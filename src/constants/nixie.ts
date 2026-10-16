@@ -169,23 +169,6 @@ export function strapBox(tw: number, th: number) {
   return { x: b.x - tw * 0.01, y: b.y - th * 0.05, w: b.w + tw * 0.02, h };
 }
 
-/** ★ The tip-off pip (where the glass was sealed): a small glass nub on the dome — a round knob on a
- *  narrow neck flaring into the dome. It fits the PIP_H the stack already budgets (the knob sits in it,
- *  the flare runs down onto the dome), so the tube is no taller. */
-export function pipPath(Sk: SkiaApi, cx: number, glassY: number, pipY: number, tw: number): { neck: SkPath; knob: { cx: number; cy: number; r: number } } {
-  const ph = Math.max(0.5, glassY - pipY);
-  const r = Math.min(tw * 0.07, ph * 0.5);
-  const nw = r * 0.6, fw = tw * 0.10;
-  const knobY = pipY + r;
-  const neck = Sk.Path.Make();
-  neck.moveTo(cx - fw, glassY + ph * 0.9);
-  neck.quadTo(cx - nw, glassY + ph * 0.2, cx - nw, knobY);
-  neck.lineTo(cx + nw, knobY);
-  neck.quadTo(cx + nw, glassY + ph * 0.2, cx + fw, glassY + ph * 0.9);
-  neck.close();
-  return { neck, knob: { cx, cy: knobY, r } };
-}
-
 /** A digit's height as a fraction of the digit size nf (Nixie One's figure height, so the tubes keep
  *  their size). */
 export const DIGIT_H = 0.72;
@@ -214,9 +197,48 @@ export function cornerPath(Sk: SkiaApi, x: number, y: number, w: number, h: numb
   p.close();
   return p;
 }
-/** The digit tube's glass: `48% 48% 3 3 / 26% 26% 3 3`. */
-export const tubeGlassPath = (Sk: SkiaApi, x: number, y: number, w: number, h: number) =>
-  cornerPath(Sk, x, y, w, h, [0.48 * w, 0.26 * h], [0.48 * w, 0.26 * h], [3, 3], [3, 3]);
+/**
+ * ★★ The digit tube's glass as ONE BLOWN SHAPE (Stuart, 2026-10-16: "the tips look like they originate
+ * inside the dome and not the dome morphing into the tip"). Straight sides; at 26 % of the glass height
+ * the shoulders curve in (convex), then turn concave — a bell / ogee — and flow into a short neck that
+ * ends in the small rounded tip where the glass was sealed. No seam, no separate part.
+ * `pip` is the height above `y` the neck and tip may use (the stack's PIP_H — the tube is no taller);
+ * 0 closes the shape at the neck (the sprite's clip, which never reaches above the glass box).
+ * Bottom corners 3 pt, as before.
+ */
+export function tubeGlassPath(Sk: SkiaApi, x: number, y: number, w: number, h: number, pip = 0): SkPath {
+  const cx = x + w / 2, L = x, R = x + w, S = y + 0.26 * h, B = y + h;
+  const nw = Math.max(0.45, w * 0.045);                 // half the neck
+  const r = Math.max(nw * 1.25, Math.min(w * 0.07, pip * 0.42));   // the tip's knob
+  const p = Sk.Path.Make();
+  p.moveTo(L, B - 3);
+  p.lineTo(L, S);
+  // left shoulder: convex, then concave into the neck
+  p.cubicTo(L, y + 0.09 * h, cx - 0.36 * w, y + 0.05 * h, cx - 0.20 * w, y + 0.042 * h);
+  p.cubicTo(cx - 0.11 * w, y + 0.036 * h, cx - nw, y + 0.022 * h, cx - nw, y);
+  if (pip > 0) {
+    const ky = y - pip + r;                              // knob centre: its top is the tube's top
+    const a = (Math.asin(Math.min(1, nw / r)) * 180) / Math.PI;
+    p.lineTo(cx - nw, ky + Math.sqrt(Math.max(0, r * r - nw * nw)));
+    p.arcToOval(Sk.XYWHRect(cx - r, ky - r, 2 * r, 2 * r), 90 + a, 360 - 2 * a, false);
+  }
+  p.lineTo(cx + nw, y);
+  // right shoulder, mirrored
+  p.cubicTo(cx + nw, y + 0.022 * h, cx + 0.11 * w, y + 0.036 * h, cx + 0.20 * w, y + 0.042 * h);
+  p.cubicTo(cx + 0.36 * w, y + 0.05 * h, R, y + 0.09 * h, R, S);
+  p.lineTo(R, B - 3);
+  p.arcToOval(Sk.XYWHRect(R - 6, B - 6, 6, 6), 0, 90, false);
+  p.lineTo(L + 3, B);
+  p.arcToOval(Sk.XYWHRect(L, B - 6, 6, 6), 90, 90, false);
+  p.close();
+  return p;
+}
+/** Where the tip's knob sits (for its highlight): same numbers as tubeGlassPath. */
+export function tubeTip(x: number, y: number, w: number, pip: number) {
+  const nw = Math.max(0.45, w * 0.045);
+  const r = Math.max(nw * 1.25, Math.min(w * 0.07, pip * 0.42));
+  return { cx: x + w / 2, cy: y - pip + r, r };
+}
 
 /** The anode's honeycomb (flat-topped hexagons, edge `r`) filling the anode box, offset by (ox, oy).
  *  One path of line segments — stroked thin, clipped to meshBox by the caller. */

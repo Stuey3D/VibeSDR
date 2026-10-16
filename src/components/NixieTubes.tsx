@@ -36,7 +36,7 @@ import {
 } from '@shopify/react-native-skia';
 import {
   nixieGeometry, nixieReadout, nixieSpec, mhzDigitsFor, drawTubeInside, honeycombPath, meshBox, meshWire,
-  cornerPath as cornerPathSk, tubeGlassPath, strapBox, pipPath,
+  cornerPath as cornerPathSk, tubeGlassPath, tubeTip, strapBox,
   COLLAR_H, PIP_H, type NixieGeometry, type NixieLayout, type NixieSpec, type NixieUnit, type TubeDesign,
 } from '../constants/nixie';
 import { assetPixelRatio } from '../constants/assetDensity';
@@ -54,7 +54,7 @@ type Corner = [number, number];
 const cornerPath = (x: number, y: number, w: number, h: number, tl: Corner, tr: Corner, br: Corner, bl: Corner): SkPath =>
   cornerPathSk(Skia, x, y, w, h, tl, tr, br, bl);
 /** The digit tube's glass: `48% 48% 3 3 / 26% 26% 3 3`. */
-const tubeGlass = (x: number, y: number, w: number, h: number) => tubeGlassPath(Skia, x, y, w, h);
+const tubeGlass = (x: number, y: number, w: number, h: number, pip = 0) => tubeGlassPath(Skia, x, y, w, h, pip);
 /** The bulb's glass: `48% 48% 2 2 / 22% 22% 2 2`. */
 const bulbGlass = (x: number, y: number, w: number, h: number) =>
   cornerPath(x, y, w, h, [0.48 * w, 0.22 * h], [0.48 * w, 0.22 * h], [2, 2], [2, 2]);
@@ -179,15 +179,17 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
 
         {/* ── The digit tubes: pip, glass, mesh, collar ── */}
         {geo.tubes.map((t, i) => {
-          const glass = tubeGlass(t.x, T.glassY, t.w, geo.glassH);
+          const pipH = T.glassY - T.pipY;
+          const glass = tubeGlass(t.x, T.glassY, t.w, geo.glassH, pipH);
+          const tip = tubeTip(t.x, T.glassY, t.w, pipH);
           const cx = t.x + t.w / 2;
           return (
             <Group key={`t${i}`}>
               <Group clip={glass}>
-                <Rect x={t.x} y={T.glassY} width={t.w} height={geo.glassH} color="#0a0504" />
+                <Rect x={t.x} y={T.pipY} width={t.w} height={geo.glassH + pipH} color="#0a0504" />
                 <Ellipse cx={cx} cy={T.glassY + geo.glassH * 0.45} rx={t.w * 0.70} ry={geo.glassH * 0.55}
                   colors={['rgba(255,110,30,0.16)', 'rgba(255,90,20,0)']} positions={[0, 0.70]} />
-                <Rect x={t.x} y={T.glassY} width={t.w} height={geo.glassH}>
+                <Rect x={t.x} y={T.pipY} width={t.w} height={geo.glassH + pipH}>
                   <LinearGradient start={vec(t.x, 0)} end={vec(t.x + t.w, 0)}
                     colors={['rgba(255,255,255,0.13)', 'rgba(255,255,255,0.03)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.04)', 'rgba(255,255,255,0.14)']}
                     positions={[0, 0.22, 0.5, 0.8, 1]} />
@@ -213,18 +215,8 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
                   );
                 })()}
               </Group>
-              {/* The tip-off pip: a glass nub on the dome, catching faint light. */}
-              {(() => {
-                const pp = pipPath(Skia, cx, T.glassY, T.pipY, t.w);
-                return (
-                  <Group>
-                    <Path path={pp.neck} color="rgba(235,225,210,0.16)" />
-                    <Path path={pp.neck} color="rgba(255,240,220,0.22)" style="stroke" strokeWidth={0.5} />
-                    <Circle cx={pp.knob.cx} cy={pp.knob.cy} r={pp.knob.r} color="rgba(235,225,210,0.22)" />
-                    <Circle cx={pp.knob.cx - pp.knob.r * 0.3} cy={pp.knob.cy - pp.knob.r * 0.3} r={pp.knob.r * 0.4} color="rgba(255,200,150,0.35)" />
-                  </Group>
-                );
-              })()}
+              {/* The tip of the blown glass catches a faint glint (part of the glass outline above). */}
+              <Circle cx={tip.cx - tip.r * 0.25} cy={tip.cy - tip.r * 0.25} r={tip.r * 0.45} color="rgba(255,225,190,0.30)" />
               <Rect x={t.x} y={T.collarY - 1} width={t.w} height={1} color="rgba(0,0,0,0.8)" />
               <Path path={cornerPath(t.x, T.collarY, t.w, COLLAR_H, [1, 1], [1, 1], [2, 2], [2, 2])}>
                 <LinearGradient start={vec(0, T.collarY)} end={vec(0, T.collarY + COLLAR_H)}
