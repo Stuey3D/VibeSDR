@@ -220,6 +220,45 @@ class RtlTcpServerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        /* ★★★ FOREGROUND FIRST, AND A REFUSAL IS A STOP, NEVER A CRASH (NickB G4IRX, Pixel 6, Android 17, 2026-10-16).
+         *
+         * Nick's phone crashed four times in an afternoon after an update: a Java CRASH at importance "service"
+         * (never "foreground service") with no memory to speak of, at 15:10:55, 15:11:39, 15:41:39 and 16:41:39. The spacing is
+         * ActivityManager's own arithmetic, not ours: a started service that crashes within 60 s of being
+         * restarted gets crashCount+1 and its next restart is put off 30 min × (crashCount − 1) (ActiveServices
+         * .scheduleServiceRestartLocked, BOUND_SERVICE_CRASH_RESTART_DURATION) — hence +30 min, then +60, and
+         * the next would have been +90. Every restart of this START_STICKY service was dying the instant it
+         * came up.
+         * ★★ WHY IT DIES: a sticky restart is NOT a startForegroundService. Android 12+ (targetSdk 31+) lets a
+         *    service go foreground from the background only with an exemption, and a system restart of an app
+         *    that is not exempt from battery optimisation has none, so startForeground() throws
+         *    ForegroundServiceStartNotAllowedException ("mAllowStartForeground false") — uncaught, here on the
+         *    main thread, the whole process. Lite (targetSdk 28) is outside the rule, which is why the restart
+         *    looked proven; the main app targets 31+ and is inside it.
+         * ★ So the order is: go foreground BEFORE anything else (and before the restore thread opens a radio a
+         *   background process would then be holding with nobody to tell), catch the refusal, say so in a
+         *   notification the owner can tap, and stop for good — START_NOT_STICKY, so Android does not go on
+         *   restarting a service that can only be refused. The armed flag is left alone: nothing here decides
+         *   the owner no longer wants a server; the app's own Start (or an attach within the blip) still does.
+         * ★ Read the extras first: the notification names the server. */
+        intent?.let {
+            name = it.getStringExtra(EXTRA_NAME) ?: name
+            ip   = it.getStringExtra(EXTRA_IP) ?: ip
+            port = it.getIntExtra(EXTRA_PORT, port)
+            mode = it.getStringExtra(EXTRA_MODE) ?: mode
+        }
+        try {
+            ensureChannel()
+            startForegroundInternal()
+        } catch (t: Throwable) {
+            val how = if (intent == null) "Android restarted it in the background"
+                      else if (intent.getBooleanExtra(EXTRA_RESTORE, false)) "a background restart"
+                      else "a start"
+            Log.e(TAG, "Android refused to let the server run in the foreground ($how): $t")
+            postStoppedNotification()
+            try { stopSelf(startId) } catch (_: Throwable) {}
+            return START_NOT_STICKY
+        }
         // A NULL intent means Android RECREATED us after the process died (START_STICKY),
         // rather than someone starting us. The service is back but the native shim went
         // down with the old process — so rebuild it, or we'd sit here showing a
@@ -230,7 +269,7 @@ class RtlTcpServerService : Service() {
         // thing that survived, and it is the actual source of truth.
         if (intent == null || intent.getBooleanExtra(EXTRA_RESTORE, false)) {
             val boot = intent?.getBooleanExtra(EXTRA_BOOT, false) == true
-            Thread {
+            Thread { try {
                 if (boot) {
                     // ★ Say what it is waiting for, not "Sharing" — there is no server yet.
                     restoreFailure = "Starting when the network is up (power returned)…"
@@ -286,16 +325,16 @@ class RtlTcpServerService : Service() {
                     restoreFailure = null
                     if (tries > 0) Log.i(TAG, "VibeServer rebuilt after waiting ${tries * 2} s")
                 }
-            }.start()
+            } catch (t: Throwable) {
+                /* ★★ AN UNCAUGHT THROW ON A PLAIN Thread IS A PROCESS CRASH. The restore runs headless — USB,
+                 *    the engine, the tunnel, the map, NSD — and any one of them throwing took the whole app down
+                 *    with a stackless CRASH, after which Android restarted it into the same throw. Say it in the
+                 *    notification instead, like every other reason the restore can fail. */
+                Log.e(TAG, "rebuilding VibeServer threw", t)
+                restoreFailure = "Could not restart the server (${t.javaClass.simpleName}) — open the app and press Start"
+                handler.post { try { updateNotification() } catch (_: Throwable) {} }
+            } }.start()
         }
-        intent?.let {
-            name = it.getStringExtra(EXTRA_NAME) ?: name
-            ip   = it.getStringExtra(EXTRA_IP) ?: ip
-            port = it.getIntExtra(EXTRA_PORT, port)
-            mode = it.getStringExtra(EXTRA_MODE) ?: mode
-        }
-        ensureChannel()
-        startForegroundInternal()
         acquireWakeLock()
         wifiLock.acquire()
         watchForDetach()
@@ -429,6 +468,31 @@ class RtlTcpServerService : Service() {
                 .build()
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(BOOT_NOTIF_ID, n)
         } catch (t: Throwable) { Log.w(TAG, "could not post the start-when-power-returns notice: $t") }
+    }
+
+    /** ★ Android would not let the server run (see onStartCommand). Dismissable, tappable, and worded for the
+     *  person who finds it later — the server is OFF, and how to put it back. The app's own name, because this
+     *  file is shared with Lite. Same id as the boot notice: both say "it did not start", and one is enough. */
+    private fun postStoppedNotification() {
+        try {
+            ensureChannel()
+            val app = try { applicationInfo.loadLabel(packageManager).toString() } catch (_: Throwable) { "the app" }
+            val text = "Android stopped it running in the background. Open $app and press Start to share the radio again."
+            val pi = PendingIntent.getActivity(
+                this, 2, appEntryIntent(this),
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                    or PendingIntent.FLAG_UPDATE_CURRENT)
+            val n = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("VibeServer stopped")
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(BOOT_NOTIF_ID, n)
+        } catch (t: Throwable) { Log.w(TAG, "could not post the server-stopped notice: $t") }
     }
 
     private fun updateNotification() {
