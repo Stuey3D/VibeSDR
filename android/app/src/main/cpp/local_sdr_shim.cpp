@@ -44,6 +44,7 @@
 #include "vibe_antswitch.h"
 #include "vibe_gzip.h"
 #include "vibe_rsp_init_gate.h" // ★ the AGC-initialising indicator's ending — it cannot wedge (2026-10-06)
+#include "vibe_rsp_rail_step.h" // ★ the RF loop's open-loop test — a rail must show in OUR peak (2026-10-16)
 #include "vibe_agc_rules.h"   // ★ auto-IF settle hold, gross-overload shed, per-band gain — see the header
 #include "vibe_session_turns.h"   // ★ whose turn it is, and borrowed time after it — see the header   // ★ what this server runs on, for the directory — see the header
 
@@ -3991,16 +3992,29 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *   independent of whether its AGC is running. -999 = nothing outstanding. */
     static float structGainAtStep = -999.0f;
     static int   unhonoured = 0;         // consecutive steps whose write never reached the radio
+    /* ★★ OUR OWN ADC PEAK, averaged over the same window as the reduction, and what it was when we
+     *   stepped — the half of the open-loop test the API cannot freeze (vibe_rsp_rail_step.h). The
+     *   0.1 s peak alone wanders with programme; a window's mean is steady enough to see a rung in. */
+    static double pkAccum = 0.0; static int pkCount = 0;
+    static double peakAtStep = NAN;
+    static int    stepDirAt = 0;         // the direction of the step outstanding
+    static int    lnaBeforeStep = -1;    // the state that step left
+    /* ★★★ WHERE THE BLIND WALK BEGAN — the state before the first step later judged frozen. A HOLD
+     *     returns here: every step after it was taken on a number that could not change, and on
+     *     2026-10-16 those steps were five rungs of RF gain into an FM band (8 -> 1, overload). */
+    static int    walkFrom = -1;
 
     const int gr = sdrp->currentIfGr();
     if (gr <= 0) return;                                  // not reported yet
     const auto now = std::chrono::steady_clock::now();
     if (winStart.time_since_epoch().count() == 0) winStart = now;
     accum += gr; ++count;
+    { const double pk = sdrp->adcPeakDbfs(); if (std::isfinite(pk) && pk > -98.0) { pkAccum += pk; ++pkCount; } }
     if (std::chrono::duration_cast<std::chrono::milliseconds>(now - winStart).count() < kWindowMs)
         return;                                           // ★ still filling this window
 
     const double mean = count ? accum / count : 0.0;
+    const double meanPeak = pkCount ? pkAccum / pkCount : NAN;
     /* ★★★ DAB: AS MUCH RF GAIN AS THE CONVERTER ALLOWS, AND THE IF WINDOW IS NOT CONSULTED.
      *     Measured on 10D, RSP1A, 2026-09-15 23:20-23:30, same aerial as a V4 that decoded it
      *     clean: at the window rule's choice (state 5, IF 41-59) the raw error rate sat in the
@@ -4085,7 +4099,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         outMs = 0; outDir = 0;
         return;
     }
-    accum = 0.0; count = 0; winStart = now;
+    accum = 0.0; count = 0; winStart = now; pkAccum = 0.0; pkCount = 0;
 
     /* ★★★ STRICTLY PAST THE TRIGGER, NOT AT IT. `>=` acts the moment the average TOUCHES the
      *     threshold, which is the boundary behaviour the 28/52 skirt exists to prevent — the
@@ -4115,7 +4129,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         if (lastStepAt.time_since_epoch().count() != 0 &&
             std::chrono::duration_cast<std::chrono::milliseconds>(nowStep - lastStepAt).count()
                 < 5000) {
-            outMs = 0; outDir = 0; accum = 0.0; count = 0;
+            outMs = 0; outDir = 0; accum = 0.0; count = 0; pkAccum = 0.0; pkCount = 0;
             return;
         }
     }
@@ -4181,25 +4195,43 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     if (g_rspAgcClearEvidence.exchange(false, std::memory_order_relaxed)) {
         deadSteps = 0; unhonoured = 0; deadWarned = false;
         grAtLastStep = -1; structGainAtStep = -999.0f;
+        peakAtStep = NAN; stepDirAt = 0; lnaBeforeStep = -1; walkFrom = -1;
         outMs = 0; outDir = 0; lastDir = 0; oscWarned = false;   // ★ no sustain carried over a handover
     }
     if (grAtLastStep >= 0) {
-        const float gNow    = sdrp->structGainDb();
-        const bool  haveG   = gNow > -998.0f && structGainAtStep > -998.0f;
-        const bool  wrLanded = haveG && std::fabs(gNow - structGainAtStep) > 0.05f;
-        const bool  grMoved  = (int)llround(mean) != grAtLastStep;
-
-        /* ★★★ A RAIL IS NOT A FROZEN NUMBER. At 59 (or 20) the IF AGC has nothing left to give,
-         *     so an LNA step that leaves it there is the AGC still saying "too much" — not a dead
-         *     readout. Measured on the Lenovo RSP1A in DAB (2026-09-15 15:13): ADC peak -32 dBFS
-         *     against a -40 target, IF pinned at 59, and this guard declared the reading frozen
-         *     after two steps and HELD — at 8 dB over target, with the ensemble breaking up. Off
-         *     the rails, two unchanged readings through two rungs is still the frozen-readout test. */
-        const bool atRail = mean <= 20.5 || mean >= 58.5;
-        if (haveG && !wrLanded)      { ++unhonoured; deadSteps = 0; }
-        else if (!grMoved && !atRail) { ++deadSteps;  unhonoured = 0; }
-        else                         { deadSteps = 0; unhonoured = 0; deadWarned = false; }
+        /* ★★★ A RAIL IS NOT A FROZEN NUMBER — BUT ONLY IF OUR OWN SAMPLES AGREE IT IS A RAIL.
+         *     At 59 (or 20) the IF AGC has nothing left to give, so an LNA step that leaves it there
+         *     is the AGC still saying "too much" — not a dead readout. Measured on the Lenovo RSP1A in
+         *     DAB (2026-09-15 15:13): IF pinned at 59, this guard declared the reading frozen after two
+         *     steps and HELD at 8 dB over target. So a rail was exempted outright.
+         *  ★★★ AND THAT EXEMPTION WALKED THE FRONT END TO MAXIMUM ON 2026-10-16. The readout froze AT
+         *      the max-gain rail (20) on FM and the loop added five rungs, 8 -> 3, then two more on a
+         *      frozen 25, ending at RF 1/9 and overload — while our ADC peak moved 6 dB in total. A real
+         *      rail cannot absorb a rung, so the step MUST show in the peak; under half the rung, the
+         *      IF answered and only its readout is dead. The judgement is vibersp::judgeRfStep
+         *      (vibe_rsp_rail_step.h, tested with those numbers); a starved 20-rail (level well under
+         *      the set point — Stuart's 40 m) still stands, so RF gain is still given back there. */
+        vibersp::RfStepEvidence e;
+        e.grAtStep = grAtLastStep; e.grMeanNow = mean;
+        e.structAtStep = structGainAtStep; e.structNow = sdrp->structGainDb();
+        e.peakAtStep = peakAtStep; e.peakNow = meanPeak;
+        e.dir = stepDirAt; e.setPointDbfs = sdrp->ifAgcSetPointDbfs();
+        const vibersp::RfStepVerdict v = vibersp::judgeRfStep(e);
+        if (v == vibersp::RfStepVerdict::Unhonoured)  { ++unhonoured; deadSteps = 0; }
+        else if (v == vibersp::RfStepVerdict::Frozen) {
+            if (++deadSteps == 1) walkFrom = lnaBeforeStep;
+            unhonoured = 0;
+            if (vibersp::rfReadingAtRail(mean))
+                LOGI("RSP RF AGC: the IF reduction reads %.0f dB, a rail — but our last step (%.1f dB of RF "
+                     "gain) moved our own ADC peak only %+.1f dB (%.1f -> %.1f dBFS). A rail cannot absorb a "
+                     "rung, so the IF answered and the READOUT did not: counting it as frozen (%d).",
+                     mean, std::fabs((double)e.structNow - (double)e.structAtStep),
+                     meanPeak - peakAtStep, peakAtStep, meanPeak, deadSteps);
+        }
+        else if (v == vibersp::RfStepVerdict::Answered) { deadSteps = 0; unhonoured = 0; deadWarned = false; walkFrom = -1; }
+        // ★ Inconclusive: a rail we cannot check (a small rung, no peak) — neither for nor against.
         grAtLastStep = -1; structGainAtStep = -999.0f;    // consumed, whichever way it went
+        peakAtStep = NAN; stepDirAt = 0;
     }
 
     /* ★★ TWO STEPS BEFORE EITHER VERDICT, NOT ONE. The reduction is an integer and the gain ladder
@@ -4224,6 +4256,24 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
                  "a live AGC cannot sit still through that: this number is frozen, not measured, "
                  "and every further step would be taken on evidence that cannot change. Holding RF "
                  "gain at state %d.", mean, deadSteps, sdrp->currentLnaState());
+            /* ★★★ AND TAKE BACK THE STEPS THAT NUMBER BOUGHT. Holding where the walk stopped keeps every
+             *     rung it took on dead evidence — on 2026-10-16 that was RF 1/9 on the FM band, overloaded,
+             *     and the gain memory then handed that state to the next listener. The state before the
+             *     first frozen step was chosen on a live reading; go back to it, once, as the hold begins.
+             *     Within the owner's cap, and the memory follows so a re-open does not restore the walk. */
+            const int n   = sdrp->lnaStateCount();
+            const int cur = sdrp->currentLnaState();
+            const int back = walkFrom;
+            walkFrom = -1;
+            if (back >= 0 && back < n && back >= std::max(0, lnaFloor) && back != cur) {
+                LOGI("RSP RF AGC: undoing the steps taken on the frozen reading — RF gain state %d -> %d, "
+                     "where the walk began (ADC peak %.1f dBFS)", cur, back, sdrp->adcPeakDbfs());
+                LocalSdrShim::instance().setLnaState(back);
+                g_vibeAgcRspLastLna.store(back, std::memory_order_relaxed);
+                g_vibeAgcRspLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
+                lastMove = now; lastStepAt = std::chrono::steady_clock::now();
+            }
         }
         /* ★★★ REVERTED, SAME NIGHT, AND THE REASON MATTERS MORE THAN THE CHANGE.
          *   This branch briefly raised g_rspApiStuck so a frozen readout would offer the same
@@ -4374,6 +4424,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *   never does, we are steering by a frozen number and must stop. See the open-loop test. */
     grAtLastStep     = (int)llround(mean);
     structGainAtStep = sdrp->structGainDb();
+    peakAtStep = meanPeak; stepDirAt = dir; lnaBeforeStep = cur;   // ★ the samples' half of the test
     LocalSdrShim::instance().setLnaState(want);
     g_vibeAgcRspLastLna.store(want, std::memory_order_relaxed);
     g_vibeAgcRspLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(

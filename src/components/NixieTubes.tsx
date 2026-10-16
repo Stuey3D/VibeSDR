@@ -31,12 +31,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Dimensions, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import {
-  Canvas, Group, Image as SkImageNode, LinearGradient, Path, RadialGradient, Rect, Skia,
+  Canvas, Circle, Group, Image as SkImageNode, LinearGradient, Path, RadialGradient, Rect, Skia,
   vec, BlurMask, TileMode, type SkImage, type SkPath,
 } from '@shopify/react-native-skia';
 import {
   nixieGeometry, nixieReadout, nixieSpec, mhzDigitsFor, drawTubeInside, honeycombPath, meshBox, meshWire,
-  cornerPath as cornerPathSk, tubeGlassPath,
+  cornerPath as cornerPathSk, tubeGlassPath, tubeTip, strapBox,
   COLLAR_H, PIP_H, type NixieGeometry, type NixieLayout, type NixieSpec, type NixieUnit, type TubeDesign,
 } from '../constants/nixie';
 import { assetPixelRatio } from '../constants/assetDensity';
@@ -54,7 +54,7 @@ type Corner = [number, number];
 const cornerPath = (x: number, y: number, w: number, h: number, tl: Corner, tr: Corner, br: Corner, bl: Corner): SkPath =>
   cornerPathSk(Skia, x, y, w, h, tl, tr, br, bl);
 /** The digit tube's glass: `48% 48% 3 3 / 26% 26% 3 3`. */
-const tubeGlass = (x: number, y: number, w: number, h: number) => tubeGlassPath(Skia, x, y, w, h);
+const tubeGlass = (x: number, y: number, w: number, h: number, pip = 0) => tubeGlassPath(Skia, x, y, w, h, pip);
 /** The bulb's glass: `48% 48% 2 2 / 22% 22% 2 2`. */
 const bulbGlass = (x: number, y: number, w: number, h: number) =>
   cornerPath(x, y, w, h, [0.48 * w, 0.22 * h], [0.48 * w, 0.22 * h], [2, 2], [2, 2]);
@@ -143,7 +143,6 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
         <Rect x={0} y={h - 7 * lk} width={w} height={7 * lk}>
           <LinearGradient start={vec(0, h)} end={vec(0, h - 7 * lk)} colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0)']} />
         </Rect>
-        <Rect x={0} y={h - 1} width={w} height={1} color="rgba(255,200,160,0.08)" />
 
         {/* ── Each tube's cast shadow and neon halo on the back wall (drawn once) ── */}
         {geo.tubes.map((t, i) => {
@@ -180,16 +179,17 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
 
         {/* ── The digit tubes: pip, glass, mesh, collar ── */}
         {geo.tubes.map((t, i) => {
-          const glass = tubeGlass(t.x, T.glassY, t.w, geo.glassH);
+          const pipH = T.glassY - T.pipY;
+          const glass = tubeGlass(t.x, T.glassY, t.w, geo.glassH, pipH);
+          const tip = tubeTip(t.x, T.glassY, t.w, pipH);
           const cx = t.x + t.w / 2;
           return (
             <Group key={`t${i}`}>
-              <Path path={cornerPath(cx - 2, T.pipY, 4, PIP_H, [2, 2], [2, 2], [0, 0], [0, 0])} color="rgba(255,235,210,0.22)" />
               <Group clip={glass}>
-                <Rect x={t.x} y={T.glassY} width={t.w} height={geo.glassH} color="#0a0504" />
+                <Rect x={t.x} y={T.pipY} width={t.w} height={geo.glassH + pipH} color="#0a0504" />
                 <Ellipse cx={cx} cy={T.glassY + geo.glassH * 0.45} rx={t.w * 0.70} ry={geo.glassH * 0.55}
                   colors={['rgba(255,110,30,0.16)', 'rgba(255,90,20,0)']} positions={[0, 0.70]} />
-                <Rect x={t.x} y={T.glassY} width={t.w} height={geo.glassH}>
+                <Rect x={t.x} y={T.pipY} width={t.w} height={geo.glassH + pipH}>
                   <LinearGradient start={vec(t.x, 0)} end={vec(t.x + t.w, 0)}
                     colors={['rgba(255,255,255,0.13)', 'rgba(255,255,255,0.03)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.04)', 'rgba(255,255,255,0.14)']}
                     positions={[0, 0.22, 0.5, 0.8, 1]} />
@@ -200,7 +200,23 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
                     colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0)']} />
                 </Rect>
                 <Path path={glass} color="rgba(255,235,210,0.10)" style="stroke" strokeWidth={2} />
+                {/* The top strap across the cage: flat metal, a bright top edge (lit warm from below in
+                    the lit tube's sprite). */}
+                {(() => {
+                  const sb = strapBox(t.w, geo.glassH);
+                  return (
+                    <Group>
+                      <Rect x={t.x + sb.x} y={T.glassY + sb.y} width={sb.w} height={sb.h}>
+                        <LinearGradient start={vec(0, T.glassY + sb.y)} end={vec(0, T.glassY + sb.y + sb.h)}
+                          colors={['rgba(215,215,210,0.38)', 'rgba(150,150,145,0.18)']} />
+                      </Rect>
+                      <Rect x={t.x + sb.x} y={T.glassY + sb.y + sb.h} width={sb.w} height={Math.max(0.5, sb.h * 0.5)} color="rgba(0,0,0,0.35)" />
+                    </Group>
+                  );
+                })()}
               </Group>
+              {/* The tip of the blown glass catches a faint glint (part of the glass outline above). */}
+              <Circle cx={tip.cx - tip.r * 0.25} cy={tip.cy - tip.r * 0.25} r={tip.r * 0.45} color="rgba(255,225,190,0.30)" />
               <Rect x={t.x} y={T.collarY - 1} width={t.w} height={1} color="rgba(0,0,0,0.8)" />
               <Path path={cornerPath(t.x, T.collarY, t.w, COLLAR_H, [1, 1], [1, 1], [2, 2], [2, 2])}>
                 <LinearGradient start={vec(0, T.collarY)} end={vec(0, T.collarY + COLLAR_H)}
@@ -255,6 +271,12 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
             </Group>
           );
         })}
+        {/* ★ The panel's lower lip IN FRONT of the tube bases: the sockets run under it, so the tubes read
+            as mounted through the panel, not standing on a ledge inside it (Stuart, 2026-10-16). */}
+        <Rect x={0} y={h - 3.5} width={w} height={3.5}>
+          <LinearGradient start={vec(0, h - 3.5)} end={vec(0, h)} colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.55)']} />
+        </Rect>
+        <Rect x={0} y={h - 1} width={w} height={1} color="rgba(255,200,160,0.08)" />
       </Group>
     </Canvas>
   );
@@ -356,6 +378,9 @@ export interface NixieTubesProps {
    *  children). ★ The tubes are laid out in the window LEFT of it, so kHz / MHz / Hz can never move
    *  a tube (§7 TRAP: anchor the tube group, never centre tubes and label together). */
   reserveRight?: number;
+  /** The landscape centre window: tubes take back the 10-tube narrowing when the window has room, and
+   *  digits fill a little more of the glass (constants/nixie nixieGeometry `grow`). */
+  grow?: boolean;
   style?:  StyleProp<ViewStyle>;
   children?: React.ReactNode;
 }
@@ -380,7 +405,7 @@ function sizeKey(layout: string, design: object, bar: boolean, scale: number, re
 }
 
 export default function NixieTubes({ hz, unit, layout, design, bar, scale = 1, radius = 5, reserveRight = 0,
-  style, children }: NixieTubesProps) {
+  grow = false, style, children }: NixieTubesProps) {
   const sk = sizeKey(layout, design, bar, scale, reserveRight);
   const [sz, setSz] = useState(() => sizes.get(sk) ?? { w: 0, h: 0 });
   const onLayout = (e: LayoutChangeEvent) => {
@@ -398,8 +423,8 @@ export default function NixieTubes({ hz, unit, layout, design, bar, scale = 1, r
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [layout, extra.current]);
   const tubeW = sz.w - reserveRight;
-  const geo = useMemo(() => (tubeW > 0 && sz.h > 0 ? nixieGeometry(tubeW, sz.h, spec, design, { bar, scale }) : null),
-    [tubeW, sz.h, spec, design, bar, scale]);
+  const geo = useMemo(() => (tubeW > 0 && sz.h > 0 ? nixieGeometry(tubeW, sz.h, spec, design, { bar, scale, grow }) : null),
+    [tubeW, sz.h, spec, design, bar, scale, grow]);
   // ★ Memoised: the cathode layer is React.memo, and a fresh array every parent render would defeat it.
   const ro = useMemo(() => nixieReadout(hz, spec, unit), [hz, spec, unit]);
   const key = ro.tubes.map(d => d ?? ' ').join('');

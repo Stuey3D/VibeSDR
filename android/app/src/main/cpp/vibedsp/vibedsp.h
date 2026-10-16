@@ -2302,7 +2302,7 @@ private:
      *     60 dB keeps it out), evaluated on every 8th output — a power needs no more — and any programme leaking in through a
      *     small carrier phase error regressed out against the in-phase output, so a clean wide-stereo station is not
      *     mistaken for a noisy one. σ²_L = σ²_S (1 + K_M/K_S), the main channel's small share from the f² law (lrNoiseKM_).
-     *  ★ The removal is fitted on the bench for THIS statistic (see kLrNoiseA/B in mpxmeasure.cpp). */
+     *  ★ The removal is fitted on the bench for THIS statistic (see kLrNoiseA/B/C in mpxmeasure.cpp: the lift is a function of σ/A, solved for A). */
     double lrNoiseKM_ = 0.0;             // K_M / K_S for this FIR — the main channel's noise as a share of the subcarrier's
     int lrQPhase_ = 0;                   // every 8th evaluated sample feeds the quadrature power
     double lrQQ_ = 0.0, lrQI_ = 0.0, lrII_ = 0.0; int lrQN_ = 0;   // this window's sums

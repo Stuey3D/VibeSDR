@@ -8,7 +8,7 @@
  */
 import {
   CATHODE_STACK, cathodeDepth, cathodeNeighbours, CATHODE_STROKES, GLYPH_W, meshBox, digitCentre, nixieSpec, nixieReadout, nixieGeometry,
-  stackHeight, mhzDigitsFor, TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, MIN_GLASS,
+  stackHeight, mhzDigitsFor, TUBE_DESIGN, PIP_H, COLLAR_H, COLLAR_SHOWN, GLASS_GAIN, CLEAR, MIN_GLASS,
 } from '../src/constants/nixie.ts';
 
 let fails = 0, passes = 0;
@@ -27,12 +27,13 @@ const show = (r: { tubes: (string | null)[]; bulbs: boolean[] }, bulbAt: number[
   const d = TUBE_DESIGN.meterShared;
   const hf = nixieSpec('hf');
   const g = nixieGeometry(400, 35, hf, d, { bar: false });
-  ok('35 pt window: the glass shrank below its design height', g.glassH < d.th + 2 && g.glassH <= 35 - 10);
+  ok('35 pt window: the glass is the window less pip, shown collar and clearance', g.glassH <= 35 - (PIP_H + COLLAR_SHOWN + 2 * CLEAR) + 1e-9);
   ok('35 pt window: pip + glass + collar + clearance fits', stackHeight(g.glassH) <= 35);
   ok('35 pt window: the pip is not clipped', g.collarY - g.glassH - PIP_H >= 0);
   // A design stack of 37 (glass 27) in a 35 window must lose exactly the 2 pt.
   const g37 = nixieGeometry(400, 35, hf, { tw: 18, th: 27, nf: 26 }, { bar: false });
-  eq('37 pt design stack in a 35 pt window loses 2 pt of glass', g37.glassH, 25);
+  // ★ 2026-10-16: the base shows 2 pt (was 4) and gave those 2 pt to the glass — a 27 pt design glass now fits whole.
+  eq('a 27 pt design glass keeps all of it in a 35 pt window (the base gave its 2 pt)', g37.glassH, 27);
 }
 // Every window height from the bar's shared pill (≈ 20 pt) up: the stack never overflows.
 for (let h = 18; h <= 64; h++) {
@@ -40,7 +41,7 @@ for (let h = 18; h <= 64; h++) {
     for (const layout of ['hf', 'wide', 'fm'] as const) {
       const g = nixieGeometry(220, h, nixieSpec(layout), d, { bar: name.startsWith('bar') });
       ok(`h=${h} ${name} ${layout}: stack fits`, stackHeight(g.glassH) <= h + 1e-9);
-      ok(`h=${h} ${name} ${layout}: glass capped at design`, g.glassH <= d.th + 1e-9);
+      ok(`h=${h} ${name} ${layout}: glass capped at design`, g.glassH <= d.th + GLASS_GAIN + 1e-9);
       ok(`h=${h} ${name} ${layout}: digit fits the glass`, g.nf <= g.glassH * 0.8 + 1e-9);
       ok(`h=${h} ${name} ${layout}: bulb shorter than a tube`, g.bulbH < g.glassH);
     }
@@ -50,15 +51,15 @@ for (let h = 18; h <= 64; h++) {
 //     window height, every design, every layout, every scale — the clearance is all above the pip.
 {
   const g = nixieGeometry(300, 48, nixieSpec('hf'), TUBE_DESIGN.meter, { bar: false });
-  eq('collar stands on the window floor', g.collarY + COLLAR_H, 48);
+  eq('collar stands on the window floor', g.collarY + COLLAR_SHOWN, 48);
   for (const sc of [0.58, 0.82, 1, 1.13, 1.45]) for (let h = 18; h <= 72; h++)
     for (const [name, d] of Object.entries(TUBE_DESIGN)) for (const layout of ['hf', 'wide', 'fm'] as const) {
       const gg = nixieGeometry(260, h, nixieSpec(layout), d, { bar: name.startsWith('bar'), scale: sc });
-      ok(`h=${h} ${name} ${layout} @${sc}: collar foot on the floor`, Math.abs(gg.collarY + COLLAR_H * sc - h) < 1e-9);
+      ok(`h=${h} ${name} ${layout} @${sc}: collar foot on the floor`, Math.abs(gg.collarY + COLLAR_SHOWN * sc - h) < 1e-9);
       // ★★ `drop` is exactly how far the row moved from the brief's foot (h − CLEAR), so the wall's
       //    neon spill that NixieStatic moves by it stays where it was RELATIVE TO THE TUBES.
       ok(`h=${h} ${name} ${layout} @${sc}: drop = the row's move`,
-         Math.abs((gg.collarY + COLLAR_H * sc) - gg.drop - (h - CLEAR * sc)) < 1e-9);
+         Math.abs((gg.collarY + COLLAR_SHOWN * sc) - gg.drop - (h - CLEAR * sc)) < 1e-9);
       // …and the clearance went to the top, not into a clipped dome.
       ok(`h=${h} ${name} ${layout} @${sc}: ≥ ${2 * CLEAR} pt over the pip or the glass is at its cap`,
          gg.collarY - gg.glassH - PIP_H * sc >= 2 * CLEAR * sc - 1e-9 || gg.glassH <= MIN_GLASS * sc + 1e-9);
@@ -77,12 +78,30 @@ for (let h = 18; h <= 64; h++) {
   ok('…and the whole group fits inside it', last.x + last.w <= 120 + 1e-6 && narrow.tubes[0].x >= 0);
   const wide = nixieGeometry(1000, 60, nixieSpec('wide'), TUBE_DESIGN.meter, { bar: false });
   eq('10-tube radio: 8/10 of the width', +(wide.tubes[0].w).toFixed(2), +(22 * 0.8).toFixed(2));
-  eq('10-tube radio: digits 0.9×', +(wide.nf).toFixed(2), +(30 * 0.9).toFixed(2));
+  eq('10-tube radio: digits 0.9× (× the glass the base gave, 38/36)', +(wide.nf).toFixed(2), +(30 * 0.9 * (36 + GLASS_GAIN) / 36).toFixed(2));
   const w10b = nixieGeometry(1000, 60, nixieSpec('wide'), TUBE_DESIGN.bar, { bar: true });
   eq('10 tubes in the bar window narrow further by 8/10', +(w10b.tubes[0].w).toFixed(2), +(16 * 0.8).toFixed(2));
+  // ★ grow (landscape centre window): a roomy window takes back the 10-tube narrowing; never overflows.
+  {
+    const L = TUBE_DESIGN.meterLand, sp = nixieSpec('wide'), sc = 33 / 37;
+    const was = nixieGeometry(256, 33, sp, L, { bar: false, scale: sc });
+    const now = nixieGeometry(256, 33, sp, L, { bar: false, scale: sc, grow: true });
+    ok('grow: a roomy landscape window gets bigger digits (iPhone 12 landscape)', now.nf > was.nf * 1.08 && now.tubes[0].w > was.tubes[0].w);
+    let fits = true, never = true;
+    for (let w = 80; w <= 900; w += 7) for (const h of [27, 33, 40, 52]) for (const lay of ['hf', 'wide'] as const) {
+      const g = nixieGeometry(w, h, nixieSpec(lay), L, { bar: false, scale: h / 37, grow: true });
+      const g0 = nixieGeometry(w, h, nixieSpec(lay), L, { bar: false, scale: h / 37 });
+      const last = g.tubes[g.tubes.length - 1];
+      if (last.x + last.w > w + 1e-6 || g.tubes[0].x < 0) fits = false;
+      if (g.nf < g0.nf - 1e-9 || g.tubes[0].w < g0.tubes[0].w - 1e-9) never = false;
+    }
+    ok('grow: the group always fits its window', fits);
+    ok('grow: never smaller than without it', never);
+    ok('grow: the digit still fits the glass', now.nf * 0.72 <= now.glassH * 0.63);
+  }
   const bulbW = nixieGeometry(1000, 60, nixieSpec('hf'), TUBE_DESIGN.meter, { bar: false });
   eq('bulb ≈ 0.45 × a digit tube', bulbW.bulbs[0].w, Math.round(22 * 0.45));
-  eq('bulb glass ≈ 0.62 × a digit tube', +(bulbW.bulbH).toFixed(2), +(36 * 0.62).toFixed(2));
+  eq('bulb glass ≈ 0.62 × a digit tube', +(bulbW.bulbH).toFixed(2), +((36 + GLASS_GAIN) * 0.62).toFixed(2));
 }
 
 // ── ★★★ Fixed tube layout: units change only the lit bulb (§13.11) ──────────

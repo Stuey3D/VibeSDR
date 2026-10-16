@@ -160,6 +160,15 @@ export function meshBox(tw: number, th: number) {
   //   26 % of its height) down to just above the floor shade.
   return { x: tw * 0.07, y: th * 0.25, w: tw * 0.86, h: th * 0.71 };
 }
+/** ★ The top spacer (Stuart, 2026-10-16: "a small piece above the number that has a slight reflection of
+ *  the glow"): the IN-14's flat metal strap across the top of the cage, in the gap between the cage and
+ *  the dome — no extra height. Its underside catches the digit's light. */
+export function strapBox(tw: number, th: number) {
+  const b = meshBox(tw, th);
+  const h = Math.max(0.6, th * 0.022);
+  return { x: b.x - tw * 0.01, y: b.y - th * 0.05, w: b.w + tw * 0.02, h };
+}
+
 /** A digit's height as a fraction of the digit size nf (Nixie One's figure height, so the tubes keep
  *  their size). */
 export const DIGIT_H = 0.72;
@@ -188,9 +197,48 @@ export function cornerPath(Sk: SkiaApi, x: number, y: number, w: number, h: numb
   p.close();
   return p;
 }
-/** The digit tube's glass: `48% 48% 3 3 / 26% 26% 3 3`. */
-export const tubeGlassPath = (Sk: SkiaApi, x: number, y: number, w: number, h: number) =>
-  cornerPath(Sk, x, y, w, h, [0.48 * w, 0.26 * h], [0.48 * w, 0.26 * h], [3, 3], [3, 3]);
+/**
+ * ★★ The digit tube's glass as ONE BLOWN SHAPE (Stuart, 2026-10-16: "the tips look like they originate
+ * inside the dome and not the dome morphing into the tip"). Straight sides; at 26 % of the glass height
+ * the shoulders curve in (convex), then turn concave — a bell / ogee — and flow into a short neck that
+ * ends in the small rounded tip where the glass was sealed. No seam, no separate part.
+ * `pip` is the height above `y` the neck and tip may use (the stack's PIP_H — the tube is no taller);
+ * 0 closes the shape at the neck (the sprite's clip, which never reaches above the glass box).
+ * Bottom corners 3 pt, as before.
+ */
+export function tubeGlassPath(Sk: SkiaApi, x: number, y: number, w: number, h: number, pip = 0): SkPath {
+  const cx = x + w / 2, L = x, R = x + w, S = y + 0.26 * h, B = y + h;
+  const nw = Math.max(0.45, w * 0.045);                 // half the neck
+  const r = Math.max(nw * 1.25, Math.min(w * 0.07, pip * 0.42));   // the tip's knob
+  const p = Sk.Path.Make();
+  p.moveTo(L, B - 3);
+  p.lineTo(L, S);
+  // left shoulder: convex, then concave into the neck
+  p.cubicTo(L, y + 0.09 * h, cx - 0.36 * w, y + 0.05 * h, cx - 0.20 * w, y + 0.042 * h);
+  p.cubicTo(cx - 0.11 * w, y + 0.036 * h, cx - nw, y + 0.022 * h, cx - nw, y);
+  if (pip > 0) {
+    const ky = y - pip + r;                              // knob centre: its top is the tube's top
+    const a = (Math.asin(Math.min(1, nw / r)) * 180) / Math.PI;
+    p.lineTo(cx - nw, ky + Math.sqrt(Math.max(0, r * r - nw * nw)));
+    p.arcToOval(Sk.XYWHRect(cx - r, ky - r, 2 * r, 2 * r), 90 + a, 360 - 2 * a, false);
+  }
+  p.lineTo(cx + nw, y);
+  // right shoulder, mirrored
+  p.cubicTo(cx + nw, y + 0.022 * h, cx + 0.11 * w, y + 0.036 * h, cx + 0.20 * w, y + 0.042 * h);
+  p.cubicTo(cx + 0.36 * w, y + 0.05 * h, R, y + 0.09 * h, R, S);
+  p.lineTo(R, B - 3);
+  p.arcToOval(Sk.XYWHRect(R - 6, B - 6, 6, 6), 0, 90, false);
+  p.lineTo(L + 3, B);
+  p.arcToOval(Sk.XYWHRect(L, B - 6, 6, 6), 90, 90, false);
+  p.close();
+  return p;
+}
+/** Where the tip's knob sits (for its highlight): same numbers as tubeGlassPath. */
+export function tubeTip(x: number, y: number, w: number, pip: number) {
+  const nw = Math.max(0.45, w * 0.045);
+  const r = Math.max(nw * 1.25, Math.min(w * 0.07, pip * 0.42));
+  return { cx: x + w / 2, cy: y - pip + r, r };
+}
 
 /** The anode's honeycomb (flat-topped hexagons, edge `r`) filling the anode box, offset by (ox, oy).
  *  One path of line segments — stroked thin, clipped to meshBox by the caller. */
@@ -226,11 +274,11 @@ export const meshWire = (tw: number) => Math.max(0.35, tw * 0.012);
  */
 export interface NeonLayer { width: number; sigma: number; color: string; alpha: number }
 export const DIGIT_NEON: NeonLayer[] = [
-  { width: 0.16,  sigma: 0.15,  color: 'rgb(200,62,6)',   alpha: 0.80 },   // wide bloom, fills the window
+  { width: 0.16,  sigma: 0.15,  color: 'rgb(200,62,6)',   alpha: 0.65 },   // wide bloom, fills the window
   { width: 0.09,  sigma: 0.05,  color: 'rgb(214,84,9)',   alpha: 1 },   // the gas sheath
   { width: 0.062, sigma: 0.016, color: 'rgb(240,110,8)',  alpha: 1 },      // the glow hugging the wire
   { width: 0.046, sigma: 0.006, color: 'rgb(252,150,22)', alpha: 1 },      // the hot core round the wire
-  { width: 0.03,  sigma: 0.003, color: 'rgb(255,182,60)', alpha: 1 },      // white-hot next to the wire
+  { width: 0.036, sigma: 0.003, color: 'rgb(255,192,84)', alpha: 1 },      // white-hot next to the wire
 ]
 /** The wire itself, white-hot in its sheath. */
 export const DIGIT_CORE = '#ffb848';
@@ -247,7 +295,7 @@ const WIRE_FRONT     = 'rgba(30,26,22,0.55)';      // in front of a lit digit: d
 /** The anode mesh in front of the stack: it shadows the glow as fine hex lines, and is lit warm itself. */
 const MESH_SHADOW    = 'rgba(40,14,4,0.17)';
 const MESH_LIT       = 'rgba(230,100,30,0.20)';
-const MESH_WASH      = 'rgba(190,70,8,0.36)';
+const MESH_WASH      = 'rgba(190,70,8,0.26)';
 
 /**
  * Draw ONE tube's inside — the whole cathode stack with `lit` glowing at its own depth (null = a
@@ -331,7 +379,12 @@ export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, lit: string | null,
       layer(z.opacity, 0, () => shape(lit, DIGIT_CORE, wireW / z.scale));
     });
     const [frontCol, frontA] = rgbA(WIRE_FRONT);
-    layer(frontA, 0, () => {
+    /* ★ Small tubes stay legible (Stuart, 2026-10-16: "the smaller numbers, especially the 8, are slightly
+     *  harder to read"): a mid/back digit is crossed by up to nine wires, and at phone-bar / landscape size
+     *  those silhouettes are a large share of its stroke. They fade with the digit size — full at 30 pt,
+     *  half at 15 pt and below. */
+    const frontK = Math.max(0.5, Math.min(1, nf / 30));
+    layer(frontA * frontK, 0, () => {
       for (let i = li - 1; i >= 0; i--) {
         const d = CATHODE_STACK[i];
         atDepth(d, (z) => shape(d, frontCol, wireW / z.scale));
@@ -351,6 +404,28 @@ export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, lit: string | null,
     c.drawPath(mesh, paint(MESH_LIT, { stroke: meshW, blend: 4 /* BlendMode.DstOver */ }));
     c.drawRect(box, paint(MESH_WASH, { blend: 4 }));
     c.restore();
+    /* ★ NO HARD CUT-OFF AT THE CAGE TOP (Stuart, 2026-10-16): the wash carries on above the cage and fades
+     *  into the dome, as the real tube's light spills upward onto the glass and the parts above. */
+    const fadeTop = b.y * 0.15;
+    const up = Sk.Paint();
+    up.setAntiAlias(true);
+    up.setBlendMode(4 /* DstOver */);
+    up.setShader(Sk.Shader.MakeLinearGradient({ x: 0, y: b.y }, { x: 0, y: fadeTop },
+      [Sk.Color(MESH_WASH), Sk.Color('rgba(190,70,8,0)')], [0, 1], 0 /* TileMode.Clamp */));
+    c.drawRect(Sk.XYWHRect(0, fadeTop, tw, b.y - fadeTop), up);
+    // The top strap catching the glow on its underside.
+    const sb = strapBox(tw, th);
+    const sp = Sk.Paint();
+    sp.setAntiAlias(true);
+    sp.setShader(Sk.Shader.MakeLinearGradient({ x: 0, y: sb.y }, { x: 0, y: sb.y + sb.h },
+      [Sk.Color('rgba(255,150,70,0.12)'), Sk.Color('rgba(255,175,95,0.42)')], [0, 1], 0));
+    c.drawRect(Sk.XYWHRect(sb.x, sb.y, sb.w, sb.h), sp);
+    // and a faint warm sheen on the dome glass above it
+    const dome = Sk.Paint();
+    dome.setAntiAlias(true);
+    dome.setShader(Sk.Shader.MakeRadialGradient({ x: tw / 2, y: sb.y }, tw * 0.55,
+      [Sk.Color('rgba(255,120,40,0.10)'), Sk.Color('rgba(255,120,40,0)')], [0, 1], 0));
+    c.drawRect(Sk.XYWHRect(0, 0, tw, sb.y), dome);
   }
   c.restore();
 }
@@ -431,7 +506,16 @@ export const TUBE_DESIGN = {
 /** Stack pieces (pt at scale 1): tip-off pip, socket collar, and the clearance — 2 × CLEAR, all of it
  *  above the pip (the collar stands on the floor, see the ★★★ above). */
 export const PIP_H = 2;
-export const COLLAR_H = 4;
+/** ★★ THE BASE, 2026-10-16 (Stuart: "drop the base slightly … so they look like they are attached to the
+ *  bottom of the panel"): the collar is 3 pt (was 4) and sinks COLLAR_SUNK into the panel's lower lip, as
+ *  if the tube were mounted through it — 2 pt of socket still shows. The 2 pt the base gave up go to the
+ *  glass (GLASS_GAIN), so the digits grow in the same readout height. */
+export const COLLAR_H = 3;
+export const COLLAR_SUNK = 1;
+/** The collar that shows above the window floor. */
+export const COLLAR_SHOWN = COLLAR_H - COLLAR_SUNK;
+/** What the base gave up (4 pt shown → 2), handed to the glass's design cap. */
+export const GLASS_GAIN = 4 - COLLAR_SHOWN;
 export const CLEAR = 2;
 /** Floor for the glass: below this the dome cannot be drawn at all. The stack then CLIPS rather than
  *  lie — only reachable in a window under 18 pt, which no layout has. */
@@ -449,7 +533,7 @@ export interface NixieGeometry {
   nf:        number;
   gap:       number;
   /** y of the collar's top edge (the socket floor line) — everything stands on it. The collar's foot
-   *  (collarY + COLLAR_H) is the window's bottom edge: the tubes stand on the line under the window. */
+   *  runs COLLAR_SUNK under the window's bottom edge: the tubes are mounted through the panel's lip. */
   collarY:   number;
   /** ★★ How far the anchoring moved the row DOWN from the brief's layout (the 2 pt that used to sit
    *  under the collar). Everything that belongs to the tubes but is not drawn from their boxes — the
@@ -470,12 +554,23 @@ export interface NixieGeometry {
  *   never move a tube (§7 TRAP: anchor the group, do not centre it with the label).
  */
 export function nixieGeometry(w: number, h: number, spec: NixieSpec, design: TubeDesign,
-                              opts: { bar: boolean; scale?: number }): NixieGeometry {
+                              opts: { bar: boolean; scale?: number; grow?: boolean }): NixieGeometry {
   const sc = opts.scale ?? 1;
   const n = spec.mhzTubes + spec.fracTubes;
   const nb = spec.bulbAt.length;
-  const k10 = Math.min(1, 8 / n);
   const barK = opts.bar ? Math.min(1, 16 / design.tw) : 1;
+  /* ★ GROW (the landscape centre window only, Stuart 2026-10-16: "any room to increase the size a tiny
+   *   amount in landscape?"): a 10-tube radio is narrowed to 8/10 up front; a window with room to spare
+   *   takes back as much of that as fits, and its digits may fill a little more of the glass (0.86 vs
+   *   0.8). Never wider than the window — `fit` below still has the last word. The bar windows ASK for
+   *   their width (nixieNaturalWidth), so they never grow. */
+  let k10 = Math.min(1, 8 / n);
+  if (opts.grow && k10 < 1) {
+    const tw1 = design.tw * barK * sc, bw1 = Math.round(tw1 * 0.45);
+    const gap1 = (barK < 1 ? 1 : 2) * sc;
+    const natural1 = n * tw1 + nb * (bw1 + 4 * sc) + (n + nb - 1) * gap1;
+    k10 = Math.min(1, Math.max(k10, w / natural1));
+  }
   const k = barK * k10;
   let tw = design.tw * k * sc;
   let nf = (k < 1 ? design.nf * (0.5 + k / 2) : design.nf) * sc;
@@ -488,9 +583,12 @@ export function nixieGeometry(w: number, h: number, spec: NixieSpec, design: Tub
   const fit = naturalW > fixed && w > fixed ? Math.min(1, (w - fixed) / (naturalW - fixed)) : 1;
   tw *= fit;
   const bw = Math.max(2, bw0 * fit);
-  const glassMax = design.th * sc;
-  const glassH = Math.max(MIN_GLASS * sc, Math.min(glassMax, h - (PIP_H + COLLAR_H + 2 * CLEAR) * sc));
-  nf = Math.min(nf * fit, glassH * 0.8);
+  const glassMax = (design.th + GLASS_GAIN) * sc;
+  const glassH = Math.max(MIN_GLASS * sc, Math.min(glassMax, h - (PIP_H + COLLAR_SHOWN + 2 * CLEAR) * sc));
+  // ★ The glass the base gave up (GLASS_GAIN) grows the digit with it, so the numbers get bigger in the
+  //   same readout height wherever the glass did (Stuart, 2026-10-16).
+  const gainK = Math.max(1, glassH / (design.th * sc));
+  nf = Math.min(nf * fit * gainK, glassH * (opts.grow ? 0.86 : 0.8));
   const bulbH = glassH * 0.62;
   const gapF = gap * fit;
   const groupW = n * tw + nb * (bw + 4 * sc) + (n + nb - 1) * gapF;
@@ -507,12 +605,12 @@ export function nixieGeometry(w: number, h: number, spec: NixieSpec, design: Tub
     x += tw + gapF;
   }
   // ★★★ Anchored: the collar's foot on the window floor, no clearance under it (see the header).
-  const collarY = h - COLLAR_H * sc;
+  const collarY = h - COLLAR_SHOWN * sc;   // ★ the collar's foot runs COLLAR_SUNK under the window's lip
   return { tubes, bulbs, glassH, bulbH, nf, gap: gapF, collarY, drop: CLEAR * sc, naturalW, fit };
 }
 
 /** The whole stack's height for a glass height — what must fit in the window (its clearance included,
  *  all of it above the pip). */
 export function stackHeight(glassH: number, scale = 1): number {
-  return glassH + (PIP_H + COLLAR_H + 2 * CLEAR) * scale;
+  return glassH + (PIP_H + COLLAR_SHOWN + 2 * CLEAR) * scale;
 }

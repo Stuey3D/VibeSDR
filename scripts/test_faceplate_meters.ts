@@ -16,7 +16,7 @@ import {
   meterUnitOf, type MeterUnit,
 } from '../src/constants/meters.ts';
 import * as METERS_MOD from '../src/constants/meters.ts';
-import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H, COLLAR_H } from '../src/constants/nixie.ts';
+import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H, COLLAR_H, COLLAR_SHOWN, GLASS_GAIN } from '../src/constants/nixie.ts';
 import {
   modeBoxFit, modeTextWidth, stereoWidth, modeLabelCandidates, composeModeLabel, MODE_BOX, MODE_BOX_MAX_SHARE, isFixedFace,
   MODE_MIN_FONT, type ModeFace,
@@ -408,8 +408,8 @@ for (const W of [320, 375, 390, 430]) {
       const tag = `${W} pt ${meter}${shared ? '+shared' : ''} ${layout} (window ${d.freqH} pt)`;
       ok(`${tag}: the stack fits the window`, stackHeight(g.glassH, scale) <= d.freqH + 1e-9);
       ok(`${tag}: the dome's pip is inside the window`, g.collarY - g.glassH - PIP_H * scale >= -1e-9);
-      ok(`${tag}: ★ the tubes stand on the line under the window`, Math.abs(g.collarY + COLLAR_H * scale - d.freqH) < 1e-9);
-      ok(`${tag}: the glass never exceeds its design height`, g.glassH <= design.th * scale + 1e-9);
+      ok(`${tag}: ★ the tubes stand on the line under the window`, Math.abs(g.collarY + COLLAR_SHOWN * scale - d.freqH) < 1e-9);
+      ok(`${tag}: the glass never exceeds its design height`, g.glassH <= (design.th + GLASS_GAIN) * scale + 1e-9);
       const last = g.tubes[g.tubes.length - 1];
       ok(`${tag}: the tube row fits the width`, last.x + last.w <= winW + 1e-6);
     }

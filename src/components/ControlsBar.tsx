@@ -54,7 +54,7 @@ import EdgeMeter from './EdgeMeter';
 import DabMeter from './DabMeter';
 import { DAB_SEARCHING, type DabQuality } from '../utils/dabQuality';
 import { GhostGrid, SegDigits, VfdFilaments } from './VfdParts';
-import { TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, type NixieLayout } from '../constants/nixie';
+import { TUBE_DESIGN, PIP_H, COLLAR_SHOWN, CLEAR, type NixieLayout } from '../constants/nixie';
 import { composeModeLabel, modeBoxFit, MODE_BOX, segModeFont, segModeFieldWidth, segReadingGeometry, segUnitFont } from '../constants/modeBox';
 import { segModeCells, segReadingCells, segUnitCells, SEG_ALL, SEG_DEMOD_CELLS, SEG_READ_GHOST, SEG_UNIT_CELLS } from '../constants/segField';
 import { SegField, segCellX, segFieldCellsWidth, type SegExtra } from './SegField';
@@ -1099,8 +1099,10 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
       <NixieTubes hz={ro.hz} unit={ro.unit} layout={ro.layout}
         design={land ? TUBE_DESIGN.meterLand : shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter} bar={false}
         // ★ fill: the stack (glass + pip + collar + clearance) is the window's height; the width still fits it.
-        scale={fill ? H / (TUBE_DESIGN.meterLand.th + PIP_H + COLLAR_H + 2 * CLEAR) : s.scale}
-        radius={8} reserveRight={labelW} style={{ flex: 1, height: H, minWidth: 0 }}>
+        scale={fill ? H / (TUBE_DESIGN.meterLand.th + PIP_H + COLLAR_SHOWN + 2 * CLEAR) : s.scale}
+        // ★ grow: landscape only — the centre window has room either side, so a 10-tube radio's tubes take it
+        //   (Stuart, 2026-10-16). Still never wider than the window.
+        radius={8} reserveRight={labelW} grow={land} style={{ flex: 1, height: H, minWidth: 0 }}>
         {label}
       </NixieTubes>
     );
