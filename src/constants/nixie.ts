@@ -221,8 +221,8 @@ export const meshWire = (tw: number) => Math.max(0.35, tw * 0.012);
  */
 export interface NeonLayer { width: number; sigma: number; color: string; alpha: number }
 export const DIGIT_NEON: NeonLayer[] = [
-  { width: 0.16,  sigma: 0.15,  color: 'rgb(200,62,6)',   alpha: 0.60 },   // wide bloom, fills the window
-  { width: 0.09,  sigma: 0.05,  color: 'rgb(214,84,9)',   alpha: 0.85 },   // the gas sheath
+  { width: 0.16,  sigma: 0.15,  color: 'rgb(200,62,6)',   alpha: 0.70 },   // wide bloom, fills the window
+  { width: 0.09,  sigma: 0.05,  color: 'rgb(214,84,9)',   alpha: 0.95 },   // the gas sheath
   { width: 0.062, sigma: 0.016, color: 'rgb(240,110,8)',  alpha: 1 },      // the glow hugging the wire
   { width: 0.046, sigma: 0.006, color: 'rgb(252,150,22)', alpha: 1 },      // the hot core round the wire
   { width: 0.03,  sigma: 0.003, color: 'rgb(255,182,60)', alpha: 1 },      // white-hot next to the wire
@@ -242,7 +242,7 @@ const WIRE_FRONT     = 'rgba(30,26,22,0.55)';      // in front of a lit digit: d
 /** The anode mesh in front of the stack: it shadows the glow as fine hex lines, and is lit warm itself. */
 const MESH_SHADOW    = 'rgba(40,14,4,0.17)';
 const MESH_LIT       = 'rgba(230,100,30,0.20)';
-const MESH_WASH      = 'rgba(190,70,8,0.28)';
+const MESH_WASH      = 'rgba(190,70,8,0.32)';
 
 /**
  * Draw ONE tube's inside — the whole cathode stack with `lit` glowing at its own depth (null = a
