@@ -8,6 +8,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import android.speech.RecognitionListener
 import android.speech.RecognitionSupport
 import android.speech.RecognitionSupportCallback
@@ -27,7 +31,7 @@ import java.io.OutputStream
 import java.util.Locale
 
 /**
- * ★★ The API-33+ half of VibeTranscriberModule (kept out of the module class — see the note there).
+ * ★★ The API-31+ half of VibeTranscriberModule (kept out of the module class — see the note there).
  *
  *  One on-device SpeechRecognizer in a SEGMENTED session fed from a pipe: our 16 kHz mono PCM goes in the write end,
  *  results come back per segment (final) and as partials. The recogniser lives on the main looper (it must); the
@@ -38,9 +42,23 @@ import java.util.Locale
  *    is no detection API, so AUTO means the phone's language.
  *  ★ A language whose model is missing is DOWNLOADED BY THE SYSTEM on request (triggerModelDownload) and the box says
  *    so — never silently, never a cloud fallback.
+ *
+ *  ★★★ ANDROID 12 (API 31-32 — Kiko's Galaxy S10, whose last update is 12). createOnDeviceSpeechRecognizer is there
+ *    (31), but checkRecognitionSupport and triggerModelDownload are 33: the app can neither LIST the phone's offline
+ *    speech languages nor fetch one. So on 31-32 (`chooseOnly` in the caps): no AUTO, no GET — the user chooses the
+ *    language from a fixed common list (the phone's own first), and a language that is not installed for offline use
+ *    says how to add it in the phone's settings, and stops (no retry loop).
+ *    ★ The pipe (EXTRA_AUDIO_SOURCE) is a 33 FRAMEWORK constant but it is read by the recogniser SERVICE, which is
+ *      updated on its own (Google's comes from Play). If the 12 phone's service ignores it, it would listen to the
+ *      MICROPHONE — captions of the room, not the radio. So on 31-32 our end of the pipe is NON-BLOCKING and if the
+ *      recogniser has not read our audio for PIPE_DEAF_MS we stop and say so, rather than caption the wrong thing.
+ *    ★ Not yet run on a 31/32 device (2026-10-16) — the first real test says which 12 phones take the pipe.
+ *    ★ getVoiceDetailsIntent / ACTION_GET_LANGUAGE_DETAILS was considered for the list: it asks the DEFAULT (cloud)
+ *      recogniser for every language it supports, not what is installed offline — a list that would promise languages
+ *      the on-device recogniser cannot do. Not used.
  */
-@RequiresApi(33)
-class TranscribeEngine33(
+@RequiresApi(31)
+class TranscribeEngine(
     private val ctx: Context,
     private val mod: VibeTranscriberModule,
     languageArg: String,
@@ -54,8 +72,23 @@ class TranscribeEngine33(
     private var announced = false   // the box's "Trying …" line, once per start (open() runs per segment)
     companion object {
         private const val TAG = "VibeTranscribe"
+        /** 31-32: the recogniser has not taken our audio for this long while it flows → it is not reading the pipe. */
+        private const val PIPE_DEAF_MS = 5000L
+        /** 31-32: the languages offered when the phone cannot be asked (the phone's own goes first). One tag each. */
+        private val COMMON = listOf("en-US", "es-ES", "fr-FR", "de-DE", "it-IT", "pt-BR", "nl-NL", "ru-RU", "uk-UA",
+            "pl-PL", "tr-TR", "ar-EG", "zh-CN", "ja-JP", "ko-KR", "hi-IN", "vi-VN", "th-TH", "id-ID", "cs-CZ", "sv-SE")
+
+        /** Android 12: the user's own setting is the only way to add an offline speech language — say where, plainly. */
+        fun notInstalledText(nm: String) =
+            "$nm is not installed for offline speech on this phone. Add it in the phone's Settings (search Settings for " +
+            "\"offline speech\" — Google's recogniser keeps them under Speech Services by Google), then try again."
 
         fun capabilities(ctx: Context, p: Promise) {
+            if (Build.VERSION.SDK_INT < 33) capabilities31(ctx, p) else capabilities33(ctx, p)
+        }
+
+        @RequiresApi(33)
+        private fun capabilities33(ctx: Context, p: Promise) {
             Handler(Looper.getMainLooper()).post {
                 val m = Arguments.createMap()
                 if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)) {
@@ -104,9 +137,51 @@ class TranscribeEngine33(
             }
         }
 
+        /** 31-32: no list and no download — the phone's language and the common ones, nothing marked ON PHONE. */
+        private fun capabilities31(ctx: Context, p: Promise) {
+            Handler(Looper.getMainLooper()).post {
+                val m = Arguments.createMap()
+                if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)) {
+                    m.putBoolean("available", false)
+                    m.putString("reason", "This phone has no on-device speech recogniser")
+                    p.resolve(m); return@post
+                }
+                val dev = Locale.getDefault()
+                m.putBoolean("available", true)
+                m.putBoolean("chooseOnly", true)
+                m.putString("deviceLanguage", dev.language)
+                m.putString("deviceLanguageName", dev.getDisplayLanguage(dev))
+                m.putString("deviceRegion", dev.country)
+                m.putBoolean("nativeLanguageDetection", false)
+                val tags = (listOf(dev.toLanguageTag()) + COMMON)
+                    .distinctBy { Locale.forLanguageTag(it).language }
+                val arr = Arguments.createArray()
+                for (id in tags) {
+                    val o = Arguments.createMap()
+                    o.putString("id", id)
+                    o.putString("name", Locale.forLanguageTag(id).getDisplayName(dev))
+                    o.putBoolean("installed", false)   // unknown on 12 — never claimed
+                    arr.pushMap(o)
+                }
+                m.putArray("languages", arr)
+                p.resolve(m)
+            }
+        }
+
         /** ★ DOWNLOAD… — the SYSTEM fetches the speech model (it shows its own progress); the translation pack follows
          *  on Wi-Fi only, as when listening. Resolves at once with what was started, never waits on the system. */
         fun download(ctx: Context, language: String, translateTo: String, p: Promise) {
+            if (Build.VERSION.SDK_INT < 33) {   // no GET is drawn on 12; answer plainly if one is ever asked for
+                val res = Arguments.createMap()
+                res.putBoolean("ok", false)
+                res.putString("text", notInstalledText(Locale.forLanguageTag(language).getDisplayLanguage(Locale.getDefault())))
+                p.resolve(res); return
+            }
+            download33(ctx, language, translateTo, p)
+        }
+
+        @RequiresApi(33)
+        private fun download33(ctx: Context, language: String, translateTo: String, p: Promise) {
             Handler(Looper.getMainLooper()).post {
                 val dev = Locale.getDefault()
                 val nm = Locale.forLanguageTag(language).getDisplayLanguage(dev)
@@ -155,8 +230,15 @@ class TranscribeEngine33(
     fun start() {
         main.post {
             status("Preparing on-device speech…")
+            if (Build.VERSION.SDK_INT < 33) open() else start33()   // 12: nothing to ask — the chosen language
+        }
+    }
+
+    @RequiresApi(33)
+    private fun start33() {
+        run {
             val probe = try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx) } catch (e: Throwable) { null }
-            if (probe == null) { mod.emit("error", "Could not start the on-device recogniser"); return@post }
+            if (probe == null) { mod.emit("error", "Could not start the on-device recogniser"); return }
             try {
                 probe.checkRecognitionSupport(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH), ctx.mainExecutor,
                     object : RecognitionSupportCallback {
@@ -253,15 +335,47 @@ class TranscribeEngine33(
         val os = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
         out = os
         VibeTranscribeTap.reset()
-        VibeTranscribeTap.sink = { bytes ->
-            val o = out
-            if (o != null && !stopped) {
-                try { o.write(bytes) } catch (e: IOException) { /* the session ended; reopen() takes over */ }
+        if (Build.VERSION.SDK_INT < 33) {
+            // ★ 12: our end never blocks; a pipe left full for PIPE_DEAF_MS = the recogniser is not reading it.
+            val fd = pipe[1].fileDescriptor
+            try { Os.fcntlInt(fd, OsConstants.F_SETFL, OsConstants.O_NONBLOCK) } catch (_: ErrnoException) {}
+            var fullSince = 0L
+            VibeTranscribeTap.sink = sink@{ bytes ->
+                if (out !== os || stopped) return@sink
+                val n = try { Os.write(fd, bytes, 0, bytes.size) } catch (e: ErrnoException) {
+                    if (e.errno != OsConstants.EAGAIN) return@sink   // closed: the session ended; reopen() takes over
+                    0
+                } catch (_: IOException) { return@sink }
+                if (n > 0) { fullSince = 0L; return@sink }
+                val now = SystemClock.elapsedRealtime()
+                if (fullSince == 0L) fullSince = now
+                else if (now - fullSince > PIPE_DEAF_MS) {
+                    fullSince = Long.MAX_VALUE / 2   // once
+                    main.post { deaf() }
+                }
+            }
+        } else {
+            VibeTranscribeTap.sink = { bytes ->
+                val o = out
+                if (o != null && !stopped) {
+                    try { o.write(bytes) } catch (e: IOException) { /* the session ended; reopen() takes over */ }
+                }
             }
         }
         if (detected.isEmpty()) setDetected(prim, announce = false)
         status(if (language == "auto" && Build.VERSION.SDK_INT >= 34 && installed.size > 1)
             "Listening — detecting the language…" else "Listening — ${display(prim)}")
+    }
+
+    @RequiresApi(33)
+    private fun fetchModel(intent: Intent) { try { sr?.triggerModelDownload(intent) } catch (_: Throwable) {} }
+
+    /** 12: the recogniser never read our audio — it is (at best) listening to the microphone. Stop, and say so. */
+    private fun deaf() {
+        if (stopped) return
+        stop()
+        mod.emit("error", "This phone's speech recogniser does not take the radio's audio on Android ${Build.VERSION.RELEASE} " +
+            "(it listens only to the microphone), so TRANSCRIBE cannot work here. It needs Android 13 on this phone.")
     }
 
     private fun reopen(delayMs: Long) {
@@ -290,7 +404,11 @@ class TranscribeEngine33(
             if (t.isNotEmpty()) mod.emit("partial", t)
         }
         override fun onSegmentResults(b: Bundle) { deliver(b) }
-        override fun onResults(b: Bundle?) { if (b != null) deliver(b) }
+        override fun onResults(b: Bundle?) {
+            if (b != null) deliver(b)
+            // ★ 12's recogniser may not keep a segmented session: one utterance, then results — listen again.
+            if (Build.VERSION.SDK_INT < 33) reopen(100)
+        }
         override fun onEndOfSegmentedSession() { reopen(200) }
 
         override fun onLanguageDetection(b: Bundle) {
@@ -302,13 +420,26 @@ class TranscribeEngine33(
             if (stopped) return
             when (error) {
                 SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE, SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> {
+                    if (Build.VERSION.SDK_INT < 33) {
+                        // ★ 12: the app cannot fetch it — tell the user where to add it, and stop (no retry loop).
+                        val nm = Locale.forLanguageTag(primary()).getDisplayLanguage(Locale.getDefault())
+                        stop()
+                        mod.emit("error", notInstalledText(nm))
+                        return
+                    }
                     // ★ Ask the SYSTEM to fetch the model (it shows its own progress); say so here too.
                     status("Downloading the ${display(primary())} speech model — it works offline once installed…")
-                    try { sr?.triggerModelDownload(intent) } catch (_: Throwable) {}
+                    fetchModel(intent)
                     reopen(15000)
                 }
                 SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> reopen(100)
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> reopen(1000)
+                // ★ 12: the recogniser wanted the microphone, not our pipe — say so rather than retry.
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                    if (Build.VERSION.SDK_INT < 33) deaf() else {
+                        restarts++
+                        if (restarts > 5) mod.emit("error", "Speech recogniser stopped (error $error)") else reopen(500L * restarts)
+                    }
                 else -> {
                     restarts++
                     if (restarts > 5) { mod.emit("error", "Speech recogniser stopped (error $error)"); return }

@@ -4615,7 +4615,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★★ TRANSCRIBE (V12, experimental) — ON-DEVICE speech-to-text of the audio we play, translated to the phone's
    *  language when it is another one. Client-side, so every backend has it (OWRX included); UberSDR's STT key is the
    *  server's whisper and is untouched. Offered only where the device can run it (transcribeCaps) — iOS 26+, Android
-   *  13+ with an on-device recogniser. Language: 'auto' (detect) or a locale id; target: a language code, '' = off. */
+   *  12+ with an on-device recogniser (12: choose the language, no AUTO/GET). Language: 'auto' (detect) or a locale id; target: a language code, '' = off. */
   const [txCaps, setTxCaps] = useState<TranscribeCaps | null>(null);
   const [txLang, setTxLang] = useState('auto');
   const [txTo,   setTxTo]   = useState<string | null>(null);     // null = not loaded yet → the phone's language
@@ -4636,6 +4636,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const txTarget = txTo == null ? txDevTo
     : (txTo && !/[-_]/.test(txTo) && sameLanguage(txTo, txDevTo) ? txDevTo : txTo);
   const txTargetRef = useRef(txTarget); txTargetRef.current = txTarget;
+  /* ★ Android 12 has no AUTO (TranscribeCaps.chooseOnly) — a stored or default 'auto' means the phone's language there.
+   *   Not saved: the same choice on a later Android or an iPhone restore is still AUTO. */
+  useEffect(() => {
+    if (txCaps?.chooseOnly && txLang === 'auto' && txCaps.deviceLanguage) {
+      setTxLang(txCaps.deviceLanguage); txLangRef.current = txCaps.deviceLanguage;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txCaps, txLang]);
   const txLangRef = useRef(txLang); txLangRef.current = txLang;
   /** The language the transcriber settled on (detected or chosen) — shown in the status line by the native side. */
   /** The engine's own state line ("Listening — French (detected)") — a partial borrows the status row while speech is
@@ -10850,7 +10858,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             const full = !!txCaps.maxLanguages && new Set(kept).size >= txCaps.maxLanguages;
             return {
               text: `${txOffer.station ? `${txOffer.station} is` : 'This station is'} believed to be in ${nm} (EiBi). ${nm} is not on this phone — download it to transcribe this station (a few hundred MB, best on Wi-Fi).`
-                  + (full ? ` iPhone keeps ${txCaps.maxLanguages} languages, so the least used one will be removed to make room.` : ''),
+                  + (full ? ` iPhone keeps ${txCaps.maxLanguages} languages, so the least used one will be removed to make room (never your phone\u2019s language or the one you translate into).` : ''),
               action: txDl.id === txOffer.code ? 'DOWNLOADING…' : 'DOWNLOAD',
               onAction: txDl.id ? undefined : () => txDownload(txOffer.code),
             };
@@ -11950,7 +11958,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           languages: transcribeLanguageList(txCaps),
           downloading: txDl.id,
           downloadNote: txDl.note,
-          onDownload: (id: string) => txDownload(id),
+          // ★ Android 12 cannot fetch a speech language — no GET (a control that does nothing is not drawn).
+          onDownload: txCaps.chooseOnly ? undefined : (id: string) => txDownload(id),
+          chooseOnly: !!txCaps.chooseOnly,
           // ★ iOS only: a language holding one of Apple's places can give it back (Stuart, 10-15).
           onRemove: (id: string) => {
             if (txDl.id) return;
@@ -11963,9 +11973,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           heard: activeDecoder === 'transcribe' ? txHeard : '',
           /* ★ Said where the user chooses (Stuart, 10-15: "Advise users that on iOS auto … can only try 4 languages at
            *   once and may take a while"). Android 14+ detects natively and needs no note. */
-          autoNote: txCaps.nativeLanguageDetection ? undefined
+          autoNote: txCaps.chooseOnly
+            ? 'On Android 12 the app cannot see which speech languages are on the phone, detect the language or download one: choose the language being spoken. If it is not installed for offline speech, the box says how to add it in the phone\u2019s settings.'
+            : txCaps.nativeLanguageDetection ? undefined
             : Platform.OS === 'ios'
-              ? `On iPhone AUTO can only listen for 4 languages at once. It starts with the 4 most likely that are ON PHONE — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, then ' : ''}the main language around the receiver and the area’s other languages — then tries your phone’s languages and the rest marked ON PHONE, four at a time, so it can take a while; the box shows each try. Once it settles, the runner-up keeps listening and takes over if it fits the audio better. Retuning or CLR detects again. AUTO only tries languages ON PHONE and never downloads — each is 300–450 MB, so GET one on Wi-Fi and it joins AUTO’s list. When EiBi names a language that is not on the phone, the box offers to download it. iPhone keeps ${txCaps.maxLanguages ?? 'a few'} per app: a download when they are all taken removes the least used one, or REMOVE one yourself.`
+              ? `On iPhone AUTO can only listen for 4 languages at once. It starts with the 4 most likely that are ON PHONE — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, then ' : ''}the main language around the receiver and the area’s other languages — then tries your phone’s languages and the rest marked ON PHONE, four at a time, so it can take a while; the box shows each try. Once it settles, the runner-up keeps listening and takes over if it fits the audio better. Retuning or CLR detects again. AUTO only tries languages ON PHONE and never downloads — each is 300–450 MB, so GET one on Wi-Fi and it joins AUTO’s list. When EiBi names a language that is not on the phone, the box offers to download it. iPhone keeps ${txCaps.maxLanguages ?? 'a few'} per app: a download when they are all taken removes the least used one (never your phone\u2019s language or the one you translate into), or REMOVE one yourself.`
               : `On this phone AUTO listens in the most likely language — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, else ' : ''}the main language around the receiver. Choose the language yourself for anything else.`,
           onLanguage: (id: string) => {
             setTxLang(id); txLangRef.current = id;

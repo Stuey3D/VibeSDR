@@ -301,6 +301,8 @@ interface ModeSelectorProps {
     heard?: string;
     /** iOS: AUTO only compares languages already on the phone — say so, or a new language looks unsupported. */
     autoNote?: string;
+    /** Android 12: no AUTO row — nothing can detect the language there (TranscribeCaps.chooseOnly). */
+    chooseOnly?: boolean;
     /** Translation target ('' = off) and the phone's language, the one target offered beside OFF / EN. */
     translateTo: string; deviceLanguage: string; onTranslateTo: (code: string) => void;
   } | null;
@@ -401,7 +403,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txListOpen]);
   const txPick = (id: string) => { setTxListOpen(false); tc?.onLanguage(id); };
-  const txRows = tc ? [{ id: 'auto', code: 'auto', name: 'AUTO — detect the language', installed: true }, ...tc.languages] : [];
+  const txRows = tc ? [...(tc.chooseOnly ? [] : [{ id: 'auto', code: 'auto', name: 'AUTO — detect the language', installed: true }]), ...tc.languages] : [];
   // ★ The phone's language (its variant: PORTUGUESE (BR)) and English — one button per language, never two Englishes.
   const txTargets = tc ? [tc.deviceLanguage, ...(sameLanguage(tc.deviceLanguage, 'en') ? [] : ['en'])].filter(Boolean) : [];
   const transcribeCallout = tc && txLit ? (

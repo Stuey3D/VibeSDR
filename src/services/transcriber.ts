@@ -7,7 +7,7 @@
  * server's own engine and stays exactly as it is.
  *
  * ★★ Nothing leaves the phone: Apple SpeechAnalyzer + Translation (iOS 26+), Android's on-device SpeechRecognizer
- *    (13+, language detection on 14+) + ML Kit on-device translation. Where the device cannot do it, capabilities()
+ *    (12+; language list, downloads and AUTO need 13; detection on 14+) + ML Kit on-device translation. Where the device cannot do it, capabilities()
  *    says so and the TRANSCRIBE key is not drawn (AGENTS.md: no dead controls).
  */
 import { NativeEventEmitter, NativeModules } from 'react-native';
@@ -29,6 +29,9 @@ export interface TranscribeCaps {
   languages?: TranscribeLanguage[];
   /** Android: the recogniser can identify the spoken language itself (14+). iOS AUTO is done by comparing models. */
   nativeLanguageDetection?: boolean;
+  /** Android 12 (API 31-32): the phone cannot be asked which speech languages it has, nor fetch one — the user chooses
+   *  the language (no AUTO, no GET), and `installed` is never claimed. */
+  chooseOnly?: boolean;
 }
 export type TranscribeEvent =
   | { type: 'status'; text: string }

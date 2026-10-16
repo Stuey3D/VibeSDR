@@ -19,15 +19,17 @@ import java.util.concurrent.atomic.AtomicInteger
  *  on every backend. Android's on-device SpeechRecognizer takes our audio through a pipe (EXTRA_AUDIO_SOURCE, API 33)
  *  and, on 14+, identifies the spoken language itself (EXTRA_ENABLE_LANGUAGE_DETECTION). Translation is ML Kit, on
  *  the device. Nothing leaves the phone, and there is no fallback to a cloud recogniser.
+ *  ★ Android 12 (31-32, Kiko's Galaxy S10): the on-device recogniser exists but there is no API to list or download
+ *    its languages, so the user chooses the language (no AUTO, no GET) — see TranscribeEngine's "ANDROID 12" note.
  *
  *  ★★ THIS CLASS NAMES NO android.* TYPE NEWER THAN minSdk (24). RN reflects over every declared method of a module
  *     class, and a newer type in a signature is a NoClassDefFoundError at launch on old phones (Lite 65, 2026-10-14).
- *     Everything from API 33 lives in TranscribeEngine33, which is only touched behind an SDK_INT check.
+ *     Everything from API 31 lives in TranscribeEngine, which is only touched behind an SDK_INT check.
  */
 class VibeTranscriberModule(private val ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ctx) {
     override fun getName() = "VibeTranscriber"
 
-    private var engine: Any? = null       // TranscribeEngine33 on 33+
+    private var engine: Any? = null       // TranscribeEngine on 31+
 
     fun emit(m: WritableMap) {
         try {
@@ -44,19 +46,19 @@ class VibeTranscriberModule(private val ctx: ReactApplicationContext) : ReactCon
 
     @ReactMethod
     fun capabilities(p: Promise) {
-        if (Build.VERSION.SDK_INT < 33) {
+        if (Build.VERSION.SDK_INT < 31) {
             val m = Arguments.createMap()
-            m.putBoolean("available", false); m.putString("reason", "Needs Android 13 or later")
+            m.putBoolean("available", false); m.putString("reason", "Needs Android 12 or later")
             p.resolve(m); return
         }
-        TranscribeEngine33.capabilities(ctx, p)
+        TranscribeEngine.capabilities(ctx, p)
     }
 
     @ReactMethod
     fun start(language: String, translateTo: String) {
-        if (Build.VERSION.SDK_INT < 33) { emit("error", "Needs Android 13 or later"); return }
+        if (Build.VERSION.SDK_INT < 31) { emit("error", "Needs Android 12 or later"); return }
         stop()
-        val e = TranscribeEngine33(ctx, this, language, translateTo)
+        val e = TranscribeEngine(ctx, this, language, translateTo)
         engine = e
         e.start()
     }
@@ -64,16 +66,16 @@ class VibeTranscriberModule(private val ctx: ReactApplicationContext) : ReactCon
     /** DOWNLOAD… in the language row — fetch a language's speech model (and translation pack) without listening. */
     @ReactMethod
     fun download(language: String, translateTo: String, p: Promise) {
-        if (Build.VERSION.SDK_INT < 33) {
-            val m = Arguments.createMap(); m.putBoolean("ok", false); m.putString("text", "Needs Android 13 or later")
+        if (Build.VERSION.SDK_INT < 31) {
+            val m = Arguments.createMap(); m.putBoolean("ok", false); m.putString("text", "Needs Android 12 or later")
             p.resolve(m); return
         }
-        TranscribeEngine33.download(ctx, language, translateTo, p)
+        TranscribeEngine.download(ctx, language, translateTo, p)
     }
 
     @ReactMethod
     fun stop() {
-        if (Build.VERSION.SDK_INT >= 33) (engine as? TranscribeEngine33)?.stop()
+        if (Build.VERSION.SDK_INT >= 31) (engine as? TranscribeEngine)?.stop()
         engine = null
     }
 
