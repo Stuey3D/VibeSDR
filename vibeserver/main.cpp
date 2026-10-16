@@ -47,6 +47,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <dirent.h>
 #include <limits.h>       // PATH_MAX, for selfExePath()
 #include <thread>
 #if defined(__APPLE__)
@@ -100,6 +101,66 @@ std::atomic<bool> g_stop{false};
 //   must not depend on the main loop noticing g_stop and unwinding tidily. kill() and waitpid()
 //   are async-signal-safe; this deliberately does nothing else.
 void onSignal(int) { g_stop = true; reapRadios(); }
+
+/* ★★★ A STOP THAT DOES NOT FINISH MUST NOT HOLD THE RESTART FOR 90 SECONDS (2026-10-16).
+ *  Pi 500, 20:26:53: the setup page's save restarted every radio, and radio 00000002 — a listener had
+ *  asked for DAB in the same second — logged "Stopping…", kept capturing ("capture clean" a minute
+ *  later) and never exited. systemd waited out TimeoutStopSec (90 s) and SIGKILLed it, and for that
+ *  minute and a half the front door showed NO radios, because vibeserver-radios waits for every one.
+ *  ★★ systemd's timeout is the LAST resort, not the plan: it is 90 s, and a SIGKILL leaves nothing in
+ *     the journal about what was stuck. This fires first, says WHICH STEP of the stop it was on
+ *     (LocalSdrShim::stopStage) and which threads were still alive, then leaves. Nothing is lost by
+ *     leaving: the spectrogram is saved before the stop starts, the config is on disk, and a process
+ *     exit already hands the dongle back to the kernel (see stopLocked, 2026-10-05).
+ *  ★★ 8 s, not 5: the stop itself waits up to 5 s for a radio reader that will not leave libusb and
+ *     LOGS that it gave up — the net must not cut that sentence off. VIBE_STOP_GRACE_S overrides.
+ *  ★★★ THE GUARD AGAINST A HANG MUST NOT CONTAIN ONE (the 2026-09-13 lesson: an fflush() down an
+ *      undrained pipe kept a watchdog from ever reaching _exit for forty minutes). Everything here
+ *      is write(2) on fd 2 and fixed buffers; the thread listing is the one part that touches the
+ *      filesystem, so an alarm() is armed first — if even that wedges, SIGALRM's default action ends
+ *      the process two seconds later.
+ *  ★ Exit status 0: on a stop or a restart this is the outcome that was asked for, and Restart=always
+ *    brings the radio back either way. The journal line is what makes it visible. */
+void armShutdownWatchdog() {
+    int secs = 8;
+    if (const char* e = std::getenv("VIBE_STOP_GRACE_S")) { const int v = std::atoi(e); if (v > 0) secs = v; }
+    std::thread([secs]{
+        std::this_thread::sleep_for(std::chrono::seconds(secs));
+        std::signal(SIGALRM, SIG_DFL);
+        ::alarm(2);
+        char line[512];
+        const char* stage = vibe::LocalSdrShim::stopStage();
+        int n = std::snprintf(line, sizeof line,
+            "VibeServer: shutdown did not complete in %ds — stuck at: %s — exiting anyway so the "
+            "service can restart.\n", secs, stage ? stage : "(before or after the radio's stop)");
+        if (n > 0) (void)!::write(2, line, std::min<size_t>(size_t(n), sizeof line - 1));
+#if defined(__linux__)
+        // ★ The threads still alive, by name and what the kernel says each is waiting in.
+        if (DIR* d = ::opendir("/proc/self/task")) {
+            while (dirent* de = ::readdir(d)) {
+                if (de->d_name[0] == '.') continue;
+                char path[96], comm[32] = "", wchan[64] = "";
+                auto slurp = [&](const char* what, char* out, size_t cap) {
+                    std::snprintf(path, sizeof path, "/proc/self/task/%s/%s", de->d_name, what);
+                    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+                    if (fd < 0) return;
+                    const ssize_t r = ::read(fd, out, cap - 1);
+                    ::close(fd);
+                    out[r > 0 ? r : 0] = 0;
+                    for (char* c = out; *c; ++c) if (*c == '\n') { *c = 0; break; }
+                };
+                slurp("comm", comm, sizeof comm);
+                slurp("wchan", wchan, sizeof wchan);
+                n = std::snprintf(line, sizeof line, "VibeServer:   still running: %s %s (in %s)\n",
+                                  de->d_name, comm, wchan[0] ? wchan : "?");
+                if (n > 0) (void)!::write(2, line, std::min<size_t>(size_t(n), sizeof line - 1));
+            }
+            ::closedir(d);
+        }
+#endif
+        _exit(0);
+    }).detach();
+}
 
 struct Opts {
     int         device  = 0;             // USB device index; <0 = use rtl_tcp instead
@@ -4244,14 +4305,7 @@ int main(int argc, char** argv) {
              *      no locks held by the threads we are escaping.
              *  ★ Nothing is lost by dropping the flush: the spectrogram is saved above, the config
              *    is on disk, and this message goes straight to fd 2 rather than through stdio. */
-            std::thread([]{
-                std::this_thread::sleep_for(std::chrono::seconds(8));
-                static const char msg[] =
-                    "VibeServer: shutdown did not complete in 8s — exiting anyway "
-                    "so the service can restart.\n";
-                (void)!::write(2, msg, sizeof msg - 1);
-                _exit(0);
-            }).detach();
+            armShutdownWatchdog();   // ★ the same net the plain stop has — see there
             LocalSdrShim::noteProcessExiting();   // ★ exit or execv next — see stopLocked (2026-10-05)
             shim.stop();
             // ★★★ IF NOTHING WILL BRING US BACK, BRING OURSELVES BACK. "Restart" here is `return
@@ -4288,7 +4342,9 @@ int main(int argc, char** argv) {
         }
     }
 
+    armShutdownWatchdog();   // ★★★ a plain stop (systemctl restart, a reboot) had NO net — see there
     std::printf("\nStopping…\n");
+    std::fflush(stdout);
     // ★★★ AND ON A PLAIN STOP, which is the path `systemctl restart` and a reboot actually take —
     //     SIGTERM sets g_stop and we arrive here. The first cut of this only saved on the
     //     SETUP-PAGE restart, so a reboot silently lost the history it was written to protect; the

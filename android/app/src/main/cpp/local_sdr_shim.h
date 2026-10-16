@@ -473,6 +473,9 @@ public:
     /** ★★★ THE NEXT stop() IS THE PROCESS GOING AWAY (the standalone server's exit and self-restart).
      *  A dongle is then NOT rtlsdr_close()d — see the note in stopLocked() (2026-10-05). */
     static void noteProcessExiting();
+    /** ★ The step stop() is on right now, or nullptr when it is not stopping (or has finished). For a
+     *  shutdown watchdog to report WHERE a stop wedged — see g_vsStopStage. */
+    static const char* stopStage();
     /** ITU region (1/2/3) for the named band presets — derived from where the owner says the
      *  receiver is. See vibe_bands.h: the allocations genuinely differ between regions. */
     static void setBandRegion(int region);

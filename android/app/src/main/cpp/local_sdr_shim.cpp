@@ -3608,6 +3608,13 @@ static std::atomic<bool>   g_vsPublicSharing{false};
 static std::atomic<bool>   g_radioOrphaned{false};
 /** ★ Set by the standalone server just before its last stop() — see LocalSdrShim::noteProcessExiting. */
 static std::atomic<bool>   g_vsProcessExiting{false};
+/** ★★★ WHERE A STOP IS, so a stop that never finishes can SAY where it stuck (2026-10-16). A radio on
+ *  the Pi 500 logged "Stopping…", kept capturing for 90 s and was SIGKILLed by systemd — which leaves
+ *  nothing in the journal about what it was waiting for. stopLocked() names each step here; the
+ *  standalone server's shutdown watchdog prints it (LocalSdrShim::stopStage). nullptr = not stopping,
+ *  or done. Static strings only — the watchdog reads it from another thread with no lock. */
+static std::atomic<const char*> g_vsStopStage{nullptr};
+#define STOP_STAGE(s) g_vsStopStage.store((s))
 /** ★★★ WHY THE RADIO IS NOT OURS RIGHT NOW — and it must reach the LISTENER, not just the log.
  *  When the idle park has released the dongle so another program can use it, and that program
  *  took it, resumeCaptureIdle's reacquire fails. That failure was only LOGI'd, so a listener saw
@@ -7014,7 +7021,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  and before the ban list. Found by audit, 2026-09-10.
      *  ★ Each handler now clears a flag when it returns and the accept loop joins the finished
      *    ones on its way past — bounded work, and shutdown still joins whatever is left. */
-    struct ConnThread { std::thread th; std::shared_ptr<std::atomic<bool>> done; };
+    /** ★ The socket rides along so a stop can SHUT IT DOWN before joining the thread — see stopLocked.
+     *  A handler whose socket nobody closes sits in recv for as long as its client stays connected. */
+    struct ConnThread { std::thread th; std::shared_ptr<std::atomic<bool>> done; std::shared_ptr<net::Socket> sock; };
     std::vector<ConnThread> connThreads;
     /** Join and drop every handler that has already returned. Call with connMtx held. */
     void reapConnThreadsLocked() {
@@ -16672,7 +16681,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             auto done = std::make_shared<std::atomic<bool>>(false);
             connThreads.push_back({ std::thread([this, sock, done]{
-                routeOrHandle(sock); done->store(true, std::memory_order_release); }), done });
+                routeOrHandle(sock); done->store(true, std::memory_order_release); }), done, sock });
         }
     }
 
@@ -16760,7 +16769,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             auto done = std::make_shared<std::atomic<bool>>(false);
             connThreads.push_back({ std::thread([this, sock, done]{
-                handleConnection(sock); done->store(true, std::memory_order_release); }), done });
+                handleConnection(sock); done->store(true, std::memory_order_release); }), done, sock });
         }
     }
 
@@ -25455,7 +25464,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         auto lastData = std::chrono::steady_clock::now();
         while (tcpRunning.load()) {
             auto s = tcpSock; if (!s) break;
-            int got = s->recv(buf.data() + carry, CHUNK, false, 5000);
+            // ★ 500 ms, not 5 s: the stop closes this socket to wake us, and on macOS a shutdown() does
+            //   not wake a poll() that is already waiting, so every rtl_tcp stop sat out the whole
+            //   timeout (measured 2026-10-16: 5.0-5.8 s per stop). A timeout only loops; data never waits.
+            int got = s->recv(buf.data() + carry, CHUNK, false, 500);
             if (got <= 0) { if (!tcpRunning.load()) break; continue; }
             auto now = std::chrono::steady_clock::now();
             auto gapMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -25473,6 +25485,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 // ── Public API ───────────────────────────────────────────────────────────────
 // Serialises start()/stop() so concurrent app-teardown calls can't double-free.
 static std::mutex g_lifecycle;
+/** ★★★ A TEARDOWN HOLDS g_lifecycle FOR ITS WHOLE LENGTH — and it JOINS THE CONNECTION THREADS while
+ *  holding it. So a connection thread that blocks on g_lifecycle (setNfmVoice and setDeemphasis, both
+ *  sent by the app the moment it connects) can never be joined: the stop waits for the handler, the
+ *  handler waits for the stop. Set by stopLocked() for its duration; see lockLifecycleUnlessTearingDown. */
+static std::atomic<bool> g_vsTearingDown{false};
+/** Take g_lifecycle — unless a teardown holds it, in which case give up (false) rather than wait for
+ *  a stop that is itself waiting for us. The caller keeps the setting in its shared default either
+ *  way, so the next start still applies it. ★ A short poll, not a plain lock(): a lock() already
+ *  queued cannot be withdrawn when the teardown begins. */
+static bool lockLifecycleUnlessTearingDown(std::unique_lock<std::mutex>& lk) {
+    while (!lk.try_lock()) {
+        if (g_vsTearingDown.load()) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return true;
+}
 
 // ★★★ THE LISTENER'S DSP CHOICES, HELD OUTSIDE `p` SO THEY SURVIVE A RADIO RESTART.
 //
@@ -27197,6 +27225,7 @@ void LocalSdrShim::setVibeServerDabAgc(bool on, int target) {
 void LocalSdrShim::setVibeServerUserNotch(bool allowed) { g_dsp.rspUserNotch.store(allowed ? 1 : 0); }
 void LocalSdrShim::setProvidesSpectrogram(bool on) { g_vsProvidesSpectrogram.store(on); }
 void LocalSdrShim::noteProcessExiting() { g_vsProcessExiting.store(true); }
+const char* LocalSdrShim::stopStage() { return g_vsStopStage.load(); }
 
 void LocalSdrShim::setBandRegion(int region) {
     vibebands::defaultRegion() = (region >= 1 && region <= 3) ? region : 1;
@@ -28940,7 +28969,10 @@ void LocalSdrShim::stop() {
 
 void LocalSdrShim::stopLocked() {
     if (!p) return;
-    Impl* impl = p; p = nullptr;
+    // ★ `p` is cleared further down, once every connection handler has been joined — see "NOTHING MAY
+    //   ARRIVE". Clearing it here let a handler pass `if (!p)` and then dereference null.
+    Impl* impl = p;
+    g_vsTearingDown.store(true);
     /* ★★★ STOPPING IS DECLARED FIRST, BEFORE A SINGLE SOCKET IS CLOSED. Closing the clients
      *     below runs their disconnect handlers, and the last one to go found nobody watching and
      *     did what it always does: "[DAB] last listener left — restoring the receiver" — a full
@@ -28950,6 +28982,13 @@ void LocalSdrShim::stopLocked() {
      *     running) 1.3 s after that — status=6/ABRT on every settings save. The flag was set
      *     AFTER the clients were stopped, which is exactly too late. */
     impl->stopping.store(true);
+    // ★ TEST KNOB: wedge this stop for good, so a test can watch the standalone server's shutdown
+    //   watchdog fire (scripts/test-server-stop-during-dab.mjs). Nothing else reads it.
+    if (const char* e = std::getenv("VIBE_TEST_STOP_WEDGE"); e && *e == '1') {
+        STOP_STAGE("a test wedge (VIBE_TEST_STOP_WEDGE)");
+        for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    STOP_STAGE("closing the port and the clients");
 
     impl->serverRunning.store(false);
     // ★★★ AND STOP LISTENING NOW, NOT WHEN THE TEARDOWN FINISHES. Everything below this line can
@@ -28991,6 +29030,82 @@ void LocalSdrShim::stopLocked() {
           if (kv.second->audio) kv.second->audio->close();
       } }
 
+    // ★★★ NEVER JOIN THE THREAD YOU ARE ON. `joinable()` means "has an associated thread", NOT
+    //     "is not me" — so a CONNECTION THREAD that reaches this teardown (a client disconnecting
+    //     is exactly that) walked the list and joined ITSELF. std::thread::join() then throws
+    //     system_error(EDEADLK), nothing catches it, and the app aborts:
+    //         std::__throw_system_error -> __cxa_throw -> std::terminate -> abort
+    //     Seen on macOS 10.0.2 build 44 (2026-08-01), with a second caller already inside the
+    //     same teardown on the TurboModule queue — two joins racing, one of them fatal.
+    //     ★ Detach instead: the thread is finishing anyway (serverRunning is already clear), and a
+    //     detached thread that outlives this call is a far smaller problem than a crash.
+    //     ★★ AND CATCH. A join can also fail because another caller already joined the same
+    //     thread; a teardown path must never be the thing that kills the process — least of all a
+    //     teardown running because something ELSE already went wrong.
+    const auto self = std::this_thread::get_id();
+    auto joinSafely = [&](std::thread& t, const char* what) {
+        if (!t.joinable()) return;
+        if (t.get_id() == self) {
+            LOGI("shim: %s is the calling thread — detaching rather than joining itself", what);
+            t.detach();
+            return;
+        }
+        try { t.join(); }
+        catch (const std::system_error& e) { LOGI("shim: %s join failed (%s)", what, e.what()); }
+    };
+    /* ★★★ NOTHING MAY ARRIVE WHILE THE RADIO IS TAKEN APART — SO EVERY CONNECTION IS FINISHED FIRST.
+     *  (2026-10-16, Pi 500, radio 00000002, the setup page's save restarting every radio.)
+     *  A listener arrived in the same second as the SIGTERM and asked for DAB. Its connection thread
+     *  was INSIDE setSampleRate() — which stops the reader and the DSP thread itself — when this stop
+     *  began. So this stop found no reader to cancel and no DSP thread to join (the rate change had
+     *  already taken both), and walked on; the rate change then finished and STARTED THEM AGAIN —
+     *  reader, DSP, housekeeping, the pipeline's workers — on a receiver that was being dismantled.
+     *  The journal says exactly that: "Stopping…", then "sample rate: 2048000 … tcp=0" and "[DAB]
+     *  mode ON" AFTER it, "[DAB] ★ … the radio reports 0.000 MS/s" (p had already been nulled), and
+     *  "capture clean" a full minute later from a radio that was meant to be stopped. The stop then
+     *  never finished — it reached the connection-thread join at the very end, and a handler can wait
+     *  there for ever: blocked on g_lifecycle (setNfmVoice / setDeemphasis, which the app sends as it
+     *  connects — and this stop HOLDS g_lifecycle), or in recv() on a socket that registered after the
+     *  client sweep and so was never closed. systemd SIGKILLed it after 90 s. (No stack was captured
+     *  on the Pi; the Mac stacks below put the stop in that same join.)
+     *  On the Mac, against rtl_tcp, the same race crashes instead of hanging — SIGSEGV on a nulled
+     *  `p` in setSampleRate, or SIGABRT from ~Impl destroying a thread the rate change restarted
+     *  (scripts/test-server-stop-during-dab.mjs pins both).
+     *  ★★ The cure is ORDER, not another flag: the accept and hand-off loops are stopped, every
+     *     connection's socket is shut down and every handler JOINED — while the radio is still whole,
+     *     so a rate change in flight simply completes — and only then is `p` cleared and the radio
+     *     stopped. After this point no thread exists that could start anything again.
+     *  ★ The handlers are cheap to finish: serverRunning is clear, stopping is set (so a departing
+     *    listener does not "restore the receiver", 2026-09-15), setSampleRate refuses once it sees
+     *    stopping, and the two setters that take g_lifecycle give up when a teardown holds it
+     *    (lockLifecycleUnlessTearingDown) — otherwise that join is a deadlock by construction. */
+    STOP_STAGE("the accept thread");
+    joinSafely(impl->acceptThread, "accept thread");
+    // ★★★ AND THE HAND-OFF LISTENER. Destroying a joinable std::thread calls std::terminate — which
+    //     is exactly the "terminate called without an active exception" and status=6/ABRT that
+    //     appeared on every radio's shutdown the moment this thread was added.
+    // ★ JOINED FIRST, CLOSED AFTER. Its loop wakes every 500 ms to check serverRunning (cleared
+    //   above). Closing the fd underneath a poll() does not wake it on Linux, and a closed fd number
+    //   can be handed straight to the next socket opened — so the fd is closed once nobody waits on it.
+    STOP_STAGE("the hand-off thread");
+    joinSafely(impl->handoffThread, "hand-off thread");
+    if (impl->handoffFd >= 0) { ::close(impl->handoffFd); impl->handoffFd = -1; }
+    // ★ Leave no stale socket behind: the next process to start would bind() onto a file nothing
+    //   is listening on, and every hand-off to it would fail with "connection refused".
+    if (!impl->handoffPath.empty()) ::unlink(impl->handoffPath.c_str());
+    STOP_STAGE("the connection threads");
+    {
+        std::vector<Impl::ConnThread> conns;
+        { std::lock_guard<std::mutex> lk(impl->connMtx); conns.swap(impl->connThreads); }
+        // ★ Shut down, not closed: the handler owns the fd and closes it on its way out; this only
+        //   makes its recv()/send() fail so that it leaves. A socket registered AFTER the client sweep
+        //   above (an accept-time control block still running when the stop began) is caught here.
+        for (auto& c : conns) if (c.sock) c.sock->shutdownBoth();
+        for (auto& c : conns) joinSafely(c.th, "connection thread");   // ★ outside connMtx
+    }
+    p = nullptr;   // ★ only now: no connection handler is left to read it half-way through a call
+
+    STOP_STAGE("joining the listeners' writers");
     // ★★★ JOIN EVERY PER-CLIENT WRITER BEFORE THE MAPS GO. Each listener owns an outbox thread,
     //     and destroying a std::thread that is still joinable calls std::terminate — which is
     //     precisely what "terminate called without an active exception" and status=6/ABRT in the
@@ -29007,6 +29122,7 @@ void LocalSdrShim::stopLocked() {
         { std::lock_guard<std::mutex> lk(impl->clientMtx);
           for (auto& kv : impl->clientDsp) gone.push_back(kv.second);
           impl->clientDsp.clear(); impl->pendingAudio.clear(); impl->sockSession.clear(); }
+        STOP_STAGE("stopping the listeners' DSP threads");
         for (auto& c : gone) impl->stopClientThread(c);   // outside the lock — they take it too
         // ★ A departing listener may have been the RDS decoder for its frequency; hand it to
         //   whoever is still there. Cheap, and only when somebody actually left.
@@ -29016,10 +29132,13 @@ void LocalSdrShim::stopLocked() {
     // Stop the IQ source. USB: cancel the async read. RTL-TCP: clear the run flag
     // and close the socket so the blocked recv() returns and the read thread exits.
     impl->stopping.store(true);      // so the capture thread knows this is US, not an unplug
+    STOP_STAGE("the hotplug watch");
     impl->stopHotplugWatch();
     // ★ Before any close: the writer touches `dev`. It takes devMtx, but joining it here is what
     //   guarantees no transfer is even queued by the time the handle goes.
+    STOP_STAGE("the hardware writer");
     impl->stopHwWriter();
+    STOP_STAGE("stopping the radio's stream");
     if (impl->dev) rtlsdr_cancel_async(impl->dev);
     if (impl->useSpy()) {
         impl->tcpRunning.store(false);
@@ -29081,6 +29200,7 @@ void LocalSdrShim::stopLocked() {
     //     "std::mutex::lock -> abort" crash the Airspy taught us on 2026-07-27. A leaked Impl in a
     //     process the user can restart beats an abort, and beats a hang that looks like a bug in
     //     everything else.
+    STOP_STAGE("waiting for the radio reader");
     bool readerStuck = false;
     if (impl->rtlThread.joinable()) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -29110,64 +29230,29 @@ void LocalSdrShim::stopLocked() {
         //    would send an owner hunting for a cable fault we caused.
         g_radioOrphaned.store(true);
         LOGE("local SDR stopped — RADIO ORPHANED, restart the app to reclaim it");
+        STOP_STAGE(nullptr);
+        g_vsTearingDown.store(false);
         return;
     }
     // IQ source stopped -> stop the DSP consumer (drains/clears the queue) before
     // tearing the engine down, so no rx.feed runs against a destroyed engine.
+    STOP_STAGE("the DAB clock");
     impl->stopDabClock();     // ★ joined here, not left for ~Impl to destroy while running
+    STOP_STAGE("the DSP thread");
     impl->stopDspThread();
+    STOP_STAGE("the audio chain");
     impl->teardownAudio();
+    STOP_STAGE("the pipeline's spectrum and demod workers");
     impl->rx.stop();
 
     // ★ Every decoder host: each drains and joins its own vibe-decode thread before its decoders are
     //   deleted, and gives its slots back — before `delete impl` destroys the outboxes they write to.
+    STOP_STAGE("the decoders");
     impl->decoders_.shutdownAll();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
     { std::lock_guard<std::mutex> lk(impl->notchMtx); delete impl->notchEng; impl->notchEng = nullptr; }
-    // NOTE: the accept loop needs no poking to exit — it polls accept() with a 500 ms timeout and
-    // checks serverRunning, which was cleared at the top. The PORT is closed up there too, and
-    // deliberately early; see the note beside it.
-    // ★ The old warning here said stop() was not idempotent and would double-close the fd (fdsan →
-    //   SIGABRT). It guards on `open_` and clears `fd_` now, so ~Listener's second call is a
-    //   no-op. Checked in net_shim.cpp rather than assumed, because that abort was real.
-    // ★★★ NEVER JOIN THE THREAD YOU ARE ON. `joinable()` means "has an associated thread", NOT
-    //     "is not me" — so a CONNECTION THREAD that reaches this teardown (a client disconnecting
-    //     is exactly that) walked the list and joined ITSELF. std::thread::join() then throws
-    //     system_error(EDEADLK), nothing catches it, and the app aborts:
-    //         std::__throw_system_error -> __cxa_throw -> std::terminate -> abort
-    //     Seen on macOS 10.0.2 build 44 (2026-08-01), with a second caller already inside the
-    //     same teardown on the TurboModule queue — two joins racing, one of them fatal.
-    //     ★ Detach instead: the thread is finishing anyway (serverRunning is already clear), and a
-    //     detached thread that outlives this call is a far smaller problem than a crash.
-    //     ★★ AND CATCH. A join can also fail because another caller already joined the same
-    //     thread; a teardown path must never be the thing that kills the process — least of all a
-    //     teardown running because something ELSE already went wrong.
-    const auto self = std::this_thread::get_id();
-    auto joinSafely = [&](std::thread& t, const char* what) {
-        if (!t.joinable()) return;
-        if (t.get_id() == self) {
-            LOGI("shim: %s is the calling thread — detaching rather than joining itself", what);
-            t.detach();
-            return;
-        }
-        try { t.join(); }
-        catch (const std::system_error& e) { LOGI("shim: %s join failed (%s)", what, e.what()); }
-    };
-    joinSafely(impl->acceptThread, "accept thread");
-    // ★★★ AND THE HAND-OFF LISTENER. Destroying a joinable std::thread calls std::terminate — which
-    //     is exactly the "terminate called without an active exception" and status=6/ABRT that
-    //     appeared on every radio's shutdown the moment this thread was added. It aborts on the way
-    //     OUT, so the process looks fine until systemd restarts it and finds it failed.
-    // ★ Closing the fd first is what makes the join prompt: the loop is sitting in poll(), and this
-    //   wakes it rather than waiting out its timeout.
-    if (impl->handoffFd >= 0) { ::close(impl->handoffFd); impl->handoffFd = -1; }
-    joinSafely(impl->handoffThread, "hand-off thread");
-    // ★ Leave no stale socket behind: the next process to start would bind() onto a file nothing
-    //   is listening on, and every hand-off to it would fail with "connection refused".
-    if (!impl->handoffPath.empty()) ::unlink(impl->handoffPath.c_str());
-    { std::lock_guard<std::mutex> lk(impl->connMtx);
-      for (auto& c : impl->connThreads) joinSafely(c.th, "connection thread");
-      impl->connThreads.clear(); }
+    // ★ The accept and hand-off threads and every connection handler were joined near the TOP, before
+    //   the radio was touched — see "NOTHING MAY ARRIVE WHILE THE RADIO IS TAKEN APART".
 
     /* ★★★ AND WHEN THE PROCESS IS GOING AWAY, DO NOT CLOSE THE DONGLE — THE KERNEL DOES IT (2026-10-05).
      *  EVERY stop of the Pi 2's RTL radio process ABORTED, rc13 and rc14 alike — 13 in ten days in the
@@ -29193,6 +29278,7 @@ void LocalSdrShim::stopLocked() {
              "(a close after a cancel aborts in libusb)");
         impl->dev = nullptr;
     }
+    STOP_STAGE("closing the radio");
     if (impl->dev) rtlsdr_close(impl->dev);
     impl->tcpSock = nullptr;             // RTL-TCP socket already closed above
     // Close our own dup last (rtlsdr_close/libusb don't own it). Kotlin's
@@ -29201,7 +29287,10 @@ void LocalSdrShim::stopLocked() {
     // ★ And a fresh handle handed in by Kotlin that the watchdog never got to adopt — see usbFdDead.
     if (const int f = impl->freshUsbFd.exchange(-1); f >= 0) ::close(f);
     setRadioProblem("");   // ★ a stopped server has no radio to be wrong with (radioProblem)
+    STOP_STAGE("freeing the receiver");
     delete impl;
+    STOP_STAGE(nullptr);
+    g_vsTearingDown.store(false);
     LOGI("local SDR stopped");
 }
 
@@ -32056,7 +32145,13 @@ void LocalSdrShim::setSampleRate(double rate) {
     //     the rate, so the front end is now looking at a different set of signals — every failed
     //     climb the loop remembers was learned through the other filter.
     agcForget("sample rate changed");
-    if (!p || rate <= 0) return;
+    /* ★★★ `p` IS READ ONCE. It is the receiver a stop clears, and this runs on connection threads: the
+     *  old form tested `!p` here and then locked `p->rateMtx` further down — and a stop that cleared it
+     *  in between was a SIGSEGV at 0xe248 (rateMtx's offset in a null Impl), measured on the Mac
+     *  2026-10-16 with a DAB request racing a SIGTERM. The Impl itself outlives every connection
+     *  thread (stopLocked joins them before it frees anything), so a local copy is safe to use. */
+    Impl* const impl = p;
+    if (!impl || rate <= 0) return;
     /**
      * ★★★ ONE RATE CHANGE AT A TIME, OR THE APP DIES. This function stops the IQ source, JOINS the
      *     reader thread and joins the DSP thread. Both joins are guarded by `joinable()`, which is
@@ -32075,12 +32170,17 @@ void LocalSdrShim::setSampleRate(double rate) {
      *    why this sequence had no mutual exclusion at all.
      * ★ Ordered rateMtx → modeMtx, and nothing takes them the other way round.
      */
-    std::lock_guard<std::mutex> rateLk(p->rateMtx);
+    std::lock_guard<std::mutex> rateLk(impl->rateMtx);
+    /* ★★★ AND NOT ONCE A STOP HAS BEGUN. Everything below stops the reader and the DSP thread and
+     *  STARTS THEM AGAIN — on a receiver being dismantled that is the 2026-10-16 Pi 500 hang (see
+     *  "NOTHING MAY ARRIVE" in stopLocked). stopping is set before the stop waits for us, so a change
+     *  already in flight completes on a whole radio and any later one does nothing. */
+    if (impl->stopping.load()) { LOGI("sample rate change ignored — this radio is stopping"); return; }
     // ★★★ NO VIBE_HW_LOCK HERE, DELIBERATELY. This function calls stopDspThread() before it
     //     takes modeMtx, and that join waits on a thread which takes modeMtx per buffer —
     //     holding it from the top would deadlock exactly as the stopDspThread note warns.
     //     It takes the lock further down, at the only point where that is safe.
-    if (p->radioReleased.load()) return;   // the radio is lent to another program
+    if (impl->radioReleased.load()) return;   // the radio is lent to another program
     // ★★★ A LOCKED CENTRE LOCKS THE RATE TOO. The centre and the rate TOGETHER define the
     //     captured window; pinning one and leaving the other client-changeable is incoherent,
     //     and it showed: with the centre held at 6.5 MHz a listener changed the rate and the
@@ -32091,7 +32191,6 @@ void LocalSdrShim::setSampleRate(double rate) {
              g_vsLockedCentre.load() / 1e6);
         return;
     }
-    Impl* impl = p;
     const bool tcp = impl->useTcp();
     const bool rsp = impl->useSdrplay();
     // ★★★ THE AIRSPY WAS MISSING FROM THIS GUARD, so an HF+ — which has no `dev` — returned
@@ -32245,6 +32344,11 @@ void LocalSdrShim::setSampleRate(double rate) {
     }
     joinOnce(impl->rtlThread, "rate change reader");
     impl->stopDspThread();
+    // ★ TEST KNOB: hold the rate change open here, with the reader and DSP thread both stopped, so a
+    //   test can land a stop inside it every time (scripts/test-server-stop-during-dab.mjs). On a real
+    //   dongle this window is ~0.2 s; on the bench it is a few ms and a race test would be luck.
+    static const int holdMs = [] { const char* e = std::getenv("VIBE_TEST_RATE_HOLD_MS"); return e ? std::atoi(e) : 0; }();
+    if (holdMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(holdMs));
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
     uint32_t actual;
     if (tcp) {
@@ -32375,15 +32479,17 @@ void LocalSdrShim::setSampleRate(double rate) {
     LOGI("sample rate: %.0f (actual %u) fft=%d tcp=%d", rate, actual, impl->fftSize, tcp);
 }
 void LocalSdrShim::setNfmVoice(bool on) {
-    std::lock_guard<std::mutex> life(g_lifecycle);
     g_nfmVoiceShared.store(on);  // ★ remembered even if there is no radio yet
+    std::unique_lock<std::mutex> life(g_lifecycle, std::defer_lock);
+    if (!lockLifecycleUnlessTearingDown(life)) return;   // ★ a stop holds it and is joining us
     if (!p) return;
     p->rx.setNfmVoice(on);       // live — no rebuild needed
     LOGI("nfm audio: %s", on ? "voice (300 Hz-3 kHz)" : "raw");
 }
 void LocalSdrShim::setDeemphasis(double tau) {
-    std::lock_guard<std::mutex> life(g_lifecycle);
     g_dsp.deempTau.store(tau);   // ★ remembered even if there is no radio yet
+    std::unique_lock<std::mutex> life(g_lifecycle, std::defer_lock);
+    if (!lockLifecycleUnlessTearingDown(life)) return;   // ★ a stop holds it and is joining us
     if (!p) return;
     if (p->deempTau == tau) return;
     p->deempTau = tau;

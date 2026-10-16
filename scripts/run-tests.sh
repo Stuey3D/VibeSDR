@@ -567,6 +567,14 @@ printf '\n\033[1m── DAB exit (end to end) ──\033[0m\n'
 node scripts/test-server-dab-exit.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ A STOP THAT LANDS ON A DAB START STILL STOPS (Pi 500, 2026-10-16: a settings save, a listener asking for
+#     DAB in the same second, "Stopping…" and then 90 s until systemd's SIGKILL): a rate change held open across
+#     the SIGTERM, late DAB/NFM/de-emphasis requests, a plain stop's speed, and the shutdown watchdog naming the
+#     step a wedged stop was on. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── stop during a DAB start (end to end) ──\033[0m\n'
+node scripts/test-server-stop-during-dab.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ SHARE A STATION THROUGH THE REAL SERVER: two listeners on a shared dial; the line the room receives is
 #     named from the receiver's own store, a smuggled label is not relayed, out-of-range / closed-mode shares
 #     are refused with a reason, flood control covers shares. Same VIBESERVER_BIN rule: not run without one.
