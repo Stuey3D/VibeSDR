@@ -4537,7 +4537,12 @@ function fill() {
   //   given a value it has no option for shows nothing and would save "" back (2026-10-16, schedutil).
   {
     const gsel = $("cpuGovernor"), want = cfg.cpuGovernor || "performance";
-    if (![...gsel.options].some(o => o.value === want)) gsel.add(new Option(`${want} (set by hand)`, want));
+    const opts = gsel.options ? [...gsel.options] : [];
+    if (opts.length && !opts.some(o => o.value === want) && typeof gsel.add === "function") {
+      const o = document.createElement("option");
+      o.value = want; o.textContent = `${want} (set by hand)`;
+      gsel.add(o);
+    }
     gsel.value = want;
   }
   $("uncompressed").value = String(cfg.uncompressed || 0);
