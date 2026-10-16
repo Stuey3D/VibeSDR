@@ -138,6 +138,66 @@ console.log('\n3. ABSENT IS ABSENT — never a fake zero');
   await new Promise((r) => setTimeout(r, 150));
 }
 
+console.log('\n3a. POWER — brief dips are amber, only real trouble is red (Pi 500, 2026-10-16)');
+{
+  const powerCard = () => [...$('adminHealth').querySelectorAll('.aCard')]
+    .find((c) => c.querySelector('.k')?.textContent === 'POWER');
+  const show = async (sys) => {
+    responses.status = { ...STATUS, sys: { ...STATUS.sys, ...sys } };
+    mod.openAdmin('127.0.0.1:48111', 'secret');
+    await new Promise((r) => setTimeout(r, 150));
+    const c = powerCard();
+    return { c, v: c?.querySelector('.v')?.textContent ?? '', s: c?.querySelector('.s')?.getAttribute('title') ?? '' };
+  };
+  const P = { status: 'warning', now: false, dipsHour: 0, longestSec: 0, nowSec: 0, recentSec: 0,
+              recentWindowSec: 300, sustainedSec: 10, usbLostHour: 0, overCurrentHour: 0, lastDipAgoSec: -1, dips: [] };
+
+  // ★ Polled INSIDE a 2-s dip: underVoltage is true at this instant, and the card must still be amber.
+  let r = await show({ underVoltage: true, underVoltageEver: true,
+                       power: { ...P, verdict: 'brief', now: true, dipsHour: 23, longestSec: 4, nowSec: 2, dips: [[20, 18]] } });
+  ok(r.v === 'BRIEF DIPS', 'a dip at the instant of the poll reads BRIEF DIPS, not UNDER-VOLTAGE', r.v);
+  ok(r.c?.classList.contains('warn') && !r.c?.classList.contains('crit'), 'amber, not red');
+  ok(/23 in the last hour/.test(r.s) && /no USB device has dropped/.test(r.s), 'counts the hour, and claims no USB loss', r.s);
+  ok(!/drop out/.test(r.s), 'and does NOT predict USB devices dropping out', r.s);
+  // ★ The dip 20-18 s ago is shaded on the graphs (the load graph here — this fixture has no clock column).
+  const rect = $('adminGraphs').querySelector('rect');
+  ok(!!rect && Number(rect.getAttribute('x')) > 40, 'the dip is shaded on the graph, near the recent end', rect?.outerHTML ?? '');
+
+  r = await show({ underVoltage: false, underVoltageEver: true,
+                   power: { ...P, verdict: 'sustained', status: 'critical', dipsHour: 2, longestSec: 14 } });
+  ok(r.v === 'UNDER-VOLTAGE' && r.c?.classList.contains('crit'), 'a dip held ≥ 10 s is red UNDER-VOLTAGE');
+  ok(/held low for 14 s/.test(r.s), 'and says for how long', r.s);
+
+  r = await show({ underVoltage: true, underVoltageEver: true,
+                   power: { ...P, verdict: 'frequent', status: 'critical', now: true, dipsHour: 70, longestSec: 6, recentSec: 210 } });
+  ok(r.v === 'UNDER-VOLTAGE' && /70% of the last 5 minutes/.test(r.s), 'continuous short dips are red, as a share of 5 minutes', r.s);
+
+  r = await show({ underVoltage: false, underVoltageEver: true,
+                   power: { ...P, verdict: 'usblost', status: 'critical', dipsHour: 3, usbLostHour: 1 } });
+  ok(r.v === 'USB DROPPED' && r.c?.classList.contains('crit') && /1 USB device dropped/.test(r.s), 'a USB device lost in a dip is red USB DROPPED', r.s);
+
+  r = await show({ underVoltage: false, underVoltageEver: true,
+                   power: { ...P, verdict: 'overcurrent', status: 'critical', overCurrentHour: 3 } });
+  ok(r.v === 'USB OVER-CURRENT' && /3 over-current events/.test(r.s), 'USB over-current is red, counted', r.s);
+
+  r = await show({ underVoltage: false, underVoltageEver: true, power: { ...P, verdict: 'dipped' } });
+  ok(r.v === 'DIPPED' && r.c?.classList.contains('warn'), 'nothing this hour but a dip since start: DIPPED, amber');
+
+  r = await show({ underVoltage: false, underVoltageEver: false, power: { ...P, verdict: 'ok', status: 'ok' } });
+  ok(r.v === 'OK' && !r.c?.classList.contains('warn') && !r.c?.classList.contains('crit'), 'a clean supply: OK');
+
+  // ★ An older server sends no `power` — its card is exactly what it always was.
+  r = await show({ underVoltage: true, underVoltageEver: true });
+  ok(r.v === 'UNDER-VOLTAGE' && r.c?.classList.contains('crit'), 'an older server (no power block) keeps the old card');
+
+  r = await show({ cpuKHz: 1500000 });
+  ok(!r.c, 'no supply sensor (not a Pi): no POWER card at all');
+
+  responses.status = STATUS;
+  mod.openAdmin('127.0.0.1:48111', 'secret');
+  await new Promise((r) => setTimeout(r, 150));
+}
+
 console.log('\n3b. WHERE THEY CONNECT FROM');
 {
   const rows = $('adminCountries').querySelectorAll('.ccRow');
