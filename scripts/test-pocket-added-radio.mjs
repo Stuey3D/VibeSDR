@@ -19,7 +19,7 @@ const seed = JSON.parse(fs.readFileSync(R + "/image/pocket/stage-pocket/00-pocke
 fs.writeFileSync(path.join(T, "config.json"), JSON.stringify(seed));
 const srv = spawn(BIN, ["--config", "/dev/null"], { env: { ...process.env, VIBESERVER_CONFIG: path.join(T, "config.json"), VIBESERVER_POCKET_DIR: PD, HOME: T },
   stdio: ["ignore", fs.openSync(path.join(T, "server.log"), "w"), fs.openSync(path.join(T, "server.err"), "w")] });
-const br = spawn("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", ["--headless=new", "--mute-audio", "--no-first-run",
+const br = spawn("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", ["--headless=new", "--mute-audio", "--disable-audio-output", "--no-first-run",
   `--remote-debugging-port=${CDP}`, `--user-data-dir=${path.join(T, "b")}`, "--window-size=390,844", "about:blank"], { stdio: "ignore" });
 try {
   for (let i = 0; i < 40; i++) { try { await fetch(`${BASE}/vibeserver/pocket/hello`); break; } catch { await sleep(250); } }

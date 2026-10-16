@@ -751,11 +751,18 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     const why = x?.ceqWhy ?? 3;
     ceqTxt = why === 1 ? 'off' : why === 2 ? 'signal too weak to equalise'
                                            : 'standing by · nothing to correct';
+    // ★★ Green when there is nothing to correct — the healthy answer (Stuart, 2026-10-16). "off" is
+    //    the listener's choice and "too weak" a limit, not a fault: both uncoloured. Browser rule.
+    ceqCol = why === 1 || why === 2 ? undefined : C.good;
   }
   const nbPct = (x?.nbRate ?? 0) * 100;
   const nbTxt = !x ? DASH
     : nbPct < 0.005 ? 'nothing to blank'
     : `${nbPct.toFixed(nbPct < 1 ? 2 : 1)}% blanked`;
+  // ★★ THE BROWSER HAS ALWAYS COLOURED THIS ROW AND THE APP NEVER DID — the same server, two looks.
+  //    Green for "nothing to blank", amber once it removes enough to matter (> 0.5 %), a trickle
+  //    uncoloured: colouring a trickle would cry wolf.
+  const nbCol = !x ? undefined : nbPct < 0.005 ? C.good : nbPct > 0.5 ? C.warn : undefined;
   // ★ The IF figure is "the OTHER option minus this one", so it MUST be read against the current
   //   state — the sign flips the moment the filter engages, and a bare number is genuinely
   //   ambiguous. Printed as a sentence.
@@ -787,7 +794,10 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
         (ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`);
     }
   } else if (x && ifC > 0 && mpxSnr > 0.5) {
-    ifCol = ifG > 1.5 ? C.good : undefined;
+    // ★★ Green in every verdict: the filter is WIDE and the shadow is judging the 110k cut. "would
+    //    cost" / "no real gain" mean wide is right; "would help" is the adjacent-channel arm's own
+    //    evidence (it engages, or keeps a live RDS decode). None is a fault (Stuart, 2026-10-16).
+    ifCol = C.good;
     ifTxt = `wide · ${Math.round(ifC / 1000)}k ` +
       (ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain');
   }
@@ -1213,7 +1223,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                reserve="100.0% · moderate · held · IMS standing by · NR already blending further" />
           <Row raw={raw} label="CEQ"         value={ceqTxt} colour={ceqCol}
                reserve="standing by · nothing to correct" />
-          <Row raw={raw} label="Blanker"     value={nbTxt} reserve="nothing to blank" />
+          <Row raw={raw} label="Blanker"     value={nbTxt} colour={nbCol} reserve="nothing to blank" />
           <Row raw={raw} label="IF narrow"   value={ifTxt} colour={ifCol}
                reserve="999k narrow · wide would cost 99.9 dB" />
           <Row raw={raw} label="Now playing" value={nowPlaying || DASH} />

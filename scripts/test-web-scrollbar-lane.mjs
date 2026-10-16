@@ -54,7 +54,7 @@ const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port)]
   env: { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
          VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') }, stdio: ['ignore', log, log] });
 const edge = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-first-run', '--no-default-browser-check',
-  '--mute-audio', `--user-data-dir=${path.join(dir, 'edge')}`, '--window-size=1280,900', '--autoplay-policy=no-user-gesture-required', 'about:blank'], { stdio: 'ignore' });
+  '--mute-audio', '--disable-audio-output', `--user-data-dir=${path.join(dir, 'edge')}`, '--window-size=1280,900', '--autoplay-policy=no-user-gesture-required', 'about:blank'], { stdio: 'ignore' });
 
 // ★ A watchdog: a driver that hangs (a CDP call that never answers) must FAIL, never sit forever.
 let hung = false;

@@ -52,7 +52,7 @@ const srv = spawn(BIN, ["--config", "/dev/null"], {
   env: { ...process.env, VIBESERVER_CONFIG: path.join(T, "config.json"), VIBESERVER_POCKET_DIR: PD, HOME: T },
   stdio: ["ignore", fs.openSync(path.join(T, "server.log"), "w"), fs.openSync(path.join(T, "server.err"), "w")] });
 const prof = path.join(T, "browser");
-const br = spawn(BROWSER, ["--headless=new", "--mute-audio", "--no-first-run", "--disable-extensions",
+const br = spawn(BROWSER, ["--headless=new", "--mute-audio", "--disable-audio-output", "--no-first-run", "--disable-extensions",
   `--remote-debugging-port=${CDP}`, `--user-data-dir=${prof}`, "--window-size=390,844", "about:blank"],
   { stdio: "ignore" });
 

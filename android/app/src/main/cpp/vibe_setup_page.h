@@ -672,6 +672,7 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <select id="cpuGovernor">
           <option value="performance">Full speed — recommended for a receiver</option>
           <option value="ondemand">On demand — saves a little power</option>
+          <option value="schedutil">Schedutil — runs coolest, for a portable or battery host</option>
           <option value="default">Leave the system setting alone</option>
         </select>
         <div class="hint">A Raspberry Pi normally decides its speed from how busy each core looks.
@@ -680,7 +681,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           un-throttled, while the audio broke up. Full speed costs a couple of watts.
           <br><b>Choose full speed for a shared receiver</b>, where several people are each being
           given their own tuner. <b>On demand suits a battery or solar host</b> serving one
-          listener from a dongle — far less work, and the watts matter more than the headroom.</div></label>
+          listener from a dongle — far less work, and the watts matter more than the headroom.
+          <b>Schedutil</b> follows the work most closely and runs the coolest: a Pi 3A+ served WFM
+          stereo with Advanced RDS cleanly at 0.9&nbsp;GHz under it, where on demand sat at 1.2.</div></label>
       <div class="hint" id="govNow"></div>
     </div>
 
@@ -4530,7 +4533,13 @@ function fill() {
   $("lon").value = cfg.lon || "";
   $("mdns").checked = cfg.mdnsAdvertise !== false;
 
-  $("cpuGovernor").value = cfg.cpuGovernor || "performance";
+  // ★ A governor set outside this list (by hand, or by an older page) is SHOWN, not blanked — a select
+  //   given a value it has no option for shows nothing and would save "" back (2026-10-16, schedutil).
+  {
+    const gsel = $("cpuGovernor"), want = cfg.cpuGovernor || "performance";
+    if (![...gsel.options].some(o => o.value === want)) gsel.add(new Option(`${want} (set by hand)`, want));
+    gsel.value = want;
+  }
   $("uncompressed").value = String(cfg.uncompressed || 0);
   $("trustedProxies").value = cfg.trustedProxies || "";
   // ★ Absent = "1" (the rule enforced), matching the config's own default — an older server that

@@ -152,6 +152,13 @@ const LS_PREFS   = 'vibesdr_web_prefs_v1';
 let step = 1000;                 // tuning step, Hz (restored from prefs on load)
 /** ★ Wheel = TUNE rather than ZOOM. Same choice the app offers; see the wheel handler. */
 let wheelTunes = false;
+/** ★ The frequency label that follows the mouse over the waterfall (initPointerFreq). Default ON;
+ *  the menu's FREQUENCY AT POINTER switch turns it off. `hidePtrFreq` is set once the label exists. */
+let ptrFreqOn = true;
+let hidePtrFreq: () => void = () => {};
+/** A device that can hover with a fine pointer at all (a mouse or trackpad, even beside a touchscreen).
+ *  Decides whether the switch is SHOWN; whether the label shows is decided per event by pointerType. */
+const HOVER_MQ = typeof matchMedia === 'function' ? matchMedia('(any-hover: hover) and (any-pointer: fine)') : null;
 let spec: SpectrumClient | null = null;
 let audio: AudioPlayer | null = null;
 // ★ A handle for drivers and bug reports: window.__vibeAudio.debugState() says where the audio
@@ -10802,7 +10809,12 @@ function renderRds() {
     ceqEl.textContent = why === 1 ? 'off'
                       : why === 2 ? 'signal too weak to equalise'
                       : 'standing by · nothing to correct';
-    ceqEl.style.color = '';
+    /* ★★ GREEN WHEN THERE IS NOTHING TO CORRECT — that is the healthy answer, the same verdict
+     *    MULTIPATH gives in green on the row above ("clean"), and BLANKER gives for "nothing to
+     *    blank". Stuart, 2026-10-16: CEQ and IF NARROW "should be green ... as both of them are
+     *    reporting everything being within normal parameters". "off" is the listener's choice and
+     *    "too weak" is a limit, not a fault — both stay uncoloured. */
+    ceqEl.style.color = why === 1 || why === 2 ? '' : '#7dff9a';
   } else { ceqEl.textContent = dash; ceqEl.style.color = ''; }
 
   // ★★ THE IF-NARROWING BENEFIT, read against the CURRENT state — the shadow always evaluates THE
@@ -10843,7 +10855,12 @@ function renderRds() {
     const kHz = Math.round(ifC / 1000);
     const verdict = ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain';
     ifEl.textContent = `wide · ${kHz}k ${verdict} (${ifG >= 0 ? '+' : ''}${ifG.toFixed(1)} dB)`;
-    ifEl.style.color = ifG > 1.5 ? '#7dff9a' : '';
+    /* ★★ GREEN IN EVERY VERDICT HERE. This arm is the filter sitting WIDE with the shadow judging
+     *    the 110k cut: "would cost" and "no real gain" both mean wide is the right choice — normal
+     *    parameters, not a quiet warning (Stuart, 2026-10-16) — and "would help" is the adjacent-
+     *    channel arm's own evidence, which engages from here or deliberately declines to trade a
+     *    live RDS decode for under 3 dB. None of the three is a fault on this receiver. */
+    ifEl.style.color = '#7dff9a';
   } else { ifEl.textContent = dash; ifEl.style.color = ''; }
 
   const pdev = rdsExt?.pilotDev ?? 0;
@@ -13507,6 +13524,12 @@ function buildMenu() {
    *  user action), wrong for this one, which is purely local. So the page said TUNE after a reload while
    *  the wheel went on zooming (Onfliner, 2026-10-02: "not remembered when the page is refreshed"). */
   wheelTunes = prefs()['wheelAction'] === 1;
+  /* ★ FREQUENCY AT POINTER — local to this browser like the wheel (not a VIEW_KEY: it is about the
+   *  mouse in front of you, not the look of the waterfall). Only offered where there IS a mouse. */
+  toggle('ptrFreqTg', (on) => { ptrFreqOn = on; if (!on) hidePtrFreq(); }, 'ptrFreq', true);
+  const showPtrRow = () => { $('rowPtrFreq').hidden = !HOVER_MQ?.matches; };
+  showPtrRow();
+  HOVER_MQ?.addEventListener?.('change', showPtrRow);
   slider('contrast', 'contrastVal', (v) => String(v),
     (v) => wf!.applySettings({ wfContrast: v }), 'wfContrast');
   slider('sharp', 'sharpVal', (v) => String(v),
@@ -16043,6 +16066,114 @@ function initWaterfallInput() {
     spec.zoomBy(e.deltaY < 0 ? 1.25 : 0.8, anchor);
     updateViewOverlays();
   }, { passive: false });
+  initPointerFreq(c);
+}
+
+/** What a click at `rawHz` would tune to, WITHOUT the side effects of clampTune (it arms the gap
+ *  bounce and shows the toast). The same snap as the click handler: snapToStep, then clampTune's own
+ *  rules. `out` = a frequency the radio or its owner does not allow — a click there parks on the edge. */
+function clickTarget(rawHz: number): { hz: number; out: boolean } {
+  const want = Math.round(snapToStep(rawHz, step));
+  const win = lockedWindow();
+  if (win) return { hz: Math.max(win[0], Math.min(win[1], want)), out: false };
+  const ranges = allowedRanges() ?? tuneRanges();
+  if (!ranges) return { hz: Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, want)), out: false };
+  for (const [lo, hi] of ranges) if (want >= lo && want <= hi) return { hz: want, out: false };
+  return { hz: want, out: true };
+}
+
+/**
+ * ★★ FREQUENCY AT THE POINTER (Kiko, 2026-10-16: "show the frequency on the mouse cursor on desktop
+ * like in OpenWebRX"). A small label beside the mouse over the waterfall AND the spectrum (both are
+ * the one #wf canvas), reading what a click there would tune to — clickTarget() is the click handler's
+ * own arithmetic, so the label and the click can never disagree.
+ *
+ * ★ MOUSE ONLY (pointerType 'mouse'). A touch has no hover: a label would appear on the press and stay
+ *   stuck where the finger lifted. Pens are left out for the same reason on most tablets.
+ * ★ Hidden while a button is down (a drag pans, and the label would chase a moving scale), on leave,
+ *   when the window loses focus or the tab is hidden, in DAB (a click does not tune there), and when the
+ *   menu's switch is off.
+ * ★ CHEAP. pointermove only stores two numbers; one rAF per frame while the mouse is over the canvas
+ *   does the arithmetic and touches the DOM only when the text or the position actually changes —
+ *   position by transform, so nothing is laid out. The canvas rect is cached (ResizeObserver + scroll
+ *   invalidate it). The loop runs while hovering so a wheel zoom, a pan echo or a retune updates the
+ *   reading under a still mouse.
+ */
+function initPointerFreq(c: HTMLCanvasElement) {
+  const el = document.getElementById('ptrFreq');
+  if (!el) return;
+  ptrFreqOn = prefs()['ptrFreq'] !== false;
+  const mEl = el.querySelector('.m') as HTMLElement, fEl = el.querySelector('.f') as HTMLElement,
+        uEl = el.querySelector('.u') as HTMLElement;
+  let px = 0, py = 0, over = false, held = false, raf = 0;
+  let rect: DOMRect | null = null, cw = 0;              // canvas rect + clientWidth, cached
+  let measure = false;                                  // label text changed: re-read its size next frame
+  let shownHz = NaN, shownUnit = '', shownOut = false, shown = false, tx = NaN, ty = NaN;
+  let lw = 0, lh = 0;                                   // label size, read at the START of a frame
+  const invalidate = () => { rect = null; };
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(invalidate).observe(c);
+  window.addEventListener('resize', invalidate);
+  window.addEventListener('scroll', invalidate, true);
+
+  const setShown = (on: boolean) => {
+    if (on !== shown) { shown = on; el.classList.toggle('show', on); if (on) measure = true; }
+  };
+  const stop = () => { over = false; if (raf) { cancelAnimationFrame(raf); raf = 0; } setShown(false); };
+  hidePtrFreq = () => setShown(false);
+
+  const frame = () => {
+    raf = 0;
+    if (!over) { setShown(false); return; }
+    raf = requestAnimationFrame(frame);
+    if (held || !ptrFreqOn || dabOn || !spec || !wf || document.hidden) { setShown(false); return; }
+    // ── reads first (layout is clean at the start of a frame) ──
+    if (!rect) { rect = c.getBoundingClientRect(); cw = c.clientWidth; }
+    const W = rect.width, H = rect.height;
+    const x = px - rect.left, y = py - rect.top;
+    if (x < 0 || y < 0 || x > W || y > H) { setShown(false); return; }
+    if (measure && shown) { measure = false; lw = el.offsetWidth; lh = el.offsetHeight; }
+    const t = clickTarget(wf.xToHz(x, cw));
+    // ── then writes ──
+    if (t.hz !== shownHz || freqUnit !== shownUnit) {
+      shownHz = t.hz; shownUnit = freqUnit;
+      const r = cardFreqPlain(t.hz);
+      if (r) {
+        mEl.textContent = r.main;
+        // The card's fine digits (100 Hz / 10 Hz in MHz) — only when they say something; on a whole-kHz
+        // step they are always "00" and would be noise beside the mouse.
+        fEl.textContent = r.fine && r.fine !== '00' ? r.fine : '';
+        uEl.textContent = r.unit;
+        measure = true;
+      }
+    }
+    if (t.out !== shownOut) { shownOut = t.out; el.classList.toggle('out', t.out); }
+    // Below-right of the tip, clear of the cursor; flipped to the other side near the right or bottom edge.
+    const GAP_X = 14, GAP_Y = 18;
+    let nx = x + GAP_X, ny = y + GAP_Y;
+    if (lw && nx + lw > W - 2) nx = Math.max(2, x - GAP_X - lw);
+    if (lh && ny + lh > H - 2) ny = Math.max(2, y - 8 - lh);
+    nx = Math.round(nx); ny = Math.round(ny);
+    if (nx !== tx || ny !== ty) { tx = nx; ty = ny; el.style.transform = `translate3d(${nx}px,${ny}px,0)`; }
+    setShown(true);
+  };
+  const kick = () => { if (!raf) raf = requestAnimationFrame(frame); };
+
+  c.addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse') { stop(); return; }
+    px = e.clientX; py = e.clientY; over = true;
+    held = e.buttons !== 0;
+    kick();
+  });
+  c.addEventListener('pointerenter', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    rect = null; px = e.clientX; py = e.clientY; over = true; held = e.buttons !== 0; kick();
+  });
+  c.addEventListener('pointerdown', (e) => { held = true; if (e.pointerType !== 'mouse') stop(); else setShown(false); });
+  c.addEventListener('pointerup', (e) => { held = false; if (e.pointerType === 'mouse') kick(); });
+  c.addEventListener('pointerleave', stop);
+  c.addEventListener('pointercancel', stop);
+  window.addEventListener('blur', stop);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
 }
 
 function initKeyboard() {

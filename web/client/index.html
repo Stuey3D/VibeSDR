@@ -330,6 +330,25 @@ html[data-frontdoor] #splashListeners { display: none !important; }
 #wfWrap { position: relative; flex: 1 1 auto; min-height: 0; }
 #wf { display: block; width: 100%; height: 100%; cursor: crosshair; }
 #wf.panning { cursor: grabbing; }
+/* ★ The pointer-frequency label (initPointerFreq). Positioned by TRANSFORM only, so following the
+   mouse never lays anything out; shown by visibility, not display, for the same reason. The panel
+   and border tokens are the ones the rest of the overlays use, so a CONTROLS colour change reaches it.
+   Standard font, like every banner and pill — the display font is for the main controls only. */
+#ptrFreq {
+  position: absolute; left: 0; top: 0; z-index: 30; pointer-events: none;
+  visibility: hidden; will-change: transform;
+  padding: 2px 7px; border-radius: 6px; white-space: nowrap;
+  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid var(--btn-border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.55);
+  color: var(--btn-text); font-family: var(--mono, monospace); font-size: 11px; line-height: 1.4;
+  letter-spacing: 0.3px; font-variant-numeric: tabular-nums;
+}
+#ptrFreq.show { visibility: visible; }
+#ptrFreq .f { opacity: 0.68; }
+#ptrFreq .u { margin-left: 0.45em; color: var(--text-dim); }
+/* Over dead space (outside what this radio or its owner allows) — the frequency is still true, but a
+   click parks on the edge instead of tuning there, so it is shown as not-a-destination. */
+#ptrFreq.out { opacity: 0.6; }
 
 /* Receiver identity badge — top-right of the spectrum, like UberSDR.
    pointer-events:none so it never steals a click-to-tune or a pan gesture. */
@@ -3037,6 +3056,10 @@ select.btn { padding: 6px 8px; }
   <canvas id="bands"></canvas>
   <canvas id="scale"></canvas>
   <div id="wfWrap"><canvas id="wf"></canvas>
+  <!-- ★ FREQUENCY AT THE POINTER (Kiko, 2026-10-16: "like OpenWebRX"). Follows a MOUSE over the
+       waterfall and spectrum and reads the frequency a click there would tune to. Mouse only — a
+       touch has no hover, so a label would stick wherever the finger lifted. See initPointerFreq. -->
+  <div id="ptrFreq" aria-hidden="true"><span class="m"></span><span class="f"></span><span class="u"></span></div>
   <!-- ★★ HONEST DEAD SPACE. Near a band edge, half the window is frequencies the radio cannot
        reach — an Airspy HF+ has nothing between 31 and 60 MHz. The FFT still produces SOMETHING
        there (noise, and the mirror of what is below), and drawing it as spectrum would be a
@@ -4820,6 +4843,13 @@ select.btn { padding: 6px 8px; }
            is worse than a toggle with a default, because it invites you to test it on the radio. -->
       <button class="btn on" data-v="0">ZOOM</button><button class="btn" data-v="1">TUNE</button>
     </div>
+  </div>
+  <!-- ★ FREQUENCY AT POINTER — the label that follows the mouse over the waterfall (initPointerFreq).
+       Hidden on a touch-only device, where there is no pointer to follow and the switch would do
+       nothing (AGENTS.md: no control that is dead where it is shown). -->
+  <div class="mrow" id="rowPtrFreq" hidden>
+    <label for="ptrFreqTg">FREQUENCY AT POINTER</label>
+    <div class="seg"><button class="btn on" id="ptrFreqTg">ON</button></div>
   </div>
   <div class="mrow">
     <label for="bright">BRIGHTNESS</label>

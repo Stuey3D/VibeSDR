@@ -134,7 +134,7 @@ try {
   await new Promise((r) => front.listen(frontPort, '127.0.0.1', r));
   const CDP = await freePort();
   prof = fs.mkdtempSync(path.join(tmp, 'edge-'));
-  edge = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-first-run', '--no-default-browser-check', '--mute-audio',
+  edge = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-first-run', '--no-default-browser-check', '--mute-audio', '--disable-audio-output',
     `--user-data-dir=${prof}`, `--host-resolver-rules=MAP *.vibesdr.net 127.0.0.1:${frontPort},MAP vibesdr.net 127.0.0.1:${frontPort}`,
     `--ignore-certificate-errors-spki-list=${spki}`, '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
   let target = null;

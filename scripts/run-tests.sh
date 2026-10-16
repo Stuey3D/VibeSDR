@@ -516,6 +516,13 @@ printf '\n\033[1m── game controllers on the served page (simulated pad, end 
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-gamepad.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★ FREQUENCY AT THE POINTER (Kiko, 2026-10-16, "like OpenWebRX"): a MOUSE over the waterfall/spectrum shows the
+#     frequency a click there tunes to (and the click agrees), hides on leave/press, never on touch; the menu switch
+#     turns it off and is remembered; the switch is not offered on a touch-only device.
+printf '\n\033[1m── frequency at the pointer on the served page (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-pointer-frequency.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 printf '\n\033[1m── portable Wi-Fi on the served page (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-pocket-connection-web.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
