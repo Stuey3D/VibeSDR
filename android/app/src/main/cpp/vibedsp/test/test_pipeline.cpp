@@ -1,7 +1,9 @@
 // VibeSDR V5 host test — RationalResampler + RxPipeline end-to-end.
 #include "../vibedsp.h"
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <thread>
 #include <vector>
 
 using namespace vibedsp;
@@ -82,6 +84,9 @@ static void testPipeline() {
     // Feed in blocks to exercise streaming state.
     for (int o = 0; o < Ni; o += 65536)
         pipe.feed(iq.data() + o, std::min(65536, Ni - o));
+    // ★ End of stream: stop() drains the demod worker, so with VIBE_DSP_THREADS=1 (every multi-core server since
+    //   2026-10-16) every block's audio is in `cap` before it is read — and nothing is still appending to it.
+    pipe.stop();
 
     std::printf("  spectrum frames = %d (bins %d), audio samples = %zu\n",
                 cap.specFrames, cap.bins, cap.audio.size());
@@ -110,6 +115,7 @@ static std::vector<float> runPipe(const std::vector<cf32>& iq, double fs,
     pipe.setTune(offset, mode, bw);
     for (int o = 0; o < (int)iq.size(); o += 65536)
         pipe.feed(iq.data() + o, std::min(65536, (int)iq.size() - o));
+    pipe.stop();   // ★ drain the demod worker — see testPipeline
     return cap.audio;
 }
 
@@ -162,6 +168,7 @@ static void testNfmVoice() {
         pipe.setNfmVoice(voice);
         pipe.setTune(fc, RxPipeline::Mode::NFM, 12500.0);
         for (int o = 0; o < Ni; o += 65536) pipe.feed(iq.data() + o, std::min(65536, Ni - o));
+        pipe.stop();   // ★ drain the demod worker — see testPipeline
         return cap.audio;
     };
     const auto raw = run(false), voice = run(true);
@@ -284,6 +291,7 @@ static void testWFMStereo() {
     pipe.setTune(fc, RxPipeline::Mode::WFM, 200000.0);
     for (int o = 0; o < Ni; o += 65536)
         pipe.feed(iq.data() + o, std::min(65536, Ni - o));
+    pipe.stop();   // ★ drain the demod worker — see testPipeline
 
     std::printf("  channels=%d, stereo locked=%d, L samples=%zu R samples=%zu\n",
                 cap.channels, (int)cap.stereoLocked, cap.audio.size(), cap.audioR.size());
@@ -751,11 +759,38 @@ static void testFftRateJumpMidStream() {
     std::printf("  frames after the jump: %d\n", cnt.frames);
 }
 
+/* ★★★ THE SPECTRUM WORKER MUST NOT CAP THE FRAME RATE AT ONE FRAME PER feed() (2026-10-16). With one slot, every
+ *  emit point after the first inside a block found the worker busy (or its frame not yet collected) and dropped:
+ *  2.048 MS/s at 80 FFT/s in 32 ms blocks gave 31 FFT/s — the server's "SPEC RATE: engine emitting 9.4 fps, asked
+ *  20.0" the day the split became every server's default. Paced in real time (one second), as a radio delivers. */
+static void testSpectrumThreadRate() {
+    std::printf("-- RxPipeline spectrum worker keeps the frame rate (65536-sample blocks) --\n");
+    const double fs = 2048000.0; const int blk = 65536;
+    std::vector<cf32> iq((size_t)blk);
+    for (int i = 0; i < blk; ++i) iq[i] = cf32((float)std::cos(0.01 * i), (float)std::sin(0.01 * i));
+    Cap cap;
+    RxPipeline pipe;
+    RxPipeline::Callbacks cb; cb.ctx = &cap; cb.spectrum = onSpec;
+    pipe.setSpectrumThread(true);
+    pipe.start(fs, 8192, 80.0, 48000, cb);
+    const long total = (long)fs;                       // one second of capture
+    const auto t0 = std::chrono::steady_clock::now();
+    for (long o = 0; o < total; o += blk) {
+        pipe.feed(iq.data(), blk);
+        std::this_thread::sleep_until(t0 + std::chrono::microseconds((long long)((o + blk) / fs * 1e6)));
+    }
+    const unsigned dropped = pipe.spectrumFramesDropped();
+    pipe.stop();
+    std::printf("  %d frames for 80 asked, %u dropped (up to kSpecQ still in flight at the end)\n", cap.specFrames, dropped);
+    check(cap.specFrames >= 72, "spectrum worker delivers >= 90 % of the asked frame rate with blocks longer than a stride");
+}
+
 int main() {
     std::printf("== vibedsp resampler + pipeline host test ==\n");
     testFftRateJumpMidStream();
     testResampler();
     testPipeline();
+    testSpectrumThreadRate();
     testNFM();
     testNfmVoice();
     testSSB();

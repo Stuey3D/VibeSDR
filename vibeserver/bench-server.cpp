@@ -2,15 +2,14 @@
 // the JSON. The same engine the setup page and the Lite app run; this is how it is checked on a box.
 // usage: vibeserver-bench [seconds per scenario] [clip.vbu8]   — with no clip it fetches (and caches) one.
 #include "vibe_benchmark_dab.h"
+#include "vibe_thread_layout.h"
 #include <cstdio>
 #include <cstdlib>
 int main(int argc, char** argv) {
-#if defined(__arm__) && !defined(__aarch64__)
-    // ★★ THE SERVER'S OWN THREAD LAYOUT (main.cpp, and the Lite APK's MainApplication). Without it this measured a
-    //    single-threaded receiver no 32-bit box runs: WFM 2.048 read 103 % on the Pi 2 against 59 % as served.
-    setenv("VIBE_DSP_THREADS", "1", 0);
-    setenv("VIBE_DAB_SPLIT",   "1", 0);
-#endif
+    // ★★ THE SERVER'S OWN THREAD LAYOUT (vibe_thread_layout.h — every multi-core server since 2026-10-16). Without
+    //    it this measured a single-threaded receiver no server runs: WFM 2.048 read 103 % on the Pi 2 against 59 %
+    //    as served. Called here, not left to the shim's initialiser: this binary may not link the shim's object.
+    vibe::vibeApplyDefaultThreadLayout();
     const double secs = argc > 1 ? std::atof(argv[1]) : 4.0;
     // ★ A path given, or the cached download (fetched on first use) — see ensureDabClip.
     const std::string clip = argc > 2 ? std::string(argv[2])

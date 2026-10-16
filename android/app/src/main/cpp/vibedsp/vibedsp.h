@@ -2813,20 +2813,22 @@ public:
     double zoomOffsetHz() const { return zoomOffOut_.load(std::memory_order_relaxed); }
     void stop();
     ~RxPipeline();
-    /** ★★★ THE SPECTRUM FFT ON ITS OWN THREAD — OPT-IN, OFF BY DEFAULT (2026-09-18, VibeServer Lite).
+    /** ★★★ THE SPECTRUM FFT ON ITS OWN THREAD — OFF BY DEFAULT HERE, ON IN EVERY MULTI-CORE SERVER (2026-09-18,
+     *  VibeServer Lite; every server since 2026-10-16 via VIBE_DSP_THREADS — g_vsSplitDefault in local_sdr_shim.cpp).
      *  `perf` on a Cortex-A7 put the wide FFT + dB conversion at ~11 % of vibe-dsp, the thread that
      *  also makes the audio, while two of four cores sat idle and the audio surged. With this on,
      *  the DSP thread still gathers the window and still CALLS cb.spectrum — so everything a host
      *  does in that callback (a VibeServer runs its whole AGC there) stays on the thread it was
      *  written for. Only the arithmetic moves: the window is copied (8 KB) to a worker, and the
-     *  finished frame is delivered on the NEXT feed(), a few tens of ms later.
-     *  ★★ The spectrum is lossy-tolerant and the audio is not: a frame that arrives while the
-     *     worker is still busy is DROPPED, never waited for.
+     *  finished frame is delivered at the next emit point or the next feed(), whichever comes first.
+     *  ★★ The spectrum is lossy-tolerant and the audio is not: a frame that arrives while all
+     *     kSpecQ windows are still in flight is DROPPED, never waited for.
      *  ★ Also seeded by VIBE_SPEC_THREAD=1 at start(), so a bench can try it with no host change.
      *    Call from the thread that calls start()/feed(), or before either. */
     void setSpectrumThread(bool on) { specThreadWant_ = on; }
     unsigned spectrumFramesDropped() const { return specDropped_.load(std::memory_order_relaxed); }
-    /** ★★★ THE DEMODULATOR ON ITS OWN THREAD — OPT-IN, OFF BY DEFAULT (2026-09-18, VibeServer Lite).
+    /** ★★★ THE DEMODULATOR ON ITS OWN THREAD — OFF BY DEFAULT HERE, ON IN EVERY MULTI-CORE SERVER (2026-09-18,
+     *  VibeServer Lite; every server since 2026-10-16 — see setSpectrumThread).
      *  `perf` on a Cortex-A7 (Pi 2 = Fire 7's core): WFM stereo pinned vibe-dsp at 99.9 % with two
      *  cores idle, and the audio surged. feed() is cut at the channel buffer: the NCO and the
      *  decimators (and the spectrum) stay on the caller's thread, everything after — IF filter,
@@ -3114,13 +3116,24 @@ private:
     std::thread specThread_;
     std::mutex  specM_;
     std::condition_variable specCv_;
-    std::vector<cf32>  specWork_;            // the window in flight — the worker's while specBusy_
-    std::vector<float> specDone_;            // its result — the DSP thread's once specReady_
-    int   specWorkN_ = 0;
-    bool  specBusy_ = false, specReady_ = false, specStop_ = false;
+    /* ★★★ A SMALL FIFO, NOT ONE SLOT (2026-10-16). With one slot a frame could only be handed over once
+     *  per feed(): the finished frame was collected at the TOP of the next feed, so every further emit
+     *  point inside the same block found the slot still busy or still full and was dropped. Any block
+     *  longer than one spectrum stride lost frames — measured with a 2.048 MS/s capture at 80 FFT/s:
+     *  32768-sample blocks 62 FFT/s, 65536 31, 131072 15.5, on an idle Mac. The server logged it
+     *  ("SPEC RATE: engine emitting 9.4 fps, asked 20.0"). Now finished frames are delivered at every
+     *  emit point too, and up to kSpecQ windows may be in flight; a frame is dropped only when all are.
+     *  ★ Cost: kSpecQ × fftSize × 12 bytes (1.5 MB at 32768), on the one pipeline that has a spectrum.
+     *  Slot i holds window/result number i % kSpecQ; specFilled_ ≥ specComputed_ ≥ specDelivered_. */
+    static constexpr int kSpecQ = 4;
+    std::vector<cf32>  specWorkQ_[kSpecQ];   // a window in flight — the worker's from fill to compute
+    std::vector<float> specDoneQ_[kSpecQ];   // its result — the DSP thread's from compute to delivery
+    unsigned long long specFilled_ = 0, specComputed_ = 0, specDelivered_ = 0;   // under specM_
+    bool  specStop_ = false;
     std::atomic<unsigned> specDropped_{0};
     void startSpecThread_();
     void stopSpecThread_();
+    void deliverSpecFrames_();               // DSP thread: every finished frame, oldest first
     // ── the optional demod worker — see setDemodThread ──
     static constexpr int kDemodQ = 4;        // channel blocks in flight
     bool demodThreadWant_ = false, demodOn_ = false;

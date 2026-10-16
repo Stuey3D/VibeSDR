@@ -36,6 +36,7 @@
 #endif
 #include <unistd.h>
 #include "vibe_thread.h"   // ★ the one definition — see the header for why it moved
+#include "vibe_thread_layout.h"   // ★ the receiver split on every multi-core server — g_vsSplitDefault below
 #include "vibe_usb_recovery.h"   // ★ park-not-release, fresh-fd back-off, the re-plug advice (2026-10-05)
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 #include "vibe_hwinfo.h"
@@ -207,6 +208,14 @@ bool vibeLogVerbose() {
 void vibeSetLogVerbose(bool on) { g_logVerbose.store(on ? 1 : 0, std::memory_order_relaxed); }
 
 namespace {
+
+/* ★★★ ONE THREAD LAYOUT ON EVERY SERVER (2026-10-16, Stuart: "the multithreaded setup needs to be the default
+ *  for all servers"). The rule and its reasons live in vibe_thread_layout.h; it is applied HERE, in the code every
+ *  server shares, at library load — before any RxPipeline or DabService starts, and in the same process as the
+ *  setup page's benchmark, which therefore measures the layout that runs. The owner's own environment wins. */
+#if !defined(_WIN32)
+[[maybe_unused]] const bool g_vsSplitDefault = vibe::vibeApplyDefaultThreadLayout();
+#endif
 
 // V5: the on-device DSP is now the clean-room GPL-free engine. These local
 // aliases replace the old SDR++ dsp:: sample types so the decoder/audio feed
@@ -18413,9 +18422,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                               *  there — steady, for as long as the listen lasts. A compute-bound
                               *  thread wanders; a thread BLOCKED ON A QUEUE pins just over 100 %,
                               *  because the blocked time is charged to the same interval. On armhf
-                              *  (the Pi 2 and nothing else) VIBE_DSP_THREADS=1, so the whole WFM
+                              *  (and, since 2026-10-16, every multi-core server — g_vsSplitDefault) VIBE_DSP_THREADS=1, so the whole WFM
                               *  chain runs on one `vibe-demod` thread behind a 4-slot queue.
-                              *  ★ So on a 32-bit box dspCpu is NOT a pure CPU figure, and the
+                              *  ★ So with the split on, dspCpu is NOT a pure CPU figure, and the
                               *  health pill going red is reporting "the pipeline is not keeping
                               *  up", not "this core is busy". This counter is what distinguishes
                               *  them, in one HTTP GET instead of a day of measurement. */
