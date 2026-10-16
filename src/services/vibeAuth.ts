@@ -193,6 +193,50 @@ export async function resolveRadioAuth(radioUrl: string, pin: string): Promise<s
   } catch { return ''; }
 }
 
+/**
+ * ★★★ IS THIS PIN RIGHT, BEFORE WE LEAVE THE PICKER? (2026-10-16)
+ *
+ *  Without this a wrong PIN — typed, or a saved one the owner has since changed — went straight
+ *  to the receiver screen, where the server refuses the socket with a bare 401 and the listener
+ *  is left with a radio that never starts and no box to type the right PIN into. Asking first
+ *  turns "dead end" into "That PIN was not accepted — try again".
+ *
+ *  ★★ Same cheap GET as verifyVibePin (no listener slot, nobody displaced), and the SAME gate the
+ *     socket uses, so the answer cannot disagree with the connection. A wrong answer counts
+ *     towards the server's backoff exactly as the refused socket would have.
+ *  ★★ FOUR answers, not two, because the caller does different things with each:
+ *     'ok'      — connect.
+ *     'wrong'   — 401: ask again.
+ *     'locked'  — the backoff has this address (429, or `lockedFor` on the challenge): say so,
+ *                 rather than letting the listener retype a correct PIN into a locked door.
+ *     'unknown' — unreachable, no nonce, a server too old to have /verify (404), a tunnel 502:
+ *                 connect as the app always did and let the connect path report what it finds.
+ *                 Never infer a pass OR a fail from these.
+ *  `lockedFor` is seconds, when the server says.
+ */
+export type VibePinCheck = { result: 'ok' | 'wrong' | 'locked' | 'unknown'; lockedFor?: number };
+export async function checkVibePin(baseUrl: string, pin: string, timeoutMs = 8000): Promise<VibePinCheck> {
+  const base = baseUrl.replace(/\/+$/, '');
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const ch = await fetch(`${base}/vibeserver/auth`, { signal: ctrl.signal, cache: 'no-store' });
+    const j = await ch.json() as { nonce?: string; lockedFor?: number };
+    if (typeof j?.lockedFor === 'number' && j.lockedFor > 0) return { result: 'locked', lockedFor: j.lockedFor };
+    if (!j?.nonce) return { result: 'unknown' };
+    const q = `vs_nonce=${encodeURIComponent(j.nonce)}&vs_auth=${vibeAuthToken(pin ?? '', j.nonce)}`;
+    const v = await fetch(`${base}/vibeserver/auth/verify?${q}`, { signal: ctrl.signal, cache: 'no-store' });
+    if (v.status === 200) return { result: 'ok' };
+    if (v.status === 401) return { result: 'wrong' };
+    if (v.status === 429) return { result: 'locked' };
+    return { result: 'unknown' };
+  } catch {
+    return { result: 'unknown' };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 export async function resolveVibeAuth(baseUrl: string, pin: string): Promise<string> {
   const base = baseUrl.replace(/\/+$/, '');
   const resp = await fetch(`${base}/vibeserver/auth`);

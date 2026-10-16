@@ -46,6 +46,20 @@ function goToSpy(host: string, port: number) {
 /** Reset the stack to the SDR screen for a resolved target (fresh mount). */
 async function goToTarget(target: ResolvedTarget) {
   if (!navigationRef.isReady()) return;
+  /* ★★ A VIBESERVER GOES THROUGH THE PICKER (2026-10-16) — it owns the PIN probe and the PIN box
+   *  (see RootStackParamList.linkVibe). Straight to SDR, a PIN-protected VibeServer was refused at
+   *  the socket with nothing on screen to type the PIN into, on Android and iOS alike. */
+  if (target.serverType === 'vibeserver') {
+    navigationRef.dispatch(CommonActions.reset({
+      index: 0,
+      routes: [{ name: 'InstancePicker', params: {
+        noAutoConnect: true,
+        linkVibe: { url: target.baseUrl, name: target.instanceName,
+                    freq: target.freq, mode: target.mode, zoom: target.zoom },
+      } }],
+    }));
+    return;
+  }
   const viewMode = await getViewMode();
   navigationRef.dispatch(CommonActions.reset({
     index: 1,
