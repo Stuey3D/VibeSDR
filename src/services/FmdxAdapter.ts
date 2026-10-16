@@ -21,6 +21,7 @@ import { USER_AGENT } from '../constants/version';
 import { guard, guardJson, noteFault } from './faultLog';
 import { cleanText } from '../utils/safeText';
 import { cleanKeepSpacing } from '../utils/cleanLines';
+import { toWsUrl } from '../utils/serverUrl';
 
 const Vibe = NativeModules.VibePowerModule as {
   startFmdxAudio?: (baseUrl: string) => void;
@@ -45,12 +46,8 @@ const FMDX_CAPS: BackendCapabilities = {
 
 /** ws(s) URL for a given path from an http(s) base. */
 function wsUrl(base: string, path: string): string {
-  let s = base.trim();
-  if (s.startsWith('https://'))      s = 'wss://' + s.slice(8);
-  else if (s.startsWith('http://'))  s = 'ws://'  + s.slice(7);
-  else                               s = 'ws://'  + s;
-  s = s.replace(/\/+$/, '');
-  return s + path;
+  // ★ wss follows the scheme, never the port — utils/serverUrl.ts (GitHub #52).
+  return toWsUrl(base) + path;
 }
 
 /** Reopen ladder for a dropped /text socket — see scheduleTextReconnect. */

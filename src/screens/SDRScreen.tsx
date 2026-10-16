@@ -77,6 +77,7 @@ import {
 import { wrapWithConverter, wrapConverterCallbacks } from '../services/ConverterBackend';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { withKiwiProxyPort } from '../utils/kiwiProxy';
+import { toHttpUrl } from '../utils/serverUrl';
 import { localSessionGen } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
@@ -2184,6 +2185,8 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const [connected, setConnected] = useState(false);
   const [serverLost, setServerLost] = useState(false);   // OWRX server crashed/restarted
+  /** ★ What the socket said, and whether we ever got past the handshake (GitHub #52). */
+  const [serverLostWhy, setServerLostWhy] = useState<{ reason: string; neverConnected: boolean } | null>(null);
   const [serverBusy, setServerBusy] = useState(false);   // Kiwi receiver full (too_busy)
   const [kiwiRefused, setKiwiRefused] = useState<string | null>(null);  // Kiwi refusal card (msg)
   const [compatWarn,  setCompatWarn]  = useState(false); // "leaving VibeSDR" warning before web view
@@ -2202,10 +2205,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   //       is a separate guard and does not depend on this timing.
   useEffect(() => {
     if (!route.params?.compatOnly) return;
-    let u = withKiwiProxyPort((route.params.baseUrl || '').trim()).replace(/\/+$/, '')   // ★★ proxy.kiwisdr.com = 8073 only
-      .replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-    if (!/^https?:\/\//.test(u)) u = 'http://' + u;
-    setCompatUrl(u + '/');
+    // ★★ proxy.kiwisdr.com = 8073 only; scheme + port as given otherwise — utils/serverUrl.ts.
+    setCompatUrl(toHttpUrl(withKiwiProxyPort((route.params.baseUrl || '').trim())) + '/');
   }, [route.params?.compatOnly, route.params?.baseUrl]);
   // A definitive Kiwi refusal terminates the session — an auto-reconnect/zombie watchdog must NOT
   // then stack a "serverLost / Reconnect" card on top of the refusal card. Ref (not state) so the
@@ -5359,11 +5360,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           ifText: hz > 0 ? `IF ${Math.round(hz / 1000)}k${auto ? ' auto' : ''}`
                          : (auto ? 'IF wide auto' : 'IF wide') });
       },
-      onServerLost: () => {
+      onServerLost: (reason?: string, neverConnected?: boolean) => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
         // the server is usually still restarting).
+        // ★★ GitHub #52: the reason reaches the card and the diagnostics breadcrumbs. It used to be
+        //   dropped, so a TLS port dialled as ws:// left a log with nothing in it but mount/unmount.
+        if (reason) crumb(`server lost: ${reason}`);
         if (destroyed.current || kiwiRefusedRef.current) return;   // refusal card already owns the screen
+        setServerLostWhy(reason ? { reason, neverConnected: !!neverConnected } : null);
         setServerLost(true);
         (VibePowerModule as any)?.stopExternalAudio?.();
       },
@@ -10732,10 +10737,19 @@ export default function SDRScreen({ route, navigation }: Props) {
         return (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={sdrMs.serverLostCard}>
-            <Text style={sdrMs.serverLostTitle}>{lostLabel} server stopped responding</Text>
-            <Text style={sdrMs.serverLostBody}>{isKiwiProtocol(route.params.serverType)
+            <Text style={sdrMs.serverLostTitle}>{serverLostWhy?.neverConnected
+              ? `Couldn't connect to this ${lostLabel} server`
+              : `${lostLabel} server stopped responding`}</Text>
+            <Text style={sdrMs.serverLostBody}>{serverLostWhy?.neverConnected
+              ? `The receiver didn't complete the connection. Check the address — including http:// or https:// and the port — matches the one that opens in your browser.`
+              : isKiwiProtocol(route.params.serverType)
               ? `The receiver dropped the connection. ${lostLabel} owners with few slots often restrict access: some allow only their own web page, so apps like VibeSDR are refused the moment they connect; some block broadcast / commercial bands and disconnect you when you tune there. If reconnecting drops the same way it's likely an owner restriction — try another receiver. Otherwise it may just be busy or restarting: wait a minute and reconnect.`
               : `The receiver dropped the connection — ${lostLabel} servers restart from time to time. Please wait a minute, then reconnect — or pick another from the list.`}</Text>
+            {!!serverLostWhy?.reason && (
+              <Text style={[sdrMs.serverLostBody, { fontSize: 11, opacity: 0.75, marginTop: 6 }]} selectable>
+                {serverLostWhy.reason}
+              </Text>
+            )}
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
@@ -10860,10 +10874,8 @@ export default function SDRScreen({ route, navigation }: Props) {
                   //      multiple slots", FMDX.org Discord 2026-07-29) — the Kiwi path should
                   //      not quietly do the opposite.
                   client.current?.disconnectSocket?.();
-                  let u = withKiwiProxyPort((baseUrl || '').trim()).replace(/\/+$/, '')   // ★★ proxy.kiwisdr.com = 8073 only
-                    .replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-                  if (!/^https?:\/\//.test(u)) u = 'http://' + u;
-                  setCompatUrl(u + '/');
+                  // ★★ proxy.kiwisdr.com = 8073 only; scheme + port as given — utils/serverUrl.ts.
+                  setCompatUrl(toHttpUrl(withKiwiProxyPort((baseUrl || '').trim())) + '/');
                 }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>CONTINUE</Text>
               </TouchableOpacity>

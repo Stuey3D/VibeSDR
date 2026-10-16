@@ -1,4 +1,5 @@
 // Shared SDR types used across clients and UI
+import { parseServerUrl, withScheme, toHttpUrl, buildServerUrl, type ParseOpts } from '../utils/serverUrl';
 import { STEP_833, STEP_FM_ODD, isAirbandCom } from '../utils/airband';
 import { cleanText } from '../utils/safeText';
 import { cleanLines } from '../utils/cleanLines';
@@ -71,6 +72,11 @@ export async function checkConnection(_url: string, _password?: string): Promise
 
 export type ServerType = 'ubersdr' | 'kiwi' | 'web888' | 'owrx';
 
+/** The backends reached over HTTP(S) — the ones whose scheme matters. rtl_tcp / SpyServer are raw TCP. */
+export function isHttpBackend(t: string | null | undefined): boolean {
+  return t === 'ubersdr' || t === 'owrx' || t === 'kiwi' || t === 'web888' || t === 'fmdx' || t === 'vibeserver';
+}
+
 /** ★★★ WEB-888 SPEAKS KIWI, BUT NOT AT THE SAME URL — and that one difference is the whole
  *  reason a Web-888 could not be connected to at all, on either the KiwiSDR or the OpenWebRX
  *  setting, until 2026-08-03.
@@ -134,8 +140,7 @@ export const DEFAULT_PORT: Record<BackendType, number> = {
 /** @param known what this server was last seen to be, when the caller has a stored answer. A
  *  KiwiSDR-family receiver is never asked for VibeServer's files — see the note below. */
 export async function detectServerType(url: string, known?: string | null): Promise<BackendType | null> {
-  const base = url.trim().replace(/\/+$/, '')
-    .replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+  const base = toHttpUrl(url);   // ★ scheme + port as given — utils/serverUrl.ts
   // Manual AbortController + setTimeout — AbortSignal.timeout() isn't reliably
   // available in Android's Hermes runtime and throws before the fetch even runs,
   // which used to make detection fail → default to ubersdr → 404 on OWRX servers.
@@ -275,37 +280,33 @@ export interface ServerAddress {
   hasPath: boolean;
 }
 
-export function parseServerAddress(
-  raw: string, defaultPort?: number,
-): ServerAddress | null {
-  let s = raw.trim().replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
-  const schemeM = /^(https?):\/\//i.exec(s);
-  const explicitScheme = !!schemeM;
-  const https = schemeM ? schemeM[1].toLowerCase() === 'https' : false;
-  if (schemeM) s = s.slice(schemeM[0].length);
-  if (!s) return null;
+export function parseServerAddress(raw: string, opts: ParseOpts = {}): ServerAddress | null {
+  // ★★★ utils/serverUrl.ts owns the rule (GitHub #52): scheme and port kept as given, defaults
+  //   only for a missing part, the scheme never inferred from the port.
+  const u = parseServerUrl(raw, opts);
+  if (!u) return null;
+  return { host: u.host, port: u.port, url: u.url, explicitScheme: u.explicitScheme, hasPath: u.path.length > 0 };
+}
 
-  // Split authority from path BEFORE touching either — the old code deleted the path here.
-  const slash = s.indexOf('/');
-  const authority = slash >= 0 ? s.slice(0, slash) : s;
-  let path = slash >= 0 ? s.slice(slash) : '';
-  path = path.replace(/[?#].*$/, '').replace(/\/+$/, '');   // drop query/fragment + trailing /
-
-  const m = /^(.+?)(?::(\d+))?$/.exec(authority);
-  if (!m || !m[1]) return null;
-  const host = m[1];
-  const port = m[2] ? parseInt(m[2], 10)
-    : defaultPort != null ? defaultPort
-    : https ? 443 : 80;
-  if (!Number.isFinite(port) || port <= 0 || port >= 65536) return null;
-
-  // ★ Omit the port when it is the scheme's default: a URL that says `:443` on https works,
-  // but it is not what anyone pasted and it makes every log and label harder to read.
-  const scheme = https ? 'https' : 'http';
-  const defaultForScheme = https ? 443 : 80;
-  const authorityOut = port === defaultForScheme ? host : `${host}:${port}`;
-  return { host, port, url: `${scheme}://${authorityOut}${path}`,
-           explicitScheme, hasPath: path.length > 0 };
+/** ★★★ WHICH SCHEME DOES THIS SERVER SPEAK? (GitHub #52.) Only asked when the user did not say —
+ *  an explicit http:// or https:// is returned untouched. Otherwise https is tried FIRST: a TLS
+ *  port answers nothing over plain http (OWRX+ resets the connection), while a plain port fails a
+ *  TLS hello at once, so the order costs a plain server one quick failure. Any HTTP answer at all
+ *  (even a 404) proves the scheme. Nothing answering either way → the http guess, as before.
+ *  ★ This PROBES; it never guesses from the port number. 8073 can be TLS. */
+export async function resolveServerScheme(baseUrl: string, explicitScheme: boolean): Promise<string> {
+  const u = parseServerUrl(baseUrl);
+  if (!u || explicitScheme) return baseUrl;
+  const answers = async (url: string): Promise<boolean> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    try { await fetch(url + '/', { signal: ctrl.signal }); return true; }
+    catch { return false; }
+    finally { clearTimeout(timer); }
+  };
+  const tls = withScheme(u, 'https').url;
+  if (await answers(tls)) return tls;
+  return u.url;
 }
 
 /** ★★ Occupancy of a VibeServer, from its identity endpoint.
@@ -494,26 +495,29 @@ async function vibeDirectUrl(base: string): Promise<string | null> {
 }
 
 export async function probeServer(
-  host: string, port: number, hint?: BackendType | null, baseUrl?: string,
+  host: string, port: number, hint?: BackendType | null, baseUrl?: string, explicitScheme = false,
 ): Promise<ProbeResult | null> {
-  const fallbackUrl = baseUrl || `http://${host}:${port}`;
+  const fallbackUrl = baseUrl || buildServerUrl('http', host, port);
   // An explicit choice is not probed at all, so the caller's address is all we know.
   if (hint) return { type: hint, url: fallbackUrl };
 
-  // ★ A URL WINS WHEN WE HAVE ONE. A receiver in a subfolder does not answer at the root, so
-  // probing `host:port` alone reports "nothing there" for a server that is plainly running.
-  if (baseUrl) {
-    const t = await detectServerType(baseUrl);
+  // ★★★ THE SCHEME IS PROBED, NEVER GUESSED — AND NEVER OVERRULED (GitHub #52). A typed http:// or
+  //   https:// is the only scheme tried. With none typed, https goes FIRST: an OWRX+ with its own
+  //   certificate answers only TLS, on 8073 like any other OWRX. The URL keeps its port and path
+  //   either way — a receiver in a subfolder does not answer at the root.
+  const candidates: string[] = [];
+  const add = (u: string) => { if (!candidates.includes(u)) candidates.push(u); };
+  const parsed = baseUrl ? parseServerUrl(baseUrl) : null;
+  const schemes: Array<'https' | 'http'> =
+    explicitScheme && parsed ? [parsed.scheme] : ['https', 'http'];
+  if (parsed) for (const sc of schemes) add(withScheme(parsed, sc).url);
+  // …then the bare host:port, for an address whose path turned out not to be the receiver.
+  for (const sc of schemes) add(buildServerUrl(sc, host, port));
+
+  for (const url of candidates) {
+    const t = await detectServerType(url);
     // ★★ FOLLOW THE SERVER'S OWN ANSWER ABOUT WHERE IT LIVES — see vibeDirectUrl(). Without this
     //    a tunnelled receiver connects for everything except the socket.
-    if (t === 'vibeserver') return { type: t, url: (await vibeDirectUrl(baseUrl)) || baseUrl };
-    if (t) return { type: t, url: baseUrl };
-  }
-
-  const authority = `${host}:${port}`;
-  for (const scheme of ['https', 'http'] as const) {
-    const url = `${scheme}://${authority}`;
-    const t = await detectServerType(url);
     if (t === 'vibeserver') return { type: t, url: (await vibeDirectUrl(url)) || url };
     if (t) return { type: t, url };
   }

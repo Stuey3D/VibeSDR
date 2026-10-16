@@ -35,6 +35,8 @@ const Vibe = NativeModules.VibePowerModule as {
 import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
 import { cleanText } from '../utils/safeText';
 import { receiverPlaceLine } from './grid';
+import { owrxWsUrl, owrxHttpBase, owrxCloseReason } from '../utils/serverUrl';
+import { noteDecision } from './protocolLog';
 import { parseOwnerCal, FloorTracker, ownerMap, anchorMap, type OwnerCal, type SmeterMap } from './owrxSmeterCal';
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';   // for the decoder below
 
@@ -264,14 +266,9 @@ export class OwrxAdapter implements SDRBackend {
     this.httpBase = OwrxAdapter.toHttpBase(baseUrl);
   }
 
-  /** ws(s)/http(s)://host:port[/path] → http(s)://host:port (for /status.json). */
-  static toHttpBase(baseUrl: string): string {
-    let u = baseUrl.trim().replace(/\/+$/, '');
-    if (u.startsWith('wss://'))        u = 'https://' + u.slice('wss://'.length);
-    else if (u.startsWith('ws://'))    u = 'http://'  + u.slice('ws://'.length);
-    else if (!/^https?:\/\//.test(u))  u = 'http://'  + u;
-    return u.replace(/\/ws\/?$/, '');
-  }
+  /** ws(s)/http(s)://host:port[/path] → http(s)://host:port[/path] (for /status.json).
+   *  ★ utils/serverUrl.ts — the scheme and port are kept as given (GitHub #52). */
+  static toHttpBase(baseUrl: string): string { return owrxHttpBase(baseUrl); }
 
   /** Poll /status.json (public, no admin) and build per-SDR usage keyed by sdrId.
    *  An SDR appears in status.json only when ACTIVE (a live user or a background
@@ -358,15 +355,9 @@ export class OwrxAdapter implements SDRBackend {
     this.stopRateMeter();
   }
 
-  /** http(s)://host:port[/path] → ws(s)://host:port/ws/ (trailing slash required;
-   *  the StaticRoute is exactly "/ws/", a bare /ws 404s). */
-  static toWsUrl(baseUrl: string): string {
-    let u = baseUrl.trim().replace(/\/+$/, '');
-    if (u.startsWith('https://'))      u = 'wss://' + u.slice('https://'.length);
-    else if (u.startsWith('http://'))  u = 'ws://'  + u.slice('http://'.length);
-    else if (!/^wss?:\/\//.test(u))    u = 'ws://'  + u;
-    return u + '/ws/';
-  }
+  /** http(s)://host:port[/path] → ws(s)://host:port[/path]/ws/. wss follows https, NEVER the port —
+   *  an OWRX+ with native TLS answers on 8073 too (GitHub #52). See utils/serverUrl.ts. */
+  static toWsUrl(baseUrl: string): string { return owrxWsUrl(baseUrl); }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   connect(frequency?: number, mode?: SDRMode): Promise<void> {
@@ -382,8 +373,15 @@ export class OwrxAdapter implements SDRBackend {
       this.ws = ws;
       ws.binaryType = 'arraybuffer';
 
+      /* ★★★ SAY WHY IT FAILED (GitHub #52). The socket's error message was thrown away and every
+       *  failure — a TLS port dialled as ws://, a refused port, a bad certificate — became "server
+       *  stopped responding", with nothing in the diagnostics log. Now the reason travels with the
+       *  close, and the log records where we dialled and what came back. */
+      let lastError = '';
+      noteDecision('owrx', `connecting ${this.wsUrl}`);
       ws.onopen = () => {
         this.dbg('WS open ' + this.wsUrl);
+        noteDecision('owrx', `socket open ${this.wsUrl}`);
         ws.send('SERVER DE CLIENT client=vibesdr type=receiver');
         // connectionproperties + start are sent on the CLIENT DE SERVER ack.
       };
@@ -399,17 +397,25 @@ export class OwrxAdapter implements SDRBackend {
           guard('owrx', 'binary', () => this.onBinary(u8), `len=${u8.length}`);
         }
       };
-      ws.onerror = () => { this.dbg('WS error'); if (!settled) { settled = true; reject(new Error('OpenWebRX WebSocket error')); } };
+      // ★ NOT settled here: RN delivers error THEN close, and the close carries the code. Rejecting
+      //   on the error used to mark the attempt settled, so the close could not tell a handshake that
+      //   never happened from a session that dropped.
+      ws.onerror = (e: any) => {
+        lastError = String(e?.message ?? '').trim();
+        this.dbg('WS error ' + lastError);
+      };
       ws.onclose = (ev) => {
         this.dbg('WS close ' + ev.code);
+        const reason = owrxCloseReason(this.wsUrl, !settled, ev.code, lastError || String(ev.reason ?? ''));
+        noteDecision('owrx', reason);
         this.lastLink = 0; this.cb.onLink?.(0);   // drop the connection signal meter
         this.stopStatusPoll();                     // stop polling a dead server
         // This handler is nulled before our own intentional close()s (destroy /
         // disconnectSocket), so reaching here ALWAYS means an unexpected drop —
         // i.e. the OWRX server crashed/restarted. Tell the UI to hold + warn.
         this.cb.onDisconnect();
-        this.cb.onServerLost?.();
-        if (!settled) { settled = true; reject(new Error('OpenWebRX closed (' + ev.code + ')')); }
+        this.cb.onServerLost?.(reason, !settled);
+        if (!settled) { settled = true; reject(new Error(reason)); }
       };
     });
   }

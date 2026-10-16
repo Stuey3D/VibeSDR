@@ -11,6 +11,7 @@ import { VibeServerClient } from './VibeServerClient';
 import type { SDRMode, SDRStatus } from './sdrProtocol';
 import { WFM_MIN_BW_HZ } from './sdrProtocol';
 import type { BackendCallbacks, BackendCapabilities, BackendKind, SDRBackend } from './SDRBackend';
+import { toHttpUrl } from '../utils/serverUrl';
 
 const VIBESERVER_CAPS: BackendCapabilities = {
   profiles:       false,
@@ -254,7 +255,7 @@ export class VibeServerAdapter implements SDRBackend {
    *  → ITU region, for custom/default UberSDR hosts not carrying a directory lon. */
   private async fetchReceiverLon(): Promise<void> {
     try {
-      const http = this.baseUrl.trim().replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://').replace(/\/+$/, '');
+      const http = toHttpUrl(this.baseUrl);   // ★ scheme + port as given — utils/serverUrl.ts
       const r = await fetch(http + '/status.json', { signal: AbortSignal.timeout(8000) });
       if (!r.ok) return;
       const lon = (await r.json())?.receiver?.gps?.lon;
