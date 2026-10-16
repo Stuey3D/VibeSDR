@@ -15,11 +15,12 @@
  *      SIZE or the radio's tube count changes — never on a tune step.
  *   2. NixieCathodes — only what a tune step changes: each tube's inside and the lit bead. A tube's
  *      inside is ONE pre-rendered SPRITE per digit (glowSprite.ts; drawn by constants/nixie
- *      drawTubeInside): the whole IN-14 stack (front→back 3 8 9 4 0 5 7 2 6 1) with that digit lit
+ *      drawTubeInside): the whole IN-14 stack (front→back 6 5 4 7 3 9 8 2 0 1, measured) with that digit lit
  *      at its own depth, seen through the dark wires of every cathode in front of it, the ones behind
  *      lit warm, the hex anode mesh over the glow. Rasterised once per tube size (11 images), so a
  *      fast spin blits one image per tube and never runs a live BlurMask or draws text.
- * ★ The IN-14's own shapes: the 5 is the 2's cathode turned upside down, the 1 a plain straight wire.
+ * ★ The IN-14's own shapes: the 5 is the 2's cathode turned upside down, the 2's base a straight wire
+ *   (no upturn), the 1 a plain straight wire. The neon glow is a fattened, blurred sheath round each wire.
  * ★ Neon afterglow: a cathode that goes out is drawn at ≈38 % for one frame, then gone, while the
  *   new one lights. A fade, never a flash; nothing animates at rest, so there is no flicker.
  * ★ Fast tune: every frequency this component is given is drawn, at the rate it is given — no

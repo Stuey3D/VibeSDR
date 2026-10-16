@@ -21,24 +21,31 @@
  */
 
 // ★ Types only: this module stays loadable by node (scripts/test_faceplate_nixie.ts) with no React Native.
-import type { Skia, SkCanvas, SkFont, SkPaint, SkPath } from '@shopify/react-native-skia';
+import type { Skia, SkCanvas, SkFont, SkPath } from '@shopify/react-native-skia';
 
 /**
- * ★★★ THE IN-14 CATHODE STACK, FRONT to back: 3 8 9 4 0 5 7 2 6 1 (Stuart, 2026-10-16 — his own IN-14
- *   clock is the reference). The 3 sits right behind the anode mesh and reads crisp; the 1 is at the back
- *   and is seen THROUGH the wires of all nine cathodes in front of it, as on the real tube (the video:
- *   the 1, 6 and 2 are crossed by dark wire, the 3 and 8 are clean).
- *   The order before 2026-10-16 was this one REVERSED (a 1 drawn clean at the front).
+ * ★★★ THE IN-14 CATHODE STACK, FRONT to back: 6 5 4 7 3 9 8 2 0 1 — MEASURED off Stuart's 4K close-up of real
+ *   IN-14s (IMG_1559, 2026-10-16: tube 1 steps through all ten digits at 9.7-12.7 s). No published depth
+ *   order is trustworthy (datasheets give only the pinout), so this is what the video shows.
+ *   Two independent cues, every digit in the SAME tube, same exposure:
+ *    · size (perspective — a deeper cathode is further from the lens): lit-stroke height in px of the
+ *      full-height digits 6 338 · 5 334 · 7 327 · 3 326 · 9 323 · 8 322 · 2 315 · 1 289 · 0 288
+ *      (the 4 runs below the line by design, so its height does not compare);
+ *    · occlusion — dark wire silhouettes across the lit stroke, over and above the hex mesh:
+ *      6 5 4 none · 7 one · 3 9 two-three · 8 three · 2 0 1 four or more.
+ *   Confidence: 6 5 front and 0 1 back HIGH; 4 7 3 9 8 2 medium; within the pairs 6/5, 3/9, 8/2, 0/1 low.
+ *   (Superseded: the "3 8 9 4 0 5 7 2 6 1" an AI summary offered, its reverse, and a read of the
+ *   low-resolution IMG_0043 — "6 4 7 9 1 0 3 8 5 2".)
  */
-export const CATHODE_STACK = ['3', '8', '9', '4', '0', '5', '7', '2', '6', '1'] as const;
+export const CATHODE_STACK = ['6', '5', '4', '7', '3', '9', '8', '2', '0', '1'] as const;
 
 export interface CathodeDepth { scale: number; dy: number; opacity: number; soft: number }
 
 /**
  * Stack index i (0 = front) → a slightly smaller, lower, dimmer and softer digit:
  * `scale 1 − 0.010·i`, `dy 0.15·i`, `opacity 1 − 0.015·i`, glow radius × `1 + 0.05·i`.
- * ★ Gentle on purpose: the real stack is a few mm deep in a 18 mm tube — the back 1 is ~9 % smaller and
- *   softer, not a different size. (The pre-2026-10-16 0.028 per step made the back digit 25 % smaller.)
+ * ★ The back digit is ~9 % smaller and a touch softer (the 4K video measures ~15 % at macro range;
+ *   the dimming and scale are held where Stuart last saw them until he decides). (The pre-2026-10-16 0.028 per step made the back digit 25 % smaller.)
  */
 export function cathodeDepth(d: string): CathodeDepth {
   const i = Math.max(0, CATHODE_STACK.indexOf(d as any));
@@ -122,23 +129,48 @@ export function honeycombPath(Sk: SkiaApi, tw: number, th: number, ox = 0, oy = 
   return p;   // ★ overruns the box by a cell: the caller CLIPS to meshBox (a path op on open lines is empty)
 }
 
-/** A CSS glow stack, outermost first: `[[radius, colour], …]`. */
-export type NixieGlow = Array<[number, string]>;
-
-/** §7 digit: `#ffc48a`, glow `0 0 1.5 #ff8a2e, 0 0 5 #ff6410, 0 0 11 rgba(255,80,10,.75), 0 0 20 rgba(255,70,0,.35)`. */
-export const DIGIT_CORE = '#ffc48a';
-export const DIGIT_GLOW: NixieGlow = [[20, 'rgba(255,70,0,0.35)'], [11, 'rgba(255,80,10,0.75)'], [5, '#ff6410'], [1.5, '#ff8a2e']];
+/**
+ * ★★ THE NEON GLOW (Stuart, 2026-10-16: "a lovely neon gas glow around them", the reference video).
+ * The gas glows in a sheath round the wire: brightest at the wire, falling off over a few stroke widths,
+ * spilling warm light on the mesh and the wires next to it. Each layer is the cathode shape FATTENED
+ * (a thin Nixie One stroke blurred on its own gives almost no halo — that was the old look) and then
+ * blurred, outermost first. `sigma` is a fraction of the digit size, `fat` is in stroke widths.
+ */
+export interface NeonLayer { sigma: number; fat: number; color: string; alpha: number }
+export const DIGIT_NEON: NeonLayer[] = [
+  // ★ Colours sampled from the 4K video (IMG_1559) off the stroke, never from its clipped yellow core:
+  //   sheath #f59306, halo #d65409, lit window #be4608. Deep neon orange, not yellow-white.
+  { sigma: 0.17,  fat: 4,   color: 'rgb(200,62,6)',   alpha: 0.65 },   // wide bloom, fills the window
+  { sigma: 0.07,  fat: 3,   color: 'rgb(214,84,9)',   alpha: 0.75 },   // the gas sheath
+  { sigma: 0.026, fat: 2,   color: 'rgb(240,110,8)',  alpha: 0.95 },    // hugging the wire
+  { sigma: 0.008, fat: 1.1, color: 'rgb(250,145,14)', alpha: 1 },      // hot rim
+];
+/** The wire itself: hot orange-amber (the camera clips it to yellow; the eye sees amber). */
+export const DIGIT_CORE = '#ffaa2c';
+/** The core is drawn this much fatter than Nixie One's stroke (in stroke widths): the lit wire reads
+ *  about twice the font's weight in the 4K video. */
+export const CORE_FAT = 0.6;
 /** Unlit cathodes: bare metal in a switched-off tube; lit warm from the side by a lit digit behind
  *  the ones in front; a dark wire where one crosses the glow. */
 const WIRE_OFF       = 'rgba(160,140,120,0.13)';
 const WIRE_WARM      = 'rgba(255,150,90,0.12)';
-const WIRE_FRONT     = 'rgba(20,10,5,0.32)';
+const WIRE_FRONT     = 'rgba(70,26,6,0.36)';
 /** The anode mesh in front of the stack: it shadows the glow as fine hex lines, and is lit warm itself. */
-/** Nixie One's stroke weight, as a fraction of the font size (measured: the 0's ring). */
-const STEM = 0.06;
-const MESH_SHADOW    = 'rgba(30,14,6,0.28)';
-const MESH_LIT       = 'rgba(255,140,70,0.16)';
-const MESH_WASH      = 'rgba(255,110,40,0.07)';
+/** Nixie One's stroke weight, as a fraction of the font size (measured at 1000 px: 29-30 px — the 0's
+ *  ring, the 2's base and tick). The 1's plain wire is drawn this wide. */
+export const STEM = 0.03;
+/**
+ * ★ THE 2's BASE IS A STRAIGHT WIRE (Stuart, 2026-10-16, his photo): Nixie One ends the 2's flat base
+ * with a 90° upturn — a second short stroke the IN-14 does not have. Measured in Nixie One at 1000 px
+ * from the text origin: base y −30…−1 (centre −15.5), tick x 500…529 rising to y −170, base from x 61.
+ * The tube cuts everything right of x 0.485 below y −0.25 and caps the base there with a round end of
+ * the stroke's own width. The 5 is the flipped 2, so its flat top loses the matching down-tick.
+ * Only the frequency tubes draw this; the font is untouched everywhere else.
+ */
+export const TWO_TRIM = { cutX: 0.485, cutTop: -0.25, capY: -0.0155 };
+const MESH_SHADOW    = 'rgba(40,14,4,0.17)';
+const MESH_LIT       = 'rgba(230,100,30,0.20)';
+const MESH_WASH      = 'rgba(190,70,8,0.28)';
 
 /**
  * Draw ONE tube's inside — the whole cathode stack with `lit` glowing at its own depth (null = a
@@ -149,28 +181,61 @@ const MESH_WASH      = 'rgba(255,110,40,0.07)';
  */
 export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, font: SkFont, lit: string | null,
                                tw: number, th: number, nf: number): void {
-  const paint = (color: string, opts: { blur?: number; stroke?: number; blend?: number } = {}) => {
+  const paint = (color: string, opts: { stroke?: number; blend?: number } = {}) => {
     const p = Sk.Paint();
     p.setAntiAlias(true);
     p.setColor(Sk.Color(color));
-    if (opts.blur && opts.blur > 0) p.setMaskFilter(Sk.MaskFilter.MakeBlur(0 /* BlurStyle.Normal */, opts.blur / 2, true));
     if (opts.stroke) { p.setStyle(1 /* PaintStyle.Stroke */); p.setStrokeWidth(opts.stroke); }
     if (opts.blend !== undefined) p.setBlendMode(opts.blend);
     return p;
   };
   const { cx, cy } = digitCentre(tw, th);
-  const glyph = (d: string, p: SkPaint) => {
+  const stem = nf * STEM;
+  /** The cathode's shape in an OPAQUE colour, fattened by `fat` pt — the 1 as a plain wire, the 5 as the
+   *  flipped 2, the 2's base without the font's upturn. */
+  const shape = (d: string, color: string, fat: number) => {
     const g = cathodeGlyph(d);
     const b = font.measureText(g.glyph);
+    const p = paint(color);
     if (g.bar) {                                          // the 1: a wire the height of a 0
-      const w = nf * STEM, len = b.height + w;
+      const w = stem + fat, len = b.height + w;
       c.drawRRect(Sk.RRectXY(Sk.XYWHRect(cx - w / 2, cy - len / 2, w, len), w / 2, w / 2), p);
       return;
     }
     const x = cx - (b.x + b.width / 2), y = cy - (b.y + b.height / 2);
+    const trim = g.glyph === '2';
     if (g.flipY) { c.save(); c.translate(0, 2 * cy); c.scale(1, -1); }
+    if (trim) {
+      c.save();
+      c.clipRect(Sk.XYWHRect(x + TWO_TRIM.cutX * nf, y + TWO_TRIM.cutTop * nf, 0.3 * nf, -TWO_TRIM.cutTop * nf + 0.1 * nf),
+        0 /* ClipOp.Difference */, true);
+    }
     c.drawText(g.glyph, x, y, p, font);
+    if (fat > 0) {
+      const ps = paint(color, { stroke: fat });
+      ps.setStrokeJoin(1 /* StrokeJoin.Round */);
+      c.drawText(g.glyph, x, y, ps, font);
+    }
+    if (trim) {
+      c.restore();
+      c.drawCircle(x + TWO_TRIM.cutX * nf, y + TWO_TRIM.capY * nf, (stem + fat) / 2, p);
+    }
     if (g.flipY) c.restore();
+  };
+  /** Draw `draw` as one layer at `alpha`, blurred by `sigma` pt — so a shape's overlapping parts (the
+   *  trimmed 2's cap, a fattened outline) never double up, and the blur is the layer's, not cut by the
+   *  trim's clip. */
+  const layer = (alpha: number, sigma: number, draw: () => void) => {
+    const lp = Sk.Paint();
+    lp.setAlphaf(alpha);
+    if (sigma > 0) lp.setImageFilter(Sk.ImageFilter.MakeBlur(sigma, sigma, 3 /* TileMode.Decal */, null));
+    c.saveLayer(lp);
+    draw();
+    c.restore();
+  };
+  const rgbA = (rgba: string): [string, number] => {
+    const m = /rgba\((\d+),(\d+),(\d+),([\d.]+)\)/.exec(rgba.replace(/\s/g, ''));
+    return m ? [`rgb(${m[1]},${m[2]},${m[3]})`, +m[4]] : [rgba, 1];
   };
   const atDepth = (d: string, draw: (z: CathodeDepth) => void) => {
     const z = cathodeDepth(d);
@@ -181,30 +246,31 @@ export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, font: SkFont, lit: stri
     draw(z);
     c.restore();
   };
-  const gk = Math.max(0.6, Math.min(1, nf / 30));        // the glow shrinks with the tube
 
   c.save();
   c.clipPath(tubeGlassPath(Sk, 0, 0, tw, th), 1 /* ClipOp.Intersect */, true);
   const li = lit === null ? CATHODE_STACK.length : CATHODE_STACK.indexOf(lit as any);
-  // Back to front, so every cathode covers the ones behind it — the glow included.
-  for (let i = CATHODE_STACK.length - 1; i >= 0; i--) {
-    const d = CATHODE_STACK[i];
-    atDepth(d, (z) => {
-      if (i === li) {
-        for (const [r, col] of DIGIT_GLOW) {
-          const p = paint(col, { blur: r * gk * z.soft });
-          p.setAlphaf(p.getAlphaf() * z.opacity);
-          glyph(d, p);
-        }
-        const core = paint(DIGIT_CORE);
-        core.setAlphaf(z.opacity);
-        glyph(d, core);
-      } else if (i > li) {
-        const p = paint(lit === null ? WIRE_OFF : WIRE_WARM);
-        p.setAlphaf(p.getAlphaf() * z.opacity);
-        glyph(d, p);
-      } else {
-        glyph(d, paint(WIRE_FRONT));
+  /* Back to front: the cathodes behind, the lit one, the cathodes in front — each covering what is
+   * behind it, the glow included. ★ The unlit wires are drawn as ONE layer per side, opaque inside it,
+   * the layer at the wire's tint: where two wires overlap (the 3, 8 and 0 share curves) they do not
+   * stack up into a solid dark band over the digit — a wire is a wire, however many lie on that line. */
+  const [backCol, backA] = rgbA(lit === null ? WIRE_OFF : WIRE_WARM);
+  layer(backA, 0, () => {
+    for (let i = CATHODE_STACK.length - 1; i > li; i--) {
+      const d = CATHODE_STACK[i];
+      atDepth(d, (z) => layer(z.opacity, 0, () => shape(d, backCol, 0)));
+    }
+  });
+  if (lit !== null) {
+    atDepth(lit, (z) => {
+      for (const g of DIGIT_NEON) layer(g.alpha * z.opacity, g.sigma * nf * z.soft, () => shape(lit, g.color, g.fat * stem));
+      layer(z.opacity, 0, () => shape(lit, DIGIT_CORE, CORE_FAT * stem));
+    });
+    const [frontCol, frontA] = rgbA(WIRE_FRONT);
+    layer(frontA, 0, () => {
+      for (let i = li - 1; i >= 0; i--) {
+        const d = CATHODE_STACK[i];
+        atDepth(d, () => shape(d, frontCol, 0));
       }
     });
   }

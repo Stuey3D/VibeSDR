@@ -126,19 +126,22 @@ eq('mhzDigitsFor(145 MHz)', mhzDigitsFor(145_000_000), 3);
 eq('mhzDigitsFor(648 kHz)', mhzDigitsFor(648_000), 1);
 
 // ── Cathode stack ────────────────────────────────────────────────────────────
-// ★★★ IN-14 front→back 3 8 9 4 0 5 7 2 6 1 (Stuart, 2026-10-16; his IN-14 clock is the reference).
-eq('stack order (front → back)', CATHODE_STACK.join(' '), '3 8 9 4 0 5 7 2 6 1');
-eq('a 3 sits at the front', cathodeDepth('3'), { scale: 1, dy: 0, opacity: 1, soft: 1 });
+// ★★★ front→back 6 5 4 7 3 9 8 2 0 1 — measured off Stuart's 4K close-up (IMG_1559, 2026-10-16).
+eq('stack order (front → back)', CATHODE_STACK.join(' '), '6 5 4 7 3 9 8 2 0 1');
+ok('the 6 is at the front (4K: largest, no wire across it)', CATHODE_STACK[0] === '6');
+ok('the 1 is at the back (4K: smallest, crossed by most wires)', CATHODE_STACK[9] === '1');
+ok('the stack holds each digit once', [...CATHODE_STACK].sort().join('') === '0123456789');
+eq('a 6 sits at the front', cathodeDepth('6'), { scale: 1, dy: 0, opacity: 1, soft: 1 });
 {
   const d1 = cathodeDepth('1');
-  ok('a 1 sits smaller, lower, dimmer and softer than a 3', d1.scale < 1 && d1.dy > 0 && d1.opacity < 1 && d1.soft > 1);
+  ok('a 1 sits smaller, lower, dimmer and softer than a 6', d1.scale < 1 && d1.dy > 0 && d1.opacity < 1 && d1.soft > 1);
   eq('a 1 (index 9)', [+(d1.scale).toFixed(3), +(d1.dy).toFixed(2), +(d1.opacity).toFixed(3), +(d1.soft).toFixed(2)], [0.91, 1.35, 0.865, 1.45]);
   ok('the depth is gentle: the back digit is at least 85 % of the front one', d1.scale >= 0.85);
 }
-eq('a 5: every cathode behind and in front', cathodeNeighbours('5'), { back: ['7', '2', '6', '1'], front: ['3', '8', '9', '4', '0'] });
-eq('a 3: nothing in front', cathodeNeighbours('3').front, []);
-eq('a 1: seen through all nine', cathodeNeighbours('1'), { back: [], front: ['3', '8', '9', '4', '0', '5', '7', '2', '6'] });
-eq('a switched-off tube shows the whole stack', cathodeNeighbours(null), { back: ['3', '8', '9', '4', '0', '5', '7', '2', '6', '1'], front: [] });
+eq('a 3: every cathode behind and in front', cathodeNeighbours('3'), { back: ['9', '8', '2', '0', '1'], front: ['6', '5', '4', '7'] });
+eq('a 6: nothing in front', cathodeNeighbours('6').front, []);
+eq('a 1: seen through all nine', cathodeNeighbours('1'), { back: [], front: ['6', '5', '4', '7', '3', '9', '8', '2', '0'] });
+eq('a switched-off tube shows the whole stack', cathodeNeighbours(null), { back: ['6', '5', '4', '7', '3', '9', '8', '2', '0', '1'], front: [] });
 eq('the 5 is the 2 turned upside down', cathodeGlyph('5'), { glyph: '2', flipY: true, bar: false });
 eq('the 1 is a plain wire', cathodeGlyph('1').bar, true);
 eq('a 7 is the font\'s own', cathodeGlyph('7'), { glyph: '7', flipY: false, bar: false });

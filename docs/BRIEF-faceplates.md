@@ -429,20 +429,28 @@ Applies to the frequency window, mode box and VTS strip (`VTSBar.tsx`, the live 
     - ★ **TRAP (perf):** the recess, glass, mesh, collars and shadows never change. Draw them once and
       cache the result as a layer. Per tune step, redraw only the cathodes and the decimal point.
   - **Cathode depth**, which is the "a little higher or a little set back" feel of a real tube:
-    - ★★★ REVISED 2026-10-16 against Stuart's own IN-14 clock (video + photo): the ten cathodes are
-      stacked front to back `3 8 9 4 0 5 7 2 6 1` (the order first written here was this one reversed).
-      The 3 is clean behind the mesh; the 1 is seen through the wires of all nine in front.
+    - ★★★ REVISED 2026-10-16, MEASURED off Stuart's 4K close-up of his IN-14s (IMG_1559, one tube steps
+      through all ten digits at 9.7-12.7 s): front to back `6 5 4 7 3 9 8 2 0 1`. Same-tube evidence:
+      lit-stroke size (perspective) and dark wire crossing the stroke. No published depth order is
+      trustworthy — the earlier `1 6 2 7 5 0 4 9 8 3` here, and the `3 8 9 4 0 5 7 2 6 1` an AI summary
+      gave, both contradict the video. See constants/nixie.ts for the per-digit numbers.
     - A lit digit at stack index *i* is drawn at `scale(1 − 0.010·i)`, `translateY(0.15·i)`, opacity
       `1 − 0.015·i` and glow radius × `1 + 0.05·i` — a 1 sits a touch smaller, lower, dimmer and softer
-      than a 3 (gentle: the real stack is a few mm deep).
+      than the 6 at the front (gentle: the real stack is a few mm deep).
     - EVERY unlit cathode is drawn: those behind it lit warm by its glow, every one in front as dark wire
       crossing the glow; a switched-off tube shows the whole stack as bare metal. The hex anode mesh is a
       rectangle round the stack, IN FRONT of it: it shadows the glow and is lit warm itself.
-    - IN-14 shapes: the 5 is the 2's cathode turned upside down; the 1 is a plain straight wire.
+    - IN-14 shapes (frequency tubes only; the font is untouched elsewhere): the 5 is the 2's cathode
+      turned upside down (a vertical flip — a 180° turn draws it backwards); the 2's flat base is a
+      straight wire with no upturn (Nixie One has one); the 1 is a plain straight wire.
+    - The neon glow (sampled off the 4K video, not its clipped core): a fattened, blurred sheath round
+      each wire — bloom #c83e06, sheath #d65409, halo #f06e08, rim #fa910e, core #ffaa2c — filling the
+      anode window with warm orange. No flicker: the dark tubes in the video are the camera catching the
+      multiplex; the eye never sees it.
     - ★ TRAP (perf): all of this is ONE sprite per digit per tube size (constants/nixie `drawTubeInside`);
       a tune step blits one image per tube.
-    - Digit `#ffc48a`, glow `0 0 1.5 #ff8a2e, 0 0 5 #ff6410, 0 0 11 rgba(255,80,10,.75),
-      0 0 20 rgba(255,70,0,.35)`.
+    - (Superseded by the sampled glow above: digit `#ffc48a`, glow `0 0 1.5 #ff8a2e, 0 0 5 #ff6410,
+      0 0 11 rgba(255,80,10,.75), 0 0 20 rgba(255,70,0,.35)`.)
   - ★★★ **The decimal point is its own tube**, as on a real nixie clock (Stuart's reference photo). It is a
     small neon indicator bulb (INS-1 style), never a dot inside a digit tube:
     - width ≈ 0.45 × a digit tube, glass height ≈ 0.62 × a digit tube's glass;
