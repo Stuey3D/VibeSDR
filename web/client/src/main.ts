@@ -1582,6 +1582,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       setToggleTo('imsBtn', s.ims, 'ims', (on) => on ? 'IMS ON' : 'IMS OFF');
       setToggleTo('ceqBtn', s.ceq, 'ceq', (on) => on ? 'CEQ ON' : 'CEQ OFF');
       setToggleTo('nbBtn',  s.nb,  'nb',  (on) => on ? 'NB ON'  : 'NB OFF');
+      // ★★★ De-emphasis and stereo, as the server runs them (from 11.0.4) — the control said what this
+      //     tab last asked for, or, never asked, OFF (see segment()). Absent = an older server: left alone.
+      if (typeof s.deemph === 'number')
+        setSegmentTo('deemphSeg', 'tau', Math.round(s.deemph * 1e6), 'deemph');
+      if (typeof s.stereo === 'boolean')
+        setToggleTo('stereoBtn', s.stereo, 'stereo', (on) => on ? 'ST ON' : 'ST OFF');
       if (typeof s.nfmVoice === 'boolean') {
         nfmVoiceKnown = true;   // ★ the row may now appear (in NFM) — see syncNfmVoiceRow
         /* ★★ THE REPORT MUST NOT OVERWRITE THE LISTENER'S CHOICE. A new session reports the
@@ -13275,11 +13281,25 @@ function segment(id: string, attr: string, apply: (v: number) => void, prefKey?:
   for (const b of btns) {
     b.onclick = () => {
       const v = Number(b.dataset[attr]);
+      recentPress.set(id, Date.now());   // ★ the same guard as toggle() — see setSegmentTo
       pick(v, true);
       if (prefKey) savePref(prefKey, v);
     };
   }
-  pick(typeof saved === 'number' ? saved : Number(btns[0].dataset[attr]), false);
+  /* ★★★ THE PAGE'S OWN DEFAULT, NOT THE FIRST BUTTON (Stuart, 2026-10-17: de-emphasis "was saying off when
+   *  it was on"). With nothing saved this picked btns[0] — OFF — while index.html marks 50 µs `on` and the
+   *  server runs 50 µs, so every new visitor was shown no de-emphasis over audio that had it. */
+  const dflt = btns.find((b) => b.classList.contains('on')) ?? btns[0];
+  pick(typeof saved === 'number' ? saved : Number(dflt.dataset[attr]), false);
+}
+
+/** ★ Paint a segmented control from the SERVER's report, without sending anything — setToggleTo's twin,
+ *  with the same 4 s guard so a just-pressed choice is not overwritten by a report taken before it landed. */
+function setSegmentTo(id: string, attr: string, v: number, prefKey?: string) {
+  const host = document.getElementById(id);
+  if (!host || Date.now() - (recentPress.get(id) || 0) < 4000) return;
+  for (const b of Array.from(host.children) as HTMLElement[]) b.classList.toggle('on', Number(b.dataset[attr]) === v);
+  if (prefKey) savePref(prefKey, v);
 }
 
 /** ★★★ THE SLIDER'S WHOLE TRAVEL SAT IN THE HALF OF THE RANGE THAT BARELY DOES ANYTHING, so it
