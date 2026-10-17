@@ -333,6 +333,9 @@ if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else f
 # ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09): none on the everyday pad, only the dial's band while a
 #     question is open, every link a Signal Identification Wiki page, every DECODE a decoder we run, the watches agree.
 if node --no-warnings scripts/test_dial_answers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ The room's passband on a shared dial (2026-10-17): the web client adopts it from config and sends nothing;
+#     the app and Jr read the same fields. The server half is test-room-passband.cpp above.
+if node --no-warnings scripts/test_room_passband.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE ANTENNA SWITCH SETUP RULES (2026-10-09): what Lite's screen / the setup page send the server.
 if node --no-warnings scripts/test_antenna_switch_cfg.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_antenna_bands_presets.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

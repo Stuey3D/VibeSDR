@@ -1223,7 +1223,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         // ★ `false` on a shared dial: setMode's second argument SENDS the mode to the server, and
         //   the mode is shared here too — adopting what the radio is already doing must not be
         //   broadcast back to it as a change.
-        setMode(initialMode, !srvSharedDial && !!last);
+        // ★★ On a shared dial SpectrumClient has already adopted the room's mode AND passband from this
+        //    same config (roomPassband.ts) — resetting the edges to the mode's default here threw the
+        //    room's away on every join.
+        setMode(initialMode, !srvSharedDial && !!last, srvSharedDial && spec!.mode === initialMode);
         renderFreq();
         if (srvSharedDial) { /* adopted above — say nothing, move nothing */ }
         else if (last) spec!.tune(clampTune(last.hz), last.mode, { recenter: true });
@@ -1385,7 +1388,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //     chose none of them. Without this the audio followed and the screen did not.
     onDialMoved: (hz, mode) => {
       renderFreq();
-      if (mode && mode !== undefined) setMode(mode, false);   // ★ false: adopting, not commanding
+      // ★ false: adopting, not commanding. ★★ And KEEP the passband: SpectrumClient already reset it if the
+      //   mode changed, and the room's edges arrive after this — resetting here put every mirror back on
+      //   the mode's default each time somebody else tuned.
+      if (mode && mode !== undefined) setMode(mode, false, true);
       updateViewOverlays();
       // ★ Say it on the strip, briefly. A frequency that changes on its own reads as a fault
       //   unless something on screen accounts for it — the strip is where the room's state lives,
@@ -1397,6 +1403,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         strip.textContent = `moved to ${mhz} MHz`;
         setTimeout(() => { if (strip.textContent === `moved to ${mhz} MHz`) strip.textContent = was; }, 2500);
       }
+    },
+    /* ★★★ SOMEBODY ELSE MOVED THE PASSBAND (or the mode) — REDRAW THE SLIDERS (2026-10-17). Stuart heard
+     *  the room's passband change and his sliders stayed put. SpectrumClient has already written the
+     *  room's values; this redraws them and sends NOTHING — setMode(…, false, true) and syncBw() only
+     *  draw. The waterfall's sidebands read spec.bandwidthLow/High on the next frame by themselves. */
+    onRoomPassband: (mode) => {
+      if (mode) { setMode(mode, false, true); renderFreq(); }
+      else syncBw();
     },
     onSessionWarning: (secs) => setTimeLeft(secs),
     onDevice: (present, reason, inUse, radioName) => showDeviceBanner(present, reason, inUse, radioName),
@@ -14061,10 +14075,15 @@ function populateHw() {
   }
 }
 
-function setMode(m: SDRMode, send: boolean) {
+/** `keepPassband` — adopting a mode the room is ALREADY in, whose passband SpectrumClient holds: leave
+ *  the edges alone rather than reset them to the mode's default. Only meaningful with `send` false. */
+function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   if (!spec) return;
   if (send) spec.setMode(m);
-  else { spec.mode = m; const bw = MODE_BANDWIDTHS[m]; spec.bandwidthLow = bw[0]; spec.bandwidthHigh = bw[1]; }
+  else {
+    spec.mode = m;
+    if (!keepPassband) { const bw = MODE_BANDWIDTHS[m]; spec.bandwidthLow = bw[0]; spec.bandwidthHigh = bw[1]; }
+  }
   // ★ The card's own readout (#mMode) is the only one; it is refreshed by mobile.ts's poll.
   if (m !== 'wfm') {
     rdsStereo = false;

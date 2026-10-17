@@ -2838,6 +2838,7 @@ final class UberClient: ObservableObject {
         //   we used to be — it compares centerHz against `frequency`, which we have just moved.
       }
     }
+    if isVibe, vibeAdopted { adoptRoomPassband(j) }
 
     // VFO-LOCKED CENTRE. drawVFO puts the needle at the display centre, so the view must stay
     // centred on the tuned frequency. A config whose centre has drifted from it — the wide
@@ -2981,6 +2982,36 @@ final class UberClient: ObservableObject {
   /// When THIS watch last moved the dial. The server confirms every tune we send as a config, so
   /// without this the shared-dial follow below would adopt our own echo and fight a held step key.
   private var lastLocalTuneAt: Double = 0
+  /// When THIS watch last moved the passband — the same guard, for the room's passband. See adoptRoomPassband.
+  private var lastLocalBwAt: Double = 0
+
+  /// ★★★ THE ROOM'S MODE AND PASSBAND, WHETHER OR NOT THE DIAL MOVED (2026-10-17) — the app's and the web
+  /// client's rule (src/services/roomPassband.ts), in Swift. Stuart: "on shared VFO, if a user changes the
+  /// bandwidth sliders I am hearing them but they aren't synchronising with mine." The shared chain applied
+  /// the edges and config never carried them; it does now (`bandwidthLow`/`bandwidthHigh`, only while they
+  /// belong to the mode the radio is in), and the mode above was adopted only with a move of the dial.
+  /// ★★★ WRITTEN STRAIGHT INTO bwLow/bwHigh/mode — never through setBandwidth()/setMode(), which send. An
+  ///     adopted value sent back as a change is the loop the shared-dial contract forbids.
+  /// ★ Not inside our own echo (1.5 s, as the dial), and only on a shared dial.
+  private func adoptRoomPassband(_ j: [String: Any]) {
+    guard sharedView else { return }
+    let now = ProcessInfo.processInfo.systemUptime
+    guard now - max(lastLocalTuneAt, lastLocalBwAt) > 1.5 else { return }
+    guard let m = (j["mode"] as? String)?.lowercased(), !m.isEmpty else { return }
+    if m != mode.lowercased(), let d = Self.modeBW[m] {
+      Vitals.crumb("UBER shared dial: room mode \(m)")
+      mode = m
+      clearRds()
+      bwLow = d.low; bwHigh = d.high          // the mode's default, until the room says otherwise
+      saveVibeState()
+    }
+    guard m == mode.lowercased(),
+          let lo = Wire.inRange(j["bandwidthLow"], -1.0e6...1.0e6),
+          let hi = Wire.inRange(j["bandwidthHigh"], -1.0e6...1.0e6), hi > lo,
+          abs(lo - bwLow) >= 1 || abs(hi - bwHigh) >= 1 else { return }
+    Vitals.crumb("UBER shared dial: room passband \(Int(lo))..\(Int(hi))")
+    bwLow = lo; bwHigh = hi
+  }
   /// ★ The frequency the SERVER last said it was on — tells "the audio socket delivered my tune" from
   ///   "nobody heard me". See the fallback in sendTune().
   private var lastServerVfo: Double = 0
@@ -3518,6 +3549,7 @@ final class UberClient: ObservableObject {
   func setBandwidth(_ low: Double, _ high: Double) {
     bwLow = low
     bwHigh = high
+    lastLocalBwAt = ProcessInfo.processInfo.systemUptime   // ★ so its echo is not the room's — see adoptRoomPassband
     audioSock.send(json: ["type": "tune",
                           "bandwidthLow":  Int(low.rounded()),
                           "bandwidthHigh": Int(high.rounded())])
@@ -3526,6 +3558,7 @@ final class UberClient: ObservableObject {
   func setMode(_ m: String) {
     guard m != mode else { return }
     mode = m
+    lastLocalTuneAt = ProcessInfo.processInfo.systemUptime   // ★ configs already sent with the OLD mode must not undo it
     clearRds()            // RDS is WFM-only; leaving/among modes must not leave a station name up
     // A mode change resets the passband to that mode's server default (the fresh socket below
     // applies the same default server-side; we just mirror it for the VFO lines / UI).
