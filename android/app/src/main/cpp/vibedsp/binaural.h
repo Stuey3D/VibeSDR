@@ -9,7 +9,8 @@
 //    headphones. A real source off to one side reaches the far ear (a) QUIETER, (b) LATER — up to ~0.6 ms, the
 //    width of a head — and (c) DULLER, because the head shadows the treble. All three are applied to the FAR ear
 //    only, all three scale with how far off tune you are, and all three ease to nothing inside a dead zone
-//    (~±15 Hz) so on-tune audio sits centre-head and does not wander. The far ear is never silenced: at most
+//    (~±15 Hz; ±50 Hz on SSB, plus a hysteresis — see kSsbEnterHz) so on-tune audio sits centre-head and does not
+//    wander. The far ear is never silenced: at most
 //    10 dB down (BinauralSpatialiser::kMaxDropDb).
 //
 // ★★ WHERE THE OFFSET COMES FROM is per mode, and mostly NOT here:
@@ -258,6 +259,39 @@ public:
     /** ★ A dial change smaller than this is not a move: radiod stamps frames with ±1 Hz of jitter, and every
      *  "move" restarts the estimator — it would never finish one. (Mirrored by BIN_DIAL_MOVE_HZ in JS.) */
     static constexpr double kDialMoveHz = 2.0;
+    /** ★★★ HYSTERESIS ON AN ESTIMATOR LEAN (Stuart on 477: "deep male voice in the right, higher pitched female voice
+     *  in the left when they are talking to each other and the panning left and right constantly" — on LSB, low
+     *  audio to the right IS the spread's map, so the spread was switching ON during an on-tune QSO). Two things
+     *  made it: SSB used AM's ±15 Hz dead zone, but a voice cannot be measured that finely and the stations of a QSO
+     *  sit a few tens of Hz apart; and every new speaker swings the median. Now the SSB dead zone is ±50 Hz (the
+     *  caller's BIN_DEAD_SSB_HZ), and from CENTRED an estimator answer must pass this to START a lean; once leaning it
+     *  lets go only inside the dead zone. Between the two, an answer changes nothing — the state it found stays.
+     *  ★ A DIAL-RECKONED answer (or the waterfall cue, which has its own ±kCoarseMinHz rule) does NOT have to pass it:
+     *    turning the knob off a locked voice leans at once, exactly as before — that figure is not a guess.
+     *  ★ The lean and the spread share w, so the spread follows the same hysteresis: none on an on-tune QSO.
+     *  PROVISIONAL (synthetic voices, no off-air clips): 90 Hz clears FAST's scatter on a voice and the ~30 Hz between
+     *  QSO stations by a margin, and stays well inside the estimator's ±300 Hz reach. */
+    static constexpr float kSsbEnterHz = 90.0f;
+    /** ★★ HIGH VOICES COUNT FOR LESS (the same report: "its a deep male voice and a childrens radio club talking").
+     *  A child's voice (F0 ~250-400 Hz) puts only 6-10 harmonics in a 2.7 kHz passband, and the comb k·f0 + d fits
+     *  d ± f0 (and d ± f0/2) almost as well as d — and those aliases now fall INSIDE the ±300 Hz search. FAST was
+     *  tuned on adult voices only. Above kHighF0Hz (SsbOffsetEstimate::f0Hz, the estimator's own pitch figure):
+     *  1. the gate rises by kHighF0GatePerHz per Hz of pitch, up to ×kHighF0GateMax (×2 from 300 Hz up);
+     *  2. while a held answer stands that a LOWER voice helped establish (lowVoiceHeld_), a high-voice answer more than
+     *     kAgreeHz from it is ignored — it may refine that answer, never drag it. A high voice ALONE is not held to
+     *     its own first answers that way (a wrong first lock would then defend itself for two minutes);
+     *  3. a high-voice answer that sits where its own aliases of "on tune" would (within kAgreeHz of ±f0 or ±f0/2)
+     *     is ignored unless it agrees with the held answer — with nothing held yet, a near-monotone child otherwise
+     *     locks a pitch off tune before anyone else has spoken. The cost: a child mistuned by exactly half or one
+     *     pitch gets no estimator answer (the dial and the waterfall cue still lean); never the wrong ear.
+     *  PROVISIONAL — chosen on synthetic voices (vibeserver/test-binaural.cpp §10), no off-air clips. Rule 1 alone,
+     *  measured over 32 FAST windows each: a near-monotone 300 Hz voice mistuned −150 Hz had 28 aliases pass the
+     *  gate, 10 with it; a 250 Hz one on tune 16 → 16 (that case is rule 3's). Without rule 3 a monotone 250 Hz
+     *  child speaking first in an on-tune QSO leaned at 5 s (pan 0.74); with it, never. Calibrate on real children's
+     *  voices before trusting the numbers. */
+    static constexpr float kHighF0Hz = 200.0f;
+    static constexpr float kHighF0GatePerHz = 0.01f;
+    static constexpr float kHighF0GateMax = 2.0f;
     /** ★ FAST's own gate, as a scale on the SLOW gate (SsbOffsetEstimator::gateFor). PROVISIONAL — measured
      *  on synthetic voices in vibeserver/test-binaural.cpp, NOT on the off-air clips (VIBE_SSB_CLIPS was not
      *  available when this was written). ssb_offset.h asks for it to be calibrated on them: do that before
@@ -341,9 +375,10 @@ private:
     void ensureWorker_();
     void workerLoop_();
     void ssbStep_();                  // one pass of the worker's job (worker thread, or a test)
-    void ssbAccept_(float signalHz);
+    void ssbAccept_(float signalHz, float f0Hz);
     void coarseStep_();
     void release_();                  // drop the held SSB answer (worker)
+    void leanUpdate_(bool firm);      // the SSB lean's hysteresis (worker): firm = the dial or the cue set this answer
 
     BinauralSpatialiser fx_;
     std::atomic<bool> enabled_{false}, resetFx_{false};
@@ -386,6 +421,10 @@ private:
     bool coarseHeld_ = false; ///< the held SSB answer came from the waterfall cue, not the estimator (worker only)
     std::atomic<bool> coarsePub_{false};
     std::vector<float> hist_;         // accepted answers, SIGNAL terms (sideband applied), newest last
+    std::vector<float> histF0_;       // …and the pitch (SsbOffsetEstimate::f0Hz) of the voice that gave each
+    bool lowVoiceHeld_ = false;       ///< the held answer was established with a voice at or under kHighF0Hz (worker)
+    bool lean_ = false;               ///< the SSB lean's hysteresis state (worker): see kSsbEnterHz
+    std::atomic<bool> leanPub_{false};///< …published for the audio thread
     double lastAccept_ = 0;
     std::vector<float> chunk_;
     std::atomic<int> estimates_{0}, accepted_{0};

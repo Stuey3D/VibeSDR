@@ -315,6 +315,7 @@ void BinauralSpread::process(float* L, float* R, int n, double rate, int kind, f
 
 BinauralTuning::BinauralTuning(bool startWorker) : ring_(kRing, 0.0f), startWorker_(startWorker) {
     hist_.reserve(kMedianOf + 1);
+    histF0_.reserve(kMedianOf + 1);
     chunk_.resize(4096);
     sL_.reserve(4096); sR_.reserve(4096);
 }
@@ -379,7 +380,8 @@ float BinauralTuning::targetPan_(int n, int rate, const float* L, const float* R
     const int src = source_.load(std::memory_order_relaxed);
     float off = 0; bool ok = false;
     if (src == Given) { off = given_.load(); ok = givenValid_.load(); }
-    else if (src == SsbUsb || src == SsbLsb) { off = ssbHz_.load(); ok = ssbValid_.load(); }
+    // ★ SSB leans only while the worker's hysteresis says so (kSsbEnterHz) — the dead zone alone is not enough there.
+    else if (src == SsbUsb || src == SsbLsb) { off = ssbHz_.load(); ok = ssbValid_.load() && leanPub_.load(std::memory_order_relaxed); }
     float p = ok ? binauralPanFor(off, dead_.load(), full_.load()) : 0.0f;
 
     /* ★★ THE WFM HAND-OFF. Off tune the pilot is not locked and the aid pans you in; close enough to lock,
@@ -499,11 +501,12 @@ void BinauralTuning::workerLoop_() {
 
 void BinauralTuning::pumpSsbForTest() { ssbStep_(); }
 
-void BinauralTuning::ssbAccept_(float signalHz) {
+void BinauralTuning::ssbAccept_(float signalHz, float f0Hz) {
     hist_.push_back(signalHz);
+    histF0_.push_back(f0Hz);
     // ★ reckoned_ stays set: an answer that agreed with the knob refines it, it does not hand the estimator back
     //   the authority to drag it to centre (kReckonTrustHz). Only a dial move or a reset changes who is in charge.
-    if ((int)hist_.size() > kMedianOf) hist_.erase(hist_.begin());
+    if ((int)hist_.size() > kMedianOf) { hist_.erase(hist_.begin()); histF0_.erase(histF0_.begin()); }
     lastAccept_ = nowSec();
     accepted_.fetch_add(1);
     if ((int)hist_.size() < kMedianMin) return;
@@ -518,13 +521,31 @@ void BinauralTuning::ssbAccept_(float signalHz) {
     if (agree < kMedianMin || agree * 2 <= (int)n) return;
     ssbHz_.store(med);
     ssbValid_.store(true);
+    // ★ Did a LOWER voice help establish it? Then a high voice may not drag it (kHighF0Hz).
+    lowVoiceHeld_ = false;
+    for (size_t i = 0; i < hist_.size(); ++i)
+        if (std::fabs(hist_[i] - med) <= kAgreeHz && histF0_[i] > 0 && histF0_[i] <= kHighF0Hz) lowVoiceHeld_ = true;
     // ★ The estimator has spoken (two agreeing answers): a coarse-held answer hands over to it here.
     if (coarseHeld_) { coarseHeld_ = false; coarsePub_.store(false); }
 }
 
 void BinauralTuning::release_() {
-    ssbValid_.store(false); hist_.clear(); reckoned_ = false;
+    ssbValid_.store(false); hist_.clear(); histF0_.clear(); reckoned_ = false; lowVoiceHeld_ = false;
     coarseHeld_ = false; coarsePub_.store(false);
+    leanUpdate_(false);
+}
+
+void BinauralTuning::leanUpdate_(bool firm) {
+    /* ★★★ THE HYSTERESIS (kSsbEnterHz): centred → leaning needs |answer| > kSsbEnterHz, or an answer the DIAL (or the
+     *     waterfall cue) set — firm; leaning → centred only inside the dead zone. Re-run after every change of the held
+     *     answer, and once per worker pass (a new dead zone from setSource releases here).
+     *  ★ Worker thread. The audio thread reads leanPub_ next to ssbHz_ without a lock: for one block it can pair a new
+     *    answer with the old state — at worst a lean starts or ends 20 ms late. Both are smoothed anyway. */
+    const bool valid = ssbValid_.load();
+    const float h = std::fabs(ssbHz_.load()), dead = dead_.load();
+    if (!valid || !(h > dead)) lean_ = false;
+    else if (!lean_ && (firm || h > kSsbEnterHz)) lean_ = true;
+    leanPub_.store(lean_);
 }
 
 void BinauralTuning::coarseStep_() {
@@ -533,15 +554,16 @@ void BinauralTuning::coarseStep_() {
     const float c = (float)(hintCarrier_.load() - dial_.load());
     if (!std::isfinite(c) || std::fabs(c) > kSsbHoldHz) { if (coarseHeld_) release_(); return; }
     auto seed = [&] {
-        hist_.clear(); reckoned_ = false;
+        hist_.clear(); histF0_.clear(); reckoned_ = false; lowVoiceHeld_ = false;
         coarseHeld_ = true; coarsePub_.store(true);
         ssbHz_.store(c); ssbValid_.store(true);
+        leanUpdate_(true);   // the cue's own ±kCoarseMinHz rule has already been applied
     };
     if (coarseHeld_) {
         // Ours already: follow the cue — unless it now says "on tune or within its own error", which it cannot
         // tell apart, so let go and leave the fine centring to the estimator.
         if (std::fabs(c) < kCoarseMinHz) release_();
-        else ssbHz_.store(c);
+        else { ssbHz_.store(c); leanUpdate_(true); }
         return;
     }
     const bool valid = ssbValid_.load();
@@ -561,14 +583,17 @@ void BinauralTuning::ssbStep_() {
         // Idle: nothing is fed; keep the ring empty so a later start begins with fresh audio.
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
         if (est_) { est_.reset(); estRate_ = 0; }
-        hist_.clear(); ssbValid_.store(false); workerGen_ = gen; workerSrc_ = src; haveDial_ = false; reckoned_ = false;
+        hist_.clear(); histF0_.clear(); ssbValid_.store(false); workerGen_ = gen; workerSrc_ = src; haveDial_ = false;
+        reckoned_ = false; lowVoiceHeld_ = false;
         coarseHeld_ = false; coarsePub_.store(false);
+        leanUpdate_(false);
         return;
     }
     if (gen != workerGen_ || src != workerSrc_) {
         workerGen_ = gen; workerSrc_ = src;
-        hist_.clear(); ssbValid_.store(false); reckoned_ = false;
+        hist_.clear(); histF0_.clear(); ssbValid_.store(false); reckoned_ = false; lowVoiceHeld_ = false;
         coarseHeld_ = false; coarsePub_.store(false);
+        leanUpdate_(false);
         if (est_) est_->reset();
         haveDial_ = false;
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
@@ -586,6 +611,8 @@ void BinauralTuning::ssbStep_() {
         // ★ A coarse-held answer moves too, but stays COARSE (not reckoned): its figure is still the cue's ±150 Hz,
         //   so the estimator may replace it, not merely refine it. coarseStep_ re-reads the cue below anyway.
         if (ssbValid_.load()) { ssbHz_.store(ssbHz_.load() - d); if (!coarseHeld_) reckoned_ = true; }
+        // ★★ The knob's figure is not a guess: it leans at once, past the dead zone, without kSsbEnterHz.
+        leanUpdate_(true);
         if (est_) est_->reset();
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
         // A move beyond the estimator's reach leaves nothing it could confirm; let the answer go stale.
@@ -609,8 +636,11 @@ void BinauralTuning::ssbStep_() {
         if (est_->push(chunk_.data(), n)) {
             estimates_.fetch_add(1);
             const SsbOffsetEstimate& e = est_->last();
+            // ★★ A HIGH VOICE counts for less (kHighF0Hz): its gate rises with its pitch.
+            const float hiF0 = e.f0Hz > kHighF0Hz
+                ? std::min(kHighF0GateMax, 1.0f + kHighF0GatePerHz * (e.f0Hz - kHighF0Hz)) : 1.0f;
             const bool gated = e.valid && e.frames >= e.minFrames
-                && e.confidence >= kFastGateScale * SsbOffsetEstimator::gateFor(e.offsetHz)
+                && e.confidence >= kFastGateScale * hiF0 * SsbOffsetEstimator::gateFor(e.offsetHz)
                 && (std::fabs(e.offsetHz) <= SsbOffsetEstimator::kLargeHz || e.snrDb >= SsbOffsetEstimator::kLargeMinSnrDb)
                 && std::fabs(e.offsetHz) <= kSsbRangeHz;
             // ★ +d = the audio is d Hz HIGH. USB: the signal is above the dial (tune up, lean right) → +d.
@@ -622,12 +652,27 @@ void BinauralTuning::ssbStep_() {
             const bool beyondReach = ssbValid_.load() && std::fabs(ssbHz_.load()) > kSsbRangeHz;
             const bool contradicts = reckoned_ && ssbValid_.load()
                                   && std::fabs(sb * e.offsetHz - ssbHz_.load()) > kReckonTrustHz;   // see kReckonTrustHz
-            if (gated && !beyondReach && !contradicts && std::isfinite(e.offsetHz)) ssbAccept_(sb * e.offsetHz);
+            // ★★ …it may not DRAG an answer a lower voice established: a child's alias a pitch away is exactly a
+            //    disagreement of that size. Agreeing, it refines like any other.
+            const bool high = e.f0Hz > kHighF0Hz;
+            const bool agreesHeld = ssbValid_.load() && std::fabs(sb * e.offsetHz - ssbHz_.load()) <= kAgreeHz;
+            const bool dragsLow = high && lowVoiceHeld_ && ssbValid_.load() && !coarseHeld_ && !agreesHeld;
+            // ★★ …and an answer that sits exactly where this voice's own aliases of "on tune" would (±f0, ±f0/2) is not
+            //    believed from it unless it agrees with what is held: with nothing held yet, a near-monotone child
+            //    otherwise locks a pitch off tune before anyone else has spoken (§10, the child speaking FIRST).
+            const float a = std::fabs(e.offsetHz);
+            const bool aliasShaped = high && !agreesHeld
+                && (std::fabs(a - e.f0Hz) <= kAgreeHz || std::fabs(a - 0.5f * e.f0Hz) <= kAgreeHz);
+            if (gated && !beyondReach && !contradicts && !dragsLow && !aliasShaped && std::isfinite(e.offsetHz))
+                ssbAccept_(sb * e.offsetHz, e.f0Hz);
         }
     }
     // ★ Only the ESTIMATOR's own answers go stale — a reckoned one holds while the dial stays put (see kSsbHoldHz).
     //   Nor does a coarse-held one: the cue is live, and its own going-invalid releases it (coarseStep_).
-    if (ssbValid_.load() && !reckoned_ && !coarseHeld_ && nowSec() - lastAccept_ > kSsbStaleSec) { ssbValid_.store(false); hist_.clear(); }
+    if (ssbValid_.load() && !reckoned_ && !coarseHeld_ && nowSec() - lastAccept_ > kSsbStaleSec) {
+        ssbValid_.store(false); hist_.clear(); histF0_.clear(); lowVoiceHeld_ = false;
+    }
+    leanUpdate_(false);   // an estimator answer, a stale drop, or a new dead zone: never firm
 }
 
 int BinauralTuning::stats(float* o, int cap) const {

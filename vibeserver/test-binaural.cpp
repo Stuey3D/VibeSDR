@@ -21,6 +21,10 @@
 //      bank's constant frame on SSB/CW, not at all elsewhere); off tune the lean AND the spread, both from the same
 //      weight w, growing together; LSB mirrored; none of the spread on AM/FM; the SSB estimator still fed and
 //      publishing with the spread map set; no click or NaN through toggles, w changes and a sideband change; cost.
+//  10. SSB QSOs (Stuart on 477: "deep male voice in the right, higher pitched female voice in the left … panning left
+//      and right constantly"): a deep voice and a child's in alternate overs, on tune, 30 / 70 Hz apart, a monotone
+//      child (speaking first too), a mistuned QSO, a child alone — the ±50 Hz SSB dead zone, the kSsbEnterHz
+//      hysteresis and the high-voice rules (kHighF0Hz).
 //
 // ★ SILENT: every signal is generated and measured in memory, never played.
 #include "vibedsp/binaural.h"
@@ -77,8 +81,13 @@ static int lagOf(const std::vector<float>& a, const std::vector<float>& b, size_
 
 /* The synthetic SSB voice from test-ssb-offset.cpp: harmonics of a pitch that glides (95-180 Hz), every one
  * moved by `offsetHz` (that IS the mistuning — +d = the audio d Hz HIGH), in a 250-2800 Hz passband, spoken
- * in syllables with a breath every 5 s, over band noise `snrDb` below the speech. */
-static std::vector<float> voice(double rate, double secs, double offsetHz, double snrDb, unsigned seed) {
+ * in syllables with a breath every 5 s, over band noise `snrDb` below the speech.
+ * ★ `f0c` = the pitch's centre (default 135 Hz, the original voice bit for bit); the glide scales with it, so
+ *   f0c 100 is a deep man (~70-130 Hz) and f0c 300 a child (~200-400 Hz: nine harmonics in the passband).
+ *   `glide` scales the intonation: 0.4 is a near-monotone reading voice, whose pitch moves too little for FAST's
+ *   "the truth is sharp, aliases are broad" to hold — its answers alias a pitch away (measured: §10). */
+static std::vector<float> voice(double rate, double secs, double offsetHz, double snrDb, unsigned seed, double f0c = 135,
+                                double glide = 1) {
     std::mt19937 rng(seed);
     std::normal_distribution<float> g(0.0f, 1.0f);
     std::uniform_real_distribution<float> u(0.0f, 6.2831853f);
@@ -90,7 +99,8 @@ static std::vector<float> voice(double rate, double secs, double offsetHz, doubl
     const double nAmp = 0.25 * std::pow(10.0, -snrDb / 20.0);
     for (size_t i = 0; i < n; ++i) {
         const double t = i / rate;
-        const double f0 = 135 + 35 * std::sin(2 * M_PI * 0.23 * t) + 12 * std::sin(2 * M_PI * 1.7 * t + 1.0);
+        const double sc = glide * f0c / 135.0;
+        const double f0 = f0c + sc * 35 * std::sin(2 * M_PI * 0.23 * t) + sc * 12 * std::sin(2 * M_PI * 1.7 * t + 1.0);
         ph += 2 * M_PI * f0 / rate;
         const double syl = std::max(0.0, std::sin(2 * M_PI * 3.1 * t));
         const double pause = std::fmod(t, 5.0) > 4.0 ? 0.0 : 1.0;
@@ -120,6 +130,9 @@ static void feed(BinauralTuning& bt, const std::vector<float>& x, int rate, std:
     bt.pumpSsbForTest();
 }
 
+/* ★ SSB's dead zone as the app sends it (binauralOffset.ts BIN_DEAD_SSB_HZ). Until 477 these tests passed AM's 15 Hz
+ *   for SSB too, as the app did; a voice cannot be measured that finely and QSO stations sit tens of Hz apart. */
+static constexpr float kSsbDead = 50.0f;
 static constexpr float kReckonTol = 60.0f;   // = BinauralTuning::kReckonTrustHz: refinement may move it this far
 
 // A windowed-sinc band-pass on white noise: the receiver's noise as its filter shapes it (CW, §8).
@@ -155,6 +168,59 @@ static std::vector<float> mix(const std::vector<float>& a, const std::vector<flo
     std::vector<float> y(std::min(a.size(), b.size()));
     for (size_t i = 0; i < y.size(); ++i) y[i] = a[i] + b[i];
     return y;
+}
+
+/* ★★ A QSO: overs alternating between a DEEP voice (F0 ~100 Hz, at `offA`) and a HIGH one (F0 ~300 Hz, a child —
+ * at `offB`), `overSec` each, `rounds` times, 0.6 s of band noise between overs (the pause while the other station
+ * keys up). Stuart on 477: "its a deep male voice and a childrens radio club talking". */
+static std::vector<float> qso(double rate, double offA, double offB, double overSec, int rounds, unsigned seed,
+                              double childF0 = 300, double childGlide = 1, bool childFirst = false) {
+    std::vector<float> x;
+    std::mt19937 rng(seed);
+    std::normal_distribution<float> g(0.0f, 1.0f);
+    const double nAmp = 0.25 * std::pow(10.0, -25 / 20.0);
+    for (int r = 0; r < rounds; ++r) {
+        for (int k = 0; k < 2; ++k) {
+            const int who = childFirst ? 1 - k : k;   // 0 = the deep voice, 1 = the child
+            const auto v = voice(rate, overSec, who ? offB : offA, 25, seed + 10 * r + who, who ? childF0 : 100.0, who ? childGlide : 1.0);
+            x.insert(x.end(), v.begin(), v.end());
+            for (size_t i = 0; i < (size_t)(0.6 * rate); ++i) x.push_back((float)(nAmp * g(rng)));
+        }
+    }
+    return x;
+}
+
+/* Feed like feed(), and watch the controller every packet after `fromSec`: the largest |pan| and spread, how often
+ * the published offset changed SIGN once valid, whether it ever pointed the wrong way (`wantSign` ≠ 0), and the
+ * worst |out − in delayed by D| (D < 0: not checked). */
+struct Watch { float maxPan = 0, maxSpread = 0; int signChanges = 0, wrongEar = 0; double worstDelayed = 0; float firstLean = -1; };
+static Watch feedWatch(BinauralTuning& bt, const std::vector<float>& x, int rate, double fromSec, int wantSign, int D) {
+    const int pkt = rate / 50;
+    std::vector<float> l(pkt), r(pkt);
+    Watch w;
+    int lastSign = 0;
+    for (size_t i = 0; i + pkt <= x.size(); i += pkt) {
+        for (int k = 0; k < pkt; ++k) l[k] = r[k] = x[i + k];
+        bt.processPlanar(l.data(), r.data(), pkt, rate);
+        if ((i / pkt) % 2 == 1) bt.pumpSsbForTest();
+        float st[12]; bt.stats(st, 12);
+        const double t = (double)(i + pkt) / rate;
+        if (st[4] != 0 && w.firstLean < 0) w.firstLean = (float)t;
+        if (t < fromSec) continue;
+        w.maxPan = std::max(w.maxPan, std::fabs(st[4]));
+        w.maxSpread = std::max(w.maxSpread, st[9]);
+        if (wantSign && st[4] * wantSign < 0) ++w.wrongEar;
+        if (st[3] > 0 && std::fabs(st[2]) > 0) {
+            const int sg = st[2] > 0 ? 1 : -1;
+            if (lastSign && sg != lastSign) ++w.signChanges;
+            lastSign = sg;
+        }
+        // ★ From 0.5 s: the bank warms a frame, then crossfades 40 ms from the undelayed input (BinauralSpread::kWetSec).
+        if (D >= 0 && i >= (size_t)D && t >= 0.5)
+            for (int k = 0; k < pkt; ++k)
+                w.worstDelayed = std::max({w.worstDelayed, (double)std::fabs(l[k] - x[i + k - D]), (double)std::fabs(r[k] - x[i + k - D])});
+    }
+    return w;
 }
 
 int main() {
@@ -344,12 +410,14 @@ int main() {
             { +100, BinauralTuning::SsbUsb, +100, "USB, audio 100 Hz HIGH → signal ABOVE the dial: +100 (lean right)" },
             { -120, BinauralTuning::SsbUsb, -120, "USB, audio 120 Hz LOW → −120 (lean left)" },
             { +100, BinauralTuning::SsbLsb, -100, "LSB, audio 100 Hz HIGH → signal BELOW the dial: −100 (lean left)" },
-            { -80,  BinauralTuning::SsbLsb, +80,  "LSB, audio 80 Hz LOW → +80 (lean right)" },
+            // ★ Was −80 → +80 until 477: 80 Hz is now INSIDE the hysteresis band (an estimator answer must pass
+            //   kSsbEnterHz 90 to START a lean), so the sign check moved out to 130 Hz; 80 Hz is checked below.
+            { -130, BinauralTuning::SsbLsb, +130, "LSB, audio 130 Hz LOW → +130 (lean right)" },
         };
         for (const Case& c : cases) {
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(c.src, 15, 300);
+            bt.setSource(c.src, kSsbDead, 300);
             bt.setDial(7100000);
             std::vector<float> L, R;
             feed(bt, voice(fs, 12, c.off, 25, 7), (int)fs, &L, &R);
@@ -361,11 +429,26 @@ int main() {
             check(ok && std::fabs(hz - c.want) <= 20 && (c.want > 0 ? lr < -0.5 : lr > 0.5) && finite(L) && finite(R), c.what);
         }
         {
+            // ★★ THE HYSTERESIS BAND: an 80 Hz ESTIMATOR answer is published (the dial can move it) but does not START a
+            //    lean — from centred it takes more than kSsbEnterHz (90). A dial move would (see the 100 Hz step below).
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbLsb, kSsbDead, 300);
+            bt.setDial(7100000);
+            std::vector<float> L, R;
+            feed(bt, voice(fs, 12, -80, 25, 7), (int)fs, &L, &R);
+            float hz = 0; const bool ok = bt.ssbOffset(hz);
+            float st[12]; bt.stats(st, 12);
+            std::printf("      LSB, audio 80 Hz LOW: published %s %+.1f Hz, pan %.3f\n", ok ? "" : "(none)", hz, st[4]);
+            check(ok && std::fabs(hz - 80) <= 20 && st[4] == 0 && st[9] == 0,
+                  "an 80 Hz estimator answer, from centred, does not start a lean (hysteresis: it takes > 90 Hz)");
+        }
+        {
             // How long from the first word to the first lean, and a weaker signal (informational + a sign check).
             for (double snr : { 25.0, 12.0 }) {
                 BinauralTuning bt(false);
                 bt.setEnabled(true);
-                bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+                bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
                 const auto v = voice(fs, 12, 150, snr, 21);
                 double first = -1;
                 for (size_t i = 0; i + (size_t)(fs / 10) <= v.size(); i += (size_t)(fs / 10)) {
@@ -381,7 +464,7 @@ int main() {
         {
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(3700000);
             std::vector<float> L, R;
             feed(bt, voice(fs, 12, 0, 25, 11), (int)fs, &L, &R);
@@ -407,7 +490,7 @@ int main() {
             //     and it centres again" / "actually I cant trigger it again")
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(7100000);
             feed(bt, voice(fs, 10, 0, 25, 13), (int)fs);
             float h0 = 0; const bool l0 = bt.ssbOffset(h0);
@@ -434,7 +517,7 @@ int main() {
             // ★★ 100 Hz STEPS — inside the estimator's reach, where FAST's pull toward small offsets used to win.
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(7100000);
             feed(bt, voice(fs, 10, 0, 25, 17), (int)fs);
             float h0 = 0; bt.ssbOffset(h0);
@@ -449,7 +532,7 @@ int main() {
         {
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             std::mt19937 rng(5);
             std::normal_distribution<float> g(0.0f, 0.05f);
             std::vector<float> n((size_t)(fs * 15));
@@ -480,7 +563,7 @@ int main() {
         const double effect = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / 20.0;
         BinauralTuning bs(false);
         bs.setEnabled(true);
-        bs.setSource(BinauralTuning::SsbUsb, 15, 300);
+        bs.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
         t0 = std::chrono::steady_clock::now();
         feed(bs, x, (int)fs);
         const double ssb = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / 20.0;
@@ -496,7 +579,7 @@ int main() {
             // ★ ARRIVING 500 Hz BELOW A VOICE never locked: the estimator cannot reach it; the cue can.
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(dial);
             bt.setSsbHint(dial + 500, true);
             std::vector<float> L, R;
@@ -520,7 +603,7 @@ int main() {
             // ★ A VALID IN-REACH FINE ANSWER IS NEVER FOUGHT.
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(dial);
             feed(bt, voice(fs, 10, 0, 25, 32), (int)fs);
             float h0 = 0; const bool v0 = bt.ssbOffset(h0);
@@ -537,7 +620,7 @@ int main() {
             // ★ BEYOND REACH: the knob's exact figure stays when the cue agrees; a disagreeing cue replaces it.
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(dial);
             feed(bt, voice(fs, 10, 0, 25, 34), (int)fs);
             float h0 = 0; bt.ssbOffset(h0);
@@ -557,7 +640,7 @@ int main() {
             // ★ HANDED BACK: a coarse-held answer inside the estimator's reach is replaced by the estimator.
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(dial);
             bt.setSsbHint(dial + 260, true);           // the cue says 260; the voice is really at +120
             feed(bt, voice(fs, 20, 120, 25, 35), (int)fs);
@@ -569,7 +652,7 @@ int main() {
         {
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(dial);
             bt.setSsbHint(dial + 90, true);            // within the cue's own error
             bt.pumpSsbForTest();
@@ -578,7 +661,7 @@ int main() {
             bt.setSsbHint(dial - 700, true);
             bt.pumpSsbForTest();
             const bool v = bt.ssbOffset(h);
-            bt.setSource(BinauralTuning::SsbLsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbLsb, kSsbDead, 300);
             bt.pumpSsbForTest();
             float h2 = 0; const bool v2 = bt.ssbOffset(h2);
             check(v && std::fabs(h + 700) < 1 && !v2, "a cue below the dial reads −; a change of sideband forgets it");
@@ -684,7 +767,7 @@ int main() {
         for (int kind : { (int)BinauralSpread::Usb, (int)BinauralSpread::Lsb }) {
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(kind == BinauralSpread::Lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(kind == BinauralSpread::Lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(7100000);
             bt.setSpread(kind, lo, hi);
             const auto x = voice(fs, 12, 0, 25, 7);
@@ -798,7 +881,7 @@ int main() {
         for (int kind : { (int)BinauralSpread::Usb, (int)BinauralSpread::Lsb }) {
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(kind == BinauralSpread::Lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(kind == BinauralSpread::Lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(7100000);
             bt.setSpread(kind, lo, hi);
             feed(bt, voice(fs, 12, 150, 25, 7), (int)fs);
@@ -815,7 +898,7 @@ int main() {
             // …and the waterfall's coarse cue, beyond the estimator's reach.
             BinauralTuning bt(false);
             bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 300);
             bt.setDial(7100000);
             bt.setSpread(BinauralSpread::Usb, lo, hi);
             bt.setSsbHint(7100000 + 800, true);
@@ -870,6 +953,118 @@ int main() {
             const double c = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / 20.0;
             std::printf("      SSB %s (audio thread): %.3f %% of one core at 48 kHz\n", off == 0 ? "on tune (no FFT)" : "off tune, lean + spread", c * 100);
             check(c < 0.02, off == 0 ? "on tune costs < 2 % of a core at 48 kHz (this Mac)" : "off tune costs < 2 % of a core at 48 kHz (this Mac)");
+        }
+    }
+
+    std::printf(" ── 10. SSB QSOs: a deep voice and a child's, on tune and off (Stuart on 477) ──\n");
+    {
+        /* "deep male voice in the right, higher pitched female voice in the left when they are talking to each other
+         * and the panning left and right constantly". On LSB, low audio to the right IS the spread's map — so the
+         * spread (w > 0) was switching ON during an on-tune QSO. The fix: SSB's dead zone is ±50 Hz (the JS sends
+         * it), an estimator answer must pass ±kSsbEnterHz to START a lean, and a high voice counts for less. */
+        const float lo = 50, hi = 2700, dead = 50;
+        const int D = 512;
+        for (int src : { (int)BinauralTuning::SsbLsb, (int)BinauralTuning::SsbUsb }) {
+            const bool lsb = src == BinauralTuning::SsbLsb;
+            {
+                BinauralTuning bt(false);
+                bt.setEnabled(true); bt.setSource(src, dead, 300); bt.setDial(7100000);
+                bt.setSpread(lsb ? BinauralSpread::Lsb : BinauralSpread::Usb, lo, hi);
+                const auto x = qso(fs, 0, 0, 4, 5, 100);
+                const Watch w = feedWatch(bt, x, (int)fs, 0.0, 0, D);
+                float st[12]; bt.stats(st, 12);
+                std::printf("      %s QSO on tune, %.0f s: %d estimates, %d accepted, published %s %+.1f · max pan %.3f, spread %.3f, |out − in delayed| %.1e\n",
+                            lsb ? "LSB" : "USB", x.size() / fs, (int)st[6], (int)st[7], st[3] > 0 ? "" : "(none)", st[2], w.maxPan, w.maxSpread, w.worstDelayed);
+                check(w.firstLean < 0 && w.maxPan == 0 && w.maxSpread == 0 && w.worstDelayed <= 1e-6,
+                      lsb ? "LSB QSO, deep + child both ON TUNE: never a lean, never a spread — the output IS the input, delayed"
+                          : "USB QSO, deep + child both ON TUNE: never a lean, never a spread — the output IS the input, delayed");
+            }
+            // ★★ THE HARD CASE: a near-monotone child (glide 0.4) — FAST reads a 250 Hz one mostly a PITCH HIGH (+F0,
+            //    ±F0/2) and with confidence to pass its gate. The deep voice speaking first, then the child first.
+            for (int v = 0; v < 4; ++v) {
+                const double cf0 = v < 2 ? 250 : 300;
+                const bool childFirst = v % 2 == 1;
+                BinauralTuning bt(false);
+                bt.setEnabled(true); bt.setSource(src, dead, 300); bt.setDial(7100000);
+                bt.setSpread(lsb ? BinauralSpread::Lsb : BinauralSpread::Usb, lo, hi);
+                const auto x = qso(fs, 0, 0, 4, 5, 500 + 10 * v, cf0, 0.4, childFirst);
+                const Watch w = feedWatch(bt, x, (int)fs, 0.0, 0, D);
+                float st[12]; bt.stats(st, 12);
+                std::printf("      %s QSO on tune, monotone %3.0f Hz child%s: %d estimates, %d accepted, published %s %+.1f · first lean %.1f s, max pan %.3f, spread %.3f\n",
+                            lsb ? "LSB" : "USB", cf0, childFirst ? " FIRST" : "", (int)st[6], (int)st[7], st[3] > 0 ? "" : "(none)", st[2],
+                            w.firstLean, w.maxPan, w.maxSpread);
+                char what[200];
+                std::snprintf(what, sizeof what, "%s QSO on tune with a monotone %.0f Hz child%s: never a lean, never a spread",
+                              lsb ? "LSB" : "USB", cf0, childFirst ? " speaking FIRST" : "");
+                check(w.firstLean < 0 && w.maxPan == 0 && w.maxSpread == 0 && w.worstDelayed <= 1e-6, what);
+            }
+            for (double offB : { 30.0, 70.0 }) {
+                // ★ The stations a little apart. 30 Hz: inside ±50, the dead zone alone keeps it. 70 Hz: the median
+                //   wanders between the two speakers (0 and 70) — that is the 477 flapping in miniature, and only the
+                //   hysteresis keeps it from starting a lean: from centred an estimator answer needs > 90 Hz.
+                BinauralTuning bt(false);
+                bt.setEnabled(true); bt.setSource(src, dead, 300); bt.setDial(7100000);
+                bt.setSpread(lsb ? BinauralSpread::Lsb : BinauralSpread::Usb, lo, hi);
+                const auto x = qso(fs, 0, offB, 4, 5, 200);
+                const Watch w = feedWatch(bt, x, (int)fs, 0.0, 0, D);
+                float st[12]; bt.stats(st, 12);
+                std::printf("      %s QSO %.0f Hz apart (deep 0, child +%.0f): published %s %+.1f, sign changes %d · max pan %.3f, spread %.3f\n",
+                            lsb ? "LSB" : "USB", offB, offB, st[3] > 0 ? "" : "(none)", st[2], w.signChanges, w.maxPan, w.maxSpread);
+                char what[200];
+                std::snprintf(what, sizeof what, "%s QSO, the stations %.0f Hz apart: stays centred (%s)", lsb ? "LSB" : "USB", offB,
+                              offB < 50 ? "inside ±50 Hz" : "the hysteresis: no lean starts under 90 Hz");
+                check(w.firstLean < 0 && w.maxPan == 0 && w.maxSpread == 0, what);
+            }
+            {
+                // A genuinely mistuned QSO: both 150 Hz high in the audio. USB: signal above → right; LSB: below → left.
+                BinauralTuning bt(false);
+                bt.setEnabled(true); bt.setSource(src, dead, 300); bt.setDial(7100000);
+                bt.setSpread(lsb ? BinauralSpread::Lsb : BinauralSpread::Usb, lo, hi);
+                const auto x = qso(fs, 150, 150, 4, 5, 300);
+                const int want = lsb ? -1 : 1;
+                const Watch w = feedWatch(bt, x, (int)fs, 0.0, want, -1);
+                // From the first lean on: never the wrong ear, never centred again, the sign never flips.
+                BinauralTuning bt2(false);
+                bt2.setEnabled(true); bt2.setSource(src, dead, 300); bt2.setDial(7100000);
+                bt2.setSpread(lsb ? BinauralSpread::Lsb : BinauralSpread::Usb, lo, hi);
+                const Watch w2 = feedWatch(bt2, x, (int)fs, w.firstLean > 0 ? w.firstLean + 1.0 : 1e9, want, -1);
+                float st[12]; bt2.stats(st, 12);
+                float minPan = 1;
+                {
+                    BinauralTuning bt3(false);
+                    bt3.setEnabled(true); bt3.setSource(src, dead, 300); bt3.setDial(7100000);
+                    const int pkt = (int)fs / 50; std::vector<float> l(pkt), r(pkt);
+                    for (size_t i = 0; i + pkt <= x.size(); i += pkt) {
+                        for (int k = 0; k < pkt; ++k) l[k] = r[k] = x[i + k];
+                        bt3.processPlanar(l.data(), r.data(), pkt, (int)fs);
+                        if ((i / pkt) % 2 == 1) bt3.pumpSsbForTest();
+                        float s3[12]; bt3.stats(s3, 12);
+                        if (w.firstLean > 0 && (i + pkt) / fs > w.firstLean + 1.0) minPan = std::min(minPan, s3[4] * want);
+                    }
+                }
+                std::printf("      %s QSO both +150 Hz audio: first lean %.1f s, published %+.1f, sign changes %d, wrong-ear packets %d, weakest lean after %.2f\n",
+                            lsb ? "LSB" : "USB", w.firstLean, st[2], w2.signChanges, w.wrongEar, minPan);
+                check(w.firstLean > 0 && w.firstLean < 10 && w.wrongEar == 0 && w2.signChanges == 0 && minPan > 0.2 && st[2] * want > 100,
+                      lsb ? "LSB mistuned QSO: leans the right way (left) and STAYS — no flapping between the speakers"
+                          : "USB mistuned QSO: leans the right way (right) and STAYS — no flapping between the speakers");
+            }
+            for (double off : { 150.0, 110.0 }) {
+                // A child alone, strong, mistuned: no answer, or the right sign — never the wrong ear. ★ 150 Hz is HALF
+                // its pitch, where its own alias of "on tune" sits, so it is not believed (no answer: the dial and the
+                // waterfall cue still lean); 110 Hz is not alias-shaped, and leans the right way.
+                BinauralTuning bt(false);
+                bt.setEnabled(true); bt.setSource(src, dead, 300); bt.setDial(7100000);
+                bt.setSpread(lsb ? BinauralSpread::Lsb : BinauralSpread::Usb, lo, hi);
+                const int want = lsb ? -1 : 1;
+                const Watch w = feedWatch(bt, voice(fs, 20, off, 25, 400, 300), (int)fs, 0.0, want, -1);
+                float st[12]; bt.stats(st, 12);
+                std::printf("      %s child alone %+.0f Hz audio: published %s %+.1f, first lean %.1f s, wrong-ear packets %d\n",
+                            lsb ? "LSB" : "USB", off, st[3] > 0 ? "" : "(none)", st[2], w.firstLean, w.wrongEar);
+                char what[200];
+                std::snprintf(what, sizeof what, "%s child's voice alone %.0f Hz off: %s", lsb ? "LSB" : "USB", off,
+                              off == 150 ? "no answer or the right sign — never the wrong ear" : "leans, the right way, never the wrong ear");
+                check(w.wrongEar == 0 && (off == 150 ? (st[3] == 0 || st[2] * want > 0) : (w.firstLean > 0 && st[2] * want > 60)), what);
+            }
         }
     }
 
