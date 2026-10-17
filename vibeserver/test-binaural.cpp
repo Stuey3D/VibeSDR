@@ -341,6 +341,10 @@ int main() {
             const double lr = db(rms(L, L.size() - (size_t)fs, L.size()), rms(R, R.size() - (size_t)fs, R.size()));
             std::printf("      on tune: published %s %+.1f Hz, L−R %+.2f dB\n", ok ? "" : "(none)", hz, lr);
             check(ok && std::fabs(hz) < 15 && std::fabs(lr) < 0.5, "an ON-TUNE voice sits centre-head (inside the dead zone)");
+            // ±1 Hz of frequency-stamp jitter is not a move: the held answer stays exactly where it was.
+            bt.setDial(3700001); bt.pumpSsbForTest(); bt.setDial(3699999); bt.pumpSsbForTest(); bt.setDial(3700000);
+            float hzj = 0; bt.pumpSsbForTest(); bt.ssbOffset(hzj);
+            check(hzj == hz, "±1 Hz of dial jitter does not move (or restart) the SSB answer");
             // ★ The dial moves +50 Hz: the held answer follows at once (signal − dial: 0 → −50 Hz, lean left).
             bt.setDial(3700050);
             bt.pumpSsbForTest();

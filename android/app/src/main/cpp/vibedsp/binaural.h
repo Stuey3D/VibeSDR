@@ -100,6 +100,9 @@ public:
     static constexpr float kAgreeHz = 40.0f;       ///< …and a MAJORITY of them (at least two) lie this close to it
     static constexpr float kSsbRangeHz = 300.0f;   ///< the estimator searches ±300 Hz; beyond is not an answer
     static constexpr float kSsbStaleSec = 8.0f;    ///< no accepted answer for this long → back to centre
+    /** ★ A dial change smaller than this is not a move: radiod stamps frames with ±1 Hz of jitter, and every
+     *  "move" restarts the estimator — it would never finish one. (Mirrored by BIN_DIAL_MOVE_HZ in JS.) */
+    static constexpr double kDialMoveHz = 2.0;
     /** ★ FAST's own gate, as a scale on the SLOW gate (SsbOffsetEstimator::gateFor). PROVISIONAL — measured
      *  on synthetic voices in vibeserver/test-binaural.cpp, NOT on the off-air clips (VIBE_SSB_CLIPS was not
      *  available when this was written). ssb_offset.h asks for it to be calibrated on them: do that before

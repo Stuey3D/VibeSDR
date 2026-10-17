@@ -298,7 +298,7 @@ void BinauralTuning::ssbStep_() {
     //    drop the audio queued before the move.
     const double dial = dial_.load();
     if (!haveDial_) { lastDial_ = dial; haveDial_ = true; }
-    else if (dial != lastDial_) {
+    else if (std::fabs(dial - lastDial_) >= kDialMoveHz) {
         const float d = (float)(dial - lastDial_);
         lastDial_ = dial;
         for (float& v : hist_) v -= d;
