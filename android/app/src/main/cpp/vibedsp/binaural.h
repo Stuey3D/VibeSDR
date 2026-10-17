@@ -28,11 +28,21 @@
 //                       what makes the lean trigger when you ARRIVE off a voice. It only steps in where the
 //                       estimator cannot answer — see setSsbHint() for the hand-off.
 //
-// ★★ TWO STYLES (setSpread). GUIDE is everything above: one lean for the whole sound, telling you which way to
-//    tune. SPREAD (SSB/CW only) leans each AUDIO FREQUENCY by where it lies in the passband — the low end of the
-//    passband to the left ear, the high end to the right — so a crowded band arrives as a stereo picture, with
-//    two signals either side of the dial in different ears (BinauralSpread). They are exclusive: under SPREAD
-//    the guide lean is held at centre.
+// ★★ ONE BEHAVIOUR, TWO CUES (V12 — through build 476 it was two exclusive STYLES, GUIDE or SPREAD). Stuart,
+//    2026-10-17, on 476: "I thought we were combining both binural methods so that when on signal it presents in
+//    mono as it would before and then pan left and right based on signal and audio response when off tune."
+//    • ON TUNE (inside the dead zone) the audio is UNTOUCHED: no lean, no spread.
+//    • OFF TUNE the guide lean (everything above) AND the spread (BinauralSpread: each AUDIO frequency placed by
+//      where it lies in the passband, higher RF to the right in every sideband) fade in TOGETHER, both driven by
+//      the SAME off-tune weight w = |binauralPanFor(offset)| — 0 in the dead zone, 1 at full scale. The lean says
+//      which way to tune; the spread spreads what is in the passband around it.
+//    • The spread exists only where the audio IS a slice of spectrum — SSB and CW (setSpread's kind, stated by the
+//      caller per mode). AM, FM and DAB get the lean alone.
+//    • The SSB estimator is fed whatever the spread is doing: on SSB it is the offset source that drives w.
+//    ★ The spread bank has one frame of latency (10.7 ms at 48 kHz), so on SSB/CW the WHOLE path — on tune too —
+//      runs through a matching delay: on tune it is the input delayed by exactly that frame, bit for bit, and as
+//      w rises the output moves from that delayed copy to the bank's, which is time-aligned with it. The latency
+//      is CONSTANT while binaural is on in SSB/CW, so tuning on and off never shifts the timing. See BinauralSpread.
 //
 // ★★ THREAD RULES — the audio thread is never made to wait (Network > Audio > Spectrum > Decoders):
 //    • every setter may be called from ANY thread; it only stores atomics.
@@ -109,10 +119,20 @@ private:
  *     ✗ Not a bank of IIR band-passes: crossovers that sum flat need careful design per band count, and a pan
  *       that varies smoothly with frequency is exactly what per-bin weights give for free.
  *     ★ 50 %, not 75 %, overlap: half the FFTs (cost matters on the 1 GB phones), and it is enough because the
- *       weights are FIXED while the style is steady and SMOOTH across frequency, so each ear's filter is short
- *       (≲ 2 ms against a 10.7 ms frame) and the circular wrap that 75 % would hide is already negligible.
- *  ★ LATENCY: one frame, N samples — 10.7 ms at 48 kHz (latencySamples()). Only while SPREAD runs: off, it is
- *    bypassed outright and costs nothing.
+ *       weights change only as slowly as the lean does and are SMOOTH across frequency, so each ear's filter is
+ *       short (≲ 2 ms against a 10.7 ms frame) and the circular wrap that 75 % would hide is already negligible.
+ *  ★★ LATENCY AND THE DRY PATH. The bank is one frame late: N samples, 10.7 ms at 48 kHz (latencySamples()). On
+ *     tune the spread is nothing, so the output is the INPUT DELAYED BY EXACTLY N — a plain delay line per ear, not
+ *     the bank, so it is the original audio bit for bit (Stuart: "presents in mono as it would before"). Off tune
+ *     the output moves from that delayed copy to the bank's output; the two are time-aligned, so the move is a pure
+ *     change of spread, never a comb or a jump in timing.
+ *     ✗ NOT "dry with no delay on tune, the bank off tune": the two would be 10.7 ms apart, so every crossing of
+ *       the dead zone would slip the timing by a frame and comb-filter the crossfade (a 94 Hz-spaced flanger) —
+ *       and you cross it every time you tune. A constant 10.7 ms is inaudible on a radio stream; a moving one is not.
+ *     ★ The delay begins when the bank engages (binaural switched on in SSB/CW, or a change into SSB/CW), with one
+ *       kWetSec crossfade from the undelayed input, and ends the same way. Between, it never moves.
+ *     ★ On tune the bank does no FFT at all on SSB (its overlap-add is kept alive in the time domain, so the first
+ *       frame off tune joins seamlessly); CW still takes the forward FFT, to keep measuring the note.
  *
  *  ★★ THE SCALE IS FIXED Hz PER POSITION, from the DEFAULT SSB passband (the caller passes it: 50-2700 Hz, the
  *     app's MODE_BANDWIDTHS.usb). Its low edge is full LEFT, its high edge full RIGHT, its middle (1375 Hz) the
@@ -121,6 +141,8 @@ private:
  *     narrow" — a narrow filter simply shows the middle of the picture.)
  *     • USB: higher audio IS higher RF → higher audio to the right.
  *     • LSB: higher audio is LOWER RF, so the map is mirrored: higher RF stays to the right in both sidebands.
+ *       (Stuart confirmed it on 476: "in LSB if i go off tune downwards it becomes deeper sounding … Obviously USB
+ *       will be the reverse of this." — ✗ do not flip it.)
  *     • CW: the same Hz-per-position, centred on the CW note so the tuned signal is dead centre. The note is not
  *       ours to know (VibeServer beats at 600 Hz, a Kiwi at 500, others their own, and none reports it — see
  *       binauralOffset.ts), so it is MEASURED: the middle of the band the receiver's noise fills in the audio
@@ -130,19 +152,22 @@ private:
  *         off the note leans a fraction of a dB. That is the rule as asked ("you wouldnt hear them anyway if the
  *         passband is too narrow"); widen the filter and the CW band spreads out like SSB.
  *  ★ THE PAN LAW: far-ness = |position|^kShape. A voice's energy sits low in the passband (most of it a few hundred
- *    Hz either side of 1 kHz), so a straight line would hold one on-tune voice off to the left. The power law keeps
- *    the middle of the picture gentle — one voice sounds centred — and still reaches full treatment at the edges,
- *    where a second signal lives. (Measured in vibeserver/test-binaural.cpp, §8: |L−R| under 1 dB.)
- *  ★ SWITCHING IS A GLIDE, never a click: in, the bank warms up for one frame, the output crossfades from the dry
- *    path to the bank's (still unspread) output over kWetSec, then the spread grows over kAmountSec; out, the same
- *    in reverse. A change of sideband glides the spread to nothing, swaps the map, and glides it back.
+ *    Hz either side of 1 kHz), so a straight line would hold one voice off to the left. The power law keeps the
+ *    middle of the picture gentle and still reaches full treatment at the edges, where a second signal lives.
+ *  ★★ HOW MUCH: `amount` (0…1) — the controller passes the off-tune weight w, the SAME number that sets the lean.
+ *     It is smoothed here with the lean's own time constant (BinauralSpatialiser::kPanTauSec), so the spread and
+ *     the lean grow and shrink together. A change of sideband glides the spread to nothing (kSwapSec), swaps the
+ *     map, and glides it back; the delay stays put throughout.
  *  Audio thread only. */
 class BinauralSpread {
 public:
     enum Kind : int { Off = 0, Usb = 1, Lsb = 2, CwUpper = 3, CwLower = 4 };
     static constexpr float kShape = 1.5f;          ///< far-ness = |position|^kShape (see THE PAN LAW)
-    static constexpr float kAmountSec = 0.25f;     ///< the spread grows or shrinks over this
-    static constexpr float kWetSec = 0.04f;        ///< dry ↔ bank crossfade
+    static constexpr float kSwapSec = 0.15f;       ///< a change of map: the spread out, then back in, over this each way
+    static constexpr float kWetSec = 0.04f;        ///< engaging / disengaging: undelayed input ↔ the delayed path
+    /** The delayed copy → the bank's output by the time the spread reaches this amount (a crossfade between two
+     *  ALIGNED signals that differ only by the spread, so it is only there for a stereo input's sake). */
+    static constexpr float kMixFullAt = 0.05f;
     static constexpr float kCwDefaultHz = 600.0f;  ///< CW note before the passband has been measured
     static constexpr float kBinHz = 94.0f;         ///< target bin width: N = the power of two giving ≤ this
 
@@ -151,15 +176,17 @@ public:
     BinauralSpread(const BinauralSpread&) = delete;
     BinauralSpread& operator=(const BinauralSpread&) = delete;
 
-    /** Mono (the mean of L and R) in → stereo out, in place. `kind` Off = glide out and bypass. `edgeLo/HiHz`:
-     *  the default SSB passband's audio edges (full left / full right before any mirroring). */
-    void process(float* L, float* R, int n, double rate, int kind, float edgeLoHz, float edgeHiHz);
+    /** Stereo in place. `kind` Off = glide out and bypass (AM, FM, DAB; or binaural switched off). `amount` 0…1:
+     *  how much spread (0 = the input, delayed). `edgeLo/HiHz`: the default SSB passband's audio edges (full left /
+     *  full right before any mirroring). */
+    void process(float* L, float* R, int n, double rate, int kind, float amount, float edgeLoHz, float edgeHiHz);
     /** Out of the path at once (binaural switched back on: the next use warms up from silence, never from a stale
      *  frame of whatever played before). */
-    void reset() { running_ = false; amt_ = 0; wet_ = 0; }
+    void reset() { running_ = false; amt_ = 0; eff_ = 0; map_ = 1; wet_ = 0; }
     /** Is the bank in the signal path (running, or gliding in or out)? */
     bool running() const { return running_; }
-    float amount() const { return amt_; }
+    /** The spread actually applied, 0…1 (the smoothed amount, times the map-swap glide). */
+    float amount() const { return eff_; }
     float wet() const { return wet_; }
     float cwCentreHz() const { return cwCentre_; }
     int latencySamples() const { return running_ ? n_ : 0; }
@@ -173,19 +200,23 @@ private:
     void frame_();
     void weights_();
     void cwMeasure_();
+    void cwForget_();
 
     double fs_ = 0;
-    int n_ = 0, h_ = 0, pos_ = 0, warm_ = 0;
+    int n_ = 0, h_ = 0, pos_ = 0, warm_ = 0, dpos_ = 0;
     bool running_ = false;
     int kind_ = Off;                 // the map in use (changes only at zero spread)
     float lo_ = 50, hi_ = 2700;
-    float amt_ = 0, wet_ = 0;        // current
+    float amt_ = 0;                  // the smoothed amount (follows the caller's w)
+    float map_ = 1;                  // the map-swap glide: 1 normally, through 0 while the map changes
+    float eff_ = 0;                  // amt_ × map_: what the weights are built for
+    float wet_ = 0;                  // undelayed input (0) ↔ the delayed path (1)
     float wAmt_ = -1;                // the amount the weights were built for (-1 = rebuild)
     float cwCentre_ = kCwDefaultHz;
     bool cwMeasured_ = false;
     int cwHops_ = 0;
     std::unique_ptr<RealFFT> fwd_, inv_;
-    std::vector<float> win_, in_, frame_buf_, outL_, outR_, tmp_;
+    std::vector<float> win_, win2_, in_, frame_buf_, outL_, outR_, tmp_, dryL_, dryR_;
     std::vector<cf32> spec_, specL_, specR_, wL_, wR_;
     std::vector<float> psm_, floor_;  // CW: smoothed power and its slow floor, per bin (dB)
 };
@@ -256,6 +287,10 @@ public:
     // Any thread:
     void setEnabled(bool on);
     bool enabled() const { return enabled_.load(std::memory_order_relaxed); }
+    /** ★ Enabled, OR switched off but still gliding back to the untouched input (the lean to centre, the spread's
+     *  delay out). A caller that skips process*() when this is false never cuts the effect off mid-lean or jumps
+     *  the 10.7 ms delay — that would be a click. */
+    bool active() const { return enabled() || activePub_.load(std::memory_order_relaxed); }
     /** The offset source, and the scale: 0 pan inside ±deadHz, full pan at ±fullHz. A change of source
      *  forgets the SSB estimate. */
     void setSource(int source, float deadHz, float fullHz);
@@ -281,7 +316,8 @@ public:
      *    The cue going invalid releases a coarse-held answer (the caller already holds its reading through a
      *    pause between overs). */
     void setSsbHint(double carrierHz, bool valid);
-    /** ★★ STYLE: BinauralSpread::Off = GUIDE (the lean), Usb/Lsb/CwUpper/CwLower = SPREAD with that map.
+    /** ★★ THE SPREAD MAP for the current mode: BinauralSpread::Off (AM, FM, DAB — the lean alone) or
+     *  Usb/Lsb/CwUpper/CwLower. NOT a style: how MUCH spread is always the off-tune weight w (none on tune).
      *  `edgeLo/HiHz` = the default SSB passband's audio edges (the fixed scale). Any thread. */
     void setSpread(int kind, float edgeLoHz, float edgeHiHz);
 
@@ -324,6 +360,8 @@ private:
     std::atomic<float> spreadLo_{50.0f}, spreadHi_{2700.0f};
     BinauralSpread spread_;           // audio thread only
     std::atomic<float> spreadPub_{0.0f}, cwCentrePub_{0.0f};
+    std::atomic<bool> activePub_{false};   // audio thread: still in the path (see active())
+    bool glidingOut_ = false;              // audio thread: the last block ran switched off, still gliding out
 
     // WFM stereo state — audio thread only
     bool stereoState_ = false;
@@ -370,6 +408,7 @@ extern "C" {
 void* vibe_binaural_create(void);
 void  vibe_binaural_destroy(void* h);
 void  vibe_binaural_set_enabled(void* h, int on);
+/** 1 while the caller should run process*(): enabled, or switched off and still gliding out (BinauralTuning::active). */
 int   vibe_binaural_enabled(void* h);
 /** source: 0 none, 1 given (setOffset), 2 SSB USB, 3 SSB LSB. */
 void  vibe_binaural_set_source(void* h, int source, float deadHz, float fullHz);
@@ -379,7 +418,8 @@ void  vibe_binaural_set_stereo(void* h, int hint);
 void  vibe_binaural_set_dial(void* h, double hz);
 /** The waterfall's SSB carrier, ABSOLUTE Hz (valid 0 = none seen). See BinauralTuning::setSsbHint. */
 void  vibe_binaural_set_ssb_hint(void* h, double carrierHz, int valid);
-/** Style: 0 GUIDE; SPREAD 1 USB, 2 LSB, 3 CW (upper), 4 CW (lower). Edges = the default SSB passband (audio Hz). */
+/** The mode's spread map: 0 none (AM, FM, DAB), 1 USB, 2 LSB, 3 CW (upper), 4 CW (lower). Edges = the default SSB
+ *  passband (audio Hz). How much spread is the off-tune weight — none on tune. */
 void  vibe_binaural_set_spread(void* h, int kind, float edgeLoHz, float edgeHiHz);
 /** Audio thread. Planar stereo float, in place. */
 void  vibe_binaural_process_planar(void* h, float* L, float* R, int n, int rate);

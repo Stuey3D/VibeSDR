@@ -118,7 +118,7 @@ float BinauralSpread::panAt(float f, int kind, float centre, float half) {
 }
 
 void BinauralSpread::configure_(double rate) {
-    // ★ Allocates — once, the first time SPREAD engages at a rate (as the spatialiser's delay ring does on a rate
+    // ★ Allocates — once, the first time the bank engages at a rate (as the spatialiser's delay ring does on a rate
     //   change). Re-engaging at the same rate reuses everything; steady running never allocates.
     fs_ = rate;
     int n = 128;
@@ -126,15 +126,24 @@ void BinauralSpread::configure_(double rate) {
     n_ = n; h_ = n / 2;
     fwd_ = std::make_unique<RealFFT>(n_);
     inv_ = std::make_unique<RealFFT>(n_, true);
-    win_.resize(n_);
-    for (int i = 0; i < n_; ++i) win_[i] = (float)std::sin(kPi * (i + 0.5) / n_);   // sqrt of a periodic Hann
+    win_.resize(n_); win2_.resize(n_);
+    for (int i = 0; i < n_; ++i) {
+        win_[i] = (float)std::sin(kPi * (i + 0.5) / n_);   // sqrt of a periodic Hann
+        win2_[i] = win_[i] * win_[i];                      // analysis × synthesis: the identity frame (no FFT)
+    }
     in_.assign(n_, 0.0f); frame_buf_.assign(n_, 0.0f); outL_.assign(n_, 0.0f); outR_.assign(n_, 0.0f);
     tmp_.assign(n_, 0.0f);
+    dryL_.assign(n_, 0.0f); dryR_.assign(n_, 0.0f);     // the on-tune path: exactly the bank's latency
     const int b = n_ / 2 + 1;
     spec_.assign(b, cf32(0, 0)); specL_.assign(b, cf32(0, 0)); specR_.assign(b, cf32(0, 0));
     wL_.assign(b, cf32(0, 0)); wR_.assign(b, cf32(0, 0));
     psm_.assign(b, -200.0f); floor_.assign(b, -200.0f);
-    pos_ = 0; warm_ = 0; wAmt_ = -1; cwHops_ = 0;
+    pos_ = 0; warm_ = 0; dpos_ = 0; wAmt_ = -1; cwHops_ = 0;
+}
+
+void BinauralSpread::cwForget_() {
+    cwMeasured_ = false; cwCentre_ = kCwDefaultHz;
+    std::fill(psm_.begin(), psm_.end(), -200.0f); std::fill(floor_.begin(), floor_.end(), -200.0f);
 }
 
 void BinauralSpread::weights_() {
@@ -146,7 +155,7 @@ void BinauralSpread::weights_() {
     const float norm = 1.0f / (float)n_;               // KissFFT's round trip scales by N
     for (int k = 0; k < b; ++k) {
         const float f = (float)(k * fs_ / n_);
-        const float p = amt_ * panAt(f, kind_, centre, half);
+        const float p = eff_ * panAt(f, kind_, centre, half);
         const float farL = std::max(0.0f, p), farR = std::max(0.0f, -p);   // + = sits right: the LEFT ear is far
         auto w = [&](float far) {
             const float g = std::pow(10.0f, -BinauralSpatialiser::kMaxDropDb * far / 20.0f);
@@ -158,7 +167,7 @@ void BinauralSpread::weights_() {
         };
         wL_[k] = w(farL); wR_[k] = w(farR);
     }
-    wAmt_ = amt_;
+    wAmt_ = eff_;
 }
 
 void BinauralSpread::cwMeasure_() {
@@ -188,9 +197,17 @@ void BinauralSpread::cwMeasure_() {
 
 void BinauralSpread::frame_() {
     const int n = n_, h = h_, b = n_ / 2 + 1;
-    for (int i = 0; i < n; ++i) frame_buf_[i] = in_[i] * win_[i];
-    fwd_->forward(frame_buf_.data(), spec_.data());
-    if (kind_ == CwUpper || kind_ == CwLower) {
+    const bool cw = kind_ == CwUpper || kind_ == CwLower;
+    // ★★ ON TUNE (no spread) THE BANK IS THE IDENTITY, so on SSB it skips the FFTs and overlap-adds the windowed
+    //    input straight back (analysis × synthesis window = the Hann, which overlap-adds to 1). Nobody hears it —
+    //    the output on tune is the delay line — but it keeps the accumulators exactly as the FFT path would have
+    //    left them, so the first frame off tune joins without a seam. CW still needs the spectrum for the note.
+    const bool identity = eff_ <= 0.0f;
+    if (!identity || cw) {
+        for (int i = 0; i < n; ++i) frame_buf_[i] = in_[i] * win_[i];
+        fwd_->forward(frame_buf_.data(), spec_.data());
+    }
+    if (cw) {
         const float rise = 0.5f * (float)h / (float)fs_;   // dB per hop: 0.5 dB/s
         // ★ …but 12 dB/s while the floor sits more than 12 dB under the power: after a squelch closes and opens,
         //   the floor has followed the silence down, and at 0.5 dB/s it would take minutes to find the noise again.
@@ -205,21 +222,27 @@ void BinauralSpread::frame_() {
         }
         if (++cwHops_ * h >= (int)(0.25 * fs_)) { cwHops_ = 0; cwMeasure_(); }
     }
-    if (wAmt_ != amt_) weights_();
-    for (int k = 0; k < b; ++k) { specL_[k] = spec_[k] * wL_[k]; specR_[k] = spec_[k] * wR_[k]; }
     // Slide the overlap-add accumulators by a hop, then add this frame (synthesis window applied).
     std::memmove(outL_.data(), outL_.data() + h, sizeof(float) * (n - h));
     std::memmove(outR_.data(), outR_.data() + h, sizeof(float) * (n - h));
     std::fill(outL_.begin() + (n - h), outL_.end(), 0.0f);
     std::fill(outR_.begin() + (n - h), outR_.end(), 0.0f);
-    inv_->inverse(specL_.data(), tmp_.data());
-    for (int i = 0; i < n; ++i) outL_[i] += tmp_[i] * win_[i];
-    inv_->inverse(specR_.data(), tmp_.data());
-    for (int i = 0; i < n; ++i) outR_[i] += tmp_[i] * win_[i];
+    if (identity) {
+        for (int i = 0; i < n; ++i) { const float y = in_[i] * win2_[i]; outL_[i] += y; outR_[i] += y; }
+    } else {
+        // ★ Rebuilt as the amount moves — but not for every whisker of the smoother's tail (a few thousand
+        //   transcendentals per rebuild); 0.002 of the full spread is far below anything the ear can place.
+        if (wAmt_ < 0 || std::fabs(eff_ - wAmt_) > 0.002f || (eff_ != wAmt_ && eff_ >= 1.0f)) weights_();
+        for (int k = 0; k < b; ++k) { specL_[k] = spec_[k] * wL_[k]; specR_[k] = spec_[k] * wR_[k]; }
+        inv_->inverse(specL_.data(), tmp_.data());
+        for (int i = 0; i < n; ++i) outL_[i] += tmp_[i] * win_[i];
+        inv_->inverse(specR_.data(), tmp_.data());
+        for (int i = 0; i < n; ++i) outR_[i] += tmp_[i] * win_[i];
+    }
     std::memmove(in_.data(), in_.data() + h, sizeof(float) * (n - h));
 }
 
-void BinauralSpread::process(float* L, float* R, int n, double rate, int kind, float edgeLo, float edgeHi) {
+void BinauralSpread::process(float* L, float* R, int n, double rate, int kind, float amount, float edgeLo, float edgeHi) {
     if (n <= 0 || rate <= 0 || !L || !R) return;
     if (kind < Off || kind > CwLower) kind = Off;
     if (!running_) {
@@ -227,52 +250,62 @@ void BinauralSpread::process(float* L, float* R, int n, double rate, int kind, f
         if (rate != fs_ || !fwd_) configure_(rate);
         else {
             std::fill(in_.begin(), in_.end(), 0.0f); std::fill(outL_.begin(), outL_.end(), 0.0f);
-            std::fill(outR_.begin(), outR_.end(), 0.0f); pos_ = 0; warm_ = 0; cwHops_ = 0;
+            std::fill(outR_.begin(), outR_.end(), 0.0f); std::fill(dryL_.begin(), dryL_.end(), 0.0f);
+            std::fill(dryR_.begin(), dryR_.end(), 0.0f); pos_ = 0; warm_ = 0; dpos_ = 0; cwHops_ = 0;
         }
-        running_ = true; amt_ = 0; wet_ = 0; wAmt_ = -1; kind_ = kind;
-        if (kind_ == CwUpper || kind_ == CwLower) {
-            cwMeasured_ = false; cwCentre_ = kCwDefaultHz;
-            std::fill(psm_.begin(), psm_.end(), -200.0f); std::fill(floor_.begin(), floor_.end(), -200.0f);
-        }
+        running_ = true; amt_ = 0; eff_ = 0; map_ = 1; wet_ = 0; wAmt_ = -1; kind_ = kind;
+        if (kind_ == CwUpper || kind_ == CwLower) cwForget_();
     } else if (rate != fs_) {
         // A rate change mid-run: start the bank again from a dry crossfade (rare — a reconnect).
-        configure_(rate); amt_ = 0; wet_ = 0; kind_ = kind == Off ? kind_ : kind;
+        configure_(rate); amt_ = 0; eff_ = 0; map_ = 1; wet_ = 0; kind_ = kind == Off ? kind_ : kind;
     }
     if (std::isfinite(edgeLo) && std::isfinite(edgeHi) && std::fabs(edgeHi - edgeLo) >= 100.0f
         && (edgeLo != lo_ || edgeHi != hi_)) { lo_ = std::min(edgeLo, edgeHi); hi_ = std::max(edgeLo, edgeHi); wAmt_ = -1; }
 
-    const float dAmt = (float)(1.0 / (kAmountSec * fs_)), dWet = (float)(1.0 / (kWetSec * fs_));
+    const bool want = kind != Off;
+    float tgt = want && std::isfinite(amount) ? std::max(0.0f, std::min(1.0f, amount)) : 0.0f;
+    // ★ The lean's own smoothing (a one-pole at kPanTauSec), so spread and lean, fed the same w, move together.
+    const float aAmt = (float)(1.0 - std::exp(-1.0 / (BinauralSpatialiser::kPanTauSec * fs_)));
+    const float dSwap = (float)(1.0 / (kSwapSec * fs_)), dWet = (float)(1.0 / (kWetSec * fs_));
+    const float mixPer = 1.0f / kMixFullAt;
     const int h = h_;
     for (int i = 0; i < n; ++i) {
-        // ★ The order of a glide: IN — warm a frame, wet up, then the spread up. OUT (or a new map) — the spread
-        //   down first, then (OUT only) wet down. The weights follow the amount once per hop.
-        const bool want = kind != Off;
+        // ★ The order of a glide: IN — warm a frame (the delay line and the bank fill), then the undelayed input
+        //   crossfades to the delayed path. The spread follows w throughout. OUT — the spread down first, then wet
+        //   down. A NEW MAP — the spread down, swap, back up; the delay never moves.
         if (want && kind != kind_) {
-            if (amt_ > 0) amt_ = std::max(0.0f, amt_ - dAmt);
+            if (map_ > 0) map_ = std::max(0.0f, map_ - dSwap);
             else {
-                if ((kind_ == CwUpper || kind_ == CwLower) != (kind == CwUpper || kind == CwLower)) {
-                    cwMeasured_ = false; cwCentre_ = kCwDefaultHz;
-                    std::fill(psm_.begin(), psm_.end(), -200.0f); std::fill(floor_.begin(), floor_.end(), -200.0f);
-                }
+                if ((kind_ == CwUpper || kind_ == CwLower) != (kind == CwUpper || kind == CwLower)) cwForget_();
                 kind_ = kind; wAmt_ = -1;
             }
-        } else if (want) {
+        } else if (map_ < 1) {
+            map_ = std::min(1.0f, map_ + dSwap);
+        }
+        amt_ += aAmt * (tgt - amt_);
+        if (std::fabs(tgt - amt_) < 1e-4f) amt_ = tgt;   // settle exactly: on tune means 0, not 1e-30
+        eff_ = amt_ * map_;
+        if (want) {
             if (warm_ < n_) ++warm_;
             else if (wet_ < 1) wet_ = std::min(1.0f, wet_ + dWet);
-            else if (amt_ < 1) amt_ = std::min(1.0f, amt_ + dAmt);
-        } else {
-            if (amt_ > 0) amt_ = std::max(0.0f, amt_ - dAmt);
-            else if (wet_ > 0) wet_ = std::max(0.0f, wet_ - dWet);
+        } else if (amt_ <= 0 && wet_ > 0) {
+            wet_ = std::max(0.0f, wet_ - dWet);
         }
         const float dl = L[i], dr = R[i];
         in_[n_ - h + pos_] = 0.5f * (dl + dr);
-        const float yl = outL_[pos_], yr = outR_[pos_];
-        L[i] = dl + wet_ * (yl - dl);
-        R[i] = dr + wet_ * (yr - dr);
+        // The delay line: exactly the bank's latency (N), each ear on its own — on tune, the input as it was.
+        const float ddl = dryL_[dpos_], ddr = dryR_[dpos_];
+        dryL_[dpos_] = dl; dryR_[dpos_] = dr;
+        if (++dpos_ == n_) dpos_ = 0;
+        float pl = ddl, pr = ddr;
+        const float mx = std::min(1.0f, eff_ * mixPer);
+        if (mx > 0) { pl = ddl + mx * (outL_[pos_] - ddl); pr = ddr + mx * (outR_[pos_] - ddr); }
+        if (wet_ >= 1) { L[i] = pl; R[i] = pr; }        // ★ exact: on tune, wet 1, mx 0 → the delayed input bit for bit
+        else { L[i] = dl + wet_ * (pl - dl); R[i] = dr + wet_ * (pr - dr); }
         if (++pos_ == h) { pos_ = 0; frame_(); }
         if (!want && amt_ <= 0 && wet_ <= 0) {
             // Fully out: the rest of this block (from the next sample) is dry, and the bank stops.
-            running_ = false; amt_ = 0; wet_ = 0;
+            running_ = false; amt_ = 0; eff_ = 0; wet_ = 0;
             return;
         }
     }
@@ -292,7 +325,9 @@ BinauralTuning::~BinauralTuning() {
 }
 
 void BinauralTuning::setEnabled(bool on) {
-    if (on && !enabled_.load()) resetFx_.store(true);   // the audio thread clears the delay lines on its next block
+    // The audio thread clears the delay lines on its next block — unless it is still gliding out from a moment ago,
+    // when carrying on from where it is is the seamless thing (see processPlanar).
+    if (on && !enabled_.load()) resetFx_.store(true);
     enabled_.store(on);
     if (on) { const int s = source_.load(); if (s == SsbUsb || s == SsbLsb) ensureWorker_(); }
 }
@@ -401,25 +436,34 @@ void BinauralTuning::ssbFeed_(const float* L, const float* R, int n, int rate) {
 
 void BinauralTuning::processPlanar(float* L, float* R, int n, int rate) {
     if (!L || !R || n <= 0 || rate <= 0) return;
-    if (resetFx_.exchange(false)) {
+    const bool on = enabled_.load(std::memory_order_relaxed);
+    // ★ Switched back on while still gliding out (iOS keeps calling until active() drops): keep the state — a reset
+    //   would cut the delay line mid-glide. Otherwise start clean, never from a stale frame.
+    if (resetFx_.exchange(false) && !glidingOut_) {
         fx_.reset();
         spread_.reset();
         stereoState_ = false; stereoHeld_ = 0; stereoW_ = 1; sideRatio_ = 0; sideStereo_ = false;
     }
+    if (!on && !spread_.running() && fx_.pan() == 0.0f) {   // fully out: the untouched input
+        glidingOut_ = false; activePub_.store(false, std::memory_order_relaxed);
+        return;
+    }
     const int src = source_.load(std::memory_order_relaxed);
-    const int sk = spreadKind_.load(std::memory_order_relaxed);
-    // ★ The SSB estimator is fed only under GUIDE: under SPREAD nothing reads its answer, and on a 1 GB phone a
-    //   decoder nobody listens to is CPU the audio needs. (Back to GUIDE, it locks again from fresh speech.)
-    if ((src == SsbUsb || src == SsbLsb) && sk == BinauralSpread::Off) ssbFeed_(L, R, n, rate);   // before the effect
-    float p = targetPan_(n, rate, L, R);
-    // ★★ The two styles are exclusive: while SPREAD runs (or glides in or out) the guide lean is held at centre —
-    //    the spatialiser glides it there (kPanTauSec), and at centre it is exactly transparent.
-    spread_.process(L, R, n, rate, sk, spreadLo_.load(std::memory_order_relaxed), spreadHi_.load(std::memory_order_relaxed));
-    if (sk != BinauralSpread::Off || spread_.running()) p = 0.0f;
+    const int sk = on ? spreadKind_.load(std::memory_order_relaxed) : (int)BinauralSpread::Off;
+    // ★★ The SSB estimator is fed WHENEVER binaural is on in SSB — the spread included: on SSB it is the offset
+    //    source that sets w, and so the spread itself. (Until 476 it was starved under the SPREAD style.)
+    if (on && (src == SsbUsb || src == SsbLsb)) ssbFeed_(L, R, n, rate);   // before the effect
+    const float p = on ? targetPan_(n, rate, L, R) : 0.0f;
+    // ★★ ONE WEIGHT FOR BOTH: the spread's amount IS the lean's size, w = |p| — 0 in the dead zone (untouched),
+    //    1 at full scale. The bank smooths it with the lean's own time constant, so they grow together.
+    spread_.process(L, R, n, rate, sk, std::fabs(p), spreadLo_.load(std::memory_order_relaxed), spreadHi_.load(std::memory_order_relaxed));
     fx_.process(L, R, n, rate, p);
     panPub_.store(fx_.pan(), std::memory_order_relaxed);
     spreadPub_.store(spread_.running() ? spread_.amount() : 0.0f, std::memory_order_relaxed);
     cwCentrePub_.store(spread_.cwCentreHz(), std::memory_order_relaxed);
+    const bool still = spread_.running() || fx_.pan() != 0.0f;
+    glidingOut_ = !on && still;
+    activePub_.store(on || still, std::memory_order_relaxed);
 }
 
 int BinauralTuning::processInt16(const int16_t* in, int inCh, int frames, int rate, int16_t* out) {
@@ -609,7 +653,7 @@ extern "C" {
 void* vibe_binaural_create(void) { return new BinauralTuning(); }
 void  vibe_binaural_destroy(void* h) { delete static_cast<BinauralTuning*>(h); }
 void  vibe_binaural_set_enabled(void* h, int on) { if (h) static_cast<BinauralTuning*>(h)->setEnabled(on != 0); }
-int   vibe_binaural_enabled(void* h) { return h && static_cast<BinauralTuning*>(h)->enabled() ? 1 : 0; }
+int   vibe_binaural_enabled(void* h) { return h && static_cast<BinauralTuning*>(h)->active() ? 1 : 0; }
 void  vibe_binaural_set_source(void* h, int source, float deadHz, float fullHz) {
     if (h) static_cast<BinauralTuning*>(h)->setSource(source, deadHz, fullHz);
 }

@@ -13,9 +13,14 @@
 //   7. The COARSE SSB cue (the waterfall's carrier): drives the lean where the estimator has no answer or none in
 //      reach, never fights a valid in-reach answer, keeps the knob's exact figure when it agrees, hands over to
 //      the estimator, follows the dial, lets go when it goes invalid.
-//   8. SPREAD: tones placed by audio frequency (USB: 500 Hz left, 2200 Hz right; LSB mirrored), clamped past the
-//      default passband's edges, one voice centred overall, never silent, no NaN, no click switching in and out,
-//      the CW note measured from the noise; latency and cost printed.
+//   8. THE SPREAD MAP at full amount (BinauralSpread alone): tones placed by audio frequency (USB: 500 Hz left,
+//      2200 Hz right; LSB mirrored), clamped past the default passband's edges, one voice centred overall, never
+//      silent, the CW note measured from the noise; latency printed.
+//   9. ONE BEHAVIOUR (Stuart on 476: "when on signal it presents in mono as it would before and then pan left and
+//      right based on signal and audio response when off tune"): on tune the output IS the input (delayed by the
+//      bank's constant frame on SSB/CW, not at all elsewhere); off tune the lean AND the spread, both from the same
+//      weight w, growing together; LSB mirrored; none of the spread on AM/FM; the SSB estimator still fed and
+//      publishing with the spread map set; no click or NaN through toggles, w changes and a sideband change; cost.
 //
 // ★ SILENT: every signal is generated and measured in memory, never played.
 #include "vibedsp/binaural.h"
@@ -580,23 +585,23 @@ int main() {
         }
     }
 
-    std::printf(" ── 8. SPREAD ──\n");
+    std::printf(" ── 8. the SPREAD map, at full amount ──\n");
+    const float lo = 50, hi = 2700;   // = MODE_BANDWIDTHS.usb (sdrProtocol.ts)
     {
-        const float lo = 50, hi = 2700;   // = MODE_BANDWIDTHS.usb (sdrProtocol.ts)
         check(BinauralSpread::panAt(50, BinauralSpread::Usb, 1375, 1325) == -1 && BinauralSpread::panAt(2700, BinauralSpread::Usb, 1375, 1325) == 1
               && BinauralSpread::panAt(1375, BinauralSpread::Usb, 1375, 1325) == 0, "the scale: 50 Hz full left, 2700 Hz full right, 1375 Hz centre");
         check(BinauralSpread::panAt(4000, BinauralSpread::Usb, 1375, 1325) == 1 && BinauralSpread::panAt(10, BinauralSpread::Usb, 1375, 1325) == -1,
               "beyond the default edges: clamped at full");
         check(BinauralSpread::panAt(500, BinauralSpread::Lsb, 1375, 1325) == -BinauralSpread::panAt(500, BinauralSpread::Usb, 1375, 1325),
               "LSB is the mirror (higher audio = lower RF)");
-        // Steady state of a tone through the whole controller under SPREAD.
+        /* ★ CHANGED with the combined behaviour: these ran through the CONTROLLER under the old SPREAD style, which
+         *   spread at full whatever the tuning. Now the controller spreads only as far as you are off tune, so the
+         *   MAP is measured on the bank alone at amount 1 — what the controller gives at full off-tune weight, minus
+         *   the lean (§9 measures the two together). */
         auto lrOf = [&](const std::vector<float>& x, int kind, std::vector<float>* Lo = nullptr, std::vector<float>* Ro = nullptr) {
-            BinauralTuning bt(false);
-            bt.setEnabled(true);
-            bt.setSource(kind == BinauralSpread::Lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, 15, 300);
-            bt.setSpread(kind, lo, hi);
-            std::vector<float> L, R;
-            run(bt, x, (int)fs, L, R);
+            BinauralSpread sp;
+            std::vector<float> L = x, R = x;
+            for (size_t i = 0; i + 960 <= x.size(); i += 960) sp.process(&L[i], &R[i], 960, fs, kind, 1.0f, lo, hi);
             if (Lo) { *Lo = L; *Ro = R; }
             const size_t a = (size_t)(1.0 * fs), b = x.size() - (size_t)(0.1 * fs);
             return db(rms(L, a, b), rms(R, a, b));
@@ -608,10 +613,9 @@ int main() {
         check(u5 > 3 && u22 < -3, "USB: a 500 Hz signal sits LEFT, a 2200 Hz one RIGHT (higher RF = right)");
         check(l5 < -3 && l22 > 3, "LSB: mirrored — 500 Hz audio (the HIGHER RF) sits right, 2200 Hz left");
         {
-            // Both at once: each ear carries more of its own signal (the two-signals-either-side case).
             std::vector<float> L, R;
             lrOf(mix(t500, t2200), BinauralSpread::Usb, &L, &R);
-            auto bandRms = [&](const std::vector<float>& y, double f) {   // a single-bin DFT over the steady second
+            auto bandRms = [&](const std::vector<float>& y, double f) {   // a single-bin DFT over the steady half second
                 double re = 0, im = 0; const size_t a = (size_t)fs, b = a + (size_t)fs / 2;
                 for (size_t i = a; i < b; ++i) { re += y[i] * std::cos(2 * M_PI * f * i / fs); im += y[i] * std::sin(2 * M_PI * f * i / fs); }
                 return std::sqrt(re * re + im * im);
@@ -628,11 +632,10 @@ int main() {
             const auto v = voice(fs, 8, 0, 25, 41);
             const double lr = lrOf(v, BinauralSpread::Usb, &L, &R);
             const double lrL = lrOf(v, BinauralSpread::Lsb);
-            std::printf("      one on-tune voice: L−R %+.2f dB (USB), %+.2f dB (LSB)\n", lr, lrL);
-            check(std::fabs(lr) < 1.5 && std::fabs(lrL) < 1.5 && finite(L) && finite(R), "one voice sounds centred overall (|L−R| < 1.5 dB)");
+            std::printf("      one voice through the full map: L−R %+.2f dB (USB), %+.2f dB (LSB)\n", lr, lrL);
+            check(std::fabs(lr) < 1.5 && std::fabs(lrL) < 1.5 && finite(L) && finite(R), "the pan law keeps one voice's weight central (|L−R| < 1.5 dB)");
         }
         {
-            // Never silent: the far ear of a full-edge tone is at most the drop + the shelf down.
             std::vector<float> L, R;
             const auto x = tone(fs, 2.0, 2700, 0.3);
             lrOf(x, BinauralSpread::Usb, &L, &R);
@@ -641,64 +644,222 @@ int main() {
             check(far > -17.5 && far < -8, "never silent: the far ear ≈ 10 dB down (+ the head shadow), not off");
         }
         {
-            // ★ NO CLICK switching in and out: a 500 Hz sine (max step 0.02 per sample) through GUIDE → SPREAD →
-            //   GUIDE → SPREAD(LSB) → off, mid-signal. The worst per-sample step is the click detector.
-            BinauralTuning bt(false);
-            bt.setEnabled(true);
-            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
-            const auto x = tone(fs, 6.0, 500, 0.3);
-            const double maxIn = 2 * M_PI * 500 / fs * 0.3;
-            std::vector<float> L(x.size()), R(x.size());
-            const int pkt = 480;
-            float maxSpread = 0;
-            for (size_t i = 0; i + pkt <= x.size(); i += pkt) {
-                const double t = i / fs;
-                bt.setSpread(t < 1 ? 0 : t < 2.5 ? BinauralSpread::Usb : t < 3.5 ? 0 : t < 5 ? BinauralSpread::Lsb : 0, lo, hi);
-                std::copy(x.begin() + i, x.begin() + i + pkt, L.begin() + i);
-                std::copy(x.begin() + i, x.begin() + i + pkt, R.begin() + i);
-                bt.processPlanar(&L[i], &R[i], pkt, (int)fs);
-                float st[12]; bt.stats(st, 12); maxSpread = std::max(maxSpread, st[9]);
-            }
-            double worst = 0;
-            for (size_t i = 1; i < L.size(); ++i) worst = std::max({worst, (double)std::fabs(L[i] - L[i - 1]), (double)std::fabs(R[i] - R[i - 1])});
-            std::printf("      switching in/out ×4: worst step %.4f (the sine's own %.4f), reached spread %.2f\n", worst, maxIn, maxSpread);
-            check(finite(L) && finite(R) && worst < 1.6 * maxIn && maxSpread > 0.99, "no click and no NaN switching SPREAD in and out, or between sidebands");
-        }
-        {
             // ★ CW: the note is measured from the noise. A Kiwi-style 300-700 Hz passband (note 500) with a CW signal
             //   ON the note → centred; one 200 Hz higher → a little to the right.
             auto cw = [&](double toneHz, float& centre) {
-                BinauralTuning bt(false);
-                bt.setEnabled(true);
-                bt.setSource(BinauralTuning::Given, 15, 300);
-                bt.setSpread(BinauralSpread::CwUpper, lo, hi);
-                const auto n = bandNoise(fs, 6.0, 300, 700, 0.05, 7);
+                BinauralSpread sp;
+                const auto nz = bandNoise(fs, 6.0, 300, 700, 0.05, 7);
                 auto t = tone(fs, 6.0, toneHz, 0.2);
                 for (size_t i = 0; i < t.size(); ++i) if (std::fmod(i / fs, 0.24) > 0.12) t[i] = 0;   // keyed dits
-                std::vector<float> L, R;
-                run(bt, mix(n, t), (int)fs, L, R);
-                float st[12]; bt.stats(st, 12); centre = st[11];
+                std::vector<float> L = mix(nz, t), R = L;
+                for (size_t i = 0; i + 960 <= L.size(); i += 960) sp.process(&L[i], &R[i], 960, fs, BinauralSpread::CwUpper, 1.0f, lo, hi);
+                centre = sp.cwCentreHz();
                 const size_t a = (size_t)(3 * fs), b = L.size() - 4800;
                 return db(rms(L, a, b), rms(R, a, b));
             };
-            float c0 = 0, c1 = 0;
-            const double on = cw(500, c0), up = cw(700, c1);
+            float c0 = 0, c1b = 0;
+            const double on = cw(500, c0), up = cw(700, c1b);
             std::printf("      CW 300-700 Hz passband: measured note %.0f Hz; on-note signal L−R %+.2f dB, 200 Hz up %+.2f dB\n", c0, on, up);
-            check(std::fabs(c0 - 500) < 70 && std::fabs(on) < 1.0 && up < on - 0.2, "CW: the note found from the noise, the tuned signal centred, a higher one to the right");
+            check(std::fabs(c0 - 500) < 70 && std::fabs(on) < 1.0 && up < on - 0.2, "CW: the note found from the noise, the note centred in the map, a higher one to the right");
         }
         {
             BinauralSpread sp;
             std::vector<float> l(480, 0.0f), r(480, 0.0f);
-            sp.process(l.data(), r.data(), 480, fs, BinauralSpread::Usb, lo, hi);
-            std::printf("      latency while SPREAD runs: %d samples = %.1f ms at 48 kHz (bypassed when off: 0)\n",
+            sp.process(l.data(), r.data(), 480, fs, BinauralSpread::Usb, 0.0f, lo, hi);
+            std::printf("      latency while the bank runs (SSB/CW, on tune or off): %d samples = %.1f ms at 48 kHz (AM/FM: 0)\n",
                         sp.latencySamples(), 1000.0 * sp.latencySamples() / fs);
             check(sp.latencySamples() <= 512, "latency one frame (≤ 512 samples at 48 kHz)");
         }
+    }
+
+    std::printf(" ── 9. one behaviour: untouched on tune, lean + spread together off tune ──\n");
+    {
+        auto toneAt = [&](const std::vector<float>& y, double f, size_t a, size_t b) {   // single-bin DFT magnitude
+            double re = 0, im = 0;
+            for (size_t i = a; i < b; ++i) { re += y[i] * std::cos(2 * M_PI * f * i / fs); im += y[i] * std::sin(2 * M_PI * f * i / fs); }
+            return std::sqrt(re * re + im * im);
+        };
+        const int D = 512;   // the bank's frame at 48 kHz — the constant latency on SSB/CW
+        // (a) ON TUNE = UNTOUCHED: an SSB voice right on tune, locked by the estimator, with the spread map set.
+        for (int kind : { (int)BinauralSpread::Usb, (int)BinauralSpread::Lsb }) {
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(kind == BinauralSpread::Lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(7100000);
+            bt.setSpread(kind, lo, hi);
+            const auto x = voice(fs, 12, 0, 25, 7);
+            std::vector<float> L, R;
+            feed(bt, x, (int)fs, &L, &R);
+            float hz = 0; const bool ok = bt.ssbOffset(hz);
+            float st[12]; bt.stats(st, 12);
+            double worst = 0;
+            for (size_t i = (size_t)(0.5 * fs); i < L.size(); ++i)
+                worst = std::max({worst, (double)std::fabs(L[i] - x[i - D]), (double)std::fabs(R[i] - x[i - D])});
+            std::printf("      %s on-tune voice: locked %s %+.1f Hz, max |out − in delayed %d| = %.2e (pan %.3f, spread %.3f)\n",
+                        kind == BinauralSpread::Usb ? "USB" : "LSB", ok ? "at" : "(not)", hz, D, worst, st[4], st[9]);
+            check(ok && std::fabs(hz) < 15 && worst <= 1e-6 && st[4] == 0 && st[9] == 0,
+                  kind == BinauralSpread::Usb ? "USB on tune: the output IS the input (one constant frame later), no lean, no spread"
+                                              : "LSB on tune: the output IS the input (one constant frame later), no lean, no spread");
+        }
+        // The same on AM (no spread map): untouched with NO delay at all.
         {
-            const auto x = voice(fs, 20, 0, 25, 42);
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::Given, 15, 300);
+            bt.setOffset(5, true);
+            bt.setSpread(BinauralSpread::Off, lo, hi);
+            const auto x = tone(fs, 2.0, 700, 0.3);
+            std::vector<float> L, R;
+            run(bt, x, (int)fs, L, R);
+            double worst = 0;
+            for (size_t i = 0; i < x.size() - 960; ++i) worst = std::max({worst, (double)std::fabs(L[i] - x[i]), (double)std::fabs(R[i] - x[i])});
+            std::printf("      AM on tune (5 Hz, inside the dead zone): max |out − in| = %.2e, no delay\n", worst);
+            check(worst <= 1e-6, "AM on tune: the output IS the input, not even delayed");
+        }
+        // (b)/(c) OFF TUNE: three tones — 500 Hz, 1375 Hz (the map's centre: the lean alone), 2200 Hz.
+        auto offTune = [&](int kind, float offHz, double& d5, double& d13, double& d22, float& pan, float& spr) {
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::Given, 15, 300);   // the controller takes w from whichever source: Given is exact
+            bt.setOffset(offHz, true);
+            bt.setSpread(kind, lo, hi);
+            const auto x = mix(mix(tone(fs, 3.0, 500, 0.2), tone(fs, 3.0, 1375, 0.2)), tone(fs, 3.0, 2200, 0.2));
+            std::vector<float> L, R;
+            run(bt, x, (int)fs, L, R);
+            const size_t a = (size_t)(2.0 * fs), b = a + (size_t)(0.5 * fs);
+            d5 = db(toneAt(L, 500, a, b), toneAt(R, 500, a, b));
+            d13 = db(toneAt(L, 1375, a, b), toneAt(R, 1375, a, b));
+            d22 = db(toneAt(L, 2200, a, b), toneAt(R, 2200, a, b));
+            float st[12]; bt.stats(st, 12); pan = st[4]; spr = st[9];
+        };
+        {
+            double d5, d13, d22; float pan, spr;
+            offTune(BinauralSpread::Usb, 500, d5, d13, d22, pan, spr);
+            std::printf("      USB +500 Hz: pan %.2f spread %.2f · L−R 500 Hz %+.2f, 1375 Hz %+.2f, 2200 Hz %+.2f dB\n", pan, spr, d5, d13, d22);
+            /* ★ RELATIVE, NOT ABSOLUTE, on purpose. The lean (full, 10 dB) moves the WHOLE picture to the right — it
+             *   says "tune up" — and the spread then places what is in the passband around it, lower RF left of
+             *   higher. So at full weight a 500 Hz tone sits LEFT OF the 2200 Hz one but may still be right of
+             *   centre; "louder left" is measured against the map's centre tone (1375 Hz), which only the lean moves. */
+            check(pan > 0.99 && spr > 0.99 && d13 < -3, "USB +500 Hz: the lean is full and to the RIGHT (tune up), the spread is full");
+            check(d5 - d13 > 3 && d13 - d22 > 3, "USB +500 Hz: the spread is there — 500 Hz to the left of the centre, 2200 Hz to its right");
+        }
+        {
+            double d5, d13, d22; float pan, spr;
+            offTune(BinauralSpread::Lsb, 500, d5, d13, d22, pan, spr);
+            std::printf("      LSB +500 Hz: pan %.2f spread %.2f · L−R 500 Hz %+.2f, 1375 Hz %+.2f, 2200 Hz %+.2f dB\n", pan, spr, d5, d13, d22);
+            check(pan > 0.99 && spr > 0.99 && d13 < -3 && d22 - d13 > 3 && d13 - d5 > 3,
+                  "LSB +500 Hz: the same lean right, the spread mirrored (500 Hz audio = the higher RF, to the right)");
+        }
+        // (d) THE WEIGHT: as the offset grows, lean and spread grow together, monotonically, from nothing.
+        {
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::Given, 15, 300);
+            bt.setSpread(BinauralSpread::Usb, lo, hi);
+            const auto x = tone(fs, 1.2, 900, 0.2);
+            const float offs[] = { 0, 10, 15, 30, 60, 100, 150, 200, 250, 300, 400 };
+            float prevP = -1, prevS = -1, worstGap = 0; bool mono = true, zero = true;
+            std::printf("      offset → pan / spread:");
+            for (float o : offs) {
+                bt.setOffset(o, true);
+                std::vector<float> L, R;
+                run(bt, x, (int)fs, L, R);
+                float st[12]; bt.stats(st, 12);
+                std::printf(" %.0f→%.2f/%.2f", o, st[4], st[9]);
+                if (st[4] < prevP - 1e-4f || st[9] < prevS - 1e-4f) mono = false;
+                if (o <= 15 && (st[4] != 0 || st[9] != 0)) zero = false;
+                worstGap = std::max(worstGap, std::fabs(st[4] - st[9]));
+                prevP = st[4]; prevS = st[9];
+            }
+            std::printf("\n      largest |pan − spread| %.3f\n", worstGap);
+            check(zero && mono && worstGap < 0.02 && prevP > 0.99 && prevS > 0.99,
+                  "w: nothing in the dead zone, then lean and spread grow together (monotonic, within 0.02) to full");
+        }
+        // (e) AM / FM: no spread map → never any spread, the lean as before.
+        {
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::Given, 15, 300);
+            bt.setOffset(500, true);
+            bt.setSpread(BinauralSpread::Off, lo, hi);
+            float maxS = 0;
+            const auto x = tone(fs, 2.0, 900, 0.2);
+            std::vector<float> l(960), r(960);
+            for (size_t i = 0; i + 960 <= x.size(); i += 960) {
+                std::copy(x.begin() + i, x.begin() + i + 960, l.begin()); std::copy(l.begin(), l.end(), r.begin());
+                bt.processPlanar(l.data(), r.data(), 960, (int)fs);
+                float st[12]; bt.stats(st, 12); maxS = std::max(maxS, st[9]);
+            }
+            float st[12]; bt.stats(st, 12);
+            std::printf("      AM/FM +500 Hz: pan %.2f, spread never above %.2f\n", st[4], maxS);
+            check(maxS == 0 && st[4] > 0.99, "AM/FM (no map): the lean alone — no spread, ever");
+        }
+        // (f) THE SSB ESTIMATOR IS STILL FED with the spread map set — it is what drives w on SSB.
+        for (int kind : { (int)BinauralSpread::Usb, (int)BinauralSpread::Lsb }) {
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(kind == BinauralSpread::Lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(7100000);
+            bt.setSpread(kind, lo, hi);
+            feed(bt, voice(fs, 12, 150, 25, 7), (int)fs);
+            float hz = 0; const bool ok = bt.ssbOffset(hz);
+            float st[12]; bt.stats(st, 12);
+            const float want = kind == BinauralSpread::Usb ? 150.0f : -150.0f;
+            std::printf("      %s voice 150 Hz high, spread map set: %d estimates, published %+.1f Hz → pan %+.2f, spread %.2f\n",
+                        kind == BinauralSpread::Usb ? "USB" : "LSB", (int)st[6], hz, st[4], st[9]);
+            check(st[6] > 0 && ok && std::fabs(hz - want) <= 20 && st[4] * want > 0 && st[9] > 0.3,
+                  kind == BinauralSpread::Usb ? "USB: the estimator is fed and publishes with the map set; its answer drives lean AND spread"
+                                              : "LSB: the estimator is fed and publishes with the map set (sign per sideband); lean AND spread follow");
+        }
+        {
+            // …and the waterfall's coarse cue, beyond the estimator's reach.
             BinauralTuning bt(false);
             bt.setEnabled(true);
             bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(7100000);
+            bt.setSpread(BinauralSpread::Usb, lo, hi);
+            bt.setSsbHint(7100000 + 800, true);
+            feed(bt, bandNoise(fs, 1.5, 300, 2700, 0.02, 3), (int)fs);
+            float hz = 0; const bool ok = bt.ssbOffset(hz);
+            float st[12]; bt.stats(st, 12);
+            std::printf("      coarse cue 800 Hz up, map set: held %+.0f Hz → pan %.2f, spread %.2f\n", hz, st[4], st[9]);
+            check(ok && std::fabs(hz - 800) < 1 && st[4] > 0.99 && st[9] > 0.99, "the coarse cue drives lean and spread too");
+        }
+        // (g) NO CLICK, NO NaN: on tune → off → a sideband change mid-lean → the lean flips → on tune → to AM while
+        //     leaning → back to USB → switched OFF mid-lean (called only while active(), as iOS does) → back on.
+        {
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::Given, 15, 300);
+            const auto x = tone(fs, 10.0, 500, 0.3);
+            const double maxIn = 2 * M_PI * 500 / fs * 0.3;
+            std::vector<float> L(x.size()), R(x.size());
+            const int pkt = 480;
+            float maxSpread = 0; bool glided = false;
+            for (size_t i = 0; i + pkt <= x.size(); i += pkt) {
+                const double t = i / fs;
+                bt.setOffset(t < 0.5 ? 0 : t < 3 ? 400 : t < 4 ? -400 : t < 5 ? 0 : t < 7.3 ? 200 : 300, true);
+                bt.setSpread(t < 2 ? BinauralSpread::Usb : t < 5 ? BinauralSpread::Lsb : t < 6 ? BinauralSpread::Off : BinauralSpread::Usb, lo, hi);
+                if (std::fabs(t - 7.0) < 1e-6) bt.setEnabled(false);
+                if (std::fabs(t - 8.5) < 1e-6) bt.setEnabled(true);
+                std::copy(x.begin() + i, x.begin() + i + pkt, L.begin() + i);
+                std::copy(x.begin() + i, x.begin() + i + pkt, R.begin() + i);
+                if (bt.active()) { bt.processPlanar(&L[i], &R[i], pkt, (int)fs); if (!bt.enabled()) glided = true; }
+                float st[12]; bt.stats(st, 12); maxSpread = std::max(maxSpread, st[9]);
+            }
+            double worst = 0;
+            for (size_t i = 1; i < L.size(); ++i) worst = std::max({worst, (double)std::fabs(L[i] - L[i - 1]), (double)std::fabs(R[i] - R[i - 1])});
+            std::printf("      toggles, w changes, sideband change: worst step %.4f (the sine's own %.4f), reached spread %.2f\n", worst, maxIn, maxSpread);
+            check(finite(L) && finite(R) && worst < 1.6 * maxIn && maxSpread > 0.99 && glided,
+                  "no click and no NaN — w moving, a sideband change, to AM and back, switched off (a glide) and on");
+        }
+        // (h) Cost, audio thread, through the whole controller.
+        for (float off : { 0.0f, 500.0f }) {
+            const auto x = voice(fs, 20, 0, 25, 42);
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::Given, 15, 300);
+            bt.setOffset(off, true);
             bt.setSpread(BinauralSpread::Usb, lo, hi);
             std::vector<float> l(960), r(960);
             auto t0 = std::chrono::steady_clock::now();
@@ -707,8 +868,8 @@ int main() {
                 bt.processPlanar(l.data(), r.data(), 960, (int)fs);
             }
             const double c = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / 20.0;
-            std::printf("      SPREAD (audio thread): %.3f %% of one core at 48 kHz\n", c * 100);
-            check(c < 0.02, "SPREAD costs < 2 % of a core at 48 kHz (this Mac)");
+            std::printf("      SSB %s (audio thread): %.3f %% of one core at 48 kHz\n", off == 0 ? "on tune (no FFT)" : "off tune, lean + spread", c * 100);
+            check(c < 0.02, off == 0 ? "on tune costs < 2 % of a core at 48 kHz (this Mac)" : "off tune costs < 2 % of a core at 48 kHz (this Mac)");
         }
     }
 
