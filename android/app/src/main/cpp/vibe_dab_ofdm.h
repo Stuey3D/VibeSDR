@@ -400,9 +400,12 @@ inline double dqpskSoftFromProducts(const C32* prod, const float* mag, int K, fl
             const __m128 si = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(pi, k)));
             const __m128i ir = _mm_cvttps_epi32(sr), ii = _mm_cvttps_epi32(si);
             const __m128i b = _mm_packs_epi16(_mm_packs_epi32(ir, ii), _mm_setzero_si128());   // re0..3, im0..3
-            const int64_t both = _mm_cvtsi128_si64(b);
-            std::memcpy(softRe + c, &both, 4);
-            std::memcpy(softIm + c, reinterpret_cast<const char*>(&both) + 4, 4);
+            // ★ _mm_storel_epi64, NOT _mm_cvtsi128_si64: the latter is x86-64 only and stopped the
+            //   i386 build (2026-10-17). Same single movq on amd64; plain SSE2 on 32-bit.
+            alignas(16) int8_t both[8];
+            _mm_storel_epi64(reinterpret_cast<__m128i*>(both), b);
+            std::memcpy(softRe + c, both, 4);
+            std::memcpy(softIm + c, both + 4, 4);
             const __m128 ar = _mm_sub_ps(_mm_mul_ps(_mm_and_ps(pr, absMask), rm), r2);
             const __m128 ai = _mm_sub_ps(_mm_mul_ps(_mm_and_ps(pi, absMask), rm), r2);
             eacc = _mm_add_ps(eacc, _mm_and_ps(ok, _mm_add_ps(_mm_mul_ps(ar, ar), _mm_mul_ps(ai, ai))));

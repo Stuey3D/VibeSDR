@@ -11,7 +11,7 @@
 # started once per architecture.
 #
 # ★★ THE REPOSITORY NOW CARRIES arm64 AND amd64 (since 2026-08-20, for x86 Linux users — see
-#    GitHub issue #21). Everything arch-specific below is keyed on $ARCH: the pool filenames, the
+#    GitHub issue #21), armhf (2026-09-22) and i386 (2026-10-17, 32-bit x86, SSE2). Everything arch-specific below is keyed on $ARCH: the pool filenames, the
 #    revision high-water mark, the prune, and the per-architecture Packages index. What is NOT
 #    per-arch is the Release file, which must name EVERY architecture the repository holds — get
 #    that wrong and one architecture silently disappears from apt. See the note where it is built.
@@ -41,6 +41,15 @@ if [ -n "${VIBE_CROSS_ARCH:-}" ]; then
   [ "$ARCH" = "armhf" ] && CROSS_CMAKE="$CROSS_CMAKE -DVIBE_ARMV6_STAGE=/build/armv6-stage"
   # ★ dpkg-shlibdeps reads these to resolve the ARMHF libraries rather than the host's.
   export DEB_HOST_ARCH="$ARCH" DEB_HOST_MULTIARCH=arm-linux-gnueabihf DEB_HOST_GNU_TYPE=arm-linux-gnueabihf
+fi
+# ★★★ A PRE-BUILT PACKAGE IS INDEXED WHEREVER THIS RUNS (2026-10-17, for i386 beside amd64). The docker
+#     wrapper now runs the prebuilt pass in the host's own container rather than emulating the target
+#     just to call dpkg-scanpackages, so the architecture comes from the caller here as well. ONLY with
+#     a pre-built package: on the build path it would stamp a host-arch binary with another arch's name.
+#  ★ The package's own Architecture: is still checked against it below — the caller is not trusted.
+if [ -n "${VIBE_PUBLISH_ARCH:-}" ]; then
+  [ -n "${VIBE_PREBUILT_DEB:-}" ] || { echo "!! VIBE_PUBLISH_ARCH without VIBE_PREBUILT_DEB — refusing"; exit 1; }
+  ARCH="$VIBE_PUBLISH_ARCH"
 fi
 DRY_RUN=0
 # ★ An `if`, not `&&` — as the last command in the line, a REAL publish (no --dry-run) made the

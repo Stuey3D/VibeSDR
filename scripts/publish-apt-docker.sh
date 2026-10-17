@@ -41,12 +41,15 @@ DRY_RUN=""
 #     an old package for ever with apt reporting everything up to date — a stale architecture is
 #     invisible from the publishing end, which is exactly why it must not be opt-in.
 # ★ `--arch arm64` is there for a genuine hurry (see the emulation note below), not for habit.
-ARCHES="arm64 amd64 armhf"   # ★ armhf joined 2026-09-22 — cross-compiled, see below
+ARCHES="arm64 amd64 armhf i386"   # ★ armhf joined 2026-09-22 — cross-compiled; i386 2026-10-17 — built on the Lenovo
+# ★★ i386 IS 32-BIT x86 — Kiko's Atom N270 netbook in Brazil ran 11.0.4 built from source because apt
+#    had nothing for it, and the mission is exactly that machine (Stuart, 2026-10-17). SSE2 floor;
+#    preinst refuses a CPU without it. Built natively on the Lenovo like amd64 (see the refusal below).
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN="--dry-run" ;;
     --arch)    shift; ARCHES="${1//,/ }" ;;
-    *) echo "usage: $0 [--dry-run] [--arch arm64|amd64|armhf|'arm64 amd64 armhf']"; exit 1 ;;
+    *) echo "usage: $0 [--dry-run] [--arch arm64|amd64|armhf|i386|'arm64 amd64 armhf i386']"; exit 1 ;;
   esac
   shift
 done
@@ -135,18 +138,42 @@ echo "==> staged $(ls "$STAGE" | wc -l | tr -d ' ') SDRplay headers from $SDRPLA
 #     publish-apt.sh. Set it on the host and the compile is skipped for that arch; every check
 #     still runs, and the signing key stays here. Built for the emulated arch, which segfaults
 #     the compiler under qemu on a different file every run.
-# ★ STAGED INSIDE THE SOURCE MOUNT rather than bind-mounted on its own. A second -v for the file
-#   is the obvious way and it silently does not work: Docker Desktop shares a fixed set of host
-#   paths, so a mount outside them yields no file and the container reports the package "does not
-#   exist" — which reads as a missing build rather than a missing mount. $SRC_DIR is already
-#   mounted and already proven, so the file travels the way everything else does.
-PREBUILT_ENV=""; PREBUILT_STAGED=""
+# ★★★ SEVERAL PRE-BUILT PACKAGES, ONE PER x86 ARCHITECTURE (2026-10-17). With i386 beside amd64 there
+#     are two architectures the Mac cannot build, and a single VIBE_PREBUILT_DEB could only ever cover
+#     one of them per run — so a default run would have refused i386 or amd64 every time, and the
+#     "obvious" workaround is publishing them separately, which is the stale-architecture trap again.
+#     VIBE_PREBUILT_DEB now takes a SPACE-SEPARATED LIST and each file goes to the pass for its own
+#     architecture. scripts/build-x86-debs.sh builds both on the Lenovo and prints the exact line.
+# ★★ ROUTED BY THE CANONICAL FILENAME, vibeserver_<ver>-<rev>_<arch>.deb — and a file not named that
+#    way is refused here, because the indexer ignores it in the pool and the run still says
+#    "published:" (build_emulated_arch_on_real_hardware, trap 1). publish-apt.sh then asks the
+#    PACKAGE its Architecture: as well, so a renamed file cannot slip through either.
+HOSTARCH=$(uname -m); case "$HOSTARCH" in arm64|aarch64) HOSTARCH=arm64;; x86_64) HOSTARCH=amd64;; esac
+PREBUILT_STAGED_ALL=""
+prebuilt_for() {   # prebuilt_for <arch> — the staged path for that arch, or nothing
+  local f; for f in $PREBUILT_STAGED_ALL; do
+    case "$(basename "$f")" in *_"$1".deb) echo "$f"; return;; esac
+  done; }
 if [ -n "${VIBE_PREBUILT_DEB:-}" ]; then
-  [ -f "$VIBE_PREBUILT_DEB" ] || { echo "!! no such file: $VIBE_PREBUILT_DEB"; exit 1; }
-  PREBUILT_STAGED="$SRC_DIR/.prebuilt-$(basename "$VIBE_PREBUILT_DEB")"
-  cp "$VIBE_PREBUILT_DEB" "$PREBUILT_STAGED"
-  trap 'rm -f "$PREBUILT_STAGED"' EXIT
-  PREBUILT_ENV="-e VIBE_PREBUILT_DEB=/work/VibeSDR/$(basename "$PREBUILT_STAGED")"
+  for f in $VIBE_PREBUILT_DEB; do
+    [ -f "$f" ] || { echo "!! no such file: $f"; exit 1; }
+    case "$(basename "$f")" in
+      vibeserver_*-*_*.deb) ;;
+      *) echo "!! $f is not named vibeserver_<ver>-<rev>_<arch>.deb — the indexer would ignore it"; exit 1;;
+    esac
+    _a="$(basename "$f" .deb)"; _a="${_a##*_}"
+    [ -z "$(prebuilt_for "$_a")" ] || { echo "!! two pre-built packages for $_a"; exit 1; }
+    case " $ARCHES " in *" $_a "*) ;; *) echo "!! $f is for $_a, which this run does not publish (--arch '$ARCHES')"; exit 1;; esac
+    # ★ STAGED INSIDE THE SOURCE MOUNT rather than bind-mounted on its own. A second -v for the file
+    #   is the obvious way and it silently does not work: Docker Desktop shares a fixed set of host
+    #   paths, so a mount outside them yields no file and the container reports the package "does not
+    #   exist" — which reads as a missing build rather than a missing mount. $SRC_DIR is already
+    #   mounted and already proven, so the file travels the way everything else does.
+    _st="$SRC_DIR/.prebuilt-$(basename "$f")"
+    cp "$f" "$_st"
+    PREBUILT_STAGED_ALL="$PREBUILT_STAGED_ALL $_st"
+  done
+  trap 'rm -f $PREBUILT_STAGED_ALL' EXIT
 fi
 
 for A in $ARCHES; do
@@ -154,7 +181,7 @@ for A in $ARCHES; do
   DOCKERFILE="$SRC_DIR/vibeserver/linux/Dockerfile.build"
   PLATFORM="$A"
   CROSS_ENV=""
-  HOSTARCH=$(uname -m); case "$HOSTARCH" in arm64|aarch64) HOSTARCH=arm64;; x86_64) HOSTARCH=amd64;; esac
+  PREBUILT_ENV=""
   # ★★★ armhf IS A CROSS-COMPILE ON THE HOST'S OWN ARCHITECTURE — never an arm/v7 container.
   #     Apple Silicon cannot execute AArch32, so that would be qemu, the emulation that segfaults.
   #     Measured on the Pi 2 against its native build: 174% vs 174% of a core (-marm matters —
@@ -164,6 +191,19 @@ for A in $ARCHES; do
     DOCKERFILE="$SRC_DIR/vibeserver/linux/Dockerfile.cross-armhf"
     PLATFORM="$HOSTARCH"
     CROSS_ENV="-e VIBE_CROSS_ARCH=armhf"
+  fi
+  # ★★★ A PRE-BUILT PACKAGE IS INDEXED IN THE HOST'S OWN CONTAINER (2026-10-17). Nothing is compiled
+  #     on that pass — only dpkg-deb, dpkg-scanpackages and gpg, none of which care what architecture
+  #     they run on — so emulating the target just to index it bought a qemu image build (librtlsdr
+  #     compiled under emulation, ~1 GB more on a tight disk) and nothing else. VIBE_PUBLISH_ARCH
+  #     tells publish-apt.sh which architecture it is publishing; it still checks the package agrees.
+  _pb="$(prebuilt_for "$A")"
+  if [ -n "$_pb" ]; then
+    IMAGE="vibeserver-build:bookworm-$HOSTARCH"
+    DOCKERFILE="$SRC_DIR/vibeserver/linux/Dockerfile.build"
+    PLATFORM="$HOSTARCH"
+    CROSS_ENV=""
+    PREBUILT_ENV="-e VIBE_PREBUILT_DEB=/work/VibeSDR/$(basename "$_pb") -e VIBE_PUBLISH_ARCH=$A"
   fi
   echo "==> [$A] build image"
   docker build --platform "linux/$PLATFORM" -q \
@@ -195,12 +235,15 @@ for A in $ARCHES; do
   #    libc6 >= 2.38 onto a package meant for Debian 12). It is a live receiver but a private one
   #    with Stuart as the only listener, so building there disturbs nobody.
   #  ★ armhf is deliberately NOT covered: it cross-builds here reliably and has no box to go to.
-  if [ "$A" = "amd64" ] && [ "$PLATFORM" != "$HOSTARCH" ] && [ -z "${PREBUILT_ENV:-}" ]; then
-    echo "!! REFUSING to build amd64 under emulation — it has failed 3/3 and takes ~25 min to fail."
-    echo "!! Build it natively on the Lenovo/OWRX box (192.168.86.13, ~1 min) and pass the result:"
-    echo "!!   VIBE_PREBUILT_DEB=/path/to/vibeserver_<ver>-<rev>_amd64.deb $0"
+  #  ★★ i386 IS THE SAME CASE (2026-10-17): Apple Silicon runs no x86 at all, so a linux/386 container
+  #     here is qemu too. On the Lenovo it is native — an x86-64 CPU executes 32-bit code directly.
+  if { [ "$A" = "amd64" ] || [ "$A" = "i386" ]; } && [ "$HOSTARCH" != "amd64" ] && [ -z "${PREBUILT_ENV:-}" ]; then
+    echo "!! REFUSING to build $A under emulation — amd64 has failed 3/3 and takes ~25 min to fail."
+    echo "!! Build it natively on the Lenovo/OWRX box (192.168.86.13, ~1 min per arch):"
+    echo "!!   scripts/build-x86-debs.sh --rev <REV>        # builds amd64 AND i386, prints the line below"
+    echo "!!   VIBE_PREBUILT_DEB='/path/vibeserver_<ver>-<rev>_amd64.deb /path/vibeserver_<ver>-<rev>_i386.deb' $0"
     echo "!! See the memory note build_emulated_arch_on_real_hardware for the exact container run."
-    echo "!! ✗ Do not work around this by dropping amd64: publishing one arch hides the other."
+    echo "!! ✗ Do not work around this by dropping $A: publishing one arch hides the other."
     echo "!! (VIBE_ALLOW_EMULATION=1 overrides, if you have a reason qemu will behave today.)"
     [ -z "${VIBE_ALLOW_EMULATION:-}" ] && exit 1
   fi

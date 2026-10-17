@@ -14,6 +14,11 @@
 #    Do not "update" this to a newer base image.
 #
 # ★ arm64 native on Apple Silicon, so this is a real build and not emulation.
+# ★★ amd64 AND i386 FROM THIS SAME FILE, on the Lenovo (scripts/build-x86-debs.sh): `--platform
+#    linux/386` takes bookworm's i386 image and every library below for i386, natively — an x86-64
+#    CPU runs 32-bit code directly. ONE recipe for every architecture, so the i386 package cannot
+#    drift from amd64's library list. (uname -m in that container still says x86_64 — CMake keys
+#    32-bit x86 off the pointer size for that reason; see VIBE_X86_32.)
 FROM debian:bookworm-slim
 
 # ★★★ EVERY ONE OF THESE IS LOAD-BEARING, and the ones that look optional are the dangerous ones:

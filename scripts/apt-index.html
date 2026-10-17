@@ -54,8 +54,8 @@
   <p>Tested on Debian 13 (trixie) and Raspberry Pi OS on a Pi 500, and on Ubuntu 24.04 on an
      Intel i5. Anything <strong>arm64</strong> or <strong>amd64</strong> running Debian or Ubuntu
      should work &mdash; the install below is the same command on either.</p>
-  <p><strong>One package, every architecture</strong> &mdash; apt picks arm64, amd64 or armhf
-     (32-bit ARM) to suit the machine. Minimum confirmed hardware: <strong>Raspberry Pi 2</strong>
+  <p><strong>One package, every architecture</strong> &mdash; apt picks arm64, amd64, armhf
+     (32-bit ARM) or i386 (32-bit Intel/AMD, SSE2 or newer) to suit the machine. Minimum confirmed hardware: <strong>Raspberry Pi 2</strong>
      (quad-core ARMv7, 0.9&nbsp;GHz); 512&nbsp;MB of RAM recommended. 32-bit ARM needs NEON, so ARMv6
      boards (Pi Zero, Zero W, Pi 1) are not supported yet.</p>
   <p><strong>On Intel/AMD it runs the scalar path</strong>, which costs about

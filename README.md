@@ -106,12 +106,12 @@ Judge it on the feel. That's the part a screenshot can't show, and the part we c
 audio, Advanced RDS, DAB and DAB+, the decoders, an optional PIN, per-band gain ceilings and session
 limits. Several radios can sit behind one address.
 
-**Linux** (arm64, amd64 and armhf):
+**Linux** (arm64, amd64, armhf and i386):
 
 ```bash
 curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
-echo "deb [arch=arm64,amd64,armhf signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+echo "deb [arch=arm64,amd64,armhf,i386 signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
   | sudo tee /etc/apt/sources.list.d/vibesdr.list
 sudo apt update && sudo apt install vibeserver
 ```

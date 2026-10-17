@@ -6,13 +6,16 @@ Debian/Ubuntu/Raspberry Pi OS.
 
 ## Hardware
 
-One package for every architecture — apt picks **arm64**, **amd64** or **armhf** (32-bit ARM) to
-suit the machine. There is no separate "Lite" build on Linux.
+One package for every architecture — apt picks **arm64**, **amd64**, **armhf** (32-bit ARM) or
+**i386** (32-bit Intel/AMD) to suit the machine. There is no separate "Lite" build on Linux.
 
 - **Minimum confirmed hardware: Raspberry Pi 2** — quad-core ARMv7 at 0.9 GHz.
 - **RAM:** 256 MB will run it; **512 MB recommended** for headroom.
 - **32-bit ARM needs NEON** (ARMv7 or newer). ARMv6 boards — Pi Zero, Zero W, Pi 1 — are not
   supported yet; the package refuses to install there rather than fail at runtime.
+- **32-bit x86 needs SSE2** — any Pentium 4, Pentium M, Atom (the N270 netbooks included) or
+  Athlon 64. A Pentium III or Athlon XP has none, and the package refuses to install there rather
+  than fail at runtime. SDRplay publish no 32-bit x86 driver, so RSPs are not offered on i386.
 - Older or lower-end hardware will most likely run with restrictions: on a small machine the
   setup page measures what it can carry and switches heavy features off.
 
@@ -27,7 +30,7 @@ VibeServer needs** — there is no list of libraries to chase, and nothing to bu
 # 1. Trust the signing key and add the repository (once, ever)
 curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
-echo "deb [arch=arm64,amd64,armhf signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+echo "deb [arch=arm64,amd64,armhf,i386 signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
   | sudo tee /etc/apt/sources.list.d/vibesdr.list
 
 # 2. Install
@@ -38,6 +41,8 @@ sudo apt install vibeserver
 > **Naming the architectures is deliberate** — it lists exactly what we publish. ★ `armhf` joined
 > on 2026-09-22 (32-bit Raspberry Pi OS on a Pi 2/3/4). An older line without it still works on a
 > 64-bit machine, but a 32-bit Pi needs `armhf` in the list or apt will never see its package.
+> `i386` joined on 2026-10-17 for the same reason: a 32-bit-only x86 machine (an Atom N270
+> netbook) sees nothing without it.
 >
 > ★ It says `arm64,amd64`, not `arm64`. It was `arm64` alone from before x86 was supported, and
 > that is not merely untidy on an Intel or AMD box — it tells apt to look for arm64 packages only,

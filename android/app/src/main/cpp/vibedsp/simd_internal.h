@@ -38,7 +38,12 @@
 //    and proven; a "tidy" shared abstraction would put every Pi and every phone at risk to save
 //    some duplication in a 200-line header. The SSE branches sit alongside, and the SCALAR path
 //    remains the reference both are checked against (VIBE_FORCE_SCALAR builds it anywhere).
-#if (defined(__x86_64__) || defined(_M_X64)) && !defined(VIBE_FORCE_SCALAR)
+// ★★ AND ON 32-BIT x86 WHEN THE COMPILER IS TOLD SSE2 (2026-10-17). The i386 package is built with
+//    -msse2 -mfpmath=sse (see vibeserver/CMakeLists.txt, VIBE_X86_32) and preinst refuses a CPU
+//    without it, so __SSE2__ is a promise there too. Keyed on __x86_64__ alone, an Atom N270 would
+//    have run the SCALAR kernels — the very machines that most need the four-wide ones. Nothing below
+//    uses a 64-bit-only intrinsic; a plain i686 build (no -msse2) still gets the scalar path.
+#if (defined(__x86_64__) || defined(_M_X64) || defined(__SSE2__)) && !defined(VIBE_FORCE_SCALAR)
   #include <emmintrin.h>          // SSE2
   #define VIBE_SSE 1
 #endif

@@ -108,6 +108,32 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv6")
   add_compile_options(-marm -march=armv6 -mfpu=vfp)
   link_libraries(atomic)
 endif()
+# ── 32-bit x86 (2026-10-17) — the i386 package: Atom N270 netbooks, Pentium M laptops ──────────
+# ★★★ KEYED ON THE POINTER SIZE, NOT CMAKE_SYSTEM_PROCESSOR. The package is built in a linux/386
+#     container on a 64-bit kernel, and `uname -m` there still says x86_64 — so a processor test
+#     would take this for amd64 and bundle the amd64 cloudflared, a tunnel that can never start on
+#     the machine it ships to (the 32-bit ARM branch below had exactly that bug once).
+# ★★★ SSE2 IS THE FLOOR (Stuart, 2026-10-17: "keep the sse2 requirement"). Debian's i386 compiler
+#     defaults to plain i686 with x87 floating point — every float through the 80-bit stack, and
+#     none of the SSE2 kernels in vibedsp or the DAB headers compiled in. -mfpmath=sse moves scalar
+#     float AND double into SSE registers too. That reaches the Pentium M (2003, SSE2 only) and
+#     every Atom; it excludes the Pentium III and Athlon XP, which preinst refuses in words rather
+#     than letting them die "Illegal instruction" on the first DSP call.
+# ★★ -march=i686, NOT pentium4: the ISA comes from the explicit -msse2, and -march=pentium4 would
+#    also TUNE for NetBurst — the wrong pipeline for the in-order Atoms and the Pentium M this
+#    package is for. -mtune=generic leaves scheduling neutral.
+# ★★ SSE3 WAS MEASURED AND IS NOT WORTH THE PENTIUM M (2026-10-17, vibeserver-bench on the Lenovo,
+#    5 interleaved rounds per build): -msse3 changed 54 of 266k instructions and total CPU by -0.2 %
+#    (run-to-run spread ±0.6 %); -mssse3 -0.3 %; amd64 -msse3 -0.2 %. The hot loops are hand-written
+#    SSE2 intrinsics, which an -msse3 flag does not rewrite. So no higher floor and no runtime dispatch.
+#    What DOES matter is that those intrinsics are compiled in at all: the vibedsp gate used to be
+#    __x86_64__ only, and opening it to __SSE2__ took i386 WFM 2.4 MS/s from 7.7 to 4.9 % of a core.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86|x86_64|AMD64)$")
+  set(VIBE_X86_32 ON)
+  add_compile_options(-march=i686 -msse2 -mfpmath=sse -mtune=generic)
+  message(STATUS "32-bit x86: -march=i686 -msse2 -mfpmath=sse (SSE2 floor)")
+endif()
 
 add_library(vibedsp STATIC
     ${VIBEDSP_SRC}
@@ -333,7 +359,13 @@ target_link_libraries(vibeserver_core PUBLIC "${RTLSDR_LIB}" "${USB_LIB}")
 # So we take the HEADERS (for the structs and typedefs) and link NOTHING. A machine without
 # the API simply reports zero SDRplay devices.
 find_path(SDRPLAY_INC sdrplay_api.h HINTS /usr/local/include /Library/SDRplayAPI/3.15.1/include)
-if(SDRPLAY_INC)
+if(VIBE_X86_32)
+  # ★★ SDRplay PUBLISHES NO 32-BIT x86 API (3.x is x86-64, ARM32 and ARM64 only), so on i386 there is
+  #    no library an owner could ever install for us to dlopen. Compiled OUT rather than left to find
+  #    nothing — "a control that only works on one radio should not be there", and the same goes for a
+  #    radio that cannot work on the machine at all. Not a strict-build failure: there is nothing missing.
+  message(STATUS "SDRplay: not built on 32-bit x86 — SDRplay ships no i386 API")
+elseif(SDRPLAY_INC)
   message(STATUS "SDRplay headers: ${SDRPLAY_INC} (runtime dlopen, not linked)")
   target_include_directories(vibeserver_core PUBLIC "${SDRPLAY_INC}")
   target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_SDRPLAY)
@@ -723,7 +755,11 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #  ★ Absent = a package WITHOUT the tunnel rather than a broken build: someone building from a
   #    fresh clone has not run fetch.sh, and their server should still compile and run.
   set(_vibe_cf_src "${CMAKE_CURRENT_SOURCE_DIR}/../tools/cloudflared-desktop/bin")
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+  if(VIBE_X86_32)
+    # ★ Before the processor tests, for the reason given at VIBE_X86_32: uname says x86_64 in the
+    #   linux/386 build container.
+    set(_vibe_cf "${_vibe_cf_src}/cloudflared-linux-386")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
     set(_vibe_cf "${_vibe_cf_src}/cloudflared-linux-arm64")
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
     # ★ 32-bit ARM (VibeServer Lite: a Pi 2, an old Armbian box). This used to fall to the else()
