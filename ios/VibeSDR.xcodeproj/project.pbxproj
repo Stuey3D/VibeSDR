@@ -26,6 +26,7 @@
 		AA000002000000000000EE13 /* VibeWatchModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE11 /* VibeWatchModule.swift */; };
 		AA000007000000000000FF13 /* VibeTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000FF11 /* VibeTranscriber.swift */; };
 		AA000007000000000000FF16 /* TranscribePlaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000FF15 /* TranscribePlaces.swift */; };
+		AA000007000000000000FF18 /* LanguageID.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000FF17 /* LanguageID.swift */; };
 		AA000007000000000000FF14 /* VibeTranscriber.m in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000FF12 /* VibeTranscriber.m */; settings = {COMPILER_FLAGS = "-fno-modules"; }; };
 		AA000002000000000000EE14 /* VibeWatchModule.m in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE12 /* VibeWatchModule.m */; settings = {COMPILER_FLAGS = "-fno-modules"; }; };
 		AA000002000000000000EE33 /* WatchSpectrumForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */; };
@@ -117,6 +118,7 @@
 		AA000002000000000000EE11 /* VibeWatchModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibeWatchModule.swift; path = VibeSDR/VibeWatchModule.swift; sourceTree = "<group>"; };
 		AA000007000000000000FF11 /* VibeTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibeTranscriber.swift; path = VibeSDR/VibeTranscriber.swift; sourceTree = "<group>"; };
 		AA000007000000000000FF15 /* TranscribePlaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TranscribePlaces.swift; path = VibeSDR/TranscribePlaces.swift; sourceTree = "<group>"; };
+		AA000007000000000000FF17 /* LanguageID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LanguageID.swift; path = VibeSDR/LanguageID.swift; sourceTree = "<group>"; };
 		AA000007000000000000FF12 /* VibeTranscriber.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VibeTranscriber.m; path = VibeSDR/VibeTranscriber.m; sourceTree = "<group>"; };
 		AA000002000000000000EE12 /* VibeWatchModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VibeWatchModule.m; path = VibeSDR/VibeWatchModule.m; sourceTree = "<group>"; };
 		AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchSpectrumForwarder.swift; path = VibeSDR/WatchSpectrumForwarder.swift; sourceTree = "<group>"; };
@@ -163,6 +165,7 @@
 				AA000002000000000000EE12 /* VibeWatchModule.m */,
 				AA000007000000000000FF11 /* VibeTranscriber.swift */,
 				AA000007000000000000FF15 /* TranscribePlaces.swift */,
+				AA000007000000000000FF17 /* LanguageID.swift */,
 				AA000007000000000000FF12 /* VibeTranscriber.m */,
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
 				F11748442D0722820044C1D9 /* VibeSDR-Bridging-Header.h */,
@@ -541,6 +544,7 @@
 				AA000002000000000000EE14 /* VibeWatchModule.m in Sources */,
 				AA000007000000000000FF13 /* VibeTranscriber.swift in Sources */,
 				AA000007000000000000FF16 /* TranscribePlaces.swift in Sources */,
+				AA000007000000000000FF18 /* LanguageID.swift in Sources */,
 				AA000007000000000000FF14 /* VibeTranscriber.m in Sources */,
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
 				59A08D71697B2308CF571DCA /* ExpoModulesProvider.swift in Sources */,

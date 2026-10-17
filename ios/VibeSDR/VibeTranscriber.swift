@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import Speech
 import Translation
+import NaturalLanguage
 import SwiftUI
 
 /* ★★★ ON-DEVICE TRANSCRIPTION + TRANSLATION (V12, experimental). Brief: briefs/BRIEF-live-transcription-translation.md.
@@ -14,10 +15,12 @@ import SwiftUI
  *     the device; there is no fallback to a server recogniser, ever. Older iOS: the key is not drawn at all.
  *
  *  ★★ APPLE HAS NO SPOKEN-LANGUAGE IDENTIFICATION (checked in the iOS 27 SDK — Speech has a SpeechDetector for
- *     voice activity, nothing for language). So AUTO is done the honest way: up to four transcribers, one per
- *     candidate language, listen to the SAME audio for the first few phrases, and the one that is most confident
- *     about what it heard wins. A wrong-language model still produces words — it just does not believe them.
- *     Candidates are only languages whose speech model is already on the phone plus the phone's own language:
+ *     voice activity, nothing for language). So AUTO brute-forces it (rewritten 2026-10-17 night from the bake-off,
+ *     docs/v12/LANGUAGE-ID-BAKEOFF.md): every language whose model is on the device hears the same buffered 10 s of
+ *     speech, and rule H2 (LanguageID.swift — confidence × NaturalLanguage's reading of each transcript × the other
+ *     models' vote) names it, or names nothing. A wrong-language model still writes words — often the RIGHT language's
+ *     words, confidently, which is why confidence alone picked wrong on 60 % of English. Then ONE live transcriber runs
+ *     in that language and a background check switches only on clear, repeated evidence.
  *     AUTO never downloads anything silently. Choosing a language explicitly downloads its model, and says so.
  *
  *  ★ Thread priority rule (Network > Audio > Spectrum > Decoders): feed() is called on audioQ and only copies
@@ -133,7 +136,8 @@ class VibeTranscriber: RCTEventEmitter {
       guard SpeechTranscriber.isAvailable else {
         resolve(["available": false, "reason": "On-device speech recognition is not available on this device"]); return
       }
-      await SpeechEngines.releaseInstalled()
+      // ★ No releasing here any more (2026-10-17 night): the places the app KEEPS are put right by keep(), which JS
+      //   calls with the ★ list once it has these capabilities (SpeechEngines.reconcileKept).
       let supported = await SpeechEngines.supportedLocales()
       let installed = await SpeechEngines.installedIds()
       let here = Locale.current
@@ -152,26 +156,29 @@ class VibeTranscriber: RCTEventEmitter {
                //   en-GB) — the bare code would be Apple's default variant, not Kiko's Brazilian Portuguese.
                "deviceTranslateTo": await SpeechEngines.deviceTranslateTarget(),
                // ★ TRANSLATE TO is a list (Stuart, 2026-10-17: "that button for english needs to be a list too for
-               //   people who are multilingual themselves") — every language Apple's Translation offers.
+               //   people who are multilingual themselves") — every language Apple's Translation offers. JS folds it to
+               //   one row per language (src/services/translateTargets.ts).
                "translateLanguages": await SpeechEngines.translateTargets(),
                "languages": langs])
     }
   }
 
-  /// language: "auto" or a BCP-47 id. translateTo: "" = off, else a language code ("en"). options: JSON
-  /// { understood: ["fr"] } — the languages the user reads without translation (TxOptions).
-  @objc func start(_ language: String, translateTo: String, options: String) {
+  /// language: "auto" (or "auto:zh,pt-BR,…" — the prior order from JS) or a BCP-47 id. translateTo: "" = off, else a
+  /// language id ("en", "pt-BR"). ★ No options any more: LANGUAGES I UNDERSTAND went on 2026-10-17 (Stuart: "not sure
+  /// what the I understand thing is").
+  @objc func start(_ language: String, translateTo: String) {
     guard #available(iOS 26.0, *) else { emit(["type": "error", "text": "Needs iOS 26 or later"]); return }
     (engineBox as? TranscribeEngine)?.stop()
-    let eng = TranscribeEngine(owner: self, language: language, translateTo: translateTo, options: TxOptions(options))
+    let eng = TranscribeEngine(owner: self, language: language, translateTo: translateTo)
     engineBox = eng
     eng.start()
   }
 
-  /// ★ DOWNLOAD… in the language row (Stuart, 2026-10-15: "an option to pop up the language downloader ourselves").
+  /// ★ GET in the language row (Stuart, 2026-10-15: "an option to pop up the language downloader ourselves").
   /// Fetches a language's speech model without starting to listen — so AUTO can pick it from then on — and, when a
   /// translation target is set, puts up Apple's own translation-pack sheet. Resolves { ok, text } for the box.
-  @objc func download(_ language: String, translateTo: String,
+  /// `keep`: a ★ language (or the phone's own) — it KEEPS its place; any other GET gives the place straight back.
+  @objc func download(_ language: String, translateTo: String, keep: Bool,
                       resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     guard #available(iOS 26.0, *) else { resolve(["ok": false, "text": "Needs iOS 26 or later"]); return }
     Task {
@@ -182,11 +189,13 @@ class VibeTranscriber: RCTEventEmitter {
       let nm = Locale.current.localizedString(forLanguageCode: code) ?? code
       let m = await SpeechEngines.module(for: loc)
       do {
-        if !(await SpeechEngines.isPresent(loc, m)) { try await SpeechEngines.fetch(loc, m) }
+        if !(await SpeechEngines.isPresent(loc, m)) { try await SpeechEngines.fetch(loc, m, keep: keep) }
+        else if keep { await SpeechEngines.reserve(loc) }
       } catch {
         resolve(["ok": false, "text": "Could not download \(nm): \(error.localizedDescription)"]); return
       }
-      var text = "\(nm) is saved on this device — AUTO can now pick it"
+      var text = keep ? "\(nm) is kept on this device — AUTO can now pick it"
+                      : "\(nm) is saved on this device — AUTO can now pick it"
       if !translateTo.isEmpty, code != TranscribePlaces.base(translateTo) {
         let dst = Locale.Language(identifier: translateTo)
         let dn = Locale.current.localizedString(forIdentifier: translateTo) ?? translateTo
@@ -202,9 +211,18 @@ class VibeTranscriber: RCTEventEmitter {
     }
   }
 
-  /* ★ There is no REMOVE any more (2026-10-17). It existed to give back one of Apple's 5 places when a GET was
-   *   refused; downloads no longer keep a place (SpeechEngines.fetch), so it would only ever release nothing — a dead
-   *   control (AGENTS.md). Apple offers no "delete this model now"; iOS frees a released model's space itself. */
+  /// ★★ THE 5 KEPT PLACES (Stuart, 2026-10-17 night): the phone's language + up to 4 ★ languages. `languages`: the ★
+  /// list as locale ids, in order. Reserves the ★ ones that are on the device, keeps the phone's language if this app
+  /// holds it, and gives back every other place this app holds. Resolves { kept: [ids] }. Called by JS at launch
+  /// (once capabilities and the ★ list are known) and whenever a ★ changes.
+  @objc func keep(_ languages: [String], resolver resolve: @escaping RCTPromiseResolveBlock,
+                  rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard #available(iOS 26.0, *) else { resolve(["kept": []]); return }
+    Task { resolve(["kept": await SpeechEngines.reconcileKept(languages)]) }
+  }
+
+  /* ★ There is no REMOVE (2026-10-17). Apple offers no "delete this model now" — un-starring gives the place back and
+   *   the system tidies the model away when it wants; languages are removed in the system settings. */
 
   /// The dial, for SSB auto-tune of the recogniser's feed ('usb'/'lsb' arm it; any change resets it).
   @objc func tuning(_ mode: String, freqHz: Double) {
@@ -215,17 +233,6 @@ class VibeTranscriber: RCTEventEmitter {
     guard #available(iOS 26.0, *) else { return }
     (engineBox as? TranscribeEngine)?.stop()
     engineBox = nil
-  }
-}
-
-/// start() options from JS: { understood: ["fr"] } (JSON; absent or bad = none).
-struct TxOptions {
-  /// Base codes the user reads without translation (Stuart, 2026-10-17: multilingual users). The target always is.
-  var understood: Set<String> = []
-  init(_ json: String) {
-    guard let d = json.data(using: .utf8),
-          let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
-    understood = Set((o["understood"] as? [String] ?? []).map { TranscribePlaces.base($0) })
   }
 }
 
@@ -257,9 +264,7 @@ enum SpeechEngines {
   /* ★★ A LANGUAGE ALREADY ON THE DEVICE RUNS WITHOUT A PLACE. Measured 2026-10-16 on macOS 27's Speech framework (the
    *  same one iOS 26/27 ships) with the app's exact SpeechTranscriber AND DictationTranscriber configurations: a binary
    *  holding NO reservation transcribed en-GB and nl-BE speech correctly. status(forModules:) said `.supported` for
-   *  them — it reports THIS app's reservation, not whether the model is on the device; installedLocales does that.
-   *  ★★★ And since 2026-10-17 a language this app downloads is the same: see `fetch` below. (Before, each download
-   *  KEPT one of Apple's 5 places and a full set removed the least used — gone, with TranscribePlaces.decide.) */
+   *  them — it reports THIS app's reservation, not whether the model is on the device; installedLocales does that. */
   /// The model is on the device (any app or the system put it there) — or this app's own status says installed.
   static func isPresent(_ loc: Locale, _ m: any SpeechModule) async -> Bool {
     if await installedIds().contains(loc.identifier(.bcp47)) { return true }
@@ -270,36 +275,80 @@ enum SpeechEngines {
     return Locale.current.localizedString(forLanguageCode: c) ?? c
   }
 
-  /* ★★★ SAVED TO THE DEVICE, NOT KEPT IN A PLACE (measured 2026-10-17 on macOS 27, memory
-   *  speech_models_release_after_download). A model is downloaded under a reservation — Apple's API needs one — and the
-   *  reservation is RELEASED straight after: the model stays installed and a process holding NO reservation transcribed
-   *  Polish word-perfect. Stuart: "that way we can offer the button to save it to the system no 5 slot weirdness".
-   *  So the 5-place cap only limits downloads IN FLIGHT, and nothing is ever removed to make room.
+  /* ★★★ KEPT, OR SAVED AND RELEASED (Stuart, 2026-10-17 night — the third answer that day, and the measured one).
+   *  A model is downloaded under a reservation — Apple's API needs one, and `maximumReservedLocales` is 5 per app.
+   *  Released straight after, it stays installed and runs with no place held (measured: Polish word-perfect) — BUT the
+   *  system tidies released models away: of 13 locales downloaded and released, ru, ar, ro, id, uk, nl-NL and the Indian
+   *  set were purged within minutes, with 12 GB free (memory speech_models_release_after_download). So the places are
+   *  spent deliberately: THE PHONE'S LANGUAGE + UP TO 4 ★ LANGUAGES ARE KEPT; every other GET downloads and releases
+   *  (it works until the system tidies it, then the list shows GET again). No REMOVE anywhere.
    *  ★ The assets must be fetched for the app's EXACT module (`module(for:)`): a `.longDictation` download left this
-   *    configuration with no audio format — nothing ran.
-   *  ★★ AND THE SYSTEM DOES TIDY RELEASED MODELS AWAY (measured later on 2026-10-17: of 13 locales downloaded and
-   *    released, ru, ar, ro, id, uk, nl-NL and the Indian set were purged almost at once; pl-PL, released and then
-   *    used, survived). Kept anyway — Stuart's decision, 2026-10-17: "if we are abusing the system level downloads to
-   *    get around the 5 then we don't need the remove button. We do however need to inform users that they will take
-   *    space, they will need to be removed in the system settings, and recently used ones may need to wait before
-   *    removal." So no REMOVE, no promise that a language stays: the list reads installedLocales every time and a
-   *    tidied-away language shows GET again; the GET confirm and the help say the rest. */
-  /// Downloads `loc`'s model for `m` (the app's module) and gives the place straight back.
-  static func fetch(_ loc: Locale, _ m: any SpeechModule) async throws {
-    await releaseInstalled()                     // a place must be free for the download itself
+   *    configuration with no audio format — nothing ran. */
+  /// Downloads `loc`'s model for `m` (the app's module). `keep`: hold the place; else give back the one it took.
+  static func fetch(_ loc: Locale, _ m: any SpeechModule, keep: Bool) async throws {
+    let before = Set(await AssetInventory.reservedLocales.map { $0.identifier(.bcp47) })
+    let b = TranscribePlaces.base(loc.identifier(.bcp47))
+    let held = before.contains { TranscribePlaces.base($0) == b }
+    // ★ Every place kept (4 ★ + the phone's language): say so rather than take one from a kept language — a released
+    //   language can be purged while the download runs.
+    if !held && before.count >= AssetInventory.maximumReservedLocales { throw PlacesFull() }
     if let req = try await AssetInventory.assetInstallationRequest(supporting: [m]) {
       try await req.downloadAndInstall()
     }
-    _ = await AssetInventory.release(reservedLocale: loc)
-    await releaseInstalled()                     // ★ and any place Apple filed under another spelling of the locale
-  }
-  /// Gives back every place whose model is installed — those run without one. This is also how places held by
-  /// builds before 2026-10-17 (which KEPT a place per language) are handed back: the first list read frees them.
-  static func releaseInstalled() async {
-    let have = await installedIds()
-    for l in await AssetInventory.reservedLocales where have.contains(l.identifier(.bcp47)) {
-      _ = await AssetInventory.release(reservedLocale: l)
+    guard !keep else { return }
+    // Give back only what this download took (Apple may file it under another spelling of the locale).
+    for l in await AssetInventory.reservedLocales {
+      let id = l.identifier(.bcp47)
+      if !before.contains(id) && TranscribePlaces.base(id) == b { _ = await AssetInventory.release(reservedLocale: l) }
     }
+  }
+  struct PlacesFull: LocalizedError {
+    var errorDescription: String? {
+      "every place is kept for your \u{2605} languages and the phone\u{2019}s \u{2014} take a \u{2605} off one to GET another"
+    }
+  }
+  /// Holds a place for a language already on the device (a ★ one). Quietly does nothing when full or refused.
+  static func reserve(_ loc: Locale) async {
+    let b = TranscribePlaces.base(loc.identifier(.bcp47))
+    let now = await AssetInventory.reservedLocales
+    if now.contains(where: { TranscribePlaces.base($0.identifier(.bcp47)) == b }) { return }
+    guard now.count < AssetInventory.maximumReservedLocales else { return }
+    _ = try? await AssetInventory.reserve(locale: loc)
+  }
+  /* ★★ RECONCILE (Stuart, 2026-10-17 night): kept = the phone's language + the ★ list. "Release anything else this app
+   *  holds; reserve ★ ones that aren't."
+   *  ★ THE PHONE'S LANGUAGE keeps a place only if THIS APP holds one for it — i.e. we downloaded it. A model the
+   *    system provides (the usual case: the phone's dictation language) is installed with no reservation of ours and
+   *    needs no place. (Unprovable from the API: a phone language an older build downloaded and released looks
+   *    system-provided too, and so stays unreserved until it is GOT or starred again.)
+   *  ★ A ★ language not on the device (never got, or tidied away) is left for GET — reserving nothing installs nothing. */
+  static func reconcileKept(_ starIds: [String]) async -> [String] {
+    let installed = await installedLocales()
+    var held = await AssetInventory.reservedLocales
+    var keepBases: [String] = []
+    for id in starIds.prefix(4) where !keepBases.contains(TranscribePlaces.base(id)) { keepBases.append(TranscribePlaces.base(id)) }
+    if let phone = await supportedLocale(equivalentTo: Locale.current) {
+      let pb = TranscribePlaces.base(phone.identifier(.bcp47))
+      if held.contains(where: { TranscribePlaces.base($0.identifier(.bcp47)) == pb }), !keepBases.contains(pb) { keepBases.append(pb) }
+    }
+    // Give back everything else — and a second spelling of a kept language (one place per language).
+    var seen = Set<String>()
+    for l in held {
+      let b = TranscribePlaces.base(l.identifier(.bcp47))
+      if !keepBases.contains(b) || !seen.insert(b).inserted { _ = await AssetInventory.release(reservedLocale: l) }
+    }
+    held = await AssetInventory.reservedLocales
+    for id in starIds.prefix(4) {
+      let b = TranscribePlaces.base(id)
+      if held.contains(where: { TranscribePlaces.base($0.identifier(.bcp47)) == b }) { continue }
+      let ins = installed.first(where: { $0.identifier(.bcp47) == id })
+             ?? installed.first(where: { TranscribePlaces.base($0.identifier(.bcp47)) == b })
+      guard let loc = ins, held.count < AssetInventory.maximumReservedLocales else { continue }
+      if (try? await AssetInventory.reserve(locale: loc)) == true { held.append(loc) }
+    }
+    let kept = await AssetInventory.reservedLocales.map { $0.identifier(.bcp47) }
+    NSLog("[VibeTranscriber] kept places: %@ (★ %@)", kept.joined(separator: ", "), starIds.joined(separator: ", "))
+    return kept
   }
   /// TRANSLATE TO's list: every language Apple's Translation offers, as ids JS can store ('pt' = Brazilian, 'pt-PT',
   /// 'zh' / 'zh-TW'), named, and `installed` where the pack from the phone's language is already on the device.
@@ -341,6 +390,122 @@ enum SpeechEngines {
     return DictationTranscriber(locale: loc, contentHints: [], transcriptionOptions: [.punctuation],
                                 reportingOptions: [.volatileResults], attributeOptions: [.transcriptionConfidence])
   }
+  /// One confidence per word (a run's confidence for each space-separated word in it) — the bake-off's count.
+  static func confidences(_ rt: AttributedString) -> [Double] {
+    var cs: [Double] = []
+    for run in rt.runs {
+      if let c = run[AttributeScopes.SpeechAttributes.ConfidenceAttribute.self] {
+        let w = rt[run.range].characters.split(whereSeparator: { $0 == " " }).count
+        for _ in 0..<max(1, w) { cs.append(c) }
+      }
+    }
+    return cs
+  }
+}
+
+// MARK: - Language scorer (AUTO's brute force)
+
+/* ★★★ EVERY LANGUAGE ON THE DEVICE, ON THE SAME 10 s OF SPEECH (V12, 2026-10-17; docs/v12/LANGUAGE-ID-BAKEOFF.md).
+ *  A fresh analyzer per language per window, at most 2 at a time (2-wide measured 1.64-1.83× faster; more is not
+ *  worth it), each with the app's exact module. Keeping analyzers warm was measured to save nothing.
+ *  ★★ THE API TRAP: finalize(through:) on an analyzer started with start(inputSequence:) HUNG FOREVER. So: one buffer
+ *     through analyzeSequence(), then finalizeAndFinish(through:) the time it returned — and a 20 s guard that cancels
+ *     a run that still does not finish, so one stuck model can never wedge AUTO.
+ *  Then NaturalLanguage reads each transcript, and LanguageID.swift (pure, tested against the bake-off) scores it. */
+@available(iOS 26.0, *)
+enum LanguageScorer {
+  struct Measured: Sendable {
+    let heard: LanguageID.Heard
+    let text: String
+    let seconds: Double          // this language's analysis, wall (preparation + analysis)
+  }
+
+  static func score(_ samples: [Float], rate: Double, locales: [Locale], width: Int, priority: TaskPriority) async -> [Measured] {
+    await withTaskGroup(of: Measured?.self) { g in
+      var next = 0, out: [Measured] = []
+      func add() {
+        guard next < locales.count else { return }
+        let l = locales[next]; next += 1
+        g.addTask(priority: priority) { await one(l, samples, rate, priority) }
+      }
+      for _ in 0..<max(1, width) { add() }
+      for await m in g { if let m { out.append(m) }; add() }
+      return out
+    }
+  }
+
+  static func one(_ loc: Locale, _ samples: [Float], _ rate: Double, _ priority: TaskPriority) async -> Measured? {
+    let t0 = Date()
+    let m = await SpeechEngines.module(for: loc)
+    guard let fmt = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [m]),
+          let buf = buffer(samples, rate: rate, to: fmt) else { return nil }
+    let an = SpeechAnalyzer(modules: [m], options: .init(priority: priority, modelRetention: .whileInUse))
+    let collect = Task { () -> (String, [Double]) in
+      var texts: [String] = [], cs: [Double] = []
+      do {
+        if let st = m as? SpeechTranscriber {
+          for try await r in st.results where r.isFinal { texts.append(String(r.text.characters)); cs += SpeechEngines.confidences(r.text) }
+        } else if let dt = m as? DictationTranscriber {
+          for try await r in dt.results where r.isFinal { texts.append(String(r.text.characters)); cs += SpeechEngines.confidences(r.text) }
+        }
+      } catch {}
+      return (texts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines), cs)
+    }
+    let watchdog = Task {
+      try? await Task.sleep(nanoseconds: 20_000_000_000)
+      if !Task.isCancelled { await an.cancelAndFinishNow() }
+    }
+    do {
+      try await an.prepareToAnalyze(in: fmt)
+      let (stream, cont) = AsyncStream<AnalyzerInput>.makeStream()
+      cont.yield(AnalyzerInput(buffer: buf)); cont.finish()
+      if let last = try await an.analyzeSequence(stream) { try await an.finalizeAndFinish(through: last) }
+      else { await an.cancelAndFinishNow() }
+    } catch {
+      await an.cancelAndFinishNow()
+    }
+    let (text, cs) = await collect.value
+    watchdog.cancel()
+    let secs = Double(samples.count) / max(1, rate)
+    let (nl, top) = cs.isEmpty ? (0.0, "") : nlOwn(text, loc)
+    let heard = LanguageID.Heard(id: loc.identifier(.bcp47), words: cs.count,
+                                 meanConf: cs.isEmpty ? 0 : cs.reduce(0, +) / Double(cs.count),
+                                 tokensPerSecond: Double(cs.count) / max(0.1, secs), nlOwn: nl, nlTop: top)
+    return Measured(heard: heard, text: text, seconds: Date().timeIntervalSince(t0))
+  }
+
+  /// NaturalLanguage's probability that `text` is in `loc`'s language, and its top language (raw). Mandarin counts
+  /// Simplified or Traditional, Cantonese Traditional (the bake-off's lidbench, exactly).
+  static func nlOwn(_ text: String, _ loc: Locale) -> (Double, String) {
+    let r = NLLanguageRecognizer()
+    r.processString(text)
+    let h = r.languageHypotheses(withMaximum: 5)
+    let code = loc.language.languageCode?.identifier ?? ""
+    let want: NLLanguage = code == "zh" ? .simplifiedChinese : code == "yue" ? .traditionalChinese : NLLanguage(rawValue: code)
+    var p = h[want] ?? 0
+    if code == "zh" { p = max(p, h[.traditionalChinese] ?? 0) }
+    return (p, h.max { $0.value < $1.value }?.key.rawValue ?? "")
+  }
+
+  /// The window (16 kHz float mono) in the model's own format.
+  static func buffer(_ s: [Float], rate: Double, to fmt: AVAudioFormat) -> AVAudioPCMBuffer? {
+    guard !s.isEmpty,
+          let src = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false),
+          let b = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: AVAudioFrameCount(s.count)) else { return nil }
+    b.frameLength = AVAudioFrameCount(s.count)
+    s.withUnsafeBufferPointer { _ = memcpy(b.floatChannelData![0], $0.baseAddress!, s.count * MemoryLayout<Float>.size) }
+    if fmt == src { return b }
+    guard let conv = AVAudioConverter(from: src, to: fmt),
+          let out = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(Double(s.count) * fmt.sampleRate / rate) + 4096)
+    else { return nil }
+    var fed = false
+    var err: NSError?
+    conv.convert(to: out, error: &err) { _, st in
+      if fed { st.pointee = .endOfStream; return nil }
+      fed = true; st.pointee = .haveData; return b
+    }
+    return err == nil && out.frameLength > 0 ? out : nil
+  }
 }
 
 // MARK: - Engine
@@ -349,47 +514,46 @@ enum SpeechEngines {
 final class TranscribeEngine {
   private weak var owner: VibeTranscriber?
   private let language: String
-  /// AUTO's EiBi hint ('auto:zh,tr' from JS): what the schedule says is on this frequency now — weighed first.
+  /// AUTO's prior order from JS ('auto:zh,pt-BR,en'): EiBi's languages for this frequency, the receiver's main language,
+  /// the ★ list, the receiver area's (src/services/transcribeOrder.ts). It orders the shortlist and breaks ties — it
+  /// never decides (EiBi was wrong for 3 of the frequencies recorded for the bake-off).
   private let hints: [String]
   private let translateTo: String
-  private let options: TxOptions
   /// Everything below is touched only on `q`.
   private let q = DispatchQueue(label: "com.vibesdr.transcribe", qos: .utility)
-  private var lanes: [Lane] = []
-  private var chosen: Lane?
-  private var probing = false
-  private var probeStart = Date()
   private var stopped = false
-  /* ★★ THE RUNNER-UP KEEPS LISTENING (Stuart, 2026-10-15: an SSB contact in another language whose call signs were
-   *    said in English was settled as English, and a French station as German). Detection decides on a few phrases,
-   *    and a few phrases can mislead. So the second-best language of the deciding round stays on beside the chosen
-   *    one, and if it is clearly the more confident over the last 40 words it takes over — the language follows the
-   *    audio instead of being fixed by the first sentence. Costs one extra speech model while AUTO runs. */
-  private var challenger: Lane?
-  private static let overtake = 0.08          // the challenger's lead (mean confidence) that makes it the language
-  private var candidates: [Locale] = []
-  /* ★★ ROUNDS OF FOUR (Stuart, 2026-10-15). Apple has no language identifier and running more than ~4 models at once
-   *    is too much for a phone, so AUTO tries the pool four at a time — EiBi's languages for this frequency, the
-   *    receiver's main language, the user's ★ preferred ones, the receiver area's, the phone's, then every other
-   *    language ON PHONE (order: begin()) — and moves on when no lane in a round is convincing. After the
-   *    last round it settles on the most confident language heard in ANY round. The pool is the user's to shape:
-   *    GET in the language list adds a language to it. */
-  private static let laneCap = 4
-  private static let convincing = 0.55        // mean word confidence that ends the search early
-  private var round = 0
-  private var bestSeen: (locale: Locale, conf: Double)?
-  private var rounds: Int { max(1, (candidates.count + Self.laneCap - 1) / Self.laneCap) }
+  /// ★ THE ONE LIVE LANE: the chosen language, or the one AUTO locked on. It alone feeds the box and the translator,
+  ///   so translation gets whole sentences (Stuart: "translation works better once it locks on").
+  private var live: Lane?
+  private var liveWant = ""                    // the locale a lane is being opened for (a newer lock wins)
   private var translator: Translator?
+  /* ★★★ AUTO (rewritten 2026-10-17 night, from the bake-off — Stuart's decision A). No rounds of four, no probing lanes,
+   *    no challenger lane, no "best seen", no confidence-collapse re-probe: every language in the pool is scored on the
+   *    same buffered 10 s of SPEECH (LanguageScorer), rule H2 decides, LanguageID.Lock locks fast and holds, and while
+   *    locked the same check runs in the background and switches only on 2 consecutive wins by 0.10. */
+  private var pool: [Locale] = []
+  private var lock = LanguageID.Lock()
+  private var costs = LanguageID.Costs()
+  private var widen = LanguageID.Widen()
+  private var budget = LanguageID.budgetSeconds
+  private var critical = false
+  private var scoring = false
+  private var checkEvery = 1                   // while locked: background check every Nth speech window
+  private var checkTick = 0
+  private var unrecognised = 0                 // unconvincing speech windows since the last lock (for the box)
+  private var window: [Float] = []             // speech-gated audio being gathered, at `windowRate`
+  private var windowRate = 16000.0
+  private var observers: [NSObjectProtocol] = []
   /* ★★ THE STALL WATCHDOG (V12 research, 2026-10-16). SpeechTranscriber was measured going quiet on medium SSB — words
    *    for 7-15 s, then nothing for the rest of the clip; a 12 s no-result watchdog that starts a FRESH analyzer took
    *    3702 kHz from 19 words to 85, and fired 0 times on clean VOLMET. So: audio FLOWING (over a low RMS floor — never
-   *    squelch or mute silence) and no volatile or final result for 12 s → that lane gets a fresh analyzer, same
-   *    language; the translator, the box's text and the lane's confidence history are kept. A restart that brings
-   *    nothing doubles the wait (to 96 s), so a long stretch of band noise costs a few restarts, not one every 12 s. */
+   *    squelch or mute silence) and no volatile or final result for 12 s → the live lane gets a fresh analyzer, same
+   *    language; the translator and the box's text are kept. A restart that brings nothing doubles the wait (to 96 s),
+   *    so a long stretch of band noise costs a few restarts, not one every 12 s. */
   private static let stallAfter: TimeInterval = 12
   private static let stallMax: TimeInterval = 96
   private static let stallAudible: TimeInterval = 10      // of the window, this much must have been audio
-  private static let stallRmsFloor: Float = 0.002          // ≈ -54 dBFS
+  private static let stallRmsFloor: Float = 0.002          // ≈ -54 dBFS — also AUTO's speech gate
   private var stallRestarts = 0
 
   final class Lane {
@@ -400,11 +564,6 @@ final class TranscribeEngine {
     let format: AVAudioFormat
     var converter: AVAudioConverter?
     var tasks: [Task<Void, Never>] = []
-    var confSum = 0.0, words = 0
-    var finals: [String] = []
-    /// The last 40 words' confidence — what the chosen language and its challenger are compared on.
-    var recent: [Double] = []
-    var recentMean: Double { recent.isEmpty ? 0 : recent.reduce(0, +) / Double(recent.count) }
     // ── stall watchdog (q only) ──
     var lastResult = Date()
     var audible: TimeInterval = 0
@@ -415,7 +574,6 @@ final class TranscribeEngine {
       self.locale = locale; self.transcriber = transcriber; self.analyzer = analyzer
       self.input = input; self.format = format
     }
-    var meanConf: Double { words > 0 ? confSum / Double(words) : 0 }
     func shutdown() {
       input.finish()
       tasks.forEach { $0.cancel() }
@@ -424,11 +582,12 @@ final class TranscribeEngine {
     }
   }
 
-  init(owner: VibeTranscriber, language: String, translateTo: String, options: TxOptions) {
-    self.owner = owner; self.translateTo = translateTo; self.options = options
-    if language.hasPrefix("auto:") {
+  init(owner: VibeTranscriber, language: String, translateTo: String) {
+    self.owner = owner; self.translateTo = translateTo
+    if language == "auto" || language.hasPrefix("auto:") {
       self.language = "auto"
-      self.hints = language.dropFirst(5).split(separator: ",").map(String.init).filter { !$0.isEmpty }
+      self.hints = language.hasPrefix("auto:")
+        ? language.dropFirst(5).split(separator: ",").map(String.init).filter { !$0.isEmpty } : []
     } else {
       self.language = language; self.hints = []
     }
@@ -441,6 +600,7 @@ final class TranscribeEngine {
     let c = l.language.languageCode?.identifier ?? ""
     return Locale.current.localizedString(forLanguageCode: c) ?? c.uppercased()
   }
+  private func shortName(_ id: String) -> String { shortName(Locale(identifier: id)) }
 
   func start() {
     Task { await self.begin() }
@@ -451,122 +611,114 @@ final class TranscribeEngine {
     q.async {
       if self.stallRestarts > 0 { NSLog("[VibeTranscriber] stall watchdog: %d restart(s) this session", self.stallRestarts) }
       self.stopped = true
-      self.lanes.forEach { $0.shutdown() }
-      self.lanes.removeAll(); self.chosen = nil; self.challenger = nil
+      self.live?.shutdown(); self.live = nil
+      self.observers.forEach { NotificationCenter.default.removeObserver($0) }
+      self.observers.removeAll()
     }
+  }
+
+  /* ★★ AUTO TESTS ONLY WHAT IS ALREADY ON THE PHONE (Stuart, 2026-10-15). A speech model is 300–450 MB, so probing by
+   *    download could pull a gigabyte over mobile data. A likely language that is not here is SAID instead — the box's
+   *    own notice offers the DOWNLOAD (SDRScreen, from EiBi and the phone's list).
+   *  ★★★ THE ORDER IS BUILT IN JS (src/services/transcribeOrder.ts, tested): EiBi's languages, the receiver's MAIN
+   *    language (in its variant — 'pt-BR' — when that one is installed), the ★ list, the receiver area's others. Here
+   *    the phone's own languages and everything else installed follow, and anything not installed is dropped.
+   *  ★★ ONE ENTRY PER LANGUAGE, NOT PER VARIANT (Stuart on V12 479: "Trying English, English, Spanish, French"). Each
+   *    language once: the variant JS named explicitly if installed, else the phone's own, else the hint's, else the
+   *    first installed. Read again before every window — the system can tidy a model away mid-session. */
+  private func buildPool() async -> [Locale] {
+    let installedList = await SpeechEngines.installedLocales()
+    let installed = Set(installedList.map { $0.identifier(.bcp47) })
+    var order: [String] = []                          // base codes, in prior order
+    var pick: [String: (loc: Locale, rank: Int)] = [:] // base → the variant to run (lower rank wins)
+    func offer(_ l: Locale, rank: Int) {
+      let id = l.identifier(.bcp47), b = TranscribePlaces.base(id)
+      if !order.contains(b) { order.append(b) }
+      guard installed.contains(id) else { return }
+      if let cur = pick[b], cur.rank <= rank { return }
+      pick[b] = (l, rank)
+    }
+    for code in hints {
+      let want = code == "zh" ? "zh-CN" : code == "yue" ? "yue-CN" : code
+      let explicit = code.contains("-") || code.contains("_")       // a variant JS chose on purpose
+      if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: want)) { offer(l, rank: explicit ? 0 : 2) }
+    }
+    for id in Locale.preferredLanguages {
+      if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: id)) { offer(l, rank: 1) }
+    }
+    // ★ Apple's "multiple languages of India" model is not a language to identify.
+    for l in installedList where TranscribePlaces.base(l.identifier(.bcp47)) != "mul" { offer(l, rank: 3) }
+    return order.compactMap { pick[$0]?.loc }
   }
 
   private func begin() async {
     status("Preparing on-device speech…")
-    var cands: [Locale] = []
+    let tapDial: (Float, [Float]) -> Void = { [weak self] d, st in self?.q.async { self?.onDial(d, st) } }
+    let sink: (AVAudioPCMBuffer) -> Void = { [weak self] buf in self?.q.async { self?.feed(buf) } }
     if language != "auto" {
-      guard let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: language)) else {
+      guard let loc = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: language)) else {
         owner?.emit(["type": "error", "text": "\(language) is not supported for on-device speech"]); return
       }
-      cands = [l]
-    } else {
-      /* ★★ AUTO TESTS ONLY WHAT IS ALREADY ON THE PHONE (Stuart, 2026-10-15). A speech model is 300–450 MB, so probing
-       *    by download could pull a gigabyte over mobile data. A likely language
-       *    that is not here is SAID instead — the user GETs it when and where it suits them. */
-      //    (The box's own notice offers the DOWNLOAD — SDRScreen, from EiBi and the phone's list.)
-      /* ★★★ THE ORDER IS BUILT IN JS (src/services/transcribeOrder.ts, tested; 2026-10-17): `hints` arrives as EiBi's
-       *    languages for the frequency, the receiver's MAIN language (a reserved round-1 lane, in the receiver's
-       *    variant — 'pt-BR' — when that one is installed), the user's ★ PREFERRED languages in their order, then the
-       *    receiver area's others. Here the phone's own languages and everything else installed follow, and anything
-       *    not installed is dropped — so no entry costs a lane unless its model is really on the device. */
-      /* ★★ ONE LANE PER LANGUAGE, NOT PER VARIANT (Stuart on V12 479, 2026-10-17: the box read "Trying English, Dutch,
-       *    French, German (round 1 of 7)… Trying English, English, Spanish, French (round 2 of 7)"). A Mac has many
-       *    system models — en-GB, en-US, en-AU, en-IN… — and each took a lane of its own, so English was tried over
-       *    and over and AUTO ran to seven rounds. Telling languages apart is the job here; the accent is not. Each
-       *    language is tried ONCE: in the variant JS named explicitly (the receiver's, 'pt-BR') if installed, else the
-       *    one the phone itself uses (Settings → Language order), else the hint's, else the first installed. */
-      let installedList = await SpeechEngines.installedLocales()
-      let installed = Set(installedList.map { $0.identifier(.bcp47) })
-      var order: [String] = []                          // base codes, in the order they are tried
-      var pick: [String: (loc: Locale, rank: Int)] = [:] // base → the variant to run (lower rank wins)
-      func offer(_ l: Locale, rank: Int) {
-        let id = l.identifier(.bcp47), b = TranscribePlaces.base(id)
-        if !order.contains(b) { order.append(b) }
-        guard installed.contains(id) else { return }
-        if let cur = pick[b], cur.rank <= rank { return }
-        pick[b] = (l, rank)
-      }
-      for code in hints {
-        let want = code == "zh" ? "zh-CN" : code == "yue" ? "yue-CN" : code
-        let explicit = code.contains("-") || code.contains("_")       // a variant JS chose on purpose
-        if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: want)) { offer(l, rank: explicit ? 0 : 2) }
-      }
-      for id in Locale.preferredLanguages {
-        if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: id)) { offer(l, rank: 1) }
-      }
-      for l in installedList { offer(l, rank: 3) }
-      cands = order.compactMap { pick[$0]?.loc }
-    }
-    guard !cands.isEmpty else {
-      owner?.emit(["type": "error", "text": "No speech language is on this device yet — GET one in the LANGUAGE list"]); return
-    }
-    candidates = cands
-    round = 0; bestSeen = nil
-    await openRound()
-  }
-
-  /// The current round's slice of the pool, probed side by side (a single explicit language is just chosen).
-  private func openRound() async {
-    let lo = round * Self.laneCap, hi = min(candidates.count, lo + Self.laneCap)
-    guard lo < hi else { return }
-    await openLanes(Array(candidates[lo..<hi]), probe: candidates.count > 1)
-  }
-
-  private func openLanes(_ cands: [Locale], probe: Bool) async {
-    var made: [Lane] = []
-    for loc in cands {
       let t = await SpeechEngines.module(for: loc)
       do {
-        // ★ On the device = runs (measured: no place needed). status() alone said `.supported` for a model the
-        //   system already had, which made AUTO skip it.
-        let isInstalled = await SpeechEngines.isPresent(loc, t)
-        // ★ AUTO never downloads (Stuart, 10-15 — 300–450 MB each), so it never takes a place either.
-        if probe && !isInstalled { continue }
-        if !isInstalled {
+        // ★ On the device = runs (measured: no place needed). Choosing a language that is not here downloads it —
+        //   JS asked first (size, Wi-Fi) — and gives the place back like any GET.
+        if !(await SpeechEngines.isPresent(loc, t)) {
           status("Downloading the \(shortName(loc)) speech model (once, then it works offline)…")
-          try await SpeechEngines.fetch(loc, t)
+          try await SpeechEngines.fetch(loc, t, keep: false)
         }
-        guard let lane = try await makeLane(loc, module: t) else { continue }
-        made.append(lane)
+        guard let lane = try await makeLane(loc, module: t) else {
+          owner?.emit(["type": "error", "text": "Could not start \(name(loc)) speech"]); return
+        }
+        q.async {
+          guard !self.stopped else { lane.shutdown(); return }
+          self.live = lane
+          self.choose(lane)
+          VibeTranscribeTap.shared.setSink(sink, onDial: tapDial)
+        }
       } catch {
-        NSLog("[VibeTranscriber] lane %@ failed: %@", loc.identifier, error.localizedDescription)
-        if cands.count == 1 {
-          owner?.emit(["type": "error", "text": "Could not start \(name(loc)) speech: \(error.localizedDescription)"])
-          return
-        }
+        owner?.emit(["type": "error", "text": "Could not start \(name(loc)) speech: \(error.localizedDescription)"])
       }
+      return
     }
-    guard !made.isEmpty else { owner?.emit(["type": "error", "text": "Could not start on-device speech"]); return }
-    let tapDial: (Float, [Float]) -> Void = { [weak self] d, st in self?.q.async { self?.onDial(d, st) } }
+    let p = await buildPool()
+    guard !p.isEmpty else {
+      owner?.emit(["type": "error", "text": "No speech language is on this device yet — GET one in the LANGUAGE list"]); return
+    }
+    let names = p.map { shortName($0) }
     q.async {
-      guard !self.stopped else { made.forEach { $0.shutdown() }; return }
-      self.lanes = made
-      self.probing = probe
-      self.probeStart = Date()
-      if self.probing {
-        self.chosen = nil
-        let names = made.map { self.shortName($0.locale) }.joined(separator: ", ")
-        // ★ The search shows in the BOX, line by line (Stuart, 10-15) — the status line alone flickers past.
-        self.owner?.emit(["type": "trying",
-                          "text": names + (self.rounds > 1 ? " (round \(self.round + 1) of \(self.rounds))" : "")])
-        // ★ Said while it searches, so a slow AUTO explains itself (Stuart, 10-15: "warn users of how it works").
-        self.status(self.rounds > 1
-          ? "Listening — trying \(names) (round \(self.round + 1) of \(self.rounds); only 4 languages can be tried at a time, so this can take a while)…"
-                                    : "Listening — detecting the language (\(names))…")
-      } else {
-        self.choose(made[0])
-      }
-      VibeTranscribeTap.shared.setSink({ [weak self] buf in self?.q.async { self?.feed(buf) } }, onDial: tapDial)
+      guard !self.stopped else { return }
+      self.pool = p
+      self.watchPower()
+      // ★ The search shows in the BOX (Stuart, 10-15) — the status line alone flickers past. JS writes "Trying …".
+      let shown = names.count > 8 ? names.prefix(8).joined(separator: ", ") + " and \(names.count - 8) more" : names.joined(separator: ", ")
+      self.owner?.emit(["type": "trying", "text": shown])
+      self.status("Listening — detecting the language from 10 s of speech…")
+      VibeTranscribeTap.shared.setSink(sink, onDial: tapDial)
     }
   }
 
-  /// One analyzer for `loc` on `module`, started, with its results task. Used to open a lane and to give a stalled
-  /// lane a fresh analyzer.
+  /// ★ The device budget follows the phone's state (bake-off: re-evaluate on thermal state and Low Power Mode). The
+  ///   measured costs are thrown away too — a hot or slowed phone is measured afresh. q only.
+  private func watchPower() {
+    let nc = NotificationCenter.default
+    let again: (Notification) -> Void = { [weak self] _ in self?.q.async { self?.reevaluate(log: true) } }
+    observers.append(nc.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: nil, using: again))
+    observers.append(nc.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: nil, using: again))
+    reevaluate(log: false)
+  }
+  private func reevaluate(log: Bool) {
+    let pi = ProcessInfo.processInfo
+    budget = LanguageID.budget(thermal: pi.thermalState.rawValue, lowPower: pi.isLowPowerModeEnabled)
+    critical = pi.thermalState == .critical
+    if log {
+      costs = LanguageID.Costs()
+      NSLog("[VibeTranscriber] AUTO budget %.1f s per window (thermal %d, low power %d)%@", budget,
+            pi.thermalState.rawValue, pi.isLowPowerModeEnabled ? 1 : 0, critical ? " — background check suspended" : "")
+    }
+  }
+
+  /// One analyzer for `loc` on `module`, started, with its results task: the live lane (and a stalled lane's fresh one).
   private func makeLane(_ loc: Locale, module t: any SpeechModule) async throws -> Lane? {
     guard let fmt = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [t]) else { return nil }
     let (stream, cont) = AsyncStream<AnalyzerInput>.makeStream(bufferingPolicy: .bufferingNewest(64))
@@ -588,8 +740,29 @@ final class TranscribeEngine {
     return lane
   }
 
-  // q only — the stalled lane gets a fresh analyzer for the same language; it takes the old lane's place (chosen,
-  // challenger, its confidence history and anything heard during detection), then the old one is shut down.
+  /// q only — AUTO locked or switched: the live lane moves to `loc`. The old lane keeps writing until the new one is
+  /// ready, so a switch drops nothing; `lead` (the deciding window's transcript) is written first.
+  private func goLive(_ loc: Locale, lead: String?) {
+    let id = loc.identifier(.bcp47)
+    liveWant = id
+    Task { [weak self] in
+      guard let self else { return }
+      let lane = try? await self.makeLane(loc, module: await SpeechEngines.module(for: loc))
+      self.q.async {
+        guard let lane else {
+          if self.liveWant == id { self.owner?.emit(["type": "error", "text": "Could not start \(self.name(loc)) speech"]) }
+          return
+        }
+        guard !self.stopped, self.liveWant == id else { lane.shutdown(); return }
+        self.live?.shutdown()
+        self.live = lane
+        self.choose(lane)
+        if let lead, !lead.isEmpty { self.deliver(lead, locale: loc) }   // nothing heard while deciding is lost
+      }
+    }
+  }
+
+  // q only — the stalled live lane gets a fresh analyzer for the same language, then the old one is shut down.
   private func restartLane(_ old: Lane, quiet: TimeInterval) {
     old.restarting = true
     stallRestarts += 1
@@ -605,12 +778,9 @@ final class TranscribeEngine {
           old.restarting = false; old.lastResult = Date(); old.audible = 0; old.stallAfter = next
           return
         }
-        guard !self.stopped, let i = self.lanes.firstIndex(where: { $0 === old }) else { fresh.shutdown(); return }
-        fresh.confSum = old.confSum; fresh.words = old.words; fresh.finals = old.finals; fresh.recent = old.recent
+        guard !self.stopped, self.live === old else { fresh.shutdown(); return }
         fresh.stallAfter = next
-        self.lanes[i] = fresh
-        if self.chosen === old { self.chosen = fresh }
-        if self.challenger === old { self.challenger = fresh }
+        self.live = fresh
         old.shutdown()
       }
     }
@@ -631,133 +801,132 @@ final class TranscribeEngine {
     var rms: Float = 0
     if let p = mono.floatChannelData?[0], mono.frameLength > 0 { vDSP_rmsqv(p, 1, &rms, vDSP_Length(mono.frameLength)) }
     let dur = Double(mono.frameLength) / mono.format.sampleRate
-    let now = Date()
-    for lane in lanes where !lane.restarting {
+    if let lane = live, !lane.restarting {
       if rms > Self.stallRmsFloor { lane.audible += dur }
-      let quiet = now.timeIntervalSince(lane.lastResult)
+      let quiet = Date().timeIntervalSince(lane.lastResult)
       if quiet >= lane.stallAfter, lane.audible >= Self.stallAudible { restartLane(lane, quiet: quiet) }
     }
-    for lane in lanes {
+    if let lane = live {
       if lane.converter == nil || lane.converter!.inputFormat != mono.format {
         lane.converter = AVAudioConverter(from: mono.format, to: lane.format)
       }
-      guard let conv = lane.converter else { continue }
-      let ratio = lane.format.sampleRate / mono.format.sampleRate
-      let cap = AVAudioFrameCount(Double(mono.frameLength) * ratio + 64)
-      guard let out = AVAudioPCMBuffer(pcmFormat: lane.format, frameCapacity: cap) else { continue }
-      var fed = false
-      var err: NSError?
-      conv.convert(to: out, error: &err) { _, st in
-        if fed { st.pointee = .noDataNow; return nil }
-        fed = true; st.pointee = .haveData; return mono
+      if let conv = lane.converter {
+        let ratio = lane.format.sampleRate / mono.format.sampleRate
+        let cap = AVAudioFrameCount(Double(mono.frameLength) * ratio + 64)
+        if let out = AVAudioPCMBuffer(pcmFormat: lane.format, frameCapacity: cap) {
+          var fed = false
+          var err: NSError?
+          conv.convert(to: out, error: &err) { _, st in
+            if fed { st.pointee = .noDataNow; return nil }
+            fed = true; st.pointee = .haveData; return mono
+          }
+          if err == nil, out.frameLength > 0 { lane.input.yield(AnalyzerInput(buffer: out)) }
+        }
       }
-      if err == nil, out.frameLength > 0 { lane.input.yield(AnalyzerInput(buffer: out)) }
+    }
+    /* ★★ AUTO'S WINDOW: only audio over the floor is gathered — squelch (the tap sends zeros), mute and dead air are
+     *    never scored — and every 10 s of it is one window. The live lane above is untouched by any of this. */
+    guard language == "auto", rms > Self.stallRmsFloor, let p = mono.floatChannelData?[0], mono.frameLength > 0 else { return }
+    if mono.format.sampleRate != windowRate { window.removeAll(); windowRate = mono.format.sampleRate }
+    window.append(contentsOf: UnsafeBufferPointer(start: p, count: Int(mono.frameLength)))
+    if Double(window.count) >= LanguageID.windowSeconds * windowRate {
+      let w = window
+      window.removeAll(keepingCapacity: true)
+      windowReady(w)
+    }
+  }
+
+  // q only — 10 s of speech gathered: score it, unless the last one is still being scored (then it is dropped —
+  // decoders never wait) or, while locked, the background check is not due / the phone is too hot.
+  private func windowReady(_ w: [Float]) {
+    guard !scoring else { NSLog("[VibeTranscriber] AUTO: window dropped (still scoring the last)"); return }
+    let background = lock.locked != nil
+    if background {
+      if critical { return }
+      checkTick += 1
+      if checkTick < checkEvery { return }
+      checkTick = 0
+    }
+    scoring = true
+    let plan = LanguageID.plan(costs, budget: budget)
+    let step = widen.step, locked = lock.locked?.id, rate = windowRate
+    // ★ Background priority while locked: the check must never slow the live lane, the box or the translator.
+    Task.detached(priority: background ? .background : .utility) { [weak self] in
+      guard let self else { return }
+      let p = await self.buildPool()
+      let ids = p.map { $0.identifier(.bcp47) }
+      let picks = LanguageID.pick(pool: ids, locked: locked, perWindow: plan.perWindow, step: step)
+      let locs = picks.compactMap { id in p.first { $0.identifier(.bcp47) == id } }
+      let t0 = Date()
+      let got = await LanguageScorer.score(w, rate: rate, locales: locs, width: plan.twoWide ? 2 : 1,
+                                           priority: background ? .background : .utility)
+      let wall = Date().timeIntervalSince(t0)
+      self.q.async { self.onScored(got, wall: wall, plan: plan, pool: p) }
+    }
+  }
+
+  // q only — one window scored.
+  private func onScored(_ got: [LanguageScorer.Measured], wall: TimeInterval, plan: LanguageID.Plan, pool p: [Locale]) {
+    scoring = false
+    guard !stopped else { return }
+    pool = p
+    if plan.twoWide && got.count >= 2 { costs.addTwoWide(languages: got.count, wall: wall) }
+    else { for g in got { costs.addSequential(g.heard.id, g.seconds) } }
+    checkEvery = p.count <= plan.perWindow ? 1 : 3      // a shortlist device checks every 30 s, not every 10 s
+    guard !got.isEmpty else { return }
+    let ranked = LanguageID.rank(got.map { $0.heard }, prior: p.map { $0.identifier(.bcp47) })
+    let convinced = LanguageID.convincing(ranked)
+    widen.after(convincing: convinced, slices: LanguageID.slices(pool: p.count, perWindow: plan.perWindow))
+    let summary = ranked.prefix(4).map { "\(shortName($0.id)) \(Int(($0.score * 100).rounded())) %" }.joined(separator: " · ")
+    NSLog("[VibeTranscriber] AUTO window: %d languages in %.2f s (%@): %@", got.count, wall, plan.twoWide ? "2-wide" : "1-wide", summary)
+    switch lock.observe(ranked) {
+    case .locked(let id):
+      unrecognised = 0
+      guard let loc = p.first(where: { $0.identifier(.bcp47) == id }) else { return }
+      owner?.emit(["type": "tried", "text": "Heard: \(summary)"])
+      goLive(loc, lead: got.first(where: { $0.heard.id == id })?.text)
+    case .switched(let from, let to):
+      guard let loc = p.first(where: { $0.identifier(.bcp47) == to }) else { return }
+      // ★ Never disturbs the live lane until the new language is ready (goLive); the box says why.
+      owner?.emit(["type": "tried", "text": "Sounds more like \(shortName(to)) than \(shortName(from)) — switching"])
+      goLive(loc, lead: nil)
+    case .challenging(let id, let n):
+      NSLog("[VibeTranscriber] AUTO: %@ ahead of %@ (%d of %d)", id, lock.locked?.id ?? "-", n, LanguageID.switchWins)
+    case .nothing:
+      // ★ REJECTION (bake-off: 0 false answers on 234 noise, data, music and uninstalled-language windows): nothing
+      //   reached 0.40 → say so, never guess. Once in the box, then the status line carries it.
+      unrecognised += 1
+      if unrecognised == 1 {
+        owner?.emit(["type": "tried", "text": "No language recognised yet (closest: \(summary)) — listening on"])
+      }
+      status(p.count > plan.perWindow
+        ? "Listening — no language recognised yet (\(min(plan.perWindow, p.count)) of \(p.count) languages per 10 s on this device)"
+        : "Listening — no language recognised yet")
+    case .held:
+      break
     }
   }
 
   // q only
   private func onResult(_ lane: Lane, _ rt: AttributedString, _ isFinal: Bool) {
-    guard !stopped, lanes.contains(where: { $0 === lane }) else { return }
+    guard !stopped, lane === live else { return }
     // ★ Any result, volatile or final, is life: the stall clock starts again and the next wait is the short one.
     lane.lastResult = Date(); lane.audible = 0; lane.stallAfter = Self.stallAfter
     let text = String(rt.characters).trimmingCharacters(in: .whitespacesAndNewlines)
-    if !isFinal {
-      if chosen === lane, !text.isEmpty { owner?.emit(["type": "partial", "text": text]) }
-      return
-    }
     guard !text.isEmpty else { return }
-    var cs: [Double] = []
-    for run in rt.runs {
-      if let c = run[AttributeScopes.SpeechAttributes.ConfidenceAttribute.self] {
-        let w = rt[run.range].characters.split(whereSeparator: { $0 == " " }).count
-        for _ in 0..<max(1, w) { cs.append(c) }
-      }
-    }
-    lane.confSum += cs.reduce(0, +); lane.words += cs.count
-    if probing {
-      lane.finals.append(text)
-      decideIfReady()
-      return
-    }
-    lane.recent.append(contentsOf: cs)
-    if lane.recent.count > 40 { lane.recent.removeFirst(lane.recent.count - 40) }
-    guard let cur = chosen else { return }
-    if lane === challenger {
-      // ★ Both have heard enough of the same audio, and the challenger believes it clearly more: switch.
-      if lane.recent.count >= 15, cur.recent.count >= 15, lane.recentMean > cur.recentMean + Self.overtake {
-        owner?.emit(["type": "tried", "text": "Sounds more like \(shortName(lane.locale)) than \(shortName(cur.locale)) — switching"])
-        challenger = cur
-        cur.recent.removeAll(); lane.recent.removeAll()
-        choose(lane)
-      }
-      return
-    }
-    guard cur === lane else { return }
-    deliver(text, lane: lane)
-    // ★ The station changed language (SW broadcasts do, hourly): confidence collapses. Re-detect, AUTO only.
-    if language == "auto", candidates.count > 1, lane.recent.count >= 25, lane.recentMean < 0.35 {
-      lane.recent.removeAll()
-      status("The language seems to have changed — re-detecting…")
-      reprobe()
-    }
-  }
-
-  // q only
-  private func decideIfReady() {
-    let elapsed = Date().timeIntervalSince(probeStart)
-    // ★ More evidence than the first build asked for (6 words, 5 s): French settled as German on that (10-15).
-    let ready = lanes.filter { $0.words >= 10 }
-    guard !ready.isEmpty, elapsed >= 8 || ready.count == lanes.count else { return }
-    // Enough heard by at least one model: the most confident wins — unless the top two are too close to call, when
-    // it listens on, for up to 20 s.
-    let ranked = lanes.filter { $0.words >= 4 }.sorted { $0.meanConf > $1.meanConf }
-    guard let best = ranked.first else { return }
-    let second = ranked.count > 1 ? ranked[1] : nil
-    if let s2 = second, best.meanConf - s2.meanConf < 0.05, elapsed < 20 { return }
-    if bestSeen == nil || best.meanConf > bestSeen!.conf { bestSeen = (best.locale, best.meanConf) }
-    // ★ Not convincing and languages left to try: the next four.
-    if best.meanConf < Self.convincing, round + 1 < rounds {
-      let tried = lanes.map { shortName($0.locale) }.joined(separator: ", ")
-      emitVerdicts()
-      shutdownLanes()
-      round += 1
-      status("Not \(tried) — trying the next languages…")
-      Task { await self.openRound() }
-      return
-    }
-    // ★ Every round tried and none convincing: the best heard anywhere, if it was not in this round.
-    if best.meanConf < Self.convincing, let b = bestSeen, b.locale.identifier(.bcp47) != best.locale.identifier(.bcp47) {
-      emitVerdicts()
-      owner?.emit(["type": "tried", "text": "None was a clear match — going back to \(shortName(b.locale)), the best heard"])
-      shutdownLanes()
-      Task { await self.openLanes([b.locale], probe: false) }
-      return
-    }
-    // ★ The runner-up stays on as the challenger (see `challenger`) — only if it heard something at all.
-    let runnerUp = (second?.words ?? 0) > 0 ? second : nil
-    for l in lanes where l !== best && l !== runnerUp { l.shutdown() }
-    lanes = [best] + (runnerUp.map { [$0] } ?? [])
-    challenger = runnerUp
-    best.recent.removeAll(); runnerUp?.recent.removeAll()
-    probing = false
-    choose(best)
-    for t in best.finals { deliver(t, lane: best) }   // nothing heard during detection is lost
-    best.finals.removeAll()
+    if !isFinal { owner?.emit(["type": "partial", "text": text]); return }
+    deliver(text, locale: lane.locale)
   }
 
   // q only
   private func choose(_ lane: Lane) {
-    chosen = lane
     let lang = lane.locale.language.languageCode?.identifier ?? ""
     owner?.emit(["type": "lang", "text": lane.locale.identifier(.bcp47), "name": shortName(lane.locale),
                  "detected": language == "auto"])
     status("Listening — \(shortName(lane.locale))\(language == "auto" ? " (detected)" : "")")
     translator = nil
-    /* ★★ LANGUAGES I UNDERSTAND (Stuart, 2026-10-17: "for people who are multilingual themselves") — speech in one of
-     *    them is shown as it is, no translation line; everything else goes to the target. */
-    if options.understood.contains(TranscribePlaces.base(lang)) {
-      if !translateTo.isEmpty { status("Listening — \(shortName(lane.locale)) (you understand it — not translated)") }
-    } else if !translateTo.isEmpty, lang != TranscribePlaces.base(translateTo) {
+    // ★ Speech already in the target language is never translated.
+    if !translateTo.isEmpty, lang != TranscribePlaces.base(translateTo) {
       let tr = Translator(source: lane.locale.language, target: Locale.Language(identifier: translateTo)) { [weak self] s in
         self?.status(s)
       }
@@ -767,31 +936,8 @@ final class TranscribeEngine {
   }
 
   // q only
-  private func reprobe() {
-    shutdownLanes()
-    round = 0; bestSeen = nil
-    Task { await self.openRound() }
-  }
-
-  // q only — one line for the box: what each language in this round made of the audio.
-  private func emitVerdicts() {
-    let v = lanes.map { l -> String in
-      l.words == 0 ? "\(shortName(l.locale)) — nothing recognised"
-                   : "\(shortName(l.locale)) — weak match (\(Int((l.meanConf * 100).rounded())) %)"
-    }.joined(separator: " · ")
-    owner?.emit(["type": "tried", "text": v])
-  }
-
-  // q only
-  private func shutdownLanes() {
-    for l in lanes { l.shutdown() }
-    lanes.removeAll(); chosen = nil; challenger = nil; probing = false
-    VibeTranscribeTap.shared.setSink(nil)
-  }
-
-  // q only
-  private func deliver(_ text: String, lane: Lane) {
-    let lang = shortName(lane.locale)
+  private func deliver(_ text: String, locale: Locale) {
+    let lang = shortName(locale)
     guard let tr = translator else {
       owner?.emit(["type": "final", "text": text, "lang": lang]); return
     }
@@ -803,7 +949,7 @@ final class TranscribeEngine {
 
   // q only
   private func onLaneError(_ lane: Lane, _ e: Error) {
-    guard !stopped, chosen === lane else { return }
+    guard !stopped, live === lane else { return }
     owner?.emit(["type": "error", "text": "Speech stopped: \(e.localizedDescription)"])
   }
 }

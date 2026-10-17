@@ -311,17 +311,19 @@ interface ModeSelectorProps {
     /** DOWNLOAD… — fetch a language for AUTO without listening (Stuart, 10-15). The id being fetched, and the last word.
      *  The caller confirms first (size + where it is saved). */
     onDownload?: (id: string) => void; downloading?: string; downloadNote?: string;
-    /** ★ AUTO's PREFERRED languages, in order (codes) — the numbered ★ on ON PHONE rows. Absent = no ★ drawn. */
-    preferred?: string[]; onPreferred?: (code: string) => void;
+    /** ★ AUTO's PREFERRED languages, in order (codes) — the numbered ★. Absent = no ★ drawn. At most `preferredMax`. */
+    preferred?: string[]; onPreferred?: (code: string) => void; preferredMax?: number;
+    /** iOS: a ★ on a language that is not on the device GETs it (after the same confirm) and keeps it there. Without
+     *  this (Android) the ★ is only drawn on languages already ON PHONE. */
+    starGets?: boolean;
     /** ⚠ The SDR's local language is not on this device: its code and the line to show (Stuart, 2026-10-17). */
     missing?: { code: string; text: string } | null;
     /** Android 13: AUTO is ONE likely language, not a detection — its name and why ("Portuguese (the SDR's local
      *  language)"); the key reads LIKELY · … instead of claiming to detect. */
     likely?: string;
-    /** TRANSLATE TO's list (every language the device translates into) — absent: the phone's language and English. */
-    translateLanguages?: { id: string; name: string; installed?: boolean }[];
-    /** LANGUAGES I UNDERSTAND: base codes shown untranslated; toggled from TRANSLATE TO's list. */
-    understood?: string[]; onUnderstood?: (code: string) => void;
+    /** TRANSLATE TO's list, ONE ROW PER LANGUAGE (translateTargets.ts; the phone's row first) — `ids` are the variants
+     *  folded into the row. Absent: the phone's language and English. */
+    translateLanguages?: { id: string; name: string; installed?: boolean; ids?: string[] }[];
     /** The language being heard right now ('' when not running) — shown on the AUTO key as AUTO · MANDARIN. */
     heard?: string;
     /** iOS: AUTO only compares languages already on the phone — say so, or a new language looks unsupported. */
@@ -405,8 +407,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     )}</NavItem>
   ) : null;
   /* ★ The settings drop in under the key while it is selected, as RTTY's and TIME's do. AUTO detects the spoken
-   *  language; a chosen language downloads its speech model once (the box says so). TRANSLATE offers OFF, the
-   *  phone's own language and English — the target is what YOU read, so a long list would be noise.
+   *  language; a chosen language downloads its speech model once (the box says so). TRANSLATE TO is a list,
+   *  one row per language (below).
    *  ★★ LANGUAGE IS A DROPDOWN LIST, like OWRX's DIGITAL / DECODERS (Stuart, 2026-10-15: "a scrollable list … that way
    *     we dont clutter the menu with lots of buttons") — so it can carry EVERY language the phone can transcribe,
    *     not a hand-picked twenty. Each row says whether it is on the phone; GET fetches one (speech model, and the
@@ -443,19 +445,21 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const txPick = (id: string) => { setTxListOpen(false); tc?.onLanguage(id); };
   const txRows = tc ? [...(tc.chooseOnly ? [] : [{ id: 'auto', code: 'auto', name: tc.likely ? `${txWarnTri}LIKELY — the most likely language (no detection on Android 13)` : `${txWarnTri}AUTO — detect the language`, installed: true }]), ...tc.languages] : [];
   /* ★★ TRANSLATE TO IS A LIST (Stuart, 2026-10-17: "that button for english needs to be a list too for people who
-   *    are multilingual themselves"). OFF, the phone's own variant first (PORTUGUESE (BR)), then every language the
-   *    device translates into. ★★ LANGUAGES I UNDERSTAND: a ☐/☑ on each row — speech in a ticked language is shown as
-   *    it is, everything else goes to the target (Stuart understands English + French, target English: French
-   *    broadcasts stay French, German ones come out in English). The target itself is always understood. */
+   *    are multilingual themselves") — a PLAIN list, ONE ROW PER LANGUAGE (2026-10-17 night: no more Arabic (Saudi
+   *    Arabia) + Arabic (UAE); written forms kept only where they differ — Chinese Simplified / Traditional,
+   *    Portuguese Brazil / Portugal, English UK / US). OFF, the phone's own row first, then the rest. Speech already in
+   *    the target language is never translated. (LANGUAGES I UNDERSTAND went the same night — Stuart: "not sure what
+   *    the I understand thing is".) */
   const [trListOpen, setTrListOpen] = useState(false);
-  const trBase = (id: string) => id.toLowerCase().split(/[-_]/)[0];
-  const txTargets: { id: string; name: string; installed?: boolean }[] = !tc ? [] : (() => {
+  const txTargets: { id: string; name: string; installed?: boolean; ids?: string[] }[] = !tc ? [] : (() => {
     const all = tc.translateLanguages?.length ? tc.translateLanguages
       : [tc.deviceLanguage, ...(sameLanguage(tc.deviceLanguage, 'en') ? [] : ['en'])].filter(Boolean).map(id => ({ id, name: translateTargetLabel(id) }));
-    const mine = all.find(l => l.id === tc.deviceLanguage) ?? (tc.deviceLanguage ? { id: tc.deviceLanguage, name: translateTargetLabel(tc.deviceLanguage) } : null);
-    return [...(mine ? [mine] : []), ...all.filter(l => l.id !== mine?.id)];
+    const dev = tc.deviceLanguage;
+    const mine = all.find(l => l.id === dev || !!(l as any).ids?.includes(dev)) ?? (dev ? { id: dev, name: translateTargetLabel(dev) } : null);
+    return [...(mine ? [mine] : []), ...all.filter(l => l !== mine && l.id !== mine?.id)];
   })();
-  const trHead = !tc ? '' : tc.translateTo ? translateTargetLabel(tc.translateTo).toUpperCase() : 'OFF';
+  const trRow = !tc?.translateTo ? undefined : txTargets.find(l => l.id === tc.translateTo || !!l.ids?.includes(tc.translateTo));
+  const trHead = !tc ? '' : tc.translateTo ? (trRow?.name ?? translateTargetLabel(tc.translateTo)).toUpperCase() : 'OFF';
   const trPick = (id: string) => { setTrListOpen(false); tc?.onTranslateTo(id); };
   const transcribeCallout = tc && txLit ? (
     <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
@@ -510,11 +514,14 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             const keyB = pt.metal ? pt.winText : t.btnBorder;
             const warnRow = !!txMissing && l.id === txMissing.code;
             /* ★★ PREFERRED FOR AUTO (Stuart, 2026-10-17: "I can say Auto mode try English, French, Dutch, German, Spanish
-             *    first"). On an ON PHONE row a ☆ adds the language to the END of AUTO's preferred list and shows its
-             *    place (★1, ★2 …); tapping it again takes it out. AUTO tries them after EiBi's and the SDR's local
-             *    language (transcribeOrder.ts). Only on rows that are on the device — AUTO never downloads. */
+             *    first"). A ☆ adds the language to the END of the ★ list and shows its place (★1, ★2 …); tapping it
+             *    again takes it out. ★★ AND ★ KEEPS IT (2026-10-17 night): on iOS a ★ language holds one of Apple's
+             *    places, so the system never tidies it away — a ★ on a language not on the device GETs it first (same
+             *    confirm as GET). At most 4 (the phone's language takes the fifth place); when full the ☆ dims and
+             *    the line under the list says so. Android: ★ only on rows ON PHONE (it orders AUTO's allow-list). */
             const prefAt = tc.preferred && l.id !== 'auto' ? tc.preferred.indexOf(l.id) : -1;
-            const canPrefer = !!tc.onPreferred && !!tc.preferred && l.id !== 'auto' && !!l.installed && tc.downloading !== l.id;
+            const canPrefer = !!tc.onPreferred && !!tc.preferred && l.id !== 'auto' && (!!l.installed || !!tc.starGets) && tc.downloading !== l.id;
+            const prefFull = !!tc.preferred && tc.preferred.length >= (tc.preferredMax ?? 4);
             return (
               <NavRow key={l.id}><MoreItem onPress={() => txPick(l.id)}
                 onReveal={() => {
@@ -537,15 +544,22 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                     <Text style={[st.txSide, { color: keyC, opacity: 0.6 }]}>{side}</Text>
                   ))}
                   {canPrefer && (
-                    <TxKey label={prefAt >= 0 ? `\u2605${prefAt + 1}` : '\u2606'} color={keyC} style={[st.txStar, { borderColor: keyB }, prefAt < 0 && { opacity: 0.7 }]}
+                    <TxKey label={prefAt >= 0 ? `\u2605${prefAt + 1}` : '\u2606'} color={keyC} style={[st.txStar, { borderColor: keyB }, prefAt < 0 && { opacity: prefFull ? 0.35 : 0.7 }]}
                       onPress={() => tc.onPreferred?.(l.id)}
-                      a11y={prefAt >= 0 ? `${l.name} is AUTO's preference ${prefAt + 1}. Remove it` : `Prefer ${l.name} in AUTO`} />
+                      a11y={prefAt >= 0 ? `${l.name} is starred ${prefAt + 1}: AUTO prefers it and it stays on this device. Remove the star`
+                           : prefFull ? `Star ${l.name}: the stars are full (${tc.preferredMax ?? 4}). Take one off first`
+                           : `Star ${l.name}: AUTO prefers it and it stays on this device`} />
                   )}
                 </TouchableOpacity>
               )}</MoreItem></NavRow>
             );
           })}
         </ScrollView>
+      )}
+      {txListOpen && !!tc.preferred && !!tc.onPreferred && tc.preferred.length >= (tc.preferredMax ?? 4) && (
+        <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, opacity: 0.7, marginTop: 4, textAlign: 'left' }, { color: t.btnText }]}>
+          {'\u2605'} is full ({tc.preferredMax ?? 4} of {tc.preferredMax ?? 4}) {'\u2014'} take a {'\u2605'} off one to star another.
+        </Text>
       )}
       {!!tc.downloadNote && (
         <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, marginTop: 4, textAlign: 'left' }, { color: t.btnText }]}>
@@ -576,15 +590,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" contentContainerStyle={scrollLane}
                     style={[st.moreList, { borderColor: t.btnBorder }, pt.metal && windowStyle(pt)]}>
           {[{ id: '', name: 'OFF — show only what is said' }, ...txTargets].map(l => {
-            const on = l.id === tc.translateTo;
+            // ★ The ✓ follows the ROW: a target stored as a variant folded into it ('ar-AE') still ticks Arabic.
+            const on = l.id === tc.translateTo || (!!tc.translateTo && !!(l as any).ids?.includes(tc.translateTo));
             const keyC = pt.metal ? pt.winText : t.btnText;
-            const keyB = pt.metal ? pt.winText : t.btnBorder;
             const rowText = pt.metal
               ? { fontFamily: 'Atkinson Hyperlegible', color: on ? pt.readout : pt.winText,
                   ...(on ? { textShadowColor: pt.readoutGlow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } } : null) }
               : { fontFamily: t.font, color: on ? dec : t.btnText };
-            const isTarget = !!l.id && !!tc.translateTo && sameLanguage(l.id, tc.translateTo);
-            const knows = !!l.id && !!tc.understood?.includes(trBase(l.id));
             return (
               <NavRow key={l.id || 'off'}><MoreItem onPress={() => trPick(l.id)} onReveal={() => {}}>{(navFocused, navRef) => (
                 <TouchableOpacity ref={navRef as any} activeOpacity={0.7} onPress={() => trPick(l.id)}
@@ -593,27 +605,14 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   <Text style={[st.moreItemText, { flex: 1 }, rowText]} numberOfLines={1}>
                     {on ? '✓ ' : ''}{l.name.toUpperCase()}
                   </Text>
-                  {!!(l as any).installed && !isTarget && (
+                  {!!(l as any).installed && (
                     <Text style={[st.txSide, { color: keyC, opacity: 0.6 }]}>ON PHONE</Text>
                   )}
-                  {!!l.id && !!tc.onUnderstood && (isTarget ? (
-                    <Text style={[st.txSide, { color: keyC, opacity: 0.6, marginLeft: 8 }]}>TARGET</Text>
-                  ) : (
-                    <TxKey label={knows ? '\u2611 I UNDERSTAND' : '\u2610 I UNDERSTAND'} color={keyC}
-                      style={[{ borderColor: keyB }, !knows && { opacity: 0.7 }]}
-                      onPress={() => tc.onUnderstood?.(l.id)}
-                      a11y={knows ? `You understand ${l.name}: shown untranslated. Tap to translate it again` : `I understand ${l.name}: show it untranslated`} />
-                  ))}
                 </TouchableOpacity>
               )}</MoreItem></NavRow>
             );
           })}
         </ScrollView>
-      )}
-      {!!tc.translateTo && !!tc.understood?.some(c => !sameLanguage(c, tc.translateTo)) && (
-        <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, opacity: 0.7, marginTop: 4, textAlign: 'left' }, { color: t.btnText }]}>
-          Not translated (you understand them): {tc.understood.filter(c => !sameLanguage(c, tc.translateTo)).map(c => translateTargetLabel(c)).join(', ')}
-        </Text>
       )}
       <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, opacity: 0.7, marginTop: 6, textAlign: 'left' }, { color: t.btnText }]}>
         On this device, free and private — nothing is sent anywhere.{tc.autoNote ? ` ${tc.autoNote}` : ''} Clear speech works best; noisy SSB and airband will be patchy.

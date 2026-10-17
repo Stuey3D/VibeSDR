@@ -215,7 +215,8 @@ const EIBI_LANG_ISO: Record<string, string> = {
 };
 
 /** ★ TRANSCRIBE's AUTO hint (Stuart, 2026-10-15: "if i tune to china radio chinese needs to be a language to test").
- *  iOS can only weigh ~4 languages at once, so what EiBi says is on THIS frequency NOW goes first. Within 2.5 kHz
+ *  What EiBi says is on THIS frequency NOW goes first in AUTO's order — on iOS it orders the shortlist on a slow phone
+ *  and breaks ties, never decides (EiBi was wrong for 3 of the 2026-10-17 bake-off's frequencies). Within 2.5 kHz
  *  (half a SW channel), on air now; nearest first. Returns ISO codes (no repeats) and the station EiBi names. */
 export async function eibiLanguagesAt(freqHz: number): Promise<{ langs: string[]; station: string }> {
   await ensureLoaded();

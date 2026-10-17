@@ -63,14 +63,9 @@ class TranscribeEngine(
     private val mod: VibeTranscriberModule,
     languageArg: String,
     private val translateTo: String,
-    /** start()'s options JSON from JS: { understood: ["fr"] } — languages shown untranslated (multilingual users). */
-    optionsJson: String = "",
 ) {
-    /** ★★ LANGUAGES I UNDERSTAND (Stuart, 2026-10-17: "for people who are multilingual themselves") — base codes. */
-    private val understood: Set<String> = try {
-        val a = org.json.JSONObject(optionsJson.ifEmpty { "{}" }).optJSONArray("understood")
-        (0 until (a?.length() ?: 0)).map { a!!.getString(it).substringBefore('-').lowercase(Locale.ROOT) }.toSet()
-    } catch (_: Throwable) { emptySet() }
+    // ★ LANGUAGES I UNDERSTAND went on 2026-10-17 night (Stuart: "not sure what the I understand thing is") — speech
+    //   already in the target language is still never translated (prepareTranslator: src == dst).
     /** 'auto:zh,tr' from JS = AUTO with EiBi's languages for this frequency weighed first. */
     private val language = if (languageArg.startsWith("auto:")) "auto" else languageArg
     private val hints = if (languageArg.startsWith("auto:"))
@@ -553,10 +548,6 @@ class TranscribeEngine(
         val key = "$src>$dst"
         if (key == translatorFor) return
         translator?.close(); translator = null; translatorReady = false; translatorFor = key
-        if (dst != null && understood.contains(lang.substringBefore('-').lowercase(Locale.ROOT))) {
-            status("Listening — ${display(lang)} (you understand it — not translated)")
-            return
-        }
         if (dst == null || src == null || src == dst) {
             if (dst != null && src == null) status("Translation from ${display(lang)} is not available on this device")
             return

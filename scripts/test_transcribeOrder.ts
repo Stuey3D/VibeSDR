@@ -7,14 +7,15 @@
  *   • the main language is sent in the receiver-country variant when that variant is installed (pt-BR, en-GB);
  *   • an uninstalled main language gets NO reserved lane — the preferred list moves up into it;
  *   • one entry per language (en / en-GB, zh / cmn), whatever the source;
- *   • the ★ toggle appends and removes; the stored form survives junk;
+ *   • the ★ toggle appends and removes, and refuses a 5th (Apple keeps 5: the phone's language + 4 ★); the stored
+ *     form survives junk and keeps the first 4 of an older, longer list;
  *   • the ⚠ for a receiver whose main language is not on the device — and none for a UK receiver with English, nor
  *     without a known receiver position;
  *   • Android 12/13's single LIKELY language: EiBi's, else the SDR's local language, else the first ★, else the phone's.
  *
  * Run: node --no-warnings scripts/test_transcribeOrder.ts
  */
-import { autoOrder, togglePreferred, parsePreferred, receiverLanguageMissing, autoLikely } from '../src/services/transcribeOrder.ts';
+import { autoOrder, togglePreferred, parsePreferred, receiverLanguageMissing, autoLikely, PREFERRED_MAX, preferredFull } from '../src/services/transcribeOrder.ts';
 import { countryNear } from '../src/services/regionLanguages.ts';
 
 let fails = 0;
@@ -67,6 +68,11 @@ eq('★ toggle removes and closes the gap', togglePreferred(['en', 'fr', 'nl'], 
 eq('★ toggle: Mandarin as cmn removes zh', togglePreferred(['zh', 'en'], 'cmn'), ['en']);
 eq('stored list parsed, junk + repeats dropped', parsePreferred('en, FR,,nl,en,xx-YY,de'), ['en', 'fr', 'nl', 'de']);
 eq('stored list absent', parsePreferred(null), []);
+eq('★ cap is 4', PREFERRED_MAX, 4);
+eq('★ full at 4', [preferredFull(['en', 'fr', 'nl']), preferredFull(['en', 'fr', 'nl', 'de'])], [false, true]);
+eq('★ toggle refuses a 5th', togglePreferred(['en', 'fr', 'nl', 'de'], 'es'), ['en', 'fr', 'nl', 'de']);
+eq('★ toggle still removes when full', togglePreferred(['en', 'fr', 'nl', 'de'], 'nl'), ['en', 'fr', 'de']);
+eq('stored list of 5 (before the cap) keeps the first 4', parsePreferred('es,fr,nl,de,it'), ['es', 'fr', 'nl', 'de']);
 
 eq('⚠ Brazilian receiver, no Portuguese on the device', receiverLanguageMissing('pt', true, has('en', 'de')), 'pt');
 eq('⚠ none: UK receiver with English', receiverLanguageMissing('en', true, has('en')), null);

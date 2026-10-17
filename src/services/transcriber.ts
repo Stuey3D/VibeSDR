@@ -10,7 +10,7 @@
  *    (12+; language list, downloads and AUTO need 13; detection on 14+) + ML Kit on-device translation. Where the device cannot do it, capabilities()
  *    says so and the TRANSCRIBE key is not drawn (AGENTS.md: no dead controls).
  */
-import { NativeEventEmitter, NativeModules } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
 export interface TranscribeLanguage { id: string; name: string; installed?: boolean }
 export interface TranscribeCaps {
@@ -28,7 +28,7 @@ export interface TranscribeCaps {
   /** The phone's region ('GB') — which variant 'English' means. */
   deviceRegion?: string;
   languages?: TranscribeLanguage[];
-  /** Android: the recogniser can identify the spoken language itself (14+). iOS AUTO is done by comparing models. */
+  /** Android: the recogniser can identify the spoken language itself (14+). iOS AUTO scores every model on the device. */
   nativeLanguageDetection?: boolean;
   /** Android 12 (API 31-32): the phone cannot be asked which speech languages it has, nor fetch one — the user chooses
    *  the language (no AUTO, no GET), and `installed` is never claimed. */
@@ -38,7 +38,7 @@ export type TranscribeEvent =
   | { type: 'status'; text: string }
   | { type: 'error'; text: string }
   | { type: 'partial'; text: string }
-  /** AUTO's search, for the box: the languages being tried, then what each one made of it. */
+  /** AUTO's search, for the box: the languages it listens for, then what it heard (or that nothing was recognised). */
   | { type: 'trying'; text: string }
   | { type: 'tried'; text: string }
   | { type: 'lang'; text: string; name: string; detected?: boolean }
@@ -65,16 +65,26 @@ export function transcribeCaps(): Promise<TranscribeCaps> {
 /** Ask again (after a download) — the installed ticks change. */
 export function refreshTranscribeCaps(): Promise<TranscribeCaps> { capsPromise = null; return transcribeCaps(); }
 
-/** DOWNLOAD… — fetch a language's speech model (+ translation pack) without listening; { ok, text } for the row. */
-export function downloadTranscribeLanguage(language: string, translateTo: string): Promise<{ ok: boolean; text: string }> {
+/** GET — fetch a language's speech model (+ translation pack) without listening; { ok, text } for the row.
+ *  `keep` (iOS): a ★ language or the phone's own — it KEEPS one of Apple's 5 places; any other GET gives its place
+ *  straight back (the system may tidy that language away when unused — GET again). Android has no places. */
+export function downloadTranscribeLanguage(language: string, translateTo: string, keep = false): Promise<{ ok: boolean; text: string }> {
   if (!Native?.download) return Promise.resolve({ ok: false, text: 'Not in this build' });
-  return Native.download(language, translateTo || '').catch((e: any) => ({ ok: false, text: String(e?.message ?? e) }));
+  const p = Platform.OS === 'ios' ? Native.download(language, translateTo || '', !!keep) : Native.download(language, translateTo || '');
+  return p.catch((e: any) => ({ ok: false, text: String(e?.message ?? e) }));
 }
 
-/** understood: base codes the user reads without translation (multilingual users, 2026-10-17) — passed as start()'s
- *  options JSON on both platforms; the engine makes no translator for speech in one of them. */
-export function startTranscribe(language: string, translateTo: string, understood: string[] = []) {
-  Native?.start?.(language || 'auto', translateTo || '', JSON.stringify({ understood }));
+/** ★★ THE 5 KEPT PLACES (iOS; Stuart, 2026-10-17 night): the phone's language + the ★ list (locale ids, ≤ 4). Native
+ *  reserves the ★ ones on the device, keeps the phone's language if the app holds it, and gives back every other
+ *  place. Call at launch once capabilities and the ★ list are known, and after every ★ change. No-op elsewhere. */
+export function keepTranscribeLanguages(localeIds: string[]): Promise<string[]> {
+  if (Platform.OS !== 'ios' || !Native?.keep) return Promise.resolve([]);
+  return Native.keep(localeIds).then((r: any) => (r?.kept ?? []) as string[]).catch(() => []);
+}
+
+/** language: 'auto', 'auto:<prior order>' or a locale id; translateTo: '' = off. */
+export function startTranscribe(language: string, translateTo: string) {
+  Native?.start?.(language || 'auto', translateTo || '');
 }
 export function stopTranscribe() { Native?.stop?.(); }
 /** ★ The dial, for SSB AUTO-TUNE of the recogniser's feed (V12): in USB/LSB the native side estimates how far the
