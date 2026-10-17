@@ -746,7 +746,9 @@ int main() {
             const double lr = lrOf(v, BinauralSpread::Usb, &L, &R);
             const double lrL = lrOf(v, BinauralSpread::Lsb);
             std::printf("      one voice through the full map: L−R %+.2f dB (USB), %+.2f dB (LSB)\n", lr, lrL);
-            check(std::fabs(lr) < 1.5 && std::fabs(lrL) < 1.5 && finite(L) && finite(R), "the pan law keeps one voice's weight central (|L−R| < 1.5 dB)");
+            // ★ 1.6, not 1.5 (2026-10-17): the steadied image (BinauralSpread::steady_) holds each frame to the centre of the
+            //   last 2 s, which weights the quiet, far-placed frames (sibilants) toward the loud ones — 1.48 dB became 1.54.
+            check(std::fabs(lr) < 1.6 && std::fabs(lrL) < 1.6 && finite(L) && finite(R), "the pan law keeps one voice's weight central (|L−R| < 1.6 dB)");
         }
         {
             std::vector<float> L, R;
@@ -1095,6 +1097,99 @@ int main() {
                               off == 150 ? "no answer or the right sign — never the wrong ear" : "leans, the right way, never the wrong ear");
                 check(w.wrongEar == 0 && (off == 150 ? (st[3] == 0 || st[2] * want > 0) : (w.firstLean > 0 && st[2] * want > 60)), what);
             }
+        }
+    }
+
+    std::printf(" ── 11. the image holds still (Stuart on 479: \"it still flaps about a bit too\") ──\n");
+    {
+        // ★ Reversals of a series with a swing of at least `swing` each way (as test-ssb-offset-real §5 counts them).
+        auto reversals = [](const std::vector<double>& v, double swing) {
+            double ext = v.empty() ? 0 : v[0]; int dir = 0, revs = 0;
+            for (double p : v) {
+                if (dir == 0) { if (p - ext >= swing) { dir = 1; ext = p; } else if (ext - p >= swing) { dir = -1; ext = p; } }
+                else if (dir > 0) { if (p > ext) ext = p; else if (ext - p >= swing) { ++revs; dir = -1; ext = p; } }
+                else { if (p < ext) ext = p; else if (p - ext >= swing) { ++revs; dir = 1; ext = p; } }
+            }
+            return revs;
+        };
+        {
+            /* A voice's syllables, reduced to what moved the image: 150 ms of low harmonics (a vowel, 300-800 Hz), 100 ms
+             * of sibilance (2000-2600 Hz), over and over — through the bank at FULL spread. Placed band by band, the vowel
+             * sits ~5 dB left and the "s" ~7 dB right: until 2026-10-17 the image crossed the head four times a second.
+             * Now each frame is held to the centre of the last 2 s; the per-50 ms level difference barely moves. */
+            const auto lowB = bandNoise(fs, 12, 300, 800, 0.3, 5), highB = bandNoise(fs, 12, 2000, 2600, 0.15, 6);
+            std::vector<float> x(lowB.size());
+            for (size_t i = 0; i < x.size(); ++i) x[i] = std::fmod((double)i / fs, 0.25) < 0.15 ? lowB[i] : highB[i];
+            BinauralSpread sp;
+            std::vector<float> L = x, R = x;
+            for (size_t i = 0; i + 960 <= x.size(); i += 960) sp.process(&L[i], &R[i], 960, fs, BinauralSpread::Usb, 1.0f, 50, 2700);
+            // Each syllable's own place: the middle of each vowel and each "s" (the edges skipped — the bank is one 10.7 ms
+            // frame late, and the frame straddling a change is its resolution, not a flap).
+            double vSum = 0, sSum = 0; int vN = 0, sN = 0;
+            for (double t0 = 4.0; t0 + 0.25 <= 12.0; t0 += 0.25) {
+                auto at = [&](double s0, double s1) { return db(rms(R, (size_t)((t0 + s0) * fs), (size_t)((t0 + s1) * fs)),
+                                                                rms(L, (size_t)((t0 + s0) * fs), (size_t)((t0 + s1) * fs))); };
+                vSum += at(0.04, 0.14); ++vN;
+                sSum += at(0.19, 0.24); ++sN;
+            }
+            const double vowel = vSum / vN, sib = sSum / sN;
+            // ★ Measured: the vowel and the "s" sat 13.3 dB apart (one ear to the other) before the steadying; 1.6 dB after.
+            std::printf("      vowel / sibilant alternating at 4 Hz, full spread: vowel %+.2f dB, sibilant %+.2f dB (R over L) — %.2f dB apart\n",
+                        vowel, sib, std::fabs(vowel - sib));
+            check(std::fabs(vowel - sib) < 3.0, "one voice's syllables no longer swing the image across the head (vowel and 's' within 3 dB)");
+        }
+        {
+            // …while what the passband holds AT ONCE keeps its places: a 500 Hz signal in bursts (a voice with pauses) still
+            // sits left, and a steady 500 Hz with a steady 2200 Hz are one in each ear (§8 "together" checks the latter).
+            const auto t = tone(fs, 6.0, 500, 0.3);
+            std::vector<float> x(t.size());
+            for (size_t i = 0; i < x.size(); ++i) x[i] = std::fmod((double)i / fs, 0.4) < 0.2 ? t[i] : 0.0f;
+            BinauralSpread sp;
+            std::vector<float> L = x, R = x;
+            for (size_t i = 0; i + 960 <= x.size(); i += 960) sp.process(&L[i], &R[i], 960, fs, BinauralSpread::Usb, 1.0f, 50, 2700);
+            const double lr = db(rms(L, (size_t)(2 * fs), x.size()), rms(R, (size_t)(2 * fs), x.size()));
+            std::printf("      a 500 Hz signal in bursts: L−R %+.2f dB\n", lr);
+            check(lr > 4, "a lone signal off to one side, with pauses, still sits to that side");
+        }
+        {
+            /* ★★ THE WATERFALL CUE JITTERS. It reads where a voice's band starts from a second of averaged spectrum and is
+             *    good to ±150 Hz; the app re-sends it whenever it moves 10 Hz. A coarse-held answer used to FOLLOW every
+             *    reading, so the lean wobbled with the cue's noise. Arrived 500 Hz off, the cue wandering ±40 Hz: */
+            BinauralTuning bt(false);
+            bt.setEnabled(true); bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 1000); bt.setDial(7100000);
+            std::mt19937 rng(9);
+            std::uniform_real_distribution<float> jit(-40, 40);
+            const int pkt = (int)fs / 50;
+            std::vector<float> l(pkt), r(pkt);
+            std::vector<double> pans;
+            for (int i = 0; i < 50 * 14; ++i) {
+                if (i % 5 == 0) bt.setSsbHint(7100000 + 500 + jit(rng), true);
+                std::fill(l.begin(), l.end(), 0.0f); std::fill(r.begin(), r.end(), 0.0f);
+                bt.processPlanar(l.data(), r.data(), pkt, (int)fs);
+                if (i % 2 == 1) bt.pumpSsbForTest();
+                float st[12]; bt.stats(st, 12);
+                if (i >= 100) pans.push_back(st[4]);
+            }
+            double lo = 1, hi = -1;
+            for (double p : pans) { lo = std::min(lo, p); hi = std::max(hi, p); }
+            const int rv = reversals(pans, 0.01);
+            std::printf("      cue 500 Hz ± 40 Hz jitter: pan %.3f…%.3f, %d reversals (≥ 1 %%) in 12 s\n", lo, hi, rv);
+            check(lo > 0.3 && rv == 0, "a jittering waterfall cue leans steadily — its noise inside its own error is not followed");
+            // …and hovering around its own floor (150 Hz) it must not switch the lean on and off.
+            BinauralTuning b2(false);
+            b2.setEnabled(true); b2.setSource(BinauralTuning::SsbUsb, kSsbDead, 1000); b2.setDial(7100000);
+            int toggles = 0; bool was = false;
+            for (int i = 0; i < 50 * 12; ++i) {
+                if (i % 5 == 0) b2.setSsbHint(7100000 + (i / 5 % 2 ? 140 : 165), true);
+                std::fill(l.begin(), l.end(), 0.0f); std::fill(r.begin(), r.end(), 0.0f);
+                b2.processPlanar(l.data(), r.data(), pkt, (int)fs);
+                if (i % 2 == 1) b2.pumpSsbForTest();
+                float h = 0; const bool v = b2.ssbOffset(h);
+                if (i > 50 && v != was) ++toggles;
+                was = v;
+            }
+            std::printf("      cue alternating 140 / 165 Hz: the answer came and went %d times in 11 s\n", toggles);
+            check(toggles <= 1, "a cue hovering at its own floor does not switch the lean on and off");
         }
     }
 

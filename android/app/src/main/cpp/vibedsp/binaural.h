@@ -156,6 +156,10 @@ private:
  *  ★ THE PAN LAW: far-ness = |position|^kShape. A voice's energy sits low in the passband (most of it a few hundred
  *    Hz either side of 1 kHz), so a straight line would hold one voice off to the left. The power law keeps the
  *    middle of the picture gentle and still reaches full treatment at the edges, where a second signal lives.
+ *  ★★★ THE IMAGE HOLDS STILL (2026-10-17, Stuart on 479: "it still flaps about a bit too"): placed band by band, a
+ *     voice moved the whole image with every syllable (a vowel's low harmonics one side, its "s" the other). Each frame
+ *     is now held to where the passband's energy has sat over the last kImageSlowSec — see steady_(). What sounds AT
+ *     ONCE keeps its separation; a lone signal keeps its side.
  *  ★★ HOW MUCH: `amount` (0…1) — the controller passes the off-tune weight w, the SAME number that sets the lean.
  *     It is smoothed here with the lean's own time constant (BinauralSpatialiser::kPanTauSec), so the spread and
  *     the lean grow and shrink together. A change of sideband glides the spread to nothing (kSwapSec), swaps the
@@ -172,6 +176,11 @@ public:
     static constexpr float kMixFullAt = 0.05f;
     static constexpr float kCwDefaultHz = 600.0f;  ///< CW note before the passband has been measured
     static constexpr float kBinHz = 94.0f;         ///< target bin width: N = the power of two giving ≤ this
+    /** ★★★ THE IMAGE HOLDS STILL (Stuart on 479: "it still flaps about a bit too" — see steady_()): how much of each
+     *  frame's departure from the held image centre is taken out (1 = all of it; 0 = the spread as it was to 479). */
+    static constexpr float kSteadyImage = 1.0f;
+    static constexpr float kImageSlowSec = 2.0f;   ///< the held centre: where the passband's energy has sat over this
+    static constexpr float kImageFastSec = 0.01f;  ///< the correction's own glide across frames (never a step)
 
     BinauralSpread();
     ~BinauralSpread();
@@ -203,6 +212,7 @@ private:
     void weights_();
     void cwMeasure_();
     void cwForget_();
+    void steady_(double eL, double eR);
 
     double fs_ = 0;
     int n_ = 0, h_ = 0, pos_ = 0, warm_ = 0, dpos_ = 0;
@@ -221,6 +231,10 @@ private:
     std::vector<float> win_, win2_, in_, frame_buf_, outL_, outR_, tmp_, dryL_, dryR_;
     std::vector<cf32> spec_, specL_, specR_, wL_, wR_;
     std::vector<float> psm_, floor_;  // CW: smoothed power and its slow floor, per bin (dB)
+    std::vector<float> m2L_, m2R_;    // each ear's power gain per bin at FULL amount (steady_ judges the map on these)
+    double eSlowL_ = 0, eSlowR_ = 0;  // the held image: each ear's full-amount energy averaged over kImageSlowSec
+    float bal_ = 0;                   // the correction now applied, dB (R over L)
+    double slowN_ = 0;                // frames in the held centre since it started (a running mean until it is full)
 };
 
 /** ★★ THE CONTROLLER: which offset, how much pan, the WFM stereo crossfade, the SSB worker. One per output. */
@@ -303,6 +317,13 @@ public:
      *  but transmitters cut their low end anywhere from ~100 to ~400 Hz, so the cue is good to about ±150 Hz. A
      *  coarse answer smaller than this cannot tell "on tune" from "just off", and it never leans on its own. */
     static constexpr float kCoarseMinHz = 150.0f;
+    /** ★★ A COARSE-HELD answer is not dragged by the cue's own noise (Stuart on 479: "it still flaps about a bit too").
+     *  It follows the cue only when they disagree by more than kCoarseFollowHz, and is let go only under
+     *  kCoarseReleaseHz — a hysteresis under kCoarseMinHz, so a cue hovering at its floor cannot switch the lean on and
+     *  off. Synthetic (test-binaural §11: ±40 Hz of jitter, a cue alternating 140/165 Hz); the cue has no off-air
+     *  measurement yet — the real-audio harness has no waterfall. */
+    static constexpr float kCoarseFollowHz = 100.0f;
+    static constexpr float kCoarseReleaseHz = 100.0f;
     /** A beyond-reach answer the DIAL reckoned and a coarse cue within this of each other are the same voice: the
      *  knob's exact figure is kept, the cue's ±150 Hz is not allowed to replace it. */
     static constexpr float kCoarseAgreeHz = 250.0f;

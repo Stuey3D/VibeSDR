@@ -137,8 +137,10 @@ void BinauralSpread::configure_(double rate) {
     const int b = n_ / 2 + 1;
     spec_.assign(b, cf32(0, 0)); specL_.assign(b, cf32(0, 0)); specR_.assign(b, cf32(0, 0));
     wL_.assign(b, cf32(0, 0)); wR_.assign(b, cf32(0, 0));
+    m2L_.assign(b, 1.0f); m2R_.assign(b, 1.0f);
     psm_.assign(b, -200.0f); floor_.assign(b, -200.0f);
     pos_ = 0; warm_ = 0; dpos_ = 0; wAmt_ = -1; cwHops_ = 0;
+    eSlowL_ = eSlowR_ = 0; bal_ = 0; slowN_ = 0;
 }
 
 void BinauralSpread::cwForget_() {
@@ -166,6 +168,11 @@ void BinauralSpread::weights_() {
             return cf32(g * mag * norm * std::cos(ph), g * mag * norm * std::sin(ph));
         };
         wL_[k] = w(farL); wR_[k] = w(farR);
+        // ★ …and each ear's power gain at FULL amount, for steady_(): the image's centre judged on the map itself, so
+        //   the amount gliding in or out never reads as the signal moving.
+        const float p1 = panAt(f, kind_, centre, half);
+        const cf32 a = w(std::max(0.0f, p1)), c = w(std::max(0.0f, -p1));
+        m2L_[k] = std::norm(a) / (norm * norm); m2R_[k] = std::norm(c) / (norm * norm);
     }
     wAmt_ = eff_;
 }
@@ -193,6 +200,38 @@ void BinauralSpread::cwMeasure_() {
     if (!cwMeasured_) { cwCentre_ = c; cwMeasured_ = true; wAmt_ = -1; return; }
     // Moves of under a bin are measurement noise; larger ones glide (half-way per look, ~4 looks a second).
     if (std::fabs(c - cwCentre_) > binHz) { cwCentre_ += 0.5f * (c - cwCentre_); wAmt_ = -1; }
+}
+
+void BinauralSpread::steady_(double eL, double eR) {
+    /* ★★★ THE IMAGE HOLDS STILL WHILE THE VOICE TALKS (kSteadyImage). Stuart on 479: "it still flaps about a bit too".
+     *     Measured (test-ssb-offset-real §5) it was not the lean — the estimator's answer held within a few Hz — but the
+     *     SPREAD: it places each audio frequency by itself, so a voice whose energy moves from its low harmonics (a
+     *     vowel) to its sibilants (an "s") moved the whole image across the head with every syllable: 1.5-2 dB of
+     *     level difference, reversing 60-120 times a minute, at 479's scale; 1.0-1.2 dB at ±500/±1000 Hz on the new one.
+     *     So the bank keeps the image's CENTRE where the signal has been for the last kImageSlowSec — the spread's own
+     *     placement of what is in the passband, averaged — and takes out each frame's departure from it with a gain
+     *     split between the ears. What a frame holds AT ONCE keeps its separation (two stations in the passband are
+     *     still one left, one right — Stuart's "stereo separation of the signals"); a lone voice off to one side still
+     *     sits off to that side; it just stops dancing.
+     *  ★ Judged on the map at FULL amount (eL/eR: the frame's power through each ear's full-spread weights) and scaled
+     *    by the amount actually applied — the level difference in dB grows in proportion to it — so the amount gliding in
+     *    as you tune off is never mistaken for the signal moving, and a lone steady signal is placed at once, exactly as
+     *    before (its held centre is seeded by its first frame). kImageFastSec smooths the correction across frames so it
+     *    never steps; it is bounded at the spread's own reach (kMaxDropDb × the amount). */
+    if (kSteadyImage <= 0.0f) { bal_ = 0; return; }
+    const double tiny = 1e-20;
+    const double hop = (double)h_ / fs_;
+    // ★ A plain running mean until kImageSlowSec of frames are in, then the exponential: no one frame (the splatter of
+    //   an onset, the first frame off tune) can set the centre for seconds.
+    if (slowN_ < 1e9) ++slowN_;
+    const double aS = std::max(1.0 - std::exp(-hop / kImageSlowSec), 1.0 / slowN_);
+    const double aF = 1.0 - std::exp(-hop / kImageFastSec);
+    eSlowL_ += aS * (eL - eSlowL_); eSlowR_ += aS * (eR - eSlowR_);
+    const double now = 10.0 * std::log10((eR + tiny) / (eL + tiny));
+    const double held = 10.0 * std::log10((eSlowR_ + tiny) / (eSlowL_ + tiny));
+    const float lim = BinauralSpatialiser::kMaxDropDb * eff_;
+    const float want = std::max(-lim, std::min(lim, (float)(kSteadyImage * eff_ * (held - now))));
+    bal_ += (float)aF * (want - bal_);
 }
 
 void BinauralSpread::frame_() {
@@ -228,12 +267,23 @@ void BinauralSpread::frame_() {
     std::fill(outL_.begin() + (n - h), outL_.end(), 0.0f);
     std::fill(outR_.begin() + (n - h), outR_.end(), 0.0f);
     if (identity) {
+        eSlowL_ = eSlowR_ = 0; bal_ = 0; slowN_ = 0;   // on tune: the next lean starts its picture afresh
         for (int i = 0; i < n; ++i) { const float y = in_[i] * win2_[i]; outL_[i] += y; outR_[i] += y; }
     } else {
         // ★ Rebuilt as the amount moves — but not for every whisker of the smoother's tail (a few thousand
         //   transcendentals per rebuild); 0.002 of the full spread is far below anything the ear can place.
         if (wAmt_ < 0 || std::fabs(eff_ - wAmt_) > 0.002f || (eff_ != wAmt_ && eff_ >= 1.0f)) weights_();
-        for (int k = 0; k < b; ++k) { specL_[k] = spec_[k] * wL_[k]; specR_[k] = spec_[k] * wR_[k]; }
+        double eL = 0, eR = 0;
+        for (int k = 0; k < b; ++k) {
+            specL_[k] = spec_[k] * wL_[k]; specR_[k] = spec_[k] * wR_[k];
+            const double e = std::norm(spec_[k]);
+            eL += e * m2L_[k]; eR += e * m2R_[k];
+        }
+        steady_(eL, eR);
+        if (bal_ != 0.0f) {
+            const float gl = std::pow(10.0f, -bal_ / 40.0f), gr = 1.0f / gl;   // the correction, half per ear
+            for (int k = 0; k < b; ++k) { specL_[k] *= gl; specR_[k] *= gr; }
+        }
         inv_->inverse(specL_.data(), tmp_.data());
         for (int i = 0; i < n; ++i) outL_[i] += tmp_[i] * win_[i];
         inv_->inverse(specR_.data(), tmp_.data());
@@ -254,6 +304,7 @@ void BinauralSpread::process(float* L, float* R, int n, double rate, int kind, f
             std::fill(dryR_.begin(), dryR_.end(), 0.0f); pos_ = 0; warm_ = 0; dpos_ = 0; cwHops_ = 0;
         }
         running_ = true; amt_ = 0; eff_ = 0; map_ = 1; wet_ = 0; wAmt_ = -1; kind_ = kind;
+        eSlowL_ = eSlowR_ = 0; bal_ = 0; slowN_ = 0;
         if (kind_ == CwUpper || kind_ == CwLower) cwForget_();
     } else if (rate != fs_) {
         // A rate change mid-run: start the bank again from a dry crossfade (rare — a reconnect).
@@ -560,10 +611,16 @@ void BinauralTuning::coarseStep_() {
         leanUpdate_(true);   // the cue's own ±kCoarseMinHz rule has already been applied
     };
     if (coarseHeld_) {
-        // Ours already: follow the cue — unless it now says "on tune or within its own error", which it cannot
-        // tell apart, so let go and leave the fine centring to the estimator.
-        if (std::fabs(c) < kCoarseMinHz) release_();
-        else { ssbHz_.store(c); leanUpdate_(true); }
+        // Ours already: follow the cue — unless it now says "on tune", so let go and leave the fine centring to the
+        // estimator.
+        // ★★ (2026-10-17, Stuart on 479: "it still flaps about a bit too") BUT NOT ITS NOISE. The cue is good to ±150 Hz
+        //    and the app re-sends it at every 10 Hz wobble; followed reading by reading, the lean wobbled with it (§11:
+        //    a ±40 Hz jitter at 500 Hz off gave 63 reversals in 12 s). So the held figure moves only when the cue
+        //    disagrees by more than kCoarseFollowHz — a different voice, or the average settling — and it lets go only
+        //    under kCoarseReleaseHz, below the kCoarseMinHz that seeds it: a cue hovering at 150 Hz switched the lean
+        //    on and off ten times a second. The dial still moves the held figure at once (ssbStep_), cue or no cue.
+        if (std::fabs(c) < kCoarseReleaseHz) release_();
+        else if (std::fabs(c - ssbHz_.load()) > kCoarseFollowHz) { ssbHz_.store(c); leanUpdate_(true); }
         return;
     }
     const bool valid = ssbValid_.load();
