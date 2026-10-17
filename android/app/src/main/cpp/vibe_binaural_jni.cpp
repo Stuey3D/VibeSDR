@@ -29,6 +29,16 @@ Java_com_vibesdr_app_VibeBinaural_nSetStereo(JNIEnv*, jclass, jlong h, jint hint
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeBinaural_nSetDial(JNIEnv*, jclass, jlong h, jdouble hz) { vibe_binaural_set_dial(H(h), hz); }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeBinaural_nSetSsbHint(JNIEnv*, jclass, jlong h, jdouble carrierHz, jboolean valid) {
+    vibe_binaural_set_ssb_hint(H(h), carrierHz, valid ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeBinaural_nSetSpread(JNIEnv*, jclass, jlong h, jint kind, jfloat lo, jfloat hi) {
+    vibe_binaural_set_spread(H(h), kind, lo, hi);
+}
+
 /** int16 interleaved (inCh 1|2) → int16 STEREO interleaved. Returns frames written (0 if `out` is short). */
 extern "C" JNIEXPORT jint JNICALL
 Java_com_vibesdr_app_VibeBinaural_nProcessShorts(JNIEnv* env, jclass, jlong h, jshortArray in, jint inCh, jint frames,

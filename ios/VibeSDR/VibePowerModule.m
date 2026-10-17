@@ -63,6 +63,8 @@ RCT_EXTERN_METHOD(setBinauralSource:(nonnull NSNumber *)source deadHz:(nonnull N
 RCT_EXTERN_METHOD(setBinauralOffset:(nonnull NSNumber *)hz valid:(BOOL)valid)
 RCT_EXTERN_METHOD(setBinauralStereo:(nonnull NSNumber *)hint)
 RCT_EXTERN_METHOD(setBinauralDial:(nonnull NSNumber *)hz)
+RCT_EXTERN_METHOD(setBinauralSsbHint:(nonnull NSNumber *)carrierHz valid:(BOOL)valid)
+RCT_EXTERN_METHOD(setBinauralSpread:(nonnull NSNumber *)kind edgeLoHz:(nonnull NSNumber *)edgeLoHz edgeHiHz:(nonnull NSNumber *)edgeHiHz)
 RCT_EXTERN_METHOD(setSquelchOpen:(BOOL)open)
 RCT_EXTERN_METHOD(sendAudioCommand:(NSString *)json)
 RCT_EXTERN_METHOD(setNowPlaying:(NSString *)title artist:(NSString *)artist)

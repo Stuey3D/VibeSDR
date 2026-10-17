@@ -30,6 +30,10 @@ object VibeBinaural {
     fun setOffset(hz: Float, valid: Boolean) { if (h != 0L) nSetOffset(h, hz, valid) }
     fun setStereo(hint: Int) { if (h != 0L) nSetStereo(h, hint) }
     fun setDial(hz: Double) { if (h != 0L) nSetDial(h, hz) }
+    /** The waterfall's coarse SSB cue: the voice's carrier, ABSOLUTE Hz (binauralOffset.ts ssbCoarseCarrier). */
+    fun setSsbHint(carrierHz: Double, valid: Boolean) { if (h != 0L) nSetSsbHint(h, carrierHz, valid) }
+    /** GUIDE (kind 0) or SPREAD with its map (1 USB, 2 LSB, 3/4 CW) and the default SSB passband's edges. */
+    fun setSpread(kind: Int, edgeLoHz: Float, edgeHiHz: Float) { if (h != 0L) nSetSpread(h, kind, edgeLoHz, edgeHiHz) }
 
     /** int16 (ch 1|2) → int16 stereo into `out` (≥ 2·frames). Returns the SAMPLES written (2·frames). */
     fun processShorts(src: ShortArray, frames: Int, ch: Int, rate: Int, out: ShortArray): Int {
@@ -65,6 +69,8 @@ object VibeBinaural {
     @JvmStatic private external fun nSetOffset(h: Long, hz: Float, valid: Boolean)
     @JvmStatic private external fun nSetStereo(h: Long, hint: Int)
     @JvmStatic private external fun nSetDial(h: Long, hz: Double)
+    @JvmStatic private external fun nSetSsbHint(h: Long, carrierHz: Double, valid: Boolean)
+    @JvmStatic private external fun nSetSpread(h: Long, kind: Int, lo: Float, hi: Float)
     @JvmStatic private external fun nProcessShorts(h: Long, input: ShortArray, inCh: Int, frames: Int, rate: Int, out: ShortArray): Int
     @JvmStatic private external fun nProcessBytes(h: Long, input: ByteArray, inCh: Int, frames: Int, rate: Int, out: ByteArray): Int
 }

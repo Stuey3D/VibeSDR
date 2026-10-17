@@ -1519,7 +1519,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
   }
 
-  // ── Binaural tuning (V12) — see binauralH. All five only store atomics in the C++ object. ──
+  // ── Binaural tuning (V12) — see binauralH. All seven only store atomics in the C++ object. ──
   @objc func setBinaural(_ on: Bool) { vibe_binaural_set_enabled(binauralH, on ? 1 : 0) }
   @objc func setBinauralSource(_ source: NSNumber, deadHz: NSNumber, fullHz: NSNumber) {
     vibe_binaural_set_source(binauralH, source.int32Value, deadHz.floatValue, fullHz.floatValue)
@@ -1529,6 +1529,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
   @objc func setBinauralStereo(_ hint: NSNumber) { vibe_binaural_set_stereo(binauralH, hint.int32Value) }
   @objc func setBinauralDial(_ hz: NSNumber) { vibe_binaural_set_dial(binauralH, hz.doubleValue) }
+  /// The waterfall's coarse SSB cue: the voice's carrier, ABSOLUTE Hz (binauralOffset.ts ssbCoarseCarrier).
+  @objc func setBinauralSsbHint(_ carrierHz: NSNumber, valid: Bool) {
+    vibe_binaural_set_ssb_hint(binauralH, carrierHz.doubleValue, valid ? 1 : 0)
+  }
+  /// GUIDE (kind 0) or SPREAD with its map (1 USB, 2 LSB, 3/4 CW) and the default SSB passband's edges.
+  @objc func setBinauralSpread(_ kind: NSNumber, edgeLoHz: NSNumber, edgeHiHz: NSNumber) {
+    vibe_binaural_set_spread(binauralH, kind.int32Value, edgeLoHz.floatValue, edgeHiHz.floatValue)
+  }
 
   /** Client-side audio squelch gate (network, e.g. Kiwi). JS opens/closes it
    *  from the S-meter level vs the threshold. open=true is the default. */
@@ -1837,10 +1845,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let eng = audioEngine != nil ? "yes" : "no"
     let dec = opusDecoder != nil ? "yes" : "no"
     let ws  = (wsUsingNW ? wsReady : (wsTask?.state == .running)) ? "open" : "closed"
-    var b = [Float](repeating: 0, count: 9)
-    _ = vibe_binaural_stats(binauralH, &b, 9)
-    let bin = b[0] > 0 ? String(format: " bin=src%ld off=%.0f%@ pan=%.2f w=%.2f ssb=%ld/%ld drop=%ld",
-                                Int(b[1]), b[2], b[3] > 0 ? "" : "?", b[4], b[5], Int(b[7]), Int(b[6]), Int(b[8])) : ""
+    var b = [Float](repeating: 0, count: 12)
+    _ = vibe_binaural_stats(binauralH, &b, 12)
+    let bin = b[0] > 0 ? String(format: " bin=src%ld off=%.0f%@%@ pan=%.2f w=%.2f ssb=%ld/%ld drop=%ld spread=%.2f",
+                                Int(b[1]), b[2], b[3] > 0 ? "" : "?", b[10] > 0 ? "c" : "", b[4], b[5], Int(b[7]), Int(b[6]),
+                                Int(b[8]), b[9]) : ""
     return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed)\(bin)"
   }
 

@@ -20,11 +20,16 @@ void  vibe_binaural_set_offset(void* h, float hz, int valid);
 /** 0 mono / not a stereo mode, 1 stereo locked, 2 unknown (measure the audio). Any thread. */
 void  vibe_binaural_set_stereo(void* h, int hint);
 void  vibe_binaural_set_dial(void* h, double hz);
+/** The waterfall's SSB carrier, ABSOLUTE Hz (valid 0 = none seen) — the coarse cue. Any thread. */
+void  vibe_binaural_set_ssb_hint(void* h, double carrierHz, int valid);
+/** Style: 0 GUIDE; SPREAD 1 USB, 2 LSB, 3 CW (upper), 4 CW (lower). Edges = the default SSB passband (audio Hz). Any thread. */
+void  vibe_binaural_set_spread(void* h, int kind, float edgeLoHz, float edgeHiHz);
 /** Audio thread. Planar stereo float, in place. */
 void  vibe_binaural_process_planar(void* h, float* L, float* R, int n, int rate);
 /** Audio thread. int16 interleaved (inCh 1 or 2) → int16 stereo interleaved. Returns frames. */
 int   vibe_binaural_process_i16(void* h, const int16_t* in, int inCh, int frames, int rate, int16_t* outStereo);
-/** [enabled, source, offsetHz, offsetValid, pan, stereoWeight, ssbEstimates, ssbAccepted, ringDrops]. */
+/** [enabled, source, offsetHz, offsetValid, pan, stereoWeight, ssbEstimates, ssbAccepted, ringDrops,
+ *   spreadAmount, coarseHeld, spreadCwCentreHz] — up to `cap`. */
 int   vibe_binaural_stats(void* h, float* out, int cap);
 #ifdef __cplusplus
 }

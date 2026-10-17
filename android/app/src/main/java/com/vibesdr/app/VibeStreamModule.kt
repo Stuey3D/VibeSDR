@@ -502,6 +502,10 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun setBinauralOffset(hz: Double, valid: Boolean) { VibeBinaural.setOffset(hz.toFloat(), valid) }
     @ReactMethod fun setBinauralStereo(hint: Double) { VibeBinaural.setStereo(hint.toInt()) }
     @ReactMethod fun setBinauralDial(hz: Double) { VibeBinaural.setDial(hz) }
+    @ReactMethod fun setBinauralSsbHint(carrierHz: Double, valid: Boolean) { VibeBinaural.setSsbHint(carrierHz, valid) }
+    @ReactMethod fun setBinauralSpread(kind: Double, edgeLoHz: Double, edgeHiHz: Double) {
+        VibeBinaural.setSpread(kind.toInt(), edgeLoHz.toFloat(), edgeHiHz.toFloat())
+    }
 
     // Client-side audio squelch gate (Kiwi etc.) — JS opens/closes from the meter.
     @ReactMethod
