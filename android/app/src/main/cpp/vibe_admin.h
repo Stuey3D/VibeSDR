@@ -30,6 +30,7 @@
 // ★ sysconf(_SC_CLK_TCK) and clock_gettime for the per-process CPU fallback — named rather than
 //   relied on transitively, the same lesson <cmath> taught in vibe_bands.h this afternoon.
 #include <unistd.h>
+#include <atomic>
 #include <deque>
 #include <set>
 #include <mutex>
@@ -1588,12 +1589,27 @@ inline SysStats readSys() {
     //     missing sensor honestly as "not available", so the cost of leaving it out is a card
     //     that tells the truth rather than a number that might be a lie.
 #elif defined(__linux__)
-    {
+    /* ★★★ ON ANDROID AN APP MAY NOT READ EITHER — ASK ONCE, THEN STOP (2026-10-17, Stuart's XCover 4S). SELinux
+     *  refuses /proc/loadavg and the thermal sysfs to an untrusted app, and every refusal is an audit record:
+     *  this runs every 2 s from vibe-hotplug, so after 6 h the logcat held 21 485 "avc: denied" lines — the
+     *  server's own messages buried, and a little CPU and battery spent being told no. A refusal does not
+     *  change while the process lives, so the first one is remembered. The cards already say "not available"
+     *  for a missing sensor, so nothing on screen changes. On a Pi or any Linux box both reads succeed and this
+     *  costs nothing. */
+#if defined(__ANDROID__)
+    static std::atomic<bool> loadRefused{false}, tempRefused{false};   // ★ the health tick and an admin request may both sample
+#else
+    constexpr bool loadRefused = false, tempRefused = false;
+#endif
+    if (!loadRefused) {
         const std::string la = slurp("/proc/loadavg", 128);
         if (!la.empty() && sscanf(la.c_str(), "%lf %lf %lf", &s.load1, &s.load5, &s.load15) == 3)
             s.haveLoad = true;
+#if defined(__ANDROID__)
+        else if (la.empty()) loadRefused = true;
+#endif
     }
-    {
+    if (!tempRefused) {
         // ★ Try the common thermal zones in turn. The Pi's CPU is zone 0; other boards vary, and
         //   a container has none at all — which is a legitimate answer, not a failure.
         static const char* kZones[] = {
@@ -1612,6 +1628,9 @@ inline SysStats readSys() {
             s.haveTemp = true;
             break;
         }
+#if defined(__ANDROID__)
+        if (!s.haveTemp) tempRefused = true;
+#endif
     }
 #if defined(__linux__)
     {
