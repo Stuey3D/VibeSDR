@@ -24,10 +24,16 @@ export interface Band {
 // 500 Hz; CB is receiver-region split (R1/R3 = NFM, R2 = AM, 10 kHz). Steps must
 // be members of STEPS (sdrTypes.ts).
 export const BAND_PLAN: Band[] = [
-  { lo: 9000,      hi: 148500,    name: 'LW Broadcast Band',         type: 'broadcast', mode: 'am',  step: 9000 },
+  /* ★★★ VLF WAS LABELLED LW, AND LW WAS LABELLED NDB (Stuart, 2026-10-17: "when I go to VLF via typing the frequency
+   *  or using a bookmark defaults to the MW setup of 9KHz step … and AM when it needs to be 500Hz step and probably
+   *  CW"). 9–148.5 kHz was "LW Broadcast" on AM/9 kHz, and the real LW broadcast band, 148.5–283.5 kHz, was NDBs on
+   *  USB/500 Hz — one row out. His plan: VLF 500 Hz CW · LW AM 9 kHz (10 kHz in the Americas) · the gap up to MW
+   *  500 Hz USB, for NAVTEX on 490/518 kHz and the beacons. */
+  { lo: 9000,      hi: 148500,    name: 'VLF / LF Utility',           type: 'utility', mode: 'cwu', step: 500 },
   { lo: 135700,    hi: 137800,    name: '2200m Ham Band',             type: 'ham',  bandLabel: '2200m', mode: 'cwu', step: 100 },
-  { lo: 148500,    hi: 283500,    name: 'NDB / Navigational Beacons', type: 'utility', mode: 'usb', step: 500 },
-  { lo: 283500,    hi: 525000,    name: 'NDB / Maritime Beacons',     type: 'utility', mode: 'usb', step: 500 },
+  { lo: 148500,    hi: 283500,    name: 'LW Broadcast Band',          type: 'broadcast', regions: [1, 3], mode: 'am', step: 9000 },
+  { lo: 148500,    hi: 283500,    name: 'LW Broadcast Band',          type: 'broadcast', regions: [2], mode: 'am', step: 10000 },
+  { lo: 283500,    hi: 525000,    name: 'NDB / NAVTEX / Maritime',    type: 'utility', mode: 'usb', step: 500 },
   { lo: 472000,    hi: 479000,    name: '630m Ham Band',              type: 'ham',  bandLabel: '630m', mode: 'cwu', step: 100 },
   // ★ ITU (Stuart, 2026-10-04 — "region based on the ITU bandplan"): Regions 1 AND 3 are 526.5–1606.5 kHz on 9 kHz
   //   channels; Region 2 (the Americas) is 525–1705 kHz on 10 kHz. This had R3 on 10 kHz and the two upper edges swapped.

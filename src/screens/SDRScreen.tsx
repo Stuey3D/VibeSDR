@@ -5832,8 +5832,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onDialMoved: (hz: number) => {
         if (destroyed.current) return;
-        const who = dialStateRef.current?.tuner;
-        setDialHint(`${who ? `User ${who}` : 'Another listener'} tuned to ${(hz / 1e6).toFixed(3)} MHz`);
+        /* ★★★ ONLY WHEN SOMEBODY ELSE MOVED IT (Stuart, 2026-10-17): "when you tune a shared server
+         *  it comes up USER4 has tuned … when it is only you on there". This adopt branch also runs
+         *  on the server's echo of OUR OWN tune when it lands outside the 1.5 s settle window, and
+         *  it named whatever handle the strip held — a number that meant nothing to the person who
+         *  had just turned the knob. The server records who tuned BEFORE it applies the tune
+         *  (local_sdr_shim.cpp, "THE SHARED DIAL: REMEMBER WHO MOVED IT"), so the dial state is
+         *  already current here: ours, or nobody else listening, says nothing.
+         *  ★ No number either — "Another user", in Stuart's words. The chat keeps its User N. */
+        const d = dialStateRef.current;
+        if (d && (d.mine || (d.you > 0 && d.tuner === d.you) || d.listeners <= 1)) return;
+        setDialHint(`Another user has tuned to ${(hz / 1e6).toFixed(3)} MHz`);
       },
       onDialRefused: () => {
         if (destroyed.current) return;
