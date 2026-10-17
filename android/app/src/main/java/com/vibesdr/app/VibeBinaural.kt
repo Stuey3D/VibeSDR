@@ -32,7 +32,8 @@ object VibeBinaural {
     fun setDial(hz: Double) { if (h != 0L) nSetDial(h, hz) }
     /** The waterfall's coarse SSB cue: the voice's carrier, ABSOLUTE Hz (binauralOffset.ts ssbCoarseCarrier). */
     fun setSsbHint(carrierHz: Double, valid: Boolean) { if (h != 0L) nSetSsbHint(h, carrierHz, valid) }
-    /** GUIDE (kind 0) or SPREAD with its map (1 USB, 2 LSB, 3/4 CW) and the default SSB passband's edges. */
+    /** The mode's spread map (0 none — AM/FM/DAB; 1 USB, 2 LSB, 3/4 CW) and the default SSB passband's edges. Not a
+     *  style: native spreads only as far as the listener is off tune, by the same weight as the lean. */
     fun setSpread(kind: Int, edgeLoHz: Float, edgeHiHz: Float) { if (h != 0L) nSetSpread(h, kind, edgeLoHz, edgeHiHz) }
 
     /** int16 (ch 1|2) → int16 stereo into `out` (≥ 2·frames). Returns the SAMPLES written (2·frames). */

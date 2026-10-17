@@ -3193,6 +3193,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     // ★ V12 binaural tuning (see binauralH). Off = one atomic load and nothing else. ENGINE_CH is 2, so the
     //   buffer is always stereo here; the guard is for safety, not a path.
+    //   ★ vibe_binaural_enabled reads ACTIVE, not the switch: turned off, it stays 1 until the lean has centred and
+    //     the SSB/CW spread's constant 10.7 ms delay has crossfaded out — stopping mid-glide would click.
     if vibe_binaural_enabled(binauralH) != 0, buf.format.channelCount == 2, let chans = buf.floatChannelData {
       vibe_binaural_process_planar(binauralH, chans[0], chans[1], Int32(buf.frameLength), Int32(fmt.sampleRate))
     }

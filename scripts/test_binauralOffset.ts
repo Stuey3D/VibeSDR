@@ -14,13 +14,14 @@
  *   • the COARSE SSB cue from the waterfall: a USB voice +500 / −800 / +1500 Hz off (and an LSB one) → the right
  *     sign and size within 150 Hz; coarse bins, noise → nothing; the average survives a retune; the tracker sends
  *     the ABSOLUTE carrier, holds it through a pause and lets go after;
- *   • SPREAD: which map per mode (hidden for AM/FM/DAB), the fixed scale = the protocol's default USB passband, and
- *     the tracker states the style only on change.
+ *   • THE SPREAD MAP: which map per mode (none for AM/FM/DAB), the fixed scale = the protocol's default USB
+ *     passband, and — ONE behaviour since 476, no GUIDE / SPREAD style — the tracker sends each mode's map BY
+ *     ITSELF, only on change, with no style message, and keeps working out the SSB coarse cue with a map set.
  *
  * Run: node --no-warnings scripts/test_binauralOffset.ts   (silent: no audio anywhere)
  */
 import {
-  binauralPlan, binauralModeOk, spectrumOffset, BinauralTracker, SsbCoarse, spreadKindFor, binauralSpreadOk,
+  binauralPlan, binauralModeOk, spectrumOffset, BinauralTracker, SsbCoarse, spreadKindFor,
   BIN_SRC_SSB_USB, BIN_SRC_SSB_LSB, BIN_SRC_GIVEN, BIN_SRC_NONE, BIN_SPREAD_EDGES,
   BIN_SPREAD_OFF, BIN_SPREAD_USB, BIN_SPREAD_LSB, BIN_SPREAD_CW_UPPER, BIN_SPREAD_CW_LOWER,
 } from '../src/services/binauralOffset.ts';
@@ -220,7 +221,7 @@ function ssbFrame(dial: number, carrier: number, lowCut: number, lsb: boolean, n
   }
 }
 
-console.log('── SPREAD ──');
+console.log('── THE SPREAD MAP (one behaviour: no style) ──');
 {
   ok(BIN_SPREAD_EDGES[0] === MODE_BANDWIDTHS.usb[0] && BIN_SPREAD_EDGES[1] === MODE_BANDWIDTHS.usb[1] && BIN_SPREAD_EDGES[1] === 2700,
      'the fixed scale IS the protocol\'s default USB passband (50-2700 Hz)');
@@ -228,21 +229,52 @@ console.log('── SPREAD ──');
   ok(spreadKindFor('cwu', -200, 200) === BIN_SPREAD_CW_UPPER && spreadKindFor('cwl', -200, 200) === BIN_SPREAD_CW_LOWER
      && spreadKindFor('cwl', 300, 700) === BIN_SPREAD_CW_UPPER && spreadKindFor('cw', -700, -300) === BIN_SPREAD_CW_LOWER,
      'CW → upper or lower by where the passband sits, by name when it straddles the dial');
-  ok(!binauralSpreadOk('am') && !binauralSpreadOk('sam') && !binauralSpreadOk('nfm') && !binauralSpreadOk('wfm') && !binauralSpreadOk('dab')
-     && binauralSpreadOk('usb') && binauralSpreadOk('cwl'), 'SPREAD offered for SSB and CW only — not AM, FM or DAB');
+  ok(['am', 'sam', 'nfm', 'fm', 'wfm', 'dab'].every((m) => spreadKindFor(m, -5000, 5000) === BIN_SPREAD_OFF),
+     'no map for AM, SAM, NFM, FM, WFM or DAB — the lean alone there');
+  // ★ Record EVERY call the tracker makes, by name: a style message (or any unknown one) would show up here.
   const calls: string[] = [];
-  const t = new BinauralTracker({ setBinauralSpread: (k: number, a: number, b: number) => calls.push(`spread ${k} ${a} ${b}`) });
+  const names = new Set<string>();
+  const sink = new Proxy({}, {
+    get: (_t, name: string) => (...a: unknown[]) => {
+      names.add(name);
+      if (name === 'setBinauralSpread') calls.push(`spread ${a[0]} ${a[1]} ${a[2]}`);
+    },
+  });
+  const t = new BinauralTracker(sink);
+  ok(!('setStyle' in t), 'the tracker has no style to set any more');
   const g = { centerHz: CENTRE, bwHz: BW, tuneHz: CENTRE, lo: 50, hi: 2700 };
   let now = 0;
-  t.onFrame(noise(), g, 'usb', (now += 100));
-  ok(calls[0] === `spread ${BIN_SPREAD_OFF} 50 2700`, 'GUIDE (the default) is stated once: spread off');
-  t.setStyle('spread');
   t.onFrame(noise(), g, 'usb', (now += 100)); t.onFrame(noise(), g, 'usb', (now += 100));
-  ok(calls.length === 2 && calls[1] === `spread ${BIN_SPREAD_USB} 50 2700`, 'SPREAD on USB → the USB map, sent once');
+  ok(calls.length === 1 && calls[0] === `spread ${BIN_SPREAD_USB} 50 2700`, 'USB: the USB map is sent BY ITSELF, once');
   t.onFrame(noise(), { ...g, lo: -2700, hi: -50 }, 'lsb', (now += 100));
-  ok(calls[2] === `spread ${BIN_SPREAD_LSB} 50 2700`, 'to LSB → the mirrored map (the same scale)');
+  ok(calls[1] === `spread ${BIN_SPREAD_LSB} 50 2700`, 'to LSB → the mirrored map (the same scale)');
+  t.onFrame(noise(), { ...g, lo: 300, hi: 700 }, 'cw', (now += 100));
+  ok(calls[2] === `spread ${BIN_SPREAD_CW_UPPER} 50 2700`, 'to CW → the CW map');
   t.onFrame(noise(), { ...g, lo: -5000, hi: 5000 }, 'am', (now += 100));
-  ok(calls[3] === `spread ${BIN_SPREAD_OFF} 50 2700`, 'to AM → GUIDE (there is no spectrum in AM audio to spread)');
+  ok(calls[3] === `spread ${BIN_SPREAD_OFF} 50 2700`, 'to AM → no map (there is no spectrum in AM audio to spread)');
+  t.onFrame(noise(), { ...g, lo: -6000, hi: 6000 }, 'nfm', (now += 100)); t.onFrame(noise(), { ...g, lo: -6000, hi: 6000 }, 'nfm', (now += 100));
+  ok(calls.length === 4, 'to NFM → still no map, and nothing re-sent');
+  t.reset();
+  t.onFrame(noise(), g, 'usb', (now += 100));
+  ok(calls[4] === `spread ${BIN_SPREAD_USB} 50 2700`, 'after a reset (switched back on) the map is stated afresh');
+  ok([...names].every((n) => n.startsWith('setBinaural')) && ![...names].some((n) => /style/i.test(n)),
+     `no style message — only ${[...names].sort().join(', ')}`);
+}
+{
+  // ★ The SSB coarse cue is worked out WITH the map set (it used to stop under the SPREAD style): it drives the
+  //   off-tune weight, and so the spread as well as the lean.
+  const hints: string[] = [], maps: number[] = [];
+  const t = new BinauralTracker({
+    setBinauralSsbHint: (hz: number, v: boolean) => hints.push(v ? `hint ${Math.round(hz)}` : 'hint x'),
+    setBinauralSpread: (k: number) => maps.push(k),
+  });
+  const dial = CENTRE + 2000;
+  const g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: 50, hi: 2700 };
+  let now = 0;
+  for (let i = 0; i < 25; i++) t.onFrame(ssbFrame(dial, dial + 500, 300, false), g, 'usb', (now += 100));
+  const last = hints.filter((h) => h !== 'hint x').pop();
+  ok(maps[0] === BIN_SPREAD_USB && last !== undefined && Math.abs(Number(last.split(' ')[1]) - (dial + 500)) < 150,
+     `USB with its map set: the coarse cue is still sent (${last ?? 'none'})`);
 }
 
 console.log(fails ? `\nFAILED: ${fails}` : '\nall passed');

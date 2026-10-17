@@ -175,8 +175,8 @@ import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
-import { BinauralTracker, binauralModeOk, binauralSpreadOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
-         type BinauralSink, type BinauralStyle } from '../services/binauralOffset';
+import { BinauralTracker, binauralModeOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
+         type BinauralSink } from '../services/binauralOffset';
 import { isoToFlag, validIso } from '../services/rdsCountry';
 import CenterVfoButton from '../components/CenterVfoButton';
 import PasswordModal from '../components/PasswordModal';
@@ -314,8 +314,6 @@ const SQL_AUTO_KEY = 'lsv_squelch_auto';
 const NFM_VOICE_KEY = 'lsv_nfm_voice';
 /** ★ V12 BINAURAL TUNING — the listener's choice, '1' on; absent/'0' off (the default: it changes what you hear). */
 const BINAURAL_KEY = 'lsv_binaural';
-/** ★ V12 BINAURAL's STYLE — 'spread' or absent/'guide' (the default: GUIDE is what the switch first meant). */
-const BINAURAL_STYLE_KEY = 'lsv_binaural_style';
 const SQL_AUTO_MARGIN_KEY = 'lsv_squelch_auto_margin';
 
 /** The server's health levels arrive as plain numbers off the wire (ServerHealth) and the pill's own
@@ -2607,6 +2605,11 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  opt-in, and it wants headphones. The effect runs natively on the audio the app plays, so it works on every
    *  backend; this screen only supplies what native cannot see — the spectrum readings (AM/CW/FM), the dial, and
    *  the WFM stereo indicator. SSB is measured natively from the voice itself.
+   *  ★★ ONE BEHAVIOUR, NO STYLE (Stuart on 476: "when on signal it presents in mono as it would before and then pan
+   *     left and right based on signal and audio response when off tune"). On tune the audio is untouched; off
+   *     tune it leans toward the signal AND, on SSB and CW, spreads the passband across the ears — both by the
+   *     same amount. The GUIDE / SPREAD choice (lsv_binaural_style) is gone; the tracker sends each mode's spread
+   *     map by itself (binauralOffset.ts spreadKindFor).
    *  ★ Below `status` (it reads status.mode) — see the note on the lock-screen logo above. */
   const [binaural, setBinauralState] = useState(false);
   const binauralRef = useRef(false);
@@ -2614,24 +2617,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   if (!binauralTracker.current) binauralTracker.current = new BinauralTracker((VibePowerModule ?? {}) as BinauralSink);
   /** Has this connection ever reported a WFM stereo indicator? If not, native measures the audio instead. */
   const fmStereoSeenRef = useRef(false);
-  /* ★★ THE STYLE — GUIDE (the lean that tells you which way to tune) or SPREAD (SSB/CW: each audio frequency placed
-   *  by where it lies in the passband, so neighbouring signals arrive in different ears). Remembered like the
-   *  switch. Offered only where SPREAD means something (binauralSpreadOk); elsewhere GUIDE applies whatever is
-   *  remembered — the tracker sends the effective style per frame (binauralOffset.ts spreadKindFor). */
-  const [binauralStyle, setBinauralStyleState] = useState<BinauralStyle>('guide');
   useEffect(() => {
     AsyncStorage.getItem(BINAURAL_KEY).then((v) => { if (v === '1') setBinauralState(true); }).catch(() => {});
-    AsyncStorage.getItem(BINAURAL_STYLE_KEY).then((v) => { if (v === 'spread') setBinauralStyleState('spread'); }).catch(() => {});
   }, []);
   const onBinaural = useCallback((on: boolean) => {
     setBinauralState(on);
     AsyncStorage.setItem(BINAURAL_KEY, on ? '1' : '0').catch(() => {});
   }, []);
-  const onBinauralStyle = useCallback((st: BinauralStyle) => {
-    setBinauralStyleState(st);
-    AsyncStorage.setItem(BINAURAL_STYLE_KEY, st).catch(() => {});
-  }, []);
-  useEffect(() => { binauralTracker.current?.setStyle(binauralStyle); }, [binauralStyle]);
   useEffect(() => {
     binauralRef.current = binaural;
     binauralTracker.current?.reset();   // the next spectrum frame states source, dial and offset afresh
@@ -10443,6 +10435,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    recordings, server settings) and FreqModal (bookmarks).
     //    ★ Again 2026-10-17 for binaural's STYLE row (GUIDE / SPREAD): it sits under the BINAURAL switch in the same
     //    sheet, so "binaural tuning … under the speaker button" still holds; the rest re-checked, unchanged.
+    //    ★ And again 2026-10-17 when that STYLE row was REMOVED (one combined behaviour): this card never named the
+    //    styles, so nothing here pointed at the row; the whole sentence re-read against AudioSheet, MenuSheet and
+    //    FreqModal once more — unchanged.
     { id: 'menu', title: 'Everything else: the settings cog',
       body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — noise reduction, the auto notch, squelch, binaural tuning, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
       target: tourRef('menuBtn') },
@@ -12177,9 +12172,6 @@ export default function SDRScreen({ route, navigation }: Props) {
              mode). (FM-DX is not this screen — it has no spectrum to read, and no row.) */
         binaural={binaural}
         onBinaural={binauralModeOk(status.mode) && !dabOn ? onBinaural : undefined}
-        /* ★ SPREAD only where the audio is a slice of spectrum (SSB, CW); elsewhere no style row at all. */
-        binauralStyle={binauralStyle}
-        onBinauralStyle={binauralSpreadOk(status.mode) && !dabOn ? onBinauralStyle : undefined}
         deemph={hwDeemph}   onDeemph={onHwDeemph}
         stereo={hwStereo}   onStereo={onHwStereo}
         fmNr={fmNr}   onFmNr={vibeFmDsp ? onFmNr : undefined}

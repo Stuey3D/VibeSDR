@@ -12,6 +12,8 @@ extern "C" {
 void* vibe_binaural_create(void);
 void  vibe_binaural_destroy(void* h);
 void  vibe_binaural_set_enabled(void* h, int on);
+/** 1 while the caller should run process: enabled, OR switched off and still gliding back to the untouched input
+ *  (the lean to centre, the spread's 10.7 ms delay out) — skipping it then would click. */
 int   vibe_binaural_enabled(void* h);
 /** source: 0 none, 1 given (set_offset), 2 SSB USB, 3 SSB LSB. 0 pan inside ±deadHz, full at ±fullHz. Any thread. */
 void  vibe_binaural_set_source(void* h, int source, float deadHz, float fullHz);
@@ -22,7 +24,8 @@ void  vibe_binaural_set_stereo(void* h, int hint);
 void  vibe_binaural_set_dial(void* h, double hz);
 /** The waterfall's SSB carrier, ABSOLUTE Hz (valid 0 = none seen) — the coarse cue. Any thread. */
 void  vibe_binaural_set_ssb_hint(void* h, double carrierHz, int valid);
-/** Style: 0 GUIDE; SPREAD 1 USB, 2 LSB, 3 CW (upper), 4 CW (lower). Edges = the default SSB passband (audio Hz). Any thread. */
+/** The mode's spread map: 0 none (AM, FM, DAB), 1 USB, 2 LSB, 3 CW (upper), 4 CW (lower) — not a style: how much
+ *  spread is the off-tune weight, none on tune. Edges = the default SSB passband (audio Hz). Any thread. */
 void  vibe_binaural_set_spread(void* h, int kind, float edgeLoHz, float edgeHiHz);
 /** Audio thread. Planar stereo float, in place. */
 void  vibe_binaural_process_planar(void* h, float* L, float* R, int n, int rate);

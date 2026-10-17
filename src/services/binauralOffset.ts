@@ -34,12 +34,14 @@
  *      simply stays centred — never a wrong lean.
  *    • DAB and every whole-profile mode — none.
  *
- * ★★ TWO STYLES. GUIDE (all of the above): one lean for the whole sound, telling you which way to tune. SPREAD (SSB,
- *    CW — where the audio IS the RF spectrum shifted): each audio frequency placed by where it lies in the passband,
- *    so two signals either side of the dial arrive in different ears. Native does the work (BinauralSpread); this
- *    file only says which map: spreadKindFor(). Elsewhere (AM, FM, DAB) there is no SPREAD to offer — the audio is
- *    not a slice of spectrum — so the choice is not shown and GUIDE applies (AGENTS.md: a control that only works
- *    in one scenario should not be there).
+ * ★★ ONE BEHAVIOUR, TWO CUES (until 476 they were two exclusive STYLES, GUIDE or SPREAD; Stuart on 476: "when on
+ *    signal it presents in mono as it would before and then pan left and right based on signal and audio response
+ *    when off tune"). ON TUNE the audio is untouched. OFF TUNE, by one weight (0 in the dead zone, 1 at full scale):
+ *    the LEAN (all of the above) says which way to tune, and on SSB and CW — where the audio IS the RF spectrum
+ *    shifted — the SPREAD places each audio frequency by where it lies in the passband, higher RF to the right in
+ *    every sideband. Native does both (BinauralSpread, driven by the same weight as the lean); this file only says
+ *    which map the mode has: spreadKindFor(), sent by the tracker by itself whenever binaural is on. AM, FM and DAB
+ *    have no map — their audio is not a slice of spectrum — so they get the lean alone. There is no choice to offer.
  *
  * ★ PURE apart from the sink it is handed (no React Native import), so scripts/test_binauralOffset.ts runs it
  *   under plain node. (sdrProtocol.ts is type-only imports, so it loads there too — hence the .ts extension.)
@@ -68,22 +70,20 @@ export interface BinauralPlan {
   refHz: number;
 }
 
-/** SPREAD maps — mirror BinauralSpread::Kind in vibedsp/binaural.h. 0 = GUIDE (no spread). */
+/** Spread maps — mirror BinauralSpread::Kind in vibedsp/binaural.h. 0 = none (AM, FM, DAB: the lean alone). */
 export const BIN_SPREAD_OFF = 0;
 export const BIN_SPREAD_USB = 1;
 export const BIN_SPREAD_LSB = 2;
 export const BIN_SPREAD_CW_UPPER = 3;
 export const BIN_SPREAD_CW_LOWER = 4;
-/** ★★ SPREAD's FIXED SCALE = the DEFAULT USB passband (Stuart: "treat the 0-2.7K or whatever our default is as the
+/** ★★ THE SPREAD's FIXED SCALE = the DEFAULT USB passband (Stuart: "treat the 0-2.7K or whatever our default is as the
  *  default stereo separation so good width"): its low edge full left, its high edge full right. Read from the
  *  table the protocol uses, so the two cannot drift apart. It never follows the listener's filter — a signal keeps
  *  its place when the passband is widened or narrowed. */
 export const BIN_SPREAD_EDGES: readonly [number, number] = [MODE_BANDWIDTHS.usb[0], MODE_BANDWIDTHS.usb[1]];
 
-export type BinauralStyle = 'guide' | 'spread';
-
 /**
- * The SPREAD map for a mode, or BIN_SPREAD_OFF where SPREAD means nothing. USB/LSB by sideband (data modes ride
+ * The spread map for a mode, or BIN_SPREAD_OFF where a spread means nothing. USB/LSB by sideband (data modes ride
  * these too). CW: upper or lower by WHERE THE PASSBAND SITS — a Kiwi's CWL passband is below the dial — and, when
  * it straddles the dial (VibeServer/UberSDR ±200 Hz), by the mode's name. ★ Not perfect: VibeServer beats CWL as
  * USB (local_sdr_shim), so there a CWL signal's left and right come out swapped. The tuned signal is centred either
@@ -102,11 +102,6 @@ export function spreadKindFor(mode: string | undefined | null, lo: number, hi: n
     }
     default: return BIN_SPREAD_OFF;
   }
-}
-
-/** Is SPREAD offered in this mode? (The audio menu shows the style choice only where it is.) */
-export function binauralSpreadOk(mode: string | undefined | null): boolean {
-  return spreadKindFor(mode, 0, 0) !== BIN_SPREAD_OFF;
 }
 
 /** The smallest dial change that counts as a move (mirrors BinauralTuning::kDialMoveHz). */
@@ -354,7 +349,8 @@ export interface BinauralSink {
   setBinauralDial?: (hz: number) => void;
   /** The coarse SSB cue: the voice's carrier, ABSOLUTE Hz (absolute, so it cannot race the dial). */
   setBinauralSsbHint?: (carrierHz: number, valid: boolean) => void;
-  /** The style: BIN_SPREAD_OFF = GUIDE, else SPREAD with that map; edges = BIN_SPREAD_EDGES. */
+  /** The mode's spread map (BIN_SPREAD_OFF = none: the lean alone); edges = BIN_SPREAD_EDGES. How much spread is
+   *  native's business — the same off-tune weight as the lean, none on tune. */
   setBinauralSpread?: (kind: number, edgeLoHz: number, edgeHiHz: number) => void;
 }
 
@@ -371,7 +367,6 @@ export class BinauralTracker {
    *  fades below the threshold within a second or two of silence.) */
   static readonly COARSE_HOLD_MS = 4000;
   private sink: BinauralSink;
-  private style: BinauralStyle = 'guide';
   private spreadSent = -1;
   private coarse = new SsbCoarse();
   private coarseKey = '';
@@ -398,9 +393,6 @@ export class BinauralTracker {
     this.spreadSent = -1; this.coarse.reset(); this.coarseKey = ''; this.coarseHz = NaN; this.coarseAt = -Infinity;
     this.coarseSentHz = NaN; this.coarseSentOk = false; this.coarseSentAt = -Infinity;
   }
-
-  /** GUIDE or SPREAD — the listener's choice. Applied on the next frame (SPREAD only where the mode has a map). */
-  setStyle(style: BinauralStyle): void { this.style = style; }
 
   setStereo(hint: number): void {
     if (hint === this.stereo) return;
@@ -435,15 +427,15 @@ export class BinauralTracker {
       this.dial = g.tuneHz;
       this.sink.setBinauralDial?.(g.tuneHz);
     }
-    // ★★ The style: SPREAD where this mode has a map, GUIDE everywhere else. Stated only when it changes.
-    const kind = this.style === 'spread' ? spreadKindFor(mode, g.lo, g.hi) : BIN_SPREAD_OFF;
+    // ★★ The mode's spread map, stated by itself (there is no style to choose any more) and only when it changes.
+    const kind = spreadKindFor(mode, g.lo, g.hi);
     if (kind !== this.spreadSent) {
       this.spreadSent = kind;
       this.sink.setBinauralSpread?.(kind, BIN_SPREAD_EDGES[0], BIN_SPREAD_EDGES[1]);
     }
     if (p.kind === 'ssb') {
-      // ★ Under SPREAD nothing reads the guide's offset, so the coarse cue is not worked out (a phone's CPU).
-      if (kind === BIN_SPREAD_OFF) this.coarseFrame(bins, g, p.source === BIN_SRC_SSB_LSB, now);
+      // ★ Always: the coarse cue drives the off-tune weight on SSB, and with it the spread as well as the lean.
+      this.coarseFrame(bins, g, p.source === BIN_SRC_SSB_LSB, now);
       return { ok: false, hz: 0 };
     }
     if (p.kind !== 'peak' && p.kind !== 'centroid') return { ok: false, hz: 0 };
