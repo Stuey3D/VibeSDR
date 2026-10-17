@@ -296,6 +296,8 @@ final class UberClient: ObservableObject {
   /// back the way you left it instead of wanting a re-dial on every connect.
   private var vibeHwKey: String { "vibe.hw.\(host)" }
   private var vibeHwRestoring = false    // suppress save-on-set while we replay the saved values
+  /// ★ Has this socket stated the saved de-emphasis yet? See restoreVibeHw — once per socket, then the server's word.
+  private var deemphStated = false
   private func saveVibeHw() {
     guard isVibe, !vibeHwRestoring else { return }
     UserDefaults.standard.set(["auto": gainAuto, "gain": gainValue, "biasT": biasT,
@@ -315,7 +317,15 @@ final class UberClient: ObservableObject {
     if let v = s["agc"]    as? Bool, v != agc    { setAgc(v) }
     if let v = s["biasT"]  as? Bool, v != biasT  { setBiasT(v) }
     if let v = s["ppm"]    as? Int,  v != ppm    { setPpm(v) }
-    if let v = s["deemph"] as? Int,  v != deemph { setDeemph(v) }
+    /* ★★★ DE-EMPHASIS IS STATED ONCE PER SOCKET, THEN THE SERVER'S REPORT IS SHOWN (2026-10-17). This ran on
+     *  EVERY hwinfo and compared against Jr's own mirror, never the server: on a shared dial, when somebody
+     *  else changed it, Jr went on showing its old value — the same disagreement the phone had ("it still
+     *  showed 75 but i think it was running 50", Stuart). From 11.0.4 the server reports `deemph`
+     *  (onHwInfo adopts it); the listener's remembered choice for this host is said once, on connect. */
+    if !deemphStated {
+      deemphStated = true
+      if let v = s["deemph"] as? Int, v != deemph { setDeemph(v) }
+    }
     // ★ Restore the notch PREFERENCE even on a radio that lacks them — the user may move
     //   between servers, and a setting silently dropped is a setting that never comes back.
     //   pushAllRadioSettings() gates the actual send on the advertised capability.
@@ -628,6 +638,10 @@ final class UberClient: ObservableObject {
     //   and 0 would read as "no gain allowed at all".
     gainCap    = (j["gainCap"] as? NSNumber)?.intValue ?? -1
     maxFftRate = (j["maxFftRate"] as? NSNumber)?.intValue ?? 0   // owner ceiling (needs a Moto update to appear)
+    // ★ De-emphasis as the server runs it (SECONDS on the wire, µs here) — absent on a server before 11.0.4.
+    //   Adopted only once our own choice has been stated (restoreVibeHw), so a report taken before it landed
+    //   cannot undo it.
+    if deemphStated, let d = (j["deemph"] as? NSNumber)?.doubleValue, d >= 0 { deemph = Int((d * 1e6).rounded()) }
     restoreVibeHw()          // the server has now declared what it offers — put the radio back
     pushAllRadioSettings()   // …including the per-radio gain path, see below
   }
@@ -1943,6 +1957,7 @@ final class UberClient: ObservableObject {
   private func openSpectrum() {
     guard !goingIdle else { return }   // never reopen a torn-down client (server switch)
     startHeartbeat()
+    deemphStated = false   // ★ a new socket is a new listener to the server — say the choice again (restoreVibeHw)
     specOpenSeq &+= 1
     let seq = specOpenSeq
     // ★★★ OVERSAMPLE: 1024 BINS, REDUCED ON THE WATCH (BRIEF-jr-vibeserver-display §2).
