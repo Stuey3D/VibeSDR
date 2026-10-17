@@ -9,11 +9,12 @@
  *   • one entry per language (en / en-GB, zh / cmn), whatever the source;
  *   • the ★ toggle appends and removes; the stored form survives junk;
  *   • the ⚠ for a receiver whose main language is not on the device — and none for a UK receiver with English, nor
- *     without a known receiver position.
+ *     without a known receiver position;
+ *   • Android 12/13's single LIKELY language: EiBi's, else the SDR's local language, else the first ★, else the phone's.
  *
  * Run: node --no-warnings scripts/test_transcribeOrder.ts
  */
-import { autoOrder, togglePreferred, parsePreferred, receiverLanguageMissing } from '../src/services/transcribeOrder.ts';
+import { autoOrder, togglePreferred, parsePreferred, receiverLanguageMissing, autoLikely } from '../src/services/transcribeOrder.ts';
 import { countryNear } from '../src/services/regionLanguages.ts';
 
 let fails = 0;
@@ -71,6 +72,15 @@ eq('⚠ Brazilian receiver, no Portuguese on the device', receiverLanguageMissin
 eq('⚠ none: UK receiver with English', receiverLanguageMissing('en', true, has('en')), null);
 eq('⚠ none: receiver position unknown', receiverLanguageMissing('pt', false, has('en')), null);
 eq('⚠ none: no language known for the area', receiverLanguageMissing(undefined, true, has('en')), null);
+
+eq('likely: EiBi when installed', autoLikely({ eibi: ['de'], area: ['pt'], preferred: ['en'], installed: () => true, phone: 'en' }),
+   { code: 'de', why: 'eibi' });
+eq('likely: Kiko\'s receiver → Portuguese', autoLikely({ eibi: [], area: ['pt', 'es'], preferred: ['en'], installed: () => true, phone: 'en' }),
+   { code: 'pt', why: 'receiver' });
+eq('likely: receiver language missing → first ★ installed', autoLikely({ eibi: ['zh'], area: ['pt'], preferred: ['fr', 'en'], installed: has('fr', 'en'), phone: 'en' }),
+   { code: 'fr', why: 'preferred' });
+eq('likely: nothing installed → the phone\'s', autoLikely({ eibi: [], area: ['pt'], preferred: [], installed: () => false, phone: 'en' }),
+   { code: 'en', why: 'phone' });
 
 eq('countryNear: Kiko (São Paulo) → BR', countryNear({ lat: -23.5, lon: -46.6 }), 'BR');
 eq('countryNear: Moulton → GB', countryNear({ lat: 52.3, lon: -0.85 }), 'GB');

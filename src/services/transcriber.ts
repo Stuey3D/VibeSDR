@@ -22,6 +22,9 @@ export interface TranscribeCaps {
   /** iOS: the phone's language as a translation target, with its variant where Apple's Translation has several
    *  ('pt-BR', 'zh-Hant', 'en-GB'); else the bare code. Android (ML Kit) translates to bare codes only. */
   deviceTranslateTo?: string;
+  /** TRANSLATE TO's list: every language the device can translate into (iOS: Apple's Translation, ids like 'pt',
+   *  'pt-PT', 'zh-TW'; Android: ML Kit's bare codes). `installed`: the pack is already here (iOS only). */
+  translateLanguages?: { id: string; name: string; installed?: boolean }[];
   /** The phone's region ('GB') — which variant 'English' means. */
   deviceRegion?: string;
   languages?: TranscribeLanguage[];
@@ -68,7 +71,11 @@ export function downloadTranscribeLanguage(language: string, translateTo: string
   return Native.download(language, translateTo || '').catch((e: any) => ({ ok: false, text: String(e?.message ?? e) }));
 }
 
-export function startTranscribe(language: string, translateTo: string) { Native?.start?.(language || 'auto', translateTo || ''); }
+/** understood: base codes the user reads without translation (multilingual users, 2026-10-17) — passed as start()'s
+ *  options JSON on both platforms; the engine makes no translator for speech in one of them. */
+export function startTranscribe(language: string, translateTo: string, understood: string[] = []) {
+  Native?.start?.(language || 'auto', translateTo || '', JSON.stringify({ understood }));
+}
 export function stopTranscribe() { Native?.stop?.(); }
 /** ★ The dial, for SSB AUTO-TUNE of the recogniser's feed (V12): in USB/LSB the native side estimates how far the
  *  voice is mistuned from its own harmonics and shifts ITS copy back (vibedsp/ssb_offset — shared C++, both

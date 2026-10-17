@@ -7,7 +7,7 @@ RCT_EXTERN_METHOD(capabilities
                   : (RCTPromiseResolveBlock)resolve rejecter
                   : (RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN_METHOD(start : (NSString *)language translateTo : (NSString *)translateTo)
+RCT_EXTERN_METHOD(start : (NSString *)language translateTo : (NSString *)translateTo options : (NSString *)options)
 
 RCT_EXTERN_METHOD(tuning : (NSString *)mode freqHz : (double)freqHz)
 

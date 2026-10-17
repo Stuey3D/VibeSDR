@@ -80,3 +80,22 @@ export function receiverLanguageMissing(mainLang: string | undefined, located: b
   if (!located || !mainLang) return null;
   return installed(mainLang) ? null : mainLang;
 }
+
+export type LikelyWhy = 'eibi' | 'receiver' | 'preferred' | 'area' | 'phone';
+/** ★★ ANDROID 12/13: ONE LANGUAGE, NOT A DETECTION (Stuart, 2026-10-17: "if we can give some form of transcription to
+ *  12/13 then do it"). Android 13 has no language detection and 12 cannot even list what is installed, so AUTO there
+ *  means the single most likely language — the first of autoOrder's list that is installed, else the phone's own —
+ *  and the list says so honestly ("LIKELY · Portuguese (the SDR's local language)"). On 12 the same pick (no EiBi,
+ *  `installed` unknown → everything counts) PRESELECTS the language. `why` names where it came from. */
+export function autoLikely(o: AutoOrderInput & { phone: string }): { code: string; why: LikelyWhy } {
+  const order = autoOrder(o);
+  const b = (id: string) => base(id);
+  for (const id of order) {
+    if (!o.installed(b(id))) continue;
+    const why: LikelyWhy = o.eibi.slice(0, 3).some(c => base(c) === b(id)) ? 'eibi'
+      : o.area[0] && base(o.area[0]) === b(id) ? 'receiver'
+      : o.preferred.some(c => base(c) === b(id)) ? 'preferred' : 'area';
+    return { code: id, why };
+  }
+  return { code: o.phone, why: 'phone' };
+}

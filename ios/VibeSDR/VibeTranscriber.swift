@@ -151,15 +151,19 @@ class VibeTranscriber: RCTEventEmitter {
                // ★ Translate INTO the phone's own variant where Apple's Translation has more than one (pt-BR, zh-Hant,
                //   en-GB) — the bare code would be Apple's default variant, not Kiko's Brazilian Portuguese.
                "deviceTranslateTo": await SpeechEngines.deviceTranslateTarget(),
+               // ★ TRANSLATE TO is a list (Stuart, 2026-10-17: "that button for english needs to be a list too for
+               //   people who are multilingual themselves") — every language Apple's Translation offers.
+               "translateLanguages": await SpeechEngines.translateTargets(),
                "languages": langs])
     }
   }
 
-  /// language: "auto" or a BCP-47 id. translateTo: "" = off, else a language code ("en").
-  @objc func start(_ language: String, translateTo: String) {
+  /// language: "auto" or a BCP-47 id. translateTo: "" = off, else a language code ("en"). options: JSON
+  /// { understood: ["fr"] } — the languages the user reads without translation (TxOptions).
+  @objc func start(_ language: String, translateTo: String, options: String) {
     guard #available(iOS 26.0, *) else { emit(["type": "error", "text": "Needs iOS 26 or later"]); return }
     (engineBox as? TranscribeEngine)?.stop()
-    let eng = TranscribeEngine(owner: self, language: language, translateTo: translateTo)
+    let eng = TranscribeEngine(owner: self, language: language, translateTo: translateTo, options: TxOptions(options))
     engineBox = eng
     eng.start()
   }
@@ -214,6 +218,17 @@ class VibeTranscriber: RCTEventEmitter {
   }
 }
 
+/// start() options from JS: { understood: ["fr"] } (JSON; absent or bad = none).
+struct TxOptions {
+  /// Base codes the user reads without translation (Stuart, 2026-10-17: multilingual users). The target always is.
+  var understood: Set<String> = []
+  init(_ json: String) {
+    guard let d = json.data(using: .utf8),
+          let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+    understood = Set((o["understood"] as? [String] ?? []).map { TranscribePlaces.base($0) })
+  }
+}
+
 // MARK: - Speech engines
 
 /// ★ Apple has TWO on-device transcribers and they cover different languages. SpeechTranscriber (the newer, better
@@ -262,8 +277,13 @@ enum SpeechEngines {
    *  So the 5-place cap only limits downloads IN FLIGHT, and nothing is ever removed to make room.
    *  ★ The assets must be fetched for the app's EXACT module (`module(for:)`): a `.longDictation` download left this
    *    configuration with no audio format — nothing ran.
-   *  ★ Apple can still tidy a released model away when the device runs short of space; the list reads what is really
-   *    installed, so the language simply shows GET again. */
+   *  ★★ AND THE SYSTEM DOES TIDY RELEASED MODELS AWAY (measured later on 2026-10-17: of 13 locales downloaded and
+   *    released, ru, ar, ro, id, uk, nl-NL and the Indian set were purged almost at once; pl-PL, released and then
+   *    used, survived). Kept anyway — Stuart's decision, 2026-10-17: "if we are abusing the system level downloads to
+   *    get around the 5 then we don't need the remove button. We do however need to inform users that they will take
+   *    space, they will need to be removed in the system settings, and recently used ones may need to wait before
+   *    removal." So no REMOVE, no promise that a language stays: the list reads installedLocales every time and a
+   *    tidied-away language shows GET again; the GET confirm and the help say the rest. */
   /// Downloads `loc`'s model for `m` (the app's module) and gives the place straight back.
   static func fetch(_ loc: Locale, _ m: any SpeechModule) async throws {
     await releaseInstalled()                     // a place must be free for the download itself
@@ -281,6 +301,21 @@ enum SpeechEngines {
       _ = await AssetInventory.release(reservedLocale: l)
     }
   }
+  /// TRANSLATE TO's list: every language Apple's Translation offers, as ids JS can store ('pt' = Brazilian, 'pt-PT',
+  /// 'zh' / 'zh-TW'), named, and `installed` where the pack from the phone's language is already on the device.
+  static func translateTargets() async -> [[String: Any]] {
+    let avail = LanguageAvailability()
+    let me = Locale.current.language
+    var out: [[String: Any]] = [], seen = Set<String>()
+    for l in await avail.supportedLanguages {
+      let id = l.minimalIdentifier.replacingOccurrences(of: "_", with: "-")
+      guard seen.insert(id).inserted else { continue }
+      let same = l.languageCode?.identifier == me.languageCode?.identifier
+      let st = same ? LanguageAvailability.Status.installed : await avail.status(from: me, to: l)
+      out.append(["id": id, "name": Locale.current.localizedString(forIdentifier: id) ?? id, "installed": st == .installed])
+    }
+    return out.sorted { ($0["name"] as! String) < ($1["name"] as! String) }
+  }
   /// The phone's language as a Translation target: a variant only when Apple's Translation offers several for the
   /// language and one matches the phone (region first, then script — zh-Hant for Taiwan/Hong Kong); else the bare code.
   static func deviceTranslateTarget() async -> String {
@@ -290,8 +325,12 @@ enum SpeechEngines {
     guard variants.count > 1 else { return code }
     if let r = me.region?.identifier,
        let v = variants.first(where: { $0.region?.identifier == r }) { return v.minimalIdentifier.replacingOccurrences(of: "_", with: "-") }
+    // ★ The same id form as TRANSLATE TO's list (translateTargets: minimalIdentifier), so the phone's own variant
+    //   is one row, not two.
     if let sc = (me.script ?? Locale.Language(identifier: me.maximalIdentifier).script)?.identifier,
-       variants.contains(where: { $0.script?.identifier == sc }) { return "\(code)-\(sc)" }
+       let v = variants.first(where: { ($0.script ?? Locale.Language(identifier: $0.maximalIdentifier).script)?.identifier == sc }) {
+      return v.minimalIdentifier.replacingOccurrences(of: "_", with: "-")
+    }
     return code
   }
   static func module(for loc: Locale) async -> any SpeechModule {
@@ -313,6 +352,7 @@ final class TranscribeEngine {
   /// AUTO's EiBi hint ('auto:zh,tr' from JS): what the schedule says is on this frequency now — weighed first.
   private let hints: [String]
   private let translateTo: String
+  private let options: TxOptions
   /// Everything below is touched only on `q`.
   private let q = DispatchQueue(label: "com.vibesdr.transcribe", qos: .utility)
   private var lanes: [Lane] = []
@@ -384,8 +424,8 @@ final class TranscribeEngine {
     }
   }
 
-  init(owner: VibeTranscriber, language: String, translateTo: String) {
-    self.owner = owner; self.translateTo = translateTo
+  init(owner: VibeTranscriber, language: String, translateTo: String, options: TxOptions) {
+    self.owner = owner; self.translateTo = translateTo; self.options = options
     if language.hasPrefix("auto:") {
       self.language = "auto"
       self.hints = language.dropFirst(5).split(separator: ",").map(String.init).filter { !$0.isEmpty }
@@ -713,7 +753,11 @@ final class TranscribeEngine {
                  "detected": language == "auto"])
     status("Listening — \(shortName(lane.locale))\(language == "auto" ? " (detected)" : "")")
     translator = nil
-    if !translateTo.isEmpty, lang != TranscribePlaces.base(translateTo) {
+    /* ★★ LANGUAGES I UNDERSTAND (Stuart, 2026-10-17: "for people who are multilingual themselves") — speech in one of
+     *    them is shown as it is, no translation line; everything else goes to the target. */
+    if options.understood.contains(TranscribePlaces.base(lang)) {
+      if !translateTo.isEmpty { status("Listening — \(shortName(lane.locale)) (you understand it — not translated)") }
+    } else if !translateTo.isEmpty, lang != TranscribePlaces.base(translateTo) {
       let tr = Translator(source: lane.locale.language, target: Locale.Language(identifier: translateTo)) { [weak self] s in
         self?.status(s)
       }

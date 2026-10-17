@@ -315,6 +315,13 @@ interface ModeSelectorProps {
     preferred?: string[]; onPreferred?: (code: string) => void;
     /** ⚠ The SDR's local language is not on this device: its code and the line to show (Stuart, 2026-10-17). */
     missing?: { code: string; text: string } | null;
+    /** Android 13: AUTO is ONE likely language, not a detection — its name and why ("Portuguese (the SDR's local
+     *  language)"); the key reads LIKELY · … instead of claiming to detect. */
+    likely?: string;
+    /** TRANSLATE TO's list (every language the device translates into) — absent: the phone's language and English. */
+    translateLanguages?: { id: string; name: string; installed?: boolean }[];
+    /** LANGUAGES I UNDERSTAND: base codes shown untranslated; toggled from TRANSLATE TO's list. */
+    understood?: string[]; onUnderstood?: (code: string) => void;
     /** The language being heard right now ('' when not running) — shown on the AUTO key as AUTO · MANDARIN. */
     heard?: string;
     /** iOS: AUTO only compares languages already on the phone — say so, or a new language looks unsupported. */
@@ -412,10 +419,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *    mode and highlight the language row if the language is not installed"). The triangle rides on AUTO (the head
    *    and its row), the line under the head says which language and GETs it, and that language's row is outlined
    *    in the warn colour with its GET ready — and is where the list opens. */
-  const txMissing = tc?.missing && !tc.chooseOnly ? tc.missing : null;
+  const txMissing = tc?.missing ?? null;
   const txWarnTri = txMissing ? '\u26A0 ' : '';
   const txHead = !tc ? '' : tc.language === 'auto'
-    ? txWarnTri + (tc.heard ? `AUTO · ${tc.heard.toUpperCase()}` : 'AUTO — DETECT THE LANGUAGE')
+    ? txWarnTri + (tc.likely ? `LIKELY · ${tc.likely.toUpperCase()}`
+                 : tc.heard ? `AUTO · ${tc.heard.toUpperCase()}` : 'AUTO — DETECT THE LANGUAGE')
     : (txChosen?.name ?? tc.language).toUpperCase();
   // ★ The warn meaning, readable on every look: the clash-ruled amber (white on amber/neon text); a dark amber on the
   //   white default theme, where pale yellow would vanish.
@@ -433,9 +441,22 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txListOpen]);
   const txPick = (id: string) => { setTxListOpen(false); tc?.onLanguage(id); };
-  const txRows = tc ? [...(tc.chooseOnly ? [] : [{ id: 'auto', code: 'auto', name: `${txWarnTri}AUTO — detect the language`, installed: true }]), ...tc.languages] : [];
-  // ★ The phone's language (its variant: PORTUGUESE (BR)) and English — one button per language, never two Englishes.
-  const txTargets = tc ? [tc.deviceLanguage, ...(sameLanguage(tc.deviceLanguage, 'en') ? [] : ['en'])].filter(Boolean) : [];
+  const txRows = tc ? [...(tc.chooseOnly ? [] : [{ id: 'auto', code: 'auto', name: tc.likely ? `${txWarnTri}LIKELY — the most likely language (no detection on Android 13)` : `${txWarnTri}AUTO — detect the language`, installed: true }]), ...tc.languages] : [];
+  /* ★★ TRANSLATE TO IS A LIST (Stuart, 2026-10-17: "that button for english needs to be a list too for people who
+   *    are multilingual themselves"). OFF, the phone's own variant first (PORTUGUESE (BR)), then every language the
+   *    device translates into. ★★ LANGUAGES I UNDERSTAND: a ☐/☑ on each row — speech in a ticked language is shown as
+   *    it is, everything else goes to the target (Stuart understands English + French, target English: French
+   *    broadcasts stay French, German ones come out in English). The target itself is always understood. */
+  const [trListOpen, setTrListOpen] = useState(false);
+  const trBase = (id: string) => id.toLowerCase().split(/[-_]/)[0];
+  const txTargets: { id: string; name: string; installed?: boolean }[] = !tc ? [] : (() => {
+    const all = tc.translateLanguages?.length ? tc.translateLanguages
+      : [tc.deviceLanguage, ...(sameLanguage(tc.deviceLanguage, 'en') ? [] : ['en'])].filter(Boolean).map(id => ({ id, name: translateTargetLabel(id) }));
+    const mine = all.find(l => l.id === tc.deviceLanguage) ?? (tc.deviceLanguage ? { id: tc.deviceLanguage, name: translateTargetLabel(tc.deviceLanguage) } : null);
+    return [...(mine ? [mine] : []), ...all.filter(l => l.id !== mine?.id)];
+  })();
+  const trHead = !tc ? '' : tc.translateTo ? translateTargetLabel(tc.translateTo).toUpperCase() : 'OFF';
+  const trPick = (id: string) => { setTrListOpen(false); tc?.onTranslateTo(id); };
   const transcribeCallout = tc && txLit ? (
     <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                              : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
@@ -532,12 +553,68 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         </Text>
       )}
       <SubLabel label="TRANSLATE TO" />
-      <OptRow>
-        <SegBtn label="OFF" active={!tc.translateTo} onPress={() => tc.onTranslateTo('')} />
-        {txTargets.map(c => (
-          <SegBtn key={c} label={translateTargetLabel(c).toUpperCase()} active={tc.translateTo === c} onPress={() => tc.onTranslateTo(c)} />
-        ))}
-      </OptRow>
+      <NavRow><NavItem onPress={() => setTrListOpen(o => !o)}>{(navFocused, navRef) => pt.metal ? (
+        <PopupKey ref={navRef as any} active pip onPress={() => setTrListOpen(o => !o)} focused={navFocused} height={38}
+          style={{ alignSelf: 'stretch' }} accessibilityLabel={`Translate to: ${trHead}`}>
+          {(legend) => (
+            <View style={st.moreHeadMetal}>
+              <Text style={[st.moreHeadText, { fontFamily: 'Atkinson Hyperlegible', fontWeight: '700', letterSpacing: 1, color: legend }]}
+                    numberOfLines={1}>{trHead}</Text>
+              <Text style={[st.moreChevron, { color: legend }]}>{trListOpen ? '▴' : '▾'}</Text>
+            </View>
+          )}
+        </PopupKey>
+      ) : (
+        <TouchableOpacity ref={navRef as any} activeOpacity={0.8} onPress={() => setTrListOpen(o => !o)}
+          accessibilityLabel={`Translate to: ${trHead}`}
+          style={[st.moreHead, { borderColor: dec, backgroundColor: decBg }, navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}>
+          <Text style={[st.moreHeadText, { fontFamily: t.font, color: dec }]} numberOfLines={1}>{trHead}</Text>
+          <Text style={[st.moreChevron, { color: t.btnText }]}>{trListOpen ? '▴' : '▾'}</Text>
+        </TouchableOpacity>
+      )}</NavItem></NavRow>
+      {trListOpen && (
+        <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" contentContainerStyle={scrollLane}
+                    style={[st.moreList, { borderColor: t.btnBorder }, pt.metal && windowStyle(pt)]}>
+          {[{ id: '', name: 'OFF — show only what is said' }, ...txTargets].map(l => {
+            const on = l.id === tc.translateTo;
+            const keyC = pt.metal ? pt.winText : t.btnText;
+            const keyB = pt.metal ? pt.winText : t.btnBorder;
+            const rowText = pt.metal
+              ? { fontFamily: 'Atkinson Hyperlegible', color: on ? pt.readout : pt.winText,
+                  ...(on ? { textShadowColor: pt.readoutGlow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } } : null) }
+              : { fontFamily: t.font, color: on ? dec : t.btnText };
+            const isTarget = !!l.id && !!tc.translateTo && sameLanguage(l.id, tc.translateTo);
+            const knows = !!l.id && !!tc.understood?.includes(trBase(l.id));
+            return (
+              <NavRow key={l.id || 'off'}><MoreItem onPress={() => trPick(l.id)} onReveal={() => {}}>{(navFocused, navRef) => (
+                <TouchableOpacity ref={navRef as any} activeOpacity={0.7} onPress={() => trPick(l.id)}
+                  style={[st.moreItem, st.txItem, { borderBottomColor: pt.metal ? pt.winRule : t.barBorder },
+                          navFocused && { backgroundColor: focusC.tint(0.16) }]}>
+                  <Text style={[st.moreItemText, { flex: 1 }, rowText]} numberOfLines={1}>
+                    {on ? '✓ ' : ''}{l.name.toUpperCase()}
+                  </Text>
+                  {!!(l as any).installed && !isTarget && (
+                    <Text style={[st.txSide, { color: keyC, opacity: 0.6 }]}>ON PHONE</Text>
+                  )}
+                  {!!l.id && !!tc.onUnderstood && (isTarget ? (
+                    <Text style={[st.txSide, { color: keyC, opacity: 0.6, marginLeft: 8 }]}>TARGET</Text>
+                  ) : (
+                    <TxKey label={knows ? '\u2611 I UNDERSTAND' : '\u2610 I UNDERSTAND'} color={keyC}
+                      style={[{ borderColor: keyB }, !knows && { opacity: 0.7 }]}
+                      onPress={() => tc.onUnderstood?.(l.id)}
+                      a11y={knows ? `You understand ${l.name}: shown untranslated. Tap to translate it again` : `I understand ${l.name}: show it untranslated`} />
+                  ))}
+                </TouchableOpacity>
+              )}</MoreItem></NavRow>
+            );
+          })}
+        </ScrollView>
+      )}
+      {!!tc.translateTo && !!tc.understood?.some(c => !sameLanguage(c, tc.translateTo)) && (
+        <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, opacity: 0.7, marginTop: 4, textAlign: 'left' }, { color: t.btnText }]}>
+          Not translated (you understand them): {tc.understood.filter(c => !sameLanguage(c, tc.translateTo)).map(c => translateTargetLabel(c)).join(', ')}
+        </Text>
+      )}
       <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, opacity: 0.7, marginTop: 6, textAlign: 'left' }, { color: t.btnText }]}>
         On this device, free and private — nothing is sent anywhere.{tc.autoNote ? ` ${tc.autoNote}` : ''} Clear speech works best; noisy SSB and airband will be patchy.
       </Text>

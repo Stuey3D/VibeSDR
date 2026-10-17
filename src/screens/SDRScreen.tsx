@@ -215,7 +215,7 @@ import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, startTranscribe, stopTranscribe, setTranscribeTuning, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, sameLanguage, translateTargetLabel, type TranscribeCaps } from '../services/transcriber';
-import { autoOrder, togglePreferred, parsePreferred, receiverLanguageMissing } from '../services/transcribeOrder';
+import { autoOrder, autoLikely, togglePreferred, parsePreferred, receiverLanguageMissing, type LikelyWhy } from '../services/transcribeOrder';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -4691,16 +4691,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ AUTO's PREFERRED languages, in the user's order (codes) — the numbered ★ in the LANGUAGE list (2026-10-17). */
   const [txPref, setTxPref] = useState<string[]>([]);
   const txPrefRef = useRef<string[]>([]); txPrefRef.current = txPref;
+  /** ★ LANGUAGES I UNDERSTAND (Stuart, 2026-10-17: "for people who are multilingual themselves") — base codes shown
+   *  untranslated, ticked in TRANSLATE TO's list. Empty = just the target (the behaviour before). */
+  const [txKnow, setTxKnow] = useState<string[]>([]);
+  const txKnowRef = useRef<string[]>([]); txKnowRef.current = txKnow;
   useEffect(() => {
     let dead = false;
     transcribeCaps().then(c => { if (!dead) setTxCaps(c); });
-    AsyncStorage.multiGet(['lsv_tx_lang', 'lsv_tx_to', 'lsv_tx_pref']).then(kv => {
+    AsyncStorage.multiGet(['lsv_tx_lang', 'lsv_tx_to', 'lsv_tx_pref', 'lsv_tx_know']).then(kv => {
       if (dead) return;
       const l = kv[0]?.[1], t = kv[1]?.[1];
       if (l) setTxLang(transcribeChoiceCode(l));   // ★ a language code ('fr'); older builds stored 'fr-BE'
       if (t != null) setTxTo(t === 'off' ? '' : t);
       const p = parsePreferred(kv[2]?.[1]);
       setTxPref(p); txPrefRef.current = p;
+      const k = parsePreferred(kv[3]?.[1]);       // same stored form: 'en,fr'
+      setTxKnow(k); txKnowRef.current = k;
     }).catch(() => {});
     return () => { dead = true; };
   }, []);
@@ -4710,14 +4716,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   const txTarget = txTo == null ? txDevTo
     : (txTo && !/[-_]/.test(txTo) && sameLanguage(txTo, txDevTo) ? txDevTo : txTo);
   const txTargetRef = useRef(txTarget); txTargetRef.current = txTarget;
-  /* ★ Android 12 has no AUTO (TranscribeCaps.chooseOnly) — a stored or default 'auto' means the phone's language there.
-   *   Not saved: the same choice on a later Android or an iPhone restore is still AUTO. */
+  /* ★ Android 12 has no AUTO (TranscribeCaps.chooseOnly) — a stored or default 'auto' is PRESELECTED there as the most
+   *   likely language (Stuart, 2026-10-17: "if we can give some form of transcription to 12/13 then do it"): the SDR's
+   *   local language (Portuguese on Kiko's server), else the first ★, else the phone's — transcribeOrder autoLikely.
+   *   Re-picked when the receiver's position arrives, until the user chooses. Not saved: the same choice on a later
+   *   Android or an iPhone restore is still AUTO. */
+  const txAutoPickedRef = useRef(false);
   useEffect(() => {
-    if (txCaps?.chooseOnly && txLang === 'auto' && txCaps.deviceLanguage) {
-      setTxLang(txCaps.deviceLanguage); txLangRef.current = txCaps.deviceLanguage;
-    }
+    if (!txCaps?.chooseOnly || !txCaps.deviceLanguage) return;
+    if (txLang !== 'auto' && !txAutoPickedRef.current) return;
+    const supported = (c: string) => !!pickLocale(txCaps, c) || (c === 'zh' && !!pickLocale(txCaps, 'cmn'));
+    const pick = autoLikely({ eibi: [], area: recvLoc ? languagesNear(recvLoc, supported, 4) : [], preferred: txPrefRef.current,
+                              installed: supported, phone: txCaps.deviceLanguage }).code;
+    const code = transcribeChoiceCode(pick);
+    if (code !== txLang) { txAutoPickedRef.current = true; setTxLang(code); txLangRef.current = code; }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [txCaps, txLang]);
+  }, [txCaps, txLang, recvLoc]);
   const txLangRef = useRef(txLang); txLangRef.current = txLang;
   /** The language the transcriber settled on (detected or chosen) — shown in the status line by the native side. */
   /** The engine's own state line ("Listening — French (detected)") — a partial borrows the status row while speech is
@@ -4793,6 +4807,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    device, in the receiver's variant: pt-BR on Kiko's), the user's ★ PREFERRED list, then the area's others. The
    *    native side adds the phone's languages and the rest installed, and drops anything not on the device. */
   const txCapsRef = useRef<TranscribeCaps | null>(null); txCapsRef.current = txCaps;
+  /** Android 13: the one language AUTO listens in, and why (set when AUTO starts; see txHintsFor). */
+  const [txLikely, setTxLikely] = useState<{ code: string; why: LikelyWhy } | null>(null);
   const txHintsFor = useCallback(async (freq: number): Promise<{ langs: string[]; label: string; eibi: string[]; station: string }> => {
     const caps = txCapsRef.current;
     const supported = (c: string) => !!pickLocale(caps, c) || (c === 'zh' && !!pickLocale(caps, 'cmn'));
@@ -4817,6 +4833,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         return v ? v.id : null;
       },
     });
+    /* ★ Android 13 (no detection): the engine listens in the FIRST hint it can — so only installed ones go, and the
+     *   list names that one honestly (txLikely). Android 14 detects among installed languages itself. */
+    if (Platform.OS === 'android' && caps && !caps.nativeLanguageDetection && !caps.chooseOnly) {
+      const lk = autoLikely({ eibi: fromEibi, area, preferred: txPrefRef.current, installed, phone: caps.deviceLanguage ?? 'en' });
+      setTxLikely(lk);
+      return { langs: langs.filter(installed), label: fromEibi.length ? `EiBi: ${e.station} · ${fromEibi.map(langName).join(', ')}` : '',
+               eibi: fromEibi, station: e.station };
+    }
     return { langs, label: fromEibi.length ? `EiBi: ${e.station} · ${fromEibi.map(langName).join(', ')}` : '',
              eibi: fromEibi, station: e.station };
   }, []);
@@ -4827,7 +4851,14 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    (transcribeOrder.ts `receiverLanguageMissing`, tested). Wording: Stuart's ("SDR's local language … is not
    *    currently downloaded"). */
   const txMissingCode = useMemo(() => {
-    if (!txCaps?.available || txCaps.chooseOnly) return null;
+    if (!txCaps?.available) return null;
+    // ★ Android 12 cannot say what is installed: warn whenever the SDR's language is not the phone's own, and say
+    //   where to add it (no GET there — there is no API).
+    if (txCaps.chooseOnly) {
+      const sup = (c: string) => !!pickLocale(txCaps, c);
+      const main = recvLoc ? languagesNear(recvLoc, sup, 1)[0] : undefined;
+      return main && !sameLanguage(main, txCaps.deviceLanguage ?? '') ? main : null;
+    }
     const rows = transcribeLanguageList(txCaps);
     const supported = (c: string) => !!pickLocale(txCaps, c) || (c === 'zh' && !!pickLocale(txCaps, 'cmn'));
     const installed = (c: string) => !!rows.find(r => r.code === c || (c === 'zh' && r.code === 'cmn'))?.installed;
@@ -4856,7 +4887,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const startTxHinted = useCallback(() => {
     txStartFreqRef.current = txFreqRef.current;
     txLanguageArg().then(arg => {
-      if (activeDecRef.current === 'transcribe') startTranscribe(arg, txTargetRef.current);
+      if (activeDecRef.current === 'transcribe') startTranscribe(arg, txTargetRef.current, txKnowRef.current);
     });
   }, [txLanguageArg]);
   txRedetectRef.current = () => {
@@ -4878,9 +4909,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       ? (ios ? `\n\nYou translate into ${translateTargetLabel(to)}: if that translation pack is not on this device yet, Apple\u2019s own window offers it straight after.`
              : `\n\nYou translate into ${translateTargetLabel(to)}: its translation pack is fetched too if it is not on the phone yet.`)
       : '';
+    /* ★★ WHAT TO SAY (Stuart, 2026-10-17: "inform users that they will take space, they will need to be removed in
+     *    the system settings, and recently used ones may need to wait before removal"). The model is the SYSTEM's
+     *    download (VibeTranscriber SpeechEngines.fetch releases it straight after), so VibeSDR cannot remove it, and
+     *    the system may tidy away one that is not used — then the list shows GET again. The Mac path is the one
+     *    Stuart used; the iPhone one is not verified, so it says "Settings". */
     Alert.alert(`Download ${nm}?`,
-      (ios ? `About 300\u2013450 MB is saved to this device (best on Wi-Fi) and stays for transcribing ${nm} from then on \u2014 iOS frees the space itself if the device runs short.`
-           : `The ${nm} speech model is saved to this phone (it can be a few hundred MB \u2014 best on Wi-Fi) and stays for transcribing ${nm} from then on.`) + tr,
+      (ios ? `About 300\u2013450 MB of storage (best on Wi-Fi). It is saved by the system, not VibeSDR: to remove it later use Settings (on a Mac, System Settings \u2192 Keyboard \u2192 Dictation), and a language used recently may have to wait a while before it can be removed. The system may also tidy away languages you do not use \u2014 GET again if one goes.`
+           : `The ${nm} speech model takes storage (it can be a few hundred MB \u2014 best on Wi-Fi). It is saved by the phone, not VibeSDR: remove it later in the phone\u2019s speech settings.`) + tr,
       [{ text: 'Cancel', style: 'cancel' }, { text: 'Download', onPress: go }]);
   };
   /** GET in the list, the ⚠ line and DOWNLOAD in the box: confirm, fetch the language (and the translation pack), then
@@ -11030,7 +11066,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           notice={activeDecoder === 'transcribe' && txOffer && txCaps ? (() => {
             const nm = langName(txOffer.code);
             return {
-              text: `${txOffer.station ? `${txOffer.station} is` : 'This station is'} believed to be in ${nm} (EiBi). ${nm} is not on this ${Platform.OS === 'ios' ? 'device' : 'phone'} — download it to transcribe this station (${Platform.OS === 'ios' ? '300\u2013450 MB' : 'a few hundred MB'}, best on Wi-Fi; it stays for next time).`,
+              text: `${txOffer.station ? `${txOffer.station} is` : 'This station is'} believed to be in ${nm} (EiBi). ${nm} is not on this ${Platform.OS === 'ios' ? 'device' : 'phone'} — download it to transcribe this station (${Platform.OS === 'ios' ? '300\u2013450 MB' : 'a few hundred MB'}, best on Wi-Fi).`,
               action: txDl.id === txOffer.code ? 'DOWNLOADING…' : 'DOWNLOAD',
               onAction: txDl.id ? undefined : () => txDownload(txOffer.code),
             };
@@ -12151,20 +12187,42 @@ export default function SDRScreen({ route, navigation }: Props) {
           },
           missing: txMissingCode ? (() => {
             const nm = langName(txMissingCode);
+            if (txCaps.chooseOnly) {
+              return { code: txMissingCode, text: `\u26A0 ${nm} \u2014 the SDR\u2019s local language \u2014 may not be downloaded: on Android 12 add it for offline speech in the phone\u2019s Settings (search \u201Coffline speech\u201D)` };
+            }
             const tr = txTarget && !sameLanguage(txTarget, txMissingCode) ? ' — GET also offers its translation pack if it is needed' : '';
             return { code: txMissingCode, text: `\u26A0 ${nm} \u2014 the SDR\u2019s local language \u2014 is not currently downloaded${tr}` };
           })() : null,
           heard: activeDecoder === 'transcribe' ? txHeard : '',
+          // ★ Android 13: AUTO is one likely language, not a detection — said on the key (transcribeOrder autoLikely).
+          likely: Platform.OS === 'android' && !txCaps.nativeLanguageDetection && !txCaps.chooseOnly ? (() => {
+            const lk = txLikely ?? autoLikely({ eibi: [], area: languagesNear(recvLoc, c => !!pickLocale(txCaps, c), 4),
+              preferred: txPref, installed: c => !!transcribeLanguageList(txCaps).find(r => r.code === c)?.installed,
+              phone: txCaps.deviceLanguage ?? 'en' });
+            const why = { eibi: 'EiBi', receiver: 'the SDR\u2019s local language', preferred: 'your \u2605 language',
+                          area: 'spoken near the SDR', phone: 'your phone\u2019s language' }[lk.why];
+            return `${langName(lk.code)} (${why})`;
+          })() : undefined,
+          // ★ TRANSLATE TO's list + LANGUAGES I UNDERSTAND (Stuart, 2026-10-17).
+          translateLanguages: txCaps.translateLanguages,
+          understood: txKnow,
+          onUnderstood: (code: string) => {
+            const next = togglePreferred(txKnowRef.current, code.toLowerCase().split(/[-_]/)[0]);
+            setTxKnow(next); txKnowRef.current = next;
+            AsyncStorage.setItem('lsv_tx_know', next.join(',')).catch(() => {});
+            if (activeDecRef.current === 'transcribe') openDecoder('transcribe');
+          },
           /* ★ Said where the user chooses (Stuart, 10-15: "Advise users that on iOS auto … can only try 4 languages at
            *   once and may take a while"). Android 14+ detects natively and needs no note. */
           autoNote: txCaps.chooseOnly
-            ? 'On Android 12 the app cannot see which speech languages are on the phone, detect the language or download one: choose the language being spoken. If it is not installed for offline speech, the box says how to add it in the phone\u2019s settings.'
+            ? 'On Android 12 the app cannot see which speech languages are on the phone, detect the language or download one, so it starts on the most likely one \u2014 the SDR\u2019s local language (\u26A0 if that is not your phone\u2019s), else your first \u2605, else your phone\u2019s \u2014 and you can choose another. If it is not installed for offline speech, the box says how to add it in the phone\u2019s settings.'
             : txCaps.nativeLanguageDetection ? undefined
             : Platform.OS === 'ios'
-              ? `AUTO can only listen for 4 languages at once on this device, so it tries them in rounds of four: ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, then ' : ''}the SDR\u2019s local language, then your \u2605 languages in their order (tap \u2606 on a language ON PHONE to add it; tap again to take it out), then the area\u2019s other languages, your phone\u2019s languages and the rest ON PHONE. It can take a while; the box shows each try. Once it settles, the runner-up keeps listening and takes over if it fits the audio better. Retuning or CLR detects again. AUTO only tries languages ON PHONE and never downloads \u2014 GET saves one to this device (300\u2013450 MB, best on Wi-Fi) and it stays, joining AUTO\u2019s list; iOS frees the space itself only if the device runs short. \u26A0 means the SDR\u2019s local language is not downloaded yet \u2014 its row is outlined, ready to GET. When EiBi names a language that is not here, the box offers to download it.`
-              : `On this phone AUTO listens in the most likely language — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, else ' : ''}the SDR\u2019s local language when it is ON PHONE, else your first \u2605 language (tap \u2606 on a language ON PHONE). Choose the language yourself for anything else.`,
+              ? `AUTO can only listen for 4 languages at once on this device, so it tries them in rounds of four: ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, then ' : ''}the SDR\u2019s local language, then your \u2605 languages in their order (tap \u2606 on a language ON PHONE to add it; tap again to take it out), then the area\u2019s other languages, your phone\u2019s languages and the rest ON PHONE. It can take a while; the box shows each try. Once it settles, the runner-up keeps listening and takes over if it fits the audio better. Retuning or CLR detects again. AUTO only tries languages ON PHONE and never downloads \u2014 GET adds one (300\u2013450 MB of storage, best on Wi-Fi). Downloads are the system\u2019s, not VibeSDR\u2019s: remove one in Settings (on a Mac, System Settings \u2192 Keyboard \u2192 Dictation); a language used recently may have to wait a while before it can be removed, and the system may tidy away ones you do not use \u2014 GET again if one goes. \u26A0 means the SDR\u2019s local language is not downloaded yet \u2014 its row is outlined, ready to GET. When EiBi names a language that is not here, the box offers to download it. TRANSLATE TO is a list too: tick \u2610 I UNDERSTAND on the languages you read and they are shown as they are, not translated.`
+              : `On this phone AUTO listens in the most likely language — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, else ' : ''}the SDR\u2019s local language when it is ON PHONE, else your first \u2605 language (tap \u2606 on a language ON PHONE), else your phone\u2019s. Android 13 cannot detect the language, so the key says which one it is listening in (LIKELY \u00B7 \u2026); Android 14 detects among the languages ON PHONE. Choose the language yourself for anything else. Tick \u2610 I UNDERSTAND in TRANSLATE TO for languages you read: they are not translated.`,
           onLanguage: (id: string) => {
             const choose = () => {
+              txAutoPickedRef.current = false;           // the user's choice now — Android 12 stops re-picking
               setTxLang(id); txLangRef.current = id;
               AsyncStorage.setItem('lsv_tx_lang', id).catch(() => {});
               // ★ Applied at once while running, like TIME's station — a correction you SEE.

@@ -63,7 +63,14 @@ class TranscribeEngine(
     private val mod: VibeTranscriberModule,
     languageArg: String,
     private val translateTo: String,
+    /** start()'s options JSON from JS: { understood: ["fr"] } — languages shown untranslated (multilingual users). */
+    optionsJson: String = "",
 ) {
+    /** ★★ LANGUAGES I UNDERSTAND (Stuart, 2026-10-17: "for people who are multilingual themselves") — base codes. */
+    private val understood: Set<String> = try {
+        val a = org.json.JSONObject(optionsJson.ifEmpty { "{}" }).optJSONArray("understood")
+        (0 until (a?.length() ?: 0)).map { a!!.getString(it).substringBefore('-').lowercase(Locale.ROOT) }.toSet()
+    } catch (_: Throwable) { emptySet() }
     /** 'auto:zh,tr' from JS = AUTO with EiBi's languages for this frequency weighed first. */
     private val language = if (languageArg.startsWith("auto:")) "auto" else languageArg
     private val hints = if (languageArg.startsWith("auto:"))
@@ -111,6 +118,7 @@ class TranscribeEngine(
                 m.putString("deviceLanguage", dev.language)
                 m.putString("deviceLanguageName", dev.getDisplayLanguage(dev))
                 m.putString("deviceRegion", dev.country)   // ★ picks en-GB over en-AU (pickLocale)
+                m.putArray("translateLanguages", translateTargets(dev))
                 m.putBoolean("nativeLanguageDetection", Build.VERSION.SDK_INT >= 34)
                 val sr = try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx) } catch (e: Throwable) { null }
                 if (sr == null) { p.resolve(m); return@post }
@@ -162,6 +170,7 @@ class TranscribeEngine(
                 m.putString("deviceLanguage", dev.language)
                 m.putString("deviceLanguageName", dev.getDisplayLanguage(dev))
                 m.putString("deviceRegion", dev.country)
+                m.putArray("translateLanguages", translateTargets(dev))
                 m.putBoolean("nativeLanguageDetection", false)
                 val tags = (listOf(dev.toLanguageTag()) + COMMON)
                     .distinctBy { Locale.forLanguageTag(it).language }
@@ -175,6 +184,18 @@ class TranscribeEngine(
                 }
                 m.putArray("languages", arr)
                 p.resolve(m)
+            }
+        }
+
+        /** ★ TRANSLATE TO is a list (Stuart, 2026-10-17): every language ML Kit translates, named in the phone's language.
+         *  Bare codes — ML Kit has no regional variants. Which packs are downloaded is not marked (ML Kit only says so
+         *  asynchronously; a follow-up). */
+        private fun translateTargets(dev: Locale) = Arguments.createArray().also { arr ->
+            for (code in TranslateLanguage.getAllLanguages().sortedBy { Locale.forLanguageTag(it).getDisplayLanguage(dev) }) {
+                val o = Arguments.createMap()
+                o.putString("id", code)
+                o.putString("name", Locale.forLanguageTag(code).getDisplayLanguage(dev))
+                arr.pushMap(o)
             }
         }
 
@@ -532,6 +553,10 @@ class TranscribeEngine(
         val key = "$src>$dst"
         if (key == translatorFor) return
         translator?.close(); translator = null; translatorReady = false; translatorFor = key
+        if (dst != null && understood.contains(lang.substringBefore('-').lowercase(Locale.ROOT))) {
+            status("Listening — ${display(lang)} (you understand it — not translated)")
+            return
+        }
         if (dst == null || src == null || src == dst) {
             if (dst != null && src == null) status("Translation from ${display(lang)} is not available on this device")
             return

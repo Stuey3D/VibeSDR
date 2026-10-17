@@ -54,11 +54,12 @@ class VibeTranscriberModule(private val ctx: ReactApplicationContext) : ReactCon
         TranscribeEngine.capabilities(ctx, p)
     }
 
+    /** options: JSON { understood: ["fr"] } — the languages shown untranslated (a String: no newer type here). */
     @ReactMethod
-    fun start(language: String, translateTo: String) {
+    fun start(language: String, translateTo: String, options: String) {
         if (Build.VERSION.SDK_INT < 31) { emit("error", "Needs Android 12 or later"); return }
         stop()
-        val e = TranscribeEngine(ctx, this, language, translateTo)
+        val e = TranscribeEngine(ctx, this, language, translateTo, options)
         engine = e
         e.start()
     }
