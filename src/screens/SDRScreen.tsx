@@ -175,6 +175,8 @@ import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
+import { BinauralTracker, binauralModeOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
+         type BinauralSink } from '../services/binauralOffset';
 import { isoToFlag, validIso } from '../services/rdsCountry';
 import CenterVfoButton from '../components/CenterVfoButton';
 import PasswordModal from '../components/PasswordModal';
@@ -310,6 +312,8 @@ const SQL_AUTO_KEY = 'lsv_squelch_auto';
  *  not a property of one radio. Stuart, 2026-09-27: "default it to voice to avoid nasty static and
  *  then when user switches it in the audio menu then it is remembered for next time". Absent = Voice. */
 const NFM_VOICE_KEY = 'lsv_nfm_voice';
+/** ★ V12 BINAURAL TUNING — the listener's choice, '1' on; absent/'0' off (the default: it changes what you hear). */
+const BINAURAL_KEY = 'lsv_binaural';
 const SQL_AUTO_MARGIN_KEY = 'lsv_squelch_auto_margin';
 
 /** The server's health levels arrive as plain numbers off the wire (ServerHealth) and the pill's own
@@ -2594,6 +2598,49 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ Mirrored for the stuck-audio recovery, which is created once and cannot read state.
   useEffect(() => { tuneRef.current = { frequency: status.frequency, mode: status.mode }; },
             [status.frequency, status.mode]);
+
+  /* ★★ V12 BINAURAL TUNING — the audio leans toward the ear on the side the signal lies and comes back to the
+   *  middle of the head as you tune onto it (services/binauralOffset.ts, vibedsp/binaural.h). ONE setting, in the
+   *  AUDIO menu, OFF by default and remembered (BINAURAL_KEY): it changes what the listener HEARS, so it is
+   *  opt-in, and it wants headphones. The effect runs natively on the audio the app plays, so it works on every
+   *  backend; this screen only supplies what native cannot see — the spectrum readings (AM/CW/FM), the dial, and
+   *  the WFM stereo indicator. SSB is measured natively from the voice itself.
+   *  ★ Below `status` (it reads status.mode) — see the note on the lock-screen logo above. */
+  const [binaural, setBinauralState] = useState(false);
+  const binauralRef = useRef(false);
+  const binauralTracker = useRef<BinauralTracker | null>(null);
+  if (!binauralTracker.current) binauralTracker.current = new BinauralTracker((VibePowerModule ?? {}) as BinauralSink);
+  /** Has this connection ever reported a WFM stereo indicator? If not, native measures the audio instead. */
+  const fmStereoSeenRef = useRef(false);
+  useEffect(() => {
+    AsyncStorage.getItem(BINAURAL_KEY).then((v) => { if (v === '1') setBinauralState(true); }).catch(() => {});
+  }, []);
+  const onBinaural = useCallback((on: boolean) => {
+    setBinauralState(on);
+    AsyncStorage.setItem(BINAURAL_KEY, on ? '1' : '0').catch(() => {});
+  }, []);
+  useEffect(() => {
+    binauralRef.current = binaural;
+    binauralTracker.current?.reset();   // the next spectrum frame states source, dial and offset afresh
+    const vp = VibePowerModule as BinauralSink & { setBinaural?: (on: boolean) => void } | undefined;
+    if (!binaural) vp?.setBinauralSource?.(0, 15, 300);
+    vp?.setBinaural?.(binaural);
+  }, [binaural]);
+  // ★ Leaving the screen leaves nothing behind: a stale offset must not lean the next connection's audio.
+  useEffect(() => () => {
+    const vp = VibePowerModule as BinauralSink & { setBinaural?: (on: boolean) => void } | undefined;
+    vp?.setBinauralSource?.(0, 15, 300);
+    vp?.setBinaural?.(false);
+  }, []);
+  // WFM: the aid hands over to stereo as the pilot locks (native crossfades with hysteresis — binaural.h).
+  //   Forced mono → always the aid; a backend that reports its pilot → that; one that never has → native measures.
+  useEffect(() => {
+    if (!binaural) return;
+    const hint = status.mode !== 'wfm' || !hwStereo ? BIN_STEREO_MONO
+      : fmStereoSeenRef.current ? (fmStereo ? BIN_STEREO_LOCKED : BIN_STEREO_MONO)
+      : BIN_STEREO_UNKNOWN;
+    binauralTracker.current?.setStereo(hint);
+  }, [binaural, status.mode, fmStereo, hwStereo]);
   // Hot-path frame sink — WaterfallView registers its imperative frame handler
   // here; spectrum frames bypass React state entirely (CPU audit 2026-06-11:
   // setState per 10–20Hz frame re-rendered the whole tree ≈ a full core).
@@ -6194,7 +6241,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         const nextLive = { name: stationName, psRaw: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc, call: (meta as any).call as string | undefined,
                            rdsFlags: meta.rdsFlags };
         setLiveStation((cur) => keepIfSameStation(cur, nextLive));
-        if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
+        if (typeof meta.stereo === 'boolean') { fmStereoSeenRef.current = true; setFmStereo(meta.stereo); }
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
         if (meta.programmes) {
@@ -6212,6 +6259,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         // Waterfall/spectrum render imperatively — no React state per frame.
         wfFrameSink.current?.(newBins, s);
+        // ★ V12 binaural tuning: the AM/CW/FM offset from this frame (and the dial/source); off = one ref read.
+        if (binauralRef.current) {
+          binauralTracker.current?.onFrame(newBins, {
+            centerHz: s.trueCenterHz ?? s.centerHz, bwHz: s.bwHz, tuneHz: s.frequency,
+            lo: s.bandwidthLow, hi: s.bandwidthHigh,
+          }, dabOnRef.current ? 'dab' : s.mode);
+        }
         // The watch feeds off the RAW frame, not the waterfall component: the
         // primary use case is a locked phone in a pocket, and the Skia tree is
         // unmounted by then. Plain JS + one bridge call, so it's safe to keep
@@ -10370,8 +10424,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    into it from LocalHardwarePanel, so the speaker list here grew. A card that enumerates
     //    what lives where has to be re-read every time one of those places changes — the previous
     //    breakage was this same card, and the half of the sentence nobody was editing.
+    // ★★ RE-VERIFIED 2026-10-17 for V12 BINAURAL TUNING, a new AudioSheet row: the whole sentence re-read against
+    //    AudioSheet (NR, notch, squelch, de-emphasis, stereo — all still there), MenuSheet (display, controls,
+    //    recordings, server settings) and FreqModal (bookmarks).
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — noise reduction, the auto notch, squelch, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — noise reduction, the auto notch, squelch, binaural tuning, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
@@ -12100,6 +12157,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         fmSquelch={fmSquelch}            onFmSquelch={onFmSquelch}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
+        /* ★ V12 binaural tuning — offered only where an offset source exists: never DAB (or any whole-profile
+             mode). (FM-DX is not this screen — it has no spectrum to read, and no row.) */
+        binaural={binaural}
+        onBinaural={binauralModeOk(status.mode) && !dabOn ? onBinaural : undefined}
         deemph={hwDeemph}   onDeemph={onHwDeemph}
         stereo={hwStereo}   onStereo={onHwStereo}
         fmNr={fmNr}   onFmNr={vibeFmDsp ? onFmNr : undefined}

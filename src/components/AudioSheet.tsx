@@ -540,6 +540,12 @@ export interface AudioSheetProps {
   // Auto-notch (all backends)
   notchOn?: boolean;
   onNotch?: (on: boolean) => void;
+  /** ★★ V12 BINAURAL TUNING — the audio leans toward the ear on the side the signal lies, centring as you tune
+   *  onto it (services/binauralOffset.ts). Every backend: it runs on the audio the app plays. SDRScreen passes
+   *  the handler only in a mode with an offset source (not DAB, not FM-DX), so the row hides rather than sit
+   *  there doing nothing. */
+  binaural?: boolean;
+  onBinaural?: (on: boolean) => void;
 
   /** ★★ FM DE-EMPHASIS AND WFM STEREO LIVE HERE, NOT IN THE HARDWARE PANEL. They are not
    *  properties of the radio — they act on OUR demodulator, which is why they applied to a
@@ -611,7 +617,7 @@ export default function AudioSheet({
   kiwiSquelch = 0, onKiwiSquelch, onSquelchDrag, onSquelchDragEnd,
   sqlAuto = false, onSqlAuto, sqlAutoMargin = 12, onSqlAutoMargin, sqlAutoOk = false,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
-  notchOn = false, onNotch,
+  notchOn = false, onNotch, binaural = false, onBinaural,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
   fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
@@ -865,6 +871,23 @@ export default function AudioSheet({
               <Text style={[st.bwLabel, { width: 78 }]}>AUTO NOTCH</Text>
               <View style={{ flex: 1 }} />
               <Toggle label={notchOn ? 'ON' : 'OFF'} on={notchOn} onPress={() => onNotch?.(!notchOn)} />
+            </View>
+          )}
+
+          {/* ★★ BINAURAL TUNING (V12) — opt-in: it changes what you hear. Headphones: the sound leans toward
+              the side the signal is on (right = tune up), and sits in the middle when you are on it. */}
+          {onBinaural && (
+            <View style={{ marginTop: 2 }}>
+              <View style={st.bwRow}>
+                <Text style={[st.bwLabel, { width: 78 }]}>BINAURAL</Text>
+                <View style={{ flex: 1 }} />
+                <Toggle label={binaural ? 'ON' : 'OFF'} on={binaural} onPress={() => onBinaural(!binaural)}
+                  a11y={binaural ? 'Binaural tuning on. Tap to turn off.' : 'Binaural tuning off. Tap to turn on.'} />
+              </View>
+              <Text style={st.iqNote}>
+                For headphones. The sound leans towards the side the signal is on — right means tune up, left
+                means tune down — and settles in the middle when you are on it.
+              </Text>
             </View>
           )}
 

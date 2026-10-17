@@ -259,6 +259,8 @@ if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fai
 if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ SERVER ADDRESSES (serverUrl.ts): scheme and port are a PAIR — https://host:8073 stays TLS (GitHub #52, OWRX+ native TLS).
 if node --no-warnings scripts/test_server_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 BINAURAL TUNING (binauralOffset.ts): the offset source per mode, AM/CW/FM readings with known offsets, the tracker.
+if node --no-warnings scripts/test_binauralOffset.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ OWRX S-METER CALIBRATION (owrxSmeterCal.ts): the wire level is not dBm — owner's plugin figures, else noise at S2.
 if node --no-warnings scripts/test_owrxSmeterCal.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ VIBESERVER SQUELCH ON/OFF (vibeSquelch.ts): a threshold below -100 dBFS is a threshold, not "off" — the
