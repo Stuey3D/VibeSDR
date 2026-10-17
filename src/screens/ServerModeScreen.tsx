@@ -7,7 +7,7 @@ import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } fro
  *  owner can still change or switch it off.
  *  ★ OFF FOR V11 (Stuart, 2026-10-10): Chicopee has no switch to test with — "it is being left out of V11 for now".
  *    The test build (lite-v11.0.0-rc34test1-antenna-switch) stays up for anyone who has one. Flip to true for V12. */
-const ANT_SWITCH_SETUP = false;
+const ANT_SWITCH_SETUP = true;   // ★ ON in the 11.0.4+antswitch1 experimental build (Stuart, 2026-10-17)
 import GainSlider, { gainSliderInk } from '../components/GainSlider';
 import BandLimitEditor, { Band } from '../components/BandLimitEditor';
 

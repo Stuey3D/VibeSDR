@@ -3969,7 +3969,7 @@ function swServerFields() {
 }
 /* ★★ THE GATE — Lite's ANT_SWITCH_SETUP (ServerModeScreen.tsx), same rule: OFF FOR V11 (Stuart, 2026-10-10, no tester has
  *  a switch); a server already set up keeps the section so its owner can change or switch it off. true for V12. */
-const SW_SETUP = false;
+const SW_SETUP = true;   // ★ ON in the 11.0.4+antswitch1 experimental build (Stuart, 2026-10-17)
 let swSaved = false;   // ★ the SAVED state decides, so an owner who clicks "No" does not watch the section vanish
 function swRender() {
   $("swBox").style.display = (SW_SETUP || swSaved) ? "" : "none";

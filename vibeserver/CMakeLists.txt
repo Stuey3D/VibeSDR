@@ -29,6 +29,10 @@ project(vibeserver VERSION 11.0.4 LANGUAGES CXX C)
 #     11.0.0~b1, which dpkg sorts ABOVE 5.6.x and BELOW 11.0.0, so both upgrades are clean.
 #     ★ Empty it for the release. Never publish a ~ version AFTER its release — it would sort below it.
 set(VIBESERVER_PRERELEASE "")
+# ★★ AN EXPERIMENTAL BUILD of a release (2026-10-17: 11.0.4 with the antenna-switch setup turned on) is named on its own
+#    line too, and APPENDED with '+': 11.0.4+antswitch1 sorts ABOVE 11.0.4-3 and BELOW 11.0.5, so the .deb installs over
+#    a regular VibeServer, apt never swaps it back, and the next real release replaces it. Empty on every other branch.
+set(VIBESERVER_EXPERIMENTAL "antswitch1")
 
 # ── ★★★ SANITISER BUILDS FOR THE TESTS AND THE OFFLINE REPLAY ────────────────────────────────
 #
@@ -63,6 +67,9 @@ endfunction()
 set(VIBESERVER_VERSION "${PROJECT_VERSION}")
 if(VIBESERVER_PRERELEASE)
   set(VIBESERVER_VERSION "${PROJECT_VERSION}~${VIBESERVER_PRERELEASE}")
+endif()
+if(VIBESERVER_EXPERIMENTAL)
+  set(VIBESERVER_VERSION "${VIBESERVER_VERSION}+${VIBESERVER_EXPERIMENTAL}")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)

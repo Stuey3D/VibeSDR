@@ -32,5 +32,14 @@ ok(newerLiteRelease([rel('lite-v11.0.0-rc36')], '11.0.0~rc37-lite') === null, 'a
 ok(newerLiteRelease(list, 'hand-built') === null, 'an unreadable installed version is not offered a guess');
 ok(liteVersionLabel(P('lite-v11.0.0-rc37')) === 'RC37' && liteVersionLabel(P('lite-v11.0.0')) === '11.0.0', 'labels: RC37, 11.0.0');
 
+
+// ★★ The 11.0.4+antswitch1 experimental build (2026-10-17): level with 11.0.4, below 11.0.5, never offered itself.
+ok(P('11.0.4+antswitch1-lite').exp && !P('11.0.4+antswitch1-lite').test, 'an experimental build parses (+antswitch1)');
+ok(compareLite(P('lite-v11.0.4'), P('11.0.4+antswitch1-lite')) === 0, '11.0.4 ranks level with its experimental build');
+ok(newerLiteRelease([rel('lite-v11.0.4')], '11.0.4+antswitch1-lite') === null, 'experimental installed → 11.0.4 is NOT offered');
+const pickX = newerLiteRelease([rel('lite-v11.0.4'), rel('lite-v11.0.5')], '11.0.4+antswitch1-lite');
+ok(!!pickX && pickX.tag === 'lite-v11.0.5', 'experimental installed → 11.0.5 is offered');
+ok(newerLiteRelease([rel('lite-v11.0.4-antswitch1')], '11.0.3-lite') === null, 'an EXPERIMENTAL release is never offered');
+
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exit(fails ? 1 : 0);

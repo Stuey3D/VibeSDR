@@ -192,6 +192,11 @@ string(REGEX MATCH "set\\(VIBESERVER_PRERELEASE \"([A-Za-z0-9]*)\"\\)" _vs_unuse
 if(CMAKE_MATCH_1)
   set(VIBESERVER_VERSION "${VIBESERVER_VERSION}~${CMAKE_MATCH_1}")
 endif()
+# ★ An experimental build's label (antswitch1 → 11.0.4+antswitch1), same file, same way.
+string(REGEX MATCH "set\\(VIBESERVER_EXPERIMENTAL \"([A-Za-z0-9]*)\"\\)" _vs_unused "${_vs_cmakelists}")
+if(CMAKE_MATCH_1)
+  set(VIBESERVER_VERSION "${VIBESERVER_VERSION}+${CMAKE_MATCH_1}")
+endif()
 # ★ Set only by lite/android/app/build.gradle — see the flavour report in local_sdr_shim.cpp.
 if (VIBE_LITE_APP)
   target_compile_definitions(vibelocalsdr PRIVATE VIBE_LITE_APP=1)

@@ -10,17 +10,21 @@
  * pre-release number. ★ A TEST build (rc34test1) sits just below its own rc, and test releases are never
  * OFFERED — they are handed to one person for one fault, not to everyone who presses the button.
  */
-export interface LiteVersion { nums: number[]; pre: '' | 'b' | 'rc'; preN: number; test: boolean }
+export interface LiteVersion { nums: number[]; pre: '' | 'b' | 'rc'; preN: number; test: boolean; exp: boolean }
 
 export function parseLiteVersion(s: string): LiteVersion | null {
   const t = String(s || '').trim().replace(/^lite-v/i, '').replace(/-lite$/i, '');
-  const m = /^(\d+)\.(\d+)\.(\d+)(?:[~-](b|rc)(\d+)(test\d*)?)?$/i.exec(t);
+  // ★★ AN EXPERIMENTAL BUILD (11.0.4+antswitch1-lite, tag lite-v11.0.4-antswitch1 — 2026-10-17) ranks LEVEL with its
+  //    release: 11.0.4 is not offered over it (that would take the experiment away), 11.0.5 is. Like a test build,
+  //    an experimental release is never OFFERED — the regular builds' parser cannot even read its tag.
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[~-](b|rc)(\d+)(test\d*)?)?(?:[+-]([a-z]+\d*))?$/i.exec(t);
   if (!m) return null;
   return {
     nums: [Number(m[1]), Number(m[2]), Number(m[3])],
     pre: (m[4] ? m[4].toLowerCase() : '') as LiteVersion['pre'],
     preN: m[5] ? Number(m[5]) : 0,
     test: !!m[6],
+    exp: !!m[7],
   };
 }
 
@@ -42,7 +46,7 @@ export function newerLiteRelease(releases: LiteRelease[], installed: string): (L
   let best: (LiteRelease & { v: LiteVersion }) | null = null;
   for (const r of releases) {
     const v = parseLiteVersion(r.tag);
-    if (!v || v.test || !r.apkUrl || !(r.size > 0)) continue;
+    if (!v || v.test || v.exp || !r.apkUrl || !(r.size > 0)) continue;
     if (!best || compareLite(v, best.v) > 0) best = { ...r, v };
   }
   if (!best) return null;

@@ -10,6 +10,9 @@ def serverVersion = (vsCmake =~ /project\(vibeserver VERSION ([0-9.]+)/)[0][1]
 // ★ The pre-release label (b1 → 11.0.0~b1-lite) — see VIBESERVER_PRERELEASE in that file.
 def vsPre = (vsCmake =~ /set\(VIBESERVER_PRERELEASE "([A-Za-z0-9]*)"\)/)
 if (vsPre.find() && vsPre.group(1)) serverVersion = serverVersion + "~" + vsPre.group(1)
+// ★ An experimental build's label (antswitch1 → 11.0.4+antswitch1-lite) — VIBESERVER_EXPERIMENTAL in that file.
+def vsExp = (vsCmake =~ /set\(VIBESERVER_EXPERIMENTAL "([A-Za-z0-9]*)"\)/)
+if (vsExp.find() && vsExp.group(1)) serverVersion = serverVersion + "+" + vsExp.group(1)
 
 // ★★★ Lite's signing keys — see the note at signingConfigs below.
 def liteProps = new Properties()
