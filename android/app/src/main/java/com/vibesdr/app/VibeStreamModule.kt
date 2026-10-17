@@ -493,6 +493,16 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.setNotchOn(on)
     }
 
+    // ★ V12 BINAURAL TUNING — straight to the VibeBinaural singleton (it outlives the service; see there).
+    //   Each only stores atomics in the shared C++ object, so they run on the bridge thread as they are.
+    @ReactMethod fun setBinaural(on: Boolean) { VibeBinaural.setEnabled(on) }
+    @ReactMethod fun setBinauralSource(source: Double, deadHz: Double, fullHz: Double) {
+        VibeBinaural.setSource(source.toInt(), deadHz.toFloat(), fullHz.toFloat())
+    }
+    @ReactMethod fun setBinauralOffset(hz: Double, valid: Boolean) { VibeBinaural.setOffset(hz.toFloat(), valid) }
+    @ReactMethod fun setBinauralStereo(hint: Double) { VibeBinaural.setStereo(hint.toInt()) }
+    @ReactMethod fun setBinauralDial(hz: Double) { VibeBinaural.setDial(hz) }
+
     // Client-side audio squelch gate (Kiwi etc.) — JS opens/closes from the meter.
     @ReactMethod
     fun setSquelchOpen(open: Boolean) {

@@ -100,6 +100,8 @@ add_library(vibelocalsdr SHARED
     mdns_responder.cpp vibe_affinity.cpp
     # ★ V12 TRANSCRIBE: the recogniser feed (vibedsp/ssb_offset — resample to 16 kHz, SSB auto-tune), shared with iOS.
     vibe_ssb_jni.cpp
+    # ★ V12 BINAURAL TUNING: the far-ear spatialiser + offset sources (vibedsp/binaural), shared with iOS.
+    vibe_binaural_jni.cpp
     # ★★★ COUNTRY AND NETWORK LOOKUP — THE SAME FILES THE DAEMON USES, not a copy. The admin page
     #     said "No country data yet" on Android for ever, and the Network column read "unknown",
     #     because these two were only ever compiled into the Linux/macOS daemon (Stuart,

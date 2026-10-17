@@ -228,6 +228,15 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // local → LocalHw.setNotch, network → here). One filter per output channel.
   private var notchOn       = false
   private var notch: [AutoNotch] = []
+  /* ★★ V12 BINAURAL TUNING — the audio leans toward the ear on the side the signal lies (vibedsp/binaural.h).
+   *  ★ WHY HERE, IN scheduleOut: it is the ONE place every backend's audio passes — UberSDR's Opus, OWRX/Kiwi
+   *    and local hardware through the external-PCM path, FM-DX's MP3 — already 48 kHz stereo planar, mono
+   *    duplicated. One hook, every server. AFTER the recorder and the transcriber tap: it changes what the
+   *    listener HEARS (that is the point), never what is saved or transcribed.
+   *  ★ The DSP is the shared C++ (the same object Android's AudioTrack writers call), not Swift: one
+   *    implementation, one test (vibeserver/test-binaural.cpp). Its setters only store atomics, so the RN
+   *    methods below call them straight from the bridge thread; only process runs on audioQ. */
+  private let binauralH: UnsafeMutableRawPointer? = vibe_binaural_create()
   // Client-side audio squelch gate (network backends, e.g. Kiwi). JS drives it
   // from the S-meter dBm vs the threshold; when closed we output silence (engine
   // keeps running — distinct from pause/isMuted). Defaults open.
@@ -1510,6 +1519,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
   }
 
+  // ── Binaural tuning (V12) — see binauralH. All five only store atomics in the C++ object. ──
+  @objc func setBinaural(_ on: Bool) { vibe_binaural_set_enabled(binauralH, on ? 1 : 0) }
+  @objc func setBinauralSource(_ source: NSNumber, deadHz: NSNumber, fullHz: NSNumber) {
+    vibe_binaural_set_source(binauralH, source.int32Value, deadHz.floatValue, fullHz.floatValue)
+  }
+  @objc func setBinauralOffset(_ hz: NSNumber, valid: Bool) {
+    vibe_binaural_set_offset(binauralH, hz.floatValue, valid ? 1 : 0)
+  }
+  @objc func setBinauralStereo(_ hint: NSNumber) { vibe_binaural_set_stereo(binauralH, hint.int32Value) }
+  @objc func setBinauralDial(_ hz: NSNumber) { vibe_binaural_set_dial(binauralH, hz.doubleValue) }
+
   /** Client-side audio squelch gate (network, e.g. Kiwi). JS opens/closes it
    *  from the S-meter level vs the threshold. open=true is the default. */
   @objc func setSquelchOpen(_ open: Bool) {
@@ -1817,7 +1837,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let eng = audioEngine != nil ? "yes" : "no"
     let dec = opusDecoder != nil ? "yes" : "no"
     let ws  = (wsUsingNW ? wsReady : (wsTask?.state == .running)) ? "open" : "closed"
-    return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed)"
+    var b = [Float](repeating: 0, count: 9)
+    _ = vibe_binaural_stats(binauralH, &b, 9)
+    let bin = b[0] > 0 ? String(format: " bin=src%d off=%.0f%@ pan=%.2f w=%.2f ssb=%d/%d drop=%d",
+                                Int(b[1]), b[2], b[3] > 0 ? "" : "?", b[4], b[5], Int(b[7]), Int(b[6]), Int(b[8])) : ""
+    return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed)\(bin)"
   }
 
   // MARK: - Recording
@@ -3157,6 +3181,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       let nch = Int(buf.format.channelCount)
       let n = Int(buf.frameLength)
       for c in 0..<nch { memset(chans[c], 0, n * MemoryLayout<Float>.size) }
+    }
+    // ★ V12 binaural tuning (see binauralH). Off = one atomic load and nothing else. ENGINE_CH is 2, so the
+    //   buffer is always stereo here; the guard is for safety, not a path.
+    if vibe_binaural_enabled(binauralH) != 0, buf.format.channelCount == 2, let chans = buf.floatChannelData {
+      vibe_binaural_process_planar(binauralH, chans[0], chans[1], Int32(buf.frameLength), Int32(fmt.sampleRate))
     }
     // Live-edge bound: if a delivery burst piles up more than ~0.4s of queued
     // audio, drop instead of scheduling — latency stays bounded instead of

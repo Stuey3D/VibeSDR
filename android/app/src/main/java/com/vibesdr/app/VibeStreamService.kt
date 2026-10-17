@@ -1469,6 +1469,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
             var mine: AudioTrack? = null
             var myRate = 0; var myCh = 0
+            var binOut = ShortArray(0)   // ★ V12 binaural: this writer's own stereo buffer (two writers may overlap)
             try {
                 while (running && externalAudio && gen == extGen) {
                     /* ★ Hold back until the cushion exists. Only while a bursty mode is
@@ -1489,17 +1490,31 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     handleRecRequests()   // arm/stop the recorder on this thread too
                     if (item == null) continue
                     extQueuedFrames.addAndGet(-(item.third.size / item.second))
-                    if (mine == null || myRate != item.first || myCh != item.second) {
+                    /* ★★ V12 BINAURAL TUNING needs two ears, so with it on the track is STEREO whatever the source
+                     *  (mono is duplicated first, in VibeBinaural). Toggling it rebuilds the track once, here, like a
+                     *  rate change; off, this is the original path exactly. */
+                    val bin = VibeBinaural.on
+                    val outCh = if (bin) 2 else item.second
+                    if (mine == null || myRate != item.first || myCh != outCh) {
                         mine?.release()
-                        mine = buildExtTrack(item.first, item.second)
-                        myRate = item.first; myCh = item.second
+                        mine = buildExtTrack(item.first, outCh, item.second)
+                        myRate = item.first; myCh = outCh
                         if (gen == extGen) extTrack = mine        // volume changes reach the current writer only
                     }
                     if (!muted) {
                         notchShorts(item.third, item.second)   // auto notch (network)
                         if (!squelchOpen) java.util.Arrays.fill(item.third, 0)  // squelch gate
+                        // ★ Binaural AFTER the squelch and on a copy: the recorder and the transcriber below take the
+                        //   source as it was — the effect changes what the listener HEARS, never what is saved.
+                        var pcm = item.third; var pcmN = item.third.size
+                        if (bin) {
+                            val frames = item.third.size / item.second
+                            if (binOut.size < frames * 2) binOut = ShortArray(frames * 2)
+                            pcmN = VibeBinaural.processShorts(item.third, frames, item.second, item.first, binOut)
+                            pcm = binOut
+                        }
                         // ★ A track released under us (it should no longer happen) ends THIS writer, not the app.
-                        try { mine?.write(item.third, 0, item.third.size) }  // blocking = backpressure
+                        try { mine?.write(pcm, 0, pcmN) }  // blocking = backpressure
                         catch (e: IllegalStateException) { Log.w(TAG, "ext AudioTrack gone mid-write: ${e.message}"); break }
                     }
                     // ★ V12: the on-device transcriber — squelch applied (muted audio skips the gate above, so say so).
@@ -1526,7 +1541,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     /** Build and start a stream AudioTrack. The CALLER owns it (see startExtWriter) and must release it. */
-    private fun buildExtTrack(rate: Int, channels: Int = 1): AudioTrack {
+    private fun buildExtTrack(rate: Int, channels: Int = 1, srcChannels: Int = channels): AudioTrack {
         val mask = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
         val minBuf = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
         val t = AudioTrack.Builder()
@@ -1549,7 +1564,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         t.setVolume(volume * pageGain)
         t.play()
         extRate = rate
-        extChannels = channels
+        // ★ The SOURCE's channels — the recorder reads this, and it is fed the source, not the binaural copy.
+        extChannels = srcChannels
         Log.i(TAG, "ext AudioTrack ${rate}Hz ch=$channels")
         return t
     }
@@ -2035,7 +2051,18 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var codecChannels = 0
     @Volatile private var track: AudioTrack? = null
     private var trackRate = 0
-    private var trackChannels = 0
+    private var trackChannels = 0        // the DECODED pcm's channels (what NR, the notch, the recorder see)
+    private var trackOutChannels = 0     // the AudioTrack's — 2 whenever V12 binaural tuning is on
+    private var binDecOut = ByteArray(0) // binaural's stereo copy (decode thread only)
+
+    /** Mono PCM16 LE → both ears (only reached in the instant binaural was switched off before the track rebuilt). */
+    private fun upmixBytes(src: ByteArray, frames: Int, out: ByteArray): Int {
+        for (i in 0 until frames) {
+            val lo = src[2 * i]; val hi = src[2 * i + 1]
+            out[4 * i] = lo; out[4 * i + 1] = hi; out[4 * i + 2] = lo; out[4 * i + 3] = hi
+        }
+        return frames * 4
+    }
     private var ptsUs = 0L
 
     private fun startDecodeThread() {
@@ -2056,6 +2083,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 track = null
                 trackRate = 0
                 trackChannels = 0
+                trackOutChannels = 0
             }
         }, "vibesdr-decode")
         t.priority = Thread.MAX_PRIORITY
@@ -2138,7 +2166,21 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         if (recArmed) encodePcm(pcm)
                         // ★ V12: the on-device transcriber hears what the listener hears (VibeTranscriberModule).
                         VibeTranscribeTap.feedBytes(pcm, pcm.size, trackRate, trackChannels, false)
-                        if (!muted) track?.write(pcm, 0, pcm.size)  // blocking = backpressure
+                        if (!muted) {
+                            // ★ V12 binaural tuning: a stereo copy for the (stereo) track — see startExtWriter.
+                            //   The track was (re)built for the setting by ensureTrackFor above; a mono pcm on a stereo
+                            //   track is only possible in the instant the setting changed, and is then just upmixed.
+                            val bin = VibeBinaural.on
+                            if (trackOutChannels == 2 && (bin || trackChannels == 1)) {
+                                val frames = pcm.size / (2 * trackChannels)
+                                if (binDecOut.size < frames * 4) binDecOut = ByteArray(frames * 4)
+                                val n = if (bin) VibeBinaural.processBytes(pcm, frames, trackChannels, trackRate, binDecOut)
+                                        else upmixBytes(pcm, frames, binDecOut)
+                                track?.write(binDecOut, 0, n)  // blocking = backpressure
+                            } else {
+                                track?.write(pcm, 0, pcm.size)  // blocking = backpressure
+                            }
+                        }
                     }
                     c.releaseOutputBuffer(outIdx, false)
                 }
@@ -2542,9 +2584,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private fun ensureTrackFor(format: MediaFormat) {
         val rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
         val ch = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-        if (track != null && trackRate == rate && trackChannels == ch) return
+        // ★ V12 binaural tuning plays in two ears whatever the codec decodes — see startExtWriter.
+        val outCh = if (VibeBinaural.on) 2 else ch
+        if (track != null && trackRate == rate && trackChannels == ch && trackOutChannels == outCh) return
         track?.release()
-        val mask = if (ch == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
+        val mask = if (outCh == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
         val minBuf = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
         val t = AudioTrack.Builder()
             .setAudioAttributes(
@@ -2560,7 +2604,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     .setChannelMask(mask)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBuf * 2, 9_600 * ch)) // ≥100ms
+            .setBufferSizeInBytes(maxOf(minBuf * 2, 9_600 * outCh)) // ≥100ms
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
         t.setVolume(volume * pageGain)
@@ -2568,6 +2612,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         track = t
         trackRate = rate
         trackChannels = ch
+        trackOutChannels = outCh
         Log.i(TAG, "AudioTrack ${rate}Hz ${ch}ch")
     }
 
