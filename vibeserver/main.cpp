@@ -2129,7 +2129,16 @@ int main(int argc, char** argv) {
             //    radio to draw its tabs, but it must also show what the radio in front of you is
             //    ACTUALLY running — those differ the moment anyone passes a flag, and a settings
             //    page showing the file while the radio obeys something else is a page that lies.
-            vsconfig::ServerConfig out = g_serverConfig;
+            /* ★★★ FROM THE FILE AS IT IS NOW, NOT THIS PROCESS'S COPY FROM START-UP (Stuart, 2026-10-17, the Pi 2:
+             *  the setup page said "Full · 20 fps" on a radio capped at 5 and running at 5). Every process — the
+             *  front door and each radio — keeps its own g_serverConfig and refreshes it only on ITS OWN saves.
+             *  The cap was saved through the radio process at 13:40; the front door had read the file at 13:33,
+             *  so it went on handing the page the old 20 — and a Save from that page would have sent the 20
+             *  straight back. The save paths already re-read the file before merging (see below); the read did
+             *  not. The file is the one shared truth, so read it; this process's copy is the fallback only when
+             *  there is no file (flags-only start) or it will not parse. */
+            vsconfig::ServerConfig out;
+            { std::string e; if (g_configPath.empty() || !vsconfig::loadServer(g_configPath, out, e)) out = g_serverConfig; }
             for (auto& r : out.radios) {
                 if (r.serial.empty() || r.serial != g_myRadioSerial) continue;
                 const auto& c = g_runtimeConfig;

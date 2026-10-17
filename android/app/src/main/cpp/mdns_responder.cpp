@@ -93,6 +93,12 @@ std::atomic<bool>      g_run{false};
 std::string            g_host;           // "vibesdr" — WITHOUT the .local
 uint32_t               g_addr = 0;       // our IPv4, network byte order
 std::atomic<bool>      g_conflict{false};
+// ★ A LEGACY UNICAST question (RFC 6762 §6.7 — asked from a port other than 5353: dig, nslookup, a plain resolver)
+//   is answered straight back to the asker's port, with its transaction id, its question repeated, a TTL of at most
+//   10 s and no cache-flush bit. Set only while one such question is being answered (the responder is one thread).
+bool                   g_legacy = false;
+uint32_t ttlOut()   { return g_legacy ? 10u : (uint32_t)kTtl; }
+uint16_t classOut() { return g_legacy ? 0x0001 : 0x8001; }      // CLASS IN (+ cache-flush on multicast)
 // ── The service, when we are the one publishing it (0 = we are not) ──────────────────
 uint16_t               g_svcPort = 0;
 bool                   g_svcPin  = false;
@@ -137,17 +143,51 @@ std::string svcInstName(const std::string& host) {
 /** The meta-query browsers use to ask "what KINDS of service are here?" */
 std::string svcMetaName()               { return encodeDotted("_services._dns-sd._udp.local"); }
 
-/** Case-insensitive compare of a DNS-encoded name in `buf` at `pos` against ours.
- *  Returns the length consumed, or 0 if it doesn't match. Compression pointers are
- *  not followed: a QUESTION never uses them. */
-size_t matchName(const uint8_t* buf, size_t len, size_t pos, const std::string& want) {
-    size_t i = pos, w = 0;
+/** Where the name at `pos` ends in the packet (one past its last byte), or 0 if it is malformed.
+ *  A compression pointer ENDS the name in place (2 bytes) — where it points does not matter here. */
+size_t skipName(const uint8_t* buf, size_t len, size_t pos) {
+    size_t i = pos;
     while (i < len) {
+        const uint8_t l = buf[i];
+        if (l == 0) return i + 1;
+        if ((l & 0xC0) == 0xC0) return (i + 2 <= len) ? i + 2 : 0;
+        if ((l & 0xC0) != 0) return 0;                            // 0x40/0x80: reserved label types
+        i += 1 + l;
+    }
+    return 0;
+}
+
+/** Case-insensitive compare of a DNS-encoded name in `buf` at `pos` against ours (`want`, uncompressed).
+ *  Returns the length the name occupies AT `pos` (to skip it), or 0 if it doesn't match.
+ *
+ *  ★★★ COMPRESSION POINTERS ARE FOLLOWED (2026-10-17, Stuart: vibeserver-portable.local "not reachable for most of
+ *      today" while vibepocket.local — avahi, same box — always was). This used to say "a QUESTION never uses them"
+ *      and returned no-match on the first pointer. Wrong: Apple's mDNSResponder (every Mac, iPhone, iPad) packs the
+ *      questions of ALL its pending lookups into one packet and compresses the later names against the earlier ones —
+ *      "vibeserver-portable" + pointer to the "local" of the question before it, or AAAA then A by pointer to the
+ *      whole name. Our question was only ever answered when it happened to be FIRST in the packet and uncompressed,
+ *      so the name resolved or not depending on what else the asker was looking up — a busy Apple LAN (TVs, amps,
+ *      phones) made it mostly "not". Measured from the Mac against the Pi 500 and the Portable: a lone A question was
+ *      answered; "AAAA + A(ptr)" got only the NSEC; "other.local + ours(ptr .local)" got nothing. avahi answered all
+ *      three. Every published name and the _vibesdr._tcp browse went through this parser, so discovery had the same
+ *      hole. */
+size_t matchName(const uint8_t* buf, size_t len, size_t pos, const std::string& want) {
+    const size_t end = skipName(buf, len, pos);
+    if (!end) return 0;
+    size_t i = pos, w = 0;
+    for (int hops = 0; i < len;) {
         uint8_t l = buf[i];
         if (l == 0) {
-            return (w == want.size() - 1) ? (i + 1 - pos) : 0;   // want ends with the \0
+            return (w == want.size() - 1) ? (end - pos) : 0;      // want ends with the \0
         }
-        if ((l & 0xC0) != 0) return 0;                            // pointer — not expected
+        if ((l & 0xC0) == 0xC0) {
+            if (i + 1 >= len || ++hops > 16) return 0;            // a pointer loop is a malformed packet
+            const size_t to = ((size_t)(l & 0x3F) << 8) | buf[i + 1];
+            if (to >= i) return 0;                                // pointers only ever point BACK
+            i = to;
+            continue;
+        }
+        if ((l & 0xC0) != 0) return 0;
         if (i + 1 + l > len) return 0;
         if (w >= want.size() || (uint8_t)want[w] != l) return 0;
         for (uint8_t k = 0; k < l; ++k) {
@@ -180,8 +220,8 @@ std::string buildAnswer(const std::string& host, uint32_t addr, uint16_t txid) {
     u16(0);             // additional
     p += name;
     u16(1);             // TYPE A
-    u16(0x8001);        // CLASS IN, cache-flush bit — we are authoritative for this name
-    u32(kTtl);
+    u16(classOut());        // CLASS IN, cache-flush bit — we are authoritative for this name
+    u32(ttlOut());
     u16(4);
     p.append((const char*)&addr, 4);     // already network byte order
     return p;
@@ -225,7 +265,7 @@ std::string buildService(const std::string& host, uint32_t addr, uint16_t txid, 
         p += type;
         u16(12);            // TYPE PTR
         u16(0x0001);        // CLASS IN — no cache-flush, see above
-        u32(kTtl);
+        u32(ttlOut());
         u16((uint16_t)inst.size());
         p += inst;
     }
@@ -233,8 +273,8 @@ std::string buildService(const std::string& host, uint32_t addr, uint16_t txid, 
     // SRV: priority, weight, port, target
     p += inst;
     u16(33);                // TYPE SRV
-    u16(0x8001);            // CLASS IN + cache-flush
-    u32(kTtl);
+    u16(classOut());            // CLASS IN + cache-flush
+    u32(ttlOut());
     u16((uint16_t)(6 + hostN.size()));
     u16(0); u16(0); u16(g_svcPort);
     p += hostN;
@@ -248,8 +288,8 @@ std::string buildService(const std::string& host, uint32_t addr, uint16_t txid, 
         rd += (char)k2.size(); rd += k2;
         p += inst;
         u16(16);            // TYPE TXT
-        u16(0x8001);
-        u32(kTtl);
+        u16(classOut());
+        u32(ttlOut());
         u16((uint16_t)rd.size());
         p += rd;
     }
@@ -257,8 +297,8 @@ std::string buildService(const std::string& host, uint32_t addr, uint16_t txid, 
     // A, so the resolver never has to ask where the target lives.
     p += hostN;
     u16(1);
-    u16(0x8001);
-    u32(kTtl);
+    u16(classOut());
+    u32(ttlOut());
     u16(4);
     p.append((const char*)&addr, 4);
     return p;
@@ -276,7 +316,7 @@ std::string buildMetaPtr(uint16_t txid) {
     };
     u16(txid); u16(0x8400); u16(0); u16(1); u16(0); u16(0);
     p += meta;
-    u16(12); u16(0x0001); u32(kTtl);
+    u16(12); u16(0x0001); u32(ttlOut());
     u16((uint16_t)type.size());
     p += type;
     return p;
@@ -306,14 +346,25 @@ std::string buildNsec(const std::string& host, uint16_t txid) {
     u16(0); u16(1); u16(0); u16(0);
     p += name;
     u16(47);                // TYPE NSEC
-    u16(0x8001);            // CLASS IN + cache-flush
-    u32(kTtl);
+    u16(classOut());            // CLASS IN + cache-flush
+    u32(ttlOut());
     std::string rdata = name;      // "next name" is our own, as mDNS does
     rdata += (char)0x00;           // window 0
     rdata += (char)0x01;           // bitmap length
     rdata += (char)0x40;           // bit for type 1 (A) only — no AAAA
     u16((uint16_t)rdata.size());
     p += rdata;
+    return p;
+}
+
+/** A response rebuilt for a legacy unicast asker: its transaction id and its question (`question` = name + QTYPE +
+ *  QCLASS, uncompressed) in front of the answers. The builders already wrote TTL ≤ 10 and no cache-flush (g_legacy). */
+std::string legacyReply(const std::string& ans, uint16_t txid, const std::string& question) {
+    if (ans.size() < 12 || question.empty()) return ans;
+    std::string p = ans;
+    p[0] = (char)(txid >> 8); p[1] = (char)(txid & 0xFF);
+    p[4] = 0; p[5] = 1;                                       // QDCOUNT = 1
+    p.insert(12, question);
     return p;
 }
 
@@ -530,11 +581,11 @@ void loop(std::string base, uint32_t addr) {
                 if ((buf[2] & 0x80) && !isOurs(from.sin_addr.s_addr)) {
                     size_t off = 12;
                     uint16_t qd = (buf[4] << 8) | buf[5];
-                    for (uint16_t q = 0; q < qd && off < (size_t)n; ++q) {
-                        while (off < (size_t)n && buf[off]) off += 1 + buf[off];
-                        off += 5;
+                    for (uint16_t q = 0; q < qd && off && off < (size_t)n; ++q) {
+                        off = skipName(buf, n, off);
+                        if (off) off += 4;
                     }
-                    if (off < (size_t)n && matchName(buf, n, off, want)) {
+                    if (off && off < (size_t)n && matchName(buf, n, off, want)) {
                         g_conflict.store(true);
                     }
                 }
@@ -660,19 +711,27 @@ void loop(std::string base, uint32_t addr) {
         // ★ Answer with our address on the ASKER's network, out of that interface (a phone on the hotspot must be
         //   told 10.42.0.1, not the Ethernet address it cannot reach).
         bool unicastReply = false;
+        // ★ Legacy unicast: the asker's own port, NOT 5353 — this used to rewrite the port to 5353, so `dig -p 5353
+        //   @224.0.0.251` and every plain resolver were answered on a port nobody was listening on.
+        const bool legacy = ntohs(from.sin_port) != kPort;
+        const uint16_t txid = (uint16_t)((buf[0] << 8) | buf[1]);
+        std::string qEcho;                             // the question being answered, uncompressed (legacy only)
+        g_legacy = legacy;
 #ifdef VIBE_MDNS_PER_IFACE
         const uint32_t here = addrFor(ifs, from.sin_addr.s_addr, addr);
         auto reply = [&](const std::string& ans) {
             if (ans.empty()) return;
-            if (unicastReply) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
-            else              sendVia(fd, ans, group, here);
+            if (legacy)            sendTo(fd, legacyReply(ans, txid, qEcho), from);
+            else if (unicastReply) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
+            else                   sendVia(fd, ans, group, here);
         };
 #else
         const uint32_t here = addr;
         auto reply = [&](const std::string& ans) {
             if (ans.empty()) return;
-            if (unicastReply) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
-            else              sendTo(fd, ans, group);
+            if (legacy)            sendTo(fd, legacyReply(ans, txid, qEcho), from);
+            else if (unicastReply) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
+            else                   sendTo(fd, ans, group);
         };
 #endif
 
@@ -685,15 +744,18 @@ void loop(std::string base, uint32_t addr) {
             const bool isInst = g_svcPort && !wantInst.empty() && matchName(buf, n, off, wantInst);
             const bool isType = g_svcPort && !wantType.empty() && matchName(buf, n, off, wantType);
             const bool isMeta = g_svcPort && !wantMeta.empty() && matchName(buf, n, off, wantMeta);
-            // Skip this question's name however it turned out.
-            size_t skip = off;
-            while (skip < (size_t)n && buf[skip]) skip += 1 + buf[skip];
-            skip += 1;
-            if (skip + 4 > (size_t)n) break;
+            // Skip this question's name however it turned out (a pointer ends it in two bytes).
+            size_t skip = skipName(buf, n, off);
+            if (!skip || skip + 4 > (size_t)n) break;
             uint16_t qtype = (buf[skip] << 8) | buf[skip + 1];
             const bool unicast = (buf[skip + 2] & 0x80) != 0;   // QU bit
             unicastReply = unicast;
             off = skip + 4;
+            if (legacy) {
+                qEcho = isMeta ? wantMeta : isType ? wantType : isInst ? wantInst : want;
+                qEcho.append((const char*)buf + skip, 2);           // QTYPE as asked
+                qEcho += (char)0x00; qEcho += (char)0x01;            // QCLASS IN (QU bit cleared)
+            }
 
             // ── The service questions ────────────────────────────────────────────────────
             if (isType || isInst || isMeta) {
@@ -729,6 +791,7 @@ void loop(std::string base, uint32_t addr) {
             // Honour the QU bit: a resolver that asked for a unicast reply gets one.
             reply(ans);
         }
+        g_legacy = false;                              // announcements stay multicast-shaped
     }
     close(fd);
 }

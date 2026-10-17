@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.20)
 #     package takes its upstream version from here, and the macOS app's plist is bumped alongside
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
-project(vibeserver VERSION 11.0.4 LANGUAGES CXX C)
+project(vibeserver VERSION 11.0.5 LANGUAGES CXX C)
 # ★★★ V11 (2026-09-28): the app, Jr, every VibeServer host, Lite and the Mac app all move to major 11
 #     together (docs/BRIEF-v11-compatibility.md). A PRE-RELEASE is named on its OWN line, read by every
 #     reader of the line above (android CMake, lite gradle, mac/build-app.sh): the package becomes
@@ -586,6 +586,13 @@ add_executable(test-power-dips "${CMAKE_CURRENT_SOURCE_DIR}/test-power-dips.cpp"
 target_include_directories(test-power-dips PRIVATE "${CPP_DIR}")
 target_link_libraries(test-power-dips PRIVATE Threads::Threads)
 add_test(NAME power-dips COMMAND test-power-dips)
+# ★ The mDNS responder's question parser (2026-10-17): compressed questions — Apple packs several lookups into one
+#   packet — were ignored, so <name>.local resolved only when ours happened to be the first, uncompressed question.
+add_executable(test-mdns "${CMAKE_CURRENT_SOURCE_DIR}/test-mdns.cpp")
+target_include_directories(test-mdns PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-mdns)
+target_link_libraries(test-mdns PRIVATE Threads::Threads)
+add_test(NAME mdns COMMAND test-mdns)
 # ★ The fatal-signal record (crash_report.h, 2026-10-06): a fault on a named thread is reported with its
 #   thread, PC as an exe offset and version, and the process still dies of the same signal. Linux only
 #   (prints SKIP elsewhere).

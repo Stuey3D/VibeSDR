@@ -86,6 +86,7 @@ const POWERSAVE_FPS = 5;
 
 import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState } from './sdrProtocol';
 import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE, clampVibePassband } from './sdrProtocol';
+import { roomMode, roomPassband } from './roomPassband';
 import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
 import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
@@ -629,6 +630,8 @@ export abstract class VibeServerWsClient {
   setMode(mode: SDRMode) {
     const changed = mode !== this.status.mode;
     this.status.mode = mode;
+    // ★ Ours, so the configs already on their way with the OLD mode are not adopted over it — see roomMode.
+    this.lastLocalTuneAt = Date.now();
     // Server applies these defaults on every mode change (websocket.go —
     // "These match the defaults in app.js setMode()"). It never reports
     // bandwidth back, so mirror the exact table to stay in sync.
@@ -648,6 +651,8 @@ export abstract class VibeServerWsClient {
     if (this.isLocal) [low, high] = clampVibePassband(this.status.mode, low, high);
     this.status.bandwidthLow  = low;
     this.status.bandwidthHigh = high;
+    // ★ So the configs answering a drag are not read as somebody else's passband — see roomPassband.
+    this.lastLocalBwAt = Date.now();
     // Local shim (on-device or a remote VibeServer): the demod runs server-side
     // and its audio WS is NOT owned by VibePowerModule, so sendBandwidth() is a
     // no-op there. Send over the spectrum WS control channel — handleControl's
@@ -1308,6 +1313,8 @@ export abstract class VibeServerWsClient {
   /** When this client last tuned itself — so the server's echo of our own tune is not mistaken
    *  for another listener moving a shared dial. */
   private lastLocalTuneAt = 0;
+  /** When this client last moved the passband itself — the same guard, for the room's passband. */
+  private lastLocalBwAt = 0;
   /** The VFO the SERVER last told us it has us on (config.vfo). The only honest way to ask whether
    *  a tune took: our own status is set by tune() itself. */
   private lastServerVfo = 0;
@@ -2887,6 +2894,37 @@ export abstract class VibeServerWsClient {
           }
           this.callbacks.onStatus({ ...this.status });
         }
+        /* ★★★ THE ROOM'S MODE AND PASSBAND, WHETHER OR NOT THE DIAL MOVED (2026-10-17). Stuart: "on
+         *  shared VFO, if a user changes the bandwidth sliders I am hearing them but they aren't
+         *  synchronising with mine." The server applied the edges to the one shared demodulator and
+         *  never said so; config now carries them, and the mode was only ever adopted with a move of
+         *  the dial. Rule and guards in roomPassband.ts — read by the web client too.
+         *  ★★★ WRITTEN STRAIGHT INTO status, NEVER THROUGH setBandwidth()/setMode(): those transmit,
+         *      and an adopted value sent back as a change is the loop the shared-dial contract forbids.
+         *      The screen draws its sliders from status (onStatus here, and every spectrum frame). */
+        const ctx = {
+          shared: sharedNow, mode: String(this.status.mode),
+          low: Number(this.status.bandwidthLow), high: Number(this.status.bandwidthHigh),
+          sinceLocalMs: Date.now() - Math.max(this.lastLocalTuneAt, this.lastLocalBwAt),
+        };
+        let roomChanged = false;
+        const rm = roomMode(msg, ctx);
+        if (rm && rm in MODE_BANDWIDTHS) {
+          noteDecision('vibe', `room mode adopted ${rm}`);
+          this._adoptMode(rm as SDRMode);      // ★ the mode's default passband, until the room says otherwise
+          roomChanged = true;
+        }
+        const pb = roomPassband(msg, {
+          ...ctx, mode: String(this.status.mode),
+          low: Number(this.status.bandwidthLow), high: Number(this.status.bandwidthHigh),
+        });
+        if (pb) {
+          noteDecision('vibe', `room passband adopted ${pb[0]}..${pb[1]}`);
+          this.status.bandwidthLow = pb[0];
+          this.status.bandwidthHigh = pb[1];
+          roomChanged = true;
+        }
+        if (roomChanged) this.callbacks.onStatus({ ...this.status });
       }
       if (this.wantTune) {
         const want = this.wantTune;

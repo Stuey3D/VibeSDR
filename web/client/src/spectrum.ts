@@ -21,6 +21,7 @@ import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services
 import { DabAssembler } from '../../../src/services/dabAssemble';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg } from '../../../src/services/vibeSquelch';
+import { roomMode, roomPassband } from '../../../src/services/roomPassband';
 
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
@@ -616,6 +617,11 @@ export interface SpectrumCallbacks {
   /** ★★ SOMEBODY ELSE TURNED THE DIAL. Only ever fires on a shared receiver: the page redraws its
    *  readout, its mode and its VFO marker from values it did not choose. */
   onDialMoved?: (hz: number, mode: SDRMode) => void;
+  /** ★★★ THE ROOM'S MODE OR PASSBAND CHANGED without the dial moving — somebody else dragged the
+   *  passband sliders, or switched the demodulator on the same frequency. Already written into
+   *  `mode`/`bandwidthLow`/`bandwidthHigh`; the page redraws its sliders and readout and SENDS
+   *  NOTHING. `mode` is set only when the mode itself changed. */
+  onRoomPassband?: (mode?: SDRMode) => void;
   /** ★ Admin controls were re-locked after an idle period. NOT a disconnection: the session,
    *  the audio and any decoder are all still running. `idleMin` is how long it waited. */
   /** Another session proved the owner's password more recently; this one is now an ordinary
@@ -656,6 +662,9 @@ export class SpectrumClient {
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
   private sendTimer: number | null = null;
   /** When this client last tuned itself — see the dial-follow in the config handler. */
+  /** ★ When this listener last moved the passband itself — so the configs answering a drag are not read
+   *  as somebody else's passband (see roomPassband.ts). -Infinity for the same reason as below. */
+  private lastLocalBwAt = -Infinity;
   private lastLocalTuneAt = -Infinity;   // ★ -Infinity, not 0: performance.now() starts at 0 with the page
   private lastSendAt = -Infinity;
   private pingTimer: number | null = null;
@@ -965,6 +974,31 @@ export class SpectrumClient {
             }
             this.cb.onDialMoved?.(this.frequency, this.mode);
           }
+        }
+        /* ★★★ THE ROOM'S MODE AND PASSBAND, WHETHER OR NOT THE DIAL MOVED (2026-10-17). Stuart: "on
+         *  shared VFO, if a user changes the bandwidth sliders I am hearing them but they aren't
+         *  synchronising with mine." The server applied the edges to the one shared demodulator and
+         *  config never carried them; it does now, and the mode above was only ever adopted with a
+         *  move of the dial. Rule and guards in src/services/roomPassband.ts — the app reads it too.
+         *  ★★★ WRITTEN STRAIGHT INTO OUR STATE, never through setBandwidth()/setMode(): those send, and
+         *      an adopted value sent back as a change is the loop the shared-dial contract forbids.
+         *  ★ After the follow-the-dial block, so a move AND a passband in one config both land (the
+         *    page's onDialMoved resets nothing it should keep — see main.ts). */
+        {
+          const ctx = {
+            shared: msg.shared === true, mode: this.mode as string,
+            low: this.bandwidthLow, high: this.bandwidthHigh,
+            sinceLocalMs: performance.now() - Math.max(this.lastLocalTuneAt, this.lastLocalBwAt),
+          };
+          let modeMoved: SDRMode | undefined;
+          const rm = roomMode(msg, ctx);
+          if (rm && MODE_BANDWIDTHS[rm as SDRMode]) {
+            modeMoved = this.mode = rm as SDRMode;
+            [this.bandwidthLow, this.bandwidthHigh] = MODE_BANDWIDTHS[modeMoved];   // until the room says otherwise
+          }
+          const pb = roomPassband(msg, { ...ctx, mode: this.mode, low: this.bandwidthLow, high: this.bandwidthHigh });
+          if (pb) [this.bandwidthLow, this.bandwidthHigh] = pb;
+          if (modeMoved || pb) this.cb.onRoomPassband?.(modeMoved);
         }
         this.cb.onConfig?.(cfg);
         break;
@@ -1510,6 +1544,7 @@ export class SpectrumClient {
     // ★ The mode's own tune carries the current frequency, so a frequency still held is already in it.
     this.tunePacer.cancel();
     this.mode = mode;
+    this.lastLocalTuneAt = performance.now();   // ★ ours — configs already sent with the OLD mode must not undo it
     const bw = MODE_BANDWIDTHS[mode];
     if (bw) { this.bandwidthLow = bw[0]; this.bandwidthHigh = bw[1]; }
     // The shim IGNORES bandwidth fields on a tune that also changes mode
@@ -1524,6 +1559,7 @@ export class SpectrumClient {
     [low, high] = clampPassband(this.mode, low, high);
     this.bandwidthLow = low;
     this.bandwidthHigh = high;
+    this.lastLocalBwAt = performance.now();     // ★ see lastLocalBwAt
     this._send({ type: 'bandwidth', bandwidthLow: low, bandwidthHigh: high });
   }
 
