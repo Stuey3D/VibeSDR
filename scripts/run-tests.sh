@@ -39,6 +39,8 @@ flags_for() {
     #    anti-aliased recogniser feed. -clips runs it on the research's real UberSDR recordings — NOT RUN
     #    (exit 3) unless VIBE_SSB_CLIPS points at them; they are ~50 MB of off-air audio and not in the repo.
     test-ssb-offset|test-ssb-offset-clips) echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★★ V12 BINAURAL TUNING (vibedsp/binaural): the spatialiser, the WFM hand-off and the SSB source (FAST estimator).
+    test-binaural) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★ Every mode's DSP cost vs passband, both directions and past the ceiling — the audit that
     #   followed the WFM cliff (2026-09-29). Optimised for the same reason.
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
@@ -96,6 +98,8 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-ssb-offset|test-ssb-offset-clips) echo "$VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
+                              $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-binaural) echo "$VDSP/binaural.cpp $VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
                               $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     # ★★ proc.cpp goes with anything that SHELLS OUT (curl, mostly): geoip, asndb and radiodns all
     #    call vibeproc::run. It was missing, so those three "did not build" — and a suite that does
