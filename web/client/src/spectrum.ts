@@ -498,6 +498,8 @@ export interface SpectrumCallbacks {
     /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
      *  hardware, different setter, different button — never fold them into one field. */
     biasT?: boolean; rspBiasT?: boolean;
+    /** ★ FM de-emphasis (SECONDS) and stereo as the server runs them (from 11.0.4); undefined from an older server. */
+    deemph?: number; stereo?: boolean;
   }) => void;
   /** ★ Demodulators the owner has switched off, from hwinfo. Called since it was added and never
    *  DECLARED here — so every caller was an implicit-any under a strict check. Harmless at run
@@ -1198,6 +1200,8 @@ export class SpectrumClient {
             dabNotch: typeof msg.dabNotch === 'boolean' ? msg.dabNotch : undefined,
             biasT:    typeof msg.biasT    === 'boolean' ? msg.biasT    : undefined,
             rspBiasT: typeof msg.rspBiasT === 'boolean' ? msg.rspBiasT : undefined,
+            deemph:   typeof msg.deemph   === 'number'  ? msg.deemph   : undefined,
+            stereo:   typeof msg.stereo   === 'boolean' ? msg.stereo   : undefined,
           });
         }
         // ★ Seconds left on a limited session, sent on connect so the clock starts THEN

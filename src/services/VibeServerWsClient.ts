@@ -2630,6 +2630,16 @@ export abstract class VibeServerWsClient {
           nfmVoice: typeof msg.nfmvoice === 'boolean' ? msg.nfmvoice : undefined,
         });
       }
+      // ★★★ DE-EMPHASIS AND STEREO, AS THE SERVER RUNS THEM (from 11.0.4). The app used to draw the
+      //     value it last saved — and one saved slot serves every remote server, so 75 µs chosen on a
+      //     US server showed on a UK one running 50 (Stuart, 2026-10-17).
+      if (typeof msg.deemph === 'number' || typeof msg.stereo === 'boolean') {
+        const tau = Number(msg.deemph);
+        this.callbacks.onHwAudio?.({
+          deemph: typeof msg.deemph === 'number' && Number.isFinite(tau) && tau >= 0 ? tau : undefined,
+          stereo: typeof msg.stereo === 'boolean' ? msg.stereo : undefined,
+        });
+      }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       if (typeof msg.gainNow === 'number') this.callbacks.onHwGainNow?.(msg.gainNow);
       // ★ Only when the server states it — an older one does not, and 0 must not be read as

@@ -4753,6 +4753,8 @@ static VsNotchWant vsAutoNotchFor(double hz, bool dabMode) {
 }
 
 static float vsDesiredNrStrength();  // <0 = unset
+static double vsDesiredDeemph();     // seconds: 0 off, 50e-6, 75e-6
+static bool  vsDesiredStereo();
 static int   vsDesiredRspBiasT();    // -1 unset, 0 off, 1 on
 // The RSP front end as the owner last left it. -1 = never set.
 static std::atomic<int> g_vsSavedLna{-1}, g_vsSavedIfGr{-1}, g_vsSavedIfAgc{-1};
@@ -16597,6 +16599,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   an older one never states it, and a button that does nothing is worse than none.
         j += std::string(",\"nfmvoice\":") + (mine(&ClientDsp::nfmVoice, g_nfmVoiceShared) ? "true" : "false");
         j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
+        /* ★★★ DE-EMPHASIS AND STEREO WERE ACCEPTED AND NEVER REPORTED — the same shape again (Stuart,
+         *  2026-10-17): set 75 µs on a US server, come home, and the app showed 75 while this server
+         *  ran 50, because the app had nothing to read and drew the last value it had saved. Stated
+         *  here so a client paints the radio, not its memory. THIS listener's when it has its own
+         *  pipeline (an unset tau is the pipeline's own 50 µs default), the shared value otherwise.
+         *  ★ SECONDS on the wire, like the `deemph` command — see vibeserver_wire_units_seconds. */
+        {
+            const double tau = myDsp ? (myDsp->deempTau >= 0 ? myDsp->deempTau : 50e-6) : vsDesiredDeemph();
+            char tb[32]; std::snprintf(tb, sizeof tb, "%.6g", tau);
+            j += std::string(",\"deemph\":") + tb;
+            j += std::string(",\"stereo\":") + ((myDsp ? myDsp->stereoOn.load() : vsDesiredStereo()) ? "true" : "false");
+        }
         // ★★★ THE SAME BUG AS `nr`/`notch` ABOVE, AND THE FIX WAS LEFT HALF-DONE. That pair was
         //     added on 2026-07-28 because rendering our saved prefs showed NR OFF while it was
         //     audibly ON. Every OTHER sticky control has exactly the same shape and none of them
@@ -25747,6 +25761,8 @@ static bool  vsUserNotchAllowed()  { return g_dsp.rspUserNotch.load() != 0; }
 static bool  vsAntennaLocked()     { return g_antennaLocked.load() != 0; }
 
 static float vsDesiredNrStrength() { return g_dsp.nrStrength.load(); }
+static double vsDesiredDeemph()    { return g_dsp.deempTau.load(); }
+static bool  vsDesiredStereo()     { return g_dsp.stereoOn.load(); }
 static int   vsDesiredRspBiasT()   { return g_dsp.rspBiasT.load(); }
 
 // Replay the listener's choices onto a freshly built Impl. ★ Call this at EVERY `p = impl`

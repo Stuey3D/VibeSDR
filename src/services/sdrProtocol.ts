@@ -347,6 +347,9 @@ export interface SDRCallbacks {
                       autobw?: boolean; nbx?: boolean;
                       /** ★ NFM Voice (true) vs Raw; undefined from a server without the filter. */
                       nfmVoice?: boolean }) => void;
+  /** ★★★ FM de-emphasis (SECONDS: 0, 50e-6, 75e-6) and stereo as the SERVER is running them. Each is
+   *  undefined when the server did not state it — an older server, where the control keeps its default. */
+  onHwAudio?:   (s: { deemph?: number; stereo?: boolean }) => void;
   /** ★★★ DAB, and it is a VIBESERVER-ONLY callback. `s` is the whole measured state of the
    *  multiplex (see DabState — every field is MEASURED, nothing inferred); null means DAB has
    *  ended, and `err` carries the server's refusal when it could not start. */

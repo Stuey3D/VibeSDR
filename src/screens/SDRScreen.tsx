@@ -1200,6 +1200,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwIfCap,       setHwIfCap]       = useState(-1);
   const [hwIfLocked,    setHwIfLocked]    = useState(false);
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
+  const serverAudioRef = useRef<{ deemph?: number; stereo?: boolean }>({});   // ★ hwinfo's — see onHwAudio
   const [hwStereo,      setHwStereo]      = useState(true);   // WFM stereo on / forced mono (local)
   // ★★ THE BROADCAST-FM TREATMENTS. All four default ON, matching the server: each only acts on the
   //    fault it can fix, so a listener who never opens the sheet gets the better sound. The RADIO is
@@ -1347,8 +1348,20 @@ export default function SDRScreen({ route, navigation }: Props) {
         autoGain: prefs.autoGain, gain: prefs.gain, ppm: prefs.ppm, sampleRate: prefs.sampleRate,
         biasTee: prefs.biasTee, agc: prefs.agc, directSampling: prefs.directSampling,
         autoDs: prefs.autoDs, dsBelowHz: prefs.dsBelowHz,
+        deemph: prefs.deemph, stereo: prefs.stereo,
       };
-      setHwDeemph(deemph); setHwStereo(stereo); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
+      /* ★★★ DE-EMPHASIS AND STEREO ON A REMOTE SERVER ARE THE SERVER'S (Stuart, 2026-10-17: "I went to a
+       *  US server … set it [75], but when i went back to my own server it still showed 75 but i think it
+       *  was running 50"). This blob is ONE slot for every remote VibeServer, and the value restored here
+       *  went only to LocalHw — this phone's engine — so the menu showed the last server's setting while
+       *  the server ran its own. The server reports both in hwinfo (onHwAudio); until it has, the control
+       *  shows the defaults a fresh listener actually gets (50 µs, stereo on), which is also the truth on
+       *  an older server that does not report them. The ref keeps a report that beat this async restore. */
+      if (isVibeServer) {
+        setHwDeemph(serverAudioRef.current.deemph ?? 50e-6);
+        setHwStereo(serverAudioRef.current.stereo ?? true);
+      } else { setHwDeemph(deemph); setHwStereo(stereo); }
+      setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
       /* ★★★ A REMOTE SERVER'S HARDWARE IS NOT RESTORED FROM HERE AT ALL — not into the panel and
        *  not into LocalHw, which is THIS PHONE's engine (and, if the phone is serving, its served
        *  radio). The server states its own gain, AGC, rate, bias-T, ppm and direct sampling in
@@ -1472,8 +1485,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!isLocal || !hwLoaded.current) return;
     AsyncStorage.setItem(localHwKey, JSON.stringify({
-      ...(hwSavedBlob ?? hwLoadedPrefsRef.current),
-      deemph: hwDeemph, stereo: hwStereo,
+      // ★ A remote server's de-emphasis and stereo are written back AS LOADED, like its hardware —
+      //   they are that server's state, not this device's preference (see the restore).
+      ...(hwSavedBlob ? { ...hwSavedBlob, deemph: hwDeemph, stereo: hwStereo } : hwLoadedPrefsRef.current),
       // ★ Scoped to the DEVICE (`tcp:host:port` or `usb`) like everything else in this blob — a
       //   converter is a property of one physical dongle-plus-front-end, and that is exactly what
       //   localDeviceKey identifies. Nothing new to sync or migrate.
@@ -5890,6 +5904,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       //     authority: another listener may have turned one off, and a control that misreports the
       //     radio is worse than a missing one because nothing tells you to look. Receiving this at
       //     all is also what reveals the controls — a server that never sends it does not have them.
+      // ★★★ What the server is running — see the restore's note on DE-EMPHASIS AND STEREO.
+      onHwAudio: (st) => {
+        if (destroyed.current) return;
+        if (st.deemph !== undefined) { serverAudioRef.current.deemph = st.deemph; setHwDeemph(st.deemph); }
+        if (st.stereo !== undefined) { serverAudioRef.current.stereo = st.stereo; setHwStereo(st.stereo); }
+      },
       onFmDsp: (st) => {
         if (destroyed.current) return;
         setVibeFmDsp(true);
@@ -6036,8 +6056,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onDialMoved: (hz: number) => {
         if (destroyed.current) return;
-        const who = dialStateRef.current?.tuner;
-        setDialHint(`${who ? `User ${who}` : 'Another listener'} tuned to ${(hz / 1e6).toFixed(3)} MHz`);
+        /* ★★★ ONLY WHEN SOMEBODY ELSE MOVED IT (Stuart, 2026-10-17): "when you tune a shared server
+         *  it comes up USER4 has tuned … when it is only you on there". This adopt branch also runs
+         *  on the server's echo of OUR OWN tune when it lands outside the 1.5 s settle window, and
+         *  it named whatever handle the strip held — a number that meant nothing to the person who
+         *  had just turned the knob. The server records who tuned BEFORE it applies the tune
+         *  (local_sdr_shim.cpp, "THE SHARED DIAL: REMEMBER WHO MOVED IT"), so the dial state is
+         *  already current here: ours, or nobody else listening, says nothing.
+         *  ★ No number either — "Another user", in Stuart's words. The chat keeps its User N. */
+        const d = dialStateRef.current;
+        if (d && (d.mine || (d.you > 0 && d.tuner === d.you) || d.listeners <= 1)) return;
+        setDialHint(`Another user has tuned to ${(hz / 1e6).toFixed(3)} MHz`);
       },
       onDialRefused: () => {
         if (destroyed.current) return;

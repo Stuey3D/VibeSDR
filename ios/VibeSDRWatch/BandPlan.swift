@@ -20,10 +20,10 @@ enum BandPlan {
   static let cb        = Color(red: 1,          green: 0x77/255.0, blue: 0)
 
   static let bands: [BandEntry] = [
-    BandEntry(lo:       9_000, hi:    148_500, name: "LW Broadcast Band",           color: broadcast),
+    BandEntry(lo:       9_000, hi:    148_500, name: "VLF / LF Utility",            color: utility),
     BandEntry(lo:     135_700, hi:    137_800, name: "2200m Ham Band",              color: ham),
-    BandEntry(lo:     148_500, hi:    283_500, name: "NDB / Navigational Beacons",  color: utility),
-    BandEntry(lo:     283_500, hi:    525_000, name: "NDB / Maritime Beacons",      color: utility),
+    BandEntry(lo:     148_500, hi:    283_500, name: "LW Broadcast Band",           color: broadcast),
+    BandEntry(lo:     283_500, hi:    525_000, name: "NDB / NAVTEX / Maritime",     color: utility),
     BandEntry(lo:     472_000, hi:    479_000, name: "630m Ham Band",               color: ham),
     BandEntry(lo:     525_000, hi:  1_705_000, name: "AM Broadcast Band",           color: broadcast),
     BandEntry(lo:   1_800_000, hi:  2_000_000, name: "160m Ham Band",               color: ham),
