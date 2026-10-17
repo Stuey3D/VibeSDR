@@ -1839,7 +1839,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let ws  = (wsUsingNW ? wsReady : (wsTask?.state == .running)) ? "open" : "closed"
     var b = [Float](repeating: 0, count: 9)
     _ = vibe_binaural_stats(binauralH, &b, 9)
-    let bin = b[0] > 0 ? String(format: " bin=src%d off=%.0f%@ pan=%.2f w=%.2f ssb=%d/%d drop=%d",
+    let bin = b[0] > 0 ? String(format: " bin=src%ld off=%.0f%@ pan=%.2f w=%.2f ssb=%ld/%ld drop=%ld",
                                 Int(b[1]), b[2], b[3] > 0 ? "" : "?", b[4], b[5], Int(b[7]), Int(b[6]), Int(b[8])) : ""
     return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed)\(bin)"
   }

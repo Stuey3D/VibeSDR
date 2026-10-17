@@ -55,6 +55,8 @@ export interface BinauralPlan {
   refHz: number;
 }
 
+/** The smallest dial change that counts as a move (mirrors BinauralTuning::kDialMoveHz). */
+export const BIN_DIAL_MOVE_HZ = 2;
 /** The base dead zone: on-tune audio must not wander (the brief: about ±15 Hz). */
 export const BIN_DEAD_HZ = 15;
 /** ★ Full lean at 300 Hz off for SSB and CW: the SSB estimator searches ±300 Hz, and 300 Hz is the edge of a
@@ -222,9 +224,12 @@ export class BinauralTracker {
       this.sink.setBinauralSource?.(p.source, p.deadHz, p.fullHz);
       if (kindChanged) { this.smooth = NaN; this.lastOkAt = -Infinity; this.sentHz = NaN; this.sentOk = false; }
     }
-    if (g.tuneHz !== this.dial && Number.isFinite(g.tuneHz)) {
-      // ★ The dial moved: a smoothed spectrum reading is of the OLD position — start the smoothing again.
-      //   (Native carries the SSB answer across the move itself.)
+    // ★★ A MOVE IS 2 Hz OR MORE. radiod stamps each frame's frequency with ±1 Hz of jitter (see the setStatus
+    //    gate in SDRScreen); passed on, every frame would read as a retune and native would restart the SSB
+    //    estimator twenty times a second — it would never finish one.
+    if (Number.isFinite(g.tuneHz) && !(Math.abs(g.tuneHz - this.dial) < BIN_DIAL_MOVE_HZ)) {
+      // The dial moved: a smoothed spectrum reading is of the OLD position — start the smoothing again.
+      // (Native carries the SSB answer across the move itself.)
       if (Number.isFinite(this.dial)) this.smooth = NaN;
       this.dial = g.tuneHz;
       this.sink.setBinauralDial?.(g.tuneHz);

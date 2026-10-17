@@ -134,6 +134,10 @@ console.log('── the tracker ──');
   ok(calls[b4] === 'src 2 15 300' && !calls.slice(b4).some((c) => c.startsWith('off')), 'switch to USB → native source 2, no spectrum offsets');
   now += 100; t.onFrame(noise(), { ...g, tuneHz: CENTRE + 50, lo: 50, hi: 2700 }, 'usb', now);
   ok(calls[calls.length - 1] === `dial ${CENTRE + 50}`, 'the dial is passed on (native carries its SSB answer across the move)');
+  const b5 = calls.length;
+  now += 100; t.onFrame(noise(), { ...g, tuneHz: CENTRE + 51, lo: 50, hi: 2700 }, 'usb', now);
+  now += 100; t.onFrame(noise(), { ...g, tuneHz: CENTRE + 49, lo: 50, hi: 2700 }, 'usb', now);
+  ok(calls.length === b5, '±1 Hz of frequency-stamp jitter is NOT a move (the SSB estimator is left to finish)');
   t.setStereo(1); t.setStereo(1);
   ok(calls.filter((c) => c === 'st 1').length === 1, 'the stereo hint is sent once per change');
 }
