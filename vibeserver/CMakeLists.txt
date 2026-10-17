@@ -586,6 +586,13 @@ add_executable(test-power-dips "${CMAKE_CURRENT_SOURCE_DIR}/test-power-dips.cpp"
 target_include_directories(test-power-dips PRIVATE "${CPP_DIR}")
 target_link_libraries(test-power-dips PRIVATE Threads::Threads)
 add_test(NAME power-dips COMMAND test-power-dips)
+# ★ The mDNS responder's question parser (2026-10-17): compressed questions — Apple packs several lookups into one
+#   packet — were ignored, so <name>.local resolved only when ours happened to be the first, uncompressed question.
+add_executable(test-mdns "${CMAKE_CURRENT_SOURCE_DIR}/test-mdns.cpp")
+target_include_directories(test-mdns PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-mdns)
+target_link_libraries(test-mdns PRIVATE Threads::Threads)
+add_test(NAME mdns COMMAND test-mdns)
 # ★ The fatal-signal record (crash_report.h, 2026-10-06): a fault on a named thread is reported with its
 #   thread, PC as an exe offset and version, and the process still dies of the same signal. Linux only
 #   (prints SKIP elsewhere).
