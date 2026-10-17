@@ -39,6 +39,11 @@ flags_for() {
     #    anti-aliased recogniser feed. (test-ssb-offset-clips, on the research's first UberSDR clips, was retired
     #    2026-10-17: those folders are gone, and the two-stage estimator is measured on new ones — test-ssb-offset-real.)
     test-ssb-offset) echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★★★ …and on REAL off-air audio (2026-10-17): VOLMET at eleven known dials, QSOs demodulated from busy-band I/Q,
+    #     two stations in one passband — where the two-stage estimator's gates were chosen, with a held-out set.
+    #     NOT RUN (exit 3) unless VIBE_TEST_AUDIO points at the folder holding ssb/ and iq/ (~1 GB, not in the repo).
+    #     Takes a few minutes (it demodulates ~80 two-minute clips). VIBE_SSB_OWNER=<m4a> adds Stuart's recording.
+    test-ssb-offset-real) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★★ V12 BINAURAL TUNING (vibedsp/binaural): the spatialiser, the WFM hand-off and the SSB source (FAST estimator).
     test-binaural) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★ Every mode's DSP cost vs passband, both directions and past the ceiling — the audit that
@@ -98,6 +103,8 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-ssb-offset) echo "$VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
+                              $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-ssb-offset-real) echo "$VDSP/binaural.cpp $VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
                               $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-binaural) echo "$VDSP/binaural.cpp $VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
                               $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
