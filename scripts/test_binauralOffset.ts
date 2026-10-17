@@ -56,7 +56,7 @@ console.log('── the plan per mode ──');
   const u = binauralPlan('usb', 50, 2700, BIN), l = binauralPlan('lsb', -2700, -50, BIN);
   ok(u.kind === 'ssb' && u.source === BIN_SRC_SSB_USB && l.source === BIN_SRC_SSB_LSB, 'USB/LSB → the native voice estimator, by sideband');
   // ★ ±50 Hz since 477 (was AM's ±15): a voice cannot be measured that finely, and QSO stations sit tens of Hz apart.
-  ok(u.deadHz === 50 && u.fullHz === 300 && l.deadHz === 50 && l.fullHz === 300, 'SSB: dead zone ±50 Hz, full lean at 300 Hz off (both sidebands)');
+  ok(u.deadHz === 50 && u.fullHz === 1000 && l.deadHz === 50 && l.fullHz === 1000, 'SSB: dead zone ±50 Hz, full lean at 1 kHz off (both sidebands)');
   ok(binauralPlan('am', -5000, 5000, 0).deadHz === 15 && binauralPlan('cwu', 300, 700, 0).deadHz === 15,
      'AM and CW keep the ±15 Hz dead zone (the SSB change is SSB only)');
   const am = binauralPlan('am', -5000, 5000, BIN), cw = binauralPlan('cwu', 300, 700, BIN);
@@ -142,7 +142,7 @@ console.log('── the tracker ──');
   // Mode change to USB: the native estimator takes over; no spectrum offsets are sent.
   const b4 = calls.length;
   now += 200; t.onFrame(noise(), { ...g, lo: 50, hi: 2700 }, 'usb', now);
-  ok(calls[b4] === 'src 2 50 300' && !calls.slice(b4).some((c) => c.startsWith('off')), 'switch to USB → native source 2 (dead ±50 Hz), no spectrum offsets');
+  ok(calls[b4] === 'src 2 50 1000' && !calls.slice(b4).some((c) => c.startsWith('off')), 'switch to USB → native source 2 (dead ±50 Hz), no spectrum offsets');
   now += 100; t.onFrame(noise(), { ...g, tuneHz: CENTRE + 50, lo: 50, hi: 2700 }, 'usb', now);
   ok(calls[calls.length - 1] === `dial ${CENTRE + 50}`, 'the dial is passed on (native carries its SSB answer across the move)');
   const b5 = calls.length;

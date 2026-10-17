@@ -114,12 +114,16 @@ export const BIN_DEAD_HZ = 15;
  * constantly"). The SSB offset is measured from the VOICE, and a voice cannot be measured to ±15 Hz — the estimator
  * scatters by tens of Hz from one over to the next, a child's voice more than a man's, and the stations of a QSO sit
  * a few tens of Hz apart anyway. Natively a further hysteresis applies (BinauralTuning::kSsbEnterHz, 90 Hz): an
- * estimator answer must pass it to START a lean; a dial move leans at once. Full scale stays 300 Hz — still well over
- * three dead zones of ramp.
+ * estimator answer must pass it to START a lean; a dial move leans at once. Full scale is BIN_FULL_SSB_HZ.
  */
 export const BIN_DEAD_SSB_HZ = 50;
-/** ★ Full lean at 300 Hz off for SSB and CW: the SSB estimator searches ±300 Hz, and 300 Hz is the edge of a
- *  typical CW filter — past it you are hearing a different signal, not a mistuned one. */
+/** ★★ SSB's full lean at 1 kHz off (Stuart on 479, 2026-10-17: "the pan doesn't need to be as aggressive when slightly
+ *  off tune — about half what it is for 500 Hz, and then 1 kHz has the full pan"). The same smoothstep from the ±50 Hz
+ *  dead zone gives 46 % at 500 Hz, 13 % at 200 Hz. Possible since the two-stage estimator reaches ±1200 Hz; through
+ *  build 478 it searched ±300 Hz, which is why full scale sat there. */
+export const BIN_FULL_SSB_HZ = 1000;
+/** ★ Full lean at 300 Hz off for CW: 300 Hz is the edge of a typical CW filter — past it you are hearing a different
+ *  signal, not a mistuned one. (SSB shared it until 2026-10-17 — see BIN_FULL_SSB_HZ.) */
 export const BIN_FULL_NARROW_HZ = 300;
 
 /** Is binaural tuning meaningful in this mode at all? (The audio menu hides the row when not.) */
@@ -141,8 +145,8 @@ export function binauralPlan(mode: string | undefined | null, lo: number, hi: nu
     return { kind, source, deadHz: d, fullHz: Math.max(full, 3 * d), refHz };
   };
   switch (m) {
-    case 'usb': return plan('ssb', BIN_SRC_SSB_USB, BIN_DEAD_SSB_HZ, BIN_FULL_NARROW_HZ);
-    case 'lsb': return plan('ssb', BIN_SRC_SSB_LSB, BIN_DEAD_SSB_HZ, BIN_FULL_NARROW_HZ);
+    case 'usb': return plan('ssb', BIN_SRC_SSB_USB, BIN_DEAD_SSB_HZ, BIN_FULL_SSB_HZ);
+    case 'lsb': return plan('ssb', BIN_SRC_SSB_LSB, BIN_DEAD_SSB_HZ, BIN_FULL_SSB_HZ);
     case 'cw': case 'cwu': case 'cwl':
       return plan('peak', BIN_SRC_GIVEN, res, BIN_FULL_NARROW_HZ, (lo + hi) / 2);
     // ★ AM: full lean at a fifth of the passband (±5 kHz → 1 kHz). An AM carrier a few hundred Hz off is still
