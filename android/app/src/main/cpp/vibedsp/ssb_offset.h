@@ -71,6 +71,13 @@ struct SsbOffsetEstimate {
     float snrDb = 0.0f;           ///< voiced frames over the quiet ones between words — a rough SNR
     int   frames = 0;             ///< voiced frames used
     int   minFrames = 60;         ///< the profile's floor for believing it (SLOW 60 = 4.8 s; FAST 20)
+    /** ★ The voice's PITCH: the mean, over the voiced frames used, of each frame's F0 from the whitened spectrum's
+     *  autocorrelation (Hz; 0 when not measured — Config::fullPitchSearch skips the autocorrelation).
+     *  Diagnostic for the estimate itself — but the binaural aid gates on it (BinauralTuning::kHighF0Hz): a HIGH
+     *  voice (a child, F0 ~250-400 Hz) has few, widely spaced harmonics in a 2.7 kHz passband, and the comb
+     *  k·f0 + d fits d ± f0 almost as well as d, so its answer is far less certain. The autocorrelation is already
+     *  computed per frame (it proposes the comb's pitches); reading the pitch off it costs one pass over ~85 lags. */
+    float f0Hz = 0.0f;
     bool  passes() const;         ///< the gate: see SsbOffsetEstimator::gateFor and the note in ssb_offset.cpp
 };
 
@@ -148,7 +155,8 @@ private:
     int bufFill_ = 0, nBlock_ = 0, nd_ = 0;
     int used_ = 0;                // voiced frames in the current window
     long long windowSamples_ = 0; // input (internal-rate) samples since the window began
-    double cpuSec_ = 0, snrSum_ = 0;
+    double cpuSec_ = 0, snrSum_ = 0, f0Sum_ = 0;   // f0Sum_: each voiced frame's pitch, summed…
+    int f0N_ = 0;                 // …over this many frames
     SsbOffsetEstimate last_;
     int count_ = 0;
 };

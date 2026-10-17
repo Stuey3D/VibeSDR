@@ -80,7 +80,7 @@ void SsbOffsetEstimator::reset() {
     if (rs_) rs_->reset();
     buf_.clear(); bufFill_ = 0; nBlock_ = 0;
     std::fill(acc_.begin(), acc_.end(), 0.0f);
-    used_ = 0; windowSamples_ = 0; snrSum_ = 0;
+    used_ = 0; windowSamples_ = 0; snrSum_ = 0; f0Sum_ = 0; f0N_ = 0;
     last_ = SsbOffsetEstimate{};
     count_ = 0;
 }
@@ -144,7 +144,7 @@ void SsbOffsetEstimator::flushBlock_() {
         last_ = finish_(); ++count_;
     } else if (windowSamples_ >= (long long)(c_.maxWindowSec * c_.rate)) {
         if (voiced >= c_.minVoicedSec) { last_ = finish_(); ++count_; }
-        else { std::fill(acc_.begin(), acc_.end(), 0.0f); used_ = 0; windowSamples_ = 0; snrSum_ = 0; }
+        else { std::fill(acc_.begin(), acc_.end(), 0.0f); used_ = 0; windowSamples_ = 0; snrSum_ = 0; f0Sum_ = 0; f0N_ = 0; }
     }
 }
 
@@ -178,6 +178,7 @@ void SsbOffsetEstimator::analyse_(const float* f) {
     //   SPACING — which a mistuning does not change. Its three best local maxima are this frame's
     //   plausible pitches; FINE: each is refined ±3 Hz in 0.5 Hz steps by the comb itself.
     std::vector<float> f0s;
+    float pitchHz = 0;   // this frame's F0 (see SsbOffsetEstimate::f0Hz); 0 = not measured (fullPitchSearch)
     const int b0 = (int)std::ceil(c_.combLoHz / res), b1 = std::min(need - 1, (int)(c_.combHiHz / res));
     if (c_.fullPitchSearch) {
         for (float f0 = c_.f0Lo; f0 <= c_.f0Hi; f0 += 1.0f) f0s.push_back(f0);
@@ -200,6 +201,15 @@ void SsbOffsetEstimator::analyse_(const float* f) {
                     best[k] = L; break;
                 }
             }
+        }
+        /* ★ THE PITCH, for SsbOffsetEstimate::f0Hz. A comb of spacing f0 correlates with itself at f0, 2·f0, 3·f0…
+         *   almost equally, so the HIGHEST lag is often a multiple (measured on the synthetic voice: a 100 Hz voice
+         *   read 280-350 Hz from the winning comb, which fits every third harmonic as well as all of them). The
+         *   pitch is the SMALLEST lag that is a local maximum within half of the best — half the spacing is never
+         *   one (a shift of half a pitch puts harmonics on the gaps: R goes negative there). */
+        if (best[0] >= 0 && R[best[0]] > 0) {
+            for (int L = l0; L <= l1; ++L)
+                if (R[L] > R[L - 1] && R[L] >= R[L + 1] && R[L] >= 0.5f * R[best[0]]) { pitchHz = (float)(L * res); break; }
         }
         for (int k = 0; k < 3; ++k) {
             if (best[k] < 0) continue;
@@ -252,6 +262,7 @@ void SsbOffsetEstimator::analyse_(const float* f) {
     const float sd = (float)std::sqrt(var / nv) + 1e-9f;
     for (int j = 0; j < nd_; ++j) acc_[j] += cur_[j] > NEG ? (float)((cur_[j] - mean) / sd) : 0.0f;
     ++used_;
+    if (pitchHz > 0) { f0Sum_ += pitchHz; ++f0N_; }
     cpuSec_ += nowSec() - t0;
 }
 
@@ -293,11 +304,12 @@ SsbOffsetEstimate SsbOffsetEstimator::finish_() {
         for (int j = 0; j < nd_; ++j) if (std::abs(j - jb) > ex) rival = std::max(rival, hp[j]);
         e.clarity = (hp[jb] - rival) / sd;
         e.snrDb = (float)(snrSum_ / used);
+        e.f0Hz = f0N_ > 0 ? (float)(f0Sum_ / f0N_) : 0.0f;
         e.confidence = hp[jb] / used;
         e.valid = true;
     }
     std::fill(acc_.begin(), acc_.end(), 0.0f);
-    used_ = 0; windowSamples_ = 0; snrSum_ = 0;
+    used_ = 0; windowSamples_ = 0; snrSum_ = 0; f0Sum_ = 0; f0N_ = 0;
     return e;
 }
 
