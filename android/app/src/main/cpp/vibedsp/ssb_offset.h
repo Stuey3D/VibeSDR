@@ -160,7 +160,11 @@ public:
     /** ★★ THE DIAL MOVED by a known amount: the voice's audio moved by `audioHz` (USB: dial +Δ → −Δ; LSB: +Δ). The
      *  evidence gathered so far is MOVED with it rather than thrown away (the comb curve and the voice's spectrum are
      *  both in audio Hz), and the audio queued before the move is dropped. A FAST estimator (memoryVoicedSec > 0) keeps
-     *  what it knew across a knob turn — the deep side needs seconds of intonation to tell one pitch alias from the next. */
+     *  what it knew across a knob turn — the deep side needs seconds of intonation to tell one pitch alias from the next.
+     *  ★★ A caller that cannot say how far the dial moved must reset() instead: FAST's memory otherwise holds the old
+     *     offset for seconds. Measured on Stuart's in-app recording (no dial known), it read "on tune" for ~6 s after he
+     *     tuned 500 Hz off before its confidence fell under the gate — and a detector for "the voice moved" was tried and
+     *     dropped: at a safe threshold it never fired, at a lower one it replaced the memory with deep-side aliases. */
     void shiftAudio(float audioHz);
     /** Voiced audio collected toward the next estimate. */
     float pendingVoicedSeconds() const;

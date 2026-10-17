@@ -65,6 +65,7 @@ constexpr int   kBands = 120;        // …to 3 kHz
 constexpr float kCoarseMinPeakDb = 7.0f;     // a voice that never stands this clear of the noise gives no position
 constexpr float kCoarseEdgeDb = 6.0f;        // the edge: at least this far over the noise…
 constexpr float kCoarseBelowPeakDb = 12.0f;  // …and within this of the voice's best band
+constexpr int   kEdgeRun = 3;                // …for this many bands running (150 Hz: a hum or a thump is not a voice's edge)
 constexpr float kCoarseTolHz = 50.0f;        // the edge's own error (25 Hz bands, the lowest harmonic's skirt)
 constexpr float kTxLowCutMinHz = -50.0f;     // a transmitter's low cut: ESSB ~60 Hz, less the skirt and splatter below it…
 constexpr float kTxLowCutMaxHz = 400.0f;     // …to a contest-style 400 Hz
@@ -464,8 +465,11 @@ void SsbOffsetEstimator::coarse_(SsbOffsetEstimate& e) const {
     if (peak < kCoarseMinPeakDb) return;               // the voice never stands clear of the noise: no position
     const float thr = std::max(kCoarseEdgeDb, peak - kCoarseBelowPeakDb);
     int lo = -1;
-    for (int b = std::max(rx, 1); b + 2 <= top; ++b)
-        if (snr[b] >= thr && snr[b + 1] >= thr && snr[b + 2] >= thr) { lo = b; break; }
+    for (int b = std::max(rx, 1); b + kEdgeRun <= top; ++b) {
+        bool run = true;
+        for (int q = 0; q < kEdgeRun && run; ++q) run = snr[b + q] >= thr;
+        if (run) { lo = b; break; }
+    }
     if (lo < 0) return;
     e.passbandLowHz = rx * kBandHz;
     e.voiceLowHz = lo * kBandHz;
@@ -507,29 +511,40 @@ SsbOffsetEstimate SsbOffsetEstimator::finish_() {
         coarse_(e);
         const bool haveCoarse = e.coarseHiHz != 0.0f || e.coarseLoHz != 0.0f;
         auto inside = [&](int j) { return !haveCoarse || (ds_[j] >= e.coarseLoHz && ds_[j] <= e.coarseHiHz); };
-        int jg = 0, jb = -1;
-        for (int j = 1; j < nd_; ++j) if (hp[j] > hp[jg]) jg = j;
-        for (int j = 0; j < nd_; ++j) if (inside(j) && (jb < 0 || hp[j] > hp[jb])) jb = j;
-        double m = 0, v = 0;
-        for (float y : hp) m += y;
-        m /= nd_;
-        for (float y : hp) v += (y - m) * (y - m);
-        const float sd = (float)std::sqrt(v / nd_) + 1e-9f;
-        if (jb < 0) { jb = jg; e.reconciled = false; }
-        else if (jb != jg && (hp[jg] - hp[jb]) > kReconcileSd * sd) e.reconciled = false;
-        float frac = 0;
-        if (jb > 0 && jb < nd_ - 1) {
-            const float y0 = hp[jb - 1], y1 = hp[jb], y2 = hp[jb + 1], den = y0 - 2 * y1 + y2;
-            if (den < 0) frac = std::max(-0.5f, std::min(0.5f, 0.5f * (y0 - y2) / den));
-        }
-        e.offsetHz = ds_[jb] + frac * c_.dStepHz;
-        float rival = -1e30f;
-        const int ex = (int)std::lround(30.0f / c_.dStepHz);
-        for (int j = 0; j < nd_; ++j) if (std::abs(j - jb) > ex && inside(j)) rival = std::max(rival, hp[j]);
-        e.clarity = rival > -1e29f ? (hp[jb] - rival) / sd : 10.0f;
+        struct Pick { int jb; float offsetHz, strength, clarity; bool reconciled; };
+        auto pick = [&](const std::vector<float>& c) {
+            Pick r{-1, 0, 0, 0, true};
+            int jg = 0;
+            for (int j = 1; j < nd_; ++j) if (c[j] > c[jg]) jg = j;
+            for (int j = 0; j < nd_; ++j) if (inside(j) && (r.jb < 0 || c[j] > c[r.jb])) r.jb = j;
+            double m = 0, v = 0;
+            for (float y : c) m += y;
+            m /= nd_;
+            for (float y : c) v += (y - m) * (y - m);
+            const float sd = (float)std::sqrt(v / nd_) + 1e-9f;
+            if (r.jb < 0) { r.jb = jg; r.reconciled = false; }
+            else if (r.jb != jg && (c[jg] - c[r.jb]) > kReconcileSd * sd) r.reconciled = false;
+            const int jb = r.jb;
+            float frac = 0;
+            if (jb > 0 && jb < nd_ - 1) {
+                const float y0 = c[jb - 1], y1 = c[jb], y2 = c[jb + 1], den = y0 - 2 * y1 + y2;
+                if (den < 0) frac = std::max(-0.5f, std::min(0.5f, 0.5f * (y0 - y2) / den));
+            }
+            r.offsetHz = ds_[jb] + frac * c_.dStepHz;
+            float rival = -1e30f;
+            const int ex = (int)std::lround(30.0f / c_.dStepHz);
+            for (int j = 0; j < nd_; ++j) if (std::abs(j - jb) > ex && inside(j)) rival = std::max(rival, c[j]);
+            r.clarity = rival > -1e29f ? (c[jb] - rival) / sd : 10.0f;
+            r.strength = c[jb];
+            return r;
+        };
+        const Pick a = pick(hp);
+        e.reconciled = a.reconciled;
+        e.offsetHz = a.offsetHz;
+        e.clarity = a.clarity;
+        e.confidence = a.strength;   // already per frame
         e.snrDb = snrW_ > 0 ? (float)(snrSum_ / snrW_) : 0.0f;
         e.f0Hz = f0N_ > 0 ? (float)(f0Sum_ / f0N_) : 0.0f;
-        e.confidence = hp[jb];   // already per frame
         e.valid = true;
     }
     used_ = 0; windowSamples_ = 0;
