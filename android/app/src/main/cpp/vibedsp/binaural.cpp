@@ -118,6 +118,8 @@ float BinauralSpread::panAt(float f, int kind, float centre, float half) {
 }
 
 void BinauralSpread::configure_(double rate) {
+    // ★ Allocates — once, the first time SPREAD engages at a rate (as the spatialiser's delay ring does on a rate
+    //   change). Re-engaging at the same rate reuses everything; steady running never allocates.
     fs_ = rate;
     int n = 128;
     while (n < 4096 && rate / n > kBinHz) n <<= 1;   // 48 kHz → 512 (93.75 Hz), 12 kHz → 128, 96 kHz → 1024
