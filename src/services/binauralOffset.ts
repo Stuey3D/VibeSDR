@@ -11,6 +11,11 @@
  * ★★ WHERE EACH MODE'S OFFSET COMES FROM:
  *    • USB / LSB  — NATIVE, from the audio: the voice-harmonic estimator (ssb_offset.h, FAST profile) on its own
  *                   worker thread. An SSB signal has no carrier for a spectrum to see; the voice is the evidence.
+ *                   ★★ PLUS A COARSE CUE FROM HERE (SsbCoarse): the estimator reaches ±300 Hz, so arriving 500 Hz
+ *                   off a voice it never locked gave no lean at all (Stuart, 2026-10-17: "if i am tuning up and end
+ *                   up 500Hz below it wont trigger?"). The waterfall shows where the voice's band STARTS, a few kHz
+ *                   either way, and the carrier is ~300 Hz below that start (above it on LSB) — good to ±~150 Hz.
+ *                   Native uses it only where its own answer is missing or out of reach (BinauralTuning::setSsbHint).
  *    • AM / SAM   — HERE, the carrier: the strongest bin in the passband, against the DIAL.
  *    • CW         — HERE, the CW signal's peak in the spectrum, against the PASSBAND CENTRE.
  *        ★★ NOT "received tone vs the set CW pitch", which is what was first asked for. The pitch is not ours to
@@ -29,9 +34,17 @@
  *      simply stays centred — never a wrong lean.
  *    • DAB and every whole-profile mode — none.
  *
+ * ★★ TWO STYLES. GUIDE (all of the above): one lean for the whole sound, telling you which way to tune. SPREAD (SSB,
+ *    CW — where the audio IS the RF spectrum shifted): each audio frequency placed by where it lies in the passband,
+ *    so two signals either side of the dial arrive in different ears. Native does the work (BinauralSpread); this
+ *    file only says which map: spreadKindFor(). Elsewhere (AM, FM, DAB) there is no SPREAD to offer — the audio is
+ *    not a slice of spectrum — so the choice is not shown and GUIDE applies (AGENTS.md: a control that only works
+ *    in one scenario should not be there).
+ *
  * ★ PURE apart from the sink it is handed (no React Native import), so scripts/test_binauralOffset.ts runs it
- *   under plain node.
+ *   under plain node. (sdrProtocol.ts is type-only imports, so it loads there too — hence the .ts extension.)
  */
+import { MODE_BANDWIDTHS } from './sdrProtocol.ts';
 
 /** Native source ids — mirror BinauralTuning::Source in vibedsp/binaural.h. */
 export const BIN_SRC_NONE = 0;
@@ -53,6 +66,47 @@ export interface BinauralPlan {
   fullHz: number;
   /** Where the signal SHOULD be, relative to the dial (Hz): 0 for a carrier, the passband centre for CW. */
   refHz: number;
+}
+
+/** SPREAD maps — mirror BinauralSpread::Kind in vibedsp/binaural.h. 0 = GUIDE (no spread). */
+export const BIN_SPREAD_OFF = 0;
+export const BIN_SPREAD_USB = 1;
+export const BIN_SPREAD_LSB = 2;
+export const BIN_SPREAD_CW_UPPER = 3;
+export const BIN_SPREAD_CW_LOWER = 4;
+/** ★★ SPREAD's FIXED SCALE = the DEFAULT USB passband (Stuart: "treat the 0-2.7K or whatever our default is as the
+ *  default stereo separation so good width"): its low edge full left, its high edge full right. Read from the
+ *  table the protocol uses, so the two cannot drift apart. It never follows the listener's filter — a signal keeps
+ *  its place when the passband is widened or narrowed. */
+export const BIN_SPREAD_EDGES: readonly [number, number] = [MODE_BANDWIDTHS.usb[0], MODE_BANDWIDTHS.usb[1]];
+
+export type BinauralStyle = 'guide' | 'spread';
+
+/**
+ * The SPREAD map for a mode, or BIN_SPREAD_OFF where SPREAD means nothing. USB/LSB by sideband (data modes ride
+ * these too). CW: upper or lower by WHERE THE PASSBAND SITS — a Kiwi's CWL passband is below the dial — and, when
+ * it straddles the dial (VibeServer/UberSDR ±200 Hz), by the mode's name. ★ Not perfect: VibeServer beats CWL as
+ * USB (local_sdr_shim), so there a CWL signal's left and right come out swapped. The tuned signal is centred either
+ * way (the note is measured), so the cost is only which side a neighbour sits.
+ */
+export function spreadKindFor(mode: string | undefined | null, lo: number, hi: number): number {
+  const m = String(mode ?? '').toLowerCase();
+  switch (m) {
+    case 'usb': return BIN_SPREAD_USB;
+    case 'lsb': return BIN_SPREAD_LSB;
+    case 'cw': case 'cwu': case 'cwl': {
+      const mid = (lo + hi) / 2;
+      if (Number.isFinite(mid) && mid < -50) return BIN_SPREAD_CW_LOWER;
+      if (Number.isFinite(mid) && mid > 50) return BIN_SPREAD_CW_UPPER;
+      return m === 'cwl' ? BIN_SPREAD_CW_LOWER : BIN_SPREAD_CW_UPPER;
+    }
+    default: return BIN_SPREAD_OFF;
+  }
+}
+
+/** Is SPREAD offered in this mode? (The audio menu shows the style choice only where it is.) */
+export function binauralSpreadOk(mode: string | undefined | null): boolean {
+  return spreadKindFor(mode, 0, 0) !== BIN_SPREAD_OFF;
 }
 
 /** The smallest dial change that counts as a move (mirrors BinauralTuning::kDialMoveHz). */
@@ -171,12 +225,137 @@ export function spectrumOffset(bins: ArrayLike<number>, g: SpecGeom, kind: Binau
   return Number.isFinite(hz) ? { ok: true, hz } : { ok: false, hz: 0 };
 }
 
+// ── SSB: the coarse cue from the waterfall ─────────────────────────────────────────────────────────
+
+/** Bins coarser than this cannot place a voice's edge well enough to be worth a lean: leave it to the estimator. */
+export const COARSE_MAX_BIN_HZ = 100;
+/** ★ Where the voice's band starts, above the suppressed carrier. Transmit filters cut their low end at ~100-400 Hz;
+ *  300 Hz is the common figure (the usual 300-2700 Hz SSB filter), and the spread either side is the cue's error. */
+export const COARSE_VOICE_LOW_HZ = 300;
+/** The window: the passband, plus this either side — enough to see the start of a voice the dial is well off. */
+export const COARSE_MARGIN_HZ = 3000;
+/** A voice's averaged band stands this far over the floor (dB). */
+export const COARSE_OVER_DB = 6;
+/** Time-averaging per frame (~10 frames/s → about a second). */
+export const COARSE_ALPHA = 0.1;
+/** Frames a cell must have averaged before it counts. */
+export const COARSE_MIN_FRAMES = 8;
+
+export interface CoarseReading {
+  ok: boolean;
+  /** The voice's suppressed carrier, ABSOLUTE Hz. */
+  carrierHz: number;
+  /** true = the carrier-side edge was off the window: only the DIRECTION is sure, the size is at least this. */
+  bound: boolean;
+}
+
+/**
+ * ★★ WHERE THE SSB VOICE IS, FROM THE WATERFALL. A voice is speech, so any one frame is ragged; averaged over a
+ * second it is a solid band from ~300 Hz above its carrier to ~2.7 kHz (below it, on LSB). The CARRIER side of that
+ * band is the sharp one — the transmitter's filter — so that is the edge we find; the far side just fades.
+ *   • Averaged in ABSOLUTE RF cells (one per bin), not dial-relative ones: the signal stays put when the knob turns,
+ *     so the average survives a retune and the answer is right again on the next frame.
+ *   • The floor is the window's lower fifth (the window is ~8.6 kHz; one voice fills under a third of it).
+ *   • The band chosen is the one overlapping the passband most — the voice you are HEARING part of — and it must
+ *     overlap by 300 Hz and be 500-4000 Hz wide (a carrier is narrower; an AM station wider).
+ *   • Its carrier-side edge off the window → only the direction is sure; reported as a bound (`bound`), which is
+ *     still past full lean (300 Hz), so it leans the right way at once.
+ *   • Bins over COARSE_MAX_BIN_HZ, or nothing over the floor → no reading. Never a guess.
+ */
+export class SsbCoarse {
+  private gridHz = 0;
+  private startHz = 0;           // the absolute frequency of cell 0 (a multiple of gridHz)
+  private pow = new Float64Array(0);
+  private cnt = new Uint16Array(0);
+
+  reset(): void { this.gridHz = 0; this.pow = new Float64Array(0); this.cnt = new Uint16Array(0); }
+
+  /** One frame. `lsb` = the voice is below its carrier. */
+  onFrame(bins: ArrayLike<number>, g: SpecGeom, lsb: boolean): CoarseReading {
+    const none: CoarseReading = { ok: false, carrierHz: 0, bound: false };
+    const n = bins.length;
+    if (n < 8 || !(g.bwHz > 0) || !Number.isFinite(g.tuneHz)) return none;
+    const binHz = g.bwHz / n;
+    if (binHz > COARSE_MAX_BIN_HZ) { this.reset(); return none; }
+    if (!(Math.abs(binHz - this.gridHz) <= 0.01 * binHz)) {
+      this.gridHz = binHz; this.pow = new Float64Array(0); this.cnt = new Uint16Array(0);
+    }
+    const lo = Math.min(g.lo, g.hi), hi = Math.max(g.lo, g.hi);
+    const grid = this.gridHz;
+    const start = Math.floor((g.tuneHz + lo - COARSE_MARGIN_HZ) / grid) * grid;
+    const cells = Math.ceil((hi - lo + 2 * COARSE_MARGIN_HZ) / grid) + 1;
+    // Slide the average to the window's new place (a retune): cells still in view keep what they have learnt.
+    if (this.pow.length !== cells || start !== this.startHz) {
+      const np = new Float64Array(cells), nc = new Uint16Array(cells);
+      const shift = Math.round((start - this.startHz) / grid);
+      for (let i = 0; i < cells; i++) {
+        const j = i + shift;
+        if (j >= 0 && j < this.pow.length) { np[i] = this.pow[j]; nc[i] = this.cnt[j]; }
+      }
+      this.pow = np; this.cnt = nc; this.startHz = start;
+    }
+    for (let i = 0; i < cells; i++) {
+      const k = Math.round((start + i * grid - g.centerHz) / binHz + n / 2);
+      if (k < 0 || k >= n) continue;
+      const v = bins[k];
+      if (!Number.isFinite(v)) continue;
+      const p = Math.pow(10, v / 10);
+      this.pow[i] = this.cnt[i] === 0 ? p : this.pow[i] + COARSE_ALPHA * (p - this.pow[i]);
+      if (this.cnt[i] < 60000) this.cnt[i]++;
+    }
+    // The floor: the lower fifth of the matured cells.
+    const ripe: number[] = [];
+    for (let i = 0; i < cells; i++) if (this.cnt[i] >= COARSE_MIN_FRAMES) ripe.push(this.pow[i]);
+    if (ripe.length < cells / 2) return none;
+    ripe.sort((a, b) => a - b);
+    const floor = ripe[Math.floor(ripe.length / 5)];
+    if (!(floor > 0)) return none;
+    const thr = floor * Math.pow(10, COARSE_OVER_DB / 10);
+    const on = (i: number) => this.cnt[i] >= COARSE_MIN_FRAMES && this.pow[i] > thr;
+    // Runs of occupied cells, bridging gaps of up to 150 Hz (a weak formant valley, a quiet harmonic).
+    const gap = Math.max(1, Math.round(150 / grid));
+    const pbLo = g.tuneHz + lo, pbHi = g.tuneHz + hi;
+    let best = -1, bestA = 0, bestZ = 0, i = 0;
+    while (i < cells) {
+      if (!on(i)) { i++; continue; }
+      const a = i;
+      let z = i, j = i + 1;
+      while (j < cells && j - z <= gap + 1) { if (on(j)) z = j; j++; }
+      i = z + 1;
+      const fa = start + (a - 0.5) * grid, fz = start + (z + 0.5) * grid;
+      const width = fz - fa;
+      const overlap = Math.min(fz, pbHi) - Math.max(fa, pbLo);
+      if (width < 500 || width > 4000 || overlap < 300) continue;
+      if (overlap > best) { best = overlap; bestA = a; bestZ = z; }
+    }
+    if (best < 0) return none;
+    const db = (x: number) => 10 * Math.log10(Math.max(x, 1e-30));
+    const tDb = db(thr);
+    // The carrier-side edge, between the last cell under the threshold and the first over it (linear in dB).
+    const edgeAt = (inside: number, outside: number) => {
+      const di = db(this.pow[inside]), dout = db(this.pow[outside]);
+      const t = di > dout ? (di - tDb) / (di - dout) : 0.5;
+      return start + (inside + (outside - inside) * Math.max(0, Math.min(1, t))) * grid;
+    };
+    if (!lsb) {
+      if (bestA === 0) return { ok: true, carrierHz: start - COARSE_VOICE_LOW_HZ, bound: true };
+      return { ok: true, carrierHz: edgeAt(bestA, bestA - 1) - COARSE_VOICE_LOW_HZ, bound: false };
+    }
+    if (bestZ === cells - 1) return { ok: true, carrierHz: start + (cells - 1) * grid + COARSE_VOICE_LOW_HZ, bound: true };
+    return { ok: true, carrierHz: edgeAt(bestZ, bestZ + 1) + COARSE_VOICE_LOW_HZ, bound: false };
+  }
+}
+
 /** What the tracker drives — VibePowerModule's binaural methods on both platforms (optional: older natives). */
 export interface BinauralSink {
   setBinauralSource?: (source: number, deadHz: number, fullHz: number) => void;
   setBinauralOffset?: (hz: number, valid: boolean) => void;
   setBinauralStereo?: (hint: number) => void;
   setBinauralDial?: (hz: number) => void;
+  /** The coarse SSB cue: the voice's carrier, ABSOLUTE Hz (absolute, so it cannot race the dial). */
+  setBinauralSsbHint?: (carrierHz: number, valid: boolean) => void;
+  /** The style: BIN_SPREAD_OFF = GUIDE, else SPREAD with that map; edges = BIN_SPREAD_EDGES. */
+  setBinauralSpread?: (kind: number, edgeLoHz: number, edgeHiHz: number) => void;
 }
 
 /**
@@ -188,7 +367,19 @@ export class BinauralTracker {
   /** A spectrum reading survives this long without a fresh one: a CW space, a word gap on AM. */
   static readonly HOLD_MS = 1500;
   static readonly PUSH_MS = 100;
+  /** ★ A coarse SSB reading survives this long without a fresh one: the pause between overs. (The average itself
+   *  fades below the threshold within a second or two of silence.) */
+  static readonly COARSE_HOLD_MS = 4000;
   private sink: BinauralSink;
+  private style: BinauralStyle = 'guide';
+  private spreadSent = -1;
+  private coarse = new SsbCoarse();
+  private coarseKey = '';
+  private coarseHz = NaN;
+  private coarseAt = -Infinity;
+  private coarseSentHz = NaN;
+  private coarseSentOk = false;
+  private coarseSentAt = -Infinity;
   private srcKey = '';
   private dial = NaN;
   private stereo = -1;
@@ -204,7 +395,12 @@ export class BinauralTracker {
   reset(): void {
     this.srcKey = ''; this.dial = NaN; this.stereo = -1; this.smooth = NaN;
     this.lastOkAt = -Infinity; this.sentHz = NaN; this.sentOk = false; this.sentAt = -Infinity;
+    this.spreadSent = -1; this.coarse.reset(); this.coarseKey = ''; this.coarseHz = NaN; this.coarseAt = -Infinity;
+    this.coarseSentHz = NaN; this.coarseSentOk = false; this.coarseSentAt = -Infinity;
   }
+
+  /** GUIDE or SPREAD — the listener's choice. Applied on the next frame (SPREAD only where the mode has a map). */
+  setStyle(style: BinauralStyle): void { this.style = style; }
 
   setStereo(hint: number): void {
     if (hint === this.stereo) return;
@@ -222,7 +418,12 @@ export class BinauralTracker {
       const kindChanged = this.srcKey.split('|')[0] !== String(p.source);
       this.srcKey = key;
       this.sink.setBinauralSource?.(p.source, p.deadHz, p.fullHz);
-      if (kindChanged) { this.smooth = NaN; this.lastOkAt = -Infinity; this.sentHz = NaN; this.sentOk = false; }
+      if (kindChanged) {
+        this.smooth = NaN; this.lastOkAt = -Infinity; this.sentHz = NaN; this.sentOk = false;
+        // ★ Native forgets the coarse cue on a change of source, so it must be stated afresh (and the average
+        //   belongs to the old sideband's reading anyway).
+        this.coarseKey = ''; this.coarseSentHz = NaN; this.coarseSentOk = false; this.coarseSentAt = -Infinity;
+      }
     }
     // ★★ A MOVE IS 2 Hz OR MORE. radiod stamps each frame's frequency with ±1 Hz of jitter (see the setStatus
     //    gate in SDRScreen); passed on, every frame would read as a retune and native would restart the SSB
@@ -233,6 +434,17 @@ export class BinauralTracker {
       if (Number.isFinite(this.dial)) this.smooth = NaN;
       this.dial = g.tuneHz;
       this.sink.setBinauralDial?.(g.tuneHz);
+    }
+    // ★★ The style: SPREAD where this mode has a map, GUIDE everywhere else. Stated only when it changes.
+    const kind = this.style === 'spread' ? spreadKindFor(mode, g.lo, g.hi) : BIN_SPREAD_OFF;
+    if (kind !== this.spreadSent) {
+      this.spreadSent = kind;
+      this.sink.setBinauralSpread?.(kind, BIN_SPREAD_EDGES[0], BIN_SPREAD_EDGES[1]);
+    }
+    if (p.kind === 'ssb') {
+      // ★ Under SPREAD nothing reads the guide's offset, so the coarse cue is not worked out (a phone's CPU).
+      if (kind === BIN_SPREAD_OFF) this.coarseFrame(bins, g, p.source === BIN_SRC_SSB_LSB, now);
+      return { ok: false, hz: 0 };
     }
     if (p.kind !== 'peak' && p.kind !== 'centroid') return { ok: false, hz: 0 };
 
@@ -251,5 +463,21 @@ export class BinauralTracker {
       this.sentHz = hz; this.sentOk = ok; this.sentAt = now;
     }
     return { ok, hz };
+  }
+
+  /** SSB: the waterfall's coarse cue → native, held through a pause, at most one message per PUSH_MS. */
+  private coarseFrame(bins: ArrayLike<number>, g: SpecGeom, lsb: boolean, now: number): void {
+    const key = lsb ? 'lsb' : 'usb';
+    if (key !== this.coarseKey) { this.coarseKey = key; this.coarse.reset(); this.coarseHz = NaN; this.coarseAt = -Infinity; }
+    const r = this.coarse.onFrame(bins, g, lsb);
+    if (r.ok) { this.coarseHz = r.carrierHz; this.coarseAt = now; }
+    const ok = Number.isFinite(this.coarseHz) && now - this.coarseAt <= BinauralTracker.COARSE_HOLD_MS;
+    const hz = ok ? this.coarseHz : 0;
+    // 10 Hz is well inside the cue's own error: finer changes are not worth a bridge message.
+    const changed = ok !== this.coarseSentOk || (ok && !(Math.abs(hz - this.coarseSentHz) < 10));
+    if (changed && now - this.coarseSentAt >= BinauralTracker.PUSH_MS) {
+      this.sink.setBinauralSsbHint?.(hz, ok);
+      this.coarseSentHz = hz; this.coarseSentOk = ok; this.coarseSentAt = now;
+    }
   }
 }

@@ -546,6 +546,11 @@ export interface AudioSheetProps {
    *  there doing nothing. */
   binaural?: boolean;
   onBinaural?: (on: boolean) => void;
+  /** ★★ ITS STYLE: GUIDE (one lean: which way to tune) or SPREAD (each audio frequency placed by where it lies in
+   *  the passband — two signals either side of the dial in different ears). SDRScreen passes the handler only
+   *  for SSB and CW, where the audio IS a slice of spectrum; the row shows only while BINAURAL is on. */
+  binauralStyle?: 'guide' | 'spread';
+  onBinauralStyle?: (s: 'guide' | 'spread') => void;
 
   /** ★★ FM DE-EMPHASIS AND WFM STEREO LIVE HERE, NOT IN THE HARDWARE PANEL. They are not
    *  properties of the radio — they act on OUR demodulator, which is why they applied to a
@@ -617,7 +622,7 @@ export default function AudioSheet({
   kiwiSquelch = 0, onKiwiSquelch, onSquelchDrag, onSquelchDragEnd,
   sqlAuto = false, onSqlAuto, sqlAutoMargin = 12, onSqlAutoMargin, sqlAutoOk = false,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
-  notchOn = false, onNotch, binaural = false, onBinaural,
+  notchOn = false, onNotch, binaural = false, onBinaural, binauralStyle = 'guide', onBinauralStyle,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
   fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
@@ -884,9 +889,21 @@ export default function AudioSheet({
                 <Toggle label={binaural ? 'ON' : 'OFF'} on={binaural} onPress={() => onBinaural(!binaural)}
                   a11y={binaural ? 'Binaural tuning on. Tap to turn off.' : 'Binaural tuning off. Tap to turn on.'} />
               </View>
+              {binaural && onBinauralStyle && (
+                <View style={st.bwRow}>
+                  <Text style={[st.bwLabel, { width: 78 }]}>STYLE</Text>
+                  <View style={st.keyWrapEnd}>
+                  {([{ l: 'GUIDE', v: 'guide' as const }, { l: 'SPREAD', v: 'spread' as const }]).map((o) => (
+                    <Toggle key={o.v} label={o.l} on={binauralStyle === o.v} onPress={() => onBinauralStyle(o.v)} padH={10} marginLeft={6}
+                      a11y={o.v === 'guide' ? 'Guide style: the sound leans the way to tune.' : 'Spread style: signals spread across the stereo picture by frequency.'} />
+                  ))}
+                  </View>
+                </View>
+              )}
               <Text style={st.iqNote}>
-                For headphones. The sound leans towards the side the signal is on — right means tune up, left
-                means tune down — and settles in the middle when you are on it.
+                {binaural && onBinauralStyle && binauralStyle === 'spread'
+                  ? 'For headphones. Signals are spread across your ears by where they sit in the passband — lower to the left, higher to the right — so on a busy band two stations either side of you come from different sides.'
+                  : 'For headphones. The sound leans towards the side the signal is on — right means tune up, left means tune down — and settles in the middle when you are on it.'}
               </Text>
             </View>
           )}

@@ -10,14 +10,21 @@
  *     signal's centroid — each within a fraction of a bin;
  *   • noise alone is never a reading;
  *   • the tracker holds through a CW space, lets go after it, sends the source/dial/offset only on change and
- *     at most every 100 ms.
+ *     at most every 100 ms;
+ *   • the COARSE SSB cue from the waterfall: a USB voice +500 / −800 / +1500 Hz off (and an LSB one) → the right
+ *     sign and size within 150 Hz; coarse bins, noise → nothing; the average survives a retune; the tracker sends
+ *     the ABSOLUTE carrier, holds it through a pause and lets go after;
+ *   • SPREAD: which map per mode (hidden for AM/FM/DAB), the fixed scale = the protocol's default USB passband, and
+ *     the tracker states the style only on change.
  *
  * Run: node --no-warnings scripts/test_binauralOffset.ts   (silent: no audio anywhere)
  */
 import {
-  binauralPlan, binauralModeOk, spectrumOffset, BinauralTracker,
-  BIN_SRC_SSB_USB, BIN_SRC_SSB_LSB, BIN_SRC_GIVEN, BIN_SRC_NONE,
+  binauralPlan, binauralModeOk, spectrumOffset, BinauralTracker, SsbCoarse, spreadKindFor, binauralSpreadOk,
+  BIN_SRC_SSB_USB, BIN_SRC_SSB_LSB, BIN_SRC_GIVEN, BIN_SRC_NONE, BIN_SPREAD_EDGES,
+  BIN_SPREAD_OFF, BIN_SPREAD_USB, BIN_SPREAD_LSB, BIN_SPREAD_CW_UPPER, BIN_SPREAD_CW_LOWER,
 } from '../src/services/binauralOffset.ts';
+import { MODE_BANDWIDTHS } from '../src/services/sdrProtocol.ts';
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { if (c) console.log('  ✓ ' + m); else { fails++; console.log('  ✗ ' + m); } };
@@ -140,6 +147,102 @@ console.log('── the tracker ──');
   ok(calls.length === b5, '±1 Hz of frequency-stamp jitter is NOT a move (the SSB estimator is left to finish)');
   t.setStereo(1); t.setStereo(1);
   ok(calls.filter((c) => c === 'st 1').length === 1, 'the stereo hint is sent once per change');
+}
+
+console.log('── SSB: the coarse cue from the waterfall ──');
+/** A speech-like SSB voice on one frame: the band from carrier+lowCut to carrier+2700 (mirrored for LSB), louder
+ *  low down (−6 dB/octave above 500 Hz), ragged bin to bin, and silent on ~30 % of frames (syllables, breaths). */
+function ssbFrame(dial: number, carrier: number, lowCut: number, lsb: boolean, n = N, bw = BW, centre = CENTRE): Float32Array {
+  const bin = bw / n;
+  const b = new Float32Array(n);
+  for (let k = 0; k < n; k++) b[k] = -100 + 3 * (rnd() - 0.5);
+  if (rnd() < 0.3) return b;
+  for (let k = 0; k < n; k++) {
+    const f = centre + (k - n / 2) * bin;
+    const a = lsb ? carrier - f : f - carrier;          // audio frequency of this bin
+    if (a < lowCut || a > 2700) continue;
+    const tilt = a > 500 ? -6 * Math.log2(a / 500) : 0;
+    b[k] = Math.max(b[k], -78 + tilt + 10 * (rnd() - 0.5));
+  }
+  return b;
+}
+{
+  const dial = CENTRE + 2000;
+  const cases: [number, number, boolean][] = [[+500, 300, false], [-800, 250, false], [+1500, 350, false], [+700, 300, true], [-1200, 300, true]];
+  for (const [off, cut, lsb] of cases) {
+    const c = new SsbCoarse();
+    const g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: lsb ? -2700 : 50, hi: lsb ? -50 : 2700 };
+    let r = { ok: false, carrierHz: 0, bound: false };
+    for (let i = 0; i < 25; i++) r = c.onFrame(ssbFrame(dial, dial + off, cut, lsb), g, lsb);
+    const got = r.carrierHz - dial;
+    ok(r.ok && Math.abs(got - off) < 150,
+       `${lsb ? 'LSB' : 'USB'} voice ${off > 0 ? '+' : ''}${off} Hz off (its low cut ${cut} Hz) → ${r.ok ? (got > 0 ? '+' : '') + got.toFixed(0) + ' Hz' : 'nothing'}${r.bound ? ' (bound)' : ''}`);
+  }
+  {
+    // The average is in ABSOLUTE cells: a retune keeps it, and the answer is relative to the new dial at once.
+    const c = new SsbCoarse();
+    const g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: 50, hi: 2700 };
+    for (let i = 0; i < 25; i++) c.onFrame(ssbFrame(dial, dial + 600, 300, false), g, false);
+    const r = c.onFrame(ssbFrame(dial + 200, dial + 600, 300, false), { ...g, tuneHz: dial + 200 }, false);
+    ok(r.ok && Math.abs(r.carrierHz - (dial + 200) - 400) < 150, `a 200 Hz retune keeps the average: +600 → ${(r.carrierHz - dial - 200).toFixed(0)} Hz against the new dial`);
+  }
+  {
+    // Bins too coarse to place an edge → nothing (left to the estimator).
+    const c = new SsbCoarse();
+    const n = 256, g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: 50, hi: 2700 };   // 187.5 Hz bins
+    let any = false;
+    for (let i = 0; i < 25; i++) any = c.onFrame(ssbFrame(dial, dial + 500, 300, false, n), g, false).ok || any;
+    ok(!any, 'coarse bins (187 Hz) → no reading');
+    const c2 = new SsbCoarse();
+    let any2 = false;
+    for (let i = 0; i < 40; i++) any2 = c2.onFrame(noise(), { ...g }, false).ok || any2;
+    ok(!any2, 'noise only → no reading');
+    const c3 = new SsbCoarse();
+    let any3 = false;
+    for (let i = 0; i < 25; i++) { const b = noise(); line(b, dial + 900, -60); any3 = c3.onFrame(b, { ...g }, false).ok || any3; }
+    ok(!any3, 'a lone carrier (too narrow for a voice) → no reading');
+  }
+  {
+    // The tracker: the ABSOLUTE carrier to native, held through a pause between overs, let go after the hold.
+    const hints: string[] = [];
+    const t = new BinauralTracker({ setBinauralSsbHint: (hz: number, v: boolean) => hints.push(v ? `hint ${Math.round(hz)}` : 'hint x') });
+    const g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: 50, hi: 2700 };
+    let now = 0;
+    for (let i = 0; i < 25; i++) { now += 100; t.onFrame(ssbFrame(dial, dial + 500, 300, false), g, 'usb', now); }
+    const last = hints.filter((h) => h !== 'hint x').pop() ?? '';
+    const hz = Number(last.split(' ')[1]);
+    ok(Math.abs(hz - (dial + 500)) < 150 && hints.length <= 6, `the tracker sends the carrier as an absolute frequency (${last}), a trickle (${hints.length} messages)`);
+    const n0 = hints.length;
+    for (let i = 0; i < 30; i++) { now += 100; t.onFrame(noise(), g, 'usb', now); }
+    ok(hints.slice(n0).every((h) => h !== 'hint x'), 'a 3 s pause between overs: the cue is HELD');
+    for (let i = 0; i < 40; i++) { now += 100; t.onFrame(noise(), g, 'usb', now); }
+    ok(hints[hints.length - 1] === 'hint x', 'long silence: the cue is let go');
+  }
+}
+
+console.log('── SPREAD ──');
+{
+  ok(BIN_SPREAD_EDGES[0] === MODE_BANDWIDTHS.usb[0] && BIN_SPREAD_EDGES[1] === MODE_BANDWIDTHS.usb[1] && BIN_SPREAD_EDGES[1] === 2700,
+     'the fixed scale IS the protocol\'s default USB passband (50-2700 Hz)');
+  ok(spreadKindFor('usb', 50, 2700) === BIN_SPREAD_USB && spreadKindFor('lsb', -2700, -50) === BIN_SPREAD_LSB, 'USB/LSB → their maps');
+  ok(spreadKindFor('cwu', -200, 200) === BIN_SPREAD_CW_UPPER && spreadKindFor('cwl', -200, 200) === BIN_SPREAD_CW_LOWER
+     && spreadKindFor('cwl', 300, 700) === BIN_SPREAD_CW_UPPER && spreadKindFor('cw', -700, -300) === BIN_SPREAD_CW_LOWER,
+     'CW → upper or lower by where the passband sits, by name when it straddles the dial');
+  ok(!binauralSpreadOk('am') && !binauralSpreadOk('sam') && !binauralSpreadOk('nfm') && !binauralSpreadOk('wfm') && !binauralSpreadOk('dab')
+     && binauralSpreadOk('usb') && binauralSpreadOk('cwl'), 'SPREAD offered for SSB and CW only — not AM, FM or DAB');
+  const calls: string[] = [];
+  const t = new BinauralTracker({ setBinauralSpread: (k: number, a: number, b: number) => calls.push(`spread ${k} ${a} ${b}`) });
+  const g = { centerHz: CENTRE, bwHz: BW, tuneHz: CENTRE, lo: 50, hi: 2700 };
+  let now = 0;
+  t.onFrame(noise(), g, 'usb', (now += 100));
+  ok(calls[0] === `spread ${BIN_SPREAD_OFF} 50 2700`, 'GUIDE (the default) is stated once: spread off');
+  t.setStyle('spread');
+  t.onFrame(noise(), g, 'usb', (now += 100)); t.onFrame(noise(), g, 'usb', (now += 100));
+  ok(calls.length === 2 && calls[1] === `spread ${BIN_SPREAD_USB} 50 2700`, 'SPREAD on USB → the USB map, sent once');
+  t.onFrame(noise(), { ...g, lo: -2700, hi: -50 }, 'lsb', (now += 100));
+  ok(calls[2] === `spread ${BIN_SPREAD_LSB} 50 2700`, 'to LSB → the mirrored map (the same scale)');
+  t.onFrame(noise(), { ...g, lo: -5000, hi: 5000 }, 'am', (now += 100));
+  ok(calls[3] === `spread ${BIN_SPREAD_OFF} 50 2700`, 'to AM → GUIDE (there is no spectrum in AM audio to spread)');
 }
 
 console.log(fails ? `\nFAILED: ${fails}` : '\nall passed');
