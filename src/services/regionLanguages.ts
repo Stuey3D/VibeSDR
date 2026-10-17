@@ -40,6 +40,17 @@ function km(aLat: number, aLon: number, bLat: number, bLon: number): number {
 /** Up to `n` languages likely on air around a receiver, nearest country first, keeping only those `supported`.
  *  No receiver position (a local dongle that never said) → the phone's own country stands in for it. */
 export function languagesNear(loc: { lat: number; lon: number } | null, supported: (code: string) => boolean, n = 4): string[] {
+  const near = nearest(loc);
+  const out: string[] = [];
+  for (const { a } of near) {
+    for (const c of a[3]) if (!out.includes(c) && supported(c)) out.push(c);
+    if (out.length >= n) break;
+  }
+  return out.slice(0, n);
+}
+
+/** The anchors nearest first; no receiver position → the phone's own country stands in for it ([] if unknown). */
+function nearest(loc: { lat: number; lon: number } | null): { a: [string, number, number, string[]]; d: number }[] {
   let at = loc;
   if (!at) {
     const region = ((Intl as any)?.DateTimeFormat?.().resolvedOptions?.().locale ?? '').split('-').pop()?.toUpperCase();
@@ -47,11 +58,11 @@ export function languagesNear(loc: { lat: number; lon: number } | null, supporte
     if (!a) return [];
     at = { lat: a[1], lon: a[2] };
   }
-  const near = ANCHORS.map(a => ({ a, d: km(at!.lat, at!.lon, a[1], a[2]) })).sort((x, y) => x.d - y.d);
-  const out: string[] = [];
-  for (const { a } of near) {
-    for (const c of a[3]) if (!out.includes(c) && supported(c)) out.push(c);
-    if (out.length >= n) break;
-  }
-  return out.slice(0, n);
+  return ANCHORS.map(a => ({ a, d: km(at!.lat, at!.lon, a[1], a[2]) })).sort((x, y) => x.d - y.d);
+}
+
+/** ★ The receiver's COUNTRY ('BR', 'GB') — the nearest anchor — so its main language can be tried in the variant
+ *  spoken there (pt-BR for Kiko's receiver, en-GB for a UK one). Same stand-in as languagesNear; '' if unknown. */
+export function countryNear(loc: { lat: number; lon: number } | null): string {
+  return nearest(loc)[0]?.a[0] ?? '';
 }

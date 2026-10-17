@@ -114,6 +114,21 @@ function NavItem({ onPress, children }: {
   return <>{children(focused, viewRef)}</>;
 }
 
+/** ★ A small key at the right of a LANGUAGE row (GET, the ★ preference) — its OWN nav stop in the row's NavRow, so
+ *  left/right reaches it from the keyboard or a gamepad (the row itself picks the language). */
+function TxKey({ label, onPress, color, a11y, style }: {
+  label: string; onPress: () => void; color: string; a11y: string; style?: object;
+}) {
+  const focusC = useNavFocus();
+  const { focused, viewRef } = useNavButton(onPress);
+  return (
+    <TouchableOpacity ref={viewRef as any} hitSlop={8} onPress={onPress} accessibilityLabel={a11y}
+      style={[st.txGet, { borderColor: color }, style, focused && { borderColor: focusC.ring, borderWidth: 2 }]}>
+      <Text style={[st.txSide, { color }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 function fmtHz(hz: number) {
   return hz >= 1000 ? (hz / 1000).toFixed(1) + ' kHz' : hz + ' Hz';
 }
@@ -292,11 +307,14 @@ interface ModeSelectorProps {
   transcribeControls?: {
     active: boolean; selected: boolean; onToggle: () => void;
     /** 'auto' or a locale id; the offered rows are AUTO + the common languages the device actually has. */
-    language: string; languages: { code: string; id: string; name: string; installed?: boolean; kept?: boolean }[]; onLanguage: (id: string) => void;
-    /** DOWNLOAD… — fetch a language for AUTO without listening (Stuart, 10-15). The id being fetched, and the last word. */
+    language: string; languages: { code: string; id: string; name: string; installed?: boolean }[]; onLanguage: (id: string) => void;
+    /** DOWNLOAD… — fetch a language for AUTO without listening (Stuart, 10-15). The id being fetched, and the last word.
+     *  The caller confirms first (size + where it is saved). */
     onDownload?: (id: string) => void; downloading?: string; downloadNote?: string;
-    /** iOS: give back the app's place for a language (rows with `kept`). */
-    onRemove?: (id: string) => void;
+    /** ★ AUTO's PREFERRED languages, in order (codes) — the numbered ★ on ON PHONE rows. Absent = no ★ drawn. */
+    preferred?: string[]; onPreferred?: (code: string) => void;
+    /** ⚠ The SDR's local language is not on this device: its code and the line to show (Stuart, 2026-10-17). */
+    missing?: { code: string; text: string } | null;
     /** The language being heard right now ('' when not running) — shown on the AUTO key as AUTO · MANDARIN. */
     heard?: string;
     /** iOS: AUTO only compares languages already on the phone — say so, or a new language looks unsupported. */
@@ -390,20 +408,32 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const txScroll = useRef<ScrollView | null>(null);
   const txItemY = useRef<Record<string, number>>({});
   const txChosen = tc?.languages.find(l => l.id === tc.language);
+  /* ★★ ⚠ THE SDR'S LOCAL LANGUAGE IS NOT DOWNLOADED (Stuart, 2026-10-17: "put a warning triangle next to the AUTO
+   *    mode and highlight the language row if the language is not installed"). The triangle rides on AUTO (the head
+   *    and its row), the line under the head says which language and GETs it, and that language's row is outlined
+   *    in the warn colour with its GET ready — and is where the list opens. */
+  const txMissing = tc?.missing && !tc.chooseOnly ? tc.missing : null;
+  const txWarnTri = txMissing ? '\u26A0 ' : '';
   const txHead = !tc ? '' : tc.language === 'auto'
-    ? (tc.heard ? `AUTO · ${tc.heard.toUpperCase()}` : 'AUTO — DETECT THE LANGUAGE')
+    ? txWarnTri + (tc.heard ? `AUTO · ${tc.heard.toUpperCase()}` : 'AUTO — DETECT THE LANGUAGE')
     : (txChosen?.name ?? tc.language).toUpperCase();
+  // ★ The warn meaning, readable on every look: the clash-ruled amber (white on amber/neon text); a dark amber on the
+  //   white default theme, where pale yellow would vanish.
+  const txWarnC = t.name === 'white' ? '#9a5a00' : pt.ink.m.warn;
+  // ★ The ⚠ line sits on the PLATE, not in the dark list window: on silver/black it is engraved in the plate's note
+  //   colour like the decoder caption's ⚠ (pale amber on a silver plate would vanish).
+  const txWarnPlate = pt.metal ? pt.note : txWarnC;
   useEffect(() => {
     if (!txListOpen || !tc) return;
     const id = setTimeout(() => {
-      const y = txItemY.current[tc.language];
+      const y = txItemY.current[txMissing?.code ?? tc.language] ?? txItemY.current[tc.language];
       if (y != null) txScroll.current?.scrollTo({ y: Math.max(0, y - 60), animated: false });
     }, 60);
     return () => clearTimeout(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txListOpen]);
   const txPick = (id: string) => { setTxListOpen(false); tc?.onLanguage(id); };
-  const txRows = tc ? [...(tc.chooseOnly ? [] : [{ id: 'auto', code: 'auto', name: 'AUTO — detect the language', installed: true }]), ...tc.languages] : [];
+  const txRows = tc ? [...(tc.chooseOnly ? [] : [{ id: 'auto', code: 'auto', name: `${txWarnTri}AUTO — detect the language`, installed: true }]), ...tc.languages] : [];
   // ★ The phone's language (its variant: PORTUGUESE (BR)) and English — one button per language, never two Englishes.
   const txTargets = tc ? [tc.deviceLanguage, ...(sameLanguage(tc.deviceLanguage, 'en') ? [] : ['en'])].filter(Boolean) : [];
   const transcribeCallout = tc && txLit ? (
@@ -428,6 +458,22 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           <Text style={[st.moreChevron, { color: t.btnText }]}>{txListOpen ? '▴' : '▾'}</Text>
         </TouchableOpacity>
       )}</NavItem></NavRow>
+      {txMissing && (
+        <NavRow><NavItem onPress={tc.onDownload && !tc.downloading ? () => tc.onDownload?.(txMissing.code) : undefined}>{(navFocused, navRef) => (
+          <TouchableOpacity ref={navRef as any} activeOpacity={0.7} disabled={!tc.onDownload || !!tc.downloading}
+            onPress={() => tc.onDownload?.(txMissing.code)} accessibilityRole="button"
+            accessibilityLabel={`${txMissing.text.replace(/^\u26A0\s*/, '')}. Download it`}
+            style={[st.txWarn, { borderColor: txWarnPlate }, navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}>
+            <Text style={[st.txSide, { flex: 1, color: txWarnPlate, fontWeight: '600', fontFamily: pt.metal ? 'Atkinson Hyperlegible' : t.font },
+                          pt.metal && engraveText(pt, pt.note)]}>
+              {txMissing.text}
+            </Text>
+            {!!tc.onDownload && (
+              <Text style={[st.txSide, { color: txWarnPlate, marginLeft: 8 }, pt.metal && engraveText(pt, pt.note)]}>{tc.downloading === txMissing.code ? 'GETTING…' : 'GET'}</Text>
+            )}
+          </TouchableOpacity>
+        )}</NavItem></NavRow>
+      )}
       {txListOpen && (
         <ScrollView ref={txScroll} nestedScrollEnabled keyboardShouldPersistTaps="handled" contentContainerStyle={scrollLane}
                     style={[st.moreList, { borderColor: t.btnBorder }, pt.metal && windowStyle(pt)]}>
@@ -438,10 +484,16 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   ...(on ? { textShadowColor: pt.readoutGlow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } } : null) }
               : { fontFamily: t.font, color: on ? dec : t.btnText };
             const side = l.id === 'auto' ? ''
-              : tc.downloading === l.id ? ((l as any).kept ? 'REMOVING…' : 'GETTING…') : l.installed ? 'ON PHONE' : tc.onDownload ? 'GET' : '';
-            /* ★ REMOVE (Stuart, 2026-10-15): iPhone keeps only a handful of speech languages per app, and a GET with every
-             *   place taken is refused — so a language holding a place can give it back here. iOS only (`kept`). */
-            const canRemove = !!(l as any).kept && !!tc.onRemove && tc.downloading !== l.id;
+              : tc.downloading === l.id ? 'GETTING…' : l.installed ? 'ON PHONE' : tc.onDownload ? 'GET' : '';
+            const keyC = pt.metal ? pt.winText : t.btnText;
+            const keyB = pt.metal ? pt.winText : t.btnBorder;
+            const warnRow = !!txMissing && l.id === txMissing.code;
+            /* ★★ PREFERRED FOR AUTO (Stuart, 2026-10-17: "I can say Auto mode try English, French, Dutch, German, Spanish
+             *    first"). On an ON PHONE row a ☆ adds the language to the END of AUTO's preferred list and shows its
+             *    place (★1, ★2 …); tapping it again takes it out. AUTO tries them after EiBi's and the SDR's local
+             *    language (transcribeOrder.ts). Only on rows that are on the device — AUTO never downloads. */
+            const prefAt = tc.preferred && l.id !== 'auto' ? tc.preferred.indexOf(l.id) : -1;
+            const canPrefer = !!tc.onPreferred && !!tc.preferred && l.id !== 'auto' && !!l.installed && tc.downloading !== l.id;
             return (
               <NavRow key={l.id}><MoreItem onPress={() => txPick(l.id)}
                 onReveal={() => {
@@ -451,23 +503,22 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 <TouchableOpacity ref={navRef as any} activeOpacity={0.7} onPress={() => txPick(l.id)}
                   onLayout={e => { txItemY.current[l.id] = e.nativeEvent.layout.y; }}
                   style={[st.moreItem, st.txItem, { borderBottomColor: pt.metal ? pt.winRule : t.barBorder },
+                          warnRow && [st.txWarnRow, { borderColor: txWarnC }],
                           navFocused && { backgroundColor: focusC.tint(0.16) }]}>
                   <Text style={[st.moreItemText, { flex: 1 }, rowText]} numberOfLines={1}>
-                    {on ? '✓ ' : ''}{l.name.toUpperCase()}
+                    {on ? '✓ ' : ''}{warnRow ? '\u26A0 ' : ''}{l.name.toUpperCase()}
                   </Text>
                   {!!side && (side === 'GET' ? (
-                    <TouchableOpacity hitSlop={8} onPress={() => tc.onDownload?.(l.id)}
-                      style={[st.txGet, { borderColor: pt.metal ? pt.winText : t.btnBorder }]}>
-                      <Text style={[st.txSide, { color: pt.metal ? pt.winText : t.btnText }]}>GET</Text>
-                    </TouchableOpacity>
+                    <TxKey label="GET" onPress={() => tc.onDownload?.(l.id)} color={warnRow ? txWarnC : keyC}
+                      style={warnRow ? undefined : { borderColor: keyB }}
+                      a11y={warnRow ? `Get ${l.name}, the SDR's local language` : `Get ${l.name}`} />
                   ) : (
-                    <Text style={[st.txSide, { color: pt.metal ? pt.winText : t.btnText, opacity: 0.6 }]}>{side}</Text>
+                    <Text style={[st.txSide, { color: keyC, opacity: 0.6 }]}>{side}</Text>
                   ))}
-                  {canRemove && (
-                    <TouchableOpacity hitSlop={8} onPress={() => tc.onRemove?.(l.id)} accessibilityLabel={`Remove ${l.name}`}
-                      style={[st.txGet, { marginLeft: 8, borderColor: pt.metal ? pt.winText : t.btnBorder }]}>
-                      <Text style={[st.txSide, { color: pt.metal ? pt.winText : t.btnText }]}>REMOVE</Text>
-                    </TouchableOpacity>
+                  {canPrefer && (
+                    <TxKey label={prefAt >= 0 ? `\u2605${prefAt + 1}` : '\u2606'} color={keyC} style={[st.txStar, { borderColor: keyB }, prefAt < 0 && { opacity: 0.7 }]}
+                      onPress={() => tc.onPreferred?.(l.id)}
+                      a11y={prefAt >= 0 ? `${l.name} is AUTO's preference ${prefAt + 1}. Remove it` : `Prefer ${l.name} in AUTO`} />
                   )}
                 </TouchableOpacity>
               )}</MoreItem></NavRow>
@@ -1081,6 +1132,12 @@ const st = StyleSheet.create({
   txItem:       { flexDirection: 'row', alignItems: 'center' },
   txSide:       { fontSize: 11, fontWeight: '600', letterSpacing: 0.5 },
   txGet:        { borderWidth: 1, borderRadius: 3, paddingVertical: 3, paddingHorizontal: 8, marginLeft: 8 },
+  // ★ fixed width so ☆ / ★1 / ★12 line up down the list
+  txStar:       { minWidth: 38, alignItems: 'center', paddingHorizontal: 4 },
+  txWarn:       { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 4, paddingVertical: 6,
+                  paddingHorizontal: 8, marginTop: 6 },
+  // ★ The highlighted row: an outline in the warn colour (no fill — a fill fights the metal window's dark glass).
+  txWarnRow:    { borderWidth: 1.5, borderRadius: 3 },
   decCaption:   { color: DEC_COL, fontSize: 11, marginTop: 7, opacity: 0.85, lineHeight: 15 },
   closeBtn: {
     marginTop: 14, alignSelf: 'center', borderWidth: 1,
