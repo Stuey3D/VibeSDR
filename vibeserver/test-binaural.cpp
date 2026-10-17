@@ -109,6 +109,8 @@ static void feed(BinauralTuning& bt, const std::vector<float>& x, int rate, std:
     bt.pumpSsbForTest();
 }
 
+static constexpr float kReckonTol = 60.0f;   // = BinauralTuning::kReckonTrustHz: refinement may move it this far
+
 int main() {
     std::printf("Binaural tuning — synthetic\n");
     const double fs = 48000;
@@ -351,6 +353,52 @@ int main() {
             float hz2 = 0; const bool ok2 = bt.ssbOffset(hz2);
             std::printf("      dial +50 Hz: held answer now %+.1f Hz\n", hz2);
             check(ok2 && std::fabs(hz2 - (hz - 50)) < 0.01, "the dial moved +50 Hz → the held answer moved −50 Hz at once");
+        }
+        {
+            // ★★★ STUART'S 500 Hz STEP (V12 474): lock on tune, step the dial +500 Hz — beyond the estimator's
+            //     ±300 Hz — keep listening to the now-mistuned voice for 20 s, and the lean must HOLD, not centre.
+            //     Then step back: centre again; step −500: lean the other way. ("it pans but then I wait just off
+            //     and it centres again" / "actually I cant trigger it again")
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(7100000);
+            feed(bt, voice(fs, 10, 0, 25, 13), (int)fs);
+            float h0 = 0; const bool l0 = bt.ssbOffset(h0);
+            bt.setDial(7100500);                       // one step up: the signal is now 500 Hz BELOW the dial
+            std::vector<float> L, R;
+            feed(bt, voice(fs, 20, -500, 25, 14), (int)fs, &L, &R);   // the voice as heard 500 Hz off
+            float h1 = 0; const bool l1 = bt.ssbOffset(h1);
+            const double lr = db(rms(L, L.size() - (size_t)fs, L.size()), rms(R, R.size() - (size_t)fs, R.size()));
+            std::printf("      500 Hz step: locked %s %+.1f → after 20 s off-tune %s %+.1f Hz, L−R %+.2f dB\n",
+                        l0 ? "" : "(none)", h0, l1 ? "" : "(none)", h1, lr);
+            check(l0 && l1 && std::fabs(h1 - (h0 - 500)) < 1.0 && lr > 0.5,
+                  "a 500 Hz step off a locked voice HOLDS its lean (left) through 20 s of mistuned speech");
+            bt.setDial(7100000);
+            feed(bt, voice(fs, 4, 0, 25, 15), (int)fs);
+            float h2 = 0; bt.ssbOffset(h2);
+            bt.setDial(7099500);                       // one step down: signal 500 Hz ABOVE → lean right
+            feed(bt, voice(fs, 6, 500, 25, 16), (int)fs, &L, &R);
+            float h3 = 0; const bool l3 = bt.ssbOffset(h3);
+            const double lr3 = db(rms(L, L.size() - (size_t)fs, L.size()), rms(R, R.size() - (size_t)fs, R.size()));
+            std::printf("      back on tune %+.1f Hz; one step down → %s %+.1f Hz, L−R %+.2f dB\n", h2, l3 ? "" : "(none)", h3, lr3);
+            check(std::fabs(h2) < 15 && l3 && h3 > 300 && lr3 < -0.5, "back on tune centres; a step the other way leans the other ear — it triggers again");
+        }
+        {
+            // ★★ 100 Hz STEPS — inside the estimator's reach, where FAST's pull toward small offsets used to win.
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(7100000);
+            feed(bt, voice(fs, 10, 0, 25, 17), (int)fs);
+            float h0 = 0; bt.ssbOffset(h0);
+            bt.setDial(7100100);
+            std::vector<float> L, R;
+            feed(bt, voice(fs, 20, -100, 25, 18), (int)fs, &L, &R);
+            float h1 = 0; const bool l1 = bt.ssbOffset(h1);
+            const double lr = db(rms(L, L.size() - (size_t)fs, L.size()), rms(R, R.size() - (size_t)fs, R.size()));
+            std::printf("      100 Hz step: %+.1f → after 20 s off-tune %s %+.1f Hz, L−R %+.2f dB\n", h0, l1 ? "" : "(none)", h1, lr);
+            check(l1 && std::fabs(h1 - (h0 - 100)) <= kReckonTol && lr > 0.5, "a 100 Hz step HOLDS its lean through 20 s of mistuned speech");
         }
         {
             BinauralTuning bt(false);

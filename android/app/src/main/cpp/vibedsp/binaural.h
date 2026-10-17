@@ -99,7 +99,25 @@ public:
     static constexpr int   kMedianMin = 2;
     static constexpr float kAgreeHz = 40.0f;       ///< …and a MAJORITY of them (at least two) lie this close to it
     static constexpr float kSsbRangeHz = 300.0f;   ///< the estimator searches ±300 Hz; beyond is not an answer
-    static constexpr float kSsbStaleSec = 8.0f;    ///< no accepted answer for this long → back to centre
+    /** No accepted answer for this long → back to centre (estimator answers only; a reckoned one never goes stale).
+     *  ★★ TWO MINUTES, NOT 8 s (Stuart, 2026-10-17: "actually I cant trigger it again"). The dial can only move an
+     *  answer that is HELD — so when 8 s of a pause between overs dropped even the on-tune lock, turning off it
+     *  then did nothing until several more seconds of on-tune speech re-locked it. A slightly old lock costs far
+     *  less than none: a newer accepted answer replaces it, and only long silence lets it go. */
+    static constexpr float kSsbStaleSec = 120.0f;
+    /** ★★★ HOW FAR A DIAL-RECKONED ANSWER IS HELD (Stuart, 2026-10-17, on V12 474: "if i am on a signal then tune off
+     *  it pans but then I wait just off and it centres again even though I can hear badly modulated voices" — "I
+     *  use a 500Hz step rate"). One step is beyond the estimator's ±300 Hz, so nothing could ever confirm the lean,
+     *  the 8 s stale timer dropped it, and a held answer past 4 × 300 Hz was thrown away. An answer moved by the
+     *  dial is not a guess — it is exactly how far the knob turned from a voice we had locked — so it is held to
+     *  the edge of an SSB passband and never goes stale while the dial stays put. */
+    static constexpr float kSsbHoldHz = 4000.0f;
+    /** ★★★ AFTER A DIAL MOVE THE KNOB'S FIGURE IS IN CHARGE (Stuart: "if i switch to 100Hz it pans but then centers
+     *  even if i am still off tune"). 100 Hz is inside the estimator's reach, but FAST leans toward SMALL offsets
+     *  (ssb_offset.h says so), so its answers on the mistuned voice came back near 0 and out-voted the exact
+     *  reckoned figure within seconds. While reckoned, an estimator answer may only REFINE the held one — it is
+     *  accepted if it lies within this of it, ignored otherwise — until the dial moves again. */
+    static constexpr float kReckonTrustHz = 60.0f;
     /** ★ A dial change smaller than this is not a move: radiod stamps frames with ±1 Hz of jitter, and every
      *  "move" restarts the estimator — it would never finish one. (Mirrored by BIN_DIAL_MOVE_HZ in JS.) */
     static constexpr double kDialMoveHz = 2.0;
@@ -185,6 +203,7 @@ private:
     std::unique_ptr<SsbOffsetEstimator> est_;
     int estRate_ = 0, workerGen_ = -1, workerSrc_ = None;
     double lastDial_ = 0; bool haveDial_ = false;
+    bool reckoned_ = false;   ///< the held SSB answer was moved by the dial since it was last measured (worker only)
     std::vector<float> hist_;         // accepted answers, SIGNAL terms (sideband applied), newest last
     double lastAccept_ = 0;
     std::vector<float> chunk_;

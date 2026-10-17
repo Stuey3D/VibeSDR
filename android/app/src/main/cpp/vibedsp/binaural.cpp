@@ -257,6 +257,8 @@ void BinauralTuning::pumpSsbForTest() { ssbStep_(); }
 
 void BinauralTuning::ssbAccept_(float signalHz) {
     hist_.push_back(signalHz);
+    // ★ reckoned_ stays set: an answer that agreed with the knob refines it, it does not hand the estimator back
+    //   the authority to drag it to centre (kReckonTrustHz). Only a dial move or a reset changes who is in charge.
     if ((int)hist_.size() > kMedianOf) hist_.erase(hist_.begin());
     lastAccept_ = nowSec();
     accepted_.fetch_add(1);
@@ -282,12 +284,12 @@ void BinauralTuning::ssbStep_() {
         // Idle: nothing is fed; keep the ring empty so a later start begins with fresh audio.
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
         if (est_) { est_.reset(); estRate_ = 0; }
-        hist_.clear(); ssbValid_.store(false); workerGen_ = gen; workerSrc_ = src; haveDial_ = false;
+        hist_.clear(); ssbValid_.store(false); workerGen_ = gen; workerSrc_ = src; haveDial_ = false; reckoned_ = false;
         return;
     }
     if (gen != workerGen_ || src != workerSrc_) {
         workerGen_ = gen; workerSrc_ = src;
-        hist_.clear(); ssbValid_.store(false);
+        hist_.clear(); ssbValid_.store(false); reckoned_ = false;
         if (est_) est_->reset();
         haveDial_ = false;
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
@@ -302,11 +304,11 @@ void BinauralTuning::ssbStep_() {
         const float d = (float)(dial - lastDial_);
         lastDial_ = dial;
         for (float& v : hist_) v -= d;
-        if (ssbValid_.load()) ssbHz_.store(ssbHz_.load() - d);
+        if (ssbValid_.load()) { ssbHz_.store(ssbHz_.load() - d); reckoned_ = true; }
         if (est_) est_->reset();
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
         // A move beyond the estimator's reach leaves nothing it could confirm; let the answer go stale.
-        if (std::fabs(ssbHz_.load()) > 4 * kSsbRangeHz) { ssbValid_.store(false); hist_.clear(); }
+        if (std::fabs(ssbHz_.load()) > kSsbHoldHz) { ssbValid_.store(false); hist_.clear(); reckoned_ = false; }
     }
     const int rate = ringRate_.load();
     if (rate <= 0) return;
@@ -331,10 +333,18 @@ void BinauralTuning::ssbStep_() {
                 && std::fabs(e.offsetHz) <= kSsbRangeHz;
             // ★ +d = the audio is d Hz HIGH. USB: the signal is above the dial (tune up, lean right) → +d.
             //   LSB inverts the audio: high audio means the signal is BELOW the dial → −d.
-            if (gated && std::isfinite(e.offsetHz)) ssbAccept_(sb * e.offsetHz);
+            // ★★ BEYOND ITS REACH, THE ESTIMATOR IS NOT ASKED. While the held answer is outside ±kSsbRangeHz the
+            //    voice is somewhere it cannot see, so anything it reports is a pitch alias or another station —
+            //    and a few of those would outvote the knob's exact figure in the median. It resumes refining the
+            //    moment the dial brings the signal back within its range.
+            const bool beyondReach = ssbValid_.load() && std::fabs(ssbHz_.load()) > kSsbRangeHz;
+            const bool contradicts = reckoned_ && ssbValid_.load()
+                                  && std::fabs(sb * e.offsetHz - ssbHz_.load()) > kReckonTrustHz;   // see kReckonTrustHz
+            if (gated && !beyondReach && !contradicts && std::isfinite(e.offsetHz)) ssbAccept_(sb * e.offsetHz);
         }
     }
-    if (ssbValid_.load() && nowSec() - lastAccept_ > kSsbStaleSec) { ssbValid_.store(false); hist_.clear(); }
+    // ★ Only the ESTIMATOR's own answers go stale — a reckoned one holds while the dial stays put (see kSsbHoldHz).
+    if (ssbValid_.load() && !reckoned_ && nowSec() - lastAccept_ > kSsbStaleSec) { ssbValid_.store(false); hist_.clear(); }
 }
 
 int BinauralTuning::stats(float* o, int cap) const {
