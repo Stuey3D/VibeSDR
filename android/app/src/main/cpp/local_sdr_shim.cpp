@@ -39,6 +39,7 @@
 #include "vibe_thread_layout.h"   // ★ the receiver split on every multi-core server — g_vsSplitDefault below
 #include "vibe_usb_recovery.h"   // ★ park-not-release, fresh-fd back-off, the re-plug advice (2026-10-05)
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
+#include "vibe_room_passband.h"   // ★ the shared chain's passband edges, reported in config (2026-10-17)
 #include "vibe_hwinfo.h"
 #include "vibe_mqtt.h"        // ★ the external antenna switch (2026-10-09) — see g_ext below
 #include "vibe_antswitch.h"
@@ -5778,6 +5779,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<bool>  squelchOn{false};
     std::atomic<float> squelchDb{-50.0f};
     std::atomic<double> vfoBwHz{12000.0};   // current demod bandwidth
+    // ★★★ The passband EDGES a listener last chose on the shared chain, and the mode they belong to —
+    //     reported in config so every other listener's sliders follow. See vibe_room_passband.h.
+    vibepb::RoomPassband roomPb;
     std::atomic<float>  channelDb{-200.0f};  // peak passband power (dB), pre-AGC
     // Audio noise reduction (self-contained spectral subtraction). Mono only;
     // off by default. No external resources → can't fail to init.
@@ -13164,6 +13168,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rxBwHz = std::min(mp.bandwidth, sampleRate * 0.8);
         vfoBwHz.store(mp.bandwidth);
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        // ★★ The chain is back at the mode's DEFAULT width, so the edges a listener chose are no longer
+        //    what anybody hears — config must stop reporting them (vibe_room_passband.h).
+        roomPb.forget();
         LOGI("audio chain: mode=%s bw=%.0f ch=%d", mode.c_str(), mp.bandwidth, mp.channels);
         // ★★ A DEMODULATOR CHANGE IS A NEW START for auto-IF too: AM -> WFM at 96.6 narrowed 0.7 s
         //    later on an S/N read through an overloaded front end ("rds dead"; Sony 21:25:32).
@@ -13607,7 +13614,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string myMode = mode;
         double myVfo = audioFreq.load();
         double myCentre = viewCenter.load(), myEffective = effective;
-        if (auto me = dspFor(sock)) {
+        /* ★★★ THE PASSBAND, ON THE SHARED CHAIN ONLY. A listener with a private channel (per-client
+         *     VFO) owns its passband outright and has nobody to follow; on the shared chain it is the
+         *     room's, and this is the field that lets the room's sliders move together. Empty when
+         *     nobody has chosen one in the current mode — see vibe_room_passband.h. */
+        std::string pbField;
+        auto me = dspFor(sock);
+        if (!me) pbField = roomPb.configField(mode);
+        if (me) {
             myMode = me->mode; myVfo = me->vfoHz;
             // ★ Its own view, or the shared one — the client scales its axis by what we say here,
             //   so telling it the shared span while sending it a private zoomed row draws every
@@ -13620,7 +13634,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (me->viewSpanHz > 0) { myCentre = me->viewCentreHz; myEffective = me->viewSpanHz; }
         }
         const double binBw = myEffective / (double)cfgBins;   // we emit cfgBins bins over MY span
-        char buf[768];   // grew when vfo/locked, then ifBw/gain were added — a truncated JSON config is fatal
+        char buf[896];   // grew when vfo/locked, then ifBw/gain, then the passband were added — a truncated JSON config is fatal
         // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
         // to this so you can't zoom out past the actual RTL bandwidth.
         // ★ mode: the server is AUTHORITATIVE on its own starting demodulator (the owner sets it,
@@ -13660,7 +13674,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     this IF filter and this gain and the joining client should be like OK setting
              *     myself to that." ONE message states it all. hwinfo keeps its copies for older
              *     clients. ifBw 0 = no filter (full capture). */
-            "\"ifBw\":%d,\"ifAuto\":%s,\"gainNow\":%d,\"agc\":%d}",
+            "\"ifBw\":%d,\"ifAuto\":%s,\"gainNow\":%d,\"agc\":%d%s}",
             (long long)llround(myCentre), cfgBins, binBw, myEffective, span,
             // ★★ THIS listener's mode and VFO, not the server's. In shared mode they are
             //    genuinely different per listener, and telling a client someone else's dial is
@@ -13672,7 +13686,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             (g_tunerBwAuto.load(std::memory_order_relaxed)
                 && !g_dabMode.load(std::memory_order_relaxed)) ? "true" : "false",
             LocalSdrShim::instance().currentGainTenthDb(),
-            g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? 1 : 0);
+            g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? 1 : 0,
+            pbField.c_str());
         // ★ snprintf returns the length it WANTED — a cut config is a deaf client.
         if (cfgLen < 0 || cfgLen >= (int)sizeof buf) { LOGE("config truncated (%d)", cfgLen); return; }
         sendText(sock, buf);
@@ -15402,7 +15417,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; }
             if (jsonNum(msg, "frequency", v) && v > 0) retune(v);
             double lo, hi;
-            if (!rebuilt && jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) setBandwidth(hi - lo);
+            if (!rebuilt && jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) {
+                setBandwidth(hi - lo);
+                notePassband(lo, hi);   // ★ Jr and the phone's native path send the edges inside a tune
+            }
             broadcastConfig();          // ★ everybody else is listening to this dial too
             return;
         }
@@ -15425,8 +15443,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (type == "bandwidth") {
             double lo, hi, bw;
-            if (jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) setBandwidth(hi - lo);
-            else if (jsonNum(msg,"bandwidth",bw)) setBandwidth(bw);
+            if (jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) { setBandwidth(hi - lo); notePassband(lo, hi); }
+            else if (jsonNum(msg,"bandwidth",bw)) { setBandwidth(bw); roomPb.forget(); }
+            /* ★★★ AND THE ROOM IS TOLD. This broadcast was always here, and it carried no passband —
+             *     so the audio changed for everybody and nobody's sliders moved (Stuart, 2026-10-17:
+             *     "if a user changes the bandwidth sliders I am hearing them but they aren't
+             *     synchronising with mine"). config now carries the edges; see sendConfig. */
             broadcastConfig();
             return;
         }
@@ -16645,6 +16667,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             j += std::string(",\"rspBiasT\":") + (vsDesiredRspBiasT() ? "true" : "false");
         j += "}";
         sendText(sock, j);
+    }
+
+    /** Remember the edges a listener just applied to the shared chain, at the width it is really
+     *  running — see vibe_room_passband.h. Call AFTER setBandwidth, which sets that width. */
+    void notePassband(double lo, double hi) {
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
+        roomPb.note(mode, lo, hi, vfoBwHz.load(), rxMode == vibedsp::RxPipeline::Mode::CW);
     }
 
     void setBandwidth(double bw) {

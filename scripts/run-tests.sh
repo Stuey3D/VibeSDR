@@ -115,6 +115,9 @@ deps_for() {
     test-bulk-pace)     echo "" ;;
     # ★★ A burst of tunes: the newest wins, paced by the server's load (vibe_tune_pace.h, 2026-10-05).
     test-tune-pace)     echo "" ;;
+    # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
+    #     sliders follow the room's, in the mode they were chosen in.
+    test-room-passband) echo "" ;;
     test-time-decoder)  echo "android/app/src/main/cpp/decoders/time_decoder.cpp" ;;
     test-radiodns-ecc)  echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
     test-radiodns-name) echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
