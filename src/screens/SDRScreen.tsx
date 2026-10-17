@@ -3575,20 +3575,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   // sheet, and fire the share from the sheet's onDismiss (nothing modal up).
   const pendingRecShare = useRef<string | null>(null);
 
+  /* ★★ ONE TAP, ONE RECORDING (Stuart on V12 482, 2026-10-17: "it took a few clicks and a false file created, it
+   *    seems really delayed"). The button only changed once native had opened the file, so a slow open looked like a
+   *    dead button; the next tap then landed as stop-then-start and left a stray file. Now the button shows
+   *    recording AT ONCE, taps are ignored while a start or stop is in flight, and a failed start puts it back. */
+  const recBusy = useRef(false);
   const toggleRecording = useCallback(() => {
+    if (recBusy.current) return;
     if (!isRecording) {
+      recBusy.current = true;
+      setRecStartedAt(Date.now());
+      setIsRecording(true);
       // Pass the LIVE freq/mode for the filename — native currentFreq is only
       // tracked on UberSDR's audio WS, so OWRX would otherwise show a stale freq.
       (VibePowerModule as any)?.startRecording(Math.round(status.frequency || 0), String(status.mode || ''))
-        .then(() => {
-          setRecStartedAt(Date.now());
-          setIsRecording(true);
-        })
-        .catch((e: Error) => Alert.alert('Recording', `Could not start recording: ${e.message}`));
+        .then(() => { recBusy.current = false; })
+        .catch((e: Error) => {
+          recBusy.current = false;
+          setRecStartedAt(null);
+          setIsRecording(false);
+          Alert.alert('Recording', `Could not start recording: ${e.message}`);
+        });
     } else {
+      recBusy.current = true;
       setRecStartedAt(null);
       setIsRecording(false);
       VibePowerModule?.stopRecording()
+        .finally(() => { recBusy.current = false; })
         .then(async (path: string | null) => {
           // Half-height native share sheet; the file also stays in app storage
           // (iOS Documents / Android filesDir) and is reachable via the

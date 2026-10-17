@@ -968,20 +968,31 @@ export default function TunerScreen({ route, navigation }: Props) {
   }, NAV_REPEAT_KEYS);
 
   // ── Recording (REC + Recordings live in the AUDIO sheet — control island) ────
+  // ★★ One tap, one recording — the same fix as SDRScreen's (Stuart, 2026-10-17: "a few clicks and a false file").
+  const recBusy = useRef(false);
   const toggleRecording = useCallback(() => {
+    if (recBusy.current) return;
     if (!isRecording) {
+      recBusy.current = true;
+      setRecSeconds(0);
+      recTimerRef.current = setInterval(() => setRecSeconds((s: number) => s + 1), 1000);
+      setIsRecording(true);
       (VibePowerModule as any)?.startRecording(Math.round(displayFreq || 0), 'wfm')
-        .then(() => {
+        .then(() => { recBusy.current = false; })
+        .catch((e: Error) => {
+          recBusy.current = false;
+          if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
           setRecSeconds(0);
-          recTimerRef.current = setInterval(() => setRecSeconds((s: number) => s + 1), 1000);
-          setIsRecording(true);
-        })
-        .catch((e: Error) => Alert.alert('Recording', `Could not start recording: ${e.message}`));
+          setIsRecording(false);
+          Alert.alert('Recording', `Could not start recording: ${e.message}`);
+        });
     } else {
+      recBusy.current = true;
       if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
       setRecSeconds(0);
       setIsRecording(false);
       VibePowerModule?.stopRecording()
+        .finally(() => { recBusy.current = false; })
         .then(async (path: string | null) => {
           // Present the native share sheet only once the AudioSheet Modal is gone
           // (else it presents over the modal and wedges touch handling) — iOS
