@@ -108,6 +108,16 @@ export function spreadKindFor(mode: string | undefined | null, lo: number, hi: n
 export const BIN_DIAL_MOVE_HZ = 2;
 /** The base dead zone: on-tune audio must not wander (the brief: about ±15 Hz). */
 export const BIN_DEAD_HZ = 15;
+/**
+ * ★★★ SSB's OWN dead zone: ±50 Hz, not the ±15 Hz the spectrum sources use (Stuart on 477: "deep male voice in the
+ * right, higher pitched female voice in the left when they are talking to each other and the panning left and right
+ * constantly"). The SSB offset is measured from the VOICE, and a voice cannot be measured to ±15 Hz — the estimator
+ * scatters by tens of Hz from one over to the next, a child's voice more than a man's, and the stations of a QSO sit
+ * a few tens of Hz apart anyway. Natively a further hysteresis applies (BinauralTuning::kSsbEnterHz, 90 Hz): an
+ * estimator answer must pass it to START a lean; a dial move leans at once. Full scale stays 300 Hz — still well over
+ * three dead zones of ramp.
+ */
+export const BIN_DEAD_SSB_HZ = 50;
 /** ★ Full lean at 300 Hz off for SSB and CW: the SSB estimator searches ±300 Hz, and 300 Hz is the edge of a
  *  typical CW filter — past it you are hearing a different signal, not a mistuned one. */
 export const BIN_FULL_NARROW_HZ = 300;
@@ -131,8 +141,8 @@ export function binauralPlan(mode: string | undefined | null, lo: number, hi: nu
     return { kind, source, deadHz: d, fullHz: Math.max(full, 3 * d), refHz };
   };
   switch (m) {
-    case 'usb': return plan('ssb', BIN_SRC_SSB_USB, BIN_DEAD_HZ, BIN_FULL_NARROW_HZ);
-    case 'lsb': return plan('ssb', BIN_SRC_SSB_LSB, BIN_DEAD_HZ, BIN_FULL_NARROW_HZ);
+    case 'usb': return plan('ssb', BIN_SRC_SSB_USB, BIN_DEAD_SSB_HZ, BIN_FULL_NARROW_HZ);
+    case 'lsb': return plan('ssb', BIN_SRC_SSB_LSB, BIN_DEAD_SSB_HZ, BIN_FULL_NARROW_HZ);
     case 'cw': case 'cwu': case 'cwl':
       return plan('peak', BIN_SRC_GIVEN, res, BIN_FULL_NARROW_HZ, (lo + hi) / 2);
     // ★ AM: full lean at a fifth of the passband (±5 kHz → 1 kHz). An AM carrier a few hundred Hz off is still
