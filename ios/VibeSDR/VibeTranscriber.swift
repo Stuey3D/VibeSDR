@@ -133,23 +133,21 @@ class VibeTranscriber: RCTEventEmitter {
       guard SpeechTranscriber.isAvailable else {
         resolve(["available": false, "reason": "On-device speech recognition is not available on this device"]); return
       }
+      await SpeechEngines.releaseInstalled()
       let supported = await SpeechEngines.supportedLocales()
       let installed = await SpeechEngines.installedIds()
-      let reserved = Set(await AssetInventory.reservedLocales.map { $0.identifier(.bcp47) })
       let here = Locale.current
       let langs: [[String: Any]] = supported
         .map { loc -> [String: Any] in
           let id = loc.identifier(.bcp47)
-          // ★ `reserved` = one of the places Apple gives this app (REMOVE frees it); `installed` = the model is here.
-          return ["id": id, "name": here.localizedString(forIdentifier: id) ?? id, "installed": installed.contains(id),
-                  "reserved": reserved.contains(id)]
+          // ★ `installed` = the model is on the device (saved by this app, another app or the system).
+          return ["id": id, "name": here.localizedString(forIdentifier: id) ?? id, "installed": installed.contains(id)]
         }
         .sorted { ($0["name"] as! String) < ($1["name"] as! String) }
       resolve(["available": true, "deviceLanguage": Locale.current.language.languageCode?.identifier ?? "en",
                "deviceLanguageName": here.localizedString(forLanguageCode: Locale.current.language.languageCode?.identifier ?? "en") ?? "",
                // ★ The phone's region, so 'English' means en-GB on a British phone, not the list's first (en-AU).
                "deviceRegion": Locale.current.region?.identifier ?? "",
-               "maxLanguages": AssetInventory.maximumReservedLocales,   // Apple's cap on speech languages kept
                // ★ Translate INTO the phone's own variant where Apple's Translation has more than one (pt-BR, zh-Hant,
                //   en-GB) — the bare code would be Apple's default variant, not Kiko's Brazilian Portuguese.
                "deviceTranslateTo": await SpeechEngines.deviceTranslateTarget(),
@@ -179,23 +177,12 @@ class VibeTranscriber: RCTEventEmitter {
       let code = loc.language.languageCode?.identifier ?? ""
       let nm = Locale.current.localizedString(forLanguageCode: code) ?? code
       let m = await SpeechEngines.module(for: loc)
-      var roomNote = ""
       do {
-        if await SpeechEngines.isPresent(loc, m) {
-          await SpeechEngines.keepIfFree(loc)          // already here: runs without a place, removes nothing
-        } else {
-          switch await SpeechEngines.makePlace(for: loc, protecting: translateTo.isEmpty ? [] : [translateTo]) {
-          case .full(let msg): resolve(["ok": false, "text": msg]); return
-          case .made(let r): if let r { roomNote = ". Removed \(r) (least used) to make room for \(nm)" }
-          }
-          if let req = try await AssetInventory.assetInstallationRequest(supporting: [m]) {
-            try await req.downloadAndInstall()
-          }
-        }
+        if !(await SpeechEngines.isPresent(loc, m)) { try await SpeechEngines.fetch(loc, m) }
       } catch {
         resolve(["ok": false, "text": "Could not download \(nm): \(error.localizedDescription)"]); return
       }
-      var text = "\(nm) is on this phone — AUTO can now pick it\(roomNote)"
+      var text = "\(nm) is saved on this device — AUTO can now pick it"
       if !translateTo.isEmpty, code != TranscribePlaces.base(translateTo) {
         let dst = Locale.Language(identifier: translateTo)
         let dn = Locale.current.localizedString(forIdentifier: translateTo) ?? translateTo
@@ -204,30 +191,16 @@ class VibeTranscriber: RCTEventEmitter {
         case .supported:
           let ok = await TranslationDownloadHost.request(source: loc.language, target: dst)
           text += ok ? ", translating to \(dn)" : " (translation pack not downloaded)"
-        default: text += " (the phone cannot translate it to \(dn))"
+        default: text += " (this device cannot translate it to \(dn))"
         }
       }
       resolve(["ok": true, "text": text])
     }
   }
 
-  /// ★ REMOVE in the language row (Stuart, 2026-10-15: "we need a remove button too as right now I try a download and
-  /// get the 5 limit warning"). Gives back this app's place for the language; iOS deletes the model itself when it
-  /// wants the space (Apple offers no "delete now"). Resolves { ok, text } for the box.
-  @objc func remove(_ language: String,
-                    resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-    guard #available(iOS 26.0, *) else { resolve(["ok": false, "text": "Needs iOS 26 or later"]); return }
-    Task {
-      let base = Locale(identifier: language).language.languageCode?.identifier ?? language
-      let nm = Locale.current.localizedString(forLanguageCode: base) ?? base
-      var n = 0
-      for l in await AssetInventory.reservedLocales where l.language.languageCode?.identifier == base {
-        if await AssetInventory.release(reservedLocale: l) { n += 1 }
-      }
-      resolve(n > 0 ? ["ok": true, "text": "\(nm) removed — iOS deletes the model when it needs the space"]
-                    : ["ok": false, "text": "\(nm) was not kept by this app"])
-    }
-  }
+  /* ★ There is no REMOVE any more (2026-10-17). It existed to give back one of Apple's 5 places when a GET was
+   *   refused; downloads no longer keep a place (SpeechEngines.fetch), so it would only ever release nothing — a dead
+   *   control (AGENTS.md). Apple offers no "delete this model now"; iOS frees a released model's space itself. */
 
   /// The dial, for SSB auto-tune of the recogniser's feed ('usb'/'lsb' arm it; any change resets it).
   @objc func tuning(_ mode: String, freqHz: Double) {
@@ -266,41 +239,12 @@ enum SpeechEngines {
     if let s = await SpeechTranscriber.supportedLocale(equivalentTo: l) { return s }
     return await DictationTranscriber.supportedLocale(equivalentTo: l)
   }
-  /* ★★★ APPLE KEEPS AT MOST `maximumReservedLocales` SPEECH LANGUAGES PER APP (5 on this Mac's SDK) — its limit, not
-   *  ours. reserve() past it fails. A download the USER asked for (GET, the box's DOWNLOAD, choosing a language) makes
-   *  room by giving back the LEAST USED place, and says which (Stuart, 2026-10-15: "auto remove the least used
-   *  language"). AUTO itself never downloads, so it never evicts. Last use: UserDefaults id → time, set on use.
-   *  ★★★ BUT NEVER A PROTECTED ONE (V12 467, 2026-10-16: an English iPhone lost ENGLISH to make room for Vietnamese —
-   *  it is rarely HEARD on shortwave, so it looked least used). The rule is TranscribePlaces.decide (tested):
-   *  the phone's languages, the translation target, what is being transcribed now and the incoming one keep their
-   *  places; if every place is protected nothing is removed and the user is asked (REMOVE in the LANGUAGE list).
-   *  ★★ A LANGUAGE ALREADY ON THE DEVICE RUNS WITHOUT A PLACE. Measured 2026-10-16 on macOS 27's Speech framework (the
+  /* ★★ A LANGUAGE ALREADY ON THE DEVICE RUNS WITHOUT A PLACE. Measured 2026-10-16 on macOS 27's Speech framework (the
    *  same one iOS 26/27 ships) with the app's exact SpeechTranscriber AND DictationTranscriber configurations: a binary
    *  holding NO reservation transcribed en-GB and nl-BE speech correctly. status(forModules:) said `.supported` for
    *  them — it reports THIS app's reservation, not whether the model is on the device; installedLocales does that.
-   *  So the phone's own language, when the system already has it, never takes one of the places at all. */
-  private static let lruKey = "vibeTxLangLastUsed"
-  static func touch(_ loc: Locale) { touch(id: loc.identifier(.bcp47)) }
-  /// Also takes a bare code ("en") — the translation target counts as use of its language.
-  static func touch(id: String) {
-    guard !id.isEmpty else { return }
-    var m = UserDefaults.standard.dictionary(forKey: lruKey) as? [String: Double] ?? [:]
-    m[id] = Date().timeIntervalSince1970
-    UserDefaults.standard.set(m, forKey: lruKey)
-  }
-  /// The phone's own languages (Settings → Language order) as base codes — always protected.
-  static func deviceBases() -> Set<String> {
-    var out = Set(Locale.preferredLanguages.map { TranscribePlaces.base($0) })
-    if let c = Locale.current.language.languageCode?.identifier { out.insert(c) }
-    return out
-  }
-  /// Base codes being transcribed right now (set by the running engine) — protected while in use.
-  private static let inUseLock = NSLock()
-  private static var inUseStore = Set<String>()
-  static var inUse: Set<String> {
-    get { inUseLock.lock(); defer { inUseLock.unlock() }; return inUseStore }
-    set { inUseLock.lock(); inUseStore = newValue; inUseLock.unlock() }
-  }
+   *  ★★★ And since 2026-10-17 a language this app downloads is the same: see `fetch` below. (Before, each download
+   *  KEPT one of Apple's 5 places and a full set removed the least used — gone, with TranscribePlaces.decide.) */
   /// The model is on the device (any app or the system put it there) — or this app's own status says installed.
   static func isPresent(_ loc: Locale, _ m: any SpeechModule) async -> Bool {
     if await installedIds().contains(loc.identifier(.bcp47)) { return true }
@@ -311,48 +255,31 @@ enum SpeechEngines {
     return Locale.current.localizedString(forLanguageCode: c) ?? c
   }
 
-  enum Place { case made(removed: String?); case full(message: String) }
-  /// Makes sure `loc` holds a place before a download. `protecting`: more base codes to keep (translation target).
-  static func makePlace(for loc: Locale, protecting extra: Set<String>) async -> Place {
-    let id = loc.identifier(.bcp47)
-    let held = await AssetInventory.reservedLocales
-    let heldIds = held.map { $0.identifier(.bcp47) }
-    let device = deviceBases()
-    let prot = device.union(extra.map { TranscribePlaces.base($0) }).union(inUse)
-    let used = UserDefaults.standard.dictionary(forKey: lruKey) as? [String: Double] ?? [:]
-    var removed: String?
-    switch TranscribePlaces.decide(held: heldIds, max: AssetInventory.maximumReservedLocales, incoming: id,
-                                   protectedBases: prot, lastUsed: used) {
-    case .room: break
-    case .remove(let victimId):
-      if let victim = held.first(where: { $0.identifier(.bcp47) == victimId }) {
-        NSLog("[VibeTranscriber] releasing %@ to make room for %@", victim.identifier, id)
-        if await AssetInventory.release(reservedLocale: victim) { removed = langName(victimId) }
-      }
-    case .ask:
-      // ★ Never a silent removal of a language the user needs — say why each is kept and let them choose.
-      let why: (String) -> String = { h in
-        let b = TranscribePlaces.base(h)
-        if device.contains(b) { return "\(langName(h)) (your phone\u{2019}s language)" }
-        if extra.contains(where: { TranscribePlaces.base($0) == b }) { return "\(langName(h)) (translating into it)" }
-        if inUse.contains(b) { return "\(langName(h)) (in use)" }
-        return langName(h)
-      }
-      let kept = Array(Set(heldIds.map(why))).sorted().joined(separator: ", ")
-      return .full(message: "iPhone keeps \(AssetInventory.maximumReservedLocales) speech languages for VibeSDR and all are needed: \(kept). REMOVE one in the LANGUAGE list to make room for \(langName(id)).")
+  /* ★★★ SAVED TO THE DEVICE, NOT KEPT IN A PLACE (measured 2026-10-17 on macOS 27, memory
+   *  speech_models_release_after_download). A model is downloaded under a reservation — Apple's API needs one — and the
+   *  reservation is RELEASED straight after: the model stays installed and a process holding NO reservation transcribed
+   *  Polish word-perfect. Stuart: "that way we can offer the button to save it to the system no 5 slot weirdness".
+   *  So the 5-place cap only limits downloads IN FLIGHT, and nothing is ever removed to make room.
+   *  ★ The assets must be fetched for the app's EXACT module (`module(for:)`): a `.longDictation` download left this
+   *    configuration with no audio format — nothing ran.
+   *  ★ Apple can still tidy a released model away when the device runs short of space; the list reads what is really
+   *    installed, so the language simply shows GET again. */
+  /// Downloads `loc`'s model for `m` (the app's module) and gives the place straight back.
+  static func fetch(_ loc: Locale, _ m: any SpeechModule) async throws {
+    await releaseInstalled()                     // a place must be free for the download itself
+    if let req = try await AssetInventory.assetInstallationRequest(supporting: [m]) {
+      try await req.downloadAndInstall()
     }
-    _ = try? await AssetInventory.reserve(locale: loc)
-    touch(loc)
-    return .made(removed: removed)
+    _ = await AssetInventory.release(reservedLocale: loc)
+    await releaseInstalled()                     // ★ and any place Apple filed under another spelling of the locale
   }
-  /// A language already on the device that the user asked for: keep it (so iOS does not tidy it away) only when a
-  /// place is FREE — never remove another for a model that runs without one — and never for the phone's language.
-  static func keepIfFree(_ loc: Locale) async {
-    touch(loc)
-    if deviceBases().contains(TranscribePlaces.base(loc.identifier(.bcp47))) { return }
-    let held = await AssetInventory.reservedLocales
-    if held.contains(where: { TranscribePlaces.base($0.identifier(.bcp47)) == TranscribePlaces.base(loc.identifier(.bcp47)) }) { return }
-    if held.count < AssetInventory.maximumReservedLocales { _ = try? await AssetInventory.reserve(locale: loc) }
+  /// Gives back every place whose model is installed — those run without one. This is also how places held by
+  /// builds before 2026-10-17 (which KEPT a place per language) are handed back: the first list read frees them.
+  static func releaseInstalled() async {
+    let have = await installedIds()
+    for l in await AssetInventory.reservedLocales where have.contains(l.identifier(.bcp47)) {
+      _ = await AssetInventory.release(reservedLocale: l)
+    }
   }
   /// The phone's language as a Translation target: a variant only when Apple's Translation offers several for the
   /// language and one matches the phone (region first, then script — zh-Hant for Taiwan/Hong Kong); else the bare code.
@@ -402,8 +329,9 @@ final class TranscribeEngine {
   private static let overtake = 0.08          // the challenger's lead (mean confidence) that makes it the language
   private var candidates: [Locale] = []
   /* ★★ ROUNDS OF FOUR (Stuart, 2026-10-15). Apple has no language identifier and running more than ~4 models at once
-   *    is too much for a phone, so AUTO tries the pool four at a time — EiBi's languages for this frequency, then the
-   *    phone's, then every other language ON PHONE — and moves on when no lane in a round is convincing. After the
+   *    is too much for a phone, so AUTO tries the pool four at a time — EiBi's languages for this frequency, the
+   *    receiver's main language, the user's ★ preferred ones, the receiver area's, the phone's, then every other
+   *    language ON PHONE (order: begin()) — and moves on when no lane in a round is convincing. After the
    *    last round it settles on the most confident language heard in ANY round. The pool is the user's to shape:
    *    GET in the language list adds a language to it. */
   private static let laneCap = 4
@@ -480,7 +408,6 @@ final class TranscribeEngine {
 
   func stop() {
     VibeTranscribeTap.shared.setSink(nil)
-    SpeechEngines.inUse = []
     q.async {
       if self.stallRestarts > 0 { NSLog("[VibeTranscriber] stall watchdog: %d restart(s) this session", self.stallRestarts) }
       self.stopped = true
@@ -498,33 +425,45 @@ final class TranscribeEngine {
       }
       cands = [l]
     } else {
-      // ★ EiBi's languages for this frequency first (fetched if missing — the box says so), then the phone's
-      //   languages (in the user's order), then any other model already installed.
-      var seen = Set<String>()
-      var hinted = Set<String>()
-      for code in hints {
-        let want = code == "zh" ? "zh-CN" : code == "yue" ? "yue-CN" : code
-        if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: want)),
-           seen.insert(l.identifier(.bcp47)).inserted { cands.append(l); hinted.insert(l.identifier(.bcp47)) }
-      }
-      let phoneAt = cands.count
-      for id in Locale.preferredLanguages {
-        if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: id)),
-           seen.insert(l.identifier(.bcp47)).inserted { cands.append(l) }
-      }
-      for l in await SpeechEngines.installedLocales() where seen.insert(l.identifier(.bcp47)).inserted {
-        cands.append(l)
-      }
-      _ = phoneAt
       /* ★★ AUTO TESTS ONLY WHAT IS ALREADY ON THE PHONE (Stuart, 2026-10-15). A speech model is 300–450 MB, so probing
-       *    by download could pull a gigabyte over mobile data and churn Apple's handful of places. A likely language
+       *    by download could pull a gigabyte over mobile data. A likely language
        *    that is not here is SAID instead — the user GETs it when and where it suits them. */
       //    (The box's own notice offers the DOWNLOAD — SDRScreen, from EiBi and the phone's list.)
-      let installed = await SpeechEngines.installedIds()
-      cands = cands.filter { installed.contains($0.identifier(.bcp47)) }
+      /* ★★★ THE ORDER IS BUILT IN JS (src/services/transcribeOrder.ts, tested; 2026-10-17): `hints` arrives as EiBi's
+       *    languages for the frequency, the receiver's MAIN language (a reserved round-1 lane, in the receiver's
+       *    variant — 'pt-BR' — when that one is installed), the user's ★ PREFERRED languages in their order, then the
+       *    receiver area's others. Here the phone's own languages and everything else installed follow, and anything
+       *    not installed is dropped — so no entry costs a lane unless its model is really on the device. */
+      /* ★★ ONE LANE PER LANGUAGE, NOT PER VARIANT (Stuart on V12 479, 2026-10-17: the box read "Trying English, Dutch,
+       *    French, German (round 1 of 7)… Trying English, English, Spanish, French (round 2 of 7)"). A Mac has many
+       *    system models — en-GB, en-US, en-AU, en-IN… — and each took a lane of its own, so English was tried over
+       *    and over and AUTO ran to seven rounds. Telling languages apart is the job here; the accent is not. Each
+       *    language is tried ONCE: in the variant JS named explicitly (the receiver's, 'pt-BR') if installed, else the
+       *    one the phone itself uses (Settings → Language order), else the hint's, else the first installed. */
+      let installedList = await SpeechEngines.installedLocales()
+      let installed = Set(installedList.map { $0.identifier(.bcp47) })
+      var order: [String] = []                          // base codes, in the order they are tried
+      var pick: [String: (loc: Locale, rank: Int)] = [:] // base → the variant to run (lower rank wins)
+      func offer(_ l: Locale, rank: Int) {
+        let id = l.identifier(.bcp47), b = TranscribePlaces.base(id)
+        if !order.contains(b) { order.append(b) }
+        guard installed.contains(id) else { return }
+        if let cur = pick[b], cur.rank <= rank { return }
+        pick[b] = (l, rank)
+      }
+      for code in hints {
+        let want = code == "zh" ? "zh-CN" : code == "yue" ? "yue-CN" : code
+        let explicit = code.contains("-") || code.contains("_")       // a variant JS chose on purpose
+        if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: want)) { offer(l, rank: explicit ? 0 : 2) }
+      }
+      for id in Locale.preferredLanguages {
+        if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: id)) { offer(l, rank: 1) }
+      }
+      for l in installedList { offer(l, rank: 3) }
+      cands = order.compactMap { pick[$0]?.loc }
     }
     guard !cands.isEmpty else {
-      owner?.emit(["type": "error", "text": "No speech language is on this phone yet — GET one in the LANGUAGE list"]); return
+      owner?.emit(["type": "error", "text": "No speech language is on this device yet — GET one in the LANGUAGE list"]); return
     }
     candidates = cands
     round = 0; bestSeen = nil
@@ -548,19 +487,9 @@ final class TranscribeEngine {
         let isInstalled = await SpeechEngines.isPresent(loc, t)
         // ★ AUTO never downloads (Stuart, 10-15 — 300–450 MB each), so it never takes a place either.
         if probe && !isInstalled { continue }
-        // ★ Only a model that is not here needs a place — one already installed runs as it is, evicting nothing.
-        if !probe, !isInstalled {
-          switch await SpeechEngines.makePlace(for: loc, protecting: translateTo.isEmpty ? [] : [translateTo]) {
-          case .full(let msg): owner?.emit(["type": "error", "text": msg]); return
-          case .made(let r):
-            if let r { owner?.emit(["type": "tried", "text": "Removed \(r) (least used) to make room for \(shortName(loc))"]) }
-          }
-        }
         if !isInstalled {
           status("Downloading the \(shortName(loc)) speech model (once, then it works offline)…")
-          if let req = try await AssetInventory.assetInstallationRequest(supporting: [t]) {
-            try await req.downloadAndInstall()
-          }
+          try await SpeechEngines.fetch(loc, t)
         }
         guard let lane = try await makeLane(loc, module: t) else { continue }
         made.append(lane)
@@ -587,7 +516,7 @@ final class TranscribeEngine {
                           "text": names + (self.rounds > 1 ? " (round \(self.round + 1) of \(self.rounds))" : "")])
         // ★ Said while it searches, so a slow AUTO explains itself (Stuart, 10-15: "warn users of how it works").
         self.status(self.rounds > 1
-          ? "Listening — trying \(names) (round \(self.round + 1) of \(self.rounds); iPhone can only try 4 languages at a time, so this can take a while)…"
+          ? "Listening — trying \(names) (round \(self.round + 1) of \(self.rounds); only 4 languages can be tried at a time, so this can take a while)…"
                                     : "Listening — detecting the language (\(names))…")
       } else {
         self.choose(made[0])
@@ -779,9 +708,6 @@ final class TranscribeEngine {
   // q only
   private func choose(_ lane: Lane) {
     chosen = lane
-    SpeechEngines.touch(lane.locale)   // ★ "least used" means least used HERE
-    SpeechEngines.touch(id: translateTo)   // ★ translating INTO a language is use of it too
-    SpeechEngines.inUse = [TranscribePlaces.base(lane.locale.identifier(.bcp47))]
     let lang = lane.locale.language.languageCode?.identifier ?? ""
     owner?.emit(["type": "lang", "text": lane.locale.identifier(.bcp47), "name": shortName(lane.locale),
                  "detected": language == "auto"])

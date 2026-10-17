@@ -19,9 +19,4 @@ RCT_EXTERN_METHOD(download
                   : (RCTPromiseResolveBlock)resolve rejecter
                   : (RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN_METHOD(remove
-                  : (NSString *)language resolver
-                  : (RCTPromiseResolveBlock)resolve rejecter
-                  : (RCTPromiseRejectBlock)reject)
-
 @end
