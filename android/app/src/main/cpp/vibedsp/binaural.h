@@ -16,7 +16,8 @@
 // ★★ WHERE THE OFFSET COMES FROM is per mode, and mostly NOT here:
 //      SSB (USB/LSB)  — HERE: the shared voice-harmonic estimator (ssb_offset.h), FAST profile, run on its own
 //                       worker thread, its raw answers smoothed by a running median. The audio is the only
-//                       place an SSB mistuning shows — there is no carrier to look at.
+//                       place an SSB mistuning shows — there is no carrier to look at. ★ Two-stage since 2026-10-17
+//                       (where the voice's energy sits + the harmonic comb): it reaches ±1200 Hz, deep or thin.
 //      everything else — the CALLER (the app's JS, from the spectrum it already draws): AM/SAM carrier peak, CW
 //                       peak, NFM/FM/WFM power centroid, each against the passband centre. Passed in with
 //                       setOffset(). See src/services/binauralOffset.ts for why CW is measured there and not as
@@ -25,8 +26,8 @@
 //                       a slow crossfade, so a flickering pilot near lock cannot make it alternate.
 //      DAB            — never (the caller sends Source::None).
 //      SSB, COARSE    — the CALLER again, from the waterfall (binauralOffset.ts ssbCoarseCarrier): where the
-//                       voice's band starts. Reaches a few kHz where the estimator reaches ±300 Hz, so it is
-//                       what makes the lean trigger when you ARRIVE off a voice. It only steps in where the
+//                       voice's band starts. Reaches a few kHz where the estimator reaches ±1200 Hz, so it is
+//                       what makes the lean trigger when you ARRIVE far off a voice. It only steps in where the
 //                       estimator cannot answer — see setSsbHint() for the hand-off.
 //
 // ★★ ONE BEHAVIOUR, TWO CUES (V12 — through build 476 it was two exclusive STYLES, GUIDE or SPREAD). Stuart,
@@ -236,7 +237,10 @@ public:
      *  too slow for a knob that is turning. Two that AGREE is the same rule SsbAutoTune uses. */
     static constexpr int   kMedianMin = 2;
     static constexpr float kAgreeHz = 40.0f;       ///< …and a MAJORITY of them (at least two) lie this close to it
-    static constexpr float kSsbRangeHz = 300.0f;   ///< the estimator searches ±300 Hz; beyond is not an answer
+    /** The estimator searches ±1200 Hz (SsbOffsetEstimator::Config::dMaxHz); beyond is not an answer.
+     *  ★ Was ±300 until the two-stage estimate (2026-10-17): its coarse stage — where the voice's energy sits in the
+     *    passband — tells a pitch alias from the truth, so the comb is no longer confined to ±300. */
+    static constexpr float kSsbRangeHz = 1200.0f;
     /** No accepted answer for this long → back to centre (estimator answers only; a reckoned one never goes stale).
      *  ★★ TWO MINUTES, NOT 8 s (Stuart, 2026-10-17: "actually I cant trigger it again"). The dial can only move an
      *  answer that is HELD — so when 8 s of a pause between overs dropped even the on-tune lock, turning off it
@@ -245,10 +249,12 @@ public:
     static constexpr float kSsbStaleSec = 120.0f;
     /** ★★★ HOW FAR A DIAL-RECKONED ANSWER IS HELD (Stuart, 2026-10-17, on V12 474: "if i am on a signal then tune off
      *  it pans but then I wait just off and it centres again even though I can hear badly modulated voices" — "I
-     *  use a 500Hz step rate"). One step is beyond the estimator's ±300 Hz, so nothing could ever confirm the lean,
+     *  use a 500Hz step rate"). One step was beyond the estimator's then ±300 Hz, so nothing could confirm the lean,
      *  the 8 s stale timer dropped it, and a held answer past 4 × 300 Hz was thrown away. An answer moved by the
      *  dial is not a guess — it is exactly how far the knob turned from a voice we had locked — so it is held to
-     *  the edge of an SSB passband and never goes stale while the dial stays put. */
+     *  the edge of an SSB passband and never goes stale while the dial stays put. ★ Since 2026-10-17 a 500 Hz step is
+     *  inside the estimator's ±1200 Hz, and its evidence moves with the dial (shiftAudio), so it REFINES the knob's
+     *  figure within kReckonTrustHz; beyond ±1200 the knob's figure alone holds, as before. */
     static constexpr float kSsbHoldHz = 4000.0f;
     /** ★★★ AFTER A DIAL MOVE THE KNOB'S FIGURE IS IN CHARGE (Stuart: "if i switch to 100Hz it pans but then centers
      *  even if i am still off tune"). 100 Hz is inside the estimator's reach, but FAST leans toward SMALL offsets
@@ -270,33 +276,29 @@ public:
      *    turning the knob off a locked voice leans at once, exactly as before — that figure is not a guess.
      *  ★ The lean and the spread share w, so the spread follows the same hysteresis: none on an on-tune QSO.
      *  PROVISIONAL (synthetic voices, no off-air clips): 90 Hz clears FAST's scatter on a voice and the ~30 Hz between
-     *  QSO stations by a margin, and stays well inside the estimator's ±300 Hz reach. */
+     *  QSO stations by a margin, and stays well inside the estimator's reach. */
     static constexpr float kSsbEnterHz = 90.0f;
     /** ★★ HIGH VOICES COUNT FOR LESS (the same report: "its a deep male voice and a childrens radio club talking").
      *  A child's voice (F0 ~250-400 Hz) puts only 6-10 harmonics in a 2.7 kHz passband, and the comb k·f0 + d fits
-     *  d ± f0 (and d ± f0/2) almost as well as d — and those aliases now fall INSIDE the ±300 Hz search. FAST was
+     *  d ± f0 (and d ± f0/2) almost as well as d — and those aliases fall INSIDE the estimator's search. FAST was
      *  tuned on adult voices only. Above kHighF0Hz (SsbOffsetEstimate::f0Hz, the estimator's own pitch figure):
      *  1. the gate rises by kHighF0GatePerHz per Hz of pitch, up to ×kHighF0GateMax (×2 from 300 Hz up);
      *  2. while a held answer stands that a LOWER voice helped establish (lowVoiceHeld_), a high-voice answer more than
      *     kAgreeHz from it is ignored — it may refine that answer, never drag it. A high voice ALONE is not held to
      *     its own first answers that way (a wrong first lock would then defend itself for two minutes);
-     *  3. a high-voice answer that sits where its own aliases of "on tune" would (within kAgreeHz of ±f0 or ±f0/2)
-     *     is ignored unless it agrees with the held answer — with nothing held yet, a near-monotone child otherwise
-     *     locks a pitch off tune before anyone else has spoken. The cost: a child mistuned by exactly half or one
-     *     pitch gets no estimator answer (the dial and the waterfall cue still lean); never the wrong ear.
-     *  PROVISIONAL — chosen on synthetic voices (vibeserver/test-binaural.cpp §10), no off-air clips. Rule 1 alone,
-     *  measured over 32 FAST windows each: a near-monotone 300 Hz voice mistuned −150 Hz had 28 aliases pass the
-     *  gate, 10 with it; a 250 Hz one on tune 16 → 16 (that case is rule 3's). Without rule 3 a monotone 250 Hz
-     *  child speaking first in an on-tune QSO leaned at 5 s (pan 0.74); with it, never. Calibrate on real children's
-     *  voices before trusting the numbers. */
+     *  3. (REMOVED 2026-10-17) a high-voice answer at ±f0 or ±f0/2 — its own aliases of "on tune" — was ignored unless
+     *     it agreed with the held answer. The two-stage estimator (ssb_offset.h) no longer makes those aliases: on the
+     *     same §10 voices the monotone 250/300 Hz children on tune, speaking first too, never lean without the rule, and
+     *     the child really 150 Hz off (half its pitch — the rule refused it) is read right. Rules 1 and 2 stay: a child
+     *     still has few harmonics, and a lower voice's lock is still the better witness.
+     *  PROVISIONAL — chosen on synthetic voices (vibeserver/test-binaural.cpp §10); the off-air clips
+     *  (test-ssb-offset-real) have no children's voices yet. Calibrate on real children's voices before trusting them. */
     static constexpr float kHighF0Hz = 200.0f;
     static constexpr float kHighF0GatePerHz = 0.01f;
     static constexpr float kHighF0GateMax = 2.0f;
-    /** ★ FAST's own gate, as a scale on the SLOW gate (SsbOffsetEstimator::gateFor). PROVISIONAL — measured
-     *  on synthetic voices in vibeserver/test-binaural.cpp, NOT on the off-air clips (VIBE_SSB_CLIPS was not
-     *  available when this was written). ssb_offset.h asks for it to be calibrated on them: do that before
-     *  trusting the number. */
-    static constexpr float kFastGateScale = 0.8f;
+    // ★ kFastGateScale (0.8 × the SLOW gate, provisional, synthetic) is GONE (2026-10-17): FAST now carries its own
+    //   gate, measured on off-air VOLMET and QSO clips (SsbOffsetEstimate::passes, test-ssb-offset-real). The high-F0
+    //   rule scales THAT gate's confidence floor.
     /** ★★ THE COARSE CUE'S OWN ERROR. The waterfall puts the carrier ~300 Hz below where the voice's band starts,
      *  but transmitters cut their low end anywhere from ~100 to ~400 Hz, so the cue is good to about ±150 Hz. A
      *  coarse answer smaller than this cannot tell "on tune" from "just off", and it never leans on its own. */

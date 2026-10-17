@@ -48,7 +48,11 @@ static double db(double p, double ref) { return 10 * std::log10((p + 1e-30) / (r
 
 /* A synthetic SSB voice: harmonics of a pitch that glides (95-180 Hz) the way intonation does, every one
  * moved by `offsetHz` (that IS the mistuning), inside a 250-2800 Hz passband with a falling tilt, spoken
- * in syllables with a pause every few seconds, over band noise `snrDb` below the speech. */
+ * in syllables with a pause every few seconds, over band noise `snrDb` below the speech.
+ * ★ The noise passes the SAME 250-2800 Hz passband (a 255-tap band-pass), as a receiver's filter would pass it. Until
+ *   2026-10-17 it was white: harmless while the search reached ±300 Hz, but the two-stage estimate reads the passband's
+ *   floor from the noise between words, and full-band noise under a voice that starts at 250 Hz says "a transmitter
+ *   with a 250 Hz low cut, on tune" — which made a voice tuned 500 Hz LOW look like its alias a few pitches up. */
 static std::vector<float> voice(double rate, double secs, double offsetHz, double snrDb, unsigned seed) {
     std::mt19937 rng(seed);
     std::normal_distribution<float> g(0.0f, 1.0f);
@@ -71,7 +75,23 @@ static std::vector<float> voice(double rate, double secs, double offsetHz, doubl
             if (fk < 250 || fk > 2800) continue;
             s += std::cos(k * ph + 2 * M_PI * offsetHz * t + th[k]) / std::sqrt((double)k);
         }
-        x[i] = (float)(0.08 * s * syl * pause + nAmp * g(rng));
+        x[i] = (float)(0.08 * s * syl * pause);
+    }
+    // the band noise, through the passband (windowed-sinc band-pass, Blackman, unity in band)
+    const int T = 255, m = T / 2;
+    std::vector<double> h(T);
+    for (int k = 0; k < T; ++k) {
+        const double t = k - m, w = 0.42 - 0.5 * std::cos(2 * M_PI * k / (T - 1)) + 0.08 * std::cos(4 * M_PI * k / (T - 1));
+        auto lp = [&](double fc) { const double a = 2 * fc / rate; return t == 0 ? a : std::sin(M_PI * a * t) / (M_PI * t); };
+        h[k] = (lp(2800) - lp(250)) * w;
+    }
+    // white noise of the old density over the whole band, so the in-band SNR is what it always was
+    std::vector<float> nz(n + T);
+    for (auto& v : nz) v = (float)(nAmp * g(rng));
+    for (size_t i = 0; i < n; ++i) {
+        double a = 0;
+        for (int k = 0; k < T; ++k) a += h[k] * nz[i + k];
+        x[i] += (float)a;
     }
     return x;
 }
@@ -112,12 +132,13 @@ int main() {
     }
 
     std::printf(" ── 2. known offsets in a synthetic voice (40 s, 16 kHz) ──\n");
-    for (double d : {-180.0, -100.0, -37.0, 0.0, 64.0, 150.0}) {
+    // ★ −500 and +800: beyond the old ±300 Hz search, inside the two-stage reach (±1200 Hz, 2026-10-17).
+    for (double d : {-500.0, -180.0, -100.0, -37.0, 0.0, 64.0, 150.0, 800.0}) {
         const auto x = voice(16000, 40, d, 30, 7 + (unsigned)(d + 500));
         const auto e = SsbOffsetEstimator::estimate(x.data(), (int)x.size(), 16000);
         char what[200];
         std::snprintf(what, sizeof what, "offset %+4.0f: estimated %+6.1f Hz, confidence %.2f (gate %.2f), %.0f dB, %.0f s voiced",
-                      d, e.offsetHz, e.confidence, SsbOffsetEstimator::gateFor(e.offsetHz), e.snrDb, e.voicedSeconds);
+                      d, e.offsetHz, e.confidence, e.gate.confidence, e.snrDb, e.voicedSeconds);
         check(std::fabs(e.offsetHz - d) <= 3 && e.passes(), what);
     }
     {
@@ -166,14 +187,15 @@ int main() {
         check(t.estimates() == 0 && t.appliedHz() == 0, "not SSB: the estimator never runs, nothing is shifted");
     }
     {
-        // ★ An offset beyond ±250 Hz is never corrected (and ±300 is the edge of the search).
-        const auto x = voice(16000, 120, 280, 30, 13);
+        // ★ An offset beyond ±kMaxCorrectHz is never corrected. ★ It was ±250 Hz (+280 tested) while the search
+        //   reached only ±300; the two-stage estimate reaches ±1200, and the recogniser now corrects to ±1000.
+        const auto x = voice(16000, 120, 1100, 30, 13);
         SsbAutoTune t(16000);
         t.setSideband(+1);
         std::vector<float> y(x);
         for (size_t i = 0; i + 320 <= y.size(); i += 320) t.process(&y[i], 320);
         char what[160];
-        std::snprintf(what, sizeof what, "+280 Hz voice (beyond ±250): left alone (shift %+.1f, last estimate %+.0f)",
+        std::snprintf(what, sizeof what, "+1100 Hz voice (beyond ±1000): left alone (shift %+.1f, last estimate %+.0f)",
                       t.appliedHz(), t.lastEstimate().offsetHz);
         check(t.appliedHz() == 0, what);
     }

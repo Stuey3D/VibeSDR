@@ -79,6 +79,27 @@ static int lagOf(const std::vector<float>& a, const std::vector<float>& b, size_
     return best;
 }
 
+/* Band noise through the 250-2800 Hz passband (a 255-tap windowed-sinc band-pass, unity in band): what a receiver's
+ * filter lets through between words. White noise of density `amp` before the filter, so the in-band level is the old one. */
+static std::vector<float> passbandNoise(size_t n, double rate, double amp, std::mt19937& rng) {
+    std::normal_distribution<float> g(0.0f, 1.0f);
+    const int T = 255, m = T / 2;
+    std::vector<double> h(T);
+    for (int k = 0; k < T; ++k) {
+        const double t = k - m, w = 0.42 - 0.5 * std::cos(2 * M_PI * k / (T - 1)) + 0.08 * std::cos(4 * M_PI * k / (T - 1));
+        auto lp = [&](double fc) { const double a = 2 * fc / rate; return t == 0 ? a : std::sin(M_PI * a * t) / (M_PI * t); };
+        h[k] = (lp(2800) - lp(250)) * w;
+    }
+    std::vector<float> nz(n + T), y(n);
+    for (auto& v : nz) v = (float)(amp * g(rng));
+    for (size_t i = 0; i < n; ++i) {
+        double a = 0;
+        for (int k = 0; k < T; ++k) a += h[k] * nz[i + k];
+        y[i] = (float)a;
+    }
+    return y;
+}
+
 /* The synthetic SSB voice from test-ssb-offset.cpp: harmonics of a pitch that glides (95-180 Hz), every one
  * moved by `offsetHz` (that IS the mistuning — +d = the audio d Hz HIGH), in a 250-2800 Hz passband, spoken
  * in syllables with a breath every 5 s, over band noise `snrDb` below the speech.
@@ -89,7 +110,6 @@ static int lagOf(const std::vector<float>& a, const std::vector<float>& b, size_
 static std::vector<float> voice(double rate, double secs, double offsetHz, double snrDb, unsigned seed, double f0c = 135,
                                 double glide = 1) {
     std::mt19937 rng(seed);
-    std::normal_distribution<float> g(0.0f, 1.0f);
     std::uniform_real_distribution<float> u(0.0f, 6.2831853f);
     const size_t n = (size_t)(rate * secs);
     std::vector<float> x(n);
@@ -110,8 +130,13 @@ static std::vector<float> voice(double rate, double secs, double offsetHz, doubl
             if (fk < 250 || fk > 2800) continue;
             s += std::cos(k * ph + 2 * M_PI * offsetHz * t + th[k]) / std::sqrt((double)k);
         }
-        x[i] = (float)(0.08 * s * syl * pause + nAmp * g(rng));
+        x[i] = (float)(0.08 * s * syl * pause);
     }
+    // ★ The band noise passes the same 250-2800 Hz passband, as a receiver's filter passes it (2026-10-17, with the
+    //   two-stage estimator: it reads the passband's floor from the noise between words, and white noise under a voice
+    //   that starts at 250 Hz says "a transmitter with a 250 Hz low cut" — see test-ssb-offset.cpp's voice()).
+    const auto nz = passbandNoise(n, rate, nAmp, rng);
+    for (size_t i = 0; i < n; ++i) x[i] += nz[i];
     return x;
 }
 
@@ -177,14 +202,14 @@ static std::vector<float> qso(double rate, double offA, double offB, double over
                               double childF0 = 300, double childGlide = 1, bool childFirst = false) {
     std::vector<float> x;
     std::mt19937 rng(seed);
-    std::normal_distribution<float> g(0.0f, 1.0f);
     const double nAmp = 0.25 * std::pow(10.0, -25 / 20.0);
     for (int r = 0; r < rounds; ++r) {
         for (int k = 0; k < 2; ++k) {
             const int who = childFirst ? 1 - k : k;   // 0 = the deep voice, 1 = the child
             const auto v = voice(rate, overSec, who ? offB : offA, 25, seed + 10 * r + who, who ? childF0 : 100.0, who ? childGlide : 1.0);
             x.insert(x.end(), v.begin(), v.end());
-            for (size_t i = 0; i < (size_t)(0.6 * rate); ++i) x.push_back((float)(nAmp * g(rng)));
+            const auto gap = passbandNoise((size_t)(0.6 * rate), rate, nAmp, rng);   // the same passband as the voices
+            x.insert(x.end(), gap.begin(), gap.end());
         }
     }
     return x;
@@ -485,7 +510,7 @@ int main() {
         }
         {
             // ★★★ STUART'S 500 Hz STEP (V12 474): lock on tune, step the dial +500 Hz — beyond the estimator's
-            //     ±300 Hz — keep listening to the now-mistuned voice for 20 s, and the lean must HOLD, not centre.
+            //     then ±300 Hz (inside its ±1200 since 2026-10-17) — keep listening to the now-mistuned voice for 20 s, and the lean must HOLD, not centre.
             //     Then step back: centre again; step −500: lean the other way. ("it pans but then I wait just off
             //     and it centres again" / "actually I cant trigger it again")
             BinauralTuning bt(false);
@@ -501,7 +526,10 @@ int main() {
             const double lr = db(rms(L, L.size() - (size_t)fs, L.size()), rms(R, R.size() - (size_t)fs, R.size()));
             std::printf("      500 Hz step: locked %s %+.1f → after 20 s off-tune %s %+.1f Hz, L−R %+.2f dB\n",
                         l0 ? "" : "(none)", h0, l1 ? "" : "(none)", h1, lr);
-            check(l0 && l1 && std::fabs(h1 - (h0 - 500)) < 1.0 && lr > 0.5,
+            // ★ Within 10 Hz of the truth (−500), not within 1 Hz of the knob's figure (2026-10-17): a 500 Hz step is now
+            //   inside the estimator's reach, so its answers REFINE the reckoned figure (kReckonTrustHz) — the lock's own
+            //   few Hz of error is corrected rather than carried along.
+            check(l0 && l1 && std::fabs(h1 + 500) < 10.0 && lr > 0.5,
                   "a 500 Hz step off a locked voice HOLDS its lean (left) through 20 s of mistuned speech");
             bt.setDial(7100000);
             feed(bt, voice(fs, 4, 0, 25, 15), (int)fs);
@@ -624,17 +652,19 @@ int main() {
             bt.setDial(dial);
             feed(bt, voice(fs, 10, 0, 25, 34), (int)fs);
             float h0 = 0; bt.ssbOffset(h0);
-            bt.setDial(dial - 500);                    // a 500 Hz step down: reckoned +500
-            bt.setSsbHint(dial + 80, true);            // the cue reads +580: the same voice, within its error
+            // ★ 1500 Hz, not 500 (2026-10-17): the estimator now reaches ±1200 Hz, so a 500 Hz step is IN reach and the
+            //   cue rightly leaves it alone (rule 1). Beyond reach means beyond ±1200.
+            bt.setDial(dial - 1500);                   // a 1500 Hz step down: reckoned +1500
+            bt.setSsbHint(dial + 80, true);            // the cue reads +1580: the same voice, within its error
             bt.pumpSsbForTest();
             float h1 = 0; bt.ssbOffset(h1);
-            check(std::fabs(h1 - (h0 + 500)) < 1, "beyond reach, an agreeing cue leaves the reckoned figure exact");
-            bt.setSsbHint(dial - 500 + 1500, true);     // now a voice 1.5 kHz up fills the passband
+            check(std::fabs(h1 - (h0 + 1500)) < 1, "beyond reach, an agreeing cue leaves the reckoned figure exact");
+            bt.setSsbHint(dial - 1500 + 3000, true);    // now a voice 3 kHz up fills the passband
             bt.pumpSsbForTest();
             float h2 = 0; bt.ssbOffset(h2);
             float st[12]; bt.stats(st, 12);
-            std::printf("      reckoned %+.1f → agreeing cue keeps %+.1f; disagreeing cue → %+.1f (coarse %d)\n", h0 + 500, h1, h2, (int)st[10]);
-            check(std::fabs(h2 - 1500) < 1 && st[10] == 1, "beyond reach, a disagreeing cue replaces the reckoned figure");
+            std::printf("      reckoned %+.1f → agreeing cue keeps %+.1f; disagreeing cue → %+.1f (coarse %d)\n", h0 + 1500, h1, h2, (int)st[10]);
+            check(std::fabs(h2 - 3000) < 1 && st[10] == 1, "beyond reach, a disagreeing cue replaces the reckoned figure");
         }
         {
             // ★ HANDED BACK: a coarse-held answer inside the estimator's reach is replaced by the estimator.

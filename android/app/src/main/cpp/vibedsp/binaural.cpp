@@ -613,7 +613,11 @@ void BinauralTuning::ssbStep_() {
         if (ssbValid_.load()) { ssbHz_.store(ssbHz_.load() - d); if (!coarseHeld_) reckoned_ = true; }
         // ★★ The knob's figure is not a guess: it leans at once, past the dead zone, without kSsbEnterHz.
         leanUpdate_(true);
-        if (est_) est_->reset();
+        // ★★ …and the estimator's evidence MOVES with it rather than being thrown away (2026-10-17): its comb curve and
+        //    the voice's spectrum are in audio Hz, and the voice's audio moved by −Δ on USB, +Δ on LSB. On the deep
+        //    side only seconds of intonation tell one pitch alias from the next, and a knob turned in 500 Hz steps
+        //    would otherwise restart that from nothing at every click.
+        if (est_) est_->shiftAudio(src == SsbUsb ? -d : d);
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
         // A move beyond the estimator's reach leaves nothing it could confirm; let the answer go stale.
         if (std::fabs(ssbHz_.load()) > kSsbHoldHz) release_();
@@ -636,12 +640,11 @@ void BinauralTuning::ssbStep_() {
         if (est_->push(chunk_.data(), n)) {
             estimates_.fetch_add(1);
             const SsbOffsetEstimate& e = est_->last();
-            // ★★ A HIGH VOICE counts for less (kHighF0Hz): its gate rises with its pitch.
+            // ★★ FAST's own gate (measured on off-air clips — SsbOffsetEstimate::passes), and a HIGH VOICE counts for
+            //    less (kHighF0Hz): its confidence floor rises with its pitch.
             const float hiF0 = e.f0Hz > kHighF0Hz
                 ? std::min(kHighF0GateMax, 1.0f + kHighF0GatePerHz * (e.f0Hz - kHighF0Hz)) : 1.0f;
-            const bool gated = e.valid && e.frames >= e.minFrames
-                && e.confidence >= kFastGateScale * hiF0 * SsbOffsetEstimator::gateFor(e.offsetHz)
-                && (std::fabs(e.offsetHz) <= SsbOffsetEstimator::kLargeHz || e.snrDb >= SsbOffsetEstimator::kLargeMinSnrDb)
+            const bool gated = e.passes() && e.confidence >= hiF0 * e.gate.confidence
                 && std::fabs(e.offsetHz) <= kSsbRangeHz;
             // ★ +d = the audio is d Hz HIGH. USB: the signal is above the dial (tune up, lean right) → +d.
             //   LSB inverts the audio: high audio means the signal is BELOW the dial → −d.
@@ -657,13 +660,12 @@ void BinauralTuning::ssbStep_() {
             const bool high = e.f0Hz > kHighF0Hz;
             const bool agreesHeld = ssbValid_.load() && std::fabs(sb * e.offsetHz - ssbHz_.load()) <= kAgreeHz;
             const bool dragsLow = high && lowVoiceHeld_ && ssbValid_.load() && !coarseHeld_ && !agreesHeld;
-            // ★★ …and an answer that sits exactly where this voice's own aliases of "on tune" would (±f0, ±f0/2) is not
-            //    believed from it unless it agrees with what is held: with nothing held yet, a near-monotone child
-            //    otherwise locks a pitch off tune before anyone else has spoken (§10, the child speaking FIRST).
-            const float a = std::fabs(e.offsetHz);
-            const bool aliasShaped = high && !agreesHeld
-                && (std::fabs(a - e.f0Hz) <= kAgreeHz || std::fabs(a - 0.5f * e.f0Hz) <= kAgreeHz);
-            if (gated && !beyondReach && !contradicts && !dragsLow && !aliasShaped && std::isfinite(e.offsetHz))
+            // ★ The old rule 3 — ignore a high voice's answer that sits at ±f0 or ±f0/2 (its own aliases of "on tune")
+            //   unless it agrees with what is held — is GONE (2026-10-17): the two-stage estimator no longer makes
+            //   those aliases. Its below-carrier teeth refute the alias a pitch up, its memory and clarity floor the
+            //   others; measured in §10, the monotone 250/300 Hz children on tune (speaking first too) never lean
+            //   without it, and a child really 150 Hz off — half its pitch, which the rule refused — is now read right.
+            if (gated && !beyondReach && !contradicts && !dragsLow && std::isfinite(e.offsetHz))
                 ssbAccept_(sb * e.offsetHz, e.f0Hz);
         }
     }
