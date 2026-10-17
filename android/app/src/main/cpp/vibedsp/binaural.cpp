@@ -101,6 +101,181 @@ void BinauralSpatialiser::process(float* L, float* R, int n, double rate, float 
     }
 }
 
+// ── SPREAD: the filter bank ──────────────────────────────────────────────────────────────────────
+
+BinauralSpread::BinauralSpread() = default;
+BinauralSpread::~BinauralSpread() = default;
+
+float BinauralSpread::panAt(float f, int kind, float centre, float half) {
+    if (kind == Off || !(half > 0) || !std::isfinite(f)) return 0.0f;
+    // ★ Position: −1 at the scale's low edge, +1 at its high edge, linear in Hz. LSB and lower-CW audio runs
+    //   the other way in RF, so the sign flips — higher RF is to the right in every sideband.
+    const float sense = (kind == Lsb || kind == CwLower) ? -1.0f : 1.0f;
+    float u = sense * (f - centre) / half;
+    u = std::max(-1.0f, std::min(1.0f, u));
+    const float a = std::pow(std::fabs(u), kShape);
+    return u >= 0 ? a : -a;
+}
+
+void BinauralSpread::configure_(double rate) {
+    fs_ = rate;
+    int n = 128;
+    while (n < 4096 && rate / n > kBinHz) n <<= 1;   // 48 kHz → 512 (93.75 Hz), 12 kHz → 128, 96 kHz → 1024
+    n_ = n; h_ = n / 2;
+    fwd_ = std::make_unique<RealFFT>(n_);
+    inv_ = std::make_unique<RealFFT>(n_, true);
+    win_.resize(n_);
+    for (int i = 0; i < n_; ++i) win_[i] = (float)std::sin(kPi * (i + 0.5) / n_);   // sqrt of a periodic Hann
+    in_.assign(n_, 0.0f); frame_buf_.assign(n_, 0.0f); outL_.assign(n_, 0.0f); outR_.assign(n_, 0.0f);
+    tmp_.assign(n_, 0.0f);
+    const int b = n_ / 2 + 1;
+    spec_.assign(b, cf32(0, 0)); specL_.assign(b, cf32(0, 0)); specR_.assign(b, cf32(0, 0));
+    wL_.assign(b, cf32(0, 0)); wR_.assign(b, cf32(0, 0));
+    psm_.assign(b, -200.0f); floor_.assign(b, -200.0f);
+    pos_ = 0; warm_ = 0; wAmt_ = -1; cwHops_ = 0;
+}
+
+void BinauralSpread::weights_() {
+    // ★ Rebuilt only when the amount, the map or the CW centre moves — steady, it is never touched.
+    const int b = n_ / 2 + 1;
+    const bool cw = kind_ == CwUpper || kind_ == CwLower;
+    const float half = 0.5f * std::fabs(hi_ - lo_);
+    const float centre = cw ? cwCentre_ : 0.5f * (lo_ + hi_);
+    const float norm = 1.0f / (float)n_;               // KissFFT's round trip scales by N
+    for (int k = 0; k < b; ++k) {
+        const float f = (float)(k * fs_ / n_);
+        const float p = amt_ * panAt(f, kind_, centre, half);
+        const float farL = std::max(0.0f, p), farR = std::max(0.0f, -p);   // + = sits right: the LEFT ear is far
+        auto w = [&](float far) {
+            const float g = std::pow(10.0f, -BinauralSpatialiser::kMaxDropDb * far / 20.0f);
+            const float sh = 1.0f - BinauralSpatialiser::kShelfCut * far;
+            const float r = f / BinauralSpatialiser::kShelfHz;
+            const float mag = std::sqrt((1.0f + sh * sh * r * r) / (1.0f + r * r));   // the head-shadow shelf at f
+            const float ph = (float)(-2.0 * kPi * f * far * BinauralSpatialiser::kMaxItdSec);   // the delay, as phase
+            return cf32(g * mag * norm * std::cos(ph), g * mag * norm * std::sin(ph));
+        };
+        wL_[k] = w(farL); wR_[k] = w(farR);
+    }
+    wAmt_ = amt_;
+}
+
+void BinauralSpread::cwMeasure_() {
+    /* ★★ THE CW NOTE = THE MIDDLE OF THE NOISE. Each bin's power is smoothed (~0.1 s), and a floor follows it
+     *    DOWN at once and UP slowly (0.5 dB/s) — so a keyed CW signal, which leaves gaps, barely lifts it, and what
+     *    is left is the shape of the receiver's filter on its own noise. The passband is where that floor stands
+     *    within 6 dB of its top; its middle is the note. Too narrow (< 2 bins), too wide (> 3 kHz) or silent
+     *    (squelch, a −120 dB floor) → keep the last answer. */
+    const int b = n_ / 2 + 1;
+    const double binHz = fs_ / n_;
+    const int k0 = std::max(1, (int)std::ceil(100.0 / binHz)), k1 = std::min(b - 2, (int)(3200.0 / binHz));
+    if (k1 - k0 < 3) return;
+    int pk = k0;
+    for (int k = k0; k <= k1; ++k) if (floor_[k] > floor_[pk]) pk = k;
+    if (floor_[pk] < -120.0f) return;
+    const float thr = floor_[pk] - 6.0f;
+    int a = pk, z = pk;
+    while (a > k0 && floor_[a - 1] >= thr) --a;
+    while (z < k1 && floor_[z + 1] >= thr) ++z;
+    const double lo = (a - 0.5) * binHz, hi = (z + 0.5) * binHz;
+    if (z - a + 1 < 2 || hi - lo > 3000.0) return;
+    const float c = (float)(0.5 * (lo + hi));
+    if (!cwMeasured_) { cwCentre_ = c; cwMeasured_ = true; wAmt_ = -1; return; }
+    // Moves of under a bin are measurement noise; larger ones glide (half-way per look, ~4 looks a second).
+    if (std::fabs(c - cwCentre_) > binHz) { cwCentre_ += 0.5f * (c - cwCentre_); wAmt_ = -1; }
+}
+
+void BinauralSpread::frame_() {
+    const int n = n_, h = h_, b = n_ / 2 + 1;
+    for (int i = 0; i < n; ++i) frame_buf_[i] = in_[i] * win_[i];
+    fwd_->forward(frame_buf_.data(), spec_.data());
+    if (kind_ == CwUpper || kind_ == CwLower) {
+        const float rise = 0.5f * (float)h / (float)fs_;   // dB per hop: 0.5 dB/s
+        // ★ …but 12 dB/s while the floor sits more than 12 dB under the power: after a squelch closes and opens,
+        //   the floor has followed the silence down, and at 0.5 dB/s it would take minutes to find the noise again.
+        //   A keyed mark (≈ 0.1 s) lifts it barely a dB before the next space drops it back.
+        const float riseFast = 12.0f * (float)h / (float)fs_;
+        for (int k = 0; k < b; ++k) {
+            const float p = 10.0f * std::log10(std::norm(spec_[k]) + 1e-20f);
+            // ★ The first frame seeds both (an unset floor of −200 dB would take hours to rise at 0.5 dB/s).
+            if (psm_[k] <= -199.0f) { psm_[k] = p; floor_[k] = p; continue; }
+            psm_[k] += 0.1f * (p - psm_[k]);
+            floor_[k] = psm_[k] < floor_[k] ? psm_[k] : floor_[k] + (psm_[k] - floor_[k] > 12.0f ? riseFast : rise);
+        }
+        if (++cwHops_ * h >= (int)(0.25 * fs_)) { cwHops_ = 0; cwMeasure_(); }
+    }
+    if (wAmt_ != amt_) weights_();
+    for (int k = 0; k < b; ++k) { specL_[k] = spec_[k] * wL_[k]; specR_[k] = spec_[k] * wR_[k]; }
+    // Slide the overlap-add accumulators by a hop, then add this frame (synthesis window applied).
+    std::memmove(outL_.data(), outL_.data() + h, sizeof(float) * (n - h));
+    std::memmove(outR_.data(), outR_.data() + h, sizeof(float) * (n - h));
+    std::fill(outL_.begin() + (n - h), outL_.end(), 0.0f);
+    std::fill(outR_.begin() + (n - h), outR_.end(), 0.0f);
+    inv_->inverse(specL_.data(), tmp_.data());
+    for (int i = 0; i < n; ++i) outL_[i] += tmp_[i] * win_[i];
+    inv_->inverse(specR_.data(), tmp_.data());
+    for (int i = 0; i < n; ++i) outR_[i] += tmp_[i] * win_[i];
+    std::memmove(in_.data(), in_.data() + h, sizeof(float) * (n - h));
+}
+
+void BinauralSpread::process(float* L, float* R, int n, double rate, int kind, float edgeLo, float edgeHi) {
+    if (n <= 0 || rate <= 0 || !L || !R) return;
+    if (kind < Off || kind > CwLower) kind = Off;
+    if (!running_) {
+        if (kind == Off) return;                        // bypassed: not a single multiply
+        if (rate != fs_ || !fwd_) configure_(rate);
+        else {
+            std::fill(in_.begin(), in_.end(), 0.0f); std::fill(outL_.begin(), outL_.end(), 0.0f);
+            std::fill(outR_.begin(), outR_.end(), 0.0f); pos_ = 0; warm_ = 0; cwHops_ = 0;
+        }
+        running_ = true; amt_ = 0; wet_ = 0; wAmt_ = -1; kind_ = kind;
+        if (kind_ == CwUpper || kind_ == CwLower) {
+            cwMeasured_ = false; cwCentre_ = kCwDefaultHz;
+            std::fill(psm_.begin(), psm_.end(), -200.0f); std::fill(floor_.begin(), floor_.end(), -200.0f);
+        }
+    } else if (rate != fs_) {
+        // A rate change mid-run: start the bank again from a dry crossfade (rare — a reconnect).
+        configure_(rate); amt_ = 0; wet_ = 0; kind_ = kind == Off ? kind_ : kind;
+    }
+    if (std::isfinite(edgeLo) && std::isfinite(edgeHi) && std::fabs(edgeHi - edgeLo) >= 100.0f
+        && (edgeLo != lo_ || edgeHi != hi_)) { lo_ = std::min(edgeLo, edgeHi); hi_ = std::max(edgeLo, edgeHi); wAmt_ = -1; }
+
+    const float dAmt = (float)(1.0 / (kAmountSec * fs_)), dWet = (float)(1.0 / (kWetSec * fs_));
+    const int h = h_;
+    for (int i = 0; i < n; ++i) {
+        // ★ The order of a glide: IN — warm a frame, wet up, then the spread up. OUT (or a new map) — the spread
+        //   down first, then (OUT only) wet down. The weights follow the amount once per hop.
+        const bool want = kind != Off;
+        if (want && kind != kind_) {
+            if (amt_ > 0) amt_ = std::max(0.0f, amt_ - dAmt);
+            else {
+                if ((kind_ == CwUpper || kind_ == CwLower) != (kind == CwUpper || kind == CwLower)) {
+                    cwMeasured_ = false; cwCentre_ = kCwDefaultHz;
+                    std::fill(psm_.begin(), psm_.end(), -200.0f); std::fill(floor_.begin(), floor_.end(), -200.0f);
+                }
+                kind_ = kind; wAmt_ = -1;
+            }
+        } else if (want) {
+            if (warm_ < n_) ++warm_;
+            else if (wet_ < 1) wet_ = std::min(1.0f, wet_ + dWet);
+            else if (amt_ < 1) amt_ = std::min(1.0f, amt_ + dAmt);
+        } else {
+            if (amt_ > 0) amt_ = std::max(0.0f, amt_ - dAmt);
+            else if (wet_ > 0) wet_ = std::max(0.0f, wet_ - dWet);
+        }
+        const float dl = L[i], dr = R[i];
+        in_[n_ - h + pos_] = 0.5f * (dl + dr);
+        const float yl = outL_[pos_], yr = outR_[pos_];
+        L[i] = dl + wet_ * (yl - dl);
+        R[i] = dr + wet_ * (yr - dr);
+        if (++pos_ == h) { pos_ = 0; frame_(); }
+        if (!want && amt_ <= 0 && wet_ <= 0) {
+            // Fully out: the rest of this block (from the next sample) is dry, and the bank stops.
+            running_ = false; amt_ = 0; wet_ = 0;
+            return;
+        }
+    }
+}
+
 // ── The controller ───────────────────────────────────────────────────────────────────────────────
 
 BinauralTuning::BinauralTuning(bool startWorker) : ring_(kRing, 0.0f), startWorker_(startWorker) {
@@ -128,6 +303,7 @@ void BinauralTuning::setSource(int source, float deadHz, float fullHz) {
         gen_.fetch_add(1);
         ssbValid_.store(false);
         givenValid_.store(false);
+        hintValid_.store(false);    // a waterfall cue belongs to the sideband it was read for
     }
     if ((source == SsbUsb || source == SsbLsb) && enabled_.load()) ensureWorker_();
 }
@@ -143,6 +319,18 @@ void BinauralTuning::setStereoHint(int hint) {
 
 void BinauralTuning::setDial(double hz) {
     if (std::isfinite(hz)) dial_.store(hz);
+}
+
+void BinauralTuning::setSsbHint(double carrierHz, bool valid) {
+    if (std::isfinite(carrierHz)) hintCarrier_.store(carrierHz);
+    hintValid_.store(valid && std::isfinite(carrierHz));
+}
+
+void BinauralTuning::setSpread(int kind, float edgeLoHz, float edgeHiHz) {
+    if (kind < BinauralSpread::Off || kind > BinauralSpread::CwLower) kind = BinauralSpread::Off;
+    if (std::isfinite(edgeLoHz)) spreadLo_.store(edgeLoHz);
+    if (std::isfinite(edgeHiHz)) spreadHi_.store(edgeHiHz);
+    spreadKind_.store(kind);
 }
 
 bool BinauralTuning::ssbOffset(float& hz) const {
@@ -213,13 +401,23 @@ void BinauralTuning::processPlanar(float* L, float* R, int n, int rate) {
     if (!L || !R || n <= 0 || rate <= 0) return;
     if (resetFx_.exchange(false)) {
         fx_.reset();
+        spread_.reset();
         stereoState_ = false; stereoHeld_ = 0; stereoW_ = 1; sideRatio_ = 0; sideStereo_ = false;
     }
     const int src = source_.load(std::memory_order_relaxed);
-    if (src == SsbUsb || src == SsbLsb) ssbFeed_(L, R, n, rate);   // before the effect: the estimator hears the source
-    const float p = targetPan_(n, rate, L, R);
+    const int sk = spreadKind_.load(std::memory_order_relaxed);
+    // ★ The SSB estimator is fed only under GUIDE: under SPREAD nothing reads its answer, and on a 1 GB phone a
+    //   decoder nobody listens to is CPU the audio needs. (Back to GUIDE, it locks again from fresh speech.)
+    if ((src == SsbUsb || src == SsbLsb) && sk == BinauralSpread::Off) ssbFeed_(L, R, n, rate);   // before the effect
+    float p = targetPan_(n, rate, L, R);
+    // ★★ The two styles are exclusive: while SPREAD runs (or glides in or out) the guide lean is held at centre —
+    //    the spatialiser glides it there (kPanTauSec), and at centre it is exactly transparent.
+    spread_.process(L, R, n, rate, sk, spreadLo_.load(std::memory_order_relaxed), spreadHi_.load(std::memory_order_relaxed));
+    if (sk != BinauralSpread::Off || spread_.running()) p = 0.0f;
     fx_.process(L, R, n, rate, p);
     panPub_.store(fx_.pan(), std::memory_order_relaxed);
+    spreadPub_.store(spread_.running() ? spread_.amount() : 0.0f, std::memory_order_relaxed);
+    cwCentrePub_.store(spread_.cwCentreHz(), std::memory_order_relaxed);
 }
 
 int BinauralTuning::processInt16(const int16_t* in, int inCh, int frames, int rate, int16_t* out) {
@@ -274,6 +472,39 @@ void BinauralTuning::ssbAccept_(float signalHz) {
     if (agree < kMedianMin || agree * 2 <= (int)n) return;
     ssbHz_.store(med);
     ssbValid_.store(true);
+    // ★ The estimator has spoken (two agreeing answers): a coarse-held answer hands over to it here.
+    if (coarseHeld_) { coarseHeld_ = false; coarsePub_.store(false); }
+}
+
+void BinauralTuning::release_() {
+    ssbValid_.store(false); hist_.clear(); reckoned_ = false;
+    coarseHeld_ = false; coarsePub_.store(false);
+}
+
+void BinauralTuning::coarseStep_() {
+    // ★ The hand-off — see setSsbHint in binaural.h for the order of authority and why.
+    if (!hintValid_.load()) { if (coarseHeld_) release_(); return; }
+    const float c = (float)(hintCarrier_.load() - dial_.load());
+    if (!std::isfinite(c) || std::fabs(c) > kSsbHoldHz) { if (coarseHeld_) release_(); return; }
+    auto seed = [&] {
+        hist_.clear(); reckoned_ = false;
+        coarseHeld_ = true; coarsePub_.store(true);
+        ssbHz_.store(c); ssbValid_.store(true);
+    };
+    if (coarseHeld_) {
+        // Ours already: follow the cue — unless it now says "on tune or within its own error", which it cannot
+        // tell apart, so let go and leave the fine centring to the estimator.
+        if (std::fabs(c) < kCoarseMinHz) release_();
+        else ssbHz_.store(c);
+        return;
+    }
+    const bool valid = ssbValid_.load();
+    const float h = ssbHz_.load();
+    if (!valid) { if (std::fabs(c) >= kCoarseMinHz) seed(); return; }
+    if (std::fabs(h) <= kSsbRangeHz) return;              // 1. a fine answer in reach: never fought
+    if (std::fabs(c - h) <= kCoarseAgreeHz) return;       // 3. the same voice: the knob's exact figure stays
+    if (std::fabs(c) >= kCoarseMinHz) seed();             //    a different voice fills the passband
+    else release_();                                      //    a voice on tune: let the estimator look
 }
 
 void BinauralTuning::ssbStep_() {
@@ -285,11 +516,13 @@ void BinauralTuning::ssbStep_() {
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
         if (est_) { est_.reset(); estRate_ = 0; }
         hist_.clear(); ssbValid_.store(false); workerGen_ = gen; workerSrc_ = src; haveDial_ = false; reckoned_ = false;
+        coarseHeld_ = false; coarsePub_.store(false);
         return;
     }
     if (gen != workerGen_ || src != workerSrc_) {
         workerGen_ = gen; workerSrc_ = src;
         hist_.clear(); ssbValid_.store(false); reckoned_ = false;
+        coarseHeld_ = false; coarsePub_.store(false);
         if (est_) est_->reset();
         haveDial_ = false;
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
@@ -304,12 +537,15 @@ void BinauralTuning::ssbStep_() {
         const float d = (float)(dial - lastDial_);
         lastDial_ = dial;
         for (float& v : hist_) v -= d;
-        if (ssbValid_.load()) { ssbHz_.store(ssbHz_.load() - d); reckoned_ = true; }
+        // ★ A coarse-held answer moves too, but stays COARSE (not reckoned): its figure is still the cue's ±150 Hz,
+        //   so the estimator may replace it, not merely refine it. coarseStep_ re-reads the cue below anyway.
+        if (ssbValid_.load()) { ssbHz_.store(ssbHz_.load() - d); if (!coarseHeld_) reckoned_ = true; }
         if (est_) est_->reset();
         rd_.store(wr_.load(std::memory_order_acquire), std::memory_order_release);
         // A move beyond the estimator's reach leaves nothing it could confirm; let the answer go stale.
-        if (std::fabs(ssbHz_.load()) > kSsbHoldHz) { ssbValid_.store(false); hist_.clear(); reckoned_ = false; }
+        if (std::fabs(ssbHz_.load()) > kSsbHoldHz) release_();
     }
+    coarseStep_();
     const int rate = ringRate_.load();
     if (rate <= 0) return;
     if (!est_ || rate != estRate_) {
@@ -344,7 +580,8 @@ void BinauralTuning::ssbStep_() {
         }
     }
     // ★ Only the ESTIMATOR's own answers go stale — a reckoned one holds while the dial stays put (see kSsbHoldHz).
-    if (ssbValid_.load() && !reckoned_ && nowSec() - lastAccept_ > kSsbStaleSec) { ssbValid_.store(false); hist_.clear(); }
+    //   Nor does a coarse-held one: the cue is live, and its own going-invalid releases it (coarseStep_).
+    if (ssbValid_.load() && !reckoned_ && !coarseHeld_ && nowSec() - lastAccept_ > kSsbStaleSec) { ssbValid_.store(false); hist_.clear(); }
 }
 
 int BinauralTuning::stats(float* o, int cap) const {
@@ -353,9 +590,10 @@ int BinauralTuning::stats(float* o, int cap) const {
     float off = 0; bool ok = false;
     if (src == Given) { off = given_.load(); ok = givenValid_.load(); }
     else if (src == SsbUsb || src == SsbLsb) { off = ssbHz_.load(); ok = ssbValid_.load(); }
-    const float v[9] = { enabled_.load() ? 1.0f : 0.0f, (float)src, off, ok ? 1.0f : 0.0f, panPub_.load(), stereoWPub_.load(),
-                         (float)estimates_.load(), (float)accepted_.load(), (float)drops_.load() };
-    const int n = std::min(cap, 9);
+    const float v[12] = { enabled_.load() ? 1.0f : 0.0f, (float)src, off, ok ? 1.0f : 0.0f, panPub_.load(), stereoWPub_.load(),
+                          (float)estimates_.load(), (float)accepted_.load(), (float)drops_.load(),
+                          spreadPub_.load(), coarsePub_.load() ? 1.0f : 0.0f, cwCentrePub_.load() };
+    const int n = std::min(cap, 12);
     for (int i = 0; i < n; ++i) o[i] = v[i];
     return n;
 }
@@ -378,6 +616,12 @@ void  vibe_binaural_set_offset(void* h, float hz, int valid) {
 }
 void  vibe_binaural_set_stereo(void* h, int hint) { if (h) static_cast<BinauralTuning*>(h)->setStereoHint(hint); }
 void  vibe_binaural_set_dial(void* h, double hz) { if (h) static_cast<BinauralTuning*>(h)->setDial(hz); }
+void  vibe_binaural_set_ssb_hint(void* h, double carrierHz, int valid) {
+    if (h) static_cast<BinauralTuning*>(h)->setSsbHint(carrierHz, valid != 0);
+}
+void  vibe_binaural_set_spread(void* h, int kind, float edgeLoHz, float edgeHiHz) {
+    if (h) static_cast<BinauralTuning*>(h)->setSpread(kind, edgeLoHz, edgeHiHz);
+}
 void  vibe_binaural_process_planar(void* h, float* L, float* R, int n, int rate) {
     if (h) static_cast<BinauralTuning*>(h)->processPlanar(L, R, n, rate);
 }

@@ -118,9 +118,9 @@ void ComplexFFT::powerDbShifted(const cf32* in, const float* win, float* outDb, 
     powerToDbBlock(z,         outDb + h, n_ - h, scale);   // lower bins → right
 }
 
-RealFFT::RealFFT(int size) : n_(size) {
-    // inverse=0 (forward), no preallocated mem/lenmem -> KissFFT mallocs cfg.
-    cfg_ = kiss_fftr_alloc(n_, 0, nullptr, nullptr);
+RealFFT::RealFFT(int size, bool inverse) : n_(size) {
+    // No preallocated mem/lenmem -> KissFFT mallocs cfg. A kiss_fftr cfg is one direction only.
+    cfg_ = kiss_fftr_alloc(n_, inverse ? 1 : 0, nullptr, nullptr);
     scratch_.resize(bins());
 }
 
@@ -133,6 +133,12 @@ void RealFFT::forward(const float* in, cf32* out) {
     kiss_fftr((kiss_fftr_cfg)cfg_,
               reinterpret_cast<const kiss_fft_scalar*>(in),
               reinterpret_cast<kiss_fft_cpx*>(out));
+}
+
+void RealFFT::inverse(const cf32* in, float* out) {
+    kiss_fftri((kiss_fftr_cfg)cfg_,
+               reinterpret_cast<const kiss_fft_cpx*>(in),
+               reinterpret_cast<kiss_fft_scalar*>(out));
 }
 
 void RealFFT::powerDb(const float* in, float* outDb, float scale) {

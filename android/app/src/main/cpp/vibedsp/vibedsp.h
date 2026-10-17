@@ -40,9 +40,12 @@ struct stereo { float l, r; };
 // Forward real-to-complex FFT for the waterfall. Wraps KissFFT's kiss_fftr.
 // `size` must be even (we always use powers of two). Not thread-safe; one
 // instance per pipeline thread.
+// ★ `inverse` builds the complex-to-real transform instead (kiss_fftri) — V12 binaural SPREAD's
+//   overlap-add filter bank resynthesises through it. Unnormalised, like KissFFT: a forward and an
+//   inverse in a row scale by size().
 class RealFFT {
 public:
-    explicit RealFFT(int size);
+    explicit RealFFT(int size, bool inverse = false);
     ~RealFFT();
     RealFFT(const RealFFT&) = delete;
     RealFFT& operator=(const RealFFT&) = delete;
@@ -53,6 +56,8 @@ public:
     // Transform `n` real input samples -> `bins()` complex outputs.
     // Caller supplies input length == size(); out length == bins().
     void forward(const float* in, cf32* out);
+    // Inverse only (built with inverse=true): `bins()` complex inputs -> size() real outputs.
+    void inverse(const cf32* in, float* out);
 
     // Convenience: power spectrum in dB (10*log10(|X|^2)), length bins().
     // `scale` normalises for FFT size + window gain (caller-computed).

@@ -23,6 +23,16 @@
 //      WFM            — active only while MONO: it fades out as stereo locks (setStereoHint), with hysteresis and
 //                       a slow crossfade, so a flickering pilot near lock cannot make it alternate.
 //      DAB            — never (the caller sends Source::None).
+//      SSB, COARSE    — the CALLER again, from the waterfall (binauralOffset.ts ssbCoarseCarrier): where the
+//                       voice's band starts. Reaches a few kHz where the estimator reaches ±300 Hz, so it is
+//                       what makes the lean trigger when you ARRIVE off a voice. It only steps in where the
+//                       estimator cannot answer — see setSsbHint() for the hand-off.
+//
+// ★★ TWO STYLES (setSpread). GUIDE is everything above: one lean for the whole sound, telling you which way to
+//    tune. SPREAD (SSB/CW only) leans each AUDIO FREQUENCY by where it lies in the passband — the low end of the
+//    passband to the left ear, the high end to the right — so a crowded band arrives as a stereo picture, with
+//    two signals either side of the dial in different ears (BinauralSpread). They are exclusive: under SPREAD
+//    the guide lean is held at centre.
 //
 // ★★ THREAD RULES — the audio thread is never made to wait (Network > Audio > Spectrum > Decoders):
 //    • every setter may be called from ANY thread; it only stores atomics.
@@ -40,6 +50,8 @@
 #include <memory>
 #include <thread>
 #include <vector>
+
+#include "vibedsp.h"   // RealFFT, cf32 (SPREAD's filter bank)
 
 namespace vibedsp {
 
@@ -84,6 +96,100 @@ private:
     Ear l_, r_;
 };
 
+/** ★★ SPREAD — each audio frequency placed by where it lies in the passband (Stuart, 2026-10-17: "if say you are
+ *  halfway between 2 signals you get one in the left and one in the right" · "so a crowded band gives you stereo
+ *  separation of the signals").
+ *
+ *  ★★ AN OVERLAP-ADD FILTER BANK. Short FFT frames (≈ 94 Hz bins: 512 points at 48 kHz, scaled with the rate),
+ *     50 % overlap, sqrt-Hann on analysis AND synthesis (their product, the Hann, overlap-adds to exactly 1, so
+ *     with every weight at 1 the output IS the input, delayed). Each bin of the mono input is resynthesised
+ *     twice, once per ear, through a complex weight: that ear's far-ness treatment at that bin's frequency —
+ *     the SAME three cues as BinauralSpatialiser (level ≤ kMaxDropDb, delay ≤ kMaxItdSec as a phase turn, and
+ *     the head-shadow shelf's magnitude at that frequency). Not hard L/R: nothing is ever silenced.
+ *     ✗ Not a bank of IIR band-passes: crossovers that sum flat need careful design per band count, and a pan
+ *       that varies smoothly with frequency is exactly what per-bin weights give for free.
+ *     ★ 50 %, not 75 %, overlap: half the FFTs (cost matters on the 1 GB phones), and it is enough because the
+ *       weights are FIXED while the style is steady and SMOOTH across frequency, so each ear's filter is short
+ *       (≲ 2 ms against a 10.7 ms frame) and the circular wrap that 75 % would hide is already negligible.
+ *  ★ LATENCY: one frame, N samples — 10.7 ms at 48 kHz (latencySamples()). Only while SPREAD runs: off, it is
+ *    bypassed outright and costs nothing.
+ *
+ *  ★★ THE SCALE IS FIXED Hz PER POSITION, from the DEFAULT SSB passband (the caller passes it: 50-2700 Hz, the
+ *     app's MODE_BANDWIDTHS.usb). Its low edge is full LEFT, its high edge full RIGHT, its middle (1375 Hz) the
+ *     centre, linear in Hz between — and it does NOT follow the filter, so a signal keeps its place when you widen
+ *     or narrow. Beyond the default edges it clamps at full. ("you wouldnt hear them anyway if the passband is too
+ *     narrow" — a narrow filter simply shows the middle of the picture.)
+ *     • USB: higher audio IS higher RF → higher audio to the right.
+ *     • LSB: higher audio is LOWER RF, so the map is mirrored: higher RF stays to the right in both sidebands.
+ *     • CW: the same Hz-per-position, centred on the CW note so the tuned signal is dead centre. The note is not
+ *       ours to know (VibeServer beats at 600 Hz, a Kiwi at 500, others their own, and none reports it — see
+ *       binauralOffset.ts), so it is MEASURED: the middle of the band the receiver's noise fills in the audio
+ *       (cwCentreHz_). Every backend centres its CW filter on its own note, so the passband's middle IS the note.
+ *       Until the noise has been heard, kCwDefaultHz.
+ *       ★ The same Hz-per-position means a 400-500 Hz CW filter shows only the MIDDLE of the picture: a signal 200 Hz
+ *         off the note leans a fraction of a dB. That is the rule as asked ("you wouldnt hear them anyway if the
+ *         passband is too narrow"); widen the filter and the CW band spreads out like SSB.
+ *  ★ THE PAN LAW: far-ness = |position|^kShape. A voice's energy sits low in the passband (most of it a few hundred
+ *    Hz either side of 1 kHz), so a straight line would hold one on-tune voice off to the left. The power law keeps
+ *    the middle of the picture gentle — one voice sounds centred — and still reaches full treatment at the edges,
+ *    where a second signal lives. (Measured in vibeserver/test-binaural.cpp, §8: |L−R| under 1 dB.)
+ *  ★ SWITCHING IS A GLIDE, never a click: in, the bank warms up for one frame, the output crossfades from the dry
+ *    path to the bank's (still unspread) output over kWetSec, then the spread grows over kAmountSec; out, the same
+ *    in reverse. A change of sideband glides the spread to nothing, swaps the map, and glides it back.
+ *  Audio thread only. */
+class BinauralSpread {
+public:
+    enum Kind : int { Off = 0, Usb = 1, Lsb = 2, CwUpper = 3, CwLower = 4 };
+    static constexpr float kShape = 1.5f;          ///< far-ness = |position|^kShape (see THE PAN LAW)
+    static constexpr float kAmountSec = 0.25f;     ///< the spread grows or shrinks over this
+    static constexpr float kWetSec = 0.04f;        ///< dry ↔ bank crossfade
+    static constexpr float kCwDefaultHz = 600.0f;  ///< CW note before the passband has been measured
+    static constexpr float kBinHz = 94.0f;         ///< target bin width: N = the power of two giving ≤ this
+
+    BinauralSpread();
+    ~BinauralSpread();
+    BinauralSpread(const BinauralSpread&) = delete;
+    BinauralSpread& operator=(const BinauralSpread&) = delete;
+
+    /** Mono (the mean of L and R) in → stereo out, in place. `kind` Off = glide out and bypass. `edgeLo/HiHz`:
+     *  the default SSB passband's audio edges (full left / full right before any mirroring). */
+    void process(float* L, float* R, int n, double rate, int kind, float edgeLoHz, float edgeHiHz);
+    /** Out of the path at once (binaural switched back on: the next use warms up from silence, never from a stale
+     *  frame of whatever played before). */
+    void reset() { running_ = false; amt_ = 0; wet_ = 0; }
+    /** Is the bank in the signal path (running, or gliding in or out)? */
+    bool running() const { return running_; }
+    float amount() const { return amt_; }
+    float wet() const { return wet_; }
+    float cwCentreHz() const { return cwCentre_; }
+    int latencySamples() const { return running_ ? n_ : 0; }
+
+    /** The per-ear far-ness at an audio frequency for a kind and scale (the pan law alone: + = the LEFT ear is far,
+     *  i.e. the sound sits RIGHT). Exposed for the tests. */
+    static float panAt(float audioHz, int kind, float centreHz, float halfHz);
+
+private:
+    void configure_(double rate);
+    void frame_();
+    void weights_();
+    void cwMeasure_();
+
+    double fs_ = 0;
+    int n_ = 0, h_ = 0, pos_ = 0, warm_ = 0;
+    bool running_ = false;
+    int kind_ = Off;                 // the map in use (changes only at zero spread)
+    float lo_ = 50, hi_ = 2700;
+    float amt_ = 0, wet_ = 0;        // current
+    float wAmt_ = -1;                // the amount the weights were built for (-1 = rebuild)
+    float cwCentre_ = kCwDefaultHz;
+    bool cwMeasured_ = false;
+    int cwHops_ = 0;
+    std::unique_ptr<RealFFT> fwd_, inv_;
+    std::vector<float> win_, in_, frame_buf_, outL_, outR_, tmp_;
+    std::vector<cf32> spec_, specL_, specR_, wL_, wR_;
+    std::vector<float> psm_, floor_;  // CW: smoothed power and its slow floor, per bin (dB)
+};
+
 /** ★★ THE CONTROLLER: which offset, how much pan, the WFM stereo crossfade, the SSB worker. One per output. */
 class BinauralTuning {
 public:
@@ -126,6 +232,13 @@ public:
      *  available when this was written). ssb_offset.h asks for it to be calibrated on them: do that before
      *  trusting the number. */
     static constexpr float kFastGateScale = 0.8f;
+    /** ★★ THE COARSE CUE'S OWN ERROR. The waterfall puts the carrier ~300 Hz below where the voice's band starts,
+     *  but transmitters cut their low end anywhere from ~100 to ~400 Hz, so the cue is good to about ±150 Hz. A
+     *  coarse answer smaller than this cannot tell "on tune" from "just off", and it never leans on its own. */
+    static constexpr float kCoarseMinHz = 150.0f;
+    /** A beyond-reach answer the DIAL reckoned and a coarse cue within this of each other are the same voice: the
+     *  knob's exact figure is kept, the cue's ±150 Hz is not allowed to replace it. */
+    static constexpr float kCoarseAgreeHz = 250.0f;
 
     // ── WFM stereo hand-off ──
     static constexpr float kStereoOnHoldSec = 0.8f;   ///< stereo must hold this long before the aid fades out
@@ -152,13 +265,33 @@ public:
     /** The dial, Hz. A change moves the held SSB answer by the same amount (the signal stayed where it was;
      *  the dial moved), so the lean follows the knob at once instead of waiting a second for a new estimate. */
     void setDial(double hz);
+    /** ★★ THE COARSE SSB CUE, from the waterfall: the voice's suppressed carrier as an ABSOLUTE RF frequency (Hz),
+     *  valid=false when the caller sees no voice. Absolute, not an offset, so it cannot race setDial: the offset is
+     *  always taken against the dial as it is NOW.
+     *  ★★ THE HAND-OFF (worker thread, coarseStep_), in order of authority:
+     *    1. A valid estimator/reckoned answer WITHIN ±kSsbRangeHz is never touched — the cue's ±150 Hz must not
+     *       fight a fine answer the estimator can still refine.
+     *    2. No answer: the cue seeds one if it says ≥ kCoarseMinHz — the arriving-off-tune case the estimator
+     *       cannot reach. A COARSE-HELD answer then follows the cue, moves with the dial like any other, and is
+     *       handed back the moment two estimator answers agree (they may REPLACE it, not just refine it: the
+     *       estimator is the better witness once the voice is within its reach).
+     *    3. A held answer BEYOND reach: kept if the cue agrees within kCoarseAgreeHz (the knob's figure is exact);
+     *       replaced if the cue disagrees — a different voice now fills the passband — or let go if the cue puts a
+     *       voice right on tune, so the estimator can look.
+     *    The cue going invalid releases a coarse-held answer (the caller already holds its reading through a
+     *    pause between overs). */
+    void setSsbHint(double carrierHz, bool valid);
+    /** ★★ STYLE: BinauralSpread::Off = GUIDE (the lean), Usb/Lsb/CwUpper/CwLower = SPREAD with that map.
+     *  `edgeLo/HiHz` = the default SSB passband's audio edges (the fixed scale). Any thread. */
+    void setSpread(int kind, float edgeLoHz, float edgeHiHz);
 
     // Audio thread:
     void processPlanar(float* L, float* R, int n, int rate);
     /** int16 in (1 or 2 channels, interleaved) → int16 STEREO interleaved out (2·frames). Returns frames. */
     int processInt16(const int16_t* in, int inCh, int frames, int rate, int16_t* outStereo);
 
-    /** [enabled, source, offsetHz, offsetValid, pan, stereoWeight, ssbEstimates, ssbAccepted, ringDrops]. */
+    /** [enabled, source, offsetHz, offsetValid, pan, stereoWeight, ssbEstimates, ssbAccepted, ringDrops,
+     *   spreadAmount, coarseHeld, spreadCwCentreHz]. */
     int stats(float* out, int cap) const;
 
     // Exposed for the tests: the SSB answer the worker last published, and a synchronous pump of the worker's
@@ -173,6 +306,8 @@ private:
     void workerLoop_();
     void ssbStep_();                  // one pass of the worker's job (worker thread, or a test)
     void ssbAccept_(float signalHz);
+    void coarseStep_();
+    void release_();                  // drop the held SSB answer (worker)
 
     BinauralSpatialiser fx_;
     std::atomic<bool> enabled_{false}, resetFx_{false};
@@ -183,6 +318,12 @@ private:
     std::atomic<int> stereoHint_{Mono};
     std::atomic<double> dial_{0.0};
     std::atomic<int> gen_{0};         // bumped on a source change: the worker starts over
+    std::atomic<double> hintCarrier_{0.0};
+    std::atomic<bool> hintValid_{false};
+    std::atomic<int> spreadKind_{BinauralSpread::Off};
+    std::atomic<float> spreadLo_{50.0f}, spreadHi_{2700.0f};
+    BinauralSpread spread_;           // audio thread only
+    std::atomic<float> spreadPub_{0.0f}, cwCentrePub_{0.0f};
 
     // WFM stereo state — audio thread only
     bool stereoState_ = false;
@@ -204,6 +345,8 @@ private:
     int estRate_ = 0, workerGen_ = -1, workerSrc_ = None;
     double lastDial_ = 0; bool haveDial_ = false;
     bool reckoned_ = false;   ///< the held SSB answer was moved by the dial since it was last measured (worker only)
+    bool coarseHeld_ = false; ///< the held SSB answer came from the waterfall cue, not the estimator (worker only)
+    std::atomic<bool> coarsePub_{false};
     std::vector<float> hist_;         // accepted answers, SIGNAL terms (sideband applied), newest last
     double lastAccept_ = 0;
     std::vector<float> chunk_;
@@ -234,6 +377,10 @@ void  vibe_binaural_set_offset(void* h, float hz, int valid);
 /** 0 mono / not a stereo mode, 1 stereo locked, 2 unknown (measure the audio). */
 void  vibe_binaural_set_stereo(void* h, int hint);
 void  vibe_binaural_set_dial(void* h, double hz);
+/** The waterfall's SSB carrier, ABSOLUTE Hz (valid 0 = none seen). See BinauralTuning::setSsbHint. */
+void  vibe_binaural_set_ssb_hint(void* h, double carrierHz, int valid);
+/** Style: 0 GUIDE; SPREAD 1 USB, 2 LSB, 3 CW (upper), 4 CW (lower). Edges = the default SSB passband (audio Hz). */
+void  vibe_binaural_set_spread(void* h, int kind, float edgeLoHz, float edgeHiHz);
 /** Audio thread. Planar stereo float, in place. */
 void  vibe_binaural_process_planar(void* h, float* L, float* R, int n, int rate);
 /** Audio thread. int16 interleaved (inCh 1 or 2) → int16 stereo interleaved (2·frames). Returns frames. */

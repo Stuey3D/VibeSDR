@@ -10,6 +10,12 @@
 //      FAST estimator + running median — the sign per sideband, the dead zone at 0 Hz, noise never believed,
 //      the dial move carried at once.
 //   6. Cost per second of audio.
+//   7. The COARSE SSB cue (the waterfall's carrier): drives the lean where the estimator has no answer or none in
+//      reach, never fights a valid in-reach answer, keeps the knob's exact figure when it agrees, hands over to
+//      the estimator, follows the dial, lets go when it goes invalid.
+//   8. SPREAD: tones placed by audio frequency (USB: 500 Hz left, 2200 Hz right; LSB mirrored), clamped past the
+//      default passband's edges, one voice centred overall, never silent, no NaN, no click switching in and out,
+//      the CW note measured from the noise; latency and cost printed.
 //
 // ★ SILENT: every signal is generated and measured in memory, never played.
 #include "vibedsp/binaural.h"
@@ -110,6 +116,41 @@ static void feed(BinauralTuning& bt, const std::vector<float>& x, int rate, std:
 }
 
 static constexpr float kReckonTol = 60.0f;   // = BinauralTuning::kReckonTrustHz: refinement may move it this far
+
+// A windowed-sinc band-pass on white noise: the receiver's noise as its filter shapes it (CW, §8).
+static std::vector<float> bandNoise(double rate, double secs, double f1, double f2, double amp, unsigned seed) {
+    std::mt19937 rng(seed);
+    std::normal_distribution<float> g(0.0f, 1.0f);
+    const int taps = 511;
+    std::vector<double> hk(taps);
+    for (int i = 0; i < taps; ++i) {
+        const double m = i - (taps - 1) / 2.0;
+        auto sinc = [&](double fc) { return m == 0 ? 2 * fc / rate : std::sin(2 * M_PI * fc / rate * m) / (M_PI * m); };
+        const double w = 0.5 - 0.5 * std::cos(2 * M_PI * i / (taps - 1));
+        hk[i] = (sinc(f2) - sinc(f1)) * w;
+    }
+    const size_t n = (size_t)(rate * secs);
+    std::vector<float> wn(n + taps), x(n);
+    for (auto& v : wn) v = g(rng);
+    for (size_t i = 0; i < n; ++i) { double a = 0; for (int k = 0; k < taps; ++k) a += hk[k] * wn[i + k]; x[i] = (float)(amp * a); }
+    return x;
+}
+
+// Through a controller (mono in, both ears), no SSB pumping; returns L and R.
+static void run(BinauralTuning& bt, const std::vector<float>& x, int rate, std::vector<float>& L, std::vector<float>& R) {
+    const int pkt = rate / 50;
+    L.assign(x.size(), 0.0f); R.assign(x.size(), 0.0f);
+    for (size_t i = 0; i + pkt <= x.size(); i += pkt) {
+        std::copy(x.begin() + i, x.begin() + i + pkt, L.begin() + i);
+        std::copy(x.begin() + i, x.begin() + i + pkt, R.begin() + i);
+        bt.processPlanar(&L[i], &R[i], pkt, rate);
+    }
+}
+static std::vector<float> mix(const std::vector<float>& a, const std::vector<float>& b) {
+    std::vector<float> y(std::min(a.size(), b.size()));
+    for (size_t i = 0; i < y.size(); ++i) y[i] = a[i] + b[i];
+    return y;
+}
 
 int main() {
     std::printf("Binaural tuning — synthetic\n");
@@ -441,6 +482,234 @@ int main() {
         std::printf("      effect (audio thread): %.3f %% of one core; + SSB estimator (worker): %.3f %%\n",
                     effect * 100, ssb * 100);
         check(effect < 0.01, "the audio-thread effect costs < 1 % of a core at 48 kHz stereo");
+    }
+
+    std::printf(" ── 7. the coarse SSB cue (the waterfall) ──\n");
+    {
+        const double dial = 7100000;
+        {
+            // ★ ARRIVING 500 Hz BELOW A VOICE never locked: the estimator cannot reach it; the cue can.
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(dial);
+            bt.setSsbHint(dial + 500, true);
+            std::vector<float> L, R;
+            feed(bt, voice(fs, 4, 500, 25, 31), (int)fs, &L, &R);
+            float h = 0; const bool v = bt.ssbOffset(h);
+            float st[12]; bt.stats(st, 12);
+            const double lr = db(rms(L, L.size() - (size_t)fs, L.size()), rms(R, R.size() - (size_t)fs, R.size()));
+            std::printf("      no fine answer, cue +500 → %s %+.1f Hz (coarse %d), L−R %+.2f dB\n", v ? "" : "(none)", h, (int)st[10], lr);
+            check(v && std::fabs(h - 500) < 1 && st[10] == 1 && lr < -3, "no fine answer: the cue drives the lean (right, tune up)");
+            // The dial moves 200 Hz up: the cue is ABSOLUTE, so the answer is now 300 Hz, at once.
+            bt.setDial(dial + 200);
+            bt.pumpSsbForTest();
+            bt.ssbOffset(h);
+            std::printf("      dial +200 → %+.1f Hz\n", h);
+            check(std::fabs(h - 300) < 1, "the dial moves a coarse-held answer like any other");
+            bt.setSsbHint(0, false);
+            bt.pumpSsbForTest();
+            check(!bt.ssbOffset(h), "the cue going invalid lets a coarse-held answer go");
+        }
+        {
+            // ★ A VALID IN-REACH FINE ANSWER IS NEVER FOUGHT.
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(dial);
+            feed(bt, voice(fs, 10, 0, 25, 32), (int)fs);
+            float h0 = 0; const bool v0 = bt.ssbOffset(h0);
+            bt.setSsbHint(dial + 800, true);           // a wrong cue (another voice, a misread edge)
+            std::vector<float> L, R;
+            feed(bt, voice(fs, 4, 0, 25, 33), (int)fs, &L, &R);
+            float h1 = 0; const bool v1 = bt.ssbOffset(h1);
+            float st[12]; bt.stats(st, 12);
+            const double lr = db(rms(L, L.size() - (size_t)fs, L.size()), rms(R, R.size() - (size_t)fs, R.size()));
+            std::printf("      locked %s%+.1f Hz; cue +800 → %+.1f Hz (coarse %d), L−R %+.2f dB\n", v0 ? "" : "(none) ", h0, h1, (int)st[10], lr);
+            check(v0 && v1 && std::fabs(h1) < 15 && st[10] == 0 && std::fabs(lr) < 0.1, "a valid in-reach fine answer ignores the cue: still centred");
+        }
+        {
+            // ★ BEYOND REACH: the knob's exact figure stays when the cue agrees; a disagreeing cue replaces it.
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(dial);
+            feed(bt, voice(fs, 10, 0, 25, 34), (int)fs);
+            float h0 = 0; bt.ssbOffset(h0);
+            bt.setDial(dial - 500);                    // a 500 Hz step down: reckoned +500
+            bt.setSsbHint(dial + 80, true);            // the cue reads +580: the same voice, within its error
+            bt.pumpSsbForTest();
+            float h1 = 0; bt.ssbOffset(h1);
+            check(std::fabs(h1 - (h0 + 500)) < 1, "beyond reach, an agreeing cue leaves the reckoned figure exact");
+            bt.setSsbHint(dial - 500 + 1500, true);     // now a voice 1.5 kHz up fills the passband
+            bt.pumpSsbForTest();
+            float h2 = 0; bt.ssbOffset(h2);
+            float st[12]; bt.stats(st, 12);
+            std::printf("      reckoned %+.1f → agreeing cue keeps %+.1f; disagreeing cue → %+.1f (coarse %d)\n", h0 + 500, h1, h2, (int)st[10]);
+            check(std::fabs(h2 - 1500) < 1 && st[10] == 1, "beyond reach, a disagreeing cue replaces the reckoned figure");
+        }
+        {
+            // ★ HANDED BACK: a coarse-held answer inside the estimator's reach is replaced by the estimator.
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(dial);
+            bt.setSsbHint(dial + 260, true);           // the cue says 260; the voice is really at +120
+            feed(bt, voice(fs, 20, 120, 25, 35), (int)fs);
+            float h = 0; const bool v = bt.ssbOffset(h);
+            float st[12]; bt.stats(st, 12);
+            std::printf("      cue +260, voice +120 → %s%+.1f Hz (coarse %d, %d accepted)\n", v ? "" : "(none) ", h, (int)st[10], (int)st[7]);
+            check(v && st[10] == 0 && std::fabs(h - 120) < 60, "the estimator replaces a coarse answer within its reach");
+        }
+        {
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setDial(dial);
+            bt.setSsbHint(dial + 90, true);            // within the cue's own error
+            bt.pumpSsbForTest();
+            float h = 0;
+            check(!bt.ssbOffset(h), "a cue under ±150 Hz (its own error) never leans on its own");
+            bt.setSsbHint(dial - 700, true);
+            bt.pumpSsbForTest();
+            const bool v = bt.ssbOffset(h);
+            bt.setSource(BinauralTuning::SsbLsb, 15, 300);
+            bt.pumpSsbForTest();
+            float h2 = 0; const bool v2 = bt.ssbOffset(h2);
+            check(v && std::fabs(h + 700) < 1 && !v2, "a cue below the dial reads −; a change of sideband forgets it");
+        }
+    }
+
+    std::printf(" ── 8. SPREAD ──\n");
+    {
+        const float lo = 50, hi = 2700;   // = MODE_BANDWIDTHS.usb (sdrProtocol.ts)
+        check(BinauralSpread::panAt(50, BinauralSpread::Usb, 1375, 1325) == -1 && BinauralSpread::panAt(2700, BinauralSpread::Usb, 1375, 1325) == 1
+              && BinauralSpread::panAt(1375, BinauralSpread::Usb, 1375, 1325) == 0, "the scale: 50 Hz full left, 2700 Hz full right, 1375 Hz centre");
+        check(BinauralSpread::panAt(4000, BinauralSpread::Usb, 1375, 1325) == 1 && BinauralSpread::panAt(10, BinauralSpread::Usb, 1375, 1325) == -1,
+              "beyond the default edges: clamped at full");
+        check(BinauralSpread::panAt(500, BinauralSpread::Lsb, 1375, 1325) == -BinauralSpread::panAt(500, BinauralSpread::Usb, 1375, 1325),
+              "LSB is the mirror (higher audio = lower RF)");
+        // Steady state of a tone through the whole controller under SPREAD.
+        auto lrOf = [&](const std::vector<float>& x, int kind, std::vector<float>* Lo = nullptr, std::vector<float>* Ro = nullptr) {
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(kind == BinauralSpread::Lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, 15, 300);
+            bt.setSpread(kind, lo, hi);
+            std::vector<float> L, R;
+            run(bt, x, (int)fs, L, R);
+            if (Lo) { *Lo = L; *Ro = R; }
+            const size_t a = (size_t)(1.0 * fs), b = x.size() - (size_t)(0.1 * fs);
+            return db(rms(L, a, b), rms(R, a, b));
+        };
+        const auto t500 = tone(fs, 2.0, 500, 0.3), t2200 = tone(fs, 2.0, 2200, 0.3);
+        const double u5 = lrOf(t500, BinauralSpread::Usb), u22 = lrOf(t2200, BinauralSpread::Usb);
+        const double l5 = lrOf(t500, BinauralSpread::Lsb), l22 = lrOf(t2200, BinauralSpread::Lsb);
+        std::printf("      USB: 500 Hz L−R %+.2f dB, 2200 Hz %+.2f dB · LSB: 500 Hz %+.2f dB, 2200 Hz %+.2f dB\n", u5, u22, l5, l22);
+        check(u5 > 3 && u22 < -3, "USB: a 500 Hz signal sits LEFT, a 2200 Hz one RIGHT (higher RF = right)");
+        check(l5 < -3 && l22 > 3, "LSB: mirrored — 500 Hz audio (the HIGHER RF) sits right, 2200 Hz left");
+        {
+            // Both at once: each ear carries more of its own signal (the two-signals-either-side case).
+            std::vector<float> L, R;
+            lrOf(mix(t500, t2200), BinauralSpread::Usb, &L, &R);
+            auto bandRms = [&](const std::vector<float>& y, double f) {   // a single-bin DFT over the steady second
+                double re = 0, im = 0; const size_t a = (size_t)fs, b = a + (size_t)fs / 2;
+                for (size_t i = a; i < b; ++i) { re += y[i] * std::cos(2 * M_PI * f * i / fs); im += y[i] * std::sin(2 * M_PI * f * i / fs); }
+                return std::sqrt(re * re + im * im);
+            };
+            const double s5 = db(bandRms(L, 500), bandRms(R, 500)), s22 = db(bandRms(L, 2200), bandRms(R, 2200));
+            std::printf("      together: 500 Hz L−R %+.2f dB, 2200 Hz %+.2f dB\n", s5, s22);
+            check(s5 > 3 && s22 < -3, "two signals at once: one in each ear");
+        }
+        const double c1 = lrOf(tone(fs, 2.0, 3000, 0.3), BinauralSpread::Usb), c2 = lrOf(tone(fs, 2.0, 3600, 0.3), BinauralSpread::Usb);
+        std::printf("      past the edge: 3000 Hz %+.2f dB, 3600 Hz %+.2f dB\n", c1, c2);
+        check(std::fabs(c1 - c2) < 0.6, "past the default edge the placement is clamped (the same lean)");
+        {
+            std::vector<float> L, R;
+            const auto v = voice(fs, 8, 0, 25, 41);
+            const double lr = lrOf(v, BinauralSpread::Usb, &L, &R);
+            const double lrL = lrOf(v, BinauralSpread::Lsb);
+            std::printf("      one on-tune voice: L−R %+.2f dB (USB), %+.2f dB (LSB)\n", lr, lrL);
+            check(std::fabs(lr) < 1.5 && std::fabs(lrL) < 1.5 && finite(L) && finite(R), "one voice sounds centred overall (|L−R| < 1.5 dB)");
+        }
+        {
+            // Never silent: the far ear of a full-edge tone is at most the drop + the shelf down.
+            std::vector<float> L, R;
+            const auto x = tone(fs, 2.0, 2700, 0.3);
+            lrOf(x, BinauralSpread::Usb, &L, &R);
+            const double far = db(rms(L, (size_t)fs, x.size() - 4800), rms(x, (size_t)fs, x.size() - 4800));
+            std::printf("      far ear at the edge: %+.2f dB re the input\n", far);
+            check(far > -17.5 && far < -8, "never silent: the far ear ≈ 10 dB down (+ the head shadow), not off");
+        }
+        {
+            // ★ NO CLICK switching in and out: a 500 Hz sine (max step 0.02 per sample) through GUIDE → SPREAD →
+            //   GUIDE → SPREAD(LSB) → off, mid-signal. The worst per-sample step is the click detector.
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            const auto x = tone(fs, 6.0, 500, 0.3);
+            const double maxIn = 2 * M_PI * 500 / fs * 0.3;
+            std::vector<float> L(x.size()), R(x.size());
+            const int pkt = 480;
+            float maxSpread = 0;
+            for (size_t i = 0; i + pkt <= x.size(); i += pkt) {
+                const double t = i / fs;
+                bt.setSpread(t < 1 ? 0 : t < 2.5 ? BinauralSpread::Usb : t < 3.5 ? 0 : t < 5 ? BinauralSpread::Lsb : 0, lo, hi);
+                std::copy(x.begin() + i, x.begin() + i + pkt, L.begin() + i);
+                std::copy(x.begin() + i, x.begin() + i + pkt, R.begin() + i);
+                bt.processPlanar(&L[i], &R[i], pkt, (int)fs);
+                float st[12]; bt.stats(st, 12); maxSpread = std::max(maxSpread, st[9]);
+            }
+            double worst = 0;
+            for (size_t i = 1; i < L.size(); ++i) worst = std::max({worst, (double)std::fabs(L[i] - L[i - 1]), (double)std::fabs(R[i] - R[i - 1])});
+            std::printf("      switching in/out ×4: worst step %.4f (the sine's own %.4f), reached spread %.2f\n", worst, maxIn, maxSpread);
+            check(finite(L) && finite(R) && worst < 1.6 * maxIn && maxSpread > 0.99, "no click and no NaN switching SPREAD in and out, or between sidebands");
+        }
+        {
+            // ★ CW: the note is measured from the noise. A Kiwi-style 300-700 Hz passband (note 500) with a CW signal
+            //   ON the note → centred; one 200 Hz higher → a little to the right.
+            auto cw = [&](double toneHz, float& centre) {
+                BinauralTuning bt(false);
+                bt.setEnabled(true);
+                bt.setSource(BinauralTuning::Given, 15, 300);
+                bt.setSpread(BinauralSpread::CwUpper, lo, hi);
+                const auto n = bandNoise(fs, 6.0, 300, 700, 0.05, 7);
+                auto t = tone(fs, 6.0, toneHz, 0.2);
+                for (size_t i = 0; i < t.size(); ++i) if (std::fmod(i / fs, 0.24) > 0.12) t[i] = 0;   // keyed dits
+                std::vector<float> L, R;
+                run(bt, mix(n, t), (int)fs, L, R);
+                float st[12]; bt.stats(st, 12); centre = st[11];
+                const size_t a = (size_t)(3 * fs), b = L.size() - 4800;
+                return db(rms(L, a, b), rms(R, a, b));
+            };
+            float c0 = 0, c1 = 0;
+            const double on = cw(500, c0), up = cw(700, c1);
+            std::printf("      CW 300-700 Hz passband: measured note %.0f Hz; on-note signal L−R %+.2f dB, 200 Hz up %+.2f dB\n", c0, on, up);
+            check(std::fabs(c0 - 500) < 70 && std::fabs(on) < 1.0 && up < on - 0.2, "CW: the note found from the noise, the tuned signal centred, a higher one to the right");
+        }
+        {
+            BinauralSpread sp;
+            std::vector<float> l(480, 0.0f), r(480, 0.0f);
+            sp.process(l.data(), r.data(), 480, fs, BinauralSpread::Usb, lo, hi);
+            std::printf("      latency while SPREAD runs: %d samples = %.1f ms at 48 kHz (bypassed when off: 0)\n",
+                        sp.latencySamples(), 1000.0 * sp.latencySamples() / fs);
+            check(sp.latencySamples() <= 512, "latency one frame (≤ 512 samples at 48 kHz)");
+        }
+        {
+            const auto x = voice(fs, 20, 0, 25, 42);
+            BinauralTuning bt(false);
+            bt.setEnabled(true);
+            bt.setSource(BinauralTuning::SsbUsb, 15, 300);
+            bt.setSpread(BinauralSpread::Usb, lo, hi);
+            std::vector<float> l(960), r(960);
+            auto t0 = std::chrono::steady_clock::now();
+            for (size_t i = 0; i + 960 <= x.size(); i += 960) {
+                std::copy(x.begin() + i, x.begin() + i + 960, l.begin()); std::copy(l.begin(), l.end(), r.begin());
+                bt.processPlanar(l.data(), r.data(), 960, (int)fs);
+            }
+            const double c = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / 20.0;
+            std::printf("      SPREAD (audio thread): %.3f %% of one core at 48 kHz\n", c * 100);
+            check(c < 0.02, "SPREAD costs < 2 % of a core at 48 kHz (this Mac)");
+        }
     }
 
     std::printf(fails ? "\nFAILED: %d\n" : "\nall passed\n", fails);
