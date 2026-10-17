@@ -34,8 +34,14 @@ double nowSec() {
  *      speaker it held the first lean back a whole over). Training: 80 % of answers pass, none wrong; held-out 8957:
  *      79 %, none wrong; the held-out QSOs ≤ ±500 Hz: ~1 % of passes wrong (the other station), none wrong-signed.
  *      The test prints the current figures. */
+bool SsbOffsetEstimate::deepPinned() const {
+    return coarsePinned && offsetHz <= -gate.deepHz && gate.deepConfidence < gate.confidence;
+}
+float SsbOffsetEstimate::confidenceFloor() const { return deepPinned() ? gate.deepConfidence : gate.confidence; }
+
 bool SsbOffsetEstimate::passes() const {
-    return valid && reconciled && frames >= minFrames && confidence >= gate.confidence && clarity >= gate.clarity
+    const float kMin = deepPinned() ? std::max(gate.clarity, gate.deepClarity) : gate.clarity;
+    return valid && reconciled && frames >= minFrames && confidence >= confidenceFloor() && clarity >= kMin
         && (std::fabs(offsetHz) <= gate.largeHz || (snrDb >= gate.largeSnrDb && frames >= gate.largeFrames));
 }
 
@@ -54,6 +60,10 @@ SsbOffsetEstimator::Config SsbOffsetEstimator::Config::forProfile(Profile p) {
         // ★ 8 s of memory: measured 5 / 8 / 12 s on the clips — 8 s settles the deep side (where only intonation
         //   tells one pitch alias from the next) nearly as well as 12, and lets a new voice take over sooner.
         c.memoryVoicedSec = 8.0f;
+        // ★ Deep and pinned (see Gate::deepConfidence): measured, 0.1 with clarity ≥ 0.5 added 120 believed VOLMET
+        //   answers below −400 Hz, none wrong (the deep −1000 dials went from no answer to answered); on the held-out
+        //   QSOs 225, 9 a pitch alias out in size — never in sign.
+        c.gate.deepConfidence = 0.1f; c.gate.deepClarity = 0.5f;
         c.gate.confidence = 0.3f; c.gate.clarity = 0.4f; c.gate.largeSnrDb = 8.0f; c.gate.largeFrames = 30;
     }
     return c;
@@ -476,6 +486,7 @@ void SsbOffsetEstimator::coarse_(SsbOffsetEstimate& e) const {
     const bool pinned = e.voiceLowHz <= e.passbandLowHz + kCoarseTolHz;
     e.coarseHiHz = e.voiceLowHz + kCoarseTolHz - kTxLowCutMinHz;
     e.coarseLoHz = pinned ? -c_.dMaxHz : e.voiceLowHz - kCoarseTolHz - kTxLowCutMaxHz;
+    e.coarsePinned = pinned;
 }
 
 /* ★★ THE SHARP PEAK, AND HOW SURE. The summed curve is high-passed (minus its own ±80 Hz moving

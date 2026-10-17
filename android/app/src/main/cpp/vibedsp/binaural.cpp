@@ -644,7 +644,7 @@ void BinauralTuning::ssbStep_() {
             //    less (kHighF0Hz): its confidence floor rises with its pitch.
             const float hiF0 = e.f0Hz > kHighF0Hz
                 ? std::min(kHighF0GateMax, 1.0f + kHighF0GatePerHz * (e.f0Hz - kHighF0Hz)) : 1.0f;
-            const bool gated = e.passes() && e.confidence >= hiF0 * e.gate.confidence
+            const bool gated = e.passes() && e.confidence >= hiF0 * e.confidenceFloor()
                 && std::fabs(e.offsetHz) <= kSsbRangeHz;
             // ★ +d = the audio is d Hz HIGH. USB: the signal is above the dial (tune up, lean right) → +d.
             //   LSB inverts the audio: high audio means the signal is BELOW the dial → −d.

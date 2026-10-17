@@ -100,8 +100,16 @@ struct SsbOffsetEstimate {
         float largeHz = 40.0f;    ///< …and beyond ±largeHz:
         float largeSnrDb = 10.0f; ///<    a speech-to-gap ratio of at least this…
         int   largeFrames = 60;   ///<    …from at least this many voiced frames
+        /** ★ DEEP AND PINNED: an answer at or below −deepHz while the coarse stage says the voice is piled against the
+         *  passband floor (its interval open downward) cannot have the wrong SIGN — the veto forbids anything thin — so
+         *  only its size is in doubt, and there a voice's strongest harmonics are below 0 Hz: the comb is weak by
+         *  nature. It is believed at deepConfidence if its clarity reaches deepClarity. Off when deepConfidence ≥ confidence. */
+        float deepHz = 400.0f, deepConfidence = 0.4f, deepClarity = 0.5f;
     } gate;
+    bool  coarsePinned = false;   ///< the coarse stage found the voice piled against the floor (deep, open-ended)
     bool  passes() const;         ///< the gate: valid, reconciled, enough frames, and `gate` met
+    bool  deepPinned() const;     ///< judged by the deep-and-pinned floor (Gate::deepConfidence)
+    float confidenceFloor() const;///< the confidence this answer must reach (scaled by callers with rules of their own)
 };
 
 class SsbOffsetEstimator {
