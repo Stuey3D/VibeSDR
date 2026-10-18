@@ -215,9 +215,13 @@ console.log('\nThe notices: the server decides, the page draws it in Stuart\'s w
   ok(text.includes('Airspy HF+ (serial DD52B980BE4946DA) can’t be seen right now.')
      && text.includes('It’s set to be released when VibeServer isn’t using it'),
      '★★ release ON + cannot tell → the softer notice');
-  ok(text.includes('RSP1B in use with another app on this server'), '★★ known in use, release ON → a plain line');
+  // ★★ Stuart's wording (2026-10-18), with the examples for THIS driver (an RSP: SDRconnect, not rtl_tcp).
+  ok(text.includes('RSP1B is in use by another program on this computer (e.g. OpenWebRX, SDR++, SDRconnect). '
+                   + 'Close it and VibeServer will pick the radio up automatically.')
+     && !/sdrCard[^>]*>[^<]*RSP1B is in use/.test(h), '★★ known in use, release ON → a plain line');
   ok(!/data-serial="R1"/.test(h), '  …with no Remove or Pause beside it');
-  ok(text.includes('RSPdx is in use by another app on this server, so VibeServer cannot serve it. Stop that app'),
+  ok(text.includes('RSPdx is in use by another program on this computer (e.g. OpenWebRX, SDR++, SDRconnect). '
+                   + 'Close it and VibeServer will pick the radio up automatically. Until then nobody can listen to it here.'),
      '★★ known in use, release OFF → a problem to fix');
   ok(text.includes('Paused V4') && /data-sdr="resume" data-serial="P1"/.test(h), 'a paused radio offers RESUME');
   ok(text.includes('VibeServer has found a new SDR: RTL-SDR Blog V4, serial 00000009')
