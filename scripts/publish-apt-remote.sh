@@ -208,6 +208,11 @@ echo "==> InRelease and Release.gpg verify against KEY.gpg"
 # ★★ Every index the Release lists must match its SHA256 line, and every package an index lists must match ITS
 #    SHA256 — the pool travelled over the network twice, and apt refuses the lot on one mismatch.
 awk '/^SHA256:/{f=1;next} /^[A-Za-z]/{f=0} f&&NF==3{print $1, $3}' "$DIST/Release" | while read -r sum path; do
+  # ★ The Release lists ITSELF, with the checksum of a half-written file: publish-apt.sh runs
+  #   `apt-ftparchive release dists/stable > dists/stable/Release`, so the file exists (truncated) while it is
+  #   being scanned. Long-standing in the live repository too (a 219-byte "Release" line) and harmless — apt
+  #   never fetches that entry — so it is skipped here rather than reported.
+  case "$path" in Release|InRelease|Release.gpg) continue;; esac
   [ -f "$DIST/$path" ] || continue
   [ "$(shasum -a 256 "$DIST/$path" | awk '{print $1}')" = "$sum" ] || { echo "!! $path does not match the Release"; exit 1; }
 done
