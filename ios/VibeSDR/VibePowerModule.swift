@@ -56,6 +56,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
             // are separate events on purpose: the arrows reuse the tuner keys' press/hold
             // semantics, and a sweep needs to know when the key was released.
             "VibeKeyDown", "VibeKeyUp", "VibeScroll",
+            // ★ Game controllers (VibeGamepad.swift): the whole pad on every change; src/utils/padActions.ts maps it
+            //   onto the keyboard's own keys.
+            "VibePad",
             // ★ The local audio pump's byte tally. The link meter has to include AUDIO or it is
             //   worse than useless — it once read 12 KB/s while the link carried 198, and hid the
             //   real problem for months. Now the socket is native, only native can count it.
@@ -103,6 +106,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     shared?.sendEvent(withName: name, body: ["key": key, "plain": plain, "typing": typing])
   }
 
+  /// A game controller's state (VibeGamepad) — no-ops harmlessly before JS has subscribed.
+  static func emitPad(_ body: [String: Any]) {
+    shared?.sendEvent(withName: "VibePad", body: body)
+  }
+
+  /// ★ BACK ON A GAME CONTROLLER WHILE A FIELD HAS THE CURSOR leaves the field — one layer, exactly what Escape does on
+  ///   the keyboard (VibeKeyWindow.pressesBegan). Called by src/utils/hardwareKeys.ts; a pad has no key window press.
+  @objc func leaveTextField() {
+    DispatchQueue.main.async { _ = VibeKeyWindow.focusedTextInputInApp()?.resignFirstResponder() }
+  }
+
   /// Pointer scroll deltas (mouse wheel / trackpad), in points.
   static func emitScroll(_ dx: Double, _ dy: Double, _ x: Double, _ y: Double) {
     shared?.sendEvent(withName: "VibeScroll", body: ["dx": dx, "dy": dy, "x": x, "y": y])
@@ -111,6 +125,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   override init() {
     super.init()
     VibePowerModule.shared = self
+    // ★ Game controllers: from here on a connected pad reports (nothing at all runs without one).
+    DispatchQueue.main.async { VibeGamepad.shared.start() }
     startVoiceObserver()
     VibeCrashLog.install()      // record uncaught ObjC exceptions — see VibeCrashLog
     VibeCrashLog.announce()     // ...and SAY what the last one was, or recording it achieves nothing

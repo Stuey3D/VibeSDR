@@ -18,6 +18,7 @@
 		AA000001000000000000AC03 /* AudioSelfHeal.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AC01 /* AudioSelfHeal.swift */; };
 		AA000001000000000000AAA4 /* VibePowerModule.m in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAA2 /* VibePowerModule.m */; settings = {COMPILER_FLAGS = "-fno-modules"; }; };
 		AA000001000000000000BB52 /* RecordBufferRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000BB51 /* RecordBufferRing.swift */; };
+		AA000001000000000000BB62 /* VibeGamepad.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000BB61 /* VibeGamepad.swift */; };
 		AA000001000000000000AAB3 /* VibeDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAB1 /* VibeDSP.swift */; };
 		AA000001000000000000AAC3 /* artwork_base.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAC1 /* artwork_base.png */; };
 		AA000001000000000000AAC4 /* logo_ubersdr.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAC2 /* logo_ubersdr.png */; };
@@ -90,6 +91,7 @@
 		AA000001000000000000AC01 /* AudioSelfHeal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AudioSelfHeal.swift; path = ../spike/WristSDR/WristSDR/AudioSelfHeal.swift; sourceTree = "<group>"; };
 		AA000001000000000000AAA2 /* VibePowerModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VibePowerModule.m; path = VibeSDR/VibePowerModule.m; sourceTree = "<group>"; };
 		AA000001000000000000BB51 /* RecordBufferRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RecordBufferRing.swift; path = VibeSDR/RecordBufferRing.swift; sourceTree = "<group>"; };
+		AA000001000000000000BB61 /* VibeGamepad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibeGamepad.swift; path = VibeSDR/VibeGamepad.swift; sourceTree = "<group>"; };
 		AA000001000000000000AAB1 /* VibeDSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibeDSP.swift; path = VibeSDR/VibeDSP.swift; sourceTree = "<group>"; };
 		AA000001000000000000AAC1 /* artwork_base.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = artwork_base.png; path = VibeSDR/artwork_base.png; sourceTree = "<group>"; };
 		AA000001000000000000AAC2 /* logo_ubersdr.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = logo_ubersdr.png; path = VibeSDR/logo_ubersdr.png; sourceTree = "<group>"; };
@@ -162,6 +164,7 @@
 				AA000001000000000000AAF1 /* FmdxMp3Decoder.swift */,
 				AA000001000000000000AAB1 /* VibeDSP.swift */,
 				AA000001000000000000BB51 /* RecordBufferRing.swift */,
+				AA000001000000000000BB61 /* VibeGamepad.swift */,
 				AA000001000000000000AAA2 /* VibePowerModule.m */,
 				AA000002000000000000EE11 /* VibeWatchModule.swift */,
 				AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */,
@@ -542,6 +545,7 @@
 				AA000001000000000000AAF3 /* FmdxMp3Decoder.swift in Sources */,
 				AA000001000000000000AAB3 /* VibeDSP.swift in Sources */,
 				AA000001000000000000BB52 /* RecordBufferRing.swift in Sources */,
+				AA000001000000000000BB62 /* VibeGamepad.swift in Sources */,
 				AA000001000000000000AAA4 /* VibePowerModule.m in Sources */,
 				AA000002000000000000EE13 /* VibeWatchModule.swift in Sources */,
 				AA000002000000000000EE33 /* WatchSpectrumForwarder.swift in Sources */,
