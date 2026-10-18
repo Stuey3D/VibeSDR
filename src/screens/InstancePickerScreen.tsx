@@ -1870,6 +1870,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // subtitle in style — quiet prose under the title — but not a permanent one: a touch user
   // never needs it, and showing it to them would be teaching a lesson nobody asked for.
   const [kbHint, setKbHint] = useState(false);
+  // ★ …in the words of what was pressed: a game controller has no Enter or W A S D to be told about.
+  const [kbHintPad, setKbHintPad] = useState(false);
 
   // ★★ OCCUPANCY OF SAVED VibeSERVERS. One client per radio means a public receiver is a
   // queue of one, so a busy server MUST say so before it is tapped — otherwise "in use" is
@@ -1920,7 +1922,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   }, [favourites, screenFocused]);
 
   useEffect(() => {
-    const sub = addKeyListener('down', () => { setKbHint(true); });
+    const sub = addKeyListener('down', (e) => { setKbHint(true); setKbHintPad(!!e.pad); });
     return () => sub.remove();
   }, []);
 
@@ -2514,7 +2516,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             for space and was clipped underneath it in portrait. (Stuart, 2026-07-25.) */}
         {kbHint && (
           <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
-            Keyboard: arrows or W A S D move · Enter connects · Backspace or Esc goes back
+            {kbHintPad
+              ? 'Controller: the D-pad moves · enter connects · back goes back · hold START to switch the buttons'
+              : 'Keyboard: arrows or W A S D move · Enter connects · Backspace or Esc goes back'}
           </Text>
         )}
 

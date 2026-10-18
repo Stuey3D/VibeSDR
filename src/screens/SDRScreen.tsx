@@ -10596,8 +10596,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'schemes', title: 'Pick your control scheme',
       body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named above them.',
       target: tourRef('menuBtn'), illustration: schemeMock },
-    { id: 'keys', title: 'A keyboard drives the whole thing',
-      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and it works like a game controller: the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom. More in the settings cog, under KEYBOARD.',
+    { id: 'keys', title: 'A keyboard or controller drives it all',
+      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom. A game controller does the same, on Android too: the D-pad moves the highlight, and holding START switches between face buttons and the two sticks. More in the settings cog, under KEYBOARD.',
       target: tourRef('menuBtn'), illustration: keysMock },
     // ★★ v5, not v4: the two steps above are new in V10 and describe things that
     //    already shipped invisibly. Bumping the key re-runs the tour ONCE for
