@@ -399,9 +399,14 @@ namespace {
  *    `ranges` is numbers. Getting this backwards printed "500,31000000" on the Android side.
  */
 static bool g_radioUnanswered = false;   // set by buildStatus(); read by the ping loop
+/* ★★ A RADIO KNOWN TO BE IN ANOTHER PROGRAM'S HANDS (2026-10-18). Published as inUseElsewhere, and
+ *  re-pinged every two minutes rather than fifteen, so the listing stops saying "in use by another
+ *  app" soon after that program lets go — a stale IN USE turns listeners away from a free radio. */
+static bool g_radioInUseElsewhere = false;
 
 std::string buildStatus(int port) {
     g_radioUnanswered = false;
+    g_radioInUseElsewhere = false;
     const std::string ident  = httpGetLocal(port, "/vibeserver.json");
     const std::string radios = httpGetLocal(port, "/vibeserver/radios");
 
@@ -544,7 +549,7 @@ std::string buildStatus(int port) {
                         }
                     }
                     j += ",\"maxListeners\":" + std::to_string(rmax);
-                    if (inUse) j += ",\"inUseElsewhere\":true";
+                    if (inUse) { j += ",\"inUseElsewhere\":true"; g_radioInUseElsewhere = true; }
                     // ★★ WORDS in coverage, NUMBERS in ranges — see the note above.
                     auto arr = [&](const std::string& key) -> std::string {
                         const std::string k2 = "\"" + key + "\":";
@@ -1055,7 +1060,13 @@ void worker() {
         //    than punished for being new, and only a proven one waits the full interval.
         long long wait = g_listed ? g_pingSec : 30;
         // ★ A radio behind the door that did not answer this ping (still starting) — ask again soon.
-        if (g_radioUnanswered) wait = 30;
+        // ★★ BUT NOT EVERY 30 s FOR EVER. A radio that never starts (the Lenovo, 2026-10-18: 17 hours
+        //    of 30-second publishes while OpenWebRX held its RSP) is not "still starting" after ten
+        //    tries; five minutes from then on, and back to 30 s the moment one answers.
+        static int unansweredRun = 0;
+        unansweredRun = g_radioUnanswered ? unansweredRun + 1 : 0;
+        if (g_radioUnanswered) wait = unansweredRun > 10 ? (wait < 300 ? wait : 300) : 30;
+        else if (g_radioInUseElsewhere && wait > 120) wait = 120;
         // ★★ Back off a tunnel that will not start, so a cloudflared that is missing or broken is
         //    not respawned every thirty seconds for ever. Capped at five minutes so a link that
         //    does come back is still picked up promptly.

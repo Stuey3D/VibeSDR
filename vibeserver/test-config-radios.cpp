@@ -641,6 +641,60 @@ int main() {
            "★ an extra unclaimed RSP on the bus makes it ambiguous which is ours → never said");
     }
 
+    // ★★★ THE SDRplay API'S OWN WORD (the Lenovo, 2026-10-18: OpenWebRX held the RSP1A for 17 h, sysfs
+    //     showed nothing countable, every 5-second restart recorded "not found" and nobody was told).
+    std::printf("\nIn use elsewhere: an RSP a working SDRplay API does not list\n");
+    {
+        using vibe::knownInUseElsewhere; using vibe::knownInUseFor;
+        ok(knownInUseElsewhere(false, 1, -1, 0, 0),
+           "★★★ one RSP on the bus, the API answered and listed none, none of ours running → known");
+        ok(knownInUseElsewhere(false, 1, 0, 0, 0), "★ …even when sysfs shows no claim at all (the Lenovo)");
+        ok(!knownInUseElsewhere(false, 1, -1, 0, -1), "★★ the API did not answer (service down) → never said");
+        ok(!knownInUseElsewhere(false, 0, -1, 0, 0), "nothing of its kind on the bus → not 'in use' (unplugged)");
+        ok(!knownInUseElsewhere(false, 1, -1, 1, 0), "★ the only unlisted RSP is our sibling's → not this radio");
+        ok(knownInUseElsewhere(false, 2, -1, 1, 0), "two RSPs: our sibling streams one, the other is unlisted → known");
+        ok(knownInUseElsewhere(false, 2, -1, 0, 1), "two RSPs, the API lists one (not ours), the other unlisted → known");
+        ok(!knownInUseElsewhere(false, 2, -1, 1, 1),
+           "★ our sibling RELEASED its RSP (listed AND counted) → nothing left over, never said (safe side)");
+        ok(!knownInUseElsewhere(false, -1, -1, 0, 0), "★★ no bus count → never said, whatever the API says");
+        ok(!knownInUseFor("airspyhf", false, 1, -1, 0, 0), "★ the API's count is an RSP rule — an HF+ ignores it");
+        ok(!knownInUseFor("sdrplay", true, 1, -1, 0, -1), "★ the RTL busy flag is an RTL rule — an RSP ignores it");
+        ok(knownInUseFor("sdrplay", false, 1, -1, 0, 0), "and an RSP uses the API's count");
+    }
+
+    // ★★★ THE RADIO-STATUS STATE MACHINE: what each attempt records. Busy only when known; opened clears
+    //     at once; unplugged is never "busy". Driven through the sequences the field actually produces.
+    std::printf("\nRadio status: busy → open → busy, busy vs unplugged\n");
+    {
+        using vibe::radioRecordState;
+        auto eq = [](const char* a, const char* b) { return std::string(a) == b; };
+        // The Lenovo: an RSP held by OpenWebRX through the SDRplay API service, then released, then taken again.
+        ok(eq(radioRecordState("sdrplay", false, false, false, 1, 0, 0, 0), "busy"), "RSP held by OWRX → busy");
+        ok(eq(radioRecordState("sdrplay", true, true, false, 1, 0, 0, 1), ""), "OWRX stops, the RSP opens → record cleared");
+        ok(eq(radioRecordState("sdrplay", false, false, false, 1, 1, 0, 0), "busy"), "OWRX takes it again → busy again");
+        // Unplugged, not lent.
+        ok(eq(radioRecordState("sdrplay", false, false, false, 0, 0, 0, 0), "notfound"),
+           "★★★ RSP unplugged (nothing on the bus) → notfound, NEVER busy");
+        ok(eq(radioRecordState("sdrplay", false, false, false, 1, -1, 0, -1), "notfound"),
+           "★ SDRplay service down: nothing proves anything → notfound (the door judges it uncertain)");
+        // An RTL held by rtl_tcp: named (opening for the serial works), the claim says LIBUSB_ERROR_BUSY.
+        ok(eq(radioRecordState("rtlsdr", true, false, true, 1, -1, 0, -1), "busy"), "RTL held by rtl_tcp → busy");
+        ok(eq(radioRecordState("rtlsdr", true, true, false, 1, -1, 0, -1), ""), "rtl_tcp stops → opened, cleared");
+        ok(eq(radioRecordState("rtlsdr", true, false, false, 1, -1, 0, -1), "openfailed"),
+           "★ RTL named, open failed for another reason (wedged chip) → openfailed, not 'another app'");
+        ok(eq(radioRecordState("rtlsdr", false, false, false, 0, -1, 0, -1), "notfound"), "RTL unplugged → notfound");
+        // Airspy HF+ / Airspy / HackRF: libusb drivers; the claim shows in sysfs as usbfs.
+        ok(eq(radioRecordState("airspyhf", true, false, false, 1, 1, 0, -1), "busy"), "HF+ claimed by SDR++ → busy");
+        ok(eq(radioRecordState("hackrf", false, false, false, 1, 1, 0, -1), "busy"),
+           "HackRF claimed elsewhere, serial unreadable → busy");
+        ok(eq(radioRecordState("airspy", true, false, false, 1, 0, 0, -1), "openfailed"),
+           "Airspy R2 would not open, nobody holds it → openfailed");
+        ok(eq(radioRecordState("airspy", true, false, false, 1, 1, 0, -1), "busy"), "Airspy R2 claimed elsewhere → busy");
+        // ★ A listed RSP that will not open is NOT judged by the API's count (ours is in it).
+        ok(eq(radioRecordState("sdrplay", true, false, false, 1, 0, 0, 1), "openfailed"),
+           "★ RSP listed but SelectDevice failed, no claim → openfailed");
+    }
+
     // The sysfs reader, against a fake tree shaped like /sys/bus/usb/devices.
     std::printf("\nsysfs: who has claimed which radio\n");
     {

@@ -138,11 +138,52 @@ inline bool sysfsClaimedCounts(const std::string& root, int& sdrplay, int& airsp
  *  ★ The one case it cannot see through: ours unplugged AND a different radio of the same kind,
  *    not in our config, plugged in AND held by another program. Rare enough to accept; the
  *    alternative is never saying it at all on an RSP, the radio people most often lend out. */
-inline bool knownInUseElsewhere(bool rtlBusy, int onBus, int claimed, int runningOurs) {
+/*  @param apiListed   ★★★ SDRplay ONLY: how many RSPs a WORKING API listed just now
+ *                     (SdrplaySource::lastListOk), -1 = unknown or not an RSP. GetDevices leaves out
+ *                     an RSP another process has SELECTED — the API's own statement, not a guess — so
+ *                     an RSP on the bus that it did not list, and that none of our running radios
+ *                     accounts for, is held by another program. Needed because the sysfs claim is
+ *                     not always there to count: on the Lenovo (2026-10-18) OpenWebRX held the
+ *                     RSP1A for 17 hours and every one of the radio's 5-second restarts recorded
+ *                     "not found", so the directory, the app and the setup page said nothing.
+ *  ★ Only ever asked about a radio the API did not name — a named one that will not open is the
+ *    `claimed` rule's business — so `apiListed` counts OTHER RSPs, and they are subtracted. */
+inline bool knownInUseElsewhere(bool rtlBusy, int onBus, int claimed, int runningOurs, int apiListed = -1) {
     if (rtlBusy) return true;
-    if (onBus < 0 || claimed < 0) return false;
+    if (onBus < 0) return false;
     const int ours = runningOurs > 0 ? runningOurs : 0;
+    if (apiListed >= 0 && onBus - apiListed - ours >= 1) return true;
+    if (claimed < 0) return false;
     return claimed - ours >= 1 && onBus == ours + 1;
+}
+
+/** knownInUseElsewhere with the per-DRIVER rules applied, so no caller can feed an RTL's busy flag to an
+ *  RSP or the SDRplay API's count to a dongle: rtlBusy counts only for "rtlsdr", apiListed only for
+ *  "sdrplay". Every reader of "is it another program's?" goes through here. */
+inline bool knownInUseFor(const std::string& driver, bool rtlBusy, int onBus, int claimed,
+                          int runningOurs, int apiListed) {
+    return knownInUseElsewhere(rtlBusy && driver == "rtlsdr", onBus, claimed, runningOurs,
+                               driver == "sdrplay" ? apiListed : -1);
+}
+
+/** ★★★ WHAT A RADIO'S PROCESS RECORDS AFTER ONE ATTEMPT TO TAKE ITS DEVICE — the whole state machine
+ *  of the radio-status file, as one pure function (the file itself lives in main.cpp):
+ *    ""            opened — the record is CLEARED, at once (busy → open clears the moment it opens)
+ *    "busy"        KNOWN to be another program's (see knownInUseElsewhere) — the only state any
+ *                  listener-facing surface turns into "in use by another app"
+ *    "openfailed"  the driver named it and it would not open, cause not proven
+ *    "notfound"    the driver could not name it — UNPLUGGED or LENT is judged later, by the front
+ *                  door, with the bus as witness (decidePresence); never "unplugged" from here
+ *  The process retries on its own (systemd restarts it every 5 s; a running one retries its take-back),
+ *  and each attempt writes afresh, so a radio the other program lets go of goes busy → "" with no
+ *  timer. `named` = the driver listed this radio's serial in the enumeration just taken. */
+inline const char* radioRecordState(const std::string& driver, bool named, bool opened, bool rtlBusy,
+                                    int onBus, int claimed, int runningOurs, int apiListed) {
+    if (opened) return "";
+    // ★ The API's count only speaks for a radio it did NOT list — a listed one that will not open
+    //   is the claimed-interface rule's business.
+    if (knownInUseFor(driver, rtlBusy, onBus, claimed, runningOurs, named ? -1 : apiListed)) return "busy";
+    return named ? "openfailed" : "notfound";
 }
 
 }  // namespace vibe

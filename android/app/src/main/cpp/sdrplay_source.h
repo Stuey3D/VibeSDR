@@ -94,6 +94,15 @@ public:
     static bool available();
     static int  deviceCount();
     static std::string deviceName(int index);
+    /** ★★★ DID THE LAST deviceCount() GET A REAL ANSWER FROM THE API — opened, GetDevices said
+     *  Success, within the deadline? False when the API is missing, the service is down or wedged.
+     *  ★ This is what lets an RSP's "not listed" be read as the API's own word: GetDevices leaves
+     *    out a device another process has SELECTED, so an RSP on the USB bus that a WORKING API does
+     *    not list (and none of our own radios is holding) is another program's — OpenWebRX, SDR++,
+     *    SDRconnect (2026-10-18, the Lenovo: OWRX held the RSP1A for 17 h and VibeServer said
+     *    nothing, because on that machine sysfs showed no claim it could count). A count of zero
+     *    from an API that never answered proves nothing, which is why the two are kept apart. */
+    static bool lastListOk();
     /** ★ The API stopped answering — a stale system-wide lock held by another process, often
      *  one that crashed inside the API. Reported so it can be SHOWN rather than waited on:
      *  a hang has no crash report and nothing for the user to act on. */

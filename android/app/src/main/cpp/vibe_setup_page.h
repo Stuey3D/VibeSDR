@@ -5375,12 +5375,19 @@ function sdrRender() {
       // ★★ KNOWN to be held by another program. Released: that is the deal, a plain line. Not
       //    released: something TOOK it — an app left running over SSH that grabs the dongle at boot
       //    is the case Stuart named — so it is a problem with a fix.
+      // ★★★ STUART'S WORDS (2026-10-18), and the examples follow the DRIVER: rtl_tcp means nothing to
+      //     an RSP owner, SDRconnect nothing to a dongle's. WHICH program is not named — the SDRplay
+      //     API cannot say, and the sandbox (ProtectProc=invisible) hides other users' processes.
       const who = m.holder ? ` (${esc(m.holder)})` : "";
+      const eg = m.driver === "rtlsdr" ? "OpenWebRX, SDR++, rtl_tcp"
+               : m.driver === "sdrplay" ? "OpenWebRX, SDR++, SDRconnect"
+               : "OpenWebRX, SDR++";
+      const said = `${n} is in use by another program on this computer${who} (e.g. ${eg}). Close it and `
+        + `VibeServer will pick the radio up automatically.`;
       out.push(m.release
-        ? `<div class="sdrLine">${n} in use with another app on this server${who}</div>`
-        : `<div class="sdrCard sdrSoft">${n} is in use by another app on this server${who}, so VibeServer `
-          + `cannot serve it. Stop that app (or set this radio to be released when not in use) and `
-          + `VibeServer will pick it up again.</div>`);
+        ? `<div class="sdrLine">${said}</div>`
+        : `<div class="sdrCard sdrSoft">${said} Until then nobody can listen to it here. (Or set this `
+          + `radio to be released when not in use, if you share it with that program on purpose.)</div>`);
     }
   }
   for (const p of (SDR.paused || [])) {
