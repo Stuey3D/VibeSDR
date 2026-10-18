@@ -74,6 +74,9 @@ import kotlin.math.min
 class VibeStreamService : MediaBrowserServiceCompat() {
 
     companion object {
+        /** ★★ V12 RECORD BUFFER — process-wide, so the setting reaches it before the service exists (JS sends it
+         *  when a screen mounts) and it outlives a service restart like the iOS module does. RecordBufferRing.kt. */
+        @JvmStatic val recRing = RecordBufferRing()
         const val CHANNEL_ID = "vibesdr_audio"
         const val NOTIF_ID = 1
         // Media-browser node ids (Android Auto / CarPlay-style browse tree)
@@ -269,13 +272,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var websdrChunker: BlockChunker? = null
     @Volatile private var streamSr = 12_000   // latest packet-header rate
 
-    // ── Recorder (decode-thread state machine) ───────────────────────────────
-    // Taps the post-DSP 48k PCM into MediaCodec AAC + MediaMuxer .m4a;
-    // records through mutes. Start/stop arrive as requests and are handled
-    // on the decode thread (MediaCodec is not thread-safe).
+    // ── Recorder (its own thread) ────────────────────────────────────────────
+    // Taps the post-DSP PCM (what the listener hears, binaural included) into MediaCodec AAC + MediaMuxer .m4a;
+    // records through mutes.
+    // ★★ V12: the encoder lives on recExec, a single thread of its own, NOT the decode/ext audio threads. Starting a
+    //    recording with up to 60 s in the record buffer means encoding that much at once, and the audio thread must
+    //    never wait for it (Network > Audio > Spectrum > Decoders). The audio threads hand over a copy of each buffer;
+    //    one thread means MediaCodec is still only ever touched from one place, in submission order.
     @Volatile var recArmed = false
-    @Volatile private var recStartReq: com.facebook.react.bridge.Promise? = null
-    @Volatile private var recStopReq: com.facebook.react.bridge.Promise? = null
+    private val recExec = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "vibesdr-rec").apply { priority = Thread.NORM_PRIORITY; isDaemon = true }
+    }
     private var recEncoder: android.media.MediaCodec? = null
     private var recMuxer: android.media.MediaMuxer? = null
     private var recTrackIndex = -1
@@ -497,6 +504,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         stopCarConnectionWatch()
         mediaSession?.release()
         instance = null
+        // ★ The recorder thread finishes what is queued (a live recording's end) and then exits — one per service.
+        recExec.shutdown()
         super.onDestroy()
     }
 
@@ -564,6 +573,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     fun stopEngine() {
         running = false
+        // ★ V12: a live recording ends with the engine on EVERY path — the external feed (local/Kiwi/OWRX) never had
+        //   a decode thread whose finally would finalise it.
+        if (recArmed) finishRecorderAsync(null)
         // Reset external state too, so switching OWRX→UberSDR doesn't leave the
         // engine in external mode (which made UberSDR pause take the external path
         // → media-control "pause springs back to play").
@@ -1487,7 +1499,6 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         }
                     }
                     val item = extQueue.poll(250, TimeUnit.MILLISECONDS)
-                    handleRecRequests()   // arm/stop the recorder on this thread too
                     if (item == null) continue
                     extQueuedFrames.addAndGet(-(item.third.size / item.second))
                     /* ★★ V12 BINAURAL TUNING needs two ears, so with it on the track is STEREO whatever the source
@@ -1501,32 +1512,32 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         myRate = item.first; myCh = outCh
                         if (gen == extGen) extTrack = mine        // volume changes reach the current writer only
                     }
-                    if (!muted) {
+                    // ★ V12: a recording or the record buffer is listening — it gets what the listener would hear,
+                    //   paused or not: the notch, the squelch and binaural run for it too (once, never twice).
+                    val tapOn = recArmed || recRing.isOn
+                    var pcm = item.third; var pcmN = item.third.size; var pcmCh = item.second
+                    if (!muted || tapOn) {
                         notchShorts(item.third, item.second)   // auto notch (network)
                         if (!squelchOpen) java.util.Arrays.fill(item.third, 0)  // squelch gate
-                        // ★ Binaural AFTER the squelch and on a copy: the recorder and the transcriber below take the
-                        //   source as it was — the effect changes what the listener HEARS, never what is saved.
-                        var pcm = item.third; var pcmN = item.third.size
+                        // ★ Binaural AFTER the squelch and on a copy: the TRANSCRIBER below takes the plain source.
+                        //   ★★ The recorder takes the binaural copy (Stuart, 2026-10-18: recordings "properly represent
+                        //   what was heard by the user at the time").
                         if (bin) {
                             val frames = item.third.size / item.second
                             if (binOut.size < frames * 2) binOut = ShortArray(frames * 2)
                             pcmN = VibeBinaural.processShorts(item.third, frames, item.second, item.first, binOut)
-                            pcm = binOut
+                            pcm = binOut; pcmCh = 2
                         }
+                    }
+                    if (!muted) {
                         // ★ A track released under us (it should no longer happen) ends THIS writer, not the app.
                         try { mine?.write(pcm, 0, pcmN) }  // blocking = backpressure
                         catch (e: IllegalStateException) { Log.w(TAG, "ext AudioTrack gone mid-write: ${e.message}"); break }
                     }
                     // ★ V12: the on-device transcriber — squelch applied (muted audio skips the gate above, so say so).
                     VibeTranscribeTap.feed(item.third, item.third.size, item.first, item.second, !squelchOpen)
-                    // Feed the recorder encoder (the UberSDR decode loop isn't
-                    // running on this path, so recording is driven from here).
-                    if (recArmed) {
-                        val sh = item.third
-                        val bytes = ByteArray(sh.size * 2)
-                        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(sh)
-                        encodePcm(bytes, item.second, item.first)
-                    }
+                    // The recorder + record buffer (the UberSDR decode loop isn't running on this path).
+                    if (tapOn) recTapShorts(pcm, pcmN, pcmCh, item.first)
                 }
             } catch (e: InterruptedException) {
                 // normal shutdown
@@ -2075,10 +2086,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 Log.e(TAG, "decode loop died: ${e.message}", e)
             } finally {
                 releaseCodec()
-                recArmed = false
-                releaseRecorder()  // finalises the .m4a if a recording was live
-                recStartReq?.reject("stopped", "audio engine stopped"); recStartReq = null
-                recStopReq?.resolve(null); recStopReq = null
+                finishRecorderAsync(null)  // finalises the .m4a if a recording was live (on the recorder thread)
                 track?.release()
                 track = null
                 trackRate = 0
@@ -2094,7 +2102,6 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private fun decodeLoop() {
         val info = MediaCodec.BufferInfo()
         while (running) {
-            handleRecRequests()   // runs even when no packets flow
             val pkt = packetQueue.poll(250, TimeUnit.MILLISECONDS) ?: continue
             if (pkt.size <= HEADER_LEN) continue
             val ch = pkt[12].toInt() and 0xFF
@@ -2163,23 +2170,33 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         }
                         notchBytes(pcm, trackChannels)   // auto notch (network)
                         if (!squelchOpen) java.util.Arrays.fill(pcm, 0)  // squelch gate
-                        if (recArmed) encodePcm(pcm)
-                        // ★ V12: the on-device transcriber hears what the listener hears (VibeTranscriberModule).
+                        // ★ V12: the on-device transcriber hears what the listener hears (VibeTranscriberModule) — the
+                        //   plain audio, BEFORE binaural (speech recognition wants it mono).
                         VibeTranscribeTap.feedBytes(pcm, pcm.size, trackRate, trackChannels, false)
+                        // ★ V12 binaural tuning: a stereo copy for the (stereo) track — see startExtWriter.
+                        //   The track was (re)built for the setting by ensureTrackFor above; a mono pcm on a stereo
+                        //   track is only possible in the instant the setting changed, and is then just upmixed.
+                        //   ★★ Run when the speaker OR a recording / the record buffer wants it — a paused listener's
+                        //   recording keeps binaural (Stuart, 2026-10-18) — and only once per buffer.
+                        val tapOn = recArmed || recRing.isOn
+                        val bin = VibeBinaural.on
+                        var outN = -1   // ≥ 0 = binDecOut holds the stereo track feed
+                        var binDone = false
+                        if ((!muted || (tapOn && bin)) && trackOutChannels == 2 && (bin || trackChannels == 1)) {
+                            val frames = pcm.size / (2 * trackChannels)
+                            if (binDecOut.size < frames * 4) binDecOut = ByteArray(frames * 4)
+                            outN = if (bin) VibeBinaural.processBytes(pcm, frames, trackChannels, trackRate, binDecOut)
+                                   else upmixBytes(pcm, frames, binDecOut)
+                            binDone = bin
+                        }
+                        // The recorder + record buffer: what the listener hears (binaural when on), before volume.
+                        if (tapOn) {
+                            if (binDone) recTapBytes(binDecOut, outN, 2, trackRate)
+                            else recTapBytes(pcm, pcm.size, trackChannels, trackRate)
+                        }
                         if (!muted) {
-                            // ★ V12 binaural tuning: a stereo copy for the (stereo) track — see startExtWriter.
-                            //   The track was (re)built for the setting by ensureTrackFor above; a mono pcm on a stereo
-                            //   track is only possible in the instant the setting changed, and is then just upmixed.
-                            val bin = VibeBinaural.on
-                            if (trackOutChannels == 2 && (bin || trackChannels == 1)) {
-                                val frames = pcm.size / (2 * trackChannels)
-                                if (binDecOut.size < frames * 4) binDecOut = ByteArray(frames * 4)
-                                val n = if (bin) VibeBinaural.processBytes(pcm, frames, trackChannels, trackRate, binDecOut)
-                                        else upmixBytes(pcm, frames, binDecOut)
-                                track?.write(binDecOut, 0, n)  // blocking = backpressure
-                            } else {
-                                track?.write(pcm, 0, pcm.size)  // blocking = backpressure
-                            }
+                            if (outN >= 0) track?.write(binDecOut, 0, outN)  // blocking = backpressure
+                            else track?.write(pcm, 0, pcm.size)              // blocking = backpressure
                         }
                     }
                     c.releaseOutputBuffer(outIdx, false)
@@ -2326,54 +2343,64 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     // ── Recorder (decode-thread state machine) ───────────────────────────────
 
-    private fun handleRecRequests() {
-        recStartReq?.let { promise ->
-            recStartReq = null
-            try {
-                val ts = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss", java.util.Locale.US)
-                    .format(java.util.Date())
-                val rf = if (recReqFreq > 0) recReqFreq else currentFreq.toDouble()
-                val rm = if (recReqMode.isNotEmpty()) recReqMode else currentMode
-                val mhz = String.format(java.util.Locale.US, "%.4fMHz", rf / 1e6)
-                recDisplayName = "VibeSDR_${ts}_${mhz}_${rm.uppercase()}.m4a"
-                // filesDir == Expo's FileSystem.documentDirectory, so the JS
-                // RecordingsOverlay can list/play/delete it. (Was cacheDir +
-                // MediaStore publish; now the in-app browser is the home for
-                // recordings on both platforms — share exports elsewhere.)
-                val f = java.io.File(filesDir, recDisplayName)
-                // External audio (local/Kiwi/OWRX) has its own rate/channels; encodePcm converts
-                // whatever arrives to recRate, so the file plays at the right speed.
-                recResampler.reset()
-                recChannels = if (externalAudio) extChannels.coerceIn(1, 2)
-                              else if (trackChannels == 2) 2 else 1
-                val fmt = MediaFormat.createAudioFormat(
-                    MediaFormat.MIMETYPE_AUDIO_AAC, recRate, recChannels)
-                fmt.setInteger(MediaFormat.KEY_AAC_PROFILE,
-                    android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-                fmt.setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
-                fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 65_536)
-                val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
-                enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                enc.start()
-                recEncoder = enc
-                recMuxer = android.media.MediaMuxer(
-                    f.absolutePath, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-                recTrackIndex = -1
-                recMuxerStarted = false
-                recPtsUs = 0
-                recFile = f
-                recArmed = true
-                Log.i(TAG, "recording → $recDisplayName")
-                promise.resolve(f.absolutePath)
-            } catch (e: Exception) {
-                Log.e(TAG, "rec start failed: ${e.message}")
-                promise.reject("rec_open", e.message)
-                releaseRecorder()
+    /** recExec only: open the encoder + muxer for a new recording, resolve, then encode the record buffer's prefix. */
+    private fun openRecorder(prefix: List<RecordBufferRing.Chunk>, prefixSec: Double, wantStereo: Boolean,
+                             promise: com.facebook.react.bridge.Promise) {
+        try {
+            val ts = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss", java.util.Locale.US)
+                .format(java.util.Date())
+            val rf = if (recReqFreq > 0) recReqFreq else currentFreq.toDouble()
+            val rm = if (recReqMode.isNotEmpty()) recReqMode else currentMode
+            val mhz = String.format(java.util.Locale.US, "%.4fMHz", rf / 1e6)
+            recDisplayName = "VibeSDR_${ts}_${mhz}_${rm.uppercase()}.m4a"
+            // filesDir == Expo's FileSystem.documentDirectory, so the JS
+            // RecordingsOverlay can list/play/delete it. (Was cacheDir +
+            // MediaStore publish; now the in-app browser is the home for
+            // recordings on both platforms — share exports elsewhere.)
+            val f = java.io.File(filesDir, recDisplayName)
+            // External audio (local/Kiwi/OWRX) has its own rate/channels; encodePcm converts
+            // whatever arrives to recRate, so the file plays at the right speed.
+            recResampler.reset()
+            // ★ V12: stereo when the source is, when binaural is on (it makes any source stereo), or when the record
+            //   buffer already holds stereo — otherwise a binaural recording would be folded back to mono.
+            recChannels = if (wantStereo) 2 else 1
+            val fmt = MediaFormat.createAudioFormat(
+                MediaFormat.MIMETYPE_AUDIO_AAC, recRate, recChannels)
+            fmt.setInteger(MediaFormat.KEY_AAC_PROFILE,
+                android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            fmt.setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
+            fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 65_536)
+            val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            enc.start()
+            recEncoder = enc
+            recMuxer = android.media.MediaMuxer(
+                f.absolutePath, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            recTrackIndex = -1
+            recMuxerStarted = false
+            recPtsUs = 0
+            recFile = f
+            Log.i(TAG, "recording → $recDisplayName (${"%.1f".format(prefixSec)} s from the record buffer)")
+            promise.resolve(Arguments.createMap().apply {
+                putString("path", f.absolutePath)
+                putDouble("bufferedSeconds", prefixSec)
+            })
+            for (c in prefix) {
+                if (recEncoder == null) break
+                encodePcm(shortsToBytes(c.samples, c.samples.size), c.channels, c.rate)
             }
-        }
-        recStopReq?.let { promise ->
-            recStopReq = null
+        } catch (e: Exception) {
+            Log.e(TAG, "rec start failed: ${e.message}")
             recArmed = false
+            promise.reject("rec_open", e.message)
+            releaseRecorder()
+        }
+    }
+
+    /** Queue the end of the recording on recExec — after every buffer already handed over. */
+    private fun finishRecorderAsync(promise: com.facebook.react.bridge.Promise?) {
+        synchronized(recRing) { recArmed = false }
+        recRun {
             try {
                 val enc = recEncoder
                 if (enc != null) {
@@ -2384,20 +2411,52 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     }
                     drainEncoder(true)
                 }
-                val src = recFile
+                val src = if (enc != null) recFile else null
                 releaseRecorder()
+                recFile = null
                 // Keep the file in filesDir (in-app browser is its home); return
                 // the bare path. Sharing wraps it in Expo's content provider JS-side.
-                promise.resolve(src?.absolutePath)
+                promise?.resolve(src?.absolutePath)
             } catch (e: Exception) {
                 Log.e(TAG, "rec stop failed: ${e.message}")
                 releaseRecorder()
-                promise.reject("rec_stop", e.message)
+                promise?.reject("rec_stop", e.message)
             }
         }
     }
 
-    private fun encodePcm(pcm: ByteArray, srcChannels: Int = trackChannels, srcRate: Int = trackRate) {
+    /** recExec.execute, except after the service has shut it down (a late decode-thread finally): dropped, logged. */
+    private fun recRun(task: () -> Unit) {
+        try { recExec.execute(task) }
+        catch (e: java.util.concurrent.RejectedExecutionException) { Log.w(TAG, "recorder thread gone — task dropped") }
+    }
+
+    /** Audio threads: one buffer of what the listener hears → the recorder (a copy, on recExec) and the record
+     *  buffer. ★ Under the ring's lock, so startRecording's snapshot-and-arm is atomic against it: every buffer
+     *  lands in the prefix OR the live feed, never both, never neither. */
+    private fun recTapShorts(sh: ShortArray, n: Int, ch: Int, rate: Int) {
+        synchronized(recRing) {
+            if (!recArmed && !recRing.isOn) return
+            val copy = sh.copyOf(n)   // the caller reuses its buffer
+            if (recArmed) recRun { encodePcm(shortsToBytes(copy, copy.size), ch, rate) }
+            recRing.append(copy, ch, rate)
+        }
+    }
+
+    private fun recTapBytes(b: ByteArray, n: Int, ch: Int, rate: Int) {
+        val sh = ShortArray(n / 2)
+        ByteBuffer.wrap(b, 0, n).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(sh)
+        recTapShorts(sh, sh.size, ch, rate)
+    }
+
+    private fun shortsToBytes(sh: ShortArray, n: Int): ByteArray {
+        val bytes = ByteArray(n * 2)
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(sh, 0, n)
+        return bytes
+    }
+
+    /** recExec only. */
+    private fun encodePcm(pcm: ByteArray, srcChannels: Int, srcRate: Int) {
         val enc = recEncoder ?: return
         // Source channels and rate can flip mid-recording — adapt to the encoder's
         val data = recResampler.process(matchChannels(pcm, srcChannels, recChannels),
@@ -2517,11 +2576,23 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // including local/Kiwi where the service's currentFreq isn't synced).
         if (frequency > 0) recReqFreq = frequency
         if (mode.isNotEmpty()) recReqMode = mode
-        recStartReq = promise
+        /* ★★ V12 RECORD BUFFER: snapshot the buffer and arm the live tap under ONE lock (see recTapShorts), then
+         *    everything else is recExec's — open, resolve with the buffered seconds (the timer starts there), encode
+         *    the prefix, then the live buffers queued behind it. "Recording must always respond instantly regardless
+         *    of the buffer set" (Stuart): nothing here waits for an encode, and the open no longer waits for the
+         *    decode thread's next loop either. */
+        synchronized(recRing) {
+            val prefix = if (recRing.isOn) recRing.snapshot() else emptyList()
+            val prefixSec = prefix.sumOf { it.micros } / 1e6
+            val srcStereo = if (externalAudio) extChannels == 2 else trackChannels == 2
+            val wantStereo = srcStereo || VibeBinaural.on || prefix.any { it.channels == 2 }
+            recArmed = true
+            recRun { openRecorder(prefix, prefixSec, wantStereo, promise) }
+        }
     }
 
     fun stopRecordingNative(promise: com.facebook.react.bridge.Promise) {
-        recStopReq = promise
+        finishRecorderAsync(promise)
     }
 
     /** System share sheet for the finished recording (content:// URI). */
