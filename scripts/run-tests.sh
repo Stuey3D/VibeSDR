@@ -522,6 +522,9 @@ if npx tsx scripts/test_key_actions.ts; then pass=$((pass+1)); else fail=$((fail
 #    hid after the units, where no arrow went).
 if npx tsx scripts/test_nav_move.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ GAME CONTROLLERS IN THE APP (V12): Stuart's two profiles onto the keyboard's own keys, HOLD START, the jog wheels.
+if npx tsx scripts/test_pad_actions.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
 #     first keeping its codec — through the same WebSockets the clients use, against fake-rtl-tcp.

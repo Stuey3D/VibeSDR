@@ -10380,7 +10380,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       const k = e.key;
       // ★★ Feed the Full Keyboard Access detector FIRST — above every guard below — because the question "do the
       //    arrows reach this app at all" is app-wide, and FkaSplash is mounted on this screen.
-      noteKeyForFka(k, e.plain);
+      if (!e.pad) noteKeyForFka(k, e.plain);   // a game controller says nothing about Full Keyboard Access
       // ★ Not the screen on top — a stack navigator keeps this MOUNTED behind whatever is above it.
       if (!screenFocusedRef.current) return;
       // ★ Third-party page on screen (compatibility mode) — every key of ours is off, so nothing of ours can fire under

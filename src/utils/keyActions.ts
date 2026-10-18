@@ -70,7 +70,9 @@ export type HwKey =
   | 'Enter' | 'Back'
   | 'TuneDown' | 'TuneUp' | 'ZoomOut' | 'ZoomIn';
 
-export interface HwKeyEvent { key: HwKey; plain: boolean; typing: boolean }
+/** ★ `pad`: it came from a game controller (src/utils/padActions.ts), not a keyboard — the Full Keyboard Access
+ *  detector must not count it (PanelNav noteKeyForFka). Everything else treats the two alike, on purpose. */
+export interface HwKeyEvent { key: HwKey; plain: boolean; typing: boolean; pad?: boolean }
 
 const HW_NAME: Record<KeyAction, HwKey> = {
   up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
@@ -79,14 +81,16 @@ const HW_NAME: Record<KeyAction, HwKey> = {
 };
 
 /** A raw native report ({key, plain, typing}) → the event the app's listeners get, or null if it is not one of ours. */
-export function toHwKey(raw: { key?: string; plain?: boolean; typing?: boolean } | null | undefined): HwKeyEvent | null {
+export function toHwKey(raw: { key?: string; plain?: boolean; typing?: boolean; pad?: boolean } | null | undefined): HwKeyEvent | null {
   const a = keyAction(raw?.key);
   if (!a) return null;
   const typing = !!raw?.typing;
   // ★ While a field has the cursor only its Enter (commit) and Escape (leave, close the panel) are ever ours.
   if (typing && !(a === 'enter' || raw?.key === 'Escape')) return null;
   // ★ plain = the physical arrow key it stands for. W A S D are not (PanelNav's Full Keyboard Access detector).
-  return { key: HW_NAME[a], plain: raw?.plain !== false && /^Arrow/.test(raw?.key ?? ''), typing };
+  const e: HwKeyEvent = { key: HW_NAME[a], plain: raw?.plain !== false && /^Arrow/.test(raw?.key ?? ''), typing };
+  if (raw?.pad) e.pad = true;
+  return e;
 }
 
 type HwListener = (e: HwKeyEvent) => boolean | void;
@@ -102,7 +106,7 @@ export class KeyBus {
     this.lists[kind].push(entry);
     return { remove: () => { const l = this.lists[kind]; const i = l.indexOf(entry); if (i >= 0) l.splice(i, 1); } };
   }
-  dispatch(kind: 'down' | 'up', raw: { key?: string; plain?: boolean; typing?: boolean } | null | undefined): void {
+  dispatch(kind: 'down' | 'up', raw: { key?: string; plain?: boolean; typing?: boolean; pad?: boolean } | null | undefined): void {
     const e = toHwKey(raw);
     if (!e) return;
     // A copy: a listener may open or close a panel, adding or removing listeners mid-dispatch.

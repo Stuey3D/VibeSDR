@@ -228,7 +228,7 @@ export function useRepeatingKeys(
     };
     const down = addKeyListener('down', (e) => {
       const k = e.key;
-      noteKeyForFka(k, e.plain);
+      if (!e.pad) noteKeyForFka(k, e.plain);   // a game controller says nothing about Full Keyboard Access
       if (e.typing && !typingOk) return;
       if (k === held) return;      // a re-fired down for the key already held: ignore
       stop();

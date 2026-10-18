@@ -1,0 +1,104 @@
+// Game controllers in the app (src/utils/padActions.ts) — Stuart's mapping, fed into the keyboard's own keys.
+import { PadMapper, PAD_BIT, padKey, SWITCH_HOLD_MS, type PadOut } from '../src/utils/padActions';
+import { toHwKey } from '../src/utils/keyActions';
+
+let fails = 0;
+const ok = (c: boolean, what: string) => { console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fails++; };
+const keys = (o: PadOut[]) => o.filter((x): x is { kind: 'down' | 'up'; key: string } => 'kind' in x).map((x) => `${x.kind}:${x.key}`).join(' ');
+const action = (k: string | null) => (k ? toHwKey({ key: k })?.key ?? null : null);
+
+console.log('test_pad_actions');
+
+// ── Every button lands on the keyboard key Stuart's scheme gives it ──
+const want: Record<string, [string | null, string | null]> = {   // button: [buttons profile, sticks profile]
+  up: ['ArrowUp', 'ArrowUp'], down: ['ArrowDown', 'ArrowDown'], left: ['ArrowLeft', 'ArrowLeft'], right: ['ArrowRight', 'ArrowRight'],
+  r1: ['Enter', null], l1: ['Back', null],
+  north: ['ZoomIn', null], south: ['ZoomOut', 'Enter'], west: ['TuneDown', null], east: ['TuneUp', 'Back'],
+  start: [null, null],
+};
+for (const [b, [bp, sp]] of Object.entries(want)) {
+  ok(action(padKey(b as any, 'buttons')) === bp, `buttons: ${b} -> ${bp}`);
+  ok(action(padKey(b as any, 'sticks')) === sp, `sticks: ${b} -> ${sp}`);
+}
+
+// ── Profile choice: sticks decide until START has chosen ──
+{
+  const m = new PadMapper(null);
+  ok(m.profileOf(true) === 'sticks' && m.profileOf(false) === 'buttons', 'no choice: a pad with sticks gets sticks, one without gets buttons');
+  m.setChosen('buttons');
+  ok(m.profileOf(true) === 'buttons', 'a remembered choice wins over the pad');
+}
+
+// ── Press / release ──
+{
+  const m = new PadMapper(null);
+  ok(keys(m.feed({ id: 'p', sticks: true, b: PAD_BIT.south }, 0)) === 'down:Enter', 'sticks: ✕ down is Enter down');
+  ok(keys(m.feed({ id: 'p', sticks: true, b: 0 }, 50)) === 'up:Enter', '…and up is Enter up');
+  ok(keys(m.feed({ id: 'p', sticks: true, b: PAD_BIT.right }, 60)) === 'down:ArrowRight', 'D-pad right');
+  ok(keys(m.feed({ id: 'p', sticks: true, b: PAD_BIT.right }, 70)) === '', 'a repeat report of the same state sends nothing (PanelNav repeats a held key)');
+  ok(keys(m.feed({ id: 'p', sticks: true, b: PAD_BIT.down }, 80)) === 'up:ArrowRight down:ArrowDown', 'a roll: up, then the new down');
+  ok(keys(m.feed({ id: 'p', gone: true }, 90)) === 'up:ArrowDown', 'unplugged mid-press: the held key goes up');
+  ok(keys(m.feed({ id: 'p', sticks: true, b: PAD_BIT.l1 | PAD_BIT.r1 }, 100)) === '', 'sticks: the shoulders do nothing');
+}
+{
+  const m = new PadMapper(null);
+  ok(keys(m.feed({ id: 'q', sticks: false, b: PAD_BIT.east }, 0)) === 'down:.', 'buttons: right face = tune up (held = the keys\' sweep)');
+  ok(keys(m.feed({ id: 'q', sticks: false, b: PAD_BIT.east | PAD_BIT.r1 }, 10)) === 'down:Enter', 'buttons: R = Enter, with tune still held');
+  ok(keys(m.feed({ id: 'q', sticks: false, b: 0 }, 20)) === 'up:. up:Enter', 'both released');
+}
+
+// ── HOLD START switches, never a tap ──
+{
+  const saved: string[] = [];
+  const m = new PadMapper(null, (p) => saved.push(p));
+  m.feed({ id: 'p', sticks: true, b: PAD_BIT.start }, 1000);
+  ok(m.nextDeadline() === 1000 + SWITCH_HOLD_MS, 'START down: a deadline is armed');
+  m.feed({ id: 'p', sticks: true, b: 0 }, 1300);
+  ok(m.nextDeadline() === null && saved.length === 0 && m.tick(5000).length === 0, 'a TAP of START switches nothing');
+  m.feed({ id: 'p', sticks: true, b: PAD_BIT.start | PAD_BIT.south }, 2000);   // ✕ held as well (Enter down)
+  ok(m.tick(2000 + SWITCH_HOLD_MS - 1).length === 0, 'not before the hold time');
+  const o = m.tick(2000 + SWITCH_HOLD_MS);
+  const n = o.find((x) => 'notice' in x) as any;
+  ok(!!n && n.profile === 'buttons' && /hold START to switch back/.test(n.notice), 'held: switches to buttons, the notice says how to switch back');
+  ok(keys(o) === 'up:Enter', 'a button held across the switch goes up as what it went down as');
+  ok(saved.join() === 'buttons', 'the choice is saved');
+  ok(m.tick(9999).length === 0 && m.nextDeadline() === null, 'once per hold');
+  ok(keys(m.feed({ id: 'p', sticks: true, b: PAD_BIT.start }, 10000)) === '', 'releasing ✕ after the switch sends nothing more');
+  m.feed({ id: 'p', sticks: true, b: 0 }, 10100);
+  ok(keys(m.feed({ id: 'p', sticks: true, b: PAD_BIT.south }, 10200)) === 'down:-', 'now ✕ (bottom) is zoom out, by position');
+  m.feed({ id: 'p', sticks: true, b: 0 }, 10300);
+  m.feed({ id: 'p', sticks: true, b: PAD_BIT.start }, 11000);
+  const back = m.tick(11000 + SWITCH_HOLD_MS).find((x) => 'notice' in x) as any;
+  ok(back?.profile === 'sticks' && saved.join() === 'buttons,sticks', 'held again: back to sticks');
+}
+
+// ── The jog wheels ──
+{
+  const m = new PadMapper('sticks');
+  const ring = (stick: 'l' | 'r', fromDeg: number, toDeg: number, step = 5) => {
+    const out: PadOut[] = [];
+    const s = Math.sign(toDeg - fromDeg);
+    for (let a = fromDeg; s > 0 ? a <= toDeg : a >= toDeg; a += s * step) {
+      const x = Math.cos(a * Math.PI / 180), y = Math.sin(a * Math.PI / 180);   // y DOWN: growing angle = clockwise
+      out.push(...m.feed(stick === 'l' ? { id: 'j', sticks: true, lx: x, ly: y } : { id: 'j', sticks: true, rx: x, ry: y }, 0));
+    }
+    m.feed({ id: 'j', sticks: true }, 0);   // back to the middle
+    return keys(out);
+  };
+  const cw = ring('l', 0, 90);
+  ok(cw === 'down:. up:. down:. up:. down:. up:.', `left stick clockwise a quarter turn = three tune-up taps (got ${cw})`);
+  const acw = ring('l', 90, 0);
+  ok(acw === 'down:, up:, down:, up:, down:, up:,', `anticlockwise = tune down (got ${acw})`);
+  const z = ring('r', 0, 90);
+  ok(z === 'down:+ up:+ down:+ up:+', `right stick clockwise = zoom in (got ${z})`);
+  const wrap = ring('l', 150, 210);
+  ok(wrap === 'down:. up:. down:. up:.', `passing through west is not a 360° jump (got ${wrap})`);
+  ok(keys(m.feed({ id: 'j', sticks: true, lx: 0.2, ly: 0.1 }, 0)) === '', 'a stick near the middle never drifts the dial');
+  const mb = new PadMapper('buttons');
+  let out: PadOut[] = [];
+  for (let a = 0; a <= 180; a += 5) out = out.concat(mb.feed({ id: 'k', sticks: true, lx: Math.cos(a * Math.PI / 180), ly: Math.sin(a * Math.PI / 180) }, 0));
+  ok(keys(out) === '', 'buttons profile: the sticks do nothing');
+}
+
+console.log(fails ? `test_pad_actions: ${fails} FAILED` : 'test_pad_actions: all ok');
+process.exit(fails ? 1 : 0);
