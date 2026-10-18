@@ -131,8 +131,14 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4
    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86|x86_64|AMD64)$")
   set(VIBE_X86_32 ON)
-  add_compile_options(-march=i686 -msse2 -mfpmath=sse -mtune=generic)
-  message(STATUS "32-bit x86: -march=i686 -msse2 -mfpmath=sse (SSE2 floor)")
+  # ★ A CACHE STRING, so an Atom test build can swap the ISA line (-march=bonnell …) without the
+  #   default reasserting -march=i686 AFTER it: add_compile_options lands after CMAKE_CXX_FLAGS on the
+  #   command line, so a -march passed through CMAKE_CXX_FLAGS was silently overridden (2026-10-18).
+  set(VIBE_X86_32_FLAGS "-march=i686 -msse2 -mfpmath=sse -mtune=generic" CACHE STRING
+      "ISA flags for the 32-bit x86 build (keep -mfpmath=sse)")
+  separate_arguments(_vibe_x86_32_flags UNIX_COMMAND "${VIBE_X86_32_FLAGS}")
+  add_compile_options(${_vibe_x86_32_flags})
+  message(STATUS "32-bit x86: ${VIBE_X86_32_FLAGS}")
 endif()
 
 add_library(vibedsp STATIC
