@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # publish-apt-docker.sh — build and publish VibeServer from the Mac, in a bookworm container.
 #
+# ★★★ THIS IS THE BACKUP ROUTE (2026-10-18). THE NORMAL ONE IS scripts/publish-apt-remote.sh: every package
+#     is built and indexed on the Lenovo (192.168.86.13), and the Mac only signs, commits and pushes. Use this
+#     script only when the Lenovo is unavailable. Both run the same publish-apt.sh, so the rules are the same.
+# ★★★ ~/.colima WAS DELETED ON 2026-10-18 to free 13 GB, so this route needs its VM recreated first —
+#     SMALL, as explained further down (a 40 GB disk once took the Mac to 134 MB free):
+#         colima start --cpu 4 --memory 4 --disk 12
+#         brew install docker-buildx      # + "cliPluginsExtraDirs" in ~/.docker/config.json (see below)
+#     and removed completely afterwards:  colima stop && colima delete -f && rm -rf ~/.colima/_lima/_disks
+#     amd64 and i386 still come from the Lenovo here (VIBE_PREBUILT_DEB) — this Mac cannot build x86 — so if
+#     the Lenovo is down, this route can publish arm64 + armhf only, and it says so before refusing.
+#
 #   scripts/publish-apt-docker.sh                # BOTH arches, index, sign, commit, push
 #   scripts/publish-apt-docker.sh --dry-run      # everything except the push
 #   scripts/publish-apt-docker.sh --arch arm64   # one architecture only (see the warning below)
@@ -251,7 +262,7 @@ for A in $ARCHES; do
   if { [ "$A" = "amd64" ] || [ "$A" = "i386" ]; } && [ "$HOSTARCH" != "amd64" ] && [ -z "${PREBUILT_ENV:-}" ]; then
     echo "!! REFUSING to build $A under emulation — amd64 has failed 3/3 and takes ~25 min to fail."
     echo "!! Build it natively on the Lenovo/OWRX box (192.168.86.13, ~1 min per arch):"
-    echo "!!   scripts/build-x86-debs.sh --rev <REV>        # builds amd64 AND i386, prints the line below"
+    echo "!!   scripts/build-debs-remote.sh --rev <REV> --arch 'amd64 i386'   # (or the normal route: publish-apt-remote.sh)"
     echo "!!   VIBE_PREBUILT_DEB='/path/vibeserver_<ver>-<rev>_amd64.deb /path/vibeserver_<ver>-<rev>_i386.deb' $0"
     echo "!! See the memory note build_emulated_arch_on_real_hardware for the exact container run."
     echo "!! ✗ Do not work around this by dropping $A: publishing one arch hides the other."
