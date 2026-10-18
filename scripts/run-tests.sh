@@ -41,6 +41,9 @@ flags_for() {
     # ★★★ Every chain delivers exactly 48 000 audio samples per second of capture (2026-10-07: the RSPs
     #     ran 32-34 ppm short through a rounded, approximated resampler ratio). Optimised: 21 s of input per chain.
     test-resampler-rate)   echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★★★ FirDecimator/RealFir against the direct convolution, sample for sample (2026-10-18) — on x86
+    #     the SSE2 aligned tap banks, on ARM the NEON kernel. The server's own flags for vibedsp.
+    test-fir-simd)         echo "-O3 -ffp-contract=fast -I $VDSP" ;;
     # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
     #   slot decode finishes in a second rather than ten.
     test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
@@ -94,6 +97,7 @@ deps_for() {
     # ★★ proc.cpp goes with anything that SHELLS OUT (curl, mostly): geoip, asndb and radiodns all
     #    call vibeproc::run. It was missing, so those three "did not build" — and a suite that does
     #    not build is not a suite that passes, it is one nobody is running. Caught 2026-09-21.
+    test-fir-simd)      echo "$VDSP/ddc.cpp" ;;
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;

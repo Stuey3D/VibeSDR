@@ -114,6 +114,11 @@ for A in $ARCHES; do
         \${VIBE_X86_32_FLAGS:+\"-DVIBE_X86_32_FLAGS=\$VIBE_X86_32_FLAGS\"} > /out/cmake.log
       nice -n 19 cmake --build build $TARGET -j4 > /out/build.log 2>&1 \
         || { tail -30 /out/build.log; exit 1; }
+      # ★★★ THE x86 FIR KERNELS ARE CHECKED WHERE THEY ARE COMPILED (2026-10-18): the SSE2 tap banks
+      #     exist only in these builds, so this is the one place their output can be compared with the
+      #     direct convolution before a package carries them. One second; a mismatch stops the build.
+      if [ \"$PGO\" != generate ]; then (cd build && nice -n 19 ctest -R \"^fir-simd\\\$\" --output-on-failure > /out/ctest.log 2>&1) \
+        || { tail -30 /out/ctest.log; exit 1; }; fi
       # ★ chmod: the container runs as root, and a root-owned directory under ~/vibeout stops the next
       #   run from emptying it (rm -rf) — the && chain then skips the whole build without saying so.
       if [ \"$PGO\" = generate ]; then mkdir -p /out/pgogen && cp build/vibeserver build/vibeserver-bench /out/pgogen/ \

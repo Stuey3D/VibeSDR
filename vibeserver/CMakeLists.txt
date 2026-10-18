@@ -716,6 +716,13 @@ add_test(NAME mdns COMMAND test-mdns)
 add_executable(test-crash-report "${CMAKE_CURRENT_SOURCE_DIR}/test-crash-report.cpp")
 target_link_libraries(test-crash-report PRIVATE Threads::Threads)
 add_test(NAME crash-report COMMAND test-crash-report)
+# ★★★ The FIR kernels against the direct convolution, sample for sample (2026-10-18). On x86 this is
+#     the ONLY check of the SSE2 aligned tap banks (21fe0cf7) — the Mac never compiles them, and the
+#     DSP suites assert behaviours a slightly wrong kernel can pass. Built with vibedsp's own flags.
+add_executable(test-fir-simd "${CMAKE_CURRENT_SOURCE_DIR}/test-fir-simd.cpp" "${CPP_DIR}/vibedsp/ddc.cpp")
+target_include_directories(test-fir-simd PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
+target_compile_options(test-fir-simd PRIVATE -O3 -ffp-contract=fast)
+add_test(NAME fir-simd COMMAND test-fir-simd)
 # The offline replay harness: the same chain over a VIBE_IQ_DUMP capture, in seconds.
 # ★ dab-offline and the receiver test take the PFFFT path so the SERVER's transform is what gets
 #   replayed and tested; the other DAB tests keep the header-only radix-2, which is the reference.
