@@ -3463,10 +3463,10 @@ select.btn { padding: 6px 8px; }
                control (AGENTS.md). The glyph says the box is locked before you touch it, and the tap
                still answers, with the reason and the way out (Stuart, 2026-09-25: "in DAB mode the
                frequency entry must have a padlock and advise it is locked due to DAB mode"). -->
-          <span id="mFreqBox"><span id="mFreqLock" hidden aria-hidden="true"><svg viewBox="0 0 10 13" width="9" height="12"
+          <span id="mFreqBox" role="button" tabindex="0"><span id="mFreqLock" hidden aria-hidden="true"><svg viewBox="0 0 10 13" width="9" height="12"
             fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1" y="5.5" width="8" height="6.5" rx="1"/><path
             d="M2.9 5.5V3.6a2.1 2.1 0 0 1 4.2 0v1.9"/></svg></span><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span><span id="mChan" hidden></span></span>
-          <span id="mMode">NFM</span><!--
+          <span id="mMode" role="button" tabindex="0">NFM</span><!--
           ★★ THE APP'S INTERLOCKING RINGS, not a green "ST". The lettering was the least legible
              thing on a bar that runs to bright green, and the app already has a symbol for this
              (ControlsBar.tsx:432, StereoIcon) — a shape reads at a glance where two small letters
@@ -3475,7 +3475,7 @@ select.btn { padding: 6px 8px; }
              0.62×, stroke 0.13× — hence a 26×16 box with r=7 at cx 8 and 17.9. -->
           <span id="mStereo" title="Stereo pilot locked" aria-label="Stereo"><svg viewBox="0 0 26 16" fill="none"
             stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="8" cy="8" r="7"/><circle
-            cx="17.9" cy="8" r="7"/></svg></span><span id="mSnr"></span>
+            cx="17.9" cy="8" r="7"/></svg></span><span id="mSnr" role="button" tabindex="0"></span>
         </div>
         <!-- ★★★ THE DAB RECEPTION METER (Stuart, 2026-10-06): in DAB the gradient above is power in the passband,
              which read S9 on a multiplex that never played. This bar says whether it can be HEARD — three bars

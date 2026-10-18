@@ -167,6 +167,14 @@ export function initMobileControls(deps: MobileDeps) {
   //    number pad, and the gradient behind them was an invisible third button.
   $('mFreqBox').onclick = () => deps.openFreqEntry();
   $('mMode').onclick    = () => openModePicker();
+  // ★ The frequency box, the mode and the signal reading are spans that act as buttons, so they carry role="button"
+  //   and tabindex="0" (index.html) — without those a game controller's highlight and the Tab key skipped straight
+  //   past them (Stuart, 2026-10-18: "it skips past the frequency box the demodulator button"). Enter / Space press them.
+  for (const id of ['mFreqBox', 'mMode', 'mSnr']) {
+    $(id).addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $(id).click(); }
+    });
+  }
   // ★★★ A MENU, NOT A CYCLER — the same ruling this file already applies to the STEP button, and
   //     for the same reason, now confirmed on this control too: "I have to click multiple times
   //     and it sometimes jumps past the digits I want, I want to view the SNR but keeps jumping
