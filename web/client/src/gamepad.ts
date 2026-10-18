@@ -60,7 +60,8 @@ let current: HTMLElement | null = null;
 let lastBox: Box | null = null;
 let adjusting = false;
 let grabbed: HTMLElement | null = null;         // the [data-navbox] that has the D-pad, if any
-let autoTaken = '';                             // the data-navauto token already taken (once per appearance)
+let autoTaken = '';
+let grabDepth = 0;                              // backStack depth when the box took the D-pad (see back)                             // the data-navauto token already taken (once per appearance)
 const held = new Map<string, number>();        // action → when it next repeats (ms)
 const tuneJog = new Jog(30), zoomJog = new Jog(45);
 
@@ -107,6 +108,7 @@ function candidates(root: HTMLElement): HTMLElement[] {
 /** Enter on a box: it takes the D-pad, the highlight goes to its first list item (else its first key). */
 function grab(b: HTMLElement) {
   grabbed = b;
+  grabDepth = backStack.length;
   b.classList.add('gpGrab');
   const list = candidates(b);
   const start = b.dataset.navstart;
@@ -196,6 +198,9 @@ export function pushBack(close: () => void): () => void {
 
 function back() {
   if (adjusting && current) { adjusting = false; current.classList.remove('gpAdjust'); return; }
+  // ★ LAYERS IN ORDER: what opened AFTER the box took the D-pad (a header key's menu) closes first; then the box lets
+  //   go; only then what was already up before it (the first-visit tour, which stays on screen while you use the radio).
+  if (grabbed && backStack.length <= grabDepth) { release(); return; }
   const top = backStack.pop();
   if (top) { top(); highlight(null); return; }
   if (grabbed) { release(); return; }
