@@ -26,6 +26,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeEventEmitter, NativeModules } from 'react-native';
+import { screenNavRef } from './ScreenNav';
 import { captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS, useNavFocus } from './PanelNav';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -626,37 +627,19 @@ export default function DecoderPanel({
     return () => clearTimeout(t);
   }, [decoderText, minimised, nvViewingPrev]);
 
-  // ── Keyboard: the decoder box takes the keyboard on TAB ─────────────────────
+  // ── Keyboard: the decoder box takes the keyboard on ENTER (the screen's highlight on it) ──
   //
   // ★ This box floats above a LIVE screen, so it cannot simply listen: while it holds the
-  // keyboard the main screen must stop acting on keys, or up/down would retune the radio
-  // underneath the list you are reading. Tab hands it over and Tab hands it back.
+  // keyboard the main screen must stop moving its highlight, or the arrows would act
+  // underneath the list you are reading. Enter on the box hands it over; Back hands it back.
   //
   // ★★ TWO AXES, NO SUB-MODES. Left/right move along the header controls, up/down move
-  // through the list, and whichever you last used is what SPACE activates. That avoids a
+  // through the list, and whichever you last used is what ENTER activates. That avoids a
   // nested "now you are in the header" state, which would be one more invisible mode.
   //
-  // ★★ ENTER IS THE KEY WE NAME; Space still works but is no longer advertised anywhere
-  // (Stuart, 2026-07-26: "now we don't have the spacebar so any references to it need
-  // removing"). Documenting both meant naming a key that silently fails for anyone using Full
-  // Keyboard Access, which is worse than naming one that always works. Space is kept in the
-  // handlers because it costs nothing and is what a hand reaches for out of habit.
-  //
-  // ★★ ENTER WORKS TOO, added 2026-07-26. iOS Full Keyboard Access uses SPACE to activate the
-  // focused element, so under FKA the space bar never reaches us and the box became unusable —
-  // a list you can move through and cannot select from. Stuart: "space is not working in FKA
-  // mode, so all those places you didn't want Enter, unfortunately it is needed."
-  //
-  // ★ The conflict that ruled Enter out does not actually arise HERE: the main screen stops
-  // acting on keys whenever this box owns them (see region capture), so while the user is in
-  // the list there is no tune box for Enter to open. Space stays the documented key because it
-  // is what the on-screen hint has room for and what works in the normal case; Enter is a
-  // silent second door, which is what you want for a fallback.
-  //
-  // ★ SPACE, NOT ENTER, was the original rule. Enter is the tune box across the whole app and
-  // Stuart flagged the exception himself — a key that means something different depending on
-  // where you are is the thing that has caused most of the confusion in this work. Space is
-  // free, and "space activates the focused thing" is a convention rather than a rule to learn.
+  // ★★ ENTER ONLY (2026-10-18, one scheme). Space was once the key here and then a silent second door (iOS Full
+  // Keyboard Access takes Space); with every key now meaning the same thing everywhere, Enter selects and Space is not
+  // ours at all — Full Keyboard Access and VoiceOver keep it.
   const [kbZone, setKbZone] = useState<null | 'header' | 'list' | 'popup'>(null);
   const [speedIdx, setSpeedIdx] = useState(0);
   const [hdrIdx, setHdrIdx] = useState(0);
@@ -708,10 +691,10 @@ export default function DecoderPanel({
 
   // The list this box is showing, if any. ADS-B and spots have nothing to select — Stuart:
   // "same kinda thing with ADSB except nothing to select just scroll" — so they navigate but
-  // Space does nothing rather than pretending to.
+  // Enter does nothing rather than pretending to.
   const listLen = isDabMode ? dabProgrammes.length : 0;
 
-  // ★ The flash. Tab-in is otherwise invisible, and invisible focus has looked like a broken
+  // ★ The flash. Entering the box is otherwise invisible, and invisible focus has looked like a broken
   // keyboard three times over in this work. It announces itself once and then gets out of the
   // way, which is what a real control does when it lights up. (Stuart's idea.)
   const { value: flash, flash: announce, flashThen } = useAnnounce();
@@ -724,12 +707,12 @@ export default function DecoderPanel({
 
   useEffect(() => () => { captureRegion(null); }, []);   // never leave it captured on unmount
 
-  // ★★ DAB TAKES THE KEYBOARD WITHOUT TAB. On DAB the VFO is LOCKED to the multiplex, so
+  // ★★ DAB TAKES THE KEYBOARD WITHOUT BEING ASKED. On DAB the VFO is LOCKED to the multiplex, so
   // there is nothing to tune and the box IS the interface — the programme list is the only
-  // thing on screen worth moving through. Making the user press Tab first would be asking
+  // thing on screen worth moving through. Making the user go in first would be asking
   // them to hand over a keyboard the main screen has no use for. (Stuart, 2026-07-26.)
   //
-  // ★ Once per appearance, so Tab still releases it and does not immediately snatch it back:
+  // ★ Once per appearance, so Back still releases it and it does not immediately snatch it back:
   // a user who wants the waterfall's zoom on a DAB ensemble can still have it.
   // ★ The list SCROLLS, so focus has to drag it — the same fault the profile list had. Uses
   // the y each row reports on layout rather than a measurement API: it is the position within
@@ -752,7 +735,7 @@ export default function DecoderPanel({
   // ★★ WHO OWNS THE ARROWS BY DEFAULT. On DAB and ADS-B the box IS the screen — a locked
   // multiplex or an aircraft table — so it takes the arrows outright. On the HF decoders the
   // waterfall is in ACTIVE USE and tune/zoom are the primary controls, so the box only
-  // borrows them when you deliberately Tab in. Stuart's framing, and it is the right split:
+  // borrows them when you deliberately go in (Enter on the box). Stuart's framing, and it is the right split:
   // secondary functions should take the controls only while you are actually looking at them.
   const autoOwn = isDabMode || isAircraftMode;
   const autoTaken = useRef(false);
@@ -774,93 +757,66 @@ export default function DecoderPanel({
 
   useEffect(() => { if (!panelOn) leave(); }, [panelOn, leave]);
 
+  // ★★★ ONE SCHEME (Stuart, 2026-10-18): the box is a place the screen's highlight can land (ScreenNav); Enter there
+  //   hands it the keyboard. Inside, the arrows move through the list (left/right reach the header controls), Enter
+  //   selects, Back steps out — the speed popup first, then out of the box altogether. Tab, Space and T are gone.
   useRepeatingKeys(panelOn, (k: string) => {
-    {
-      // Any key the box acts on counts as activity — see armIdle.
-      if (kbZoneRef.current) armIdleRef.current();
-      if (k === 'Tab') {
-        // ★★ ON DAB, TAB MOVES BETWEEN LIST AND HEADER — it never releases the keyboard.
-        // Zooming a multiplex only zooms into a wall of signals (Stuart), so handing the
-        // arrows back to the main screen gains nothing. But the header still holds SPEED FIX,
-        // which is very much wanted, so Tab has to reach it rather than leave.
-        //
-        // ★ I first removed Tab here entirely, having conflated "leaving the box" with
-        // "reaching the header". They are different things, and on DAB only one of them is
-        // useful.
-        if (autoOwnRef.current) {
-          // Owned outright: Tab moves between the list and the header, never out.
-          setKbZone(z => (z === 'header' ? 'list' : 'header'));
-          setHdrIdx(0);
-          announce();
-          return;
-        }
-        // ★ Borrowed: Tab once into the LIST, again into the HEADER, again to hand it back.
-        // The list first because scrolling what you are reading is the common case; the
-        // header controls are the occasional one. (Stuart.)
-        setKbZone(z => {
-          if (z === null) { captureRegion('decoder'); announce(); return 'list'; }
-          if (z === 'list') { setHdrIdx(0); announce(); return 'header'; }
-          captureRegion(null);
-          return null;
-        });
-        return;
-      }
-      if (!kbZoneRef.current) return;               // not ours until Tab says so
-      if (k === 'Escape' || k === 'Backspace') {
-        // Deepest first: close the speed popup before anything else, without changing it.
-        if (kbZoneRef.current === 'popup') { popCloseRef.current(); return; }
-        // Where the box OWNS the arrows there is nothing to hand them back to, so these step
-        // back to the list rather than leaving them tuning a locked VFO.
-        if (autoOwnRef.current) { setKbZone('list'); return; }
-        leave();
-        return;
-      }
-      // The popup is a dropdown: it owns every arrow while open, Space picks, Backspace leaves.
-      if (kbZoneRef.current === 'popup') {
-        if (k === 'ArrowLeft' || k === 'ArrowUp') { setSpeedIdx(i => Math.max(0, i - 1)); return; }
-        if (k === 'ArrowRight' || k === 'ArrowDown') { setSpeedIdx(i => Math.min(popLenRef.current - 1, i + 1)); return; }
-        if (k === 'Space' || k === 'Enter') { popApplyRef.current(speedIdxRef.current); return; }
-        if (k === 'Tab') { popCloseRef.current(); return; }
-        return;
-      }
-      if (k === 'ArrowLeft' || k === 'ArrowRight') {
-        setKbZone('header');
-        setHdrIdx(i => Math.max(0, Math.min(hdrSlots.current.length - 1, i + (k === 'ArrowRight' ? 1 : -1))));
-        return;
-      }
-      if (k === 'ArrowUp' || k === 'ArrowDown') {
-        // ★ No selectable list (ADS-B, spots, a text decoder) — Stuart: "nothing to select,
-        // just scroll". So the arrows move the body itself rather than doing nothing.
-        if (listLenRef.current <= 0) {
-          const sv: any = aircraftRef.current ?? spotsRef.current ?? outputRef.current;
-          if (!sv) return;
-          setKbZone('list');
-          // ★★ NOT ANIMATED, deliberately. An animated scroll emits onScroll frames while it
-          // runs, and this ref is updated from those — so with key repeat each step computed
-          // its next target from a MID-FLIGHT position and the list oscillated. Stepping
-          // straight there removes the whole class: the repeat rate is what makes it look like
-          // scrolling, and it does so more smoothly than fighting an animation.
-          bodyScrollY.current = Math.max(0, bodyScrollY.current + (k === 'ArrowDown' ? 90 : -90));
-          if (sv.scrollToOffset) sv.scrollToOffset({ offset: bodyScrollY.current, animated: false });
-          else sv.scrollTo?.({ y: bodyScrollY.current, animated: false });
-          return;
-        }
+    // Any key the box acts on counts as activity — see armIdle.
+    if (kbZoneRef.current) armIdleRef.current();
+    if (!kbZoneRef.current) return;               // not ours until Enter on the box says so
+    if (k === 'Back') {
+      // Deepest first: close the speed popup before anything else, without changing it.
+      if (kbZoneRef.current === 'popup') { popCloseRef.current(); return true; }
+      // ★ Then out of the box, even where it owns the arrows outright (DAB, ADS-B): Back must always lead somewhere,
+      //   or the menu and the frequency box behind a DAB list would be unreachable from the keyboard.
+      leave();
+      return true;
+    }
+    // The popup is a dropdown: it owns every arrow while open, Enter picks, Back leaves.
+    if (kbZoneRef.current === 'popup') {
+      if (k === 'ArrowLeft' || k === 'ArrowUp') { setSpeedIdx(i => Math.max(0, i - 1)); return true; }
+      if (k === 'ArrowRight' || k === 'ArrowDown') { setSpeedIdx(i => Math.min(popLenRef.current - 1, i + 1)); return true; }
+      if (k === 'Enter') { popApplyRef.current(speedIdxRef.current); return true; }
+      return;
+    }
+    if (k === 'ArrowLeft' || k === 'ArrowRight') {
+      setKbZone('header');
+      setHdrIdx(i => Math.max(0, Math.min(hdrSlots.current.length - 1, i + (k === 'ArrowRight' ? 1 : -1))));
+      return true;
+    }
+    if (k === 'ArrowUp' || k === 'ArrowDown') {
+      // ★ No selectable list (ADS-B, spots, a text decoder) — Stuart: "nothing to select,
+      // just scroll". So the arrows move the body itself rather than doing nothing.
+      if (listLenRef.current <= 0) {
+        const sv: any = aircraftRef.current ?? spotsRef.current ?? outputRef.current;
+        if (!sv) return true;
         setKbZone('list');
-        setListIdx(i => Math.max(0, Math.min(listLenRef.current - 1, i + (k === 'ArrowDown' ? 1 : -1))));
-        return;
+        // ★★ NOT ANIMATED, deliberately. An animated scroll emits onScroll frames while it
+        // runs, and this ref is updated from those — so with key repeat each step computed
+        // its next target from a MID-FLIGHT position and the list oscillated.
+        bodyScrollY.current = Math.max(0, bodyScrollY.current + (k === 'ArrowDown' ? 90 : -90));
+        if (sv.scrollToOffset) sv.scrollToOffset({ offset: bodyScrollY.current, animated: false });
+        else sv.scrollTo?.({ y: bodyScrollY.current, animated: false });
+        return true;
       }
-      // ★★ T OPENS THE TUNE BOX (Stuart). Only needed where the panel owns the keyboard
-      // OUTRIGHT — DAB and ADS-B — because there Enter is ours for selecting and can never
-      // reach the main screen, leaving no way to change frequency at all. On the borrowed
-      // decoders Enter still opens the tune box whenever the box does not hold the keyboard,
-      // so they need nothing.
-      if (k === 'T' && autoOwnRef.current) { onOpenFreqRef.current?.(); return; }
-      if (k === 'Space' || k === 'Enter') {
-        if (kbZoneRef.current === 'header') hdrSlots.current[hdrIdxRef.current]?.();
-        else if (listLenRef.current > 0) onSelectDabRef.current?.(listIdxRef.current);
-      }
+      setKbZone('list');
+      setListIdx(i => Math.max(0, Math.min(listLenRef.current - 1, i + (k === 'ArrowDown' ? 1 : -1))));
+      return true;
+    }
+    if (k === 'Enter') {
+      if (kbZoneRef.current === 'header') hdrSlots.current[hdrIdxRef.current]?.();
+      else if (listLenRef.current > 0) onSelectDabRef.current?.(listIdxRef.current);
+      return true;
     }
   }, NAV_REPEAT_KEYS);
+
+  /** Enter on the box (the screen's highlight, ScreenNav): it takes the keyboard. */
+  const enterBox = useCallback(() => {
+    captureRegion('decoder');
+    setKbZone('list');
+    setListIdx(0);
+    announce();
+  }, [announce]);
 
   // Refs so the listener above, installed once, never reads a stale value.
   const kbZoneRef = useRef(kbZone);   kbZoneRef.current = kbZone;
@@ -882,7 +838,7 @@ export default function DecoderPanel({
     if (p) onSelectDab?.(p.id);
   };
 
-  // Idle timeout, matching the menus: a stray Tab must not leave the box holding the keyboard
+  // Idle timeout, matching the menus: a stray Enter must not leave the box holding the keyboard
   // while the user has walked away from it. Resets on every key it handles.
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1034,7 +990,7 @@ export default function DecoderPanel({
         {/* ★ Arrival / departure flash. A border that brightens once and fades, so taking the
             keyboard and handing it back are both announced. pointerEvents none — it is a
             signal, never a target. */}
-        <Animated.View pointerEvents="none"
+        <Animated.View pointerEvents="none" ref={screenNavRef('decoderBox', enterBox)}
           style={[dp.flash, { opacity: flash }]} />
 
         {/* Header */}
@@ -1057,16 +1013,12 @@ export default function DecoderPanel({
               // and said nothing about it — the CLR button responded to space, so it worked,
               // but nothing told you it would. A box that has the keyboard should say so
               // whatever it is showing. (Stuart, 2026-07-25.)
-              // ★ Always says where Tab goes NEXT, so the cycle is discoverable by using it
-              // rather than by being remembered. The wording differs by zone AND by whether
-              // the box owns the arrows or merely borrowed them.
+              // ★ Always says what the keys do HERE (one scheme, 2026-10-18): arrows move, Enter presses,
+              // backspace (or escape) leaves — the popup first, then the box.
               ? (kbZone === 'popup' ? 'enter to set · backspace to cancel'
-                 : kbZone === 'header' ? (autoOwn ? (isDabMode ? 'enter to press · tab for stations · t to tune'
-                                                               : 'enter to press · tab for the list · t to tune')
-                                                  : 'enter to press · tab to leave')
-                 : listLen > 0        ? (autoOwn ? 'enter to select · tab for controls · t to tune'
-                                                  : 'enter to select · tab for controls')
-                 : 'scroll with ↑↓ · tab for controls')
+                 : kbZone === 'header' ? 'enter to press · ↑↓ for the list · backspace to leave'
+                 : listLen > 0        ? 'enter to select · ←→ for controls · backspace to leave'
+                 : 'scroll with ↑↓ · ←→ for controls · backspace to leave')
               : isDabMode ? (dabEnsemble || 'reading multiplex…')
               // ★ NAVTEX says where it is in the broadcast; a refusal or an error still speaks for itself.
               : isNavtex && !/^(error|not started)/.test(decoderStatus) ? (nvReceiving ? 'receiving' : 'standing by')

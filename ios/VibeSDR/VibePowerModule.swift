@@ -95,13 +95,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     isRunning || externalAudio || fmdxAudio || (audioEngine?.isRunning ?? false)
   }
 
-  /// Called from VibeKeyWindow. No-ops harmlessly before JS has subscribed.
-  /// ★ `plain` is false when the name was SYNTHESISED — an arrow that came from the `< > - +`
-  /// aliases, or one that only arrived because a modifier was held. The Full Keyboard Access
-  /// detector needs that distinction: those are precisely the WORKAROUNDS for FKA, so counting
-  /// them as evidence that the arrows work would make the feature hide its own diagnosis.
-  static func emitKey(_ name: String, _ key: String, _ plain: Bool = true) {
-    shared?.sendEvent(withName: name, body: ["key": key, "plain": plain])
+  /// Called from VibeKeyWindow with the key's DOM name; src/utils/hardwareKeys.ts maps it (one scheme, 2026-10-18).
+  /// No-ops harmlessly before JS has subscribed.
+  /// ★ `plain` is true only for a physical arrow key pressed alone — the Full Keyboard Access detector's evidence.
+  /// ★ `typing` is true while a text field has the cursor (only Enter and Escape are then reported).
+  static func emitKey(_ name: String, _ key: String, _ plain: Bool = false, _ typing: Bool = false) {
+    shared?.sendEvent(withName: name, body: ["key": key, "plain": plain, "typing": typing])
   }
 
   /// Pointer scroll deltas (mouse wheel / trackpad), in points.

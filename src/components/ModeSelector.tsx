@@ -9,7 +9,7 @@ import { SIGID_HOME } from '../services/dialChat';
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useKeyboardMode, useNavFocus } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useKeyboardMode, useNavFocus, NAV_ADJUST } from './PanelNav';
 import {
   usePopupSurface, usePopupTheme, usePopupFrame, engraveText, windowStyle,
   PopupScrim, PopupPlate, PopupHandle, PopupKey, PopupFader, sheetCap,
@@ -58,7 +58,7 @@ function NavSlider({ mirror = false, ...props }: React.ComponentProps<typeof Sli
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const { minimumValue = 0, maximumValue = 1, step, value = 0, onValueChange } = props;
   const nudge = step && step > 0 ? step : (maximumValue - minimumValue) / 20;
-  const { focused, viewRef } = useNavRange((dir) => {
+  const { focused, adjusting, viewRef } = useNavRange((dir) => {
     const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
     if (next !== value) onValueChange?.(next);
   });
@@ -69,14 +69,14 @@ function NavSlider({ mirror = false, ...props }: React.ComponentProps<typeof Sli
     return (
       <PopupFader innerRef={viewRef as any} value={value} minimumValue={minimumValue} maximumValue={maximumValue}
         step={step} onValueChange={onValueChange} onSlidingComplete={props.onSlidingComplete}
-        fillFrom={mirror ? 'right' : 'left'} focused={focused}
+        fillFrom={mirror ? 'right' : 'left'} focused={focused} adjusting={adjusting}
         style={[StyleSheet.flatten(props.style) as any, { height: 24 }]} />
     );
   }
   return (
     <Slider ref={viewRef as any} {...props}
-      minimumTrackTintColor={focused ? focusC.ring : props.minimumTrackTintColor}
-      thumbTintColor={focused ? focusC.ring : props.thumbTintColor} />
+      minimumTrackTintColor={focused ? (adjusting ? NAV_ADJUST : focusC.ring) : props.minimumTrackTintColor}
+      thumbTintColor={focused ? (adjusting ? NAV_ADJUST : focusC.ring) : props.thumbTintColor} />
   );
 }
 

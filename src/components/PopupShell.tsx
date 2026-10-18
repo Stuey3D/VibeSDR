@@ -45,6 +45,7 @@ import ChassisPlate from './ChassisPlate';
 import { useDomeKey, DOME_TRAVEL } from './DomeKey';
 import { CAP_SHEEN } from '../constants/capSheen';
 import { useRisingPressRetention } from './RotateFade';
+import { NAV_ADJUST } from './PanelNav';
 
 export type { PopupTokens } from '../constants/popupTokens';
 /** ★ The scroll indicator's lane (popupTokens.ts) — every popup scroller takes it from here. */
@@ -385,7 +386,7 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
  *   otherwise steal a drag with any vertical component.
  */
 export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, onValueChange,
-  onSlidingComplete, level, active = true, lineColor, style, focused, innerRef, disabled, fillFrom = 'left' }: {
+  onSlidingComplete, level, active = true, lineColor, style, focused, adjusting, innerRef, disabled, fillFrom = 'left' }: {
   value: number; minimumValue?: number; maximumValue?: number; step?: number;
   onValueChange?: (v: number) => void; onSlidingComplete?: (v: number) => void;
   /** 0..1 live level drawn behind the fill (squelch), or undefined for none. */
@@ -394,7 +395,8 @@ export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, on
   active?: boolean;
   /** Override the index line (squelch: red while the gate is muting). */
   lineColor?: string;
-  style?: StyleProp<ViewStyle>; focused?: boolean; innerRef?: React.Ref<View>; disabled?: boolean;
+  style?: StyleProp<ViewStyle>; focused?: boolean; /** Enter pressed on it: left/right adjust (PanelNav) */ adjusting?: boolean;
+  innerRef?: React.Ref<View>; disabled?: boolean;
   /** Which end the fill runs from to the cap: 'right' for a mirrored control whose value is on the
    *  cap's right (the demodulator sheet's LOWER passband edge — its passband is toward the carrier). */
   fillFrom?: 'left' | 'right';
@@ -445,7 +447,7 @@ export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, on
   const lvl = level == null ? null : Math.max(0, Math.min(1, level));
   return (
     <View ref={(r: any) => { box.current = r; if (typeof innerRef === 'function') innerRef(r); else if (innerRef) (innerRef as any).current = r; }}
-      style={[ps.fader, style, focused && [ps.faderFocus, { borderColor: pt.ink.focus }], disabled && { opacity: 0.45 }]}
+      style={[ps.fader, style, focused && [ps.faderFocus, { borderColor: adjusting ? NAV_ADJUST : pt.ink.focus }], disabled && { opacity: 0.45 }]}
       onLayout={(e) => { setW(e.nativeEvent.layout.width); measure(); }}
       hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
       accessibilityRole="adjustable" accessibilityValue={{ min: minimumValue, max: maximumValue, now: value }}

@@ -193,6 +193,7 @@ import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 import { STEP_833, type AirChannel } from '../utils/airband';
 import { tourRef, mergeRefs } from './Coachmark';
+import { screenNavRef } from './ScreenNav';
 import { isRotation, notifyRevealed, rotSlide } from '../services/rotateReveal';
 import { IS_TV } from '../utils/tv';
 import { minuteKey } from '../services/renderChurn';
@@ -1556,7 +1557,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
     )}
     <View style={[pm.row, full ? { flex: 1 } : null]}>
       <TouchableOpacity
-        ref={tourRef('freqBox')}
+        ref={mergeRefs(tourRef('freqBox'), screenNavRef('freqBox', onFreqTap))}
         style={[pm.freqBox, full ? { flex: 1, justifyContent: 'center', alignItems: dk.style === 'hyper' ? 'flex-end' : 'stretch' } : null,
           dk.style === 'hyper'
           ? { backgroundColor: ct.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }
@@ -1604,7 +1605,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
         {(dk.style === 'dot' || dk.style === 'seg') && <VfdFilaments radius={5} />}
       </TouchableOpacity>
       <TouchableOpacity
-        ref={tourRef('modeBtn')}
+        ref={mergeRefs(tourRef('modeBtn'), screenNavRef('modeBtn', onModeTap))}
         style={[pm.modeBtn, { backgroundColor: ct.pillBg, borderLeftColor: ct.modeDivider, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: full ? 56 : tight ? 72 : 84 }]}
         onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
       >
@@ -1677,7 +1678,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
               const w = Math.round(e.nativeEvent.layout.width);
               setWinW(p => (p === w ? p : w));
             }}>
-        <TouchableOpacity ref={tourRef('freqBox')} onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
+        <TouchableOpacity ref={mergeRefs(tourRef('freqBox'), screenNavRef('freqBox', onFreqTap))} onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
           style={[cd.freqArea, dk.style === 'hyper' && { paddingHorizontal: s.r(8), gap: s.r(8) }]}>
           {dk.style === 'hyper' ? (<>
             <Text style={[pm.freq, {
@@ -1705,7 +1706,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
               gap={s.r(6)} shared={shared} winH={dl.freqH} land={!!L} />
           )}
         </TouchableOpacity>
-        <TouchableOpacity ref={tourRef('modeBtn')} onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
+        <TouchableOpacity ref={mergeRefs(tourRef('modeBtn'), screenNavRef('modeBtn', onModeTap))} onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
           style={[cd.modeBox, { width: mb.width, paddingHorizontal: s.r(MODE_BOX.padH),
                                 borderLeftColor: 'rgba(255,255,255,0.10)' }]}>
           <LiveModeReadout bus={bus} snrText={snrText} meterMode={meterMode} signalActive={signalActive}
@@ -2301,14 +2302,14 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
             before. Default keeps today's outline key at rest; it now snaps and clicks. The ACTION
             is on release; the depress, click and flare are on touch-down. */}
         {/* STEP */}
-        <DomeKey ref={tourRef('stepBtn')} style={por.key} {...keyProps}
+        <DomeKey ref={mergeRefs(tourRef('stepBtn'), screenNavRef('stepBtn', onStep))} style={por.key} {...keyProps}
           onPress={onStep} accessibilityLabel="Tuning step">
           {p => <DomeText progress={p} style={[por.btnTxt, { fontSize: BTN_FONT * dl.legendScale }]}>{stepLabel}</DomeText>}
         </DomeKey>
 
         {/* AUDIO — opens the audio sheet; breathes red↔white while recording
             (REC lives inside the sheet, so this is the tap target to stop it). */}
-        <DomeKey style={por.key} {...keyProps} onPress={onAudio}
+        <DomeKey ref={screenNavRef('audioBtn', onAudio)} style={por.key} {...keyProps} onPress={onAudio}
           accessibilityLabel={`${audioAsRecord ? 'Record' : 'Audio'}${macMuted ? ', muted' : ''}`}
           overlay={<Animated.View pointerEvents="none"
             style={[StyleSheet.absoluteFill, { borderRadius: pulseR, borderWidth: 1, borderColor: ct.keyPulseRec, opacity: recPulse }]} />}>
@@ -2316,7 +2317,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         </DomeKey>
 
         {/* MENU */}
-        <DomeKey ref={tourRef('menuBtn')} style={por.key} {...keyProps} onPress={onMenu}
+        <DomeKey ref={mergeRefs(tourRef('menuBtn'), screenNavRef('menuBtn', onMenu))} style={por.key} {...keyProps} onPress={onMenu}
           accessibilityLabel={menuAsBack ? 'Back' : 'Settings'}>
           {p => menuAsBack
             ? <DomeText progress={p} style={{ fontSize: s.f(t.btnSize) * dl.legendScale }}>‹ Back</DomeText>
@@ -2324,7 +2325,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         </DomeKey>
 
         {/* CHAT */}
-        <DomeKey style={por.key} {...keyProps} lightReach={chatOff ? 0 : keyProps.lightReach}
+        <DomeKey ref={screenNavRef('chatBtn', chatOff ? undefined : onChat)} style={por.key} {...keyProps} lightReach={chatOff ? 0 : keyProps.lightReach}
           onPress={chatOff ? NOOP : onChat} accessibilityLabel="Chat"
           accessibilityHint={chatOff ? 'Chat is not available on this server' : undefined}
           overlay={chatUnread
@@ -2617,14 +2618,14 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       {/* STEP + MENU column */}
       <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
         {/* ★ Dome keys (§5), KEY_H tall exactly (§11). Under 44 pt, so hitSlop reaches into the gaps. */}
-        <DomeKey ref={tourRef('stepBtn')} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach}
+        <DomeKey ref={mergeRefs(tourRef('stepBtn'), screenNavRef('stepBtn', onStep))} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach}
           onPress={onStep} accessibilityLabel="Tuning step">
           {/* ★ ONE line: "100k" / "500Hz" / "8.33k" SHRINK to fit the key; two lines let the text
               ask for a taller box, which is the bug this key had. */}
           {p => <DomeText progress={p} style={[lnd.lsTxt, { fontSize: KEY_FONT, lineHeight: KEY_LH }]}
                   numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{stepLabel}</DomeText>}
         </DomeKey>
-        <DomeKey ref={tourRef('menuBtn')} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach}
+        <DomeKey ref={mergeRefs(tourRef('menuBtn'), screenNavRef('menuBtn', onMenu))} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach}
           onPress={onMenu} accessibilityLabel={menuAsBack ? 'Back' : 'Settings'}>
           {/* ★ SET, not the cog, where the key is small (Stuart, 2026-10-03, the SE in Display Zoom: "the cog is the
               weak icon here, maybe change it to say SET instead") — at 14 pt its teeth blur, letters do not. The
@@ -2706,7 +2707,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
         {/* ★ Recording / unread chat: the outline turns red / blue on the default key (today's
             signal); a cap has no outline, so there it is a ring round the slot. */}
-        <DomeKey style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach} onPress={onAudio}
+        <DomeKey ref={screenNavRef('audioBtn', onAudio)} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach} onPress={onAudio}
           /* ★★ BREATHES, as the portrait key does (Stuart, 2026-10-06: the breathing went missing when the control
               customisation arrived — this key got a STATIC red outline). One pulse on every chassis: a ring that
               fades in and out on the same recPulse as portrait. */
@@ -2715,7 +2716,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           accessibilityLabel={`${audioAsRecord ? 'Record' : 'Audio'}${macMuted ? ', muted' : ''}`}>
           {p => <AudioKeyLegend size={ICON_SZ} progress={p} asRecord={audioAsRecord} muted={macMuted} />}
         </DomeKey>
-        <DomeKey style={lnd.lsKey} height={KEY_H} radius={6} lightReach={chatOff ? 0 : lightReach}
+        <DomeKey ref={screenNavRef('chatBtn', chatOff ? undefined : onChat)} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={chatOff ? 0 : lightReach}
           onPress={chatOff ? NOOP : onChat}
           accessibilityHint={chatOff ? 'Chat is not available on this server' : undefined}
           overlay={chatUnread

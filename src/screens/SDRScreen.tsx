@@ -129,7 +129,9 @@ import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import FkaSplash from '../components/FkaSplash';
-import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka } from '../components/PanelNav';
+import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus } from '../components/PanelNav';
+import { screenNavMove, screenNavBox, screenNavPress, ScreenNavRing } from '../components/ScreenNav';
+import { addKeyListener, SCREEN_PRIORITY } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -10267,22 +10269,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (r.zoom) ctrlRects.current.zoom = r.zoom;
   }, []);
 
-  // ── Hardware keyboard, global layer (briefs/BRIEF-inputs-shack-mode-mac.md §6) ──────
+  // ── Hardware keyboard: ONE SCHEME (Stuart, 2026-10-18 — src/utils/keyActions.ts) ──────
   //
-  // Arrows tune and zoom; letters open panels; Esc closes. Key events arrive from
-  // VibeKeyWindow (AppDelegate.swift), which reports them from the WINDOW so that
-  // anything genuinely wanting a key — a focused text field — consumes it first and
-  // never reaches us. So there is no need to suppress shortcuts while typing.
+  // Arrows / W A S D move the screen's HIGHLIGHT between its controls (ScreenNav), Enter presses it, Back (Backspace or
+  // Escape) closes what is open, < > tune and - + zoom from anywhere — exactly the game controller and the Apple TV
+  // remote, and exactly the web page. The old letters (D M S A C), Enter-opens-the-frequency-box, the arrows tuning
+  // and zooming, and Esc-opens-the-servers-menu are gone: the frequency box, the mode and the servers chip are all
+  // places the highlight can go.
   //
-  // ★ Arrows reuse the tuner keys' control law via createHoldSweep, NOT a second
-  // implementation: tap = one step, hold = the accelerating sweep, with the same
-  // constants tuned on air. A held arrow key is exactly a held tuner key.
-  //
-  // NOT YET DONE (deliberately, see the brief): the IN-PANEL layer — arrows
-  // navigating an open menu or the bookmarks grid, Tab switching frequency-box tabs,
-  // H/K/M choosing units. That touches every panel's internals. Also pending: Esc
-  // OPENING the servers menu when nothing is open, which needs a prop on ServersChip
-  // (it owns its own open state). Esc currently only closes.
+  // ★ Tune and zoom reuse the tuner keys' control law via createHoldSweep, NOT a second implementation: tap = one
+  // step, hold = the accelerating sweep, with the same constants tuned on air. A held > is exactly a held tuner key.
   // ★ The servers menu COUNTS as a panel. Without it, a second Esc bumped the open token
   // again instead of closing — the chip owns its own open state, so Esc could open it and
   // never shut it. It now reports up, and closeAll sends it a close token.
@@ -10314,6 +10310,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => { controlsHiddenRef.current = controlsHidden; }, [controlsHidden]);
 
   const kbInUse = useKeyboardMode();
+  const navRing = useNavFocus();
   const screenFocused = useIsFocused();
   const screenFocusedRef = useRef(screenFocused);
   useEffect(() => { screenFocusedRef.current = screenFocused; }, [screenFocused]);
@@ -10326,6 +10323,32 @@ export default function SDRScreen({ route, navigation }: Props) {
   kbActions.current = { onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
                         onMenuOpen, onStepOpen, onAudioOpen, onModeOpen,
                         onFreqOpen, openChat };
+
+  // ★ THE SCREEN'S HIGHLIGHT (ScreenNav): which control the keyboard is on, and its box relative to this screen's root.
+  //   Drawn only while the keyboard is in use and nothing is open over it; a touch hides it (keyboard mode ends).
+  const rootRef = useRef<View | null>(null);
+  const navHlRef = useRef<string | null>(null);
+  const [navHl, setNavHlState] = useState<string | null>(null);
+  const [navBox, setNavBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const placeRing = useCallback((box: { x: number; y: number; w: number; h: number } | null) => {
+    if (!box) { setNavBox(null); return; }
+    const root: any = rootRef.current;
+    if (!root?.measureInWindow) { setNavBox(box); return; }
+    root.measureInWindow((rx: number, ry: number) => setNavBox({ x: box.x - (rx || 0), y: box.y - (ry || 0), w: box.w, h: box.h }));
+  }, []);
+  const setNavHl = useCallback((id: string | null, box?: { x: number; y: number; w: number; h: number } | null) => {
+    navHlRef.current = id; setNavHlState(id); placeRing(id ? box ?? null : null);
+  }, [placeRing]);
+  const moveHighlight = useCallback(async (dir: 'up' | 'down' | 'left' | 'right') => {
+    const r = await screenNavMove(navHlRef.current, dir);
+    if (r) setNavHl(r.id, r.box);
+  }, [setNavHl]);
+  // ★ A rotation, a window resize or the controls coming back moves the control — the ring follows it.
+  useEffect(() => {
+    if (!navHl) return;
+    const t = setTimeout(() => { void screenNavBox(navHl).then((b) => { if (navHlRef.current === navHl) placeRing(b); }); }, 250);
+    return () => clearTimeout(t);
+  }, [navHl, screenW, screenH, controlsHidden, anyPanelOpen, placeRing]);
 
   useEffect(() => {
     // Built once and driven through the ref, so a re-render never rebuilds a sweeper
@@ -10349,61 +10372,55 @@ export default function SDRScreen({ route, navigation }: Props) {
       setServersCloseToken(t => t + 1);
     };
 
-    const down = emitter.addListener('VibeKeyDown', (e: { key: string; plain?: boolean }) => {
-      const k = e?.key; if (!k) return;
-      // ★★ Feed the Full Keyboard Access detector FIRST — above every guard below.
-      // This screen runs its own raw listener rather than useRepeatingKeys, so it was the one
-      // surface never reporting keys, and it is precisely the surface FkaSplash is mounted on.
-      // Loading straight into a server therefore meant the splash could never fire, which is
-      // exactly what Stuart saw. Counted before the focus and suppression guards because the
-      // question "do arrows reach this app at all" is app-wide, not per screen.
-      noteKeyForFka(k, e?.plain !== false);
-      // ★ Not the screen on top — a stack navigator keeps this MOUNTED behind whatever is
-      // above it, and a listener that keeps firing there acts on a screen the user cannot
-      // see. The mirror of the bug that had the picker connecting to servers from behind
-      // this one; cheap insurance against it happening the other way round.
+    // ★ PRIORITY LOW: every panel and box drawn over this screen hears a key first, and takes Back first when it has
+    //   a layer of its own to peel (a sub-page, a slider in adjust mode). See hardwareKeys.
+    const down = addKeyListener('down', (e) => {
+      const k = e.key;
+      // ★★ Feed the Full Keyboard Access detector FIRST — above every guard below — because the question "do the
+      //    arrows reach this app at all" is app-wide, and FkaSplash is mounted on this screen.
+      noteKeyForFka(k, e.plain);
+      // ★ Not the screen on top — a stack navigator keeps this MOUNTED behind whatever is above it.
       if (!screenFocusedRef.current) return;
-      // ★ Third-party page on screen (compatibility mode) — every shortcut is off, Esc
-      // included, so nothing of ours can fire under a page we did not write. See PanelNav.
+      // ★ Third-party page on screen (compatibility mode) — every key of ours is off, so nothing of ours can fire under
+      //   a page we did not write. See PanelNav.
       if (shortcutsSuppressed()) return;
-      // ★ The decoder box has taken the keyboard (Tab). It floats above a LIVE screen, so
-      // without this the arrows would keep tuning the radio underneath the list being read.
-      if (regionCaptured()) return;
-      const a = kbActions.current;
-      // ★ Esc precedence, one rule in one place: something open -> close it;
-      // nothing open -> open the SERVERS menu (the brief's universal back/open key).
-      if (k === 'Escape') {
-        if (panelOpenRef.current) { closeAll(); return; }
-        // ★★ HIDDEN CONTROLS ARE A TRAP WITHOUT THIS. Hiding them removes the servers chip
-        // and every button, leaving only a touch-only ▲ chevron — so a keyboard-driven user
-        // (the whole point of shack mode) had no way back at all. Stuart found it on the TV:
-        // "an unrecoverable situation… nothing brings back the controls."
-        //
-        // It sits between the two existing cases because it IS the deeper state: Esc backs
-        // out of the most-hidden thing first, and only opens the servers menu once there is
-        // nothing left to back out of.
-        if (controlsHiddenRef.current) { setControlsHidden(false); return; }
-        setServersToken(t => t + 1);
-        return;
-      }
-      // With a panel open the arrows and letters belong to it, not to tuning. Until
-      // the in-panel layer exists they simply do nothing rather than tuning blind
-      // underneath an open sheet.
-      if (panelOpenRef.current) return;
+      // ★ Typing in a field: only Escape reaches here (as Back) — it closes the panel the field is in.
+      if (e.typing) { if (k === 'Back' && panelOpenRef.current) { closeAll(); return true; } return; }
+      // ★ Tune and zoom work from ANYWHERE, panels and the decoder box included — as a pad's do on the web page.
       switch (k) {
-        case 'ArrowLeft':  kb.vfo.press(-1);  break;
-        case 'ArrowRight': kb.vfo.press(1);   break;
-        case 'ArrowUp':    kb.zoom.press(1);  break;   // in
-        case 'ArrowDown':  kb.zoom.press(-1); break;   // out
-        case 'Enter': a.onFreqOpen(); break;
-        case 'D': a.onModeOpen();  break;              // demodulator box
-        case 'M': a.onMenuOpen();  break;
-        case 'S': a.onStepOpen();  break;              // step rate
-        case 'A': a.onAudioOpen(); break;
-        case 'C': a.openChat();    break;
+        case 'TuneDown': kb.vfo.press(-1); return true;
+        case 'TuneUp':   kb.vfo.press(1);  return true;
+        case 'ZoomOut':  kb.zoom.press(-1); return true;
+        case 'ZoomIn':   kb.zoom.press(1);  return true;
         default: break;
       }
-    });
+      // ★ The decoder box has taken the keyboard (Enter on it). It floats above a LIVE screen; its own listener has
+      //   the arrows, Enter and Back until it hands them back.
+      if (regionCaptured()) return;
+      switch (k) {
+        case 'Back':
+          // ★ One rule in one place: something open → close it. The panel itself had first refusal (a sub-page).
+          if (panelOpenRef.current) { closeAll(); return true; }
+          // ★★ HIDDEN CONTROLS ARE A TRAP WITHOUT THIS. Hiding them removes every button, leaving only a touch-only ▲
+          //    chevron — Stuart found it on the TV: "an unrecoverable situation… nothing brings back the controls."
+          if (controlsHiddenRef.current) { setControlsHidden(false); return true; }
+          setNavHl(null);
+          return true;
+        default: break;
+      }
+      // With a panel open, movement and Enter belong to it (PanelNav), never to the screen underneath.
+      if (panelOpenRef.current) return;
+      if (k === 'Enter') {
+        const cur = navHlRef.current;
+        if (cur && screenNavPress(cur)) return true;
+        void moveHighlight('down');            // nothing highlighted yet: Enter just shows where you are
+        return true;
+      }
+      if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight') {
+        void moveHighlight(k === 'ArrowUp' ? 'up' : k === 'ArrowDown' ? 'down' : k === 'ArrowLeft' ? 'left' : 'right');
+        return true;
+      }
+    }, { priority: SCREEN_PRIORITY });
     // Scroll: accumulate deltas until they cross a notch, then act. A wheel emits
     // large discrete jumps and a trackpad a smooth stream — accumulating handles
     // both without the wheel feeling laggy or the trackpad firing hundreds of steps.
@@ -10444,10 +10461,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
     });
 
-    const up = emitter.addListener('VibeKeyUp', (e: { key: string }) => {
-      const k = e?.key;
-      if (k === 'ArrowLeft' || k === 'ArrowRight') kb.vfo.release();
-      if (k === 'ArrowUp'   || k === 'ArrowDown')  kb.zoom.release();
+    const up = addKeyListener('up', (e) => {
+      const k = e.key;
+      if (k === 'TuneDown' || k === 'TuneUp') kb.vfo.release();
+      if (k === 'ZoomOut'  || k === 'ZoomIn') kb.zoom.release();
     });
     return () => {
       down.remove(); up.remove(); scroll.remove();
@@ -10615,6 +10632,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   return (
     <View
+      ref={rootRef}
       style={styles.root}
       // Capture-phase touch sniff (returns false — never steals the touch):
       // marks interaction for smooth tune / idle saver on any Pressable UI.
@@ -10631,6 +10649,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         setRootH(e.nativeEvent.layout.height)}
     >
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
+      {/* ★ The keyboard's highlight on this screen (ScreenNav) — only while the keyboard is driving and nothing is open. */}
+      {kbInUse && !anyPanelOpen && !!navHl && <ScreenNavRing box={navBox} color={navRing.ring} />}
 
       {/* ── WHICH RADIO? The landing page, for a multi-radio server ───────────────────────
           ★★★ IT MUST SCROLL. On a phone, and especially in landscape, a list that cannot

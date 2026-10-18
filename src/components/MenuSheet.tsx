@@ -8,7 +8,7 @@
  */
 
 import StationLogo from './StationLogo';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected, NAV_ADJUST } from './PanelNav';
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -644,7 +644,7 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
   // ★ ATTACH THE REF. Without it reveal cannot measure the slider and falls back to the old
   // row-height ESTIMATE, which is why a slider landed barely in view at the foot of the sheet
   // while every button centred correctly — the buttons attach theirs and the sliders did not.
-  const { focused, viewRef } = useNavRange((dir) => {
+  const { focused, adjusting, viewRef } = useNavRange((dir) => {
     const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
     if (next !== value) onValueChange?.(next);
   });
@@ -656,7 +656,7 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
     return (
       <PopupFader innerRef={viewRef as any} value={value} minimumValue={minimumValue} maximumValue={maximumValue}
         step={step} onValueChange={onValueChange} onSlidingComplete={props.onSlidingComplete}
-        active={props.minimumTrackTintColor !== C.track} focused={focused}
+        active={props.minimumTrackTintColor !== C.track} focused={focused} adjusting={adjusting}
         style={[StyleSheet.flatten(props.style) as any, { height: 24 }]} />
     );
   }
@@ -664,8 +664,8 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
     <Slider
       ref={viewRef as any}
       {...props}
-      minimumTrackTintColor={focused ? C.focus : props.minimumTrackTintColor}
-      thumbTintColor={focused ? C.focus : props.thumbTintColor}
+      minimumTrackTintColor={focused ? (adjusting ? NAV_ADJUST : C.focus) : props.minimumTrackTintColor}
+      thumbTintColor={focused ? (adjusting ? NAV_ADJUST : C.focus) : props.thumbTintColor}
     />
   );
 }
@@ -1342,14 +1342,14 @@ function MenuSheetBody({
   // ── Keyboard navigation of the sheet ────────────────────────────────────────
   // Up/down between rows, left/right within a row, Enter to activate. The machinery
   // is shared (PanelNav.tsx); attach `scrollRef` to the ScrollView and the buttons
-  // register themselves. Esc is NOT handled here — SDRScreen already closes panels
-  // on Esc, and one owner for that rule is what keeps the precedence honest.
-  // ★ BACKSPACE = ‹ BACK. The sub-panels (Display Settings, Bookmarks, the colour-map
+  // register themselves. Closing the menu itself is NOT handled here — SDRScreen closes
+  // panels on Back, and one owner for that rule is what keeps the precedence honest.
+  // ★ BACK (Backspace / Escape) = ‹ BACK first. The sub-panels (Display Settings, Bookmarks, the colour-map
   // and profile dropdowns) each have a BACK row, but a keyboard-only user had no way to
   // reach it — you could get INTO a sub-panel and not out. Read through a ref because the
   // pane states are declared further down; the ref is refreshed every render, so the
   // closure never sees a stale one.
-  const paneBack = useRef<() => void>(() => {});
+  const paneBack = useRef<() => boolean>(() => false);
   const kbInUse = useKeyboardMode();
   const fkaSuspected = useFullKeyboardAccessSuspected();
   const { navCtx, scrollProps, scrollRef, scrollY: scrollYRef } = usePanelNav(visible, {
@@ -1442,20 +1442,21 @@ function MenuSheetBody({
       if (y != null) cmapScroll.current?.scrollTo({ y: Math.max(0, y - 40), animated: true });
     },
     undefined,
-    // Backspace leaves the list WITHOUT applying a colour; Enter picks and closes.
+    // Back leaves the list WITHOUT applying a colour; Enter picks and closes.
     () => setCmapOpen(false),
   );
 
   // Deepest-first, so Backspace peels one layer at a time rather than jumping to the top.
   paneBack.current = () => {
-    if (bmImportOpen)     { setBmImportOpen(false); return; }
-    if (cmapOpen)         { setCmapOpen(false); return; }
-    if (profileOpen)      { setProfileOpen(false); return; }
-    if (dabOpen)          { setDabOpen(false); return; }
-    if (bookmarksOpen)    { setBookmarksOpen(false); return; }
-    if (dispSettingsOpen) { setDispSettingsOpen(false); return; }
-    if (custOpen)         { setCustOpen(false); return; }
-    // Nothing nested open — leave the menu itself to Esc, which SDRScreen owns.
+    if (bmImportOpen)     { setBmImportOpen(false); return true; }
+    if (cmapOpen)         { setCmapOpen(false); return true; }
+    if (profileOpen)      { setProfileOpen(false); return true; }
+    if (dabOpen)          { setDabOpen(false); return true; }
+    if (bookmarksOpen)    { setBookmarksOpen(false); return true; }
+    if (dispSettingsOpen) { setDispSettingsOpen(false); return true; }
+    if (custOpen)         { setCustOpen(false); return true; }
+    // Nothing nested open — pass Back on: SDRScreen closes the menu itself.
+    return false;
   };
 
   const [bmImportText,   setBmImportText]   = useState('');

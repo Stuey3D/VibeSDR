@@ -62,3 +62,55 @@ export function keyDir(a: KeyAction | null): 'up' | 'down' | 'left' | 'right' | 
 export function keyRepeats(a: KeyAction | null): boolean {
   return !!a && a !== 'enter' && a !== 'back';
 }
+
+// ── The app's canonical key names and its listener bus (src/utils/hardwareKeys.ts wires the native side to it) ──
+
+export type HwKey =
+  | 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight'
+  | 'Enter' | 'Back'
+  | 'TuneDown' | 'TuneUp' | 'ZoomOut' | 'ZoomIn';
+
+export interface HwKeyEvent { key: HwKey; plain: boolean; typing: boolean }
+
+const HW_NAME: Record<KeyAction, HwKey> = {
+  up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
+  enter: 'Enter', back: 'Back',
+  tuneDown: 'TuneDown', tuneUp: 'TuneUp', zoomOut: 'ZoomOut', zoomIn: 'ZoomIn',
+};
+
+/** A raw native report ({key, plain, typing}) → the event the app's listeners get, or null if it is not one of ours. */
+export function toHwKey(raw: { key?: string; plain?: boolean; typing?: boolean } | null | undefined): HwKeyEvent | null {
+  const a = keyAction(raw?.key);
+  if (!a) return null;
+  const typing = !!raw?.typing;
+  // ★ While a field has the cursor only its Enter (commit) and Escape (leave, close the panel) are ever ours.
+  if (typing && !(a === 'enter' || raw?.key === 'Escape')) return null;
+  // ★ plain = the physical arrow key it stands for. W A S D are not (PanelNav's Full Keyboard Access detector).
+  return { key: HW_NAME[a], plain: raw?.plain !== false && /^Arrow/.test(raw?.key ?? ''), typing };
+}
+
+type HwListener = (e: HwKeyEvent) => boolean | void;
+
+/** Newest listener first; a 'down' listener returning true consumes the key, so back peels one layer at a time.
+ *  ★ `priority`: a SCREEN's own listener registers low (-1) so the panels and boxes drawn over it always hear a key
+ *    first, whatever order their effects happened to run in (a child's effect runs before its parent's). */
+export class KeyBus {
+  private lists: Record<'down' | 'up', { f: HwListener; pri: number; seq: number }[]> = { down: [], up: [] };
+  private seq = 0;
+  add(kind: 'down' | 'up', f: HwListener, priority = 0): { remove(): void } {
+    const entry = { f, pri: priority, seq: ++this.seq };
+    this.lists[kind].push(entry);
+    return { remove: () => { const l = this.lists[kind]; const i = l.indexOf(entry); if (i >= 0) l.splice(i, 1); } };
+  }
+  dispatch(kind: 'down' | 'up', raw: { key?: string; plain?: boolean; typing?: boolean } | null | undefined): void {
+    const e = toHwKey(raw);
+    if (!e) return;
+    // A copy: a listener may open or close a panel, adding or removing listeners mid-dispatch.
+    const order = this.lists[kind].slice().sort((a, b) => b.pri - a.pri || b.seq - a.seq);
+    for (const { f } of order) {
+      let used: boolean | void = false;
+      try { used = f(e); } catch (err) { console.warn('[keys]', err); }
+      if (used === true && kind === 'down') return;
+    }
+  }
+}
