@@ -43,7 +43,11 @@ const REMOVED = ['bar', 'leftCol', 'tuner', 'pill', 'freq', 'freqUnit', 'freqCha
 // Short ones ('freq', 'vol', 'sig', 'stereo', 'bar', 'pill'…) are also message fields, URL params and
 // class names in the scripts, and 'freqUnit' is a saved preference's key — so only the distinctive
 // ones are looked for as script literals.
-const DISTINCTIVE = REMOVED.filter((id) => id.length >= 6 && !['stereo', 'freqUnit'].includes(id));
+// ★ 'tuneDown', 'tuneUp', 'zoomOut', 'zoomIn' are also the KEY ACTIONS of the one keyboard/controller scheme
+//   (src/utils/keyActions.ts, V12 2026-10-18) — string literals in the scripts that name an action, not an
+//   element. Section 1 still proves no element or selector by those names survives in the page.
+const KEY_ACTIONS = ['tuneDown', 'tuneUp', 'zoomOut', 'zoomIn'];
+const DISTINCTIVE = REMOVED.filter((id) => id.length >= 6 && !['stereo', 'freqUnit', ...KEY_ACTIONS].includes(id));
 const CLASSES = ['barRow', 'mutedRed'];
 
 // ── 1. the shell HTML ──────────────────────────────────────────────────────────────────────────
