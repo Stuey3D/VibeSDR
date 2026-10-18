@@ -1006,11 +1006,18 @@ public:
     void process(const float* x, int n, bool measure = true) {
         if (!ready_ || n <= 0) return;
         double acc = 0.0;
+        /* ★★ b1 = 0 AND b2 = −b0, ALWAYS — the constant-skirt band-pass configure() builds. Written
+         *  as the general biquad it spent five multiplies and four adds per section per sample, and
+         *  this is FIVE sections at the MPX rate: 7.8 % of the whole server's CPU in the Lenovo's
+         *  WFM profile (2026-10-18), the biggest single line in the demod thread. b0·(in − x2) is
+         *  three multiplies and three adds, and a shorter dependency chain per section, which is
+         *  what an in-order Atom actually waits on. Same filter; the rounding differs in the last
+         *  bit, on a level meter. */
         for (int i = 0; i < n; ++i) {
             float v = x[i];
             for (int s = 0; s < kSections; ++s) {
                 const float in = v;
-                const float y = b0_ * in + b1_ * x1_[s] + b2_ * x2_[s] - a1_ * y1_[s] - a2_ * y2_[s];
+                const float y = b0_ * (in - x2_[s]) - a1_ * y1_[s] - a2_ * y2_[s];
                 x2_[s] = x1_[s]; x1_[s] = in; y2_[s] = y1_[s]; y1_[s] = y;
                 v = y;
             }
