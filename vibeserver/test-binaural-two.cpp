@@ -14,7 +14,8 @@
 // CASES, each for USB, LSB and CW: (a) both at once, (b) taking turns (2-5 s overs, a QSO), (c) one 15 dB stronger.
 //   SSB synthetic — transmitter-limited voices (300-2700 Hz before the shift), carriers ±600 and ±1000 Hz from the dial;
 //                   once with the estimator alone, once with the waterfall cue following whoever talks (what the app's
-//                   SsbCoarse does: "the voice overlapping the passband most").
+//                   SsbCoarse does: "the voice overlapping the passband most"), and once ZOOMED OUT — the second voice
+//                   sent alone, no first cue (2026-10-18: the waterfall past ~100 Hz bins).
 //   CW synthetic  — two keyed carriers at the note ±300 Hz in a 1 kHz filter, and ±150 Hz in the default 400 Hz one; the
 //                   app's CW peak tracker (binauralOffset.ts BinauralTracker, ported below) feeding setOffset.
 //   REAL (VIBE_TEST_AUDIO=~/VibeSDR-test-audio):
@@ -316,7 +317,10 @@ static int latencyFor(int rate) { int n = 128; while (n < 4096 && (double)rate /
  *   one filling the passband most, here the lower); the SECOND (setSsbHint2) the other, when it is seen too. Equal voices
  *   at once flip the first cue every couple of seconds as their averages cross. (test_binauralOffset.ts measures the
  *   real SsbCoarse finding both on synthetic waterfall frames.) */
-static void waterfall(BinauralTuning& bt, double dial, double sep, int cs, const Overs& ov, double t) {
+/* ★★★ `secondOnly` (2026-10-18, "make that 200 kHz"): the waterfall ZOOMED OUT past ~100 Hz bins — the app sends the second
+ *     voice alone, never the first (its first reading would lean an on-tune voice: binauralOffset.ts
+ *     COARSE_CROWD_MAX_BIN_HZ), and native must take that alone as two. */
+static void waterfall(BinauralTuning& bt, double dial, double sep, int cs, const Overs& ov, double t, bool secondOnly = false) {
     bool seen[2];
     for (int w = 0; w < 2; ++w) {
         seen[w] = cs != 1;
@@ -327,7 +331,7 @@ static void waterfall(BinauralTuning& bt, double dial, double sep, int cs, const
     else if (cs == 2) first = 0;
     else first = ((int)(t / 2.3)) % 2;
     if (first < 0) { bt.setSsbHint(0, false); bt.setSsbHint2(0, false); return; }
-    bt.setSsbHint(dial + (first == 0 ? -sep : sep), true);
+    bt.setSsbHint(dial + (first == 0 ? -sep : sep), !secondOnly);
     const int other = 1 - first;
     bt.setSsbHint2(dial + (other == 0 ? -sep : sep), seen[other]);
 }
@@ -427,7 +431,7 @@ int main() {
                 const auto nz = bandNoise(fs, n, 50, 2700, 0.004, 31);
                 std::vector<float> x(n);
                 for (size_t i = 0; i < n; ++i) x[i] = low[i] + high[i] + nz[i];
-                for (int cue = 0; cue < 2; ++cue) {
+                for (int cue = 0; cue < 3; ++cue) {
                     BinauralTuning bt(false);
                     bt.setEnabled(true);
                     bt.setSource(lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, 50, 1000);
@@ -442,12 +446,12 @@ int main() {
                                         st[3] > 0 ? "" : "(x)", st[4], st[9], st[12], (int)st[10]);
                         }
                         if (!cue) return;
-                        waterfall(bt, dial, sep, cs, ov, (double)i / fs);
+                        waterfall(bt, dial, sep, cs, ov, (double)i / fs, cue == 2);
                     });
                     char label[200];
                     std::snprintf(label, sizeof label, "%s carriers ±%.0f Hz, %s, %s:", lsb ? "LSB" : "USB", sep,
                                   cs == 0 ? "(a) both at once" : cs == 1 ? "(b) taking turns" : "(c) the lower 15 dB stronger",
-                                  cue ? "with the waterfall cue" : "estimator alone");
+                                  cue == 2 ? "zoomed out: the second voice alone" : cue ? "with the waterfall cue" : "estimator alone");
                     // ★ STRICT unless nothing was ever held: two voices at once, each a comb over the other, give the
                     //   estimator nothing it believes, and with nothing held there is no evidence that two voices are there
                     //   rather than one on tune filling the same band. The app's waterfall cue sees both (the cue runs).
@@ -557,7 +561,7 @@ int main() {
                         high[i] = (float)(gh * highSrc[i] * (cs == 1 ? ov.on(1, t) : 1));
                         x[i] = low[i] + high[i];
                     }
-                  for (int cue = 0; cue < 2; ++cue) {
+                  for (int cue = 0; cue < 3; ++cue) {
                     BinauralTuning bt(false);
                     bt.setEnabled(true);
                     bt.setSource(lsb ? BinauralTuning::SsbLsb : BinauralTuning::SsbUsb, 50, 1000);
@@ -567,7 +571,7 @@ int main() {
                     std::vector<float> L, R;
                     const double held = runChain(bt, x, ra, L, R, [&](size_t i) {
                         if (!cue) return;
-                        waterfall(bt, dial, p.off, cs, ov, (double)i / ra);
+                        waterfall(bt, dial, p.off, cs, ov, (double)i / ra, cue == 2);
                     });
                     // exclusive bands: on USB the low one's audio is (300..2700)−OFF, the high one's (300..2700)+OFF.
                     const double off = p.off;
@@ -579,7 +583,7 @@ int main() {
                     std::snprintf(label, sizeof label, "%s %s (below) + %s (above), ±%.0f Hz, %s, %s:", lsb ? "LSB" : "USB",
                                   lsb ? p.high : p.low, lsb ? p.low : p.high, off,
                                   cs == 0 ? "(a) both at once" : cs == 1 ? "(b) taking turns" : "(c) the lower 15 dB stronger",
-                                  cue ? "with the waterfall cue" : "estimator alone");
+                                  cue == 2 ? "zoomed out: the second voice alone" : cue ? "with the waterfall cue" : "estimator alone");
                     judge(v, label, L, R, low, l1, l2, high, h1, h2, ra, cue ? 5.0 : std::max(5.0, held + 1.0), cue ? 0 : held < 0 ? 1 : 2);
                   }
                 }

@@ -21,6 +21,7 @@
  * Run: node --no-warnings scripts/test_binauralOffset.ts   (silent: no audio anywhere)
  */
 import {
+  COARSE_CROWD_MAX_BIN_HZ,
   binauralPlan, binauralModeOk, spectrumOffset, BinauralTracker, SsbCoarse, spreadKindFor, COARSE_MAX_BIN_HZ,
   BIN_SRC_SSB_USB, BIN_SRC_SSB_LSB, BIN_SRC_GIVEN, BIN_SRC_NONE, BIN_SPREAD_EDGES,
   BIN_SPREAD_OFF, BIN_SPREAD_USB, BIN_SPREAD_LSB, BIN_SPREAD_CW_UPPER, BIN_SPREAD_CW_LOWER,
@@ -254,12 +255,18 @@ function ssbFrame(dial: number, carrier: number, lowCut: number, lsb: boolean, n
     ok(r.ok && Math.abs(r.carrierHz - (dial + 200) - 400) < 150, `a 200 Hz retune keeps the average: +600 → ${(r.carrierHz - dial - 200).toFixed(0)} Hz against the new dial`);
   }
   {
-    // Bins too coarse to place an edge → nothing (left to the estimator).
-    const c = new SsbCoarse();
+    // Bins too coarse to place an edge for a LEAN (over COARSE_MAX_BIN_HZ) → no lean cue is ever sent (left to the
+    // estimator); the reading itself goes on to COARSE_CROWD_MAX_BIN_HZ, for the second voice alone.
+    const hints: string[] = [];
+    const t = new BinauralTracker({ setBinauralSsbHint: (hz: number, v: boolean) => hints.push(v ? `hint ${Math.round(hz - dial)}` : 'hint x') });
     const n = 256, g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: 50, hi: 2700 };   // 187.5 Hz bins
+    for (let i = 0; i < 25; i++) t.onFrame(ssbFrame(dial, dial + 500, 300, false, n), g, 'usb', i * 100);
+    ok(!hints.some((h) => h !== 'hint x'), `bins coarser than ${COARSE_MAX_BIN_HZ} Hz (187 Hz) → no lean cue sent (${hints.join(', ') || 'nothing'})`);
+    // …and past COARSE_CROWD_MAX_BIN_HZ, no reading at all.
+    const c = new SsbCoarse();
     let any = false;
-    for (let i = 0; i < 25; i++) any = c.onFrame(ssbFrame(dial, dial + 500, 300, false, n), g, false).ok || any;
-    ok(!any, `bins coarser than ${COARSE_MAX_BIN_HZ} Hz (187 Hz) → no reading`);
+    for (let i = 0; i < 25; i++) any = c.onFrame(ssbFrame(dial, dial + 500, 300, false, 128), g, false).ok || any;
+    ok(!any, `bins coarser than ${COARSE_CROWD_MAX_BIN_HZ} Hz (375 Hz) → no reading`);
     const c2 = new SsbCoarse();
     let any2 = false;
     for (let i = 0; i < 40; i++) any2 = c2.onFrame(noise(), { ...g }, false).ok || any2;

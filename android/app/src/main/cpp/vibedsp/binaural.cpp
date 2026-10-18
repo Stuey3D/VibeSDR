@@ -697,10 +697,15 @@ void BinauralTuning::processPlanar(float* L, float* R, int n, int rate) {
         if (src == SsbUsb || src == SsbLsb) {
             if (ssbValid_.load(std::memory_order_relaxed))
                 held = (src == SsbUsb ? 1.0f : -1.0f) * ssbHz_.load(std::memory_order_relaxed);   // the AUDIO shift
-            // the waterfall sees a second voice in the passband (setSsbHint2), apart from the first
-            two = hintValid_.load(std::memory_order_relaxed) && hint2Valid_.load(std::memory_order_relaxed)
-               && std::fabs(hint2Carrier_.load(std::memory_order_relaxed) - hintCarrier_.load(std::memory_order_relaxed))
-                  >= BinauralSpread::kCrowdSidesApartHz;
+            // the waterfall sees a second voice in the passband (setSsbHint2), apart from the first.
+            // ★★★ (2026-10-18, "make that 200 kHz") A second with NO first cue is two voices too: on a waterfall zoomed out
+            //     past ~100 Hz bins the app reads both voices but sends only the second — the first cannot tell on tune
+            //     from a bin off, and would lean (binauralOffset.ts COARSE_CROWD_MAX_BIN_HZ). The app sends the second only
+            //     while its first reading holds and ≥ kCrowdSidesApartHz from it, so a first that IS sent is checked again.
+            two = hint2Valid_.load(std::memory_order_relaxed)
+               && (!hintValid_.load(std::memory_order_relaxed)
+                   || std::fabs(hint2Carrier_.load(std::memory_order_relaxed) - hintCarrier_.load(std::memory_order_relaxed))
+                      >= BinauralSpread::kCrowdSidesApartHz);
             // …or the estimator heard the other one (a pulse: the bank holds it for kCrowdHoldSec of audio)
             const uint32_t os = otherSeq_.load(std::memory_order_relaxed);
             if (os != otherSeen_) { otherSeen_ = os; two = true; }

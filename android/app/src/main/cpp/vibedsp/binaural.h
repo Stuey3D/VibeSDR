@@ -499,7 +499,9 @@ public:
     void setSsbHint(double carrierHz, bool valid);
     /** ★★★ A SECOND VOICE the waterfall sees in the passband (2026-10-18): its suppressed carrier, ABSOLUTE Hz, valid=false
      *  when there is none. With the first cue (setSsbHint) ≥ 300 Hz from it, the passband is CROWDED: two voices talking
-     *  at once either side of you, which the audio cannot tell from one on tune. See BinauralSpread::crowd. Any thread. */
+     *  at once either side of you, which the audio cannot tell from one on tune. See BinauralSpread::crowd. Any thread.
+     *  ★ Valid with NO first cue is crowded too: on a zoomed-out waterfall the app sends only the second (its first reading
+     *    would lean an on-tune voice; binauralOffset.ts COARSE_CROWD_MAX_BIN_HZ) — it has checked the two apart itself. */
     void setSsbHint2(double carrierHz, bool valid);
     /** ★★ THE SPREAD MAP for the current mode: BinauralSpread::Off (AM, FM, DAB — the lean alone) or
      *  Usb/Lsb/CwUpper/CwLower. NOT a style: how MUCH spread is always the off-tune weight w (none on tune).

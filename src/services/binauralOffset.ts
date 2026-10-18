@@ -242,13 +242,22 @@ export function spectrumOffset(bins: ArrayLike<number>, g: SpecGeom, kind: Binau
  *  ★ MEASURED 2026-10-18 on the composite sweep (scripts/test_binauralSweep.ts, real voices): at 23-94 Hz bins the cue
  *  points the right way on 99-100 % of frames; at 188 Hz still 97-100 %, but it then reads an ON-TUNE voice as 250+ Hz
  *  off on a fifth to most of the on-tune frames (it cannot tell on tune from a bin or two off), and holding back the near
- *  readings cost half its coverage. So it stays 100: a phone view wider than ~100 kHz (1024 bins) gives no cue — zoom
- *  in to sweep a band with the lean. */
+ *  readings cost half its coverage. So the LEAN stays 100: a view wider than ~100 kHz gives no lean cue (1024 bins on
+ *  every window, Mac and iPad included: VibeServer is asked for 1024, UberSDR sends its own) — zoom in to sweep a band with the lean. The second voice reaches further:
+ *  COARSE_CROWD_MAX_BIN_HZ. */
 export const COARSE_MAX_BIN_HZ = 100;
 /** ★★★ …but the SECOND VOICE (setSsbHint2 → native places each voice by its own frequency) is read up to this: there is
  *  no whole-image lean in the crowded state, so the on-tune misreading that sets COARSE_MAX_BIN_HZ does not matter to it.
- *  Between the two, the cue's FIRST reading is used only to find the second one, and never sent (no lean). */
-export const COARSE_CROWD_MAX_BIN_HZ = 100;
+ *  Between the two, the cue's FIRST reading is used only to find the second one, and never sent (no lean); native takes
+ *  a second with no first as two (binaural.cpp, the `two` judgement).
+ *  ★ 250 (2026-10-18, Stuart: "make that 200KHz which is about the entire 40m band" — he sits at band level, 200-250 kHz:
+ *    195-245 Hz bins at a phone's 1024). MEASURED (scripts/test_binauralSweep.ts, real voices, exact DFT bins): two voices
+ *    3 kHz apart either side of the dial (two QSOs side by side) read as two on 96-99 % (LSB) / 68 % (USB) of frames at
+ *    94-150 Hz bins, 83-84 % / 59-69 % at 195-245, falling to 76 % / 53 % at 300; a LONE voice read as two on 0 % of
+ *    frames at every zoom to 245, swept or parked on tune (SsbCoarse.separate). Voices 1-2 kHz apart, overlapping, are
+ *    found on 0-25 % of frames at ANY zoom (47 Hz included) — that is separate() refusing what an on-tune voice could
+ *    also look like, not the bin width; native's own witnesses (the estimator) still see a QSO either side. */
+export const COARSE_CROWD_MAX_BIN_HZ = 250;
 /** ★ Where the voice's band starts, above the suppressed carrier. Transmit filters cut their low end at ~100-400 Hz.
  *  ★ 180, not the textbook 300 (2026-10-18): measured on real voices (the composite sweep), 300 put the carrier 120-160 Hz
  *  too far from the voice on every zoom — the edge found 6 dB over the floor sits on the filter's skirt, and many
@@ -297,7 +306,7 @@ export const COARSE_VOICE_TOP_HZ = 3000;
 export const COARSE_SECOND_MIN_HZ = 300;
 /** Two voices' carriers this far apart are two voices, not one read twice (mirrors BinauralSpread::kCrowdSidesApartHz). */
 export const COARSE_SECOND_APART_HZ = 300;
-/** separate(): a voice's band is widened by this (plus two bins) before another voice's energy counts as outside it —
+/** separate(): a voice's band is widened by this (plus a bin; two bins cost the closer pairs and bought nothing measured) before another voice's energy counts as outside it —
  *  the filter's skirt, a band running past 2.7 kHz, and the cue's own error. */
 export const COARSE_SEPARATE_MARGIN_HZ = 150;
 /** separate(): the held average decays by this a frame (~10 a second): −6 dB in about 8 s — a QSO's over and its pause,
@@ -321,7 +330,8 @@ export const COARSE_SEPARATE_MIN_HZ = 200;
  *     overlap by 300 Hz and be 500-4000 Hz wide (a carrier is narrower; an AM station wider).
  *   • Its carrier-side edge off the window → only the direction is sure; reported as a bound (`bound`), which is
  *     still past full lean (300 Hz), so it leans the right way at once.
- *   • Bins over COARSE_MAX_BIN_HZ, or nothing over the floor → no reading. Never a guess.
+ *   • Bins over COARSE_CROWD_MAX_BIN_HZ, or nothing over the floor → no reading. Never a guess. (Over COARSE_MAX_BIN_HZ
+ *     the reading finds the second voice only; the tracker never sends it as a lean.)
  */
 export class SsbCoarse {
   /** The coarsest bins read at all (test instrument: scripts/test_binauralSweep.ts measures past it). */
@@ -473,7 +483,7 @@ export class SsbCoarse {
    * ★★★ ARE THESE TWO VOICES REALLY TWO? (2026-10-18, Stuart on 484: "when i zoomed in without tuning it panned over
    * slightly" — on tune, right, "a bassy male voice".) Each must have shown energy, within the last few seconds (the held
    * average), IN THE PASSBAND where the OTHER cannot reach — outside the other's band (COARSE_VOICE_LOW_HZ…2700 Hz from
-   * its carrier, widened by COARSE_SEPARATE_MARGIN_HZ and two bins for the cue's own error) — over at least
+   * its carrier, widened by COARSE_SEPARATE_MARGIN_HZ and a bin for the cue's own error) — over at least
    * COARSE_SEPARATE_MIN_HZ. A voice you are ON fills the passband, so nothing can be outside it there: a lone on-tune voice is
    * never two, whatever a gap in its ragged spectrum or a neighbour beyond the passband looks like. Between two stations,
    * each has its own part of the passband — and in a QSO either side, each shows it while it talks, held between overs.
@@ -485,7 +495,7 @@ export class SsbCoarse {
     const g = this.lastG;
     if (!g || !(this.floorNow > 0) || !(this.gridHz > 0) || !Number.isFinite(c1) || !Number.isFinite(c2)) return false;
     const grid = this.gridHz;
-    const m = COARSE_SEPARATE_MARGIN_HZ + 2 * grid;
+    const m = COARSE_SEPARATE_MARGIN_HZ + grid;
     const pLo = g.tuneHz + Math.min(g.lo, g.hi), pHi = g.tuneHz + Math.max(g.lo, g.hi);
     const band = (c: number, w: number): [number, number] =>
       lsb ? [c - 2700 - w, c - COARSE_VOICE_LOW_HZ + w] : [c + COARSE_VOICE_LOW_HZ - w, c + 2700 + w];
