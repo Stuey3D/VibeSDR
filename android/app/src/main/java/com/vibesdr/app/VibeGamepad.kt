@@ -6,11 +6,16 @@ import android.hardware.input.InputManager
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.Window
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.facebook.react.views.modal.ReactModalHostView
+import java.lang.ref.WeakReference
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -37,6 +42,11 @@ import kotlin.math.roundToInt
  *   both); the two are kept apart and OR'd, so a pad that sends both still presses once.
  * ★ `typing`: while a text field has the cursor the JS side lets only enter and back through (the keyboard's rule),
  *   and back lets go of the cursor — leaveTextField.
+ * ★★★ POP-UPS ARE WINDOWS OF THEIR OWN. A React Native <Modal> (the frequency card, the menus, the keyboard
+ *   reference) is an Android Dialog, and a Dialog's keys and stick movements go to ITS window — never to the activity's
+ *   dispatchKeyEvent. Left like that, the pad would go dead the moment any pop-up opened. hookDialogs wraps each modal
+ *   dialog's Window.Callback so its pad events come here too (and the text field it holds is the one `typing` asks
+ *   about); it runs when the activity — or a dialog already hooked — loses focus, which is when a new one has opened.
  */
 object VibeGamepad {
     // PAD_BIT (src/utils/padActions.ts)
@@ -54,6 +64,8 @@ object VibeGamepad {
     }
     private val pads = HashMap<Int, Pad>()
     private var listening = false
+    /** The window the last pad event arrived in — the activity's, or a pop-up's (see hookDialogs). */
+    private var lastWin: WeakReference<Window>? = null
 
     private fun isPadSource(source: Int): Boolean =
         (source and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
@@ -77,7 +89,7 @@ object VibeGamepad {
     }
 
     /** From MainActivity.dispatchKeyEvent. True = ours, consumed. */
-    fun onKey(act: Activity, e: KeyEvent): Boolean {
+    fun onKey(act: Activity, e: KeyEvent, win: Window = act.window): Boolean {
         val bit = bitFor(e.keyCode)
         if (bit == 0) return false
         // ★ The D-pad keys also come from keyboards and TV remotes — ours only when the DEVICE is a game controller.
@@ -89,12 +101,12 @@ object VibeGamepad {
             KeyEvent.ACTION_UP -> p.keys = p.keys and bit.inv()
             else -> return true
         }
-        report(act, e.deviceId, p, e.device)
+        report(win, e.deviceId, p, e.device)
         return true
     }
 
     /** From MainActivity.dispatchGenericMotionEvent. True = ours, consumed. */
-    fun onMotion(act: Activity, e: MotionEvent): Boolean {
+    fun onMotion(act: Activity, e: MotionEvent, win: Window = act.window): Boolean {
         if ((e.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
         if (e.actionMasked != MotionEvent.ACTION_MOVE) return false
         if (ctx?.hasActiveReactInstance() != true) return false
@@ -109,7 +121,7 @@ object VibeGamepad {
         val zr = rightStickAxes(dev)
         p.rx = if (zr != null) axis(e, dev, zr.first) else 0f
         p.ry = if (zr != null) axis(e, dev, zr.second) else 0f
-        report(act, e.deviceId, p, dev)
+        report(win, e.deviceId, p, dev)
         return true
     }
 
@@ -141,19 +153,20 @@ object VibeGamepad {
 
     private fun q(v: Float): Int = (v * 32f).roundToInt()     // quantised to 1/32 of travel, as on Apple
 
-    private fun report(act: Activity, id: Int, p: Pad, dev: InputDevice?) {
+    private fun report(win: Window, id: Int, p: Pad, dev: InputDevice?) {
         val b = p.keys or p.hat
         val now = intArrayOf(b, q(p.lx), q(p.ly), q(p.rx), q(p.ry))
         if (p.sent?.contentEquals(now) == true) return
         p.sent = now
-        listenForRemoval(act)
+        lastWin = WeakReference(win)
+        listenForRemoval(win.context)
         val m = Arguments.createMap()
         m.putString("id", "a$id")
         m.putBoolean("sticks", hasSticks(dev))
         m.putInt("b", b)
         m.putDouble("lx", now[1] / 32.0); m.putDouble("ly", now[2] / 32.0)
         m.putDouble("rx", now[3] / 32.0); m.putDouble("ry", now[4] / 32.0)
-        m.putBoolean("typing", act.currentFocus is EditText)
+        m.putBoolean("typing", win.currentFocus is EditText)
         emit(m)
     }
 
@@ -165,10 +178,10 @@ object VibeGamepad {
     }
 
     /** A pad switched off mid-press must not leave a tune sweep running: 'gone' makes JS release what is held. */
-    private fun listenForRemoval(act: Activity) {
+    private fun listenForRemoval(c: Context) {
         if (listening) return
         listening = true
-        val im = act.applicationContext.getSystemService(Context.INPUT_SERVICE) as? InputManager ?: return
+        val im = c.applicationContext.getSystemService(Context.INPUT_SERVICE) as? InputManager ?: return
         im.registerInputDeviceListener(object : InputManager.InputDeviceListener {
             override fun onInputDeviceAdded(deviceId: Int) {}
             override fun onInputDeviceChanged(deviceId: Int) {}
@@ -185,10 +198,52 @@ object VibeGamepad {
     /** ★ Back on a pad while a field has the cursor leaves the field — one layer, as Escape does on a keyboard. */
     fun leaveTextField(act: Activity) {
         act.runOnUiThread {
-            val v = act.currentFocus as? EditText ?: return@runOnUiThread
+            // The field may be in a pop-up's window (the frequency card), not the activity's.
+            val v = (lastWin?.get()?.currentFocus ?: act.currentFocus) as? EditText ?: return@runOnUiThread
             v.clearFocus()
             (act.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
                 ?.hideSoftInputFromWindow(v.windowToken, 0)
+        }
+    }
+
+    // ── Pop-ups (see the header) ─────────────────────────────────────────────────
+
+    /** Wrap the Window.Callback of every React Native modal dialog now showing, once each. UI thread. */
+    fun hookDialogs(act: Activity) {
+        fun walk(v: View) {
+            if (v is ReactModalHostView) {
+                val w = v.dialog?.window
+                if (w != null) {
+                    val cb = w.callback
+                    if (cb != null && cb !is PadWindowCallback) w.callback = PadWindowCallback(cb, act, w)
+                    // A pop-up opened from inside this one has its host view in THIS dialog's tree.
+                    walk(w.decorView)
+                }
+            }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        try { walk(act.window.decorView) } catch (t: Throwable) { android.util.Log.w("VibeGamepad", "hookDialogs: $t") }
+    }
+
+    /** A pop-up window's callback with the pad taken out first; everything else goes to the dialog as before. */
+    private class PadWindowCallback(private val orig: Window.Callback, private val act: Activity, private val win: Window) :
+        Window.Callback by orig {
+        override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+            onKey(act, event, win) || orig.dispatchKeyEvent(event)
+        override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean =
+            onMotion(act, event, win) || orig.dispatchGenericMotionEvent(event)
+        override fun onWindowFocusChanged(hasFocus: Boolean) {
+            orig.onWindowFocusChanged(hasFocus)
+            // ★ Another pop-up opened over this one: hook it too.
+            if (!hasFocus) win.decorView.post { hookDialogs(act) }
+        }
+        // ★ Java default methods are not delegated by `by` — forward the two the system calls on a dialog.
+        override fun onProvideKeyboardShortcuts(data: MutableList<android.view.KeyboardShortcutGroup>?,
+                                                menu: android.view.Menu?, deviceId: Int) {
+            if (android.os.Build.VERSION.SDK_INT >= 24) orig.onProvideKeyboardShortcuts(data, menu, deviceId)
+        }
+        override fun onPointerCaptureChanged(hasCapture: Boolean) {
+            if (android.os.Build.VERSION.SDK_INT >= 26) orig.onPointerCaptureChanged(hasCapture)
         }
     }
 }

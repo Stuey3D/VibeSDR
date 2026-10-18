@@ -89,6 +89,12 @@ open class MainActivity : ReactActivity() {
     return super.dispatchGenericMotionEvent(ev)
   }
 
+  /** ★ A pop-up (a React Native Modal = a Dialog) took the focus: give its window the pad too (VibeGamepad.hookDialogs). */
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (!hasFocus) window.decorView.post { VibeGamepad.hookDialogs(this) }
+  }
+
   override fun onNewIntent(intent: Intent?) {
     super.onNewIntent(intent)
     setIntent(intent)
