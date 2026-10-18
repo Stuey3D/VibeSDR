@@ -32,6 +32,9 @@ object VibeBinaural {
     fun setDial(hz: Double) { if (h != 0L) nSetDial(h, hz) }
     /** The waterfall's coarse SSB cue: the voice's carrier, ABSOLUTE Hz (binauralOffset.ts ssbCoarseCarrier). */
     fun setSsbHint(carrierHz: Double, valid: Boolean) { if (h != 0L) nSetSsbHint(h, carrierHz, valid) }
+    /** A SECOND voice the waterfall sees in the passband (absolute Hz): native judges the passband crowded and places
+     *  each voice by its own frequency instead of leaning the whole sound toward one (Stuart on 483). */
+    fun setSsbHint2(carrierHz: Double, valid: Boolean) { if (h != 0L) nSetSsbHint2(h, carrierHz, valid) }
     /** The mode's spread map (0 none — AM/FM/DAB; 1 USB, 2 LSB, 3/4 CW) and the default SSB passband's edges. Not a
      *  style: native spreads only as far as the listener is off tune, by the same weight as the lean. */
     fun setSpread(kind: Int, edgeLoHz: Float, edgeHiHz: Float) { if (h != 0L) nSetSpread(h, kind, edgeLoHz, edgeHiHz) }
@@ -71,6 +74,7 @@ object VibeBinaural {
     @JvmStatic private external fun nSetStereo(h: Long, hint: Int)
     @JvmStatic private external fun nSetDial(h: Long, hz: Double)
     @JvmStatic private external fun nSetSsbHint(h: Long, carrierHz: Double, valid: Boolean)
+    @JvmStatic private external fun nSetSsbHint2(h: Long, carrierHz: Double, valid: Boolean)
     @JvmStatic private external fun nSetSpread(h: Long, kind: Int, lo: Float, hi: Float)
     @JvmStatic private external fun nProcessShorts(h: Long, input: ShortArray, inCh: Int, frames: Int, rate: Int, out: ShortArray): Int
     @JvmStatic private external fun nProcessBytes(h: Long, input: ByteArray, inCh: Int, frames: Int, rate: Int, out: ByteArray): Int

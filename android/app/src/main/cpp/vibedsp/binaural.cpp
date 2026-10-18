@@ -144,9 +144,9 @@ float BinauralSpread::panMix_(float f, float centre, float half) const {
     return a + crowd_ * (panAtCwCrowded(f, kind_, cwCentre_, dead_, full_) - a);
 }
 
-void BinauralSpread::setContext(float heldShiftHz, bool coarse, float deadHz, float fullHz, uint32_t dialSeq) {
+void BinauralSpread::setContext(float heldShiftHz, bool twoVoices, float deadHz, float fullHz, uint32_t dialSeq) {
     heldShift_ = std::isfinite(heldShiftHz) ? heldShiftHz : NAN;
-    heldCoarse_ = coarse;
+    twoVoices_ = twoVoices;
     if (std::isfinite(deadHz) && std::isfinite(fullHz) && (deadHz != dead_ || fullHz != full_)) {
         dead_ = std::max(0.0f, deadHz); full_ = std::max(dead_ + 1.0f, fullHz); wAmt_ = -1;
     }
@@ -155,7 +155,7 @@ void BinauralSpread::setContext(float heldShiftHz, bool coarse, float deadHz, fl
 }
 
 void BinauralSpread::crowdForget_() {
-    occ_ = 0; lastEv_ = -1e9; sideT_[0] = sideT_[1] = -1e9;
+    lastEv_ = -1e9; sideT_[0] = sideT_[1] = -1e9;
     for (Track& t : tracks_) t = Track();
 }
 
@@ -305,40 +305,21 @@ void BinauralSpread::steady_(double eL, double eR) {
 }
 
 void BinauralSpread::crowdSsb_() {
-    /* ★★★ SSB: ANOTHER VOICE WHERE THE HELD ONE CANNOT REACH. A voice's audio is its transmitter's band — at the widest
-     *     about 100-2800 Hz — moved by how far it is mistuned (the held answer, heldShift_). So with a voice held 600 Hz
-     *     BELOW the dial on USB its audio ends by ~2200 Hz; energy SUSTAINED above that, over the noise between words, is
-     *     another signal — one above the dial. Held ABOVE, its audio starts at ~700 Hz; energy below is a voice below.
-     *     ✗ NOT judged from the spectrum alone: one voice on tune fills the same 50-2700 Hz that two either side of the
-     *       dial do. The held answer says where ONE is; only then does energy elsewhere mean a second.
-     *     ★ The region must be kCrowdRegionMinHz wide (a voice held < ~450 Hz below or < ~300 Hz above leaves too little
-     *       to judge) — and a coarse-held answer (the waterfall's ±150 Hz) gives up that much more of it. */
-    const double hop = (double)h_ / fs_;
-    const float aO = (float)(1.0 - std::exp(-hop / kCrowdOccSec));
-    bool active = false, judged = false;
-    if (std::isfinite(heldShift_)) {
-        // ★ kCrowdGuardHz between the held voice's band and the region: a strong harmonic leaks a bin or two into its
-        //   neighbours through the bank's window (a lone voice 300 Hz off once read as a second one); the cue's ±150 Hz on top.
-        const float m = kCrowdGuardHz + (heldCoarse_ ? 150.0f : 0.0f);
-        const float s = heldShift_;
-        float r0, r1;
-        if (s < 0) { r0 = 2700.0f + s + m; r1 = hi_; } else { r0 = lo_; r1 = 100.0f + s - m; }
-        r0 = std::max(r0, lo_); r1 = std::min(r1, hi_);
-        if (r1 - r0 >= kCrowdRegionMinHz) {
-            const double binHz = fs_ / n_;
-            const int ka = std::max(1, (int)std::ceil(r0 / binHz)), kb = std::min(n_ / 2 - 1, (int)std::floor(r1 / binHz));
-            if (kb >= ka) {
-                double ep = 0, ef = 0;
-                for (int k = ka; k <= kb; ++k) { ep += std::pow(10.0, psm_[k] / 10.0); ef += std::pow(10.0, floor_[k] / 10.0); }
-                judged = true;
-                active = ef > 0 && 10.0 * std::log10(ep / ef) > kCrowdOverDb;
-            }
-        }
-    }
-    occ_ += aO * ((active ? 1.0 : 0.0) - occ_);
-    if (!judged && !std::isfinite(heldShift_)) occ_ = 0;   // nothing held: nothing to judge against
-    if (occ_ >= kCrowdOccFrac) lastEv_ = clock_;
-    // ★ The second witness (kCrowdSideHz): the held answer on both sides of the dial with no dial move between.
+    /* ★★★ SSB: TWO VOICES. Two witnesses, either enough, each held kCrowdHoldSec (the other station's over and the pause
+     *     before it); a dial move forgets both (setContext).
+     *     1. THE WATERFALL SEES TWO (twoVoices_, from the controller: setSsbHint2): the app's coarse cue finds every voice
+     *        whose transmitter edge it can see, and reports a second one filling the passband ≥ 300 Hz from the first.
+     *        The waterfall sees past the passband, edges included, so it sees two voices TALKING AT ONCE — which the audio
+     *        cannot tell from one on tune: both fill the same 50-2700 Hz.
+     *        Also through twoVoices_: the ESTIMATOR gave a gated answer on the other side of the dial from the held one
+     *        (ssbStep_) — the other station of a QSO, heard from the audio alone, with no waterfall.
+     *     2. THE HELD ANSWER HAS SAT ON BOTH SIDES of the dial (kCrowdSideHz) — the cue or the estimator following whoever
+     *        talks. A voice does not cross the dial unless the dial moves.
+     *     ✗ TRIED AND DROPPED (2026-10-18): energy in the audio where the held voice "cannot reach" (beyond its band as
+     *       moved by the held answer). Clean on synthetic voices; on the off-air VOLMET clips every LONE voice at ±500 /
+     *       ±1000 Hz was judged crowded 93-100 % of the time — real transmitters' bands run past 2.7 kHz, and a min-following
+     *       noise floor sits 6-10 dB under the noise it follows (test-ssb-offset-real §5 failed). */
+    if (twoVoices_) lastEv_ = clock_;
     if (std::isfinite(heldShift_) && std::fabs(heldShift_) >= kCrowdSideHz) {
         const int i = heldShift_ > 0 ? 1 : 0;
         sideT_[i] = clock_; sideV_[i] = heldShift_;
@@ -566,6 +547,7 @@ void BinauralTuning::setSource(int source, float deadHz, float fullHz) {
         ssbValid_.store(false);
         givenValid_.store(false);
         hintValid_.store(false);    // a waterfall cue belongs to the sideband it was read for
+        hint2Valid_.store(false);
     }
     if ((source == SsbUsb || source == SsbLsb) && enabled_.load()) ensureWorker_();
 }
@@ -586,6 +568,11 @@ void BinauralTuning::setDial(double hz) {
 void BinauralTuning::setSsbHint(double carrierHz, bool valid) {
     if (std::isfinite(carrierHz)) hintCarrier_.store(carrierHz);
     hintValid_.store(valid && std::isfinite(carrierHz));
+}
+
+void BinauralTuning::setSsbHint2(double carrierHz, bool valid) {
+    if (std::isfinite(carrierHz)) hint2Carrier_.store(carrierHz);
+    hint2Valid_.store(valid && std::isfinite(carrierHz));
 }
 
 void BinauralTuning::setSpread(int kind, float edgeLoHz, float edgeHiHz) {
@@ -706,12 +693,19 @@ void BinauralTuning::processPlanar(float* L, float* R, int n, int rate) {
         const double dial = dial_.load(std::memory_order_relaxed);
         if (!haveDialAudio_) { lastDialAudio_ = dial; haveDialAudio_ = true; }
         else if (std::fabs(dial - lastDialAudio_) >= kDialMoveHz) { lastDialAudio_ = dial; ++dialSeqAudio_; }
-        float held = NAN; bool coarse = false;
-        if ((src == SsbUsb || src == SsbLsb) && ssbValid_.load(std::memory_order_relaxed)) {
-            held = (src == SsbUsb ? 1.0f : -1.0f) * ssbHz_.load(std::memory_order_relaxed);   // the AUDIO shift
-            coarse = coarsePub_.load(std::memory_order_relaxed);
+        float held = NAN; bool two = false;
+        if (src == SsbUsb || src == SsbLsb) {
+            if (ssbValid_.load(std::memory_order_relaxed))
+                held = (src == SsbUsb ? 1.0f : -1.0f) * ssbHz_.load(std::memory_order_relaxed);   // the AUDIO shift
+            // the waterfall sees a second voice in the passband (setSsbHint2), apart from the first
+            two = hintValid_.load(std::memory_order_relaxed) && hint2Valid_.load(std::memory_order_relaxed)
+               && std::fabs(hint2Carrier_.load(std::memory_order_relaxed) - hintCarrier_.load(std::memory_order_relaxed))
+                  >= BinauralSpread::kCrowdSidesApartHz;
+            // …or the estimator heard the other one (a pulse: the bank holds it for kCrowdHoldSec of audio)
+            const uint32_t os = otherSeq_.load(std::memory_order_relaxed);
+            if (os != otherSeen_) { otherSeen_ = os; two = true; }
         }
-        spread_.setContext(held, coarse, dead_.load(std::memory_order_relaxed), full_.load(std::memory_order_relaxed), dialSeqAudio_);
+        spread_.setContext(held, two, dead_.load(std::memory_order_relaxed), full_.load(std::memory_order_relaxed), dialSeqAudio_);
     }
     const float c = sk != BinauralSpread::Off ? spread_.crowd() : 0.0f;
     // ★★ ONE WEIGHT FOR BOTH (a lone signal): the spread's amount IS the lean's size, w = |p| — 0 in the dead zone
@@ -970,6 +964,16 @@ void BinauralTuning::ssbStep_() {
             //   those aliases. Its below-carrier teeth refute the alias a pitch up, its memory and clarity floor the
             //   others; measured in §10, the monotone 250/300 Hz children on tune (speaking first too) never lean
             //   without it, and a child really 150 Hz off — half its pitch, which the rule refused — is now read right.
+            // ★★★ A GATED answer on the OTHER side of the dial from the held one, well apart from it, is a second voice
+            //     (2026-10-18, Stuart on 483: two stations either side, taking turns). It does not move the held answer —
+            //     one over gives too few answers to out-vote the median — but it tells the bank the passband is crowded.
+            //     Gated answers never pointed the wrong way on any off-air clip (test-ssb-offset-real), so one is enough.
+            if (gated && ssbValid_.load() && std::isfinite(e.offsetHz)) {
+                const float x = sb * e.offsetHz, held = ssbHz_.load();
+                if (x * held < 0 && std::fabs(x) >= BinauralSpread::kCrowdSideHz && std::fabs(held) >= BinauralSpread::kCrowdSideHz
+                    && std::fabs(x - held) >= BinauralSpread::kCrowdSidesApartHz)
+                    otherSeq_.fetch_add(1, std::memory_order_relaxed);
+            }
             if (gated && !beyondReach && !contradicts && !dragsLow && std::isfinite(e.offsetHz))
                 ssbAccept_(sb * e.offsetHz, e.f0Hz);
             vote_(e, sb, hiF0);
@@ -1017,6 +1021,9 @@ void  vibe_binaural_set_stereo(void* h, int hint) { if (h) static_cast<BinauralT
 void  vibe_binaural_set_dial(void* h, double hz) { if (h) static_cast<BinauralTuning*>(h)->setDial(hz); }
 void  vibe_binaural_set_ssb_hint(void* h, double carrierHz, int valid) {
     if (h) static_cast<BinauralTuning*>(h)->setSsbHint(carrierHz, valid != 0);
+}
+void  vibe_binaural_set_ssb_hint2(void* h, double carrierHz, int valid) {
+    if (h) static_cast<BinauralTuning*>(h)->setSsbHint2(carrierHz, valid != 0);
 }
 void  vibe_binaural_set_spread(void* h, int kind, float edgeLoHz, float edgeHiHz) {
     if (h) static_cast<BinauralTuning*>(h)->setSpread(kind, edgeLoHz, edgeHiHz);

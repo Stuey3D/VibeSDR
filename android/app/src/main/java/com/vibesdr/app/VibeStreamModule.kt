@@ -503,6 +503,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun setBinauralStereo(hint: Double) { VibeBinaural.setStereo(hint.toInt()) }
     @ReactMethod fun setBinauralDial(hz: Double) { VibeBinaural.setDial(hz) }
     @ReactMethod fun setBinauralSsbHint(carrierHz: Double, valid: Boolean) { VibeBinaural.setSsbHint(carrierHz, valid) }
+    @ReactMethod fun setBinauralSsbHint2(carrierHz: Double, valid: Boolean) { VibeBinaural.setSsbHint2(carrierHz, valid) }
     @ReactMethod fun setBinauralSpread(kind: Double, edgeLoHz: Double, edgeHiHz: Double) {
         VibeBinaural.setSpread(kind.toInt(), edgeLoHz.toFloat(), edgeHiHz.toFloat())
     }

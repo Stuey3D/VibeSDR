@@ -145,21 +145,23 @@ function voiceInView(v: Voice, dial: number, minOverlap = 300): boolean {
 
 // ── a sweep ──────────────────────────────────────────────────────────────────────────────────────────────────────
 interface Ev { t: number; k: 'dial' | 'hint' | 'src'; v: number; ok?: boolean; dead?: number; full?: number }
-interface SweepStats { inView: number; cue: number; right: number; judged: number; errs: number[]; signed: number[]; near: number; nearFalse: number }
+interface SweepStats { inView: number; cue: number; right: number; judged: number; errs: number[]; signed: number[]; near: number; nearFalse: number; second: number }
 
 interface Band { name: string; sb: number; voices: Voice[]; sweeps: [number, number][]; judged: boolean }
 function sweep(iq: Iq, band: Band, from: number, to: number, stepHz: number, everySec: number, binTarget: number,
                t0: number, events: Ev[] | null): SweepStats {
-  const st: SweepStats = { inView: 0, cue: 0, right: 0, judged: 0, errs: [], signed: [], near: 0, nearFalse: 0 };
+  const st: SweepStats = { inView: 0, cue: 0, right: 0, judged: 0, errs: [], signed: [], near: 0, nearFalse: 0, second: 0 };
   const nfft = 1 << Math.round(Math.log2(iq.fs / binTarget));
   const binHz = iq.fs / nfft;
   const nBins = Math.min(1024, Math.floor(nfft * 0.85));
   const span = nBins * binHz;
   let hint = { ok: false, hz: 0 };
+  let hint2 = { ok: false, hz: 0 };
   const t = () => now;
   let now = 0;
   const sink: BinauralSink = {
     setBinauralSsbHint: (hz, ok) => { hint = { ok, hz }; events?.push({ t: t(), k: 'hint', v: hz, ok }); },
+    setBinauralSsbHint2: (hz, ok) => { hint2 = { ok, hz }; },
     setBinauralDial: (hz) => { events?.push({ t: t(), k: 'dial', v: hz }); },
     setBinauralSource: (s, dead, full) => { events?.push({ t: t(), k: 'src', v: s, dead, full }); },
   };
@@ -185,6 +187,8 @@ function sweep(iq: Iq, band: Band, from: number, to: number, stepHz: number, eve
     if (inView.length !== 1 || touching !== 1) continue;
     const v = inView[0];
     st.inView++;
+    // ★★★ A LONE voice must not read as two (2026-10-18: the second-voice cue makes native place by frequency, no lean)
+    if (hint.ok && hint2.ok) st.second++;
     if (!hint.ok) continue;
     st.cue++;
     const truth = v.carrier - dial, got = hint.hz - dial;
@@ -321,13 +325,13 @@ for (const binTarget of ZOOMS) {
   for (const [step, every] of PACES) {
     if (only && Number(only[2]) !== step) continue;
     for (const judged of [true, false]) {
-      const tot: SweepStats = { inView: 0, cue: 0, right: 0, judged: 0, errs: [], signed: [], near: 0, nearFalse: 0 };
+      const tot: SweepStats = { inView: 0, cue: 0, right: 0, judged: 0, errs: [], signed: [], near: 0, nearFalse: 0, second: 0 };
       for (const b of ALL) {
         if (b.judged !== judged || (only && b.name !== only[0])) continue;
         for (const [a, z] of b.sweeps) for (const [from, to] of [[a, z], [z, a]]) {
           const ev: Ev[] | null = evDir ? [] : null;
           const s = sweep(b.iq, b, from, to, step, every, binTarget, judged ? 0 : 5, ev);
-          tot.inView += s.inView; tot.cue += s.cue; tot.right += s.right; tot.judged += s.judged; tot.errs.push(...s.errs); tot.signed.push(...s.signed); tot.near += s.near; tot.nearFalse += s.nearFalse;
+          tot.inView += s.inView; tot.cue += s.cue; tot.right += s.right; tot.judged += s.judged; tot.errs.push(...s.errs); tot.signed.push(...s.signed); tot.near += s.near; tot.nearFalse += s.nearFalse; tot.second += s.second;
           // ★ The native half (test-ssb-offset-real §7) replays a composite sweep's dial + hint stream against its audio.
           if (ev && judged && binTarget <= COARSE_MAX_BIN_HZ) writeFileSync(`${evDir}/sweep_${b.name.replace(/ /g, '_')}_${from}_${to}_${step}_${binTarget}.json`,
             JSON.stringify({ band: b.name, iq: `composite_${b.iq.centre}_${SECS}.f32`, fs: b.iq.fs, centre: b.iq.centre, secs: SECS,
@@ -338,10 +342,11 @@ for (const binTarget of ZOOMS) {
       const cueFrac = tot.cue / tot.inView, rightFrac = tot.judged ? tot.right / tot.judged : 0;
       console.log(`   ${judged ? 'composite' : 'real     '} bins ${String(binTarget).padStart(3)} Hz, ${String(step).padStart(3)} Hz every ${every} s: in view ${String(tot.inView).padStart(4)}`
         + ` · cue ${(100 * cueFrac).toFixed(0).padStart(3)} % · right way ${(100 * rightFrac).toFixed(0).padStart(3)} % of ${tot.judged}`
-        + ` · error median ${pct(tot.errs, 0.5).toFixed(0)} / 90 % ${pct(tot.errs, 0.9).toFixed(0)} Hz (bias ${pct(tot.signed, 0.5).toFixed(0)}) · on tune ≥250: ${tot.nearFalse}/${tot.near}`);
+        + ` · error median ${pct(tot.errs, 0.5).toFixed(0)} / 90 % ${pct(tot.errs, 0.9).toFixed(0)} Hz (bias ${pct(tot.signed, 0.5).toFixed(0)}) · on tune ≥250: ${tot.nearFalse}/${tot.near} · lone voice read as two: ${tot.second}/${tot.inView}`);
       if (judged && binTarget <= COARSE_MAX_BIN_HZ) {
         const errMax = 250 + binTarget;   // the edge is found to about a bin
         check(tot.nearFalse <= 0.1 * tot.near, `composite, bins ${binTarget} Hz, ${step} Hz clicks: on tune, a cue that would lean audibly on ≤ 10 % of frames (${tot.nearFalse} of ${tot.near})`);
+        check(tot.second <= 0.05 * tot.inView, `composite, bins ${binTarget} Hz, ${step} Hz clicks: one voice alone in the passband is read as two on ≤ 5 % of frames (${tot.second} of ${tot.inView})`);
         check(cueFrac >= 0.6 && rightFrac >= 0.95 && pct(tot.errs, 0.9) <= errMax,
           `composite, bins ${binTarget} Hz, ${step} Hz clicks: cue on ≥ 60 % of in-view frames (${(100 * cueFrac).toFixed(0)} %), right way ≥ 95 % (${(100 * rightFrac).toFixed(0)} %), 90 % error ≤ ${errMax} Hz (${pct(tot.errs, 0.9).toFixed(0)})`);
       }

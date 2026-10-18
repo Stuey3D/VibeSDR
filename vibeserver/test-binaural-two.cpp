@@ -310,19 +310,46 @@ static double runChain(BinauralTuning& bt, const std::vector<float>& x, int rate
 
 static int latencyFor(int rate) { int n = 128; while (n < 4096 && (double)rate / n > BinauralSpread::kBinHz) n <<= 1; return n; }
 
-struct Verdict { int cases = 0, ok = 0, unheld = 0, unheldWrong = 0; };
+/* ★ What the app's waterfall cue (binauralOffset.ts SsbCoarse + BinauralTracker) sends for two voices at −sep and +sep:
+ *   each voice it can see is one sounding now or within COARSE_HOLD_MS (4 s) — the tracker holds a reading through the
+ *   pause between overs while its voice still fills the passband. The FIRST cue is the voice talking (both at once: the
+ *   one filling the passband most, here the lower); the SECOND (setSsbHint2) the other, when it is seen too. Equal voices
+ *   at once flip the first cue every couple of seconds as their averages cross. (test_binauralOffset.ts measures the
+ *   real SsbCoarse finding both on synthetic waterfall frames.) */
+static void waterfall(BinauralTuning& bt, double dial, double sep, int cs, const Overs& ov, double t) {
+    bool seen[2];
+    for (int w = 0; w < 2; ++w) {
+        seen[w] = cs != 1;
+        if (cs == 1) for (double back = 0; back <= 4.0; back += 0.1) if (t - back >= 0 && ov.on(w, t - back)) { seen[w] = true; break; }
+    }
+    int first;
+    if (cs == 1) first = ov.on(0, t) ? 0 : ov.on(1, t) ? 1 : seen[0] ? 0 : seen[1] ? 1 : -1;
+    else if (cs == 2) first = 0;
+    else first = ((int)(t / 2.3)) % 2;
+    if (first < 0) { bt.setSsbHint(0, false); bt.setSsbHint2(0, false); return; }
+    bt.setSsbHint(dial + (first == 0 ? -sep : sep), true);
+    const int other = 1 - first;
+    bt.setSsbHint2(dial + (other == 0 ? -sep : sep), seen[other]);
+}
+
+struct Verdict { int cases = 0, ok = 0, unheld = 0, unheldWrong = 0, audio = 0, audioOk = 0; };
 
 /* One two-signal case through the chain, both signals measured and judged. */
+/* mode: 0 = judged; 1 = nothing was ever held (judged only never the wrong way); 2 = SSB from the AUDIO ALONE (no waterfall
+ * cue) — REPORTED: see the summary for why it cannot be judged. */
 static void judge(Verdict& v, const char* label, const std::vector<float>& L, const std::vector<float>& R,
                   const std::vector<float>& lowC, double l1, double l2, const std::vector<float>& highC, double h1, double h2,
-                  int rate, double fromSec, bool strict = true) {
+                  int rate, double fromSec, int mode = 0) {
+    const bool strict = mode == 0;
     const int D = latencyFor(rate);
     const Place lo = measure(L, R, lowC, rate, l1, l2, D, fromSec, -1), hi = measure(L, R, highC, rate, h1, h2, D, fromSec, +1);
     const bool ok = placedRight(lo, -1) && placedRight(hi, +1);
-    std::printf("      %s%s\n", label, ok ? "" : strict ? "   ← NOT PLACED" : "   (nothing held: judged only never the wrong way)");
+    std::printf("      %s%s\n", label, ok ? "" : mode == 0 ? "   ← NOT PLACED" : mode == 1 ? "   (nothing held: judged only never the wrong way)"
+                                                     : "   (audio alone: reported)");
     show("below", lo); show("above", hi);
-    if (strict) { ++v.cases; if (ok) ++v.ok; }
-    else { ++v.unheld; if (lo.mean > 0.5 || hi.mean < -0.5 || lo.wrong > 0.03 || hi.wrong > 0.03) ++v.unheldWrong; }
+    if (mode == 0) { ++v.cases; if (ok) ++v.ok; }
+    else if (mode == 1) { ++v.unheld; if (lo.mean > 0.5 || hi.mean < -0.5 || lo.wrong > 0.03 || hi.wrong > 0.03) ++v.unheldWrong; }
+    else { ++v.audio; if (ok) ++v.audioOk; }
 }
 
 // ── real audio ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -415,25 +442,17 @@ int main() {
                                         st[3] > 0 ? "" : "(x)", st[4], st[9], st[12], (int)st[10]);
                         }
                         if (!cue) return;
-                        // The waterfall cue follows the voice that fills the passband most — the one talking (both at once:
-                        // the stronger; equal: it flips every couple of seconds as their averages cross).
-                        const double t = (double)i / fs;
-                        int who;
-                        if (cs == 1) who = ov.on(0, t) ? 0 : ov.on(1, t) ? 1 : -1;
-                        else if (cs == 2) who = 0;
-                        else who = ((int)(t / 2.3)) % 2;
-                        if (who < 0) return;   // a gap: the app holds its last reading
-                        bt.setSsbHint(dial + (who == 0 ? -sep : sep), true);
+                        waterfall(bt, dial, sep, cs, ov, (double)i / fs);
                     });
                     char label[200];
                     std::snprintf(label, sizeof label, "%s carriers ±%.0f Hz, %s, %s:", lsb ? "LSB" : "USB", sep,
                                   cs == 0 ? "(a) both at once" : cs == 1 ? "(b) taking turns" : "(c) the lower 15 dB stronger",
-                                  cue ? "waterfall cue following the talker" : "estimator alone");
+                                  cue ? "with the waterfall cue" : "estimator alone");
                     // ★ STRICT unless nothing was ever held: two voices at once, each a comb over the other, give the
                     //   estimator nothing it believes, and with nothing held there is no evidence that two voices are there
                     //   rather than one on tune filling the same band. The app's waterfall cue sees both (the cue runs).
                     //   …and until something IS held the image is untouched, by design: judged from a second after that.
-                    judge(v, label, L, R, low, lowA, lowB, high, hiA, hiB, fs, cue ? from : std::max(from, held + 1.0), cue || held >= 0);
+                    judge(v, label, L, R, low, lowA, lowB, high, hiA, hiB, fs, cue ? from : std::max(from, held + 1.0), cue ? 0 : held < 0 ? 1 : 2);
                 }
             }
         }
@@ -548,13 +567,7 @@ int main() {
                     std::vector<float> L, R;
                     const double held = runChain(bt, x, ra, L, R, [&](size_t i) {
                         if (!cue) return;
-                        const double t = (double)i / ra;
-                        int who;
-                        if (cs == 1) who = ov.on(0, t) ? 0 : ov.on(1, t) ? 1 : -1;
-                        else if (cs == 2) who = 0;
-                        else who = ((int)(t / 2.3)) % 2;
-                        if (who < 0) return;
-                        bt.setSsbHint(dial + (who == 0 ? -p.off : p.off), true);
+                        waterfall(bt, dial, p.off, cs, ov, (double)i / ra);
                     });
                     // exclusive bands: on USB the low one's audio is (300..2700)−OFF, the high one's (300..2700)+OFF.
                     const double off = p.off;
@@ -566,8 +579,8 @@ int main() {
                     std::snprintf(label, sizeof label, "%s %s (below) + %s (above), ±%.0f Hz, %s, %s:", lsb ? "LSB" : "USB",
                                   lsb ? p.high : p.low, lsb ? p.low : p.high, off,
                                   cs == 0 ? "(a) both at once" : cs == 1 ? "(b) taking turns" : "(c) the lower 15 dB stronger",
-                                  cue ? "cue following the talker" : "estimator alone");
-                    judge(v, label, L, R, low, l1, l2, high, h1, h2, ra, cue ? 5.0 : std::max(5.0, held + 1.0), cue || held >= 0);
+                                  cue ? "with the waterfall cue" : "estimator alone");
+                    judge(v, label, L, R, low, l1, l2, high, h1, h2, ra, cue ? 5.0 : std::max(5.0, held + 1.0), cue ? 0 : held < 0 ? 1 : 2);
                   }
                 }
             }
@@ -581,6 +594,13 @@ int main() {
     check(v.ok == v.cases, what);
     std::snprintf(what, sizeof what, "nothing held (no answer, no cue): never the wrong way (%d of %d were)", v.unheldWrong, v.unheld);
     check(v.unheldWrong == 0, what);
+    /* ★★ SSB FROM THE AUDIO ALONE (no waterfall cue: zoomed out past 100 Hz bins, or a backend without a spectrum): the
+     *    estimator locks ONE voice and holds it, and a second voice talking at the same time is a comb under the first it
+     *    does not answer — nothing in the audio says "two" rather than "one on tune" (both fill 50-2700 Hz; a far-side
+     *    energy test was tried and judged every LONE off-air voice crowded — binaural.cpp crowdSsb_). Only when the held
+     *    answer itself crosses the dial, or a gated answer lands on the other side, does the audio know. So these are
+     *    REPORTED: the lean then follows the one locked voice, steadily, as before this fix. */
+    std::printf("   (SSB from the audio alone, reported: %d of %d placed — the waterfall cue is what sees two voices)\n", v.audioOk, v.audio);
     std::printf(fails ? "\nFAILED: %d\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

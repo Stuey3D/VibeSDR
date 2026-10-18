@@ -24,6 +24,9 @@ void  vibe_binaural_set_stereo(void* h, int hint);
 void  vibe_binaural_set_dial(void* h, double hz);
 /** The waterfall's SSB carrier, ABSOLUTE Hz (valid 0 = none seen) — the coarse cue. Any thread. */
 void  vibe_binaural_set_ssb_hint(void* h, double carrierHz, int valid);
+/** A SECOND voice the waterfall sees in the passband, ABSOLUTE Hz (valid 0 = none): with the first ≥ 300 Hz away, the
+ *  passband is CROWDED and each voice is placed by its own frequency (no whole-image lean). */
+void  vibe_binaural_set_ssb_hint2(void* h, double carrierHz, int valid);
 /** The mode's spread map: 0 none (AM, FM, DAB), 1 USB, 2 LSB, 3 CW (upper), 4 CW (lower) — not a style: how much
  *  spread is the off-tune weight, none on tune. Edges = the default SSB passband (audio Hz). Any thread. */
 void  vibe_binaural_set_spread(void* h, int kind, float edgeLoHz, float edgeHiHz);

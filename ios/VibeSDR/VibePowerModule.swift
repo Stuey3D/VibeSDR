@@ -1533,6 +1533,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func setBinauralSsbHint(_ carrierHz: NSNumber, valid: Bool) {
     vibe_binaural_set_ssb_hint(binauralH, carrierHz.doubleValue, valid ? 1 : 0)
   }
+  /// A SECOND voice the waterfall sees in the passband, ABSOLUTE Hz — native then places each by its own frequency
+  /// instead of leaning the whole sound toward one (Stuart on 483: "in between 2 signals").
+  @objc func setBinauralSsbHint2(_ carrierHz: NSNumber, valid: Bool) {
+    vibe_binaural_set_ssb_hint2(binauralH, carrierHz.doubleValue, valid ? 1 : 0)
+  }
   /// GUIDE (kind 0) or SPREAD with its map (1 USB, 2 LSB, 3/4 CW) and the default SSB passband's edges.
   @objc func setBinauralSpread(_ kind: NSNumber, edgeLoHz: NSNumber, edgeHiHz: NSNumber) {
     vibe_binaural_set_spread(binauralH, kind.int32Value, edgeLoHz.floatValue, edgeHiHz.floatValue)

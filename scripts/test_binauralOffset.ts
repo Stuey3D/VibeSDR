@@ -294,6 +294,57 @@ function ssbFrame(dial: number, carrier: number, lowCut: number, lsb: boolean, n
   }
 }
 
+console.log('── SSB: TWO voices either side of the dial (Stuart on 483: "blending them both and swirling them about") ──');
+{
+  // ★★★ The waterfall sees both voices — their carrier-side edges too, beyond the passband — and reports the second
+  //     (native then places each by its own frequency instead of leaning the whole sound toward one).
+  const dial = CENTRE + 2000;
+  const both = (a: Float32Array, b: Float32Array) => { const y = new Float32Array(a.length); for (let k = 0; k < a.length; k++) y[k] = Math.max(a[k], b[k]); return y; };
+  for (const [sep, lsb] of [[600, false], [1000, false], [600, true], [1000, true]] as [number, boolean][]) {
+    const c = new SsbCoarse();
+    const g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: lsb ? -2700 : 50, hi: lsb ? -50 : 2700 };
+    let r = { ok: false, carrierHz: 0, bound: false, secondHz: NaN } as { ok: boolean; carrierHz: number; bound: boolean; secondHz?: number };
+    for (let i = 0; i < 30; i++) r = c.onFrame(both(ssbFrame(dial, dial - sep, 300, lsb), ssbFrame(dial, dial + sep, 300, lsb)), g, lsb);
+    const a = r.carrierHz - dial, b = (r.secondHz ?? NaN) - dial;
+    ok(r.ok && Number.isFinite(b) && a * b < 0 && Math.abs(Math.abs(a) - sep) < 250 && Math.abs(Math.abs(b) - sep) < 250,
+       `${lsb ? 'LSB' : 'USB'} voices at ∓${sep} Hz at once → first ${a.toFixed(0)}, second ${Number.isFinite(b) ? b.toFixed(0) : 'none'} Hz`);
+  }
+  {
+    // A lone voice is never two.
+    const c = new SsbCoarse();
+    const g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: 50, hi: 2700 };
+    let seconds = 0;
+    for (let i = 0; i < 40; i++) { const r = c.onFrame(ssbFrame(dial, dial + 500, 300, false), g, false); if (r.ok && Number.isFinite(r.secondHz)) seconds++; }
+    ok(seconds === 0, `a lone voice 500 Hz off: no second voice (${seconds} frames said one)`);
+  }
+  {
+    // The tracker: in a QSO either side (overs of 3 s), the other voice stays stated through its partner's over.
+    const msgs: string[] = [];
+    const t = new BinauralTracker({
+      setBinauralSsbHint: (hz: number, v: boolean) => msgs.push(v ? `h1 ${Math.round(hz - dial)}` : 'h1 x'),
+      setBinauralSsbHint2: (hz: number, v: boolean) => msgs.push(v ? `h2 ${Math.round(hz - dial)}` : 'h2 x'),
+    });
+    const g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: 50, hi: 2700 };
+    // ★ Native holds the "two voices" evidence for 8 s (BinauralSpread::kCrowdHoldSec), so what matters is that the second
+    //   voice is never unstated for long once the QSO is under way — not that it never blinks at an over's turn.
+    let now = 0, h2Valid = false, h2Ever = false, gap = 0, worstGap = 0;
+    for (let over = 0; over < 6; over++) {
+      for (let i = 0; i < 30; i++) {
+        now += 100;
+        t.onFrame(ssbFrame(dial, dial + (over % 2 ? 600 : -600), 300, false), g, 'usb', now);
+        const last2 = msgs.filter((m) => m.startsWith('h2')).pop();
+        h2Valid = !!last2 && last2 !== 'h2 x';
+        if (h2Valid) h2Ever = true;
+        if (over >= 2) { gap = h2Valid ? 0 : gap + 1; worstGap = Math.max(worstGap, gap); }
+      }
+    }
+    ok(h2Ever && worstGap <= 20, `a QSO at ∓600 Hz in 3 s overs: the second voice is stated, never unstated for more than 2 s from the third over (worst ${(worstGap / 10).toFixed(1)} s; ${msgs.filter((m) => m.startsWith('h2')).join(', ')})`);
+    // …and a lone voice afterwards: the second lets go once its hold runs out.
+    for (let i = 0; i < 60; i++) { now += 100; t.onFrame(ssbFrame(dial, dial - 600, 300, false), g, 'usb', now); }
+    ok(msgs.filter((m) => m.startsWith('h2')).pop() === 'h2 x', 'the other station gone quiet for 6 s: the second voice is let go');
+  }
+}
+
 console.log('── THE SPREAD MAP (one behaviour: no style) ──');
 {
   ok(BIN_SPREAD_EDGES[0] === MODE_BANDWIDTHS.usb[0] && BIN_SPREAD_EDGES[1] === MODE_BANDWIDTHS.usb[1] && BIN_SPREAD_EDGES[1] === 2700,

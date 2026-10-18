@@ -35,6 +35,11 @@ Java_com_vibesdr_app_VibeBinaural_nSetSsbHint(JNIEnv*, jclass, jlong h, jdouble 
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeBinaural_nSetSsbHint2(JNIEnv*, jclass, jlong h, jdouble carrierHz, jboolean valid) {
+    vibe_binaural_set_ssb_hint2(H(h), carrierHz, valid ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeBinaural_nSetSpread(JNIEnv*, jclass, jlong h, jint kind, jfloat lo, jfloat hi) {
     vibe_binaural_set_spread(H(h), kind, lo, hi);
 }

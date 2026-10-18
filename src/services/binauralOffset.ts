@@ -280,7 +280,19 @@ export interface CoarseReading {
   carrierHz: number;
   /** true = the carrier-side edge was off the window: only the DIRECTION is sure, the size is at least this. */
   bound: boolean;
+  /** ★★★ A SECOND voice filling the passband too (≥ COARSE_MIN_OVERLAP_HZ), its carrier ≥ COARSE_SECOND_APART_HZ from the
+   *  first: ABSOLUTE Hz, NaN when there is none. Native then places each voice by its frequency instead of leaning the
+   *  whole sound toward one (BinauralTuning::setSsbHint2 — Stuart on 483: "in between 2 signals … blending them both and
+   *  swirling them about between the ears"). */
+  secondHz?: number;
 }
+
+/** No voice reaches further than this above its carrier (a generous transmitter's top cut). */
+export const COARSE_VOICE_TOP_HZ = 3000;
+/** Energy beyond that must cover at least this much (Hz, a second's average over COARSE_OVER_DB) to be a second voice. */
+export const COARSE_SECOND_MIN_HZ = 300;
+/** Two voices' carriers this far apart are two voices, not one read twice (mirrors BinauralSpread::kCrowdSidesApartHz). */
+export const COARSE_SECOND_APART_HZ = 300;
 
 /**
  * ★★ WHERE THE SSB VOICE IS, FROM THE WATERFALL. A voice is speech, so any one frame is ragged; averaged over a
@@ -362,7 +374,8 @@ export class SsbCoarse {
     const kq = Math.max(1, Math.round(COARSE_QUIET_HZ / grid));
     const kTop = Math.max(1, Math.round(COARSE_TOP_HZ / grid));
     const kVoice = Math.max(kTop + 1, Math.round(2700 / grid));
-    let best = -1, bestCarrier = 0;
+    let best = -1, bestCarrier = 0, bestE = -1;
+    const found: Array<[number, number]> = [];   // [overlap, carrier] of every voice that fills the passband enough
     const ks = Math.round(COARSE_SKIRT_HZ / grid);
     for (let e = kq + ks; e < cells; e++) {
       const de = at(e);
@@ -390,10 +403,34 @@ export class SsbCoarse {
       const binComp = 0.5 * Math.max(0, grid - 50);
       const carrier = lsb ? edgeHz + COARSE_VOICE_LOW_HZ - binComp : edgeHz - COARSE_VOICE_LOW_HZ + binComp;
       const ov = coarseVoiceOverlap(carrier, lsb, g);
-      if (ov >= COARSE_MIN_OVERLAP_HZ && ov > best) { best = ov; bestCarrier = carrier; }
+      if (ov >= COARSE_MIN_OVERLAP_HZ) found.push([ov, carrier]);
+      if (ov >= COARSE_MIN_OVERLAP_HZ && ov > best) { best = ov; bestCarrier = carrier; bestE = e; }
     }
     if (best < 0) return none;
-    return { ok: true, carrierHz: bestCarrier, bound: false };
+    // ★★★ The second voice: the one filling the passband most after the first, apart from it.
+    let second = NaN, secondOv = -1;
+    for (const [ov, c] of found) if (Math.abs(c - bestCarrier) >= COARSE_SECOND_APART_HZ && ov > secondOv) { secondOv = ov; second = c; }
+    /* ★★★ …or one whose edge the first one HIDES. Two voices less than a voice's width apart overlap, and the upper one's
+     *     carrier-side edge falls inside the lower one's band (USB; mirrored, LSB) — there is no quiet below it to find. But
+     *     no voice reaches more than COARSE_VOICE_TOP_HZ above its carrier: energy SUSTAINED beyond that (the cells are a
+     *     second's average, so noise does not pass COARSE_OVER_DB) is another voice. Its far edge (its transmitter's top
+     *     cut, ~2700 Hz above its carrier) places it. */
+    if (!Number.isFinite(second) && bestE >= 0) {
+      const k0 = bestE + Math.round((COARSE_VOICE_TOP_HZ + COARSE_SKIRT_HZ - COARSE_VOICE_LOW_HZ) / grid);
+      const kLen = Math.round(2700 / grid);
+      let occ = 0, top = -1, run = 0;
+      for (let j = k0; j < Math.min(cells, k0 + kLen); j++) {
+        const d = at(j);
+        if (d >= COARSE_OVER_DB) { occ++; run = 0; top = j; }
+        else if (Number.isFinite(d) && ++run * grid > 300) break;   // a gap of 300 Hz: the band has ended
+      }
+      if (occ * grid >= COARSE_SECOND_MIN_HZ && top >= 0) {
+        const topHz = start + (lsb ? cells - 1 - top : top) * grid;
+        const c2 = lsb ? topHz + 2700 : topHz - 2700;
+        if (Math.abs(c2 - bestCarrier) >= COARSE_SECOND_APART_HZ && coarseVoiceOverlap(c2, lsb, g) >= COARSE_MIN_OVERLAP_HZ) second = c2;
+      }
+    }
+    return { ok: true, carrierHz: bestCarrier, bound: false, secondHz: second };
   }
 }
 
@@ -414,6 +451,8 @@ export interface BinauralSink {
   setBinauralDial?: (hz: number) => void;
   /** The coarse SSB cue: the voice's carrier, ABSOLUTE Hz (absolute, so it cannot race the dial). */
   setBinauralSsbHint?: (carrierHz: number, valid: boolean) => void;
+  /** A SECOND voice the waterfall sees in the passband (ABSOLUTE Hz; valid false = none) — native judges it crowded. */
+  setBinauralSsbHint2?: (carrierHz: number, valid: boolean) => void;
   /** The mode's spread map (BIN_SPREAD_OFF = none: the lean alone); edges = BIN_SPREAD_EDGES. How much spread is
    *  native's business — the same off-tune weight as the lean, none on tune. */
   setBinauralSpread?: (kind: number, edgeLoHz: number, edgeHiHz: number) => void;
@@ -442,6 +481,10 @@ export class BinauralTracker {
   /** ★ A coarse SSB reading survives this long without a fresh one: the pause between overs. (The average itself
    *  fades below the threshold within a second or two of silence.) */
   static readonly COARSE_HOLD_MS = 4000;
+  /** ★★★ A second voice counts only once seen in this many readings (half a second)… */
+  static readonly SECOND_MIN_FRAMES = 5;
+  /** …and filling this much of the passband (Hz): a neighbour just touching its edge is not "between two signals". */
+  static readonly SECOND_MIN_OVERLAP_HZ = 600;
   private sink: BinauralSink;
   private spreadSent = -1;
   private coarse = new SsbCoarse();
@@ -451,6 +494,11 @@ export class BinauralTracker {
   private coarseSentHz = NaN;
   private coarseSentOk = false;
   private coarseSentAt = -Infinity;
+  /** Voices the waterfall has seen lately (each reading's first AND second), merged within COARSE_SECOND_APART_HZ (a hidden voice is placed from its far edge, ±200 Hz). */
+  private seen: Array<{ hz: number; at: number; n: number }> = [];
+  private secondSentHz = NaN;
+  private secondSentOk = false;
+  private secondSentAt = -Infinity;
   private srcKey = '';
   private dial = NaN;
   private stereo = -1;
@@ -469,6 +517,7 @@ export class BinauralTracker {
     this.lastOkAt = -Infinity; this.sentHz = NaN; this.sentOk = false; this.sentAt = -Infinity;
     this.spreadSent = -1; this.coarse.reset(); this.coarseKey = ''; this.coarseHz = NaN; this.coarseAt = -Infinity;
     this.coarseSentHz = NaN; this.coarseSentOk = false; this.coarseSentAt = -Infinity;
+    this.seen = []; this.secondSentHz = NaN; this.secondSentOk = false; this.secondSentAt = -Infinity;
   }
 
   setStereo(hint: number): void {
@@ -492,6 +541,7 @@ export class BinauralTracker {
         // ★ Native forgets the coarse cue on a change of source, so it must be stated afresh (and the average
         //   belongs to the old sideband's reading anyway).
         this.coarseKey = ''; this.coarseSentHz = NaN; this.coarseSentOk = false; this.coarseSentAt = -Infinity;
+        this.seen = []; this.secondSentHz = NaN; this.secondSentOk = false; this.secondSentAt = -Infinity;
       }
     }
     // ★★ A MOVE IS 2 Hz OR MORE. radiod stamps each frame's frequency with ±1 Hz of jitter (see the setStatus
@@ -560,9 +610,35 @@ export class BinauralTracker {
   /** SSB: the waterfall's coarse cue → native, held through a pause, at most one message per PUSH_MS. */
   private coarseFrame(bins: ArrayLike<number>, g: SpecGeom, lsb: boolean, now: number): void {
     const key = lsb ? 'lsb' : 'usb';
-    if (key !== this.coarseKey) { this.coarseKey = key; this.coarse.reset(); this.coarseHz = NaN; this.coarseAt = -Infinity; }
+    if (key !== this.coarseKey) { this.coarseKey = key; this.coarse.reset(); this.coarseHz = NaN; this.coarseAt = -Infinity; this.seen = []; }
     const r = this.coarse.onFrame(bins, g, lsb);
     if (r.ok) { this.coarseHz = r.carrierHz; this.coarseAt = now; }
+    // ★★★ THE SECOND VOICE (2026-10-18): every voice seen lately — a reading's first and its second — held like the first
+    //     (COARSE_HOLD_MS, while it still fills the passband). In a QSO either side of the dial the two take turns and
+    //     each fades from the average while the other talks, so "the other one" is whichever was seen last apart from the
+    //     first cue. The DIAL is not involved: the cells are absolute, and a retune drops what leaves the passband.
+    if (r.ok) {
+      for (const hz of [r.carrierHz, r.secondHz ?? NaN]) {
+        if (!Number.isFinite(hz)) continue;
+        const v = this.seen.find((x) => Math.abs(x.hz - hz) < COARSE_SECOND_APART_HZ);   // closer than that: the same voice
+        if (v) { v.hz = hz; v.at = now; v.n++; } else this.seen.push({ hz, at: now, n: 1 });
+      }
+    }
+    this.seen = this.seen.filter((x) => now - x.at <= BinauralTracker.COARSE_HOLD_MS && coarseVoiceOverlap(x.hz, lsb, g) >= COARSE_MIN_OVERLAP_HZ);
+    {
+      let other: { hz: number; at: number; n: number } | undefined;
+      if (Number.isFinite(this.coarseHz))
+        for (const x of this.seen)
+          if (x.n >= BinauralTracker.SECOND_MIN_FRAMES && Math.abs(x.hz - this.coarseHz) >= COARSE_SECOND_APART_HZ
+              && coarseVoiceOverlap(x.hz, lsb, g) >= BinauralTracker.SECOND_MIN_OVERLAP_HZ && (!other || x.at > other.at)) other = x;
+      const ok2 = other !== undefined;
+      const hz2 = other ? other.hz : 0;
+      const changed2 = ok2 !== this.secondSentOk || (ok2 && !(Math.abs(hz2 - this.secondSentHz) < 10));
+      if (changed2 && now - this.secondSentAt >= BinauralTracker.PUSH_MS) {
+        this.sink.setBinauralSsbHint2?.(hz2, ok2);
+        this.secondSentHz = hz2; this.secondSentOk = ok2; this.secondSentAt = now;
+      }
+    }
     // ★★ A HELD reading only while its voice is still in the passband (2026-10-18, the sweep test on real voices): the
     //    hold is for the pause between overs, not for a voice the knob has left behind — mid-sweep it kept leaning
     //    toward a voice that was no longer in your ears, for up to COARSE_HOLD_MS after the dial had passed it.

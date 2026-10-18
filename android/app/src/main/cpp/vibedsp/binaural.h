@@ -216,18 +216,9 @@ public:
     //     swirling them about between the ears. This is on CW too.") — see crowd() and binaural.cpp crowdSsb_/crowdCw_.
     /** The crowd weight's glide (seconds): the lean giving way and the spread coming up are never a step. */
     static constexpr float kCrowdTauSec = 0.15f;
-    /** SSB: the evidence (another voice where the held one cannot reach) is held this long — the other station's over
-     *  and the pause before it (test-binaural-two: overs of 2-5 s). A dial move forgets it at once. */
+    /** The evidence of a second signal is held this long — the other station's over and the pause before it
+     *  (test-binaural-two: overs of 2-5 s). A dial move forgets it at once. */
     static constexpr float kCrowdHoldSec = 8.0f;
-    /** SSB: the held voice's band in the audio is taken as its transmitter's widest likely 100-2800 Hz, moved by the held
-     *  answer; the region beyond it (on the far side) must be at least this wide to be judged… */
-    static constexpr float kCrowdRegionMinHz = 200.0f;
-    /** …kept this far from the held voice's band (the bank's sqrt-Hann window leaks a strong harmonic ~30 dB down 2-3 bins away, and a region beyond the receiver's own noise has a floor near nothing: a lone voice 300 Hz off read as two at 150 Hz). */
-    static constexpr float kCrowdGuardHz = 250.0f;
-    /** …and, averaged over kCrowdOccSec, sound kCrowdOverDb over its own noise floor kCrowdOccFrac of the time. */
-    static constexpr float kCrowdOverDb = 6.0f;
-    static constexpr float kCrowdOccSec = 0.5f;
-    static constexpr float kCrowdOccFrac = 0.25f;
     /** CW: a carrier is a local peak standing this far over the passband's noise (the median of its floor)… */
     static constexpr float kCwPeakDb = 12.0f;
     /** …heard for at least this long (summed) before it counts — a key click or a noise spike is not a signal… */
@@ -239,7 +230,7 @@ public:
     /** SSB, the second witness: the HELD answer itself has sat on BOTH sides of the dial — each at least this far out, the
      *  two at least kCrowdSidesApartHz apart — within kCrowdHoldSec and with no dial move between. A voice does not cross
      *  the dial unless the dial moves, so that is two voices: the waterfall cue (or the estimator) following whoever talks
-     *  in a QSO either side. (The far-side region cannot see this case: the cue always points at the one talking.) */
+     *  in a QSO either side. */
     static constexpr float kCrowdSideHz = 150.0f;
     static constexpr float kCrowdSidesApartHz = 300.0f;
 
@@ -254,13 +245,14 @@ public:
     void process(float* L, float* R, int n, double rate, int kind, float amount, float edgeLoHz, float edgeHiHz);
     /** ★★★ What the controller knows that the bank needs to judge a CROWDED passband (audio thread, before process()):
      *  `heldShiftHz` = the held SSB answer as an AUDIO shift (+ = the voice's audio is high: USB +offset, LSB −offset),
-     *  NaN when none is held; `coarse` = it is the waterfall's ±150 Hz figure; `deadHz`/`fullHz` = the lean's scale (CW's
+     *  NaN when none is held; `twoVoices` = the waterfall sees two voices in the passband; `deadHz`/`fullHz` = the lean's scale (CW's
      *  crowded map is the lean's own curve); `dialSeq` changes on every dial move (the evidence belongs to the old dial). */
-    void setContext(float heldShiftHz, bool coarse, float deadHz, float fullHz, uint32_t dialSeq);
+    void setContext(float heldShiftHz, bool twoVoices, float deadHz, float fullHz, uint32_t dialSeq);
     /** ★★★ 0…1, glided (kCrowdTauSec): how far the passband is judged CROWDED — more than one signal in it, so each is
      *  placed by its own frequency: the controller's whole-image lean gives way by this much and the spread comes up to
-     *  full by it. CW: two carriers ≥ kCwTrackApartHz apart heard within kCrowdHoldSec. SSB: another voice sounding where
-     *  the held one cannot reach. 0 while the bank is out of the path. */
+     *  full by it. CW: two carriers ≥ kCwTrackApartHz apart heard within kCrowdHoldSec. SSB: the waterfall sees a second
+     *  voice in the passband, the estimator heard one on the other side, or the held answer has sat on both sides of the
+     *  dial (crowdSsb_). 0 while out of the path. */
     float crowd() const { return running_ ? crowd_ : 0.0f; }
     /** Out of the path at once (binaural switched back on: the next use warms up from silence, never from a stale
      *  frame of whatever played before). */
@@ -317,13 +309,12 @@ private:
 
     // CROWDED (audio thread)
     float heldShift_ = NAN;           // setContext: the held SSB answer as an audio shift, NaN = none
-    bool heldCoarse_ = false;
+    bool twoVoices_ = false;          // setContext: the waterfall sees a second voice
     float dead_ = 15, full_ = 300;    // the lean's scale (CW's crowded map)
     uint32_t dialSeq_ = 0;
     bool dialSeqSet_ = false;
     double clock_ = 0;                // seconds of frames since the bank started
-    double occ_ = 0;                  // SSB: the far-side region's sounding fraction (kCrowdOccSec)
-    double lastEv_ = -1e9;            // SSB: when that last passed kCrowdOccFrac
+    double lastEv_ = -1e9;            // SSB: when a witness last spoke
     double sideT_[2] = {-1e9, -1e9};  // SSB: when the held answer last sat below / above the dial (kCrowdSideHz)
     float sideV_[2] = {0, 0};         // …and where
     float crowd_ = 0;                 // the glided weight (crowd())
@@ -506,6 +497,10 @@ public:
      *    The cue going invalid releases a coarse-held answer (the caller already holds its reading through a
      *    pause between overs). */
     void setSsbHint(double carrierHz, bool valid);
+    /** ★★★ A SECOND VOICE the waterfall sees in the passband (2026-10-18): its suppressed carrier, ABSOLUTE Hz, valid=false
+     *  when there is none. With the first cue (setSsbHint) ≥ 300 Hz from it, the passband is CROWDED: two voices talking
+     *  at once either side of you, which the audio cannot tell from one on tune. See BinauralSpread::crowd. Any thread. */
+    void setSsbHint2(double carrierHz, bool valid);
     /** ★★ THE SPREAD MAP for the current mode: BinauralSpread::Off (AM, FM, DAB — the lean alone) or
      *  Usb/Lsb/CwUpper/CwLower. NOT a style: how MUCH spread is always the off-tune weight w (none on tune).
      *  `edgeLo/HiHz` = the default SSB passband's audio edges (the fixed scale). Any thread. */
@@ -548,6 +543,10 @@ private:
     std::atomic<int> gen_{0};         // bumped on a source change: the worker starts over
     std::atomic<double> hintCarrier_{0.0};
     std::atomic<bool> hintValid_{false};
+    std::atomic<uint32_t> otherSeq_{0};  // worker: bumped when a gated answer lands on the other side (a second voice)
+    uint32_t otherSeen_ = 0;               // audio thread: the last otherSeq_ passed on
+    std::atomic<double> hint2Carrier_{0.0};
+    std::atomic<bool> hint2Valid_{false};
     std::atomic<int> spreadKind_{BinauralSpread::Off};
     std::atomic<float> spreadLo_{50.0f}, spreadHi_{2700.0f};
     BinauralSpread spread_;           // audio thread only
@@ -621,6 +620,8 @@ void  vibe_binaural_set_stereo(void* h, int hint);
 void  vibe_binaural_set_dial(void* h, double hz);
 /** The waterfall's SSB carrier, ABSOLUTE Hz (valid 0 = none seen). See BinauralTuning::setSsbHint. */
 void  vibe_binaural_set_ssb_hint(void* h, double carrierHz, int valid);
+/** A SECOND voice the waterfall sees in the passband, ABSOLUTE Hz (valid 0 = none). See BinauralTuning::setSsbHint2. */
+void  vibe_binaural_set_ssb_hint2(void* h, double carrierHz, int valid);
 /** The mode's spread map: 0 none (AM, FM, DAB), 1 USB, 2 LSB, 3 CW (upper), 4 CW (lower). Edges = the default SSB
  *  passband (audio Hz). How much spread is the off-tune weight — none on tune. */
 void  vibe_binaural_set_spread(void* h, int kind, float edgeLoHz, float edgeHiHz);
