@@ -298,12 +298,13 @@ runbuild "
   cd $BUILD_SRC/vibeserver
   if [ \"${VIBE_CROSS_ARCH:-}\" = armhf ]; then
     cmake -S . -B build-armv6 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=/opt/armv6-toolchain.cmake \
-          -DVIBE_RTLSDR_PREFIX=/opt/vibe-rtlsdr-v6 -DVIBE_RPATH_SUBDIR=/armv6 >/dev/null
+          -DVIBE_LINUX_DEPS=/opt/vibe-deps-v6 >/dev/null
     cmake --build build-armv6 --target vibeserver -j\"${JOBS:-$(nproc)}\" | tail -1
-    readelf -A build-armv6/vibeserver | grep -q 'Tag_CPU_arch: v6' \
+    # ★ grep -c, never -q, under pipefail (SIGPIPE turns a match into a failure).
+    [ \"\$(readelf -A build-armv6/vibeserver | grep -c 'Tag_CPU_arch: v6' || true)\" -gt 0 ] \
       || { echo '!! the ARMv6 build is not ARMv6'; exit 1; }
-    mkdir -p /build/armv6-stage && cp build-armv6/vibeserver /build/armv6-stage/ \
-      && cp -a /opt/vibe-rtlsdr-v6/lib/librtlsdr.so* /build/armv6-stage/
+    # ★ ONE FILE since 2026-10-18: librtlsdr is linked in, there is no ARMv6 .so to stage beside it.
+    mkdir -p /build/armv6-stage && cp build-armv6/vibeserver /build/armv6-stage/
   fi
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV \
         -DVIBESERVER_STRICT_RADIOS=ON $CROSS_CMAKE >/dev/null
@@ -339,11 +340,20 @@ fi
 
 # ★★ ASSERT THE BASELINE, every publish. The point of the build root is the Depends: line it
 #    produces, so a silent regression to a newer libc is the one failure that must never ship.
-BAD="$(dpkg-deb -f "$DEB" Depends | tr ',' '\n' | grep -E 'libc6 \(>= 2\.(3[7-9]|[4-9])|libstdc\+\+6 \(>= 1[3-9]' || true)"
+BAD="$(dpkg-deb -f "$DEB" Depends | tr ',' '\n' | grep -E 'libc6 \(>= 2\.(3[6-9]|[4-9])|libstdc\+\+6 \(>= 1[3-9]' || true)"
 if [ -n "$BAD" ]; then
   echo "!! this package demands a newer runtime than the build root should produce:"
   echo "$BAD"
   echo "   it would be uninstallable on the systems the build root exists to support."
+  exit 1
+fi
+# ★★★ AND NOTHING BUT libc6 (Stuart, 2026-10-18): every library is linked in, so Depends may name only
+#     libc6 and the tools we exec. CPack already refuses such a package (linux/check-deb-depends.cmake);
+#     this catches a pre-built package from the Lenovo as well.
+EXTRA="$(dpkg-deb -f "$DEB" Depends | tr ',' '\n' | sed 's/^ *//; s/ *(.*$//' | grep -vxE 'adduser|curl|gzip|libc6' || true)"
+if [ -n "$EXTRA" ]; then
+  echo "!! this package depends on system libraries it must carry itself:"
+  echo "$EXTRA"
   exit 1
 fi
 echo "==> built $(basename "$DEB")"

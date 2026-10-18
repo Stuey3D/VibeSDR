@@ -262,7 +262,7 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 | Name | Licence | Where |
 |---|---|---|
 | **librtlsdr / rtl_tcp** — Osmocom rtl-sdr 2.0.3, Steve Markgraf & contributors | GPL-2.0-or-later | Android Local Hardware, VibeServer (all hosts), Lite; patched to open an Android USB handle |
-| **libusb** | LGPL-2.1-or-later | Android, Lite, VibeServer (static on macOS) |
+| **libusb** | LGPL-2.1-or-later | Android, Lite, VibeServer (linked statically on macOS and Linux) |
 | **libairspyhf** — Airspy | BSD-3-Clause | Airspy HF+ driver; patched for Android USB handles |
 | **libairspy** — Airspy (Vernoux, Touil, Gilmour) | BSD-3-Clause + MIT (IQ converter, filters) | Airspy R2 / Mini driver, unmodified |
 | **libhackrf** — Great Scott Gadgets | BSD-3-Clause (library source) | HackRF driver; patched to open from a USB fd |
@@ -271,6 +271,7 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 | **PFFFT** — Julien Pommier, after FFTPACK (© 2004 UCAR) | FFTPACK licence (BSD-style) | The DAB receiver's OFDM FFT |
 | **ft8_lib** — Kārlis Goba (YL3JG) | MIT | FT8 / FT4 decoding |
 | **Opus** — Xiph.Org Foundation | BSD-3-Clause | The streaming codec: VibeServer encodes, the app, watch and web client decode |
+| **ncurses** — Thomas E. Dickey & the Free Software Foundation | X11 (MIT-style) | VibeServer on Linux: the settings wizard, linked into the binary |
 | **[opus-decoder / wasm-audio-decoders](https://github.com/eshaz/wasm-audio-decoders)** — Ethan Halsall | MIT | libopus in WebAssembly — how VibeServer's web client decodes Opus on a plain `http://` LAN address |
 | **cloudflared** — Cloudflare | Apache-2.0 | The tunnel that lets a VibeServer be reached without port forwarding |
 | **MapLibre GL JS** — MapLibre contributors | BSD-3-Clause | The GPU map engine (app, web client, directory) |

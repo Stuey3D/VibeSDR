@@ -133,8 +133,11 @@ for A in $ARCHES; do
       [ \"\$(dpkg-deb -f \$d Architecture)\" = $A ] || { echo \"!! wrong Architecture\"; exit 1; }
       [ \"\$(dpkg-deb --fsys-tarfile \$d | grep -ca \"First-time setup\" || true)\" -gt 0 ] \
         || { echo \"!! no settings wizard in the binary\"; exit 1; }
-      if dpkg-deb -f \$d Depends | tr , \"\\n\" | grep -E \"libc6 \\(>= 2\\.(3[7-9]|[4-9])|libstdc\\+\\+6 \\(>= 1[3-9]\"; then
-        echo \"!! needs a newer runtime than bookworm\"; exit 1; fi
+      if dpkg-deb -f \$d Depends | tr , \"\\n\" | grep -E \"libc6 \\(>= 2\\.(3[6-9]|[4-9])|libstdc\\+\\+6 \\(>= 1[3-9]\"; then
+        echo \"!! needs a newer glibc than 2.35 (Ubuntu 22.04)\"; exit 1; fi
+      # ★ Nothing but libc6 and the exec()d tools (2026-10-18) — every library is linked in.
+      x=\$(dpkg-deb -f \$d Depends | tr , \"\\n\" | sed \"s/^ *//; s/ *(.*\\\$//\" | grep -vxE \"adduser|curl|gzip|libc6\" || true)
+      [ -z \"\$x\" ] || { echo \"!! depends on system libraries: \$x\"; exit 1; }
       echo \"    Depends: \$(dpkg-deb -f \$d Depends)\"'"
   scp -q "$HOST:$DEB" "$OUT/"
   DEBS="$DEBS $OUT/$(basename "$DEB")"
