@@ -9,7 +9,7 @@ import { SIGID_HOME } from '../services/dialChat';
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useKeyboardMode, useNavFocus, NAV_ADJUST } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useNavFocus, NAV_ADJUST } from './PanelNav';
 import {
   usePopupSurface, usePopupTheme, usePopupFrame, engraveText, windowStyle,
   PopupScrim, PopupPlate, PopupHandle, PopupKey, PopupFader, sheetCap,
@@ -23,7 +23,6 @@ import {
  *  faders; the decoder list sits in a recessed window. ★ 2026-10-12: the default chassis follows the user's
  *  colours too (keys = controls colour, text = text colour, a running decoder = the selected-item meaning). */
 const SHEET_BG = 'rgba(8,6,1,0.97)';
-import { NativeEventEmitter, NativeModules } from 'react-native';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
@@ -673,27 +672,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
 
   // Keyboard / D-pad navigation — shared machinery (PanelNav). Each grid is a NavRow,
   // so up/down moves between grids and left/right within one.
-  // ★ [D] AGAIN OPENS THE DECODERS LIST. D opens this card from the main screen, so pressing
-  // it again to reach the long digital/decoder list is the obvious follow-through — and it
-  // saves arrowing past the whole mode grid to get there. Backspace leaves it without
-  // choosing, like every other dropdown.
-  //
-  // No double-fire on the way in: SDRScreen ignores letters once a panel is open, and this
-  // listener only exists while the card is visible.
-  const kbSeen = useKeyboardMode();
-  useEffect(() => {
-    if (!visible) return;
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
-      if (e?.key === 'D' && others.length > 0) setMoreOpen(o => !o);
-    });
-    return () => sub.remove();
-  }, [visible, others.length]);
+  // ★ The decoders list is a dropdown the highlight opens with Enter (the [D] letter and its key cap went with the
+  // rest of the shortcuts, 2026-10-18); Back leaves it without choosing, like every other dropdown.
 
   const { navCtx, scrollProps } = usePanelNav(visible, {
     onTimeout: onClose,
-    // Backspace closes the decoder list first; only then does it mean anything else.
-    onBack: () => { if (moreOpen) setMoreOpen(false); },
+    // Back closes the decoder list first; only then does it close the card (SDRScreen).
+    onBack: () => { if (moreOpen) { setMoreOpen(false); return true; } return false; },
   });
 
   return (
@@ -813,7 +798,6 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 accessibilityLabel={activeDecInOthers?.label ?? currentInOthers?.label ?? 'Digital and decoders'}>
                 {(legend) => (
                   <View style={st.moreHeadMetal}>
-                    {kbSeen && <View style={[st.keyCap, { borderColor: focusC.ring }]}><Text style={[st.keyCapText, { color: focusC.ring }]}>D</Text></View>}
                     <Text style={[st.moreHeadText, { fontFamily: 'Atkinson Hyperlegible', fontWeight: '700', letterSpacing: 1,
                                   color: legend }]} numberOfLines={1}>
                       {activeDecInOthers ? activeDecInOthers.label.toUpperCase()
@@ -833,9 +817,6 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                       navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
               onPress={() => setMoreOpen(o => !o)}
               activeOpacity={0.8}>
-              {kbSeen && (
-                <View style={[st.keyCap, { borderColor: focusC.ring }]}><Text style={[st.keyCapText, { color: focusC.ring }]}>D</Text></View>
-              )}
               <Text style={[st.moreHeadText, { fontFamily: t.font },
                             { color: activeDecInOthers ? dec : currentInOthers ? t.btnActiveText : t.btnText }]} numberOfLines={1}>
                 {activeDecInOthers ? activeDecInOthers.label.toUpperCase()
@@ -1191,10 +1172,6 @@ const st = StyleSheet.create({
   btnText:      { textAlign: 'center' },
   mapsWrap:     { marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.12)' },
   moreWrap:     { marginTop: 12 },
-  // A real view, not styled text: iOS drops borders on nested Text runs.
-  keyCap:       { borderWidth: 1,   // colour inline: useNavFocus
-                  borderRadius: 3, paddingHorizontal: 3, marginRight: 6 },
-  keyCapText:   { fontSize: 11, fontWeight: '700' as const },
   moreHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     borderWidth: 1, borderRadius: 3, paddingVertical: 10, paddingHorizontal: 12,

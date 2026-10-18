@@ -13,7 +13,7 @@
 //     already has an array and just wants a focused index.
 //
 // ★ OWNER ARBITRATION. Panels are not structurally prevented from being visible at
-// once, and two panels both listening to VibeKeyDown would both move their focus on
+// once, and two panels both listening for keys would both move their focus on
 // one key press. So visible panels push themselves onto a stack and only the TOP one
 // handles keys. Cheap, and it means a panel opening over another cannot steal or
 // double-handle input.
@@ -206,11 +206,12 @@ export function useRepeatingKeys(
   active: boolean,
   handler: (k: string, e: HwKeyEvent) => boolean | void,
   repeatKeys: readonly string[],
-  opts?: { typing?: boolean },
+  opts?: { typing?: boolean; priority?: number },
 ) {
   const hRef = useRef(handler); hRef.current = handler;
   const keysRef = useRef(repeatKeys); keysRef.current = repeatKeys;
   const typingOk = !!opts?.typing;
+  const priority = opts?.priority ?? 0;
   useEffect(() => {
     if (!active) return;
     let held: string | null = null;
@@ -237,12 +238,12 @@ export function useRepeatingKeys(
         timer = setTimeout(tick, REPEAT_DELAY_MS);
       }
       return used === true;
-    });
+    }, { priority });
     const up = addKeyListener('up', (e) => {
       if (e.key === held) stop();
     });
     return () => { stop(); down.remove(); up.remove(); };
-  }, [active, typingOk]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active, typingOk, priority]);   // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 export const NAV_REPEAT_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'] as const;

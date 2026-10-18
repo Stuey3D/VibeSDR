@@ -130,8 +130,8 @@ import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import FkaSplash from '../components/FkaSplash';
 import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus } from '../components/PanelNav';
-import { screenNavMove, screenNavBox, screenNavPress, ScreenNavRing } from '../components/ScreenNav';
-import { addKeyListener, SCREEN_PRIORITY } from '../utils/hardwareKeys';
+import { useScreenHighlight } from '../components/ScreenNav';
+import { addKeyListener, SCREEN_PRIORITY, keyDirOf } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -10324,31 +10324,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                         onMenuOpen, onStepOpen, onAudioOpen, onModeOpen,
                         onFreqOpen, openChat };
 
-  // ★ THE SCREEN'S HIGHLIGHT (ScreenNav): which control the keyboard is on, and its box relative to this screen's root.
-  //   Drawn only while the keyboard is in use and nothing is open over it; a touch hides it (keyboard mode ends).
-  const rootRef = useRef<View | null>(null);
-  const navHlRef = useRef<string | null>(null);
-  const [navHl, setNavHlState] = useState<string | null>(null);
-  const [navBox, setNavBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const placeRing = useCallback((box: { x: number; y: number; w: number; h: number } | null) => {
-    if (!box) { setNavBox(null); return; }
-    const root: any = rootRef.current;
-    if (!root?.measureInWindow) { setNavBox(box); return; }
-    root.measureInWindow((rx: number, ry: number) => setNavBox({ x: box.x - (rx || 0), y: box.y - (ry || 0), w: box.w, h: box.h }));
-  }, []);
-  const setNavHl = useCallback((id: string | null, box?: { x: number; y: number; w: number; h: number } | null) => {
-    navHlRef.current = id; setNavHlState(id); placeRing(id ? box ?? null : null);
-  }, [placeRing]);
-  const moveHighlight = useCallback(async (dir: 'up' | 'down' | 'left' | 'right') => {
-    const r = await screenNavMove(navHlRef.current, dir);
-    if (r) setNavHl(r.id, r.box);
-  }, [setNavHl]);
-  // ★ A rotation, a window resize or the controls coming back moves the control — the ring follows it.
-  useEffect(() => {
-    if (!navHl) return;
-    const t = setTimeout(() => { void screenNavBox(navHl).then((b) => { if (navHlRef.current === navHl) placeRing(b); }); }, 250);
-    return () => clearTimeout(t);
-  }, [navHl, screenW, screenH, controlsHidden, anyPanelOpen, placeRing]);
+  // ★ THE SCREEN'S HIGHLIGHT (ScreenNav): which control the keyboard is on. Drawn only while the keyboard is in use
+  //   and nothing is open over it; a touch hides it (keyboard mode ends).
+  const screenHl = useScreenHighlight(kbInUse && !anyPanelOpen, navRing.ring, [screenW, screenH, controlsHidden, anyPanelOpen]);
+  const screenHlRef = useRef(screenHl); screenHlRef.current = screenHl;
 
   useEffect(() => {
     // Built once and driven through the ref, so a re-render never rebuilds a sweeper
@@ -10384,8 +10363,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ Third-party page on screen (compatibility mode) — every key of ours is off, so nothing of ours can fire under
       //   a page we did not write. See PanelNav.
       if (shortcutsSuppressed()) return;
-      // ★ Typing in a field: only Escape reaches here (as Back) — it closes the panel the field is in.
-      if (e.typing) { if (k === 'Back' && panelOpenRef.current) { closeAll(); return true; } return; }
+      // ★ Typing in a field: nothing here acts. (Escape leaves the field — the native window lets go of the cursor — and
+      //   the next Back closes the panel; Enter is the field's own commit.)
+      if (e.typing) return;
       // ★ Tune and zoom work from ANYWHERE, panels and the decoder box included — as a pad's do on the web page.
       switch (k) {
         case 'TuneDown': kb.vfo.press(-1); return true;
@@ -10404,22 +10384,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           // ★★ HIDDEN CONTROLS ARE A TRAP WITHOUT THIS. Hiding them removes every button, leaving only a touch-only ▲
           //    chevron — Stuart found it on the TV: "an unrecoverable situation… nothing brings back the controls."
           if (controlsHiddenRef.current) { setControlsHidden(false); return true; }
-          setNavHl(null);
+          screenHlRef.current.clear();
           return true;
         default: break;
       }
       // With a panel open, movement and Enter belong to it (PanelNav), never to the screen underneath.
       if (panelOpenRef.current) return;
-      if (k === 'Enter') {
-        const cur = navHlRef.current;
-        if (cur && screenNavPress(cur)) return true;
-        void moveHighlight('down');            // nothing highlighted yet: Enter just shows where you are
-        return true;
-      }
-      if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight') {
-        void moveHighlight(k === 'ArrowUp' ? 'up' : k === 'ArrowDown' ? 'down' : k === 'ArrowLeft' ? 'left' : 'right');
-        return true;
-      }
+      if (k === 'Enter') { screenHlRef.current.press(); return true; }
+      const dir = keyDirOf(k);
+      if (dir) { void screenHlRef.current.move(dir); return true; }
     }, { priority: SCREEN_PRIORITY });
     // Scroll: accumulate deltas until they cross a notch, then act. A wheel emits
     // large discrete jumps and a trackpad a smooth stream — accumulating handles
@@ -10533,7 +10506,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                    backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 9, paddingHorizontal: 12,
                    minWidth: 200 }}>
       <Text style={{ color: gt.ink.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>
-        ⌨  KEYBOARD SHORTCUTS
+        ⌨  KEYBOARD
       </Text>
     </View>
   );
@@ -10601,7 +10574,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named above them.',
       target: tourRef('menuBtn'), illustration: schemeMock },
     { id: 'keys', title: 'A keyboard drives the whole thing',
-      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and nearly every control has a key behind it: tuning, zoom, mode, bookmarks, the menus. The full list is in the settings cog, and Esc always steps back out of whatever is open.',
+      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and it works like a game controller: the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom. More in the settings cog, under KEYBOARD.',
       target: tourRef('menuBtn'), illustration: keysMock },
     // ★★ v5, not v4: the two steps above are new in V10 and describe things that
     //    already shipped invisibly. Bumping the key re-runs the tour ONCE for
@@ -10632,7 +10605,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   return (
     <View
-      ref={rootRef}
+      ref={screenHl.rootRef}
       style={styles.root}
       // Capture-phase touch sniff (returns false — never steals the touch):
       // marks interaction for smooth tune / idle saver on any Pressable UI.
@@ -10650,7 +10623,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     >
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
       {/* ★ The keyboard's highlight on this screen (ScreenNav) — only while the keyboard is driving and nothing is open. */}
-      {kbInUse && !anyPanelOpen && !!navHl && <ScreenNavRing box={navBox} color={navRing.ring} />}
+      {screenHl.ring}
 
       {/* ── WHICH RADIO? The landing page, for a multi-radio server ───────────────────────
           ★★★ IT MUST SCROLL. On a phone, and especially in landscape, a list that cannot

@@ -51,3 +51,8 @@ export function addKeyListener(kind: 'down' | 'up', f: (e: HwKeyEvent) => boolea
 
 /** The priority a SCREEN's own listener takes, so every panel and box over it hears a key first. */
 export const SCREEN_PRIORITY = -1;
+
+/** A movement key's direction, for the highlight code. */
+export function keyDirOf(k: HwKey | string): 'up' | 'down' | 'left' | 'right' | null {
+  return k === 'ArrowUp' ? 'up' : k === 'ArrowDown' ? 'down' : k === 'ArrowLeft' ? 'left' : k === 'ArrowRight' ? 'right' : null;
+}

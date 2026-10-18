@@ -4,6 +4,7 @@ import { downloadDetail, removeDetail, DETAIL_BYTES } from '../services/mapglDet
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { useListNav, noteTouchInteraction, useNavFocus } from '../components/PanelNav';
+import { addKeyListener } from '../utils/hardwareKeys';
 import {
   ActivityIndicator,
   Alert,
@@ -18,7 +19,6 @@ import {
   TouchableOpacity,
   View,
   Dimensions,
-  NativeEventEmitter,
   NativeModules,
   AppState,
 } from 'react-native';
@@ -1920,8 +1920,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   }, [favourites, screenFocused]);
 
   useEffect(() => {
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', () => setKbHint(true));
+    const sub = addKeyListener('down', () => { setKbHint(true); });
     return () => sub.remove();
   }, []);
 
@@ -2035,51 +2034,26 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       try { target?.scrollToIndex?.({ index: i - hdrLen, viewPosition: 0.5, animated: true }); }
       catch { /* index briefly out of range while the list rebuilds — harmless */ }
     },
+    undefined,
+    // ★ BACK STEPS OUT ONE LEVEL. Deepest first: inside a DIRECTORY it leaves it and returns to the chooser — without
+    //   this a directory could be entered by keyboard and only left by touch. Otherwise it collapses the group the
+    //   focus is standing in, walking BACK to the nearest header so it works from any row inside the group.
+    () => {
+      if (selectedDir !== null) {
+        setSelectedDir(null); setInstances([]); setFilter(''); setError(null); setLoading(false);
+        return true;
+      }
+      for (let j = Math.min(navFocusRef.current, listData.length - 1); j >= 0; j--) {
+        const h = listData[j];
+        if (h?.kind === 'header') { if (h.collapsible && !h.collapsed) toggleGroup(h.groupKey); return true; }
+      }
+      return true;
+    },
   );
 
-  // ★ Row shortcuts (Stuart): F favourites the focused server, D sets/clears it as the
-  // default, S cycles the sort. Letters are safe here because the native side withholds
-  // them whenever a text field has focus, so the custom-server box still types normally.
+  // ★★★ ONE SCHEME (Stuart, 2026-10-18): the row letters (F favourite, D default, E edit, S sort) are gone — the row's
+  // own buttons do those. Back (Backspace / Escape) is the only key with a meaning of its own here: step out one level.
   const navFocusRef = useRef(navFocus); navFocusRef.current = navFocus;
-  useEffect(() => {
-    if (!listNavActive) return;
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
-      const k = e?.key;
-      if (k === 'S') { cycleFavSort(); return; }
-      if (k === 'Backspace') {
-        // ★ Deepest first: inside a DIRECTORY, Backspace leaves it and returns to the
-        // chooser — the same "step out one level" meaning it has everywhere else. Without
-        // this a directory could be entered by keyboard and only left by touch.
-        if (selectedDir !== null) {
-          setSelectedDir(null); setInstances([]); setFilter(''); setError(null); setLoading(false);
-          return;
-        }
-        // Otherwise step out = collapse the group the focus is standing in. Walks BACK to
-        // the nearest header, so it works from any row inside the group, not just its top.
-        for (let j = Math.min(navFocusRef.current, listData.length - 1); j >= 0; j--) {
-          const h = listData[j];
-          if (h?.kind === 'header') { if (h.collapsible && !h.collapsed) toggleGroup(h.groupKey); return; }
-        }
-        return;
-      }
-      const it = listData[navFocusRef.current];
-      if (!it || it.kind === 'header') return;
-      const fav: Favourite = it.kind === 'custom'
-        ? it.fav
-        : { name: it.data.name, url: it.data.url, serverType: it.data.serverType };
-      if (k === 'F') { void handleToggleFav(fav); return; }
-      // ★ E edits a CUSTOM server. Directory rows are not ours to edit — their address
-      // comes from the directory — so E is deliberately inert on them rather than
-      // opening a sheet whose changes could not be saved.
-      if (k === 'E') { if (it.kind === 'custom') openEditFav(it.fav); return; }
-      if (k === 'D') {
-        const isDef = defaultInst?.url === fav.url;
-        if (isDef) handleClearDefault(); else handleSetDefault({ name: fav.name, url: fav.url });
-      }
-    });
-    return () => sub.remove();
-  }, [listNavActive, listData, selectedDir, toggleGroup, cycleFavSort, handleToggleFav, handleSetDefault, handleClearDefault, defaultInst, openEditFav]);
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
@@ -2520,8 +2494,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             for space and was clipped underneath it in portrait. (Stuart, 2026-07-25.) */}
         {kbHint && (
           <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
-            To navigate with a keyboard: ↑↓ move · ⏎ connect · ⌫ collapse ·
-            F favourite · D default · E edit · S sort
+            Keyboard: arrows or W A S D move · Enter connects · Backspace or Esc goes back
           </Text>
         )}
 

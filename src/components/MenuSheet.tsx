@@ -1539,15 +1539,14 @@ function MenuSheetBody({
                 state is move a highlight to find an explanation. (Tested on device 2026-07-26.) */}
             {fkaSuspected && (
               <View style={styles.fkaNote}>
-                <Text style={styles.fkaNoteTitle}>HOLD SHIFT WITH THE ARROW KEYS</Text>
+                <Text style={styles.fkaNoteTitle}>USE W A S D FOR THE ARROW KEYS</Text>
                 <Text style={styles.fkaNoteBody}>
                   iOS Full Keyboard Access looks to be switched on. It claims the plain arrow keys
-                  and Tab for its own navigation, so VibeSDR never sees them.{'\n'}
-                  Use <Text style={styles.fkaNoteKey}>{'<'}</Text> <Text style={styles.fkaNoteKey}>{'>'}</Text> to
-                  tune and <Text style={styles.fkaNoteKey}>-</Text> <Text style={styles.fkaNoteKey}>+</Text> to
-                  zoom — they are the arrow keys by another name and work in these menus too. In a
-                  text box, or for menus, hold <Text style={styles.fkaNoteKey}>Shift</Text> with an
-                  arrow — and <Text style={styles.fkaNoteKey}>Alt/Option (⌥)</Text> with Tab. You do not need
+                  for its own navigation, so VibeSDR never sees them.{'\n'}
+                  <Text style={styles.fkaNoteKey}>W</Text> <Text style={styles.fkaNoteKey}>A</Text>{' '}
+                  <Text style={styles.fkaNoteKey}>S</Text> <Text style={styles.fkaNoteKey}>D</Text> move the
+                  highlight instead, <Text style={styles.fkaNoteKey}>{'<'}</Text> <Text style={styles.fkaNoteKey}>{'>'}</Text> tune
+                  and <Text style={styles.fkaNoteKey}>-</Text> <Text style={styles.fkaNoteKey}>+</Text> zoom. You do not need
                   to turn anything off.
                 </Text>
               </View>
@@ -1654,7 +1653,7 @@ function MenuSheetBody({
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
             </BtnRow>
             <BtnRow>
-              <Btn label="⌨ KEYBOARD SHORTCUTS" full onPress={onKeyHelp} />
+              <Btn label="⌨ KEYBOARD" full onPress={onKeyHelp} />
             </BtnRow>
             <BtnRow>
               <Btn label="▼ HIDE CONTROLS" full onPress={onHideControls} />

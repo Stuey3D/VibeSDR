@@ -12,7 +12,7 @@
  * ★ Controls join with `ref={screenNavRef('id', onPress)}` (mergeRefs with a tourRef where there is one). Only one of a
  *   portrait/landscape pair is ever mounted, so one id serves both — the Coachmark registry's rule.
  */
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 import { pickNext, type Box, type Dir } from '../utils/gamepadNav';
 
@@ -76,4 +76,44 @@ export function ScreenNavRing({ box, color }: { box: Box | null; color: string }
       borderWidth: 3, borderColor: color, borderRadius: 10, zIndex: 9999, elevation: 30,
     }} />
   );
+}
+
+/**
+ * The screen's highlight state, shared by the receiver screen (SDRScreen) and the FM-DX screen (TunerScreen).
+ * Attach `rootRef` to the screen's root view and render `ring` inside it; feed `move` / `press` / `clear` from the
+ * screen's key listener. `relayout` lists whatever can move the controls (window size, hidden controls, panels).
+ */
+export function useScreenHighlight(show: boolean, color: string, relayout: unknown[]) {
+  const rootRef = useRef<View | null>(null);
+  const hlRef = useRef<string | null>(null);
+  const [hl, setHlState] = useState<string | null>(null);
+  const [box, setBox] = useState<Box | null>(null);
+  const place = useCallback((b: Box | null) => {
+    if (!b) { setBox(null); return; }
+    const root: any = rootRef.current;
+    if (!root?.measureInWindow) { setBox(b); return; }
+    root.measureInWindow((rx: number, ry: number) => setBox({ x: b.x - (rx || 0), y: b.y - (ry || 0), w: b.w, h: b.h }));
+  }, []);
+  const set = useCallback((id: string | null, b?: Box | null) => {
+    hlRef.current = id; setHlState(id); place(id ? b ?? null : null);
+  }, [place]);
+  const move = useCallback(async (dir: Dir) => {
+    const r = await screenNavMove(hlRef.current, dir);
+    if (r) set(r.id, r.box);
+  }, [set]);
+  /** Enter: press the highlighted control, or — with nothing highlighted yet — show where you are. */
+  const press = useCallback(() => {
+    const cur = hlRef.current;
+    if (cur && screenNavPress(cur)) return;
+    void move('down');
+  }, [move]);
+  const clear = useCallback(() => set(null), [set]);
+  // ★ A rotation, a window resize or the controls coming back moves the control — the ring follows it.
+  useEffect(() => {
+    if (!hl) return;
+    const t = setTimeout(() => { void screenNavBox(hl).then((b) => { if (hlRef.current === hl) place(b); }); }, 250);
+    return () => clearTimeout(t);
+  }, [hl, place, ...relayout]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const ring = show && hl ? <ScreenNavRing box={box} color={color} /> : null;
+  return { rootRef, ring, move, press, clear };
 }

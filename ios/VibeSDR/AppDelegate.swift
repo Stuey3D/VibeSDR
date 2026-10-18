@@ -130,7 +130,7 @@ class VibeKeyWindow: UIWindow {
   private var isTypingInTextField: Bool { focusedTextInput() != nil }
 
   /// While typing, the app hears only these — and the field still gets them (we observe, never intercept): Enter
-  /// commits a typed frequency or a search, Escape leaves the field and closes its panel. Everything else — letters,
+  /// commits a typed frequency or a search, Escape leaves the field (see pressesBegan). Everything else — letters,
   /// the arrows (caret), comma, full stop, minus, Backspace (delete) — belongs to the field alone.
   private static let typingPassthrough: Set<String> = ["Enter", "Escape"]
 
@@ -150,6 +150,12 @@ class VibeKeyWindow: UIWindow {
     let r = report(presses, "VibeKeyDown")
     // ★ ALWAYS call super while typing, even for the keys we mirrored: the field must still receive them.
     if r.typing || !r.handled { super.pressesBegan(presses, with: event) }
+    // ★★ ESCAPE LEAVES THE FIELD — one layer, like every other back. The cursor goes, and the arrows / W A S D then move
+    //    the highlight round the panel the field sits in (the frequency card's units and tabs, the bookmark results); a
+    //    second Escape or Backspace closes the panel. The web page does the same.
+    if r.typing, presses.contains(where: { $0.key?.keyCode == .keyboardEscape }) {
+      DispatchQueue.main.async { [weak self] in _ = self?.focusedTextInput()?.resignFirstResponder() }
+    }
   }
 
   override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
