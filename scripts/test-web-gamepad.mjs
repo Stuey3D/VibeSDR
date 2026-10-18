@@ -67,6 +67,8 @@ async function open(url) {
 
 const freq = (p) => p.js(`parseFloat(document.getElementById("freqInput").value)`);
 const press = async (p, i) => { await p.js(`__btn(${i}, true); 1`); await sleep(120); await p.js(`__btn(${i}, false); 1`); await sleep(120); };
+// Hold a button (START switches the controls only when HELD — a tap must never do it).
+const hold = async (p, i, ms) => { await p.js(`__btn(${i}, true); 1`); await sleep(ms); await p.js(`__btn(${i}, false); 1`); await sleep(120); };
 // Turn a stick through `deg` degrees from 0°, 5° at a time, then let it go.
 const turn = async (p, ax, from, to) => {
   const stepD = to > from ? 5 : -5;
@@ -114,10 +116,25 @@ try {
   ok(await p.js(`document.getElementById("menu").contains(document.querySelector(".gpFocus"))`), "with the menu open, the highlight moves INSIDE the menu");
   await press(p, 1);                                                   // ○ = back
   ok(await p.until(`!document.getElementById("menu").classList.contains("open")`), "○ closes the menu");
-  // START switches the method (a one-stick pad reported as two), says so, and remembers it.
+  // The frequency box and the mode are buttons to the pad too (Stuart, 2026-10-18: "it skips past the frequency box
+  // the demodulator button"): walking the D-pad must land on each.
+  const seen = new Set();
+  for (let i = 0; i < 60 && seen.size < 2; i++) {
+    const id = await p.js(`document.querySelector(".gpFocus")?.id || ""`);
+    if (id === "mFreqBox" || id === "mMode") seen.add(id);
+    await press(p, [15, 13, 14, 12][i % 4]);
+  }
+  ok(seen.has("mFreqBox"), "D-pad: the highlight reaches the frequency box");
+  ok(seen.has("mMode"), "D-pad: the highlight reaches the mode (demodulator) button");
+  // A TAP of START changes nothing (Stuart: an accidental press switched the controls with no way back).
   await press(p, 9);
+  await sleep(400);
+  ok(!/Controls:/.test(await p.js(`document.getElementById("gpToast")?.textContent || ""`)), "a tap of START does not switch the controls");
+  // HOLDING START switches the method (a one-stick pad reported as two), says so — and how to switch back — and remembers it.
+  await hold(p, 9, 1200);
   ok(await p.until(`/buttons by position/.test(document.getElementById("gpToast")?.textContent || "")`, 3000),
-     "START switches to buttons-by-position and says so on screen");
+     "holding START switches to buttons-by-position and says so on screen");
+  ok(/hold START to switch back/.test(await p.js(`document.getElementById("gpToast")?.textContent || ""`)), "…and says how to switch back");
   ok(await p.js(`localStorage.getItem("vibe.padProfile") === "buttons"`), "…remembered on this device");
   const h0 = await freq(p);
   await press(p, 1);                                                   // now ○ (right face) = tune up
@@ -126,17 +143,19 @@ try {
   ok(Math.abs((await freq(p)) - h0) < 1e-6, "…□ (left) tunes back down");
   // Walk the D-pad to MENU again (the page keeps its own highlight; drawing one by hand would not tell it).
   let onMenu2 = false;
-  for (let i = 0; i < 40 && !onMenu2; i++) {
+  // ★ All four directions in turn, a few presses each: with the frequency box and mode now on the route, a fixed
+  //   right/down zigzag can settle between two keys and never head for MENU.
+  for (let i = 0; i < 120 && !onMenu2; i++) {
     onMenu2 = await p.js(`(() => { const h = document.querySelector(".gpFocus"); return !!h && /^\\s*MENU\\s*$/i.test(h.textContent || ""); })()`);
-    if (!onMenu2) await press(p, i % 2 ? 15 : 13);
+    if (!onMenu2) await press(p, [15, 13, 14, 12][Math.floor(i / 3) % 4]);
   }
   ok(onMenu2, "no-stick: the D-pad reaches the MENU key");
   await press(p, 5);                                                   // R1 = enter
   ok(await p.until(`document.getElementById("menu").classList.contains("open")`), "no-stick: R1 = enter (opens the highlighted MENU)");
   await press(p, 4);                                                   // L1 = back
   ok(await p.until(`!document.getElementById("menu").classList.contains("open")`), "no-stick: L1 = back (closes it)");
-  await press(p, 9);
-  ok(await p.until(`/two sticks/.test(document.getElementById("gpToast")?.textContent || "")`, 3000), "START again: back to two sticks");
+  await hold(p, 9, 1200);
+  ok(await p.until(`/two sticks/.test(document.getElementById("gpToast")?.textContent || "")`, 3000), "holding START again: back to two sticks");
   await p.js(`localStorage.removeItem("vibe.padProfile"); 1`);
   ok(p.errors.length === 0, "no JavaScript errors" + (p.errors.length ? ": " + p.errors.slice(0, 2).join(" | ") : ""));
   p.ws.close();
