@@ -41,6 +41,13 @@
 //    • The spread exists only where the audio IS a slice of spectrum — SSB and CW (setSpread's kind, stated by the
 //      caller per mode). AM, FM and DAB get the lean alone.
 //    • The SSB estimator is fed whatever the spread is doing: on SSB it is the offset source that drives w.
+//    ★★★ CROWDED (2026-10-18, Stuart on 483: "when in between 2 signals rather than putting the one below us in the left
+//      ear and the one above us in the right it is blending them both and swirling them about between the ears. This is
+//      on CW too."). The lean is about ONE signal — so between two it dragged both to one ear and swung across whenever
+//      the other took over. When the bank judges the passband to hold MORE THAN ONE signal (BinauralSpread::crowd), the
+//      whole-image lean gives way and the spread comes up to full: each signal placed by its own frequency, higher RF to
+//      the right, whoever is talking. CW then uses the lean's own curve per frequency, so a carrier sits where its lean
+//      alone would put it. A lone signal — on tune or off — is exactly as before. Measured: vibeserver/test-binaural-two.
 //    ★ The spread bank has one frame of latency (10.7 ms at 48 kHz), so on SSB/CW the WHOLE path — on tune too —
 //      runs through a matching delay: on tune it is the input delayed by exactly that frame, bit for bit, and as
 //      w rises the output moves from that delayed copy to the bank's, which is time-aligned with it. The latency
@@ -149,8 +156,9 @@ private:
  *       and you cross it every time you tune. A constant 10.7 ms is inaudible on a radio stream; a moving one is not.
  *     ★ The delay begins when the bank engages (binaural switched on in SSB/CW, or a change into SSB/CW), with one
  *       kWetSec crossfade from the undelayed input, and ends the same way. Between, it never moves.
- *     ★ On tune the bank does no FFT at all on SSB (its overlap-add is kept alive in the time domain, so the first
- *       frame off tune joins seamlessly); CW still takes the forward FFT, to keep measuring the note.
+ *     ★ On tune the bank does no INVERSE FFT (its overlap-add is kept alive in the time domain, so the first frame off
+ *       tune joins seamlessly); the forward FFT runs always — CW measures the note from it, and both judge a crowded
+ *       passband from it (since 2026-10-18: two voices either side of the dial can arrive with nothing leaning).
  *
  *  ★★ THE SCALE IS FIXED Hz PER POSITION, from the DEFAULT SSB passband (the caller passes it: 50-2700 Hz, the
  *     app's MODE_BANDWIDTHS.usb). Its low edge is full LEFT, its high edge full RIGHT, its middle (1375 Hz) the
@@ -167,16 +175,21 @@ private:
  *       (cwCentreHz_). Every backend centres its CW filter on its own note, so the passband's middle IS the note.
  *       Until the noise has been heard, kCwDefaultHz.
  *       ★ The same Hz-per-position means a 400-500 Hz CW filter shows only the MIDDLE of the picture: a signal 200 Hz
- *         off the note leans a fraction of a dB. That is the rule as asked ("you wouldnt hear them anyway if the
- *         passband is too narrow"); widen the filter and the CW band spreads out like SSB.
+ *         off the note leans a fraction of a dB. That was the rule as asked ("you wouldnt hear them anyway if the
+ *         passband is too narrow") — ★★★ but NOT when the passband is CROWDED (2026-10-18): Stuart's 483 clip held two
+ *         carriers ±165 Hz either side of the note, both plainly audible, and the SSB scale put them under 1 dB apart.
+ *         Crowded, CW's map is the LEAN's curve per frequency (panAtCwCrowded: ±165 Hz → 4-8 dB, one each side).
  *  ★ THE PAN LAW: far-ness = |position|^kShape. A voice's energy sits low in the passband (most of it a few hundred
  *    Hz either side of 1 kHz), so a straight line would hold one voice off to the left. The power law keeps the
  *    middle of the picture gentle and still reaches full treatment at the edges, where a second signal lives.
  *  ★★★ THE IMAGE HOLDS STILL (2026-10-17, Stuart on 479: "it still flaps about a bit too"): placed band by band, a
  *     voice moved the whole image with every syllable (a vowel's low harmonics one side, its "s" the other). Each frame
  *     is now held to where the passband's energy has sat over the last kImageSlowSec — see steady_(). What sounds AT
- *     ONCE keeps its separation; a lone signal keeps its side.
- *  ★★ HOW MUCH: `amount` (0…1) — the controller passes the off-tune weight w, the SAME number that sets the lean.
+ *     ONCE keeps its separation; a lone signal keeps its side. ★★★ Not when CROWDED: two stations taking turns move the
+ *     energy from side to side BY BEING TWO STATIONS, and holding it to its 2 s centre pulled each toward the middle as it
+ *     keyed up ("blending them both") — the steadying gives way by the crowd weight.
+ *  ★★ HOW MUCH: `amount` (0…1) — the controller passes the off-tune weight w, the SAME number that sets the lean
+ *     (crowded: up to 1 by the crowd weight, while the lean gives way by it).
  *     It is smoothed here with the lean's own time constant (BinauralSpatialiser::kPanTauSec), so the spread and
  *     the lean grow and shrink together. A change of sideband glides the spread to nothing (kSwapSec), swaps the
  *     map, and glides it back; the delay stays put throughout.

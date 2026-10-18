@@ -32,7 +32,7 @@ void  vibe_binaural_process_planar(void* h, float* L, float* R, int n, int rate)
 /** Audio thread. int16 interleaved (inCh 1 or 2) → int16 stereo interleaved. Returns frames. */
 int   vibe_binaural_process_i16(void* h, const int16_t* in, int inCh, int frames, int rate, int16_t* outStereo);
 /** [enabled, source, offsetHz, offsetValid, pan, stereoWeight, ssbEstimates, ssbAccepted, ringDrops,
- *   spreadAmount, coarseHeld, spreadCwCentreHz] — up to `cap`. */
+ *   spreadAmount, coarseHeld, spreadCwCentreHz, crowd] — up to `cap`. */
 int   vibe_binaural_stats(void* h, float* out, int cap);
 #ifdef __cplusplus
 }

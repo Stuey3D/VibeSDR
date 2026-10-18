@@ -1845,11 +1845,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let eng = audioEngine != nil ? "yes" : "no"
     let dec = opusDecoder != nil ? "yes" : "no"
     let ws  = (wsUsingNW ? wsReady : (wsTask?.state == .running)) ? "open" : "closed"
-    var b = [Float](repeating: 0, count: 12)
-    _ = vibe_binaural_stats(binauralH, &b, 12)
-    let bin = b[0] > 0 ? String(format: " bin=src%ld off=%.0f%@%@ pan=%.2f w=%.2f ssb=%ld/%ld drop=%ld spread=%.2f",
+    var b = [Float](repeating: 0, count: 13)
+    _ = vibe_binaural_stats(binauralH, &b, 13)
+    // crowd = the passband judged to hold more than one signal (each placed by its own frequency, no whole-image lean)
+    let bin = b[0] > 0 ? String(format: " bin=src%ld off=%.0f%@%@ pan=%.2f w=%.2f ssb=%ld/%ld drop=%ld spread=%.2f crowd=%.2f",
                                 Int(b[1]), b[2], b[3] > 0 ? "" : "?", b[10] > 0 ? "c" : "", b[4], b[5], Int(b[7]), Int(b[6]),
-                                Int(b[8]), b[9]) : ""
+                                Int(b[8]), b[9], b[12]) : ""
     return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed)\(bin)"
   }
 

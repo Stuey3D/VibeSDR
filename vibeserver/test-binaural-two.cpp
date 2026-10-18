@@ -24,7 +24,10 @@
 //       lies below the dial), the other with the dial that far BELOW its own: mixed, both at once and in turns. As LSB the
 //       same audio is the mirror case (a USB clip's audio shifted down is an LSB station ABOVE the dial).
 // PASS = the lower signal sits LEFT and the upper RIGHT, steadily, in every case: mean |ILD| ≥ 1.5 dB the right way, no more
-// than 3 % of windows the wrong way, ≤ 6 reversals a minute; and the ITD, where measured, never the wrong way on average.
+// than 3 % of windows the wrong way (or 2: the first key-up of a second station), ≤ 2 side flips a minute, sd ≤ 2.5 dB, and
+// the ITD, where measured, its way too (see placedRight). A run in which NOTHING was ever held (no estimator answer, no
+// cue — two voices at once give the estimator nothing it believes) is judged only never the wrong way.
+// ★ VIBE_TWO_TRACE=1 prints the controller every 0.25-0.5 s (held, pan, spread, crowd); VIBE_TWO_WRONG=1 each wrong window.
 //
 // ★ SILENT: everything is generated or read and measured in memory, never played.
 #include "vibedsp/binaural.h"

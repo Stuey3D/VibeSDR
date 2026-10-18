@@ -46,6 +46,10 @@ flags_for() {
     test-ssb-offset-real) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★★ V12 BINAURAL TUNING (vibedsp/binaural): the spatialiser, the WFM hand-off and the SSB source (FAST estimator).
     test-binaural) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
+    # ★★★ …and between TWO signals (Stuart on 483: "blending them both and swirling them about"): one below the dial, one
+    #     above, USB/LSB/CW, at once / in turns / one stronger. Synthetic always; Stuart's 483 CW clip and off-air VOLMET
+    #     pairs too when VIBE_TEST_AUDIO points at the folder holding binaural/ and ssb/ (reported NOT RUN otherwise).
+    test-binaural-two) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★ Every mode's DSP cost vs passband, both directions and past the ceiling — the audit that
     #   followed the WFM cliff (2026-09-29). Optimised for the same reason.
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
@@ -106,7 +110,7 @@ deps_for() {
                               $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-ssb-offset-real) echo "$VDSP/binaural.cpp $VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
                               $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-binaural) echo "$VDSP/binaural.cpp $VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
+    test-binaural|test-binaural-two) echo "$VDSP/binaural.cpp $VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
                               $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     # ★★ proc.cpp goes with anything that SHELLS OUT (curl, mostly): geoip, asndb and radiodns all
     #    call vibeproc::run. It was missing, so those three "did not build" — and a suite that does

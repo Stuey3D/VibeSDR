@@ -878,7 +878,8 @@ export default function AudioSheet({
               on signal it presents in mono as it would before and then pan left and right based on signal and audio
               response when off tune"): on a signal the sound is untouched; off it, the sound leans toward the
               signal and, on SSB and CW, the passband spreads across the ears — both by how far off you are. The
-              GUIDE / SPREAD row that sat here until 476 is gone. */}
+              GUIDE / SPREAD row that sat here until 476 is gone. ★ Between two signals (483: "swirling them about")
+              the lean gives way and each sits on its own side — native's CROWDED judgement (vibedsp/binaural.h). */}
           {onBinaural && (
             <View style={{ marginTop: 2 }}>
               <View style={st.bwRow}>
@@ -888,7 +889,7 @@ export default function AudioSheet({
                   a11y={binaural ? 'Binaural tuning on. Tap to turn off.' : 'Binaural tuning off. Tap to turn on.'} />
               </View>
               <Text style={st.iqNote}>
-                For headphones. On a signal the sound is left just as it is. Tune off it and the sound leans towards the side the signal is on — right means tune up, left means tune down — and on SSB and CW what is in the passband also spreads across your ears, lower on the dial to the left, higher to the right.
+                For headphones. On a signal the sound is left just as it is. Tune off it and the sound leans towards the side the signal is on — right means tune up, left means tune down — and on SSB and CW what is in the passband also spreads across your ears, lower on the dial to the left, higher to the right. Between two signals, the lower stays left and the higher right.
               </Text>
             </View>
           )}

@@ -983,7 +983,7 @@ int main() {
                 bt.processPlanar(l.data(), r.data(), 960, (int)fs);
             }
             const double c = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / 20.0;
-            std::printf("      SSB %s (audio thread): %.3f %% of one core at 48 kHz\n", off == 0 ? "on tune (no FFT)" : "off tune, lean + spread", c * 100);
+            std::printf("      SSB %s (audio thread): %.3f %% of one core at 48 kHz\n", off == 0 ? "on tune (forward FFT only: the crowded judgement)" : "off tune, lean + spread", c * 100);
             check(c < 0.02, off == 0 ? "on tune costs < 2 % of a core at 48 kHz (this Mac)" : "off tune costs < 2 % of a core at 48 kHz (this Mac)");
         }
     }
