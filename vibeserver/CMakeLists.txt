@@ -120,12 +120,11 @@ if(UNIX AND NOT APPLE)
     add_link_options(-static-libstdc++ -static-libgcc)
     # ★★★ …WITHOUT RAISING THE glibc FLOOR. Static libstdc++ 12 was built against bookworm's glibc
     #     2.36, and its std::random_device calls arc4random@GLIBC_2.36 — which alone made the package
-    #     `libc6 (>= 2.36)` and refused Ubuntu 22.04. linux/glibc_floor.c answers that call from
-    #     getentropy() (glibc 2.25) via --wrap; the object goes into EVERY executable (link_libraries,
-    #     before any target exists), because an archive member would be searched too early on the
-    #     link line to satisfy a reference from libstdc++.a at its end.
+    #     `libc6 (>= 2.36)` and refused Ubuntu 22.04. linux/glibc_floor.c DEFINES arc4random from
+    #     getentropy() (glibc 2.25) — not --wrap, which the ARMv6 build's lld ignored. The object goes
+    #     into EVERY executable (link_libraries, before any target exists): an archive member would be
+    #     searched too early on the link line to satisfy a reference from libstdc++.a at its end.
     add_library(vibe_glibc_floor OBJECT "${CMAKE_CURRENT_SOURCE_DIR}/linux/glibc_floor.c")
-    add_link_options(LINKER:--wrap=arc4random)
     link_libraries(vibe_glibc_floor)
   elseif(VIBESERVER_STRICT_RADIOS)
     message(FATAL_ERROR

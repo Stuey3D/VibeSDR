@@ -14,7 +14,12 @@ set(CMAKE_C_COMPILER   clang)
 set(CMAKE_CXX_COMPILER clang++)
 set(CMAKE_C_FLAGS_INIT   "${_t}")
 set(CMAKE_CXX_FLAGS_INIT "${_t}")
-set(CMAKE_EXE_LINKER_FLAGS_INIT    "${_t} -fuse-ld=lld")
+# ★★ -no-pie (2026-10-18): the self-contained build links Raspbian's STATIC libncursesw.a/libtinfo.a,
+#    and Raspbian's gcc does not default to PIE, so those objects carry absolute relocations that lld
+#    refuses in a PIE ("R_ARM_ABS32 cannot be used against local symbol"). Debian's clang links PIE by
+#    default; Raspbian's own programs are not PIE. Matching Raspbian costs ASLR of the ARMv6 binary's
+#    own image on a Pi Zero / Pi 1 (its stack, heap and libc are still randomised).
+set(CMAKE_EXE_LINKER_FLAGS_INIT    "${_t} -fuse-ld=lld -no-pie")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${_t} -fuse-ld=lld")
 set(CMAKE_FIND_ROOT_PATH ${RPI_SYSROOT} /opt/vibe-deps-v6)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
