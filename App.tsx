@@ -741,7 +741,9 @@ export default function App() {
                    *  full radio, and parsing "3/3 full" back out of a sentence to decide that
                    *  would be a second reader of a rule the phone already knows. Unknown
                    *  occupancy is NOT full — absent data must never lock somebody out. */
-                  full: r.listeners != null && r.users > 0 && r.listeners >= r.users,
+                  full: (r.listeners != null && r.users > 0 && r.listeners >= r.users)
+                        // ★ Held by another program on that server: dimmed and disabled like a full one.
+                        || r.inUseElsewhere === true,
                   /* ★★ THIS RADIO HAS A PIN OF ITS OWN (Stuart, 2026-10-09: Buddy showed the Pi 500's Airspy open,
                    *  connected without asking and got a blank screen). Said so the wrist can show the lock; the tap
                    *  still goes ahead — the phone's autoVibe path now asks the RADIO and brings up the wrist PIN pad. */
