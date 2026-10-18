@@ -254,6 +254,8 @@ function shortRange(lo: number, hi: number): string {
  *     do know, and nothing we do not.
  */
 export function radioOccupancy(r: VibeRadio): string {
+  // ★★ Said first: however many may listen, nobody can while another program holds it.
+  if (r.inUseElsewhere === true) return 'In use by another app';
   const cap  = Math.max(0, Number(r.users) || 0);
   const live = r.listeners == null ? null : Math.max(0, Number(r.listeners) || 0);
   if (cap <= 1) {

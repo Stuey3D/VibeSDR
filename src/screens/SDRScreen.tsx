@@ -672,7 +672,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       /* ★★ …AND NOT WHEN THAT ONE RADIO HAS A PIN OF ITS OWN (2026-10-09). Adopting it here connected without the
        *  radio's PIN — the door has none, so nothing asked — and every socket was refused: a blank SDR screen. Left
        *  unadopted, the card shows it locked with the PIN box, exactly as for a door of several. */
-      if (d.radios.length === 1 && !worthReading && d.radios[0].pinLocked !== true) {
+      /* ★★★ …NOR WHEN ANOTHER PROGRAM ON THAT SERVER HAS IT (2026-10-18). Adopting it walked the listener
+       *  into a radio whose process cannot start — a dead waterfall and a reconnect loop. Left unadopted,
+       *  its card says IN USE BY ANOTHER APP and the line under it says why. */
+      if (d.radios.length === 1 && !worthReading && d.radios[0].pinLocked !== true
+          && d.radios[0].inUseElsewhere !== true) {
         setRadioBase(radioBaseUrl(baseUrl, d.radios[0].id));
       }
       setDoorPending(false);

@@ -46,6 +46,10 @@ pin_for() {
     cloudflared-linux-arm64) echo d2b49df8dbb3a36e743ce00b091c180e0942a0b67487257c573a631db001796c ;;
     cloudflared-linux-arm)   echo e5853ce169323c10be2fff3fc810e860ead5ab8ee36b8b77268e6c6fbc9ba738 ;;
     cloudflared-linux-amd64) echo 14ecae0dd17ba74f8055e22b8f5b5acc3cbb5a9c3be4e7d6507fe1c4eadaea95 ;;
+    # ★ 386 added 2026-10-17 for the i386 package — checked against the SHA-256 Cloudflare lists on the
+    #   2026.8.0 release page (the amd64 line above matched that list too). Go's 386 port needs SSE2,
+    #   the same floor as our own i386 build, so the tunnel reaches every machine the server does.
+    cloudflared-linux-386)   echo 2e156c495fa7e1badbdf99cf0a91825453cb8bcb47d773572f466ce1d6114b5b ;;
     LICENSE)                 echo 58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd ;;
     *)                       echo "" ;;
   esac
@@ -99,6 +103,7 @@ fetch() {                       # fetch <asset> <dest-name>
 fetch cloudflared-linux-arm64  cloudflared-linux-arm64
 fetch cloudflared-linux-arm    cloudflared-linux-arm      # ★ 32-bit ARM — VibeServer Lite (Pi 2 etc.)
 fetch cloudflared-linux-amd64  cloudflared-linux-amd64
+fetch cloudflared-linux-386    cloudflared-linux-386      # ★ 32-bit x86 — the i386 package (Atom N270, Pentium M)
 # ★★★ NO darwin BINARY ANY MORE (2026-09-28). Cloudflare's cloudflared-darwin-arm64 is built for
 #     macOS 15.0 (LC_BUILD_VERSION minos 15.0), and VibeServer.app promises macOS 14 — so on a 14
 #     Mac the tunnel switch started nothing. vibeserver/mac/build-deps.sh COMPILES the same pinned

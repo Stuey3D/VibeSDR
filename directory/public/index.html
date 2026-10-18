@@ -1528,7 +1528,7 @@ function radioLine(r, s) {
   //   are taking a turn rather than finding an idle radio.
   const isFull = said !== null && max > 0 && said >= max && !claimable;
   // ★ ONE LISTENER AT A TIME READS "FREE", not "0 of 1" — the landing page's own wording.
-  const stateTxt = s && s.unreachable ? 'NOT RESPONDING'
+  const stateTxt = (s && s.unreachable) || r.radioDown ? 'NOT RESPONDING'
                  : said === null ? ''
                  : isFull ? (freeIn > 0 ? `FULL · FREE IN ${mmss(freeIn)}` : 'FULL')
                  : claimable && said >= max ? 'FREE · TAKE OVER'
@@ -1556,7 +1556,7 @@ function radioLine(r, s) {
       ${bands.covers ? `<div class="rcSub rcBands">${esc(bands.covers)}</div>` : ''}
       ${bands.filters ? `<div class="rcSub rcBands rcFilt">${esc(bands.filters)}</div>` : ''}
       ${etiquette}
-      ${stateTxt ? `<div class="rcStateRow"><span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}">${esc(stateTxt)}</span></div>` : ''}
+      ${stateTxt ? `<div class="rcStateRow"><span class="rcState ${isFull ? 'full' : ''}${(s && s.unreachable) || r.radioDown ? ' down' : ''}">${esc(stateTxt)}</span></div>` : ''}
     </div>`;
   // ★★★ A LOCKED RADIO IS SHOWN, NOT HIDDEN — and it does not link anywhere. Hiding it would make
   //     the server look smaller than it is and give a member of the club no way to reach the radio
@@ -2020,6 +2020,7 @@ function radioInUse(r, s) {
 /** One radio's slot state: true free, false busy, null nobody said. */
 function radioFree(r, s) {
   if (radioInUse(r, s)) return false;
+  if (r && r.radioDown) return null;   // ★ not answering: nobody can say it is free
   // ★ A SINGLE-RADIO SERVER IS ITS RADIO — the one case where the machine's figures state a fact
   //   about the receiver rather than assume one. Anything else must have said it per radio.
   const solo = !!(s && Array.isArray(s.radios) && s.radios.length === 1);
@@ -3591,6 +3592,18 @@ async function withLiveCounts(servers) {
             if (Number.isFinite(rj.maxUsers))   radios[0].maxListeners = Number(rj.maxUsers);
             if (Number.isFinite(rj.freeInSec))  radios[0].freeInSec = Number(rj.freeInSec);
             if (typeof rj.claimable === 'boolean') radios[0].claimable = rj.claimable;
+            /* ★★★ AND ITS OWN WORD ON WHETHER ANOTHER PROGRAM HAS IT (2026-10-18). This block never copied
+             *  it, so a single-radio server's card could only learn it from the listing. A front door now
+             *  answers this route for a radio held elsewhere even while the radio's process cannot start. */
+            if (soloFromRadio) radios[0].inUseElsewhere = rj.inUseElsewhere === true;
+            radios[0].radioDown = false;
+          } else if (r3.status === 503) {
+            /* ★★★ THE DOOR ANSWERED AND THE RADIO DID NOT — so the machine's figures below are the DOOR's
+             *  (no radio, 0 listeners), and copying them drew the radio FREE. The Lenovo's RSP1A, held by
+             *  OpenWebRX, read FREE for 17 hours (2026-10-18). Not responding is the true line; the
+             *  listing's own inUseElsewhere, if it said so, still wins (radioInUse is checked first). */
+            radios[0].radioDown = true;
+            soloFromRadio = true;
           }
         } catch { /* no per-radio route: a phone server — the machine's answer below is the radio's */ }
       }
@@ -3611,8 +3624,10 @@ async function withLiveCounts(servers) {
             const rr = await fetch(`https://${s.address}/r/${encodeURIComponent(rad.id)}/vibeserver.json`,
                                    { signal: c2.signal, cache: 'no-store' });
             clearTimeout(t2);
-            if (!rr.ok) return;
+            // ★ 503 = the door is up and this radio's process is not (see the single-radio note above).
+            if (!rr.ok) { if (rr.status === 503) rad.radioDown = true; return; }
             const rj = await rr.json();
+            rad.radioDown = false;
             if (Number.isFinite(rj.listeners))  rad.listeners = Number(rj.listeners);
             if (Number.isFinite(rj.maxUsers))   rad.maxListeners = Number(rj.maxUsers);
             if (Number.isFinite(rj.freeInSec))  rad.freeInSec = Number(rj.freeInSec);

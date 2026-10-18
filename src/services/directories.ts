@@ -159,6 +159,10 @@ function normaliseRadios(rows: any[]): VibeRadio[] {
        *  so the app's list could not tell a server where every radio is private from one that is
        *  wide open, and drew neither a padlock nor a hint (2026-09-24). */
       pinLocked: r.pinLocked === true,
+      /* ★★★ ANOTHER PROGRAM ON THAT SERVER HAS THIS RADIO — the server's word, carried from the listing.
+       *  The normaliser dropped it, so the app's list drew a radio OpenWebRX had held for 17 hours as an
+       *  ordinary one (the Lenovo, 2026-10-18). Absent = unknown, never "free". */
+      inUseElsewhere: r.inUseElsewhere === true,
       restricted: !!r.restricted,
       centreHz: typeof r.centreHz === 'number' ? r.centreHz : undefined,
       spanHz: typeof r.spanHz === 'number' ? r.spanHz : undefined,

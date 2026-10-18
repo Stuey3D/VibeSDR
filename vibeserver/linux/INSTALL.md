@@ -1,24 +1,58 @@
 # VibeServer on Linux
 
 Turns an SDR into a network receiver for the VibeSDR apps and any browser.
-Tested on **Debian 13 (trixie)** on a Raspberry Pi 500 (arm64). Should work on any
-Debian/Ubuntu/Raspberry Pi OS.
+Runs on **Debian 12 or 13, Ubuntu 22.04 or newer, and Raspberry Pi OS** (bookworm or trixie, 32-
+or 64-bit), and on distributions built on them. Tested on Debian 13 (trixie) on a Raspberry Pi 500
+(arm64) and Ubuntu 24.04 on an Intel i5; installed and started in clean Debian 12, Debian 13,
+Ubuntu 22.04 and Ubuntu 24.04 containers. **Debian 11 and Ubuntu 20.04 are too old** — the package
+needs glibc 2.35, and apt cannot install it there.
+
+★ Ubuntu 22.04 needs a package **newer than 11.0.5-1**. Earlier packages linked the distribution's `libhackrf0`
+and asked for a newer one than 22.04 has; since then every radio and codec library is built into
+VibeServer itself, so the only library the package names is the C library.
 
 ## Hardware
 
-One package for every architecture — apt picks **arm64**, **amd64** or **armhf** (32-bit ARM) to
-suit the machine. There is no separate "Lite" build on Linux.
+One package for every architecture — apt picks **arm64**, **amd64**, **armhf** (32-bit ARM) or
+**i386** (32-bit Intel/AMD) to suit the machine. There is no separate "Lite" build on Linux.
 
 - **Minimum confirmed hardware: Raspberry Pi 2** — quad-core ARMv7 at 0.9 GHz.
 - **RAM:** 256 MB will run it; **512 MB recommended** for headroom.
-- **32-bit ARM needs NEON** (ARMv7 or newer). ARMv6 boards — Pi Zero, Zero W, Pi 1 — are not
-  supported yet; the package refuses to install there rather than fail at runtime.
+- **32-bit ARM without NEON** — the ARMv6 Pi Zero, Zero W and Pi 1 — gets a scalar ARMv6 build
+  from the same armhf package (postinst picks it by CPU), and runs with restrictions.
+- **32-bit x86 needs SSE2** — any Pentium 4, Pentium M, Atom (the N270 netbooks included) or
+  Athlon 64. A Pentium III or Athlon XP has none, and the package refuses to install there rather
+  than fail at runtime. SDRplay publish no 32-bit x86 driver, so RSPs are not offered on i386.
 - Older or lower-end hardware will most likely run with restrictions: on a small machine the
   setup page measures what it can carry and switches heavy features off.
 
 ---
 
 ## Install
+
+One line, the same on every machine:
+
+```bash
+curl -fsSL https://apt.vibesdr.net/install.sh | sudo bash
+```
+
+It works out the system and the processor, checks the signing key's fingerprint
+(`2B54962707D8119929E1FB2BFC384096D89F0AE7`) before trusting it, adds the repository as the steps
+below do (naming this machine's own architecture, as apt.vibesdr.net's copy of them does), and
+installs the right package. **Run it again at any time** — it upgrades
+VibeServer and changes nothing else, and it repairs an older or duplicated repository line rather
+than adding another. On a Mac it offers the notarised app instead (run it without `sudo` there).
+The script is `scripts/install.sh` in this repository; every apt publish copies it to the site.
+
+Options go after `bash -s --`, or as environment variables, which pass through `sudo`:
+
+| | |
+|---|---|
+| `--auto-updates` / `VIBE_AUTO_UPDATES=1` | VibeServer updates itself (unattended-upgrades, **this repository only** — see below) |
+| `--no-auto-updates` / `VIBE_AUTO_UPDATES=0` | turn that off again |
+| `--dry-run` / `VIBE_DRY_RUN=1` | say what would be done, change nothing |
+
+### Or by hand
 
 Two commands to add the repository, then one to install. **`apt install` pulls in everything
 VibeServer needs** — there is no list of libraries to chase, and nothing to build.
@@ -27,7 +61,7 @@ VibeServer needs** — there is no list of libraries to chase, and nothing to bu
 # 1. Trust the signing key and add the repository (once, ever)
 curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
-echo "deb [arch=arm64,amd64,armhf signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+echo "deb [arch=arm64,amd64,armhf,i386 signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
   | sudo tee /etc/apt/sources.list.d/vibesdr.list
 
 # 2. Install
@@ -38,14 +72,19 @@ sudo apt install vibeserver
 > **Naming the architectures is deliberate** — it lists exactly what we publish. ★ `armhf` joined
 > on 2026-09-22 (32-bit Raspberry Pi OS on a Pi 2/3/4). An older line without it still works on a
 > 64-bit machine, but a 32-bit Pi needs `armhf` in the list or apt will never see its package.
+> `i386` joined on 2026-10-17 for the same reason: a 32-bit-only x86 machine (an Atom N270
+> netbook) sees nothing without it.
 >
 > ★ It says `arm64,amd64`, not `arm64`. It was `arm64` alone from before x86 was supported, and
 > that is not merely untidy on an Intel or AMD box — it tells apt to look for arm64 packages only,
 > so `apt install vibeserver` reports no installation candidate on a machine we DO ship for.
 
 
-That is the whole installation. Every runtime dependency — libusb, librtlsdr, libopus, ncurses,
-curl, gzip — is declared by the package and fetched by apt automatically.
+That is the whole installation. Every library VibeServer uses — libusb, librtlsdr, the Airspy and
+HackRF drivers, libopus, ncurses, the C++ runtime — is **built into it**, so it does not depend on
+your distribution's versions of any of them. The package needs only the C library and three
+everyday tools (`curl`, `gzip`, `adduser`), which apt fetches if they are missing. FFmpeg, for DAB+
+audio, is a recommended package and comes along by default.
 
 ★ **The one exception is the SDRplay RSP driver**, and it is not an oversight: SDRplay distribute
 it under their own licence and we are not permitted to redistribute it, so it can never be a
@@ -139,7 +178,24 @@ sudo apt update && sudo apt upgrade
 ```
 
 Your settings survive, and the service restarts on the new binary. That is all — the repository is
-the update channel, so there is nothing to download by hand and nothing to rebuild.
+the update channel, so there is nothing to download by hand and nothing to rebuild. The admin
+page's **Install updates** button does the same, and so does running the one-line installer again.
+
+### Automatic updates (opt-in)
+
+```bash
+curl -fsSL https://apt.vibesdr.net/install.sh | sudo VIBE_AUTO_UPDATES=1 bash
+```
+
+This writes one file, `/etc/apt/apt.conf.d/52vibesdr-auto-updates`, for unattended-upgrades:
+
+- **If the machine was not already updating itself**, the file limits unattended-upgrades to this
+  repository (`origin=VibeSDR,label=VibeSDR,site=apt.vibesdr.net`) and nothing else — it clears the
+  Debian/Ubuntu origin lists, so turning it on for VibeServer cannot quietly start upgrading the
+  operating system. If you later want automatic OS updates too, delete the file first.
+- **If it already was**, our origin is added to the ones it had, and nothing else changes.
+
+`--no-auto-updates` (or deleting the file) undoes it.
 
 ## Before you start: the SDRplay RSP needs one extra download
 
@@ -199,11 +255,18 @@ You do **not** need this to run VibeServer — the package above is the supporte
 working on the code.
 
 ```bash
-sudo apt install -y build-essential cmake git pkg-config \
-                    libusb-1.0-0-dev librtlsdr-dev libopus-dev libncurses-dev
+sudo apt install -y build-essential cmake git pkg-config curl bzip2 libncurses-dev
 git clone https://github.com/Stuey3D/VibeSDR.git
 cd VibeSDR/vibeserver
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+linux/build-deps.sh "$HOME/vibe-deps"      # libusb, libopus, librtlsdr from pinned source
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBE_LINUX_DEPS="$HOME/vibe-deps"
 cmake --build build -j$(nproc)
 cd build && cpack && sudo apt install ./vibeserver_*.deb
 ```
+
+★ `build-deps.sh` builds the same pinned libraries the published package links, statically — so
+your build depends on nothing but the C library, like the real one. Leave out `-DVIBE_LINUX_DEPS`
+and CMake links your distribution's `libusb-1.0-0-dev librtlsdr-dev libopus-dev` instead (install
+those), which is fine for working on the code but makes a package tied to your distribution.
+Release packages are built in `vibeserver/linux/Dockerfile.build` (bookworm), which refuses a
+package whose `Depends:` names any library but `libc6`.

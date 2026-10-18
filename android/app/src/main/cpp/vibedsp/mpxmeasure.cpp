@@ -5,6 +5,7 @@
 //     flat filter, so neither the listener's passband, auto bandwidth nor the capture rate can move
 //     a transmitter constant. The listener's audio and RDS decoder are untouched by any of it.
 #include "vibedsp.h"
+#include "vibe_denormals.h"
 #if defined(__linux__)
 #include <pthread.h>
 #endif
@@ -86,6 +87,7 @@ void MpxMeasure::startWorker_() {
     thr_ = std::thread([this] {
         // ★★ DECODER PRIORITY — the bottom of Network > Audio > Spectrum > Decoders. The host maps
         //    "vibe-mpx" to it (local_sdr_shim.cpp); an instrument must never be what makes audio late.
+        vibe::vibeFlushDenormals();   // ★ its meters are the recursive filters that decay into denormals
         if (RxPipeline::workerInit()) RxPipeline::workerInit()("vibe-mpx");
 #if defined(__linux__)
         else pthread_setname_np(pthread_self(), "vibe-mpx");

@@ -586,10 +586,10 @@
       <div class="panel">
         <div class="panel-h"><span class="lbl">No spare Android?</span><span class="lbl on" id="vsVer">Mac · Linux</span></div>
         <div class="panel-b">
-          <p>The same server runs native on Apple Silicon as a menu-bar app, and on Linux, arm64 and amd64, from our apt repository. Plug in an RTL-SDR, an Airspy HF+, an Airspy R2 or Mini, or an SDRplay RSP, click <b>Open in Browser</b>, and tune. Several receivers can sit behind one address; listeners pick from a front page that shows what's free.</p>
+          <p>The same server runs native on Apple Silicon as a menu-bar app, and on Linux from our apt repository — 64-bit PCs and Raspberry Pis, 32-bit Raspberry Pis down to the Pi Zero, and even old 32-bit PCs and netbooks (Pentium 4 or newer). Plug in an RTL-SDR, an Airspy HF+, an Airspy R2 or Mini, or an SDRplay RSP, click <b>Open in Browser</b>, and tune. Several receivers can sit behind one address; listeners pick from a front page that shows what's free.</p>
           <ul class="ticks">
             <li><b>macOS</b> on Apple Silicon, notarised, so it opens cleanly.</li>
-            <li><b>Linux</b>: a Raspberry Pi, an old laptop, a NUC, a home server. Tested on Debian and Ubuntu; other distributions are likely to work but are unverified.</li>
+            <li><b>Linux</b>: a Raspberry Pi, an old laptop, a NUC, a home server. Debian 12 or newer, Ubuntu 22.04 or newer, and Raspberry Pi OS, in one line: <code style="overflow-wrap:anywhere">curl -fsSL https://apt.vibesdr.net/install.sh | sudo bash</code>. Run it again to update.</li>
             <li><b>Android</b>: built into the app. Tap <b>Use as server</b>.</li>
           </ul>
           <div class="keys">
@@ -725,7 +725,7 @@
         <p style="margin-top:8px">Switch <b>Raw IQ out</b> on in the client's audio controls and the channel you are tuned to becomes an rtl_tcp stream. Point SDR++, SDR#, GQRX, DSD-FME or anything else that speaks rtl_tcp at it. Tuning from that app moves the dial on the receiver, and the web client keeps playing.</p>
         <p style="margin-top:8px"><b>On your own network</b> nothing else is needed: the client shows the receiver's address and port and your app connects straight to it. A single-listener radio gives you the full 2.4 MHz; a multi-listener radio with individual VFOs gives each listener 250 kHz. <b>Through the tunnel</b> the client shows a six-character code instead. Run VibeIQ on your machine, type the code, and the stream arrives on <code>127.0.0.1:1234</code>, 48 kHz wide, which covers every digital voice and data mode.</p>
         <p class="fine">VibeIQ is one static binary for macOS, Linux and Windows, nothing to install. Needs a receiver whose owner has enabled Raw IQ out.</p>
-        <div class="keys"><a class="key" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeiq-v1.0.0">Download VibeIQ 1.0</a></div>
+        <div class="keys"><a class="key" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeiq-v1.0.1">Download VibeIQ 1.0.1</a></div>
       </div>
     </div>
   </div>
@@ -919,7 +919,12 @@ function radioState(r, s) {
   const claimable = r.claimable === true || (solo && s && s.claimable === true);
   const isFull = said !== null && max > 0 && said >= max && !claimable;
   const down = !!(s && s.unreachable);
+  // ★★★ HELD BY ANOTHER PROGRAM ON THAT SERVER — the server's word (inUseElsewhere), the directory's radioInUse
+  //     rule. Its listener count is 0 because nobody CAN listen, so without this it read "free", in green
+  //     (2026-10-18: the Lenovo's RSP1A, held by OpenWebRX for 17 hours).
+  const inUse = !down && (r.inUseElsewhere === true || (solo && s && s.inUseElsewhere === true));
   const text = down ? 'not responding'
+             : inUse ? 'in use by another app'
              : said === null ? ''
              : isFull ? (freeIn > 0 ? `full · free in ${mmss(freeIn)}` : 'full')
              : claimable && said >= max ? 'free · take over'
@@ -928,7 +933,7 @@ function radioState(r, s) {
   const extras = [];
   if (r.restricted && !r.locked && !(Array.isArray(r.allowedNames) && r.allowedNames.length)) extras.push('restricted range');
   if (s && Number(s.limitMin) > 0) extras.push(`${s.limitMin} minute limit`);
-  return { kind, text, cls: down ? 'unk' : isFull ? 'full' : said === null ? 'unk' : 'free', extras };
+  return { kind, text, cls: down ? 'unk' : inUse || isFull ? 'full' : said === null ? 'unk' : 'free', extras };
 }
 /** The directory's own segment rule, reduced: free beats temporary-free beats unknown beats busy. */
 function segments(items) {

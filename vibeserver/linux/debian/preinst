@@ -1,6 +1,23 @@
 #!/bin/sh
 # ★ (2026-09-22) The armhf package now carries an ARMv6 scalar build as well, and postinst installs
-#   it on a CPU without NEON — so nothing is refused here any more. Kept as an empty hook so a later
-#   release has somewhere to put a pre-install check without changing the package layout.
+#   it on a CPU without NEON — so nothing is refused for armhf any more.
 set -e
+
+# ★★★ i386: SSE2 OR NOTHING (2026-10-17). The i386 build is compiled -msse2 -mfpmath=sse — every
+#     float, every DSP kernel — so a CPU without SSE2 (Pentium III, Athlon XP, Via C3) would install
+#     cleanly and then die "Illegal instruction" the moment a radio starts, which reads as a broken
+#     server rather than an old processor. Refused HERE, before anything is unpacked, in words.
+#  ★★ Unlike armhf there is no scalar build to fall back to: Stuart chose the SSE2 floor ("keep the
+#     sse2 requirement"), which still reaches the 2003 Pentium M and every Atom netbook.
+#  ★ DPKG_MAINTSCRIPT_ARCH is the PACKAGE's architecture (dpkg sets it); a 64-bit CPU always has
+#    SSE2, so only the i386 package ever needs to look. /proc may be absent in a chroot or image
+#    build — then there is nothing to read, and refusing would only break the image.
+ARCH="${DPKG_MAINTSCRIPT_ARCH:-$(dpkg --print-architecture 2>/dev/null || echo unknown)}"
+if [ "$ARCH" = "i386" ] && [ -r /proc/cpuinfo ] && grep -q '^flags' /proc/cpuinfo \
+   && ! grep -qw sse2 /proc/cpuinfo; then
+  echo "VibeServer: this processor has no SSE2, and the 32-bit x86 (i386) build needs it." >&2
+  echo "  Any Pentium 4, Pentium M, Atom, Athlon 64 or newer has it; a Pentium III or Athlon XP" >&2
+  echo "  does not. Nothing has been installed." >&2
+  exit 1
+fi
 exit 0

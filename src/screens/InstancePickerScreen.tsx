@@ -2303,6 +2303,26 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 ⚠ Owner does not allow third-party apps — opens in compatibility mode
               </Text>
             )}
+            {/* ★★★ A RADIO ANOTHER PROGRAM ON THAT SERVER IS HOLDING (Stuart, 2026-10-18: "make it so the
+                directory shows the server but shows the radio in use in another app"). The server stays
+                listed — it is up, and its other radios may be free — but the row says so BEFORE the tap,
+                rather than letting somebody walk into a radio that cannot start. The server's word only
+                (inUseElsewhere); an older server never sends it and its row is unchanged. */}
+            {(() => {
+              const rs = inst.serverType === 'vibeserver' ? (inst.radios ?? []) : [];
+              const held = rs.filter((r) => r.inUseElsewhere === true);
+              if (!held.length) return null;
+              const txt = rs.length === 1
+                ? 'Radio in use by another app on that server — try again later'
+                : held.length === rs.length
+                  ? `All ${rs.length} radios in use by another app on that server`
+                  : `${held.map((r) => r.label).join(', ')} in use by another app on that server`;
+              return (
+                <Text style={{ fontFamily: F, fontSize: fs(11), ...meaningText(C.m, C.bad), marginTop: 2 }} numberOfLines={2}>
+                  ⚠ {txt}
+                </Text>
+              );
+            })()}
             {/* The hardware as the receiver itself reports it — "KiwiSDR 2 v1.902", "Web-888 …". */}
             {inst.hardware ? (
               <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, marginTop: 2 }} numberOfLines={1}>

@@ -1,6 +1,7 @@
 // VibeSDR V5 — RxPipeline: IQ -> {spectrum, audio}. Original VibeSDR code.
 #include <chrono>
 #include "vibedsp.h"
+#include "vibe_denormals.h"
 #if defined(__linux__)
 #include <pthread.h>
 #endif
@@ -85,6 +86,7 @@ void RxPipeline::startDemodThread_() {
     demodHead_ = demodCount_ = 0; demodBusy_ = demodStop_ = false;
     demodOn_ = true;
     demodThread_ = std::thread([this] {
+        vibe::vibeFlushDenormals();   // ★ ours, whatever the host's workerInit does — see vibe_denormals.h
         if (workerInit()) workerInit()("vibe-demod");
 #if defined(__linux__)
         else pthread_setname_np(pthread_self(), "vibe-demod");
@@ -152,6 +154,7 @@ void RxPipeline::startSpecThread_() {
     specStop_ = false;
     specThreadOn_ = true;
     specThread_ = std::thread([this] {
+        vibe::vibeFlushDenormals();
         if (workerInit()) workerInit()("vibe-spec");
 #if defined(__linux__)
         else pthread_setname_np(pthread_self(), "vibe-spec");

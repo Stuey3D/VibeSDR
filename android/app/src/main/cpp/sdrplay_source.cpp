@@ -11,6 +11,8 @@
 #include <sys/stat.h>
 #include <functional>
 #include <cstring>
+#include <atomic>
+#include <memory>
 #include <algorithm>     // ★ std::find — the antenna name check
 #include <mutex>
 #include <vector>
@@ -305,23 +307,33 @@ bool withTimeout(F&& fn, int ms) {
 }
 }  // namespace
 
+namespace { std::atomic<bool> g_lastListOk{false}; }
+
 int SdrplaySource::deviceCount() {
+    g_lastListOk.store(false);
     if (g_apiGiveUp.load()) return 0;      // wedged and already reported — do not re-block
-    int out = 0;
-    withTimeout([&out]{
+    // ★ Shared, not captured by reference: if the deadline passes, the detached worker may still
+    //   finish later, and it must not write into this returned-from frame.
+    auto out = std::make_shared<std::atomic<int>>(0);
+    auto ok  = std::make_shared<std::atomic<bool>>(false);
+    const bool answered = withTimeout([out, ok]{
         std::string err;
         if (!apiOpen(err)) return;
         sdrplay_api_DeviceT devs[SDRPLAY_MAX_DEVICES];
         unsigned int n = 0;
         api().Lock();
-        api().GetDevices(devs, &n, SDRPLAY_MAX_DEVICES);
+        const sdrplay_api_ErrT e = api().GetDevices(devs, &n, SDRPLAY_MAX_DEVICES);
         api().Unlock();
         apiClose();
-        out = (int)n;
+        out->store((int)n);
+        ok->store(e == sdrplay_api_Success);
     }, 2000);
     if (g_apiHung.load()) g_apiGiveUp.store(true);
-    return out;
+    g_lastListOk.store(answered && ok->load());
+    return out->load();
 }
+
+bool SdrplaySource::lastListOk() { return g_lastListOk.load(); }
 
 std::string SdrplaySource::deviceName(int index) {
     if (g_apiGiveUp.load()) return "";
@@ -1796,6 +1808,7 @@ SdrplaySource::SdrplaySource() = default;
 SdrplaySource::~SdrplaySource() = default;
 bool SdrplaySource::available() { return false; }
 int  SdrplaySource::deviceCount() { return 0; }
+bool SdrplaySource::lastListOk() { return false; }
 std::string SdrplaySource::deviceName(int) { return ""; }
 bool SdrplaySource::open(int, double, double, int, std::string& err) {
     err = "this build has no SDRplay support";

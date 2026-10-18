@@ -106,12 +106,19 @@ Judge it on the feel. That's the part a screenshot can't show, and the part we c
 audio, Advanced RDS, DAB and DAB+, the decoders, an optional PIN, per-band gain ceilings and session
 limits. Several radios can sit behind one address.
 
-**Linux** (arm64, amd64 and armhf):
+**Linux** (arm64, amd64, armhf and i386 — Debian 12+, Ubuntu 22.04+, Raspberry Pi OS). One line,
+the same on every machine; run it again to upgrade:
+
+```bash
+curl -fsSL https://apt.vibesdr.net/install.sh | sudo bash
+```
+
+Or by hand:
 
 ```bash
 curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
-echo "deb [arch=arm64,amd64,armhf signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+echo "deb [arch=arm64,amd64,armhf,i386 signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
   | sudo tee /etc/apt/sources.list.d/vibesdr.list
 sudo apt update && sudo apt install vibeserver
 ```
@@ -123,7 +130,8 @@ your phone, or plug in a cable and open `http://vibeserversetup.local:48000`. It
 the admin page; a new card is only for a new box.
 
 **macOS.** A notarised menu-bar app for Apple Silicon, from
-[the releases](https://github.com/Stuey3D/VibeSDR/releases). Unzip, drag to Applications.
+[the releases](https://github.com/Stuey3D/VibeSDR/releases). Unzip, drag to Applications — or run the
+same one-liner **without** `sudo` and it downloads it, checks the signature and installs it for you.
 
 **Android.** In the app, plug in the radio and tap **Use as server**. For a box that does nothing
 else, **VibeServer Lite** is the server on its own for Android TV boxes, old phones and tablets
@@ -254,7 +262,7 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 | Name | Licence | Where |
 |---|---|---|
 | **librtlsdr / rtl_tcp** — Osmocom rtl-sdr 2.0.3, Steve Markgraf & contributors | GPL-2.0-or-later | Android Local Hardware, VibeServer (all hosts), Lite; patched to open an Android USB handle |
-| **libusb** | LGPL-2.1-or-later | Android, Lite, VibeServer (static on macOS) |
+| **libusb** | LGPL-2.1-or-later | Android, Lite, VibeServer (linked statically on macOS and Linux) |
 | **libairspyhf** — Airspy | BSD-3-Clause | Airspy HF+ driver; patched for Android USB handles |
 | **libairspy** — Airspy (Vernoux, Touil, Gilmour) | BSD-3-Clause + MIT (IQ converter, filters) | Airspy R2 / Mini driver, unmodified |
 | **libhackrf** — Great Scott Gadgets | BSD-3-Clause (library source) | HackRF driver; patched to open from a USB fd |
@@ -263,6 +271,7 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 | **PFFFT** — Julien Pommier, after FFTPACK (© 2004 UCAR) | FFTPACK licence (BSD-style) | The DAB receiver's OFDM FFT |
 | **ft8_lib** — Kārlis Goba (YL3JG) | MIT | FT8 / FT4 decoding |
 | **Opus** — Xiph.Org Foundation | BSD-3-Clause | The streaming codec: VibeServer encodes, the app, watch and web client decode |
+| **ncurses** — Thomas E. Dickey & the Free Software Foundation | X11 (MIT-style) | VibeServer on Linux: the settings wizard, linked into the binary |
 | **[opus-decoder / wasm-audio-decoders](https://github.com/eshaz/wasm-audio-decoders)** — Ethan Halsall | MIT | libopus in WebAssembly — how VibeServer's web client decodes Opus on a plain `http://` LAN address |
 | **cloudflared** — Cloudflare | Apache-2.0 | The tunnel that lets a VibeServer be reached without port forwarding |
 | **MapLibre GL JS** — MapLibre contributors | BSD-3-Clause | The GPU map engine (app, web client, directory) |

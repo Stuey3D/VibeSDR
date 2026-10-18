@@ -4641,6 +4641,7 @@ static LocalSdrShim::RadiosFn      g_vsRadiosFn;
 static LocalSdrShim::UnlockFn      g_vsUnlockFn;
 static std::atomic<int>            g_vsRadiosReqProto{0};   // the proto of the request being answered
 static LocalSdrShim::HandoffFn     g_vsHandoffFn;
+static LocalSdrShim::RadioDownFn   g_vsRadioDownFn;   // ★ guarded by g_vsConfigMtx, like the router
 /// Our own "/r/<serial>" prefix, stripped from every request that arrives with it.
 static std::string                 g_vsPathPrefix;
 /** ★ The same radio under its other name. Links use the opaque id; older links, bookmarks and
@@ -5651,6 +5652,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     void spyFftLoop() {
         vibeThreadName("vibe-spy-fft");
+        vibe::vibeFlushDenormals();   // ★ a spectrum thread by another name — see vibedsp/vibe_denormals.h
         std::vector<uint8_t> frame;
         while (spyFftRunning.load()) {
             {
@@ -10215,11 +10217,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (idx < 0) idx = 0; else if (idx >= bins) idx = bins - 1;
                 return srcRow[idx];
             };
+            /* ★ floor/ceil by truncation (2026-10-18): on 32-bit x86 std::floor is a real libm CALL
+             *  (no SSE4.1 round, and the result comes back through the x87 stack) — three per output
+             *  bin per frame per listener showed up as 1.6 % of the i386 server. Exact for any bin
+             *  offset that fits an int, which every one here does. */
+            auto ifloor = [](double x) { const int t = (int)x; return t - (x < (double)t ? 1 : 0); };
+            auto iceil  = [](double x) { const int t = (int)x; return t + (x > (double)t ? 1 : 0); };
             for (int i = 0; i < outBins; i++) {
                 int signedOut = (i <= outBins / 2) ? i : i - outBins;
                 double center = signedOut * step - hwOffsetBin + viewOffsetBin;  // signed src offset from DC
-                int lo = (int)std::floor(center - step / 2.0);
-                int hi = (int)std::ceil(center + step / 2.0);
+                int lo = ifloor(center - step / 2.0);
+                int hi = iceil(center + step / 2.0);
                 if (hi <= lo) hi = lo + 1;
                 if (hi <= loValid || lo >= hiValid) { frame[22+i] = 0; continue; }  // wholly outside
                 if (lo < loValid) lo = loValid;      // partly outside: peak-hold the REAL part only
@@ -10233,7 +10241,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *  smooth curve between real points is what the eye expects, and it costs one
                      *  multiply per bin. */
                     const double c = center;
-                    const int i0 = (int)std::floor(c);
+                    const int i0 = ifloor(c);
                     const double f = c - (double)i0;
                     const float a = srcAt(std::max(loValid, std::min(hiValid - 1, i0)));
                     const float b = srcAt(std::max(loValid, std::min(hiValid - 1, i0 + 1)));
@@ -10388,9 +10396,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     lesser one won because it was the one on the wire.
              * ★ Every 4th bin: 4000 samples is far more than a percentile needs, and it keeps this
              *   O(n) with the vector reused, allocating nothing per frame. */
-            edgeBins_.clear();
-            for (int i = -(bins/2) + deadBins; i <= (bins/2 - 1) - deadBins; i += 4)
-                edgeBins_.push_back((float)dbAt(i));
+            /* ★ Sized once and written by index (2026-10-18): a push_back per bin is an out-of-line
+             *  call with a capacity check each time — vector<float>::emplace_back was 1.5-2 % of the
+             *  server's instructions in the Lenovo's WFM profile, between this loop and the contrast
+             *  one below. Same values, same order. */
+            {
+                const int e0 = -(bins/2) + deadBins, e1 = (bins/2 - 1) - deadBins;
+                const int en = e1 >= e0 ? (e1 - e0) / 4 + 1 : 0;
+                edgeBins_.resize((size_t)en);
+                for (int k = 0; k < en; ++k) edgeBins_[(size_t)k] = (float)dbAt(e0 + 4 * k);
+            }
             double floorDbNow = 0.0; const int eN = (int)edgeBins_.size();
             if (eN) {
                 const size_t k = edgeBins_.size() / 4;
@@ -10652,15 +10667,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  ★ 90th percentile against 25th, over the usable window: the top of the stations
              *    against the floor between them.
              */
-            contrastBins_.clear();
-            for (int i = -(bins/2) + deadBins; i < bins/2 - deadBins; i++)
-                contrastBins_.push_back((float)dbAt(i));
+            {   // ★ by index, not push_back — see edgeBins_ above
+                const int c0 = -(bins/2) + deadBins, c1 = bins/2 - deadBins;
+                contrastBins_.resize((size_t)std::max(0, c1 - c0));
+                for (int i = c0; i < c1; i++) contrastBins_[(size_t)(i - c0)] = (float)dbAt(i);
+            }
             if (contrastBins_.size() > 16) {
                 const size_t hi9 = (contrastBins_.size() * 9) / 10;
                 const size_t lo2 = contrastBins_.size() / 4;
                 std::nth_element(contrastBins_.begin(), contrastBins_.begin() + hi9, contrastBins_.end());
                 const float top = contrastBins_[hi9];
-                std::nth_element(contrastBins_.begin(), contrastBins_.begin() + lo2, contrastBins_.end());
+                // ★ Only the part BELOW hi9 (2026-10-18): the first partition already put every value
+                //   ≤ top in front of it, so the 25th percentile of the whole set is the lo2-th of
+                //   that prefix. The identical answer; measured, it saves only ~1 % of nth_element's
+                //   instructions (the 90th-percentile pass dominates), but it costs nothing.
+                std::nth_element(contrastBins_.begin(), contrastBins_.begin() + lo2, contrastBins_.begin() + hi9);
                 bandContrastDb.store(top - contrastBins_[lo2]);
             }
             if (cN) channelDbWide.store((float)(cSum / cN));
@@ -17042,6 +17063,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //   were once the radio is back, and bouncing them elsewhere would lose the very
                 //   thing they were trying to keep.
                 const bool wasRadio = path0.rfind("/r/", 0) == 0;
+                /* ★★★ …UNLESS WE KNOW WHY IT IS NOT ANSWERING. A radio held by another program never
+                 *  starts, so this was every reader's answer for as long as that program ran — and the
+                 *  directory page, given a 503, fell back to the machine's figures and drew the radio
+                 *  FREE. The daemon says what it knows (setRadioDownAnswer); its /vibeserver.json is
+                 *  then a real answer, 200, and its page says the true sentence. */
+                std::string downJson;
+                if (wasRadio) {
+                    RadioDownFn fn;
+                    { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsRadioDownFn; }
+                    if (fn) downJson = fn(path0);
+                }
+                const bool inUseElsewhere = !downJson.empty();
+                if (inUseElsewhere) {
+                    const size_t seg = path0.find('/', 3);
+                    std::string rest = seg == std::string::npos ? std::string("/") : path0.substr(seg);
+                    const size_t q = rest.find_first_of("?#");
+                    if (q != std::string::npos) rest.resize(q);
+                    if (rest == "/vibeserver.json") {
+                        sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                      "Access-Control-Allow-Origin: *\r\n"
+                                      "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                                      + std::to_string(downJson.size()) + "\r\n\r\n" + downJson);
+                        sock->close(); return;
+                    }
+                }
                 const std::string body = std::string(
                     "<!doctype html><meta charset=utf-8>"
                     "<title>VibeServer</title>"
@@ -17049,7 +17095,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     "display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}"
                     "div{max-width:32em;padding:2em}a{color:#ffb000}</style><div>"
                     "<h1 style='font-size:1.2em;letter-spacing:.1em'>VIBESERVER</h1><p>")
-                    + (wasRadio
+                    + (inUseElsewhere
+                        ? "That radio is in use by another program on this computer, so VibeServer "
+                          "cannot serve it right now. It will be back by itself as soon as that "
+                          "program lets go of it."
+                        : wasRadio
                         ? "That radio is not answering at the moment. It may be starting up, or it "
                           "may have been stopped."
                         : "This is the front door. It lists the radios on this machine; the "
@@ -27757,6 +27807,10 @@ int LocalSdrShim::minProtoNumber()     { return VS_MIN_PROTO; }
 void LocalSdrShim::setHandoffRouter(HandoffFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsHandoffFn = std::move(fn);
+}
+void LocalSdrShim::setRadioDownAnswer(RadioDownFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsRadioDownFn = std::move(fn);
 }
 
 void LocalSdrShim::setPathPrefix(const std::string& prefix, const std::string& alt) {

@@ -26,6 +26,11 @@
 //   from the rest instead of moving everything up together. A thread that merely must not be
 //   forgotten gets a NAME and nothing else.
 #pragma once
+// ★★ EVERY ROLE THAT RUNS DSP ALSO FLUSHES DENORMALS (2026-10-18) — audio, spectrum, decoder and the
+//    IQ input, on every platform. One call at the top of the thread, folded in here because these are
+//    already the one place each real-time thread announces itself. Why: vibedsp/vibe_denormals.h.
+//    Network, bulk and plain named threads do no DSP and are left alone.
+#include "vibedsp/vibe_denormals.h"
 
 #if defined(__ANDROID__) || defined(__linux__)
   #include <sys/resource.h>   // setpriority
@@ -39,6 +44,7 @@
 
   inline void vibeAudioThread(const char* name) {
       prctl(PR_SET_NAME, name);
+      vibe::vibeFlushDenormals();
       errno = 0;
       // = Android's Process.THREAD_PRIORITY_URGENT_AUDIO.
       if (setpriority(PRIO_PROCESS, 0, -19) != 0 && errno != 0) {
@@ -61,8 +67,8 @@
       (void)setpriority(PRIO_PROCESS, 0, nice);   // ★ best effort — vibeAudioThread warns for all
   }
   inline void vibeNetThread(const char* name)      { vibeNiceThread_(name, -20); }
-  inline void vibeSpectrumThread(const char* name) { vibeNiceThread_(name, -5); }
-  inline void vibeDecoderThread(const char* name)  { vibeNiceThread_(name, 10); }
+  inline void vibeSpectrumThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, -5); }
+  inline void vibeDecoderThread(const char* name)  { vibe::vibeFlushDenormals(); vibeNiceThread_(name, 10); }
   /* ★★★ BULK HTTP — BELOW THE WHOLE ORDER. Map tiles, the map data, the web client's scripts:
    *  bytes somebody is waiting for, but nobody HEARS late. A zoom-out on the GPU map fires dozens of
    *  PMTiles range reads at once, each on its own connection thread, and those threads sat at nice
@@ -85,6 +91,7 @@
    *     costs the rest nothing. */
   inline void vibeIqThread(const char* name) {
       prctl(PR_SET_NAME, name);
+      vibe::vibeFlushDenormals();
       errno = 0;
       if (setpriority(PRIO_PROCESS, 0, -20) != 0 && errno != 0) vibeAudioThread(name);
   }
@@ -105,6 +112,7 @@
    *    wrong declaration is worse than a good QoS. */
   inline void vibeAudioThread(const char* name) {
       pthread_setname_np(name);
+      vibe::vibeFlushDenormals();
       pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   }
   // ★ macOS has no finer class above USER_INTERACTIVE; network shares it, the rest step down.
@@ -114,10 +122,12 @@
   }
   inline void vibeSpectrumThread(const char* name) {
       pthread_setname_np(name);
+      vibe::vibeFlushDenormals();
       pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
   }
   inline void vibeDecoderThread(const char* name) {
       pthread_setname_np(name);
+      vibe::vibeFlushDenormals();
       pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
   }
   // ★ Bulk HTTP (see the Linux note): the lowest class that still makes steady progress.
@@ -128,14 +138,15 @@
   // ★ The IQ input — see the Linux note. macOS has nothing above USER_INTERACTIVE to give it.
   inline void vibeIqThread(const char* name) {
       pthread_setname_np(name);
+      vibe::vibeFlushDenormals();
       pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   }
 #else
   inline void vibeThreadName(const char*) {}
-  inline void vibeAudioThread(const char*) {}
+  inline void vibeAudioThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeNetThread(const char*) {}
-  inline void vibeSpectrumThread(const char*) {}
-  inline void vibeDecoderThread(const char*) {}
+  inline void vibeSpectrumThread(const char*) { vibe::vibeFlushDenormals(); }
+  inline void vibeDecoderThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeBulkThread(const char*) {}
-  inline void vibeIqThread(const char*) {}
+  inline void vibeIqThread(const char*) { vibe::vibeFlushDenormals(); }
 #endif

@@ -1,6 +1,7 @@
 // VibeSDR V4 — FT8 / FT4 decoder wrapper around ft8_lib (MIT).
 #include "ft8_decoder.h"
 #include "../vibe_clock.h"
+#include "../vibedsp/vibe_denormals.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -513,6 +514,7 @@ Ft8Decoder::~Ft8Decoder() {
 }
 
 void Ft8Decoder::workerLoop() {
+    vibe::vibeFlushDenormals();   // ★ its own thread, not a vibe_thread.h role — see vibedsp/vibe_denormals.h
     std::unique_lock<std::mutex> lk(wm);
     for (;;) {
         wcv.wait(lk, [this] { return pending || stop; });

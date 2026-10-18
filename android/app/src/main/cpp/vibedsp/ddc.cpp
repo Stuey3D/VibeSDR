@@ -120,10 +120,49 @@ std::vector<float> designLowpass(double cutoff, double transition, bool deepStop
 }
 
 // ── FIR decimator (complex stream, real taps) ────────────────────────────--
+// ★★ THE DELAY LINE IS NEVER SHRUNK (2026-10-18). process() used to resize buf_ up to K-1+n and back
+//    down to K-1 on every call, and growing a std::vector VALUE-INITIALISES the new tail — so every
+//    block was zero-filled and then immediately overwritten by the copy: _M_default_append was 2.5 %
+//    of the whole server on the Lenovo's WFM profile, pure waste. The buffer now keeps its size and
+//    only the history (the first K-1 samples) carries meaning between calls.
+// ★ kSlack: room past the block for the x86 banks to over-read (zeros, so they contribute nothing).
+static constexpr int kFirSlack = 32;   // ≥ the worst bank over-read: RealFir Lp_-K ≤ 18 floats
+
+#if VIBE_SSE
+#ifndef VIBE_FIR_BANK_MAX_FLOATS
+#define VIBE_FIR_BANK_MAX_FLOATS 2048
+#endif
+static inline bool aligned16(const void* p) { return ((uintptr_t)p & 15u) == 0; }
+/** A 16-byte-aligned window into `v`, sized `floats`, returned as the offset of its first float. */
+static int alignedBank(std::vector<float>& v, size_t floats) {
+    v.assign(floats + 4, 0.0f);
+    int off = 0;
+    while (!aligned16(v.data() + off)) ++off;
+    return off;
+}
+#endif
+
+// ★ decim < 1 is clamped to 1: the output-stepping loop in process() advances by decim_ (it used to
+//   count inputs, where 0 simply never fired; a step of 0 would never end).
 FirDecimator::FirDecimator(std::vector<float> taps, int decim)
-    : decim_(decim), phase_(decim), K_((int)taps.size()) {
+    : decim_(decim < 1 ? 1 : decim), phase_(decim < 1 ? 1 : decim), K_((int)taps.size()) {
     rtaps_.assign(taps.rbegin(), taps.rend());   // reversed for contiguous dot
-    buf_.assign(K_ - 1, cf32(0.0f, 0.0f));        // K-1 sample history
+    buf_.assign(K_ - 1 + kFirSlack, cf32(0.0f, 0.0f));   // K-1 sample history (+ slack)
+    buildBank_();
+}
+
+/** ★ x86: two banks of pair-duplicated reversed taps, the second shifted one sample later, each
+ *  Lp_ complex taps (a multiple of 8 = four SSE vectors per step). See sseDotAligned. */
+void FirDecimator::buildBank_() {
+#if VIBE_SSE
+    Lp_ = ((K_ + 1) + 7) & ~7;
+    if (4 * Lp_ > VIBE_FIR_BANK_MAX_FLOATS) { Lp_ = 0; bank_.clear(); return; }
+    bankOff_ = alignedBank(bank_, (size_t)4 * Lp_);
+    for (int p = 0; p < 2; ++p) {
+        float* b = bank_.data() + bankOff_ + (size_t)p * 2 * Lp_;
+        for (int k = 0; k < K_; ++k) b[2 * (k + p)] = b[2 * (k + p) + 1] = rtaps_[k];
+    }
+#endif
 }
 
 bool FirDecimator::retune(const std::vector<float>& taps) {
@@ -134,30 +173,50 @@ bool FirDecimator::retune(const std::vector<float>& taps) {
     // buf_ and phase_ are deliberately untouched: the delay line carries the signal across the
     // change and the decimation phase keeps the output sample grid aligned.
     rtaps_.assign(taps.rbegin(), taps.rend());
+    buildBank_();
     return true;
 }
 
 void FirDecimator::reset() {
     std::fill(buf_.begin(), buf_.end(), cf32(0.0f, 0.0f));
-    buf_.resize(K_ - 1);
     phase_ = decim_;
 }
 
 int FirDecimator::process(const cf32* in, int n, cf32* out) {
     // buf_ = [K-1 history][block]; y[i] = dot(rtaps_, &buf_[i]) over K samples.
-    buf_.resize((size_t)(K_ - 1 + n));
+    /* ★★ STEP FROM KEPT OUTPUT TO KEPT OUTPUT (2026-10-18). This walked every INPUT sample and counted
+     *  phase_ down to the next kept one — for a decimate-by-101 stage, 100 empty iterations per output,
+     *  each a read-modify-write of phase_ in memory (a store-forwarding chain): the hottest instruction in
+     *  the narrow-SSB profile was `subl $1, phase_`. The kept indices are just phase_-1, +decim, +decim…,
+     *  so loop over those and leave phase_ as the countdown to the next block's first one. Identical
+     *  outputs, identical phase carried across calls. */
+    const size_t used = (size_t)(K_ - 1 + n);
+    if (buf_.size() < used + kFirSlack) buf_.resize(used + kFirSlack);
     std::copy(in, in + n, buf_.begin() + (K_ - 1));
     const float* z = reinterpret_cast<const float*>(buf_.data());  // interleaved re/im
     int outn = 0;
-    for (int i = 0; i < n; ++i) {
-        if (--phase_ == 0) {
-            phase_ = decim_;
-            out[outn++] = dotCplx(rtaps_.data(), z + 2 * i, K_);
+#if VIBE_SSE
+    if (aligned16(z) && Lp_ > 0) {
+        // ★ The banks over-read up to Lp_-K_ samples past the window: keep that slack ZERO, so a
+        //   stale non-finite sample left there by an earlier block can never leak in (0 × NaN).
+        std::fill(buf_.begin() + used, buf_.begin() + used + kFirSlack, cf32(0.0f, 0.0f));
+        const float* bank = bank_.data() + bankOff_;
+        const int nv = Lp_ / 2;                          // 4-float vectors per bank
+        int i = phase_ - 1;
+        for (; i < n; i += decim_) {
+            const int p = i & 1;                         // samples are 8 bytes: two phases
+            out[outn++] = sseDotCplxAligned(bank + (size_t)p * 2 * Lp_, z + 2 * (i - p), nv);
         }
+        phase_ = i - n + 1;
+    } else
+#endif
+    {
+        int i = phase_ - 1;
+        for (; i < n; i += decim_) out[outn++] = dotCplx(rtaps_.data(), z + 2 * i, K_);
+        phase_ = i - n + 1;
     }
     // Carry the last K-1 samples as the next call's history.
-    std::copy(buf_.end() - (K_ - 1), buf_.end(), buf_.begin());
-    buf_.resize(K_ - 1);
+    std::copy(buf_.begin() + n, buf_.begin() + used, buf_.begin());
     return outn;
 }
 
@@ -318,37 +377,65 @@ void SsbDemod::process(const cf32* in, float* out, int n) {
 }
 
 // ── Real FIR (low-pass / optional decimate) ──────────────────────────────--
+// ★ Same never-shrunk delay line as FirDecimator, and on x86 four phase-shifted banks (real
+//   samples are 4 bytes, so a window can start at any of four offsets within 16 bytes).
 RealFir::RealFir(std::vector<float> taps, int decim)
-    : decim_(decim), phase_(decim), K_((int)taps.size()) {
+    : decim_(decim < 1 ? 1 : decim), phase_(decim < 1 ? 1 : decim), K_((int)taps.size()) {   // ★ see FirDecimator
     rtaps_.assign(taps.rbegin(), taps.rend());   // reversed for contiguous dot
-    buf_.assign(K_ - 1, 0.0f);                     // K-1 sample history
+    buf_.assign(K_ - 1 + kFirSlack, 0.0f);         // K-1 sample history (+ slack)
+    buildBank_();
+}
+
+void RealFir::buildBank_() {
+#if VIBE_SSE
+    Lp_ = ((K_ + 3) + 15) & ~15;                  // floats per bank: four SSE vectors per step
+    if (4 * Lp_ > VIBE_FIR_BANK_MAX_FLOATS) { Lp_ = 0; bank_.clear(); return; }
+    bankOff_ = alignedBank(bank_, (size_t)4 * Lp_);
+    for (int p = 0; p < 4; ++p) {
+        float* b = bank_.data() + bankOff_ + (size_t)p * Lp_;
+        for (int k = 0; k < K_; ++k) b[k + p] = rtaps_[k];
+    }
+#endif
 }
 
 bool RealFir::retune(const std::vector<float>& taps) {
     if ((int)taps.size() != K_) return false;   // see FirDecimator::retune
     rtaps_.assign(taps.rbegin(), taps.rend());
+    buildBank_();
     return true;
 }
 
 void RealFir::reset() {
     std::fill(buf_.begin(), buf_.end(), 0.0f);
-    buf_.resize(K_ - 1);
     phase_ = decim_;
 }
 
 int RealFir::process(const float* in, int n, float* out) {
     // buf_ = [K-1 history][block]; y[i] = dot(rtaps_, &buf_[i]) over K samples.
-    buf_.resize((size_t)(K_ - 1 + n));
+    const size_t used = (size_t)(K_ - 1 + n);
+    if (buf_.size() < used + kFirSlack) buf_.resize(used + kFirSlack);
     std::copy(in, in + n, buf_.begin() + (K_ - 1));
     int outn = 0;
-    for (int i = 0; i < n; ++i) {
-        if (--phase_ == 0) {
-            phase_ = decim_;
-            out[outn++] = dotReal(rtaps_.data(), buf_.data() + i, K_);
+#if VIBE_SSE
+    if (aligned16(buf_.data()) && Lp_ > 0) {
+        std::fill(buf_.begin() + used, buf_.begin() + used + kFirSlack, 0.0f);   // see FirDecimator
+        const float* bank = bank_.data() + bankOff_;
+        const float* z = buf_.data();
+        const int nv = Lp_ / 4;
+        int i = phase_ - 1;
+        for (; i < n; i += decim_) {
+            const int p = i & 3;
+            out[outn++] = sseAddv(sseDotAligned(bank + (size_t)p * Lp_, z + (i - p), nv));
         }
+        phase_ = i - n + 1;
+    } else
+#endif
+    {
+        int i = phase_ - 1;
+        for (; i < n; i += decim_) out[outn++] = dotReal(rtaps_.data(), buf_.data() + i, K_);
+        phase_ = i - n + 1;
     }
-    std::copy(buf_.end() - (K_ - 1), buf_.end(), buf_.begin());
-    buf_.resize(K_ - 1);
+    std::copy(buf_.begin() + n, buf_.begin() + used, buf_.begin());
     return outn;
 }
 

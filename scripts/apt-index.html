@@ -51,13 +51,15 @@
      <span class="ver">Current package: __ARCHVERSIONS__</span></p>
 
   <h2>Debian / Ubuntu / Raspberry Pi OS &mdash; ARM or Intel/AMD</h2>
-  <p>Tested on Debian 13 (trixie) and Raspberry Pi OS on a Pi 500, and on Ubuntu 24.04 on an
-     Intel i5. Anything <strong>arm64</strong> or <strong>amd64</strong> running Debian or Ubuntu
-     should work &mdash; the install below is the same command on either.</p>
-  <p><strong>One package, every architecture</strong> &mdash; apt picks arm64, amd64 or armhf
-     (32-bit ARM) to suit the machine. Minimum confirmed hardware: <strong>Raspberry Pi 2</strong>
-     (quad-core ARMv7, 0.9&nbsp;GHz); 512&nbsp;MB of RAM recommended. 32-bit ARM needs NEON, so ARMv6
-     boards (Pi Zero, Zero W, Pi 1) are not supported yet.</p>
+  <p><strong>Debian 12 or 13, Ubuntu 24.04 or newer, and Raspberry Pi OS</strong> (bookworm or
+     trixie, 32- or 64-bit), plus distributions built on them. Tested on Debian 13 and Raspberry Pi
+     OS on a Pi 500, and on Ubuntu 24.04 on an Intel i5. Ubuntu 22.04 and Debian 11 are too old:
+     their libraries predate the ones VibeServer is built against.</p>
+  <p><strong>One package, every architecture</strong> &mdash; apt picks arm64, amd64, armhf
+     (32-bit ARM) or i386 (32-bit Intel/AMD, SSE2 or newer) to suit the machine. Minimum confirmed hardware: <strong>Raspberry Pi 2</strong>
+     (quad-core ARMv7, 0.9&nbsp;GHz); 512&nbsp;MB of RAM recommended. 32-bit ARM boards without
+     NEON (Pi Zero, Zero W, Pi 1) get a scalar ARMv6 build from the same package and run with
+     restrictions.</p>
   <p><strong>On Intel/AMD it runs the scalar path</strong>, which costs about
      <strong>12.8% of one core</strong> for a stereo FM listener at 1.92&nbsp;MSPS (measured on an
      i5-11300H). That is roughly twice what NEON costs on an Apple M4, and it does not matter:
@@ -65,10 +67,17 @@
      modern core carries a full receiver comfortably.</p>
 
   <h3>1. Install</h3>
-  <p>Copy and paste the whole block &mdash; it is <strong>the same block on ARM and on
-     Intel/AMD</strong>, because it asks your machine which one it is.
-     <strong>Nothing else needs installing</strong> &mdash; apt pulls in every library VibeServer
-     needs.</p>
+  <p>One line, <strong>the same on every machine</strong>: it works out which system and
+     processor it is on, checks the signing key, adds the repository and installs the right
+     package. <strong>Nothing else needs installing</strong> &mdash; apt pulls in every library
+     VibeServer needs.</p>
+<pre>curl -fsSL https://apt.vibesdr.net/install.sh | sudo bash</pre>
+  <p>Run it again whenever you like: it upgrades VibeServer and changes nothing else.
+     <a href="install.sh">Read the script</a> first if you prefer &mdash; it is commented
+     throughout.</p>
+  <p><strong>Or by hand</strong> &mdash; the same steps the script takes. Copy and paste the whole
+     block; it is the same on ARM and on Intel/AMD, because it asks your machine which one it
+     is.</p>
 <pre>curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
@@ -127,7 +136,12 @@ systemctl status sdrplay        # should be active (running)</pre>
   <h3>Updating</h3>
 <pre>sudo apt update &amp;&amp; sudo apt upgrade</pre>
   <p>Your settings survive and the service restarts on the new binary. The admin page has an
-     <strong>Install updates</strong> button that does the same thing from a browser.</p>
+     <strong>Install updates</strong> button that does the same thing from a browser, and
+     running the one-line installer again does it too.</p>
+  <p>To have VibeServer update itself, add <code>VIBE_AUTO_UPDATES=1</code>. It turns on
+     automatic updates for <strong>this repository only</strong>: if the machine was not already
+     updating itself, the operating system is left exactly as it was.</p>
+<pre>curl -fsSL https://apt.vibesdr.net/install.sh | sudo VIBE_AUTO_UPDATES=1 bash</pre>
 
   <h3>Prefer a single file?</h3>
   <p>Install the <code>.deb</code> with <code>apt install ./&hellip;</code> &mdash; with the
@@ -138,8 +152,12 @@ systemctl status sdrplay        # should be active (running)</pre>
 <pre>__DEBLINES__</pre>
 
   <h2>macOS</h2>
-  <p>A signed, notarised build — download, open, and it runs without a Gatekeeper argument.</p>
-  <p><a href="https://github.com/Stuey3D/VibeServer/releases/latest">Latest release →</a></p>
+  <p>A signed, notarised menu-bar app for Apple Silicon (macOS 14 or later) — download, open,
+     and it runs without a Gatekeeper argument.</p>
+  <p><a href="https://github.com/Stuey3D/VibeSDR/releases">Releases →</a> (the
+     <code>vibeserver-mac</code> one). Or let the same installer fetch it, check its signature
+     and put it in Applications &mdash; on a Mac, <strong>without</strong> <code>sudo</code>:</p>
+<pre>curl -fsSL https://apt.vibesdr.net/install.sh | bash</pre>
 
   <h2>Source</h2>
   <p>VibeServer is built from the VibeSDR tree — the same DSP engine, decoders and protocol the
@@ -148,7 +166,9 @@ systemctl status sdrplay        # should be active (running)</pre>
 
   <footer>
     Packages are signed with <code>ed25519/FC384096D89F0AE7</code>
-    (VibeSDR Package Signing &lt;packages@vibesdr.net&gt;).<br>
+    (VibeSDR Package Signing &lt;packages@vibesdr.net&gt;), fingerprint
+    <code>2B54&nbsp;9627&nbsp;07D8&nbsp;1199&nbsp;29E1&nbsp;FB2B&nbsp;FC38&nbsp;4096&nbsp;D89F&nbsp;0AE7</code>
+    &mdash; the installer refuses any other key.<br>
     This repository holds build artefacts only; issues and source live in the
     <a href="https://github.com/Stuey3D/VibeSDR">main repository</a>.
   </footer>

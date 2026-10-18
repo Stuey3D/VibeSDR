@@ -35,6 +35,7 @@
 #include "radiodns.h"
 #include "parent_watch.h"   // die-with-the-front-door; a no-op on Linux
 #include "crash_report.h"   // ★ a fatal signal names its thread and PC in the journal (2026-10-06)
+#include "vibedsp/vibe_denormals.h"   // ★ FTZ/DAZ inherited by every thread — see main()
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
 #include "airspy_source.h"
@@ -1184,11 +1185,37 @@ static int runningOursOf(const vsconfig::ServerConfig& srv, const vsconfig::Radi
     return n;
 }
 
-/** ★★★ DO WE KNOW ANOTHER PROGRAM HAS THIS RADIO? See vibe::knownInUseElsewhere for the rule. */
+/** ★★★ DO WE KNOW ANOTHER PROGRAM HAS THIS RADIO? See vibe::knownInUseElsewhere for the rule.
+ *  `rspListed`: how many RSPs a working SDRplay API listed in the enumeration just taken, -1 when
+ *  unknown — pass it ONLY for a radio that enumeration did not name (see rspListedIn). */
 static bool radioKnownInUse(const vsconfig::ServerConfig& srv, const vsconfig::RadioConfig& r,
-                            const vibe::UsbBusCounts& bus, bool rtlBusy) {
-    return vibe::knownInUseElsewhere(rtlBusy && r.driver == "rtlsdr", bus.forDriver(r.driver),
-                                     bus.claimedForDriver(r.driver), runningOursOf(srv, r));
+                            const vibe::UsbBusCounts& bus, bool rtlBusy, int rspListed = -1) {
+    return vibe::knownInUseFor(r.driver, rtlBusy, bus.forDriver(r.driver), bus.claimedForDriver(r.driver),
+                               runningOursOf(srv, r), rspListed);
+}
+
+/** ★★ THE SDRplay API'S OWN WORD, from a detectRadios() taken JUST NOW (SdrplaySource::lastListOk
+ *  describes the most recent enumeration, so call this straight after it): how many RSPs the API
+ *  listed, or -1 when the API did not answer — a dead service lists nothing and proves nothing. */
+static int rspListedIn(const std::vector<vibe::DetectedRadio>& detected) {
+    if (!vibe::SdrplaySource::lastListOk()) return -1;
+    int n = 0;
+    for (const auto& d : detected) if (d.driver == "sdrplay") n++;
+    return n;
+}
+
+/** The same question asked of the SDRplay API alone, for a running radio whose take-back failed —
+ *  no RTL is opened to answer it. -1 when the API did not answer OR it does list `serial` (then the
+ *  failure was something else, and the claimed-interface rule decides). */
+static int rspListedWithout(const std::string& serial) {
+    const int n = vibe::SdrplaySource::deviceCount();
+    if (!vibe::SdrplaySource::lastListOk()) return -1;
+    for (int i = 0; i < n; i++) {
+        const std::string nm = vibe::SdrplaySource::deviceName(i);
+        const size_t sp = nm.find_last_of(' ');
+        if (sp != std::string::npos && nm.substr(sp + 1) == serial) return -1;
+    }
+    return n;
 }
 
 /** "busy" records age out like the shim's radioBusy: we only learn it by failing to take the
@@ -1461,6 +1488,11 @@ int main(int argc, char** argv) {
 #else
     vibecrash::install("dev");
 #endif
+    /* ★ Denormals flushed on the main thread too, straight after the crash handler: Linux copies MXCSR/FPCR
+     *  into every thread created after this, so a radio library's own thread (libairspy's consumer, the RSP
+     *  callbacks) gets it without calling anything. The DSP threads also set it themselves (vibe_thread.h).
+     *  Why: vibedsp/vibe_denormals.h. */
+    vibe::vibeFlushDenormals();
     /* ★ The receiver's thread split (VIBE_DSP_THREADS / VIBE_DAB_SPLIT) was set here for 32-bit ARM and small
      *  aarch64. Since 2026-10-16 it is the default on every multi-core server, set in the shared code —
      *  g_vsSplitDefault in local_sdr_shim.cpp — so the Mac, the Android app and Lite run the same layout. */
@@ -2364,6 +2396,7 @@ int main(int argc, char** argv) {
             vsconfig::ServerConfig srv; std::string err;
             if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;
             const auto detected = vibe::detectRadios();
+            const int rspListed = rspListedIn(detected);   // ★ straight after the enumeration it describes
             const auto bus = vibe::usbBusCounts();
             auto label = [](const vsconfig::RadioConfig& r) { return r.label.empty() ? r.driver : r.label; };
 
@@ -2397,7 +2430,7 @@ int main(int argc, char** argv) {
                         // ★ Named but would not open: another program's only if the bus proves it.
                         p = radioKnownInUse(srv, r, bus, false) ? vibe::Presence::Busy
                                                                 : vibe::Presence::Uncertain;
-                    } else if (p == vibe::Presence::Uncertain && radioKnownInUse(srv, r, bus, false)) {
+                    } else if (p == vibe::Presence::Uncertain && radioKnownInUse(srv, r, bus, false, rspListed)) {
                         p = vibe::Presence::Busy;
                     }
                 }
@@ -3427,9 +3460,11 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "VibeServer: no radio with serial %s is attached\n",
                              o.radioSerial.c_str());
                 const auto all = vibe::detectRadios();
+                const int rspListed = rspListedIn(all);   // ★ straight after the enumeration it describes
                 /* ★★★ AND TELL THE SETUP PAGE, NOT ONLY THE JOURNAL (Stuart, 2026-10-04). The file
                  *  says "not found since T"; whether that is UNPLUGGED or LENT is judged by the front
                  *  door with the USB bus as witness (sdr_presence.h) — this process only reports. */
+                bool known = false;
                 {
                     const vsconfig::RadioConfig* me = nullptr;
                     for (const auto& r : g_serverConfig.radios)
@@ -3437,13 +3472,24 @@ int main(int argc, char** argv) {
                     // ★★ An RSP lent to OpenWebRX is exactly "not listed by the driver" — so ask the
                     //    bus whether another program is holding a radio of this kind before calling
                     //    it anything (sdr_presence.h). Read-only: descriptors and sysfs.
-                    const bool known = me && radioKnownInUse(g_serverConfig, *me, vibe::usbBusCounts(), false);
+                    // ★ vibe::radioRecordState — the one rule for what an attempt records (sdr_presence.h).
+                    if (me) {
+                        const auto bus = vibe::usbBusCounts();
+                        known = std::string(vibe::radioRecordState(me->driver, false, false, false,
+                                                                   bus.forDriver(me->driver), bus.claimedForDriver(me->driver),
+                                                                   runningOursOf(g_serverConfig, *me), rspListed)) == "busy";
+                    }
+                    if (known) std::fprintf(stderr, "VibeServer: radio %s is in use by another program on this "
+                                                    "machine — it will be picked up as soon as that program lets go\n",
+                                            o.radioSerial.c_str());
                     radioStatusWrite(o.radioSerial, me ? me->driver : "", known ? "busy" : "notfound",
                                      known ? "another program on this machine has it"
                                            : all.empty() ? "no radios are detected at all"
                                                          : "the driver did not list this serial");
                 }
-                if (all.empty()) {
+                // ★ Not "check the USB connection" about a radio we have just proved is plugged in and held.
+                if (known) {
+                } else if (all.empty()) {
                     std::fprintf(stderr, "VibeServer: no radios are detected at all — check the "
                                          "USB connection and permissions\n");
                 } else {
@@ -3493,10 +3539,16 @@ int main(int argc, char** argv) {
             if (port <= 0) {
                 // ★ An RTL's open says LIBUSB_ERROR_BUSY in its own words; the others, the bus can.
                 const bool rtlBusy = drv == "rtlsdr" && err.find("failed: -6 ") != std::string::npos;
-                bool known = false;
+                // ★ vibe::radioRecordState — the one rule for what an attempt records (sdr_presence.h).
+                const char* state = "openfailed";
+                const auto bus = vibe::usbBusCounts();
                 for (const auto& r : g_serverConfig.radios)
-                    if (r.serial == o.radioSerial) { known = radioKnownInUse(g_serverConfig, r, vibe::usbBusCounts(), rtlBusy); break; }
-                radioStatusWrite(o.radioSerial, drv, known ? "busy" : "openfailed", err);
+                    if (r.serial == o.radioSerial) {
+                        state = vibe::radioRecordState(drv, true, false, rtlBusy, bus.forDriver(drv),
+                                                       bus.claimedForDriver(drv), runningOursOf(g_serverConfig, r), -1);
+                        break;
+                    }
+                radioStatusWrite(o.radioSerial, drv, state, err);
             } else {
                 radioStatusClear(o.radioSerial);
                 /* ★★★ AND WHEN WE LEND IT OUT AND CANNOT TAKE IT BACK. The shim learns that only by
@@ -3516,7 +3568,8 @@ int main(int argc, char** argv) {
                     for (const auto& r : srv.radios) if (r.serial == mySerial) { me = &r; break; }
                     const bool rtlBusy = myDrv == "rtlsdr"
                                       && why == "the radio is in use by another program on this machine";
-                    const bool known = me && radioKnownInUse(srv, *me, vibe::usbBusCounts(), rtlBusy);
+                    const bool known = me && radioKnownInUse(srv, *me, vibe::usbBusCounts(), rtlBusy,
+                                                             myDrv == "sdrplay" ? rspListedWithout(mySerial) : -1);
                     LocalSdrShim::setRadioInUseElsewhere(known);
                     if (known) radioStatusWrite(mySerial, myDrv, "busy", why);
                 });
@@ -3846,6 +3899,33 @@ int main(int argc, char** argv) {
                         if (r.enabled && r.configured && !r.serial.empty()
                             && (r.serial == want || vsconfig::radioId(r.serial) == want))
                             return dir + "/" + r.serial + ".sock";
+                    return "";
+                });
+                /* ★★★ AND WHEN THAT RADIO'S PROCESS IS NOT THERE TO TAKE IT — say what we KNOW. Today
+                 *  that is one thing: its process recorded, within the last minute, that another
+                 *  program on this machine holds the radio (radioStatusInUseFresh — the same test the
+                 *  radio list's `inUseElsewhere` uses, so the two cannot disagree). Then the radio's
+                 *  /vibeserver.json is answered here, as its own process would if it were up and
+                 *  holding nothing: present false, inUseElsewhere true, nobody listening. Anything
+                 *  else — starting, crashed, unplugged — stays the honest 503 it always was.
+                 *  ★ Only radios this machine offers, matched by id or serial exactly like the router. */
+                LocalSdrShim::setRadioDownAnswer([](const std::string& path) -> std::string {
+                    if (path.rfind("/r/", 0) != 0) return "";
+                    const size_t e2 = path.find_first_of("/?#", 3);
+                    const std::string want = path.substr(3, e2 == std::string::npos ? std::string::npos : e2 - 3);
+                    if (want.empty()) return "";
+                    vsconfig::ServerConfig sc; std::string e3;
+                    if (!vsconfig::loadServer(g_configPath, sc, e3)) sc = g_serverConfig;
+                    for (const auto& r : sc.radios) {
+                        if (!r.enabled || !r.configured || r.serial.empty()) continue;
+                        if (r.serial != want && vsconfig::radioId(r.serial) != want) continue;
+                        if (!radioStatusInUseFresh(radioStatusRead(r.serial))) return "";
+                        return std::string("{\"server\":\"vibeserver\",\"present\":false,\"inUseElsewhere\":true")
+                             + ",\"radioName\":\"" + jsonEscape(vsconfig::publicLabel(r.label.empty() ? r.driver : r.label)) + "\""
+                             + ",\"driver\":\"" + jsonEscape(r.driver) + "\""
+                             + ",\"listeners\":0,\"maxUsers\":" + std::to_string(r.users)
+                             + ",\"busy\":false,\"freeInSec\":-1}";
+                    }
                     return "";
                 });
             }

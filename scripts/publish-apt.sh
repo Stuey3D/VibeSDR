@@ -11,7 +11,7 @@
 # started once per architecture.
 #
 # ★★ THE REPOSITORY NOW CARRIES arm64 AND amd64 (since 2026-08-20, for x86 Linux users — see
-#    GitHub issue #21). Everything arch-specific below is keyed on $ARCH: the pool filenames, the
+#    GitHub issue #21), armhf (2026-09-22) and i386 (2026-10-17, 32-bit x86, SSE2). Everything arch-specific below is keyed on $ARCH: the pool filenames, the
 #    revision high-water mark, the prune, and the per-architecture Packages index. What is NOT
 #    per-arch is the Release file, which must name EVERY architecture the repository holds — get
 #    that wrong and one architecture silently disappears from apt. See the note where it is built.
@@ -28,6 +28,17 @@ REPO_URL="https://github.com/Stuey3D/VibeServer.git"
 APT_DIR="${APT_DIR:-$HOME/VibeServer}"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SIGN_KEY="packages@vibesdr.net"
+# ★★ THE INSTALLER NAMES THE KEY (2026-10-18). scripts/install.sh — published beside the page as
+#    https://apt.vibesdr.net/install.sh — refuses any KEY.gpg whose fingerprint is not the one written
+#    in it. A new signing key without a matching edit there would publish a repository that the
+#    one-liner refuses on every machine, so it is checked HERE, before a minute is spent building.
+#  ★ grep -c, never grep -q in a pipeline (pipefail + SIGPIPE turns a match into a failure).
+_keyfpr="$(gpg --with-colons --fingerprint "$SIGN_KEY" 2>/dev/null | awk -F: '$1=="fpr"{print $10; exit}')"
+if [ -z "$_keyfpr" ] || [ "$(grep -c "^KEY_FPR=\"$_keyfpr\"" "$SRC_DIR/scripts/install.sh" 2>/dev/null || true)" != 1 ]; then
+  echo "!! scripts/install.sh does not name the signing key (${_keyfpr:-not found}) — fix KEY_FPR there first" >&2
+  exit 1
+fi
+bash -n "$SRC_DIR/scripts/install.sh" || { echo "!! scripts/install.sh has a syntax error" >&2; exit 1; }
 ARCH="$(dpkg --print-architecture)"
 # ★★★ armhf IS CROSS-COMPILED (2026-09-22) — see vibeserver/linux/armhf-toolchain.cmake. The container
 #     is the Mac's native arm64 and the PACKAGE is armhf, so the architecture being published comes
@@ -41,6 +52,15 @@ if [ -n "${VIBE_CROSS_ARCH:-}" ]; then
   [ "$ARCH" = "armhf" ] && CROSS_CMAKE="$CROSS_CMAKE -DVIBE_ARMV6_STAGE=/build/armv6-stage"
   # ★ dpkg-shlibdeps reads these to resolve the ARMHF libraries rather than the host's.
   export DEB_HOST_ARCH="$ARCH" DEB_HOST_MULTIARCH=arm-linux-gnueabihf DEB_HOST_GNU_TYPE=arm-linux-gnueabihf
+fi
+# ★★★ A PRE-BUILT PACKAGE IS INDEXED WHEREVER THIS RUNS (2026-10-17, for i386 beside amd64). The docker
+#     wrapper now runs the prebuilt pass in the host's own container rather than emulating the target
+#     just to call dpkg-scanpackages, so the architecture comes from the caller here as well. ONLY with
+#     a pre-built package: on the build path it would stamp a host-arch binary with another arch's name.
+#  ★ The package's own Architecture: is still checked against it below — the caller is not trusted.
+if [ -n "${VIBE_PUBLISH_ARCH:-}" ]; then
+  [ -n "${VIBE_PREBUILT_DEB:-}" ] || { echo "!! VIBE_PUBLISH_ARCH without VIBE_PREBUILT_DEB — refusing"; exit 1; }
+  ARCH="$VIBE_PUBLISH_ARCH"
 fi
 DRY_RUN=0
 # ★ An `if`, not `&&` — as the last command in the line, a REAL publish (no --dry-run) made the
@@ -278,12 +298,13 @@ runbuild "
   cd $BUILD_SRC/vibeserver
   if [ \"${VIBE_CROSS_ARCH:-}\" = armhf ]; then
     cmake -S . -B build-armv6 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=/opt/armv6-toolchain.cmake \
-          -DVIBE_RTLSDR_PREFIX=/opt/vibe-rtlsdr-v6 -DVIBE_RPATH_SUBDIR=/armv6 >/dev/null
+          -DVIBE_LINUX_DEPS=/opt/vibe-deps-v6 >/dev/null
     cmake --build build-armv6 --target vibeserver -j\"${JOBS:-$(nproc)}\" | tail -1
-    readelf -A build-armv6/vibeserver | grep -q 'Tag_CPU_arch: v6' \
+    # ★ grep -c, never -q, under pipefail (SIGPIPE turns a match into a failure).
+    [ \"\$(readelf -A build-armv6/vibeserver | grep -c 'Tag_CPU_arch: v6' || true)\" -gt 0 ] \
       || { echo '!! the ARMv6 build is not ARMv6'; exit 1; }
-    mkdir -p /build/armv6-stage && cp build-armv6/vibeserver /build/armv6-stage/ \
-      && cp -a /opt/vibe-rtlsdr-v6/lib/librtlsdr.so* /build/armv6-stage/
+    # ★ ONE FILE since 2026-10-18: librtlsdr is linked in, there is no ARMv6 .so to stage beside it.
+    mkdir -p /build/armv6-stage && cp build-armv6/vibeserver /build/armv6-stage/
   fi
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV \
         -DVIBESERVER_STRICT_RADIOS=ON $CROSS_CMAKE >/dev/null
@@ -319,11 +340,20 @@ fi
 
 # ★★ ASSERT THE BASELINE, every publish. The point of the build root is the Depends: line it
 #    produces, so a silent regression to a newer libc is the one failure that must never ship.
-BAD="$(dpkg-deb -f "$DEB" Depends | tr ',' '\n' | grep -E 'libc6 \(>= 2\.(3[7-9]|[4-9])|libstdc\+\+6 \(>= 1[3-9]' || true)"
+BAD="$(dpkg-deb -f "$DEB" Depends | tr ',' '\n' | grep -E 'libc6 \(>= 2\.(3[6-9]|[4-9])|libstdc\+\+6 \(>= 1[3-9]' || true)"
 if [ -n "$BAD" ]; then
   echo "!! this package demands a newer runtime than the build root should produce:"
   echo "$BAD"
   echo "   it would be uninstallable on the systems the build root exists to support."
+  exit 1
+fi
+# ★★★ AND NOTHING BUT libc6 (Stuart, 2026-10-18): every library is linked in, so Depends may name only
+#     libc6 and the tools we exec. CPack already refuses such a package (linux/check-deb-depends.cmake);
+#     this catches a pre-built package from the Lenovo as well.
+EXTRA="$(dpkg-deb -f "$DEB" Depends | tr ',' '\n' | sed 's/^ *//; s/ *(.*$//' | grep -vxE 'adduser|curl|gzip|libc6' || true)"
+if [ -n "$EXTRA" ]; then
+  echo "!! this package depends on system libraries it must carry itself:"
+  echo "$EXTRA"
   exit 1
 fi
 echo "==> built $(basename "$DEB")"
@@ -416,6 +446,11 @@ ARCHVERSIONS="${ARCHVERSIONS//&/\\&}"; DEBLINES="${DEBLINES//&/\\&}"
 sed -e "s/__ARCHVERSIONS__/$ARCHVERSIONS/g" \
     "$SRC_DIR/scripts/apt-index.html" \
   | sed -e "s|__DEBLINES__|$DEBLINES|g" > "$APT_DIR/index.html"
+# ★★ THE ONE-LINE INSTALLER rides along with every publish, like the page, so
+#    `curl -fsSL https://apt.vibesdr.net/install.sh | sudo bash` is always the script in this tree —
+#    edit scripts/install.sh, never the copy in the artefact repo. (Checked against the signing key
+#    at the TOP of this script, before anything is built — see "THE INSTALLER NAMES THE KEY".)
+install -m 0644 "$SRC_DIR/scripts/install.sh" "$APT_DIR/install.sh"
 touch "$APT_DIR/.nojekyll"     # Pages would otherwise skip files starting with an underscore
 
 # ── Commit locally — the Mac does the pushing ────────────────────────────────

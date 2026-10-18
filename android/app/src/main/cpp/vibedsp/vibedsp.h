@@ -259,8 +259,13 @@ private:
     // samples with the reversed taps — vectorisable (NEON). phase_ counts down to
     // the next kept (decimated) output.
     std::vector<float> rtaps_;   // reversed taps
-    std::vector<cf32>  buf_;     // [K-1 history][block]
+    std::vector<cf32>  buf_;     // [K-1 history][block][slack] — never shrunk (see ddc.cpp)
     int decim_, phase_, K_;
+    // ★ x86 only (empty elsewhere): the taps PAIR-DUPLICATED and laid out in two phase-shifted banks
+    //   so every load of the delay line is ALIGNED — see FirDecimator::buildBank_ in ddc.cpp.
+    std::vector<float> bank_;
+    int Lp_ = 0, bankOff_ = 0;
+    void buildBank_();
 };
 
 // ── Zoom spectrum ────────────────────────────────────────────────────────--
@@ -1006,11 +1011,18 @@ public:
     void process(const float* x, int n, bool measure = true) {
         if (!ready_ || n <= 0) return;
         double acc = 0.0;
+        /* ★★ b1 = 0 AND b2 = −b0, ALWAYS — the constant-skirt band-pass configure() builds. Written
+         *  as the general biquad it spent five multiplies and four adds per section per sample, and
+         *  this is FIVE sections at the MPX rate: 7.8 % of the whole server's CPU in the Lenovo's
+         *  WFM profile (2026-10-18), the biggest single line in the demod thread. b0·(in − x2) is
+         *  three multiplies and three adds, and a shorter dependency chain per section, which is
+         *  what an in-order Atom actually waits on. Same filter; the rounding differs in the last
+         *  bit, on a level meter. */
         for (int i = 0; i < n; ++i) {
             float v = x[i];
             for (int s = 0; s < kSections; ++s) {
                 const float in = v;
-                const float y = b0_ * in + b1_ * x1_[s] + b2_ * x2_[s] - a1_ * y1_[s] - a2_ * y2_[s];
+                const float y = b0_ * (in - x2_[s]) - a1_ * y1_[s] - a2_ * y2_[s];
                 x2_[s] = x1_[s]; x1_[s] = in; y2_[s] = y1_[s]; y1_[s] = y;
                 v = y;
             }
@@ -1086,8 +1098,13 @@ public:
 private:
     // Same block-contiguous + NEON scheme as FirDecimator, real samples.
     std::vector<float> rtaps_;   // reversed taps
-    std::vector<float> buf_;     // [K-1 history][block]
+    std::vector<float> buf_;     // [K-1 history][block][slack] — never shrunk (see ddc.cpp)
     int decim_, phase_, K_;
+    // ★ x86 only (empty elsewhere): four phase-shifted tap banks so every load is ALIGNED — see
+    //   RealFir::buildBank_ in ddc.cpp.
+    std::vector<float> bank_;
+    int Lp_ = 0, bankOff_ = 0;
+    void buildBank_();
 };
 
 /** ★★★ A REAL FIR IN TWO STAGES — a cheap anti-alias decimate-by-2 in front of the deep one.

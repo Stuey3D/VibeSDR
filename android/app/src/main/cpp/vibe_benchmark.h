@@ -15,6 +15,7 @@
 //   switched off on a box it would overload.
 #pragma once
 #include "vibedsp/vibedsp.h"
+#include "vibedsp/vibe_denormals.h"
 #if defined(VIBE_HAVE_OPUS)
 #include "opus_audio_encoder.h"   // ★ a listener's audio is encoded per listener — see runListener
 #endif
@@ -355,6 +356,10 @@ inline double measureUplinkKBps() {
 inline std::string runBenchmark(const std::function<void(int, int, const std::string&)>& progress = nullptr,
                                 double secondsPerScenario = 4.0, double uplinkKBps = -2,
                                 const std::function<std::vector<benchdetail::Result>()>& moreRows = nullptr) {
+    /* ★★ THIS THREAD PLAYS vibe-dsp — it feeds every scenario (runOne) and runs the decoder rows — so it flushes
+     *  denormals as the served one does (vibeAudioThread). Without it the bench would charge a quiet signal's
+     *  denormals to a box whose server never pays them. See vibedsp/vibe_denormals.h. */
+    vibeFlushDenormals();
     // ★ moreRows: rows a host adds that need more than vibedsp — DAB (vibe_benchmark_dab.h: runDabRows), which
     //   pulls in the DAB service and its audio decoder. A row graded "none" (pct -1) could not be measured.
     // -2 = measure it here (desktop/Linux); an Android host passes its own figure, or -1 for "could not".

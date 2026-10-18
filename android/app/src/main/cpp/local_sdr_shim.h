@@ -533,6 +533,14 @@ public:
     /** `path` is the request path; `head` the first ~1 KB of the request (headers included). */
     using HandoffFn = std::function<std::string(const std::string& path, const std::string& head)>;
     static void setHandoffRouter(HandoffFn fn);
+    /** ★★★ WHAT THE FRONT DOOR KNOWS ABOUT A RADIO WHOSE PROCESS IS NOT ANSWERING. Given a `/r/<id>/…`
+     *  path the hand-off could not deliver, return that radio's /vibeserver.json as the door can
+     *  honestly state it — today only "another program on this machine has it" — or "" for nothing
+     *  known (the caller then answers 503, as before). Without it a radio that never starts because
+     *  OpenWebRX holds it was a 503 to every reader, and the directory page fell back to the
+     *  MACHINE's figures: 0 listeners, so "FREE", for 17 hours on the Lenovo (2026-10-18). */
+    using RadioDownFn = std::function<std::string(const std::string& path)>;
+    static void setRadioDownAnswer(RadioDownFn fn);
 
     /** Our own "/r/<serial>" prefix, stripped from arriving requests so every route below
      *  keeps matching bare paths. "" (the default) means no prefix, i.e. a single-radio server. */
