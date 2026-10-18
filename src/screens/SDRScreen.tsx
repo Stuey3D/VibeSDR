@@ -10576,7 +10576,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    styles, so nothing here pointed at the row; the whole sentence re-read against AudioSheet, MenuSheet and
     //    FreqModal once more — unchanged.
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — noise reduction, the auto notch, squelch, binaural tuning, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch, binaural tuning, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
