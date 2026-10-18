@@ -10216,11 +10216,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (idx < 0) idx = 0; else if (idx >= bins) idx = bins - 1;
                 return srcRow[idx];
             };
+            /* ★ floor/ceil by truncation (2026-10-18): on 32-bit x86 std::floor is a real libm CALL
+             *  (no SSE4.1 round, and the result comes back through the x87 stack) — three per output
+             *  bin per frame per listener showed up as 1.6 % of the i386 server. Exact for any bin
+             *  offset that fits an int, which every one here does. */
+            auto ifloor = [](double x) { const int t = (int)x; return t - (x < (double)t ? 1 : 0); };
+            auto iceil  = [](double x) { const int t = (int)x; return t + (x > (double)t ? 1 : 0); };
             for (int i = 0; i < outBins; i++) {
                 int signedOut = (i <= outBins / 2) ? i : i - outBins;
                 double center = signedOut * step - hwOffsetBin + viewOffsetBin;  // signed src offset from DC
-                int lo = (int)std::floor(center - step / 2.0);
-                int hi = (int)std::ceil(center + step / 2.0);
+                int lo = ifloor(center - step / 2.0);
+                int hi = iceil(center + step / 2.0);
                 if (hi <= lo) hi = lo + 1;
                 if (hi <= loValid || lo >= hiValid) { frame[22+i] = 0; continue; }  // wholly outside
                 if (lo < loValid) lo = loValid;      // partly outside: peak-hold the REAL part only
@@ -10234,7 +10240,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *  smooth curve between real points is what the eye expects, and it costs one
                      *  multiply per bin. */
                     const double c = center;
-                    const int i0 = (int)std::floor(c);
+                    const int i0 = ifloor(c);
                     const double f = c - (double)i0;
                     const float a = srcAt(std::max(loValid, std::min(hiValid - 1, i0)));
                     const float b = srcAt(std::max(loValid, std::min(hiValid - 1, i0 + 1)));
@@ -10389,9 +10395,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     lesser one won because it was the one on the wire.
              * ★ Every 4th bin: 4000 samples is far more than a percentile needs, and it keeps this
              *   O(n) with the vector reused, allocating nothing per frame. */
-            edgeBins_.clear();
-            for (int i = -(bins/2) + deadBins; i <= (bins/2 - 1) - deadBins; i += 4)
-                edgeBins_.push_back((float)dbAt(i));
+            /* ★ Sized once and written by index (2026-10-18): a push_back per bin is an out-of-line
+             *  call with a capacity check each time — vector<float>::emplace_back was 1.5-2 % of the
+             *  server's instructions in the Lenovo's WFM profile, between this loop and the contrast
+             *  one below. Same values, same order. */
+            {
+                const int e0 = -(bins/2) + deadBins, e1 = (bins/2 - 1) - deadBins;
+                const int en = e1 >= e0 ? (e1 - e0) / 4 + 1 : 0;
+                edgeBins_.resize((size_t)en);
+                for (int k = 0; k < en; ++k) edgeBins_[(size_t)k] = (float)dbAt(e0 + 4 * k);
+            }
             double floorDbNow = 0.0; const int eN = (int)edgeBins_.size();
             if (eN) {
                 const size_t k = edgeBins_.size() / 4;
@@ -10653,15 +10666,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  ★ 90th percentile against 25th, over the usable window: the top of the stations
              *    against the floor between them.
              */
-            contrastBins_.clear();
-            for (int i = -(bins/2) + deadBins; i < bins/2 - deadBins; i++)
-                contrastBins_.push_back((float)dbAt(i));
+            {   // ★ by index, not push_back — see edgeBins_ above
+                const int c0 = -(bins/2) + deadBins, c1 = bins/2 - deadBins;
+                contrastBins_.resize((size_t)std::max(0, c1 - c0));
+                for (int i = c0; i < c1; i++) contrastBins_[(size_t)(i - c0)] = (float)dbAt(i);
+            }
             if (contrastBins_.size() > 16) {
                 const size_t hi9 = (contrastBins_.size() * 9) / 10;
                 const size_t lo2 = contrastBins_.size() / 4;
                 std::nth_element(contrastBins_.begin(), contrastBins_.begin() + hi9, contrastBins_.end());
                 const float top = contrastBins_[hi9];
-                std::nth_element(contrastBins_.begin(), contrastBins_.begin() + lo2, contrastBins_.end());
+                // ★ Only the part BELOW hi9 (2026-10-18): the first partition already put every value
+                //   ≤ top in front of it, so the 25th percentile of the whole set is the lo2-th of
+                //   that prefix. The identical answer; measured, it saves only ~1 % of nth_element's
+                //   instructions (the 90th-percentile pass dominates), but it costs nothing.
+                std::nth_element(contrastBins_.begin(), contrastBins_.begin() + lo2, contrastBins_.begin() + hi9);
                 bandContrastDb.store(top - contrastBins_[lo2]);
             }
             if (cN) channelDbWide.store((float)(cSum / cN));
