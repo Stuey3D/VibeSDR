@@ -69,6 +69,47 @@ import SwiftUI
     return o
   }
 
+  /// ★★ V12 RECORD BUFFER → AUTO. Set by VibePowerModule: asked for up to `seconds` of the record buffer's most recent
+  /// audio, it answers (on its own queue) with the chunks, oldest first, and their rate — [] when there is none to give.
+  var primeSource: ((Double, @escaping ([RecordBufferRing.Chunk], Double) -> Void) -> Void)?
+
+  /// AUTO is starting: hand it the record buffer's last `seconds`, mono at 16 kHz, so its first window need not wait
+  /// for fresh speech. ★ A plain resample, NOT through feedH: the live audio is already flowing through that stateful
+  /// feed, and pushing older audio into it would put a seam in the live lane's copy. So the prefix skips the SSB
+  /// auto-tune's shift — fine for telling languages apart; the live audio that follows is shifted as ever.
+  func requestPrime(seconds: Double, _ deliver: @escaping (AVAudioPCMBuffer) -> Void) {
+    guard let src = primeSource else { return }
+    src(seconds) { [weak self] chunks, rate in
+      guard let self, !chunks.isEmpty else { return }
+      self.q.async {
+        let n = chunks.reduce(0) { $0 + $1.frames }
+        guard n > 0,
+              let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false),
+              let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt, frameCapacity: AVAudioFrameCount(n)),
+              let conv = AVAudioConverter(from: inFmt, to: Self.fmt16),
+              let out = AVAudioPCMBuffer(pcmFormat: Self.fmt16, frameCapacity: AVAudioFrameCount(Double(n) * 16000 / rate + 64))
+        else { return }
+        let d = inBuf.floatChannelData![0]
+        var o = 0
+        for c in chunks {
+          c.samples.withUnsafeBufferPointer { sp in
+            if c.channels == 2 { for i in 0..<c.frames { d[o + i] = (Float(sp[i * 2]) + Float(sp[i * 2 + 1])) / 65536 } }
+            else { for i in 0..<c.frames { d[o + i] = Float(sp[i]) / 32768 } }
+          }
+          o += c.frames
+        }
+        inBuf.frameLength = AVAudioFrameCount(n)
+        var fed = false
+        var err: NSError?
+        conv.convert(to: out, error: &err) { _, st in
+          if fed { st.pointee = .endOfStream; return nil }
+          fed = true; st.pointee = .haveData; return inBuf
+        }
+        if err == nil, out.frameLength > 0 { deliver(out) }
+      }
+    }
+  }
+
   /// `silent`: squelch is closed — the transcriber hears what the listener hears, i.e. nothing.
   @objc func feed(_ buf: AVAudioPCMBuffer, silent: Bool) {
     guard armed else { return }
@@ -695,6 +736,37 @@ final class TranscribeEngine {
       self.owner?.emit(["type": "trying", "text": shown])
       self.status("Listening — detecting the language from 10 s of speech…")
       VibeTranscribeTap.shared.setSink(sink, onDial: tapDial)
+      // ★ V12: with the RECORD BUFFER on, the speech already heard counts towards the first window.
+      VibeTranscribeTap.shared.requestPrime(seconds: LanguageID.windowSeconds) { [weak self] b in
+        self?.q.async { self?.primeWindow(b) }
+      }
+    }
+  }
+
+  /// q only — the record buffer's recent audio (16 kHz mono, older than anything the live feed has delivered), gated
+  /// like live audio (20 ms blocks over the speech floor) and put IN FRONT of what the window already holds.
+  private func primeWindow(_ b: AVAudioPCMBuffer) {
+    guard !stopped, language == "auto", lock.locked == nil, b.format.sampleRate == windowRate,
+          let p = b.floatChannelData?[0] else { return }
+    let n = Int(b.frameLength), blk = Int(windowRate / 50)
+    var speech: [Float] = []
+    speech.reserveCapacity(n)
+    var i = 0
+    while i < n {
+      let m = min(blk, n - i)
+      var rms: Float = 0
+      vDSP_rmsqv(p + i, 1, &rms, vDSP_Length(m))
+      if rms > Self.stallRmsFloor { speech.append(contentsOf: UnsafeBufferPointer(start: p + i, count: m)) }
+      i += m
+    }
+    guard !speech.isEmpty else { return }
+    window = speech + window
+    let need = Int(LanguageID.windowSeconds * windowRate)
+    NSLog("[VibeTranscriber] AUTO: primed with %.1f s of speech from the record buffer", Double(speech.count) / windowRate)
+    if window.count >= need {
+      let w = Array(window.suffix(need))      // the newest 10 s
+      window.removeAll(keepingCapacity: true)
+      windowReady(w)
     }
   }
 

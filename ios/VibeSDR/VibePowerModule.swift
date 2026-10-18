@@ -115,6 +115,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     startVoiceObserver()
     VibeCrashLog.install()      // record uncaught ObjC exceptions — see VibeCrashLog
     VibeCrashLog.announce()     // ...and SAY what the last one was, or recording it achieves nothing
+    /* ★★ V12 RECORD BUFFER → TRANSCRIBE's AUTO (Stuart: "this buffer could help our transcription detection too"): when
+     *    AUTO arms, it asks for the buffer's most recent audio so its first 10 s window does not wait for fresh speech.
+     *    ★ Not while binaural is on: the ring then holds the binaural mix, and the recogniser must hear plain audio
+     *      (it taps BEFORE binaural for exactly that reason). Not when the buffer is off — then there is nothing. */
+    VibeTranscribeTap.shared.primeSource = { [weak self] seconds, done in
+      guard let self else { return }
+      self.audioQ.async {
+        guard self.recRing.isOn, vibe_binaural_enabled(self.binauralH) == 0 else { done([], 48_000); return }
+        var keep: [RecordBufferRing.Chunk] = []
+        var frames = 0
+        let want = Int(seconds * self.recRing.rate)
+        for c in self.recRing.snapshot().reversed() { keep.append(c); frames += c.frames; if frames >= want { break } }
+        done(keep.reversed(), self.recRing.rate)
+      }
+    }
   }
 
   // MARK: - State
@@ -150,9 +165,16 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // recorder behaved: Web Audio resampled upstream). AVAudioFile encodes
   // AAC .m4a in hardware. recFile is audioQ-only; recArmed is read on the
   // WS callback thread (same benign cross-thread pattern as isMuted).
+  // ★ V12: recFile is now owned by recWriteQ, NOT audioQ — every write (the record buffer's prefix, then the live
+  //   buffers) is handed to that serial queue in order, so starting a recording with up to 60 s already in the
+  //   buffer never makes the audio thread wait on an encode (thread rule: Network > Audio > Spectrum > Decoders).
   private var recFile:  AVAudioFile?
   private var recPath:  String = ""
   private var recArmed  = false
+  private let recWriteQ = DispatchQueue(label: "com.vibesdr.recwrite", qos: .userInitiated)
+  /// ★★ V12 RECORD BUFFER (RecordBufferRing.swift; the setting and the retune rule: src/services/recordBuffer.ts).
+  ///   audioQ-only. Capacity 0 (Off, the default) holds nothing and costs one Bool read per buffer.
+  private let recRing = RecordBufferRing(rate: 48_000)
 
   // Client noise DSP (VibeDSP.swift — verbatim skin ports) applied to the
   // MONO packet-rate feed before stereo duplication + 48k conversion, the
@@ -231,8 +253,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   /* ★★ V12 BINAURAL TUNING — the audio leans toward the ear on the side the signal lies (vibedsp/binaural.h).
    *  ★ WHY HERE, IN scheduleOut: it is the ONE place every backend's audio passes — UberSDR's Opus, OWRX/Kiwi
    *    and local hardware through the external-PCM path, FM-DX's MP3 — already 48 kHz stereo planar, mono
-   *    duplicated. One hook, every server. AFTER the recorder and the transcriber tap: it changes what the
-   *    listener HEARS (that is the point), never what is saved or transcribed.
+   *    duplicated. One hook, every server (deliver(), which every backend's buffer passes through).
+   *  ★★ RECORDINGS INCLUDE IT (Stuart, 2026-10-18: "to properly represent what was heard by the user at the time"):
+   *     deliver() runs it BEFORE the recorder and the record buffer, and runs it even while paused when either of
+   *     those is listening — so a recording never silently loses it, and it never runs twice on one buffer. The
+   *     TRANSCRIBER still taps BEFORE it: speech recognition wants the plain (mono) audio.
    *  ★ The DSP is the shared C++ (the same object Android's AudioTrack writers call), not Swift: one
    *    implementation, one test (vibeserver/test-binaural.cpp). Its setters only store atomics, so the RN
    *    methods below call them straight from the bridge thread; only process runs on audioQ. */
@@ -675,11 +700,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     packetCount += 1
     lastPacketAt = Date()
     if let out = convertTo48k(inBuf) {
-      if recArmed { writeRecording(out) }   // OWRX/external audio recording
-      applyNotch(out)
-      tapTranscriber(out)
       // ★ Muted audio reaches here only for the on-device transcriber (feedExternal*'s gate) — never the speaker.
-      if !isMuted { scheduleOut(out) }
+      deliver(out)   // OWRX/external audio: notch, transcriber, squelch, binaural, recorder + buffer, speaker
     }
   }
 
@@ -969,10 +991,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       }
     }
     guard let out = convertTo48k(inBuf) else { return }
-    if recArmed { writeRecording(out) }
-    applyNotch(out)
-    tapTranscriber(out)
-    scheduleOut(out)
+    deliver(out)   // FM-DX (never decoded while paused — playFmdxPcm's guard)
   }
 
   /** Called from JS on app-foreground: instant zombie check instead of
@@ -1856,7 +1875,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let bin = b[0] > 0 ? String(format: " bin=src%ld off=%.0f%@%@ pan=%.2f w=%.2f ssb=%ld/%ld drop=%ld spread=%.2f crowd=%.2f",
                                 Int(b[1]), b[2], b[3] > 0 ? "" : "?", b[10] > 0 ? "c" : "", b[4], b[5], Int(b[7]), Int(b[6]),
                                 Int(b[8]), b[9], b[12]) : ""
-    return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed)\(bin)"
+    return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed) recbuf=\(Int(recRing.capacitySeconds))\(bin)"
   }
 
   // MARK: - Recording
@@ -1878,25 +1897,40 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let name = "VibeSDR_\(df.string(from: Date()))_\(mhz)_\(modeStr.uppercased()).m4a"
     let url  = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
       .appendingPathComponent(name)
+    /* ★★ V12 RECORD BUFFER — the file starts with the buffered audio, then carries on live, in order, and the
+     *    audio thread never waits for it. On audioQ: take the ring's snapshot (references, no copy) and arm the
+     *    live tap IN THE SAME BLOCK — so not one buffer falls between the two, nor lands in both. Everything after
+     *    that is recWriteQ's: open the file, resolve (with how many seconds came from the buffer, so the timer
+     *    starts there), write the prefix, then the live buffers audioQ queued behind it meanwhile.
+     *  ★ "Recording must always respond instantly regardless of the buffer set" (Stuart): the promise resolves as
+     *    soon as the file is open — before the prefix is encoded. */
     audioQ.async { [weak self] in
       guard let self else { reject("gone", "module deallocated", nil); return }
-      do {
-        // AAC straight from the hardware encoder; the file format is fixed
-        // 48 kHz so tune/mode/BW changes mid-recording need no handling.
-        let settings: [String: Any] = [
-          AVFormatIDKey:         kAudioFormatMPEG4AAC,
-          AVSampleRateKey:       self.ENGINE_RATE,
-          AVNumberOfChannelsKey: Int(self.ENGINE_CH),
-          AVEncoderBitRateKey:   128_000,
-        ]
-        self.recFile = try AVAudioFile(forWriting: url, settings: settings,
-                                       commonFormat: .pcmFormatFloat32, interleaved: false)
-        self.recPath  = url.path
-        self.recArmed = true
-        NSLog("[VibePowerModule] recording → %@", name)
-        resolve(url.path)
-      } catch {
-        reject("rec_open", error.localizedDescription, error)
+      let prefix = self.recRing.isOn ? self.recRing.snapshot() : []
+      let prefixSec = self.recRing.isOn ? self.recRing.seconds : 0
+      self.recArmed = true
+      let engineRate = self.ENGINE_RATE, engineCh = self.ENGINE_CH
+      self.recWriteQ.async {
+        do {
+          // AAC straight from the hardware encoder; the file format is fixed
+          // 48 kHz so tune/mode/BW changes mid-recording need no handling.
+          let settings: [String: Any] = [
+            AVFormatIDKey:         kAudioFormatMPEG4AAC,
+            AVSampleRateKey:       engineRate,
+            AVNumberOfChannelsKey: Int(engineCh),
+            AVEncoderBitRateKey:   128_000,
+          ]
+          let f = try AVAudioFile(forWriting: url, settings: settings,
+                                  commonFormat: .pcmFormatFloat32, interleaved: false)
+          self.recFile = f
+          self.recPath = url.path
+          NSLog("[VibePowerModule] recording → %@ (%.1f s from the record buffer)", name, prefixSec)
+          resolve(["path": url.path, "bufferedSeconds": prefixSec])
+          if !prefix.isEmpty { self.recWritePrefix(prefix, format: f.processingFormat) }
+        } catch {
+          self.recArmed = false
+          reject("rec_open", error.localizedDescription, error)
+        }
       }
     }
   }
@@ -1904,20 +1938,44 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func stopRecording(_ resolve: @escaping RCTPromiseResolveBlock,
                            rejecter reject: @escaping RCTPromiseRejectBlock) {
     recArmed = false
+    // ★ Through audioQ THEN recWriteQ: every live buffer audioQ has already handed over is written before the
+    //   file is closed — the end of a recording is not cut off by its own stop.
     audioQ.async { [weak self] in
       guard let self else { resolve(nil); return }
-      let path = self.recPath
-      self.recFile = nil  // closing the AVAudioFile finalises the .m4a
-      self.recPath = ""
-      NSLog("[VibePowerModule] recording stopped: %@", path)
-      resolve(path.isEmpty ? nil : path)
+      // ★ The record buffer starts again at the stop (Stuart, 2026-10-18): the next recording never repeats this one.
+      self.recRing.clear()
+      self.recWriteQ.async {
+        let path = self.recPath
+        self.recFile = nil  // closing the AVAudioFile finalises the .m4a
+        self.recPath = ""
+        NSLog("[VibePowerModule] recording stopped: %@", path)
+        resolve(path.isEmpty ? nil : path)
+      }
     }
+  }
+
+  // MARK: - Record buffer (V12)
+
+  /// 0 = Off (frees it), else the seconds to hold (30 / 60). App-wide setting; JS sends it on every screen.
+  @objc func setRecordBuffer(_ seconds: NSNumber) {
+    let s = max(0, min(120, seconds.doubleValue))
+    audioQ.async { [weak self] in
+      guard let self, self.recRing.capacitySeconds != s else { return }
+      self.recRing.setCapacity(seconds: s)
+      NSLog("[VibePowerModule] record buffer %@", s > 0 ? "\(Int(s)) s" : "off")
+    }
+  }
+
+  /// The retune rule (src/services/recordBuffer.ts) decided the buffered audio is no longer this audio.
+  @objc func clearRecordBuffer() {
+    audioQ.async { [weak self] in self?.recRing.clear() }
   }
 
   /** Auto notch (network backends): adaptive line enhancer per channel, applied on the final 48 kHz feed. Runs on
    *  audioQ (single-threaded), so the filter state is safe. Local/RTL-TCP never enable it here (shim already notched).
    *  ★ V12: moved out of scheduleOut so the TRANSCRIBER hears the notched audio too (it was tapped before the notch,
-   *  and a muted listener never reached scheduleOut at all). Called after the recorder, so recordings are unchanged. */
+   *  and a muted listener never reached scheduleOut at all). ★ V12 record buffer: now BEFORE the recorder too (deliver()),
+   *  so a recording is what the listener heard — it used to be written un-notched. */
   @inline(__always) private func applyNotch(_ buf: AVAudioPCMBuffer) {
     guard notchOn, let chans = buf.floatChannelData else { return }
     let nch = Int(buf.format.channelCount)
@@ -1933,7 +1991,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     if VibeTranscribeTap.shared.armed { VibeTranscribeTap.shared.feed(buf, silent: !squelchOpen) }
   }
 
+  /// audioQ: hand the buffer to the writer. No copy — every buffer here is freshly made by convertTo48k (or the
+  /// packet's own) and nothing writes to it after deliver(); the player only reads it, as the encoder does.
   private func writeRecording(_ buf: AVAudioPCMBuffer) {
+    recWriteQ.async { [weak self] in self?.recWrite(buf) }
+  }
+
+  /// recWriteQ only.
+  private func recWrite(_ buf: AVAudioPCMBuffer) {
     guard let f = recFile else { return }
     do { try f.write(from: buf) }
     catch {
@@ -1941,6 +2006,56 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       recArmed = false
       recFile  = nil
     }
+  }
+
+  /// recWriteQ only: the record buffer's prefix, oldest first, converted back to the file's float stereo.
+  private func recWritePrefix(_ chunks: [RecordBufferRing.Chunk], format: AVAudioFormat) {
+    for c in chunks {
+      guard recFile != nil else { return }
+      guard let b = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(c.frames)),
+            let ch = b.floatChannelData else { continue }
+      b.frameLength = AVAudioFrameCount(c.frames)
+      let l = ch[0], r = format.channelCount > 1 ? ch[1] : ch[0]
+      c.samples.withUnsafeBufferPointer { s in
+        if c.channels == 2 {
+          for i in 0..<c.frames { l[i] = Float(s[i * 2]) / 32768; r[i] = Float(s[i * 2 + 1]) / 32768 }
+        } else {
+          for i in 0..<c.frames { let v = Float(s[i]) / 32768; l[i] = v; r[i] = v }
+        }
+      }
+      recWrite(b)
+    }
+  }
+
+  /** ★★ THE ONE TAIL EVERY BACKEND'S 48 kHz BUFFER RUNS (UberSDR Opus, the external PCM/Opus feed, FM-DX), audioQ.
+   *  Order matters and each step says why:
+   *   1. auto notch (network backends) — the listener hears it, the transcriber and the recording get it too;
+   *   2. the TRANSCRIBER — before squelch (it takes the gate as a flag) and before binaural (plain audio for ASR);
+   *   3. squelch — closed = silence, as the speaker has always played it;
+   *   4. BINAURAL — what the listener hears. Run when someone is listening OR a recording / the record buffer is,
+   *      so a paused listener's recording keeps it (Stuart, 2026-10-18) — and only ever once per buffer;
+   *   5. the recorder and the record buffer — so a file is exactly what was heard, before volume;
+   *   6. the speaker, unless paused. */
+  @inline(__always) private func deliver(_ buf: AVAudioPCMBuffer) {
+    applyNotch(buf)
+    tapTranscriber(buf)
+    if !squelchOpen, let chans = buf.floatChannelData {
+      let nch = Int(buf.format.channelCount)
+      let n = Int(buf.frameLength)
+      for c in 0..<nch { memset(chans[c], 0, n * MemoryLayout<Float>.size) }
+    }
+    let ringOn = recRing.isOn
+    // ★ vibe_binaural_enabled reads ACTIVE, not the switch: turned off, it stays 1 until the lean has centred and
+    //   the SSB/CW spread's constant 10.7 ms delay has crossfaded out — stopping mid-glide would click.
+    if (!isMuted || recArmed || ringOn), vibe_binaural_enabled(binauralH) != 0,
+       buf.format.channelCount == 2, let chans = buf.floatChannelData {
+      vibe_binaural_process_planar(binauralH, chans[0], chans[1], Int32(buf.frameLength), Int32(buf.format.sampleRate))
+    }
+    if recArmed { writeRecording(buf) }
+    if ringOn, let chans = buf.floatChannelData {
+      recRing.append(left: chans[0], right: buf.format.channelCount > 1 ? chans[1] : nil, frames: Int(buf.frameLength))
+    }
+    if !isMuted { scheduleOut(buf) }
   }
 
   // MARK: - Location (one-shot, for nearest-first instance sorting)
@@ -2895,7 +3010,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     recArmed = false
     audioQ.async { [weak self] in
       guard let self else { return }
-      self.recFile   = nil  // closing the AVAudioFile finalises the .m4a
+      self.recWriteQ.async { self.recFile = nil }  // closing the AVAudioFile finalises the .m4a — after queued writes
       self.converter = nil
       self.converterInFmt = nil
       self.dspRate = 0      // force DSP engine rebuild on next session
@@ -3114,10 +3229,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
 
     guard let outBuf = convertTo48k(inBuf) else { return }
-    if recArmed { writeRecording(outBuf) }
-    applyNotch(outBuf)
-    tapTranscriber(outBuf)
-    if !isMuted { scheduleOut(outBuf) }
+    deliver(outBuf)
   }
 
   /** Resample a packet-rate buffer to the fixed engine format. Runs on
@@ -3191,19 +3303,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func scheduleOut(_ buf: AVAudioPCMBuffer) {
     guard let player = playerNode, let fmt = audioFormat else { return }
     ensureRendering()
-    // Squelch closed → output silence (keeps the player fed, no underrun).
-    if !squelchOpen, let chans = buf.floatChannelData {
-      let nch = Int(buf.format.channelCount)
-      let n = Int(buf.frameLength)
-      for c in 0..<nch { memset(chans[c], 0, n * MemoryLayout<Float>.size) }
-    }
-    // ★ V12 binaural tuning (see binauralH). Off = one atomic load and nothing else. ENGINE_CH is 2, so the
-    //   buffer is always stereo here; the guard is for safety, not a path.
-    //   ★ vibe_binaural_enabled reads ACTIVE, not the switch: turned off, it stays 1 until the lean has centred and
-    //     the SSB/CW spread's constant 10.7 ms delay has crossfaded out — stopping mid-glide would click.
-    if vibe_binaural_enabled(binauralH) != 0, buf.format.channelCount == 2, let chans = buf.floatChannelData {
-      vibe_binaural_process_planar(binauralH, chans[0], chans[1], Int32(buf.frameLength), Int32(fmt.sampleRate))
-    }
+    // ★ Squelch and binaural used to be applied here; since V12's record buffer they are in deliver(), BEFORE the
+    //   recorder, so a recording is what the listener heard. This now only queues the buffer for the speaker.
     // Live-edge bound: if a delivery burst piles up more than ~0.4s of queued
     // audio, drop instead of scheduling — latency stays bounded instead of
     // accumulating forever (runs on audioQ; queuedSeconds audioQ-only).

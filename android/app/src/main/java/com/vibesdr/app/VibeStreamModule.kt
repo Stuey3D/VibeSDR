@@ -514,7 +514,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.setSquelchOpen(open)
     }
 
-    // Recorder — MediaCodec AAC + MediaMuxer on the service decode thread
+    // Recorder — MediaCodec AAC + MediaMuxer on the service's recorder thread (recExec)
     @ReactMethod
     fun startRecording(frequency: Double, mode: String, promise: Promise) {
         val svc = VibeStreamService.instance
@@ -528,6 +528,17 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         if (svc == null) promise.resolve(null)
         else svc.stopRecordingNative(promise)
     }
+
+    // ★★ V12 RECORD BUFFER — the ring is process-wide (VibeStreamService.recRing), so these work before the service
+    //    exists: the setting arrives when a screen mounts. 0 = Off (frees it).
+    @ReactMethod
+    fun setRecordBuffer(seconds: Double) {
+        val s = seconds.toInt().coerceIn(0, 120)
+        if (VibeStreamService.recRing.capacitySeconds != s) VibeStreamService.recRing.setCapacity(s)
+    }
+
+    @ReactMethod
+    fun clearRecordBuffer() { VibeStreamService.recRing.clear() }
 
     @ReactMethod
     fun shareRecording(path: String) {

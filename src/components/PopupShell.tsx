@@ -44,6 +44,7 @@ import { NO_DROP_SHADOW, type PlateTokens } from '../constants/faceplate';
 import ChassisPlate from './ChassisPlate';
 import { useDomeKey, DOME_TRAVEL } from './DomeKey';
 import { CAP_SHEEN } from '../constants/capSheen';
+import { useRisingPressRetention } from './RotateFade';
 
 export type { PopupTokens } from '../constants/popupTokens';
 /** ★ The scroll indicator's lane (popupTokens.ts) — every popup scroller takes it from here. */
@@ -312,6 +313,7 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
   }), [silver]);
   const dim = useAnimatedStyle(() => ({ opacity: Math.max(0, Math.min(1, progress.value)) }));
 
+  const retain = useRisingPressRetention();   // ★ a press while the sheet rises — RotateFade.tsx SheetRisingCtx
   const onIn  = disabled ? undefined : (e: GestureResponderEvent) => { pressIn(); onPressIn?.(e); };
   const onOut = disabled ? undefined : (e: GestureResponderEvent) => { pressOut(); onPressOut?.(e); };
 
@@ -328,6 +330,7 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
       accessibilityState={{ selected: active, disabled }} accessibilityLabel={accessibilityLabel ?? label}
       accessibilityHint={accessibilityHint}
       onPress={disabled ? undefined : onPress} onPressIn={onIn} onPressOut={onOut} hitSlop={hitSlop}
+      pressRetentionOffset={retain}
       style={[ps.cap, { minHeight: height, backgroundColor: silver ? '#c4c1ba' : '#111214',
                         borderColor: silver ? '#8d8a83' : '#050505' },
               layoutOnly(style), focused && { borderColor: pt.ink.focus, borderWidth: 2 },

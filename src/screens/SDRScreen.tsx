@@ -116,6 +116,7 @@ import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq, fetchOccupancy,
          isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
+import { useRecordBuffer, bufferedSecondsOf }          from '../hooks/useRecordBuffer';
 import { setDefaultInstance, getDefaultInstance,
          clearDefaultInstance }                        from '../services/defaultInstance';
 import { getFavourites, toggleFavourite }              from '../services/favourites';
@@ -3575,29 +3576,48 @@ export default function SDRScreen({ route, navigation }: Props) {
   // sheet, and fire the share from the sheet's onDismiss (nothing modal up).
   const pendingRecShare = useRef<string | null>(null);
 
+  /* ★★ V12 RECORD BUFFER — the last 30/60 s of what a recording would capture, so ⏺ REC starts with the audio from
+   *    before the tap (hooks/useRecordBuffer; the rule: services/recordBuffer.ts). The SOURCE is everything whose
+   *    change means different audio: the server (or local radio — urlScope), the receiver on a multi-radio server,
+   *    and the DAB ensemble + service. */
+  const recBufSource = `${urlScope}|${radioBase ?? ''}|${dabOn && dabState ? `dab:${dabState.channel}:${dabState.sid}` : ''}`;
+  const [recBufSeconds, setRecBufSeconds] = useRecordBuffer({
+    freqHz: status.frequency || 0, mode: String(status.mode || ''), source: recBufSource, recording: isRecording });
+
   /* ★★ ONE TAP, ONE RECORDING (Stuart on V12 482, 2026-10-17: "it took a few clicks and a false file created, it
    *    seems really delayed"). The button only changed once native had opened the file, so a slow open looked like a
    *    dead button; the next tap then landed as stop-then-start and left a stray file. Now the button shows
    *    recording AT ONCE, taps are ignored while a start or stop is in flight, and a failed start puts it back. */
   const recBusy = useRef(false);
   const toggleRecording = useCallback(() => {
-    if (recBusy.current) return;
+    // ★ Every press is written down (Diagnostics → audio path), so a press that never arrived is provable.
+    if (recBusy.current) { noteAudioEvent('REC press ignored — a start/stop is in flight'); return; }
     if (!isRecording) {
       recBusy.current = true;
-      setRecStartedAt(Date.now());
+      const tapAt = Date.now();
+      setRecStartedAt(tapAt);
       setIsRecording(true);
+      noteAudioEvent('REC press → start requested');
       // Pass the LIVE freq/mode for the filename — native currentFreq is only
       // tracked on UberSDR's audio WS, so OWRX would otherwise show a stale freq.
       (VibePowerModule as any)?.startRecording(Math.round(status.frequency || 0), String(status.mode || ''))
-        .then(() => { recBusy.current = false; })
+        .then((r: unknown) => {
+          recBusy.current = false;
+          // ★ V12 record buffer: the file already holds this many seconds from before the tap — the timer says so.
+          const pre = bufferedSecondsOf(r);
+          if (pre > 0) setRecStartedAt((t) => (t === tapAt ? tapAt - Math.round(pre * 1000) : t));
+          noteAudioEvent(`REC started${pre > 0 ? ` (${pre.toFixed(1)} s from the record buffer)` : ''}`);
+        })
         .catch((e: Error) => {
           recBusy.current = false;
           setRecStartedAt(null);
           setIsRecording(false);
+          noteAudioEvent(`REC start refused — ${e.message}`);
           Alert.alert('Recording', `Could not start recording: ${e.message}`);
         });
     } else {
       recBusy.current = true;
+      noteAudioEvent('REC press → stop requested');
       setRecStartedAt(null);
       setIsRecording(false);
       VibePowerModule?.stopRecording()
@@ -10556,7 +10576,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    styles, so nothing here pointed at the row; the whole sentence re-read against AudioSheet, MenuSheet and
     //    FreqModal once more — unchanged.
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — noise reduction, the auto notch, squelch, binaural tuning, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch, binaural tuning, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
@@ -12314,6 +12334,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         recording={isRecording}
         recSeconds={recSeconds}
         onRec={toggleRecording}
+        recBuffer={recBufSeconds}
+        onRecBuffer={setRecBufSeconds}
         onRecordings={() => { setAudioSheetOpen(false); setRecordingsOpen(true); }}
         snrSquelch={snrSquelch}          onSnrSquelch={onSnrSquelch}
         onSquelchDrag={onSquelchDrag}

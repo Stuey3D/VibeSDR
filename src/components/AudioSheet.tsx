@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RECORD_BUFFER_CHOICES, type RecordBufferSeconds } from '../services/recordBuffer';
 import {
   Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
-import { RotateSheet, SheetRise } from './RotateFade';
+import { RotateSheet, SheetRise, useRisingPressRetention } from './RotateFade';
 import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
@@ -399,6 +400,7 @@ function Btn({ label, active, onPress, full, style, pip }: {
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
   const { focused, viewRef } = useNavButton(onPress);
+  const retain = useRisingPressRetention();   // ★ a press while the sheet rises (RotateFade SheetRisingCtx)
   if (pt.metal) {
     return (
       <PopupKey ref={viewRef as any} label={label} active={!!active} pip={pip ?? active !== undefined}
@@ -412,7 +414,7 @@ function Btn({ label, active, onPress, full, style, pip }: {
       ref={viewRef as any}
       style={[st.btn, active && st.btnActive, full && st.btnFull, style,
               focused && st.btnFocused]}
-      onPress={onPress} hitSlop={4} activeOpacity={0.7}
+      onPress={onPress} hitSlop={4} activeOpacity={0.7} pressRetentionOffset={retain}
     >
       <Text style={[st.btnText, active && st.btnTextActive]}>{label}</Text>
     </TouchableOpacity>
@@ -426,6 +428,7 @@ function SegBtn({ label, active, onPress }: { label: string; active: boolean; on
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
   const { focused, viewRef } = useNavButton(onPress);
+  const retain = useRisingPressRetention();
   if (pt.metal) {
     return <PopupKey ref={viewRef as any} label={label} active={active} pip onPress={onPress}
                      focused={focused} height={32} fontSize={11} style={{ minWidth: 54 }} />;
@@ -433,7 +436,7 @@ function SegBtn({ label, active, onPress }: { label: string; active: boolean; on
   return (
     <TouchableOpacity ref={viewRef as any}
       style={[st.btn, active && st.btnActive, focused && st.btnFocused]}
-      onPress={onPress} hitSlop={4} activeOpacity={0.7}>
+      onPress={onPress} hitSlop={4} activeOpacity={0.7} pressRetentionOffset={retain}>
       <Text style={[st.btnText, active && st.btnTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
@@ -452,6 +455,7 @@ function Toggle({ label, on, onPress, padH = 16, marginLeft, a11y }: {
 }) {
   const pt = usePopupTheme();
   const C = audioC(pt);
+  const retain = useRisingPressRetention();
   if (pt.metal) {
     return (
       <PopupKey label={label} active={on} pip onPress={onPress} hitSlop={8} height={30} fontSize={10}
@@ -460,6 +464,7 @@ function Toggle({ label, on, onPress, padH = 16, marginLeft, a11y }: {
   }
   return (
     <TouchableOpacity onPress={onPress} hitSlop={marginLeft != null ? 6 : 8} accessibilityLabel={a11y}
+      pressRetentionOffset={retain}
       style={{ paddingHorizontal: padH, paddingVertical: 4, borderRadius: 6,
                ...(marginLeft != null ? { marginLeft } : null),
                backgroundColor: on ? pt.gold.sel : 'transparent',
@@ -508,6 +513,10 @@ export interface AudioSheetProps {
   onRec?:       () => void;
   recSeconds?:  number;
   onRecordings?: () => void;
+  /** ★★ V12 RECORD BUFFER — 0 (Off) / 30 / 60 s held before the tap (hooks/useRecordBuffer). App-wide. Every backend:
+   *  it holds what a recording captures, so wherever REC works, so does this. Hidden when the screen passes no handler. */
+  recBuffer?:   RecordBufferSeconds;
+  onRecBuffer?: (s: RecordBufferSeconds) => void;
 
   // Squelch variants (gated by backend)
   snrSquelch?:   number;  onSnrSquelch?:   (v: number) => void;
@@ -610,7 +619,7 @@ export interface AudioSheetProps {
 export default function AudioSheet({
   visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', meterBus, isLocal = false, recordingOnly = false,
   nr = false, onNr, nb = false, onNb, nbx = false, onNbx, nfmVoice = true, onNfmVoice,
-  recording = false, onRec, recSeconds = 0, onRecordings,
+  recording = false, onRec, recSeconds = 0, onRecordings, recBuffer = 0, onRecBuffer,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR,
@@ -781,6 +790,26 @@ export default function AudioSheet({
               <View style={st.recDot} />
               <Text style={st.recTime}>{fmtRecTime(recSeconds)}</Text>
             </PopupWindow>
+          )}
+          {/* ★★ RECORD BUFFER (V12) — beside REC because it changes what REC does: Stuart, 2026-10-18, "a setting so a
+              user knows why recordings are longer than they expected. Next to the record button". The note is his
+              wording. Drawn as DE-EMPH's pick-one row, so it is right on every chassis without new styles. */}
+          {onRecBuffer && (
+            <View style={{ marginTop: 2 }}>
+              <View style={st.bwRow}>
+                <Text style={[st.bwLabel, { width: 88 }]}>REC BUFFER</Text>
+                <View style={st.keyWrapEnd}>
+                {RECORD_BUFFER_CHOICES.map((v) => (
+                  <Toggle key={v} label={v === 0 ? 'OFF' : `${v} s`} on={recBuffer === v} onPress={() => onRecBuffer(v)}
+                    padH={10} marginLeft={6}
+                    a11y={v === 0 ? 'Record buffer off' : `Record buffer ${v} seconds`} />
+                ))}
+                </View>
+              </View>
+              <Text style={st.iqNote}>
+                Record Buffer: when enabled, VibeSDR holds a live buffer of up to {recBuffer === 60 ? '60' : recBuffer === 30 ? '30' : '30 or 60'} seconds of audio, which can allow for recording of easily missed signals. This buffer is cleared on retune, so the previous station's audio is not included.
+              </Text>
+            </View>
           )}
           {onRecordings && (
             <BtnRow>
