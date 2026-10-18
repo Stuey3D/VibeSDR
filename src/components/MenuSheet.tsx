@@ -29,7 +29,7 @@ import {
   NativeEventEmitter,
   NativeModules,
   Platform,} from 'react-native';
-import { RotateSheet } from './RotateFade';
+import { RotateSheet, SheetRisingCtx } from './RotateFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import Slider from '@react-native-community/slider';
@@ -1479,12 +1479,17 @@ function MenuSheetBody({
   );
   useEffect(() => { if (!visible) setSearchQuery(''); }, [visible]);
 
+  // ★★ True while the sheet springs up — its keys keep a press made mid-rise (RotateFade.tsx SheetRisingCtx).
+  const [rising, setRising] = useState(false);
   useEffect(() => {
     if (visible) {
+      setRising(true);
+      let live = true;
       Animated.parallel([
         Animated.timing(backdropOp, { toValue: 1, duration: 220, useNativeDriver: true }),
         Animated.spring(translateY, { toValue: 0, damping: 22, stiffness: 200, useNativeDriver: true }),
-      ]).start();
+      ]).start(() => { if (live) setRising(false); });
+      return () => { live = false; };
     } else {
       Animated.parallel([
         Animated.timing(backdropOp, { toValue: 0, duration: 180, useNativeDriver: true }),
@@ -1498,7 +1503,7 @@ function MenuSheetBody({
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <RotateSheet>
+      <RotateSheet><SheetRisingCtx.Provider value={rising}>
       <View style={StyleSheet.absoluteFill} onTouchStart={noteTouchInteraction}>
         <TouchableWithoutFeedback onPress={onClose}>
           {/* ★★★ Transparency OFF: no dim — a full-screen blend over the live waterfall. The view
@@ -2163,7 +2168,7 @@ function MenuSheetBody({
           )}
         </Animated.View>
       </View>
-      </RotateSheet>
+      </SheetRisingCtx.Provider></RotateSheet>
     </Modal>
   );
 }

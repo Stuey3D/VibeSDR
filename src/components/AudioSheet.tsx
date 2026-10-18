@@ -3,7 +3,7 @@ import { RECORD_BUFFER_CHOICES, type RecordBufferSeconds } from '../services/rec
 import {
   Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
-import { RotateSheet, SheetRise } from './RotateFade';
+import { RotateSheet, SheetRise, useRisingPressRetention } from './RotateFade';
 import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
@@ -400,6 +400,7 @@ function Btn({ label, active, onPress, full, style, pip }: {
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
   const { focused, viewRef } = useNavButton(onPress);
+  const retain = useRisingPressRetention();   // ★ a press while the sheet rises (RotateFade SheetRisingCtx)
   if (pt.metal) {
     return (
       <PopupKey ref={viewRef as any} label={label} active={!!active} pip={pip ?? active !== undefined}
@@ -413,7 +414,7 @@ function Btn({ label, active, onPress, full, style, pip }: {
       ref={viewRef as any}
       style={[st.btn, active && st.btnActive, full && st.btnFull, style,
               focused && st.btnFocused]}
-      onPress={onPress} hitSlop={4} activeOpacity={0.7}
+      onPress={onPress} hitSlop={4} activeOpacity={0.7} pressRetentionOffset={retain}
     >
       <Text style={[st.btnText, active && st.btnTextActive]}>{label}</Text>
     </TouchableOpacity>
@@ -427,6 +428,7 @@ function SegBtn({ label, active, onPress }: { label: string; active: boolean; on
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
   const { focused, viewRef } = useNavButton(onPress);
+  const retain = useRisingPressRetention();
   if (pt.metal) {
     return <PopupKey ref={viewRef as any} label={label} active={active} pip onPress={onPress}
                      focused={focused} height={32} fontSize={11} style={{ minWidth: 54 }} />;
@@ -434,7 +436,7 @@ function SegBtn({ label, active, onPress }: { label: string; active: boolean; on
   return (
     <TouchableOpacity ref={viewRef as any}
       style={[st.btn, active && st.btnActive, focused && st.btnFocused]}
-      onPress={onPress} hitSlop={4} activeOpacity={0.7}>
+      onPress={onPress} hitSlop={4} activeOpacity={0.7} pressRetentionOffset={retain}>
       <Text style={[st.btnText, active && st.btnTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
@@ -453,6 +455,7 @@ function Toggle({ label, on, onPress, padH = 16, marginLeft, a11y }: {
 }) {
   const pt = usePopupTheme();
   const C = audioC(pt);
+  const retain = useRisingPressRetention();
   if (pt.metal) {
     return (
       <PopupKey label={label} active={on} pip onPress={onPress} hitSlop={8} height={30} fontSize={10}
@@ -461,6 +464,7 @@ function Toggle({ label, on, onPress, padH = 16, marginLeft, a11y }: {
   }
   return (
     <TouchableOpacity onPress={onPress} hitSlop={marginLeft != null ? 6 : 8} accessibilityLabel={a11y}
+      pressRetentionOffset={retain}
       style={{ paddingHorizontal: padH, paddingVertical: 4, borderRadius: 6,
                ...(marginLeft != null ? { marginLeft } : null),
                backgroundColor: on ? pt.gold.sel : 'transparent',
