@@ -29,9 +29,11 @@
  * Run: VIBE_TEST_AUDIO=$HOME/VibeSDR-test-audio node --no-warnings scripts/test_binauralSweep.ts
  */
 import { openSync, readSync, closeSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
-import { BinauralTracker, COARSE_MAX_BIN_HZ, type BinauralSink } from '../src/services/binauralOffset.ts';
+import { BinauralTracker, COARSE_MAX_BIN_HZ, COARSE_CROWD_MAX_BIN_HZ, SsbCoarse, type BinauralSink } from '../src/services/binauralOffset.ts';
 import { MODE_BANDWIDTHS } from '../src/services/sdrProtocol.ts';
 
+// ★ VIBE_SWEEP_CROWD_MAX=<Hz>: read the waterfall up to this bin width (a measurement override; 100 = build 484's reach).
+if (process.env.VIBE_SWEEP_CROWD_MAX) SsbCoarse.maxBinHz = Number(process.env.VIBE_SWEEP_CROWD_MAX);
 const root = process.env.VIBE_TEST_AUDIO;
 if (!root || !existsSync(`${root}/iq/uber_40m_7150000_iq192.wav`)) {
   console.log('   NOT RUN — set VIBE_TEST_AUDIO to the folder holding iq/ (not in the repo)');
@@ -90,7 +92,8 @@ function fft(re: Float64Array, im: Float64Array) {
 
 /** One waterfall row as a server sends it: `bins` dB values over [viewCentre ± span/2], from two averaged Hann FFTs
  *  at time t (a server's rows are a short average too). */
-function spectrumRow(iq: Iq, t: number, nfft: number, viewCentre: number, nBins: number): Float32Array {
+function spectrumRow(iq: Iq, t: number, nfft: number, viewCentre: number, nBins: number, dial = NaN): Float32Array {
+  if (nfft & (nfft - 1)) return spectrumRowDft(iq, t, nfft, viewCentre, nBins, dial);
   const fs = iq.fs, binHz = fs / nfft;
   const pow = new Float64Array(nfft);
   const re = new Float64Array(nfft), im = new Float64Array(nfft);
@@ -118,6 +121,57 @@ function spectrumRow(iq: Iq, t: number, nfft: number, viewCentre: number, nBins:
   return out;
 }
 
+/** ★ The same row at a bin width no power of two gives (150, 195, 250 Hz: a phone's 1024 bins over 150-250 kHz): a
+ *  direct DFT of length `L` (bin = fs / L exactly), only for the bins within ±9 kHz of the dial — all the waterfall cue
+ *  reads (its window is the passband ± 3 kHz) — the rest of the row is the floor. */
+const twiddles = new Map<number, { c: Float64Array; s: Float64Array; w: Float64Array }>();
+function spectrumRowDft(iq: Iq, t: number, L: number, viewCentre: number, nBins: number, dial: number): Float32Array {
+  const fs = iq.fs, binHz = fs / L;
+  let tw = twiddles.get(L);
+  if (!tw) {
+    tw = { c: new Float64Array(L), s: new Float64Array(L), w: new Float64Array(L) };
+    for (let m = 0; m < L; m++) { tw.c[m] = Math.cos(2 * Math.PI * m / L); tw.s[m] = Math.sin(2 * Math.PI * m / L); tw.w[m] = 0.5 - 0.5 * Math.cos(2 * Math.PI * m / L); }
+    twiddles.set(L, tw);
+  }
+  const xr = new Float64Array(2 * L), xi = new Float64Array(2 * L);
+  for (let s = 0; s < 2; s++) {
+    const a = Math.floor(t * fs) + s * (L >> 1);
+    for (let i = 0; i < L; i++) { const k = (a + i) % iq.re.length; xr[s * L + i] = iq.re[k] * tw.w[i]; xi[s * L + i] = iq.im[k] * tw.w[i]; }
+  }
+  const out = new Float32Array(nBins).fill(NaN);
+  const got: number[] = [];
+  const centre = Number.isFinite(dial) ? dial : viewCentre;
+  for (let b = 0; b < nBins; b++) {
+    const fAbs = viewCentre + (b - nBins / 2) * binHz;
+    if (Math.abs(fAbs - centre) > 9000) continue;
+    const f = fAbs - iq.centre;
+    if (Math.abs(f) > 0.42 * fs) continue;
+    const k = ((Math.round(f / binHz) % L) + L) % L;
+    let p = 0;
+    for (let s = 0; s < 2; s++) {
+      let ar = 0, ai = 0, m = 0;
+      const o = s * L;
+      for (let i = 0; i < L; i++) {   // X[k] = Σ x[i]·e^{−2πi·k·i/L}
+        const c = tw.c[m], sn = tw.s[m];
+        ar += xr[o + i] * c + xi[o + i] * sn; ai += xi[o + i] * c - xr[o + i] * sn;
+        m += k; if (m >= L) m -= L;
+      }
+      p += ar * ar + ai * ai;
+    }
+    out[b] = 10 * Math.log10(p / 2 + 1e-20);
+    got.push(out[b]);
+  }
+  got.sort((x, y) => x - y);
+  const floorDb = got.length ? got[Math.floor(got.length / 5)] : -100;
+  for (let b = 0; b < nBins; b++) if (Number.isNaN(out[b])) out[b] = floorDb;
+  return out;
+}
+/** Bin widths that are a power of two of the I/Q rate (the original zooms) take the radix-2 FFT; the rest, exact. */
+const POW2_ZOOMS = new Set([23, 47, 94, 188, 375]);
+function nfftFor(fs: number, binTarget: number): number {
+  return POW2_ZOOMS.has(binTarget) ? 1 << Math.round(Math.log2(fs / binTarget)) : Math.round(fs / binTarget);
+}
+
 // ── the voices whose carriers are known (test-ssb-offset-real kQsos: carrier + its own audio offset) ─────────────
 interface Voice { carrier: number; sb: number }
 const voice = (c: number, sb: number, base: number): Voice => ({ carrier: c + sb * base, sb });
@@ -138,20 +192,25 @@ const REAL: (Band & { file: string })[] = [
 // ★ Where the voice fills ≥ 300 Hz of the passband: LSB voice C−2700…C−300 against D−2700…D−50 (USB mirrored).
 const [PB_LO, PB_HI] = [MODE_BANDWIDTHS.usb[0], MODE_BANDWIDTHS.usb[1]];
 function voiceInView(v: Voice, dial: number, minOverlap = 300): boolean {
+  return voiceOverlap(v, dial) >= minOverlap;
+}
+function voiceOverlap(v: Voice, dial: number): number {
   const vLo = v.sb > 0 ? v.carrier + 300 : v.carrier - 2700, vHi = v.sb > 0 ? v.carrier + 2700 : v.carrier - 300;
   const pLo = v.sb > 0 ? dial + PB_LO : dial - PB_HI, pHi = v.sb > 0 ? dial + PB_HI : dial - PB_LO;
-  return Math.min(vHi, pHi) - Math.max(vLo, pLo) >= minOverlap;
+  return Math.min(vHi, pHi) - Math.max(vLo, pLo);
 }
 
 // ── a sweep ──────────────────────────────────────────────────────────────────────────────────────────────────────
-interface Ev { t: number; k: 'dial' | 'hint' | 'src'; v: number; ok?: boolean; dead?: number; full?: number }
-interface SweepStats { inView: number; cue: number; right: number; judged: number; errs: number[]; signed: number[]; near: number; nearFalse: number; second: number }
+/** ★ 'two' = setSsbHint2 (native's CROWDED judgement) — replayed too: it changes what the audio does. */
+interface Ev { t: number; k: 'dial' | 'hint' | 'src' | 'two'; v: number; ok?: boolean; dead?: number; full?: number }
+interface SweepStats { inView: number; cue: number; right: number; judged: number; errs: number[]; signed: number[]; near: number; nearFalse: number; second: number; frames: number; leanSent: number }
+const newStats = (): SweepStats => ({ inView: 0, cue: 0, right: 0, judged: 0, errs: [], signed: [], near: 0, nearFalse: 0, second: 0, frames: 0, leanSent: 0 });
 
 interface Band { name: string; sb: number; voices: Voice[]; sweeps: [number, number][]; judged: boolean }
 function sweep(iq: Iq, band: Band, from: number, to: number, stepHz: number, everySec: number, binTarget: number,
                t0: number, events: Ev[] | null): SweepStats {
-  const st: SweepStats = { inView: 0, cue: 0, right: 0, judged: 0, errs: [], signed: [], near: 0, nearFalse: 0, second: 0 };
-  const nfft = 1 << Math.round(Math.log2(iq.fs / binTarget));
+  const st: SweepStats = newStats();
+  const nfft = nfftFor(iq.fs, binTarget);
   const binHz = iq.fs / nfft;
   const nBins = Math.min(1024, Math.floor(nfft * 0.85));
   const span = nBins * binHz;
@@ -161,7 +220,7 @@ function sweep(iq: Iq, band: Band, from: number, to: number, stepHz: number, eve
   let now = 0;
   const sink: BinauralSink = {
     setBinauralSsbHint: (hz, ok) => { hint = { ok, hz }; events?.push({ t: t(), k: 'hint', v: hz, ok }); },
-    setBinauralSsbHint2: (hz, ok) => { hint2 = { ok, hz }; },
+    setBinauralSsbHint2: (hz, ok) => { hint2 = { ok, hz }; events?.push({ t: t(), k: 'two', v: hz, ok }); },
     setBinauralDial: (hz) => { events?.push({ t: t(), k: 'dial', v: hz }); },
     setBinauralSource: (s, dead, full) => { events?.push({ t: t(), k: 'src', v: s, dead, full }); },
   };
@@ -177,8 +236,10 @@ function sweep(iq: Iq, band: Band, from: number, to: number, stepHz: number, eve
     const dial = from + dir * stepHz * Math.min(steps, Math.floor(now / everySec));
     // the view follows the dial the way a phone does: re-centred when the dial nears an edge
     if (!Number.isFinite(viewCentre) || Math.abs(dial - viewCentre) > 0.35 * span) viewCentre = dial;
-    const bins = spectrumRow(iq, t0 + now, nfft, viewCentre, nBins);
+    const bins = spectrumRow(iq, t0 + now, nfft, viewCentre, nBins, dial);
     tr.onFrame(bins, { centerHz: viewCentre, bwHz: span, tuneHz: dial, lo, hi }, mode, Math.round(now * 1000));
+    st.frames++;
+    if (hint.ok) st.leanSent++;   // ★ over COARSE_MAX_BIN_HZ this must stay 0: no lean source from a coarse waterfall
     // judge against the nearest known voice in view
     const inView = band.voices.filter((v) => voiceInView(v, dial));
     // ★ judged only where ONE voice is in the passband and no other touches it (a composite band's truth is exact)
@@ -188,7 +249,8 @@ function sweep(iq: Iq, band: Band, from: number, to: number, stepHz: number, eve
     const v = inView[0];
     st.inView++;
     // ★★★ A LONE voice must not read as two (2026-10-18: the second-voice cue makes native place by frequency, no lean)
-    if (hint.ok && hint2.ok) st.second++;
+    //     (★ over COARSE_MAX_BIN_HZ the second is sent with no first cue, and native takes it alone as two: hint2 is the test)
+    if (hint2.ok) st.second++;
     if (!hint.ok) continue;
     st.cue++;
     const truth = v.carrier - dial, got = hint.hz - dial;
@@ -319,6 +381,107 @@ const COMPOSITES: (Band & { iq: Iq })[] = [
   { name: 'LSB composite', iq: lsbC.iq, sb: -1, voices: lsbC.voices, sweeps: [[7000000 - 9500, 7000000 + 9500]], judged: true },
   { name: 'USB composite', iq: usbC.iq, sb: +1, voices: usbC.voices, sweeps: [[14000000 - 9500, 14000000 + 9500]], judged: true },
 ];
+// ── ZOOMING IN ON A VOICE YOU ARE ON (2026-10-18, Stuart on 484) ────────────────────────────────────────────────────
+/* ★★★ "when i was zoomed out the voice was correctly in the centre but when i zoomed in without tuning it panned over
+ *     slightly" — RIGHT, "a bassy male voice" (40 m: LSB). The dial never moves; only the bin width does, from 195 Hz (a
+ *     phone's 1024 bins over 200 kHz: no cue) to 94 / 47 Hz (the cue engages). Every known voice, parked ON TUNE — the
+ *     composite's (exact truth, in noise) and the real bands' (as recorded: neighbours 1-4 kHz away, splatter, fading),
+ *     the real ones cut to 24 kHz around the dial so the native half (test-ssb-offset-real §8) can replay the same audio.
+ *     Reported here per voice: what the app sends native after the zoom — the cue's figure (a cue ≥ kCoarseMinHz = 150 Hz
+ *     with no estimator answer seeds a lean), and the second voice (crowded: each voice placed by frequency — an on-tune
+ *     voice's energy sits low in the passband, so that moves it too). Judged: a lone on-tune voice is never read as two.
+ *     ★ Rule (Stuart): a lone on-tune voice is untouched at every zoom; crowd engages only for a separate second signal. */
+/** A 24 kHz complex slice of a recording around `centre` — everything in it kept (neighbours, splatter): a receiver's view. */
+function cutBand(iq: Iq, centre: number, fromSec: number, secs: number): Iq {
+  const D = FS / CFS, n = Math.floor(secs * CFS);
+  const h1 = lowpassTaps(10500, FS, 129);
+  const re = new Float32Array(n), im = new Float32Array(n);
+  const w1 = -2 * Math.PI * (centre - iq.centre) / FS;
+  const a0 = Math.floor(fromSec * FS);
+  for (let o = 0; o < n; o++) {
+    let ar = 0, ai = 0;
+    const base = a0 + o * D;
+    for (let k = 0; k < h1.length; k++) {
+      const i = (base + k) % iq.re.length; const ph = w1 * (base + k); const c = Math.cos(ph), sn = Math.sin(ph);
+      const xr = iq.re[i], xi = iq.im[i];
+      ar += h1[k] * (xr * c - xi * sn); ai += h1[k] * (xr * sn + xi * c);
+    }
+    re[o] = ar; im[o] = ai;
+  }
+  return { re, im, centre, fs: CFS };
+}
+interface ParkSeg { frames: number; seed: number; cue: number; two: number; cues: number[] }
+const newSeg = (): ParkSeg => ({ frames: 0, seed: 0, cue: 0, two: 0, cues: [] });
+/** The dial parked at `dial` for `dur` s; the bin width follows `plan` ([from s, bin Hz], in order). Per plan segment. */
+function parked(iq: Iq, sb: number, dial: number, plan: [number, number][], dur: number, t0: number, events: Ev[] | null): ParkSeg[] {
+  let hint = { ok: false, hz: 0 }, hint2 = { ok: false, hz: 0 };
+  let now = 0;
+  const sink: BinauralSink = {
+    setBinauralSsbHint: (hz, ok) => { hint = { ok, hz }; events?.push({ t: now, k: 'hint', v: hz, ok }); },
+    setBinauralSsbHint2: (hz, ok) => { hint2 = { ok, hz }; events?.push({ t: now, k: 'two', v: hz, ok }); },
+    setBinauralDial: (hz) => { events?.push({ t: now, k: 'dial', v: hz }); },
+    setBinauralSource: (s, dead, full) => { events?.push({ t: now, k: 'src', v: s, dead, full }); },
+  };
+  const tr = new BinauralTracker(sink);
+  const mode = sb > 0 ? 'usb' : 'lsb';
+  const [lo, hi] = sb > 0 ? [PB_LO, PB_HI] : [-PB_HI, -PB_LO];
+  const segs = plan.map(newSeg);
+  for (let f = 0; f * 0.1 < dur; f++) {
+    now = f * 0.1;
+    let si = 0; while (si + 1 < plan.length && now >= plan[si + 1][0]) si++;
+    const nfft = nfftFor(iq.fs, plan[si][1]);
+    const nBins = Math.min(1024, Math.floor(nfft * 0.85));
+    const span = nBins * (iq.fs / nfft);
+    const bins = spectrumRow(iq, t0 + now, nfft, dial, nBins, dial);
+    tr.onFrame(bins, { centerHz: dial, bwHz: span, tuneHz: dial, lo, hi }, mode, Math.round(now * 1000));
+    const sg = segs[si];
+    sg.frames++;
+    if (hint.ok) { sg.cue++; sg.cues.push(hint.hz - dial); if (Math.abs(hint.hz - dial) >= 150) sg.seed++; }
+    if (hint2.ok) sg.two++;
+    if (process.env.VIBE_ZOOM_TRACE && f % 5 === 0) console.log(`      t ${now.toFixed(1)} bins ${plan[si][1]} first ${(tr.firstHz - dial).toFixed(0)} second ${(tr.secondHz - dial).toFixed(0)} hint ${hint.ok ? (hint.hz - dial).toFixed(0) : '-'} two ${hint2.ok ? (hint2.hz - dial).toFixed(0) : '-'}`);
+  }
+  return segs;
+}
+if (!process.env.VIBE_SWEEP_PART || process.env.VIBE_SWEEP_PART.includes('zoom')) {
+  console.log('   ── zooming in on a voice you are ON (dial still; 195 Hz bins for 15 s, then 94 or 47 Hz) ──');
+  const PLANS: [string, [number, number][]][] = [['195-94', [[0, 195], [15, 94]]], ['195-47', [[0, 195], [15, 47]]]];
+  const ZDUR = 45;
+  const parkedOn: { name: string; iq: Iq; sb: number; dial: number; file: string }[] = [];
+  for (const b of COMPOSITES) for (const v of b.voices) parkedOn.push({ name: `${b.name} ${v.carrier}`, iq: b.iq, sb: b.sb, dial: v.carrier, file: `composite_${b.iq.centre}_${SECS}.f32` });
+  for (const b of REAL) for (const v of b.voices) {
+    const src = iqs.get(b.file)!;
+    if (Math.abs(v.carrier - src.centre) > 0.42 * FS - 12000) continue;
+    const cache = evDir || process.env.VIBE_SWEEP_CACHE;
+    const fileName = `zoomiq_${Math.round(v.carrier)}_${ZDUR}.f32`;
+    let iq: Iq;
+    if (cache && existsSync(`${cache}/${fileName}`)) {
+      const buf = readFileSync(`${cache}/${fileName}`); const f = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+      const n = f.length / 2; iq = { re: f.slice(0, n), im: f.slice(n), centre: v.carrier, fs: CFS };
+    } else {
+      iq = cutBand(src, v.carrier, 5, ZDUR);
+      if (cache) { const all = new Float32Array(2 * iq.re.length); all.set(iq.re, 0); all.set(iq.im, iq.re.length); writeFileSync(`${cache}/${fileName}`, Buffer.from(all.buffer)); }
+    }
+    parkedOn.push({ name: `${b.name} ${Math.round(v.carrier)}`, iq, sb: b.sb, dial: v.carrier, file: fileName });
+  }
+  let loneTwo = 0, loneFrames = 0;
+  for (const p of parkedOn) for (const [pn, plan] of PLANS) {
+    if (process.env.VIBE_ZOOM_ONLY && !`${p.name} ${pn}`.includes(process.env.VIBE_ZOOM_ONLY)) continue;
+    const ev: Ev[] | null = evDir ? [] : null;
+    const segs = parked(p.iq, p.sb, p.dial, plan, ZDUR, 0, ev);
+    const a = segs[1];
+    const med = pct(a.cues, 0.5), lo10 = pct(a.cues, 0.1), hi90 = pct(a.cues, 0.9);
+    console.log(`   ${p.name.padEnd(26)} ${p.sb > 0 ? 'USB' : 'LSB'} ${pn}: before — two ${segs[0].two}/${segs[0].frames}`
+      + ` · after — cue ${a.cue}/${a.frames}, cue − dial median ${Number.isFinite(med) ? med.toFixed(0) : '-'} (10-90 % ${Number.isFinite(lo10) ? lo10.toFixed(0) : '-'}…${Number.isFinite(hi90) ? hi90.toFixed(0) : '-'}) Hz,`
+      + ` ≥150 Hz ${a.seed} · two ${a.two}/${a.frames}`);
+    // ★ the composites' voices are 3.2+ kHz apart: one alone in the passband — a "two" there is a lone voice read as two
+    if (p.file.startsWith('composite')) { loneTwo += segs[0].two + a.two; loneFrames += segs[0].frames + a.frames; }
+    if (ev) writeFileSync(`${evDir}/zoom_${p.name.replace(/ /g, '_')}_${pn}.json`,
+      JSON.stringify({ band: p.name, iq: p.file, fs: CFS, centre: p.iq.centre, secs: ZDUR, sb: p.sb, from: p.dial, to: p.dial, step: 100, every: 1,
+                       dur: ZDUR, zoomAt: plan[1][0], binTarget: plan[1][1], voices: [{ carrier: p.dial, sb: p.sb }], events: ev }));
+  }
+  check(loneTwo <= 0.01 * loneFrames, `zooming on an on-tune lone voice (composite): read as two on ≤ 1 % of frames (build 484: 3 %) (${loneTwo} of ${loneFrames} frames)`);
+  if (process.env.VIBE_SWEEP_PART === 'zoom') { console.log(fails ? 'BINAURAL SWEEP (zoom): FAILURES' : 'BINAURAL SWEEP (zoom): all passed'); process.exit(fails ? 1 : 0); }
+}
 const ALL: (Band & { iq: Iq })[] = [...COMPOSITES, ...REAL.map((b) => ({ ...b, iq: iqs.get(b.file)! }))];
 for (const binTarget of ZOOMS) {
   if (only && Number(only[1]) !== binTarget) continue;

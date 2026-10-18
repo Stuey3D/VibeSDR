@@ -343,6 +343,32 @@ console.log('── SSB: TWO voices either side of the dial (Stuart on 483: "ble
     for (let i = 0; i < 60; i++) { now += 100; t.onFrame(ssbFrame(dial, dial - 600, 300, false), g, 'usb', now); }
     ok(msgs.filter((m) => m.startsWith('h2')).pop() === 'h2 x', 'the other station gone quiet for 6 s: the second voice is let go');
   }
+  {
+    // ★★★ ON TUNE IS NEVER TWO (Stuart on 484: zoomed in on a voice he was on, "it panned over slightly" — right, "a bassy
+    //     male voice"). A deep voice right on tune (its low cut 100 Hz), a neighbour a busy band's 3 kHz away on each side
+    //     (wholly outside the passband; the far one's band ends early, as a real voice's average does — the 484 hidden-edge
+    //     rule read that as a voice overlapping the passband), and a hole in the middle of the on-tune voice: whatever the
+    //     edge search makes of them, a voice that fills the passband leaves no room for another.
+    for (const lsb of [false, true]) {
+      const c = new SsbCoarse();
+      const msgs: string[] = [];
+      const t = new BinauralTracker({ setBinauralSsbHint2: (hz: number, v: boolean) => msgs.push(v ? `h2 ${Math.round(hz - dial)}` : 'h2 x') });
+      const g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: lsb ? -2700 : 50, hi: lsb ? -50 : 2700 };
+      let seconds = 0;
+      for (let i = 0; i < 80; i++) {
+        const far = (lsb ? 1 : -1) * 3000;   // the neighbour beyond the voice's far end
+        const f = both(both(ssbFrame(dial, dial, 100, lsb), ssbFrame(dial, dial - far, 120, lsb)), ssbFrame(dial, dial + far, 300, lsb));
+        for (let k = 0; k < N; k++) {
+          const fr = CENTRE + (k - N / 2) * BIN, a = lsb ? dial - fr : fr - dial;
+          if (a > 1200 && a < 1600) f[k] = -100 + 3 * (rnd() - 0.5);   // a hole 1.2-1.6 kHz into the on-tune voice
+          if (a > 3000 + 1300) f[k] = -100 + 3 * (rnd() - 0.5);        // the far neighbour's band ends 1.3 kHz in
+        }
+        const r = c.onFrame(f, g, lsb); if (r.ok && Number.isFinite(r.secondHz)) seconds++;
+        t.onFrame(f, g, lsb ? 'lsb' : 'usb', i * 100);
+      }
+      ok(seconds === 0 && !msgs.some((m) => m !== 'h2 x'), `${lsb ? 'LSB' : 'USB'}: a deep voice ON TUNE between neighbours 3 kHz away, a hole in its band → never two (${seconds} readings said so; sent ${msgs.join(', ') || 'nothing'})`);
+    }
+  }
 }
 
 console.log('── THE SPREAD MAP (one behaviour: no style) ──');

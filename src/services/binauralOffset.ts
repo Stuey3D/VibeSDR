@@ -245,6 +245,10 @@ export function spectrumOffset(bins: ArrayLike<number>, g: SpecGeom, kind: Binau
  *  readings cost half its coverage. So it stays 100: a phone view wider than ~100 kHz (1024 bins) gives no cue — zoom
  *  in to sweep a band with the lean. */
 export const COARSE_MAX_BIN_HZ = 100;
+/** ★★★ …but the SECOND VOICE (setSsbHint2 → native places each voice by its own frequency) is read up to this: there is
+ *  no whole-image lean in the crowded state, so the on-tune misreading that sets COARSE_MAX_BIN_HZ does not matter to it.
+ *  Between the two, the cue's FIRST reading is used only to find the second one, and never sent (no lean). */
+export const COARSE_CROWD_MAX_BIN_HZ = 100;
 /** ★ Where the voice's band starts, above the suppressed carrier. Transmit filters cut their low end at ~100-400 Hz.
  *  ★ 180, not the textbook 300 (2026-10-18): measured on real voices (the composite sweep), 300 put the carrier 120-160 Hz
  *  too far from the voice on every zoom — the edge found 6 dB over the floor sits on the filter's skirt, and many
@@ -293,6 +297,18 @@ export const COARSE_VOICE_TOP_HZ = 3000;
 export const COARSE_SECOND_MIN_HZ = 300;
 /** Two voices' carriers this far apart are two voices, not one read twice (mirrors BinauralSpread::kCrowdSidesApartHz). */
 export const COARSE_SECOND_APART_HZ = 300;
+/** separate(): a voice's band is widened by this (plus two bins) before another voice's energy counts as outside it —
+ *  the filter's skirt, a band running past 2.7 kHz, and the cue's own error. */
+export const COARSE_SEPARATE_MARGIN_HZ = 150;
+/** separate(): the held average decays by this a frame (~10 a second): −6 dB in about 8 s — a QSO's over and its pause,
+ *  as long as native holds its crowded judgement (BinauralSpread::kCrowdHoldSec). (−6 dB in 4 s let a quiet partner's
+ *  energy drop out mid-over: test_binauralOffset's QSO at ∓600 Hz went 2.2 s unstated.) */
+export const COARSE_HOLD_DECAY = 0.983;
+/** separate(): each voice's own energy, outside the other's widened band, must cover this much of the passband (Hz).
+ *  On tune, the widened band covers all but (the cue's error − the widening) of it: ≤ 40 Hz at the worst measured
+ *  on-tune error (+234 Hz). Two voices ∓600 Hz either side leave the upper one ~300 Hz of its own once the cue's
+ *  ~100 Hz error is counted, so 300 was too tight. */
+export const COARSE_SEPARATE_MIN_HZ = 200;
 
 /**
  * ★★ WHERE THE SSB VOICE IS, FROM THE WATERFALL. A voice is speech, so any one frame is ragged; averaged over a
@@ -308,12 +324,19 @@ export const COARSE_SECOND_APART_HZ = 300;
  *   • Bins over COARSE_MAX_BIN_HZ, or nothing over the floor → no reading. Never a guess.
  */
 export class SsbCoarse {
+  /** The coarsest bins read at all (test instrument: scripts/test_binauralSweep.ts measures past it). */
+  static maxBinHz = COARSE_CROWD_MAX_BIN_HZ;
   private gridHz = 0;
   private startHz = 0;           // the absolute frequency of cell 0 (a multiple of gridHz)
   private pow = new Float64Array(0);
   private cnt = new Uint16Array(0);
+  /** Each cell's average, held: the larger of it now and its held value decayed by COARSE_HOLD_DECAY a frame — so a voice
+   *  that spoke in the last few seconds is still there (the other station of a QSO, between its overs). separate(). */
+  private hold = new Float64Array(0);
+  private floorNow = 0;
+  private lastG: SpecGeom | null = null;
 
-  reset(): void { this.gridHz = 0; this.pow = new Float64Array(0); this.cnt = new Uint16Array(0); }
+  reset(): void { this.gridHz = 0; this.pow = new Float64Array(0); this.cnt = new Uint16Array(0); this.hold = new Float64Array(0); this.floorNow = 0; this.lastG = null; }
 
   /** One frame. `lsb` = the voice is below its carrier. */
   onFrame(bins: ArrayLike<number>, g: SpecGeom, lsb: boolean): CoarseReading {
@@ -321,9 +344,9 @@ export class SsbCoarse {
     const n = bins.length;
     if (n < 8 || !(g.bwHz > 0) || !Number.isFinite(g.tuneHz)) return none;
     const binHz = g.bwHz / n;
-    if (binHz > COARSE_MAX_BIN_HZ) { this.reset(); return none; }
+    if (binHz > SsbCoarse.maxBinHz) { this.reset(); return none; }
     if (!(Math.abs(binHz - this.gridHz) <= 0.01 * binHz)) {
-      this.gridHz = binHz; this.pow = new Float64Array(0); this.cnt = new Uint16Array(0);
+      this.gridHz = binHz; this.pow = new Float64Array(0); this.cnt = new Uint16Array(0); this.hold = new Float64Array(0);
     }
     const lo = Math.min(g.lo, g.hi), hi = Math.max(g.lo, g.hi);
     const grid = this.gridHz;
@@ -331,13 +354,13 @@ export class SsbCoarse {
     const cells = Math.ceil((hi - lo + 2 * COARSE_MARGIN_HZ) / grid) + 1;
     // Slide the average to the window's new place (a retune): cells still in view keep what they have learnt.
     if (this.pow.length !== cells || start !== this.startHz) {
-      const np = new Float64Array(cells), nc = new Uint16Array(cells);
+      const np = new Float64Array(cells), nc = new Uint16Array(cells), nh = new Float64Array(cells);
       const shift = Math.round((start - this.startHz) / grid);
       for (let i = 0; i < cells; i++) {
         const j = i + shift;
-        if (j >= 0 && j < this.pow.length) { np[i] = this.pow[j]; nc[i] = this.cnt[j]; }
+        if (j >= 0 && j < this.pow.length) { np[i] = this.pow[j]; nc[i] = this.cnt[j]; nh[i] = this.hold[j] ?? 0; }
       }
-      this.pow = np; this.cnt = nc; this.startHz = start;
+      this.pow = np; this.cnt = nc; this.hold = nh; this.startHz = start;
     }
     for (let i = 0; i < cells; i++) {
       const k = Math.round((start + i * grid - g.centerHz) / binHz + n / 2);
@@ -348,6 +371,7 @@ export class SsbCoarse {
       this.pow[i] = this.cnt[i] === 0 ? p : this.pow[i] + COARSE_ALPHA * (p - this.pow[i]);
       if (this.cnt[i] < 60000) this.cnt[i]++;
     }
+    for (let i = 0; i < cells; i++) this.hold[i] = Math.max(this.pow[i], this.hold[i] * COARSE_HOLD_DECAY);
     // The floor: the lower fifth of the matured cells.
     const ripe: number[] = [];
     for (let i = 0; i < cells; i++) if (this.cnt[i] >= COARSE_MIN_FRAMES) ripe.push(this.pow[i]);
@@ -355,6 +379,7 @@ export class SsbCoarse {
     ripe.sort((a, b) => a - b);
     const floor = ripe[Math.floor(ripe.length / 10)];
     if (!(floor > 0)) return none;
+    this.floorNow = floor; this.lastG = g;
     /* ★★★ FIND THE CARRIER-SIDE EDGE ITSELF, not runs over a threshold (2026-10-18, the sweep test on real voices).
      *  Averaged over a second, real speech is RAGGED: one voice's band breaks into pieces 300-500 Hz apart (between
      *  formants, between words), and the old rule — the longest run over the floor, bridging only 150 Hz gaps — took a
@@ -376,6 +401,7 @@ export class SsbCoarse {
     const kVoice = Math.max(kTop + 1, Math.round(2700 / grid));
     let best = -1, bestCarrier = 0, bestE = -1;
     const found: Array<[number, number]> = [];   // [overlap, carrier] of every voice that fills the passband enough
+    const edges: number[] = [];                  // every voice edge found (voice-space cell), in the passband or not
     const ks = Math.round(COARSE_SKIRT_HZ / grid);
     for (let e = kq + ks; e < cells; e++) {
       const de = at(e);
@@ -393,6 +419,7 @@ export class SsbCoarse {
       }
       if (!(top >= COARSE_TOP_DB) || top < rest - COARSE_TOP_MARGIN_DB || cover * grid < 500) continue;   // B, C, D
       // The edge: where the step crosses COARSE_OVER_DB, between the quiet cell and the loud one (linear in dB).
+      edges.push(e);
       const dq = at(e - 1);
       const t = de > dq ? (de - COARSE_OVER_DB) / (de - dq) : 0.5;            // 0 = at the loud cell, 1 = at the quiet one
       const iIn = lsb ? cells - 1 - e : e, iOut = lsb ? cells - e : e - 1;
@@ -407,7 +434,8 @@ export class SsbCoarse {
       if (ov >= COARSE_MIN_OVERLAP_HZ && ov > best) { best = ov; bestCarrier = carrier; bestE = e; }
     }
     if (best < 0) return none;
-    // ★★★ The second voice: the one filling the passband most after the first, apart from it.
+    // ★★★ The second voice: the one filling the passband most after the first, apart from it (and really a second voice:
+    //     separate(), at the end).
     let second = NaN, secondOv = -1;
     for (const [ov, c] of found) if (Math.abs(c - bestCarrier) >= COARSE_SECOND_APART_HZ && ov > secondOv) { secondOv = ov; second = c; }
     /* ★★★ …or one whose edge the first one HIDES. Two voices less than a voice's width apart overlap, and the upper one's
@@ -415,6 +443,12 @@ export class SsbCoarse {
      *     no voice reaches more than COARSE_VOICE_TOP_HZ above its carrier: energy SUSTAINED beyond that (the cells are a
      *     second's average, so noise does not pass COARSE_OVER_DB) is another voice. Its far edge (its transmitter's top
      *     cut, ~2700 Hz above its carrier) places it. */
+    /* ★★★ …and only when no voice of its own is SEEN there. A hidden edge is hidden because the second voice overlaps the
+     *     first; energy beyond the first's band that has its OWN transmitter edge (one the search above found, wherever it
+     *     sits — `edges`, before the overlap test) is a SEPARATE voice, already judged at its true carrier.
+     *     ★ 2026-10-18 (Stuart on 484, the zoom-in lean): parked on a lone LSB voice with a neighbour 3.2 kHz below — whose
+     *       whole band is outside the passband — this rule read the neighbour's band as a hidden voice 1794 Hz below the
+     *       dial, overlapping the passband: CROWDED, and the on-tune voice was spread by frequency. */
     if (!Number.isFinite(second) && bestE >= 0) {
       const k0 = bestE + Math.round((COARSE_VOICE_TOP_HZ + COARSE_SKIRT_HZ - COARSE_VOICE_LOW_HZ) / grid);
       const kLen = Math.round(2700 / grid);
@@ -424,13 +458,50 @@ export class SsbCoarse {
         if (d >= COARSE_OVER_DB) { occ++; run = 0; top = j; }
         else if (Number.isFinite(d) && ++run * grid > 300) break;   // a gap of 300 Hz: the band has ended
       }
-      if (occ * grid >= COARSE_SECOND_MIN_HZ && top >= 0) {
+      const own = edges.some((e2) => e2 > bestE + Math.round(1000 / grid) && e2 <= top);
+      if (occ * grid >= COARSE_SECOND_MIN_HZ && top >= 0 && !own) {
         const topHz = start + (lsb ? cells - 1 - top : top) * grid;
         const c2 = lsb ? topHz + 2700 : topHz - 2700;
         if (Math.abs(c2 - bestCarrier) >= COARSE_SECOND_APART_HZ && coarseVoiceOverlap(c2, lsb, g) >= COARSE_MIN_OVERLAP_HZ) second = c2;
       }
     }
+    if (Number.isFinite(second) && !this.separate(bestCarrier, second, lsb)) second = NaN;
     return { ok: true, carrierHz: bestCarrier, bound: false, secondHz: second };
+  }
+
+  /**
+   * ★★★ ARE THESE TWO VOICES REALLY TWO? (2026-10-18, Stuart on 484: "when i zoomed in without tuning it panned over
+   * slightly" — on tune, right, "a bassy male voice".) Each must have shown energy, within the last few seconds (the held
+   * average), IN THE PASSBAND where the OTHER cannot reach — outside the other's band (COARSE_VOICE_LOW_HZ…2700 Hz from
+   * its carrier, widened by COARSE_SEPARATE_MARGIN_HZ and two bins for the cue's own error) — over at least
+   * COARSE_SEPARATE_MIN_HZ. A voice you are ON fills the passband, so nothing can be outside it there: a lone on-tune voice is
+   * never two, whatever a gap in its ragged spectrum or a neighbour beyond the passband looks like. Between two stations,
+   * each has its own part of the passband — and in a QSO either side, each shows it while it talks, held between overs.
+   * Measured: parked on lone voices, the zoom-in found a "second" 1794 Hz below the dial (a neighbour wholly outside the
+   * passband, read as hidden) — CROWDED, and native spread the on-tune voice by audio frequency: a bassy voice's energy
+   * is low audio, which on LSB is the higher RF, so the image moved right by 0.9-1.8 dB.
+   */
+  separate(c1: number, c2: number, lsb: boolean): boolean {
+    const g = this.lastG;
+    if (!g || !(this.floorNow > 0) || !(this.gridHz > 0) || !Number.isFinite(c1) || !Number.isFinite(c2)) return false;
+    const grid = this.gridHz;
+    const m = COARSE_SEPARATE_MARGIN_HZ + 2 * grid;
+    const pLo = g.tuneHz + Math.min(g.lo, g.hi), pHi = g.tuneHz + Math.max(g.lo, g.hi);
+    const band = (c: number, w: number): [number, number] =>
+      lsb ? [c - 2700 - w, c - COARSE_VOICE_LOW_HZ + w] : [c + COARSE_VOICE_LOW_HZ - w, c + 2700 + w];
+    const thr = this.floorNow * Math.pow(10, COARSE_OVER_DB / 10);
+    const own = (a: number, b: number) => {   // energy of voice a, in the passband, outside voice b's (widened) band
+      const [aLo, aHi] = band(a, 0), [bLo, bHi] = band(b, m);
+      let n = 0;
+      for (let i = 0; i < this.hold.length; i++) {
+        if (this.cnt[i] < COARSE_MIN_FRAMES) continue;
+        const f = this.startHz + i * grid;
+        if (f < pLo || f > pHi || f < aLo || f > aHi || (f >= bLo && f <= bHi)) continue;
+        if (this.hold[i] >= thr) n++;
+      }
+      return n * grid >= COARSE_SEPARATE_MIN_HZ;
+    };
+    return own(c1, c2) && own(c2, c1);
   }
 }
 
@@ -497,6 +568,10 @@ export class BinauralTracker {
   /** Voices the waterfall has seen lately (each reading's first AND second), merged within COARSE_SECOND_APART_HZ (a hidden voice is placed from its far edge, ±200 Hz). */
   private seen: Array<{ hz: number; at: number; n: number }> = [];
   private secondSentHz = NaN;
+  /** The waterfall's voices as last judged (ABSOLUTE Hz, NaN = none) — what the cue and the second say, whether or not
+   *  the zoom lets the first be sent. A test instrument (scripts/test_binauralSweep.ts); nothing reads it in the app. */
+  firstHz = NaN;
+  secondHz = NaN;
   private secondSentOk = false;
   private secondSentAt = -Infinity;
   private srcKey = '';
@@ -517,7 +592,7 @@ export class BinauralTracker {
     this.lastOkAt = -Infinity; this.sentHz = NaN; this.sentOk = false; this.sentAt = -Infinity;
     this.spreadSent = -1; this.coarse.reset(); this.coarseKey = ''; this.coarseHz = NaN; this.coarseAt = -Infinity;
     this.coarseSentHz = NaN; this.coarseSentOk = false; this.coarseSentAt = -Infinity;
-    this.seen = []; this.secondSentHz = NaN; this.secondSentOk = false; this.secondSentAt = -Infinity;
+    this.seen = []; this.firstHz = NaN; this.secondHz = NaN; this.secondSentHz = NaN; this.secondSentOk = false; this.secondSentAt = -Infinity;
   }
 
   setStereo(hint: number): void {
@@ -625,25 +700,38 @@ export class BinauralTracker {
       }
     }
     this.seen = this.seen.filter((x) => now - x.at <= BinauralTracker.COARSE_HOLD_MS && coarseVoiceOverlap(x.hz, lsb, g) >= COARSE_MIN_OVERLAP_HZ);
+    // ★★ A HELD reading only while its voice is still in the passband (2026-10-18, the sweep test on real voices): the
+    //    hold is for the pause between overs, not for a voice the knob has left behind — mid-sweep it kept leaning
+    //    toward a voice that was no longer in your ears, for up to COARSE_HOLD_MS after the dial had passed it.
+    const okFirst = Number.isFinite(this.coarseHz) && now - this.coarseAt <= BinauralTracker.COARSE_HOLD_MS
+      && (r.ok || coarseVoiceOverlap(this.coarseHz, lsb, g) >= COARSE_MIN_OVERLAP_HZ);
+    /* ★★★ THE LEAN ONLY AT FINE BINS; THE SECOND VOICE AT COARSE ONES TOO. Over COARSE_MAX_BIN_HZ the first reading cannot
+     *     tell on tune from a bin or two off, so it is never sent (native would lean on it) — but it still finds the second
+     *     voice, and two voices in the passband lean nothing: native places each by its own frequency
+     *     (BinauralSpread::crowd). So up to COARSE_CROWD_MAX_BIN_HZ the second is sent ALONE, and native takes a second
+     *     voice with no first cue as two voices (binaural.cpp, the `two` judgement). The second is stated only while the
+     *     first reading holds, at every zoom — at fine bins that is what native's own check (hint and hint2 both valid,
+     *     ≥ kCrowdSidesApartHz apart) always required, so nothing changes there. */
+    const binHz = bins.length > 0 ? g.bwHz / bins.length : Infinity;
+    const fine = binHz <= COARSE_MAX_BIN_HZ;
+    this.firstHz = okFirst ? this.coarseHz : NaN;
     {
       let other: { hz: number; at: number; n: number } | undefined;
       if (Number.isFinite(this.coarseHz))
         for (const x of this.seen)
           if (x.n >= BinauralTracker.SECOND_MIN_FRAMES && Math.abs(x.hz - this.coarseHz) >= COARSE_SECOND_APART_HZ
-              && coarseVoiceOverlap(x.hz, lsb, g) >= BinauralTracker.SECOND_MIN_OVERLAP_HZ && (!other || x.at > other.at)) other = x;
-      const ok2 = other !== undefined;
-      const hz2 = other ? other.hz : 0;
+              && coarseVoiceOverlap(x.hz, lsb, g) >= BinauralTracker.SECOND_MIN_OVERLAP_HZ && (!other || x.at > other.at)
+              && this.coarse.separate(this.coarseHz, x.hz, lsb)) other = x;   // ★★★ really two (SsbCoarse.separate)
+      const ok2 = other !== undefined && okFirst;
+      const hz2 = ok2 ? other!.hz : 0;
+      this.secondHz = ok2 ? hz2 : NaN;
       const changed2 = ok2 !== this.secondSentOk || (ok2 && !(Math.abs(hz2 - this.secondSentHz) < 10));
       if (changed2 && now - this.secondSentAt >= BinauralTracker.PUSH_MS) {
         this.sink.setBinauralSsbHint2?.(hz2, ok2);
         this.secondSentHz = hz2; this.secondSentOk = ok2; this.secondSentAt = now;
       }
     }
-    // ★★ A HELD reading only while its voice is still in the passband (2026-10-18, the sweep test on real voices): the
-    //    hold is for the pause between overs, not for a voice the knob has left behind — mid-sweep it kept leaning
-    //    toward a voice that was no longer in your ears, for up to COARSE_HOLD_MS after the dial had passed it.
-    const ok = Number.isFinite(this.coarseHz) && now - this.coarseAt <= BinauralTracker.COARSE_HOLD_MS
-      && (r.ok || coarseVoiceOverlap(this.coarseHz, lsb, g) >= COARSE_MIN_OVERLAP_HZ);
+    const ok = okFirst && fine;
     const hz = ok ? this.coarseHz : 0;
     // 10 Hz is well inside the cue's own error: finer changes are not worth a bridge message.
     const changed = ok !== this.coarseSentOk || (ok && !(Math.abs(hz - this.coarseSentHz) < 10));

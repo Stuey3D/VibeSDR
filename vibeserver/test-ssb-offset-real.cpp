@@ -917,8 +917,13 @@ static bool jsonStr(const char* p, const char* key, std::string& v) {
 struct SweepEv { double t; char k; double v; bool ok; double dead, full; };
 
 struct SweepTally { int far = 0, farRight = 0, judged = 0, wrong = 0, near = 0, nearLean = 0, runs = 0; };
+/** §8: the dial parked ON TUNE, the zoom changed at zoomAt — per half (before / after): frames, the image's level
+ *  difference (R over L, dB: + = right) moved ≥ 1 dB, the lean audible (|pan| ≥ kAudiblePan), crowded (c > 0.5), a
+ *  coarse-held answer, and the mean ILD. */
+struct ZoomTally { int frames[2] = {0, 0}, moved[2] = {0, 0}, lean[2] = {0, 0}, crowd[2] = {0, 0}, held[2] = {0, 0}; double ild[2] = {0, 0};
+                   std::vector<float> ilds, pans; bool noCue = false; };
 
-static bool replaySweep(const std::string& dir, const std::string& file, SweepTally& tally, bool verbose) {
+static bool replaySweep(const std::string& dir, const std::string& file, SweepTally& tally, bool verbose, ZoomTally* zt = nullptr) {
     FILE* f = std::fopen((dir + "/" + file).c_str(), "rb");
     if (!f) return false;
     std::string js; char buf[65536]; size_t m;
@@ -972,7 +977,9 @@ static bool replaySweep(const std::string& dir, const std::string& file, SweepTa
     const int s1 = (int)sb;
     const int dirn = to > from ? 1 : -1;
     const int steps = (int)std::floor(std::fabs(to - from) / step + 1e-9);
-    const double dur = steps * every + 3;
+    double durJ = 0, zoomAt = 0;
+    const double dur = jsonNum(p, "dur", durJ) ? durJ : steps * every + 3;
+    jsonNum(p, "zoomAt", zoomAt);
     auto dialAt = [&](double t) { return from + dirn * step * std::min(steps, (int)std::floor(t / every + 1e-9)); };
     // the receiver: mix the dial's sideband middle to 0 Hz (phase-continuous), half-band to 12 kHz, keep 50-2700 Hz
     const double fs2 = fs / 2;
@@ -988,6 +995,7 @@ static bool replaySweep(const std::string& dir, const std::string& file, SweepTa
     const int pkt = 240;   // 20 ms at 12 kHz
     std::vector<float> l(pkt), r(pkt);
     long n24 = 0; int frameIdx = 0;
+    double eL = 0, eR = 0;
     double agc = 0.1;
     for (double t = 0; t < dur; t += 0.02) {
         // events up to now
@@ -995,7 +1003,8 @@ static bool replaySweep(const std::string& dir, const std::string& file, SweepTa
             const SweepEv& e = evs[ei++];
             if (e.k == 's') bt.setSource((int)e.v, (float)e.dead, (float)e.full);
             else if (e.k == 'd') bt.setDial(e.v);
-            else if (e.k == 'h') bt.setSsbHint(e.v, e.ok);
+            else if (e.k == 'h') { if (!(zt && zt->noCue)) bt.setSsbHint(e.v, e.ok); }
+            else if (e.k == 't') { if (!(zt && zt->noCue)) bt.setSsbHint2(e.v, e.ok); }   // 'two': the second voice (native's crowded judgement)
         }
         const double dial = dialAt(t);
         const double w = -2 * M_PI * (dial - centre + s1 * mid) / fs;
@@ -1026,11 +1035,26 @@ static bool replaySweep(const std::string& dir, const std::string& file, SweepTa
         agc = std::min(agc, 1e4);
         for (int k = 0; k < pkt; ++k) { l[k] = (float)(l[k] * agc); r[k] = l[k]; }
         bt.processPlanar(l.data(), r.data(), pkt, 12000);
+        for (int k = 0; k < pkt; ++k) { eL += (double)l[k] * l[k]; eR += (double)r[k] * r[k]; }
         if (((int)std::lround(t / 0.02)) % 2 == 1) bt.pumpSsbForTest();
         if (((int)std::lround(t / 0.02)) % 5 != 4) continue;   // judge per 0.1 s
         ++frameIdx;
-        float st[12]; bt.stats(st, 12);
+        float st[13] = {0}; bt.stats(st, 13);
         const float pan = st[4];
+        const double ild = 10 * std::log10((eR + 1e-12) / (eL + 1e-12));
+        eL = eR = 0;
+        if (zt) {
+            // ★ on tune throughout: judged from 3 s into each half (the estimator's first answer; the zoom's first readings)
+            const int h = t >= zoomAt ? 1 : 0;
+            if (t - (h ? zoomAt : 0) < 3.0) continue;
+            ++zt->frames[h]; zt->ild[h] += ild;
+            zt->ilds.push_back((float)ild); zt->pans.push_back(pan);
+            if (st[12] > 0.5f) ++zt->crowd[h];
+            if (st[10] > 0) ++zt->held[h];
+            if (verbose && frameIdx % 10 == 0)
+                std::printf("      t %5.1f pan %+.3f ild %+5.2f dB off %+7.1f%s%s crowd %.2f\n", t, pan, ild, st[2], st[3] > 0 ? "" : "?", st[10] > 0 ? " c" : "", st[12]);
+            continue;
+        }
         // the one voice in view (≥ 300 Hz of the passband), none other touching
         auto overlap = [&](double c) {
             const double vLo = s1 > 0 ? c + 300 : c - 2700, vHi = s1 > 0 ? c + 2700 : c - 300;
@@ -1088,6 +1112,61 @@ static void sweepSection() {
     check(all.near > 0 && all.nearLean <= 0.1 * all.near, what);
 }
 
+// ── 8. ZOOMING IN ON A VOICE YOU ARE ON — the app's stream replayed, the dial never moving ───────────────────────────
+/* ★★★ Stuart on 484: "when i was zoomed out the voice was correctly in the centre but when i zoomed in without tuning it
+ *     panned over slightly" (right; "a bassy male voice"). scripts/test_binauralSweep.ts parks the dial ON every known
+ *     voice — composite and real band — and changes the bin width from 195 Hz (no cue) to 94 / 47 Hz at 15 s, writing
+ *     zoom_*.json. Replayed here against the same audio, and again with the waterfall's messages dropped (the estimator
+ *     alone, as zoomed out): on tune the waterfall must change nothing (Stuart: untouched at every zoom) — the image
+ *     differing from the estimator-alone one by ≥ 1 dB on ≤ 1 % of frames (build 484: 4 %, and 40 % on the real bands), by an audible pan on ≤ 2 %. A real-band voice with a genuine neighbour may be crowded (each placed by its own
+ *     frequency): reported, and judged only on the composites, whose voices are alone. */
+static void zoomSection() {
+    const char* dirEnv = std::getenv("VIBE_SWEEP_EVENTS");
+    std::printf(" ── 8. ZOOMING IN on a voice you are ON (the app's stream replayed; the dial never moves) ──\n"
+                "   moved / lean = frames where the image differs from the estimator alone (no waterfall) by ≥ 1 dB / an audible pan\n");
+    if (!dirEnv) { std::printf("   NOT RUN — set VIBE_SWEEP_EVENTS to the folder scripts/test_binauralSweep.ts wrote\n"); return; }
+    const std::string dir = dirEnv;
+    std::vector<std::string> files;
+    if (FILE* ls = popen(("ls '" + dir + "' 2>/dev/null").c_str(), "r")) {
+        char line[512];
+        while (std::fgets(line, sizeof line, ls)) {
+            std::string f(line); while (!f.empty() && (f.back() == '\n' || f.back() == '\r')) f.pop_back();
+            if (f.rfind("zoom_", 0) == 0 && f.size() > 5 && f.substr(f.size() - 5) == ".json") files.push_back(f);
+        }
+        pclose(ls);
+    }
+    if (files.empty()) { std::printf("   NOT RUN — no zoom_*.json in %s\n", dir.c_str()); return; }
+    const char* only = std::getenv("VIBE_SWEEP_ONLY_FILE");
+    int cF = 0, cMoved = 0, cLean = 0, rF = 0, rMoved = 0, rLean = 0, rCrowd = 0;
+    for (const std::string& f : files) {
+        if (only && f.find(only) == std::string::npos) continue;
+        // ★ Twice: as the app sent it, and with every waterfall message dropped (the estimator alone — what the zoomed-out
+        //   view gives). The ZOOM's doing is the difference, frame by frame (the replay is deterministic): a voice the
+        //   estimator itself misjudges is the estimator's business (§5), not the zoom's.
+        SweepTally t, t0; ZoomTally z, z0; z0.noCue = true;
+        if (!replaySweep(dir, f, t, only != nullptr, &z) || !replaySweep(dir, f, t0, false, &z0) || z.ilds.size() != z0.ilds.size()) {
+            std::printf("   (could not replay %s)\n", f.c_str()); continue;
+        }
+        for (size_t i = 0; i < z.ilds.size(); ++i) {
+            const int h = (int)i >= z.frames[0] ? 1 : 0;
+            if (std::fabs(z.ilds[i] - z0.ilds[i]) >= 1.0f) ++z.moved[h];
+            if (std::fabs(z.pans[i] - z0.pans[i]) >= kAudiblePan) ++z.lean[h];
+        }
+        const bool comp = f.find("composite") != std::string::npos;
+        std::printf("   %-44s before: ild %+5.2f dB, moved %3d/%3d, lean %3d, crowd %3d, held %3d · after: ild %+5.2f dB, moved %3d/%3d, lean %3d, crowd %3d, held %3d\n",
+                    f.c_str(), z.frames[0] ? z.ild[0] / z.frames[0] : 0.0, z.moved[0], z.frames[0], z.lean[0], z.crowd[0], z.held[0],
+                    z.frames[1] ? z.ild[1] / z.frames[1] : 0.0, z.moved[1], z.frames[1], z.lean[1], z.crowd[1], z.held[1]);
+        if (comp) { cF += z.frames[1]; cMoved += z.moved[1]; cLean += z.lean[1]; }
+        else { rF += z.frames[1]; rMoved += z.moved[1]; rLean += z.lean[1]; rCrowd += z.crowd[1]; }
+    }
+    std::printf("   real bands (reported; a real neighbour may crowd it): after the zoom, moved ≥ 1 dB %d of %d frames, lean audible %d, crowded %d\n", rMoved, rF, rLean, rCrowd);
+    char what[240];
+    std::snprintf(what, sizeof what, "zooming in on an on-tune lone voice (composites): the image moved ≥ 1 dB on ≤ 1 %% of frames (%d of %d)", cMoved, cF);
+    check(cF > 0 && cMoved <= 0.01 * cF, what);
+    std::snprintf(what, sizeof what, "zooming in on an on-tune voice (composites + real): an audible lean on ≤ 2 %% of frames (%d of %d)", cLean + rLean, cF + rF);
+    check(cF + rF > 0 && cLean + rLean <= 0.02 * (cF + rF), what);
+}
+
 int main() {
     std::printf("SSB mistune estimator — real off-air audio\n");
     const char* rootEnv = std::getenv("VIBE_TEST_AUDIO");
@@ -1102,6 +1181,11 @@ int main() {
     if (only && !std::strcmp(only, "sweep")) {
         sweepSection();
         std::printf("%s\n", fails ? "SSB OFFSET (REAL, SWEEP ONLY): FAILURES" : "SSB OFFSET (REAL, SWEEP ONLY): all passed");
+        return fails ? 1 : 0;
+    }
+    if (only && !std::strcmp(only, "zoom")) {
+        zoomSection();
+        std::printf("%s\n", fails ? "SSB OFFSET (REAL, ZOOM ONLY): FAILURES" : "SSB OFFSET (REAL, ZOOM ONLY): all passed");
         return fails ? 1 : 0;
     }
     if (only && !std::strcmp(only, "arrival")) {
@@ -1255,6 +1339,7 @@ int main() {
     steadySection(volDir, iqDir);
     arrivalSection(volDir, iqDir);
     sweepSection();
+    zoomSection();
 
     // ── summary ──
     std::printf(" ── summary ──\n");
