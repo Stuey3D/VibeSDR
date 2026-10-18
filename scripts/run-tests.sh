@@ -506,6 +506,9 @@ if npx tsx scripts/test_pocket_connection.ts; then pass=$((pass+1)); else fail=$
 # ★★ GAMEPAD (Stuart's mapping, 2026-10-10): the highlight's direction picking and the stick-rotation jog wheel.
 if npx tsx scripts/test_gamepad_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ THE KEYBOARD, ONE SCHEME (Stuart, 2026-10-18): arrows/WASD move, Enter select, Backspace/Escape back, < > tune, - + zoom.
+if npx tsx scripts/test_key_actions.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
 #     first keeping its codec — through the same WebSockets the clients use, against fake-rtl-tcp.
