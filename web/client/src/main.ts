@@ -6503,12 +6503,16 @@ function dabRender() {
   if (skeleton !== dabLastListHtml) {
     dabLastListHtml = skeleton;
     st.innerHTML = d.services.length
-      ? d.services.map(sv => `<div class="dabSvc" data-sid="${Number(sv.sid) || 0}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="cod"></span></div>`).join('')
+      ? d.services.map(sv => `<div class="dabSvc" role="button" tabindex="0" data-sid="${Number(sv.sid) || 0}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="cod"></span></div>`).join('')
         + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
       : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
           : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
     for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
       el.onclick = () => { dabPickedAt = performance.now(); dabPcmRunStart = 0; dabPcmRoseAt = 0; audio?.holdHealing(6000); spec?.dabService(Number(el.dataset.sid)); dabRender(); };
+    // ★ A station row is a button (role + tabindex above), so a game controller's highlight and the Tab key land on it —
+    //   they skipped the whole list (Stuart, 2026-10-18). Enter / Space pick it, as a click does.
+    for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
+      el.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } });
     if (body && listScroll) body.scrollTop = listScroll;
   }
   for (const sv of d.services) {

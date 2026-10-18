@@ -55,7 +55,10 @@ function scope(): HTMLElement {
     const el = document.getElementById(id);
     if (el && visible(el)) return el;
   }
-  const open = [...document.querySelectorAll<HTMLElement>('.open')].filter(visible);
+  // ★ data-navdock: a box that is .open but DOCKED beside the radio, not over it — the decoder box (DAB's station list,
+  //   RTTY, the image decoders). It is part of the page, so the highlight walks into it and on out of it to the
+  //   controls below (Stuart, 2026-10-18: in DAB the pad was stuck in the box's header). Back still closes it.
+  const open = [...document.querySelectorAll<HTMLElement>('.open:not([data-navdock])')].filter(visible);
   if (open.length) {
     // The one drawn on top: highest z-index, later in the page on a tie.
     return open.reduce((a, b) => ((+getComputedStyle(b).zIndex || 0) >= (+getComputedStyle(a).zIndex || 0) ? b : a));
