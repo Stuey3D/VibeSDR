@@ -125,9 +125,14 @@ endif()
 # ★★ SSE3 WAS MEASURED AND IS NOT WORTH THE PENTIUM M (2026-10-17, vibeserver-bench on the Lenovo,
 #    5 interleaved rounds per build): -msse3 changed 54 of 266k instructions and total CPU by -0.2 %
 #    (run-to-run spread ±0.6 %); -mssse3 -0.3 %; amd64 -msse3 -0.2 %. The hot loops are hand-written
-#    SSE2 intrinsics, which an -msse3 flag does not rewrite. So no higher floor and no runtime dispatch.
+#    SSE2 intrinsics, which an -msse3 flag does not rewrite. So no higher floor.
 #    What DOES matter is that those intrinsics are compiled in at all: the vibedsp gate used to be
 #    __x86_64__ only, and opening it to __SSE2__ took i386 WFM 2.4 MS/s from 7.7 to 4.9 % of a core.
+# ★★ RE-MEASURED FOR THE ATOMS (2026-10-18, docs/ATOM-PERFORMANCE-2026-10-18.md): -march=bonnell on
+#    the whole binary ADDS 1.5-2.3 % instructions — still no reason to raise the floor, which would drop
+#    every pre-2011 AMD (no SSSE3). Where SSSE3 genuinely pays (the DAB Viterbi's table lookup, -45 %)
+#    it is used by RUNTIME DISPATCH (vibe_dab_fec.h: target("ssse3") + __builtin_cpu_supports), so
+#    this floor stays SSE2 and the SSSE3 CPUs still get it.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4
    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86|x86_64|AMD64)$")
   set(VIBE_X86_32 ON)

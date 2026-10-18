@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.20)
+project(atomwrap CXX C)
+add_subdirectory(/src/vibeserver vs)
+add_executable(gen-iq /tools/gen-iq.cpp)
+target_include_directories(gen-iq PRIVATE /src/android/app/src/main/cpp)
+target_link_libraries(gen-iq PRIVATE vibeserver_core)
