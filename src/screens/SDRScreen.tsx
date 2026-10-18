@@ -77,6 +77,7 @@ import {
 import { wrapWithConverter, wrapConverterCallbacks } from '../services/ConverterBackend';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { withKiwiProxyPort } from '../utils/kiwiProxy';
+import { lockedWindow as lockedTuneWindow, tuneBounds, rangeMessage } from '../utils/tuneWindow';
 import { toHttpUrl } from '../utils/serverUrl';
 import { localSessionGen } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
@@ -1270,6 +1271,24 @@ export default function SDRScreen({ route, navigation }: Props) {
   const converterRef = useRef<ConverterProfile>(NO_CONVERTER);
   useEffect(() => { converterRef.current = canConvert ? converter : NO_CONVERTER; },
             [converter, canConvert]);
+  /* ★★★ THE RANGE EVERY TUNE CLAMPS INTO — the backend's range, narrowed to the owner's LOCKED
+   *  WINDOW when the VibeServer has its centre pinned (utils/tuneWindow.ts has the whole story:
+   *  the app let you tune into the black past the walls while the server clamped silently).
+   *  Refs, because the tune callbacks are built once and must read the window as it is NOW.
+   *  ★ The lock and the capture width are HARDWARE Hz; the clamp runs on display Hz, so the window
+   *    goes through the converter like everything else the backend reports. */
+  const hwLockedCentreRef = useRef(0);
+  useEffect(() => { hwLockedCentreRef.current = hwLockedCentre; }, [hwLockedCentre]);
+  const hwSampleRateRef = useRef(hwSampleRate);
+  useEffect(() => { hwSampleRateRef.current = hwSampleRate; }, [hwSampleRate]);
+  const tuneBoundsOf = useCallback((c: SDRBackend): [number, number] => {
+    const fs = (c as { captureBandwidth?: () => number }).captureBandwidth?.() || hwSampleRateRef.current;
+    const hwWin = lockedTuneWindow(hwLockedCentreRef.current, fs);
+    if (!hwWin) return c.caps.freqRange;
+    const conv = convActive(converterRef.current);
+    const a = convToDisplay(hwWin[0], conv), b = convToDisplay(hwWin[1], conv);
+    return tuneBounds(c.caps.freqRange, a <= b ? [a, b] : [b, a]);
+  }, []);
   useEffect(() => {
     if (!isLocal) return;
     let cancelled = false;
@@ -3857,7 +3876,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const s = stepRef.current; if (!(s > 0)) return;
     const cur = c.getStatus().frequency;
     const snapped = stepTarget(cur, s, dir === 'right' ? 1 : -1, 'dir', String(c.getStatus().mode));
-    const [loHz, hiHz] = c.caps.freqRange;
+    const [loHz, hiHz] = tuneBoundsOf(c);
     const newHz = Math.max(loHz, Math.min(hiHz, snapped));
     if (newHz === cur) return;
     // Discrete jump → centre it. Sweep → travel across the span like the drum.
@@ -7377,7 +7396,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     vfoPendingHz.current -= steps * s;
     const cur     = c.getStatus().frequency;
     // vDown grid snap, then whole steps — through stepTarget so 8.33 lands on true channels.
-    const [loHz, hiHz] = c.caps.freqRange;     // backend range (OWRX VHF/UHF ≠ 0–30 MHz)
+    const [loHz, hiHz] = tuneBoundsOf(c);     // backend range (OWRX VHF/UHF ≠ 0–30 MHz), or the locked window
     const newHz   = Math.max(loHz, Math.min(hiHz,
       stepTarget(cur, s, steps, 'round', String(c.getStatus().mode))));
     if (newHz === cur) return;
@@ -7535,7 +7554,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const now = Date.now();
     if (st.hz == null || now - st.sentAt > 400) st.hz = c.getStatus().frequency;
     const snapped = stepTarget(st.hz, s, dir, 'dir', String(c.getStatus().mode));
-    const [loHz, hiHz] = c.caps.freqRange;
+    const [loHz, hiHz] = tuneBoundsOf(c);
     const hz = Math.max(loHz, Math.min(hiHz, snapped));
     if (hz === st.hz) return;                    // already against the band edge
     st.hz = hz;
@@ -7723,7 +7742,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  the waterfall never reach the right frequency"). */
     const s = stepRef.current;
     const snapped = snapToStep(hz, s);   // exact 25/3 kHz on the 8.33 step — utils/airband.ts
-    const [loHz, hiHz] = c.caps.freqRange;
+    const [loHz, hiHz] = tuneBoundsOf(c);
     const clamped = Math.max(loHz, Math.min(hiHz, snapped));
     userTuneSeq.current++;   // ★ a PERSON asked (entry) — see the note on userTuneSeq
     c.tune(clamped);
@@ -8101,7 +8120,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onTuneHz = useCallback((hz: number, mode?: SDRMode) => {
     const c = client.current; if (!c) return;
     markInteract();
-    const [loHz, hiHz] = c.caps.freqRange;
+    const [loHz, hiHz] = tuneBoundsOf(c);
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
     // Discrete jump (freq modal, bookmark/VTS, Siri, search) → always land
     // centred, regardless of the VFO lock.
@@ -8251,7 +8270,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         }
         lastTuneDeltaAt.current = now;
         const cur = tuneTargetRef.current;
-        const [loHz, hiHz] = c.caps.freqRange;
+        const [loHz, hiHz] = tuneBoundsOf(c);
         tuneTargetRef.current = Math.max(loHz, Math.min(hiHz,
           stepTarget(cur, s, delta, 'dir', String(c.getStatus().mode))));
         // DEBOUNCE to 100ms (UberSDR's rate): apply the LATEST target ≤1/100ms, trailing-edge
@@ -12114,8 +12133,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         dabOnly={freqModalDab}
         unit={freqUnit}
         onUnit={setFreqUnit}
-        minHz={client.current?.caps.freqRange[0]}
-        maxHz={client.current?.caps.freqRange[1]}
+        /* ★★ THE SAME BOUNDS AS EVERY OTHER TUNE — the locked window when the owner has pinned one.
+         *  The card refuses a typed frequency outside them and SAYS what the receiver covers, as the
+         *  web client's does; it used to take the radio's whole range, so 14 MHz typed on a window
+         *  locked round 7 MHz was accepted and parked the readout out in the black. */
+        minHz={client.current ? tuneBoundsOf(client.current)[0] : undefined}
+        maxHz={client.current ? tuneBoundsOf(client.current)[1] : undefined}
+        rangeMsg={client.current ? rangeMessage(tuneBoundsOf(client.current)) : undefined}
         onShare={isLocal ? undefined : onShareStation}
         shareOffReason={sharedDialNow ? 'SHARING OFF · SHARED RADIO' : undefined}
         profiles={profiles}

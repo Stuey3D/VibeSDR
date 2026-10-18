@@ -44,6 +44,9 @@ interface FreqModalProps {
    *  widens it so VHF/UHF entries (e.g. 96.6 MHz) aren't rejected. */
   minHz?:    number;
   maxHz?:    number;
+  /** Said when a typed frequency falls outside minHz–maxHz ("This receiver covers …"). Absent = the
+   *  old silent refusal. */
+  rangeMsg?: string;
   /** Lock to MHz (FM-DX broadcast) — grey out the Hz/kHz options. */
   lockUnit?: boolean;
   /** Share the current station (moved here from the controls bar). Hidden when
@@ -230,7 +233,7 @@ function srcTag(b?: ServerBookmark): string {
 export default function FreqModal({
   visible, currentHz, onConfirm, onClose,
   unit: unitProp, onUnit, onDabTune, dabOnly, onAddServerBookmark, onImportToServer, onPickImportFileToServer,
-  minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
+  minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, rangeMsg, lockUnit = false,
   onShare,
   shareOffReason,
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
@@ -442,6 +445,10 @@ export default function FreqModal({
     const air = airbandEntry(hz);
     if (air && !air.ok) { setEntryMsg(air.message); Keyboard.dismiss(); return; }
     if (hz >= minHz && hz <= maxHz) { onConfirm(hz); onClose(); }
+    /* ★★ OUT OF RANGE IS REFUSED WITH THE REASON, and the card stays open to correct it — the web
+     *  client's rule. It used to do nothing at all: the card just sat there. On a receiver whose
+     *  owner has locked the centre the range is the locked window, which is when this matters. */
+    else if (hz > 0 && rangeMsg) setEntryMsg(rangeMsg);
     Keyboard.dismiss();
   };
 
