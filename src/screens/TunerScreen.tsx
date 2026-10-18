@@ -7,6 +7,8 @@ import RecordingsOverlay from '../components/RecordingsOverlay';
 import AudioSheet from '../components/AudioSheet';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRecordBuffer, bufferedSecondsOf } from '../hooks/useRecordBuffer';
+import { noteAudioEvent } from '../services/audioPathLog';
 import StepPicker from '../components/StepPicker';
 import { useIsFocused } from '@react-navigation/native';
 import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS, useNavFocus } from '../components/PanelNav';
@@ -969,25 +971,36 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   // ── Recording (REC + Recordings live in the AUDIO sheet — control island) ────
   // ★★ One tap, one recording — the same fix as SDRScreen's (Stuart, 2026-10-17: "a few clicks and a false file").
+  // ★★ V12 RECORD BUFFER — FM-DX is one tuner on one server, always WFM: the source is the server.
+  const [recBufSeconds, setRecBufSeconds] = useRecordBuffer({ freqHz: displayFreq || 0, mode: 'wfm', source: String(baseUrl ?? '') });
   const recBusy = useRef(false);
   const toggleRecording = useCallback(() => {
-    if (recBusy.current) return;
+    if (recBusy.current) { noteAudioEvent('REC press ignored — a start/stop is in flight'); return; }
     if (!isRecording) {
       recBusy.current = true;
       setRecSeconds(0);
       recTimerRef.current = setInterval(() => setRecSeconds((s: number) => s + 1), 1000);
       setIsRecording(true);
+      noteAudioEvent('REC press → start requested');
       (VibePowerModule as any)?.startRecording(Math.round(displayFreq || 0), 'wfm')
-        .then(() => { recBusy.current = false; })
+        .then((r: unknown) => {
+          recBusy.current = false;
+          // ★ The file already holds this much from the record buffer — the timer starts there.
+          const pre = Math.round(bufferedSecondsOf(r));
+          if (pre > 0) setRecSeconds((s: number) => s + pre);
+          noteAudioEvent(`REC started${pre > 0 ? ` (${pre} s from the record buffer)` : ''}`);
+        })
         .catch((e: Error) => {
           recBusy.current = false;
           if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
           setRecSeconds(0);
           setIsRecording(false);
+          noteAudioEvent(`REC start refused — ${e.message}`);
           Alert.alert('Recording', `Could not start recording: ${e.message}`);
         });
     } else {
       recBusy.current = true;
+      noteAudioEvent('REC press → stop requested');
       if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
       setRecSeconds(0);
       setIsRecording(false);
@@ -1367,6 +1380,8 @@ export default function TunerScreen({ route, navigation }: Props) {
         recording={isRecording}
         recSeconds={recSeconds}
         onRec={toggleRecording}
+        recBuffer={recBufSeconds}
+        onRecBuffer={setRecBufSeconds}
         onRecordings={() => { setAudioSheetOpen(false); setRecordingsOpen(true); }}
       />
 

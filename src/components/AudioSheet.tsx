@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RECORD_BUFFER_CHOICES, type RecordBufferSeconds } from '../services/recordBuffer';
 import {
   Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
@@ -508,6 +509,10 @@ export interface AudioSheetProps {
   onRec?:       () => void;
   recSeconds?:  number;
   onRecordings?: () => void;
+  /** ★★ V12 RECORD BUFFER — 0 (Off) / 30 / 60 s held before the tap (hooks/useRecordBuffer). App-wide. Every backend:
+   *  it holds what a recording captures, so wherever REC works, so does this. Hidden when the screen passes no handler. */
+  recBuffer?:   RecordBufferSeconds;
+  onRecBuffer?: (s: RecordBufferSeconds) => void;
 
   // Squelch variants (gated by backend)
   snrSquelch?:   number;  onSnrSquelch?:   (v: number) => void;
@@ -610,7 +615,7 @@ export interface AudioSheetProps {
 export default function AudioSheet({
   visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', meterBus, isLocal = false, recordingOnly = false,
   nr = false, onNr, nb = false, onNb, nbx = false, onNbx, nfmVoice = true, onNfmVoice,
-  recording = false, onRec, recSeconds = 0, onRecordings,
+  recording = false, onRec, recSeconds = 0, onRecordings, recBuffer = 0, onRecBuffer,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR,
@@ -781,6 +786,26 @@ export default function AudioSheet({
               <View style={st.recDot} />
               <Text style={st.recTime}>{fmtRecTime(recSeconds)}</Text>
             </PopupWindow>
+          )}
+          {/* ★★ RECORD BUFFER (V12) — beside REC because it changes what REC does: Stuart, 2026-10-18, "a setting so a
+              user knows why recordings are longer than they expected. Next to the record button". The note is his
+              wording. Drawn as DE-EMPH's pick-one row, so it is right on every chassis without new styles. */}
+          {onRecBuffer && (
+            <View style={{ marginTop: 2 }}>
+              <View style={st.bwRow}>
+                <Text style={[st.bwLabel, { width: 88 }]}>REC BUFFER</Text>
+                <View style={st.keyWrapEnd}>
+                {RECORD_BUFFER_CHOICES.map((v) => (
+                  <Toggle key={v} label={v === 0 ? 'OFF' : `${v} s`} on={recBuffer === v} onPress={() => onRecBuffer(v)}
+                    padH={10} marginLeft={6}
+                    a11y={v === 0 ? 'Record buffer off' : `Record buffer ${v} seconds`} />
+                ))}
+                </View>
+              </View>
+              <Text style={st.iqNote}>
+                Record Buffer: when enabled, VibeSDR holds a live buffer of up to {recBuffer === 60 ? '60' : recBuffer === 30 ? '30' : '30 or 60'} seconds of audio, which can allow for recording of easily missed signals. This buffer is cleared on retune, so the previous station's audio is not included.
+              </Text>
+            </View>
           )}
           {onRecordings && (
             <BtnRow>
