@@ -115,6 +115,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     startVoiceObserver()
     VibeCrashLog.install()      // record uncaught ObjC exceptions — see VibeCrashLog
     VibeCrashLog.announce()     // ...and SAY what the last one was, or recording it achieves nothing
+    /* ★★ V12 RECORD BUFFER → TRANSCRIBE's AUTO (Stuart: "this buffer could help our transcription detection too"): when
+     *    AUTO arms, it asks for the buffer's most recent audio so its first 10 s window does not wait for fresh speech.
+     *    ★ Not while binaural is on: the ring then holds the binaural mix, and the recogniser must hear plain audio
+     *      (it taps BEFORE binaural for exactly that reason). Not when the buffer is off — then there is nothing. */
+    VibeTranscribeTap.shared.primeSource = { [weak self] seconds, done in
+      guard let self else { return }
+      self.audioQ.async {
+        guard self.recRing.isOn, vibe_binaural_enabled(self.binauralH) == 0 else { done([], 48_000); return }
+        var keep: [RecordBufferRing.Chunk] = []
+        var frames = 0
+        let want = Int(seconds * self.recRing.rate)
+        for c in self.recRing.snapshot().reversed() { keep.append(c); frames += c.frames; if frames >= want { break } }
+        done(keep.reversed(), self.recRing.rate)
+      }
+    }
   }
 
   // MARK: - State
