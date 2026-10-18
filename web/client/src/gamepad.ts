@@ -8,7 +8,8 @@
  *    top = zoom in · bottom = zoom out · left = tune down · right = tune up
  *  Pads WITH two analogue sticks:
  *    D-pad = move the highlight · ✕ (bottom) = enter · ○ (right) = back
- *    LEFT stick turned like a jog wheel = tune (clockwise forwards) · RIGHT stick turned = zoom (clockwise in)
+ *    LEFT stick turned like a jog wheel = tune (clockwise forwards) · RIGHT stick turned = zoom (clockwise in) —
+ *    the rate follows the speed, like the drum: slow turning is fine, a fast spin covers ground (gamepadNav Jog)
  *  HOLD START (~1 s) switches between the two (Stuart: a pad with one stick may be reported as having two) — shown on
  *  screen and remembered on this device. ?pad=buttons|sticks forces one for a session.
  *  ★ HELD, never tapped (Stuart, 2026-10-18: "i pressed the l and r button by mistake and it switched … with no way
@@ -247,9 +248,11 @@ function poll() {
     } else {
       press(id + 'enter', btn(B_SOUTH), enter, false);
       press(id + 'back', btn(B_EAST), back, false);
-      const t = tuneJog.feed(gp.axes[0] ?? 0, gp.axes[1] ?? 0);
+      // ★ With the time, so the jog's rate follows the stick's speed — slow to land, fast to cross (gamepadNav Jog).
+      const now = performance.now();
+      const t = tuneJog.feed(gp.axes[0] ?? 0, gp.axes[1] ?? 0, now);
       for (let k = 0; k < Math.abs(t); k++) hooks?.tune(t > 0 ? 1 : -1);
-      const z = zoomJog.feed(gp.axes[2] ?? 0, gp.axes[3] ?? 0);
+      const z = zoomJog.feed(gp.axes[2] ?? 0, gp.axes[3] ?? 0, now);
       for (let k = 0; k < Math.abs(z); k++) hooks?.zoom(z > 0 ? 1 : -1);
     }
   }
