@@ -26,15 +26,20 @@
  * ★ Pure and synchronous — scripts/test_recordBuffer.ts drives it with a fake clock.
  */
 
-/** The choices the Audio sheet offers. 0 = Off (the default; nothing is allocated or run). */
+/** The choices the Audio sheet offers. 0 = Off (nothing is allocated or run). */
 export type RecordBufferSeconds = 0 | 30 | 60;
 export const RECORD_BUFFER_CHOICES: readonly RecordBufferSeconds[] = [0, 30, 60];
+/** ★★ ON BY DEFAULT, 30 s (Stuart, 2026-10-18) — until then it was Off until you chose. Someone who has turned it
+ *  off has "0" stored, and that stays Off; only a missing (never chosen) or unreadable value takes the default. */
+export const RECORD_BUFFER_DEFAULT: RecordBufferSeconds = 30;
 /** App-wide, one key for every server — the buffer is a property of THIS app, not of a receiver. */
 export const RECORD_BUFFER_KEY = 'lsv_record_buffer';
 
 export function parseRecordBufferSeconds(v: string | null | undefined): RecordBufferSeconds {
+  // ★ Number('') and Number(null) are 0 — so "nothing stored" must be caught before it reads as an explicit Off.
+  if (v == null || String(v).trim() === '') return RECORD_BUFFER_DEFAULT;
   const n = Number(v);
-  return n === 30 || n === 60 ? n : 0;
+  return n === 0 || n === 30 || n === 60 ? n : RECORD_BUFFER_DEFAULT;
 }
 
 /**

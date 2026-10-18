@@ -13058,7 +13058,7 @@ function showRecording(on: boolean) {
 /* ★★ V12 RECORD BUFFER — the setting (this browser, per server like every page setting) and the retune rule, which is
  *    the app's own (src/services/recordBuffer.ts, unit-tested): a move past the mode's allowance from the ANCHOR — the
  *    dial when the held audio began — a mode change, or another receiver / DAB service clears what is held. */
-let recBufSec = 0;
+let recBufSec = 30;   // ★ the default (recordBuffer.ts RECORD_BUFFER_DEFAULT); initRecorder reads this server's saved choice
 let recBufAnchor = new RecordBufferAnchor(0);
 let recBufLast = '';
 function applyRecBuf() {

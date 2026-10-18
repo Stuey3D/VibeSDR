@@ -2420,7 +2420,7 @@ export class AudioPlayer {
    *    from before the press (the app has the same: VibePowerModule.swift / VibeStreamService.kt). The setting and
    *    the retune rule are the page's (main.ts, src/services/recordBuffer.ts); this only holds and hands over.
    *  ★ Chunks as they arrived — mono when the stream is (most modes) — so 60 s is ≈ 5.8 MB mono, 11.5 MB stereo.
-   *    Off (the default) holds nothing and the Worker forwards nothing. The stream is 48 kHz, as wavBlob assumes. */
+   *    Off holds nothing and the Worker forwards nothing (the page defaults to 30 s: recordBuffer.ts RECORD_BUFFER_DEFAULT). The stream is 48 kHz, as wavBlob assumes. */
   private rb: { chunks: { pcm: Int16Array; ch: number; frames: number }[]; frames: number; cap: number } | null = null;
 
   /** 0 = Off (frees it); otherwise the seconds to hold. Shrinking trims the oldest; growing keeps what is held. */

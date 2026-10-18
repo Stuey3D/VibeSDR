@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { noteAudioEvent } from '../services/audioPathLog';
 import {
-  RecordBufferAnchor, RECORD_BUFFER_KEY, parseRecordBufferSeconds, type RecordBufferSeconds,
+  RecordBufferAnchor, RECORD_BUFFER_KEY, RECORD_BUFFER_DEFAULT, parseRecordBufferSeconds, type RecordBufferSeconds,
 } from '../services/recordBuffer';
 
 type RecBufNative = { setRecordBuffer?: (s: number) => void; clearRecordBuffer?: () => void };
@@ -18,7 +18,10 @@ type RecBufNative = { setRecordBuffer?: (s: number) => void; clearRecordBuffer?:
  */
 export function useRecordBuffer(dial: { freqHz: number; mode: string; source: string; recording: boolean }):
   [RecordBufferSeconds, (s: RecordBufferSeconds) => void] {
-  const [seconds, setSecondsState] = useState<RecordBufferSeconds>(0);
+  const [seconds, setSecondsState] = useState<RecordBufferSeconds>(RECORD_BUFFER_DEFAULT);
+  /** ★ Nothing reaches native until the stored choice is read: someone who turned it Off must not get a 30 s ring
+   *  allocated and freed on every screen open (the default drawn for a moment is only drawn). */
+  const [loaded, setLoaded] = useState(false);
   const anchor = useRef<RecordBufferAnchor | null>(null);
   if (!anchor.current) anchor.current = new RecordBufferAnchor(0);
   const native = VibePowerModule as unknown as RecBufNative | undefined;
@@ -26,29 +29,32 @@ export function useRecordBuffer(dial: { freqHz: number; mode: string; source: st
   useEffect(() => {
     AsyncStorage.getItem(RECORD_BUFFER_KEY)
       .then((v) => setSecondsState(parseRecordBufferSeconds(v)))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoaded(true));
   }, []);
 
   const setSeconds = useCallback((s: RecordBufferSeconds) => {
     setSecondsState(s);
+    setLoaded(true);   // a choice made before storage answered is the choice
     AsyncStorage.setItem(RECORD_BUFFER_KEY, String(s)).catch(() => {});
   }, []);
 
   // The setting → native. Off frees the ring there; 30 ↔ 60 keeps what it holds.
   useEffect(() => {
+    if (!loaded) return;
     try { native?.setRecordBuffer?.(seconds); } catch {}
     anchor.current!.setWindow(seconds);
     if (seconds > 0) noteAudioEvent(`record buffer ${seconds} s`);
-  }, [seconds, native]);
+  }, [seconds, native, loaded]);
 
   // The retune rule: a move past the mode's allowance from the anchor, a mode change, a source change → clear.
   const { freqHz, mode, source } = dial;
   useEffect(() => {
-    if (seconds <= 0 || !(freqHz > 0)) return;
+    if (!loaded || seconds <= 0 || !(freqHz > 0)) return;
     if (anchor.current!.update({ freqHz, mode, source }, Date.now())) {
       try { native?.clearRecordBuffer?.(); } catch {}
     }
-  }, [seconds, freqHz, mode, source, native]);
+  }, [seconds, freqHz, mode, source, native, loaded]);
 
   // ★ A recording's stop starts the buffer again (Stuart, 2026-10-18): native has already emptied its ring at the
   //   stop, so the anchor starts afresh at where the listener is now — the next recording never repeats this one.

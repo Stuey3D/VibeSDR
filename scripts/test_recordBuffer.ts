@@ -26,8 +26,11 @@ eq(retuneAllowanceHz(''), 5000, 'empty 5 kHz');
 // ── setting ──
 eq(parseRecordBufferSeconds('30'), 30, '"30"');
 eq(parseRecordBufferSeconds('60'), 60, '"60"');
-eq(parseRecordBufferSeconds('45'), 0, 'junk → Off');
-eq(parseRecordBufferSeconds(null), 0, 'missing → Off');
+eq(parseRecordBufferSeconds('0'), 0, 'an explicit "0" stays Off (someone who turned it off keeps it off)');
+eq(parseRecordBufferSeconds('45'), 30, 'junk → the default, 30 s');
+eq(parseRecordBufferSeconds(null), 30, 'missing (never chosen) → the default, 30 s');
+eq(parseRecordBufferSeconds(undefined), 30, 'undefined → the default, 30 s');
+eq(parseRecordBufferSeconds(''), 30, "'' (the web page with nothing saved) → the default, 30 s, not Off");
 
 // ── the first update clears (a previous screen's audio is not this audio) ──
 {
