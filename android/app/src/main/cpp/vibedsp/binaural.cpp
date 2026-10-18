@@ -155,7 +155,7 @@ void BinauralSpread::setContext(float heldShiftHz, bool coarse, float deadHz, fl
 }
 
 void BinauralSpread::crowdForget_() {
-    occ_ = 0; lastEv_ = -1e9;
+    occ_ = 0; lastEv_ = -1e9; sideT_[0] = sideT_[1] = -1e9;
     for (Track& t : tracks_) t = Track();
 }
 
@@ -229,15 +229,29 @@ void BinauralSpread::cwMeasure_() {
      *    (squelch, a −120 dB floor) → keep the last answer. */
     const int b = n_ / 2 + 1;
     const double binHz = fs_ / n_;
-    const int k0 = std::max(1, (int)std::ceil(100.0 / binHz)), k1 = std::min(b - 2, (int)(3200.0 / binHz));
+    // ★ From 50 Hz (was 100: at 94 Hz bins that began the search at 188 Hz, and a passband from near DC — Stuart's 483
+    //   clip, noise 0-1200 Hz — read its note ~50 Hz high).
+    const int k0 = std::max(1, (int)std::ceil(50.0 / binHz)), k1 = std::min(b - 2, (int)(3200.0 / binHz));
     if (k1 - k0 < 3) return;
     int pk = k0;
     for (int k = k0; k <= k1; ++k) if (floor_[k] > floor_[pk]) pk = k;
     if (floor_[pk] < -120.0f) return;
-    const float thr = floor_[pk] - 6.0f;
+    // ★★★ TWO PASSES (2026-10-18): the top of the floor may be a CARRIER's bin (a keyed one leaves its bin's floor a few
+    //     dB up), and "within 6 dB of the top" then found the carrier, not the passband. So: the run around the top within
+    //     20 dB of it (the passband's skirts fall further than that), its MEDIAN floor = the noise, and the passband = the
+    //     run within 6 dB of THAT.
     int a = pk, z = pk;
-    while (a > k0 && floor_[a - 1] >= thr) --a;
-    while (z < k1 && floor_[z + 1] >= thr) ++z;
+    while (a > k0 && floor_[a - 1] >= floor_[pk] - 20.0f) --a;
+    while (z < k1 && floor_[z + 1] >= floor_[pk] - 20.0f) ++z;
+    float level;
+    {
+        int m = 0;
+        for (int k = a; k <= z; ++k) med_[m++] = floor_[k];
+        std::nth_element(med_.begin(), med_.begin() + m / 2, med_.begin() + m);
+        level = med_[m / 2];
+    }
+    const float thr = level - 6.0f;
+    { const int a1 = a, z1 = z; a = z = pk; while (a > a1 && floor_[a - 1] >= thr) --a; while (z < z1 && floor_[z + 1] >= thr) ++z; }
     const double lo = (a - 0.5) * binHz, hi = (z + 0.5) * binHz;
     if (z - a + 1 < 2 || hi - lo > 3000.0) return;
     const float c = (float)(0.5 * (lo + hi));
@@ -303,10 +317,12 @@ void BinauralSpread::crowdSsb_() {
     const float aO = (float)(1.0 - std::exp(-hop / kCrowdOccSec));
     bool active = false, judged = false;
     if (std::isfinite(heldShift_)) {
-        const float m = heldCoarse_ ? 150.0f : 0.0f;
+        // ★ kCrowdGuardHz between the held voice's band and the region: a strong harmonic leaks a bin or two into its
+        //   neighbours through the bank's window (a lone voice 300 Hz off once read as a second one); the cue's ±150 Hz on top.
+        const float m = kCrowdGuardHz + (heldCoarse_ ? 150.0f : 0.0f);
         const float s = heldShift_;
         float r0, r1;
-        if (s < 0) { r0 = 2900.0f + s + m; r1 = hi_; } else { r0 = lo_; r1 = s - m; }
+        if (s < 0) { r0 = 2700.0f + s + m; r1 = hi_; } else { r0 = lo_; r1 = 100.0f + s - m; }
         r0 = std::max(r0, lo_); r1 = std::min(r1, hi_);
         if (r1 - r0 >= kCrowdRegionMinHz) {
             const double binHz = fs_ / n_;
@@ -322,6 +338,12 @@ void BinauralSpread::crowdSsb_() {
     occ_ += aO * ((active ? 1.0 : 0.0) - occ_);
     if (!judged && !std::isfinite(heldShift_)) occ_ = 0;   // nothing held: nothing to judge against
     if (occ_ >= kCrowdOccFrac) lastEv_ = clock_;
+    // ★ The second witness (kCrowdSideHz): the held answer on both sides of the dial with no dial move between.
+    if (std::isfinite(heldShift_) && std::fabs(heldShift_) >= kCrowdSideHz) {
+        const int i = heldShift_ > 0 ? 1 : 0;
+        sideT_[i] = clock_; sideV_[i] = heldShift_;
+        if (clock_ - sideT_[1 - i] < kCrowdHoldSec && std::fabs(sideV_[1] - sideV_[0]) >= kCrowdSidesApartHz) lastEv_ = clock_;
+    }
     crowdT_ = clock_ - lastEv_ < kCrowdHoldSec ? 1.0f : 0.0f;
 }
 
@@ -386,12 +408,21 @@ void BinauralSpread::frame_() {
         //   the floor has followed the silence down, and at 0.5 dB/s it would take minutes to find the noise again.
         //   A keyed mark (≈ 0.1 s) lifts it barely a dB before the next space drops it back.
         const float riseFast = 12.0f * (float)h / (float)fs_;
+        // ★★★ (2026-10-18) …and only when the WHOLE band has risen (the median bin 12 dB over its floor: a squelch opened),
+        //     never bin by bin. Per bin, two near-continuously keyed carriers (test-binaural-two) kept their bins' floors
+        //     ~10 dB over the noise — the floor's "top" was then a carrier, and the CW note wandered 330-840 Hz between them.
+        int m = 0;
+        const double binHz = fs_ / n_;
+        const int q0 = std::max(1, (int)std::ceil(50.0 / binHz)), q1 = std::min(b - 2, (int)(3200.0 / binHz));
+        for (int k = q0; k <= q1; ++k) if (psm_[k] > -199.0f) med_[m++] = psm_[k] - floor_[k];
+        bool fastAll = false;
+        if (m > 0) { std::nth_element(med_.begin(), med_.begin() + m / 2, med_.begin() + m); fastAll = med_[m / 2] > 12.0f; }
         for (int k = 0; k < b; ++k) {
             const float p = 10.0f * std::log10(std::norm(spec_[k]) + 1e-20f);
             // ★ The first frame seeds both (an unset floor of −200 dB would take hours to rise at 0.5 dB/s).
             if (psm_[k] <= -199.0f) { psm_[k] = p; floor_[k] = p; continue; }
             psm_[k] += 0.1f * (p - psm_[k]);
-            floor_[k] = psm_[k] < floor_[k] ? psm_[k] : floor_[k] + (psm_[k] - floor_[k] > 12.0f ? riseFast : rise);
+            floor_[k] = psm_[k] < floor_[k] ? psm_[k] : floor_[k] + (fastAll ? riseFast : rise);
         }
         if (cw && ++cwHops_ * h >= (int)(0.25 * fs_)) { cwHops_ = 0; cwMeasure_(); }
     }

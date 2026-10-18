@@ -202,25 +202,33 @@ public:
     //     than putting the one below us in the left ear and the one above us in the right it is blending them both and
     //     swirling them about between the ears. This is on CW too.") — see crowd() and binaural.cpp crowdSsb_/crowdCw_.
     /** The crowd weight's glide (seconds): the lean giving way and the spread coming up are never a step. */
-    static constexpr float kCrowdTauSec = 0.25f;
+    static constexpr float kCrowdTauSec = 0.15f;
     /** SSB: the evidence (another voice where the held one cannot reach) is held this long — the other station's over
      *  and the pause before it (test-binaural-two: overs of 2-5 s). A dial move forgets it at once. */
     static constexpr float kCrowdHoldSec = 8.0f;
     /** SSB: the held voice's band in the audio is taken as its transmitter's widest likely 100-2800 Hz, moved by the held
      *  answer; the region beyond it (on the far side) must be at least this wide to be judged… */
-    static constexpr float kCrowdRegionMinHz = 250.0f;
+    static constexpr float kCrowdRegionMinHz = 200.0f;
+    /** …kept this far from the held voice's band (the bank's sqrt-Hann window leaks a strong harmonic ~30 dB down 2-3 bins away, and a region beyond the receiver's own noise has a floor near nothing: a lone voice 300 Hz off read as two at 150 Hz). */
+    static constexpr float kCrowdGuardHz = 250.0f;
     /** …and, averaged over kCrowdOccSec, sound kCrowdOverDb over its own noise floor kCrowdOccFrac of the time. */
     static constexpr float kCrowdOverDb = 6.0f;
-    static constexpr float kCrowdOccSec = 1.0f;
+    static constexpr float kCrowdOccSec = 0.5f;
     static constexpr float kCrowdOccFrac = 0.25f;
     /** CW: a carrier is a local peak standing this far over the passband's noise (the median of its floor)… */
     static constexpr float kCwPeakDb = 12.0f;
     /** …heard for at least this long (summed) before it counts — a key click or a noise spike is not a signal… */
-    static constexpr float kCwTrackMinSec = 0.1f;
+    static constexpr float kCwTrackMinSec = 0.06f;
     /** …remembered for kCrowdHoldSec after it was last heard, and two of them at least this far apart are two signals
      *  (a tone between two bins wanders a bin; 150 Hz is 1.6 bins at the bank's 94 Hz). */
     static constexpr float kCwTrackApartHz = 150.0f;
     static constexpr float kCwTrackMatchHz = 70.0f;
+    /** SSB, the second witness: the HELD answer itself has sat on BOTH sides of the dial — each at least this far out, the
+     *  two at least kCrowdSidesApartHz apart — within kCrowdHoldSec and with no dial move between. A voice does not cross
+     *  the dial unless the dial moves, so that is two voices: the waterfall cue (or the estimator) following whoever talks
+     *  in a QSO either side. (The far-side region cannot see this case: the cue always points at the one talking.) */
+    static constexpr float kCrowdSideHz = 150.0f;
+    static constexpr float kCrowdSidesApartHz = 300.0f;
 
     BinauralSpread();
     ~BinauralSpread();
@@ -303,6 +311,8 @@ private:
     double clock_ = 0;                // seconds of frames since the bank started
     double occ_ = 0;                  // SSB: the far-side region's sounding fraction (kCrowdOccSec)
     double lastEv_ = -1e9;            // SSB: when that last passed kCrowdOccFrac
+    double sideT_[2] = {-1e9, -1e9};  // SSB: when the held answer last sat below / above the dial (kCrowdSideHz)
+    float sideV_[2] = {0, 0};         // …and where
     float crowd_ = 0;                 // the glided weight (crowd())
     float crowdT_ = 0;                // …and what this hop's judgement says (0 / 1)
     std::vector<float> med_;          // CW: scratch for the noise median
