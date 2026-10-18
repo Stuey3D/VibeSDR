@@ -52,15 +52,19 @@ case "$PGO" in ""|generate|use) ;; *) echo "!! VIBE_PGO is generate or use"; exi
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ARCHES="amd64 i386 armhf arm64"
 REV=""
+SYNC_ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --rev)  shift; REV="$1" ;;
+    # ★ Stage the headers and sync the tree, then stop — publish-apt-remote.sh needs the tree over there to
+    #   ask publish-apt.sh --next-rev which revision to build, before it can call this to build it.
+    --sync-only) SYNC_ONLY=1 ;;
     --arch) shift; ARCHES="${1//,/ }" ;;
     *) echo "usage: $0 --rev <REV> [--arch 'amd64 i386 armhf arm64']"; exit 1 ;;
   esac
   shift
 done
-[ -n "$REV" ] || { echo "usage: $0 --rev <REV> [--arch 'amd64 i386 armhf arm64']   (publish-apt-remote.sh picks it)"; exit 1; }
+[ -n "$REV" ] || [ -n "$SYNC_ONLY" ] || { echo "usage: $0 --rev <REV> [--arch 'amd64 i386 armhf arm64']   (publish-apt-remote.sh picks it)"; exit 1; }
 for A in $ARCHES; do
   case "$A" in amd64|i386|armhf|arm64) ;; *) echo "!! unknown architecture $A (amd64 i386 armhf arm64)"; exit 1;; esac
 done
@@ -81,7 +85,7 @@ rsh() {   # rsh <remote command> — exit 255 is ssh's own failure, never the re
 rsync_to_host() { rsync -a --timeout=60 -e "ssh $SSH_OPTS" "$@" || { echo "!! rsync to/from $HOST failed (exit $?)" >&2; return 1; }; }
 
 rsh true || { echo "!! cannot reach $HOST"; exit 1; }
-echo "==> $HOST before: $(rsh uptime)"
+[ -n "$SYNC_ONLY" ] || echo "==> $HOST before: $(rsh uptime)"
 
 # ★ The SDRplay headers are a build dependency staged from this machine (they are SDRplay's to license, so
 #   never committed). i386 compiles SDRplay out, but every image's COPY step needs them.
@@ -99,6 +103,8 @@ rsync_to_host --delete --exclude node_modules --exclude .git --exclude 'android/
   --exclude tvos --exclude lite --exclude '*.zip' --exclude '*.raw' --exclude '*.iq16' --exclude '*.cf32' \
   --exclude fuzz-corpus --exclude .armhf-out --exclude '.prebuilt-*' \
   "$SRC_DIR/" "$HOST:$RSRC/"
+
+[ -z "$SYNC_ONLY" ] || exit 0
 
 OUT="$SRC_DIR/vibeserver/build/prebuilt"
 mkdir -p "$OUT"

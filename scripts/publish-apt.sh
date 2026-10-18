@@ -98,7 +98,9 @@ if [ -n "${VIBE_TEST_REV:-}" ]; then
   case "$VIBE_TEST_REV" in 0~*) ;; *) echo "!! a test revision must start 0~ (sorts below every real one)"; exit 1;; esac
 fi
 
-if [ -n "$NOSIGN" ]; then
+if [ "$NEXT_REV" = 1 ]; then
+  :   # ★ only grep/sed/ls — it runs in a plain bookworm-slim container, before any build image exists
+elif [ -n "$NOSIGN" ]; then
   for t in dpkg-scanpackages apt-ftparchive dpkg-deb rsync; do
     command -v "$t" >/dev/null || { echo "missing: $t (apt install dpkg-dev apt-utils)"; exit 1; }
   done
