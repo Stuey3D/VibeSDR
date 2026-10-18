@@ -503,9 +503,10 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
     const n = slots.current.length;
     if (!n) return;
     const i = kb.current.idx;
-    if (k === 'ArrowUp' || k === 'ArrowLeft')    { setIdx(Math.max(0, i - 1)); return; }
-    if (k === 'ArrowDown' || k === 'ArrowRight') { setIdx(Math.min(n - 1, i + 1)); return; }
-    if (k === 'Enter' || k === 'Space') slots.current[i]?.();
+    if (k === 'ArrowUp' || k === 'ArrowLeft')    { setIdx(Math.max(0, i - 1)); return true; }
+    if (k === 'ArrowDown' || k === 'ArrowRight') { setIdx(Math.min(n - 1, i + 1)); return true; }
+    if (k === 'Enter') { slots.current[i]?.(); return true; }
+    // Back is passed on: SDRScreen closes the panel.
   }, NAV_REPEAT_KEYS);
 
   /* ★★ THE MANUAL FIELDS ARE HELD AS TEXT, not parsed on every keystroke. A half-typed "1" is

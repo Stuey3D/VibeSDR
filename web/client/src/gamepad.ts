@@ -9,13 +9,24 @@
  *  Pads WITH two analogue sticks:
  *    D-pad = move the highlight · ✕ (bottom) = enter · ○ (right) = back
  *    LEFT stick turned like a jog wheel = tune (clockwise forwards) · RIGHT stick turned = zoom (clockwise in)
- *  START switches between the two (Stuart: a pad with one stick may be reported as having two) — shown on screen and
- *  remembered on this device. ?pad=buttons|sticks forces one for a session.
+ *  HOLD START (~1 s) switches between the two (Stuart: a pad with one stick may be reported as having two) — shown on
+ *  screen and remembered on this device. ?pad=buttons|sticks forces one for a session.
+ *  ★ HELD, never tapped (Stuart, 2026-10-18: "i pressed the l and r button by mistake and it switched … with no way
+ *    back"): a pad whose browser numbering is not the standard layout can report a shoulder button as START, and a
+ *    tap is too easy to make by accident. The toast always says how to switch back.
  *
  * ★ Nothing runs until a pad is connected: no polling loop, no listener work, no cost to anyone without one.
  * ★ Enter on a slider or a drop-down ADJUSTS it: D-pad left/right changes the value, enter or back finishes.
+ *
+ * ★★★ THE KEYBOARD DRIVES THE SAME HIGHLIGHT (Stuart, 2026-10-18 — src/utils/keyActions.ts): arrows and W A S D are the
+ *   D-pad, Enter is enter, Backspace and Escape are back, < > tune and - + zoom. One set of actions below, fed by the
+ *   pad, the keyboard, and nothing else — so the two can never disagree. Every older keyboard shortcut is gone.
+ * ★★ BACK IS ONE PATH. A menu or overlay that is not a .open panel (the step menu, the meter menu, the tour, the
+ *   admin panel) registers its close with pushBack() while it is up; back closes the newest of those first, then the
+ *   panels. That used to be six separate Escape listeners, which a pad's back never reached.
  */
 import { pickNext, Jog, padProfile, type Box, type Dir } from '../../../src/utils/gamepadNav';
+import { keyAction, keyDir, keyRepeats, type KeyAction } from '../../../src/utils/keyActions';
 
 export interface GamepadHooks {
   tune(dir: 1 | -1): void;           // one step of the current tuning step
@@ -29,6 +40,7 @@ const PROFILE_KEY = 'vibe.padProfile';
 const B_UP = 12, B_DOWN = 13, B_LEFT = 14, B_RIGHT = 15;
 const FOCUSABLE = 'button, input:not([type=hidden]), select, a[href], [role="button"], [tabindex]:not([tabindex="-1"])';
 const REPEAT_DELAY = 380, REPEAT_EVERY = 110;
+const SWITCH_HOLD_MS = 900;                     // START held this long switches the controls
 
 let hooks: GamepadHooks | null = null;
 let running = false;
@@ -51,7 +63,8 @@ function scope(): HTMLElement {
     const el = document.getElementById(id);
     if (el && visible(el)) return el;
   }
-  const open = [...document.querySelectorAll<HTMLElement>('.open')].filter(visible);
+  // ★ data-navscope: a pop-up menu that is not one of the .open panels (the step menu, the meter menu).
+  const open = [...document.querySelectorAll<HTMLElement>('.open, [data-navscope]')].filter(visible);
   if (open.length) {
     // The one drawn on top: highest z-index, later in the page on a tie.
     return open.reduce((a, b) => ((+getComputedStyle(b).zIndex || 0) >= (+getComputedStyle(a).zIndex || 0) ? b : a));
@@ -107,9 +120,69 @@ function enter() {
   el.click();
 }
 
+// ★ Closers for whatever is up that is not a .open panel — newest last. See the header.
+const backStack: (() => void)[] = [];
+
+/** Register `close` as what back does while this menu/overlay is up. Call the returned function when it closes
+ *  (by any route) so a later back does not close it twice. */
+export function pushBack(close: () => void): () => void {
+  backStack.push(close);
+  return () => { const i = backStack.lastIndexOf(close); if (i >= 0) backStack.splice(i, 1); };
+}
+
 function back() {
   if (adjusting && current) { adjusting = false; current.classList.remove('gpAdjust'); return; }
+  const top = backStack.pop();
+  if (top) { top(); highlight(null); return; }
   if (hooks?.back()) highlight(null);
+}
+
+/** One action, from whichever device. */
+function act(a: KeyAction) {
+  const d = keyDir(a);
+  if (d) { move(d); return; }
+  switch (a) {
+    case 'enter': enter(); break;
+    case 'back': back(); break;
+    case 'tuneDown': hooks?.tune(-1); break;
+    case 'tuneUp': hooks?.tune(1); break;
+    case 'zoomOut': hooks?.zoom(-1); break;
+    case 'zoomIn': hooks?.zoom(1); break;
+  }
+}
+
+/** Somebody is typing here: a text box, a drop-down or slider holding real focus, or editable text. */
+function typingIn(t: EventTarget | null): t is HTMLElement {
+  if (!(t instanceof HTMLElement)) return false;
+  if (t.isContentEditable || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return true;
+  return t instanceof HTMLInputElement && !['button', 'submit', 'reset', 'checkbox', 'radio', 'image'].includes(t.type);
+}
+
+function onKey(e: KeyboardEvent) {
+  const a = keyAction(e.key, { ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey });
+  if (!a) return;
+  const t = e.target;
+  // ★★ TYPING IS NEVER HIJACKED: W, A, S, D, comma, full stop, minus and Backspace are characters somebody needs.
+  //    Escape is the one exception — it LEAVES THE FIELD (one layer, like every back); the arrows then move round the
+  //    panel the field is in (the frequency card's units, the search results) and a second Escape closes it. The app
+  //    does the same.
+  if (typingIn(t)) {
+    if (e.key === 'Escape') t.blur();
+    return;
+  }
+  // ★ Browser key repeat already repeats a held key at the system's rate — no second repeat of our own on top.
+  if (e.repeat && !keyRepeats(a)) return;
+  const focused = t instanceof HTMLElement && t !== document.body && t.matches(FOCUSABLE) ? t : null;
+  // ★ A control holding real focus (reached with Tab) keeps the browser's own Enter — Tab users and screen readers
+  //   press what they are on, and a control with its own Enter handler (the frequency box) is never pressed twice.
+  if (a === 'enter' && focused) return;
+  // ★ Arrows start from it, so Tab and the arrows share one place on the page…
+  if (keyDir(a) && focused && focused !== current && visible(focused)) highlight(focused);
+  e.preventDefault();
+  act(a);
+  // ★ …and once the highlight has moved on, focus does not linger behind it (a button keeps focus after a click), or
+  //   the next Enter would press the old control instead of the highlighted one.
+  if (keyDir(a) && focused && focused !== current) focused.blur();
 }
 
 /** Press, hold-to-repeat: fires on the press, then after a pause, then steadily while held. */
@@ -131,8 +204,9 @@ function forcedProfile(): string | null { return chosen; }
 function toggleProfile(axes: number) {
   chosen = padProfile(axes, chosen) === 'sticks' ? 'buttons' : 'sticks';
   try { localStorage.setItem(PROFILE_KEY, chosen); } catch { /* private window: this session only */ }
-  toast(chosen === 'sticks' ? 'Controls: two sticks — turn the left stick to tune, the right to zoom'
-                            : 'Controls: buttons by position — face buttons tune and zoom, R enter, L back');
+  toast((chosen === 'sticks' ? 'Controls: two sticks — turn the left stick to tune, the right to zoom'
+                             : 'Controls: buttons by position — face buttons tune and zoom, R enter, L back')
+        + ' · hold START to switch back');
 }
 
 function toast(text: string) {
@@ -155,21 +229,28 @@ function poll() {
     const btn = (i: number) => !!gp.buttons[i]?.pressed;
     const prof = padProfile(gp.axes.length, forcedProfile());
     const id = `${gp.index}:`;
-    press(id + 'start', btn(B_START), () => toggleProfile(gp.axes.length), false);
+    // HOLD to switch: fires once when START has been down SWITCH_HOLD_MS, never on a tap.
+    if (btn(B_START)) {
+      const since = held.get(id + 'start');
+      if (since === undefined) held.set(id + 'start', performance.now());
+      else if (since > 0 && performance.now() - since >= SWITCH_HOLD_MS) {
+        toggleProfile(gp.axes.length); held.set(id + 'start', -1);   // -1: done until released
+      }
+    } else held.delete(id + 'start');
     press(id + 'up', btn(B_UP), () => move('up'));
     press(id + 'down', btn(B_DOWN), () => move('down'));
     press(id + 'left', btn(B_LEFT), () => move('left'));
     press(id + 'right', btn(B_RIGHT), () => move('right'));
     if (prof === 'buttons') {
-      press(id + 'enter', btn(B_R1), enter, false);
-      press(id + 'back', btn(B_L1), back, false);
-      press(id + 'zin', btn(B_NORTH), () => hooks?.zoom(1));
-      press(id + 'zout', btn(B_SOUTH), () => hooks?.zoom(-1));
-      press(id + 'tdn', btn(B_WEST), () => hooks?.tune(-1));
-      press(id + 'tup', btn(B_EAST), () => hooks?.tune(1));
+      press(id + 'enter', btn(B_R1), () => act('enter'), false);
+      press(id + 'back', btn(B_L1), () => act('back'), false);
+      press(id + 'zin', btn(B_NORTH), () => act('zoomIn'));
+      press(id + 'zout', btn(B_SOUTH), () => act('zoomOut'));
+      press(id + 'tdn', btn(B_WEST), () => act('tuneDown'));
+      press(id + 'tup', btn(B_EAST), () => act('tuneUp'));
     } else {
-      press(id + 'enter', btn(B_SOUTH), enter, false);
-      press(id + 'back', btn(B_EAST), back, false);
+      press(id + 'enter', btn(B_SOUTH), () => act('enter'), false);
+      press(id + 'back', btn(B_EAST), () => act('back'), false);
       const t = tuneJog.feed(gp.axes[0] ?? 0, gp.axes[1] ?? 0);
       for (let k = 0; k < Math.abs(t); k++) hooks?.tune(t > 0 ? 1 : -1);
       const z = zoomJog.feed(gp.axes[2] ?? 0, gp.axes[3] ?? 0);
@@ -179,8 +260,10 @@ function poll() {
   requestAnimationFrame(poll);
 }
 
+/** The pad AND the keyboard. */
 export function initGamepad(h: GamepadHooks): void {
   hooks = h;
+  window.addEventListener('keydown', onKey);
   const start = () => { if (!running) { running = true; requestAnimationFrame(poll); } };
   window.addEventListener('gamepadconnected', start);
   // ★ A pad already connected before the page loaded announces itself only on its first press — poll once to see.

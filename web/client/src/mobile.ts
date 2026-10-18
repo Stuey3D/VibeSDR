@@ -15,6 +15,7 @@
 // tuning a radio, because that's what it's modelled on."
 
 import { SIGID_HOME } from '../../../src/services/dialChat';
+import { pushBack } from './gamepad';
 import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
 
 export type MobileDeps = {
@@ -167,6 +168,14 @@ export function initMobileControls(deps: MobileDeps) {
   //    number pad, and the gradient behind them was an invisible third button.
   $('mFreqBox').onclick = () => deps.openFreqEntry();
   $('mMode').onclick    = () => openModePicker();
+  // ★ The frequency box, the mode and the signal reading are spans that act as buttons, so they carry role="button"
+  //   and tabindex="0" (index.html) — without those a game controller's highlight and the Tab key skipped straight
+  //   past them (Stuart, 2026-10-18: "it skips past the frequency box the demodulator button"). Enter / Space press them.
+  for (const id of ['mFreqBox', 'mMode', 'mSnr']) {
+    $(id).addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $(id).click(); }
+    });
+  }
   // ★★★ A MENU, NOT A CYCLER — the same ruling this file already applies to the STEP button, and
   //     for the same reason, now confirmed on this control too: "I have to click multiple times
   //     and it sometimes jumps past the digits I want, I want to view the SNR but keeps jumping
@@ -182,6 +191,7 @@ export function initMobileControls(deps: MobileDeps) {
     const r = anchor.getBoundingClientRect();
     const m = document.createElement('div');
     m.id = 'mMeterMenu';
+    m.dataset.navscope = '';     // the pad's and keyboard's highlight moves within it (gamepad.ts)
     m.style.cssText = 'position:fixed;z-index:9998;background:#0d0d0d;border:1px solid #ffa000;'
       + 'border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;'
       + 'font:12px/1.4 var(--mono,monospace);box-shadow:0 6px 24px rgba(0,0,0,.6)';
@@ -215,13 +225,12 @@ export function initMobileControls(deps: MobileDeps) {
     const close = () => {
       m.remove();
       document.removeEventListener('mousedown', onDoc, true);
-      document.removeEventListener('keydown', onKey, true);
+      unBack();
     };
     const onDoc = (e: MouseEvent) => { if (!m.contains(e.target as Node)) close(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    const unBack = pushBack(close);   // back (Escape, Backspace, a pad's back) closes it first
     setTimeout(() => {
       document.addEventListener('mousedown', onDoc, true);
-      document.addEventListener('keydown', onKey, true);
     }, 0);
   };
   $('mSnr').onclick = () => openMeterMenu($('mSnr'));
@@ -250,6 +259,7 @@ export function initMobileControls(deps: MobileDeps) {
     document.getElementById('mModeMenu')?.remove();
     const menu = document.createElement('div');
     menu.id = 'mModeMenu';
+    menu.dataset.navscope = '';  // the pad's and keyboard's highlight moves within it (gamepad.ts)
     const grid = document.createElement('div');
     grid.className = 'mModeGrid';
     const cur = deps.mode().toLowerCase();
@@ -350,7 +360,7 @@ export function initMobileControls(deps: MobileDeps) {
       if (bw && bwHome) bwHome.appendChild(bw);
       menu.remove();
       document.removeEventListener('pointerdown', away, true);
-      document.removeEventListener('keydown', esc, true);
+      unBack();
     };
     // ★★★ THE DISMISS CLICK IS CONSUMED, NOT PASSED ON. This runs in the CAPTURE phase, so the
     //     same pointerdown that closed the menu went on to reach the waterfall and RETUNE — the
@@ -363,11 +373,10 @@ export function initMobileControls(deps: MobileDeps) {
       ev.stopPropagation();
       close();
     };
-    const esc = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } };
+    const unBack = pushBack(close);   // back (Escape, Backspace, a pad's back) closes it first
     // Deferred, or the click that OPENED the menu immediately closes it again.
     setTimeout(() => {
       document.addEventListener('pointerdown', away, true);
-      document.addEventListener('keydown', esc, true);
     }, 0);
   }
 

@@ -186,14 +186,9 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange, cu
 
   // ── Keyboard ────────────────────────────────────────────────────────────────
   //
-  // ★ Its own handler rather than the shared list navigation, because the key map here is
-  // deliberately different: SPACE plays, and BACKSPACE deletes. ★ Enter plays too, because
-  // iOS Full Keyboard Access swallows the space bar — see the note in DecoderPanel. Originally —
-  // it opens the frequency box everywhere else in the app, and a list where Enter meant
-  // "play" would be the same context-dependent key that has caused most of the trouble.
-  //
-  // ★ Delete is accepted alongside Backspace: a Mac keyboard has no forward-delete key, so
-  // offering only one of the two is unusable on half the hardware.
+  // ★ ONE SCHEME (2026-10-18): up / down (or W / S) move through the recordings, Enter plays and pauses, Back
+  // (Backspace / Escape) closes the list. Backspace used to DELETE the highlighted recording — a destructive key that
+  // now means back everywhere else, so deleting is the row's own ✕ (with its confirmation), by touch.
   //
   // ★ SHARE is deliberately absent. It hands off to the system share sheet, which is not ours
   // to drive — the same reason share is left off the keyboard path in the frequency card.
@@ -208,7 +203,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange, cu
   useRepeatingKeys(visible, (k: string) => {
     const { recs: all, navIdx: i } = kb.current;
     const rs = all ?? [];
-    if (k === 'Escape') { kb.current.onClose(); return; }
+    if (k === 'Back') { kb.current.onClose(); return true; }
     if (!rs.length) return;
     if (k === 'ArrowUp' || k === 'ArrowDown') {
       const next = Math.max(0, Math.min(rs.length - 1, i + (k === 'ArrowDown' ? 1 : -1)));
@@ -216,10 +211,9 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange, cu
       // ★ The list has headings between the recordings: scroll to the ROW that holds recording `next`.
       const at = kb.current.rows.findIndex((x) => x.kind === 'r' && x.i === next);
       try { if (at >= 0) listRef.current?.scrollToIndex({ index: at, viewPosition: 0.5, animated: true }); } catch {}
-      return;
+      return true;
     }
-    if (k === 'Space' || k === 'Enter') { const r = rs[i]; if (r) kb.current.togglePlay(r); return; }
-    if (k === 'Backspace' || k === 'Delete') { const r = rs[i]; if (r) kb.current.remove(r); }
+    if (k === 'Enter') { const r = rs[i]; if (r) kb.current.togglePlay(r); return true; }
   }, NAV_REPEAT_KEYS);
 
   const renderRec = useCallback(({ item, index }: { item: Rec; index: number }) => {

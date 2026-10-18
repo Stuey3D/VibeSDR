@@ -21,6 +21,7 @@
  *    "a control that only works on one radio should not be there": do not describe what is not
  *    usable here.
  */
+import { pushBack } from './gamepad';
 
 /** ★ Recorded, but never consulted to gate the tour — see the header. It exists so a future
  *  "you have not seen the tutorial" nudge has something to read, and so the button can say
@@ -131,7 +132,7 @@ function stepAvailable(s: Step): boolean {
 
 let idx = -1;                       // -1 = not running
 let panel: HTMLDivElement | null = null;
-let onKey: ((e: KeyboardEvent) => void) | null = null;
+let onKey: (() => void) | null = null;   // un-registers the tour's back (gamepad.ts pushBack)
 let onOutside: ((e: Event) => void) | null = null;
 let onResize: (() => void) | null = null;
 
@@ -328,7 +329,7 @@ export function endTutorial() {
   clearGlow();
   panel?.remove();
   panel = null;
-  if (onKey) { window.removeEventListener('keydown', onKey, true); onKey = null; }
+  if (onKey) { onKey(); onKey = null; }
   if (onOutside) { window.removeEventListener('pointerdown', onOutside, true); onOutside = null; }
   if (onResize) { window.removeEventListener('resize', onResize); onResize = null; }
   if (wasRunning) markSeen();
@@ -352,8 +353,8 @@ export function startTutorial() {
   idx = first;
   render();
 
-  onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); endTutorial(); } };
-  window.addEventListener('keydown', onKey, true);
+  // Back (Escape, Backspace, a pad's back) ends the tour.
+  onKey = pushBack(() => endTutorial());
 
   // ★★ THE LAYOUT CAN CHANGE UNDER THE TOUR. Rotating a phone, or dragging a desktop window
   //    narrow, rearranges the card — and a control that goes away while lit would keep the class

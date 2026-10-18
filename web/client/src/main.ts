@@ -20,7 +20,7 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
   () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
 import { initPocketConn } from './pocketConn';
-import { initGamepad } from './gamepad';
+import { initGamepad, pushBack } from './gamepad';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
@@ -9331,9 +9331,7 @@ function isPanelOpen(id: string): boolean {
 }
 
 function initPanels() {
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closePanels();
-  });
+  // ★ Escape (and Backspace, and a pad's back) close the panels through gamepad.ts's one back path — initKeyboard.
   // Click outside a panel closes it. The panels are centred pop-ups whose dim is
   // a box-shadow, so there is no backdrop element to hang this on.
   window.addEventListener('pointerdown', (e) => {
@@ -14376,15 +14374,6 @@ function buildVfo() {
   renderFreq();
 }
 
-/** Walk the ladder — kept for the keyboard shortcut, where cycling is the right
- *  gesture because there is nothing to point at. */
-function cycleStep() {
-  if (!spec) return;
-  const steps = stepsForFreq(spec.frequency, ituRegion());
-  const i = steps.indexOf(step);
-  setStep(steps[(i + 1) % steps.length]);
-}
-
 function setStep(v: number) {
   step = v;
   // ★ The step decides which name a shared airband frequency wears (118.000 / 118.005), and with it
@@ -14400,7 +14389,7 @@ function setStep(v: number) {
  *  step you want means clicking through the ones you don't — and on the HF ladder
  *  that is a lot of clicks to go the wrong way round. A list you point at is the
  *  right control once the options stop being few (Stuart: "bothered me for ages").
- *  ★ The keyboard [ and ] keep cycling: there is nothing to aim at from a key. */
+ *  ★ Reached by keyboard and pad like any other menu: the highlight moves in it, Enter picks, back closes. */
 /** ★ Anchored to the button that was tapped (the card's #mStep). It once defaulted to a button in
  *  the hidden desktop bar, whose getBoundingClientRect() is all zeros, so the menu landed in the
  *  top-left corner instead of on the button. */
@@ -14413,6 +14402,7 @@ function openStepMenu(anchor?: HTMLElement) {
 
   const m = document.createElement('div');
   m.id = 'stepMenu';
+  m.dataset.navscope = '';     // the pad's and keyboard's highlight moves within it while it is up (gamepad.ts)
   m.style.cssText = 'position:fixed;z-index:9998;background:#0d0d0d;border:1px solid #ffa000;'
     + 'border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;'
     + 'font:12px/1.4 var(--mono,monospace);box-shadow:0 6px 24px rgba(0,0,0,.6);'
@@ -14440,13 +14430,13 @@ function openStepMenu(anchor?: HTMLElement) {
   const close = () => {
     m.remove();
     document.removeEventListener('mousedown', onDoc, true);
-    document.removeEventListener('keydown', onKey, true);
+    unBack();
   };
   const onDoc = (e: MouseEvent) => { if (!m.contains(e.target as Node)) close(); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  // Back (Escape, Backspace, a pad's back) closes it first.
+  const unBack = pushBack(close);
   setTimeout(() => {
     document.addEventListener('mousedown', onDoc, true);
-    document.addEventListener('keydown', onKey, true);
   }, 0);
 }
 
@@ -16245,43 +16235,18 @@ function initPointerFreq(c: HTMLCanvasElement) {
 }
 
 function initKeyboard() {
-  /* ★★ GAME CONTROLLERS (Stuart's mapping, 2026-10-10 — gamepad.ts): tune and zoom are the arrow keys' own actions,
-   *  and back is Escape's, so a pad and a keyboard can never disagree. */
+  /* ★★★ ONE SCHEME FOR THE KEYBOARD AND THE GAME CONTROLLER (Stuart, 2026-10-18 — gamepad.ts, src/utils/keyActions.ts):
+   *  arrows / W A S D move the highlight, Enter selects, Backspace and Escape go back, < > tune, - + zoom. Both feed
+   *  the same actions in gamepad.ts. The older shortcuts (arrows tuning and zooming, Shift×10, [ ] for the step, M for
+   *  mute, T for the RDS panel's size, a letter for each mode) were stripped as too complicated. */
   initGamepad({
     tune: (d) => { if (spec) nudge(d * step); },
     zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
     back: () => {
       const anyOpen = !!document.querySelector('.open');
-      if (anyOpen) closePanels();
+      closePanels();
       return anyOpen;
     },
-  });
-  window.addEventListener('keydown', (e) => {
-    if (!spec) return;
-    const tgt = e.target as HTMLElement;
-    if (tgt && /INPUT|SELECT|TEXTAREA/.test(tgt.tagName)) return;
-
-    // Arrow keys tune by the selected step (×10 with Shift for a fast run).
-    const d = step * (e.shiftKey ? 10 : 1);
-    switch (e.key) {
-      case 'ArrowLeft':  nudge(-d); e.preventDefault(); break;
-      case 'ArrowRight': nudge(d);  e.preventDefault(); break;
-      case '[': case ']': cycleStep(); e.preventDefault(); break;
-      case 'ArrowUp':    spec.zoomBy(1.25); updateViewOverlays(); e.preventDefault(); break;
-      case 'ArrowDown':  spec.zoomBy(0.8);  updateViewOverlays(); e.preventDefault(); break;
-      case 'm': setMuted(!audio!.muted); break;
-      // ★ T = taller/shorter, but ONLY while the panel that it resizes is open. A shortcut
-      // that does nothing visible is worse than no shortcut: the user cannot tell whether
-      // they pressed the wrong key or the app is broken (Stuart, 2026-07-26).
-      case 't': case 'T':
-        if (rdsPanelOpen()) { $('rdsSize').click(); e.preventDefault(); }
-        break;
-      default: {
-        // Mode letter keys: first mode whose name starts with the key.
-        const m = MODES.find(x => x[0] === e.key.toLowerCase());
-        if (m) setMode(m, true);
-      }
-    }
   });
 }
 

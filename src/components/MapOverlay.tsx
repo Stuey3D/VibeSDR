@@ -1457,10 +1457,10 @@ export default function MapOverlay(
   }, []);
   const [ignored, setIgnored] = useState(false);
 
-  // ★ Esc closes the map. It is OUR page, so shortcuts are not suppressed here — but nothing
+  // ★ Back (Backspace / Escape) closes the map. It is OUR page, so keys are not suppressed here — but nothing
   // was listening for a way out, and once inside a map a keyboard user was stuck.
   const closeRef = useRef(onClose); closeRef.current = onClose;
-  useRepeatingKeys(visible, (k: string) => { if (k === 'Escape') closeRef.current(); }, []);
+  useRepeatingKeys(visible, (k: string) => { if (k === 'Back') { closeRef.current(); return true; } }, []);
   useEffect(() => { if (!disconnected) setIgnored(false); }, [disconnected]);
   const injected = useRef<Set<string>>(new Set());
   /* ★★ THE GPU MAP'S FILES FIRST: copied into <documents>/mapgl/ once (mapglPack.ts). Until that

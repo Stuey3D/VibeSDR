@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { AppState, View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform } from 'react-native';
+import { AppState, View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform, useWindowDimensions } from 'react-native';
 import { LOGO_DECODE } from '../constants/logoDecode';
 import * as FileSystem from 'expo-file-system/legacy';
 import { noteRecordingServer } from '../services/recordingsIndex';
@@ -11,7 +11,9 @@ import { useRecordBuffer, bufferedSecondsOf } from '../hooks/useRecordBuffer';
 import { noteAudioEvent } from '../services/audioPathLog';
 import StepPicker from '../components/StepPicker';
 import { useIsFocused } from '@react-navigation/native';
-import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS, useNavFocus } from '../components/PanelNav';
+import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS, ALL_REPEAT_KEYS, useNavFocus } from '../components/PanelNav';
+import { useScreenHighlight } from '../components/ScreenNav';
+import { SCREEN_PRIORITY, keyDirOf } from '../utils/hardwareKeys';
 import { v4 as uuidv4 } from 'uuid';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -908,10 +910,10 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   useRepeatingKeys(demodOpen, (k: string) => {
     const { demodActions: acts, demodIdx: i } = demodRef.current;
-    if (k === 'Escape' || k === 'Backspace') { setDemodOpen(false); return; }
-    if (k === 'ArrowUp')   { setDemodIdx(Math.max(0, i - 1)); return; }
-    if (k === 'ArrowDown') { setDemodIdx(Math.min(acts.length - 1, i + 1)); return; }
-    if (k === 'Enter' || k === 'Space') acts[i]?.run();
+    if (k === 'Back') { setDemodOpen(false); return true; }
+    if (k === 'ArrowUp')   { setDemodIdx(Math.max(0, i - 1)); return true; }
+    if (k === 'ArrowDown') { setDemodIdx(Math.min(acts.length - 1, i + 1)); return true; }
+    if (k === 'Enter') { acts[i]?.run(); return true; }
   }, NAV_REPEAT_KEYS);
 
   const panelsOpenRef = useRef(false);
@@ -920,54 +922,46 @@ export default function TunerScreen({ route, navigation }: Props) {
                          || chatOpen || recordingsOpen;
   }, [freqModalOpen, demodOpen, stepOpen, audioSheetOpen, chatOpen, recordingsOpen]);
 
-  // ★ Repeating, so holding an arrow tunes continuously — the same helper the panels use. On a
-  // SHARED tuner that is safe because the settle-commit debounce in stepTune sends one retune
-  // when you stop rather than one per repeat.
+  // ★★★ ONE SCHEME (Stuart, 2026-10-18 — src/utils/keyActions.ts), as on the receiver screen: arrows / W A S D move the
+  // highlight round the controls (ScreenNav — the frequency box, the demodulator, the step, audio, chat, ‹ Back),
+  // Enter presses, Back closes what is open, < > tune and - + zoom the dial. The letters (C D S R), Enter-opens-the-
+  // frequency-box, the arrows tuning and zooming, and Escape-leaves-the-server are gone (‹ Back is on the highlight).
+  // ★ Repeating, so holding > tunes continuously. On a SHARED tuner that is safe because the settle-commit debounce in
+  // stepTune sends one retune when you stop rather than one per repeat.
+  const { width: winW, height: winH } = useWindowDimensions();
+  const screenHl = useScreenHighlight(kbInUse && !freqModalOpen && !demodOpen && !stepOpen && !audioSheetOpen
+                                      && !chatOpen && !recordingsOpen && !showNotice, focusC.ring, [winW, winH]);
   useRepeatingKeys(true, (k: string) => {
-    {
-      if (!k) return;
-      // Not the screen on top, or a page we did not write is showing — same rules as SDRScreen.
-      if (!screenFocusedRef.current || shortcutsSuppressed()) return;
-      // ★★ THE SHARED-TUNER NOTICE COMES FIRST. It is modal and it is the ONLY thing on screen,
-      // so it takes every key and passes none through — and it had no keyboard route out at
-      // all, which on a keyboard-only setup meant the app opened into a wall. Enter, Space and
-      // Escape all dismiss it, because with one button and one action there is nothing to
-      // choose between and no reason to be fussy about which key you reach for.
-      if (showNoticeRef.current) {
-        if (k === 'Enter' || k === 'Space' || k === 'Escape') dismissNoticeRef.current();
-        return;
-      }
-      if (k === 'Escape') {
-        // One rule: something open closes, nothing open goes back to the server list.
-        if (panelsOpenRef.current) {
-          setFreqModalOpen(false); setDemodOpen(false); setStepOpen(false);
-          setAudioSheetOpen(false); setChatOpen(false); setRecordingsOpen(false);
-        } else {
-          navigation.goBack();
-        }
-        return;
-      }
-      // A panel that is open owns the rest — its own navigation is already listening.
-      if (panelsOpenRef.current) return;
-      switch (k) {
-        // ★ Tuning IS the point of this screen, and leaving the arrows out was wrong — the
-        // dial is the primary control here exactly as the drums are on the SDR screen.
-        case 'ArrowLeft':  kbRefs.current.stepTune(-1); break;
-        case 'ArrowRight': kbRefs.current.stepTune(1);  break;
-        case 'ArrowUp':    kbRefs.current.dialZoom(-40); break;
-        case 'ArrowDown':  kbRefs.current.dialZoom(40);  break;
-        case 'Enter': setFreqModalOpen(true); break;
-        case 'C': kbRefs.current.openChat(); break;
-        case 'D': setDemodOpen(true); break;
-        case 'S': setStepOpen(true); break;
-        // ★ R opens the RECORDINGS list rather than starting a recording. Stuart: it should
-        // reach the playback side too — and a key that silently begins recording, with the
-        // only feedback a small dot, is a poor thing to press by accident.
-        case 'R': setRecordingsOpen(true); break;
-        default: break;
-      }
+    if (!k) return;
+    // Not the screen on top, or a page we did not write is showing — same rules as SDRScreen.
+    if (!screenFocusedRef.current || shortcutsSuppressed()) return;
+    // ★★ THE SHARED-TUNER NOTICE COMES FIRST. It is modal and it is the ONLY thing on screen, so it takes every key
+    // and passes none through — Enter or Back dismisses it (one button, one action).
+    if (showNoticeRef.current) {
+      if (k === 'Enter' || k === 'Back') dismissNoticeRef.current();
+      return true;
     }
-  }, NAV_REPEAT_KEYS);
+    switch (k) {
+      case 'TuneDown': kbRefs.current.stepTune(-1); return true;
+      case 'TuneUp':   kbRefs.current.stepTune(1);  return true;
+      case 'ZoomIn':   kbRefs.current.dialZoom(-40); return true;
+      case 'ZoomOut':  kbRefs.current.dialZoom(40);  return true;
+      default: break;
+    }
+    if (k === 'Back') {
+      // One rule: something open closes. Leaving the server is the ‹ Back key, which the highlight reaches.
+      if (panelsOpenRef.current) {
+        setFreqModalOpen(false); setDemodOpen(false); setStepOpen(false);
+        setAudioSheetOpen(false); setChatOpen(false); setRecordingsOpen(false);
+      } else screenHl.clear();
+      return true;
+    }
+    // A panel that is open owns the rest — its own navigation is already listening.
+    if (panelsOpenRef.current) return;
+    if (k === 'Enter') { screenHl.press(); return true; }
+    const dir = keyDirOf(k);
+    if (dir) { void screenHl.move(dir); return true; }
+  }, ALL_REPEAT_KEYS, { priority: SCREEN_PRIORITY });
 
   // ── Recording (REC + Recordings live in the AUDIO sheet — control island) ────
   // ★★ One tap, one recording — the same fix as SDRScreen's (Stuart, 2026-10-17: "a few clicks and a false file").
@@ -1072,7 +1066,8 @@ export default function TunerScreen({ route, navigation }: Props) {
   const big = lay.logoBox !== LOGO_BOX_COMPACT;
 
   return (
-    <SafeAreaView style={styles.root} edges={['top']}>
+    <SafeAreaView ref={screenHl.rootRef as any} style={styles.root} edges={['top']}>
+      {screenHl.ring}
       {/* Header (Back lives in the control island's menu slot) */}
       <View style={[styles.header, { paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right }]}>
         <Text style={styles.title} numberOfLines={1}>{instanceName ?? 'FM-DX'}</Text>

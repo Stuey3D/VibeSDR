@@ -24,16 +24,14 @@ import { useFullKeyboardAccessSuspected, useRepeatingKeys, useSuppressShortcuts,
 
 const SEEN_KEY = 'lsv_fka_splash_seen_v2';
 
-// ★ The Alt key is labelled differently on every keyboard likely to be in front of a reader:
-// Alt on a Windows or handheld one (Stuart's Rii says ALT), Option on an older Apple keyboard,
-// and on a modern Mac nothing but the symbol. ALL THREE are shown (Stuart), because the
-// only failure that matters here is a user unable to FIND the key an instruction names.
+// ★ ONE SCHEME (2026-10-18): W A S D are the arrow keys by another name, and Full Keyboard Access leaves letters alone —
+// so the substitutes are no longer modifier chords (Shift+arrow, Alt/Option+Tab), just keys.
 const KEYS: { k: string; what: string }[] = [
+  { k: 'W  A  S  D', what: 'move the highlight, as the arrows do' },
   { k: '<  >', what: 'tune down and up' },
   { k: '−  +', what: 'zoom out and in' },
-  { k: 'shift + arrow', what: 'move through menus and lists' },
-  { k: 'alt/option/⌥ + tab', what: 'in and out of the decoder box' },
   { k: 'enter', what: 'selects and presses buttons' },
+  { k: 'backspace', what: 'goes back' },
 ];
 
 export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
@@ -48,8 +46,8 @@ export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
 
   const visible = suspected && seen === false;
 
-  // ★ While the splash is up the screen underneath must not act on keys — otherwise M would
-  // open the menu BEHIND it. useRepeatingKeys deliberately ignores this flag, which is what
+  // ★ While the splash is up the screen underneath must not act on keys — otherwise Enter would
+  // press a control BEHIND it. useRepeatingKeys deliberately ignores this flag, which is what
   // lets the splash still hear the very keys it has just silenced for everyone else.
   useSuppressShortcuts(visible);
 
@@ -58,12 +56,10 @@ export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
     AsyncStorage.setItem(SEEN_KEY, '1').catch(() => {});
   };
 
-  // ★ Every key here has to be one that still ARRIVES in this state — which rules out Escape's
-  // usual companions. Enter and Space are safe (letters and Enter get through, which is the
-  // whole shape of the fault), and M both dismisses and does the thing it is advertising.
+  // ★ Every key here has to be one that still ARRIVES in this state — Enter and Backspace do (Full Keyboard Access
+  // takes only the plain navigation keys). Either dismisses it: one card, one action.
   useRepeatingKeys(visible, (k: string) => {
-    if (k === 'M') { close(); onOpenHelp(); return; }
-    if (k === 'Enter' || k === 'Space' || k === 'Escape') close();
+    if (k === 'Enter' || k === 'Back') { close(); return true; }
   }, []);
 
   if (!visible) return null;
@@ -75,8 +71,8 @@ export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
         <View style={[s.card, { borderColor: t.barBorder }]}>
           <Text style={[s.title, { fontFamily: t.font }]}>YOUR ARROW KEYS ARE ELSEWHERE</Text>
           <Text style={[s.body, { fontFamily: t.font }]}>
-            iOS Full Keyboard Access is switched on, so the system is taking the arrow keys and
-            Tab and the space bar before VibeSDR can see them. Leave it on — these do the same jobs:
+            iOS Full Keyboard Access is switched on, so the system is taking the arrow keys before
+            VibeSDR can see them. Leave it on — these do the same jobs:
           </Text>
           <View style={s.table}>
             {KEYS.map((r) => (
@@ -87,8 +83,7 @@ export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
             ))}
           </View>
           <Text style={[s.body, { fontFamily: t.font }]}>
-            Press <Text style={s.inline}>M</Text> for the menu, where KEYBOARD lists every
-            shortcut in the app.
+            KEYBOARD in the settings menu explains the rest.
           </Text>
           <View style={s.btns}>
             <Pressable style={s.btn} onPress={() => { close(); onOpenHelp(); }} onTouchStart={noteTouchInteraction}>

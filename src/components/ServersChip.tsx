@@ -30,6 +30,7 @@ import { Canvas, Rect, RadialGradient, vec } from '@shopify/react-native-skia';
 import { useTheme } from '../contexts/ThemeContext';
 import SectionIcon from './SectionIcon';
 import { useGlassTheme } from './PopupShell';
+import { screenNavRef } from './ScreenNav';
 
 type Props = {
   /** Bump to open the menu from outside (keyboard Esc). */
@@ -76,8 +77,8 @@ export default function ServersChip({
   const { theme: t } = useTheme();
   const [expanded, setExpanded] = useState(false);
 
-  // ★ Opened from OUTSIDE by bumping `openToken` — the keyboard's Esc, which per the
-  // brief opens the SERVERS menu when nothing else is open. A token rather than a
+  // ★ Opened from OUTSIDE by bumping `openToken` (the keyboard reaches the chip itself now — the screen highlight,
+  // ScreenNav — so nothing bumps it today; kept for the tour and any caller that wants it). A token rather than a
   // boolean prop so the chip keeps owning its own state: the parent asks once, and
   // closing it here does not have to be reported back and mirrored.
   const lastToken = useRef(openToken);
@@ -85,8 +86,8 @@ export default function ServersChip({
     if (openToken !== lastToken.current) { lastToken.current = openToken; setExpanded(true); }
   }, [openToken]);
 
-  // ★ Esc AGAIN closes. SDRScreen owns the Esc rule ("something open → close it"), so this
-  // menu has to be visible to that rule rather than handling Esc itself — two owners for one
+  // ★ BACK closes it. SDRScreen owns the back rule ("something open → close it"), so this
+  // menu has to be visible to that rule rather than handling it itself — two owners for one
   // key is how precedence bugs start. It reports its state up and takes a close token back.
   const lastClose = useRef(closeToken);
   useEffect(() => {
@@ -168,6 +169,7 @@ export default function ServersChip({
         {!expanded ? (
           // ── Collapsed chip ──────────────────────────────────────────────────
           <Pressable
+            ref={screenNavRef('serversChip', () => setExpanded(true))}
             onPress={() => setExpanded(true)}
             onLayout={onChipWidth ? (e) => onChipWidth(Math.ceil(e.nativeEvent.layout.width)) : undefined}
             hitSlop={8}

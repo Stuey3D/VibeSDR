@@ -1,6 +1,6 @@
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Keyboard, KeyboardAvoidingView, Modal, NativeEventEmitter, NativeModules, Platform,
+  Keyboard, KeyboardAvoidingView, Modal, Platform,
   Pressable, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
 import { ActivityIndicator, ScrollView } from 'react-native';
@@ -16,7 +16,8 @@ import {
 } from '../services/stations';
 import { type UserBookmark, bookmarkPassband } from '../services/userBookmarks';
 import { airbandEntry } from '../utils/airband';
-import { useListNav, useKeyboardMode, revealIn, noteTouchInteraction, useNavFocus } from './PanelNav';
+import { useListNav, revealIn, noteTouchInteraction, useNavFocus } from './PanelNav';
+import { addKeyListener } from '../utils/hardwareKeys';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText, windowStyle,
@@ -168,31 +169,6 @@ function fromDisplay(val: string, unit: Unit): number {
   if (unit === 'hz')  return Math.round(n);
   if (unit === 'khz') return Math.round(n * 1000);
   return Math.round(n * 1e6);
-}
-
-/**
- * A boxed shortcut letter: [H]z, [T]une.
- *
- * ★ Shown ONLY while that letter actually does something — see `lettersArmed`. That makes the
- * box a live indicator rather than a label: when you tab into the bookmark search the boxes
- * disappear, which answers "why did my key do nothing" before it is asked. (Stuart's idea.)
- */
-function KeyCap({ letter, color, label, font, textStyle }: {
-  letter: string; color: string; label: string; font?: string; textStyle?: any;
-}) {
-  const st = usePopupStyles(makeSt);
-  // ★ A VIEW, not a nested <Text>. iOS renders nested Text as attributed-string runs and
-  // simply DROPS borderWidth on them — so the letter drew and the box never did, which is
-  // exactly what Stuart saw ("the boxes around the keys are not showing"). The cap has to be
-  // a real view to have a real border, so the label becomes a row rather than one string.
-  return (
-    <View style={st.keyCapRow}>
-      <View style={[st.keyCap, { borderColor: color }]}>
-        <Text style={[textStyle, { color, fontFamily: font }]}>{letter}</Text>
-      </View>
-      <Text style={[textStyle, { color, fontFamily: font }]}>{label}</Text>
-    </View>
-  );
 }
 
 /** Below this the "keyboard" is an accessory bar, not something to move out of the way. */
@@ -454,68 +430,45 @@ export default function FreqModal({
 
   // ★★ A HARDWARE Enter has to come from the NATIVE key stream, not from the TextInput.
   // The field is keyboardType="decimal-pad", which has no return key for RN to map, so
-  // onSubmitEditing never fires — and onKeyPress did not save it either, because
-  // VibeKeyWindow was swallowing Enter before the field ever saw it. The window now
-  // mirrors Enter through while typing, so listening here is what actually works.
+  // onSubmitEditing never fires. The native window mirrors Enter through while typing (marked
+  // `typing`), so listening here is what actually works.
   // (Stuart: "the enter button isnt working on frequency typing still".)
+  // ★ ONLY WHILE THE FIELD HAS THE CURSOR, and only on the tune card. Not typing, Enter belongs to
+  // the card's highlight (a tab, a unit, the field itself) — see tuneNav below.
   useEffect(() => {
     if (!visible) return;
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
-      // ★★ ONLY ON THE TUNE CARD. This card has two Enter listeners — this one, which
-      // commits a typed frequency, and the bookmarks pane's, which activates whatever the
-      // focus is on. Ungated, both fired: highlighting the bookmarks SEARCH BOX and pressing
-      // Enter tuned and closed the card instead of entering the field. Stuart: "it closes the
-      // card down like I've just pressed enter to tune." It was doing exactly that.
-      if (cardModeRef.current !== 'tune') return;
-      if (e?.key === 'Enter') confirmRef.current();
+    const sub = addKeyListener('down', (e) => {
+      if (cardModeRef.current !== 'tune' || !e.typing || e.key !== 'Enter') return;
+      confirmRef.current();
+      return true;
     });
     return () => sub.remove();
   }, [visible]);
 
-  // ★ TAB SWITCHES THE CARD (Stuart: "add the tab bar switching to the frequency box").
-  // Tab is the obvious key for a tab bar and has no other job in this card, so it needs no
-  // modifier and cannot collide with typing — the native side withholds it from us whenever
-  // a field has focus anyway.
-  // ★★ LETTER SHORTCUTS, not Tab (Stuart). Tab was the wrong key: with the frequency field
-  // focused it moves the caret inside the box rather than reaching us. Letters are free here
-  // because a frequency has no letters in it — the native side hands them over precisely
-  // because the focused field is a number pad.
-  //
-  //   [T]une / [B]ookmarks · [H]z / [K]Hz / [M]Hz
-  //
-  // ★ And the boxes are a LIVE INDICATOR, not decoration: they show only while the letters
-  // actually work, so when you are typing into the bookmark search they vanish. That answers
-  // "why did my key do nothing" before it is asked.
-  // ★ GLOBAL keyboard mode, not local state. You press Enter to OPEN this card, so a local
-  // flag was always one keypress behind and the caps only appeared after an arrow — exactly
-  // what Stuart reported. Asking the app-wide flag means they are there the moment it opens.
-  const kbSeen = useKeyboardMode();
-  const lettersArmed = visible && cardMode === 'tune';
-  const showKeyCaps = kbSeen && lettersArmed && !lockUnit;
-  useEffect(() => {
-    if (!visible) return;
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
-      const k = e?.key;
-      if (hasBookmarks && !picking && (k === 'T' || k === 'B')) {
-        const next = k === 'T' ? 'tune' : 'bookmarks';
-        if (next === 'bookmarks') Keyboard.dismiss();
-        setCardMode(next);
-        return;
-      }
-      // Unit keys only while the tune card is up — in bookmarks you are typing a search.
-      if (cardMode !== 'tune' || lockUnit) return;
-      if (k === 'H') switchUnitRef.current('hz');
-      else if (k === 'K') switchUnitRef.current('khz');
-      else if (k === 'M') switchUnitRef.current('mhz');
-    });
-    return () => sub.remove();
-  }, [visible, hasBookmarks, cardMode, lockUnit]);
+  // ★★★ ONE SCHEME (Stuart, 2026-10-18): the [T]une / [B]ookmarks and [H]z / [K]Hz / [M]Hz letters are gone, and so
+  // are their boxed key caps. The tabs and the units are places the highlight goes instead: Escape leaves the
+  // frequency field (the native window lets go of the cursor), then the arrows / W A S D walk the tabs, the units and
+  // the field, Enter presses, Back closes the card. Exactly the game controller's way round the web page's card.
+  const tuneItems = useMemo(() => {
+    const a: { k: string; run: () => void }[] = [];
+    if (hasBookmarks && !picking) {
+      a.push({ k: 'tab:tune', run: () => setCardMode('tune') });
+      a.push({ k: 'tab:bookmarks', run: () => { Keyboard.dismiss(); setCardMode('bookmarks'); } });
+    }
+    for (const u of ['hz', 'khz', 'mhz'] as Unit[]) {
+      if (!lockUnit || u === 'mhz') a.push({ k: 'unit:' + u, run: () => switchUnitRef.current(u) });
+    }
+    a.push({ k: 'field', run: () => inputRef.current?.focus() });
+    if (profiles.length > 0) a.push({ k: 'profile', run: () => setProfileToggle(n => n + 1) });
+    return a;
+  }, [hasBookmarks, picking, lockUnit, profiles.length]);
+  const [profileToggle, setProfileToggle] = useState(0);
+  const tuneNav = useListNav(visible && cardMode === 'tune', tuneItems.length, (i) => tuneItems[i]?.run());
+  const tuneOn = (k: string) => tuneNav >= 0 && tuneItems[tuneNav]?.k === k;
 
-  // Bookmark results: arrow through them and Enter to tune. Up/Down reach us even while the
-  // search box has focus (see typingPassthrough in AppDelegate), so you can type to filter
-  // and step straight down into the list without dismissing the keyboard first.
+  // Bookmark results: arrow through them and Enter to tune. While the search box has the
+  // cursor the keys are the box's (typing is never hijacked); Escape leaves it, then the arrows
+  // walk the results.
   // ★ ONE ordered focus space for the WHOLE bookmarks pane, not just the results. Slots are
   // claimed during render in JSX order — the search field, each result, the EiBi toggle, the
   // name field, the save row, each saved bookmark, the transfer buttons — so the order is
@@ -663,9 +616,9 @@ export default function FreqModal({
       >
         <View style={[st.modal, { borderColor: pt.ink.border },
                       surf.opaque && !pt.metal && { backgroundColor: surf.fill(CARD_BG) }, metalFrame]}
-              // ★ Touching the card ends keyboard mode, so the [H]z / [T]une caps disappear
-              // rather than advertising shortcuts to someone using their thumb. A Modal is its
-              // own window, so SDRScreen's root touch sniff never sees this.
+              // ★ Touching the card ends keyboard mode, so the highlight disappears rather than
+              // sitting on a key under someone's thumb. A Modal is its own window, so SDRScreen's
+              // root touch sniff never sees this.
               onTouchStart={noteTouchInteraction}>
           <PopupPlate radius={16} />
           {picking ? (
@@ -684,43 +637,40 @@ export default function FreqModal({
             </View>
           ) : hasBookmarks && pt.metal ? (
             // ★ §10.3: TUNE | BOOKMARKS are an input selector — two dome keys, the lit one with its
-            //   pip — and the ✕ is a plain key. Same order, same keyboard letters (KeyCap).
+            //   pip — and the ✕ is a plain key. Same order; the keyboard's highlight lands on each.
             <View style={st.segHeaderMetal}>
-              {(['tune', 'bookmarks'] as const).map(m => (
-                <PopupKey key={m} active={cardMode === m} pip height={32} style={{ flex: 1 }}
+              {(['tune', 'bookmarks'] as const).map(m => { const tabRun = () => { setCardMode(m); if (m === 'bookmarks') Keyboard.dismiss(); };
+                const slot = cardMode === 'bookmarks' ? bmSlot(tabRun) : null;
+                return (
+                <PopupKey key={m} ref={slot?.ref} active={cardMode === m} pip height={32} style={{ flex: 1 }}
+                  focused={cardMode === 'tune' ? tuneOn('tab:' + m) : !!slot?.on}
                   accessibilityLabel={m === 'tune' ? 'Tune' : 'Bookmarks'}
-                  onPress={() => { setCardMode(m); if (m === 'bookmarks') Keyboard.dismiss(); }}>
-                  {(c: string) => kbSeen ? (
-                    <KeyCap letter={m === 'tune' ? 'T' : 'B'} label={m === 'tune' ? 'UNE' : 'OOKMARKS'}
-                            color={c} font={POPUP_FONT} textStyle={st.segTabText} />
-                  ) : (
+                  onPress={tabRun}>
+                  {(c: string) => (
                     <Text style={[st.segTabText, { fontFamily: POPUP_FONT, color: c }]}>
                       {m === 'tune' ? 'TUNE' : 'BOOKMARKS'}
                     </Text>
                   )}
                 </PopupKey>
-              ))}
+              ); })}
               <PopupKey label="✕" onPress={onClose} height={32} fontSize={15} hitSlop={10}
                 accessibilityLabel="Close" style={{ width: 36, paddingHorizontal: 0 }} />
             </View>
           ) : hasBookmarks ? (
             <View style={st.segHeader}>
-              {(['tune', 'bookmarks'] as const).map(m => (
-                <TouchableOpacity key={m}
-                  style={[st.segTab, { borderBottomColor: cardMode === m ? keyOn : 'transparent' }]}
-                  onPress={() => { setCardMode(m); if (m === 'bookmarks') Keyboard.dismiss(); }} activeOpacity={0.7}>
-                  {kbSeen ? (
-                    <KeyCap letter={m === 'tune' ? 'T' : 'B'}
-                            label={m === 'tune' ? 'UNE' : 'OOKMARKS'}
-                            color={cardMode === m ? keyOn : dimText}
-                            font={t.font} textStyle={st.segTabText} />
-                  ) : (
-                    <Text style={[st.segTabText, { fontFamily: t.font, color: cardMode === m ? keyOn : dimText }]}>
-                      {m === 'tune' ? 'TUNE' : 'BOOKMARKS'}
-                    </Text>
-                  )}
+              {(['tune', 'bookmarks'] as const).map(m => { const tabRun = () => { setCardMode(m); if (m === 'bookmarks') Keyboard.dismiss(); };
+                const slot = cardMode === 'bookmarks' ? bmSlot(tabRun) : null;
+                const hl = cardMode === 'tune' ? tuneOn('tab:' + m) : !!slot?.on;
+                return (
+                <TouchableOpacity key={m} ref={slot?.ref}
+                  style={[st.segTab, { borderBottomColor: cardMode === m ? keyOn : 'transparent' },
+                          hl && { borderWidth: 2, borderColor: focusC.ring, borderRadius: 6 }]}
+                  onPress={tabRun} activeOpacity={0.7}>
+                  <Text style={[st.segTabText, { fontFamily: t.font, color: cardMode === m ? keyOn : dimText }]}>
+                    {m === 'tune' ? 'TUNE' : 'BOOKMARKS'}
+                  </Text>
                 </TouchableOpacity>
-              ))}
+              ); })}
               {/* ★★★ AN EXIT THAT IS ALWAYS ON SCREEN. The only ways out of the bookmarks tab were
                   the backdrop and the TUNE tab's CANCEL — and on a tall phone the card can fill the
                   screen, leaving no backdrop to tap (Stuart, 2026-09-03). A modal whose dismissal
@@ -764,7 +714,8 @@ export default function FreqModal({
               </TouchableOpacity>
             </View>
           )}
-          <View style={[st.inputRow, { borderBottomColor: pt.ink.border }, st.inputRowMetal]}>
+          <View style={[st.inputRow, { borderBottomColor: pt.ink.border }, st.inputRowMetal,
+                        tuneOn('field') && { borderWidth: 2, borderColor: focusC.ring, borderRadius: 6 }]}>
             <TextInput
               ref={inputRef}
               style={[st.input, pt.metal ? entryStyle : { color: pt.entry.color, fontFamily: t.font }]}
@@ -799,9 +750,8 @@ export default function FreqModal({
                 }
               }}
               onSubmitEditing={confirm}
-              // ★ A hardware Enter is handled by the VibeKeyDown listener above, NOT here.
-              // onKeyPress was tried and never fired: VibeKeyWindow was swallowing Enter
-              // before the field could see it, so there was nothing to hear.
+              // ★ A hardware Enter is handled by the key listener above (hardwareKeys, `typing`), NOT
+              // here: a decimal pad has no return key, so onSubmitEditing never fires for it.
               returnKeyType="done"
             />
             <Text style={[st.unitLabel, { color: pt.metal ? pt.winDim : unitText, fontFamily: ff }]}>
@@ -821,12 +771,9 @@ export default function FreqModal({
             {(['hz', 'khz', 'mhz'] as Unit[]).map(u => pt.metal ? (
               // ★ An input selector (§10.3): the lit unit carries the LED pip.
               <PopupKey key={u} active={unit === u} pip height={34} style={{ flex: 1 }}
-                disabled={lockUnit && u !== 'mhz'} onPress={() => switchUnit(u)}
+                disabled={lockUnit && u !== 'mhz'} onPress={() => switchUnit(u)} focused={tuneOn('unit:' + u)}
                 accessibilityLabel={u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz'}>
-                {(c: string) => showKeyCaps ? (
-                  <KeyCap letter={u === 'hz' ? 'H' : u === 'khz' ? 'K' : 'M'} label={u === 'hz' ? 'z' : 'Hz'}
-                          color={c} font={POPUP_FONT} textStyle={[st.unitBtnText, st.unitBtnTextMetal]} />
-                ) : (
+                {(c: string) => (
                   <Text style={[st.unitBtnText, st.unitBtnTextMetal, { color: c }]}>
                     {u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz'}
                   </Text>
@@ -841,24 +788,17 @@ export default function FreqModal({
                   { borderColor: bdrDim, paddingVertical: btnPadY },
                   unit === u && { borderColor: bdrBrt, backgroundColor: pt.ink.keyBgAct },
                   lockUnit && u !== 'mhz' && { opacity: 0.3 },
+                  tuneOn('unit:' + u) && { borderColor: focusC.ring, borderWidth: 2 },
                 ]}
                 onPress={() => switchUnit(u)}
               >
-                {showKeyCaps ? (
-                  <KeyCap
-                    letter={u === 'hz' ? 'H' : u === 'khz' ? 'K' : 'M'}
-                    label={u === 'hz' ? 'z' : 'Hz'}
-                    color={unit === u ? keyOn : dimText}
-                    font={t.font} textStyle={st.unitBtnText} />
-                ) : (
-                  <Text style={[
-                    st.unitBtnText,
-                    { fontFamily: t.font, color: dimText },
-                    unit === u && { color: keyOn },
-                  ]}>
-                    {u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz'}
-                  </Text>
-                )}
+                <Text style={[
+                  st.unitBtnText,
+                  { fontFamily: t.font, color: dimText },
+                  unit === u && { color: keyOn },
+                ]}>
+                  {u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz'}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -867,6 +807,8 @@ export default function FreqModal({
               <PopupWindow metalStyle={st.profileWin}>
               <ProfilePicker
                 active={visible && cardMode === 'tune'}
+                navFocused={tuneOn('profile')}
+                toggleToken={profileToggle}
                 profiles={profiles}
                 activeProfileId={activeProfileId}
                 sdrUsage={sdrUsage}
@@ -1259,13 +1201,6 @@ export default function FreqModal({
 }
 
 const makeSt = (pt: PopupTokens) => StyleSheet.create({
-  // Small enough to sit inside a label without changing its metrics — the boxes must not
-  // reflow the row as they appear and disappear.
-  keyCapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  keyCap: {
-    borderWidth: 1, borderRadius: 3, paddingHorizontal: 3, marginRight: 1,
-    alignItems: 'center', justifyContent: 'center',
-  },
   backdrop:     { ...StyleSheet.absoluteFill },
   // Anchor near the bottom (over the control pill) so it's thumb-reachable on
   // big phones; the auto-opened keyboard then sits just below it.

@@ -13,16 +13,21 @@
 //     already has an array and just wants a focused index.
 //
 // ★ OWNER ARBITRATION. Panels are not structurally prevented from being visible at
-// once, and two panels both listening to VibeKeyDown would both move their focus on
+// once, and two panels both listening for keys would both move their focus on
 // one key press. So visible panels push themselves onto a stack and only the TOP one
 // handles keys. Cheap, and it means a panel opening over another cannot steal or
 // double-handle input.
 //
-// ★ Esc is deliberately NOT handled here. SDRScreen owns it (close what is open, or
-// open the servers menu when nothing is), and one owner for that rule is what keeps
-// the precedence honest.
+// ★★★ ONE SCHEME (Stuart, 2026-10-18 — src/utils/keyActions.ts): arrows / W A S D move, Enter selects (on a slider:
+// ADJUST it — left/right change the value, Enter or Back finishes — exactly as a game controller's enter does on the
+// web page), Back (Backspace / Escape) steps out one layer. Keys come through src/utils/hardwareKeys.ts with canonical
+// names; nothing here knows which physical key was pressed.
+//
+// ★ BACK, ONE LAYER AT A TIME: the top panel takes Back first (leave adjust mode; step out of a sub-page). When it has
+// nothing left to step out of it passes Back on, and the SCREEN closes the panel — one owner for that rule.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, NativeEventEmitter, NativeModules, ScrollView, View } from 'react-native';
+import { Animated, ScrollView, View } from 'react-native';
+import { addKeyListener, type HwKeyEvent } from '../utils/hardwareKeys';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { focusFor, focusTint, FOCUS_GREEN } from '../constants/decoderTokens';
 
@@ -34,19 +39,17 @@ export type NavEntry = {
   /** Measured scroll-into-view, if the panel scrolls. */
   reveal?: () => void;
   /**
-   * ★ Present on VALUE controls (sliders, and the live-bar controls that will
-   * replace them). A focused range CONSUMES left/right to change its value instead
-   * of moving focus; up/down still navigates away from it. Without this a slider is
-   * reachable but dead, which is exactly what shipped.
-   *
-   * The same rule serves a game controller's D-pad, where left/right on a focused
-   * slider adjusting it is the established console idiom.
+   * ★ Present on VALUE controls (sliders, and the live-bar controls). Enter puts it in ADJUST mode: left/right then
+   * change its value, Enter or Back finishes — the game controller's rule on the web page (2026-10-18). Without
+   * this a slider is reachable but dead, which is exactly what once shipped.
    */
   adjust?: (dir: -1 | 1) => void;
 };
 
 /** Keyboard / D-pad focus green — the colour on every controls colour but green (see useNavFocus). */
 export const NAV_FOCUS = FOCUS_GREEN;
+/** A value control in ADJUST mode (Enter on a slider) — the amber the web page's game-controller highlight uses. */
+export const NAV_ADJUST = '#ffb833';
 
 /**
  * ★★ THE FOCUS COLOUR, LIVE (Stuart, 2026-10-12: "yes make it white"): WHITE when the controls colour is green —
@@ -99,8 +102,7 @@ export function useKeyboardMode(): boolean {
   useEffect(() => {
     setOn(keyboardMode);
     kbListeners.add(setOn);
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', () => setKeyboardMode(true));
+    const sub = addKeyListener('down', () => { setKeyboardMode(true); });
     return () => { kbListeners.delete(setOn); sub.remove(); };
   }, []);
   return on;
@@ -116,8 +118,7 @@ function useIdleClose(active: boolean, onTimeout?: () => void) {
       // Re-checked when it FIRES, not when armed: a touch part-way through must call it off.
       timer = setTimeout(() => { if (keyboardMode) cb.current?.(); }, PANEL_IDLE_MS);
     };
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', () => {
+    const sub = addKeyListener('down', () => {
       if (shortcutsSuppressed()) return;
       setKeyboardMode(true); arm();
     });
@@ -195,50 +196,59 @@ const REPEAT_RAMP_MS  = 1200;
 /**
  * Subscribe to keys with auto-repeat for `repeatKeys`. Everything else fires once.
  *
+ * ★ The handler may return true to CONSUME the key (see hardwareKeys: newest listener first) — how a panel takes Back
+ *   before the screen beneath would close it. Only the press can be consumed, never a repeat.
  * ★ Repeat stops on key UP, on any OTHER key, and on unmount. A repeat that outlives its key
  * would walk a list on its own, which is the kind of fault that looks like a possessed app.
+ * ★ A key reported while TYPING (Enter, Escape in a text field) is passed only to handlers that ask (`typing`).
  */
 export function useRepeatingKeys(
   active: boolean,
-  handler: (k: string) => void,
+  handler: (k: string, e: HwKeyEvent) => boolean | void,
   repeatKeys: readonly string[],
+  opts?: { typing?: boolean; priority?: number },
 ) {
   const hRef = useRef(handler); hRef.current = handler;
   const keysRef = useRef(repeatKeys); keysRef.current = repeatKeys;
+  const typingOk = !!opts?.typing;
+  const priority = opts?.priority ?? 0;
   useEffect(() => {
     if (!active) return;
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     let held: string | null = null;
+    let heldEv: HwKeyEvent | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let startedAt = 0;
-    const stop = () => { if (timer) clearTimeout(timer); timer = null; held = null; };
+    const stop = () => { if (timer) clearTimeout(timer); timer = null; held = null; heldEv = null; };
     const tick = () => {
-      if (!held) return;
-      hRef.current(held);
+      if (!held || !heldEv) return;
+      hRef.current(held, heldEv);
       const elapsed = Date.now() - startedAt;
       timer = setTimeout(tick, elapsed > REPEAT_RAMP_MS ? REPEAT_FAST_MS : REPEAT_MS);
     };
-    const down = emitter.addListener('VibeKeyDown', (e: { key: string; plain?: boolean }) => {
-      const k = e?.key;
-      if (!k) return;
-      noteKeyForFka(k, e?.plain !== false);
+    const down = addKeyListener('down', (e) => {
+      const k = e.key;
+      noteKeyForFka(k, e.plain);
+      if (e.typing && !typingOk) return;
       if (k === held) return;      // a re-fired down for the key already held: ignore
       stop();
-      hRef.current(k);
+      const used = hRef.current(k, e);
       if (keysRef.current.includes(k)) {
-        held = k;
+        held = k; heldEv = e;
         startedAt = Date.now();
         timer = setTimeout(tick, REPEAT_DELAY_MS);
       }
-    });
-    const up = emitter.addListener('VibeKeyUp', (e: { key: string }) => {
-      if (e?.key === held) stop();
+      return used === true;
+    }, { priority });
+    const up = addKeyListener('up', (e) => {
+      if (e.key === held) stop();
     });
     return () => { stop(); down.remove(); up.remove(); };
-  }, [active]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active, typingOk, priority]);   // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 export const NAV_REPEAT_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'] as const;
+/** Movement plus tune and zoom — everything a pad repeats while held. */
+export const ALL_REPEAT_KEYS = [...NAV_REPEAT_KEYS, 'TuneDown', 'TuneUp', 'ZoomOut', 'ZoomIn'] as const;
 
 // ── iOS Full Keyboard Access detection ───────────────────────────────────────
 //
@@ -261,11 +271,11 @@ const fkaListeners = new Set<(on: boolean) => void>();
 export const fullKeyboardAccessSuspected = () => keysSeen >= 4 && arrowsSeen === 0;
 
 /**
- * ★★ `plain` matters more than it looks. The `< > - +` aliases emit REAL arrow names — that is
- * the whole point of them — and Shift+arrow does too. Both are the WORKAROUNDS for Full Keyboard
- * Access, so counting either as "an arrow arrived" made the feature suppress its own diagnosis:
- * the moment a user pressed the one key that still worked, the app concluded FKA was off.
- * (Found 2026-07-26, after the splash failed to appear on a device that plainly needed it.)
+ * ★★ `plain` matters more than it looks. W A S D arrive as REAL arrow names — that is the whole
+ * point of them — and Shift+arrow does too. Both are the WORKAROUNDS for Full Keyboard Access, so
+ * counting either as "an arrow arrived" made the feature suppress its own diagnosis: the moment a
+ * user pressed the one key that still worked, the app concluded FKA was off.
+ * (Found 2026-07-26 with the old `< > - +` arrow aliases, after the splash failed to appear.)
  */
 export function noteKeyForFka(k: string, plain = true) {
   const was = fullKeyboardAccessSuspected();
@@ -347,71 +357,83 @@ function useNavKeys(opts: {
   getEntries: () => NavEntry[];
   focusedRef: React.MutableRefObject<number>;
   setFocused: (id: number) => void;
+  /** The value control in ADJUST mode, or -1. */
+  setAdjusting?: (id: number) => void;
   /** Flat lists (and wrapped grids) move on left/right as well as up/down. */
   flat?: boolean;
-  /** Backspace — step OUT of a sub-panel. See the note on the key handler. */
-  onBack?: () => void;
+  /** Back — step OUT of a sub-panel. Return false when there was nothing to step out of, so the screen closes the
+   *  panel instead (anything else counts as handled). */
+  onBack?: () => boolean | void;
 }) {
-  const { visible, getEntries, focusedRef, setFocused, flat, onBack } = opts;
+  const { visible, getEntries, focusedRef, setFocused, setAdjusting, flat, onBack } = opts;
   const tok = useNavOwner(visible);
-  const cbRef = useRef({ getEntries, setFocused, onBack });
-  cbRef.current = { getEntries, setFocused, onBack };
+  const cbRef = useRef({ getEntries, setFocused, setAdjusting, onBack });
+  cbRef.current = { getEntries, setFocused, setAdjusting, onBack };
+  const adjustingRef = useRef(-1);
+  const setAdj = (id: number) => { adjustingRef.current = id; cbRef.current.setAdjusting?.(id); };
 
   // ★ `visible`, NOT `open`. An earlier version of this said `open` and type-checked
   // perfectly, because TypeScript's DOM lib declares a global `open` (window.open) — tsc saw
   // a valid symbol while at runtime it was undefined, and the screen crash-looped. A clean
   // tsc is NOT proof a name is in scope when the DOM lib is loaded.
-  useEffect(() => { if (!visible) setFocused(-1); }, [visible, setFocused]);
+  useEffect(() => { if (!visible) { setFocused(-1); setAdj(-1); } }, [visible, setFocused]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useRepeatingKeys(visible, (k: string) => {
-    {
-      if (!k || shortcutsSuppressed()) return;      // third-party page on screen — see above
-      if (!isTopOwner(tok.current)) return;        // a panel above us owns the keys
-      const { getEntries: get, setFocused: set, onBack: back } = cbRef.current;
-      // ★ BACKSPACE STEPS OUT of a sub-panel. Multi-level menus (Display Settings,
-      // Bookmarks) had a ‹ BACK row but no keyboard way to reach it, so a keyboard-only
-      // user could enter a sub-panel and not get out. Safe to claim: the native side only
-      // sends Backspace when NO text field has focus, so it still deletes while typing.
-      if (k === 'Backspace') { back?.(); return; }
-      // Sorted by row then id = the reading order of the JSX, without anyone
-      // having to declare it.
-      const all = [...get()].sort((a, b) => a.row - b.row || a.id - b.id);
-      if (!all.length) return;
-      const cur = all.findIndex(x => x.id === focusedRef.current);
-      const move = (next: number) => {
-        const t = all[Math.max(0, Math.min(all.length - 1, next))];
-        if (!t) return;
-        set(t.id);
-        t.reveal?.();
-      };
-      if (k === 'Enter') { all[cur]?.press?.(); return; }
-      if (cur < 0) { move(0); return; }             // first key press just takes focus
-      const here = all[cur];
-      const row = here.row;
-      // ★ A focused VALUE control owns left/right — see NavEntry.adjust. Checked
-      // before navigation, so the slider changes instead of focus moving off it.
-      if (here.adjust && (k === 'ArrowLeft' || k === 'ArrowRight')) {
-        here.adjust(k === 'ArrowRight' ? 1 : -1);
-        return;
-      }
-      const nextRowFrom = () => {
-        const i = all.findIndex(x => x.row > row);
-        move(i < 0 ? all.length - 1 : i);
-      };
-      const prevRowFrom = () => {
-        const prev = [...all].reverse().find(x => x.row < row);
-        move(prev ? all.indexOf(prev) : 0);
-      };
-      switch (k) {
-        case 'ArrowDown':  nextRowFrom(); break;
-        case 'ArrowUp':    prevRowFrom(); break;
-        // In a flat list every item is its own row, so left/right would otherwise be
-        // dead. Wrapped grids (StepPicker, ModeSelector) are the common case and
-        // users reach for left/right there first.
-        case 'ArrowRight': if (flat) nextRowFrom(); else if (all[cur + 1]?.row === row) move(cur + 1); break;
-        case 'ArrowLeft':  if (flat) prevRowFrom(); else if (cur > 0 && all[cur - 1].row === row) move(cur - 1); break;
-        default: break;
-      }
+    if (!k || shortcutsSuppressed()) return;      // third-party page on screen — see above
+    if (!isTopOwner(tok.current)) return;        // a panel above us owns the keys
+    const { getEntries: get, setFocused: set, onBack: back } = cbRef.current;
+    // Sorted by row then id = the reading order of the JSX, without anyone having to declare it.
+    const all = [...get()].sort((a, b) => a.row - b.row || a.id - b.id);
+    const cur = all.findIndex(x => x.id === focusedRef.current);
+    const here = cur >= 0 ? all[cur] : undefined;
+    // ★ ADJUST MODE ends if its control has gone (a section collapsed under it).
+    if (adjustingRef.current >= 0 && (!here || here.id !== adjustingRef.current)) setAdj(-1);
+    // ★★ BACK, ONE LAYER: leave adjust mode; else step out of a sub-panel. Only when there is nothing to step out of
+    //    does it pass on (return false) — the screen then closes the panel itself.
+    if (k === 'Back') {
+      if (adjustingRef.current >= 0) { setAdj(-1); return true; }
+      if (back) return back() !== false;
+      return false;
+    }
+    if (!all.length) return;
+    const move = (next: number) => {
+      const t = all[Math.max(0, Math.min(all.length - 1, next))];
+      if (!t) return;
+      setAdj(-1);
+      set(t.id);
+      t.reveal?.();
+    };
+    if (k === 'Enter') {
+      if (!here) { move(0); return true; }         // nothing highlighted yet: Enter just takes focus
+      // ★ Enter on a VALUE control toggles ADJUST mode, as a pad's enter does on the web page: left/right then change
+      //   it, Enter or Back finishes. Without the mode, left/right on a slider could never leave it sideways.
+      if (here.adjust) { setAdj(adjustingRef.current === here.id ? -1 : here.id); return true; }
+      here.press?.();
+      return true;
+    }
+    if (cur < 0) { if (k.startsWith('Arrow')) move(0); return; }   // first movement just takes focus
+    const row = here!.row;
+    if (adjustingRef.current === here!.id && (k === 'ArrowLeft' || k === 'ArrowRight')) {
+      here!.adjust?.(k === 'ArrowRight' ? 1 : -1);
+      return;
+    }
+    const nextRowFrom = () => {
+      const i = all.findIndex(x => x.row > row);
+      move(i < 0 ? all.length - 1 : i);
+    };
+    const prevRowFrom = () => {
+      const prev = [...all].reverse().find(x => x.row < row);
+      move(prev ? all.indexOf(prev) : 0);
+    };
+    switch (k) {
+      case 'ArrowDown':  nextRowFrom(); break;
+      case 'ArrowUp':    prevRowFrom(); break;
+      // In a flat list every item is its own row, so left/right would otherwise be
+      // dead. Wrapped grids (StepPicker, ModeSelector) are the common case and
+      // users reach for left/right there first.
+      case 'ArrowRight': if (flat) nextRowFrom(); else if (all[cur + 1]?.row === row) move(cur + 1); break;
+      case 'ArrowLeft':  if (flat) prevRowFrom(); else if (cur > 0 && all[cur - 1].row === row) move(cur - 1); break;
+      default: break;
     }
   }, NAV_REPEAT_KEYS);
 }
@@ -476,6 +498,8 @@ export function revealIn(
 type NavCtxValue = {
   register: (e: NavEntry) => () => void;
   focused: number;
+  /** The value control in ADJUST mode (Enter on a slider), or -1. */
+  adjusting: number;
   nextRow: () => number;
   /** The panel's ScrollView, so buttons can reveal themselves without being
    *  handed it individually — module-scoped button components cannot see it. */
@@ -493,13 +517,14 @@ export const RowCtx = React.createContext<number>(-1);
  */
 export function usePanelNav(
   visible: boolean,
-  opts?: { onBack?: () => void; onTimeout?: () => void },
+  opts?: { onBack?: () => boolean | void; onTimeout?: () => void },
 ) {
   const entries   = useRef<NavEntry[]>([]);
   const rowSeq    = useRef(0);
   const scrollRef = useRef<ScrollView | null>(null);
   const scrollY   = useRef(0);
   const [focused, setFocused] = useState(-1);
+  const [adjusting, setAdjusting] = useState(-1);
   const focusedRef = useRef(focused);
   useEffect(() => { focusedRef.current = focused; }, [focused]);
 
@@ -525,12 +550,13 @@ export function usePanelNav(
     getEntries: useCallback(() => entries.current, []),
     focusedRef,
     setFocused,
+    setAdjusting,
     onBack: opts?.onBack,
   });
   useIdleClose(visible, opts?.onTimeout);
 
-  const navCtx = useMemo<NavCtxValue>(() => ({ register, focused, nextRow, scrollRef, scrollY }),
-                                     [register, focused, nextRow]);
+  const navCtx = useMemo<NavCtxValue>(() => ({ register, focused, adjusting, nextRow, scrollRef, scrollY }),
+                                     [register, focused, adjusting, nextRow]);
   // ★ `scrollProps` MUST be spread onto the panel's ScrollView. It carries the ref and the
   // onScroll that keeps `scrollY` current — without the offset, reveal cannot convert a
   // viewport position into a content position and the panel will not follow the focus.
@@ -616,7 +642,7 @@ export function useNavRange(onAdjust: (dir: -1 | 1) => void) {
     });
   }, [nav, row, id]);
 
-  return { focused: !!nav && nav.focused === id, viewRef, id };
+  return { focused: !!nav && nav.focused === id, adjusting: !!nav && nav.adjusting === id, viewRef, id };
 }
 
 // ── Shape 2: the flat column (StepPicker, ModeSelector) ──────────────────────
@@ -633,10 +659,10 @@ export function useListNav(
   onActivate: (index: number) => void,
   reveal?: (index: number) => void,
   onTimeout?: () => void,
-  /** ★ Backspace — leave WITHOUT choosing. A dropdown is the top owner while it is open, so
-   *  without this its Backspace hit a handler that had none and the panel behind never saw
-   *  it: there was no keyboard way out of a list except by picking something. (Stuart.) */
-  onBack?: () => void,
+  /** ★ Back — leave WITHOUT choosing. A dropdown is the top owner while it is open, so
+   *  without this its Back hit a handler that had none: there was no keyboard way out of a list
+   *  except by picking something. (Stuart.) Return false to pass Back on to the screen. */
+  onBack?: () => boolean | void,
 ) {
   // ★ Focus is held as an ENTRY ID, because that is what the shared core compares
   // against; the INDEX is derived for the caller. Holding the index here instead

@@ -9,7 +9,6 @@
  */
 
 import React, { useRef, useState } from 'react';
-import { NativeEventEmitter, NativeModules } from 'react-native';
 import { useSuppressShortcuts } from './PanelNav';
 import { useGlassTheme, type PopupTokens } from './PopupShell';
 import {
@@ -41,6 +40,7 @@ function allowBrowserLoad(req: { url?: string; isTopFrame?: boolean }): boolean 
 }
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { addKeyListener } from '../utils/hardwareKeys';
 
 export interface BrowserOverlayProps {
   url:     string | null;
@@ -83,8 +83,7 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
   const [keyNote, setKeyNote] = React.useState(false);
   React.useEffect(() => {
     if (!url) { setKeyNote(false); return; }   // same reason: no page, no listener
-    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
-    const sub = emitter.addListener('VibeKeyDown', () => setKeyNote(true));
+    const sub = addKeyListener('down', () => { setKeyNote(true); });
     return () => sub.remove();
   }, [url]);
 
@@ -120,7 +119,7 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
           <View style={styles.keyNote}>
             <Text style={styles.keyNoteText}>
               This is the receiver's own web page, so VibeSDR's keyboard and controller
-              shortcuts are switched off here. To use compatibility mode please use the
+              keys are switched off here. To use compatibility mode please use the
               touchscreen — or the trackpad if you're on a Mac.
             </Text>
           </View>

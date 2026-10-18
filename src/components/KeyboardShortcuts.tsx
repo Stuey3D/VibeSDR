@@ -19,11 +19,12 @@
  * who needs the substitutes is told by the splash and by the notice at the top of the menu, so
  * the reference does not have to shout about them as well.
  *
- * ★ Ordered by WHERE it applies rather than alphabetically — the question is "how does this
- * work here", not "what does K do". Content audited from the source in
- * briefs/BRIEF-keyboard-shortcut-list.md; re-audit rather than recall when it changes, because a stale
- * list is worse than none. A user who tries something listed and gets nothing concludes the
- * KEYBOARD is broken, not the documentation.
+ * ★★★ ONE SCHEME (Stuart, 2026-10-18): arrows / W A S D move the highlight, Enter selects, Backspace / Escape go
+ * back, < > tune, - + zoom — the game controller and the Apple TV remote, and the web page, exactly. Every older
+ * shortcut was stripped as too complicated, so this reference was rewritten from the code (src/utils/keyActions.ts,
+ * hardwareKeys, PanelNav, ScreenNav), not edited. Re-audit rather than recall when it changes, because a stale list is
+ * worse than none. A user who tries something listed and gets nothing concludes the KEYBOARD is broken, not the
+ * documentation.
  */
 import React, { useRef } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -38,84 +39,58 @@ type Section = { title: string; body: string[] };
 
 const SECTIONS: Section[] = [
   {
-    title: 'SERVER LIST',
+    title: 'ONE SET OF KEYS, EVERYWHERE',
     body: [
-      'The up and down arrows move through everything on the page — the custom URL box at the top, your favourites and custom servers, and the directories below them. Enter connects to the highlighted server, opens a section that is collapsed, or drops you into the URL box to type an address. Backspace steps back out: it leaves a directory you have opened, or collapses the group you are standing in.',
-      'With a server highlighted, F favourites it, D sets or clears it as your default, and E edits it if it is one of your own — directory entries come from the directory, so they are not ours to change. S cycles the sort order.',
+      'The keyboard works the way a game controller or the Apple TV remote does, and the same way on the web page. There are only five things to know.',
+      'The arrow keys — or W, A, S and D — move a highlight box from control to control, following the screen as it is laid out. Enter presses whatever is highlighted. Backspace or Escape goes back: it closes the menu or panel that is open, one layer at a time.',
+      '< and > tune down and up one step, and - and + zoom out and in. The unshifted keys work too — comma and full stop, and = for zoom in — and so does the number pad. Hold any of them to keep going; on the receiver screen a held tune key sweeps the band, speeding up as you hold it, exactly as the tuner keys do under a thumb.',
     ],
   },
   {
-    title: 'WATERFALL SCREEN',
+    title: 'ON THE RECEIVER',
     body: [
-      'Left and right tune, up and down zoom. A tap moves one step; hold the key and it sweeps the band, speeding up the longer you hold it, exactly as the tuner keys do under a thumb.',
-      'Enter opens the frequency box. D opens the demodulator, S the tuning step, A audio, M the menu and C chat.',
-      'Escape is the way back from anything: it closes whatever is open, brings the controls back if you have hidden them, and — when there is nothing left to close — opens the servers menu.',
+      'The highlight reaches the frequency box, the mode, the tuning step, audio, the menu, chat, the servers chip and the decoder box. Tuning and zoom work from anywhere, with a menu open or not.',
+      'If you have hidden the controls, Backspace or Escape brings them back.',
     ],
   },
   {
-    title: 'TYPING A FREQUENCY',
+    title: 'MENUS, SLIDERS AND DROPDOWNS',
     body: [
-      'Type the number and press Enter. T and B switch between the Tune and Bookmarks tabs, and H, K and M choose Hz, kHz or MHz.',
-      'On an OpenWebRX server, P opens the profile picker. Backspace leaves it without switching — which matters, because changing profile retunes the receiver for everyone else listening to it.',
-      'In the Bookmarks tab, up and down move through the results, including while you are still typing in the search box, so you can filter and then step straight down into what you found.',
+      'Inside a menu the arrows move through it and Enter presses. On a slider, or the squelch bar, Enter starts adjusting it — the highlight turns amber, left and right change the value, and Enter or Backspace finishes. A dropdown opens with Enter and closes with Backspace without changing what was selected.',
+      'If you walk away, a menu opened by keyboard closes itself after ten seconds, flashing once first so you can see why.',
     ],
   },
   {
-    title: 'MENUS, PANELS AND DROPDOWNS',
+    title: 'TYPING',
     body: [
-      'Menus are navigated with the up and down arrows, while left and right adjust anything that holds a value — a slider, or the squelch bar. Enter presses the highlighted control. Backspace goes up a level: out of a sub-panel, or out of a dropdown list without changing what was selected. Escape closes the menu completely.',
-      'Hold an arrow to keep moving. If you walk away, a menu opened by keyboard closes itself after ten seconds, flashing once first so you can see why.',
+      'While a text box has the cursor — the frequency, a search, chat, a server address — every key is the box\'s own, so W, A, S, D, the full stop and Backspace type as they always do. Enter tunes a typed frequency. Escape leaves the box, and the arrows then move round the panel it is in: in the frequency card that reaches the Tune and Bookmarks tabs, Hz, kHz and MHz, and the profile list on an OpenWebRX server.',
+      'Backing out of the profile list never switches profile — which matters, because changing profile retunes the receiver for everyone else listening to it.',
     ],
   },
   {
     title: 'DECODER BOXES',
     body: [
-      'On the HF decoders the waterfall is still the point, so the box leaves the arrows alone until you ask for them. Press Tab and it takes the keyboard, announcing itself with a flash. Press it again for the controls in its header, and once more to hand the keyboard back.',
-      'While it has the keyboard, up and down move through the list or scroll the output, left and right move along the header controls, and Enter presses whichever you last moved to. Escape or backspace hand the keyboard straight back, and so does ten seconds of not touching it — tune and zoom are what you want back.',
+      'Move the highlight onto the box and press Enter to take it over. Up and down then move through the list — or scroll it, where there is nothing to select — and left and right reach the controls along its top. Backspace hands the keyboard back. On DAB and ADS-B the box takes the keyboard by itself, and Backspace still lets you out.',
     ],
   },
   {
-    title: 'DAB AND ADS-B',
+    title: 'SERVER LIST AND FM-DX',
     body: [
-      'Here the box is the screen rather than something on top of it: the VFO is locked to the multiplex, so there is nothing to tune. The arrows belong to the box from the moment it appears, and it keeps them — up and down move through the stations, or scroll the aircraft table.',
-      'Enter selects a station. On ADS-B there is nothing to select, so the arrows simply scroll. Tab moves between the list and the header controls rather than leaving, and inside SPEED FIX the arrows choose a preset, Enter sets it, and backspace closes it having changed nothing.',
-      'T opens the frequency box here. This is the one box that keeps the keyboard rather than handing it back, so Enter is permanently spoken for and would otherwise leave no way to change frequency at all.',
+      'On the server list the arrows move through everything, Enter connects or opens a section, and Backspace steps back out of a directory or collapses a group.',
+      'On FM-DX the highlight works as on the receiver, and ‹ Back on the controls leaves the server. Because FM-DX is one radio shared by everyone connected, holding > retunes it once when you stop, not once per step.',
     ],
-  },
-  {
-    title: 'FM-DX',
-    body: [
-      'Left and right tune a step at a time and hold to keep going; up and down zoom the dial. Because FM-DX is one radio shared by everyone connected, holding an arrow retunes it once when you stop, not once per step.',
-      'Enter opens the frequency box, D the demodulator options, S the tuning step, C chat and R your recordings. Escape closes whatever is open, or takes you back to the server list.',
-      'The shared-tuner notice you meet on connecting will go with Enter or Escape — whichever you reach for.',
-    ],
-  },
-  {
-    title: 'RECORDINGS',
-    body: [
-      'Up and down select, Enter plays and pauses, and backspace deletes — or forward-delete, since a Mac keyboard has no such key. Escape closes the list.',
-      'Sharing is not on the keyboard: it hands over to the system share sheet, which is not ours to drive.',
-    ],
-  },
-  {
-    title: 'MAPS',
-    body: ['Escape brings you back to the receiver.'],
   },
   {
     title: 'COMPATIBILITY MODE',
     body: [
-      "A receiver's own pages — compatibility mode, and the server admin pages in the menu — cannot be reached from the keyboard at all. They are not our pages, so we cannot know whether or how a keyboard will work on them, and taking you somewhere the keys stop working would be worse than not going.",
-      'The admin buttons are simply skipped as the highlight moves past them, and the compatibility-mode button is greyed while you are using a keyboard. Touching it wakes it up — the tap is proof you are back on the touchscreen — and the next tap goes through.',
+      "A receiver's own pages — compatibility mode, and the server admin pages in the menu — cannot be driven from the keyboard. They are not our pages, so we cannot know whether or how a keyboard will work on them, and taking you somewhere the keys stop working would be worse than not going.",
     ],
   },
   {
     title: 'IF YOUR ARROW KEYS DO NOTHING',
     body: [
-      'iOS has an accessibility feature called Full Keyboard Access, in Settings › Accessibility › Keyboards. When it is on, iOS claims the plain arrow keys, Tab and the space bar for its own focus navigation before any app sees them, so VibeSDR never receives them. Letters and Enter still arrive, which is why the menu still opens but nothing can be tuned or stepped through.',
-      'Leave it switched on. For tuning and zoom there are four keys that need no modifier at all: < and > tune down and up, and - and + zoom out and in. They are the arrow keys by another name and work anywhere in the app, menus included, whether or not Full Keyboard Access is on.',
-      'For everything else, hold Shift with an arrow, and Alt/Option (⌥) with Tab in place of Tab. Full Keyboard Access claims only the plain navigation keys and leaves modified ones alone, so these always get through. It is one key with several faces: a Windows or handheld keyboard prints Alt, an Apple one prints Option or nothing but the ⌥ symbol, and all of them arrive here as the same modifier. Avoid Command, which the system keeps for switching apps.',
-      'The one place the four substitute keys do not apply is inside a text box, where they are simply the characters they look like — a decimal point in a frequency, a dash in a server address. In the bookmarks search, where the arrows walk the results while you are still typing, use Shift with an arrow.',
-      'Either way you never have to turn an accessibility feature off to use the radio.',
+      'iOS has an accessibility feature called Full Keyboard Access, in Settings › Accessibility › Keyboards. When it is on, iOS claims the plain arrow keys for its own focus navigation before any app sees them.',
+      'Leave it switched on and use W, A, S and D instead — they move the highlight exactly as the arrows do. < > and - + tune and zoom, Enter selects and Backspace goes back, whether or not Full Keyboard Access is on. You never have to turn an accessibility feature off to use the radio.',
     ],
   },
 ];
@@ -133,10 +108,10 @@ export default function KeyboardShortcuts({ visible, onClose }: {
   const y = useRef(0);
 
   // ★ The reference is itself keyboard-reachable, which it has to be — a shortcut list you can
-  // only read by touching the screen would be a joke on the person who needs it. Arrows scroll
-  // it, Escape closes it, and the header says so rather than leaving it to be guessed.
+  // only read by touching the screen would be a joke on the person who needs it. Up and down
+  // scroll it, Back closes it, and the header says so rather than leaving it to be guessed.
   useRepeatingKeys(visible, (k: string) => {
-    if (k === 'Escape' || k === 'Backspace') { onClose(); return; }
+    if (k === 'Back') { onClose(); return true; }
     if (k !== 'ArrowUp' && k !== 'ArrowDown') return;
     y.current = Math.max(0, y.current + (k === 'ArrowDown' ? 120 : -120));
     scroll.current?.scrollTo({ y: y.current, animated: false });
@@ -152,7 +127,7 @@ export default function KeyboardShortcuts({ visible, onClose }: {
         <PopupPlate radius={16} />
         <View style={s.head}>
           <Text style={[s.title, { fontFamily: ff }]}>KEYBOARD</Text>
-          <Text style={[s.hint, { fontFamily: ff }]}>↑↓ scroll · esc close</Text>
+          <Text style={[s.hint, { fontFamily: ff }]}>↑↓ scroll · backspace or esc closes</Text>
         </View>
         {/* ★ §10.3: the reference is reading matter — a recessed window on silver / black. */}
         <PopupWindow style={s.bodyWrap} metalStyle={s.bodyWin}>
@@ -177,7 +152,7 @@ export default function KeyboardShortcuts({ visible, onClose }: {
             would mean reading the whole reference to find the way out — the same trap this
             button exists to fix, just further along.
             ★ A keyboard reference is exactly what a TOUCH user opens out of curiosity, having
-            no keyboard to press Escape with; the backdrop is a thin margin on a small screen,
+            no keyboard to press Back with; the backdrop is a thin margin on a small screen,
             so tapping outside is not a way out you can rely on. (Stuart, 2026-07-26.) */}
         {pt.metal ? (
           <PopupKey label="CLOSE" onPress={onClose} height={32}

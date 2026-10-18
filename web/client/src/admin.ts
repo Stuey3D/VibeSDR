@@ -22,6 +22,7 @@ import { adminTicketQuery, inAdminMode, saveAdminTicket } from './adminticket';
 import { loadMapGLScripts, mapglLoad, probeMapGL } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { loadLeafletInto } from './leafletAsset';
+import { pushBack } from './gamepad';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
  *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
  *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
@@ -1792,6 +1793,8 @@ export function openAdmin(currentHost: string, adminPassword: string) {
   host = currentHost;
   password = adminPassword;
   open = true;
+  unBack?.(); unBack = pushBack(() => closeAdmin());   // back (Escape, Backspace, a pad's back) closes it
+  $('adminPanel').dataset.navscope = '';               // and the highlight moves within it (gamepad.ts)
   failures = 0;
   // ★ Fresh wholes on every open — the host may be a different receiver this time.
   connCache.clear(); histRows = []; histFields = [];
@@ -1807,8 +1810,11 @@ export function openAdmin(currentHost: string, adminPassword: string) {
   timer = window.setInterval(refresh, 2000);
 }
 
+let unBack: (() => void) | null = null;
+
 export function closeAdmin() {
   open = false;
+  unBack?.(); unBack = null;
   stopFollowing();
   window.clearInterval(timer);
   timer = 0;
@@ -1843,10 +1849,7 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     openAdmin(getHost(), pw);
   });
   $('adminPanelClose')?.addEventListener('click', closeAdmin);
-  // Escape closes it, like every other panel here.
-  document.addEventListener('keydown', (e) => {
-    if (open && e.key === 'Escape') closeAdmin();
-  });
+  // ★ Back (Escape, Backspace, a pad's back) closes it, like every other panel here — registered in openAdmin.
 
   const msg = (id: string, text: string) => { const el = $(id); el.textContent = text; };
 

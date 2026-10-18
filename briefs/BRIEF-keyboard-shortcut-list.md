@@ -1,5 +1,10 @@
 # BRIEF: The keyboard shortcut reference — content, audited from the code
 
+> ★★★ SUPERSEDED 2026-10-18 — the keyboard is now ONE scheme, app and web page, matching the game controller and the
+> Apple TV remote (src/utils/keyActions.ts): arrows / W A S D move the highlight, Enter selects, Backspace / Escape go
+> back, < > tune, - + zoom. Every shortcut below was stripped. The in-app reference is src/components/KeyboardShortcuts.tsx.
+> Kept for the history.
+
 **Project:** VibeSDR
 **Author:** Stuart Carr (Stuey3D) with Claude, 2026-07-26
 **Status:** CONTENT SETTLED, popup not built.

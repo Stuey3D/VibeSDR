@@ -8,7 +8,7 @@ import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useNavFocus } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useNavFocus, NAV_ADJUST } from './PanelNav';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { meterText, useMeters, type MeterBus } from './ControlsBar';
 import { isKiwiProtocol } from '../services/sdrTypes';
@@ -86,7 +86,7 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
   // ★ ATTACH THE REF. Without it reveal cannot measure the slider and falls back to the old
   // row-height ESTIMATE, which is why a slider landed barely in view at the foot of the sheet
   // while every button centred correctly — the buttons attach theirs and the sliders did not.
-  const { focused, viewRef } = useNavRange((dir) => {
+  const { focused, adjusting, viewRef } = useNavRange((dir) => {
     const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
     if (next !== value) onValueChange?.(next);
   });
@@ -97,14 +97,14 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
     return (
       <PopupFader innerRef={viewRef as any} value={value} minimumValue={minimumValue} maximumValue={maximumValue}
         step={step} onValueChange={onValueChange} onSlidingComplete={props.onSlidingComplete}
-        active={props.minimumTrackTintColor !== C.track} focused={focused}
+        active={props.minimumTrackTintColor !== C.track} focused={focused} adjusting={adjusting}
         style={[StyleSheet.flatten(props.style) as any, { height: 24 }]} />
     );
   }
   return (
     <Slider ref={viewRef as any} {...props}
-      minimumTrackTintColor={focused ? focusC.ring : props.minimumTrackTintColor}
-      thumbTintColor={focused ? focusC.ring : props.thumbTintColor} />
+      minimumTrackTintColor={focused ? (adjusting ? NAV_ADJUST : focusC.ring) : props.minimumTrackTintColor}
+      thumbTintColor={focused ? (adjusting ? NAV_ADJUST : focusC.ring) : props.thumbTintColor} />
   );
 }
 
@@ -182,7 +182,7 @@ function SquelchBar({ level, raw, pos, gate, auto = false, onDrag, onDragEnd }: 
   //
   // ★ LEFT AT ZERO TURNS IT OFF, mirroring the drag gesture (drag off the left edge = off).
   // Without it there is no keyboard way back out of a squelch you have just applied.
-  const { focused: navFocused, viewRef: navViewRef } = useNavRange((dir) => {
+  const { focused: navFocused, adjusting: navAdjusting, viewRef: navViewRef } = useNavRange((dir) => {
     const cur = held ?? pos;
     if (dir < 0 && cur >= 0 && cur <= 0.001) { setHeld(-1); onDrag?.(-1); onDragEnd?.(); return; }
     const base = cur < 0 ? 0 : cur;
@@ -221,7 +221,7 @@ function SquelchBar({ level, raw, pos, gate, auto = false, onDrag, onDragEnd }: 
     const muting = held !== null ? (!off && level < shown) : sqlClosedOf(shown, gate, level);
     return (
       <View ref={(r: any) => { (bar as any).current = r; (navViewRef as any).current = r; }}
-            style={[st.sqlBarWrap, navFocused && st.sqlBarFocused, auto && st.sqlBarAuto]}
+            style={[st.sqlBarWrap, navFocused && st.sqlBarFocused, navAdjusting && { borderColor: NAV_ADJUST }, auto && st.sqlBarAuto]}
             {...(onDrag ? pan.panHandlers : {})}
             hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
             onLayout={measure}>
@@ -254,7 +254,7 @@ function SquelchBar({ level, raw, pos, gate, auto = false, onDrag, onDragEnd }: 
     <View ref={(r: any) => { (bar as any).current = r; (navViewRef as any).current = r; }}
           // ★ FADES BUT STAYS VISIBLE (and stays draggable): the live signal is still the thing worth
           //   watching while auto is on, and a bar that vanished would take the evidence with it.
-          style={[st.sqlBarWrap, navFocused && st.sqlBarFocused, auto && st.sqlBarAuto]}
+          style={[st.sqlBarWrap, navFocused && st.sqlBarFocused, navAdjusting && { borderColor: NAV_ADJUST }, auto && st.sqlBarAuto]}
           {...(onDrag ? pan.panHandlers : {})}
           hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
           onLayout={measure}>

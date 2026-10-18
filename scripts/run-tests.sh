@@ -508,6 +508,9 @@ if npx tsx scripts/test_pocket_connection.ts; then pass=$((pass+1)); else fail=$
 # ★★ GAMEPAD (Stuart's mapping, 2026-10-10): the highlight's direction picking and the stick-rotation jog wheel.
 if npx tsx scripts/test_gamepad_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ THE KEYBOARD, ONE SCHEME (Stuart, 2026-10-18): arrows/WASD move, Enter select, Backspace/Escape back, < > tune, - + zoom.
+if npx tsx scripts/test_key_actions.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
 #     first keeping its codec — through the same WebSockets the clients use, against fake-rtl-tcp.
@@ -566,6 +569,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 
 printf '\n\033[1m── game controllers on the served page (simulated pad, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-gamepad.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ THE KEYBOARD, ONE SCHEME (Stuart, 2026-10-18): arrows/WASD move the highlight, Enter, Backspace/Escape back,
+#     < > , . tune, - + = zoom; typing in the frequency field never hijacked; the old shortcuts do nothing.
+printf '\n\033[1m── the keyboard on the served page (real key events, end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-keyboard.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ FREQUENCY AT THE POINTER (Kiko, 2026-10-16, "like OpenWebRX"): a MOUSE over the waterfall/spectrum shows the

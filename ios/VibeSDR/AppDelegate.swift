@@ -64,17 +64,34 @@ class AppDelegate: ExpoAppDelegate {
 
 /// A window that reports HARDWARE KEY presses to JS.
 ///
-/// ★ Deliberately the WINDOW rather than a first-responder view. Key presses travel UP
-/// the responder chain, so anything that genuinely wants a key — a focused text field,
-/// RN's own text input — consumes it first and never reaches here. That gives the
-/// brief's "text-input focus WINS" rule for free, instead of having to suppress global
-/// shortcuts whenever a field has focus. It also means we never fight React Native for
-/// first responder, which is a fight nobody wins.
+/// ★★★ ONE SCHEME (Stuart, 2026-10-18 — src/utils/keyActions.ts, the same table the web page uses): arrows and
+/// W A S D move the highlight, Enter selects, Backspace and Escape go back, < > tune, - + zoom. This window reports
+/// ONLY those keys, by their DOM names, and src/utils/hardwareKeys.ts maps them — so the mapping lives in one place for
+/// the app and the web page. Every older shortcut (letters that opened panels, Tab into the decoder box, Space,
+/// H/K/M units, P for profiles, T/B tabs, F/D/E/S on the server list) was stripped as too complicated.
 ///
-/// Down and up are separate events on purpose: the arrow keys reuse the tuner keys'
-/// tap-steps / hold-sweeps semantics, and a sweep has to know when the key was let go.
+/// ★ Deliberately the WINDOW rather than a first-responder view, so we never fight React Native for first responder.
+/// Keys we do not name (Tab, Space, every other letter, anything with Cmd/Ctrl/Alt) go straight up the responder
+/// chain untouched — Full Keyboard Access, VoiceOver and Cmd-shortcuts keep them.
+///
+/// Down and up are separate events on purpose: tune and zoom reuse the tuner keys' tap-steps / hold-sweeps law, and a
+/// sweep has to know when the key was let go. (iOS does not auto-repeat pressesBegan; PanelNav repeats movement.)
 class VibeKeyWindow: UIWindow {
-  private static func name(for key: UIKey, typing: Bool = false) -> String? {
+  /// The punctuation and letters that are ours. Shift is allowed — it is how < > + _ are typed — and every shifted
+  /// form means the same as its unshifted key, so `charactersIgnoringModifiers` is all we need.
+  private static let ourCharacters: Set<String> = [
+    "w", "a", "s", "d", "W", "A", "S", "D",
+    ",", "<", ".", ">",          // tune down / up
+    "-", "_", "=", "+",          // zoom out / in (the numeric keypad's - and + arrive as these too)
+  ]
+
+  /// Cmd, Ctrl and Alt: never ours — system and app shortcuts (Cmd-Q, Cmd-W) stay theirs.
+  private static func systemChord(_ key: UIKey) -> Bool {
+    !key.modifierFlags.intersection([.command, .control, .alternate]).isEmpty
+  }
+
+  private static func name(for key: UIKey) -> String? {
+    if systemChord(key) { return nil }
     switch key.keyCode {
     case .keyboardLeftArrow:  return "ArrowLeft"
     case .keyboardRightArrow: return "ArrowRight"
@@ -82,83 +99,24 @@ class VibeKeyWindow: UIWindow {
     case .keyboardDownArrow:  return "ArrowDown"
     case .keyboardReturnOrEnter, .keypadEnter: return "Enter"
     case .keyboardEscape:     return "Escape"
-    case .keyboardTab:        return "Tab"
-    case .keyboardSpacebar:   return "Space"
-    // Backspace steps OUT of a sub-panel (Display Settings, Bookmarks…), which
-    // otherwise had no keyboard way back. Safe to claim because a focused text
-    // field takes precedence — see `isTypingInTextField`.
     case .keyboardDeleteOrBackspace: return "Backspace"
-    // ★ Forward delete as well as backspace. A Mac keyboard has no forward-delete key at all,
-    // so anything that offers only one of the two is unusable on half the hardware — Stuart's
-    // point, and the reason both are mapped rather than one being picked as canonical.
+    // ★ Forward delete as well: on a PC keyboard it sits beside Backspace and gets pressed for it.
     case .keyboardDeleteForward: return "Delete"
     default:
-      // Letters come through as their characters; ignore anything with modifiers so
-      // system shortcuts (Cmd-Q and friends) are left entirely alone.
-      guard key.modifierFlags.isEmpty else { return nil }
       let raw = key.charactersIgnoringModifiers
-      // ★★ THE ARROW ALIASES. `,` `.` `-` `=` ARE the arrow keys — see the note above the
-      // arrowAlias table. Suppressed while typing, because every one of them is a character
-      // somebody needs in a text box.
-      if !typing, let a = VibeKeyWindow.arrowAlias[raw] { return a }
-      let c = raw.uppercased()
-      return (c.count == 1 && c >= "A" && c <= "Z") ? c : nil
+      return ourCharacters.contains(raw) ? raw : nil
     }
   }
 
-  /// ★★ FOUR PUNCTUATION KEYS THAT ARE LITERALLY THE ARROW KEYS.
-  ///
-  /// Stuart's find, and the good part is the framing: `<` and `>` are the LEFT-RIGHT axis,
-  /// `-` and `+` are the UP-DOWN axis. Not a tuning shortcut — an alias for the arrows
-  /// themselves, resolved here at the very bottom so that NOTHING downstream knows the
-  /// difference. Every menu, list, dropdown, decoder box and dial gets them for nothing, and
-  /// there is no second code path to keep in step with the first. On the waterfall they read
-  /// as tune and zoom; in a menu the same keys move the highlight and drag the sliders.
-  ///
-  /// ★ They are unconditional rather than a Full Keyboard Access fallback. FKA is what sent us
-  /// looking, but a key that only exists in a mode nobody can see is a key nobody finds — and
-  /// `<` `>` for tuning is what every radio ever built is marked with anyway.
-  ///
-  /// ★ Chosen because they are NOT letters, so they cannot collide with any shortcut on any
-  /// surface, and because iOS leaves them alone: FKA claims the actual navigation keys, which
-  /// is precisely why these get through when the arrows themselves do not.
-  ///
-  /// ★★ SUPPRESSED WHILE TYPING, and this is the sharp edge. `.` is a decimal point, `-` and
-  /// `.` both live in URLs and IP addresses. Worse, they alias to names in `typingPassthrough`,
-  /// so without the guard a `-` typed into a server address would BOTH type itself and scroll
-  /// the list underneath. Hence `typing` is threaded down here rather than checked by the
-  /// caller alone.
-  ///
-  /// ★ The consequence is a gap we cannot design away: inside a focused text box there is no
-  /// single-key substitute available AT ALL, because every key is a character somebody needs.
-  /// The bookmarks search — where the arrows walk the results while you are still typing — is
-  /// the one place that still wants Shift with an arrow under FKA. One documented island is a
-  /// better trade than blocking the whole thing on the only case that has no solution.
-  /// Did this name come from the physical key it claims to be? False for the punctuation
-  /// aliases and for anything reached with a modifier held — see emitKey's note.
+  /// Is this the physical ARROW key, pressed alone? The Full Keyboard Access detector (PanelNav noteKeyForFka) counts
+  /// only those as "arrows reach the app" — Shift+arrow and W A S D are the workarounds FKA leaves alone, so counting
+  /// them would make the detector hide its own diagnosis.
   private static func isPlain(_ key: UIKey) -> Bool {
-    key.modifierFlags.isEmpty && arrowAlias[key.charactersIgnoringModifiers] == nil
+    key.modifierFlags.intersection([.shift, .command, .control, .alternate]).isEmpty
   }
 
-  private static let arrowAlias: [String: String] = [
-    ",": "ArrowLeft", "<": "ArrowLeft",
-    ".": "ArrowRight", ">": "ArrowRight",
-    "=": "ArrowUp", "+": "ArrowUp",       // zoom IN / move up
-    "-": "ArrowDown", "_": "ArrowDown",   // zoom OUT / move down
-  ]
-
-  /// ★★ A FOCUSED TEXT FIELD OWNS THE KEYBOARD.
-  ///
-  /// This window claims keys before the responder chain sees them, and it used to claim
-  /// them unconditionally — so while the user was typing, every letter was swallowed and
-  /// never reached the field. Chat was completely dead, and Enter never arrived either, so
-  /// a typed frequency could not be committed. DIGITS still worked, because `name(for:)`
-  /// ignores them, which is exactly why the bug looked partial and confusing rather than
-  /// total. (Stuart, 2026-07-25.)
-  ///
-  /// RN's TextInput is backed by a UITextField, so conformance to UITextInput is a reliable
-  /// test. The walk costs a hierarchy traversal per key press, which is nothing — key
-  /// presses are a human-speed event.
+  /// ★★ A FOCUSED TEXT FIELD OWNS THE KEYBOARD. RN's TextInput is backed by a UITextField/UITextView, so conformance
+  /// to UITextInput is a reliable test; the walk is a human-speed event's worth of work.
   private func focusedTextInput() -> UIResponder? {
     func find(_ v: UIView) -> UIResponder? {
       if v.isFirstResponder { return v }
@@ -171,67 +129,38 @@ class VibeKeyWindow: UIWindow {
 
   private var isTypingInTextField: Bool { focusedTextInput() != nil }
 
-  /// ★★ Is the focused field a NUMBER PAD? If so, a letter can never be valid input there,
-  /// so it is ours to use as a shortcut rather than the field's to swallow.
-  ///
-  /// This is what makes [H]z / [K]Hz / [M]Hz and [T]une / [B]ookmarks work while the
-  /// frequency box has focus. Without it those keys vanished into a field that could not
-  /// accept them anyway — the letters did nothing at all, which is exactly what Stuart saw.
-  /// A normal keyboard (chat, server names, the bookmark box) is untouched: there a letter
-  /// is real input and must stay the field's.
-  private var focusedFieldIsNumeric: Bool {
-    guard let traits = focusedTextInput() as? UITextInputTraits else { return false }
-    switch traits.keyboardType {
-    case .some(.numberPad), .some(.decimalPad), .some(.numbersAndPunctuation), .some(.phonePad):
-      return true
-    default:
-      return false
+  /// While typing, the app hears only these — and the field still gets them (we observe, never intercept): Enter
+  /// commits a typed frequency or a search, Escape leaves the field (see pressesBegan). Everything else — letters,
+  /// the arrows (caret), comma, full stop, minus, Backspace (delete) — belongs to the field alone.
+  private static let typingPassthrough: Set<String> = ["Enter", "Escape"]
+
+  private func report(_ presses: Set<UIPress>, _ event: String) -> (typing: Bool, handled: Bool) {
+    let typing = isTypingInTextField
+    var handled = false
+    for p in presses {
+      guard let k = p.key, let n = VibeKeyWindow.name(for: k) else { continue }
+      if typing && !VibeKeyWindow.typingPassthrough.contains(n) { continue }
+      handled = true
+      VibePowerModule.emitKey(event, n, n.hasPrefix("Arrow") && VibeKeyWindow.isPlain(k), typing)
     }
+    return (typing, handled)
   }
 
-  /// Keys the APP still needs to hear while the user is typing. Enter commits a typed
-  /// frequency or sends a chat line; Escape backs out. Everything else — letters, arrows
-  /// (which move the caret), Backspace (which deletes) — belongs to the field alone.
-  ///
-  /// ★ UP and DOWN are mirrored too, and LEFT/RIGHT deliberately are not. In a search box
-  /// there is only one line, so up/down have no caret meaning and are exactly how you would
-  /// expect to step from the query into the results beneath it — whereas left/right move the
-  /// caret and must stay the field's. `super` is still called either way, so a multiline box
-  /// keeps its line-to-line caret movement regardless.
-  private static let typingPassthrough: Set<String> = ["Enter", "Escape", "ArrowUp", "ArrowDown"]
-
   override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-    let typing = isTypingInTextField
-    // A NUMBER PAD cannot use letters, so they stay ours even while it has focus.
-    let numeric = typing && focusedFieldIsNumeric
-    for p in presses {
-      guard let k = p.key, let n = VibeKeyWindow.name(for: k, typing: typing) else { continue }
-      let mine = VibeKeyWindow.typingPassthrough.contains(n)
-              || (numeric && n.count == 1 && n >= "A" && n <= "Z")
-      if typing && !mine { continue }
-      VibePowerModule.emitKey("VibeKeyDown", n, VibeKeyWindow.isPlain(k))
+    let r = report(presses, "VibeKeyDown")
+    // ★ ALWAYS call super while typing, even for the keys we mirrored: the field must still receive them.
+    if r.typing || !r.handled { super.pressesBegan(presses, with: event) }
+    // ★★ ESCAPE LEAVES THE FIELD — one layer, like every other back. The cursor goes, and the arrows / W A S D then move
+    //    the highlight round the panel the field sits in (the frequency card's units and tabs, the bookmark results); a
+    //    second Escape or Backspace closes the panel. The web page does the same.
+    if r.typing, presses.contains(where: { $0.key?.keyCode == .keyboardEscape }) {
+      DispatchQueue.main.async { [weak self] in _ = self?.focusedTextInput()?.resignFirstResponder() }
     }
-    // ★ ALWAYS call super while typing, even for the keys we mirrored: the field must
-    // still receive them. We are observing here, not intercepting.
-    if typing { super.pressesBegan(presses, with: event); return }
-    let handled = presses.contains { $0.key.flatMap { VibeKeyWindow.name(for: $0, typing: typing) } != nil }
-    if !handled { super.pressesBegan(presses, with: event) }
   }
 
   override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-    let typing = isTypingInTextField
-    // A NUMBER PAD cannot use letters, so they stay ours even while it has focus.
-    let numeric = typing && focusedFieldIsNumeric
-    for p in presses {
-      guard let k = p.key, let n = VibeKeyWindow.name(for: k, typing: typing) else { continue }
-      let mine = VibeKeyWindow.typingPassthrough.contains(n)
-              || (numeric && n.count == 1 && n >= "A" && n <= "Z")
-      if typing && !mine { continue }
-      VibePowerModule.emitKey("VibeKeyUp", n, VibeKeyWindow.isPlain(k))
-    }
-    if typing { super.pressesEnded(presses, with: event); return }
-    let handled = presses.contains { $0.key.flatMap { VibeKeyWindow.name(for: $0, typing: typing) } != nil }
-    if !handled { super.pressesEnded(presses, with: event) }
+    let r = report(presses, "VibeKeyUp")
+    if r.typing || !r.handled { super.pressesEnded(presses, with: event) }
   }
 
   // ── Pointer scroll (mouse wheel / trackpad) ────────────────────────────────
@@ -275,11 +204,11 @@ class VibeKeyWindow: UIWindow {
     }
   }
 
-  // A cancelled press must release a sweep too, or a held arrow could stick.
+  // A cancelled press must release a sweep too, or a held tune/zoom key could stick.
   override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
     for p in presses {
       if let k = p.key, let n = VibeKeyWindow.name(for: k) {
-        VibePowerModule.emitKey("VibeKeyUp", n)
+        VibePowerModule.emitKey("VibeKeyUp", n, false, false)
       }
     }
     super.pressesCancelled(presses, with: event)
