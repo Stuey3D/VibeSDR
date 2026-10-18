@@ -4,6 +4,20 @@
 #   scripts/build-x86-debs.sh --rev 2                      # both arches, version <cmake>-2
 #   scripts/build-x86-debs.sh --rev 0~test1 --arch i386    # a test package, never published
 #   VIBE_EXTRA_CFLAGS=-mtune=bonnell scripts/build-x86-debs.sh --rev 1+atom1 --arch amd64
+#   VIBE_X86_32_FLAGS='-march=i686 -msse2 -mfpmath=sse -mtune=bonnell' scripts/build-x86-debs.sh --rev 1+t --arch i386
+#   VIBE_PGO=generate VIBE_PGO_DIR=pgo-i386 scripts/build-x86-debs.sh --rev 1+pgo --arch i386   # instrumented binaries
+#   VIBE_PGO=use      VIBE_PGO_DIR=pgo-i386 scripts/build-x86-debs.sh --rev 1+atom2 --arch i386 # package built from them
+#
+# ★ VIBE_X86_32_FLAGS replaces the i386 ISA line (see vibeserver/CMakeLists.txt) — a -mtune in VIBE_EXTRA_CFLAGS
+#   is overridden there by the default -mtune=generic, which is what happened to the first i386 +atom1 test build.
+# ★★ PROFILE-GUIDED (VIBE_PGO, 2026-10-18, docs/ATOM-PERFORMANCE-2026-10-18.md): `generate` builds the tree with
+#    -fprofile-generate=/pgo and leaves vibeserver + vibeserver-bench in ~/vibeout/<arch>/pgogen/ instead of a
+#    package; run them on representative work (the counters land in ~/<VIBE_PGO_DIR> on the build host, which is
+#    mounted at /pgo); then `use` builds the package with -fprofile-use=/pgo. Both passes use THIS script's layout
+#    (/build/VibeSDR/vibeserver/build), because GCC names each counter file after its object's absolute path —
+#    a profile trained on a binary built anywhere else is silently not found.
+# ★ VIBE_X86_SRC_DIR: the directory on the build host the tree is synced to (default vibesdr-src). Give a test
+#   build its own, so it cannot pull the tree out from under somebody else's build there.
 #
 # ★★★ WHY THIS EXISTS. The Mac is Apple Silicon and cannot run x86 at all, so amd64 under qemu
 #     segfaulted the compiler on a different file every run (3 failures out of 3 — see the memory note
@@ -24,6 +38,10 @@
 set -euo pipefail
 
 HOST="${VIBE_X86_HOST:-192.168.86.13}"
+RSRC="${VIBE_X86_SRC_DIR:-vibesdr-src}"
+PGO="${VIBE_PGO:-}"; PGO_DIR="${VIBE_PGO_DIR:-}"
+case "$PGO" in ""|generate|use) ;; *) echo "!! VIBE_PGO is generate or use"; exit 1;; esac
+[ -z "$PGO" ] || [ -n "$PGO_DIR" ] || { echo "!! VIBE_PGO needs VIBE_PGO_DIR (a directory on $HOST)"; exit 1; }
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ARCHES="amd64 i386"
 REV=""
@@ -50,13 +68,13 @@ cp "$SDRPLAY_INC"/sdrplay_api*.h "$STAGE"/ || { echo "!! no SDRplay headers in $
 # ★ And the bundled tunnel: CMake refuses a package without it, so check here rather than after a build.
 bash "$SRC_DIR/tools/cloudflared-desktop/fetch.sh" >/dev/null
 
-echo "==> syncing the tree to $HOST:~/vibesdr-src"
+echo "==> syncing the tree to $HOST:~/$RSRC"
 rsync -a --delete --exclude node_modules --exclude .git --exclude 'android/app/build' \
   --exclude 'android/app/.cxx' --exclude 'ios/Pods' --exclude 'vibeserver/build' \
   --exclude 'vibeserver/build-*' --exclude 'web/dist' --exclude .claude --exclude spike \
   --exclude tvos --exclude lite --exclude '*.zip' --exclude '*.raw' --exclude '*.iq16' --exclude '*.cf32' \
   --exclude fuzz-corpus --exclude .armhf-out \
-  "$SRC_DIR/" "$HOST:vibesdr-src/"
+  "$SRC_DIR/" "$HOST:$RSRC/"
 
 OUT="$SRC_DIR/vibeserver/build/prebuilt"
 mkdir -p "$OUT"
@@ -78,19 +96,34 @@ for A in $ARCHES; do
   #     alone (they may be somebody's); only the throwaway copy in the container is cleaned.
   # ★ The WHOLE tree, not --target vibeserver: cpack's install step builds `all` anyway — single-job
   #   and with its output hidden in cpack.log — so a narrow target only moves the cost somewhere slower.
+  CF="${VIBE_EXTRA_CFLAGS:-}"; PGOMNT=""; TARGET=""
+  case "$PGO" in
+    generate) CF="$CF -fprofile-generate=/pgo -fprofile-update=atomic"; PGOMNT="-v \$HOME/$PGO_DIR:/pgo"
+              TARGET="--target vibeserver vibeserver-bench" ;;
+    use)      CF="$CF -fprofile-use=/pgo -fprofile-partial-training -Wno-missing-profile"; PGOMNT="-v \$HOME/$PGO_DIR:/pgo:ro" ;;
+  esac
+  [ -z "$PGO" ] || ssh "$HOST" "mkdir -p ~/$PGO_DIR"
   ssh "$HOST" "rm -rf ~/vibeout/$A && mkdir -p ~/vibeout/$A && docker run --rm --platform linux/$A --cpus 4 \
-    -v \$HOME/vibesdr-src:/work/VibeSDR:ro -v \$HOME/vibeout/$A:/out \
-    -e VIBE_EXTRA_CFLAGS='${VIBE_EXTRA_CFLAGS:-}' $IMAGE /bin/bash -euo pipefail -c '
+    -v \$HOME/$RSRC:/work/VibeSDR:ro -v \$HOME/vibeout/$A:/out $PGOMNT \
+    -e VIBE_EXTRA_CFLAGS='${CF# }' -e VIBE_X86_32_FLAGS='${VIBE_X86_32_FLAGS:-}' $IMAGE /bin/bash -euo pipefail -c '
       mkdir -p /build && cp -a /work/VibeSDR /build/VibeSDR
       cd /build/VibeSDR/vibeserver
       rm -rf build build-*
       nice -n 19 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV \
         -DVIBESERVER_STRICT_RADIOS=ON \${VIBE_EXTRA_CFLAGS:+\"-DCMAKE_C_FLAGS=\$VIBE_EXTRA_CFLAGS\" \"-DCMAKE_CXX_FLAGS=\$VIBE_EXTRA_CFLAGS\"} \
-        > /out/cmake.log
-      nice -n 19 cmake --build build -j4 > /out/build.log 2>&1 \
+        \${VIBE_X86_32_FLAGS:+\"-DVIBE_X86_32_FLAGS=\$VIBE_X86_32_FLAGS\"} > /out/cmake.log
+      nice -n 19 cmake --build build $TARGET -j4 > /out/build.log 2>&1 \
         || { tail -30 /out/build.log; exit 1; }
+      # ★ chmod: the container runs as root, and a root-owned directory under ~/vibeout stops the next
+      #   run from emptying it (rm -rf) — the && chain then skips the whole build without saying so.
+      if [ \"$PGO\" = generate ]; then mkdir -p /out/pgogen && cp build/vibeserver build/vibeserver-bench /out/pgogen/ \
+                                        && chmod -R a+rwX /out/pgogen; exit 0; fi
       cd build && nice -n 19 cpack > /out/cpack.log
       cp vibeserver_*.deb /out/'"
+  if [ "$PGO" = generate ]; then
+    echo "==> [$A] instrumented binaries in $HOST:~/vibeout/$A/pgogen/ — train them (counters -> ~/$PGO_DIR), then VIBE_PGO=use"
+    continue
+  fi
   DEB="$(ssh "$HOST" "ls ~/vibeout/$A/vibeserver_*_$A.deb" | head -1)"
   [ -n "$DEB" ] || { echo "!! [$A] no package came out"; exit 1; }
   # ★★ THE SAME GATES publish-apt.sh RUNS, here as well, so a bad package is caught before it travels.
