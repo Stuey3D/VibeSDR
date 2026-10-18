@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -17,13 +18,93 @@
 #define VIBE_DAB_VITERBI_NEON 1
 #elif defined(__SSE2__)
 #include <emmintrin.h>
-#if defined(__SSSE3__)
-#include <tmmintrin.h>          // pshufb — the table lookup the branch metrics want
-#endif
 #define VIBE_DAB_VITERBI_SSE 1
+/* ★★★ pshufb BY RUNTIME DISPATCH, NOT BY FLOOR (2026-10-18). The x86 packages stay SSE2 so the
+ *  2008-12 AMD machines (Athlon 64, Phenom, Athlon II — SSE3 but NO SSSE3) and Intel's Yonah keep
+ *  working, yet the one place in the DAB chain where SSSE3 genuinely fits — the branch-metric table
+ *  lookup NEON does with vqtbl1 — should not be lost on the Atoms and Core 2s that have it. So the
+ *  SSSE3 kernel is compiled with a per-function target attribute alongside the SSE2 one, and the
+ *  CPU is asked ONCE (cached in a static) which to run. GCC and clang both support this; any other
+ *  compiler simply keeps the SSE2 kernel. A build that is told -mssse3 takes it unconditionally. */
+#if defined(__SSSE3__)
+#include <tmmintrin.h>
+#define VIBE_DAB_VITERBI_SSSE3 2     // always (the floor already has it)
+#elif defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+#include <tmmintrin.h>
+#define VIBE_DAB_VITERBI_SSSE3 1     // dispatched
+#endif
 #endif
 
 namespace vibedab {
+
+#if defined(VIBE_DAB_VITERBI_SSSE3)
+/** ★ Does this CPU have SSSE3? Asked once; the answer is a static. */
+inline bool viterbiHasSsse3() {
+#if VIBE_DAB_VITERBI_SSSE3 == 2
+    return true;
+#else
+    // ★ VIBE_NO_SSSE3=1 forces the SSE2 kernel — the A/B switch, and an escape hatch for a CPU that
+    //   lies about itself (virtualisers have been known to).
+    static const bool yes = [] {
+        if (const char* e = std::getenv("VIBE_NO_SSSE3"); e && *e == '1') return false;
+        __builtin_cpu_init();
+        return __builtin_cpu_supports("ssse3") != 0;
+    }();
+    return yes;
+#endif
+}
+/** ★★ THE SSE2 KERNEL BELOW (Viterbi::decode) WITH THE GATHER REPLACED BY TWO pshufb — the NEON
+ *  kernel's vqtbl1 idea on x86. The sixteen branch metrics are split into a low-byte and a high-byte
+ *  table, each fits one XMM register, and pshufb looks up eight states' metrics at once from the
+ *  precomputed branch-output indices. The SSE2 path gathers those 64 metrics one scalar load and
+ *  store at a time, every step. Everything after the lookup is the SSE2 kernel unchanged, so the
+ *  survivor metrics and decisions are BIT-IDENTICAL (test-dab-fec checks both against the encoder).
+ *  The whole step loop lives in here, not just the lookup, so the dispatch costs one branch per
+ *  decode() call rather than one per step. */
+__attribute__((target("ssse3")))
+inline void viterbiAcsSsse3(const int8_t* soft, size_t steps, int kRate, int states, uint16_t* cur, uint16_t* nxt,
+                            uint8_t* decBits, size_t decStride, const uint8_t* branchOut0) {
+    const __m128i kMirror = _mm_set1_epi16(short(2 * 127 * kRate));
+    const __m128i mask = _mm_set1_epi32(0x0000FFFF);
+    const int halfMask = (states >> 1) - 1;
+    for (size_t t = 0; t < steps; ++t) {
+        const int8_t* s = soft + t * kRate;
+        alignas(16) uint8_t bmLo[16], bmHi[16];
+        for (int o = 0; o < 16; ++o) {
+            int32_t m = 0;
+            for (int j = 0; j < kRate; ++j) m += ((o >> j) & 1) ? int32_t(s[j]) : -int32_t(s[j]);
+            const uint16_t b = uint16_t(m + 127 * kRate);
+            bmLo[o] = uint8_t(b & 0xFF); bmHi[o] = uint8_t(b >> 8);
+        }
+        const __m128i tLo = _mm_load_si128((const __m128i*)bmLo), tHi = _mm_load_si128((const __m128i*)bmHi);
+        uint8_t* dec = decBits + t * decStride;
+        __m128i mnv = _mm_set1_epi16(short(0x7FFF));
+        for (int j = 0; j < states / 8; ++j) {
+            const int ns0  = j * 8;
+            const int base = (ns0 & halfMask) << 1;
+            const __m128i a = _mm_loadu_si128((const __m128i*)&cur[base]);
+            const __m128i b = _mm_loadu_si128((const __m128i*)&cur[base + 8]);
+            const __m128i ev = _mm_packs_epi32(_mm_and_si128(a, mask), _mm_and_si128(b, mask));
+            const __m128i od = _mm_packs_epi32(_mm_srli_epi32(a, 16), _mm_srli_epi32(b, 16));
+            const __m128i idx = _mm_loadl_epi64((const __m128i*)&branchOut0[ns0]);
+            const __m128i b0 = _mm_unpacklo_epi8(_mm_shuffle_epi8(tLo, idx), _mm_shuffle_epi8(tHi, idx));
+            const __m128i c0 = _mm_add_epi16(ev, b0);
+            const __m128i c1 = _mm_add_epi16(od, _mm_sub_epi16(kMirror, b0));
+            const __m128i win = _mm_cmpgt_epi16(c0, c1);
+            const __m128i best = _mm_min_epi16(c0, c1);
+            _mm_storeu_si128((__m128i*)&nxt[ns0], best);
+            mnv = _mm_min_epi16(mnv, best);
+            dec[j] = uint8_t(_mm_movemask_epi8(_mm_packs_epi16(win, win)) & 0xFF);
+        }
+        mnv = _mm_min_epi16(mnv, _mm_shuffle_epi32(mnv, _MM_SHUFFLE(1, 0, 3, 2)));
+        mnv = _mm_min_epi16(mnv, _mm_shuffle_epi32(mnv, _MM_SHUFFLE(2, 3, 0, 1)));
+        mnv = _mm_min_epi16(mnv, _mm_shufflelo_epi16(mnv, _MM_SHUFFLE(2, 3, 0, 1)));
+        const __m128i mv = _mm_set1_epi16(short(uint16_t(_mm_extract_epi16(mnv, 0))));
+        for (int i = 0; i < states; i += 8)
+            _mm_storeu_si128((__m128i*)&cur[i], _mm_sub_epi16(_mm_loadu_si128((const __m128i*)&nxt[i]), mv));
+    }
+}
+#endif
 
 // ── The mother code ─────────────────────────────────────────────────────────
 inline constexpr int kK        = 7;        ///< constraint length (6 delay elements)
@@ -119,6 +200,12 @@ public:
         cur.fill(kInit16);
         cur[0] = 0;                                   // known start state
 
+#if defined(VIBE_DAB_VITERBI_SSSE3)
+        if (viterbiHasSsse3())
+            viterbiAcsSsse3(soft, steps, kRateOut, kStates, cur.data(), nxt.data(), decBits_.data(), decStride,
+                            branchOut0_);
+        else
+#endif
         for (size_t t = 0; t < steps; ++t) {
             const int8_t* s = soft + t * kRateOut;
             // ★ bm[o] = cost of a branch whose output bits are `o`, offset to stay non-negative.
