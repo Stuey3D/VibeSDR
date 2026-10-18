@@ -130,6 +130,35 @@ float BinauralSpread::panAt(float f, int kind, float centre, float half) {
     return u >= 0 ? a : -a;
 }
 
+float BinauralSpread::panAtCwCrowded(float f, int kind, float note, float dead, float full) {
+    if (!(kind == CwUpper || kind == CwLower) || !std::isfinite(f) || !std::isfinite(note)) return 0.0f;
+    const float sense = kind == CwLower ? -1.0f : 1.0f;
+    return binauralPanFor(sense * (f - note), dead, full);
+}
+
+float BinauralSpread::panMix_(float f, float centre, float half) const {
+    // ★ CW crowded: the map moves from the fixed SSB scale to the lean's own curve as the crowd weight rises (rebuilt as it
+    //   glides, so the change is a glide too). SSB keeps its one map — crowded, only the AMOUNT changes (the controller).
+    const float a = panAt(f, kind_, centre, half);
+    if (!(kind_ == CwUpper || kind_ == CwLower) || crowd_ <= 0.0f) return a;
+    return a + crowd_ * (panAtCwCrowded(f, kind_, cwCentre_, dead_, full_) - a);
+}
+
+void BinauralSpread::setContext(float heldShiftHz, bool coarse, float deadHz, float fullHz, uint32_t dialSeq) {
+    heldShift_ = std::isfinite(heldShiftHz) ? heldShiftHz : NAN;
+    heldCoarse_ = coarse;
+    if (std::isfinite(deadHz) && std::isfinite(fullHz) && (deadHz != dead_ || fullHz != full_)) {
+        dead_ = std::max(0.0f, deadHz); full_ = std::max(dead_ + 1.0f, fullHz); wAmt_ = -1;
+    }
+    // ★ A dial move: what was heard belongs to the old dial (a lone CW note moved by the knob is not a second carrier).
+    if (!dialSeqSet_ || dialSeq != dialSeq_) { if (dialSeqSet_) crowdForget_(); dialSeq_ = dialSeq; dialSeqSet_ = true; }
+}
+
+void BinauralSpread::crowdForget_() {
+    occ_ = 0; lastEv_ = -1e9;
+    for (Track& t : tracks_) t = Track();
+}
+
 void BinauralSpread::configure_(double rate) {
     // ★ Allocates — once, the first time the bank engages at a rate (as the spatialiser's delay ring does on a rate
     //   change). Re-engaging at the same rate reuses everything; steady running never allocates.
@@ -152,12 +181,14 @@ void BinauralSpread::configure_(double rate) {
     wL_.assign(b, cf32(0, 0)); wR_.assign(b, cf32(0, 0));
     m2L_.assign(b, 1.0f); m2R_.assign(b, 1.0f);
     psm_.assign(b, -200.0f); floor_.assign(b, -200.0f);
+    med_.assign(b, 0.0f);
     pos_ = 0; warm_ = 0; dpos_ = 0; wAmt_ = -1; cwHops_ = 0;
+    clock_ = 0; crowd_ = 0; wCrowd_ = -1; crowdForget_();
     eSlowL_ = eSlowR_ = 0; bal_ = 0; slowN_ = 0;
 }
 
 void BinauralSpread::cwForget_() {
-    cwMeasured_ = false; cwCentre_ = kCwDefaultHz;
+    cwMeasured_ = false; cwCentre_ = kCwDefaultHz; noiseDb_ = -200; cwA_ = cwZ_ = 0;
     std::fill(psm_.begin(), psm_.end(), -200.0f); std::fill(floor_.begin(), floor_.end(), -200.0f);
 }
 
@@ -170,7 +201,7 @@ void BinauralSpread::weights_() {
     const float norm = 1.0f / (float)n_;               // KissFFT's round trip scales by N
     for (int k = 0; k < b; ++k) {
         const float f = (float)(k * fs_ / n_);
-        const float p = eff_ * panAt(f, kind_, centre, half);
+        const float p = eff_ * panMix_(f, centre, half);
         const float farL = std::max(0.0f, p), farR = std::max(0.0f, -p);   // + = sits right: the LEFT ear is far
         auto w = [&](float far) {
             const float g = std::pow(10.0f, -BinauralSpatialiser::kMaxDropDb * far / 20.0f);
@@ -183,11 +214,11 @@ void BinauralSpread::weights_() {
         wL_[k] = w(farL); wR_[k] = w(farR);
         // ★ …and each ear's power gain at FULL amount, for steady_(): the image's centre judged on the map itself, so
         //   the amount gliding in or out never reads as the signal moving.
-        const float p1 = panAt(f, kind_, centre, half);
+        const float p1 = panMix_(f, centre, half);
         const cf32 a = w(std::max(0.0f, p1)), c = w(std::max(0.0f, -p1));
         m2L_[k] = std::norm(a) / (norm * norm); m2R_[k] = std::norm(c) / (norm * norm);
     }
-    wAmt_ = eff_;
+    wAmt_ = eff_; wCrowd_ = crowd_;
 }
 
 void BinauralSpread::cwMeasure_() {
@@ -210,6 +241,15 @@ void BinauralSpread::cwMeasure_() {
     const double lo = (a - 0.5) * binHz, hi = (z + 0.5) * binHz;
     if (z - a + 1 < 2 || hi - lo > 3000.0) return;
     const float c = (float)(0.5 * (lo + hi));
+    // ★ The passband's bins and its noise (the median of the floor across it) — what a CW carrier is judged against
+    //   (crowdCw_). The median, not each bin's own floor: a steady unkeyed carrier lifts its own bin's floor in a minute.
+    cwA_ = a; cwZ_ = z;
+    {
+        int m = 0;
+        for (int k = a; k <= z; ++k) med_[m++] = floor_[k];
+        std::nth_element(med_.begin(), med_.begin() + m / 2, med_.begin() + m);
+        noiseDb_ = med_[m / 2];
+    }
     if (!cwMeasured_) { cwCentre_ = c; cwMeasured_ = true; wAmt_ = -1; return; }
     // Moves of under a bin are measurement noise; larger ones glide (half-way per look, ~4 looks a second).
     if (std::fabs(c - cwCentre_) > binHz) { cwCentre_ += 0.5f * (c - cwCentre_); wAmt_ = -1; }
@@ -243,8 +283,88 @@ void BinauralSpread::steady_(double eL, double eR) {
     const double now = 10.0 * std::log10((eR + tiny) / (eL + tiny));
     const double held = 10.0 * std::log10((eSlowR_ + tiny) / (eSlowL_ + tiny));
     const float lim = BinauralSpatialiser::kMaxDropDb * eff_;
-    const float want = std::max(-lim, std::min(lim, (float)(kSteadyImage * eff_ * (held - now))));
+    // ★★★ …but not in a CROWDED passband (2026-10-18, Stuart on 483: "blending them both"): there the energy moving from
+    //     one side to the other IS two stations taking turns, and holding it to its 2 s centre pulled each toward the
+    //     middle as it keyed up. Each is placed by its own frequency instead; the steadying gives way by the crowd weight.
+    const float want = std::max(-lim, std::min(lim, (float)(kSteadyImage * (1.0f - crowd_) * eff_ * (held - now))));
     bal_ += (float)aF * (want - bal_);
+}
+
+void BinauralSpread::crowdSsb_() {
+    /* ★★★ SSB: ANOTHER VOICE WHERE THE HELD ONE CANNOT REACH. A voice's audio is its transmitter's band — at the widest
+     *     about 100-2800 Hz — moved by how far it is mistuned (the held answer, heldShift_). So with a voice held 600 Hz
+     *     BELOW the dial on USB its audio ends by ~2200 Hz; energy SUSTAINED above that, over the noise between words, is
+     *     another signal — one above the dial. Held ABOVE, its audio starts at ~700 Hz; energy below is a voice below.
+     *     ✗ NOT judged from the spectrum alone: one voice on tune fills the same 50-2700 Hz that two either side of the
+     *       dial do. The held answer says where ONE is; only then does energy elsewhere mean a second.
+     *     ★ The region must be kCrowdRegionMinHz wide (a voice held < ~450 Hz below or < ~300 Hz above leaves too little
+     *       to judge) — and a coarse-held answer (the waterfall's ±150 Hz) gives up that much more of it. */
+    const double hop = (double)h_ / fs_;
+    const float aO = (float)(1.0 - std::exp(-hop / kCrowdOccSec));
+    bool active = false, judged = false;
+    if (std::isfinite(heldShift_)) {
+        const float m = heldCoarse_ ? 150.0f : 0.0f;
+        const float s = heldShift_;
+        float r0, r1;
+        if (s < 0) { r0 = 2900.0f + s + m; r1 = hi_; } else { r0 = lo_; r1 = s - m; }
+        r0 = std::max(r0, lo_); r1 = std::min(r1, hi_);
+        if (r1 - r0 >= kCrowdRegionMinHz) {
+            const double binHz = fs_ / n_;
+            const int ka = std::max(1, (int)std::ceil(r0 / binHz)), kb = std::min(n_ / 2 - 1, (int)std::floor(r1 / binHz));
+            if (kb >= ka) {
+                double ep = 0, ef = 0;
+                for (int k = ka; k <= kb; ++k) { ep += std::pow(10.0, psm_[k] / 10.0); ef += std::pow(10.0, floor_[k] / 10.0); }
+                judged = true;
+                active = ef > 0 && 10.0 * std::log10(ep / ef) > kCrowdOverDb;
+            }
+        }
+    }
+    occ_ += aO * ((active ? 1.0 : 0.0) - occ_);
+    if (!judged && !std::isfinite(heldShift_)) occ_ = 0;   // nothing held: nothing to judge against
+    if (occ_ >= kCrowdOccFrac) lastEv_ = clock_;
+    crowdT_ = clock_ - lastEv_ < kCrowdHoldSec ? 1.0f : 0.0f;
+}
+
+void BinauralSpread::crowdCw_() {
+    /* ★★★ CW: TWO CARRIERS. Each hop, every local peak in the passband standing kCwPeakDb over its noise is a carrier
+     *     heard; carriers are tracked by frequency (within kCwTrackMatchHz), each remembering how long it has been heard
+     *     and when last. Two tracks heard for kCwTrackMinSec, both within kCrowdHoldSec, kCwTrackApartHz apart → crowded.
+     *     Keyed signals taking turns are never in the same frame — hence the memory. A dial move forgets them all. */
+    const double hop = (double)h_ / fs_;
+    const double binHz = fs_ / n_;
+    const int b = n_ / 2 + 1;
+    int a = cwMeasured_ ? cwA_ - 1 : std::max(1, (int)std::ceil(100.0 / binHz));
+    int z = cwMeasured_ ? cwZ_ + 1 : std::min(b - 2, (int)(3200.0 / binHz));
+    a = std::max(1, a); z = std::min(b - 2, z);
+    if (z - a >= 2 && noiseDb_ > -150.0f) {
+        for (int k = a; k <= z; ++k) {
+            if (!(psm_[k] >= psm_[k - 1] && psm_[k] > psm_[k + 1]) || psm_[k] - noiseDb_ < kCwPeakDb) continue;
+            const float y0 = psm_[k - 1], y1 = psm_[k], y2 = psm_[k + 1], den = y0 - 2 * y1 + y2;
+            float d = den < 0 ? 0.5f * (y0 - y2) / den : 0.0f;
+            d = std::max(-0.5f, std::min(0.5f, d));
+            const float hz = (float)((k + d) * binHz);
+            Track* t = nullptr;
+            for (Track& c : tracks_) if (clock_ - c.last < kCrowdHoldSec && std::fabs(c.hz - hz) <= kCwTrackMatchHz) { t = &c; break; }
+            if (!t) {   // a new one: take a stale slot, else the least heard
+                for (Track& c : tracks_) if (clock_ - c.last >= kCrowdHoldSec) { t = &c; break; }
+                if (!t) { t = &tracks_[0]; for (Track& c : tracks_) if (c.heard < t->heard) t = &c; }
+                *t = Track(); t->hz = hz;
+            }
+            t->hz += 0.2f * (hz - t->hz);
+            t->heard += (float)hop;
+            t->last = clock_;
+        }
+    }
+    bool two = false;
+    for (int i = 0; i < 8 && !two; ++i) {
+        const Track& p = tracks_[i];
+        if (p.heard < kCwTrackMinSec || clock_ - p.last >= kCrowdHoldSec) continue;
+        for (int j = i + 1; j < 8; ++j) {
+            const Track& q = tracks_[j];
+            if (q.heard >= kCwTrackMinSec && clock_ - q.last < kCrowdHoldSec && std::fabs(p.hz - q.hz) >= kCwTrackApartHz) { two = true; break; }
+        }
+    }
+    crowdT_ = two ? 1.0f : 0.0f;
 }
 
 void BinauralSpread::frame_() {
@@ -254,12 +374,13 @@ void BinauralSpread::frame_() {
     //    input straight back (analysis × synthesis window = the Hann, which overlap-adds to 1). Nobody hears it —
     //    the output on tune is the delay line — but it keeps the accumulators exactly as the FFT path would have
     //    left them, so the first frame off tune joins without a seam. CW still needs the spectrum for the note.
+    // ★★★ (2026-10-18) The forward FFT now runs on tune on SSB too: the CROWDED judgement (crowdSsb_) needs the spectrum
+    //     whether or not anything is spread yet — two voices either side of the dial can arrive with nothing leaning.
+    //     One 512-point real FFT per 5.3 ms hop (CW always paid it).
     const bool identity = eff_ <= 0.0f;
-    if (!identity || cw) {
-        for (int i = 0; i < n; ++i) frame_buf_[i] = in_[i] * win_[i];
-        fwd_->forward(frame_buf_.data(), spec_.data());
-    }
-    if (cw) {
+    for (int i = 0; i < n; ++i) frame_buf_[i] = in_[i] * win_[i];
+    fwd_->forward(frame_buf_.data(), spec_.data());
+    {
         const float rise = 0.5f * (float)h / (float)fs_;   // dB per hop: 0.5 dB/s
         // ★ …but 12 dB/s while the floor sits more than 12 dB under the power: after a squelch closes and opens,
         //   the floor has followed the silence down, and at 0.5 dB/s it would take minutes to find the noise again.
@@ -272,8 +393,14 @@ void BinauralSpread::frame_() {
             psm_[k] += 0.1f * (p - psm_[k]);
             floor_[k] = psm_[k] < floor_[k] ? psm_[k] : floor_[k] + (psm_[k] - floor_[k] > 12.0f ? riseFast : rise);
         }
-        if (++cwHops_ * h >= (int)(0.25 * fs_)) { cwHops_ = 0; cwMeasure_(); }
+        if (cw && ++cwHops_ * h >= (int)(0.25 * fs_)) { cwHops_ = 0; cwMeasure_(); }
     }
+    // ★★★ CROWDED? (see crowd() in binaural.h) — judged every hop, glided so the lean and the spread never step.
+    clock_ += (double)h / fs_;
+    const float cT = cw ? (crowdCw_(), crowdT_) : (crowdSsb_(), crowdT_);
+    const float aC = (float)(1.0 - std::exp(-(double)h / (kCrowdTauSec * fs_)));
+    crowd_ += aC * (cT - crowd_);
+    if (std::fabs(cT - crowd_) < 1e-3f) crowd_ = cT;
     // Slide the overlap-add accumulators by a hop, then add this frame (synthesis window applied).
     std::memmove(outL_.data(), outL_.data() + h, sizeof(float) * (n - h));
     std::memmove(outR_.data(), outR_.data() + h, sizeof(float) * (n - h));
@@ -285,7 +412,8 @@ void BinauralSpread::frame_() {
     } else {
         // ★ Rebuilt as the amount moves — but not for every whisker of the smoother's tail (a few thousand
         //   transcendentals per rebuild); 0.002 of the full spread is far below anything the ear can place.
-        if (wAmt_ < 0 || std::fabs(eff_ - wAmt_) > 0.002f || (eff_ != wAmt_ && eff_ >= 1.0f)) weights_();
+        if (wAmt_ < 0 || std::fabs(eff_ - wAmt_) > 0.002f || (eff_ != wAmt_ && eff_ >= 1.0f)
+            || std::fabs(crowd_ - wCrowd_) > 0.002f || (crowd_ != wCrowd_ && (crowd_ <= 0.0f || crowd_ >= 1.0f))) weights_();
         double eL = 0, eR = 0;
         for (int k = 0; k < b; ++k) {
             specL_[k] = spec_[k] * wL_[k]; specR_[k] = spec_[k] * wR_[k];
@@ -318,7 +446,8 @@ void BinauralSpread::process(float* L, float* R, int n, double rate, int kind, f
         }
         running_ = true; amt_ = 0; eff_ = 0; map_ = 1; wet_ = 0; wAmt_ = -1; kind_ = kind;
         eSlowL_ = eSlowR_ = 0; bal_ = 0; slowN_ = 0;
-        if (kind_ == CwUpper || kind_ == CwLower) cwForget_();
+        clock_ = 0; crowd_ = 0; wCrowd_ = -1; crowdForget_();
+        cwForget_();   // ★ the per-bin power and floor now serve SSB's crowded judgement too, so every kind starts them afresh
     } else if (rate != fs_) {
         // A rate change mid-run: start the bank again from a dry crossfade (rare — a reconnect).
         configure_(rate); amt_ = 0; eff_ = 0; map_ = 1; wet_ = 0; kind_ = kind == Off ? kind_ : kind;
@@ -341,7 +470,7 @@ void BinauralSpread::process(float* L, float* R, int n, double rate, int kind, f
             if (map_ > 0) map_ = std::max(0.0f, map_ - dSwap);
             else {
                 if ((kind_ == CwUpper || kind_ == CwLower) != (kind == CwUpper || kind == CwLower)) cwForget_();
-                kind_ = kind; wAmt_ = -1;
+                kind_ = kind; wAmt_ = -1; crowd_ = 0; crowdForget_();   // a new map: a new picture
             }
         } else if (map_ < 1) {
             map_ = std::min(1.0f, map_ + dSwap);
@@ -535,10 +664,31 @@ void BinauralTuning::processPlanar(float* L, float* R, int n, int rate) {
     //    source that sets w, and so the spread itself. (Until 476 it was starved under the SPREAD style.)
     if (on && (src == SsbUsb || src == SsbLsb)) ssbFeed_(L, R, n, rate);   // before the effect
     const float p = on ? targetPan_(n, rate, L, R) : 0.0f;
-    // ★★ ONE WEIGHT FOR BOTH: the spread's amount IS the lean's size, w = |p| — 0 in the dead zone (untouched),
-    //    1 at full scale. The bank smooths it with the lean's own time constant, so they grow together.
-    spread_.process(L, R, n, rate, sk, std::fabs(p), spreadLo_.load(std::memory_order_relaxed), spreadHi_.load(std::memory_order_relaxed));
-    fx_.process(L, R, n, rate, p);
+    // ★★★ CROWDED (2026-10-18, Stuart on 483: "rather than putting the one below us in the left ear and the one above us in
+    //     the right it is blending them both and swirling them about between the ears"). The lean p is about ONE signal —
+    //     the estimator's lock, the CW peak, the waterfall cue — so with a signal either side it dragged BOTH to one ear and
+    //     swung across whenever the other took over (test-binaural-two: the upper voice 8 dB LEFT 100 % of the time). The
+    //     bank judges whether the passband holds more than one signal (BinauralSpread::crowd: c, 0…1, glided); by c the
+    //     whole-image lean gives way and the spread comes up to full, so each signal is placed by its own frequency —
+    //     higher RF to the right — whoever is talking. A lone signal (c = 0) is exactly as before.
+    {
+        const double dial = dial_.load(std::memory_order_relaxed);
+        if (!haveDialAudio_) { lastDialAudio_ = dial; haveDialAudio_ = true; }
+        else if (std::fabs(dial - lastDialAudio_) >= kDialMoveHz) { lastDialAudio_ = dial; ++dialSeqAudio_; }
+        float held = NAN; bool coarse = false;
+        if ((src == SsbUsb || src == SsbLsb) && ssbValid_.load(std::memory_order_relaxed)) {
+            held = (src == SsbUsb ? 1.0f : -1.0f) * ssbHz_.load(std::memory_order_relaxed);   // the AUDIO shift
+            coarse = coarsePub_.load(std::memory_order_relaxed);
+        }
+        spread_.setContext(held, coarse, dead_.load(std::memory_order_relaxed), full_.load(std::memory_order_relaxed), dialSeqAudio_);
+    }
+    const float c = sk != BinauralSpread::Off ? spread_.crowd() : 0.0f;
+    // ★★ ONE WEIGHT FOR BOTH (a lone signal): the spread's amount IS the lean's size, w = |p| — 0 in the dead zone
+    //    (untouched), 1 at full scale. The bank smooths it with the lean's own time constant, so they grow together.
+    const float amount = std::fabs(p) + c * (1.0f - std::fabs(p));
+    spread_.process(L, R, n, rate, sk, amount, spreadLo_.load(std::memory_order_relaxed), spreadHi_.load(std::memory_order_relaxed));
+    fx_.process(L, R, n, rate, p * (1.0f - c));
+    crowdPub_.store(c, std::memory_order_relaxed);
     panPub_.store(fx_.pan(), std::memory_order_relaxed);
     spreadPub_.store(spread_.running() ? spread_.amount() : 0.0f, std::memory_order_relaxed);
     cwCentrePub_.store(spread_.cwCentreHz(), std::memory_order_relaxed);
@@ -808,10 +958,10 @@ int BinauralTuning::stats(float* o, int cap) const {
     float off = 0; bool ok = false;
     if (src == Given) { off = given_.load(); ok = givenValid_.load(); }
     else if (src == SsbUsb || src == SsbLsb) { off = ssbHz_.load(); ok = ssbValid_.load(); }
-    const float v[12] = { enabled_.load() ? 1.0f : 0.0f, (float)src, off, ok ? 1.0f : 0.0f, panPub_.load(), stereoWPub_.load(),
+    const float v[13] = { enabled_.load() ? 1.0f : 0.0f, (float)src, off, ok ? 1.0f : 0.0f, panPub_.load(), stereoWPub_.load(),
                           (float)estimates_.load(), (float)accepted_.load(), (float)drops_.load(),
-                          spreadPub_.load(), coarsePub_.load() ? 1.0f : 0.0f, cwCentrePub_.load() };
-    const int n = std::min(cap, 12);
+                          spreadPub_.load(), coarsePub_.load() ? 1.0f : 0.0f, cwCentrePub_.load(), crowdPub_.load() };
+    const int n = std::min(cap, 13);
     for (int i = 0; i < n; ++i) o[i] = v[i];
     return n;
 }

@@ -58,6 +58,7 @@
 //   (android/app/src/main/cpp/vibe_binaural_jni.cpp).
 #pragma once
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <thread>
@@ -197,6 +198,30 @@ public:
     static constexpr float kImageSlowSec = 2.0f;   ///< the held centre: where the passband's energy has sat over this
     static constexpr float kImageFastSec = 0.01f;  ///< the correction's own glide across frames (never a step)
 
+    // ── ★★★ CROWDED: MORE THAN ONE SIGNAL IN THE PASSBAND (2026-10-18, Stuart on 483: "when in between 2 signals rather
+    //     than putting the one below us in the left ear and the one above us in the right it is blending them both and
+    //     swirling them about between the ears. This is on CW too.") — see crowd() and binaural.cpp crowdSsb_/crowdCw_.
+    /** The crowd weight's glide (seconds): the lean giving way and the spread coming up are never a step. */
+    static constexpr float kCrowdTauSec = 0.25f;
+    /** SSB: the evidence (another voice where the held one cannot reach) is held this long — the other station's over
+     *  and the pause before it (test-binaural-two: overs of 2-5 s). A dial move forgets it at once. */
+    static constexpr float kCrowdHoldSec = 8.0f;
+    /** SSB: the held voice's band in the audio is taken as its transmitter's widest likely 100-2800 Hz, moved by the held
+     *  answer; the region beyond it (on the far side) must be at least this wide to be judged… */
+    static constexpr float kCrowdRegionMinHz = 250.0f;
+    /** …and, averaged over kCrowdOccSec, sound kCrowdOverDb over its own noise floor kCrowdOccFrac of the time. */
+    static constexpr float kCrowdOverDb = 6.0f;
+    static constexpr float kCrowdOccSec = 1.0f;
+    static constexpr float kCrowdOccFrac = 0.25f;
+    /** CW: a carrier is a local peak standing this far over the passband's noise (the median of its floor)… */
+    static constexpr float kCwPeakDb = 12.0f;
+    /** …heard for at least this long (summed) before it counts — a key click or a noise spike is not a signal… */
+    static constexpr float kCwTrackMinSec = 0.1f;
+    /** …remembered for kCrowdHoldSec after it was last heard, and two of them at least this far apart are two signals
+     *  (a tone between two bins wanders a bin; 150 Hz is 1.6 bins at the bank's 94 Hz). */
+    static constexpr float kCwTrackApartHz = 150.0f;
+    static constexpr float kCwTrackMatchHz = 70.0f;
+
     BinauralSpread();
     ~BinauralSpread();
     BinauralSpread(const BinauralSpread&) = delete;
@@ -206,9 +231,19 @@ public:
      *  how much spread (0 = the input, delayed). `edgeLo/HiHz`: the default SSB passband's audio edges (full left /
      *  full right before any mirroring). */
     void process(float* L, float* R, int n, double rate, int kind, float amount, float edgeLoHz, float edgeHiHz);
+    /** ★★★ What the controller knows that the bank needs to judge a CROWDED passband (audio thread, before process()):
+     *  `heldShiftHz` = the held SSB answer as an AUDIO shift (+ = the voice's audio is high: USB +offset, LSB −offset),
+     *  NaN when none is held; `coarse` = it is the waterfall's ±150 Hz figure; `deadHz`/`fullHz` = the lean's scale (CW's
+     *  crowded map is the lean's own curve); `dialSeq` changes on every dial move (the evidence belongs to the old dial). */
+    void setContext(float heldShiftHz, bool coarse, float deadHz, float fullHz, uint32_t dialSeq);
+    /** ★★★ 0…1, glided (kCrowdTauSec): how far the passband is judged CROWDED — more than one signal in it, so each is
+     *  placed by its own frequency: the controller's whole-image lean gives way by this much and the spread comes up to
+     *  full by it. CW: two carriers ≥ kCwTrackApartHz apart heard within kCrowdHoldSec. SSB: another voice sounding where
+     *  the held one cannot reach. 0 while the bank is out of the path. */
+    float crowd() const { return running_ ? crowd_ : 0.0f; }
     /** Out of the path at once (binaural switched back on: the next use warms up from silence, never from a stale
      *  frame of whatever played before). */
-    void reset() { running_ = false; amt_ = 0; eff_ = 0; map_ = 1; wet_ = 0; }
+    void reset() { running_ = false; amt_ = 0; eff_ = 0; map_ = 1; wet_ = 0; crowd_ = 0; crowdForget_(); }
     /** Is the bank in the signal path (running, or gliding in or out)? */
     bool running() const { return running_; }
     /** The spread actually applied, 0…1 (the smoothed amount, times the map-swap glide). */
@@ -220,6 +255,10 @@ public:
     /** The per-ear far-ness at an audio frequency for a kind and scale (the pan law alone: + = the LEFT ear is far,
      *  i.e. the sound sits RIGHT). Exposed for the tests. */
     static float panAt(float audioHz, int kind, float centreHz, float halfHz);
+    /** ★★★ CW's CROWDED map: each audio frequency placed where the LEAN would place a lone carrier there —
+     *  binauralPanFor(its offset from the note, dead, full). Two carriers either side of the note are one left, one right,
+     *  as far as each would lean alone (Stuart's clip on 483: ±165 Hz → 4-7 dB, where the SSB scale gave < 1 dB). */
+    static float panAtCwCrowded(float audioHz, int kind, float noteHz, float deadHz, float fullHz);
 
 private:
     void configure_(double rate);
@@ -228,6 +267,10 @@ private:
     void cwMeasure_();
     void cwForget_();
     void steady_(double eL, double eR);
+    void crowdSsb_();
+    void crowdCw_();
+    void crowdForget_();
+    float panMix_(float f, float centre, float half) const;
 
     double fs_ = 0;
     int n_ = 0, h_ = 0, pos_ = 0, warm_ = 0, dpos_ = 0;
@@ -250,6 +293,24 @@ private:
     double eSlowL_ = 0, eSlowR_ = 0;  // the held image: each ear's full-amount energy averaged over kImageSlowSec
     float bal_ = 0;                   // the correction now applied, dB (R over L)
     double slowN_ = 0;                // frames in the held centre since it started (a running mean until it is full)
+
+    // CROWDED (audio thread)
+    float heldShift_ = NAN;           // setContext: the held SSB answer as an audio shift, NaN = none
+    bool heldCoarse_ = false;
+    float dead_ = 15, full_ = 300;    // the lean's scale (CW's crowded map)
+    uint32_t dialSeq_ = 0;
+    bool dialSeqSet_ = false;
+    double clock_ = 0;                // seconds of frames since the bank started
+    double occ_ = 0;                  // SSB: the far-side region's sounding fraction (kCrowdOccSec)
+    double lastEv_ = -1e9;            // SSB: when that last passed kCrowdOccFrac
+    float crowd_ = 0;                 // the glided weight (crowd())
+    float crowdT_ = 0;                // …and what this hop's judgement says (0 / 1)
+    std::vector<float> med_;          // CW: scratch for the noise median
+    float wCrowd_ = -1;               // the crowd weight the weights were built for
+    float noiseDb_ = -200;            // CW: the passband's noise (median floor), set by cwMeasure_
+    int cwA_ = 0, cwZ_ = 0;           // CW: the passband's bins, set by cwMeasure_
+    struct Track { float hz = 0, heard = 0; double last = -1e9; };
+    Track tracks_[8];                 // CW: carriers heard lately (kCwTrack*)
 };
 
 /** ★★ THE CONTROLLER: which offset, how much pan, the WFM stereo crossfade, the SSB worker. One per output. */
@@ -433,7 +494,7 @@ public:
     int processInt16(const int16_t* in, int inCh, int frames, int rate, int16_t* outStereo);
 
     /** [enabled, source, offsetHz, offsetValid, pan, stereoWeight, ssbEstimates, ssbAccepted, ringDrops,
-     *   spreadAmount, coarseHeld, spreadCwCentreHz]. */
+     *   spreadAmount, coarseHeld, spreadCwCentreHz, crowd]. */
     int stats(float* out, int cap) const;
 
     // Exposed for the tests: the SSB answer the worker last published, and a synchronous pump of the worker's
@@ -467,7 +528,10 @@ private:
     std::atomic<int> spreadKind_{BinauralSpread::Off};
     std::atomic<float> spreadLo_{50.0f}, spreadHi_{2700.0f};
     BinauralSpread spread_;           // audio thread only
-    std::atomic<float> spreadPub_{0.0f}, cwCentrePub_{0.0f};
+    std::atomic<float> spreadPub_{0.0f}, cwCentrePub_{0.0f}, crowdPub_{0.0f};
+    double lastDialAudio_ = 0;             // audio thread: the dial as last seen (a move bumps dialSeq_)
+    bool haveDialAudio_ = false;
+    uint32_t dialSeqAudio_ = 0;
     std::atomic<bool> activePub_{false};   // audio thread: still in the path (see active())
     bool glidingOut_ = false;              // audio thread: the last block ran switched off, still gliding out
 

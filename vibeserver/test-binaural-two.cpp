@@ -436,6 +436,11 @@ int main() {
             runChain(bt, x, fs, L, R, [&](size_t i) {
                 if (i < (size_t)(fs / 10)) return;
                 tr.frame(bt, &x[i - fs / 10], fs / 10, fs, note, lo, hi, (double)i / fs);
+                if (std::getenv("VIBE_TWO_TRACE") && i % (fs / 2) == 0) {
+                    float st[13]; bt.stats(st, 13);
+                    std::printf("        t %5.1f  offset %+6.0f%s  pan %+.2f  spread %.2f  crowd %.2f  note %.0f\n", (double)i / fs, st[2],
+                                st[3] > 0 ? "" : "(x)", st[4], st[9], st[12], st[11]);
+                }
             });
             char label[200];
             std::snprintf(label, sizeof label, "CW note ±%.0f Hz in a %s filter, %s:", off, narrow ? "400 Hz (the default)" : "1 kHz",
