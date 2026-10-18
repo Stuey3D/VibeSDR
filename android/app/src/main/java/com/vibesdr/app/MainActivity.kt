@@ -75,6 +75,20 @@ open class MainActivity : ReactActivity() {
     v.invalidate()
   }
 
+  // ── Game controllers (V12) ───────────────────────────────────────────────────
+  /* ★ A pad's buttons, D-pad and sticks go to VibeGamepad, which reports them to JS (src/utils/padActions.ts maps
+   *  them onto the keyboard's own keys). Anything that is not from a game controller returns false there at once and
+   *  is handled exactly as before — keyboards, TV remotes and touch are untouched. */
+  override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+    if (VibeGamepad.onKey(this, event)) return true
+    return super.dispatchKeyEvent(event)
+  }
+
+  override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean {
+    if (VibeGamepad.onMotion(this, ev)) return true
+    return super.dispatchGenericMotionEvent(ev)
+  }
+
   override fun onNewIntent(intent: Intent?) {
     super.onNewIntent(intent)
     setIntent(intent)
