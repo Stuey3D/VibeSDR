@@ -99,6 +99,7 @@ let adminSignedInThisView = false;
 import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
 } from './recordings';
+import { RecordBufferAnchor, parseRecordBufferSeconds } from '../../../src/services/recordBuffer';
 /* ★ The shared vector-basemap renderer, carried as a string — see ensureVibeMap(). ★★ FETCHED ONLY
  *  WHEN A MAP OPENS (openSpotsMap): ~98 KB that most listeners never use, so it is its own file and
  *  the page does not carry it (build-web.mjs splits every import() into one). */
@@ -2293,6 +2294,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onBytes: (n) => { audioBytes += n; },
     onStatus: (s) => { if (s === 'error') setStatus('error', 'audio'); },
   });
+  applyRecBuf();
   // ★★★ TELL IT WHETHER THERE IS ANYWHERE TO FALL BACK TO. With the owner's policy OFF the
   //     server REFUSES a socket opened without `codec=opus`, so 'falling back' swapped a
   //     struggling Opus stream for no stream at all — silently. The player keeps rebuilding
@@ -2314,6 +2316,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         onBytes: (n) => { audioBytes += n; },
         onStatus: (st) => { if (st === 'error') setStatus('error', 'audio'); },
       });
+      applyRecBuf();
       audio.start().catch((e) => console.error('audio restart failed', e));
     };
   }
@@ -3064,6 +3067,7 @@ function renderFrame() {
   lastRenderAt = nowMs;
 
   wf.vfoHz = spec.frequency;
+  recBufCheck();   // ★ V12 record buffer's retune rule — a string compare when nothing moved, nothing at all when Off
   guard('web-render', 'overlays', updateViewOverlays);
   // Passband drives the acrylic sidebands — so bandwidth is something you SEE
   // sitting on the signal, not a number you read.
@@ -13051,7 +13055,30 @@ function showRecording(on: boolean) {
   setClass($('mRecTime'), 'on', on);
 }
 
+/* ★★ V12 RECORD BUFFER — the setting (this browser, per server like every page setting) and the retune rule, which is
+ *    the app's own (src/services/recordBuffer.ts, unit-tested): a move past the mode's allowance from the ANCHOR — the
+ *    dial when the held audio began — a mode change, or another receiver / DAB service clears what is held. */
+let recBufSec = 0;
+let recBufAnchor = new RecordBufferAnchor(0);
+let recBufLast = '';
+function applyRecBuf() {
+  recBufAnchor = new RecordBufferAnchor(recBufSec);
+  recBufLast = '';
+  audio?.setRecordBuffer(recBufSec);
+}
+function recBufCheck() {
+  if (!recBufSec || !spec || !audio) return;
+  const src = location.host + location.pathname + (dabOn && dabState ? `|dab:${dabState.channel}:${dabState.sid}` : '');
+  const key = `${spec.frequency}|${spec.mode}|${src}`;
+  if (key === recBufLast) return;
+  recBufLast = key;
+  if (recBufAnchor.update({ freqHz: spec.frequency, mode: String(spec.mode), source: src }, Date.now())) audio.clearRecordBuffer();
+}
+
 function initRecorder() {
+  recBufSec = parseRecordBufferSeconds(String(prefs().recbuf ?? ''));
+  segment('recBufSeg', 'rb', (v) => { recBufSec = parseRecordBufferSeconds(String(v)); applyRecBuf(); }, 'recbuf');
+  applyRecBuf();
   const btn = $<HTMLButtonElement>('mPanelRec');
   btn.onclick = async () => {
     if (!audio || !spec) return;

@@ -350,7 +350,8 @@ function emit(pcm, ch) {
   const frames = Math.floor(pcm.length / Math.max(1, ch));
   if (frames <= 0) return;
   // ★ The recorder lives on the page and taps PCM BEFORE the node, so a recording stays perfect
-  //   even when playout is not. Forward it ONLY while recording, so the ordinary case never pays.
+  //   even when playout is not. Forward it ONLY while recording (or while the RECORD BUFFER is on —
+  //   the page says which with one 'rec' flag), so the ordinary case never pays.
   if (recording) self.postMessage({ type: 'pcm', pcm, ch }, [pcm.buffer.slice(0)]);
   if (!sink) return;
   const [l, r] = toFloat(pcm, ch, frames);
@@ -1107,7 +1108,7 @@ export class AudioPlayer {
         // Media playout: no worklet to feed — the packets come back here for the element.
         w.postMessage({ type: 'init', url: this.url, rawOpus: true });
       }
-      if (this.rec) w.postMessage({ type: 'rec', on: true });
+      if (this.rec || this.rb) w.postMessage({ type: 'rec', on: true });   // recording or the record buffer
       /* ★★★ SAY SO, BECAUSE OTHERWISE NOBODY CAN TELL. Every failure path here logs loudly, but
        *     SUCCESS said nothing — so a console with no warnings was indistinguishable from a
        *     console where the Worker had never been attempted, and the one line people DID see
@@ -1132,7 +1133,7 @@ export class AudioPlayer {
             break;
           // ★ Recording taps PCM on THIS side, so the Worker forwards it — but only while a
           //   recording is running. See emit() in WORKER_SRC.
-          case 'pcm':    if (d.pcm && this.rec) this._recordPcm(d.pcm, d.ch || 1); break;
+          case 'pcm':    if (d.pcm && (this.rec || this.rb)) this._recordPcm(d.pcm, d.ch || 1); break;
           /* ★ A frame the worker cannot decode but the page can — DAB+ AAC. See the worker's own
            *   note: forwarding it keeps the socket and every other format off the main thread. */
           case 'passthru': if (d.buf) { const b = d.buf as ArrayBuffer; guard('web-audio', 'frame', () => this._handleFrame(b)); } break;
@@ -1969,7 +1970,7 @@ export class AudioPlayer {
         AudioPlayer.mediaPlayoutBroken = true;
         const wasRec = !!this.rec;
         this.close(); this.closedByUs = false;
-        void this.start().then(() => { if (wasRec && this.worker) this.worker.postMessage({ type: 'rec', on: true }); });
+        void this.start().then(() => { if ((wasRec || this.rb) && this.worker) this.worker.postMessage({ type: 'rec', on: true }); });
       }
     }, 500);
   }
@@ -2359,9 +2360,12 @@ export class AudioPlayer {
    *    header cannot change channel count midway — so duplicate mono rather than write a file that
    *    desyncs halfway through. */
   private _recordPcm(pcm: Int16Array, ch: number) {
-    if (!this.rec) return;
+    if (!this.rec && !this.rb) return;
     const frames = Math.floor(pcm.length / Math.max(1, ch));
     if (frames <= 0) return;
+    // ★★ V12 RECORD BUFFER: the same tap feeds the ring — as it arrives (mono stays mono: half the memory).
+    if (this.rb) this._rbAppend(pcm.slice(0, frames * ch), ch, frames);
+    if (!this.rec) return;
     let out: Int16Array;
     if (ch === 2) {
       out = pcm.slice(0, frames * 2);
@@ -2379,7 +2383,7 @@ export class AudioPlayer {
     if (frames <= 0) return;
     if (this.fault === 'decoder') return;       // self-heal test: a decoder that stopped emitting
 
-    if (this.rec) this._recordPcm(pcm, ch);
+    if (this.rec || this.rb) this._recordPcm(pcm, ch);
 
     const l = new Float32Array(frames);
     const r = new Float32Array(frames);
@@ -2412,10 +2416,72 @@ export class AudioPlayer {
 
   private rec: { chunks: Int16Array[]; frames: number; ch: number; startedAt: number } | null = null;
 
-  startRecording() {
+  /* ★★ V12 RECORD BUFFER — the last 30 / 60 s of exactly what a recording captures, so ● REC starts with the audio
+   *    from before the press (the app has the same: VibePowerModule.swift / VibeStreamService.kt). The setting and
+   *    the retune rule are the page's (main.ts, src/services/recordBuffer.ts); this only holds and hands over.
+   *  ★ Chunks as they arrived — mono when the stream is (most modes) — so 60 s is ≈ 5.8 MB mono, 11.5 MB stereo.
+   *    Off (the default) holds nothing and the Worker forwards nothing. The stream is 48 kHz, as wavBlob assumes. */
+  private rb: { chunks: { pcm: Int16Array; ch: number; frames: number }[]; frames: number; cap: number } | null = null;
+
+  /** 0 = Off (frees it); otherwise the seconds to hold. Shrinking trims the oldest; growing keeps what is held. */
+  setRecordBuffer(seconds: number) {
+    const cap = Math.max(0, Math.round(seconds * 48000));
+    if (!cap) { this.rb = null; }
+    else if (!this.rb) { this.rb = { chunks: [], frames: 0, cap }; }
+    else { this.rb.cap = cap; this._rbTrim(); }
+    this._syncWorkerTap();
+  }
+
+  /** The page's retune rule says the held audio is no longer this audio. */
+  clearRecordBuffer() {
+    if (this.rb) { this.rb.chunks = []; this.rb.frames = 0; }
+  }
+
+  /** Seconds the buffer holds now. */
+  get bufferedSeconds(): number { return this.rb ? this.rb.frames / 48000 : 0; }
+
+  private _rbAppend(pcm: Int16Array, ch: number, frames: number) {
+    const rb = this.rb!;
+    rb.chunks.push({ pcm, ch, frames });
+    rb.frames += frames;
+    this._rbTrim();
+  }
+
+  private _rbTrim() {
+    const rb = this.rb;
+    if (!rb) return;
+    // Whole chunks from the front while what remains still covers the capacity.
+    let drop = 0;
+    while (drop < rb.chunks.length && rb.frames - rb.chunks[drop].frames >= rb.cap) { rb.frames -= rb.chunks[drop].frames; drop++; }
+    if (drop) rb.chunks.splice(0, drop);
+  }
+
+  /** The Worker forwards PCM (and, on the media path, decodes for it) only while someone is listening for it. */
+  private _syncWorkerTap() {
+    this.worker?.postMessage({ type: 'rec', on: !!(this.rec || this.rb) });
+  }
+
+  /** Start a recording. Returns the seconds it already holds from the record buffer (0 when Off). */
+  startRecording(): number {
     this.rec = { chunks: [], frames: 0, ch: 1, startedAt: Date.now() };
+    let pre = 0;
+    if (this.rb) {
+      // The prefix, oldest first, in the recording's own always-stereo layout (see _recordPcm). Synchronous on the
+      // page, so no live buffer can fall between the prefix and the first live chunk.
+      for (const c of this.rb.chunks) {
+        let out: Int16Array;
+        if (c.ch === 2) out = c.pcm;
+        else { out = new Int16Array(c.frames * 2); for (let i = 0; i < c.frames; i++) { out[i * 2] = c.pcm[i]; out[i * 2 + 1] = c.pcm[i]; } }
+        this.rec.chunks.push(out);
+        this.rec.frames += c.frames;
+      }
+      this.rec.ch = 2;
+      pre = this.rec.frames / 48000;
+      this.rec.startedAt -= Math.round(pre * 1000);   // recordedSeconds counts the prefix
+    }
     // ★ The Worker does not forward PCM unless someone is recording — see emit() in WORKER_SRC.
-    this.worker?.postMessage({ type: 'rec', on: true });
+    this._syncWorkerTap();
+    return pre;
   }
 
   get recording(): boolean { return this.rec !== null; }
@@ -2427,9 +2493,9 @@ export class AudioPlayer {
 
   /** Stop and return a WAV blob (null if nothing was captured). */
   stopRecording(): Blob | null {
-    this.worker?.postMessage({ type: 'rec', on: false });
     const r = this.rec;
     this.rec = null;
+    this._syncWorkerTap();
     if (!r || !r.frames) return null;
 
     const total = r.chunks.reduce((n, c) => n + c.length, 0);
@@ -2524,7 +2590,7 @@ export class AudioPlayer {
       this.lastCtxTime = 0; this.ctxAdvancedAt = 0;
       this.lastAudibleAt = 0; this.lastDrainAt = 0;
       await this.start();
-      if (wasRec && this.worker) this.worker.postMessage({ type: 'rec', on: true });
+      if ((wasRec || this.rb) && this.worker) this.worker.postMessage({ type: 'rec', on: true });
       console.info('[audio] audio context rebuilt');
     } catch (e) {
       console.error('[audio] rebuilding the audio context failed', e);
