@@ -254,8 +254,13 @@ private:
     // samples with the reversed taps — vectorisable (NEON). phase_ counts down to
     // the next kept (decimated) output.
     std::vector<float> rtaps_;   // reversed taps
-    std::vector<cf32>  buf_;     // [K-1 history][block]
+    std::vector<cf32>  buf_;     // [K-1 history][block][slack] — never shrunk (see ddc.cpp)
     int decim_, phase_, K_;
+    // ★ x86 only (empty elsewhere): the taps PAIR-DUPLICATED and laid out in two phase-shifted banks
+    //   so every load of the delay line is ALIGNED — see FirDecimator::buildBank_ in ddc.cpp.
+    std::vector<float> bank_;
+    int Lp_ = 0, bankOff_ = 0;
+    void buildBank_();
 };
 
 // ── Zoom spectrum ────────────────────────────────────────────────────────--
@@ -1081,8 +1086,13 @@ public:
 private:
     // Same block-contiguous + NEON scheme as FirDecimator, real samples.
     std::vector<float> rtaps_;   // reversed taps
-    std::vector<float> buf_;     // [K-1 history][block]
+    std::vector<float> buf_;     // [K-1 history][block][slack] — never shrunk (see ddc.cpp)
     int decim_, phase_, K_;
+    // ★ x86 only (empty elsewhere): four phase-shifted tap banks so every load is ALIGNED — see
+    //   RealFir::buildBank_ in ddc.cpp.
+    std::vector<float> bank_;
+    int Lp_ = 0, bankOff_ = 0;
+    void buildBank_();
 };
 
 /** ★★★ A REAL FIR IN TWO STAGES — a cheap anti-alias decimate-by-2 in front of the deep one.

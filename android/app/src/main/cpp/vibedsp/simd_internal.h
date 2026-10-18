@@ -318,6 +318,47 @@ static inline void dotCplx2(const float* t, const float* z, int K, int D, cf32& 
 #endif
 }
 
+#if VIBE_SSE
+// ── x86: the FIR inner product over ALIGNED loads (FirDecimator / RealFir, 2026-10-18) ─────────
+// ★★★ WHY x86 GETS ITS OWN SHAPE. The A53 note below rejected pair-duplicated taps because that core
+//     is LOAD-bound. x86 is the opposite case, and the in-order Atom (Bonnell: Kiko's N270, Danny's
+//     N450) most of all: SSE arithmetic can take one operand straight from memory, but only an
+//     ALIGNED one, and an unaligned 16-byte load costs Bonnell several times an aligned one (worse
+//     when it splits a cache line, which a sliding FIR window does every few outputs). dotCplx/
+//     dotReal slide over the delay line one sample at a time, so most of their loads are unaligned,
+//     and dotCplx also spends two shuffles per four taps de-interleaving re/im.
+// ★★ THE TRICK: SHIFT THE TAPS, NOT THE DATA. Output i reads the window starting at sample i. Round
+//    that start DOWN to the nearest 16-byte boundary and use a copy of the taps pre-shifted by the
+//    remainder (zeros in front). One bank per possible remainder — two for complex samples (8 bytes
+//    each), four for real ones — built once per tap set. Every data load is then aligned, every
+//    tap load is aligned, the complex case multiplies interleaved re/im straight through against
+//    pair-duplicated taps [t0 t0 t1 t1 …] with no shuffle at all, and the banks are zero-padded to
+//    a whole number of four-vector steps so there is no scalar tail either.
+// ★ Four accumulators: addps is a five-cycle latency on Bonnell, and an in-order core cannot hide
+//   a dependency chain the way the i5 does. Four is also all that fits beside the operands in the
+//   eight XMM registers of 32-bit x86.
+// ★ Exactness: the same products summed in a different order (plus products with zero taps), so
+//   the output moves in the last bit or two against dotCplx/dotReal — the same class of change the
+//   two-accumulator rewrite made, and checked by the same DSP suites.
+/** Σ t·z over nv 4-float vectors (nv a multiple of 4), both pointers 16-byte aligned. */
+static inline __m128 sseDotAligned(const float* t, const float* z, int nv) {
+    __m128 a0 = _mm_setzero_ps(), a1 = _mm_setzero_ps(), a2 = _mm_setzero_ps(), a3 = _mm_setzero_ps();
+    for (int v = 0; v < nv; v += 4, t += 16, z += 16) {
+        a0 = _mm_add_ps(a0, _mm_mul_ps(_mm_load_ps(t),      _mm_load_ps(z)));
+        a1 = _mm_add_ps(a1, _mm_mul_ps(_mm_load_ps(t + 4),  _mm_load_ps(z + 4)));
+        a2 = _mm_add_ps(a2, _mm_mul_ps(_mm_load_ps(t + 8),  _mm_load_ps(z + 8)));
+        a3 = _mm_add_ps(a3, _mm_mul_ps(_mm_load_ps(t + 12), _mm_load_ps(z + 12)));
+    }
+    return _mm_add_ps(_mm_add_ps(a0, a1), _mm_add_ps(a2, a3));
+}
+/** Complex output from interleaved samples × pair-duplicated taps: lanes are [re im re im]. */
+static inline cf32 sseDotCplxAligned(const float* t, const float* z, int nv) {
+    const __m128 s = sseDotAligned(t, z, nv);
+    const __m128 h = _mm_add_ps(s, _mm_movehl_ps(s, s));   // [re0+re1, im0+im1, …]
+    return cf32(_mm_cvtss_f32(h), _mm_cvtss_f32(_mm_shuffle_ps(h, h, _MM_SHUFFLE(1, 1, 1, 1))));
+}
+#endif  // VIBE_SSE
+
 // ✗ TRIED AND REJECTED (2026-09-16): a dotCplx variant with the taps stored pair-duplicated
 //   [t0 t0 t1 t1 …] so the interleaved samples multiply straight through with plain loads and no
 //   vld2q de-interleave. Measured on the Pi 3 (Cortex-A53, ARMv7 NEON): WFM 1.92 MS/s 55.5 % →
