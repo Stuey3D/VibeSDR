@@ -21,6 +21,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
 
     init {
         VibeStreamService.reactContext = reactContext
+        VibeGamepad.ctx = reactContext     // game controllers report through this context (VibeGamepad.kt)
         if (BuildConfig.VIBE_DIAG) registerProfTrigger()
     }
 
@@ -57,6 +58,14 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     }
 
     override fun getName() = "VibePowerModule"
+
+    /** ★ A game controller's back while a field has the cursor: leave the field, as Escape does on a keyboard
+     *  (src/utils/hardwareKeys.ts; the iOS module has the same method). */
+    @ReactMethod
+    fun leaveTextField() {
+        val act = reactContext.currentActivity ?: return
+        VibeGamepad.leaveTextField(act)
+    }
 
     /** The GPU map's files for the app's own map page, unpacked from the APK (VibeMapGL.bundleDir — the why lives
      *  there). Resolves the directory's absolute path; the first call copies, later ones read one marker. */

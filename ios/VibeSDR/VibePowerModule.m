@@ -10,6 +10,8 @@ RCT_EXTERN_METHOD(setAdminAuth:(NSString *)q)
 // ★ Hold the app awake while a watch-driven connect completes — see keepAliveForConnect.
 RCT_EXTERN_METHOD(keepAliveForConnect:(BOOL)on)
 RCT_EXTERN_METHOD(stopAudioEngine)
+// ★ A game controller's back while a field has the cursor: leave the field (VibeGamepad / hardwareKeys).
+RCT_EXTERN_METHOD(leaveTextField)
 RCT_EXTERN_METHOD(startExternalAudio:(nonnull NSNumber *)sampleRate pauseMode:(NSString *)pauseMode)
 RCT_EXTERN_METHOD(setAudioBurstDepth:(nonnull NSNumber *)seconds)
 RCT_EXTERN_METHOD(pushExternalPcm:(NSString *)base64 sampleRate:(nonnull NSNumber *)sampleRate channels:(nonnull NSNumber *)channels)

@@ -34,6 +34,7 @@ import type { SDRInstance } from './src/services/instancesApi';
 // a later connect resolves to the exact server the phone fetched, with its real type/params.
 const watchServerCache = new Map<string, SDRInstance>();
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
+import PadNotice from './src/components/PadNotice';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
 import ServerModeScreen     from './src/screens/ServerModeThemed';   // ★ in the user's colours — see there
@@ -1028,6 +1029,8 @@ export default function App() {
           </Stack.Navigator>
         </NavigationContainer>
         </CrashBoundary>
+        {/* ★ A game controller's HOLD START notice ("hold START to switch back") — nothing until a pad switches. */}
+        <PadNotice />
 
         {!splashDone && (
           <Animated.View style={{

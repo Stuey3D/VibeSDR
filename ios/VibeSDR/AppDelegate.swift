@@ -117,14 +117,27 @@ class VibeKeyWindow: UIWindow {
 
   /// ★★ A FOCUSED TEXT FIELD OWNS THE KEYBOARD. RN's TextInput is backed by a UITextField/UITextView, so conformance
   /// to UITextInput is a reliable test; the walk is a human-speed event's worth of work.
-  private func focusedTextInput() -> UIResponder? {
+  private func focusedTextInput() -> UIResponder? { VibeKeyWindow.focusedTextInput(in: self) }
+
+  private static func focusedTextInput(in root: UIView) -> UIResponder? {
     func find(_ v: UIView) -> UIResponder? {
       if v.isFirstResponder { return v }
       for s in v.subviews { if let r = find(s) { return r } }
       return nil
     }
-    let r = find(self)
+    let r = find(root)
     return r is UITextInput ? r : nil
+  }
+
+  /// The text field holding the cursor in ANY of the app's windows, or nil. For the game controller (VibeGamepad),
+  /// which has no window of its own to be told about presses in — the same test, so a pad and a keyboard agree on
+  /// when somebody is typing.
+  static func focusedTextInputInApp() -> UIResponder? {
+    for scene in UIApplication.shared.connectedScenes {
+      guard let ws = scene as? UIWindowScene else { continue }
+      for w in ws.windows { if let r = focusedTextInput(in: w) { return r } }
+    }
+    return nil
   }
 
   private var isTypingInTextField: Bool { focusedTextInput() != nil }

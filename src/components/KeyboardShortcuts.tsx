@@ -50,6 +50,7 @@ const SECTIONS: Section[] = [
     title: 'ON THE RECEIVER',
     body: [
       'The highlight reaches the frequency box, the mode, the tuning step, audio, the menu, chat, the servers chip and the decoder box. Tuning and zoom work from anywhere, with a menu open or not.',
+      'Enter on the frequency box opens the frequency card. On its Tune page the highlight is already on the frequency, so a second Enter puts the cursor in it, ready to type.',
       'If you have hidden the controls, Backspace or Escape brings them back.',
     ],
   },
@@ -63,7 +64,7 @@ const SECTIONS: Section[] = [
   {
     title: 'TYPING',
     body: [
-      'While a text box has the cursor — the frequency, a search, chat, a server address — every key is the box\'s own, so W, A, S, D, the full stop and Backspace type as they always do. Enter tunes a typed frequency. Escape leaves the box, and the arrows then move round the panel it is in: in the frequency card that reaches the Tune and Bookmarks tabs, Hz, kHz and MHz, and the profile list on an OpenWebRX server.',
+      'While a text box has the cursor — the frequency, a search, chat, a server address — every key is the box\'s own, so W, A, S, D, the full stop and Backspace type as they always do. Enter tunes a typed frequency. Escape leaves the box, and the arrows then move round the panel it is in, line by line as it is drawn: in the frequency card that reaches the Tune and Bookmarks tabs, the nearby-station arrows, the frequency itself (Enter puts the cursor back in it), Hz, kHz and MHz, and the profile list on an OpenWebRX server.',
       'Backing out of the profile list never switches profile — which matters, because changing profile retunes the receiver for everyone else listening to it.',
     ],
   },
@@ -78,6 +79,15 @@ const SECTIONS: Section[] = [
     body: [
       'On the server list the arrows move through everything, Enter connects or opens a section, and Backspace steps back out of a directory or collapses a group.',
       'On FM-DX the highlight works as on the receiver, and ‹ Back on the controls leaves the server. Because FM-DX is one radio shared by everyone connected, holding > retunes it once when you stop, not once per step.',
+    ],
+  },
+  {
+    title: 'GAME CONTROLLERS',
+    body: [
+      'A game controller does everything the keyboard does, on iPhone, iPad, Mac and Android. The D-pad moves the highlight, and holding it keeps going.',
+      'On a pad without sticks the buttons go by where they are, not what they are called: R is Enter and L is back, the top and bottom buttons zoom in and out, and the left and right buttons tune down and up.',
+      'On a pad with two sticks the bottom button (\u2715 or A) is Enter and the right one (\u25CB or B) is back. Turn the left stick round like a jog wheel to tune \u2014 clockwise goes up \u2014 and the right stick to zoom, clockwise in.',
+      'Hold START for a second to switch between the two. A notice says which you now have and how to switch back, and the choice is remembered. In a text box a controller has no letters, so only Enter and back do anything there, and back leaves the box.',
     ],
   },
   {
