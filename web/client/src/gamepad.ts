@@ -9,8 +9,11 @@
  *  Pads WITH two analogue sticks:
  *    D-pad = move the highlight · ✕ (bottom) = enter · ○ (right) = back
  *    LEFT stick turned like a jog wheel = tune (clockwise forwards) · RIGHT stick turned = zoom (clockwise in)
- *  START switches between the two (Stuart: a pad with one stick may be reported as having two) — shown on screen and
- *  remembered on this device. ?pad=buttons|sticks forces one for a session.
+ *  HOLD START (~1 s) switches between the two (Stuart: a pad with one stick may be reported as having two) — shown on
+ *  screen and remembered on this device. ?pad=buttons|sticks forces one for a session.
+ *  ★ HELD, never tapped (Stuart, 2026-10-18: "i pressed the l and r button by mistake and it switched … with no way
+ *    back"): a pad whose browser numbering is not the standard layout can report a shoulder button as START, and a
+ *    tap is too easy to make by accident. The toast always says how to switch back.
  *
  * ★ Nothing runs until a pad is connected: no polling loop, no listener work, no cost to anyone without one.
  * ★ Enter on a slider or a drop-down ADJUSTS it: D-pad left/right changes the value, enter or back finishes.
@@ -29,6 +32,7 @@ const PROFILE_KEY = 'vibe.padProfile';
 const B_UP = 12, B_DOWN = 13, B_LEFT = 14, B_RIGHT = 15;
 const FOCUSABLE = 'button, input:not([type=hidden]), select, a[href], [role="button"], [tabindex]:not([tabindex="-1"])';
 const REPEAT_DELAY = 380, REPEAT_EVERY = 110;
+const SWITCH_HOLD_MS = 900;                     // START held this long switches the controls
 
 let hooks: GamepadHooks | null = null;
 let running = false;
@@ -131,8 +135,9 @@ function forcedProfile(): string | null { return chosen; }
 function toggleProfile(axes: number) {
   chosen = padProfile(axes, chosen) === 'sticks' ? 'buttons' : 'sticks';
   try { localStorage.setItem(PROFILE_KEY, chosen); } catch { /* private window: this session only */ }
-  toast(chosen === 'sticks' ? 'Controls: two sticks — turn the left stick to tune, the right to zoom'
-                            : 'Controls: buttons by position — face buttons tune and zoom, R enter, L back');
+  toast((chosen === 'sticks' ? 'Controls: two sticks — turn the left stick to tune, the right to zoom'
+                             : 'Controls: buttons by position — face buttons tune and zoom, R enter, L back')
+        + ' · hold START to switch back');
 }
 
 function toast(text: string) {
@@ -155,7 +160,14 @@ function poll() {
     const btn = (i: number) => !!gp.buttons[i]?.pressed;
     const prof = padProfile(gp.axes.length, forcedProfile());
     const id = `${gp.index}:`;
-    press(id + 'start', btn(B_START), () => toggleProfile(gp.axes.length), false);
+    // HOLD to switch: fires once when START has been down SWITCH_HOLD_MS, never on a tap.
+    if (btn(B_START)) {
+      const since = held.get(id + 'start');
+      if (since === undefined) held.set(id + 'start', performance.now());
+      else if (since > 0 && performance.now() - since >= SWITCH_HOLD_MS) {
+        toggleProfile(gp.axes.length); held.set(id + 'start', -1);   // -1: done until released
+      }
+    } else held.delete(id + 'start');
     press(id + 'up', btn(B_UP), () => move('up'));
     press(id + 'down', btn(B_DOWN), () => move('down'));
     press(id + 'left', btn(B_LEFT), () => move('left'));
