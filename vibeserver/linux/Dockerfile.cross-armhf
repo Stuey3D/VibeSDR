@@ -17,7 +17,9 @@ COPY armhf-toolchain.cmake /opt/armhf-toolchain.cmake
 COPY build-deps.sh /opt/build-deps.sh
 # ★ Two compile jobs, niced: the Mac overheats and the Lenovo is a live receiver.
 ARG DEPS_JOBS=2
-RUN JOBS=${DEPS_JOBS} nice -n 10 bash /opt/build-deps.sh /opt/vibe-deps armhf
+# ★ build-debs-remote.sh passes DEPS_NICE=19 on the Lenovo, which is a live receiver.
+ARG DEPS_NICE=10
+RUN JOBS=${DEPS_JOBS} nice -n ${DEPS_NICE} bash /opt/build-deps.sh /opt/vibe-deps armhf
 # ★★★ THE ARMv6 HALF — a RASPBIAN bookworm sysroot (see armv6-toolchain.cmake). `extract` unpacks
 #     packages without running any of them, so no emulation is needed to build a foreign root.
 # ★★★ THE ARCHIVE KEY IS COMMITTED, NOT FETCHED. It used to be curl'd over plain http and trusted
@@ -42,5 +44,5 @@ RUN fpr="$(gpg --show-keys --with-colons /opt/raspbian-archive-keyring.gpg | awk
     && ls /opt/rpi-sysroot/usr/lib/gcc/arm-linux-gnueabihf/12/crtbegin.o
 # ★ And the ARMv6 prefix, built the same way — an ARMv7 object inside an ARMv6 binary is the same crash
 #   as an ARMv7 binary, just later. build-deps.sh checks every object is Tag_CPU_arch v6.
-RUN JOBS=${DEPS_JOBS} nice -n 10 bash /opt/build-deps.sh /opt/vibe-deps-v6 armv6
+RUN JOBS=${DEPS_JOBS} nice -n ${DEPS_NICE} bash /opt/build-deps.sh /opt/vibe-deps-v6 armv6
 WORKDIR /work

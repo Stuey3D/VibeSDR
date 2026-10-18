@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # build-deps.sh — every library the Linux VibeServer links, FROM PINNED SOURCE, as static archives.
 #
-#   build-deps.sh <prefix> [native|armhf|armv6]
+#   build-deps.sh <prefix> [native|armhf|armv6|arm64]
 #
-# Run inside the build images (Dockerfile.build, Dockerfile.cross-armhf). Output:
+# Run inside the build images (Dockerfile.build, Dockerfile.cross-armhf, Dockerfile.cross-arm64). Output:
 #   <prefix>/lib/{libusb-1.0.a,libopus.a,librtlsdr.a}
 #   <prefix>/include/{libusb-1.0/libusb.h,opus/*.h,rtl-sdr.h,rtl-sdr_export.h}
 #   <prefix>/BUILT-FROM                  what went in, one line per library
@@ -36,7 +36,7 @@
 #   runtime CPU detection where it has one (x86 SSE4.1/AVX2, ARM NEON), so a better CPU still gets it.
 set -euo pipefail
 
-PREFIX="${1:?usage: build-deps.sh <prefix> [native|armhf|armv6]}"
+PREFIX="${1:?usage: build-deps.sh <prefix> [native|armhf|armv6|arm64]}"
 PROFILE="${2:-native}"
 JOBS="${JOBS:-$(nproc)}"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
@@ -80,7 +80,16 @@ case "$PROFILE" in
     CMAKE_TC=(-DCMAKE_TOOLCHAIN_FILE=/opt/armv6-toolchain.cmake)
     OPUS_EXTRA=(--disable-asm --disable-intrinsics --disable-rtcd)
     WANT_FILE="ARM, EABI5" ;;
-  *) echo "!! profile is native, armhf or armv6"; exit 1 ;;
+  arm64)
+    # ★★ arm64 CROSS from the Lenovo's amd64 container (2026-10-18) — arm64-toolchain.cmake. NO arch flags:
+    #    the native arm64 build had none, so this is Debian's armv8-a default exactly as before (the
+    #    Cortex-A53 floor). Opus's configure finds aarch64 NEON intrinsics the same way it did natively.
+    export CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar RANLIB=aarch64-linux-gnu-ranlib NM=aarch64-linux-gnu-nm
+    ARCHFLAGS=""
+    HOSTOPT=(--host=aarch64-linux-gnu)
+    CMAKE_TC=(-DCMAKE_TOOLCHAIN_FILE=/opt/arm64-toolchain.cmake)
+    WANT_FILE="ARM aarch64" ;;
+  *) echo "!! profile is native, armhf, armv6 or arm64"; exit 1 ;;
 esac
 export CFLAGS="-O2 $ARCHFLAGS"
 # ★ pkg-config sees NOTHING: a configure script must not find a system library and quietly use it.

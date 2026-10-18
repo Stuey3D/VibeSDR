@@ -83,6 +83,8 @@ RUN ls /usr/local/include/sdrplay_api.h \
 COPY build-deps.sh /opt/build-deps.sh
 # ★ Two compile jobs, niced: the Mac overheats and the Lenovo is a live receiver.
 ARG DEPS_JOBS=2
-RUN JOBS=${DEPS_JOBS} nice -n 10 bash /opt/build-deps.sh /opt/vibe-deps native
+# ★ build-debs-remote.sh passes DEPS_NICE=19 on the Lenovo, which is a live receiver.
+ARG DEPS_NICE=10
+RUN JOBS=${DEPS_JOBS} nice -n ${DEPS_NICE} bash /opt/build-deps.sh /opt/vibe-deps native
 
 WORKDIR /work
