@@ -34,7 +34,13 @@
 // ★★ §5, STEADINESS (2026-10-17, Stuart on 479: "it still flaps about a bit too") — the pan and the image through the
 //   whole binaural chain at the app's scale: on tune, no lean; held off tune, the pan reverses ≤ 1 a minute, sd ≤ 0.05,
 //   never the wrong way; tuned away, half the lean within 0.5 s; at ±500/±1000 the image's level difference holds
-//   still (sd ≤ 0.8 dB a group). VIBE_SSB_REAL_ONLY=steady runs §5 alone.
+//   still (sd ≤ 0.8 dB a group). VIBE_SSB_REAL_ONLY=steady runs §5 alone. ★ The sd figures are ROBUST since 2026-10-18
+//   (1.4826 × MAD: the wobble around where the pan sits; one corrected first estimate is not a flap — the reversals are).
+// ★★ §6, ARRIVAL (2026-10-18, Stuart on 482: "I'm deliberately waiting off tune and it's not panning") — cold, held off tune
+//   at ±100…±1000 Hz from three points in each clip, with and without the waterfall cue: never the wrong way, never on
+//   tune; ±200…±500 audibly leaning (|pan| ≥ 0.15) on ≥ 95 % of runs, median ≤ 9 s, 80 % ≤ 18 s; with the cue (±500 and
+//   ±1000) ≤ 1.5 s.
+//   VIBE_SSB_REAL_ONLY=arrival runs §6 alone (VIBE_ARRIVE_VERBOSE=1 every run, VIBE_ARRIVE_CSV=<file> every estimate).
 #include "vibedsp/ssb_offset.h"
 #include "vibedsp/binaural.h"
 
@@ -379,7 +385,7 @@ constexpr double kHeldFromSec = 15;                      // ARRIVED / ON TUNE: j
 constexpr double kAfterMoveSec = 3;                      // TUNED AWAY: judged from this long after the move
 
 struct Steady {
-    double travel = 0, revs = 0, sd = 0, mean = 0, maxAbs = 0;
+    double travel = 0, revs = 0, sd = 0, mean = 0, maxAbs = 0, sdRaw = 0;
     double firstLean = -1;   // TUNED AWAY: s from the move; ARRIVED: s from the start — to half the expected lean
     double leanFrac = 0;     // share of the held stretch with |pan| > kRevSwing (on tune: any lean at all)
     double wrongFrac = 0;    // share leaning the WRONG way by more than kRevSwing (on tune: any way)
@@ -390,7 +396,7 @@ struct Steady {
     //    each audio frequency by itself, so a voice whose energy moves between its low harmonics and its sibilants
     //    moves the image with every syllable, by up to the spread's weight × kMaxDropDb. sd, and reversals of
     //    ≥ kIldSwing per minute.
-    double ildMean = 0, ildSd = 0, ildRevs = 0;
+    double ildMean = 0, ildSd = 0, ildRevs = 0, ildSdRaw = 0;
     float expect = 0;
     bool away = false;
 };
@@ -401,7 +407,7 @@ static Steady runSteady(const std::vector<float>* pre, const std::vector<float>&
                         float signalHz) {
     Steady s;
     s.away = pre != nullptr;
-    s.expect = binauralPanFor(signalHz, kSteadyDead, kSteadyFull);
+    s.expect = binauralPanForSsb(signalHz, kSteadyDead, kSteadyFull);
     BinauralTuning bt(false);
     bt.setEnabled(true);
     bt.setSource(sb > 0 ? BinauralTuning::SsbUsb : BinauralTuning::SsbLsb, kSteadyDead, kSteadyFull);
@@ -470,7 +476,20 @@ static Steady runSteady(const std::vector<float>* pre, const std::vector<float>&
     }
     const double m = (double)w.size();
     s.mean = sum / m;
-    s.sd = std::sqrt(std::max(0.0, sum2 / m - s.mean * s.mean));
+    s.sdRaw = std::sqrt(std::max(0.0, sum2 / m - s.mean * s.mean));
+    {
+        // ★ sd is ROBUST (1.4826 × the median absolute deviation, 2026-10-18): it measures the wobble around where the
+        //   pan SITS, and ignores a minority stretch elsewhere. A first estimate that is later corrected (one step: the
+        //   arrival vote's −588 Hz becoming −984 Hz after 94 s), or a QSO's other station taking over for 30 s, is not a
+        //   flap — and a flap is what the REVERSALS count, unchanged. The plain sd is still printed (sd raw). Until the SSB
+        //   curve (binauralPanForSsb) made ±100-300 Hz audible, those steps were 0.06 of a lean and the two agreed.
+        std::vector<double> d(pans);
+        std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+        const double med = d[d.size() / 2];
+        for (double& v : d) v = std::fabs(v - med);
+        std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+        s.sd = 1.4826 * d[d.size() / 2];
+    }
     s.travel /= mins;
     s.revs = reversals(pans, kRevSwing) / mins;
     s.leanFrac = lean / m;
@@ -488,7 +507,14 @@ static Steady runSteady(const std::vector<float>* pre, const std::vector<float>&
             for (double v : ild) { a += v; a2 += v * v; }
             a /= ild.size();
             s.ildMean = a;
-            s.ildSd = std::sqrt(std::max(0.0, a2 / ild.size() - a * a));
+            s.ildSdRaw = std::sqrt(std::max(0.0, a2 / ild.size() - a * a));
+            // ★ robust, like the pan's sd (see there): the wobble around where the image sits, not a one-off step
+            std::vector<double> d(ild);
+            std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+            const double med = d[d.size() / 2];
+            for (double& v : d) v = std::fabs(v - med);
+            std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+            s.ildSd = 1.4826 * d[d.size() / 2];
             s.ildRevs = reversals(ild, kIldSwing) / mins;
         }
     }
@@ -532,10 +558,10 @@ struct SteadyTally {
 static void showSteady(const char* name, const Steady& s) {
     char fl[32] = "-";
     if (s.firstLean >= 0) std::snprintf(fl, sizeof fl, "%.2f s", s.firstLean);
-    std::printf("   %-34s expect %+.3f | pan mean %+.3f sd %.4f max %.3f · travel/min %5.3f · reversals/min %4.2f · leaning %3.0f %%"
-                " wrong-way %3.0f %% | Hz sd %5.1f reversals/min %4.2f | image %+5.2f dB sd %.2f reversals/min %5.1f | first lean %s\n",
-                name, s.expect, s.mean, s.sd, s.maxAbs, s.travel, s.revs, 100 * s.leanFrac, 100 * s.wrongFrac, s.hzSd, s.hzRevs,
-                s.ildMean, s.ildSd, s.ildRevs, fl);
+    std::printf("   %-34s expect %+.3f | pan mean %+.3f sd %.4f (raw %.4f) max %.3f · travel/min %5.3f · reversals/min %4.2f · leaning %3.0f %%"
+                " wrong-way %3.0f %% | Hz sd %5.1f reversals/min %4.2f | image %+5.2f dB sd %.2f (raw %.2f) reversals/min %5.1f | first lean %s\n",
+                name, s.expect, s.mean, s.sd, s.sdRaw, s.maxAbs, s.travel, s.revs, 100 * s.leanFrac, 100 * s.wrongFrac, s.hzSd, s.hzRevs,
+                s.ildMean, s.ildSd, s.ildSdRaw, s.ildRevs, fl);
 }
 
 static void steadySection(const std::string& volDir, const std::string& iqDir) {
@@ -647,6 +673,421 @@ static void steadySection(const std::string& volDir, const std::string& iqDir) {
     check(nB > 0 && ildMean <= 0.8 && ildW <= 1.2 && ildRev <= 20, what);
 }
 
+
+// ── 6. ARRIVING off tune: how long until the lean appears ───────────────────────────────────────────────────────────
+/* ★★★ Stuart on 482 (2026-10-17): "binaural not working at all, no panning effect at all … at all levels of off tune",
+ *     then "it's started working, but only after I've been on a signal for a while", and "I'm deliberately waiting off
+ *     tune and it's not panning". TUNED AWAY from a locked voice is the dial's own arithmetic (instant, §5); ARRIVING
+ *     off tune on a voice nothing has locked is the estimator alone — or the waterfall cue, when the app has one.
+ *     Each run starts COLD at a fixed dial off the voice, from several points in the clip (arrival times depend on when
+ *     the speech comes), and is held there for kArriveSec. Through the real controller at the app's SSB scale, spread on.
+ *       first est / acc / pub — the estimator's first answer, the controller's first accepted one, the first published;
+ *       audible — the pan past kAudiblePan the right way (an ear difference you can hear: see kAudiblePan);
+ *       ILD — the output's level difference between the ears once it leans (dB, speech blocks, + = right).
+ *     Two cue conditions: none (the estimator alone), and the waterfall cue from 1 s in, UNDERSTATED by 100 Hz (toward
+ *     on tune: the cue's error is ±150 Hz and the understated side is the hard one). */
+constexpr double kArriveSec = 60;
+constexpr float kAudiblePan = 0.15f;   // ≈ 1.5 dB and 90 µs between the ears, plus the spread: plainly to one side
+
+struct Arrival {
+    double tEst = -1, tAcc = -1, tPub = -1, tAudible = -1;
+    bool wrong = false;          // ever leant past kRevSwing the wrong way (or at all, when on tune)
+    double ild = 0; int ildN = 0;
+    float expect = 0, finalPan = 0;
+    int estN = 0, failValid = 0, failRecon = 0, failFrames = 0, failConf = 0, failClar = 0, failLarge = 0, passN = 0;
+};
+
+static FILE* gArrCsv = nullptr;    // VIBE_ARRIVE_CSV=<path>: every estimate of every cold run (measurement aid)
+static int gArrRun = 0;
+
+static Arrival runArrival(const std::vector<float>& x, size_t from, int rate, int sb, float signalHz, bool cue) {
+    Arrival a;
+    const int run = ++gArrRun;
+    a.expect = binauralPanForSsb(signalHz, kSteadyDead, kSteadyFull);
+    BinauralTuning bt(false);
+    bt.setEnabled(true);
+    bt.setSource(sb > 0 ? BinauralTuning::SsbUsb : BinauralTuning::SsbLsb, kSteadyDead, kSteadyFull);
+    bt.setSpread(sb > 0 ? BinauralSpread::Usb : BinauralSpread::Lsb, 50, 2700);
+    const double dial = 7100000;
+    bt.setDial(dial);
+    // the estimator's own view, for where the time goes (a twin: the controller's is private)
+    SsbOffsetEstimator est(rate, SsbOffsetEstimator::Profile::Fast);
+    const int pkt = rate / 50;
+    const size_t n = std::min(x.size(), from + (size_t)(kArriveSec * rate));
+    std::vector<float> l(pkt), r(pkt);
+    double bL = 0, bR = 0; int bN = 0;
+    std::vector<std::pair<double, double>> blks;   // (energy, ild) after it leans
+    bool firstPassSeen = false;
+    for (size_t i = from; i + pkt <= n; i += pkt) {
+        const double t = (double)(i + pkt - from) / rate;
+        if (cue && t >= 1.0) {
+            const float under = signalHz > 0 ? -100.0f : 100.0f;
+            bt.setSsbHint(dial + signalHz + under, true);
+        }
+        if ((!firstPassSeen || (gArrCsv && !cue)) && est.push(&x[i], pkt)) {
+            const SsbOffsetEstimate& e = est.last();
+            if (gArrCsv && !cue)
+                std::fprintf(gArrCsv, "%d,%.2f,%.1f,%.1f,%d,%d,%d,%.3f,%.3f,%.1f,%d,%.0f,%.0f,%d,%.0f\n", run, t, signalHz, sb * e.offsetHz,
+                             e.valid, e.passes(), e.reconciled, e.confidence, e.clarity, e.snrDb, e.frames, sb * e.coarseLoHz,
+                             sb * e.coarseHiHz, e.coarsePinned, e.f0Hz);
+            if (!firstPassSeen) {
+            ++a.estN;
+            if (!e.valid) ++a.failValid;
+            else if (!e.reconciled) ++a.failRecon;
+            else if (e.frames < e.minFrames) ++a.failFrames;
+            else if (e.confidence < e.confidenceFloor()) ++a.failConf;
+            else if (e.clarity < (e.deepPinned() ? std::max(e.gate.clarity, e.gate.deepClarity) : e.gate.clarity)) ++a.failClar;
+            else if (!e.passes()) ++a.failLarge;
+            else { ++a.passN; firstPassSeen = true; }
+            }
+        }
+        std::copy(x.begin() + i, x.begin() + i + pkt, l.begin());
+        std::copy(x.begin() + i, x.begin() + i + pkt, r.begin());
+        bt.processPlanar(l.data(), r.data(), pkt, rate);
+        if (((i - from) / pkt) % 2 == 1) bt.pumpSsbForTest();
+        float st[12]; bt.stats(st, 12);
+        if (a.tEst < 0 && st[6] >= 1) a.tEst = t;
+        if (a.tAcc < 0 && st[7] >= 1) a.tAcc = t;
+        if (a.tPub < 0 && st[3] > 0) a.tPub = t;
+        const float p = st[4];
+        if (std::fabs(p) > kRevSwing && (a.expect == 0 || p * a.expect < 0)) a.wrong = true;
+        if (a.tAudible < 0 && a.expect != 0 && p * a.expect > 0 && std::fabs(p) >= kAudiblePan) a.tAudible = t;
+        a.finalPan = p;
+        for (int k = 0; k < pkt; ++k) { bL += (double)l[k] * l[k]; bR += (double)r[k] * r[k]; }
+        if (++bN == 5) {
+            if (std::fabs(p) > kRevSwing) blks.push_back({bL + bR, 10 * std::log10((bR + 1e-20) / (bL + 1e-20))});
+            bL = bR = 0; bN = 0;
+        }
+    }
+    if (!blks.empty()) {
+        std::vector<double> es; for (auto& b : blks) es.push_back(b.first);
+        std::sort(es.begin(), es.end());
+        const double gate = 0.1 * es[es.size() * 9 / 10];
+        for (auto& b : blks) if (b.first >= gate) { a.ild += b.second; ++a.ildN; }
+        if (a.ildN) a.ild /= a.ildN;
+    }
+    return a;
+}
+
+struct ArrTally {
+    int runs = 0, audible = 0, wrong = 0; std::vector<double> times;
+    void add(const Arrival& a) { ++runs; wrong += a.wrong; if (a.tAudible >= 0) { ++audible; times.push_back(a.tAudible); } }
+    void print(const char* label) const {
+        if (!runs) return;
+        std::vector<double> t = times; std::sort(t.begin(), t.end());
+        auto q = [&](double f) { return t.empty() ? -1.0 : t[std::min(t.size() - 1, (size_t)(f * t.size()))]; };
+        std::printf("   %-34s %3d runs | audible within %.0f s: %3d (%3.0f %%) · median %5.1f s · 80 %% %5.1f s · worst %5.1f s | wrong-way %d\n",
+                    label, runs, kArriveSec, audible, 100.0 * audible / runs, q(0.5), q(0.8), t.empty() ? -1.0 : t.back(), wrong);
+    }
+};
+
+static void showArrival(const char* name, const Arrival& a) {
+    std::printf("   %-40s expect %+.3f | est %5.1f acc %5.1f pub %5.1f audible %5.1f s | end pan %+.3f ILD %+5.1f dB | %s"
+                " | to 1st pass: %d est (valid %d recon %d frames %d conf %d clar %d large %d)\n",
+                name, a.expect, a.tEst, a.tAcc, a.tPub, a.tAudible, a.finalPan, a.ild, a.wrong ? "WRONG-WAY" : "ok",
+                a.estN, a.failValid, a.failRecon, a.failFrames, a.failConf, a.failClar, a.failLarge);
+}
+
+static bool arrivalSection(const std::string& volDir, const std::string& iqDir) {
+    std::printf(" ── 6. ARRIVING off tune, cold: time to an AUDIBLE lean (|pan| ≥ %.2f the right way), held %.0f s ──\n",
+                kAudiblePan, kArriveSec);
+    const bool verbose = std::getenv("VIBE_ARRIVE_VERBOSE") != nullptr;
+    if (const char* c = std::getenv("VIBE_ARRIVE_CSV")) {
+        gArrCsv = std::fopen(c, "w");
+        if (gArrCsv) std::fprintf(gArrCsv, "run,t,truth,ans,valid,passes,recon,conf,clar,snr,frames,clo,chi,pinned,f0\n");
+    }
+    const int buckets[] = {100, 200, 300, 500, 1000};
+    auto bucket = [&](int off) { for (int b = 0; b < 5; ++b) if (std::abs(off) == buckets[b]) return b; return -1; };
+    ArrTally vol[2][5], qso[2][5], onTune[2];
+    const size_t starts[] = {0, 30, 60};
+    const char* volSt[][2] = {{"shannon-5505", "5505000"}, {"raf-5450", "5450000"}, {"shannon-3413", "3413000"}, {"shannon-8957", "8957000"}};
+    for (const auto& st : volSt) {
+        auto path = [&](int off) { return volDir + "/" + st[0] + "/" + st[1] + "_usb_dial" + std::to_string(off) + ".wav"; };
+        for (int off : {0, 100, -100, 200, -200, 500, -500, 1000, -1000}) {
+            std::vector<float> x; int rate;
+            if (!readMono(path(off), x, rate)) continue;
+            if (off) {
+                const SsbOffsetEstimate whole = SsbOffsetEstimator::estimate(x.data(), (int)x.size(), rate, SsbOffsetEstimator::Profile::Slow);
+                if (!(whole.valid && whole.snrDb >= 10)) continue;   // not usable (see §1)
+            }
+            for (int c = 0; c < 2; ++c) for (size_t s0 : starts) {
+                const Arrival a = runArrival(x, s0 * rate, rate, +1, (float)-off, c == 1);
+                if (off == 0) onTune[c].add(a); else vol[c][bucket(off)].add(a);
+                if (verbose || a.wrong) {
+                    char name[96]; std::snprintf(name, sizeof name, "%s dial %+d @%zus %s", st[0], off, s0, c ? "cue" : "no cue");
+                    showArrival(name, a);
+                }
+            }
+        }
+    }
+    if (exists(iqDir)) for (const Qso& q : kQsos) {
+        const auto bb = qsoBaseband(iqDir, q, 120);
+        if (bb.size() < 12000 * 60) continue;
+        for (int off : {0, 100, -100, 200, -200, 300, -300, 500, -500, 1000, -1000}) {
+            const auto x = ssbAudio(bb, q.sb, off);
+            const float sig = q.sb * q.base - off;
+            for (int c = 0; c < 2; ++c) for (size_t s0 : starts) {
+                if (s0 * 12000 + 12000 * 20 > x.size()) continue;
+                const Arrival a = runArrival(x, s0 * 12000, 12000, q.sb, sig, c == 1);
+                if (off == 0) onTune[c].add(a); else qso[c][bucket(off)].add(a);
+                if (verbose || a.wrong) {
+                    char name[96]; std::snprintf(name, sizeof name, "%.4f dial %+d @%zus %s", q.carrierHz / 1e6, off, s0, c ? "cue" : "no cue");
+                    showArrival(name, a);
+                }
+            }
+        }
+    }
+    std::printf("   ── arrival summary ──\n");
+    for (int c = 0; c < 2; ++c) {
+        char l[64];
+        std::snprintf(l, sizeof l, "on tune (%s)", c ? "cue" : "no cue"); onTune[c].print(l);
+        for (int b = 0; b < 5; ++b) {
+            std::snprintf(l, sizeof l, "VOLMET ±%d (%s)", buckets[b], c ? "cue" : "no cue"); vol[c][b].print(l);
+            std::snprintf(l, sizeof l, "QSOs ±%d (%s)", buckets[b], c ? "cue" : "no cue"); qso[c][b].print(l);
+        }
+    }
+    /* ★★★ JUDGED. Measured 2026-10-18 — before (build 482: the plain smoothstep, no vote): ±100 and ±200 Hz NEVER audible
+     *     (0 of 144 runs), ±300 92 % (median 9.2 s, 80 % 23 s), ±500 median 4.6 / 11.1 s and 80 % 16 / 25 s (VOLMET /
+     *     QSOs); with the waterfall cue ±500/±1000 at 1.0-1.1 s. After (the SSB curve, the arrival vote): ±200 100 %
+     *     (median 5.2 / 7.7 s, 80 % 13.7 / 16.2 s), ±300 100 % (7.7 s, 13.2 s), ±500 4.5 / 8.0 s and 6.5 / 16.0 s; with the
+     *     cue every ±500/±1000 run audible by 1.1 s. ±1000 without the cue is reported only (the deep side is hard: 77-95 %).
+     *     ±100 Hz is deliberately gentle (8 % lean) and not judged for audibility. */
+    int wrong = 0, runs = 0;
+    for (int c = 0; c < 2; ++c) { wrong += onTune[c].wrong; runs += onTune[c].runs; for (int b = 0; b < 5; ++b) { wrong += vol[c][b].wrong + qso[c][b].wrong; runs += vol[c][b].runs + qso[c][b].runs; } }
+    char what[240];
+    std::snprintf(what, sizeof what, "arriving: no lean the wrong way, and none at all on tune, in %d cold runs (%d did)", runs, wrong);
+    check(runs > 0 && wrong == 0, what);
+    auto stats = [](const ArrTally& t, double& frac, double& med, double& p80) {
+        std::vector<double> v = t.times; std::sort(v.begin(), v.end());
+        frac = t.runs ? (double)t.audible / t.runs : 0;
+        med = v.empty() ? 1e9 : v[v.size() / 2];
+        p80 = v.empty() ? 1e9 : v[std::min(v.size() - 1, (size_t)(0.8 * v.size()))];
+    };
+    double fracW = 1, medW = 0, p80W = 0; int nT = 0;
+    for (const ArrTally* t : {&vol[0][1], &qso[0][1], &qso[0][2], &vol[0][3], &qso[0][3]}) {
+        if (!t->runs) continue;
+        double f, m, p; stats(*t, f, m, p);
+        fracW = std::min(fracW, f); medW = std::max(medW, m); p80W = std::max(p80W, p); ++nT;
+    }
+    std::snprintf(what, sizeof what, "arriving ±200…±500 Hz, the voice alone: audibly leaning within %.0f s on ≥ 95 %% of runs (worst group %.0f %%), median ≤ 9 s (%.1f), 80 %% ≤ 18 s (%.1f)",
+                  kArriveSec, 100 * fracW, medW, p80W);
+    check(nT > 0 && fracW >= 0.95 && medW <= 9 && p80W <= 18, what);
+    double cueW = 0; int cueMiss = 0, nC = 0;
+    // ★ ±500 and ±1000 only: the cue here is UNDERSTATED by 100 Hz and native takes kCoarseShrinkHz off its lean, so at
+    //   ±300 it leans as if 100 Hz off (8 %) — gentle by design (a cue may be a voice on tune); reported, not judged.
+    for (int b = 3; b < 5; ++b) for (const ArrTally* t : {&vol[1][b], &qso[1][b]}) {
+        if (!t->runs) continue;
+        ++nC; cueMiss += t->runs - t->audible;
+        for (double x : t->times) cueW = std::max(cueW, x);
+    }
+    std::snprintf(what, sizeof what, "arriving ±500…±1000 Hz with the waterfall cue: audibly leaning within 1.5 s, every run (worst %.1f s, %d never)", cueW, cueMiss);
+    check(nC > 0 && cueMiss == 0 && cueW <= 1.5, what);
+    return true;
+}
+
+// ── 7. THE SWEEP, through the native chain: the app's own cue stream replayed against the audio ─────────────────────
+/* ★★★ Stuart on 482: "it's not panning as I tune through the band". scripts/test_binauralSweep.ts drives the REAL app tracker
+ *     (binauralOffset.ts) over spectra of a composite band — real voices from these recordings, placed where the truth is
+ *     exact — with the dial clicking 100 Hz / 0.3 s and 500 Hz / 0.5 s, and (VIBE_SWEEP_EVENTS=<dir>) writes what it sent
+ *     native: the source, every dial change and every waterfall cue, with their times, plus the band's I/Q. Here that
+ *     stream is replayed into the real BinauralTuning while the band is demodulated along the same dial path and fed as
+ *     the audio — the estimator, the dial reckoning and the cue hand-off all working at once, as on the phone.
+ *     Judged on frames where ONE voice fills the passband and no other touches it:
+ *       • a voice ≥ 400 Hz off (past the cue's own error and its kCoarseShrinkHz): leaning the right way on ≥ 60 % of them;
+ *       • the wrong way (past 5 %) on ≤ 2 % of all judged frames;
+ *       • within ±60 Hz of a voice: an audible lean (≥ 0.15) on ≤ 10 % of those frames.
+ *     NOT RUN without the events (run the JS half first) — never a pass. */
+static bool jsonNum(const char* p, const char* key, double& v) {
+    char k[48]; std::snprintf(k, sizeof k, "\"%s\":", key);
+    const char* q = std::strstr(p, k);
+    if (!q) return false;
+    v = std::strtod(q + std::strlen(k), nullptr);
+    return true;
+}
+static bool jsonStr(const char* p, const char* key, std::string& v) {
+    char k[48]; std::snprintf(k, sizeof k, "\"%s\":\"", key);
+    const char* q = std::strstr(p, k);
+    if (!q) return false;
+    q += std::strlen(k);
+    const char* e = std::strchr(q, '"');
+    if (!e) return false;
+    v.assign(q, e);
+    return true;
+}
+struct SweepEv { double t; char k; double v; bool ok; double dead, full; };
+
+struct SweepTally { int far = 0, farRight = 0, judged = 0, wrong = 0, near = 0, nearLean = 0, runs = 0; };
+
+static bool replaySweep(const std::string& dir, const std::string& file, SweepTally& tally, bool verbose) {
+    FILE* f = std::fopen((dir + "/" + file).c_str(), "rb");
+    if (!f) return false;
+    std::string js; char buf[65536]; size_t m;
+    while ((m = std::fread(buf, 1, sizeof buf, f)) > 0) js.append(buf, m);
+    std::fclose(f);
+    const char* p = js.c_str();
+    double fs, centre, secs, sb, from, to, step, every;
+    std::string iqName;
+    if (!jsonNum(p, "fs", fs) || !jsonNum(p, "centre", centre) || !jsonNum(p, "secs", secs) || !jsonNum(p, "sb", sb) ||
+        !jsonNum(p, "from", from) || !jsonNum(p, "to", to) || !jsonNum(p, "step", step) || !jsonNum(p, "every", every) ||
+        !jsonStr(p, "iq", iqName)) return false;
+    // voices
+    std::vector<double> carriers;
+    {
+        const char* v = std::strstr(p, "\"voices\":[");
+        const char* e = v ? std::strchr(v, ']') : nullptr;
+        for (const char* q = v; q && q < e; ) {
+            q = std::strstr(q, "\"carrier\":");
+            if (!q || q > e) break;
+            carriers.push_back(std::strtod(q + 10, nullptr)); q += 10;
+        }
+    }
+    // events
+    std::vector<SweepEv> evs;
+    {
+        const char* q = std::strstr(p, "\"events\":[");
+        while (q && (q = std::strstr(q, "{\"t\":")) != nullptr) {
+            const char* e = std::strchr(q, '}');
+            std::string one(q, e + 1);
+            SweepEv ev{}; double t = 0, v = 0, d = 0, fl = 0; std::string k;
+            jsonNum(one.c_str(), "t", t); jsonNum(one.c_str(), "v", v); jsonStr(one.c_str(), "k", k);
+            ev.t = t; ev.v = v; ev.k = k.empty() ? '?' : k[0];
+            ev.ok = std::strstr(one.c_str(), "\"ok\":true") != nullptr;
+            if (jsonNum(one.c_str(), "dead", d)) ev.dead = d;
+            if (jsonNum(one.c_str(), "full", fl)) ev.full = fl;
+            evs.push_back(ev);
+            q = e;
+        }
+    }
+    // the band
+    std::vector<float> iq;
+    {
+        FILE* g = std::fopen((dir + "/" + iqName).c_str(), "rb");
+        if (!g) return false;
+        std::fseek(g, 0, SEEK_END); const long bytes = std::ftell(g); std::fseek(g, 0, SEEK_SET);
+        iq.resize((size_t)bytes / 4);
+        if (std::fread(iq.data(), 4, iq.size(), g) != iq.size()) { std::fclose(g); return false; }
+        std::fclose(g);
+    }
+    const size_t nIq = iq.size() / 2;   // re[0..n), im[n..2n)
+    const int s1 = (int)sb;
+    const int dirn = to > from ? 1 : -1;
+    const int steps = (int)std::floor(std::fabs(to - from) / step + 1e-9);
+    const double dur = steps * every + 3;
+    auto dialAt = [&](double t) { return from + dirn * step * std::min(steps, (int)std::floor(t / every + 1e-9)); };
+    // the receiver: mix the dial's sideband middle to 0 Hz (phase-continuous), half-band to 12 kHz, keep 50-2700 Hz
+    const double fs2 = fs / 2;
+    static const std::vector<float> hHalf = lowpass(5000, 24000, 63);
+    static const std::vector<float> hSsb = lowpass(1325, 12000, 241);
+    const double mid = 1375;
+    double ph = 0, ph2 = 0;
+    std::vector<cf> d1hist, d2hist;
+    BinauralTuning bt(false);
+    bt.setEnabled(true);
+    bt.setSpread(s1 > 0 ? BinauralSpread::Usb : BinauralSpread::Lsb, 50, 2700);
+    size_t ei = 0;
+    const int pkt = 240;   // 20 ms at 12 kHz
+    std::vector<float> l(pkt), r(pkt);
+    long n24 = 0; int frameIdx = 0;
+    double agc = 0.1;
+    for (double t = 0; t < dur; t += 0.02) {
+        // events up to now
+        while (ei < evs.size() && evs[ei].t <= t + 1e-9) {
+            const SweepEv& e = evs[ei++];
+            if (e.k == 's') bt.setSource((int)e.v, (float)e.dead, (float)e.full);
+            else if (e.k == 'd') bt.setDial(e.v);
+            else if (e.k == 'h') bt.setSsbHint(e.v, e.ok);
+        }
+        const double dial = dialAt(t);
+        const double w = -2 * M_PI * (dial - centre + s1 * mid) / fs;
+        for (int k = 0; k < pkt; ++k) {
+            // two 24 kHz samples per 12 kHz output
+            for (int u = 0; u < 2; ++u) {
+                const size_t i = (size_t)(n24 % (long)nIq);
+                const cf x(iq[i], iq[nIq + i]);
+                d1hist.push_back(x * cf((float)std::cos(ph), (float)std::sin(ph)));
+                ph += w; if (ph > M_PI) ph -= 2 * M_PI; if (ph < -M_PI) ph += 2 * M_PI;
+                ++n24;
+            }
+            if (d1hist.size() > hHalf.size()) d1hist.erase(d1hist.begin(), d1hist.begin() + (long)(d1hist.size() - hHalf.size()));
+            cf a(0, 0);
+            if (d1hist.size() == hHalf.size()) for (size_t j = 0; j < hHalf.size(); ++j) a += d1hist[j] * hHalf[j];
+            d2hist.push_back(a);
+            if (d2hist.size() > hSsb.size()) d2hist.erase(d2hist.begin());
+            cf b(0, 0);
+            if (d2hist.size() == hSsb.size()) for (size_t j = 0; j < hSsb.size(); ++j) b += d2hist[j] * hSsb[j];
+            const cf up((float)std::cos(ph2), (float)std::sin(ph2));
+            ph2 += 2 * M_PI * s1 * mid / fs2; if (ph2 > M_PI) ph2 -= 2 * M_PI; if (ph2 < -M_PI) ph2 += 2 * M_PI;
+            l[k] = (b * up).real();
+        }
+        // a slow AGC, like the receiver's: −20 dBFS RMS
+        double e = 0; for (float v : l) e += (double)v * v;
+        const double rms = std::sqrt(e / pkt + 1e-20);
+        agc += 0.02 * (0.1 / rms - agc);
+        agc = std::min(agc, 1e4);
+        for (int k = 0; k < pkt; ++k) { l[k] = (float)(l[k] * agc); r[k] = l[k]; }
+        bt.processPlanar(l.data(), r.data(), pkt, 12000);
+        if (((int)std::lround(t / 0.02)) % 2 == 1) bt.pumpSsbForTest();
+        if (((int)std::lround(t / 0.02)) % 5 != 4) continue;   // judge per 0.1 s
+        ++frameIdx;
+        float st[12]; bt.stats(st, 12);
+        const float pan = st[4];
+        // the one voice in view (≥ 300 Hz of the passband), none other touching
+        auto overlap = [&](double c) {
+            const double vLo = s1 > 0 ? c + 300 : c - 2700, vHi = s1 > 0 ? c + 2700 : c - 300;
+            const double pLo = s1 > 0 ? dial + 50 : dial - 2700, pHi = s1 > 0 ? dial + 2700 : dial - 50;
+            return std::min(vHi, pHi) - std::max(vLo, pLo);
+        };
+        int inView = 0, touching = 0; double c0 = 0;
+        for (double c : carriers) { const double o = overlap(c); if (o >= 300) { ++inView; c0 = c; } if (o >= 1) ++touching; }
+        if (verbose && frameIdx % 5 == 0)
+            std::printf("      t %5.1f dial %.0f pan %+.3f off %+7.1f%s%s truth %s\n", t, dial, pan, st[2], st[3] > 0 ? "" : "?", st[10] > 0 ? " c" : "",
+                        inView == 1 ? std::to_string((int)(c0 - dial)).c_str() : "-");
+        if (inView != 1 || touching != 1) continue;
+        const double truth = c0 - dial;
+        ++tally.judged;
+        if (std::fabs(truth) >= 400) { ++tally.far; if (pan * truth > 0 && std::fabs(pan) > kRevSwing) ++tally.farRight; }
+        if (std::fabs(truth) >= 100 && pan * truth < 0 && std::fabs(pan) > 0.05f) ++tally.wrong;
+        if (std::fabs(truth) <= 60) { ++tally.near; if (std::fabs(pan) >= kAudiblePan) ++tally.nearLean; }
+    }
+    ++tally.runs;
+    return true;
+}
+
+static void sweepSection() {
+    const char* dirEnv = std::getenv("VIBE_SWEEP_EVENTS");
+    std::printf(" ── 7. SWEEPING a band through the native chain (the app's cue stream replayed against the audio) ──\n");
+    if (!dirEnv) { std::printf("   NOT RUN — set VIBE_SWEEP_EVENTS to the folder scripts/test_binauralSweep.ts wrote\n"); return; }
+    const std::string dir = dirEnv;
+    std::vector<std::string> files;
+    if (FILE* ls = popen(("ls '" + dir + "' 2>/dev/null").c_str(), "r")) {
+        char line[512];
+        while (std::fgets(line, sizeof line, ls)) {
+            std::string f(line); while (!f.empty() && (f.back() == '\n' || f.back() == '\r')) f.pop_back();
+            if (f.rfind("sweep_", 0) == 0 && f.find("composite") != std::string::npos && f.size() > 5 && f.substr(f.size() - 5) == ".json") files.push_back(f);
+        }
+        pclose(ls);
+    }
+    if (files.empty()) { std::printf("   NOT RUN — no composite sweeps in %s\n", dir.c_str()); return; }
+    const char* only = std::getenv("VIBE_SWEEP_ONLY_FILE");
+    SweepTally all;
+    for (const std::string& f : files) {
+        if (only && f.find(only) == std::string::npos) continue;
+        SweepTally t;
+        if (!replaySweep(dir, f, t, only != nullptr)) { std::printf("   (could not replay %s)\n", f.c_str()); continue; }
+        std::printf("   %-58s judged %4d · ≥400 Hz off: right way %3d of %3d · wrong way %2d · on tune: audible lean %d of %d\n",
+                    f.c_str(), t.judged, t.farRight, t.far, t.wrong, t.nearLean, t.near);
+        all.far += t.far; all.farRight += t.farRight; all.judged += t.judged; all.wrong += t.wrong; all.near += t.near;
+        all.nearLean += t.nearLean; all.runs += t.runs;
+    }
+    char what[240];
+    std::snprintf(what, sizeof what, "sweeping (%d runs): a voice ≥ 400 Hz off leans the right way on ≥ 60 %% of frames (%d of %d)", all.runs, all.farRight, all.far);
+    check(all.far > 0 && all.farRight >= 0.6 * all.far, what);
+    std::snprintf(what, sizeof what, "sweeping: the wrong way on ≤ 2 %% of judged frames (%d of %d)", all.wrong, all.judged);
+    check(all.judged > 0 && all.wrong <= 0.02 * all.judged, what);
+    std::snprintf(what, sizeof what, "sweeping: within ±60 Hz of a voice, an audible lean on ≤ 10 %% of frames (%d of %d)", all.nearLean, all.near);
+    check(all.near > 0 && all.nearLean <= 0.1 * all.near, what);
+}
+
 int main() {
     std::printf("SSB mistune estimator — real off-air audio\n");
     const char* rootEnv = std::getenv("VIBE_TEST_AUDIO");
@@ -658,6 +1099,16 @@ int main() {
     }
     // ★ VIBE_SSB_REAL_ONLY=steady runs §5 alone (a minute or two, not the whole calibration) — for tuning the lean.
     const char* only = std::getenv("VIBE_SSB_REAL_ONLY");
+    if (only && !std::strcmp(only, "sweep")) {
+        sweepSection();
+        std::printf("%s\n", fails ? "SSB OFFSET (REAL, SWEEP ONLY): FAILURES" : "SSB OFFSET (REAL, SWEEP ONLY): all passed");
+        return fails ? 1 : 0;
+    }
+    if (only && !std::strcmp(only, "arrival")) {
+        arrivalSection(volDir, iqDir);
+        std::printf("%s\n", fails ? "SSB OFFSET (REAL, ARRIVAL ONLY): FAILURES" : "SSB OFFSET (REAL, ARRIVAL ONLY): all passed");
+        return fails ? 1 : 0;
+    }
     if (only && !std::strcmp(only, "steady")) {
         steadySection(volDir, iqDir);
         std::printf("%s\n", fails ? "SSB OFFSET (REAL, STEADINESS ONLY): FAILURES" : "SSB OFFSET (REAL, STEADINESS ONLY): all passed");
@@ -802,6 +1253,8 @@ int main() {
     }
 
     steadySection(volDir, iqDir);
+    arrivalSection(volDir, iqDir);
+    sweepSection();
 
     // ── summary ──
     std::printf(" ── summary ──\n");

@@ -1193,6 +1193,116 @@ int main() {
         }
     }
 
+    std::printf(" ── 12. ARRIVING off tune, and sweeping (Stuart on 482: \"no panning effect at all … at all levels of off tune\") ──\n");
+    {
+        // ★ The SSB curve: audible from ~150 Hz, half at 500, full at 1 kHz (binauralPanForSsb).
+        const float p100 = binauralPanForSsb(100, kSsbDead, 1000), p150 = binauralPanForSsb(150, kSsbDead, 1000),
+                    p200 = binauralPanForSsb(200, kSsbDead, 1000), p500 = binauralPanForSsb(500, kSsbDead, 1000),
+                    p1k = binauralPanForSsb(1000, kSsbDead, 1000), old200 = binauralPanFor(200, kSsbDead, 1000);
+        std::printf("      SSB curve: 100 Hz %.3f · 150 %.3f · 200 %.3f (the plain curve: %.3f) · 500 %.3f · 1000 %.3f\n", p100, p150, p200, old200, p500, p1k);
+        bool mono = true; float prev = 0;
+        for (int h = 0; h <= 1200; ++h) { const float q = binauralPanForSsb((float)h, kSsbDead, 1000); if (q < prev) mono = false; prev = q; }
+        check(binauralPanForSsb(50, kSsbDead, 1000) == 0 && binauralPanForSsb(-40, kSsbDead, 1000) == 0 && mono
+              && binauralPanForSsb(-300, kSsbDead, 1000) < 0, "SSB curve: dead inside ±50 Hz, monotonic, signed");
+        check(p150 >= 0.18f && p200 >= 0.25f && p200 > 3 * old200 && std::fabs(p500 - 0.5f) < 0.06f && p1k == 1.0f,
+              "SSB curve: audible from ~150 Hz (≥ 18 %), ≥ 25 % at 200 Hz, about half at 500, full at 1 kHz");
+    }
+    {
+        // ★ ARRIVING COLD 300 Hz below a voice (USB, signal ABOVE → lean right): the estimator alone, no cue, no dial move.
+        const double dial = 7100000;
+        BinauralTuning bt(false);
+        bt.setEnabled(true);
+        bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 1000);
+        bt.setSpread(BinauralSpread::Usb, 50, 2700);
+        bt.setDial(dial);
+        const auto x = voice(fs, 30, 300, 25, 71);
+        const int pkt = (int)fs / 50;
+        std::vector<float> l(pkt), r(pkt);
+        double tFirst = -1, tHalf = -1, tAud = -1; float final = 0, maxWrong = 0;
+        for (size_t i = 0; i + pkt <= x.size(); i += pkt) {
+            for (int k = 0; k < pkt; ++k) l[k] = r[k] = x[i + k];
+            bt.processPlanar(l.data(), r.data(), pkt, (int)fs);
+            if ((i / pkt) % 2 == 1) bt.pumpSsbForTest();
+            float st[12]; bt.stats(st, 12);
+            const double t = (double)(i + pkt) / fs;
+            if (st[4] < 0) maxWrong = std::max(maxWrong, -st[4]);
+            if (tFirst < 0 && st[4] > 0.02f) tFirst = t;
+            if (tAud < 0 && st[4] >= 0.15f) tAud = t;
+            final = st[4];
+        }
+        // the fade: from the first sign of a lean to half of where it settles
+        {
+            BinauralTuning b2(false);
+            b2.setEnabled(true); b2.setSource(BinauralTuning::SsbUsb, kSsbDead, 1000); b2.setDial(dial);
+            for (size_t i = 0; i + pkt <= x.size(); i += pkt) {
+                for (int k = 0; k < pkt; ++k) l[k] = r[k] = x[i + k];
+                b2.processPlanar(l.data(), r.data(), pkt, (int)fs);
+                if ((i / pkt) % 2 == 1) b2.pumpSsbForTest();
+                float st[12]; b2.stats(st, 12);
+                if (tFirst > 0 && tHalf < 0 && st[4] >= 0.5f * final) tHalf = (double)(i + pkt) / fs;
+            }
+        }
+        std::printf("      cold, +300 Hz: first lean %.2f s, audible (≥ 0.15) %.2f s, half of its final %.3f at %.2f s, wrong way max %.3f\n",
+                    tFirst, tAud, final, tHalf, maxWrong);
+        check(tAud > 0 && tAud <= 8 && final > 0.25f && maxWrong < 0.02f, "arriving 300 Hz off a voice nothing has locked: audibly leaning the right way within 8 s");
+        check(tHalf - tFirst >= 0.3, "the arrival lean FADES IN (≥ 0.3 s to half of it) — a first estimate, never a jump");
+        // on tune, cold: never a lean
+        BinauralTuning b3(false);
+        b3.setEnabled(true); b3.setSource(BinauralTuning::SsbUsb, kSsbDead, 1000); b3.setDial(dial);
+        const auto y = voice(fs, 30, 0, 25, 72);
+        float mx = 0;
+        for (size_t i = 0; i + pkt <= y.size(); i += pkt) {
+            for (int k = 0; k < pkt; ++k) l[k] = r[k] = y[i + k];
+            b3.processPlanar(l.data(), r.data(), pkt, (int)fs);
+            if ((i / pkt) % 2 == 1) b3.pumpSsbForTest();
+            float st[12]; b3.stats(st, 12); mx = std::max(mx, std::fabs(st[4]));
+        }
+        std::printf("      cold, on tune: max |pan| %.3f over 30 s\n", mx);
+        check(mx <= 0.02f, "arriving ON tune: no lean at all");
+    }
+    {
+        // ★ The cue's own error is taken off its lean (kCoarseShrinkHz): a 200 Hz cue may be a voice on tune.
+        BinauralTuning bt(false);
+        bt.setEnabled(true); bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 1000); bt.setDial(7100000);
+        bt.setSsbHint(7100200, true);
+        const int pkt = (int)fs / 50;
+        std::vector<float> l(pkt, 0.0f), r(pkt, 0.0f);
+        for (int i = 0; i < 100; ++i) { std::fill(l.begin(), l.end(), 0.0f); std::fill(r.begin(), r.end(), 0.0f); bt.processPlanar(l.data(), r.data(), pkt, (int)fs); if (i % 2) bt.pumpSsbForTest(); }
+        float st[12]; bt.stats(st, 12);
+        const float want = binauralPanForSsb(200 - BinauralTuning::kCoarseShrinkHz, kSsbDead, 1000);
+        std::printf("      cue +200 Hz → pan %.3f (as if %.0f Hz off: %.3f)\n", st[4], 200 - BinauralTuning::kCoarseShrinkHz, want);
+        check(std::fabs(st[4] - want) < 0.01f && st[4] < 0.1f, "a 200 Hz cue leans gently — by its size less its own error");
+    }
+    {
+        // ★★ SWEEPING: a voice A locked on tune, the knob turned 700 Hz up in 100 Hz clicks (A now reckoned 700 Hz BELOW),
+        //    and the waterfall sees a different voice B 400 Hz ABOVE the dial — the one now in the passband. The lean must
+        //    follow B (right), not point back at A (left): kReckonCueHz.
+        const double dial = 7100000;
+        BinauralTuning bt(false);
+        bt.setEnabled(true); bt.setSource(BinauralTuning::SsbUsb, kSsbDead, 1000); bt.setDial(dial);
+        feed(bt, voice(fs, 12, 0, 25, 81), (int)fs);
+        float h = 0; const bool locked = bt.ssbOffset(h);
+        for (int k = 1; k <= 7; ++k) { bt.setDial(dial + 100 * k); bt.pumpSsbForTest(); }
+        float hA = 0; bt.ssbOffset(hA);
+        bt.setSsbHint(dial + 700 + 400, true);
+        bt.pumpSsbForTest();
+        float hB = 0; const bool vB = bt.ssbOffset(hB);
+        float st[12]; bt.stats(st, 12);
+        std::printf("      A locked at %+.0f Hz → reckoned %+.0f after +700 Hz → cue for B at +400: held %+.0f (coarse %d)\n", h, hA, hB, (int)st[10]);
+        check(locked && std::fabs(hA + 700) < 80 && vB && std::fabs(hB - 400) < 1 && st[10] == 1,
+              "mid-sweep, a different voice in the passband takes the lean from the one the knob left behind");
+        // …but a cue that AGREES with the reckoned voice changes nothing (the knob's figure is exact)
+        BinauralTuning b2(false);
+        b2.setEnabled(true); b2.setSource(BinauralTuning::SsbUsb, kSsbDead, 1000); b2.setDial(dial);
+        feed(b2, voice(fs, 12, 0, 25, 82), (int)fs);
+        for (int k = 1; k <= 7; ++k) { b2.setDial(dial + 100 * k); b2.pumpSsbForTest(); }
+        float a0 = 0; b2.ssbOffset(a0);
+        b2.setSsbHint(dial - 120, true);   // A itself, seen by the waterfall 120 Hz out
+        b2.pumpSsbForTest();
+        float a1 = 0; b2.ssbOffset(a1);
+        check(std::fabs(a1 - a0) < 1, "…a cue agreeing with the voice the knob carried leaves the knob's exact figure alone");
+    }
+
     std::printf(fails ? "\nFAILED: %d\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

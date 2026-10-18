@@ -68,11 +68,26 @@
 namespace vibedsp {
 
 class SsbOffsetEstimator;
+struct SsbOffsetEstimate;
 
 /** Offset (signed Hz, + = signal ABOVE the dial → tune up → lean RIGHT) to a pan target in −1…+1.
  *  0 inside ±deadHz, then a smoothstep to ±1 at ±fullHz — eased at both ends, so neither entering the
  *  dead zone nor reaching full scale has a corner the ear can hear as a jolt. */
 float binauralPanFor(float offsetHz, float deadHz, float fullHz);
+
+/** ★★★ SSB's OWN CURVE (2026-10-18, Stuart on 482: "no panning effect at all … at all levels of off tune").
+ *  With the plain smoothstep from ±50 to ±1000 Hz a voice 100 Hz off leaned 0.8 % (0.1 dB between the ears) and one
+ *  200 Hz off 6.7 % (under 1 dB, 40 µs) — measured on the off-air clips (test-ssb-offset-real §6), NOT ONE of 144 cold
+ *  arrivals at ±100/±200 Hz ever reached an audible lean, even with the estimator reading the offset right. On AM the
+ *  same curve is fine because AM is tuned off by kHz; an SSB voice is usually a few hundred Hz out.
+ *  So SSB rises in TWO eased steps: to kSsbKneePan by the knee (200 Hz at the app's 50/1000 scale), then on to full.
+ *  It keeps Stuart's own figures from 479 — "about half … for 500 Hz, and then 1 kHz has the full pan" (52 % at 500,
+ *  100 % at 1000) — and is still "not as aggressive when slightly off tune" as build 479's 300 Hz full scale, but a
+ *  voice 150-200 Hz off now leans 22-30 % (≈ 2-3 dB and 130-180 µs between the ears — plainly to one side).
+ *  ±100 Hz: 8 %; ±300: 33 %. Signed like binauralPanFor; 0 inside ±deadHz. */
+float binauralPanForSsb(float offsetHz, float deadHz, float fullHz);
+constexpr float kSsbKneeAt = 0.158f;   ///< the knee, as a fraction of the way from the dead zone to full (→ 200 Hz)
+constexpr float kSsbKneePan = 0.30f;   ///< the lean reached at the knee
 
 /** ★ THE EFFECT. Stereo in place (planar L/R). `panTarget` is where the image should lean: + = toward the
  *  RIGHT ear (the LEFT ear is the far one). The pan is smoothed here (time constant kPanTauSec), so a target
@@ -251,6 +266,9 @@ public:
      *  too slow for a knob that is turning. Two that AGREE is the same rule SsbAutoTune uses. */
     static constexpr int   kMedianMin = 2;
     static constexpr float kAgreeHz = 40.0f;       ///< …and a MAJORITY of them (at least two) lie this close to it
+    /** A new median this close to the held answer is not a change (2026-10-18): the SSB curve leans audibly from ~100 Hz,
+     *  where FAST's few-Hz scatter between answers would otherwise wobble the pan (§5 counted 1.1 reversals a minute). */
+    static constexpr float kHoldHz = 12.0f;
     /** The estimator searches ±1200 Hz (SsbOffsetEstimator::Config::dMaxHz); beyond is not an answer.
      *  ★ Was ±300 until the two-stage estimate (2026-10-17): its coarse stage — where the voice's energy sits in the
      *    passband — tells a pitch alias from the truth, so the comb is no longer confined to ±300. */
@@ -313,7 +331,7 @@ public:
     // ★ kFastGateScale (0.8 × the SLOW gate, provisional, synthetic) is GONE (2026-10-17): FAST now carries its own
     //   gate, measured on off-air VOLMET and QSO clips (SsbOffsetEstimate::passes, test-ssb-offset-real). The high-F0
     //   rule scales THAT gate's confidence floor.
-    /** ★★ THE COARSE CUE'S OWN ERROR. The waterfall puts the carrier ~300 Hz below where the voice's band starts,
+    /** ★★ THE COARSE CUE'S OWN ERROR. The waterfall puts the carrier ~180 Hz below where the voice's band starts (was 300),
      *  but transmitters cut their low end anywhere from ~100 to ~400 Hz, so the cue is good to about ±150 Hz. A
      *  coarse answer smaller than this cannot tell "on tune" from "just off", and it never leans on its own. */
     static constexpr float kCoarseMinHz = 150.0f;
@@ -327,6 +345,37 @@ public:
     /** A beyond-reach answer the DIAL reckoned and a coarse cue within this of each other are the same voice: the
      *  knob's exact figure is kept, the cue's ±150 Hz is not allowed to replace it. */
     static constexpr float kCoarseAgreeHz = 250.0f;
+    /** ★★ A COARSE-HELD answer leans by |cue| − this (2026-10-18). Measured on the composite sweep (scripts/test_binauralSweep.ts,
+     *  real voices): the cue's 90th-percentile error is 160-240 Hz at 23-94 Hz bins, so with the SSB curve audible from
+     *  ~150 Hz an on-tune voice would otherwise lean whenever the cue erred by 150. Shrunk, a cue must say ≥ 250 Hz to
+     *  lean audibly (≥ 22 %) — on-tune frames that do: 0-9 %. A voice far off still leans nearly fully (1 kHz → 93 %). */
+    static constexpr float kCoarseShrinkHz = 100.0f;
+    /** ★★ THE KNOB HAS CARRIED A VOICE THIS FAR WITHOUT HEARING IT AGAIN (Stuart on 482: "it's not panning as I tune
+     *  through the band"). A dial-reckoned answer is exact about the voice it was measured on — but once the knob has
+     *  moved this far since the estimator last confirmed it, and the waterfall sees a DIFFERENT voice nearer the dial
+     *  (the one now in the passband), the lean follows that one instead of pointing back at the voice you left.
+     *  Within ±kSsbRangeHz this was never asked before (rule 1 of setSsbHint): on a busy band, where voices sit
+     *  2-3 kHz apart, the old voice stayed in charge while the next filled your ears. */
+    static constexpr float kReckonCueHz = 500.0f;
+
+    // ── THE FIRST LEAN ON ARRIVAL (2026-10-18) ──
+    /** ★★ A VOTE, FOR WHEN NOTHING IS HELD YET (Stuart on 482: "it's started working, but only after I've been on a
+     *  signal for a while"). Arriving off tune, the estimator's GATED answers come sparsely at first — on the off-air
+     *  clips the first two agreeing ones took a median 6-8 s and, one arrival in five, over 20 s (test-ssb-offset-real
+     *  §6). But its UNGATED answers in that time are nearly always on the right side: kVoteOf of them IN A ROW, every
+     *  one reconciled with where the voice's energy sits, over kVoteSnrDb, with at least kVoteConf of strength, all on
+     *  one side, past kVoteMinHz and within kVoteSpread of their median, give a PROVISIONAL answer (the median) until the
+     *  gated ones take over. Measured on the same clips (VOLMET + QSOs, 3 starts each, 60 s): no wrong-way lean and no
+     *  lean on tune; the 80th-percentile first answer at ±200…±500 Hz fell from ~21 s to ~12 s. (3 in a row: one wrong
+     *  way at −1000 Hz and one on-tune lean; no strength floor: one wrong way. Hence 4 and 0.2.) */
+    static constexpr int   kVoteOf = 4;
+    static constexpr float kVoteMinHz = 150.0f;
+    static constexpr float kVoteSpread = 0.5f;
+    static constexpr float kVoteConf = 0.2f;
+    static constexpr float kVoteSnrDb = 8.0f;
+    /** ★ The first lean on arrival FADES IN over this (a first estimate: visible, but gentle — never a jump). A lean the
+     *  dial or the waterfall set is not faded: turning off a locked voice still leans at once. */
+    static constexpr float kArrivalFadeSec = 1.0f;
 
     // ── WFM stereo hand-off ──
     static constexpr float kStereoOnHoldSec = 0.8f;   ///< stereo must hold this long before the aid fades out
@@ -402,6 +451,7 @@ private:
     void coarseStep_();
     void release_();                  // drop the held SSB answer (worker)
     void leanUpdate_(bool firm);      // the SSB lean's hysteresis (worker): firm = the dial or the cue set this answer
+    void vote_(const SsbOffsetEstimate& e, int sb, float hiF0);   // the provisional first answer (kVoteOf)
 
     BinauralSpatialiser fx_;
     std::atomic<bool> enabled_{false}, resetFx_{false};
@@ -448,6 +498,10 @@ private:
     bool lowVoiceHeld_ = false;       ///< the held answer was established with a voice at or under kHighF0Hz (worker)
     bool lean_ = false;               ///< the SSB lean's hysteresis state (worker): see kSsbEnterHz
     std::atomic<bool> leanPub_{false};///< …published for the audio thread
+    std::atomic<bool> softPub_{false};///< the lean began from an estimate, not the dial or the cue: fade it in
+    float arrW_ = 1;                  ///< audio thread: the arrival fade's weight (kArrivalFadeSec)
+    std::vector<float> votes_;        ///< worker: the last ungated-but-qualifying answers, in a row (kVoteOf)
+    double movedSinceMeasure_ = 0;    ///< worker: how far the dial has carried the held answer since it was measured
     double lastAccept_ = 0;
     std::vector<float> chunk_;
     std::atomic<int> estimates_{0}, accepted_{0};
