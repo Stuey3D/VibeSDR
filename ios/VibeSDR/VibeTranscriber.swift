@@ -89,11 +89,23 @@ import SwiftUI
               let conv = AVAudioConverter(from: inFmt, to: Self.fmt16),
               let out = AVAudioPCMBuffer(pcmFormat: Self.fmt16, frameCapacity: AVAudioFrameCount(Double(n) * 16000 / rate + 64))
         else { return }
+        /* ★ STEREO → ONE EAR, NEVER A MIX. A stereo stretch of the buffer is binaural (or WFM stereo). Binaural gives the
+         *   far ear up to 0.6 ms of delay, so L+R would comb-filter the voice (notches every ~1.7 kHz) — exactly what the
+         *   recogniser must not hear. Each ear alone is clean: the far one is only quieter and duller. So take the LOUDER
+         *   ear — the near one, the brighter copy — chosen once over the whole prime, so it never hops between ears
+         *   mid-word. WFM stereo loses nothing that matters for telling languages apart (speech sits in the middle). */
+        var eL: Double = 0, eR: Double = 0
+        for c in chunks where c.channels == 2 {
+          c.samples.withUnsafeBufferPointer { sp in
+            for i in 0..<c.frames { let l = Double(sp[i * 2]), r = Double(sp[i * 2 + 1]); eL += l * l; eR += r * r }
+          }
+        }
+        let ear = eR > eL ? 1 : 0
         let d = inBuf.floatChannelData![0]
         var o = 0
         for c in chunks {
           c.samples.withUnsafeBufferPointer { sp in
-            if c.channels == 2 { for i in 0..<c.frames { d[o + i] = (Float(sp[i * 2]) + Float(sp[i * 2 + 1])) / 65536 } }
+            if c.channels == 2 { for i in 0..<c.frames { d[o + i] = Float(sp[i * 2 + ear]) / 32768 } }
             else { for i in 0..<c.frames { d[o + i] = Float(sp[i]) / 32768 } }
           }
           o += c.frames
