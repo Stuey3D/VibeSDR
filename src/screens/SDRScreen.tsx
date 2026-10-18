@@ -130,7 +130,7 @@ import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import FkaSplash from '../components/FkaSplash';
 import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus } from '../components/PanelNav';
-import { useScreenHighlight } from '../components/ScreenNav';
+import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
 import { addKeyListener, SCREEN_PRIORITY, keyDirOf } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
@@ -11456,7 +11456,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Restore chevron when controls are hidden (full-screen waterfall) */}
       {controlsHidden && (
-        <TouchableOpacity
+        <TouchableOpacity ref={screenNavRef('restoreControls', () => setControlsHidden(false))}
           style={[styles.restoreBtn, { bottom: bottomInset + 10 }]}
           onPress={() => setControlsHidden(false)} activeOpacity={0.8} hitSlop={12}>
           <Text style={styles.restoreBtnText}>▲</Text>

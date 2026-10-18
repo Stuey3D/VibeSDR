@@ -13,7 +13,7 @@
  *   portrait/landscape pair is ever mounted, so one id serves both — the Coachmark registry's rule.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View } from 'react-native';
+import { Dimensions, View } from 'react-native';
 import { pickNext, type Box, type Dir } from '../utils/gamepadNav';
 
 const nodes = new Map<string, any>();
@@ -36,7 +36,11 @@ function measure(node: any): Promise<Box | null> {
     node.measureInWindow((x: number, y: number, w: number, h: number) => {
       if (done) return;
       done = true; clearTimeout(t);
-      resolve(w > 2 && h > 2 ? { x, y, w, h } : null);
+      // ★ Only what is ON SCREEN: hidden controls slide away rather than unmount, and a highlight on something you
+      //   cannot see is worse than none.
+      const W = Dimensions.get('window');
+      const onScreen = x + w > 0 && y + h > 0 && x < W.width && y < W.height;
+      resolve(w > 2 && h > 2 && onScreen ? { x, y, w, h } : null);
     });
   });
 }
