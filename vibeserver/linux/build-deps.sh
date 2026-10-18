@@ -130,9 +130,13 @@ git -C "$WORK/rtl" checkout -q FETCH_HEAD
 # ★ libusb BY PATH, pkg-config disabled — the same arrangement as the Mac build, so it cannot resolve
 #   to a system libusb. DETACH_KERNEL_DRIVER as the shipped .so had it (a dongle the DVB driver holds).
 CC_ONLY="${CC%% *}"   # cmake wants the compiler alone; the cross profiles' flags come from the toolchain file
+# ★★ CMAKE_C_FLAGS ONLY WHEN THERE ARE ARCH FLAGS. Given on the command line it REPLACES the toolchain
+#    file's CMAKE_C_FLAGS_INIT — for ARMv6 that is the --target/--sysroot line, and without it clang
+#    compiled for the aarch64 host (found on the first ARMv6 run). -O2 reaches CMake through $CFLAGS,
+#    which it folds in AHEAD of the init flags; armhf's ARCHFLAGS repeat the toolchain's -marm.
 cmake -S "$WORK/rtl" -B "$WORK/rtl/b" -DCMAKE_BUILD_TYPE=Release "${CMAKE_TC[@]}" \
       $([ "$PROFILE" = native ] && echo "-DCMAKE_C_COMPILER=$CC_ONLY") \
-      -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON \
+      ${ARCHFLAGS:+-DCMAKE_C_FLAGS="$ARCHFLAGS"} -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON \
       -DLIBUSB_INCLUDE_DIRS="$PREFIX/include/libusb-1.0" -DLIBUSB_LIBRARIES="$PREFIX/lib/libusb-1.0.a" \
       -DDETACH_KERNEL_DRIVER=ON >"$WORK/rtl.log" 2>&1 \
   && cmake --build "$WORK/rtl/b" --target rtlsdr_static -j"$JOBS" >>"$WORK/rtl.log" 2>&1 \
