@@ -190,7 +190,13 @@ try {
   ok(afterBs.length === typed.length - 1 && await p.js(`document.activeElement?.id === "freqInput"`), "Backspace deletes a character in the field (it is not back there)");
   await p.js(`document.getElementById("freqInput").value = "${before}"; 1`);
   await p.key("Escape");
-  ok(await p.until(`document.activeElement?.id !== "freqInput" && !document.querySelector(".open")`, 3000), "Escape leaves the field and closes its panel");
+  ok(await p.until(`document.activeElement?.id !== "freqInput"`, 3000) && await p.js(`!!document.querySelector(".open")`),
+     "Escape leaves the field (the panel stays — one layer at a time)");
+  await p.key("s");
+  ok(await p.js(`(() => { const o = [...document.querySelectorAll(".open")]; const h = document.querySelector(".gpFocus"); return !!h && o.some(x => x.contains(h)); })()`),
+     "…and S then moves the highlight round the open panel");
+  await p.key("Escape");
+  ok(await p.until(`!document.querySelector(".open")`, 3000), "a second Escape closes the panel");
   ok(near(await freq(p), before), "nothing tuned by the typing");
 
   ok(p.errors.length === 0, "no JavaScript errors" + (p.errors.length ? ": " + p.errors.slice(0, 2).join(" | ") : ""));

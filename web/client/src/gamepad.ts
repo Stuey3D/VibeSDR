@@ -163,9 +163,11 @@ function onKey(e: KeyboardEvent) {
   if (!a) return;
   const t = e.target;
   // ★★ TYPING IS NEVER HIJACKED: W, A, S, D, comma, full stop, minus and Backspace are characters somebody needs.
-  //    Escape is the one exception — it leaves the field and closes the panel it sits in, as it always has here.
+  //    Escape is the one exception — it LEAVES THE FIELD (one layer, like every back); the arrows then move round the
+  //    panel the field is in (the frequency card's units, the search results) and a second Escape closes it. The app
+  //    does the same.
   if (typingIn(t)) {
-    if (e.key === 'Escape') { t.blur(); back(); }
+    if (e.key === 'Escape') t.blur();
     return;
   }
   // ★ Browser key repeat already repeats a held key at the system's rate — no second repeat of our own on top.
