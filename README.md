@@ -106,7 +106,7 @@ Judge it on the feel. That's the part a screenshot can't show, and the part we c
 audio, Advanced RDS, DAB and DAB+, the decoders, an optional PIN, per-band gain ceilings and session
 limits. Several radios can sit behind one address.
 
-**Linux** (arm64, amd64, armhf and i386 — Debian 12+, Ubuntu 24.04+, Raspberry Pi OS). One line,
+**Linux** (arm64, amd64, armhf and i386 — Debian 12+, Ubuntu 22.04+, Raspberry Pi OS). One line,
 the same on every machine; run it again to upgrade:
 
 ```bash

@@ -1,11 +1,15 @@
 # VibeServer on Linux
 
 Turns an SDR into a network receiver for the VibeSDR apps and any browser.
-Runs on **Debian 12 or 13, Ubuntu 24.04 or newer, and Raspberry Pi OS** (bookworm or trixie, 32-
+Runs on **Debian 12 or 13, Ubuntu 22.04 or newer, and Raspberry Pi OS** (bookworm or trixie, 32-
 or 64-bit), and on distributions built on them. Tested on Debian 13 (trixie) on a Raspberry Pi 500
-(arm64) and Ubuntu 24.04 on an Intel i5. **Ubuntu 22.04 and Debian 11 are too old** — their
-libraries predate the ones the package is built against (on 22.04 it is `libhackrf0`, measured
-2026-10-18), and apt cannot install it there.
+(arm64) and Ubuntu 24.04 on an Intel i5; installed and started in clean Debian 12, Debian 13,
+Ubuntu 22.04 and Ubuntu 24.04 containers. **Debian 11 and Ubuntu 20.04 are too old** — the package
+needs glibc 2.35, and apt cannot install it there.
+
+★ Ubuntu 22.04 needs a package **newer than 11.0.5-1**. Earlier packages linked the distribution's `libhackrf0`
+and asked for a newer one than 22.04 has; since then every radio and codec library is built into
+VibeServer itself, so the only library the package names is the C library.
 
 ## Hardware
 
@@ -76,8 +80,11 @@ sudo apt install vibeserver
 > so `apt install vibeserver` reports no installation candidate on a machine we DO ship for.
 
 
-That is the whole installation. Every runtime dependency — libusb, librtlsdr, libopus, ncurses,
-curl, gzip — is declared by the package and fetched by apt automatically.
+That is the whole installation. Every library VibeServer uses — libusb, librtlsdr, the Airspy and
+HackRF drivers, libopus, ncurses, the C++ runtime — is **built into it**, so it does not depend on
+your distribution's versions of any of them. The package needs only the C library and three
+everyday tools (`curl`, `gzip`, `adduser`), which apt fetches if they are missing. FFmpeg, for DAB+
+audio, is a recommended package and comes along by default.
 
 ★ **The one exception is the SDRplay RSP driver**, and it is not an oversight: SDRplay distribute
 it under their own licence and we are not permitted to redistribute it, so it can never be a
@@ -248,11 +255,18 @@ You do **not** need this to run VibeServer — the package above is the supporte
 working on the code.
 
 ```bash
-sudo apt install -y build-essential cmake git pkg-config \
-                    libusb-1.0-0-dev librtlsdr-dev libopus-dev libncurses-dev
+sudo apt install -y build-essential cmake git pkg-config curl bzip2 libncurses-dev
 git clone https://github.com/Stuey3D/VibeSDR.git
 cd VibeSDR/vibeserver
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+linux/build-deps.sh "$HOME/vibe-deps"      # libusb, libopus, librtlsdr from pinned source
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBE_LINUX_DEPS="$HOME/vibe-deps"
 cmake --build build -j$(nproc)
 cd build && cpack && sudo apt install ./vibeserver_*.deb
 ```
+
+★ `build-deps.sh` builds the same pinned libraries the published package links, statically — so
+your build depends on nothing but the C library, like the real one. Leave out `-DVIBE_LINUX_DEPS`
+and CMake links your distribution's `libusb-1.0-0-dev librtlsdr-dev libopus-dev` instead (install
+those), which is fine for working on the code but makes a package tied to your distribution.
+Release packages are built in `vibeserver/linux/Dockerfile.build` (bookworm), which refuses a
+package whose `Depends:` names any library but `libc6`.

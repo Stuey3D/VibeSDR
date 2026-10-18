@@ -310,11 +310,14 @@ case "$ARCH" in
     die 4 "VibeServer is published for 64-bit PCs (amd64), 64-bit ARM (arm64), 32-bit ARM (armhf) and 32-bit PCs (i386); this system is '$ARCH'." ;;
 esac
 
-# ── Old enough? Every package needs glibc 2.35 (Debian 12, Raspberry Pi OS bookworm, Ubuntu 22.04 —
-#    though Ubuntu 22.04 then fails on libhackrf0, caught after apt update below).
+# ── Old enough? Every package needs glibc 2.35 (Debian 12, Raspberry Pi OS bookworm, Ubuntu 22.04) and,
+#    since 11.0.5's self-contained build, NOTHING else from the system but curl, gzip and adduser —
+#    every radio and codec library is linked in, so 22.04 installs (verified in clean containers,
+#    2026-10-18). Packages published before that still fail there on libhackrf0; the apt simulation
+#    below catches them.
 LIBC="$(dpkg-query -W -f='${Version}' libc6 2>/dev/null || true)"
 if [ -n "$LIBC" ] && ! dpkg --compare-versions "$LIBC" ge "$MIN_GLIBC"; then
-  die 3 "$OS_NAME is too old for VibeServer: it needs Debian 12, Ubuntu 24.04, Raspberry Pi OS 'bookworm' or newer (C library $MIN_GLIBC; this has ${LIBC%%-*}). Upgrade the system, or install a newer one, and run this again."
+  die 3 "$OS_NAME is too old for VibeServer: it needs Debian 12, Ubuntu 22.04, Raspberry Pi OS 'bookworm' or newer (C library $MIN_GLIBC; this has ${LIBC%%-*}). Upgrade the system, or install a newer one, and run this again."
 fi
 
 say "VibeServer installer — $OS_NAME, $ARCH"
@@ -446,14 +449,16 @@ fi
 
 # ── Can this release take it at all? ───────────────────────────────────────────────────────────
 # ★★ ASKED BEFORE INSTALLING, so an older release gets a sentence instead of apt's "held broken
-#    packages". The C library check above catches most; this catches the rest — measured 2026-10-18:
-#    Ubuntu 22.04 has glibc 2.35 but only libhackrf0 2021.03, and the package needs 2022.09 or newer.
+#    packages". The C library check above catches most; this catches the rest. Measured 2026-10-18:
+#    Ubuntu 22.04 has glibc 2.35 but only libhackrf0 2021.03, and packages up to 11.0.5-1 needed 2022.09
+#    or newer. The self-contained build names no library but libc6, so this should now only ever fire
+#    for an old package (or a broken apt) — kept, because a sentence beats "held broken packages".
 if [ "$DRY" != 1 ] && ! apt-get -s -q install vibeserver </dev/null >"$TMP/sim.log" 2>&1; then
   grep -E '^ *vibeserver *:|Depends:|^E:' "$TMP/sim.log" | sed 's/^ */   /' >&2 || true
   # ★ Leave the machine as it was found: a repository added by THIS run, for a package that cannot
   #   install here, is only a line for apt to fetch on every update. One that was there before stays.
   if [ "$NEW_LIST" = 1 ]; then rm -f "$LIST"; [ "$NEW_KEYRING" = 1 ] && rm -f "$KEYRING"; fi
-  die 3 "VibeServer cannot be installed on $OS_NAME: the libraries it needs are older here than the ones it was built against (above). It needs Debian 12, Ubuntu 24.04, Raspberry Pi OS 'bookworm' or newer."
+  die 3 "VibeServer cannot be installed on $OS_NAME: the libraries it needs are older here than the ones it was built against (above). It needs Debian 12, Ubuntu 22.04, Raspberry Pi OS 'bookworm' or newer."
 fi
 
 # ── Install or upgrade ─────────────────────────────────────────────────────────────────────────

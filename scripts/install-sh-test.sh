@@ -5,6 +5,8 @@
 # Modes: main (fresh, re-run, --auto-updates + unattended-upgrade --dry-run, upgrade, --no-auto-updates)
 #        manual (stale/duplicate/deb822 hand-made entries)  uuadd (u-u already on)  tooold  nosse2
 # Usage: install-sh-test.sh main|manual|uuadd|tooold|nosse2
+# ★ tooold wants a system BELOW glibc 2.35 (debian:bullseye, ubuntu:20.04). Ubuntu 22.04 was the 'too old'
+#   case only while packages linked Debian's libhackrf0; the self-contained build installs there (2026-10-18).
 set -u
 MODE="$1"
 echo 'APT::Install-Recommends "0";' > /etc/apt/apt.conf.d/99test-norecommends   # keep the test small
@@ -115,7 +117,7 @@ uuadd)
 tooold)
   bash /t/install.sh > /tmp/o 2>&1; rc=$?; tail -4 /tmp/o
   chk "refused with exit 3 (got $rc)" [ $rc = 3 ]
-  chk "plain reason given" grep -q 'needs Debian 12, Ubuntu 24.04' /tmp/o
+  chk "plain reason given" grep -q 'needs Debian 12, Ubuntu 22.04' /tmp/o
   chk "repository line and key not left behind" [ ! -e /etc/apt/sources.list.d/vibesdr.list -a ! -e /usr/share/keyrings/vibesdr.gpg ]
   ;;
 nosse2)
