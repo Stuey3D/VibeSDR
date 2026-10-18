@@ -33,6 +33,17 @@ else
 fi
 
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# ★★★ THE WEB PAGE IS A GENERATED FILE, AND A STALE ONE SHIPS SILENTLY (2026-10-18). Two controller fixes
+#     sat in web/client all day while vibe_web_page.h was still the 11.0.5 build, and 11.0.6-1 went to apt,
+#     Lite, the Mac and Android without them — every check passed, because every check tests the header.
+#     Rebuild it here and refuse if that changes anything: the page in the package must be the page in git.
+_page="$SRC_DIR/android/app/src/main/cpp/vibe_web_page.h"
+( cd "$SRC_DIR" && node scripts/build-web.mjs >/dev/null ) || { echo "!! scripts/build-web.mjs failed — not publishing"; exit 1; }
+if ! git -C "$SRC_DIR" diff --quiet -- "$_page"; then
+  echo "!! vibe_web_page.h was out of date with web/client — it has been rebuilt; review and commit it, then publish"
+  exit 1
+fi
 APT_DIR="${APT_DIR:-$HOME/VibeServer}"
 KEY_FILE="${VIBESERVER_SIGNING_KEY:-$HOME/Documents/VibeSDR-keys/vibesdr-apt-signing-key.asc}"
 DRY_RUN=""
