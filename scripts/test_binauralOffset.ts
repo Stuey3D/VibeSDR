@@ -21,7 +21,7 @@
  * Run: node --no-warnings scripts/test_binauralOffset.ts   (silent: no audio anywhere)
  */
 import {
-  binauralPlan, binauralModeOk, spectrumOffset, BinauralTracker, SsbCoarse, spreadKindFor,
+  binauralPlan, binauralModeOk, spectrumOffset, BinauralTracker, SsbCoarse, spreadKindFor, COARSE_MAX_BIN_HZ,
   BIN_SRC_SSB_USB, BIN_SRC_SSB_LSB, BIN_SRC_GIVEN, BIN_SRC_NONE, BIN_SPREAD_EDGES,
   BIN_SPREAD_OFF, BIN_SPREAD_USB, BIN_SPREAD_LSB, BIN_SPREAD_CW_UPPER, BIN_SPREAD_CW_LOWER,
 } from '../src/services/binauralOffset.ts';
@@ -153,6 +153,67 @@ console.log('── the tracker ──');
   ok(calls.filter((c) => c === 'st 1').length === 1, 'the stereo hint is sent once per change');
 }
 
+console.log('── AM through a fading broadcast (Stuart on 482, 6105 kHz: "the odd pan left to right before it settles") ──');
+/* A shortwave AM broadcast 120 Hz off the dial: its carrier and its sidebands fade INDEPENDENTLY (selective fading,
+ * Rayleigh, ~0.8 Hz), so in a deep carrier fade a sideband bin or the neighbouring station 4 kHz down stands tallest
+ * for a frame or two; the floor buzzes ±3 dB frame to frame. 60 s at 10 frames a second, the dial still. Every offset
+ * the tracker sends must be the carrier's (within 2 bins), and it must never let go into centre while the dial is still. */
+function rayleigh(n: number, rho: number): number[] {   // |complex AR(1)|, unit mean power
+  let re = 0, im = 0; const out: number[] = [];
+  const g = () => { const u = Math.max(1e-12, rnd()), v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  const k = Math.sqrt(1 - rho * rho);
+  for (let i = 0; i < n; i++) { re = rho * re + k * g() / Math.SQRT2; im = rho * im + k * g() / Math.SQRT2; out.push(Math.sqrt(re * re + im * im)); }
+  return out;
+}
+function amFrame(dial: number, carrierOff: number, cGain: number, sbGain: number, buzzDb: number): Float32Array {
+  const b = noise();
+  for (let k = 0; k < N; k++) b[k] += buzzDb;
+  const c = dial + carrierOff;
+  for (let k = 0; k < N; k++) {
+    const a = Math.abs(freqOf(k) - c);
+    if (a < 80 || a > 4500) continue;
+    const tilt = a > 500 ? -6 * Math.log2(a / 500) : 0;
+    b[k] = Math.max(b[k], -70 + 20 * Math.log10(sbGain + 1e-6) + tilt + 12 * (rnd() - 0.5));
+  }
+  line(b, c, -50 + 20 * Math.log10(cGain + 1e-6));
+  line(b, dial - 4000, -66);   // the neighbour, steady and weaker, inside the ±5 kHz passband
+  return b;
+}
+{
+  const dial = CENTRE + 3000, off = 120;
+  const frames = 600;
+  const cg = rayleigh(frames, 0.85), sg = rayleigh(frames, 0.85);
+  const sent: { hz: number; ok: boolean }[] = [];
+  const t = new BinauralTracker({ setBinauralOffset: (hz: number, v: boolean) => sent.push({ hz, ok: v }) });
+  const g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: -5000, hi: 5000 };
+  let now = 0, deep = 0, badFrames = 0;
+  for (let i = 0; i < frames; i++) {
+    now += 100;
+    if (cg[i] < 0.2) deep++;
+    const r = t.onFrame(amFrame(dial, off, cg[i], sg[i], 3 * (rnd() - 0.5) * 2), g, 'am', now);
+    if (!r.ok || Math.abs(r.hz - off) > 2 * BIN) badFrames++;
+  }
+  const after = sent.slice(1);
+  const strays = after.filter((x) => x.ok && Math.abs(x.hz - off) > 2 * BIN).length;
+  const drops = after.filter((x) => !x.ok).length;
+  ok(deep >= 10, `the fading is real: ${deep} frames with the carrier ≥ 14 dB down`);
+  ok(sent.length > 0 && sent[0].ok && Math.abs(sent[0].hz - off) < 2 * BIN, `the carrier read first (${sent[0] ? sent[0].hz.toFixed(0) : '-'} Hz)`);
+  ok(strays === 0, `through the fades: no offset sent that is not the carrier's (${strays} strays of ${after.length})`);
+  ok(drops === 0, `through the fades: never let go into centre while the dial is still (${drops} drops)`);
+  ok(badFrames === 0, `every one of the ${frames} frames leans on the carrier (${badFrames} did not)`);
+  // …and a real retune is still immediate: the dial moves 500 Hz, the very next frames read the new offset
+  const n0 = sent.length;
+  const g2 = { ...g, tuneHz: dial + 500 };
+  for (let i = 0; i < 3; i++) { now += 100; t.onFrame(amFrame(dial, off, 1, 1, 0), g2, 'am', now); }
+  const last = sent.slice(n0).filter((x) => x.ok).pop();
+  ok(!!last && Math.abs(last.hz - (off - 500)) < 2 * BIN, `a retune of +500 Hz reads at once: ${last ? last.hz.toFixed(0) : '-'} Hz within 0.3 s`);
+  // …and a new station tuned to (a different carrier after a move) is taken at once too
+  const n1 = sent.length;
+  for (let i = 0; i < 3; i++) { now += 100; t.onFrame(amFrame(dial + 2000, -300, 1, 1, 0), { ...g, tuneHz: dial + 2000 }, 'am', now); }
+  const last2 = sent.slice(n1).filter((x) => x.ok).pop();
+  ok(!!last2 && Math.abs(last2.hz + 300) < 2 * BIN, `a different station after a move reads at once: ${last2 ? last2.hz.toFixed(0) : '-'} Hz`);
+}
+
 console.log('── SSB: the coarse cue from the waterfall ──');
 /** A speech-like SSB voice on one frame: the band from carrier+lowCut to carrier+2700 (mirrored for LSB), louder
  *  low down (−6 dB/octave above 500 Hz), ragged bin to bin, and silent on ~30 % of frames (syllables, breaths). */
@@ -179,7 +240,9 @@ function ssbFrame(dial: number, carrier: number, lowCut: number, lsb: boolean, n
     let r = { ok: false, carrierHz: 0, bound: false };
     for (let i = 0; i < 25; i++) r = c.onFrame(ssbFrame(dial, dial + off, cut, lsb), g, lsb);
     const got = r.carrierHz - dial;
-    ok(r.ok && Math.abs(got - off) < 150,
+    // ★ ±200 Hz: the carrier is taken COARSE_VOICE_LOW_HZ (180, measured on real voices) below the edge; a transmitter that
+    //   cuts at 350 Hz is read ~170 Hz further off than it is.
+    ok(r.ok && Math.abs(got - off) < 200,
        `${lsb ? 'LSB' : 'USB'} voice ${off > 0 ? '+' : ''}${off} Hz off (its low cut ${cut} Hz) → ${r.ok ? (got > 0 ? '+' : '') + got.toFixed(0) + ' Hz' : 'nothing'}${r.bound ? ' (bound)' : ''}`);
   }
   {
@@ -196,7 +259,7 @@ function ssbFrame(dial: number, carrier: number, lowCut: number, lsb: boolean, n
     const n = 256, g = { centerHz: CENTRE, bwHz: BW, tuneHz: dial, lo: 50, hi: 2700 };   // 187.5 Hz bins
     let any = false;
     for (let i = 0; i < 25; i++) any = c.onFrame(ssbFrame(dial, dial + 500, 300, false, n), g, false).ok || any;
-    ok(!any, 'coarse bins (187 Hz) → no reading');
+    ok(!any, `bins coarser than ${COARSE_MAX_BIN_HZ} Hz (187 Hz) → no reading`);
     const c2 = new SsbCoarse();
     let any2 = false;
     for (let i = 0; i < 40; i++) any2 = c2.onFrame(noise(), { ...g }, false).ok || any2;
@@ -221,6 +284,13 @@ function ssbFrame(dial: number, carrier: number, lowCut: number, lsb: boolean, n
     ok(hints.slice(n0).every((h) => h !== 'hint x'), 'a 3 s pause between overs: the cue is HELD');
     for (let i = 0; i < 40; i++) { now += 100; t.onFrame(noise(), g, 'usb', now); }
     ok(hints[hints.length - 1] === 'hint x', 'long silence: the cue is let go');
+    // ★ A held reading only while its voice is still in the passband (2026-10-18): tune well past it, in a pause, and
+    //   the hold lets go at once instead of leaning toward a voice no longer in your ears.
+    for (let i = 0; i < 25; i++) { now += 100; t.onFrame(ssbFrame(dial, dial + 500, 300, false), g, 'usb', now); }
+    const nHeld = hints.length;
+    now += 100; t.onFrame(noise(), { ...g, tuneHz: dial + 4000 }, 'usb', now);
+    now += 100; t.onFrame(noise(), { ...g, tuneHz: dial + 4000 }, 'usb', now);
+    ok(hints.slice(nHeld).includes('hint x'), 'the dial carried 3.5 kHz past the voice during a pause → the held cue is let go at once');
   }
 }
 

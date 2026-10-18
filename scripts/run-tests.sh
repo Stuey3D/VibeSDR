@@ -271,6 +271,11 @@ if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); el
 if node --no-warnings scripts/test_server_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 BINAURAL TUNING (binauralOffset.ts): the offset source per mode, AM/CW/FM readings with known offsets, the tracker.
 if node --no-warnings scripts/test_binauralOffset.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 BINAURAL — THE WATERFALL CUE ON A SWEEP (2026-10-18, Stuart on 482: "it's not panning as I tune through the
+#     band"): the real tracker over spectra from real voices, the dial clicking 100/500 Hz. NOT RUN (exit 3) without
+#     VIBE_TEST_AUDIO (the I/Q is not in the repo). ~2 minutes (it builds a composite band from the recordings).
+node --no-warnings --max-old-space-size=4000 scripts/test_binauralSweep.ts; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 TRANSCRIBE AUTO ORDER (transcribeOrder.ts): EiBi, the SDR's local language's reserved lane, the ★ list, the ⚠.
 if node --no-warnings scripts/test_transcribeOrder.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ OWRX S-METER CALIBRATION (owrxSmeterCal.ts): the wire level is not dBm — owner's plugin figures, else noise at S2.

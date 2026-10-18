@@ -14,7 +14,9 @@
  *                   ★★ PLUS A COARSE CUE FROM HERE (SsbCoarse): the estimator reaches ±300 Hz, so arriving 500 Hz
  *                   off a voice it never locked gave no lean at all (Stuart, 2026-10-17: "if i am tuning up and end
  *                   up 500Hz below it wont trigger?"). The waterfall shows where the voice's band STARTS, a few kHz
- *                   either way, and the carrier is ~300 Hz below that start (above it on LSB) — good to ±~150 Hz.
+ *                   either way, and the carrier is ~180 Hz below that start (above it on LSB) — good to ±~150-200 Hz.
+ *                   ★ Since 2026-10-18 it finds the transmitter's FILTER EDGE (SsbCoarse.onFrame), measured on real
+ *                   voices swept at 100/500 Hz clicks (scripts/test_binauralSweep.ts).
  *                   Native uses it only where its own answer is missing or out of reach (BinauralTuning::setSsbHint).
  *    • AM / SAM   — HERE, the carrier: the strongest bin in the passband, against the DIAL.
  *    • CW         — HERE, the CW signal's peak in the spectrum, against the PASSBAND CENTRE.
@@ -236,15 +238,37 @@ export function spectrumOffset(bins: ArrayLike<number>, g: SpecGeom, kind: Binau
 
 // ── SSB: the coarse cue from the waterfall ─────────────────────────────────────────────────────────
 
-/** Bins coarser than this cannot place a voice's edge well enough to be worth a lean: leave it to the estimator. */
+/** Bins coarser than this cannot place a voice's edge well enough to be worth a lean: leave it to the estimator.
+ *  ★ MEASURED 2026-10-18 on the composite sweep (scripts/test_binauralSweep.ts, real voices): at 23-94 Hz bins the cue
+ *  points the right way on 99-100 % of frames; at 188 Hz still 97-100 %, but it then reads an ON-TUNE voice as 250+ Hz
+ *  off on a fifth to most of the on-tune frames (it cannot tell on tune from a bin or two off), and holding back the near
+ *  readings cost half its coverage. So it stays 100: a phone view wider than ~100 kHz (1024 bins) gives no cue — zoom
+ *  in to sweep a band with the lean. */
 export const COARSE_MAX_BIN_HZ = 100;
-/** ★ Where the voice's band starts, above the suppressed carrier. Transmit filters cut their low end at ~100-400 Hz;
- *  300 Hz is the common figure (the usual 300-2700 Hz SSB filter), and the spread either side is the cue's error. */
-export const COARSE_VOICE_LOW_HZ = 300;
+/** ★ Where the voice's band starts, above the suppressed carrier. Transmit filters cut their low end at ~100-400 Hz.
+ *  ★ 180, not the textbook 300 (2026-10-18): measured on real voices (the composite sweep), 300 put the carrier 120-160 Hz
+ *  too far from the voice on every zoom — the edge found 6 dB over the floor sits on the filter's skirt, and many
+ *  transmitters cut lower than 300. At 180 the median error is within ±40 Hz. A contest-style 400 Hz cut reads ~220 Hz
+ *  too far off; native takes kCoarseShrinkHz off every cue's lean for that reason (binaural.h). */
+export const COARSE_VOICE_LOW_HZ = 180;
 /** The window: the passband, plus this either side — enough to see the start of a voice the dial is well off. */
 export const COARSE_MARGIN_HZ = 3000;
+/** A voice must fill at least this much of the passband to be the one you are hearing (a reading, or a held one). */
+export const COARSE_MIN_OVERLAP_HZ = 300;
 /** A voice's averaged band stands this far over the floor (dB). */
 export const COARSE_OVER_DB = 6;
+/** The carrier side of a voice's edge is quiet — no more than this over the floor (dB)… */
+export const COARSE_QUIET_DB = 3;
+/** …for this far (Hz): below the transmitter's filter there is nothing… */
+export const COARSE_QUIET_HZ = 150;
+/** …once past the filter's own skirt, up to this wide (Hz). */
+export const COARSE_SKIRT_HZ = 80;
+/** Just inside the edge (this many Hz) the voice's low audio reaches… */
+export const COARSE_TOP_HZ = 600;
+/** …this far over the floor (dB)… */
+export const COARSE_TOP_DB = 9;
+/** …and is no more than this below anything further into the voice (dB). */
+export const COARSE_TOP_MARGIN_DB = 3;
 /** Time-averaging per frame (~10 frames/s → about a second). */
 export const COARSE_ALPHA = 0.1;
 /** Frames a cell must have averaged before it counts. */
@@ -317,42 +341,69 @@ export class SsbCoarse {
     for (let i = 0; i < cells; i++) if (this.cnt[i] >= COARSE_MIN_FRAMES) ripe.push(this.pow[i]);
     if (ripe.length < cells / 2) return none;
     ripe.sort((a, b) => a - b);
-    const floor = ripe[Math.floor(ripe.length / 5)];
+    const floor = ripe[Math.floor(ripe.length / 10)];
     if (!(floor > 0)) return none;
-    const thr = floor * Math.pow(10, COARSE_OVER_DB / 10);
-    const on = (i: number) => this.cnt[i] >= COARSE_MIN_FRAMES && this.pow[i] > thr;
-    // Runs of occupied cells, bridging gaps of up to 150 Hz (a weak formant valley, a quiet harmonic).
-    const gap = Math.max(1, Math.round(150 / grid));
-    const pbLo = g.tuneHz + lo, pbHi = g.tuneHz + hi;
-    let best = -1, bestA = 0, bestZ = 0, i = 0;
-    while (i < cells) {
-      if (!on(i)) { i++; continue; }
-      const a = i;
-      let z = i, j = i + 1;
-      while (j < cells && j - z <= gap + 1) { if (on(j)) z = j; j++; }
-      i = z + 1;
-      const fa = start + (a - 0.5) * grid, fz = start + (z + 0.5) * grid;
-      const width = fz - fa;
-      const overlap = Math.min(fz, pbHi) - Math.max(fa, pbLo);
-      if (width < 500 || width > 4000 || overlap < 300) continue;
-      if (overlap > best) { best = overlap; bestA = a; bestZ = z; }
+    /* ★★★ FIND THE CARRIER-SIDE EDGE ITSELF, not runs over a threshold (2026-10-18, the sweep test on real voices).
+     *  Averaged over a second, real speech is RAGGED: one voice's band breaks into pieces 300-500 Hz apart (between
+     *  formants, between words), and the old rule — the longest run over the floor, bridging only 150 Hz gaps — took a
+     *  piece from the middle of the voice for its edge: on the off-air 40 m sweep the cue pointed the wrong way on ~20 %
+     *  of frames, and its 90th-percentile error was ~700 Hz even with the voices laid out cleanly.
+     *  What does not break up is the TRANSMITTER'S FILTER: below the carrier side of a voice there is nothing, and the
+     *  voice's strongest energy (its low audio, 200-1000 Hz) sits right against that edge. So an edge is believed where:
+     *    A. a cell COARSE_OVER_DB over the floor has quiet (≤ COARSE_QUIET_DB) for COARSE_QUIET_HZ on its carrier side;
+     *    B. the COARSE_TOP_HZ just inside it reach COARSE_TOP_DB — the voice's low audio is there…
+     *    C. …and are no more than COARSE_TOP_MARGIN_DB below anything further into the voice (a piece from the middle
+     *       of a voice has its loudest part further in, toward the low audio it is cut off from);
+     *    D. the band it opens holds at least 500 Hz over COARSE_OVER_DB (a lone carrier or a CW signal does not).
+     *  The voice chosen is the one whose band fills the passband most — the one you are hearing. Worked in "voice
+     *  space": an LSB row is mirrored so a voice always lies above its edge. */
+    const dbOver = (i: number) => (this.cnt[i] >= COARSE_MIN_FRAMES ? 10 * Math.log10(Math.max(this.pow[i], 1e-30) / floor) : NaN);
+    const at = (j: number) => dbOver(lsb ? cells - 1 - j : j);            // voice space → the cell
+    const kq = Math.max(1, Math.round(COARSE_QUIET_HZ / grid));
+    const kTop = Math.max(1, Math.round(COARSE_TOP_HZ / grid));
+    const kVoice = Math.max(kTop + 1, Math.round(2700 / grid));
+    let best = -1, bestCarrier = 0;
+    const ks = Math.round(COARSE_SKIRT_HZ / grid);
+    for (let e = kq + ks; e < cells; e++) {
+      const de = at(e);
+      if (!(de >= COARSE_OVER_DB) || at(e - 1) >= COARSE_OVER_DB) continue;   // the first loud cell of a step
+      // A: quiet on the carrier side, past the filter's own skirt — on average (a fine bin's own noise is ±2-3 dB)
+      let qs = 0, qn = 0, qmax = -Infinity;
+      for (let j = e - ks - kq; j < e - ks; j++) { const d = at(j); if (!Number.isFinite(d)) { qn = -1; break; } qs += d; qn++; qmax = Math.max(qmax, d); }
+      if (qn <= 0 || qs / qn > COARSE_QUIET_DB || qmax >= COARSE_OVER_DB) continue;
+      let top = -Infinity, rest = -Infinity, cover = 0;
+      for (let j = e; j < Math.min(cells, e + kVoice); j++) {
+        const d = at(j);
+        if (!Number.isFinite(d)) continue;
+        if (j < e + kTop) top = Math.max(top, d); else rest = Math.max(rest, d);
+        if (d >= COARSE_OVER_DB) cover++;
+      }
+      if (!(top >= COARSE_TOP_DB) || top < rest - COARSE_TOP_MARGIN_DB || cover * grid < 500) continue;   // B, C, D
+      // The edge: where the step crosses COARSE_OVER_DB, between the quiet cell and the loud one (linear in dB).
+      const dq = at(e - 1);
+      const t = de > dq ? (de - COARSE_OVER_DB) / (de - dq) : 0.5;            // 0 = at the loud cell, 1 = at the quiet one
+      const iIn = lsb ? cells - 1 - e : e, iOut = lsb ? cells - e : e - 1;
+      const edgeHz = start + (iIn + (iOut - iIn) * Math.max(0, Math.min(1, t))) * grid;
+      // ★ A coarse bin averages the step across its width, so the crossing reads up to half a bin outside the true edge
+      //   (measured: the cue's median error grew from ~−60 Hz at 23-47 Hz bins to −150…−270 Hz at 188 Hz). Half of that
+      //   is given back — never more: an overstated cue is the one that could lean an on-tune voice.
+      const binComp = 0.5 * Math.max(0, grid - 50);
+      const carrier = lsb ? edgeHz + COARSE_VOICE_LOW_HZ - binComp : edgeHz - COARSE_VOICE_LOW_HZ + binComp;
+      const ov = coarseVoiceOverlap(carrier, lsb, g);
+      if (ov >= COARSE_MIN_OVERLAP_HZ && ov > best) { best = ov; bestCarrier = carrier; }
     }
     if (best < 0) return none;
-    const db = (x: number) => 10 * Math.log10(Math.max(x, 1e-30));
-    const tDb = db(thr);
-    // The carrier-side edge, between the last cell under the threshold and the first over it (linear in dB).
-    const edgeAt = (inside: number, outside: number) => {
-      const di = db(this.pow[inside]), dout = db(this.pow[outside]);
-      const t = di > dout ? (di - tDb) / (di - dout) : 0.5;
-      return start + (inside + (outside - inside) * Math.max(0, Math.min(1, t))) * grid;
-    };
-    if (!lsb) {
-      if (bestA === 0) return { ok: true, carrierHz: start - COARSE_VOICE_LOW_HZ, bound: true };
-      return { ok: true, carrierHz: edgeAt(bestA, bestA - 1) - COARSE_VOICE_LOW_HZ, bound: false };
-    }
-    if (bestZ === cells - 1) return { ok: true, carrierHz: start + (cells - 1) * grid + COARSE_VOICE_LOW_HZ, bound: true };
-    return { ok: true, carrierHz: edgeAt(bestZ, bestZ + 1) + COARSE_VOICE_LOW_HZ, bound: false };
+    return { ok: true, carrierHz: bestCarrier, bound: false };
   }
+}
+
+/** How much of the passband (Hz) a voice whose suppressed carrier is `carrierHz` fills — its band taken as the usual
+ *  COARSE_VOICE_LOW_HZ…2700 Hz above the carrier (below it on LSB). */
+export function coarseVoiceOverlap(carrierHz: number, lsb: boolean, g: SpecGeom): number {
+  const vLo = lsb ? carrierHz - 2700 : carrierHz + COARSE_VOICE_LOW_HZ;
+  const vHi = lsb ? carrierHz - COARSE_VOICE_LOW_HZ : carrierHz + 2700;
+  const pLo = g.tuneHz + Math.min(g.lo, g.hi), pHi = g.tuneHz + Math.max(g.lo, g.hi);
+  return Math.min(vHi, pHi) - Math.max(vLo, pLo);
 }
 
 /** What the tracker drives — VibePowerModule's binaural methods on both platforms (optional: older natives). */
@@ -376,6 +427,17 @@ export interface BinauralSink {
 export class BinauralTracker {
   /** A spectrum reading survives this long without a fresh one: a CW space, a word gap on AM. */
   static readonly HOLD_MS = 1500;
+  /** ★ AM: a carrier reading survives this long through a fade while the DIAL IS STILL (a carrier does not wander; a
+   *  move resets it). Short of it, a deep fade of a few seconds let the lean fall to centre and swing back. */
+  static readonly AM_HOLD_MS = 8000;
+  /** A peak further than this many bins (or PEAK_JUMP_MIN_HZ) from the established carrier is a jump… */
+  static readonly PEAK_JUMP_BINS = 3;
+  static readonly PEAK_JUMP_MIN_HZ = 60;
+  /** …believed only after this many frames there in a row (~1 s): a new carrier that stays, not a fade's blip. */
+  static readonly PEAK_PERSIST = 10;
+  private peakAbs = NaN;
+  private peakCand = NaN;
+  private peakCandN = 0;
   static readonly PUSH_MS = 100;
   /** ★ A coarse SSB reading survives this long without a fresh one: the pause between overs. (The average itself
    *  fades below the threshold within a second or two of silence.) */
@@ -403,6 +465,7 @@ export class BinauralTracker {
   /** Forget everything (the setting switched off, a new connection): the next frame states it all afresh. */
   reset(): void {
     this.srcKey = ''; this.dial = NaN; this.stereo = -1; this.smooth = NaN;
+    this.peakAbs = NaN; this.peakCand = NaN; this.peakCandN = 0;
     this.lastOkAt = -Infinity; this.sentHz = NaN; this.sentOk = false; this.sentAt = -Infinity;
     this.spreadSent = -1; this.coarse.reset(); this.coarseKey = ''; this.coarseHz = NaN; this.coarseAt = -Infinity;
     this.coarseSentHz = NaN; this.coarseSentOk = false; this.coarseSentAt = -Infinity;
@@ -438,6 +501,7 @@ export class BinauralTracker {
       // The dial moved: a smoothed spectrum reading is of the OLD position — start the smoothing again.
       // (Native carries the SSB answer across the move itself.)
       if (Number.isFinite(this.dial)) this.smooth = NaN;
+      this.peakAbs = NaN; this.peakCand = NaN; this.peakCandN = 0;   // a retune: the first carrier seen is taken at once
       this.dial = g.tuneHz;
       this.sink.setBinauralDial?.(g.tuneHz);
     }
@@ -455,13 +519,35 @@ export class BinauralTracker {
     if (p.kind !== 'peak' && p.kind !== 'centroid') return { ok: false, hz: 0 };
 
     const r = spectrumOffset(bins, g, p.kind, p.refHz);
+    // ★★ AM THROUGH A FADE (2026-10-18, Stuart on 482, a fading 6105 kHz broadcast: "I get the odd pan left to right
+    //    before it settles again"). In a selective fade the CARRIER drops while its sidebands — or the station next door
+    //    — do not, and for a frame or two the tallest bin is one of those: the lean jumped to it and back. A carrier does
+    //    not move while the dial is still, so once one is ESTABLISHED a reading far from it is believed only if it holds
+    //    there for PEAK_PERSIST frames (a new carrier that stays); a blip is no reading at all, and the last good one is
+    //    held (AM_HOLD_MS) through the fade. A retune clears all of it (the move resets below), so tuning stays immediate.
+    if (r.ok && p.kind === 'peak') {
+      const abs = g.tuneHz + p.refHz + r.hz;
+      const jump = Math.max(BinauralTracker.PEAK_JUMP_BINS * binHz, BinauralTracker.PEAK_JUMP_MIN_HZ);
+      if (!Number.isFinite(this.peakAbs) || Math.abs(abs - this.peakAbs) <= jump) {
+        this.peakAbs = abs; this.peakCandN = 0;
+      } else {
+        if (Number.isFinite(this.peakCand) && Math.abs(abs - this.peakCand) <= jump) this.peakCandN++;
+        else { this.peakCand = abs; this.peakCandN = 1; }
+        if (this.peakCandN >= BinauralTracker.PEAK_PERSIST) {   // it stayed: a new carrier (no move came through)
+          this.peakAbs = abs; this.peakCandN = 0; this.smooth = NaN;
+        } else {
+          r.ok = false;                                         // a blip in a fade: not a reading
+        }
+      }
+    }
     if (r.ok) {
       // A peak is already sharp (light smoothing); a centroid wobbles with the modulation (heavier).
       const a = p.kind === 'peak' ? 0.5 : 0.25;
       this.smooth = Number.isFinite(this.smooth) ? this.smooth + a * (r.hz - this.smooth) : r.hz;
       this.lastOkAt = now;
     }
-    const ok = Number.isFinite(this.smooth) && now - this.lastOkAt <= BinauralTracker.HOLD_MS;
+    const am = /^(am|sam|amn|amw)$/.test(String(mode).toLowerCase());
+    const ok = Number.isFinite(this.smooth) && now - this.lastOkAt <= (am ? BinauralTracker.AM_HOLD_MS : BinauralTracker.HOLD_MS);
     const hz = ok ? this.smooth : 0;
     const changed = ok !== this.sentOk || (ok && !(Math.abs(hz - this.sentHz) < 1));
     if (changed && now - this.sentAt >= BinauralTracker.PUSH_MS) {
@@ -477,7 +563,11 @@ export class BinauralTracker {
     if (key !== this.coarseKey) { this.coarseKey = key; this.coarse.reset(); this.coarseHz = NaN; this.coarseAt = -Infinity; }
     const r = this.coarse.onFrame(bins, g, lsb);
     if (r.ok) { this.coarseHz = r.carrierHz; this.coarseAt = now; }
-    const ok = Number.isFinite(this.coarseHz) && now - this.coarseAt <= BinauralTracker.COARSE_HOLD_MS;
+    // ★★ A HELD reading only while its voice is still in the passband (2026-10-18, the sweep test on real voices): the
+    //    hold is for the pause between overs, not for a voice the knob has left behind — mid-sweep it kept leaning
+    //    toward a voice that was no longer in your ears, for up to COARSE_HOLD_MS after the dial had passed it.
+    const ok = Number.isFinite(this.coarseHz) && now - this.coarseAt <= BinauralTracker.COARSE_HOLD_MS
+      && (r.ok || coarseVoiceOverlap(this.coarseHz, lsb, g) >= COARSE_MIN_OVERLAP_HZ);
     const hz = ok ? this.coarseHz : 0;
     // 10 Hz is well inside the cue's own error: finer changes are not worth a bridge message.
     const changed = ok !== this.coarseSentOk || (ok && !(Math.abs(hz - this.coarseSentHz) < 10));
