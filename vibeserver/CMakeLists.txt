@@ -476,25 +476,35 @@ endif()
 # ★★★ ANDROID DOES NOT COME THROUGH HERE. It builds its own copy from
 #     cpp/libhackrf/ — a VENDORED, PATCHED libhackrf with an fd entry point, because UsbManager
 #     hands the app an already-open descriptor and forbids enumeration. See
-#     android/app/src/main/cpp/CMakeLists.txt. This block is the desktop's system/Homebrew
-#     libhackrf, which is stock and has NO hackrf_open_fd — hence VIBE_HACKRF_HAS_FD, which is
-#     set there and deliberately not here.
-# ★★★ EXCEPT A macOS RELEASE (VIBE_MAC_DEPS set): there it compiles the SAME vendored cpp/libhackrf
-#     Android does — libhackrf 2026.01.3, the exact release Homebrew gave the Mac — into the core, so
-#     it is built for the app's minimum macOS with everything else instead of arriving as a macOS 26
-#     Homebrew object. The Android patches are additive (hackrf_open_fd, a skip_configuration flag
-#     only that entry point sets) or #ifdef __ANDROID__, so the desktop open path is upstream's.
-#  ★ VIBE_HACKRF_HAS_FD stays off here all the same: the Mac enumerates, it never opens by fd.
+#     android/app/src/main/cpp/CMakeLists.txt.
+# ★★★ THE DESKTOP BUILDS THE SAME VENDORED COPY — macOS release AND Linux (2026-10-18). Stuart: no
+#     radio but SDRplay may need anything installed beside VibeServer. Linux used to link Debian's
+#     libhackrf0, and dpkg-shlibdeps copied the BUILD image's version into Depends (>= 2022.09.1)
+#     though every call we make is years older — which alone refused Ubuntu 22.04 (2021.03). Built
+#     in, the package names no HackRF library at all, like the two Airspys beside it.
+#     It is libhackrf 2026.01.3. The Android patches are additive (hackrf_open_fd, a
+#     skip_configuration flag only that entry point sets) or #ifdef __ANDROID__, so the desktop open
+#     path is upstream's.
+#  ★ VIBE_HACKRF_HAS_FD stays off here all the same: the desktop enumerates, it never opens by fd.
+#  ★ A plain macOS dev `cmake` (no VIBE_MAC_DEPS) keeps Homebrew's, as it always has.
 set(HACKRF_VENDOR "${CPP_DIR}/libhackrf")
-if(APPLE AND VIBE_MAC_DEPS AND EXISTS "${HACKRF_VENDOR}/hackrf.c")
+if(EXISTS "${HACKRF_VENDOR}/hackrf.c" AND (VIBE_MAC_DEPS OR (UNIX AND NOT APPLE)))
   message(STATUS "libhackrf: vendored at ${HACKRF_VENDOR} (HackRF support: EXPERIMENTAL)")
   target_sources(vibeserver_core PRIVATE "${HACKRF_VENDOR}/hackrf.c")
   # hackrf.c includes <libusb.h> unqualified; hackrf_source.cpp's <libhackrf/hackrf.h> resolves
   # through CPP_DIR, already a PUBLIC include of the core — so it can only see the vendored header.
-  target_include_directories(vibeserver_core PRIVATE "${VIBE_MAC_DEPS}/include/libusb-1.0")
+  if(VIBE_MAC_DEPS)
+    target_include_directories(vibeserver_core PRIVATE "${VIBE_MAC_DEPS}/include/libusb-1.0")
+  else()
+    find_path(LIBUSB_INC_HRF libusb.h PATH_SUFFIXES libusb-1.0 HINTS /usr/local/include /usr/include)
+    target_include_directories(vibeserver_core PRIVATE "${LIBUSB_INC_HRF}")
+  endif()
   target_compile_definitions(vibeserver_core PUBLIC VIBE_HAS_HACKRF)
   set(HACKRF_LIB "" CACHE FILEPATH "" FORCE)   # ★ build-app.sh reads this: nothing extra to link
   set(HACKRF_VENDORED TRUE)
+elseif(UNIX AND NOT APPLE AND VIBESERVER_STRICT_RADIOS)
+  # ★ No quiet fallback to the system library on a Linux release: that is the Depends line above.
+  message(FATAL_ERROR "Vendored libhackrf not found at ${HACKRF_VENDOR}, and VIBESERVER_STRICT_RADIOS is on.")
 else()
 find_library(HACKRF_LIB NAMES hackrf HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 find_path(HACKRF_INC libhackrf/hackrf.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
@@ -520,7 +530,6 @@ elseif(VIBESERVER_STRICT_RADIOS AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE
           "libhackrf not found, and VIBESERVER_STRICT_RADIOS is on.\n"
           "  A release build must contain every radio a release claims to contain — and the one\n"
           "  person who can test this radio cannot tell a missing driver from a broken one.\n"
-          "  Linux: install libhackrf-dev (it is in vibeserver/linux/Dockerfile.build).\n"
           "  macOS: brew install hackrf.\n"
           "  Or build with -DVIBESERVER_STRICT_RADIOS=OFF for a local build that does not need it.")
 else()
