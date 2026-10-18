@@ -6507,12 +6507,16 @@ function dabRender() {
   if (skeleton !== dabLastListHtml) {
     dabLastListHtml = skeleton;
     st.innerHTML = d.services.length
-      ? d.services.map(sv => `<div class="dabSvc" data-sid="${Number(sv.sid) || 0}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="cod"></span></div>`).join('')
+      ? d.services.map(sv => `<div class="dabSvc" role="button" tabindex="0" data-sid="${Number(sv.sid) || 0}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="cod"></span></div>`).join('')
         + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
       : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
           : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
     for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
       el.onclick = () => { dabPickedAt = performance.now(); dabPcmRunStart = 0; dabPcmRoseAt = 0; audio?.holdHealing(6000); spec?.dabService(Number(el.dataset.sid)); dabRender(); };
+    // ★ A station row is a button (role + tabindex above), so a game controller's highlight and the Tab key land on it —
+    //   they skipped the whole list (Stuart, 2026-10-18). Enter / Space pick it, as a click does.
+    for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
+      el.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } });
     if (body && listScroll) body.scrollTop = listScroll;
   }
   for (const sv of d.services) {
@@ -7232,6 +7236,9 @@ function dabUiOn() {
   /* ★ `dab` lets a narrow box give the multiplex summary its own line under the header buttons —
    *  see "#decBox.dab #decStatus" in index.html. Removed in dabUiOff. */
   document.getElementById('decBox')?.classList.add('dab');
+  /* ★ DAB: the box takes a game controller's D-pad by itself on the next press (gamepad.ts autoGrab) — the station list
+   *  IS the tuning, as in the app. A fresh token per entry, so leaving DAB and coming back offers it again. */
+  const db = document.getElementById('decBox'); if (db) db.dataset.navauto = String(Date.now());
   /* ★ And it gets the size toggle every other decoder has. Opening the box directly skips
    *  openDecoder(), which is where the button is shown — so DAB had no Big/Small (Stuart). */
   $('rdsSize').classList.add('show');
@@ -7381,6 +7388,7 @@ function dabUiOff() {
      *  either, so a listener who left DAB kept an open box headed "DAB" with no controls in it
      *  (seen on the Xcover, 2026-09-07). Give the box back the way it was found. */
     document.getElementById('decBox')?.classList.remove('open', 'dab');
+    delete document.getElementById('decBox')?.dataset.navauto;
     $('rdsSize').classList.remove('show');
     $('decClr').style.display = '';
     $('dabBm').style.display = 'none';
@@ -16243,6 +16251,9 @@ function initKeyboard() {
     tune: (d) => { if (spec) nudge(d * step); },
     zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
     back: () => {
+      // ★ The admin panel is not a .open panel (it is shown by `hidden`), so it is asked for by name; it sits above all.
+      const admin = document.getElementById('adminPanel');
+      if (admin && !admin.hidden) { closeAdmin(); return true; }
       const anyOpen = !!document.querySelector('.open');
       closePanels();
       return anyOpen;

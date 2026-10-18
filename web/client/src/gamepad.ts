@@ -15,6 +15,14 @@
  *    back"): a pad whose browser numbering is not the standard layout can report a shoulder button as START, and a
  *    tap is too easy to make by accident. The toast always says how to switch back.
  *
+ * ★★ THE DECODER BOX IS ONE PLACE, AS IN THE APP (Stuart, 2026-10-18: "move up to select it then it grabs the up down
+ *    left and right with enter and backspace to select an item or to move the controls away from the decoder back to
+ *    the main controls"). A [data-navbox] is a single stop for the highlight; enter on it hands it the D-pad (the
+ *    highlight goes to its first [data-navstart] item, a DAB station), the D-pad then moves only inside it — up/down
+ *    the list, left/right to the header's keys; with nothing selectable, up/down scroll its [data-navscroll] —
+ *    enter presses, and back gives the D-pad back with the box itself highlighted. [data-navauto] (DAB, where the box
+ *    IS the tuning) takes the D-pad by itself on the first press after it appears, once — back still releases it.
+ *    The app's DecoderPanel does exactly this (enterBox / leave / autoOwn).
  * ★ Nothing runs until a pad is connected: no polling loop, no listener work, no cost to anyone without one.
  * ★ Enter on a slider or a drop-down ADJUSTS it: D-pad left/right changes the value, enter or back finishes.
  *
@@ -39,13 +47,20 @@ const B_SOUTH = 0, B_EAST = 1, B_WEST = 2, B_NORTH = 3, B_L1 = 4, B_R1 = 5, B_ST
 const PROFILE_KEY = 'vibe.padProfile';
 const B_UP = 12, B_DOWN = 13, B_LEFT = 14, B_RIGHT = 15;
 const FOCUSABLE = 'button, input:not([type=hidden]), select, a[href], [role="button"], [tabindex]:not([tabindex="-1"])';
+const NAVBOX = '[data-navbox]';
+const BOX_SCROLL = 90;                          // px the D-pad scrolls a box with nothing selectable (the app's step)
 const REPEAT_DELAY = 380, REPEAT_EVERY = 110;
 const SWITCH_HOLD_MS = 900;                     // START held this long switches the controls
 
 let hooks: GamepadHooks | null = null;
 let running = false;
 let current: HTMLElement | null = null;
+// ★ Where the highlight last stood. A panel that redraws itself (the admin panel's tables, every 2 s) replaces the
+//   highlighted button with a new one; the next press carries on from here instead of jumping to the top.
+let lastBox: Box | null = null;
 let adjusting = false;
+let grabbed: HTMLElement | null = null;         // the [data-navbox] that has the D-pad, if any
+let autoTaken = '';                             // the data-navauto token already taken (once per appearance)
 const held = new Map<string, number>();        // action → when it next repeats (ms)
 const tuneJog = new Jog(30), zoomJog = new Jog(45);
 
@@ -57,23 +72,63 @@ function visible(el: HTMLElement): boolean {
   return cs.visibility !== 'hidden' && cs.display !== 'none' && cs.pointerEvents !== 'none';
 }
 
-/** What the highlight moves within: the START screen, else the top open panel or menu, else the whole page. */
+/** What the highlight moves within: the admin panel or the START screen, else the top open panel or menu, else the whole page. */
 function scope(): HTMLElement {
-  for (const id of ['audioGate', 'splash']) {
+  if (grabbed && !(grabbed.isConnected && visible(grabbed))) release(false);   // it closed under us
+  // ★ The admin panel first: it is drawn ABOVE the splash (where an owner most often opens it) and is shown by its
+  //   `hidden` attribute, not .open — so the pad stayed on the page underneath (Stuart, 2026-10-18: "in the admin menu
+  //   there is no way to navigate it with the controller").
+  for (const id of ['adminPanel', 'audioGate', 'splash']) {
     const el = document.getElementById(id);
     if (el && visible(el)) return el;
   }
   // ★ data-navscope: a pop-up menu that is not one of the .open panels (the step menu, the meter menu).
-  const open = [...document.querySelectorAll<HTMLElement>('.open, [data-navscope]')].filter(visible);
+  // ★ A [data-navbox] is .open but DOCKED beside the radio, not over it (the decoder box) — never a scope of its own
+  //   until enter hands it the D-pad (see the header).
+  const open = [...document.querySelectorAll<HTMLElement>('.open:not([data-navbox]), [data-navscope]')].filter(visible);
   if (open.length) {
     // The one drawn on top: highest z-index, later in the page on a tie.
     return open.reduce((a, b) => ((+getComputedStyle(b).zIndex || 0) >= (+getComputedStyle(a).zIndex || 0) ? b : a));
   }
+  // ★ A box that has the D-pad comes AFTER the panels and pop-ups: one opened from inside it (a header key's menu) or by
+  //   the mouse over it is on top, and takes the D-pad until it closes.
+  if (grabbed) return grabbed;
   return document.body;
 }
 
 function candidates(root: HTMLElement): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(visible);
+  const all = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(visible);
+  if (root === grabbed) return all;
+  // Outside a box, the box is ONE stop and what is inside it is not on the route.
+  const boxes = [...root.querySelectorAll<HTMLElement>(NAVBOX)].filter(visible);
+  return [...all.filter((el) => !boxes.some((b) => b.contains(el))), ...boxes];
+}
+
+/** Enter on a box: it takes the D-pad, the highlight goes to its first list item (else its first key). */
+function grab(b: HTMLElement) {
+  grabbed = b;
+  b.classList.add('gpGrab');
+  const list = candidates(b);
+  const start = b.dataset.navstart;
+  highlight((start && list.find((el) => el.matches(start))) || list[0] || null);
+}
+
+/** Back inside a box: the D-pad goes back to the page, the box itself highlighted. */
+function release(highlightBox = true) {
+  const b = grabbed;
+  grabbed = null;
+  b?.classList.remove('gpGrab');
+  highlight(highlightBox && b && b.isConnected && visible(b) ? b : null);
+}
+
+/** DAB: the box takes the D-pad by itself on the first press after it appears (and only then). */
+function autoGrab(): boolean {
+  const b = document.querySelector<HTMLElement>('[data-navbox][data-navauto]');
+  const token = b?.dataset.navauto || '';
+  if (!b || !token || grabbed || token === autoTaken || !visible(b) || scope() !== document.body) return false;
+  autoTaken = token;
+  grab(b);
+  return true;
 }
 
 function box(el: HTMLElement): Box { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }
@@ -82,17 +137,24 @@ function highlight(el: HTMLElement | null) {
   current?.classList.remove('gpFocus', 'gpAdjust');
   current = el;
   adjusting = false;
-  if (el) { el.classList.add('gpFocus'); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  if (el) { el.classList.add('gpFocus'); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); lastBox = box(el); }
 }
 
 function move(dir: Dir) {
+  if (autoGrab()) return;
   const root = scope();
   if (adjusting && current && (dir === 'left' || dir === 'right')) { adjust(dir === 'right' ? 1 : -1); return; }
   const list = candidates(root);
   const cur = current && root.contains(current) && visible(current) ? current : null;
-  const i = pickNext(cur ? box(cur) : null, list.map(box), dir);
+  const from = cur ? box(cur) : current && !current.isConnected ? lastBox : null;   // redrawn under the highlight
+  const i = pickNext(from, list.map(box), dir);
   if (i >= 0) highlight(list[i]);
-  else if (!cur && list.length) highlight(list[0]);
+  else if (!from && list.length) highlight(list[0]);
+  else if (root === grabbed && (dir === 'up' || dir === 'down')) {
+    // Nothing further that way inside the box: scroll it (a text decoder, spots — "nothing to select, just scroll").
+    const sc = root.querySelector<HTMLElement>('[data-navscroll]') ?? root;
+    sc.scrollTop += dir === 'down' ? BOX_SCROLL : -BOX_SCROLL;
+  }
 }
 
 function adjust(d: 1 | -1) {
@@ -108,9 +170,11 @@ function adjust(d: 1 | -1) {
 }
 
 function enter() {
+  if (autoGrab()) return;
   const root = scope();
   if (!current || !root.contains(current) || !visible(current)) { move('down'); return; }
   const el = current;
+  if (el !== grabbed && el.matches(NAVBOX)) { grab(el); return; }
   if ((el instanceof HTMLInputElement && el.type === 'range') || el instanceof HTMLSelectElement) {
     adjusting = !adjusting;
     el.classList.toggle('gpAdjust', adjusting);
@@ -134,6 +198,7 @@ function back() {
   if (adjusting && current) { adjusting = false; current.classList.remove('gpAdjust'); return; }
   const top = backStack.pop();
   if (top) { top(); highlight(null); return; }
+  if (grabbed) { release(); return; }
   if (hooks?.back()) highlight(null);
 }
 

@@ -2966,6 +2966,8 @@ select.btn { padding: 6px 8px; }
    being adjusted. */
 .gpFocus { outline: 3px solid #7cff9b !important; outline-offset: 2px; border-radius: 6px; }
 .gpFocus.gpAdjust { outline-color: #ffb833 !important; }
+/* ★ A decoder box that has the D-pad (gamepad.ts grab): a quieter ring round the box, the bright one on the item. */
+.gpGrab { outline: 2px solid rgba(124,255,155,0.45) !important; outline-offset: 2px; }
 </style>
 
 <!-- Lock-screen / Now Playing artwork — the VibeServer mark (see buildArtwork in main.ts).
@@ -3118,7 +3120,7 @@ select.btn { padding: 6px 8px; }
   <span id="vtsAnn" title="TP: traffic programmes · TA: traffic announcement now · AF: alternative frequencies listed"><svg data-a="tp" viewBox="-0.2 -0.2 22.6 14.4" aria-label="TP"><path d="M0,1.25H10M5,1.25V14M14.45,0V14M14.45,1.25H18.2Q20.95,1.25 20.95,4.4Q20.95,6.95 18.2,6.95H14.45"/></svg><svg data-a="ta" viewBox="-0.2 -0.2 22.6 14.4" aria-label="TA"><path d="M0,1.25H10M5,1.25V14M13.45,14L17.2,1.25L20.95,14M14.799999999999999,9.6H19.6"/></svg><svg data-a="af" viewBox="-0.2 -0.2 22.6 14.4" aria-label="AF"><path d="M1.25,14L5,1.25L8.75,14M2.6,9.6H7.4M14.45,0V14M14.45,1.25H22.2M14.45,7H20.2"/></svg></span>
 </div>
 
-<div id="decBox">
+<div id="decBox" data-navbox data-navstart=".dabSvc">
   <!-- ★★ The header is a horizontal scroller on a narrow box; this wrapper exists ONLY to give the
        edge arrows something to position against, so they stay put while the strip moves under
        them. Putting them inside the scroller would scroll them away — which is precisely the
@@ -3198,7 +3200,7 @@ select.btn { padding: 6px 8px; }
     <span id="decSlantVal">0.000</span>
     <button class="btn adjKey on" id="decSlantDone" title="Finish setting the slant">DONE</button>
   </div>
-  <div id="decBody">
+  <div id="decBody" data-navscroll>
     <!-- ★ DAB: one pane at a time, each getting the WHOLE box. A split would have made both
          columns narrow AND still scrolling; the toggle answers that outright. -->
     <div id="dabMux" style="display:none">
