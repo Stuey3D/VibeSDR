@@ -919,7 +919,12 @@ function radioState(r, s) {
   const claimable = r.claimable === true || (solo && s && s.claimable === true);
   const isFull = said !== null && max > 0 && said >= max && !claimable;
   const down = !!(s && s.unreachable);
+  // ★★★ HELD BY ANOTHER PROGRAM ON THAT SERVER — the server's word (inUseElsewhere), the directory's radioInUse
+  //     rule. Its listener count is 0 because nobody CAN listen, so without this it read "free", in green
+  //     (2026-10-18: the Lenovo's RSP1A, held by OpenWebRX for 17 hours).
+  const inUse = !down && (r.inUseElsewhere === true || (solo && s && s.inUseElsewhere === true));
   const text = down ? 'not responding'
+             : inUse ? 'in use by another app'
              : said === null ? ''
              : isFull ? (freeIn > 0 ? `full · free in ${mmss(freeIn)}` : 'full')
              : claimable && said >= max ? 'free · take over'
@@ -928,7 +933,7 @@ function radioState(r, s) {
   const extras = [];
   if (r.restricted && !r.locked && !(Array.isArray(r.allowedNames) && r.allowedNames.length)) extras.push('restricted range');
   if (s && Number(s.limitMin) > 0) extras.push(`${s.limitMin} minute limit`);
-  return { kind, text, cls: down ? 'unk' : isFull ? 'full' : said === null ? 'unk' : 'free', extras };
+  return { kind, text, cls: down ? 'unk' : inUse || isFull ? 'full' : said === null ? 'unk' : 'free', extras };
 }
 /** The directory's own segment rule, reduced: free beats temporary-free beats unknown beats busy. */
 function segments(items) {
