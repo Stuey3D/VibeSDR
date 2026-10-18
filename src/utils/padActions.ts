@@ -141,9 +141,10 @@ export class PadMapper {
 
     if (prof === 'sticks') {
       const tap = (k: string) => { out.push({ kind: 'down', key: k }, { kind: 'up', key: k }); };
-      const t = st.tune.feed(r.lx ?? 0, r.ly ?? 0);
+      // ★ With the time: the rate follows the stick's speed, like the drum (gamepadNav Jog) — slow to land, fast to cross.
+      const t = st.tune.feed(r.lx ?? 0, r.ly ?? 0, now);
       for (let i = 0; i < Math.abs(t); i++) tap(t > 0 ? '.' : ',');
-      const z = st.zoom.feed(r.rx ?? 0, r.ry ?? 0);
+      const z = st.zoom.feed(r.rx ?? 0, r.ry ?? 0, now);
       for (let i = 0; i < Math.abs(z); i++) tap(z > 0 ? '+' : '-');
     }
     return out;

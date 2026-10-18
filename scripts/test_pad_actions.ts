@@ -75,14 +75,18 @@ for (const [b, [bp, sp]] of Object.entries(want)) {
 // ── The jog wheels ──
 {
   const m = new PadMapper('sticks');
+  // ★ A ticking clock: 5° every 16 ms is ~310 °/s, a NORMAL turn (gamepadNav's jog follows the speed — a frozen clock
+  //   reads as an infinitely fast spin).
+  let clock = 1000;
   const ring = (stick: 'l' | 'r', fromDeg: number, toDeg: number, step = 5) => {
     const out: PadOut[] = [];
     const s = Math.sign(toDeg - fromDeg);
     for (let a = fromDeg; s > 0 ? a <= toDeg : a >= toDeg; a += s * step) {
       const x = Math.cos(a * Math.PI / 180), y = Math.sin(a * Math.PI / 180);   // y DOWN: growing angle = clockwise
-      out.push(...m.feed(stick === 'l' ? { id: 'j', sticks: true, lx: x, ly: y } : { id: 'j', sticks: true, rx: x, ry: y }, 0));
+      clock += 16;
+      out.push(...m.feed(stick === 'l' ? { id: 'j', sticks: true, lx: x, ly: y } : { id: 'j', sticks: true, rx: x, ry: y }, clock));
     }
-    m.feed({ id: 'j', sticks: true }, 0);   // back to the middle
+    m.feed({ id: 'j', sticks: true }, (clock += 16));   // back to the middle
     return keys(out);
   };
   const cw = ring('l', 0, 90);
