@@ -82,7 +82,7 @@ DEBS=""
 for A in $ARCHES; do
   IMAGE="vibeserver-build:bookworm-$A"
   echo "==> [$A] build image (linux/$A, native on $HOST)"
-  ssh "$HOST" "cd ~/vibesdr-src/vibeserver/linux && nice -n 19 docker build --platform linux/$A -q \
+  ssh "$HOST" "cd ~/$RSRC/vibeserver/linux && nice -n 19 docker build --platform linux/$A -q \
     -f Dockerfile.build -t $IMAGE . >/dev/null"
   echo "==> [$A] build + package, revision $REV"
   # ★★ `set -euo pipefail` INSIDE, and no `| tail` on the compile: a string handed to bash -c does not
