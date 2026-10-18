@@ -61,6 +61,18 @@ async function open(url) {
   await call("Page.navigate", { url });
   return { ws, js, until, tap, errors };
 }
+// START RADIO: wait for the screen, press its button (a real tap — audio needs a gesture), retry until it has gone.
+// ★ Not a fixed wait and fixed coordinates: a tap that landed before the screen existed started nothing, now and then.
+const startRadio = async (p) => {
+  await p.until(`!!document.getElementById("audioGate")`, 20000);
+  for (let i = 0; i < 6; i++) {
+    const at = await p.js(`(() => { const b = document.querySelector("#audioGate button"); if (!b) return null;
+      const r = b.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+    if (!at) break;
+    await p.tap(at[0], at[1]);
+    if (await p.until(`!document.getElementById("audioGate")`, 3000)) break;
+  }
+};
 const press = async (p, i) => { await p.js(`__btn(${i}, true); 1`); await sleep(120); await p.js(`__btn(${i}, false); 1`); await sleep(120); };
 const UP = 12, DOWN = 13, LEFT = 14, RIGHT = 15, CROSS = 0, CIRCLE = 1;
 const focusId = (p) => p.js(`(() => { const h = document.querySelector(".gpFocus"); return h ? (h.id || h.textContent.trim().slice(0, 24)) : ""; })()`);
@@ -74,7 +86,7 @@ try {
   // A single-radio server: ADMIN, the password, CONNECT (joins as admin), then SERVER ADMIN in the menu.
   await p.js(`document.getElementById("btnAdmin").click(); document.getElementById("gateAdminPw").value = "pad-admin-pass"; 1`);
   await p.js(`document.getElementById("btnConnect").click(); 1`);
-  await sleep(1500); await p.tap(596, 312);                           // START RADIO (a real tap: audio needs a gesture)
+  await startRadio(p);
   ok(await p.until(`parseFloat(document.getElementById("freqInput").value) > 0`), "the receiver is running, as admin");
   await p.js(`__connect(); 1`);
   await p.js(`document.getElementById("btnServerAdmin").click(); 1`);
