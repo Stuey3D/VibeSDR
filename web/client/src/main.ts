@@ -7232,6 +7232,9 @@ function dabUiOn() {
   /* ★ `dab` lets a narrow box give the multiplex summary its own line under the header buttons —
    *  see "#decBox.dab #decStatus" in index.html. Removed in dabUiOff. */
   document.getElementById('decBox')?.classList.add('dab');
+  /* ★ DAB: the box takes a game controller's D-pad by itself on the next press (gamepad.ts autoGrab) — the station list
+   *  IS the tuning, as in the app. A fresh token per entry, so leaving DAB and coming back offers it again. */
+  const db = document.getElementById('decBox'); if (db) db.dataset.navauto = String(Date.now());
   /* ★ And it gets the size toggle every other decoder has. Opening the box directly skips
    *  openDecoder(), which is where the button is shown — so DAB had no Big/Small (Stuart). */
   $('rdsSize').classList.add('show');
@@ -7381,6 +7384,7 @@ function dabUiOff() {
      *  either, so a listener who left DAB kept an open box headed "DAB" with no controls in it
      *  (seen on the Xcover, 2026-09-07). Give the box back the way it was found. */
     document.getElementById('decBox')?.classList.remove('open', 'dab');
+    delete document.getElementById('decBox')?.dataset.navauto;
     $('rdsSize').classList.remove('show');
     $('decClr').style.display = '';
     $('dabBm').style.display = 'none';
@@ -16226,6 +16230,9 @@ function initKeyboard() {
     tune: (d) => { if (spec) nudge(d * step); },
     zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
     back: () => {
+      // ★ The admin panel is not a .open panel (it is shown by `hidden`), so it is asked for by name; it sits above all.
+      const admin = document.getElementById('adminPanel');
+      if (admin && !admin.hidden) { closeAdmin(); return true; }
       const anyOpen = !!document.querySelector('.open');
       if (anyOpen) closePanels();
       return anyOpen;

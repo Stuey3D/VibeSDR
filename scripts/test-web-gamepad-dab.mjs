@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// test-web-gamepad-dab.mjs — a GAME CONTROLLER in DAB on the served receiver page (Stuart, 2026-10-18: "in DAB mode the
-// controller was stuck in the header of the decoder box … pressing down enters the dab list then scrolls the stations
-// for selection and when at the bottom move into the main controls pane").
+// test-web-gamepad-dab.mjs — a GAME CONTROLLER in DAB on the served receiver page, the decoder box working as it does in
+// the app (Stuart, 2026-10-18: "move up to select it then it grabs the up down left and right with enter and backspace
+// to select an item or to move the controls away from the decoder back to the main controls").
 //
 // Real server, real multiplex (the bench clip through fake-rtl-tcp --dab), a real headless MUTED browser, a simulated
 // standard pad (navigator.getGamepads replaced before the page loads — see test-web-gamepad.mjs).
-//   1. from the decoder box's header, D-pad DOWN lands on the first station;
-//   2. DOWN walks every station in order, scrolling the list to keep the highlight in view;
-//   3. DOWN from the last station leaves the box for the main controls;
-//   4. ✕ on a station picks it.
+//   1. DAB takes the D-pad by itself on the first press: the highlight is on the first station;
+//   2. DOWN walks every station in order, scrolling the list; it never leaves the box; LEFT/RIGHT reach the header keys;
+//   3. ✕ picks a station; ○ gives the D-pad back with the box itself highlighted (the box stays open);
+//   4. from the box, DOWN goes to the main controls and UP comes back to the BOX (one stop, not into the list);
+//   5. ✕ on the box takes the D-pad again; ○ releases it; it does not take it by itself a second time.
 //
 // Usage: VIBESERVER_BIN=/path/to/vibeserver node scripts/test-web-gamepad-dab.mjs   (exit 3 = not run)
 import { spawn } from "node:child_process";
@@ -70,17 +71,20 @@ async function open(url) {
 }
 const press = async (p, i) => { await p.js(`__btn(${i}, true); 1`); await sleep(120); await p.js(`__btn(${i}, false); 1`); await sleep(120); };
 const UP = 12, DOWN = 13, CROSS = 0;
-// Where the highlight is: "head" (the decoder box's header), "row:<n>" (a station, by position), "box" (elsewhere in
-// the box), "card" (the main controls), or "page".
+// Where the highlight is: "row:<n>" (a station), "head" (the box's header keys), "box" (the box itself), "inbox"
+// (elsewhere inside it), "card" (the main controls), or "page:…".
 const WHERE = `(() => {
   const h = document.querySelector(".gpFocus"); if (!h) return "none";
   const rows = [...document.querySelectorAll("#dabStations .dabSvc")];
   const i = rows.indexOf(h); if (i >= 0) return "row:" + i;
+  if (h.id === "decBox") return "box";
   if (document.getElementById("decBoxHead")?.contains(h) || document.getElementById("decHeadWrap")?.contains(h)) return "head";
-  if (document.getElementById("decBox")?.contains(h)) return "box";
+  if (document.getElementById("decBox")?.contains(h)) return "inbox";
   if (document.getElementById("mcard")?.contains(h)) return "card";
   return "page:" + (h.id || h.className || h.tagName);
 })()`;
+const grabbed = (p) => p.js(`document.getElementById("decBox").classList.contains("gpGrab")`);
+const LEFT = 14, RIGHT = 15, CIRCLE = 1;
 
 try {
   for (let i = 0; i < 60; i++) { try { await fetch(`http://127.0.0.1:${port}/vibeserver.json`); break; } catch { await sleep(250); } }
@@ -101,37 +105,51 @@ try {
      `the list overflows its box (${n} stations), so walking it must scroll`);
   await p.js(`__connect(); 1`);
 
-  // 1. Get the highlight into the decoder box's header (walk UP, bounded).
-  await press(p, UP);
-  let where = await p.js(WHERE);
-  for (let i = 0; i < 60 && where !== "head"; i++) { await press(p, UP); where = await p.js(WHERE); }
-  ok(where === "head", `D-pad UP reaches the decoder box's header (at: ${where})`);
-
-  // 2. DOWN from the header: the first station, then every station in order, scrolling as it goes.
+  // 1. DAB takes the D-pad by itself: the first press lands on the first station.
   await press(p, DOWN);
-  ok((await p.js(WHERE)) === "row:0", `DOWN from the header lands on the first station (at: ${await p.js(WHERE)})`);
+  ok((await p.js(WHERE)) === "row:0" && await grabbed(p), `DAB: the first press puts the highlight on the first station, the box has the D-pad (at: ${await p.js(WHERE)})`);
+
+  // 2. DOWN walks every station in order, scrolling; at the bottom it stays in the box.
   const visited = [0];
   for (let i = 1; i < n; i++) { await press(p, DOWN); const w = await p.js(WHERE); visited.push(w.startsWith("row:") ? +w.slice(4) : w); }
   ok(visited.every((v, i) => v === i), `DOWN walks every station in order (${visited.join(" ")})`);
   ok(await p.js(`document.getElementById("decBody").scrollTop > 0`), "…and the list scrolled to keep the highlight in view");
   ok(await p.js(`(() => { const h = document.querySelector(".gpFocus").getBoundingClientRect(), b = document.getElementById("decBody").getBoundingClientRect();
                  return h.top >= b.top - 1 && h.bottom <= b.bottom + 1; })()`), "…the last station is in view");
+  await press(p, DOWN); await press(p, DOWN);
+  ok((await p.js(WHERE)) === `row:${n - 1}` && await grabbed(p), `DOWN at the bottom stays in the box (at: ${await p.js(WHERE)})`);
+  for (let i = 0; i < 4; i++) await press(p, UP);
+  await press(p, RIGHT);
+  let w = await p.js(WHERE);
+  if (w !== "head") { for (let i = 0; i < n && w !== "head"; i++) { await press(p, UP); w = await p.js(WHERE); } }
+  ok(w === "head", `the header's keys are reachable inside the box (at: ${w})`);
+  ok(await grabbed(p), "…still inside the box");
+  for (let i = 0; i < 3; i++) await press(p, DOWN);
 
-  // 3. DOWN from the last station: out of the box, into the main controls.
-  await press(p, DOWN);
-  where = await p.js(WHERE);
-  ok(where === "card", `DOWN from the last station moves into the main controls (at: ${where})`);
-  ok(await p.js(`document.getElementById("decBox").classList.contains("open")`), "…and the DAB box stays open");
-
-  // 4. Back up into the list and pick a station with ✕.
-  await press(p, UP);
-  where = await p.js(WHERE);
-  ok(where.startsWith("row:"), `UP from the controls goes back into the station list (at: ${where})`);
-  const pick = await p.js(`(() => { const h = document.querySelector(".gpFocus"); return h.classList.contains("on") ? null : +h.dataset.sid; })()`);
-  if (pick === null) { await press(p, UP); }
+  // 3. ✕ picks a station; ○ gives the D-pad back, the box highlighted and still open.
+  w = await p.js(WHERE);
+  if (!w.startsWith("row:")) { await press(p, DOWN); w = await p.js(WHERE); }
+  if (await p.js(`document.querySelector(".gpFocus").classList.contains("on")`)) { await press(p, DOWN); }
   const sid = await p.js(`+document.querySelector(".gpFocus").dataset.sid`);
   await press(p, CROSS);
   ok(await p.until(`document.querySelector('#dabStations .dabSvc.on')?.dataset.sid === "${sid}"`, 15000), `✕ picks the highlighted station (SId ${sid.toString(16).toUpperCase()})`);
+  await press(p, CIRCLE);
+  ok((await p.js(WHERE)) === "box" && !(await grabbed(p)), `○ gives the D-pad back: the box itself is highlighted (at: ${await p.js(WHERE)})`);
+  ok(await p.js(`document.getElementById("decBox").classList.contains("open")`), "…and the DAB box stays open");
+
+  // 4. The box is one stop: DOWN to the main controls, UP back to the box (not into its list).
+  await press(p, DOWN);
+  ok((await p.js(WHERE)) === "card", `from the box, DOWN goes to the main controls (at: ${await p.js(WHERE)})`);
+  let back2 = await p.js(WHERE);
+  for (let i = 0; i < 6 && back2 !== "box"; i++) { await press(p, UP); back2 = await p.js(WHERE); }
+  ok(back2 === "box", `UP from the main controls comes back to the box, not into its list (at: ${back2})`);
+
+  // 5. ✕ on the box takes the D-pad again; ○ releases; no second automatic take.
+  await press(p, CROSS);
+  ok((await p.js(WHERE)) === "row:0" && await grabbed(p), `✕ on the box hands it the D-pad again, first station highlighted (at: ${await p.js(WHERE)})`);
+  await press(p, CIRCLE);
+  await press(p, DOWN);
+  ok((await p.js(WHERE)) === "card" && !(await grabbed(p)), `after ○, the box does not take the D-pad by itself again (at: ${await p.js(WHERE)})`);
 
   ok(p.errors.length === 0, "no JavaScript errors" + (p.errors.length ? ": " + p.errors.slice(0, 2).join(" | ") : ""));
   p.ws.close();
