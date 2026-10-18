@@ -106,7 +106,14 @@ Judge it on the feel. That's the part a screenshot can't show, and the part we c
 audio, Advanced RDS, DAB and DAB+, the decoders, an optional PIN, per-band gain ceilings and session
 limits. Several radios can sit behind one address.
 
-**Linux** (arm64, amd64, armhf and i386):
+**Linux** (arm64, amd64, armhf and i386 — Debian 12+, Ubuntu 24.04+, Raspberry Pi OS). One line,
+the same on every machine; run it again to upgrade:
+
+```bash
+curl -fsSL https://apt.vibesdr.net/install.sh | sudo bash
+```
+
+Or by hand:
 
 ```bash
 curl -fsSL https://apt.vibesdr.net/KEY.gpg \
@@ -123,7 +130,8 @@ your phone, or plug in a cable and open `http://vibeserversetup.local:48000`. It
 the admin page; a new card is only for a new box.
 
 **macOS.** A notarised menu-bar app for Apple Silicon, from
-[the releases](https://github.com/Stuey3D/VibeSDR/releases). Unzip, drag to Applications.
+[the releases](https://github.com/Stuey3D/VibeSDR/releases). Unzip, drag to Applications — or run the
+same one-liner **without** `sudo` and it downloads it, checks the signature and installs it for you.
 
 **Android.** In the app, plug in the radio and tap **Use as server**. For a box that does nothing
 else, **VibeServer Lite** is the server on its own for Android TV boxes, old phones and tablets

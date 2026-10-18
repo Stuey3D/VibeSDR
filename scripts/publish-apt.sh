@@ -28,6 +28,17 @@ REPO_URL="https://github.com/Stuey3D/VibeServer.git"
 APT_DIR="${APT_DIR:-$HOME/VibeServer}"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SIGN_KEY="packages@vibesdr.net"
+# ★★ THE INSTALLER NAMES THE KEY (2026-10-18). scripts/install.sh — published beside the page as
+#    https://apt.vibesdr.net/install.sh — refuses any KEY.gpg whose fingerprint is not the one written
+#    in it. A new signing key without a matching edit there would publish a repository that the
+#    one-liner refuses on every machine, so it is checked HERE, before a minute is spent building.
+#  ★ grep -c, never grep -q in a pipeline (pipefail + SIGPIPE turns a match into a failure).
+_keyfpr="$(gpg --with-colons --fingerprint "$SIGN_KEY" 2>/dev/null | awk -F: '$1=="fpr"{print $10; exit}')"
+if [ -z "$_keyfpr" ] || [ "$(grep -c "^KEY_FPR=\"$_keyfpr\"" "$SRC_DIR/scripts/install.sh" 2>/dev/null || true)" != 1 ]; then
+  echo "!! scripts/install.sh does not name the signing key (${_keyfpr:-not found}) — fix KEY_FPR there first" >&2
+  exit 1
+fi
+bash -n "$SRC_DIR/scripts/install.sh" || { echo "!! scripts/install.sh has a syntax error" >&2; exit 1; }
 ARCH="$(dpkg --print-architecture)"
 # ★★★ armhf IS CROSS-COMPILED (2026-09-22) — see vibeserver/linux/armhf-toolchain.cmake. The container
 #     is the Mac's native arm64 and the PACKAGE is armhf, so the architecture being published comes
@@ -425,6 +436,11 @@ ARCHVERSIONS="${ARCHVERSIONS//&/\\&}"; DEBLINES="${DEBLINES//&/\\&}"
 sed -e "s/__ARCHVERSIONS__/$ARCHVERSIONS/g" \
     "$SRC_DIR/scripts/apt-index.html" \
   | sed -e "s|__DEBLINES__|$DEBLINES|g" > "$APT_DIR/index.html"
+# ★★ THE ONE-LINE INSTALLER rides along with every publish, like the page, so
+#    `curl -fsSL https://apt.vibesdr.net/install.sh | sudo bash` is always the script in this tree —
+#    edit scripts/install.sh, never the copy in the artefact repo. (Checked against the signing key
+#    at the TOP of this script, before anything is built — see "THE INSTALLER NAMES THE KEY".)
+install -m 0644 "$SRC_DIR/scripts/install.sh" "$APT_DIR/install.sh"
 touch "$APT_DIR/.nojekyll"     # Pages would otherwise skip files starting with an underscore
 
 # ── Commit locally — the Mac does the pushing ────────────────────────────────

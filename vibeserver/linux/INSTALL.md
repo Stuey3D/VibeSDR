@@ -1,8 +1,11 @@
 # VibeServer on Linux
 
 Turns an SDR into a network receiver for the VibeSDR apps and any browser.
-Tested on **Debian 13 (trixie)** on a Raspberry Pi 500 (arm64). Should work on any
-Debian/Ubuntu/Raspberry Pi OS.
+Runs on **Debian 12 or 13, Ubuntu 24.04 or newer, and Raspberry Pi OS** (bookworm or trixie, 32-
+or 64-bit), and on distributions built on them. Tested on Debian 13 (trixie) on a Raspberry Pi 500
+(arm64) and Ubuntu 24.04 on an Intel i5. **Ubuntu 22.04 and Debian 11 are too old** — their
+libraries predate the ones the package is built against (on 22.04 it is `libhackrf0`, measured
+2026-10-18), and apt cannot install it there.
 
 ## Hardware
 
@@ -11,8 +14,8 @@ One package for every architecture — apt picks **arm64**, **amd64**, **armhf**
 
 - **Minimum confirmed hardware: Raspberry Pi 2** — quad-core ARMv7 at 0.9 GHz.
 - **RAM:** 256 MB will run it; **512 MB recommended** for headroom.
-- **32-bit ARM needs NEON** (ARMv7 or newer). ARMv6 boards — Pi Zero, Zero W, Pi 1 — are not
-  supported yet; the package refuses to install there rather than fail at runtime.
+- **32-bit ARM without NEON** — the ARMv6 Pi Zero, Zero W and Pi 1 — gets a scalar ARMv6 build
+  from the same armhf package (postinst picks it by CPU), and runs with restrictions.
 - **32-bit x86 needs SSE2** — any Pentium 4, Pentium M, Atom (the N270 netbooks included) or
   Athlon 64. A Pentium III or Athlon XP has none, and the package refuses to install there rather
   than fail at runtime. SDRplay publish no 32-bit x86 driver, so RSPs are not offered on i386.
@@ -22,6 +25,30 @@ One package for every architecture — apt picks **arm64**, **amd64**, **armhf**
 ---
 
 ## Install
+
+One line, the same on every machine:
+
+```bash
+curl -fsSL https://apt.vibesdr.net/install.sh | sudo bash
+```
+
+It works out the system and the processor, checks the signing key's fingerprint
+(`2B54962707D8119929E1FB2BFC384096D89F0AE7`) before trusting it, adds the repository as the steps
+below do (naming this machine's own architecture, as apt.vibesdr.net's copy of them does), and
+installs the right package. **Run it again at any time** — it upgrades
+VibeServer and changes nothing else, and it repairs an older or duplicated repository line rather
+than adding another. On a Mac it offers the notarised app instead (run it without `sudo` there).
+The script is `scripts/install.sh` in this repository; every apt publish copies it to the site.
+
+Options go after `bash -s --`, or as environment variables, which pass through `sudo`:
+
+| | |
+|---|---|
+| `--auto-updates` / `VIBE_AUTO_UPDATES=1` | VibeServer updates itself (unattended-upgrades, **this repository only** — see below) |
+| `--no-auto-updates` / `VIBE_AUTO_UPDATES=0` | turn that off again |
+| `--dry-run` / `VIBE_DRY_RUN=1` | say what would be done, change nothing |
+
+### Or by hand
 
 Two commands to add the repository, then one to install. **`apt install` pulls in everything
 VibeServer needs** — there is no list of libraries to chase, and nothing to build.
@@ -144,7 +171,24 @@ sudo apt update && sudo apt upgrade
 ```
 
 Your settings survive, and the service restarts on the new binary. That is all — the repository is
-the update channel, so there is nothing to download by hand and nothing to rebuild.
+the update channel, so there is nothing to download by hand and nothing to rebuild. The admin
+page's **Install updates** button does the same, and so does running the one-line installer again.
+
+### Automatic updates (opt-in)
+
+```bash
+curl -fsSL https://apt.vibesdr.net/install.sh | sudo VIBE_AUTO_UPDATES=1 bash
+```
+
+This writes one file, `/etc/apt/apt.conf.d/52vibesdr-auto-updates`, for unattended-upgrades:
+
+- **If the machine was not already updating itself**, the file limits unattended-upgrades to this
+  repository (`origin=VibeSDR,label=VibeSDR,site=apt.vibesdr.net`) and nothing else — it clears the
+  Debian/Ubuntu origin lists, so turning it on for VibeServer cannot quietly start upgrading the
+  operating system. If you later want automatic OS updates too, delete the file first.
+- **If it already was**, our origin is added to the ones it had, and nothing else changes.
+
+`--no-auto-updates` (or deleting the file) undoes it.
 
 ## Before you start: the SDRplay RSP needs one extra download
 
