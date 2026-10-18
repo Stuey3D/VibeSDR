@@ -3582,7 +3582,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    and the DAB ensemble + service. */
   const recBufSource = `${urlScope}|${radioBase ?? ''}|${dabOn && dabState ? `dab:${dabState.channel}:${dabState.sid}` : ''}`;
   const [recBufSeconds, setRecBufSeconds] = useRecordBuffer({
-    freqHz: status.frequency || 0, mode: String(status.mode || ''), source: recBufSource });
+    freqHz: status.frequency || 0, mode: String(status.mode || ''), source: recBufSource, recording: isRecording });
 
   /* ★★ ONE TAP, ONE RECORDING (Stuart on V12 482, 2026-10-17: "it took a few clicks and a false file created, it
    *    seems really delayed"). The button only changed once native had opened the file, so a slow open looked like a

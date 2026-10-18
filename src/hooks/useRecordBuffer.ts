@@ -16,7 +16,7 @@ type RecBufNative = { setRecordBuffer?: (s: number) => void; clearRecordBuffer?:
  *  ★ The native ring outlives a screen, so the first update on a new screen clears it — what the last screen
  *    left in it was another server's audio.
  */
-export function useRecordBuffer(dial: { freqHz: number; mode: string; source: string }):
+export function useRecordBuffer(dial: { freqHz: number; mode: string; source: string; recording: boolean }):
   [RecordBufferSeconds, (s: RecordBufferSeconds) => void] {
   const [seconds, setSecondsState] = useState<RecordBufferSeconds>(0);
   const anchor = useRef<RecordBufferAnchor | null>(null);
@@ -49,6 +49,19 @@ export function useRecordBuffer(dial: { freqHz: number; mode: string; source: st
       try { native?.clearRecordBuffer?.(); } catch {}
     }
   }, [seconds, freqHz, mode, source, native]);
+
+  // ★ A recording's stop starts the buffer again (Stuart, 2026-10-18): native has already emptied its ring at the
+  //   stop, so the anchor starts afresh at where the listener is now — the next recording never repeats this one.
+  const { recording } = dial;
+  const wasRecording = useRef(recording);
+  useEffect(() => {
+    if (wasRecording.current && !recording && seconds > 0) {
+      anchor.current = new RecordBufferAnchor(seconds);
+      if (freqHz > 0) anchor.current.update({ freqHz, mode, source }, Date.now());
+    }
+    wasRecording.current = recording;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recording]);
 
   // Turning it on starts afresh here: whatever happens next is the first thing in the buffer.
   useEffect(() => {

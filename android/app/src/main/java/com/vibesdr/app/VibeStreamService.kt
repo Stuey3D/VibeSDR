@@ -2399,7 +2399,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     /** Queue the end of the recording on recExec — after every buffer already handed over. */
     private fun finishRecorderAsync(promise: com.facebook.react.bridge.Promise?) {
-        synchronized(recRing) { recArmed = false }
+        // ★ The record buffer starts again at the stop (Stuart, 2026-10-18): the next recording never repeats this one.
+        synchronized(recRing) { recArmed = false; recRing.clear() }
         recRun {
             try {
                 val enc = recEncoder

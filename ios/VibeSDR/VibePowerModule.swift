@@ -1936,6 +1936,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     //   file is closed — the end of a recording is not cut off by its own stop.
     audioQ.async { [weak self] in
       guard let self else { resolve(nil); return }
+      // ★ The record buffer starts again at the stop (Stuart, 2026-10-18): the next recording never repeats this one.
+      self.recRing.clear()
       self.recWriteQ.async {
         let path = self.recPath
         self.recFile = nil  // closing the AVAudioFile finalises the .m4a

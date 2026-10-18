@@ -972,7 +972,7 @@ export default function TunerScreen({ route, navigation }: Props) {
   // ── Recording (REC + Recordings live in the AUDIO sheet — control island) ────
   // ★★ One tap, one recording — the same fix as SDRScreen's (Stuart, 2026-10-17: "a few clicks and a false file").
   // ★★ V12 RECORD BUFFER — FM-DX is one tuner on one server, always WFM: the source is the server.
-  const [recBufSeconds, setRecBufSeconds] = useRecordBuffer({ freqHz: displayFreq || 0, mode: 'wfm', source: String(baseUrl ?? '') });
+  const [recBufSeconds, setRecBufSeconds] = useRecordBuffer({ freqHz: displayFreq || 0, mode: 'wfm', source: String(baseUrl ?? ''), recording: isRecording });
   const recBusy = useRef(false);
   const toggleRecording = useCallback(() => {
     if (recBusy.current) { noteAudioEvent('REC press ignored — a start/stop is in flight'); return; }

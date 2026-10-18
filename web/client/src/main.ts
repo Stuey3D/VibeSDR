@@ -13091,6 +13091,8 @@ function initRecorder() {
     const seconds = audio.recordedSeconds;
     const blob = audio.stopRecording();
     showRecording(false);
+    // ★ The record buffer starts again at the stop (Stuart, 2026-10-18): the next recording never repeats this one.
+    audio.clearRecordBuffer(); applyRecBuf(); recBufCheck();
     if (!blob) return;
 
     // Kept, not just downloaded — a recording you can't find again isn't a feature.
