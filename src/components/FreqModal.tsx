@@ -18,6 +18,7 @@ import { type UserBookmark, bookmarkPassband } from '../services/userBookmarks';
 import { airbandEntry } from '../utils/airband';
 import { useListNav, revealIn, noteTouchInteraction, useNavFocus } from './PanelNav';
 import { addKeyListener } from '../utils/hardwareKeys';
+import { tuneCardItems, type TuneCardKey } from '../utils/freqCardNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText, windowStyle,
@@ -449,21 +450,31 @@ export default function FreqModal({
   // are their boxed key caps. The tabs and the units are places the highlight goes instead: Escape leaves the
   // frequency field (the native window lets go of the cursor), then the arrows / W A S D walk the tabs, the units and
   // the field, Enter presses, Back closes the card. Exactly the game controller's way round the web page's card.
-  const tuneItems = useMemo(() => {
-    const a: { k: string; run: () => void }[] = [];
-    if (hasBookmarks && !picking) {
-      a.push({ k: 'tab:tune', run: () => setCardMode('tune') });
-      a.push({ k: 'tab:bookmarks', run: () => { Keyboard.dismiss(); setCardMode('bookmarks'); } });
+  // ★★ A GRID IN THE ORDER IT IS DRAWN (src/utils/freqCardNav.ts — why: the field used to hide after the units, where
+  //    no arrow went). Opened from the keyboard, the highlight starts on the frequency box.
+  const hasVtsSkip = !!(onVtsPrev && onVtsNext);
+  const tuneLayout = useMemo(
+    () => tuneCardItems({ tabs: hasBookmarks && !picking, vts: hasVtsSkip, lockUnit: !!lockUnit, profiles: profiles.length > 0 }),
+    [hasBookmarks, picking, hasVtsSkip, lockUnit, profiles.length]);
+  const tuneRun = (k: TuneCardKey) => {
+    switch (k) {
+      case 'tab:tune': setCardMode('tune'); break;
+      case 'tab:bookmarks': Keyboard.dismiss(); setCardMode('bookmarks'); break;
+      case 'vts:prev': onVtsPrev?.(); break;
+      case 'vts:next': onVtsNext?.(); break;
+      case 'field': inputRef.current?.focus(); break;
+      case 'profile': setProfileToggle(n => n + 1); break;
+      default: switchUnitRef.current(k.slice(5) as Unit); break;
     }
-    for (const u of ['hz', 'khz', 'mhz'] as Unit[]) {
-      if (!lockUnit || u === 'mhz') a.push({ k: 'unit:' + u, run: () => switchUnitRef.current(u) });
-    }
-    a.push({ k: 'field', run: () => inputRef.current?.focus() });
-    if (profiles.length > 0) a.push({ k: 'profile', run: () => setProfileToggle(n => n + 1) });
-    return a;
-  }, [hasBookmarks, picking, lockUnit, profiles.length]);
+  };
+  const tuneRunRef = useRef(tuneRun); tuneRunRef.current = tuneRun;
   const [profileToggle, setProfileToggle] = useState(0);
-  const tuneNav = useListNav(visible && cardMode === 'tune', tuneItems.length, (i) => tuneItems[i]?.run());
+  const tuneNavHandle = useRef<{ setFocus(i: number): void } | null>(null);
+  const tuneNav = useListNav(visible && cardMode === 'tune', tuneLayout.items.length,
+    (i) => { const it = tuneLayout.items[i]; if (it) tuneRunRef.current(it.k); },
+    undefined, undefined, undefined,
+    { rowOf: (i) => tuneLayout.items[i]?.row ?? i, startAt: tuneLayout.start, handle: tuneNavHandle });
+  const tuneItems = tuneLayout.items;
   const tuneOn = (k: string) => tuneNav >= 0 && tuneItems[tuneNav]?.k === k;
 
   // Bookmark results: arrow through them and Enter to tune. While the search box has the
@@ -696,7 +707,8 @@ export default function FreqModal({
           <PopupWindow metalStyle={st.tuneWin}>
           {onVtsPrev && onVtsNext && (
             <View style={st.vtsRow}>
-              <TouchableOpacity style={st.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
+              <TouchableOpacity style={[st.vtsArrow, tuneOn('vts:prev') && { borderWidth: 2, borderColor: focusC.ring, borderRadius: 6 }]}
+                                onPress={onVtsPrev} hitSlop={8}>
                 <Text style={[st.vtsArrowText, st.vtsArrowLeft, { color: pt.metal ? pt.winDim : pt.ink.text }]}>►</Text>
               </TouchableOpacity>
               <View style={st.vtsInfo}>
@@ -709,7 +721,8 @@ export default function FreqModal({
                   </Text>
                 )}
               </View>
-              <TouchableOpacity style={st.vtsArrow} onPress={onVtsNext} hitSlop={8}>
+              <TouchableOpacity style={[st.vtsArrow, tuneOn('vts:next') && { borderWidth: 2, borderColor: focusC.ring, borderRadius: 6 }]}
+                                onPress={onVtsNext} hitSlop={8}>
                 <Text style={[st.vtsArrowText, { color: pt.metal ? pt.readout : pt.ink.text }]}>►</Text>
               </TouchableOpacity>
             </View>
@@ -743,6 +756,9 @@ export default function FreqModal({
                *  582). Android selects the old frequency itself, once, as the field takes focus. */
               selectTextOnFocus={!onMac && Platform.OS !== 'android'}
               onFocus={() => {
+                // ★ The highlight sits on the field while it has the cursor, however the cursor got there (a tap, or
+                //   Enter on the highlighted box) — so when Escape lets go of it, the arrows carry on from HERE.
+                if (tuneLayout.start >= 0) tuneNavHandle.current?.setFocus(tuneLayout.start);
                 if (onMac) replaceOnType.current = true;
                 else if (Platform.OS === 'android') {
                   const len = valueRef.current.length;
@@ -1208,7 +1224,8 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   modal:        { backgroundColor: CARD_BG, borderWidth: 1, borderRadius: 12, padding: 20, width: '90%', maxWidth: 360 },
   title:        { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
   vtsRow:       onMetal(pt, { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }, { marginBottom: 6 }),
-  vtsArrow:     { paddingHorizontal: 8, paddingVertical: 2 },
+  // ★ A transparent border at rest, so the keyboard's ring does not shift the station name when it lands.
+  vtsArrow:     { paddingHorizontal: 6, paddingVertical: 0, borderWidth: 2, borderColor: 'transparent', borderRadius: 6 },
   vtsArrowText: { fontSize: 20, fontWeight: 'bold' },
   // ★ ► mirrored, not ◄: Apple draws the two from different fallback fonts at different sizes (see VTSBar).
   vtsArrowLeft: { transform: [{ scaleX: -1 }] },

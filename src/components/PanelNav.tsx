@@ -28,6 +28,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, ScrollView, View } from 'react-native';
 import { addKeyListener, type HwKeyEvent } from '../utils/hardwareKeys';
+import { navMove } from '../utils/navMove';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { focusFor, focusTint, FOCUS_GREEN } from '../constants/decoderTokens';
 
@@ -412,28 +413,14 @@ function useNavKeys(opts: {
       return true;
     }
     if (cur < 0) { if (k.startsWith('Arrow')) move(0); return; }   // first movement just takes focus
-    const row = here!.row;
     if (adjustingRef.current === here!.id && (k === 'ArrowLeft' || k === 'ArrowRight')) {
       here!.adjust?.(k === 'ArrowRight' ? 1 : -1);
       return;
     }
-    const nextRowFrom = () => {
-      const i = all.findIndex(x => x.row > row);
-      move(i < 0 ? all.length - 1 : i);
-    };
-    const prevRowFrom = () => {
-      const prev = [...all].reverse().find(x => x.row < row);
-      move(prev ? all.indexOf(prev) : 0);
-    };
-    switch (k) {
-      case 'ArrowDown':  nextRowFrom(); break;
-      case 'ArrowUp':    prevRowFrom(); break;
-      // In a flat list every item is its own row, so left/right would otherwise be
-      // dead. Wrapped grids (StepPicker, ModeSelector) are the common case and
-      // users reach for left/right there first.
-      case 'ArrowRight': if (flat) nextRowFrom(); else if (all[cur + 1]?.row === row) move(cur + 1); break;
-      case 'ArrowLeft':  if (flat) prevRowFrom(); else if (cur > 0 && all[cur - 1].row === row) move(cur - 1); break;
-      default: break;
+    // The movement rule itself is pure (src/utils/navMove.ts, tested by scripts/test_nav_move.ts).
+    if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight') {
+      const to = navMove(all.map(x => x.row), cur, k, !!flat);
+      if (to >= 0) move(to);
     }
   }, NAV_REPEAT_KEYS);
 }
@@ -653,6 +640,16 @@ export function useNavRange(onAdjust: (dir: -1 | 1) => void) {
  *
  * `reveal` is optional and receives the index, for lists inside a ScrollView.
  */
+export interface ListNavOpts {
+  /** Rows for a GRID of items (the frequency card: tabs / field / units). Without it every item is its own row and
+   *  left / right act as up / down. Up / Down then move between rows, left / right inside one (src/utils/navMove.ts). */
+  rowOf?: (index: number) => number;
+  /** The item the highlight starts on when the list becomes visible while the keyboard (or a pad) is in use. */
+  startAt?: number;
+  /** Filled with a setter the owner can call to move the highlight itself. */
+  handle?: React.MutableRefObject<{ setFocus(index: number): void } | null>;
+}
+
 export function useListNav(
   visible: boolean,
   length: number,
@@ -663,6 +660,7 @@ export function useListNav(
    *  without this its Back hit a handler that had none: there was no keyboard way out of a list
    *  except by picking something. (Stuart.) Return false to pass Back on to the screen. */
   onBack?: () => boolean | void,
+  opts?: ListNavOpts,
 ) {
   // ★ Focus is held as an ENTRY ID, because that is what the shared core compares
   // against; the INDEX is derived for the caller. Holding the index here instead
@@ -671,8 +669,8 @@ export function useListNav(
   const focusedRef = useRef(-1);
   useEffect(() => { focusedRef.current = focusedId; }, [focusedId]);
 
-  const cb = useRef({ onActivate, reveal });
-  cb.current = { onActivate, reveal };
+  const cb = useRef({ onActivate, reveal, rowOf: opts?.rowOf });
+  cb.current = { onActivate, reveal, rowOf: opts?.rowOf };
 
   // Ids are 1:1 with indices here, offset so they never collide with grid ids.
   const base = useRef(0);
@@ -683,7 +681,7 @@ export function useListNav(
     for (let i = 0; i < length; i++) {
       out.push({
         id: base.current + i,
-        row: i,
+        row: cb.current.rowOf ? cb.current.rowOf(i) : i,
         press:  () => cb.current.onActivate(i),
         reveal: () => cb.current.reveal?.(i),
       });
@@ -691,8 +689,20 @@ export function useListNav(
     return out;
   }, [length]);
 
-  useNavKeys({ visible, getEntries, focusedRef, setFocused: setFocusedId, flat: true, onBack });
+  useNavKeys({ visible, getEntries, focusedRef, setFocused: setFocusedId, flat: !opts?.rowOf, onBack });
   useIdleClose(visible, onTimeout);
+
+  // ★ startAt: opened BY THE KEYBOARD (or a pad), the highlight is already on the thing you came for — Stuart: "if I
+  //   have hit the enter button to go into the frequency entry box then the boxes around the keys should be there
+  //   already." A touch user sees nothing (keyboard mode is off), so the card still opens inert for a hand.
+  const startAt = opts?.startAt ?? -1;
+  useEffect(() => {
+    if (visible && keyboardMode && startAt >= 0 && startAt < length) setFocusedId(base.current + startAt);
+  }, [visible]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ★ handle: lets the owner put the highlight somewhere itself (the frequency card: a field tapped into keeps the
+  //   highlight when Escape lets go of the cursor, so the arrows carry on from the field rather than from the top).
+  if (opts?.handle) opts.handle.current = { setFocus: (i: number) => setFocusedId(i < 0 ? -1 : base.current + i) };
 
   const focused = focusedId < 0 ? -1 : focusedId - base.current;
 
