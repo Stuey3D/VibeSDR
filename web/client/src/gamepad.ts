@@ -67,7 +67,6 @@ function visible(el: HTMLElement): boolean {
 /** What the highlight moves within: the admin panel or the START screen, else the top open panel or menu, else the whole page. */
 function scope(): HTMLElement {
   if (grabbed && !(grabbed.isConnected && visible(grabbed))) release(false);   // it closed under us
-  if (grabbed) return grabbed;
   // ★ The admin panel first: it is drawn ABOVE the splash (where an owner most often opens it) and is shown by its
   //   `hidden` attribute, not .open — so the pad stayed on the page underneath (Stuart, 2026-10-18: "in the admin menu
   //   there is no way to navigate it with the controller").
@@ -82,6 +81,9 @@ function scope(): HTMLElement {
     // The one drawn on top: highest z-index, later in the page on a tie.
     return open.reduce((a, b) => ((+getComputedStyle(b).zIndex || 0) >= (+getComputedStyle(a).zIndex || 0) ? b : a));
   }
+  // ★ A box that has the D-pad comes AFTER the panels and pop-ups: one opened from inside it (a header key's menu) or by
+  //   the mouse over it is on top, and takes the D-pad until it closes.
+  if (grabbed) return grabbed;
   return document.body;
 }
 
