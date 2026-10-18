@@ -1,6 +1,7 @@
 // VibeSDR — SpectrumEngine. See spectrum_engine.h; the behaviour it reproduces is specified, with WaterfallView.tsx
 // line numbers, in docs/NATIVE-SPECTRUM-ENGINE.md ("WaterfallView per-frame behaviour"). Names follow the TS.
 #include "spectrum_engine.h"
+#include "../vibedsp/vibe_denormals.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -122,6 +123,7 @@ bool SpectrumEngine::pollUi(UiUpdate& out) {
 // ── Engine thread ───────────────────────────────────────────────────────────────────────────────────────────────
 
 void SpectrumEngine::loop() {
+    vibe::vibeFlushDenormals();   // ★ its smoothing is recursive — see vibedsp/vibe_denormals.h
 #if defined(__ANDROID__) || defined(__linux__)
     prctl(PR_SET_NAME, "vibe-spectrum");
     setpriority(PRIO_PROCESS, 0, -5);   // vibe_thread.h's SPECTRUM rank: below network and audio, above decoders

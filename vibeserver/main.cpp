@@ -35,6 +35,7 @@
 #include "radiodns.h"
 #include "parent_watch.h"   // die-with-the-front-door; a no-op on Linux
 #include "crash_report.h"   // ★ a fatal signal names its thread and PC in the journal (2026-10-06)
+#include "vibedsp/vibe_denormals.h"   // ★ FTZ/DAZ inherited by every thread — see main()
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
 #include "airspy_source.h"
@@ -1461,6 +1462,11 @@ int main(int argc, char** argv) {
 #else
     vibecrash::install("dev");
 #endif
+    /* ★ Denormals flushed on the main thread too, straight after the crash handler: Linux copies MXCSR/FPCR
+     *  into every thread created after this, so a radio library's own thread (libairspy's consumer, the RSP
+     *  callbacks) gets it without calling anything. The DSP threads also set it themselves (vibe_thread.h).
+     *  Why: vibedsp/vibe_denormals.h. */
+    vibe::vibeFlushDenormals();
     /* ★ The receiver's thread split (VIBE_DSP_THREADS / VIBE_DAB_SPLIT) was set here for 32-bit ARM and small
      *  aarch64. Since 2026-10-16 it is the default on every multi-core server, set in the shared code —
      *  g_vsSplitDefault in local_sdr_shim.cpp — so the Mac, the Android app and Lite run the same layout. */

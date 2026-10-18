@@ -1,5 +1,6 @@
 // VibeSDR V4 — SSTV decoder (C++ port of ka9q audio_extensions/sstv → slowrx).
 #include "sstv_decoder.h"
+#include "../vibedsp/vibe_denormals.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1253,6 +1254,7 @@ void SstvDecoder::process(const int16_t* mono, int count) {
 }
 
 void SstvDecoder::videoThread() {
+    vibe::vibeFlushDenormals();   // ★ its own thread, not a vibe_thread.h role — see vibedsp/vibe_denormals.h
     for (;;) {
         decodePicture();
         if (abort.load()) return;

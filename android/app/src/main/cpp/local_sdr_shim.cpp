@@ -5651,6 +5651,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     void spyFftLoop() {
         vibeThreadName("vibe-spy-fft");
+        vibe::vibeFlushDenormals();   // ★ a spectrum thread by another name — see vibedsp/vibe_denormals.h
         std::vector<uint8_t> frame;
         while (spyFftRunning.load()) {
             {
