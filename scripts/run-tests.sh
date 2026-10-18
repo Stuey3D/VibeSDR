@@ -195,6 +195,9 @@ if node scripts/check-setup-page.mjs; then pass=$((pass+1)); else fail=$((fail+1
 if node scripts/test-setup-wifi-name.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ Fork labelling (directory forkOf): a fork's name is shown, checked; official names refused as fork names.
 if node --no-warnings directory/scripts/test-fork.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ "In use by another app" through the directory (2026-10-18): the listing carries it, a held radio is never FREE,
+#     and a radio whose process did not answer (503) does not borrow the door's 0 listeners and read FREE either.
+if node --no-warnings directory/scripts/test-in-use.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE DIRECTORY PAGE (2026-10-13): this check existed but was never run here, so it failed for a month after the dial gained
 #    its second marker and nobody saw. The directory is what everyone meets first, with nothing to download.
 if node scripts/check-directory-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
