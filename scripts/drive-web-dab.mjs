@@ -49,7 +49,7 @@ await ev(`document.getElementById('dabPane')?.click()`);
 await sleep(1500);
 console.log('signal pane:', (await ev(`document.getElementById('dabSignal')?.innerText`))?.replace(/\n+/g, ' | ').slice(0, 900));
 // try to zoom and tune from the keyboard/wheel path, then check the mux did not move
-await ev(`(() => { document.getElementById('mZoomIn')?.click(); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' })); document.getElementById('mVfoUp')?.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); return 1; })()`);
+await ev(`(() => { document.getElementById('mZoomIn')?.click(); window.dispatchEvent(new KeyboardEvent('keydown', { key: '+' })); document.getElementById('mVfoUp')?.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); return 1; })()`);
 await sleep(4000);
 console.log('after zoom+arrow presses:', await ev(`document.getElementById('dabMuxLbl')?.textContent`));
 try { await send('Browser.close'); } catch {}
