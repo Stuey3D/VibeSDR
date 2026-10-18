@@ -13,8 +13,9 @@
 #    is backward compatible, so a binary built against 2.36 runs on 2.41 but never the reverse.
 #    Do not "update" this to a newer base image.
 #
-# ★ arm64 native on Apple Silicon, so this is a real build and not emulation.
-# ★★ amd64 AND i386 FROM THIS SAME FILE, on the Lenovo (scripts/build-x86-debs.sh): `--platform
+# ★ arm64 USED to be built from this file natively on Apple Silicon. Since 2026-10-18 it is cross-built on the
+#   Lenovo (Dockerfile.cross-arm64); this file still serves arm64 on the BACKUP route (publish-apt-docker.sh).
+# ★★ amd64 AND i386 FROM THIS SAME FILE, on the Lenovo (scripts/build-debs-remote.sh): `--platform
 #    linux/386` takes bookworm's i386 image and every library below for i386, natively — an x86-64
 #    CPU runs 32-bit code directly. ONE recipe for every architecture, so the i386 package cannot
 #    drift from amd64's library list. (uname -m in that container still says x86_64 — CMake keys
@@ -59,7 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #     would have failed exactly the same way, at some far less convenient moment.
 #
 # ★★ A BUILD MUST NOT DEPEND ON A THIRD PARTY'S WEBSITE STILL BEING SHAPED THE WAY IT WAS. The
-#    headers come from the publishing machine now (publish-apt-docker.sh stages them into this
+#    headers come from the publishing machine now (build-debs-remote.sh / publish-apt-docker.sh stage them into this
 #    directory from /usr/local/include, where SDRplay's own installer puts them), so the build is
 #    reproducible for as long as we have them — which is the same condition as having the source.
 #

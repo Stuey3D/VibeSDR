@@ -1,8 +1,8 @@
 #!/bin/bash
 # build-deb.sh — build the vibeserver .deb from THIS checkout for the pocket image. BUILD ONLY.
 #
-# ★★★ NOT A RELEASE. No signing, no apt index, no commit, no push — scripts/publish-apt-docker.sh is
-#     the release path and this deliberately shares none of its side effects (even its --dry-run
+# ★★★ NOT A RELEASE. No signing, no apt index, no commit, no push — scripts/publish-apt-remote.sh is
+#     the release path (publish-apt-docker.sh the backup) and this deliberately shares none of its side effects (even its --dry-run
 #     signs and commits into the apt repository checkout). The .deb lands in image/pocket/out/debs/
 #     and is only ever installed into an image by build-image.sh.
 # ★★ Same build containers as a release (Dockerfile.build for arm64, the armhf CROSS-compiler on the

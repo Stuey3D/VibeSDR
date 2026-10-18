@@ -108,4 +108,5 @@ sends, **captured** from a real session (`VIBE_COMPAT_RECORD=<file>` on a test s
 lines a fixture is made from), never typed from today's code, and never edited once recorded. Each
 checks a 101 on both sockets, a spectrum frame, an audio frame, and the squelch/tune/mode
 round-trips — or the `update-app` refusal. `scripts/compat/run.sh <url>` runs them all;
-`publish-apt-docker.sh` refuses to publish unless they pass against `VIBE_COMPAT_TARGET`.
+`publish-apt-remote.sh` (and the backup `publish-apt-docker.sh`) refuse to publish unless they pass against
+`VIBE_COMPAT_TARGET`.
