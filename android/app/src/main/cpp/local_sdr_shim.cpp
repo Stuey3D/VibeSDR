@@ -1711,6 +1711,19 @@ static const int       kMinSamples  = 10;                 // PS repetitions befo
 static const long long kPiLockSecs  = 5;                  // PI must be steady this long
 static const long long kStableSecs  = 15;                 // reconstruction must hold
 static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days unheard
+/** ★★★ THE LIST HAS A SIZE IT CANNOT PASS (Stuart, 2026-10-19: "make sure that the auto saving rds/dab bookmarks
+ *  cannot balloon the bookmarks file as this will bring down every server especially the weaker ones").
+ *  The Sony's grew to 134 MB through the escape bug (bmLoadJson); with that fixed, NUMBERS are the other way up, and
+ *  learning had no limit but the 30-day expiry. So, by construction rather than by hope:
+ *   - kLearnedMax LEARNED rows (RDS + DAB). Real stations come nowhere near it — one per FM channel, one per DAB
+ *     service — so only garbage or a travelling receiver reaches it; past it, the longest-unheard learned row goes.
+ *     A row saved BY HAND is never counted and never evicted.
+ *   - kBmMax rows in all. A hand add or import past it is refused (the import reports how many it took).
+ *   - every name 64 bytes, every mode 16, re-applied as the file is WRITTEN (bmJsonLocked).
+ *  Worst case: 21,000 rows of at most ~400 bytes = ~8 MB, under the 16 MB the loader sets aside (setBookmarksPath).
+ *  Kiko's Atom and a 1 GB box can always read their own list. */
+static const size_t    kLearnedMax  = 1000;
+static const size_t    kBmMax       = 21000;
 /** ★★★ HOW LONG YOU MUST HAVE STAYED before a station is written with a PROVISIONAL label.
  *
  *  PI-first means the identity alone is enough to save, and the identity locks in kPiLockSecs (5 s)
@@ -2022,6 +2035,8 @@ static bool bmPutManualLocked(double hz, const std::string& name, const std::str
                               bool hasBw, int bwLo, int bwHi) {
     const std::string n = bmClean(name, 64);
     if (n.empty() || !(hz > 0) || hz > 1e12) return false;
+    // ★ kBmMax: a NEW row past the limit is refused; replacing a row already there is always allowed.
+    if (g_bookmarks.size() >= kBmMax && !g_bookmarks.count(bmKey(hz))) return false;
     // ★ A mode is a demodulator name (am, usb, wfm, dab…): lower-case letters and digits, a few of them.
     std::string md;
     for (char c : mode) if (md.size() < 12 && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) md += c;
@@ -2109,9 +2124,21 @@ static void bmRemove(double hz, int sid = -1) {
 /** Drop anything unheard for kExpirySecs. Manual entries are exempt. */
 static void bmPrune() {
     const long long cutoff = (long long)time(nullptr) - kExpirySecs;
+    size_t learned = 0;
     for (auto it = g_bookmarks.begin(); it != g_bookmarks.end(); ) {
         if (!it->second.manual && it->second.lastHeard < cutoff) it = g_bookmarks.erase(it);
-        else ++it;
+        else { if (!it->second.manual) ++learned; ++it; }
+    }
+    // ★ kLearnedMax: the longest-unheard learned rows go first; hand-saved rows are never touched.
+    if (learned > kLearnedMax) {
+        std::vector<std::pair<long long, long long>> byAge;   // (lastHeard, key)
+        byAge.reserve(learned);
+        for (const auto& kv : g_bookmarks) if (!kv.second.manual) byAge.emplace_back(kv.second.lastHeard, kv.first);
+        const size_t drop = learned - kLearnedMax;
+        std::nth_element(byAge.begin(), byAge.begin() + (long)drop, byAge.end());
+        for (size_t k = 0; k < drop; ++k) g_bookmarks.erase(byAge[k].second);
+        LOGI("bookmarks: %zu learned stations is over the %zu limit — the %zu longest unheard dropped",
+             learned, kLearnedMax, drop);
     }
 }
 
@@ -2344,11 +2371,11 @@ static std::string bmJsonLocked() {
         // up to 500 Hz, and the VTS only recognises a station within 99 Hz — so a
         // bookmark like 17.428100 MHz simply never showed up when tuned to it.
         j += "{\"frequency\":" + std::to_string(kv.second.hz ? kv.second.hz : kv.first)
-           + ",\"name\":\"" + bmEsc(kv.second.name) + "\""
+           + ",\"name\":\"" + bmEsc(bmClean(kv.second.name, 64)) + "\""   // ★ capped on the way OUT too
            + ",\"pi\":" + std::to_string(kv.second.pi)
            + ",\"lastHeard\":" + std::to_string(kv.second.lastHeard)
            + ",\"manual\":" + (kv.second.manual ? "true" : "false")
-           + ",\"mode\":\"" + bmEsc(kv.second.mode) + "\""
+           + ",\"mode\":\"" + bmEsc(bmClean(kv.second.mode, 16)) + "\""
            + (kv.second.hasBw ? ",\"bandwidth_low\":" + std::to_string(kv.second.bwLo)
                                 + ",\"bandwidth_high\":" + std::to_string(kv.second.bwHi) : std::string())
            + (kv.second.sid >= 0 ? ",\"sid\":" + std::to_string(kv.second.sid)

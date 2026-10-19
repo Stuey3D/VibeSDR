@@ -4,7 +4,9 @@
 // the server "refused to start" with a brand-new dongle, spinning inside setBookmarksPath before the radio was touched.
 //   1. names with `\` and `"` come back EXACTLY, across two restarts, and the file does not grow;
 //   2. a file the old loader had already bloated loads at once, every name cut back to 64 bytes;
-//   3. a file past 16 MB is set aside (kept, renamed .oversize) and the server starts with none.
+//   3. a file past 16 MB is set aside (kept, renamed .oversize) and the server starts with none;
+//   4. learning is held to 1,000 rows, the longest unheard dropped first, hand-saved rows never touched;
+//   5. 21,000 rows in all: a new row past it is refused, so the file cannot reach the 16 MB guard.
 // ★ SILENT: no audio. Loopback only. usage: VIBESERVER_BIN=… node scripts/test-bookmark-escape.mjs
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -113,6 +115,34 @@ try {
   ok(fs.existsSync(file + '.oversize') && fs.statSync(file + '.oversize').size === huge.length, 'it is kept beside, renamed .oversize');
   const got3 = await list();
   ok(Array.isArray(got3) && got3.length === 0, `the server starts with no bookmarks (${got3.length})`);
+  await stop();
+  fs.rmSync(file + '.oversize');
+
+  // ── 4. learning cannot grow the list without limit: 1,000 learned rows, the longest unheard go; hand-saved stay ──
+  const now = Math.floor(Date.now() / 1000);
+  const many = [];
+  for (let i = 0; i < 1500; i++) many.push({ frequency: 87_600_000 + i * 10_000, name: `LEARNED ${i}`, pi: 0x1000 + i, lastHeard: now - 1500 + i, manual: false, mode: 'wfm', source: 'server' });
+  for (let i = 0; i < 20; i++) many.push({ frequency: 120_000_000 + i * 25_000, name: `HAND ${i}`, pi: -1, lastHeard: now - 10_000_000, manual: true, mode: 'am', source: 'server' });
+  fs.writeFileSync(file, JSON.stringify(many));
+  ok(await start() >= 0, 'a list of 1,500 learned stations loads');
+  const got4 = await list();
+  const learned = got4.filter((r) => r.name.startsWith('LEARNED ')), hand = got4.filter((r) => r.name.startsWith('HAND '));
+  ok(learned.length === 1000, `learned rows are held to 1,000 (${learned.length})`);
+  ok(!learned.some((r) => Number(r.name.slice(8)) < 500), 'the 500 dropped are the longest unheard');
+  ok(hand.length === 20, `every hand-saved row stays, however old (${hand.length} of 20)`);
+  await stop();
+
+  // ── 5. 21,000 rows in all: a new hand row past it is refused, replacing one is not ──
+  const full = [];
+  for (let i = 0; i < 21_000; i++) full.push({ frequency: 1_000_000 + i * 1_000, name: `ROW ${i}`, pi: -1, lastHeard: now, manual: true, mode: 'am', source: 'server' });
+  fs.writeFileSync(file, JSON.stringify(full));
+  ok(fs.statSync(file).size < 16 * 1024 * 1024, `a full list is far under the 16 MB guard (${(fs.statSync(file).size / 1e6).toFixed(1)} MB)`);
+  ok(await start() >= 0, 'a full list of 21,000 loads');
+  const post = async (rows) => fetch(`${base}/bookmarks/import?${await auth()}`, { method: 'POST', body: JSON.stringify(rows), headers: { 'Content-Type': 'application/json' } }).then((r) => r.json());
+  const extra = await post([{ name: 'ONE TOO MANY', frequency: 50_000_000, mode: 'am' }]);
+  ok(extra.imported === 0, `a new row past 21,000 is refused (${extra.imported} taken)`);
+  const replace = await post([{ name: 'ROW 5 RENAMED', frequency: 1_005_000, mode: 'am' }]);
+  ok(replace.imported === 1, `replacing a row already there still works (${replace.imported} taken)`);
 } finally {
   await stop();
   try { rtl.kill('SIGTERM'); } catch {}
