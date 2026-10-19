@@ -765,7 +765,8 @@ public:
      *  the multiplex is being read; 1.8 KB was the constellation + impulse response, drawn only while the Signal pane
      *  is open. So, built ONCE from the same pass as the legacy report (one builder — nothing to drift):
      *    live    — the legacy report minus the list, the scopes, the data services and the licensed sites;
-     *    scopes  — the ",ir":[…],"iq":[…] fragment, added for a socket whose Signal pane is open;
+     *    scopes  — the ",ir":[…],"iq":[…] fragment, added for a socket whose Signal pane is open — and, since
+     *              2026-10-19, the diagnostics no screen draws (spiParse/spiCrc/spiObjs, nLinks/nFi, links/fi);
      *    list    — every service's FIXED fields + dataSvcs + licensed: sent when it CHANGES;
      *    dls     — every service's radio text (+ DL Plus for the tuned one) with its age: sent when a TEXT changes.
      *  ★ `dlsAge` is why the list could not simply be "sent on change": an AGE changes every second, so the list
@@ -804,6 +805,14 @@ public:
     std::string jsonLocked_(ReportParts* parts = nullptr) {
         // ★ Byte ranges of the sections that leave the LIVE report (see ReportParts), in the legacy string.
         size_t dsA = 0, dsB = 0, scA = 0, scB = 0, licA = 0, licB = 0, svA = 0;
+        /* ★★ AND THE DIAGNOSTICS NO SCREEN DRAWS (2026-10-19): spiParse, spiCrc, spiObjs (up to 40 carousel rows),
+         *  nLinks/nFi and the raw links/fi tables. No reader in the app, the web page or the watch — they were for
+         *  reading the wire by hand. On a real multiplex with an SPI carousel they are most of the live report:
+         *  the Lenovo's was 5.1 KB a report tonight against 1.6 KB on the bench clip, which has no carousel. A dab=2
+         *  socket now gets them only beside the scopes (Signal pane open), so they are still there for whoever is
+         *  looking; the legacy report keeps them, unchanged. Trade-off: none on screen; three more appends per
+         *  report on the server. */
+        size_t dg1A = 0, dg1B = 0, dg2A = 0, dg2B = 0, dg3A = 0, dg3B = 0;
         std::string listSvcs, dlsMap, dlsKey;   // the list's service rows; the radio-text map; what dlsRev hashes
         const Ensemble& e = rx_.ensemble();
         const DabStats& s = rx_.stats();
@@ -956,6 +965,7 @@ public:
                 snprintf(pb, sizeof pb, ",\"spi\":{\"sid\":%u,\"packets\":%u,\"groups\":%u,\"crcFail\":%u,\"lost\":%u,\"dir\":%s,\"named\":%zu,\"complete\":%u,\"logoSvcs\":%zu}",
                          spiSid_, packets_.packets(), packets_.groups(), packets_.crcFails(), packets_.lost(), carousel_.haveDirectory() ? "true" : "false", carousel_.named(), carousel_.completeCount(), spiLogoRefs_.size());
                 j += pb;
+                dg1A = j.size();
                 char qb[200]; snprintf(qb, sizeof qb, ",\"spiParse\":{\"runs\":%u,\"siDocs\":%u,\"svcs\":%u,\"eid\":%u},\"spiCrc\":{\"byLen\":[%u,%u,%u,%u],\"last\":\"%02x %02x %02x\",\"lastAddr\":%d}",
                                          spiParseRuns_, spiSiDocs_, spiParsedSvcs_, unsigned(e.eid), packets_.failByLen(0), packets_.failByLen(1), packets_.failByLen(2), packets_.failByLen(3),
                                          packets_.lastFail()[0], packets_.lastFail()[1], packets_.lastFail()[2], packets_.lastFailAddr()); j += qb;
@@ -970,6 +980,7 @@ public:
                     }
                     j += "]";
                 }
+                dg1B = j.size();
             }
             {   /* ★ The DATA services and every user application signalled (FIG 0/13), so a DXer
                  *  can see what else the multiplex carries — and whether an SPI/EPG data service
@@ -992,13 +1003,16 @@ public:
                 //   answer to "why is the FM row empty": the mux sends none, or we missed it.
                 char cb[48];
                 snprintf(cb, sizeof cb, ",\"nLinks\":%zu,\"nFi\":%zu", e.links.size(), e.freqInfo.size());
+                dg2A = j.size();
                 j += cb;
+                dg2B = j.size();
                 const auto& td = rx_.tiiDiag();
                 char db[96];
                 snprintf(db, sizeof db, ",\"tiiDiag\":{\"comb\":%d,\"f4s\":%.1f,\"f45\":%.2f,\"frames\":%d}", td.comb, td.fourthOverSigma, td.fourthOverFifth, td.frames);
                 j += db;
                 /* ★ The raw linkage table (FIG 0/6) and frequency table (FIG 0/21), for the DX pane and
                  *  for seeing what a multiplex actually signals. Small: a few sets of a few ids. */
+                dg3A = j.size();
                 if (!e.links.empty()) {
                     j += ",\"links\":[";
                     bool f1 = true;
@@ -1028,6 +1042,7 @@ public:
                     }
                     j += "]";
                 }
+                dg3B = j.size();
             }
             /* ★★★ NOW AND NEXT, FROM THE MULTIPLEX'S OWN SCHEDULE (TS 102 371 Programme
              *  Information). `epgPi` is published even when it is zero, and that is the point:
@@ -1356,7 +1371,8 @@ public:
             // live: the legacy report without the sections that moved out (ranges ascending, never overlapping).
             std::string live;
             size_t at = 0;
-            const std::pair<size_t, size_t> cut[] = { {dsA, dsB}, {scA, scB}, {licA, licB}, {svA, j.size() - 1} };
+            const std::pair<size_t, size_t> cut[] = { {dg1A, dg1B}, {dsA, dsB}, {dg2A, dg2B}, {dg3A, dg3B}, {scA, scB},
+                                                      {licA, licB}, {svA, j.size() - 1} };
             for (const auto& c : cut) {
                 if (c.second <= c.first || c.first < at) continue;
                 live.append(j, at, c.first - at);
@@ -1365,6 +1381,8 @@ public:
             live.append(j, at, std::string::npos);
             parts->live = std::move(live);
             parts->scopes = scB > scA ? j.substr(scA, scB - scA) : std::string();
+            for (const auto& d : { std::make_pair(dg1A, dg1B), std::make_pair(dg2A, dg2B), std::make_pair(dg3A, dg3B) })
+                if (d.second > d.first) parts->scopes.append(j, d.first, d.second - d.first);
             std::string list = "{\"type\":\"dab_list\",\"channel\":\"" + ch + "\",\"eid\":" + std::to_string(e.eid);
             if (dsB > dsA) list.append(j, dsA, dsB - dsA);
             if (licB > licA) list.append(j, licA, licB - licA);
