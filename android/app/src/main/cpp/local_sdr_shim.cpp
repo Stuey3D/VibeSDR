@@ -4758,8 +4758,10 @@ static std::mutex          g_vsMaintMtx;
  *  accidentally inherit buttons that would strand it. */
 static std::string         g_vsMaintActions;
 
-// Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
-// is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
+// Opus target bitrate (bits/sec) for compressed VibeServer audio. 64 kb/s mono, 96 kb/s stereo (below).
+// ★ FIXED, not link-adaptive: nothing writes this after start and no client asks for less — the old comment
+//   here said "the client ramps it down over a constrained link", which was never built (checked 2026-10-19,
+//   chasing a garbled track over the tunnel; the stream was 96 kb/s throughout).
 static std::atomic<int>    g_vsOpusBitrate{64000};
 // ★★ STEREO GETS HALF AS MUCH AGAIN. 64 kb/s is transparent for a mono AM/SSB/NFM channel and
 //    audibly thin for FM stereo and DAB (Stuart, 2026-09-14: "FM Stereo and DAB could do with a
