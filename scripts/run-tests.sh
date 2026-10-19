@@ -29,6 +29,9 @@ flags_for() {
     #   to measure a feature that responds to FM's triangular noise spectrum.
     test-stereo-highblend) echo "-O2 -I $VDSP -I $KISS" ;;
     test-multipath-meter)  echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★★★ Our own gain step through the real chain (2026-10-19): the smoother + the pipeline's guard,
+    #     every case run with and without the step on the same noise seed. Optimised: ~30 runs of 8 s.
+    test-gain-step)        echo "-O2 -I $VDSP -I $KISS" ;;
     # ★ The Advanced RDS instrument (MpxMeasure) against a signal of known deviation, at several
     #   capture rates and passbands — the real pipeline end to end, so the same deps again.
     test-mpx-measure|test-rds-ps-frames) echo "-O2 -I $VDSP -I $KISS" ;;
@@ -77,6 +80,9 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-stereo-highblend) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-gain-step) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-multipath-meter) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
