@@ -10,6 +10,9 @@
  *    D-pad = move the highlight · ✕ (bottom) = enter · ○ (right) = back
  *    LEFT stick turned like a jog wheel = tune (clockwise forwards) · RIGHT stick turned = zoom (clockwise in) —
  *    the rate follows the speed, like the drum: slow turning is fine, a fast spin covers ground (gamepadNav Jog)
+ *  SELECT opens and closes the CONTROLLER GUIDE (padGuide.ts — the pad drawn with what each control does, Stuart
+ *  approved 2026-10-19); while it is open the D-pad left / right moves between its two tabs, up / down scroll it, and
+ *  back closes it. It opens on the layout in use and follows a HOLD START switch.
  *  HOLD START (~1 s) switches between the two (Stuart: a pad with one stick may be reported as having two) — shown on
  *  screen and remembered on this device. ?pad=buttons|sticks forces one for a session.
  *  ★ HELD, never tapped (Stuart, 2026-10-18: "i pressed the l and r button by mistake and it switched … with no way
@@ -36,15 +39,18 @@
  */
 import { pickNext, Jog, padProfile, type Box, type Dir } from '../../../src/utils/gamepadNav';
 import { keyAction, keyDir, keyRepeats, type KeyAction } from '../../../src/utils/keyActions';
+import { guideTabStep, type PadLayout } from '../../../src/utils/padGuide';
+import { padGuideOpen, padGuideLayout, setPadGuideLayout, scrollPadGuide } from './padGuide';
 
 export interface GamepadHooks {
   tune(dir: 1 | -1): void;           // one step of the current tuning step
   zoom(dir: 1 | -1): void;           // one zoom step in (+1) or out (−1)
   back(): boolean;                   // close the top panel/menu; false if there was nothing to close
+  guide(): void;                     // SELECT: open the controller guide on activePadLayout(), or close it
 }
 
 // Standard-layout button indices.
-const B_SOUTH = 0, B_EAST = 1, B_WEST = 2, B_NORTH = 3, B_L1 = 4, B_R1 = 5, B_START = 9;
+const B_SOUTH = 0, B_EAST = 1, B_WEST = 2, B_NORTH = 3, B_L1 = 4, B_R1 = 5, B_SELECT = 8, B_START = 9;
 const PROFILE_KEY = 'vibe.padProfile';
 const B_UP = 12, B_DOWN = 13, B_LEFT = 14, B_RIGHT = 15;
 const FOCUSABLE = 'button, input:not([type=hidden]), select, a[href], [role="button"], [tabindex]:not([tabindex="-1"])';
@@ -144,6 +150,13 @@ function highlight(el: HTMLElement | null) {
 }
 
 function move(dir: Dir) {
+  // ★ The guide is a picture, not a form: left / right are its two tabs, up / down scroll it (a phone shows the list
+  //   below the pad). Checked first — it is drawn over everything, a grabbed decoder box included.
+  if (padGuideOpen()) {
+    if (dir === 'left' || dir === 'right') setPadGuideLayout(guideTabStep(padGuideLayout(), dir === 'right' ? 1 : -1));
+    else scrollPadGuide(dir === 'down' ? 1 : -1);
+    return;
+  }
   if (autoGrab()) return;
   const root = scope();
   if (adjusting && current && (dir === 'left' || dir === 'right')) { adjust(dir === 'right' ? 1 : -1); return; }
@@ -173,6 +186,7 @@ function adjust(d: 1 | -1) {
 }
 
 function enter() {
+  if (padGuideOpen()) return;                     // nothing on it to press — the D-pad has the tabs
   if (autoGrab()) return;
   const root = scope();
   if (!current || !root.contains(current) || !visible(current)) { move('down'); return; }
@@ -198,6 +212,7 @@ export function pushBack(close: () => void): () => void {
 }
 
 function back() {
+  if (padGuideOpen()) { hooks?.back(); return; }   // closes the guide first, whatever is grabbed underneath
   if (adjusting && current) { adjusting = false; current.classList.remove('gpAdjust'); return; }
   // ★ LAYERS IN ORDER: what opened AFTER the box took the D-pad (a header key's menu) closes first; then the box lets
   //   go; only then what was already up before it (the first-visit tour, which stays on screen while you use the radio).
@@ -272,9 +287,16 @@ let chosen: string | null = (() => {
 })();
 function forcedProfile(): string | null { return chosen; }
 
+/** The layout in use now — what the guide opens on: the first connected pad's, else what START chose, else sticks. */
+export function activePadLayout(): PadLayout {
+  const gp = navigator.getGamepads ? [...navigator.getGamepads()].find(Boolean) : null;
+  return gp ? padProfile(gp.axes.length, chosen) : chosen === 'buttons' ? 'buttons' : 'sticks';
+}
+
 function toggleProfile(axes: number) {
   chosen = padProfile(axes, chosen) === 'sticks' ? 'buttons' : 'sticks';
   try { localStorage.setItem(PROFILE_KEY, chosen); } catch { /* private window: this session only */ }
+  setPadGuideLayout(chosen as PadLayout);         // the guide, if open, follows the switch
   toast((chosen === 'sticks' ? 'Controls: two sticks — turn the left stick to tune, the right to zoom'
                              : 'Controls: buttons by position — face buttons tune and zoom, R enter, L back')
         + ' · hold START to switch back');
@@ -308,6 +330,7 @@ function poll() {
         toggleProfile(gp.axes.length); held.set(id + 'start', -1);   // -1: done until released
       }
     } else held.delete(id + 'start');
+    press(id + 'select', btn(B_SELECT), () => hooks?.guide(), false);
     press(id + 'up', btn(B_UP), () => move('up'));
     press(id + 'down', btn(B_DOWN), () => move('down'));
     press(id + 'left', btn(B_LEFT), () => move('left'));

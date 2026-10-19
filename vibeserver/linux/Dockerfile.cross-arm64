@@ -1,0 +1,24 @@
+# ★★★ arm64 by CROSS-COMPILE on an amd64 bookworm host — the Lenovo (2026-10-18). See arm64-toolchain.cmake.
+#     The arm64 package used to come from Dockerfile.build run natively on the Mac (Apple Silicon); the
+#     Mac's Docker VM was deleted to free disk and every package is now built on the Lenovo
+#     (scripts/build-debs-remote.sh). An arm64 container there would be qemu, so this cross-builds instead.
+# ★★ THE SAME RECIPE AS Dockerfile.cross-armhf, triplet swapped: only ncurses (linked statically) and
+#    libc6:arm64 (dpkg-shlibdeps reads ITS shlibs/symbols for the one Depends we keep) are installed for
+#    the target; build-deps.sh builds libusb/libopus/librtlsdr from the pinned source for arm64.
+# ★ No distribution radio or codec libraries — see Dockerfile.build for why a -dev package here is a bug.
+FROM debian:bookworm-slim
+RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-install-recommends \
+      build-essential crossbuild-essential-arm64 cmake pkg-config file ca-certificates curl \
+      libncursesw5-dev:arm64 libc6:arm64 bzip2 \
+      dpkg-dev apt-utils gnupg git rsync xz-utils binutils-aarch64-linux-gnu \
+    && rm -rf /var/lib/apt/lists/*
+COPY sdrplay-inc/ /usr/local/include/
+RUN ls /usr/local/include/sdrplay_api.h \
+    && grep -q SDRPLAY_API_VERSION /usr/local/include/sdrplay_api.h
+COPY arm64-toolchain.cmake /opt/arm64-toolchain.cmake
+COPY build-deps.sh /opt/build-deps.sh
+# ★ Two compile jobs, niced: the Lenovo is a live receiver (build-debs-remote.sh passes DEPS_NICE=19).
+ARG DEPS_JOBS=2
+ARG DEPS_NICE=10
+RUN JOBS=${DEPS_JOBS} nice -n ${DEPS_NICE} bash /opt/build-deps.sh /opt/vibe-deps arm64
+WORKDIR /work

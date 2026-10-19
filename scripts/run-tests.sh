@@ -231,6 +231,11 @@ if node scripts/check-directory-page.mjs; then pass=$((pass+1)); else fail=$((fa
 # ★ Behaviour, not syntax: the page's own functions driven against a stubbed DOM, because the bug
 #   this catches — one radio's sample rate landing in another's config during a tab switch — is
 #   perfectly valid JavaScript and perfectly well-formed HTML.
+# ★★★ THE GOVERNOR MENU OFFERS ONLY WHAT THIS MACHINE HAS (2026-10-19): the Lenovo's intel_pstate has no schedutil.
+if node scripts/test-setup-governors.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ A TUNNEL A PREVIOUS PROCESS LEFT ON OUR PORT IS RETIRED (2026-10-19, Kiko's four tunnels). Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
@@ -276,6 +281,8 @@ if node scripts/test-web-no-desktop-bar.mjs; then pass=$((pass+1)); else fail=$(
 #     resolve to today's literal colours — the pixel-identical promise, checked as data.
 #  ★ Node runs the .ts directly (type stripping), so this needs nothing installed.
 if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ MPX POWER IN dBr (mpxPower.ts): relative to BS.412's reference, so a figure below 0 reads as compliant, not a fault.
+if node --no-warnings scripts/test_mpx_power.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ LOCKED VFO CENTRE (tuneWindow.ts): every app tune clamps into the owner's window, the server's own rule (Stuart 2026-10-18: the app tuned into the black).
 if node --no-warnings scripts/test_tune_window.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ proxy.kiwisdr.com IS 8073 ONLY (2026-10-07): 47 % of public Kiwis are listed portless (= port 80, refused).
@@ -514,6 +521,8 @@ if npx tsx scripts/test_pocket_connection.ts; then pass=$((pass+1)); else fail=$
 
 # ★★ GAMEPAD (Stuart's mapping, 2026-10-10): the highlight's direction picking and the stick-rotation jog wheel.
 if npx tsx scripts/test_gamepad_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE CONTROLLER GUIDE (2026-10-19): the shared drawing data, its words against the scheme, the layout rules.
+if npx tsx scripts/test_pad_guide.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE KEYBOARD, ONE SCHEME (Stuart, 2026-10-18): arrows/WASD move, Enter select, Backspace/Escape back, < > tune, - + zoom.
 if npx tsx scripts/test_key_actions.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -560,6 +569,13 @@ printf '\n\033[1m── bulk bookmark import (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bookmark-import.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ A BOOKMARK NAME SURVIVES A RESTART UNCHANGED (2026-10-19): the loader took names RAW while the writer escapes them,
+#     so a `\` doubled on every save until the Sony's Lite could not get past loading its list. Round trip, a bloated
+#     file loading promptly and trimmed, a 16 MB+ file set aside. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── bookmark names across restarts (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bookmark-escape.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★ AN IDLE DECODER SOCKET IS PINGED (2026-10-10): behind Cloudflare's ~100 s idle cut-off the /ws/dxcluster socket
 #    reconnected for ever ("an error log as long as my arm"). ~30 s. Same VIBESERVER_BIN rule.
 # ★★★ …and end to end on the real server and the bench multiplex: a legacy socket unchanged, a dab=2 socket's
@@ -599,6 +615,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     < > , . tune, - + = zoom; typing in the frequency field never hijacked; the old shortcuts do nothing.
 printf '\n\033[1m── the keyboard on the served page (real key events, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-keyboard.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ THE CONTROLLER GUIDE (Stuart approved the prototype 2026-10-19): SELECT opens and closes it, back closes it, the
+#     D-pad steps the tabs, it opens on the layout in use and follows HOLD START, the menu key opens it, and the layout
+#     follows the window (lines when wide, a list when narrow).
+printf '\n\033[1m── the controller guide on the served page (simulated pad, end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-pad-guide.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ FREQUENCY AT THE POINTER (Kiko, 2026-10-16, "like OpenWebRX"): a MOUSE over the waterfall/spectrum shows the

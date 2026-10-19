@@ -4,11 +4,15 @@
 #   scripts/publish-apt.sh              # build, index, sign, push
 #   scripts/publish-apt.sh --dry-run    # everything except the push
 #
-# ★★★ RUN THIS ON A DEBIAN BOX. It needs dpkg-scanpackages, apt-ftparchive and the signing key —
-# none of which exist on the Mac. In practice that box is the bookworm container started by
-# scripts/publish-apt-docker.sh, which is also what makes it multi-architecture: this script
-# publishes for whatever `dpkg --print-architecture` says it is running on, and the container is
-# started once per architecture.
+# ★★★ RUN THIS ON A DEBIAN BOX — and you never start it by hand. Two wrappers run it (2026-10-18):
+#   scripts/publish-apt-remote.sh   THE NORMAL ROUTE. Every package is built on the Lenovo; this script runs
+#                                   there in a bookworm container with VIBE_INDEX_ONLY=1 (pool, prune, index,
+#                                   page) and --next-rev, and the Mac signs, commits and pushes. The signing key
+#                                   never leaves the Mac.
+#   scripts/publish-apt-docker.sh   THE BACKUP, for when the Lenovo is unavailable: a bookworm container on the
+#                                   Mac, once per architecture, building + indexing + signing here (key mounted
+#                                   read-only). Needs colima recreated first — see that script's header.
+# It needs dpkg-scanpackages and apt-ftparchive, which do not exist on the Mac.
 #
 # ★★ THE REPOSITORY NOW CARRIES arm64 AND amd64 (since 2026-08-20, for x86 Linux users — see
 #    GitHub issue #21), armhf (2026-09-22) and i386 (2026-10-17, 32-bit x86, SSE2). Everything arch-specific below is keyed on $ARCH: the pool filenames, the
@@ -28,15 +32,38 @@ REPO_URL="https://github.com/Stuey3D/VibeServer.git"
 APT_DIR="${APT_DIR:-$HOME/VibeServer}"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SIGN_KEY="packages@vibesdr.net"
+# ★★★ TWO EXTRA MODES FOR THE LENOVO ROUTE (2026-10-18, scripts/publish-apt-remote.sh). With neither set this
+#     script is exactly what publish-apt-docker.sh (the BACKUP route) has always run: build/index/sign/commit.
+#   VIBE_INDEX_ONLY=1  copy a pre-built package into the pool, prune, index, write the page — and STOP before
+#                      signing. The signing key never leaves the Mac (security audit 2026-10-03); the Lenovo has
+#                      no key, so the Mac signs the Release this writes, exports KEY.gpg and commits.
+#   --next-rev         print the version the next publish of $ARCH would carry (<upstream>-<rev>) and exit —
+#                      the high-water-mark rule below, asked BEFORE building, so the Lenovo builds the right
+#                      revision. One copy of that rule, not a second one in the Mac script.
+#   VIBE_TEST_REV=0~…  (index-only) publish under a TEST revision into a scratch copy of the repository, for a
+#                      dry run of the whole pipeline. `0~` sorts below -1, so it can never shadow a real
+#                      package; the Mac script refuses it without --dry-run, and no marker is written for it.
+INDEX_ONLY="${VIBE_INDEX_ONLY:-}"
+NEXT_REV=0
+DRY_RUN=0
+# ★ An `if`, not `&&` — as the last command in the line, a REAL publish (no --dry-run) made the
+#   test false and `set -e` killed the script instantly with no output. Same shape as the
+#   high-water-mark bug below.
+if [ "${1:-}" = "--dry-run" ]; then DRY_RUN=1; fi
+if [ "${1:-}" = "--next-rev" ]; then NEXT_REV=1; fi
+NOSIGN=""; if [ -n "$INDEX_ONLY" ] || [ "$NEXT_REV" = 1 ]; then NOSIGN=1; fi
 # ★★ THE INSTALLER NAMES THE KEY (2026-10-18). scripts/install.sh — published beside the page as
 #    https://apt.vibesdr.net/install.sh — refuses any KEY.gpg whose fingerprint is not the one written
 #    in it. A new signing key without a matching edit there would publish a repository that the
 #    one-liner refuses on every machine, so it is checked HERE, before a minute is spent building.
 #  ★ grep -c, never grep -q in a pipeline (pipefail + SIGPIPE turns a match into a failure).
+# ★ Not on the Lenovo route (NOSIGN): there is no key on that box — publish-apt-remote.sh checks this on the Mac.
+if [ -z "$NOSIGN" ]; then
 _keyfpr="$(gpg --with-colons --fingerprint "$SIGN_KEY" 2>/dev/null | awk -F: '$1=="fpr"{print $10; exit}')"
 if [ -z "$_keyfpr" ] || [ "$(grep -c "^KEY_FPR=\"$_keyfpr\"" "$SRC_DIR/scripts/install.sh" 2>/dev/null || true)" != 1 ]; then
   echo "!! scripts/install.sh does not name the signing key (${_keyfpr:-not found}) — fix KEY_FPR there first" >&2
   exit 1
+fi
 fi
 bash -n "$SRC_DIR/scripts/install.sh" || { echo "!! scripts/install.sh has a syntax error" >&2; exit 1; }
 ARCH="$(dpkg --print-architecture)"
@@ -59,22 +86,36 @@ fi
 #     a pre-built package: on the build path it would stamp a host-arch binary with another arch's name.
 #  ★ The package's own Architecture: is still checked against it below — the caller is not trusted.
 if [ -n "${VIBE_PUBLISH_ARCH:-}" ]; then
-  [ -n "${VIBE_PREBUILT_DEB:-}" ] || { echo "!! VIBE_PUBLISH_ARCH without VIBE_PREBUILT_DEB — refusing"; exit 1; }
+  # ★ --next-rev builds nothing either, so it may name the architecture it is asking about.
+  [ -n "${VIBE_PREBUILT_DEB:-}" ] || [ "$NEXT_REV" = 1 ] || { echo "!! VIBE_PUBLISH_ARCH without VIBE_PREBUILT_DEB — refusing"; exit 1; }
   ARCH="$VIBE_PUBLISH_ARCH"
 fi
-DRY_RUN=0
-# ★ An `if`, not `&&` — as the last command in the line, a REAL publish (no --dry-run) made the
-#   test false and `set -e` killed the script instantly with no output. Same shape as the
-#   high-water-mark bug below.
-if [ "${1:-}" = "--dry-run" ]; then DRY_RUN=1; fi
+if [ -n "$INDEX_ONLY" ] && [ -z "${VIBE_PREBUILT_DEB:-}" ]; then
+  echo "!! VIBE_INDEX_ONLY indexes a pre-built package — set VIBE_PREBUILT_DEB"; exit 1
+fi
+if [ -n "${VIBE_TEST_REV:-}" ]; then
+  [ -n "$INDEX_ONLY" ] || { echo "!! VIBE_TEST_REV is for the index-only dry run (publish-apt-remote.sh --test-rev)"; exit 1; }
+  case "$VIBE_TEST_REV" in 0~*) ;; *) echo "!! a test revision must start 0~ (sorts below every real one)"; exit 1;; esac
+fi
 
-for t in dpkg-scanpackages apt-ftparchive gpg dpkg-deb cmake git rsync; do
-  command -v "$t" >/dev/null || { echo "missing: $t (apt install dpkg-dev apt-utils gnupg)"; exit 1; }
-done
-gpg --list-secret-keys "$SIGN_KEY" >/dev/null 2>&1 || { echo "no signing key for $SIGN_KEY"; exit 1; }
+if [ "$NEXT_REV" = 1 ]; then
+  :   # ★ only grep/sed/ls — it runs in a plain bookworm-slim container, before any build image exists
+elif [ -n "$NOSIGN" ]; then
+  for t in dpkg-scanpackages apt-ftparchive dpkg-deb rsync; do
+    command -v "$t" >/dev/null || { echo "missing: $t (apt install dpkg-dev apt-utils)"; exit 1; }
+  done
+else
+  for t in dpkg-scanpackages apt-ftparchive gpg dpkg-deb cmake git rsync; do
+    command -v "$t" >/dev/null || { echo "missing: $t (apt install dpkg-dev apt-utils gnupg)"; exit 1; }
+  done
+  gpg --list-secret-keys "$SIGN_KEY" >/dev/null 2>&1 || { echo "no signing key for $SIGN_KEY"; exit 1; }
+fi
 
 # ── The artefact repository (clone on first run) ─────────────────────────────
-if [ ! -d "$APT_DIR/.git" ]; then
+# ★ On the Lenovo route the repository is a COPY synced from the Mac's clone (no .git): never clone or pull it.
+if [ -n "$NOSIGN" ]; then
+  [ -d "$APT_DIR/dists/stable" ] || { echo "!! $APT_DIR is not a copy of the apt repository"; exit 1; }
+elif [ ! -d "$APT_DIR/.git" ]; then
   echo "==> cloning $REPO_URL -> $APT_DIR"
   git clone "$REPO_URL" "$APT_DIR"
 else
@@ -82,7 +123,8 @@ else
 fi
 POOL="$APT_DIR/pool/main/v/vibeserver"
 DIST="$APT_DIR/dists/stable"
-mkdir -p "$POOL" "$DIST/main/binary-$ARCH"
+# ★ Not for --next-rev: an empty binary-<arch> directory would add that architecture to the next Release.
+[ "$NEXT_REV" = 1 ] || mkdir -p "$POOL" "$DIST/main/binary-$ARCH"
 
 # ── Version: upstream from CMake, revision from what is already published ────
 UPSTREAM="$(grep -oE 'project\([^)]*VERSION[[:space:]]+[0-9.]+' "$SRC_DIR/vibeserver/CMakeLists.txt" \
@@ -137,6 +179,12 @@ MARK="$APT_DIR/.highest-revision-$UPSTREAM-$ARCH"
 [ -f "$APT_DIR/.highest-revision-$UPSTREAM" ] && bump "$(tr -cd '0-9' < "$APT_DIR/.highest-revision-$UPSTREAM")"
 REV=$((HIGH + 1))
 FULLVER="${UPSTREAM}-${REV}"
+if [ "$NEXT_REV" = 1 ]; then echo "$FULLVER"; exit 0; fi
+TEST_REV=""
+if [ -n "${VIBE_TEST_REV:-}" ]; then
+  echo "==> TEST revision $VIBE_TEST_REV instead of $REV — a dry run into a scratch repository"
+  REV="$VIBE_TEST_REV"; FULLVER="${UPSTREAM}-${REV}"; TEST_REV=1
+fi
 echo "==> publishing vibeserver $FULLVER ($ARCH)"
 
 # ★★★ WHAT GETS COPIED INTO THE BUILD ROOT — and what emphatically does not.
@@ -369,9 +417,11 @@ PKGVER="$(dpkg-deb -f "$DEB" Version)"
 #     going back to 4.1.44, in a git repository that had reached 10.8 GB, with Pages builds up
 #     from 460 s to 876 s and one of them failing outright (2026-09-11).
 # ★ The KEEP policy below was right the whole time. It was the NAME that escaped it.
-cp "$DEB" "$POOL/$(basename "$DEB" | sed 's/^\.prebuilt-//')"
+NEWDEB="$POOL/$(basename "$DEB" | sed 's/^\.prebuilt-//')"
+cp "$DEB" "$NEWDEB"
 # ★ Record the high-water mark BEFORE pruning, so a pruned revision can never be handed out again.
-echo "$REV" > "$MARK"
+# ★ Never for a test revision: the marker is a number, and `0~remote1` would read back as 1.
+[ -n "$TEST_REV" ] || echo "$REV" > "$MARK"
 
 # ── Prune ────────────────────────────────────────────────────────────────────
 # ★★ THE POOL IS NOT AN ARCHIVE. Every publish adds a .deb and nothing ever removed one, so the
@@ -381,8 +431,16 @@ echo "$REV" > "$MARK"
 KEEP=3
 # ★ Both spellings: the canonical one, and any dot-prefixed straggler from before the copy above
 #   was fixed. A prune that cannot see half the pool is not a prune.
-mapfile -t OLD < <(ls -t "$POOL"/vibeserver_*_"$ARCH".deb "$POOL"/.prebuilt-vibeserver_*_"$ARCH".deb \
-                   2>/dev/null | tail -n +$((KEEP+1)))
+# ★★★ NEWEST BY VERSION, NOT BY FILE TIME (2026-10-18). This was `ls -t`, and ~/VibeServer is now a
+#     `--depth 1` clone: every file in a fresh checkout has the SAME mtime, so "the newest 3" was whatever
+#     order ls broke the tie in — it could delete 11.0.7-1 and keep 11.0.4-3. The package just copied in is
+#     always kept (KEEP-1 others beside it), so even a test revision that sorts low survives its own publish.
+#   ★ sort -V orders Debian versions correctly for ours (digits, dots, -rev, ~pre); both routes run bookworm.
+mapfile -t OLD < <(for f in "$POOL"/vibeserver_*_"$ARCH".deb "$POOL"/.prebuilt-vibeserver_*_"$ARCH".deb; do
+                     [ -e "$f" ] && [ "$f" != "$NEWDEB" ] || continue
+                     v="$(basename "$f" | sed -E 's/^(\.prebuilt-)?vibeserver_//; s/_[^_]*\.deb$//')"
+                     printf '%s\t%s\n' "$v" "$f"
+                   done | sort -V -r -k1,1 | tail -n +"$KEEP" | cut -f2-)
 if [ ${#OLD[@]} -gt 0 ]; then
   printf '==> pruning %d old package(s), keeping the newest %d\n' "${#OLD[@]}" "$KEEP"
   rm -f "${OLD[@]}"
@@ -418,12 +476,16 @@ EOF
 ( cd "$APT_DIR" && apt-ftparchive -c aptftp.conf release dists/stable > dists/stable/Release )
 
 # ── Sign ─────────────────────────────────────────────────────────────────────
+# ★★★ NOT HERE ON THE LENOVO ROUTE: the key is on the Mac only. The Mac signs Release (InRelease + Release.gpg),
+#     exports KEY.gpg and commits — see publish-apt-remote.sh. The page and install.sh are still written below.
+if [ -z "$INDEX_ONLY" ]; then
 # InRelease (inline signature) is what modern apt prefers; Release.gpg is kept for older clients.
 rm -f "$DIST/InRelease" "$DIST/Release.gpg"
 gpg --default-key "$SIGN_KEY" --batch --yes --clearsign -o "$DIST/InRelease" "$DIST/Release"
 gpg --default-key "$SIGN_KEY" --batch --yes -abs -o "$DIST/Release.gpg" "$DIST/Release"
 gpg --armor --export "$SIGN_KEY" > "$APT_DIR/KEY.gpg"
 echo "==> signed with $(gpg --list-keys --keyid-format=long "$SIGN_KEY" | sed -n '2p' | tr -s ' ')"
+fi
 
 # ── Landing page ─────────────────────────────────────────────────────────────
 # ★★ THE PAGE DESCRIBES THE WHOLE POOL, not this build. With two architectures the page is written
@@ -460,6 +522,10 @@ touch "$APT_DIR/.nojekyll"     # Pages would otherwise skip files starting with 
 #     work happens here (arm64, Debian tooling) and `scripts/publish-apt-push.sh` on the Mac
 #     fetches this commit over SSH and pushes it — the Mac already has the credential, the key
 #     backup and Time Machine, and its clone is the copy of the pool that must survive.
+if [ -n "$INDEX_ONLY" ]; then
+  echo "==> indexed $FULLVER ($ARCH) — unsigned; the Mac signs and commits"
+  exit 0
+fi
 cd "$APT_DIR"
 git add -A
 git -c user.name="VibeSDR release" -c user.email="packages@vibesdr.net" \

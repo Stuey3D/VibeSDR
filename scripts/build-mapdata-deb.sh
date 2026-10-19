@@ -26,7 +26,7 @@
 #    ships with the server, so a machine without this package still knows what it is missing. If this
 #    package carried its own copy they would fight, and the loser would be whichever installed last.
 #
-# ★ RUN IT ON A DEBIAN BOX (or in the bookworm container publish-apt-docker.sh already builds in):
+# ★ RUN IT ON A DEBIAN BOX (or in a bookworm build container — the Lenovo's vibeserver-build:bookworm-amd64):
 #   it needs dpkg-deb. Nothing here compiles, so there is no cross-build problem to have.
 set -euo pipefail
 

@@ -7,6 +7,11 @@
  *    moves with whatever passage is playing. "(16 s)" read as a duration nobody asked about; a countdown
  *    to the figure being a full minute says what the number is waiting for and when it will be steady.
  *
+ * ★ dBr, NOT dB (Stuart, 2026-10-19, at −0.4 on a UK station: "is it possible for MPX power to be a − figure?").
+ *   It is a RELATIVE figure — dB against BS.412's reference, a sine deviating ±19 kHz — so 0 is the limit and
+ *   below it is compliant. "dB" alone made a negative number look like a fault; dBr says relative to what, and
+ *   is how MPX meters publish it.
+ *
  * Pure: no React Native, no DOM.
  */
 
@@ -17,11 +22,11 @@ export const MPX_POWER_WINDOW_S = 60;
  *  the countdown on its own line under it — the web's block lives in a 180 px plot column, where one long
  *  string would be clipped at the panel edge.
  *  `secs` = seconds the server's mean covers (0 = none yet, or an older server).
- *    value    "+6.6 dB", or "—" with nothing yet
+ *    value    "+6.6 dBr", or "—" with nothing yet
  *    settling "settling 44 s" while the minute fills, "" once it is full (or with nothing yet) */
 export function mpxPowerParts(db: number, secs: number): { value: string; settling: string } {
   if (!(secs > 0) || !Number.isFinite(db)) return { value: '—', settling: '' };
-  const value = `${db >= 0 ? '+' : '−'}${Math.abs(db).toFixed(1)} dB`;
+  const value = `${db >= 0 ? '+' : '−'}${Math.abs(db).toFixed(1)} dBr`;
   const left = Math.ceil(MPX_POWER_WINDOW_S - secs - 0.5);
   return { value, settling: left > 0 ? `settling ${left} s` : '' };
 }

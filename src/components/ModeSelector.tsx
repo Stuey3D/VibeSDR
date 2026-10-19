@@ -829,6 +829,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             {moreOpen && (
               <ScrollView ref={moreScroll} style={[st.moreList, { borderColor: t.btnBorder }, pt.metal && windowStyle(pt)]}
                           /* ★ scroll lane: full-width text rows, each inset 12 pt by moreItem's own padding */
+                          /* ★★ nestedScrollEnabled: on Android a ScrollView inside the sheet's own ScrollView
+                           *  gets NO drags without it — the sheet takes them all, so a 42-mode OpenWebRX+ list
+                           *  showed its first six and nothing below (GitHub #53). iOS ignores the prop. Every
+                           *  other dropdown here (colour map, profiles, band limits) already had it. */
+                          nestedScrollEnabled
                           keyboardShouldPersistTaps="handled">
                 {others.map(m => (
                   <NavRow key={m.id}><MoreItem onPress={() => pick(m.id)}
