@@ -612,6 +612,13 @@ void SdrplaySource::close() {
         impl_->streaming = false;
     }
     if (impl_->selected)  { api().ReleaseDevice(&impl_->dev); impl_->selected = false; }
+    /* ★★★ AND FORGET THE API'S PARAMETER BLOCK — IT IS THE API'S MEMORY, AND IT HAS JUST BEEN GIVEN BACK.
+     *     Every reader guards with `!impl_->params`, and that guard passed on the stale pointer: the Lenovo's RSP1A
+     *     was idle-released at 18:55:08 (2026-10-19, 11.0.6) and at 18:58:29 an admin-page status request read
+     *     currentIfGr() through it — SIGSEGV code 128 (a general-protection fault on freed memory) in
+     *     adminStatusJson on a vibe-conn thread, and systemd restarted the radio. Cleared here, the twenty-odd
+     *     guards already in this file mean what they say; open() fetches a fresh block with GetDeviceParams. */
+    impl_->params = nullptr;
     if (open_) apiClose();
     open_ = false;
 }
