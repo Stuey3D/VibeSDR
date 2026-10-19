@@ -13207,7 +13207,9 @@ function slider(
     lbl.textContent = fmt(v);
     apply(v);
   };
-  el.oninput = () => { run(); if (prefKey) savePref(prefKey, Number(el.value)); };
+  // ★ Save BEFORE applying (2026-10-19): some applies read the pref rather than v (applyCtlLook via ctlLook()), so
+  //   saving after drew the transparency slider one move behind.
+  el.oninput = () => { if (prefKey) savePref(prefKey, Number(el.value)); run(); };
   run();
 }
 
