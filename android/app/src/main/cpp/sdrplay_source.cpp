@@ -638,6 +638,20 @@ void SdrplaySource::setFrequency(double hz) {
     std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
     if (!open_ || !impl_->params || !impl_->params->rxChannelA) return;
     curCentre_ = hz;                      // remembered for reopen()
+    /* ★★ THE LNA STATE MUST BE VALID FOR THE BAND WE ARE MOVING TO (2026-10-19). A band change
+     *    re-applies the gain struct, and the API validates it there: FM -> MW on an RSP1A carried
+     *    LNAstate 8 into a band with seven states (0-6). OpenRSP says so and refuses the update —
+     *    "rsp: update: ERROR: Tuner1: LNAstate out of range LNAstate=8", found by the overnight
+     *    stress run on the Lenovo; the official API never complained. Clamp to the new band's
+     *    most attenuated state, as setLnaState() does, and let the RF AGC walk on from there. */
+    {
+        auto& g = impl_->params->rxChannelA->tunerParams.gain;
+        const int n = lnaStateCount(hz);
+        if ((int)g.LNAstate >= n) {
+            g.LNAstate = (unsigned char)(n - 1);
+            liveStale_.store(true, std::memory_order_relaxed);
+        }
+    }
     impl_->params->rxChannelA->tunerParams.rfFreq.rfHz = hz;
     api().Update(impl_->dev.dev, impl_->dev.tuner,
                        sdrplay_api_Update_Tuner_Frf, sdrplay_api_Update_Ext1_None);
