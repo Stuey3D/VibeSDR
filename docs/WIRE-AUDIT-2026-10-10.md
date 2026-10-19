@@ -83,3 +83,23 @@ listener. The 2 s heartbeat is required: the web client hides the ADC readout af
 `test-dab-report-pieces.mjs` (real server + bench clip, 14 checks: legacy unchanged, reassembled == legacy, bytes,
 scopes, resync, new session) · `test_dab_assemble.ts` (14) · `test_decoder_socket_idle.ts` (14) ·
 `test-bookmark-import.mjs` (18) · `test-dx-keepalive.mjs` (3).
+
+## Addendum, 2026-10-19 — a long session cost twice a short one
+
+Stuart's app read 93–103 KB/s in DAB after 23 minutes of tuning and 45 KB/s on the same multiplex after a server
+restart. Reproduced on the bench (`test-wire-session-flat.mjs`): an **Advanced RDS subscription made on FM was never
+ended by the mode** — every `rdsx` (5/s, eye grids ~9 KB each) kept arriving in DAB: 28 KB/s with `eyeEvery: 2`, 44 KB/s
+without. The web page left one behind on every DAB entry with the panel open (`dabUiOn` cleared `activeDec` before the
+detach). Fixed at the server: `rdsx` goes only to a listener whose demodulator is WFM; the subscription is kept, so back
+on FM it resumes. Measured on the bench, DAB after FM with rdsx left on: **68.8 → 24.6 KB/s** (spectrum socket).
+
+- **The 1.6 KB live report is the bench's figure.** The bench multiplex has no SPI carousel; on a real one (the
+  Lenovo, 5.1 KB a report) most of the difference is `spiObjs` (up to 40 rows), `spiParse`/`spiCrc`, `nLinks`/`nFi` and
+  the raw `links`/`fi` tables — none read by any screen. A `dab=2` socket now gets them only beside the scopes.
+- **Advanced RDS legitimately costs ~29 KB/s** (bench, `eyeEvery: 2`: eye messages ~9.1 KB at 2.5/s, the rest ~2.6 KB at
+  2.5/s), flat over four minutes. On air it grows for a while as the eye grids fill (their run-length encoding shrinks
+  as zeros disappear) and the AF/EON/ODA lists fill (bounded: 25 / 8 / 8), then plateaus.
+- **Pictures** (`dabslide`, `dablogoair`, `dabmot`): ETag + 304, and `?h=<hash>` immutable — `test-dab-slide-cache.mjs`.
+- **Left alone:** `rspstat` at 10/s (2.3 KB/s, RSP only) — the web page's overload/init chips are always on screen and
+  the app's hardware panel draws it live at 10 Hz; a cut needs a "panel open" flag from both clients, like
+  `dab_scopes`. The scopes' JSON (~1.8 KB a report, only while the Signal pane is open) could be binary; not done.
