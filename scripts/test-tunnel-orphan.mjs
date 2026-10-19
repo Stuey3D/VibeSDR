@@ -53,7 +53,8 @@ const dirSrv = http.createServer((req, res) => {
   req.on('data', (c) => { body += c; });
   req.on('end', () => {
     let j = {}; try { j = JSON.parse(body); } catch {}
-    if (req.url === '/api/directory/register' && j.url) registered.push(j.url);
+    // ★ Any call carrying an address: a restarted server with a saved listing re-publishes by ping, not register.
+    if (j.url) registered.push(j.url);
     res.setHeader('Content-Type', 'application/json');
     if (req.url === '/api/directory/register')
       res.end(JSON.stringify({ id: 'orphan-id', key: 'k'.repeat(64), slug: 'orphan', address: 'orphan.example', verified: true, pingSec: 900 }));
@@ -96,7 +97,7 @@ try {
 
   const before = registered.length;
   srv = start(1, port);
-  ok(await waitFor(() => registered.length > before, 20000), 'the restarted server registers again');
+  ok(await waitFor(() => registered.length > before, 20000), 'the restarted server publishes its address again');
   await sleep(1500);
   ok(tunnels(port).length === 1, `★ exactly ONE tunnel on its port afterwards — the orphan retired (${tunnels(port).length})`);
   ok(tunnels(other).length === 1, `★ the other server's tunnel was never touched (${tunnels(other).length})`);
