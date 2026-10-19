@@ -18040,6 +18040,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     while (!mhz.empty() && (mhz.back()=='\n'||mhz.back()=='\r')) mhz.pop_back();
                 }
                 if (!gov.empty()) j += ",\"governor\":\"" + jsonEscape(gov) + "\"";
+                /* ★ WHAT THE KERNEL OFFERS, and who drives the clock (2026-10-19): the page lists only governors this
+                 *  machine has. The Lenovo's intel_pstate offers performance and powersave, and its menu offered
+                 *  schedutil — saved, refused by vibeserver-governor, and the page never said so. */
+                {
+                    auto line = [](const char* path) {
+                        std::string v;
+                        if (FILE* f = fopen(path, "r")) { char b[256] = {0}; if (fgets(b, sizeof b, f)) v = b; fclose(f); }
+                        while (!v.empty() && (v.back() == '\n' || v.back() == '\r' || v.back() == ' ')) v.pop_back();
+                        return v;
+                    };
+                    const std::string avail = line("/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors");
+                    const std::string drv   = line("/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver");
+                    if (!avail.empty()) j += ",\"governors\":\"" + jsonEscape(avail) + "\"";
+                    if (!drv.empty())   j += ",\"cpuFreqDriver\":\"" + jsonEscape(drv) + "\"";
+                }
                 // ★★ ON A PI, THE FIRMWARE'S CLOCK — readSys() swaps in the mailbox's measured figure
                 //    (vibe_vcio.h). scaling_cur_freq is the kernel's REQUEST: it read 2400 MHz on the
                 //    Pi 500 while the firmware held the ARM at 1000 for under-voltage (2026-09-30).

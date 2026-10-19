@@ -673,6 +673,7 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <option value="performance">Full speed — recommended for a receiver</option>
           <option value="ondemand">On demand — saves a little power</option>
           <option value="schedutil">Schedutil — runs coolest, for a portable or battery host</option>
+          <option value="powersave">Processor's own scaling — runs cooler, for a battery host</option>
           <option value="default">Leave the system setting alone</option>
         </select>
         <div class="hint">A Raspberry Pi normally decides its speed from how busy each core looks.
@@ -683,7 +684,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           given their own tuner. <b>On demand suits a battery or solar host</b> serving one
           listener from a dongle — far less work, and the watts matter more than the headroom.
           <b>Schedutil</b> follows the work most closely and runs the coolest: a Pi 3A+ served WFM
-          stereo with Advanced RDS cleanly at 0.9&nbsp;GHz under it, where on demand sat at 1.2.</div></label>
+          stereo with Advanced RDS cleanly at 0.9&nbsp;GHz under it, where on demand sat at 1.2.
+          <br>On an Intel or AMD PC the processor usually manages its own speed, so the choice there is
+          <b>full speed</b> or <b>the processor's own scaling</b>. Only what this machine offers is listed.</div></label>
       <div class="hint" id="govNow"></div>
     </div>
 
@@ -3353,6 +3356,42 @@ const DRIVER_HW = {
               biasT: true,  rfNotch: false, lnaState: false },
 };
 
+/* ★★★ ONLY THE GOVERNORS THIS MACHINE HAS (2026-10-19). The Lenovo's intel_pstate offers performance and powersave; the
+ *  menu offered schedutil anyway, the save "worked", vibeserver-governor rightly refused it, and the page went on showing
+ *  Schedutil over "Currently: performance". A control that cannot work on this machine is not offered.
+ *  ★ "powersave" means two different things: under intel_pstate / amd-pstate it is the processor's own dynamic scaling
+ *    (their counterpart to schedutil); under the generic cpufreq a Pi uses it pins the MINIMUM clock, which is no
+ *    setting for a receiver. So it is offered only under a pstate driver.
+ *  ★ A saved choice the machine cannot do stays visible, marked, so the owner sees why it is not in force.
+ *  ★ Called from BOTH renderHw (the list) and fill (the saved choice) — whichever lands second gets it right.
+ *  ★ An older server sends no list: everything stays as it was. */
+let govHw = null, govAll = null;
+function govOffer() {
+  const hw = govHw, gsel = $("cpuGovernor");
+  if (!gsel || !hw) return;
+  if (typeof hw.governors !== "string" || !hw.governors.trim()) {
+    // ★ No list (no cpufreq here): the processor's-own-scaling entry is only ever offered on a pstate machine.
+    for (const o of [...gsel.options]) if (o.value === "powersave" && gsel.value !== "powersave") o.remove();
+    return;
+  }
+  // ★ REBUILT, NOT HIDDEN: Safari ignores display:none and `hidden` on an <option>, so a hidden one is still offered.
+  if (!govAll) govAll = [...gsel.options].map(o => ({ value: o.value, label: o.textContent.replace(/ \(set by hand\)$/, "") }));
+  const avail = new Set(hw.governors.trim().split(/\s+/));
+  const pstate = /pstate/.test(hw.cpuFreqDriver || "");
+  const want = gsel.value;
+  const known = govAll.some(g => g.value === want);
+  gsel.innerHTML = "";
+  for (const g of known ? govAll : [...govAll, { value: want, label: `${want} (set by hand)` }]) {
+    const can = g.value === "default" || (avail.has(g.value) && (g.value !== "powersave" || pstate));
+    if (!can && g.value !== want) continue;
+    const o = document.createElement("option");
+    o.value = g.value;
+    o.textContent = can ? g.label : `${g.label} — not available on this processor`;
+    gsel.appendChild(o);
+  }
+  gsel.value = want;
+}
+
 async function renderHw() {
   let hw = null;
   const r = radio();
@@ -3471,6 +3510,8 @@ async function renderHw() {
     gv.textContent = `Currently: ${hw.governor}${mhz}.`;
     gv.style.color = hw.governor === "performance" ? "var(--good)" : "var(--dim)";
   }
+  govHw = hw;
+  govOffer();
   // ★★★ THE SPAN IS A LIST, NOT A TYPED NUMBER. It used to be a number box, which asks the owner
   //     for a figure most people do not have — and every radio refuses the ones it cannot do, so a
   //     wrong guess fails at the hardware and reads as a broken receiver. The rates come from the
@@ -4544,6 +4585,7 @@ function fill() {
       gsel.add(o);
     }
     gsel.value = want;
+    govOffer();
   }
   $("uncompressed").value = String(cfg.uncompressed || 0);
   $("trustedProxies").value = cfg.trustedProxies || "";
