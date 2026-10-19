@@ -61,6 +61,7 @@ import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
+import { dabSlideQuery } from '../../../src/services/dabSlide';
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
@@ -6563,7 +6564,7 @@ function dabRender() {
   /* ★ OFF THE AIR FIRST: the slideshow image the service is transmitting (TS 101 499) outranks
    *  the RadioDNS file — it is what the broadcaster is sending THIS listener right now. The
    *  station list keeps RadioDNS, which covers every row. */
-  const slideUrl = d.slide && d.slide.seq ? readAuthUrl(P(`/vibeserver/dabslide?seq=${d.slide.seq}`)) : '';
+  const slideUrl = dabSlideQuery(d.slide) ? readAuthUrl(P(`/vibeserver/dabslide?${dabSlideQuery(d.slide)}`)) : '';
   const airUrl = cur && cur.logoAir ? P(`/vibeserver/dablogoair?sid=${cur.sid}`) : '';
   const curLogo = slideUrl || airUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
   const head = cur
@@ -6820,7 +6821,9 @@ async function dabKeepAirLogo(key: string, url: string, provisional: boolean) {
   if (provisional && dabLogos.get(key)) return;    // never displace a better source with cover art
   dabAirKept.add(key);
   try {
-    const r = await fetch(url, { cache: 'no-store' });
+    /* ★ 'no-cache', not 'no-store' (2026-10-19): the <img> beside it has just fetched these bytes, and the server now
+     *  sends an ETag, so this is a 304 answered from the browser's copy — the picture crossed the link twice before. */
+    const r = await fetch(url, { cache: 'no-cache' });
     if (!r.ok) { dabAirKept.delete(key); return; }
     const blob = await r.blob();
     if (!blob.size || blob.size > 24576) return;
@@ -7893,7 +7896,7 @@ function updateMediaSession() {
   if (dabOn && dabState) {
     const d = dabState;
     const cur = d.services.find(x => x.sid === d.sid);
-    const slideUrl = d.slide && d.slide.seq ? readAuthUrl(P(`/vibeserver/dabslide?seq=${d.slide.seq}`)) : '';
+    const slideUrl = dabSlideQuery(d.slide) ? readAuthUrl(P(`/vibeserver/dabslide?${dabSlideQuery(d.slide)}`)) : '';
     const airUrl = cur && cur.logoAir ? P(`/vibeserver/dablogoair?sid=${cur.sid}`) : '';
     dabArt = slideUrl || airUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
   }

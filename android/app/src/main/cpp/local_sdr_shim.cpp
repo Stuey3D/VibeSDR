@@ -1181,6 +1181,31 @@ static void dabEnsSaveLocked() {
         std::rename(tmp.c_str(), g_dabEnsFile.c_str());     // ★ atomic, as the gain file is
     }
 }
+/* ★★★ AN OFF-AIR PICTURE, SENT ONCE (2026-10-19). Album art, slides, carousel objects and SPI logos were sent whole
+ *  on every request: the live slide `no-cache` with nothing to revalidate against, `?sid=` re-sent in full every
+ *  60 s, the carousel `no-cache`. Now each carries a STRONG ETag — FNV-1a of the bytes, so the tag IS the picture and
+ *  survives a server restart — and an If-None-Match that matches gets a 304 with no body.
+ *  ★ `immutable`: the URL names the picture itself (`?h=<the ETag>`), so the client may keep it for good and never
+ *    ask again. Otherwise `cache` is the endpoint's old policy, now revalidated (304) instead of re-sent.
+ *  ★ Trade-off: one FNV pass over the bytes per request (tens of KB, microseconds) against the whole picture on the
+ *    wire every time. RAM: none kept. */
+static std::string vsAirEtag(const std::vector<uint8_t>& b, uint64_t known = 0) {
+    uint64_t h = known;
+    if (!h) { h = 1469598103934665603ULL; for (uint8_t c : b) { h ^= c; h *= 1099511628211ULL; } }
+    char t[24]; snprintf(t, sizeof t, "%016llx", (unsigned long long)h);
+    return t;
+}
+static std::string vsAirImageReply(const std::vector<uint8_t>& bytes, const std::string& mime, const std::string& etagHex,
+                                   const std::string& ifNoneMatch, bool immutable, const char* cache) {
+    const std::string etag = "\"" + etagHex + "\"";
+    const std::string hdrs = std::string("Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: ETag\r\n"
+                                         "X-Content-Type-Options: nosniff\r\nCache-Control: ")
+                           + (immutable ? "public, max-age=31536000, immutable" : cache) + "\r\nETag: " + etag + "\r\nConnection: close\r\n";
+    if (!ifNoneMatch.empty() && ifNoneMatch.find(etag) != std::string::npos)
+        return "HTTP/1.1 304 Not Modified\r\n" + hdrs + "\r\n";
+    return "HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\n" + hdrs + "Content-Length: " + std::to_string(bytes.size()) + "\r\n\r\n"
+         + std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
 /** JSON-escape a remembered label. ★ The class member `jsonEscape` is not reachable from up here,
  *  and a label is DECODED FROM THE AIR — a quote, a backslash or a control byte in it would break
  *  every client's parser, so this must never be skipped. Control bytes are dropped rather than
@@ -17128,7 +17153,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
         std::string cfWorkerHeader, vibeViaHeader;   // ★ see vsViaOf
         std::string originHeader, hostHeader;        // ★ see the cross-site check after the proxy resolution
-        std::string ifNoneMatch;                     // ★ GET /bookmarks answers 304 when the list is unchanged
+        std::string ifNoneMatch;                     // ★ GET /bookmarks and the off-air pictures (vsAirImageReply) answer 304 when unchanged
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         bool acceptsGzip = false;         // ★ /mapdata/ and the web client — see the header capture below
         bool acceptsBr = false;           // ★ the web client only: brotli, pre-compressed at build time
@@ -17346,7 +17371,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                               return a2 == std::string::npos ? std::string() : line.substr(a2, b2 - a2 + 1); };
                 if (line.size() > 7 && strncasecmp(line.c_str(), "origin:", 7) == 0) originHeader = hv(7);
                 else if (line.size() > 5 && strncasecmp(line.c_str(), "host:", 5) == 0) hostHeader = hv(5);
-                else if (line.size() > 14 && strncasecmp(line.c_str(), "if-none-match:", 14) == 0) ifNoneMatch = hv(14);   // ★ GET /bookmarks
+                else if (line.size() > 14 && strncasecmp(line.c_str(), "if-none-match:", 14) == 0) ifNoneMatch = hv(14);   // ★ GET /bookmarks, dabslide, dablogoair, dabmot
             }
             if (line.size() > 15) {
                 std::string cl = line.substr(0, 15);
@@ -18907,8 +18932,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::vector<uint8_t> bytes; int ct = -1, st = -1;
             if (!name.empty() && g_dab.carouselObject(name, bytes, ct, st)) {
                 const std::string mime = ct == 2 && st == 1 ? "image/jpeg" : ct == 2 && st == 3 ? "image/png" : "application/octet-stream";
-                std::string body(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\nAccess-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                // ★ A carousel object can be replaced under its name, so revalidated (304), never immutable — see vsAirImageReply.
+                sock->sendstr(vsAirImageReply(bytes, mime, vsAirEtag(bytes), ifNoneMatch, false, "no-cache"));
             } else {
                 sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             }
@@ -18928,7 +18953,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!f.empty()) { if (FILE* fp = fopen(f.c_str(), "rb")) { uint8_t buf[4096]; size_t r; while ((r = fread(buf, 1, sizeof buf, fp)) > 0) bytes.insert(bytes.end(), buf, buf + r); fclose(fp); mime = dabLogoMime(ext); } }
             }
             if (sid && !bytes.empty()) {
-                std::string body(reinterpret_cast<const char*>(bytes.data()), bytes.size());
                 /* ★★★ THAT MIME TYPE CAME OFF THE AIR. It is an SPI attribute copied verbatim out
                  *  of the multiplex (vibe_dab_spi.h, tag 0x80) with no validation, and it was
                  *  spliced straight into a response header — a CR LF in it splits the response and
@@ -18942,9 +18966,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     for (const char* m : kOkMime) if (mime == m) { ok = true; break; }
                     if (!ok) mime = "application/octet-stream";
                 }
-                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\n"
-                              "Access-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nCache-Control: max-age=600\r\n"
-                              "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                // ★ Ten minutes as before, then a 304 rather than the logo again — see vsAirImageReply.
+                sock->sendstr(vsAirImageReply(bytes, mime, vsAirEtag(bytes), ifNoneMatch, false, "max-age=600"));
             } else {
                 sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             }
@@ -18957,17 +18980,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  disk store, so the station list and the VTS bar can show a station whose only
              *  artwork is the one it transmits. Without it, the live slide for whatever is
              *  playing — the pane's behaviour, unchanged. */
+            /* ★★ And with ?h= (2026-10-19) the picture whose hash a dab=2 report named — live or kept — sent `immutable`:
+             *  the URL is the picture, so a client never asks for it twice. If it has been replaced since the report,
+             *  the live slide answers as a plain request would (revalidated, never immutable, so no cache is poisoned). */
             const std::string slideSid = queryParam(reqLine, "sid");
+            const std::string slideH = queryParam(reqLine, "h");
             vibedab::DabService::Slide sl;
-            const bool haveSlide = slideSid.empty()
-                ? g_dab.slide(sl)
-                : g_dab.serviceSlide(uint32_t(strtoul(slideSid.c_str(), nullptr, 10)), sl);
+            bool immutable = false;
+            bool haveSlide = false;
+            if (slideH.size() == 16 && slideH.find_first_not_of("0123456789abcdef") == std::string::npos)
+                immutable = haveSlide = g_dab.slideByHash(strtoull(slideH.c_str(), nullptr, 16), sl);
+            if (!haveSlide)
+                haveSlide = slideSid.empty()
+                    ? g_dab.slide(sl)
+                    : g_dab.serviceSlide(uint32_t(strtoul(slideSid.c_str(), nullptr, 10)), sl);
             if (haveSlide && !sl.bytes.empty()) {
-                std::string body(reinterpret_cast<const char*>(sl.bytes.data()), sl.bytes.size());
-                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + sl.mime + "\r\n"
-                              "Access-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nCache-Control: "
-                              + (slideSid.empty() ? "no-cache" : "max-age=60") + "\r\n"
-                              "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->sendstr(vsAirImageReply(sl.bytes, sl.mime, vsAirEtag(sl.bytes, sl.hash), ifNoneMatch, immutable,
+                                              slideSid.empty() ? "no-cache" : "max-age=60"));
             } else {
                 sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             }
