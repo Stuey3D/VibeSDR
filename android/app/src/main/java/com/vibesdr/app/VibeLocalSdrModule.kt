@@ -884,7 +884,34 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         startVibeServerNow(mgr, dev, opts, promise)
     }
 
+    /** ★★ A START THAT NEVER RETURNS SAYS WHERE IT IS. The Sony (Lite 77, 2026-10-19) span on Start at 96 % of a
+     *  core with the bridge thread busy and not one log line, and a release build gives no way to read a stuck
+     *  thread's stack from outside. So the start thread is watched: past 3 s, its stack goes to the log every 3 s
+     *  (tag VibeStall) until it returns. Silent on every start that finishes. */
+    private fun <T> stallWatched(what: String, body: () -> T): T {
+        val target = Thread.currentThread()
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        val w = Thread({
+            var secs = 0
+            while (!done.get()) {
+                try { Thread.sleep(3000) } catch (_: InterruptedException) { return@Thread }
+                if (done.get()) break
+                secs += 3
+                val st = target.stackTrace.take(30).joinToString("\n  at ")
+                Log.w("VibeStall", "$what still running after ${secs}s on ${target.name}:\n  at $st")
+            }
+        }, "vibe-stall-watch")
+        w.isDaemon = true
+        w.start()
+        try { return body() } finally { done.set(true); w.interrupt() }
+    }
+
     private fun startVibeServerNow(
+        mgr: UsbManager, dev: UsbDevice,
+        opts: com.facebook.react.bridge.ReadableMap, promise: Promise
+    ) = stallWatched("VibeServer start") { startVibeServerNowWatched(mgr, dev, opts, promise) }
+
+    private fun startVibeServerNowWatched(
         mgr: UsbManager, dev: UsbDevice,
         opts: com.facebook.react.bridge.ReadableMap, promise: Promise
     ) {
