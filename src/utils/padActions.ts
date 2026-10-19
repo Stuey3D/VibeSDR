@@ -13,6 +13,9 @@
  *  Pads WITH two analogue sticks ('sticks'):
  *    D-pad = move the highlight · ✕ (bottom) = enter · ○ (right) = back
  *    LEFT stick turned like a jog wheel = tune (clockwise forwards) · RIGHT stick turned = zoom (clockwise in)
+ *  SELECT opens and closes the CONTROLLER GUIDE (src/components/PadGuide.tsx — the pad drawn with what each control does,
+ *  Stuart approved 2026-10-19): it is not a keyboard key, so it comes out as its own { guide } and hardwareKeys hands it
+ *  to the guide, with the profile in use so the guide opens on that tab.
  *  HOLD START (~1 s, never a tap) switches between the two; a notice says which and how to switch back; the choice is
  *  remembered on the device. Without a choice, a pad with sticks gets 'sticks' (padProfile, shared with the web page).
  *
@@ -26,13 +29,14 @@
  */
 import { Jog, padProfile } from './gamepadNav';
 
-export type PadButton = 'up' | 'down' | 'left' | 'right' | 'south' | 'east' | 'west' | 'north' | 'l1' | 'r1' | 'start';
+export type PadButton = 'up' | 'down' | 'left' | 'right' | 'south' | 'east' | 'west' | 'north' | 'l1' | 'r1' | 'start' | 'select';
 
 /** The bits a native report packs its buttons into (the same on iOS and Android — see VibeGamepad.swift / .kt). */
 export const PAD_BIT: Record<PadButton, number> = {
   up: 1, down: 2, left: 4, right: 8,
   south: 16, east: 32, west: 64, north: 128,
   l1: 256, r1: 512, start: 1024,
+  select: 2048,                              // ★ 2026-10-19: the controller guide (VibeGamepad.swift buttonOptions / .kt BUTTON_SELECT)
 };
 
 /** One native report: the whole pad, every time something on it changes. Sticks: −1..1, x right, y DOWN. */
@@ -50,7 +54,9 @@ export interface PadReport {
 export type PadProfile = 'sticks' | 'buttons';
 export type PadOut =
   | { kind: 'down' | 'up'; key: string }
-  | { notice: string; profile: PadProfile };
+  | { notice: string; profile: PadProfile }
+  /** SELECT was pressed: open the controller guide on `profile`, or close it. */
+  | { guide: true; profile: PadProfile };
 
 /** START held this long switches the controls (the web page's figure). */
 export const SWITCH_HOLD_MS = 900;
@@ -58,7 +64,8 @@ const TUNE_DEG = 30, ZOOM_DEG = 45;          // a jog step: the web page's figur
 
 const DPAD: [PadButton, string][] = [['up', 'ArrowUp'], ['down', 'ArrowDown'], ['left', 'ArrowLeft'], ['right', 'ArrowRight']];
 
-/** Which keyboard key a button is, in a profile. null = nothing (START is the switch; a shoulder in 'sticks'). */
+/** Which keyboard key a button is, in a profile. null = nothing (START is the switch, SELECT the guide; a shoulder in
+ *  'sticks'). */
 export function padKey(b: PadButton, prof: PadProfile): string | null {
   const d = DPAD.find(([n]) => n === b);
   if (d) return d[1];
@@ -100,6 +107,13 @@ export class PadMapper {
   constructor(private chosen: string | null = null, private save: (p: PadProfile) => void = () => {}) {}
 
   setChosen(c: string | null) { this.chosen = c; }
+
+  /** The profile in use now — what the guide opens on: the newest connected pad's, else what START chose, else sticks. */
+  current(): PadProfile {
+    let last: PadState | undefined;
+    for (const st of this.pads.values()) last = st;
+    return last ? this.profileOf(last.sticks) : this.chosen === 'buttons' ? 'buttons' : 'sticks';
+  }
   profileOf(sticks: boolean): PadProfile { return padProfile(sticks ? 4 : 2, this.chosen); }
 
   feed(r: PadReport, now: number): PadOut[] {
@@ -132,6 +146,8 @@ export class PadMapper {
         if (k) { st.sent.delete(name); out.push({ kind: 'up', key: k }); }
       }
     }
+    // ★ SELECT: the guide, once per press (never repeated — it is a toggle).
+    if ((b & PAD_BIT.select) && !(prev & PAD_BIT.select)) out.push({ guide: true, profile: prof });
     for (const [name, bit] of Object.entries(PAD_BIT) as [PadButton, number][]) {
       if (!(prev & bit) && (b & bit)) {
         const k = padKey(name, prof);

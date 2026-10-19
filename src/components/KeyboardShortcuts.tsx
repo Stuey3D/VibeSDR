@@ -88,6 +88,7 @@ const SECTIONS: Section[] = [
       'On a pad without sticks the buttons go by where they are, not what they are called: R is Enter and L is back, the top and bottom buttons zoom in and out, and the left and right buttons tune down and up.',
       'On a pad with two sticks the bottom button (\u2715 or A) is Enter and the right one (\u25CB or B) is back. Turn the left stick round like a jog wheel to tune \u2014 clockwise goes up \u2014 and the right stick to zoom, clockwise in.',
       'Hold START for a second to switch between the two. A notice says which you now have and how to switch back, and the choice is remembered. In a text box a controller has no letters, so only Enter and back do anything there, and back leaves the box.',
+      'SELECT shows the controller guide: the pad drawn, with what every button does, for both layouts. Left and right switch between them, and back or SELECT again closes it. It is also in the settings cog, under CONTROLLER GUIDE.',
     ],
   },
   {

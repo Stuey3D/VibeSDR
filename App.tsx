@@ -35,6 +35,7 @@ import type { SDRInstance } from './src/services/instancesApi';
 const watchServerCache = new Map<string, SDRInstance>();
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import PadNotice from './src/components/PadNotice';
+import PadGuide from './src/components/PadGuide';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
 import ServerModeScreen     from './src/screens/ServerModeThemed';   // ★ in the user's colours — see there
@@ -1031,6 +1032,8 @@ export default function App() {
         </CrashBoundary>
         {/* ★ A game controller's HOLD START notice ("hold START to switch back") — nothing until a pad switches. */}
         <PadNotice />
+        {/* ★ The controller guide (2026-10-19) — SELECT on a pad, or the menu's CONTROLLER GUIDE key; nothing until then. */}
+        <PadGuide />
 
         {!splashDone && (
           <Animated.View style={{

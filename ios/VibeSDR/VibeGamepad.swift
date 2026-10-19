@@ -25,6 +25,7 @@ final class VibeGamepad: NSObject {
   private static let UP = 1, DOWN = 2, LEFT = 4, RIGHT = 8
   private static let SOUTH = 16, EAST = 32, WEST = 64, NORTH = 128
   private static let L1 = 256, R1 = 512, START = 1024
+  private static let SELECT = 2048        // ★ 2026-10-19: opens the controller guide (PadGuide.tsx)
 
   private struct Snap: Equatable { var b = 0; var lx: Float = 0; var ly: Float = 0; var rx: Float = 0; var ry: Float = 0 }
 
@@ -71,6 +72,10 @@ final class VibeGamepad: NSObject {
     ids[k] = "gc\(serial)"
     c.handlerQueue = .main
     if let g = c.extendedGamepad {
+      // ★ SELECT (View on Xbox, Share / Create on PlayStation, − on Nintendo) opens the controller guide. Some of these
+      //   carry a system gesture (hold Share to record) which by default keeps the press from the app altogether;
+      //   .alwaysReceive gives us the press and leaves the system its gesture.
+      g.buttonOptions?.preferredSystemGestureState = .alwaysReceive
       g.valueChangedHandler = { [weak self, weak c] _, _ in
         guard let self = self, let c = c else { return }
         self.report(c)
@@ -109,6 +114,7 @@ final class VibeGamepad: NSObject {
       on(g.buttonX.isPressed, Self.WEST); on(g.buttonY.isPressed, Self.NORTH)
       on(g.leftShoulder.isPressed, Self.L1); on(g.rightShoulder.isPressed, Self.R1)
       on(g.buttonMenu.isPressed, Self.START)
+      on(g.buttonOptions?.isPressed ?? false, Self.SELECT)
       s.lx = Self.axis(g.leftThumbstick.xAxis.value)
       s.ly = Self.axis(-g.leftThumbstick.yAxis.value)     // GameController's y is UP; ours is DOWN
       s.rx = Self.axis(g.rightThumbstick.xAxis.value)

@@ -188,6 +188,8 @@ export interface MenuSheetProps {
   onHideControls?: () => void;
   /** Opens the full keyboard reference — see KeyboardShortcuts.tsx. */
   onKeyHelp?: () => void;
+  /** Opens the controller guide — see PadGuide.tsx (SELECT on a pad opens it too). */
+  onPadGuide?: () => void;
   onDispReset?:      () => void;
   onDispSaveServer?: () => void;
   onDispSaveGlobal?: () => void;
@@ -1246,7 +1248,7 @@ function MenuSheetBody({
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
   signalMode = 'snr', onSignalMode,
   displayStyle = 'amber', onDisplayStyle,
-  drumMode = 'normal', onDrumMode, onCentreVfo, vfoLocked = true, onToggleVfoLock, onHideControls, onKeyHelp,
+  drumMode = 'normal', onDrumMode, onCentreVfo, vfoLocked = true, onToggleVfoLock, onHideControls, onKeyHelp, onPadGuide,
   mediaSkip = 'step', onMediaSkip,
   onDispReset, onDispSaveServer, onDispSaveGlobal,
   hapticsEnabled = false, onHaptics, hapticsHardware = true,
@@ -1654,6 +1656,10 @@ function MenuSheetBody({
             </BtnRow>
             <BtnRow>
               <Btn label="⌨ KEYBOARD" full onPress={onKeyHelp} />
+            </BtnRow>
+            {/* ★ The pad drawn with what each control does (2026-10-19). SELECT on the pad opens it too. */}
+            <BtnRow>
+              <Btn label="CONTROLLER GUIDE" full onPress={onPadGuide} />
             </BtnRow>
             <BtnRow>
               <Btn label="▼ HIDE CONTROLS" full onPress={onHideControls} />

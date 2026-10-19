@@ -132,7 +132,7 @@ import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import FkaSplash from '../components/FkaSplash';
 import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus } from '../components/PanelNav';
 import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
-import { addKeyListener, SCREEN_PRIORITY, keyDirOf } from '../utils/hardwareKeys';
+import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -10597,7 +10597,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named above them.',
       target: tourRef('menuBtn'), illustration: schemeMock },
     { id: 'keys', title: 'A keyboard or controller drives it all',
-      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom. A game controller does the same, on Android too: the D-pad moves the highlight, and holding START switches between face buttons and the two sticks. More in the settings cog, under KEYBOARD.',
+      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom. A game controller does the same, on Android too: the D-pad moves the highlight, SELECT shows a guide to every button, and holding START switches between face buttons and the two sticks. More in the settings cog, under KEYBOARD and CONTROLLER GUIDE.',
       target: tourRef('menuBtn'), illustration: keysMock },
     // ★★ v5, not v4: the two steps above are new in V10 and describe things that
     //    already shipped invisibly. Bumping the key re-runs the tour ONCE for
@@ -12034,6 +12034,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onWheelAction={onWheelAction} hapticsHardware={hapticsHardware}
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
         onKeyHelp={() => { setMenuOpen(false); setKeyHelpOpen(true); }}
+        onPadGuide={() => { setMenuOpen(false); openPadGuide(); }}
         vfoLocked={vfoLocked}           onToggleVfoLock={onToggleVfoLock}
         onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
         onDispSaveGlobal={onDispSaveGlobal}

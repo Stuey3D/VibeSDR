@@ -53,6 +53,7 @@ object VibeGamepad {
     private const val UP = 1; private const val DOWN = 2; private const val LEFT = 4; private const val RIGHT = 8
     private const val SOUTH = 16; private const val EAST = 32; private const val WEST = 64; private const val NORTH = 128
     private const val L1 = 256; private const val R1 = 512; private const val START = 1024
+    private const val SELECT = 2048       // ★ 2026-10-19: opens the controller guide (PadGuide.tsx)
 
     @Volatile var ctx: ReactApplicationContext? = null
 
@@ -85,6 +86,8 @@ object VibeGamepad {
         KeyEvent.KEYCODE_BUTTON_L1 -> L1
         KeyEvent.KEYCODE_BUTTON_R1 -> R1
         KeyEvent.KEYCODE_BUTTON_START -> START
+        // ★ View on Xbox, Share / Create on PlayStation, − on Nintendo pads: the controller guide.
+        KeyEvent.KEYCODE_BUTTON_SELECT -> SELECT
         else -> 0
     }
 

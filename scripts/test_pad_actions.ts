@@ -14,7 +14,7 @@ const want: Record<string, [string | null, string | null]> = {   // button: [but
   up: ['ArrowUp', 'ArrowUp'], down: ['ArrowDown', 'ArrowDown'], left: ['ArrowLeft', 'ArrowLeft'], right: ['ArrowRight', 'ArrowRight'],
   r1: ['Enter', null], l1: ['Back', null],
   north: ['ZoomIn', null], south: ['ZoomOut', 'Enter'], west: ['TuneDown', null], east: ['TuneUp', 'Back'],
-  start: [null, null],
+  start: [null, null], select: [null, null],
 };
 for (const [b, [bp, sp]] of Object.entries(want)) {
   ok(action(padKey(b as any, 'buttons')) === bp, `buttons: ${b} -> ${bp}`);
@@ -102,6 +102,24 @@ for (const [b, [bp, sp]] of Object.entries(want)) {
   let out: PadOut[] = [];
   for (let a = 0; a <= 180; a += 5) out = out.concat(mb.feed({ id: 'k', sticks: true, lx: Math.cos(a * Math.PI / 180), ly: Math.sin(a * Math.PI / 180) }, 0));
   ok(keys(out) === '', 'buttons profile: the sticks do nothing');
+}
+
+// ── SELECT: the controller guide (2026-10-19) — once per press, with the profile in use; never a keyboard key ──
+{
+  const m = new PadMapper(null);
+  ok(m.current() === 'sticks', 'no pad and no choice: the guide opens on two sticks');
+  let o = m.feed({ id: 's', sticks: true, b: PAD_BIT.select }, 0);
+  const g = o.find((x) => 'guide' in x) as any;
+  ok(!!g && g.profile === 'sticks' && keys(o) === '', 'SELECT on a two-stick pad: the guide, on sticks, and no key');
+  o = m.feed({ id: 's', sticks: true, b: PAD_BIT.select }, 50);
+  ok(!o.some((x) => 'guide' in x), 'held: once per press, not repeated');
+  m.feed({ id: 's', sticks: true, b: 0 }, 100);
+  o = m.feed({ id: 's', sticks: true, b: PAD_BIT.select }, 150);
+  ok(o.some((x) => 'guide' in x), 'pressed again: again (the guide toggles)');
+  const mb = new PadMapper('buttons');
+  ok(mb.current() === 'buttons', 'no pad, buttons chosen: the guide opens on buttons');
+  const gb = mb.feed({ id: 't', sticks: true, b: PAD_BIT.select }, 0).find((x) => 'guide' in x) as any;
+  ok(gb?.profile === 'buttons' && mb.current() === 'buttons', 'a remembered choice decides the tab');
 }
 
 console.log(fails ? `test_pad_actions: ${fails} FAILED` : 'test_pad_actions: all ok');

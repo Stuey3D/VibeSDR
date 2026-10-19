@@ -26,6 +26,8 @@
  *   VibeGamepad.kt on Android) reports the whole pad as a 'VibePad' event whenever it changes; src/utils/padActions.ts
  *   turns that into the keyboard's own keys by Stuart's scheme, and they go through the same bus with `pad: true`. So
  *   every listener above works with a pad, with no code of its own. Nothing runs without a pad connected.
+ *   ★ SELECT is not a key: it opens and closes the CONTROLLER GUIDE (PadGuide, 2026-10-19) through addPadGuideListener,
+ *     and the menu's CONTROLLER GUIDE key asks for it with openPadGuide — both on the layout in use (padProfileNow).
  *   ★ While a field has the cursor the pad obeys the keyboard's rule (toHwKey): only enter and back reach the app, and
  *     back lets go of the cursor — natively, as Escape does (leaveTextField).
  */
@@ -59,13 +61,18 @@ let padLoaded = false;
 let padTyping = false;
 let padHoldTimer: ReturnType<typeof setTimeout> | null = null;
 const padNoticeListeners = new Set<(text: string, profile: PadProfile) => void>();
+const padGuideListeners = new Set<(cmd: 'toggle' | 'open', profile: PadProfile) => void>();
+
+/** What START last chose on this device — read once, on the first pad report or the first guide. */
+function loadPadChoice(): Promise<void> {
+  if (padLoaded) return Promise.resolve();
+  padLoaded = true;
+  return AsyncStorage.getItem(PAD_PROFILE_KEY).then((v) => { if (v === 'sticks' || v === 'buttons') pad.setChosen(v); }).catch(() => {});
+}
 
 function onPad(r: (PadReport & { typing?: boolean }) | null | undefined) {
   if (!r || typeof r.id !== 'string') return;
-  if (!padLoaded) {
-    padLoaded = true;
-    AsyncStorage.getItem(PAD_PROFILE_KEY).then((v) => { if (v === 'sticks' || v === 'buttons') pad.setChosen(v); }).catch(() => {});
-  }
+  void loadPadChoice();
   padTyping = !!r.typing;
   runPad(pad.feed(r, Date.now()));
   armPadHold();
@@ -73,6 +80,7 @@ function onPad(r: (PadReport & { typing?: boolean }) | null | undefined) {
 
 function runPad(outs: PadOut[]) {
   for (const o of outs) {
+    if ('guide' in o) { emitGuide('toggle', o.profile); continue; }
     if ('notice' in o) { padNoticeListeners.forEach((f) => { try { f(o.notice, o.profile); } catch { /* a listener's fault */ } }); continue; }
     bus.dispatch(o.kind, { key: o.key, plain: false, typing: padTyping, pad: true });
     // ★ Back in a field leaves it — one layer, exactly as Escape on the keyboard (the native window does that one).
@@ -93,6 +101,25 @@ export function addPadNoticeListener(f: (text: string, profile: PadProfile) => v
   ensureNative();
   padNoticeListeners.add(f);
   return { remove: () => { padNoticeListeners.delete(f); } };
+}
+
+function emitGuide(cmd: 'toggle' | 'open', p: PadProfile) {
+  padGuideListeners.forEach((f) => { try { f(cmd, p); } catch { /* a listener's fault */ } });
+}
+
+/** SELECT on a pad ('toggle') or the menu's CONTROLLER GUIDE key ('open'), with the layout to open on (PadGuide). */
+export function addPadGuideListener(f: (cmd: 'toggle' | 'open', profile: PadProfile) => void): { remove(): void } {
+  ensureNative();
+  padGuideListeners.add(f);
+  return { remove: () => { padGuideListeners.delete(f); } };
+}
+
+/** The layout in use now: the connected pad's, else what START last chose here, else two sticks. */
+export function padProfileNow(): PadProfile { return pad.current(); }
+
+/** The menu's CONTROLLER GUIDE key — opens it on the layout in use (once the remembered choice has been read). */
+export function openPadGuide() {
+  loadPadChoice().then(() => emitGuide('open', pad.current()));
 }
 
 /** Listen for key presses ('down') or releases ('up'). Returns a subscription like NativeEventEmitter's. A 'down'

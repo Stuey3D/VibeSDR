@@ -2517,7 +2517,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         {kbHint && (
           <Text style={[styles.kbHint, { color: C.textDim }]} numberOfLines={2}>
             {kbHintPad
-              ? 'Controller: the D-pad moves · enter connects · back goes back · hold START to switch the buttons'
+              ? 'Controller: the D-pad moves · enter connects · back goes back · SELECT shows the guide'
               : 'Keyboard: arrows or W A S D move · Enter connects · Backspace or Esc goes back'}
           </Text>
         )}
