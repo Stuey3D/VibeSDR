@@ -514,6 +514,13 @@ printf '\n\033[1m── bulk bookmark import (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bookmark-import.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ A BOOKMARK NAME SURVIVES A RESTART UNCHANGED (2026-10-19): the loader took names RAW while the writer escapes them,
+#     so a `\` doubled on every save until the Sony's Lite could not get past loading its list. Round trip, a bloated
+#     file loading promptly and trimmed, a 16 MB+ file set aside. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── bookmark names across restarts (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bookmark-escape.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★ AN IDLE DECODER SOCKET IS PINGED (2026-10-10): behind Cloudflare's ~100 s idle cut-off the /ws/dxcluster socket
 #    reconnected for ever ("an error log as long as my arm"). ~30 s. Same VIBESERVER_BIN rule.
 # ★★★ …and end to end on the real server and the bench multiplex: a legacy socket unchanged, a dab=2 socket's

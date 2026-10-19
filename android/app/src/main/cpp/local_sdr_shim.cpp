@@ -2146,62 +2146,189 @@ static std::string chatShareEnsembleLabel(int block) {
 }
 
 /** Restore the saved list at start-up. The APP owns persistence — the shim has no
- *  storage of its own, and this mirrors how the station list already works. */
-static void bmLoadJson(const std::string& json) {
+ *  storage of its own, and this mirrors how the station list already works.
+ *
+ *  ★★★ PARSED AS JSON, NOT SCANNED FOR FIELDS (2026-10-19). This used to find "name":" and take
+ *  everything up to the next quote, RAW — while bmEsc() escapes every backslash and quote on the
+ *  way out. So a name holding a backslash came back with its escape still in it, went out with
+ *  that escaped AGAIN, and doubled on every save; a quote cut the name at its escape and left a
+ *  backslash to do the same. The list saves on EVERY change, so one RDS name with a stray `\` or
+ *  `"` in it — weak-signal garbage — grew exponentially. And the scan searched to the END of the
+ *  file for every row's optional fields, so the load was quadratic in a file that was exploding.
+ *  ★ Seen as a server that would not START: the Sony (Lite 77) span at 96 % of a core inside
+ *    setBookmarksPath, before the radio was touched, and logged nothing — after its HF+ had spent
+ *    a few days learning stations. The NooElec and a brand-new V4L both "refused to start".
+ *  ★ The writer was always right, so even a bloated file is valid JSON: this reads it, bmClean
+ *    cuts every name back to its 64 bytes, and the save below writes the list out whole again.
+ *  Returns false — nothing loaded, nothing saved — when the body is not a JSON array. */
+/** ★ One pass over the saved list — an array of flat objects, exactly what bmJsonLocked writes. Strings are
+ *  UNESCAPED (the whole point, see above) and kept to their first `cap` bytes while the scan runs on to the closing
+ *  quote, so a name of any length costs one read and no memory. Not the shared parser (vibe::antswitch::parseJson):
+ *  that one refuses any text over 64 KB and any string over 4 KB — built for small messages, it would have loaded a
+ *  300 KB imported list as nothing at all. */
+struct BmRow {
+    std::map<std::string, std::string> s;   // string fields, unescaped and capped
+    std::map<std::string, double>      n;   // number fields
+    std::map<std::string, bool>        b;   // true / false
+};
+static bool bmScanRows(const std::string& t, std::vector<BmRow>& rows) {
+    size_t i = 0;
+    const size_t N = t.size();
+    auto ws = [&] { while (i < N && (t[i] == ' ' || t[i] == '\n' || t[i] == '\r' || t[i] == '\t')) ++i; };
+    // A JSON string starting at t[i] == '"'. Returns false when it never closes.
+    auto str = [&](std::string* out, size_t cap) {
+        ++i;
+        while (i < N) {
+            char c = t[i++];
+            if (c == '"') return true;
+            if (c == '\\') {
+                if (i >= N) return false;
+                const char e = t[i++];
+                switch (e) {
+                    case 'n': c = '\n'; break; case 't': c = '\t'; break; case 'r': c = '\r'; break;
+                    case 'b': c = '\b'; break; case 'f': c = '\f'; break;
+                    case 'u': {
+                        if (i + 4 > N) return false;
+                        unsigned cp = 0;
+                        for (int k = 0; k < 4; ++k) {
+                            const char h = t[i++];
+                            cp = cp * 16 + (h >= '0' && h <= '9' ? h - '0' : h >= 'a' && h <= 'f' ? h - 'a' + 10
+                                          : h >= 'A' && h <= 'F' ? h - 'A' + 10 : 0);
+                        }
+                        if (out && out->size() < cap) {
+                            if (cp < 0x80) *out += char(cp);
+                            else if (cp < 0x800) { *out += char(0xC0 | (cp >> 6)); *out += char(0x80 | (cp & 0x3F)); }
+                            else { *out += char(0xE0 | (cp >> 12)); *out += char(0x80 | ((cp >> 6) & 0x3F)); *out += char(0x80 | (cp & 0x3F)); }
+                        }
+                        continue;
+                    }
+                    default: c = e;   // \" \\ \/
+                }
+            }
+            if (out && out->size() < cap) *out += c;
+        }
+        return false;
+    };
+    // Any other value — skipped, nesting and strings included, so an unknown field never derails the row.
+    auto skip = [&]() -> bool {
+        int depth = 0;
+        do {
+            ws();
+            if (i >= N) return false;
+            const char c = t[i];
+            if (c == '"') { if (!str(nullptr, 0)) return false; }
+            else if (c == '{' || c == '[') { ++depth; ++i; }
+            else if (c == '}' || c == ']') { if (--depth < 0) return false; ++i; }
+            else if (c == ',' || c == ':') { if (depth == 0) return false; ++i; }
+            else { while (i < N && t[i] != ',' && t[i] != '}' && t[i] != ']' && t[i] != ' ' && t[i] != '\n') ++i; }
+        } while (depth > 0);
+        return true;
+    };
+    ws();
+    if (i >= N || t[i] != '[') return false;
+    ++i;
+    ws();
+    if (i < N && t[i] == ']') return true;
+    while (i < N) {
+        ws();
+        if (i >= N) return false;
+        if (t[i] != '{') { if (!skip()) return false; }   // not a row — step over it
+        else {
+            ++i;
+            BmRow r;
+            ws();
+            if (i < N && t[i] == '}') ++i;
+            else for (;;) {
+                ws();
+                if (i >= N || t[i] != '"') return false;
+                std::string key;
+                if (!str(&key, 64)) return false;
+                ws();
+                if (i >= N || t[i] != ':') return false;
+                ++i; ws();
+                if (i >= N) return false;
+                const char c = t[i];
+                if (c == '"') { std::string v; if (!str(&v, 256)) return false; r.s[key] = std::move(v); }
+                else if (c == '-' || (c >= '0' && c <= '9')) {
+                    char* end = nullptr;
+                    const double v = std::strtod(t.c_str() + i, &end);
+                    if (end == t.c_str() + i) return false;
+                    i = (size_t)(end - t.c_str());
+                    r.n[key] = v;
+                }
+                else if (t.compare(i, 4, "true") == 0)  { r.b[key] = true;  i += 4; }
+                else if (t.compare(i, 5, "false") == 0) { r.b[key] = false; i += 5; }
+                else if (!skip()) return false;
+                ws();
+                if (i < N && t[i] == ',') { ++i; continue; }
+                if (i < N && t[i] == '}') { ++i; break; }
+                return false;
+            }
+            rows.push_back(std::move(r));
+        }
+        ws();
+        if (i < N && t[i] == ',') { ++i; continue; }
+        if (i < N && t[i] == ']') return true;
+        return false;
+    }
+    return false;
+}
+
+static bool bmLoadJson(const std::string& json) {
+    std::vector<BmRow> rows;
+    if (!bmScanRows(json, rows)) {
+        LOGE("bookmarks: not a JSON array of rows (%zu bytes) — nothing loaded", json.size());
+        return false;
+    }
+    auto num = [](const BmRow& r, const char* k, double def) {
+        const auto it = r.n.find(k);
+        return it != r.n.end() && std::isfinite(it->second) ? it->second : def;
+    };
+    // ★ Bounded before the cast: a double past INT_MAX cast to int is undefined, not merely wrong.
+    auto small = [&](const BmRow& r, const char* k, int def) {
+        const double v = num(r, k, def);
+        return v >= -2147483648.0 && v <= 2147483647.0 ? (int)v : def;
+    };
+    auto text = [](const BmRow& r, const char* k) {
+        const auto it = r.s.find(k);
+        return it == r.s.end() ? std::string() : it->second;
+    };
     std::lock_guard<std::mutex> lk(g_bmMtx);
     g_bookmarks.clear();
-    // Deliberately minimal parsing: this is our OWN serialisation coming back, not
-    // arbitrary input, so scan for the fields rather than pull in a JSON library.
-    size_t p = 0;
-    while ((p = json.find("\"frequency\":", p)) != std::string::npos) {
-        long long freq = atoll(json.c_str() + p + 12);
-        size_t np  = json.find("\"name\":\"", p);
-        size_t lp  = json.find("\"lastHeard\":", p);
-        size_t mp  = json.find("\"manual\":", p);
-        size_t mdp = json.find("\"mode\":\"", p);
-        size_t pip = json.find("\"pi\":", p);
-        // ★ Each of these must belong to THIS entry, not a later one: bounded by the next '{'.
-        const size_t nxt = json.find('{', p + 1);
-        auto within = [&](size_t q) { return q != std::string::npos && (nxt == std::string::npos || q < nxt); };
-        const size_t sp = json.find("\"sid\":", p), ep = json.find("\"eid\":", p), cp = json.find("\"ecc\":", p);
-        if (np == std::string::npos || lp == std::string::npos) break;
-        size_t ns = np + 8, ne = json.find('"', ns);
+    for (const auto& r : rows) {
+        const double fr = num(r, "frequency", 0.0);
+        if (!(fr > 0.0 && fr < 1e12)) continue;
         LearnedBm b;
-        b.name = json.substr(ns, ne - ns);
-        b.pi = (pip != std::string::npos) ? atoi(json.c_str() + pip + 5) : -1;
-        b.lastHeard = atoll(json.c_str() + lp + 12);
-        b.manual = (mp != std::string::npos) && json.compare(mp + 9, 4, "true") == 0;
-        b.hz = freq;                              // the saved value IS the exact frequency
-        if (mdp != std::string::npos) {
-            size_t ms = mdp + 8, me = json.find('"', ms);
-            if (me != std::string::npos) b.mode = json.substr(ms, me - ms);
-        }
+        b.hz = (long long)llround(fr);                // the saved value IS the exact frequency
+        b.name = bmClean(text(r, "name"), 64);
+        if (b.name.empty()) continue;
+        b.pi = small(r, "pi", -1);
+        b.lastHeard = (long long)num(r, "lastHeard", 0.0);
+        const auto m = r.b.find("manual");
+        b.manual = m != r.b.end() && m->second;
+        const std::string md = bmClean(text(r, "mode"), 16);
+        if (!md.empty()) b.mode = md;
         /* ★ Absent in every record written before provenance existed — and for those, "heard and
          *  settled" is the honest reading, because settling was the ONLY way a bookmark could come
-         *  into existence at all. That is the struct default, so an absent field needs no branch;
-         *  this only reads one when it IS there. */
-        const size_t nsp = json.find("\"nameSrc\":", p);
-        if (within(nsp)) b.nameSrc = atoi(json.c_str() + nsp + 10);
-        if (within(sp)) b.sid = atoi(json.c_str() + sp + 6);
-        if (within(ep)) b.eid = atoi(json.c_str() + ep + 6);
-        if (within(cp)) b.ecc = atoi(json.c_str() + cp + 6);
+         *  into existence at all. That is the struct default. */
+        b.nameSrc = small(r, "nameSrc", b.nameSrc);
+        b.sid = small(r, "sid", -1);
+        b.eid = small(r, "eid", -1);
+        b.ecc = small(r, "ecc", -1);
         /* ★ The saved passband, when the record has one (an app import, or anything saved since
          *  2026-09-29). Absent = the mode default, which is what every older record meant. */
-        {
-            const size_t blp = json.find("\"bandwidth_low\":", p), bhp = json.find("\"bandwidth_high\":", p);
-            if (within(blp) && within(bhp)) {
-                const int lo = atoi(json.c_str() + blp + 16), hi = atoi(json.c_str() + bhp + 17);
-                if (hi > lo) { b.hasBw = true; b.bwLo = lo; b.bwHi = hi; }
-            }
+        if (r.n.count("bandwidth_low") && r.n.count("bandwidth_high")) {
+            const int lo = small(r, "bandwidth_low", 0), hi = small(r, "bandwidth_high", 0);
+            if (hi > lo) { b.hasBw = true; b.bwLo = lo; b.bwHi = hi; }
         }
-        if (freq > 0 && !b.name.empty()) g_bookmarks[bmKeyFor((double)freq, b.sid)] = b;
-        p = ne;
+        g_bookmarks[bmKeyFor((double)b.hz, b.sid)] = b;
     }
     bmPrune();     // a long gap since the last run may have aged some out
     // PERSIST. Without this, a list handed in from the app (an import) replaced the
     // in-memory set but never reached the file, so it evaporated at the next restart —
     // exactly the bug we just finished fixing for the web client's import path.
     bmSaveLocked();
+    return true;
 }
 
 /** Serialise WITHOUT taking the lock — callers that already hold it use this. */
@@ -28074,6 +28201,23 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
     }
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) return;                       // nothing saved yet — that's fine
+    /* ★★ A LIST THIS BIG IS DAMAGE, NOT STATIONS. 1,478 imported ATC rows are ~300 KB; 16 MB is
+     *  some 70,000 rows. A file past it is the escape-doubling above (bmLoadJson) — read whole, it
+     *  could take the memory of the 1 GB boxes we promise to run on. It is set ASIDE, never
+     *  deleted: the owner's hand-saved entries are in there and can be recovered by hand. */
+    constexpr long kBmFileMax = 16L * 1024 * 1024;
+    if (fseek(f, 0, SEEK_END) == 0) {
+        const long size = ftell(f);
+        if (size > kBmFileMax) {
+            fclose(f);
+            const std::string aside = path + ".oversize";
+            const bool moved = rename(path.c_str(), aside.c_str()) == 0;
+            LOGE("bookmarks: %ld bytes is not a station list — %s, starting with none", size,
+                 moved ? ("set aside as " + aside).c_str() : "could not set it aside");
+            return;
+        }
+        fseek(f, 0, SEEK_SET);
+    }
     char buf[8192];
     size_t n;
     while ((n = fread(buf, 1, sizeof buf, f)) > 0) body.append(buf, n);
