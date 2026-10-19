@@ -22241,9 +22241,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void dropOldestLocked() {
         if (iqQueue.empty()) return;
         size_t n = iqQueue.front().v.size();
+        const bool lostStep = iqQueue.front().gainStep;
         iqQueuedSamples -= n;
         recycleIqLocked(std::move(iqQueue.front().v));   // ★ see iqFree_
         iqQueue.pop_front();
+        // ★ A gain step flagged in the dropped buffer has still happened: the next one carries it.
+        if (lostStep && !iqQueue.empty()) iqQueue.front().gainStep = true;
         iqDroppedSamples.fetch_add(n, std::memory_order_relaxed);
         // ★ Whatever is consumed next follows the hole this just made — see IqBuf.
         if (!iqQueue.empty()) iqQueue.front().gap = true; else iqGapNext = true;
