@@ -824,6 +824,18 @@ void stopTunnel();   // ★ startTunnel retires the previous one first
 
 std::string startTunnel(int port) {
     stopTunnel();
+    /* ★★★ AND ANY TUNNEL A PREVIOUS PROCESS LEFT ON THIS PORT (Kiko, 2026-10-19, N270). stopTunnel() kills only what
+     *  THIS process started — it returns at once when g_tunnelPort is 0, which it always is in a fresh process. So when
+     *  a process went without stopping its tunnel (the self-restart's execv keeps the pid and runs no teardown; a crash
+     *  or a kill runs none either), the old cloudflared lived on beside the new one: Kiko's "Restart server" left four
+     *  tunnels for two radios, the address was taken, and the server dropped off the directory until a reboot.
+     *  Matched by OUR port exactly, as stopTunnel does, so another radio's tunnel on the same box is never touched. */
+    {
+        char pat[192];
+        snprintf(pat, sizeof pat,
+                 "pkill -f 'tunnel --no-autoupdate --url http://127.0.0.1:%d ' 2>/dev/null", port);
+        run(pat);
+    }
     const std::string exe = cloudflaredPath();
     char cmd[1024];
     /* ★★★ --protocol http2, AND IT IS A MEASURED CHOICE, NOT A PREFERENCE. cloudflared defaults
