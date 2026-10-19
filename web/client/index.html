@@ -2968,6 +2968,55 @@ select.btn { padding: 6px 8px; }
 .gpFocus.gpAdjust { outline-color: #ffb833 !important; }
 /* ★ A decoder box that has the D-pad (gamepad.ts grab): a quieter ring round the box, the bright one on the item. */
 .gpGrab { outline: 2px solid rgba(124,255,155,0.45) !important; outline-offset: 2px; }
+/* ── ★★★ THE CONTROLLER GUIDE (padGuide.ts — Stuart approved the prototype 2026-10-19) ─────────────────────────────
+   A panel like the menu (same glass, border, dim and open animation — the shared rule above, by id below), but wide:
+   the drawing wants room. ★ ABOVE THE SPLASH: SELECT on a pad opens it from the landing page too.
+   ★ Colours: the page's tokens where it has them (--amber title and BACK, the menu's tab keys); the drawing's warm
+     greys and the action green (the pad highlight's own) are the prototype's. */
+#padGuide {
+  --pg-body: #2b2620; --pg-edge: #6b6055; --pg-key: #3d362f; --pg-keye: #8a7d6f; --pg-well: #1a1713;
+  --pg-grn: #7cff9b; --pg-grnbg: #1f3a26; --pg-ink: #e9dcc6; --pg-dim: #8d8173;
+  position: fixed; top: 50%; left: 50%; z-index: 110;
+  width: min(96vw, 1240px); max-height: 92vh; max-height: 92dvh; overflow-y: auto; scrollbar-gutter: stable;
+  background: var(--ov-panel98, rgba(8,6,2,0.98)); border: 1px solid var(--btn-border);
+  border-radius: 12px; padding: 14px 16px 16px;
+  box-shadow: var(--ov-panel-shadow, 0 24px 60px rgba(0,0,0,0.7), 0 0 0 100vmax rgba(0,0,0,0.55));
+  transform: translate(-50%, -48%) scale(0.97);
+  opacity: 0; visibility: hidden;
+  transition: opacity .14s ease-out, transform .14s ease-out, visibility .14s;
+  color: var(--pg-ink);
+}
+#padGuide.open { opacity: 1; visibility: visible; transform: translate(-50%, -50%) scale(1); }
+#pgTabs { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 10px 0 8px; }
+#pgTitle { margin: 0; text-align: center; color: var(--amber); font-size: clamp(17px, 2.6vw, 28px);
+           letter-spacing: .14em; font-weight: 700; }
+#pgSub { text-align: center; color: var(--pg-dim); margin: 4px 0 8px; font-size: clamp(12px, 1.4vw, 16px); }
+#pgFoot { text-align: center; color: var(--pg-dim); font-size: clamp(12px, 1.3vw, 15px); margin-top: 10px; line-height: 1.45; }
+#pgGuide { position: relative; display: grid; gap: 12px 20px; align-items: center;
+           grid-template-columns: 1fr minmax(0, 2.2fr) 1fr; grid-template-areas: "left pad right"; }
+#pgPad { grid-area: pad; min-width: 0; }
+#pgPad svg { width: 100%; height: auto; display: block; }
+.pgCol { display: flex; flex-direction: column; gap: clamp(10px, 2.2vh, 24px); min-width: 0; }
+.pgLeft { grid-area: left; align-items: flex-end; text-align: right; }
+.pgRight { grid-area: right; align-items: flex-start; }
+.pgLab { display: flex; gap: 8px; align-items: baseline; max-width: 22em; }
+.pgLeft .pgLab { flex-direction: row-reverse; }
+.pgNum { flex: none; width: 1.6em; height: 1.6em; border-radius: 50%; display: inline-grid; place-items: center;
+         background: var(--pg-grnbg); color: var(--pg-grn); border: 1.5px solid var(--pg-grn); font-size: .8em; font-weight: 700; }
+.pgLab b { display: block; color: var(--pg-grn); font-size: clamp(13px, 1.3vw, 18px); letter-spacing: .03em; }
+.pgLab.back b { color: var(--amber); }
+.pgLab.meta b { color: var(--pg-ink); }
+.pgS { display: block; font-size: clamp(11px, 1.05vw, 14px); color: var(--pg-ink); opacity: .85; }
+#pgLines { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+#pgLines path { fill: none; stroke: var(--pg-dim); stroke-width: 1.5; }
+/* Narrower: the pad on top, the labels as a numbered list (two columns while they fit), no leader lines. */
+#pgGuide.pgCols2 { grid-template-columns: 1fr 1fr; grid-template-areas: "pad pad" "left right"; align-items: start; }
+#pgGuide.pgCols1 { grid-template-columns: 1fr; grid-template-areas: "pad" "left" "right"; align-items: start; }
+#pgGuide.pgCols2 .pgCol, #pgGuide.pgCols1 .pgCol { align-items: stretch; text-align: left; }
+#pgGuide.pgCols2 .pgLeft .pgLab, #pgGuide.pgCols1 .pgLeft .pgLab { flex-direction: row; }
+#pgGuide.pgCols2 #pgLines, #pgGuide.pgCols1 #pgLines { display: none; }
+/* ★ A short landscape window (a phone on its side): the pad is capped by HEIGHT so the list starts on screen. */
+#pgGuide.pgCols2 #pgPad svg, #pgGuide.pgCols1 #pgPad svg { max-height: 46vh; max-height: 46dvh; }
 </style>
 
 <!-- Lock-screen / Now Playing artwork — the VibeServer mark (see buildArtwork in main.ts).
@@ -4958,6 +5007,16 @@ select.btn { padding: 6px 8px; }
     <div class="seg"><button class="btn" id="ctlReset">↺ DEFAULT COLOURS</button></div>
   </div>
 
+  <!-- ★★★ THE CONTROLLER GUIDE (Stuart approved the prototype 2026-10-19) — the pad drawn with what each control does,
+       both layouts. SELECT on the pad opens it too (gamepad.ts); padGuide.ts draws it. -->
+  <h2>GAME CONTROLLER</h2>
+  <div class="mrow">
+    <label>GUIDE</label>
+    <div class="seg"><button class="btn" id="btnPadGuide">CONTROLLER GUIDE</button></div>
+  </div>
+  <div class="lbl wrap">A game controller or a handheld drives this page: the D-pad moves a highlight, and the
+    guide shows what every button does. SELECT on the controller opens it too.</div>
+
   <!-- ★★★ SERVER ADMIN — the last thing in the menu, and only for the owner.
        Hidden unless this session is unlocked as admin: a listener has no use for it, and a
        button that exists only to refuse you is worse than no button at all. Everything above
@@ -5017,6 +5076,28 @@ select.btn { padding: 6px 8px; }
     Every library, driver, reference and data source, with what it gave:
     <a href="https://github.com/Stuey3D/VibeSDR#credits" target="_blank" rel="noopener">full credits</a>.
   </div>
+</div>
+
+<!-- ★★★ THE CONTROLLER GUIDE (padGuide.ts; the drawings and words are src/utils/padGuide.ts, shared with the app).
+     One of main.ts's PANELS, so back, Escape and a click away close it like any other. -->
+<div id="padGuide" role="dialog" aria-label="Controller guide">
+  <div id="menuHead" class="pgHead">
+    <span>CONTROLLER GUIDE</span>
+    <button class="btn" id="pgClose">CLOSE</button>
+  </div>
+  <div class="seg" id="pgTabs" role="group" aria-label="Controller layout">
+    <button type="button" class="btn" data-g="sticks" aria-pressed="true">TWO STICKS</button>
+    <button type="button" class="btn" data-g="buttons" aria-pressed="false">BUTTONS</button>
+  </div>
+  <h1 id="pgTitle"></h1>
+  <div id="pgSub"></div>
+  <div id="pgGuide" class="pgCols3">
+    <div class="pgCol pgLeft" id="pgLeft"></div>
+    <div id="pgPad"></div>
+    <div class="pgCol pgRight" id="pgRight"></div>
+    <svg id="pgLines" aria-hidden="true"></svg>
+  </div>
+  <div id="pgFoot"></div>
 </div>
 
 <!-- ★★★ THE ADMIN PAGE. A full-screen panel over the client rather than a separate document,

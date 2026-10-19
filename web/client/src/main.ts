@@ -20,7 +20,8 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
   () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
 import { initPocketConn } from './pocketConn';
-import { initGamepad } from './gamepad';
+import { initGamepad, activePadLayout } from './gamepad';
+import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
@@ -9239,7 +9240,7 @@ async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string, 
 // you can only dismiss with its own CLOSE button is a modal that traps people.
 
 const PANELS = ['menu', 'audioPanel', 'decodersPanel', 'recordingsPanel',
-                'bookmarksPanel', 'freqPanel', 'chatPanel'];
+                'bookmarksPanel', 'freqPanel', 'chatPanel', 'padGuide'];
 
 /** `reopenChat` = a share pick abandoned this way brings the chat back (see endSharePick). Only togglePanel
  *  passes false: opening another panel is the user moving on, and the chat must not reappear beside it. */
@@ -9326,6 +9327,15 @@ function togglePanel(id: string) {
   const open = $(id).classList.contains('open');
   closePanels(false);
   if (!open) $(id).classList.add('open');
+}
+
+/** ★★★ THE CONTROLLER GUIDE (padGuide.ts, 2026-10-19) — from the menu's CONTROLLER GUIDE key and from SELECT on a pad,
+ *  which also closes it. Opened on the layout in use (gamepad.ts activePadLayout); a panel like any other, so back,
+ *  Escape and a click away close it too. */
+function togglePadGuide() {
+  if (isPanelOpen('padGuide')) { closePanels(); return; }
+  closePanels(false);
+  showPadGuide(activePadLayout());
 }
 
 /** ★ Asked AFTER togglePanel, because "open" is the DOM's answer and not the caller's guess —
@@ -13362,6 +13372,8 @@ function nrPercent(strength: number): number {
 
 function buildMenu() {
   $('menuClose').onclick = () => $('menu').classList.remove('open');
+  $('btnPadGuide').onclick = () => togglePadGuide();
+  $('pgClose').onclick = () => closePanels();
   // Audio DSP lives in its own drawer (as the app's AudioSheet does) — these are
   // controls you use WHILE listening, not settings you configure once. Opened from #mAudio.
   $('audioClose').onclick = () => $('audioPanel').classList.remove('open');
@@ -16237,6 +16249,7 @@ function initKeyboard() {
       if (anyOpen) closePanels();
       return anyOpen;
     },
+    guide: () => togglePadGuide(),
   });
   window.addEventListener('keydown', (e) => {
     if (!spec) return;
