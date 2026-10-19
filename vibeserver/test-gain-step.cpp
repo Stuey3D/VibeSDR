@@ -282,12 +282,13 @@ int main() {
            "click " + f1(after.clickDb) + " dB");
     }
     // ── 6. AM / MW — "even in MW" ──────────────────────────────────────────────────────────────────
-    for (double db : {-15.0, +15.0}) {
+    for (double db : {-15.0, +15.0, -6.0}) {
         Gen g; g.am = true; g.steps = {{kStepT, db, 0.0}};
         const Verdict before = pair(g, Fix::None, secs);
         const Verdict after = pair(g, Fix::Exact, secs);
-        const std::string tb = std::string("AM ") + (db > 0 ? "+15" : "−15") + " dB, as it was:";
-        const std::string ta = std::string("AM ") + (db > 0 ? "+15" : "−15") + " dB, fixed:";
+        char lbl[16]; std::snprintf(lbl, sizeof lbl, "%+.0f", db);
+        const std::string tb = std::string("AM ") + lbl + " dB, as it was:";
+        const std::string ta = std::string("AM ") + lbl + " dB, fixed:";
         print(tb.c_str(), before, true); print(ta.c_str(), after, true);
         ok(before.amPeakDb > 3.0, "(without the fix the step is a thump over the programme)", f1(before.amPeakDb) + " dB");
         ok(after.amPeakDb < 1.5, "★★ no thump — the loudest moment is the programme itself", f1(after.amPeakDb) + " dB");
@@ -297,23 +298,53 @@ int main() {
     {
         // ★★ Bit-identical, not "close": with no step the smoother must be a pure delay, even with a hint
         //    open on a modulated AM carrier and on a noisy FM one — programme must never pass for a rung.
-        for (int kind = 0; kind < 2; ++kind) {
+        // ★ kind 2 is DAB-shaped: wideband noise with a 1.3 ms NULL every 96 ms — sharp, deep, and back
+        //   again, the one thing on air that looks most like a rung over 1.5 ms (see finalise()).
+        for (int kind = 0; kind < 3; ++kind) {
             Gen g; g.am = (kind == 0); g.noise = g.am ? 0.0 : 0.65;
             GainStepSmoother sm; sm.configure(kFs);
             std::vector<cf32> in, all, out;
+            std::mt19937 rng(42); std::normal_distribution<float> N(0.0f, 0.3f);
+            long long n = 0;
             for (int k = 0; k < 400; ++k) {
-                g.fill(in, kBlk); all.insert(all.end(), in.begin(), in.end());
+                g.fill(in, kBlk);
+                if (kind == 2) for (auto& z : in) { const bool null = (n % 96000) < 1297; ++n;
+                                                    z = null ? cf32(0.01f * N(rng), 0.01f * N(rng)) : cf32(N(rng), N(rng)); }
+                all.insert(all.end(), in.begin(), in.end());
                 if (k % 20 == 5) sm.noteStepAtStart();
                 if (k % 50 == 7) sm.noteStepSoon(0.3);
                 sm.process(in.data(), kBlk); out.insert(out.end(), in.begin(), in.end());
             }
+            if (kind == 2) std::printf("   .. DAB nulls: %u looked like a rung over 1.5 ms and were thrown out at 4 ms\n", sm.rejected());
             const int D = sm.delaySamples();
             bool same = sm.steps() == 0;
             for (size_t i = (size_t)D; i < out.size() && same; ++i) same = (out[i] == all[i - (size_t)D]);
             ok(same, kind == 0 ? "★★★ no step, hints open, AM programme: output is the input, bit for bit (delayed 4 ms)"
-                               : "★★★ no step, hints open, noisy FM: output is the input, bit for bit",
+                   : kind == 1 ? "★★★ no step, hints open, noisy FM: output is the input, bit for bit"
+                               : "★★★ no step, hints open, DAB nulls every 96 ms: output is the input, bit for bit",
                "false steps " + std::to_string(sm.steps()));
         }
+    }
+    // ── 7b. …while a real rung on a DAB ensemble is still found, null symbols and all ───────────────
+    // ★ Flagged, and searched for from a write 0.2 s early — so at least two nulls are met (and thrown
+    //   out) before the rung, and the search must carry on past them.
+    for (int soon = 0; soon < 2; ++soon) {
+        GainStepSmoother sm; sm.configure(kFs);
+        std::mt19937 rng(43); std::normal_distribution<float> N(0.0f, 0.3f);
+        std::vector<cf32> in((size_t)kBlk);
+        long long n = 0; const long long at = (long long)(kStepT * kFs) + 5000;   // not on a null
+        for (int k = 0; k < (int)(4.0 * kFs / kBlk); ++k) {
+            for (auto& z : in) { const bool null = (n % 96000) < 1297; const float gs = n >= at ? 0.1778f : 1.0f; ++n;
+                                 z = null ? cf32(0.01f * N(rng), 0.01f * N(rng)) * gs : cf32(N(rng), N(rng)) * gs; }
+            if (!soon && at >= n - kBlk && at < n) sm.noteStepAtStart();
+            const long long w = at - (long long)(0.2 * kFs);
+            if (soon && w >= n - kBlk && w < n) sm.noteStepSoon(0.3);
+            sm.process(in.data(), kBlk);
+        }
+        ok(sm.steps() == 1 && std::fabs(sm.lastStepDb() + 15.0f) < 1.0f && std::llabs(sm.lastStepAt() - at) <= 8,
+           soon ? "★★ …and searched for past the nulls from a write 0.2 s early"
+                : "★★ a −15 dB rung on a DAB ensemble is found, measured and placed to the sample",
+           "found " + std::to_string(sm.steps()) + ", " + f1(sm.lastStepDb()) + " dB at " + std::to_string(sm.lastStepAt() - at));
     }
     // ── 8. And the pilot loop cannot be wedged: from the worst state it can reach ───────────────────
     {

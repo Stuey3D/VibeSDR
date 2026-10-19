@@ -89,6 +89,8 @@ public:
     /** True while the correction still exceeds `db` — the downstream estimators' guard reads this. */
     bool correcting(double db = 1.0) const { return std::fabs(cDb_) > db; }
     unsigned steps() const { return steps_; }
+    /** Candidates found but thrown out because the level came back (see finalise). Diagnostics. */
+    unsigned rejected() const { return rejected_; }
     float lastStepDb() const { return (float)lastStepDb_; }
     /** Input sample index (since configure) the last step was placed at. Diagnostics and tests. */
     long long lastStepAt() const { return lastStepAt_; }
@@ -228,7 +230,8 @@ private:
             // Not yet a window past it? Decide next time — unless the edge is about to leave.
             if (decided || best < out0 + nOut + (long long)(w + 4) * kSeg) {
                 // ★ Over 30 dB is a signal arriving or the stream starting, not a rung of ours.
-                if (bestC <= 30.0) { found_ = best + locate(best - g0, bestDb, g0); foundDb_ = bestDb; }
+                if (bestC <= 30.0) { found_ = best + locate(best - g0, bestDb, g0); foundDb_ = bestDb;
+                                     savedTo_ = hintTo_; savedExact_ = exact_; }
                 hintFrom_ = hintTo_ = -1; nextEdge_ = best + kSeg;
                 finalise(g0, len, out0, nOut);
                 return;
@@ -254,7 +257,21 @@ private:
             const double A = meanPow(wk_ + (found_ - g0) + skip, na);
             if (B > 0.0 && A > 0.0) {
                 const double m = 10.0 * std::log10(A / B);
-                if ((m > 0) == (foundDb_ > 0) && std::fabs(m) >= 0.5) db = m;
+                /* ★★ A STEP STAYS; A DIP COMES BACK. The 4 ms figure must agree with the 1.5 ms one that
+                 *    found it, or this was a transient level event, not a gain change — a DAB null symbol
+                 *    is exactly that: a sharp ~1.3 ms drop every 96 ms that reads −10 dB over 1.5 ms and
+                 *    −2 dB over 4. Correcting it would lift the null and the frame after it by 10 dB. */
+                // ★ ±max(2 dB, 40 %) — programme on an AM carrier moves a 1.5 ms figure by ~2 dB — and at least 1 dB left over: a small "step" that halves on a longer
+                //   look is noise inside the null itself (measured: −0.8 dB taken from a 1.3 ms null).
+                if ((m > 0) != (foundDb_ > 0) || std::fabs(m) < 1.0
+                    || std::fabs(m - foundDb_) > std::max(2.0, 0.4 * std::fabs(foundDb_))) {
+                    // …and the search goes on: the real rung may still be ahead in the same window.
+                    ++rejected_;
+                    if (savedTo_ > found_) { hintFrom_ = found_ + kSeg; hintTo_ = savedTo_; exact_ = savedExact_;
+                                             nextEdge_ = ((found_ + kSeg) / kSeg + 1) * kSeg; }
+                    found_ = -1; return;
+                }
+                db = m;
             }
         }
         events_.push_back({found_, -db});
@@ -289,10 +306,11 @@ private:
     double cDb_ = 0.0, compAtStep_ = 0.0; long long sinceStep_ = 0;
     long long hintFrom_ = -1, hintTo_ = -1, nextEdge_ = 0; bool exact_ = false;
     long long found_ = -1; double foundDb_ = 0.0;     // located, size not yet measured over est_
+    long long savedTo_ = -1; bool savedExact_ = false;  // the window it was found in, for a rejection
     int est_ = kSeg;
     bool pendingExact_ = false; double pendingSoon_ = 0.0;
     std::vector<Event> events_;
-    unsigned steps_ = 0; double lastStepDb_ = 0.0; long long lastStepAt_ = -1;
+    unsigned steps_ = 0, rejected_ = 0; double lastStepDb_ = 0.0; long long lastStepAt_ = -1;
 };
 
 }  // namespace vibedsp
