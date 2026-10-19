@@ -253,6 +253,8 @@ if node scripts/test-web-no-desktop-bar.mjs; then pass=$((pass+1)); else fail=$(
 #     resolve to today's literal colours — the pixel-identical promise, checked as data.
 #  ★ Node runs the .ts directly (type stripping), so this needs nothing installed.
 if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ MPX POWER IN dBr (mpxPower.ts): relative to BS.412's reference, so a figure below 0 reads as compliant, not a fault.
+if node --no-warnings scripts/test_mpx_power.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ LOCKED VFO CENTRE (tuneWindow.ts): every app tune clamps into the owner's window, the server's own rule (Stuart 2026-10-18: the app tuned into the black).
 if node --no-warnings scripts/test_tune_window.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ proxy.kiwisdr.com IS 8073 ONLY (2026-10-07): 47 % of public Kiwis are listed portless (= port 80, refused).
