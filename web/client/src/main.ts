@@ -7199,7 +7199,11 @@ function dabUiOn() {
   /* ★ THE ADVANCED RDS PANEL SHARES THIS BOX. Entering DAB with it open left it showing under
    *  the station list ("the DAB stations populated over the top of it", Stuart, 2026-09-07).
    *  DAB takes the box; the RDS panel closes as it does for any other decoder. */
-  if (activeDec === 'rds') { spec?.rdsxLight(false); $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); activeDec = null; }
+  /* ★★★ AND THE `rds` ATTACH GOES WITH IT (2026-10-19). This line cleared activeDec BEFORE the `if (activeDec)
+   *  detach` below, so the decoder socket kept its `rds` attach and the server went on sending the FM analyser
+   *  into DAB — every rdsx, eye grids in each (rdsxLight(false) had dropped the lighter stream), ~44 KB/s against
+   *  a 1.6 KB DAB report. The server now refuses it off WFM as well (local_sdr_shim.cpp, rdsx send loop). */
+  if (activeDec === 'rds') { spec?.rdsxLight(false); decoders?.detach(); $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); activeDec = null; syncDecButtons(); }
   /* ★★★ AND EVERYTHING ELSE THAT SHARES IT. The line above was written when Advanced RDS was the only
    *  other tenant; with the FT8 spot list open, a DAB switch made by ANOTHER listener on the shared dial
    *  drew the station list into the FT8 box — FT8's ALL/AGE/COLLAPSE buttons over DAB stations over the

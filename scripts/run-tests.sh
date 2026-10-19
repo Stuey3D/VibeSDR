@@ -539,6 +539,14 @@ printf '\n\033[1m── the DAB report in pieces (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dab-report-pieces.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ A LONG SESSION COSTS NO MORE THAN A SHORT ONE (2026-10-19): Stuart's app read 93-103 KB/s in DAB after 23 minutes
+#     of tuning, 45 after a restart — an Advanced RDS subscription made on FM kept every rdsx coming in DAB. rdsx only
+#     while the listener is on WFM; per-type bytes flat after 12 multiplexes, DAB ↔ FM, a joiner, the Signal pane.
+#     Same rule: VIBESERVER_BIN + the bench clip, NOT RUN without either. ~2 minutes.
+printf '\n\033[1m── a long session stays flat on the wire (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-wire-session-flat.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ A CLIENT VANISHING MID RAW-IQ STREAM MUST NOT WEDGE THE RADIO (2026-10-10, the Pi 500's V4L froze: the close path
 #     stopped the full-rate stream under clientMtx, and its applyAutoIf() took clientMtx again). Same VIBESERVER_BIN rule.
 printf '\n\033[1m── raw IQ: a vanished client does not wedge the radio (end to end) ──\033[0m\n'

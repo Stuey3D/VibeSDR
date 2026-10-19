@@ -10464,10 +10464,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     //  ★ And per-VFO receivers had the opposite fault: only peers.front() ever got
                     //    it. sendRdsExt picks each socket's OWN listener's decoder (dspFor), so
                     //    every subscriber on every radio shape now gets their own.
+                    /* ★★★ AND ONLY WHILE THAT LISTENER IS ON FM (2026-10-19). Stuart's app read 93-103 KB/s in
+                     *     DAB after a long session and 45 after a server restart; reproduced on the bench
+                     *     (fake-rtl-tcp, scripts/test-rdsx-mode-gate.mjs): a subscription made on FM was never
+                     *     ended by the mode — entering DAB kept every rdsx coming, 5 a second, 28-44 KB/s of a
+                     *     stale FM analyser (eye grids ~9 KB each) beside a DAB report of 1.6 KB. The web page
+                     *     shows how a subscription outlives its panel: dabUiOn closed the panel and cleared
+                     *     activeDec BEFORE the line that detaches the decoder, so the `rds` attach stayed. Any
+                     *     client can leave one behind, so the SERVER decides: no WFM demodulator (another mode,
+                     *     or a multiplex), no analyser on the wire. The subscription itself is kept — back on
+                     *     FM it resumes with no message from the client.
+                     *  ★ Look and feel: none. Both clients draw the panel only in WFM (the app closes it on
+                     *    DAB and hides it off WFM; the web closes it on DAB), and off WFM the decoder does not
+                     *    run, so every message this skips was a repeat of the last FM frame.
+                     *  ★ Trade-off: one string compare per listener at 6 Hz, under the lock already taken. */
+                    const bool inDab = g_dabMode.load(std::memory_order_relaxed);
                     std::vector<std::pair<std::shared_ptr<net::Socket>, std::string>> rx_;
                     { std::lock_guard<std::mutex> lk(clientMtx);
                       for (auto& pr : peers) {
-                          if (!pr.sock || !pr.sock->isOpen()) continue;
+                          if (!pr.sock || !pr.sock->isOpen() || inDab) continue;
+                          { auto dt = clientDsp.find(pr.sock.get());
+                            const std::string& m = (dt != clientDsp.end() && dt->second) ? dt->second->mode : mode;
+                            if (m != "wfm") continue; }
                           auto it = sockSession.find(pr.sock.get());
                           rx_.push_back({ pr.sock, it == sockSession.end() ? std::string() : it->second });
                       } }
