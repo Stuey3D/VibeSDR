@@ -48,7 +48,7 @@ namespace {
 
 constexpr double kFs = 1000000.0;
 constexpr double kStepT = 3.0;              // the (first) step, seconds into the run
-constexpr int    kBlk = 8192;               // ★ steps land MID-block: the hint must not need alignment
+static int kBlk = 8192;                     // ★ steps land MID-block: the hint must not need alignment
 
 struct Step { double t, db, phiDeg; };
 
@@ -102,7 +102,7 @@ struct Run {
     unsigned smSteps = 0; float smLastDb = 0.0f;
 };
 
-enum class Fix { None, Exact, Soon };
+enum class Fix { None, Exact, Soon, Both };
 
 /** ★ Fed exactly as the shim feeds it: smoother on the raw capture, then noteGainStep() on every block
  *  while the correction is still more than 1 dB from unity (or a step was found in this block). */
@@ -121,8 +121,10 @@ void runOne(Run& r, Gen g, double secs, Fix fix, bool ceqOn = true) {
                 const long long at = (long long)(s.t * kFs);
                 // exact: the source flags the packet the change landed in (SDRplay grChanged);
                 // soon:  we wrote the gain ~16 ms before it reached the samples (an RTL's USB queue).
-                if (fix == Fix::Exact && at >= d && at < d + kBlk) sm.noteStepAtStart();
-                if (fix == Fix::Soon && at >= d + 2 * kBlk && at < d + 3 * kBlk) sm.noteStepSoon(0.3);
+                // both: an RSP — our setLnaState write first, then the packet the API flags.
+                const long long early = (long long)(0.016 * kFs);
+                if ((fix == Fix::Exact || fix == Fix::Both) && at >= d && at < d + kBlk) sm.noteStepAtStart();
+                if ((fix == Fix::Soon || fix == Fix::Both) && at - early >= d && at - early < d + kBlk) sm.noteStepSoon(0.3);
             }
             const unsigned before = sm.steps();
             sm.process(b.data(), kBlk);
@@ -218,6 +220,21 @@ int main() {
         ok(after.maxCutDrop < 600.0, "★★ the L−R corner does not move (stereo image held)", f1(after.maxCutDrop) + " Hz");
         ok(after.unlockedS == 0.0 && after.backAfterS < 0.1, "★★ stereo holds throughout — nothing to recover from",
            "back after " + f1(after.backAfterS) + " s");
+    }
+    // ── 1b. …in RSP-sized packets (1008 samples, not a multiple of anything), soon AND exact ────────
+    {
+        // ★ An RSP hands over ~0.5 ms at a time, and the flag marks the packet the change landed in. Our
+        //   own write reaches the smoother first (noteStepSoon from setLnaState), the flag after — the
+        //   flag must win, and a packet boundary must not hide the step.
+        kBlk = 1008;
+        Gen g; g.steps = {{kStepT, -15.0, 0.0}};
+        Run info; const Verdict after = pair(g, Fix::Both, 6.0, true, &info);
+        const Verdict soon = pair(g, Fix::Soon, 6.0);
+        kBlk = 8192;
+        print("clean −15 dB, 1008-sample packets:", after, false);
+        ok(info.smSteps == 1 && after.clickDb < -40.0 && soon.clickDb < -40.0 && after.extraCeqS == 0.0,
+           "★★ small packets: found once, no click, flagged or searched",
+           "found " + std::to_string(info.smSteps) + ", click " + f1(after.clickDb) + " / " + f1(soon.clickDb) + " dB");
     }
     // ── 2. …with CEQ off, where IMS was the one that narrowed ────────────────────────────────────────
     {

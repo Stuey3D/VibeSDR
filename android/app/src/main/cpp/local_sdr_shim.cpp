@@ -106,6 +106,7 @@
 
 #include "vibedsp/vibedsp.h"        // V5 clean-room GPL-free DSP engine (RxPipeline)
 #include "vibedsp/simd_internal.h"  // convI16ToF32 — the 16-bit radios' IQ conversion, vectorised
+#include "vibedsp/gainstep.h"       // GainStepSmoother — our own gain steps made level-continuous
 #include "net_shim.h"
 #include "spyserver/spyserver_client.h"               // V5 clean-room GPL-free TCP socket wrapper
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
@@ -3002,6 +3003,13 @@ static SfericDetect g_sferic;
  *     Same treatment as a gain step: suppress for a moment after any retune, filter or rate
  *     change, and keep the baseline following meanwhile. */
 static std::atomic<double> g_hwMovedAt{0.0};
+/** ★★★ WE JUST WROTE A GAIN (2026-10-19). Counted by every gain write of ours that has no exact
+ *  packet flag of its own — an RTL's tuner gain (owner, VibeAGC, the overload loop), the HF+'s
+ *  attenuator, the Airspy and HackRF stages — and by the RSP's too, where the API's grChanged flag
+ *  then pins it down. The DSP loop turns a change into GainStepSmoother::noteStepSoon(): "a step is
+ *  coming within ~0.3 s; find it", so the level is put back and glided instead of stepping. */
+static std::atomic<unsigned> g_ownGainWrites{0};
+static inline void noteOwnGainWrite() { g_ownGainWrites.fetch_add(1, std::memory_order_relaxed); }
 static inline void noteHwMoved() {
     g_hwMovedAt.store(std::chrono::duration<double>(
         std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
@@ -6144,7 +6152,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  and nothing downstream can tell. The flag is how the one who KNOWS tells the RDS decoder and
      *  the Advanced RDS instrument (RxPipeline::noteInputGap), so a hole costs a quick re-sync
      *  instead of ~25 blocks of the decoder's confusion counted as link errors. */
-    struct IqBuf { std::vector<cf32> v; bool gap = false; };
+    /** ★ `gainStep`: the SOURCE flagged a gain change taking effect in this buffer (SDRplay grChanged) —
+     *  see GainStepSmoother::noteStepAtStart. */
+    struct IqBuf { std::vector<cf32> v; bool gap = false; bool gainStep = false; };
     std::deque<IqBuf> iqQueue;
     /** ★★ SPENT IQ BUFFERS, KEPT FOR THE NEXT BLOCK (efficiency audit 2026-10-03). Every block
      *  used to be a fresh std::vector — ~600 KB at 2.4 Msps, ~31 a second — value-initialised
@@ -7641,7 +7651,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::mutex                                    qm;
         std::condition_variable                       qcv;
         // ★ The block AND which block it was — the phase correction is meaningless without it.
-        struct Block { std::vector<cf32> bins; long long index; bool gap = false; };
+        struct Block { std::vector<cf32> bins; long long index; bool gap = false; bool gainGuard = false; };
         std::deque<std::shared_ptr<const Block>> q;
         std::atomic<bool>                             run{true};
         std::atomic<uint64_t>                         dropped{0};
@@ -8248,6 +8258,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             lastIndex = blk->index;
             timespec c0{}, c1{};
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c0);
+            if (blk->gainGuard) { std::lock_guard<std::mutex> gl(c->mtx); if (c->rx) c->rx->noteGainStep(0.1); }
             feedOneClient(c, blk->bins.data(), blk->index, hole);
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c1);
             c->dspNanos.fetch_add(
@@ -22170,7 +22181,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // int16 IQ (16-bit devices: Airspy et al). Same queue, same backpressure; only
     // the sample conversion differs. Public SpyServers are not all 8-bit RTL-SDRs,
     // and feeding a 16-bit device's stream through the u8 path would be garbage.
-    void enqueueIqInt16(const int16_t* buf, int sampCount, bool blockIfFull, bool gapBefore = false) {
+    void enqueueIqInt16(const int16_t* buf, int sampCount, bool blockIfFull, bool gapBefore = false,
+                        bool gainStep = false) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v = takeIqBuf((size_t)sampCount);   // ★ recycled — see iqFree_
@@ -22191,7 +22203,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
             }
             iqQueuedSamples += v.size();
-            iqQueue.push_back(IqBuf{std::move(v), gapBefore || std::exchange(iqGapNext, false)});
+            iqQueue.push_back(IqBuf{std::move(v), gapBefore || std::exchange(iqGapNext, false), gainStep});
         }
         iqCv.notify_one();
     }
@@ -22721,6 +22733,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         blk->bins.assign(bins, bins + nbins);
         blk->index = chan_->blockIndex();     // ★ the phase reference travels WITH the samples
         blk->gap = gap;                       // ★ …and so does a hole upstream of it
+        blk->gainGuard = gainStepGuard_;      // ★ …and a gain step still gliding — see smoothGainSteps
         /* ★★★ THE SLACK IS ~40 ms AT EVERY RATE, NOT FOUR BLOCKS (2026-10-07) — see
          *  vibe_listener_queue.h. Four blocks was 41 ms on an RTL and 12 ms on an RSP at 8 MS/s, where
          *  the FFT cap makes each block three times shorter; the Pi 500's RSP1B dropped 10 of them and
@@ -22738,6 +22751,45 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             c->q.push_back(blk);
             c->qcv.notify_one();
         }
+    }
+
+    /* ★★★ OUR OWN GAIN STEP, MADE INAUDIBLE (2026-10-19) — Stuart: "RF gain movement always caused a pop
+     *  to the signals even in MW and that pop is what kills stereo". Every RF AGC rung is an abrupt
+     *  level step in the IQ; measured through the real chain (vibeserver/test-gain-step.cpp) it was a
+     *  thump of up to +18 dB on AM, a 1.3 s AGC hole, and on FM a 60-75 % "multipath" reading that
+     *  engaged CEQ on clean stations and had IMS narrowing the stereo image for seconds.
+     *  ★★ Done ONCE, here, on the capture — after the cleaner (DC and image are the front end's, and
+     *     are measured on the raw level) and before everything else: the shared pipeline, the
+     *     channelizer and so every listener, the waterfall, DAB and the raw-IQ taps.
+     *  ★★ Then the pipelines are told while the correction is still gliding (RxPipeline::noteGainStep),
+     *     so the level estimators hold their readings rather than judge the glide.
+     *  ★ TRADE-OFF: a constant 4 ms of latency on the capture (the smoother looks ahead to find the step
+     *    before its first sample leaves). VIBE_GAIN_SMOOTH=0 bypasses it entirely for an A/B. */
+    vibedsp::GainStepSmoother gainSmooth_;
+    double gainSmoothRate_ = 0.0;
+    unsigned gainSmoothSeenWrites_ = 0;
+    bool gainStepGuard_ = false;   // this buffer's verdict, handed to every channel block it produces
+    void smoothGainSteps(cf32* iq, int n, bool flagged) {
+        static const bool off = [] { const char* e = std::getenv("VIBE_GAIN_SMOOTH"); return e && e[0] == '0'; }();
+        gainStepGuard_ = false;
+        if (off || n <= 0) return;
+        if (gainSmoothRate_ != sampleRate) { gainSmooth_.configure(sampleRate); gainSmoothRate_ = sampleRate; }
+        const unsigned w = g_ownGainWrites.load(std::memory_order_relaxed);
+        if (w != gainSmoothSeenWrites_) { gainSmoothSeenWrites_ = w; gainSmooth_.noteStepSoon(0.3); }
+        if (flagged) gainSmooth_.noteStepAtStart();
+        const unsigned before = gainSmooth_.steps();
+        gainSmooth_.process(iq, n);
+        if (gainSmooth_.steps() != before) {
+            static double lastLog = 0.0;
+            const double now = nowSecs();
+            if (now - lastLog > 2.0) {
+                lastLog = now;
+                LOGI("gain step %+.1f dB %s — level held, gliding back over ~1 s", gainSmooth_.lastStepDb(),
+                     flagged ? "(flagged by the radio)" : "(found after our own write)");
+            }
+        }
+        gainStepGuard_ = gainSmooth_.steps() != before || gainSmooth_.correcting(1.0);
+        if (gainStepGuard_) rx.noteGainStep(0.1);
     }
 
     int dspBlocks_ = 0;
@@ -22764,7 +22816,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 Impl* self; std::vector<cf32>& b;
                 ~IqReturn() { std::lock_guard<std::mutex> lk(self->iqMtx); self->recycleIqLocked(std::move(b)); }
             } iqReturn{this, buf};
-            bool gap = false;
+            bool gap = false, gainStepFlag = false;
             {
                 std::unique_lock<std::mutex> lk(iqMtx);
                 // One-shot prefill at stream start. The DSP is NOT paced by this
@@ -22784,6 +22836,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!dspRunning.load()) break;
                 buf = std::move(iqQueue.front().v);
                 gap = iqQueue.front().gap;
+                gainStepFlag = iqQueue.front().gainStep;
                 iqQueue.pop_front();
                 iqQueuedSamples -= buf.size();
             }
@@ -22838,6 +22891,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     the owner's wide impulse blanker, below 30 MHz on auto. Both are one SIMD pass
              *     each over the block; VIBE_IQ_CLEAN=0 switches the cleaner off for A/B tests. */
             cleanCapture(buf.data(), (int)buf.size());
+            smoothGainSteps(buf.data(), (int)buf.size(), gainStepFlag);   // ★ our own gain steps — see gainStepGuard_
             iqTapFull(buf.data(), (int)buf.size(), sampleRate);       // ★ full-rate raw IQ out, if on
             // ★★★ IN SHARED MODE THE SHARED PIPELINE IS NOT RUN AT ALL. Its FFT is replaced by the
             //     channelizer's (emitWideFromBins), and its DEMODULATOR produced audio that NOBODY
@@ -25609,6 +25663,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
                     if (dev && !radioReleased.load()) rtlsdr_set_tuner_gain(dev, gn);
                     noteHwMoved();   // ★ a gain step lifts the whole band; it is not a sferic
+                    noteOwnGainWrite();   // ★ …nor a change in the signal — see g_ownGainWrites
                     hwGainNow = gn;
                 }
                 lk.lock();
@@ -28979,7 +29034,7 @@ int LocalSdrShim::startSdrplay(int index,
 
     impl->sdrp = std::make_unique<vibe::SdrplaySource>();
     Impl* self = impl;
-    impl->sdrp->setSink([self, seenEv = uint64_t(0), seenS = uint64_t(0)](const int16_t* iq, int n) mutable {
+    impl->sdrp->setSink([self, seenEv = uint64_t(0), seenS = uint64_t(0), seenGr = uint64_t(0)](const int16_t* iq, int n) mutable {
         self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
         /* ★★ The RSP's inferred skips — see SampleSeqWatch. Counted beside the Airspy's, but the
          *  source is diagnostic, so nothing downstream acts on it. Same thread as the callback that
@@ -28987,7 +29042,10 @@ int LocalSdrShim::startSdrplay(int index,
         { const uint64_t ev = self->sdrp->usbDropEvents(), sm = self->sdrp->usbDroppedSamples();
           if (ev < seenEv || sm < seenS) { seenEv = 0; seenS = 0; }   // defensive: never underflow
           if (ev != seenEv) { noteUsbDrop(sm - seenS, ev - seenEv); seenEv = ev; seenS = sm; } }
-        self->enqueueIqInt16(iq, n, /*blockIfFull=*/false);
+        // ★★★ The API flagged a gain change in THIS packet (grChanged) — same thread as the count. See smoothGainSteps.
+        const uint64_t gr = self->sdrp->gainChangePackets();
+        const bool step = gr != seenGr; seenGr = gr;
+        self->enqueueIqInt16(iq, n, /*blockIfFull=*/false, /*gapBefore=*/false, step);
     });
     /* ★★★ TUNE TO (LOGICAL CENTRE + OFFSET), exactly as tuneHw() and the HackRF's open do. This
      *     passed the LOGICAL centre, which was harmless only while the RSP's offset was zero —
@@ -29972,6 +30030,7 @@ void LocalSdrShim::setTunerBandwidth(int hz) {
 }
 void LocalSdrShim::setGain(int gainTenthDb) {
     if (!p) return;
+    noteOwnGainWrite();   // ★ a level step is on its way — see g_ownGainWrites
     // ★★ WHOEVER MOVED THE SLIDER GETS WHAT THEY ASKED FOR. An explicit gain is a new intent, so
     //    any overload backoff is forgotten and the protection starts again from here. Without this
     //    the owner would set 12.5 dB, the protection would still be holding it 4 steps down from a
@@ -33196,6 +33255,7 @@ void LocalSdrShim::setAirspyPreset(int mode, int tenthDb) {
     const int m = mode == 0 ? 0 /*GainSensitive*/ : 1 /*GainLinear*/;
     g_dsp.aspMode.store(m);
     if (!p || !p->useAirspy()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK();
     p->lastGainTenthDb = tenthDb;
     p->asp->setPreset(m, tenthDb);
@@ -33205,6 +33265,7 @@ void LocalSdrShim::setAirspyStage(int stage, int value) {
     else if (stage == 1) g_dsp.aspMixer.store(value);
     else if (stage == 2) g_dsp.aspVga.store(value);
     if (!p || !p->useAirspy()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK();
     if (stage == 0)      p->asp->setLnaGain(value);
     else if (stage == 1) p->asp->setMixerGain(value);
@@ -33244,6 +33305,7 @@ void LocalSdrShim::setAhfAgcThreshold(bool high) {
 void LocalSdrShim::setAhfAttenuation(int steps) {
     g_dsp.ahfAtt.store(steps);
     if (!p || !p->useAirspyHf()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK(); p->ahf->setAttenuation(steps);
 }
 void LocalSdrShim::setAhfLna(bool on) {
@@ -33263,10 +33325,12 @@ void LocalSdrShim::setHackRfAmp(bool on) {
 }
 void LocalSdrShim::setHackRfLna(int db) {
     if (!p || !p->useHackRf()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK(); p->hrf->setLnaGainDb(db);
 }
 void LocalSdrShim::setHackRfVga(int db) {
     if (!p || !p->useHackRf()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK(); p->hrf->setVgaGainDb(db);
 }
 void LocalSdrShim::setHackRfBiasTee(bool on) {
@@ -33282,6 +33346,7 @@ void LocalSdrShim::setAhfCalibrationPpb(int ppb) {
 }
 void LocalSdrShim::setLnaState(int v)       { g_dsp.rspLna.store(v);
                                               if (!p || !p->useSdrplay()) return;
+                                              noteOwnGainWrite();   // ★ the API's grChanged then pins it down
                                               VIBE_HW_LOCK(); p->sdrp->setLnaState(v); }
 void LocalSdrShim::setIfGainReduction(int v){
     /* ★ Remembered even with no radio yet — that is the owner's stored preference, not a reading.
@@ -33290,6 +33355,7 @@ void LocalSdrShim::setIfGainReduction(int v){
      *   made the readout report a gain the tuner had never been set to. The slider moved, the
      *   number moved, nothing else did. Report the refusal instead. */
     if (!p || !p->useSdrplay()) { g_dsp.rspIfGr.store(v); return; }
+    noteOwnGainWrite();
     VIBE_HW_LOCK();
     if (p->sdrp->setIfGainReduction(v)) g_dsp.rspIfGr.store(v);
     else LOGI("IF gain reduction %d REFUSED — the radio's own AGC owns this register "

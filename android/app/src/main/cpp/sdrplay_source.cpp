@@ -1752,6 +1752,9 @@ static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT* params,
             wPeak = 0; wRails = 0; wTotal = 0;
         }
     }
+    // ★★★ THIS PACKET CARRIES A GAIN CHANGE — counted right before the sink sees it, on this thread, so
+    //     the shim can tell exactly which packet the step is in (see gainChangePackets()).
+    if (params && params->grChanged && c->self) c->self->noteGainChangePacket();
     (*c->sink)(ilv.data(), (int)numSamples);
 }
 
