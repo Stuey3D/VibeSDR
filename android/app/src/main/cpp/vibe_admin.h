@@ -1609,7 +1609,55 @@ inline SysStats readSys() {
         else if (la.empty()) loadRefused = true;
 #endif
     }
-    if (!tempRefused) {
+#if !defined(__ANDROID__)
+    /* ★★★ THE CPU'S OWN SENSOR FIRST, FOUND BY NAME (Kiko, 2026-10-19, N270 netbook). thermal_zone0 is the CPU on a
+     *  Pi, but on many x86 boards it is `acpitz` — the motherboard's ACPI thermistor by the chipset: Kiko's read 71 °C
+     *  under full WFM while coretemp had the Atom's die at 46 °C (34 idle), and the Lenovo's zone0 is acpitz too. The
+     *  die is what heat and throttling are about, so on x86 it is asked for by name, in order: the `x86_pkg_temp`
+     *  thermal zone (the whole package, modern Intel), the `coretemp` hwmon (Intel back to the Atom — its "Package
+     *  id 0" when it has one, else the hottest core), `k10temp` / `zenpower` (AMD). Searched ONCE: hwmon and zone
+     *  numbers move between kernels, the names do not. None of them (a Pi, any ARM board, a container) = the zones
+     *  below, exactly as before. */
+    if (!s.haveTemp) {
+        static const std::vector<std::string> cpuSensors = [] {
+            std::vector<std::string> out;
+            auto trimmed = [](std::string v) { while (!v.empty() && (v.back() == '\n' || v.back() == ' ')) v.pop_back(); return v; };
+            for (int i = 0; i < 32 && out.empty(); i++) {
+                char f[64]; snprintf(f, sizeof f, "/sys/class/thermal/thermal_zone%d/type", i);
+                if (trimmed(slurp(f, 32)) == "x86_pkg_temp") {
+                    snprintf(f, sizeof f, "/sys/class/thermal/thermal_zone%d/temp", i);
+                    out.push_back(f);
+                }
+            }
+            for (const char* want : { "coretemp", "k10temp", "zenpower" }) {
+                for (int i = 0; i < 16 && out.empty(); i++) {
+                    char f[80]; snprintf(f, sizeof f, "/sys/class/hwmon/hwmon%d/name", i);
+                    if (trimmed(slurp(f, 32)) != want) continue;
+                    std::vector<std::string> cores;
+                    for (int k = 1; k <= 64; k++) {
+                        char in[96]; snprintf(in, sizeof in, "/sys/class/hwmon/hwmon%d/temp%d_input", i, k);
+                        if (slurp(in, 16).empty()) continue;
+                        char lb[96]; snprintf(lb, sizeof lb, "/sys/class/hwmon/hwmon%d/temp%d_label", i, k);
+                        const std::string label = trimmed(slurp(lb, 48));
+                        // ★ The package (Intel) or Tctl/Tdie (AMD) is the one figure for the chip; take it alone.
+                        if (label.rfind("Package", 0) == 0 || label == "Tctl" || label == "Tdie") { cores.assign(1, in); break; }
+                        cores.push_back(in);
+                    }
+                    out = cores;
+                }
+                if (!out.empty()) break;
+            }
+            return out;
+        }();
+        double hottest = 0;
+        for (const auto& path : cpuSensors) {
+            const double milli = atof(slurp(path.c_str(), 32).c_str());
+            if (milli > 0) hottest = std::max(hottest, milli > 1000 ? milli / 1000.0 : milli);
+        }
+        if (hottest > 0) { s.tempC = hottest; s.haveTemp = true; }
+    }
+#endif
+    if (!tempRefused && !s.haveTemp) {
         // ★ Try the common thermal zones in turn. The Pi's CPU is zone 0; other boards vary, and
         //   a container has none at all — which is a legitimate answer, not a failure.
         static const char* kZones[] = {
