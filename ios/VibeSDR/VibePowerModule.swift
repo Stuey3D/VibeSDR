@@ -547,6 +547,25 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   ///     the Opus decoder, AVAudioFormat and the engine start.
   static let audioRateRange: ClosedRange<Double> = 4_000...384_000
 
+  /// ★★ GitHub #52 — THE PARAMETERS FOR A NATIVE SOCKET TO `url`, honouring the user's per-server certificate pin
+  ///    (modules/vibe-tls-trust/VibeTlsCore). Plain ws → .tcp. wss to a host:port with NO pin → the stock .tls,
+  ///    byte-for-byte what every site here used before. Only a pinned host:port gets a verify block — and that
+  ///    block asks the system first (with the host name), then accepts only the exact pinned certificate.
+  ///    These sockets carry the audio, so without this a trusted self-signed server would connect its waterfall
+  ///    (React Native's socket, pinned in VibeTlsTrust.mm) and stay silent.
+  static func socketParams(for url: URL) -> NWParameters {
+    guard url.scheme == "wss" else { return .tcp }
+    guard let host = url.host else { return .tls }
+    let port = url.port ?? 443
+    guard VibeTlsCore.shared().pin(forHost: host, port: port) != nil else { return .tls }
+    let tls = NWProtocolTLS.Options()
+    sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, secTrust, complete in
+      let trust = sec_trust_copy_ref(secTrust).takeRetainedValue()
+      complete(VibeTlsCore.shared().evaluate(trust, host: host, port: port) != .rejected)
+    }, DispatchQueue.global(qos: .userInitiated))
+    return NWParameters(tls: tls)
+  }
+
   /// A socket URL fit for a log: credential-bearing query values (`vs_*` PIN/admin proofs and
   /// tickets, the session id) replaced with "…". The key stays so the log still says what was sent.
   static func redactURL(_ url: URL) -> String {
@@ -853,8 +872,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     fmdxDecoder = dec
 
-    let secure = (url.scheme == "wss")
-    let params: NWParameters = secure ? .tls : .tcp
+    let params = VibePowerModule.socketParams(for: url)   // ★ wss → TLS (+ the server's pin, GitHub #52)
     let wsOpts = NWProtocolWebSocket.Options()
     wsOpts.autoReplyPing = true
     params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
@@ -2081,8 +2099,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     wsGen &+= 1
     let gen = wsGen
 
-    let secure = (url.scheme == "wss")
-    let params: NWParameters = secure ? .tls : .tcp   // tunnel cert valid → default trust
+    let params = VibePowerModule.socketParams(for: url)   // tunnel cert valid → default trust; a pin only if the user made one
     let wsOpts = NWProtocolWebSocket.Options()
     wsOpts.autoReplyPing = true                        // answer server pings natively
     params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
@@ -2301,14 +2318,13 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     //     Exactly the report: "still playing audio but not tuning", and on a fresh connect no
     //     audio at all (Stuart, 2026-08-23, on TestFlight against the XCover).
     //  ★★ THE OTHER TWO NWConnection SITES IN THIS FILE ALREADY DO THIS — line ~646 (FM-DX) and
-    //     ~1558 (UberSDR audio), both `secure ? .tls : .tcp`. This one was written for the LOCAL
+    //     ~1558 (UberSDR audio); all three now share socketParams(for:). This one was written for the LOCAL
     //     shim on loopback, where plain ws is all there is, and never revisited when the same call
     //     started being pointed at a public tunnelled server. One place updated, the others quietly
     //     left behind — the same shape as the audio-socket bug this pump was built to fix.
     //  ★ Android was unaffected throughout: OkHttp reads the scheme from the URL, so there was
     //    never a decision to forget.
-    let secure = (url.scheme == "wss")
-    let params: NWParameters = secure ? .tls : .tcp
+    let params = VibePowerModule.socketParams(for: url)   // ★ wss → TLS (+ the server's pin, GitHub #52)
     let wsOpts = NWProtocolWebSocket.Options()
     wsOpts.autoReplyPing = true
     params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
@@ -2590,7 +2606,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     NSLog("[VibePowerModule] opening audio WS (URLSession): %@", VibePowerModule.redactURL(url))
     wsUsingNW = false
-    let session = URLSession(configuration: .default)
+    // ★ GitHub #52: the delegate answers ONLY server-trust challenges, and hands every one back to the system unless
+    //   it is a refused certificate matching this host:port's pin (VibeTlsSessionDelegate).
+    let session = URLSession(configuration: .default, delegate: VibeTlsSessionDelegate(), delegateQueue: nil)
     wsSession = session
     let task = session.webSocketTask(with: url)
     wsTask = task

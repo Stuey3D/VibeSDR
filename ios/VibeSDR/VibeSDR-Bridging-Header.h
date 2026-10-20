@@ -5,3 +5,4 @@
 #import <Accelerate/Accelerate.h>
 #import <React/RCTBridgeModule.h>
 #import <React/RCTEventEmitter.h>
+#import <VibeTlsTrust/VibeTlsCore.h>   // per-server certificate pins (GitHub #52)

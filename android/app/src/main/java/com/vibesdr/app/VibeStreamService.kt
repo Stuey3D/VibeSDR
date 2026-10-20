@@ -952,6 +952,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         val url = laUrl ?: return
         val client = httpClient ?: OkHttpClient.Builder()
             .pingInterval(20, TimeUnit.SECONDS)
+            .also { VibePinnedTls.applyTo(it) }   // ★ the server's certificate pin, if the user made one (GitHub #52)
             .build().also { httpClient = it }
         if (reconnect) Log.i(TAG, "local audio socket reopening: $url")
         // ★ Under laLock: stopLocalAudio arrives on the JS module thread while a reopen runs on
@@ -1333,6 +1334,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         val client = httpClient ?: OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(20, TimeUnit.SECONDS)
+            .also { VibePinnedTls.applyTo(it) }   // ★ the server's certificate pin, if the user made one (GitHub #52)
             .build().also { httpClient = it }
         val url = fmdxWsUrl(base)
         Log.i(TAG, "opening fmdx audio WS: $url")
@@ -1792,6 +1794,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         val client = httpClient ?: OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(20, TimeUnit.SECONDS)
+            .also { VibePinnedTls.applyTo(it) }   // ★ the server's certificate pin, if the user made one (GitHub #52)
             .build().also { httpClient = it }
         val url = wsUrl()
         Log.i(TAG, "opening audio WS: $url")
