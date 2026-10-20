@@ -474,7 +474,10 @@ function WaterfallView({
   // ★★ SMOOTH IS 60, NOT 40 (Stuart, 2026-10-13: "smooth is at 60 and is working so keep it"). 40 rows/s divides evenly
   //   into no drawing rate — ⅔ of a row per frame at 60, 1⅓ at 30: a regular judder (Galaxy Tab A9, measured 2·1·2·1).
   //   60 is one row a frame at 60, two at 30, one every other at 120; Default's 30 is one at 30, one every other at 60.
-  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 30 : 0;
+  // ★★ DEFAULT IS 20, NOT 30 (Stuart, 2026-10-20): with 10 fps the server default, 20 and 60 divide evenly
+  //   into 5/10/20 fps feeds and 60/120 Hz displays; 30 gave x1.5 alternating repeats on a 20 fps feed
+  //   (1, 2, 1, 2 rows per frame). The web client now uses these same three (web/client/src/main.ts WF_PRESET).
+  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 20 : 0;
   // ★★ WF_ROWS (a lines-per-frame figure LATCHED from the measured feed rate) is GONE
   //     (2026-10-03). Since uN was pinned to 1 nothing read it — it only fed `cfg.rowsPerFrame`,
   //     which no code read either. Its latch never latched (handleFrame is a []-deps callback and
@@ -1769,7 +1772,11 @@ function WaterfallView({
       rowCarry.current += dur / rowMs;      // rows this interval has earned (fractional)
       extras = Math.max(0, Math.floor(rowCarry.current) - 1);   // the arrival itself was row #1
       rowCarry.current -= Math.floor(rowCarry.current);
-      if (extras > 8) extras = 8;           // a stall must not repay as a burst
+      // ★ 11 = Smooth's 60 rows/s from a 5 fps feed (12 rows a frame). It was 8, which held Smooth to
+      //   45 rows/s on 5 fps. Not a burst risk: the carry grows by the AVERAGE interval, not by a stall's
+      //   gap, and the extras are spread over that interval. Below 5 fps (the 2 fps idle floor) the
+      //   scroll is simply slower. Same constant in spectrum_engine.cpp.
+      if (extras > 11) extras = 11;
     }
     lastDynRows.current = extras + 1;
     scheduleExtraRows(extras, dur / (extras + 1));

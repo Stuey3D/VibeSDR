@@ -291,7 +291,10 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
         rowCarry_ += dur / rowMs;
         extras = std::max(0, (int)std::floor(rowCarry_) - 1);
         rowCarry_ -= std::floor(rowCarry_);
-        if (extras > 8) extras = 8;
+        // ★ 11 = Smooth's 60 rows/s from a 5 fps feed (12 rows a frame); 8 held it to 45. The carry grows
+        //   by the AVERAGE interval, not a stall's gap, and extras are spread over it — no burst. Same
+        //   constant in WaterfallView.tsx's JS path.
+        if (extras > 11) extras = 11;
     }
     // scheduleExtraRows: always clear the pending chain first
     extrasLeft_ = extras;

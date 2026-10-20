@@ -94,6 +94,53 @@ int main() {
         }
         delete e;
     }
+    // ── 2b. SMOOTH 60 rows/s from a 5 fps feed: 12 rows a frame (11 extras) — the cap was 8, which held it to 45 ──
+    {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 60;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        double head = 0, headAt10 = 0;
+        for (int f = 0; f < 20; f++) {
+            if (f == 10) headAt10 = head;
+            auto b = frame(1024, 300);
+            e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
+            for (int t = 0; t < 200; t++) {
+                gClock += 1; e->testStep(gClock);
+                UiUpdate u;
+                if (e->pollUi(u)) {
+                    if (u.image) { head = u.head; rlImage(u.image); }
+                    if (u.peakPath) rlPath(u.peakPath);
+                }
+            }
+        }
+        // Frames 10-19, settled (avgWfGap ≈ 200 ms → dur 200, carry 12/frame → 11 extras): ~120 rows = 60/s.
+        const double rows = head - headAt10;
+        CHECK(rows >= 112 && rows <= 124, "smooth at 5 fps: %g rows in 2 s (expect ~120 = 60 rows/s; 90 = the old cap of 8)", rows);
+        delete e;
+    }
+    // ── 2c. DEFAULT 20 rows/s from a 10 fps feed: 2 rows a frame, every frame ──
+    {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 20;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        double head = 0, headAt10 = 0;
+        for (int f = 0; f < 20; f++) {
+            if (f == 10) headAt10 = head;
+            auto b = frame(1024, 300);
+            e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
+            for (int t = 0; t < 100; t++) {
+                gClock += 1; e->testStep(gClock);
+                UiUpdate u;
+                if (e->pollUi(u)) {
+                    if (u.image) { head = u.head; rlImage(u.image); }
+                    if (u.peakPath) rlPath(u.peakPath);
+                }
+            }
+        }
+        const double rows = head - headAt10;
+        CHECK(rows >= 18 && rows <= 22, "default at 10 fps: %g rows in 1 s (expect 20, ±2 for where the window cuts a frame's extras)", rows);
+        delete e;
+    }
     // ── 3. In-flight alignment: the row's true centre is 2 bins above the view → shifted right by 2 ──
     {
         auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
