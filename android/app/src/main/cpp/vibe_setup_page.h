@@ -5766,7 +5766,12 @@ function wifiNowText() {
   if (m === "setup-ap") return "Right now the box is its own open setup hotspot, “" + (w.setupSsid || "VibeServer") + "”." + seen;
   if (m === "fallback-ap") return "Right now the box is its own hotspot “" + ((w.ap && w.ap.ssid) || "") + "”"
     + ((w.saved || []).length ? " — none of your networks is in range." : ".") + seen;
-  if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "") + ".";
+  // ★ The radio's power save beside the link (BRIEF-portable-wifi-realtime Phase 0): the box switches it off after every
+  //   join; "on" here means the driver refused, which is worth an owner knowing when audio stutters.
+  const ps = w.link && w.link.powerSave;
+  if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "") + "."
+    + (w.link && w.link.signal != null ? " Signal " + w.link.signal + " dBm" + (w.link.retry != null ? ", " + w.link.retry + " % retries" : "") + "." : "")
+    + (ps === "off" ? " Wi-Fi power saving off." : ps === "on" ? " Wi-Fi power saving is ON (the radio refused to switch it off) — audio may stutter." : "");
   if (m === "connecting") return "Joining a network…";
   if (m === "wifi-off") return "Wi-Fi is off.";
   if (m === "wired") return "This box has no Wi-Fi.";

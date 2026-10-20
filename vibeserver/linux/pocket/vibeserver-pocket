@@ -109,6 +109,20 @@ HOSTNAME_FILE = "/etc/hostname"
 HOSTS_FILE    = "/etc/hosts"
 # ★★ avahi publishes <hostname>.local on every interface UNLESS its config says otherwise — checked at start (avahi_limits).
 AVAHI_CONF    = "/etc/avahi/avahi-daemon.conf"
+# ★★★ WI-FI POWER SAVE STAYS OFF (BRIEF-portable-wifi-realtime.md, Phase 0, 2026-10-20). A dozing client radio sleeps
+#     between beacons and the access point buffers our frames until it wakes — on a busy 2.4 GHz phone hotspot that is
+#     tens of milliseconds of jitter on every audio packet. NetworkManager's "2" = disable; it is written on every
+#     profile we save, migrated onto profiles saved by older builds (migrate_powersave), and CHECKED AGAIN on the radio
+#     itself after every join and once a minute while joined (powersave_check) — brcmfmac can switch it back on after a
+#     reassociation or a firmware recovery, with no change NetworkManager would report.
+POWERSAVE_RECHECK_SEC = 60
+
+
+def powersave_disabled(v):
+    """★ nmcli prints the setting as "2", "2 (disable)" or "disable" depending on its version and output mode; anything
+    else ("0 (default)", "3 (enable)", "" for a profile written before the field existed) means the global default,
+    which on brcmfmac is ON."""
+    return bool(re.match(r"\s*(2\b|disable\b)", v or ""))
 
 DEFAULTS = {
     "SETUP_SSID": "VibeServer",     # Stuart: the first-boot hotspot is called "VibeServer"
@@ -402,6 +416,9 @@ class Box:
         self.link = None              # the joined link: {signal, tx, rx, retry} — shown beside the choice
         self.link_ssid = ""           # ★ the network the RADIO is on (iw), not the name in the slot
         self._link_prev = None        # (tx packets, tx retries) at the last reading, for the retry %
+        self.power_save = None        # ★ the radio's own power save, as `iw … get power_save` says: "off" | "on" | None
+        self._ps_key = None           #   the join it was last checked for (connection, since)
+        self._ps_next = 0.0           #   …and when it is next re-checked while that join lasts
         self._names, self._names_at, self._fields = [], -1e9, {}
         self._ip = ("", "")
         self.internet = "unknown"     # NetworkManager's connectivity verdict, from NetWatch (events)
@@ -640,6 +657,54 @@ class Box:
             self._link_prev = (pk, rt)
         return {"signal": int(sig) if sig is not None else None,
                 "tx": tx, "rx": rx, "retry": retry}
+
+    def migrate_powersave(self):
+        """★★★ PROFILES SAVED BY AN OLDER BUILD (Phase 0.1). The powersave line in apply()/ap_args() reaches a profile only
+        when it is next saved, so a box set up before it existed keeps NetworkManager's default — power save ON on
+        brcmfmac — until the owner happens to re-save Wi-Fi. Every profile WE own (vibe-net-N, the two hotspots) that does
+        not say disable is modified to say it. Idempotent: a correct profile is read, not written.
+        ★★ NEVER BOUNCES A LINK. `connection modify` rewrites the profile only; NetworkManager applies it at the next
+           activation. The live link is put right by powersave_check(), on the radio, without a down/up. Returns the
+           names it changed."""
+        fixed = []
+        for n, t in self.connection_names():
+            if t != "802-11-wireless":
+                continue
+            ours = n in (AP_NAME, SETUP_NAME) or (n.startswith(NET_PREFIX) and n[len(NET_PREFIX):].isdigit())
+            if not ours or powersave_disabled(self.get(n, "802-11-wireless.powersave")):
+                continue
+            if self.nm_change(["nmcli", "connection", "modify", n, "802-11-wireless.powersave", "2"]) == 0:
+                fixed.append(n)
+        if fixed:
+            log("Wi-Fi power save switched off in %d saved profile(s) from an older build: %s" % (len(fixed), ", ".join(fixed)))
+        return fixed
+
+    def powersave_check(self):
+        """★★★ THE RADIO ITSELF, AFTER EVERY JOIN (Phase 0.2). The profile can say disable and the radio still doze:
+        brcmfmac re-enables power save after a reassociation or a firmware recovery. So `iw … get power_save` on each new
+        join, and again every POWERSAVE_RECHECK_SEC while it lasts (one netlink call — cheap beside the `iw link` this
+        tick already makes); if it says on, it is switched off and logged once for that join. Returns "off", "on" (could
+        not be switched off) or None (iw would not say)."""
+        now = self.sh.now()
+        key = (self.cur, self.since)
+        if key == self._ps_key and now < self._ps_next:
+            return self.power_save
+        first = key != self._ps_key
+        self._ps_key, self._ps_next = key, now + POWERSAVE_RECHECK_SEC
+        def read():
+            rc, out = self.sh.run(["iw", "dev", self.dev, "get", "power_save"], timeout=10)
+            m = re.search(r"Power save:\s*(on|off)", out or "", re.I) if rc == 0 else None
+            return m.group(1).lower() if m else None
+        ps = read()
+        if ps == "on":
+            self.sh.run(["iw", "dev", self.dev, "set", "power_save", "off"], timeout=10)
+            after = read()
+            if first or self.power_save != "on":
+                log("Wi-Fi power save was ON on %s (%s) — %s" % (self.dev, self.cur or "?",
+                    "switched off" if after == "off" else "could NOT be switched off; audio may stutter on a busy network"))
+            ps = "off" if after == "off" else "on"
+        self.power_save = ps
+        return ps
 
     def own_wifi(self):
         """The owner's choice: leave the network for the box's own (secured) hotspot, and hold it there."""
@@ -1214,6 +1279,9 @@ class Box:
         if cur and st >= 100:
             self.connecting_since = None
             self.link = self.link_info()
+            ps = self.powersave_check()
+            if self.link is not None:
+                self.link["powerSave"] = ps          # ★ shown beside the link's figures (state.json → the setup page)
             # ★★ THE SAFETY NET: the radio on a different network from the one its slot names (a reorder, or anything
             #    else that rewrote a live profile) → rejoin in the saved order, whatever caused it.
             prof = self.get(cur, "802-11-wireless.ssid")
@@ -1565,6 +1633,9 @@ def setup_once(box):
     cc = str(box.conf.get("COUNTRY", "")).strip().upper()
     if valid_country(cc):
         sh.run(["iw", "reg", "set", cc], timeout=10)
+    # ★★ Power save off in every profile we own, including those an older build saved (Phase 0.1) — by name, so it needs
+    #    no radio and runs on a wired box too (a USB dongle's profile is ready when it appears).
+    box.migrate_powersave()
     # ★★ THE DNS HIJACK — every name resolves to the box, but ONLY on NM's shared (hotspot)
     #    connections: this directory is read by the dnsmasq NM starts for a hotspot and by nothing
     #    else, so the box's own lookups as a client are untouched.

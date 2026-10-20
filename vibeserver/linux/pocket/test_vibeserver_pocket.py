@@ -70,6 +70,11 @@ class FakeNM:
         #     phone's own Wi-Fi is joined to another network. phone_ssid = the phone's hotspot; phone_on_ap = that phone
         #     is a station on the BOX's hotspot. While both hold, the phone's hotspot is missing from every scan.
         self.phone_ssid, self.phone_on_ap = None, False
+        # ★ Wi-Fi power save (BRIEF-portable-wifi-realtime Phase 0): the radio's own state as `iw … get power_save` reports
+        #   it, and whether a join switches it back on (brcmfmac after a reassociation / firmware recovery).
+        self.ps = "off"
+        self.ps_on_join = False
+        self.ps_stuck = False                       # `iw … set power_save off` refused (a driver that will not)
 
     # Shell interface
     def port_open(self, port):
@@ -118,7 +123,8 @@ class FakeNM:
             f = a[2]
             v = {"802-11-wireless.ssid": c["ssid"], "802-11-wireless.hidden": "yes" if c["hidden"] else "no",
                  "802-11-wireless.mode": c["mode"], "802-11-wireless-security.psk": c["psk"] if "-s" in a else "",
-                 "802-11-wireless-security.key-mgmt": "wpa-psk" if c["psk"] else ""}.get(f, "")
+                 "802-11-wireless-security.key-mgmt": "wpa-psk" if c["psk"] else "",
+                 "802-11-wireless.powersave": c.get("ps", "0 (default)")}.get(f, "")
             return 0, esc(v) + "\n"
         if a[:2] == ["nmcli", "-t"] and a[4:6] == ["device", "show"]:
             st = 100 if self.active else 30
@@ -141,6 +147,12 @@ class FakeNM:
             if self.active and not self.is_ap():     # as a client: the one station is the router, with counters
                 return 0, "Station e4:5e:1b:00:00:01 (on wlan0)\n\ttx packets:\t%d\n\ttx retries:\t%d\n" % (self.txpk, self.txrt)
             return 0, "".join("Station aa:bb:cc:00:00:%02d (on wlan0)\n" % i for i in range(self.stations))
+        if a[:2] == ["iw", "dev"] and a[3:] == ["get", "power_save"]:
+            return 0, "Power save: %s\n" % self.ps
+        if a[:2] == ["iw", "dev"] and a[3:] == ["set", "power_save", "off"]:
+            if not self.ps_stuck:
+                self.ps = "off"
+            return 0, ""
         if a[:2] == ["iw", "dev"] and a[3:] == ["link"]:
             if not self.active or self.is_ap():
                 return 0, "Not connected.\n"
@@ -170,6 +182,8 @@ class FakeNM:
             if real and real[1] == c["psk"]:
                 self.active = name
                 self.assoc = c["ssid"]
+                if self.ps_on_join:
+                    self.ps = "on"
                 return 0, ""
             self.active = ""
             self.t += int(a[2])
@@ -195,7 +209,8 @@ class FakeNM:
                                 "psk": kv.get("wifi-sec.psk", ""),
                                 "prio": int(kv.get("connection.autoconnect-priority", "0")),
                                 "hidden": kv.get("802-11-wireless.hidden") == "yes",
-                                "mode": kv.get("802-11-wireless.mode", "infrastructure")}
+                                "mode": kv.get("802-11-wireless.mode", "infrastructure"),
+                                "ps": {"2": "2 (disable)"}.get(kv.get("802-11-wireless.powersave"), "0 (default)")}
             return 0, ""
         if a[:3] == ["nmcli", "connection", "modify"]:
             c = self.conns[a[3]]
@@ -205,6 +220,7 @@ class FakeNM:
             if "wifi-sec.psk" in kv: c["psk"] = kv["wifi-sec.psk"]
             if "connection.autoconnect-priority" in kv: c["prio"] = int(kv["connection.autoconnect-priority"])
             if "802-11-wireless.hidden" in kv: c["hidden"] = kv["802-11-wireless.hidden"] == "yes"
+            if "802-11-wireless.powersave" in kv: c["ps"] = {"2": "2 (disable)"}.get(kv["802-11-wireless.powersave"], kv["802-11-wireless.powersave"])
             return 0, ""
         return 0, ""
 
@@ -318,6 +334,119 @@ def road_test_2026_10_14(tmp):
     run_for(nm, box, int(vp.DEFAULTS["TRY_SEC"]) + 60)
     ok(nm.active == vp.AP_NAME and not box.want and "not found" in box.last_error,
        "(guard) picked, never switched on: its own Wi-Fi comes back and says why")
+
+
+def powersave_phase0(tmp):
+    """★★★ BRIEF-portable-wifi-realtime.md, Phase 0 (2026-10-20): Wi-Fi power save is OFF on every profile we write, on
+    every profile an older build wrote, and on the radio itself after every join — a dozing radio is tens of ms of jitter on
+    each audio packet over a busy 2.4 GHz phone hotspot."""
+    def ps_pair(args):
+        return any(args[i:i + 2] == ["802-11-wireless.powersave", "2"] for i in range(len(args) - 1))
+
+    # ── 0.3a: the args of every saved network and of both hotspots carry powersave 2 ──
+    nm, box = make(tmp)
+    nm.air = {"Home": (60, "homepass1")}
+    box.ensure_setup_ap()
+    box.apply(req([("Home", "homepass1", {}), ("Phone", "phonepass", {"hidden": True}), ("Cafe", "", {})]))
+    writes = [c for c in nm.calls if c[:3] in (["nmcli", "connection", "add"], ["nmcli", "connection", "modify"])]
+    names = {}
+    for c in writes:
+        n = c[c.index("con-name") + 1] if "con-name" in c else c[3]
+        names.setdefault(n, []).append(c)
+    want = ["vibe-net-1", "vibe-net-2", "vibe-net-3", vp.AP_NAME, vp.SETUP_NAME]
+    ok(all(n in names and ps_pair(names[n][0]) for n in want),
+       "0.3: every saved network (1, 2, 3) and BOTH hotspots are written with 802-11-wireless.powersave 2")
+    ok("802-11-wireless.powersave" in vp.Box(nm, dict(vp.DEFAULTS)).ap_args()
+       and ps_pair(vp.Box(nm, dict(vp.DEFAULTS)).ap_args()), "…ap_args() itself carries it (setup + fallback hotspot)")
+    # a re-save of an existing slot (modify in place) carries it too
+    nm.calls.clear()
+    box.apply(req([("Home", "", {"keep": True}), ("Phone", "phonepass", {"hidden": True})]))
+    mods = [c for c in nm.calls if c[:4] == ["nmcli", "connection", "modify", "vibe-net-1"]]
+    ok(mods and ps_pair(mods[0]), "…and so does re-saving a slot in place (modify, not add)")
+
+    # ── 0.1 / 0.3b: the migration ──
+    nm, box = make(tmp)
+    mk = lambda ssid, mode, ps: {"type": "802-11-wireless", "ssid": ssid, "psk": "x" * 8, "prio": 0,
+                                 "hidden": False, "mode": mode, "ps": ps}
+    nm.conns = {"vibe-net-1": mk("Home", "infrastructure", "0 (default)"),     # an older build: never written
+                "vibe-net-2": mk("Phone", "infrastructure", "2 (disable)"),    # already right
+                "vibe-net-3": mk("Cafe", "infrastructure", "disable"),         # right, in nmcli's other spelling
+                vp.AP_NAME: mk("Pocket-SDR", "ap", "3 (enable)"),              # explicitly on
+                vp.SETUP_NAME: mk("VibeServer", "ap", ""),                     # no field at all
+                "preconfigured": mk("Imager", "infrastructure", "0 (default)")}  # NOT ours (Raspberry Pi Imager)
+    nm.active = "vibe-net-1"
+    nm.calls.clear()
+    with redirect_stdout(io.StringIO()) as out:
+        fixed = box.migrate_powersave()
+    ok(sorted(fixed) == sorted(["vibe-net-1", vp.AP_NAME, vp.SETUP_NAME]),
+       "0.1: the migration modifies the stale profiles (default, enable, missing) — got %s" % fixed)
+    ok(all(nm.conns[n]["ps"].startswith("2") for n in ("vibe-net-1", vp.AP_NAME, vp.SETUP_NAME)),
+       "…which now say disable")
+    ok("vibe-net-2" not in nm.modified and "vibe-net-3" not in nm.modified,
+       "…and leaves a correct one alone (\"2 (disable)\" and \"disable\" both read as correct)")
+    ok("preconfigured" not in nm.modified, "…and never touches a profile that is not ours")
+    ok(not any(c[:3] in (["nmcli", "connection", "down"], ["nmcli", "connection", "up"]) or c[3:5] == ["connection", "up"]
+               for c in nm.calls) and nm.active == "vibe-net-1",
+       "★★ …without bouncing the live link: no down, no up — the active profile is modified in place")
+    ok("power save switched off in 3" in out.getvalue(), "…and says what it changed")
+    nm.calls.clear()
+    with redirect_stdout(io.StringIO()):
+        again = box.migrate_powersave()
+    ok(again == [] and not any(c[:3] == ["nmcli", "connection", "modify"] for c in nm.calls),
+       "…idempotent: run again, nothing is written")
+    ok(vp.powersave_disabled("2") and vp.powersave_disabled("2 (disable)") and vp.powersave_disabled("disable")
+       and not vp.powersave_disabled("0 (default)") and not vp.powersave_disabled("") and not vp.powersave_disabled("20"),
+       "nmcli's spellings of the setting are read right")
+    # ★ The boot runs it, by name, before any radio exists (a wired box; a USB dongle plugged in later).
+    nm, box = make(tmp)
+    box.dev = None
+    nm.wifi_dev = None
+    nm.conns = {"vibe-net-1": mk("Home", "infrastructure", "0 (default)")}
+    saved = (vp.AVAHI_CONF, vp.RESET_FILES, vp.DNSMASQ_CONF)
+    vp.AVAHI_CONF, vp.RESET_FILES, vp.DNSMASQ_CONF = os.path.join(tmp, "nope.conf"), (), os.path.join(tmp, "dnsmasq.conf")
+    try:
+        with redirect_stdout(io.StringIO()):
+            vp.setup_once(box)
+    finally:
+        vp.AVAHI_CONF, vp.RESET_FILES, vp.DNSMASQ_CONF = saved
+    ok(nm.conns["vibe-net-1"]["ps"].startswith("2"), "the migration runs at service start, with or without a radio")
+
+    # ── 0.2: the radio itself, after every join ──
+    nm, box = make(tmp)
+    nm.conns = {"vibe-net-1": mk("Home", "infrastructure", "2 (disable)")}
+    nm.conns["vibe-net-1"]["psk"] = "homepass1"
+    nm.air = {"Home": (60, "homepass1")}
+    nm.ps_on_join = True                      # ★ brcmfmac: the join switches it back on, whatever the profile says
+    with redirect_stdout(io.StringIO()) as out:
+        run_for(nm, box, 90)
+    st = json.load(open(box.state_path))
+    ok(nm.active == "vibe-net-1" and nm.ps == "off" and ["iw", "dev", "wlan0", "set", "power_save", "off"] in nm.calls,
+       "0.2: joined with the radio's power save ON — `iw … set power_save off` is applied")
+    ok(st["link"] and st["link"].get("powerSave") == "off", "…and the state's link health says powerSave: off (the setup page)")
+    ok(out.getvalue().count("power save was ON") == 1, "…logged once for that join")
+    # a reassociation / firmware recovery switches it on again with no NM change: the minute's re-check catches it
+    nm.ps = "on"
+    with redirect_stdout(io.StringIO()) as out:
+        run_for(nm, box, vp.POWERSAVE_RECHECK_SEC + 10)
+    ok(nm.ps == "off", "★ TRAP: switched on again mid-join (no NM change) — the re-check switches it off again")
+    gets = [c for c in nm.calls if c[3:] == ["get", "power_save"]]
+    ok(len(gets) <= 2 + 2 * (90 + vp.POWERSAVE_RECHECK_SEC + 10) // vp.POWERSAVE_RECHECK_SEC + 2,
+       "…and the check is cheap: about once a minute, not every tick (%d reads)" % len(gets))
+    # a driver that will not switch it off: said, and shown as on
+    nm, box = make(tmp)
+    nm.conns = {"vibe-net-1": dict(mk("Home", "infrastructure", "2 (disable)"), psk="homepass1")}
+    nm.air = {"Home": (60, "homepass1")}
+    nm.ps_on_join, nm.ps_stuck = True, True
+    with redirect_stdout(io.StringIO()) as out:
+        run_for(nm, box, 60)
+    st = json.load(open(box.state_path))
+    ok(st["link"].get("powerSave") == "on" and "could NOT be switched off" in out.getvalue(),
+       "a radio that refuses: the state says on and the log says so — never reported as off")
+    # a hotspot is not a client: never asked
+    nm, box = make(tmp)
+    nm.air = {}
+    run_for(nm, box, 120)
+    ok(not any(c[3:] == ["get", "power_save"] for c in nm.calls), "on its own hotspot: not checked (AP mode does not doze)")
 
 
 def main():
@@ -611,6 +740,7 @@ def main():
         ok(nm.active == vp.SETUP_NAME, "after a Wi-Fi reset the OPEN setup hotspot is back")
 
         road_test_2026_10_14(tempfile.mkdtemp())
+        powersave_phase0(tempfile.mkdtemp())
 
     out = log.getvalue()
     for secret in ("homepass1", "phonepass", "pocketpass", "workpass1"):
