@@ -143,6 +143,62 @@ Use a Mac in Wireless Diagnostics → Sniffer on the hotspot's channel, and filt
 - Pi → phone audio frames should show **TID 6**.
 - Also note what the phone → client hop shows. This tells us whether iOS honours the tag when it forwards packets. That would be a bonus, not a requirement.
 
+**Updated for the real incident (Android hotspot, two hops on one channel):** see *Checks for Stuart* at the end for the
+exact sniffer recipe. In short, capture **both** hops:
+- **Hop 1, Pi → hotspot:** audio = TID 6, waterfall = TID 0, map = TID 1.
+- **Hop 2, hotspot → iPhone:** what TID the hotspot gives the *forwarded* audio (EF should mean TID 6 or 5), and the
+  iPhone's browsing (TID 0). If the audio rides TID 5/6 there, the Pi's mark protects the hop where the browsing competes.
+
+### Phase 1 — done (2026-10-20)
+**Verified against the source, with corrections:**
+- ✓ No `SO_PRIORITY`, `IP_TOS` or `IPV6_TCLASS` anywhere — not in `vibeserver/`, and not in
+  `android/app/src/main/cpp/`, where the server's socket code actually lives (`net_shim.cpp`, `local_sdr_shim.cpp`).
+- ✗ **`TCP_NODELAY` was already set**, on every accepted socket (`net::Listener::accept`, `net_shim.cpp`) and every outgoing
+  one. That includes the audio socket, since the door's accepted fd carries it through the hand-off.
+- ✓ The hand-off works as the brief says, but the code lives in the shim. `main.cpp` (~3802–3839 now) only supplies the
+  *router* lambda. `LocalSdrShim::routeOrHandle()` reads the request line with `MSG_PEEK`, asks the router, and
+  `vibe::sendFdTo()` passes the fd over `SCM_RIGHTS`. The radio process adopts it in `handoffLoop()`.
+- ★ **Marked in the radio process, not at the door** (`acceptWs()`, once the path is known). Socket options travel with
+  the socket, so the effect is the same for a handed-over connection. But this one line also covers a single-radio
+  server with no door, a client on a radio's own port, and **Android**, which has no door at all. Marking at the door would
+  have missed all three.
+- ★ The server only listens on IPv4 today (`net::listen` binds `AF_INET`). The IPv6 branch is there for when that changes:
+  an `AF_INET6` socket gets both `IPV6_TCLASS` and `IP_TOS`, the latter for v4-mapped traffic.
+
+**Two traps found that the brief didn't list:**
+- ★★ **On Linux, setting `IP_TOS` overwrites `SO_PRIORITY`** (`rt_tos2priority`: EF → 4). Measured on the Lenovo
+  (kernel 6.8): setting priority 6 and *then* TOS reads back **4**. `apply()` sets TOS first and priority second, and the
+  test reads 6 back on Linux.
+- ★★ **Which mark a driver honours depends on the driver:**
+  - **brcmfmac** (the Pi's onboard Wi-Fi, FullMAC) uses skb->priority 1–7 *as* the 802.1d tag, and classifies by DSCP
+    only when it is 0. So SO_PRIORITY 6 is TID 6 on a Pi, whatever its kernel's DSCP table.
+  - **mac80211** drivers (most USB dongles and PCIe cards on other Linux servers) ignore priorities below 256 and use
+    DSCP. The 256+ override would need CAP_NET_ADMIN, which the daemon doesn't have.
+  - So both marks go on every time. The next hop (the phone's hotspot) only ever sees the DSCP anyway.
+  - Many Android phones use vendor FullMAC drivers (Qualcomm, Broadcom) rather than mac80211. Their DSCP → TID map is
+    their own, typically `DSCP >> 3`, which gives TID 5 (AC_VI) for EF. That is still above the browsing.
+
+**Changed:**
+- New `android/app/src/main/cpp/vibe_wifi_qos.h`: `marksFor()` holds the table, `apply()` sets the options in the right
+  order and is best effort per option.
+- `local_sdr_shim.cpp`: `acceptWs()` marks `/ws/audio` as Audio (priority 6, EF, NODELAY) and `/ws/user-spectrum` as
+  Waterfall (priority 0, CS0), and logs once per class.
+- `/mapdata/` and `/mapgl/` are marked as Bulk (priority 1, CS1), alongside the existing bulk thread priority and pacing.
+- Control sockets are left at the default.
+- I chose CS0 rather than CS1 for the waterfall. AC_BK can be starved almost to nothing on a busy hotspot, which would
+  read as a frozen waterfall. Phase 2 does the yielding instead, under our control.
+
+**Scope:**
+- Every Linux VibeServer gets this. So do the Mac app, through the same shim: IP_TOS only, since macOS has no SO_PRIORITY.
+- **Android VibeServer/Lite needed no Kotlin change**: the native shim owns the socket. An app process may set
+  SO_PRIORITY 0–6 and IP_TOS without privileges.
+- No wire change, and a client sees nothing.
+
+**Test:** `vibeserver/test-wifi-qos.cpp` is picked up by `scripts/run-tests.sh`. It checks the table, then marks a real
+loopback TCP pair (IPv4 and IPv6) and reads back IP_TOS / IPV6_TCLASS / TCP_NODELAY, plus SO_PRIORITY on Linux. It also
+checks that re-marking a socket as waterfall really takes it out of voice. It passes on the Mac (SO_PRIORITY skipped,
+reported as not applied) and on the Lenovo, where SO_PRIORITY reads 6.
+
 ---
 
 ## Phase 2 — Audio-first sending (the real QoS we control)

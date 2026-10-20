@@ -126,6 +126,7 @@
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_squelch_msg.h"       // ★ squelch on/off: explicit `on`, else the legacy db > -100
 #include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
+#include "vibe_wifi_qos.h"          // ★★ audio out as Wi-Fi VOICE, the waterfall never (BRIEF-portable-wifi-realtime, 2026-10-20)
 #include "vibe_listener_queue.h"     // ★ a per-VFO listener's block queue, sized in time (2026-10-07)
 #include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
 #include "vibe_rtl_tuner_restore.h"   // ★ the ONE "put the tuner back after its re-init" (both direct-sampling routes)
@@ -19261,6 +19262,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    vibe_bulk_pace.h. No radio lock is taken on this path, so a low priority here
             //    cannot invert onto the DSP.
             vibeBulkThread("vibe-bulk");
+            vibeqos::apply(sock->rawFd(), vibeqos::Class::Bulk);   // ★ CS1 / background on Wi-Fi (vibe_wifi_qos.h)
             vibemap::serve(sock, reqLine.substr(from, to - from), acceptsGzip, head,
                            s_listenersCached.load(std::memory_order_relaxed) > 0);
         // ── ★★★ THE GPU MAP'S FILES, FROM DISK ──────────────────────────────────────────────────
@@ -19279,6 +19281,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     pacing, not just the priority, is what protects the audio. No radio lock is taken
             //     on this path, so a low priority cannot invert onto the DSP.
             vibeBulkThread("vibe-bulk");
+            vibeqos::apply(sock->rawFd(), vibeqos::Class::Bulk);   // ★ CS1 / background on Wi-Fi (vibe_wifi_qos.h)
             vibemapgl::serve(sock, reqLine.substr(from, to - from), rangeHeader, head,
                              s_listenersCached.load(std::memory_order_relaxed) > 0);
         // ── ★★★ THE WEB CLIENT'S SCRIPTS ────────────────────────────────────────────────────────
@@ -19718,6 +19721,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   they say their piece and hang up in the next line, so without the drain the server
         //   stops explaining itself and just disconnects, which a user reads as a crash.
         outboxOpen(sock);
+        // ★★★ THE WI-FI QUEUE, NOW THE PATH IS KNOWN (docs/BRIEF-portable-wifi-realtime.md Phase 1, vibe_wifi_qos.h).
+        //     Audio: SO_PRIORITY 6 + DSCP EF — WMM voice on the Pi's own Wi-Fi, and a mark the phone's hotspot can carry
+        //     on to the listener. Waterfall: best effort, explicitly — NEVER voice (a bulk flow in AC_VO starves the
+        //     channel, our own ACKs included). Here and not at the front door: this one line covers a connection the door
+        //     handed over, one served directly, and Android's in-process server. No wire change; a client sees nothing.
+        {
+            const auto qa = vibeqos::apply(sock->rawFd(), isAudio ? vibeqos::Class::Audio : vibeqos::Class::Waterfall);
+            static std::atomic<int> saidAudio{0}, saidSpec{0};
+            if ((isAudio ? saidAudio : saidSpec).fetch_add(1) == 0)
+                LOGI("wifi qos: %s socket marked (TOS %s%s, priority %s) — said once",
+                     isAudio ? "audio" : "waterfall", qa.tos ? "ok" : "no",
+                     qa.family == AF_INET6 ? (qa.tclass ? ", TCLASS ok" : ", TCLASS no") : "",
+                     qa.priority ? "ok" : "n/a");
+        }
 
         // ★ ONE OCCUPANT AT A TIME — and a second one is TURNED AWAY, not allowed to take over.
         //
