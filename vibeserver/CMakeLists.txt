@@ -710,6 +710,14 @@ target_include_directories(test-mdns PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-mdns)
 target_link_libraries(test-mdns PRIVATE Threads::Threads)
 add_test(NAME mdns COMMAND test-mdns)
+# ★★ Wi-Fi QoS (vibe_wifi_qos.h, 2026-10-20, docs/BRIEF-portable-wifi-realtime.md): audio marked voice, the waterfall and
+#    the map never; on Linux SO_PRIORITY is read back AFTER IP_TOS (which rewrites it). And the audio-first rule — the
+#    waterfall yields while a listener's audio is queued — on a synthetic clock.
+add_executable(test-wifi-qos "${CMAKE_CURRENT_SOURCE_DIR}/test-wifi-qos.cpp")
+target_include_directories(test-wifi-qos PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-wifi-qos)
+target_link_libraries(test-wifi-qos PRIVATE Threads::Threads)
+add_test(NAME wifi-qos COMMAND test-wifi-qos)
 # ★ The fatal-signal record (crash_report.h, 2026-10-06): a fault on a named thread is reported with its
 #   thread, PC as an exe offset and version, and the process still dies of the same signal. Linux only
 #   (prints SKIP elsewhere).

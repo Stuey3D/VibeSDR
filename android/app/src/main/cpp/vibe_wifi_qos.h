@@ -1,7 +1,7 @@
 // vibe_wifi_qos.h — which Wi-Fi queue each of our sockets goes out in, and when the waterfall gives way to the audio.
 //
 // docs/BRIEF-portable-wifi-realtime.md (2026-10-20). A Portable and the listener's phone were both on a 2.4 GHz phone
-// hotspot; the phone's own browsing made the Portable's audio stutter.
+// hotspot; the phone's own browsing made the Portable's audio stutter. Two halves, both here so they can be tested:
 //
 // ── 1. MARKING (Phase 1) ─────────────────────────────────────────────────────────────────────────────────────────
 // ★★★ THE AUDIO SOCKET GOES OUT AS VOICE (WMM AC_VO); THE WATERFALL AND THE MAP NEVER DO.
@@ -28,14 +28,29 @@
 //  ★ Carriers and Cloudflare strip or ignore DSCP: no effect through the tunnel or across the internet. This is for the
 //    local Wi-Fi hop(s), and harmless on Ethernet.
 //
+// ── 2. THE WATERFALL YIELDS TO THE AUDIO (Phase 2.1) ─────────────────────────────────────────────────────────────
+// ★★★ WHEN A LISTENER'S AUDIO IS QUEUED, THEIR WATERFALL SLOWS. The audio and the waterfall are separate sockets, and
+//     until now nothing decided between them: on a link short of airtime the waterfall's large frames sat in the same
+//     driver queue in front of the audio's small ones. AudioFirst is the rule, per listener (session):
+//       · the audio socket's writer reports, after every frame, how much audio is still unsent (our queue + the kernel's
+//         send queue, SIOCOUTQ) in MILLISECONDS of audio — so the same rule fits 16 KB/s Opus and 192 KB/s PCM;
+//       · above kYieldMs, continuously for kSustainMs (a burst from the encoder is not a backlog), the waterfall
+//         YIELDS: whole frames are dropped, one let through every kYieldFrameMs so the picture visibly slows rather than freezing (a frozen waterfall reads as a dead server);
+//       · it resumes at full rate only once the audio has been clear for kClearMs (~1 s), so it does not flap.
+//     Pure logic on a caller-supplied clock: deterministic, tested in vibeserver/test-wifi-qos.cpp.
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <mutex>
 
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
+#if defined(__linux__)
+#include <linux/sockios.h>      // SIOCOUTQ
+#endif
 
 namespace vibeqos {
 
@@ -86,5 +101,112 @@ inline Applied apply(int fd, Class c) {
     }
     return a;
 }
+
+/** Bytes written to this socket that the peer has not yet acknowledged, sent or not (Linux SIOCOUTQ; macOS
+ *  SO_NWRITE). 0 where neither exists — the gate then sees only our own queue. */
+inline int unsentBytes(int fd) {
+    if (fd < 0) return 0;
+#if defined(__linux__) && defined(SIOCOUTQ)
+    int n = 0;
+    if (::ioctl(fd, SIOCOUTQ, &n) == 0 && n > 0) return n;
+#elif defined(SO_NWRITE)
+    int n = 0; socklen_t l = sizeof n;
+    if (::getsockopt(fd, SOL_SOCKET, SO_NWRITE, &n, &l) == 0 && n > 0) return n;
+#endif
+    return 0;
+}
+
+/** ★ Hold the socket's UNSENT kernel bytes to `bytes` (TCP_NOTSENT_LOWAT, Linux 3.12+ and macOS). For the waterfall:
+ *  newest-wins happens in our outbox, and an autotuned send buffer would otherwise park seconds of stale rows ahead of
+ *  it — still contending for airtime after the audio-first gate has said stop. In-flight data is not limited, so
+ *  throughput on a long internet path is unchanged. Returns whether it took. */
+inline bool limitUnsent(int fd, int bytes = 32 * 1024) {
+#if defined(TCP_NOTSENT_LOWAT)
+    return fd >= 0 && ::setsockopt(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, &bytes, sizeof bytes) == 0;
+#else
+    (void)fd; (void)bytes; return false;
+#endif
+}
+
+/** ★★★ The audio-first rule for ONE listener. Thread-safe: the audio writer reports, the spectrum path asks. */
+class AudioFirst {
+public:
+    static constexpr double kYieldMs      = 150.0;   // audio queued beyond this ⇒ the waterfall yields
+    static constexpr double kClearMs      = 1000.0;  // …until the audio has been clear this long
+    static constexpr double kYieldFrameMs = 500.0;   // while yielding, one whole frame every this often (2 fps)
+    /** ★★ …and it must STAY over for this long. The encoder hands the writer its packets in BURSTS (one DSP block = up
+     *  to ~8 Opus frames written back to back), so for a moment right after a burst the kernel holds 160 ms of audio
+     *  on a perfectly healthy link. Measured on the live server (test-server-audio-first.mjs): a one-report rule
+     *  yielded on loopback with nothing wrong at all. A real backlog persists; a burst drains within a few ms. */
+    static constexpr double kSustainMs    = 150.0;
+
+    /** The audio writer, after each frame: `queuedBytes` still unsent (ours + the kernel's), `bytesPerSec` the audio's
+     *  own rate (so the threshold is in time, not bytes). A rate of 0 (not known yet) never yields. */
+    void noteAudio(double nowMs, double queuedBytes, double bytesPerSec) {
+        std::lock_guard<std::mutex> lk(m_);
+        const double ms = bytesPerSec > 0 ? queuedBytes * 1000.0 / bytesPerSec : 0.0;
+        lastQueuedMs_ = ms;
+        if (ms <= kYieldMs) { overSinceMs_ = -1; return; }
+        if (overSinceMs_ < 0) overSinceMs_ = nowMs;
+        if (nowMs - overSinceMs_ < kSustainMs) return;        // a burst, not (yet) a backlog
+        if (!yielding_) { yielding_ = true; ++episodes_; lastLetMs_ = -1e18; }
+        busySinceClearMs_ = nowMs;
+    }
+
+    /** ★★ The audio writer around each send. A send that BLOCKS (the kernel buffer full — the worst backlog there is)
+     *  reports nothing until it returns, so a send under way for longer than kYieldMs counts as audio queued. Without
+     *  this the waterfall would resume ~1 s into the very stall it should be yielding to. */
+    void noteSendStart(double nowMs) { std::lock_guard<std::mutex> lk(m_); sending_ = true; sendStartMs_ = nowMs; }
+    void noteSendEnd() { std::lock_guard<std::mutex> lk(m_); sending_ = false; }
+
+    /** The spectrum path, per whole frame: send it (true) or drop it (false). */
+    bool waterfallMaySend(double nowMs) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (sending_ && nowMs - sendStartMs_ > kYieldMs) {          // an audio send stuck in the kernel
+            if (!yielding_) { yielding_ = true; ++episodes_; lastLetMs_ = -1e18; }
+            busySinceClearMs_ = nowMs;
+            lastQueuedMs_ = nowMs - sendStartMs_;
+        }
+        if (yielding_ && nowMs - busySinceClearMs_ >= kClearMs) yielding_ = false;   // clear for ~1 s: resume
+        if (!yielding_) return true;
+        if (nowMs - lastLetMs_ >= kYieldFrameMs) { lastLetMs_ = nowMs; return true; }
+        ++dropped_;
+        return false;
+    }
+
+    bool yielding() const { std::lock_guard<std::mutex> lk(m_); return yielding_; }
+    uint64_t dropped() const { std::lock_guard<std::mutex> lk(m_); return dropped_; }
+    uint64_t episodes() const { std::lock_guard<std::mutex> lk(m_); return episodes_; }
+    double lastQueuedMs() const { std::lock_guard<std::mutex> lk(m_); return lastQueuedMs_; }
+
+private:
+    mutable std::mutex m_;
+    bool yielding_ = false;
+    double overSinceMs_ = -1;       // the audio has been over kYieldMs continuously since (-1 = it is not)
+    bool sending_ = false;          // an audio send is under way…
+    double sendStartMs_ = 0;        //   …since
+    double busySinceClearMs_ = 0;   // the last time the audio was over the threshold
+    double lastLetMs_ = -1e18;      // the last frame let through while yielding
+    double lastQueuedMs_ = 0;
+    uint64_t dropped_ = 0, episodes_ = 0;
+};
+
+/** The audio's byte rate, smoothed — what turns "bytes queued" into "milliseconds queued". Fed by the writer. */
+class RateMeter {
+public:
+    void note(double nowMs, double bytes) {
+        if (t0_ < 0) { t0_ = nowMs; acc_ = 0; }
+        acc_ += bytes;
+        const double dt = nowMs - t0_;
+        if (dt >= 1000.0) {
+            const double r = acc_ * 1000.0 / dt;
+            rate_ = rate_ <= 0 ? r : rate_ * 0.7 + r * 0.3;
+            t0_ = nowMs; acc_ = 0;
+        }
+    }
+    double bytesPerSec() const { return rate_; }
+private:
+    double t0_ = -1, acc_ = 0, rate_ = 0;
+};
 
 }  // namespace vibeqos

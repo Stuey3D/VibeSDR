@@ -506,6 +506,14 @@ printf '\n\033[1m── server decoders (end to end) ──\033[0m\n'
 node scripts/test-server-decoders.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ AUDIO FIRST (2026-10-20, docs/BRIEF-portable-wifi-realtime.md Phase 2): a listener whose audio backs up gets a
+#     ~2 fps waterfall until it has been clear for ~1 s; another listener never notices; an encoder burst is not a
+#     backlog. The backed-up half needs a kernel that honours a small receive buffer (Linux) — elsewhere it says NOT RUN.
+#     Same VIBESERVER_BIN rule.
+printf '\n\033[1m── audio first: the waterfall yields (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-audio-first.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ A RUNNING DECODER KEEPS THE AUDIO CHAIN (2026-10-07, Pi 500 Airspy: the listener's sockets blipped, the
 #     chain idled, and the WEFAX socket got nothing for 8 s). Decoder socket alone on a shared dial with
 #     --idle-grace 0: lines keep coming, no idle and no park, presence unchanged, and it idles once the

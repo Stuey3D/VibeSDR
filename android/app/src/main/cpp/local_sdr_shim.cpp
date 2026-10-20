@@ -9807,8 +9807,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::atomic<unsigned long long> audioTotal{0};
         bool   closing = false;      // drain what is queued, then the writer exits
         bool   overran = false;      // dropped for backlog, not for leaving
+        /** ★★★ AUDIO FIRST (docs/BRIEF-portable-wifi-realtime.md Phase 2, vibe_wifi_qos.h). The listener's gate, shared
+         *  by their audio socket (which REPORTS how much audio is still unsent) and their waterfall socket (which ASKS
+         *  before queueing a frame). Set in acceptWs once the session is known; null = no gate (never yields). */
+        std::shared_ptr<vibeqos::AudioFirst> gate;
+        bool   isAudio = false;      // this is the listener's /ws/audio socket — set with `gate`, both under m
+        vibeqos::RateMeter audioRate;   // the writer thread's own: the audio's byte rate, for "ms queued"
         std::thread th;
     };
+    /** ★★★ ONE GATE PER LISTENER, keyed by session (or "@address" for a client that sends none — an older app). Held by
+     *  the two sockets' outboxes; this map only finds it, so a gate dies with the last socket that used it. */
+    std::mutex qosGateMtx;
+    std::map<std::string, std::weak_ptr<vibeqos::AudioFirst>> qosGates;
+    std::shared_ptr<vibeqos::AudioFirst> qosGateFor(const std::string& key) {
+        std::lock_guard<std::mutex> lk(qosGateMtx);
+        for (auto it = qosGates.begin(); it != qosGates.end(); )
+            it = it->second.expired() ? qosGates.erase(it) : std::next(it);
+        auto& w = qosGates[key];
+        auto g = w.lock();
+        if (!g) { g = std::make_shared<vibeqos::AudioFirst>(); w = g; }
+        return g;
+    }
+    static double qosNowMs() {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
     /** Serialises the stop/join/restart dance in setSampleRate — see the note there. */
     std::mutex rateMtx;
     std::mutex outboxMtx;
@@ -9845,6 +9867,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibeNetThread("vibeTx");            // ★ network first — see the priority order in vibe_thread.h
         for (;;) {
             std::pair<Out, std::vector<uint8_t>> msg;
+            std::shared_ptr<vibeqos::AudioFirst> gate;      // ★ read under ob->m: acceptWs sets it after the writer starts
             {
                 std::unique_lock<std::mutex> lk(ob->m);
                 ob->cv.wait(lk, [&]{ return ob->closing || !ob->q.empty(); });
@@ -9852,9 +9875,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 msg = std::move(ob->q.front());
                 ob->q.pop_front();
                 ob->bytes -= msg.second.size();
+                if (ob->isAudio) gate = ob->gate;
             }
             if (!ob->sock->isOpen()) return;
-            if (ob->sock->send(msg.second.data(), msg.second.size()) < 0) {
+            // ★★★ AUDIO FIRST: an audio send that BLOCKS is the worst backlog of all, and it reports nothing while it
+            //     blocks — so the gate is told a send is under way, and treats a long one as audio queued.
+            const bool reportAudio = gate && msg.first == Out::Audio;
+            if (reportAudio) gate->noteSendStart(qosNowMs());
+            const int sent = ob->sock->send(msg.second.data(), msg.second.size());
+            if (reportAudio) {
+                const double now = qosNowMs();
+                gate->noteSendEnd();
+                ob->audioRate.note(now, (double)msg.second.size());
+                size_t ours;
+                { std::lock_guard<std::mutex> lk(ob->m); ours = ob->bytes; }
+                gate->noteAudio(now, (double)ours + vibeqos::unsentBytes(ob->sock->rawFd()),
+                                ob->audioRate.bytesPerSec());
+            }
+            if (sent < 0) {
                 // ★ A write that failed is NOT the same as a peer that hung up, and the disconnect
                 //   line could not tell them apart. This is the network breaking under us.
                 ob->sock->noteWhy(net::Socket::Why::SendFailed);
@@ -9922,8 +9960,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (sock->isOpen()) sock->send(frame.data(), frame.size());
             return;
         }
+        // ★★★ AUDIO FIRST (vibe_wifi_qos.h): while this listener's audio is queued, their waterfall gives way — whole
+        //     frames dropped here, before they are queued, one let through every half second so it visibly slows
+        //     rather than freezing. Back to full rate once the audio has been clear for ~1 s.
         std::lock_guard<std::mutex> lk(ob->m);
         if (ob->closing) return;
+        if (cls == Out::Spectrum && ob->gate && !ob->isAudio && !ob->gate->waterfallMaySend(qosNowMs())) {
+            noteWaterfallYield(ob);
+            return;
+        }
         // ★★ SPECTRUM IS NEWEST-WINS. A waterfall row is worthless the moment a newer one exists,
         // so a listener who cannot keep up should fall BEHIND IN DETAIL, not accumulate a backlog
         // and then be dropped for it. Replacing rather than queueing is what lets a slow client
@@ -9957,6 +10002,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (cls == Out::Audio) ob->audioTotal.fetch_add(frame.size(), std::memory_order_relaxed);
         ob->q.emplace_back(cls, std::move(frame));
         ob->cv.notify_one();
+    }
+
+    /** ★ Say so when a waterfall starts yielding — once a minute at most, server-wide: it is the line that shows the rule
+     *  working on a real link (Stuart's sniffer test, the brief's "Done when"). */
+    void noteWaterfallYield(const std::shared_ptr<Outbox>& ob) {
+        static std::atomic<int64_t> lastSaid{0};
+        const int64_t now = (int64_t)time(nullptr);
+        int64_t prev = lastSaid.load();
+        if (now - prev < 60 || !lastSaid.compare_exchange_strong(prev, now)) return;
+        LOGI("waterfall yielding to audio for %s — audio %.0f ms queued (%llu waterfall frames dropped so far, %llu episodes)",
+             ob->sock->peerAddress().c_str(), ob->gate->lastQueuedMs(),
+             (unsigned long long)ob->gate->dropped(), (unsigned long long)ob->gate->episodes());
     }
 
     unsigned adcBufN_ = 0;      // ★ buffer counter for the 1-in-4 ADC sampling (see wantAdc)
@@ -19728,6 +19785,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     handed over, one served directly, and Android's in-process server. No wire change; a client sees nothing.
         {
             const auto qa = vibeqos::apply(sock->rawFd(), isAudio ? vibeqos::Class::Audio : vibeqos::Class::Waterfall);
+            // ★★★ AND THE AUDIO-FIRST GATE (Phase 2): both of this listener's sockets share one, by session — or by
+            //     address for a client that sends no session (an older app), where two people behind one NAT at worst
+            //     share a waterfall slow-down. The writer thread reads isAudio/gate only after this, under ob->m.
+            {
+                std::shared_ptr<Outbox> ob;
+                { std::lock_guard<std::mutex> lk(outboxMtx);
+                  auto it = outboxes.find(sock.get()); if (it != outboxes.end()) ob = it->second; }
+                if (ob) {
+                    auto g = qosGateFor(session.empty() ? "@" + sock->peerAddress() : session);
+                    std::lock_guard<std::mutex> lk(ob->m);
+                    ob->gate = g; ob->isAudio = isAudio;
+                }
+            }
+            // ★ The waterfall's KERNEL queue is held small too (TCP_NOTSENT_LOWAT): newest-wins is decided in our
+            //   outbox, and a megabyte of autotuned send buffer would otherwise hold seconds of stale rows ahead of it,
+            //   still taking airtime after the gate has said stop. Only the unsent part is limited — throughput is not.
+            if (!isAudio) vibeqos::limitUnsent(sock->rawFd());
             static std::atomic<int> saidAudio{0}, saidSpec{0};
             if ((isAudio ? saidAudio : saidSpec).fetch_add(1) == 0)
                 LOGI("wifi qos: %s socket marked (TOS %s%s, priority %s) — said once",

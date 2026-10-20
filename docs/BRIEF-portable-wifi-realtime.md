@@ -223,7 +223,90 @@ If audio itself backs up for more than ~2 s, step the Opus bitrate down one notc
 - Only if the existing encoder path makes this cheap; otherwise defer it.
 - Old apps must be unaffected, per V11 core lock: no protocol change.
 
+### Phase 2 — done (2026-10-20)
+
+★★★ **First, an honest note on the incident.** In Stuart's case VibeSDR was **in the background**, and the app *closes its
+spectrum socket* when it goes to the background (`VibeServerWsClient.pauseSpectrum()`). So the waterfall wasn't on the
+air at all; the audio was competing with the iPhone's own browsing, not with our waterfall. **Phase 2.1 wouldn't have
+helped that incident.** What can help it is:
+- Phase 0 (the Pi's radio not dozing);
+- Phase 1 (EF on the audio, which the hotspot may carry onto hop 2, where the browsing is);
+- Follow-up A (the iPhone tagging its own end).
+
+Phase 2.1 is for the foreground case: an app or web client on screen, over a busy link.
+
+**How it was found to be needed, and how it works** (`vibe_wifi_qos.h`, `AudioFirst`):
+- The server already had a per-listener outbox, where a waterfall frame is newest-wins and audio is never dropped. But
+  nothing decided **between** a listener's two sockets. On a link short of airtime, the waterfall's big frames sat in the
+  same driver queue ahead of the audio's small ones.
+- Each listener (session, or `@address` for a client that sends none) now has one gate, shared by both outboxes:
+  - After every audio frame, the **audio writer reports** how much audio is still unsent: our queue plus the kernel's
+    (`SIOCOUTQ` on Linux, `SO_NWRITE` on macOS). This is in **milliseconds of audio**, from the measured byte rate, so one
+    rule fits 12 KB/s Opus and 192 KB/s PCM.
+  - Over **150 ms**, held **for 150 ms**, the waterfall **yields**. Whole frames are dropped before they are queued, and
+    one is let through every 500 ms. The picture visibly slows instead of freezing, because a frozen waterfall reads as
+    a dead server.
+  - It resumes at full rate only once the audio has been **clear for 1 s**, so it doesn't flap.
+  - An audio `send()` that **blocks** (the kernel buffer full, the worst case) reports nothing while it blocks. So a send
+    under way for more than 150 ms counts as backlog too. Without that, the waterfall would come back a second into the
+    very stall it should be giving way to.
+- ★★ **A bug found by the live test, now fixed:** the encoder hands the writer ~8 Opus frames at once per DSP block. Just
+  after each block, the kernel briefly holds 160 ms of audio on a perfectly healthy link. A one-report rule therefore
+  yielded on loopback with nothing wrong at all. Hence the **150 ms sustain** (`kSustainMs`), and a test of exactly that
+  burst pattern.
+- The threshold sits at the web client's base jitter buffer (`JITTER_SEC = 0.15`, which grows to 0.40 after underruns).
+  The waterfall gives way while the audio still has its cushion, not after it runs dry.
+- The waterfall socket also gets **`TCP_NOTSENT_LOWAT` = 32 KB**. Newest-wins happens in our outbox, but an autotuned
+  kernel send buffer could otherwise park seconds of stale rows ahead of it, still taking airtime after the gate said stop.
+  Only the *unsent* part is limited, so throughput on a long internet path is unchanged.
+- A rate-limited log line (once a minute, server-wide) reads `waterfall yielding to audio for <addr> — audio N ms
+  queued (…dropped, …episodes)`. Watch for it during the on-device test.
+- No wire change. Old apps get the same behaviour, keyed by address.
+
+**2.2 — what was done and what was deferred:**
+- `TCP_NODELAY` was already on (see Phase 1).
+- A **smaller `SO_SNDBUF` on the audio socket was NOT applied**, deliberately. The server never drops audio frames: they
+  queue in the outbox, and the listener is dropped at 512 KB. So a small kernel buffer would only move the same backlog
+  from the kernel into our outbox. The latency is identical.
+- Actually *dropping stale audio* would trade the clients' existing catch-up for audible gaps. Both clients already absorb
+  a burst after a stall: `test-web-playout-burst`, and the app's jitter buffer. That trade needs measuring on the Pi 3A+
+  over a real hotspot, which couldn't be done from here.
+- So 2.2 = NODELAY (already on) + the send-stall detection above. Revisit after Stuart's on-device test if audio still
+  arrives late rather than gapping.
+
+**2.3 — deferred, with reasons:**
+1. **The shared dial has ONE encoder fanned out to every listener** (`sendAudioPcm`, "one encode, many sockets"). Stepping
+   it down for one listener's bad link degrades everyone. Doing it per listener means a second encoder per stressed
+   listener: CPU the Pi 3A+ and the Pi 2 floor can't spare, against "optimise the weak".
+2. **It saves little airtime.** At 2.4 GHz the airtime of a 240-byte Opus packet is mostly per-frame overhead: contention,
+   preamble, the ACK, ~150–250 µs. The payload is ~30 µs at MCS7. Halving 96 → 48 kbit/s removes perhaps 5–10 % of the
+   audio's airtime. The waterfall yielding saves far more.
+3. A bitrate change mid-stream needs no protocol change, so V11 doesn't forbid it. But the cost and benefit above don't
+   justify the complexity now. If the device test shows audio alone still backing up with the waterfall yielded, the
+   cheap version is a **global** step-down only while *every* listener on the shared dial is backed up.
+
+**Tests:**
+- `vibeserver/test-wifi-qos.cpp`, deterministic on a synthetic clock:
+  - a healthy link never yields;
+  - **encoder bursts never yield**;
+  - an instant over the threshold isn't enough, but a sustained one is;
+  - 2 fps while yielding, with drops counted;
+  - no resume before 1 s clear, then full rate;
+  - flapping audio is ONE episode;
+  - the threshold is in ms, not bytes (Opus vs PCM);
+  - no rate known means no yield;
+  - a blocked send yields and holds;
+  - one listener never slows another;
+  - the rate meter;
+  - NOTSENT_LOWAT and the kernel queue read back on real sockets.
+- `scripts/test-server-audio-first.mjs` runs end to end against the real server on a shared dial with two listeners.
+  A's audio stops being read; checks: no false yield while the kernel absorbs it, A's waterfall slows to ~2 fps while it
+  is backed up, B's is untouched, nobody is dropped, and A is back at full rate ~1 s after it reads again.
+  - It probes the kernel first. macOS loopback ignores a small receive buffer and absorbs ~450 KB, longer than the 20 s
+    ping liveness, so there only the no-false-yield half runs and the rest prints **NOT RUN**.
+
 ---
+
 
 ## Out of scope
 - Anything on the phone or hotspot side.
