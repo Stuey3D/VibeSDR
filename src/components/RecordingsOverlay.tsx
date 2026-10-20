@@ -218,7 +218,9 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange, cu
   }, NAV_REPEAT_KEYS);
 
   const renderRec = useCallback(({ item, index }: { item: Rec; index: number }) => {
-    const navOn = index === navIdx;
+    // ★ Only while a keyboard or pad is driving (controller audit group H, 2026-10-20): the first row wore the ring for
+    //   every touch user too, which read as a stuck selection.
+    const navOn = kbInUse && index === navIdx;
     const isSel = sel === item.uri;
     const playing = isSel && status.playing;
     const dur = isSel ? status.duration : 0;
@@ -274,7 +276,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange, cu
         )}
       </View>
     );
-  }, [sel, status.playing, status.duration, status.currentTime, trackW, togglePlay, share, remove, player, pt, styles]);
+  }, [navIdx, kbInUse, sel, status.playing, status.duration, status.currentTime, trackW, togglePlay, share, remove, player, pt, styles]);
 
   const renderItem = useCallback(({ item }: { item: Row }) => item.kind === 'h' ? (
     <Text style={styles.group} numberOfLines={1} accessibilityRole="header">

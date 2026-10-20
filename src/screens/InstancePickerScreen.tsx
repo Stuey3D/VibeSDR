@@ -5,6 +5,7 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { useListNav, noteTouchInteraction, useNavFocus, useOverlayOpen, useOverlay, keyboardModeNow } from '../components/PanelNav';
 import { useFieldPopupNav, NavWrap } from '../components/FieldPopupNav';
+import { pickerZone, headerAbove, directoryRowAction } from '../utils/pickerNav';
 import { addKeyListener } from '../utils/hardwareKeys';
 import {
   ActivityIndicator,
@@ -2041,6 +2042,17 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (h !== zoneCounts.h || f !== zoneCounts.f) setZoneCounts({ h, f });
   });
 
+  /** ★ A directory row's press — the tap AND Enter (src/utils/pickerNav.ts directoryRowAction). */
+  const pressDirectoryRow = (inst: SDRInstance) => {
+    const a = directoryRowAction(inst, blocksApps(inst));
+    // SpyServer isn't a web backend: its "url" is spyserver://host:port and
+    // it runs through the on-device shim, not a WebSocket to a page.
+    if (a.do === 'spy') { connectSpy(a.host, a.port, inst.name, inst.sessionLimitMins); return; }
+    if (a.do === 'vibeserver') { openDirectoryVibeServer(inst); return; }
+    if (a.do === 'connect') connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType as Exclude<SDRInstance['serverType'], 'vibeserver' | 'spyserver'>, a.compatOnly);
+  };
+  const pressDirectoryRowRef = useRef(pressDirectoryRow); pressDirectoryRowRef.current = pressDirectoryRow;
+
   const navFocus = useListNav(
     listNavActive,
     zoneCounts.h + listData.length + zoneCounts.f,
@@ -2052,13 +2064,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       const it = listData[i - hdr.length];
       if (!it) return;
       if (it.kind === 'header') { if (it.collapsible) toggleGroup(it.groupKey); return; }
-      if (it.kind === 'custom') { connectFav(it.fav); return; }
-      // `connect` covers the directory backends; a SpyServer row reaches the app by a
-      // different path, so it is left to touch rather than mistyping the call.
-      const st = it.data.serverType;
-      if (st === 'spyserver') return;
-      if (st === 'vibeserver') { openDirectoryVibeServer(it.data); return; }
-      connect(it.data.url, it.data.name, undefined, it.data.longitude, st);
+      if (it.kind === 'custom') { if (!connecting) connectFav(it.fav); return; }
+      // ★★ ENTER = TAP (controller audit group H, 2026-10-20): the row's own press. Enter used to skip SpyServer
+      //    rows, open a FULL receiver the tap refuses, and drop blocksApps — a restricted receiver opened outside
+      //    compatibility mode.
+      if (!connecting) pressDirectoryRowRef.current(it.data);
     },
     (i) => {
       // viewPosition 0.5 keeps focus mid-screen, which reads far better from across a
@@ -2093,10 +2103,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         setSelectedDir(null); setInstances([]); setFilter(''); setError(null); setLoading(false);
         return true;
       }
-      for (let j = Math.min(navFocusRef.current, listData.length - 1); j >= 0; j--) {
-        const h = listData[j];
-        if (h?.kind === 'header') { if (h.collapsible && !h.collapsed) toggleGroup(h.groupKey); return true; }
-      }
+      // ★ From the LIST position, not the global index (controller audit group H): it walked listData from the global
+      //   index, so with header controls above it collapsed the wrong group (pickerZone, scripts/test_picker_nav.ts).
+      const z = pickerZone(navFocusRef.current, hdrActions.current.length, listData.length, ftrActions.current.length);
+      if (z?.zone !== 'list') return true;
+      const j = headerAbove(listData.map((x) => x.kind), z.at);
+      const h = j >= 0 ? listData[j] : undefined;
+      if (h?.kind === 'header' && h.collapsible && !h.collapsed) toggleGroup(h.groupKey);
       return true;
     },
   );
@@ -2348,17 +2361,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             // be hidden by the very rows you are most likely to be standing on.
             navOn && { borderColor: focusC.ring, borderWidth: 2 },
           ]}
-          onPress={() => {
-            // SpyServer isn't a web backend: its "url" is spyserver://host:port and
-            // it runs through the on-device shim, not a WebSocket to a page.
-            if (inst.serverType === 'spyserver') {
-              const m = /^spyserver:\/\/([^:]+):(\d+)$/.exec(inst.url);
-              if (m) connectSpy(m[1], parseInt(m[2], 10), inst.name, inst.sessionLimitMins);
-              return;
-            }
-            if (inst.serverType === 'vibeserver') { openDirectoryVibeServer(inst); return; }
-            connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType, blocksApps(inst));
-          }}
+          onPress={() => pressDirectoryRow(inst)}
           disabled={connecting || isFull}
         >
           <View style={styles.rowMain}>

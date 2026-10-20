@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
+import { useListNav, useNavFocus, NavRing } from './PanelNav';
 import { Modal, View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -84,6 +85,23 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
     return CITIES.filter(c => c.name.toLowerCase().includes(s) || c.country.toLowerCase().includes(s));
   }, [q]);
 
+  // ★ Pad and keyboard (controller audit group H, 2026-10-20): [search, each city, CANCEL]. Back is SDRScreen's overlay
+  //   rule — this picker opens over the map, so it is on top and Back closes IT (it used to close the map beneath and
+  //   leave the picker up). Enter on the search box puts the cursor in it; the cities scroll without typing.
+  const searchRef = useRef<TextInput | null>(null);
+  const listRef = useRef<FlatList<City> | null>(null);
+  const navRing = useNavFocus().ring;
+  const listNow = useRef(list); listNow.current = list;
+  const focus = useListNav(visible, list.length + 2,
+    (i) => {
+      if (i === 0) { searchRef.current?.focus(); return; }
+      if (i === listNow.current.length + 1) { onClose(); return; }
+      const c = listNow.current[i - 1];
+      if (c) onPick(c);
+    },
+    (i) => { if (i >= 1 && i <= listNow.current.length) { try { listRef.current?.scrollToIndex({ index: i - 1, viewPosition: 0.5, animated: true }); } catch { /* rebuilding */ } } },
+    undefined, () => false, { startAt: 1 });
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={[s.backdrop, dim && s.backdropDim]}>
@@ -93,7 +111,8 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
           <Text style={s.title}>SET LOCATION</Text>
           <Text style={s.sub}>Pick a nearby city for rough spot distances (no GPS).</Text>
           <TextInput
-            style={s.search}
+            ref={searchRef}
+            style={[s.search, focus === 0 && { borderColor: navRing, borderWidth: 2 }]}
             placeholder="Search city or country…"
             placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
             value={q}
@@ -103,25 +122,30 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
           {/* ★ §10.3: the list is data — a recessed window on silver / black. */}
           <PopupWindow style={s.listWrap} metalStyle={s.listWin}>
           <FlatList
+            ref={listRef}
             data={list}
+            extraData={focus}
+            onScrollToIndexFailed={() => {}}
             keyExtractor={(c) => c.name}
             keyboardShouldPersistTaps="handled"
             style={s.list}
             // ★ The indicator's lane: the country code is right-aligned to the row's edge.
             contentContainerStyle={scrollLane}
-            renderItem={({ item }) => (
+            renderItem={({ item, index }) => (
               <TouchableOpacity style={s.row} onPress={() => onPick(item)} activeOpacity={0.6}>
                 <Text style={s.city}>{item.name}</Text>
                 <Text style={s.cc}>{item.country}</Text>
+                <NavRing on={focus === index + 1} color={navRing} radius={6} />
               </TouchableOpacity>
             )}
           />
           </PopupWindow>
           {pt.metal ? (
-            <PopupKey label="CANCEL" onPress={onClose} height={32} style={{ alignSelf: 'center', width: 110, marginTop: 10 }} />
+            <PopupKey label="CANCEL" focused={focus === list.length + 1} onPress={onClose} height={32} style={{ alignSelf: 'center', width: 110, marginTop: 10 }} />
           ) : (
           <TouchableOpacity style={s.cancel} onPress={onClose} activeOpacity={0.7}>
             <Text style={s.cancelTxt}>CANCEL</Text>
+            <NavRing on={focus === list.length + 1} color={navRing} radius={6} />
           </TouchableOpacity>
           )}
         </View>

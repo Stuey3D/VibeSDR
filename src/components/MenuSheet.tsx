@@ -716,14 +716,18 @@ function SubLabel({ label, small }: { label: string; small?: boolean }) {
 //   pane draws a key, so the swap lives there, not in the pane. The rows lay out through CtrlRow.
 
 /** One key in a selector row: a legend, or (colour rows) a lit LED dot in that colour. */
-function SelectorKey({ label, dot, active, onPress, a11y, width }: {
+function SelectorKey({ label, dot, active, onPress, a11y, width, onFocused }: {
   label?: string; dot?: string; active: boolean; onPress: () => void; a11y?: string;
   /** A fixed width — the scrolling row (KeyScrollRow) sizes every key to its whole label. */
   width?: number;
+  /** ★ The highlight arrived here — the sideways-scrolling row brings the key into view (controller audit group H). */
+  onFocused?: () => void;
 }) {
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
   const { focused, viewRef } = useNavButton(onPress);
+  const onFocusedRef = useRef(onFocused); onFocusedRef.current = onFocused;
+  useEffect(() => { if (focused) onFocusedRef.current?.(); }, [focused]);
   if (pt.metal) {
     // ★★ THE SINGLE SWAP POINT (see the note above): on silver / black every selector key is a
     //   dome key with its LED pip, and a colour key shows its colour as a lit LED dot (§10.3).
@@ -803,6 +807,15 @@ function KeyScrollRow<T extends string>({ choices, value, onPick }: {
     const to = Math.max(0, Math.min(contentW - avail, x + dir * Math.max(80, avail * 0.7)));
     ref.current?.scrollTo({ x: to, animated: true });
   };
+  // ★★ …and the HIGHLIGHTED key, as a pad or keyboard walks along (controller audit group H, 2026-10-20): reveal was
+  //    vertical only, so the focus walked off the row's edge and out of sight.
+  const revealKey = (i: number) => {
+    if (!scroll || i < 0) return;
+    const left = widths.slice(0, i).reduce((a, b) => a + b + KEY_GAP, 0);
+    const right = left + widths[i];
+    if (left < x + EDGE) ref.current?.scrollTo({ x: Math.max(0, left - EDGE), animated: true });
+    else if (right > x + avail - EDGE) ref.current?.scrollTo({ x: Math.max(0, right - avail + EDGE), animated: true });
+  };
   // Bring the lit key into view once the row becomes a scroller (and when the choice moves).
   useEffect(() => {
     if (!scroll) return;
@@ -852,7 +865,7 @@ function KeyScrollRow<T extends string>({ choices, value, onPick }: {
               contentContainerStyle={[styles.btnRow, { flexWrap: 'nowrap' }]}>
               {choices.map((c, i) => (
                 <SelectorKey key={c.value} label={c.label} width={widths[i]} active={c.value === value}
-                  onPress={() => onPick(c.value)} />
+                  onPress={() => onPick(c.value)} onFocused={() => revealKey(i)} />
               ))}
             </ScrollView>
             {canL && fade('l')}
