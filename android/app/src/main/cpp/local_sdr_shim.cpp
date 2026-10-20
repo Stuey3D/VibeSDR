@@ -23611,6 +23611,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         std::lock_guard<std::mutex> idleLk(idleMtx);          // ★ AFTER reacquire — see idleMtx
         if (!captureIdle.exchange(false)) return;             // wasn't paused
+        // ★★ Same stale clock as reacquireRadio's: lastIqAt is from before the park, so restart the
+        //    3 s from now or the watchdog can re-Init a radio that is still waking up.
+        lastIqAt.store(nowSecs(), std::memory_order_relaxed);
         // ★★★ THIS `else` REPORTED A WORKING RADIO AS UNPLUGGED. With an Airspy attached, `dev`
         // is null, so the dongle branch called launchCapture() anyway — rtlsdr_read_async(NULL)
         // returned instantly, captureDown went true, and the watchdog then could not find an RTL
@@ -32069,6 +32072,13 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         return false;
     }
 
+    /* ★★★ AND THE SILENCE CLOCK STARTS AGAIN TOO. lastIqAt still held the last sample from before
+     *     the release, so the watchdog — which runs straight after the keepalive's re-acquire, on
+     *     the same tick — saw ten minutes of "silence" and re-Inited a stream that had not had time
+     *     to deliver. Every keepalive did it: 181 of 187 "re-initialised after a stall" on the
+     *     Lenovo, 10-18 → 10-19, were this, not the radio (journal, 2026-10-20). Now the radio gets
+     *     the full 3 s from the moment it is taken back, and a genuinely dead one still trips. */
+    impl->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
     impl->radioReleased.store(false);
     /* ★★★ THE KICK STARTS AGAIN FROM STEP 1 ON A RE-ACQUIRE. Its six steps advance on DSP ticks,
      *     and a released radio only ticks during the keepalive's 15 s hold every 10 min — so the
