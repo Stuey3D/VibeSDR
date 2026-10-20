@@ -21,6 +21,7 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
 import { initMobileControls } from './mobile';
 import { initPocketConn } from './pocketConn';
 import { initGamepad, activePadLayout } from './gamepad';
+import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
@@ -7662,6 +7663,9 @@ function buildControls() {
    *  is only ever SEEN in the list or in a search, so that is when to ask (refreshServerBookmarks) — and the answer is
    *  a 304 if nothing changed, gzip'd if it did. */
   $('search').addEventListener('focus', () => refreshServerBookmarks());
+  // ★ The controller keyboard never gives the box the cursor, so it asks for the receiver's list itself; ↵ only closes
+  //   the keyboard (the results stay open for the pad to pick from — search's own Enter would tune the top one).
+  kbField($('search'), { title: 'SEARCH', onOpen: () => refreshServerBookmarks() });
   initWaterfallInput();
   initKeyboard();
 }
@@ -8769,6 +8773,7 @@ function initSearch() {
     results.forEach((r, i) => {
       const row = document.createElement('div');
       row.className = 'sres' + (i === sel ? ' sel' : '');
+      row.setAttribute('role', 'button');      // ★ a game controller's highlight can reach a result (gamepad.ts)
       row.innerHTML =
         `<span class="f">${(r.frequency / 1e6).toFixed(3)}</span>` +
         `<span class="n">${r.flag ? escapeHtml(r.flag) + ' ' : ''}${escapeHtml(r.name)}` +
@@ -14893,6 +14898,15 @@ function initFreqEntry() {
     closePanels();
   };
   $('freqGo').onclick = go;
+  /* ★★ THE CONTROLLER KEYBOARD on this box (padKeyboard.ts): its number pad works in the card's own unit, its kHz/MHz key
+   *  switches the card's (the segment, BEFORE the value goes in — the segment converts what is in the box), and ↵ is
+   *  this box's Enter, so an out-of-range refusal leaves the card open with its message and the keyboard shows it. */
+  kbField($('freqInput'), {
+    title: 'FREQUENCY',
+    unit: () => freqUnit,
+    setUnit: (u) => (Array.from($('freqUnitSeg').children) as HTMLButtonElement[]).find((b) => b.dataset.unit === u)?.click(),
+    refusal: () => (isPanelOpen('freqPanel') ? $('freqMsg').textContent ?? '' : ''),
+  });
   $<HTMLInputElement>('freqInput').onkeydown = (e) => {
     if (e.key === 'Enter') { go(); e.preventDefault(); }
   };
@@ -16250,6 +16264,8 @@ function initPointerFreq(c: HTMLCanvasElement) {
 function initKeyboard() {
   /* ★★ GAME CONTROLLERS (Stuart's mapping, 2026-10-10 — gamepad.ts): tune and zoom are the arrow keys' own actions,
    *  and back is Escape's, so a pad and a keyboard can never disagree. */
+  // ★★ The controller keyboard listens first (capture): it needs to know whether a hand, a keyboard or a pad acted last.
+  initPadKeyboard();
   initGamepad({
     tune: (d) => { if (spec) nudge(d * step); },
     zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
