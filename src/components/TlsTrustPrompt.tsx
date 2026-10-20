@@ -20,6 +20,7 @@ import {
   PopupKey, PopupPlate, PopupWindow, type PopupTokens,
 } from './PopupShell';
 import { useSurface } from '../contexts/FaceplateContext';
+import { scrollLane } from '../constants/popupTokens';
 import { subscribeTlsPrompt, type TlsPrompt } from '../services/tlsTrust';
 import { certNamesHost, fingerprintLines } from '../utils/tlsPin';
 
@@ -74,7 +75,7 @@ export default function TlsTrustPrompt() {
       <View style={[styles.overlay, dim && styles.overlayDim]}>
         <View style={[styles.box, metalFrame]}>
           <PopupPlate radius={16} />
-          <ScrollView contentContainerStyle={{ gap: 12 }} bounces={false}>
+          <ScrollView contentContainerStyle={[{ gap: 12 }, scrollLane]} bounces={false}>
             <Text style={styles.title}>{title}</Text>
             <Text style={styles.sub} selectable>{where}</Text>
             <Text style={styles.body}>{body}</Text>
