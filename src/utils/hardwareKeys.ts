@@ -34,7 +34,7 @@
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { KeyBus, type HwKey, type HwKeyEvent } from './keyActions';
-import { PadMapper, type PadOut, type PadProfile, type PadReport } from './padActions';
+import { PadMapper, type PadButton, type PadOut, type PadProfile, type PadReport } from './padActions';
 import { inputSource } from './inputSource';
 
 export type { HwKey, HwKeyEvent };
@@ -82,8 +82,24 @@ function onPad(r: (PadReport & { typing?: boolean }) | null | undefined) {
   armPadHold();
 }
 
+const padKbListeners = new Set<(o: { kbButton: PadButton; profile: PadProfile } | { kbSubmit: true }) => void>();
+
+/** ★ The controller keyboard is open: the mapper turns START taps into submit and the spare buttons into edits. */
+export function setPadKeyboardOpen(on: boolean) { pad.setKeyboardOpen(on); }
+/** The controller keyboard's pad buttons (kbPadAction) and START taps. */
+export function addPadKbListener(f: (o: { kbButton: PadButton; profile: PadProfile } | { kbSubmit: true }) => void): { remove(): void } {
+  ensureNative();
+  padKbListeners.add(f);
+  return { remove: () => { padKbListeners.delete(f); } };
+}
+
 function runPad(outs: PadOut[]) {
   for (const o of outs) {
+    if ('kbButton' in o || 'kbSubmit' in o) {
+      inputSource.set('pad');
+      padKbListeners.forEach((f) => { try { f(o); } catch { /* a listener's fault */ } });
+      continue;
+    }
     // ★ Any pad press says a pad is in use — even with a field's cursor up, when the bus below drops the key: that is
     //   how a pad takes over from the system keyboard (the controller keyboard's hand-over).
     if ('kind' in o && o.kind === 'down') inputSource.set('pad');

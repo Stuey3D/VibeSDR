@@ -56,7 +56,34 @@ export type PadOut =
   | { kind: 'down' | 'up'; key: string }
   | { notice: string; profile: PadProfile }
   /** SELECT was pressed: open the controller guide on `profile`, or close it. */
-  | { guide: true; profile: PadProfile };
+  | { guide: true; profile: PadProfile }
+  /** ★ The controller keyboard is open and a button with a keyboard meaning was pressed (kbPadAction). */
+  | { kbButton: PadButton; profile: PadProfile }
+  /** ★ The controller keyboard is open and START was TAPPED: submit (decided 10-20). */
+  | { kbSubmit: true };
+
+/**
+ * ★★★ THE CONTROLLER KEYBOARD'S BUTTONS (Stuart, decided 2026-10-20 — brief § Button mapping, the proposed table
+ * accepted). Each pad keeps its own scheme: enter and back stay where they are (✕ / ○ on stick pads, R1 / L1 on
+ * no-stick pads — they arrive as the ordinary Enter / Back keys), and the TUNE action moves the caret. On stick pads the
+ * spare buttons edit: west ⌫, north space, L1 shift, R1 symbols — and on the numeric pad L1 / R1 switch kHz / MHz.
+ * No-stick pads have no spare button: they use the on-screen keys. A tap of START submits; HOLD START (the profile
+ * switch) is ignored while the keyboard is open.
+ */
+export type KbPadAction = 'backspace' | 'space' | 'shift' | 'symbols' | 'unit';
+
+export function kbPadAction(b: PadButton, prof: PadProfile, layout: 'numeric' | 'qwerty'): KbPadAction | null {
+  if (prof !== 'sticks') return null;
+  switch (b) {
+    case 'west': return 'backspace';
+    case 'north': return layout === 'qwerty' ? 'space' : null;
+    case 'l1': return layout === 'qwerty' ? 'shift' : 'unit';
+    case 'r1': return layout === 'qwerty' ? 'symbols' : 'unit';
+    default: return null;
+  }
+}
+/** The buttons that can carry a keyboard meaning (kbPadAction), on a stick pad. */
+const KB_BUTTONS: PadButton[] = ['west', 'north', 'l1', 'r1'];
 
 /** START held this long switches the controls (the web page's figure). */
 export const SWITCH_HOLD_MS = 900;
@@ -103,6 +130,9 @@ interface PadState {
 
 export class PadMapper {
   private pads = new Map<string, PadState>();
+  private kbOpen = false;
+  /** ★ The controller keyboard opened / closed: START taps submit and HOLD START is ignored while it is open. */
+  setKeyboardOpen(on: boolean) { this.kbOpen = on; }
   /** @param chosen what START last chose on this device (null = decide from the pad). @param save remembers a choice. */
   constructor(private chosen: string | null = null, private save: (p: PadProfile) => void = () => {}) {}
 
@@ -135,6 +165,9 @@ export class PadMapper {
     // HOLD START: the clock starts on the press; tick() switches once it has been held long enough.
     const startNow = !!(b & PAD_BIT.start);
     if (startNow && !(prev & PAD_BIT.start)) st.startAt = now;
+    // ★ A START TAP while the keyboard is open submits — released before the hold would have switched.
+    if (!startNow && (prev & PAD_BIT.start) && this.kbOpen && st.startAt !== null && st.startAt >= 0
+        && now - st.startAt < SWITCH_HOLD_MS) out.push({ kbSubmit: true });
     if (!startNow) st.startAt = null;
     out.push(...this.checkHold(st, now));
 
@@ -152,6 +185,8 @@ export class PadMapper {
       if (!(prev & bit) && (b & bit)) {
         const k = padKey(name, prof);
         if (k) { st.sent.set(name, k); out.push({ kind: 'down', key: k }); }
+        // ★ The keyboard's own buttons — stick pads only, where these four mean nothing else (kbPadAction).
+        else if (this.kbOpen && prof === 'sticks' && KB_BUTTONS.includes(name)) out.push({ kbButton: name, profile: prof });
       }
     }
 
@@ -184,6 +219,8 @@ export class PadMapper {
 
   private checkHold(st: PadState, now: number): PadOut[] {
     if (st.startAt === null || st.startAt < 0 || now - st.startAt < SWITCH_HOLD_MS) return [];
+    // ★ HOLD START is ignored while the keyboard is open — switching mid-word would change what every button means.
+    if (this.kbOpen) { st.startAt = -1; return []; }
     st.startAt = -1;                                      // once per hold
     const out: PadOut[] = [];
     // Anything held goes up as what it went down as, before its meaning changes.

@@ -1,5 +1,5 @@
 // Game controllers in the app (src/utils/padActions.ts) — Stuart's mapping, fed into the keyboard's own keys.
-import { PadMapper, PAD_BIT, padKey, SWITCH_HOLD_MS, type PadOut } from '../src/utils/padActions';
+import { PadMapper, PAD_BIT, padKey, SWITCH_HOLD_MS, kbPadAction, type PadOut } from '../src/utils/padActions';
 import { toHwKey } from '../src/utils/keyActions';
 
 let fails = 0;
@@ -123,4 +123,35 @@ for (const [b, [bp, sp]] of Object.entries(want)) {
 }
 
 console.log(fails ? `test_pad_actions: ${fails} FAILED` : 'test_pad_actions: all ok');
+// ★★★ THE CONTROLLER KEYBOARD'S BUTTONS (Stuart, decided 2026-10-20).
+{
+  ok(kbPadAction('west', 'sticks', 'qwerty') === 'backspace' && kbPadAction('north', 'sticks', 'qwerty') === 'space'
+     && kbPadAction('l1', 'sticks', 'qwerty') === 'shift' && kbPadAction('r1', 'sticks', 'qwerty') === 'symbols',
+     'stick pads: west ⌫, north space, L1 shift, R1 symbols');
+  ok(kbPadAction('l1', 'sticks', 'numeric') === 'unit' && kbPadAction('r1', 'sticks', 'numeric') === 'unit' && kbPadAction('north', 'sticks', 'numeric') === null,
+     'stick pads on the numeric pad: L1 / R1 switch kHz / MHz; no space');
+  ok((['west', 'north', 'l1', 'r1', 'south', 'east'] as const).every((b) => kbPadAction(b, 'buttons', 'qwerty') === null),
+     'no-stick pads: no spare button — on-screen keys only (enter / back stay R1 / L1)');
+  ok(padKey('south', 'sticks') === 'Enter' && padKey('east', 'sticks') === 'Escape' && padKey('r1', 'buttons') === 'Enter' && padKey('l1', 'buttons') === 'Escape',
+     'enter and back stay each profile\'s own');
+  const m = new PadMapper('sticks');
+  const press = (b: number, t: number) => m.feed({ id: 'p', sticks: true, b }, t);
+  press(0, 0);
+  m.setKeyboardOpen(true);
+  let o = press(PAD_BIT.west, 10);
+  ok(o.some((x) => 'kbButton' in x && x.kbButton === 'west'), 'open: west reports a keyboard button');
+  press(0, 20);
+  o = [...press(PAD_BIT.start, 100), ...press(0, 300)];
+  ok(o.some((x) => 'kbSubmit' in x), 'open: a START TAP submits');
+  o = [...press(PAD_BIT.start, 1000), ...m.tick(1000 + SWITCH_HOLD_MS + 50), ...press(0, 1000 + SWITCH_HOLD_MS + 100)];
+  ok(!o.some((x) => 'notice' in x) && !o.some((x) => 'kbSubmit' in x), 'open: HOLD START neither switches the controls nor submits');
+  m.setKeyboardOpen(false);
+  o = press(PAD_BIT.west, 5000);
+  ok(!o.some((x) => 'kbButton' in x), 'closed: west means nothing again on a stick pad');
+  press(0, 5010);
+  o = [...press(PAD_BIT.start, 6000), ...press(0, 6100)];
+  ok(!o.some((x) => 'kbSubmit' in x), 'closed: a START tap does nothing, as before');
+  o = [...press(PAD_BIT.start, 7000), ...m.tick(7000 + SWITCH_HOLD_MS + 10)];
+  ok(o.some((x) => 'notice' in x), 'closed: HOLD START still switches the controls');
+}
 process.exit(fails ? 1 : 0);
