@@ -228,6 +228,10 @@ function GuideModal({ layout, setLayout, onClose }: {
                   </>
                 )}
                 <Text style={[s.foot, { fontFamily: ff, color: dim }]}>{g.foot}</Text>
+                {/* ★ The controller keyboard (decided 10-20) — what each control does while typing. */}
+                {g.keyboard.map((line, i) => (
+                  <Text key={i} style={[s.foot, { fontFamily: ff, color: dim, marginTop: i ? 2 : 12 }]}>{line}</Text>
+                ))}
               </View>
             </ScrollView>
           </PopupWindow>

@@ -41,4 +41,12 @@ const [x, y] = viewToBox([0, 0, 200, 100], 400, 400, 100, 50);
 ok(x === 200 && y === 200, 'viewBox → box: "meet" scales to fit and centres');
 
 console.log(fails ? `${fails} FAILED` : 'all passed');
+// ★ The controller keyboard lines (decided 2026-10-20) say what kbPadAction does, per layout.
+{
+  const st = PAD_GUIDES.sticks.keyboard.join(' '), bt = PAD_GUIDES.buttons.keyboard.join(' ');
+  ok(/left button ⌫/.test(st) && /top button space/.test(st) && /L shift · R symbols/.test(st) && /kHz and MHz/.test(st) && /tap START/.test(st),
+     'two sticks: west ⌫, north space, L shift, R symbols, L/R kHz-MHz, START tap — as kbPadAction');
+  ok(/R presses/.test(bt) && /L steps back/.test(bt) && /keys on the keyboard/.test(bt), 'buttons: enter R, back L, the editing keys on screen');
+  ok([st, bt].every((t) => /↵ and Back/.test(t) || /↵/.test(t)) && [st, bt].every((t) => /touch the screen/.test(t)), 'both: the on-screen ↵ / Back, and touch hands over');
+}
 process.exit(fails ? 1 : 0);

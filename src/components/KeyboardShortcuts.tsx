@@ -87,14 +87,16 @@ const SECTIONS: Section[] = [
       'A game controller does everything the keyboard does, on iPhone, iPad, Mac and Android. The D-pad moves the highlight, and holding it keeps going.',
       'On a pad without sticks the buttons go by where they are, not what they are called: R is Enter and L is back, the top and bottom buttons zoom in and out, and the left and right buttons tune down and up.',
       'On a pad with two sticks the bottom button (\u2715 or A) is Enter and the right one (\u25CB or B) is back. Turn the left stick round like a jog wheel to tune \u2014 clockwise goes up \u2014 and the right stick to zoom, clockwise in.',
-      'Hold START for a second to switch between the two. A notice says which you now have and how to switch back, and the choice is remembered. In a text box a controller has no letters, so only Enter and back do anything there, and back leaves the box.',
+      'Hold START for a second to switch between the two. A notice says which you now have and how to switch back, and the choice is remembered.',
+      'Text boxes: Enter on a box opens the on-screen controller keyboard — a number pad for frequencies and PINs, letters for everything else. The D-pad moves between its keys and Enter presses one; it has ↵ and Back keys of its own, and ⌫. Back steps out of the symbols or capitals first, then closes it and leaves the box as it was. The tune control moves the cursor. On a pad with sticks the left button is ⌫, the top button space, L shift and R symbols (on the number pad L and R switch kHz and MHz), and a tap of START finishes. Touch the screen at any time to carry on with the phone\'s own keyboard, or type on a hardware keyboard — what you typed so far comes with you.',
+      'Every card, prompt and pop-up answers the controller: the highlight starts on the sensible answer, Enter presses it, and back is Cancel or the way back to the servers. A receiver\'s own web page keeps every key but back, which closes it.',
       'SELECT shows the controller guide: the pad drawn, with what every button does, for both layouts. Left and right switch between them, and back or SELECT again closes it. It is also in the settings cog, under CONTROLLER GUIDE.',
     ],
   },
   {
     title: 'COMPATIBILITY MODE',
     body: [
-      "A receiver's own pages — compatibility mode, and the server admin pages in the menu — cannot be driven from the keyboard. They are not our pages, so we cannot know whether or how a keyboard will work on them, and taking you somewhere the keys stop working would be worse than not going.",
+      "A receiver's own pages — compatibility mode, and the server admin pages in the menu — cannot be driven from the keyboard. They are not our pages, so we cannot know whether or how a keyboard will work on them, and taking you somewhere the keys stop working would be worse than not going. Back (Backspace, Escape, or a controller's back) still closes them.",
     ],
   },
   {

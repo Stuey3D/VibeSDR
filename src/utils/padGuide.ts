@@ -50,6 +50,9 @@ export interface Guide {
   view: [number, number, number, number];
   art: ArtShape[];
   items: GuideItem[];
+  /** ★ In the CONTROLLER KEYBOARD (app only — the web page has no on-screen keyboard yet, so its guide skips these):
+   *  what each control does while typing. Decided by Stuart 2026-10-20 (docs/v12/BRIEF-controller-keyboard.md). */
+  keyboard: string[];
 }
 
 // ── The parts ────────────────────────────────────────────────────────────────
@@ -117,6 +120,13 @@ export const PAD_GUIDES: Record<PadLayout, Guide> = {
       { side: 'right', at: [905, 449], t: 'BOTTOM BUTTON — ENTER', s: 'press · select', kind: 'action' },
       { side: 'right', at: [800, 525], t: 'RIGHT STICK — TURN IT', s: 'clockwise zooms in · anticlockwise out', kind: 'action' },
     ],
+    keyboard: [
+      'TYPING (enter on a text box opens the on-screen keyboard):',
+      'D-pad moves between keys · bottom button presses one · right button steps back a layer, then closes',
+      'Left stick turned moves the cursor · left button ⌫ · top button space',
+      'L shift · R symbols (on the number pad, L / R switch kHz and MHz) · tap START to finish',
+      'The keyboard has ↵ and Back keys of its own · touch the screen to use the phone\'s keyboard instead',
+    ],
   },
   buttons: {
     tab: 'BUTTONS',
@@ -140,6 +150,12 @@ export const PAD_GUIDES: Record<PadLayout, Guide> = {
       { side: 'right', at: [932, 470], t: 'RIGHT — TUNE UP', kind: 'action' },
       { side: 'right', at: [880, 522], t: 'BOTTOM — ZOOM OUT', kind: 'action' },
       { side: 'right', at: [828, 470], t: 'LEFT — TUNE DOWN', kind: 'action' },
+    ],
+    keyboard: [
+      'TYPING (enter on a text box opens the on-screen keyboard):',
+      'D-pad moves between keys · R presses one · L steps back a layer, then closes',
+      'Left / right face buttons move the cursor · ⌫, space, ⇧ and #+= are keys on the keyboard',
+      'Press ↵ (or tap START) to finish, Back to leave · touch the screen to use the phone\'s keyboard instead',
     ],
   },
 };
