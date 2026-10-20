@@ -212,8 +212,8 @@ Probe probeFor(const std::string& path) {
     return Probe::None;
 }
 
-std::string linkAdvice(double signal, double tx, double retry) {
-    const bool weak = (signal != -1 && signal <= -75) || (tx >= 0 && tx <= 11) || (retry >= 10);
+std::string linkAdvice(double signal, double tx, double retry, bool failed) {
+    const bool weak = (signal != -1 && signal <= -75) || (tx >= 0 && tx <= 11) || (retry >= (failed ? 3 : 10));
     return weak ? "weak" : "";
 }
 
@@ -376,6 +376,7 @@ State readState() {
         auto num = [&](const char* k) { const JV* v = l->get(k); return v && v->t == JV::Num ? v->n : -1.0; };
         st.hasLink = true;
         st.signal = num("signal"); st.tx = num("tx"); st.rx = num("rx"); st.retry = num("retry");
+        st.retryFailed = l->str("retryKind") == "failed";
     }
     st.json = body;
     while (!st.json.empty() && (st.json.back() == '\n' || st.json.back() == ' ')) st.json.pop_back();
@@ -531,12 +532,13 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
                 if (!local) { json(rp, 200, "OK", "{\"pocket\":true,\"local\":false}"); return true; }
                 std::string link = "null";
                 if (st.hasLink) {
-                    char b[160];
-                    std::snprintf(b, sizeof b, "{\"signal\":%s,\"tx\":%s,\"rx\":%s,\"retry\":%s}",
+                    char b[200];
+                    std::snprintf(b, sizeof b, "{\"signal\":%s,\"tx\":%s,\"rx\":%s,\"retry\":%s,\"retryKind\":\"%s\"}",
                                   st.signal == -1 ? "null" : std::to_string((int)st.signal).c_str(),
                                   st.tx < 0 ? "null" : std::to_string((int)llround(st.tx)).c_str(),
                                   st.rx < 0 ? "null" : std::to_string((int)llround(st.rx)).c_str(),
-                                  st.retry < 0 ? "null" : std::to_string((int)st.retry).c_str());
+                                  st.retry < 0 ? "null" : std::to_string((int)st.retry).c_str(),
+                                  st.retryFailed ? "failed" : "retries");
                     link = b;
                 }
                 // ★ The saved networks BY NAME, in order — the menu's buttons ("Stuey3D's iPhone | Meow! | Own WiFi").
@@ -554,7 +556,7 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
                      + ",\"nets\":" + nets + ",\"holdNet\":\"" + jesc(st.holdNet) + "\",\"trying\":\"" + jesc(st.trying)
                      + "\",\"tryLeft\":" + std::to_string(st.tryLeft)
                      + ",\"ssid\":\"" + jesc(st.ssid) + "\",\"apSsid\":\"" + jesc(st.apSsid) + "\",\"link\":" + link
-                     + ",\"advice\":\"" + (st.hasLink ? linkAdvice(st.signal, st.tx, st.retry) : std::string()) + "\"}");
+                     + ",\"advice\":\"" + (st.hasLink ? linkAdvice(st.signal, st.tx, st.retry, st.retryFailed) : std::string()) + "\"}");
                 return true;
             }
             if (!local) { fail(rp, 403, "Forbidden", "the box's connection can only be changed from its own network"); return true; }

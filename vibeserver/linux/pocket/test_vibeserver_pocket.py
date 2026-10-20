@@ -58,6 +58,9 @@ class FakeNM:
         self.link_sig, self.tx_rate = -60, 65.0     # the joined link as `iw … link` reports it
         self.assoc = ""                             # ★ the network the radio is REALLY on (set when a join succeeds)
         self.txpk, self.txrt = 1000, 10             # station dump counters (packets, retries)
+        # ★★★ THE PI'S OWN CHIP (brcmfmac, FullMAC) reports "tx failed" and NO "tx retries" — which is why the retry % was
+        #     null on every Portable (2026-10-20). True = the dump looks like a Pi's; txrt then counts failed frames.
+        self.brcmfmac = False
         self.door = True                            # the server's front door accepts connections
         self.ap_up_seen = []                        # (redirect loaded, state mode, door open) at each hotspot up
         self.state_path = None
@@ -166,6 +169,10 @@ class FakeNM:
             return 0, "".join("BSS x\n\tSSID: %s\n" % s for s in self.on_air())
         if a[:2] == ["iw", "dev"] and a[3:] == ["station", "dump"]:
             if self.active and not self.is_ap():     # as a client: the one station is the router, with counters
+                if self.brcmfmac:     # as `iw` prints it on a Pi 3A+/Zero 2 W/4/5: tx failed, no tx retries line
+                    return 0, ("Station e4:5e:1b:00:00:01 (on wlan0)\n\tinactive time:\t30 ms\n\trx bytes:\t912345\n"
+                               "\trx packets:\t4521\n\ttx bytes:\t8812345\n\ttx packets:\t%d\n\ttx failed:\t%d\n"
+                               "\tsignal:  \t-42 dBm\n\ttx bitrate:\t433.3 MBit/s\n" % (self.txpk, self.txrt))
                 return 0, "Station e4:5e:1b:00:00:01 (on wlan0)\n\ttx packets:\t%d\n\ttx retries:\t%d\n" % (self.txpk, self.txrt)
             return 0, "".join("Station aa:bb:cc:00:00:%02d (on wlan0)\n" % i for i in range(self.stations))
         if a[:2] == ["iw", "dev"] and a[3:] == ["get", "power_save"]:
@@ -1120,6 +1127,25 @@ def main():
         nm.txpk, nm.txrt = 1100, 30            # 100 sent, 20 more retries
         run_for(nm, box, 5)
         ok(box.link["retry"] == 17, "…and the share of retried transmissions since the last reading (20 of 120 = 17 %)")
+        ok(box.link.get("retryKind") == "retries", "…labelled as retries (a driver that reports them)")
+        run_for(nm, box, 5)
+        ok(box.link["retry"] == 0, "…and 0 % — not null — when nothing has been sent since the last reading")
+        # ★★★ THE PI'S CHIP: no "tx retries" line at all, only "tx failed" — the null of 2026-10-20.
+        nm.brcmfmac = True
+        nm.txpk, nm.txrt = 50000, 40
+        run_for(nm, box, 5)
+        ok(box.link["retry"] is None, "brcmfmac: the first reading after the switch has nothing to compare with (null, once)")
+        nm.txpk, nm.txrt = 50990, 50               # 990 sent, 10 more failed
+        run_for(nm, box, 5)
+        ok(box.link["retry"] == 1 and box.link.get("retryKind") == "failed",
+           "brcmfmac (tx failed, no tx retries): the share of failed sends is READ — 10 of 1000 = 1 %, kind \"failed\"")
+        nm.txpk, nm.txrt = 100, 0                  # counters back to zero: a re-join reset the driver's station entry
+        run_for(nm, box, 5)
+        ok(box.link["retry"] is None, "a counter that went BACKWARDS (a re-join) is a new baseline, not a negative %")
+        nm.txpk, nm.txrt = 400, 100
+        run_for(nm, box, 5)
+        ok(box.link["retry"] == 25, "…and the next reading is measured from it (100 of 400 = 25 %)")
+        nm.brcmfmac = False
         st = json.load(open(os.path.join(tmp, "state.json")))
         ok(st.get("link", {}).get("signal") == -60 and st.get("hold") is False, "the state carries the link and hold: false")
 

@@ -59,7 +59,9 @@ bool isPrivatePeer(const std::string& ip);
 /** ★★ "weak" when the joined link is poor enough that Own Wi-Fi is worth recommending — signal −75 dBm or worse, a
  *  transmit rate of 11 Mbit/s or less, or 10 % or more of transmissions retried; "" otherwise. ONE rule, decided here,
  *  so the app and the web page cannot disagree (Stuart, 2026-10-10). A figure of −1 is "not reported" and never counts. */
-std::string linkAdvice(double signal, double tx, double retry);
+/** ★ `failed` = the retry figure is FAILED sends (the Pi's brcmfmac reports no retries — 11.0.9): far rarer than retries, so
+ *  its bar is 3 %, not 10 %. */
+std::string linkAdvice(double signal, double tx, double retry, bool failed = false);
 
 /** Clients that have pressed "stay connected" — their probes are answered as online, so iOS
  *  shows "Done" instead of "Cancel" (which would drop the network). Cleared when the mode changes. */
@@ -106,6 +108,7 @@ struct State {
     int tryLeft = 0;             //   …and for how many more seconds
     bool hasLink = false;        // joined to a network, with the link's figures below (-1 = not reported)
     double signal = -1, tx = -1, rx = -1, retry = -1;
+    bool retryFailed = false;    // ★ retry counts FAILED sends (brcmfmac has no retry counter) — link.retryKind "failed"
     std::string ssid, apSsid;
     // ★★★ THE WIRED SIDE (Stuart, 2026-10-13: Ethernet as a SECOND way in — a Pi 2 has no Wi-Fi chip; a Pi 3 on a cable
     //     may have its Wi-Fi switched off). A state file from before these fields reads as the old world: Wi-Fi, on.

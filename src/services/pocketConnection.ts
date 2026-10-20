@@ -7,7 +7,12 @@
  * Shown only on a pocket VibeServer reached directly on its own network: the server answers local:false through the
  * tunnel or from a public address, and refuses the switch there too.
  */
-export interface PocketLink { signal: number | null; tx: number | null; rx: number | null; retry: number | null }
+export interface PocketLink {
+  signal: number | null; tx: number | null; rx: number | null; retry: number | null;
+  /** ★ 11.0.9: what `retry` counts. A Pi's own Wi-Fi (brcmfmac) reports no retries, only sends that FAILED after every
+   *  retry — so the figure is that, and says so. Absent (an older server) = retries. */
+  retryKind?: 'retries' | 'failed';
+}
 export interface PocketNet { rank: number; ssid: string }
 export interface PocketConn {
   pocket?: boolean; local?: boolean; mode?: string; hold?: boolean; apSet?: boolean;
@@ -51,7 +56,7 @@ export function pocketLinkLine(c: PocketConn): string {
   const bits = [`On “${c.ssid || '?'}”`];
   if (l?.signal != null) bits.push(`${String(l.signal).replace('-', '−')} dBm`);
   if (l?.tx != null) bits.push(`${l.tx} Mbit/s`);
-  if (l?.retry != null) bits.push(`${l.retry} % retries`);
+  if (l?.retry != null) bits.push(`${l.retry} % ${l.retryKind === 'failed' ? 'failed sends' : 'retries'}`);
   return bits.join(' · ') + (c.holdNet && c.holdNet === c.ssid ? ' — held while the radio is in use' : '');
 }
 

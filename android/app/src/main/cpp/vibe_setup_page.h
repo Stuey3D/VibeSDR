@@ -5804,7 +5804,7 @@ function wifiNowText() {
   //   join; "on" here means the driver refused, which is worth an owner knowing when audio stutters.
   const ps = w.link && w.link.powerSave;
   if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "") + "."
-    + (w.link && w.link.signal != null ? " Signal " + w.link.signal + " dBm" + (w.link.retry != null ? ", " + w.link.retry + " % retries" : "") + "." : "")
+    + (w.link && w.link.signal != null ? " Signal " + w.link.signal + " dBm" + (w.link.retry != null ? ", " + w.link.retry + (w.link.retryKind === "failed" ? " % failed sends" : " % retries") : "") + "." : "")
     + (ps === "off" ? " Wi-Fi power saving off." : ps === "on" ? " Wi-Fi power saving is ON (the radio refused to switch it off) — audio may stutter." : "");
   if (m === "connecting") return "Joining a network…";
   if (m === "wifi-off") return "Wi-Fi is off.";

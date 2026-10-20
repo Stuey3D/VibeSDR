@@ -753,14 +753,22 @@ class Box:
         rx = num(r"rx bitrate:\s*([\d.]+)", out)
         retry = None
         rc2, dump = self.sh.run(["iw", "dev", self.dev, "station", "dump"], timeout=10)
+        # ★★★ THE PI'S CHIP HAS NO "tx retries" (2026-10-20: retry was null on every reading). brcmfmac is FullMAC and
+        #     reports only TX_PACKETS and TX_FAILED to cfg80211 (brcmf_cfg80211_get_station), so `iw` prints "tx failed:"
+        #     and never "tx retries:". Retries where the driver has them (mac80211: USB dongles, PCIe cards); otherwise
+        #     the frames that failed after every retry — fewer, but the same warning. `retryKind` says which it is.
         pk, rt = num(r"tx packets:\s*(\d+)", dump), num(r"tx retries:\s*(\d+)", dump)
+        kind = "retries"
+        if rt is None:
+            rt, kind = num(r"tx failed:\s*(\d+)", dump), "failed"
         if rc2 == 0 and pk is not None and rt is not None:
-            if self._link_prev and pk > self._link_prev[0]:
-                dp, dr = pk - self._link_prev[0], max(0.0, rt - self._link_prev[1])
-                retry = int(round(100.0 * dr / (dp + dr))) if dp + dr > 0 else 0
-            self._link_prev = (pk, rt)
+            prev = self._link_prev
+            if prev and prev[2] == kind and pk >= prev[0] and rt >= prev[1]:   # (a counter that went back = a re-join)
+                dp, dr = pk - prev[0], rt - prev[1]
+                retry = int(round(100.0 * dr / (dp + dr))) if dp + dr > 0 else 0   # nothing sent since: none retried
+            self._link_prev = (pk, rt, kind)
         return {"signal": int(sig) if sig is not None else None,
-                "tx": tx, "rx": rx, "retry": retry}
+                "tx": tx, "rx": rx, "retry": retry, "retryKind": kind}
 
     def migrate_powersave(self):
         """★★★ PROFILES SAVED BY AN OLDER BUILD (Phase 0.1). The powersave line in apply()/ap_args() reaches a profile only

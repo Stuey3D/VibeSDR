@@ -248,6 +248,8 @@ int main() {
         ok(linkAdvice(-60, 65, 12) == "weak", "advice: 12 % retries is weak");
         ok(linkAdvice(-60, 65, 2).empty(), "advice: -60 dBm, 65 Mbit/s, 2 % retries is fine");
         ok(linkAdvice(-1, -1, -1).empty(), "advice: figures not reported never count as weak");
+        ok(linkAdvice(-60, 65, 4, true) == "weak" && linkAdvice(-60, 65, 2, true).empty(),
+           "advice: FAILED sends (a Pi's brcmfmac, no retry counter) are weak from 3 %, not 10 %");
 
         put(paths().state, "{\"mode\":\"client\",\"ssid\":\"Home\",\"hold\":false,\"ap\":{\"set\":true,\"ssid\":\"Pocket\"},"
                            "\"saved\":[{\"ssid\":\"Home\"}],\"link\":{\"signal\":-78,\"tx\":13.0,\"rx\":72.2,\"retry\":9}}\n");
@@ -257,6 +259,19 @@ int main() {
            && rg.body.find("\"signal\":-78") != std::string::npos && rg.body.find("\"tx\":13") != std::string::npos
            && rg.body.find("\"advice\":\"weak\"") != std::string::npos && rg.body.find("\"ssid\":\"Home\"") != std::string::npos,
            "GET connection on the local network: the link's figures and the advice (weak at -78 dBm)");
+        ok(rg.body.find("\"retry\":9,\"retryKind\":\"retries\"") != std::string::npos,
+           "…the retry figure carries its kind (retries, from a driver that reports them)");
+        {
+            put(paths().state, "{\"mode\":\"client\",\"ssid\":\"Home\",\"hold\":false,\"ap\":{\"set\":true,\"ssid\":\"Pocket\"},"
+                               "\"saved\":[{\"ssid\":\"Home\"}],\"link\":{\"signal\":-50,\"tx\":433.3,\"rx\":433.3,\"retry\":4,"
+                               "\"retryKind\":\"failed\"}}\n");
+            Reply rb;
+            ok(handle(g, rb, h) && rb.body.find("\"retry\":4,\"retryKind\":\"failed\"") != std::string::npos
+               && rb.body.find("\"advice\":\"weak\"") != std::string::npos,
+               "a Pi's link (brcmfmac: failed sends, no retries): passed on as kind failed, and 4 % failed is weak");
+            put(paths().state, "{\"mode\":\"client\",\"ssid\":\"Home\",\"hold\":false,\"ap\":{\"set\":true,\"ssid\":\"Pocket\"},"
+                               "\"saved\":[{\"ssid\":\"Home\"}],\"link\":{\"signal\":-78,\"tx\":13.0,\"rx\":72.2,\"retry\":9}}\n");
+        }
         Req gt = g; gt.viaTunnel = true;
         Reply rgt;
         ok(handle(gt, rgt, h) && rgt.body == "{\"pocket\":true,\"local\":false}", "…through the tunnel: local:false and nothing else");
