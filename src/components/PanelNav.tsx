@@ -62,6 +62,22 @@ export function useNavFocus(): { ring: string; tint: (a: number) => string } {
   return useMemo(() => ({ ring: focusFor(rgb), tint: (a: number) => focusTint(rgb, a) }), [rgb]);
 }
 
+/**
+ * ★ The highlight drawn OVER a control that has no focus style of its own (controller audit, 2026-10-20): an absolute
+ *   ring inside the control's own box, so nothing moves when it appears and a touch user — who never sees it — gets
+ *   exactly today's layout. Put it as the LAST child of the focused control (or of a wrapper beside a dimmed one: a
+ *   ring inside an `opacity: 0.45` row is a ring nobody can see from the sofa).
+ */
+export function NavRing({ on, color, radius = 10, inset = 0 }: { on: boolean; color: string; radius?: number; inset?: number }) {
+  if (!on) return null;
+  return (
+    <View pointerEvents="none" style={{
+      position: 'absolute', left: inset, top: inset, right: inset, bottom: inset,
+      borderWidth: 3, borderColor: color, borderRadius: radius,
+    }} />
+  );
+}
+
 // Ids are unique across ALL panels, so a panel closing and another opening can never
 // collide on a stale focus id.
 let nextNavId = 1;

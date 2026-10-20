@@ -130,7 +130,8 @@ import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import FkaSplash from '../components/FkaSplash';
-import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus } from '../components/PanelNav';
+import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus, useListNav, NavRing, revealIn } from '../components/PanelNav';
+import { chooserItems, chooserRowOf, chooserStart, chooserActivate, type ChooserRadio } from '../utils/radioChooserNav';
 import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
 import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
@@ -10334,6 +10335,121 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const kbInUse = useKeyboardMode();
   const navRing = useNavFocus();
+
+  // ── THE RADIO CHOOSER BY PAD AND KEYBOARD (controller audit §1, 2026-10-20) ─────────────────────────────────────
+  // ★★★ Stuart: "selecting a vibeserver from the directory and it shows you the radios — you cannot use the controls to
+  //     select the radio as no selection box appears on screen". The chooser was in `anyPanelOpen` (so the screen
+  //     stopped listening) with no key handling of its own (so nothing started). Now a list over everything on it, in
+  //     the order drawn: ‹ SERVERS, each radio, the PIN row, the admin row. Back = ‹ SERVERS. The rules are pure
+  //     (src/utils/radioChooserNav.ts, scripts/test_radio_chooser_nav.ts); this only wires them to the screen.
+  /** One radio row's facts — the SAME expressions the row's render uses (it calls this too), so the two cannot drift. */
+  const pickRadioState = (r: VibeRadio): ChooserRadio => {
+    const busy = radioBusy[r.id]?.busy === true;
+    const unsupported = (r.minProto ?? 0) > APP_PROTO;
+    const gated = r.pinLocked === true && !unlockedRadios[r.id] && !adminAuthQ;
+    const inUseApp = r.inUseElsewhere === true || radioBusy[r.id]?.inUse === true;
+    return { id: r.id, busy, unsupported, gated, inUseApp, blocked: (busy && !adminAuthQ) || unsupported || gated || inUseApp };
+  };
+  const pickShowPin = !!door && !adminAuthQ && door.radios.some((r) => r.pinLocked === true && !unlockedRadios[r.id]);
+  const pickOn = awaitingRadio && !!door;
+  const pickRadios = pickOn ? door!.radios.map(pickRadioState) : [];
+  const pickItems = chooserItems(pickRadios, pickShowPin);
+  const pickScrollRef = useRef<ScrollView | null>(null);
+  const pickScrollY = useRef(0);
+  const pickRowViews = useRef<Record<string, View | null>>({});
+  const pickPinRef = useRef<TextInput | null>(null);
+  const pickAdminRef = useRef<TextInput | null>(null);
+  const pickHandle = useRef<{ setFocus(index: number): void } | null>(null);
+  const pickNavRef = useRef({ items: pickItems, radios: pickRadios });
+  pickNavRef.current = { items: pickItems, radios: pickRadios };
+  const pickFocus = useListNav(
+    pickOn,
+    pickItems.length,
+    (i) => {
+      const { items, radios } = pickNavRef.current;
+      const a = chooserActivate(items, radios, i);
+      switch (a.do) {
+        case 'back': navigation.goBack(); return;
+        case 'choose': {
+          const r = door?.radios.find((x) => x.id === a.id);
+          if (r) pressPickRadio(r);
+          return;
+        }
+        case 'focus': pickHandle.current?.setFocus(a.index); return;
+        // ★ Enter on a box puts the cursor in it — a keyboard types there now. (A pad cannot type into the system
+        //   keyboard: the controller keyboard opens here instead — brief Phase 2.)
+        case 'field': (a.which === 'pin' ? pickPinRef : pickAdminRef).current?.focus(); return;
+        case 'unlock':
+          if (a.which === 'pin') { if (radioPin && !radioPinBusy) void doRadioPinUnlock(); }
+          else if (adminPickPw && !adminPickBusy) void doPickerUnlock();
+          return;
+        default: return;
+      }
+    },
+    (i) => {
+      const it = pickNavRef.current.items[i];
+      if (it?.k === 'radio') revealIn(pickScrollRef, { current: pickRowViews.current[it.id] ?? null }, -1, 120, pickScrollY);
+    },
+    undefined,
+    // ★ BACK = ‹ SERVERS: the one way out, the same call the button makes. Before this Back reached `closeAll`, which
+    //   knew nothing of the chooser — the user was stuck on it.
+    () => { navigation.goBack(); return true; },
+    { rowOf: (i) => chooserRowOf(pickNavRef.current.items, i), startAt: chooserStart(pickItems, pickRadios), handle: pickHandle },
+  );
+  /** A radio row's own press — Enter on it runs exactly this. */
+  const pressPickRadio = (r: VibeRadio) => {
+    // ★★ Choosing a radio the picker has just labelled IN USE, with the password
+    //    already entered, is a deliberate takeover — the row says so before it is
+    //    tapped. A FREE radio needs no such permission, so do not ask for it: the
+    //    flag is only ever set where somebody is actually about to be displaced.
+    /* ★ ASK FIRST, AND SAY HOW LONG THEY HAVE. Taking over disconnects somebody; the
+     *  web's card confirms and states the incumbent's remaining time, and the app
+     *  just did it. The figure comes from the row's own occupancy answer. */
+    if (radioBusy[r.id]?.busy === true) {
+      const left = radioBusy[r.id]?.freeInSec ?? -1;
+      const when = left > 0 ? ` Their turn ends in ${Math.ceil(left / 60)} min at the latest.` : '';
+      Alert.alert('Take over this receiver?',
+        `Someone is listening on ${r.label} now.${when} Taking over disconnects them.`,
+        [{ text: 'Cancel', style: 'cancel' },
+         { text: 'Take over', style: 'destructive',
+           onPress: () => { setTakeoverIntent(true); void chooseRadio(r.id); } }]);
+      return;
+    }
+    void chooseRadio(r.id);
+  };
+
+  // ── THE REFUSAL CARD BY PAD AND KEYBOARD (controller audit §2.2, 2026-10-20) ────────────────────────────────────
+  // ★★ It was in `anyPanelOpen` with no nav: TAKE OVER, TRY AGAIN and BACK TO SERVERS were unreachable and Back did
+  //    nothing (closeAll never knew `refusal`). Now a list, starting on TRY AGAIN; Back = BACK TO SERVERS.
+  const refusalItems: Array<'pw' | 'take' | 'again' | 'back'> = refusal
+    ? (refusal.title === 'IN USE' ? ['pw', 'take', 'again', 'back'] : ['again', 'back']) : [];
+  const refusalPwRef = useRef<TextInput | null>(null);
+  const refusalTryAgain = () => {
+    // ★ TRY AGAIN is the user acting, so the refusal stops being terminal. The replace
+    //   remounts and would reset the ref anyway — clearing it here as well means this
+    //   button does not depend on that remaining true.
+    terminalRefusal.current = false;
+    setRefusal(null);
+    navigation.replace('SDR', route.params);
+  };
+  const refusalBack = () => { setRefusal(null); navigation.goBack(); };
+  const refusalItemsRef = useRef(refusalItems); refusalItemsRef.current = refusalItems;
+  const refusalFocus = useListNav(
+    !!refusal,
+    refusalItems.length,
+    (i) => {
+      switch (refusalItemsRef.current[i]) {
+        case 'pw': refusalPwRef.current?.focus(); return;
+        case 'take': if (takeoverPwState) void doTakeover(); return;
+        case 'again': refusalTryAgain(); return;
+        case 'back': refusalBack(); return;
+      }
+    },
+    undefined, undefined,
+    () => { refusalBack(); return true; },
+    { startAt: Math.max(0, refusalItems.indexOf('again')) },
+  );
+  const refusalHl = (k: 'pw' | 'take' | 'again' | 'back') => refusalItems[refusalFocus] === k;
   const screenFocused = useIsFocused();
   const screenFocusedRef = useRef(screenFocused);
   useEffect(() => { screenFocusedRef.current = screenFocused; }, [screenFocused]);
@@ -10680,6 +10796,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             style={[styles.radioPickBack, { top: insets.top + 10, left: Math.max(14, insets.left + 10) }]}
           >
             <Text style={sdrMs.radioPickBackTxt}>‹ SERVERS</Text>
+            <NavRing on={pickItems[pickFocus]?.k === 'back'} color={navRing.ring} radius={6} inset={-4} />
           </TouchableOpacity>
           <Text style={sdrMs.radioPickTitle}>{door.name}</Text>
           <Text style={sdrMs.radioPickSub}>Choose a receiver</Text>
@@ -10702,6 +10819,9 @@ export default function SDRScreen({ route, navigation }: Props) {
             </Text>
           )}
           <ScrollView
+            ref={pickScrollRef}
+            scrollEventThrottle={16}
+            onScroll={(e: any) => { pickScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; }}
             style={[styles.radioPickList, scrollLaneOutset]}
             /* ★ Room under the last block for the admin row that floats over the bottom — the band
                conditions table sat behind it (Xcover, APK 439). */
@@ -10723,11 +10843,11 @@ export default function SDRScreen({ route, navigation }: Props) {
             // ★ UNKNOWN is not busy. A radio that has not answered yet stays tappable — refusing a
             //   choice on the strength of a missing answer is the same error as claiming it is
             //   free.
-            const busy = radioBusy[r.id]?.busy === true;
+            /* ★ The row's facts come from pickRadioState (above), the same function the pad's Enter uses — the
+             *  reasoning for each one: */
             /* ★★★ A RADIO THIS APP HAS NO CONTROLS FOR IS SHOWN, GREYED, AND SAYS WHY (BRIEF-v11
              *  §7) — never hidden, never offered: "Unsupported SDR — update VibeSDR". The number
              *  comes from the server's driver, so new hardware needs no app change to land here. */
-            const unsupported = (r.minProto ?? 0) > APP_PROTO;
             /* ★★★ BEHIND ITS OWN PIN, AND THIS VISIT HAS NOT OPENED IT. Weighed BEFORE anything
              *  about occupancy, because it is the only fact that matters here: however free this
              *  receiver is, this listener cannot walk into it, and "FREE" over a card that will
@@ -10739,39 +10859,21 @@ export default function SDRScreen({ route, navigation }: Props) {
              *      unlocks"). The server already lets the admin password into every radio, PIN or not
              *      (vsAuthOk: "Admin is simply above both"), and both sockets carry it (adminAuthWire) —
              *      this card was the last thing still saying no. */
-            const gated = r.pinLocked === true && !unlockedRadios[r.id] && !adminAuthQ;
             /* ★★★ ANOTHER APP ON THAT SERVER HAS IT — the door's list says so even when the radio's own
              *  process cannot answer (an app that grabbed the dongle at boot), and the radio says so
              *  when it lent the device out and could not take it back. Only when the server KNOWS.
              *  Not selectable for anyone, owner included: no password takes a device from another
              *  program (Stuart, 2026-10-04). */
-            const inUseApp = r.inUseElsewhere === true || radioBusy[r.id]?.inUse === true;
-            const blocked = (busy && !adminAuthQ) || unsupported || gated || inUseApp;
+            const { busy, unsupported, gated, inUseApp, blocked } = pickRadioState(r);
+            const pickHl = pickItems[pickFocus]?.k === 'radio' && (pickItems[pickFocus] as { id: string }).id === r.id;
             return (
+              /* ★ A wrapper carries the margin and the highlight, so the ring is not dimmed with a blocked row —
+                 a ring at 45 % is one nobody sees from the sofa — and a touch user's row is drawn as before. */
+              <View key={r.id} ref={(v) => { pickRowViews.current[r.id] = v; }} style={{ marginBottom: 10 }}>
               <Pressable
-                key={r.id}
-                style={[sdrMs.radioPickRow, blocked && { opacity: 0.45 }]}
+                style={[sdrMs.radioPickRow, { marginBottom: 0 }, blocked && { opacity: 0.45 }]}
                 disabled={blocked}
-                onPress={() => {
-                  // ★★ Choosing a radio the picker has just labelled IN USE, with the password
-                  //    already entered, is a deliberate takeover — the row says so before it is
-                  //    tapped. A FREE radio needs no such permission, so do not ask for it: the
-                  //    flag is only ever set where somebody is actually about to be displaced.
-                  /* ★ ASK FIRST, AND SAY HOW LONG THEY HAVE. Taking over disconnects somebody; the
-                   *  web's card confirms and states the incumbent's remaining time, and the app
-                   *  just did it. The figure comes from the row's own occupancy answer. */
-                  if (busy) {
-                    const left = radioBusy[r.id]?.freeInSec ?? -1;
-                    const when = left > 0 ? ` Their turn ends in ${Math.ceil(left / 60)} min at the latest.` : '';
-                    Alert.alert('Take over this receiver?',
-                      `Someone is listening on ${r.label} now.${when} Taking over disconnects them.`,
-                      [{ text: 'Cancel', style: 'cancel' },
-                       { text: 'Take over', style: 'destructive',
-                         onPress: () => { setTakeoverIntent(true); void chooseRadio(r.id); } }]);
-                    return;
-                  }
-                  void chooseRadio(r.id);
-                }}
+                onPress={() => pressPickRadio(r)}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <Text style={[sdrMs.radioPickName, { flexShrink: 1 }]}>{r.label}</Text>
@@ -10825,6 +10927,8 @@ export default function SDRScreen({ route, navigation }: Props) {
                   <Text style={sdrMs.radioPickAnt} numberOfLines={2}>{`\u2191 ${r.antenna}`}</Text>
                 )}
               </Pressable>
+              <NavRing on={pickHl} color={navRing.ring} />
+              </View>
             ); })}
             {/* ★ Predicted vs actual band conditions and where the receiver is — the web's block. */}
             <PanelBoundary name="Band conditions">
@@ -10848,7 +10952,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           {!adminAuthQ && door.radios.some((r) => r.pinLocked === true && !unlockedRadios[r.id]) && (
             <View style={styles.radioPickAdmin}>
               <TextInput
-                style={sdrMs.radioPickAdminInput}
+                ref={pickPinRef}
+                style={[sdrMs.radioPickAdminInput, pickItems[pickFocus]?.k === 'pin' && { borderColor: navRing.ring, borderWidth: 2 }]}
                 value={radioPin}
                 /* ★★★ DIGITS ONLY, FILTERED AS THEY TYPE. A PIN is numbers — the setup page and
                  *  the wizard both store digits only now — so a keypad is the right keyboard and
@@ -10874,6 +10979,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                 <Text style={sdrMs.radioPickAdminBtnText}>
                   {radioPinBusy ? '…' : 'UNLOCK'}
                 </Text>
+                <NavRing on={pickItems[pickFocus]?.k === 'pinGo'} color={navRing.ring} radius={8} />
               </TouchableOpacity>
             </View>
           )}
@@ -10888,7 +10994,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           )}
           <View style={styles.radioPickAdmin}>
             <TextInput
-              style={sdrMs.radioPickAdminInput}
+              ref={pickAdminRef}
+              style={[sdrMs.radioPickAdminInput, pickItems[pickFocus]?.k === 'admin' && { borderColor: navRing.ring, borderWidth: 2 }]}
               value={adminPickPw}
               onChangeText={(t) => { setAdminPickPw(t); setAdminPickBad(false); }}
               placeholder="Admin password (optional)"
@@ -10909,6 +11016,7 @@ export default function SDRScreen({ route, navigation }: Props) {
               <Text style={sdrMs.radioPickAdminBtnText}>
                 {adminAuthQ ? 'ADMIN ✓' : adminPickBusy ? '…' : 'UNLOCK'}
               </Text>
+              <NavRing on={pickItems[pickFocus]?.k === 'adminGo'} color={navRing.ring} radius={8} />
             </TouchableOpacity>
           </View>
           {adminPickBad && (
@@ -12100,7 +12208,8 @@ export default function SDRScreen({ route, navigation }: Props) {
                   value={takeoverPwState} onChangeText={setTakeoverPw}
                   placeholder="Admin password" placeholderTextColor={gt.ink.textFaint}
                   secureTextEntry autoCapitalize="none" autoCorrect={false}
-                  style={sdrMs.noticeInput}
+                  ref={refusalPwRef}
+                  style={[sdrMs.noticeInput, refusalHl('pw') && { borderColor: navRing.ring, borderWidth: 2 }]}
                   // ★★ RETURN TAKES OVER — the same fix as the picker's box, for the same reason:
                   //    an unhandled Return leaves the field and reaches the global shortcut layer.
                   returnKeyType="go"
@@ -12111,24 +12220,18 @@ export default function SDRScreen({ route, navigation }: Props) {
                   <Text style={[sdrMs.noticeBtnTxt, !takeoverPwState && { opacity: 0.4 }]}>
                     TAKE OVER
                   </Text>
+                  <NavRing on={refusalHl('take')} color={navRing.ring} radius={8} />
                 </TouchableOpacity>
                 {!!takeoverErr && <Text style={sdrMs.noticeItem}>{takeoverErr}</Text>}
               </>
             )}
-            <TouchableOpacity style={sdrMs.noticeBtn}
-              onPress={() => {
-                // ★ TRY AGAIN is the user acting, so the refusal stops being terminal. The replace
-                //   remounts and would reset the ref anyway — clearing it here as well means this
-                //   button does not depend on that remaining true.
-                terminalRefusal.current = false;
-                setRefusal(null);
-                navigation.replace('SDR', route.params);
-              }}>
+            <TouchableOpacity style={sdrMs.noticeBtn} onPress={refusalTryAgain}>
               <Text style={sdrMs.noticeBtnTxt}>TRY AGAIN</Text>
+              <NavRing on={refusalHl('again')} color={navRing.ring} radius={8} />
             </TouchableOpacity>
-            <TouchableOpacity style={sdrMs.noticeBtn}
-              onPress={() => { setRefusal(null); navigation.goBack(); }}>
+            <TouchableOpacity style={sdrMs.noticeBtn} onPress={refusalBack}>
               <Text style={sdrMs.noticeBtnTxt}>BACK TO SERVERS</Text>
+              <NavRing on={refusalHl('back')} color={navRing.ring} radius={8} />
             </TouchableOpacity>
           </View>
         </View>

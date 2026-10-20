@@ -533,6 +533,9 @@ if npx tsx scripts/test_nav_move.ts; then pass=$((pass+1)); else fail=$((fail+1)
 
 # ★★★ GAME CONTROLLERS IN THE APP (V12): Stuart's two profiles onto the keyboard's own keys, HOLD START, the jog wheels.
 if npx tsx scripts/test_pad_actions.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE RADIO CHOOSER BY PAD (controller audit §1, 2026-10-20): its focus order, where the highlight starts, and Enter
+#     on a blocked radio moving to the box that would open it.
+if npx tsx scripts/test_radio_chooser_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
