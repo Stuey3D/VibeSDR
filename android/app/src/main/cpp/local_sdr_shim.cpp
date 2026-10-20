@@ -29334,6 +29334,13 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
 
     p = impl;
     LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
+    /* ★★★ AND THE HOUSEKEEPING THREAD, WHICH IS WHERE VibeAGC TICKS (2026-10-20). 44c1471b gave rtl_tcp the
+     *  loop ("the loop measures our own IQ and steers through queueHwGain") but this path never started the
+     *  thread that calls overloadTick(), so on an rtl_tcp source VibeAGC was switched on, measured the ADC, logged
+     *  "ADC OVERLOAD" — and never moved the gain. Found by the AGC bench (tools/agc-bench), whose fake rtl_tcp
+     *  applies the gain: 40 dB into a loud station, clipping for minutes, zero gain commands. The fourth start
+     *  path of the "started from three of those paths and not the fourth" note above startDspThread. */
+    impl->startHotplugWatch();
     LOGI("RTL-TCP started: %s:%d center=%.0f rate=%.0f tuner=%d port=%d",
          host.c_str(), port, centerFreq, sampleRate, impl->tcpTunerType, chosen);
     return chosen;
