@@ -73,8 +73,14 @@ const serverVer = vsCmake.match(/project\(vibeserver VERSION ([0-9.]+)/)?.[1];
 const serverPre = vsCmake.match(/set\(VIBESERVER_PRERELEASE "([A-Za-z0-9]*)"\)/)?.[1] ?? '';
 const major = (v) => String(v ?? '').split('.')[0];
 console.log(`   .. server ${serverVer}${serverPre ? '~' + serverPre : ''} · app ${want} · Jr ${jrAll[0]}`);
+// ★★ THE V12 TEST PLATFORM IS THE ONE EXCEPTION (Stuart, 2026-10-20): "v12 should keep v11 server as the iOS app is
+//    the only one being built at the moment as the test platform for new features and doesnt include the server
+//    built in". So on this branch the APP may run one major AHEAD of the server (12 over 11) — never behind, never
+//    further — and Jr, which ships against the released servers, still shares the server's major.
 for (const [name, v] of [['app (app.json)', want], ['Jr', jrAll[0]]]) {
-  if (major(v) !== major(serverVer)) fail(`${name} is major ${major(v)} but the server is major ${major(serverVer)}`);
+  const ahead = name.startsWith('app') && Number(major(v)) === Number(major(serverVer)) + 1;
+  if (ahead) ok(`${name} is major ${major(v)}, one ahead of the server's ${major(serverVer)} — the V12 test platform (no server built in)`);
+  else if (major(v) !== major(serverVer)) fail(`${name} is major ${major(v)} but the server is major ${major(serverVer)}`);
   else ok(`${name} shares the server's major (${major(v)})`);
 }
 // ★ A pre-release label belongs to the SERVER package and the GitHub releases only — never the app's
