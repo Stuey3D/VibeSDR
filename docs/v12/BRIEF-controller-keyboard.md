@@ -299,6 +299,23 @@ The controller guide (`src/utils/padGuide.ts`) gets a third tab, KEYBOARD, gener
      over from (or sits alongside) `TvTextInput`'s edit sheet where that is the path today. tvOS password fields keep
      the system secure keyboard, as above.
 
+5. **Follow the LIVE input source while editing (Stuart, same day).** Not only the source that opened the field:
+   hand over mid-entry, keeping the text typed so far AND the caret. The value never resets in a hand-over, and
+   password mode is kept across the swap (`secureTextEntry` on the TextInput side, password mode on ours).
+
+   | Editing with | Then the user… | Becomes |
+   |---|---|---|
+   | ControllerKeyboard (opened by pad / remote) | touches the screen or the field | ours closes; the system keyboard opens on the same field, same value and caret (accessibility) |
+   | ControllerKeyboard | presses a physical key | ours closes; they type in place in the field, same value and caret |
+   | ControllerKeyboard | presses a pad / remote button | stays — it is ours |
+   | System keyboard (opened by touch) | types on a physical keyboard | the system keyboard drops away as the OS does; we do not fight it — still the field |
+   | System keyboard | presses a pad button | the field lets go of the cursor; ControllerKeyboard opens with the same value and caret |
+   | Typing in place (opened by a physical keyboard) | touches the field | the system keyboard (the OS's own behaviour) |
+   | Typing in place | presses a pad button | ControllerKeyboard opens with the same value and caret |
+
+   The decision is pure (`src/utils/kbHandover.ts`, tested by `scripts/test_kb_handover.ts`); it needs the root-level
+   touch capture in `App.tsx` the audit flagged, so a touch anywhere is seen.
+
 The audit's other recommendations are adopted as the defaults:
 - both layouts have visible, focusable ↵ (submit) and Back (cancel) keys as well as ⌫ (Stuart, same day);
 - triggers (LT / RT) are not needed — no native change;
