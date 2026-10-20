@@ -115,6 +115,12 @@ function qwertyKeys(mode: KbMode, layer: KbLayer, o: KbKeysOpts): KbKey[] {
   return out;
 }
 
+/**
+ * ★ The keycap glyphs NEITHER keycap font carries (Nixie One, Atkinson Hyperlegible — measured from their cmaps by
+ *   scripts/test_kb_fonts.ts): drawn in the system font instead, per character, never as a missing-glyph box.
+ */
+export const KB_SYSTEM_GLYPHS = '⌫↵⇧⇪';
+
 /** Every key on screen for this mode and layer. */
 export function kbKeys(mode: KbMode, layer: KbLayer = 'lower', o: KbKeysOpts = {}): KbKey[] {
   return layoutFor(mode) === 'numeric' ? numericKeys(mode, o) : qwertyKeys(mode, layer, o);

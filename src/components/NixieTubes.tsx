@@ -361,6 +361,28 @@ const NixieCathodes = React.memo(function NixieCathodes({ w, h, geo, tubes, bulb
   );
 });
 
+/**
+ * ★ ONE TUBE, for a controller-keyboard keycap (brief "Keycap fonts": the numeric pad's digits are drawn exactly as the
+ *   readout draws them). The same tube sprites as the window — the traced IN-14 wires, always orange — and the INS-1
+ *   bead for `.`. Anything else draws nothing (the caller labels ⌫ ↵ in text).
+ */
+export function NixieKeyDigit({ d, w, h }: { d: string; w: number; h: number }) {
+  const tw = Math.max(1, Math.round(w)), th = Math.max(1, Math.round(h));
+  const nf = Math.round(th * 0.78 * 2) / 2;
+  const sprites = useTubeSprites(nf, tw, th);
+  const bead = useBeadSprite();
+  const sp = /^\d$/.test(d) ? sprites?.[d] : undefined;
+  return (
+    <Canvas style={{ width: tw, height: th }} pointerEvents="none">
+      <Rect x={0} y={0} width={tw} height={th} color="#0a0504" />
+      {sp ? <SkImageNode image={sp.img} x={0} y={0} width={sp.w} height={sp.h} /> : null}
+      {d === '.' && bead ? (
+        <SkImageNode image={bead.img} x={tw / 2 - bead.w / 2} y={th * 0.72 - bead.h / 2} width={bead.w} height={bead.h} />
+      ) : null}
+    </Canvas>
+  );
+}
+
 // ── The window ────────────────────────────────────────────────────────────────
 
 export interface NixieTubesProps {
