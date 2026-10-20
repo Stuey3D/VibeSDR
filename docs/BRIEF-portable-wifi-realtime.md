@@ -319,6 +319,95 @@ Phase 2.1 is for the foreground case: an app or web client on screen, over a bus
 
 ---
 
+## Phase 3b — UPDATE (2026-10-20, later): the no-IR theory is OUT; WPA2/WPA3 is the target, and it is FIXED in code
+
+**New evidence:** the Portable came online on the home mesh "Meow!" — **5 GHz ch 36, 80 MHz, 433 Mbit/s, −40 dBm, GB**.
+So the 3A+ does 5 GHz ch 36 fine, and the firmware/passive-scan theory below is **ruled out**. What differs between the
+mesh (joins) and both phone hotspots (never joined) is **security**: the mesh is WPA2-only, while both hotspots are
+**WPA2/WPA3 transition**. Stuart: *"just assume it's WPA3 that's the issue."* The section below is kept as the record.
+
+**The mechanism, from NetworkManager's own source** (`src/core/supplicant/nm-supplicant-config.c`):
+- For `key-mgmt wpa-psk` with PMF at its default (optional), NM hands wpa_supplicant
+  `key_mgmt="WPA-PSK WPA-PSK-SHA256 FT-PSK SAE FT-SAE"`, whenever the supplicant was built with SAE, PMF and BIP.
+- Against a transition-mode AP, which offers PSK and SAE, the supplicant **prefers SAE**, i.e. WPA3.
+- On the 3A+'s brcmfmac, SAE (external auth or firmware offload) is the weak point.
+- Only **`pmf disable`** removes SAE. NM's comment: *"do not operate in WPA3-Personal transition mode when PMF is set to
+  disabled"*. It also sets `ieee80211w=0`.
+- Plain WPA2-PSK is always accepted by a transition AP: MFPR=0 is part of the definition of transition mode.
+
+**Built in `vibeserver-pocket` (commit `400a4547`):**
+1. **Client networks are saved with PMF off.** `wifi-sec.pmf 1` gives plain WPA2-PSK and never offers SAE.
+   `migrate_pmf()` moves older profiles over at every start. It is idempotent, changes the profile only, and leaves
+   open networks and any explicit optional/required verdict alone.
+2. **One retry per network per run** when a join is refused at authentication or association. PMF off is retried as
+   optional (for a WPA2 network that *requires* PMF), and anything else is retried as off. A retry that works is kept on
+   the profile and logged; one that fails puts the profile back as it was. A wrong password costs one extra attempt, not
+   one per rescan.
+3. **Directed probes for saved networks the scan missed** (`nmcli device wifi rescan ssid …`). A network that answers
+   only by name (an idle iPhone hotspot) is then saved as "not visible", so NetworkManager's own joins, and the next
+   boot, ask for it by name too.
+   - ★ **Privacy, weighed:** a directed probe says the name out loud. The box probes only *saved* names, only those the
+     scan missed, and only while it is already looking: at boot, when the link is lost, on a menu choice, or on the idle
+     upgrade check, and **never while someone is listening**.
+   - Marking every profile "hidden" would have the supplicant shout every saved name, the home network included, on
+     every scan. **Recommended: what was built.**
+4. **Moving up by itself:** with probes in the idle upgrade check, a higher-ranked phone hotspot that comes on is found
+   and joined without the menu. The iPhone is rank 1, above home. The A26, at rank 3 below home, is by design only
+   reached by the menu or when home is gone.
+5. **SAE proper** (WPA3-only networks) is not attempted. It would need firmware SAE support on the 3A+ (check
+   `iw phy phy0 info` for AKM `00-0f-ac:8` / "SAE"). Noted, not depended on.
+
+**The join history** (Stuart: *"whether it connects or not who knows"*):
+- **What is kept:** the last **20** attempts, each with time, SSID, band and frequency, the security seen in the scan,
+  the security tried, how it was found (scan / asked by name / blind), the result (joined / not seen / auth failed /
+  assoc timeout / DHCP failed / failed) and NetworkManager's reason.
+- **Where:** `/var/lib/vibeserver-pocket/join-history.json` on the settings partition (root 0600, survives a power
+  cycle), carried in the admin-only state. Repeats are folded into one line with a count.
+- **Shown:** on the setup page's Wi-Fi card as a short table, with **"Use now"** buttons per saved network. The feedback
+  runs "Looking for … (N s left)" → "Joined" / "Not joined: reason". It also says plainly that when the box joins
+  elsewhere this page loses it, and that it comes back by itself if the join fails.
+
+**Download diagnostics** (moved to the **admin page** at Stuart's request, so every Linux VibeServer has it; commit
+`7d2bf084`):
+- **How it is built:** by the existing root maintenance helper (new action `diagnostics`), which runs
+  `vibeserver-diagnostics`. I did not put the daemon in systemd-journal: it is internet-facing, and the helper is already
+  the privileged boundary.
+- **What is in it:** a plain-text file with versions, machine, services, the config with secrets removed, radio status,
+  VibeAGC highlights (`DIAG_HIGHLIGHTS` is the hook for the AGC agent's extra lines), and 24 h of journal. On a Portable
+  it also has the Wi-Fi story and the join history.
+- **Secrets:** scrubbed twice, by the script (every secret on the machine) and by the daemon (`diag_scrub.h`).
+- **Download:** a plain GET with `Content-Disposition: attachment`, so iOS Safari saves it.
+- **Mac and Android:** there is no maintenance helper on either, so the button isn't offered there. An equivalent needs:
+  - **Mac:** the user's own `log show --predicate 'process == "vibeserver"'`, no root needed. It could be built
+    in-process.
+  - **Android:** logcat for our own UID, readable by the app itself, plus the shim's state.
+  - Neither is built yet.
+- ★ **Known limit — the app's admin page.** If it is a WKWebView, the download needs the app to handle WKDownload. That is
+  an app change for a later release.
+
+### On-device test for Stuart — the iPhone hotspot, Maximise Compatibility OFF
+1. Update the Portable (admin page → UPDATE VIBESERVER), once this is in a package. Then check the setup page → Wi-Fi.
+   The journal at start should say `WPA2/WPA3 hotspots: N saved network(s) set to plain WPA2 (PMF off)`.
+2. On the iPhone: Settings → Personal Hotspot → **Allow Others to Join ON, Maximise Compatibility OFF**. Leave that
+   screen open for the first try.
+3. At home on the setup page → Wi-Fi → **Use now: Stuey3D's iPhone**. The page says "Looking for…", then either loses the
+   box (it joined the iPhone) or reports "Not joined: …".
+4. If it joined: put the iPhone on the hotspot and open VibeSDR. The Portable should appear and play.
+5. Either way, back home: the setup page's **Recent join attempts** table says what happened. The good result is a row
+   reading `Stuey3D's iPhone · 5 GHz (5180) · WPA2 WPA3 / in the scan or asked by name · WPA2-PSK, PMF off · joined`.
+6. Also try it hands-off: with the box idle at home and nobody listening, switch the iPhone hotspot on. Within about
+   2 minutes it should move up to the iPhone (rank 1) by itself.
+7. If anything is unclear: admin page → **DOWNLOAD DIAGNOSTICS**, and send us the file.
+8. A26 (rank 3): same, via "Use now: Stuart's A26". If it still fails, set One UI's hotspot security to **WPA2-Personal**
+   (keep 5 GHz) and try again. A join then plus a failure on WPA2/WPA3 would mean the PMF-off profile is still being
+   refused, and the history's reason column will say how.
+
+**Not proven on hardware.** All of the above is proven against a fake NetworkManager that models a transition AP whose
+SAE fails, a PMF-required AP, and a hotspot that answers only directed probes. The SAE-preference mechanism is from NM's
+source. I didn't simulate a real transition-mode AP with hostapd + mac80211_hwsim:
+- it would only show spec behaviour, not the brcmfmac firmware's;
+- it meant loading a kernel module and a second NetworkManager-visible radio on the Lenovo, a live receiver.
+
 ## Phase 3 — Why the Pi 3A+ can't see a 5 GHz phone hotspot (research only, 2026-10-20)
 
 **The facts:**
