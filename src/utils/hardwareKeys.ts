@@ -35,6 +35,7 @@ import { NativeEventEmitter, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { KeyBus, type HwKey, type HwKeyEvent } from './keyActions';
 import { PadMapper, type PadOut, type PadProfile, type PadReport } from './padActions';
+import { inputSource } from './inputSource';
 
 export type { HwKey, HwKeyEvent };
 
@@ -47,7 +48,10 @@ function ensureNative() {
   if (!mod) { native = []; return; }   // no native module (a platform without one): no keys
   const em = new NativeEventEmitter(mod);
   native = [
-    em.addListener('VibeKeyDown', (r: any) => bus.dispatch('down', r)),
+    // ★ The last input source (src/utils/inputSource.ts) is set HERE, before any listener hears the key: a physical
+    //   key is 'keyboard', a pad report 'pad' (runPad). Only keys that are ours count — but a key typed into a field
+    //   still says a keyboard is in use.
+    em.addListener('VibeKeyDown', (r: any) => { if (r?.key) inputSource.set('keyboard'); bus.dispatch('down', r); }),
     em.addListener('VibeKeyUp', (r: any) => bus.dispatch('up', r)),
     em.addListener('VibePad', (r: any) => onPad(r)),
   ];
@@ -80,6 +84,9 @@ function onPad(r: (PadReport & { typing?: boolean }) | null | undefined) {
 
 function runPad(outs: PadOut[]) {
   for (const o of outs) {
+    // ★ Any pad press says a pad is in use — even with a field's cursor up, when the bus below drops the key: that is
+    //   how a pad takes over from the system keyboard (the controller keyboard's hand-over).
+    if ('kind' in o && o.kind === 'down') inputSource.set('pad');
     if ('guide' in o) { emitGuide('toggle', o.profile); continue; }
     if ('notice' in o) { padNoticeListeners.forEach((f) => { try { f(o.notice, o.profile); } catch { /* a listener's fault */ } }); continue; }
     bus.dispatch(o.kind, { key: o.key, plain: false, typing: padTyping, pad: true });

@@ -30,6 +30,7 @@ import { Animated, ScrollView, View } from 'react-native';
 import { addKeyListener, type HwKeyEvent } from '../utils/hardwareKeys';
 import { navMove } from '../utils/navMove';
 import { OverlayStack, type OverlayOpts } from '../utils/overlayStack';
+import { inputSource, type InputSource } from '../utils/inputSource';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { focusFor, focusTint, FOCUS_GREEN } from '../constants/decoderTokens';
 
@@ -99,13 +100,28 @@ export const nextNavButtonId = () => nextNavId++;
 // the next key press, so alternating between hand and keyboard needs no mode switch.
 export const PANEL_IDLE_MS = 10_000;
 
-let keyboardMode = false;
+// ★★ keyboardMode is now DERIVED from the one input-source tracker (src/utils/inputSource.ts — touch / keyboard / pad),
+//   which the key bus sets centrally (a pad counts). `useKeyboardMode()` = anything but touch, as before;
+//   `useInputSource()` tells a pad from a keyboard (the controller keyboard opens only for a pad or remote).
+let keyboardMode = inputSource.get() !== 'touch';
 const kbListeners = new Set<(on: boolean) => void>();
-const setKeyboardMode = (on: boolean) => {
-  if (keyboardMode === on) return;
+inputSource.subscribe((src) => {
+  const on = src !== 'touch';
+  if (on === keyboardMode) return;
   keyboardMode = on;
   kbListeners.forEach(f => f(on));
+});
+const setKeyboardMode = (on: boolean) => {
+  if (!on) { inputSource.set('touch'); return; }
+  if (inputSource.get() === 'touch') inputSource.set('keyboard');   // fallback: the bus normally set it already
 };
+
+/** The last input source, live: 'touch' | 'keyboard' | 'pad'. */
+export function useInputSource(): InputSource {
+  const [src, setSrc] = useState<InputSource>(inputSource.get());
+  useEffect(() => { setSrc(inputSource.get()); return inputSource.subscribe(setSrc); }, []);
+  return src;
+}
 /** Is a keyboard or pad driving right now? (Synchronous — for code outside React: appAlert.) */
 export const keyboardModeNow = () => keyboardMode;
 /** Any pointer/touch interaction — a present user, so idle-close is wrong. */

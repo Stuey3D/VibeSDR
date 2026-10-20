@@ -6,7 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Alert, Animated, ActivityIndicator, AppState, Dimensions, LogBox, NativeModules, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { TouchableOpacity } from 'react-native';
-import { useOverlay, useKeyboardMode, useNavFocus } from './src/components/PanelNav';
+import { useOverlay, useKeyboardMode, useNavFocus, noteTouchInteraction } from './src/components/PanelNav';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFonts } from 'expo-font';
 LogBox.ignoreAllLogs();
@@ -1004,7 +1004,15 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
-      <View style={{ flex: 1, backgroundColor: '#080601' }}>
+      {/* ★★ ONE ROOT TOUCH CAPTURE (controller keyboard brief, 2026-10-20): touch was noted only where a surface
+          called noteTouchInteraction itself, so a touch anywhere else left the app in "pad" mode — and the next field
+          would have opened the controller keyboard under a hand. Notes the touch and returns false: it never takes
+          the touch from anything. (A Modal is its own root — pop-ups note their own.) */}
+      <View style={{ flex: 1, backgroundColor: '#080601' }}
+            onStartShouldSetResponderCapture={() => { noteTouchInteraction(); return false; }}
+            /* ★ And the raw touch event, which bubbles from every child even where a native gesture handler (the
+               waterfall, the drums) never asks the responder system. */
+            onTouchStart={noteTouchInteraction}>
         <CrashBoundary>
         <NavigationContainer
           ref={navigationRef}
