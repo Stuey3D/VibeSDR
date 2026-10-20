@@ -90,7 +90,10 @@ int main() {
     // ★ The rungs any user may take: raising nice never needs a privilege.
     ok(dec.nice == std::max(base, vibeprio::kDecoder), "decoders at nice " + std::to_string(vibeprio::kDecoder) + " (" + std::to_string(dec.nice) + ")");
     ok(bulk.nice == std::max(base, vibeprio::kBulk), "bulk HTTP at nice " + std::to_string(vibeprio::kBulk) + " (" + std::to_string(bulk.nice) + ")");
-    ok(dec.nice > spec.nice && bulk.nice > dec.nice, "bulk below decoders below spectrum");
+    // ★ Started niced (`nice ctest`, base 10), spectrum and decoders both sit AT the base, so only the order that can
+    //   still differ is checked — a niced runner is not a fault in the ladder.
+    if (base < vibeprio::kDecoder) ok(dec.nice > spec.nice && bulk.nice > dec.nice, "bulk below decoders below spectrum");
+    else ok(bulk.nice >= dec.nice && dec.nice >= spec.nice, "bulk not above decoders not above spectrum (started at nice " + std::to_string(base) + ")");
 
     const bool privileged = audio.nice == vibeprio::kAudio;
     if (!privileged) {
