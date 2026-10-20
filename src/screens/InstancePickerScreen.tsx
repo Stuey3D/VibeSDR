@@ -135,7 +135,7 @@ import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import { APP_VERSION } from '../constants/version';
 import { useServing, loopbackIfSelf, servingNow } from '../services/serving';
 import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
-import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
+import { startMdnsDiscovery, mdnsDiscoverySupported, type DiscoveredServer, type MdnsBrowse } from '../services/mdns';
 import { favFromDiscovered, repairFromDiscovery, needsVibeProbe, tcpFavHttpBase } from '../services/discoveredFavs';
 import { resolveVibeAuth, checkVibePin } from '../services/vibeAuth';
 import { crumb } from '../services/crumbs';
@@ -369,6 +369,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [editPin,     setEditPin]       = useState<{ sha256: string; at?: number } | null>(null);
   // Auto-discovered RTL-TCP servers (mDNS/Bonjour) — live while the picker is focused.
   const [discovered,  setDiscovered]    = useState<DiscoveredServer[]>([]);
+  // ★ The live browse (its refresh() is the SEARCH AGAIN row) and whether it is still in its first few seconds.
+  const mdnsRef = useRef<MdnsBrowse | null>(null);
+  const [mdnsSearching, setMdnsSearching] = useState(false);
   const [tcpName,     setTcpName]       = useState('');
   const [tcpHost,     setTcpHost]       = useState('');
   const [tcpPort,     setTcpPort]       = useState('1234');
@@ -550,10 +553,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   // mDNS/Bonjour: browse for RTL-TCP servers while the picker is on screen; stop
   // on blur so we don't hold the network browser open during an SDR session.
+  // ★ The browse restarts itself on return from the background, and SEARCH AGAIN restarts it by hand (mdnsBrowse.ts).
   useFocusEffect(useCallback(() => {
     setDiscovered([]);
-    const stop = startMdnsDiscovery(setDiscovered);
-    return () => { stop(); setDiscovered([]); };
+    const stop = startMdnsDiscovery(setDiscovered, setMdnsSearching);
+    mdnsRef.current = stop;
+    return () => { stop(); mdnsRef.current = null; setDiscovered([]); setMdnsSearching(false); };
   }, []));
 
   const { font: F, scale } = themeFor(viewMode);
@@ -2951,8 +2956,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 </View>
 
                 {/* DISCOVERED — RTL-TCP servers found automatically on the local
-                    network via mDNS/Bonjour. Only shown when something advertises. */}
-                {discoveredNew.length > 0 && (
+                    network via mDNS/Bonjour. ★ Shown wherever the app can browse, even
+                    with nothing found: its SEARCH AGAIN row is most needed exactly then. */}
+                {(mdnsDiscoverySupported || discoveredNew.length > 0) && (
                   <View style={{ marginTop: 10 }}>
                     <SectionHeader label="DISCOVERED" fs={fs} F={F} C={C} />
                     {discoveredNew.map((s) => (
@@ -2978,6 +2984,33 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         </TouchableOpacity>
                       </ChooserRow>
                     ))}
+                    {/* ★★ SEARCH AGAIN (Stuart, 2026-10-20: "sometimes it wont find a server until I close and open
+                        again"). A real restart of the network browse — stop, start, rows not found again within a few
+                        seconds dropped — not a re-render. A ChooserRow, so the pad and keyboard reach it like any row;
+                        dashed like "+ Add custom server", the other row that is an action rather than a server. */}
+                    {mdnsDiscoverySupported && (
+                      <ChooserRow
+                        style={[styles.row, { borderColor: C.keyDim, borderStyle: 'dashed' }]}
+                        onPress={() => mdnsRef.current?.refresh()}
+                        accessibilityRole="button"
+                        accessibilityLabel="Search again for servers on this network"
+                      >
+                        <View style={styles.rowMain}>
+                          <Text style={{ fontFamily: F, fontSize: fs(15), color: C.key }} numberOfLines={1}>
+                            {mdnsSearching ? '↻ Searching…' : '↻ Search again'}
+                          </Text>
+                          <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
+                            {mdnsSearching
+                              ? 'looking for servers on this network'
+                              : discoveredNew.length > 0
+                                ? 'look again for servers on this network'
+                                : discovered.length > 0
+                                  ? 'the servers found here are already in your list'
+                                  : 'none found on this network — tap to look again'}
+                          </Text>
+                        </View>
+                      </ChooserRow>
+                    )}
                   </View>
                 )}
               </View>

@@ -272,6 +272,8 @@ if node --no-warnings scripts/test_tune_window.ts; then pass=$((pass+1)); else f
 if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ SERVER ADDRESSES (serverUrl.ts): scheme and port are a PAIR — https://host:8073 stays TLS (GitHub #52, OWRX+ native TLS).
 if node --no-warnings scripts/test_server_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ LAN DISCOVERY (mdnsBrowse.ts): SEARCH AGAIN and the return from the background really restart the browse; stale rows go (Stuart 2026-10-20).
+if node --no-warnings scripts/test_mdns_browse.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ PER-SERVER CERTIFICATE PINS (tlsPin.ts, GitHub #52): the key, the fingerprint, what a certificate says, and which
 #     prompt — offer / "certificate has changed" / refuse (expired, public cert for another name) / nothing.
 if node --no-warnings scripts/test_tls_pin.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

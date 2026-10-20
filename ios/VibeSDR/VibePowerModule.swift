@@ -3567,43 +3567,87 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // the compressed protocol (and whether it needs a PIN) before connecting.
   private static let vibeServiceType = "_vibesdr._tcp"
 
+  // ★★★ A BROWSE THAT DIES MUST BE RESTARTED, AND A RESOLVE THAT HANGS MUST GIVE UP (Stuart, 2026-10-20: "sometimes it
+  //     wont find a server until I close and open again"). Neither browser had a state handler: an NWBrowser that FAILED
+  //     — iOS tears down a suspended app's DNS-SD connection, and mDNSResponder can restart under us — just stopped
+  //     reporting, and the list looked healthy and empty until the app was killed. And the resolve (a TCP connection to
+  //     the service, to learn its address) waited for ever in .waiting when the name would not resolve — 11.0.4's
+  //     responder on the Portable dropped Apple's packed questions — so that server never appeared, and never got a
+  //     second try because the browser had already reported it as added. Now:
+  //       • a failed browser is restarted 1 s later (only while discovery is still wanted);
+  //       • a resolve gets 8 s, and a resolve that fails or times out is tried again twice (3 s, then 10 s later);
+  //       • a .changed result (its TXT, e.g. the PIN flag) resolves again;
+  //       • all state lives on mdnsQueue — the JS thread only queues work onto it.
+  //     JS also restarts the whole browse on return from the background and from SEARCH AGAIN (src/services/mdnsBrowse.ts).
+  private var mdnsWanted = false
+  private var mdnsGeneration = 0
+
   @objc(startDiscovery)
   func startDiscovery() {
-    stopDiscovery()
-    for type in [VibePowerModule.rtlTcpServiceType, VibePowerModule.vibeServiceType] {
-      let params = NWParameters()
-      params.includePeerToPeer = true
-      let browser = NWBrowser(
-        for: .bonjourWithTXTRecord(type: type, domain: nil), using: params)
-      browser.browseResultsChangedHandler = { [weak self] _, changes in
-        guard let self = self else { return }
-        for change in changes {
-          switch change {
-          case .added(let result):
-            self.resolveMdns(result)
-          case .removed(let result):
-            if case let .service(name, _, _, _) = result.endpoint {
-              self.sendEvent(withName: "VibeMdnsLost", body: ["name": name])
-            }
-          default:
-            break
-          }
-        }
+    mdnsQueue.async { [weak self] in
+      guard let self = self else { return }
+      self.stopDiscoveryOnQueue()
+      self.mdnsWanted = true
+      self.mdnsGeneration += 1
+      for type in [VibePowerModule.rtlTcpServiceType, VibePowerModule.vibeServiceType] {
+        self.startBrowser(type: type, generation: self.mdnsGeneration)
       }
-      browser.start(queue: mdnsQueue)
-      mdnsBrowsers.append(browser)
     }
   }
 
   @objc(stopDiscovery)
   func stopDiscovery() {
+    mdnsQueue.async { [weak self] in self?.stopDiscoveryOnQueue() }
+  }
+
+  private func stopDiscoveryOnQueue() {
+    mdnsWanted = false
+    mdnsGeneration += 1
     for b in mdnsBrowsers { b.cancel() }
     mdnsBrowsers.removeAll()
     for conn in mdnsResolvers { conn.cancel() }
     mdnsResolvers.removeAll()
   }
 
-  private func resolveMdns(_ result: NWBrowser.Result) {
+  private func startBrowser(type: String, generation: Int) {
+    let params = NWParameters()
+    params.includePeerToPeer = true
+    let browser = NWBrowser(for: .bonjourWithTXTRecord(type: type, domain: nil), using: params)
+    browser.stateUpdateHandler = { [weak self, weak browser] state in
+      guard let self = self, case .failed(let err) = state else { return }
+      NSLog("[VibeMdns] browser for %@ failed (%@) — restarting", type, "\(err)")
+      if let browser = browser {
+        browser.cancel()
+        self.mdnsBrowsers.removeAll { $0 === browser }
+      }
+      self.mdnsQueue.asyncAfter(deadline: .now() + 1) { [weak self] in
+        guard let self = self, self.mdnsWanted, self.mdnsGeneration == generation else { return }
+        self.startBrowser(type: type, generation: generation)
+      }
+    }
+    browser.browseResultsChangedHandler = { [weak self] _, changes in
+      guard let self = self else { return }
+      for change in changes {
+        switch change {
+        case .added(let result):
+          self.resolveMdns(result, attempt: 0, generation: generation)
+        case .changed(_, let result, _):
+          self.resolveMdns(result, attempt: 0, generation: generation)
+        case .removed(let result):
+          if case let .service(name, _, _, _) = result.endpoint {
+            self.sendEvent(withName: "VibeMdnsLost", body: ["name": name])
+          }
+        default:
+          break
+        }
+      }
+    }
+    browser.start(queue: mdnsQueue)
+    mdnsBrowsers.append(browser)
+  }
+
+  private func resolveMdns(_ result: NWBrowser.Result, attempt: Int, generation: Int) {
+    guard mdnsWanted, mdnsGeneration == generation else { return }
     guard case let .service(serviceName, serviceType, _, _) = result.endpoint else { return }
     let proto = serviceType.contains("vibesdr") ? "vibeserver" : "rtltcp"
     // Friendly name + pin flag from the TXT record.
@@ -3615,6 +3659,18 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     let conn = NWConnection(to: result.endpoint, using: .tcp)
     mdnsResolvers.append(conn)
+    var settled = false
+    // ★ One way out, whichever comes first: an address, a failure, or the 8 s timeout. A failure is retried.
+    let finish: (Bool) -> Void = { [weak self, weak conn] ok in
+      guard let self = self, !settled else { return }
+      settled = true
+      if let conn = conn { self.dropResolver(conn) }
+      if !ok && attempt < 2 {
+        self.mdnsQueue.asyncAfter(deadline: .now() + (attempt == 0 ? 3 : 10)) { [weak self] in
+          self?.resolveMdns(result, attempt: attempt + 1, generation: generation)
+        }
+      }
+    }
     conn.stateUpdateHandler = { [weak self, weak conn] state in
       guard let self = self, let conn = conn else { return }
       switch state {
@@ -3624,18 +3680,23 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
           var h = "\(host)"
           if let pct = h.firstIndex(of: "%") { h = String(h[..<pct]) }  // strip IPv6 zone id
           h = h.replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
-          self.sendEvent(withName: "VibeMdnsFound",
-                         body: ["name": friendly, "host": h, "port": Int(port.rawValue),
-                                "proto": proto, "pin": pin])
+          if self.mdnsWanted && self.mdnsGeneration == generation {
+            self.sendEvent(withName: "VibeMdnsFound",
+                           body: ["name": friendly, "host": h, "port": Int(port.rawValue),
+                                  "proto": proto, "pin": pin])
+          }
+          finish(true)
+        } else {
+          finish(false)
         }
-        self.dropResolver(conn)
       case .failed, .cancelled:
-        self.dropResolver(conn)
+        finish(false)
       default:
-        break
+        break        // .waiting: the timeout below decides
       }
     }
     conn.start(queue: mdnsQueue)
+    mdnsQueue.asyncAfter(deadline: .now() + 8) { finish(false) }
   }
 
   private func dropResolver(_ conn: NWConnection) {
