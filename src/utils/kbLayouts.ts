@@ -136,10 +136,23 @@ export function kbMove(keys: readonly KbKey[], cur: number, dir: Dir): number {
   if (!keys.length) return -1;
   if (cur < 0 || cur >= keys.length) return 0;
   const here = keys[cur];
+  // ★ LEFT / RIGHT STAY ON THE ROW. pickNext scores by distance, so from the wide space bar "right" chose "n" in the
+  //   row above (nearer centre to centre) over ↵ beside it. A keyboard row is a row: the nearest key that way on it,
+  //   else the wrap below.
+  if (dir === 'left' || dir === 'right') {
+    let near = -1;
+    for (let j = 0; j < keys.length; j++) {
+      const k = keys[j];
+      if (j === cur || !overlapsRow(k, here)) continue;
+      const ahead = dir === 'right' ? cxOf(k) > cxOf(here) : cxOf(k) < cxOf(here);
+      if (ahead && (near < 0 || Math.abs(cxOf(k) - cxOf(here)) < Math.abs(cxOf(keys[near]) - cxOf(here)))) near = j;
+    }
+    if (near >= 0) return near;
+  }
   // ★ pickNext works in POINTS (it ignores a move of a point or less), so key units are scaled up first.
   const S = 100;
   const px = (k: Box): Box => ({ x: k.x * S, y: k.y * S, w: k.w * S, h: k.h * S });
-  const i = pickNext(px(here), keys.map(px), dir);
+  const i = dir === 'up' || dir === 'down' ? pickNext(px(here), keys.map(px), dir) : -1;
   if (i >= 0) return i;
   // Wrap: the far end of this row (left / right) or of this column (up / down).
   let best = -1;
