@@ -449,6 +449,32 @@ def powersave_phase0(tmp):
     ok(not any(c[3:] == ["get", "power_save"] for c in nm.calls), "on its own hotspot: not checked (AP mode does not doze)")
 
 
+def scan_lists_every_security(tmp):
+    """★★ PHASE 3 (BRIEF-portable-wifi-realtime, 2026-10-20): Stuart's iPhone hotspot without Maximise Compatibility is
+    5 GHz ch 36, WPA2/WPA3 Personal — and never appeared on the box. Our own list is NOT the filter: every network nmcli
+    reports is listed whatever its security column says (transition mode, WPA3 only, SAE, OWE, enterprise); only an
+    empty column is marked open. If it is missing, the radio never reported it."""
+    nm, box = make(tmp)
+    rows = {"iPhone": "WPA2 WPA3", "WPA3 only": "WPA3", "Sae": "SAE", "Owe": "OWE", "Work": "WPA2 802.1X", "Cafe": "",
+            "Old": "WPA1 WPA2"}
+    real = nm.run
+    def run(args, timeout=40, secret=False):
+        if args[:3] == ["nmcli", "-t", "-f"] and "list" in args:
+            return 0, "".join("%s:%d:%s\n" % (esc(k), 50, v) for k, v in rows.items())
+        return real(args, timeout, secret)
+    nm.run = run
+    seen = box.scan()
+    ok(seen == set(rows), "the scan keeps every network whatever its security (WPA2/WPA3 transition, WPA3, SAE, OWE, 802.1X)")
+    sec = {x["ssid"]: x["secure"] for x in box.scan_cache}
+    ok(sec["iPhone"] and sec["WPA3 only"] and sec["Sae"] and not sec["Cafe"],
+       "…and marks only the one with no security as open (the page's \"(open)\" label)")
+    # the request a WPA2/WPA3 network is saved with: a PSK profile — NM's wpa-psk joins a transition AP by its PSK AKM
+    box.apply(req([("iPhone", "phonepass", {})]))
+    add = [c for c in nm.calls if c[:3] == ["nmcli", "connection", "add"] and "iPhone" in c]
+    ok(add and add[0][add[0].index("wifi-sec.key-mgmt") + 1] == "wpa-psk" and "802-11-wireless.band" not in add[0],
+       "a WPA2/WPA3 network is saved as wpa-psk, and the client profile pins NO band (5 GHz is never excluded by us)")
+
+
 def main():
     print("vibeserver-pocket — the pocket box's Wi-Fi state machine")
     tmp = tempfile.mkdtemp()
@@ -741,6 +767,7 @@ def main():
 
         road_test_2026_10_14(tempfile.mkdtemp())
         powersave_phase0(tempfile.mkdtemp())
+        scan_lists_every_security(tempfile.mkdtemp())
 
     out = log.getvalue()
     for secret in ("homepass1", "phonepass", "pocketpass", "workpass1"):

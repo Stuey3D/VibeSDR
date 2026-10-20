@@ -37,8 +37,11 @@ An Android hotspot is a Linux **mac80211 AP** (the phone's Wi-Fi driver plus hos
 Pi to the iPhone, the kernel picks the WMM access category from the packet's **DSCP** (`cfg80211_classify8021d`: the
 RFC 8325 table on kernels ≥ 5.x, plain `DSCP >> 3` before that). So an EF (`0xB8`) tag the Pi puts on its audio packets
 **may carry through to the hotspot → iPhone downlink**, which is exactly where the iPhone's browsing competes. It's not
-guaranteed: some vendor offload paths (tethering offload in the modem/Wi-Fi firmware) re-mark or ignore DSCP, and a
-NAT/forward path could re-mark, though Linux forwarding preserves DSCP by default. Hence the sniffer check in Phase 1.3
+guaranteed:
+- many phones use a vendor FullMAC driver (Qualcomm, Broadcom) rather than mac80211, with their own DSCP → TID map
+  (typically `DSCP >> 3`, so EF → TID 5, which is still above best effort);
+- tethering hardware offload in the modem/Wi-Fi firmware can re-mark or ignore DSCP;
+- a NAT/forward path could re-mark, though Linux forwarding preserves DSCP by default. Hence the sniffer check in Phase 1.3
 looks at **both** hops.
 
 ### The client's uplink matters too
@@ -307,11 +310,188 @@ Phase 2.1 is for the foreground case: an app or web client on screen, over a bus
 
 ---
 
-
 ## Out of scope
-- Anything on the phone or hotspot side.
-- 5 GHz: the 3A+ supports it, but the iPhone's non-compatibility hotspot often sits on ch 149+. Investigate `iw reg get` / `iw list` with `GB` separately. **Do not** fake the country code.
+- Anything on the phone or hotspot side, beyond the app follow-up (A) below.
+- ~~5 GHz: the 3A+ supports it, but the iPhone's non-compatibility hotspot often sits on ch 149+.~~ The guess was wrong:
+  Stuart's iPhone hotspot measured on **ch 36**. The investigation is now **Phase 3** below. **Do not** fake the country
+  code.
 - Bluetooth on the hotspot phone (2.4 GHz coexistence). Mention it in the Portable docs as a user tip only.
+
+---
+
+## Phase 3 — Why the Pi 3A+ can't see a 5 GHz phone hotspot (research only, 2026-10-20)
+
+**The facts:**
+- **Stuart's iPhone Personal Hotspot with Maximise Compatibility OFF** (measured from his Mac, joined to it): **channel 36**,
+  5 GHz, 80 MHz, 802.11ax, **WPA2/WPA3 Personal**, country GB.
+- The **Samsung Galaxy A26** hotspot in 5 GHz mode shows the same symptom. Its channel and security are unmeasured.
+- In both cases the Pi **never even listed the SSID**. It appeared only once the hotspot was forced to 2.4 GHz.
+- So this is a **scan/visibility** problem, not authentication: a WPA3 problem would show the SSID and then fail to join.
+- The iPhone is the priority, because it's the phone Stuart will use with the Portable most.
+
+### Ruled out from the source
+| Suspect | Finding |
+|---|---|
+| No regulatory country, so world mode | **No.** `setup_once()` runs `iw reg set <COUNTRY>` at **every boot**, from the settings partition (setup's choice), else the image's `pocket.conf`, else the code default `GB`. The image also runs `raspi-config nonint do_wifi_country` at build time. The setup page has a "Country (two letters — sets the legal Wi-Fi channels)" field. Stuart confirms GB. |
+| The channel is restricted for GB | **No, not for ch 36.** 5150–5250 MHz is open indoors in GB (ETSI), with no DFS. The old ch 149+ theory doesn't apply to this iPhone. |
+| Our own network list filters on security | **No.** `Box.scan()` keeps every row `nmcli … wifi list` returns. The SECURITY column only decides the "(open)" label, and `scan_while_ap()` lists every `SSID:` line from `iw … scan ap-force`. The setup page's dropdown is that list, unfiltered. **Now tested** (`scan_lists_every_security`): "WPA2 WPA3", "WPA3", "SAE", "OWE" and "WPA2 802.1X" are all listed and all marked secure. |
+| Our profile pins 2.4 GHz | **No.** Only the box's *own hotspots* set `802-11-wireless.band bg`. Client profiles set no band (also now tested). |
+| How a WPA2/WPA3 network is saved | `wifi-sec.key-mgmt wpa-psk`, PMF unset (NM's default, "optional" where supported). NM's `wpa-psk` joins a transition-mode AP by its PSK AKM, so that's right *once the network is visible*. |
+
+### What's left — the leading theory: 5 GHz is passive-only (no-IR) in the radio's firmware
+**The mechanism:**
+- brcmfmac doesn't use cfg80211's regulatory database for its channel flags. It reads the channel list **from the
+  firmware** (`brcmf_construct_chaninfo`), and the firmware applies its own **CLM** table for whatever country code it
+  actually accepted.
+- `iw reg set GB` reaches the firmware through `brcmf_cfg80211_reg_notifier`. With no per-board country map, the Pi
+  passes "GB" with rev 0. If the CLM blob doesn't accept it, the firmware stays on its default (world-like) domain. The
+  kernel then logs something like `brcmf_cfg80211_reg_notifier: Country code iovar returned err = -52`, while
+  `iw reg get` still says GB for the global domain.
+- In that state, 5 GHz channels are typically marked **no-IR** (passive).
+
+**Why that would hide the hotspot:**
+- On a no-IR channel the Pi may **not send probe requests**. Neither the scan nor NetworkManager's directed probe for a
+  "not visible" network is sent.
+- It can only *hear beacons*. An idle phone hotspot is a poor beaconer. The iPhone's goes quiet when no Personal Hotspot
+  screen is open and expects devices to wake it (our own setup-page hint already says it is "usually not visible while
+  you are setting this up"). Phone hotspots also often answer probes rather than advertise widely.
+- So: **5 GHz → passive-only on the Pi → no probe → idle hotspot never heard → never listed.** On 2.4 GHz, channels 1–11
+  allow active scanning even in world mode, so the probe goes out and the phone answers. That fits every observation,
+  including the Samsung.
+
+**Other explanations to keep open:**
+1. **Firmware age.** Older CYW43455 firmware (the 7.45.x line) predates 802.11ax. It *should* still hear an ax AP's
+   legacy beacon, but HE-only or 80 MHz quirks on ch 36 are a known class of trouble. The `dmesg` firmware line will tell.
+2. **WPA3/PMF — secondary.** This wouldn't hide the SSID, but if it shows up once the scan is fixed and then won't join,
+   it is the next suspect:
+   - brcmfmac SAE needs firmware/supplicant support the 3A+ may lack. `wpa-psk` avoids SAE entirely on a
+     transition-mode AP.
+   - Some brcmfmac firmware fails association to transition-mode APs when PMF is negotiated "optional". The usual fix is
+     `802-11-wireless-security.pmf disable` (value 1) **on that profile only**. That's safe on a transition AP
+     (MFPR=0); a WPA3-only network can't be joined by this chip anyway.
+   - Proposal *if* it's confirmed: on a join that fails with an association or handshake reason to a network whose scan
+     row says WPA3, retry once with `pmf disable`, and keep it on that profile if it works. Not implemented, pending the
+     device evidence.
+
+### Read-only checks (the Portable was unreachable from here today — `vibepocket.local` and its last address didn't answer, so these are for Stuart)
+With the iPhone hotspot **on, Maximise Compatibility OFF**, and the Personal Hotspot screen **open** on the phone:
+```
+iw reg get                                         # global country AND any "phy#0" block (self-managed / custom)
+iw phy phy0 channels                               # every channel with its flags: is 5180 MHz (ch 36) "No IR"? disabled?
+iw list | sed -n '/Frequencies/,/^[[:space:]]*[A-Z][a-z]* [a-z]*:/p'   # same, older iw
+dmesg | grep -i brcmf                              # firmware version line, and any "Country code iovar returned err"
+journalctl -k -b | grep -i -E 'brcmf|regulatory'   # the same if dmesg has rotated
+nmcli -f SSID,CHAN,FREQ,SECURITY dev wifi list     # the cached list (no rescan): is ANY 5 GHz network listed at all?
+iw phy phy0 info | grep -i -E 'SAE|PMF|MFP|00-0f-ac:8'   # does the driver advertise SAE (AKM 00-0f-ac:8) / MFP?
+```
+**What the answers mean:**
+- `No IR` on 5180 → the theory holds.
+- 5 GHz home or neighbour networks listed but not the phone → the phone isn't beaconing. Try with the hotspot screen
+  open.
+- No 5 GHz networks at all → firmware or regulatory. The `dmesg` country error is the smoking gun.
+
+**Hotspot side:**
+- iPhone: there's no channel choice. Maximise Compatibility is the only switch, and it moves the hotspot to **2.4 GHz
+  and plain WPA2** together, so it can't tell the two theories apart.
+- Samsung A26 (One UI): Hotspot → Configure → Band offers 2.4 GHz / 5 GHz (and "2.4 GHz and 5 GHz" on some models), and
+  Security offers **WPA2-Personal**, WPA3 or WPA2/WPA3. **The decisive test: 5 GHz + WPA2-Personal.**
+  - Pi still can't see it → visibility (the no-IR theory).
+  - Pi sees and joins it → it was the WPA3 transition after all.
+  - Then 5 GHz + WPA2/WPA3 → the PMF question.
+  - Note the channel One UI picks: Mac → Option-click Wi-Fi.
+
+### Proposals (nothing implemented — Phase 3 is research)
+1. **Say it in the setup page, from the radio's own answer.** At start, `vibeserver-pocket` can read `iw phy` once. If
+   every 5 GHz channel is No-IR or disabled, put `"band5": "passive"` in `state.json`. The Wi-Fi card then says *"This
+   box's Wi-Fi can only listen on 5 GHz here, so a phone hotspot on 5 GHz may not appear — use Maximise Compatibility /
+   2.4 GHz."* It's honest, cheap, and replaces today's blanket hint with a fact about this box.
+2. **Fix the country at the firmware, never by faking it.** If `dmesg` shows the country iovar refused, the fix is
+   firmware: a newer `firmware-brcm80211` / CLM blob that carries GB, via the converge's package list. Setting a
+   country the owner isn't in is never the fix.
+3. **The country the box uses should be the owner's.** The image default is `COUNTRY=GB`. A box flashed and used
+   abroad runs GB rules until someone edits the field, and that is a *wrong* country, the very thing we don't want.
+   - The setup page already knows the owner's **location country** (`cfg.country`, set for RDS, or worked out from the
+     town and lat/lon lookup).
+   - Proposal: when the Wi-Fi country is still the image default and the location country differs, **pre-fill** the
+     Wi-Fi country from it, with a one-line note, and save it only when the owner presses Save Wi-Fi.
+   - Never derived from an IP address, never silent.
+4. If Phase 3's evidence lands on WPA3/PMF instead, the per-profile `pmf disable` retry above.
+
+---
+
+## Follow-up A — the app tagging its own end (proposal, NOT implemented: app changes ride a later release)
+The iPhone → hotspot hop carries the app's TCP ACKs for the audio socket, plus its own requests. On hop 2 the hotspot →
+iPhone downlink is the hotspot's to classify. Both clients open their audio socket **natively**, so both can tag it,
+cheaply and safely:
+
+- **iOS** — `VibePowerModule.swift` builds every audio socket as an `NWConnection` from
+  `VibePowerModule.socketParams(for:)`:
+  - the VibeServer local audio socket (`openLocalAudioConn`, ~line 2305);
+  - the UberSDR audio socket (`openAudioWsNW`, ~2083);
+  - FM-DX (`startFmdxAudioOnMain`, ~876).
+  - One line on those params: **`params.serviceClass = .interactiveVoice`**. Apple maps it to DSCP EF and WMM AC_VO on
+    Wi-Fi, and to Fastlane/QoS-map networks. It applies to the whole connection, so the iPhone's ACKs for our audio go
+    out as voice too.
+  - Safe: a network that ignores it is no worse off. The flow is real-time, low-bitrate audio, which is exactly what the
+    class is for.
+  - Not for the waterfall, which is React Native's SocketRocket socket. Leave that best effort.
+  - `URLSessionWebSocketTask`'s `networkServiceType = .voip/.responsiveAV` doesn't apply: these sockets aren't URLSession.
+- **Android** — `VibeStreamService.kt` opens the audio socket through OkHttp (`openLocalAudioConn`, ~line 951). Give that
+  `OkHttpClient` a `socketFactory` that wraps `SocketFactory.getDefault()` and calls **`socket.trafficClass = 0xB8`**
+  (IP_TOS = EF) on each socket it creates. TLS layers on top of that socket, so `wss` keeps the mark.
+  - Use a client dedicated to the audio socket, so nothing else is marked.
+  - Android Wi-Fi drivers map DSCP → UP themselves (EF → 5 or 6). No permission needed.
+- **Web client:** a browser can't mark a WebSocket. Nothing to do; Phase 1/2 on the server is what a browser listener
+  gets.
+- **Both:** behind `TCP_NODELAY` (already the platform default for these sockets). No protocol change, and nothing a
+  server can see.
+- **Rules (per AGENTS.md):** iOS first, compile-check Swift locally, and ship it in the next mega build, not its own.
+
+---
+
+## Checks for Stuart (on device)
+
+**0. Before anything:** the Portable's listener count is 0 (`curl -s http://vibepocket.local:48000/vibeserver.json`, and
+the radio's own `/r/<id>/vibeserver.json`).
+
+**Phase 0 — power save**
+1. On the box *as it is now* (older build): `iw dev wlan0 get power_save`, then
+   `nmcli -f NAME,802-11-wireless.powersave connection show` (a profile reading `0 (default)` or `3 (enable)` is the stale
+   case).
+2. After the update and a service restart: the journal says `Wi-Fi power save switched off in N saved profile(s)…`. The
+   nmcli line shows `2 (disable)` for every `vibe-*` profile, and `iw dev wlan0 get power_save` says **off**.
+3. Leave it joined for an hour (reassociations happen): it still says off. If it ever logs `power save was ON … switched
+   off`, that's brcmfmac re-enabling it, and the 60 s re-check catching it.
+4. The setup page's Wi-Fi line reads "… Wi-Fi power saving off."
+
+**Phase 1 — marks (sniffer, both hops)**
+1. On the Mac: Option-click Wi-Fi → Open Wireless Diagnostics → Window → Sniffer. Set the hotspot's **channel** and
+   **width** (the A26 on 2.4 GHz will be 1, 6 or 11, at 20 MHz). Capture ~30 s while listening in the app (foreground,
+   waterfall on), then again with the app backgrounded and Safari loading a video on the iPhone.
+2. Open the `.pcap` in Wireshark. The frames are encrypted, but the 802.11 QoS header (TID) is not.
+   - Find the MACs: the **Pi** is `wlan0`'s address (`ip link show wlan0`), the **iPhone** is in Settings → General →
+     About → Wi-Fi Address (with private address off for this hotspot, or read it from the A26's connected-devices
+     list), and the **hotspot** is the BSSID.
+   - **Hop 1** (Pi → hotspot): `wlan.ta == <Pi MAC> && wlan.fc.type_subtype == 0x28` → `wlan.qos.tid`. Expect a steady
+     ~50 frames/s at **TID 6** (audio), bursts at **TID 0** (waterfall), and **TID 1** only while panning the map.
+   - **Hop 2** (hotspot → iPhone): `wlan.ta == <hotspot BSSID> && wlan.ra == <iPhone MAC>`. Look for the same steady
+     ~50/s small frames at **TID 6 or 5**. If they're there, the A26 is carrying our EF mark onto the hop where the
+     browsing competes, and the browsing itself should be TID 0. If hop 2's audio is TID 0, the A26 (or its tethering
+     offload) strips or ignores DSCP. Then only Follow-up A and a less busy channel can help that hop.
+   - **iPhone → hotspot**: today the iPhone's ACKs for the audio will be TID 0. That's what Follow-up A changes.
+   - Statistics → Conversations or IO Graph with `wlan.qos.tid` per hop gives a one-picture answer.
+3. Server log on the Pi: `journalctl -u vibeserver-radios -b | grep 'wifi qos'` should show
+   `audio socket marked (TOS ok, priority ok)`.
+
+**Phase 2 — audio first**
+1. App in the **foreground**, waterfall running, on the A26 hotspot at 2.4 GHz. Stream a video on the A26 itself, or on a
+   second device on that hotspot. Expected: audio holds, and the waterfall visibly slows to ~2 fps during the worst of it,
+   then returns. The log says `waterfall yielding to audio for <ip> — audio N ms queued …` (at most once a minute).
+2. Repeat the original incident (app backgrounded, Safari browsing). As explained in Phase 2's notes, the waterfall isn't
+   involved there. That case tests Phases 0 and 1 (and later A). If it still stutters with power save off and EF on hop
+   1, note hop 2's TIDs from the sniffer.
+
+**Phase 3 — 5 GHz:** the read-only commands and the A26 band/security test in Phase 3 above.
 
 ## Done when
 - Phase 0: the tests pass, an upgraded box reports `power_save off`, and the stale-connection migration is proven.
