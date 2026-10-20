@@ -25,6 +25,7 @@ import {
   shareSummary, parseShared, sharedLineText, shareTuneStep, shareFromManual, manualFieldFrom,
   MANUAL_SHARE_MODES, SHARE_MODE_LABEL, type ShareOut, type SharedStation,
 } from '../../../src/services/chatShare';
+import { kbField } from './padKeyboard';
 import { answerBand, isAnswer, isQuestion, bannerLine, BannerGate, phraseDecoder, phraseWiki, ANSWER_WINDOW_MS, DIAL_PHRASES } from '../../../src/services/dialChat';
 
 /** The vocabulary, in the order a conversation actually runs: ask, act, answer, thank.
@@ -277,6 +278,12 @@ export function initChat(d: Deps) {
     const manSend = document.createElement('button');
     manSend.className = 'btn'; manSend.textContent = 'Send';
     manual.append(freq, unit, mode, manSend);
+    // ★ The controller keyboard (padKeyboard.ts): its number pad's kHz/MHz key is this unit picker, and ↵ is Send.
+    kbField(freq, {
+      title: 'FREQUENCY TO SHARE',
+      unit: () => (unit.value === 'kHz' ? 'khz' : 'mhz'),
+      setUnit: (u) => { unit.value = u === 'khz' ? 'kHz' : 'MHz'; },
+    });
     /* ★ STARTS WHERE THE DIAL IS — "check out" usually means "here", so the common case is Manual → Send.
      *  ✗ Not while DAB is on: the frequency under a multiplex is not a station; Bookmark has the service. */
     const prefill = () => {

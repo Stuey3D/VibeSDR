@@ -501,6 +501,11 @@ if npx tsx scripts/test_pocket_connection.ts; then pass=$((pass+1)); else fail=$
 if npx tsx scripts/test_gamepad_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE CONTROLLER GUIDE (2026-10-19): the shared drawing data, its words against the scheme, the layout rules.
 if npx tsx scripts/test_pad_guide.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE CONTROLLER KEYBOARD (decided 2026-10-20): the layouts and the hand-over rule, shared with the app (V12's own tests,
+#    unchanged), and the web page's promises read from its source (padKeyboard.ts / gamepad.ts).
+if npx tsx scripts/test_kb_layouts.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_kb_handover.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_web_pad_keyboard.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
@@ -613,6 +618,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     follows the window (lines when wide, a list when narrow).
 printf '\n\033[1m── the controller guide on the served page (simulated pad, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-pad-guide.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE CONTROLLER KEYBOARD (decided 2026-10-20): only for a pad that is being USED; open by pad, type, submit; touch,
+#     physical-key and pad hand-overs keep the text and caret; pad back lets go of a box; password mode; both profiles.
+printf '\n\033[1m── the controller keyboard on the served page (simulated pad, end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-pad-keyboard.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ FREQUENCY AT THE POINTER (Kiko, 2026-10-16, "like OpenWebRX"): a MOUSE over the waterfall/spectrum shows the

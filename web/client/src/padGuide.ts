@@ -24,6 +24,8 @@ const ROLE: Record<ArtRole, string> = {
 };
 
 let layout: PadLayout = 'sticks';
+/** The web page's addition to the shared typing lines: a computer has a mouse and a keyboard as well as a touchscreen. */
+const WEB_KB_LINE = 'On a computer, click the box or just type on the keyboard — the on-screen keyboard steps aside, keeping what you typed';
 let built = false;
 
 const $ = (id: string) => document.getElementById(id);
@@ -54,6 +56,8 @@ function render() {
   $('pgTitle')!.textContent = g.title;
   $('pgSub')!.textContent = g.sub;
   $('pgFoot')!.textContent = g.foot;
+  // ★ TYPING — the controller keyboard's controls (padKeyboard.ts), the app's words, plus the page's own hand-over line.
+  $('pgKb')!.innerHTML = [...g.keyboard, WEB_KB_LINE].map((t) => `<p>${esc(t)}</p>`).join('');
   const marks = g.items.map((it, i) =>
     `<g><circle cx="${it.at[0]}" cy="${it.at[1]}" r="13" style="fill:var(--pg-grnbg);stroke:var(--pg-grn);stroke-width:2.5"/>` +
     `<text x="${it.at[0]}" y="${it.at[1] + 6}" font-family="Helvetica Neue, Arial, sans-serif" font-size="17" font-weight="700" ` +
