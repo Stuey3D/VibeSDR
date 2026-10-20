@@ -44,7 +44,17 @@ import {
 } from '../services/instancesApi';
 import { checkConnection, detectServerType, probeServer, parseServerAddress, DEFAULT_PORT,
          fetchOccupancy, type ServerOccupancy, isKiwiProtocol, isHttpBackend, resolveServerScheme,
+         detectWithTls, TlsNotTrusted,
          type BackendType, type ServerType } from '../services/sdrTypes';
+import { forgetPinForUrl, pinForUrl } from '../services/tlsTrust';
+import { formatFingerprint } from '../utils/tlsPin';
+
+/** ★ GitHub #52: a probe whose server presented a certificate the person declined has ALREADY been explained by the
+ *  trust prompt — stop quietly (true). Anything else is rethrown. */
+function tlsHandled(e: unknown): true {
+  if (e instanceof TlsNotTrusted) return true;
+  throw e;
+}
 import { vibeServerNeedsPin } from '../services/vibeAuth';
 import { buildServerUrl, parseServerUrl, withScheme } from '../utils/serverUrl';
 
@@ -355,6 +365,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [editFav,     setEditFav]       = useState<Favourite | null>(null);
   const [editName,    setEditName]      = useState('');
   const [editUrl,     setEditUrl]       = useState('');
+  /** ★ GitHub #52: the certificate the person trusted for this saved server's host:port, if any — shown with FORGET. */
+  const [editPin,     setEditPin]       = useState<{ sha256: string; at?: number } | null>(null);
   // Auto-discovered RTL-TCP servers (mDNS/Bonjour) — live while the picker is focused.
   const [discovered,  setDiscovered]    = useState<DiscoveredServer[]>([]);
   const [tcpName,     setTcpName]       = useState('');
@@ -607,7 +619,24 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     setEditFav(fav);
     setEditName(fav.name);
     setEditUrl(fav.url);
+    setEditPin(null);
+    pinForUrl(fav.url).then(setEditPin).catch(() => {});
   }, []);
+  const forgetEditPin = useCallback(async () => {
+    if (!editFav) return;
+    await forgetPinForUrl(editFav.url);
+    setEditPin(null);
+  }, [editFav]);
+  /** Long press on a custom server: Delete, plus Forget when a certificate is trusted for it (GitHub #52). */
+  const tcpFavActions = useCallback(async (f: TcpFav) => {
+    const pin = f.url ? await pinForUrl(f.url) : null;
+    Alert.alert(f.name, `${f.host}:${f.port}${pin ? `\n\nTrusted certificate (SHA-256)\n${formatFingerprint(pin.sha256)}` : ''}`, [
+      { text: 'Cancel', style: 'cancel' },
+      ...(pin && f.url ? [{ text: 'Forget certificate', onPress: () => { void forgetPinForUrl(f.url!); } }] : []),
+      { text: 'Delete', style: 'destructive' as const, onPress: () => removeTcpFav(f) },
+    ]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tcpFavs]);
   const saveEditFav = useCallback(async () => {
     if (!editFav) return;
     const url = editUrl.trim();
@@ -1452,7 +1481,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     let url = parsed.url;
     if (!type) {
       setConnecting(true);
-      const probed = await probeServer(parsed.host, parsed.port, null, parsed.url, parsed.explicitScheme);
+      let probed: Awaited<ReturnType<typeof probeServer>>;
+      try { probed = await probeServer(parsed.host, parsed.port, null, parsed.url, parsed.explicitScheme); }
+      catch (e) { setConnecting(false); tlsHandled(e); return; }
       setConnecting(false);
       if (!probed) {
         Alert.alert('Custom server',
@@ -1466,7 +1497,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       //   dialled as ws://host:8073, closed in 50 ms, and showed "server stopped responding".
       //   The type is the user's to choose; the scheme is still found out, never guessed.
       setConnecting(true);
-      url = await resolveServerScheme(parsed.url, false);
+      try { url = await resolveServerScheme(parsed.url, false); }
+      catch (e) { setConnecting(false); tlsHandled(e); return; }
       setConnecting(false);
     }
     if (save) {
@@ -1545,7 +1577,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     let favUrl = f.url;
     if (!favUrl && isHttpBackend(proto) && proto !== 'vibeserver') {
       setConnecting(true);
-      favUrl = await resolveServerScheme(buildServerUrl('http', f.host, f.port), false);
+      try { favUrl = await resolveServerScheme(buildServerUrl('http', f.host, f.port), false); }
+      catch (e) { setConnecting(false); tlsHandled(e); return; }
       setConnecting(false);
       const healed = favUrl;
       const next = tcpFavs.map(t => (t.host === f.host && t.port === f.port ? { ...t, url: healed } : t));
@@ -1591,7 +1624,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // previous build mis-saved as kiwi). Detection returns null only when the
     // host can't be reached — then keep the stored type rather than guessing.
     // ★ Hand it what we already believe this server is — a known Kiwi is not asked for our files.
-    let detected = await detectServerType(fav.url, fav.serverType);
+    // ★ GitHub #52: an https favourite refused for its certificate asks the person (detectWithTls); a decline stops.
+    let detected: BackendType | null;
+    try { detected = await detectWithTls(fav.url, fav.serverType); }
+    catch (e) { tlsHandled(e); return; }
 
     // ★★★ GitHub #52 SELF-HEAL. Earlier builds saved a typed `host:8073` as http://host:8073 — a
     //   guess. If nothing answers there, ask the SAME host, port and path over https; if that
@@ -1600,7 +1636,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (!detected && /^http:\/\//i.test(fav.url) && fav.serverType !== 'vibeserver') {
       const p = parseServerUrl(fav.url);
       const tls = p ? withScheme(p, 'https').url : null;
-      const tlsType = tls ? await detectServerType(tls, fav.serverType) : null;
+      let tlsType: BackendType | null = null;
+      try { tlsType = tls ? await detectWithTls(tls, fav.serverType) : null; }
+      catch (e) { tlsHandled(e); return; }
       if (tls && tlsType) {
         await updateFavourite(fav.url, { url: tls }).catch(() => {});
         setFavourites(await getFavourites());
@@ -1663,7 +1701,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // (NSAllowsArbitraryLoads) — most Kiwi/OpenWebRX receivers are hobbyist HTTP
     // boxes with no TLS, so we don't block them.
     setConnecting(true);
-    const probed = await probeServer(u.host, u.port, null, u.url, u.explicitScheme);
+    let probed: Awaited<ReturnType<typeof probeServer>>;
+    try { probed = await probeServer(u.host, u.port, null, u.url, u.explicitScheme); }
+    catch (e) { setConnecting(false); tlsHandled(e); return; }
     setConnecting(false);
     if (!probed) {
       // Typed a bare host with no port? DEFAULT_PORT guessed 80/8073, which is
@@ -2495,6 +2535,18 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
               placeholder="Address (host, IP or URL)" placeholderTextColor={C.textDim}
               value={editUrl} onChangeText={setEditUrl} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
+            {/* ★ GitHub #52: a certificate trusted on first use for this server's host:port — and the way to forget it. */}
+            {editPin && (
+              <View style={{ marginTop: 10, gap: 6 }}>
+                <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 1 }}>TRUSTED CERTIFICATE (SHA-256)</Text>
+                <Text selectable style={{ fontFamily: Platform.select({ ios: 'Courier', default: 'monospace' }), fontSize: fs(11), color: C.value }}>
+                  {formatFingerprint(editPin.sha256)}
+                </Text>
+                <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border, alignSelf: 'flex-start' }]} onPress={forgetEditPin}>
+                  <Text style={{ fontFamily: F, fontSize: fs(13), color: C.keyIdle }}>Forget certificate</Text>
+                </TouchableOpacity>
+              </View>
+            )}
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
               <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={() => setEditFav(null)}>
                 <Text style={{ fontFamily: F, fontSize: fs(13), color: C.keyIdle }}>Cancel</Text>
@@ -2866,10 +2918,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     <ChooserRow key={`${f.host}:${f.port}`}
                       style={[styles.row, { borderColor: C.borderBright }]}
                       onPress={() => { void connectTcpFav(f); }}
-                      onLongPress={() => Alert.alert(f.name, `${f.host}:${f.port}`, [
-                        { text: 'Cancel', style: 'cancel' },
-                        { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
-                      ])}
+                      onLongPress={() => { void tcpFavActions(f); }}
                     >
                       <Image source={require('../../assets/rtltcp.png')}
                         style={{ width: 26, height: 26, tintColor: C.key, marginRight: 8 }} resizeMode="contain" />

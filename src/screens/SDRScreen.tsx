@@ -212,6 +212,8 @@ import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
+import { checkTlsAfterFailure } from '../services/tlsTrust';
+import { tlsTarget } from '../utils/tlsPin';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -5037,6 +5039,24 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── Connect ───────────────────────────────────────────────────────────────
 
+  /* ★★★ GitHub #52 — A RECEIVER WITH ITS OWN CERTIFICATE. A first connection over https that failed may have failed
+   *  on the certificate (an OpenWebRX+ with a self-signed pair, the case casm hit). Ask services/tlsTrust: it probes
+   *  the certificate and, if the person may trust it, asks them. Trusted → connect again at once. Declined → the
+   *  "couldn't connect" card, saying why. Not a certificate problem → `then`, i.e. the error handling below exactly
+   *  as before. Returns false (and does nothing) when there is nothing to ask: plain http, or a session that had
+   *  already connected — a certificate does not change mid-session. */
+  const tlsGateFailure = (base: string, then: () => void): boolean => {
+    if (connectedOnceRef.current || !tlsTarget(base)) return false;
+    checkTlsAfterFailure(base).then((o) => {
+      if (destroyed.current) return;
+      if (o === 'trusted') { setServerLost(false); setServerLostWhy(null); setConnEpoch((n: number) => n + 1); return; }
+      if (o === 'none') { then(); return; }
+      setServerLostWhy({ reason: `${base}: the server's certificate is not trusted on this device`, neverConnected: true });
+      setServerLost(true);
+    }).catch(() => then());
+    return true;
+  };
+
   useEffect(() => {
     // ★★★ NEVER OPEN A SOCKET TO A RECEIVER WHOSE OWNER HAS SAID NO. The directory told us before
     //     we left the picker, so connecting would take a slot on someone's radio, stream for ten
@@ -5054,6 +5074,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     //     TRY AGAIN, TAKE OVER, or back to the picker — all of which clear this.
     if (terminalRefusal.current) return;
     destroyed.current = false;
+    // ★ GitHub #52: once per attempt — the certificate question is asked at most once before the normal error path.
+    let tlsAsked = false;
     /* ★★ A NEW CONNECTION KNOWS NOTHING ABOUT THE LAST ONE'S HEALTH. The pill is drawn only from
      *  what the server has said, and a server that says nothing must show none — so a stale pill
      *  from the previous receiver would be a reading attributed to a machine that never sent it.
@@ -5397,7 +5419,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           ifText: hz > 0 ? `IF ${Math.round(hz / 1000)}k${auto ? ' auto' : ''}`
                          : (auto ? 'IF wide auto' : 'IF wide') });
       },
-      onServerLost: (reason?: string, neverConnected?: boolean) => {
+      onServerLost: function onLost(reason?: string, neverConnected?: boolean) {
+        // ★ GitHub #52: a socket that never opened over https asks about the certificate first (tlsGateFailure).
+        if (neverConnected && !tlsAsked && tlsGateFailure(connectBase, () => { tlsAsked = true; onLost(reason, neverConnected); })) return;
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
         // the server is usually still restarting).
@@ -6328,8 +6352,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           }
         }
       },
-      onError: (msg) => {
+      onError: function onErr(msg) {
         if (destroyed.current) return;
+        // ★ GitHub #52: a first connection over https that failed asks about the certificate first (tlsGateFailure).
+        if (!tlsAsked && tlsGateFailure(connectBase, () => { tlsAsked = true; onErr(msg); })) return;
         // ★★★ A STALE ADMIN CREDENTIAL MUST NOT LOCK THE OWNER OUT OF LISTENING. The ticket minted
         //     at the picker is short-lived (ten minutes) and rides the CONNECT URL — so unlocking,
         //     then choosing a radio a while later, presents an EXPIRED credential and the server
@@ -6622,7 +6648,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ Typed, NOT `(c as any).setAdminAuth?.()`. That form is why this went unnoticed: with the
       //   method missing, optional chaining made it a silent no-op rather than an error.
       if (adminAuthQRef.current) c.setAdminAuth?.(adminAuthWireRef.current);
-      c.connect(f, m, { allowServerDefault: !restored }).catch(() => {});
+      // ★ GitHub #52: a rejected first connect over https may be the certificate — asked once (tlsGateFailure).
+      c.connect(f, m, { allowServerDefault: !restored }).catch(() => { if (!tlsAsked) tlsGateFailure(connectBase, () => {}); });
     }).catch(() => {
       if (cancelled || destroyed.current) return;
       lastTuneLoaded.current = true;
@@ -6632,7 +6659,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ Typed, NOT `(c as any).setAdminAuth?.()`. That form is why this went unnoticed: with the
       //   method missing, optional chaining made it a silent no-op rather than an error.
       if (adminAuthQRef.current) c.setAdminAuth?.(adminAuthWireRef.current);
-      c.connect(status.frequency, status.mode, { allowServerDefault: true }).catch(() => {});
+      c.connect(status.frequency, status.mode, { allowServerDefault: true }).catch(() => { if (!tlsAsked) tlsGateFailure(connectBase, () => {}); });
     });
     // ★★★ GIVE crashGuard A WAY TO KILL THIS SESSION. A render crash resets navigation, but this
     // client and the NATIVE audio engine would otherwise survive it — and then every later

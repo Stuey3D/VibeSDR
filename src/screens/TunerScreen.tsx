@@ -35,6 +35,8 @@ import { fmdxDeclaredRange } from '../services/fmdxDirectory';
 import { requestSync } from '../services/cloudSync';
 import { fmdxLayout, LOGO_BOX_COMPACT } from '../constants/fmdxLayout';
 import { FMDX_TUNE_LO, FMDX_TUNE_HI, FMDX_DIAL_VIEW_LO, FMDX_DIAL_VIEW_HI } from '../constants/fmBand';
+import { checkTlsAfterFailure } from '../services/tlsTrust';
+import { tlsTarget } from '../utils/tlsPin';
 
 // FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
 // demod + RDS, native MP3 audio. No waterfall — station/RDS panels fill the top,
@@ -144,6 +146,8 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   const [st, setSt] = useState<FmdxState | null>(null);
   const [connected, setConnected] = useState(false);
+  /** ★ GitHub #52: bumped when the person trusts this server's certificate, to connect again. */
+  const [tlsEpoch, setTlsEpoch] = useState(0);
   const [paused, setPaused] = useState(false);   // power-saving pause (media controls) → disconnected
   const [error, setError] = useState<string | null>(null);
   const [logo, setLogo] = useState<string | null>(null);
@@ -458,13 +462,27 @@ export default function TunerScreen({ route, navigation }: Props) {
     });
 
     const uuid = uuidv4();
+    /* ★★ GitHub #52: a first connection over https that failed may have failed on the certificate (a server with its
+     *  own self-signed pair). Asked ONCE per attempt; trusted → connect again; declined → say so; not a certificate
+     *  problem → the error exactly as before. */
+    let everConnected = false, tlsAsked = false;
+    const failed = (m: string) => {
+      if (destroyed.current) return;
+      if (everConnected || tlsAsked || !tlsTarget(baseUrl)) { setError(m); return; }
+      tlsAsked = true;
+      checkTlsAfterFailure(baseUrl).then((o) => {
+        if (destroyed.current) return;
+        if (o === 'trusted') setTlsEpoch((n) => n + 1);
+        else setError(o === 'none' ? m : "This server's certificate is not trusted on this device");
+      }).catch(() => setError(m));
+    };
     const backend = createBackend('fmdx', baseUrl, uuid, {
       onSpectrum: () => {},
       onStatus:   () => {},
-      onError:    (m) => { if (!destroyed.current) setError(m); },
-      onConnect:  () => { if (!destroyed.current) { setConnected(true); setError(null); } },
+      onError:    (m) => failed(m),
+      onConnect:  () => { if (!destroyed.current) { everConnected = true; setConnected(true); setError(null); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
-      onServerLost: () => { if (!destroyed.current) setError('Server stopped responding'); },
+      onServerLost: () => failed('Server stopped responding'),
       onFmdxInfo: (info) => {
         if (destroyed.current) return;
         setServerInfo(info);
@@ -533,7 +551,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       },
     });
     backendRef.current = backend;
-    backend.connect().catch((e) => { if (!destroyed.current) setError(String(e?.message ?? e)); });
+    backend.connect().catch((e) => failed(String(e?.message ?? e)));
     // FM-DX lock-screen card: neutral FM artwork + server name (the native side
     // also disables skip + owns reconnect for the shared tuner).
     VibePowerModule?.setInstanceName?.(instanceName ?? 'FM-DX');
@@ -549,7 +567,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       backendRef.current?.destroy();
       backendRef.current = null;
     };
-  }, [baseUrl]);
+  }, [baseUrl, tlsEpoch]);
 
   // ── Connection-link watchdog: degrade the 3-bar meter when /text frames go
   //    stale (green → yellow → red → down), independent of a single frame. ──

@@ -38,6 +38,7 @@ import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
 import ServerModeScreen     from './src/screens/ServerModeThemed';   // ★ in the user's colours — see there
 import LegacyPackageNotice  from './src/components/LegacyPackageNotice';
+import TlsTrustPrompt       from './src/components/TlsTrustPrompt';
 import TunerScreen          from './src/screens/TunerScreen';
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
@@ -1027,6 +1028,8 @@ export default function App() {
             <Stack.Screen name="Tuner"          component={TunerScreen}          options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
+        {/* ★ GitHub #52: "Trust this server?" for a receiver with its own certificate — one place, any screen. */}
+        <TlsTrustPrompt />
         </CrashBoundary>
 
         {!splashDone && (
