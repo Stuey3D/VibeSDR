@@ -31644,7 +31644,11 @@ void LocalSdrShim::overloadTick() {
          *  ★★ WHAT STILL STOPS IT IS THE CONVERTER, which is the limit that means something here:
          *     the ceiling test below is untouched, so a strong ensemble cannot reach the rails.
          *  ★ Cutting is never gated by any of this — anything asking for LESS gain still gets it. */
-        const bool dabClimbFree = g_dabMode.load(std::memory_order_relaxed);
+        /* ★ And SSB/CW, which are judged on headroom ONLY (vibe_agc_rules.h §5): the plateau and the floor test are
+         *  inferences about the signal, and the floor one misreads a converter at low gain — the 8-bit quantisation
+         *  floor does not fall with the gain, so after a deep overload cut the "gain-normalised floor" reads lifted
+         *  and the loop could never climb back (the AGC bench: cut to 8.7 dB by a blowtorch, then stuck there). */
+        const bool dabClimbFree = g_dabMode.load(std::memory_order_relaxed) || headroomOnly;
         if (!dabClimbFree && g_snrPlateau.load(std::memory_order_relaxed)) {
             if (peak > g_snrPlateauPeak.load(std::memory_order_relaxed) - 6.0) return;
             g_snrPlateau.store(false, std::memory_order_relaxed);
