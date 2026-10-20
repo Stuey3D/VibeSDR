@@ -116,6 +116,55 @@ AVAHI_CONF    = "/etc/avahi/avahi-daemon.conf"
 #     itself after every join and once a minute while joined (powersave_check) — brcmfmac can switch it back on after a
 #     reassociation or a firmware recovery, with no change NetworkManager would report.
 POWERSAVE_RECHECK_SEC = 60
+# ★★★ WPA2/WPA3 PHONE HOTSPOTS (Stuart's iPhone and Galaxy A26, 2026-10-20: both 5 GHz WPA2/WPA3 "transition" hotspots,
+#     neither ever joined by the Pi 3A+, which joins his WPA2-only mesh on the same 5 GHz channel at 433 Mbit/s).
+#  ★★ WHAT NETWORKMANAGER DOES WITH key-mgmt wpa-psk (read from its source, nm-supplicant-config.c): with PMF at its
+#     default ("optional") and a wpa_supplicant built with SAE, it hands the supplicant "WPA-PSK WPA-PSK-SHA256 FT-PSK SAE
+#     FT-SAE" — and against a transition-mode access point (PSK + SAE offered) the supplicant PREFERS SAE, i.e. WPA3. On
+#     the 3A+'s brcmfmac firmware SAE is the weak point (external auth / offload). Only PMF "disable" leaves SAE out
+#     ("do not operate in WPA3-Personal transition mode when PMF is set to disabled"), so the box asks for plain WPA2-PSK,
+#     which every transition-mode network must accept (MFPR=0 is part of the definition of transition mode).
+#  ★ So client networks are saved with PMF DISABLE (NM's 1). A network that turns out to need PMF (WPA2 with PMF
+#    required — rare; a WPA3-only network cannot be joined by this chip anyway) is caught by the one-off retry in
+#    join(): PMF "optional" (2), kept on that profile if it works. migrate_pmf() brings older profiles over.
+PMF_DISABLE, PMF_OPTIONAL = "1", "2"
+# ★★★ THE JOIN HISTORY (Stuart, 2026-10-20: "whether it connects or not who knows but it's a pain in the arse" — a box
+#     that leaves the home network for a hotspot vanishes from it, so nobody saw whether the join worked or why not).
+#     The last JOIN_KEEP attempts, on the settings partition (survives a power cycle), shown on the setup page. SSIDs are
+#     private: it travels only in the admin-gated state, like the saved networks.
+JOIN_HISTORY = "/var/lib/vibeserver-pocket/join-history.json"
+JOIN_KEEP = 20
+
+
+def pmf_value(v):
+    """nmcli prints PMF as "1", "1 (disable)", "disable", "0 (default)", "2 (optional)"… → "0".."3" ("" unknown)."""
+    v = (v or "").strip().lower()
+    m = re.match(r"(\d)", v)
+    if m:
+        return m.group(1)
+    return {"default": "0", "disable": "1", "optional": "2", "required": "3"}.get(v.split(" ")[0] if v else "", "")
+
+
+def join_result(reason):
+    """NetworkManager's reason for a failed activation → one word the owner can read in the history."""
+    r = reason or ""
+    if re.search(r"not be found|not found|no network", r, re.I):
+        return "not seen"
+    if re.search(r"secret|password|psk|4-way|handshake|authenticat", r, re.I):
+        return "auth failed"
+    if re.search(r"IP configuration|DHCP|ip-config|no available address", r, re.I):
+        return "DHCP failed"
+    if re.search(r"timed out|timeout|associat", r, re.I):
+        return "assoc timeout"
+    return "failed"
+
+
+def band_of(freq):
+    try:
+        f = int(freq)
+    except (TypeError, ValueError):
+        return ""
+    return "2.4 GHz" if f < 3000 else ("5 GHz" if f < 5925 else "6 GHz")
 
 
 def powersave_disabled(v):
@@ -416,6 +465,10 @@ class Box:
         self.link = None              # the joined link: {signal, tx, rx, retry} — shown beside the choice
         self.link_ssid = ""           # ★ the network the RADIO is on (iw), not the name in the slot
         self._link_prev = None        # (tx packets, tx retries) at the last reading, for the retry %
+        self.scan_info = {}           # ★ ssid -> {"freq", "security", "via": "scan"|"probe"} from the last look
+        self.retried = set()          # ★ networks the PMF retry has been tried on this run (once each)
+        self.history_path = JOIN_HISTORY
+        self.history = load_history(self.history_path)
         self.power_save = None        # ★ the radio's own power save, as `iw … get power_save` says: "off" | "on" | None
         self._ps_key = None           #   the join it was last checked for (connection, since)
         self._ps_next = 0.0           #   …and when it is next re-checked while that join lasts
@@ -596,12 +649,23 @@ class Box:
     def scan(self):
         """A full scan (station mode only — NM refuses one while the radio is a hotspot).
         Returns the set of SSIDs seen, or None if the scan failed."""
-        rc, out = self.sh.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list",
+        rc, out = self.sh.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,FREQ", "device", "wifi", "list",
                                "ifname", self.dev, "--rescan", "yes"], timeout=30)
         if rc != 0:
             return None
+        best = self.parse_list(out)
+        self.scan_info = {k: {"freq": v["freq"], "security": v["security"], "via": "scan"} for k, v in best.items()}
+        self.scan_cache = sorted(({"ssid": v["ssid"], "signal": v["signal"], "secure": v["secure"]} for v in best.values()),
+                                 key=lambda x: -x["signal"])[:40]
+        self.scan_at = int(time.time())
+        return set(best)
+
+    @staticmethod
+    def parse_list(out):
+        """`nmcli -t -f SSID,SIGNAL,SECURITY,FREQ device wifi list` → {ssid: {...}}, the strongest row per name.
+        ★ Every security is kept (WPA2/WPA3 transition, WPA3, SAE, OWE, enterprise): only an empty column is open."""
         best = {}
-        for line in out.splitlines():
+        for line in (out or "").splitlines():
             f = terse_split(line)
             if len(f) < 3 or not f[0]:
                 continue
@@ -609,11 +673,51 @@ class Box:
                 sig = int(f[1])
             except ValueError:
                 sig = 0
+            m = re.match(r"\s*(\d+)", f[3]) if len(f) > 3 else None
             if f[0] not in best or sig > best[f[0]]["signal"]:
-                best[f[0]] = {"ssid": f[0], "signal": sig, "secure": f[2] not in ("", "--")}
-        self.scan_cache = sorted(best.values(), key=lambda x: -x["signal"])[:40]
-        self.scan_at = int(time.time())
-        return set(best)
+                best[f[0]] = {"ssid": f[0], "signal": sig, "secure": f[2] not in ("", "--"),
+                              "security": f[2] if f[2] != "--" else "", "freq": int(m.group(1)) if m else None}
+        return best
+
+    def probe(self, ssids):
+        """★★★ ASK FOR A SAVED NETWORK BY NAME (a directed probe) — for the ones the last scan did not see. A phone hotspot
+        often does not answer a wildcard scan (an idle iPhone hotspot barely beacons) but answers its own name.
+        ★★ PRIVACY, WEIGHED: a directed probe says the name out loud to anyone listening. So only SAVED names, only those the
+           scan missed, and only while the box is looking for a network anyway (boot, link lost, a menu choice, or an idle
+           upgrade check) — never on a timer of its own and never for a network it can already see. Marking every profile
+           "hidden" instead would have the supplicant shout every saved name (the home network's too) on every scan.
+        Returns the set of those names that answered; their freq/security are merged into scan_info as via "probe"."""
+        ssids = [x for x in ssids if x]
+        if not ssids or not self.dev:
+            return set()
+        args = ["nmcli", "device", "wifi", "rescan", "ifname", self.dev]
+        for x in ssids:
+            args += ["ssid", x]
+        if self.sh.run(args, timeout=20)[0] != 0:
+            return set()
+        self.sh.sleep(4)                                  # ★ the rescan returns at once; results land a few seconds later
+        rc, out = self.sh.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,FREQ", "device", "wifi", "list",
+                               "ifname", self.dev, "--rescan", "no"], timeout=20)
+        if rc != 0:
+            return set()
+        got = self.parse_list(out)
+        hits = set()
+        for x in ssids:
+            on = ssid_on_air(x, set(got))
+            if on is not None:
+                hits.add(x)
+                self.scan_info.setdefault(on, {"freq": got[on]["freq"], "security": got[on]["security"], "via": "probe"})
+        return hits
+
+    def found_by_name_only(self, name, ssid):
+        """★★ A network that answered only when asked by name is saved as "not visible" (802-11-wireless.hidden yes), so
+        NetworkManager's own join — and its autoconnect at the next boot — probes for it by name too; a profile left
+        "visible" would look for it with a wildcard scan and not find it again. Only for networks PROVEN to need it."""
+        if self.get(name, "802-11-wireless.hidden") == "yes":
+            return
+        log("network \"%s\" answers only when asked by name — saved as not visible, so it is always asked for by name"
+            % ssid.encode("unicode_escape").decode("ascii"))
+        self.nm_change(["nmcli", "connection", "modify", name, "802-11-wireless.hidden", "yes"])
 
     def scan_while_ap(self):
         """★ A scan WITHOUT taking the hotspot down, where the driver allows it (iw's ap-force).
@@ -677,6 +781,24 @@ class Box:
                 fixed.append(n)
         if fixed:
             log("Wi-Fi power save switched off in %d saved profile(s) from an older build: %s" % (len(fixed), ", ".join(fixed)))
+        return fixed
+
+    def migrate_pmf(self):
+        """★★ PROFILES SAVED BEFORE THE PMF RULE (see PMF_DISABLE): every secured vibe-net-N still at NM's default PMF is
+        modified to PMF off. An explicit "optional"/"required" is left alone — that is the retry's verdict for a network
+        that needs it. Idempotent, by name, profile only (never a down/up). Returns the names it changed."""
+        fixed = []
+        for n, t in self.connection_names():
+            if t != "802-11-wireless" or not (n.startswith(NET_PREFIX) and n[len(NET_PREFIX):].isdigit()):
+                continue
+            if not self.get(n, "802-11-wireless-security.key-mgmt"):
+                continue                                  # open: no PMF to speak of
+            if pmf_value(self.get(n, "802-11-wireless-security.pmf")) not in ("", "0"):
+                continue
+            if self.nm_change(["nmcli", "connection", "modify", n, "802-11-wireless-security.pmf", PMF_DISABLE]) == 0:
+                fixed.append(n)
+        if fixed:
+            log("WPA2/WPA3 hotspots: %d saved network(s) set to plain WPA2 (PMF off): %s" % (len(fixed), ", ".join(fixed)))
         return fixed
 
     def powersave_check(self):
@@ -795,6 +917,59 @@ class Box:
         self.join_reason = "" if rc == 0 else nm_reason(getattr(self.sh, "last_stderr", ""))
         self.read_active()
         return rc == 0
+
+    def security_used(self, name):
+        """What this profile asks for, in the history's words."""
+        if not self.get(name, "802-11-wireless-security.key-mgmt"):
+            return "open"
+        pmf = pmf_value(self.get(name, "802-11-wireless-security.pmf"))
+        return {"1": "WPA2-PSK, PMF off", "2": "WPA2/WPA3 (SAE allowed), PMF optional",
+                "3": "PMF required"}.get(pmf, "WPA2/WPA3 (SAE allowed), PMF default")
+
+    def join(self, name, ssid, via="scan"):
+        """★★★ JOIN A SAVED CLIENT NETWORK, RECORDED — and ONE retry with the other PMF setting when the network refused
+        us at authentication or association (never for "not found": nothing was there to refuse). PMF off → optional
+        (a WPA2 network that requires PMF); anything else → off (a WPA2/WPA3 transition network whose SAE this chip
+        fumbles). Once per network per run, so a wrong password costs one extra attempt, not one every rescan. A retry
+        that works is KEPT on the profile and logged; one that does not puts the profile back as it was."""
+        used = self.security_used(name)
+        ok_ = self.up(name)
+        self.record(ssid, "joined" if ok_ else join_result(self.join_reason), self.join_reason, visible=via, name=name, used=used)
+        if ok_ or not self.get(name, "802-11-wireless-security.key-mgmt") or name in self.retried:
+            return ok_
+        if join_result(self.join_reason) not in ("auth failed", "assoc timeout", "failed"):
+            return False
+        self.retried.add(name)
+        was = pmf_value(self.get(name, "802-11-wireless-security.pmf")) or "0"
+        other = PMF_OPTIONAL if was == PMF_DISABLE else PMF_DISABLE
+        self.nm_change(["nmcli", "connection", "modify", name, "802-11-wireless-security.pmf", other])
+        used2 = self.security_used(name)
+        ok_ = self.up(name)
+        self.record(ssid, "joined" if ok_ else join_result(self.join_reason), self.join_reason, visible=via, name=name, used=used2)
+        if ok_:
+            log("network \"%s\" refused \"%s\" but took \"%s\" — kept that way"
+                % (ssid.encode("unicode_escape").decode("ascii"), used, used2))
+        else:
+            self.nm_change(["nmcli", "connection", "modify", name, "802-11-wireless-security.pmf", was])
+        return ok_
+
+    def record(self, ssid, result, reason="", visible="scan", name="", used=None):
+        """One line of the join history (see JOIN_HISTORY). The same network failing the same way again updates the last
+        line (its time and a count) instead of pushing the useful lines out — an absent phone is asked for every two
+        minutes."""
+        info = self.scan_info.get(ssid_on_air(ssid, set(self.scan_info)) or ssid) or {}
+        e = {"t": int(time.time()), "ssid": ssid, "freq": info.get("freq"), "band": band_of(info.get("freq")),
+             "seen": info.get("security", ""), "visible": visible,
+             "used": used if used is not None else (self.security_used(name) if name else ""),
+             "result": result, "reason": (reason or "")[:140], "n": 1}
+        last = self.history[-1] if self.history else None
+        if last and result != "joined" and all(last.get(k) == e[k] for k in ("ssid", "result", "used", "visible", "reason")):
+            last["t"], last["n"] = e["t"], int(last.get("n", 1)) + 1
+            last["freq"], last["band"], last["seen"] = e["freq"] or last.get("freq"), e["band"] or last.get("band"), e["seen"] or last.get("seen")
+        else:
+            self.history.append(e)
+            del self.history[:-JOIN_KEEP]
+        save_history(self.history_path, self.history)
 
     def join_error(self, ssid):
         """★ What the owner is told when a join fails — NetworkManager's reason, not a guess. It used to say "check its
@@ -990,6 +1165,20 @@ class Box:
                 if visible is None:
                     log("the scan failed twice — trying the saved networks by name")
                     visible, unseen = set(), True
+        # ★★★ THE ONES THE SCAN MISSED ARE ASKED FOR BY NAME (see probe()) — a blind join costs JOIN_WAIT_SEC each, a
+        #     directed probe a few seconds for all of them. From a working link too (an upgrade: the caller only gets here
+        #     while nobody is listening), where a blind join is never made.
+        want = [(r, n, x, h) for r, n, x, h in saved
+                if (below_rank is None or r < below_rank) and ssid_on_air(x, visible) is None
+                and not (below_rank is not None and self.failed_until.get(n, 0) > self.sh.now())]
+        probed = self.probe([x for _, _, x, _ in want]) if want and not unseen else set()
+        for r, n, x, h in want:
+            if x in probed:
+                if not h:
+                    self.found_by_name_only(n, x)
+            elif r <= 3:
+                self.record(x, "not seen", "asked by name, no answer", visible="no", name=n)
+        visible = set(visible) | {ssid_on_air(x, set(self.scan_info)) or x for x in probed}
         now = self.sh.now()
         for rank, name, ssid, hidden in saved:
             if below_rank is not None and rank >= below_rank:
@@ -1008,7 +1197,7 @@ class Box:
                 self.correct_ssid(name, ssid, on_air)
                 ssid = on_air
             log("joining network %s (%s)" % (rank if rank < 9 else "other", ssid))
-            if self.up(name):
+            if self.join(name, ssid, via="probe" if ssid in probed else ("scan" if on_air is not None else "blind")):
                 self.captive_off()
                 self.mode = "client"
                 self.since = int(time.time())
@@ -1080,13 +1269,23 @@ class Box:
             self.mode = "connecting"
         vis = self.scan() or set()                      # ★ a scan keeps the link: nobody is dropped until it is there
         on_air = ssid_on_air(w["ssid"], vis)
+        via = "scan" if on_air is not None else "blind"
+        if on_air is None and self.probe([w["ssid"]]):
+            # ★★ The scan missed it but it answered its name (a phone hotspot): join it the same way from now on.
+            on_air, via = ssid_on_air(w["ssid"], set(self.scan_info)) or w["ssid"], "probe"
+            if not w["hidden"]:
+                self.found_by_name_only(w["name"], w["ssid"])
+                w["hidden"] = True
         if on_air is None and not w["hidden"]:
+            if not w.get("said"):
+                w["said"] = True
+                self.record(w["ssid"], "not seen", "not in the scan and no answer by name", visible="no", name=w["name"])
             return
         if on_air is not None and on_air != w["ssid"]:
             self.correct_ssid(w["name"], w["ssid"], on_air)
             w["ssid"] = on_air
         log("joining the chosen network (%s)" % w["ssid"])
-        if self.up(w["name"]):
+        if self.join(w["name"], w["ssid"], via=via):
             self.captive_off()
             self.mode = "client"
             self.since = int(time.time())
@@ -1149,6 +1348,12 @@ class Box:
                     "802-11-wireless.hidden", "yes" if net["hidden"] else "no"]
             if psk:
                 args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
+                # ★★★ PLAIN WPA2 (PMF off) — see PMF_DISABLE. Kept only where the retry already proved this very network
+                #     needs PMF (same slot, same name, an explicit optional/required on it).
+                keep = (modify and self.get(name, "802-11-wireless.ssid") == net["ssid"]
+                        and pmf_value(self.get(name, "802-11-wireless-security.pmf")) in ("2", "3"))
+                if not keep:
+                    args += ["wifi-sec.pmf", PMF_DISABLE]
             if self.nm_change(args, secret=True) != 0:
                 self.last_error = "network %d could not be saved" % rank
         for n in sorted(existing):
@@ -1371,6 +1576,8 @@ class Box:
             # ★★★ False when the settings partition is not in use (vibeserver-pocket-data could neither find
             #     nor make it): setup would be held in RAM and lost at the next restart. The page says so.
             "settingsSaved": not os.path.exists(VOLATILE_FILE),
+            # ★★★ The last JOIN_KEEP join attempts, oldest first (see JOIN_HISTORY) — admin-only, like the rest of this.
+            "joins": self.history,
         }
         write_state_file(self.state_path, doc)
 
@@ -1536,6 +1743,23 @@ def load_conf(paths=(CONF, STATE_CONF)):
     return conf
 
 
+def load_history(path):
+    """The join history from the settings partition; [] when missing or unreadable (never a reason to fail)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            h = json.load(f)
+        return [e for e in h if isinstance(e, dict)][-JOIN_KEEP:] if isinstance(h, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def save_history(path, history):
+    try:
+        write_atomic(path, json.dumps(history[-JOIN_KEEP:], ensure_ascii=False), mode=0o600)   # ★ SSIDs: root only
+    except OSError:
+        pass                                              # ★ no settings partition: it lasts until the restart
+
+
 def write_atomic(path, text, mode=0o644):
     """★★★ A POWER CUT LEAVES THE OLD FILE OR THE NEW ONE, NEVER HALF OF EITHER: temp file, fsync,
     rename, fsync the directory (the rename itself is only durable once its directory is)."""
@@ -1636,6 +1860,7 @@ def setup_once(box):
     # ★★ Power save off in every profile we own, including those an older build saved (Phase 0.1) — by name, so it needs
     #    no radio and runs on a wired box too (a USB dongle's profile is ready when it appears).
     box.migrate_powersave()
+    box.migrate_pmf()
     # ★★ THE DNS HIJACK — every name resolves to the box, but ONLY on NM's shared (hotspot)
     #    connections: this directory is read by the dnsmasq NM starts for a hotspot and by nothing
     #    else, so the box's own lookups as a client are untouched.

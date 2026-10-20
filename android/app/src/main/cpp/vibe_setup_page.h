@@ -301,6 +301,18 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <p class="why" id="wifiSummaryText" style="margin-bottom:10px;white-space:pre-line"></p>
         <button type="button" class="ghost" id="wifiChange">Change Wi-Fi</button>
         <span class="note" id="wifiSummaryMsg" style="margin-left:10px"></span>
+        <!-- ★★★ TRY A SAVED NETWORK NOW (Stuart, 2026-10-20: fewer steps to test a phone hotspot). The same choice as the
+             app's menu (POST /vibeserver/pocket/connection, the box's own network only): the box looks for it for about
+             a minute and a half, joins it the moment it appears, and goes back where it was if it never does. -->
+        <div id="wifiTry" style="margin-top:12px"></div>
+        <div class="note hide" id="wifiTryMsg" style="margin-top:8px;white-space:pre-line"></div>
+      </div>
+      <!-- ★★★ THE JOIN HISTORY (Stuart, 2026-10-20). A box that leaves this network for a hotspot vanishes from it, so
+           nobody saw whether the join worked or why not: the box keeps its last 20 attempts (through a restart) and
+           shows them here. -->
+      <div id="wifiJoins" class="hide" style="margin-top:14px">
+        <p class="lbl" style="margin:0 0 6px">Recent join attempts (newest first)</p>
+        <div style="overflow-x:auto"><table id="wifiJoinsTable" style="width:100%;border-collapse:collapse;font-size:12px"></table></div>
       </div>
       <!-- ★★★ A BOX THAT CANNOT SAVE SAYS SO, FIRST (Stuart's v6 card, 2026-10-10: no settings partition, so
            setup went perfectly and the first restart brought it back as new). From the state's settingsSaved. -->
@@ -331,9 +343,12 @@ body.wifiFirst .wifiFirstOnly { display: block; }
          apostrophe (&lsquo;Sam's&rsquo; or &lsquo;Sam&rsquo;s&rsquo;) both work &mdash; the box saves the name
          exactly as the iPhone sends it once it sees it.</div>
       <!-- ★★ Stuart's Pi 3 A+ (2026-10-10) would not join his iPhone's hotspot until Maximise Compatibility was on: newer
-           iPhones run the hotspot on 5 GHz with newer security, which the Pi's Wi-Fi may not see or join. -->
-      <div class="hint"><b>On the iPhone, turn on Maximise Compatibility</b> (Settings &rsaquo; Personal Hotspot) &mdash;
-         without it this box may not be able to join. On an Android phone, set the hotspot to <b>2.4 GHz</b>.</div>
+           iPhones run the hotspot on 5 GHz with WPA2/WPA3 security. Since 2026-10-20 the box joins such hotspots as plain
+           WPA2 and asks for them by name (vibeserver-pocket, PMF_DISABLE / probe) — NOT YET PROVEN ON THE DEVICE, so the
+           old advice stays as the fallback, worded as one. -->
+      <div class="hint">If the box will not join your phone&rsquo;s hotspot, <b>on the iPhone turn on Maximise
+         Compatibility</b> (Settings &rsaquo; Personal Hotspot), or on an Android phone set the hotspot to <b>2.4 GHz</b>
+         or its security to <b>WPA2</b>. The join attempts below say what happened.</div>
 
       <h2 style="margin-top:22px">This box&rsquo;s own hotspot</h2>
       <p class="why">Used when none of your networks is in range. It is secured (WPA2): join it with this
@@ -5794,6 +5809,87 @@ function wifiCollapseRender() {
     + "\nOwn hotspot: " + w.ap.ssid
     + (w.lastError ? "\nLast problem: " + w.lastError + "." : "");
 }
+/** ★★★ The join history (state.json "joins", oldest first) as a short table, newest first. */
+function wifiJoinsRender() {
+  const j = ((WIFI && WIFI.joins) || []).slice().reverse();
+  $("wifiJoins").classList.toggle("hide", !j.length);
+  if (!j.length) return;
+  const td = 'style="padding:3px 6px;border-top:1px solid rgba(128,128,128,.25);vertical-align:top"';
+  const when = t => { const d = new Date(t * 1000); return d.toLocaleDateString(undefined, {day: "numeric", month: "short"}) + " " + d.toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"}); };
+  const how = v => v === "probe" ? "asked by name" : v === "scan" ? "in the scan" : v === "no" ? "not found" : "by name (blind)";
+  $("wifiJoinsTable").innerHTML =
+    '<tr><th align="left">When</th><th align="left">Network</th><th align="left">Band</th><th align="left">Seen as</th>'
+    + '<th align="left">Tried as</th><th align="left">Result</th></tr>'
+    + j.map(e => `<tr><td ${td}>${esc(when(e.t || 0))}</td><td ${td}>${esc(e.ssid || "")}</td>`
+      + `<td ${td}>${esc(e.band || "?")}${e.freq ? " (" + esc(String(e.freq)) + ")" : ""}</td>`
+      + `<td ${td}>${esc(e.seen || "—")}<br><span class="note">${esc(how(e.visible))}</span></td><td ${td}>${esc(e.used || "")}</td>`
+      + `<td ${td}><b>${esc(e.result || "")}</b>${(e.n || 1) > 1 ? " ×" + esc(String(e.n)) : ""}`
+      + `${e.reason ? '<br><span class="note">' + esc(e.reason) + "</span>" : ""}</td></tr>`).join("");
+}
+
+/** ★★★ "Try now" for each saved network, with feedback until it is decided (see #wifiTry). */
+let WIFI_TRY = null;
+function wifiTryRender() {
+  const saved = (WIFI && WIFI.saved) || [];
+  const host = $("wifiTry");
+  host.innerHTML = saved.length && WIFI.mode !== "wifi-off"
+    ? '<span class="note" style="margin-right:6px">Use now:</span>' + saved.map((n, i) =>
+        `<button type="button" class="ghost" data-try="${i + 1}" style="padding:6px 10px;font-size:13px;margin:2px">${esc(n.ssid)}</button>`).join("")
+    : "";
+  host.querySelectorAll("[data-try]").forEach(b => b.onclick = () => wifiTryNow(+b.dataset.try));
+}
+async function wifiTryNow(rank) {
+  const n = ((WIFI && WIFI.saved) || [])[rank - 1];
+  if (!n) return;
+  const msg = $("wifiTryMsg");
+  msg.classList.remove("hide");
+  const from = WIFI.mode === "client" ? WIFI.ssid : "";
+  try {
+    const r = await fetch("/vibeserver/pocket/connection", {method: "POST", cache: "no-store", body: JSON.stringify({to: "net", rank})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw (j.error || ("Refused (" + r.status + ")."));
+  } catch (e) { msg.textContent = "Could not ask the box: " + e; return; }
+  WIFI_TRY = {ssid: n.ssid, from, until: Date.now() + 150000};
+  msg.textContent = "Looking for “" + n.ssid + "”… (up to a minute and a half — switch the hotspot on now if it is off)."
+    + (from ? "\nIf it joins, the box leaves “" + from + "” and this page loses it: open it again on “" + n.ssid
+      + "”, or come back here later — if it cannot join it returns to “" + from + "” by itself, and the attempts below say why." : "");
+  wifiTryPoll();
+}
+async function wifiTryPoll() {
+  const t = WIFI_TRY;
+  if (!t) return;
+  let w = null;
+  try {
+    const r = await fetch("/vibeserver/pocket/wifi?" + await authQuery(), {cache: "no-store"});
+    w = r.ok ? await r.json() : null;
+  } catch (e) { w = null; }
+  const msg = $("wifiTryMsg");
+  if (!w) {
+    // ★ The box has gone from this network — the expected sign of a join elsewhere (or of a look that dropped the link).
+    msg.textContent = "The box has left this network — most likely it is now on “" + t.ssid + "”."
+      + (t.from ? "\nIf it could not join, it comes back to “" + t.from + "” by itself within a couple of minutes; reload then and the attempts below say what happened." : "");
+    if (Date.now() < t.until) setTimeout(wifiTryPoll, 5000); else WIFI_TRY = null;
+    return;
+  }
+  WIFI = Object.assign(WIFI || {}, w);
+  wifiJoinsRender();
+  const last = (w.joins || []).filter(e => e.ssid === t.ssid).pop();
+  if (w.mode === "client" && w.ssid === t.ssid) {
+    msg.textContent = "Joined “" + t.ssid + "”" + (last && last.band ? " (" + last.band + ", " + (last.used || "") + ")" : "") + ".";
+    WIFI_TRY = null; return;
+  }
+  if (w.trying) {
+    msg.textContent = "Looking for “" + t.ssid + "”… " + (w.tryLeft || 0) + " s left."
+      + (last && last.t * 1000 > Date.now() - 150000 ? "\nLast attempt: " + last.result + (last.reason ? " — " + last.reason : "") : "");
+  } else if (Date.now() > t.until - 145000) {
+    msg.textContent = "Not joined “" + t.ssid + "”" + (w.lastError ? ": " + w.lastError : ".")
+      + (last ? "\nLast attempt: " + last.result + (last.reason ? " — " + last.reason : "") : "")
+      + (w.mode === "client" ? "\nStill on “" + (w.ssid || "?") + "”." : "");
+    WIFI_TRY = null; return;
+  }
+  if (Date.now() < t.until) setTimeout(wifiTryPoll, 3000); else WIFI_TRY = null;
+}
+
 $("wifiChange").onclick = () => {
   WIFI_EDITING = true; $("wifiSummaryMsg").textContent = "";
   wifiCollapseRender();
@@ -5802,6 +5898,8 @@ $("wifiChange").onclick = () => {
 
 function wifiRender() {
   wifiCollapseRender();
+  wifiJoinsRender();
+  wifiTryRender();
   $("wifiNow").textContent = wifiNowText() + (WIFI && WIFI.lastError ? "  Last problem: " + WIFI.lastError + "." : "");
   const scan = (WIFI && WIFI.scan) || [];
   const host = $("wifiNets");
