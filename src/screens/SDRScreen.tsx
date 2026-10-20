@@ -130,9 +130,10 @@ import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import FkaSplash from '../components/FkaSplash';
-import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus, useListNav, NavRing, revealIn } from '../components/PanelNav';
+import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus, useListNav, NavRing, revealIn, useOverlay, useOverlayOpen, overlayOpenNow } from '../components/PanelNav';
 import { chooserItems, chooserRowOf, chooserStart, chooserActivate, type ChooserRadio } from '../utils/radioChooserNav';
 import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
+import { NavCard, CardKey } from '../components/NavCard';
 import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
@@ -10319,15 +10320,28 @@ export default function SDRScreen({ route, navigation }: Props) {
   //     connection error (Stuart, 2026-08-16, on the Mac). The comment above says a surface the
   //     keyboard can reach must be one the keyboard can leave — this one could not even be typed
   //     into safely, which is the same rule one step earlier.
-  const anyPanelOpen = menuOpen || stepOpen || chatOpen ||
-                       freqModalOpen || modeSelOpen || audioSheetOpen || serversOpen ||
-                       hwOpen || aboutOpen || ratioOverlayOpen || recordingsOpen ||
-                       cityPickerOpen || keyHelpOpen || (awaitingRadio && !!door) ||
-                       // ★ And the refusal card, which also carries a password box over a live
-                       //   screen. Same overlay, same leak.
-                       !!refusal;
-  const panelOpenRef = useRef(anyPanelOpen);
-  useEffect(() => { panelOpenRef.current = anyPanelOpen; }, [anyPanelOpen]);
+  // ★★★ ONE OVERLAY RULE (controller audit, 2026-10-20 — PanelNav useOverlay). This was a hand-kept list
+  //     (`anyPanelOpen`) and a hand-kept `closeAll`, and both went wrong from either side: the radio chooser was in the
+  //     list with no keys of its own (nothing could be chosen, Back did nothing), and the tour cards, connection cards,
+  //     password box and map were NOT in it (Enter pressed the controls behind them). Now every surface drawn over this
+  //     screen registers itself with its own Back, and the screen yields while ANY is open — those listed here, the
+  //     chooser and refusal card below, and the ones that register themselves (tours, cards, the password box, maps,
+  //     the DAB panel, App-level prompts).
+  //     Back peels ONE layer: the top surface closes; the one beneath has the keys again.
+  useOverlay(menuOpen, { name: 'menu', onBack: () => setMenuOpen(false) });
+  useOverlay(stepOpen, { name: 'step', onBack: () => setStepOpen(false) });
+  useOverlay(chatOpen, { name: 'chat', onBack: () => setChatOpen(false) });
+  useOverlay(freqModalOpen, { name: 'freq', onBack: () => setFreqModalOpen(false) });
+  useOverlay(modeSelOpen, { name: 'mode', onBack: () => setModeSelOpen(false) });
+  useOverlay(audioSheetOpen, { name: 'audio', onBack: () => setAudioSheetOpen(false) });
+  useOverlay(serversOpen, { name: 'servers', onBack: () => setServersCloseToken(t => t + 1) });
+  useOverlay(hwOpen, { name: 'hardware', onBack: () => setHwOpen(false) });
+  useOverlay(aboutOpen, { name: 'about', onBack: () => setAboutOpen(false) });
+  useOverlay(ratioOverlayOpen, { name: 'ratio', onBack: () => setRatioOverlayOpen(false) });
+  useOverlay(recordingsOpen, { name: 'recordings', onBack: () => setRecordingsOpen(false) });
+  useOverlay(cityPickerOpen, { name: 'city', onBack: () => setCityPickerOpen(false) });
+  useOverlay(keyHelpOpen, { name: 'keyhelp', onBack: () => setKeyHelpOpen(false) });
+  const anyPanelOpen = useOverlayOpen();
 
   // Read through a ref: the key listener is installed once and must not capture a stale value.
   const controlsHiddenRef = useRef(controlsHidden);
@@ -10362,6 +10376,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const pickHandle = useRef<{ setFocus(index: number): void } | null>(null);
   const pickNavRef = useRef({ items: pickItems, radios: pickRadios });
   pickNavRef.current = { items: pickItems, radios: pickRadios };
+  useOverlay(pickOn, { name: 'radio chooser', onBack: () => navigation.goBack() });
   const pickFocus = useListNav(
     pickOn,
     pickItems.length,
@@ -10434,6 +10449,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   };
   const refusalBack = () => { setRefusal(null); navigation.goBack(); };
   const refusalItemsRef = useRef(refusalItems); refusalItemsRef.current = refusalItems;
+  useOverlay(!!refusal, { name: 'refusal', onBack: () => refusalBack(), blockTuneZoom: true });
   const refusalFocus = useListNav(
     !!refusal,
     refusalItems.length,
@@ -10482,14 +10498,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     const kb = kbRef.current;
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
 
-    const closeAll = () => {
-      setMenuOpen(false); setStepOpen(false); setChatOpen(false);
-      setFreqModalOpen(false); setModeSelOpen(false); setAudioSheetOpen(false);
-      setHwOpen(false); setAboutOpen(false); setRatioOverlayOpen(false);
-      setRecordingsOpen(false); setCityPickerOpen(false); setKeyHelpOpen(false);
-      setServersCloseToken(t => t + 1);
-    };
-
     // ★ PRIORITY LOW: every panel and box drawn over this screen hears a key first, and takes Back first when it has
     //   a layer of its own to peel (a sub-page, a slider in adjust mode). See hardwareKeys.
     const down = addKeyListener('down', (e) => {
@@ -10518,8 +10526,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (regionCaptured()) return;
       switch (k) {
         case 'Back':
-          // ★ One rule in one place: something open → close it. The panel itself had first refusal (a sub-page).
-          if (panelOpenRef.current) { closeAll(); return true; }
+          // ★ Something open: the top surface's own Back (useOverlay) has already run — never reach past it.
+          if (overlayOpenNow()) return true;
           // ★★ HIDDEN CONTROLS ARE A TRAP WITHOUT THIS. Hiding them removes every button, leaving only a touch-only ▲
           //    chevron — Stuart found it on the TV: "an unrecoverable situation… nothing brings back the controls."
           if (controlsHiddenRef.current) { setControlsHidden(false); return true; }
@@ -10528,7 +10536,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         default: break;
       }
       // With a panel open, movement and Enter belong to it (PanelNav), never to the screen underneath.
-      if (panelOpenRef.current) return;
+      if (overlayOpenNow()) return;
       if (k === 'Enter') { screenHlRef.current.press(); return true; }
       const dir = keyDirOf(k);
       if (dir) { void screenHlRef.current.move(dir); return true; }
@@ -10540,7 +10548,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const NOTCH = 26;   // points of scroll per step, tuned against a wheel detent
     const scroll = emitter.addListener('VibeScroll',
                                        (e: { dx: number; dy: number; x: number; y: number }) => {
-      if (panelOpenRef.current) return;      // a sheet's own scrolling wins
+      if (overlayOpenNow()) return;      // a sheet's own scrolling wins
       const a = kbActions.current;
       // Which control is the pointer over, if any?
       const inRect = (r?: { x: number; y: number; w: number; h: number }) =>
@@ -11186,16 +11194,20 @@ export default function SDRScreen({ route, navigation }: Props) {
               style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', zIndex: 240 }]}>
           {/* ★★ 2026-10-12 colour rule: the card's edge and title are the busy amber (a warning — white on amber /
               neon text), the sentence is the TEXT colour, the answer is a KEY in the CONTROLS colour. */}
+          {/* ★ A pad answers it too (controller audit): the highlight starts on YES, and Back answers as well — both
+              are "I am here". Tune and zoom still work underneath (they answer it anyway, via markInteract). */}
+          <NavCard name="still listening" onBack={markInteract}>
           <View style={[styles.stillHereCard, { borderColor: gt.ink.busy }]}>
             <Text style={[styles.stillHereTitle, { color: gt.ink.busy }]}>STILL LISTENING?</Text>
             <Text style={[styles.stillHereBody, { color: gt.ink.text }]}>
               {`This receiver disconnects idle listeners so others can have a turn.\nYou will be disconnected in ${Math.ceil(idleWarnLeftMs / 1000)}s.`}
             </Text>
-            <TouchableOpacity activeOpacity={0.8} onPress={markInteract}
+            <CardKey preferred activeOpacity={0.8} onPress={markInteract}
                               style={[styles.stillHereBtn, { borderColor: gt.gold.selBorder, backgroundColor: gt.ink.keyBgAct }]}>
               <Text style={[styles.stillHereBtnTxt, { color: gt.gold.sel }]}>YES, I'M HERE</Text>
-            </TouchableOpacity>
+            </CardKey>
           </View>
+          </NavCard>
         </View>
       ) : null}
 
@@ -11293,6 +11305,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Reconnect failed (server full / rate-limited) — tap retries */}
       {!kiwiRefused && reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
+          ref={screenNavRef('reconnectBanner', () => { setReconnectFailedUi(false); setDataSaverOff(false); unmute(); fullReconnect(); })}
           onPress={() => { setReconnectFailedUi(false); setDataSaverOff(false); unmute(); fullReconnect(); }}
           activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>⚠️ RECONNECT FAILED — TAP TO RETRY</Text>
@@ -11307,7 +11320,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                         : 'SDR';
         return (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={sdrMs.serverLostCard}>
+          <NavCard name="connection card" onBack={() => navigation.goBack()}><View style={sdrMs.serverLostCard}>
             <Text style={sdrMs.serverLostTitle}>{serverLostWhy?.neverConnected
               ? `Couldn't connect to this ${lostLabel} server`
               : `${lostLabel} server stopped responding`}</Text>
@@ -11322,24 +11335,24 @@ export default function SDRScreen({ route, navigation }: Props) {
               </Text>
             )}
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
+              <CardKey style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
                 <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={sdrMs.serverLostBtn}
+              </CardKey>
+              <CardKey preferred style={sdrMs.serverLostBtn}
                 onPress={() => { setServerLost(false); fullReconnect(); }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>RECONNECT</Text>
-              </TouchableOpacity>
+              </CardKey>
             </View>
             {/* A Kiwi that keeps kicking a connected user still lets them reach compatibility mode —
                 otherwise unreachable, since the initial-refusal card never shows once it connects. */}
             {isKiwiProtocol(route.params.serverType) && (
-              <TouchableOpacity style={[sdrMs.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
+              <CardKey style={[sdrMs.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
                 onPress={() => { setServerLost(false); setCompatWarn(true); }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
-              </TouchableOpacity>
+              </CardKey>
             )}
-          </View>
+          </View></NavCard>
         </View>
         );
       })()}
@@ -11366,62 +11379,62 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {!kiwiRefused && serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={sdrMs.serverLostCard}>
+          <NavCard name="connection card" onBack={() => navigation.goBack()}><View style={sdrMs.serverLostCard}>
             <Text style={sdrMs.serverLostTitle}>Receiver unavailable</Text>
             <Text style={sdrMs.serverLostBody}>This {rxLabel} has no free channel for you right now — it may be full, or its channels may be password-protected or limited to local users (the directory's user count can be out of date). Pick another receiver, or try again shortly.</Text>
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
+              <CardKey style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
                 <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={sdrMs.serverLostBtn}
+              </CardKey>
+              <CardKey preferred style={sdrMs.serverLostBtn}
                 onPress={() => { setServerBusy(false); fullReconnect(); }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>RETRY</Text>
-              </TouchableOpacity>
+              </CardKey>
             </View>
-            <TouchableOpacity style={[sdrMs.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
+            <CardKey style={[sdrMs.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
               onPress={() => { setServerBusy(false); setCompatWarn(true); }} activeOpacity={0.85}>
               <Text style={sdrMs.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
-            </TouchableOpacity>
-          </View>
+            </CardKey>
+          </View></NavCard>
         </View>
       )}
 
       {/* KiwiSDR refused the connection — our own card, three choices. */}
       {kiwiRefused && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={sdrMs.serverLostCard}>
+          <NavCard name="connection card" onBack={() => { clearKiwiRefused(); navigation.goBack(); }}><View style={sdrMs.serverLostCard}>
             <Text style={sdrMs.serverLostTitle}>Couldn’t connect</Text>
             <Text style={sdrMs.serverLostBody}>{kiwiRefused}</Text>
             <View style={{ gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
-              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt, { alignSelf: 'stretch' }]}
+              <CardKey style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt, { alignSelf: 'stretch' }]}
                 onPress={() => { clearKiwiRefused(); navigation.goBack(); }} activeOpacity={0.85}>
                 <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>BACK TO SERVER LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[sdrMs.serverLostBtn, { alignSelf: 'stretch' }]}
+              </CardKey>
+              <CardKey preferred style={[sdrMs.serverLostBtn, { alignSelf: 'stretch' }]}
                 onPress={() => { clearKiwiRefused(); fullReconnect(); }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>TRY AGAIN</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[sdrMs.serverLostBtn, { alignSelf: 'stretch' }]}
+              </CardKey>
+              <CardKey style={[sdrMs.serverLostBtn, { alignSelf: 'stretch' }]}
                 onPress={() => { clearKiwiRefused(); setCompatWarn(true); }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
-              </TouchableOpacity>
+              </CardKey>
             </View>
-          </View>
+          </View></NavCard>
         </View>
       )}
 
       {/* Warning before opening the receiver's own web UI in compatibility mode. */}
       {compatWarn && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={sdrMs.serverLostCard}>
+          <NavCard name="connection card" onBack={() => { setCompatWarn(false); navigation.goBack(); }}><View style={sdrMs.serverLostCard}>
             <Text style={sdrMs.serverLostTitle}>Open in compatibility mode?</Text>
             <Text style={sdrMs.serverLostBody}>This opens the {rxLabel}’s OWN web interface inside VibeSDR — you’ll use the receiver’s native controls and layout, not VibeSDR’s. The advanced VibeSDR features won’t apply here: no background audio, no recording, no lock-screen or Apple Watch playback, and none of VibeSDR’s waterfall or audio controls. Tap “← VibeSDR” at the top to come back.</Text>
             <View style={{ gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
-              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt, { alignSelf: 'stretch' }]}
+              <CardKey style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt, { alignSelf: 'stretch' }]}
                 onPress={() => { setCompatWarn(false); navigation.goBack(); }} activeOpacity={0.85}>
                 <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>CANCEL</Text>
-              </TouchableOpacity>
+              </CardKey>
               {/* ★★ GREYED WHILE A KEYBOARD IS IN USE (Stuart). Compatibility mode is the
                   receiver's OWN web page, where none of our shortcuts apply and we cannot know
                   what a key would do — so rather than letting the keyboard carry someone into a
@@ -11430,7 +11443,8 @@ export default function SDRScreen({ route, navigation }: Props) {
                   touchscreen, so the button enables and the second tap goes through. No setting
                   to find, no mode to leave — the gesture that would use it is the gesture that
                   unlocks it. */}
-              <TouchableOpacity
+              {/* ★ skip: not in the pad's focus order while a keyboard is in use — the same rule as the greying. */}
+              <CardKey skip={kbInUse}
                 style={[sdrMs.serverLostBtn, { alignSelf: 'stretch' }, kbInUse && { opacity: 0.4 }]}
                 onPress={() => {
                   if (kbInUse) { noteTouchInteraction(); return; }   // first tap: back to touch
@@ -11449,7 +11463,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                   setCompatUrl(toHttpUrl(withKiwiProxyPort((baseUrl || '').trim())) + '/');
                 }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>CONTINUE</Text>
-              </TouchableOpacity>
+              </CardKey>
               {kbInUse && (
                 <Text style={[sdrMs.serverLostBody, { fontSize: 11, textAlign: 'center' }]}>
                   Blocked while you are using a keyboard: this is the receiver's own page, and we
@@ -11458,7 +11472,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                 </Text>
               )}
             </View>
-          </View>
+          </View></NavCard>
         </View>
       )}
 
@@ -11499,44 +11513,44 @@ export default function SDRScreen({ route, navigation }: Props) {
           a background — give the user an escape (the rest of the app is alive). */}
       {!kiwiRefused && specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={sdrMs.serverLostCard}>
+          <NavCard name="connection card" onBack={() => navigation.goBack()}><View style={sdrMs.serverLostCard}>
             <Text style={sdrMs.serverLostTitle}>Waterfall didn’t resume</Text>
             <Text style={sdrMs.serverLostBody}>
               Audio is still running, but the waterfall and spectrum didn’t restart. Reconnect to restore them, or pick another server.
             </Text>
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
+              <CardKey style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
                 <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={sdrMs.serverLostBtn}
+              </CardKey>
+              <CardKey preferred style={sdrMs.serverLostBtn}
                 onPress={() => { setSpecFailed(false); fullReconnect(); }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>RECONNECT</Text>
-              </TouchableOpacity>
+              </CardKey>
             </View>
-          </View>
+          </View></NavCard>
         </View>
       )}
 
       {!kiwiRefused && connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={sdrMs.serverLostCard}>
+          <NavCard name="connection card" onBack={() => navigation.goBack()}><View style={sdrMs.serverLostCard}>
             <Text style={sdrMs.serverLostTitle}>Connection lost</Text>
             <Text style={sdrMs.serverLostBody}>
               Lost connection to {instanceName || 'the server'} — trying to reconnect…
             </Text>
             <ActivityIndicator color={gt.ink.busy} style={{ marginBottom: 14 }} />
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
+              <CardKey style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
                 <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={sdrMs.serverLostBtn}
+              </CardKey>
+              <CardKey preferred style={sdrMs.serverLostBtn}
                 onPress={() => { setConnLost(false); fullReconnect(); }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>RECONNECT</Text>
-              </TouchableOpacity>
+              </CardKey>
             </View>
-          </View>
+          </View></NavCard>
         </View>
       )}
 
@@ -11544,7 +11558,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           the app can never be permanently stuck on the connecting spinner. */}
       {!kiwiRefused && connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={sdrMs.serverLostCard}>
+          <NavCard name="connection card" onBack={() => navigation.goBack()}><View style={sdrMs.serverLostCard}>
             <Text style={sdrMs.serverLostTitle}>Couldn’t connect</Text>
             <Text style={sdrMs.serverLostBody}>
               No response from {instanceName || 'the receiver'}. {route.params.isLocal
@@ -11554,22 +11568,23 @@ export default function SDRScreen({ route, navigation }: Props) {
                   : 'It may be offline or unreachable — try again or pick another server.'}
             </Text>
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
+              <CardKey style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
                 <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={sdrMs.serverLostBtn}
+              </CardKey>
+              <CardKey preferred style={sdrMs.serverLostBtn}
                 onPress={() => { setConnTimedOut(false); fullReconnect(); }} activeOpacity={0.85}>
                 <Text style={sdrMs.serverLostBtnText}>RETRY</Text>
-              </TouchableOpacity>
+              </CardKey>
             </View>
-          </View>
+          </View></NavCard>
         </View>
       )}
 
       {/* Paused → disconnected — tap does a full from-scratch reconnect */}
       {!kiwiRefused && dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
+          ref={screenNavRef('pausedBanner', () => { setDataSaverOff(false); unmute(); fullReconnect(); })}
           onPress={() => { setDataSaverOff(false); unmute(); fullReconnect(); }} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>
         </TouchableOpacity>
@@ -11580,6 +11595,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           (Network instances disconnect on pause, so this is local-only.) */}
       {isLocal && isMuted && !dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
+          ref={screenNavRef('mutedBanner', unmute)}
           onPress={unmute} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>🔇 AUDIO MUTED — TAP TO UNMUTE</Text>
         </TouchableOpacity>

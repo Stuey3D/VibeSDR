@@ -29,7 +29,8 @@
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
-import { useRepeatingKeys } from './PanelNav';
+import { useOverlay } from './PanelNav';
+import { NavCard, CardKey } from './NavCard';
 import { useCoversScreen } from '../hooks/useScreenCovered';
 import { WebView } from 'react-native-webview';
 import { CABBR } from '../assets/countryAbbr';
@@ -1459,8 +1460,12 @@ export default function MapOverlay(
 
   // ★ Back (Backspace / Escape) closes the map. It is OUR page, so keys are not suppressed here — but nothing
   // was listening for a way out, and once inside a map a keyboard user was stuck.
+  // ★★ AN OVERLAY (controller audit group B, 2026-10-20): it was not in the receiver screen's yield list, so the arrows
+  //    and Enter pressed the receiver's controls BEHIND the map. Now the screen yields while it is up, and Back closes
+  //    it only when it is on top — the city picker opened from it takes Back first (it used to close the MAP and leave
+  //    the picker up).
   const closeRef = useRef(onClose); closeRef.current = onClose;
-  useRepeatingKeys(visible, (k: string) => { if (k === 'Back') { closeRef.current(); return true; } }, []);
+  useOverlay(visible, { name: 'map', onBack: () => closeRef.current() });
   useEffect(() => { if (!disconnected) setIgnored(false); }, [disconnected]);
   const injected = useRef<Set<string>>(new Set());
   /* ★★ THE GPU MAP'S FILES FIRST: copied into <documents>/mapgl/ once (mapglPack.ts). Until that
@@ -1717,21 +1722,23 @@ export default function MapOverlay(
         )}
         {disconnected && !ignored && (
           <View style={mo.discWrap} pointerEvents="box-none">
+            <NavCard name="map disconnected" onBack={() => setIgnored(true)}>
             <View style={mo.discCard}>
               <Text style={mo.discTitle}>Receiver disconnected</Text>
               <Text style={mo.discBody}>The server dropped the connection — spots have stopped. You can stay on the map (already-plotted spots remain) or reconnect.</Text>
               <View style={mo.discRow}>
-                <TouchableOpacity style={[mo.discBtn, mo.discBtnAlt]} onPress={() => onBackToList?.()} activeOpacity={0.85}>
+                <CardKey ringColor="#ffffff" style={[mo.discBtn, mo.discBtnAlt]} onPress={() => onBackToList?.()} activeOpacity={0.85}>
                   <Text style={mo.discBtnAltTxt}>Back to list</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={mo.discBtn} onPress={() => { setIgnored(true); onRetry?.(); }} activeOpacity={0.85}>
+                </CardKey>
+                <CardKey preferred ringColor="#ffffff" style={mo.discBtn} onPress={() => { setIgnored(true); onRetry?.(); }} activeOpacity={0.85}>
                   <Text style={mo.discBtnTxt}>Retry</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[mo.discBtn, mo.discBtnAlt]} onPress={() => setIgnored(true)} activeOpacity={0.85}>
+                </CardKey>
+                <CardKey ringColor="#ffffff" style={[mo.discBtn, mo.discBtnAlt]} onPress={() => setIgnored(true)} activeOpacity={0.85}>
                   <Text style={mo.discBtnAltTxt}>Ignore</Text>
-                </TouchableOpacity>
+                </CardKey>
               </View>
             </View>
+            </NavCard>
           </View>
         )}
       </View>

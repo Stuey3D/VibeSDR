@@ -536,6 +536,9 @@ if npx tsx scripts/test_pad_actions.ts; then pass=$((pass+1)); else fail=$((fail
 # ★★★ THE RADIO CHOOSER BY PAD (controller audit §1, 2026-10-20): its focus order, where the highlight starts, and Enter
 #     on a blocked radio moving to the box that would open it.
 if npx tsx scripts/test_radio_chooser_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ ONE OVERLAY RULE (controller audit, 2026-10-20): the top surface owns the keys, Back peels one layer, arrows never
+#     reach the screen beneath, tune passes, a raised tour stays on top, BrowserOverlay keeps Back.
+if npx tsx scripts/test_overlay_stack.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

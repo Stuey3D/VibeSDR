@@ -18,7 +18,9 @@
  *    the RDS fault, pre-empted. Nothing in here re-checks them, and nothing in here should build a
  *    string by concatenating one into JSON.
  */
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { captureRegion, useKeyboardMode, useListNav, useNavFocus, NavRing } from './PanelNav';
+import { screenNavRef } from './ScreenNav';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { LOGO_DECODE } from '../constants/logoDecode';
 import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
@@ -340,8 +342,12 @@ const SvcLogo = React.memo(function SvcLogo({ uri }: { uri: string | null }) {
  * ★ `sv.dls` is per service and already gated (dabTypes.parseDabMessage); `d.dls` is the tuned
  *   one's and is the fallback for the row that is playing, since the server sends it there.
  */
-const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPress, waiting }: {
+const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPress, waiting, focused, ring, onY }: {
   sv: DabState['services'][number]; d: DabState; base: string; readAuth: string; onPress: () => void;
+  /** ★ The pad / keyboard highlight (the box has the keys — see DabPanel). */
+  focused?: boolean; ring?: string;
+  /** Its y in the list, for scrolling the highlight into view. */
+  onY?: (sid: number, y: number) => void;
   /** The "tuning in" line, shown in this row's live-text slot while it is the picked station. */
   waiting?: string;
 }) {
@@ -356,7 +362,8 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPre
   const ann = (d.announce ?? []).filter(a => a.subChId === sv.subch && a.types.length);
   const alarm = ann.some(a => a.alarm);
   return (
-    <TouchableOpacity onPress={onPress} style={[s.svc, active && s.svcActive]} activeOpacity={0.7}>
+    <TouchableOpacity onPress={onPress} style={[s.svc, active && s.svcActive]} activeOpacity={0.7}
+                      onLayout={onY ? (e) => onY(sv.sid, e.nativeEvent.layout.y) : undefined}>
       <SvcLogo uri={logo} />
       <View style={{ flex: 1 }}>
         {/* ★ GREEN for the station that is playing — the browser's `.dabSvc.on` — because gold on
@@ -369,6 +376,7 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPre
         {!!text && <Marquee text={text} style={[s.svcDls, active && { color: C.selLive }]} />}
       </View>
       <Text style={s.svcCodec}>{sv.codec}{sv.kbps ? ` ${sv.kbps}k` : ''}</Text>
+      <NavRing on={!!focused} color={ring ?? '#fff'} radius={6} />
     </TouchableOpacity>
   );
 });
@@ -574,8 +582,65 @@ export default function DabPanel(p: DabPanelProps) {
   const block = p.blockIndex >= 0 ? DAB_BLOCKS[p.blockIndex] : undefined;
   const muxTitle = d?.label || (d && !d.locked ? 'searching…' : block ? block.name : DASH);
 
+  // ── THE DAB BOX BY PAD AND KEYBOARD (controller audit group B, 2026-10-20) ─────────────────────────────────────
+  // ★★ It opens by itself on entering DAB and had no keys at all: the service rows, STATIONS/SIGNAL, BIG, ★ and
+  //    EXIT DAB were unreachable and Back did nothing. It now behaves as the decoder box does on DAB (DecoderPanel,
+  //    Stuart 2026-07-26: "the box IS the interface" — the VFO is locked to the multiplex): it TAKES the keyboard once
+  //    on arrival, the arrows walk [header keys, then each station], Enter picks, Back hands the keys back to the
+  //    screen (where the highlight can return to it — Enter on the box takes them again). A touch hands them back too.
+  //    Tune and zoom still step the block from anywhere (the screen's own keys).
+  const kbOn = useKeyboardMode();
+  const navRing = useNavFocus().ring;
+  const [grab, setGrab] = useState(false);
+  const autoGrabbed = useRef(false);
+  useEffect(() => { captureRegion(grab ? 'dab' : null); }, [grab]);
+  useEffect(() => () => { captureRegion(null); }, []);   // never leave it captured on unmount
+  useEffect(() => {
+    if (!kbOn) { setGrab(false); return; }               // a touch: the hand has it
+    if (autoGrabbed.current) return;
+    autoGrabbed.current = true;
+    setGrab(true);
+  }, [kbOn]);
+  type DabKey = 'pane' | 'big' | 'bm' | 'exit';
+  const hdrKeys: DabKey[] = ['pane', ...(bigUseful ? ['big' as const] : []), ...(p.onBookmarks ? ['bm' as const] : []), 'exit'];
+  const navSvcs = d && pane === 'stations' ? d.services : [];
+  const dabNav = useRef({ hdrKeys, navSvcs }); dabNav.current = { hdrKeys, navSvcs };
+  const listRef = useRef<ScrollView | null>(null);
+  const rowY = useRef<Record<number, number>>({});
+  const onRowY = React.useCallback((sid: number, y: number) => { rowY.current[sid] = y; }, []);
+  const activeAt = navSvcs.findIndex((x) => x.sid === d?.sid);
+  const dabFocus = useListNav(
+    grab, hdrKeys.length + navSvcs.length,
+    (i) => {
+      const { hdrKeys: hk, navSvcs: sv } = dabNav.current;
+      if (i < hk.length) {
+        const k = hk[i];
+        if (k === 'pane') setPane(pane === 'stations' ? 'signal' : 'stations');
+        else if (k === 'big') p.onTall(!tall);
+        else if (k === 'bm') { setGrab(false); p.onBookmarks?.(); }
+        else { setGrab(false); p.onExit(); }
+        return;
+      }
+      const x = sv[i - hk.length];
+      if (x) pick(x.sid);
+    },
+    (i) => {
+      const { hdrKeys: hk, navSvcs: sv } = dabNav.current;
+      const x = sv[i - hk.length];
+      const y = x ? rowY.current[x.sid] : undefined;
+      if (y != null) listRef.current?.scrollTo({ y: Math.max(0, y - 60), animated: true });
+    },
+    undefined,
+    () => { setGrab(false); return true; },
+    {
+      rowOf: (i) => (i < dabNav.current.hdrKeys.length ? 0 : i - dabNav.current.hdrKeys.length + 1),
+      startAt: navSvcs.length ? hdrKeys.length + Math.max(0, activeAt) : hdrKeys.length - 1,
+    },
+  );
+  const keyHl = (k: DabKey) => grab && dabFocus === hdrKeys.indexOf(k) ? { borderColor: navRing, borderWidth: 2 } : null;
+
   const body = (
-    <ScrollView style={{ maxHeight: maxBody }} contentContainerStyle={s.body}
+    <ScrollView ref={listRef} style={{ maxHeight: maxBody }} contentContainerStyle={s.body}
                 showsVerticalScrollIndicator={false}>
       {!!p.error && <Text style={s.notice}>{p.error}</Text>}
       {/* ★★★ SAY WHY IT IS SILENT, IN BOTH PANES. DAB+ is decoded ON THE SERVER — Stuart,
@@ -603,6 +668,7 @@ export default function DabPanel(p: DabPanelProps) {
           {d.services.map(sv => (
             <ServiceRow key={sv.sid} sv={sv} d={d} base={p.base} readAuth={p.readAuth ?? ''}
                         waiting={sv.sid === d.sid ? waitingText : ''}
+                        focused={grab && dabFocus === hdrKeys.length + d.services.indexOf(sv)} ring={navRing} onY={onRowY}
                         onPress={() => pick(sv.sid)} />
           ))}
           {/* ★ The list is the last good one, kept while the FIC is not reading — say so, as the
@@ -854,7 +920,9 @@ export default function DabPanel(p: DabPanelProps) {
   );
 
   return (
-    <DecoderShell bottom={p.bottomOffset} maxWidth={DAB_MAX_W} tall={tall}>
+    <DecoderShell bottom={p.bottomOffset} maxWidth={DAB_MAX_W} tall={tall} borderColor={grab ? navRing : undefined}>
+        {/* ★ A place the screen's highlight can land: Enter takes the keys back into the box. */}
+        <View pointerEvents="none" style={StyleSheet.absoluteFill} ref={screenNavRef('dabBox', () => setGrab(true))} />
         <DecoderHeader>
           <DecoderTitle>DAB</DecoderTitle>
           {/* ★★★ A READOUT, NOT A CONTROL. This was a pair of chevrons either side of the block —
@@ -876,17 +944,17 @@ export default function DabPanel(p: DabPanelProps) {
           {/* ★ The label names where the button GOES, and the state is readable without pressing
               it — the browser's rule for this same control. */}
           <DecoderKey active onPress={() => setPane(pane === 'stations' ? 'signal' : 'stations')}
-                      label={pane === 'stations' ? 'SIGNAL' : 'STATIONS'} />
-          {bigUseful && <DecoderKey active={tall} onPress={() => p.onTall(!tall)} label={tall ? 'SMALL' : 'BIG'} />}
+                      style={keyHl('pane')} label={pane === 'stations' ? 'SIGNAL' : 'STATIONS'} />
+          {bigUseful && <DecoderKey active={tall} style={keyHl('big')} onPress={() => p.onTall(!tall)} label={tall ? 'SMALL' : 'BIG'} />}
           {!!p.onBookmarks && (
-            <DecoderKey onPress={p.onBookmarks} accessibilityLabel="DAB bookmarks" label="★" />
+            <DecoderKey onPress={p.onBookmarks} style={keyHl('bm')} accessibilityLabel="DAB bookmarks" label="★" />
           )}
           {/* ★★★ NO ✕ (Stuart, 2026-09-20). Closing this window left the receiver IN DAB with nothing on
               screen to control it — no station list, no way back except pressing DAB again, which reads as
               having lost the mode rather than having hidden a panel. The web client has never offered it.
               EXIT DAB is the honest way out: it leaves the mode as well as the window. SMALL is there for
               anyone who wants the picture back without leaving DAB. */}
-          <DecoderKey onPress={p.onExit} label="EXIT DAB" />
+          <DecoderKey onPress={p.onExit} style={keyHl('exit')} label="EXIT DAB" />
         </DecoderHeader>
 
         <DecoderBody>{body}</DecoderBody>

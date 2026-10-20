@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Alert, Animated, ActivityIndicator, AppState, Dimensions, LogBox, NativeModules, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { TouchableOpacity } from 'react-native';
+import { useOverlay, useKeyboardMode, useNavFocus } from './src/components/PanelNav';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFonts } from 'expo-font';
 LogBox.ignoreAllLogs();
@@ -965,6 +966,16 @@ export default function App() {
     AsyncStorage.setItem(SPLASH_SEEN_KEY, '1').catch(() => {});
     fadeSplash();
   }, [fadeSplash]);
+  // ★ The first-launch splash by pad and keyboard (controller audit group E, 2026-10-20): it had no keys, so a pad
+  //   user could never get past it and the list underneath took the arrows. While it is up it is an overlay; on the
+  //   first launch Enter or Back = CONTINUE (the ring sits on it). The brief connecting splash just swallows keys.
+  useOverlay(!splashDone, {
+    name: 'splash', level: 1,
+    onEnter: firstOpen ? handleContinue : undefined,
+    onBack: firstOpen ? handleContinue : undefined,
+  });
+  const splashKb = useKeyboardMode();
+  const splashRing = useNavFocus().ring;
 
   // vibesdr:// deep links — drain once fonts are loaded and the first-open flag
   // has resolved (so we don't navigate before the nav container is mounted).
@@ -1056,7 +1067,7 @@ export default function App() {
                   activeOpacity={0.85}
                   style={{
                     marginTop: 26, paddingVertical: 10, paddingHorizontal: 30,
-                    borderRadius: 8, borderWidth: 1, borderColor: '#FFB833',
+                    borderRadius: 8, borderWidth: splashKb ? 3 : 1, borderColor: splashKb ? splashRing : '#FFB833',
                     backgroundColor: 'rgba(255,184,51,0.12)',
                   }}>
                   <Text style={{ color: '#FFB833', fontSize: 13, fontFamily: 'Courier', fontWeight: 'bold', letterSpacing: 1 }}>

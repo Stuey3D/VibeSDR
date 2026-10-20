@@ -16,6 +16,7 @@ import {
   PopupKey, PopupPlate, type PopupTokens,
 } from './PopupShell';
 import { useSurface } from '../contexts/FaceplateContext';
+import { useFieldPopupNav, NavWrap } from './FieldPopupNav';
 import { useAndroidKeyboardHeight } from '../hooks/useAndroidKeyboardHeight';
 
 /**
@@ -67,6 +68,13 @@ export default function VibePinPrompt({ visible, name, initial, note, onSubmit, 
     onSubmit(p, save);
   };
 
+  // ★ Pad and keyboard (controller audit group B): an overlay — Back = Cancel — over [PIN, Cancel, Connect, Save &
+  //   Connect], starting on the field. Its keys were unreachable and Back only let go of the field.
+  const nav = useFieldPopupNav(visible, {
+    name: 'VibeServer PIN', fields: 1, keys: [onCancel, () => submit(false), () => submit(true)],
+    onField: () => inputRef.current?.focus(), onBack: onCancel,
+  });
+
   return (
     <Modal
       visible={visible}
@@ -104,7 +112,7 @@ export default function VibePinPrompt({ visible, name, initial, note, onSubmit, 
             <Text style={styles.sub} numberOfLines={3}>Enter the PIN for {name}</Text>
             <TextInput
               ref={inputRef}
-              style={styles.input}
+              style={[styles.input, nav.field(0) && { borderColor: nav.ring, borderWidth: 2 }]}
               placeholder="PIN"
               placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
               value={pin}
@@ -124,21 +132,27 @@ export default function VibePinPrompt({ visible, name, initial, note, onSubmit, 
             />
             {pt.metal ? (
               <View style={styles.row}>
-                <PopupKey label="CANCEL" onPress={onCancel} height={40} fontSize={12} />
-                <PopupKey label="CONNECT" onPress={() => submit(false)} height={40} fontSize={12} />
-                <PopupKey label="SAVE & CONNECT" primary onPress={() => submit(true)} height={40} fontSize={12} />
+                <PopupKey label="CANCEL" focused={nav.key(0)} onPress={onCancel} height={40} fontSize={12} />
+                <PopupKey label="CONNECT" focused={nav.key(1)} onPress={() => submit(false)} height={40} fontSize={12} />
+                <PopupKey label="SAVE & CONNECT" primary focused={nav.key(2)} onPress={() => submit(true)} height={40} fontSize={12} />
               </View>
             ) : (
               <View style={styles.row}>
+                <NavWrap on={nav.key(0)} color={nav.ring}>
                 <TouchableOpacity style={styles.btn} onPress={onCancel} accessibilityRole="button">
                   <Text style={styles.btnTxtCancel}>Cancel</Text>
                 </TouchableOpacity>
+                </NavWrap>
+                <NavWrap on={nav.key(1)} color={nav.ring}>
                 <TouchableOpacity style={styles.btn} onPress={() => submit(false)} accessibilityRole="button">
                   <Text style={styles.btnTxt}>Connect</Text>
                 </TouchableOpacity>
+                </NavWrap>
+                <NavWrap on={nav.key(2)} color={nav.ring}>
                 <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => submit(true)} accessibilityRole="button">
                   <Text style={styles.btnTxtPrimary}>Save & Connect</Text>
                 </TouchableOpacity>
+                </NavWrap>
               </View>
             )}
           </View>

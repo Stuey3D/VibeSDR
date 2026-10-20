@@ -11,7 +11,7 @@ import { useRecordBuffer, bufferedSecondsOf } from '../hooks/useRecordBuffer';
 import { noteAudioEvent } from '../services/audioPathLog';
 import StepPicker from '../components/StepPicker';
 import { useIsFocused } from '@react-navigation/native';
-import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS, ALL_REPEAT_KEYS, useNavFocus } from '../components/PanelNav';
+import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS, ALL_REPEAT_KEYS, useNavFocus, useOverlay, useOverlayOpen, overlayOpenNow } from '../components/PanelNav';
 import { useScreenHighlight } from '../components/ScreenNav';
 import { SCREEN_PRIORITY, keyDirOf } from '../utils/hardwareKeys';
 import { v4 as uuidv4 } from 'uuid';
@@ -916,11 +916,16 @@ export default function TunerScreen({ route, navigation }: Props) {
     if (k === 'Enter') { acts[i]?.run(); return true; }
   }, NAV_REPEAT_KEYS);
 
-  const panelsOpenRef = useRef(false);
-  useEffect(() => {
-    panelsOpenRef.current = freqModalOpen || demodOpen || stepOpen || audioSheetOpen
-                         || chatOpen || recordingsOpen;
-  }, [freqModalOpen, demodOpen, stepOpen, audioSheetOpen, chatOpen, recordingsOpen]);
+  // ★★★ ONE OVERLAY RULE (controller audit, 2026-10-20 — PanelNav useOverlay), as on the receiver screen: each panel
+  //     registers with its own Back, and the screen yields while ANY overlay is up (these, and the ones that register
+  //     themselves — the password box, the tour, App-level prompts).
+  useOverlay(freqModalOpen, { name: 'freq', onBack: () => setFreqModalOpen(false) });
+  useOverlay(demodOpen, { name: 'demod', onBack: () => setDemodOpen(false) });
+  useOverlay(stepOpen, { name: 'step', onBack: () => setStepOpen(false) });
+  useOverlay(audioSheetOpen, { name: 'audio', onBack: () => setAudioSheetOpen(false) });
+  useOverlay(chatOpen, { name: 'chat', onBack: () => setChatOpen(false) });
+  useOverlay(recordingsOpen, { name: 'recordings', onBack: () => setRecordingsOpen(false) });
+  const anyOverlay = useOverlayOpen();
 
   // ★★★ ONE SCHEME (Stuart, 2026-10-18 — src/utils/keyActions.ts), as on the receiver screen: arrows / W A S D move the
   // highlight round the controls (ScreenNav — the frequency box, the demodulator, the step, audio, chat, ‹ Back),
@@ -929,8 +934,7 @@ export default function TunerScreen({ route, navigation }: Props) {
   // ★ Repeating, so holding > tunes continuously. On a SHARED tuner that is safe because the settle-commit debounce in
   // stepTune sends one retune when you stop rather than one per repeat.
   const { width: winW, height: winH } = useWindowDimensions();
-  const screenHl = useScreenHighlight(kbInUse && !freqModalOpen && !demodOpen && !stepOpen && !audioSheetOpen
-                                      && !chatOpen && !recordingsOpen && !showNotice, focusC.ring, [winW, winH]);
+  const screenHl = useScreenHighlight(kbInUse && !anyOverlay && !showNotice, focusC.ring, [winW, winH]);
   useRepeatingKeys(true, (k: string) => {
     if (!k) return;
     // Not the screen on top, or a page we did not write is showing — same rules as SDRScreen.
@@ -950,14 +954,12 @@ export default function TunerScreen({ route, navigation }: Props) {
     }
     if (k === 'Back') {
       // One rule: something open closes. Leaving the server is the ‹ Back key, which the highlight reaches.
-      if (panelsOpenRef.current) {
-        setFreqModalOpen(false); setDemodOpen(false); setStepOpen(false);
-        setAudioSheetOpen(false); setChatOpen(false); setRecordingsOpen(false);
-      } else screenHl.clear();
+      // (Something open: the top overlay's own Back has already run — never reach past it.)
+      if (!overlayOpenNow()) screenHl.clear();
       return true;
     }
     // A panel that is open owns the rest — its own navigation is already listening.
-    if (panelsOpenRef.current) return;
+    if (overlayOpenNow()) return;
     if (k === 'Enter') { screenHl.press(); return true; }
     const dir = keyDirOf(k);
     if (dir) { void screenHl.move(dir); return true; }

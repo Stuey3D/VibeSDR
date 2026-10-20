@@ -25,10 +25,11 @@
 //
 // ★ BACK, ONE LAYER AT A TIME: the top panel takes Back first (leave adjust mode; step out of a sub-page). When it has
 // nothing left to step out of it passes Back on, and the SCREEN closes the panel — one owner for that rule.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, ScrollView, View } from 'react-native';
 import { addKeyListener, type HwKeyEvent } from '../utils/hardwareKeys';
 import { navMove } from '../utils/navMove';
+import { OverlayStack, type OverlayOpts } from '../utils/overlayStack';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { focusFor, focusTint, FOCUS_GREEN } from '../constants/decoderTokens';
 
@@ -45,6 +46,8 @@ export type NavEntry = {
    * this a slider is reachable but dead, which is exactly what once shipped.
    */
   adjust?: (dir: -1 | 1) => void;
+  /** ★ Where the highlight starts when the surface opens under a pad or keyboard (a card's main answer). */
+  preferred?: boolean;
 };
 
 /** Keyboard / D-pad focus green — the colour on every controls colour but green (see useNavFocus). */
@@ -363,6 +366,76 @@ function useNavOwner(visible: boolean): React.MutableRefObject<object> {
   return tok;
 }
 
+// ── ONE OVERLAY RULE (controller audit, 2026-10-20 — src/utils/overlayStack.ts) ─────────────────────────────────
+//
+// ★★★ Whatever is on top owns the keys. A surface drawn over a screen calls `useOverlay(visible, { onBack })`:
+//   • the screen beneath hides its highlight and stops acting on movement and Enter (`useOverlayOpen()` /
+//     `overlayOpenNow()` — this replaced SDRScreen's hand-kept `anyPanelOpen` and the picker's `listNavActive`);
+//   • it becomes a nav OWNER, so a panel already open beneath stops moving;
+//   • Back with nothing left to peel inside it runs ITS onBack; Enter its onEnter (if it has one obvious action);
+//     arrows are swallowed. Its own useListNav / usePanelNav runs first, so it draws its own highlight and peels its
+//     own layers.
+// ★ The owner is pushed in a LAYOUT effect, so it always lands BELOW the surface's own nav (a passive effect), even
+//   when that nav is in a child — child passive effects run before a parent's, child layout effects before ANY
+//   passive effect. Push order then matches what is on screen: the surface's list on top of the surface's owner on
+//   top of whatever was open before.
+export const overlays = new OverlayStack();
+/** Below every panel (0) — they take Back first — and above the screens (-1). */
+export const OVERLAY_PRIORITY = -0.5;
+/** A raised overlay (level > 0 — the tours) hears keys before every panel, below the controller guide (100). */
+export const OVERLAY_RAISED_PRIORITY = 50;
+/** Is anything drawn over the screen right now? (Synchronous — for key listeners.) */
+export const overlayOpenNow = () => overlays.count() > 0;
+
+/** Re-renders when overlays open and close; true while any is open. */
+export function useOverlayOpen(): boolean {
+  const [n, setN] = useState(overlays.count());
+  useEffect(() => { setN(overlays.count()); return overlays.subscribe(setN); }, []);
+  return n > 0;
+}
+
+/** Register a surface drawn over a screen while `visible`. Returns whether it is the TOP one (draw its ring). */
+export function useOverlay(visible: boolean, opts: OverlayOpts): boolean {
+  const tok = useRef<object>({});
+  const optsRef = useRef(opts); optsRef.current = opts;
+  const [top, setTop] = useState(false);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const t = tok.current;
+    // Handlers are read through the ref at key time, so a changing closure never re-orders the stack.
+    overlays.push(t, {
+      get onBack() { return optsRef.current.onBack; },
+      get onEnter() { return optsRef.current.onEnter; },
+      get blockTuneZoom() { return optsRef.current.blockTuneZoom; },
+      get backWhenSuppressed() { return optsRef.current.backWhenSuppressed; },
+      get name() { return optsRef.current.name; },
+      get level() { return optsRef.current.level; },
+    } as OverlayOpts);
+    owners.push(t);
+    const unsub = overlays.subscribe(() => setTop(overlays.isTop(t)));
+    setTop(overlays.isTop(t));
+    return () => {
+      unsub();
+      const i = owners.lastIndexOf(t);
+      if (i >= 0) owners.splice(i, 1);
+      overlays.remove(t);
+      setTop(false);
+    };
+  }, [visible]);
+  useEffect(() => {
+    if (!visible) return;
+    const t = tok.current;
+    const sub = addKeyListener('down', (e) => {
+      const d = overlays.decide(t, e.key, e, shortcutsSuppressed());
+      if (d === 'back') { optsRef.current.onBack?.(); return true; }
+      if (d === 'enter') { optsRef.current.onEnter?.(); return true; }
+      return d === 'swallow';
+    }, { priority: (opts.level ?? 0) > 0 ? OVERLAY_RAISED_PRIORITY : OVERLAY_PRIORITY });
+    return () => sub.remove();
+  }, [visible, (opts.level ?? 0) > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
+  return visible && top;
+}
+
 // ── The key handling core, shared by both shapes ─────────────────────────────
 //
 // `getEntries` is called on every key press rather than captured, so a panel whose
@@ -520,7 +593,7 @@ export const RowCtx = React.createContext<number>(-1);
  */
 export function usePanelNav(
   visible: boolean,
-  opts?: { onBack?: () => boolean | void; onTimeout?: () => void },
+  opts?: { onBack?: () => boolean | void; onTimeout?: () => void; flat?: boolean },
 ) {
   const entries   = useRef<NavEntry[]>([]);
   const rowSeq    = useRef(0);
@@ -555,8 +628,22 @@ export function usePanelNav(
     setFocused,
     setAdjusting,
     onBack: opts?.onBack,
+    // ★ flat: every key its own row and left / right walk the order too (a card's few keys, side by side or stacked).
+    flat: !!opts?.flat,
   });
   useIdleClose(visible, opts?.onTimeout);
+
+  // ★ Opened under a pad or keyboard: start on the `preferred` key, if one registered (NavCard's main answer). After a
+  //   tick, so the keys have registered; never over a highlight somebody has already moved.
+  useEffect(() => {
+    if (!visible || !keyboardMode) return;
+    const t = setTimeout(() => {
+      if (focusedRef.current >= 0) return;
+      const p = [...entries.current].sort((a, b) => a.row - b.row || a.id - b.id).find((e) => e.preferred);
+      if (p) setFocused(p.id);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [visible]);
 
   const navCtx = useMemo<NavCtxValue>(() => ({ register, focused, adjusting, nextRow, scrollRef, scrollY }),
                                      [register, focused, adjusting, nextRow]);
@@ -587,7 +674,7 @@ export function NavRow({ children }: { children: React.ReactNode }) {
  * `onPress` is read through a ref, so a button whose handler changes every render
  * does not need to re-register (which would reorder it and scramble reading order).
  */
-export function useNavButton(onPress?: () => void, skip?: boolean) {
+export function useNavButton(onPress?: () => void, skip?: boolean, opts?: { preferred?: boolean }) {
   const nav = React.useContext(NavCtx);
   const row = React.useContext(RowCtx);
   const idRef = useRef<number>(-1);
@@ -606,8 +693,9 @@ export function useNavButton(onPress?: () => void, skip?: boolean) {
       id, row,
       press:  () => pressRef.current?.(),
       reveal: () => revealIn(nav.scrollRef, viewRef, row, 120, nav.scrollY),
+      preferred: !!opts?.preferred,
     });
-  }, [nav, row, id, skip]);
+  }, [nav, row, id, skip, !!opts?.preferred]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   return { focused: !skip && !!nav && nav.focused === id, viewRef, id };
 }

@@ -243,3 +243,28 @@ exists today. Verdicts are for the pad.
 - iOS alert and Modal behaviour with a pad is read from React Native's and our native source, **not tested on a
   device**. The first device check should confirm fact 2 (a pad under a UIAlertController) because MUST-3 rests on it.
 - Android TV behaviour is from code plus the Kiko notes in `TvTextInput.tsx`.
+
+---
+
+## 7. Phase 1 progress (2026-10-20)
+
+### The overlay rule as built
+`useOverlay(visible, { onBack, onEnter?, blockTuneZoom?, backWhenSuppressed?, level? })` in `src/components/PanelNav.tsx`,
+pure core `src/utils/overlayStack.ts` (`scripts/test_overlay_stack.ts`). While any overlay is up the screen hides its
+highlight and yields movement and Enter (`useOverlayOpen()` / `overlayOpenNow()` replaced `anyPanelOpen`, `closeAll`
+and the picker's `listNavActive` list). The top overlay hears what its own nav passed on (priority −0.5: below every
+panel, above the screens): Back = its `onBack`, Enter = its `onEnter`, arrows swallowed, tune/zoom pass unless blocked.
+`level: 1` (the tours, the splash) stays above later level-0 overlays and hears keys before any panel (priority 50).
+Helpers: `NavCard`/`CardKey` (cards with a few keys — `preferred` = where the highlight starts),
+`useFieldPopupNav`/`NavWrap` (field pop-ups), `NavRing` (an absolute ring that moves nothing).
+
+### TlsTrustPrompt (main `f6035f0d`, not on V12) — how it plugs in when main is merged
+It is mounted once in `App.tsx` over every screen. On merge:
+- call `useFieldPopupNav(visible, { name: 'tls trust', fields: 0, keys: [cancel, trust], startAt: 0, onBack: cancel,
+  onField: () => {} })` — **focus starts on CANCEL** (the safe answer; TRUST is never the default), Back = CANCEL;
+- pass `focused={nav.key(0)}` / `nav.key(1)` to its two `PopupKey`s, or wrap the default-skin `TouchableOpacity`s in
+  `NavWrap`;
+- nothing else: being an overlay already stops the screen or list beneath it, and on Android the pad's B reaches the
+  bus from inside its Modal (`VibeGamepad.kt` hooks every `ReactModalHostView`), so Back = CANCEL works there too;
+- if it uses `Alert.alert` anywhere (the long-press "Forget certificate"), route it through `appAlert()`.
+

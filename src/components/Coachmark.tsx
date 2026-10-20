@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useGlassTheme, type PopupTokens } from './PopupShell';
+import { useOverlay, useKeyboardMode, useNavFocus } from './PanelNav';
 
 export interface TourStep {
   id: string;
@@ -151,6 +152,13 @@ function CoachmarkOverlay({
   onNext: () => void; onSkip: () => void;
 }) {
   const styles = useCoachStyles();
+  // ★★ A PAD OR KEYBOARD ANSWERS THE CARD (controller audit group B, 2026-10-20). Before this the card had no keys
+  //    and was in no yield list, so Enter pressed the control UNDER the card. Now it is a raised overlay (level 1: it
+  //    stays on top of a menu a step opens behind it, and hears keys before any panel): Enter = Next, Back = Skip,
+  //    arrows and tune/zoom do nothing beneath it. The ring sits on Next, the key Enter presses.
+  useOverlay(true, { name: 'tour', level: 1, onEnter: onNext, onBack: onSkip, blockTuneZoom: true });
+  const kbInUse = useKeyboardMode();
+  const navRing = useNavFocus().ring;
   const win = Dimensions.get('window');
   const pad = step.padding ?? 8;
   const breathe = useRef(new Animated.Value(0)).current;
@@ -228,7 +236,8 @@ function CoachmarkOverlay({
             <Pressable onPress={onSkip} hitSlop={10} style={styles.skip}>
               <Text style={styles.skipText}>Skip</Text>
             </Pressable>
-            <Pressable onPress={onNext} hitSlop={10} style={styles.next}>
+            <Pressable onPress={onNext} hitSlop={10}
+                       style={[styles.next, kbInUse && { borderWidth: 3, borderColor: navRing, margin: -3 }]}>
               <Text style={styles.nextText}>{index + 1 >= count ? 'Got it' : 'Next'}</Text>
             </Pressable>
           </View>

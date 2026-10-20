@@ -16,6 +16,7 @@ import {
 import { useSurface } from '../contexts/FaceplateContext';
 import { sanitizeIdent } from '../services/kiwiIdent';
 import { useAndroidKeyboardHeight } from '../hooks/useAndroidKeyboardHeight';
+import { useFieldPopupNav, NavWrap } from './FieldPopupNav';
 
 interface Props {
   visible:  boolean;
@@ -47,6 +48,14 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
     onSubmit(val);
   };
 
+  // ★ Pad and keyboard (controller audit group B): an overlay — Back = Cancel, nothing reaches the list beneath — over
+  //   [field, Cancel, primary], starting on the field. Enter on the field puts the cursor in it.
+  const fieldRef = React.useRef<TextInput | null>(null);
+  const nav = useFieldPopupNav(visible, {
+    name: 'IdentModal', fields: 1, keys: [onCancel, submit],
+    onField: () => fieldRef.current?.focus(), onBack: onCancel,
+  });
+
   return (
     <Modal
       visible={visible}
@@ -66,7 +75,8 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
             sent automatically next time.
           </Text>
           <TextInput
-            style={styles.input}
+            ref={fieldRef}
+            style={[styles.input, nav.field(0) && { borderColor: nav.ring, borderWidth: 2 }]}
             placeholder="e.g. M0ABC or Stu"
             placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
             value={name}
@@ -79,17 +89,21 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
           />
           {pt.metal ? (
             <View style={styles.row}>
-              <PopupKey label="CANCEL" onPress={onCancel} height={40} fontSize={12} style={{ minWidth: 96 }} />
-              <PopupKey label="SAVE & CONNECT" primary onPress={submit} height={40} fontSize={12} style={{ minWidth: 110 }} />
+              <PopupKey label="CANCEL" focused={nav.key(0)} onPress={onCancel} height={40} fontSize={12} style={{ minWidth: 96 }} />
+              <PopupKey label="SAVE & CONNECT" primary focused={nav.key(1)} onPress={submit} height={40} fontSize={12} style={{ minWidth: 110 }} />
             </View>
           ) : (
           <View style={styles.row}>
-            <TouchableOpacity style={styles.btn} onPress={onCancel}>
+<NavWrap on={nav.key(0)} color={nav.ring}>
+                        <TouchableOpacity style={styles.btn} onPress={onCancel}>
               <Text style={styles.btnTxtCancel}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={submit}>
+            </NavWrap>
+<NavWrap on={nav.key(1)} color={nav.ring}>
+                        <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={submit}>
               <Text style={styles.btnTxtPrimary}>Save & Connect</Text>
             </TouchableOpacity>
+            </NavWrap>
           </View>
           )}
         </View>

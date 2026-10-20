@@ -15,6 +15,7 @@ import {
 } from './PopupShell';
 import { useSurface } from '../contexts/FaceplateContext';
 import { useAndroidKeyboardHeight } from '../hooks/useAndroidKeyboardHeight';
+import { useFieldPopupNav, NavWrap } from './FieldPopupNav';
 
 interface Props {
   visible:    boolean;
@@ -44,6 +45,14 @@ export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }
     onCancel();
   };
 
+  // ★ Pad and keyboard (controller audit group B): an overlay — Back = Cancel, nothing reaches the list beneath — over
+  //   [field, Cancel, primary], starting on the field. Enter on the field puts the cursor in it.
+  const fieldRef = React.useRef<TextInput | null>(null);
+  const nav = useFieldPopupNav(visible, {
+    name: 'PasswordModal', fields: 1, keys: [cancel, submit],
+    onField: () => fieldRef.current?.focus(), onBack: cancel,
+  });
+
   return (
     <Modal
       visible={visible}
@@ -60,7 +69,8 @@ export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }
           <Text style={styles.title}>Password Required</Text>
           <Text style={styles.sub} numberOfLines={2}>{serverUrl}</Text>
           <TextInput
-            style={styles.input}
+            ref={fieldRef}
+            style={[styles.input, nav.field(0) && { borderColor: nav.ring, borderWidth: 2 }]}
             placeholder="Enter password"
             placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
             value={pw}
@@ -72,17 +82,21 @@ export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }
           />
           {pt.metal ? (
             <View style={styles.row}>
-              <PopupKey label="CANCEL" onPress={cancel} height={40} fontSize={12} style={{ minWidth: 96 }} />
-              <PopupKey label="CONNECT" primary onPress={submit} height={40} fontSize={12} style={{ minWidth: 110 }} />
+              <PopupKey label="CANCEL" focused={nav.key(0)} onPress={cancel} height={40} fontSize={12} style={{ minWidth: 96 }} />
+              <PopupKey label="CONNECT" primary focused={nav.key(1)} onPress={submit} height={40} fontSize={12} style={{ minWidth: 110 }} />
             </View>
           ) : (
           <View style={styles.row}>
-            <TouchableOpacity style={styles.btn} onPress={cancel}>
+<NavWrap on={nav.key(0)} color={nav.ring}>
+                        <TouchableOpacity style={styles.btn} onPress={cancel}>
               <Text style={styles.btnTxtCancel}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={submit}>
+            </NavWrap>
+<NavWrap on={nav.key(1)} color={nav.ring}>
+                        <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={submit}>
               <Text style={styles.btnTxtPrimary}>Connect</Text>
             </TouchableOpacity>
+            </NavWrap>
           </View>
           )}
         </View>

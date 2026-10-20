@@ -3,7 +3,8 @@ import { useDetailMaps, mb } from '../services/useDetailMaps';
 import { downloadDetail, removeDetail, DETAIL_BYTES } from '../services/mapglDetail';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
-import { useListNav, noteTouchInteraction, useNavFocus } from '../components/PanelNav';
+import { useListNav, noteTouchInteraction, useNavFocus, useOverlayOpen, useOverlay } from '../components/PanelNav';
+import { useFieldPopupNav, NavWrap } from '../components/FieldPopupNav';
 import { addKeyListener } from '../utils/hardwareKeys';
 import {
   ActivityIndicator,
@@ -1962,7 +1963,45 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   //
   // ★ Any screen-level key listener needs this. Mounted is not the same as on screen, which
   // is the second time that distinction has bitten in this work.
-  const listNavActive = screenFocused && !tcpModal && !editFav && !connecting;
+  // ★★★ ONE OVERLAY RULE (controller audit, 2026-10-20 — PanelNav useOverlay): this was a hand-kept list
+  //     (`!tcpModal && !editFav`) that missed IdentModal, PasswordModal, the PIN prompt, Recordings and the tour, so
+  //     keys went on moving and pressing the list beneath them. Every pop-up now registers itself; the list yields
+  //     while ANY is open.
+  const overlayUp = useOverlayOpen();
+  const listNavActive = screenFocused && !overlayUp && !connecting;
+
+  // ── Add custom server / Edit favourite, by pad and keyboard (audit group B) ──
+  // ★ Both had no keys and, on Android, no way out at all (a pad's B is consumed natively). Now: Back = Cancel, the
+  //   protocol chips on the first row, then each field, then the keys on one row.
+  const tcpNameRef = useRef<TextInput | null>(null);
+  const tcpHostRef = useRef<TextInput | null>(null);
+  const tcpPortRef = useRef<TextInput | null>(null);
+  const tcpNav = useFieldPopupNav(tcpModal, {
+    name: 'add server', fields: PROTO_CHOICES.length + 3,
+    fieldRow: (i) => (i < PROTO_CHOICES.length ? 0 : i - PROTO_CHOICES.length + 1),
+    startAt: PROTO_CHOICES.length,   // the name box: Auto is already chosen
+    keys: [() => setTcpModal(false), () => tcpModalConnect(false), () => tcpModalConnect(true)],
+    onField: (i) => {
+      if (i < PROTO_CHOICES.length) {
+        const id = PROTO_CHOICES[i][0];
+        setTcpProto(id);
+        if (id !== 'auto') setTcpPort(String(DEFAULT_PORT[id as BackendType]));
+        return;
+      }
+      [tcpNameRef, tcpHostRef, tcpPortRef][i - PROTO_CHOICES.length]?.current?.focus();
+    },
+    onBack: () => setTcpModal(false),
+  });
+  const editNameRef = useRef<TextInput | null>(null);
+  const editUrlRef = useRef<TextInput | null>(null);
+  const editNav = useFieldPopupNav(!!editFav, {
+    name: 'edit favourite', fields: 2,
+    keys: [() => setEditFav(null), () => { void saveEditFav(); }],
+    onField: (i) => [editNameRef, editUrlRef][i]?.current?.focus(),
+    onBack: () => setEditFav(null),
+  });
+  // ★ Recordings over the list: it has its own list nav; this makes the list beneath yield and Back close it.
+  useOverlay(recordingsOpen, { name: 'recordings', onBack: () => setRecordingsOpen(false) });
 
   // ★★ ONE index space for the WHOLE screen. The chooser (custom URL, discovered,
   // DIRECTORIES) is the list's ListHeaderComponent, so it was never in `listData` and none
@@ -2413,8 +2452,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 SpyServer on NON-STANDARD ports: they're raw TCP with no HTTP to sniff,
                 so nothing can identify them but the user. */}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-              {PROTO_CHOICES.map(([id, label]) => (
-                <TouchableOpacity key={id} onPress={() => {
+              {PROTO_CHOICES.map(([id, label], ci) => (
+                <NavWrap key={id} on={tcpNav.field(ci)} color={tcpNav.ring}>
+                <TouchableOpacity onPress={() => {
                     setTcpProto(id);
                     if (id !== 'auto') setTcpPort(String(DEFAULT_PORT[id as BackendType]));
                   }}
@@ -2423,6 +2463,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                           backgroundColor: tcpProto === id ? C.keyBgAct : 'transparent' }]}>
                   <Text style={{ fontFamily: F, fontSize: fs(12), color: tcpProto === id ? C.key : C.keyIdle }}>{label}</Text>
                 </TouchableOpacity>
+                </NavWrap>
               ))}
             </View>
             <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, marginBottom: 10 }}>
@@ -2434,26 +2475,32 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 ? 'Raw full-rate IQ — needs a fast local network. Works with virtually all SDR software.'
                 : `Connect as ${PROTO_LABEL[tcpProto as BackendType]}, without probing.`}
             </Text>
-            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
+            <TextInput ref={tcpNameRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, tcpNav.field(PROTO_CHOICES.length) && { borderColor: tcpNav.ring, borderWidth: 2 }]}
               placeholder="Name (e.g. Shack Pi)" placeholderTextColor={C.textDim}
               value={tcpName} onChangeText={setTcpName} autoCorrect={false} />
-            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
+            <TextInput ref={tcpHostRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, tcpNav.field(PROTO_CHOICES.length + 1) && { borderColor: tcpNav.ring, borderWidth: 2 }]}
               placeholder="Host, IP or URL (e.g. stuey3d.freemyip.com)" placeholderTextColor={C.textDim}
               value={tcpHost} onChangeText={setTcpHost} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
-            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
+            <TextInput ref={tcpPortRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, tcpNav.field(PROTO_CHOICES.length + 2) && { borderColor: tcpNav.ring, borderWidth: 2 }]}
               placeholder={tcpProto === 'auto' ? 'Port' : `Port (default ${DEFAULT_PORT[tcpProto as BackendType]})`}
               placeholderTextColor={C.textDim}
               value={tcpPort} onChangeText={setTcpPort} keyboardType="number-pad" />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
+              <NavWrap on={tcpNav.key(0)} color={tcpNav.ring}>
               <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={() => setTcpModal(false)}>
                 <Text style={{ fontFamily: F, fontSize: fs(13), color: C.keyIdle }}>Cancel</Text>
               </TouchableOpacity>
+              </NavWrap>
+              <NavWrap on={tcpNav.key(1)} color={tcpNav.ring}>
               <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.borderBright }]} onPress={() => tcpModalConnect(false)}>
                 <Text style={{ fontFamily: F, fontSize: fs(13), color: C.key }}>Connect</Text>
               </TouchableOpacity>
+              </NavWrap>
+              <NavWrap on={tcpNav.key(2)} color={tcpNav.ring}>
               <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.keyFill }]} onPress={() => tcpModalConnect(true)}>
                 <Text style={{ fontFamily: F, fontSize: fs(13), color: '#1a1205', fontWeight: '600' }}>Save & Connect</Text>
               </TouchableOpacity>
+              </NavWrap>
             </View>
           </View>
         </View>
@@ -2465,19 +2512,23 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         <View style={styles.tcpBackdrop}>
           <View style={[styles.tcpCard, { borderColor: C.borderBright }]}>
             <Text style={{ fontFamily: F, fontSize: fs(16), color: C.text, letterSpacing: 1, marginBottom: 10 }}>EDIT SERVER</Text>
-            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
+            <TextInput ref={editNameRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, editNav.field(0) && { borderColor: editNav.ring, borderWidth: 2 }]}
               placeholder="Name" placeholderTextColor={C.textDim}
               value={editName} onChangeText={setEditName} autoCorrect={false} />
-            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
+            <TextInput ref={editUrlRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, editNav.field(1) && { borderColor: editNav.ring, borderWidth: 2 }]}
               placeholder="Address (host, IP or URL)" placeholderTextColor={C.textDim}
               value={editUrl} onChangeText={setEditUrl} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
+              <NavWrap on={editNav.key(0)} color={tcpNav.ring}>
               <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={() => setEditFav(null)}>
                 <Text style={{ fontFamily: F, fontSize: fs(13), color: C.keyIdle }}>Cancel</Text>
               </TouchableOpacity>
+              </NavWrap>
+              <NavWrap on={editNav.key(1)} color={tcpNav.ring}>
               <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.keyFill }]} onPress={saveEditFav}>
                 <Text style={{ fontFamily: F, fontSize: fs(13), color: '#1a1205', fontWeight: '600' }}>Save changes</Text>
               </TouchableOpacity>
+              </NavWrap>
             </View>
           </View>
         </View>
