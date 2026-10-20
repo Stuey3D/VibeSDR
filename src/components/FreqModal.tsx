@@ -17,6 +17,8 @@ import {
 import { type UserBookmark, bookmarkPassband } from '../services/userBookmarks';
 import { airbandEntry } from '../utils/airband';
 import { useListNav, revealIn, noteTouchInteraction, useNavFocus } from './PanelNav';
+import { usePadField } from './ControllerKeyboard';
+import { bookmarkFreqLabel } from '../utils/bookmarkName';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { tuneCardItems, type TuneCardKey } from '../utils/freqCardNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -80,6 +82,9 @@ interface FreqModalProps {
    *  number: ◄ name ►. The always-on VTSBar is untouched. FM-DX disables skip (one shared
    *  tuner) — SDRScreen omits the handlers there, so the guard travels with the row. */
   vtsName?:   string;
+  /** ★ The bookmark name to pre-fill (decided 10-20): the RDS name, then the station name, then the frequency —
+   *  src/utils/bookmarkName.ts. Without it the card falls back to the frequency. */
+  defaultBookmarkName?: string;
   vtsFreq?:   number | null;
   onVtsPrev?: () => void;
   onVtsNext?: () => void;
@@ -208,7 +213,7 @@ function srcTag(b?: ServerBookmark): string {
 }
 
 export default function FreqModal({
-  visible, currentHz, onConfirm, onClose,
+  visible, currentHz, onConfirm, onClose, defaultBookmarkName,
   unit: unitProp, onUnit, onDabTune, dabOnly, onAddServerBookmark, onImportToServer, onPickImportFileToServer,
   minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, rangeMsg, lockUnit = false,
   onShare,
@@ -253,7 +258,9 @@ export default function FreqModal({
   const [cardMode, setCardMode]         = useState<'tune' | 'bookmarks'>('tune');
   const [dabFilter, setDabFilter]       = useState(false);
   const [searchQuery, setSearchQuery]   = useState('');
+  const searchQueryRef = useRef(searchQuery); searchQueryRef.current = searchQuery;
   const [bmName, setBmName]             = useState('');
+  const bmNameRefV = useRef(bmName); bmNameRefV.current = bmName;
   const [bmAll, setBmAll]               = useState(false);
   /** ★ Closed by default — see the ON THIS SERVER block. A phone card cannot afford a list that
    *  opens itself, and this one is as long as the receiver has been listening. */
@@ -350,6 +357,8 @@ export default function FreqModal({
 
   useEffect(() => {
     if (visible) {
+      // ★ Pre-fill the bookmark name so SAVE works at once — a pad cannot type one (decided 10-20); still editable.
+      setBmName(defaultBookmarkName || bookmarkFreqLabel(currentHz));
       setValue(toDisplay(currentHz, unit));
       setDraftVts(null);   // start from the tuned station; typing takes over
       // ★ Come back to the list you were working through — see stickySearch.
@@ -429,6 +438,39 @@ export default function FreqModal({
     Keyboard.dismiss();
   };
 
+  // ★★★ THE CONTROLLER KEYBOARD (brief, decided 2026-10-20): Enter on the frequency box with a PAD opens the numeric
+  //     pad (digits drawn as the readout draws them, one point, kHz ↔ MHz); a keyboard or a touch puts the cursor in
+  //     the field as before. ↵ tunes through the card's own rules — an airband name that does not exist or a
+  //     frequency out of range is refused with the reason, and the keypad stays up to correct it.
+  const tryTune = (v: string, u: Unit): string | void => {
+    const hz = fromDisplay(v, u);
+    const air = airbandEntry(hz);
+    if (air && !air.ok) return air.message;
+    if (hz >= minHz && hz <= maxHz) { onConfirm(hz); onClose(); return; }
+    if (hz > 0 && rangeMsg) return rangeMsg;
+    return hz > 0 ? 'That frequency is out of range.' : 'Enter a frequency.';
+  };
+  // Bookmark search (live: the results follow the typing) and the bookmark name — QWERTY.
+  const searchField = usePadField({
+    ref: searchRef, mode: 'search', title: 'Search bookmarks', live: true,
+    getValue: () => searchQueryRef.current,
+    setValue: (v) => { setSearchQuery(v); if (!v.trim()) stickySearch = null; },
+  });
+  const nameField = usePadField({
+    ref: bmNameRef, mode: 'text', title: 'Bookmark name',
+    getValue: () => bmNameRefV.current,
+    setValue: (v) => setBmName(v.slice(0, 60)),
+  });
+  const freqField = usePadField({
+    ref: inputRef, mode: 'frequency', title: 'Frequency',
+    getValue: () => valueRef.current,
+    setValue: (v) => setValue(v),
+    onSubmit: (v, u) => tryTune(v, (u ?? unit) as Unit),
+    unit: () => unit, unitLocked: !!lockUnit,
+    // The keypad has already converted the number: just remember the unit, as switchUnit does.
+    onUnit: (u) => { setUnitState(u as Unit); onUnit?.(u as Unit); AsyncStorage.setItem('lsv_fq_unit', u).catch(() => {}); },
+  });
+
   // ★★ A HARDWARE Enter has to come from the NATIVE key stream, not from the TextInput.
   // The field is keyboardType="decimal-pad", which has no return key for RN to map, so
   // onSubmitEditing never fires. The native window mirrors Enter through while typing (marked
@@ -463,7 +505,7 @@ export default function FreqModal({
       case 'tab:bookmarks': Keyboard.dismiss(); setCardMode('bookmarks'); break;
       case 'vts:prev': onVtsPrev?.(); break;
       case 'vts:next': onVtsNext?.(); break;
-      case 'field': inputRef.current?.focus(); break;
+      case 'field': freqField.open(); break;
       case 'profile': setProfileToggle(n => n + 1); break;
       case 'act:cancel': onClose(); break;
       case 'act:share': doShareRef.current(); break;
@@ -766,7 +808,10 @@ export default function FreqModal({
                *  selected everything, and "582" then replaced the 4 (Stuart, XCover 4s, 2026-10-12: typing 4582 gave
                *  582). Android selects the old frequency itself, once, as the field takes focus. */
               selectTextOnFocus={!onMac && Platform.OS !== 'android'}
+              onBlur={freqField.fieldProps.onBlur}
+              onSelectionChange={freqField.fieldProps.onSelectionChange}
               onFocus={() => {
+                freqField.fieldProps.onFocus();
                 // ★ The highlight sits on the field while it has the cursor, however the cursor got there (a tap, or
                 //   Enter on the highlighted box) — so when Escape lets go of it, the arrows carry on from HERE.
                 if (tuneLayout.start >= 0) tuneNavHandle.current?.setFocus(tuneLayout.start);
@@ -942,7 +987,7 @@ export default function FreqModal({
                         onScroll={(e) => { bmScrollY.current = e.nativeEvent.contentOffset.y; }}
                         scrollEventThrottle={16}
                         keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
-              {(() => { const { on, ref: slotRef } = bmSlot(() => searchRef.current?.focus()); return (
+              {(() => { const { on, ref: slotRef } = bmSlot(() => searchField.open()); return (
               <TextInput
                 ref={(r: any) => { (searchRef as any).current = r; slotRef(r); }}
                 style={[st.searchInput, { color: winC, fontFamily: ff,
@@ -954,7 +999,8 @@ export default function FreqModal({
                   if (!v.trim()) stickySearch = null;
                 }}
                 placeholder={picking ? '🔍 Search bookmarks & EiBi…' : '🔍 Search bookmarks & band plan…'} placeholderTextColor={winDim}
-                autoCorrect={false} autoCapitalize="none" spellCheck={false} textContentType="none" clearButtonMode="while-editing" />
+                autoCorrect={false} autoCapitalize="none" spellCheck={false} textContentType="none" clearButtonMode="while-editing"
+                {...searchField.fieldProps} />
               ); })()}
               {dabFilter && (() => {
                 const rows = searchBookmarks
@@ -1087,12 +1133,13 @@ export default function FreqModal({
 
               {!picking && (<>
               <Text style={[st.bmSub, { color: plateDim }]}>Add: {(currentHz / 1_000_000).toFixed(4)} MHz {currentMode.toUpperCase()}</Text>
-              {(() => { const { on, ref: slotRef } = bmSlot(() => bmNameRef.current?.focus()); return (
+              {(() => { const { on, ref: slotRef } = bmSlot(() => nameField.open()); return (
               <TextInput ref={(r: any) => { (bmNameRef as any).current = r; slotRef(r); }}
                 style={[st.searchInput, { color: winC, fontFamily: ff,
                                           borderColor: on ? focusC.ring : (pt.metal ? pt.window.border : bdrDim), borderWidth: on ? 2 : 1 },
                         st.inputMetal]}
-                value={bmName} onChangeText={setBmName} placeholder="Bookmark name…" placeholderTextColor={winDim} maxLength={60} autoCorrect={false} />
+                value={bmName} onChangeText={setBmName} placeholder="Bookmark name…" placeholderTextColor={winDim} maxLength={60} autoCorrect={false}
+                {...nameField.fieldProps} />
               ); })()}
               <View style={st.bmSegRow}>
                 <BmBtn style={[st.bmSeg, { borderColor: !bmAll ? bdrBrt : bdrDim }]} label="THIS SERVER" active={!bmAll} pip onPress={() => setBmAll(false)}><Text style={[st.bmSegText, { color: !bmAll ? keyOn : dimText }]}>THIS SERVER</Text></BmBtn>

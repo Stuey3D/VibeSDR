@@ -134,6 +134,7 @@ import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardM
 import { chooserItems, chooserRowOf, chooserStart, chooserActivate, type ChooserRadio } from '../utils/radioChooserNav';
 import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
 import { NavCard, CardKey } from '../components/NavCard';
+import { bookmarkDefaultName } from '../utils/bookmarkName';
 import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
@@ -12751,6 +12752,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       <PanelBoundary name="Frequency card" onClose={closeFreqModal} resetKey={freqModalOpen}>
       <FreqModal
         visible={freqModalOpen}
+        defaultBookmarkName={bookmarkDefaultName({ rds: liveStation.name, station: vtsMenuName, hz: status.frequency })}
         /* ★ The card is inside a Modal, where useSafeAreaInsets reads 0 — measure out here and
          *   pass it in, the same way BrowserOverlay has done since build 70. */
         topInset={insets.top}

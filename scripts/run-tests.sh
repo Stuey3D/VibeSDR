@@ -554,6 +554,8 @@ if npx tsx scripts/test_kb_layouts.ts; then pass=$((pass+1)); else fail=$((fail+
 if npx tsx scripts/test_controller_keyboard.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if npx tsx scripts/test_kb_handover.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if npx tsx scripts/test_kb_fonts.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE BOOKMARK NAME, PRE-FILLED (decided 10-20): RDS name, then station name, then the frequency.
+if npx tsx scripts/test_bookmark_name.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
