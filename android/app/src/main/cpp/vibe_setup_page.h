@@ -1489,7 +1489,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <div class="hint">For this radio: the rate it runs at, and the fastest a listener may ask for &mdash;
           they can still choose a slower waterfall. Halving it roughly halves what this radio sends:
           worth doing for a wide, fast radio, on a metered connection, or where several people share
-          one uplink.</div></label>
+          one uplink. If this machine runs short of processor time (DAB on a Pi 2, say), it slows its own
+          waterfall to 10 or 5 fps while it must, so the audio keeps going, and climbs back when it can.</div></label>
       <!-- ★★★ THE DAB OVERRIDE, WHICH THIS PAGE NEVER OFFERED (Stuart, 2026-09-19, setting up the first
            VibeServer Lite: "I didnt see the override option for DAB"). The config has carried
            dabRateBoost per radio for weeks and the phone app's server screen has the switch; this
@@ -3107,9 +3108,7 @@ function renderGain() {
   { const can = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
     $("dabRateBoost").disabled = !can;
     $("dabRateBoost").checked = can && !!r.dabRateBoost;
-    // ★ 0 or the orphan 15 read as Full, and saving writes a real 20 (see the note on the old master load).
-    { const f = Number(r.fftRate) || Number(r.maxFps) || 0;
-      $("maxFps").value = (f === 5 || f === 10) ? String(f) : "20"; }
+    fpsShow(r);
     $("dabRateBoostRow").style.opacity = can ? "" : "0.45";
     $("dabRateBoostNote").style.display = can ? "" : "none";
     $("dabRateBoostNo").style.display = can ? "none" : ""; }
@@ -3380,6 +3379,26 @@ const DRIVER_HW = {
  *  ★ A saved choice the machine cannot do stays visible, marked, so the owner sees why it is not in force.
  *  ★ Called from BOTH renderHw (the list) and fill (the saved choice) — whichever lands second gets it right.
  *  ★ An older server sends no list: everything stays as it was. */
+/** ★★ THE WATERFALL RATE AS IT IS, NOT AS THE MENU WOULD LIKE IT (11.0.9, the Pi 2). The menu offers 5 / 10 / 20, and a
+ *  rate saved any other way (15, by hand or by an older page) was shown as "Full · 20 fps" — on a server running at 15.
+ *  Before 5a0e6ca3 every save wrote that 20 back, which is how the Pi 2 went from 15 to 20 and broke up on DAB. Now such a
+ *  value is SHOWN, as "15 fps (set by hand)", and stays exactly as saved unless the owner picks another rate (the save
+ *  only writes this radio's rate on a change — see the "change" handler). Rebuilt per radio tab, so one radio's odd value
+ *  never appears on another's menu. ★ The rate shown is the one the server RUNS: fftRate under the maxFps ceiling;
+ *  both unset (0) is the server default, Full · 20. */
+function fpsShow(r) {
+  const sel = $("maxFps");
+  for (const o of [...sel.options]) if (o.value !== "5" && o.value !== "10" && o.value !== "20") o.remove();
+  const rates = [Number(r.fftRate) || 0, Number(r.maxFps) || 0].filter(v => v > 0);
+  const f = rates.length ? Math.min(...rates) : 0;
+  if (f > 0 && f !== 5 && f !== 10 && f !== 20) {
+    const o = document.createElement("option");
+    o.value = String(f); o.textContent = `${f} fps (set by hand)`;
+    sel.appendChild(o);
+    sel.value = String(f);
+  } else sel.value = f > 0 ? String(f) : "20";
+}
+
 let govHw = null, govAll = null;
 function govOffer() {
   const hw = govHw, gsel = $("cpuGovernor");
@@ -5785,7 +5804,7 @@ function wifiNowText() {
   //   join; "on" here means the driver refused, which is worth an owner knowing when audio stutters.
   const ps = w.link && w.link.powerSave;
   if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "") + "."
-    + (w.link && w.link.signal != null ? " Signal " + w.link.signal + " dBm" + (w.link.retry != null ? ", " + w.link.retry + " % retries" : "") + "." : "")
+    + (w.link && w.link.signal != null ? " Signal " + w.link.signal + " dBm" + (w.link.retry != null ? ", " + w.link.retry + (w.link.retryKind === "failed" ? " % failed sends" : " % retries") : "") + "." : "")
     + (ps === "off" ? " Wi-Fi power saving off." : ps === "on" ? " Wi-Fi power saving is ON (the radio refused to switch it off) — audio may stutter." : "");
   if (m === "connecting") return "Joining a network…";
   if (m === "wifi-off") return "Wi-Fi is off.";

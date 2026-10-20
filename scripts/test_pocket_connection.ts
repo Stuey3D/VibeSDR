@@ -18,6 +18,9 @@ ok(!pocketWifiShown({ pocket: true, local: false, hasWifi: true }), '…and neve
 const home = { pocket: true, local: true, mode: 'client', ssid: 'Meow!', apSsid: 'Pocket-SDR',
                link: { signal: -78, tx: 13, rx: 72, retry: 9 }, advice: 'weak' };
 ok(pocketLinkLine(home) === 'On “Meow!” · −78 dBm · 13 Mbit/s · 9 % retries', 'the link line: network, signal, rate, retries');
+ok(pocketLinkLine({ ...home, link: { signal: -42, tx: 433, rx: 433, retry: 1, retryKind: 'failed' } })
+   === 'On “Meow!” · −42 dBm · 433 Mbit/s · 1 % failed sends',
+   'a Pi\'s own Wi-Fi (brcmfmac: no retry counter): the figure is failed sends, and says so (11.0.9)');
 ok(pocketLinkLine({ ...home, link: { signal: -60, tx: null, rx: null, retry: null } }) === 'On “Meow!” · −60 dBm',
    'figures not reported are left out, never shown as 0');
 ok(!pocketOnOwn(home) && pocketOnOwn({ mode: 'fallback-ap' }), 'which side is lit');

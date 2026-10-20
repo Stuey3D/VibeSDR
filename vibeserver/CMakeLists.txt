@@ -698,6 +698,14 @@ foreach(v native boost)
   endif()
   add_test(NAME health-snail-${v} COMMAND test-health-snail-${v})
 endforeach()
+# ★★ The dynamic spectrum ceiling (vibe_spec_governor.h, 11.0.9 — the Pi 2 on DAB): starved → 20 → 10 → 5 fast, calm →
+#    back up slowly, no hunting, never above the owner's top or a listener's ask; composed with the audio-first gate the
+#    lower of the two wins. On a fake clock and a fake load.
+add_executable(test-spec-governor "${CMAKE_CURRENT_SOURCE_DIR}/test-spec-governor.cpp")
+target_include_directories(test-spec-governor PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-spec-governor)
+target_link_libraries(test-spec-governor PRIVATE Threads::Threads)
+add_test(NAME spec-governor COMMAND test-spec-governor)
 # ★ The POWER card's verdict (vibe_power.h): brief supply dips amber, sustained / continuous / USB loss red.
 add_executable(test-power-dips "${CMAKE_CURRENT_SOURCE_DIR}/test-power-dips.cpp")
 target_include_directories(test-power-dips PRIVATE "${CPP_DIR}")

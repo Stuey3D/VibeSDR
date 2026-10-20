@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 /**
  * The locked-window tune clamp (src/utils/tuneWindow.ts).
  *
@@ -73,6 +74,15 @@ for (const [mode, halfBw] of [['wfm', 100_000], ['am', 5_000], ['usb', 1_500], [
 
 // ── What the frequency card says ──────────────────────────────────────────────────────────────
 eq('range message',                rangeMessage(b98), 'This receiver covers 96.850–99.150 MHz');
+
+// ── The WEB CLIENT uses the same rule (11.0.9: its lockedWindow() was the bare ±Fs/2) ──────────
+{
+  const web = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+  eq('web imports the shared lockedWindow', /import \{ lockedWindow as sharedLockedWindow \} from '\.\.\/\.\.\/\.\.\/src\/utils\/tuneWindow'/.test(web), true);
+  const body = web.slice(web.indexOf('function lockedWindow()'), web.indexOf('function lockedWindow()') + 900);
+  eq('web lockedWindow() returns the shared window', /sharedLockedWindow\(hwLockedCentre, fs\)/.test(body), true);
+  eq('web lockedWindow() has no bare ±Fs/2 left', /fs \/ 2/.test(body.slice(0, body.indexOf('\n}') + 2)), false);
+}
 
 console.log(`tune window: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

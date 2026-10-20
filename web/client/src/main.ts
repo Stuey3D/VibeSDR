@@ -28,6 +28,7 @@ import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAu
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
+import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindow';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
 import { lrDisplay } from '../../../src/services/lrMeter';
@@ -14494,10 +14495,12 @@ function tuneRanges(): [number, number][] | null {
  *    is what the OWNER has pinned it to, which is a much smaller box and the only one a listener
  *    on a shared receiver may move inside. */
 function lockedWindow(): [number, number] | null {
-  if (!(hwLockedCentre > 0)) return null;
+  // ★★★ THE SERVER'S GUARD BAND, NOT THE BARE ±Fs/2 (owed with the app's locked-VFO fix, 11.0.9).
+  //     The server parks the VFO within lockedCentre ± (Fs/2 − min(50 kHz, 0.15·Fs)); clamping to
+  //     ±Fs/2 let this page show a figure up to 50 kHz from where the server actually put the dial.
+  //     One rule for the app and the web: src/utils/tuneWindow.ts (test_tune_window.ts).
   const fs = spec?.captureBandwidth();
-  if (!fs) return null;
-  return [hwLockedCentre - fs / 2, hwLockedCentre + fs / 2];
+  return fs ? sharedLockedWindow(hwLockedCentre, fs) : null;
 }
 
 /** ★★ WHAT THE OWNER PERMITS, as opposed to what the hardware can reach. Absent unless they have

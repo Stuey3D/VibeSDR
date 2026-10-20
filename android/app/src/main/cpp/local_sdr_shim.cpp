@@ -127,6 +127,7 @@
 #include "vibe_squelch_msg.h"       // ★ squelch on/off: explicit `on`, else the legacy db > -100
 #include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
 #include "vibe_wifi_qos.h"          // ★★ audio out as Wi-Fi VOICE, the waterfall never (BRIEF-portable-wifi-realtime, 2026-10-20)
+#include "vibe_spec_governor.h"     // ★★ the waterfall gives way to a starved CPU: 20 → 10 → 5, fast down, slow up (11.0.9)
 #include "vibe_listener_queue.h"     // ★ a per-VFO listener's block queue, sized in time (2026-10-07)
 #include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
 #include "vibe_rtl_tuner_restore.h"   // ★ the ONE "put the tuner back after its re-init" (both direct-sampling routes)
@@ -899,6 +900,8 @@ static std::atomic<double> g_vsMaxFftRate{0.0};
 /** ★ The spectrum rate this machine is MEASURED to deliver, or -1 when nobody is listening. Fed by
  *  the SPEC RATE audit and shown beside the rate selector so a slow box explains itself. */
 static std::atomic<double> g_specAchievedFps{-1.0};        // <=0 = server default (20 fps)
+/** ★★ The dynamic spectrum ceiling in force (vibe_spec_governor.h), 0 = none. Published as specCeil. */
+static std::atomic<double> g_specGovCeil{0.0};
 // ★ The IDLE SAVER is a CLIENT feature — after a while without interaction the listener asks us to
 // drop the spectrum rate, which saves this host real FFT work and real radio time. Normally the
 // listener may switch it off. A server on solar and cellular in the middle of nowhere cannot afford
@@ -7312,6 +7315,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** The rate the OWNER configured (--fps / the GUI). The floor when nobody has asked, and what
      *  the radio returns to when the last slow listener leaves. */
     double baseFftRate = 0.0;
+    /** ★★ THE DYNAMIC SPECTRUM CEILING (vibe_spec_governor.h, 11.0.9 — the Pi 2 on DAB). Fed every ~2 s on the
+     *  hotplug thread (specGovernorTick); recomputeEngineRate() applies its ceiling under the owner's. Touched only
+     *  under specGovMtx. specWantFps = the engine rate WITHOUT the governor (the fastest listener, under the owner). */
+    std::mutex specGovMtx;
+    vibespec::Governor specGov;
+    double specWantFps = 0.0;
+    /** ★ Bumped on a mode change (shared or per listener): the load is a different load, so the governor's lesson
+     *  from failed climbs is dropped (Governor::newCircumstances). */
+    std::atomic<unsigned> specLoadEpoch{0};
 
     // ── ★★★ PER-CLIENT DSP — every listener their own VFO, demodulator and audio ─────────────
     //
@@ -8722,8 +8734,48 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (want <= 0) want = std::min(baseFftRate, kIdleFps);
         const double mr = g_vsMaxFftRate.load();     // the owner's ceiling still wins
         if (mr > 0 && want > mr) want = mr;
+        /* ★★ AND THE GOVERNOR'S, BELOW THE OWNER'S (vibe_spec_governor.h): only while this box is starved for CPU,
+         *  20 → 10 → 5. It never raises anything — the owner's top and a listener's lower ask both still hold — and
+         *  the idle floor (2 fps) is below every rung, so it is never touched. */
+        { std::lock_guard<std::mutex> g(specGovMtx); specWantFps = want; want = specGov.effective(want); }
         if (want <= 0 || std::fabs(want - fftRate) < 0.01) return;
         applyEngineRate(want);
+    }
+
+    /** ★★ THE GOVERNOR'S TICK — every ~2 s from the hotplug thread (never the DSP thread: recomputeEngineRate takes
+     *  clientMtx). Reads the same load figures tune pacing does; logs every change, with the reading that caused it.
+     *  ★ VIBESERVER_SPEC_GOVERNOR=0 switches it off: the engine then runs exactly as before 11.0.9. */
+    void specGovernorTick() {
+        static const bool on = [] { const char* e = std::getenv("VIBESERVER_SPEC_GOVERNOR");
+                                    return !(e && *e == '0'); }();
+        if (!on) return;
+        const vibetune::Load tl = serverLoad();
+        vibespec::Load l;
+        l.dspPct = tl.dspPct; l.demodBlocked = tl.demodBlocked; l.backlogMs = tl.backlogMs; l.cpuLevel = tl.cpuLevel;
+        static unsigned lastEpoch = 0; static bool lastDab = false;
+        const unsigned ep = specLoadEpoch.load(std::memory_order_relaxed);
+        const bool dab = g_dabMode.load(std::memory_order_relaxed);
+        bool changed; double before, after, wantNow;
+        {
+            std::lock_guard<std::mutex> g(specGovMtx);
+            if (ep != lastEpoch || dab != lastDab) specGov.newCircumstances();
+            lastEpoch = ep; lastDab = dab;
+            before = specGov.ceiling();
+            wantNow = specWantFps;
+            changed = specGov.feed((double)paceNowMs(), l, wantNow);
+            after = specGov.ceiling();
+        }
+        if (!changed) return;
+        g_specGovCeil.store(after, std::memory_order_relaxed);
+        if (after > 0 && (before <= 0 || after < before))
+            LOGI("spectrum ceiling %s -> %.0f fps: this server is short of CPU (dspCpu %.0f%%%s, IQ backlog %.0f ms, "
+                 "CPU level %d) — the waterfall gives way to the audio",
+                 before > 0 ? std::to_string((int)before).c_str() : "none", after, l.dspPct,
+                 l.demodBlocked ? ", demod queue full" : "", l.backlogMs, l.cpuLevel);
+        else
+            LOGI("spectrum ceiling %.0f -> %s: calm again (dspCpu %.0f%%, CPU level %d)",
+                 before, after > 0 ? (std::to_string((int)after) + " fps").c_str() : "none", l.dspPct, l.cpuLevel);
+        recomputeEngineRate();
     }
 
     /** Set the engine rate itself. The per-client decimation below turns this into each
@@ -11100,6 +11152,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sdrp->setIfAgc(false);
                 sdrp->setIfGainReduction(nudged);
                 sdrp->setIfAgc(true);
+                noteOwnGainWrite();            // ★ 11.0.9: a level step is on its way, like any gain write of ours
                 g_rspAgcReinitAt.store((long long)std::chrono::duration_cast<
                     std::chrono::seconds>(
                         std::chrono::steady_clock::now().time_since_epoch()).count(),
@@ -11114,6 +11167,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    the strength of a number nobody was updating. */
             else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
                 noteHwMoved();                 // ★ every kick step moves the level; none is a sferic
+                noteOwnGainWrite();            // ★ …and is a gain write of ours (11.0.9: the kick's were not counted)
                 switch (++sdrpAgcKick) {
                     case 1: sdrp->setLnaState(std::max(0, sdrp->lnaStateCount() - 1 - kRspInitRfGainPos));
                             /* ★ SAY IT ON THE VTS TOO. The flashing chip stays; this is the sentence
@@ -14177,7 +14231,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 double v = 0, lo = 0, hi = 0, bw = 0;
                 bool changed = false;
-                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true; }
+                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true;
+                                                   specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
                 if (jsonNum(msg, "frequency", v) && v > 0) {
                     // ★ Clamp to the captured window: a listener cannot tune outside the range
                     //   the owner locked, and silently accepting it would demodulate noise.
@@ -15704,7 +15759,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 m.clear();
             }
             bool rebuilt = false;
-            if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; }
+            if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
             if (jsonNum(msg, "frequency", v) && v > 0) retune(v);
             double lo, hi;
             if (!rebuilt && jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) {
@@ -15727,7 +15782,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             // Decimation is derived from the mode's bandwidth, so re-negotiate it
             // BEFORE rebuilding the audio chain (it may change sampleRate/fftSize).
-            if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); }
+            if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
             broadcastConfig();
             return;
         }
@@ -18866,6 +18921,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              + ",\"iqDrops\":" + std::to_string(g_iqDrops.load(std::memory_order_relaxed))
                              + ",\"usbSamples\":" + std::to_string(g_usbSamples.load(std::memory_order_relaxed))
                              + ",\"dspCpu\":" + std::to_string((int)(dspLoadPct + 0.5))
+                             // ★★ the waterfall's CPU ceiling (vibe_spec_governor.h): 0 = none, else 10 or 5 fps
+                             + ",\"specCeil\":" + std::to_string((int)(g_specGovCeil.load(std::memory_order_relaxed) + 0.5))
                              + ",\"dspLockMs\":" + std::to_string((int)(g_dspLockMaxMs.load(std::memory_order_relaxed) + 0.5))
                              + ",\"dspWorkMs\":" + std::to_string((int)(g_dspWorkMaxMs.load(std::memory_order_relaxed) + 0.5))
                              /* ★★★ demodWaits — HOW OFTEN THE DSP THREAD BLOCKED ON A FULL DEMOD
@@ -22882,27 +22939,51 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     double gainSmoothRate_ = 0.0;
     unsigned gainSmoothSeenWrites_ = 0;
     bool gainStepGuard_ = false;   // this buffer's verdict, handed to every channel block it produces
+    /* ★★ 11.0.9 — THE RUNG THAT DOES NOT STAY. On the real RSP the hardware IF AGC cancels some rungs within ms,
+     *  which the smoother's "a step stays" test rightly refuses — and 11.0.8 then did nothing, so the transient
+     *  still popped and still upset the pilot and CEQ. Now (gainstep.h, test-gain-step case 9):
+     *    · a FLAGGED packet holds the level from the first sharp edge in it, kept or not (the smoother's hold);
+     *    · the estimators sit out every flagged packet and every block of a hold, not only a found step's glide;
+     *    · an own gain write with no flag (an RTL, the HF+, the kick) guards them for the 0.3 s the step may
+     *      take to land — the write says WHEN only roughly, so the level itself is still left to the finder.
+     *  ★ The hold is OFF on DAB: a null symbol is a sharp dip that comes back, and holding across one fills it. */
+    long ownWriteGuardLeft_ = 0;   // samples of the own-write guard still to run
+    long flagRecentLeft_ = 0;      // samples since a flag still "recent" — what the log line says found a step
     void smoothGainSteps(cf32* iq, int n, bool flagged) {
         static const bool off = [] { const char* e = std::getenv("VIBE_GAIN_SMOOTH"); return e && e[0] == '0'; }();
         gainStepGuard_ = false;
         if (off || n <= 0) return;
         if (gainSmoothRate_ != sampleRate) { gainSmooth_.configure(sampleRate); gainSmoothRate_ = sampleRate; }
+        gainSmooth_.setTransientHold(!g_dabMode.load(std::memory_order_relaxed));
         const unsigned w = g_ownGainWrites.load(std::memory_order_relaxed);
-        if (w != gainSmoothSeenWrites_) { gainSmoothSeenWrites_ = w; gainSmooth_.noteStepSoon(0.3); }
-        if (flagged) gainSmooth_.noteStepAtStart();
-        const unsigned before = gainSmooth_.steps();
+        if (w != gainSmoothSeenWrites_) {
+            gainSmoothSeenWrites_ = w; gainSmooth_.noteStepSoon(0.3);
+            ownWriteGuardLeft_ = (long)(0.3 * sampleRate);
+        }
+        // ★ A flag is "recent" for 20 ms of signal: the step it marks is FOUND a buffer or two later (the finder
+        //   looks ahead), and the log used to credit that find to "our own write" though the radio had flagged it.
+        if (flagged) { gainSmooth_.noteStepAtStart(); flagRecentLeft_ = (long)(0.02 * sampleRate); }
+        const unsigned before = gainSmooth_.steps(), holdsBefore = gainSmooth_.holds();
         gainSmooth_.process(iq, n);
-        if (gainSmooth_.steps() != before) {
+        if (gainSmooth_.steps() != before || gainSmooth_.holds() != holdsBefore) {
             static double lastLog = 0.0;
             const double now = nowSecs();
             if (now - lastLog > 2.0) {
                 lastLog = now;
-                LOGI("gain step %+.1f dB %s — level held, gliding back over ~1 s", gainSmooth_.lastStepDb(),
-                     flagged ? "(flagged by the radio)" : "(found after our own write)");
+                const bool byFlag = flagged || flagRecentLeft_ > 0;
+                if (gainSmooth_.steps() != before)
+                    LOGI("gain step %+.1f dB %s — level held, gliding back over ~1 s", gainSmooth_.lastStepDb(),
+                         byFlag ? "(flagged by the radio)" : "(found after our own write)");
+                else
+                    LOGI("gain transient held (flagged by the radio; the step did not stay) — level kept continuous");
             }
         }
-        gainStepGuard_ = gainSmooth_.steps() != before || gainSmooth_.correcting(1.0);
+        const bool ownWrite = ownWriteGuardLeft_ > 0;
+        gainStepGuard_ = flagged || ownWrite || gainSmooth_.steps() != before || gainSmooth_.correcting(1.0)
+                      || gainSmooth_.holding();
         if (gainStepGuard_) rx.noteGainStep(0.1);
+        if (ownWriteGuardLeft_ > 0) ownWriteGuardLeft_ = std::max(0L, ownWriteGuardLeft_ - (long)n);
+        if (flagRecentLeft_ > 0) flagRecentLeft_ = std::max(0L, flagRecentLeft_ - (long)n);
     }
 
     int dspBlocks_ = 0;
@@ -24914,6 +24995,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LocalSdrShim::instance().autoBandwidthTick();
                 LocalSdrShim::instance().batteryTick();
                 LocalSdrShim::instance().healthTick();   // ★ its own 1 Hz gate inside
+                specGovernorTick();                       // ★★ after health: it reads the CPU level health just set
                 /* ★★★ AND FLUSH THE CONNECTION LOG HERE, WHERE EVERY HOST RUNS. It is written
                  *     lazily — open()/close() only mark it dirty — and the only thing calling
                  *     saveIfDue() was the LINUX DAEMON'S loop (vibeserver/main.cpp). On the
@@ -29165,18 +29247,6 @@ int LocalSdrShim::startSdrplay(int index,
         // ★★★ The API flagged a gain change in THIS packet (grChanged) — same thread as the count. See smoothGainSteps.
         const uint64_t gr = self->sdrp->gainChangePackets();
         const bool step = gr != seenGr; seenGr = gr;
-        /* ★ DIAGNOSTIC (2026-10-20, delete once settled): on the Lenovo RSP1A neither OpenRSP nor the official
-         *   API produced a single "(flagged by the radio)" across nine RF AGC rungs. This says whether the
-         *   API sets grChanged at all, and when, against our own gain writes. Rate-limited. */
-        if (step) {
-            static double lastGrLog = 0.0;
-            const double now = Impl::nowSecs();
-            if (now - lastGrLog > 1.0) {
-                lastGrLog = now;
-                LOGI("RSP grChanged: packet #%llu flagged (own gain writes so far %u)",
-                     (unsigned long long)gr, g_ownGainWrites.load(std::memory_order_relaxed));
-            }
-        }
         self->enqueueIqInt16(iq, n, /*blockIfFull=*/false, /*gapBefore=*/false, step);
     });
     /* ★★★ TUNE TO (LOGICAL CENTRE + OFFSET), exactly as tuneHw() and the HackRF's open do. This
