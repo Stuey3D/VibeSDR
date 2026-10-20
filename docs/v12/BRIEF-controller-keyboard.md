@@ -133,8 +133,13 @@ One. "VCR segments" is `seg`, labelled VCR: 7-segment digits with a 14-segment u
 [ 7 ] [ 8 ] [ 9 ]   [ ⌫ ]
 [ 4 ] [ 5 ] [ 6 ]   [kHz/MHz]
 [ 1 ] [ 2 ] [ 3 ]   [ Clear ]
-[ . ] [ 0 ] [ ↵ ]
+[ . ] [ 0 ] [ ↵ ]   [ Back ]
 ```
+
+**Decided 10-20 (Stuart: "make sure the onscreen keyboards have an enter and back too"):** both layouts carry a
+visible, focusable **↵ Enter** key (submit) and a visible, focusable **Back** key (cancel / close), so every action
+can be done by moving to a key and pressing it, on any pad or remote — including no-stick pads and the Siri Remote.
+⌫ (backspace) stays a separate key.
 
 - Only one decimal point allowed, with a digit limit for the current unit.
 - Validated against the server's tuning range when the user submits, with an inline error.
@@ -148,8 +153,10 @@ One. "VCR segments" is `seg`, labelled VCR: 7-segment digits with a 14-segment u
 [q][w][e][r][t][y][u][i][o][p]
 [a][s][d][f][g][h][j][k][l][⌫]
 [⇧][z][x][c][v][b][n][m][-][↵]
-[ #+= ][      space      ][Done]
+[Back][ #+= ][    space    ][ ↵ ]
 ```
+
+★ Decided 10-20: **↵** (submit) and **Back** (cancel / close) are on-screen keys on this layout too, beside ⌫.
 
 - Layers: lower case, upper case (⇧; a double press gives caps lock) and symbols (`#+=`).
 - Accented characters (é, ç, ã, ñ, etc.) by long-pressing A on the base letter. **Refined:** "A" means *enter* in Stuart's scheme, which is R on a no-stick pad. Long-press of enter needs press/release timing that the bus already gives (down and up are separate events). URL mode needs `.`, `/`, `:` on the base layer — see modes.
@@ -272,6 +279,26 @@ The controller guide (`src/utils/padGuide.ts`) gets a third tab, KEYBOARD, gener
 - Predictive text or autocorrect.
 - Keyboards for non-Latin scripts.
 - **Refined:** pasting (the bookmark import box) — touch-only by nature.
+
+## Decided 10-20 (Stuart, relayed by the coordinator 2026-10-20)
+
+1. **Buttons:** each pad keeps its own scheme. Enter and back stay where they are — R1 / L1 on no-stick pads, ✕ / ○ on
+   stick pads. The **tune** action moves the caret. On stick pads the spare face buttons and L1 / R1 are
+   ⌫ (west) / space (north) / shift (L1) / symbols (R1); on the numeric pad L1 / R1 toggle kHz / MHz. No-stick pads
+   use the on-screen keys for those. (The proposed table in § Button mapping is accepted as written.)
+2. **START:** a tap submits while the keyboard is open; HOLD START (profile switch) is ignored while it is open.
+3. **Bookmark name:** pre-filled from the RDS name, then the station name, then the frequency, so SAVE works straight
+   away and the name stays editable.
+
+The audit's other recommendations are adopted as the defaults:
+- both layouts have visible, focusable ↵ (submit) and Back (cancel) keys as well as ⌫ (Stuart, same day);
+- triggers (LT / RT) are not needed — no native change;
+- the keyboard opens only on Enter on a field, never on arrival;
+- Back cancels one layer (⌫ is a key);
+- landscape follows the window (numeric side by side when wide, QWERTY full width);
+- digit-step tuning is Phase 3;
+- `VibePinPrompt` replaces the iOS `Alert.prompt` whenever a pad is in use;
+- ServerMode's admin password gets a "generate" key.
 
 ## 8. Every text field, and the mode it would use (Refined — new)
 
