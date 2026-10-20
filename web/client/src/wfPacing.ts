@@ -27,7 +27,7 @@
  *     at the next arrival, and discarding a repeat costs nothing real.
  */
 
-/** Display rates panels actually run at. A measured rate within 4 % of one IS that one. */
+/** Display rates panels actually run at. A measured rate within 5 % of one IS that one. */
 const NOMINAL_HZ = [24, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240];
 
 export function nominalRefreshHz(measuredHz: number): number {
@@ -37,7 +37,7 @@ export function nominalRefreshHz(measuredHz: number): number {
     const err = Math.abs(measuredHz - hz) / hz;
     if (err < bestErr) { bestErr = err; best = hz; }
   }
-  return bestErr <= 0.04 ? best : measuredHz;
+  return bestErr <= 0.05 ? best : measuredHz;
 }
 
 /** Robust display-interval estimate: the MEDIAN of the last few rAF intervals. An EMA let one long
@@ -45,7 +45,7 @@ export function nominalRefreshHz(measuredHz: number): number {
 export class FrameClock {
   private dts: number[] = [];
   private last = 0;
-  private static readonly N = 15;
+  private static readonly N = 31;
   /** Feed a frame timestamp (prefer the rAF timestamp: vsync-aligned, unlike performance.now()). */
   tick(ts: number) {
     if (this.last > 0) {
@@ -75,6 +75,20 @@ export function framesPerRowFor(refreshHz: number, rowsPerSec: number, prev: num
   const cand = Math.max(1, Math.floor(ideal + 0.5 + 1e-9));
   if (prev >= 1 && cand !== prev && Math.abs(ideal - prev) < 0.5 + 0.15) return prev;
   return cand;
+}
+
+/** How to draw `deviceRowsPerSec` on a `refreshHz` panel evenly: `per` device rows (all one real row)
+ *  every `fpr` frames. Faster than the display → several rows a frame. Slower → one device row every
+ *  N frames if that is a whole number, else one SCREEN row (rowPx device rows) every N frames if THAT
+ *  is (Default 20/s at dpr 2 on 60 Hz: 2 rows every 3 frames), else one device row, N rounded. */
+export function emitShape(refreshHz: number, deviceRowsPerSec: number, rowPx: number): { per: number; fpr: number } {
+  const rate = Math.max(1, deviceRowsPerSec);
+  if (rate >= refreshHz * 0.95) return { per: Math.max(1, Math.floor(rate / refreshHz + 0.5)), fpr: 1 };
+  for (const per of [1, Math.max(1, Math.round(rowPx))]) {
+    const x = refreshHz * per / rate;
+    if (Math.abs(x - Math.round(x)) < 0.05) return { per, fpr: Math.max(1, Math.round(x)) };
+  }
+  return { per: 1, fpr: Math.max(1, Math.floor(refreshHz / rate + 0.5 + 1e-9)) };
 }
 
 /** Rows to hold for one arrival-to-arrival pair: enough for the WORST recent gap, rounded UP, plus
@@ -120,16 +134,25 @@ export class RowPacer {
   private slowGap = 0;        // worst recent arrival gap (jumps up, decays ×0.98 per arrival)
   private avgGap = 0;         // smoothed arrival gap — the trace tween's span
   private frameTick = 0;
-  framesPerRow = 0;           // 0 = re-decide at the next arrival
+  framesPerRow = 0;           // display frames per EMISSION (0 = re-decide at the next arrival)
+  /** Device rows drawn per emission — all the SAME real row. 1, except: SMOOTH on a Retina canvas
+   *  (60 screen rows/s = 120 device rows/s, two per frame at 60 Hz), and SHARP, whose one row per
+   *  received frame is one SCREEN row (rowPx device rows) — the app's look, one point per frame. */
+  rowsPerEmit = 1;
+  /** Device pixels per screen row (round(dpr), ≥ 1). */
+  rowPx = 1;
+  /** Device rows the last onFrame() asked for (0 or rowsPerEmit). */
+  rowsNow = 0;
   emitStart = 0;
   emitInterval = 0;
   emitTotal = 0;
   emitted = 0;
 
   /** The setting changed: re-decide the cadence from scratch (the hysteresis is for wobble only). */
-  setRate(rowsPerSec: number, sharp: boolean) {
-    if (rowsPerSec !== this.rowsPerSec || sharp !== this.sharp) this.framesPerRow = 0;
-    this.rowsPerSec = rowsPerSec; this.sharp = sharp;
+  setRate(rowsPerSec: number, sharp: boolean, rowPx = 1) {
+    const px = Math.max(1, Math.round(rowPx));
+    if (rowsPerSec !== this.rowsPerSec || sharp !== this.sharp || px !== this.rowPx) this.framesPerRow = 0;
+    this.rowsPerSec = rowsPerSec; this.sharp = sharp; this.rowPx = px;
   }
 
   /** A real row arrived at `now` (ms). Unemitted repeats of the last pair are DROPPED, never flushed. */
@@ -145,7 +168,15 @@ export class RowPacer {
     //   that jittered across a vsync boundary on screen as 2, 4, 2, 4 frames apart (measured up to
     //   9 hitches/s at 20 fps). On a cadence, a row that just misses its slot goes out one frame late
     //   and the cadence restarts from THERE, so the phase settles where arrivals precede slots.
-    const target = this.sharp ? 1000 / Math.max(1, this.avgGap) : this.rowsPerSec;
+    // ★ FASTER THAN THE DISPLAY → several device rows per frame. Smooth at dpr 2 is 120 device
+    //   rows/s; one row a frame would cap it at 60 (half the app's speed). Rounded, from the nominal
+    //   refresh, so it cannot wobble: 120/60 = 2, 60/60 = 1, 120/120 = 1.
+    // ★ And a rate that is not a whole number of frames per DEVICE row is drawn a SCREEN row at a time:
+    //   Default's 20 rows/s is 40 device rows/s on Retina — 1.5 frames each at 60 Hz, the knife-edge —
+    //   so it goes as 2 device rows every 3 frames instead (the app's own one-point step).
+    const per = this.sharp ? this.rowPx : emitShape(refreshHz, this.rowsPerSec, this.rowPx).per;
+    if (per !== this.rowsPerEmit) { this.rowsPerEmit = per; this.framesPerRow = 0; }
+    const target = this.sharp ? 1000 / Math.max(1, this.avgGap) : this.rowsPerSec / per;
     this.framesPerRow = framesPerRowFor(refreshHz, target, this.framesPerRow);
     const rowMs = 1000 / (refreshHz / this.framesPerRow);
     this.emitTotal = this.sharp ? 1 : rowsForPair(gap, this.slowGap, rowMs);
@@ -154,16 +185,19 @@ export class RowPacer {
     this.emitted = 0;
   }
 
-  /** One display frame at `frameTs`. Returns 0, or t ∈ (0, 1] for the row to draw now: t < 0.5 shows
-   *  the PREVIOUS real row, otherwise the newest — whole rows, never a blend. `hasRow` = a row exists. */
+  /** One display frame at `frameTs`. Returns 0, or t ∈ (0, 1] for the row to draw now (`rowsNow`
+   *  device rows of it): t < 0.5 shows the PREVIOUS real row, otherwise the newest — whole rows,
+   *  never a blend. `hasRow` = a row exists. */
   onFrame(frameTs: number, hasRow: boolean): number {
     this.clock.tick(frameTs);
+    this.rowsNow = 0;
     if (!hasRow) return 0;
     const fpr = Math.max(1, this.framesPerRow);
     const due = rowsDueThisFrame(this.frameTick, fpr, this.emitTotal - this.emitted);
     this.frameTick = due.frameTick;
     if (!due.rows) return 0;
     this.emitted++;
+    this.rowsNow = this.rowsPerEmit;
     // ★ t against the pair WITHOUT rowsForPair's +1 headroom row, so the headroom never changes which
     //   real row is shown (prev/cur) — only how long the pair can last. Surplus rows show the newest.
     const nominal = this.sharp ? 1 : Math.max(1, this.emitTotal - 1);

@@ -7964,10 +7964,18 @@ let wfScroll: 'sharp' | 'default' | 'smooth' = 'default';
 // ★ Each preset is a TARGET ROW RATE (rows/sec on screen), not a multiplier: this renderer works
 //   out how many rows to synthesise per frame pair to hit it, which is why a slow feed and a fast
 //   one scroll at the same speed. SHARP opts out entirely — one row per received frame.
+// ★★★ THE APP'S THREE, EXACTLY (src/components/WaterfallView.tsx WF_TARGET_ROWS; Stuart, 2026-10-20: browser
+//     and app scroll identically). Rates are SCREEN rows (points) per second — the app's row is one point.
+//     Stuart 10-20: with 10 fps the server default, 20 and 60 divide evenly into 5/10/20 fps feeds and
+//     60/120 Hz displays; 30 gave ×1.5 alternating repeats on a 20 fps feed. On Retina at 60 Hz Default is
+//     one screen row (2 device rows) every 3 frames, Smooth 2 device rows every frame (wfPacing emitShape).
+//     40 was tried in the app and is a regular judder.
+//     Every row on screen is a REAL frame, repeated when the feed is slower — never a blend (7bce170d) —
+//     so 5, 10 and 20 fps servers all scroll at the same steady speed.
 const WF_PRESET: Record<string, { rate: number; note: string }> = {
-  sharp:   { rate: 0,  note: 'One row per received frame — nothing invented, and it scrolls at the data rate.' },
-  default: { rate: 20, note: 'A steady 20 rows/sec whatever the feed — a little interpolation on a slow one.' },
-  smooth:  { rate: 30, note: 'A steady 30 rows/sec — continuous motion on a slow feed, less real detail.' },
+  sharp:   { rate: 0,  note: 'One row per received frame — nothing repeated, and it scrolls at the data rate.' },
+  default: { rate: 20, note: 'A steady 20 rows/sec whatever the feed — real rows, repeated on a slow one.' },
+  smooth:  { rate: 60, note: 'A steady 60 rows/sec — the fastest, smoothest scroll; more repeats on a slow feed.' },
 };
 let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
 

@@ -136,7 +136,7 @@ export class Waterfall {
    *    between real ones (emitTotal is forced to 1, the state this already reaches naturally when
    *    the screen speed matches the data rate). The SPECTRUM TRACE is untouched either way: this
    *    governs waterfall row emission only, and the trace must stay smooth at all times. */
-  setSharpRows(on: boolean) { this.sharpRows = on; this.pacer.setRate(this.rowsPerSec, on); }
+  setSharpRows(on: boolean) { this.sharpRows = on; this.pacer.setRate(this.rowsPerSec, on, renderDpr()); }
   private sharpRows = false;
 
 
@@ -147,7 +147,7 @@ export class Waterfall {
   }
   // ★ framesPerRow = 0: a new rate re-decides the cadence from scratch (its hysteresis is only for
   //   measurement wobble at a FIXED rate — carrying Smooth's N=1 into Default would keep 60 rows/s).
-  private recomputeRate() { this.rowsPerSec = this.screenSpeed * renderDpr(); this.pacer.setRate(this.rowsPerSec, this.sharpRows); }
+  private recomputeRate() { this.rowsPerSec = this.screenSpeed * renderDpr(); this.pacer.setRate(this.rowsPerSec, this.sharpRows, renderDpr()); }
   private prevRow: Uint8Array | null = null;   // last received row
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
@@ -621,7 +621,8 @@ export class Waterfall {
     // ★ Display interval: the MEDIAN of recent ticks, from the rAF timestamp when the caller has it
     //   (vsync-aligned; performance.now() inside the callback carries the callback's own jitter).
     const t = this.pacer.onFrame(frameTs ?? now, !!(this.curRow && this.prevRow));
-    if (t > 0) this.drawRow(t);
+    // ★ rowsNow device rows of the SAME real row: Smooth on Retina (2 a frame), Sharp (one screen row).
+    if (t > 0) for (let i = 0; i < this.pacer.rowsNow; i++) this.drawRow(t);
 
 
     // ★★★ DO NOT ZERO THE CARRY WHEN A PAIR COMPLETES. That is what an accumulator is FOR: the
