@@ -813,7 +813,7 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
     const t = statusTags(on, sd.face);
     const cells = <StatusCells sd={sd as VfdStatus} parts={[t.text]} frames={t.frames} label={on.join(' ')} />;
     return onPress
-      ? <TouchableOpacity onPress={onPress} activeOpacity={0.7} hitSlop={8}>{cells}</TouchableOpacity>
+      ? <TouchableOpacity /* nav-registered: the readout carries screenNavRef on its parent */ onPress={onPress} activeOpacity={0.7} hitSlop={8}>{cells}</TouchableOpacity>
       : cells;
   }
   const body = (
@@ -828,7 +828,7 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
     </View>
   );
   return onPress
-    ? <TouchableOpacity onPress={onPress} activeOpacity={0.7} hitSlop={8}>{body}</TouchableOpacity>
+    ? <TouchableOpacity /* nav-registered: the readout carries screenNavRef on its parent */ onPress={onPress} activeOpacity={0.7} hitSlop={8}>{body}</TouchableOpacity>
     : body;
 }
 

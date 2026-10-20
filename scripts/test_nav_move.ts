@@ -55,4 +55,15 @@ for (const tabs of [true, false]) for (const vts of [true, false]) for (const lo
 }
 
 console.log(fails ? `test_nav_move: ${fails} FAILED` : 'test_nav_move: all ok');
+// ★ The action row (controller audit group C, 2026-10-20): CANCEL / SHARE / TUNE on one row below everything, SHARE only
+//   when it can be pressed; the highlight still starts on the frequency box.
+{
+  const a = tuneCardItems({ tabs: true, vts: false, lockUnit: false, profiles: true, actions: { share: true } });
+  const last = a.items.slice(-3).map((x) => x.k).join(',');
+  ok(last === 'act:cancel,act:share,act:tune', `action row in order (${last})`);
+  ok(new Set(a.items.slice(-3).map((x) => x.row)).size === 1 && a.items.slice(-3)[0].row > a.items[a.items.length - 4].row, 'one row, below the rest');
+  ok(a.items[a.start].k === 'field', 'still starts on the frequency box');
+  const b = tuneCardItems({ tabs: false, vts: false, lockUnit: false, profiles: false, actions: { share: false } });
+  ok(!b.items.some((x) => x.k === 'act:share') && b.items.some((x) => x.k === 'act:tune'), 'no SHARE stop when sharing is off');
+}
 process.exit(fails ? 1 : 0);

@@ -454,8 +454,9 @@ export default function FreqModal({
   //    no arrow went). Opened from the keyboard, the highlight starts on the frequency box.
   const hasVtsSkip = !!(onVtsPrev && onVtsNext);
   const tuneLayout = useMemo(
-    () => tuneCardItems({ tabs: hasBookmarks && !picking, vts: hasVtsSkip, lockUnit: !!lockUnit, profiles: profiles.length > 0 }),
-    [hasBookmarks, picking, hasVtsSkip, lockUnit, profiles.length]);
+    () => tuneCardItems({ tabs: hasBookmarks && !picking, vts: hasVtsSkip, lockUnit: !!lockUnit, profiles: profiles.length > 0,
+                          actions: { share: !!onShare && !shareOffReason } }),
+    [hasBookmarks, picking, hasVtsSkip, lockUnit, profiles.length, !!onShare, !!shareOffReason]);   // eslint-disable-line react-hooks/exhaustive-deps
   const tuneRun = (k: TuneCardKey) => {
     switch (k) {
       case 'tab:tune': setCardMode('tune'); break;
@@ -464,6 +465,9 @@ export default function FreqModal({
       case 'vts:next': onVtsNext?.(); break;
       case 'field': inputRef.current?.focus(); break;
       case 'profile': setProfileToggle(n => n + 1); break;
+      case 'act:cancel': onClose(); break;
+      case 'act:share': doShareRef.current(); break;
+      case 'act:tune': confirmRef.current(); break;
       default: switchUnitRef.current(k.slice(5) as Unit); break;
     }
   };
@@ -542,6 +546,13 @@ export default function FreqModal({
 
   // Read through a ref so the listener above never captures a stale `value`.
   const confirmRef = useRef(confirm); confirmRef.current = confirm;
+  /** SHARE — the key's press, and Enter on it (controller audit group C). */
+  const doShare = () => {
+    if (!onShare) return;
+    if (Platform.OS === 'ios') { pendingShare.current = true; onClose(); }
+    else { onShare(); onClose(); }
+  };
+  const doShareRef = useRef(doShare); doShareRef.current = doShare;
   // Read through a ref: the listener above is installed once, on `visible` alone.
   const cardModeRef = useRef(cardMode); cardModeRef.current = cardMode;
 
@@ -872,23 +883,20 @@ export default function FreqModal({
           {pt.metal ? (
             // ★ §10.3: CANCEL and SHARE are plain keys; TUNE ▶ is the primary action, its legend lit.
             <View style={st.actions}>
-              <PopupKey label="CANCEL" onPress={onClose} height={40} fontSize={12} style={{ flex: 1 }} />
+              <PopupKey label="CANCEL" focused={tuneOn('act:cancel')} onPress={onClose} height={40} fontSize={12} style={{ flex: 1 }} />
               {onShare && shareOffReason ? (
                 <PopupKey label={shareOffReason} disabled numberOfLines={2} height={40} fontSize={9}
                   accessibilityLabel={`Share. ${shareOffReason}`} style={{ flex: 1 }} />
               ) : onShare && (
-                <PopupKey label="SHARE" height={40} fontSize={12} style={{ flex: 1 }}
-                  onPress={() => {
-                    if (Platform.OS === 'ios') { pendingShare.current = true; onClose(); }
-                    else { onShare(); onClose(); }
-                  }} />
+                <PopupKey label="SHARE" focused={tuneOn('act:share')} height={40} fontSize={12} style={{ flex: 1 }}
+                  onPress={doShare} />
               )}
-              <PopupKey label="TUNE ▶" primary onPress={confirm} height={40} fontSize={12} style={{ flex: 2 }} />
+              <PopupKey label="TUNE ▶" primary focused={tuneOn('act:tune')} onPress={confirm} height={40} fontSize={12} style={{ flex: 2 }} />
             </View>
           ) : (
           <View style={st.actions}>
             <TouchableOpacity
-              style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }]}
+              style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }, tuneOn('act:cancel') && { borderColor: focusC.ring, borderWidth: 2 }]}
               onPress={onClose}
             >
               <Text style={{ fontFamily: t.font, fontSize: isWhite ? 13 : 12, color: dimText }}>
@@ -904,11 +912,8 @@ export default function FreqModal({
               </View>
             ) : onShare && (
               <TouchableOpacity
-                style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }]}
-                onPress={() => {
-                  if (Platform.OS === 'ios') { pendingShare.current = true; onClose(); }
-                  else { onShare(); onClose(); }
-                }}
+                style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }, tuneOn('act:share') && { borderColor: focusC.ring, borderWidth: 2 }]}
+                onPress={doShare}
               >
                 <Text style={{ fontFamily: t.font, fontSize: isWhite ? 13 : 12, color: dimText }}>
                   SHARE
@@ -916,7 +921,7 @@ export default function FreqModal({
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={[st.tuneBtn, { borderColor: bdrBrt, paddingVertical: btnPadY }]}
+              style={[st.tuneBtn, { borderColor: bdrBrt, paddingVertical: btnPadY }, tuneOn('act:tune') && { borderColor: focusC.ring, borderWidth: 2 }]}
               onPress={confirm}
             >
               <Text style={{ fontFamily: t.font, fontSize: isWhite ? 13 : 12, color: keyOn, fontWeight: 'bold' }}>

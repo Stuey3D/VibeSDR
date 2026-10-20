@@ -169,7 +169,7 @@ export default function KeyboardShortcuts({ visible, onClose }: {
           <PopupKey label="CLOSE" onPress={onClose} height={32}
             style={{ alignSelf: 'center', width: 110, marginVertical: 10 }} />
         ) : (
-        <Pressable style={s.closeBtn} onPress={onClose} onTouchStart={noteTouchInteraction}>
+        <Pressable /* nav-skip: Back closes it */ style={s.closeBtn} onPress={onClose} onTouchStart={noteTouchInteraction}>
           <Text style={[s.closeTxt, { fontFamily: t.font }]}>CLOSE</Text>
         </Pressable>
         )}

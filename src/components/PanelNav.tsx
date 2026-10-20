@@ -728,6 +728,24 @@ export function useNavButton(onPress?: () => void, skip?: boolean, opts?: { pref
 }
 
 /**
+ * ★ A focus slot round any control with no nav of its own (controller audit group C, 2026-10-20): a text field (Enter
+ *   puts the cursor in it), a plain Touchable, a footer link. Registers in the surrounding `NavRow` and draws a ring
+ *   that moves nothing. Use `style` for the layout the wrapped control needs (e.g. `{ flex: 1 }` round a field).
+ */
+export function NavSlot({ onPress, skip, style, radius = 8, children }: {
+  onPress: () => void; skip?: boolean; style?: object; radius?: number; children: React.ReactNode;
+}) {
+  const { focused, viewRef } = useNavButton(onPress, skip);
+  const { ring } = useNavFocus();
+  return (
+    <View ref={viewRef} style={style}>
+      {children}
+      <NavRing on={focused} color={ring} radius={radius} inset={-3} />
+    </View>
+  );
+}
+
+/**
  * Register a VALUE control (a slider, or a live-bar control) in the focus order.
  *
  * ★ Fixes a real gap: only buttons registered, so keyboard focus SKIPPED sliders

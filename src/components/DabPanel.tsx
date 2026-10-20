@@ -362,7 +362,7 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPre
   const ann = (d.announce ?? []).filter(a => a.subChId === sv.subch && a.types.length);
   const alarm = ann.some(a => a.alarm);
   return (
-    <TouchableOpacity onPress={onPress} style={[s.svc, active && s.svcActive]} activeOpacity={0.7}
+    <TouchableOpacity /* nav-registered: DabPanel's list (focused prop) */ onPress={onPress} style={[s.svc, active && s.svcActive]} activeOpacity={0.7}
                       onLayout={onY ? (e) => onY(sv.sid, e.nativeEvent.layout.y) : undefined}>
       <SvcLogo uri={logo} />
       <View style={{ flex: 1 }}>

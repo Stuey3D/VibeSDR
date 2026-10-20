@@ -282,6 +282,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [error,       setError]         = useState<string | null>(null);
   const [customUrl,   setCustomUrl]     = useState('');
   const customInputRef = useRef<TextInput | null>(null);
+  // ★ Controller audit group C: the directory search box and the URL row's ♡ / ☆ / sort presses, shared by touch and Enter.
+  const filterInputRef = useRef<TextInput | null>(null);
+  const urlHeartPress = useRef<() => void>(() => {});
+  const urlStarPress = useRef<() => void>(() => {});
+  const sortPress = useRef<() => void>(() => {});
   const [connecting,  setConnecting]    = useState(false);
   const [filter,      setFilter]        = useState('');
   /** ★★★ Show the receivers whose owner does not permit third-party apps (`ext_api === 0`). They
@@ -2100,6 +2105,30 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // own buttons do those. Back (Backspace / Escape) is the only key with a meaning of its own here: step out one level.
   const navFocusRef = useRef(navFocus); navFocusRef.current = navFocus;
 
+  // ── A row's own buttons by pad (controller audit group C) — see renderItem's `subOn`. ──
+  const [rowSub, setRowSub] = useState(0);
+  const rowSubRef = useRef(0); rowSubRef.current = rowSub;
+  const rowSubs = useRef<Record<number, Array<() => void>>>({});
+  const listLenRef = useRef(listData.length); listLenRef.current = listData.length;
+  useEffect(() => { setRowSub(0); }, [navFocus]);
+  useEffect(() => {
+    if (!listNavActive) return;
+    // Above the list's own nav (priority 0): Left / Right / Enter / Back on a row that HAS buttons are the row's.
+    const sub = addKeyListener('down', (e) => {
+      if (e.typing) return;
+      const li = navFocusRef.current - hdrActions.current.length;
+      if (li < 0 || li >= listLenRef.current) return;
+      const subsHere = rowSubs.current[li];
+      if (!subsHere || !subsHere.length) return;
+      const cur = rowSubRef.current;
+      if (e.key === 'ArrowRight') { if (cur < subsHere.length) setRowSub(cur + 1); return true; }
+      if (e.key === 'ArrowLeft') { if (cur > 0) { setRowSub(cur - 1); return true; } return; }
+      if (e.key === 'Enter' && cur > 0) { subsHere[cur - 1]?.(); return true; }
+      if (e.key === 'Back' && cur > 0) { setRowSub(0); return true; }
+    }, { priority: 1 });
+    return () => sub.remove();
+  }, [listNavActive]);
+
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
   /**
@@ -2118,6 +2147,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const globalIndex = foot ? hdrActions.current.length + listData.length + i : i;
     return navFocus === globalIndex;
   };
+
+  /** ★ The highlight on a header control (controller audit group C): the same ring the rows use. */
+  const slotRing = (on: boolean) => (on ? { borderColor: focusC.ring, borderWidth: 2 } : null);
 
   /** A chooser row that takes part in the screen's single focus order. */
   const ChooserRow = ({ style, onPress, zone, children, ...rest }: any) => {
@@ -2138,6 +2170,20 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     );
   };
 
+  /** ★ A small key INSIDE a chooser row (a saved server's ✕, a discovered one's ☆) — its own stop in the header's
+   *  order, straight after its row (React renders a row's children before its next sibling). Controller audit group C. */
+  const ChooserKey = ({ style, onPress, children, ...rest }: any) => {
+    const bank = hdrActions.current;
+    const myIndex = bank.length;
+    bank.push(onPress ?? (() => {}));
+    const on = navFocus === myIndex;
+    return (
+      <TouchableOpacity onPress={onPress} style={[{ borderRadius: 6 }, style, on && { borderColor: focusC.ring, borderWidth: 2 }]} {...rest}>
+        {children}
+      </TouchableOpacity>
+    );
+  };
+
   const renderItem = ({ item, index, getIndex, drag, isActive }: {
     item: ListItem; index?: number; getIndex?: () => number | undefined;
     drag?: () => void; isActive?: boolean;
@@ -2148,6 +2194,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // Two list components, two contracts, one renderItem shared between them.
     const idx = index ?? getIndex?.();
     const navOn = idx != null && (idx + hdrActions.current.length) === navFocus;
+    // ★★ THE ROW'S OWN BUTTONS (controller audit group C, 2026-10-20): ✎ ☆ ♥ on a saved server, ☆ ♡ on a directory
+    //    row, the favourites' sort chip — none were reachable by pad. On the highlighted row, Right walks onto them and
+    //    Left back to the row; Enter presses the one lit; Back returns to the row (see the listener by useListNav).
+    const subs: Array<() => void> = [];
+    if (idx != null) rowSubs.current[idx] = subs;
+    const subOn = (fn: () => void) => { subs.push(fn); return navOn && rowSub === subs.length; };
+    const subRing = (on: boolean) => (on ? { borderWidth: 2, borderColor: focusC.ring, borderRadius: 6 } : null);
     // Explicit collapsible section headers (favourites / country groups / OTHER).
     if (item.kind === 'header') {
       // ★ Headers are navigable (Enter collapses them) but had NO focus styling, so the
@@ -2162,7 +2215,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               <View style={{ flex: 1 }}>
                 <SectionHeader label={item.count > 0 ? `${item.label}  (${item.count})` : item.label} fs={fs} F={F} C={C} />
               </View>
-              <TouchableOpacity onPress={cycleFavSort} style={[styles.sortBtn, { borderColor: C.border }]} activeOpacity={0.7}>
+              <TouchableOpacity onPress={cycleFavSort} style={[styles.sortBtn, { borderColor: C.border }, subRing(subOn(cycleFavSort))]} activeOpacity={0.7}>
                 <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.key, letterSpacing: 1 }}>⇅ {FAV_SORT_LABEL[favSort]}</Text>
               </TouchableOpacity>
             </View>
@@ -2249,19 +2302,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             </View>
             <View style={styles.rowRight}>
               {favIsCustom(fav) && (
-                <TouchableOpacity style={{ padding: 4 }} onPress={() => openEditFav(fav)}>
+                <TouchableOpacity style={[{ padding: 4 }, subRing(subOn(() => openEditFav(fav)))]} onPress={() => openEditFav(fav)}>
                   <Text style={{ fontSize: fs(16), color: C.keyDim }}>✎</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity style={{ padding: 4 }}
+              <TouchableOpacity style={[{ padding: 4 }, subRing(subOn(() => isDefault ? handleClearDefault() : handleSetDefault({ name: fav.name, url: fav.url })))]}
                 onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: fav.name, url: fav.url })}>
                 <Text style={{ fontSize: fs(18), color: isDefault ? C.key : C.keyDim }}>{isDefault ? '★' : '☆'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={{ padding: 4 }} onPress={() => handleToggleFav(fav)}>
+              <TouchableOpacity style={[{ padding: 4 }, subRing(subOn(() => handleToggleFav(fav)))]} onPress={() => handleToggleFav(fav)}>
                 <Text style={{ fontSize: fs(18), color: C.red }}>♥</Text>
               </TouchableOpacity>
               {canDrag && (
-                <TouchableOpacity style={{ paddingLeft: 6, paddingVertical: 4 }} onPressIn={drag} delayLongPress={0}>
+                <TouchableOpacity /* nav-skip: the drag handle is a gesture (reorder by pad is on the NICE list) */ style={{ paddingLeft: 6, paddingVertical: 4 }} onPressIn={drag} delayLongPress={0}>
                   <Text style={{ fontSize: fs(20), color: C.keyDim }}>≡</Text>
                 </TouchableOpacity>
               )}
@@ -2401,11 +2454,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 {isFull ? 'FULL ' : ''}{inst.users}/{inst.maxUsers}
               </Text>
             ) : null}
-            <TouchableOpacity style={{ padding: 4 }}
+            <TouchableOpacity style={[{ padding: 4 }, subRing(subOn(() => isDefault ? handleClearDefault() : handleSetDefault({ name: inst.name, url: inst.url })))]}
               onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: inst.name, url: inst.url })}>
               <Text style={{ fontSize: fs(18), color: isDefault ? C.key : C.keyDim }}>{isDefault ? '★' : '☆'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={{ padding: 4 }}
+            <TouchableOpacity style={[{ padding: 4 }, subRing(subOn(() => handleToggleFav({ name: inst.name, url: inst.url, serverType: inst.serverType,
+                latitude: inst.latitude ?? undefined, longitude: inst.longitude ?? undefined, bestSnr: inst.bestSnr ?? undefined,
+                custom: false })))]}
               onPress={() => handleToggleFav({ name: inst.name, url: inst.url, serverType: inst.serverType,
                 latitude: inst.latitude ?? undefined, longitude: inst.longitude ?? undefined, bestSnr: inst.bestSnr ?? undefined,
                 custom: false })}>
@@ -2555,14 +2610,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           {/* ★★ RECORDINGS, WITHOUT OPENING A RECEIVER (NickB / Stuart, 2026-10-10: "Top of the directory page can we
               have a recordings button … lists it by server name and then chronologically"). The same list as the
               audio menu's, all servers equal here. */}
+          {/* ★ RECORDINGS and the cog take part in the pad's order (controller audit group C, 2026-10-20). */}
           <TouchableOpacity onPress={() => setRecordingsOpen(true)} hitSlop={8} accessibilityRole="button"
                             accessibilityLabel="Recordings"
-                            style={{ paddingVertical: 6, paddingHorizontal: 10, marginRight: 4, borderWidth: 1,
-                                     borderColor: C.border, borderRadius: 6 }}>
+                            style={[{ paddingVertical: 6, paddingHorizontal: 10, marginRight: 4, borderWidth: 1,
+                                     borderColor: C.border, borderRadius: 6 }, slotRing(chooserSlot(() => setRecordingsOpen(true)))]}>
             <Text style={{ fontFamily: F, fontSize: fs(11), color: C.key, letterSpacing: 1 }}>⏺ RECORDINGS</Text>
           </TouchableOpacity>
           {/* ⚙ = factory reset (the mode-change badge is gone — single skin now) */}
-          <TouchableOpacity style={{ padding: 10 }} onPress={handleMasterReset} hitSlop={8}>
+          <TouchableOpacity style={[{ padding: 10, borderRadius: 6 }, slotRing(chooserSlot(handleMasterReset))]} onPress={handleMasterReset} hitSlop={8}>
             <Text style={{ fontSize: fs(22), color: C.keyIdle }}>⚙</Text>
           </TouchableOpacity>
         </View>
@@ -2582,7 +2638,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           <View style={[styles.defaultBanner, { borderBottomColor: C.borderBright, backgroundColor: C.keyBgAct }]}>
             <Text style={{ fontFamily: F, fontSize: fs(9), color: C.text, letterSpacing: 2, flexShrink: 0 }}>★ AUTO-CONNECT</Text>
             <Text style={{ fontFamily: F, fontSize: fs(12), color: C.text, flex: 1 }} numberOfLines={1}>{defaultInst.name}</Text>
-            <TouchableOpacity onPress={handleClearDefault} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+            <TouchableOpacity onPress={handleClearDefault} style={[{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }, slotRing(chooserSlot(handleClearDefault))]}>
               <Text style={{ fontFamily: F, fontSize: fs(14), color: C.red }}>✕</Text>
             </TouchableOpacity>
           </View>
@@ -2591,7 +2647,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         {/* Directory back row — only inside an open directory */}
         {selectedDir !== null && (
           <TouchableOpacity
-            style={[styles.backRow, { borderBottomColor: C.border }]}
+            style={[styles.backRow, { borderBottomColor: C.border }, slotRing(chooserSlot(() => { setSelectedDir(null); setInstances([]); setFilter(''); setError(null); setLoading(false); }))]}
             onPress={() => { setSelectedDir(null); setInstances([]); setFilter(''); setError(null); setLoading(false); }}
           >
             <Text style={{ fontFamily: F, fontSize: fs(13), color: C.key }}>‹ Directories</Text>
@@ -2629,7 +2685,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             /* SpyServer link pasted — favourite into the SpyServer list (no http
                default-star; SpyServer isn't a default-instance auto-connect). */
             <TouchableOpacity
-              style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }]}
+              style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }, slotRing(chooserSlot(() => toggleSpyFav(customSpyTarget.host, customSpyTarget.port)))]}
               onPress={() => toggleSpyFav(customSpyTarget.host, customSpyTarget.port)}
             >
               {(() => {
@@ -2642,8 +2698,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             <>
               {/* Heart — favourite this custom URL */}
               <TouchableOpacity
-                style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }]}
-                onPress={() => {
+                style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }, slotRing(chooserSlot(() => urlHeartPress.current()))]}
+                onPress={() => urlHeartPress.current()}
+              >
+                <Text style={{ fontSize: fs(18), color: customFav ? C.red : C.keyDim }}>
+                  {customFav ? '♥' : '♡'}
+                </Text>
+              </TouchableOpacity>
+              {(() => { urlHeartPress.current = () => {
                   const url     = normalisedCustomUrl;
                   const fallback = url.replace(/^https?:\/\//, '');
                   // Already a favourite → just un-favourite. Otherwise ask for a name.
@@ -2664,16 +2726,17 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   } else {
                     favouriteCustomUrl(url, fallback);
                   }
-                }}
-              >
-                <Text style={{ fontSize: fs(18), color: customFav ? C.red : C.keyDim }}>
-                  {customFav ? '♥' : '♡'}
-                </Text>
-              </TouchableOpacity>
+                }; return null; })()}
               {/* Star — set as default */}
               <TouchableOpacity
-                style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }]}
-                onPress={() => {
+                style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }, slotRing(chooserSlot(() => urlStarPress.current()))]}
+                onPress={() => urlStarPress.current()}
+              >
+                <Text style={{ fontSize: fs(18), color: defaultInst?.url === normalisedCustomUrl ? C.key : C.keyDim }}>
+                  {defaultInst?.url === normalisedCustomUrl ? '★' : '☆'}
+                </Text>
+              </TouchableOpacity>
+              {(() => { urlStarPress.current = () => {
                   const url  = normalisedCustomUrl;
                   const name = url.replace(/^https?:\/\//, '');
                   if (defaultInst?.url === url) {
@@ -2688,16 +2751,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                       },
                     ]);
                   }
-                }}
-              >
-                <Text style={{ fontSize: fs(18), color: defaultInst?.url === normalisedCustomUrl ? C.key : C.keyDim }}>
-                  {defaultInst?.url === normalisedCustomUrl ? '★' : '☆'}
-                </Text>
-              </TouchableOpacity>
+                }; return null; })()}
             </>
           ) : null}
           <TouchableOpacity
-            style={[styles.connectBtn, { borderColor: C.borderBright }, connecting && { opacity: 0.5 }]}
+            style={[styles.connectBtn, { borderColor: C.borderBright }, connecting && { opacity: 0.5 }, slotRing(chooserSlot(() => { if (!connecting) connectCustom(); }))]}
             onPress={connectCustom}
             disabled={connecting}
           >
@@ -2712,7 +2770,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         {selectedDir !== null && (
         <View style={styles.filterRow}>
           <TextInput
-            style={[styles.filterInput, { fontFamily: F, fontSize: fs(11), color: C.value, borderColor: C.border, flex: 1 }]}
+            ref={filterInputRef}
+            style={[styles.filterInput, { fontFamily: F, fontSize: fs(11), color: C.value, borderColor: C.border, flex: 1 },
+                    slotRing(chooserSlot(() => filterInputRef.current?.focus()))]}
             placeholder="Search name, location or callsign…"
             placeholderTextColor={C.textDim}
             value={filter}
@@ -2722,22 +2782,23 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           />
           <TouchableOpacity
             style={[styles.sortBtn, { borderColor: effectiveSort !== 'nearest' ? C.borderBright : C.border },
-                    availModes.length < 2 && { opacity: 0.5 }]}
+                    availModes.length < 2 && { opacity: 0.5 }, availModes.length >= 2 && slotRing(chooserSlot(() => sortPress.current()))]}
             disabled={availModes.length < 2}
-            onPress={() => {
-              // Cycle only through the modes usable right now (skips SNR on Receiverbook, NEAR
-              // with no location). Persist so it sticks when the mode becomes available again.
-              const next = availModes[(availModes.indexOf(effectiveSort) + 1) % availModes.length];
-              setSortMode(next);
-              AsyncStorage.setItem('vibe.picker.sort', next).catch(() => {});
-            }}
+            onPress={() => sortPress.current()}
           >
             <Text style={{ fontFamily: F, fontSize: fs(11), color: effectiveSort !== 'nearest' ? C.key : C.keyIdle, letterSpacing: 1 }}>
               {effectiveSort === 'snr' ? '📶 SNR' : effectiveSort === 'country' ? '🌍 COUNTRY' : '📍 NEAR'}
             </Text>
           </TouchableOpacity>
+          {(() => { sortPress.current = () => {
+              // Cycle only through the modes usable right now (skips SNR on Receiverbook, NEAR
+              // with no location). Persist so it sticks when the mode becomes available again.
+              const next = availModes[(availModes.indexOf(effectiveSort) + 1) % availModes.length];
+              setSortMode(next);
+              AsyncStorage.setItem('vibe.picker.sort', next).catch(() => {});
+            }; return null; })()}
           {collapsibleKeys.length > 0 && (
-            <TouchableOpacity style={[styles.sortBtn, { borderColor: C.border }]} onPress={toggleAllGroups}>
+            <TouchableOpacity style={[styles.sortBtn, { borderColor: C.border }, slotRing(chooserSlot(toggleAllGroups))]} onPress={toggleAllGroups}>
               <Text style={{ fontFamily: F, fontSize: fs(11), color: C.keyIdle, letterSpacing: 1 }}>
                 {allGroupsOpen ? '▾ ALL' : '▸ ALL'}
               </Text>
@@ -2755,7 +2816,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           ) : error ? (
             <View style={styles.centred}>
               <Text style={{ fontFamily: F, fontSize: fs(12), ...meaningText(C.m, C.bad), textAlign: 'center' }}>{error}</Text>
-              <TouchableOpacity onPress={() => openDirectory(selectedDir)}>
+              <TouchableOpacity onPress={() => openDirectory(selectedDir)}
+                style={[{ borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }, slotRing(chooserSlot(() => openDirectory(selectedDir)))]}>
                 <Text style={{ fontFamily: F, fontSize: fs(12), color: C.key, textDecorationLine: 'underline' }}>Retry</Text>
               </TouchableOpacity>
             </View>
@@ -2769,7 +2831,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               // rows when `data` or `extraData` changes, and the focused index is external
               // state — so focus was moving correctly and invisibly, which is exactly what
               // Stuart saw, and why an Enter could connect to a server he could not see.
-              extraData={[navFocus, showRestricted]}
+              extraData={[navFocus, showRestricted, rowSub]}
               style={{ flex: 1 }}
               /* ★★★ THE RED-ROW EXPLANATION, WITH ITS OWN SHOW/HIDE. Only appears when this
                  directory actually lists receivers whose owner has switched third-party access off
@@ -2791,8 +2853,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     </Text>
                     <TouchableOpacity
                       onPress={() => setShowRestricted(v => !v)}
-                      style={{ borderWidth: 1, borderColor: C.bad, borderRadius: 6,
-                               paddingHorizontal: 10, paddingVertical: 6 }}
+                      style={[{ borderWidth: 1, borderColor: C.bad, borderRadius: 6,
+                               paddingHorizontal: 10, paddingVertical: 6 }, slotRing(chooserSlot(() => setShowRestricted(v => !v)))]}
                     >
                       <Text style={{ fontFamily: F, fontSize: fs(11), ...meaningText(C.m, C.bad) }}>
                         {showRestricted ? 'HIDE' : 'SHOW'}
@@ -2816,7 +2878,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           <DraggableFlatList
             ref={dragRef}
             onScrollOffsetChange={(y: number) => { listScrollY.current = y; }}
-            extraData={navFocus}   // same reason as the FlatList above
+            extraData={[navFocus, rowSub]}   // same reason as the FlatList above
             data={listData}
             containerStyle={{ flex: 1 }}
             onDragEnd={({ data }) => handleFavDragEnd(data)}
@@ -2912,13 +2974,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                           {PROTO_LABEL[(f.proto ?? 'rtltcp') as BackendType] ?? 'auto'} · {f.host}:{f.port}
                         </Text>
                       </View>
-                      <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      <ChooserKey hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                         onPress={() => appAlert('Delete', `Remove "${f.name}"?`, [
                           { text: 'Cancel', style: 'cancel' },
                           { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
                         ])}>
                         <Text style={{ fontFamily: F, fontSize: fs(18), color: C.keyDim, paddingHorizontal: 8 }}>✕</Text>
-                      </TouchableOpacity>
+                      </ChooserKey>
                     </ChooserRow>
                   ))}
                   <ChooserRow
@@ -2956,10 +3018,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                               : `rtl_tcp · ${s.host}:${s.port} · on your network`}
                           </Text>
                         </View>
-                        <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        <ChooserKey hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                           onPress={() => saveDiscovered(s)}>
                           <Text style={{ fontFamily: F, fontSize: fs(20), color: C.keyDim, paddingHorizontal: 8 }}>☆</Text>
-                        </TouchableOpacity>
+                        </ChooserKey>
                       </ChooserRow>
                     ))}
                   </View>
@@ -3081,7 +3143,7 @@ function SectionHeader({ label, fs, F, C, collapsible, collapsed, onToggle }: {
   // skews older with failing eyesight, so these navigation headers lead on legibility.
   if (collapsible) {
     return (
-      <TouchableOpacity onPress={onToggle} activeOpacity={0.6}
+      <TouchableOpacity /* nav-registered: a header row — Enter on it collapses */ onPress={onToggle} activeOpacity={0.6}
         style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 11,
                  borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border }}>
         <Text style={{ fontFamily: F, fontSize: fs(15), color: C.text, width: fs(20) }}>{collapsed ? '▸' : '▾'}</Text>

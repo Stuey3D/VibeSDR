@@ -136,7 +136,7 @@ export function PopupScrim({ onPress, color, opacity, style, onTouchStart, child
   const bg: ViewStyle = { backgroundColor: dim ? color : 'transparent' };
   if (opacity != null) {
     return (
-      <Pressable style={[StyleSheet.absoluteFill, style]} onPress={onPress} onTouchStart={onTouchStart}
+      <Pressable /* nav-skip: a backdrop, not a control */ style={[StyleSheet.absoluteFill, style]} onPress={onPress} onTouchStart={onTouchStart}
                  accessibilityRole="button" accessibilityLabel="Close">
         <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, bg, { opacity }]} />
         {children}
@@ -144,7 +144,7 @@ export function PopupScrim({ onPress, color, opacity, style, onTouchStart, child
     );
   }
   return (
-    <Pressable style={[style, bg]} onPress={onPress} onTouchStart={onTouchStart}
+    <Pressable /* nav-skip: a backdrop, not a control */ style={[style, bg]} onPress={onPress} onTouchStart={onTouchStart}
                accessibilityRole="button" accessibilityLabel="Close">
       {children}
     </Pressable>

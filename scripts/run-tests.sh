@@ -541,6 +541,9 @@ if npx tsx scripts/test_radio_chooser_nav.ts; then pass=$((pass+1)); else fail=$
 if npx tsx scripts/test_overlay_stack.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ appAlert (controller audit, 2026-10-20): button order = focus order, never starting on a destructive key, Back = cancel.
 if npx tsx scripts/test_app_alert.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ NAV COVERAGE (controller audit, 2026-10-20): a touchable on a pad-driven surface with no nav registration fails
+#     once its file passes its baseline — the next silent skip fails here instead of on Stuart's sofa.
+if npx tsx scripts/test_nav_coverage.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

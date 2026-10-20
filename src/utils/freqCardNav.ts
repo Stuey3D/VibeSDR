@@ -14,17 +14,21 @@
  *     row 2   [ frequency box ]
  *     row 3   Hz  kHz  MHz                 (only MHz on a receiver that locks the unit)
  *     row 4   profile                      (when the receiver has profiles)
+ *     row 5   CANCEL  SHARE  TUNE ▶        (`actions` — controller audit group C, 2026-10-20: SHARE was unreachable
+ *                                           by pad; SHARE only where it can be pressed, not its greyed reason)
  *
  *   Up / Down step a line, Left / Right walk along one (src/utils/navMove.ts). Opened from the keyboard, the
  *   highlight starts ON the frequency box (`start`), so Enter puts the cursor straight in it.
  */
 export type TuneCardKey =
   | 'tab:tune' | 'tab:bookmarks' | 'vts:prev' | 'vts:next' | 'field'
-  | 'unit:hz' | 'unit:khz' | 'unit:mhz' | 'profile';
+  | 'unit:hz' | 'unit:khz' | 'unit:mhz' | 'profile'
+  | 'act:cancel' | 'act:share' | 'act:tune';
 
 export interface TuneCardItem { k: TuneCardKey; row: number }
 
-export function tuneCardItems(o: { tabs: boolean; vts: boolean; lockUnit: boolean; profiles: boolean }):
+export function tuneCardItems(o: { tabs: boolean; vts: boolean; lockUnit: boolean; profiles: boolean;
+                                   actions?: { share: boolean } }):
     { items: TuneCardItem[]; start: number } {
   const items: TuneCardItem[] = [];
   if (o.tabs) items.push({ k: 'tab:tune', row: 0 }, { k: 'tab:bookmarks', row: 0 });
@@ -34,5 +38,10 @@ export function tuneCardItems(o: { tabs: boolean; vts: boolean; lockUnit: boolea
     if (!o.lockUnit || u === 'mhz') items.push({ k: `unit:${u}` as TuneCardKey, row: 3 });
   }
   if (o.profiles) items.push({ k: 'profile', row: 4 });
+  if (o.actions) {
+    items.push({ k: 'act:cancel', row: 5 });
+    if (o.actions.share) items.push({ k: 'act:share', row: 5 });
+    items.push({ k: 'act:tune', row: 5 });
+  }
   return { items, start: items.findIndex((x) => x.k === 'field') };
 }

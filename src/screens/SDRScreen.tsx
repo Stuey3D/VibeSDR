@@ -10879,7 +10879,7 @@ export default function SDRScreen({ route, navigation }: Props) {
               /* ★ A wrapper carries the margin and the highlight, so the ring is not dimmed with a blocked row —
                  a ring at 45 % is one nobody sees from the sofa — and a touch user's row is drawn as before. */
               <View key={r.id} ref={(v) => { pickRowViews.current[r.id] = v; }} style={{ marginBottom: 10 }}>
-              <Pressable
+              <Pressable /* nav-registered: the chooser list — ring on the wrapper (pickHl) */
                 style={[sdrMs.radioPickRow, { marginBottom: 0 }, blocked && { opacity: 0.45 }]}
                 disabled={blocked}
                 onPress={() => pressPickRadio(r)}

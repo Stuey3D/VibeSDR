@@ -8,7 +8,7 @@ import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useNavFocus, NAV_ADJUST } from './PanelNav';
+import { NavCtx, NavRow, NavSlot, RowCtx, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useNavFocus, NAV_ADJUST } from './PanelNav';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { meterText, useMeters, type MeterBus } from './ControlsBar';
 import { isKiwiProtocol } from '../services/sdrTypes';
@@ -448,27 +448,40 @@ function SegBtn({ label, active, onPress }: { label: string; active: boolean; on
  * exactly as it was inline (gold fill when on, black legend). Silver / black: a dome key with its
  * LED pip (§10.3 — the pip replaces every gold fill).
  */
-function Toggle({ label, on, onPress, padH = 16, marginLeft, a11y }: {
+type ToggleProps = {
   label: string; on: boolean; onPress: () => void;
   /** Today's horizontal padding (16 for a lone switch, 10 / 9 in a row of choices). */
   padH?: number; marginLeft?: number; a11y?: string;
-}) {
+};
+/**
+ * ★★ REGISTERS ITSELF (controller audit group C, 2026-10-20): every Toggle was skipped by the pad — MUTE, the record
+ *   buffer, notch, binaural, NBX, VOICE/RAW, raw audio, IQ OUT, de-emphasis, stereo, the FM row. A group of choices
+ *   shares the `NavRow` its caller wraps it in (left / right between them); a lone one takes a row of its own.
+ */
+function Toggle(p: ToggleProps) {
+  const row = React.useContext(RowCtx);
+  return row >= 0 ? <ToggleKey {...p} /> : <NavRow><ToggleKey {...p} /></NavRow>;
+}
+function ToggleKey({ label, on, onPress, padH = 16, marginLeft, a11y }: ToggleProps) {
   const pt = usePopupTheme();
   const C = audioC(pt);
   const retain = useRisingPressRetention();
+  const { focused, viewRef } = useNavButton(onPress);
+  const ring = useNavFocus().ring;
   if (pt.metal) {
     return (
-      <PopupKey label={label} active={on} pip onPress={onPress} hitSlop={8} height={30} fontSize={10}
+      <PopupKey ref={viewRef as any} focused={focused} label={label} active={on} pip onPress={onPress} hitSlop={8} height={30} fontSize={10}
         accessibilityLabel={a11y} style={{ minWidth: padH >= 16 ? 58 : 44, marginLeft }} />
     );
   }
   return (
-    <TouchableOpacity onPress={onPress} hitSlop={marginLeft != null ? 6 : 8} accessibilityLabel={a11y}
+    <TouchableOpacity ref={viewRef as any} onPress={onPress} hitSlop={marginLeft != null ? 6 : 8} accessibilityLabel={a11y}
       pressRetentionOffset={retain}
       style={{ paddingHorizontal: padH, paddingVertical: 4, borderRadius: 6,
                ...(marginLeft != null ? { marginLeft } : null),
                backgroundColor: on ? pt.gold.sel : 'transparent',
-               borderWidth: 1, borderColor: on ? pt.gold.sel : C.muted }}>
+               borderWidth: 1, borderColor: on ? pt.gold.sel : C.muted,
+               ...(focused ? { borderColor: ring, borderWidth: 2, margin: -1, ...(marginLeft != null ? { marginLeft: marginLeft - 1 } : null) } : null) }}>
       <Text style={{ color: on ? '#000' : C.muted,
                      fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
         {label}
@@ -736,7 +749,7 @@ export default function AudioSheet({
               <PopupKey label="✕" onPress={onClose} height={30} fontSize={14} hitSlop={10}
                 accessibilityLabel="Close" style={{ width: 34, paddingHorizontal: 0 }} />
             ) : (
-              <TouchableOpacity onPress={onClose} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
+              <TouchableOpacity /* nav-skip: ✕ — Back closes the sheet */ onPress={onClose} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
                 <Text style={{ fontFamily: t.font, fontSize: 18, color: pt.metal ? t.btnText : pt.gold.close }}>✕</Text>
               </TouchableOpacity>
             )}
@@ -798,13 +811,13 @@ export default function AudioSheet({
             <View style={{ marginTop: 2 }}>
               <View style={st.bwRow}>
                 <Text style={[st.bwLabel, { width: 88 }]}>REC BUFFER</Text>
-                <View style={st.keyWrapEnd}>
+                <NavRow><View style={st.keyWrapEnd}>
                 {RECORD_BUFFER_CHOICES.map((v) => (
                   <Toggle key={v} label={v === 0 ? 'OFF' : `${v} s`} on={recBuffer === v} onPress={() => onRecBuffer(v)}
                     padH={10} marginLeft={6}
                     a11y={v === 0 ? 'Record buffer off' : `Record buffer ${v} seconds`} />
                 ))}
-                </View>
+                </View></NavRow>
               </View>
               <Text style={st.iqNote}>
                 Record Buffer: when enabled, VibeSDR holds a live buffer of up to {recBuffer === 60 ? '60' : recBuffer === 30 ? '30' : '30 or 60'} seconds of audio, which can allow for recording of easily missed signals. This buffer is cleared on retune, so the previous station's audio is not included.
@@ -959,25 +972,29 @@ export default function AudioSheet({
           {/* ★★★ RAW IQ OUT — a side channel of this session. See the note on the prop. */}
           {onIqOut && (
             <View style={{ marginTop: 6 }}>
+              <NavRow>
               <View style={st.bwRow}>
                 <Text style={[st.bwLabel, { width: 78 }]}>RAW IQ</Text>
                 <View style={st.keyWrap}>
                   {(iqLocal ? [48000, 96000, 192000, 250000] : [48000]).map(r => (
+                    <NavSlot key={r} radius={5} skip={!!iq?.on} onPress={() => { if (!iq?.on) setIqRate(r); }}>{
                     pt.metal ? (
                     <PopupKey key={r} label={`${r / 1000}k`} active={(iq?.rate ?? iqRate) === r} pip hitSlop={6}
                       height={28} fontSize={10} disabled={!!iq?.on && iq.rate !== r}
                       onPress={() => { if (!iq?.on) setIqRate(r); }} />
                   ) : (
-                    <TouchableOpacity key={r} onPress={() => { if (!iq?.on) setIqRate(r); }} hitSlop={6}
+                    <TouchableOpacity /* nav-registered: the NavSlot round it */ key={r} onPress={() => { if (!iq?.on) setIqRate(r); }} hitSlop={6}
                       style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 5, borderWidth: 1,
                                borderColor: (iq?.rate ?? iqRate) === r ? pt.gold.sel : C.muted, opacity: iq?.on && iq.rate !== r ? 0.35 : 1 }}>
                       <Text style={{ color: (iq?.rate ?? iqRate) === r ? pt.gold.sel : C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 10 }}>{r / 1000}k</Text>
                     </TouchableOpacity>
                   )
+                  }</NavSlot>
                   ))}
                 </View>
                 <Toggle label={iq?.on ? 'ON' : 'OFF'} on={!!iq?.on} onPress={() => onIqOut(!iq?.on, iqRate)} />
               </View>
+              </NavRow>
               <Text selectable style={st.iqNote}>
                 {iq?.on && !iq.public
                   ? `IQ out is on at ${(iq.rate ?? iqRate) / 1000} kHz. Connect your rtl_tcp app to ${iq.host}:${iq.port}. Tuning from that app moves this dial; audio here keeps playing.`
@@ -992,14 +1009,14 @@ export default function AudioSheet({
               de-emphasis, stereo. 50µs Europe/UK, 75µs Americas/Korea. Tau is in SECONDS on the
               wire, which is easy to get wrong — see the wire-units note. */}
           {onDeemph && (
-            <View style={st.bwRow}>
+            <NavRow><View style={st.bwRow}>
               <Text style={[st.bwLabel, { width: 78 }]}>DE-EMPH</Text>
               <View style={st.keyWrapEnd}>
               {([{ l: 'OFF', v: 0 }, { l: '50µs', v: 50e-6 }, { l: '75µs', v: 75e-6 }]).map((o) => (
                 <Toggle key={o.l} label={o.l} on={deemph === o.v} onPress={() => onDeemph(o.v)} padH={10} marginLeft={6} />
               ))}
               </View>
-            </View>
+            </View></NavRow>
           )}
 
           {/* ★ WFM STEREO — off forces mono, which is cleaner on a weak or noisy signal. */}
@@ -1029,7 +1046,7 @@ export default function AudioSheet({
               {/* ★★ THE KEYS WRAP, they never overflow. Five keys + the label are wider than a phone's
                   row (and a narrow Mac window's): A-BW was cut off at the right edge (Stuart,
                   2026-10-01). Right-aligned like the single toggles above, a second line when short. */}
-              <View style={st.keyWrapEnd}>
+              <NavRow><View style={st.keyWrapEnd}>
               {([
                 { l: 'NR',  on: fmNr !== false,  cb: onFmNr },
                 { l: 'IMS', on: fmIms !== false, cb: onFmIms },
@@ -1042,7 +1059,7 @@ export default function AudioSheet({
               ] as const).filter((o) => !!o.cb).map((o) => (
                 <Toggle key={o.l} label={o.l} on={o.on} onPress={() => o.cb?.(!o.on)} padH={9} marginLeft={6} />
               ))}
-              </View>
+              </View></NavRow>
             </View>
           )}
 
@@ -1104,13 +1121,14 @@ export default function AudioSheet({
             {serverDspEnabled && (
               <View style={st.subPanel}>
                 <SubLabel label="DSP TYPE" />
-                <View style={[st.btnRow, { paddingTop: 2, paddingBottom: 0 }]}>
+                {/* ★ In a NavRow (controller audit group C): SegBtns outside one never registered. */}
+                <NavRow><View style={[st.btnRow, { paddingTop: 2, paddingBottom: 0 }]}>
                   {dspFilters.map((f: DspFilterDesc) => (
                     <SegBtn key={f.name} label={f.name.toUpperCase()}
                             active={serverDspFilter === f.name}
                             onPress={() => onServerDspFilter?.(f.name)} />
                   ))}
-                </View>
+                </View></NavRow>
                 {(dspFilters.find((f: DspFilterDesc) => f.name === serverDspFilter)?.params ?? [])
                   .filter((p: DspParamDesc) => p.runtime_safe !== false)
                   .map((p: DspParamDesc) => {
@@ -1150,7 +1168,7 @@ export default function AudioSheet({
         {pt.metal ? (
           <PopupKey label="CLOSE" onPress={onClose} height={32} style={{ alignSelf: 'center', width: 110, marginTop: 14 }} />
         ) : (
-        <TouchableOpacity style={[st.closeBtn, { borderColor: pt.ink.keyBorder }]} onPress={onClose}>
+        <TouchableOpacity /* nav-skip: CLOSE — Back closes the sheet */ style={[st.closeBtn, { borderColor: pt.ink.keyBorder }]} onPress={onClose}>
           <Text style={[st.closeBtnText, { fontFamily: t.font, color: pt.gold.close }]}>CLOSE</Text>
         </TouchableOpacity>
         )}

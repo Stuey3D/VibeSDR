@@ -195,7 +195,7 @@ function GuideModal({ layout, setLayout, onClose }: {
               <PopupKey key={l} label={PAD_GUIDES[l].tab} active={l === layout} pip onPress={() => setLayout(l)}
                         height={30} style={s.tabMetal} />
             ) : (
-              <Pressable key={l} onPress={() => setLayout(l)} accessibilityRole="button" accessibilityState={{ selected: l === layout }}
+              <Pressable /* nav-skip: left/right switch the tabs */ key={l} onPress={() => setLayout(l)} accessibilityRole="button" accessibilityState={{ selected: l === layout }}
                          style={[s.tab, l === layout ? { borderColor: pt.gold.selBorder, backgroundColor: pt.ink.keyBgAct }
                                                      : { borderColor: pt.ink.keyBorder }]}>
                 <Text style={[s.tabTxt, { fontFamily: t.font, color: l === layout ? pt.gold.sel : pt.ink.key }]}>{PAD_GUIDES[l].tab}</Text>
@@ -234,7 +234,7 @@ function GuideModal({ layout, setLayout, onClose }: {
           {pt.metal ? (
             <PopupKey label="CLOSE" onPress={onClose} height={32} style={{ alignSelf: 'center', width: 110, marginVertical: 10 }} />
           ) : (
-            <Pressable style={s.closeBtn} onPress={onClose} onTouchStart={noteTouchInteraction}>
+            <Pressable /* nav-skip: Back / SELECT close it */ style={s.closeBtn} onPress={onClose} onTouchStart={noteTouchInteraction}>
               <Text style={[s.closeTxt, { fontFamily: t.font }]}>CLOSE</Text>
             </Pressable>
           )}

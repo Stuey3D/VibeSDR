@@ -233,10 +233,10 @@ function CoachmarkOverlay({
         <View style={styles.row}>
           <Text style={styles.count}>{index + 1} / {count}</Text>
           <View style={styles.btns}>
-            <Pressable onPress={onSkip} hitSlop={10} style={styles.skip}>
+            <Pressable /* nav-skip: Back = Skip (the overlay) */ onPress={onSkip} hitSlop={10} style={styles.skip}>
               <Text style={styles.skipText}>Skip</Text>
             </Pressable>
-            <Pressable onPress={onNext} hitSlop={10}
+            <Pressable /* nav-registered: Enter = Next, ringed */ onPress={onNext} hitSlop={10}
                        style={[styles.next, kbInUse && { borderWidth: 3, borderColor: navRing, margin: -3 }]}>
               <Text style={styles.nextText}>{index + 1 >= count ? 'Got it' : 'Next'}</Text>
             </Pressable>

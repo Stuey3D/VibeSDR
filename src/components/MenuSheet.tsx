@@ -8,7 +8,7 @@
  */
 
 import StationLogo from './StationLogo';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected, NAV_ADJUST } from './PanelNav';
+import { NavCtx, NavRow, NavSlot, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected, NAV_ADJUST } from './PanelNav';
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -680,17 +680,21 @@ function VfoLockBtn({ locked, disabled, onPress, full }: {
 }) {
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
+  // ★ Registers itself (controller audit group C): it never did, so the pad's highlight walked past VFO lock.
+  //   Disabled = not in the order (a dead stop reads as a broken pad).
+  const { focused, viewRef } = useNavButton(onPress, disabled);
   if (pt.metal) {
     // A toggle: the pip lights while the VFO is LOCKED (the mockup's "🔒 LOCKED" key).
     return (
-      <PopupKey label={locked ? 'LOCKED' : 'FREE'} active={locked} pip onPress={onPress} disabled={disabled}
+      <PopupKey ref={viewRef as any} focused={focused} label={locked ? 'LOCKED' : 'FREE'} active={locked} pip onPress={onPress} disabled={disabled}
         height={34} fontSize={12} style={full ? styles.btnFull : undefined}
         icon={() => <VfoLockIcon size={20} locked={locked} />} />
     );
   }
   return (
     <TouchableOpacity
-      style={[styles.btn, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, full && styles.btnFull, disabled && { opacity: 0.4 }]}
+      ref={viewRef as any}
+      style={[styles.btn, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, full && styles.btnFull, disabled && { opacity: 0.4 }, focused && styles.btnFocused]}
       onPress={disabled ? undefined : onPress} disabled={disabled} hitSlop={4} activeOpacity={0.7}
     >
       <VfoLockIcon size={20} locked={locked} />
@@ -1303,6 +1307,7 @@ function MenuSheetBody({
   /** ★ Cleared the moment it is submitted — this gets typed at a club night with people behind
    *  you, the same reason the server screen's box is dots by default. */
   const [menuAdminPw, setMenuAdminPw] = useState('');
+  const menuAdminRef = useRef<TextInput | null>(null);
 
   // Responsive sheet geometry — SHEET_H is a module constant measured in
   // PORTRAIT, so in landscape a bottom-anchored 700pt sheet pokes past the top
@@ -1574,7 +1579,10 @@ function MenuSheetBody({
               {/* ★ The BUTTON has to name the radio too, not just the panel it opens. The
                   header was fixed and this was not, so the menu still announced an RTL-SDR
                   while the panel behind it said Airspy (Stuart, 2026-07-27). */}
-              <Btn label={`${radioModel || 'Local SDR'} Controls  \u203a`} full onPress={onLocalHardware} />
+              {/* ★ In a NavRow (controller audit group C): a Btn outside one never registers, so a pad skipped it. */}
+              <NavRow>
+                <Btn label={`${radioModel || 'Local SDR'} Controls  \u203a`} full onPress={onLocalHardware} />
+              </NavRow>
             </>)}
 
             {/* ── ANTENNA — its own section just under the SDR controls (Stuart, 2026-10-09) ──
@@ -2009,8 +2017,12 @@ function MenuSheetBody({
                   was nothing on screen to say a password would reveal them. */}
               {!adminOk && (
                 <>
+                  {/* ★ Reachable by pad and keyboard (controller audit group C): Enter on the field puts the cursor in it. */}
+                  <NavRow>
                   <View style={styles.adminUnlockRow}>
+                    <NavSlot style={{ flex: 1 }} onPress={() => menuAdminRef.current?.focus()}>
                     <TextInput
+                      ref={menuAdminRef}
                       value={menuAdminPw}
                       onChangeText={setMenuAdminPw}
                       placeholder="Admin password"
@@ -2019,6 +2031,8 @@ function MenuSheetBody({
                       style={styles.adminUnlockInput}
                       onSubmitEditing={() => { if (menuAdminPw) { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); } }}
                     />
+                    </NavSlot>
+                    <NavSlot onPress={() => { if (menuAdminPw) { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); } }}>
                     {pt.metal ? (
                       <PopupKey label="UNLOCK" primary disabled={!menuAdminPw} height={36}
                         onPress={() => { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); }} />
@@ -2030,7 +2044,9 @@ function MenuSheetBody({
                       <Text style={styles.adminUnlockBtnTxt}>UNLOCK</Text>
                     </TouchableOpacity>
                     )}
+                    </NavSlot>
                   </View>
+                  </NavRow>
                   <Text style={styles.kbSkipNote}>
                     {adminRefused
                       ? (adminFailReason === 'unreachable'
@@ -2117,10 +2133,15 @@ function MenuSheetBody({
                 identifies WHICH backend this instance runs (UberSDR today;
                 KiwiSDR/OpenWebRX later), so it's keyed by server type. ── */}
             <View style={styles.footerRow}>
+              {/* ★ About is reachable by pad and keyboard (controller audit group C). */}
+              <NavRow>
+              <NavSlot onPress={() => onAbout?.()} radius={6}>
               <TouchableOpacity onPress={onAbout} hitSlop={8}>
                 <Text style={styles.footerBrand}>VibeSDR v{APP_VERSION}</Text>
                 <Text style={styles.footerAboutHint}>ABOUT</Text>
               </TouchableOpacity>
+              </NavSlot>
+              </NavRow>
               <View style={styles.footerServer}>
                 {/* OWRX's logo is a black antenna that vanishes on the dark UI —
                     give it a light chip so it reads. */}

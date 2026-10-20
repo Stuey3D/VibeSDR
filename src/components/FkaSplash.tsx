@@ -86,10 +86,10 @@ export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
             KEYBOARD in the settings menu explains the rest.
           </Text>
           <View style={s.btns}>
-            <Pressable style={s.btn} onPress={() => { close(); onOpenHelp(); }} onTouchStart={noteTouchInteraction}>
+            <Pressable /* nav-skip: help — NICE list; Enter/Back close the splash */ style={s.btn} onPress={() => { close(); onOpenHelp(); }} onTouchStart={noteTouchInteraction}>
               <Text style={[s.btnTxt, { fontFamily: t.font }]}>SHOW ME</Text>
             </Pressable>
-            <Pressable style={s.btn} onPress={close} onTouchStart={noteTouchInteraction}>
+            <Pressable /* nav-skip: Enter/Back close the splash */ style={s.btn} onPress={close} onTouchStart={noteTouchInteraction}>
               <Text style={[s.btnTxt, { fontFamily: t.font }]}>GOT IT</Text>
             </Pressable>
           </View>

@@ -126,23 +126,23 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
           </View>
         )}
         <View style={[styles.bar, topInset != null && { paddingTop: topInset + 6 }]}>
-          <TouchableOpacity onPress={onClose} hitSlop={12} activeOpacity={0.7}>
+          <TouchableOpacity /* nav-skip: Back closes the overlay (a third-party page; its own chrome stays touch) */ onPress={onClose} hitSlop={12} activeOpacity={0.7}>
             <Text style={styles.back}>{backLabel ?? '← SDR'}</Text>
           </TouchableOpacity>
           <Text style={styles.title} numberOfLines={1}>{title ?? url}</Text>
           {allowSave && (
-            <TouchableOpacity onPress={onSave} hitSlop={10} activeOpacity={0.7}>
+            <TouchableOpacity /* nav-skip: third-party page chrome */ onPress={onSave} hitSlop={10} activeOpacity={0.7}>
               <Text style={styles.save}>⤓ Save</Text>
             </TouchableOpacity>
           )}
           {/* Browser history arrows — multi-level admin pages */}
-          <TouchableOpacity
+          <TouchableOpacity /* nav-skip: third-party page chrome */
             onPress={() => webRef.current?.goBack()}
             hitSlop={10} activeOpacity={0.7} disabled={!canBack}
           >
             <Text style={[styles.navArrow, !canBack && styles.navArrowDim]}>‹</Text>
           </TouchableOpacity>
-          <TouchableOpacity
+          <TouchableOpacity /* nav-skip: third-party page chrome */
             onPress={() => webRef.current?.goForward()}
             hitSlop={10} activeOpacity={0.7} disabled={!canFwd}
           >

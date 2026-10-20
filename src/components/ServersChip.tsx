@@ -157,7 +157,7 @@ export default function ServersChip({
       {/* Catch-layer: swallows the outside tap so dismissing never tunes/pans the
           waterfall, and carries a faint backdrop tint. Behind the dropdown. */}
       {expanded && (
-        <Pressable
+        <Pressable /* nav-skip: the outside-tap catch layer */
           style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.18)' }]}
           onPress={collapse}
           accessibilityRole="button"
