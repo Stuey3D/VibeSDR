@@ -184,4 +184,54 @@ private:
     int cap_ = 0, n_ = 0, head_ = 0;
 };
 
+/* ★★★ 7. THE WATERFALL STAYS STILL WHILE VibeAGC MOVES (Stuart, 2026-10-20: "it bumped up from 29 - 33 - 32 with
+ *  visual jumps in the spectrum").
+ *  The raw capture already goes through GainStepSmoother (vibedsp/gainstep.h): at one of our own gain steps it puts
+ *  the level back and GLIDES it to the new one over ~a second, which is right for the demodulators and still a
+ *  visible slide on the waterfall. This takes the rest out for the PICTURE only: while VibeAGC is on, every
+ *  displayed dB is offset by the gain VibeAGC has moved since its reference (where it started, or where it was
+ *  re-anchored), with the smoother's own correction taken back out — so at the step the two cancel exactly and
+ *  afterwards the offset holds. A station keeps its colour while the loop works underneath it.
+ *  ★★ WHAT IT DOES NOT TOUCH: the measurements (the AGC reads raw bins), the ADC peak and clip figures, the "sig"
+ *     meter — an overload is still reported as it is. And NOT the owner's slider: with VibeAGC off the offset is 0
+ *     and a manual change shows as it always has.
+ *  ★★ TRADE-OFF, STATED: it holds what scales with the gain — signals and band noise — still. The receiver's OWN
+ *     floor (the 8-bit converter's) does not scale, so after a large cut on a quiet band that floor rises on the
+ *     picture by the cut. That is the calibrated-display behaviour (a dBm scale), and the price of a still picture.
+ *  ★ The gain in effect changes when the radio applies it, not when we queue it: the smoother's found step says
+ *    when (exactly); a step too small for it to find (most RTL rungs are 1-3 dB, under its 4 dB search floor) is
+ *    taken kSpecApplyWithinSec after the write — about the USB/I2C latency, so the error either way is a frame.
+ *    Because the offset is (reference - gain in effect - the smoother's correction), a step it finds LATER than
+ *    that is still exact from the moment it is found: nothing is counted twice. */
+constexpr double kSpecApplyWithinSec = 0.10;
+class SpectrumGainComp {
+public:
+    /** Call once per IQ block on the DSP thread. Returns the dB to ADD to every displayed bin.
+     *  agcOn — VibeAGC is steering this radio; writeSeq — our gain-write counter; targetTenth — the gain the
+     *  last write asked for; smootherSteps / corrDb — the smoother's step count and current correction;
+     *  reanchor — start a new reference at the gain in effect (VibeAGC switched on, a full forget, idle park). */
+    double update(double now, bool agcOn, unsigned writeSeq, int targetTenth, unsigned smootherSteps, double corrDb,
+                  bool reanchor) {
+        if (effTenth_ < 0 && targetTenth >= 0) effTenth_ = targetTenth;
+        if (writeSeq != seenWrites_) { seenWrites_ = writeSeq; pendingTenth_ = targetTenth; pendingUntil_ = now + kSpecApplyWithinSec; }
+        if (smootherSteps != seenSteps_) {
+            seenSteps_ = smootherSteps;
+            if (pendingTenth_ >= 0) { effTenth_ = pendingTenth_; pendingTenth_ = -1; }
+        }
+        if (pendingTenth_ >= 0 && now >= pendingUntil_) { effTenth_ = pendingTenth_; pendingTenth_ = -1; }
+        if (!agcOn || effTenth_ < 0) { refTenth_ = -1; return 0.0; }
+        if (reanchor || refTenth_ < 0) refTenth_ = effTenth_;
+        const double moved = (effTenth_ - refTenth_) / 10.0;
+        // ★ The smoother's correction is part of the level we are shown; take it back out with the offset, so at
+        //   the step the two cancel. Only while the correction belongs to OUR step (an RSP's own steps are not ours).
+        return -(moved + corrDb);
+    }
+    int refTenth() const { return refTenth_; }
+    int effTenth() const { return effTenth_; }
+private:
+    unsigned seenWrites_ = 0, seenSteps_ = 0;
+    int effTenth_ = -1, pendingTenth_ = -1, refTenth_ = -1;
+    double pendingUntil_ = 0.0;
+};
+
 }  // namespace vibeagc

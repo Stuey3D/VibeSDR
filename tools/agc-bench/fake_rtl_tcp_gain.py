@@ -32,6 +32,9 @@ ap.add_argument('--synth', action='store_true')
 ap.add_argument('--a-hz', type=float, default=14.200e6); ap.add_argument('--b-hz', type=float, default=14.203e6)
 ap.add_argument('--a-dbfs', type=float, default=-12.0); ap.add_argument('--b-dbfs', type=float, default=-30.0)
 ap.add_argument('--floor-dbfs', type=float, default=-48.0)
+ap.add_argument('--qsb-db', type=float, default=0.0)      # slow fading (QSB), +/- dB, 5-15 s, per station
+ap.add_argument('--c-hz', type=float, default=0.0)        # a third, strong SSB neighbour keying up and down
+ap.add_argument('--c-dbfs', type=float, default=-20.0)
 ap.add_argument('--seed', type=int, default=1)
 ap.add_argument('--g0', type=int, default=280)
 ap.add_argument('--blowtorch-at', type=float, default=-1.0)
@@ -68,6 +71,14 @@ else:
         e = np.array(out[:int(secs * fs_e)], dtype=np.float64)
         k = np.ones(3) / 3; e = np.convolve(e, k, mode='same')        # ~30 ms edges
         return np.interp(np.arange(n) / RATE, np.arange(len(e)) / fs_e, e)
+    def qsb(rng):
+        # slow fading: a sum of three sinusoids with random 5-15 s periods, scaled to +/- qsb_db
+        if a.qsb_db <= 0: return 1.0
+        tt = np.arange(n) / RATE; f = np.zeros(n)
+        for _ in range(3):
+            per = 5 + 10 * rng.random(); f += np.sin(2 * np.pi * tt / per + 2 * np.pi * rng.random())
+        f /= 3.0
+        return 10 ** (a.qsb_db * f / 20)
     def ssb(rng, dbfs):
         # band-limited noise 300-2700 Hz ABOVE the carrier (USB), by FFT synthesis; peak-normalised
         X = np.zeros(n, dtype=np.complex128)
@@ -76,13 +87,15 @@ else:
         X[band] = rng.standard_normal(band.sum()) + 1j * rng.standard_normal(band.sum())
         x = np.fft.ifft(X)
         x /= np.percentile(np.abs(x), 99.9)
-        return (x * envelope(rng) * 10 ** (dbfs / 20)).astype(np.complex64)
+        return (x * envelope(rng) * qsb(rng) * 10 ** (dbfs / 20)).astype(np.complex64)
     content_centre = a.a_hz
     t = np.arange(n) / RATE
     A = ssb(rng, a.a_dbfs)
     B = ssb(rng, a.b_dbfs) * np.exp(2j * np.pi * (a.b_hz - a.a_hz) * t).astype(np.complex64)
     noise = ((rng.standard_normal(n) + 1j * rng.standard_normal(n)) * 10 ** (a.floor_dbfs / 20) / math.sqrt(2)).astype(np.complex64)
     content = (A + B + noise).astype(np.complex64)
+    if a.c_hz:
+        content += (ssb(rng, a.c_dbfs) * np.exp(2j * np.pi * (a.c_hz - a.a_hz) * t).astype(np.complex64)).astype(np.complex64)
     del A, B, noise, t
 print('[fake-rtl-tcp-gain] %d samples of content (%.1f s) at %d S/s' % (len(content), len(content) / RATE, RATE), file=sys.stderr)
 

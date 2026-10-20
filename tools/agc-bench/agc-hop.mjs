@@ -9,6 +9,8 @@
 //                   60 s on A, then 12 hops A<->B 15 s apart. Measures gain moves and reversals during the hops,
 //                   and the forgets the server logged.
 //   synth-overload  the same, and a carrier 19 dB over the operating point arrives at 120 s: must be cut fast.
+//   loop            Stuart's Portable: a weak small loop (tuner near its ceiling), B 12 dB louder than A, QSB +/-4 dB,
+//                   band noise, a strong SSB neighbour 12 kHz up keying up and down; starts at 29.7 dB and must climb.
 //   real            the V4L's own 40 m capture (~/VibeSDR-test-audio/iq/v4l_40m_7150000_250k.cu8), LSB, hopping
 //                   between the two strong signals 2.9 kHz apart.
 // Prints a summary; --json prints it as one JSON line. Exit 0 always (the caller judges) unless the run broke.
@@ -41,6 +43,13 @@ if (scenario === 'real') {
   // ~1.4 kHz above their energy.
   A = 7150000 - 671 + 1400; B = 7150000 + 2258 + 1400; mode = 'lsb';
   fakeArgs = ['--file', f, '--file-centre', '7150000', '--g0', '207'];
+} else if (scenario === 'loop') {
+  // ★ STUART'S PORTABLE (2026-10-20): a stationary RTL V4 on a small loop outdoors — little antenna gain, so the
+  //   tuner sits near the top of its range; levels change with the station hopped to (B 12 dB louder than A),
+  //   speech, band noise and QSB (+/-4 dB, 5-15 s); a strong SSB neighbour 12 kHz up keys up and down.
+  A = 14200000; B = 14203000; mode = 'usb';
+  fakeArgs = ['--synth', '--a-hz', String(A), '--b-hz', String(B), '--a-dbfs', '-38', '--b-dbfs', '-26',
+              '--floor-dbfs', '-60', '--qsb-db', '4', '--c-hz', '14212000', '--c-dbfs', '-27', '--g0', '280', '--seed', '5'];
 } else {
   A = 14200000; B = 14203000; mode = 'usb';
   fakeArgs = ['--synth', '--a-hz', String(A), '--b-hz', String(B), '--g0', '280', '--seed', '3'];
@@ -76,14 +85,24 @@ try {
   const spec = new WebSocket(`${wsBase}/ws/user-spectrum?user_session_id=${SID}&mode=binary8&bins=1024`);
   const audio = new WebSocket(`${wsBase}/ws/audio?user_session_id=${SID}&codec=opus`);
   audio.onmessage = () => {}; audio.onerror = () => {};
+  const t0s = Date.now();
   await new Promise((r, j) => { spec.onopen = r; spec.onerror = j; });
-  spec.onmessage = () => {};
+  // ★ THE PICTURE: the median of every spectrum frame (the noise floor a listener sees), timestamped.
+  const floors = [];   // [t, median dB]
+  spec.binaryType = 'arraybuffer';
+  spec.onmessage = (ev) => {
+    if (typeof ev.data === 'string') return;
+    const u = new Uint8Array(ev.data);
+    if (u.length < 64 || u[0] !== 83 || u[1] !== 80 || u[2] !== 69 || u[3] !== 67) return;   // 'SPEC'
+    const v = Array.from(u.subarray(22)).filter((x) => x > 0).sort((p, q) => p - q);
+    if (v.length) floors.push([(Date.now() - t0s) / 1000, v[v.length >> 1] - 256]);
+  };
   const send = (o) => spec.send(JSON.stringify(o));
   const tune = (f) => { send({ type: 'zoom', frequency: f, binBandwidth: 25 }); send({ type: 'tune', frequency: f, mode }); };
   // ★ Start at 40.0 dB, set by hand (so the server KNOWS where the tuner is — rtl_tcp has no getter), then hand it to
   //   VibeAGC: at 40 dB the loud station overloads the converter, so the first thing the loop must do is cut.
   tune(A);
-  send({ type: 'gain', value: 400 });
+  send({ type: 'gain', value: scenario === 'loop' ? 297 : 400 });
   await sleep(1500);
   send({ type: 'gain', auto: true });
   const t0 = Date.now(); const wall0 = t0 / 1000;
@@ -140,6 +159,21 @@ try {
     const firstLower = writes.find((w) => w[0] >= at && pre && w[1] < pre[1]);
     cutAfter = firstLower ? +(firstLower[0] - at).toFixed(1) : null;
   }
+  // ★ How far the picture's floor moved across each of VibeAGC's own gain writes: the median of the frames 3-1 s
+  //   before against 1.5-3.5 s after (the smoother's glide is done by then). Writes closer than 4 s apart are skipped.
+  const tOff = (t0s - t0) / 1000;
+  const fl = floors.map(([t, m]) => [t + tOff, m]);
+  const med = (a) => { const b = [...a].sort((p, q) => p - q); return b.length ? b[b.length >> 1] : NaN; };
+  const firstLoop = writes.findIndex((w) => w[0] > 5);   // the owner's own writes (t < 2 s) are not VibeAGC's
+  const loopWrites = firstLoop >= 0 ? writes.slice(firstLoop) : [];
+  const shifts = [];
+  for (let i = 0; i < loopWrites.length; i++) {
+    const [tw, g] = loopWrites[i]; const prevG = writes[firstLoop + i - 1] ? writes[firstLoop + i - 1][1] : g;
+    if ((i && tw - loopWrites[i - 1][0] < 4) || (i + 1 < loopWrites.length && loopWrites[i + 1][0] - tw < 4)) continue;
+    const b = med(fl.filter(([t]) => t >= tw - 3 && t < tw - 1).map((x) => x[1]));
+    const a2 = med(fl.filter(([t]) => t >= tw + 1.5 && t < tw + 3.5).map((x) => x[1]));
+    if (Number.isFinite(a2) && Number.isFinite(b)) shifts.push({ at: +tw.toFixed(1), stepDb: (g - prevG) / 10, floorShiftDb: a2 - b });
+  }
   let recLines = 0, recOk = true, recTunes = 0, recChannel = 0;
   for (const line of recText.split('\n').filter(Boolean)) {
     recLines++; try { const o = JSON.parse(line); if (o.k === 'tune') { recTunes++; if (o.forget === 'channel') recChannel++; } } catch { recOk = false; }
@@ -148,7 +182,7 @@ try {
              channelForgets: chanForgets, overloadCutAfterS: cutAfter,
              gainWritesBeforeHops: before.map((w) => w[1] / 10), gainDbDuringHops: gainSeries.map((g) => g / 10),
              recordStatus: rec.status, recordUnauthStatus: unauth.status, recordLines: recLines, recordJsonOk: recOk,
-             recordTunes: recTunes, recordChannelTunes: recChannel, out: outDir };
+             recordTunes: recTunes, recordChannelTunes: recChannel, floorAtGainMoves: shifts, out: outDir };
 } finally { srv.kill('SIGTERM'); fake.kill('SIGTERM'); }
 if (asJson) console.log(JSON.stringify(result));
 else for (const [k, v] of Object.entries(result)) console.log(`  ${k.padEnd(22)} ${JSON.stringify(v)}`);
@@ -165,6 +199,11 @@ if (process.argv.includes('--assert')) {
   if (ov && !(result.overloadCutAfterS !== null && result.overloadCutAfterS <= 5)) fails.push(`overload cut after ${result.overloadCutAfterS} s`);
   if (result.recordStatus !== 200 || result.recordUnauthStatus !== 401 || !result.recordJsonOk || result.recordChannelTunes !== hops)
     fails.push(`record: ${result.recordStatus}/${result.recordUnauthStatus} json ${result.recordJsonOk} channel tunes ${result.recordChannelTunes}`);
+  // ★ The picture: across VibeAGC's own moves of 3 dB or more the floor a listener sees stays put (the median is
+  //   whole dB, so 1.5 dB is "unchanged"). The overload cut itself is excluded — the spray it ends is real.
+  for (const sh of result.floorAtGainMoves || [])
+    if (Math.abs(sh.stepDb) >= 3 && sh.stepDb > -15 && Math.abs(sh.floorShiftDb) > 1.5)
+      fails.push(`the waterfall moved ${sh.floorShiftDb} dB for a ${sh.stepDb} dB gain move at ${sh.at} s`);
   for (const f of fails) console.log(`  FAIL ${f}`);
   console.log(fails.length ? `  ${scenario}: FAILED` : `  ${scenario}: ok`);
   process.exit(fails.length ? 1 : 0);

@@ -3721,6 +3721,11 @@ static std::atomic<double>   g_adcPeakHeldDbfs{-99.0};
 static std::atomic<bool>     g_adcPeakHoldReset{false};   // ★ a full forget: the old window's peaks are not this one's
 /** ★★★ THE VibeAGC RECORD (vibe_agc_record.h): bounded, in memory, never on disk. */
 static vibeagc::AgcRecord    g_agcRecord;
+/** ★★★ THE WATERFALL STAYS STILL WHILE VibeAGC MOVES (vibe_agc_rules.h §7, 2026-10-20): the dB every displayed
+ *  spectrum bin is offset by, written once per IQ block beside the gain-step smoother, read by every frame
+ *  builder. g_specReanchor: start a new reference (VibeAGC switched on, a full forget, the idle park). */
+static std::atomic<float>    g_specCompDb{0.0f};
+static std::atomic<bool>     g_specReanchor{false};
 static inline double agcWallNow() {
     return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
@@ -8165,7 +8170,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         r.bins.resize(kSpectroBins);
         for (int i = 0; i < kSpectroBins; i++) {
             const double v = spectroAcc[i] / std::max(1, spectroAccN);
-            const int q = (int)lround(v + 256.0);
+            const int q = (int)lround(v + 256.0 + g_specCompDb.load(std::memory_order_relaxed));   // ★ §7
             r.bins[i] = (uint8_t)(q < 0 ? 0 : (q > 255 ? 255 : q));
             spectroAcc[i] = 0;
         }
@@ -8567,6 +8572,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Frame and send this listener's own zoomed row. Mirrors onZoomSpectrum's un-shift exactly:
      *  the wire puts DC at bin 0, while the zoom FFT hands back a shifted row. */
     void onClientZoom(ClientDsp* c, const float* db, int nb) {
+        const float specComp = g_specCompDb.load(std::memory_order_relaxed);   // ★ vibe_agc_rules.h §7
         c->viewPriming.store(false);     // the sharp path is live — the shared row can stand down
         std::shared_ptr<net::Socket> sock = c->spec;
         if (!sock || !sock->isOpen() || nb <= 0) return;
@@ -8583,7 +8589,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const int signedOut = (i <= half) ? i : i - outBins;
             int src = half + signedOut;
             if (src < 0) src = 0; else if (src >= nb) src = nb - 1;
-            int v = (int)lround(db[src] + 256.0);
+            int v = (int)lround(db[src] + 256.0 + specComp);   // ★ §7: still while VibeAGC moves
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
         sendWs(sock, 0x2, frame.data(), frame.size(), Out::Spectrum);
@@ -10112,6 +10118,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // A zoom frame, in the SAME wire format as onSpectrum's — same SPEC header, same bin count,
     // same dB offset — so the client needs no new code path and simply sees a sharper picture.
     void onZoomSpectrum(const float* db, int nb) {
+        const float specComp = g_specCompDb.load(std::memory_order_relaxed);   // ★ vibe_agc_rules.h §7
         // ★ One radio, one view — every listener sees the SAME spectrum. What can differ is the
         //   WIDTH each asked to receive it at, so build one frame per distinct width.
         auto peers = allSpecPeers();
@@ -10186,7 +10193,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             float best = zrow[src];
             for (int k = 1; k < grp && src + k < nb; k++)          // peak-hold, don't drop carriers
                 if (zrow[src + k] > best) best = zrow[src + k];
-            int v = (int)lround(best + 256.0);
+            int v = (int)lround(best + 256.0 + specComp);   // ★ §7: still while VibeAGC moves
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
         size_t sent = 0;
@@ -10204,6 +10211,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGV("zoom spectrum: %lld frames sent", (long long)zoomFrames_);
     }
     void onSpectrum(const float* db, int bins) {
+        const float specComp = g_specCompDb.load(std::memory_order_relaxed);   // ★ vibe_agc_rules.h §7
         // ★ The crossover cannot announce itself from the tuner thread — see g_dsAnnounce.
         drainDirectSamplingAnnounce();
         if ((int)fftAccum.size() != bins) { fftAccum.assign(bins, 0.0f); accumCount = 0; }
@@ -10534,7 +10542,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     float val = srcAt(s);                   // averaged dB, over this listener's frames
                     if (val > best) best = val;             // peak-hold
                 }
-                int v = (int)lround(best + 256.0);
+                int v = (int)lround(best + 256.0 + specComp);   // ★ §7: still while VibeAGC moves
                 // Clamp to 1, not 0 — 0 is the no-data sentinel and must stay unambiguous.
                 frame[22+i] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
             }
@@ -23005,9 +23013,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     double gainSmoothRate_ = 0.0;
     unsigned gainSmoothSeenWrites_ = 0;
     bool gainStepGuard_ = false;   // this buffer's verdict, handed to every channel block it produces
+    vibeagc::SpectrumGainComp specComp_;   // ★ vibe_agc_rules.h §7 — DSP thread only
     void smoothGainSteps(cf32* iq, int n, bool flagged) {
         static const bool off = [] { const char* e = std::getenv("VIBE_GAIN_SMOOTH"); return e && e[0] == '0'; }();
         gainStepGuard_ = false;
+        /* ★★★ THE PICTURE'S OFFSET, from the same block's facts (§7): VibeAGC on an RTL (an RSP's own RF AGC is
+         *  not ours to undo), the gain we last wrote, and what the smoother has found and is still correcting. */
+        {
+            const bool agcOn = g_vibeAgcRtlOn.load(std::memory_order_relaxed) && !useSdrplay() && !useSpy();
+            const double comp = specComp_.update(nowSecs(), agcOn, g_ownGainWrites.load(std::memory_order_relaxed),
+                                                 lastGainTenthDb, gainSmooth_.steps(),
+                                                 (off ? 0.0 : (double)gainSmooth_.correctionDb()),
+                                                 g_specReanchor.exchange(false, std::memory_order_relaxed));
+            g_specCompDb.store((float)comp, std::memory_order_relaxed);
+        }
         if (off || n <= 0) return;
         if (gainSmoothRate_ != sampleRate) { gainSmooth_.configure(sampleRate); gainSmoothRate_ = sampleRate; }
         const unsigned w = g_ownGainWrites.load(std::memory_order_relaxed);
@@ -23026,6 +23045,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         gainStepGuard_ = gainSmooth_.steps() != before || gainSmooth_.correcting(1.0);
         if (gainStepGuard_) rx.noteGainStep(0.1);
+        if (gainSmooth_.steps() != before) {   // ★ a step found in this block: its correction applies to this block's frames
+            const bool agcOn = g_vibeAgcRtlOn.load(std::memory_order_relaxed) && !useSdrplay() && !useSpy();
+            g_specCompDb.store((float)specComp_.update(nowSecs(), agcOn, g_ownGainWrites.load(std::memory_order_relaxed),
+                                                       lastGainTenthDb, gainSmooth_.steps(),
+                                                       (double)gainSmooth_.correctionDb(), false),
+                               std::memory_order_relaxed);
+        }
     }
 
     int dspBlocks_ = 0;
@@ -23750,6 +23776,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("everybody has left — AGC restarts from the owner's resting gain %d "
                  "(%d steps below the ceiling)", rest, steps);
             g_gainRef.store(rest, std::memory_order_relaxed);
+            g_specReanchor.store(true, std::memory_order_relaxed);   // ★ vibe_agc_rules.h §7: a fresh start for the picture too
             g_ovlSteps.store(steps, std::memory_order_relaxed);
             g_ovlBadGain.store(-1, std::memory_order_relaxed);
         g_ovlBadStrikes.store(0, std::memory_order_relaxed);   // ★ a new band starts with a clean record   // a fresh start, not the old hunt
@@ -26576,6 +26603,7 @@ void LocalSdrShim::setVibeAgcRtl(bool on) {
     //     a client for anything to happen (Stuart, 2026-08-21).
     if (was == on && (!on || g_gainTarget.load(std::memory_order_relaxed) >= 0)) return;
     LOGI("RTL AGC: %s", on ? "ON — free to use the tuner's whole range" : "off");
+    g_specReanchor.store(true, std::memory_order_relaxed);   // ★ §7: the picture's reference is where the loop starts
     // ★★ RTL-TCP: the rtl_tcp gain table stands in for the USB driver's list (2026-09-22).
     const bool tcpSrc = p && p->useTcp() && p->tcpHasGain();
     if (!p || (!p->dev && !tcpSrc)) return;
@@ -32788,6 +32816,7 @@ static void agcForget(const char* why) {
      *  minute. vibe_agc_rules.h §6. */
     g_resetPeakHold.store(true, std::memory_order_relaxed);
     g_adcPeakHoldReset.store(true, std::memory_order_relaxed);
+    g_specReanchor.store(true, std::memory_order_relaxed);   // ★ §7: a new place, a new reference for the picture
     g_agcRecord.forget(agcWallNow(), why);
     g_agcHurryUntil.store(now + 8.0, std::memory_order_relaxed);
     g_ovlMargin.store(3.0, std::memory_order_relaxed);

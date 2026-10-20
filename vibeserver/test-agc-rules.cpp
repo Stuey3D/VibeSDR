@@ -222,6 +222,46 @@ int main() {
         for (int k = 0; k < kHeadroomPeakHoldSec; ++k) ph.push(-40.0);
         ok(std::fabs(ph.max() + 40.0) < 1e-9, "...a whole hold of silence does (the band really has gone quiet)");
     }
+    printf("\nThe waterfall stays still while VibeAGC moves (§7)\n");
+    {
+        // A capture whose noise floor reads -90 dB at the reference gain 29.7. Blocks every 10 ms. At t = 1.00 s VibeAGC
+        // writes 33.8 dB (the Pi 500's own move, 2026-10-20); the radio applies it at 1.05 s. The smoother, when it finds
+        // the step, puts the level back (-4.1 dB) and glides that to 0 with a 0.4 s time constant.
+        auto run = [](bool agcOn, bool found, int fromT, int toT, bool useComp, double* worst, double* settledAt) {
+            SpectrumGainComp sc; unsigned writes = 0, steps = 0; int target = fromT; int hw = fromT;
+            double corr = 0.0, stepAt = -1; *worst = 0.0;
+            for (int k = 0; k <= 400; ++k) {
+                const double t = k * 0.01;
+                if (k == 100) { ++writes; target = toT; }
+                if (k == 105) { hw = toT; if (found) { ++steps; stepAt = t; corr = -(toT - fromT) / 10.0; } }
+                if (stepAt >= 0 && t > stepAt) corr = -(toT - fromT) / 10.0 * std::exp(-(t - stepAt) / 0.4);
+                const double comp = sc.update(t, agcOn, writes, target, steps, corr, k == 0);
+                const double shown = -90.0 + (hw - fromT) / 10.0 + corr + (useComp ? comp : 0.0);
+                *worst = std::max(*worst, std::fabs(shown + 90.0));
+                if (k == 400 && settledAt) *settledAt = shown;
+            }
+        };
+        double w = 0, end = 0;
+        run(true, true, 297, 338, false, &w, &end);
+        ok(w > 3.0, "BEFORE: the smoother alone slides the waterfall the whole 4.1 dB (the visible jump, reproduced)");
+        run(true, true, 297, 338, true, &w, &end);
+        printf("        found step: worst %.2f dB off, after 3 s %.2f dB off\n", w, std::fabs(end + 90.0));
+        ok(w <= 0.5, "NOW: a 4.1 dB VibeAGC step the smoother finds — the floor never moves more than 0.5 dB");
+        run(true, false, 297, 316, true, &w, &end);   // 29.7 -> 31.6: too small for the smoother to find
+        ok(std::fabs(end + 90.0) <= 0.05 && w <= 2.0, "a 1.9 dB step too small to find: a frame-long blip at most, then still");
+        run(false, true, 297, 338, true, &w, &end);
+        ok(std::fabs(end + 90.0 - 4.1) < 0.05, "the OWNER'S slider (VibeAGC off): the picture changes by the step, as it always did");
+        // Re-anchored (a full forget): the offset starts again from zero at the gain in effect.
+        SpectrumGainComp sc; double c = sc.update(0, true, 0, 297, 0, 0, true);
+        c = sc.update(0.1, true, 1, 338, 1, -4.1, false);
+        ok(std::fabs(c - 0.0) < 1e-9, "at a found step the offset and the smoother's correction cancel exactly");
+        c = sc.update(5.0, true, 1, 338, 1, 0.0, false);
+        ok(std::fabs(c + 4.1) < 1e-9, "...and once the glide is done the offset holds the whole step");
+        c = sc.update(5.1, true, 1, 338, 1, 0.0, true);
+        ok(std::fabs(c) < 1e-9, "a re-anchor (VibeAGC on, a full forget, the idle park) starts a new reference");
+        ok(sc.update(5.2, false, 1, 338, 1, 0.0, false) == 0.0, "VibeAGC off: no offset at all");
+    }
+
     printf("\nagc rules: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }
