@@ -284,3 +284,32 @@ this favourite / SpyServer" save under the address (as Android always has).
 must not import PopupShell (`scripts/test_server_colours.ts`); `crashGuard`, `faceplateGuard`, `CrashBoundary`,
 `LegacyPackageNotice` — crash and recovery paths that must not depend on the app's own UI being healthy. Native OS
 surfaces (share sheet, document picker, permission prompts) remain out of reach (§5).
+
+### Phase 1 + Phase 2 — built (2026-10-20), and what is left
+**Built:** MUST-1 radio chooser + refusal card; MUST-2 overlay rule on groups A/B of the sofa path (both tours, seven
+connection cards, idle card, three banners, PasswordModal ×2 hosts, IdentModal, VibePinPrompt, Add server, Edit
+favourite, DabPanel, MapOverlay + its card, the splash, Recordings on the picker, TunerScreen panels); MUST-3 `appAlert`;
+MUST-4 ControllerKeyboard (numeric + QWERTY, ↵/Back/⌫ on both, live hand-over, password traps) wired to frequency, the
+VibeServer PIN, radio PIN, every sofa-path password box, custom URL, Add server / Edit favourite, directory search,
+bookmark search and name (pre-filled), KiwiSDR call sign; MUST-5 group C (MenuSheet four, AudioSheet toggles + DSP
+TYPE, server-list row/header buttons, directory search/sort/ALL/Retry/SHOW, FreqModal SHARE) + `test_nav_coverage`;
+MUST-6 BrowserOverlay Back; MUST-7 picker Back index, Enter = tap; plus CityPicker keys/Back, horizontal reveal,
+Recordings ring for touch users.
+
+**Left (SHOULD / NICE, unchanged by this work unless noted):**
+- ChatDrawer nav and the canned-phrase pad; chat fields not wired to the keyboard yet (handle, message, manual freq).
+- LocalHardwarePanel on `usePanelNav` (35 unregistered controls — `test_nav_coverage` baseline); its admin / LO fields.
+- AboutOverlay scroll + buttons; SpecRatioOverlay slider; AdvRdsPanel; PanelBoundary / CrashBoundary keys.
+- FreqModal bookmarks-pane extras (magic key field, DAB rows, EiBi toggle, sync, delete, import) — baseline 12.
+- RecordingsOverlay share / delete / seek; FM-DX ♥, KEYS/DRUMS, PAUSED banner, band and AF chips; receiver-screen
+  CenterVfo and EdgeChips; owner notice; decoder spot rows.
+- The ~10 Alert calls left native on purpose (ServerMode + ExportLogs in Lite's bundle; crash/guard paths).
+- ServerMode / RtlTcpServer pad support (Android); the Random PIN pill reachable by pad (decided 10-20) lands with it.
+- Android hardware keyboard and the Android TV D-pad remote never reach the bus (`VibeGamepad.kt`), so on Android TV
+  the remote still uses `TvTextInput`'s edit sheet, not ControllerKeyboard — needs native work (decided 10-20 scope).
+- Physical LETTERS typed while ControllerKeyboard is open: only our keys reach JS on iOS (`AppDelegate.swift`
+  `ourCharacters`), so the hand-over to typing in place fires on an arrow / W A S D / Enter / Backspace, and the
+  first letter typed is not carried — needs the native printable-character report the brief describes.
+- ControlsBar's readout still draws its own digits; `FreqDigit` reuses the same components for the keycaps, and
+  moving the readout onto it is a device-checked follow-up.
+- Web page: pad Back does not blur a field; no controller keyboard on the web yet (brief §11).
