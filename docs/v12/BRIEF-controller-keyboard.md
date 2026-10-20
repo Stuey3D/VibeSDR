@@ -290,6 +290,15 @@ The controller guide (`src/utils/padGuide.ts`) gets a third tab, KEYBOARD, gener
 3. **Bookmark name:** pre-filled from the RDS name, then the station name, then the frequency, so SAVE works straight
    away and the name stays editable.
 
+4. **Scope — an addition, never a replacement (Stuart, same day).** Decided by the last input source *at the moment
+   Enter or a tap opens the field*:
+   - **Touch → the system keyboard, always and unchanged** — for accessibility (VoiceOver / TalkBack, sizing,
+     dictation) and other languages.
+   - **Physical keyboard → never the on-screen keyboard**; it types straight into the field, in place.
+   - **Game controller or TV remote → ControllerKeyboard.** That includes the Android TV D-pad remote: on TV it takes
+     over from (or sits alongside) `TvTextInput`'s edit sheet where that is the path today. tvOS password fields keep
+     the system secure keyboard, as above.
+
 The audit's other recommendations are adopted as the defaults:
 - both layouts have visible, focusable ↵ (submit) and Back (cancel) keys as well as ⌫ (Stuart, same day);
 - triggers (LT / RT) are not needed — no native change;
