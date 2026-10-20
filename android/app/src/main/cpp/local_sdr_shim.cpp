@@ -28655,8 +28655,8 @@ int LocalSdrShim::start(int fd, int vid, int pid,
      *  start the engine otherwise runs at the base rate until somebody arrives and LEAVES —
      *  which is how the floor measured 8.6 % after a DAB session and 19 % on a fresh launch. */
     impl->recomputeEngineRate();
-    // VibeServer waterfall frame-rate throttle: a serving host can cap fps (Full
-    // 20 / Half 10 / Quarter 5) to save CPU and wire data. The client interpolates
+    // VibeServer waterfall frame-rate throttle: a serving host can cap fps (Smoother
+    // 20 / Default 10 / Half 5 — 10 the default since 2026-10-20) to save CPU and wire data. The client interpolates
     // the waterfall, so a lower rate still scrolls smoothly.
     if (g_serveOnLan.load()) {
         double mr = g_vsMaxFftRate.load();

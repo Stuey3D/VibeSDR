@@ -135,7 +135,14 @@ int main() {
         Governor f;                                            // fastest listener asked 10: the first cut is 5
         run(f, 0, 8000, kStarvedDab, 10);
         ok(f.ceiling() == 5 && f.effective(10) == 5, "engine already at 10: the first cut goes straight to 5 (a cut that cuts)");
-        Governor q;                                            // already at 5 (owner Quarter): nothing to cut
+        // ★ THE NEW SERVER DEFAULT (2026-10-20): owner Default · 10 — the top is 10, so the ladder is 10 → 5 → back to 10.
+        Governor d; int dch = 0;
+        run(d, 0, 8000, kStarvedDab, 10, &dch);
+        ok(d.effective(10) == 5 && dch == 1, "owner Default · 10, starved: one step, 10 → 5");
+        run(d, 8000, 8 * 60000, kCalm, 10);
+        ok(d.effective(10) == 10 && d.effective(20) <= 20, "…and calm again: back to the owner's 10, never above it");
+        ok(d.effective(10) == 10, "the climb tops out at the owner's 10 (effective never raises a want)");
+        Governor q;                                            // already at 5 (owner Half · 5): nothing to cut
         int ch = 0;
         run(q, 0, 60000, kStarvedDab, 5, &ch);
         ok(q.ceiling() == 0 && ch == 0, "owner at 5: starved changes nothing — no rung below");

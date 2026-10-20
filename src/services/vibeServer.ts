@@ -18,16 +18,7 @@ const Local: any = (NativeModules as any).VibeLocalSDR;
 export const vibeServerSupported =
   Platform.OS === 'android' && !!Local?.startVibeServer;
 
-// Waterfall frame-rate tiers. Our Local Hardware default is 20 fps; Half (10) is
-// exactly UberSDR's shipping default, Quarter (5) sits just under OWRX's 9 — the
-// client interpolates the waterfall so a throttled rate still scrolls smoothly.
-export type FpsTier = 'full' | 'half' | 'quarter';
-export const FPS_TIERS: { key: FpsTier; label: string; fps: number }[] = [
-  { key: 'full',    label: 'Full · 20 fps',    fps: 20 },
-  { key: 'half',    label: 'Half · 10 fps',    fps: 10 },
-  { key: 'quarter', label: 'Quarter · 5 fps',  fps: 5  },
-];
-export const fpsForTier = (t: FpsTier) => FPS_TIERS.find(x => x.key === t)?.fps ?? 20;
+export { FPS_TIERS, DEFAULT_FPS_TIER, fpsForTier, type FpsTier } from './fpsTiers';
 
 // Optional demod-bandwidth cap (server-side), for low-end hosts / slow networks.
 // 0 = no cap (client gets the full control set).

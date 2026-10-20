@@ -745,6 +745,35 @@ int main() {
         ok(fromJson(R"({"gain":123})", s, err) && s.radios[0].fftRate == 5, "a patch without a rate leaves it alone");
     }
 
+    std::printf("\nThe 10-fps default (2026-10-20): NEW radios start at 10, a saved 20 stays 20, no migration\n");
+    {
+        ServerConfig s;
+        ok(fromJson(R"({"radios":[{"serial":"N"}]})", s, err) && s.radios.size() == 1, "a fresh radio with no rates", err);
+        ok(s.radios[0].fftRate == 10 && s.radios[0].maxFps == 10, "★ a fresh radio runs at 10 under a ceiling of 10",
+           std::to_string(s.radios[0].fftRate) + "/" + std::to_string(s.radios[0].maxFps));
+        RadioConfig blank;
+        ok(blank.fftRate == 10 && blank.maxFps == 10, "a radio added by the setup page (struct default) is 10 / 10");
+        Config one;
+        ok(one.fftRate == 10 && one.maxFps == 10, "the machine default is 10 / 10 too");
+        ok((s = ServerConfig{}, fromJson(R"({"radios":[{"serial":"S","maxFps":0,"fftRate":20}]})", s, err))
+           && s.radios[0].fftRate == 20 && s.radios[0].maxFps == 0, "★ a saved Smoother (no ceiling, 20) stays 20", err);
+        ok((s = ServerConfig{}, fromJson(R"({"radios":[{"serial":"T","maxFps":20,"fftRate":20}]})", s, err))
+           && s.radios[0].fftRate == 20 && s.radios[0].maxFps == 20, "a saved 20 / 20 stays 20 / 20", err);
+        ServerConfig back; ok(fromJson(toJson(s), back, err) && back.radios[0].fftRate == 20 && back.radios[0].maxFps == 20,
+           "★ and it is still 20 after a save and reload — no migration on save");
+        // Files that saved only ONE of the two predate both being written: read with the OLD defaults.
+        ok((s = ServerConfig{}, fromJson(R"({"radios":[{"serial":"U","fftRate":20}]})", s, err))
+           && s.radios[0].fftRate == 20 && s.radios[0].maxFps == 0, "only fftRate 20 saved: no ceiling, 20 (as before)", err);
+        ok((s = ServerConfig{}, fromJson(R"({"radios":[{"serial":"V","maxFps":0}]})", s, err))
+           && s.radios[0].fftRate == 20 && s.radios[0].maxFps == 0, "only maxFps 0 saved: 20 (the old default rate)", err);
+        ok((s = ServerConfig{}, fromJson(R"({"radios":[{"serial":"W","maxFps":5}]})", s, err))
+           && s.radios[0].fftRate == 5 && s.radios[0].maxFps == 5, "only maxFps 5 saved: 5", err);
+        Config c1; ok(fromJson(R"({"fftRate":20})", c1, err, false) && c1.fftRate == 20 && c1.maxFps == 0,
+           "the single-radio reader keeps the same rule");
+        double m = 10, f = 10; legacyFps(false, false, m, f);
+        ok(m == 10 && f == 10, "legacyFps: neither saved leaves the new defaults");
+    }
+
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
     if (failures) std::printf("%d FAILED\n", failures);
     return failures ? 1 : 0;
