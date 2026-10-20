@@ -40,6 +40,7 @@
  *   - Needle: 3-layer LED glow (28/16/6 blur), needleScale = clamp(.25,1,pxPerHz×4000)
  */
 
+import { newRowTargetState, stepRowTarget } from '../assets/wfRowTarget';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
@@ -474,7 +475,12 @@ function WaterfallView({
   // ★★ SMOOTH IS 60, NOT 40 (Stuart, 2026-10-13: "smooth is at 60 and is working so keep it"). 40 rows/s divides evenly
   //   into no drawing rate — ⅔ of a row per frame at 60, 1⅓ at 30: a regular judder (Galaxy Tab A9, measured 2·1·2·1).
   //   60 is one row a frame at 60, two at 30, one every other at 120; Default's 30 is one at 30, one every other at 60.
-  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 30 : 0;
+  // ★★ DEFAULT IS 20, NOT 30 (Stuart, 2026-10-20): with 10 fps the server default, 20 and 60 divide evenly
+  //   into 5/10/20 fps feeds and 60/120 Hz displays; 30 gave x1.5 alternating repeats on a 20 fps feed
+  //   (1, 2, 1, 2 rows per frame). The web client now uses these same three (web/client/src/main.ts WF_PRESET).
+  // ★★★ AND THESE ARE NOW CAPS (Stuart 10-20): the rows aimed for follow the measured feed — min(cap, 3x / 6x the feed),
+  //     snapped to a divisor of 60 (src/assets/wfRowTarget.ts; handleFrame / spectrum_engine.cpp apply it).
+  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 20 : 0;
   // ★★ WF_ROWS (a lines-per-frame figure LATCHED from the measured feed rate) is GONE
   //     (2026-10-03). Since uN was pinned to 1 nothing read it — it only fed `cfg.rowsPerFrame`,
   //     which no code read either. Its latch never latched (handleFrame is a []-deps callback and
@@ -737,6 +743,8 @@ function WaterfallView({
   const scrollFrac  = useSharedValue(1);
   const lastFrameTs = useRef(0);
   const avgFrameMs  = useRef(150);
+  const rowTargetSt = useRef(newRowTargetState());   // the feed-following row target (wfRowTarget.ts)
+  const rowTargetCap = useRef(-1);
 
   const wfUniforms = useDerivedValue(() => ({
     uHeadF:    uHead.value,
@@ -1684,7 +1692,21 @@ function WaterfallView({
     // each frame directly there looks jerky (Stuart 2026-07-24). Waterfall and trace want opposite
     // things at a low data rate, so the flags are split.
     const lowFps = avgFrameMs.current > LOW_FPS_GLIDE_MS;
-    const wfBoost = boost || (cfg.smoothTune && lowFps);
+    // ★★★ NO GLIDE WHILE REPEAT ROWS CARRY THE SCROLL — the native engine's 7013cebe, ported to this
+    //     JS path (iOS, and Android with the engine off). On a feed slower than the setting's row
+    //     rate (Default/Smooth on a < 15 fps feed: UberSDR, a throttled server) the extra rows ARE
+    //     the motion; a glide over the frame interval on top of them is two motions fighting. Tell:
+    //     ~5 s smooth, then judder, as avgFrameMs crosses 66 ms. Sharp (no repeats) keeps its glide;
+    //     a gesture (boost) always glides.
+    // ★★★ THE TARGET FOLLOWS THE FEED (Stuart 10-20, src/assets/wfRowTarget.ts): cfg.targetRows is the setting's CAP
+    //     (20 Default, 60 Smooth); the rows aimed for are min(cap, 3x / 6x the measured feed), snapped to a divisor of
+    //     60, with a latch on the feed so a wobble cannot flap it. 0 = actual rows. rowCarry runs on across a change.
+    if (rowTargetCap.current !== cfg.targetRows) { rowTargetSt.current = newRowTargetState(); rowTargetCap.current = cfg.targetRows; }
+    const rowTarget = avgFrameMs.current > 0
+      ? stepRowTarget(rowTargetSt.current, cfg.targetRows >= 60 ? 'smooth' : cfg.targetRows > 0 ? 'default' : 'sharp', 1000 / avgFrameMs.current)
+      : rowTargetSt.current.target;
+    const repeatsCarry = rowTarget > 0;
+    const wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
     // 3. Waterfall (phase 2): ONE raw frame row into the ring — the shader
     //    synthesizes the line-rate look (uN lines/frame, temporal blend of
@@ -1756,12 +1778,13 @@ function WaterfallView({
     //     ★ It made sense in the OLD model, where the glide came from uFrac sweeping across uN
     //       synthesised lines. With uN = 1 there are no synthesised lines to sweep: the scroll IS
     //       the rows, so the rows must be pushed on every path.
-    const rowMs = cfg.targetRows > 0 ? 1000 / cfg.targetRows : 0;
+    const rowMs = rowTarget > 0 ? 1000 / rowTarget : 0;
     let extras = 0;
     if (rowMs > 0) {
       rowCarry.current += dur / rowMs;      // rows this interval has earned (fractional)
       extras = Math.max(0, Math.floor(rowCarry.current) - 1);   // the arrival itself was row #1
       rowCarry.current -= Math.floor(rowCarry.current);
+      // ★ The rule never asks for more than 6 rows a frame (Stuart 10-20), so 8 is headroom — the stall guard.
       if (extras > 8) extras = 8;           // a stall must not repay as a burst
     }
     lastDynRows.current = extras + 1;

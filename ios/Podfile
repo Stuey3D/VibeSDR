@@ -30,6 +30,9 @@ target 'VibeSDR' do
   # iCloud key-value store bridge (favourites, bookmarks, colours, dials).
   pod 'VibeICloudKVS', :path => '../modules/vibe-icloud-kvs'
 
+  # Per-server certificate pins — trust on first use for self-signed receivers (GitHub #52).
+  pod 'VibeTlsTrust', :path => '../modules/vibe-tls-trust'
+
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
   else

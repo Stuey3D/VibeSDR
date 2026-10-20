@@ -21,13 +21,16 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
 import { initMobileControls } from './mobile';
 import { initPocketConn } from './pocketConn';
 import { initGamepad, pushBack, activePadLayout } from './gamepad';
+import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
+import { FrameClock, renderEvery } from './wfPacing';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
+import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindow';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
 import { lrDisplay } from '../../../src/services/lrMeter';
@@ -61,6 +64,7 @@ import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
+import { dabSlideQuery } from '../../../src/services/dabSlide';
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
@@ -2918,12 +2922,18 @@ let lastViewKey = '';
 function renderHz(): number {
   // The render clock must also keep up with the waterfall's EMIT rate (Speed × dpr pixel rows/sec),
   // or a high speed on a Retina canvas would out-run the draw loop and the scroll would stall.
-  const emit = wfSpeed * renderDpr();
+  // ★ The PRESET's rate when it has one (Default 20, Smooth 30) — wfSpeed is the hidden legacy
+  //   setting, and under Smooth it under-stated the emit rate by a third.
+  const emit = (WF_PRESET[wfScroll]?.rate || wfSpeed) * renderDpr();
   // ★ DAB holds the dial and the view: nothing on the spectrum needs more than 30 frames a second.
   return Math.min(dabOn ? 30 : 60, Math.max(20, Math.max(wantedFps() * 3, emit)));
 }
 
-let lastRenderAt = 0;
+/** ★★★ RENDER EVERY Nth DISPLAY FRAME, N WHOLE — not "is it 1000/renderHz − 1 ms since the last?".
+ *  That clock test, at renderHz 60 on a 60 Hz panel, threw away any frame whose callback ran ~1 ms
+ *  early: a 33 ms hole in the waterfall, several a second on Safari (2026-10-20). See wfPacing.ts. */
+const renderClock = new FrameClock();
+let renderCount = 0;
 
 /**
  * ★ SELF-PROFILER — add #perf to the URL.
@@ -3053,19 +3063,17 @@ function perfReport(secs: number) {
  *  drawn behind it (showAudioGate). Rows still arrive and are processed; only the drawing waits. */
 let startScreenUp = false;
 
-function loop() {
+function loop(frameTs?: number) {
   if (!wf || !spec) return;
-  try { renderFrame(); }
+  try { renderFrame(frameTs ?? performance.now()); }
   catch (e) { noteFault('web-render', 'frame', e); }
   requestAnimationFrame(loop);
 }
 
-function renderFrame() {
+function renderFrame(frameTs: number) {
   if (!wf || !spec) return;
-  const nowMs = performance.now();
-  const minGap = 1000 / renderHz() - 1;      // -1ms: never miss a slot to rounding
-  if (nowMs - lastRenderAt < minGap) return;
-  lastRenderAt = nowMs;
+  renderClock.tick(frameTs);
+  if (renderCount++ % renderEvery(renderClock.hz(), renderHz()) !== 0) return;
 
   wf.vfoHz = spec.frequency;
   recBufCheck();   // ★ V12 record buffer's retune rule — a string compare when nothing moved, nothing at all when Off
@@ -3098,7 +3106,7 @@ function renderFrame() {
   const w = wf;
   if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
   const drawWf = !NO_WF && !startScreenUp;
-  if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick());   // synthesise any waterfall lines now due (see Waterfall.tick)
+  if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick(frameTs));   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen is the ONLY exception
   //     (Stuart, 2026-09-30: "it must never stop"). A draw-skip under an open panel was tried and removed.
@@ -6567,7 +6575,7 @@ function dabRender() {
   /* ★ OFF THE AIR FIRST: the slideshow image the service is transmitting (TS 101 499) outranks
    *  the RadioDNS file — it is what the broadcaster is sending THIS listener right now. The
    *  station list keeps RadioDNS, which covers every row. */
-  const slideUrl = d.slide && d.slide.seq ? readAuthUrl(P(`/vibeserver/dabslide?seq=${d.slide.seq}`)) : '';
+  const slideUrl = dabSlideQuery(d.slide) ? readAuthUrl(P(`/vibeserver/dabslide?${dabSlideQuery(d.slide)}`)) : '';
   const airUrl = cur && cur.logoAir ? P(`/vibeserver/dablogoair?sid=${cur.sid}`) : '';
   const curLogo = slideUrl || airUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
   const head = cur
@@ -6824,7 +6832,9 @@ async function dabKeepAirLogo(key: string, url: string, provisional: boolean) {
   if (provisional && dabLogos.get(key)) return;    // never displace a better source with cover art
   dabAirKept.add(key);
   try {
-    const r = await fetch(url, { cache: 'no-store' });
+    /* ★ 'no-cache', not 'no-store' (2026-10-19): the <img> beside it has just fetched these bytes, and the server now
+     *  sends an ETag, so this is a 304 answered from the browser's copy — the picture crossed the link twice before. */
+    const r = await fetch(url, { cache: 'no-cache' });
     if (!r.ok) { dabAirKept.delete(key); return; }
     const blob = await r.blob();
     if (!blob.size || blob.size > 24576) return;
@@ -7203,7 +7213,11 @@ function dabUiOn() {
   /* ★ THE ADVANCED RDS PANEL SHARES THIS BOX. Entering DAB with it open left it showing under
    *  the station list ("the DAB stations populated over the top of it", Stuart, 2026-09-07).
    *  DAB takes the box; the RDS panel closes as it does for any other decoder. */
-  if (activeDec === 'rds') { spec?.rdsxLight(false); $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); activeDec = null; }
+  /* ★★★ AND THE `rds` ATTACH GOES WITH IT (2026-10-19). This line cleared activeDec BEFORE the `if (activeDec)
+   *  detach` below, so the decoder socket kept its `rds` attach and the server went on sending the FM analyser
+   *  into DAB — every rdsx, eye grids in each (rdsxLight(false) had dropped the lighter stream), ~44 KB/s against
+   *  a 1.6 KB DAB report. The server now refuses it off WFM as well (local_sdr_shim.cpp, rdsx send loop). */
+  if (activeDec === 'rds') { spec?.rdsxLight(false); decoders?.detach(); $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); activeDec = null; syncDecButtons(); }
   /* ★★★ AND EVERYTHING ELSE THAT SHARES IT. The line above was written when Advanced RDS was the only
    *  other tenant; with the FT8 spot list open, a DAB switch made by ANOTHER listener on the shared dial
    *  drew the station list into the FT8 box — FT8's ALL/AGE/COLLAPSE buttons over DAB stations over the
@@ -7658,6 +7672,9 @@ function buildControls() {
    *  is only ever SEEN in the list or in a search, so that is when to ask (refreshServerBookmarks) — and the answer is
    *  a 304 if nothing changed, gzip'd if it did. */
   $('search').addEventListener('focus', () => refreshServerBookmarks());
+  // ★ The controller keyboard never gives the box the cursor, so it asks for the receiver's list itself; ↵ only closes
+  //   the keyboard (the results stay open for the pad to pick from — search's own Enter would tune the top one).
+  kbField($('search'), { title: 'SEARCH', onOpen: () => refreshServerBookmarks() });
   initWaterfallInput();
   initKeyboard();
 }
@@ -7893,7 +7910,7 @@ function updateMediaSession() {
   if (dabOn && dabState) {
     const d = dabState;
     const cur = d.services.find(x => x.sid === d.sid);
-    const slideUrl = d.slide && d.slide.seq ? readAuthUrl(P(`/vibeserver/dabslide?seq=${d.slide.seq}`)) : '';
+    const slideUrl = dabSlideQuery(d.slide) ? readAuthUrl(P(`/vibeserver/dabslide?${dabSlideQuery(d.slide)}`)) : '';
     const airUrl = cur && cur.logoAir ? P(`/vibeserver/dablogoair?sid=${cur.sid}`) : '';
     dabArt = slideUrl || airUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
   }
@@ -7951,10 +7968,16 @@ let wfScroll: 'sharp' | 'default' | 'smooth' = 'default';
 // ★ Each preset is a TARGET ROW RATE (rows/sec on screen), not a multiplier: this renderer works
 //   out how many rows to synthesise per frame pair to hit it, which is why a slow feed and a fast
 //   one scroll at the same speed. SHARP opts out entirely — one row per received frame.
+// ★★★ THE APP'S THREE, EXACTLY, AND THE SAME RULE (src/assets/wfRowTarget.ts, shared with WaterfallView and the native
+//     Android engine). Stuart 10-20: the rows follow the MEASURED feed — Sharp = actual rows; Default = min(20, 3 x feed);
+//     Smooth = min(60, 6 x feed); each snapped DOWN to a rate that divides 60 ({10,12,15,20,30,60}), never below the
+//     feed: 5 fps → 5/15/30, 10 → 10/20/60, 20 → 20/20/60, UberSDR 3.3 → 3.3/10/20, OWRX ~9 → 9/20/30. Rates are
+//     SCREEN rows (points) — the app's row is one point. Every row is a REAL frame, repeated, never a blend (7bce170d).
+//     `rate` is the cap (it also sizes the render clock, renderHz).
 const WF_PRESET: Record<string, { rate: number; note: string }> = {
-  sharp:   { rate: 0,  note: 'One row per received frame — nothing invented, and it scrolls at the data rate.' },
-  default: { rate: 20, note: 'A steady 20 rows/sec whatever the feed — a little interpolation on a slow one.' },
-  smooth:  { rate: 30, note: 'A steady 30 rows/sec — continuous motion on a slow feed, less real detail.' },
+  sharp:   { rate: 0,  note: 'One row per received frame — nothing repeated, and it scrolls at the data rate.' },
+  default: { rate: 20, note: 'Up to 20 rows/sec — three times the data rate, real rows repeated on a slow feed.' },
+  smooth:  { rate: 60, note: 'Up to 60 rows/sec — six times the data rate: the smoothest scroll, more repeats.' },
 };
 let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
 
@@ -7971,8 +7994,8 @@ function computeActiveFps(): number {
 function applyWaterfallRates() {
   activeFps = computeActiveFps();
   wf?.setSpeed(wfSpeed);
-  wf?.setSharpRows(wfScroll === 'sharp');
-  if (WF_PRESET[wfScroll]?.rate) wf?.setSpeed(WF_PRESET[wfScroll].rate);
+  // ★★★ The rows follow the FEED now (Stuart 10-20): the preset is a scroll MODE, its rate a cap (wfRowTarget.ts).
+  wf?.setScroll(wfScroll);
   // The speed control belongs to SMOOTH: under SHARP the data rate decides, so showing it would be
   // a control whose every use is a no-op.
   // ★ The old 10/20/30 SPEED row is gone from the UI: the preset decides it. Kept hidden rather
@@ -8765,6 +8788,7 @@ function initSearch() {
     results.forEach((r, i) => {
       const row = document.createElement('div');
       row.className = 'sres' + (i === sel ? ' sel' : '');
+      row.setAttribute('role', 'button');      // ★ a game controller's highlight can reach a result (gamepad.ts)
       row.innerHTML =
         `<span class="f">${(r.frequency / 1e6).toFixed(3)}</span>` +
         `<span class="n">${r.flag ? escapeHtml(r.flag) + ' ' : ''}${escapeHtml(r.name)}` +
@@ -13234,7 +13258,9 @@ function slider(
     lbl.textContent = fmt(v);
     apply(v);
   };
-  el.oninput = () => { run(); if (prefKey) savePref(prefKey, Number(el.value)); };
+  // ★ Save BEFORE applying (2026-10-19): some applies read the pref rather than v (applyCtlLook via ctlLook()), so
+  //   saving after drew the transparency slider one move behind.
+  el.oninput = () => { if (prefKey) savePref(prefKey, Number(el.value)); run(); };
   run();
 }
 
@@ -14504,10 +14530,12 @@ function tuneRanges(): [number, number][] | null {
  *    is what the OWNER has pinned it to, which is a much smaller box and the only one a listener
  *    on a shared receiver may move inside. */
 function lockedWindow(): [number, number] | null {
-  if (!(hwLockedCentre > 0)) return null;
+  // ★★★ THE SERVER'S GUARD BAND, NOT THE BARE ±Fs/2 (owed with the app's locked-VFO fix, 11.0.9).
+  //     The server parks the VFO within lockedCentre ± (Fs/2 − min(50 kHz, 0.15·Fs)); clamping to
+  //     ±Fs/2 let this page show a figure up to 50 kHz from where the server actually put the dial.
+  //     One rule for the app and the web: src/utils/tuneWindow.ts (test_tune_window.ts).
   const fs = spec?.captureBandwidth();
-  if (!fs) return null;
-  return [hwLockedCentre - fs / 2, hwLockedCentre + fs / 2];
+  return fs ? sharedLockedWindow(hwLockedCentre, fs) : null;
 }
 
 /** ★★ WHAT THE OWNER PERMITS, as opposed to what the hardware can reach. Absent unless they have
@@ -14900,6 +14928,15 @@ function initFreqEntry() {
     closePanels();
   };
   $('freqGo').onclick = go;
+  /* ★★ THE CONTROLLER KEYBOARD on this box (padKeyboard.ts): its number pad works in the card's own unit, its kHz/MHz key
+   *  switches the card's (the segment, BEFORE the value goes in — the segment converts what is in the box), and ↵ is
+   *  this box's Enter, so an out-of-range refusal leaves the card open with its message and the keyboard shows it. */
+  kbField($('freqInput'), {
+    title: 'FREQUENCY',
+    unit: () => freqUnit,
+    setUnit: (u) => (Array.from($('freqUnitSeg').children) as HTMLButtonElement[]).find((b) => b.dataset.unit === u)?.click(),
+    refusal: () => (isPanelOpen('freqPanel') ? $('freqMsg').textContent ?? '' : ''),
+  });
   $<HTMLInputElement>('freqInput').onkeydown = (e) => {
     if (e.key === 'Enter') { go(); e.preventDefault(); }
   };
@@ -16259,6 +16296,8 @@ function initKeyboard() {
    *  arrows / W A S D move the highlight, Enter selects, Backspace and Escape go back, < > tune, - + zoom. Both feed
    *  the same actions in gamepad.ts. The older shortcuts (arrows tuning and zooming, Shift×10, [ ] for the step, M for
    *  mute, T for the RDS panel's size, a letter for each mode) were stripped as too complicated. */
+  // ★★ The controller keyboard listens first (capture): it needs to know whether a hand, a keyboard or a pad acted last.
+  initPadKeyboard();
   initGamepad({
     tune: (d) => { if (spec) nudge(d * step); },
     zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },

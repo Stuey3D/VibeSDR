@@ -677,8 +677,27 @@ public:
     }
     /** ★ The newest slideshow image off the air for the playing service — a station logo or
      *  now-playing artwork (TS 101 499), served by the shim at /vibeserver/dabslide. */
-    struct Slide { std::vector<uint8_t> bytes; std::string mime, name; uint32_t seq = 0; uint32_t sid = 0; };
+    /* ★★ `hash` — FNV-1a of the bytes (2026-10-19). The picture's own name: the HTTP ETag of /vibeserver/dabslide, and
+     *  the `h` a dab=2 live report carries so a client can ask for `?h=` — a URL unique to the picture, cached for good.
+     *  `seq` alone is not safe as a cache key: it restarts from 0 with the server, so `?seq=3` after a restart named a
+     *  DIFFERENT picture than the one a phone had cached under it (Android's Fresco keys on the URL alone). */
+    struct Slide { std::vector<uint8_t> bytes; std::string mime, name; uint32_t seq = 0; uint32_t sid = 0; uint64_t hash = 0; };
+    static uint64_t fnv1aBytes(const std::vector<uint8_t>& b) {
+        uint64_t h = 1469598103934665603ULL;
+        for (uint8_t c : b) { h ^= c; h *= 1099511628211ULL; }
+        return h;
+    }
     bool slide(Slide& out) { std::lock_guard<std::mutex> lk(m_); pollSlide(); if (!slide_.seq) return false; out = slide_; return true; }
+    /** ★ The picture whose hash is `h` — the live slide or any kept one. False when neither holds it (it has been
+     *  replaced since the report that named it). */
+    bool slideByHash(uint64_t h, Slide& out) {
+        std::lock_guard<std::mutex> lk(m_);
+        pollSlide();
+        if (!h) return false;
+        if (slide_.seq && slide_.hash == h) { out = slide_; return true; }
+        for (const auto& kv : slideBySid_) if (kv.second.hash == h && !kv.second.bytes.empty()) { out = kv.second; return true; }
+        return false;
+    }
 
     /** ★★★ THE OFF-AIR PICTURE, KEPT. Where the carousel's logos are cached per ensemble, this is
      *  the per-SERVICE slideshow store — and it exists because of a station with no logo anywhere
@@ -708,7 +727,7 @@ public:
             fclose(f);
             if (s.bytes.empty()) continue;
             s.mime = std::string("image/") + (strcmp(ext, "jpg") == 0 ? "jpeg" : ext);
-            s.sid = sid; s.seq = 1;
+            s.sid = sid; s.seq = 1; s.hash = fnv1aBytes(s.bytes);
             slideRemember(sid, s);                // ★ read once, then answered from memory
             out = s; return true;
         }
@@ -765,7 +784,8 @@ public:
      *  the multiplex is being read; 1.8 KB was the constellation + impulse response, drawn only while the Signal pane
      *  is open. So, built ONCE from the same pass as the legacy report (one builder — nothing to drift):
      *    live    — the legacy report minus the list, the scopes, the data services and the licensed sites;
-     *    scopes  — the ",ir":[…],"iq":[…] fragment, added for a socket whose Signal pane is open;
+     *    scopes  — the ",ir":[…],"iq":[…] fragment, added for a socket whose Signal pane is open — and, since
+     *              2026-10-19, the diagnostics no screen draws (spiParse/spiCrc/spiObjs, nLinks/nFi, links/fi);
      *    list    — every service's FIXED fields + dataSvcs + licensed: sent when it CHANGES;
      *    dls     — every service's radio text (+ DL Plus for the tuned one) with its age: sent when a TEXT changes.
      *  ★ `dlsAge` is why the list could not simply be "sent on change": an AGE changes every second, so the list
@@ -804,6 +824,15 @@ public:
     std::string jsonLocked_(ReportParts* parts = nullptr) {
         // ★ Byte ranges of the sections that leave the LIVE report (see ReportParts), in the legacy string.
         size_t dsA = 0, dsB = 0, scA = 0, scB = 0, licA = 0, licB = 0, svA = 0;
+        /* ★★ AND THE DIAGNOSTICS NO SCREEN DRAWS (2026-10-19): spiParse, spiCrc, spiObjs (up to 40 carousel rows),
+         *  nLinks/nFi and the raw links/fi tables. No reader in the app, the web page or the watch — they were for
+         *  reading the wire by hand. On a real multiplex with an SPI carousel they are most of the live report:
+         *  the Lenovo's was 5.1 KB a report tonight against 1.6 KB on the bench clip, which has no carousel. A dab=2
+         *  socket now gets them only beside the scopes (Signal pane open), so they are still there for whoever is
+         *  looking; the legacy report keeps them, unchanged. Trade-off: none on screen; three more appends per
+         *  report on the server. */
+        size_t dg1A = 0, dg1B = 0, dg2A = 0, dg2B = 0, dg3A = 0, dg3B = 0;
+        size_t slHAt = 0;   // ★ where the live report's slide object closes — see Slide::hash
         std::string listSvcs, dlsMap, dlsKey;   // the list's service rows; the radio-text map; what dlsRev hashes
         const Ensemble& e = rx_.ensemble();
         const DabStats& s = rx_.stats();
@@ -947,6 +976,7 @@ public:
                 char sb[160];
                 snprintf(sb, sizeof sb, ",\"slide\":{\"seq\":%u,\"mime\":\"%s\",\"bytes\":%zu,\"name\":\"", slide_.seq, slide_.mime.c_str(), slide_.bytes.size());
                 j += sb; j += esc(slide_.name) + "\"}";
+                slHAt = j.size() - 1;   // ★ ReportParts: the dab=2 live report's slide gets its `h` here (legacy unchanged)
             }
             {
                 char mb[96];
@@ -956,6 +986,7 @@ public:
                 snprintf(pb, sizeof pb, ",\"spi\":{\"sid\":%u,\"packets\":%u,\"groups\":%u,\"crcFail\":%u,\"lost\":%u,\"dir\":%s,\"named\":%zu,\"complete\":%u,\"logoSvcs\":%zu}",
                          spiSid_, packets_.packets(), packets_.groups(), packets_.crcFails(), packets_.lost(), carousel_.haveDirectory() ? "true" : "false", carousel_.named(), carousel_.completeCount(), spiLogoRefs_.size());
                 j += pb;
+                dg1A = j.size();
                 char qb[200]; snprintf(qb, sizeof qb, ",\"spiParse\":{\"runs\":%u,\"siDocs\":%u,\"svcs\":%u,\"eid\":%u},\"spiCrc\":{\"byLen\":[%u,%u,%u,%u],\"last\":\"%02x %02x %02x\",\"lastAddr\":%d}",
                                          spiParseRuns_, spiSiDocs_, spiParsedSvcs_, unsigned(e.eid), packets_.failByLen(0), packets_.failByLen(1), packets_.failByLen(2), packets_.failByLen(3),
                                          packets_.lastFail()[0], packets_.lastFail()[1], packets_.lastFail()[2], packets_.lastFailAddr()); j += qb;
@@ -970,6 +1001,7 @@ public:
                     }
                     j += "]";
                 }
+                dg1B = j.size();
             }
             {   /* ★ The DATA services and every user application signalled (FIG 0/13), so a DXer
                  *  can see what else the multiplex carries — and whether an SPI/EPG data service
@@ -992,13 +1024,16 @@ public:
                 //   answer to "why is the FM row empty": the mux sends none, or we missed it.
                 char cb[48];
                 snprintf(cb, sizeof cb, ",\"nLinks\":%zu,\"nFi\":%zu", e.links.size(), e.freqInfo.size());
+                dg2A = j.size();
                 j += cb;
+                dg2B = j.size();
                 const auto& td = rx_.tiiDiag();
                 char db[96];
                 snprintf(db, sizeof db, ",\"tiiDiag\":{\"comb\":%d,\"f4s\":%.1f,\"f45\":%.2f,\"frames\":%d}", td.comb, td.fourthOverSigma, td.fourthOverFifth, td.frames);
                 j += db;
                 /* ★ The raw linkage table (FIG 0/6) and frequency table (FIG 0/21), for the DX pane and
                  *  for seeing what a multiplex actually signals. Small: a few sets of a few ids. */
+                dg3A = j.size();
                 if (!e.links.empty()) {
                     j += ",\"links\":[";
                     bool f1 = true;
@@ -1028,6 +1063,7 @@ public:
                     }
                     j += "]";
                 }
+                dg3B = j.size();
             }
             /* ★★★ NOW AND NEXT, FROM THE MULTIPLEX'S OWN SCHEDULE (TS 102 371 Programme
              *  Information). `epgPi` is published even when it is zero, and that is the point:
@@ -1356,15 +1392,26 @@ public:
             // live: the legacy report without the sections that moved out (ranges ascending, never overlapping).
             std::string live;
             size_t at = 0;
-            const std::pair<size_t, size_t> cut[] = { {dsA, dsB}, {scA, scB}, {licA, licB}, {svA, j.size() - 1} };
+            const std::pair<size_t, size_t> cut[] = { {dg1A, dg1B}, {dsA, dsB}, {dg2A, dg2B}, {dg3A, dg3B}, {scA, scB},
+                                                      {licA, licB}, {svA, j.size() - 1} };
             for (const auto& c : cut) {
                 if (c.second <= c.first || c.first < at) continue;
                 live.append(j, at, c.first - at);
                 at = c.second;
             }
             live.append(j, at, std::string::npos);
+            /* ★ The slide's `h` — only on the dab=2 live report, so the legacy one stays byte-for-byte. The slide comes
+             *  before every cut range, so its offset in `live` is its offset in `j`; checked rather than assumed. */
+            bool slBeforeCuts = slHAt > 0;
+            for (const auto& c : cut) if (c.second > c.first && c.first <= slHAt) slBeforeCuts = false;
+            if (slBeforeCuts && slHAt < live.size() && live[slHAt] == '}') {
+                char hb[40]; snprintf(hb, sizeof hb, ",\"h\":\"%016llx\"", (unsigned long long)slide_.hash);
+                live.insert(slHAt, hb);
+            }
             parts->live = std::move(live);
             parts->scopes = scB > scA ? j.substr(scA, scB - scA) : std::string();
+            for (const auto& d : { std::make_pair(dg1A, dg1B), std::make_pair(dg2A, dg2B), std::make_pair(dg3A, dg3B) })
+                if (d.second > d.first) parts->scopes.append(j, d.first, d.second - d.first);
             std::string list = "{\"type\":\"dab_list\",\"channel\":\"" + ch + "\",\"eid\":" + std::to_string(e.eid);
             if (dsB > dsA) list.append(j, dsA, dsB - dsA);
             if (licB > licA) list.append(j, licA, licB - licA);
@@ -2422,7 +2469,7 @@ private:
         slideAlert_ = o.alert;
         slideClickUrl_ = o.clickUrl;
         slide_.bytes = std::move(o.body); slide_.mime = o.mime(); slide_.name = o.name;
-        slide_.sid = sid_; slide_.seq = ++slideSeq_;
+        slide_.sid = sid_; slide_.seq = ++slideSeq_; slide_.hash = fnv1aBytes(slide_.bytes);
         /* ★★★ AND KEEP A COPY. `slide_` is cleared by every retune, which is right for the pane
          *  and is exactly why the picture kept having to be read off the air again. */
         if (!sid_ || slide_.bytes.empty()) return;

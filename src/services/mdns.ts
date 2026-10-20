@@ -1,4 +1,4 @@
-import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import { AppState, NativeModules, NativeEventEmitter, Platform } from 'react-native';
 
 // mDNS/Bonjour auto-discovery of networked RTL-TCP servers. Platform-agnostic
 // wrapper over the native discovery:
@@ -12,93 +12,66 @@ import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 // to rtl_tcp on the UberSDR host) publishes host, port, and an optional `name`
 // TXT record for a friendly label.
 
-export type ServerProto = 'rtltcp' | 'vibeserver';
-export type DiscoveredServer = {
-  name: string; host: string; port: number;
-  proto: ServerProto;   // which protocol the advertised server speaks
-  pin: boolean;         // VibeServer only: whether it requires a PIN
-};
+export type { ServerProto, DiscoveredServer, MdnsBrowse } from './mdnsBrowse';
+import { createMdnsBrowse, type DiscoveredServer, type MdnsBrowse, type ServerProto } from './mdnsBrowse';
 
 const nativeModule: any =
   Platform.OS === 'ios'
     ? (NativeModules as any).VibePowerModule
     : (NativeModules as any).VibeMDNS;
 
-const key = (host: string, port: number) => `${host}:${port}`;
+/** Whether this build can browse the LAN at all (the SEARCH AGAIN row is drawn only where it can do something). */
+export const mdnsDiscoverySupported = !!nativeModule?.startDiscovery;
 
 /**
  * Start browsing for RTL-TCP servers. `onChange` is called with the full current
- * list whenever it changes. Returns a stop function — call it on unmount/blur.
- * No-ops safely (returns a stop fn that does nothing) if the native module is
- * unavailable on this build.
+ * list whenever it changes. Returns a stop function — call it on unmount/blur —
+ * which also carries `refresh()` (restart the browse; see mdnsBrowse.ts) and `searching()`.
+ * `onSearching` hears "searching" go true at every (re)start and false once its grace period ends.
+ * No-ops safely (a stop fn that does nothing) if the native module is unavailable on this build.
  */
 export function startMdnsDiscovery(
   onChange: (servers: DiscoveredServer[]) => void,
-): () => void {
-  if (!nativeModule?.startDiscovery) return () => {};
-
+  onSearching?: (busy: boolean) => void,
+): MdnsBrowse {
+  if (!nativeModule?.startDiscovery) {
+    const none = (() => {}) as MdnsBrowse;
+    none.refresh = () => {};
+    none.searching = () => false;
+    return none;
+  }
   const emitter = new NativeEventEmitter(nativeModule);
-  const byKey = new Map<string, DiscoveredServer>();
-  const nameToKey = new Map<string, string>();
-
-  const push = () => onChange(Array.from(byKey.values()));
-
-  const foundSub = emitter.addListener('VibeMdnsFound', (e: any) => {
-    const host = String(e?.host ?? '').trim();
-    const port = Number(e?.port);
-    if (!host || !Number.isFinite(port) || port <= 0) return;
-    const name = String(e?.name ?? '').trim() || `${host}:${port}`;
-    const proto: ServerProto = e?.proto === 'vibeserver' ? 'vibeserver' : 'rtltcp';
-    const pin = !!e?.pin;
-    const k = key(host, port);
-    byKey.set(k, { name, host, port, proto, pin });
-    if (e?.name) nameToKey.set(String(e.name), k);
-    push();
-  });
-
-  // Removal events carry only the service name (host/port aren't re-resolved on
-  // teardown), so map it back to the key we stored on discovery.
-  const lostSub = emitter.addListener('VibeMdnsLost', (e: any) => {
-    const svcName = String(e?.name ?? '');
-    const k = nameToKey.get(svcName);
-    if (k && byKey.delete(k)) {
-      nameToKey.delete(svcName);
-      push();
-    }
-  });
-
-  try { nativeModule.startDiscovery(); } catch {}
-
-  // ★★★ THE PHONE'S OWN HOTSPOT (Stuart, 2026-10-10: a VibeServer Portable on his iPhone's hotspot — "I also have no way
-  //     of knowing the ip address of the connected pi from the phone", and the app did not list it). An iPhone's
-  //     Personal Hotspot always hands out 172.20.10.2–14 — thirteen addresses — and shows nobody their numbers. So,
-  //     alongside Bonjour (which may not cross from a hotspot's clients to the phone hosting it), ask those thirteen
-  //     "are you a VibeServer?" — /vibeserver.json, 1.5 s each, all at once, every 20 s while the list is open.
-  //     Nothing there costs thirteen refused connections. iOS only: that range is Apple's.
-  const swept = new Map<string, DiscoveredServer>();
-  let sweepDead = false;
-  const sweep = async () => {
-    if (Platform.OS !== 'ios') return;
-    const found = await Promise.all(Array.from({ length: 13 }, (_, i) => `172.20.10.${i + 2}`).map(hotspotProbe));
-    if (sweepDead) return;
-    let changed = false;
-    for (let i = 0; i < 13; i++) {
-      const host = `172.20.10.${i + 2}`, k = key(host, 48000), s = found[i];
-      if (s && !byKey.has(k)) { byKey.set(k, s); swept.set(k, s); changed = true; }
-      if (!s && swept.has(k)) { swept.delete(k); byKey.delete(k); changed = true; }
-    }
-    if (changed) push();
-  };
-  void sweep();
-  const sweepTimer = setInterval(() => { void sweep(); }, 20000);
-
-  return () => {
-    sweepDead = true;
-    clearInterval(sweepTimer);
-    try { nativeModule.stopDiscovery?.(); } catch {}
-    foundSub.remove();
-    lostSub.remove();
-  };
+  return createMdnsBrowse({
+    start: () => nativeModule.startDiscovery(),
+    stop: () => nativeModule.stopDiscovery?.(),
+    listen: (event, fn) => emitter.addListener(event, fn),
+    // ★★★ THE PHONE'S OWN HOTSPOT (Stuart, 2026-10-10: a VibeServer Portable on his iPhone's hotspot — "I also have no way
+    //     of knowing the ip address of the connected pi from the phone", and the app did not list it). An iPhone's
+    //     Personal Hotspot always hands out 172.20.10.2–14 — thirteen addresses — and shows nobody their numbers. So,
+    //     alongside Bonjour (which may not cross from a hotspot's clients to the phone hosting it), ask those thirteen
+    //     "are you a VibeServer?" — /vibeserver.json, 1.5 s each, all at once, every 20 s while the list is open.
+    //     Nothing there costs thirteen refused connections. iOS only: that range is Apple's.
+    sweep: Platform.OS === 'ios'
+      ? async () => (await Promise.all(Array.from({ length: 13 }, (_, i) => `172.20.10.${i + 2}`).map(hotspotProbe)))
+          .filter((s): s is DiscoveredServer => !!s)
+      : undefined,
+    // ★★ BACK FROM THE BACKGROUND = A FRESH BROWSE. iOS drops a suspended app's DNS-SD connections, and the phone may
+    //    have changed networks meanwhile; the old browse then reports nothing, for ever. Only from 'background' — a
+    //    pulled-down Control Centre ('inactive') is not a reason to look again.
+    onForeground: (fn) => {
+      let last = AppState.currentState;
+      const sub = AppState.addEventListener('change', (st) => {
+        const from = last;
+        last = st;
+        if (st === 'active' && from === 'background') fn();
+      });
+      return { remove: () => sub.remove() };
+    },
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (t) => clearTimeout(t),
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (t) => clearInterval(t),
+  }, onChange, onSearching);
 }
 
 /** One address on the phone's hotspot: a VibeServer there, or null. Named from the pocket box's own hello if it is one. */

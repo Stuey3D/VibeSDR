@@ -597,6 +597,25 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   ///     the Opus decoder, AVAudioFormat and the engine start.
   static let audioRateRange: ClosedRange<Double> = 4_000...384_000
 
+  /// ★★ GitHub #52 — THE PARAMETERS FOR A NATIVE SOCKET TO `url`, honouring the user's per-server certificate pin
+  ///    (modules/vibe-tls-trust/VibeTlsCore). Plain ws → .tcp. wss to a host:port with NO pin → the stock .tls,
+  ///    byte-for-byte what every site here used before. Only a pinned host:port gets a verify block — and that
+  ///    block asks the system first (with the host name), then accepts only the exact pinned certificate.
+  ///    These sockets carry the audio, so without this a trusted self-signed server would connect its waterfall
+  ///    (React Native's socket, pinned in VibeTlsTrust.mm) and stay silent.
+  static func socketParams(for url: URL) -> NWParameters {
+    guard url.scheme == "wss" else { return .tcp }
+    guard let host = url.host else { return .tls }
+    let port = url.port ?? 443
+    guard VibeTlsCore.shared().pin(forHost: host, port: port) != nil else { return .tls }
+    let tls = NWProtocolTLS.Options()
+    sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, secTrust, complete in
+      let trust = sec_trust_copy_ref(secTrust).takeRetainedValue()
+      complete(VibeTlsCore.shared().evaluate(trust, host: host, port: port) != .rejected)
+    }, DispatchQueue.global(qos: .userInitiated))
+    return NWParameters(tls: tls)
+  }
+
   /// A socket URL fit for a log: credential-bearing query values (`vs_*` PIN/admin proofs and
   /// tickets, the session id) replaced with "…". The key stays so the log still says what was sent.
   static func redactURL(_ url: URL) -> String {
@@ -903,8 +922,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     fmdxDecoder = dec
 
-    let secure = (url.scheme == "wss")
-    let params: NWParameters = secure ? .tls : .tcp
+    let params = VibePowerModule.socketParams(for: url)   // ★ wss → TLS (+ the server's pin, GitHub #52)
     let wsOpts = NWProtocolWebSocket.Options()
     wsOpts.autoReplyPing = true
     params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
@@ -2274,8 +2292,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     wsGen &+= 1
     let gen = wsGen
 
-    let secure = (url.scheme == "wss")
-    let params: NWParameters = secure ? .tls : .tcp   // tunnel cert valid → default trust
+    let params = VibePowerModule.socketParams(for: url)   // tunnel cert valid → default trust; a pin only if the user made one
     let wsOpts = NWProtocolWebSocket.Options()
     wsOpts.autoReplyPing = true                        // answer server pings natively
     params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
@@ -2494,14 +2511,13 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     //     Exactly the report: "still playing audio but not tuning", and on a fresh connect no
     //     audio at all (Stuart, 2026-08-23, on TestFlight against the XCover).
     //  ★★ THE OTHER TWO NWConnection SITES IN THIS FILE ALREADY DO THIS — line ~646 (FM-DX) and
-    //     ~1558 (UberSDR audio), both `secure ? .tls : .tcp`. This one was written for the LOCAL
+    //     ~1558 (UberSDR audio); all three now share socketParams(for:). This one was written for the LOCAL
     //     shim on loopback, where plain ws is all there is, and never revisited when the same call
     //     started being pointed at a public tunnelled server. One place updated, the others quietly
     //     left behind — the same shape as the audio-socket bug this pump was built to fix.
     //  ★ Android was unaffected throughout: OkHttp reads the scheme from the URL, so there was
     //    never a decision to forget.
-    let secure = (url.scheme == "wss")
-    let params: NWParameters = secure ? .tls : .tcp
+    let params = VibePowerModule.socketParams(for: url)   // ★ wss → TLS (+ the server's pin, GitHub #52)
     let wsOpts = NWProtocolWebSocket.Options()
     wsOpts.autoReplyPing = true
     params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
@@ -2783,7 +2799,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     NSLog("[VibePowerModule] opening audio WS (URLSession): %@", VibePowerModule.redactURL(url))
     wsUsingNW = false
-    let session = URLSession(configuration: .default)
+    // ★ GitHub #52: the delegate answers ONLY server-trust challenges, and hands every one back to the system unless
+    //   it is a refused certificate matching this host:port's pin (VibeTlsSessionDelegate).
+    let session = URLSession(configuration: .default, delegate: VibeTlsSessionDelegate(), delegateQueue: nil)
     wsSession = session
     let task = session.webSocketTask(with: url)
     wsTask = task
@@ -3728,43 +3746,87 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // the compressed protocol (and whether it needs a PIN) before connecting.
   private static let vibeServiceType = "_vibesdr._tcp"
 
+  // ★★★ A BROWSE THAT DIES MUST BE RESTARTED, AND A RESOLVE THAT HANGS MUST GIVE UP (Stuart, 2026-10-20: "sometimes it
+  //     wont find a server until I close and open again"). Neither browser had a state handler: an NWBrowser that FAILED
+  //     — iOS tears down a suspended app's DNS-SD connection, and mDNSResponder can restart under us — just stopped
+  //     reporting, and the list looked healthy and empty until the app was killed. And the resolve (a TCP connection to
+  //     the service, to learn its address) waited for ever in .waiting when the name would not resolve — 11.0.4's
+  //     responder on the Portable dropped Apple's packed questions — so that server never appeared, and never got a
+  //     second try because the browser had already reported it as added. Now:
+  //       • a failed browser is restarted 1 s later (only while discovery is still wanted);
+  //       • a resolve gets 8 s, and a resolve that fails or times out is tried again twice (3 s, then 10 s later);
+  //       • a .changed result (its TXT, e.g. the PIN flag) resolves again;
+  //       • all state lives on mdnsQueue — the JS thread only queues work onto it.
+  //     JS also restarts the whole browse on return from the background and from SEARCH AGAIN (src/services/mdnsBrowse.ts).
+  private var mdnsWanted = false
+  private var mdnsGeneration = 0
+
   @objc(startDiscovery)
   func startDiscovery() {
-    stopDiscovery()
-    for type in [VibePowerModule.rtlTcpServiceType, VibePowerModule.vibeServiceType] {
-      let params = NWParameters()
-      params.includePeerToPeer = true
-      let browser = NWBrowser(
-        for: .bonjourWithTXTRecord(type: type, domain: nil), using: params)
-      browser.browseResultsChangedHandler = { [weak self] _, changes in
-        guard let self = self else { return }
-        for change in changes {
-          switch change {
-          case .added(let result):
-            self.resolveMdns(result)
-          case .removed(let result):
-            if case let .service(name, _, _, _) = result.endpoint {
-              self.sendEvent(withName: "VibeMdnsLost", body: ["name": name])
-            }
-          default:
-            break
-          }
-        }
+    mdnsQueue.async { [weak self] in
+      guard let self = self else { return }
+      self.stopDiscoveryOnQueue()
+      self.mdnsWanted = true
+      self.mdnsGeneration += 1
+      for type in [VibePowerModule.rtlTcpServiceType, VibePowerModule.vibeServiceType] {
+        self.startBrowser(type: type, generation: self.mdnsGeneration)
       }
-      browser.start(queue: mdnsQueue)
-      mdnsBrowsers.append(browser)
     }
   }
 
   @objc(stopDiscovery)
   func stopDiscovery() {
+    mdnsQueue.async { [weak self] in self?.stopDiscoveryOnQueue() }
+  }
+
+  private func stopDiscoveryOnQueue() {
+    mdnsWanted = false
+    mdnsGeneration += 1
     for b in mdnsBrowsers { b.cancel() }
     mdnsBrowsers.removeAll()
     for conn in mdnsResolvers { conn.cancel() }
     mdnsResolvers.removeAll()
   }
 
-  private func resolveMdns(_ result: NWBrowser.Result) {
+  private func startBrowser(type: String, generation: Int) {
+    let params = NWParameters()
+    params.includePeerToPeer = true
+    let browser = NWBrowser(for: .bonjourWithTXTRecord(type: type, domain: nil), using: params)
+    browser.stateUpdateHandler = { [weak self, weak browser] state in
+      guard let self = self, case .failed(let err) = state else { return }
+      NSLog("[VibeMdns] browser for %@ failed (%@) — restarting", type, "\(err)")
+      if let browser = browser {
+        browser.cancel()
+        self.mdnsBrowsers.removeAll { $0 === browser }
+      }
+      self.mdnsQueue.asyncAfter(deadline: .now() + 1) { [weak self] in
+        guard let self = self, self.mdnsWanted, self.mdnsGeneration == generation else { return }
+        self.startBrowser(type: type, generation: generation)
+      }
+    }
+    browser.browseResultsChangedHandler = { [weak self] _, changes in
+      guard let self = self else { return }
+      for change in changes {
+        switch change {
+        case .added(let result):
+          self.resolveMdns(result, attempt: 0, generation: generation)
+        case .changed(_, let result, _):
+          self.resolveMdns(result, attempt: 0, generation: generation)
+        case .removed(let result):
+          if case let .service(name, _, _, _) = result.endpoint {
+            self.sendEvent(withName: "VibeMdnsLost", body: ["name": name])
+          }
+        default:
+          break
+        }
+      }
+    }
+    browser.start(queue: mdnsQueue)
+    mdnsBrowsers.append(browser)
+  }
+
+  private func resolveMdns(_ result: NWBrowser.Result, attempt: Int, generation: Int) {
+    guard mdnsWanted, mdnsGeneration == generation else { return }
     guard case let .service(serviceName, serviceType, _, _) = result.endpoint else { return }
     let proto = serviceType.contains("vibesdr") ? "vibeserver" : "rtltcp"
     // Friendly name + pin flag from the TXT record.
@@ -3776,6 +3838,18 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     let conn = NWConnection(to: result.endpoint, using: .tcp)
     mdnsResolvers.append(conn)
+    var settled = false
+    // ★ One way out, whichever comes first: an address, a failure, or the 8 s timeout. A failure is retried.
+    let finish: (Bool) -> Void = { [weak self, weak conn] ok in
+      guard let self = self, !settled else { return }
+      settled = true
+      if let conn = conn { self.dropResolver(conn) }
+      if !ok && attempt < 2 {
+        self.mdnsQueue.asyncAfter(deadline: .now() + (attempt == 0 ? 3 : 10)) { [weak self] in
+          self?.resolveMdns(result, attempt: attempt + 1, generation: generation)
+        }
+      }
+    }
     conn.stateUpdateHandler = { [weak self, weak conn] state in
       guard let self = self, let conn = conn else { return }
       switch state {
@@ -3785,18 +3859,23 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
           var h = "\(host)"
           if let pct = h.firstIndex(of: "%") { h = String(h[..<pct]) }  // strip IPv6 zone id
           h = h.replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
-          self.sendEvent(withName: "VibeMdnsFound",
-                         body: ["name": friendly, "host": h, "port": Int(port.rawValue),
-                                "proto": proto, "pin": pin])
+          if self.mdnsWanted && self.mdnsGeneration == generation {
+            self.sendEvent(withName: "VibeMdnsFound",
+                           body: ["name": friendly, "host": h, "port": Int(port.rawValue),
+                                  "proto": proto, "pin": pin])
+          }
+          finish(true)
+        } else {
+          finish(false)
         }
-        self.dropResolver(conn)
       case .failed, .cancelled:
-        self.dropResolver(conn)
+        finish(false)
       default:
-        break
+        break        // .waiting: the timeout below decides
       }
     }
     conn.start(queue: mdnsQueue)
+    mdnsQueue.asyncAfter(deadline: .now() + 8) { finish(false) }
   }
 
   private func dropResolver(_ conn: NWConnection) {

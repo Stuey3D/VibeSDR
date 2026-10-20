@@ -9,6 +9,7 @@
 //   4. it is a fraction of the bytes;
 //   5. dab_scopes on → ir/iq arrive; off → they stop;
 //   6. dab_resync → the list and radio text are sent again; leaving and re-entering DAB → sent again.
+//   7. (2026-10-19) the diagnostics no screen draws (spiObjs, links, fi …) come only with the scopes; legacy keeps them.
 // ★ Real server, real multiplex: the bench clip (vibeserver/bench-clip/dab-bench-clean.vbu8, 12D — built by
 //   make-clip.sh, not in git). Without it or VIBESERVER_BIN this reports NOT RUN, never a pass. Silent, loopback only.
 import * as esbuild from 'esbuild';
@@ -98,6 +99,14 @@ try {
      '…and blocks, data services and licensed sites too');
   const texts = (r) => (r?.services ?? []).filter((s) => s.dls).map((s) => `${s.sid}:${s.dls}`).sort().join('|');
   ok(texts(neu.report) === texts(lgNow), `…and every service's radio text (${(lgNow?.services ?? []).filter((s) => s.dls).length} with text)`);
+  // ★ 2026-10-19: the diagnostics no screen draws travel with the scopes — every OTHER field of the legacy report is
+  //   in the reassembled one, and nothing is added but the revision stamps.
+  const DIAG = new Set(['ir', 'iq', 'spiParse', 'spiCrc', 'spiObjs', 'nLinks', 'nFi', 'links', 'fi']);
+  const missing = Object.keys(lgNow ?? {}).filter((k) => !(k in (neu.report ?? {})));
+  const extra = Object.keys(neu.report ?? {}).filter((k) => !(k in (lgNow ?? {})));
+  ok(missing.length > 0 && missing.every((k) => DIAG.has(k)) && extra.every((k) => ['v', 'listRev', 'dlsRev'].includes(k)),
+     `…and every field a screen reads (only diagnostics held back: ${missing.join(', ')}; added: ${extra.join(', ')})`);
+  ok(['spiParse', 'spiCrc', 'nLinks', 'nFi'].every((k) => k in (lgNow ?? {})), '…while the legacy report still carries the diagnostics');
 
   // ── bytes over the same 8 s ──
   old.counting = neu.counting = true;
@@ -115,6 +124,10 @@ try {
   // ★ At once, not at the next half-second tick — no empty constellation box when the pane opens (look and feel).
   ok(Date.now() - t0 < 250, `…immediately, not at the next tick (${Date.now() - t0} ms)`);
   ok(Array.isArray(neu.report?.iq), '…and reach the assembled report');
+  { const withScopes = neu.msgs.filter((m) => m.type === 'dab' && Array.isArray(m.iq)).at(-1);
+    const lgk = Object.keys(full() ?? {}).filter((k) => !['ir', 'iq'].includes(k) || k in (withScopes ?? {}));
+    ok(withScopes && lgk.every((k) => k in withScopes || k === 'services' || k === 'dataSvcs' || k === 'licensed' || k === 'blocks'),
+       '…with the diagnostics beside them (spiParse, spiCrc, nLinks, nFi …): the open pane has every legacy field'); }
   neu.send({ type: 'dab_scopes', on: 0 });
   await sleep(1200);
   mark = neu.msgs.length;

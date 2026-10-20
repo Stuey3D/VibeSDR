@@ -58,6 +58,8 @@ struct InstancePickerView: View {
   @State private var showCustom = false
   @State private var editFav: Favourite? = nil     // the custom server being edited (long-press)
   @StateObject private var mdns = VibeMdns()
+  /// ★ GitHub #52: observed so a "Forget certificate" takes effect in the menus at once.
+  @ObservedObject private var tls = TlsTrustCenter.shared
   @State private var pinFor: VibeAd? = nil
   @State private var pinEntry = ""
 
@@ -237,6 +239,7 @@ struct InstancePickerView: View {
       if f.custom {
         Button { editFav = f } label: { Label("Edit", systemImage: "pencil") }
       }
+      forgetCertificateButton(f.url)
       Button(role: .destructive) {
         favs.remove(f.url)
       } label: { Label("Delete", systemImage: "trash") }
@@ -320,6 +323,18 @@ struct InstancePickerView: View {
         }.buttonStyle(.plain)
       }.opacity(s.full ? 0.5 : 1)
     }.buttonStyle(.plain).disabled(s.full)
+    .modifier(ForgetCertificateMenu(url: s.url, pinned: tls.pin(forURL: s.url) != nil))
+  }
+
+  /// ★★ GitHub #52 — FORGET A TRUSTED CERTIFICATE, from the server's own long-press menu. Shown ONLY when
+  ///    this address's host:port has one (AGENTS.md: never a control whose every use is a no-op). The prompt
+  ///    tells people this is where it lives ("hold the server in the list → Forget certificate").
+  @ViewBuilder private func forgetCertificateButton(_ url: String) -> some View {
+    if tls.pin(forURL: url) != nil {
+      Button(role: .destructive) { tls.forget(url: url) } label: {
+        Label("Forget certificate", systemImage: "lock.slash")
+      }
+    }
   }
 
   /// Simplified wrist sort: by distance from the user when the directory reports it (UberSDR gives
@@ -488,6 +503,9 @@ struct CustomServerSheet: View {
   @State private var type: ServerType
   @State private var detecting = false
   @State private var detectMsg = ""
+  /// The address this sheet was opened on (editing), for its trusted certificate. ★ GitHub #52.
+  private let originalUrl: String
+  @ObservedObject private var tls = TlsTrustCenter.shared
 
   /// `editing` seeds the fields from an existing custom server; nil = a fresh add. When editing we
   /// already know the type, so start with Auto-detect OFF (no need to re-probe) — the user can flip
@@ -495,6 +513,7 @@ struct CustomServerSheet: View {
   init(editing fav: Favourite? = nil, onSubmit: @escaping (_ name: String, _ url: String, _ type: ServerType) -> Void) {
     self.onSubmit = onSubmit
     self.editing = fav != nil
+    self.originalUrl = fav?.url ?? ""
     _url  = State(initialValue: fav?.url ?? "")
     _name = State(initialValue: fav?.name ?? "")
     _auto = State(initialValue: fav == nil)
@@ -530,8 +549,27 @@ struct CustomServerSheet: View {
         Button(editing ? "Save changes" : (auto ? "Detect & save" : "Save favourite")) { save() }
           .disabled(url.trimmingCharacters(in: .whitespaces).isEmpty || detecting)
       }
+      // ★★ GitHub #52: the certificate this server's address is trusted with, and the way to forget it —
+      //    only when there is one. Four short monospace lines, as the prompt showed them.
+      if editing, let fp = tls.pin(forURL: originalUrl) {
+        Section("TRUSTED CERTIFICATE") {
+          VStack(alignment: .leading, spacing: 1) {
+            Text("SHA-256").font(.system(size: 9.5)).foregroundColor(.secondary)
+            ForEach(Array(TlsPin.lines(fp).enumerated()), id: \.offset) { _, line in
+              Text(line).font(.system(size: 10.5, design: .monospaced)).lineLimit(1).minimumScaleFactor(0.6)
+            }
+          }
+          Button(role: .destructive) { tls.forget(url: originalUrl) } label: {
+            Label("Forget certificate", systemImage: "lock.slash").font(.system(size: 13))
+          }
+          Text("Jr will ask again the next time it connects.").font(.system(size: 10)).foregroundColor(.secondary)
+        }
+      }
     }
     .navigationTitle(editing ? "Edit server" : "Custom server")
+    // ★ GitHub #52: detection runs HERE, inside a sheet, so the certificate question must be hosted here too
+    //   — a sheet cannot be presented over another one. TlsTrustCenter lets only the top-most host show it.
+    .tlsTrustPrompt()
   }
 
   private func save() {
@@ -551,6 +589,16 @@ struct CustomServerSheet: View {
           return
         }
       }
+      // ★ GitHub #52: it answered, with a certificate the person did not trust (or one we refuse). Say
+      //   THAT — "couldn't find it" would send them hunting for an address that was right all along.
+      let declined = await MainActor.run { candidates.contains { TlsTrustCenter.shared.recentlyDeclined(url: $0) } }
+      if declined {
+        await MainActor.run {
+          detecting = false
+          detectMsg = "Not saved — this server's certificate isn't trusted."
+        }
+        return
+      }
       // No luck on the default ports AND no port was typed → VibeServer may have drifted to another
       // port in its range. Scan 48000..48049 so the user needn't chase a changing port.
       let hasPort = clean.contains("://") || clean.range(of: #":\d+$"#, options: .regularExpression) != nil
@@ -566,6 +614,24 @@ struct CustomServerSheet: View {
         detectMsg = "Couldn't find it. Try the IP address rather than a “.local” name — "
                   + "and if you set a CUSTOM port, add it (e.g. 192.168.1.5:8080), then pick the type below."
       }
+    }
+  }
+}
+
+/// ★ GitHub #52: a long-press menu on a directory row ONLY when its address has a trusted certificate to
+///   forget — those rows had no menu before, and an empty one would be a long-press that does nothing.
+private struct ForgetCertificateMenu: ViewModifier {
+  let url: String
+  let pinned: Bool
+  func body(content: Content) -> some View {
+    if pinned {
+      content.contextMenu {
+        Button(role: .destructive) { TlsTrustCenter.shared.forget(url: url) } label: {
+          Label("Forget certificate", systemImage: "lock.slash")
+        }
+      }
+    } else {
+      content
     }
   }
 }

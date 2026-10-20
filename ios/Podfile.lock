@@ -2380,6 +2380,8 @@ PODS:
     - React-Core
   - VibeLocalSDR (1.0.0):
     - React-Core
+  - VibeTlsTrust (1.0.0):
+    - React-Core
   - Yoga (0.0.0)
 
 DEPENDENCIES:
@@ -2488,6 +2490,7 @@ DEPENDENCIES:
   - RNWorklets (from `../node_modules/react-native-worklets`)
   - VibeICloudKVS (from `../modules/vibe-icloud-kvs`)
   - VibeLocalSDR (from `../modules/vibe-local-sdr`)
+  - VibeTlsTrust (from `../modules/vibe-tls-trust`)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
 
 EXTERNAL SOURCES:
@@ -2700,6 +2703,8 @@ EXTERNAL SOURCES:
     :path: "../modules/vibe-icloud-kvs"
   VibeLocalSDR:
     :path: "../modules/vibe-local-sdr"
+  VibeTlsTrust:
+    :path: "../modules/vibe-tls-trust"
   Yoga:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
@@ -2808,8 +2813,9 @@ SPEC CHECKSUMS:
   RNWorklets: 43af89f696342f91118a2f1f3a879056e2f47331
   VibeICloudKVS: 479562e95e00badc42d741ee9e7bc8c331eabde8
   VibeLocalSDR: a077c4caa70d3dd4d9f8e5e114d66d3ab6aeed8c
+  VibeTlsTrust: 399a5982eb5c383c9922c4b615d32f46ed9b4e42
   Yoga: fe50ab299e578f397fef753cf309c6703a4db29b
 
-PODFILE CHECKSUM: 6cc3b5d1e09c33a209fd9ff408be24b82d31097b
+PODFILE CHECKSUM: 079406d74b83f9f539b821c170bce947c9a24f83
 
 COCOAPODS: 1.16.2

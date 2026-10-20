@@ -336,6 +336,13 @@ final class OwrxClient: ObservableObject, SDRClient {
         // wss → ws auto-fallback: a plain-HTTP OWRX box (most self-hosted ones) refuses TLS with
         // "-9836 bad protocol version". If we tried wss and hit that, retry once as ws.
         let lower = st.lowercased()
+        // ★★ GitHub #52: a certificate the person did not trust is NOT a plain-HTTP box. Falling back to
+        //    ws:// there would send the session in the clear to whatever answered with that certificate —
+        //    so it is said plainly and NOT retried (picking the server again asks again).
+        if lower.contains("certificate not trusted") {
+          self.status = "certificate not trusted"
+          return
+        }
         if self.secure, !self.triedInsecureFallback,
            lower.contains("9836") || lower.contains("protocol version") || lower.contains("tls") || lower.contains("secure") {
           self.triedInsecureFallback = true

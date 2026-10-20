@@ -50,7 +50,7 @@ export interface Guide {
   view: [number, number, number, number];
   art: ArtShape[];
   items: GuideItem[];
-  /** ★ In the CONTROLLER KEYBOARD (app only — the web page has no on-screen keyboard yet, so its guide skips these):
+  /** ★ In the CONTROLLER KEYBOARD (the app's ControllerKeyboard and the web page's padKeyboard.ts both draw these):
    *  what each control does while typing. Decided by Stuart 2026-10-20 (docs/v12/BRIEF-controller-keyboard.md). */
   keyboard: string[];
 }

@@ -40,6 +40,9 @@ class MainApplication : Application(), ReactApplication {
     } catch (e: IllegalArgumentException) {
       ReleaseLevel.STABLE
     }
+    // ★★ GitHub #52: per-server certificate pins, loaded and handed to React Native's client builders BEFORE it starts
+    //   — a saved default server auto-connects at launch. See VibePinnedTls.
+    VibeTlsTrustModule.install(this)
     loadReactNative(this)
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
   }

@@ -1,0 +1,232 @@
+#!/usr/bin/python3
+# vibeserver-diagnostics — ONE plain-text file an owner can send us, built as root (2026-10-20).
+#
+# ★★★ HOW IT IS REACHED. The admin page's "Download diagnostics" asks for the maintenance action `diagnostics`; the
+#     daemon writes the request, systemd runs vibeserver-maintenance as root (the same path as "Install updates"), and
+#     that runs THIS script with its output going to /var/lib/vibeserver-maint/diagnostics.txt (root:vibeserver 0640).
+#     The daemon then serves that file to the admin page as a download, after scrubbing the secrets it knows itself.
+#  ★★ WHY THE MAINTENANCE HELPER, NOT THE systemd-journal GROUP: the daemon runs NoNewPrivileges, unprivileged, and is
+#     on the internet. Putting it in systemd-journal would let a compromised daemon read EVERY unit's journal, any time,
+#     and dmesg/NetworkManager details need root anyway. The helper is root-owned, does one named thing, and is already
+#     the boundary every other privileged admin action crosses — nothing new is trusted.
+#
+# ★★★ WHAT IS NEVER IN IT: a password. Every secret this machine holds is collected first — the server config's
+#     password/PIN/key-like fields (admin password, listener PIN, each radio's PIN), the directory key, every Wi-Fi
+#     password NetworkManager holds — and scrubbed from the WHOLE text, then anything that LOOKS like one (psk=…,
+#     "…pass…": "…", vs_auth=… in a logged URL). The daemon scrubs the secrets it knows a second time before serving.
+#
+# ★ What IS in it: versions, uptime/memory/disk/throttling, the server config (secrets removed), each radio's status
+#   file, highlighted lines (VibeAGC and friends — DIAG_HIGHLIGHTS takes more), and the journal of our units,
+#   NetworkManager, avahi and the SDRplay service for the last 24 h. On a PORTABLE (the pocket marker) also the Wi-Fi
+#   story: link, regulatory domain, power save, the firmware line, NetworkManager's profiles WITHOUT secrets, the join
+#   history and the Wi-Fi service's state. A Portable's journal lives in RAM, so there the file says "since last boot".
+# ★ Plain text, not an archive: a phone can open it, and so can whoever it is sent to.
+#
+# usage: vibeserver-diagnostics            (prints the bundle; vibeserver-maintenance redirects it)
+
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+SERVER_CONF = "/etc/vibeserver/config.json"
+DIRECTORY_STATE = "/var/lib/vibeserver/directory.json"
+POCKET_MARKER = "/etc/vibeserver-pocket/enabled"
+POCKET_STATE = "/run/vibeserver-pocket/state.json"
+JOIN_HISTORY = "/var/lib/vibeserver-pocket/join-history.json"
+RADIO_STATUS_GLOB = "/run/vibeserver/radio-status-*.json"
+JOURNAL_MAX = 3 * 1024 * 1024          # ★ the journal section's cap (the newest lines kept); a phone carries the file
+UNITS = ("vibeserver*", "vibeserver-pocket*", "vibeserver-radios*", "vibeserver-maintenance*",
+         "NetworkManager*", "avahi-daemon*", "sdrplay*")
+# ★ Lines lifted out of the journal into their own short section. The AGC work may add patterns (VibeAGC lines it
+#   wants from the field) — the bundle takes them with no other change.
+DIAG_HIGHLIGHTS = ("VibeAGC", "agc", "wifi qos", "waterfall yielding", "power save", "joining", "could not join",
+                   "answers only when asked", "kept that way", "brcmf", "overrun", "underrun", "dropped", "crash")
+HIGHLIGHT_MAX = 400
+TOOL_ENV = dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8")
+
+SECRET_KEY = re.compile(r"(pass|pin|psk|secret|token|key|ticket|credential|auth)", re.I)
+
+
+def run(args, timeout=30):
+    try:
+        p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, text=True,
+                           encoding="utf-8", errors="replace", env=TOOL_ENV, stdin=subprocess.DEVNULL)
+        return p.returncode, p.stdout
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, "(%s: %s)" % (args[0], type(e).__name__)
+
+
+def read_text(path, limit=256 * 1024):
+    try:
+        with open(path, "rb") as f:
+            return f.read(limit).decode("utf-8", "replace")
+    except OSError:
+        return None
+
+
+def terse_split(line):
+    """nmcli -t: fields split on ':' with '\\:' and '\\\\' escapes."""
+    out, cur, esc = [], [], False
+    for ch in line:
+        if esc:
+            cur.append(ch); esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch == ":":
+            out.append("".join(cur)); cur = []
+        else:
+            cur.append(ch)
+    out.append("".join(cur))
+    return out
+
+
+def json_secrets(path):
+    """Every string under a password/PIN/key-like name in a JSON file (any depth)."""
+    vals = set()
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if isinstance(v, str) and SECRET_KEY.search(k):
+                    vals.add(v)
+                else:
+                    walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    t = read_text(path, 4 * 1024 * 1024)
+    if t:
+        try:
+            walk(json.loads(t))
+        except ValueError:
+            pass
+    return vals
+
+
+def wifi_profiles(run=run):
+    """[(name)] of NetworkManager's Wi-Fi profiles."""
+    rc, out = run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"])
+    if rc != 0:
+        return []
+    return [f[0] for f in (terse_split(l) for l in out.splitlines()) if len(f) >= 2 and f[1] == "802-11-wireless"]
+
+
+def nm_psks(run=run):
+    vals = set()
+    for n in wifi_profiles(run):
+        rc, out = run(["nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", n])
+        v = out.rstrip("\n") if rc == 0 else ""
+        if "\\" in v:
+            v = "".join(terse_split(v))
+        if v:
+            vals.add(v)
+    return vals
+
+
+def secret_values(conf_paths=(SERVER_CONF, DIRECTORY_STATE), run=run):
+    vals = set()
+    for p in conf_paths:
+        vals |= json_secrets(p)
+    vals |= nm_psks(run)
+    return {v for v in vals if len(v) >= 4}       # ★ a 1-3 character value would scrub ordinary words
+
+
+def redact(text, secrets):
+    """Scrub known secret values, then anything that LOOKS like one."""
+    for v in sorted(secrets, key=len, reverse=True):
+        text = text.replace(v, "[redacted]")
+    text = re.sub(r'("[^"]*(?:pass|pin|psk|secret|token|key|ticket)[^"]*"\s*:\s*)"[^"]*"', r'\1"[redacted]"', text,
+                  flags=re.I)
+    text = re.sub(r"\b(psk|password|passphrase|wpa-psk|vs_auth|vs_admin_auth|vs_admin_token|vs_admin_ticket|vs_admin_nonce|vs_nonce)"
+                  r"([=:]\s*)[^\s&\"']+", r"\1\2[redacted]", text, flags=re.I)
+    return text
+
+
+def bundle(run=run, conf_paths=(SERVER_CONF, DIRECTORY_STATE), pocket_marker=POCKET_MARKER, pocket_state=POCKET_STATE,
+           join_history=JOIN_HISTORY, status_glob=RADIO_STATUS_GLOB, server_conf=SERVER_CONF, now=None):
+    now = now or time.time()
+    portable = os.path.exists(pocket_marker)
+    out = []
+    def sec(title):
+        out.append("\n==== %s ====" % title)
+    def cmd(title, args, timeout=30):
+        sec(title)
+        rc, txt = run(args, timeout=timeout)
+        out.append((txt or "").rstrip() or "(nothing — exit %d)" % rc)
+    secrets = secret_values(conf_paths, run)
+    out.append("VibeServer diagnostics%s — %s" % (" (Portable)" if portable else "",
+                                                   time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(now))))
+    out.append("★ Contains this server's addresses and the names of its networks. No passwords (they are removed).")
+    out.append("★ The journal covers the last 24 h at most%s." % (
+        " — on a Portable it lives in RAM, so everything is SINCE THE LAST BOOT" if portable else
+        " (less if the machine booted since, or keeps it in RAM)"))
+    cmd("versions", ["sh", "-c", "dpkg-query -W -f='${Package} ${Version}\\n' 'vibeserver*' 2>/dev/null; uname -a; "
+                                 "grep -E '^(PRETTY_NAME|VERSION_CODENAME)=' /etc/os-release 2>/dev/null; uptime"])
+    cmd("machine", ["sh", "-c", "free -m 2>/dev/null; echo; df -h / /var/lib 2>/dev/null; echo; "
+                                "command -v vcgencmd >/dev/null && vcgencmd get_throttled && vcgencmd measure_temp; "
+                                "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null"])
+    cmd("services", ["sh", "-c", "systemctl --no-pager --plain list-units 'vibeserver*' 'sdrplay*' 2>/dev/null | head -n 40"])
+    cmd("usb", ["sh", "-c", "lsusb 2>/dev/null || ls /sys/bus/usb/devices 2>/dev/null"])
+    sec("server config (secrets removed)")
+    out.append((read_text(server_conf) or "(not readable)").strip())
+    for pth in sorted(glob.glob(status_glob))[:8]:
+        sec("radio status " + os.path.basename(pth))
+        out.append((read_text(pth, 64 * 1024) or "").strip() or "(empty)")
+    if portable:
+        cmd("wi-fi firmware (dmesg)", ["sh", "-c", "dmesg 2>/dev/null | grep -i -E 'brcmf|cfg80211|regulatory' | tail -n 60"])
+        cmd("iw dev wlan0 link", ["iw", "dev", "wlan0", "link"])
+        cmd("iw dev wlan0 get power_save", ["iw", "dev", "wlan0", "get", "power_save"])
+        cmd("iw reg get", ["iw", "reg", "get"])
+        cmd("networkmanager devices", ["nmcli", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device"])
+        sec("networkmanager wi-fi profiles (no secrets)")
+        fields = ("802-11-wireless.ssid", "802-11-wireless.mode", "802-11-wireless.band", "802-11-wireless.hidden",
+                  "802-11-wireless.powersave", "802-11-wireless-security.key-mgmt", "802-11-wireless-security.pmf",
+                  "connection.autoconnect-priority")
+        for n in wifi_profiles(run):
+            vals = []
+            for f in fields:
+                rc, v = run(["nmcli", "-g", f, "connection", "show", n])
+                vals.append("%s=%s" % (f.split(".")[-1], (v or "").strip() if rc == 0 else "?"))
+            out.append("%s: %s" % (n, ", ".join(vals)))
+        sec("wi-fi join history (oldest first)")
+        try:
+            hist = json.loads(read_text(join_history) or "[]")
+        except ValueError:
+            hist = []
+        for e in hist if isinstance(hist, list) else []:
+            if not isinstance(e, dict):
+                continue
+            out.append("%s  %-24s %-8s %-10s seen=%-12s tried=%-34s %s%s%s" % (
+                time.strftime("%m-%d %H:%M:%S", time.localtime(e.get("t", 0))), e.get("ssid", ""), e.get("band", ""),
+                e.get("visible", ""), e.get("seen", "") or "-", e.get("used", ""), e.get("result", ""),
+                (" ×%d" % e["n"]) if e.get("n", 1) > 1 else "", (" — " + e["reason"]) if e.get("reason") else ""))
+        if not hist:
+            out.append("(no join attempts recorded)")
+        sec("wi-fi service state")
+        out.append((read_text(pocket_state) or "(not written)").strip())
+    rc, journal = run(["journalctl", "--since", "-24h", "--no-pager", "-o", "short-iso"]
+                      + sum((["-u", u] for u in UNITS), []), timeout=90)
+    journal = journal or ""
+    lines = journal.splitlines()
+    sec("highlights (from the journal below; newest %d)" % HIGHLIGHT_MAX)
+    pat = re.compile("|".join(re.escape(h) for h in DIAG_HIGHLIGHTS), re.I)
+    out.extend([l for l in lines if pat.search(l)][-HIGHLIGHT_MAX:] or ["(none)"])
+    cut = ""
+    if len(journal.encode("utf-8")) > JOURNAL_MAX:
+        journal = journal.encode("utf-8")[-JOURNAL_MAX:].decode("utf-8", "ignore")
+        journal = journal[journal.find("\n") + 1:]
+        cut = " — the newest %d MB only" % (JOURNAL_MAX // (1024 * 1024))
+    sec("journal, last 24 h: %s%s" % (" ".join(UNITS), cut))
+    out.append(journal.rstrip() or "(empty — exit %d)" % rc)
+    return redact("\n".join(out) + "\n", secrets)
+
+
+if __name__ == "__main__":
+    try:
+        sys.stdout.write(bundle())
+    except Exception as e:                  # ★ a failure is reported IN the file, never an empty download
+        sys.stdout.write("VibeServer diagnostics — the bundle could not be built (%s: %s)\n" % (type(e).__name__, e))
+    sys.exit(0)

@@ -2,6 +2,7 @@
 //   clang++ -std=c++17 -O2 -I../vibedsp test_spectrum_engine.cpp spectrum_engine.cpp ../vibedsp/spectrum_processor.cpp
 // Images and paths are faked (a heap copy of the ring / the points); the engine runs on a simulated clock.
 #include "spectrum_engine.h"
+#include "wf_row_target.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -68,31 +69,95 @@ int main() {
         rlImage(lastImg);
         delete e;
     }
-    // ── 2. Repeat rows: smooth scroll (40 rows/s) at a 10 fps feed → 3 extras per frame at 25 ms ──
+    // ── 2. Repeat rows: Smooth (cap 60) at a 10 fps feed → 60 rows/s: 5 extras per frame at ~16.7 ms ──
     {
         auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
-        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 40;
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 60;
         e->setConfig(c); e->setView(100e6, 2.048e6);
-        double head = 0; std::vector<double> headTimes;
-        for (int f = 0; f < 20; f++) {
+        double head = 0, headAt30 = 0; std::vector<double> headTimes;
+        for (int f = 0; f < 40; f++) {
+            if (f == 30) headAt30 = head;
             auto b = frame(1024, 300);
             e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
             for (int t = 0; t < 100; t++) {
                 gClock += 1; e->testStep(gClock);
                 UiUpdate u;
                 if (e->pollUi(u)) {
-                    if (u.image) { if (u.head != head && f >= 15) headTimes.push_back(gClock); head = u.head; rlImage(u.image); }
+                    if (u.image) { if (u.head != head && f >= 35) headTimes.push_back(gClock); head = u.head; rlImage(u.image); }
                     if (u.peakPath) rlPath(u.peakPath);
                 }
             }
         }
-        // After settling (avgWfGap ≈ 100 ms → dur 100, carry 4/frame → 3 extras): 4 rows per frame.
-        CHECK(head >= 70 && head <= 90, "rows with extras: head %g (expect ~4 a frame)", head);
+        // Settled (avgWfGap ≈ 100 ms → dur 100, target 60 → carry 6/frame → 5 extras): 6 rows per frame, frames 30-39.
+        CHECK(head - headAt30 >= 57 && head - headAt30 <= 63, "rows with extras: %g in 1 s once settled (expect ~60)", head - headAt30);
         if (headTimes.size() >= 8) {
-            const double gap = headTimes[2] - headTimes[1];
-            CHECK(gap >= 18 && gap <= 32, "extra-row spacing %g ms (dur/(extras+1), dur = the measured gap)", gap);
+            const double gap = (headTimes.back() - headTimes.front()) / (double)(headTimes.size() - 1);
+            CHECK(gap >= 13 && gap <= 21, "mean row spacing %g ms (dur/(extras+1) ≈ 16.7, dur = the measured gap)", gap);
         }
         delete e;
+    }
+    // ── 2b. SMOOTH from a 5 fps feed: 30 rows/s (6 x 5, Stuart 10-20) — not 60 (x12) ──
+    {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 60;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        double head = 0, headAt10 = 0;
+        for (int f = 0; f < 20; f++) {
+            if (f == 10) headAt10 = head;
+            auto b = frame(1024, 300);
+            e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
+            for (int t = 0; t < 200; t++) {
+                gClock += 1; e->testStep(gClock);
+                UiUpdate u;
+                if (e->pollUi(u)) {
+                    if (u.image) { head = u.head; rlImage(u.image); }
+                    if (u.peakPath) rlPath(u.peakPath);
+                }
+            }
+        }
+        // Frames 10-19, settled (avgWfGap ≈ 200 ms → dur 200, target 30 → carry 6/frame → 5 extras): ~60 rows = 30/s.
+        const double rows = head - headAt10;
+        CHECK(rows >= 57 && rows <= 63, "smooth at 5 fps: %g rows in 2 s (expect ~60 = 30 rows/s)", rows);
+        delete e;
+    }
+    // ── 2c. DEFAULT 20 rows/s from a 10 fps feed: 2 rows a frame, every frame ──
+    {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 20;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        double head = 0, headAt10 = 0;
+        for (int f = 0; f < 20; f++) {
+            if (f == 10) headAt10 = head;
+            auto b = frame(1024, 300);
+            e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
+            for (int t = 0; t < 100; t++) {
+                gClock += 1; e->testStep(gClock);
+                UiUpdate u;
+                if (e->pollUi(u)) {
+                    if (u.image) { head = u.head; rlImage(u.image); }
+                    if (u.peakPath) rlPath(u.peakPath);
+                }
+            }
+        }
+        const double rows = head - headAt10;
+        CHECK(rows >= 18 && rows <= 22, "default at 10 fps: %g rows in 1 s (expect 20, ±2 for where the window cuts a frame's extras)", rows);
+        delete e;
+    }
+    // ── 2d. wf_row_target.h: the same table as scripts/test_wf_row_target.ts, from a cold 150 ms estimate ──
+    {
+        auto drive = [](int cap, double fps, vibewf::RowTargetState& st, double& ema, int frames) {
+            double t = 0; for (int i = 0; i < frames; i++) { ema = ema * 0.8 + (1000.0 / fps) * 0.2; t = vibewf::stepRowTarget(st, cap, 1000.0 / ema); }
+            return t; };
+        auto settle = [&](int cap, double fps) { vibewf::RowTargetState st; double ema = 150; const double t = drive(cap, fps, st, ema, 200); return t == 0 ? fps : t; };
+        struct Row { double fps, def, smo; } tbl[] = { {5, 15, 30}, {10, 20, 60}, {20, 20, 60}, {10.0 / 3, 10, 20}, {9, 20, 30} };
+        for (const Row& r : tbl)
+            CHECK(settle(20, r.fps) == r.def && settle(60, r.fps) == r.smo, "row target at %.2f fps: %g / %g (want %g / %g)",
+                  r.fps, settle(20, r.fps), settle(60, r.fps), r.def, r.smo);
+        CHECK(vibewf::rowTargetFor(20, 20) == 0, "20 fps Default is actual rows");
+        // A governor step 10 → 5: Smooth changes once, 60 → 30.
+        vibewf::RowTargetState st; double ema = 150; double t = drive(60, 10, st, ema, 200); int changes = 0;
+        for (int i = 0; i < 400; i++) { ema = ema * 0.8 + 200 * 0.2; const double n = vibewf::stepRowTarget(st, 60, 1000.0 / ema); if (n != t) changes++; t = n; }
+        CHECK(changes == 1 && t == 30, "governor 10 -> 5: Smooth changes %d time(s), ends %g (want once, 30)", changes, t);
     }
     // ── 3. In-flight alignment: the row's true centre is 2 bins above the view → shifted right by 2 ──
     {

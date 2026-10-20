@@ -301,6 +301,18 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <p class="why" id="wifiSummaryText" style="margin-bottom:10px;white-space:pre-line"></p>
         <button type="button" class="ghost" id="wifiChange">Change Wi-Fi</button>
         <span class="note" id="wifiSummaryMsg" style="margin-left:10px"></span>
+        <!-- ★★★ TRY A SAVED NETWORK NOW (Stuart, 2026-10-20: fewer steps to test a phone hotspot). The same choice as the
+             app's menu (POST /vibeserver/pocket/connection, the box's own network only): the box looks for it for about
+             a minute and a half, joins it the moment it appears, and goes back where it was if it never does. -->
+        <div id="wifiTry" style="margin-top:12px"></div>
+        <div class="note hide" id="wifiTryMsg" style="margin-top:8px;white-space:pre-line"></div>
+      </div>
+      <!-- ★★★ THE JOIN HISTORY (Stuart, 2026-10-20). A box that leaves this network for a hotspot vanishes from it, so
+           nobody saw whether the join worked or why not: the box keeps its last 20 attempts (through a restart) and
+           shows them here. -->
+      <div id="wifiJoins" class="hide" style="margin-top:14px">
+        <p class="lbl" style="margin:0 0 6px">Recent join attempts (newest first)</p>
+        <div style="overflow-x:auto"><table id="wifiJoinsTable" style="width:100%;border-collapse:collapse;font-size:12px"></table></div>
       </div>
       <!-- ★★★ A BOX THAT CANNOT SAVE SAYS SO, FIRST (Stuart's v6 card, 2026-10-10: no settings partition, so
            setup went perfectly and the first restart brought it back as new). From the state's settingsSaved. -->
@@ -331,9 +343,12 @@ body.wifiFirst .wifiFirstOnly { display: block; }
          apostrophe (&lsquo;Sam's&rsquo; or &lsquo;Sam&rsquo;s&rsquo;) both work &mdash; the box saves the name
          exactly as the iPhone sends it once it sees it.</div>
       <!-- ★★ Stuart's Pi 3 A+ (2026-10-10) would not join his iPhone's hotspot until Maximise Compatibility was on: newer
-           iPhones run the hotspot on 5 GHz with newer security, which the Pi's Wi-Fi may not see or join. -->
-      <div class="hint"><b>On the iPhone, turn on Maximise Compatibility</b> (Settings &rsaquo; Personal Hotspot) &mdash;
-         without it this box may not be able to join. On an Android phone, set the hotspot to <b>2.4 GHz</b>.</div>
+           iPhones run the hotspot on 5 GHz with WPA2/WPA3 security. Since 2026-10-20 the box joins such hotspots as plain
+           WPA2 and asks for them by name (vibeserver-pocket, PMF_DISABLE / probe) — NOT YET PROVEN ON THE DEVICE, so the
+           old advice stays as the fallback, worded as one. -->
+      <div class="hint">If the box will not join your phone&rsquo;s hotspot, <b>on the iPhone turn on Maximise
+         Compatibility</b> (Settings &rsaquo; Personal Hotspot), or on an Android phone set the hotspot to <b>2.4 GHz</b>
+         or its security to <b>WPA2</b>. The join attempts below say what happened.</div>
 
       <h2 style="margin-top:22px">This box&rsquo;s own hotspot</h2>
       <p class="why">Used when none of your networks is in range. It is secured (WPA2): join it with this
@@ -1466,15 +1481,21 @@ body.wifiFirst .wifiFirstOnly { display: block; }
            well, whereas a 2.4 MS/s RTL at 20 may be fine". It sat on the master tab as one rate for the
            machine, and on a Full-mode server that save was silently dropped (5 fps stayed 20). -->
       <label><span class="lbl">Waterfall rate</span>
+        <!-- ★★ 10 IS THE DEFAULT (Stuart, 2026-10-20: "like OWRX; 20 is an owner option"). The labels were
+             Full 20 / Half 10 / Quarter 5, which stopped meaning anything once 10 was the default. The VALUES
+             are unchanged (5 / 10 / 20), so every saved config reads exactly as before. -->
         <select id="maxFps">
-          <option value="20">Full &middot; 20 fps</option>
-          <option value="10">Half &middot; 10 fps</option>
-          <option value="5">Quarter &middot; 5 fps</option>
+          <option value="20">Smoother &middot; 20 fps</option>
+          <option value="10">Default &middot; 10 fps</option>
+          <option value="5">Half &middot; 5 fps</option>
         </select>
         <div class="hint">For this radio: the rate it runs at, and the fastest a listener may ask for &mdash;
-          they can still choose a slower waterfall. Halving it roughly halves what this radio sends:
-          worth doing for a wide, fast radio, on a metered connection, or where several people share
-          one uplink.</div></label>
+          they can still choose a slower waterfall. 10 fps is the default. 20 is smoother, but sends about
+          twice the data and costs more processor time; 5 halves it again &mdash; worth it for a wide, fast
+          radio, on a metered connection, or where several people share one uplink. Listeners' waterfalls
+          scroll at the same steady speed whichever you choose. If this machine runs short of processor time
+          (DAB on a Pi 2, say), it slows its own waterfall while it must, so the audio keeps going, and climbs
+          back when it can.</div></label>
       <!-- ★★★ THE DAB OVERRIDE, WHICH THIS PAGE NEVER OFFERED (Stuart, 2026-09-19, setting up the first
            VibeServer Lite: "I didnt see the override option for DAB"). The config has carried
            dabRateBoost per radio for weeks and the phone app's server screen has the switch; this
@@ -3092,9 +3113,7 @@ function renderGain() {
   { const can = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
     $("dabRateBoost").disabled = !can;
     $("dabRateBoost").checked = can && !!r.dabRateBoost;
-    // ★ 0 or the orphan 15 read as Full, and saving writes a real 20 (see the note on the old master load).
-    { const f = Number(r.fftRate) || Number(r.maxFps) || 0;
-      $("maxFps").value = (f === 5 || f === 10) ? String(f) : "20"; }
+    fpsShow(r);
     $("dabRateBoostRow").style.opacity = can ? "" : "0.45";
     $("dabRateBoostNote").style.display = can ? "" : "none";
     $("dabRateBoostNo").style.display = can ? "none" : ""; }
@@ -3365,6 +3384,26 @@ const DRIVER_HW = {
  *  ★ A saved choice the machine cannot do stays visible, marked, so the owner sees why it is not in force.
  *  ★ Called from BOTH renderHw (the list) and fill (the saved choice) — whichever lands second gets it right.
  *  ★ An older server sends no list: everything stays as it was. */
+/** ★★ THE WATERFALL RATE AS IT IS, NOT AS THE MENU WOULD LIKE IT (11.0.9, the Pi 2). The menu offers 5 / 10 / 20, and a
+ *  rate saved any other way (15, by hand or by an older page) was shown as "Full · 20 fps" — on a server running at 15.
+ *  Before 5a0e6ca3 every save wrote that 20 back, which is how the Pi 2 went from 15 to 20 and broke up on DAB. Now such a
+ *  value is SHOWN, as "15 fps (set by hand)", and stays exactly as saved unless the owner picks another rate (the save
+ *  only writes this radio's rate on a change — see the "change" handler). Rebuilt per radio tab, so one radio's odd value
+ *  never appears on another's menu. ★ The rate shown is the one the server RUNS: fftRate under the maxFps ceiling;
+ *  both unset (0) is the server default — Default · 10 since 2026-10-20 (it was Full · 20). */
+function fpsShow(r) {
+  const sel = $("maxFps");
+  for (const o of [...sel.options]) if (o.value !== "5" && o.value !== "10" && o.value !== "20") o.remove();
+  const rates = [Number(r.fftRate) || 0, Number(r.maxFps) || 0].filter(v => v > 0);
+  const f = rates.length ? Math.min(...rates) : 0;
+  if (f > 0 && f !== 5 && f !== 10 && f !== 20) {
+    const o = document.createElement("option");
+    o.value = String(f); o.textContent = `${f} fps (set by hand)`;
+    sel.appendChild(o);
+    sel.value = String(f);
+  } else sel.value = f > 0 ? String(f) : "10";   // ★ nothing saved = the server default, Default · 10
+}
+
 let govHw = null, govAll = null;
 function govOffer() {
   const hw = govHw, gsel = $("cpuGovernor");
@@ -4863,7 +4902,7 @@ function fill() {
   $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; });
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {
-    const v = parseFloat($("maxFps").value) || 20; radio().maxFps = v; radio().fftRate = v; });
+    const v = parseFloat($("maxFps").value) || 10; radio().maxFps = v; radio().fftRate = v; });
   $("dabScanLabels").addEventListener("change", () => { radio().dabScanLabels = parseInt($("dabScanLabels").value, 10); });
   $("gainSplitSlider").addEventListener("input", () => {
     const v = parseInt($("gainSplitSlider").value, 10);
@@ -5766,7 +5805,12 @@ function wifiNowText() {
   if (m === "setup-ap") return "Right now the box is its own open setup hotspot, “" + (w.setupSsid || "VibeServer") + "”." + seen;
   if (m === "fallback-ap") return "Right now the box is its own hotspot “" + ((w.ap && w.ap.ssid) || "") + "”"
     + ((w.saved || []).length ? " — none of your networks is in range." : ".") + seen;
-  if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "") + ".";
+  // ★ The radio's power save beside the link (BRIEF-portable-wifi-realtime Phase 0): the box switches it off after every
+  //   join; "on" here means the driver refused, which is worth an owner knowing when audio stutters.
+  const ps = w.link && w.link.powerSave;
+  if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "") + "."
+    + (w.link && w.link.signal != null ? " Signal " + w.link.signal + " dBm" + (w.link.retry != null ? ", " + w.link.retry + (w.link.retryKind === "failed" ? " % failed sends" : " % retries") : "") + "." : "")
+    + (ps === "off" ? " Wi-Fi power saving off." : ps === "on" ? " Wi-Fi power saving is ON (the radio refused to switch it off) — audio may stutter." : "");
   if (m === "connecting") return "Joining a network…";
   if (m === "wifi-off") return "Wi-Fi is off.";
   if (m === "wired") return "This box has no Wi-Fi.";
@@ -5789,6 +5833,87 @@ function wifiCollapseRender() {
     + "\nOwn hotspot: " + w.ap.ssid
     + (w.lastError ? "\nLast problem: " + w.lastError + "." : "");
 }
+/** ★★★ The join history (state.json "joins", oldest first) as a short table, newest first. */
+function wifiJoinsRender() {
+  const j = ((WIFI && WIFI.joins) || []).slice().reverse();
+  $("wifiJoins").classList.toggle("hide", !j.length);
+  if (!j.length) return;
+  const td = 'style="padding:3px 6px;border-top:1px solid rgba(128,128,128,.25);vertical-align:top"';
+  const when = t => { const d = new Date(t * 1000); return d.toLocaleDateString(undefined, {day: "numeric", month: "short"}) + " " + d.toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"}); };
+  const how = v => v === "probe" ? "asked by name" : v === "scan" ? "in the scan" : v === "no" ? "not found" : "by name (blind)";
+  $("wifiJoinsTable").innerHTML =
+    '<tr><th align="left">When</th><th align="left">Network</th><th align="left">Band</th><th align="left">Seen as</th>'
+    + '<th align="left">Tried as</th><th align="left">Result</th></tr>'
+    + j.map(e => `<tr><td ${td}>${esc(when(e.t || 0))}</td><td ${td}>${esc(e.ssid || "")}</td>`
+      + `<td ${td}>${esc(e.band || "?")}${e.freq ? " (" + esc(String(e.freq)) + ")" : ""}</td>`
+      + `<td ${td}>${esc(e.seen || "—")}<br><span class="note">${esc(how(e.visible))}</span></td><td ${td}>${esc(e.used || "")}</td>`
+      + `<td ${td}><b>${esc(e.result || "")}</b>${(e.n || 1) > 1 ? " ×" + esc(String(e.n)) : ""}`
+      + `${e.reason ? '<br><span class="note">' + esc(e.reason) + "</span>" : ""}</td></tr>`).join("");
+}
+
+/** ★★★ "Try now" for each saved network, with feedback until it is decided (see #wifiTry). */
+let WIFI_TRY = null;
+function wifiTryRender() {
+  const saved = (WIFI && WIFI.saved) || [];
+  const host = $("wifiTry");
+  host.innerHTML = saved.length && WIFI.mode !== "wifi-off"
+    ? '<span class="note" style="margin-right:6px">Use now:</span>' + saved.map((n, i) =>
+        `<button type="button" class="ghost" data-try="${i + 1}" style="padding:6px 10px;font-size:13px;margin:2px">${esc(n.ssid)}</button>`).join("")
+    : "";
+  host.querySelectorAll("[data-try]").forEach(b => b.onclick = () => wifiTryNow(+b.dataset.try));
+}
+async function wifiTryNow(rank) {
+  const n = ((WIFI && WIFI.saved) || [])[rank - 1];
+  if (!n) return;
+  const msg = $("wifiTryMsg");
+  msg.classList.remove("hide");
+  const from = WIFI.mode === "client" ? WIFI.ssid : "";
+  try {
+    const r = await fetch("/vibeserver/pocket/connection", {method: "POST", cache: "no-store", body: JSON.stringify({to: "net", rank})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw (j.error || ("Refused (" + r.status + ")."));
+  } catch (e) { msg.textContent = "Could not ask the box: " + e; return; }
+  WIFI_TRY = {ssid: n.ssid, from, until: Date.now() + 150000};
+  msg.textContent = "Looking for “" + n.ssid + "”… (up to a minute and a half — switch the hotspot on now if it is off)."
+    + (from ? "\nIf it joins, the box leaves “" + from + "” and this page loses it: open it again on “" + n.ssid
+      + "”, or come back here later — if it cannot join it returns to “" + from + "” by itself, and the attempts below say why." : "");
+  wifiTryPoll();
+}
+async function wifiTryPoll() {
+  const t = WIFI_TRY;
+  if (!t) return;
+  let w = null;
+  try {
+    const r = await fetch("/vibeserver/pocket/wifi?" + await authQuery(), {cache: "no-store"});
+    w = r.ok ? await r.json() : null;
+  } catch (e) { w = null; }
+  const msg = $("wifiTryMsg");
+  if (!w) {
+    // ★ The box has gone from this network — the expected sign of a join elsewhere (or of a look that dropped the link).
+    msg.textContent = "The box has left this network — most likely it is now on “" + t.ssid + "”."
+      + (t.from ? "\nIf it could not join, it comes back to “" + t.from + "” by itself within a couple of minutes; reload then and the attempts below say what happened." : "");
+    if (Date.now() < t.until) setTimeout(wifiTryPoll, 5000); else WIFI_TRY = null;
+    return;
+  }
+  WIFI = Object.assign(WIFI || {}, w);
+  wifiJoinsRender();
+  const last = (w.joins || []).filter(e => e.ssid === t.ssid).pop();
+  if (w.mode === "client" && w.ssid === t.ssid) {
+    msg.textContent = "Joined “" + t.ssid + "”" + (last && last.band ? " (" + last.band + ", " + (last.used || "") + ")" : "") + ".";
+    WIFI_TRY = null; return;
+  }
+  if (w.trying) {
+    msg.textContent = "Looking for “" + t.ssid + "”… " + (w.tryLeft || 0) + " s left."
+      + (last && last.t * 1000 > Date.now() - 150000 ? "\nLast attempt: " + last.result + (last.reason ? " — " + last.reason : "") : "");
+  } else if (Date.now() > t.until - 145000) {
+    msg.textContent = "Not joined “" + t.ssid + "”" + (w.lastError ? ": " + w.lastError : ".")
+      + (last ? "\nLast attempt: " + last.result + (last.reason ? " — " + last.reason : "") : "")
+      + (w.mode === "client" ? "\nStill on “" + (w.ssid || "?") + "”." : "");
+    WIFI_TRY = null; return;
+  }
+  if (Date.now() < t.until) setTimeout(wifiTryPoll, 3000); else WIFI_TRY = null;
+}
+
 $("wifiChange").onclick = () => {
   WIFI_EDITING = true; $("wifiSummaryMsg").textContent = "";
   wifiCollapseRender();
@@ -5797,6 +5922,8 @@ $("wifiChange").onclick = () => {
 
 function wifiRender() {
   wifiCollapseRender();
+  wifiJoinsRender();
+  wifiTryRender();
   $("wifiNow").textContent = wifiNowText() + (WIFI && WIFI.lastError ? "  Last problem: " + WIFI.lastError + "." : "");
   const scan = (WIFI && WIFI.scan) || [];
   const host = $("wifiNets");

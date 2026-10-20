@@ -28,6 +28,9 @@
 		559629F1F786C14523FFE7AA /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EEA65462FB06374237A24A2 /* OwrxClient.swift */; };
 		A1B2C3D40001FR0NTD00R001 /* FrontDoor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */; };
 		A1B2C3D40001ADM1NSECRET01 /* AdminSecret.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002ADM1NSECRET02 /* AdminSecret.swift */; };
+		A1B2C3D4000171SPR0MP7001 /* TlsTrustPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000271SPR0MP7002 /* TlsTrustPrompt.swift */; };
+		A1B2C3D40001715TRU570001 /* TlsTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002715TRU570002 /* TlsTrust.swift */; };
+		A1B2C3D40001715P1N000001 /* TlsPin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002715P1N000002 /* TlsPin.swift */; };
 		5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FF50C437861299AAC27394 /* SignalProcessor.swift */; };
 		70EE588C003629B12094698A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5C7CA3AAA59DBED958D0315 /* ContentView.swift */; };
 		84E896EF03E1F50282383A9A /* CpuMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */; };
@@ -91,6 +94,9 @@
 		3EEA65462FB06374237A24A2 /* OwrxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxClient.swift; sourceTree = "<group>"; };
 		A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontDoor.swift; sourceTree = "<group>"; };
 		A1B2C3D40002ADM1NSECRET02 /* AdminSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminSecret.swift; sourceTree = "<group>"; };
+		A1B2C3D4000271SPR0MP7002 /* TlsTrustPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TlsTrustPrompt.swift; sourceTree = "<group>"; };
+		A1B2C3D40002715TRU570002 /* TlsTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TlsTrust.swift; sourceTree = "<group>"; };
+		A1B2C3D40002715P1N000002 /* TlsPin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TlsPin.swift; sourceTree = "<group>"; };
 		3EEC2B3FFA6441C4C3A46B8F /* FmdxMp3Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxMp3Decoder.swift; sourceTree = "<group>"; };
 		4E5AC63C04FF3BF2C4B76378 /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRDirectory.swift; sourceTree = "<group>"; };
 		4FB5962ADE3FED0012F31D5D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -182,6 +188,9 @@
 				3EEA65462FB06374237A24A2 /* OwrxClient.swift */,
 				A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */,
 				A1B2C3D40002ADM1NSECRET02 /* AdminSecret.swift */,
+				A1B2C3D4000271SPR0MP7002 /* TlsTrustPrompt.swift */,
+				A1B2C3D40002715TRU570002 /* TlsTrust.swift */,
+				A1B2C3D40002715P1N000002 /* TlsPin.swift */,
 				DC1001D6D5D78E308A2F855C /* OwrxSocket.swift */,
 				4E5AC63C04FF3BF2C4B76378 /* SDRDirectory.swift */,
 				69FF50C437861299AAC27394 /* SignalProcessor.swift */,
@@ -368,6 +377,9 @@
 				559629F1F786C14523FFE7AA /* OwrxClient.swift in Sources */,
 				A1B2C3D40001FR0NTD00R001 /* FrontDoor.swift in Sources */,
 				A1B2C3D40001ADM1NSECRET01 /* AdminSecret.swift in Sources */,
+				A1B2C3D4000171SPR0MP7001 /* TlsTrustPrompt.swift in Sources */,
+				A1B2C3D40001715TRU570001 /* TlsTrust.swift in Sources */,
+				A1B2C3D40001715P1N000001 /* TlsPin.swift in Sources */,
 				F2566A4100EC8550A4BEFB78 /* OwrxSocket.swift in Sources */,
 				BF96B321B6B5696F03092EF8 /* SDRDirectory.swift in Sources */,
 				5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */,
@@ -418,7 +430,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/WristSDR/opus",
 				);
-				MARKETING_VERSION = 11.0.5;
+				MARKETING_VERSION = 11.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.stuey3d.wristsdr.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -490,7 +502,7 @@
 					"@executable_path/Frameworks",
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 11.0.5;
+				MARKETING_VERSION = 11.0.9;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.stuey3d.wristsdr;
@@ -567,7 +579,7 @@
 					"@executable_path/Frameworks",
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 11.0.5;
+				MARKETING_VERSION = 11.0.9;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.stuey3d.wristsdr;
@@ -653,7 +665,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/WristSDR/opus",
 				);
-				MARKETING_VERSION = 11.0.5;
+				MARKETING_VERSION = 11.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.stuey3d.wristsdr.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

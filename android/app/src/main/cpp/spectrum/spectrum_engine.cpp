@@ -1,6 +1,7 @@
 // VibeSDR — SpectrumEngine. See spectrum_engine.h; the behaviour it reproduces is specified, with WaterfallView.tsx
 // line numbers, in docs/NATIVE-SPECTRUM-ENGINE.md ("WaterfallView per-frame behaviour"). Names follow the TS.
 #include "spectrum_engine.h"
+#include "wf_row_target.h"
 #include "../vibedsp/vibe_denormals.h"
 #include <algorithm>
 #include <chrono>
@@ -263,7 +264,13 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     //   asks for more rows than the feed sends (Default 30, Smooth 40 from 8 fps), the repeat rows ARE the motion —
     //   even one-row steps, as the Mac shows on the same server. Sharp (no repeat rows) keeps its glide; a gesture
     //   always glides.
-    const bool repeatsCarry = cfg.targetRows > 0 && avgFrameMs_ > 0 && 1000.0 / avgFrameMs_ < cfg.targetRows;
+    // ★★★ THE TARGET FOLLOWS THE FEED (Stuart 10-20, wf_row_target.h): cfg.targetRows is the setting's CAP (20 Default,
+    //     60 Smooth); the rows actually aimed for are min(cap, 3x / 6x the measured feed), snapped to a divisor of 60,
+    //     with hysteresis. 0 = actual rows. The fractional carry (rowCarry_) runs on across a change: no jump.
+    if (cfg.targetRows != rowTargetCap_) { rowTargetSt_ = {}; rowTargetCap_ = cfg.targetRows; }   // a new setting decides afresh
+    const double rowTarget = avgFrameMs_ > 0 ? vibewf::stepRowTarget(rowTargetSt_, cfg.targetRows, 1000.0 / avgFrameMs_)
+                                             : rowTargetSt_.target;
+    const bool repeatsCarry = rowTarget > 0;
     const bool wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
     if (lastWfPushAt_ > 0) {
@@ -285,12 +292,14 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     if (covNow_) return;
     const double revealMs = avgWfGapMs_ > 0 ? avgWfGapMs_ : avgFrameMs_;
     const double dur = std::max(50.0, std::min(1000.0, revealMs));
-    const double rowMs = cfg.targetRows > 0 ? 1000.0 / cfg.targetRows : 0;
+    const double rowMs = rowTarget > 0 ? 1000.0 / rowTarget : 0;
     int extras = 0;
     if (rowMs > 0) {
         rowCarry_ += dur / rowMs;
         extras = std::max(0, (int)std::floor(rowCarry_) - 1);
         rowCarry_ -= std::floor(rowCarry_);
+        // ★ The rule never asks for more than 6 rows a frame (Stuart 10-20, wf_row_target.h), so 8 is headroom
+        //   again — kept as the stall guard it always was.
         if (extras > 8) extras = 8;
     }
     // scheduleExtraRows: always clear the pending chain first

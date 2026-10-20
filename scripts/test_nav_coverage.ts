@@ -67,7 +67,7 @@ const BASELINE: Record<string, number> = {
   'src/components/MenuSheet.tsx': 9,            // sideways selector nudges, sub-page back row, drop-downs (SHOULD)
   'src/components/RecordingsOverlay.tsx': 5,    // share / delete / seek (SHOULD)
   'src/screens/SDRScreen.tsx': 2,               // owner notice + its ✕ (NICE)
-  'src/screens/TunerScreen.tsx': 10,            // ♥, KEYS/DRUMS, PAUSED, band and AF chips (SHOULD)
+  'src/screens/TunerScreen.tsx': 8,             // ♥, KEYS/DRUMS, PAUSED, band and AF chips (SHOULD)
 };
 
 console.log('test_nav_coverage');
@@ -84,7 +84,9 @@ for (const [f, list] of Object.entries(report).sort()) {
 // The surfaces this phase made pad-complete must STAY complete.
 for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx', 'src/components/PasswordModal.tsx',
                  'src/components/IdentModal.tsx', 'src/components/VibePinPrompt.tsx', 'src/components/Coachmark.tsx',
-                 'src/components/AppAlert.tsx', 'src/components/DabPanel.tsx']) {
+                 'src/components/AppAlert.tsx', 'src/components/DabPanel.tsx',
+                 // ★ main's "Trust this server?" (GitHub #52), joined to the overlay rule in the 11.0.9 merge (audit §7).
+                 'src/components/TlsTrustPrompt.tsx']) {
   const list = report[f] ?? unregistered(path.join(root, f));
   ok(list.length === 0, `${f}: every touchable registered`, list.map((l) => '      ' + l).join('\n'));
 }

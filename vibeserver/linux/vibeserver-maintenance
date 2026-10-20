@@ -14,7 +14,7 @@
 #
 # ★★★ AND IT IS A BETTER BOUNDARY THAN sudo WAS. The list of permitted actions lives HERE, in a
 # root-owned file the daemon cannot write to. Even if the daemon were compromised outright, the
-# most it can do is ask for one of these five things by name. That is the same argument that kept
+# most it can do is ask for one of these things by name. That is the same argument that kept
 # a web terminal out of the admin page, applied one layer down.
 #
 # ★★ The request is DELETED BEFORE it is acted on (just after the log is reset — see below).
@@ -227,5 +227,24 @@ case "$action" in
                 #   install with no uninstall is a decision an owner cannot revisit.
                 apt_do apt-get remove -y vibeserver-mapdata-detail
                 after_install ;;
+  # ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20): one text file for the owner to send us. Built by vibeserver-diagnostics (it
+  #     reads the journal and, on a Portable, dmesg and NetworkManager — root's to read), every secret scrubbed there,
+  #     written HERE in root's directory (root:vibeserver 0640) for the daemon to serve — it can read it, never replace
+  #     or redirect it. No python3 (a minimal install): a journal-only file, the daemon still scrubs what it knows.
+  diagnostics)  log "building the diagnostics file"
+                DIAG=$LOGDIR/diagnostics.txt
+                rm -f "$DIAG" "$DIAG.tmp" 2>/dev/null || true
+                if command -v python3 >/dev/null 2>&1 && [ -x /usr/lib/vibeserver/vibeserver-diagnostics ]; then
+                  ( umask 027 && timeout 180 python3 -I /usr/lib/vibeserver/vibeserver-diagnostics > "$DIAG.tmp" ) \
+                    || log "!! the diagnostics script did not finish — the file holds what it wrote"
+                else
+                  ( umask 027 && { echo "VibeServer diagnostics (no python3 here: the journal only)"
+                                   dpkg-query -W -f='${Package} ${Version}\n' 'vibeserver*' 2>/dev/null; uname -a; uptime
+                                   echo; echo "==== journal, last 24 h ===="
+                                   journalctl --since -24h --no-pager -o short-iso -u 'vibeserver*' 2>/dev/null | tail -c 3000000
+                                 } > "$DIAG.tmp" ) || true
+                fi
+                chgrp vibeserver "$DIAG.tmp" 2>/dev/null || true
+                mv -f "$DIAG.tmp" "$DIAG" && log "diagnostics ready ($(( $(stat -c %s "$DIAG" 2>/dev/null || echo 0) / 1024 )) KB)" ;;
   *)            log "ignoring unknown action '$action'"; exit 0 ;;
 esac

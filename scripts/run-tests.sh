@@ -29,6 +29,9 @@ flags_for() {
     #   to measure a feature that responds to FM's triangular noise spectrum.
     test-stereo-highblend) echo "-O2 -I $VDSP -I $KISS" ;;
     test-multipath-meter)  echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★★★ Our own gain step through the real chain (2026-10-19): the smoother + the pipeline's guard,
+    #     every case run with and without the step on the same noise seed. Optimised: ~30 runs of 8 s.
+    test-gain-step)        echo "-O2 -I $VDSP -I $KISS" ;;
     # ★ The Advanced RDS instrument (MpxMeasure) against a signal of known deviation, at several
     #   capture rates and passbands — the real pipeline end to end, so the same deps again.
     test-mpx-measure|test-rds-ps-frames) echo "-O2 -I $VDSP -I $KISS" ;;
@@ -92,6 +95,9 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-stereo-highblend) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-gain-step) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-multipath-meter) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
@@ -233,6 +239,8 @@ if node scripts/check-directory-page.mjs; then pass=$((pass+1)); else fail=$((fa
 #   perfectly valid JavaScript and perfectly well-formed HTML.
 # ★★★ THE GOVERNOR MENU OFFERS ONLY WHAT THIS MACHINE HAS (2026-10-19): the Lenovo's intel_pstate has no schedutil.
 if node scripts/test-setup-governors.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE WATERFALL RATE MENU SHOWS THE RATE THE SERVER RUNS (11.0.9): a hand-set 15 is "15 fps (set by hand)", never "Full · 20".
+if node scripts/test-setup-maxfps.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A TUNNEL A PREVIOUS PROCESS LEFT ON OUR PORT IS RETIRED (2026-10-19, Kiko's four tunnels). Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -257,6 +265,9 @@ if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)
 # ★★ The pocket box's Wi-Fi state machine against a fake NetworkManager: strict 1/2/3 order, moving
 #    up when network 1 returns, never pulling a hotspot from under a phone, no password in any log.
 if python3 vibeserver/linux/pocket/test_vibeserver_pocket.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20): the file an owner sends us never carries a secret — a Wi-Fi password, the admin
+#     password, a PIN, the directory key, planted in NetworkManager, the config, a status file and the journal.
+if python3 vibeserver/linux/test_vibeserver_diagnostics.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A PORTABLE UPDATES FULLY WITHOUT A NEW CARD (Stuart, 2026-10-13). vibeserver-pocket-converge on a fake root: a no-op
 #     without the marker, idempotent, config.txt lines once, an owner's own change kept, the package list drives what
 #     Update installs — and vibeserver-maintenance's `update` with apt + overlayroot-chroot stubbed.
@@ -302,6 +313,11 @@ if node --no-warnings scripts/test_transcribeOrder.ts; then pass=$((pass+1)); el
 if node --no-warnings scripts/test_recordBuffer.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the iOS/Mac ring + the prefix-then-live writer order (macOS only: needs xcrun swiftc).
 if command -v xcrun >/dev/null 2>&1; then if bash scripts/test_recordBuffer_swift.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi; fi
+# ★★ LAN DISCOVERY (mdnsBrowse.ts): SEARCH AGAIN and the return from the background really restart the browse; stale rows go (Stuart 2026-10-20).
+if node --no-warnings scripts/test_mdns_browse.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ PER-SERVER CERTIFICATE PINS (tlsPin.ts, GitHub #52): the key, the fingerprint, what a certificate says, and which
+#     prompt — offer / "certificate has changed" / refuse (expired, public cert for another name) / nothing.
+if node --no-warnings scripts/test_tls_pin.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ OWRX S-METER CALIBRATION (owrxSmeterCal.ts): the wire level is not dBm — owner's plugin figures, else noise at S2.
 if node --no-warnings scripts/test_owrxSmeterCal.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ VIBESERVER SQUELCH ON/OFF (vibeSquelch.ts): a threshold below -100 dBFS is a threshold, not "off" — the
@@ -478,6 +494,16 @@ if node --no-warnings scripts/test_faceplate_lighting.ts; then pass=$((pass+1));
 #     pick and Siri are refused on a shared dial with others listening (and on spectator / listen-only),
 #     as FM-DX's always were; alone or exclusive they work; the native switch and a press agree.
 if node --no-warnings scripts/test_blindTuneGate.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ WEB WATERFALL ROW PACING (wfPacing.ts): one whole row every N display frames, N fixed — Default on
+#    a Retina 60 Hz panel is a steady 30 rows/s (it flipped 1 <-> 2 on the 1.5 knife-edge: Stuart's
+#    "sticky" Safari waterfall, 2026-10-20), never two rows in a frame, Sharp on a cadence too.
+if node --no-warnings scripts/test_wf_pacing.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE ROW TARGET FOLLOWS THE FEED (src/assets/wfRowTarget.ts, Stuart 10-20): Default min(20, 3x), Smooth min(60, 6x),
+#    snapped to a divisor of 60 — the app, the web client and the native engine (wf_row_target.h) share the rule.
+if node --no-warnings scripts/test_wf_row_target.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE 10-FPS DEFAULT (2026-10-20): the serving phone's tiers read Smoother · 20 / Default · 10 / Half · 5, the stored
+#    keys still mean 20 / 10 / 5, and a new server starts on Default · 10.
+if node --no-warnings scripts/test_fps_tiers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ "IS THIS ACTUALLY NEWS?" (renderChurn.ts): a repeated RDS label / bookmark list keeps the old
 #    object so the radio screen does not re-render for it, any drawn change still gets through, and
 #    the controls-bar clock re-renders on the minute, not every second (power audit, 2026-10-01).
@@ -523,6 +549,9 @@ if npx tsx scripts/test_pocket_connection.ts; then pass=$((pass+1)); else fail=$
 if npx tsx scripts/test_gamepad_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE CONTROLLER GUIDE (2026-10-19): the shared drawing data, its words against the scheme, the layout rules.
 if npx tsx scripts/test_pad_guide.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE CONTROLLER KEYBOARD ON THE WEB PAGE (decided 2026-10-20): its promises read from its source (padKeyboard.ts /
+#    gamepad.ts). The shared layouts and hand-over rule (test_kb_layouts / test_kb_handover) run once, with the app's below.
+if npx tsx scripts/test_web_pad_keyboard.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE KEYBOARD, ONE SCHEME (Stuart, 2026-10-18): arrows/WASD move, Enter select, Backspace/Escape back, < > tune, - + zoom.
 if npx tsx scripts/test_key_actions.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -564,6 +593,28 @@ if npx tsx scripts/test_bookmark_name.ts; then pass=$((pass+1)); else fail=$((fa
 #    NOT RUN — counted separately, never as a pass: a stale binary would test yesterday's server.
 printf '\n\033[1m── server decoders (end to end) ──\033[0m\n'
 node scripts/test-server-decoders.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ DOWNLOAD DIAGNOSTICS on the admin API (2026-10-20): admin only, an attachment a phone saves, and the daemon's own
+#     scrub of the admin password / PINs / directory key. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── download diagnostics (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-admin-diagnostics.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ AUDIO FIRST (2026-10-20, docs/BRIEF-portable-wifi-realtime.md Phase 2): a listener whose audio backs up gets a
+#     ~2 fps waterfall until it has been clear for ~1 s; another listener never notices; an encoder burst is not a
+#     backlog. The backed-up half needs a kernel that honours a small receive buffer (Linux) — elsewhere it says NOT RUN.
+#     Same VIBESERVER_BIN rule.
+printf '\n\033[1m── audio first: the waterfall yields (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-audio-first.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ THE THREAD LADDER ON THE RUNNING SERVER (2026-10-20, Pi 500: socket writers at nice 0 under a -19 DSP was the
+#     finding). Read from /proc: audio send ≥ DSP > waterfall send ≥ spectrum; then one busy loop per core at -19 and
+#     the audio must keep its rate. Linux only; the negative rungs and the load half need CAP_SYS_NICE (NOT RUN
+#     without). Same VIBESERVER_BIN rule.
+printf '\n\033[1m── thread ladder: writers above the DSP (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-thread-rank.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ A RUNNING DECODER KEEPS THE AUDIO CHAIN (2026-10-07, Pi 500 Airspy: the listener's sockets blipped, the
@@ -608,6 +659,21 @@ printf '\n\033[1m── the DAB report in pieces (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dab-report-pieces.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ A LONG SESSION COSTS NO MORE THAN A SHORT ONE (2026-10-19): Stuart's app read 93-103 KB/s in DAB after 23 minutes
+#     of tuning, 45 after a restart — an Advanced RDS subscription made on FM kept every rdsx coming in DAB. rdsx only
+#     while the listener is on WFM; per-type bytes flat after 12 multiplexes, DAB ↔ FM, a joiner, the Signal pane.
+#     Same rule: VIBESERVER_BIN + the bench clip, NOT RUN without either. ~2 minutes.
+printf '\n\033[1m── a long session stays flat on the wire (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-wire-session-flat.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ AN OFF-AIR PICTURE LOADS ONCE (2026-10-19): ETag + 304 on dabslide / dablogoair / dabmot, ?h= immutable, and in a
+#     real MUTED browser the station list (rebuilt twice a second) fetches the picture once and never again after a
+#     reload. Same rule: VIBESERVER_BIN + the bench clip (the browser part also wants Edge). ~40 s.
+printf '\n\033[1m── DAB pictures: once, then from cache (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dab-slide-cache.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ A CLIENT VANISHING MID RAW-IQ STREAM MUST NOT WEDGE THE RADIO (2026-10-10, the Pi 500's V4L froze: the close path
 #     stopped the full-rate stream under clientMtx, and its applyAutoIf() took clientMtx again). Same VIBESERVER_BIN rule.
 printf '\n\033[1m── raw IQ: a vanished client does not wedge the radio (end to end) ──\033[0m\n'
@@ -645,6 +711,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     follows the window (lines when wide, a list when narrow).
 printf '\n\033[1m── the controller guide on the served page (simulated pad, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-pad-guide.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE CONTROLLER KEYBOARD (decided 2026-10-20): only for a pad that is being USED; open by pad, type, submit; touch,
+#     physical-key and pad hand-overs keep the text and caret; pad back lets go of a box; password mode; both profiles.
+printf '\n\033[1m── the controller keyboard on the served page (simulated pad, end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-pad-keyboard.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ FREQUENCY AT THE POINTER (Kiko, 2026-10-16, "like OpenWebRX"): a MOUSE over the waterfall/spectrum shows the
@@ -772,6 +843,16 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     simulated — and still refusing expired / self-signed / untrusted / wrong-host. Needs the network.
 printf '\n\033[1m── TLS roots for old Android (VibeTls) ──\033[0m\n'
 bash scripts/test-tls-roots.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ PER-SERVER CERTIFICATE PINS, NATIVE (GitHub #52): the app's own VibeTlsCore.m (Mac, Security.framework) and
+#     VibePinnedTls.kt (desktop JVM, real OkHttp) against self-signed servers on 127.0.0.1 — refused without a pin and
+#     the server never sees the request; the pin accepted for THAT host:port only; changed / expired refused; forget.
+printf '\n\033[1m── certificate pins, Apple (VibeTlsCore) ──\033[0m\n'
+bash scripts/test-tls-pin-apple.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── certificate pins, Android (VibePinnedTls) ──\033[0m\n'
+bash scripts/test-tls-pin-android.sh; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the

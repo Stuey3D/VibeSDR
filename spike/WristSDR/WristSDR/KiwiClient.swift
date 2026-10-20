@@ -402,11 +402,20 @@ final class KiwiClient: ObservableObject, SDRClient {
     }
     RunLoop.main.add(t, forMode: .common); rateTimer = t
 
+    armConnectWatchdog()
+
+    audio.start { _, _ in }
+    openSnd()
+  }
+
+  private func armConnectWatchdog() {
     // Connect watchdog — if no audio/waterfall frame has arrived in 12s the connection is never
     // coming (blocked, full, callsign-only, or just unreachable). Say so instead of hanging.
     let ct = Timer(timeInterval: 12, repeats: false) { [weak self] _ in
       Task { @MainActor in
         guard let self, !self.everFrame else { return }
+        // ★ GitHub #52: the person is reading a certificate prompt — that is not a dead server. Wait on.
+        if self.sockState.contains("checking the server's certificate") { self.armConnectWatchdog(); return }
         // Include the last socket state (debug): "ready" ⇒ socket opened but Kiwi sent no frames
         // (handshake/UA/protocol), "waiting"/"preparing" ⇒ the connection never completed.
         // ★ RELEASE: the raw socket state (`POSIXErrorCode(rawValue: 53)…`) is crumbed, not shown.
@@ -416,9 +425,6 @@ final class KiwiClient: ObservableObject, SDRClient {
       }
     }
     RunLoop.main.add(ct, forMode: .common); connectTimer = ct
-
-    audio.start { _, _ in }
-    openSnd()
   }
 
   /// Surface a refusal reason ONCE (badp/too_busy/handshake/timeout all funnel here).
@@ -584,7 +590,10 @@ final class KiwiClient: ObservableObject, SDRClient {
             self.retrySnd(reason: st)
           } else {
             Vitals.crumb("KIWI socket failed — state: \(st)")
-            self.fail(self.ownerBlockAdvice(st) ?? "This \(self.rxLabel) wouldn’t open a connection.")
+            // ★ GitHub #52: the person declined (or we refused) its certificate — say THAT, not "wouldn't open".
+            self.fail(st.contains("certificate not trusted")
+                      ? "This \(self.rxLabel)’s certificate isn’t trusted, so Jr didn’t connect."
+                      : self.ownerBlockAdvice(st) ?? "This \(self.rxLabel) wouldn’t open a connection.")
           }
         }
       }

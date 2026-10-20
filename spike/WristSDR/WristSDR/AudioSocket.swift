@@ -15,6 +15,9 @@ import Network
 /// So JR does the same on purpose. This is a straight port of the phone's pattern.
 final class AudioSocket {
 
+  /// Carries TlsTrustCenter's answer from its task to this socket's queue (askAboutCertificate).
+  private final class OutcomeBox: @unchecked Sendable { var value: TlsTrustCenter.Outcome = .none }
+
   /// WHICH SOCKET THIS IS. Both the audio and the spectrum socket are instances of this
   /// class, and every state message it emitted said "audio ws …" — so a SPECTRUM failure
   /// was reported on screen as an audio failure, while audio was visibly running at 50/s.
@@ -79,6 +82,14 @@ final class AudioSocket {
   private var urlSession: URLSession?
   private var usingURLSession = false
   private var lastOpen: (url: URL, headers: [(name: String, value: String)], autoReplyPing: Bool, avoidRelay: Bool)?
+  /// ★★ GitHub #52 — ONE CERTIFICATE QUESTION PER SOCKET UNTIL IT CONNECTS. A wss whose certificate the
+  ///    system refuses (a receiver with its own self-signed one) asks TlsTrustCenter once; a Cancel then holds
+  ///    for this socket's life, so the caller's reconnect ladder cannot turn into a prompt every few seconds.
+  ///    Reaching `.ready` re-arms it, so a certificate that CHANGES mid-session is still put to the person.
+  ///    Picking the server again builds a new client and new sockets, which ask afresh.
+  private var tlsAsked = false
+  /// The caller's own `forceIPv4`, so a socket reopened after "Trust" is opened exactly as it was (OWRX pins v4).
+  private var lastForceIPv4 = false
 
   /// Raw WebSocket binary frames — one Opus packet each, with UberSDR's 21-byte header.
   var onData: ((Data) -> Void)?
@@ -97,6 +108,7 @@ final class AudioSocket {
     cancel()
     if !forceIPv4 { retriedV4 = false }          // a fresh caller-driven open starts the ladder again
     lastOpen = (url, headers, autoReplyPing, avoidRelay)
+    lastForceIPv4 = forceIPv4
     // ★★★ A PLAIN ws:// ON A PRIVATE ADDRESS: DO NOT EVEN TRY NWConnection. We know how that
     //     ends — POSIX 53 at connect, on this watch and on the phone — so attempting it costs a
     //     12-second deadline and buys nothing. Stuart, on build 40: "local connection still takes
@@ -120,8 +132,9 @@ final class AudioSocket {
       return
     }
 
-    let secure = (url.scheme == "wss")
-    let params: NWParameters = secure ? .tls : .tcp
+    // ★ wss → TLS: the stock `.tls` unless the person trusted this host:port's own certificate, then a
+    //   verify block that asks the system FIRST and accepts only that exact certificate (TlsTrust, #52).
+    let params = TlsTrust.shared.parameters(for: url)
     // avoidRelay: refuse the iPhone Bluetooth relay (it presents as the `.other` interface) so a
     // bandwidth-heavy feed goes over the watch's OWN wifi/cellular instead. watchOS often powers the
     // watch's wifi down while the phone is near, so a caller MUST have a fallback: if no data arrives,
@@ -153,10 +166,13 @@ final class AudioSocket {
       case .ready:
         // Tag the interface actually in use so the UI can show wifi vs the phone relay (.other).
         self.isWaiting = false
+        self.tlsAsked = false
         self.connectDeadline?.cancel(); self.connectDeadline = nil
         self.onState?("\(name) ws ready [\(Self.pathName(c.currentPath))]")
         self.receive(c, g)
       case .waiting(let e):
+        // ★ #52: a refused CERTIFICATE is not a path that may yet appear — put the question instead.
+        if TlsTrust.isTrustFailure(e), self.askAboutCertificate(url, original: "\(name) ws failed: \(e)") { return }
         // Path not satisfiable YET. NWConnection retries toward .ready on its own — do not
         // tear it down here or you fight the framework and lose.
         // ★ Reported, but NOT acted on: the deadline armed in open() is what ends this state if
@@ -170,6 +186,7 @@ final class AudioSocket {
       case .failed(let e):
         self.isWaiting = false
         self.connectDeadline?.cancel(); self.connectDeadline = nil
+        if TlsTrust.isTrustFailure(e), self.askAboutCertificate(url, original: "\(name) ws failed: \(e)") { return }
         self.onState?("\(name) ws failed: \(e)")
       case .cancelled:
         self.isWaiting = false
@@ -247,7 +264,9 @@ final class AudioSocket {
     for h in headers { req.setValue(h.value, forHTTPHeaderField: h.name) }
     let cfg = URLSessionConfiguration.default
     cfg.waitsForConnectivity = true
-    let sess = URLSession(configuration: cfg)
+    // ★ #52: the pin delegate — every server-trust challenge goes back to the system unless it is a refused
+    //   certificate matching this host:port's pin.
+    let sess = URLSession(configuration: cfg, delegate: TlsSessionDelegate.shared, delegateQueue: nil)
     let t = sess.webSocketTask(with: req)
     t.maximumMessageSize = 16 * 1024 * 1024
     urlSession = sess
@@ -264,9 +283,12 @@ final class AudioSocket {
       guard let self, self.gen == g, self.task === t else { return }
       switch result {
       case .failure(let e):
+        if TlsTrust.isTrustFailure(e),
+           self.askAboutCertificate(t.originalRequest?.url ?? t.currentRequest?.url, original: "\(self.name) ws failed: \(e.localizedDescription)") { return }
         self.onState?("\(self.name) ws failed: \(e.localizedDescription)")
       case .success(let msg):
         if first {
+          self.tlsAsked = false
           self.onState?("\(self.name) ws ready [URLSession]")
           self.onReady?()
         }
@@ -278,6 +300,50 @@ final class AudioSocket {
         self.receiveURLSession(t, g)
       }
     }
+  }
+
+  /// ★★★ GitHub #52 — THE CERTIFICATE WAS REFUSED. Ask TlsTrustCenter (probe → decide → the prompt) instead
+  ///     of reporting the failure, and say nothing to the caller until the person has answered: its retry
+  ///     ladder would otherwise reopen the socket under the prompt. Trusted → this socket reopens itself
+  ///     exactly as it was opened, now with the pin. Declined or refused → ONE plain failure,
+  ///     "… ws failed: certificate not trusted — host:port" (the callers' word "failed", and OwrxClient knows
+  ///     not to answer it by falling back to plain ws). Not a certificate we can help with → the original
+  ///     failure, unchanged.
+  /// Returns false (caller reports as before) when it is not ours to ask: plain ws, or already asked.
+  private func askAboutCertificate(_ url: URL?, original: String) -> Bool {
+    guard let url, url.scheme?.lowercased() == "wss", let t = TlsPin.target(url), !tlsAsked else { return false }
+    tlsAsked = true
+    // ★ Retire the failed attempt WITHOUT its `.cancelled` reaching the caller (FM-DX reads "cancelled" as
+    //   a failure to retry): bump the generation first, so its handlers are already stale.
+    gen &+= 1
+    let g = gen
+    connectDeadline?.cancel(); connectDeadline = nil
+    isWaiting = false
+    conn?.cancel(); conn = nil
+    task?.cancel(with: .goingAway, reason: nil); task = nil; urlSession = nil; usingURLSession = false
+    onState?("\(name) ws: checking the server's certificate")
+    // ★ The answer comes back on this socket's own queue, like every other state change; the work item
+    //   holds `self` weakly, the async hop carries only the outcome.
+    let answer = OutcomeBox()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, self.gen == g else { return }       // the caller moved on (reopened or cancelled) meanwhile
+      switch answer.value {
+      case .trusted:
+        guard let again = self.lastOpen else { return }
+        self.open(url: again.url, headers: again.headers, forceIPv4: self.lastForceIPv4,
+                  autoReplyPing: again.autoReplyPing, avoidRelay: again.avoidRelay)
+      case .none:
+        self.onState?(original)
+      case .declined, .refused:
+        self.onState?("\(self.name) ws failed: certificate not trusted — \(t.host):\(t.port)")
+      }
+    }
+    let q = queue
+    Task {
+      answer.value = await TlsTrustCenter.shared.checkAfterFailure(host: t.host, port: t.port)
+      q.async(execute: work)
+    }
+    return true
   }
 
   private func receive(_ c: NWConnection, _ g: Int) {

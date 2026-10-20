@@ -2968,6 +2968,53 @@ select.btn { padding: 6px 8px; }
 .gpFocus.gpAdjust { outline-color: #ffb833 !important; }
 /* ★ A decoder box that has the D-pad (gamepad.ts grab): a quieter ring round the box, the bright one on the item. */
 .gpGrab { outline: 2px solid rgba(124,255,155,0.45) !important; outline-offset: 2px; }
+/* ── ★★★ THE CONTROLLER KEYBOARD (padKeyboard.ts; layouts and rules shared with the app, decided 2026-10-20) ──────────
+   Only for a game controller. Docked to the bottom over a dim that leaves the page readable above it (search results
+   update as you type). The panel glass, border and amber are the panels'; the highlight is the pad's own green.
+   ★ The number pad's digits are the frequency readout's own — #mFreq and .kbDigit share the rule below, and the
+     keycap face is #mFreqBox's (white hairline, 62 % black over the card's colour). --kb-freq / --kb-card are copied
+     from #mcard when it opens, so the listener's colour choices follow.
+   ★ ABOVE everything but the profile toast (9600 < this < the hand-over never needs anything above). */
+#padKb { position: fixed; inset: 0; z-index: 9500; display: flex; align-items: flex-end; justify-content: center;
+         background: rgba(0,0,0,0.55); touch-action: none; user-select: none; -webkit-user-select: none; }
+#padKb[hidden] { display: none; }
+#padKb .kbSheet { width: 100%; max-height: 100%; box-sizing: border-box; display: flex; flex-direction: column;
+                  align-items: center; gap: 12px; padding: 14px 16px max(16px, env(safe-area-inset-bottom, 0px));
+                  background: var(--ov-panel98, rgba(8,6,2,0.98)); border-top: 1px solid var(--btn-border);
+                  border-radius: 12px 12px 0 0; box-shadow: 0 -12px 40px rgba(0,0,0,0.6); }
+#padKb.kbSide .kbSheet { flex-direction: row; justify-content: center; align-items: center; gap: 20px; height: 100%;
+                         border-radius: 0; }
+#padKb .kbValueBox { width: min(100%, 720px); box-sizing: border-box; border: 1px solid var(--btn-border); border-radius: 10px;
+                     padding: 8px 14px; background: rgba(0,0,0,0.6); }
+#padKb.kbSide .kbValueBox { width: auto; flex: 1 1 0; max-width: 420px; }
+#padKb .kbTitle { color: var(--text-dim); font-size: 12px; letter-spacing: 0.12em; min-height: 1em; }
+#padKb .kbValue { display: flex; align-items: center; min-height: 40px; font-size: 26px; color: var(--amber);
+                  white-space: pre; overflow: hidden; }
+#padKb.numeric .kbValue { font-variant-numeric: tabular-nums; color: var(--kb-freq, #fff); }
+#padKb .kbBefore, #padKb .kbAfter { overflow: hidden; text-overflow: clip; }
+#padKb .kbBefore { direction: rtl; unicode-bidi: plaintext; }  /* a long value keeps the caret end in view */
+#padKb .kbCaret { flex: none; width: 3px; height: 1.1em; margin: 0 1px; border-radius: 1px; background: #7cff9b;
+                  animation: kbBlink 1.06s steps(1) infinite; }
+#padKb.secure .kbCaret { background: #9a9a9a; }
+@keyframes kbBlink { 50% { opacity: 0; } }
+#padKb .kbUnit { margin-left: 10px; font-size: 15px; color: var(--text-dim); }
+#padKb .kbErr { color: var(--red); font-size: 13px; }
+#padKb .kbErr:empty, #padKb .kbHint:empty { display: none; }
+#padKb .kbHint { color: var(--text-dim); font-size: 12px; margin-top: 4px; }
+#padKb .kbGrid { position: relative; flex: none; }
+#padKb .kbKey { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+                border-radius: 8px; border: 1px solid var(--btn-border); background: var(--btn-bg);
+                color: var(--btn-text); overflow: hidden; white-space: nowrap; }
+#padKb .kbKey.kbDigitKey { border-color: rgba(255,255,255,0.38);
+                           background: linear-gradient(rgba(0,0,0,0.62), rgba(0,0,0,0.62)), var(--kb-card, #000); }
+#padKb .kbKey.kbLit { color: var(--btn-active-tx); border-color: var(--btn-active-bdr); background: var(--btn-active-bg); }
+#padKb .kbKey.kbOn { outline: 3px solid #7cff9b; outline-offset: 1px; z-index: 1; }
+#padKb .kbKey.kbPress { background: rgba(124,255,155,0.25); }
+/* ★★ PASSWORD MODE: a neutral ring and NO press flash — over a mirrored screen the highlight shows which key was hit. */
+#padKb.secure .kbKey.kbOn { outline-color: #9a9a9a; }
+#padKb.secure .kbKey.kbPress { background: var(--btn-bg); }
+#padKb .kbSys { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+#mFreq, #padKb .kbDigit { font-variant-numeric: tabular-nums; color: var(--ctl-freq, var(--kb-freq, #fff)); letter-spacing: 0.02em; }
 /* ── ★★★ THE CONTROLLER GUIDE (padGuide.ts — Stuart approved the prototype 2026-10-19) ─────────────────────────────
    A panel like the menu (same glass, border, dim and open animation — the shared rule above, by id below), but wide:
    the drawing wants room. ★ ABOVE THE SPLASH: SELECT on a pad opens it from the landing page too.
@@ -2991,6 +3038,10 @@ select.btn { padding: 6px 8px; }
 #pgTitle { margin: 0; text-align: center; color: var(--amber); font-size: clamp(17px, 2.6vw, 28px);
            letter-spacing: .14em; font-weight: 700; }
 #pgSub { text-align: center; color: var(--pg-dim); margin: 4px 0 8px; font-size: clamp(12px, 1.4vw, 16px); }
+#pgKb { max-width: 60em; margin: 12px auto 0; padding-top: 10px; border-top: 1px solid var(--bar-border);
+        color: var(--pg-ink); font-size: clamp(12px, 1.3vw, 15px); line-height: 1.5; }
+#pgKb p { margin: 2px 0; }
+#pgKb p:first-child { color: var(--pg-grn); font-weight: 700; letter-spacing: .03em; }
 #pgFoot { text-align: center; color: var(--pg-dim); font-size: clamp(12px, 1.3vw, 15px); margin-top: 10px; line-height: 1.45; }
 #pgGuide { position: relative; display: grid; gap: 12px 20px; align-items: center;
            grid-template-columns: 1fr minmax(0, 2.2fr) 1fr; grid-template-areas: "left pad right"; }
@@ -3065,7 +3116,7 @@ select.btn { padding: 6px 8px; }
          origin — there is nothing to type. -->
     <div id="hostRow" hidden>
       <label for="host">SERVER</label>
-      <input id="host" placeholder="192.168.86.134:48000" spellcheck="false">
+      <input id="host" data-kb="url" placeholder="192.168.86.134:48000" spellcheck="false">
     </div>
     <div id="pinRow">
       <label for="pin">PIN</label>
@@ -3811,7 +3862,15 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="actUpdateAll">UPDATE ALL PACKAGES</button>
       <button class="btn" id="actRestart">RESTART VIBESERVER</button>
       <button class="btn aWarn" id="actReboot">REBOOT THE MACHINE</button>
+      <!-- ★★★ DOWNLOAD DIAGNOSTICS (Stuart, 2026-10-20): one text file of this server's logs and settings for the
+           owner to send us. Built as root by the maintenance helper, secrets removed, saved by this browser. -->
+      <button class="btn" id="actDiag" hidden>DOWNLOAD DIAGNOSTICS</button>
     </div>
+    <p class="dim wrap aNote" id="actDiagNote" hidden>
+      <b>Download diagnostics</b> saves a text file of this server&rsquo;s logs and settings from the last day, to send
+      to us if something is not working. It never contains passwords, but it does contain this server&rsquo;s
+      addresses and network names &mdash; only send it to people you trust.
+    </p>
     <!-- ★★ TWO INDEPENDENT SCHEDULES, not one with a scope switch. A VibeServer update is one
          small package we build and can sensibly be daily; a full system upgrade is bigger and
          occasionally wants attention, so it suits a weekly slot. One schedule would force the
@@ -5026,7 +5085,8 @@ select.btn { padding: 6px 8px; }
     <div class="seg"><button class="btn" id="btnPadGuide">CONTROLLER GUIDE</button></div>
   </div>
   <div class="lbl wrap">A game controller or a handheld drives this page: the D-pad moves a highlight, and the
-    guide shows what every button does. SELECT on the controller opens it too.</div>
+    guide shows what every button does. SELECT on the controller opens it too. Enter on a text box opens an on-screen
+    keyboard for the controller; touch, a click or a key on a real keyboard goes back to ordinary typing.</div>
 
   <!-- ★★★ SERVER ADMIN — the last thing in the menu, and only for the owner.
        Hidden unless this session is unlocked as admin: a listener has no use for it, and a
@@ -5109,6 +5169,8 @@ select.btn { padding: 6px 8px; }
     <svg id="pgLines" aria-hidden="true"></svg>
   </div>
   <div id="pgFoot"></div>
+  <!-- ★ TYPING: what each control does in the controller keyboard (src/utils/padGuide.ts `keyboard`, shared with the app). -->
+  <div id="pgKb"></div>
 </div>
 
 <!-- ★★★ THE ADMIN PAGE. A full-screen panel over the client rather than a separate document,

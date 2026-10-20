@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.20)
 #     package takes its upstream version from here, and the macOS app's plist is bumped alongside
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
-project(vibeserver VERSION 11.0.8 LANGUAGES CXX C)
+project(vibeserver VERSION 11.0.9 LANGUAGES CXX C)
 # ★★★ V11 (2026-09-28): the app, Jr, every VibeServer host, Lite and the Mac app all move to major 11
 #     together (docs/BRIEF-v11-compatibility.md). A PRE-RELEASE is named on its OWN line, read by every
 #     reader of the line above (android CMake, lite gradle, mac/build-app.sh): the package becomes
@@ -698,6 +698,14 @@ foreach(v native boost)
   endif()
   add_test(NAME health-snail-${v} COMMAND test-health-snail-${v})
 endforeach()
+# ★★ The dynamic spectrum ceiling (vibe_spec_governor.h, 11.0.9 — the Pi 2 on DAB): starved → 20 → 10 → 5 fast, calm →
+#    back up slowly, no hunting, never above the owner's top or a listener's ask; composed with the audio-first gate the
+#    lower of the two wins. On a fake clock and a fake load.
+add_executable(test-spec-governor "${CMAKE_CURRENT_SOURCE_DIR}/test-spec-governor.cpp")
+target_include_directories(test-spec-governor PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-spec-governor)
+target_link_libraries(test-spec-governor PRIVATE Threads::Threads)
+add_test(NAME spec-governor COMMAND test-spec-governor)
 # ★ The POWER card's verdict (vibe_power.h): brief supply dips amber, sustained / continuous / USB loss red.
 add_executable(test-power-dips "${CMAKE_CURRENT_SOURCE_DIR}/test-power-dips.cpp")
 target_include_directories(test-power-dips PRIVATE "${CPP_DIR}")
@@ -705,11 +713,44 @@ target_link_libraries(test-power-dips PRIVATE Threads::Threads)
 add_test(NAME power-dips COMMAND test-power-dips)
 # ★ The mDNS responder's question parser (2026-10-17): compressed questions — Apple packs several lookups into one
 #   packet — were ignored, so <name>.local resolved only when ours happened to be the first, uncompressed question.
+#   ★ 2026-10-20: and respond() — whole query packets in, whole responses out: A+AAAA → A + NSEC, browse → PTR with
+#     SRV/TXT/A/NSEC additionals, known-answer suppression, TC, QU, legacy unicast, announce and goodbye.
 add_executable(test-mdns "${CMAKE_CURRENT_SOURCE_DIR}/test-mdns.cpp")
 target_include_directories(test-mdns PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-mdns)
 target_link_libraries(test-mdns PRIVATE Threads::Threads)
 add_test(NAME mdns COMMAND test-mdns)
+# ★★ Wi-Fi QoS (vibe_wifi_qos.h, 2026-10-20, docs/BRIEF-portable-wifi-realtime.md): audio marked voice, the waterfall and
+#    the map never; on Linux SO_PRIORITY is read back AFTER IP_TOS (which rewrites it). And the audio-first rule — the
+#    waterfall yields while a listener's audio is queued — on a synthetic clock.
+add_executable(test-wifi-qos "${CMAKE_CURRENT_SOURCE_DIR}/test-wifi-qos.cpp")
+target_include_directories(test-wifi-qos PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-wifi-qos)
+target_link_libraries(test-wifi-qos PRIVATE Threads::Threads)
+add_test(NAME wifi-qos COMMAND test-wifi-qos)
+# ★★★ THE THREAD LADDER, READ BACK (vibe_thread.h, 2026-10-20): audio send ≥ DSP > waterfall send ≥ spectrum >
+#     decoders — nice via getpriority + /proc on Linux, QoS on macOS. Negative rungs NOT RUN without CAP_SYS_NICE.
+add_executable(test-thread-rank "${CMAKE_CURRENT_SOURCE_DIR}/test-thread-rank.cpp")
+target_include_directories(test-thread-rank PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-thread-rank)
+target_link_libraries(test-thread-rank PRIVATE Threads::Threads)
+add_test(NAME thread-rank COMMAND test-thread-rank)
+set_tests_properties(thread-rank PROPERTIES SKIP_RETURN_CODE 77)
+# ★★★ VibeAGC (2026-10-20): the retune-forget split, carrierless headroom, the bursty channel level and the bounded
+#     record (vibe_agc_rules.h, vibe_agc_record.h) — pure, no radio. Silent: synthetic SSB speech, nothing played.
+add_executable(test-agc-rules "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-rules.cpp")
+target_include_directories(test-agc-rules PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-agc-rules)
+add_test(NAME agc-rules COMMAND test-agc-rules)
+add_executable(test-agc-record "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-record.cpp")
+target_include_directories(test-agc-record PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-agc-record)
+target_link_libraries(test-agc-record PRIVATE Threads::Threads)
+add_test(NAME agc-record COMMAND test-agc-record)
+# ★★ Download diagnostics (diag_scrub.h, 2026-10-20): the daemon's own scrub of the file before it is downloaded.
+add_executable(test-diag-scrub "${CMAKE_CURRENT_SOURCE_DIR}/test-diag-scrub.cpp")
+vibe_sanitize(test-diag-scrub)
+add_test(NAME diag-scrub COMMAND test-diag-scrub)
 # ★ The fatal-signal record (crash_report.h, 2026-10-06): a fault on a named thread is reported with its
 #   thread, PC as an exe offset and version, and the process still dies of the same signal. Linux only
 #   (prints SKIP elsewhere).
@@ -790,7 +831,7 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #    NoNewPrivileges=yes, so it cannot elevate at all — sudo is impossible by design here. The
   #    daemon writes a request file instead; the .path unit notices it and runs the helper as
   #    root. See linux/vibeserver-maintenance for the permitted actions.
-  install(PROGRAMS linux/vibeserver-maintenance DESTINATION lib/vibeserver)
+  install(PROGRAMS linux/vibeserver-maintenance linux/vibeserver-diagnostics DESTINATION lib/vibeserver)
   install(FILES linux/vibeserver-maintenance.path
                 linux/vibeserver-maintenance.service
           DESTINATION lib/systemd/system)

@@ -256,6 +256,19 @@ try {
   ok(fs.existsSync(path.join(PD, "pocket-kick.request")) && fs.readFileSync(path.join(PD, "pocket-kick.request"), "utf8") === "switch\n",
      "…by the one-word kick the root service reads");
 
+  // ── ★★★ the join history (2026-10-20) ──
+  state({mode: "client", ssid: "Meow!", joins: [
+    {t: Math.floor(Date.now() / 1000) - 60, ssid: "Stuey3D’s iPhone", freq: 5180, band: "5 GHz", seen: "WPA2 WPA3",
+     visible: "probe", used: "WPA2-PSK, PMF off", result: "joined", reason: "", n: 1},
+    {t: Math.floor(Date.now() / 1000) - 30, ssid: "Stuart's A26 <b>x</b>", freq: null, band: "", seen: "", visible: "no",
+     used: "WPA2-PSK, PMF off", result: "not seen", reason: "asked by name, no answer", n: 3}]});
+  await js(`wifiLoad().then(() => 1)`);
+  ok(await until(`document.querySelectorAll("#wifiJoinsTable tr").length === 3`), "the join history is drawn: a header and two attempts");
+  ok(await js(`(() => { const r = document.querySelectorAll("#wifiJoinsTable tr"); return r[1].textContent.includes("A26")
+               && r[1].textContent.includes("×3") && r[2].textContent.includes("5 GHz") && r[2].textContent.includes("asked by name"); })()`),
+     "…newest first, with the count, the band and how it was found");
+  ok(await js(`!document.getElementById("wifiJoinsTable").innerHTML.includes("<b>x</b>")`), "…and a network's name is escaped, never markup");
+
   ok(errors.length === 0, "no JavaScript errors on the page" + (errors.length ? ": " + errors.slice(0, 3).join(" | ") : ""));
   ws.close();
 } catch (e) {

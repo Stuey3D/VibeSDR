@@ -40,6 +40,15 @@
   #include <cstdio>
   #include <cstring>
 
+  namespace vibeprio {
+      constexpr int kNet       = -20;   // the audio socket's send, and the IQ input
+      constexpr int kAudio     = -19;   // the real-time chain (= THREAD_PRIORITY_URGENT_AUDIO)
+      constexpr int kSendWf    = -10;   // the waterfall/control/decoder socket's send
+      constexpr int kSpectrum  = -5;
+      constexpr int kDecoder   = 10;
+      constexpr int kBulk      = 15;
+  }
+
   inline void vibeThreadName(const char* name) { prctl(PR_SET_NAME, name); }
 
   inline void vibeAudioThread(const char* name) {
@@ -47,7 +56,7 @@
       vibe::vibeFlushDenormals();
       errno = 0;
       // = Android's Process.THREAD_PRIORITY_URGENT_AUDIO.
-      if (setpriority(PRIO_PROCESS, 0, -19) != 0 && errno != 0) {
+      if (setpriority(PRIO_PROCESS, 0, vibeprio::kAudio) != 0 && errno != 0) {
           static std::atomic<bool> warned{false};
           if (!warned.exchange(true))
               std::fprintf(stderr,
@@ -66,9 +75,35 @@
       errno = 0;
       (void)setpriority(PRIO_PROCESS, 0, nice);   // ★ best effort — vibeAudioThread warns for all
   }
-  inline void vibeNetThread(const char* name)      { vibeNiceThread_(name, -20); }
-  inline void vibeSpectrumThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, -5); }
-  inline void vibeDecoderThread(const char* name)  { vibe::vibeFlushDenormals(); vibeNiceThread_(name, 10); }
+  /* ★★★ THE LADDER, IN ONE PLACE (2026-10-20). Network sends sit at the top, the waterfall's send
+   *  one rung BELOW the audio chain and one ABOVE the spectrum work that feeds it:
+   *     audio send -20  ≥  IQ input -20  >  audio chain (DSP, demod, DAB, encode) -19
+   *     >  waterfall/control send -10  >  spectrum -5  >  default 0  >  decoders 10  >  bulk HTTP 15
+   *  ★★ WHY THE WATERFALL'S SEND STEPS DOWN: on a multi-radio server every radio is its own process,
+   *     and nice is compared across all of them. One radio's DSP must not lose to another radio's
+   *     waterfall — but it must never beat another radio's AUDIO send either, which is the rule
+   *     (Network > Audio > Spectrum > Decoders) read across processes. A send thread spends its life
+   *     asleep in send() or on its queue, so the rung costs nothing while idle. */
+  /* ★★ A REFUSED -20 FALLS BACK TO -19, as the IQ input already did: without the fallback a box that
+   *  allows -19 but not -20 (an RLIMIT_NICE of 39) would leave the send thread at 0 under a -19 DSP —
+   *  the exact inversion this ladder exists to prevent. vibeAudioThread warns, once, if that fails too. */
+  inline void vibeNetThread(const char* name) {
+      prctl(PR_SET_NAME, name);
+      errno = 0;
+      if (setpriority(PRIO_PROCESS, 0, vibeprio::kNet) != 0 && errno != 0) vibeAudioThread(name);
+  }
+  /* ★★★ A SEND THREAD LEARNS WHAT IT CARRIES AFTER IT STARTS. The outbox writer starts at the network
+   *  rung (the handshake and a refusal go out there), and re-ranks itself once acceptWs has said which
+   *  socket it serves: audio stays at the top, anything else steps down to kSendWf. Renamed too, so a
+   *  look at /proc tells the two apart (vibeTx-audio / vibeTx-wf, both under 16 bytes).
+   *  ★ Stepping DOWN needs no privilege; stepping up from -10 to -20 does, and a writer only ever goes
+   *    one way (it is classified once). */
+  inline void vibeSendRank(bool audio) {
+      if (audio) { vibeNetThread("vibeTx-audio"); return; }
+      vibeNiceThread_("vibeTx-wf", vibeprio::kSendWf);
+  }
+  inline void vibeSpectrumThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kSpectrum); }
+  inline void vibeDecoderThread(const char* name)  { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kDecoder); }
   /* ★★★ BULK HTTP — BELOW THE WHOLE ORDER. Map tiles, the map data, the web client's scripts:
    *  bytes somebody is waiting for, but nobody HEARS late. A zoom-out on the GPU map fires dozens of
    *  PMTiles range reads at once, each on its own connection thread, and those threads sat at nice
@@ -78,7 +113,7 @@
    *  close), so nothing has to put the priority back.
    *  ★★ NOT for the admin API or anything that takes clientMtx/modeMtx: a low-priority thread that
    *     holds a lock the DSP needs is priority inversion, which is worse than the contention. */
-  inline void vibeBulkThread(const char* name)     { vibeNiceThread_(name, 15); }
+  inline void vibeBulkThread(const char* name)     { vibeNiceThread_(name, vibeprio::kBulk); }
   /* ★★★ THE IQ INPUT SITS ABOVE THE WHOLE ORDER — Network > Audio > Spectrum > Decoders all
    *  consume what it delivers, and a sample it fails to collect is lost for every one of them
    *  (never late: GONE — a radio library drops the buffer). So it takes the top nice, level with
@@ -93,7 +128,7 @@
       prctl(PR_SET_NAME, name);
       vibe::vibeFlushDenormals();
       errno = 0;
-      if (setpriority(PRIO_PROCESS, 0, -20) != 0 && errno != 0) vibeAudioThread(name);
+      if (setpriority(PRIO_PROCESS, 0, vibeprio::kNet) != 0 && errno != 0) vibeAudioThread(name);
   }
 #elif defined(__APPLE__)
   #include <pthread.h>
@@ -120,6 +155,12 @@
       pthread_setname_np(name);
       pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   }
+  // ★★ The send thread's re-rank (see the Linux note): audio level with the DSP, the waterfall's send
+  //    level with the spectrum work — macOS has no class between USER_INTERACTIVE and USER_INITIATED.
+  inline void vibeSendRank(bool audio) {
+      pthread_setname_np(audio ? "vibeTx-audio" : "vibeTx-wf");
+      pthread_set_qos_class_self_np(audio ? QOS_CLASS_USER_INTERACTIVE : QOS_CLASS_USER_INITIATED, 0);
+  }
   inline void vibeSpectrumThread(const char* name) {
       pthread_setname_np(name);
       vibe::vibeFlushDenormals();
@@ -145,6 +186,7 @@
   inline void vibeThreadName(const char*) {}
   inline void vibeAudioThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeNetThread(const char*) {}
+  inline void vibeSendRank(bool) {}
   inline void vibeSpectrumThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeDecoderThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeBulkThread(const char*) {}

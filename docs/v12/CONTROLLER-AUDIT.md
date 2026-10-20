@@ -260,6 +260,9 @@ Helpers: `NavCard`/`CardKey` (cards with a few keys — `preferred` = where the 
 
 ### TlsTrustPrompt (main `f6035f0d`, not on V12) — how it plugs in when main is merged
 It is mounted once in `App.tsx` over every screen. On merge:
+**Done in the 11.0.9 merge (2026-10-20):** as below — `useFieldPopupNav` with CANCEL first (a refusal's lone OK
+otherwise), both skins' keys ringed, the long-press "Forget certificate" through `appAlert()`, and the ✎ sheet's FORGET
+key a third row under the address. `test_nav_coverage` holds TlsTrustPrompt at zero.
 - call `useFieldPopupNav(visible, { name: 'tls trust', fields: 0, keys: [cancel, trust], startAt: 0, onBack: cancel,
   onField: () => {} })` — **focus starts on CANCEL** (the safe answer; TRUST is never the default), Back = CANCEL;
 - pass `focused={nav.key(0)}` / `nav.key(1)` to its two `PopupKey`s, or wrap the default-skin `TouchableOpacity`s in

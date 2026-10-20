@@ -77,8 +77,8 @@ export interface DabState {
   /** A regulator's licensed sites for this ensemble (nearest first when the receiver's position is known).
    *  `code` is the TII ("" when the source has none); `src` whose record it is — absent = Ofcom (older servers). */
   licensed?: { site: string; area: string; code: string; km: number; src?: string }[];
-  /** The newest slideshow image off the air for the playing service; fetch /vibeserver/dabslide?seq=. */
-  slide?: { seq: number; mime: string; bytes: number; name: string };
+  /** The newest slideshow image off the air for the playing service; fetch /vibeserver/dabslide?h= (or ?seq= from an older server) — see dabSlide.ts. */
+  slide?: { seq: number; mime: string; bytes: number; name: string; h?: string };   // ★ h: dab=2 only — see dabSlide.ts
   motGroups?: number; motCrcFail?: number; motObjects?: number;
   spi?: { sid: number; packets: number; groups: number; crcFail: number; lost: number; dir: boolean; named: number; complete: number; logoSvcs: number };
   tiiDiag?: { comb: number; f4s: number; f45: number; frames: number };

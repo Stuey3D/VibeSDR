@@ -176,6 +176,12 @@ public:
      *  hardware lock and touches the tuner, so the libusb callback must never call it (see the
      *  note on enqueueIq). Non-static: it works on the live device. */
     void overloadTick();
+    /** ★★★ THE VibeAGC RECORD (vibe_agc_record.h, 2026-10-20). agcRecordTick: one call a second from the same
+     *  housekeeping thread — takes a snapshot of the loop's inputs only while the gain is moving or within 30 s of
+     *  an event. agcRecordJsonl: the whole bounded ring, oldest first, one JSON object per line (admin-only: it is
+     *  served at /vibeserver/admin/agc and is the ONE function a diagnostics bundle should include). */
+    void agcRecordTick();
+    static std::string agcRecordJsonl();
     /** The gain the radio is ACTUALLY set to, in its own units (tenths of a dB on an RTL);
      *  -1 = auto/AGC. Sent in hwinfo so a remote client can SHOW the truth instead of imposing
      *  its own remembered value on a radio it does not own. */
@@ -399,6 +405,10 @@ public:
      *    file does not exist on a phone. */
     using AdminLogFn = std::function<void(std::string& text, bool& running, int& exitCode)>;
     static void setAdminLogHandler(AdminLogFn fn);
+    /** ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20): the daemon hands back the file the root helper built (maintenance action
+     *  `diagnostics`), already scrubbed, and its download name. False + err = nothing to hand over (not built yet). */
+    using AdminDiagFn = std::function<bool(std::string& body, std::string& fileName, std::string& err)>;
+    static void setAdminDiagnosticsHandler(AdminDiagFn fn);
 
     /** ★★ IP -> ISO-3166 country, for the flags beside listeners and the top-countries tally.
      *  Registered by the DAEMON, which owns the dataset (see vibeserver/geoip.cpp for why it is

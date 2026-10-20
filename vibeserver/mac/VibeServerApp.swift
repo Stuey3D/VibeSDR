@@ -434,7 +434,9 @@ final class Server: ObservableObject {
     // as a failing link and stepping down forever chasing a limit it can never reach.
     // 0 = no cap. Tiers match the Android server's (FPS_TIERS in src/services/vibeServer.ts) so a
     // setting means the same thing on every host.
-    @AppStorage("maxFps")   var maxFps     = 0.0      // 0 = server default (20), else 20/10/5
+    // ★★ 10 IS THE DEFAULT for a new server (Stuart, 2026-10-20); 20 is the owner's option. A value SAVED
+    //   before that keeps its meaning: 0 was "Full · 20" (no ceiling, the old 20 default) and still is.
+    @AppStorage("maxFps")   var maxFps     = 10.0     // 20 / 10 / 5; a saved 0 = the old Full (no cap, 20)
     @AppStorage("eibi")     var eibiStations = false  // download the EiBi schedule for /stations search
     @Published var eibiStatus = ""                    // "1234 stations" / "downloading…" / "offline"
     @AppStorage("maxBwHz")  var maxBwHz    = 0.0      // 0 = uncapped demod bandwidth
@@ -2213,11 +2215,17 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Link Management") {
-                Picker("Waterfall rate", selection: $server.maxFps) {
-                    Text("Full · 20 fps").tag(0.0)
-                    Text("Half · 10 fps").tag(10.0)
-                    Text("Quarter · 5 fps").tag(5.0)
+                // ★ Labels renamed with the 10-fps default (2026-10-20): Full/Half/Quarter → Smoother/Default/Half.
+                //   A saved 0 (the old Full) shows as Smoother · 20, which is what it serves.
+                Picker("Waterfall rate", selection: Binding(
+                    get: { server.maxFps == 0 ? 20.0 : server.maxFps },
+                    set: { server.maxFps = $0 })) {
+                    Text("Smoother · 20 fps").tag(20.0)
+                    Text("Default · 10 fps").tag(10.0)
+                    Text("Half · 5 fps").tag(5.0)
                 }
+                Text("10 fps is the default. 20 is smoother, but sends about twice the data and costs more processor time. Listeners' waterfalls scroll at the same steady speed either way.")
+                    .font(.caption).foregroundStyle(.secondary)
                 // ★★ THE RATES THIS RADIO CAN ACTUALLY DO. The list was the RTL2832U's,
                 // hardcoded — so an RSP, which runs to 10 MSPS where a dongle tops out near
                 // 2.56, was capped at less than a quarter of its capability by a menu that

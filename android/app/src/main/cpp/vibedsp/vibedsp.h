@@ -1218,6 +1218,11 @@ public:
      *   exactly the moments a listener is most likely to be listening to the audio.
      */
     void resyncBitClock() { cycle_ = 0; }
+    /** TEST ONLY: push the loop's frequency integrator (and its phase) somewhere, to prove recovery
+     *  from it. Never called by the receiver. */
+    void debugKick(double offsetHz, double phaseRad) { df_ = w0_ * (offsetHz / 19000.0); phase_ += phaseRad;
+        const float c = std::cos((float)phaseRad), s = std::sin((float)phaseRad);
+        const float oc = oscC_ * c - oscS_ * s, os = oscS_ * c + oscC_ * s; oscC_ = oc; oscS_ = os; }
     void reset() { phase_ = 0.0; df_ = 0.0; lockAmp_ = 0.0f; cycle_ = 0; lockState_ = false; trackState_ = false;
                    oscC_ = 1.0f; oscS_ = 0.0f; sinceNorm_ = 0; }
 private:
@@ -1665,6 +1670,13 @@ public:
      *    hypothesis has a full window again, so a re-sync reads as the link it is, not as "-1, no
      *    RDS". Called on the thread that runs process(). */
     void noteGap(double holdSec = 0.25);
+    /** ★★ OUR OWN GAIN STEP — not a hole (11.0.9). The signal never stopped and the bit stream is continuous, so
+     *  sync, the symbol reference and decoding all carry on; only the MEASUREMENTS (level, deviation, phase, the
+     *  constellation) stop accumulating for `holdSec`, so the step's wake is never counted as the station. */
+    void holdMeasurements(double holdSec) {
+        const long hold = (mpxRate_ > 0.0) ? (long)(holdSec * mpxRate_) : 0;
+        measHold_ = std::max(measHold_, hold);
+    }
     /** How many holes noteGap() has been told about since configure(). Diagnostics. */
     unsigned gapsNoted() const { return gaps_; }
     /** ★★ RMS of the recovered 57 kHz baseband, relative to the pilot's own lock
@@ -3006,6 +3018,29 @@ public:
      *  ★ Nothing else changes: no rebuild, no audio reset, no pilot re-seed. Unlike requestReset()
      *    this is safe to call every time, from any thread; it is honoured on the one that feeds. */
     void noteInputGap() { gapReq_.store(true, std::memory_order_relaxed); }
+    /** ★★★ THE FRONT END'S GAIN JUST MOVED, AND THE LEVEL IS STILL SETTLING (2026-10-19). The caller
+     *  (the shim, from GainStepSmoother) says so on every block while its correction is still
+     *  gliding; for `holdSec` after the last call the estimators that integrate LEVEL stop judging:
+     *    · the multipath meter keeps its filters running but does not take a reading — a level
+     *      gliding back over a second reads 10-26 % "multipath" through its 30 ms mean, and a raw step
+     *      read 60-75 %, which engaged CEQ on a clean station and sent IMS narrowing the L−R corner;
+     *    · CEQ neither engages nor lets go — its dwell is frozen, so the decision it had stands;
+     *    · for the first 50 ms the MPX noise meter takes no reading and the blend S/N does not move,
+     *      and the pilot lock metric is held as it is for a hole (StereoPLL::noteGap) — so whatever
+     *      the step itself did to the composite can never be counted as noise or as a lost pilot.
+     *  ★ Nothing is reset and nothing is rebuilt: when the hold ends every meter carries on from
+     *    where it was, exactly as if the step had never happened. Any thread; honoured on the feeding one. */
+    void noteGainStep(double holdSec = 0.1) {
+        const float h = (float)holdSec;
+        float cur = gainGuardReq_.load(std::memory_order_relaxed);
+        while (h > cur && !gainGuardReq_.compare_exchange_weak(cur, h, std::memory_order_relaxed)) {}
+    }
+    /** TEST ONLY — see StereoPLL::debugKick. Call between feeds, on the feeding thread. */
+    void debugKickPilotLoop(double offsetHz, double phaseRad = 0.0) { pll_.debugKick(offsetHz, phaseRad); }
+    /** Gain-step onsets that reached a feed(). Diagnostics. */
+    unsigned gainSteps() const { return gainSteps_.load(std::memory_order_relaxed); }
+    /** True while the guard above is holding the level estimators. */
+    bool gainGuarded() const { return gainGuardLeft_ > 0; }
     /** Holes noteInputGap() has reported that reached a feed(). Diagnostics (rdsx `gaps`). */
     unsigned inputGaps() const { return inputGaps_.load(std::memory_order_relaxed); }
     /** How many times the audio chain has been rebuilt. Diagnostics only — but it is what
@@ -3165,6 +3200,7 @@ private:
     std::vector<cf32> demodQ_[kDemodQ];
     int  demodQn_[kDemodQ] = {};
     bool demodQGap_[kDemodQ] = {};           // ★ the hole travels WITH its block — see noteInputGap
+    float demodQGuard_[kDemodQ] = {};        // ★ …and so does a gain step's hold — see noteGainStep
     std::vector<cf32> demodIn_;              // the worker's channel buffer for the block in hand
     int  demodHead_ = 0, demodCount_ = 0;
     bool demodBusy_ = false, demodStop_ = false;
@@ -3172,8 +3208,8 @@ private:
     void startDemodThread_();
     void stopDemodThread_();
     void flushDemod_();
-    void enqueueDemod_(const cf32* ch, int nc, bool gap);
-    void demodTail_(std::vector<cf32>& chB, int nc, bool gap);
+    void enqueueDemod_(const cf32* ch, int nc, bool gap, float guardSec = 0.0f);
+    void demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guardSec = 0.0f);
     int specFill_ = 0;          // samples gathered toward the next frame
     // ── Overlapping spectrum window ────────────────────────────────────────
     // ★★★ WHY THIS IS A RING AND NOT A GATHER. Disjoint blocks cap the frame rate at
@@ -3366,6 +3402,10 @@ private:
     double rdsFlagAt_ = 0.0;                                     // when, steady seconds — see Callbacks::rdsFlags
     std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<bool> gapReq_{false};        // see noteInputGap()
+    std::atomic<float> gainGuardReq_{0.0f};  // see noteGainStep() — seconds of hold asked for
+    std::atomic<unsigned> gainSteps_{0};
+    long gainGuardLeft_ = 0;                 // channel samples left in the hold (demod side)
+    long gainOnsetLeft_ = 0;                 // …and in its first 50 ms
     std::atomic<unsigned> inputGaps_{0};
     std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()
     std::atomic<bool> tuneReq_{false};       // same-chain retune: move the NCO, rebuild nothing

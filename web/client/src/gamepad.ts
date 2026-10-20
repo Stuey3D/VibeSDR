@@ -36,11 +36,18 @@
  * ★★ BACK IS ONE PATH. A menu or overlay that is not a .open panel (the step menu, the meter menu, the tour, the
  *   admin panel) registers its close with pushBack() while it is up; back closes the newest of those first, then the
  *   panels. That used to be six separate Escape listeners, which a pad's back never reached.
+ * ★★★ Enter on a TEXT BOX opens the CONTROLLER KEYBOARD (padKeyboard.ts — the app's layouts and rules, decided by
+ *    Stuart 2026-10-20); while it is open every button goes to it (kbPoll). A pad press in a box somebody is typing in
+ *    with the phone's keyboard or a real one hands it over with the text and caret; BACK in such a box lets go of it
+ *    (the audit's "on the web, pad Back doesn't release a text field" — the highlight used to walk away while the box
+ *    kept the cursor). Only a real press or a stick past STICK_USE counts as using the pad; a connected pad does not.
  */
 import { pickNext, Jog, padProfile, type Box, type Dir } from '../../../src/utils/gamepadNav';
 import { keyAction, keyDir, keyRepeats, type KeyAction } from '../../../src/utils/keyActions';
 import { guideTabStep, type PadLayout } from '../../../src/utils/padGuide';
 import { padGuideOpen, padGuideLayout, setPadGuideLayout, scrollPadGuide } from './padGuide';
+import { isTextField, fieldEdited, openPadKeyboard, padKbOpen, padKbLayout, padKbMove, padKbPress, padKbBack, padKbEdit,
+         padKbSubmit, padKbCheckField, onPadKbClose, notePadInput, inputSource } from './padKeyboard';
 
 export interface GamepadHooks {
   tune(dir: 1 | -1): void;           // one step of the current tuning step
@@ -58,6 +65,10 @@ const NAVBOX = '[data-navbox]';
 const BOX_SCROLL = 90;                          // px the D-pad scrolls a box with nothing selectable (the app's step)
 const REPEAT_DELAY = 380, REPEAT_EVERY = 110;
 const SWITCH_HOLD_MS = 900;                     // START held this long switches the controls
+// ★★ WHAT COUNTS AS USING THE PAD (Stuart, 2026-10-20: "only show the on-screen keyboard when the web client is actually
+//    being driven by a control pad"): a button going DOWN, or a stick pushed past this — never a pad that is merely
+//    connected, and never drift or axis noise. The jog itself engages at 0.6 (gamepadNav Jog).
+const STICK_USE = 0.5;
 
 let hooks: GamepadHooks | null = null;
 let running = false;
@@ -71,6 +82,18 @@ let autoTaken = '';
 let grabDepth = 0;                              // backStack depth when the box took the D-pad (see back)                             // the data-navauto token already taken (once per appearance)
 const held = new Map<string, number>();        // action → when it next repeats (ms)
 const tuneJog = new Jog(30), zoomJog = new Jog(45);
+const lastButtons = new Map<number, boolean[]>();   // per pad: what was down last frame (to see a press, not a hold)
+const lastSticks = new Map<number, boolean[]>();    // per pad: which sticks were past STICK_USE last frame
+// ★ Buttons that were down when the keyboard opened or closed: ignored until let go, so the press that opened it never
+//   also types a key, and the ↵ that closed it never also presses the field again (which would reopen it).
+const suppressed = new Set<string>();
+function suppressHeld() {
+  // ★ And forget every hold in progress: a button let go while the other side had the pad never told press() so, and a
+  //   one-shot (enter, back) would otherwise stay "held" for ever and never fire again.
+  held.clear();
+  const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) as Gamepad[] : [];
+  for (const gp of pads) gp.buttons.forEach((b, i) => { if (b?.pressed) suppressed.add(`${gp.index}:${i}`); });
+}
 
 function visible(el: HTMLElement): boolean {
   if ((el as HTMLButtonElement).disabled || el.hidden) return false;
@@ -197,7 +220,12 @@ function enter() {
     el.classList.toggle('gpAdjust', adjusting);
     return;
   }
-  if (el instanceof HTMLInputElement && !['button', 'submit', 'checkbox', 'radio'].includes(el.type)) { el.focus(); return; }
+  // ★★ A TEXT BOX: the controller keyboard (padKeyboard.ts) — never el.focus(), which on a phone pops up a keyboard
+  //    the pad cannot drive, and on a handheld kiosk gives the cursor to a box nothing can type into.
+  //    ★ V12: the KEYBOARD drives this highlight too (onKey) — Enter from a real keyboard types in place, never the
+  //    on-screen one (src/utils/inputSource.ts: keyboard → in place, pad → the controller keyboard).
+  if (isTextField(el) && inputSource.get() !== 'pad') { el.focus(); return; }
+  if (isTextField(el)) { openPadKeyboard(el); suppressHeld(); return; }
   el.click();
 }
 
@@ -276,8 +304,10 @@ function press(action: string, down: boolean, fire: () => void, repeat = true) {
   const now = performance.now();
   if (!down) { held.delete(action); return; }
   const next = held.get(action);
-  if (next === undefined) { fire(); held.set(action, repeat ? now + REPEAT_DELAY : Infinity); return; }
-  if (now >= next) { fire(); held.set(action, now + REPEAT_EVERY); }
+  // ★ Recorded BEFORE it fires: a press that opens or closes the controller keyboard clears every hold (suppressHeld),
+  //   and must not be written back afterwards as a hold that never ends.
+  if (next === undefined) { held.set(action, repeat ? now + REPEAT_DELAY : Infinity); fire(); return; }
+  if (now >= next) { held.set(action, now + REPEAT_EVERY); fire(); }
 }
 
 /** The choice: ?pad= for this session, else what START last chose on this device, else decided from the pad. */
@@ -318,10 +348,26 @@ function poll() {
   if (!running) return;
   const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) as Gamepad[] : [];
   if (!pads.length) { running = false; highlight(null); return; }
+  padKbCheckField();
   for (const gp of pads) {
-    const btn = (i: number) => !!gp.buttons[i]?.pressed;
     const prof = padProfile(gp.axes.length, forcedProfile());
     const id = `${gp.index}:`;
+    const down = gp.buttons.map((b) => !!b?.pressed);
+    const was = lastButtons.get(gp.index) ?? [];
+    lastButtons.set(gp.index, down);
+    const rising = down.map((d, i) => d && !was[i]);
+    const sticks = [Math.hypot(gp.axes[0] ?? 0, gp.axes[1] ?? 0) > STICK_USE, Math.hypot(gp.axes[2] ?? 0, gp.axes[3] ?? 0) > STICK_USE];
+    const sWas = lastSticks.get(gp.index) ?? [false, false];
+    lastSticks.set(gp.index, sticks);
+    if (rising.some(Boolean) || sticks.some((v, i) => v && !sWas[i])) notePadInput();
+    // ★★ A PAD PRESS WHILE A TEXT BOX HAS THE CURSOR (kbHandover: system / in place + pad).
+    if (rising.some(Boolean) && padWhileTyping(rising[prof === 'buttons' ? B_L1 : B_EAST])) suppressHeld();
+    const btn = (i: number) => {
+      const k = id + i;
+      if (suppressed.has(k)) { if (!down[i]) suppressed.delete(k); return false; }
+      return down[i];
+    };
+    if (padKbOpen()) { kbPoll(gp, prof, id, btn); continue; }
     // HOLD to switch: fires once when START has been down SWITCH_HOLD_MS, never on a tap.
     if (btn(B_START)) {
       const since = held.get(id + 'start');
@@ -356,10 +402,75 @@ function poll() {
   requestAnimationFrame(poll);
 }
 
+/** A pad press while a text box has the cursor. Back lets go of the box (the highlight stays on it); any other press in
+ *  a box somebody was typing in hands it to the controller keyboard with the text and caret; a box that took the cursor
+ *  by itself (autofocus) is only let go, and the press then does what it always does. True = the press is used up. */
+function padWhileTyping(isBack: boolean): boolean {
+  const el = document.activeElement;
+  if (!isTextField(el) || padKbOpen()) return false;
+  if (isBack) { el.blur(); highlight(el); return true; }
+  if (fieldEdited(el)) {
+    let caret: number | undefined;
+    try { caret = el.selectionStart ?? undefined; } catch { /* no caret on this type */ }
+    highlight(el);
+    openPadKeyboard(el, caret);
+    return true;
+  }
+  el.blur();
+  highlight(el);
+  return false;
+}
+
+/** The pad while the controller keyboard is open: every button goes to it, nothing reaches tuning, zoom or panels. */
+function kbPoll(gp: Gamepad, prof: string, id: string, btn: (i: number) => boolean) {
+  // START: a TAP submits (released before the hold time); a HOLD is ignored while open — switching the controls
+  // mid-word would change what every button means.
+  if (btn(B_START)) { if (!held.has(id + 'kbstart')) held.set(id + 'kbstart', performance.now()); }
+  else {
+    const t = held.get(id + 'kbstart');
+    held.delete(id + 'kbstart');
+    if (t !== undefined && performance.now() - t < SWITCH_HOLD_MS) { padKbSubmit(); return; }
+  }
+  press(id + 'kbup', btn(B_UP), () => padKbMove('up'));
+  press(id + 'kbdown', btn(B_DOWN), () => padKbMove('down'));
+  press(id + 'kbleft', btn(B_LEFT), () => padKbMove('left'));
+  press(id + 'kbright', btn(B_RIGHT), () => padKbMove('right'));
+  const now = performance.now();
+  if (prof === 'buttons') {
+    press(id + 'kbpress', btn(B_R1), padKbPress, false);
+    press(id + 'kbback', btn(B_L1), padKbBack, false);
+    press(id + 'kbcl', btn(B_WEST), () => padKbEdit('left'));      // the tune buttons move the caret
+    press(id + 'kbcr', btn(B_EAST), () => padKbEdit('right'));
+  } else {
+    const numeric = padKbLayout() === 'numeric';
+    press(id + 'kbpress', btn(B_SOUTH), padKbPress, false);
+    press(id + 'kbback', btn(B_EAST), padKbBack, false);
+    press(id + 'kbbs', btn(B_WEST), () => padKbEdit('bs'));
+    press(id + 'kbsp', btn(B_NORTH), () => padKbEdit('space'));
+    press(id + 'kbl1', btn(B_L1), () => padKbEdit(numeric ? 'unit' : 'shift'), false);
+    press(id + 'kbr1', btn(B_R1), () => padKbEdit(numeric ? 'unit' : 'symbols'), false);
+    // The left stick turned (the tune action) moves the caret; the right stick (zoom) does nothing here.
+    const t = tuneJog.feed(gp.axes[0] ?? 0, gp.axes[1] ?? 0, now);
+    for (let k = 0; k < Math.abs(t); k++) padKbEdit(t > 0 ? 'right' : 'left');
+    zoomJog.feed(gp.axes[2] ?? 0, gp.axes[3] ?? 0, now);
+  }
+}
+
 /** The pad AND the keyboard. */
 export function initGamepad(h: GamepadHooks): void {
   hooks = h;
   window.addEventListener('keydown', onKey);
+  // When the keyboard closes by ↵ or Back, the highlight goes back to the box it was typing into.
+  onPadKbClose((el, why) => { suppressHeld(); if (why !== 'handover' && el.isConnected && visible(el)) highlight(el); });
+  // ★ A box that takes the cursor BY ITSELF while the pad is driving (a panel that focuses its field on opening): let
+  //   go of it and highlight it instead — enter on it opens the controller keyboard. Otherwise a phone would pop up
+  //   its own keyboard, and a kiosk would leave the cursor in a box nothing can type into.
+  document.addEventListener('focusin', (e) => {
+    if (!isTextField(e.target) || padKbOpen() || inputSource.get() !== 'pad') return;
+    const el = e.target as HTMLElement;
+    el.blur();
+    if (running) highlight(el);
+  });
   const start = () => { if (!running) { running = true; requestAnimationFrame(poll); } };
   window.addEventListener('gamepadconnected', start);
   // ★ A pad already connected before the page loaded announces itself only on its first press — poll once to see.

@@ -47,7 +47,17 @@ import {
 } from '../services/instancesApi';
 import { checkConnection, detectServerType, probeServer, parseServerAddress, DEFAULT_PORT,
          fetchOccupancy, type ServerOccupancy, isKiwiProtocol, isHttpBackend, resolveServerScheme,
+         detectWithTls, TlsNotTrusted,
          type BackendType, type ServerType } from '../services/sdrTypes';
+import { forgetPinForUrl, pinForUrl } from '../services/tlsTrust';
+import { formatFingerprint } from '../utils/tlsPin';
+
+/** ★ GitHub #52: a probe whose server presented a certificate the person declined has ALREADY been explained by the
+ *  trust prompt — stop quietly (true). Anything else is rethrown. */
+function tlsHandled(e: unknown): true {
+  if (e instanceof TlsNotTrusted) return true;
+  throw e;
+}
 import { vibeServerNeedsPin } from '../services/vibeAuth';
 import { buildServerUrl, parseServerUrl, withScheme } from '../utils/serverUrl';
 
@@ -128,7 +138,7 @@ import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import { APP_VERSION } from '../constants/version';
 import { useServing, loopbackIfSelf, servingNow } from '../services/serving';
 import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
-import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
+import { startMdnsDiscovery, mdnsDiscoverySupported, type DiscoveredServer, type MdnsBrowse } from '../services/mdns';
 import { favFromDiscovered, repairFromDiscovery, needsVibeProbe, tcpFavHttpBase } from '../services/discoveredFavs';
 import { resolveVibeAuth, checkVibePin } from '../services/vibeAuth';
 import { crumb } from '../services/crumbs';
@@ -367,8 +377,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [editFav,     setEditFav]       = useState<Favourite | null>(null);
   const [editName,    setEditName]      = useState('');
   const [editUrl,     setEditUrl]       = useState('');
+  /** ★ GitHub #52: the certificate the person trusted for this saved server's host:port, if any — shown with FORGET. */
+  const [editPin,     setEditPin]       = useState<{ sha256: string; at?: number } | null>(null);
   // Auto-discovered RTL-TCP servers (mDNS/Bonjour) — live while the picker is focused.
   const [discovered,  setDiscovered]    = useState<DiscoveredServer[]>([]);
+  // ★ The live browse (its refresh() is the SEARCH AGAIN row) and whether it is still in its first few seconds.
+  const mdnsRef = useRef<MdnsBrowse | null>(null);
+  const [mdnsSearching, setMdnsSearching] = useState(false);
   const [tcpName,     setTcpName]       = useState('');
   const [tcpHost,     setTcpHost]       = useState('');
   const [tcpPort,     setTcpPort]       = useState('1234');
@@ -550,10 +565,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   // mDNS/Bonjour: browse for RTL-TCP servers while the picker is on screen; stop
   // on blur so we don't hold the network browser open during an SDR session.
+  // ★ The browse restarts itself on return from the background, and SEARCH AGAIN restarts it by hand (mdnsBrowse.ts).
   useFocusEffect(useCallback(() => {
     setDiscovered([]);
-    const stop = startMdnsDiscovery(setDiscovered);
-    return () => { stop(); setDiscovered([]); };
+    const stop = startMdnsDiscovery(setDiscovered, setMdnsSearching);
+    mdnsRef.current = stop;
+    return () => { stop(); mdnsRef.current = null; setDiscovered([]); setMdnsSearching(false); };
   }, []));
 
   const { font: F, scale } = themeFor(viewMode);
@@ -619,7 +636,24 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     setEditFav(fav);
     setEditName(fav.name);
     setEditUrl(fav.url);
+    setEditPin(null);
+    pinForUrl(fav.url).then(setEditPin).catch(() => {});
   }, []);
+  const forgetEditPin = useCallback(async () => {
+    if (!editFav) return;
+    await forgetPinForUrl(editFav.url);
+    setEditPin(null);
+  }, [editFav]);
+  /** Long press on a custom server: Delete, plus Forget when a certificate is trusted for it (GitHub #52). */
+  const tcpFavActions = useCallback(async (f: TcpFav) => {
+    const pin = f.url ? await pinForUrl(f.url) : null;
+    appAlert(f.name, `${f.host}:${f.port}${pin ? `\n\nTrusted certificate (SHA-256)\n${formatFingerprint(pin.sha256)}` : ''}`, [
+      { text: 'Cancel', style: 'cancel' },
+      ...(pin && f.url ? [{ text: 'Forget certificate', onPress: () => { void forgetPinForUrl(f.url!); } }] : []),
+      { text: 'Delete', style: 'destructive' as const, onPress: () => removeTcpFav(f) },
+    ]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tcpFavs]);
   const saveEditFav = useCallback(async () => {
     if (!editFav) return;
     const url = editUrl.trim();
@@ -1466,7 +1500,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     let url = parsed.url;
     if (!type) {
       setConnecting(true);
-      const probed = await probeServer(parsed.host, parsed.port, null, parsed.url, parsed.explicitScheme);
+      let probed: Awaited<ReturnType<typeof probeServer>>;
+      try { probed = await probeServer(parsed.host, parsed.port, null, parsed.url, parsed.explicitScheme); }
+      catch (e) { setConnecting(false); tlsHandled(e); return; }
       setConnecting(false);
       if (!probed) {
         appAlert('Custom server',
@@ -1480,7 +1516,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       //   dialled as ws://host:8073, closed in 50 ms, and showed "server stopped responding".
       //   The type is the user's to choose; the scheme is still found out, never guessed.
       setConnecting(true);
-      url = await resolveServerScheme(parsed.url, false);
+      try { url = await resolveServerScheme(parsed.url, false); }
+      catch (e) { setConnecting(false); tlsHandled(e); return; }
       setConnecting(false);
     }
     if (save) {
@@ -1560,7 +1597,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     let favUrl = f.url;
     if (!favUrl && isHttpBackend(proto) && proto !== 'vibeserver') {
       setConnecting(true);
-      favUrl = await resolveServerScheme(buildServerUrl('http', f.host, f.port), false);
+      try { favUrl = await resolveServerScheme(buildServerUrl('http', f.host, f.port), false); }
+      catch (e) { setConnecting(false); tlsHandled(e); return; }
       setConnecting(false);
       const healed = favUrl;
       const next = tcpFavs.map(t => (t.host === f.host && t.port === f.port ? { ...t, url: healed } : t));
@@ -1606,7 +1644,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // previous build mis-saved as kiwi). Detection returns null only when the
     // host can't be reached — then keep the stored type rather than guessing.
     // ★ Hand it what we already believe this server is — a known Kiwi is not asked for our files.
-    let detected = await detectServerType(fav.url, fav.serverType);
+    // ★ GitHub #52: an https favourite refused for its certificate asks the person (detectWithTls); a decline stops.
+    let detected: BackendType | null;
+    try { detected = await detectWithTls(fav.url, fav.serverType); }
+    catch (e) { tlsHandled(e); return; }
 
     // ★★★ GitHub #52 SELF-HEAL. Earlier builds saved a typed `host:8073` as http://host:8073 — a
     //   guess. If nothing answers there, ask the SAME host, port and path over https; if that
@@ -1615,7 +1656,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (!detected && /^http:\/\//i.test(fav.url) && fav.serverType !== 'vibeserver') {
       const p = parseServerUrl(fav.url);
       const tls = p ? withScheme(p, 'https').url : null;
-      const tlsType = tls ? await detectServerType(tls, fav.serverType) : null;
+      let tlsType: BackendType | null = null;
+      try { tlsType = tls ? await detectWithTls(tls, fav.serverType) : null; }
+      catch (e) { tlsHandled(e); return; }
       if (tls && tlsType) {
         await updateFavourite(fav.url, { url: tls }).catch(() => {});
         setFavourites(await getFavourites());
@@ -1678,7 +1721,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // (NSAllowsArbitraryLoads) — most Kiwi/OpenWebRX receivers are hobbyist HTTP
     // boxes with no TLS, so we don't block them.
     setConnecting(true);
-    const probed = await probeServer(u.host, u.port, null, u.url, u.explicitScheme);
+    let probed: Awaited<ReturnType<typeof probeServer>>;
+    try { probed = await probeServer(u.host, u.port, null, u.url, u.explicitScheme); }
+    catch (e) { setConnecting(false); tlsHandled(e); return; }
     setConnecting(false);
     if (!probed) {
       // Typed a bare host with no port? DEFAULT_PORT guessed 80/8073, which is
@@ -2029,9 +2074,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     onBack: () => setTcpModal(false),
   });
   const editNav = useFieldPopupNav(!!editFav, {
-    name: 'edit favourite', fields: 2,
+    // ★ GitHub #52: with a trusted certificate, its FORGET key is a third row under the address (Enter presses it).
+    name: 'edit favourite', fields: editPin ? 3 : 2,
     keys: [() => setEditFav(null), () => { void saveEditFav(); }],
-    onField: (i) => [editNameField, editUrlField][i]?.open(),
+    onField: (i) => { if (i === 2) { void forgetEditPin(); return; } [editNameField, editUrlField][i]?.open(); },
     onBack: () => setEditFav(null),
   });
   // ★ Recordings over the list: it has its own list nav; this makes the list beneath yield and Back close it.
@@ -2604,6 +2650,20 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             <TextInput ref={editUrlRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, editNav.field(1) && { borderColor: editNav.ring, borderWidth: 2 }]}
               placeholder="Address (host, IP or URL)" placeholderTextColor={C.textDim}
               value={editUrl} onChangeText={setEditUrl} autoCapitalize="none" autoCorrect={false} keyboardType="url" {...editUrlField.fieldProps} />
+            {/* ★ GitHub #52: a certificate trusted on first use for this server's host:port — and the way to forget it. */}
+            {editPin && (
+              <View style={{ marginTop: 10, gap: 6 }}>
+                <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 1 }}>TRUSTED CERTIFICATE (SHA-256)</Text>
+                <Text selectable style={{ fontFamily: Platform.select({ ios: 'Courier', default: 'monospace' }), fontSize: fs(11), color: C.value }}>
+                  {formatFingerprint(editPin.sha256)}
+                </Text>
+                <NavWrap on={editNav.field(2)} color={editNav.ring} style={{ alignSelf: 'flex-start' }}>
+                <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border, alignSelf: 'flex-start' }]} onPress={forgetEditPin}>
+                  <Text style={{ fontFamily: F, fontSize: fs(13), color: C.keyIdle }}>Forget certificate</Text>
+                </TouchableOpacity>
+                </NavWrap>
+              </View>
+            )}
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
               <NavWrap on={editNav.key(0)} color={tcpNav.ring}>
               <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={() => setEditFav(null)}>
@@ -2990,10 +3050,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     <ChooserRow key={`${f.host}:${f.port}`}
                       style={[styles.row, { borderColor: C.borderBright }]}
                       onPress={() => { void connectTcpFav(f); }}
-                      onLongPress={() => appAlert(f.name, `${f.host}:${f.port}`, [
-                        { text: 'Cancel', style: 'cancel' },
-                        { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
-                      ])}
+                      onLongPress={() => { void tcpFavActions(f); }}
                     >
                       <Image source={require('../../assets/rtltcp.png')}
                         style={{ width: 26, height: 26, tintColor: C.key, marginRight: 8 }} resizeMode="contain" />
@@ -3026,8 +3083,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 </View>
 
                 {/* DISCOVERED — RTL-TCP servers found automatically on the local
-                    network via mDNS/Bonjour. Only shown when something advertises. */}
-                {discoveredNew.length > 0 && (
+                    network via mDNS/Bonjour. ★ Shown wherever the app can browse, even
+                    with nothing found: its SEARCH AGAIN row is most needed exactly then. */}
+                {(mdnsDiscoverySupported || discoveredNew.length > 0) && (
                   <View style={{ marginTop: 10 }}>
                     <SectionHeader label="DISCOVERED" fs={fs} F={F} C={C} />
                     {discoveredNew.map((s) => (
@@ -3053,6 +3111,33 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         </ChooserKey>
                       </ChooserRow>
                     ))}
+                    {/* ★★ SEARCH AGAIN (Stuart, 2026-10-20: "sometimes it wont find a server until I close and open
+                        again"). A real restart of the network browse — stop, start, rows not found again within a few
+                        seconds dropped — not a re-render. A ChooserRow, so the pad and keyboard reach it like any row;
+                        dashed like "+ Add custom server", the other row that is an action rather than a server. */}
+                    {mdnsDiscoverySupported && (
+                      <ChooserRow
+                        style={[styles.row, { borderColor: C.keyDim, borderStyle: 'dashed' }]}
+                        onPress={() => mdnsRef.current?.refresh()}
+                        accessibilityRole="button"
+                        accessibilityLabel="Search again for servers on this network"
+                      >
+                        <View style={styles.rowMain}>
+                          <Text style={{ fontFamily: F, fontSize: fs(15), color: C.key }} numberOfLines={1}>
+                            {mdnsSearching ? '↻ Searching…' : '↻ Search again'}
+                          </Text>
+                          <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
+                            {mdnsSearching
+                              ? 'looking for servers on this network'
+                              : discoveredNew.length > 0
+                                ? 'look again for servers on this network'
+                                : discovered.length > 0
+                                  ? 'the servers found here are already in your list'
+                                  : 'none found on this network — tap to look again'}
+                          </Text>
+                        </View>
+                      </ChooserRow>
+                    )}
                   </View>
                 )}
               </View>

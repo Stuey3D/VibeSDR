@@ -134,6 +134,37 @@ export const DEFAULT_PORT: Record<BackendType, number> = {
   vibeserver: 48000, rtltcp: 1234, spyserver: 5555,
 };
 
+/* ★★★ GitHub #52 — A SERVER WITH ITS OWN CERTIFICATE. When an https probe fails, the app asks whether it was the
+ *  certificate and, if it is one the person may trust, puts the question to them (services/tlsTrust.ts). That module
+ *  is React Native; this file is also bundled into the WEB client (web/client imports stepsForFreq), where the browser
+ *  owns certificates — so the check is HANDED IN by tlsTrust at load (setTlsGate), never imported here. Unset (web,
+ *  tests) = no check, exactly as before. */
+export type TlsGateOutcome = 'trusted' | 'declined' | 'refused' | 'none';
+let tlsGate: ((url: string) => Promise<TlsGateOutcome>) | null = null;
+export function setTlsGate(fn: ((url: string) => Promise<TlsGateOutcome>) | null): void { tlsGate = fn; }
+
+/** ★ Thrown when a server presented a certificate the person then declined (or one that must be refused). The prompt
+ *  has already explained it — a caller catching this shows nothing more. "Nothing answered" would be wrong:
+ *  something answered, with a certificate. */
+export class TlsNotTrusted extends Error {
+  constructor(public readonly url: string, public readonly outcome: 'declined' | 'refused') {
+    super(outcome === 'declined' ? `certificate not trusted for ${url}` : `certificate refused for ${url}`);
+    this.name = 'TlsNotTrusted';
+  }
+}
+
+/** ★ detectServerType, plus GitHub #52: an https address that did not answer is asked about its certificate; trusted
+ *  now → detected again; declined / refused → TlsNotTrusted. Only for paths the PERSON started (the picker), never a
+ *  background refresh. */
+export async function detectWithTls(url: string, known?: string | null): Promise<BackendType | null> {
+  const t = await detectServerType(url, known);
+  if (t || !tlsGate || !/^https:\/\//i.test(toHttpUrl(url))) return t;
+  const outcome = await tlsGate(toHttpUrl(url)).catch((): TlsGateOutcome => 'none');
+  if (outcome === 'trusted') return detectServerType(url, known);
+  if (outcome === 'declined' || outcome === 'refused') throw new TlsNotTrusted(url, outcome);
+  return null;
+}
+
 /** Probe a manually-entered host to pick the backend (v3). Fetches the landing
  *  page and sniffs markers. Returns null when the host can't be reached (the
  *  caller keeps any previously-known type rather than guessing). */
@@ -306,6 +337,13 @@ export async function resolveServerScheme(baseUrl: string, explicitScheme: boole
   };
   const tls = withScheme(u, 'https').url;
   if (await answers(tls)) return tls;
+  // ★★ GitHub #52: a TLS port whose certificate the platform refused does not "answer" either — but it DID present a
+  //   certificate, so it speaks https. Trusted now → https. Declined → TlsNotTrusted (the prompt said why).
+  if (tlsGate) {
+    const outcome = await tlsGate(tls).catch((): TlsGateOutcome => 'none');
+    if (outcome === 'trusted') return tls;
+    if (outcome === 'declined' || outcome === 'refused') throw new TlsNotTrusted(tls, outcome);
+  }
   return u.url;
 }
 
@@ -515,7 +553,9 @@ export async function probeServer(
   for (const sc of schemes) add(buildServerUrl(sc, host, port));
 
   for (const url of candidates) {
-    const t = await detectServerType(url);
+    // ★ GitHub #52: an https candidate refused for its certificate asks the person (detectWithTls) — and a decline
+    //   stops here rather than trying http, which a TLS-only port answers with a reset ("nothing answered").
+    const t = await detectWithTls(url);
     // ★★ FOLLOW THE SERVER'S OWN ANSWER ABOUT WHERE IT LIVES — see vibeDirectUrl(). Without this
     //    a tunnelled receiver connects for everything except the socket.
     if (t === 'vibeserver') return { type: t, url: (await vibeDirectUrl(url)) || url };

@@ -144,7 +144,10 @@ func detectServerType(_ url: String) async -> ServerType? {
   guard let u = URL(string: base + "/") else { return nil }
   var req = URLRequest(url: u); req.timeoutInterval = 5
   do {
-    let (data, _) = try await URLSession.shared.data(for: req)
+    // ★ GitHub #52: a receiver with its own certificate (casm's OWRX+ on https://…:8073) is asked about HERE,
+    //   while the person is adding it — and on "Trust" the same request simply goes again. A Cancel throws,
+    //   so detection reports it could not find the server rather than guessing a type.
+    let (data, _) = try await TlsTrustCenter.data(for: req, ask: true)
     let body = (String(data: data, encoding: .utf8) ?? "").lowercased()
     // ★ VibeServer serves the UberSDR-style spectrum protocol BUT needs the VibeServer client mode
     // (isVibe: /ws/audio + PIN + Opus/ADPCM). Returning .ubersdr made Jr run the UberSDR /ws register

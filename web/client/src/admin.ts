@@ -1587,7 +1587,8 @@ async function refresh() {
       renderMapglDetail(md);
       for (const [id, act] of [['actUpdateCheck', 'update-check'], ['actUpdate', 'update'],
                                ['actUpdateAll', 'update-all'],
-                               ['actRestart', 'restart'], ['actReboot', 'reboot']] as const) {
+                               ['actRestart', 'restart'], ['actReboot', 'reboot'],
+                               ['actDiag', 'diagnostics'], ['actDiagNote', 'diagnostics']] as const) {
         const el = document.getElementById(id);
         if (el) el.hidden = !offered.includes(act);
       }
@@ -2109,6 +2110,35 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     + 'Stations learned from RDS are kept. This cannot be undone.'));
 
   $('actUpdateCheck')?.addEventListener('click', () => act('update-check'));
+  // ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20): ask the root helper to build the file (the maintenance action, its output
+  //     shown in #actLog like any other), wait for it to finish, then fetch it as a DOWNLOAD — a plain GET answered
+  //     with Content-Disposition: attachment, so every browser (iOS Safari too) saves it rather than leaving the page.
+  $('actDiag')?.addEventListener('click', async () => {
+    const btn = $('actDiag') as HTMLButtonElement;
+    btn.disabled = true;
+    msg('actMsg', 'Building the diagnostics file… (up to a minute)');
+    try {
+      let before = '';
+      try { before = String((await get('maintenance-log')).text ?? ''); } catch { /* none */ }
+      await post('action', { action: 'diagnostics' });
+      let done = false;
+      for (let i = 0; i < 120 && !done; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        let j: any;
+        try { j = await get('maintenance-log'); } catch { continue; }
+        const text = String(j.text ?? '');
+        if (!j.running && text && text !== before) done = true;
+      }
+      if (!done) { msg('actMsg', 'The diagnostics file was not ready in time. Is vibeserver-maintenance.path enabled?'); return; }
+      const a = document.createElement('a');
+      a.href = `${base()}/vibeserver/admin/diagnostics?${await q()}`;
+      a.download = '';
+      document.body.appendChild(a); a.click(); a.remove();
+      msg('actMsg', 'Diagnostics saved by your browser — send the file to whoever is helping you.');
+    } catch (e) {
+      msg('actMsg', (e as Error).message);
+    } finally { btn.disabled = false; }
+  });
   $('actUpdate')?.addEventListener('click', () => act('update', 'Update VibeServer to the latest version?'));
   $('actUpdateAll')?.addEventListener('click', () => act('update-all',
     'Upgrade EVERY package on this machine?\n\n'

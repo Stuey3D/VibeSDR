@@ -100,9 +100,10 @@ void RxPipeline::startDemodThread_() {
             demodIn_.swap(demodQ_[demodHead_]);
             const int nc = demodQn_[demodHead_];
             const bool gap = demodQGap_[demodHead_];
+            const float guard = demodQGuard_[demodHead_];
             demodBusy_ = true;
             lk.unlock();
-            demodTail_(demodIn_, nc, gap);
+            demodTail_(demodIn_, nc, gap, guard);
             lk.lock();
             demodBusy_ = false;
             demodHead_ = (demodHead_ + 1) % kDemodQ;
@@ -112,7 +113,7 @@ void RxPipeline::startDemodThread_() {
     });
 }
 
-void RxPipeline::enqueueDemod_(const cf32* ch, int nc, bool gap) {
+void RxPipeline::enqueueDemod_(const cf32* ch, int nc, bool gap, float guardSec) {
     std::unique_lock<std::mutex> lk(demodM_);
     if (demodCount_ >= kDemodQ) {
         demodWaits_.fetch_add(1, std::memory_order_relaxed);
@@ -122,6 +123,7 @@ void RxPipeline::enqueueDemod_(const cf32* ch, int nc, bool gap) {
     demodQ_[slot].assign(ch, ch + nc);
     demodQn_[slot] = nc;
     demodQGap_[slot] = gap;
+    demodQGuard_[slot] = guardSec;
     ++demodCount_;
     lk.unlock();
     demodCv_.notify_one();
@@ -808,6 +810,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
     //     the two readers that care, so it lands on the samples that follow the hole and no others.
     const bool gap = gapReq_.exchange(false, std::memory_order_relaxed);
     if (gap) inputGaps_.fetch_add(1, std::memory_order_relaxed);
+    // ★★ A GAIN STEP'S HOLD — see noteGainStep(). Taken here like the hole above and carried with the
+    //    block, so it covers the samples that follow it and no others.
+    const float guardSec = gainGuardReq_.exchange(0.0f, std::memory_order_relaxed);
     bool rebuilt = false;
     if (dirty_) {
         rebuildAudio();                  // rebuildAudio() re-points the NCO itself
@@ -1020,18 +1025,35 @@ void RxPipeline::feed(const cf32* iq, int n) {
         // ★ THE CUT (setDemodThread): everything above is the DSP thread's, everything below may run
         //   on vibe-demod. The channel block is handed over whole; a full queue is WAITED for, never
         //   dropped — a hole in the channel is a click, and a late block is only a late block.
-        if (demodOn_) { enqueueDemod_(chBuf_.data(), nc, gap); return; }
-        demodTail_(chBuf_, nc, gap);
+        if (demodOn_) { enqueueDemod_(chBuf_.data(), nc, gap, guardSec); return; }
+        demodTail_(chBuf_, nc, gap, guardSec);
     }
 }
 
 /** ★ The second half of the audio path: channel IQ in, audio (and every RDS/stereo/meter callback)
  *  out. On the DSP thread by default; on vibe-demod with setDemodThread. `chB` is the channel buffer
  *  it owns for this call — the DSP thread keeps writing its own chBuf_ meanwhile. */
-void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
+void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guardSec) {
     // ★★ The RDS decoder hears about a hole BEFORE it decodes the samples after it — see
     //    RdsDemod::noteGap. Harmless when RDS is off: it only forgets a grid it is not using.
     if (gap) { rdsDemod_.noteGap(); pll_.noteGap(); }
+    /* ★★★ OUR OWN GAIN STEP: the level estimators sit this out — see noteGainStep(). Measured before
+     *     (vibeserver/test-gain-step.cpp): even with the IQ level put back and glided, the multipath
+     *     meter read the glide as 10-26 % and CEQ engaged on a marginal station for 1.8-6 s. The
+     *     hold is in CHANNEL samples, so it means the same time at every rate and on every thread. */
+    if (guardSec > 0.0f && chFs_ > 0.0) {
+        const long g = (long)(guardSec * chFs_);
+        if (gainGuardLeft_ <= 0) {
+            gainSteps_.fetch_add(1, std::memory_order_relaxed);
+            gainOnsetLeft_ = (long)(0.05 * chFs_);
+            pll_.noteGap(0.05);
+            rdsDemod_.holdMeasurements(0.1);   // ★ 11.0.9: RDS figures sit the step out too (decoding carries on)
+        }
+        if (g > gainGuardLeft_) gainGuardLeft_ = g;
+    }
+    const bool gainGuard = gainGuardLeft_ > 0, gainOnset = gainOnsetLeft_ > 0;
+    if (gainGuardLeft_ > 0) gainGuardLeft_ = std::max(0L, gainGuardLeft_ - (long)nc);
+    if (gainOnsetLeft_ > 0) gainOnsetLeft_ = std::max(0L, gainOnsetLeft_ - (long)nc);
     {
         faultStage_ = nullptr;          // per-block: trace_() records the FIRST bad stage
         if (cb_.iq && nc > 0) cb_.iq(cb_.ctx, chB.data(), nc, chFs_);
@@ -1090,7 +1112,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
 
         // ★ The RAW reading first — what arrived, before we touch it. It is both the trigger for
         //   the equaliser and half of its scorecard, so it must never see the equaliser's output.
-        if (mode_ == Mode::WFM) multipath_.process(chB.data(), nc);
+        if (mode_ == Mode::WFM) multipath_.process(chB.data(), nc, /*measure=*/!gainGuard);
 
         // ── CEQ ──────────────────────────────────────────────────────────────────────────────
         // ★★★ GATED ON A GOOD SIGNAL WITH REAL MULTIPATH, because those are the only conditions in
@@ -1149,7 +1171,10 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
             imsBlendHz_ = 0.0f;
             imsWhy_ = !imsOn_.load(std::memory_order_relaxed) ? 1 : ceqEngaged_ ? 2
                     : !multipathValid_ ? 5 : multipathCorr_ <= 0.06f ? 3 : 4;
-            if (want && !ceqEngaged_) {
+            // ★★ Not while our own gain step settles (noteGainStep): the reading it would decide on is
+            //    held, and a decision taken on a held reading is a decision taken on the step.
+            if (gainGuard) {
+            } else if (want && !ceqEngaged_) {
                 if (++ceqDwell_ > 20) { ceqEngaged_ = true; ceqDwell_ = 0; ceq_.reset(); }
             } else if (!want && ceqEngaged_) {
                 if (++ceqDwell_ > 20) { ceqEngaged_ = false; ceqDwell_ = 0; ceq_.reset(); }
@@ -1294,7 +1319,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
         // ★ Still WFM-only: the 15-19 kHz gap it reads is a property of the FM multiplex and
         //   means nothing on AM or SSB.
         if (mode_ == Mode::WFM) {
-            mpxNoise_.process(demodBuf_.data(), nc);
+            mpxNoise_.process(demodBuf_.data(), nc, /*measure=*/!gainOnset);   // ★ a gain step is not noise
             if (mpxNoise_.ready()) {
                 const float noise = mpxNoise_.level();
                 const float pilot = std::fabs(pll_.lockAmp());
@@ -1335,7 +1360,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
                             blendSnrDb_, lmrHiCutHz_);
                     }
                 } else pilotOddTicks_ = 0;
-                if (pilotUsable) {
+                if (pilotUsable && !gainOnset) {
                     const float snr = (noise > 1e-9f) ? (pilot / noise) : 1e6f;
                     const float db  = 20.0f * std::log10(std::max(snr, 1e-6f));
                     blendSnrDb_ += 0.05f * (db - blendSnrDb_);
@@ -1676,7 +1701,11 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
                 for (int i = 0; i < nm; ++i) { y += a * (rightBuf_[i] - y); rightBuf_[i] = y; }
                 lmrHiCutY_ = std::isfinite(y) ? y : 0.0f;
             } else {
-                lmrHiCutY_ = 0.0f;
+                /* ★★ BYPASSED, THE STATE FOLLOWS THE SIGNAL — it was zeroed, so the block the corner first
+                 *    glided under 14 kHz started its one-pole from 0 V: a step of the programme's whole
+                 *    instantaneous level, a −20 dB click on every engagement. Found by test-gain-step's
+                 *    no-step twin, 2026-10-19 — the click was in the run WITHOUT the gain step. */
+                lmrHiCutY_ = (nm > 0 && std::isfinite(rightBuf_[nm - 1])) ? rightBuf_[nm - 1] : 0.0f;
             }
             const float ramp = (float)(1.0 / (audFs_ * 0.04));   // ~40 ms blend time constant
             stereoBlend_ = stereoMatrixBlend(leftBuf_.data(), rightBuf_.data(),
@@ -1700,7 +1729,10 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
                 }
                 hiCutYL_ = std::isfinite(yl) ? yl : 0.0f;
                 hiCutYR_ = std::isfinite(yr) ? yr : 0.0f;
-            } else { hiCutYL_ = hiCutYR_ = 0.0f; }
+            } else if (nm > 0) {   // ★★ bypassed: follow the signal, so engaging is seamless (see lmrHiCutY_)
+                hiCutYL_ = std::isfinite(lprBuf_[nm - 1]) ? lprBuf_[nm - 1] : 0.0f;
+                hiCutYR_ = std::isfinite(lmrBuf_[nm - 1]) ? lmrBuf_[nm - 1] : 0.0f;
+            }
             trace_("matrix_l", lprBuf_.data(), nm);
             trace_("matrix_r", lmrBuf_.data(), nm);
             const bool lk = stereoBlend_ > 0.5f;   // indicator follows audible state
@@ -1765,7 +1797,9 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
                 float y = hiCutYM_;
                 for (int i = 0; i < nd; ++i) { y += a * (w[i] - y); w[i] = y; }
                 hiCutYM_ = std::isfinite(y) ? y : 0.0f;
-            } else { hiCutYM_ = 0.0f; }
+            } else if (nd > 0) {   // ★★ bypassed: follow the signal (see lmrHiCutY_)
+                hiCutYM_ = std::isfinite(audioIn[nd - 1]) ? audioIn[nd - 1] : 0.0f;
+            }
             if (useAgc_) { agc_.process(audioIn, nd); agc_.guard(); }  // AM/SSB/CW level + anti-clip
             trace_("mono_out", audioIn, nd);
             audioBuf_.resize(resamp_->maxOut(nd));

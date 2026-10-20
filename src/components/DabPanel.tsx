@@ -32,6 +32,7 @@ import { DAB_BLOCKS, DAB_PTY, dabBlockAt } from '../services/dabBlocks';
 import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
 import { receiverIso } from '../services/rdsCountry';
 import { withReadAuth } from '../services/vibeAuth';
+import { dabSlideQuery } from '../services/dabSlide';
 import { limiter } from '../utils/limit';
 import { cuPct, dabCuSegments } from '../utils/dabCapacity';
 
@@ -233,15 +234,16 @@ function useServiceLogo(base: string, d: DabState | null,
  *  slideshow image the service is transmitting (TS 101 499) outranks the RadioDNS file, because it
  *  is what the broadcaster is sending THIS listener right now (cover art, a presenter, a weather
  *  map). The app had no header at all; the slide was only a last-resort row logo. Keyed on the
- *  slide's sequence number so a new picture replaces the old one and an unchanged one is not
- *  refetched twice a second. */
+ *  picture's HASH (`?h=`, dabSlide.ts; `?seq=` from an older server) so a new picture replaces the
+ *  old one and an unchanged one is never refetched — the server sends `?h=` immutable, so iOS's URL
+ *  cache and Android's Fresco both keep it, and a server restart cannot alias an old cached picture. */
 const SignalHead = React.memo(function SignalHead({ d, cur, base, readAuth }: {
   d: DabState; cur: DabState['services'][number] | undefined; base: string; readAuth: string;
 }) {
   const { s } = useDecoderStyles(makeStyles);
   const logo = useServiceLogo(base, d, cur, readAuth);
   const [dead, setDead] = React.useState<string | null>(null);
-  const slide = d.slide && d.slide.seq ? withReadAuth(`${base}/vibeserver/dabslide?seq=${d.slide.seq}`, readAuth) : null;
+  const slide = dabSlideQuery(d.slide) ? withReadAuth(`${base}/vibeserver/dabslide?${dabSlideQuery(d.slide)}`, readAuth) : null;
   const air = cur?.logoAir ? `${base}/vibeserver/dablogoair?sid=${cur.sid}` : null;
   const pick = [slide, air, logo].find(u => !!u && u !== dead) ?? null;
   if (!cur) return null;

@@ -423,6 +423,15 @@ public:
         seqRatio_.store(seqWatch_.ratio(), std::memory_order_relaxed);
         seqIrregular_.store(seqWatch_.irregular(), std::memory_order_relaxed);
     }
+    /** ★★★ PACKETS IN WHICH A GAIN CHANGE TOOK EFFECT — sdrplay_api_StreamCbParamsT::grChanged, counted by
+     *  the stream callback immediately before it hands that packet to the sink (2026-10-19). The sink
+     *  runs on the same thread, so a change in this count since its last call marks EXACTLY the packet
+     *  the step is in: our LNA rungs, our gRdB writes and the radio's own IF AGC steps alike. The shim
+     *  hands that to GainStepSmoother, which puts the level back and glides it — see vibedsp/gainstep.h.
+     *  ★ Whether OpenRSP sets the flag is unverified; the shim also notes our own writes, so a library
+     *    that never flags still gets the (wider, searched) treatment. */
+    uint64_t gainChangePackets() const { return grPackets_.load(std::memory_order_relaxed); }
+    void noteGainChangePacket() { grPackets_.fetch_add(1, std::memory_order_relaxed); }
     uint64_t usbDroppedSamples() const { return usbDropped_.load(std::memory_order_relaxed); }
     uint64_t usbDropEvents() const { return usbDropEvents_.load(std::memory_order_relaxed); }
     /** The learned counter step per sample (0 = not learned) and jumps that fit no whole number of
@@ -489,6 +498,7 @@ private:
     // ★ See noteSampleNum(). seqWatch_ is the callback thread's alone; the atomics are for readers.
     SampleSeqWatch seqWatch_;
     std::atomic<uint64_t> usbDropped_{0}, usbDropEvents_{0}, seqIrregular_{0};
+    std::atomic<uint64_t> grPackets_{0};      // ★ see gainChangePackets()
     std::atomic<uint32_t> seqRatio_{0};
 };
 

@@ -30,7 +30,8 @@ import java.util.concurrent.TimeUnit
  *    OkHttpClientProvider's client, NO_COOKIES jar, connect/write 10 s, read 0, the Cookie header from the forwarding
  *    cookie handler, the caller's headers (our User-Agent), the default `origin`, a server close echoed back, failures
  *    reported with their message. Receivers that are not ours — UberSDR operators write rules against what we send —
- *    must see the same handshake as before. (VibeTls is deliberately NOT applied: RN's socket never had it.)
+ *    must see the same handshake as before. (VibeTls is deliberately NOT applied: RN's socket never had it. The
+ *    per-server pins ARE — RN's socket has them through WebSocketModule.setCustomClientBuilder; see VibePinnedTls.)
  */
 class VibeSpecSocketModule(private val ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ctx) {
     override fun getName() = "VibeSpecSocket"
@@ -61,6 +62,7 @@ class VibeSpecSocketModule(private val ctx: ReactApplicationContext) : ReactCont
             .connectTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MINUTES)
+            .also { VibePinnedTls.applyTo(it) }   // ★ as RN's socket now does (WebSocketModule's custom builder, GitHub #52)
             .build()
         val b = Request.Builder().tag(id).url(url)
         cookieFor(url)?.let { b.addHeader("Cookie", it) }

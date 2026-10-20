@@ -47,6 +47,7 @@
 #include "vibe_rsp_init_gate.h" // ★ the AGC-initialising indicator's ending — it cannot wedge (2026-10-06)
 #include "vibe_rsp_rail_step.h" // ★ the RF loop's open-loop test — a rail must show in OUR peak (2026-10-16)
 #include "vibe_agc_rules.h"   // ★ auto-IF settle hold, gross-overload shed, per-band gain — see the header
+#include "vibe_agc_record.h"  // ★ the bounded in-memory VibeAGC record + flap counters (2026-10-20)
 #include "vibe_session_turns.h"   // ★ whose turn it is, and borrowed time after it — see the header   // ★ what this server runs on, for the directory — see the header
 
 #include <algorithm>
@@ -106,6 +107,7 @@
 
 #include "vibedsp/vibedsp.h"        // V5 clean-room GPL-free DSP engine (RxPipeline)
 #include "vibedsp/simd_internal.h"  // convI16ToF32 — the 16-bit radios' IQ conversion, vectorised
+#include "vibedsp/gainstep.h"       // GainStepSmoother — our own gain steps made level-continuous
 #include "net_shim.h"
 #include "spyserver/spyserver_client.h"               // V5 clean-room GPL-free TCP socket wrapper
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
@@ -125,6 +127,8 @@
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_squelch_msg.h"       // ★ squelch on/off: explicit `on`, else the legacy db > -100
 #include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
+#include "vibe_wifi_qos.h"          // ★★ audio out as Wi-Fi VOICE, the waterfall never (BRIEF-portable-wifi-realtime, 2026-10-20)
+#include "vibe_spec_governor.h"     // ★★ the waterfall gives way to a starved CPU: 20 → 10 → 5, fast down, slow up (11.0.9)
 #include "vibe_listener_queue.h"     // ★ a per-VFO listener's block queue, sized in time (2026-10-07)
 #include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
 #include "vibe_rtl_tuner_restore.h"   // ★ the ONE "put the tuner back after its re-init" (both direct-sampling routes)
@@ -897,6 +901,8 @@ static std::atomic<double> g_vsMaxFftRate{0.0};
 /** ★ The spectrum rate this machine is MEASURED to deliver, or -1 when nobody is listening. Fed by
  *  the SPEC RATE audit and shown beside the rate selector so a slow box explains itself. */
 static std::atomic<double> g_specAchievedFps{-1.0};        // <=0 = server default (20 fps)
+/** ★★ The dynamic spectrum ceiling in force (vibe_spec_governor.h), 0 = none. Published as specCeil. */
+static std::atomic<double> g_specGovCeil{0.0};
 // ★ The IDLE SAVER is a CLIENT feature — after a while without interaction the listener asks us to
 // drop the spectrum rate, which saves this host real FFT work and real radio time. Normally the
 // listener may switch it off. A server on solar and cellular in the middle of nowhere cannot afford
@@ -1180,6 +1186,31 @@ static void dabEnsSaveLocked() {
         std::fclose(f);
         std::rename(tmp.c_str(), g_dabEnsFile.c_str());     // ★ atomic, as the gain file is
     }
+}
+/* ★★★ AN OFF-AIR PICTURE, SENT ONCE (2026-10-19). Album art, slides, carousel objects and SPI logos were sent whole
+ *  on every request: the live slide `no-cache` with nothing to revalidate against, `?sid=` re-sent in full every
+ *  60 s, the carousel `no-cache`. Now each carries a STRONG ETag — FNV-1a of the bytes, so the tag IS the picture and
+ *  survives a server restart — and an If-None-Match that matches gets a 304 with no body.
+ *  ★ `immutable`: the URL names the picture itself (`?h=<the ETag>`), so the client may keep it for good and never
+ *    ask again. Otherwise `cache` is the endpoint's old policy, now revalidated (304) instead of re-sent.
+ *  ★ Trade-off: one FNV pass over the bytes per request (tens of KB, microseconds) against the whole picture on the
+ *    wire every time. RAM: none kept. */
+static std::string vsAirEtag(const std::vector<uint8_t>& b, uint64_t known = 0) {
+    uint64_t h = known;
+    if (!h) { h = 1469598103934665603ULL; for (uint8_t c : b) { h ^= c; h *= 1099511628211ULL; } }
+    char t[24]; snprintf(t, sizeof t, "%016llx", (unsigned long long)h);
+    return t;
+}
+static std::string vsAirImageReply(const std::vector<uint8_t>& bytes, const std::string& mime, const std::string& etagHex,
+                                   const std::string& ifNoneMatch, bool immutable, const char* cache) {
+    const std::string etag = "\"" + etagHex + "\"";
+    const std::string hdrs = std::string("Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: ETag\r\n"
+                                         "X-Content-Type-Options: nosniff\r\nCache-Control: ")
+                           + (immutable ? "public, max-age=31536000, immutable" : cache) + "\r\nETag: " + etag + "\r\nConnection: close\r\n";
+    if (!ifNoneMatch.empty() && ifNoneMatch.find(etag) != std::string::npos)
+        return "HTTP/1.1 304 Not Modified\r\n" + hdrs + "\r\n";
+    return "HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\n" + hdrs + "Content-Length: " + std::to_string(bytes.size()) + "\r\n\r\n"
+         + std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 /** JSON-escape a remembered label. ★ The class member `jsonEscape` is not reachable from up here,
  *  and a label is DECODED FROM THE AIR — a quote, a backslash or a control byte in it would break
@@ -2977,6 +3008,13 @@ static SfericDetect g_sferic;
  *     Same treatment as a gain step: suppress for a moment after any retune, filter or rate
  *     change, and keep the baseline following meanwhile. */
 static std::atomic<double> g_hwMovedAt{0.0};
+/** ★★★ WE JUST WROTE A GAIN (2026-10-19). Counted by every gain write of ours that has no exact
+ *  packet flag of its own — an RTL's tuner gain (owner, VibeAGC, the overload loop), the HF+'s
+ *  attenuator, the Airspy and HackRF stages — and by the RSP's too, where the API's grChanged flag
+ *  then pins it down. The DSP loop turns a change into GainStepSmoother::noteStepSoon(): "a step is
+ *  coming within ~0.3 s; find it", so the level is put back and glided instead of stepping. */
+static std::atomic<unsigned> g_ownGainWrites{0};
+static inline void noteOwnGainWrite() { g_ownGainWrites.fetch_add(1, std::memory_order_relaxed); }
 static inline void noteHwMoved() {
     g_hwMovedAt.store(std::chrono::duration<double>(
         std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
@@ -3673,6 +3711,27 @@ static std::atomic<double>   g_floorTestMutedUntil{0.0};
 static std::atomic<double>   g_gainSettleUntil{0.0};
 /** ★ The frequency the AGC's learning belongs to — see agcForget() and its caller in retune(). */
 static std::atomic<double>   g_agcLearnedAtHz{0.0};
+/** ★★★ WHERE THE FRONT END'S LEARNING BELONGS — the TUNER frequency (physical, Hz) at which the overload memory,
+ *  margin and strikes were last learned (vibe_agc_rules.h §4, Stuart 2026-10-20). A hop that leaves the tuner
+ *  within a quarter of the IF filter of this keeps them; tuneHw() and retune() move it on a real move. 0 = unset. */
+static std::atomic<double>   g_agcFrontEndHz{0.0};
+/** ★★★ SSB / CW: NO CARRIER, SO NO BEFORE/AFTER VERDICT — headroom only (vibe_agc_rules.h §5). Written by the
+ *  measurement from the demodulator's kind, read by overloadTick. */
+static std::atomic<bool>     g_agcCarrierless{false};
+/** ★ The loudest one-second ADC peak of the last kHeadroomPeakHoldSec — what a carrierless climb is predicted
+ *  against, so a pause between overs cannot ask for gain. Written in the 1 s ADC window. */
+static std::atomic<double>   g_adcPeakHeldDbfs{-99.0};
+static std::atomic<bool>     g_adcPeakHoldReset{false};   // ★ a full forget: the old window's peaks are not this one's
+/** ★★★ THE VibeAGC RECORD (vibe_agc_record.h): bounded, in memory, never on disk. */
+static vibeagc::AgcRecord    g_agcRecord;
+/** ★★★ THE WATERFALL STAYS STILL WHILE VibeAGC MOVES (vibe_agc_rules.h §7, 2026-10-20): the dB every displayed
+ *  spectrum bin is offset by, written once per IQ block beside the gain-step smoother, read by every frame
+ *  builder. g_specReanchor: start a new reference (VibeAGC switched on, a full forget, the idle park). */
+static std::atomic<float>    g_specCompDb{0.0f};
+static std::atomic<bool>     g_specReanchor{false};
+static inline double agcWallNow() {
+    return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
 /**
  * ★★★ HURRY, JUST AFTER A TUNE. "just needs to respond quicker especially whilst tuning" (Stuart,
  *  2026-08-23) — and tuning is exactly where the loop's caution buys nothing: the gain that was
@@ -3692,6 +3751,7 @@ static std::atomic<bool>     g_resetSepAvg{false};
 // Defined further down, beside setSampleRate(); declared here because retune() and the loop both
 // run above them.
 static void agcForget(const char* why);
+static void agcChannelForget(const char* why);
 static void agcSettleAfterGain(double now);
 /** ★★★ THE BEST (LOWEST) NOISE FLOOR SEEN AT THIS DIAL, and the continuous intermod detector built
  *  on it.
@@ -4823,6 +4883,7 @@ static std::atomic<int>            g_biasTeeWant{-1};   // -1 = never asked
 /** Reboot / restart / update, performed by the daemon. Null on a phone — see adminAction(). */
 static LocalSdrShim::AdminActionFn g_vsAdminActionFn;
 static LocalSdrShim::AdminLogFn    g_vsAdminLogFn;
+static LocalSdrShim::AdminDiagFn   g_vsAdminDiagFn;      // ★ guarded by g_vsConfigMtx — see setAdminDiagnosticsHandler
 static LocalSdrShim::GeoIpFn       g_vsGeoIpFn;
 /** ★ Station artwork by PI/ECC/frequency (RadioDNS). Declared with the other handlers rather than
  *  beside its setter, because the ENDPOINT that reads it is thousands of lines above that. */
@@ -5596,6 +5657,8 @@ static bool dabSeedGain(ImplT* p, int wantSteps, double now, const char* what = 
     g_ovlSteps.store(want, std::memory_order_relaxed);
     g_ovlLastChangeAt.store(now, std::memory_order_relaxed);
     agcSettleAfterGain(now);
+    g_agcRecord.gain(agcWallNow(), what ? vibeagc::GainSrc::BandSeed : vibeagc::GainSrc::DabSeed,
+                     p->lastGainTenthDb, applied, what ? what : "dab block");
     p->lastGainTenthDb = applied;
     p->queueHwGain(applied);
     if (what)   // ★ the same seed for an ordinary band (vibe_agc_rules.h §3)
@@ -6119,7 +6182,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  and nothing downstream can tell. The flag is how the one who KNOWS tells the RDS decoder and
      *  the Advanced RDS instrument (RxPipeline::noteInputGap), so a hole costs a quick re-sync
      *  instead of ~25 blocks of the decoder's confusion counted as link errors. */
-    struct IqBuf { std::vector<cf32> v; bool gap = false; };
+    /** ★ `gainStep`: the SOURCE flagged a gain change taking effect in this buffer (SDRplay grChanged) —
+     *  see GainStepSmoother::noteStepAtStart. */
+    struct IqBuf { std::vector<cf32> v; bool gap = false; bool gainStep = false; };
     std::deque<IqBuf> iqQueue;
     /** ★★ SPENT IQ BUFFERS, KEPT FOR THE NEXT BLOCK (efficiency audit 2026-10-03). Every block
      *  used to be a fresh std::vector — ~600 KB at 2.4 Msps, ~31 a second — value-initialised
@@ -6856,12 +6921,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
     void tuneHw(double logicalCenter) {
         noteHwMoved();                       // ★ see g_hwMovedAt — a retune is not a sferic
-        // ★ A new dial position is a new noise floor — see g_bestFloorDb. Carrying the old one
-        //   across would have the AGC refusing gain on a quiet band because a busy one was noisy.
-        g_bestFloorDb.store(0.0f, std::memory_order_relaxed);
-        // ★ And the failed step belongs to the OLD frequency — see g_ovlBadGain.
-        g_ovlBadGain.store(-1, std::memory_order_relaxed);
-        g_ovlBadStrikes.store(0, std::memory_order_relaxed);   // ★ a new band starts with a clean record
+        /* ★★★ ONLY WHEN THE TUNER REALLY MOVED (vibe_agc_rules.h §4, Stuart 2026-10-20). A new noise floor
+         *  (g_bestFloorDb) and a failed step that belongs to the OLD frequency (g_ovlBadGain) are facts about
+         *  what the front end is handed — and in auto IF the tuner follows the dial on every tune over 1 kHz,
+         *  so this cleared them on every SSB hop. Cleared now when the tuner has travelled more than a quarter
+         *  of the IF filter from where they were learned; a hop inside that keeps them. */
+        {
+            const double tunerHz = logicalCenter - convOffsetHz.load(std::memory_order_relaxed) + hwOffsetHz();
+            const double ifEff   = vibeagc::agcIfEffectiveHz((double)g_tunerBwHz.load(std::memory_order_relaxed),
+                                                             sampleRate);
+            if (vibeagc::agcFrontEndMoved(g_agcFrontEndHz.load(std::memory_order_relaxed), tunerHz, ifEff)) {
+                g_agcFrontEndHz.store(tunerHz, std::memory_order_relaxed);
+                g_bestFloorDb.store(0.0f, std::memory_order_relaxed);
+                g_ovlBadGain.store(-1, std::memory_order_relaxed);
+                g_ovlBadStrikes.store(0, std::memory_order_relaxed);   // ★ a new band starts with a clean record
+                g_adcPeakHoldReset.store(true, std::memory_order_relaxed);
+            }
+        }
         /* ★★★ THE CONVERTER IS APPLIED HERE AND NOWHERE ELSE. `logicalCenter` is TRUE RF — what
          *   the listener asked for and what every other part of this server believes — and this is
          *   the single line where a frequency stops being that and becomes a number the tuner is
@@ -7114,7 +7190,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<int>   sepAvgN{0};
     std::atomic<int>   sepAvgNeed{10};
     bool sepAvgFilled() const { return sepAvgN.load() >= sepAvgNeed.load(); }
-    float chanPeakHold_ = -200.0f;   // ★ see the peak-hold note in the measurement
+    vibeagc::WindowMax chanWin_;     // ★ the bursty channel level — vibe_agc_rules.h §6
+    bool  burstyNow_ = false;
     float chanSlowMean_  = -200.0f;  // ★ the wobble/skew detector — see the note at chanNow
     float chanWobbleDb_  = -1.0f;
     float chanSkewDb_    = -1.0f;
@@ -7275,6 +7352,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** The rate the OWNER configured (--fps / the GUI). The floor when nobody has asked, and what
      *  the radio returns to when the last slow listener leaves. */
     double baseFftRate = 0.0;
+    /** ★★ THE DYNAMIC SPECTRUM CEILING (vibe_spec_governor.h, 11.0.9 — the Pi 2 on DAB). Fed every ~2 s on the
+     *  hotplug thread (specGovernorTick); recomputeEngineRate() applies its ceiling under the owner's. Touched only
+     *  under specGovMtx. specWantFps = the engine rate WITHOUT the governor (the fastest listener, under the owner). */
+    std::mutex specGovMtx;
+    vibespec::Governor specGov;
+    double specWantFps = 0.0;
+    /** ★ Bumped on a mode change (shared or per listener): the load is a different load, so the governor's lesson
+     *  from failed climbs is dropped (Governor::newCircumstances). */
+    std::atomic<unsigned> specLoadEpoch{0};
 
     // ── ★★★ PER-CLIENT DSP — every listener their own VFO, demodulator and audio ─────────────
     //
@@ -7616,7 +7702,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::mutex                                    qm;
         std::condition_variable                       qcv;
         // ★ The block AND which block it was — the phase correction is meaningless without it.
-        struct Block { std::vector<cf32> bins; long long index; bool gap = false; };
+        struct Block { std::vector<cf32> bins; long long index; bool gap = false; bool gainGuard = false; };
         std::deque<std::shared_ptr<const Block>> q;
         std::atomic<bool>                             run{true};
         std::atomic<uint64_t>                         dropped{0};
@@ -8096,7 +8182,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         r.bins.resize(kSpectroBins);
         for (int i = 0; i < kSpectroBins; i++) {
             const double v = spectroAcc[i] / std::max(1, spectroAccN);
-            const int q = (int)lround(v + 256.0);
+            const int q = (int)lround(v + 256.0 + g_specCompDb.load(std::memory_order_relaxed));   // ★ §7
             r.bins[i] = (uint8_t)(q < 0 ? 0 : (q > 255 ? 255 : q));
             spectroAcc[i] = 0;
         }
@@ -8223,6 +8309,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             lastIndex = blk->index;
             timespec c0{}, c1{};
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c0);
+            if (blk->gainGuard) { std::lock_guard<std::mutex> gl(c->mtx); if (c->rx) c->rx->noteGainStep(0.1); }
             feedOneClient(c, blk->bins.data(), blk->index, hole);
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c1);
             c->dspNanos.fetch_add(
@@ -8497,6 +8584,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Frame and send this listener's own zoomed row. Mirrors onZoomSpectrum's un-shift exactly:
      *  the wire puts DC at bin 0, while the zoom FFT hands back a shifted row. */
     void onClientZoom(ClientDsp* c, const float* db, int nb) {
+        const float specComp = g_specCompDb.load(std::memory_order_relaxed);   // ★ vibe_agc_rules.h §7
         c->viewPriming.store(false);     // the sharp path is live — the shared row can stand down
         std::shared_ptr<net::Socket> sock = c->spec;
         if (!sock || !sock->isOpen() || nb <= 0) return;
@@ -8513,7 +8601,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const int signedOut = (i <= half) ? i : i - outBins;
             int src = half + signedOut;
             if (src < 0) src = 0; else if (src >= nb) src = nb - 1;
-            int v = (int)lround(db[src] + 256.0);
+            int v = (int)lround(db[src] + 256.0 + specComp);   // ★ §7: still while VibeAGC moves
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
         sendWs(sock, 0x2, frame.data(), frame.size(), Out::Spectrum);
@@ -8684,8 +8772,48 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (want <= 0) want = std::min(baseFftRate, kIdleFps);
         const double mr = g_vsMaxFftRate.load();     // the owner's ceiling still wins
         if (mr > 0 && want > mr) want = mr;
+        /* ★★ AND THE GOVERNOR'S, BELOW THE OWNER'S (vibe_spec_governor.h): only while this box is starved for CPU,
+         *  20 → 10 → 5. It never raises anything — the owner's top and a listener's lower ask both still hold — and
+         *  the idle floor (2 fps) is below every rung, so it is never touched. */
+        { std::lock_guard<std::mutex> g(specGovMtx); specWantFps = want; want = specGov.effective(want); }
         if (want <= 0 || std::fabs(want - fftRate) < 0.01) return;
         applyEngineRate(want);
+    }
+
+    /** ★★ THE GOVERNOR'S TICK — every ~2 s from the hotplug thread (never the DSP thread: recomputeEngineRate takes
+     *  clientMtx). Reads the same load figures tune pacing does; logs every change, with the reading that caused it.
+     *  ★ VIBESERVER_SPEC_GOVERNOR=0 switches it off: the engine then runs exactly as before 11.0.9. */
+    void specGovernorTick() {
+        static const bool on = [] { const char* e = std::getenv("VIBESERVER_SPEC_GOVERNOR");
+                                    return !(e && *e == '0'); }();
+        if (!on) return;
+        const vibetune::Load tl = serverLoad();
+        vibespec::Load l;
+        l.dspPct = tl.dspPct; l.demodBlocked = tl.demodBlocked; l.backlogMs = tl.backlogMs; l.cpuLevel = tl.cpuLevel;
+        static unsigned lastEpoch = 0; static bool lastDab = false;
+        const unsigned ep = specLoadEpoch.load(std::memory_order_relaxed);
+        const bool dab = g_dabMode.load(std::memory_order_relaxed);
+        bool changed; double before, after, wantNow;
+        {
+            std::lock_guard<std::mutex> g(specGovMtx);
+            if (ep != lastEpoch || dab != lastDab) specGov.newCircumstances();
+            lastEpoch = ep; lastDab = dab;
+            before = specGov.ceiling();
+            wantNow = specWantFps;
+            changed = specGov.feed((double)paceNowMs(), l, wantNow);
+            after = specGov.ceiling();
+        }
+        if (!changed) return;
+        g_specGovCeil.store(after, std::memory_order_relaxed);
+        if (after > 0 && (before <= 0 || after < before))
+            LOGI("spectrum ceiling %s -> %.0f fps: this server is short of CPU (dspCpu %.0f%%%s, IQ backlog %.0f ms, "
+                 "CPU level %d) — the waterfall gives way to the audio",
+                 before > 0 ? std::to_string((int)before).c_str() : "none", after, l.dspPct,
+                 l.demodBlocked ? ", demod queue full" : "", l.backlogMs, l.cpuLevel);
+        else
+            LOGI("spectrum ceiling %.0f -> %s: calm again (dspCpu %.0f%%, CPU level %d)",
+                 before, after > 0 ? (std::to_string((int)after) + " fps").c_str() : "none", l.dspPct, l.cpuLevel);
+        recomputeEngineRate();
     }
 
     /** Set the engine rate itself. The per-client decimation below turns this into each
@@ -9770,8 +9898,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::atomic<unsigned long long> audioTotal{0};
         bool   closing = false;      // drain what is queued, then the writer exits
         bool   overran = false;      // dropped for backlog, not for leaving
+        /** ★★★ AUDIO FIRST (docs/BRIEF-portable-wifi-realtime.md Phase 2, vibe_wifi_qos.h). The listener's gate, shared
+         *  by their audio socket (which REPORTS how much audio is still unsent) and their waterfall socket (which ASKS
+         *  before queueing a frame). Set in acceptWs once the session is known; null = no gate (never yields). */
+        std::shared_ptr<vibeqos::AudioFirst> gate;
+        bool   isAudio = false;      // this is the listener's /ws/audio socket — set with `gate`, both under m
+        bool   classified = false;   // acceptWs has said which socket this is — set with isAudio, under m
+        vibeqos::RateMeter audioRate;   // the writer thread's own: the audio's byte rate, for "ms queued"
         std::thread th;
     };
+    /** ★★★ ONE GATE PER LISTENER, keyed by session (or "@address" for a client that sends none — an older app). Held by
+     *  the two sockets' outboxes; this map only finds it, so a gate dies with the last socket that used it. */
+    std::mutex qosGateMtx;
+    std::map<std::string, std::weak_ptr<vibeqos::AudioFirst>> qosGates;
+    std::shared_ptr<vibeqos::AudioFirst> qosGateFor(const std::string& key) {
+        std::lock_guard<std::mutex> lk(qosGateMtx);
+        for (auto it = qosGates.begin(); it != qosGates.end(); )
+            it = it->second.expired() ? qosGates.erase(it) : std::next(it);
+        auto& w = qosGates[key];
+        auto g = w.lock();
+        if (!g) { g = std::make_shared<vibeqos::AudioFirst>(); w = g; }
+        return g;
+    }
+    static double qosNowMs() {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
     /** Serialises the stop/join/restart dance in setSampleRate — see the note there. */
     std::mutex rateMtx;
     std::mutex outboxMtx;
@@ -9806,8 +9957,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  blocking is exactly what this thread is for, and it holds no lock any other client wants. */
     void outboxWriter(std::shared_ptr<Outbox> ob) {
         vibeNetThread("vibeTx");            // ★ network first — see the priority order in vibe_thread.h
+        /* ★★★ THEN THE RUNG FOR WHAT IT CARRIES (2026-10-20). Started at the top so the handshake and a
+         *  refusal go out promptly; once acceptWs has classified the socket, an AUDIO writer stays at the
+         *  top (above every radio's DSP on the machine) and any other writer steps down below the audio
+         *  chain, above the spectrum work (vibe_thread.h, the ladder). Checked as each message is taken —
+         *  a writer's rank only matters while it has something to send. */
+        bool ranked = false;
         for (;;) {
             std::pair<Out, std::vector<uint8_t>> msg;
+            std::shared_ptr<vibeqos::AudioFirst> gate;      // ★ read under ob->m: acceptWs sets it after the writer starts
+            bool rankNow = false, rankAudio = false;
             {
                 std::unique_lock<std::mutex> lk(ob->m);
                 ob->cv.wait(lk, [&]{ return ob->closing || !ob->q.empty(); });
@@ -9815,9 +9974,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 msg = std::move(ob->q.front());
                 ob->q.pop_front();
                 ob->bytes -= msg.second.size();
+                if (ob->isAudio) gate = ob->gate;
+                if (!ranked && ob->classified) { ranked = rankNow = true; rankAudio = ob->isAudio; }
             }
+            if (rankNow) vibeSendRank(rankAudio);
             if (!ob->sock->isOpen()) return;
-            if (ob->sock->send(msg.second.data(), msg.second.size()) < 0) {
+            // ★★★ AUDIO FIRST: an audio send that BLOCKS is the worst backlog of all, and it reports nothing while it
+            //     blocks — so the gate is told a send is under way, and treats a long one as audio queued.
+            const bool reportAudio = gate && msg.first == Out::Audio;
+            if (reportAudio) gate->noteSendStart(qosNowMs());
+            const int sent = ob->sock->send(msg.second.data(), msg.second.size());
+            if (reportAudio) {
+                const double now = qosNowMs();
+                gate->noteSendEnd();
+                ob->audioRate.note(now, (double)msg.second.size());
+                size_t ours;
+                { std::lock_guard<std::mutex> lk(ob->m); ours = ob->bytes; }
+                gate->noteAudio(now, (double)ours + vibeqos::unsentBytes(ob->sock->rawFd()),
+                                ob->audioRate.bytesPerSec());
+            }
+            if (sent < 0) {
                 // ★ A write that failed is NOT the same as a peer that hung up, and the disconnect
                 //   line could not tell them apart. This is the network breaking under us.
                 ob->sock->noteWhy(net::Socket::Why::SendFailed);
@@ -9885,8 +10061,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (sock->isOpen()) sock->send(frame.data(), frame.size());
             return;
         }
+        // ★★★ AUDIO FIRST (vibe_wifi_qos.h): while this listener's audio is queued, their waterfall gives way — whole
+        //     frames dropped here, before they are queued, one let through every half second so it visibly slows
+        //     rather than freezing. Back to full rate once the audio has been clear for ~1 s.
         std::lock_guard<std::mutex> lk(ob->m);
         if (ob->closing) return;
+        if (cls == Out::Spectrum && ob->gate && !ob->isAudio && !ob->gate->waterfallMaySend(qosNowMs())) {
+            noteWaterfallYield(ob);
+            return;
+        }
         // ★★ SPECTRUM IS NEWEST-WINS. A waterfall row is worthless the moment a newer one exists,
         // so a listener who cannot keep up should fall BEHIND IN DETAIL, not accumulate a backlog
         // and then be dropped for it. Replacing rather than queueing is what lets a slow client
@@ -9920,6 +10103,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (cls == Out::Audio) ob->audioTotal.fetch_add(frame.size(), std::memory_order_relaxed);
         ob->q.emplace_back(cls, std::move(frame));
         ob->cv.notify_one();
+    }
+
+    /** ★ Say so when a waterfall starts yielding — once a minute at most, server-wide: it is the line that shows the rule
+     *  working on a real link (Stuart's sniffer test, the brief's "Done when"). */
+    void noteWaterfallYield(const std::shared_ptr<Outbox>& ob) {
+        static std::atomic<int64_t> lastSaid{0};
+        const int64_t now = (int64_t)time(nullptr);
+        int64_t prev = lastSaid.load();
+        if (now - prev < 60 || !lastSaid.compare_exchange_strong(prev, now)) return;
+        LOGI("waterfall yielding to audio for %s — audio %.0f ms queued (%llu waterfall frames dropped so far, %llu episodes)",
+             ob->sock->peerAddress().c_str(), ob->gate->lastQueuedMs(),
+             (unsigned long long)ob->gate->dropped(), (unsigned long long)ob->gate->episodes());
     }
 
     unsigned adcBufN_ = 0;      // ★ buffer counter for the 1-in-4 ADC sampling (see wantAdc)
@@ -9985,6 +10180,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // A zoom frame, in the SAME wire format as onSpectrum's — same SPEC header, same bin count,
     // same dB offset — so the client needs no new code path and simply sees a sharper picture.
     void onZoomSpectrum(const float* db, int nb) {
+        const float specComp = g_specCompDb.load(std::memory_order_relaxed);   // ★ vibe_agc_rules.h §7
         // ★ One radio, one view — every listener sees the SAME spectrum. What can differ is the
         //   WIDTH each asked to receive it at, so build one frame per distinct width.
         auto peers = allSpecPeers();
@@ -10059,7 +10255,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             float best = zrow[src];
             for (int k = 1; k < grp && src + k < nb; k++)          // peak-hold, don't drop carriers
                 if (zrow[src + k] > best) best = zrow[src + k];
-            int v = (int)lround(best + 256.0);
+            int v = (int)lround(best + 256.0 + specComp);   // ★ §7: still while VibeAGC moves
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
         size_t sent = 0;
@@ -10077,6 +10273,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGV("zoom spectrum: %lld frames sent", (long long)zoomFrames_);
     }
     void onSpectrum(const float* db, int bins) {
+        const float specComp = g_specCompDb.load(std::memory_order_relaxed);   // ★ vibe_agc_rules.h §7
         // ★ The crossover cannot announce itself from the tuner thread — see g_dsAnnounce.
         drainDirectSamplingAnnounce();
         if ((int)fftAccum.size() != bins) { fftAccum.assign(bins, 0.0f); accumCount = 0; }
@@ -10407,7 +10604,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     float val = srcAt(s);                   // averaged dB, over this listener's frames
                     if (val > best) best = val;             // peak-hold
                 }
-                int v = (int)lround(best + 256.0);
+                int v = (int)lround(best + 256.0 + specComp);   // ★ §7: still while VibeAGC moves
                 // Clamp to 1, not 0 — 0 is the no-data sentinel and must stay unambiguous.
                 frame[22+i] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));
             }
@@ -10464,10 +10661,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     //  ★ And per-VFO receivers had the opposite fault: only peers.front() ever got
                     //    it. sendRdsExt picks each socket's OWN listener's decoder (dspFor), so
                     //    every subscriber on every radio shape now gets their own.
+                    /* ★★★ AND ONLY WHILE THAT LISTENER IS ON FM (2026-10-19). Stuart's app read 93-103 KB/s in
+                     *     DAB after a long session and 45 after a server restart; reproduced on the bench
+                     *     (fake-rtl-tcp, scripts/test-rdsx-mode-gate.mjs): a subscription made on FM was never
+                     *     ended by the mode — entering DAB kept every rdsx coming, 5 a second, 28-44 KB/s of a
+                     *     stale FM analyser (eye grids ~9 KB each) beside a DAB report of 1.6 KB. The web page
+                     *     shows how a subscription outlives its panel: dabUiOn closed the panel and cleared
+                     *     activeDec BEFORE the line that detaches the decoder, so the `rds` attach stayed. Any
+                     *     client can leave one behind, so the SERVER decides: no WFM demodulator (another mode,
+                     *     or a multiplex), no analyser on the wire. The subscription itself is kept — back on
+                     *     FM it resumes with no message from the client.
+                     *  ★ Look and feel: none. Both clients draw the panel only in WFM (the app closes it on
+                     *    DAB and hides it off WFM; the web closes it on DAB), and off WFM the decoder does not
+                     *    run, so every message this skips was a repeat of the last FM frame.
+                     *  ★ Trade-off: one string compare per listener at 6 Hz, under the lock already taken. */
+                    const bool inDab = g_dabMode.load(std::memory_order_relaxed);
                     std::vector<std::pair<std::shared_ptr<net::Socket>, std::string>> rx_;
                     { std::lock_guard<std::mutex> lk(clientMtx);
                       for (auto& pr : peers) {
-                          if (!pr.sock || !pr.sock->isOpen()) continue;
+                          if (!pr.sock || !pr.sock->isOpen() || inDab) continue;
+                          { auto dt = clientDsp.find(pr.sock.get());
+                            const std::string& m = (dt != clientDsp.end() && dt->second) ? dt->second->mode : mode;
+                            if (m != "wfm") continue; }
                           auto it = sockSession.find(pr.sock.get());
                           rx_.push_back({ pr.sock, it == sockSession.end() ? std::string() : it->second });
                       } }
@@ -10601,6 +10816,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     outside it and run to a few times its width.
              */
             const double demodBw = std::max(2500.0, std::min(2.0e6, paramsFor(mode).bandwidth));
+            /* ★★★ AND AROUND THE DIAL, NOT THE FFT CENTRE (2026-10-20). This FFT's centre bin is the TUNER, which
+             *     sits HW_OFFSET_HZ (15 kHz) above the logical centre and — in auto IF — follows the dial. A FM
+             *     channel (±100 kHz) still contains a station 15 kHz off centre, but a narrow one does not: on SSB
+             *     the "channel" was ±1.35 kHz around the DC spike and the shoulders 1.6-6.75 kHz either side of it,
+             *     so every verdict was about a patch of band 15 kHz above whatever Stuart was listening to.
+             *  ★★ So narrow modes (20 kHz and under — AM, NFM, SSB, CW) measure around the demodulator's PASSBAND:
+             *     the dial offset the audio chain already uses (vfoOffsetNow), plus half the width on the side the
+             *     sideband sits (USB and CW pass 0..+bw from the tuned point, LSB 0..-bw). FM is left exactly as
+             *     it was measured and calibrated (agc_band_profiles), centre bin and all. */
+            const ModeParams mpMeas = paramsFor(mode);
+            const bool narrowWin = demodBw <= 20000.0;
+            int cOff = 0;
+            if (narrowWin) {
+                double c = vfoOffsetNow();
+                if (mpMeas.kind == ModeParams::SSB_USB || mpMeas.kind == ModeParams::CW) c += rxBwHz * 0.5;
+                else if (mpMeas.kind == ModeParams::SSB_LSB)                             c -= rxBwHz * 0.5;
+                cOff = (int)std::lround(c / binHz);
+                const int lim = bins / 2 - 1;
+                if (cOff > lim) cOff = lim; else if (cOff < -lim) cOff = -lim;
+            }
+            // ★ SSB and CW have no carrier: headroom only (vibe_agc_rules.h §5). Read by overloadTick.
+            g_agcCarrierless.store(mpMeas.kind == ModeParams::SSB_USB || mpMeas.kind == ModeParams::SSB_LSB
+                                   || mpMeas.kind == ModeParams::CW, std::memory_order_relaxed);
             shoulderBins_.clear();
             {
                 const int inner = std::max(1, (int)std::lround((demodBw * 0.60) / binHz));
@@ -10621,15 +10859,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                              (int)std::lround((demodBw * 2.50) / binHz),
                                              (int)std::lround((sampleRate * 0.35) / binHz) });
                 for (int i = inner; i <= outer; i++) {
-                    shoulderBins_.push_back((float)dbAt(i));
-                    shoulderBins_.push_back((float)dbAt(-i));
+                    shoulderBins_.push_back((float)dbAt(cOff + i));
+                    shoulderBins_.push_back((float)dbAt(cOff - i));
                 }
             }
             {
                 // ★ …and the channel over the demodulator's own passband, not a fixed ±100 kHz.
                 const int cHalf = std::max(1, (int)std::lround((demodBw * 0.5) / binHz));
                 double cs = 0; int cnum = 0;
-                for (int i = -cHalf; i <= cHalf; i++) { cs += dbAt(i); cnum++; }
+                for (int i = -cHalf; i <= cHalf; i++) { cs += dbAt(cOff + i); cnum++; }
                 const float chanNow = cnum ? (float)(cs / cnum) : -200.0f;
                 /* ══ IS IT SITTING STILL, AND IS IT SYMMETRICAL? ════════════════════════════════
                  * ★★★ STUART'S EYE, AND IT IS THE BEST DETECTOR IN THE LOOP. 2026-08-24: at 103.0
@@ -10682,8 +10920,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     //    skipping the middle so the centre bin sits in neither half.
                     const int cSkip = std::max(1, (int)std::lround(10000.0 / binHz));
                     double loS = 0, hiS = 0; int loN = 0, hiN = 0;
-                    for (int i = cSkip; i <= cHalf; i++) { hiS += dbAt(i);  hiN++;
-                                                           loS += dbAt(-i); loN++; }
+                    for (int i = cSkip; i <= cHalf; i++) { hiS += dbAt(cOff + i);  hiN++;
+                                                           loS += dbAt(cOff - i); loN++; }
                     if (loN && hiN) {
                         const float sk = (float)std::fabs(loS / loN - hiS / hiN);
                         float sm = chanSkewDb_;
@@ -10704,7 +10942,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (g_resetSepAvg.exchange(false, std::memory_order_relaxed))
                     { sepAvgDb.store(-200.0f); sepAvgN.store(0); }
                 if (g_resetPeakHold.exchange(false, std::memory_order_relaxed))
-                    { chanPeakHold_ = -200.0f; sepAvgDb.store(-200.0f); sepAvgN.store(0); }
+                    { chanWin_.reset(); sepAvgDb.store(-200.0f); sepAvgN.store(0); }
                       // ★ NOT the wobble/skew: they are paused through the settling window
                       //   instead (see below), because re-seeding them from a disturbed frame is
                       //   what made 104.2 look like a ghost.
@@ -10723,13 +10961,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *    practice, NFM and wider is a continuous carrier.
                  */
                 const bool bursty = demodBw <= 20000.0;
+                burstyNow_ = bursty;
                 float use = chanNow;
                 if (bursty) {
-                    const float decay = 0.5f / std::max(1.0f, (float)fftRate);
-                    float held = chanPeakHold_ - decay;
-                    if (chanNow > held || held < -199.0f) held = chanNow;
-                    chanPeakHold_ = held;
-                    use = held;
+                    /* ★★★ THE SAME STATISTIC BEFORE AND AFTER A MOVE (vibe_agc_rules.h §6, 2026-10-20). This was a
+                     *     hold decaying 0.5 dB/s, reset on a gain write and rebuilt from scratch — so "before" was the
+                     *     loudest moment of a long history and "after" the loudest of 2.7 s, and every move read about
+                     *     2 dB worse than it was (simulated, no change at all). Now the maximum over a FIXED window,
+                     *     not fed while the gain settles, and sepAvg does not fill until the window is full. */
+                    const int cap = std::max(2, (int)std::lround(vibeagc::kBurstyWindowSec * std::max(1.0, (double)fftRate)));
+                    if (chanWin_.capacity() != cap) chanWin_.configure(cap);
+                    if (nowSecs() >= g_gainSettleUntil.load(std::memory_order_relaxed)) chanWin_.push(chanNow);
+                    if (chanWin_.size() > 0) use = chanWin_.max();
                 }
                 channelDbWide.store(use);
             }
@@ -10798,7 +11041,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     sepAvgFilled() says when that is; nothing judges before it. */
                 const int need = std::max(4, (int)std::lround(fftRate));
                 sepAvgNeed.store(need);
-                if (nowSecs() >= g_gainSettleUntil.load(std::memory_order_relaxed)) {
+                if (nowSecs() >= g_gainSettleUntil.load(std::memory_order_relaxed)
+                    && (!burstyNow_ || chanWin_.full())) {   // ★ §6: only full windows are averaged
                     const int n = sepAvgN.load() + 1;
                     float avg = sepAvgDb.load();
                     if (avg < -190.0f || n == 1) avg = sepNow;
@@ -10987,6 +11231,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sdrp->setIfAgc(false);
                 sdrp->setIfGainReduction(nudged);
                 sdrp->setIfAgc(true);
+                noteOwnGainWrite();            // ★ 11.0.9: a level step is on its way, like any gain write of ours
                 g_rspAgcReinitAt.store((long long)std::chrono::duration_cast<
                     std::chrono::seconds>(
                         std::chrono::steady_clock::now().time_since_epoch()).count(),
@@ -11001,6 +11246,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    the strength of a number nobody was updating. */
             else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
                 noteHwMoved();                 // ★ every kick step moves the level; none is a sferic
+                noteOwnGainWrite();            // ★ …and is a gain write of ours (11.0.9: the kick's were not counted)
                 switch (++sdrpAgcKick) {
                     case 1: sdrp->setLnaState(std::max(0, sdrp->lnaStateCount() - 1 - kRspInitRfGainPos));
                             /* ★ SAY IT ON THE VTS TOO. The flashing chip stays; this is the sentence
@@ -13600,30 +13846,69 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     bandwidth IS the band.
          *  ★ Floored at 1 kHz so CW (500 Hz wide) does not re-learn on every touch of the drum, and
          *    a nudge across a station's own passband is still the same signal either way. */
-        const double reHz = std::max(1000.0,
-                                     0.5 * g_demodBwHz.load(std::memory_order_relaxed));
-        if (std::fabs(freq - g_agcLearnedAtHz.load(std::memory_order_relaxed)) > reHz) {
-            const double fromHz = g_agcLearnedAtHz.load(std::memory_order_relaxed);
-            g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
-            /* ★★★ INTO ANOTHER BAND, AT THE GAIN THAT LAST SETTLED THERE (vibe_agc_rules.h §3). Carrying
-             *  airband's 49.6 dB onto 96.6 put 56 % of the samples on the rail for 8 s (Sony,
-             *  2026-10-02 21:25). Seeded BEFORE the forget, so the forget's longer settle (the whole
-             *  chain re-converging after a retune) is the one that stands. */
-            const int toBand = vibeagc::agcBandKey(freq);
-            if (fromHz > 0.0 && vibeagc::agcBandKey(fromHz) != toBand) {
-                int learned = -1;
-                { std::lock_guard<std::mutex> lk(g_bandGainMtx);
-                  auto it = g_bandGainMem.find(toBand); if (it != g_bandGainMem.end()) learned = it->second; }
-                if (learned >= 0) dabSeedGain(this, learned, Impl::nowSecs(), "this band");
+        /* ★★★ THE CHANNEL ALWAYS, THE FRONT END ONLY ON A REAL MOVE — vibe_agc_rules.h §4 (Stuart, 2026-10-20).
+         *  The 08-25 rule above still decides when the CHANNEL is a different one (half the demodulator's
+         *  width). What changed is what a channel move costs: a hop that keeps the same capture window and the
+         *  same IF filter keeps the overload memory, the margin, the strike count — and on SSB/CW, where there is
+         *  no verdict to re-run, "settled" too. Hopping between two SSB signals 3 kHz apart used to clear all of
+         *  that and let the 8 s hurry climb straight back into the gain that had just been cut.
+         *  ★ Predicted here, before the placement below moves anything: the tuner leaves the window if the dial
+         *    does; inside it, auto IF makes the tuner follow the dial (dongleForView), manual leaves it put. */
+        {
+            const double learnedAt = g_agcLearnedAtHz.load(std::memory_order_relaxed);
+            const double lockC     = g_vsLockedCentre.load();
+            const double winLimit  = sampleRate / 2.0 - std::min(50000.0, sampleRate * 0.15);
+            const double centreNow = rtlCenter.load();
+            const bool   leaves    = lockC <= 0.0 && std::fabs(freq - centreNow) > winLimit;
+            const bool   follows   = lockC <= 0.0 && g_tunerBwAuto.load(std::memory_order_relaxed)
+                                     && std::fabs(freq - centreNow) > 1000.0;
+            const double centreNew = lockC > 0.0 ? lockC : ((leaves || follows) ? freq : centreNow);
+            const double tunerNew  = centreNew - convOffsetHz.load(std::memory_order_relaxed) + hwOffsetHz();
+            const double ifEff     = vibeagc::agcIfEffectiveHz((double)g_tunerBwHz.load(std::memory_order_relaxed),
+                                                               sampleRate);
+            const int    toBand    = vibeagc::agcBandKey(freq);
+            const bool   bandChg   = learnedAt > 0.0 && vibeagc::agcBandKey(learnedAt) != toBand;
+            const vibeagc::RetuneForget dec = vibeagc::agcRetuneDecision(
+                learnedAt, freq, g_demodBwHz.load(std::memory_order_relaxed),
+                g_agcFrontEndHz.load(std::memory_order_relaxed), tunerNew, ifEff, leaves, bandChg);
+            // ★ The record: every tune that forgot something or moved the tuner, the rest at most once a second
+            //   (a held drag sends twenty a second and would wash the ring out).
+            {
+                static double lastPlainAt = 0.0;
+                const double wnow = agcWallNow();
+                if (dec != vibeagc::RetuneForget::None || leaves || follows || wnow - lastPlainAt >= 1.0) {
+                    if (dec == vibeagc::RetuneForget::None && !leaves && !follows) lastPlainAt = wnow;
+                    g_agcRecord.tune(wnow, audioFreq.load(), freq, (int)dec, leaves || follows, mode.c_str());
+                }
             }
-            agcForget("retuned");
-            g_agcWideSteps.store(-1, std::memory_order_relaxed);   // ★ see g_agcWideSteps
-            // ★★ A NEW STATION HAS NEW NEIGHBOURS, so the narrowing decision does not travel
-            //    with the dial. Re-earned from the measurement at the new frequency, or not at all —
-            //    and not in the first seconds, while that measurement is still settling.
-            autoIfFreshStart("retuned");
-            rx.setAutoBandwidth(0.0);
-            g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
+            if (dec == vibeagc::RetuneForget::Full) {
+                g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
+                g_agcFrontEndHz.store(tunerNew, std::memory_order_relaxed);
+                /* ★★★ INTO ANOTHER BAND, AT THE GAIN THAT LAST SETTLED THERE (vibe_agc_rules.h §3). Carrying
+                 *  airband's 49.6 dB onto 96.6 put 56 % of the samples on the rail for 8 s (Sony,
+                 *  2026-10-02 21:25). Seeded BEFORE the forget, so the forget's longer settle (the whole
+                 *  chain re-converging after a retune) is the one that stands. */
+                if (bandChg) {
+                    int learned = -1;
+                    { std::lock_guard<std::mutex> lk(g_bandGainMtx);
+                      auto it = g_bandGainMem.find(toBand); if (it != g_bandGainMem.end()) learned = it->second; }
+                    if (learned >= 0) dabSeedGain(this, learned, Impl::nowSecs(), "this band");
+                }
+                agcForget(leaves ? "retuned outside the capture window"
+                          : bandChg ? "retuned into another band" : "retuned — the tuner moved");
+                g_agcWideSteps.store(-1, std::memory_order_relaxed);   // ★ see g_agcWideSteps
+            } else if (dec == vibeagc::RetuneForget::Channel) {
+                g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
+                agcChannelForget("another station, same front end");
+            }
+            if (dec != vibeagc::RetuneForget::None) {
+                // ★★ A NEW STATION HAS NEW NEIGHBOURS, so the narrowing decision does not travel
+                //    with the dial. Re-earned from the measurement at the new frequency, or not at all —
+                //    and not in the first seconds, while that measurement is still settling.
+                autoIfFreshStart("retuned");
+                rx.setAutoBandwidth(0.0);
+                g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
+            }
         }
         // ★ …and the dial moving changes where the filter should sit, in Auto.
         applyAutoIf();
@@ -14064,7 +14349,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 double v = 0, lo = 0, hi = 0, bw = 0;
                 bool changed = false;
-                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true; }
+                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true;
+                                                   specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
                 if (jsonNum(msg, "frequency", v) && v > 0) {
                     // ★ Clamp to the captured window: a listener cannot tune outside the range
                     //   the owner locked, and silently accepting it would demodulate noise.
@@ -15591,7 +15877,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 m.clear();
             }
             bool rebuilt = false;
-            if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; }
+            if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
             if (jsonNum(msg, "frequency", v) && v > 0) retune(v);
             double lo, hi;
             if (!rebuilt && jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) {
@@ -15614,7 +15900,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             // Decimation is derived from the mode's bandwidth, so re-negotiate it
             // BEFORE rebuilding the audio chain (it may change sampleRate/fftSize).
-            if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); }
+            if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
             broadcastConfig();
             return;
         }
@@ -17110,7 +17396,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
         std::string cfWorkerHeader, vibeViaHeader;   // ★ see vsViaOf
         std::string originHeader, hostHeader;        // ★ see the cross-site check after the proxy resolution
-        std::string ifNoneMatch;                     // ★ GET /bookmarks answers 304 when the list is unchanged
+        std::string ifNoneMatch;                     // ★ GET /bookmarks and the off-air pictures (vsAirImageReply) answer 304 when unchanged
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         bool acceptsGzip = false;         // ★ /mapdata/ and the web client — see the header capture below
         bool acceptsBr = false;           // ★ the web client only: brotli, pre-compressed at build time
@@ -17328,7 +17614,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                               return a2 == std::string::npos ? std::string() : line.substr(a2, b2 - a2 + 1); };
                 if (line.size() > 7 && strncasecmp(line.c_str(), "origin:", 7) == 0) originHeader = hv(7);
                 else if (line.size() > 5 && strncasecmp(line.c_str(), "host:", 5) == 0) hostHeader = hv(5);
-                else if (line.size() > 14 && strncasecmp(line.c_str(), "if-none-match:", 14) == 0) ifNoneMatch = hv(14);   // ★ GET /bookmarks
+                else if (line.size() > 14 && strncasecmp(line.c_str(), "if-none-match:", 14) == 0) ifNoneMatch = hv(14);   // ★ GET /bookmarks, dabslide, dablogoair, dabmot
             }
             if (line.size() > 15) {
                 std::string cl = line.substr(0, 15);
@@ -18417,6 +18703,40 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                + ",\"text\":\"" + vibeadmin::esc(text) + "\"}");
                 return;
             }
+            if (!isPost && what == "diagnostics") {
+                /* ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20). Admin only (the gate above), and a plain GET answered with a
+                 *  FILE — Content-Disposition: attachment — so any browser, iOS Safari included, saves it for the owner
+                 *  to send on. The file is built by the root helper first (action `diagnostics`); the daemon scrubs the
+                 *  secrets it knows once more before it comes back here (diag_scrub.h). */
+                LocalSdrShim::AdminDiagFn fn;
+                { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsAdminDiagFn; }
+                std::string text, name, err;
+                if (!fn) { reply(404, "Not Found", "{\"error\":\"diagnostics are not available on this server\"}"); return; }
+                if (!fn(text, name, err)) { reply(409, "Conflict", "{\"error\":\"" + jsonEscape(err) + "\"}"); return; }
+                // ★ And this radio's VibeAGC record (bounded, in memory — vibe_agc_record.h): gains, tunes and forgets,
+                //   no secrets. It is what makes a flap readable after the fact from the one file the owner sends.
+                text += "\n===== VibeAGC record (this radio, oldest first, JSONL) =====\n" + LocalSdrShim::agcRecordJsonl();
+                LOGI("admin diagnostics downloaded by %s (%zu KB)", ip.c_str(), text.size() / 1024);
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                              "Content-Disposition: attachment; filename=\"" + name + "\"\r\n"
+                              "X-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n"
+                              "Content-Length: " + std::to_string(text.size()) + "\r\n\r\n" + text);
+                sock->close();
+                return;
+            }
+            if (!isPost && what == "agc") {
+                /* ★★★ THE VibeAGC RECORD (vibe_agc_record.h, 2026-10-20). Admin only (the gate above), a FILE like
+                 *  diagnostics: the bounded in-memory ring, oldest first, one JSON object per line. Never on disk —
+                 *  LocalSdrShim::agcRecordJsonl() is the one function a diagnostics bundle includes. */
+                const std::string text = LocalSdrShim::agcRecordJsonl();
+                LOGI("admin VibeAGC record downloaded by %s (%zu KB)", ip.c_str(), text.size() / 1024);
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson; charset=utf-8\r\n"
+                              "Content-Disposition: attachment; filename=\"vibeagc-record.jsonl\"\r\n"
+                              "X-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n"
+                              "Content-Length: " + std::to_string(text.size()) + "\r\n\r\n" + text);
+                sock->close();
+                return;
+            }
             if (!isPost && what == "history") {
                 // ★ ?after=<epoch>: only the new tail — see History::json.
                 reply(200, "OK", g_vsHistory.json(atoll(queryParam(reqLine, "after").c_str())));
@@ -18735,6 +19055,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              + ",\"iqDrops\":" + std::to_string(g_iqDrops.load(std::memory_order_relaxed))
                              + ",\"usbSamples\":" + std::to_string(g_usbSamples.load(std::memory_order_relaxed))
                              + ",\"dspCpu\":" + std::to_string((int)(dspLoadPct + 0.5))
+                             // ★★ the waterfall's CPU ceiling (vibe_spec_governor.h): 0 = none, else 10 or 5 fps
+                             + ",\"specCeil\":" + std::to_string((int)(g_specGovCeil.load(std::memory_order_relaxed) + 0.5))
                              + ",\"dspLockMs\":" + std::to_string((int)(g_dspLockMaxMs.load(std::memory_order_relaxed) + 0.5))
                              + ",\"dspWorkMs\":" + std::to_string((int)(g_dspWorkMaxMs.load(std::memory_order_relaxed) + 0.5))
                              /* ★★★ demodWaits — HOW OFTEN THE DSP THREAD BLOCKED ON A FULL DEMOD
@@ -18754,6 +19076,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                               *  them, in one HTTP GET instead of a day of measurement. */
                              + ",\"demodWaits\":" + std::to_string(
                                    g_demodWaits.load(std::memory_order_relaxed))
+                             /* ★★ VibeAGC FLAP COUNTERS (vibe_agc_record.h, 2026-10-20): the loop's gain moves and its
+                              *  direction REVERSALS in the last 60 s. Converging = moves without reversals; a flap
+                              *  is reversals. Readable without the admin password; the record itself is not. */
+                             + ",\"agcMoves60s\":" + std::to_string(g_agcRecord.moves(agcWallNow()))
+                             + ",\"agcReversals60s\":" + std::to_string(g_agcRecord.reversals(agcWallNow()))
                              /* ★ TUNE PACING, readable from outside (vibe_tune_pace.h, 2026-10-05): the
                               *  gap a tune would be held for right now (0 / 150 / 350 ms), and how many
                               *  tunes have been merged into a newer one since start. */
@@ -18889,8 +19216,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::vector<uint8_t> bytes; int ct = -1, st = -1;
             if (!name.empty() && g_dab.carouselObject(name, bytes, ct, st)) {
                 const std::string mime = ct == 2 && st == 1 ? "image/jpeg" : ct == 2 && st == 3 ? "image/png" : "application/octet-stream";
-                std::string body(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\nAccess-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                // ★ A carousel object can be replaced under its name, so revalidated (304), never immutable — see vsAirImageReply.
+                sock->sendstr(vsAirImageReply(bytes, mime, vsAirEtag(bytes), ifNoneMatch, false, "no-cache"));
             } else {
                 sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             }
@@ -18910,7 +19237,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!f.empty()) { if (FILE* fp = fopen(f.c_str(), "rb")) { uint8_t buf[4096]; size_t r; while ((r = fread(buf, 1, sizeof buf, fp)) > 0) bytes.insert(bytes.end(), buf, buf + r); fclose(fp); mime = dabLogoMime(ext); } }
             }
             if (sid && !bytes.empty()) {
-                std::string body(reinterpret_cast<const char*>(bytes.data()), bytes.size());
                 /* ★★★ THAT MIME TYPE CAME OFF THE AIR. It is an SPI attribute copied verbatim out
                  *  of the multiplex (vibe_dab_spi.h, tag 0x80) with no validation, and it was
                  *  spliced straight into a response header — a CR LF in it splits the response and
@@ -18924,9 +19250,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     for (const char* m : kOkMime) if (mime == m) { ok = true; break; }
                     if (!ok) mime = "application/octet-stream";
                 }
-                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\n"
-                              "Access-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nCache-Control: max-age=600\r\n"
-                              "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                // ★ Ten minutes as before, then a 304 rather than the logo again — see vsAirImageReply.
+                sock->sendstr(vsAirImageReply(bytes, mime, vsAirEtag(bytes), ifNoneMatch, false, "max-age=600"));
             } else {
                 sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             }
@@ -18939,17 +19264,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  disk store, so the station list and the VTS bar can show a station whose only
              *  artwork is the one it transmits. Without it, the live slide for whatever is
              *  playing — the pane's behaviour, unchanged. */
+            /* ★★ And with ?h= (2026-10-19) the picture whose hash a dab=2 report named — live or kept — sent `immutable`:
+             *  the URL is the picture, so a client never asks for it twice. If it has been replaced since the report,
+             *  the live slide answers as a plain request would (revalidated, never immutable, so no cache is poisoned). */
             const std::string slideSid = queryParam(reqLine, "sid");
+            const std::string slideH = queryParam(reqLine, "h");
             vibedab::DabService::Slide sl;
-            const bool haveSlide = slideSid.empty()
-                ? g_dab.slide(sl)
-                : g_dab.serviceSlide(uint32_t(strtoul(slideSid.c_str(), nullptr, 10)), sl);
+            bool immutable = false;
+            bool haveSlide = false;
+            if (slideH.size() == 16 && slideH.find_first_not_of("0123456789abcdef") == std::string::npos)
+                immutable = haveSlide = g_dab.slideByHash(strtoull(slideH.c_str(), nullptr, 16), sl);
+            if (!haveSlide)
+                haveSlide = slideSid.empty()
+                    ? g_dab.slide(sl)
+                    : g_dab.serviceSlide(uint32_t(strtoul(slideSid.c_str(), nullptr, 10)), sl);
             if (haveSlide && !sl.bytes.empty()) {
-                std::string body(reinterpret_cast<const char*>(sl.bytes.data()), sl.bytes.size());
-                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + sl.mime + "\r\n"
-                              "Access-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nCache-Control: "
-                              + (slideSid.empty() ? "no-cache" : "max-age=60") + "\r\n"
-                              "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->sendstr(vsAirImageReply(sl.bytes, sl.mime, vsAirEtag(sl.bytes, sl.hash), ifNoneMatch, immutable,
+                                              slideSid.empty() ? "no-cache" : "max-age=60"));
             } else {
                 sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             }
@@ -19203,6 +19534,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    vibe_bulk_pace.h. No radio lock is taken on this path, so a low priority here
             //    cannot invert onto the DSP.
             vibeBulkThread("vibe-bulk");
+            vibeqos::apply(sock->rawFd(), vibeqos::Class::Bulk);   // ★ CS1 / background on Wi-Fi (vibe_wifi_qos.h)
             vibemap::serve(sock, reqLine.substr(from, to - from), acceptsGzip, head,
                            s_listenersCached.load(std::memory_order_relaxed) > 0);
         // ── ★★★ THE GPU MAP'S FILES, FROM DISK ──────────────────────────────────────────────────
@@ -19221,6 +19553,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     pacing, not just the priority, is what protects the audio. No radio lock is taken
             //     on this path, so a low priority cannot invert onto the DSP.
             vibeBulkThread("vibe-bulk");
+            vibeqos::apply(sock->rawFd(), vibeqos::Class::Bulk);   // ★ CS1 / background on Wi-Fi (vibe_wifi_qos.h)
             vibemapgl::serve(sock, reqLine.substr(from, to - from), rangeHeader, head,
                              s_listenersCached.load(std::memory_order_relaxed) > 0);
         // ── ★★★ THE WEB CLIENT'S SCRIPTS ────────────────────────────────────────────────────────
@@ -19660,6 +19993,37 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   they say their piece and hang up in the next line, so without the drain the server
         //   stops explaining itself and just disconnects, which a user reads as a crash.
         outboxOpen(sock);
+        // ★★★ THE WI-FI QUEUE, NOW THE PATH IS KNOWN (docs/BRIEF-portable-wifi-realtime.md Phase 1, vibe_wifi_qos.h).
+        //     Audio: SO_PRIORITY 6 + DSCP EF — WMM voice on the Pi's own Wi-Fi, and a mark the phone's hotspot can carry
+        //     on to the listener. Waterfall: best effort, explicitly — NEVER voice (a bulk flow in AC_VO starves the
+        //     channel, our own ACKs included). Here and not at the front door: this one line covers a connection the door
+        //     handed over, one served directly, and Android's in-process server. No wire change; a client sees nothing.
+        {
+            const auto qa = vibeqos::apply(sock->rawFd(), isAudio ? vibeqos::Class::Audio : vibeqos::Class::Waterfall);
+            // ★★★ AND THE AUDIO-FIRST GATE (Phase 2): both of this listener's sockets share one, by session — or by
+            //     address for a client that sends no session (an older app), where two people behind one NAT at worst
+            //     share a waterfall slow-down. The writer thread reads isAudio/gate only after this, under ob->m.
+            {
+                std::shared_ptr<Outbox> ob;
+                { std::lock_guard<std::mutex> lk(outboxMtx);
+                  auto it = outboxes.find(sock.get()); if (it != outboxes.end()) ob = it->second; }
+                if (ob) {
+                    auto g = qosGateFor(session.empty() ? "@" + sock->peerAddress() : session);
+                    std::lock_guard<std::mutex> lk(ob->m);
+                    ob->gate = g; ob->isAudio = isAudio; ob->classified = true;
+                }
+            }
+            // ★ The waterfall's KERNEL queue is held small too (TCP_NOTSENT_LOWAT): newest-wins is decided in our
+            //   outbox, and a megabyte of autotuned send buffer would otherwise hold seconds of stale rows ahead of it,
+            //   still taking airtime after the gate has said stop. Only the unsent part is limited — throughput is not.
+            if (!isAudio) vibeqos::limitUnsent(sock->rawFd());
+            static std::atomic<int> saidAudio{0}, saidSpec{0};
+            if ((isAudio ? saidAudio : saidSpec).fetch_add(1) == 0)
+                LOGI("wifi qos: %s socket marked (TOS %s%s, priority %s) — said once",
+                     isAudio ? "audio" : "waterfall", qa.tos ? "ok" : "no",
+                     qa.family == AF_INET6 ? (qa.tclass ? ", TCLASS ok" : ", TCLASS no") : "",
+                     qa.priority ? "ok" : "n/a");
+        }
 
         // ★ ONE OCCUPANT AT A TIME — and a second one is TURNED AWAY, not allowed to take over.
         //
@@ -21963,6 +22327,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     uint32_t adcRails_ = 0, adcTotal_ = 0;
     LogLatch adcLatch_;   // ★ ADC OVERLOAD's own — see LogLatch
     int      clipRun_ = 0;   // consecutive seconds with rail hits — see the dwell above
+    vibeagc::PeakHold adcPeakHold_;   // ★ the last kHeadroomPeakHoldSec seconds' peaks — vibe_agc_rules.h §5
     uint8_t  adcMax_ = 0, adcMin_ = 255;
     double   adcAt_ = 0;
 
@@ -22031,6 +22396,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const double frac = dev / 128.0;
                 g_adcPeakDbfs.store(frac > 0 ? 20.0 * std::log10(frac) : -99.0,
                                     std::memory_order_relaxed);
+                // ★ §5: the loudest second of the last ten, for a carrierless climb's prediction.
+                if (g_adcPeakHoldReset.exchange(false, std::memory_order_relaxed)) adcPeakHold_.reset();
+                adcPeakHold_.push(frac > 0 ? 20.0 * std::log10(frac) : -99.0);
+                g_adcPeakHeldDbfs.store(adcPeakHold_.max(), std::memory_order_relaxed);
                 const double clipPct = 100.0 * (double)adcRails_ / (double)adcTotal_;
                 g_adcClipPct.store(clipPct, std::memory_order_relaxed);
                 // ★★★ THE THRESHOLD WAS SIXTEEN TIMES TOO HIGH, and picked out of the air. The
@@ -22123,7 +22492,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // int16 IQ (16-bit devices: Airspy et al). Same queue, same backpressure; only
     // the sample conversion differs. Public SpyServers are not all 8-bit RTL-SDRs,
     // and feeding a 16-bit device's stream through the u8 path would be garbage.
-    void enqueueIqInt16(const int16_t* buf, int sampCount, bool blockIfFull, bool gapBefore = false) {
+    void enqueueIqInt16(const int16_t* buf, int sampCount, bool blockIfFull, bool gapBefore = false,
+                        bool gainStep = false) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v = takeIqBuf((size_t)sampCount);   // ★ recycled — see iqFree_
@@ -22144,7 +22514,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
             }
             iqQueuedSamples += v.size();
-            iqQueue.push_back(IqBuf{std::move(v), gapBefore || std::exchange(iqGapNext, false)});
+            iqQueue.push_back(IqBuf{std::move(v), gapBefore || std::exchange(iqGapNext, false), gainStep});
         }
         iqCv.notify_one();
     }
@@ -22182,9 +22552,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void dropOldestLocked() {
         if (iqQueue.empty()) return;
         size_t n = iqQueue.front().v.size();
+        const bool lostStep = iqQueue.front().gainStep;
         iqQueuedSamples -= n;
         recycleIqLocked(std::move(iqQueue.front().v));   // ★ see iqFree_
         iqQueue.pop_front();
+        // ★ A gain step flagged in the dropped buffer has still happened: the next one carries it.
+        if (lostStep && !iqQueue.empty()) iqQueue.front().gainStep = true;
         iqDroppedSamples.fetch_add(n, std::memory_order_relaxed);
         // ★ Whatever is consumed next follows the hole this just made — see IqBuf.
         if (!iqQueue.empty()) iqQueue.front().gap = true; else iqGapNext = true;
@@ -22674,6 +23047,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         blk->bins.assign(bins, bins + nbins);
         blk->index = chan_->blockIndex();     // ★ the phase reference travels WITH the samples
         blk->gap = gap;                       // ★ …and so does a hole upstream of it
+        blk->gainGuard = gainStepGuard_;      // ★ …and a gain step still gliding — see smoothGainSteps
         /* ★★★ THE SLACK IS ~40 ms AT EVERY RATE, NOT FOUR BLOCKS (2026-10-07) — see
          *  vibe_listener_queue.h. Four blocks was 41 ms on an RTL and 12 ms on an RSP at 8 MS/s, where
          *  the FFT cap makes each block three times shorter; the Pi 500's RSP1B dropped 10 of them and
@@ -22690,6 +23064,87 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                       g_chanDrops.fetch_add(1, std::memory_order_relaxed); }
             c->q.push_back(blk);
             c->qcv.notify_one();
+        }
+    }
+
+    /* ★★★ OUR OWN GAIN STEP, MADE INAUDIBLE (2026-10-19) — Stuart: "RF gain movement always caused a pop
+     *  to the signals even in MW and that pop is what kills stereo". Every RF AGC rung is an abrupt
+     *  level step in the IQ; measured through the real chain (vibeserver/test-gain-step.cpp) it was a
+     *  thump of up to +18 dB on AM, a 1.3 s AGC hole, and on FM a 60-75 % "multipath" reading that
+     *  engaged CEQ on clean stations and had IMS narrowing the stereo image for seconds.
+     *  ★★ Done ONCE, here, on the capture — after the cleaner (DC and image are the front end's, and
+     *     are measured on the raw level) and before everything else: the shared pipeline, the
+     *     channelizer and so every listener, the waterfall, DAB and the raw-IQ taps.
+     *  ★★ Then the pipelines are told while the correction is still gliding (RxPipeline::noteGainStep),
+     *     so the level estimators hold their readings rather than judge the glide.
+     *  ★ TRADE-OFF: a constant 4 ms of latency on the capture (the smoother looks ahead to find the step
+     *    before its first sample leaves). VIBE_GAIN_SMOOTH=0 bypasses it entirely for an A/B. */
+    vibedsp::GainStepSmoother gainSmooth_;
+    double gainSmoothRate_ = 0.0;
+    unsigned gainSmoothSeenWrites_ = 0;
+    bool gainStepGuard_ = false;   // this buffer's verdict, handed to every channel block it produces
+    /* ★★ 11.0.9 — THE RUNG THAT DOES NOT STAY. On the real RSP the hardware IF AGC cancels some rungs within ms,
+     *  which the smoother's "a step stays" test rightly refuses — and 11.0.8 then did nothing, so the transient
+     *  still popped and still upset the pilot and CEQ. Now (gainstep.h, test-gain-step case 9):
+     *    · a FLAGGED packet holds the level from the first sharp edge in it, kept or not (the smoother's hold);
+     *    · the estimators sit out every flagged packet and every block of a hold, not only a found step's glide;
+     *    · an own gain write with no flag (an RTL, the HF+, the kick) guards them for the 0.3 s the step may
+     *      take to land — the write says WHEN only roughly, so the level itself is still left to the finder.
+     *  ★ The hold is OFF on DAB: a null symbol is a sharp dip that comes back, and holding across one fills it. */
+    long ownWriteGuardLeft_ = 0;   // samples of the own-write guard still to run
+    long flagRecentLeft_ = 0;      // samples since a flag still "recent" — what the log line says found a step
+    vibeagc::SpectrumGainComp specComp_;   // ★ vibe_agc_rules.h §7 — DSP thread only
+    void smoothGainSteps(cf32* iq, int n, bool flagged) {
+        static const bool off = [] { const char* e = std::getenv("VIBE_GAIN_SMOOTH"); return e && e[0] == '0'; }();
+        gainStepGuard_ = false;
+        /* ★★★ THE PICTURE'S OFFSET, from the same block's facts (§7): VibeAGC on an RTL (an RSP's own RF AGC is
+         *  not ours to undo), the gain we last wrote, and what the smoother has found and is still correcting. */
+        {
+            const bool agcOn = g_vibeAgcRtlOn.load(std::memory_order_relaxed) && !useSdrplay() && !useSpy();
+            const double comp = specComp_.update(nowSecs(), agcOn, g_ownGainWrites.load(std::memory_order_relaxed),
+                                                 lastGainTenthDb, gainSmooth_.steps(),
+                                                 (off ? 0.0 : (double)gainSmooth_.correctionDb()),
+                                                 g_specReanchor.exchange(false, std::memory_order_relaxed));
+            g_specCompDb.store((float)comp, std::memory_order_relaxed);
+        }
+        if (off || n <= 0) return;
+        if (gainSmoothRate_ != sampleRate) { gainSmooth_.configure(sampleRate); gainSmoothRate_ = sampleRate; }
+        gainSmooth_.setTransientHold(!g_dabMode.load(std::memory_order_relaxed));
+        const unsigned w = g_ownGainWrites.load(std::memory_order_relaxed);
+        if (w != gainSmoothSeenWrites_) {
+            gainSmoothSeenWrites_ = w; gainSmooth_.noteStepSoon(0.3);
+            ownWriteGuardLeft_ = (long)(0.3 * sampleRate);
+        }
+        // ★ A flag is "recent" for 20 ms of signal: the step it marks is FOUND a buffer or two later (the finder
+        //   looks ahead), and the log used to credit that find to "our own write" though the radio had flagged it.
+        if (flagged) { gainSmooth_.noteStepAtStart(); flagRecentLeft_ = (long)(0.02 * sampleRate); }
+        const unsigned before = gainSmooth_.steps(), holdsBefore = gainSmooth_.holds();
+        gainSmooth_.process(iq, n);
+        if (gainSmooth_.steps() != before || gainSmooth_.holds() != holdsBefore) {
+            static double lastLog = 0.0;
+            const double now = nowSecs();
+            if (now - lastLog > 2.0) {
+                lastLog = now;
+                const bool byFlag = flagged || flagRecentLeft_ > 0;
+                if (gainSmooth_.steps() != before)
+                    LOGI("gain step %+.1f dB %s — level held, gliding back over ~1 s", gainSmooth_.lastStepDb(),
+                         byFlag ? "(flagged by the radio)" : "(found after our own write)");
+                else
+                    LOGI("gain transient held (flagged by the radio; the step did not stay) — level kept continuous");
+            }
+        }
+        const bool ownWrite = ownWriteGuardLeft_ > 0;
+        gainStepGuard_ = flagged || ownWrite || gainSmooth_.steps() != before || gainSmooth_.correcting(1.0)
+                      || gainSmooth_.holding();
+        if (gainStepGuard_) rx.noteGainStep(0.1);
+        if (ownWriteGuardLeft_ > 0) ownWriteGuardLeft_ = std::max(0L, ownWriteGuardLeft_ - (long)n);
+        if (flagRecentLeft_ > 0) flagRecentLeft_ = std::max(0L, flagRecentLeft_ - (long)n);
+        if (gainSmooth_.steps() != before) {   // ★ a step found in this block: its correction applies to this block's frames
+            const bool agcOn = g_vibeAgcRtlOn.load(std::memory_order_relaxed) && !useSdrplay() && !useSpy();
+            g_specCompDb.store((float)specComp_.update(nowSecs(), agcOn, g_ownGainWrites.load(std::memory_order_relaxed),
+                                                       lastGainTenthDb, gainSmooth_.steps(),
+                                                       (double)gainSmooth_.correctionDb(), false),
+                               std::memory_order_relaxed);
         }
     }
 
@@ -22717,7 +23172,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 Impl* self; std::vector<cf32>& b;
                 ~IqReturn() { std::lock_guard<std::mutex> lk(self->iqMtx); self->recycleIqLocked(std::move(b)); }
             } iqReturn{this, buf};
-            bool gap = false;
+            bool gap = false, gainStepFlag = false;
             {
                 std::unique_lock<std::mutex> lk(iqMtx);
                 // One-shot prefill at stream start. The DSP is NOT paced by this
@@ -22737,6 +23192,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!dspRunning.load()) break;
                 buf = std::move(iqQueue.front().v);
                 gap = iqQueue.front().gap;
+                gainStepFlag = iqQueue.front().gainStep;
                 iqQueue.pop_front();
                 iqQueuedSamples -= buf.size();
             }
@@ -22791,6 +23247,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     the owner's wide impulse blanker, below 30 MHz on auto. Both are one SIMD pass
              *     each over the block; VIBE_IQ_CLEAN=0 switches the cleaner off for A/B tests. */
             cleanCapture(buf.data(), (int)buf.size());
+            smoothGainSteps(buf.data(), (int)buf.size(), gainStepFlag);   // ★ our own gain steps — see gainStepGuard_
             iqTapFull(buf.data(), (int)buf.size(), sampleRate);       // ★ full-rate raw IQ out, if on
             // ★★★ IN SHARED MODE THE SHARED PIPELINE IS NOT RUN AT ALL. Its FFT is replaced by the
             //     channelizer's (emitWideFromBins), and its DEMODULATOR produced audio that NOBODY
@@ -23404,6 +23861,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     for (int i = 0; i < n; i++) if (gl[(size_t)i] <= rest)      restIdx = i;
                     steps = ceilIdx - restIdx;
                     if (steps < 0) steps = 0;
+                    g_agcRecord.gain(agcWallNow(), vibeagc::GainSrc::IdlePark, lastGainTenthDb,
+                                     gl[(size_t)restIdx], "everybody left: resting gain");
                     lastGainTenthDb = gl[(size_t)restIdx];
                     queueHwGain(gl[(size_t)restIdx]);
                 }
@@ -23411,6 +23870,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("everybody has left — AGC restarts from the owner's resting gain %d "
                  "(%d steps below the ceiling)", rest, steps);
             g_gainRef.store(rest, std::memory_order_relaxed);
+            g_specReanchor.store(true, std::memory_order_relaxed);   // ★ vibe_agc_rules.h §7: a fresh start for the picture too
             g_ovlSteps.store(steps, std::memory_order_relaxed);
             g_ovlBadGain.store(-1, std::memory_order_relaxed);
         g_ovlBadStrikes.store(0, std::memory_order_relaxed);   // ★ a new band starts with a clean record   // a fresh start, not the old hunt
@@ -23507,6 +23967,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         std::lock_guard<std::mutex> idleLk(idleMtx);          // ★ AFTER reacquire — see idleMtx
         if (!captureIdle.exchange(false)) return;             // wasn't paused
+        // ★★ Same stale clock as reacquireRadio's: lastIqAt is from before the park, so restart the
+        //    3 s from now or the watchdog can re-Init a radio that is still waking up.
+        lastIqAt.store(nowSecs(), std::memory_order_relaxed);
         // ★★★ THIS `else` REPORTED A WORKING RADIO AS UNPLUGGED. With an Airspy attached, `dev`
         // is null, so the dongle branch called launchCapture() anyway — rtlsdr_read_async(NULL)
         // returned instantly, captureDown went true, and the watchdog then could not find an RTL
@@ -24675,6 +25138,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 int slept = 0;
                 for (int i = 0; i < 20 && hotplugRun.load(); i++) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    // ★ The VibeAGC record's one-second snapshot, half-way through this 2 s cycle (the other
+                    //   follows overloadTick below). Cheap: it returns at once unless something is moving.
+                    if (i == 9 && !stopping.load() && !restarting.load()) LocalSdrShim::instance().agcRecordTick();
                     if (++slept >= 4 && g_dabMode.load(std::memory_order_relaxed)
                         && g_dab.quality().fibRate <= 0.0f && !stopping.load() && !restarting.load()) {
                         LocalSdrShim::instance().overloadTick();
@@ -24694,9 +25160,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //     work that is allowed to take milliseconds. 2 s also matches the detector's
                 //     own two-second dwell — there is nothing to react to faster than that.
                 LocalSdrShim::instance().overloadTick();
+                LocalSdrShim::instance().agcRecordTick();   // ★ the second snapshot of this 2 s cycle
                 LocalSdrShim::instance().autoBandwidthTick();
                 LocalSdrShim::instance().batteryTick();
                 LocalSdrShim::instance().healthTick();   // ★ its own 1 Hz gate inside
+                specGovernorTick();                       // ★★ after health: it reads the CPU level health just set
                 /* ★★★ AND FLUSH THE CONNECTION LOG HERE, WHERE EVERY HOST RUNS. It is written
                  *     lazily — open()/close() only mark it dirty — and the only thing calling
                  *     saveIfDue() was the LINUX DAEMON'S loop (vibeserver/main.cpp). On the
@@ -25562,6 +26030,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
                     if (dev && !radioReleased.load()) rtlsdr_set_tuner_gain(dev, gn);
                     noteHwMoved();   // ★ a gain step lifts the whole band; it is not a sferic
+                    noteOwnGainWrite();   // ★ …nor a change in the signal — see g_ownGainWrites
                     hwGainNow = gn;
                 }
                 lk.lock();
@@ -25691,7 +26160,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // same queue the USB/rtl_tcp paths feed. Blocks with backpressure exactly like
     // tcpReadLoop, so the 250 ms jitter buffer applies here too.
     void spyReadLoop() {
-        vibeThreadName("vibe-spy");
+        /* ★★★ AN IQ INPUT, SO THE IQ RUNG (2026-10-20). This was a plain name at nice 0 — under a -19 DSP and a -20
+         *  writer the reader that FEEDS them was the one thread left behind: one busy loop per core at -19 cut a
+         *  listener's audio to 40 % (scripts/test-server-thread-rank.mjs). It blocks on the socket and on a full
+         *  queue, so the rung costs nothing while it waits. See vibeIqThread. */
+        vibeIqThread("vibe-spy");
         auto lastData = std::chrono::steady_clock::now();
         spy->run(tcpRunning,
             [&](const uint8_t* data, size_t bytes, uint32_t fmt) {
@@ -25721,7 +26194,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // Reads what's available (low latency) and carries a stray odd byte so I/Q
     // pairs never misalign across reads.
     void tcpReadLoop() {
-        vibeThreadName("vibe-tcp");
+        /* ★★★ AN IQ INPUT, SO THE IQ RUNG (2026-10-20). This was a plain name at nice 0 — under a -19 DSP and a -20
+         *  writer the reader that FEEDS them was the one thread left behind: one busy loop per core at -19 cut a
+         *  listener's audio to 40 % (scripts/test-server-thread-rank.mjs). It blocks on the socket and on a full
+         *  queue, so the rung costs nothing while it waits. See vibeIqThread. */
+        vibeIqThread("vibe-tcp");
         const int CHUNK = 32768;                 // bytes (16384 IQ samples)
         std::vector<uint8_t> buf(CHUNK + 1);
         int carry = 0;                            // 0/1 leftover byte from last read
@@ -26229,6 +26706,7 @@ void LocalSdrShim::setVibeAgcRtl(bool on) {
     //     a client for anything to happen (Stuart, 2026-08-21).
     if (was == on && (!on || g_gainTarget.load(std::memory_order_relaxed) >= 0)) return;
     LOGI("RTL AGC: %s", on ? "ON — free to use the tuner's whole range" : "off");
+    g_specReanchor.store(true, std::memory_order_relaxed);   // ★ §7: the picture's reference is where the loop starts
     // ★★ RTL-TCP: the rtl_tcp gain table stands in for the USB driver's list (2026-09-22).
     const bool tcpSrc = p && p->useTcp() && p->tcpHasGain();
     if (!p || (!p->dev && !tcpSrc)) return;
@@ -27379,6 +27857,10 @@ void LocalSdrShim::setAdminActionHandler(AdminActionFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsAdminActionFn = std::move(fn);
 }
+void LocalSdrShim::setAdminDiagnosticsHandler(AdminDiagFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsAdminDiagFn = std::move(fn);
+}
 void LocalSdrShim::setAdminLogHandler(AdminLogFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsAdminLogFn = std::move(fn);
@@ -28351,8 +28833,8 @@ int LocalSdrShim::start(int fd, int vid, int pid,
      *  start the engine otherwise runs at the base rate until somebody arrives and LEAVES —
      *  which is how the floor measured 8.6 % after a DAB session and 19 % on a fresh launch. */
     impl->recomputeEngineRate();
-    // VibeServer waterfall frame-rate throttle: a serving host can cap fps (Full
-    // 20 / Half 10 / Quarter 5) to save CPU and wire data. The client interpolates
+    // VibeServer waterfall frame-rate throttle: a serving host can cap fps (Smoother
+    // 20 / Default 10 / Half 5 — 10 the default since 2026-10-20) to save CPU and wire data. The client interpolates
     // the waterfall, so a lower rate still scrolls smoothly.
     if (g_serveOnLan.load()) {
         double mr = g_vsMaxFftRate.load();
@@ -28932,7 +29414,7 @@ int LocalSdrShim::startSdrplay(int index,
 
     impl->sdrp = std::make_unique<vibe::SdrplaySource>();
     Impl* self = impl;
-    impl->sdrp->setSink([self, seenEv = uint64_t(0), seenS = uint64_t(0)](const int16_t* iq, int n) mutable {
+    impl->sdrp->setSink([self, seenEv = uint64_t(0), seenS = uint64_t(0), seenGr = uint64_t(0)](const int16_t* iq, int n) mutable {
         self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
         /* ★★ The RSP's inferred skips — see SampleSeqWatch. Counted beside the Airspy's, but the
          *  source is diagnostic, so nothing downstream acts on it. Same thread as the callback that
@@ -28940,7 +29422,10 @@ int LocalSdrShim::startSdrplay(int index,
         { const uint64_t ev = self->sdrp->usbDropEvents(), sm = self->sdrp->usbDroppedSamples();
           if (ev < seenEv || sm < seenS) { seenEv = 0; seenS = 0; }   // defensive: never underflow
           if (ev != seenEv) { noteUsbDrop(sm - seenS, ev - seenEv); seenEv = ev; seenS = sm; } }
-        self->enqueueIqInt16(iq, n, /*blockIfFull=*/false);
+        // ★★★ The API flagged a gain change in THIS packet (grChanged) — same thread as the count. See smoothGainSteps.
+        const uint64_t gr = self->sdrp->gainChangePackets();
+        const bool step = gr != seenGr; seenGr = gr;
+        self->enqueueIqInt16(iq, n, /*blockIfFull=*/false, /*gapBefore=*/false, step);
     });
     /* ★★★ TUNE TO (LOGICAL CENTRE + OFFSET), exactly as tuneHw() and the HackRF's open do. This
      *     passed the LOGICAL centre, which was harmless only while the RSP's offset was zero —
@@ -29097,6 +29582,13 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
 
     p = impl;
     LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
+    /* ★★★ AND THE HOUSEKEEPING THREAD, WHICH IS WHERE VibeAGC TICKS (2026-10-20). 44c1471b gave rtl_tcp the
+     *  loop ("the loop measures our own IQ and steers through queueHwGain") but this path never started the
+     *  thread that calls overloadTick(), so on an rtl_tcp source VibeAGC was switched on, measured the ADC, logged
+     *  "ADC OVERLOAD" — and never moved the gain. Found by the AGC bench (tools/agc-bench), whose fake rtl_tcp
+     *  applies the gain: 40 dB into a loud station, clipping for minutes, zero gain commands. The fourth start
+     *  path of the "started from three of those paths and not the fourth" note above startDspThread. */
+    impl->startHotplugWatch();
     LOGI("RTL-TCP started: %s:%d center=%.0f rate=%.0f tuner=%d port=%d",
          host.c_str(), port, centerFreq, sampleRate, impl->tcpTunerType, chosen);
     return chosen;
@@ -29925,6 +30417,9 @@ void LocalSdrShim::setTunerBandwidth(int hz) {
 }
 void LocalSdrShim::setGain(int gainTenthDb) {
     if (!p) return;
+    noteOwnGainWrite();   // ★ a level step is on its way — see g_ownGainWrites
+    g_agcRecord.gain(agcWallNow(), vibeagc::GainSrc::Owner, p->lastGainTenthDb, gainTenthDb,
+                     gainTenthDb < 0 ? "owner: VibeAGC on" : "owner: manual gain");
     // ★★ WHOEVER MOVED THE SLIDER GETS WHAT THEY ASKED FOR. An explicit gain is a new intent, so
     //    any overload backoff is forgotten and the protection starts again from here. Without this
     //    the owner would set 12.5 dB, the protection would still be holding it 4 steps down from a
@@ -30279,9 +30774,21 @@ void LocalSdrShim::overloadTick() {
         && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < dwell)
         return;
 
+    /* ★★★ SSB AND CW ARE JUDGED ON HEADROOM ONLY (vibe_agc_rules.h §5, Stuart 2026-10-20). With no carrier the
+     *  before/after verdict reads the operator — speech swings several dB a syllable and stops between words —
+     *  so it is skipped exactly as DAB's separation verdict is: a climb is predicted against the loudest second
+     *  of the last ten, a cut still answers the live second (two hot seconds, or the rail). No probes down, no
+     *  "putting it back", no settling on a flat result. */
+    const bool headroomOnly = g_agcCarrierless.load(std::memory_order_relaxed)
+                              && !g_dabMode.load(std::memory_order_relaxed);
+    if (headroomOnly) g_wantDown.store(false, std::memory_order_relaxed);
     // ★★★ DID THE LAST CLIMB ACTUALLY HELP? Judged on SNR, a few seconds later, once the meters
     //     have caught up with the new gain.
     const double climbAt = g_climbAt.load(std::memory_order_relaxed);
+    if (headroomOnly) {
+        // ★ Nothing to judge: the trial only paces the next move, as it does while DAB is acquiring.
+        if (climbAt > 0 && now - climbAt >= tickProf.verdictSec) g_climbAt.store(0.0, std::memory_order_relaxed);
+    } else
     // ★★★ DO NOT JUDGE A CLIMB ACROSS A DISTURBED WINDOW. If a buffer was dropped or the engine
     //     rate changed since the climb, the floor moved for reasons that are not the radio's — and
     //     concluding "the front end is compressing" from that is how one listener joining left the
@@ -31048,7 +31555,7 @@ void LocalSdrShim::overloadTick() {
     //      and it is only a bad trade if you assume a gain change is free.
     //  ★ Coming DOWN is unchanged and still immediate — an overload is ruining the signal NOW, and
     //    40 ms is a bargain to end it. This reluctance applies only to climbing back up.
-    } else if (steps > 0 && !g_settled.load(std::memory_order_relaxed)
+    } else if (steps > 0 && (headroomOnly || !g_settled.load(std::memory_order_relaxed))
                && !(g_dabMode.load(std::memory_order_relaxed) && dabDecodingPerfectly())
                && cleanRun >= (hurry ? 1 : kAgcClimbAfterSec)
                /* ★ A climb on trial blocks the next one until its verdict — right when there is an
@@ -31158,9 +31665,18 @@ void LocalSdrShim::overloadTick() {
      *  ★ Only inside the recovery window. The prediction immediately below still judges the final
      *    landing peak and refuses anything that would pass the climb ceiling, so this changes the
      *    SIZE of the ask and never the safety of the answer. */
+    /* ★ §5: a carrierless climb is predicted against the loudest second of the last ten — a pause between overs
+     *  must not read as headroom. Every other mode reads the live second, as before. */
+    const double climbPeak = headroomOnly
+        ? std::max(g_adcPeakHeldDbfs.load(std::memory_order_relaxed), g_adcPeakDbfs.load(std::memory_order_relaxed))
+        : g_adcPeakDbfs.load(std::memory_order_relaxed);
+    /* ★ ...and lands no higher than the operating point (-6 dBFS), so there is a 5 dB deadband between where a
+     *  carrierless climb may land and where the -1 dBFS cut begins — wider than any RTL rung plus a talker's swing
+     *  (vibe_agc_rules.h §5). Every other mode climbs to the one ceiling, as before. */
+    const double climbCeil = headroomOnly ? agcTargetDbfs() : agcClimbCeilDbfs();
     if (climbToFit && want < steps) {
         const int from = tgtIdx - steps;
-        const double peak = g_adcPeakDbfs.load(std::memory_order_relaxed);
+        const double peak = climbPeak;
         const double room = agcTargetDbfs() - peak - g_ovlMargin.load(std::memory_order_relaxed);
         /* ★★★ AND THE ADC IS NOT THE BINDING CONSTRAINT WHERE HARM SHOWS OUTSIDE THE CHANNEL.
          *
@@ -31207,7 +31723,7 @@ void LocalSdrShim::overloadTick() {
         const int from = tgtIdx - steps;               // where we are now
         if (idx <= from) return;                       // nothing to gain
         const double stepDb = (gains[(size_t)idx] - gains[(size_t)from]) / 10.0;
-        const double peak   = g_adcPeakDbfs.load(std::memory_order_relaxed);
+        const double peak   = climbPeak;
         // ★★★ AIM WELL BACK FROM THE RAIL, NOT AT IT. This climbed until the next step would only
         //     just avoid clipping — which is the LOUDEST gain the converter tolerates, and far past
         //     the point where an R820T's front end starts making intermodulation. Stuart, on
@@ -31247,12 +31763,16 @@ void LocalSdrShim::overloadTick() {
          *  ★★ WHAT STILL STOPS IT IS THE CONVERTER, which is the limit that means something here:
          *     the ceiling test below is untouched, so a strong ensemble cannot reach the rails.
          *  ★ Cutting is never gated by any of this — anything asking for LESS gain still gets it. */
-        const bool dabClimbFree = g_dabMode.load(std::memory_order_relaxed);
+        /* ★ And SSB/CW, which are judged on headroom ONLY (vibe_agc_rules.h §5): the plateau and the floor test are
+         *  inferences about the signal, and the floor one misreads a converter at low gain — the 8-bit quantisation
+         *  floor does not fall with the gain, so after a deep overload cut the "gain-normalised floor" reads lifted
+         *  and the loop could never climb back (the AGC bench: cut to 8.7 dB by a blowtorch, then stuck there). */
+        const bool dabClimbFree = g_dabMode.load(std::memory_order_relaxed) || headroomOnly;
         if (!dabClimbFree && g_snrPlateau.load(std::memory_order_relaxed)) {
             if (peak > g_snrPlateauPeak.load(std::memory_order_relaxed) - 6.0) return;
             g_snrPlateau.store(false, std::memory_order_relaxed);
         }
-        if (peak + stepDb > agcClimbCeilDbfs()) return;
+        if (peak + stepDb > climbCeil) return;
         // ★ Not consulted while kGhostMayCut is false — an unproven detector must not block a
         //   climb either, or it starves the gain by the back door instead of the front.
         // ★ And never climb while the floor is already lifted — that is the condition a climb
@@ -31263,7 +31783,7 @@ void LocalSdrShim::overloadTick() {
         //   jump path was just fixed for; this is the SINGLE-step copy of the same check and it
         //   would have quietly reinstated it (silently, at that — the branch does not log).
         if (peak + stepDb > -std::min(g_ovlMargin.load(std::memory_order_relaxed),
-                                      -agcClimbCeilDbfs())) {
+                                      -climbCeil)) {
             // ★ Silent. This runs every 2 s and would otherwise fill the log with a line saying
             //   nothing happened — the one thing guaranteed to make the useful lines unreadable.
             return;
@@ -31295,14 +31815,14 @@ void LocalSdrShim::overloadTick() {
             // ★ Clamped so the learned margin can never be stricter than the one ceiling above —
             //   it was 3.0 (aim at -3.0 dBFS) and that IS the dead zone, by another name.
             const double mgn = std::min(g_ovlMargin.load(std::memory_order_relaxed),
-                                        -agcClimbCeilDbfs());
+                                        -climbCeil);
             int best = idx;
             for (int j = idx + 1; j <= tgtIdx; j++) {
                 const double add = (gains[(size_t)j] - gains[(size_t)from]) / 10.0;
                 // ★ The same ceiling the single step now uses, or the jump would stop at the old
                 //   operating point and the loop would creep the rest of the way — the exact
                 //   slowness the jump exists to remove.
-                if (peak + add > agcClimbCeilDbfs()) break;
+                if (peak + add > climbCeil) break;
                 if (peak + add > -mgn) break;
                 if (bad >= 0 && gains[(size_t)j] >= bad && cleanRun < holdJ) break;
                 best = j;
@@ -31617,6 +32137,21 @@ void LocalSdrShim::overloadTick() {
     else
         LOGI("clean for %ds — gain back up to %.1f dB (%d below %.1f dB)",
              cleanRun, applied / 10.0, want, target / 10.0);
+    {   // ★ The record (vibe_agc_record.h): the same reason the line above gave, in a word or three.
+        const int fromT = gains[(size_t)((tgtIdx - steps) < 0 ? 0 : (tgtIdx - steps))];
+        const char* recWhy =
+            want > steps ? (steps_forceDown ? "put back: climb did not hold"
+                          : downForRunaway ? "runaway: still chasing"
+                          : downForGhost   ? "ghost"
+                          : backoffToFit && clipPct > 0.0 ? "adc overload (rail)"
+                          : clipPct > 0.0  ? "adc overload"
+                          : "converter hot")
+                         : (steps_forceUp ? "put back: cut did not hold"
+                          : climbToFit    ? "recovering after a cut"
+                          : headroomOnly  ? "headroom (carrierless)"
+                          : "clean: climb");
+        g_agcRecord.gain(agcWallNow(), vibeagc::GainSrc::Loop, fromT, applied, recWhy);
+    }
     // ★ Reset the run that triggered us, or one sustained overload would walk the gain to the
     //   bottom in as many seconds as there are steps.
     if (want > steps) g_adcClipRun.store(0, std::memory_order_relaxed);
@@ -31948,6 +32483,13 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         return false;
     }
 
+    /* ★★★ AND THE SILENCE CLOCK STARTS AGAIN TOO. lastIqAt still held the last sample from before
+     *     the release, so the watchdog — which runs straight after the keepalive's re-acquire, on
+     *     the same tick — saw ten minutes of "silence" and re-Inited a stream that had not had time
+     *     to deliver. Every keepalive did it: 181 of 187 "re-initialised after a stall" on the
+     *     Lenovo, 10-18 → 10-19, were this, not the radio (journal, 2026-10-20). Now the radio gets
+     *     the full 3 s from the moment it is taken back, and a genuinely dead one still trips. */
+    impl->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
     impl->radioReleased.store(false);
     /* ★★★ THE KICK STARTS AGAIN FROM STEP 1 ON A RE-ACQUIRE. Its six steps advance on DSP ticks,
      *     and a released radio only ticks during the keepalive's 15 s hold every 10 min — so the
@@ -32360,6 +32902,13 @@ static void agcForget(const char* why) {
     g_gainSettleIsForget.store(!dabAcq, std::memory_order_relaxed);   // ★ the peak-hold is STALE here
     if (dabAcq) g_resetPeakHold.store(true, std::memory_order_relaxed);
     g_resetSepAvg.store(true, std::memory_order_relaxed);   // ★ the LAST station's separation
+    /* ★★ AND THE CHANNEL LEVEL GOES WITH IT, always (2026-10-20). It held the station we LEFT and decayed at
+     *  0.5 dB/s, so after a strong-to-weak move the first verdict was judged against the old station for half a
+     *  minute. vibe_agc_rules.h §6. */
+    g_resetPeakHold.store(true, std::memory_order_relaxed);
+    g_adcPeakHoldReset.store(true, std::memory_order_relaxed);
+    g_specReanchor.store(true, std::memory_order_relaxed);   // ★ §7: a new place, a new reference for the picture
+    g_agcRecord.forget(agcWallNow(), why);
     g_agcHurryUntil.store(now + 8.0, std::memory_order_relaxed);
     g_ovlMargin.store(3.0, std::memory_order_relaxed);
     g_bestFloorDb.store(0.0f, std::memory_order_relaxed);      // 0 = unset, see the floor test
@@ -32391,6 +32940,50 @@ static void agcForget(const char* why) {
     LOGI("AGC: forgetting what it learned (%s) — margin back to 3 dB", why);
 }
 
+/** ★★★ ANOTHER STATION, THE SAME FRONT END (vibe_agc_rules.h §4, Stuart 2026-10-20). What belongs to the
+ *  CHANNEL goes — separation averages, the channel level, a move on trial, the hill-climb's run baselines.
+ *  What belongs to the FRONT END stays — the gain that overloaded (g_ovlBadGain), its strikes, the learned
+ *  margin, the gain that held at full span, the quietest floor — because the tuner and the converter are being
+ *  handed the same capture behind the same IF filter.
+ *  ★★ CARRIERLESS (SSB/CW): nothing here is used — the loop runs on headroom (§5) — so a hop changes NOTHING in
+ *     the loop: no settle, no hurry, "settled" kept. That is the whole of Stuart's ask for the Portable.
+ *  ★ With a carrier (AM/NFM/FM) the hill-climb's conclusion IS about the station, so "settled" and the probe
+ *    state are re-earned on the new one, with the 8 s hurry — but never into a gain the front end has already
+ *    shown it cannot hold, because that memory is kept. */
+static void agcChannelForget(const char* why) {
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const bool carrierless = g_agcCarrierless.load(std::memory_order_relaxed)
+                             && !g_dabMode.load(std::memory_order_relaxed);
+    g_resetSepAvg.store(true, std::memory_order_relaxed);
+    g_resetPeakHold.store(true, std::memory_order_relaxed);
+    g_climbAt.store(0.0, std::memory_order_relaxed);        // ★ a move on trial was judged against the old channel
+    g_dropAt.store(0.0, std::memory_order_relaxed);
+    g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);
+    g_sepBestInRun.store(-200.0f, std::memory_order_relaxed);
+    g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
+    g_stepsAtSepBest.store(-1, std::memory_order_relaxed);
+    g_sameDirRun.store(0, std::memory_order_relaxed);
+    g_nextStride.store(0, std::memory_order_relaxed);
+    g_bestShoulderDb.store(0.0f, std::memory_order_relaxed);
+    g_snrPlateau.store(false, std::memory_order_relaxed);
+    if (!carrierless) {
+        const double until = now + 2.5;   // ★ the same settle a forget gets: the chain re-converges on the new station
+        if (g_gainSettleUntil.load(std::memory_order_relaxed) < until) {
+            g_gainSettleUntil.store(until, std::memory_order_relaxed);
+            g_gainSettleIsForget.store(true, std::memory_order_relaxed);
+        }
+        g_settled.store(false, std::memory_order_relaxed);
+        g_triedDown.store(false, std::memory_order_relaxed);
+        g_wantDown.store(false, std::memory_order_relaxed);
+        g_moveDir.store(0, std::memory_order_relaxed);
+        g_agcHurryUntil.store(now + 8.0, std::memory_order_relaxed);
+    }
+    g_agcRecord.forget(agcWallNow(), carrierless ? "channel (carrierless: loop untouched)" : "channel");
+    LOGI("AGC: %s — %s; the overload memory, margin and strike count are kept (same capture, same IF filter)",
+         why, carrierless ? "headroom-only mode, nothing to re-learn" : "re-learning the station");
+}
+
 /** ★★ A GAIN WRITE IS NOT INSTANT AND THE MEASUREMENTS ARE A SECOND WIDE. The clip statistics are
  *  computed over roughly a second, so for a second after a change they still contain samples taken
  *  at the OLD gain — and the loop read them as fresh evidence and cut again. Measured on the Pi,
@@ -32411,6 +33004,41 @@ static void agcSettleAfterGain(double now) {
      *    anybody asks, the hold has been rebuilt from the level that actually exists now. */
     g_resetPeakHold.store(true, std::memory_order_relaxed);
 }
+
+void LocalSdrShim::agcRecordTick() {
+    if (!p || !g_vibeAgcRtlOn.load(std::memory_order_relaxed)) return;
+    const double wnow = agcWallNow();
+    if (!g_agcRecord.wantSnap(wnow)) return;   // ★ settled and quiet: nothing to add
+    const double now = Impl::nowSecs();
+    vibeagc::AgcSnap s;
+    s.gainDb       = p->lastGainTenthDb >= 0 ? (float)(p->lastGainTenthDb / 10.0) : NAN;
+    s.steps        = (int16_t)g_ovlSteps.load(std::memory_order_relaxed);
+    s.peakDbfs     = (float)g_adcPeakDbfs.load(std::memory_order_relaxed);
+    s.peakHeldDbfs = (float)g_adcPeakHeldDbfs.load(std::memory_order_relaxed);
+    s.clipPct      = (float)g_adcClipPct.load(std::memory_order_relaxed);
+    s.hotRun       = (int16_t)std::min(30000, g_adcHotRun.load(std::memory_order_relaxed));
+    s.cleanRun     = (int16_t)std::min(30000, g_adcCleanRun.load(std::memory_order_relaxed));
+    const float sep = p->sepAvgDb.load();
+    s.sepDb        = sep > -190.0f ? sep : NAN;
+    s.sepFromShoulders = p->sepFromShoulders.load() ? 1 : 0;
+    s.chanDb       = p->channelDbWide.load();
+    s.shoulderDb   = p->shoulderDb.load();
+    s.contrastDb   = p->bandContrastDb.load();
+    s.ifKhz        = (float)(vibeagc::agcIfEffectiveHz((double)g_tunerBwHz.load(std::memory_order_relaxed),
+                                                       p->sampleRate) / 1000.0);
+    s.fftRate      = (float)p->fftRate;
+    s.settled      = g_settled.load(std::memory_order_relaxed) ? 1 : 0;
+    s.hurry        = now < g_agcHurryUntil.load(std::memory_order_relaxed) ? 1 : 0;
+    s.headroomOnly = (g_agcCarrierless.load(std::memory_order_relaxed) && !g_dabMode.load(std::memory_order_relaxed)) ? 1 : 0;
+    const int bad  = g_ovlBadGain.load(std::memory_order_relaxed);
+    s.badGainDb    = bad >= 0 ? (float)(bad / 10.0) : NAN;
+    s.badHold      = (int16_t)std::min(30000, vsOvlBadHold());
+    s.provisional  = g_ovlBadProvisional.load(std::memory_order_relaxed) ? 1 : 0;
+    s.strikes      = (int16_t)g_ovlBadStrikes.load(std::memory_order_relaxed);
+    vibeagc::agcCopyWhy(s.profile, sizeof s.profile, g_profile.load(std::memory_order_relaxed)->name);
+    g_agcRecord.snap(wnow, s);
+}
+std::string LocalSdrShim::agcRecordJsonl() { return g_agcRecord.jsonl(agcWallNow()); }
 
 unsigned LocalSdrShim::maxSampleRateHz() {
     if (!p) return 0;
@@ -33149,6 +33777,7 @@ void LocalSdrShim::setAirspyPreset(int mode, int tenthDb) {
     const int m = mode == 0 ? 0 /*GainSensitive*/ : 1 /*GainLinear*/;
     g_dsp.aspMode.store(m);
     if (!p || !p->useAirspy()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK();
     p->lastGainTenthDb = tenthDb;
     p->asp->setPreset(m, tenthDb);
@@ -33158,6 +33787,7 @@ void LocalSdrShim::setAirspyStage(int stage, int value) {
     else if (stage == 1) g_dsp.aspMixer.store(value);
     else if (stage == 2) g_dsp.aspVga.store(value);
     if (!p || !p->useAirspy()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK();
     if (stage == 0)      p->asp->setLnaGain(value);
     else if (stage == 1) p->asp->setMixerGain(value);
@@ -33197,6 +33827,7 @@ void LocalSdrShim::setAhfAgcThreshold(bool high) {
 void LocalSdrShim::setAhfAttenuation(int steps) {
     g_dsp.ahfAtt.store(steps);
     if (!p || !p->useAirspyHf()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK(); p->ahf->setAttenuation(steps);
 }
 void LocalSdrShim::setAhfLna(bool on) {
@@ -33216,10 +33847,12 @@ void LocalSdrShim::setHackRfAmp(bool on) {
 }
 void LocalSdrShim::setHackRfLna(int db) {
     if (!p || !p->useHackRf()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK(); p->hrf->setLnaGainDb(db);
 }
 void LocalSdrShim::setHackRfVga(int db) {
     if (!p || !p->useHackRf()) return;
+    noteOwnGainWrite();
     VIBE_HW_LOCK(); p->hrf->setVgaGainDb(db);
 }
 void LocalSdrShim::setHackRfBiasTee(bool on) {
@@ -33235,6 +33868,7 @@ void LocalSdrShim::setAhfCalibrationPpb(int ppb) {
 }
 void LocalSdrShim::setLnaState(int v)       { g_dsp.rspLna.store(v);
                                               if (!p || !p->useSdrplay()) return;
+                                              noteOwnGainWrite();   // ★ the API's grChanged then pins it down
                                               VIBE_HW_LOCK(); p->sdrp->setLnaState(v); }
 void LocalSdrShim::setIfGainReduction(int v){
     /* ★ Remembered even with no radio yet — that is the owner's stored preference, not a reading.
@@ -33243,6 +33877,7 @@ void LocalSdrShim::setIfGainReduction(int v){
      *   made the readout report a gain the tuner had never been set to. The slider moved, the
      *   number moved, nothing else did. Report the refusal instead. */
     if (!p || !p->useSdrplay()) { g_dsp.rspIfGr.store(v); return; }
+    noteOwnGainWrite();
     VIBE_HW_LOCK();
     if (p->sdrp->setIfGainReduction(v)) g_dsp.rspIfGr.store(v);
     else LOGI("IF gain reduction %d REFUSED — the radio's own AGC owns this register "
