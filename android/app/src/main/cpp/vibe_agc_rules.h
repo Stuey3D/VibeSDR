@@ -22,6 +22,7 @@
  */
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace vibeagc {
 
@@ -77,20 +78,160 @@ inline int agcBandKey(double hz) {
     return k;                 // above 1 GHz
 }
 
-/* ★★★ 4. HOW FAR A RETUNE MUST GO BEFORE THE AGC FORGETS (2026-10-20, moved here unchanged from retune()).
- *  Half the demodulator's bandwidth, floored at 1 kHz — Stuart's 2026-08-25 rule ("100KHz move of the vfo
- *  ... in AM mode it needs to be less"). Measured from where the AGC LAST forgot (g_agcLearnedAtHz), not
- *  from the previous tune, so a drag of small nudges forgets once it has added up to the threshold.
- *  ★ The width passed in is the AGC's own (g_demodBwHz), which the shim floors at 2.5 kHz — so the
- *    figures in use are: SSB (2.7 kHz) 1.35 kHz · CW 1.25 kHz · AM 5 kHz · NFM 6.25 kHz · WFM 100 kHz.
- *  ★★ SO ON SSB, MOVING TO A SIGNAL A FEW kHz AWAY IS A FULL FORGET: the failed-gain hysteresis, the
- *     learned margin and "settled" all go, and the 8 s hurry lets the loop re-climb at once (Stuart, on
- *     the Portable, 2026-10-20: "it seemed to reset the AGC moving from one SSB signal to another in close
- *     range"). That is this rule doing what it says; test-agc-rules.cpp pins it. */
+/* ★★★ 4. WHAT A RETUNE FORGETS — THE CHANNEL ALWAYS, THE FRONT END ONLY ON A REAL MOVE.
+ *  ★★★ STUART'S DECISION, 2026-10-20 (Portable, RTL-SDR V4, hopping between close SSB signals: "it seemed to
+ *      reset the AGC moving from one SSB signal to another in close range"). This partly reverses the 08-25
+ *      rule, which forgot EVERYTHING once the dial moved more than half the demodulator's bandwidth — 1.35 kHz
+ *      on SSB, so every hop cleared the overload memory, the margin, "settled" and the repeat count, and the
+ *      8 s hurry let the loop re-climb into the gain that had just been cut.
+ *  ★★ THE SPLIT. Two kinds of thing are learned, and they belong to different places:
+ *       · the CHANNEL — separation averages, the peak-hold, a move on trial, the hill-climb's run baselines.
+ *         A different station invalidates them, so they still go at half the demodulator's width (the 08-25
+ *         figure, unchanged: SSB 1.35 kHz · CW 1.25 · AM 5 · NFM 6.25 · WFM 100 kHz — the shim floors the width
+ *         at 2.5 kHz). That is agcChannelMoved().
+ *       · the FRONT END — the gain that overloaded, the strike count, the learned margin. Those are facts
+ *         about what the TUNER and the CONVERTER are being handed, which is the whole capture behind the IF
+ *         filter, not the channel. A hop that keeps the same capture window and the same IF filter hands the
+ *         front end the same signals, so they are KEPT.
+ *  ★ A REAL MOVE (everything forgotten, as before): the dial leaving the capture window, the tuner moving by
+ *    more than a quarter of the IF filter's width from where the front end was learned, a band change
+ *    (agcBandKey), and — handled at their own call sites — a sample-rate change, the IF filter widening, DAB.
+ *  ★ Measured from where each was LAST learned, never from the previous tune, so a drag of small nudges still
+ *    adds up: 100 Hz steps re-learn the channel every 1.4 kHz on SSB and the front end once the tuner has
+ *    travelled a quarter of the filter. */
 constexpr double kRetuneForgetMinHz = 1000.0;
 inline double agcRetuneForgetHz(double agcDemodBwHz) { return std::max(kRetuneForgetMinHz, 0.5 * agcDemodBwHz); }
-inline bool agcRetuneForgets(double learnedAtHz, double newHz, double agcDemodBwHz) {
+inline bool agcChannelMoved(double learnedAtHz, double newHz, double agcDemodBwHz) {
     return std::fabs(newHz - learnedAtHz) > agcRetuneForgetHz(agcDemodBwHz);
 }
+/** The IF filter the front end actually sees: 0 (no filter / automatic) means the capture itself. */
+inline double agcIfEffectiveHz(double tunerBwHz, double sampleRateHz) {
+    return (tunerBwHz <= 0.0 || tunerBwHz > sampleRateHz) ? sampleRateHz : tunerBwHz;
+}
+constexpr double kFrontEndKeepFrac = 0.25;
+inline double agcFrontEndKeepHz(double ifEffHz) { return kFrontEndKeepFrac * ifEffHz; }
+/** Has the TUNER moved far enough that what reaches the front end is a different set of signals?
+ *  `anchorHz` <= 0 means nothing has been learned yet — any position is a new one. */
+inline bool agcFrontEndMoved(double anchorHz, double tunerHz, double ifEffHz) {
+    return anchorHz <= 0.0 || std::fabs(tunerHz - anchorHz) > agcFrontEndKeepHz(ifEffHz);
+}
+enum class RetuneForget { None = 0, Channel = 1, Full = 2 };
+inline const char* retuneForgetName(RetuneForget r) {
+    return r == RetuneForget::Full ? "full" : r == RetuneForget::Channel ? "channel" : "none";
+}
+/** One decision for retune(): `tunerAnchorHz`/`tunerNewHz` are the tuner centre where the front end was
+ *  learned and where it will be after this tune; `leavesWindow` = the dial is outside the capture. */
+inline RetuneForget agcRetuneDecision(double learnedAtHz, double newHz, double agcDemodBwHz,
+                                      double tunerAnchorHz, double tunerNewHz, double ifEffHz,
+                                      bool leavesWindow, bool bandChanged) {
+    if (learnedAtHz <= 0.0) return RetuneForget::Full;   // ★ the first tune: nothing learned to keep
+    const bool chan = agcChannelMoved(learnedAtHz, newHz, agcDemodBwHz);
+    if (!chan && !leavesWindow && !bandChanged) return RetuneForget::None;
+    if (leavesWindow || bandChanged || agcFrontEndMoved(tunerAnchorHz, tunerNewHz, ifEffHz))
+        return RetuneForget::Full;
+    return RetuneForget::Channel;
+}
+
+/* ★★★ 5. CARRIERLESS MODES (SSB, CW) ARE JUDGED ON HEADROOM ONLY — Stuart, 2026-10-20.
+ *  The before/after verdict asks "did that move leave the station further above its neighbourhood?". On a
+ *  signal with no carrier that question is answered by the OPERATOR, not the gain: speech level swings
+ *  several dB syllable to syllable and stops between words, so a 0.5 dB threshold reads the talker. Measured
+ *  on synthetic SSB speech with NO change at all: 47 % of trials "better", 47 % "worse" even with equal
+ *  windows (and 60 / 32 with the old hold). So SSB and CW are treated as DAB already is — the converter
+ *  decides: climb while the predicted peak clears the ceiling, cut when it is hot or railing.
+ *  ★★ AND THE PREDICTION READS A HELD PEAK. The ADC peak is a one-second maximum; a pause between overs
+ *     drops it and the old loop climbed into the next syllable. The climb is predicted against the loudest
+ *     second of the last kHeadroomPeakHoldSec, so a pause shorter than that cannot ask for gain, and a climb
+ *     lands no higher than the operating point (kAgcTargetDbfs, -6). The CUT still reads the live second (two hot seconds, or the rail), so a genuine overload is shed at once. */
+/*  ★★ 30 s AND A 5 dB DEADBAND, BOTH MEASURED ON THE MODEL in test-agc-rules.cpp (20 x 10 min of synthetic SSB
+ *     speech, the station the loudest thing in the capture — the worst case): held 10 s and climbing to the -1 dBFS
+ *     ceiling still moved the gain 431 times; 30 s and climbing only as far as the -6 dBFS operating point, 25 —
+ *     about one move per ten minutes once settled. The CUT stays at -1 dBFS for two seconds, so the 5 dB between
+ *     where a climb may land and where a cut begins is wider than any rung on an RTL (4 dB at most) plus a
+ *     talker's syllable-to-syllable swing. agc_window_narrower_than_step, applied. */
+constexpr int kHeadroomPeakHoldSec = 30;
+struct PeakHold {
+    double pk[kHeadroomPeakHoldSec];
+    int n = 0, head = 0;
+    PeakHold() { reset(); }
+    void reset() { n = 0; head = 0; for (double& v : pk) v = -99.0; }
+    void push(double dbfs) { pk[head] = dbfs; head = (head + 1) % kHeadroomPeakHoldSec; if (n < kHeadroomPeakHoldSec) ++n; }
+    double max() const { double m = -99.0; for (int i = 0; i < n; ++i) m = std::max(m, pk[i]); return m; }
+};
+
+/* ★★★ 6. THE BURSTY CHANNEL LEVEL (AM, NFM): THE SAME STATISTIC BEFORE AND AFTER A MOVE.
+ *  A peak-hold that decays 0.5 dB/s was compared, after a move, with a hold rebuilt from scratch: before = the
+ *  loudest moment of a long history, after = the loudest of 2.7 s. The longer window reads higher, so every
+ *  move looked worse than it was — −2.2 dB on average with no change at all (simulated). Now: the maximum
+ *  over a FIXED window (kBurstyWindowSec), not fed while the gain is settling, and not averaged until the
+ *  window is full — so "before" and "after" are maxima over the same length of time. Cleared on a gain write
+ *  AND on a channel move (it held the LAST station's level and decayed for half a minute). */
+constexpr double kBurstyWindowSec = 2.5;
+class WindowMax {
+public:
+    void configure(int cap) { cap = std::max(1, cap); if (cap != cap_) { cap_ = cap; buf_.assign((size_t)cap_, -200.0f); } reset(); }
+    void reset() { n_ = 0; head_ = 0; }
+    void push(float v) {
+        if (cap_ <= 0) configure(1);
+        buf_[(size_t)head_] = v; head_ = (head_ + 1) % cap_; if (n_ < cap_) ++n_;
+    }
+    bool  full() const { return cap_ > 0 && n_ >= cap_; }
+    int   size() const { return n_; }
+    int   capacity() const { return cap_; }
+    float max() const { float m = -200.0f; for (int i = 0; i < n_; ++i) m = std::max(m, buf_[(size_t)i]); return m; }
+private:
+    std::vector<float> buf_;
+    int cap_ = 0, n_ = 0, head_ = 0;
+};
+
+/* ★★★ 7. THE WATERFALL STAYS STILL WHILE VibeAGC MOVES (Stuart, 2026-10-20: "it bumped up from 29 - 33 - 32 with
+ *  visual jumps in the spectrum").
+ *  The raw capture already goes through GainStepSmoother (vibedsp/gainstep.h): at one of our own gain steps it puts
+ *  the level back and GLIDES it to the new one over ~a second, which is right for the demodulators and still a
+ *  visible slide on the waterfall. This takes the rest out for the PICTURE only: while VibeAGC is on, every
+ *  displayed dB is offset by the gain VibeAGC has moved since its reference (where it started, or where it was
+ *  re-anchored), with the smoother's own correction taken back out — so at the step the two cancel exactly and
+ *  afterwards the offset holds. A station keeps its colour while the loop works underneath it.
+ *  ★★ WHAT IT DOES NOT TOUCH: the measurements (the AGC reads raw bins), the ADC peak and clip figures, the "sig"
+ *     meter — an overload is still reported as it is. And NOT the owner's slider: with VibeAGC off the offset is 0
+ *     and a manual change shows as it always has.
+ *  ★★ TRADE-OFF, STATED: it holds what scales with the gain — signals and band noise — still. The receiver's OWN
+ *     floor (the 8-bit converter's) does not scale, so after a large cut on a quiet band that floor rises on the
+ *     picture by the cut. That is the calibrated-display behaviour (a dBm scale), and the price of a still picture.
+ *  ★ The gain in effect changes when the radio applies it, not when we queue it: the smoother's found step says
+ *    when (exactly); a step too small for it to find (most RTL rungs are 1-3 dB, under its 4 dB search floor) is
+ *    taken kSpecApplyWithinSec after the write — about the USB/I2C latency, so the error either way is a frame.
+ *    Because the offset is (reference - gain in effect - the smoother's correction), a step it finds LATER than
+ *    that is still exact from the moment it is found: nothing is counted twice. */
+constexpr double kSpecApplyWithinSec = 0.10;
+class SpectrumGainComp {
+public:
+    /** Call once per IQ block on the DSP thread. Returns the dB to ADD to every displayed bin.
+     *  agcOn — VibeAGC is steering this radio; writeSeq — our gain-write counter; targetTenth — the gain the
+     *  last write asked for; smootherSteps / corrDb — the smoother's step count and current correction;
+     *  reanchor — start a new reference at the gain in effect (VibeAGC switched on, a full forget, idle park). */
+    double update(double now, bool agcOn, unsigned writeSeq, int targetTenth, unsigned smootherSteps, double corrDb,
+                  bool reanchor) {
+        if (effTenth_ < 0 && targetTenth >= 0) effTenth_ = targetTenth;
+        if (writeSeq != seenWrites_) { seenWrites_ = writeSeq; pendingTenth_ = targetTenth; pendingUntil_ = now + kSpecApplyWithinSec; }
+        if (smootherSteps != seenSteps_) {
+            seenSteps_ = smootherSteps;
+            if (pendingTenth_ >= 0) { effTenth_ = pendingTenth_; pendingTenth_ = -1; }
+        }
+        if (pendingTenth_ >= 0 && now >= pendingUntil_) { effTenth_ = pendingTenth_; pendingTenth_ = -1; }
+        if (!agcOn || effTenth_ < 0) { refTenth_ = -1; return 0.0; }
+        if (reanchor || refTenth_ < 0) refTenth_ = effTenth_;
+        const double moved = (effTenth_ - refTenth_) / 10.0;
+        // ★ The smoother's correction is part of the level we are shown; take it back out with the offset, so at
+        //   the step the two cancel. Only while the correction belongs to OUR step (an RSP's own steps are not ours).
+        return -(moved + corrDb);
+    }
+    int refTenth() const { return refTenth_; }
+    int effTenth() const { return effTenth_; }
+private:
+    unsigned seenWrites_ = 0, seenSteps_ = 0;
+    int effTenth_ = -1, pendingTenth_ = -1, refTenth_ = -1;
+    double pendingUntil_ = 0.0;
+};
 
 }  // namespace vibeagc
