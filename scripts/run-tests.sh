@@ -272,6 +272,9 @@ if node --no-warnings scripts/test_tune_window.ts; then pass=$((pass+1)); else f
 if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ SERVER ADDRESSES (serverUrl.ts): scheme and port are a PAIR — https://host:8073 stays TLS (GitHub #52, OWRX+ native TLS).
 if node --no-warnings scripts/test_server_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ PER-SERVER CERTIFICATE PINS (tlsPin.ts, GitHub #52): the key, the fingerprint, what a certificate says, and which
+#     prompt — offer / "certificate has changed" / refuse (expired, public cert for another name) / nothing.
+if node --no-warnings scripts/test_tls_pin.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ OWRX S-METER CALIBRATION (owrxSmeterCal.ts): the wire level is not dBm — owner's plugin figures, else noise at S2.
 if node --no-warnings scripts/test_owrxSmeterCal.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ VIBESERVER SQUELCH ON/OFF (vibeSquelch.ts): a threshold below -100 dBFS is a threshold, not "off" — the
@@ -718,6 +721,16 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     simulated — and still refusing expired / self-signed / untrusted / wrong-host. Needs the network.
 printf '\n\033[1m── TLS roots for old Android (VibeTls) ──\033[0m\n'
 bash scripts/test-tls-roots.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ PER-SERVER CERTIFICATE PINS, NATIVE (GitHub #52): the app's own VibeTlsCore.m (Mac, Security.framework) and
+#     VibePinnedTls.kt (desktop JVM, real OkHttp) against self-signed servers on 127.0.0.1 — refused without a pin and
+#     the server never sees the request; the pin accepted for THAT host:port only; changed / expired refused; forget.
+printf '\n\033[1m── certificate pins, Apple (VibeTlsCore) ──\033[0m\n'
+bash scripts/test-tls-pin-apple.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── certificate pins, Android (VibePinnedTls) ──\033[0m\n'
+bash scripts/test-tls-pin-android.sh; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the
