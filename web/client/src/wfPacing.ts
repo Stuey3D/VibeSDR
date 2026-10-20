@@ -1,3 +1,5 @@
+import { newRowTargetState, stepRowTarget, type WfScroll } from '../../../src/assets/wfRowTarget.ts';
+
 /**
  * ★★★ WATERFALL ROW PACING — pure functions, so the cadence can be proved without a browser
  *     (scripts/test_wf_pacing.ts). waterfall.ts and main.ts's render loop both use these.
@@ -148,7 +150,22 @@ export class RowPacer {
   emitTotal = 0;
   emitted = 0;
 
-  /** The setting changed: re-decide the cadence from scratch (the hysteresis is for wobble only). */
+  /** ★★★ FOLLOW THE FEED (Stuart 10-20, src/assets/wfRowTarget.ts — the app's rule, shared): the setting is a
+   *  SCROLL MODE, and the rows aimed for come from the measured feed — Default min(20, 3x), Smooth min(60, 6x),
+   *  snapped to a divisor of 60, latched against wobble; 0 = actual rows (drawn as Sharp is). Screen rows × dpr. */
+  scroll: WfScroll | null = null;
+  private dpr = 1;
+  private tgt = newRowTargetState();
+  private feedMs = 0;          // the feed estimate the target follows — a stall's one long gap is clipped (≤ 2×)
+  /** Screen rows/s aimed for now (0 = actual rows) — for the test and diagnostics. */
+  screenTarget = 0;
+  setScroll(scroll: WfScroll, dpr: number) {
+    if (scroll !== this.scroll || dpr !== this.dpr) { this.tgt = newRowTargetState(); this.framesPerRow = 0; }
+    this.scroll = scroll; this.dpr = dpr; this.rowPx = Math.max(1, Math.round(dpr));
+    this.sharp = scroll === 'sharp';
+  }
+
+  /** A FIXED rate (no feed-following) — the cadence tests drive this directly. */
   setRate(rowsPerSec: number, sharp: boolean, rowPx = 1) {
     const px = Math.max(1, Math.round(rowPx));
     if (rowsPerSec !== this.rowsPerSec || sharp !== this.sharp || px !== this.rowPx) this.framesPerRow = 0;
@@ -158,10 +175,19 @@ export class RowPacer {
   /** A real row arrived at `now` (ms). Unemitted repeats of the last pair are DROPPED, never flushed. */
   onArrival(now: number) {
     this.emitted = this.emitTotal;
-    const gap = this.lastArrival ? now - this.lastArrival : 1000 / this.rowsPerSec;
+    const first = !this.lastArrival;
+    const gap = first ? 1000 / Math.max(1, this.rowsPerSec || 20) : now - this.lastArrival;
     this.lastArrival = now;
     this.slowGap = Math.max(gap, this.slowGap * 0.98);
     this.avgGap = this.avgGap ? this.avgGap * 0.85 + gap * 0.15 : gap;
+    if (this.scroll && !first) {       // ★ the first arrival has no gap to measure — never feed it a guess
+      this.feedMs = this.feedMs ? this.feedMs * 0.8 + Math.min(gap, this.feedMs * 2) * 0.2 : gap;
+      const t = stepRowTarget(this.tgt, this.scroll, 1000 / Math.max(1, this.feedMs));
+      const sharp = t === 0, rps = sharp ? this.rowsPerSec : t * this.dpr;
+      // ★ A new target re-decides the cadence; frameTick and the pair run on, so nothing jumps.
+      if (sharp !== this.sharp || rps !== this.rowsPerSec) { this.sharp = sharp; this.rowsPerSec = rps; this.framesPerRow = 0; }
+      this.screenTarget = t;
+    }
     const refreshHz = this.clock.hz();
     // ★ SHARP paces at the FEED's rate (one real row per arrival, nothing repeated) — but still on a
     //   whole-frame cadence. Drawing each row on the first frame after it lands put every arrival

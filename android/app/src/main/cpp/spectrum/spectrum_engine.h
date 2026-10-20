@@ -13,6 +13,7 @@
 // ★ No JSI and no Skia here. Images and paths are made through the functions passed to the constructor (the
 //   vibe_rnskia exports in the patched react-native-skia), so this core builds and tests on the host.
 #pragma once
+#include "wf_row_target.h"
 #include "spectrum_processor.h"
 #include <atomic>
 #include <cmath>
@@ -33,7 +34,7 @@ struct EngineConfig {
     bool   specShow = true;
     bool   peakHold = true;
     bool   smoothTune = true;
-    int    targetRows = 0;     // WF_TARGET_ROWS: 60 smooth / 20 default / 0 sharp (Default 30 -> 20, 2026-10-20)
+    int    targetRows = 0;     // WF_TARGET_ROWS = the setting's CAP: 60 smooth / 20 default / 0 sharp — the rows actually aimed for follow the feed (wf_row_target.h)
 };
 
 /** What the UI thread picks up. Handles are OWNED by the receiver once taken (wrap them or release them). */
@@ -149,6 +150,8 @@ private:
     double lastRowCenterHz_ = 0, lastRowHzPerBin_ = 0;
     double avgFrameMs_ = 150, lastFrameTs_ = 0, avgWfGapMs_ = 0, lastWfPushAt_ = 0;
     double rowCarry_ = 0;
+    vibewf::RowTargetState rowTargetSt_;   // rows/s aimed for now + its feed latch (wf_row_target.h); target 0 = actual rows
+    int    rowTargetCap_ = -1; // the cfg.targetRows rowTarget_ was decided under
     int extrasLeft_ = 0; double extraSpacing_ = 0, extraDueAt_ = -1;
     bool covNow_ = false, bgNow_ = false;  // engine-thread copies
     EngineConfig cfgNow_;

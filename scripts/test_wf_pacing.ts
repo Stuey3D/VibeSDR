@@ -29,14 +29,15 @@ function ok(what: string, cond: boolean, detail = '') {
 
 function lcg(seed: number) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 0x100000000); }
 
-interface Sim { rowsPerSec: number; sharp?: boolean; rowPx?: number; hz?: number; fps?: number; frameJit?: number;
+interface Sim { rowsPerSec: number; sharp?: boolean; rowPx?: number; scroll?: 'sharp' | 'default' | 'smooth'; fpsAt?: (ms: number) => number; hz?: number; fps?: number; frameJit?: number;
                 arrJit?: number; dropVsync?: number; secs?: number; seed?: number }
 /** Returns rows drawn per display SLOT (dropped vsyncs are slots with no frame). */
 function simulate(o: Sim) {
   const hz = o.hz ?? 60, fps = o.fps ?? 20, secs = o.secs ?? 30, rnd = lcg(o.seed ?? 7);
-  const p = new RowPacer(); p.setRate(o.rowsPerSec, !!o.sharp, o.rowPx ?? 1);
+  const p = new RowPacer();
+  if (o.scroll) p.setScroll(o.scroll, o.rowPx ?? 1); else p.setRate(o.rowsPerSec, !!o.sharp, o.rowPx ?? 1);
   const arrivals: number[] = [];
-  for (let t = 37.3; t < secs * 1000; t += 1000 / fps) arrivals.push(t + (rnd() * 2 - 1) * (o.arrJit ?? 0));
+  for (let t = 37.3; t < secs * 1000; t += 1000 / (o.fpsAt ? o.fpsAt(t) : fps)) arrivals.push(t + (rnd() * 2 - 1) * (o.arrJit ?? 0));
   arrivals.sort((a, b) => a - b);
   let ai = 0, have = false;
   const slots: number[] = [];
@@ -53,7 +54,7 @@ function simulate(o: Sim) {
   s.forEach((r, i) => { if (r) { if (last >= 0) gaps.push(i - last); last = i; } });
   const hist: Record<number, number> = {}; for (const g of gaps) hist[g] = (hist[g] || 0) + 1;
   const perEmit: Record<number, number> = {}; for (const r of s) if (r) perEmit[r] = (perEmit[r] || 0) + 1;
-  return { rowsPerSec: rows / (s.length / hz), gaps, hist, fpr: p.framesPerRow, perEmit };
+  return { rowsPerSec: rows / (s.length / hz), gaps, hist, fpr: p.framesPerRow, perEmit, target: p.screenTarget, slots: s };
 }
 const describe = (r: ReturnType<typeof simulate>) => `rows/s ${r.rowsPerSec.toFixed(2)} gaps ${JSON.stringify(r.hist)} rows/emission ${JSON.stringify(r.perEmit)} N=${r.fpr}`;
 const offCadence = (r: ReturnType<typeof simulate>, n: number) => r.gaps.filter((g) => g !== n).length;
@@ -110,6 +111,24 @@ for (const seed of [11, 12, 13]) {
   const r = simulate({ rowsPerSec: 40, rowPx: 2, dropVsync: 0.05, ...REAL });
   ok('DEFAULT dpr2 @60 with 5 % dropped vsyncs: N stays 3', r.fpr === 3, describe(r));
 }
+// ── FOLLOW THE FEED (Stuart 10-20, src/assets/wfRowTarget.ts): the web client scrolls exactly as the app ──
+for (const [scroll, fps, screen] of [['default', 5, 15], ['default', 10, 20], ['default', 20, 20], ['smooth', 5, 30], ['smooth', 10, 60],
+                                     ['smooth', 20, 60], ['sharp', 10, 10], ['default', 10 / 3, 10], ['smooth', 9, 30]] as const) {
+  const r = simulate({ rowsPerSec: 0, scroll, rowPx: 2, fps, ...REAL });
+  const want = screen * 2, n = Object.keys(r.hist).sort((a, b) => r.hist[+b] - r.hist[+a])[0];
+  ok(`FEED ${scroll} @ ${fps.toFixed(2)} fps, dpr 2, 60 Hz: ${screen} screen rows/s, on cadence`,
+     Math.abs(r.rowsPerSec - want) < want * 0.02 + 0.3 && offCadence(r, +n) / 27 <= 0.25, describe(r));
+}
+{
+  // A governor step 10 -> 5 fps half way: Smooth 60 -> 30 ONCE, and the scroll keeps going (no frame without a row
+  // at 30/s after the change — one row every 2 frames).
+  const r = simulate({ rowsPerSec: 0, scroll: 'smooth', rowPx: 2, fps: 10, fpsAt: (ms) => (ms < 15000 ? 10 : 5), ...REAL });
+  const tail = r.slots.slice(-60 * 10);   // the last 10 s
+  const rows = tail.reduce((a, b) => a + b, 0) / 10;
+  ok('governor 10 -> 5 fps: Smooth settles at 30 screen rows/s (60 device), one device row every 2 frames',
+     r.target === 30 && Math.abs(rows - 60) < 2, `target ${r.target}, last 10 s ${rows} device rows/s`);
+}
+
 // ── emitShape ──
 ok('emitShape: 40 device rows/s @60, rowPx 2 → 2 rows every 3 frames', JSON.stringify(emitShape(60, 40, 2)) === '{"per":2,"fpr":3}');
 ok('emitShape: 120 @60 → 2 a frame; 120 @120 → 1 a frame', JSON.stringify(emitShape(60, 120, 2)) === '{"per":2,"fpr":1}' && JSON.stringify(emitShape(120, 120, 2)) === '{"per":1,"fpr":1}');

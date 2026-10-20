@@ -136,7 +136,14 @@ export class Waterfall {
    *    between real ones (emitTotal is forced to 1, the state this already reaches naturally when
    *    the screen speed matches the data rate). The SPECTRUM TRACE is untouched either way: this
    *    governs waterfall row emission only, and the trace must stay smooth at all times. */
-  setSharpRows(on: boolean) { this.sharpRows = on; this.pacer.setRate(this.rowsPerSec, on, renderDpr()); }
+  setSharpRows(on: boolean) { this.sharpRows = on; if (!this.scroll) this.pacer.setRate(this.rowsPerSec, on, renderDpr()); }
+  /** ★★★ THE SCROLL MODE, and the rows follow the FEED (Stuart 10-20, src/assets/wfRowTarget.ts — the app's rule):
+   *  Sharp = actual rows; Default = min(20, 3 x feed); Smooth = min(60, 6 x feed); snapped to a divisor of 60. */
+  setScroll(scroll: 'sharp' | 'default' | 'smooth') {
+    this.scroll = scroll; this.sharpRows = scroll === 'sharp';
+    this.pacer.setScroll(scroll, renderDpr());
+  }
+  private scroll: 'sharp' | 'default' | 'smooth' | null = null;
   private sharpRows = false;
 
 
@@ -147,7 +154,11 @@ export class Waterfall {
   }
   // ★ framesPerRow = 0: a new rate re-decides the cadence from scratch (its hysteresis is only for
   //   measurement wobble at a FIXED rate — carrying Smooth's N=1 into Default would keep 60 rows/s).
-  private recomputeRate() { this.rowsPerSec = this.screenSpeed * renderDpr(); this.pacer.setRate(this.rowsPerSec, this.sharpRows, renderDpr()); }
+  private recomputeRate() {
+    this.rowsPerSec = this.screenSpeed * renderDpr();
+    if (this.scroll) this.pacer.setScroll(this.scroll, renderDpr());     // a Detail (dpr) change
+    else this.pacer.setRate(this.rowsPerSec, this.sharpRows, renderDpr());
+  }
   private prevRow: Uint8Array | null = null;   // last received row
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
