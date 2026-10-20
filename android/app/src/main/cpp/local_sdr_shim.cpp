@@ -26160,7 +26160,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // same queue the USB/rtl_tcp paths feed. Blocks with backpressure exactly like
     // tcpReadLoop, so the 250 ms jitter buffer applies here too.
     void spyReadLoop() {
-        vibeThreadName("vibe-spy");
+        /* ★★★ AN IQ INPUT, SO THE IQ RUNG (2026-10-20). This was a plain name at nice 0 — under a -19 DSP and a -20
+         *  writer the reader that FEEDS them was the one thread left behind: one busy loop per core at -19 cut a
+         *  listener's audio to 40 % (scripts/test-server-thread-rank.mjs). It blocks on the socket and on a full
+         *  queue, so the rung costs nothing while it waits. See vibeIqThread. */
+        vibeIqThread("vibe-spy");
         auto lastData = std::chrono::steady_clock::now();
         spy->run(tcpRunning,
             [&](const uint8_t* data, size_t bytes, uint32_t fmt) {
@@ -26190,7 +26194,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // Reads what's available (low latency) and carries a stray odd byte so I/Q
     // pairs never misalign across reads.
     void tcpReadLoop() {
-        vibeThreadName("vibe-tcp");
+        /* ★★★ AN IQ INPUT, SO THE IQ RUNG (2026-10-20). This was a plain name at nice 0 — under a -19 DSP and a -20
+         *  writer the reader that FEEDS them was the one thread left behind: one busy loop per core at -19 cut a
+         *  listener's audio to 40 % (scripts/test-server-thread-rank.mjs). It blocks on the socket and on a full
+         *  queue, so the rung costs nothing while it waits. See vibeIqThread. */
+        vibeIqThread("vibe-tcp");
         const int CHUNK = 32768;                 // bytes (16384 IQ samples)
         std::vector<uint8_t> buf(CHUNK + 1);
         int carry = 0;                            // 0/1 leftover byte from last read

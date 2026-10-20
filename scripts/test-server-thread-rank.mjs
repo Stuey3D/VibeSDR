@@ -6,9 +6,11 @@
 //     compared across all of them, so one radio's DSP (-19) must never outrank another radio's AUDIO send. The rule is
 //     Network > Audio > Spectrum > Decoders: audio send ≥ DSP > waterfall send ≥ spectrum.
 // ★★ THE LOAD HALF stands in for "another radio's DSP": one busy loop per core at nice -19 (the DSP's rung), in other
-//    processes. The fake dongle runs at -20, as the IQ input does in the server — it plays the hardware, which does not
-//    queue behind anybody's CPU — and so does this script, which plays the listener's network. What is under test is
-//    the server between them: its audio must arrive at the same rate, without a long gap.
+//    processes. The fake dongle is moved to SCHED_FIFO for it: it plays the HARDWARE, which DMAs its samples whatever
+//    the CPU is doing — and it is not light (node synthesising 2 MS/s took ~80 % of a core against the server's ~18 %
+//    in the measuring container), so at a mere -20 it was the fake that starved and the test measured that: audio
+//    fell to 35-40 % with every server thread on its rung. This script, which plays the listener's network, takes -20.
+//    What is under test is the server between them: its audio must arrive at the same rate, without a long gap.
 // ★ LINUX ONLY (thread ranks are read from /proc); elsewhere "not run" (exit 3). Without CAP_SYS_NICE (a developer's
 //   shell) the server cannot take its negative rungs at all — reported NOT RUN, never as a pass. In a container:
 //   `docker run --cap-add SYS_NICE …` as root gives exactly the unit's AmbientCapabilities=CAP_SYS_NICE.
@@ -18,7 +20,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -33,7 +35,7 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
 function ws(port, pathq) {
   const key = crypto.randomBytes(16).toString('base64');
   const s = net.connect(port, '127.0.0.1');
-  const st = { binAt: [], closed: false };
+  const st = { binAt: [], binLen: [], closed: false };
   let hs = false, buf = Buffer.alloc(0);
   s.on('connect', () => s.write(`GET ${pathq} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
   s.on('error', () => {});
@@ -49,7 +51,7 @@ function ws(port, pathq) {
       if (buf.length < off + len) break;
       const p = buf.subarray(off, off + len); buf = buf.subarray(off + len);
       if (op === 0x9) { const q = Buffer.alloc(6 + p.length); q[0] = 0x8a; q[1] = 0x80 | p.length; q.writeUInt32BE(0, 2); p.copy(q, 6); s.write(q); continue; }
-      if (op === 0x2) st.binAt.push(Date.now());
+      if (op === 0x2) { st.binAt.push(Date.now()); st.binLen.push(p.length); }
     }
   });
   st.close = () => { try { s.write(Buffer.from([0x88, 0x80, 0, 0, 0, 0])); } catch {} s.end(); };
@@ -85,13 +87,16 @@ function threads(pid) {
   return out;
 }
 
-/** Audio frames per second and the longest silence between two frames, over [from, to). */
+/** Audio BYTES per second (frames may batch differently under load — the bytes are the sound), frames per second,
+ *  and the longest silence between two frames, over [from, to). */
 function cadence(st, from, to) {
-  const t = st.binAt.filter((x) => x >= from && x < to);
+  const idx = st.binAt.map((x, i) => i).filter((i) => st.binAt[i] >= from && st.binAt[i] < to);
+  const t = idx.map((i) => st.binAt[i]);
+  const bytes = idx.reduce((a, i) => a + st.binLen[i], 0);
   let gap = 0;
   for (let i = 1; i < t.length; i++) gap = Math.max(gap, t[i] - t[i - 1]);
   if (t.length) gap = Math.max(gap, t[0] - from, to - t[t.length - 1]);
-  return { fps: t.length * 1000 / (to - from), gap: t.length ? gap : to - from };
+  return { fps: t.length * 1000 / (to - from), bps: bytes * 1000 / (to - from), gap: t.length ? gap : to - from };
 }
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-rank-'));
@@ -129,6 +134,7 @@ try {
   const summary = ['vibeTx-audio', 'vibeTx-wf', 'vibeTx', 'vibe-rtl', 'vibe-dsp', 'vibe-listener', 'vibe-spec']
     .map((n) => `${n} ${of(n).map((t) => t.nice).join('/') || '-'}`).join(' · ');
   console.log(`   ${summary}`);
+  if (process.env.VERBOSE) console.log('   all: ' + th.map((t) => `${t.comm}:${t.nice}`).join(' '));
   ok(of('vibeTx-audio').length >= 1, `the audio socket's writer is classified and named (${of('vibeTx-audio').length})`);
   ok(of('vibeTx-wf').length >= 1, `the waterfall socket's writer is classified and named (${of('vibeTx-wf').length})`);
   ok(of('vibe-dsp').length >= 1 && aud.binAt.length > 0, `the DSP runs and audio arrives (${aud.binAt.length} frames)`);
@@ -162,13 +168,17 @@ try {
       burners.push(b);
     }
     try { os.setPriority(0, -20); } catch {}   // this script plays the listener's network: it must not be what starves
+    let fifo = false;
+    try { execFileSync('chrt', ['-a', '-f', '-p', '10', String(rtl.pid)], { stdio: 'ignore' }); fifo = true; } catch {}
+    ok(fifo, 'the fake dongle runs SCHED_FIFO (plays the hardware) — without it the load measures the fake, not the server');
     await sleep(1000);
     t0 = Date.now();
     await sleep(8000);
     const busy = cadence(aud, t0, Date.now());
-    console.log(`   idle ${idle.fps.toFixed(1)} frames/s, longest gap ${idle.gap} ms · loaded (${n} burners at -19) ${busy.fps.toFixed(1)} frames/s, longest gap ${busy.gap} ms`);
-    ok(idle.fps > 5, `audio flowing before the load (${idle.fps.toFixed(1)}/s)`);
-    ok(busy.fps >= idle.fps * 0.9, `★★★ the audio keeps its rate under the load (${busy.fps.toFixed(1)} vs ${idle.fps.toFixed(1)} /s)`);
+    const kb = (c) => `${(c.bps / 1024).toFixed(1)} KB/s in ${c.fps.toFixed(1)} frames/s, longest gap ${c.gap} ms`;
+    console.log(`   idle ${kb(idle)} · loaded (${n} burners at -19) ${kb(busy)}`);
+    ok(idle.bps > 1000, `audio flowing before the load (${(idle.bps / 1024).toFixed(1)} KB/s)`);
+    ok(busy.bps >= idle.bps * 0.9, `★★★ the audio keeps its rate under the load (${(busy.bps / 1024).toFixed(1)} vs ${(idle.bps / 1024).toFixed(1)} KB/s)`);
     ok(busy.gap < 400, `★★ no long silence under the load (longest ${busy.gap} ms)`);
     ok(!aud.closed, 'the listener stayed connected');
   }
