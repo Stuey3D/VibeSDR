@@ -705,6 +705,8 @@ target_link_libraries(test-power-dips PRIVATE Threads::Threads)
 add_test(NAME power-dips COMMAND test-power-dips)
 # ★ The mDNS responder's question parser (2026-10-17): compressed questions — Apple packs several lookups into one
 #   packet — were ignored, so <name>.local resolved only when ours happened to be the first, uncompressed question.
+#   ★ 2026-10-20: and respond() — whole query packets in, whole responses out: A+AAAA → A + NSEC, browse → PTR with
+#     SRV/TXT/A/NSEC additionals, known-answer suppression, TC, QU, legacy unicast, announce and goodbye.
 add_executable(test-mdns "${CMAKE_CURRENT_SOURCE_DIR}/test-mdns.cpp")
 target_include_directories(test-mdns PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-mdns)

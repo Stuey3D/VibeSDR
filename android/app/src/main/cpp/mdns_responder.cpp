@@ -10,9 +10,11 @@
 //
 // WHAT IT DOES
 //
-// Joins 224.0.0.251:5353, and answers QTYPE=A (and ANY) questions for our own name with
-// our IPv4 address. It does not browse and it does not cache — this is not a general mDNS
-// stack and does not try to be one.
+// Joins 224.0.0.251:5353, and answers questions for our own name with our IPv4 address (A, and
+// an NSEC for the AAAA we do not have). It does not browse and it does not cache — this is not a
+// general mDNS stack and does not try to be one. What it DOES do is answer the packets real
+// resolvers send, the way RFC 6762 says: see respond() for the list, and vibeserver/test-mdns.cpp
+// for every shape, byte for byte. scripts/probe-mdns.py asks a live server the same questions.
 //
 // ★★★ AND, WHEN ASKED TO, IT PUBLISHES THE SERVICE (_vibesdr._tcp) TOO.
 //
@@ -39,6 +41,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -65,6 +68,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
@@ -93,12 +97,6 @@ std::atomic<bool>      g_run{false};
 std::string            g_host;           // "vibesdr" — WITHOUT the .local
 uint32_t               g_addr = 0;       // our IPv4, network byte order
 std::atomic<bool>      g_conflict{false};
-// ★ A LEGACY UNICAST question (RFC 6762 §6.7 — asked from a port other than 5353: dig, nslookup, a plain resolver)
-//   is answered straight back to the asker's port, with its transaction id, its question repeated, a TTL of at most
-//   10 s and no cache-flush bit. Set only while one such question is being answered (the responder is one thread).
-bool                   g_legacy = false;
-uint32_t ttlOut()   { return g_legacy ? 10u : (uint32_t)kTtl; }
-uint16_t classOut() { return g_legacy ? 0x0001 : 0x8001; }      // CLASS IN (+ cache-flush on multicast)
 // ── The service, when we are the one publishing it (0 = we are not) ──────────────────
 uint16_t               g_svcPort = 0;
 bool                   g_svcPin  = false;
@@ -203,170 +201,308 @@ size_t matchName(const uint8_t* buf, size_t len, size_t pos, const std::string& 
     return 0;
 }
 
-/** Build an mDNS response carrying one A record for our name. */
-std::string buildAnswer(const std::string& host, uint32_t addr, uint16_t txid) {
-    const std::string name = encodeName(host);
-    std::string p;
-    auto u16 = [&](uint16_t v) { p += (char)(v >> 8); p += (char)(v & 0xFF); };
-    auto u32 = [&](uint32_t v) {
-        p += (char)(v >> 24); p += (char)((v >> 16) & 0xFF);
-        p += (char)((v >> 8) & 0xFF); p += (char)(v & 0xFF);
-    };
-    u16(txid);
-    u16(0x8400);        // response, authoritative
-    u16(0);             // questions
-    u16(1);             // answers
-    u16(0);             // authority
-    u16(0);             // additional
-    p += name;
-    u16(1);             // TYPE A
-    u16(classOut());        // CLASS IN, cache-flush bit — we are authoritative for this name
-    u32(ttlOut());
-    u16(4);
-    p.append((const char*)&addr, 4);     // already network byte order
-    return p;
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// RECORDS AND RESPONSES
+//
+// ★★★ ONE QUERY PACKET, ONE RESPONSE, BUILT BY respond() (2026-10-20, Stuart: the Portable "usually" missing from the
+//     app's Discovered list, vibeserver-portable.local failing in every browser). This used to be a builder per record
+//     shape and a reply per QUESTION, each written into the Answer section. What real resolvers send, and what we now
+//     do with it (RFC 6762 / 6763):
+//       · several questions in one packet, compressed against each other (Apple packs every pending lookup) — all are
+//         matched, and everything we own goes out in ONE response;
+//       · A + AAAA asked together — the A answered, and an NSEC saying "this name has no AAAA" (§6.1), so the asker
+//         stops waiting for an IPv6 address that will never come. An A answer always carries that NSEC as an
+//         additional record, so an asker that only asked for A learns it too;
+//       · a browse (PTR) — the PTR in the Answer section and SRV, TXT, A and NSEC as ADDITIONAL records (RFC 6763 §12.1),
+//         which is where Android's MdnsDiscoveryManager and mDNSResponder look for them;
+//       · KNOWN ANSWERS (§7.1) — a record the asker already holds with at least half its TTL left is NOT sent again: a
+//         MUST, and it is what keeps a busy LAN quiet; a packet with the TC bit has more known answers coming, so its
+//         reply waits 400–500 ms for them (§7.2 — done in the serve loop);
+//       · QU (§5.4) — a query whose every question asks for a unicast reply gets one, to the asker's 5353;
+//       · LEGACY UNICAST (§6.7) — a query from any port but 5353 gets its id and questions back, TTL ≤ 10, no cache-flush,
+//         to the port it came from.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+/** One resource record we own. TTL and class are applied when it is written (normal, legacy or goodbye). */
+struct Rec {
+    std::string name;      // DNS-encoded, uncompressed
+    uint16_t    type;
+    bool        unique;    // cache-flush bit on multicast: we alone answer for it (not the shared PTRs)
+    std::string rdata;     // uncompressed
+};
+
+bool sameRec(const Rec& a, const Rec& b) { return a.type == b.type && a.name == b.name && a.rdata == b.rdata; }
+
+void put16(std::string& p, uint16_t v) { p += (char)(v >> 8); p += (char)(v & 0xFF); }
+void put32(std::string& p, uint32_t v) { put16(p, (uint16_t)(v >> 16)); put16(p, (uint16_t)(v & 0xFFFF)); }
+
+Rec recA(const std::string& host, uint32_t addr) {
+    return {encodeName(host), 1, true, std::string((const char*)&addr, 4)};   // addr is network byte order already
 }
+
+/** "This name exists and A is the only type it has" — the negative answer to AAAA (RFC 6762 §6.1). RDATA = next name
+ *  (our own, as mDNS does) + window 0 + bitmap length 1 + bitmap; bit 1 (A) is 0x40. */
+Rec recNsec(const std::string& host) {
+    const std::string name = encodeName(host);
+    std::string rd = name;
+    rd += (char)0x00; rd += (char)0x01; rd += (char)0x40;
+    return {name, 47, true, rd};
+}
+
+Rec recPtr(const std::string& host) { return {svcTypeName(), 12, false, svcInstName(host)}; }
+
+Rec recSrv(const std::string& host, uint16_t port) {
+    std::string rd;
+    put16(rd, 0); put16(rd, 0); put16(rd, port);           // priority, weight, port
+    rd += encodeName(host);
+    return {svcInstName(host), 33, true, rd};
+}
+
+/** The same TXT keys every existing client already reads. */
+Rec recTxt(const std::string& host, bool pin) {
+    const std::string k1 = "proto=vibeserver";
+    const std::string k2 = pin ? "pin=1" : "pin=0";
+    std::string rd;
+    rd += (char)k1.size(); rd += k1;
+    rd += (char)k2.size(); rd += k2;
+    return {svcInstName(host), 16, true, rd};
+}
+
+/** The "what KINDS of service are here?" meta-query's answer. */
+Rec recMeta() { return {svcMetaName(), 12, false, svcTypeName()}; }
+
+enum class Ttl { Normal, Legacy, Goodbye };
 
 /**
- * The service records, as one response: PTR (what is here) + SRV (where) + TXT (how) + A.
- *
- * ★★★ ALL FOUR IN ONE PACKET, because that is what makes discovery INSTANT rather than a
- *     three-round-trip conversation. A browser that gets a bare PTR must then ask for SRV,
- *     then TXT, then A — and on a phone waking its Wi-Fi that is the difference between a
- *     server appearing at once and appearing "eventually", which reads as not appearing.
- * ★★ NO NAME COMPRESSION. Pointers would save a hundred bytes and are a common source of
- *    subtly wrong packets; we are nowhere near the MTU, so the whole names are written out.
- * ★ The cache-flush bit is set on SRV/TXT/A (we are authoritative for those) but NOT on the
- *   PTR: several servers legitimately share one service type, and flushing there would tell
- *   resolvers to forget everyone else's.
+ * Write one DNS message. `qsec`/`qd` = a question section to repeat (legacy unicast only — multicast responses carry
+ * none, RFC 6762 §6). No name compression: we are far below any MTU, and pointers are where packets go subtly wrong.
  */
-std::string buildService(const std::string& host, uint32_t addr, uint16_t txid, bool includePtr) {
-    const std::string inst = svcInstName(host);
-    const std::string type = svcTypeName();
-    const std::string hostN = encodeName(host);
-    if (inst.empty() || type.empty()) return std::string();
-
+std::string writeMsg(uint16_t txid, const std::string& qsec, uint16_t qd,
+                     const std::vector<Rec>& an, const std::vector<Rec>& ar, Ttl ttl) {
     std::string p;
-    auto u16 = [&](uint16_t v) { p += (char)(v >> 8); p += (char)(v & 0xFF); };
-    auto u32 = [&](uint32_t v) {
-        p += (char)(v >> 24); p += (char)((v >> 16) & 0xFF);
-        p += (char)((v >> 8) & 0xFF); p += (char)(v & 0xFF);
+    put16(p, txid);
+    put16(p, 0x8400);                  // response, authoritative
+    put16(p, qd);
+    put16(p, (uint16_t)an.size());
+    put16(p, 0);
+    put16(p, (uint16_t)ar.size());
+    p += qsec;
+    auto rr = [&](const Rec& r) {
+        p += r.name;
+        put16(p, r.type);
+        // ★ cache-flush only on a multicast answer we alone own; a legacy asker is a plain DNS client (§6.7)
+        put16(p, (r.unique && ttl != Ttl::Legacy) ? 0x8001 : 0x0001);
+        put32(p, ttl == Ttl::Goodbye ? 0u : ttl == Ttl::Legacy ? 10u : (uint32_t)kTtl);
+        put16(p, (uint16_t)r.rdata.size());
+        p += r.rdata;
     };
-
-    const uint16_t nAns = includePtr ? 4 : 3;
-    u16(txid);
-    u16(0x8400);            // response, authoritative
-    u16(0);                 // questions
-    u16(nAns);              // answers
-    u16(0);                 // authority
-    u16(0);                 // additional
-
-    if (includePtr) {
-        p += type;
-        u16(12);            // TYPE PTR
-        u16(0x0001);        // CLASS IN — no cache-flush, see above
-        u32(ttlOut());
-        u16((uint16_t)inst.size());
-        p += inst;
-    }
-
-    // SRV: priority, weight, port, target
-    p += inst;
-    u16(33);                // TYPE SRV
-    u16(classOut());            // CLASS IN + cache-flush
-    u32(ttlOut());
-    u16((uint16_t)(6 + hostN.size()));
-    u16(0); u16(0); u16(g_svcPort);
-    p += hostN;
-
-    // TXT: the same keys every existing client already reads.
-    {
-        const std::string k1 = "proto=vibeserver";
-        const std::string k2 = g_svcPin ? "pin=1" : "pin=0";
-        std::string rd;
-        rd += (char)k1.size(); rd += k1;
-        rd += (char)k2.size(); rd += k2;
-        p += inst;
-        u16(16);            // TYPE TXT
-        u16(classOut());
-        u32(ttlOut());
-        u16((uint16_t)rd.size());
-        p += rd;
-    }
-
-    // A, so the resolver never has to ask where the target lives.
-    p += hostN;
-    u16(1);
-    u16(classOut());
-    u32(ttlOut());
-    u16(4);
-    p.append((const char*)&addr, 4);
+    for (const auto& r : an) rr(r);
+    for (const auto& r : ar) rr(r);
     return p;
 }
 
-/** Answer the "what service types are here?" meta-query with our type. */
-std::string buildMetaPtr(uint16_t txid) {
-    const std::string meta = svcMetaName(), type = svcTypeName();
-    if (meta.empty() || type.empty()) return std::string();
-    std::string p;
-    auto u16 = [&](uint16_t v) { p += (char)(v >> 8); p += (char)(v & 0xFF); };
-    auto u32 = [&](uint32_t v) {
-        p += (char)(v >> 24); p += (char)((v >> 16) & 0xFF);
-        p += (char)((v >> 8) & 0xFF); p += (char)(v & 0xFF);
-    };
-    u16(txid); u16(0x8400); u16(0); u16(1); u16(0); u16(0);
-    p += meta;
-    u16(12); u16(0x0001); u32(ttlOut());
-    u16((uint16_t)type.size());
-    p += type;
-    return p;
+/** Who we are, as the answers need it: the name we took, our address ON THE ASKER'S NETWORK, and the service (port 0
+ *  = name only — Android, where NsdManager publishes the service). */
+struct Self {
+    std::string host;
+    uint32_t    addr = 0;
+    uint16_t    svcPort = 0;
+    bool        pin = false;
+};
+
+/** The records an unsolicited announcement carries (RFC 6762 §8.3): everything we own. */
+std::vector<Rec> ownRecords(const Self& s) {
+    std::vector<Rec> v{recA(s.host, s.addr)};
+    if (s.svcPort) {
+        v.push_back(recPtr(s.host));
+        v.push_back(recSrv(s.host, s.svcPort));
+        v.push_back(recTxt(s.host, s.pin));
+    }
+    return v;
 }
+
+std::string buildAnnounce(const Self& s) {
+    return writeMsg(0, std::string(), 0, ownRecords(s), {recNsec(s.host)}, Ttl::Normal);
+}
+
+/** "We are going": the SERVICE records with TTL 0 (RFC 6762 §10.1), so browsers drop the server at once instead of
+ *  listing it for two more minutes. ★ Not the A record: a radio process behind the front door answers for the same
+ *  name and is still there. */
+std::string buildGoodbye(const Self& s) {
+    if (!s.svcPort) return std::string();
+    return writeMsg(0, std::string(), 0, {recPtr(s.host), recSrv(s.host, s.svcPort), recTxt(s.host, s.pin)}, {},
+                    Ttl::Goodbye);
+}
+
+/** One record from a query's Answer section (a KNOWN ANSWER), by offsets into its packet. */
+struct Known {
+    const uint8_t* buf; size_t n;
+    size_t   nameOff;
+    uint16_t type;
+    uint32_t ttl;
+    size_t   rdOff;
+    uint16_t rdLen;
+};
+
+/** Every known answer in `buf`. Stops quietly at the first malformed record (what was read so far still counts). */
+void collectKnown(const uint8_t* buf, size_t n, std::vector<Known>& out) {
+    if (n < 12) return;
+    const uint16_t qd = (uint16_t)((buf[4] << 8) | buf[5]);
+    const uint16_t an = (uint16_t)((buf[6] << 8) | buf[7]);
+    size_t off = 12;
+    for (uint16_t q = 0; q < qd; ++q) {
+        off = skipName(buf, n, off);
+        if (!off || off + 4 > n) return;
+        off += 4;
+    }
+    for (uint16_t a = 0; a < an; ++a) {
+        const size_t nameOff = off;
+        off = skipName(buf, n, off);
+        if (!off || off + 10 > n) return;
+        Known k{buf, n, nameOff, (uint16_t)((buf[off] << 8) | buf[off + 1]),
+                ((uint32_t)buf[off + 4] << 24) | ((uint32_t)buf[off + 5] << 16) | ((uint32_t)buf[off + 6] << 8) | buf[off + 7],
+                off + 10, (uint16_t)((buf[off + 8] << 8) | buf[off + 9])};
+        off += 10 + k.rdLen;
+        if (off > n) return;
+        out.push_back(k);
+    }
+}
+
+/** Does the asker already hold `r` with at least half its TTL left (RFC 6762 §7.1)? Then it must not be sent. */
+bool alreadyKnown(const Rec& r, const std::vector<Known>& ks) {
+    for (const auto& k : ks) {
+        if (k.type != r.type || k.ttl < (uint32_t)kTtl / 2) continue;
+        if (!matchName(k.buf, k.n, k.nameOff, r.name)) continue;
+        const uint8_t* rd = k.buf + k.rdOff;
+        if (r.type == 12) {                                   // PTR: the target name, maybe compressed
+            if (matchName(k.buf, k.rdOff + k.rdLen, k.rdOff, r.rdata)) return true;
+        } else if (r.type == 33) {                            // SRV: priority/weight/port, then the target name
+            if (k.rdLen > 6 && std::memcmp(rd, r.rdata.data(), 6) == 0 &&
+                matchName(k.buf, k.rdOff + k.rdLen, k.rdOff + 6, r.rdata.substr(6)))
+                return true;
+        } else if (k.rdLen == r.rdata.size() && std::memcmp(rd, r.rdata.data(), k.rdLen) == 0) {
+            return true;                                      // A, TXT, an uncompressed NSEC
+        }
+    }
+    return false;
+}
+
+/** What respond() decided: a packet, and whether it goes back to the asker alone (legacy: its own port; QU: 5353)
+ *  rather than to the group. An empty packet = stay silent. */
+struct Response {
+    std::string pkt;
+    bool        unicast = false;
+};
+
+/** A query packet: the first one asks; any more are the known-answer continuations of a TC query (§7.2). */
+struct Pkt { const uint8_t* buf; size_t n; };
 
 /**
- * A NEGATIVE answer: "this name exists, and the only record type it has is A".
- *
- * Without this, an AAAA (IPv6) query for our name goes UNANSWERED — and a resolver asks
- * for A and AAAA together, then WAITS for the missing reply to time out before using the
- * IPv4 address it already had. That wait is why connecting by .local felt markedly
- * slower than connecting by IP. Silence is not "no"; NSEC is how mDNS says "no".
- *
- * RDATA = <next domain name> <window 0> <bitmap length 1> <bitmap>, and the bitmap's
- * high bit of byte 0 is type 1 (A) — so 0x40.
+ * ★★★ THE WHOLE DECISION, WITH NO SOCKET IN SIGHT — so test-mdns can feed it the exact bytes real resolvers send.
+ * `legacy` = the query came from a port other than 5353.
  */
-std::string buildNsec(const std::string& host, uint16_t txid) {
-    const std::string name = encodeName(host);
-    std::string p;
-    auto u16 = [&](uint16_t v) { p += (char)(v >> 8); p += (char)(v & 0xFF); };
-    auto u32 = [&](uint32_t v) {
-        p += (char)(v >> 24); p += (char)((v >> 16) & 0xFF);
-        p += (char)((v >> 8) & 0xFF); p += (char)(v & 0xFF);
+Response respond(const std::vector<Pkt>& pkts, const Self& self, bool legacy) {
+    Response out;
+    if (pkts.empty() || pkts[0].n < 12 || self.host.empty()) return out;
+    const std::string want = encodeName(self.host);
+    const std::string wantInst = self.svcPort ? svcInstName(self.host) : std::string();
+    const std::string wantType = self.svcPort ? svcTypeName() : std::string();
+    const std::string wantMeta = self.svcPort ? svcMetaName() : std::string();
+
+    std::vector<Rec> an;
+    auto addAn = [&](const Rec& r) {
+        for (const auto& x : an) if (sameRec(x, r)) return;
+        an.push_back(r);
     };
-    u16(txid);
-    u16(0x8400);            // response, authoritative
-    u16(0); u16(1); u16(0); u16(0);
-    p += name;
-    u16(47);                // TYPE NSEC
-    u16(classOut());            // CLASS IN + cache-flush
-    u32(ttlOut());
-    std::string rdata = name;      // "next name" is our own, as mDNS does
-    rdata += (char)0x00;           // window 0
-    rdata += (char)0x01;           // bitmap length
-    rdata += (char)0x40;           // bit for type 1 (A) only — no AAAA
-    u16((uint16_t)rdata.size());
-    p += rdata;
-    return p;
+    bool anyMulticastQ = false;                 // a question we answer that did NOT ask for a unicast reply
+    std::string qsec;                           // legacy: the first packet's questions, repeated verbatim
+    uint16_t    qsecCount = 0;
+    std::vector<Known> known;
+
+    for (size_t pi = 0; pi < pkts.size(); ++pi) {
+        const uint8_t* buf = pkts[pi].buf;
+        const size_t n = pkts[pi].n;
+        if (n < 12) continue;
+        if (buf[2] & 0x80) continue;                         // a response, not a query
+        if ((buf[2] >> 3) & 0x0F) continue;                  // OPCODE ≠ 0: not a standard query — ignored (§18.3)
+        const uint16_t qd = (uint16_t)((buf[4] << 8) | buf[5]);
+        size_t off = 12;
+        for (uint16_t q = 0; q < qd; ++q) {
+            const bool isHost = matchName(buf, n, off, want) != 0;
+            const bool isInst = !wantInst.empty() && matchName(buf, n, off, wantInst);
+            const bool isType = !wantType.empty() && matchName(buf, n, off, wantType);
+            const bool isMeta = !wantMeta.empty() && matchName(buf, n, off, wantMeta);
+            const size_t skip = skipName(buf, n, off);       // however it matched (a pointer ends a name in 2 bytes)
+            if (!skip || skip + 4 > n) break;
+            const uint16_t qtype  = (uint16_t)((buf[skip] << 8) | buf[skip + 1]);
+            const uint16_t qclass = (uint16_t)(((buf[skip + 2] & 0x7F) << 8) | buf[skip + 3]);
+            const bool qu = (buf[skip + 2] & 0x80) != 0;
+            off = skip + 4;
+            if (pi == 0) { qsec.assign((const char*)buf + 12, off - 12); qsecCount = (uint16_t)(q + 1); }
+            if (qclass != 1 && qclass != 255) continue;      // IN or ANY only
+            const bool any = qtype == 255;
+            bool hit = false;
+            if (isHost) {
+                if (qtype == 1 || any) { addAn(recA(self.host, self.addr)); hit = true; }
+                if (qtype == 28)       { addAn(recNsec(self.host)); hit = true; }   // no AAAA: say so
+            }
+            if (isType && (qtype == 12 || any)) { addAn(recPtr(self.host)); hit = true; }
+            if (isInst) {
+                if (qtype == 33 || any) { addAn(recSrv(self.host, self.svcPort)); hit = true; }
+                if (qtype == 16 || any) { addAn(recTxt(self.host, self.pin)); hit = true; }
+            }
+            if (isMeta && (qtype == 12 || any)) { addAn(recMeta()); hit = true; }
+            if (hit && !qu) anyMulticastQ = true;
+        }
+        collectKnown(buf, n, known);
+    }
+
+    // Known-answer suppression (§7.1). Not for a legacy asker: it never sends any, and owes us no list.
+    if (!legacy) {
+        std::vector<Rec> keep;
+        for (const auto& r : an) if (!alreadyKnown(r, known)) keep.push_back(r);
+        an.swap(keep);
+    }
+    if (an.empty()) return out;
+
+    // Additional records (RFC 6763 §12, RFC 6762 §6.1): whatever the asker would have to ask for next.
+    std::vector<Rec> ar;
+    auto addAr = [&](const Rec& r) {
+        for (const auto& x : an) if (sameRec(x, r)) return;
+        for (const auto& x : ar) if (sameRec(x, r)) return;
+        if (!legacy && alreadyKnown(r, known)) return;
+        ar.push_back(r);
+    };
+    bool hasPtr = false, hasSrv = false, hasHost = false;
+    for (const auto& r : an) {
+        hasPtr  = hasPtr  || (r.type == 12 && r.name == wantType && !wantType.empty());
+        hasSrv  = hasSrv  || r.type == 33;
+        hasHost = hasHost || ((r.type == 1 || r.type == 47) && r.name == want);
+    }
+    if (hasPtr) {
+        addAr(recSrv(self.host, self.svcPort));
+        addAr(recTxt(self.host, self.pin));
+    }
+    if (hasPtr || hasSrv || hasHost) {
+        addAr(recA(self.host, self.addr));
+        addAr(recNsec(self.host));
+    }
+
+    if (legacy) {
+        uint16_t txid = (uint16_t)((pkts[0].buf[0] << 8) | pkts[0].buf[1]);
+        // ★ The question section is copied byte for byte: it starts at offset 12 in both packets, so any compression
+        //   pointers inside it (into earlier questions) still point at the same bytes.
+        out.pkt = writeMsg(txid, qsec, qsecCount, an, ar, Ttl::Legacy);
+        out.unicast = true;
+    } else {
+        out.pkt = writeMsg(0, std::string(), 0, an, ar, Ttl::Normal);
+        out.unicast = !anyMulticastQ;          // every answered question was QU
+    }
+    return out;
 }
 
-/** A response rebuilt for a legacy unicast asker: its transaction id and its question (`question` = name + QTYPE +
- *  QCLASS, uncompressed) in front of the answers. The builders already wrote TTL ≤ 10 and no cache-flush (g_legacy). */
-std::string legacyReply(const std::string& ans, uint16_t txid, const std::string& question) {
-    if (ans.size() < 12 || question.empty()) return ans;
-    std::string p = ans;
-    p[0] = (char)(txid >> 8); p[1] = (char)(txid & 0xFF);
-    p[4] = 0; p[5] = 1;                                       // QDCOUNT = 1
-    p.insert(12, question);
-    return p;
-}
+/** The TC bit: "more known answers follow in the next packet(s)". */
+bool truncated(const uint8_t* buf, size_t n) { return n >= 12 && (buf[2] & 0x02); }
 
 /** Ask whether anyone else already answers for `host`. */
 std::string buildProbe(const std::string& host) {
@@ -602,27 +738,87 @@ void loop(std::string base, uint32_t addr) {
     LOGI("mDNS responder up: %s.local -> %s", host.c_str(),
          inet_ntoa(*(in_addr*)&addr));
 
-    // Announce ourselves twice, a second apart, so resolvers learn the name without
-    // having to ask (RFC 6762 §8.3).
-    const std::string want = encodeName(host);
-    const std::string wantInst = svcInstName(host);
-    const std::string wantType = svcTypeName();
-    const std::string wantMeta = svcMetaName();
-    // ★ Our name (and the service, when we publish it) to the group, on every interface.
-    auto announce = [&]() {
-        toGroup([&](uint32_t a) { return buildAnswer(host, a, 0); });
-        if (g_svcPort) toGroup([&](uint32_t a) { return buildService(host, a, 0, true); });
-    };
-    for (int i = 0; i < 2 && g_run.load(); ++i) {
-        // ★ Announce the SERVICE unasked too. A client that is already listening learns about
-        //   this server the moment it starts, instead of only when it next happens to browse —
-        //   which is what "the server took a while to appear" actually is.
-        announce();
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
+    // ── Announce (RFC 6762 §8.3) ─────────────────────────────────────────────
+    // ★ The SERVICE too, unasked: a client that is already listening learns about this server the moment it starts,
+    //   instead of only when it next happens to browse — which is what "the server took a while to appear" actually is.
+    // ★★ THREE ANNOUNCEMENTS, 1 s THEN 2 s APART, at start AND after every network change (2026-10-20). A change used to
+    //    get ONE announcement — and the moment the Portable has just joined a network (hotspot ↔ client) is exactly when
+    //    a packet is likeliest to be lost: the station is still settling its power save and its multicast membership.
+    //    One lost packet and every listener on the new network kept the old answer, or none, until it next asked.
+    using Clock = std::chrono::steady_clock;
+    Self self;
+    self.host = host;
+    self.addr = addr;
+    self.svcPort = g_svcPort;
+    self.pin = g_svcPin;
+    auto selfAt = [&](uint32_t a) { Self s = self; s.addr = a; return s; };
+    int burstLeft = 0;
+    Clock::time_point nextAnnounce = Clock::now();
+    auto startBurst = [&]() { burstLeft = 3; nextAnnounce = Clock::now(); };
+    startBurst();
     if (g_svcPort)
         LOGI("mDNS service published: %s.%s.local on port %u", host.c_str(), kSvcType,
              (unsigned)g_svcPort);
+
+    // ★ A query with the TC bit has more known answers coming from the same asker (RFC 6762 §7.2): it is held here for
+    //   400–500 ms, its continuation packets are added to it, and it is answered once — knowing everything the asker
+    //   already holds. A continuation without TC completes the list and lets it be answered at once.
+    struct Held {
+        sockaddr_in from;
+        std::vector<std::string> pkts;
+        Clock::time_point due;
+    };
+    std::vector<Held> held;
+
+#ifdef VIBE_MDNS_PER_IFACE
+    // ★★★ OUR ADDRESS ON THE ASKER'S NETWORK — and if we have none there, LOOK AGAIN before answering (2026-10-20).
+    //     Interfaces were re-read every 5 s, so for up to 5 s after a hotspot ↔ client switch a question from the NEW
+    //     network matched no interface and was answered with the fallback — the address on the network the box had just
+    //     LEFT (10.42.0.1), with the cache-flush bit: the asker cached a wrong address for two minutes. Now a question we
+    //     cannot place re-reads the interfaces (one getifaddrs), and a change found that way is announced at once.
+    auto hereFor = [&](uint32_t peer) {
+        uint32_t a = addrFor(ifs, peer, 0);
+        if (a) return a;
+        std::vector<Ifc> nowIfs = listIfcs();
+        if (!sameIfcs(nowIfs, ifs)) {
+            ifs = std::move(nowIfs);
+            joinEach(fd, ifs);
+            const uint32_t now = currentIpv4();
+            if (now) { addr = now; g_addr = now; }
+            LOGI("mDNS: the interfaces changed (seen on a question) — announcing");
+            startBurst();
+            a = addrFor(ifs, peer, 0);
+        }
+        if (a) return a;
+        const uint32_t now = currentIpv4();               // a routed or link-local asker: our primary address NOW
+        return now ? now : addr;
+    };
+#else
+    auto hereFor = [&](uint32_t) { return addr; };
+#endif
+
+    auto send = [&](const Response& r, const sockaddr_in& asker, bool legacy, uint32_t here) {
+        if (r.pkt.empty()) return;
+        if (legacy) { sendTo(fd, r.pkt, asker); return; }     // its own port, its own id
+        if (r.unicast) {                                      // QU: straight back to the asker's 5353
+            sockaddr_in to = asker;
+            to.sin_port = htons(kPort);
+            sendTo(fd, r.pkt, to);
+            return;
+        }
+#ifdef VIBE_MDNS_PER_IFACE
+        sendVia(fd, r.pkt, group, here);                      // out of the interface the asker shares
+#else
+        (void)here;
+        sendTo(fd, r.pkt, group);
+#endif
+    };
+    auto answerHeld = [&](Held& h) {
+        std::vector<Pkt> ps;
+        for (const auto& s : h.pkts) ps.push_back({(const uint8_t*)s.data(), s.size()});
+        const uint32_t here = hereFor(h.from.sin_addr.s_addr);
+        send(respond(ps, selfAt(here), false), h.from, false, here);
+    };
 
     // ── Serve ────────────────────────────────────────────────────────────────
     // ★★★ RE-JOIN THE GROUP, FOR EVER. A multicast membership does NOT survive the interface it
@@ -641,16 +837,23 @@ void loop(std::string base, uint32_t addr) {
     //    it, slow enough to be invisible — this is two setsockopt calls a minute.
     time_t lastJoin = time(nullptr);
     time_t lastIp = lastJoin;
+    (void)lastIp;                                     // unused where the address is not followed (Android < 24)
     while (g_run.load()) {
+        if (burstLeft > 0 && Clock::now() >= nextAnnounce) {
+            toGroup([&](uint32_t a) { return buildAnnounce(selfAt(a)); });
+            --burstLeft;
+            nextAnnounce = Clock::now() + std::chrono::seconds(burstLeft == 2 ? 1 : 2);
+        }
 #ifdef VIBE_MDNS_FOLLOW_IP
         // ★★★ FOLLOW THE ADDRESS (2026-10-10, the pocket box). The address was taken once, at start —
         //     right for a Pi that never moves, wrong for a box that goes from its own hotspot (10.42.0.1)
         //     to the owner's Wi-Fi to their phone's hotspot without restarting: the name kept answering
-        //     with an address on a network the box had left. Looked at every 5 s (one getifaddrs);
-        //     on a change the new address is announced at once, as a fresh start would.
+        //     with an address on a network the box had left. ★ Looked at every 2 s (one getifaddrs — it was
+        //     5 s, and every one of those seconds after a switch is a question answered with the old address
+        //     on Android, which has no per-interface lookup); on a change the new address is announced.
         {
             const time_t nowT = time(nullptr);
-            if (nowT - lastIp >= 5 || nowT < lastIp) {
+            if (nowT - lastIp >= 2 || nowT < lastIp) {
                 lastIp = nowT;
                 const uint32_t now = currentIpv4();
 #ifdef VIBE_MDNS_PER_IFACE
@@ -673,7 +876,7 @@ void loop(std::string base, uint32_t addr) {
                     re.imr_interface.s_addr = htonl(INADDR_ANY);
                     setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &re, sizeof re);   // EADDRINUSE = still held
 #endif
-                    announce();
+                    startBurst();
                 }
             }
         }
@@ -692,107 +895,66 @@ void loop(std::string base, uint32_t addr) {
 #endif
                 if (rejoined) {
                     LOGI("mDNS multicast membership had been lost — re-joined and re-announcing");
-                    announce();
+                    startBurst();
                 }
             }
         }
-        timeval tv{1, 0};
+        // Held TC queries whose wait is over.
+        for (size_t i = 0; i < held.size();) {
+            if (Clock::now() >= held[i].due) { answerHeld(held[i]); held.erase(held.begin() + (long)i); }
+            else ++i;
+        }
+
+        // Sleep until the next thing that has a time: a packet, a held query's deadline, an announcement, or 1 s.
+        auto wait = std::chrono::milliseconds(1000);
+        const auto nowC = Clock::now();
+        auto sooner = [&](Clock::time_point t) {
+            const auto d = std::chrono::duration_cast<std::chrono::milliseconds>(t - nowC);
+            if (d < wait) wait = d < std::chrono::milliseconds(0) ? std::chrono::milliseconds(0) : d;
+        };
+        for (const auto& h : held) sooner(h.due);
+        if (burstLeft > 0) sooner(nextAnnounce);
+        timeval tv{(time_t)(wait.count() / 1000), (suseconds_t)((wait.count() % 1000) * 1000)};
         fd_set rd;
         FD_ZERO(&rd);
         FD_SET(fd, &rd);
         if (select(fd + 1, &rd, nullptr, nullptr, &tv) <= 0) continue;
 
-        uint8_t buf[1500];
+        uint8_t buf[9000];                             // mDNS allows up to 9000 bytes (§17); a jumbo KA list is legal
         sockaddr_in from{};
         socklen_t fl = sizeof from;
         ssize_t n = recvfrom(fd, buf, sizeof buf, 0, (sockaddr*)&from, &fl);
         if (n < 12) continue;
         if (buf[2] & 0x80) continue;                   // a response, not a question
-        // ★ Answer with our address on the ASKER's network, out of that interface (a phone on the hotspot must be
-        //   told 10.42.0.1, not the Ethernet address it cannot reach).
-        bool unicastReply = false;
-        // ★ Legacy unicast: the asker's own port, NOT 5353 — this used to rewrite the port to 5353, so `dig -p 5353
-        //   @224.0.0.251` and every plain resolver were answered on a port nobody was listening on.
         const bool legacy = ntohs(from.sin_port) != kPort;
-        const uint16_t txid = (uint16_t)((buf[0] << 8) | buf[1]);
-        std::string qEcho;                             // the question being answered, uncompressed (legacy only)
-        g_legacy = legacy;
-#ifdef VIBE_MDNS_PER_IFACE
-        const uint32_t here = addrFor(ifs, from.sin_addr.s_addr, addr);
-        auto reply = [&](const std::string& ans) {
-            if (ans.empty()) return;
-            if (legacy)            sendTo(fd, legacyReply(ans, txid, qEcho), from);
-            else if (unicastReply) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
-            else                   sendVia(fd, ans, group, here);
-        };
-#else
-        const uint32_t here = addr;
-        auto reply = [&](const std::string& ans) {
-            if (ans.empty()) return;
-            if (legacy)            sendTo(fd, legacyReply(ans, txid, qEcho), from);
-            else if (unicastReply) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
-            else                   sendTo(fd, ans, group);
-        };
-#endif
-
-        uint16_t qd = (buf[4] << 8) | buf[5];
-        size_t off = 12;
-        for (uint16_t q = 0; q < qd && off + 4 < (size_t)n; ++q) {
-            size_t used = matchName(buf, n, off, want);
-            // ★ Which of OUR names is being asked about? Checked before the question is
-            //   consumed, since matchName reads from the same offset.
-            const bool isInst = g_svcPort && !wantInst.empty() && matchName(buf, n, off, wantInst);
-            const bool isType = g_svcPort && !wantType.empty() && matchName(buf, n, off, wantType);
-            const bool isMeta = g_svcPort && !wantMeta.empty() && matchName(buf, n, off, wantMeta);
-            // Skip this question's name however it turned out (a pointer ends it in two bytes).
-            size_t skip = skipName(buf, n, off);
-            if (!skip || skip + 4 > (size_t)n) break;
-            uint16_t qtype = (buf[skip] << 8) | buf[skip + 1];
-            const bool unicast = (buf[skip + 2] & 0x80) != 0;   // QU bit
-            unicastReply = unicast;
-            off = skip + 4;
-            if (legacy) {
-                qEcho = isMeta ? wantMeta : isType ? wantType : isInst ? wantInst : want;
-                qEcho.append((const char*)buf + skip, 2);           // QTYPE as asked
-                qEcho += (char)0x00; qEcho += (char)0x01;            // QCLASS IN (QU bit cleared)
-            }
-
-            // ── The service questions ────────────────────────────────────────────────────
-            if (isType || isInst || isMeta) {
-                std::string ans;
-                if (isMeta) {
-                    if (qtype == 12 || qtype == 255) ans = buildMetaPtr(0);
-                } else if (isType) {
-                    // A browse. PTR + everything needed to use it, in one packet.
-                    if (qtype == 12 || qtype == 255) ans = buildService(host, here, 0, true);
-                } else {
-                    // The instance itself — SRV/TXT/ANY. No PTR: it was not asked for, and
-                    // this name is not where a PTR lives.
-                    if (qtype == 33 || qtype == 16 || qtype == 255)
-                        ans = buildService(host, here, 0, false);
-                }
-                reply(ans);
-                continue;
-            }
-
-            if (!used) continue;
-
-            std::string ans;
-            if (qtype == 1 || qtype == 255) {
-                ans = buildAnswer(host, here, 0);          // A — our address on the asker's network
-            } else if (qtype == 28) {
-                // AAAA — we have none. ANSWER anyway, with NSEC: leaving it unanswered
-                // makes the resolver wait out a timeout before using the A record it
-                // already holds, which is exactly what made .local feel slow.
-                ans = buildNsec(host, 0);
-            } else {
-                continue;
-            }
-            // Honour the QU bit: a resolver that asked for a unicast reply gets one.
-            reply(ans);
+        if (legacy) {                                  // a plain DNS client: no known answers, no TC, answer now
+            const uint32_t here = hereFor(from.sin_addr.s_addr);
+            send(respond({{buf, (size_t)n}}, selfAt(here), true), from, true, here);
+            continue;
         }
-        g_legacy = false;                              // announcements stay multicast-shaped
+        // A continuation of a held TC query from the same asker: its known answers join the wait.
+        Held* h = nullptr;
+        for (auto& x : held)
+            if (x.from.sin_addr.s_addr == from.sin_addr.s_addr && x.from.sin_port == from.sin_port) h = &x;
+        if (h) {
+            h->pkts.emplace_back((const char*)buf, (size_t)n);
+            if (truncated(buf, n)) h->due = Clock::now() + std::chrono::milliseconds(400 + rand() % 100);
+            else                   h->due = Clock::now();      // the list is complete
+            continue;
+        }
+        const uint16_t qd = (uint16_t)((buf[4] << 8) | buf[5]);
+        if (qd == 0) continue;                         // known answers with no question we are holding: nothing asked
+        if (truncated(buf, n)) {
+            if (held.size() >= 16) { answerHeld(held.front()); held.erase(held.begin()); }
+            held.push_back({from, {std::string((const char*)buf, (size_t)n)},
+                            Clock::now() + std::chrono::milliseconds(400 + rand() % 100)});
+            continue;
+        }
+        const uint32_t here = hereFor(from.sin_addr.s_addr);
+        send(respond({{buf, (size_t)n}}, selfAt(here), false), from, false, here);
     }
+    // ★ Going: say so for the service, so the Discovered lists drop this server now rather than in two minutes.
+    toGroup([&](uint32_t a) { return buildGoodbye(selfAt(a)); });
     close(fd);
 }
 
