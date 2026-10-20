@@ -9903,6 +9903,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  before queueing a frame). Set in acceptWs once the session is known; null = no gate (never yields). */
         std::shared_ptr<vibeqos::AudioFirst> gate;
         bool   isAudio = false;      // this is the listener's /ws/audio socket — set with `gate`, both under m
+        bool   classified = false;   // acceptWs has said which socket this is — set with isAudio, under m
         vibeqos::RateMeter audioRate;   // the writer thread's own: the audio's byte rate, for "ms queued"
         std::thread th;
     };
@@ -9956,9 +9957,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  blocking is exactly what this thread is for, and it holds no lock any other client wants. */
     void outboxWriter(std::shared_ptr<Outbox> ob) {
         vibeNetThread("vibeTx");            // ★ network first — see the priority order in vibe_thread.h
+        /* ★★★ THEN THE RUNG FOR WHAT IT CARRIES (2026-10-20). Started at the top so the handshake and a
+         *  refusal go out promptly; once acceptWs has classified the socket, an AUDIO writer stays at the
+         *  top (above every radio's DSP on the machine) and any other writer steps down below the audio
+         *  chain, above the spectrum work (vibe_thread.h, the ladder). Checked as each message is taken —
+         *  a writer's rank only matters while it has something to send. */
+        bool ranked = false;
         for (;;) {
             std::pair<Out, std::vector<uint8_t>> msg;
             std::shared_ptr<vibeqos::AudioFirst> gate;      // ★ read under ob->m: acceptWs sets it after the writer starts
+            bool rankNow = false, rankAudio = false;
             {
                 std::unique_lock<std::mutex> lk(ob->m);
                 ob->cv.wait(lk, [&]{ return ob->closing || !ob->q.empty(); });
@@ -9967,7 +9975,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 ob->q.pop_front();
                 ob->bytes -= msg.second.size();
                 if (ob->isAudio) gate = ob->gate;
+                if (!ranked && ob->classified) { ranked = rankNow = true; rankAudio = ob->isAudio; }
             }
+            if (rankNow) vibeSendRank(rankAudio);
             if (!ob->sock->isOpen()) return;
             // ★★★ AUDIO FIRST: an audio send that BLOCKS is the worst backlog of all, and it reports nothing while it
             //     blocks — so the gate is told a send is under way, and treats a long one as audio queued.
@@ -20000,7 +20010,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (ob) {
                     auto g = qosGateFor(session.empty() ? "@" + sock->peerAddress() : session);
                     std::lock_guard<std::mutex> lk(ob->m);
-                    ob->gate = g; ob->isAudio = isAudio;
+                    ob->gate = g; ob->isAudio = isAudio; ob->classified = true;
                 }
             }
             // ★ The waterfall's KERNEL queue is held small too (TCP_NOTSENT_LOWAT): newest-wins is decided in our

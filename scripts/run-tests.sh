@@ -542,6 +542,14 @@ printf '\n\033[1m── audio first: the waterfall yields (end to end) ──\03
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-audio-first.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ THE THREAD LADDER ON THE RUNNING SERVER (2026-10-20, Pi 500: socket writers at nice 0 under a -19 DSP was the
+#     finding). Read from /proc: audio send ≥ DSP > waterfall send ≥ spectrum; then one busy loop per core at -19 and
+#     the audio must keep its rate. Linux only; the negative rungs and the load half need CAP_SYS_NICE (NOT RUN
+#     without). Same VIBESERVER_BIN rule.
+printf '\n\033[1m── thread ladder: writers above the DSP (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-thread-rank.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ A RUNNING DECODER KEEPS THE AUDIO CHAIN (2026-10-07, Pi 500 Airspy: the listener's sockets blipped, the
 #     chain idled, and the WEFAX socket got nothing for 8 s). Decoder socket alone on a shared dial with
 #     --idle-grace 0: lines keep coming, no idle and no park, presence unchanged, and it idles once the

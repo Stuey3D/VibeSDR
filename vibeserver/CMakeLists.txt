@@ -728,6 +728,14 @@ target_include_directories(test-wifi-qos PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-wifi-qos)
 target_link_libraries(test-wifi-qos PRIVATE Threads::Threads)
 add_test(NAME wifi-qos COMMAND test-wifi-qos)
+# ★★★ THE THREAD LADDER, READ BACK (vibe_thread.h, 2026-10-20): audio send ≥ DSP > waterfall send ≥ spectrum >
+#     decoders — nice via getpriority + /proc on Linux, QoS on macOS. Negative rungs NOT RUN without CAP_SYS_NICE.
+add_executable(test-thread-rank "${CMAKE_CURRENT_SOURCE_DIR}/test-thread-rank.cpp")
+target_include_directories(test-thread-rank PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-thread-rank)
+target_link_libraries(test-thread-rank PRIVATE Threads::Threads)
+add_test(NAME thread-rank COMMAND test-thread-rank)
+set_tests_properties(thread-rank PROPERTIES SKIP_RETURN_CODE 77)
 # ★★★ VibeAGC (2026-10-20): the retune-forget split, carrierless headroom, the bursty channel level and the bounded
 #     record (vibe_agc_rules.h, vibe_agc_record.h) — pure, no radio. Silent: synthetic SSB speech, nothing played.
 add_executable(test-agc-rules "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-rules.cpp")
