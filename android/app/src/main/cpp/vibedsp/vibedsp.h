@@ -1665,6 +1665,13 @@ public:
      *    hypothesis has a full window again, so a re-sync reads as the link it is, not as "-1, no
      *    RDS". Called on the thread that runs process(). */
     void noteGap(double holdSec = 0.25);
+    /** ★★ OUR OWN GAIN STEP — not a hole (11.0.9). The signal never stopped and the bit stream is continuous, so
+     *  sync, the symbol reference and decoding all carry on; only the MEASUREMENTS (level, deviation, phase, the
+     *  constellation) stop accumulating for `holdSec`, so the step's wake is never counted as the station. */
+    void holdMeasurements(double holdSec) {
+        const long hold = (mpxRate_ > 0.0) ? (long)(holdSec * mpxRate_) : 0;
+        measHold_ = std::max(measHold_, hold);
+    }
     /** How many holes noteGap() has been told about since configure(). Diagnostics. */
     unsigned gapsNoted() const { return gaps_; }
     /** ★★ RMS of the recovered 57 kHz baseband, relative to the pilot's own lock

@@ -1047,6 +1047,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
             gainSteps_.fetch_add(1, std::memory_order_relaxed);
             gainOnsetLeft_ = (long)(0.05 * chFs_);
             pll_.noteGap(0.05);
+            rdsDemod_.holdMeasurements(0.1);   // ★ 11.0.9: RDS figures sit the step out too (decoding carries on)
         }
         if (g > gainGuardLeft_) gainGuardLeft_ = g;
     }

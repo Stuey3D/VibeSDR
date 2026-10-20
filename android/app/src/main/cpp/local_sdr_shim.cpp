@@ -11152,6 +11152,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sdrp->setIfAgc(false);
                 sdrp->setIfGainReduction(nudged);
                 sdrp->setIfAgc(true);
+                noteOwnGainWrite();            // ★ 11.0.9: a level step is on its way, like any gain write of ours
                 g_rspAgcReinitAt.store((long long)std::chrono::duration_cast<
                     std::chrono::seconds>(
                         std::chrono::steady_clock::now().time_since_epoch()).count(),
@@ -11166,6 +11167,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    the strength of a number nobody was updating. */
             else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
                 noteHwMoved();                 // ★ every kick step moves the level; none is a sferic
+                noteOwnGainWrite();            // ★ …and is a gain write of ours (11.0.9: the kick's were not counted)
                 switch (++sdrpAgcKick) {
                     case 1: sdrp->setLnaState(std::max(0, sdrp->lnaStateCount() - 1 - kRspInitRfGainPos));
                             /* ★ SAY IT ON THE VTS TOO. The flashing chip stays; this is the sentence
@@ -22937,27 +22939,51 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     double gainSmoothRate_ = 0.0;
     unsigned gainSmoothSeenWrites_ = 0;
     bool gainStepGuard_ = false;   // this buffer's verdict, handed to every channel block it produces
+    /* ★★ 11.0.9 — THE RUNG THAT DOES NOT STAY. On the real RSP the hardware IF AGC cancels some rungs within ms,
+     *  which the smoother's "a step stays" test rightly refuses — and 11.0.8 then did nothing, so the transient
+     *  still popped and still upset the pilot and CEQ. Now (gainstep.h, test-gain-step case 9):
+     *    · a FLAGGED packet holds the level from the first sharp edge in it, kept or not (the smoother's hold);
+     *    · the estimators sit out every flagged packet and every block of a hold, not only a found step's glide;
+     *    · an own gain write with no flag (an RTL, the HF+, the kick) guards them for the 0.3 s the step may
+     *      take to land — the write says WHEN only roughly, so the level itself is still left to the finder.
+     *  ★ The hold is OFF on DAB: a null symbol is a sharp dip that comes back, and holding across one fills it. */
+    long ownWriteGuardLeft_ = 0;   // samples of the own-write guard still to run
+    long flagRecentLeft_ = 0;      // samples since a flag still "recent" — what the log line says found a step
     void smoothGainSteps(cf32* iq, int n, bool flagged) {
         static const bool off = [] { const char* e = std::getenv("VIBE_GAIN_SMOOTH"); return e && e[0] == '0'; }();
         gainStepGuard_ = false;
         if (off || n <= 0) return;
         if (gainSmoothRate_ != sampleRate) { gainSmooth_.configure(sampleRate); gainSmoothRate_ = sampleRate; }
+        gainSmooth_.setTransientHold(!g_dabMode.load(std::memory_order_relaxed));
         const unsigned w = g_ownGainWrites.load(std::memory_order_relaxed);
-        if (w != gainSmoothSeenWrites_) { gainSmoothSeenWrites_ = w; gainSmooth_.noteStepSoon(0.3); }
-        if (flagged) gainSmooth_.noteStepAtStart();
-        const unsigned before = gainSmooth_.steps();
+        if (w != gainSmoothSeenWrites_) {
+            gainSmoothSeenWrites_ = w; gainSmooth_.noteStepSoon(0.3);
+            ownWriteGuardLeft_ = (long)(0.3 * sampleRate);
+        }
+        // ★ A flag is "recent" for 20 ms of signal: the step it marks is FOUND a buffer or two later (the finder
+        //   looks ahead), and the log used to credit that find to "our own write" though the radio had flagged it.
+        if (flagged) { gainSmooth_.noteStepAtStart(); flagRecentLeft_ = (long)(0.02 * sampleRate); }
+        const unsigned before = gainSmooth_.steps(), holdsBefore = gainSmooth_.holds();
         gainSmooth_.process(iq, n);
-        if (gainSmooth_.steps() != before) {
+        if (gainSmooth_.steps() != before || gainSmooth_.holds() != holdsBefore) {
             static double lastLog = 0.0;
             const double now = nowSecs();
             if (now - lastLog > 2.0) {
                 lastLog = now;
-                LOGI("gain step %+.1f dB %s — level held, gliding back over ~1 s", gainSmooth_.lastStepDb(),
-                     flagged ? "(flagged by the radio)" : "(found after our own write)");
+                const bool byFlag = flagged || flagRecentLeft_ > 0;
+                if (gainSmooth_.steps() != before)
+                    LOGI("gain step %+.1f dB %s — level held, gliding back over ~1 s", gainSmooth_.lastStepDb(),
+                         byFlag ? "(flagged by the radio)" : "(found after our own write)");
+                else
+                    LOGI("gain transient held (flagged by the radio; the step did not stay) — level kept continuous");
             }
         }
-        gainStepGuard_ = gainSmooth_.steps() != before || gainSmooth_.correcting(1.0);
+        const bool ownWrite = ownWriteGuardLeft_ > 0;
+        gainStepGuard_ = flagged || ownWrite || gainSmooth_.steps() != before || gainSmooth_.correcting(1.0)
+                      || gainSmooth_.holding();
         if (gainStepGuard_) rx.noteGainStep(0.1);
+        if (ownWriteGuardLeft_ > 0) ownWriteGuardLeft_ = std::max(0L, ownWriteGuardLeft_ - (long)n);
+        if (flagRecentLeft_ > 0) flagRecentLeft_ = std::max(0L, flagRecentLeft_ - (long)n);
     }
 
     int dspBlocks_ = 0;
@@ -29221,18 +29247,6 @@ int LocalSdrShim::startSdrplay(int index,
         // ★★★ The API flagged a gain change in THIS packet (grChanged) — same thread as the count. See smoothGainSteps.
         const uint64_t gr = self->sdrp->gainChangePackets();
         const bool step = gr != seenGr; seenGr = gr;
-        /* ★ DIAGNOSTIC (2026-10-20, delete once settled): on the Lenovo RSP1A neither OpenRSP nor the official
-         *   API produced a single "(flagged by the radio)" across nine RF AGC rungs. This says whether the
-         *   API sets grChanged at all, and when, against our own gain writes. Rate-limited. */
-        if (step) {
-            static double lastGrLog = 0.0;
-            const double now = Impl::nowSecs();
-            if (now - lastGrLog > 1.0) {
-                lastGrLog = now;
-                LOGI("RSP grChanged: packet #%llu flagged (own gain writes so far %u)",
-                     (unsigned long long)gr, g_ownGainWrites.load(std::memory_order_relaxed));
-            }
-        }
         self->enqueueIqInt16(iq, n, /*blockIfFull=*/false, /*gapBefore=*/false, step);
     });
     /* ★★★ TUNE TO (LOGICAL CENTRE + OFFSET), exactly as tuneHw() and the HackRF's open do. This
