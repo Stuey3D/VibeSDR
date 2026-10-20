@@ -9,7 +9,7 @@
  */
 
 import React, { useRef, useState } from 'react';
-import { useSuppressShortcuts } from './PanelNav';
+import { useSuppressShortcuts, useOverlay } from './PanelNav';
 import { useGlassTheme, type PopupTokens } from './PopupShell';
 import {
   ActivityIndicator, Alert, Linking, Modal, Share, StyleSheet, Text, TouchableOpacity, View,
@@ -75,6 +75,12 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
   // the moment the screen mounted. MOUNTED IS NOT THE SAME AS VISIBLE, and the failure mode
   // was silent and total: the keyboard simply stopped working everywhere. (2026-07-25.)
   useSuppressShortcuts(!!url);
+  // ★★ …BUT THE WAY OUT IS OURS (controller audit group F, 2026-10-20). With every key off, Back was off too — and a
+  //    key a pad CAN reach (the demodulator menu's OWRX MAP / FILES, compatibility mode, the admin pages) opened this
+  //    with no way back but the touchscreen. Back (pad B / ○ / L, Backspace, Escape) now closes it; every other key
+  //    stays off on the page, as the rule says.
+  const closeRefB = useRef(onClose); closeRefB.current = onClose;
+  useOverlay(!!url, { name: 'browser', onBack: () => closeRefB.current(), backWhenSuppressed: true });
   const pt = useGlassTheme();
   const styles = browserStyles(pt);
 
@@ -120,8 +126,8 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
           <View style={styles.keyNote}>
             <Text style={styles.keyNoteText}>
               This is the receiver's own web page, so VibeSDR's keyboard and controller
-              keys are switched off here. To use compatibility mode please use the
-              touchscreen — or the trackpad if you're on a Mac.
+              keys are switched off here — except Back, which closes it. To use the page
+              itself please use the touchscreen — or the trackpad if you're on a Mac.
             </Text>
           </View>
         )}
