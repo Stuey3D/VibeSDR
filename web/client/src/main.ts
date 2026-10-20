@@ -25,6 +25,7 @@ import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
+import { FrameClock, renderEvery } from './wfPacing';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
@@ -2918,12 +2919,18 @@ let lastViewKey = '';
 function renderHz(): number {
   // The render clock must also keep up with the waterfall's EMIT rate (Speed × dpr pixel rows/sec),
   // or a high speed on a Retina canvas would out-run the draw loop and the scroll would stall.
-  const emit = wfSpeed * renderDpr();
+  // ★ The PRESET's rate when it has one (Default 20, Smooth 30) — wfSpeed is the hidden legacy
+  //   setting, and under Smooth it under-stated the emit rate by a third.
+  const emit = (WF_PRESET[wfScroll]?.rate || wfSpeed) * renderDpr();
   // ★ DAB holds the dial and the view: nothing on the spectrum needs more than 30 frames a second.
   return Math.min(dabOn ? 30 : 60, Math.max(20, Math.max(wantedFps() * 3, emit)));
 }
 
-let lastRenderAt = 0;
+/** ★★★ RENDER EVERY Nth DISPLAY FRAME, N WHOLE — not "is it 1000/renderHz − 1 ms since the last?".
+ *  That clock test, at renderHz 60 on a 60 Hz panel, threw away any frame whose callback ran ~1 ms
+ *  early: a 33 ms hole in the waterfall, several a second on Safari (2026-10-20). See wfPacing.ts. */
+const renderClock = new FrameClock();
+let renderCount = 0;
 
 /**
  * ★ SELF-PROFILER — add #perf to the URL.
@@ -3053,19 +3060,17 @@ function perfReport(secs: number) {
  *  drawn behind it (showAudioGate). Rows still arrive and are processed; only the drawing waits. */
 let startScreenUp = false;
 
-function loop() {
+function loop(frameTs?: number) {
   if (!wf || !spec) return;
-  try { renderFrame(); }
+  try { renderFrame(frameTs ?? performance.now()); }
   catch (e) { noteFault('web-render', 'frame', e); }
   requestAnimationFrame(loop);
 }
 
-function renderFrame() {
+function renderFrame(frameTs: number) {
   if (!wf || !spec) return;
-  const nowMs = performance.now();
-  const minGap = 1000 / renderHz() - 1;      // -1ms: never miss a slot to rounding
-  if (nowMs - lastRenderAt < minGap) return;
-  lastRenderAt = nowMs;
+  renderClock.tick(frameTs);
+  if (renderCount++ % renderEvery(renderClock.hz(), renderHz()) !== 0) return;
 
   wf.vfoHz = spec.frequency;
   guard('web-render', 'overlays', updateViewOverlays);
@@ -3097,7 +3102,7 @@ function renderFrame() {
   const w = wf;
   if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
   const drawWf = !NO_WF && !startScreenUp;
-  if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick());   // synthesise any waterfall lines now due (see Waterfall.tick)
+  if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick(frameTs));   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen is the ONLY exception
   //     (Stuart, 2026-09-30: "it must never stop"). A draw-skip under an open panel was tried and removed.
