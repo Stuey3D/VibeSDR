@@ -29048,6 +29048,18 @@ int LocalSdrShim::startSdrplay(int index,
         // ★★★ The API flagged a gain change in THIS packet (grChanged) — same thread as the count. See smoothGainSteps.
         const uint64_t gr = self->sdrp->gainChangePackets();
         const bool step = gr != seenGr; seenGr = gr;
+        /* ★ DIAGNOSTIC (2026-10-20, delete once settled): on the Lenovo RSP1A neither OpenRSP nor the official
+         *   API produced a single "(flagged by the radio)" across nine RF AGC rungs. This says whether the
+         *   API sets grChanged at all, and when, against our own gain writes. Rate-limited. */
+        if (step) {
+            static double lastGrLog = 0.0;
+            const double now = Impl::nowSecs();
+            if (now - lastGrLog > 1.0) {
+                lastGrLog = now;
+                LOGI("RSP grChanged: packet #%llu flagged (own gain writes so far %u)",
+                     (unsigned long long)gr, g_ownGainWrites.load(std::memory_order_relaxed));
+            }
+        }
         self->enqueueIqInt16(iq, n, /*blockIfFull=*/false, /*gapBefore=*/false, step);
     });
     /* ★★★ TUNE TO (LOGICAL CENTRE + OFFSET), exactly as tuneHw() and the HackRF's open do. This
