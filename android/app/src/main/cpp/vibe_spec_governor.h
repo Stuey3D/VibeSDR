@@ -44,12 +44,20 @@ struct Load {
 };
 
 /** ★ Starved: the audio is (or is about to be) paying for the waterfall. Any one is enough. */
+/** ★★ A BLOCKED DEMOD QUEUE ONLY MEANS STARVED WHEN THE MACHINE IS BUSY. On an idle Mac with a network radio the
+ *   demod-wait count rose ~30/s at dspCpu 2 % — the queue was full because the CONSUMER paced itself, not because
+ *   the CPU was short — and the governor walked a healthy server 20 → 10 → 5 in 12 s (found 2026-10-20 before 11.0.9
+ *   shipped). So a block counts only alongside real load: the DSP thread busy, or the IQ backlog growing. */
+inline bool blockedUnderLoad(const Load& l) {
+    return l.demodBlocked && (l.dspPct >= 60.0 || l.backlogMs >= 100.0);
+}
+
 inline bool starved(const Load& l) {
-    return l.dspPct >= 90.0 || l.demodBlocked || l.backlogMs >= 250.0 || l.cpuLevel >= 3;
+    return l.dspPct >= 90.0 || blockedUnderLoad(l) || l.backlogMs >= 250.0 || l.cpuLevel >= 3;
 }
 /** ★ Calm: room to spare on every count — only then may the waterfall climb back. */
 inline bool calm(const Load& l) {
-    return l.dspPct < 60.0 && !l.demodBlocked && l.backlogMs < 100.0 && l.cpuLevel <= 1;
+    return l.dspPct < 60.0 && !blockedUnderLoad(l) && l.backlogMs < 100.0 && l.cpuLevel <= 1;
 }
 
 class Governor {

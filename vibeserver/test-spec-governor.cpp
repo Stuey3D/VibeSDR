@@ -154,7 +154,9 @@ int main() {
     std::printf("── which loads count ──\n");
     {
         ok(vibespec::starved({95, false, 0, 0}), "dspCpu 95 = starved");
-        ok(vibespec::starved({40, true, 0, 0}), "the demod queue blocking = starved (the worst block)");
+        ok(vibespec::starved({70, true, 0, 0}), "the demod queue blocking under load = starved (the worst block)");
+        ok(vibespec::starved({40, true, 150, 0}), "the demod queue blocking with the IQ backlog growing = starved");
+        ok(!vibespec::starved({40, true, 0, 0}), "blocking at 40 % with no backlog = the consumer pacing itself, not starved");
         ok(vibespec::starved({40, false, 300, 0}), "300 ms of IQ backlog = starved");
         ok(vibespec::starved({40, false, 0, 3}), "the whole machine CRITICAL = starved (the Pi 2's DAB case)");
         ok(!vibespec::starved({85, false, 100, 2}), "dspCpu 85 + CPU HIGH = busy, not starved");
@@ -188,5 +190,24 @@ int main() {
     }
 
     std::printf(fails ? "\n%d FAILED\n" : "\nall good\n", fails);
+    std::printf("── an idle box whose demod queue reports full is NOT starved (2026-10-20) ──\n");
+    {
+        // The Mac on a network radio: dspCpu 2 %, demod waits ~30/s, no backlog — the consumer pacing itself.
+        const Load idleBlocked{2, true, 0, 0};
+        Governor g;
+        double t = 0; int changes = 0;
+        t = run(g, t, 60000, idleBlocked, 20, &changes);
+        ok(g.ceiling() == 0 && changes == 0, "a minute of idle-but-blocked never lowers the waterfall");
+        // …and from a lowered ceiling it still counts as calm, so the waterfall climbs back.
+        Governor h; double u = 0;
+        u = run(h, u, 8000, kStarvedDab, 20);
+        ok(h.ceiling() == 10, "(setup) starved → 10");
+        u = run(h, u, 70000, idleBlocked, 20);
+        ok(h.effective(20) == 20, "idle-but-blocked is calm: back to 20 after the calm spell");
+        // A blocked queue WITH load is still starvation.
+        Governor b; double v = 0;
+        v = run(b, v, 8000, Load{70, true, 20, 1}, 20);
+        ok(b.ceiling() == 10, "blocked under load (dspCpu 70) still steps down");
+    }
     return fails ? 1 : 0;
 }
