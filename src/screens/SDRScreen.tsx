@@ -135,6 +135,7 @@ import { chooserItems, chooserRowOf, chooserStart, chooserActivate, type Chooser
 import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
 import { NavCard, CardKey } from '../components/NavCard';
 import { bookmarkDefaultName } from '../utils/bookmarkName';
+import { usePadField } from '../components/ControllerKeyboard';
 import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
@@ -10376,6 +10377,25 @@ export default function SDRScreen({ route, navigation }: Props) {
   const pickPinRef = useRef<TextInput | null>(null);
   const pickAdminRef = useRef<TextInput | null>(null);
   const pickHandle = useRef<{ setFocus(index: number): void } | null>(null);
+  // ★ The two boxes by pad (controller keyboard, decided 10-20): Enter opens the numeric pad for the PIN and QWERTY in
+  //   password mode for the admin password; ↵ unlocks. A keyboard or touch puts the cursor in the box as before.
+  //   The unlock runs after the value has rendered (both read their box's state).
+  const pinUnlockRef = useRef(doRadioPinUnlock); pinUnlockRef.current = doRadioPinUnlock;
+  const adminUnlockRef = useRef(doPickerUnlock); adminUnlockRef.current = doPickerUnlock;
+  const radioPinRef = useRef(radioPin); radioPinRef.current = radioPin;
+  const adminPickPwRef = useRef(adminPickPw); adminPickPwRef.current = adminPickPw;
+  const pickPinField = usePadField({
+    ref: pickPinRef, mode: 'pin', title: 'PIN for a locked receiver',
+    getValue: () => radioPinRef.current,
+    setValue: (v) => { setRadioPin(v.replace(/[^0-9]/g, '')); setRadioPinBad(false); },
+    onSubmit: () => { setTimeout(() => { void pinUnlockRef.current(); }, 60); },
+  });
+  const pickAdminField = usePadField({
+    ref: pickAdminRef, mode: 'password', title: 'Admin password',
+    getValue: () => adminPickPwRef.current,
+    setValue: (v) => { setAdminPickPw(v); setAdminPickBad(false); },
+    onSubmit: () => { setTimeout(() => { void adminUnlockRef.current(); }, 60); },
+  });
   const pickNavRef = useRef({ items: pickItems, radios: pickRadios });
   pickNavRef.current = { items: pickItems, radios: pickRadios };
   useOverlay(pickOn, { name: 'radio chooser', onBack: () => navigation.goBack() });
@@ -10395,7 +10415,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         case 'focus': pickHandle.current?.setFocus(a.index); return;
         // ★ Enter on a box puts the cursor in it — a keyboard types there now. (A pad cannot type into the system
         //   keyboard: the controller keyboard opens here instead — brief Phase 2.)
-        case 'field': (a.which === 'pin' ? pickPinRef : pickAdminRef).current?.focus(); return;
+        case 'field': (a.which === 'pin' ? pickPinField : pickAdminField).open(); return;
         case 'unlock':
           if (a.which === 'pin') { if (radioPin && !radioPinBusy) void doRadioPinUnlock(); }
           else if (adminPickPw && !adminPickBusy) void doPickerUnlock();
@@ -10451,13 +10471,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   };
   const refusalBack = () => { setRefusal(null); navigation.goBack(); };
   const refusalItemsRef = useRef(refusalItems); refusalItemsRef.current = refusalItems;
+  const takeoverPwRefV = useRef(takeoverPwState); takeoverPwRefV.current = takeoverPwState;
+  const refusalField = usePadField({
+    ref: refusalPwRef, mode: 'password', title: 'Admin password',
+    getValue: () => takeoverPwRefV.current, setValue: setTakeoverPw,
+    onSubmit: (v) => { if (v) void doTakeover(v); },
+  });
   useOverlay(!!refusal, { name: 'refusal', onBack: () => refusalBack(), blockTuneZoom: true });
   const refusalFocus = useListNav(
     !!refusal,
     refusalItems.length,
     (i) => {
       switch (refusalItemsRef.current[i]) {
-        case 'pw': refusalPwRef.current?.focus(); return;
+        case 'pw': refusalField.open(); return;
         case 'take': if (takeoverPwState) void doTakeover(); return;
         case 'again': refusalTryAgain(); return;
         case 'back': refusalBack(); return;
@@ -10980,6 +11006,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                 //     and reaches the window's shortcut layer on the screen behind this one.
                 returnKeyType="go"
                 onSubmitEditing={() => { void doRadioPinUnlock(); }}
+                {...pickPinField.fieldProps}
               />
               <TouchableOpacity
                 style={sdrMs.radioPickAdminBtn}
@@ -11017,6 +11044,7 @@ export default function SDRScreen({ route, navigation }: Props) {
               //     through to the window's shortcut layer — see doPickerUnlock.
               returnKeyType="go"
               onSubmitEditing={() => { void doPickerUnlock(); }}
+              {...pickAdminField.fieldProps}
             />
             <TouchableOpacity
               style={sdrMs.radioPickAdminBtn}
@@ -12232,6 +12260,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                   //    an unhandled Return leaves the field and reaches the global shortcut layer.
                   returnKeyType="go"
                   onSubmitEditing={() => { void doTakeover(); }}
+                  {...refusalField.fieldProps}
                 />
                 <TouchableOpacity style={sdrMs.noticeBtn} disabled={!takeoverPwState}
                   onPress={() => { void doTakeover(); }}>

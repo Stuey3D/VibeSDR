@@ -8,6 +8,7 @@
  */
 
 import StationLogo from './StationLogo';
+import { usePadField } from './ControllerKeyboard';
 import { NavCtx, NavRow, NavSlot, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected, NAV_ADJUST } from './PanelNav';
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -1321,6 +1322,14 @@ function MenuSheetBody({
    *  you, the same reason the server screen's box is dots by default. */
   const [menuAdminPw, setMenuAdminPw] = useState('');
   const menuAdminRef = useRef<TextInput | null>(null);
+  // ★ By pad: Enter on the box opens the controller keyboard in password mode, ↵ unlocks (decided 10-20).
+  const menuAdminPwRef = useRef(menuAdminPw); menuAdminPwRef.current = menuAdminPw;
+  const onAdminUnlockRef = useRef(onAdminUnlock); onAdminUnlockRef.current = onAdminUnlock;
+  const menuAdminField = usePadField({
+    ref: menuAdminRef, mode: 'password', title: 'Admin password',
+    getValue: () => menuAdminPwRef.current, setValue: setMenuAdminPw,
+    onSubmit: (v) => { if (v) { onAdminUnlockRef.current?.(v); setMenuAdminPw(''); } },
+  });
 
   // Responsive sheet geometry — SHEET_H is a module constant measured in
   // PORTRAIT, so in landscape a bottom-anchored 700pt sheet pokes past the top
@@ -2033,7 +2042,7 @@ function MenuSheetBody({
                   {/* ★ Reachable by pad and keyboard (controller audit group C): Enter on the field puts the cursor in it. */}
                   <NavRow>
                   <View style={styles.adminUnlockRow}>
-                    <NavSlot style={{ flex: 1 }} onPress={() => menuAdminRef.current?.focus()}>
+                    <NavSlot style={{ flex: 1 }} onPress={() => menuAdminField.open()}>
                     <TextInput
                       ref={menuAdminRef}
                       value={menuAdminPw}
@@ -2043,6 +2052,7 @@ function MenuSheetBody({
                       secureTextEntry autoCapitalize="none" autoCorrect={false}
                       style={styles.adminUnlockInput}
                       onSubmitEditing={() => { if (menuAdminPw) { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); } }}
+                      {...menuAdminField.fieldProps}
                     />
                     </NavSlot>
                     <NavSlot onPress={() => { if (menuAdminPw) { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); } }}>

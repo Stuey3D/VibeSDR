@@ -17,6 +17,8 @@ import {
 } from './PopupShell';
 import { useSurface } from '../contexts/FaceplateContext';
 import { useFieldPopupNav, NavWrap } from './FieldPopupNav';
+import { usePadField } from './ControllerKeyboard';
+import { inputSourceNow } from '../utils/inputSource';
 import { useAndroidKeyboardHeight } from '../hooks/useAndroidKeyboardHeight';
 
 /**
@@ -70,9 +72,16 @@ export default function VibePinPrompt({ visible, name, initial, note, onSubmit, 
 
   // ★ Pad and keyboard (controller audit group B): an overlay — Back = Cancel — over [PIN, Cancel, Connect, Save &
   //   Connect], starting on the field. Its keys were unreachable and Back only let go of the field.
+  // ★ A pad: Enter on the field opens the numeric pad in PIN mode (digits only; ↵ = Connect); keyboard / touch: the field.
+  const pinRef = useRef(pin); pinRef.current = pin;
+  const pinField = usePadField({
+    ref: inputRef, mode: 'pin', title: `PIN for ${name}`,
+    getValue: () => pinRef.current, setValue: setPin,
+    onSubmit: (v) => { onSubmit(v.trim(), false); },
+  });
   const nav = useFieldPopupNav(visible, {
     name: 'VibeServer PIN', fields: 1, keys: [onCancel, () => submit(false), () => submit(true)],
-    onField: () => inputRef.current?.focus(), onBack: onCancel,
+    onField: () => pinField.open(), onBack: onCancel,
   });
 
   return (
@@ -84,7 +93,9 @@ export default function VibePinPrompt({ visible, name, initial, note, onSubmit, 
       onRequestClose={onCancel}
       // ★ Focus once the window is up: autoFocus inside an Android Modal can fire before the
       //   window takes input, and then no keyboard comes up.
-      onShow={() => { setTimeout(() => inputRef.current?.focus(), 50); }}
+      // ★ Not with a pad: the cursor would raise a system keyboard the pad cannot type into — the highlight starts on
+      //   the field instead, and Enter opens the controller keyboard.
+      onShow={() => { if (inputSourceNow() !== 'pad') setTimeout(() => inputRef.current?.focus(), 50); }}
     >
       <KeyboardAvoidingView
         style={[styles.flex, dim && styles.overlayDim]}
@@ -129,6 +140,7 @@ export default function VibePinPrompt({ visible, name, initial, note, onSubmit, 
               blurOnSubmit={false}
               onSubmitEditing={() => submit(false)}
               accessibilityLabel={`PIN for ${name}`}
+              {...pinField.fieldProps}
             />
             {pt.metal ? (
               <View style={styles.row}>

@@ -81,4 +81,19 @@ ok(/password \? '#9a9a9a'/.test(ck) && /activeOpacity=\{password \? 1/.test(ck),
 ok(/leaveTextField/.test(ck) && /Keyboard\.dismiss\(\)/.test(ck), 'opening lets go of any field cursor first (else the keyboard is deaf)');
 ok(/onTouchStart=\{\(\) => \{ inputSource\.set\('touch'\); handover\(\); \}\}/.test(ck), 'any touch hands over to the system keyboard');
 ok(/if \(!e\.pad\) \{ handover\(\); return true; \}/.test(ck), 'a physical key hands over to typing in place');
+// ★★ The sofa-path fields are wired (Phase 2 step 6): each opens the controller keyboard for a pad, in its mode.
+const WIRED: Array<[string, string[]]> = [
+  ['src/components/FreqModal.tsx', ["mode: 'frequency'", "mode: 'search'", "mode: 'text'"]],
+  ['src/components/VibePinPrompt.tsx', ["mode: 'pin'"]],
+  ['src/components/PasswordModal.tsx', ["mode: 'password'"]],
+  ['src/components/IdentModal.tsx', ["mode: 'text'"]],
+  ['src/screens/SDRScreen.tsx', ["mode: 'pin'", "mode: 'password'"]],
+  ['src/components/MenuSheet.tsx', ["mode: 'password'"]],
+  ['src/screens/InstancePickerScreen.tsx', ["mode: 'url'", "mode: 'search'", "mode: 'text'", "mode: 'pin'"]],
+];
+for (const [f2, modes] of WIRED) {
+  const t2 = readFileSync(new URL('../' + f2, import.meta.url), 'utf8');
+  ok(/usePadField\(/.test(t2) && modes.every((m) => t2.includes(m)), `${f2}: wired (${modes.join(', ')})`);
+  ok((t2.match(/\{\.\.\.\w+\.fieldProps\}|fieldProps\.on(Focus|Blur|SelectionChange)/g) ?? []).length >= 1, `${f2}: its TextInputs report focus and caret (the hand-over)`);
+}
 process.exit(fails ? 1 : 0);

@@ -6,6 +6,7 @@ import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatli
 import { useListNav, noteTouchInteraction, useNavFocus, useOverlayOpen, useOverlay, keyboardModeNow } from '../components/PanelNav';
 import { useFieldPopupNav, NavWrap } from '../components/FieldPopupNav';
 import { pickerZone, headerAbove, directoryRowAction } from '../utils/pickerNav';
+import { usePadField } from '../components/ControllerKeyboard';
 import { addKeyListener } from '../utils/hardwareKeys';
 import {
   ActivityIndicator,
@@ -285,6 +286,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const customInputRef = useRef<TextInput | null>(null);
   // ★ Controller audit group C: the directory search box and the URL row's ♡ / ☆ / sort presses, shared by touch and Enter.
   const filterInputRef = useRef<TextInput | null>(null);
+  const editNameRef = useRef<TextInput | null>(null);
+  const editUrlRef = useRef<TextInput | null>(null);
+  const connectCustomRef = useRef<() => void>(() => {});
   const urlHeartPress = useRef<() => void>(() => {});
   const urlStarPress = useRef<() => void>(() => {});
   const sortPress = useRef<() => void>(() => {});
@@ -1692,6 +1696,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     }
     connectDetected(probed.type, u.host, u.port, raw, probed.url);
   }, [customUrl, connectSpy, connectDetected]);
+  connectCustomRef.current = connectCustom;
 
   const handleSetDefault = useCallback((inst: DefaultInstance) => {
     appAlert('Set Default', `Auto-connect to "${inst.name}" on startup?`, [
@@ -1986,6 +1991,27 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const tcpNameRef = useRef<TextInput | null>(null);
   const tcpHostRef = useRef<TextInput | null>(null);
   const tcpPortRef = useRef<TextInput | null>(null);
+  // ★★ The controller keyboard on this screen's fields (decided 10-20): Enter on a field with a PAD opens it — url mode
+  //    for addresses, digits for a port, search (live) for the directory, text for names; a keyboard or touch puts
+  //    the cursor in the field as before. A pad press while a field has the system keyboard hands it over.
+  const customUrlRef = useRef(customUrl); customUrlRef.current = customUrl;
+  const filterRef = useRef(filter); filterRef.current = filter;
+  const tcpVals = useRef({ tcpName, tcpHost, tcpPort, editName, editUrl });
+  tcpVals.current = { tcpName, tcpHost, tcpPort, editName, editUrl };
+  const customField = usePadField({
+    ref: customInputRef, mode: 'url', title: 'Custom server address',
+    getValue: () => customUrlRef.current, setValue: setCustomUrl,
+    onSubmit: () => { setTimeout(() => connectCustomRef.current(), 60); },
+  });
+  const filterField = usePadField({
+    ref: filterInputRef, mode: 'search', title: 'Search the directory', live: true,
+    getValue: () => filterRef.current, setValue: setFilter,
+  });
+  const tcpNameField = usePadField({ ref: tcpNameRef, mode: 'text', title: 'Name', getValue: () => tcpVals.current.tcpName, setValue: setTcpName });
+  const tcpHostField = usePadField({ ref: tcpHostRef, mode: 'url', title: 'Host, IP or URL', getValue: () => tcpVals.current.tcpHost, setValue: setTcpHost });
+  const tcpPortField = usePadField({ ref: tcpPortRef, mode: 'pin', title: 'Port', getValue: () => tcpVals.current.tcpPort, setValue: setTcpPort });
+  const editNameField = usePadField({ ref: editNameRef, mode: 'text', title: 'Name', getValue: () => tcpVals.current.editName, setValue: setEditName });
+  const editUrlField = usePadField({ ref: editUrlRef, mode: 'url', title: 'Address', getValue: () => tcpVals.current.editUrl, setValue: setEditUrl });
   const tcpNav = useFieldPopupNav(tcpModal, {
     name: 'add server', fields: PROTO_CHOICES.length + 3,
     fieldRow: (i) => (i < PROTO_CHOICES.length ? 0 : i - PROTO_CHOICES.length + 1),
@@ -1998,16 +2024,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         if (id !== 'auto') setTcpPort(String(DEFAULT_PORT[id as BackendType]));
         return;
       }
-      [tcpNameRef, tcpHostRef, tcpPortRef][i - PROTO_CHOICES.length]?.current?.focus();
+      [tcpNameField, tcpHostField, tcpPortField][i - PROTO_CHOICES.length]?.open();
     },
     onBack: () => setTcpModal(false),
   });
-  const editNameRef = useRef<TextInput | null>(null);
-  const editUrlRef = useRef<TextInput | null>(null);
   const editNav = useFieldPopupNav(!!editFav, {
     name: 'edit favourite', fields: 2,
     keys: [() => setEditFav(null), () => { void saveEditFav(); }],
-    onField: (i) => [editNameRef, editUrlRef][i]?.current?.focus(),
+    onField: (i) => [editNameField, editUrlField][i]?.open(),
     onBack: () => setEditFav(null),
   });
   // ★ Recordings over the list: it has its own list nav; this makes the list beneath yield and Back close it.
@@ -2539,14 +2563,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             </Text>
             <TextInput ref={tcpNameRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, tcpNav.field(PROTO_CHOICES.length) && { borderColor: tcpNav.ring, borderWidth: 2 }]}
               placeholder="Name (e.g. Shack Pi)" placeholderTextColor={C.textDim}
-              value={tcpName} onChangeText={setTcpName} autoCorrect={false} />
+              value={tcpName} onChangeText={setTcpName} autoCorrect={false} {...tcpNameField.fieldProps} />
             <TextInput ref={tcpHostRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, tcpNav.field(PROTO_CHOICES.length + 1) && { borderColor: tcpNav.ring, borderWidth: 2 }]}
               placeholder="Host, IP or URL (e.g. stuey3d.freemyip.com)" placeholderTextColor={C.textDim}
-              value={tcpHost} onChangeText={setTcpHost} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
+              value={tcpHost} onChangeText={setTcpHost} autoCapitalize="none" autoCorrect={false} keyboardType="url" {...tcpHostField.fieldProps} />
             <TextInput ref={tcpPortRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, tcpNav.field(PROTO_CHOICES.length + 2) && { borderColor: tcpNav.ring, borderWidth: 2 }]}
               placeholder={tcpProto === 'auto' ? 'Port' : `Port (default ${DEFAULT_PORT[tcpProto as BackendType]})`}
               placeholderTextColor={C.textDim}
-              value={tcpPort} onChangeText={setTcpPort} keyboardType="number-pad" />
+              value={tcpPort} onChangeText={setTcpPort} keyboardType="number-pad" {...tcpPortField.fieldProps} />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
               <NavWrap on={tcpNav.key(0)} color={tcpNav.ring}>
               <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={() => setTcpModal(false)}>
@@ -2576,10 +2600,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             <Text style={{ fontFamily: F, fontSize: fs(16), color: C.text, letterSpacing: 1, marginBottom: 10 }}>EDIT SERVER</Text>
             <TextInput ref={editNameRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, editNav.field(0) && { borderColor: editNav.ring, borderWidth: 2 }]}
               placeholder="Name" placeholderTextColor={C.textDim}
-              value={editName} onChangeText={setEditName} autoCorrect={false} />
+              value={editName} onChangeText={setEditName} autoCorrect={false} {...editNameField.fieldProps} />
             <TextInput ref={editUrlRef} style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }, editNav.field(1) && { borderColor: editNav.ring, borderWidth: 2 }]}
               placeholder="Address (host, IP or URL)" placeholderTextColor={C.textDim}
-              value={editUrl} onChangeText={setEditUrl} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
+              value={editUrl} onChangeText={setEditUrl} autoCapitalize="none" autoCorrect={false} keyboardType="url" {...editUrlField.fieldProps} />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
               <NavWrap on={editNav.key(0)} color={tcpNav.ring}>
               <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={() => setEditFav(null)}>
@@ -2662,7 +2686,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
         {/* Custom URL — chooser only */}
         {selectedDir === null && (() => {
-        const urlFocused = chooserSlot(() => customInputRef.current?.focus());
+        const urlFocused = chooserSlot(() => customField.open());
         return (
         <View ref={tourRef('customUrl')} collapsable={false} style={styles.customRow}>
           {/* ★ THE EXAMPLE MUST SHOW A PORT. Without one it reads as "hostname only", and a bare
@@ -2683,6 +2707,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             keyboardType="url"
             returnKeyType="go"
             onSubmitEditing={connectCustom}
+            {...customField.fieldProps}
           />
           {customSpyTarget ? (
             /* SpyServer link pasted — favourite into the SpyServer list (no http
@@ -2775,13 +2800,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           <TextInput
             ref={filterInputRef}
             style={[styles.filterInput, { fontFamily: F, fontSize: fs(11), color: C.value, borderColor: C.border, flex: 1 },
-                    slotRing(chooserSlot(() => filterInputRef.current?.focus()))]}
+                    slotRing(chooserSlot(() => filterField.open()))]}
             placeholder="Search name, location or callsign…"
             placeholderTextColor={C.textDim}
             value={filter}
             onChangeText={setFilter}
             autoCapitalize="none"
             autoCorrect={false}
+            {...filterField.fieldProps}
           />
           <TouchableOpacity
             style={[styles.sortBtn, { borderColor: effectiveSort !== 'nearest' ? C.borderBright : C.border },

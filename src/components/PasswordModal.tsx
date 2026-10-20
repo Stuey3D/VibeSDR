@@ -16,6 +16,7 @@ import {
 import { useSurface } from '../contexts/FaceplateContext';
 import { useAndroidKeyboardHeight } from '../hooks/useAndroidKeyboardHeight';
 import { useFieldPopupNav, NavWrap } from './FieldPopupNav';
+import { usePadField } from './ControllerKeyboard';
 
 interface Props {
   visible:    boolean;
@@ -48,9 +49,16 @@ export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }
   // ★ Pad and keyboard (controller audit group B): an overlay — Back = Cancel, nothing reaches the list beneath — over
   //   [field, Cancel, primary], starting on the field. Enter on the field puts the cursor in it.
   const fieldRef = React.useRef<TextInput | null>(null);
+  // ★ A pad: Enter on the field opens the controller keyboard in password mode (↵ = Connect); keyboard / touch: the field.
+  const pwRef = React.useRef(pw); pwRef.current = pw;
+  const pwField = usePadField({
+    ref: fieldRef, mode: 'password', title: 'Password',
+    getValue: () => pwRef.current, setValue: setPw,
+    onSubmit: (v) => { setPw(''); onSubmit(v.trim()); },
+  });
   const nav = useFieldPopupNav(visible, {
     name: 'PasswordModal', fields: 1, keys: [cancel, submit],
-    onField: () => fieldRef.current?.focus(), onBack: cancel,
+    onField: () => pwField.open(), onBack: cancel,
   });
 
   return (
@@ -79,6 +87,7 @@ export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }
             autoFocus={false}
             returnKeyType="go"
             onSubmitEditing={submit}
+            {...pwField.fieldProps}
           />
           {pt.metal ? (
             <View style={styles.row}>

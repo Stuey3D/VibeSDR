@@ -17,6 +17,7 @@ import { useSurface } from '../contexts/FaceplateContext';
 import { sanitizeIdent } from '../services/kiwiIdent';
 import { useAndroidKeyboardHeight } from '../hooks/useAndroidKeyboardHeight';
 import { useFieldPopupNav, NavWrap } from './FieldPopupNav';
+import { usePadField } from './ControllerKeyboard';
 
 interface Props {
   visible:  boolean;
@@ -51,9 +52,20 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
   // ★ Pad and keyboard (controller audit group B): an overlay — Back = Cancel, nothing reaches the list beneath — over
   //   [field, Cancel, primary], starting on the field. Enter on the field puts the cursor in it.
   const fieldRef = React.useRef<TextInput | null>(null);
+  // ★ A pad: Enter on the field opens the controller keyboard (↵ = Save & Connect); keyboard / touch: the field.
+  const nameRef = React.useRef(name); nameRef.current = name;
+  const identField = usePadField({
+    ref: fieldRef, mode: 'text', title: 'Name or call sign',
+    getValue: () => nameRef.current, setValue: (v) => setName(sanitizeIdent(v)),
+    onSubmit: (v) => {
+      const val = sanitizeIdent(v.trim());
+      if (!val) return 'Enter a name or call sign.';
+      onSubmit(val);
+    },
+  });
   const nav = useFieldPopupNav(visible, {
     name: 'IdentModal', fields: 1, keys: [onCancel, submit],
-    onField: () => fieldRef.current?.focus(), onBack: onCancel,
+    onField: () => identField.open(), onBack: onCancel,
   });
 
   return (
@@ -86,6 +98,7 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
             autoCorrect={false}
             returnKeyType="go"
             onSubmitEditing={submit}
+            {...identField.fieldProps}
           />
           {pt.metal ? (
             <View style={styles.row}>
