@@ -301,6 +301,10 @@ The audit's other recommendations are adopted as the defaults:
 - ~~ServerMode's admin password gets a "generate" key~~ — **dropped (Stuart, same day)**: `ServerModeScreen.tsx:1317`
   already records the rule, "Still typed by the owner, never generated". The admin password field uses
   ControllerKeyboard in `password` mode, like every other field.
+- **Listener PINs may be random (Stuart, same day):** keep ServerMode's existing **Random** PIN pill and make it
+  reachable by pad — the PIN is always shown on screen, so a generated one cannot lock anybody out. Only ADMIN
+  passwords must be typed by the owner, never generated: a forgotten generated admin password locks the owner out of
+  their own server.
 
 ## 8. Every text field, and the mode it would use (Refined — new)
 
