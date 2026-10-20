@@ -17649,7 +17649,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     sock->sendstr("HTTP/1.1 " + std::to_string(prp.code) + " " + prp.status
                                   + "\r\nContent-Type: " + prp.contentType
                                   + (prp.location.empty() ? std::string() : "\r\nLocation: " + prp.location)
-                                  + (prp.disposition.empty() ? std::string() : "\r\nContent-Disposition: " + prp.disposition)
                                   + "\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                                   + std::to_string(prp.body.size()) + "\r\n\r\n" + prp.body);
                     sock->close(); return;
