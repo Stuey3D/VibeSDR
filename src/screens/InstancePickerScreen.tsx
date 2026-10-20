@@ -3,7 +3,7 @@ import { useDetailMaps, mb } from '../services/useDetailMaps';
 import { downloadDetail, removeDetail, DETAIL_BYTES } from '../services/mapglDetail';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
-import { useListNav, noteTouchInteraction, useNavFocus, useOverlayOpen, useOverlay } from '../components/PanelNav';
+import { useListNav, noteTouchInteraction, useNavFocus, useOverlayOpen, useOverlay, keyboardModeNow } from '../components/PanelNav';
 import { useFieldPopupNav, NavWrap } from '../components/FieldPopupNav';
 import { addKeyListener } from '../utils/hardwareKeys';
 import {
@@ -133,6 +133,7 @@ import { crumb } from '../services/crumbs';
 import { exportLogs, EXPORT_LOGS_LABEL } from '../components/ExportLogs';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
 import RecordingsOverlay from '../components/RecordingsOverlay';
+import { appAlert } from '../components/AppAlert';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
 // mixes OWRX + Kiwi, so the row icon tells them apart at a glance).
@@ -721,14 +722,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       }
       if (!result.allowed) {
         setConnecting(false);
-        Alert.alert('Connection Refused', result.reason ?? 'Server refused connection');
+        appAlert('Connection Refused', result.reason ?? 'Server refused connection');
         return;
       }
       setConnecting(false);
       navigation.navigate('SDR', { baseUrl: cleaned, instanceName: name, password, viewMode, serverLongitude, serverType });
     } catch (e: any) {
       setConnecting(false);
-      Alert.alert('Connection Error', e.message ?? 'Could not reach server');
+      appAlert('Connection Error', e.message ?? 'Could not reach server');
     }
   }, [navigation, viewMode]);
 
@@ -795,7 +796,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // PCM); spectrum/control reuse the UberSDR path against ws://127.0.0.1.
   const connectLocal = useCallback(async (modeOverride?: typeof viewMode) => {
     const Local = (NativeModules as any).VibeLocalSDR;
-    if (!Local?.startSpectrum) { Alert.alert('Local Hardware', 'Not available on this build.'); return; }
+    if (!Local?.startSpectrum) { appAlert('Local Hardware', 'Not available on this build.'); return; }
     setConnecting(true);
     try {
       // NB: the shim's WS stays bound to localhost (default). VibeServer will later
@@ -820,7 +821,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     } catch (e: any) {
       setConnecting(false);
       // ★ Same rule as the connect prompt: three radios are supported, so do not name one.
-      Alert.alert('Local Hardware', e?.message ?? 'Could not start local SDR. Is a radio plugged in via USB OTG?');
+      appAlert('Local Hardware', e?.message ?? 'Could not start local SDR. Is a radio plugged in via USB OTG?');
     }
   }, [navigation, viewMode]);
 
@@ -859,7 +860,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       watchProvider.setPhoneStatus('pick');
       watchTargetPending.claimed = false;
       watchProvider.holdAwake(false);
-      Alert.alert('VibeServer', `Could not reach ${host}:${port}. Is it on the same network?`);
+      appAlert('VibeServer', `Could not reach ${host}:${port}. Is it on the same network?`);
       return;
     }
     crumb('connectVibeServer: auth resolved, resetting to SDR');
@@ -941,7 +942,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       connectVibeServer('127.0.0.1', s.port, 'This phone (loopback)', '', undefined, pw, takeover);
     };
     if (!full) { void go(false); return; }
-    Alert.alert(
+    appAlert(
       'Server in use',
       s.maxUsers <= 1
         ? 'This server allows one listener at a time. Connecting will disconnect the current user.'
@@ -960,7 +961,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const askVibePin = useCallback((name: string, initial: string, note?: string) =>
     new Promise<{ pin: string; save: boolean } | null>((resolve) => {
       const body = `Enter the PIN for ${name}`;
-      if (Platform.OS === 'ios' && (Alert as any).prompt) {
+      // ★★ NOT WITH A PAD OR KEYBOARD (controller audit, 2026-10-20): Alert.prompt is a native dead end for a pad, and
+      //    the list behind it kept moving. Then iOS takes VibePinPrompt too — an overlay with keys of its own.
+      if (Platform.OS === 'ios' && (Alert as any).prompt && !keyboardModeNow()) {
         (Alert as any).prompt(
           'VibeServer PIN', note ? `${note}\n\n${body}` : body,
           [{ text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
@@ -1020,7 +1023,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       }
       if (chk.result === 'locked') {
         const mins = chk.lockedFor ? Math.max(1, Math.ceil(chk.lockedFor / 60)) : 0;
-        Alert.alert('VibeServer',
+        appAlert('VibeServer',
           `Too many wrong PINs from this device. ${mins ? `Try again in about ${mins} minute${mins === 1 ? '' : 's'}.` : 'Try again later.'}`);
         return;
       }
@@ -1118,7 +1121,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // local-SDR wiring (isLocal) with isTcp set for the RTL-TCP icon/labels.
   const connectTcp = useCallback(async (host: string, port: number, name: string) => {
     const Local = (NativeModules as any).VibeLocalSDR;
-    if (!Local?.startTcp) { Alert.alert('RTL-TCP', 'Not available on this build.'); return; }
+    if (!Local?.startTcp) { appAlert('RTL-TCP', 'Not available on this build.'); return; }
     setConnecting(true);
     try {
       // Default to 20m USB — most rtl_tcp sources people add are HF (e.g. UberSDR
@@ -1137,7 +1140,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       });
     } catch (e: any) {
       setConnecting(false);
-      Alert.alert('RTL-TCP', e?.message ?? `Could not connect to ${host}:${port}. Is rtl_tcp running and reachable?`);
+      appAlert('RTL-TCP', e?.message ?? `Could not connect to ${host}:${port}. Is rtl_tcp running and reachable?`);
     }
   }, [navigation, viewMode]);
 
@@ -1147,7 +1150,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const connectSpy = useCallback(async (host: string, port: number, name: string,
                                        sessionLimitMins?: number) => {
     const Local = (NativeModules as any).VibeLocalSDR;
-    if (!Local?.startSpyServer) { Alert.alert('SpyServer', 'Not available on this build.'); return; }
+    if (!Local?.startSpyServer) { appAlert('SpyServer', 'Not available on this build.'); return; }
     setConnecting(true);
     try {
       const res = await Local.startSpyServer({
@@ -1165,7 +1168,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       });
     } catch (e: any) {
       setConnecting(false);
-      Alert.alert('SpyServer', e?.message ?? `Could not connect to ${host}:${port}.`);
+      appAlert('SpyServer', e?.message ?? `Could not connect to ${host}:${port}.`);
     }
   }, [navigation, viewMode]);
 
@@ -1200,7 +1203,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         let needsPin = true;
         try { needsPin = await vibeServerNeedsPin(vsBase); }
         catch {
-          Alert.alert('VibeServer', `Could not reach ${vsBase}. Is it on the same network?`);
+          appAlert('VibeServer', `Could not reach ${vsBase}. Is it on the same network?`);
           return;
         }
         openVibeServer(host, port, label, needsPin, vsBase);
@@ -1252,10 +1255,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         host = u.hostname;
         port = u.port ? parseInt(u.port, 10) : (u.protocol === 'http:' ? 80 : 443);
       } catch { host = ''; }
-      if (!host) { Alert.alert('VibeServer', 'That link does not name a server.'); return; }
+      if (!host) { appAlert('VibeServer', 'That link does not name a server.'); return; }
       let needsPin = true;
       try { needsPin = await vibeServerNeedsPin(base); }
-      catch { Alert.alert('VibeServer', `Could not reach ${base}. Is it still up?`); return; }
+      catch { appAlert('VibeServer', `Could not reach ${base}. Is it still up?`); return; }
       const tune: LinkTune = { freq: linkVibe.freq, mode: linkVibe.mode, zoom: linkVibe.zoom };
       openVibeServer(host, port, linkVibe.name || `${host}:${port}`, needsPin, base, tune);
     })();
@@ -1335,7 +1338,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         watchProvider.setPhoneStatus('pick');
         watchTargetPending.claimed = false;
         watchProvider.holdAwake(false);   // the attempt is over — see watchProvider.holdAwake
-        Alert.alert('VibeServer', `Could not reach ${door}. Is it still up?`);
+        appAlert('VibeServer', `Could not reach ${door}. Is it still up?`);
         return;
       }
       /* ★★ A PIN PROMPT IS A DEAD END FOR THE WRIST. openVibeServer puts an Alert on the PHONE and
@@ -1369,7 +1372,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         const lockedOut = (lockedFor?: number) => {
           endAttempt();
           const mins = lockedFor ? Math.max(1, Math.ceil(lockedFor / 60)) : 0;
-          Alert.alert('VibeServer',
+          appAlert('VibeServer',
             `Too many wrong PINs from this device. ${mins ? `Try again in about ${mins} minute${mins === 1 ? '' : 's'}.` : 'Try again later.'}`);
         };
         if (saved) {
@@ -1443,7 +1446,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   const tcpModalConnect = useCallback(async (save: boolean) => {
     const parsed = parseTcpEntry();
-    if (!parsed) { Alert.alert('Custom server', 'Enter a host (and optional :port).'); return; }
+    if (!parsed) { appAlert('Custom server', 'Enter a host (and optional :port).'); return; }
     const name = tcpName.trim() || `${parsed.host}:${parsed.port}`;
 
     // On AUTO, probe before saving — so the favourite remembers what it actually is
@@ -1456,7 +1459,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       const probed = await probeServer(parsed.host, parsed.port, null, parsed.url, parsed.explicitScheme);
       setConnecting(false);
       if (!probed) {
-        Alert.alert('Custom server',
+        appAlert('Custom server',
           `Nothing answered at ${parsed.host}:${parsed.port}.\n\nIf it's an rtl_tcp or SpyServer on a non-standard port, pick the type instead of Auto — raw TCP can't be detected.`);
         return;
       }
@@ -1502,7 +1505,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     { name, host, port, proto: 'spyserver' as const }];
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     };
-    if (Platform.OS === 'ios' && (Alert as any).prompt) {
+    // ★ With a pad or keyboard: no native prompt (a pad cannot answer it) — saved under its address, as on Android.
+    if (Platform.OS === 'ios' && (Alert as any).prompt && !keyboardModeNow()) {
       (Alert as any).prompt('Name this SpyServer', fallback,
         [{ text: 'Cancel', style: 'cancel' },
          { text: 'Save', onPress: (t?: string) => add((t && t.trim()) || fallback) }],
@@ -1658,7 +1662,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (spy) { setCustomUrl(''); connectSpy(spy.host, spy.port, `${spy.host}:${spy.port}`); return; }
 
     const u = parseServerAddress(raw);
-    if (!u) { Alert.alert('Custom server', `Couldn't read an address from "${raw}".`); return; }
+    if (!u) { appAlert('Custom server', `Couldn't read an address from "${raw}".`); return; }
 
     // Probe, then route. Plain HTTP to public-internet servers IS allowed
     // (NSAllowsArbitraryLoads) — most Kiwi/OpenWebRX receivers are hobbyist HTTP
@@ -1676,7 +1680,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         setConnecting(false);
         if (port) { connectDetected('vibeserver', u.host, port, raw); return; }
       }
-      Alert.alert('Custom server',
+      appAlert('Custom server',
         `Nothing answered at ${u.host}:${u.port}.\n\nIf this is an rtl_tcp or SpyServer on a non-standard port, add it with the + button and pick the type — raw TCP servers can't be auto-detected.`);
       return;
     }
@@ -1684,14 +1688,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   }, [customUrl, connectSpy, connectDetected]);
 
   const handleSetDefault = useCallback((inst: DefaultInstance) => {
-    Alert.alert('Set Default', `Auto-connect to "${inst.name}" on startup?`, [
+    appAlert('Set Default', `Auto-connect to "${inst.name}" on startup?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Set Default', onPress: async () => { await setDefaultInstance(inst); setDefaultInst(inst); } },
     ]);
   }, []);
 
   const handleClearDefault = useCallback(() => {
-    Alert.alert('Remove Default', 'Stop auto-connecting on startup?', [
+    appAlert('Remove Default', 'Stop auto-connecting on startup?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Remove', style: 'destructive', onPress: async () => { await clearDefaultInstance(); setDefaultInst(null); } },
     ]);
@@ -1701,7 +1705,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // prefs, per-instance tunes, favourites, default instance, callsigns…),
   // asking about bookmarks first (never cleared silently).
   const handleMasterReset = useCallback(() => {
-    Alert.alert(
+    appAlert(
       'Factory Reset',
       'Clears ALL settings and stored data and returns the app to a fresh-install state. Recordings already saved to your device are not affected.',
       [
@@ -1714,7 +1718,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             navigation.replace('InstancePicker');
           };
           if (bms.length > 0) {
-            Alert.alert(
+            appAlert(
               'Bookmarks',
               `Keep your ${bms.length} saved bookmark${bms.length !== 1 ? 's' : ''}?`,
               [
@@ -2644,7 +2648,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   const fallback = url.replace(/^https?:\/\//, '');
                   // Already a favourite → just un-favourite. Otherwise ask for a name.
                   if (customFav) { handleToggleFav({ name: fallback, url: customFav.url }); return; }
-                  if (Platform.OS === 'ios' && (Alert as any).prompt) {
+                  // ★ With a pad or keyboard: no native prompt — saved under its address, as on Android.
+                  if (Platform.OS === 'ios' && (Alert as any).prompt && !keyboardModeNow()) {
                     (Alert as any).prompt(
                       'Name this favourite',
                       url,
@@ -2674,7 +2679,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   if (defaultInst?.url === url) {
                     handleClearDefault();
                   } else {
-                    Alert.alert('Set as Default', `Auto-connect to "${name}" on every startup?`, [
+                    appAlert('Set as Default', `Auto-connect to "${name}" on every startup?`, [
                       { text: 'Cancel', style: 'cancel' },
                       { text: 'Set Default', onPress: async () => {
                           await setDefaultInstance({ name, url });
@@ -2894,7 +2899,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     <ChooserRow key={`${f.host}:${f.port}`}
                       style={[styles.row, { borderColor: C.borderBright }]}
                       onPress={() => { void connectTcpFav(f); }}
-                      onLongPress={() => Alert.alert(f.name, `${f.host}:${f.port}`, [
+                      onLongPress={() => appAlert(f.name, `${f.host}:${f.port}`, [
                         { text: 'Cancel', style: 'cancel' },
                         { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
                       ])}
@@ -2908,7 +2913,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         </Text>
                       </View>
                       <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        onPress={() => Alert.alert('Delete', `Remove "${f.name}"?`, [
+                        onPress={() => appAlert('Delete', `Remove "${f.name}"?`, [
                           { text: 'Cancel', style: 'cancel' },
                           { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
                         ])}>
@@ -3025,10 +3030,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   const onPress = () => {
                     if (st.kind === 'downloading') return;
                     if (detailMaps.installed) {
-                      Alert.alert('Remove High Detail Maps?', `This frees ${mb(detailMaps.bytes)}. The standard maps stay, and you can download these again at any time.`,
+                      appAlert('Remove High Detail Maps?', `This frees ${mb(detailMaps.bytes)}. The standard maps stay, and you can download these again at any time.`,
                         [{ text: 'Keep', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: () => removeDetail() }]);
                     } else {
-                      Alert.alert('Download High Detail Maps?', `About ${mb(DETAIL_BYTES)}, once. Wi-Fi is recommended. The maps keep working while it downloads.`,
+                      appAlert('Download High Detail Maps?', `About ${mb(DETAIL_BYTES)}, once. Wi-Fi is recommended. The maps keep working while it downloads.`,
                         [{ text: 'Not now', style: 'cancel' }, { text: 'Download', onPress: () => { void downloadDetail(); } }]);
                     }
                   };

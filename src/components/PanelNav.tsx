@@ -106,6 +106,8 @@ const setKeyboardMode = (on: boolean) => {
   keyboardMode = on;
   kbListeners.forEach(f => f(on));
 };
+/** Is a keyboard or pad driving right now? (Synchronous — for code outside React: appAlert.) */
+export const keyboardModeNow = () => keyboardMode;
 /** Any pointer/touch interaction — a present user, so idle-close is wrong. */
 export function noteTouchInteraction() { setKeyboardMode(false); }
 
@@ -392,6 +394,31 @@ export function useOverlayOpen(): boolean {
   const [n, setN] = useState(overlays.count());
   useEffect(() => { setN(overlays.count()); return overlays.subscribe(setN); }, []);
   return n > 0;
+}
+
+/**
+ * The same registration from outside React, for something shown imperatively (a native alert raised by appAlert on the
+ * touch path: while it is up the pad must not press things behind it). Returns the remover — call it exactly once.
+ */
+export function pushOverlay(opts: OverlayOpts): () => void {
+  const t = {};
+  overlays.push(t, opts);
+  owners.push(t);
+  const sub = addKeyListener('down', (e) => {
+    const d = overlays.decide(t, e.key, e, shortcutsSuppressed());
+    if (d === 'back') { opts.onBack?.(); return true; }
+    if (d === 'enter') { opts.onEnter?.(); return true; }
+    return d === 'swallow';
+  }, { priority: (opts.level ?? 0) > 0 ? OVERLAY_RAISED_PRIORITY : OVERLAY_PRIORITY });
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    sub.remove();
+    const i = owners.lastIndexOf(t);
+    if (i >= 0) owners.splice(i, 1);
+    overlays.remove(t);
+  };
 }
 
 /** Register a surface drawn over a screen while `visible`. Returns whether it is the TOP one (draw its ring). */

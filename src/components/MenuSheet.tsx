@@ -69,6 +69,7 @@ import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import type { Textures } from '../constants/assetDensity';
+import { appAlert } from './AppAlert';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1093,7 +1094,7 @@ function ICloudRow() {
   // ★ Destructive and remote, so it CONFIRMS. Everything else in this menu is a
   // toggle you can flip back; this reaches other devices and cannot be undone.
   const onReset = useCallback(() => {
-    Alert.alert(
+    appAlert(
       'Replace iCloud with this device?',
       'iCloud is replaced by what is on this iPhone. Nothing here is deleted.\n\n'
       + 'Anything NOT on this iPhone is deleted everywhere — including favourites or '
@@ -1143,7 +1144,7 @@ function ICloudRow() {
         <Btn label="SHARE SYNC DIAGNOSTIC" onPress={() => {
           syncDiagnostic()
             .then((text) => Share.share({ message: text }))
-            .catch((e) => Alert.alert('Diagnostic failed', String(e?.message ?? e)));
+            .catch((e) => appAlert('Diagnostic failed', String(e?.message ?? e)));
         }} />
       </BtnRow>
     </>)}

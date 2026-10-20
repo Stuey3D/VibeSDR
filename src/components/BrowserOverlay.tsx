@@ -27,7 +27,7 @@ function allowBrowserLoad(req: { url?: string; isTopFrame?: boolean }): boolean 
   if (/^(about:blank|about:srcdoc|data:|blob:)/i.test(u)) return req?.isTopFrame === false || /^about:blank/i.test(u);
   if (ASK_SCHEMES.test(u)) {
     const what = u.split(':')[0].toLowerCase();
-    Alert.alert(
+    appAlert(
       'Leave VibeSDR?',
       `This page wants to open a ${what === 'tel' ? 'phone call' : what === 'sms' ? 'text message' : 'new email'}:\n\n${u.slice(0, 120)}`,
       [
@@ -41,6 +41,7 @@ function allowBrowserLoad(req: { url?: string; isTopFrame?: boolean }): boolean 
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { addKeyListener } from '../utils/hardwareKeys';
+import { appAlert } from './AppAlert';
 
 export interface BrowserOverlayProps {
   url:     string | null;

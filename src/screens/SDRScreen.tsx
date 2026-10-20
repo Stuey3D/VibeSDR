@@ -223,6 +223,7 @@ import { meaningText } from '../constants/decoderTokens';
 import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, keepTranscribeLanguages, startTranscribe, stopTranscribe, setTranscribeTuning, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, sameLanguage, translateTargetLabel, type TranscribeCaps } from '../services/transcriber';
 import { autoOrder, autoLikely, togglePreferred, parsePreferred, receiverLanguageMissing, PREFERRED_MAX, type LikelyWhy } from '../services/transcribeOrder';
 import { translateRows } from '../services/translateTargets';
+import { appAlert } from '../components/AppAlert';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -1486,7 +1487,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           return;
         }
         if ((await AsyncStorage.getItem('lsv_bg_restrict_dismissed_v1')) === '1') return;
-        Alert.alert(
+        appAlert(
           'Allow background audio',
           "This device restricts VibeSDR when it isn't on screen, which breaks up audio in the background.\n\n" +
           "To fix it:\n" +
@@ -3569,7 +3570,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setAutoContrast(5); setSpatialSmooth(true); setWfCoarse('auto');
     setVfoNeedle('#ffffff'); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
     setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
-    Alert.alert('Display Reset', 'Display settings restored to defaults.');
+    appAlert('Display Reset', 'Display settings restored to defaults.');
   }, [baseUrl]);
 
   const onDispSaveServer = useCallback(() => {
@@ -3577,7 +3578,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_display_prefs:' + baseUrl, stampPrefs(latestPrefsJson.current))
       .catch(() => {});
     requestSync();
-    Alert.alert('Saved', 'Display settings saved for this server.');
+    appAlert('Saved', 'Display settings saved for this server.');
   }, [baseUrl]);
 
   const onDispSaveGlobal = useCallback(() => {
@@ -3587,7 +3588,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_display_prefs', stampPrefs(latestPrefsJson.current))
       .catch(() => {});
     requestSync();
-    Alert.alert('Saved', 'Display settings saved as the global default.');
+    appAlert('Saved', 'Display settings saved as the global default.');
   }, [baseUrl]);
 
   // ── Recording ─────────────────────────────────────────────────────────────
@@ -3640,7 +3641,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setRecStartedAt(null);
           setIsRecording(false);
           noteAudioEvent(`REC start refused — ${e.message}`);
-          Alert.alert('Recording', `Could not start recording: ${e.message}`);
+          appAlert('Recording', `Could not start recording: ${e.message}`);
         });
     } else {
       recBusy.current = true;
@@ -3881,7 +3882,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.getItem('owrx_pause_warning_seen').then((seen: string | null) => {
       if (seen) return;
       AsyncStorage.setItem('owrx_pause_warning_seen', '1').catch(() => {});
-      Alert.alert(
+      appAlert(
         'OpenWebRX — note on pausing',
         'OpenWebRX receivers use server-side profiles. If you pause from the lock screen, VibeSDR disconnects to free the receiver — and reconnecting resets it to the server’s default profile and frequency. (Locking the screen while playing keeps audio going; this only applies to an explicit pause.)',
         [{ text: 'Got it' }],
@@ -4984,7 +4985,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const keepLine = starring
       ? ` \u2605 keeps it on this device (up to ${PREFERRED_MAX} languages).`
       : ` \u2605 keeps a language on this device; others may be tidied away by the system when unused \u2014 GET again if one goes.`;
-    Alert.alert(starring ? `Download and keep ${nm}?` : `Download ${nm}?`,
+    appAlert(starring ? `Download and keep ${nm}?` : `Download ${nm}?`,
       (ios ? `About 300\u2013450 MB of storage (best on Wi-Fi).${keepLine} To remove a language later use Settings (on a Mac, System Settings \u2192 Keyboard \u2192 Dictation); one used recently may have to wait a while.`
            : `The ${nm} speech model takes storage (it can be a few hundred MB \u2014 best on Wi-Fi). It is saved by the phone, not VibeSDR: remove it later in the phone\u2019s speech settings.`) + tr,
       [{ text: 'Cancel', style: 'cancel' }, { text: 'Download', onPress: go }]);
@@ -5553,7 +5554,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onIqOut: (m) => {
         if (destroyed.current) return;
         if (m.on) { setIqState({ on: true, rate: m.rate, host: m.host, port: m.port, code: m.code, public: m.public }); registerIqCode(connectBase, m.code, m.token); }
-        else { setIqState({ on: false }); registerIqCode(connectBase); if (m.why) Alert.alert('Raw IQ out', m.why); }
+        else { setIqState({ on: false }); registerIqCode(connectBase); if (m.why) appAlert('Raw IQ out', m.why); }
       },
       /** ★ DAB, about once a second, with the whole measured state of the multiplex. `null` means
        *  it has ended; `why` is the server's refusal, which is an explanation and not an error —
@@ -6782,7 +6783,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  precisely the servers this alert is about — the listener was offered nothing but
            *  "Back to Servers". Found by the compiler the day tsconfig started checking this file. */
           const web = client.current?.updateAppWebUrl || route.params.baseUrl || '';
-          Alert.alert('Update VibeSDR', UPDATE_APP_MESSAGE, [
+          appAlert('Update VibeSDR', UPDATE_APP_MESSAGE, [
             { text: 'Back to Servers', onPress: () => navigation.goBack() },
             ...(web ? [{ text: 'Open in browser', onPress: () => { Linking.openURL(web).catch(() => {}); navigation.goBack(); } }] : []),
           ]);
@@ -6805,12 +6806,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (needsPassword) {
           setPwPrompt(true);
         } else if (status === 503) {
-          Alert.alert('Receiver is full', reason || 'Every listening slot on this receiver is in use.', [
+          appAlert('Receiver is full', reason || 'Every listening slot on this receiver is in use.', [
             { text: 'Back to Servers', onPress: () => navigation.goBack() },
             { text: 'Try Again', onPress: () => setConnEpoch((n) => n + 1) },
           ]);
         } else if (status === 410 || banned) {
-          Alert.alert(status === 410 ? 'Session ended' : 'Refused by this receiver',
+          appAlert(status === 410 ? 'Session ended' : 'Refused by this receiver',
                       reason || 'This receiver will not accept the connection.', [
             { text: 'Back to Servers', onPress: () => navigation.goBack() },
           ]);
@@ -6818,7 +6819,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // ★ Other backends still reach this the old way — their refusals are not UberSDR-shaped.
           setPwPrompt(true);
         } else {
-          Alert.alert('Connection Error', reason || msg, [
+          appAlert('Connection Error', reason || msg, [
             { text: 'Back to Servers', onPress: () => navigation.goBack() },
             { text: 'Enter Password', onPress: () => setPwPrompt(true) },
           ]);
@@ -7185,7 +7186,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (sessionLimitMins) parts.push(
       `This receiver limits each listener to ${sessionLimitMins} minutes. ` +
       'A countdown is shown next to the clock, and it will disconnect you when the time is up.');
-    Alert.alert(readOnly && sessionLimitMins ? 'Listen-only, and time limited'
+    appAlert(readOnly && sessionLimitMins ? 'Listen-only, and time limited'
                 : readOnly ? 'Listen-only receiver' : 'Time-limited receiver',
                 parts.join('\n\n'));
   }, [connected, readOnly, sessionLimitMins]);
@@ -7208,7 +7209,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // tuner to whoever asks next. Say so, once.
         if (s.spy && s.closed && !toldClosed) {
           toldClosed = true;
-          Alert.alert(
+          appAlert(
             'Receiver disconnected',
             'The SpyServer closed the connection. Public receivers often limit how ' +
             'long one listener can stay, and many allow only one at a time — someone ' +
@@ -8044,14 +8045,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       clearDefaultInstance()
         .then(() => {
           setIsDefault(false);
-          Alert.alert('Default Cleared', 'No default server is set.');
+          appAlert('Default Cleared', 'No default server is set.');
         })
         .catch(() => {});
     } else {
       setDefaultInstance({ name: instanceName ?? baseUrl, url: baseUrl })
         .then(() => {
           setIsDefault(true);
-          Alert.alert('Default Set', `${instanceName ?? baseUrl} is now your default server.`);
+          appAlert('Default Set', `${instanceName ?? baseUrl} is now your default server.`);
         })
         .catch(() => {});
     }
@@ -9548,7 +9549,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onExportBookmarks = useCallback(() => {
     const list = userBookmarks;
-    if (!list.length) { Alert.alert('Bookmarks', 'No bookmarks to export.'); return; }
+    if (!list.length) { appAlert('Bookmarks', 'No bookmarks to export.'); return; }
     // Plain-array JSON — directly importable by desktop UberSDR's
     // local-bookmarks Import (JSON). Share as text: save/airdrop/paste.
     Share.share({ message: exportBookmarksJSON(list) }).catch(() => {});
@@ -10192,7 +10193,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (step === 'no-dab')  { setDialHint('This receiver cannot play DAB.'); return; }
     if (step === 'ask') {
       const others = Math.max(1, (dialStateRef.current?.listeners ?? 2) - 1);
-      Alert.alert(
+      appAlert(
         'Ask to tune',
         `${others === 1 ? 'Somebody else is' : `${others} others are`} listening to this receiver — tuning moves it for everyone.`,
         [
@@ -10423,7 +10424,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (radioBusy[r.id]?.busy === true) {
       const left = radioBusy[r.id]?.freeInSec ?? -1;
       const when = left > 0 ? ` Their turn ends in ${Math.ceil(left / 60)} min at the latest.` : '';
-      Alert.alert('Take over this receiver?',
+      appAlert('Take over this receiver?',
         `Someone is listening on ${r.label} now.${when} Taking over disconnects them.`,
         [{ text: 'Cancel', style: 'cancel' },
          { text: 'Take over', style: 'destructive',
@@ -12113,7 +12114,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           const instCount = bookmarksForInstance(userBookmarks, bookmarkScope, legacyScopes)
             .filter((b: UserBookmark) => b.scope === baseUrl).length;
           if (instCount > 0) {
-            Alert.alert(
+            appAlert(
               'Bookmarks',
               `Keep the ${instCount} bookmark${instCount !== 1 ? 's' : ''} saved for this server?`,
               [

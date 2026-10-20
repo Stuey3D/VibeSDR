@@ -37,6 +37,7 @@ const watchServerCache = new Map<string, SDRInstance>();
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import PadNotice from './src/components/PadNotice';
 import PadGuide from './src/components/PadGuide';
+import { AppAlertHost, appAlert } from './src/components/AppAlert';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
 import ServerModeScreen     from './src/screens/ServerModeThemed';   // ★ in the user's colours — see there
@@ -317,7 +318,7 @@ export default function App() {
       if (done) return; done = true;
       if (detailInstalled() || (await detailAsked())) return;
       t = setTimeout(() => {
-        Alert.alert(
+        appAlert(
           'High Detail Maps',
           'Download the high detail maps? They need approx 200 MB of storage space on this device and are a one time download.\n\nWithout them the standard maps still work. You can download them later from the bottom of the server list.',
           [{ text: 'Not now', style: 'cancel', onPress: () => { void markDetailAsked(); } },
@@ -1045,6 +1046,8 @@ export default function App() {
         <PadNotice />
         {/* ★ The controller guide (2026-10-19) — SELECT on a pad, or the menu's CONTROLLER GUIDE key; nothing until then. */}
         <PadGuide />
+        {/* ★ appAlert's in-app dialog for a pad or keyboard (controller audit, 2026-10-20). */}
+        <AppAlertHost />
 
         {!splashDone && (
           <Animated.View style={{

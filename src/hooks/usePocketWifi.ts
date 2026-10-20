@@ -14,6 +14,7 @@ import {
   POCKET_WEAK_TITLE, POCKET_WEAK_BODY, POCKET_WEAK_SNOOZE_MS, POCKET_TRY_SEC,
   type PocketConn, type PocketChoice, type PocketNet,
 } from '../services/pocketConnection';
+import { appAlert } from '../components/AppAlert';
 
 const originOf = (base: string) => (String(base || '').match(/^(https?:\/\/[^/]+)/) ?? [])[1] ?? '';
 
@@ -61,7 +62,7 @@ export function usePocketWifi(base: string | null, onSwitched: () => void) {
     const net = typeof to === 'object' ? to : null;
     if (net ? pocketOnNet(conn, net) : (to === 'own') === pocketOnOwn(conn)) return;   // already there
     const t = pocketSwitchText(conn, to);
-    Alert.alert(t.title, t.body, [
+    appAlert(t.title, t.body, [
       { text: 'Cancel', style: 'cancel' },
       { text: net ? 'Look for it' : to === 'own' ? 'Switch to own Wi-Fi' : 'Switch back', onPress: async () => {
         try {
@@ -70,11 +71,11 @@ export function usePocketWifi(base: string | null, onSwitched: () => void) {
             body: JSON.stringify(net ? { to: 'net', rank: net.rank } : { to }) });
           if (!r.ok) {
             const j: any = await r.json().catch(() => ({}));
-            Alert.alert('Not switched', j?.error || `The box refused (${r.status}).`);
+            appAlert('Not switched', j?.error || `The box refused (${r.status}).`);
             return;
           }
           switching.current = true;
-          Alert.alert('Switching', net
+          appAlert('Switching', net
             ? `Turn on “${net.ssid}” now if it is a hotspot — the box looks for it for ${POCKET_TRY_SEC} seconds. `
               + 'Then start again from the server list on a device connected to it.'
             : to === 'own'
@@ -82,7 +83,7 @@ export function usePocketWifi(base: string | null, onSwitched: () => void) {
             : 'Join your network in Settings › Wi-Fi, then start again from the server list.',
             [{ text: 'OK', onPress: onSwitched }]);
         } catch {
-          Alert.alert('Not switched', 'The box did not answer.');
+          appAlert('Not switched', 'The box did not answer.');
         }
       } },
     ]);
@@ -95,7 +96,7 @@ export function usePocketWifi(base: string | null, onSwitched: () => void) {
     if (!weak) { askedThisSpell.current = false; return; }
     if (askedThisSpell.current || switching.current || Date.now() < snoozedUntil.current) return;
     askedThisSpell.current = true;
-    Alert.alert(POCKET_WEAK_TITLE, POCKET_WEAK_BODY, [
+    appAlert(POCKET_WEAK_TITLE, POCKET_WEAK_BODY, [
       { text: 'Not now', style: 'cancel', onPress: () => { snoozedUntil.current = Date.now() + POCKET_WEAK_SNOOZE_MS; } },
       { text: 'Switch to own Wi-Fi', onPress: () => choose('own') },
     ]);

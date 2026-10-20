@@ -27,6 +27,7 @@ import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-au
 import { useMacAudio } from '../services/macAudio';
 import { groupRecordings, NO_SERVER } from '../services/recordingGroups';
 import { loadRecordingIndex, pruneRecordingIndex } from '../services/recordingsIndex';
+import { appAlert } from './AppAlert';
 
 const REC = NativeModules.VibePowerModule as { shareRecording?: (path: string) => void };
 
@@ -172,7 +173,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange, cu
   }, []);
 
   const remove = useCallback((rec: Rec) => {
-    Alert.alert('Delete recording', `Delete "${rec.freq} ${rec.mode}" (${rec.when})?`, [
+    appAlert('Delete recording', `Delete "${rec.freq} ${rec.mode}" (${rec.when})?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
         try {

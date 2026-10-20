@@ -39,6 +39,7 @@ import { fmdxDeclaredRange } from '../services/fmdxDirectory';
 import { requestSync } from '../services/cloudSync';
 import { fmdxLayout, LOGO_BOX_COMPACT } from '../constants/fmdxLayout';
 import { FMDX_TUNE_LO, FMDX_TUNE_HI, FMDX_DIAL_VIEW_LO, FMDX_DIAL_VIEW_HI } from '../constants/fmBand';
+import { appAlert } from '../components/AppAlert';
 
 // FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
 // demod + RDS, native MP3 audio. No waterfall — station/RDS panels fill the top,
@@ -992,7 +993,7 @@ export default function TunerScreen({ route, navigation }: Props) {
           setRecSeconds(0);
           setIsRecording(false);
           noteAudioEvent(`REC start refused — ${e.message}`);
-          Alert.alert('Recording', `Could not start recording: ${e.message}`);
+          appAlert('Recording', `Could not start recording: ${e.message}`);
         });
     } else {
       recBusy.current = true;

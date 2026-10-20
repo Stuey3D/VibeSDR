@@ -268,3 +268,19 @@ It is mounted once in `App.tsx` over every screen. On merge:
   bus from inside its Modal (`VibeGamepad.kt` hooks every `ReactModalHostView`), so Back = CANCEL works there too;
 - if it uses `Alert.alert` anywhere (the long-press "Forget certificate"), route it through `appAlert()`.
 
+
+### appAlert — converted, and what is left
+`appAlert()` (`src/components/AppAlert.tsx`, rules in `src/utils/appAlertModel.ts`, `scripts/test_app_alert.ts`):
+touch → the native alert unchanged, with a level-2 overlay registered while it is up (a pad cannot press anything
+behind it); pad or keyboard → an in-app dialog, highlight on the safe default (never a destructive key), Back = the
+cancel button. **Converted: every `Alert.alert` in** SDRScreen (20, incl. "Take over this receiver?", Receiver full,
+Session ended, Connection Error, Update VibeSDR, listen-only, disconnected, Default Set/Cleared, Ask to tune, keep
+bookmarks), InstancePickerScreen (29, incl. the connect errors, compatibility Back/Continue, Set/Remove Default,
+factory reset, TCP delete, High Detail Maps), TunerScreen, App.tsx ("High Detail Maps?" at first launch), MenuSheet,
+RecordingsOverlay (delete), BrowserOverlay ("Leave VibeSDR?"), usePocketWifi, useDeepLinks.
+The iOS `Alert.prompt`s step aside when a pad or keyboard is in use: the VibeServer PIN takes `VibePinPrompt`; "Name
+this favourite / SpyServer" save under the address (as Android always has).
+**Left native, on purpose:** `ServerModeScreen` (4) and `ExportLogs` (3) — both in VibeServer Lite's bundle, which
+must not import PopupShell (`scripts/test_server_colours.ts`); `crashGuard`, `faceplateGuard`, `CrashBoundary`,
+`LegacyPackageNotice` — crash and recovery paths that must not depend on the app's own UI being healthy. Native OS
+surfaces (share sheet, document picker, permission prompts) remain out of reach (§5).

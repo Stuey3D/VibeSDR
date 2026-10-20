@@ -539,6 +539,8 @@ if npx tsx scripts/test_radio_chooser_nav.ts; then pass=$((pass+1)); else fail=$
 # ★★★ ONE OVERLAY RULE (controller audit, 2026-10-20): the top surface owns the keys, Back peels one layer, arrows never
 #     reach the screen beneath, tune passes, a raised tour stays on top, BrowserOverlay keeps Back.
 if npx tsx scripts/test_overlay_stack.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ appAlert (controller audit, 2026-10-20): button order = focus order, never starting on a destructive key, Back = cancel.
+if npx tsx scripts/test_app_alert.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

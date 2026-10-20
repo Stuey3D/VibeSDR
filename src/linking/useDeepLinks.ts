@@ -21,10 +21,11 @@ import { parseVibeSdrUrl, resolveRequest, type ResolvedTarget } from './DeepLink
 import { parseSdrUrl } from './SdrLinkHandler';
 import { markDeepLinkActive, markInitialLinkChecked } from './deepLinkState';
 import { parseUrlStrict, SERVER_SCHEMES } from '../utils/safeUrl';
+import { appAlert } from '../components/AppAlert';
 
 function toast(msg: string) {
   if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.LONG);
-  else Alert.alert('VibeSDR', msg);
+  else appAlert('VibeSDR', msg);
 }
 
 /**
@@ -97,7 +98,7 @@ export function useDeepLinks(ready: boolean) {
       const t = parseSdrUrl(url);
       if (!t) { toast('Invalid SpyServer link'); return; }
       const onSDR = navigationRef.getCurrentRoute?.()?.name === 'SDR';
-      Alert.alert(
+      appAlert(
         'Connect to SpyServer?',
         `${t.host}:${t.port}\n\nSpyServer links come from third-party sources — only connect to servers you trust.`
           + (onSDR ? '\nThis will disconnect your current session.' : ''),
@@ -123,7 +124,7 @@ export function useDeepLinks(ready: boolean) {
     const onSDR = navigationRef.getCurrentRoute?.()?.name === 'SDR';
     if (req.url) {
       const host = parseUrlStrict(res.target.baseUrl, SERVER_SCHEMES)?.host || res.target.baseUrl;
-      Alert.alert(
+      appAlert(
         'Open server from link?',
         `${host}\n\nLinks can come from anyone — only connect to servers you trust.`
           + (onSDR ? '\nThis will disconnect your current session.' : ''),
@@ -133,7 +134,7 @@ export function useDeepLinks(ready: boolean) {
         ],
       );
     } else if (onSDR) {
-      Alert.alert(
+      appAlert(
         'Open server from link?',
         `Connect to ${res.target.instanceName}?\nThis will disconnect your current session.`,
         [
