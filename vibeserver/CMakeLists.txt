@@ -720,6 +720,10 @@ target_include_directories(test-wifi-qos PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-wifi-qos)
 target_link_libraries(test-wifi-qos PRIVATE Threads::Threads)
 add_test(NAME wifi-qos COMMAND test-wifi-qos)
+# ★★ Download diagnostics (diag_scrub.h, 2026-10-20): the daemon's own scrub of the file before it is downloaded.
+add_executable(test-diag-scrub "${CMAKE_CURRENT_SOURCE_DIR}/test-diag-scrub.cpp")
+vibe_sanitize(test-diag-scrub)
+add_test(NAME diag-scrub COMMAND test-diag-scrub)
 # ★ The fatal-signal record (crash_report.h, 2026-10-06): a fault on a named thread is reported with its
 #   thread, PC as an exe offset and version, and the process still dies of the same signal. Linux only
 #   (prints SKIP elsewhere).
@@ -800,7 +804,7 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #    NoNewPrivileges=yes, so it cannot elevate at all — sudo is impossible by design here. The
   #    daemon writes a request file instead; the .path unit notices it and runs the helper as
   #    root. See linux/vibeserver-maintenance for the permitted actions.
-  install(PROGRAMS linux/vibeserver-maintenance DESTINATION lib/vibeserver)
+  install(PROGRAMS linux/vibeserver-maintenance linux/vibeserver-diagnostics DESTINATION lib/vibeserver)
   install(FILES linux/vibeserver-maintenance.path
                 linux/vibeserver-maintenance.service
           DESTINATION lib/systemd/system)

@@ -3811,7 +3811,15 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="actUpdateAll">UPDATE ALL PACKAGES</button>
       <button class="btn" id="actRestart">RESTART VIBESERVER</button>
       <button class="btn aWarn" id="actReboot">REBOOT THE MACHINE</button>
+      <!-- ★★★ DOWNLOAD DIAGNOSTICS (Stuart, 2026-10-20): one text file of this server's logs and settings for the
+           owner to send us. Built as root by the maintenance helper, secrets removed, saved by this browser. -->
+      <button class="btn" id="actDiag" hidden>DOWNLOAD DIAGNOSTICS</button>
     </div>
+    <p class="dim wrap aNote" id="actDiagNote" hidden>
+      <b>Download diagnostics</b> saves a text file of this server&rsquo;s logs and settings from the last day, to send
+      to us if something is not working. It never contains passwords, but it does contain this server&rsquo;s
+      addresses and network names &mdash; only send it to people you trust.
+    </p>
     <!-- ★★ TWO INDEPENDENT SCHEDULES, not one with a scope switch. A VibeServer update is one
          small package we build and can sensibly be daily; a full system upgrade is bigger and
          occasionally wants attention, so it suits a weekly slot. One schedule would force the

@@ -399,6 +399,10 @@ public:
      *    file does not exist on a phone. */
     using AdminLogFn = std::function<void(std::string& text, bool& running, int& exitCode)>;
     static void setAdminLogHandler(AdminLogFn fn);
+    /** ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20): the daemon hands back the file the root helper built (maintenance action
+     *  `diagnostics`), already scrubbed, and its download name. False + err = nothing to hand over (not built yet). */
+    using AdminDiagFn = std::function<bool(std::string& body, std::string& fileName, std::string& err)>;
+    static void setAdminDiagnosticsHandler(AdminDiagFn fn);
 
     /** ★★ IP -> ISO-3166 country, for the flags beside listeners and the top-countries tally.
      *  Registered by the DAEMON, which owns the dataset (see vibeserver/geoip.cpp for why it is

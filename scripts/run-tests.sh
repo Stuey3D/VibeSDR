@@ -240,6 +240,9 @@ if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)
 # ★★ The pocket box's Wi-Fi state machine against a fake NetworkManager: strict 1/2/3 order, moving
 #    up when network 1 returns, never pulling a hotspot from under a phone, no password in any log.
 if python3 vibeserver/linux/pocket/test_vibeserver_pocket.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20): the file an owner sends us never carries a secret — a Wi-Fi password, the admin
+#     password, a PIN, the directory key, planted in NetworkManager, the config, a status file and the journal.
+if python3 vibeserver/linux/test_vibeserver_diagnostics.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A PORTABLE UPDATES FULLY WITHOUT A NEW CARD (Stuart, 2026-10-13). vibeserver-pocket-converge on a fake root: a no-op
 #     without the marker, idempotent, config.txt lines once, an owner's own change kept, the package list drives what
 #     Update installs — and vibeserver-maintenance's `update` with apt + overlayroot-chroot stubbed.
@@ -506,6 +509,12 @@ if npx tsx scripts/test_pad_guide.ts; then pass=$((pass+1)); else fail=$((fail+1
 #    NOT RUN — counted separately, never as a pass: a stale binary would test yesterday's server.
 printf '\n\033[1m── server decoders (end to end) ──\033[0m\n'
 node scripts/test-server-decoders.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ DOWNLOAD DIAGNOSTICS on the admin API (2026-10-20): admin only, an attachment a phone saves, and the daemon's own
+#     scrub of the admin password / PINs / directory key. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── download diagnostics (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-admin-diagnostics.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ AUDIO FIRST (2026-10-20, docs/BRIEF-portable-wifi-realtime.md Phase 2): a listener whose audio backs up gets a

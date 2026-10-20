@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <sstream>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <ctime>
@@ -80,6 +81,7 @@
 #include "moveloc.h"       // ★ the nearest town as the server moves (owner's tick) — inert when off
 #include "vibe_mapgl.h"   // the GPU map's files and its optional detail pack
 #include "mapgl_curl.h"   // the High Detail Maps downloader (shared with Mac Simple mode)
+#include "diag_scrub.h"   // ★ the daemon's own scrub of the diagnostics file before it is downloaded
 
 // ★ Declared out here on purpose: the anonymous namespace below closes long before
 //   reapRadios() is defined, so a declaration inside it would be a DIFFERENT function
@@ -3273,7 +3275,7 @@ int main(int argc, char** argv) {
     //    re-detected until it is physically replugged — the button would STRAND the receiver.
     //    Same rule as AGENTS.md: remove a control that cannot work rather than leave it visible.
 #if defined(__linux__) && !defined(__ANDROID__)
-    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove");
+    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove,diagnostics");
 #else
     LocalSdrShim::setMaintenanceActions("");   // no section at all, rather than an empty one
 #endif
@@ -4169,6 +4171,42 @@ int main(int argc, char** argv) {
     //    While maintenance.request exists the helper has not started (it truncates the log BEFORE it
     //    removes the request), so the page is told "waiting" instead of being shown the previous
     //    run's finished output — the "first press did nothing" fault the old unlink existed to fix.
+    /* ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20, Stuart: on every Linux VibeServer's admin page, not only a Portable's).
+     *  The root helper (maintenance action `diagnostics`, which runs vibeserver-diagnostics) leaves the file in its own
+     *  root-owned directory — root:vibeserver 0640, so we can READ it and can never replace or redirect it. Read with
+     *  O_NOFOLLOW, capped, scrubbed once more of the secrets THIS process knows (diag_scrub.h), named for the machine.
+     *  ★ VIBESERVER_DIAG_FILE moves it for the end-to-end test; it comes from our root-owned unit's environment. */
+    LocalSdrShim::setAdminDiagnosticsHandler([](std::string& body, std::string& name, std::string& err) -> bool {
+        const char* env = std::getenv("VIBESERVER_DIAG_FILE");
+        const std::string path = env && *env ? env : "/var/lib/vibeserver-maint/diagnostics.txt";
+        const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0) { err = "no diagnostics file yet — press Download diagnostics again"; return false; }
+        char buf[65536]; ssize_t n;
+        body.clear();
+        while ((n = ::read(fd, buf, sizeof buf)) > 0) {
+            body.append(buf, (size_t)n);
+            if (body.size() > 16u * 1024 * 1024) break;          // ★ the helper caps it far lower; this is a ceiling
+        }
+        ::close(fd);
+        if (body.empty()) { err = "the diagnostics file is empty — press Download diagnostics again"; return false; }
+        std::vector<std::string> secrets;
+        vsconfig::ServerConfig sc; std::string e;
+        if (!vsconfig::loadServer(g_configPath, sc, e)) sc = g_serverConfig;
+        secrets.push_back(sc.adminPass); secrets.push_back(sc.pin);
+        for (const auto& r : sc.radios) secrets.push_back(r.pin);
+        {   // the directory key (directory.cpp keeps it in the data directory's directory.json)
+            std::ifstream f(vsDataDir() + "/directory.json"); std::stringstream ss; ss << f.rdbuf();
+            const std::string d = ss.str(); const size_t k = d.find("\"key\":\"");
+            if (k != std::string::npos) { const size_t a = k + 7, b = d.find('"', a); if (b != std::string::npos) secrets.push_back(d.substr(a, b - a)); }
+        }
+        body = vsdiag::scrubSecrets(std::move(body), secrets);
+        char host[256] = {0}; ::gethostname(host, sizeof host - 1);
+        char ts[32]; const time_t now = ::time(nullptr); struct tm tmv{}; ::localtime_r(&now, &tmv);
+        std::strftime(ts, sizeof ts, "%Y%m%d-%H%M%S", &tmv);
+        name = vsdiag::fileName(host, ts);
+        return true;
+    });
+
     LocalSdrShim::setAdminLogHandler([](std::string& text, bool& running, int& exitCode) {
         text.clear(); running = false; exitCode = 0;
         struct stat rq{};
@@ -4236,7 +4274,10 @@ int main(int argc, char** argv) {
                                           /* ★ Performed by the shim itself (vibe_mapgl.h), never
                                            *  by the helper; listed so the two lists agree. */
                                           "mapgl-detail-install", "mapgl-detail-remove",
-                                          "sdrplay-restart" };
+                                          "sdrplay-restart",
+                                          /* ★ Download diagnostics: the helper builds the file, the
+                                           *  handler below serves it (2026-10-20). */
+                                          "diagnostics" };
         bool known = false;
         for (const char* a : kActions) if (action == a) { known = true; break; }
         if (!known) { err = "unknown action: " + action; return false; }

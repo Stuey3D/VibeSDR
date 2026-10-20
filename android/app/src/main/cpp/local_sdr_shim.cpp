@@ -4857,6 +4857,7 @@ static std::atomic<int>            g_biasTeeWant{-1};   // -1 = never asked
 /** Reboot / restart / update, performed by the daemon. Null on a phone — see adminAction(). */
 static LocalSdrShim::AdminActionFn g_vsAdminActionFn;
 static LocalSdrShim::AdminLogFn    g_vsAdminLogFn;
+static LocalSdrShim::AdminDiagFn   g_vsAdminDiagFn;      // ★ guarded by g_vsConfigMtx — see setAdminDiagnosticsHandler
 static LocalSdrShim::GeoIpFn       g_vsGeoIpFn;
 /** ★ Station artwork by PI/ECC/frequency (RadioDNS). Declared with the other handlers rather than
  *  beside its setter, because the ENDPOINT that reads it is thousands of lines above that. */
@@ -18529,6 +18530,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                + ",\"text\":\"" + vibeadmin::esc(text) + "\"}");
                 return;
             }
+            if (!isPost && what == "diagnostics") {
+                /* ★★★ DOWNLOAD DIAGNOSTICS (2026-10-20). Admin only (the gate above), and a plain GET answered with a
+                 *  FILE — Content-Disposition: attachment — so any browser, iOS Safari included, saves it for the owner
+                 *  to send on. The file is built by the root helper first (action `diagnostics`); the daemon scrubs the
+                 *  secrets it knows once more before it comes back here (diag_scrub.h). */
+                LocalSdrShim::AdminDiagFn fn;
+                { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsAdminDiagFn; }
+                std::string text, name, err;
+                if (!fn) { reply(404, "Not Found", "{\"error\":\"diagnostics are not available on this server\"}"); return; }
+                if (!fn(text, name, err)) { reply(409, "Conflict", "{\"error\":\"" + jsonEscape(err) + "\"}"); return; }
+                LOGI("admin diagnostics downloaded by %s (%zu KB)", ip.c_str(), text.size() / 1024);
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                              "Content-Disposition: attachment; filename=\"" + name + "\"\r\n"
+                              "X-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n"
+                              "Content-Length: " + std::to_string(text.size()) + "\r\n\r\n" + text);
+                sock->close();
+                return;
+            }
             if (!isPost && what == "history") {
                 // ★ ?after=<epoch>: only the new tail — see History::json.
                 reply(200, "OK", g_vsHistory.json(atoll(queryParam(reqLine, "after").c_str())));
@@ -27577,6 +27596,10 @@ bool LocalSdrShim::adminAction(const std::string& action, std::string& err) {
 void LocalSdrShim::setAdminActionHandler(AdminActionFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsAdminActionFn = std::move(fn);
+}
+void LocalSdrShim::setAdminDiagnosticsHandler(AdminDiagFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsAdminDiagFn = std::move(fn);
 }
 void LocalSdrShim::setAdminLogHandler(AdminLogFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
