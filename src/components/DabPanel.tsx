@@ -19,7 +19,7 @@
  *    string by concatenating one into JSON.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { captureRegion, useKeyboardMode, useListNav, useNavFocus, NavRing } from './PanelNav';
+import { captureRegion, capturedRegion, useKeyboardMode, useListNav, useNavFocus, NavRing } from './PanelNav';
 import { screenNavRef } from './ScreenNav';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { LOGO_DECODE } from '../constants/logoDecode';
@@ -593,8 +593,9 @@ export default function DabPanel(p: DabPanelProps) {
   const navRing = useNavFocus().ring;
   const [grab, setGrab] = useState(false);
   const autoGrabbed = useRef(false);
-  useEffect(() => { captureRegion(grab ? 'dab' : null); }, [grab]);
-  useEffect(() => () => { captureRegion(null); }, []);   // never leave it captured on unmount
+  // ★ Release only what WE hold — the decoder box is a different region and must not be let go by this one.
+  useEffect(() => { if (grab) captureRegion('dab'); else if (capturedRegion() === 'dab') captureRegion(null); }, [grab]);
+  useEffect(() => () => { if (capturedRegion() === 'dab') captureRegion(null); }, []);   // never leave it captured on unmount
   useEffect(() => {
     if (!kbOn) { setGrab(false); return; }               // a touch: the hand has it
     if (autoGrabbed.current) return;

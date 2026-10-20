@@ -355,6 +355,8 @@ export function useFullKeyboardAccessSuspected(): boolean {
 let region: string | null = null;
 const regionListeners = new Set<(r: string | null) => void>();
 export const regionCaptured = () => region !== null;
+/** Which region holds the keys now, or null. */
+export const capturedRegion = () => region;
 export function captureRegion(name: string | null) {
   if (region === name) return;
   region = name;
