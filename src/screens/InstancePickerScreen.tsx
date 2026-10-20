@@ -5,7 +5,8 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { useListNav, noteTouchInteraction, useNavFocus, useOverlayOpen, useOverlay, keyboardModeNow } from '../components/PanelNav';
 import { useFieldPopupNav, NavWrap } from '../components/FieldPopupNav';
-import { pickerZone, headerAbove, directoryRowAction } from '../utils/pickerNav';
+import { pickerZone, headerAbove, directoryRowAction, revealOffset } from '../utils/pickerNav';
+import { useRenderBank } from '../utils/renderBank';
 import { usePadField } from '../components/ControllerKeyboard';
 import { addKeyListener } from '../utils/hardwareKeys';
 import {
@@ -2096,21 +2097,47 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // the footer (call sign + DIRECTORIES). The footer renders AFTER the items, so a single
   // counter would have handed footer rows the same indices as list rows. Header rows are
   // numbered first, the list keeps the middle, and the footer is offset past both.
-  const hdrActions = useRef<Array<() => void>>([]);
-  const ftrActions = useRef<Array<() => void>>([]);
-  hdrActions.current = [];
-  ftrActions.current = [];
-
-  // ★★ The LENGTH has to come from state, not from the refs. The banks are cleared at the
-  // top of this render and only filled while the CHILDREN render — so reading their length
-  // here always gave zero, the nav's range was just the list, and focus stuck at its last
-  // index. Stuart saw exactly that: focus=12 of rows=13, unable to reach Manchester or the
-  // directories below it. The counts are published after each render and settle in one pass.
+  //
+  // ★★★ CLAIM INTO THE STAGE, READ THE COMMITTED BANK (V12 489 — src/utils/renderBank.ts). These were plain refs emptied
+  // at the top of this render. A setState with an unchanged value (setRowSub(0) after every move) makes React call this
+  // function again and then bail out WITHOUT rendering the rows — so the bank the key handlers read held only the slots
+  // claimed here (RECORDINGS, the cog, the URL box…), never the rows claimed by ChooserRow / ChooserKey. The highlight
+  // drawn on a DISCOVERED server was treated as a list row: the list scrolled away from it and Enter pressed another row.
+  // `hdrActions` / `ftrActions` are the STAGE (render only); `hdrDone` / `ftrDone` are what is on screen (handlers).
+  // ★★ The LENGTH comes from state too: published on each commit, so the nav's range follows the rows (it once stuck at
+  // focus=12 of rows=13, unable to reach Manchester or the directories below it).
   const [zoneCounts, setZoneCounts] = useState({ h: 0, f: 0 });
-  useEffect(() => {
-    const h = hdrActions.current.length, f = ftrActions.current.length;
-    if (h !== zoneCounts.h || f !== zoneCounts.f) setZoneCounts({ h, f });
-  });
+  const zoneCountsRef = useRef(zoneCounts); zoneCountsRef.current = zoneCounts;
+  const publishZones = () => {
+    const h = hdrDone.current.length, f = ftrDone.current.length;
+    if (h !== zoneCountsRef.current.h || f !== zoneCountsRef.current.f) setZoneCounts({ h, f });
+  };
+  const hdrBank = useRenderBank<() => void>();
+  const ftrBank = useRenderBank<() => void>(() => publishZones());   // declared second: its commit runs after hdrBank's
+  const hdrActions = hdrBank.stage, ftrActions = ftrBank.stage;
+  const hdrDone = hdrBank.committed, ftrDone = ftrBank.committed;
+  // Each header and footer row's own view (set as it commits), so reveal can measure it rather than guess.
+  const hdrViews = useRef<Array<any>>([]);
+  /** The list's own box (both lists), for measuring a header or footer row against what is actually visible. */
+  const listBoxRef = useRef<View | null>(null);
+  const selectedDirRef = useRef(selectedDir); selectedDirRef.current = selectedDir;
+  /**
+   * ★ scrollToIndex on a row the list has not laid out yet (a long directory, a held D-pad outrunning the windowing)
+   *   throws without getItemLayout — reveal swallowed it and the highlight went on below the fold. Jump to the estimate,
+   *   which makes the list lay that row out, then centre it properly — once, so a row that never lays out cannot loop.
+   */
+  const indexRetried = useRef(-1);
+  const onScrollToIndexFailed = useCallback((info: { index: number; averageItemLength: number }) => {
+    const target: any = selectedDirRef.current !== null ? listRef.current : dragRef.current;
+    const again = indexRetried.current === info.index;
+    indexRetried.current = again ? -1 : info.index;
+    if (again) return;                                   // the second try failed too: the estimate stands
+    try { target?.scrollToOffset?.({ offset: Math.max(0, info.averageItemLength * info.index), animated: false }); } catch {}
+    setTimeout(() => {
+      if (navFocusRef.current - hdrDone.current.length !== info.index) return;   // the highlight has moved on
+      try { target?.scrollToIndex?.({ index: info.index, viewPosition: 0.5, animated: true }); } catch {}
+    }, 80);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ★ A directory row's press — the tap AND Enter (src/utils/pickerNav.ts directoryRowAction). */
   const pressDirectoryRow = (inst: SDRInstance) => {
@@ -2128,7 +2155,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     zoneCounts.h + listData.length + zoneCounts.f,
     (i) => {
       // Header, then the list, then the footer — the order they appear on screen.
-      const hdr = hdrActions.current, ftr = ftrActions.current;
+      const hdr = hdrDone.current, ftr = ftrDone.current;
       if (i < hdr.length) { hdr[i]?.(); return; }
       if (i >= hdr.length + listData.length) { ftr[i - hdr.length - listData.length]?.(); return; }
       const it = listData[i - hdr.length];
@@ -2143,24 +2170,30 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     (i) => {
       // viewPosition 0.5 keeps focus mid-screen, which reads far better from across a
       // room than nudging it just inside the edge. Whichever list is actually mounted.
-      const hdrLen = hdrActions.current.length;
+      // ★★ The COMMITTED counts (what is on screen), never the render stage — see useRenderBank above.
+      const hdrLen = hdrDone.current.length;
       const target: any = selectedDir !== null ? listRef.current : dragRef.current;
-      // Header and footer rows sit outside the data, so scroll to the ends instead.
-      if (i < hdrLen) { try { target?.scrollToOffset?.({ offset: 0, animated: true }); } catch {} return; }
-      if (i >= hdrLen + listData.length) {
-        // ★ NOT scrollToEnd. That jumps to the very bottom, so the FIRST footer rows — the
-        // call sign and the UberSDR directory — end up scrolled off the top and look skipped
-        // even though focus is on them. Stuart: "it's reachable but as the list scrolls it's
-        // just out of view." Measure the row and put it where it can be read instead.
-        const v = ftrViews.current[i - hdrLen - listData.length];
-        v?.measureInWindow?.((_x: number, y: number, _w: number, h: number) => {
-          const screenH = Dimensions.get('window').height;
-          if (y >= 100 && y + h <= screenH - 60) return;      // already readable
-          const want = Math.max(120, screenH / 2 - h / 2);
-          try { target?.scrollToOffset?.({ offset: Math.max(0, listScrollY.current + (y - want)), animated: true }); } catch {}
+      // ★ Header and footer rows sit outside the data: MEASURE the row and centre it in the list's own box. NOT
+      //   scrollToEnd for the footer (the call sign and the UberSDR directory scrolled off the top: "it's reachable but
+      //   as the list scrolls it's just out of view"), and NOT the top for the header (seven DISCOVERED servers and
+      //   SEARCH AGAIN make it taller than a phone's list — the bottom ones sat below the fold, highlighted).
+      const measureInto = (v: any) => {
+        const box: any = listBoxRef.current;
+        if (!v?.measureInWindow || !box?.measureInWindow) return false;
+        box.measureInWindow((_bx: number, by: number, _bw: number, bh: number) => {
+          v.measureInWindow((_x: number, y: number, _w: number, h: number) => {
+            const to = revealOffset(listScrollY.current, { y: by, h: bh }, { y, h });
+            if (to !== null) { try { target?.scrollToOffset?.({ offset: to, animated: true }); } catch {} }
+          });
         });
+        return true;
+      };
+      if (i < hdrLen) {
+        // A control above the list (RECORDINGS, the cog, the URL box) has no view here: the list goes to its top.
+        if (!measureInto(hdrViews.current[i])) { try { target?.scrollToOffset?.({ offset: 0, animated: true }); } catch {} }
         return;
       }
+      if (i >= hdrLen + listData.length) { measureInto(ftrViews.current[i - hdrLen - listData.length]); return; }
       try { target?.scrollToIndex?.({ index: i - hdrLen, viewPosition: 0.5, animated: true }); }
       catch { /* index briefly out of range while the list rebuilds — harmless */ }
     },
@@ -2175,7 +2208,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       }
       // ★ From the LIST position, not the global index (controller audit group H): it walked listData from the global
       //   index, so with header controls above it collapsed the wrong group (pickerZone, scripts/test_picker_nav.ts).
-      const z = pickerZone(navFocusRef.current, hdrActions.current.length, listData.length, ftrActions.current.length);
+      const z = pickerZone(navFocusRef.current, hdrDone.current.length, listData.length, ftrDone.current.length);
       if (z?.zone !== 'list') return true;
       const j = headerAbove(listData.map((x) => x.kind), z.at);
       const h = j >= 0 ? listData[j] : undefined;
@@ -2193,13 +2226,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const rowSubRef = useRef(0); rowSubRef.current = rowSub;
   const rowSubs = useRef<Record<number, Array<() => void>>>({});
   const listLenRef = useRef(listData.length); listLenRef.current = listData.length;
-  useEffect(() => { setRowSub(0); }, [navFocus]);
+  // ★ Only when it is not already 0: a same-value setState still makes React call this screen once more (that bailed-out
+  //   render is what emptied the old banks). Harmless now, but there is no reason to ask for it on every move.
+  useEffect(() => { if (rowSubRef.current !== 0) setRowSub(0); }, [navFocus]);
   useEffect(() => {
     if (!listNavActive) return;
     // Above the list's own nav (priority 0): Left / Right / Enter / Back on a row that HAS buttons are the row's.
     const sub = addKeyListener('down', (e) => {
       if (e.typing) return;
-      const li = navFocusRef.current - hdrActions.current.length;
+      const li = navFocusRef.current - hdrDone.current.length;
       if (li < 0 || li >= listLenRef.current) return;
       const subsHere = rowSubs.current[li];
       if (!subsHere || !subsHere.length) return;
@@ -2227,6 +2262,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const bank = foot ? ftrActions.current : hdrActions.current;
     const i = bank.length;
     bank.push(onPress);
+    // A slot is a control ABOVE the list (or a box inside it with no row of its own): nothing to measure — reveal sends
+    // the list to its top, as it always did. Cleared so a row's view left at this index is never measured instead.
+    (foot ? ftrViews : hdrViews).current[i] = null;
     const globalIndex = foot ? hdrActions.current.length + listData.length + i : i;
     return navFocus === globalIndex;
   };
@@ -2246,7 +2284,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const on = navFocus === globalIndex;
     return (
       <TouchableOpacity onPress={onPress}
-        ref={foot ? ((r: any) => { ftrViews.current[myIndex] = r; }) : undefined}
+        ref={(r: any) => { (foot ? ftrViews : hdrViews).current[myIndex] = r; }}
         style={[style, on && { borderColor: focusC.ring, borderWidth: 2 }]} {...rest}>
         {children}
       </TouchableOpacity>
@@ -2261,7 +2299,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     bank.push(onPress ?? (() => {}));
     const on = navFocus === myIndex;
     return (
-      <TouchableOpacity onPress={onPress} style={[{ borderRadius: 6 }, style, on && { borderColor: focusC.ring, borderWidth: 2 }]} {...rest}>
+      <TouchableOpacity onPress={onPress} ref={(r: any) => { hdrViews.current[myIndex] = r; }}
+        style={[{ borderRadius: 6 }, style, on && { borderColor: focusC.ring, borderWidth: 2 }]} {...rest}>
         {children}
       </TouchableOpacity>
     );
@@ -2276,7 +2315,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // could never render, however correct the focus was. The plain FlatList passes `index`.
     // Two list components, two contracts, one renderItem shared between them.
     const idx = index ?? getIndex?.();
-    const navOn = idx != null && (idx + hdrActions.current.length) === navFocus;
+    // ★ The COMMITTED header count: a row can re-render on its own (the list windowing in as it scrolls), after a
+    //   bailed-out render has emptied the stage. Publishing a new count re-renders the screen, so this catches up.
+    const navOn = idx != null && (idx + hdrDone.current.length) === navFocus;
     // ★★ THE ROW'S OWN BUTTONS (controller audit group C, 2026-10-20): ✎ ☆ ♥ on a saved server, ☆ ♡ on a directory
     //    row, the favourites' sort chip — none were reachable by pad. On the highlighted row, Right walks onto them and
     //    Left back to the row; Enter presses the one lit; Back returns to the row (see the listener by useListNav).
@@ -2896,7 +2937,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         </View>
         )}
 
-        {/* Body: directory list when one is open, else the chooser */}
+        {/* Body: directory list when one is open, else the chooser.
+            ★ In a box of its own, so reveal can measure a row against what the list actually shows (V12 489). */}
+        <View ref={listBoxRef} collapsable={false} style={{ flex: 1 }}>
         {selectedDir !== null ? (
           loading ? (
             <View style={styles.centred}>
@@ -2916,6 +2959,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               onScroll={onListScroll}
               scrollEventThrottle={16}
               data={listData}
+              onScrollToIndexFailed={onScrollToIndexFailed}
               // ★★ WITHOUT THIS THE SELECTION BOX NEVER APPEARS. FlatList only re-renders
               // rows when `data` or `extraData` changes, and the focused index is external
               // state — so focus was moving correctly and invisibly, which is exactly what
@@ -2969,6 +3013,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             onScrollOffsetChange={(y: number) => { listScrollY.current = y; }}
             extraData={[navFocus, rowSub]}   // same reason as the FlatList above
             data={listData}
+            onScrollToIndexFailed={onScrollToIndexFailed}
             containerStyle={{ flex: 1 }}
             onDragEnd={({ data }) => handleFavDragEnd(data)}
             activationDistance={12}
@@ -3240,6 +3285,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             }
           />
         )}
+        </View>
       </KeyboardAvoidingView>
 
       {/* First-run guided tour (dismissable) */}

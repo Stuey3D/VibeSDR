@@ -55,3 +55,19 @@ export function directoryRowAction(r: DirRowLike, restricted: boolean): DirRowAc
   if (r.serverType === 'vibeserver') return { do: 'vibeserver' };
   return { do: 'connect', compatOnly: restricted };
 }
+
+/**
+ * ★ Scroll a row of the list's header or footer into view (V12 489): the offset to scroll the list to, or null when the
+ *   row is already wholly inside the list's own box. Positions are window coordinates from measureInWindow — the list's
+ *   box (`box`) and the row (`row`) — and `scrollY` is the list's offset now. Centred: from across a room a row nudged
+ *   just inside the edge is easy to lose.
+ * ★★ The header rows used to scroll the list to the TOP whatever they were. With DISCOVERED holding seven servers and
+ *    SEARCH AGAIN under them, the header is taller than a phone's list, so the bottom servers sat below the fold while
+ *    the highlight was on them — "I cannot get the green box to land on the bottom few discovered servers".
+ */
+export function revealOffset(scrollY: number, box: { y: number; h: number }, row: { y: number; h: number }): number | null {
+  if (!(box.h > 0) || !(row.h >= 0)) return null;
+  const rel = row.y - box.y;                       // the row's top, from the top of the list's box
+  if (rel >= 0 && rel + row.h <= box.h) return null;
+  return Math.max(0, scrollY + rel - Math.max(0, (box.h - row.h) / 2));
+}

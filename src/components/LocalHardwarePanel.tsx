@@ -16,6 +16,7 @@ import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode, useNavFocus } from 
 import GainSlider, { gainSliderInk } from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
+import { useRenderBank } from '../utils/renderBank';
 import {
   CONVERTER_PRESETS, type ConverterProfile, V4_WARNING,
   fromPreset, isIdentity, outputRange, presetById,
@@ -490,22 +491,22 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   //
   // ★ ANDROID ONLY, so this cannot be exercised on an iPhone: local USB hardware is an Android
   // feature. Wired for completeness rather than because it could be tested here.
-  const slots = useRef<Array<() => void>>([]);
-  slots.current = [];
-  const [count, setCount] = useState(0);
+  // ★ STAGE vs COMMITTED (V12 489 — src/utils/renderBank.ts): claim into `slots` while rendering; the key handler reads
+  //   `slotsDone`, which only a committed render replaces.
+  const slotBank = useRenderBank<() => void>();
+  const slots = slotBank.stage, slotsDone = slotBank.committed;
   const [idx, setIdx] = useState(0);
-  useEffect(() => { if (slots.current.length !== count) setCount(slots.current.length); });
   useEffect(() => { if (p.visible) setIdx(0); }, [p.visible]);
 
   const kb = useRef({ idx });
   kb.current = { idx };
   useRepeatingKeys(p.visible, (k: string) => {
-    const n = slots.current.length;
+    const n = slotsDone.current.length;
     if (!n) return;
     const i = kb.current.idx;
     if (k === 'ArrowUp' || k === 'ArrowLeft')    { setIdx(Math.max(0, i - 1)); return true; }
     if (k === 'ArrowDown' || k === 'ArrowRight') { setIdx(Math.min(n - 1, i + 1)); return true; }
-    if (k === 'Enter') { slots.current[i]?.(); return true; }
+    if (k === 'Enter') { slotsDone.current[i]?.(); return true; }
     // Back is passed on: SDRScreen closes the panel.
   }, NAV_REPEAT_KEYS);
 

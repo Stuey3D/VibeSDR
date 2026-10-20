@@ -43,6 +43,7 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel,
 import StationLogo from './StationLogo';
 import { scrollLane } from '../constants/popupTokens';
 import type { Aircraft } from '../services/SDRBackend';
+import { useRenderBank } from '../utils/renderBank';
 /** ★ A tuning move this large (Hz) while WEFAX or NAVTEX is open is a different transmission — see the retune effects.
  *  It is wider than a USB passband, so the tones have left it; fine-tuning a station onto its tones stays under it. */
 const RETUNE_NEW_CHART_HZ = 3000;
@@ -644,12 +645,12 @@ export default function DecoderPanel({
   const [speedIdx, setSpeedIdx] = useState(0);
   const [hdrIdx, setHdrIdx] = useState(0);
   const [listIdx, setListIdx] = useState(0);
-  const hdrSlots = useRef<Array<() => void>>([]);
-  hdrSlots.current = [];
-  const [hdrCount, setHdrCount] = useState(0);
-  useEffect(() => {
-    if (hdrSlots.current.length !== hdrCount) setHdrCount(hdrSlots.current.length);
-  });
+  // ★★★ STAGE vs COMMITTED (V12 489 — src/utils/renderBank.ts): HBtn claims from a CHILD render, so a bailed-out render of
+  //   the box (a same-value setState — and RTTY / FT8 text arrives many times a second) emptied a plain-ref bank of
+  //   every key. Claim into `hdrSlots` (the stage); the key handler reads `hdrDone`.
+  const [, setHdrCount] = useState(0);   // re-renders the box when the number of header keys changes
+  const hdrBank = useRenderBank<() => void>((b) => { setHdrCount((n) => (n === b.length ? n : b.length)); });
+  const hdrSlots = hdrBank.stage, hdrDone = hdrBank.committed;
 
   // ★★ THE HEADER RUN SCROLLS. On an iPhone SE — and worse, an SE in Display Zoom, which is the
   // narrowest layout the app ever draws — the header controls ran off the right edge. AGE was
@@ -781,7 +782,7 @@ export default function DecoderPanel({
     }
     if (k === 'ArrowLeft' || k === 'ArrowRight') {
       setKbZone('header');
-      setHdrIdx(i => Math.max(0, Math.min(hdrSlots.current.length - 1, i + (k === 'ArrowRight' ? 1 : -1))));
+      setHdrIdx(i => Math.max(0, Math.min(hdrDone.current.length - 1, i + (k === 'ArrowRight' ? 1 : -1))));
       return true;
     }
     if (k === 'ArrowUp' || k === 'ArrowDown') {
@@ -804,7 +805,7 @@ export default function DecoderPanel({
       return true;
     }
     if (k === 'Enter') {
-      if (kbZoneRef.current === 'header') hdrSlots.current[hdrIdxRef.current]?.();
+      if (kbZoneRef.current === 'header') hdrDone.current[hdrIdxRef.current]?.();
       else if (listLenRef.current > 0) onSelectDabRef.current?.(listIdxRef.current);
       return true;
     }

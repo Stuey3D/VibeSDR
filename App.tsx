@@ -37,6 +37,7 @@ const watchServerCache = new Map<string, SDRInstance>();
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import PadNotice from './src/components/PadNotice';
 import PadGuide from './src/components/PadGuide';
+import PanelBoundary from './src/components/PanelBoundary';
 import { AppAlertHost, appAlert } from './src/components/AppAlert';
 import { ControllerKeyboardHost } from './src/components/ControllerKeyboard';
 import SDRScreen            from './src/screens/SDRScreen';
@@ -1054,14 +1055,19 @@ export default function App() {
         {/* ★ GitHub #52: "Trust this server?" for a receiver with its own certificate — one place, any screen. */}
         <TlsTrustPrompt />
         </CrashBoundary>
+        {/* ★★ These four sit OUTSIDE CrashBoundary (they draw over every screen), so a render throw in any of them is
+            FATAL in a release build — the app closes (found chasing V12 489's crash on Stuart's Mac, 2026-10-20; not proven
+            to be that crash). Each is its own PanelBoundary
+            now: a fault restarts that one surface (at most three times a minute, then closes it), logged with its component
+            stack, and the app keeps running. */}
         {/* ★ A game controller's HOLD START notice ("hold START to switch back") — nothing until a pad switches. */}
-        <PadNotice />
+        <PanelBoundary name="Controller notice" tail="the app is still running" autoRetry><PadNotice /></PanelBoundary>
         {/* ★ The controller guide (2026-10-19) — SELECT on a pad, or the menu's CONTROLLER GUIDE key; nothing until then. */}
-        <PadGuide />
+        <PanelBoundary name="Controller guide" tail="the app is still running" autoRetry><PadGuide /></PanelBoundary>
         {/* ★ appAlert's in-app dialog for a pad or keyboard (controller audit, 2026-10-20). */}
-        <AppAlertHost />
+        <PanelBoundary name="Message box" tail="the app is still running" autoRetry><AppAlertHost /></PanelBoundary>
         {/* ★ The controller keyboard — text entry for a pad or TV remote (brief, decided 2026-10-20). */}
-        <ControllerKeyboardHost />
+        <PanelBoundary name="Controller keyboard" tail="the app is still running" autoRetry><ControllerKeyboardHost /></PanelBoundary>
 
         {!splashDone && (
           <Animated.View style={{

@@ -575,6 +575,9 @@ if npx tsx scripts/test_app_alert.ts; then pass=$((pass+1)); else fail=$((fail+1
 if npx tsx scripts/test_nav_coverage.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE SERVER LIST'S FOCUS RULES (controller audit group H): Back from the list position, Enter = tap on directory rows.
 if npx tsx scripts/test_picker_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 489: the picker's focus order under a REAL React renderer — a bailed-out render emptied the render-time bank
+#     (src/utils/renderBank.ts), so the ring, reveal and Enter disagreed. Real key bus, real pad mapper, both enters.
+if npx tsx scripts/test_render_bank.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ CONTROLLER KEYBOARD (brief, decided 2026-10-20): the last input source — touch / keyboard / pad — set centrally.
 if npx tsx scripts/test_input_source.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ …its layouts (every key reachable, ↵ / Back / ⌫ on every layout, wide keys, wrap), its editing rules (one point,

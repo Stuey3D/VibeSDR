@@ -28,6 +28,7 @@ import {
   scrollLane, scrollLaneOutset,
 } from './PopupShell';
 import { toSegCells } from '../constants/displayText';
+import { useRenderBank } from '../utils/renderBank';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -534,13 +535,13 @@ export default function FreqModal({
   // The LENGTH comes from state rather than the ref, for the same reason as the server
   // picker: the bank is cleared at the top of this render and only filled while the children
   // render, so reading it here would always give zero and focus would stop at the first item.
-  const bmSlots = useRef<Array<() => void>>([]);
-  const bmViews = useRef<any[]>([]);
-  bmSlots.current = [];
+  // ★★★ STAGE vs COMMITTED (V12 489 — src/utils/renderBank.ts): BmBtn claims from a CHILD render, so a bailed-out render
+  //   of this card (a same-value setState) emptied a plain-ref bank of every BmBtn and Enter pressed the wrong slot.
+  //   Claim into `bmSlots` (the stage); the handlers read `bmDone`.
   const [bmCount, setBmCount] = useState(0);
-  useEffect(() => {
-    if (bmSlots.current.length !== bmCount) setBmCount(bmSlots.current.length);
-  });
+  const bmBank = useRenderBank<() => void>((b) => { setBmCount((n) => (n === b.length ? n : b.length)); });
+  const bmSlots = bmBank.stage, bmDone = bmBank.committed;
+  const bmViews = useRef<any[]>([]);
 
   // ★ The pane SCROLLS — a search for something common comes back with dozens of results —
   // so focus has to drag the view with it. Without a reveal the caret walked off the bottom
@@ -552,7 +553,7 @@ export default function FreqModal({
   const bmNavFocus = useListNav(
     visible && cardMode === 'bookmarks',
     bmCount,
-    (i) => bmSlots.current[i]?.(),
+    (i) => bmDone.current[i]?.(),
     (i) => revealIn(bmScrollRef, { current: bmViews.current[i] }, -1, 90, bmScrollY),
   );
 

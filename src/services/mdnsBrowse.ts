@@ -121,6 +121,9 @@ export function createMdnsBrowse(
     if (changed) push();
   };
 
+  // ★ A bad answer from an address on the hotspot must never become an unhandled rejection (V12 489 crash hunt).
+  const sweepSafe = () => { sweep().catch(() => {}); };
+
   const start = () => {
     gen++;
     seen.clear();
@@ -144,10 +147,10 @@ export function createMdnsBrowse(
       if (changed) push();
       setBusy(false);
     }, GRACE_MS);
-    void sweep();
+    sweepSafe();
   };
 
-  const sweepTimer = d.setInterval(() => { void sweep(); }, SWEEP_MS);
+  const sweepTimer = d.setInterval(sweepSafe, SWEEP_MS);
   const fgSub = d.onForeground?.(() => { if (!dead) start(); });
   start();
 

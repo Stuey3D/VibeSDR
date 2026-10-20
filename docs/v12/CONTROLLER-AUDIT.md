@@ -316,3 +316,30 @@ Recordings ring for touch users.
 - ControlsBar's readout still draws its own digits; `FreqDigit` reuses the same components for the keycaps, and
   moving the readout onto it is a device-checked follow-up.
 - Web page: pad Back does not blur a field; no controller keyboard on the web yet (brief §11).
+
+## 489 regression — the server list's ring, reveal and Enter disagreed (2026-10-20, Stuart's PS pad on the Mac)
+
+**Symptom.** The ring moved onto the DISCOVERED servers but the list scrolled to a different place (by list rows, not
+header rows), the bottom servers were never seen lit in either direction, and Enter did nothing (or pressed a row
+sixteen places away): the DIRECTORIES did not open, groups did not expand, on ✕ and on R alike.
+
+**Root cause — a render-time bank read outside render.** The picker built its one focus order by claiming slots while
+rendering: the screen claims its own controls (`chooserSlot`), CHILD components claim the rows (`ChooserRow`,
+`ChooserKey`). The bank was a plain ref emptied at the top of the screen's render, and the key handlers read it. Step 4
+(e03a96b5) added `useEffect(() => setRowSub(0), [navFocus])`: a same-value setState after every move. React then CALLS
+the screen once more and bails out without rendering its children or committing — the bank is emptied, refilled with the
+screen's 5 slots, and never gets its rows back. From then on every handler saw 5 header entries where the screen drew 21:
+reveal treated the third DISCOVERED server as list row 1 and centred OWRX; Enter indexed `listData` or an empty footer
+bank. The 20 s occupancy poll's unchanged answers did the same. Reproduced with the real React in
+`scripts/test_render_bank.ts` (84 faults on the old bank, 0 on the fix).
+
+**Fix.** `src/utils/renderBank.ts` `useRenderBank`: claim into `stage` while rendering; handlers read `committed`, which
+only a layout effect (a render React commits) replaces. Applied to all four render-claimed banks: the picker (header and
+footer), FreqModal's bookmarks pane (`BmBtn`), DecoderPanel's header (`HBtn`) and LocalHardwarePanel. Also: header rows
+are MEASURED into view against the list's own box (`revealOffset`) instead of sending the list to its top (the header
+outgrew a phone's list once SEARCH AGAIN joined seven discovered servers); `onScrollToIndexFailed` recovers a row the
+list had not laid out yet; the four App-level hosts outside CrashBoundary (PadNotice, PadGuide, AppAlertHost,
+ControllerKeyboardHost) each sit in an auto-retrying PanelBoundary, so a render throw there is no longer fatal.
+
+**Rule.** Anything claimed during render is read from the committed copy. A same-value setState is not free: React may
+run the component again without its children.

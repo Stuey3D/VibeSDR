@@ -1,5 +1,5 @@
 // The server list's focus rules (src/utils/pickerNav.ts) — controller audit group H, 2026-10-20.
-import { pickerZone, headerAbove, directoryRowFull, directoryRowAction } from '../src/utils/pickerNav';
+import { pickerZone, headerAbove, directoryRowFull, directoryRowAction, revealOffset } from '../src/utils/pickerNav';
 
 let fails = 0;
 const ok = (c: boolean, what: string) => { console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fails++; };
@@ -27,4 +27,15 @@ ok(J(directoryRowAction({ url: 'spyserver://h.example:5555', serverType: 'spyser
 ok(directoryRowAction({ url: 'http://x', serverType: 'vibeserver', users: 1, maxUsers: 0 }, false).do === 'vibeserver', 'VibeServer rows open the door');
 ok(J(directoryRowAction({ url: 'http://x', serverType: 'kiwi', users: 1, maxUsers: 4 }, true)) === '{"do":"connect","compatOnly":true}', 'a restricted receiver opens in compatibility mode on Enter too');
 ok(J(directoryRowAction({ url: 'http://x', serverType: 'owrx', users: 1, maxUsers: 0 }, false)) === '{"do":"connect","compatOnly":false}', 'an ordinary one connects normally');
+// ★ V12 489: header and footer rows are MEASURED into view (the header used to send the list to its top, so the bottom
+//   DISCOVERED servers sat below the fold while lit). The list's box: y 120, 466 tall; rows 48 tall.
+const box = { y: 120, h: 466 };
+ok(revealOffset(0, box, { y: 300, h: 48 }) === null, 'a row wholly inside the list: no scroll');
+ok(revealOffset(0, box, { y: 120, h: 48 }) === null && revealOffset(0, box, { y: 538, h: 48 }) === null, 'touching either edge still counts as inside');
+const below = revealOffset(0, box, { y: 640, h: 48 })!;
+ok(below !== null && Math.abs(640 - below - (box.y + (box.h - 48) / 2)) < 0.01, 'Bravia below the fold: scrolled so it sits in the middle of the list');
+const above = revealOffset(400, box, { y: 40, h: 48 })!;
+ok(above !== null && above < 400 && Math.abs(40 + (400 - above) - (box.y + (box.h - 48) / 2)) < 0.01, 'a row above the top: scrolled back to the middle');
+ok(revealOffset(0, box, { y: 60, h: 48 }) === 0, 'never a negative offset');
+ok(revealOffset(0, { y: 120, h: 0 }, { y: 640, h: 48 }) === null, 'an unmeasured list (height 0): leave it alone');
 process.exit(fails ? 1 : 0);
