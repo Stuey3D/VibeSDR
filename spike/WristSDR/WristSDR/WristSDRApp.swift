@@ -45,6 +45,10 @@ struct TutorialSheet: View {
       .padding(.horizontal, 4).padding(.bottom, 8)
     }
     .navigationTitle("Tutorial")
+    // ★ GitHub #52: each screen's first-use tutorial is a SHEET that opens moments after the first connect —
+    //   exactly when a server with its own certificate fails and asks. A sheet cannot be presented over
+    //   another, so the question is hosted here too (the top-most host shows it; see TlsTrustCenter).
+    .tlsTrustPrompt()
   }
 }
 
@@ -238,6 +242,11 @@ struct WristSDRApp: App {
           }
         }
       }
+      // ★★ GitHub #52 — "Trust this server?" for a receiver with its own certificate. At the ROOT, so a
+      //    socket failing on any screen (waterfall, DAB, ADS-B, FM-DX) or the picker asks the same way. A
+      //    sheet, not an overlay: it takes the Digital Crown for scrolling, so the crown cannot tune the
+      //    radio behind it while the fingerprint is being read.
+      .tlsTrustPrompt()
       // ★★ TIME LIMIT REACHED — at the ROOT, so it covers the waterfall, DAB, ADS-B and
       // FM-DX alike. A per-screen overlay would miss whichever one the listener happens
       // to be on when their slot runs out, which is precisely when they need telling.

@@ -685,6 +685,10 @@ final class SpikeLink: ObservableObject {
     //   goes: they have plainly read it, or they would not be back.
     noteActivity()
     clearAutoStopNotice()
+    // ★ GitHub #52: picking a server is a new, deliberate connection — a certificate the person cancelled
+    //   a moment ago is asked about again rather than silently refused (TlsTrustCenter's one-minute memory
+    //   exists so two SOCKETS of one connection never ask twice, not to overrule a fresh choice).
+    TlsTrustCenter.shared.clearDeclines()
     // ★ Radio ids are per-server ("rtl0" is on half of them) — an unlock must never cross.
     unlockedRadios = []
     radioPins = [:]

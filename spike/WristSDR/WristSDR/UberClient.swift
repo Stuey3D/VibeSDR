@@ -1508,7 +1508,9 @@ final class UberClient: ObservableObject {
     c.timeoutIntervalForRequest = 8
     c.timeoutIntervalForResource = 12
     // The watch's own Wi-Fi/cellular — nothing is proxied through the phone.
-    return URLSession(configuration: c)
+    // ★ GitHub #52: the pin delegate. A certificate the system trusts is untouched; a refused one passes only
+    //   when it is the exact one the person trusted for this host:port (TlsTrust).
+    return URLSession(configuration: c, delegate: TlsSessionDelegate.shared, delegateQueue: nil)
   }
 
   /// The predicted view, exactly as the phone does it: gestures must move the picture NOW,
@@ -1748,7 +1750,8 @@ final class UberClient: ObservableObject {
       // ★ needsPin is NOT a transient failure — retrying cannot fix a PIN we do not
       // have, and each attempt walks the server closer to locking us out. Stop and
       // let the UI ask.
-      while !ok, !needsPin, tries < 2, !goingIdle {
+      // ★ #52: nor is a certificate the person declined — asking again a second later would be a nag.
+      while !ok, !needsPin, status != "certificate not trusted", tries < 2, !goingIdle {
         tries += 1
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         guard !goingIdle else { return }
@@ -1795,6 +1798,7 @@ final class UberClient: ObservableObject {
       // forever, and no relaunch can fix it. Rotating once turns a permanent lockout into a
       // single bad connect.
       let old = status
+      guard old != "certificate not trusted" else { return }   // ★ #52: a new session id cannot fix a certificate
       guard rotateSession() else { return }
       status = "retrying (fresh session) · was: \(old)"
       if !(await postConnection()) { return }
@@ -1896,7 +1900,9 @@ final class UberClient: ObservableObject {
     req.setValue("VibeSDR", forHTTPHeaderField: "X-Requested-With")
     req.httpBody = try? JSONSerialization.data(withJSONObject: ["user_session_id": uuid])
     do {
-      let (data, resp) = try await httpSession.data(for: req)
+      // ★ #52: a server with its own certificate is asked about HERE — the first request of an UberSDR
+      //   connection — and on "Trust" the same request simply goes again.
+      let (data, resp) = try await TlsTrustCenter.data(for: req, session: httpSession, ask: true)
       guard let http = resp as? HTTPURLResponse else {
         status = "no HTTP response"
         return false
@@ -1921,7 +1927,7 @@ final class UberClient: ObservableObject {
       }
       return allowed
     } catch {
-      status = "connection failed: \(error.localizedDescription)"
+      status = error is TlsNotTrusted ? "certificate not trusted" : "connection failed: \(error.localizedDescription)"
       Vitals.crumb("UBER preflight FAILED \(error.localizedDescription)")
       return false
     }
@@ -2003,6 +2009,9 @@ final class UberClient: ObservableObject {
       Task { @MainActor in
         guard let self else { return }
         self.specWsState = st
+        // ★ GitHub #52: a certificate the person did not trust — say so, and do not knock on (picking the
+        //   server again asks again).
+        if st.contains("certificate not trusted") { self.status = "certificate not trusted"; return }
         if st.contains("failed") || st.contains("recv:") { self.retrySpectrum() }
       }
     }
@@ -3154,6 +3163,7 @@ final class UberClient: ObservableObject {
       Task { @MainActor in
         guard let self else { return }
         self.audioWsState = s
+        if s.contains("certificate not trusted") { self.status = "certificate not trusted"; return }   // ★ #52
         // A rate-limited socket is not a broken socket — it is an EARLY socket. Back off and
         // come back, rather than sitting there dead until the app is relaunched.
         if s.contains("failed") || s.contains("recv:") { self.retryAudio() }
@@ -3187,7 +3197,9 @@ final class UberClient: ObservableObject {
     //   declining to send. One attempt with these crumbs settles it.
     Vitals.crumb("VIBE auth GET \(Vitals.redact(url))")
     do {
-      let (data, _) = try await httpSession.data(from: url)
+      // ★ #52: the first request of a VibeServer connection — a server with its own certificate is asked
+      //   about here, and on "Trust" this request goes again.
+      let (data, _) = try await TlsTrustCenter.data(for: URLRequest(url: url), session: httpSession, ask: true)
       Vitals.crumb("VIBE auth OK \(data.count)B")
       vibeDiag = ""          // we reached it — drop any stale reason
       guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -3238,7 +3250,7 @@ final class UberClient: ObservableObject {
       //   user — "can't reach server (-1004)" reads as an internal error escaping. The code is
       //   still recorded in the crumb log above, where it is just as useful to us and invisible
       //   to them. Put it back in the status line only for an internal TestFlight build.
-      status = "can't reach server"
+      status = error is TlsNotTrusted ? "certificate not trusted" : "can't reach server"
       // ★ vibeDiag stays for the reasons a PERSON can act on ("no host in this favourite"); a
       //   bare errno and a hostname is not one of them.
       vibeDiag = ""

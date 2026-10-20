@@ -174,7 +174,8 @@ final class FmDxClient: SDRClient {
   // location line has nothing to show.
   private func fetchStaticData() {
     guard let url = URL(string: "\(secure ? "https" : "http")://\(base)/static_data") else { return }
-    URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+    // ★ GitHub #52: the pin session (never asks — a background fetch; the sockets do the asking).
+    TlsTrust.session.dataTask(with: url) { [weak self] data, _, _ in
       guard let self, let data,
             let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
       let name = SafeText.clean(j["tunerName"], max: 64)
@@ -214,6 +215,9 @@ final class FmDxClient: SDRClient {
       Task { @MainActor in
         guard let self else { return }
         if st.contains("ready") { self.status = "live" }
+        // ★ GitHub #52: a certificate the person did not trust — say so, and do not knock every 2 s
+        //   (picking the server again asks again).
+        if st.contains("certificate not trusted") { self.status = "certificate not trusted"; return }
         if st.contains("failed") || st.contains("cancelled") { self.status = "reconnecting"; self.retry(self.openText) }
       }
     }
@@ -325,6 +329,7 @@ final class FmDxClient: SDRClient {
     chatSock.onText = { [weak self] t in self?.onChatFrame(t) }
     chatSock.onState = { [weak self] st in
       Task { @MainActor in guard let self else { return }
+        if st.contains("certificate not trusted") { return }        // ★ #52 — see openText
         if st.contains("failed") || st.contains("cancelled") { self.retry(self.openChat) } }
     }
     guard let u = wsURL("/chat") else { return }
@@ -373,6 +378,7 @@ final class FmDxClient: SDRClient {
         if st.contains("ready") {
           self.audioSock.send(text: "{\"type\":\"fallback\",\"data\":\"mp3\"}")   // request MP3 fallback
         }
+        if st.contains("certificate not trusted") { return }        // ★ #52 — see openText
         if st.contains("failed") || st.contains("cancelled") { self.retry(self.openAudio) }
       }
     }

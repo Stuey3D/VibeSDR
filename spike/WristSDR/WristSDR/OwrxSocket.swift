@@ -72,6 +72,14 @@ final class OwrxSocket: NSObject {
 }
 
 extension OwrxSocket: URLSessionWebSocketDelegate {
+  /// ★ GitHub #52: server trust goes to TlsTrust — the system's own answer, unless it refused a certificate
+  ///   matching this host:port's pin. (This class is not wired into OwrxClient today — AudioSocket is — but
+  ///   a socket of ours that cannot honour a pin must not exist to be picked up again.)
+  func urlSession(_ s: URLSession, didReceive challenge: URLAuthenticationChallenge,
+                  completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+    let (d, c) = TlsTrust.shared.disposition(for: challenge)
+    completionHandler(d, c)
+  }
   func urlSession(_ s: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol proto: String?) {
     onState?("owrx ws ready")
   }

@@ -71,7 +71,10 @@ enum FrontDoor {
         var req = URLRequest(url: url)
         req.timeoutInterval = timeout
         req.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+        // ★ GitHub #52: the FIRST request of a VibeServer connection, so a server with its own certificate is
+        //   asked about here (TlsTrustCenter) — a Cancel still reads as "not a door", and resolveVibeAuth then
+        //   reports "certificate not trusted" without asking twice.
+        guard let (data, resp) = try? await TlsTrustCenter.data(for: req, ask: true),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -145,7 +148,9 @@ enum FrontDoor {
         var nreq = URLRequest(url: nonceURL)
         nreq.timeoutInterval = timeout
         nreq.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (data, resp) = try? await URLSession.shared.data(for: nreq),
+        // ★ #52: through the pin session, but never asking — the front door was asked about on the way in,
+        //   and this runs under the PIN sheet, which a second sheet cannot cover.
+        guard let (data, resp) = try? await TlsTrustCenter.data(for: nreq, ask: false),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return false }
@@ -163,7 +168,7 @@ enum FrontDoor {
         var vreq = URLRequest(url: vURL)
         vreq.timeoutInterval = timeout
         vreq.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (_, vresp) = try? await URLSession.shared.data(for: vreq) else { return false }
+        guard let (_, vresp) = try? await TlsTrustCenter.data(for: vreq, ask: false) else { return false }
         return (vresp as? HTTPURLResponse)?.statusCode == 200
     }
 }
