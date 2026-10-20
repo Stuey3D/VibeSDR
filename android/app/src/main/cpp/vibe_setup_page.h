@@ -1481,16 +1481,21 @@ body.wifiFirst .wifiFirstOnly { display: block; }
            well, whereas a 2.4 MS/s RTL at 20 may be fine". It sat on the master tab as one rate for the
            machine, and on a Full-mode server that save was silently dropped (5 fps stayed 20). -->
       <label><span class="lbl">Waterfall rate</span>
+        <!-- ★★ 10 IS THE DEFAULT (Stuart, 2026-10-20: "like OWRX; 20 is an owner option"). The labels were
+             Full 20 / Half 10 / Quarter 5, which stopped meaning anything once 10 was the default. The VALUES
+             are unchanged (5 / 10 / 20), so every saved config reads exactly as before. -->
         <select id="maxFps">
-          <option value="20">Full &middot; 20 fps</option>
-          <option value="10">Half &middot; 10 fps</option>
-          <option value="5">Quarter &middot; 5 fps</option>
+          <option value="20">Smoother &middot; 20 fps</option>
+          <option value="10">Default &middot; 10 fps</option>
+          <option value="5">Half &middot; 5 fps</option>
         </select>
         <div class="hint">For this radio: the rate it runs at, and the fastest a listener may ask for &mdash;
-          they can still choose a slower waterfall. Halving it roughly halves what this radio sends:
-          worth doing for a wide, fast radio, on a metered connection, or where several people share
-          one uplink. If this machine runs short of processor time (DAB on a Pi 2, say), it slows its own
-          waterfall to 10 or 5 fps while it must, so the audio keeps going, and climbs back when it can.</div></label>
+          they can still choose a slower waterfall. 10 fps is the default. 20 is smoother, but sends about
+          twice the data and costs more processor time; 5 halves it again &mdash; worth it for a wide, fast
+          radio, on a metered connection, or where several people share one uplink. Listeners' waterfalls
+          scroll at the same steady speed whichever you choose. If this machine runs short of processor time
+          (DAB on a Pi 2, say), it slows its own waterfall while it must, so the audio keeps going, and climbs
+          back when it can.</div></label>
       <!-- ★★★ THE DAB OVERRIDE, WHICH THIS PAGE NEVER OFFERED (Stuart, 2026-09-19, setting up the first
            VibeServer Lite: "I didnt see the override option for DAB"). The config has carried
            dabRateBoost per radio for weeks and the phone app's server screen has the switch; this
@@ -3385,7 +3390,7 @@ const DRIVER_HW = {
  *  value is SHOWN, as "15 fps (set by hand)", and stays exactly as saved unless the owner picks another rate (the save
  *  only writes this radio's rate on a change — see the "change" handler). Rebuilt per radio tab, so one radio's odd value
  *  never appears on another's menu. ★ The rate shown is the one the server RUNS: fftRate under the maxFps ceiling;
- *  both unset (0) is the server default, Full · 20. */
+ *  both unset (0) is the server default — Default · 10 since 2026-10-20 (it was Full · 20). */
 function fpsShow(r) {
   const sel = $("maxFps");
   for (const o of [...sel.options]) if (o.value !== "5" && o.value !== "10" && o.value !== "20") o.remove();
@@ -3396,7 +3401,7 @@ function fpsShow(r) {
     o.value = String(f); o.textContent = `${f} fps (set by hand)`;
     sel.appendChild(o);
     sel.value = String(f);
-  } else sel.value = f > 0 ? String(f) : "20";
+  } else sel.value = f > 0 ? String(f) : "10";   // ★ nothing saved = the server default, Default · 10
 }
 
 let govHw = null, govAll = null;
@@ -4897,7 +4902,7 @@ function fill() {
   $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; });
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {
-    const v = parseFloat($("maxFps").value) || 20; radio().maxFps = v; radio().fftRate = v; });
+    const v = parseFloat($("maxFps").value) || 10; radio().maxFps = v; radio().fftRate = v; });
   $("dabScanLabels").addEventListener("change", () => { radio().dabScanLabels = parseInt($("dabScanLabels").value, 10); });
   $("gainSplitSlider").addEventListener("input", () => {
     const v = parseInt($("gainSplitSlider").value, 10);

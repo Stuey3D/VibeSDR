@@ -209,7 +209,13 @@ struct Config {
      *  and the page's own label was unachievable. The page now writes the rate as well.
      *  ★ 20/10/5 divide 60 exactly (3, 6, 12 repeats), so the client interpolates onto a 60 Hz
      *    display with whole frame repeats — Stuart: "the interpolation has correct figures". */
-    double maxBw = 0, maxFps = 0, fftRate = 20;
+    /* ★★★ 10, NOT 20, FOR A NEW SERVER (Stuart, 2026-10-20: "the default waterfall rate becomes 10 fps (like
+     *  OWRX); 20 is an owner option in setup"). BOTH numbers: maxFps is the ceiling a listener's ask is held
+     *  to, so a default rate of 10 under no ceiling would hand every client that asks for 20 its 20.
+     *  ★★ NEW ONLY, NO MIGRATION. Both keys have been written on every save for months, so an existing
+     *     config keeps whatever it holds (maxFps 0 + fftRate 20 = Smoother · 20). A file holding only ONE
+     *     of the two predates that and is read the way the old defaults read it — see legacyFps(). */
+    double maxBw = 0, maxFps = 10, fftRate = 10;
     int    uncompressed = 0;
     /* ★★★ REMOVED: forceIdleSaver. It made the CLIENT's 30-second idle slowdown mandatory, and
      *  that slowdown no longer exists — it read "nobody is looking" from "nobody is touching",
@@ -428,7 +434,13 @@ struct RadioConfig {
      *  and the page's own label was unachievable. The page now writes the rate as well.
      *  ★ 20/10/5 divide 60 exactly (3, 6, 12 repeats), so the client interpolates onto a 60 Hz
      *    display with whole frame repeats — Stuart: "the interpolation has correct figures". */
-    double maxBw = 0, maxFps = 0, fftRate = 20;
+    /* ★★★ 10, NOT 20, FOR A NEW SERVER (Stuart, 2026-10-20: "the default waterfall rate becomes 10 fps (like
+     *  OWRX); 20 is an owner option in setup"). BOTH numbers: maxFps is the ceiling a listener's ask is held
+     *  to, so a default rate of 10 under no ceiling would hand every client that asks for 20 its 20.
+     *  ★★ NEW ONLY, NO MIGRATION. Both keys have been written on every save for months, so an existing
+     *     config keeps whatever it holds (maxFps 0 + fftRate 20 = Smoother · 20). A file holding only ONE
+     *     of the two predates that and is read the way the old defaults read it — see legacyFps(). */
+    double maxBw = 0, maxFps = 10, fftRate = 10;
     int    uncompressed = 0;
     bool   releaseWhenIdle = false;
     double idleGrace = 300;
@@ -867,6 +879,15 @@ std::string safeLinkUrl(const std::string& url);
 
 /** ★ May this radio drive the landing page's spectrogram? Fixed window, not released when idle,
  *  and actually being served. See RadioConfig::spectrogram for why each of those matters. */
+/** ★★ THE OLD DEFAULTS, FOR A FILE THAT SAVED ONLY ONE OF THE TWO RATES (the 10-fps default, 2026-10-20).
+ *  Before then an absent maxFps meant 0 (no ceiling) and an absent fftRate meant 20 — so a file holding just
+ *  one of them keeps meaning what it meant. Neither present = a new radio: the new defaults (10 / 10) stand.
+ *  Pure, so test-config-radios proves it. */
+inline void legacyFps(bool hadMaxFps, bool hadFftRate, double& maxFps, double& fftRate) {
+    if (hadMaxFps == hadFftRate) return;
+    if (!hadMaxFps) maxFps = 0;
+    if (!hadFftRate) fftRate = maxFps > 0 && maxFps < 20 ? maxFps : 20;
+}
 bool canDrawSpectrogram(const RadioConfig& r);
 
 /** Which radio draws it, or -1 when none can — which is a real answer, not a failure. */

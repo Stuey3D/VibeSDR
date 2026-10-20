@@ -16,6 +16,7 @@
  * own noise floor. Peak-picking keeps it visible.
  */
 
+import { RowPacer } from './wfPacing';
 import { SignalProcessor, type SignalProcessorSettings } from '../../../src/assets/signalProcessor';
 
 /** Fixed ring width — see the note at the GPU push. Must never depend on bin count. */
@@ -135,7 +136,14 @@ export class Waterfall {
    *    between real ones (emitTotal is forced to 1, the state this already reaches naturally when
    *    the screen speed matches the data rate). The SPECTRUM TRACE is untouched either way: this
    *    governs waterfall row emission only, and the trace must stay smooth at all times. */
-  setSharpRows(on: boolean) { this.sharpRows = on; }
+  setSharpRows(on: boolean) { this.sharpRows = on; if (!this.scroll) this.pacer.setRate(this.rowsPerSec, on, renderDpr()); }
+  /** ★★★ THE SCROLL MODE, and the rows follow the FEED (Stuart 10-20, src/assets/wfRowTarget.ts — the app's rule):
+   *  Sharp = actual rows; Default = min(20, 3 x feed); Smooth = min(60, 6 x feed); snapped to a divisor of 60. */
+  setScroll(scroll: 'sharp' | 'default' | 'smooth') {
+    this.scroll = scroll; this.sharpRows = scroll === 'sharp';
+    this.pacer.setScroll(scroll, renderDpr());
+  }
+  private scroll: 'sharp' | 'default' | 'smooth' | null = null;
   private sharpRows = false;
 
 
@@ -144,21 +152,19 @@ export class Waterfall {
     this.screenSpeed = Math.max(1, screenRowsPerSec);
     this.recomputeRate();
   }
-  private recomputeRate() { this.rowsPerSec = this.screenSpeed * renderDpr(); }
+  // ★ framesPerRow = 0: a new rate re-decides the cadence from scratch (its hysteresis is only for
+  //   measurement wobble at a FIXED rate — carrying Smooth's N=1 into Default would keep 60 rows/s).
+  private recomputeRate() {
+    this.rowsPerSec = this.screenSpeed * renderDpr();
+    if (this.scroll) this.pacer.setScroll(this.scroll, renderDpr());     // a Detail (dpr) change
+    else this.pacer.setRate(this.rowsPerSec, this.sharpRows, renderDpr());
+  }
   private prevRow: Uint8Array | null = null;   // last received row
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
-  private lastArrival = 0;
-  private slowGap = 0;        // worst recent arrival gap — see the sizing note
-  private avgGap = 0;         // SMOOTHED arrival gap — what the row pacing follows
-  private lastTickAt = 0;     // vsync pacing — see tick()
-  private frameMs = 0;        // smoothed display frame interval
-  private frameTick = 0;      // display frames counted toward the next row — see tick()
-  private framesPerRow = 1;   // display frames per waterfall row — snapped to the refresh rate
-  private emitStart = 0;
-  private emitInterval = 0;   // ms between synthesised rows for this pair
-  private emitTotal = 0;      // rows to synthesise between prev and cur
-  private emitted = 0;
+  /** ★ Arrival gaps, display rate, cadence and the per-pair row budget — all in wfPacing.ts's
+   *  RowPacer, pure, so scripts/test_wf_pacing.ts proves the cadence the screen gets. */
+  private pacer = new RowPacer();
 
   // Geometry of the last frame — used for click-to-tune and the axis.
   centerHz = 0;
@@ -537,7 +543,6 @@ export class Waterfall {
     //     ★ The original worry that motivated the flush — an early frame "eating its own lines" so
     //       the waterfall stalls — is handled instead by SIZING for the worst gap below, which
     //       guarantees there are always enough rows to reach the next arrival.
-    this.emitted = this.emitTotal;
 
     // Roll cur -> prev, and copy in the new row (frame.row is a reused buffer).
     if (!this.curRow || this.curRow.length !== row.length) {
@@ -552,14 +557,11 @@ export class Waterfall {
     // How many lines to synthesise before the next frame lands. Derived from the
     // OBSERVED arrival gap, so it adapts to whatever rate the server is running —
     // no need to be told, and it self-corrects across a throttle change.
-    const gap = this.lastArrival ? now - this.lastArrival : 1000 / this.rowsPerSec;
-    this.lastArrival = now;
     // ★★ HEADROOM: size against the WORST recent gap, not this one. Server frames do not arrive
     //    evenly, and a pair sized for an average gap runs out of rows on a long one — the scroll
     //    stops dead until the next frame. Jumps straight to any slower gap and decays back gently,
     //    so it tracks the worst case rather than the mean; the surplus on a normal gap is simply
     //    discarded above.
-    this.slowGap = Math.max(gap, this.slowGap * 0.98);
     // ★★★ PACE OFF THE SMOOTHED GAP, NOT THIS ONE. The row interval was derived from the
     //     INSTANTANEOUS arrival gap, so a server frame arriving 10 ms early or late changed the
     //     scroll rate for that whole pair — visible as the waterfall speeding up and slowing down
@@ -567,10 +569,7 @@ export class Waterfall {
     //     server dropping or increasing the odd frame here or there"), so the renderer must not
     //     follow it frame by frame: it follows the AVERAGE and lets the row accumulator carry the
     //     difference. That is what a jitter buffer does, without the added latency of one.
-    this.avgGap = this.avgGap ? this.avgGap * 0.85 + gap * 0.15 : gap;
-
     // Clamp: a stalled link mustn't queue up hundreds of lines to catch up on.
-    const clamped = Math.max(20, Math.min(1000, gap));
     // ★★★ ROWS TO SYNTHESISE FOR THIS PAIR, TO HIT THE TARGET ROW RATE. Derived from the OBSERVED
     //     gap, and that is correct HERE: this renderer draws rows as they are produced and keeps no
     //     history mapping, so the count may vary per pair without rescaling anything.
@@ -587,29 +586,26 @@ export class Waterfall {
     //     unevenly. That is the DEFAULT-only hitch (Stuart, 2026-08-03: "all rates need to be tied
     //     to the screen refresh rate"). Snap the rate to what the display can actually deliver
     //     FIRST, then size the pair from that. SHARP is exempt: one row per frame, no cadence.
-    const refreshHz = this.frameMs > 0 ? 1000 / this.frameMs : 60;
-    const framesPerRow = Math.max(1, Math.round(refreshHz / Math.max(1, this.rowsPerSec)));
-    const trueRowsPerSec = refreshHz / framesPerRow;
-    this.framesPerRow = framesPerRow;
-    this.emitTotal = this.sharpRows ? 1
-                   : Math.max(1, Math.round(Math.max(clamped, this.slowGap) / (1000 / trueRowsPerSec)));
+    // ★★★ 2026-10-20: the refresh is the NOMINAL panel rate from the MEDIAN interval, and N keeps
+    //     hysteresis — 60 Hz / 40 rows/s is exactly 1.5, and a raw EMA put N on that knife-edge
+    //     (1 ↔ 2 every arrival: 43-60 rows/s, 24 hitches/s, Stuart's "sticky" Default on Safari).
+    //     The pair is sized with ceil(): round() ran it dry a frame early on a gap just over the
+    //     worst seen. Both in wfPacing.ts, proved by scripts/test_wf_pacing.ts.
     // Smoothed, so arrival jitter does not become scroll-rate jitter. Falls back to the observed
     // gap until the average has anything in it.
-    this.emitInterval = (this.avgGap || clamped) / this.emitTotal;
-    this.emitStart = now;
-    this.emitted = 0;
+    this.pacer.onArrival(now);
   }
 
   /** Emit any waterfall lines now due. Call once per animation frame.
    *  At 20fps in this draws exactly one row per frame (emitTotal === 1) and the
    *  blending collapses to a straight copy of the newest row. */
-  tick() {
+  tick(frameTs?: number) {
     // ★ Release BEFORE the early-return: on a cold start there is no curRow yet, and the very
     //   first held row is the one that creates it. Draining after the guard would deadlock — no
     //   row because no curRow, no curRow because no row.
     const now = performance.now();
     if (this.held.length) this._releaseHeld(now);
-    if (!this.curRow || !this.prevRow) return;
+    // (No early return before the pacer: it times the display even before the first row lands.)
 
     // ★★★ PACED BY VSYNC, NOT BY THE CLOCK. tick() is already called from requestAnimationFrame,
     //     but the EMISSION used to ask "is row k due yet?" against wall-clock times. At 20 rows/s
@@ -619,11 +615,6 @@ export class Waterfall {
     //     Vsync?").
     //     Now: accumulate rows-per-FRAME and emit whole rows as they come due. The cadence is
     //     locked to the display, so it is even by construction and adapts to 120 Hz for free.
-    const dt = this.lastTickAt ? now - this.lastTickAt : 16.7;
-    this.lastTickAt = now;
-    // Smoothed refresh interval — one long frame (a GC pause, a tab switch) must not spike the
-    // row rate, which would look exactly like the burst this replaces.
-    this.frameMs = this.frameMs ? this.frameMs * 0.9 + Math.min(dt, 100) * 0.1 : dt;
 
     // ★★★ ONE ROW EVERY N DISPLAY FRAMES — N A WHOLE NUMBER. This is the crux, and it is why every
     //     pacing scheme before it failed. A waterfall row is a whole DEVICE pixel, and the row rate
@@ -633,21 +624,16 @@ export class Waterfall {
     //     the display. Quantising the cadence to a whole number of frames makes the motion even by
     //     construction, at the cost of the rate landing on 60/N (30, 20, 15, 12…) instead of
     //     exactly what was asked for — a difference nobody can see, unlike the stutter.
-    //     ★ Recomputed from the SMOOTHED frame interval, so a 120 Hz panel simply gets N twice as
-    //       large and the same even result.
+    //     ★ Recomputed from the MEDIAN frame interval snapped to the panel's nominal rate (RowPacer),
+    //       so a 120 Hz panel simply gets N twice as large and the same even result.
     // Decided at arrival, from the SAME refresh measurement that sized emitTotal — see there.
-    const framesPerRow = this.sharpRows ? 1 : this.framesPerRow;
-    let guard = 0;
-    if (framesPerRow > 0) {
-      this.frameTick++;
-      while (this.emitted < this.emitTotal && this.frameTick >= framesPerRow && guard++ < 4) {
-        this.frameTick -= framesPerRow;
-        this.emitted++;
-        this.drawRow(this.emitted / this.emitTotal);
-      }
-      // Do not bank more than one row's worth of credit: a stall must not repay as a burst.
-      if (this.frameTick > framesPerRow) this.frameTick = framesPerRow;
-    }
+    // ★ AT MOST ONE ROW PER DISPLAY FRAME (rowsDueThisFrame). The old loop banked a missed slot and
+    //   repaid it as TWO rows in one frame — at N = 1 that was a visible lurch after every stall.
+    // ★ Display interval: the MEDIAN of recent ticks, from the rAF timestamp when the caller has it
+    //   (vsync-aligned; performance.now() inside the callback carries the callback's own jitter).
+    const t = this.pacer.onFrame(frameTs ?? now, !!(this.curRow && this.prevRow));
+    // ★ rowsNow device rows of the SAME real row: Smooth on Retina (2 a frame), Sharp (one screen row).
+    if (t > 0) for (let i = 0; i < this.pacer.rowsNow; i++) this.drawRow(t);
 
 
     // ★★★ DO NOT ZERO THE CARRY WHEN A PAIR COMPLETES. That is what an accumulator is FOR: the
@@ -792,10 +778,11 @@ export class Waterfall {
     const prevPeak = this.prevPeak;
     const ds = this.drawSpec;
     const dp = this.drawPeak;
-    if (!prevSpec || !prevPeak || !ds || !dp || !this.emitInterval) return { spec, peak };
+    const P = this.pacer;
+    if (!prevSpec || !prevPeak || !ds || !dp || !P.emitInterval) return { spec, peak };
 
-    const span = this.emitInterval * this.emitTotal;   // observed gap between frames
-    const t = Math.max(0, Math.min(1, (performance.now() - this.emitStart) / span));
+    const span = P.emitInterval * P.emitTotal;   // observed gap between frames
+    const t = Math.max(0, Math.min(1, (performance.now() - P.emitStart) / span));
     if (t >= 1) return { spec, peak };
 
     for (let i = 0; i < spec.length; i++) ds[i] = prevSpec[i] + (spec[i] - prevSpec[i]) * t;

@@ -307,8 +307,9 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getStr(s, "landingDabService", c.landingDabService);
     if (getNum(s, "users", d))       c.users = (int)d;
     if (getNum(s, "maxBw", d))       c.maxBw = d;
-    if (getNum(s, "maxFps", d))      c.maxFps = d;
-    if (getNum(s, "fftRate", d))     c.fftRate = d;
+    { const bool hm = getNum(s, "maxFps", d);  if (hm) c.maxFps = d;
+      const bool hr = getNum(s, "fftRate", d); if (hr) c.fftRate = d;
+      legacyFps(hm, hr, c.maxFps, c.fftRate); }   // ★ the 10-fps default is for NEW servers only
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
     getBool(s, "releaseWhenIdle", c.releaseWhenIdle);
     if (getNum(s, "idleGrace", d))   c.idleGrace = d;
@@ -481,7 +482,10 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     S("blockedModes", r.blockedModes);
     // ★ Absent keeps the safe defaults (AGC off, protection on) — B() only assigns when present.
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
-    I("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
+    I("users", r.users); N("maxBw", r.maxBw);
+    { double v = 0; const bool hm = getNum(j, "maxFps", v);  if (hm) r.maxFps = v;
+      const bool hr = getNum(j, "fftRate", v); if (hr) r.fftRate = v;
+      legacyFps(hm, hr, r.maxFps, r.fftRate); }   // ★ the 10-fps default is for NEW radios only
     I("uncompressed", r.uncompressed);
     B("releaseWhenIdle", r.releaseWhenIdle);
     N("idleGrace", r.idleGrace);

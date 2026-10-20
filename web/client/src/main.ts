@@ -25,6 +25,7 @@ import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
+import { FrameClock, renderEvery } from './wfPacing';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
@@ -2918,12 +2919,18 @@ let lastViewKey = '';
 function renderHz(): number {
   // The render clock must also keep up with the waterfall's EMIT rate (Speed × dpr pixel rows/sec),
   // or a high speed on a Retina canvas would out-run the draw loop and the scroll would stall.
-  const emit = wfSpeed * renderDpr();
+  // ★ The PRESET's rate when it has one (Default 20, Smooth 30) — wfSpeed is the hidden legacy
+  //   setting, and under Smooth it under-stated the emit rate by a third.
+  const emit = (WF_PRESET[wfScroll]?.rate || wfSpeed) * renderDpr();
   // ★ DAB holds the dial and the view: nothing on the spectrum needs more than 30 frames a second.
   return Math.min(dabOn ? 30 : 60, Math.max(20, Math.max(wantedFps() * 3, emit)));
 }
 
-let lastRenderAt = 0;
+/** ★★★ RENDER EVERY Nth DISPLAY FRAME, N WHOLE — not "is it 1000/renderHz − 1 ms since the last?".
+ *  That clock test, at renderHz 60 on a 60 Hz panel, threw away any frame whose callback ran ~1 ms
+ *  early: a 33 ms hole in the waterfall, several a second on Safari (2026-10-20). See wfPacing.ts. */
+const renderClock = new FrameClock();
+let renderCount = 0;
 
 /**
  * ★ SELF-PROFILER — add #perf to the URL.
@@ -3053,19 +3060,17 @@ function perfReport(secs: number) {
  *  drawn behind it (showAudioGate). Rows still arrive and are processed; only the drawing waits. */
 let startScreenUp = false;
 
-function loop() {
+function loop(frameTs?: number) {
   if (!wf || !spec) return;
-  try { renderFrame(); }
+  try { renderFrame(frameTs ?? performance.now()); }
   catch (e) { noteFault('web-render', 'frame', e); }
   requestAnimationFrame(loop);
 }
 
-function renderFrame() {
+function renderFrame(frameTs: number) {
   if (!wf || !spec) return;
-  const nowMs = performance.now();
-  const minGap = 1000 / renderHz() - 1;      // -1ms: never miss a slot to rounding
-  if (nowMs - lastRenderAt < minGap) return;
-  lastRenderAt = nowMs;
+  renderClock.tick(frameTs);
+  if (renderCount++ % renderEvery(renderClock.hz(), renderHz()) !== 0) return;
 
   wf.vfoHz = spec.frequency;
   guard('web-render', 'overlays', updateViewOverlays);
@@ -3097,7 +3102,7 @@ function renderFrame() {
   const w = wf;
   if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
   const drawWf = !NO_WF && !startScreenUp;
-  if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick());   // synthesise any waterfall lines now due (see Waterfall.tick)
+  if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick(frameTs));   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen is the ONLY exception
   //     (Stuart, 2026-09-30: "it must never stop"). A draw-skip under an open panel was tried and removed.
@@ -7959,10 +7964,16 @@ let wfScroll: 'sharp' | 'default' | 'smooth' = 'default';
 // ★ Each preset is a TARGET ROW RATE (rows/sec on screen), not a multiplier: this renderer works
 //   out how many rows to synthesise per frame pair to hit it, which is why a slow feed and a fast
 //   one scroll at the same speed. SHARP opts out entirely — one row per received frame.
+// ★★★ THE APP'S THREE, EXACTLY, AND THE SAME RULE (src/assets/wfRowTarget.ts, shared with WaterfallView and the native
+//     Android engine). Stuart 10-20: the rows follow the MEASURED feed — Sharp = actual rows; Default = min(20, 3 x feed);
+//     Smooth = min(60, 6 x feed); each snapped DOWN to a rate that divides 60 ({10,12,15,20,30,60}), never below the
+//     feed: 5 fps → 5/15/30, 10 → 10/20/60, 20 → 20/20/60, UberSDR 3.3 → 3.3/10/20, OWRX ~9 → 9/20/30. Rates are
+//     SCREEN rows (points) — the app's row is one point. Every row is a REAL frame, repeated, never a blend (7bce170d).
+//     `rate` is the cap (it also sizes the render clock, renderHz).
 const WF_PRESET: Record<string, { rate: number; note: string }> = {
-  sharp:   { rate: 0,  note: 'One row per received frame — nothing invented, and it scrolls at the data rate.' },
-  default: { rate: 20, note: 'A steady 20 rows/sec whatever the feed — a little interpolation on a slow one.' },
-  smooth:  { rate: 30, note: 'A steady 30 rows/sec — continuous motion on a slow feed, less real detail.' },
+  sharp:   { rate: 0,  note: 'One row per received frame — nothing repeated, and it scrolls at the data rate.' },
+  default: { rate: 20, note: 'Up to 20 rows/sec — three times the data rate, real rows repeated on a slow feed.' },
+  smooth:  { rate: 60, note: 'Up to 60 rows/sec — six times the data rate: the smoothest scroll, more repeats.' },
 };
 let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
 
@@ -7979,8 +7990,8 @@ function computeActiveFps(): number {
 function applyWaterfallRates() {
   activeFps = computeActiveFps();
   wf?.setSpeed(wfSpeed);
-  wf?.setSharpRows(wfScroll === 'sharp');
-  if (WF_PRESET[wfScroll]?.rate) wf?.setSpeed(WF_PRESET[wfScroll].rate);
+  // ★★★ The rows follow the FEED now (Stuart 10-20): the preset is a scroll MODE, its rate a cap (wfRowTarget.ts).
+  wf?.setScroll(wfScroll);
   // The speed control belongs to SMOOTH: under SHARP the data rate decides, so showing it would be
   // a control whose every use is a no-op.
   // ★ The old 10/20/30 SPEED row is gone from the UI: the preset decides it. Kept hidden rather

@@ -49,7 +49,7 @@ import { readPrefs } from '../services/serverPrefs';
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio, getConnectedRadio,
   setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
-  vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
+  vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier, DEFAULT_FPS_TIER,
   setServerLocationMode, getManualServerLocation, LOC_KEY, LOCMODE_KEY,
   LOC_MOVING_KEY, setServerLocationMoving, migrateDeviceMode, watchLocationWhileServing,
   getResolvedServerLocation,
@@ -230,7 +230,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [pinMode, setPinMode]     = useState<PinMode>('random');
   const [pin, setPin]             = useState(() => randomPin(Date.now()));
   const [rate, setRate]           = useState(0);          // 0 = client-controlled
-  const [fps, setFps]             = useState<FpsTier>('full');
+  const [fps, setFps]             = useState<FpsTier>(DEFAULT_FPS_TIER);   // ★ Default · 10 for a new server; a saved key wins (below)
   const [compress, setCompress]   = useState(true);
   // ★ Admin password — protects the CONTROLS (bias-T, direct sampling, calibration), not
   // access. Deliberately separate from the listening PIN: Hans's server is open to everyone

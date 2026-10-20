@@ -10,7 +10,14 @@ if (!fn) { console.log('   FAIL fpsShow not found in the page'); process.exit(1)
 let fail = 0;
 const ok = (c, what) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fail++; };
 
-const PAGE = [['20', 'Full · 20 fps'], ['10', 'Half · 10 fps'], ['5', 'Quarter · 5 fps']];
+// ★ The menu's options as the PAGE writes them (not a copy that could drift): the 10-fps default (2026-10-20)
+//   renamed Full/Half/Quarter to Smoother · 20 / Default · 10 / Half · 5 — same VALUES, so saved configs read as before.
+const sel0 = src.match(/<select id="maxFps">([\s\S]*?)<\/select>/);
+const PAGE = sel0 ? [...sel0[1].matchAll(/<option value="(\d+)">([^<]*)<\/option>/g)].map((m) => [m[1], m[2].replace(/&middot;/g, '·')]) : [];
+ok(JSON.stringify(PAGE) === JSON.stringify([['20', 'Smoother · 20 fps'], ['10', 'Default · 10 fps'], ['5', 'Half · 5 fps']]),
+   `the menu reads Smoother · 20 / Default · 10 / Half · 5 (${JSON.stringify(PAGE)})`);
+ok(/10 fps is the default\. 20 is smoother, but sends about\s+twice the data and costs more processor time/.test(src),
+   'the hint says 10 is the default, and that 20 is smoother but costs more data and CPU');
 function makeSelect() {
   const sel = { options: [], _v: '' };
   const mk = (value, textContent) => ({ value, textContent, remove() { sel.options = sel.options.filter((o) => o !== this); } });
@@ -28,20 +35,21 @@ function run(sel, r) {
 
 let sel = makeSelect();
 let r = run(sel, { fftRate: 15, maxFps: 15 });
-ok(r.value === '15' && r.label === '15 fps (set by hand)', `15 saved → "${r.label}", not Full · 20`);
+ok(r.value === '15' && r.label === '15 fps (set by hand)', `15 saved → "${r.label}", not Smoother · 20`);
 // What the save would write: the change handler is the ONLY writer, and it reads the selected value.
-const handler = src.match(/\$\("maxFps"\)\.addEventListener\("change", \(\) => \{\n\s*const v = parseFloat\(\$\("maxFps"\)\.value\) \|\| 20;/);
-ok(!!handler && parseFloat(sel.value) === 15, 'the only writer is the change handler, and it would read 15 — never 20');
+const handler = src.match(/\$\("maxFps"\)\.addEventListener\("change", \(\) => \{\n\s*const v = parseFloat\(\$\("maxFps"\)\.value\) \|\| 10;/);
+ok(!!handler && parseFloat(sel.value) === 15, 'the only writer is the change handler, and it would read 15 — never 20 or 10');
 ok(!/stashRadio[\s\S]{0,400}maxFps/.test(src.slice(src.indexOf('function stashRadio'), src.indexOf('function stashRadio') + 400)),
    'stashRadio (every save) does not write the rate');
 
 r = run(sel, { fftRate: 10, maxFps: 10 });
-ok(r.value === '10' && r.n === 3, `switching to a radio at 10: Half · 10, and the hand-set 15 is gone from the menu (${r.n} options)`);
+ok(r.value === '10' && r.n === 3, `switching to a radio at 10: Default · 10, and the hand-set 15 is gone from the menu (${r.n} options)`);
 
 sel = makeSelect();
-ok(run(sel, { fftRate: 5, maxFps: 5 }).value === '5', 'Quarter · 5 shows as 5');
-ok(run(makeSelect(), { fftRate: 20, maxFps: 20 }).value === '20', 'Full · 20 shows as 20');
-ok(run(makeSelect(), {}).value === '20', 'nothing saved (server default) shows Full · 20');
+ok(run(sel, { fftRate: 5, maxFps: 5 }).value === '5', 'Half · 5 shows as 5');
+ok(run(makeSelect(), { fftRate: 20, maxFps: 20 }).value === '20', 'Smoother · 20 shows as 20');
+ok(run(makeSelect(), { fftRate: 20, maxFps: 0 }).value === '20', 'an existing server saved at 20 with no ceiling shows Smoother · 20 (no migration)');
+ok(run(makeSelect(), {}).value === '10', 'nothing saved (server default) shows Default · 10');
 r = run(makeSelect(), { fftRate: 20, maxFps: 8 });
 ok(r.value === '8' && r.label === '8 fps (set by hand)', `fftRate 20 under a maxFps of 8 runs at 8 → "${r.label}"`);
 r = run(makeSelect(), { fftRate: 12.5, maxFps: 0 });

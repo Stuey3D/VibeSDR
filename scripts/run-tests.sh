@@ -458,6 +458,16 @@ if node --no-warnings scripts/test_faceplate_lighting.ts; then pass=$((pass+1));
 #     pick and Siri are refused on a shared dial with others listening (and on spectator / listen-only),
 #     as FM-DX's always were; alone or exclusive they work; the native switch and a press agree.
 if node --no-warnings scripts/test_blindTuneGate.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ WEB WATERFALL ROW PACING (wfPacing.ts): one whole row every N display frames, N fixed — Default on
+#    a Retina 60 Hz panel is a steady 30 rows/s (it flipped 1 <-> 2 on the 1.5 knife-edge: Stuart's
+#    "sticky" Safari waterfall, 2026-10-20), never two rows in a frame, Sharp on a cadence too.
+if node --no-warnings scripts/test_wf_pacing.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE ROW TARGET FOLLOWS THE FEED (src/assets/wfRowTarget.ts, Stuart 10-20): Default min(20, 3x), Smooth min(60, 6x),
+#    snapped to a divisor of 60 — the app, the web client and the native engine (wf_row_target.h) share the rule.
+if node --no-warnings scripts/test_wf_row_target.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE 10-FPS DEFAULT (2026-10-20): the serving phone's tiers read Smoother · 20 / Default · 10 / Half · 5, the stored
+#    keys still mean 20 / 10 / 5, and a new server starts on Default · 10.
+if node --no-warnings scripts/test_fps_tiers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ "IS THIS ACTUALLY NEWS?" (renderChurn.ts): a repeated RDS label / bookmark list keeps the old
 #    object so the radio screen does not re-render for it, any drawn change still gets through, and
 #    the controls-bar clock re-renders on the minute, not every second (power audit, 2026-10-01).
