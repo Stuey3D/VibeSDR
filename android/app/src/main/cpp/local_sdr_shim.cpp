@@ -18703,6 +18703,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::string text, name, err;
                 if (!fn) { reply(404, "Not Found", "{\"error\":\"diagnostics are not available on this server\"}"); return; }
                 if (!fn(text, name, err)) { reply(409, "Conflict", "{\"error\":\"" + jsonEscape(err) + "\"}"); return; }
+                // ★ And this radio's VibeAGC record (bounded, in memory — vibe_agc_record.h): gains, tunes and forgets,
+                //   no secrets. It is what makes a flap readable after the fact from the one file the owner sends.
+                text += "\n===== VibeAGC record (this radio, oldest first, JSONL) =====\n" + LocalSdrShim::agcRecordJsonl();
                 LOGI("admin diagnostics downloaded by %s (%zu KB)", ip.c_str(), text.size() / 1024);
                 sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n"
                               "Content-Disposition: attachment; filename=\"" + name + "\"\r\n"
