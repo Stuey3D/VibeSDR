@@ -720,6 +720,17 @@ target_include_directories(test-wifi-qos PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-wifi-qos)
 target_link_libraries(test-wifi-qos PRIVATE Threads::Threads)
 add_test(NAME wifi-qos COMMAND test-wifi-qos)
+# ★★★ VibeAGC (2026-10-20): the retune-forget split, carrierless headroom, the bursty channel level and the bounded
+#     record (vibe_agc_rules.h, vibe_agc_record.h) — pure, no radio. Silent: synthetic SSB speech, nothing played.
+add_executable(test-agc-rules "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-rules.cpp")
+target_include_directories(test-agc-rules PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-agc-rules)
+add_test(NAME agc-rules COMMAND test-agc-rules)
+add_executable(test-agc-record "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-record.cpp")
+target_include_directories(test-agc-record PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-agc-record)
+target_link_libraries(test-agc-record PRIVATE Threads::Threads)
+add_test(NAME agc-record COMMAND test-agc-record)
 # ★★ Download diagnostics (diag_scrub.h, 2026-10-20): the daemon's own scrub of the file before it is downloaded.
 add_executable(test-diag-scrub "${CMAKE_CURRENT_SOURCE_DIR}/test-diag-scrub.cpp")
 vibe_sanitize(test-diag-scrub)
