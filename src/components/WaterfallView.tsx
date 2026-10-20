@@ -1684,7 +1684,14 @@ function WaterfallView({
     // each frame directly there looks jerky (Stuart 2026-07-24). Waterfall and trace want opposite
     // things at a low data rate, so the flags are split.
     const lowFps = avgFrameMs.current > LOW_FPS_GLIDE_MS;
-    const wfBoost = boost || (cfg.smoothTune && lowFps);
+    // ★★★ NO GLIDE WHILE REPEAT ROWS CARRY THE SCROLL — the native engine's 7013cebe, ported to this
+    //     JS path (iOS, and Android with the engine off). On a feed slower than the setting's row
+    //     rate (Default/Smooth on a < 15 fps feed: UberSDR, a throttled server) the extra rows ARE
+    //     the motion; a glide over the frame interval on top of them is two motions fighting. Tell:
+    //     ~5 s smooth, then judder, as avgFrameMs crosses 66 ms. Sharp (no repeats) keeps its glide;
+    //     a gesture (boost) always glides.
+    const repeatsCarry = cfg.targetRows > 0 && avgFrameMs.current > 0 && 1000 / avgFrameMs.current < cfg.targetRows;
+    const wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
     // 3. Waterfall (phase 2): ONE raw frame row into the ring — the shader
     //    synthesizes the line-rate look (uN lines/frame, temporal blend of
