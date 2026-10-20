@@ -146,6 +146,16 @@ export function useKeyboardMode(): boolean {
   return on;
 }
 
+// ★★ HOLD THE IDLE CLOSE (controller keyboard brief, trap found): a panel re-arms its 10 s idle close only when IT hears
+//   a key. The controller keyboard consumes every key, so the frequency card beneath it would time out and close
+//   mid-typing. While anything holds this counter, an idle timer that fires just re-arms.
+let idleHolds = 0;
+export function holdIdleClose(): () => void {
+  idleHolds++;
+  let done = false;
+  return () => { if (!done) { done = true; idleHolds = Math.max(0, idleHolds - 1); } };
+}
+
 function useIdleClose(active: boolean, onTimeout?: () => void) {
   const cb = useRef(onTimeout); cb.current = onTimeout;
   useEffect(() => {
@@ -154,7 +164,10 @@ function useIdleClose(active: boolean, onTimeout?: () => void) {
     const arm = () => {
       if (timer) clearTimeout(timer);
       // Re-checked when it FIRES, not when armed: a touch part-way through must call it off.
-      timer = setTimeout(() => { if (keyboardMode) cb.current?.(); }, PANEL_IDLE_MS);
+      timer = setTimeout(() => {
+        if (idleHolds > 0) { arm(); return; }   // the controller keyboard is open over this panel
+        if (keyboardMode) cb.current?.();
+      }, PANEL_IDLE_MS);
     };
     const sub = addKeyListener('down', () => {
       if (shortcutsSuppressed()) return;

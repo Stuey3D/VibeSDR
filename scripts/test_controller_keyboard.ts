@@ -67,10 +67,18 @@ ok(run(kbInit('text', 'x'), { t: 'reveal' }).reveal === false, 'reveal does noth
 // Clear.
 ok(run(kbInit('text', 'abc'), { t: 'clear' }).value === '' , 'Clear');
 // ★★ Never logged: no runtime import, no console, no crumb in the reducer or the layouts.
-for (const f2 of ['src/utils/controllerKeyboard.ts', 'src/utils/kbLayouts.ts', 'src/utils/kbHandover.ts']) {
+for (const f2 of ['src/utils/controllerKeyboard.ts', 'src/utils/kbLayouts.ts', 'src/utils/kbHandover.ts', 'src/components/ControllerKeyboard.tsx']) {
   const src = readFileSync(new URL('../' + f2, import.meta.url), 'utf8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
   ok(!/console\.|crumb\(|diagnostics|logEvent|breadcrumb/.test(src), `${f2}: logs nothing`);
 }
 const red = readFileSync(new URL('../src/utils/controllerKeyboard.ts', import.meta.url), 'utf8');
 ok(!/^import (?!type )/m.test(red), 'controllerKeyboard.ts: no runtime import at all');
+// The overlay's own promises, read from its source.
+const ck = readFileSync(new URL('../src/components/ControllerKeyboard.tsx', import.meta.url), 'utf8');
+ok(/priority: 1000/.test(ck) && /return true;\s*\/\/ zoom: nothing here/.test(ck), 'the overlay hears keys above everything and consumes every one');
+ok(/setPadKeyboardOpen\(true\)/.test(ck) && /holdIdleClose\(\)/.test(ck), 'START taps submit while open; the panel beneath cannot time out mid-typing');
+ok(/password \? '#9a9a9a'/.test(ck) && /activeOpacity=\{password \? 1/.test(ck), 'password mode: a neutral ring and no press animation');
+ok(/leaveTextField/.test(ck) && /Keyboard\.dismiss\(\)/.test(ck), 'opening lets go of any field cursor first (else the keyboard is deaf)');
+ok(/onTouchStart=\{\(\) => \{ inputSource\.set\('touch'\); handover\(\); \}\}/.test(ck), 'any touch hands over to the system keyboard');
+ok(/if \(!e\.pad\) \{ handover\(\); return true; \}/.test(ck), 'a physical key hands over to typing in place');
 process.exit(fails ? 1 : 0);

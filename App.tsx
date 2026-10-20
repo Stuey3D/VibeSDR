@@ -38,6 +38,7 @@ import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import PadNotice from './src/components/PadNotice';
 import PadGuide from './src/components/PadGuide';
 import { AppAlertHost, appAlert } from './src/components/AppAlert';
+import { ControllerKeyboardHost } from './src/components/ControllerKeyboard';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
 import ServerModeScreen     from './src/screens/ServerModeThemed';   // ★ in the user's colours — see there
@@ -1056,6 +1057,8 @@ export default function App() {
         <PadGuide />
         {/* ★ appAlert's in-app dialog for a pad or keyboard (controller audit, 2026-10-20). */}
         <AppAlertHost />
+        {/* ★ The controller keyboard — text entry for a pad or TV remote (brief, decided 2026-10-20). */}
+        <ControllerKeyboardHost />
 
         {!splashDone && (
           <Animated.View style={{

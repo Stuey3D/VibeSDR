@@ -82,6 +82,14 @@ function onPad(r: (PadReport & { typing?: boolean }) | null | undefined) {
   armPadHold();
 }
 
+const padTypingListeners = new Set<() => void>();
+/** ★ A pad button pressed while a text field has the cursor (not Back) — the hand-over to the controller keyboard. */
+export function addPadWhileTypingListener(f: () => void): { remove(): void } {
+  ensureNative();
+  padTypingListeners.add(f);
+  return { remove: () => { padTypingListeners.delete(f); } };
+}
+
 const padKbListeners = new Set<(o: { kbButton: PadButton; profile: PadProfile } | { kbSubmit: true }) => void>();
 
 /** ★ The controller keyboard is open: the mapper turns START taps into submit and the spare buttons into edits. */
@@ -105,6 +113,9 @@ function runPad(outs: PadOut[]) {
     if ('kind' in o && o.kind === 'down') inputSource.set('pad');
     if ('guide' in o) { emitGuide('toggle', o.profile); continue; }
     if ('notice' in o) { padNoticeListeners.forEach((f) => { try { f(o.notice, o.profile); } catch { /* a listener's fault */ } }); continue; }
+    // ★ A pad press while a field has the cursor (the system keyboard, or typing in place): the controller keyboard
+    //   takes over that field (usePadField) — except Back, which lets go of the field, one layer, as Escape does.
+    if (o.kind === 'down' && padTyping && o.key !== 'Escape') padTypingListeners.forEach((f) => { try { f(); } catch { /* a listener's fault */ } });
     bus.dispatch(o.kind, { key: o.key, plain: false, typing: padTyping, pad: true });
     // ★ Back in a field leaves it — one layer, exactly as Escape on the keyboard (the native window does that one).
     if (o.kind === 'down' && o.key === 'Escape' && padTyping) NativeModules.VibePowerModule?.leaveTextField?.();
