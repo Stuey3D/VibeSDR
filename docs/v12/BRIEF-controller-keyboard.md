@@ -298,7 +298,9 @@ The audit's other recommendations are adopted as the defaults:
 - landscape follows the window (numeric side by side when wide, QWERTY full width);
 - digit-step tuning is Phase 3;
 - `VibePinPrompt` replaces the iOS `Alert.prompt` whenever a pad is in use;
-- ServerMode's admin password gets a "generate" key.
+- ~~ServerMode's admin password gets a "generate" key~~ — **dropped (Stuart, same day)**: `ServerModeScreen.tsx:1317`
+  already records the rule, "Still typed by the owner, never generated". The admin password field uses
+  ControllerKeyboard in `password` mode, like every other field.
 
 ## 8. Every text field, and the mode it would use (Refined — new)
 
@@ -444,4 +446,4 @@ while open), `web/client/src/gamepad.ts`, plus the screens in the audit.
 | 8 | Siri Remote kHz/MHz | On-screen key; decide with the tvOS port. |
 | 9 | Bookmark default name | Default to RDS PS / station name / frequency so saving needs no typing. |
 | 10 | iOS PIN with a pad | Use `VibePinPrompt` instead of `Alert.prompt` whenever a pad is in use. |
-| 11 | ServerMode admin password | Add a "generate" key (the one forced typing step to start a server). |
+| 11 | ServerMode admin password | ~~Add a "generate" key~~ — dropped 10-20: "still typed by the owner, never generated" (`ServerModeScreen.tsx:1317`); ControllerKeyboard in `password` mode. |
