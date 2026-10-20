@@ -127,6 +127,7 @@
 #include "vibe_squelch_msg.h"       // ★ squelch on/off: explicit `on`, else the legacy db > -100
 #include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
 #include "vibe_wifi_qos.h"          // ★★ audio out as Wi-Fi VOICE, the waterfall never (BRIEF-portable-wifi-realtime, 2026-10-20)
+#include "vibe_spec_governor.h"     // ★★ the waterfall gives way to a starved CPU: 20 → 10 → 5, fast down, slow up (11.0.9)
 #include "vibe_listener_queue.h"     // ★ a per-VFO listener's block queue, sized in time (2026-10-07)
 #include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
 #include "vibe_rtl_tuner_restore.h"   // ★ the ONE "put the tuner back after its re-init" (both direct-sampling routes)
@@ -899,6 +900,8 @@ static std::atomic<double> g_vsMaxFftRate{0.0};
 /** ★ The spectrum rate this machine is MEASURED to deliver, or -1 when nobody is listening. Fed by
  *  the SPEC RATE audit and shown beside the rate selector so a slow box explains itself. */
 static std::atomic<double> g_specAchievedFps{-1.0};        // <=0 = server default (20 fps)
+/** ★★ The dynamic spectrum ceiling in force (vibe_spec_governor.h), 0 = none. Published as specCeil. */
+static std::atomic<double> g_specGovCeil{0.0};
 // ★ The IDLE SAVER is a CLIENT feature — after a while without interaction the listener asks us to
 // drop the spectrum rate, which saves this host real FFT work and real radio time. Normally the
 // listener may switch it off. A server on solar and cellular in the middle of nowhere cannot afford
@@ -7312,6 +7315,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** The rate the OWNER configured (--fps / the GUI). The floor when nobody has asked, and what
      *  the radio returns to when the last slow listener leaves. */
     double baseFftRate = 0.0;
+    /** ★★ THE DYNAMIC SPECTRUM CEILING (vibe_spec_governor.h, 11.0.9 — the Pi 2 on DAB). Fed every ~2 s on the
+     *  hotplug thread (specGovernorTick); recomputeEngineRate() applies its ceiling under the owner's. Touched only
+     *  under specGovMtx. specWantFps = the engine rate WITHOUT the governor (the fastest listener, under the owner). */
+    std::mutex specGovMtx;
+    vibespec::Governor specGov;
+    double specWantFps = 0.0;
+    /** ★ Bumped on a mode change (shared or per listener): the load is a different load, so the governor's lesson
+     *  from failed climbs is dropped (Governor::newCircumstances). */
+    std::atomic<unsigned> specLoadEpoch{0};
 
     // ── ★★★ PER-CLIENT DSP — every listener their own VFO, demodulator and audio ─────────────
     //
@@ -8722,8 +8734,48 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (want <= 0) want = std::min(baseFftRate, kIdleFps);
         const double mr = g_vsMaxFftRate.load();     // the owner's ceiling still wins
         if (mr > 0 && want > mr) want = mr;
+        /* ★★ AND THE GOVERNOR'S, BELOW THE OWNER'S (vibe_spec_governor.h): only while this box is starved for CPU,
+         *  20 → 10 → 5. It never raises anything — the owner's top and a listener's lower ask both still hold — and
+         *  the idle floor (2 fps) is below every rung, so it is never touched. */
+        { std::lock_guard<std::mutex> g(specGovMtx); specWantFps = want; want = specGov.effective(want); }
         if (want <= 0 || std::fabs(want - fftRate) < 0.01) return;
         applyEngineRate(want);
+    }
+
+    /** ★★ THE GOVERNOR'S TICK — every ~2 s from the hotplug thread (never the DSP thread: recomputeEngineRate takes
+     *  clientMtx). Reads the same load figures tune pacing does; logs every change, with the reading that caused it.
+     *  ★ VIBESERVER_SPEC_GOVERNOR=0 switches it off: the engine then runs exactly as before 11.0.9. */
+    void specGovernorTick() {
+        static const bool on = [] { const char* e = std::getenv("VIBESERVER_SPEC_GOVERNOR");
+                                    return !(e && *e == '0'); }();
+        if (!on) return;
+        const vibetune::Load tl = serverLoad();
+        vibespec::Load l;
+        l.dspPct = tl.dspPct; l.demodBlocked = tl.demodBlocked; l.backlogMs = tl.backlogMs; l.cpuLevel = tl.cpuLevel;
+        static unsigned lastEpoch = 0; static bool lastDab = false;
+        const unsigned ep = specLoadEpoch.load(std::memory_order_relaxed);
+        const bool dab = g_dabMode.load(std::memory_order_relaxed);
+        bool changed; double before, after, wantNow;
+        {
+            std::lock_guard<std::mutex> g(specGovMtx);
+            if (ep != lastEpoch || dab != lastDab) specGov.newCircumstances();
+            lastEpoch = ep; lastDab = dab;
+            before = specGov.ceiling();
+            wantNow = specWantFps;
+            changed = specGov.feed((double)paceNowMs(), l, wantNow);
+            after = specGov.ceiling();
+        }
+        if (!changed) return;
+        g_specGovCeil.store(after, std::memory_order_relaxed);
+        if (after > 0 && (before <= 0 || after < before))
+            LOGI("spectrum ceiling %s -> %.0f fps: this server is short of CPU (dspCpu %.0f%%%s, IQ backlog %.0f ms, "
+                 "CPU level %d) — the waterfall gives way to the audio",
+                 before > 0 ? std::to_string((int)before).c_str() : "none", after, l.dspPct,
+                 l.demodBlocked ? ", demod queue full" : "", l.backlogMs, l.cpuLevel);
+        else
+            LOGI("spectrum ceiling %.0f -> %s: calm again (dspCpu %.0f%%, CPU level %d)",
+                 before, after > 0 ? (std::to_string((int)after) + " fps").c_str() : "none", l.dspPct, l.cpuLevel);
+        recomputeEngineRate();
     }
 
     /** Set the engine rate itself. The per-client decimation below turns this into each
@@ -14177,7 +14229,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 double v = 0, lo = 0, hi = 0, bw = 0;
                 bool changed = false;
-                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true; }
+                if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true;
+                                                   specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
                 if (jsonNum(msg, "frequency", v) && v > 0) {
                     // ★ Clamp to the captured window: a listener cannot tune outside the range
                     //   the owner locked, and silently accepting it would demodulate noise.
@@ -15704,7 +15757,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 m.clear();
             }
             bool rebuilt = false;
-            if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; }
+            if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
             if (jsonNum(msg, "frequency", v) && v > 0) retune(v);
             double lo, hi;
             if (!rebuilt && jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) {
@@ -15727,7 +15780,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             // Decimation is derived from the mode's bandwidth, so re-negotiate it
             // BEFORE rebuilding the audio chain (it may change sampleRate/fftSize).
-            if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); }
+            if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
             broadcastConfig();
             return;
         }
@@ -18866,6 +18919,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              + ",\"iqDrops\":" + std::to_string(g_iqDrops.load(std::memory_order_relaxed))
                              + ",\"usbSamples\":" + std::to_string(g_usbSamples.load(std::memory_order_relaxed))
                              + ",\"dspCpu\":" + std::to_string((int)(dspLoadPct + 0.5))
+                             // ★★ the waterfall's CPU ceiling (vibe_spec_governor.h): 0 = none, else 10 or 5 fps
+                             + ",\"specCeil\":" + std::to_string((int)(g_specGovCeil.load(std::memory_order_relaxed) + 0.5))
                              + ",\"dspLockMs\":" + std::to_string((int)(g_dspLockMaxMs.load(std::memory_order_relaxed) + 0.5))
                              + ",\"dspWorkMs\":" + std::to_string((int)(g_dspWorkMaxMs.load(std::memory_order_relaxed) + 0.5))
                              /* ★★★ demodWaits — HOW OFTEN THE DSP THREAD BLOCKED ON A FULL DEMOD
@@ -24914,6 +24969,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LocalSdrShim::instance().autoBandwidthTick();
                 LocalSdrShim::instance().batteryTick();
                 LocalSdrShim::instance().healthTick();   // ★ its own 1 Hz gate inside
+                specGovernorTick();                       // ★★ after health: it reads the CPU level health just set
                 /* ★★★ AND FLUSH THE CONNECTION LOG HERE, WHERE EVERY HOST RUNS. It is written
                  *     lazily — open()/close() only mark it dirty — and the only thing calling
                  *     saveIfDue() was the LINUX DAEMON'S loop (vibeserver/main.cpp). On the
