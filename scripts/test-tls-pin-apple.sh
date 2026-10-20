@@ -33,7 +33,7 @@ if [ -d "$RND/macos-arm64_x86_64/ReactNativeDependencies.framework" ]; then
   SR=(-DVIBE_WITH_SR -I"$RND/Headers" -F"$RND/macos-arm64_x86_64" -framework ReactNativeDependencies
       -Wl,-rpath,"$PWD/$RND/macos-arm64_x86_64" modules/vibe-tls-trust/VibePinnedSRPolicy.m)
 fi
-if ! nice clang -fobjc-arc -Wall -Imodules/vibe-tls-trust -framework Foundation -framework Security "${SR[@]}" \
+if ! nice clang -fobjc-arc -Wall -Imodules/vibe-tls-trust -framework Foundation -framework Security ${SR[@]+"${SR[@]}"} \
       modules/vibe-tls-trust/VibeTlsCore.m scripts/tls/VibeTlsPinTest.m -o "$OUT/test" > "$OUT/build.log" 2>&1; then
   echo "   did not build"; tail -20 "$OUT/build.log"; exit 1
 fi
