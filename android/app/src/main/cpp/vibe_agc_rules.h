@@ -21,6 +21,7 @@
  *   21:25:38.3  ADC overload cleared after 8 s      (and it settled at 22.9 dB, -5 dBFS)
  */
 #include <algorithm>
+#include <cmath>
 
 namespace vibeagc {
 
@@ -74,6 +75,22 @@ inline int agcBandKey(double hz) {
     int k = 0;
     for (double e : kEdges) { if (hz < e) return k; ++k; }
     return k;                 // above 1 GHz
+}
+
+/* ★★★ 4. HOW FAR A RETUNE MUST GO BEFORE THE AGC FORGETS (2026-10-20, moved here unchanged from retune()).
+ *  Half the demodulator's bandwidth, floored at 1 kHz — Stuart's 2026-08-25 rule ("100KHz move of the vfo
+ *  ... in AM mode it needs to be less"). Measured from where the AGC LAST forgot (g_agcLearnedAtHz), not
+ *  from the previous tune, so a drag of small nudges forgets once it has added up to the threshold.
+ *  ★ The width passed in is the AGC's own (g_demodBwHz), which the shim floors at 2.5 kHz — so the
+ *    figures in use are: SSB (2.7 kHz) 1.35 kHz · CW 1.25 kHz · AM 5 kHz · NFM 6.25 kHz · WFM 100 kHz.
+ *  ★★ SO ON SSB, MOVING TO A SIGNAL A FEW kHz AWAY IS A FULL FORGET: the failed-gain hysteresis, the
+ *     learned margin and "settled" all go, and the 8 s hurry lets the loop re-climb at once (Stuart, on
+ *     the Portable, 2026-10-20: "it seemed to reset the AGC moving from one SSB signal to another in close
+ *     range"). That is this rule doing what it says; test-agc-rules.cpp pins it. */
+constexpr double kRetuneForgetMinHz = 1000.0;
+inline double agcRetuneForgetHz(double agcDemodBwHz) { return std::max(kRetuneForgetMinHz, 0.5 * agcDemodBwHz); }
+inline bool agcRetuneForgets(double learnedAtHz, double newHz, double agcDemodBwHz) {
+    return std::fabs(newHz - learnedAtHz) > agcRetuneForgetHz(agcDemodBwHz);
 }
 
 }  // namespace vibeagc

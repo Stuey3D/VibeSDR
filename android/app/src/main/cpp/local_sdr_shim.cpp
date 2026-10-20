@@ -13712,9 +13712,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     bandwidth IS the band.
          *  ★ Floored at 1 kHz so CW (500 Hz wide) does not re-learn on every touch of the drum, and
          *    a nudge across a station's own passband is still the same signal either way. */
-        const double reHz = std::max(1000.0,
-                                     0.5 * g_demodBwHz.load(std::memory_order_relaxed));
-        if (std::fabs(freq - g_agcLearnedAtHz.load(std::memory_order_relaxed)) > reHz) {
+        /* ★ The rule itself lives in vibe_agc_rules.h §4, so test-agc-rules.cpp can hold it down. */
+        if (vibeagc::agcRetuneForgets(g_agcLearnedAtHz.load(std::memory_order_relaxed), freq,
+                                      g_demodBwHz.load(std::memory_order_relaxed))) {
             const double fromHz = g_agcLearnedAtHz.load(std::memory_order_relaxed);
             g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
             /* ★★★ INTO ANOTHER BAND, AT THE GAIN THAT LAST SETTLED THERE (vibe_agc_rules.h §3). Carrying
@@ -17649,6 +17649,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     sock->sendstr("HTTP/1.1 " + std::to_string(prp.code) + " " + prp.status
                                   + "\r\nContent-Type: " + prp.contentType
                                   + (prp.location.empty() ? std::string() : "\r\nLocation: " + prp.location)
+                                  + (prp.disposition.empty() ? std::string() : "\r\nContent-Disposition: " + prp.disposition)
                                   + "\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                                   + std::to_string(prp.body.size()) + "\r\n\r\n" + prp.body);
                     sock->close(); return;

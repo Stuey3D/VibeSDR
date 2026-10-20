@@ -1,6 +1,7 @@
 // ★★★ THE THREE RULES FROM THE SONY'S TWO DROPS (vibe_agc_rules.h, 2026-10-02 21:23 and 21:25).
 // Pure functions, so the evening's own numbers are the test: the auto-IF hold after a new start, the
-// gross-overload shed, and the band key that carries a settled gain across a retune.
+// gross-overload shed, and the band key that carries a settled gain across a retune — plus the retune-forget
+// distance (§4), pinned on Stuart's two-SSB-signals case.
 //   build: c++ -std=c++17 -I ../android/app/src/main/cpp -o /tmp/tagc test-agc-rules.cpp
 #include "vibe_agc_rules.h"
 #include <cstdio>
@@ -43,6 +44,35 @@ int main() {
        "the FM band starts at 87.5 MHz");
     ok(agcBandKey(1.25e6) != agcBandKey(7.1e6), "MW and HF are different bands");
     ok(agcBandKey(1090e6) == agcBandKey(1766e6), "above 1 GHz is one band");
+
+    printf("\nRetune forget — two SSB signals a few kHz apart (the Portable, 2026-10-20)\n");
+    {
+        // The widths the shim actually passes: max(2.5 kHz, the mode's bandwidth) — see vibe_agc_rules.h §4.
+        const double ssb = 2700.0, cw = 2500.0, am = 10000.0, nfm = 12500.0, wfm = 200000.0;
+        ok(std::fabs(agcRetuneForgetHz(ssb) - 1350.0) < 1e-9, "SSB: a move of more than 1.35 kHz forgets");
+        ok(std::fabs(agcRetuneForgetHz(cw)  - 1250.0) < 1e-9, "CW: 1.25 kHz (the 2.5 kHz floor, not the 1 kHz one)");
+        ok(std::fabs(agcRetuneForgetHz(am)  - 5000.0) < 1e-9 && std::fabs(agcRetuneForgetHz(nfm) - 6250.0) < 1e-9,
+           "AM 5 kHz, NFM 6.25 kHz");
+        ok(std::fabs(agcRetuneForgetHz(wfm) - 100000.0) < 1e-9, "WFM: 100 kHz (Stuart's FM figure)");
+
+        // Two USB stations 3 kHz apart on 20 m: hopping between them is a full forget every time.
+        const double a = 14.200e6, b = 14.203e6;
+        double learned = a;
+        ok(agcRetuneForgets(learned, b, ssb), "14.200 -> 14.203 USB: FORGETS (hysteresis, margin, settled all cleared)");
+        learned = b;
+        ok(agcRetuneForgets(learned, a, ssb), "...and back again: forgets again");
+        ok(!agcRetuneForgets(a, a + 1000.0, ssb), "a 1 kHz touch-up on the same SSB signal: kept");
+        ok(!agcRetuneForgets(a, b, wfm), "the same 3 kHz on WFM: kept");
+
+        // A drag in 100 Hz steps: measured from where it LAST forgot, so it forgets on the 14th step.
+        learned = a; int forgets = 0, firstAt = -1;
+        for (int k = 1; k <= 30; ++k) {
+            const double f = a + 100.0 * k;
+            if (agcRetuneForgets(learned, f, ssb)) { ++forgets; if (firstAt < 0) firstAt = k; learned = f; }
+        }
+        ok(firstAt == 14, "100 Hz drag steps: the first forget is at +1.4 kHz (step 14)");
+        ok(forgets == 2, "a 3 kHz drag forgets twice (at +1.4 and +2.8 kHz)");
+    }
 
     printf("\nagc rules: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
