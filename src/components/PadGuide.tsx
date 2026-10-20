@@ -26,6 +26,7 @@ import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText,
   PopupKey, PopupPlate, PopupScrim, PopupWindow, POPUP_FONT, type PopupTokens,
 } from './PopupShell';
+import { scrollLane } from '../constants/popupTokens';
 import { addPadGuideListener, addPadNoticeListener } from '../utils/hardwareKeys';
 import {
   PAD_GUIDES, PAD_LAYOUTS, guideColumns, guideTabStep, leaderPath, viewToBox,
@@ -205,7 +206,7 @@ function GuideModal({ layout, setLayout, onClose }: {
           <PopupWindow style={s.bodyWrap} metalStyle={s.bodyWin} onLayout={(e) => setWinH(e.nativeEvent.layout.height)}>
             <ScrollView ref={scroll} style={s.body} scrollEventThrottle={32}
                         onScroll={(e) => { y.current = e.nativeEvent.contentOffset.y; }}
-                        contentContainerStyle={s.bodyIn}>
+                        contentContainerStyle={[s.bodyIn, scrollLane]}>
               <View onLayout={(e) => setBodyW(e.nativeEvent.layout.width)}>
                 <Text style={[s.gTitle, { fontFamily: ff, color: amber }]}>{g.title}</Text>
                 <Text style={[s.gSub, { fontFamily: ff, color: dim }]}>{g.sub}</Text>
