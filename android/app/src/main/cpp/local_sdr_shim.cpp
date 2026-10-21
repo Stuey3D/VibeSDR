@@ -27838,19 +27838,25 @@ bool LocalSdrShim::adminAction(const std::string& action, std::string& err) {
     // ★★ ENFORCED, not merely undrawn. The advertised list is what the page uses to decide what
     //    to show; this is what makes it true. A client that asks anyway — an old build, a script,
     //    a curious person — must be refused, not obeyed.
+    // ★★★ ONE LIST, NOT THREE (2026-10-21). A hard-coded copy of the actions used to sit here as
+    //     well; Download diagnostics was added to the daemon's list and the advertised one but not
+    //     to this copy, so every Linux server drew the button and refused it ("unknown action:
+    //     diagnostics"). The advertised list is matched as WHOLE comma-separated names (a substring
+    //     match let "restart" through inside "sdrplay-restart"), and the daemon checks its own
+    //     list again before writing the request.
     { std::lock_guard<std::mutex> lk(g_vsMaintMtx);
-      if (g_vsMaintActions.find(action) == std::string::npos) {
+      bool offered = false;
+      size_t a = 0;
+      while (a <= g_vsMaintActions.size()) {
+          size_t b = g_vsMaintActions.find(',', a);
+          if (b == std::string::npos) b = g_vsMaintActions.size();
+          if (g_vsMaintActions.compare(a, b - a, action) == 0 && !action.empty()) { offered = true; break; }
+          a = b + 1;
+      }
+      if (!offered) {
           err = "this server does not offer that action";
           return false;
       } }
-    if (action != "reboot" && action != "restart" && action != "update-check" &&
-        action != "update" && action != "update-all" && action != "shutdown" &&
-        /* ★ The optional detail map pack. Guarded here as well as in the daemon, because this
-         *  list is what refuses a script or an old build that asks anyway. */
-        action != "maps-install" && action != "maps-remove") {
-        err = "unknown action: " + action;
-        return false;
-    }
     return fn(action, err);
 }
 void LocalSdrShim::setAdminActionHandler(AdminActionFn fn) {
