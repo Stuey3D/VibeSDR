@@ -87,12 +87,8 @@ rsync_to_host() { rsync -a --timeout=60 -e "ssh $SSH_OPTS" "$@" || { echo "!! rs
 rsh true || { echo "!! cannot reach $HOST"; exit 1; }
 [ -n "$SYNC_ONLY" ] || echo "==> $HOST before: $(rsh uptime)"
 
-# ★ The SDRplay headers are a build dependency staged from this machine (they are SDRplay's to license, so
-#   never committed). i386 compiles SDRplay out, but every image's COPY step needs them.
-SDRPLAY_INC="${SDRPLAY_INC:-/usr/local/include}"
-STAGE="$SRC_DIR/vibeserver/linux/sdrplay-inc"
-rm -rf "$STAGE"; mkdir -p "$STAGE"
-cp "$SDRPLAY_INC"/sdrplay_api*.h "$STAGE"/ || { echo "!! no SDRplay headers in $SDRPLAY_INC"; exit 1; }
+# ★ No SDRplay headers to stage any more (2026-10-21): the API headers are OpenRSP's, committed in
+#   vendor/openrsp/include, and the images no longer COPY a sdrplay-inc/ directory.
 # ★ And the bundled tunnel: CMake refuses a package without it, so check here rather than after a build.
 bash "$SRC_DIR/tools/cloudflared-desktop/fetch.sh" >/dev/null
 

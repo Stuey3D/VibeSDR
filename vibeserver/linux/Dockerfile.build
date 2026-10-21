@@ -42,33 +42,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libncursesw5-dev \
       dpkg-dev apt-utils gnupg git rsync xz-utils \
       python3-minimal \
+      sdcc \
     && rm -rf /var/lib/apt/lists/*
 # ★★ python3-minimal IS NOT OPTIONAL SCENERY: scripts/build-mapdata-deb.sh reads the map data's own
 #    index.json to decide what goes in the optional detail package. bookworm-SLIM has no python3 and
 #    no jq, and a package list parsed with grep is exactly the thing that ships a dataset missing a
 #    layer. ~30 MB in a build image, against a file list that cannot drift from the data.
 
-# ★★ SDRplay headers: STAGED FROM THE BUILD HOST, never downloaded. The API is dlopen'd at
-#    runtime, so the headers are all the build needs — and SDRplay's licence is theirs, which is
-#    why the library itself can never be a dependency of our package, and why these headers are
-#    NOT committed to this repository either.
-#
-# ★★★ THIS USED TO `curl` THEM FROM sdrplay.com AND THAT URL IS NOW A 404 (found 2026-08-20, on
-#     the first amd64 build). Their whole /software/ path is gone and downloads sit behind a
-#     recaptcha form, so no version number would have fixed it. The arm64 image had the step
-#     CACHED, which is the only reason releases kept working — a clean rebuild on ANY architecture
-#     would have failed exactly the same way, at some far less convenient moment.
-#
-# ★★ A BUILD MUST NOT DEPEND ON A THIRD PARTY'S WEBSITE STILL BEING SHAPED THE WAY IT WAS. The
-#    headers come from the publishing machine now (build-debs-remote.sh / publish-apt-docker.sh stage them into this
-#    directory from /usr/local/include, where SDRplay's own installer puts them), so the build is
-#    reproducible for as long as we have them — which is the same condition as having the source.
-#
-# ★ Without these, RSP support compiles out silently — which shipped once already, and is why
-#   VIBESERVER_STRICT_RADIOS exists.
-COPY sdrplay-inc/ /usr/local/include/
-RUN ls /usr/local/include/sdrplay_api.h \
-    && grep -q SDRPLAY_API_VERSION /usr/local/include/sdrplay_api.h
+# ★★★ sdcc BUILDS THE RSP BRIDGE FIRMWARE (OpenRSP, 2026-10-21): vendor/openrsp/firmware/src is 8051 C,
+#     compiled here into the three images the bundled RSP service uploads. A host tool, architecture-free;
+#     CMake refuses a release build without it. bookworm's 4.2.0 reproduces OpenRSP's released images
+#     byte for byte (SHA-256 checked against openrsp_3.15.2-20_arm64.deb).
+# ★★ The SDRplay headers are NO LONGER STAGED here: the API headers are OpenRSP's, in vendor/openrsp/include.
 
 # ★★★ OUR OWN libusb, libopus AND librtlsdr — PINNED SOURCE, STATIC, INTO A PREFIX OF OUR OWN.
 #     Debian's librtlsdr is 2.0.2 and does not know the RTL-SDR Blog V4L ("V4 Lite", R828S) at all;

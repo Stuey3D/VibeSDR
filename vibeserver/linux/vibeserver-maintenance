@@ -164,10 +164,20 @@ case "$action" in
   #   answering ("WaitForResponse ... timed out - suspect Service problem"), every re-Init said
   #   AlreadyInitialised, and nothing an unprivileged process can send will clear it. The service
   #   is restarted and then VibeServer, which is what the owner did by hand on 2026-09-15.
-  sdrplay-restart) log "restarting the SDRplay API service, then vibeserver"
-                for u in sdrplay.service sdrplay_apiService.service; do
-                  systemctl cat "$u" >/dev/null 2>&1 && { systemctl restart "$u"; log "restarted $u"; break; }
+  # ★★ THREE POSSIBLE SERVICES since the package carries its own (vibeserver-rsp, OpenRSP, 2026-10-21).
+  #    The one that is RUNNING is the one the server is a client of; ours is installed everywhere but
+  #    skips itself when a system SDRplay stack is present, so "the unit exists" no longer says which.
+  #    Nothing running: the old rule (the first unit that exists) — a dead service is restarted, not left.
+  sdrplay-restart) log "restarting the RSP driver service, then vibeserver"
+                done_u=""
+                for u in sdrplay.service sdrplay_apiService.service vibeserver-rsp.service; do
+                  systemctl is-active --quiet "$u" && { systemctl restart "$u"; log "restarted $u"; done_u=1; break; }
                 done
+                if [ -z "$done_u" ]; then
+                  for u in sdrplay.service sdrplay_apiService.service vibeserver-rsp.service; do
+                    systemctl cat "$u" >/dev/null 2>&1 && { systemctl restart "$u"; log "restarted $u"; break; }
+                  done
+                fi
                 sleep 3
                 systemctl restart vibeserver ;;
   reboot)       log "rebooting";                 systemctl reboot ;;

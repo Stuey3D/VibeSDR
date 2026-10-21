@@ -19,6 +19,9 @@ Wants=network-online.target
 #   the front door from serving the setup page, which is the one thing you need to fix it from.
 Wants=vibeserver-radios.service
 Before=vibeserver-radios.service
+# ★★ THE BUNDLED RSP DRIVER SERVICE (OpenRSP, 2026-10-21): ORDER only. An RSP's arrival starts it (udev,
+#    99-vibeserver-sdr.rules); when both start at boot, the service is up before the server asks it anything.
+After=vibeserver-rsp.service
 
 [Service]
 Type=simple

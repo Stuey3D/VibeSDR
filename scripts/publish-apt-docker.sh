@@ -123,30 +123,9 @@ if [ ! -d "$APT_DIR/.git" ]; then
   git clone https://github.com/Stuey3D/VibeServer.git "$APT_DIR"
 fi
 
-# ── SDRplay headers: staged from this machine into the build context ─────────
-# ★★★ NOT DOWNLOADED ANY MORE. The Dockerfile used to curl them from sdrplay.com; that URL 404s as
-#     of 2026-08-20 and their downloads now sit behind a recaptcha form. Releases only kept working
-#     because the arm64 image had the step cached — the first CLEAN build of any architecture would
-#     have failed, and a build that depends on someone else's website being unchanged is a build
-#     that breaks on their schedule rather than ours.
-# ★★ TO BE CLEAR ABOUT WHAT SDRplay IS HERE: the LIBRARY is the user's own business — it is
-#    dlopen'd at runtime, it is never a dependency of our .deb, and RSP owners install it
-#    themselves. The HEADERS are a BUILD dependency: without them the RSP backend compiles out,
-#    which shipped once and is why VIBESERVER_STRICT_RADIOS refuses rather than warns.
-# ★ Staged, not committed: the headers are SDRplay's to license, so they live on the build machine
-#   (their own installer puts them in /usr/local/include) and are copied in per build.
-SDRPLAY_INC="${SDRPLAY_INC:-/usr/local/include}"
-STAGE="$SRC_DIR/vibeserver/linux/sdrplay-inc"
-rm -rf "$STAGE"; mkdir -p "$STAGE"
-if ! cp "$SDRPLAY_INC"/sdrplay_api*.h "$STAGE"/ 2>/dev/null; then
-  echo "!! no SDRplay headers in $SDRPLAY_INC"
-  echo "   They are a BUILD dependency (the RSP backend needs them to compile); the runtime"
-  echo "   library is not, and users install that themselves."
-  echo "   Install SDRplay's API package on this machine, or set SDRPLAY_INC to a directory"
-  echo "   holding sdrplay_api*.h."
-  exit 1
-fi
-echo "==> staged $(ls "$STAGE" | wc -l | tr -d ' ') SDRplay headers from $SDRPLAY_INC"
+# ── SDRplay headers: NOT STAGED ANY MORE (2026-10-21) ─────────────────────────
+# ★ The API headers are OpenRSP's (GPLv3), committed in vendor/openrsp/include; the images no longer
+#   COPY sdrplay-inc/. RSP support cannot compile out for want of a header on this machine.
 
 # ★★ ONE ARCHITECTURE AT A TIME, SEQUENTIALLY — they share the apt clone, and two publishes
 #    writing the same Packages/Release/index.html at once would interleave into nonsense.

@@ -9,6 +9,8 @@ Documentation=https://vibesdr.net
 After=network-online.target vibeserver.service
 Wants=network-online.target
 PartOf=vibeserver.service
+# ★ After the bundled RSP driver service, when both start together — see vibeserver.service.
+After=vibeserver-rsp.service
 
 [Service]
 Type=simple

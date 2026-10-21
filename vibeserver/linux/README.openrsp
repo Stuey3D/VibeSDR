@@ -1,0 +1,28 @@
+OpenRSP in this package
+=======================
+
+This package contains OpenRSP, an independent, open-source driver stack for RSP-family receivers
+(https://openrsp.dev), so that an RSP works with VibeServer with nothing else installed:
+
+  /usr/lib/vibeserver/openrsp/libsdrplay_api.so.3.15   the API library VibeServer loads
+  /usr/lib/vibeserver/openrsp/sdrplay_apiService       the device service (vibeserver-rsp.service)
+  /usr/lib/vibeserver/openrsp/firmware/own/            OpenRSP's USB bridge firmware
+
+OpenRSP is not made, endorsed or supported by SDRplay Ltd. Please report problems with it to the VibeSDR
+project, not to SDRplay. Copyright (C) 2026 the OpenRSP authors. It is free software under the GNU General
+Public License, version 3 or later: see /usr/share/doc/vibeserver/COPYING.openrsp.
+
+Source code
+-----------
+The Corresponding Source of these files is the directory vendor/openrsp of the VibeSDR source code, at the
+release tag matching this package's version: https://github.com/Stuey3D/VibeSDR
+It is OpenRSP 3.15.2-20 (https://openrsp.dev/downloads/openrsp-3.15.2-20-src.tar.gz, SHA-256
+288828d04beb4ecb0812ee8a3635b31b539c9b1b4dbb4344e2f127fd6ec20057) with the build changes listed in
+VIBESDR-CHANGES beside this file. vibeserver/CMakeLists.txt (section "OpenRSP") shows how it is built.
+
+If an SDRplay API is already installed
+--------------------------------------
+If SDRplay's own API, or OpenRSP's sdrplay-api-open package, is installed (its service is at
+/opt/sdrplay_api/sdrplay_apiService), that installation keeps the receivers for every program on the
+machine: vibeserver-rsp.service does not start, and VibeServer uses the installed library. Nothing of
+either is changed or removed. Remove it to use the driver in this package instead.

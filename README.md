@@ -266,7 +266,8 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 | **libairspyhf** — Airspy | BSD-3-Clause | Airspy HF+ driver; patched for Android USB handles |
 | **libairspy** — Airspy (Vernoux, Touil, Gilmour) | BSD-3-Clause + MIT (IQ converter, filters) | Airspy R2 / Mini driver, unmodified |
 | **libhackrf** — Great Scott Gadgets | BSD-3-Clause (library source) | HackRF driver; patched to open from a USB fd |
-| **SDRplay API** — SDRplay Ltd | proprietary | Headers only; the library is loaded at runtime if the user installed it, never bundled |
+| **OpenRSP** — the OpenRSP authors ([openrsp.dev](https://openrsp.dev)) | GPL-3.0-or-later | VibeServer on Linux (amd64, arm64, armhf): the SDRplay RSP driver — API library, device service and USB bridge firmware — built from `vendor/openrsp` (see `VIBESDR-CHANGES` there). Its API headers are what every build compiles against. Not affiliated with SDRplay Ltd |
+| **SDRplay API** — SDRplay Ltd | proprietary | Never bundled. Loaded at runtime only where the owner installed it (macOS; or Linux, where an installed SDRplay service is used in preference to the bundled one) |
 | **KissFFT** — Mark Borgerding | BSD-3-Clause | The FFT inside VibeDSP (and inside ft8_lib) |
 | **PFFFT** — Julien Pommier, after FFTPACK (© 2004 UCAR) | FFTPACK licence (BSD-style) | The DAB receiver's OFDM FFT |
 | **ft8_lib** — Kārlis Goba (YL3JG) | MIT | FT8 / FT4 decoding |

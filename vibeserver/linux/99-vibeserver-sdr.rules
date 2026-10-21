@@ -11,3 +11,18 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="03eb", ATTRS{idProduct}=="800c", MODE="0660"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="60a1", MODE="0660", GROUP="plugdev"
 # HackRF One (libhackrf, driver "hackrf")
 SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6089", MODE="0660", GROUP="plugdev"
+# SDRplay RSP1 / RSP1A / RSP2 / RSPduo / RSPdx / RSP1B / RSPdx-R2 — for the bundled OpenRSP service
+# (vibeserver-rsp.service), which runs as `vibeserver` in plugdev rather than as root. The product IDs
+# are the ones OpenRSP's own rules list (vendor/openrsp/system/linux/66-sdrplay.rules).
+# ★ A system SDRplay stack's own 66-sdrplay.rules makes these 0666; this later rule narrows them to
+#   0660 plugdev, which its root-run service does not notice.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1df7", ATTRS{idProduct}=="2500", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1df7", ATTRS{idProduct}=="3000", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1df7", ATTRS{idProduct}=="3010", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1df7", ATTRS{idProduct}=="3020", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1df7", ATTRS{idProduct}=="3030", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1df7", ATTRS{idProduct}=="3050", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1df7", ATTRS{idProduct}=="3060", MODE="0660", GROUP="plugdev"
+# ★★ …and the RSP's arrival STARTS the bundled RSP service — only machines with an RSP ever run it. Whole
+#    device only (not each interface). The unit skips itself when a system SDRplay service is installed.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1df7", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-rsp.service"
