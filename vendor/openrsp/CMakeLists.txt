@@ -158,10 +158,19 @@ if(SDRPLAY_PLATFORM STREQUAL "linux")
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|ARM)" AND CMAKE_SIZEOF_VOID_P EQUAL 4)
     set(SDRPLAY_NEEDED_PTHREAD_RT)
   endif()
+  # VibeSDR change (2026-10-21): SDRPLAY_STATIC_CXX_RUNTIME (default OFF = upstream behaviour) links
+  # libstdc++ and libgcc INTO the library instead of naming libstdc++.so.6, so a package carrying it
+  # needs nothing from the distribution but glibc. The version script keeps them local.
+  option(SDRPLAY_STATIC_CXX_RUNTIME "Linux: link the C++ runtime statically into libsdrplay_api" OFF)
+  if(SDRPLAY_STATIC_CXX_RUNTIME)
+    set(SDRPLAY_NEEDED_CXX -static-libstdc++ -static-libgcc)
+  else()
+    set(SDRPLAY_NEEDED_CXX -lstdc++)
+  endif()
   target_link_options(sdrplay_api PRIVATE
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/libsdrplay_api.map"
     "LINKER:--no-undefined"
-    "LINKER:--no-as-needed" ${SDRPLAY_NEEDED_PTHREAD_RT} -lstdc++ -lc "LINKER:--as-needed")
+    "LINKER:--no-as-needed" ${SDRPLAY_NEEDED_PTHREAD_RT} ${SDRPLAY_NEEDED_CXX} -lc "LINKER:--as-needed")
 elseif(WIN32)
   # sdrplay_api.dll, the 24 API 3.15 exports with their ordinals (cmake/sdrplay_api.def, cmake/Windows.cmake).
   sdrplay_windows_client_lib(sdrplay_api)
@@ -178,6 +187,9 @@ set(SDRPLAY_FIRMWARE_DIR "/usr/share/sdrplay_api/firmware" CACHE PATH
 add_executable(sdrplay_apiService ${SRC}/service/main.cpp)
 target_link_libraries(sdrplay_apiService PRIVATE sdrplay_core sdrplay_platform_usb)
 target_compile_definitions(sdrplay_apiService PRIVATE SDRPLAY_FIRMWARE_DIR="${SDRPLAY_FIRMWARE_DIR}")
+if(SDRPLAY_STATIC_CXX_RUNTIME)
+  target_link_options(sdrplay_apiService PRIVATE -static-libstdc++ -static-libgcc) # VibeSDR change, as above
+endif()
 # In the build tree the daemon finds the firmware through <exe dir>/firmware.
 if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/firmware)
   file(CREATE_LINK ${CMAKE_CURRENT_SOURCE_DIR}/firmware ${CMAKE_CURRENT_BINARY_DIR}/firmware SYMBOLIC)

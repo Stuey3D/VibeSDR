@@ -39,7 +39,24 @@ find_package(PkgConfig QUIET)
 
 # libusb-1.0 is the only USB API on every OS.
 set(SDRPLAY_HAVE_LIBUSB OFF)
-if(PKG_CONFIG_FOUND)
+# VibeSDR change (2026-10-21): SDRPLAY_LIBUSB_LIBRARY + SDRPLAY_LIBUSB_INCLUDE_DIR name a libusb
+# explicitly (VibeServer's own static libusb-1.0.a, built without udev), bypassing pkg-config. A cross
+# toolchain file that sets PKG_CONFIG_LIBDIR itself would otherwise hide it, and a service built
+# without libusb compiles the USB stub and finds no receiver. Unset = upstream behaviour.
+set(SDRPLAY_LIBUSB_LIBRARY "" CACHE FILEPATH "libusb-1.0 library to link (empty: pkg-config)")
+set(SDRPLAY_LIBUSB_INCLUDE_DIR "" CACHE PATH "Directory holding libusb.h (with SDRPLAY_LIBUSB_LIBRARY)")
+if(SDRPLAY_LIBUSB_LIBRARY)
+  if(NOT EXISTS "${SDRPLAY_LIBUSB_LIBRARY}" OR NOT EXISTS "${SDRPLAY_LIBUSB_INCLUDE_DIR}/libusb.h")
+    message(FATAL_ERROR "SDRPLAY_LIBUSB_LIBRARY/SDRPLAY_LIBUSB_INCLUDE_DIR: no library or libusb.h there")
+  endif()
+  add_library(PkgConfig::LIBUSB INTERFACE IMPORTED)
+  set_target_properties(PkgConfig::LIBUSB PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${SDRPLAY_LIBUSB_INCLUDE_DIR}"
+    INTERFACE_LINK_LIBRARIES "${SDRPLAY_LIBUSB_LIBRARY};Threads::Threads")
+  set(LIBUSB_FOUND ON)
+  set(SDRPLAY_HAVE_LIBUSB ON)
+  message(STATUS "libusb: ${SDRPLAY_LIBUSB_LIBRARY} (given explicitly)")
+elseif(PKG_CONFIG_FOUND)
   pkg_check_modules(LIBUSB IMPORTED_TARGET libusb-1.0)
   if(LIBUSB_FOUND)
     set(SDRPLAY_HAVE_LIBUSB ON)
@@ -63,8 +80,15 @@ if(SDRPLAY_PLATFORM STREQUAL "linux")
   if(NOT SDRPLAY_HAVE_LIBUSB)
     message(FATAL_ERROR "libusb-1.0 development files are required on Linux (apt install libusb-1.0-0-dev)")
   endif()
-  pkg_check_modules(LIBUDEV REQUIRED IMPORTED_TARGET libudev)
-  set(SDRPLAY_HAVE_LIBUDEV ON)
+  # VibeSDR change (2026-10-21): libudev made optional (SDRPLAY_LINUX_UDEV, default ON = upstream
+  # behaviour). Only HotplugUdev.cpp uses it, and nothing in the service calls setHotplugCallback (the
+  # service re-enumerates on every GetDevices and probes selected devices once a second), so a build
+  # without it behaves the same. VibeServer's packages link nothing from the system but glibc.
+  option(SDRPLAY_LINUX_UDEV "Linux: link libudev for the hotplug monitor" ON)
+  if(SDRPLAY_LINUX_UDEV)
+    pkg_check_modules(LIBUDEV REQUIRED IMPORTED_TARGET libudev)
+    set(SDRPLAY_HAVE_LIBUDEV ON)
+  endif()
 endif()
 
 # Cross-target test runs (Android /data/local/tmp, a Mac/Wine copy, ...): the unit tests read

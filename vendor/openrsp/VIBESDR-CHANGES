@@ -1,0 +1,24 @@
+OpenRSP in VibeSDR — provenance and changes
+============================================
+
+Source:   https://openrsp.dev/downloads/openrsp-3.15.2-20-src.tar.gz
+          release v3.15.2-openrsp.25 (OpenRSP 3.15.2-20, SDRplay API 3.15.2 compatible), built 2026-10-21
+SHA-256:  288828d04beb4ecb0812ee8a3635b31b539c9b1b4dbb4344e2f127fd6ec20057
+Licence:  GNU General Public License, version 3 or later (COPYING). Copyright (C) 2026 the OpenRSP authors.
+          OpenRSP is an independent project, not affiliated with SDRplay Ltd.
+
+The tree was committed unmodified first (git history: "vendor: OpenRSP 3.15.2-20 source, unmodified"),
+so `git diff <that commit> -- vendor/openrsp` shows every change below exactly.
+
+Changes made for VibeSDR (GPLv3 section 5a notice). Each is marked "VibeSDR change (2026-10-21)" in the
+file, and each leaves upstream behaviour unchanged unless the option is set:
+
+1. cmake/Platform.cmake — SDRPLAY_LINUX_UDEV (default ON). OFF builds the Linux service without
+   libudev. Only the hotplug monitor uses libudev and nothing in the service calls it.
+2. cmake/Platform.cmake — SDRPLAY_LIBUSB_LIBRARY / SDRPLAY_LIBUSB_INCLUDE_DIR name libusb explicitly
+   instead of asking pkg-config (VibeServer links its own static libusb 1.0.30, built without udev).
+3. CMakeLists.txt — SDRPLAY_STATIC_CXX_RUNTIME (default OFF). ON links libstdc++/libgcc statically
+   into libsdrplay_api.so.3.15 and sdrplay_apiService, so the package depends on nothing but glibc.
+
+How VibeServer builds it: vibeserver/CMakeLists.txt, section "OpenRSP". docs/OPENRSP-BUNDLE-PLAN.md
+gives the reasoning, and covers each platform.
