@@ -78,12 +78,23 @@ class FakeNM:
         self.ps = "off"
         self.ps_on_join = False
         self.ps_stuck = False                       # `iw … set power_save off` refused (a driver that will not)
-        # ★★★ WPA2/WPA3 PHONE HOTSPOTS (2026-10-20). kind[ssid]: "transition" = PSK+SAE offered, and THIS chip fumbles SAE
-        #     (a join whose profile lets NM offer SAE — PMF not off — fails as the 3A+ does); "pmf-required" = WPA2 with
-        #     PMF required (a PMF-off join fails). quiet = answers only a DIRECTED probe (an idle iPhone hotspot): missing
-        #     from wildcard scans, listed after `rescan ssid <it>`, joinable only by a profile that probes by name.
-        self.kind, self.quiet, self.freq = {}, set(), {}
+        # ★★★ WHAT EACH NETWORK ADVERTISES AND WHAT IT REALLY TAKES (2026-10-21, measured on the Portable). kind[ssid]:
+        #     None/"wpa2"   plain WPA2-PSK, no MFP: takes wpa-psk with PMF off or optional (not required, not SAE)
+        #     "wpa2-mfpc"   WPA2, MFP capable: takes any wpa-psk
+        #     "pmf-required" WPA2, MFP required: refuses PMF off
+        #     "transition"  WPA2/WPA3 (PSK+SAE, MFPC) — STUART'S IPHONE: refuses PMF off (instantly, 2026-10-21)
+        #     "wpa3"        SAE only, MFP required: refuses PMF off
+        #     "sae-broken"  ADVERTISES transition but fails whenever SAE is offered (the safety net's case)
+        #     "liar-mfpc"   ADVERTISES MFP capable but refuses PMF optional (the safety net's other case)
+        #     "open"        no security
+        #   bss[ssid] = [(kind, signal), …] — several access points under one name (old router + new mesh): the join works
+        #   if ANY of them takes the profile, as wpa_supplicant picks among the matching ones.
+        #   quiet = answers only a DIRECTED probe (an idle iPhone hotspot): missing from wildcard scans, listed after
+        #   `rescan ssid <it>`, joinable only by a profile that probes by name.
+        self.kind, self.quiet, self.freq, self.bss = {}, set(), {}, {}
+        self.iw_dump_ok = True                      # `iw dev … scan dump` answers
         self.probed = []                            # every ssid a directed probe asked for
+        self.attempts = []                          # (ssid, key-mgmt, pmf) of every station join tried
         self._probe_hits = set()
 
     # Shell interface
@@ -133,7 +144,7 @@ class FakeNM:
             f = a[2]
             v = {"802-11-wireless.ssid": c["ssid"], "802-11-wireless.hidden": "yes" if c["hidden"] else "no",
                  "802-11-wireless.mode": c["mode"], "802-11-wireless-security.psk": c["psk"] if "-s" in a else "",
-                 "802-11-wireless-security.key-mgmt": "wpa-psk" if c["psk"] else "",
+                 "802-11-wireless-security.key-mgmt": (c.get("km") or "wpa-psk") if c["psk"] else "",
                  "802-11-wireless.powersave": c.get("ps", "0 (default)"),
                  "802-11-wireless-security.pmf": c.get("pmf", "0 (default)")}.get(f, "")
             return 0, esc(v) + "\n"
@@ -153,7 +164,8 @@ class FakeNM:
             if "yes" in a:
                 self._probe_hits = set()            # a wildcard scan replaces the list
             def sec(k):
-                return {"transition": "WPA2 WPA3", "pmf-required": "WPA2"}.get(self.kind.get(k), "WPA2")
+                return {"transition": "WPA2 WPA3", "sae-broken": "WPA2 WPA3", "wpa3": "WPA3", "open": ""}.get(
+                    self.kinds(k)[0][0], "WPA2")
             return 0, "".join("%s:%d:%s:%d MHz\n" % (esc(k), sig, sec(k), self.freq.get(k, 2437))
                               for k, (sig, _) in listed.items())
         if a[:4] == ["nmcli", "device", "wifi", "rescan"]:
@@ -163,6 +175,18 @@ class FakeNM:
             self.probed += asked
             self._probe_hits |= {x for x in asked if x in self.on_air()}
             return 0, ""
+        if a[:2] == ["iw", "dev"] and a[3:] == ["scan", "dump"]:
+            if not self.iw_dump_ok:
+                return 1, ""
+            if self.is_ap():
+                return 0, ""
+            listed = [k for k in self.on_air() if k not in self.quiet or k in self._probe_hits]
+            out, n = "", 0
+            for k in listed:
+                for kind, sig in self.kinds(k):
+                    n += 1
+                    out += iw_bss("02:00:00:00:%02x:%02x" % (n // 256, n % 256), k, kind, sig, self.freq.get(k, 2437))
+            return 0, out
         if a[:2] == ["iw", "dev"] and a[3:] == ["scan", "ap-force"]:
             if not self.ap_force:
                 return 1, ""
@@ -208,10 +232,11 @@ class FakeNM:
                 self.phone_on_ap = False            # leaving our hotspot for a network drops its stations
             real = self.on_air().get(c["ssid"])
             pmf = (c.get("pmf") or "0")[0]
-            k = self.kind.get(c["ssid"])
+            km = c.get("km") or "wpa-psk"
             if real and c["ssid"] in self.quiet and not c["hidden"]:
                 real = None                         # ★ a wildcard look never finds it; only a by-name profile does
-            if real and ((k == "transition" and pmf != "1") or (k == "pmf-required" and pmf == "1")):
+            self.attempts.append((c["ssid"], km, pmf))
+            if real and c["psk"] and not any(takes(kind, km, pmf) for kind, _ in self.kinds(c["ssid"])):
                 self.active = ""
                 self.t += int(a[2])
                 self.last_stderr = "Error: Connection activation failed: (7) Secrets were required, but not provided."
@@ -248,7 +273,8 @@ class FakeNM:
                                 "hidden": kv.get("802-11-wireless.hidden") == "yes",
                                 "mode": kv.get("802-11-wireless.mode", "infrastructure"),
                                 "ps": {"2": "2 (disable)"}.get(kv.get("802-11-wireless.powersave"), "0 (default)"),
-                                "pmf": {"1": "1 (disable)", "2": "2 (optional)", "3": "3 (required)"}.get(kv.get("wifi-sec.pmf"), "0 (default)")}
+                                "pmf": {"1": "1 (disable)", "2": "2 (optional)", "3": "3 (required)"}.get(kv.get("wifi-sec.pmf"), "0 (default)"),
+                                "km": kv.get("wifi-sec.key-mgmt", "")}
             return 0, ""
         if a[:3] == ["nmcli", "connection", "modify"]:
             c = self.conns[a[3]]
@@ -258,14 +284,61 @@ class FakeNM:
             if "wifi-sec.psk" in kv: c["psk"] = kv["wifi-sec.psk"]
             if "connection.autoconnect-priority" in kv: c["prio"] = int(kv["connection.autoconnect-priority"])
             if "802-11-wireless.hidden" in kv: c["hidden"] = kv["802-11-wireless.hidden"] == "yes"
+            for kk in ("wifi-sec.key-mgmt", "802-11-wireless-security.key-mgmt"):
+                if kk in kv: c["km"] = kv[kk]
             for pk in ("wifi-sec.pmf", "802-11-wireless-security.pmf"):
                 if pk in kv: c["pmf"] = {"0": "0 (default)", "1": "1 (disable)", "2": "2 (optional)", "3": "3 (required)"}[kv[pk]]
             if "802-11-wireless.powersave" in kv: c["ps"] = {"2": "2 (disable)"}.get(kv["802-11-wireless.powersave"], kv["802-11-wireless.powersave"])
             return 0, ""
         return 0, ""
 
+    def kinds(self, ssid):
+        if ssid in self.bss:
+            return sorted(self.bss[ssid], key=lambda x: -x[1])
+        return [(self.kind.get(ssid) or "wpa2", self.air.get(ssid, (60, ""))[0])]
+
     def is_ap(self):
         return bool(self.active) and self.conns.get(self.active, {}).get("mode") == "ap"
+
+
+def takes(kind, km, pmf):
+    """Does an access point of `kind` (FakeNM.kind) accept a profile asking for key-mgmt `km`, PMF `pmf`?"""
+    if kind == "open":
+        return False                                # (a password profile never matches an open network)
+    if kind in ("wpa2", None):
+        return km == "wpa-psk" and pmf != "3"
+    if kind == "wpa2-mfpc":
+        return km == "wpa-psk"
+    if kind in ("pmf-required", "transition", "wpa3"):
+        return pmf != "1"
+    if kind == "sae-broken":
+        return km == "wpa-psk" and pmf == "1"
+    if kind == "liar-mfpc":
+        return km == "wpa-psk" and pmf == "1"
+    return False
+
+
+def iw_bss(bssid, ssid, kind, sig, freq):
+    """One access point as `iw dev wlan0 scan dump` prints it (iw 6.x on Raspberry Pi OS bookworm)."""
+    rsn = {"wpa2": ("PSK", "16-PTKSA-RC 1-GTKSA-RC (0x000c)"),
+           "wpa2-mfpc": ("PSK", "16-PTKSA-RC 1-GTKSA-RC MFP-capable (0x008c)"),
+           "liar-mfpc": ("PSK", "16-PTKSA-RC 1-GTKSA-RC MFP-capable (0x008c)"),
+           "pmf-required": ("PSK/SHA-256", "16-PTKSA-RC 1-GTKSA-RC MFP-required MFP-capable (0x00cc)"),
+           "transition": ("PSK SAE", "16-PTKSA-RC 1-GTKSA-RC MFP-capable (0x008c)"),
+           "sae-broken": ("PSK SAE", "16-PTKSA-RC 1-GTKSA-RC MFP-capable (0x008c)"),
+           "wpa3": ("SAE", "16-PTKSA-RC 1-GTKSA-RC MFP-required MFP-capable (0x00cc)")}.get(kind or "wpa2")
+    name = "".join(c if (c.isprintable() and c.isascii() and c not in " \\") or (c == " " and 0 < i < len(ssid) - 1)
+                   else "".join("\\x%02x" % b for b in c.encode("utf-8")) for i, c in enumerate(ssid))
+    out = ("BSS %s(on wlan0)\n\tlast seen: 412.580s [boottime]\n\tTSF: 0 usec (0d, 00:00:00)\n\tfreq: %d.0\n"
+           "\tbeacon interval: 100 TUs\n\tcapability: ESS %sShortSlotTime (0x%s)\n\tsignal: %.2f dBm\n"
+           "\tlast seen: 240 ms ago\n\tInformation elements from Probe Response frame:\n\tSSID: %s\n"
+           "\tSupported rates: 6.0* 9.0 12.0* 18.0 24.0* 36.0 48.0 54.0 \n"
+           % (bssid, freq, "" if rsn is None else "Privacy ", "0401" if rsn is None else "0411", -100 + sig / 2.0, name))
+    if rsn:
+        out += ("\tRSN:\t * Version: 1\n\t\t * Group cipher: CCMP\n\t\t * Pairwise ciphers: CCMP\n"
+                "\t\t * Authentication suites: %s\n\t\t * Capabilities: %s\n" % rsn)
+    out += "\tExtended capabilities:\n\t\t * Extended Channel Switching\n\t\t * Operating Mode Notification\n"
+    return out
 
 
 def make(tmp):
@@ -273,6 +346,8 @@ def make(tmp):
     box = vp.Box(nm, dict(vp.DEFAULTS), state_path=os.path.join(tmp, "state.json"))
     box.history_path = os.path.join(tmp, "join-history-%d.json" % id(box))
     box.history = []
+    box.sec_path = os.path.join(tmp, "wifi-security-%d.json" % id(box))
+    box.sec_memory = {}
     box.dev = "wlan0"
     nm.state_path = box.state_path
     return nm, box
@@ -517,78 +592,415 @@ def scan_lists_every_security(tmp):
        "a WPA2/WPA3 network is saved as wpa-psk, and the client profile pins NO band (5 GHz is never excluded by us)")
 
 
+# ★★★ WHAT `iw dev wlan0 scan dump` PRINTS (iw 6.x, Raspberry Pi OS bookworm; layout as iw's scan.c writes it). One
+#     fixture per case Stuart's Portable meets: the iPhone with Maximise Compatibility OFF (5 GHz WPA2/WPA3 transition)
+#     and ON (2.4 GHz plain WPA2), a WPA3-only router, a WPA2 router that offers PMF, one that requires it (PSK/SHA-256),
+#     an open café, a hidden network (empty SSID), an enterprise one, an old WPA1 one, and one access point printed twice
+#     (beacon + probe response) with the RSN capabilities only as hex on the second.
+IW_IPHONE_TRANSITION = """BSS 9e:2c:4a:1b:7d:01(on wlan0)
+\tlast seen: 1871.204s [boottime]
+\tTSF: 0 usec (0d, 00:00:00)
+\tfreq: 5220.0
+\tbeacon interval: 100 TUs
+\tcapability: ESS Privacy SpectrumMgmt ShortSlotTime RadioMeasure (0x1511)
+\tsignal: -41.00 dBm
+\tlast seen: 120 ms ago
+\tInformation elements from Probe Response frame:
+\tSSID: Stuey3D\\xe2\\x80\\x99s iPhone
+\tSupported rates: 6.0* 9.0 12.0* 18.0 24.0* 36.0 48.0 54.0
+\tDS Parameter set: channel 44
+\tCountry: GB\tEnvironment: Indoor/Outdoor
+\t\tChannels [36 - 48] @ 23 dBm
+\tPower constraint: 0 dB
+\tRSN:\t * Version: 1
+\t\t * Group cipher: CCMP
+\t\t * Pairwise ciphers: CCMP
+\t\t * Authentication suites: PSK SAE
+\t\t * Capabilities: 1-PTKSA-RC 1-GTKSA-RC MFP-capable (0x0080)
+\tHT capabilities:
+\t\tCapabilities: 0x1ef
+\t\t\tRX LDPC
+\tExtended capabilities:
+\t\t * Extended Channel Switching
+\t\t * BSS Transition
+\t\t * Operating Mode Notification
+\tWMM:\t * Parameter version 1
+\t\t * BE: CW 15-1023, AIFSN 3
+"""
+IW_IPHONE_COMPAT = """BSS 9e:2c:4a:1b:7d:02(on wlan0)
+\tlast seen: 1871.300s [boottime]
+\tfreq: 2437
+\tbeacon interval: 100 TUs
+\tcapability: ESS Privacy ShortSlotTime (0x0411)
+\tsignal: -44.00 dBm
+\tlast seen: 80 ms ago
+\tSSID: Stuey3D\\xe2\\x80\\x99s iPhone
+\tDS Parameter set: channel 6
+\tRSN:\t * Version: 1
+\t\t * Group cipher: CCMP
+\t\t * Pairwise ciphers: CCMP
+\t\t * Authentication suites: PSK
+\t\t * Capabilities: 1-PTKSA-RC 1-GTKSA-RC (0x0000)
+"""
+IW_WPA3_ONLY = """BSS 3c:28:6d:aa:bb:01(on wlan0)
+\tfreq: 5500
+\tcapability: ESS Privacy SpectrumMgmt ShortSlotTime (0x0511)
+\tsignal: -60.00 dBm
+\tSSID: Lab WPA3
+\tRSN:\t * Version: 1
+\t\t * Group cipher: CCMP
+\t\t * Pairwise ciphers: CCMP
+\t\t * Authentication suites: SAE
+\t\t * Capabilities: 16-PTKSA-RC 1-GTKSA-RC MFP-required MFP-capable (0x00cc)
+"""
+IW_WPA2_MFPC = """BSS 74:ac:b9:00:11:22(on wlan0) -- associated
+\tfreq: 5180
+\tcapability: ESS Privacy SpectrumMgmt ShortSlotTime (0x0511)
+\tsignal: -52.00 dBm
+\tSSID: Meow!
+\tRSN:\t * Version: 1
+\t\t * Group cipher: CCMP
+\t\t * Pairwise ciphers: CCMP
+\t\t * Authentication suites: PSK FT/PSK
+\t\t * Capabilities: 16-PTKSA-RC 1-GTKSA-RC MFP-capable (0x008c)
+"""
+IW_WPA2_MFPR = """BSS 74:ac:b9:00:11:33(on wlan0)
+\tfreq: 2412
+\tcapability: ESS Privacy ShortSlotTime (0x0411)
+\tsignal: -70.00 dBm
+\tSSID: Office
+\tRSN:\t * Version: 1
+\t\t * Group cipher: CCMP
+\t\t * Pairwise ciphers: CCMP
+\t\t * Authentication suites: PSK/SHA-256
+\t\t * Capabilities: 16-PTKSA-RC 1-GTKSA-RC MFP-required MFP-capable (0x00cc)
+"""
+IW_OPEN_AND_HIDDEN = """BSS 00:11:22:33:44:55(on wlan0)
+\tfreq: 2462
+\tcapability: ESS ShortSlotTime (0x0401)
+\tsignal: -75.00 dBm
+\tSSID: Cafe Free WiFi
+BSS 00:11:22:33:44:66(on wlan0)
+\tfreq: 2462
+\tcapability: ESS Privacy ShortSlotTime (0x0411)
+\tsignal: -50.00 dBm
+\tSSID:
+\tRSN:\t * Version: 1
+\t\t * Authentication suites: PSK
+\t\t * Capabilities: 1-PTKSA-RC 1-GTKSA-RC (0x0000)
+BSS 00:11:22:33:44:77(on wlan0)
+\tfreq: 5745
+\tsignal: -66.00 dBm
+\tSSID: \\x00\\x00\\x00\\x00
+"""
+IW_ENTERPRISE_WPA1 = """BSS 08:00:00:00:00:01(on wlan0)
+\tfreq: 5200
+\tcapability: ESS Privacy (0x0011)
+\tsignal: -58.00 dBm
+\tSSID: eduroam
+\tRSN:\t * Version: 1
+\t\t * Group cipher: CCMP
+\t\t * Pairwise ciphers: CCMP
+\t\t * Authentication suites: IEEE 802.1X FT/IEEE 802.1X
+\t\t * Capabilities: 1-PTKSA-RC 1-GTKSA-RC MFP-capable (0x0080)
+BSS 08:00:00:00:00:02(on wlan0)
+\tfreq: 2422
+\tcapability: ESS Privacy (0x0011)
+\tsignal: -80.00 dBm
+\tSSID: OldRouter
+\tWPA:\t * Version: 1
+\t\t * Group cipher: TKIP
+\t\t * Pairwise ciphers: TKIP
+\t\t * Authentication suites: PSK
+"""
+# One access point printed twice in one dump (iw on some kernels repeats a BSS whose beacon and probe response differ);
+# the second copy has the capabilities as HEX ONLY (an older iw prints no words for them).
+IW_TWICE_HEX_ONLY = """BSS 9e:2c:4a:1b:7d:01(on wlan0)
+\tfreq: 5220
+\tsignal: -45.00 dBm
+\tSSID: Twice
+\tRSN:\t * Version: 1
+\t\t * Authentication suites: PSK
+\t\t * Capabilities: (0x0000)
+BSS 9e:2c:4a:1b:7d:01(on wlan0)
+\tfreq: 5220
+\tsignal: -45.00 dBm
+\tSSID: Twice
+\tRSN:\t * Version: 1
+\t\t * Authentication suites: PSK SAE
+\t\t * Capabilities: (0x0080)
+"""
+
+
+def rsn_detection():
+    """★★★ DETECTION FIRST (2026-10-21): the RSN element read from iw → what the network is → what we ask for."""
+    IPH = "Stuey3D’s iPhone"
+    def one(text, ssid):
+        return vp.advert_of(vp.parse_iw_scan(text)[ssid])
+
+    a = one(IW_IPHONE_TRANSITION, IPH)
+    b = vp.parse_iw_scan(IW_IPHONE_TRANSITION)[IPH][0]
+    ok(b["akm"] == {"PSK", "SAE"} and b["mfpc"] and not b["mfpr"] and b["freq"] == 5220 and b["signal"] == -41.0
+       and b["bssid"] == "9e:2c:4a:1b:7d:01",
+       "iw fixture, iPhone Maximise Compatibility OFF: PSK+SAE, MFP capable not required, 5220 MHz, -41 dBm, curly ’ decoded")
+    ok(a["kind"] == "transition" and vp.plan_for(a) == {"km": "wpa-psk", "pmf": "2"},
+       "…→ WPA2/WPA3 transition → wpa-psk (SAE allowed), PMF OPTIONAL — what joined it on the device")
+    ok("Country" not in str(b) and b["akm"] == {"PSK", "SAE"},
+       "…the HT / Extended capabilities / WMM '*' lines after the RSN element are not read as RSN")
+    a = one(IW_IPHONE_COMPAT, IPH)
+    ok(a["kind"] == "wpa2" and vp.plan_for(a) == {"km": "wpa-psk", "pmf": "1"},
+       "iw fixture, iPhone Maximise Compatibility ON: plain WPA2, no MFP → PMF off")
+    a = one(IW_WPA3_ONLY, "Lab WPA3")
+    ok(a["kind"] == "wpa3" and vp.plan_for(a) == {"km": "sae", "pmf": "3"}, "iw fixture, WPA3 only: SAE + MFP required → sae, PMF required")
+    a = one(IW_WPA2_MFPC, "Meow!")
+    ok(a["kind"] == "wpa2-mfpc" and vp.plan_for(a) == {"km": "wpa-psk", "pmf": "2"},
+       "iw fixture, WPA2 mesh (PSK + FT/PSK) with MFP capable, associated: → PMF optional")
+    a = one(IW_WPA2_MFPR, "Office")
+    ok(a["kind"] == "wpa2-mfpr" and vp.plan_for(a) == {"km": "wpa-psk", "pmf": "3"},
+       "iw fixture, WPA2 PSK/SHA-256 + MFP required: → PMF required")
+    got = vp.parse_iw_scan(IW_OPEN_AND_HIDDEN)
+    ok(set(got) == {"Cafe Free WiFi"} and vp.plan_for(vp.advert_of(got["Cafe Free WiFi"])) is None
+       and vp.advert_of(got["Cafe Free WiFi"])["kind"] == "open",
+       "iw fixture, open café: open, nothing to choose; hidden access points (empty / NUL SSID) skipped")
+    got = vp.parse_iw_scan(IW_ENTERPRISE_WPA1)
+    ok(vp.advert_of(got["eduroam"])["kind"] == "other" and vp.plan_for(vp.advert_of(got["eduroam"])) is None
+       and got["eduroam"][0]["akm"] == {"IEEE 802.1X", "FT/IEEE 802.1X"},
+       "iw fixture, enterprise (802.1X): not a password network — left alone ('IEEE 802.1X' kept as one suite)")
+    ok(vp.advert_of(got["OldRouter"])["kind"] == "wpa1" and vp.plan_for(vp.advert_of(got["OldRouter"]))["pmf"] == "1",
+       "iw fixture, old WPA1 (TKIP) router: wpa-psk, PMF off")
+    got = vp.parse_iw_scan(IW_TWICE_HEX_ONLY)["Twice"]
+    a = vp.advert_of(got)
+    ok(len(got) == 2 and got[1]["mfpc"] and not got[1]["mfpr"] and a["kind"] == "transition" and a["mixed"],
+       "one BSSID printed twice, capabilities as hex only: MFPC read from 0x0080; PSK vs PSK+SAE → the setting both take")
+    ok(vp.parse_iw_scan("") == {} and vp.parse_iw_scan("garbage\nSSID: x\n") == {} and vp.advert_of([]) is None,
+       "empty or junk iw output: nothing heard, never an exception")
+    allfix = (IW_IPHONE_TRANSITION + IW_WPA3_ONLY + IW_WPA2_MFPC + IW_WPA2_MFPR + IW_OPEN_AND_HIDDEN + IW_ENTERPRISE_WPA1)
+    ok(set(vp.parse_iw_scan(allfix)) == {IPH, "Lab WPA3", "Meow!", "Office", "Cafe Free WiFi", "eduroam", "OldRouter"},
+       "every fixture in one dump: each network found under its own name")
+    # fingerprints: the same security from another BSSID is the same; any change in AKM or MFP is not
+    f1 = vp.advert_of(vp.parse_iw_scan(IW_WPA2_MFPC)["Meow!"])["fp"]
+    f2 = vp.advert_of(vp.parse_iw_scan(IW_WPA2_MFPC.replace("74:ac:b9:00:11:22", "aa:bb:cc:dd:ee:ff"))["Meow!"])["fp"]
+    f3 = vp.advert_of(vp.parse_iw_scan(IW_WPA2_MFPC.replace("MFP-capable (0x008c)", "(0x000c)"))["Meow!"])["fp"]
+    ok(f1 == f2 == "FT/PSK+PSK/C" and f3 == "FT/PSK+PSK/0",
+       "fingerprint: a new BSSID with the same security is the same network; MFP switched off is a change")
+    # nmcli's SECURITY column, the second opinion
+    nmk = {s: vp.advert_from_nm(s)["kind"] for s in ("WPA2 WPA3", "WPA3", "WPA2", "WPA1 WPA2", "", "--", "WPA2 802.1X", "OWE", "WPA1")}
+    ok(nmk == {"WPA2 WPA3": "transition", "WPA3": "wpa3", "WPA2": "wpa2-mfpc", "WPA1 WPA2": "wpa2-mfpc", "": "open",
+               "--": "open", "WPA2 802.1X": "other", "OWE": "other", "WPA1": "wpa1"},
+       "nmcli SECURITY → kind (no MFP in nmcli, so plain WPA2 is asked for with PMF optional)")
+    ok(vp.plan_for(None) == {"km": "wpa-psk", "pmf": "2"}, "not heard (hidden / not on yet) → wpa-psk, PMF optional")
+    # the ladder
+    L = lambda km, pmf: [(p["km"], p["pmf"]) for p in vp.ladder_of({"km": km, "pmf": pmf})]
+    ok(L("sae", "3") == [("wpa-psk", "2"), ("wpa-psk", "1")] and L("wpa-psk", "3") == [("wpa-psk", "2"), ("wpa-psk", "1")]
+       and L("wpa-psk", "2") == [("wpa-psk", "1")] and L("wpa-psk", "1") == [("wpa-psk", "2")] and L("wpa-psk", "0") == [("wpa-psk", "1")],
+       "the ladder after a refusal: SAE/required → optional → off; optional → off; off → optional")
+    ok(vp.plan_words({"km": "sae", "pmf": "3"}) == "WPA3 (SAE), PMF required" and vp.plan_words({"km": "", "pmf": "0"}) == "open",
+       "the history's words for each setting")
+    ok(vp.load_wifi_sec("/nonexistent/x.json") == {}, "no memory file: nothing remembered, never a failure")
+
+
 def wpa3_transition_hotspots(tmp):
-    """★★★ STUART'S PHONE HOTSPOTS (2026-10-20): iPhone and Galaxy A26, both 5 GHz WPA2/WPA3 transition, never joined by
-    the Pi 3A+ (which joins his WPA2 mesh on the same channel at 433 Mbit/s). NM's wpa-psk offers SAE unless PMF is off,
-    and this chip fumbles SAE: so client networks are plain WPA2 (PMF off), with ONE retry the other way; a hotspot that
-    answers only its own name is asked for by name; and every attempt lands in a join history the owner can read later."""
-    def prof(ssid, psk, rank, pmf="0 (default)", hidden=False):
+    """★★★ STUART'S PHONE HOTSPOTS (2026-10-20/21): iPhone and Galaxy A26, both 5 GHz WPA2/WPA3 transition. On the device
+    (2026-10-21) the iPhone REFUSED a PMF-off profile at once and JOINED with SAE allowed + PMF optional. So: read what
+    the network advertises (iw's RSN element) before every join, ask for exactly that, run the whole ladder on a refusal,
+    remember what joined only for as long as the network advertises the same thing; a hotspot that answers only its own
+    name is asked for by name; and every attempt lands in a join history the owner can read later."""
+    def prof(ssid, psk, rank, pmf="0 (default)", hidden=False, km=""):
         return {"type": "802-11-wireless", "ssid": ssid, "psk": psk, "prio": vp.PRIORITY.get(rank, 0),
-                "hidden": hidden, "mode": "infrastructure", "pmf": pmf}
+                "hidden": hidden, "mode": "infrastructure", "pmf": pmf, "km": km}
     AP = {"type": "802-11-wireless", "ssid": "Pocket-SDR", "psk": "pocketpass", "prio": 0, "hidden": False, "mode": "ap"}
     IPH, A26 = "Stuey3D’s iPhone", "Stuart's A26"
 
-    # ── a profile saved by an older build (NM's default PMF): migrated to PMF off, then it joins at once ──
+    def again(nm, box):
+        """The link drops (the router is swapped, the phone hotspot restarts): the box looks again."""
+        nm.active, nm.attempts = "", []
+        box.read_active()
+
+    # ── ★★★ THE DEVICE CASE: an 11.0.9 profile (PMF off) for the 5 GHz transition iPhone — detected, rewritten, joined ──
     nm, box = make(tmp)
-    nm.conns = {"vibe-net-1": prof(IPH, "phonepass", 1), "vibe-net-2": prof("Meow!", "meowpass1", 2),
+    nm.conns = {"vibe-net-1": prof(IPH, "phonepass", 1, pmf="1 (disable)"),
+                "vibe-net-2": prof("Meow!", "meowpass1", 2, pmf="1 (disable)"),
                 "vibe-net-3": prof("Cafe", "", 3), vp.AP_NAME: dict(AP)}
-    nm.conns["vibe-net-3"]["psk"] = ""
     nm.air = {IPH: (60, "phonepass"), "Meow!": (80, "meowpass1")}
-    nm.kind, nm.freq = {IPH: "transition"}, {IPH: 5180, "Meow!": 5180}
+    nm.kind, nm.freq = {IPH: "transition"}, {IPH: 5220, "Meow!": 5180}
     with redirect_stdout(io.StringIO()) as out:
-        fixed = box.migrate_pmf()
-        again = box.migrate_pmf()
-    ok(sorted(fixed) == ["vibe-net-1", "vibe-net-2"] and again == [] and nm.conns["vibe-net-3"]["pmf"].startswith("0"),
-       "migration: secured profiles at NM's default PMF → PMF off (plain WPA2); an open one untouched; idempotent")
-    run_for(nm, box, 60)
+        run_for(nm, box, 60)
     h = box.history
-    ok(nm.active == "vibe-net-1" and h and h[-1]["result"] == "joined" and [e["ssid"] for e in h if e["result"] != "not seen"] == [IPH],
-       "★★★ the 5 GHz WPA2/WPA3 iPhone hotspot: joined FIRST TIME as plain WPA2 (no SAE offered)")
-    ok(h[-1]["band"] == "5 GHz" and h[-1]["freq"] == 5180 and h[-1]["seen"] == "WPA2 WPA3"
-       and h[-1]["used"] == "WPA2-PSK, PMF off" and h[-1]["visible"] == "scan",
-       "…and the history line says so: 5 GHz (5180), seen as WPA2 WPA3, tried as WPA2-PSK PMF off, found by the scan")
+    ok(nm.active == "vibe-net-1" and nm.attempts[:1] == [(IPH, "wpa-psk", "2")],
+       "★★★ the 5 GHz WPA2/WPA3 iPhone (saved PMF off by 11.0.9): FIRST attempt already SAE allowed + PMF optional, joined")
+    ok(nm.conns["vibe-net-1"]["pmf"].startswith("2") and nm.conns["vibe-net-2"]["pmf"].startswith("1"),
+       "…its profile now says PMF optional; Meow! (not joined, plain WPA2) is untouched")
+    ok(h and h[-1]["result"] == "joined" and h[-1]["band"] == "5 GHz" and h[-1]["freq"] == 5220
+       and h[-1]["seen"] == "WPA2/WPA3" and h[-1]["used"] == "WPA2/WPA3 (SAE allowed), PMF optional",
+       "…the history says: 5 GHz (5220), advertised WPA2/WPA3, joined with SAE allowed + PMF optional")
+    ok("advertises WPA2/WPA3 — joining with WPA2/WPA3 (SAE allowed), PMF optional" in out.getvalue(),
+       "…and the log says why, in plain words")
     ok(any(e["ssid"] == "Cafe" and e["result"] == "not seen" for e in h), "…and the absent network 3, asked for by name, is 'not seen'")
+    ok(box.sec_memory.get(IPH, {}).get("pmf") == "2" and vp.load_wifi_sec(box.sec_path) == box.sec_memory
+       and oct(os.stat(box.sec_path).st_mode & 0o777) == "0o600",
+       "…what joined it is remembered (settings partition, root-only)")
 
-    # ── the same network on a profile that still offers SAE (no migration yet): fails, retried with PMF off, KEPT ──
+    # ── each advertisement → the setting asked for, first time, no retry ──
+    cases = [("wpa3", ("sae", "3")), ("transition", ("wpa-psk", "2")), ("wpa2-mfpc", ("wpa-psk", "2")),
+             ("pmf-required", ("wpa-psk", "3")), ("wpa2", ("wpa-psk", "1"))]
+    for kind, want in cases:
+        nm, box = make(tmp)
+        nm.conns = {"vibe-net-1": prof("Net", "netpass12", 1, pmf="1 (disable)"), vp.AP_NAME: dict(AP)}
+        nm.air, nm.kind = {"Net": (70, "netpass12")}, {"Net": kind}
+        with redirect_stdout(io.StringIO()):
+            run_for(nm, box, 40)
+        ok(nm.active == "vibe-net-1" and nm.attempts == [("Net", want[0], want[1])],
+           "advertises %-12s → joined first time with key-mgmt %s, PMF %s" % (kind, want[0], want[1]))
+
+    # ── not heard (iw has nothing, nmcli has nothing: a hidden network) → PMF optional ──
     nm, box = make(tmp)
-    nm.conns = {"vibe-net-1": prof(IPH, "phonepass", 1), vp.AP_NAME: dict(AP)}
-    nm.air, nm.kind, nm.freq = {IPH: (60, "phonepass")}, {IPH: "transition"}, {IPH: 5180}
+    nm.conns = {"vibe-net-1": prof("Hidden", "hidpass12", 1, pmf="1 (disable)", hidden=True), vp.AP_NAME: dict(AP)}
+    nm.air, nm.kind, nm.quiet = {"Hidden": (60, "hidpass12")}, {"Hidden": "pmf-required"}, {"Hidden"}
+    real = nm.run
+    def no_probe(args, timeout=40, secret=False):
+        if args[:4] == ["nmcli", "device", "wifi", "rescan"]:
+            return 1, ""                             # a directed probe that hears nothing back
+        return real(args, timeout, secret)
+    nm.run = no_probe
+    with redirect_stdout(io.StringIO()):
+        run_for(nm, box, 60)
+    ok(nm.active == "vibe-net-1" and nm.attempts[:1] == [("Hidden", "wpa-psk", "2")],
+       "a network not heard at all (hidden, nothing from iw or nmcli): joined blind with PMF optional")
+
+    # ── iw has nothing, nmcli's SECURITY column is the second opinion ──
+    nm, box = make(tmp)
+    nm.conns = {"vibe-net-1": prof("W3", "w3pass123", 1), vp.AP_NAME: dict(AP)}
+    nm.air, nm.kind, nm.iw_dump_ok = {"W3": (60, "w3pass123")}, {"W3": "wpa3"}, False
+    with redirect_stdout(io.StringIO()):
+        run_for(nm, box, 40)
+    ok(nm.active == "vibe-net-1" and nm.attempts[:1] == [("W3", "sae", "3")],
+       "iw cannot say: nmcli's \"WPA3\" is enough — SAE, PMF required")
+
+    # ── THE SAFETY NET: a router that advertises what it does not honour → the ladder, kept, remembered ──
+    nm, box = make(tmp)
+    nm.conns = {"vibe-net-1": prof("Liar", "liarpass1", 1), vp.AP_NAME: dict(AP)}
+    nm.air, nm.kind = {"Liar": (60, "liarpass1")}, {"Liar": "sae-broken"}
     with redirect_stdout(io.StringIO()) as out:
         run_for(nm, box, 90)
-    ok(nm.active == "vibe-net-1" and nm.conns["vibe-net-1"]["pmf"].startswith("1"),
-       "a profile still offering SAE: refused, retried ONCE with PMF off, joined — and PMF off is kept on it")
-    ok([e["result"] for e in box.history] == ["auth failed", "joined"]
-       and box.history[0]["used"].startswith("WPA2/WPA3") and box.history[1]["used"] == "WPA2-PSK, PMF off",
-       "…the history shows both: auth failed (SAE allowed), then joined (WPA2-PSK, PMF off)")
-    ok(out.getvalue().count("kept that way") == 1, "…and it is logged once")
+    ok(nm.active == "vibe-net-1" and [x[2] for x in nm.attempts] == ["2", "1"] and nm.conns["vibe-net-1"]["pmf"].startswith("1"),
+       "advertises WPA2/WPA3 but SAE fails: optional refused → plain WPA2 (PMF off) joined, kept on the profile")
+    ok([e["result"] for e in box.history] == ["auth failed", "joined"] and box.sec_memory["Liar"]["pmf"] == "1",
+       "…the history shows both, and PMF off is remembered for this advertisement")
+    # next boot: the same advertisement → straight to what worked, no refusal first
+    nm.active, nm.attempts = "", []
+    box2 = vp.Box(nm, dict(vp.DEFAULTS), state_path=box.state_path)
+    box2.dev, box2.history_path, box2.history, box2.sec_path = "wlan0", box.history_path + "2", [], box.sec_path
+    box2.sec_memory = vp.load_wifi_sec(box.sec_path)
+    nm.conns["vibe-net-1"]["pmf"] = "2 (optional)"            # (as if NM had it otherwise — the memory decides)
+    with redirect_stdout(io.StringIO()) as out:
+        run_for(nm, box2, 60)
+    ok(nm.active == "vibe-net-1" and nm.attempts == [("Liar", "wpa-psk", "1")] and "as when it last joined" in out.getvalue(),
+       "after a restart, the same advertisement: what joined last time, first time (no refusal first)")
 
-    # ── a WPA2 network that REQUIRES PMF: PMF off fails, the retry with optional works, kept; a re-save keeps it ──
+    # WPA3 advertised, SAE fails, PSK-only works: SAE → PSK optional → PSK off
     nm, box = make(tmp)
-    nm.air, nm.kind = {"Office": (60, "officepass")}, {"Office": "pmf-required"}
+    nm.conns = {"vibe-net-1": prof("Liar3", "liarpass1", 1), vp.AP_NAME: dict(AP)}
+    nm.air, nm.kind = {"Liar3": (60, "liarpass1")}, {"Liar3": "sae-broken"}
+    real2 = nm.run
+    def wpa3_says(args, timeout=40, secret=False):              # it ADVERTISES SAE only
+        rc, o = real2(args, timeout, secret)
+        if args[3:] == ["scan", "dump"]:
+            o = o.replace("Authentication suites: PSK SAE", "Authentication suites: SAE").replace("(0x008c)", "(0x00cc)")
+        return rc, o
+    nm.run = wpa3_says
     with redirect_stdout(io.StringIO()):
-        box.apply(req([("Office", "officepass", {})]))
-    ok(nm.conns["vibe-net-1"]["pmf"].startswith("1"), "a newly saved network is plain WPA2 (PMF off)")
+        run_for(nm, box, 120)
+    ok(nm.active == "vibe-net-1" and nm.attempts == [("Liar3", "sae", "3"), ("Liar3", "wpa-psk", "2"), ("Liar3", "wpa-psk", "1")],
+       "advertises WPA3 only but will not do it: the WHOLE ladder — SAE → WPA2/WPA3 optional → plain WPA2 — joined on the last")
+
+    # a router that says MFP capable and then refuses PMF: optional → off
+    nm, box = make(tmp)
+    nm.conns = {"vibe-net-1": prof("Mfp", "mfppass12", 1), vp.AP_NAME: dict(AP)}
+    nm.air, nm.kind = {"Mfp": (60, "mfppass12")}, {"Mfp": "liar-mfpc"}
     with redirect_stdout(io.StringIO()):
         run_for(nm, box, 90)
-    ok(nm.active == "vibe-net-1" and nm.conns["vibe-net-1"]["pmf"].startswith("2"),
-       "a WPA2 network that requires PMF: PMF off refused, PMF optional joined — and kept")
-    with redirect_stdout(io.StringIO()):
-        box.apply(req([("Office", "", {"keep": True})]))
-    ok(nm.conns["vibe-net-1"]["pmf"].startswith("2"), "…re-saving Wi-Fi keeps that verdict (same slot, same name)")
-    with redirect_stdout(io.StringIO()):
-        box.migrate_pmf()
-    ok(nm.conns["vibe-net-1"]["pmf"].startswith("2"), "…and the migration never undoes it")
+    ok(nm.active == "vibe-net-1" and [x[2] for x in nm.attempts] == ["2", "1"],
+       "advertises PMF capable but refuses it: optional → off, joined")
 
-    # ── a wrong password: two attempts at most, the profile put back, and no flip-flopping on later tries ──
+    # ── ★★★ THE SAME NAME, DIFFERENT ROUTERS (Stuart: "I have had Meow! over multiple different routers") ──
+    nm, box = make(tmp)
+    nm.conns = {"vibe-net-1": prof("Meow!", "meowpass1", 1), vp.AP_NAME: dict(AP)}
+    nm.air, nm.kind = {"Meow!": (80, "meowpass1")}, {"Meow!": "wpa2"}
+    with redirect_stdout(io.StringIO()):
+        run_for(nm, box, 40)
+    ok(nm.active == "vibe-net-1" and nm.attempts == [("Meow!", "wpa-psk", "1")], "(Meow! on the old router: plain WPA2, PMF off)")
+    # the router is replaced by a WPA2/WPA3 one: same name, same password — and PMF off would now be refused
+    nm.kind["Meow!"] = "transition"
+    again(nm, box)
+    with redirect_stdout(io.StringIO()) as out:
+        run_for(nm, box, 60)
+    ok(nm.active == "vibe-net-1" and nm.attempts == [("Meow!", "wpa-psk", "2")] and "changed since it last joined" in out.getvalue(),
+       "★★ Meow! moves to a WPA2/WPA3 router: the change is SEEN, the profile rebuilt before the join, joined first time")
+    ok(box.sec_memory["Meow!"]["pmf"] == "2" and box.sec_memory["Meow!"]["adv"] == "transition", "…and the memory follows it")
+    # …then a WPA3-only one, then back to plain WPA2 (a DOWNGRADE: joined, logged in plain words)
+    nm.kind["Meow!"] = "wpa3"
+    again(nm, box)
+    with redirect_stdout(io.StringIO()):
+        run_for(nm, box, 60)
+    ok(nm.active == "vibe-net-1" and nm.attempts == [("Meow!", "sae", "3")], "Meow! as WPA3 only: SAE, PMF required, first time")
+    nm.kind["Meow!"] = "wpa2"
+    again(nm, box)
+    with redirect_stdout(io.StringIO()) as out:
+        run_for(nm, box, 60)
+    ok(nm.active == "vibe-net-1" and nm.attempts == [("Meow!", "wpa-psk", "1")],
+       "★★ WPA3 only → plain WPA2 (a downgrade): NOT blocked — rebuilt and joined first time")
+    ok("WEAKER than the WPA3 only (PMF required) it advertised when it last joined" in out.getvalue()
+       and "another network using the same name" in out.getvalue(),
+       "…and the downgrade is logged in plain words (a replaced router — or another network using the name)")
+    # a remembered setting that is refused (same advertisement, the router now behaves differently): the ladder again
+    nm.kind["Meow!"] = "wpa2-mfpc"
+    again(nm, box)
+    with redirect_stdout(io.StringIO()):
+        run_for(nm, box, 40)
+    nm.kind["Meow!"] = "liar-mfpc"                    # (prints the same RSN — the fingerprint does not change)
+    again(nm, box)
+    with redirect_stdout(io.StringIO()):
+        run_for(nm, box, 90)
+    ok(nm.active == "vibe-net-1" and [x[2] for x in nm.attempts] == ["2", "1"],
+       "a REMEMBERED setting refused: never 'known, give up' — the ladder runs again and the new answer is kept")
+    ok(box.sec_memory["Meow!"]["pmf"] == "1", "…and remembered")
+
+    # ── two access points, one name, different security (old router + new mesh, both live) ──
+    nm, box = make(tmp)
+    nm.conns = {"vibe-net-1": prof("Meow!", "meowpass1", 1, pmf="1 (disable)"), vp.AP_NAME: dict(AP)}
+    nm.air = {"Meow!": (80, "meowpass1")}
+    nm.bss = {"Meow!": [("wpa2", 80), ("wpa3", 50)]}
+    with redirect_stdout(io.StringIO()) as out:
+        run_for(nm, box, 40)
+    ok(nm.active == "vibe-net-1" and nm.attempts == [("Meow!", "wpa-psk", "2")] and "access points disagree" in out.getvalue(),
+       "two access points named Meow! (plain WPA2 + WPA3 only): the one setting both take — SAE allowed, PMF optional")
+    adv = vp.advert_of(vp.parse_iw_scan(nm.run(["iw", "dev", "wlan0", "scan", "dump"])[1])["Meow!"])
+    ok(adv["kind"] == "transition" and adv["n"] == 2 and adv["mixed"] and adv["fp"] == "PSK/0,SAE/R",
+       "…its fingerprint is the set of (AKM, MFP) heard — never the BSSIDs")
+
+    # ── a wrong password: the ladder once, the profile back to the detected setting, no flip-flopping later ──
     nm, box = make(tmp)
     nm.conns = {"vibe-net-1": prof(IPH, "WRONGpass", 1, pmf="1 (disable)"), vp.AP_NAME: dict(AP)}
     nm.air, nm.kind = {IPH: (60, "phonepass")}, {IPH: "transition"}
     with redirect_stdout(io.StringIO()):
         run_for(nm, box, 200)
     ups = sum(1 for c in nm.calls if c[3:6] == ["connection", "up", "vibe-net-1"])
-    ok(nm.active == vp.AP_NAME and nm.conns["vibe-net-1"]["pmf"].startswith("1") and 2 <= ups <= 3,
-       "a wrong password: one retry at most, the profile back to PMF off, its own hotspot raised (%d attempts)" % ups)
+    ok(nm.active == vp.AP_NAME and nm.conns["vibe-net-1"]["pmf"].startswith("2") and 2 <= ups <= 3 and IPH not in box.sec_memory,
+       "a wrong password: the ladder once (%d attempts), profile back to what it advertises, nothing remembered" % ups)
     ok("password" in box.last_error, "…and the owner is still told it refused the password")
+
+    # ── saving: each network as advertised in the last scan; a re-save keeps a slot's setting ──
+    nm, box = make(tmp)
+    nm.air, nm.kind = {"Office": (60, "officepass"), "W3": (60, "w3pass123")}, {"Office": "pmf-required", "W3": "wpa3"}
+    with redirect_stdout(io.StringIO()):
+        box.scan()
+        box.apply(req([("Office", "officepass", {}), ("W3", "w3pass123", {}), ("Unheard", "unheard12", {})]))
+    ok(nm.conns["vibe-net-1"]["pmf"].startswith("3") and nm.conns["vibe-net-2"]["km"] == "sae"
+       and nm.conns["vibe-net-3"]["pmf"].startswith("2"),
+       "saving networks from the scan: WPA2 PMF-required → required, WPA3 → SAE, one not heard → PMF optional")
+    with redirect_stdout(io.StringIO()):
+        box.apply(req([("Office", "", {"keep": True})]))
+    ok(nm.conns["vibe-net-1"]["pmf"].startswith("3"), "…re-saving Wi-Fi keeps a slot's setting (same slot, same name)")
 
     # ── ★★★ a hotspot that answers only when asked by name (an idle iPhone): directed probe, saved "not visible" ──
     nm, box = make(tmp)
@@ -967,6 +1379,7 @@ def main():
         powersave_phase0(tempfile.mkdtemp())
         scan_lists_every_security(tempfile.mkdtemp())
         wpa3_transition_hotspots(tempfile.mkdtemp())
+        rsn_detection()
 
     out = log.getvalue()
     for secret in ("homepass1", "phonepass", "pocketpass", "workpass1"):
