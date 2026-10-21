@@ -125,6 +125,8 @@ deps_for() {
     test-bulk-pace)     echo "" ;;
     # ★★ A burst of tunes: the newest wins, paced by the server's load (vibe_tune_pace.h, 2026-10-05).
     test-tune-pace)     echo "" ;;
+    # ★★★ …and DAB block steps through the same hold (2026-10-21): a burst re-acquires on its last block.
+    test-dab-block-pace) echo "" ;;
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.
     test-room-passband) echo "" ;;
@@ -626,6 +628,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    D-pad, the list walks and scrolls, ✕ picks, ○ gives it back. The bench multiplex through the fake radio.
 printf '\n\033[1m── a game controller in DAB on the served page (simulated pad, bench multiplex) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-gamepad-dab.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ HAMMERING THE MULTIPLEX BUTTON TUNES ONCE (Stuart, 2026-10-21: "rapidly tune down to 7D … dont tune the SDR just
+#     hold it and tune on final move"; "I tried to rapid tune the Pi2 earlier and it kept snapping back"): the server
+#     holds a raw socket's per-press `dab` steps latest-wins (a lone press at once), and the served page sends one
+#     `dab` per burst with no snap-back. Same VIBESERVER_BIN rule; the browser half wants Edge. ~40 s.
+printf '\n\033[1m── DAB: a burst of multiplex presses is one tune (server + served page, end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dab-burst.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADMIN (Stuart, 2026-10-18: "in the admin menu there is no way to navigate it with the controller"): the highlight goes
 #    into the panel and stays there, carries on after the tables redraw, and ○ closes it.
