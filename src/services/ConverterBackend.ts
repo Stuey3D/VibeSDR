@@ -106,6 +106,8 @@ export function wrapConverterCallbacks<T extends Record<string, any>>(
       frequency: toDisplay(s.frequency, c),
       centerHz:  toDisplay(s.centerHz, c),
       ...(s.trueCenterHz !== undefined ? { trueCenterHz: toDisplay(s.trueCenterHz, c) } : {}),
+      // ★ The server's own dial is a frequency too — unconverted, LocalAudioPlayer could never match it.
+      ...(s.serverDial ? { serverDial: { ...s.serverDial, frequency: toDisplay(s.serverDial.frequency, c) } } : {}),
     };
   };
 
@@ -227,6 +229,7 @@ class ConverterBackend implements SDRBackend {
       frequency: this.up(s.frequency),
       centerHz:  this.up(s.centerHz),
       ...(s.trueCenterHz !== undefined ? { trueCenterHz: this.up(s.trueCenterHz) } : {}),
+      ...(s.serverDial ? { serverDial: { ...s.serverDial, frequency: this.up(s.serverDial.frequency) } } : {}),
     };
   };
 

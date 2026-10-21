@@ -2826,6 +2826,19 @@ export abstract class VibeServerWsClient {
       {
         const sv = Number(msg.vfo);
         if (Number.isFinite(sv) && sv > 0) {
+          /* ★★★ AND KEEP THE SERVER'S WORD BESIDE OUR OWN, IN THE SAME STATUS — so the audio socket can tell
+           *  the screen adopting it from a person tuning (src/services/audioTuneForward.ts). Written here,
+           *  BEFORE the adopt below emits, so the snapshot that carries an adopted frequency carries this too:
+           *  a render that lags the next config still compares like with like. The Lenovo, 2026-10-22: the
+           *  V12 iPhone sent every one of Safari's steps back, "684 after 693". */
+          const bl = Number(msg.bandwidthLow), bh = Number(msg.bandwidthHigh);
+          const pbOk = typeof msg.bandwidthLow === 'number' && typeof msg.bandwidthHigh === 'number'
+                    && Number.isFinite(bl) && Number.isFinite(bh) && bl < bh;
+          this.status.serverDial = {
+            frequency: sv,
+            ...(typeof msg.mode === 'string' && msg.mode ? { mode: msg.mode } : {}),
+            ...(pbOk ? { bandwidthLow: bl, bandwidthHigh: bh } : {}),
+          };
           try {
             VibePowerModule?.noteServerFreq?.(
               sv, typeof msg.mode === 'string' && msg.mode ? msg.mode : this.status.mode);
