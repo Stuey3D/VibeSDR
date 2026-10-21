@@ -359,11 +359,36 @@ private:
          *    672 samples early: 0.7 ms at the wrong level, a click at −20 dB (measured, 2026-10-19). */
         // Candidate piece k starts at e; the step is somewhere inside it. B = the W before it, A = the W
         // after it — the straddling piece itself is in neither, so its position cannot bias the ratio.
+        /* ★★★ EACH SAMPLE'S POWER SUMMED ONCE, NOT ~100 TIMES (2026-10-21). This loop used to call meanPow over
+         *    both 1.5 ms windows for every 64-sample edge — (2W+4)·64 samples per 64 in, ~100× the stream — for
+         *    the whole 0.3 s an own write's search runs. On the Portable's Pi 3A+ that was more than a core for
+         *    0.3 s after EVERY RTL gain write: "IQ overrun — dropping a buffer (the DSP thread was blocked)",
+         *    heard as a stutter on every VibeAGC move; the Pi 500 absorbed it in audio but its waterfall hitched.
+         *    Every window here is whole 64-sample pieces on the global kSeg grid (e is on it), so the pieces are
+         *    summed once into a prefix and each window is a difference. Same figures to rounding; O(n).
+         *    vibeserver/bench-gain-step-cost.cpp measures it. */
+        {
+            const long long eLo = std::max(nextEdge_, (long long)0);
+            const long long pLo = std::max(((g0 + kSeg - 1) / kSeg) * kSeg, eLo - (long long)(w + 2) * kSeg);
+            const long long eHi = std::min(hintTo_, gEnd - 3 * kSeg - (long long)w * kSeg);
+            const long long pHi = std::min((gEnd / kSeg) * kSeg, eHi + (long long)(w + 3) * kSeg);
+            pieceBase_ = pLo;
+            const long long np = pHi > pLo ? (pHi - pLo) / kSeg : 0;
+            piecePre_.resize((size_t)np + 1);
+            piecePre_[0] = 0.0;
+            for (long long j = 0; j < np; ++j)
+                piecePre_[(size_t)j + 1] = piecePre_[(size_t)j] + kSeg * meanPow(wk_ + (pLo - g0) + j * kSeg, kSeg);
+        }
+        auto win = [&](long long from, int pieces) {   // mean power of `pieces` pieces from global `from`
+            const long long off = from - pieceBase_, j = off / kSeg;
+            if (off < 0 || off % kSeg != 0 || j + pieces + 1 > (long long)piecePre_.size())   // off the summed span: direct
+                return meanPow(wk_ + (from - g0), pieces * kSeg);
+            return (piecePre_[(size_t)(j + pieces)] - piecePre_[(size_t)j]) / (double)(pieces * kSeg);
+        };
         for (long long e = nextEdge_; e + 3 * kSeg + (long long)w * kSeg <= gEnd && e <= hintTo_; e += kSeg) {
             if (e - (long long)(w + 2) * kSeg < g0) { nextEdge_ = e + kSeg; continue; }
-            const int ie = (int)(e - g0);
-            const double B = meanPow(wk_ + ie - w * kSeg, w * kSeg);
-            const double A = meanPow(wk_ + ie + kSeg, w * kSeg);
+            const double B = win(e - (long long)w * kSeg, w);
+            const double A = win(e + kSeg, w);
             if (!(B > 0.0) || !(A > 0.0)) { nextEdge_ = e + kSeg; continue; }
             const double c = 10.0 * std::log10(A / B);
             /* ★★ AND IT MUST BE SHARP. The windows alone were fooled by programme: a 1 kHz tone at 50 %
@@ -371,14 +396,14 @@ private:
              *    (measured, 2026-10-19). A front-end step is instantaneous, so the pieces either side of
              *    the straddling one already differ by most of it; modulation of that size takes a
              *    sizeable fraction of an audio cycle to get there. */
-            const double pPrev = meanPow(wk_ + ie - kSeg, kSeg);
-            const double pNext = meanPow(wk_ + ie + kSeg, kSeg);
+            const double pPrev = win(e - kSeg, 1);
+            const double pNext = win(e + kSeg, 1);
             const double cAdj = (pPrev > 0.0 && pNext > 0.0) ? 10.0 * std::log10(pNext / pPrev) : 0.0;
             // ★ …and CONCENTRATED at this piece: the level moves here and hardly at all from one piece to
             //   the next on either side. Modulation spreads the same change evenly over its slope, so a
             //   tone's steepest point fails this however the windows fall.
-            const double pPrev2 = meanPow(wk_ + ie - 2 * kSeg, kSeg);
-            const double pNext2 = meanPow(wk_ + ie + 2 * kSeg, kSeg);
+            const double pPrev2 = win(e - 2 * kSeg, 1);
+            const double pNext2 = win(e + 2 * kSeg, 1);
             const double sB = (pPrev2 > 0.0 && pPrev > 0.0) ? 10.0 * std::log10(pPrev / pPrev2) : 99.0;
             const double sA = (pNext2 > 0.0 && pNext > 0.0) ? 10.0 * std::log10(pNext2 / pNext) : 99.0;
             // the jump across the piece, less the programme's own slope either side of it
@@ -490,6 +515,7 @@ private:
     double rate_ = 0.0, glideSec_ = 0.4;
     int win_ = kSeg, delay_ = 2 * kSeg, hist_ = kSeg;
     std::vector<cf32> fifo_; size_t start_ = 0;
+    std::vector<double> piecePre_; long long pieceBase_ = 0;   // analyse(): prefix of 64-sample piece powers
     cf32* wk_ = nullptr;                      // this call's view: fifo_ from start_, global index g0
     long long gIn_ = 0;                       // global index of the next sample to ARRIVE
     double cDb_ = 0.0, compAtStep_ = 0.0; long long sinceStep_ = 0;
