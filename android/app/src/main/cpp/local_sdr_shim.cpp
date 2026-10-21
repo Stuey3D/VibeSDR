@@ -21400,6 +21400,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  pace is up, when any other message arrives (order is kept), or when the socket goes. On an
          *  idle server the pace is 0, so a lone tune still lands the instant it arrives and only a
          *  backlog ALREADY in the socket is merged. */
+        /* ★★★ AND DAB BLOCK STEPS (2026-10-21): a hammered next/previous multiplex from a client that does
+         *  not coalesce costs the block it ENDED on (plus its first press), not a re-acquire per press; a
+         *  lone step still goes at once. The rule is in vibe_tune_pace.h; test-dab-block-pace holds it. */
         vibetune::TuneHold tuneHold;
         auto applyHeldTune = [&] {
             const std::string m = tuneHold.take();

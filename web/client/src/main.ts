@@ -32,6 +32,7 @@ import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindow';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
+import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
 import { lrDisplay } from '../../../src/services/lrMeter';
 /** ★ Set once an L/R reading has arrived — see lrDisplay (no flashing on a weak station). */
@@ -1559,6 +1560,22 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  away", Stuart, 2026-09-06). TS 103 176 6.2.2: the list is a THING THE RECEIVER KEEPS, not
        *  a picture of this frame. Hold it while the channel is unchanged; a retune clears it
        *  (dabTune sets dabState = null), and a different ensemble replaces it. */
+      /* ★★★ A REPORT FROM THE BLOCK WE ARE LEAVING IS DROPPED, WHOLE (2026-10-21 — the Pi 2's snap-back).
+       *  Mid-burst (dabStepper pending) the label is ahead of the server by design; after the send, dabAsk
+       *  holds until the server names our block, 6 s pass, or a third block shows somebody else moved
+       *  the shared dial. Its list and live text belong to the old block too, so nothing of it is drawn.
+       *  ★ Display only: nothing is sent from here — the server owns the dial (shared-dial contract). */
+      if (dabOn && d.channel) {
+        const bi = DAB_BLOCKS.findIndex(b => b.name === d.channel);
+        if (bi >= 0) {
+          const burst = dabStepper.pending();
+          if (burst >= 0 && bi !== burst) return;
+          if (!dabAsk.accept(bi, Date.now())) return;
+          dabServerBlock = bi;
+        }
+      } else if (d.channel) {
+        dabServerBlock = DAB_BLOCKS.findIndex(b => b.name === d.channel);
+      }
       if (!dabOn) {
         /* ★★★ SOMEBODY ELSE PUT THIS RECEIVER ON A MULTIPLEX (or we reloaded while it was on):
          *  the box opens now, with no message to the server. See dabUiOn. */
@@ -6383,6 +6400,32 @@ const DAB_BLOCKS: { name: string; hz: number }[] = [
   ['13A',230784],['13B',232496],['13C',234208],['13D',235776],['13E',237488],['13F',239200],
 ].map(([n, k]) => ({ name: String(n), hz: Number(k) * 1000 }));
 
+/* ★★★ ONE RETUNE PER BURST OF PRESSES, AND NO SNAP-BACK (Stuart, 2026-10-21: "if I connect at 12b and
+ *  rapidly tune down to 7D hammering the multiplex button multiple times a second … dont tune the SDR
+ *  just hold it and tune on final move. However if I am tuning a multiplex and holding there for a
+ *  second to see the waterfall then tuning again we need to tune as normal"; then "I tried to rapid tune
+ *  the Pi2 earlier and it kept snapping back"). dabTune sent a `dab` on EVERY press, so a run of ten
+ *  presses was ten full re-acquires queued on the server. Now the app's rule, from the same code
+ *  (src/services/dabStepper.ts): the label moves on each press, the server is told the block the user
+ *  STOPPED on, once, DAB_STEP_SETTLE_MS after the last press. CLAMPED at the ends, as dabTune always was.
+ *  ★ dabAsk holds the label against reports still naming the block we LEFT (bounded; display only —
+ *    nothing is ever re-sent); dabServerBlock is the block the server last reported. */
+let dabServerBlock = -1;
+const dabAsk = new DabAskGuard();
+const dabStepper = new DabBlockStepper(DAB_BLOCKS.length,
+  (i) => {   // the settled block — the one send of the burst
+    dabAsk.sent(i, dabServerBlock, Date.now());
+    audio?.holdHealing(6000); spec?.dab(true, i);
+  },
+  (i) => {   // every press: the label, the remembered block, the arrows' names — at once
+    dabChannel = i;
+    savePref('dabChannel', DAB_BLOCKS[i].name);
+    dabState = null;
+    dabRender();
+    syncDialTips();   // ★ the arrows name the NEXT blocks — see syncDialTips
+  },
+  DAB_STEP_SETTLE_MS, undefined, 'clamp');
+
 /** TS 101 756 table 12 — the international programme type codes carried in FIG 0/17. */
 const DAB_PTY: string[] = ['None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
   'Culture', 'Science', 'Varied', 'Pop Music', 'Rock Music', 'Easy Listening', 'Light Classical',
@@ -7182,13 +7225,16 @@ function dabGoTo(hz: number, sid: number) {
   if (idx < 0) return;
   // ★ sid < 0 = "this block, whatever was playing" — a bookmark without a service id.
   const svc = sid >= 0 ? sid : undefined;
+  dabStepper.cancel();   // ★ a pick is the answer — a burst still settling must not override it
   if (!dabOn) {
     dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
     dabUiOn();
+    dabAsk.sent(idx, dabServerBlock, Date.now());
     audio?.holdHealing(6000); spec?.dab(true, idx, svc);
   } else if (idx !== dabChannel) {
     dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
     dabState = null;
+    dabAsk.sent(idx, dabServerBlock, Date.now());
     audio?.holdHealing(6000); spec?.dab(true, idx, svc);
   } else if (svc !== undefined) {
     audio?.holdHealing(6000); spec?.dabService(svc);
@@ -7197,15 +7243,11 @@ function dabGoTo(hz: number, sid: number) {
   syncDialTips();
 }
 
+/** Step the multiplex — every arrow, key, wheel and pad press in DAB ends here (via nudge). Coalesced:
+ *  see dabStepper above. ★ CLAMP, never wrap: 13F -> 5A in one press is not what a band scan meant. */
 function dabTune(delta: number) {
-  if (dabChannel < 0) dabChannel = DAB_BLOCKS.findIndex(b => b.name === '12B');
-  // ★ CLAMP, never wrap: 13F -> 5A in one press is not what a band scan meant.
-  dabChannel = Math.max(0, Math.min(DAB_BLOCKS.length - 1, dabChannel + delta));
-  savePref('dabChannel', DAB_BLOCKS[dabChannel].name);
-  dabState = null;
-  audio?.holdHealing(6000); spec?.dab(true, dabChannel);
-  dabRender();
-  syncDialTips();   // ★ the arrows name the NEXT blocks — see syncDialTips
+  const cur = dabChannel >= 0 ? dabChannel : DAB_BLOCKS.findIndex(b => b.name === '12B');
+  dabStepper.step(cur, delta);
 }
 
 /** ★★★ ZOOM IS BLOCKED IN DAB MODE — DISABLED, not merely ignored (AGENTS.md: a control that does
@@ -7421,6 +7463,7 @@ function dabSetMode(on: boolean) {
     } else {
       if (dabChannel < 0) dabChannel = dabRememberedChannel();
       dabUiOn();
+      dabAsk.sent(dabChannel, dabServerBlock, Date.now());
       audio?.holdHealing(6000); spec?.dab(true, dabChannel);
     }
   } else {
@@ -7436,6 +7479,7 @@ function dabSetMode(on: boolean) {
   dabRender();
 }
 function dabUiOff() {
+  dabStepper.cancel(); dabAsk.clear();   // ★ leaving DAB: a burst still settling dies, nothing is awaited
   spec?.dabScopes(false);
   dabQualityMeter.reset(); dabQuality = null;
   dabLockControls(false);
