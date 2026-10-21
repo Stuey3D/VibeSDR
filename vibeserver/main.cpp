@@ -255,6 +255,9 @@ struct Opts {
     // already perfect before this"). Sharper bins are not worth a worse picture. Opt in with
     // --zoom-spectrum until it can beat the wide path on LOOK as well as resolution.
     bool        zoomSpectrum = false;
+    // ★★ Ask before tuning on a shared dial (docs/TUNING-ETIQUETTE.md). Normally per radio in config.json
+    //    (RadioConfig::askBeforeTuning); this flag is for a server run from the command line, and the tests.
+    bool        askBeforeTuning = false;
     // ★ RSP front-end notches. OFF unless the operator asks: the RF notch covers broadcast FM.
     double      idleGrace = 300.0;   // seconds before an unattended radio idle-parks
     bool        rfNotch  = false;
@@ -351,6 +354,7 @@ void usage() {
         "                    picks the channel method: 1 = direct, 2+ = shared.\n"
         "  --channels MODE   override that choice: direct | shared\n"
         "  --zoom-spectrum   EXPERIMENTAL: real bins at deep zoom instead of interpolation.\n"
+        "  --ask-before-tuning  on a shared dial with company, a newcomer asks in chat before tuning.\n"
         "  --idle-grace SEC  wait SEC after the last listener leaves before idling the radio\n"
         "                    (default 300). Stops a page reload driving a park/wake cycle,\n"
                     "                    which is what wedges an RSP. 0 = idle immediately.\n"
@@ -496,6 +500,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--channels")  o.channels = need(i);
         else if (a == "--no-zoom-spectrum") o.zoomSpectrum = false;
         else if (a == "--zoom-spectrum")    o.zoomSpectrum = true;
+        else if (a == "--ask-before-tuning") o.askBeforeTuning = true;
         else if (a == "--idle-grace") o.idleGrace = std::atof(need(i));
         else if (a == "--rf-notch")   o.rfNotch  = true;
         else if (a == "--dab-notch")  o.dabNotch = true;
@@ -4029,7 +4034,7 @@ int main(int argc, char** argv) {
         //   one-at-a-time dongle want different answers to "is the limit a deadline".
         LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);
         // ★★ Ask before tuning (2026-10-21) — per radio, beside the limit; off unless the owner chose it.
-        LocalSdrShim::instance().setAskBeforeTuning(mine ? mine->askBeforeTuning : false);
+        LocalSdrShim::instance().setAskBeforeTuning(mine ? mine->askBeforeTuning : o.askBeforeTuning);
         // ★ MACHINE-level, not per radio: the rule is about one visitor holding SEVERAL of this
         //   machine's radios, so it cannot be a property of any one of them.
         // ★ The CAP, not the switch — the switch is derived from it in the config reader so the

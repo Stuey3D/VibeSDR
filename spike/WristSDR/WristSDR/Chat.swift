@@ -53,6 +53,8 @@ enum CannedDial {
     ("please_hold",    "Please hold — chasing DX"),
     ("yes_go_ahead",   "Yes, on it — go ahead"),
     ("yes_hold",       "Yes, on it — please hold"),
+    // ★★ Ask before tuning's gentle NO (2026-10-21) — "Do you mind, I am listening here", without the edge.
+    ("listening_few_min", "Listening — a few more minutes?"),
     ("mid_decode",     "Mid-decode — please wait"),
     // ★★ A WEFAX chart is ten minutes of holding still, and "please wait" with no duration is what
     //    makes people ask again in ninety seconds. The number is the difference between a queue

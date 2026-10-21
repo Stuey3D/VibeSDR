@@ -22,6 +22,7 @@ import { DabAssembler } from '../../../src/services/dabAssemble';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg } from '../../../src/services/vibeSquelch';
 import { roomMode, roomPassband } from '../../../src/services/roomPassband';
+import { parseAsk, askLocked, type AskState } from '../../../src/services/dialChat';
 
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
@@ -570,7 +571,9 @@ export interface SpectrumCallbacks {
    *  listening, who moved the dial last (an ordinal — never an identity), and whether somebody is
    *  mid-decode. Absent on an exclusive receiver, which is every existing one. */
   onDial?: (d: { mode: string; tuner: number; mine: boolean; you: number;
-                 listeners: number; decoding?: boolean }) => void;
+                 listeners: number; decoding?: boolean } & AskState) => void;
+  /** ★★ Ask before tuning: a tune was refused here because the server has not let this listener in yet. */
+  onTuneLocked?: () => void;
   /** Spectator mode refused a control. ★ Said out loud, because a control that silently does
    *  nothing reads as a broken radio rather than as a receiver somebody has parked deliberately. */
   /** The RTL overload protection stepped the gain: `steps` below the owner's ceiling, `dir` -1
@@ -1134,6 +1137,8 @@ export class SpectrumClient {
          *     this one case never used it.
          *  ★ Same shape as the `needs_codec` message in audio.ts, which was also sent, also
          *    ignored, and also left the only evidence being a control that appeared not to work. */
+        // ★★ Ask before tuning's refusal (`ask`) is said by the banner and the chat key; the text is for older pages.
+        if (typeof msg.why === 'string' && msg.why && msg.ask) { this.cb.onTuneLocked?.(); break; }
         if (typeof msg.why === 'string' && msg.why) { this.cb.onRefused?.(msg.why); break; }
         if (typeof msg.vts === 'string' && msg.vts) { this.cb.onVts?.(msg.vts); break; }
         // ★ The owner's message to listeners, pushed the moment it is posted or cleared.
@@ -1291,7 +1296,10 @@ export class SpectrumClient {
           call: typeof msg.call === 'string' && /^[KW][A-Z]{3}$/.test(msg.call) ? msg.call : undefined,
         });
         break;
-      case 'dial':
+      case 'dial': {
+        // ★★ Ask before tuning — the server's answer, through the app's own reader (dialChat.parseAsk).
+        const ask = parseAsk(msg);
+        this.tuneLocked = askLocked(ask);
         this.cb.onDial?.({
           mode: String(msg.mode || 'exclusive'),
           tuner: Number(msg.tuner) || 0,
@@ -1299,8 +1307,10 @@ export class SpectrumClient {
           you: Number(msg.you) || 0,
           listeners: Number(msg.listeners) || 0,
           decoding: msg.decoding === true,
+          ...ask,
         });
         break;
+      }
       // ★★★ THE DONGLE'S OVERLOAD PROTECTION MOVED THE GAIN. Distinct from the RSP's `rspstat`
       //     overload flag, which reports a HARDWARE condition: this reports an ACTION we took, so
       //     the chip can say which way the gain went rather than only that something is wrong.
@@ -1509,6 +1519,7 @@ export class SpectrumClient {
     //    call would ruin holding the step button down: each 100 Hz nudge would drop the buffer and
     //    re-arm it, turning a smooth tune into stuttering silence. Below one bandwidth the
     //    buffered audio is still substantially the signal you are listening to, so it is kept.
+    if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
     if (this.dabHeld) return;            // ★ see dabHeld — the multiplex is the tuning
     const prev = this.frequency;
     this.lastLocalTuneAt = performance.now();   // ★ so a config echo is not mistaken for somebody else
@@ -1541,6 +1552,7 @@ export class SpectrumClient {
   }
 
   setMode(mode: SDRMode) {
+    if (mode !== this.mode && this.askBlocked()) return;   // ★★ ask before tuning; re-picking changes nothing
     // ★ The mode's own tune carries the current frequency, so a frequency still held is already in it.
     this.tunePacer.cancel();
     this.mode = mode;
@@ -1557,6 +1569,8 @@ export class SpectrumClient {
     // ★ The one door every passband goes through (slider, bookmark, shared link), so the WFM floor
     //   is applied once, here — see WFM_MIN_BW_HZ.
     [low, high] = clampPassband(this.mode, low, high);
+    // ★★ Ask before tuning — the passband is everybody's on a shared dial. Only a CHANGE asks.
+    if ((low !== this.bandwidthLow || high !== this.bandwidthHigh) && this.askBlocked()) return;
     this.bandwidthLow = low;
     this.bandwidthHigh = high;
     this.lastLocalBwAt = performance.now();     // ★ see lastLocalBwAt
@@ -1667,6 +1681,7 @@ export class SpectrumClient {
    *  most) plus a 1.5 s tail; our own entry ends it. The app's DabExitGuard is the same rule. */
   private dabQuietUntil = 0;
   dab(on: boolean, channel?: number, sid?: number) {
+    if (this.askBlocked()) return;     // ★★ ask before tuning — the multiplex is everybody's on a shared dial
     if (on) this.tunePacer.cancel();   // ★ a held tune must not land on top of the multiplex
     this.dabQuietUntil = on ? 0 : Date.now() + 5000;
     this.dabHeld = on;
@@ -1675,7 +1690,24 @@ export class SpectrumClient {
     if (sid !== undefined) m.sid = sid;
     this._send(m);
   }
-  dabService(sid: number) { this._send({ type: 'dab_service', sid }); }
+  dabService(sid: number) { if (this.askBlocked()) return; this._send({ type: 'dab_service', sid }); }
+
+  /* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server said this listener may not move the shared dial yet
+   *  (dial.tuneLocked, read by dialChat.parseAsk — the app's reader, one file). THE ONE GATE for every way this page
+   *  tunes — drum, keys, spectrum click, entry, bookmarks, search, a pad, the keyboard: tune(), setMode(),
+   *  setBandwidth(), dab() and dabService() refuse while it is set, tell the page (onTuneLocked → the chat key and the
+   *  banner flash), and ask the server for the room's state so anything drawn early snaps back. Never inferred
+   *  here; an old server's silence leaves it false. */
+  private tuneLocked = false;
+  private askStateAt = 0;
+  isTuneLocked(): boolean { return this.tuneLocked; }
+  private askBlocked(): boolean {
+    if (!this.tuneLocked) return false;
+    this.cb.onTuneLocked?.();
+    const now = performance.now();
+    if (now - this.askStateAt > 1000) { this.askStateAt = now; this._send({ type: 'state' }); }
+    return true;
+  }
   private dabAsm = new DabAssembler();
   private dabScopesOn = false;
   private dabScopesSaidAt = 0;

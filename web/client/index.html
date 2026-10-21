@@ -777,6 +777,12 @@ html[data-frontdoor] #splashListeners { display: none !important; }
            color: #ffcc88; padding: 0.22em 0.5em; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.38);
            background: rgba(0, 0, 0, 0.62); box-shadow: 0 1px 5px rgba(0, 0, 0, 0.6); white-space: nowrap; }
 #mShared.alone { color: #7bd88f; }
+/* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md): the server has not let this listener in yet. The tuning controls
+   are DIMMED — visibly locked, not missing — and a touch on one flashes the chat key and the banner (main.ts
+   nudgeAsk) instead of tuning. body.askLocked is set only from the server's dial message. */
+body.askLocked #mVfoDial, body.askLocked #mVfoDown, body.askLocked #mVfoUp, body.askLocked #mMode, body.askLocked #bwLo, body.askLocked #bwHi, body.askLocked #bwHome { opacity: 0.35; }
+#mChat.askNudge { animation: chatBreathe 0.45s ease-in-out 6 alternate; }
+@media (prefers-reduced-motion: reduce) { #mChat.askNudge { animation: none; box-shadow: inset 0 0 0 2px var(--amber); } }
 #mPillIn.shared #mFreq { font-size: 1.5em; }
 #mMode    { padding: 0.15em 0.45em; }
 #mFreqBox:active, #mMode:active, #mSnr:active { background: rgba(255, 255, 255, 0.18); }

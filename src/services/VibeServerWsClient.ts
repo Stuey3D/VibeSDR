@@ -2384,6 +2384,9 @@ export abstract class VibeServerWsClient {
        *  ★★ They must not share a slot: a refusal routed into the owner's notice would clobber a
        *     message somebody deliberately posted, and leave it clobbered. */
       const why = typeof msg.why === 'string' ? msg.why : '';
+      // ★★ Ask before tuning's refusal (`ask`) is said by the banner and the chat key, not a VTS line — the text is
+      //    for clients that predate the lock.
+      if (why && msg.ask) { this.callbacks.onTuneLocked?.(); return; }
       if (why) { this.callbacks.onRefused?.(why); return; }
       // ★ `vts` = a transient server line for the bar (gain start-up, sampling switch); the
       //   refusal path already lands there, with the same look.

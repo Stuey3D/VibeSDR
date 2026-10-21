@@ -132,7 +132,7 @@ export function padPhrases(questionOpen: boolean, hz: number): Phrase[] {
 const TUNING_BANNER: Record<string, string> = {
   ask_tune: 'Can I tune?', anyone_using: 'Anyone using this?', tuning_now: 'Tuning now',
   go_ahead: 'Go ahead, tune', please_hold: 'Please hold — DX', yes_go_ahead: 'On it — go ahead',
-  yes_hold: 'On it — please hold', listening_few_min: 'Listening — few more min?', mid_decode: 'Decoding — please wait', decoding_10min: 'Decoding ~10 min',
+  yes_hold: 'On it — please hold', listening_few_min: 'Listening — a few min?', mid_decode: 'Decoding — please wait', decoding_10min: 'Decoding ~10 min',
   decode_done: 'Decode done — all yours', wont_tune: "OK, won't tune yet", all_yours: 'Done — all yours',
   tune_back: 'Tuning back',
 };
