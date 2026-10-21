@@ -172,6 +172,13 @@ try {
   ok(await until(() => a.last('dial')?.tuneLocked === true, 1500), '★ …and the admin now outranks the longest-connected listener, who is locked');
   d.send({ type: 'gain', value: 250 }); await sleep(400);
   ok(refusedLines('gain', 'dddd0004') === 0, 'an admin\'s gain is never refused');
+  // ★★ Stuart, 2026-10-21: "admin mode must have full control at all time … including tuning etc".
+  //    An admin outranks the longest-connected listener (locked just above), and still tunes at once, no asking.
+  d.send({ type: 'tune', frequency: 99900000, mode: 'wfm' });
+  ok(await until(() => vfo(a) === 99900000), '★ the admin tunes at once, without asking, and everyone follows');
+  d.send({ type: 'stereo', on: false }); await sleep(400);
+  for (const t of ['tune', 'stereo'])
+    ok(refusedLines(t, 'dddd0004') === 0, `an admin's ${t} is never refused`);
   d.close();
   ok(await until(() => a.last('dial')?.tuneLocked === false, 6000), 'the admin leaves: the longest-connected listener is top again');
 
