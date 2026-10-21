@@ -502,3 +502,28 @@ choice, never ours.
 - [DXLab: Icom spectrum over USB at 115200](https://dxlabsuite.com/dxlabwiki/SpectrumWaterfallIcom) ·
   [IC-7610 CI-V info (scope 27 00 divisions)](https://icomfrance.com/uploads/files/produit/not-IC-7610_ENG_Info_V130_0a-en.pdf)
 - [wfweb](https://github.com/adecarolis/wfweb): GPL-3.0, "headless wfview fork".
+
+## Phase TX — owner transmit (decided by Stuart, 2026-10-21; after receive-only Phase 1 ships)
+
+A TX button exists only when ALL of these hold. Every check is the SERVER's; the client has no vote.
+
+1. **"Allow transmit" is switched on in setup.** Default OFF. Plugging an Icom in never produces a TX button.
+2. **The admin password is entered** for this session.
+3. **The connection is from the local network.** A direct TCP peer in a private range (RFC 1918 or IPv6 ULA/link-local)
+   on a subnet of one of the box's own interfaces. NOT local, ever: loopback (a tunnel or reverse proxy on the box
+   arrives as 127.0.0.1), the directory relay/tunnel, any request carrying X-Forwarded-For / Forwarded, and VPN
+   ranges (Tailscale 100.64/10, WireGuard interfaces). Stuart: VPNs stay remote — "at least if they are on their local
+   network we know they are in the vicinity of the transmitter".
+
+Safeguards:
+- **Hold to talk**, never a latch. A **3 minute** TX timeout unkeys regardless.
+- **Dead-man**: socket drop or > ~500 ms without TX audio → unkey at once. A frozen tab must never leave it keyed.
+- **One transmitter at a time.** Listeners see the TX banner; the RX stream mutes while keyed.
+- The admin's live TX session is the ONLY thing that opens the TX frames in the CI-V allow-list. The DTR/RTS rule
+  (libusb, lines held low) and the VOX / USB SEND / USB Keying preflight stay exactly as in Phase 1 — keying is CI-V
+  `1C 00 01` / `1C 00 00` from the server only.
+- **Microphone**: the native app can capture at once. The web client needs a secure context, i.e. HTTPS on the LAN —
+  shared work with GitHub #52 (self-signed certificate trust).
+- Tested into a dummy load with Saber before any antenna, like the RX phases.
+- Licensing is the operator's responsibility; the setup switch says so in plain words. Local-only means the operator
+  is physically near the station.
