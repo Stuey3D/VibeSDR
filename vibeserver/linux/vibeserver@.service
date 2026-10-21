@@ -9,8 +9,7 @@ Documentation=https://vibesdr.net
 After=network-online.target vibeserver.service
 Wants=network-online.target
 PartOf=vibeserver.service
-# ★ An RSP radio's driver service (OpenRSP) — see vibeserver.service. Keep the two in step.
-Wants=vibeserver-rsp.service
+# ★ After the bundled RSP driver service, when both start together — see vibeserver.service.
 After=vibeserver-rsp.service
 
 [Service]

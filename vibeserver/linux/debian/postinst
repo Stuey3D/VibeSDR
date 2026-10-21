@@ -230,11 +230,6 @@ case "$1" in
       #   Restarting it is safe on every version: it is socket-activated, so nothing loses a message.
       systemctl restart systemd-journald.service >/dev/null 2>&1 || true
       systemctl enable vibeserver.service >/dev/null 2>&1 || true
-      # ★★ THE BUNDLED RSP DRIVER SERVICE (OpenRSP, 2026-10-21). Enabled always — it skips itself when a
-      #    system SDRplay stack is installed, and on a CPU it cannot run on — and started below only if the
-      #    server was running, for the same reason as the radios.
-      #    Absent on i386 (no OpenRSP there yet): the `|| true` covers it.
-      systemctl enable vibeserver-rsp.service >/dev/null 2>&1 || true
       # ★★ THE WATCHER MUST BE ENABLED OR THE MAINTENANCE BUTTONS DO NOTHING. The daemon writes
       #    its request happily; without this unit running, nothing is watching for it, and the
       #    admin page reports success for an action that never happens — worse than an error.
@@ -251,11 +246,17 @@ case "$1" in
       #     the air. Measured on the Pi, 2026-08-26 — and it is not what "enabled but NOT started"
       #     four lines up promises. Restarting what was running is the intent; starting what was
       #     stopped is not.
-      if [ -n "$WAS_ACTIVE" ]; then
-        # ★ The RSP service BEFORE the radios that are its clients. try-restart first: an upgrade replaces
-        #   its binary, and a running one would carry on from the deleted file (see below).
-        systemctl try-restart vibeserver-rsp.service >/dev/null 2>&1 || true
+      # ★★ THE BUNDLED RSP DRIVER SERVICE (OpenRSP, 2026-10-21) is not enabled: an RSP's arrival starts it
+      #    (udev, 99-vibeserver-sdr.rules), and it skips itself when a system SDRplay service is installed or
+      #    on a CPU it cannot run on. Here, BEFORE the radios that are its clients: a running one is restarted
+      #    onto the new binary (it would carry on from the deleted file, see below), and an RSP that is
+      #    ALREADY plugged in gets its service now — the udev trigger above sends "change", not the "add"
+      #    that starts it. Absent on i386 (no OpenRSP there yet): the `|| true`s cover it.
+      systemctl try-restart vibeserver-rsp.service >/dev/null 2>&1 || true
+      if grep -qsx 1df7 /sys/bus/usb/devices/*/idVendor; then
         systemctl start vibeserver-rsp.service >/dev/null 2>&1 || true
+      fi
+      if [ -n "$WAS_ACTIVE" ]; then
         systemctl start vibeserver-radios.service >/dev/null 2>&1 || true
       fi
       # ★ The wizard enables and starts the service itself (tui.cpp), so telling people to run

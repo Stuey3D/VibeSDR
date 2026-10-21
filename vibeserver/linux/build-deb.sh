@@ -152,8 +152,13 @@ if [ "$ARCH" != i386 ]; then
   done
   (cd "$ORSP/firmware/own" && sha256sum -c --quiet manifest.sha256) || fail "the RSP firmware does not match its manifest"
   [ "$(strings "$ORSP/sdrplay_apiService" | count libusb)" -gt 20 ] || fail "the RSP service has no libusb in it (USB stub?)"
-  NAPI="$(readelf -W --dyn-syms "$ORSP/libsdrplay_api.so.3.15" | awk '$5=="GLOBAL" && $7!="UND"' | count ' sdrplay_api_')"
-  [ "$NAPI" -ge 24 ] || fail "libsdrplay_api.so.3.15 exports only $NAPI sdrplay_api_ symbols"
+  # ★ The C entry points sdrplay_source.cpp resolves (OpenRSP 3.15.2-20 exports 23 plain sdrplay_api_* of its 101).
+  EXPORTS="$(readelf -W --dyn-syms "$ORSP/libsdrplay_api.so.3.15" | awk '$5=="GLOBAL" && $7!="UND" {print $8}')"
+  for s in Open Close GetDevices SelectDevice ReleaseDevice GetDeviceParams Init Uninit Update \
+           LockDeviceApi UnlockDeviceApi GetErrorString ApiVersion; do
+    [ "$(echo "$EXPORTS" | count -x "sdrplay_api_$s")" -eq 1 ] || fail "libsdrplay_api.so.3.15 does not export sdrplay_api_$s"
+  done
+  NAPI="$(echo "$EXPORTS" | count '^sdrplay_api_')"
   [ -f "$X/usr/share/doc/vibeserver/COPYING.openrsp" ] || fail "OpenRSP's licence is not in the package"
   ORSP_LINE="library ($NAPI sdrplay_api_ exports), service, firmware $(cut -c1-12 "$ORSP/firmware/own/manifest.sha256" | tr '\n' ' ')"
 fi

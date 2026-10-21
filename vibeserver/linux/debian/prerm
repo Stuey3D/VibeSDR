@@ -8,7 +8,6 @@ case "$1" in
       systemctl disable vibeserver.service >/dev/null 2>&1 || true
       # ★ And the bundled RSP driver service, whose binary is about to go too.
       systemctl stop vibeserver-rsp.service >/dev/null 2>&1 || true
-      systemctl disable vibeserver-rsp.service >/dev/null 2>&1 || true
     fi
     ;;
 esac

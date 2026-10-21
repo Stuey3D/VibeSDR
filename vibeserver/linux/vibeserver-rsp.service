@@ -16,8 +16,15 @@ Documentation=https://openrsp.dev
 ConditionPathExists=!/opt/sdrplay_api/sdrplay_apiService
 # ★ Removed by postinst on an ARMv6 CPU (Pi Zero / Pi 1), where this ARMv7 build cannot run.
 ConditionFileIsExecutable=/usr/lib/vibeserver/openrsp/sdrplay_apiService
+# ★★★ STARTED BY THE RECEIVER, NOT BY THE BOOT (optimise the weak). A 99-vibeserver-sdr.rules line wants
+#     this unit when an RSP appears — at boot (udev coldplug) or when one is plugged in — so a Pi 2 serving an
+#     RTL-SDR never runs an RSP service it has no use for. No [Install] section: nothing enables it. It is not
+#     stopped when the RSP is unplugged (a replug is then instant); a reboot without one leaves it off.
+# ★ NOT PartOf=vibeserver.service: a `systemctl stop vibeserver` would stop it, and nothing would start it
+#   again until the RSP was replugged. The radios order themselves After= it instead.
+# ★ NO Conflicts=sdrplay.service, deliberately: a start of this unit (an RSP plugged in) would then STOP an
+#   installed SDRplay service before our condition had even been checked.
 Before=vibeserver.service vibeserver-radios.service
-PartOf=vibeserver.service
 
 [Service]
 Type=simple
@@ -55,6 +62,3 @@ RestrictSUIDSGID=yes
 #   AF_NETLINK for libusb's hotplug monitor.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
 IPAddressDeny=any
-
-[Install]
-WantedBy=multi-user.target
