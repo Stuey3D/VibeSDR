@@ -9,7 +9,7 @@
 //   1. SERVER (a raw socket — an old app, or anybody's client that sends a `dab` per press): 10 block steps in 500 ms
 //      re-acquire twice at most (the first press + the last block), the same 10 as one clump once, a lone step at
 //      once, an exit mid-burst never tunes the held step. Counted from the server's own "[DAB] mode ON" lines.
-//   2. WEB PAGE (a real headless, MUTED browser): ten ArrowLeft presses move the label ten blocks and send ONE `dab`,
+//   2. WEB PAGE (a real headless, MUTED browser): ten tune-down presses (< ,) move the label ten blocks and send ONE `dab`,
 //      the block stopped on, ~450 ms after the last press; the label never goes back to a block it left; a press,
 //      a look, a press sends two; leaving DAB mid-burst sends no block.
 // ★ No bench clip needed: the server reports the block it is on whether or not a multiplex locks.
@@ -206,9 +206,9 @@ try {
                           window.dispatchEvent(new KeyboardEvent("keydown", { key: "${k}", bubbles: true })), 1)`);
     await js(`window.__dabSent.length = 0; 1`);
     const seen = [];
-    for (let k = 0; k < 10; k++) { await key('ArrowLeft'); seen.push(await js(LBL)); await sleep(120); }
+    for (let k = 0; k < 10; k++) { await key(','); seen.push(await js(LBL)); await sleep(120); }
     const want = B[si - 10];
-    ok(seen.join(' ') === B.slice(si - 10, si).reverse().join(' '), `ten ArrowLeft presses walk the label ten blocks at once (${start} → ${seen.join(' ')})`);
+    ok(seen.join(' ') === B.slice(si - 10, si).reverse().join(' '), `ten < presses walk the label ten blocks at once (${start} → ${seen.join(' ')})`);
     ok((await js(`window.__dabSent.length`)) === 0, 'nothing was sent while the presses were coming');
     // Watch the label from here: it must never go back to a block it has left.
     await js(`window.__lbl = []; window.__lblT = setInterval(() => { const m = /\\((\\w+)\\)/.exec(document.getElementById("dabMuxLbl")?.textContent || ""); window.__lbl.push(m ? m[1] : ""); }, 40); 1`);
@@ -221,13 +221,13 @@ try {
 
     // Press, look, press: two sends.
     await js(`window.__dabSent.length = 0; 1`);
-    await key('ArrowRight'); await sleep(1200); await key('ArrowRight'); await sleep(1200);
+    await key('.'); await sleep(1200); await key('.'); await sleep(1200);
     const two = await js(`window.__dabSent.map(x => JSON.parse(x[1]).channel)`);
     ok(two.join(',') === `${si - 9},${si - 8}`, `press, look a second, press: two sends, each as normal (${two.map((i) => B[i]).join(' ')})`);
 
     // Leaving DAB mid-burst: no block is sent.
     await js(`window.__dabSent.length = 0; 1`);
-    await key('ArrowLeft'); await key('ArrowLeft');
+    await key(','); await key(',');
     await js(`document.getElementById("dabExit").click(); 1`);
     await sleep(1200);
     const ex = await js(`window.__dabSent.map(x => x[1])`);

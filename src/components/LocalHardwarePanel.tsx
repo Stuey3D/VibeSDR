@@ -554,7 +554,10 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
 
   const slot = (run: () => void) => {
     const i = slots.current.length;
-    slots.current.push(run);
+    // ★★ V12 + ASK BEFORE TUNING (11.0.10 merge): the touch shield over the locked panel does not stop a pad or key —
+    //    Enter runs the slot directly. Every slot is inside the locked block, so while locked Enter nudges (chat key and
+    //    banner flash) exactly as a touch does, instead of moving a control the client would then drop silently.
+    slots.current.push(p.askLocked ? () => p.onAskLockedTouch?.() : run);
     return idx === i;
   };
   return (
@@ -677,6 +680,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             </View>
           )}
           <View style={p.askLocked ? { opacity: 0.35 } : undefined}>
+          {/* nav-skip: a touch-only shield, not a control — pad Enter on a locked slot nudges instead (see slot()). */}
           {p.askLocked && (
             <Pressable style={[StyleSheet.absoluteFill, { zIndex: 9 }]} onPressIn={p.onAskLockedTouch}
               accessibilityRole="button" accessibilityLabel="Receiver settings locked"

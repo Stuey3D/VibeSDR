@@ -1171,6 +1171,7 @@ type SharedTuner = NonNullable<ControlsBarProps['sharedDial']>;
  *  unlocked dial — and every server without the owner's switch — is exactly as before. */
 function AskLockShield({ st }: { st?: SharedTuner | null }) {
   if (!st || !askLocked(st.ask)) return null;
+  // nav-skip: a touch-only shield, not a control — a pad or key reaching the drum goes through onVfoStep's askGate.
   return (
     <Pressable style={[StyleSheet.absoluteFill, { zIndex: 6 }]} onPressIn={st.onLockedTouch}
       accessibilityRole="button" accessibilityLabel="Tuning locked"
