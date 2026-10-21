@@ -44,6 +44,28 @@ struct DialChatView: View {
         // ★★ It stays HERE, on the chat page, deliberately. Stuart: "keep it as it is now with the
         //   chat being the place to unlock the tuner as that prompts a user to ask." Reaching for
         //   the tuner walks you past the place you would ask for it.
+        // ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md): the SERVER has not let this listener in yet, so arming is
+        //   not offered — the row says why and what to do. "Can I tune?" is the first key below it.
+        if radio.dialTuneLocked {
+          HStack(spacing: 8) {
+            Image(systemName: "bubble.left.and.exclamationmark.bubble.right")
+              .font(.system(size: 14)).frame(width: 36, height: 30)
+            VStack(alignment: .leading, spacing: 1) {
+              Text(radio.dialAskState == "open" ? "AWAITING A REPLY"
+                   : radio.dialAskState == "no" ? "ASKED TO WAIT" : "ASK BEFORE TUNING")
+                .font(.system(size: 11, weight: .bold))
+              Text(radio.dialAskState == "open" ? "No answer in 15 s and it's yours"
+                   : radio.dialAskState == "no" ? "Yours in 5 min at most"
+                   : "Ask in chat — others are listening")
+                .font(.system(size: 9)).opacity(0.75).lineLimit(2)
+            }
+            Spacer()
+          }
+          .foregroundColor(.orange)
+          .padding(.horizontal, 8).padding(.vertical, 6)
+          .frame(maxWidth: .infinity)
+          .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.14)))
+        } else {
         Button {
           radio.dialArmed.toggle()
           WKInterfaceDevice.current().play(radio.dialArmed ? .start : .stop)
@@ -75,6 +97,7 @@ struct DialChatView: View {
             .fill((radio.dialArmed ? Color.green : Color.white).opacity(0.14)))
         }
         .buttonStyle(.plain)
+        }
 
         // ── The transcript ──────────────────────────────────────────────────────
         if radio.chatLines.isEmpty {

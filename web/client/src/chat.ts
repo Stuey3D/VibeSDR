@@ -26,7 +26,8 @@ import {
   MANUAL_SHARE_MODES, SHARE_MODE_LABEL, type ShareOut, type SharedStation,
 } from '../../../src/services/chatShare';
 import { kbField } from './padKeyboard';
-import { answerBand, isAnswer, isQuestion, bannerLine, BannerGate, phraseDecoder, phraseWiki, ANSWER_WINDOW_MS, DIAL_PHRASES } from '../../../src/services/dialChat';
+import { answerBand, isAnswer, isQuestion, bannerLine, BannerGate, phraseDecoder, phraseWiki, ANSWER_WINDOW_MS, DIAL_PHRASES,
+         askLocked, type AskState } from '../../../src/services/dialChat';
 
 /** The vocabulary, in the order a conversation actually runs: ask, act, answer, thank.
  *  ★★ TAKEN FROM JR, NOT INVENTED HERE — `Canned.fmdx` in Chat.swift, plus the long-decode lines.
@@ -41,6 +42,8 @@ export const PHRASES: Array<{ id: string; text: string; group?: string; key?: st
   { id: 'please_hold',    text: 'Please hold — chasing DX' },
   { id: 'yes_go_ahead',   text: "Yes, I'm on it — but go ahead and tune" },
   { id: 'yes_hold',       text: "Yes, I'm on it — please hold on" },
+  // ★★ ASK BEFORE TUNING's gentle NO (2026-10-21): the requested "Do you mind, I am listening here", without the edge.
+  { id: 'listening_few_min', text: "I'm listening to this one — a few more minutes, please?" },
   { id: 'mid_decode',     text: "I'm running a decoder — can you wait please?" },
   { id: 'decoding_10min', text: 'Decoding — about 10 minutes' },
   { id: 'decode_done',    text: 'Decode finished — all yours' },
@@ -112,7 +115,7 @@ const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds', answ
 export type DialState = {
   mode: string; tuner: number; mine: boolean; you: number;
   listeners: number; decoding?: boolean;
-};
+} & AskState;
 
 type Deps = {
   /** Send a phrase id to the server. */
@@ -495,6 +498,9 @@ export function onDial(d: DialState) {
   //    the one thing a shared dial must never look like.
   if (d.mode === 'spectator') bits.push('the owner tunes this receiver');
   else if (d.decoding)        bits.push(d.mine ? 'you are decoding' : `User ${d.tuner} is decoding`);
+  // ★★ Ask before tuning — never "go ahead" to somebody the server will refuse (dialChat.dialSummary says the same).
+  else if (askLocked(d))      bits.push(d.askState === 'open' ? 'you asked — waiting for a reply'
+                                      : d.askState === 'no' ? 'asked to wait a few minutes' : 'ask before tuning — Can I tune? below');
   // ★ "You are tuning", not "you have the dial": nobody HOLDS it. Saying otherwise would promise
   //   an exclusivity the server does not enforce and Stuart deliberately did not want.
   else if (d.tuner && d.mine) bits.push('you tuned last');

@@ -89,6 +89,7 @@ export class VibeServerClient extends VibeServerWsClient {
   private dabExit = new DabExitGuard();
 
   dab(on: boolean, channel?: number, sid?: number) {
+    if (this.askBlocked()) return;   // ★★ ask before tuning — the multiplex is everybody's on a shared dial
     holdNativeHealing(VibeServerClient.DAB_MUX_HOLD_MS,
       on ? `DAB on${channel !== undefined ? ' block #' + channel : ''}` : 'DAB off');
     if (!on) { this.dabSeenChannel = null; this.dabSeenSid = null; }
@@ -114,6 +115,7 @@ export class VibeServerClient extends VibeServerWsClient {
 
   /** Switch service WITHIN the tuned multiplex — no retune, no re-acquire. */
   dabService(sid: number) {
+    if (this.askBlocked()) return;   // ★★ ask before tuning — the station is everybody's on a shared dial
     holdNativeHealing(VibeServerClient.DAB_SERVICE_HOLD_MS, `DAB service ${sid}`);
     this.sendSpectrum({ type: 'dab_service', sid });
   }

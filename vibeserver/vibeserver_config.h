@@ -667,6 +667,11 @@ struct RadioConfig {
      *     chose it under today's meaning, and a setting must never change what it does underneath
      *     the person who set it. */
     bool   sessionLimitSoft = false;
+    /** ★★★ ASK BEFORE TUNING (2026-10-21) — on a SHARED DIAL with more than one listener, a newcomer's tuning is
+     *  refused until they have asked in the chat and the room said yes, or nobody answered in 15 s; a "no" holds at
+     *  most 5 minutes. Admin outranks everybody, then the longest-connected. OFF by default and on upgrade.
+     *  docs/TUNING-ETIQUETTE.md, android/app/src/main/cpp/vibe_tune_etiquette.h. Per radio, like the limit. */
+    bool   askBeforeTuning = false;
 
     /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
      *  off is the default: this is an option for a busy shared receiver, not a policy.

@@ -49,6 +49,8 @@ enum CannedDial {
     ("please_hold",    "Please hold — chasing DX"),
     ("yes_go_ahead",   "Yes, on it — go ahead"),
     ("yes_hold",       "Yes, on it — please hold"),
+    // ★★ Ask before tuning's gentle NO (2026-10-21) — "Do you mind, I am listening here", without the edge.
+    ("listening_few_min", "Listening — a few more minutes?"),
     ("mid_decode",     "Mid-decode — please wait"),
     ("decoding_10min", "Decoding — about 10 min"),
     ("decode_done",    "Decode done — all yours"),

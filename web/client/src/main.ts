@@ -78,6 +78,7 @@ import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
+import { askBannerText, askLocked, ASK_NUDGE_TEXT, type AskState } from '../../../src/services/dialChat';
 // ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
 import { httpBase, wsBase, isValidServerHost } from './origin';
@@ -752,6 +753,50 @@ async function loadAudioPolicy(httpBase: string) {
  *  answer — not sure if our chat notification is too subtle"). Somebody else's tuning line (dialChat isTuningPhrase),
  *  while the chat is shut, takes over the banner for 8 s: three flashes, then held. The app does the same. */
 let bannerSaidText = '';
+/* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server's last word on this listener (dial message, via
+ *  dialChat.parseAsk). Drawn from, never decided here: body.askLocked dims the tuning controls, the banner says what
+ *  to do now, and a reach for a locked control nudges (nudgeAsk). null = no lock on this receiver. */
+let askNow: AskState | null = null;
+let askNudgeAt = 0;
+let askNudgeTimer: ReturnType<typeof setTimeout> | null = null;
+/** ★ A reach for a locked control: flash "ASK IN CHAT BEFORE TUNING" on the banner and the CHAT key. Once per
+ *  2.5 s — a drum flick or a held key is one reach, not forty. */
+function nudgeAsk() {
+  const now = Date.now();
+  if (now - askNudgeAt < 2500) return;
+  askNudgeAt = now;
+  flashSharedBanner(ASK_NUDGE_TEXT);
+  const b = document.getElementById('mChat');
+  if (b) {
+    b.classList.remove('askNudge'); void b.offsetWidth; b.classList.add('askNudge');   // ★ restart the flash
+    if (askNudgeTimer) clearTimeout(askNudgeTimer);
+    askNudgeTimer = setTimeout(() => b.classList.remove('askNudge'), 3000);
+  }
+}
+/** ★★ What is dimmed and shielded while locked — index.html body.askLocked lists the same ids. The tuning controls,
+ *  and (Stuart, 2026-10-21: "lock gain too") every receiver setting that changes what the others hear: the gain and
+ *  each driver's own front end (RSP / HF+ / Airspy / HackRF rows), RTL AGC, the tuner's IF filter, the sample rate,
+ *  direct sampling, the antenna, and the shared DSP (NR, notch, de-emphasis, stereo, the blankers, IMS / CEQ /
+ *  auto-bandwidth, NFM voice). Squelch, the waterfall and the raw-IQ / uncompressed rows are this listener's own. */
+const ASK_SHIELD_SEL = '#mVfoDial, #mVfoDown, #mVfoUp, #mMode, #bwLo, #bwHi, #bwHome, '
+  + '#rowGain, #rspCtls, #ahfCtls, #aspCtls, #hrfCtls, #rowTunerBw, #rowRate, #agc, #dsSeg, #antSeg, #rspAntSeg, '
+  + '#nr, #notch, #deemphSeg, #stereoBtn, #wspBtn, #imsBtn, #ceqBtn, #autoBwBtn, #nbBtn, #nbxBtn, #nfmVoiceBtn';
+/** ★★ THE DIMMED CONTROLS DO NOT TUNE — a touch on one is the reach that nudges. Captured before the drum, the step
+ *  keys and the passband sliders see it, and only while the server says this listener is locked. The spectrum click,
+ *  entry, bookmarks and the pad all reach SpectrumClient, whose own gate nudges the same way (onTuneLocked). */
+function wireAskShield() {
+  const sel = ASK_SHIELD_SEL;
+  const stop = (e: Event) => {
+    if (!askLocked(askNow)) return;
+    const t = e.target as Element | null;
+    if (!t || !t.closest || !t.closest(sel)) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.type === 'pointerdown' || e.type === 'keydown') nudgeAsk();
+  };
+  for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'click', 'wheel', 'input', 'keydown'])
+    document.addEventListener(ev, stop, { capture: true, passive: false });
+}
+if (typeof document !== 'undefined') wireAskShield();
 let bannerSaidTimers: ReturnType<typeof setTimeout>[] = [];
 function flashSharedBanner(text: string) {
   bannerSaidTimers.forEach(clearTimeout);
@@ -773,6 +818,13 @@ function updateSharedBanner() {
   if (!srvSharedDial) return;
   // ★★ A tuning line just arrived — the banner says it (flashSharedBanner; the app's SDRScreen bannerSaid).
   if (bannerSaidText) { ms.textContent = bannerSaidText; ms.title = 'Chat: ' + bannerSaidText; return; }
+  // ★★ Ask before tuning: while locked, what to do NOW (ask / awaiting a reply / when it is yours).
+  const askTxt = askNow ? askBannerText(askNow, false) : null;
+  if (askTxt) {
+    ms.classList.remove('alone'); ms.textContent = askTxt;
+    ms.title = 'Ask in the chat before tuning — a yes, or no answer within 15 seconds, lets you in';
+    return;
+  }
   // ★ Until the first count arrives (0), the cautious wording — never "free" on a guess.
   if (listenerCount <= 0) { ms.classList.remove('alone'); ms.textContent = 'SHARED TUNER · ASK BEFORE TUNING'; return; }
   const alone = listenerCount <= 1;
@@ -1363,6 +1415,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDial: (d) => {
       chatDial(d);
       dialModeNow = d.mode;
+      {
+        // ★★ ASK BEFORE TUNING — adopt the server's word; say so when the room lets this listener in.
+        const was = askNow;
+        askNow = d.askFirst ? { askFirst: true, tuneLocked: d.tuneLocked, askState: d.askState, askUntil: d.askUntil } : null;
+        document.body.classList.toggle('askLocked', askLocked(askNow));
+        if (askLocked(was) && !askLocked(askNow) && askNow && was?.askState) flashSharedBanner('GO AHEAD — YOURS TO TUNE');
+        updateSharedBanner();
+      }
       syncMediaSkip();
       const on = d.mode !== 'exclusive';
       /* ★ The receiver's sharing state decides who owns the SAMPLE RATE as well as the dial — see
@@ -1387,6 +1447,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onDialRefused: () => { chatRefused(); togglePanel('chatPanel'); },
+    // ★★ Ask before tuning — SpectrumClient refused a tune for us; show why (the chat key and the banner).
+    onTuneLocked: () => nudgeAsk(),
     onSaid: (from, id, admin, msg) => chatSaid(from, id, admin, msg),
     // ★★★ SOMEBODY ELSE MOVED THE DIAL — REDRAW WHAT THEY MOVED. The readout, the mode and the
     //     VFO marker are all drawn from values this client chose, and on a shared receiver it

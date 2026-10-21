@@ -63,6 +63,7 @@ int main() {
         RadioConfig fm;  fm.serial = "DD52B980BE4946DA"; fm.driver = "airspyhf"; fm.label = "FM";
                          fm.users = 1; fm.freq = 96600000; fm.demodMode = "wfm";
                          fm.configured = true;
+                         fm.askBeforeTuning = true;   // ★ ask before tuning (2026-10-21) — per radio
         RadioConfig rtl; rtl.serial = "00000003"; rtl.driver = "rtlsdr"; rtl.label = "VHF";
                          rtl.enabled = false;      // switched off in the TUI
         s.radios = {hf, fm, rtl};
@@ -79,6 +80,8 @@ int main() {
             ok(!back.radios[2].enabled, "★ radio 2 is disabled, and stayed disabled");
             ok(back.radios[0].users == 30 && back.radios[1].users == 1,
                "★ per-radio listener limits are independent");
+            ok(back.radios[1].askBeforeTuning && !back.radios[0].askBeforeTuning && !back.radios[2].askBeforeTuning,
+               "★ 'ask before tuning' survives the round trip, on the radio it was set on and no other");
         }
         ok(back.adminPass == "Test123", "the shared password is stated once");
     }

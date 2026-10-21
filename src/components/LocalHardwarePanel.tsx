@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal, View, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
   KeyboardAvoidingView, Platform, Animated,
-  Switch, StyleSheet,
+  Switch, StyleSheet, Pressable,
 } from 'react-native';
 import { DecoderTitle, DecoderKey, DecoderSurface, DECODER_FONT } from './DecoderShell';
 import { decoderTokensFor } from '../constants/decoderTokens';
@@ -156,6 +156,10 @@ export interface LocalHardwarePanelProps {
    *  (Stuart, 2026-07-27). A protection nobody can see is not obviously protecting anything. */
   /** ★ The owner has FORCED the AGC on — a listener may not set a gain at all. From hwinfo. */
   agcLocked?: boolean;
+  /** ★★★ ASK BEFORE TUNING — the server has not let this listener into a shared tuner yet (dial.tuneLocked), so
+   *  every control here is dimmed and a touch calls onAskLockedTouch. docs/TUNING-ETIQUETTE.md. */
+  askLocked?: boolean;
+  onAskLockedTouch?: () => void;
   /** ★★★ The owner has FIXED the gain on this band: the ceiling IS the setting, and the server
    *  refuses every gain message from anybody. Unlike agcLocked this applies to EVERY driver —
    *  including the HackRF, where there is no AGC to reason about and the lock still closes both
@@ -656,6 +660,25 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 </Text>
               )}
             </View>
+          )}
+          {/* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md, Stuart 2026-10-21: "lock gain too"). On a shared tuner
+              every control in this panel changes what EVERYBODY hears, so while the server says this listener has not
+              been let in, the panel is dimmed and a touch nudges (the chat key and the banner flash) instead of
+              acting. The password card above stays live — an admin is never locked. The server refuses these too. */}
+          {p.askLocked && (
+            <View style={styles.adminCard}>
+              <Text style={styles.adminTitle}>ASK BEFORE TUNING</Text>
+              <Text style={styles.note}>
+                Other people are listening to this shared tuner, and these settings change what they hear. They stay
+                dimmed until you have asked in the chat — a yes, or no answer within 15 seconds, lets you in.
+              </Text>
+            </View>
+          )}
+          <View style={p.askLocked ? { opacity: 0.35 } : undefined}>
+          {p.askLocked && (
+            <Pressable style={[StyleSheet.absoluteFill, { zIndex: 9 }]} onPressIn={p.onAskLockedTouch}
+              accessibilityRole="button" accessibilityLabel="Receiver settings locked"
+              accessibilityHint="Ask in the chat before changing them — other people are listening" />
           )}
           {/* ★★ GAIN IS NOT ONE CONTROL ACROSS RADIOS. A dongle has a tuner gain TABLE; an
               HF+ has an AGC, an attenuator in 6 dB steps and a preamp, and no table at all —
@@ -1623,6 +1646,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             </Text>
           )}
           </>}
+          </View>
           {p.isSpy && <Text style={[styles.note, { marginTop: 16 }]}>
             Frequency correction, bias-T, digital AGC and direct sampling are not part
             of the SpyServer protocol — they belong to whoever runs this receiver.
