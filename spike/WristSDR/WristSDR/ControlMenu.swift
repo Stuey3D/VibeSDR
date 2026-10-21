@@ -795,6 +795,40 @@ struct HardwareSheet: View {
   /// The owner has locked the radio and we are not through it. Everything the
   /// server's adminGate refuses is drawn dim and inert while this holds.
   private var ownerLocked: Bool { radio.adminSet && !radio.adminOk }
+
+  /// The owner's password box. ★ ONE view, drawn in one of two places: below the line on an ordinary page, or —
+  /// while ask before tuning has this listener locked — above the dimmed page, LIVE, because an admin is never
+  /// locked and signing in is the way out (Stuart, 2026-10-21: "Jr needs to be able to sign in as admin too").
+  /// The phone app does the same: its password card stays usable above the locked hardware panel.
+  private var adminCard: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 5) {
+        Image(systemName: "lock.fill").font(.system(size: 11, weight: .bold))
+        Text("Owner-locked").font(.system(size: 12, weight: .semibold))
+      }.foregroundColor(.orange)
+      // ★ Say which of the two situations this is. "Most of this is yours" and "none of
+      //   this is yours" want different sentences, and the second one is the whole screen.
+      Text(radio.dialTuneLocked
+           ? "Signed in as admin you are never locked. Enter the admin password to take the receiver over."
+           : nothingForUser
+           ? "Every control on this receiver is set by its owner. There is nothing here for a listener to change."
+           : "These controls belong to the owner. Enter the admin password to unlock them.")
+        .font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
+      SecureField("Admin password", text: $adminPass)
+        .font(.system(size: 14, design: .rounded))
+      Button {
+        let p = adminPass.trimmingCharacters(in: .whitespaces)
+        adminPass = ""
+        radio.adminUnlock(p)
+      } label: {
+        Text("Unlock").font(.system(size: 13, weight: .semibold)).frame(maxWidth: .infinity)
+      }
+      .buttonStyle(.borderedProminent).tint(.orange)
+      .disabled(adminPass.trimmingCharacters(in: .whitespaces).isEmpty)
+    }
+    .padding(10)
+    .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.10)))
+  }
   /* ★★★ SHOW ONLY WHAT THIS LISTENER CAN ACTUALLY USE. Jr dimmed-and-disabled the owner's
    *     controls, which is better than the phone did (its switches MOVED and then lied), but it
    *     is still an offer: a row on a watch is precious, and one that cannot be pressed is a row
@@ -838,6 +872,8 @@ struct HardwareSheet: View {
           .font(.system(size: 10)).foregroundColor(.orange)
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(.horizontal, 6).padding(.top, 4)
+        // ★★ …and the way out stays LIVE, above the inert region — see adminCard.
+        if radio.adminSet && !radio.adminOk { adminCard.padding(.horizontal, 6) }
       }
       VStack(spacing: 7) {
         // ★★ THE ADMIN LOCK, WHERE THE LOCKED CONTROLS ARE. The server enforces it —
@@ -1137,33 +1173,9 @@ struct HardwareSheet: View {
         // was a password prompt for controls they had not looked for yet — it read
         // as "this radio is not for you" rather than "most of this is". Everything
         // below the line goes through the server's adminGate.
-        if radio.adminSet && !radio.adminOk {
-          VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-              Image(systemName: "lock.fill").font(.system(size: 11, weight: .bold))
-              Text("Owner-locked").font(.system(size: 12, weight: .semibold))
-            }.foregroundColor(.orange)
-            // ★ Say which of the two situations this is. "Most of this is yours" and "none of
-            //   this is yours" want different sentences, and the second one is the whole screen.
-            Text(nothingForUser
-                 ? "Every control on this receiver is set by its owner. There is nothing here for a listener to change."
-                 : "These controls belong to the owner. Enter the admin password to unlock them.")
-              .font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
-            SecureField("Admin password", text: $adminPass)
-              .font(.system(size: 14, design: .rounded))
-            Button {
-              let p = adminPass.trimmingCharacters(in: .whitespaces)
-              adminPass = ""
-              radio.adminUnlock(p)
-            } label: {
-              Text("Unlock").font(.system(size: 13, weight: .semibold)).frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent).tint(.orange)
-            .disabled(adminPass.trimmingCharacters(in: .whitespaces).isEmpty)
-          }
-          .padding(10)
-          .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.10)))
-        }
+        // ★★ While ask-before-tuning has this listener locked the card is drawn ABOVE the dimmed page instead
+        //   (see body) — signing in is the way out, so it must never be inside the inert region.
+        if radio.adminSet && !radio.adminOk && !radio.dialTuneLocked { adminCard }
         if radio.radioHasBiasT && !ownerLocked {
           HStack(spacing: 7) {
             Button { radio.setBiasT(!radio.biasT) } label: {

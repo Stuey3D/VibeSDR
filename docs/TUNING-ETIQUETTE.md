@@ -113,6 +113,9 @@ Not gated: zoom/pan, chat itself, `state`.
   antenna and the shared DSP buttons are dimmed and shielded (`ASK_SHIELD_SEL`).
 - **Jr** (watch, direct): refuses to send a tune while locked and says why; its Radio page (gain, AGC, RSP / HF+
   rows, de-emphasis, the FM row) is dimmed and inert with a line saying why, and the socket drops the list.
+  ★ Its admin password card is drawn ABOVE the dimmed region while locked and stays live (Stuart: "Jr needs to
+  be able to sign in as admin too") — an admin is never locked, and the server sends the dial state the moment
+  a sign-in is granted, so the lock clears at once rather than at the next 2 s tick.
   **Buddy** tunes through the phone, whose gate covers it; it exposes no receiver settings.
 
 ## Tests

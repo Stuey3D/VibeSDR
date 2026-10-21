@@ -9783,10 +9783,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (auto& sock : allSpecClientsLocked()) {
                 if (!sock || !sock->isOpen()) continue;
                 auto it = sockSession.find(sock.get());
-                out.emplace_back(sock, dialJsonLocked(it == sockSession.end() ? std::string() : it->second));
+                const std::string sess = it == sockSession.end() ? std::string() : it->second;
+                out.emplace_back(sock, dialJsonLocked(sess));
+                askNoteSentLocked(sock.get(), sess);
             }
         }
         for (auto& kv : out) sendText(kv.first, kv.second);
+    }
+    /** ★★ Remember what this socket was just told about ask before tuning, so askTick re-sends only on a CHANGE from
+     *  what it really holds. Without it a sendDialState between ticks (an admin sign-in, a chat line) left the tick
+     *  comparing against an older view — and a change BACK to that view (the admin leaving) was never sent: found by
+     *  scripts/test-ask-before-tuning.mjs. Call WITH clientMtx held. */
+    void askNoteSentLocked(net::Socket* sk, const std::string& sess) {
+        if (!g_vsAskBeforeTuning.load() || !sk) return;
+        const double now = Impl::nowSecs();
+        askSent[sk] = askBook.view(askRoomLocked(now), sess, now);
     }
     /** ★★★ ONE ANSWER TO "WHERE IS THE RADIO?" — sent on join and on a client's {"type":"state"}.
      *  Everything a client must ADOPT: config (frequency, mode, zoom, IF, gain), hwinfo, the DAB
@@ -9853,7 +9864,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (vsSharedDial()) {
             std::lock_guard<std::mutex> lk(clientMtx);
             auto it = sockSession.find(sock.get());
-            sendText(sock, dialJsonLocked(it == sockSession.end() ? std::string() : it->second));
+            const std::string sess = it == sockSession.end() ? std::string() : it->second;
+            sendText(sock, dialJsonLocked(sess));
+            askNoteSentLocked(sock.get(), sess);   // ★ see askNoteSentLocked
         }
     }
     unsigned long long soleLastBytes = 0;   ///< previous sample, for the uplink rate
@@ -14748,6 +14761,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  stayed locked until some unrelated hwinfo happened along. Stuart, 2026-10-04: "I cannot
              *  disable VibeAGC" … "it seemed to appear after a little while". */
             sendHwInfo(sock);
+            /* ★★ AND ASK BEFORE TUNING'S LOCK, AT ONCE (Stuart, 2026-10-21: "Jr needs to be able to sign in as admin
+             *  too"). An admin is never locked and signing in is the way out — so the room's dial state (this
+             *  listener's tuneLocked, and everybody's rank, since an admin outranks them) goes out now, not at the
+             *  next 2 s housekeeping tick. */
+            if (ok && g_vsAskBeforeTuning.load() && vsSharedDial()) sendDialState();
             return;
         }
         // ★★★ ON A SHARED RECEIVER, NOTHING SHARED IS UNLOCKED. The radio's front end and the

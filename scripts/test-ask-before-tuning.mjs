@@ -162,6 +162,19 @@ try {
   ok(await until(() => c.last('dial')?.tuneLocked === false, 20000), `★ nobody answered: let in after ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   ok(Date.now() - t0 >= 13000, '…and not before the 15 s were up');
 
+  console.log('── signing in as admin is the way out, at once (Stuart: "Jr needs to be able to sign in as admin too") ──');
+  // ★ This server has no password, so an unlock is granted as it is on any server without one.
+  const d = await join('dddd0004');
+  ok(await until(() => d.last('dial')?.tuneLocked === true), 'a fourth listener arrives locked');
+  const tAdmin = Date.now();
+  d.send({ type: 'admin_unlock', nonce: '', token: '' });
+  ok(await until(() => d.last('dial')?.tuneLocked === false, 1500), `★ signed in: unlocked from the next dial state (${Date.now() - tAdmin} ms, not the 2 s tick)`);
+  ok(await until(() => a.last('dial')?.tuneLocked === true, 1500), '★ …and the admin now outranks the longest-connected listener, who is locked');
+  d.send({ type: 'gain', value: 250 }); await sleep(400);
+  ok(refusedLines('gain', 'dddd0004') === 0, 'an admin\'s gain is never refused');
+  d.close();
+  ok(await until(() => a.last('dial')?.tuneLocked === false, 6000), 'the admin leaves: the longest-connected listener is top again');
+
   console.log('── when the room empties, the lock goes ──');
   b.close(); c.close();
   ok(await until(() => a.last('dial')?.askFirst !== true, 6000), 'alone again: the dial says no lock');
