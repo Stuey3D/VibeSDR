@@ -64,7 +64,7 @@ result in the existing `dial` message, per listener:
 The fields are **absent** when the switch is off — so a new client on an old server dims nothing.
 The housekeeping tick (2 s) resolves the timers and re-sends `dial` to anybody whose view changed.
 
-**The server refuses** a locked listener's `tune`, `mode`, `bandwidth` and `dab` frames — at the WebSocket
+**The server refuses** a locked listener's `tune`, `mode`, `bandwidth`, `dab` and `dab_service` frames — at the WebSocket
 reader, i.e. only for frames a client sent. Internal entries (the landing, the DAB resume for an arriving
 listener, the idle resume) call `handleControl` directly and are never gated: **recovery is not a user
 action**, and it is not refused either. A refused frame that would change nothing (a re-assert of where the
@@ -83,6 +83,12 @@ dial, as before; noted as a follow-up), chat itself, `state`.
   and a touch flashes the chat key and the banner.
 - **Jr** (watch, direct): refuses to send a tune while locked and says why. **Buddy** tunes through the
   phone, whose gate covers it.
+
+## Tests
+- `vibeserver/test-tune-etiquette.cpp` — the rule on a synthetic clock (ranks, windows, conflicts, lapses).
+- `scripts/test_ask_before_tuning.ts` — the clients' reader, banner widths, and that app + web gate every send.
+- `scripts/test-ask-before-tuning.mjs` — a real vibeserver (`--ask-before-tuning`, fake dongle, silent): refusal at
+  the socket, the old-client notice, YES / NO / 15 s on the wire.
 
 ## Why not lock everyone until they ask?
 The longest-connected listener (or the admin) is the one being protected; locking them too would make the
