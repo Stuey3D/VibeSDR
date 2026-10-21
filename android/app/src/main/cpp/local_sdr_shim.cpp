@@ -9553,7 +9553,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool askRefuses(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         if (!g_vsAskBeforeTuning.load() || !sock) return false;
         const std::string type = jsonStr(msg, "type");
-        if (type != "tune" && type != "mode" && type != "bandwidth" && type != "dab") return false;
+        // ★ What everybody HEARS: the frequency, the demodulator, the passband, the multiplex and the DAB service.
+        //   Zoom/pan is a view and stays free; gain-class controls are unchanged by this switch.
+        if (type != "tune" && type != "mode" && type != "bandwidth" && type != "dab" && type != "dab_service") return false;
         const double now = Impl::nowSecs();
         std::string me;
         bool notice = false, state = false;

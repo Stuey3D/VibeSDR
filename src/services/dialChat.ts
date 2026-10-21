@@ -46,6 +46,8 @@ export const DIAL_PHRASES: Phrase[] = [
   { id: 'please_hold',    text: 'Please hold — chasing DX' },
   { id: 'yes_go_ahead',   text: "Yes, I'm on it — but go ahead and tune" },
   { id: 'yes_hold',       text: "Yes, I'm on it — please hold on" },
+  // ★★ ASK BEFORE TUNING's gentle NO (2026-10-21): the requested "Do you mind, I am listening here", without the edge.
+  { id: 'listening_few_min', text: "I'm listening to this one — a few more minutes, please?" },
   { id: 'mid_decode',     text: "I'm running a decoder — can you wait please?" },
   // ★★ THE LONG ONES EARN THEIR PLACE. A WEFAX chart or an SSTV frame is ten minutes of holding
   //    still, and "please wait" with no duration is what makes people ask again ninety seconds
@@ -130,7 +132,7 @@ export function padPhrases(questionOpen: boolean, hz: number): Phrase[] {
 const TUNING_BANNER: Record<string, string> = {
   ask_tune: 'Can I tune?', anyone_using: 'Anyone using this?', tuning_now: 'Tuning now',
   go_ahead: 'Go ahead, tune', please_hold: 'Please hold — DX', yes_go_ahead: 'On it — go ahead',
-  yes_hold: 'On it — please hold', mid_decode: 'Decoding — please wait', decoding_10min: 'Decoding ~10 min',
+  yes_hold: 'On it — please hold', listening_few_min: 'Listening — few more min?', mid_decode: 'Decoding — please wait', decoding_10min: 'Decoding ~10 min',
   decode_done: 'Decode done — all yours', wont_tune: "OK, won't tune yet", all_yours: 'Done — all yours',
   tune_back: 'Tuning back',
 };
@@ -178,7 +180,55 @@ export function phraseText(id: string): string | null {
 export type DialState = {
   mode: string; tuner: number; mine: boolean; you: number;
   listeners: number; decoding: boolean;
+} & AskState;
+
+/* ── ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md, 2026-10-21) ─────────────────────────────────────────────
+ *  The server's opt-in etiquette lock. ONE READER for the browser and the app (web/client imports this file), so
+ *  the two can never disagree about what the dial message means.
+ *  ★★★ THE CLIENT IS TOLD, IT NEVER WORKS IT OUT (shared-dial contract). Nothing here decides whether a listener
+ *      may tune: `tuneLocked` is the server's answer, and an old server that sends none means "not locked". */
+export type AskState = {
+  /** The lock is in force on this radio right now (the owner's switch, a shared dial, company). */
+  askFirst?: boolean;
+  /** THIS listener may not move the dial yet. */
+  tuneLocked?: boolean;
+  /** '' — not asked yet · 'open' — asked, waiting for a reply · 'no' — told to wait. */
+  askState?: '' | 'open' | 'no';
+  /** When `askState` ends (local ms clock), from the server's seconds-left on arrival. 0 = none. */
+  askUntil?: number;
 };
+
+/** Read the ask fields off a `dial` message. Absent = not locked — a new client on an old server dims nothing. */
+export function parseAsk(msg: Record<string, unknown>, now = Date.now()): AskState {
+  if (msg.askFirst !== true) return { askFirst: false, tuneLocked: false, askState: '', askUntil: 0 };
+  const st = msg.askState === 'open' || msg.askState === 'no' ? msg.askState : '';
+  const secs = Number(msg.askSecs) || 0;
+  return { askFirst: true, tuneLocked: msg.tuneLocked === true, askState: st, askUntil: st && secs > 0 ? now + secs * 1000 : 0 };
+}
+
+/** May this listener NOT tune right now? Only ever the server's answer. */
+export function askLocked(d: AskState | null | undefined): boolean {
+  return !!d && d.askFirst === true && d.tuneLocked === true;
+}
+
+/** ★ What the shared-tuner banner flashes when a locked control is touched. Caps, like the banner it replaces. */
+export const ASK_NUDGE_TEXT = 'ASK IN CHAT BEFORE TUNING';
+
+/** ★★ The shared-tuner banner's standing words while locked — what to do NOW, not a rule to remember.
+ *  ★ `tight` drops the "SHARED TUNER · " prefix first (SE in Display Zoom), never the words that matter.
+ *  ★ A NO says WHEN it ends as a clock time, so the banner does not have to tick every second. */
+export function askBannerText(d: AskState, tight: boolean, clock?: (ms: number) => string): string | null {
+  if (!askLocked(d)) return null;
+  const pre = tight ? '' : 'SHARED TUNER · ';
+  // ★ No longer than today's "SHARED TUNER · ASK TO TUNE · 2/5 👤", which is what the narrowest layout was fitted to.
+  if (d.askState === 'open') return `${pre}AWAITING A REPLY`;
+  if (d.askState === 'no' && d.askUntil) {
+    const t = clock ? clock(d.askUntil)
+      : (() => { const x = new Date(d.askUntil); return `${String(x.getHours()).padStart(2, '0')}:${String(x.getMinutes()).padStart(2, '0')}`; })();
+    return `${pre}YOURS TO TUNE ${t}`;
+  }
+  return `${pre}ASK IN CHAT TO TUNE`;
+}
 
 /** True when this receiver shares one dial between its listeners. */
 export function isSharedDial(d: DialState | null): boolean {
@@ -198,6 +248,9 @@ export function dialSummary(d: DialState): string {
   const bits: string[] = [`${d.listeners} listening`];
   if (d.mode === 'spectator')      bits.push('the owner tunes this receiver');
   else if (d.decoding)             bits.push(d.mine ? 'you are decoding' : `User ${d.tuner} is decoding`);
+  // ★ Ask before tuning: say what to do, never "go ahead" to somebody the server will refuse.
+  else if (askLocked(d))           bits.push(d.askState === 'open' ? 'you asked — waiting for a reply'
+                                           : d.askState === 'no' ? 'asked to wait a few minutes' : 'ask before tuning');
   else if (d.tuner && d.mine)      bits.push('you tuned last');
   else if (d.tuner)                bits.push(`User ${d.tuner} is tuning`);
   else                             bits.push('nobody is tuning — go ahead');

@@ -9,6 +9,7 @@
  * ✗ Nothing that DOES anything belongs in this file. A function here is a shared component again.
  */
 import type { DabState } from './dabTypes';
+import type { AskState } from './dialChat';
 
 /** The one sentence a refused-as-too-old client shows; SDRScreen matches on it to add the button. */
 export const UPDATE_APP_MESSAGE = 'This server needs a newer VibeSDR. Update the app, or open the receiver in your browser for now.';
@@ -308,7 +309,10 @@ export interface SDRCallbacks {
    *  IS the mechanism by which two strangers sort the dial out between themselves.
    *  ★ `mode` is 'exclusive' on an ordinary receiver, and nothing chat-shaped should be shown. */
   onDial?:      (d: { mode: string; tuner: number; mine: boolean; you: number;
-                      listeners: number; decoding: boolean }) => void;
+                      listeners: number; decoding: boolean } & AskState) => void;
+  /** ★★ ASK BEFORE TUNING: something tried to tune while the server says this listener may not — the screen
+   *  flashes the chat key and the shared-tuner banner (docs/TUNING-ETIQUETTE.md). Nothing was sent. */
+  onTuneLocked?: () => void;
   /** Spectator mode said no — the owner tunes this one. An explanation, not an error. */
   onDialRefused?: () => void;
   /** ★★★ THE CLIENT IS PUTTING THE DIAL BACK WHERE THIS PERSON LEFT IT — a deliberate restore of

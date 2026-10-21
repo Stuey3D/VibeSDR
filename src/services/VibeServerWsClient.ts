@@ -91,6 +91,7 @@ import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
 import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 import { vsSquelchMsg } from './vibeSquelch';
+import { parseAsk, askLocked } from './dialChat';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
  *
@@ -262,6 +263,21 @@ export abstract class VibeServerWsClient {
   /** ★ Does this receiver share one dial? Set from the server's `dial` message. On a shared dial a centre
    *  change we did not ask for is another listener tuning, and must be ADOPTED rather than argued with. */
   private sharedDial = false;
+  /** ★★★ ASK BEFORE TUNING — the server said this listener may not move the dial yet (dial.tuneLocked). The ONE
+   *  gate for every way this client tunes (drum, keys, spectrum, bookmarks, Siri, the watch, a pad): tune(),
+   *  setMode(), setBandwidth() and dab() refuse while it is set, and the screen is nudged. Never inferred here —
+   *  only the server's word sets it, and an old server's silence leaves it false (docs/TUNING-ETIQUETTE.md). */
+  protected tuneLocked = false;
+  private askStateAskedAt = 0;
+  /** @return true when the lock refused the caller. Asks the server for the room's state (at most once a second),
+   *  so anything the screen already drew optimistically snaps back to where the radio really is. */
+  protected askBlocked(): boolean {
+    if (!this.tuneLocked) return false;
+    this.callbacks.onTuneLocked?.();
+    const now = Date.now();
+    if (now - this.askStateAskedAt > 1000) { this.askStateAskedAt = now; this.requestState(); }
+    return true;
+  }
   // Local hardware only — set by the adapter from the device config. Drives the
   // movable Fs pan window in panSpan(). Default = the 2.4 MS/s RTL-SDR rate.
   /**
@@ -474,6 +490,7 @@ export abstract class VibeServerWsClient {
 
   /** Tune to a new frequency (and optionally mode). Sends to native audio WS + spectrum WS. */
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
+    if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
     if (this.dabHeld) return;            // ★ see dabHeld — the multiplex IS the tuning
     const prevFreq = this.status.frequency;   // ★ read BEFORE it is overwritten — see sameSpot below
     this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
@@ -628,6 +645,7 @@ export abstract class VibeServerWsClient {
   }
 
   setMode(mode: SDRMode) {
+    if (mode !== this.status.mode && this.askBlocked()) return;   // ★★ ask before tuning; a re-pick changes nothing
     const changed = mode !== this.status.mode;
     this.status.mode = mode;
     // ★ Ours, so the configs already on their way with the OLD mode are not adopted over it — see roomMode.
@@ -645,6 +663,9 @@ export abstract class VibeServerWsClient {
   }
 
   setBandwidth(low: number, high: number) {
+    // ★★ Ask before tuning — the passband is everybody's on a shared dial. Only a CHANGE asks (a slider settling
+    //    on the room's own edges is not somebody reaching for it).
+    if ((low !== this.status.bandwidthLow || high !== this.status.bandwidthHigh) && this.askBlocked()) return;
     // ★ VibeServer clamps WFM to WFM_MIN_BW_HZ and every mode to MODE_MAX_BW_HZ; do it here too so
     //   status (and so the slider and any bookmark saved from it) holds the width the server is
     //   actually running. See clampVibePassband.
@@ -2332,6 +2353,9 @@ export abstract class VibeServerWsClient {
     if (msg.type === 'dial') {
       // ★ Remembered because it changes what an "unsolicited" centre MEANS — see the config handler.
       this.sharedDial = String(msg.mode || 'exclusive') !== 'exclusive';
+      // ★★ Ask before tuning: the server's answer, read by the one reader the browser shares (dialChat.parseAsk).
+      const ask = parseAsk(msg);
+      this.tuneLocked = askLocked(ask);
       this.callbacks.onDial?.({
         mode: String(msg.mode || 'exclusive'),
         tuner: Number(msg.tuner) || 0,
@@ -2339,6 +2363,7 @@ export abstract class VibeServerWsClient {
         you: Number(msg.you) || 0,
         listeners: Number(msg.listeners) || 0,
         decoding: msg.decoding === true,
+        ...ask,
       });
       return;
     }
