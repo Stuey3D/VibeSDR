@@ -785,6 +785,19 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <label><span class="lbl">Maximum listeners</span>
             <input type="number" id="users" min="1" max="50"></label>
         </div>
+        <!-- ★★★ ASK BEFORE TUNING (Stuart, 2026-10-21) — DIRECTLY AFTER THE COUNT, because it only means anything
+             once the count says several people share the dial. Shown ONLY then (unlocked, more than one listener):
+             on a locked window everybody has their own VFO and on a one-listener radio there is nobody to ask, so
+             the switch would be a control whose every use is a no-op (AGENTS.md). Off by default. -->
+        <div id="askFirstRow" class="hide">
+          <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
+            <input type="checkbox" id="askFirst" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Ask before tuning</span></label>
+          <div class="hint">When somebody else is already listening, a newcomer&rsquo;s tuning controls are dimmed
+            until they ask in the chat. A &ldquo;yes&rdquo; lets them in at once, and so does no answer within
+            15&nbsp;seconds. A &ldquo;no&rdquo; holds for five minutes at most, so nobody can keep the radio to
+            themselves. Your answer as admin always counts first, then whoever has been listening longest.</div>
+        </div>
         <!-- ★★★ THIS BOX IS WHAT TURNS AN UNLOCKED RADIO INTO AN FM-DX ONE, so it is where the
              consequence is explained rather than in a mode card. Two settings already say
              everything: an unpinned centre means one dial, and a count above one means several
@@ -2197,6 +2210,8 @@ function usersNote() {
   const el = $("usersNote"); if (!el) return;
   const n = parseInt($("users").value || "1", 10);
   const locked = radio().mode === "locked";
+  // ★ Ask before tuning exists only on a shared dial — see #askFirstRow.
+  if ($("askFirstRow")) $("askFirstRow").classList.toggle("hide", locked || n <= 1);
   if (locked) {
     el.innerHTML = "Each listener tunes independently inside the window you pinned.";
   } else if (n > 1) {
@@ -4822,6 +4837,7 @@ function fill() {
   if ($("idleGrace")) $("idleGrace").value = String(r.idleGrace != null ? Math.round(r.idleGrace) : 300);
   $("sessionLimit").value = r.sessionLimitMin || 0;
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
+  if ($("askFirst")) $("askFirst").checked = !!r.askBeforeTuning;   // ★ absent = off, as on every older config
   $("idleKick").value = r.idleKickMin || 0;
   if ($("nbWide"))   $("nbWide").value = String(r.nbWide === undefined || r.nbWide === null ? 1 : r.nbWide);
   if ($("rawIqOn")) {
@@ -5164,6 +5180,9 @@ function collectRadio() {
     sessionLimitMin: parseInt($("sessionLimit").value || "0", 10),
     // ★ Absent/false = hard, so an existing radio keeps doing exactly what its owner chose.
     sessionLimitSoft: $("sessionLimitMode").value === "soft",
+    // ★ Ask before tuning — saved as ticked even while hidden (one listener / locked), so raising the count later
+    //   brings back what the owner chose; the server only applies it on a shared dial with company anyway.
+    askBeforeTuning: !!($("askFirst") && $("askFirst").checked),
     // ★ Sent as typed; the SERVER clamps to the 15-minute floor, so the page cannot be the thing
     //   that decides what is too short.
     idleKickMin: parseInt($("idleKick").value || "0", 10),
