@@ -50,7 +50,26 @@ reply so far stands (the admin's always wins):
 - A standing NO also ends early if its sayer leaves, or is no longer ranked above the asker (their time
   limit ran out), or someone ranked above the sayer says YES.
 
-A grant lasts for the visit (kept across a reconnect within the user-number hold, 2 minutes).
+### ★★ How long a grant lasts (Stuart, 2026-10-22)
+*"If actively tuning they stay up but if left on a station for a few mins they lock again."* A grant lasts
+while it is being **used**: it **lapses after 3 minutes** (`kGrantIdleS`) with no **accepted** receiver
+change from that session. Any frame in the locked list below (tune, mode, passband, DAB, gain, the shared
+DSP …) that the server **accepts** restarts the clock. These do **not**: a refused frame, a re-assert of
+where the radio already is, zoom / pan / squelch / the waterfall rate / chat (free — they do not move the
+shared dial), and the server's own landing and resume (recovery is not the person). On a lapse the listener
+is a **newcomer again** — ask, then YES / 15 s silence / NO ≤ 5 minutes, exactly as before. If nobody ranked
+above them is here when it lapses, nothing locks (they are top anyway). The clock belongs to the grant, so a
+reconnect within the 2-minute user-number hold keeps it — and it keeps running through the drop.
+
+| Timer | Length | Constant (`vibe_tune_etiquette.h`) |
+|---|---|---|
+| Ask with no answer → let in | 15 s | `kAskWindowS` |
+| A NO holds at most | 5 minutes | `kNoHoldS` |
+| A grant with no accepted receiver change → locked again | 3 minutes | `kGrantIdleS` |
+| Grant (and its idle clock) kept across a reconnect | 2 minutes | `kGoneForgetS` |
+
+`VIBE_ASK_GRANT_IDLE_S` (1–3600) overrides `kGrantIdleS` — **for tests only** (the live suite runs it at
+10 s); never set on a real server.
 
 ## Enforcement — the server owns all of it
 Per the shared-dial contract the server holds the lock state, the ranks and the timers, and states the
@@ -61,8 +80,13 @@ result in the existing `dial` message, per listener:
 ```
 `askFirst` = the lock is in force on this radio now; `tuneLocked` = this listener may not tune;
 `askState` = `""` | `"open"` (asked, waiting) | `"no"` (told no); `askSecs` = seconds left in that state.
+`askGrantSecs` (from 2026-10-22, optional) = this listener holds a grant that matters (they would be locked
+without it) and it lapses in this many seconds **if they change nothing more**; every accepted change resets it
+to the full 3 minutes, and `dial` is NOT re-sent per tune, so a client that ever shows it counts it down
+locally and resets it on its own accepted change. Absent = no grant / unknown. No client reads it yet. When
+a grant lapses the listener simply gets `tuneLocked: true` with no `askState` — the newcomer's view.
 The fields are **absent** when the switch is off — so a new client on an old server dims nothing.
-The housekeeping tick (2 s) resolves the timers and re-sends `dial` to anybody whose view changed.
+The housekeeping tick (2 s) resolves the timers (the grant's idle lapse included) and re-sends `dial` to anybody whose view changed.
 
 **The server refuses** a locked listener's `tune`, `mode`, `bandwidth`, `dab` and `dab_service` frames — at the WebSocket
 reader, i.e. only for frames a client sent. Internal entries (the landing, the DAB resume for an arriving
@@ -119,10 +143,12 @@ Not gated: zoom/pan, chat itself, `state`.
   **Buddy** tunes through the phone, whose gate covers it; it exposes no receiver settings.
 
 ## Tests
-- `vibeserver/test-tune-etiquette.cpp` — the rule on a synthetic clock (ranks, windows, conflicts, lapses).
+- `vibeserver/test-tune-etiquette.cpp` — the rule on a synthetic clock (ranks, windows, conflicts, lapses, the
+  grant's 3-minute idle lapse: 179 s granted, 181 s locked, a tune at 170 s resets, reconnect keeps the clock).
 - `scripts/test_ask_before_tuning.ts` — the clients' reader, banner widths, and that app + web gate every send.
 - `scripts/test-ask-before-tuning.mjs` — a real vibeserver (`--ask-before-tuning`, fake dongle, silent): refusal at
-  the socket, the old-client notice, YES / NO / 15 s on the wire.
+  the socket, the old-client notice, YES / NO / 15 s on the wire, and the idle lapse (shortened to 10 s with the
+  test-only `VIBE_ASK_GRANT_IDLE_S`): tuning keeps it up, zooming alone does not.
 
 ## Why not lock everyone until they ask?
 The longest-connected listener (or the admin) is the one being protected; locking them too would make the

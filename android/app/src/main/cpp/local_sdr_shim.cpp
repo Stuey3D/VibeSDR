@@ -9489,6 +9489,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (v.inForce) {
                 j += ",\"askFirst\":true,\"tuneLocked\":" + std::string(v.locked ? "true" : "false");
                 if (!v.state.empty()) j += ",\"askState\":\"" + v.state + "\",\"askSecs\":" + std::to_string(v.secs);
+                // ★ A grant that matters, and how long it has left if they change nothing more (kGrantIdleS; each
+                //   accepted change restarts it, and the dial is NOT re-sent per tune). Absent = no grant / unknown.
+                if (v.grantSecs >= 0) j += ",\"askGrantSecs\":" + std::to_string(v.grantSecs);
             }
         }
         return j + "}";
@@ -9496,7 +9499,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     // ── ★★★ ASK BEFORE TUNING (vibe_tune_etiquette.h, docs/TUNING-ETIQUETTE.md) ──────────────────────────────
     /** The rule's state: who asked, who answered, who has been let in. Under clientMtx. */
-    vibeask::Book askBook;
+    vibeask::Book askBook = askBookFromEnv();
+    /** ★ TEST-ONLY: VIBE_ASK_GRANT_IDLE_S shortens the grant's idle lapse so scripts/test-ask-before-tuning.mjs can
+     *  see it in seconds, not minutes. Never set on a real server; out-of-range values are ignored. */
+    static vibeask::Book askBookFromEnv() {
+        vibeask::Book b;
+        if (const char* e = std::getenv("VIBE_ASK_GRANT_IDLE_S")) {
+            const double v = std::atof(e);
+            if (v >= 1.0 && v <= 3600.0) b.grantIdleS = v;
+        }
+        return b;
+    }
     /** What each spectrum socket was last told, so the tick re-sends `dial` only to somebody whose view CHANGED. */
     std::map<net::Socket*, vibeask::View> askSent;
     /** ★ One refusal notice per session per 10 s, and one full-state reply per socket per second: a held tune
@@ -9571,26 +9584,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bool notice = false, state = false;
         {
             std::lock_guard<std::mutex> lk(clientMtx);
-            if (!askInForceLocked()) return false;
+            static const std::string kNoSession;
             auto it = sockSession.find(sock.get());
-            me = it == sockSession.end() ? std::string() : it->second;
-            if (!askBook.locked(askRoomLocked(now), me)) return false;
-            // ★ Nothing to move: the radio is already where this frame asks.
-            double v = 0;
-            const std::string m = jsonStr(msg, "mode");
-            bool noop = false;
-            if (type == "tune")
-                noop = (!jsonNum(msg, "frequency", v) || std::fabs(v - audioFreq.load()) < 1.0) && (m.empty() || m == mode)
-                       && msg.find("bandwidthLow") == std::string::npos;
-            else if (type == "mode") noop = m.empty() || m == mode;
-            else if (type == "dab") {
-                double onV = 0, ch = -1; jsonNum(msg, "on", onV);
-                const bool hasCh = jsonNum(msg, "channel", ch);
-                noop = onV != 0 && g_dabMode.load(std::memory_order_relaxed)
-                       && (!hasCh || (int)ch == g_dabWantChannel.load(std::memory_order_relaxed))
-                       && msg.find("\"sid\"") == std::string::npos;
+            const std::string& sess = it == sockSession.end() ? kNoSession : it->second;
+            if (!askInForceLocked() || !askBook.locked(askRoomLocked(now), sess)) {
+                // ★★★ ACCEPTED — and a frame that really changes the receiver keeps this session's grant alive
+                //     (kGrantIdleS, Stuart 2026-10-22: "if actively tuning they stay up"). Counted while the lock is
+                //     not in force too (alone for a moment), so a grant does not lapse under somebody still tuning.
+                //     A re-assert of where the radio already is is not a change. Only frames a CLIENT sent reach
+                //     here, so recovery never counts. One map lookup when there is no grant; no allocation.
+                if (askBook.holdsGrant(sess) && !askNoopLocked(type, msg)) askBook.acted(sess, now);
+                return false;
             }
-            if (noop) return true;
+            me = sess;
+            // ★ Nothing to move: the radio is already where this frame asks.
+            if (askNoopLocked(type, msg)) return true;
             double& at = askNoticeAt[me];
             if (now - at >= 10.0) { at = now; notice = true; }
             if (askNoticeAt.size() > 512) askNoticeAt.clear();
@@ -9604,6 +9612,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             sendText(sock, "{\"type\":\"notice\",\"ask\":1,\"why\":\"Ask in chat before tuning or changing the receiver "
                            "\xE2\x80\x94 other people are listening to this shared tuner\"}");
         return true;
+    }
+
+    /** ★ Would this gated frame change nothing — the radio is already where it asks? Call WITH clientMtx held. */
+    bool askNoopLocked(const std::string& type, const std::string& msg) {
+        double v = 0;
+        if (type == "tune") {
+            const std::string m = jsonStr(msg, "mode");
+            return (!jsonNum(msg, "frequency", v) || std::fabs(v - audioFreq.load()) < 1.0) && (m.empty() || m == mode)
+                   && msg.find("bandwidthLow") == std::string::npos;
+        }
+        if (type == "mode") { const std::string m = jsonStr(msg, "mode"); return m.empty() || m == mode; }
+        if (type == "dab") {
+            double onV = 0, ch = -1; jsonNum(msg, "on", onV);
+            const bool hasCh = jsonNum(msg, "channel", ch);
+            return onV != 0 && g_dabMode.load(std::memory_order_relaxed)
+                   && (!hasCh || (int)ch == g_dabWantChannel.load(std::memory_order_relaxed))
+                   && msg.find("\"sid\"") == std::string::npos;
+        }
+        return false;
     }
 
     /** ★★ A chat line, read for what it MEANS to the lock (an ask, a yes, a no). Call WITHOUT clientMtx held. */
