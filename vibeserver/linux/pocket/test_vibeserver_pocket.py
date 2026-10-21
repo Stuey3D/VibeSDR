@@ -592,6 +592,82 @@ def scan_lists_every_security(tmp):
        "a WPA2/WPA3 network is saved as wpa-psk, and the client profile pins NO band (5 GHz is never excluded by us)")
 
 
+def kept_log(tmp):
+    """★★★ THE WI-FI LOG THAT SURVIVES A REBOOT (2026-10-21: the RAM journal lost a whole afternoon's evidence). Copied in
+    batches, Wi-Fi lines only, overlap cut, capped with one rotation, 0600, never raises."""
+    class J:
+        def __init__(self):
+            self.t, self.units, self.kern, self.calls = 0.0, [], [], []
+        def now(self):
+            return self.t
+        def run(self, args, timeout=40, secret=False):
+            self.calls.append(list(args))
+            if args[0] != "journalctl":
+                return 0, ""
+            src = self.kern if "-k" in args else self.units
+            return 0, "".join(l + "\n" for l in src)
+    j = J()
+    path = os.path.join(tmp, "kept", "wifi-log.txt")
+    wall = [1792560000.0]
+    k = vp.KeptLog(j, path=path, cap=4096, wall=lambda: wall[0])
+    ok(not k.due(), "not copied in the first minute (the boot's lines are copied once NetworkManager has settled)")
+    j.t = 61
+    j.units = ["2026-10-21T14:00:01.000001+0100 pocket NetworkManager[412]: <info> device (wlan0): Activation: starting",
+               "2026-10-21T14:00:03.000001+0100 pocket vibeserver-pocket[380]: vibeserver-pocket: network \"Meow!\" advertises WPA2/WPA3"]
+    j.kern = ["2026-10-21T14:00:02.000001+0100 pocket kernel: brcmfmac: brcmf_cfg80211_connect: Connecting",
+              "2026-10-21T14:00:02.500000+0100 pocket kernel: usb 1-1: new high-speed USB device number 3"]
+    ok(k.due() and k.flush() == 3, "the first copy: this boot's NetworkManager / supplicant / our lines + the kernel's Wi-Fi lines (3)")
+    text = open(path, encoding="utf-8").read()
+    ok("usb 1-1" not in text and text.index("Activation: starting") < text.index("brcmf_cfg80211_connect") < text.index("advertises"),
+       "…kernel lines other than Wi-Fi are left out, and the two reads merge in time order")
+    ok(oct(os.stat(path).st_mode & 0o777) == "0o600", "…the file is root-only (SSIDs are private)")
+    ok(["-b"] == [a for a in j.calls[0] if a == "-b"] and all("-u" in c or "-k" in c for c in j.calls)
+       and any("NetworkManager.service" in c for c in j.calls) and any("wpa_supplicant.service" in c for c in j.calls),
+       "…asked of journalctl: this boot, NetworkManager + wpa_supplicant + vibeserver-pocket, and the kernel")
+    # the next copy: the overlap with the previous read is cut, only new lines are appended
+    wall[0] += 900
+    j.t += 900
+    j.units = j.units + ["2026-10-21T14:15:00.000001+0100 pocket NetworkManager[412]: <info> device (wlan0): state change: activated -> failed"]
+    ok(k.due() and k.flush() == 1, "fifteen minutes on: only the one new line is copied (the overlap is cut)")
+    ok(any("--since" in c for c in j.calls[2:]) and open(path, encoding="utf-8").read().count("Activation: starting") == 1,
+       "…read with --since the last copy, nothing repeated")
+    # after a join: soon, but not more than once every two minutes
+    k.soon()
+    ok(k.next_at == j.t + vp.WIFI_LOG_MIN_GAP_SEC - 0 and not k.due(), "a join straight after a copy: the next copy waits for the minimum gap")
+    k.flush()
+    j.t += 600
+    k.soon()
+    ok(k.next_at == j.t + vp.WIFI_LOG_AFTER_JOIN_SEC, "a join later on: copied ~20 s after it (NetworkManager's lines about it included)")
+    # nothing new: nothing written (no SD write for nothing)
+    size = os.path.getsize(path)
+    j.t += 30
+    ok(k.flush() == 0 and os.path.getsize(path) == size, "nothing new: nothing written")
+    # a stop writes the marker line even with nothing new
+    k.flush("vibeserver-pocket stopped (a reboot, an update or a restart)")
+    ok("stopped (a reboot" in open(path, encoding="utf-8").read(), "a stop leaves a line saying so")
+    # the cap: one rotation, never more than two files of the cap
+    for i in range(40):
+        j.units = j.units + ["2026-10-21T15:%02d:00.000001+0100 pocket NetworkManager[412]: <info> %s" % (i % 60, "x" * 200)]
+        j.t += 1000
+        k.flush()
+    files = sorted(os.listdir(os.path.dirname(path)))
+    ok(files == ["wifi-log.txt", "wifi-log.txt.1"] and all(os.path.getsize(os.path.join(os.path.dirname(path), f)) <= 4096 for f in files),
+       "capped: wifi-log.txt + one rotation (wifi-log.txt.1), each within the cap — bounded on the card")
+    # a restarted service reads the whole boot again: the last kept line cuts the repeat
+    k2 = vp.KeptLog(j, path=path, cap=4096, wall=lambda: wall[0])
+    before = open(path, encoding="utf-8").read()
+    j.t += 100
+    n = k2.flush()
+    after = open(path, encoding="utf-8").read()
+    ok(n == 0 and after.count(j.units[-1]) == 1, "a restarted service (whole boot read again): nothing already kept is repeated")
+    # a journal that will not answer, a path that cannot be written: a log line, never an exception
+    open(os.path.join(tmp, "blocker"), "w").close()        # a FILE where the directory should be
+    bad = vp.KeptLog(j, path=os.path.join(tmp, "blocker", "wifi-log.txt"), cap=4096)
+    with redirect_stdout(io.StringIO()) as out:
+        r = bad.flush()
+    ok(r == 0 and "could not keep the Wi-Fi log" in out.getvalue(), "an unwritable settings partition: one log line, never a crash")
+
+
 # ★★★ WHAT `iw dev wlan0 scan dump` PRINTS (iw 6.x, Raspberry Pi OS bookworm; layout as iw's scan.c writes it). One
 #     fixture per case Stuart's Portable meets: the iPhone with Maximise Compatibility OFF (5 GHz WPA2/WPA3 transition)
 #     and ON (2.4 GHz plain WPA2), a WPA3-only router, a WPA2 router that offers PMF, one that requires it (PSK/SHA-256),
@@ -1380,6 +1456,7 @@ def main():
         scan_lists_every_security(tempfile.mkdtemp())
         wpa3_transition_hotspots(tempfile.mkdtemp())
         rsn_detection()
+        kept_log(tempfile.mkdtemp())
 
     out = log.getvalue()
     for secret in ("homepass1", "phonepass", "pocketpass", "workpass1"):

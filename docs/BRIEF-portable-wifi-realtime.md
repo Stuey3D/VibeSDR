@@ -319,6 +319,22 @@ Phase 2.1 is for the foreground case: an app or web client on screen, over a bus
 
 ---
 
+## Phase 3c — UPDATE (2026-10-21): PMF-off was WRONG on the device; DETECTION FIRST replaces it
+
+**Device evidence:** the iPhone hotspot with Maximise Compatibility OFF (5 GHz, 5220 MHz, WPA2/WPA3 transition) **refused
+the PMF-off profile at once**; the retry with SAE allowed + **PMF optional** joined (172.20.10.2). The "brcmfmac fumbles
+SAE" theory in 3b is wrong. Meow! and the 2.4 GHz compatibility hotspot (plain WPA2) join either way.
+
+**What the code does now** (`vibeserver-pocket`, "DETECTION FIRST"): after every scan/probe and again before every join
+it reads `iw dev wlan0 scan dump` (the kernel's copy of the last scan — no radio work) for each network's RSN element —
+AKM suites and MFP-capable/required — and asks for exactly that: WPA3-only → `sae` + PMF required; transition → `wpa-psk`
+(SAE allowed) + PMF optional; WPA2 MFPC → optional; WPA2 MFPR → required; plain WPA2 → PMF off; not heard → optional.
+nmcli's SECURITY column is the fallback (no MFP in it). A refusal runs the whole ladder once per run (SAE/required →
+optional → off; off → optional). What joins is remembered per SSID with a fingerprint of the advertisement (AKM set + MFP
+flags, never BSSIDs) and used only while the network advertises the same thing — Stuart's Meow! has been several
+different routers. A downgrade is joined and logged in plain words. `migrate_pmf()` is gone. Section 3b is kept as the
+record.
+
 ## Phase 3b — UPDATE (2026-10-20, later): the no-IR theory is OUT; WPA2/WPA3 is the target, and it is FIXED in code
 
 **New evidence:** the Portable came online on the home mesh "Meow!" — **5 GHz ch 36, 80 MHz, 433 Mbit/s, −40 dBm, GB**.

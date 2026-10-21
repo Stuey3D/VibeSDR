@@ -158,6 +158,23 @@ WIFI_SEC_KEEP = 20
 #     private: it travels only in the admin-gated state, like the saved networks.
 JOIN_HISTORY = "/var/lib/vibeserver-pocket/join-history.json"
 JOIN_KEEP = 20
+# ★★★ THE WI-FI LOG THAT SURVIVES A REBOOT (2026-10-21: the Portable's journal is in RAM — 16 MB, journald volatile, on
+#     purpose: a journal on the SD card is a write every few seconds — so every reboot and every update wiped it, and a
+#     whole afternoon's evidence went with it). KeptLog copies OUR lines, NetworkManager's, wpa_supplicant's and the
+#     kernel's Wi-Fi lines (brcmfmac, cfg80211, wlan0) from the RAM journal to the settings partition:
+#       · in batches — every WIFI_LOG_FLUSH_SEC, ~20 s after a join attempt (so a failed join's NetworkManager lines
+#         are kept even if the power goes next), and when the service is stopped (a reboot, an update);
+#       · bounded — WIFI_LOG_CAP per file, one rotation (wifi-log.txt → wifi-log.txt.1), so never more than 2 × the cap;
+#       · appended, never rewritten — a few KB a quarter-hour on a quiet box, nothing a card notices;
+#       · 0600 (SSIDs are private) and in Download diagnostics (vibeserver-diagnostics), secrets scrubbed there as
+#         everything else is. The journal is never made persistent: this is the part worth keeping, nothing else.
+WIFI_LOG = "/var/lib/vibeserver-pocket/wifi-log.txt"
+WIFI_LOG_CAP = 128 * 1024
+WIFI_LOG_FLUSH_SEC = 900
+WIFI_LOG_AFTER_JOIN_SEC = 20
+WIFI_LOG_MIN_GAP_SEC = 120          # ★ a phone hotspot asked for every two minutes must not mean a write every minute
+WIFI_LOG_UNITS = ("NetworkManager.service", "wpa_supplicant.service", "vibeserver-pocket.service")
+KERNEL_WIFI_LINE = re.compile(r"brcmf|cfg80211|ieee80211|wlan\d|regulatory|\bwifi\b", re.I)
 
 
 def pmf_value(v):
@@ -721,6 +738,7 @@ class Box:
         self._link_prev = None        # (tx packets, tx retries) at the last reading, for the retry %
         self.scan_info = {}           # ★ ssid -> {"freq", "security", "via": "scan"|"probe"} from the last look
         self.retried = set()          # ★ networks the security ladder has been run on this run (once each)
+        self.after_join = None        # ★ called after every join attempt (KeptLog.soon — keep the evidence)
         self.adverts = {}             # ★ ssid -> advert_of(…): what each network ADVERTISES, from `iw … scan dump`
         self.sec_path = WIFI_SEC_FILE
         self.sec_memory = load_wifi_sec(self.sec_path)   # ★ ssid -> what joined it, and what it advertised then
@@ -1253,6 +1271,13 @@ class Box:
         return plan_words(self.profile_plan(name))
 
     def join(self, name, ssid, via="scan"):
+        try:
+            return self._join(name, ssid, via)
+        finally:
+            if self.after_join:
+                self.after_join()
+
+    def _join(self, name, ssid, via="scan"):
         """★★★ JOIN A SAVED CLIENT NETWORK, RECORDED. DETECTION FIRST: the kernel's scan results are read again and the
         profile is made to ask for what the network advertises now (choose_security). If the network refuses us at
         authentication or association (never for "not found": nothing was there to refuse), THE WHOLE LADDER is tried
@@ -2253,6 +2278,90 @@ def boot(box, configured=None):
     setup_once(box)
 
 
+class KeptLog:
+    """★★★ The Wi-Fi lines of the RAM journal, copied in batches to the settings partition (see WIFI_LOG)."""
+
+    def __init__(self, sh, path=WIFI_LOG, cap=WIFI_LOG_CAP, wall=time.time):
+        self.sh, self.path, self.cap, self.wall = sh, path, cap, wall
+        self.since = None             # wall-clock second of the last copy; None = not yet this run (take the whole boot)
+        self.last_line = ""           # the newest line copied — the overlap of the next read is cut there
+        self.last_at = -1e9           # monotonic time of the last copy
+        self.next_at = sh.now() + 60  # ★ the first copy a minute in: the boot's own lines, once NetworkManager settled
+        # ★ A restarted service (Restart=always) reads the whole boot again: the last line already kept cuts the repeat.
+        try:
+            with open(path, "rb") as f:
+                f.seek(max(0, os.path.getsize(path) - 4096))
+                tail = [l for l in f.read().decode("utf-8", "replace").splitlines() if l and not l.startswith("────")]
+            self.last_line = tail[-1] if tail else ""
+        except OSError:
+            pass
+
+    def soon(self):
+        """After a join attempt: copy ~20 s from now (NetworkManager's lines about it will be in), but never more often
+        than WIFI_LOG_MIN_GAP_SEC."""
+        now = self.sh.now()
+        self.next_at = min(self.next_at, max(now + WIFI_LOG_AFTER_JOIN_SEC, self.last_at + WIFI_LOG_MIN_GAP_SEC))
+
+    def due(self):
+        return self.sh.now() >= self.next_at
+
+    def read_new(self):
+        """The journal's Wi-Fi lines since the last copy, oldest first (the microsecond timestamp leads each line, so the
+        two reads merge by it; lines of one read keep their order)."""
+        span = ["-b"] if self.since is None else ["--since", "@%d" % (self.since - 2)]   # ★ a small overlap, cut below
+        base = ["journalctl", "--no-pager", "-q", "-o", "short-iso-precise"] + span
+        rc, units = self.sh.run(base + sum((["-u", u] for u in WIFI_LOG_UNITS), []), timeout=60)
+        rc2, kern = self.sh.run(base + ["-k"], timeout=60)
+        lines = (units.splitlines() if rc == 0 else []) + \
+                [l for l in (kern.splitlines() if rc2 == 0 else []) if KERNEL_WIFI_LINE.search(l)]
+        lines = sorted((l for l in lines if l.strip() and not l.startswith("-- ")), key=lambda l: l.split(" ", 1)[0])
+        if self.last_line and self.last_line in lines:
+            i = len(lines) - 1 - lines[::-1].index(self.last_line)
+            lines = lines[i + 1:]
+        return lines
+
+    def flush(self, why=""):
+        """Copy what is new; returns the number of lines written. Never raises (a full or missing partition loses only
+        this copy)."""
+        self.last_at = self.sh.now()
+        self.next_at = self.last_at + WIFI_LOG_FLUSH_SEC
+        try:
+            first = self.since is None
+            lines = self.read_new()
+            self.since = int(self.wall())
+            if not lines and not first and not why:
+                return 0                                      # ★ nothing new: no write at all
+            if lines:
+                self.last_line = lines[-1]
+            text = ""
+            if first:
+                text += "──── %s: vibeserver-pocket started (this boot's Wi-Fi lines follow) ────\n" % \
+                        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.wall()))
+            text += "".join(l + "\n" for l in lines)
+            if why:
+                text += "──── %s: %s ────\n" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.wall())), why)
+            data = text.encode("utf-8")
+            if len(data) > self.cap:
+                data = data[-self.cap:]
+                data = data[data.find(b"\n") + 1:]
+            try:
+                size = os.path.getsize(self.path)
+            except OSError:
+                size = 0
+            if size and size + len(data) > self.cap:
+                os.replace(self.path, self.path + ".1")      # ★ the one rotation: never more than two files
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+            return len(lines)
+        except Exception as e:
+            log("could not keep the Wi-Fi log (%s) — it is in the RAM journal only" % type(e).__name__)
+            return 0
+
+
 CONVERGE = "/usr/lib/vibeserver/vibeserver-pocket-converge"
 
 
@@ -2298,6 +2407,20 @@ def main_loop():
     net = NetWatch(sh)
     net.start()
     gov = GovernorFollower()
+    kept = KeptLog(sh)
+    box.after_join = kept.soon
+    # ★ A stop (reboot, update, restart) copies the last lines first: SIGTERM ends the loop through the finally below.
+    import signal
+    def _term(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, _term)
+    try:
+        run_loop(sh, box, net, gov, kept, uid)
+    finally:
+        kept.flush("vibeserver-pocket stopped (a reboot, an update or a restart)")
+
+
+def run_loop(sh, box, net, gov, kept, uid):
     was_mode = None
     last_tick = 0
     # ★ What the kick words below need: a radio, switched on.
@@ -2371,6 +2494,8 @@ def main_loop():
                 box.last_error = "internal: %s" % type(e).__name__
                 log(box.last_error)
             box.write_state()
+            if kept.due():
+                kept.flush()
         sh.sleep(1)
 
 
