@@ -527,3 +527,19 @@ Safeguards:
 - Tested into a dummy load with Saber before any antenna, like the RX phases.
 - Licensing is the operator's responsibility; the setup switch says so in plain words. Local-only means the operator
   is physically near the station.
+
+## Phase TX-remote — the owner's PAIRED app transmits from anywhere (Stuart, 2026-10-21; after Phase TX)
+
+Stuart: "Pairing code with the app when setting up, only the server owner's app is paired."
+
+- **Pairing at setup, on the LAN.** The setup/admin page (reached locally) shows a short code (6 digits, single use,
+  expires in 5 minutes). The owner types it into the VibeSDR app while the phone is on the same network. The app and
+  server swap a key pair; the private key lives in the iOS Keychain / Android Keystore, never leaves the phone.
+- **Only the paired app can transmit remotely.** Not the web client, not any other phone, not a password alone.
+  Remote TX = paired device key + admin session + "Allow remote transmit" switch ON (separate from local TX, default
+  OFF). Before each TX session the app asks for Face ID / fingerprint, so a lost unlocked phone cannot key the rig.
+- **Revoke and re-pair** from the admin page (lost phone, new phone). Re-pairing is only possible on the LAN.
+- **Encrypted, pinned connection required** — the server is plain HTTP today. Shared work with GitHub #52.
+- Phase TX safeguards all apply; the dead-man unkey on a lost link is the critical one on mobile data.
+- Licensing is the operator's responsibility and matters more here (remote operation); ask the club before building.
+- OPEN: one paired device, or a few (phone + iPad)?
