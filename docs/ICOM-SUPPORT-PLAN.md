@@ -544,7 +544,10 @@ Stuart: "Pairing code with the app when setting up, only the server owner's app 
   > ~500 ms without TX audio → the server sends `1C 00 00` at once, on every device type.
 - Licensing is the operator's responsibility and matters more here (remote operation); ask the club before building.
 - **Up to 5 paired devices**, apps only (Stuart, 2026-10-21) — e.g. iPhone app, Jr, iPad, Mac (Touch ID or the Mac's
-  password stands in for Face ID), one spare. Listed by name + last used on the admin page.
+  password stands in for Face ID), one spare. Also covers TWO OPERATORS on one rig (Stuart: POTA couples, each
+  with their own callsign): each paired device carries its operator's CALLSIGN, the TX banner shows who is keyed
+  ("TX: M0ABC"), and the server keeps a TX log (callsign, device, start/end, frequency, mode) for their station logs.
+  One transmitter at a time still holds — the second operator waits for unkey. Listed by name + last used on the admin page.
 - **Jr on the watch transmits too** ("like a Dick Tracy watch"). Jr is standalone, so it pairs itself: the same
   6-digit code typed on the watch, its own key in the watch Keychain, counting as one of the 5. Wrist detection +
   watch passcode stand in for Face ID. Hold-to-talk on a big button (Action button on Ultra). The watch mic streams
