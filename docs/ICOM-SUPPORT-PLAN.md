@@ -540,9 +540,11 @@ Stuart: "Pairing code with the app when setting up, only the server owner's app 
   OFF). Before each TX session the app asks for Face ID / fingerprint, so a lost unlocked phone cannot key the rig.
 - **Revoke and re-pair** from the admin page (lost phone, new phone). Re-pairing is only possible on the LAN.
 - **Encrypted, pinned connection required** — the server is plain HTTP today. Shared work with GitHub #52.
-- Phase TX safeguards all apply; the dead-man unkey on a lost link is the critical one on mobile data.
+- Phase TX safeguards all apply. **Instant unkey on loss of connection** (Stuart, 2026-10-21): socket drop or
+  > ~500 ms without TX audio → the server sends `1C 00 00` at once, on every device type.
 - Licensing is the operator's responsibility and matters more here (remote operation); ask the club before building.
-- **Up to 5 paired devices**, apps only (Stuart, 2026-10-21). Listed by name + last used on the admin page.
+- **Up to 5 paired devices**, apps only (Stuart, 2026-10-21) — e.g. iPhone app, Jr, iPad, Mac (Touch ID or the Mac's
+  password stands in for Face ID), one spare. Listed by name + last used on the admin page.
 - **Jr on the watch transmits too** ("like a Dick Tracy watch"). Jr is standalone, so it pairs itself: the same
   6-digit code typed on the watch, its own key in the watch Keychain, counting as one of the 5. Wrist detection +
   watch passcode stand in for Face ID. Hold-to-talk on a big button (Action button on Ultra). The watch mic streams
