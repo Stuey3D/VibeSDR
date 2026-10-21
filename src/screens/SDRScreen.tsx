@@ -64,7 +64,7 @@ import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
-import { DabBlockStepper, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
+import { DabBlockStepper, DabAskGuard, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../utils/dabQuality';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth, withReadAuth } from '../services/vibeAuth';
@@ -2357,6 +2357,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   }
   const stepDabBlock = (steps: number) => { dabStepper.current?.step(dabBlockRef.current, steps); };
   useEffect(() => () => dabStepper.current?.cancel(), []);
+  /* ★★★ NO SNAP-BACK (2026-10-21, Stuart on the Pi 2: "it kept snapping back"). After we send a block,
+   *  reports still naming the block we LEFT are dropped until the server names ours, 6 s pass, or a third
+   *  block shows somebody else moved the dial (DabAskGuard says why). Display only — nothing is re-sent.
+   *  serverDabBlockRef is the block the server last reported, i.e. the one a send leaves. */
+  const dabAskGuard = useRef(new DabAskGuard());
+  const serverDabBlockRef = useRef(-1);
   const dabBlockKeyRef = useRef('lsv_dab_block');
   useEffect(() => { dabOnRef.current = dabOn; }, [dabOn]);
   useEffect(() => { dabBoxOpenRef.current = dabBoxOpen; }, [dabBoxOpen]);
@@ -2434,6 +2440,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     dabWasOn.current = dabOn;
     if (!was || dabOn) return;
     dabStepper.current?.cancel();
+    dabAskGuard.current.clear();
     if (liveBadgeRef.current === 'DAB') { liveBadgeRef.current = undefined; liveStationRef.current = ''; }
     setLiveStation((cur) => liveStationAfterDab(was, dabOn, cur));
   }, [dabOn]);
@@ -2496,6 +2503,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (i >= 0) setDabBlock(i);
     setDabBoxOpen(true);
     setDabError(undefined);
+    dabAskGuard.current.clear();               // ★ no block asked — whatever the server names is right
     c.dab(true);
     setDabOn(true);
   }, []);
@@ -2527,10 +2535,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabBoxOpen(true);
     setDabError(undefined);
     if (!dabOnRef.current) {
+      dabAskGuard.current.sent(idx, serverDabBlockRef.current, Date.now());
       c.dab(true, idx, svc);
       setDabOn(true); dabOnRef.current = true;
     } else if (idx !== dabBlockRef.current) {
       setDabState(null);
+      dabAskGuard.current.sent(idx, serverDabBlockRef.current, Date.now());
       c.dab(true, idx, svc);
     } else if (svc !== undefined) {
       c.dabService?.(svc);
@@ -2546,6 +2556,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabBlock(i);
     setDabState(null);                         // ★ the last mux's numbers are not this one's
     AsyncStorage.setItem(dabBlockKeyRef.current, DAB_BLOCKS[i].name).catch(() => {});
+    dabAskGuard.current.sent(i, serverDabBlockRef.current, Date.now());   // ★ no snap-back — see dabAskGuard
     c.dab(true, i);
   }, []);
 
@@ -5184,6 +5195,16 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  showing it as one would put a red card over a receiver that is working perfectly. */
       onDab: (st, why) => {
         if (destroyed.current) return;
+        /* ★★★ A REPORT FROM THE BLOCK WE JUST LEFT IS DROPPED, WHOLE (DabAskGuard, 2026-10-21 — the Pi 2's
+         *  snap-back): its channel would drag the label back, and its list and live text belong to that
+         *  block too. Bounded; a third block (somebody else on the shared dial) is followed at once. */
+        if (st?.channel) {
+          const bi = dabBlockIndex(st.channel);
+          if (bi >= 0) {
+            if (!dabAskGuard.current.accept(bi, Date.now())) return;
+            serverDabBlockRef.current = bi;
+          }
+        }
         /* ★★★ HOLD THE LAST GOOD LIST — the web client's rule (TS 103 176 6.2.2: the list is a
          *  thing the receiver KEEPS, not a picture of this frame). A frame where the FIC did not
          *  read arrives with no services, and painting it blanks the list under the reader's
@@ -8367,14 +8388,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         dabStepper.current?.cancel();   // ★ the wrist's pick outranks a burst still settling on the phone
         onDabBlockRef.current?.(Math.max(0, Math.min(DAB_BLOCKS.length - 1, index)));
       },
+      /* ★★★ A CROWN STEP IS A PRESS, SO IT GOES THROUGH THE STEPPER (2026-10-21). It tuned the server on
+       *  every detent; now the label follows each one and the server hears the block the wrist STOPPED
+       *  on, once, after the settle — the phone's own keys' rule (services/dabStepper.ts). Still wraps:
+       *  the crown is a ring, and Buddy works its steps out from the SAME Band III table
+       *  (WatchLink.dabBlocks), so steps accumulate from where the burst is heading. */
       onDabBlockStep: (step: number) => {
         if (!dabOnRef.current || !step) return;
-        dabStepper.current?.cancel();
-        const n = DAB_BLOCKS.length;
-        const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
-        // ★ Still wraps: the crown is a ring, and Buddy sends a step it worked out from the SAME
-        //   Band III table (WatchLink.dabBlocks), so cur + step is where the wrist stopped.
-        onDabBlockRef.current?.(((cur + step) % n + n) % n);
+        dabStepper.current?.step(dabBlockRef.current, step);
       },
 
       onZoomDelta: (delta: number) => {
