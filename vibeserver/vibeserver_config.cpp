@@ -501,6 +501,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     N("converterInputLoHz", r.converterInputLoHz); N("converterInputHiHz", r.converterInputHiHz);
     B("spectrogram", r.spectrogram);
     I("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
+    B("askBeforeTuning", r.askBeforeTuning);   // ★ and written in radioToJson below — the setup page reads that one
     I("idleKickMin", r.idleKickMin);
     I("dabScanLabels", r.dabScanLabels);
     dropBlockedDabLanding(r.blockedModes, r.landingDabChannel, r.landingDabSid, r.landingDabService);
@@ -568,6 +569,7 @@ std::string radioToJson(const RadioConfig& r) {
     N("converterInputLoHz", r.converterInputLoHz); N("converterInputHiHz", r.converterInputHiHz);
     B("spectrogram", r.spectrogram);
     N("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
+    B("askBeforeTuning", r.askBeforeTuning);
     N("idleKickMin", r.idleKickMin);
     N("dabScanLabels", r.dabScanLabels);
     if (!o.empty() && o.back() == ',') o.pop_back();

@@ -358,6 +358,8 @@ object VibeLocalSDR {
 
     /** The time limit is a GUARANTEE, not a deadline: kept past its time until somebody waits. */
     fun setVibeServerSessionLimitSoft(soft: Boolean) { ensureLoaded(); nativeSetVibeServerSessionLimitSoft(soft) }
+    /** Ask before tuning: on a shared dial with company, a newcomer asks in chat before the dial is theirs. */
+    fun setVibeServerAskBeforeTuning(on: Boolean) { ensureLoaded(); nativeSetVibeServerAskBeforeTuning(on) }
     /** Minutes with no interaction before a listener is asked, then released. 0 = off. */
     fun setVibeServerIdleKick(minutes: Int) { ensureLoaded(); nativeSetVibeServerIdleKick(minutes) }
     /** The aerial on this radio, its icon, and the machine's standing landing-screen message. */
@@ -416,6 +418,7 @@ object VibeLocalSDR {
     private external fun nativeSetVibeServerUncompressedAudio(mode: Int)
     private external fun nativeSetVibeServerSessionLimit(minutes: Int)
     private external fun nativeSetVibeServerSessionLimitSoft(soft: Boolean)
+    private external fun nativeSetVibeServerAskBeforeTuning(on: Boolean)
     private external fun nativeSetVibeServerIdleKick(minutes: Int)
     private external fun nativeSetAntennaSwitch(json: String, map: String, locked: Boolean)
     private external fun nativeAntSwitchSearch(host: String, port: Int): String

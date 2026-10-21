@@ -155,6 +155,7 @@ struct VibeRtlTunerOps {
 #include "vibe_airspy_limit.h"      // the owner's per-band limit on an Airspy R2 / Mini
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
 #include "vibe_chat_share.h"        // ★ "share a station" in the canned chat: validate, name, say
+#include "vibe_tune_etiquette.h"    // ★★ "Ask before tuning": who may move a shared dial (docs/TUNING-ETIQUETTE.md)
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -2515,6 +2516,10 @@ static std::atomic<int>     g_vsSessionLimitMin{0};
 /** ★★★ SOFT = THE LIMIT IS A GUARANTEE, NOT A DEADLINE. See RadioConfig::sessionLimitSoft.
  *  ★ Default FALSE so an upgrade changes nothing for an owner who already chose a limit. */
 static std::atomic<bool>    g_vsSessionLimitSoft{false};
+/** ★★★ ASK BEFORE TUNING — the owner's opt-in etiquette lock (RadioConfig::askBeforeTuning, 2026-10-21). It only
+ *  bites on a SHARED DIAL with more than one listener: a newcomer's tune is refused until the room says yes, or
+ *  nobody answers in 15 s. Default OFF, so an upgrade changes nothing. See vibe_tune_etiquette.h. */
+static std::atomic<bool>    g_vsAskBeforeTuning{false};
 /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes, 0 = OFF, and off is the default.
  *
  *  ★★★ "NO INTERACTION" IS NOT "NOT LISTENING", and that is the whole difficulty. Somebody sitting
@@ -9475,7 +9480,159 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ WHY THE DIAL IS NOT MOVING, when it is not. A decode runs for ten minutes with no
         //    interaction, and a room that cannot see that is a room that starts retuning over it.
         if (decodingNow()) j += ",\"decoding\":true";
+        // ★★ ASK BEFORE TUNING — only while the owner has it on, so a new client on an old server (or with the switch
+        //    off) is told nothing and dims nothing. The listener is TOLD; it never works the lock out for itself.
+        if (g_vsAskBeforeTuning.load()) {
+            const double now = Impl::nowSecs();
+            const vibeask::Room room = askRoomLocked(now);
+            const vibeask::View v = askBook.view(room, forSession, now);
+            if (v.inForce) {
+                j += ",\"askFirst\":true,\"tuneLocked\":" + std::string(v.locked ? "true" : "false");
+                if (!v.state.empty()) j += ",\"askState\":\"" + v.state + "\",\"askSecs\":" + std::to_string(v.secs);
+            }
+        }
         return j + "}";
+    }
+
+    // ── ★★★ ASK BEFORE TUNING (vibe_tune_etiquette.h, docs/TUNING-ETIQUETTE.md) ──────────────────────────────
+    /** The rule's state: who asked, who answered, who has been let in. Under clientMtx. */
+    vibeask::Book askBook;
+    /** What each spectrum socket was last told, so the tick re-sends `dial` only to somebody whose view CHANGED. */
+    std::map<net::Socket*, vibeask::View> askSent;
+    /** ★ One refusal notice per session per 10 s, and one full-state reply per socket per second: a held tune
+     *  key on an old client must not become a stream of pills or a stream of state. */
+    std::map<std::string, double> askNoticeAt;
+    std::map<net::Socket*, double> askStateAt;
+
+    /** Is the lock in force right now? Switch on, a shared dial, company. Call WITH clientMtx held. */
+    bool askInForceLocked() { return g_vsAskBeforeTuning.load() && vsSharedDial() && specListenerCountLocked() > 1; }
+
+    /** ★★ THE ROOM, AS THE RULE NEEDS IT. Call WITH clientMtx held.
+     *  ★★ "LONGEST-CONNECTED" IS THE SESSION LIMIT'S OWN CLOCK — `sockSince`, the turn start keyed on the browser and
+     *     address, so a reload does not jump the queue and the rank agrees with the countdown on screen. The earliest
+     *     of a session's sockets is theirs.
+     *  ★ Past the limit = the same test the countdown uses (secsLeftFor): limit set, not admin, not loopback. */
+    vibeask::Room askRoomLocked(double now) {
+        vibeask::Room r;
+        r.inForce = askInForceLocked();
+        if (!r.inForce) return r;
+        std::map<std::string, std::pair<double, bool>> seen;   // session -> (earliest since, loopback)
+        for (auto& [sk, sess] : sockSession) {
+            if (sess.empty() || !sk) continue;
+            auto si = sockSince.find(sk);
+            const double since = si != sockSince.end() && si->second > 0 ? si->second : now;
+            auto it = seen.find(sess);
+            const bool lb = isLoopback(sk->peerAddress());
+            if (it == seen.end()) seen[sess] = { since, lb };
+            else { it->second.first = std::min(it->second.first, since); it->second.second = it->second.second || lb; }
+        }
+        const int limitMin = g_vsSessionLimitMin.load();
+        for (auto& [sess, v] : seen) {
+            vibeask::Person p;
+            p.session = sess;
+            p.admin = isAdminSessionLocked(sess);
+            p.since = v.first;
+            p.overLimit = limitMin > 0 && !p.admin && !v.second && (now - v.first) >= (double)limitMin * 60.0;
+            auto h = dialHandles.find(sess);
+            p.handle = h != dialHandles.end() ? h->second : 0;
+            r.people.push_back(p);
+        }
+        return r;
+    }
+
+    /** ★★★ THE SERVER'S HALF OF THE LOCK — a frame a CLIENT sent, refused when its sender may not move the dial.
+     *
+     *  ★★★ CALLED FROM THE WEBSOCKET READER ONLY, NEVER FROM handleControl. The landing, the DAB resume for an
+     *      arriving listener and the idle resume all enter handleControl directly with the joiner's socket, and
+     *      RECOVERY IS NOT A USER ACTION (shared-dial contract) — it must never be refused for being somebody's.
+     *  ★★ A frame that would change nothing (a re-assert of where the radio already is) is dropped in silence; a
+     *     real one gets the room's state back, so the client snaps to where the radio actually is, and — at most
+     *     every 10 s — a `notice` `why`, the refusal pill every client already draws. An OLD client therefore just
+     *     does not tune, and is told why. A new one never sends it: the dial message has already dimmed it.
+     *  @return true if the frame was refused (do not hand it on). Call WITHOUT clientMtx held. */
+    bool askRefuses(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (!g_vsAskBeforeTuning.load() || !sock) return false;
+        const std::string type = jsonStr(msg, "type");
+        if (type != "tune" && type != "mode" && type != "bandwidth" && type != "dab") return false;
+        const double now = Impl::nowSecs();
+        std::string me;
+        bool notice = false, state = false;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            if (!askInForceLocked()) return false;
+            auto it = sockSession.find(sock.get());
+            me = it == sockSession.end() ? std::string() : it->second;
+            if (!askBook.locked(askRoomLocked(now), me)) return false;
+            // ★ Nothing to move: the radio is already where this frame asks.
+            double v = 0;
+            const std::string m = jsonStr(msg, "mode");
+            bool noop = false;
+            if (type == "tune")
+                noop = (!jsonNum(msg, "frequency", v) || std::fabs(v - audioFreq.load()) < 1.0) && (m.empty() || m == mode)
+                       && msg.find("bandwidthLow") == std::string::npos;
+            else if (type == "mode") noop = m.empty() || m == mode;
+            else if (type == "dab") {
+                double onV = 0, ch = -1; jsonNum(msg, "on", onV);
+                const bool hasCh = jsonNum(msg, "channel", ch);
+                noop = onV != 0 && g_dabMode.load(std::memory_order_relaxed)
+                       && (!hasCh || (int)ch == g_dabWantChannel.load(std::memory_order_relaxed))
+                       && msg.find("\"sid\"") == std::string::npos;
+            }
+            if (noop) return true;
+            double& at = askNoticeAt[me];
+            if (now - at >= 10.0) { at = now; notice = true; }
+            if (askNoticeAt.size() > 512) askNoticeAt.clear();
+            double& st = askStateAt[sock.get()];
+            if (now - st >= 1.0) { st = now; state = true; }
+        }
+        LOGI("%s from session [%s] refused — ask before tuning is on and they have not been let in yet",
+             type.c_str(), me.empty() ? "?" : me.c_str());
+        if (state) sendFullState(sock);   // ★ re-adopt: config, hwinfo, the DAB box, and the dial (which says why)
+        if (notice)
+            sendText(sock, "{\"type\":\"notice\",\"ask\":1,\"why\":\"Ask in chat before tuning \xE2\x80\x94 "
+                           "other people are listening to this shared tuner\"}");
+        return true;
+    }
+
+    /** ★★ A chat line, read for what it MEANS to the lock (an ask, a yes, a no). Call WITHOUT clientMtx held. */
+    void askOnSaid(const std::string& from, const std::string& id) {
+        if (!g_vsAskBeforeTuning.load()) return;
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            const double now = Impl::nowSecs();
+            changed = askBook.onSaid(askRoomLocked(now), from, id, now);
+        }
+        if (changed) sendDialState();
+    }
+
+    /** ★★ THE CLOCK — housekeeping, every 2 s: windows close, NOs lapse, ranks move as people come and go. Re-sends
+     *  `dial` to each listener whose lock CHANGED (a countdown alone is not a change; the client counts it down from
+     *  the seconds it was given). Also tells everybody when the lock stops being in force, so nothing stays dimmed. */
+    void askTick() {
+        if (!g_vsAskBeforeTuning.load() && askSent.empty()) return;
+        if (!vsSharedDial()) return;
+        std::vector<std::pair<std::shared_ptr<net::Socket>, std::string>> out;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            const double now = Impl::nowSecs();
+            const vibeask::Room room = askRoomLocked(now);
+            askBook.tick(room, now);
+            std::set<net::Socket*> live;
+            for (auto& sock : allSpecClientsLocked()) {
+                if (!sock || !sock->isOpen()) continue;
+                live.insert(sock.get());
+                auto it = sockSession.find(sock.get());
+                const std::string sess = it == sockSession.end() ? std::string() : it->second;
+                const vibeask::View v = askBook.view(room, sess, now);
+                auto& was = askSent[sock.get()];
+                if (v != was) { was = v; out.emplace_back(sock, dialJsonLocked(sess)); }
+            }
+            for (auto it = askSent.begin(); it != askSent.end(); ) it = live.count(it->first) ? std::next(it) : askSent.erase(it);
+            for (auto it = askStateAt.begin(); it != askStateAt.end(); ) it = live.count(it->first) ? std::next(it) : askStateAt.erase(it);
+            if (!g_vsAskBeforeTuning.load()) askSent.clear();
+        }
+        for (auto& kv : out) sendText(kv.first, kv.second);
     }
 
     // ── ★★★ THE CANNED CHAT ───────────────────────────────────────────────────────────────────
@@ -9503,6 +9660,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   "go ahead" or "hold", with no way to say "yes, I am on it" either way (Stuart, 2026-09-14).
             "yes_go_ahead",    // Yes, I'm on it — but go ahead and tune
             "yes_hold",        // Yes, I'm on it — please hold on
+            // ★★ ASK BEFORE TUNING's gentle NO (2026-10-21) — the requested "Do you mind, I am listening here" said
+            //    without the edge: why, and a little time. A NO to the lock (vibe_tune_etiquette.h replyMeaning).
+            "listening_few_min", // I'm listening to this one — a few more minutes, please?
             "mid_decode",      // Please wait — mid-decode
             // ★★ THE LONG ONES. A WEFAX chart or an SSTV image is ten minutes of holding still,
             //    and "please wait" without a duration is what makes people ask again in ninety
@@ -15737,11 +15897,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool isAdmin = adminNow(sock);
             int from = 0;
             long long since = 0;   // when `from` was given to this session — see dialHandleSince
+            std::string saidBy;    // ★ the session, for ask before tuning (askOnSaid) once the line has gone out
             {
                 std::lock_guard<std::mutex> lk(clientMtx);
                 auto it = sockSession.find(sock.get());
                 const std::string me = it == sockSession.end() ? std::string() : it->second;
                 if (me.empty()) return;                       // no id, no voice
+                saidBy = me;
                 const double now = Impl::nowSecs();
                 /* ★★ FLOOD CONTROL COVERS SHARES TOO — one line per session per kChatMinGapSec, whatever
                  *  it says. A share is checked AFTER the slot is spent, so a stream of rejected shares
@@ -15815,6 +15977,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ "since": when this number was given to this person — a client draws "— User 1 joined 17:40 —" when it changes.
             if (since > 0 && !line.empty() && line.back() == '}') line.insert(line.size() - 1, ",\"since\":" + std::to_string(since));
             for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, line);
+            /* ★★ AND WHAT IT MEANS TO THE LOCK — after the line, so the room reads "Go ahead, tune" before the asker's
+             *  controls light up. Only a line the room actually heard counts (flood control returned above). */
+            askOnSaid(saidBy, id);
             return;
         }
         /* ★★★ DAB OWNS THE RECEIVER — AND A SECOND BROWSER MUST NOT TAKE IT BACK. A client
@@ -21209,7 +21374,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         auto applyHeldTune = [&] {
             const std::string m = tuneHold.take();
             if (m.empty()) return;
-            handleControl(sock, m);
+            // ★★ ASK BEFORE TUNING gates what a CLIENT sent, here at the reader — never inside handleControl, which
+            //    the server's own landing and resume paths also call (askRefuses).
+            if (!askRefuses(sock, m)) handleControl(sock, m);
             tuneHold.applied(monoMs());
         };
         while (serverRunning.load() && sock->isOpen()) {
@@ -21255,8 +21422,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const uint64_t mergedBefore = tuneHold.merged;
                 const std::string first = tuneHold.offer(payload, monoMs(), [&] { return tunePaceMs(); }, passThrough);
                 if (tuneHold.merged != mergedBefore) g_tunesMerged.fetch_add(1, std::memory_order_relaxed);
-                if (!first.empty()) { handleControl(sock, first); tuneHold.applied(monoMs()); }
-                if (passThrough) handleControl(sock, payload);
+                if (!first.empty()) { if (!askRefuses(sock, first)) handleControl(sock, first); tuneHold.applied(monoMs()); }
+                if (passThrough && !askRefuses(sock, payload)) handleControl(sock, payload);
             }
         }
         // ★ The last tune is never lost: one still held when the socket goes is applied, exactly as it
@@ -26120,6 +26287,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 enforceAdminIdle();
                 enforceIdleListeners();
                 reapDecoderOrphans();
+                askTick();             // ★ ask before tuning: the 15 s window, the 5-minute NO, people coming and going
             }
         });
     }
@@ -26938,6 +27106,12 @@ void LocalSdrShim::setMaxRadiosPerIp(int cap) {
     if (cap == 0)      LOGI("radios per address: NO LIMIT — one address may hold every radio (owner's choice)");
     else if (cap == 1) LOGI("radios per address: 1 — an address holding one radio is refused the others");
     else               LOGI("radios per address: %d — an address may hold %d at once, and is refused the rest", cap, cap);
+}
+
+void LocalSdrShim::setAskBeforeTuning(bool on) {
+    const bool was = g_vsAskBeforeTuning.exchange(on);
+    if (was != on) LOGI("ask before tuning: %s", on ? "ON — on a shared dial with company, a newcomer asks in chat first"
+                                                    : "off");
 }
 
 void LocalSdrShim::setSessionLimitSoft(bool soft) {

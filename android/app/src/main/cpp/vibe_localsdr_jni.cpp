@@ -410,6 +410,12 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerSessionLimitSoft(JNIEnv*, j
     vibe::LocalSdrShim::instance().setSessionLimitSoft(soft == JNI_TRUE);
 }
 
+// ★★ Ask before tuning on a shared dial — see vibe_tune_etiquette.h.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerAskBeforeTuning(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::instance().setAskBeforeTuning(on == JNI_TRUE);
+}
+
 // Minutes of asking for nothing before a listener is prompted and then released. 0 = off.
 // ★ The shim clamps to its 15-minute floor; this passes what the owner typed.
 extern "C" JNIEXPORT void JNICALL

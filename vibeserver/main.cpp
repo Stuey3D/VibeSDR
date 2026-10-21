@@ -4028,6 +4028,8 @@ int main(int argc, char** argv) {
         // ★ Per radio, like the limit it modifies — a shared 30-listener receiver and a
         //   one-at-a-time dongle want different answers to "is the limit a deadline".
         LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);
+        // ★★ Ask before tuning (2026-10-21) — per radio, beside the limit; off unless the owner chose it.
+        LocalSdrShim::instance().setAskBeforeTuning(mine ? mine->askBeforeTuning : false);
         // ★ MACHINE-level, not per radio: the rule is about one visitor holding SEVERAL of this
         //   machine's radios, so it cannot be a property of any one of them.
         // ★ The CAP, not the switch — the switch is derived from it in the config reader so the

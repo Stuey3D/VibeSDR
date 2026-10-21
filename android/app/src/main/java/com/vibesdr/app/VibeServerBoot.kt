@@ -252,6 +252,7 @@ object VibeServerBoot {
         VibeLocalSDR.setVibeServerUncompressedAudio(cfg.i("uncompressedAudio", 0))
         VibeLocalSDR.setVibeServerSessionLimit(cfg.i("sessionLimitMin", 0))
         VibeLocalSDR.setVibeServerSessionLimitSoft(cfg.b("sessionLimitSoft", false))
+        VibeLocalSDR.setVibeServerAskBeforeTuning(cfg.b("askBeforeTuning", false))
         VibeLocalSDR.setVibeServerIdleKick(cfg.i("idleKickMin", 0))
         // ★ The battery floor — a phone on a solar panel must never run itself flat (2026-09-17).
         VibeLocalSDR.setBatteryPolicy(cfg.i("batteryPauseAt", 0), cfg.i("batteryResumeAt", 40))
