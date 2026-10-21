@@ -53,6 +53,11 @@ if(SDRPLAY_LIBUSB_LIBRARY)
   set_target_properties(PkgConfig::LIBUSB PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${SDRPLAY_LIBUSB_INCLUDE_DIR}"
     INTERFACE_LINK_LIBRARIES "${SDRPLAY_LIBUSB_LIBRARY};Threads::Threads")
+  if(APPLE)
+    # A static libusb on macOS needs the frameworks its darwin backend calls.
+    set_property(TARGET PkgConfig::LIBUSB APPEND PROPERTY INTERFACE_LINK_LIBRARIES
+      "-framework IOKit" "-framework CoreFoundation" "-framework Security")
+  endif()
   set(LIBUSB_FOUND ON)
   set(SDRPLAY_HAVE_LIBUSB ON)
   message(STATUS "libusb: ${SDRPLAY_LIBUSB_LIBRARY} (given explicitly)")

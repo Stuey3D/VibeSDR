@@ -16,7 +16,8 @@ file, and each leaves upstream behaviour unchanged unless the option is set:
 1. cmake/Platform.cmake — SDRPLAY_LINUX_UDEV (default ON). OFF builds the Linux service without
    libudev. Only the hotplug monitor uses libudev and nothing in the service calls it.
 2. cmake/Platform.cmake — SDRPLAY_LIBUSB_LIBRARY / SDRPLAY_LIBUSB_INCLUDE_DIR name libusb explicitly
-   instead of asking pkg-config (VibeServer links its own static libusb 1.0.30, built without udev).
+   instead of asking pkg-config (VibeServer links its own static libusb 1.0.30, built without udev). On
+   macOS that interface also adds the IOKit, CoreFoundation and Security frameworks a static libusb needs.
 3. CMakeLists.txt — SDRPLAY_STATIC_CXX_RUNTIME (default OFF). ON links libstdc++/libgcc statically
    into libsdrplay_api.so.3.15 and sdrplay_apiService, so the package depends on nothing but glibc.
 
