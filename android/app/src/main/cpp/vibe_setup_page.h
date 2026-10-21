@@ -343,8 +343,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
          apostrophe (&lsquo;Sam's&rsquo; or &lsquo;Sam&rsquo;s&rsquo;) both work &mdash; the box saves the name
          exactly as the iPhone sends it once it sees it.</div>
       <!-- ★★ Stuart's Pi 3 A+ (2026-10-10) would not join his iPhone's hotspot until Maximise Compatibility was on: newer
-           iPhones run the hotspot on 5 GHz with WPA2/WPA3 security. Since 2026-10-20 the box joins such hotspots as plain
-           WPA2 and asks for them by name (vibeserver-pocket, PMF_DISABLE / probe) — NOT YET PROVEN ON THE DEVICE, so the
+           iPhones run the hotspot on 5 GHz with WPA2/WPA3 security. Since 2026-10-21 the box reads what each network
+           advertises (WPA2 / WPA2+WPA3 / WPA3, PMF) and joins with that, falling back a step if refused, and asks for a
+           hotspot by name (vibeserver-pocket, DETECTION FIRST / probe). The iPhone joined that way on the device; the
            old advice stays as the fallback, worded as one. -->
       <div class="hint">If the box will not join your phone&rsquo;s hotspot, <b>on the iPhone turn on Maximise
          Compatibility</b> (Settings &rsaquo; Personal Hotspot), or on an Android phone set the hotspot to <b>2.4 GHz</b>

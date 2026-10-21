@@ -44,6 +44,10 @@ def main():
     pstate = os.path.join(tmp, "state.json")
     open(pstate, "w").write('{"mode":"client","ssid":"Stuey3D’s iPhone"}')
     marker = os.path.join(tmp, "enabled")
+    wlog = os.path.join(tmp, "wifi-log.txt")
+    open(wlog + ".1", "w").write("2026-10-19T09:00:00.000000+0100 pocket NetworkManager[400]: <info> OLDER-ROTATED-LINE\n")
+    open(wlog, "w").write("2026-10-20T09:00:00.000000+0100 pocket kernel: brcmfmac: brcmf_run_escan: error (-110) BEFORE-REBOOT\n"
+                          "2026-10-20T09:00:01.000000+0100 pocket wpa_supplicant[500]: wlan0: psk=%s KEPT-LINE\n" % PSK)
     open(marker, "w").close()
     journal = "\n".join(["2026-10-20T10:00:%02d vibeserver[1]: line %d" % (i % 60, i) for i in range(200)] + [
         "2026-10-20T10:05:00 vibeserver[1]: VibeAGC: gain step 28.0 dB",
@@ -69,7 +73,7 @@ def main():
         return 0, ""
 
     kw = dict(run=run, conf_paths=(conf, dstate), pocket_marker=marker, pocket_state=pstate, join_history=hist,
-              status_glob=os.path.join(tmp, "radio-status-*.json"), server_conf=conf)
+              status_glob=os.path.join(tmp, "radio-status-*.json"), server_conf=conf, wifi_log=wlog)
     text = vd.bundle(**kw)
     for name, v in (("the Wi-Fi password", PSK), ("the hotspot password", AP_PSK), ("the admin password", ADMIN),
                     ("the listener PIN", PIN), ("a radio's PIN", RPIN), ("the directory key", DKEY)):
@@ -80,6 +84,7 @@ def main():
     for sect in ("versions", "machine", "services", "usb", "server config (secrets removed)", "radio status",
                  "wi-fi firmware", "iw dev wlan0 link", "iw dev wlan0 get power_save", "iw reg get",
                  "networkmanager wi-fi profiles (no secrets)", "wi-fi join history", "wi-fi service state",
+                 "wi-fi log kept across reboots",
                  "highlights", "journal, last 24 h"):
         ok("==== " + sect in text, "a Portable's file has its '%s' section" % sect)
     ok("SINCE THE LAST BOOT" in text and "No passwords" in text and "addresses" in text,
@@ -90,6 +95,10 @@ def main():
        "VibeAGC lines are lifted into the highlights (DIAG_HIGHLIGHTS takes more patterns)")
     ok(any(a[0] == "journalctl" and "vibeserver*" in a and "NetworkManager*" in a and "sdrplay*" in a for a in calls),
        "the journal asked for: our units, NetworkManager, avahi, the SDRplay service")
+    kl = text.split("==== wi-fi log kept across reboots")[1].split("\n==== ")[0]
+    ok("BEFORE-REBOOT" in kl and "KEPT-LINE" in kl and kl.index("OLDER-ROTATED-LINE") < kl.index("BEFORE-REBOOT"),
+       "★★★ the Wi-Fi log kept on the settings partition is in the file — the rotated half first (oldest first)")
+    ok(PSK not in kl, "…and scrubbed like everything else (a password planted in a kept line is gone)")
     # an ordinary (not Portable) server: no Wi-Fi sections, never NetworkManager's secrets
     calls.clear()
     kw2 = dict(kw, pocket_marker=os.path.join(tmp, "absent"))
