@@ -4069,6 +4069,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     nudgeAsk();
     return true;
   }, [nudgeAsk]);
+  /** ★★ The same gate for a sheet's handler — the shared DSP rows (NR, notch, de-emphasis, stereo, the blankers, the
+   *  broadcast-FM row): on a shared tuner they are everybody's (Stuart, 2026-10-21: "lock gain too"). Only the
+   *  handler the SHEET calls is wrapped, so a restore on connect never nudges (the client drops those silently). */
+  const askWrap = useCallback(<A extends unknown[]>(fn: (...a: A) => void) =>
+    (...a: A) => { if (askGate()) return; fn(...a); }, [askGate]);
   /// ★ Read inside the watch command handlers, which are registered once — a captured boolean
   ///   would be whatever it was when the screen mounted, i.e. always false.
   const sharedDialRef = useRef(false);
@@ -11712,8 +11717,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
         localSquelch={hwSquelch}        onLocalSquelch={isLocal ? onLocalSquelch : undefined}
         kiwiSquelch={kiwiSquelch}       onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
-        localNR={hwNrLevel}             onLocalNR={isLocal ? onLocalNR : undefined}
-        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
+        localNR={hwNrLevel}             onLocalNR={isLocal ? askWrap(onLocalNR) : undefined}
+        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? askWrap(onLocalNotch) : onNetNotch}
         eibiEnabled={eibiEnabled}        onEibiToggle={onEibiToggle}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         serverDspEnabled={serverDspEnabled}
@@ -11941,21 +11946,21 @@ export default function SDRScreen({ route, navigation }: Props) {
         sqlAutoMargin={sqlAutoMargin}    onSqlAutoMargin={onSqlAutoMargin}
         sqlAutoOk={sqlAutoOk}
         localSquelch={hwSquelch}         onLocalSquelch={isLocal ? onLocalSquelch : undefined}
-        localNR={hwNrLevel}              onLocalNR={isLocal ? onLocalNR : undefined}
+        localNR={hwNrLevel}              onLocalNR={isLocal ? askWrap(onLocalNR) : undefined}
         kiwiSquelch={kiwiSquelch}        onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
         fmSquelch={fmSquelch}            onFmSquelch={onFmSquelch}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
-        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
-        deemph={hwDeemph}   onDeemph={onHwDeemph}
-        stereo={hwStereo}   onStereo={onHwStereo}
-        fmNr={fmNr}   onFmNr={vibeFmDsp ? onFmNr : undefined}
-        fmIms={fmIms} onFmIms={vibeFmDsp ? onFmIms : undefined}
-        fmAutoBw={fmAutoBw} onFmAutoBw={vibeFmDsp ? onFmAutoBw : undefined}
-        fmCeq={fmCeq} onFmCeq={vibeFmDsp ? onFmCeq : undefined}
-        fmNb={fmNb}   onFmNb={vibeFmDsp ? onFmNb : undefined}
-        nbx={fmNbx}   onNbx={vibeFmDsp ? onFmNbx : undefined}
+        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? askWrap(onLocalNotch) : onNetNotch}
+        deemph={hwDeemph}   onDeemph={askWrap(onHwDeemph)}
+        stereo={hwStereo}   onStereo={askWrap(onHwStereo)}
+        fmNr={fmNr}   onFmNr={vibeFmDsp ? askWrap(onFmNr) : undefined}
+        fmIms={fmIms} onFmIms={vibeFmDsp ? askWrap(onFmIms) : undefined}
+        fmAutoBw={fmAutoBw} onFmAutoBw={vibeFmDsp ? askWrap(onFmAutoBw) : undefined}
+        fmCeq={fmCeq} onFmCeq={vibeFmDsp ? askWrap(onFmCeq) : undefined}
+        fmNb={fmNb}   onFmNb={vibeFmDsp ? askWrap(onFmNb) : undefined}
+        nbx={fmNbx}   onNbx={vibeFmDsp ? askWrap(onFmNbx) : undefined}
         nfmVoice={fmNfmVoice}
-        onNfmVoice={nfmVoiceKnown && (status.mode === 'nfm' || status.mode === 'fm') ? onFmNfmVoice : undefined}
+        onNfmVoice={nfmVoiceKnown && (status.mode === 'nfm' || status.mode === 'fm') ? askWrap(onFmNfmVoice) : undefined}
         rawAudio={rawAudio}
         onRawAudio={rawAudioPolicy === 'choice' ? setRawAudio : undefined}
         iq={iqState}
@@ -11976,6 +11981,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onServerDsp={onServerDsp}
         onServerDspFilter={onServerDspFilter}
         onServerDspParam={onServerDspParam}
+        askLocked={askLocked(dialState)}
       />
       )} />
       </PanelBoundary>
@@ -11992,6 +11998,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onConverter={canConvert ? setConverter : undefined}
           radio={radioCaps}
           agcLocked={hwAgcLocked}
+          askLocked={askLocked(dialState) && !adminOk}   /* ★★ ask before tuning: the whole panel is the room's */
+          onAskLockedTouch={nudgeAsk}
           gainLocked={hwGainLocked}
           ifGrFloorDb={hwIfGrFloor}
           hasTunerBw={hwHasTunerBw}

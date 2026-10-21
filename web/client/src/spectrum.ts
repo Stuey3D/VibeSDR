@@ -22,7 +22,7 @@ import { DabAssembler } from '../../../src/services/dabAssemble';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg } from '../../../src/services/vibeSquelch';
 import { roomMode, roomPassband } from '../../../src/services/roomPassband';
-import { parseAsk, askLocked, type AskState } from '../../../src/services/dialChat';
+import { parseAsk, askLocked, ASK_SHARED_SETTINGS, type AskState } from '../../../src/services/dialChat';
 
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
@@ -816,6 +816,10 @@ export class SpectrumClient {
   send(obj: Record<string, unknown>) { this._send(obj); }
 
   private _send(obj: Record<string, unknown>) {
+    // ★★ Ask before tuning: the room's receiver settings (gain, AGC, the shared DSP…) are not ours to send yet —
+    //    dropped SILENTLY, because pushSettingsToServer's restore on connect is not somebody reaching. The touch
+    //    shield in main.ts is what nudges. See dialChat.ASK_SHARED_SETTINGS.
+    if (this.tuneLocked && ASK_SHARED_SETTINGS.has(String(obj.type))) return;
     const ws = this.ws;
     if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(obj)); return; }
     // ★★★ A CONTROL THAT GOES NOWHERE MUST NOT GO QUIETLY. This dropped every tune, mode and gain
@@ -1137,8 +1141,9 @@ export class SpectrumClient {
          *     this one case never used it.
          *  ★ Same shape as the `needs_codec` message in audio.ts, which was also sent, also
          *    ignored, and also left the only evidence being a control that appeared not to work. */
-        // ★★ Ask before tuning's refusal (`ask`) is said by the banner and the chat key; the text is for older pages.
-        if (typeof msg.why === 'string' && msg.why && msg.ask) { this.cb.onTuneLocked?.(); break; }
+        // ★★ Ask before tuning's refusal (`ask`) is for older pages. This one never sends a locked frame on purpose (its
+        //    gates nudge when a PERSON reaches), so one arriving here answers a restore or a race — dropped, not flashed.
+        if (typeof msg.why === 'string' && msg.why && msg.ask) break;
         if (typeof msg.why === 'string' && msg.why) { this.cb.onRefused?.(msg.why); break; }
         if (typeof msg.vts === 'string' && msg.vts) { this.cb.onVts?.(msg.vts); break; }
         // ★ The owner's message to listeners, pushed the moment it is posted or cleared.

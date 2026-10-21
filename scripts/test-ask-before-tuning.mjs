@@ -113,6 +113,24 @@ try {
   b.send({ type: 'tune', frequency: 96100000, mode: 'wfm' }); await sleep(600);
   ok(b.count('notice') === n2, 'a re-assert of where the radio already is is dropped in silence (recovery is not a user action)');
 
+  console.log('── and the room\'s receiver settings are locked too (Stuart, 2026-10-21: "lock gain too") ──');
+  const refusedLines = (type, sid) => fs.readFileSync(logPath, 'utf8').split('\n')
+    .filter((l) => l.includes(`${type} from session [${sid}] refused`)).length;
+  for (const m of [{ type: 'gain', value: 200 }, { type: 'agc', on: true }, { type: 'stereo', on: false },
+                   { type: 'nr', on: true, strength: 1 }, { type: 'deemph', tau: 75e-6 }, { type: 'rsp_control', lna: 3 },
+                   { type: 'tunerbw', value: 1000000 }]) {
+    b.send(m); await sleep(250);
+    ok(refusedLines(m.type, 'bbbb0002') >= 1, `★ a locked listener's ${m.type} is refused at the socket`);
+  }
+  const zoomBefore = refusedLines('zoom', 'bbbb0002');
+  b.send({ type: 'zoom', frequency: 96100000, binBandwidth: 500 }); await sleep(300);
+  ok(refusedLines('zoom', 'bbbb0002') === zoomBefore, 'zoom / pan stays free ("that shouldn\'t move the tuning or audio")');
+  const sqlBefore = refusedLines('squelch', 'bbbb0002');
+  b.send({ type: 'squelch', db: -60, on: true }); await sleep(300);
+  ok(refusedLines('squelch', 'bbbb0002') === sqlBefore, 'squelch stays free — it is this listener\'s own gate');
+  a.send({ type: 'stereo', on: true }); await sleep(300);
+  ok(refusedLines('stereo', 'aaaa0001') === 0, 'the longest-connected listener may still change the receiver');
+
   console.log('── the free listener tunes as ever ──');
   a.send({ type: 'tune', frequency: 96600000, mode: 'wfm' });
   ok(await until(() => vfo(b) === 96600000), '★ the longest-connected listener moved the dial, and the newcomer followed');
@@ -131,6 +149,9 @@ try {
   ok(await until(() => b.last('dial')?.tuneLocked === false), '★ "Go ahead, tune" from the one who said no: let in at once');
   b.send({ type: 'tune', frequency: 98000000, mode: 'wfm' });
   ok(await until(() => vfo(a) === 98000000), '★ …and now their tune moves the radio for everybody');
+  const gainBefore = refusedLines('gain', 'bbbb0002');
+  b.send({ type: 'gain', value: 300 }); await sleep(400);
+  ok(refusedLines('gain', 'bbbb0002') === gainBefore, '…and their gain is accepted too');
 
   console.log('── no answer in 15 s lets a newcomer in ──');
   const c = await join('cccc0003');

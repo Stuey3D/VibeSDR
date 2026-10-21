@@ -5,7 +5,7 @@
 //   2. the banner says what to do now, and never runs longer than today's widest banner;
 //   3. both web and app gate their tuning sends on the same reader.
 import fs from 'node:fs';
-import { parseAsk, askLocked, askBannerText, ASK_NUDGE_TEXT, dialSummary, DIAL_PHRASES, bannerLine } from '../src/services/dialChat.ts';
+import { parseAsk, askLocked, askBannerText, ASK_NUDGE_TEXT, ASK_SHARED_SETTINGS, dialSummary, DIAL_PHRASES, bannerLine } from '../src/services/dialChat.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -60,6 +60,28 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   
     });
     ok(gated, `${name}: tune / setMode / setBandwidth all ask the gate first`);
   }
+}
+
+// ── 4. "lock gain too" (Stuart, 2026-10-21): ONE list of the room's receiver settings, in three places ──
+{
+  const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+  const shim = read('android/app/src/main/cpp/local_sdr_shim.cpp');
+  const s = shim.indexOf('kGated = {'), e = shim.indexOf('};', s);
+  const server = [...shim.slice(s, e).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1])
+    .filter((t) => !['tune', 'mode', 'bandwidth', 'dab', 'dab_service', 'iqtune'].includes(t)).sort();
+  const jr = read('spike/WristSDR/WristSDR/UberClient.swift');
+  const js = jr.indexOf('askSharedSettings: Set<String> = ['), je = jr.indexOf(']', js + 40);
+  const jrList = [...jr.slice(js, je).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1]).sort();
+  const app = [...ASK_SHARED_SETTINGS].sort();
+  ok(server.length >= 20 && server.join() === app.join(), `the server and the app/web refuse the same ${app.length} settings`);
+  ok(jrList.join() === app.join(), 'Jr refuses the same list');
+  for (const t of ['gain', 'agc', 'rsp_control', 'ahf_control', 'airspy_control', 'hackrf_control', 'tunerbw', 'nr', 'notch', 'deemph', 'stereo'])
+    if (!app.includes(t)) ok(false, `${t} is missing from the locked list`);
+  for (const t of ['zoom', 'reset', 'squelch', 'fftRate', 'set_rate', 'rdsx', 'say', 'state', 'iqout'])
+    ok(!app.includes(t) && !server.includes(t), `${t} stays free (a view, or this listener's own)`);
+  const appWs = read('src/services/VibeServerWsClient.ts'), web = read('web/client/src/spectrum.ts');
+  ok(/_sendCtl\(obj[^)]*\) \{\s*\/\/[^\n]*\n\s*if \(this\.tuneLocked && ASK_SHARED_SETTINGS\.has/.test(appWs), 'app: the control sender drops a locked setting');
+  ok(/_send\(obj[^)]*\) \{[\s\S]{0,400}if \(this\.tuneLocked && ASK_SHARED_SETTINGS\.has/.test(web), 'web: the one sender drops a locked setting');
 }
 
 console.log(`test_ask_before_tuning: ${pass} passed, ${fail} failed`);

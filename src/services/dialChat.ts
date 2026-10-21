@@ -211,6 +211,22 @@ export function askLocked(d: AskState | null | undefined): boolean {
   return !!d && d.askFirst === true && d.tuneLocked === true;
 }
 
+/** ★★★ THE SHARED RECEIVER SETTINGS A LOCKED LISTENER MAY NOT SEND (Stuart, 2026-10-21: "lock gain too"). Every
+ *  message here changes what EVERYBODY on a shared dial hears — the front end of whichever radio it is (RTL gain and
+ *  AGC, the RSP's gain reduction / LNA / AGC, the HF+ attenuator / preamp / AGC, the Airspy and HackRF stages, the
+ *  antenna, the tuner's IF filter, the sample rate, direct sampling) and the ONE shared pipeline's DSP (NR, notch,
+ *  de-emphasis, stereo, the blankers, the broadcast-FM row, NFM voice). The server refuses the same list
+ *  (local_sdr_shim.cpp askRefuses) — this copy only keeps a client from sending what it would refuse.
+ *  ★ Dropped SILENTLY by the clients: a page restoring its preferences on connect is not somebody reaching for a
+ *    control, so only the UI's own touch shields nudge. Tuning (tune/mode/bandwidth/dab) has its own gate.
+ *  ★ NOT here, because they are this listener's own: squelch (per session), the waterfall rate, zoom/pan, RDS
+ *    subscriptions, recording, uncompressed audio, raw IQ out, and everything behind the admin password. */
+export const ASK_SHARED_SETTINGS = new Set<string>([
+  'gain', 'agc', 'rsp_control', 'rsp_agc_restart', 'ahf_control', 'airspy_control', 'hackrf_control', 'antenna',
+  'tunerbw', 'sampleRate', 'directSampling',
+  'nr', 'notch', 'deemph', 'stereo', 'nfmvoice', 'wsp', 'nb', 'nbx', 'ceq', 'ims', 'autobw',
+]);
+
 /** ★ What the shared-tuner banner flashes when a locked control is touched. Caps, like the banner it replaces. */
 export const ASK_NUDGE_TEXT = 'ASK IN CHAT BEFORE TUNING';
 

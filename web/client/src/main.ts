@@ -773,11 +773,19 @@ function nudgeAsk() {
     askNudgeTimer = setTimeout(() => b.classList.remove('askNudge'), 3000);
   }
 }
+/** ★★ What is dimmed and shielded while locked — index.html body.askLocked lists the same ids. The tuning controls,
+ *  and (Stuart, 2026-10-21: "lock gain too") every receiver setting that changes what the others hear: the gain and
+ *  each driver's own front end (RSP / HF+ / Airspy / HackRF rows), RTL AGC, the tuner's IF filter, the sample rate,
+ *  direct sampling, the antenna, and the shared DSP (NR, notch, de-emphasis, stereo, the blankers, IMS / CEQ /
+ *  auto-bandwidth, NFM voice). Squelch, the waterfall and the raw-IQ / uncompressed rows are this listener's own. */
+const ASK_SHIELD_SEL = '#mVfoDial, #mVfoDown, #mVfoUp, #mMode, #bwLo, #bwHi, #bwHome, '
+  + '#rowGain, #rspCtls, #ahfCtls, #aspCtls, #hrfCtls, #rowTunerBw, #rowRate, #agc, #dsSeg, #antSeg, #rspAntSeg, '
+  + '#nr, #notch, #deemphSeg, #stereoBtn, #wspBtn, #imsBtn, #ceqBtn, #autoBwBtn, #nbBtn, #nbxBtn, #nfmVoiceBtn';
 /** ★★ THE DIMMED CONTROLS DO NOT TUNE — a touch on one is the reach that nudges. Captured before the drum, the step
  *  keys and the passband sliders see it, and only while the server says this listener is locked. The spectrum click,
  *  entry, bookmarks and the pad all reach SpectrumClient, whose own gate nudges the same way (onTuneLocked). */
 function wireAskShield() {
-  const sel = '#mVfoDial, #mVfoDown, #mVfoUp, #mMode, #bwLo, #bwHi, #bwHome';
+  const sel = ASK_SHIELD_SEL;
   const stop = (e: Event) => {
     if (!askLocked(askNow)) return;
     const t = e.target as Element | null;

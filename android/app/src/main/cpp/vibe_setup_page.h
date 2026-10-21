@@ -793,7 +793,7 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
             <input type="checkbox" id="askFirst" style="width:16px;height:16px;accent-color:var(--amber)">
             <span>Ask before tuning</span></label>
-          <div class="hint">When somebody else is already listening, a newcomer&rsquo;s tuning controls are dimmed
+          <div class="hint">When somebody else is already listening, a newcomer&rsquo;s tuning controls &mdash; and the gain and receiver settings everybody hears &mdash; are dimmed
             until they ask in the chat. A &ldquo;yes&rdquo; lets them in at once, and so does no answer within
             15&nbsp;seconds. A &ldquo;no&rdquo; holds for five minutes at most, so nobody can keep the radio to
             themselves. Your answer as admin always counts first, then whoever has been listening longest.</div>

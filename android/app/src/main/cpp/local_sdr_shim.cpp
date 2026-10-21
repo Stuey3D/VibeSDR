@@ -9553,9 +9553,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool askRefuses(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         if (!g_vsAskBeforeTuning.load() || !sock) return false;
         const std::string type = jsonStr(msg, "type");
-        // ★ What everybody HEARS: the frequency, the demodulator, the passband, the multiplex and the DAB service.
-        //   Zoom/pan is a view and stays free; gain-class controls are unchanged by this switch.
-        if (type != "tune" && type != "mode" && type != "bandwidth" && type != "dab" && type != "dab_service") return false;
+        // ★ What everybody HEARS: the frequency, the demodulator, the passband, the multiplex and the DAB service —
+        //   and (Stuart, 2026-10-21: "lock gain too") every receiver setting a shared dial shares: each driver's front
+        //   end, the antenna, the tuner's IF filter, the rate, direct sampling, and the one pipeline's DSP. Zoom/pan is
+        //   a view ("that shouldn't move the tuning or audio") and stays free, as do squelch (per session), the frame
+        //   rate, RDS subscriptions, raw IQ and everything already behind the admin password.
+        //   ★ ONE LIST, TWO READERS: the clients' copy is src/services/dialChat.ts ASK_SHARED_SETTINGS.
+        static const std::set<std::string> kGated = {
+            "tune", "mode", "bandwidth", "dab", "dab_service", "iqtune",
+            "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control", "hackrf_control", "antenna",
+            "tunerbw", "sampleRate", "directSampling",
+            "nr", "notch", "deemph", "stereo", "nfmvoice", "wsp", "nb", "nbx", "ceq", "ims", "autobw",
+        };
+        if (!kGated.count(type)) return false;
         const double now = Impl::nowSecs();
         std::string me;
         bool notice = false, state = false;
@@ -9591,8 +9601,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              type.c_str(), me.empty() ? "?" : me.c_str());
         if (state) sendFullState(sock);   // ★ re-adopt: config, hwinfo, the DAB box, and the dial (which says why)
         if (notice)
-            sendText(sock, "{\"type\":\"notice\",\"ask\":1,\"why\":\"Ask in chat before tuning \xE2\x80\x94 "
-                           "other people are listening to this shared tuner\"}");
+            sendText(sock, "{\"type\":\"notice\",\"ask\":1,\"why\":\"Ask in chat before tuning or changing the receiver "
+                           "\xE2\x80\x94 other people are listening to this shared tuner\"}");
         return true;
     }
 

@@ -91,7 +91,7 @@ import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
 import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 import { vsSquelchMsg } from './vibeSquelch';
-import { parseAsk, askLocked } from './dialChat';
+import { parseAsk, askLocked, ASK_SHARED_SETTINGS } from './dialChat';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
  *
@@ -484,6 +484,7 @@ export abstract class VibeServerWsClient {
    *  stale intent onto a session that has moved on. Anything that MUST survive a reconnect is
    *  re-sent from the onopen path, deliberately, by name. */
   protected sendSpectrum(msg: Record<string, unknown>): boolean {
+    if (this.tuneLocked && ASK_SHARED_SETTINGS.has(String(msg.type))) return false;   // ★★ ask before tuning — see _sendCtl
     if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return false;
     try { this.spectrumWs.send(JSON.stringify(msg)); return true; } catch { return false; }
   }
@@ -735,6 +736,8 @@ export abstract class VibeServerWsClient {
   // ── VibeServer hardware controls (client drives the remote radio) ─────────
   // Sent over the spectrum WS control channel; the shim applies them server-side.
   private _sendCtl(obj: Record<string, unknown>) {
+    // ★★ Ask before tuning: the room's receiver settings are not ours to send yet — silently (dialChat.ASK_SHARED_SETTINGS).
+    if (this.tuneLocked && ASK_SHARED_SETTINGS.has(String(obj.type))) return;
     const ws = this.spectrumWs;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
@@ -2384,9 +2387,10 @@ export abstract class VibeServerWsClient {
        *  ★★ They must not share a slot: a refusal routed into the owner's notice would clobber a
        *     message somebody deliberately posted, and leave it clobbered. */
       const why = typeof msg.why === 'string' ? msg.why : '';
-      // ★★ Ask before tuning's refusal (`ask`) is said by the banner and the chat key, not a VTS line — the text is
-      //    for clients that predate the lock.
-      if (why && msg.ask) { this.callbacks.onTuneLocked?.(); return; }
+      // ★★ Ask before tuning's refusal (`ask`) is for clients that predate the lock. This one never sends a locked
+      //    frame on purpose — its own gates nudge when a PERSON reaches — so one arriving here answers a restore or a
+      //    race, and is dropped rather than flashed.
+      if (why && msg.ask) return;
       if (why) { this.callbacks.onRefused?.(why); return; }
       // ★ `vts` = a transient server line for the bar (gain start-up, sampling switch); the
       //   refusal path already lands there, with the same look.

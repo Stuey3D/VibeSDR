@@ -830,6 +830,15 @@ struct HardwareSheet: View {
 
   var body: some View {
     ScrollView {
+      // ★★★ ASK BEFORE TUNING (Stuart, 2026-10-21: "lock gain too"): on a shared tuner every control on this page
+      //   changes what everybody hears, so while the server has not let this listener in, the page is dimmed and
+      //   inert, and says why. The client drops the messages too (UberClient.askSharedSettings).
+      if radio.dialTuneLocked {
+        Text("Ask in the chat first — other people are listening to this shared tuner. A yes, or no answer in 15 s, lets you in.")
+          .font(.system(size: 10)).foregroundColor(.orange)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 6).padding(.top, 4)
+      }
       VStack(spacing: 7) {
         // ★★ THE ADMIN LOCK, WHERE THE LOCKED CONTROLS ARE. The server enforces it —
         // bias-T, PPM, direct sampling and calibration all go through adminGate — but
@@ -1165,6 +1174,7 @@ struct HardwareSheet: View {
         }
       }
       .padding(.horizontal, 6).padding(.bottom, 10)
+      .disabled(radio.dialTuneLocked).opacity(radio.dialTuneLocked ? 0.35 : 1)   // ★★ ask before tuning — see above
     }
     .navigationTitle("Radio")
     .sheet(isPresented: $showSpan) {

@@ -3439,7 +3439,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                         trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
                     </View>
                     <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                      When somebody else is already listening, a newcomer's tuning controls are dimmed until they
+                      When somebody else is already listening, a newcomer's tuning controls — and the gain and receiver settings everybody hears — are dimmed until they
                       ask in the chat. A "yes" lets them in at once, and so does no answer within 15 seconds. A "no"
                       holds for five minutes at most, so nobody can keep the radio to themselves. Your answer as
                       admin always counts first, then whoever has been listening longest.

@@ -403,8 +403,13 @@ final class AudioSocket {
     return conn?.state == .ready
   }
 
+  /// ★★ ASK BEFORE TUNING — control types this socket must not send right now (set by UberClient from the server's
+  /// dial message; empty = no lock). Dropped silently: the screen says why. Set and read on the main actor.
+  var refusedTypes: Set<String> = []
+
   /// JSON control (the tune). Text frame, same as the phone.
   func send(json: [String: Any]) {
+    if !refusedTypes.isEmpty, let t = json["type"] as? String, refusedTypes.contains(t) { return }
     if usingURLSession {
       if let d = try? JSONSerialization.data(withJSONObject: json),
          let str = String(data: d, encoding: .utf8) { task?.send(.string(str)) { _ in } }

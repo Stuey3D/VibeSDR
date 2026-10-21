@@ -72,8 +72,34 @@ radio already is) is dropped silently; a real one gets the room's `config` back 
 and, at most every 10 s, a `notice` with `why` = "Ask in chat before tuning — …", which every client since
 the refusal pill already shows. **Old clients** therefore simply do not tune and are told why.
 
-Not gated: zoom/pan (a view, not what anybody hears), gain-class controls (unchanged — open on a shared
-dial, as before; noted as a follow-up), chat itself, `state`.
+### ★★ "Lock gain too" (Stuart, 2026-10-21)
+On a shared dial there is ONE front end and ONE pipeline, so every receiver setting changes what everybody
+hears. These are refused as well (one list, three readers: `kGated` in `local_sdr_shim.cpp askRefuses`,
+`ASK_SHARED_SETTINGS` in `src/services/dialChat.ts`, `UberClient.askSharedSettings` on Jr — checked equal by
+`scripts/test_ask_before_tuning.ts`):
+
+| Locked while not let in | Message |
+|---|---|
+| RTL gain + VibeAGC (`gain`), RTL hardware AGC (`agc`) | `gain`, `agc` |
+| SDRplay IF gain reduction / LNA state / IF + RF AGC / notches / HDR …, gain-API restart | `rsp_control`, `rsp_agc_restart` |
+| Airspy HF+ attenuator / preamp / AGC | `ahf_control` |
+| Airspy R2/Mini LNA / mixer / VGA / modes, HackRF LNA / VGA | `airspy_control`, `hackrf_control` |
+| Antenna port | `antenna` |
+| Tuner IF filter, sample rate, direct sampling | `tunerbw`, `sampleRate`, `directSampling` |
+| Shared DSP: NR, notch, de-emphasis, stereo, NFM voice, weak-signal NR, both blankers, CEQ, IMS, auto bandwidth | `nr`, `notch`, `deemph`, `stereo`, `nfmvoice`, `wsp`, `nb`, `nbx`, `ceq`, `ims`, `autobw` |
+
+**Stay free** (checked per handler): zoom / pan / reset (a view — "that shouldn't move the tuning or audio"),
+squelch (`sessionSquelch`, per session), the waterfall rate (`fftRate` per client, `set_rate`), Advanced RDS
+(`rdsx`, a per-listener subscription), DAB scopes / resync (per socket), ADC stats, raw IQ out and uncompressed
+audio (per session; raw IQ is off on a shared dial anyway), chat, `state`, ping, admin unlock. Bias-T, ppm,
+automatic direct sampling, the DAB rate boost and raw-IQ policy are behind the admin password already, and an
+admin is never locked. Volume, waterfall contrast and the rest of the look are client-side and never sent.
+
+The clients drop a locked setting **silently** (a page restoring its preferences on connect is not a person
+reaching); the touch shields on the dimmed controls are what nudge. A server `notice` carrying `ask` is
+likewise dropped by new clients — it is for clients that predate the lock.
+
+Not gated: zoom/pan, chat itself, `state`.
 
 ## Clients
 - **Web** (`web/client`): `tuneLocked` dims the tuning controls; the SpectrumClient refuses to send a gated
@@ -81,8 +107,13 @@ dial, as before; noted as a follow-up), chat itself, `state`.
   chat key and the banner, and asks the server for `state` so the readout snaps back.
 - **App** (`src/`, phones, iPad, Mac, Android, tvOS): the same gate in `VibeServerWsClient`; the drums dim
   and a touch flashes the chat key and the banner.
-- **Jr** (watch, direct): refuses to send a tune while locked and says why. **Buddy** tunes through the
-  phone, whose gate covers it.
+  The hardware panel (LocalHardwarePanel) is dimmed and shielded as a whole, with an ASK BEFORE TUNING card
+  under the password card (which stays live); the audio sheet dims the shared DSP rows and gates their handlers.
+- **Web**, receiver settings: the gain row, each driver's row, RTL AGC, IF filter, sample rate, direct sampling,
+  antenna and the shared DSP buttons are dimmed and shielded (`ASK_SHIELD_SEL`).
+- **Jr** (watch, direct): refuses to send a tune while locked and says why; its Radio page (gain, AGC, RSP / HF+
+  rows, de-emphasis, the FM row) is dimmed and inert with a line saying why, and the socket drops the list.
+  **Buddy** tunes through the phone, whose gate covers it; it exposes no receiver settings.
 
 ## Tests
 - `vibeserver/test-tune-etiquette.cpp` — the rule on a synthetic clock (ranks, windows, conflicts, lapses).

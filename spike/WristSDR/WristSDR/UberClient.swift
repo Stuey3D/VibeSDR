@@ -697,6 +697,14 @@ final class UberClient: ObservableObject {
   /// sends neither, and this stays false. `dialAskState` is "" | "open" (asked, waiting) | "no" (asked to wait).
   @Published var dialTuneLocked = false
   @Published var dialAskState = ""
+  /// ★ The receiver settings a locked listener may not send — the SAME list as the server's (local_sdr_shim.cpp
+  /// askRefuses) and the phone's (src/services/dialChat.ts ASK_SHARED_SETTINGS); scripts/test_ask_before_tuning.ts
+  /// checks the three agree.
+  static let askSharedSettings: Set<String> = [
+    "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control", "hackrf_control", "antenna",
+    "tunerbw", "sampleRate", "directSampling",
+    "nr", "notch", "deemph", "stereo", "nfmvoice", "wsp", "nb", "nbx", "ceq", "ims", "autobw",
+  ]
   /// True when this receiver shares one tuner between its listeners.
   var sharedDial: Bool { isVibe && dialMode != "exclusive" }
 
@@ -2674,6 +2682,9 @@ final class UberClient: ObservableObject {
         self.dialTuneLocked = askFirst && ((j["tuneLocked"] as? Bool) ?? false)
         self.dialAskState   = askFirst ? ((j["askState"] as? String) ?? "") : ""
         if self.dialTuneLocked { self.dialArmed = false }   // ★ an arm from before the lock must not survive it
+        // ★★ AND THE ROOM'S RECEIVER SETTINGS (Stuart, 2026-10-21: "lock gain too") — gain, AGC, the RSP / HF+
+        //    rows, de-emphasis, stereo, the FM DSP: everybody's on a shared dial, so not sent while locked.
+        self.specSock.refusedTypes = self.dialTuneLocked ? Self.askSharedSettings : []
       }
       return
     }
