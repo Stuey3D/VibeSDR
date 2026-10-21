@@ -73,11 +73,10 @@ Mac app or the GitHub APKs.**
   for the Apple App Store, TestFlight and **Google Play**. It covers only code Stuart holds the copyright to.
   OpenRSP's authors have granted no such permission. Therefore:
   - The iOS and Mac App Store builds must never contain OpenRSP. That is already the plan: no iOS.
-  - **The Google Play AAB of the Android app** is the open question. Most people treat Play as compatible with
-    GPLv3, and many GPL apps ship there. But Stuart judged an exception worth writing for his own code, and
-    OpenRSP should get the same care. **Ask M9PSY for the same additional permission** (App Store / TestFlight /
-    Google Play, official binaries) **before** OpenRSP goes into the Play build. The GitHub APK and Lite (both
-    sideloaded) do not need it.
+  - **The Google Play AAB of the Android app: DECIDED, it may carry OpenRSP** (Stuart, 2026-10-21). Play is
+    treated as compatible with GPLv3, and the Play app already ships librtlsdr (GPL-2.0-or-later, not Stuart's)
+    on exactly those terms. M9PSY has consented to the integration (Discord, 2026-10-21). Only the Apple
+    stores need a §7 exception we cannot give for someone else's code, so the line stays at Apple.
 - libusb (LGPL-2.1+) is already linked statically on Linux and the Mac, so nothing changes there.
 - **Trade marks.** OpenRSP uses SDRplay's file names only where compatibility forces it. We go further and use
   none of their paths: everything lives under `/usr/lib/vibeserver/openrsp`, and the unit is called
