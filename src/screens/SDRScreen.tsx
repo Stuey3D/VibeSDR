@@ -13119,6 +13119,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     caller ever bumps it without touching status, the prop will not update and the
           //     tune will be silently dropped — bump state, not just the ref, if that day comes.
           userTuneSeq={userTuneSeq.current + tuneAssertNonce}
+          /* ★★★ THE SERVER'S OWN DIAL, from the same status as `frequency` and in the same HARDWARE Hz — a value
+           *  equal to it is this screen adopting the room's dial, and is never sent back (audioTuneForward.ts:
+           *  the V12 iPhone echoed every step Safari took on the Lenovo, 2026-10-22). */
+          serverDial={status.serverDial
+            ? { ...status.serverDial, frequency: convToHardware(status.serverDial.frequency, converterRef.current) }
+            : null}
           /* ★★★ AND THIS IS WHERE "THE AUDIO IS FLOWING" ACTUALLY COMES FROM ON A VIBESERVER.
            *
            *  The DAB "tuning in" line clears when audio is heard, and it read `lastAudioAtRef` /

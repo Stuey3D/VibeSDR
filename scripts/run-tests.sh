@@ -415,6 +415,10 @@ if node --no-warnings scripts/test_ask_before_tuning.ts; then pass=$((pass+1)); 
 # ★★★ The room's passband on a shared dial (2026-10-17): the web client adopts it from config and sends nothing;
 #     the app and Jr read the same fields. The server half is test-room-passband.cpp above.
 if node --no-warnings scripts/test_room_passband.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ NO CLIENT SENDS BACK A DIAL IT WAS GIVEN (2026-10-22, the Lenovo: Safari tuned 657 → 693 and the V12 iPhone sent
+#     every step back, "684 after 693"): the app's audio-socket tune door (audioTuneForward.ts) never forwards the
+#     server's own dial, a person's change always goes (the drum included), and the web client follows silently.
+if node --no-warnings scripts/test_dial_echo.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE ANTENNA SWITCH SETUP RULES (2026-10-09): what Lite's screen / the setup page send the server.
 if node --no-warnings scripts/test_antenna_switch_cfg.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_antenna_bands_presets.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -719,6 +723,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     `dab` per burst with no snap-back. Same VIBESERVER_BIN rule; the browser half wants Edge. ~40 s.
 printf '\n\033[1m── DAB: a burst of multiplex presses is one tune (server + served page, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dab-burst.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE SHARED-DIAL CONTRACT, END TO END (2026-10-22, the Lenovo echo): one listener walks the dial; the app's
+#     audio-socket door with the OLD rule echoes it (reproduced from the server's own log), with the NEW rule sends
+#     nothing, the served web page sends nothing, and a person on the app still tunes (a step and straight back
+#     included). Same VIBESERVER_BIN rule; the web page half wants Edge. ~45 s.
+printf '\n\033[1m── shared dial: nobody echoes another listener’s tune (server + app rule + served page, end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --no-warnings scripts/test-dial-echo.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADMIN (Stuart, 2026-10-18: "in the admin menu there is no way to navigate it with the controller"): the highlight goes
 #    into the panel and stays there, carries on after the tables redraw, and ○ closes it.

@@ -74,6 +74,12 @@ export interface SDRStatus {
    *  from the VFO (the "signal next to the VFO" bug). The full-spectrum display can keep using
    *  centerHz for gesture continuity. */
   trueCenterHz?: number;
+  /** ★★★ WHERE THE SERVER LAST SAID THE DIAL IS — its own `config` (vfo, mode, and the room's passband when it
+   *  sent one), written by the client in the SAME step that adopts it, so it always travels in the same
+   *  snapshot as `frequency`. LocalAudioPlayer reads it to tell the screen ADOPTING the room's dial from a
+   *  person tuning (src/services/audioTuneForward.ts — THE SHARED-DIAL CONTRACT, the Lenovo echo of
+   *  2026-10-22). Hz in the same units as `frequency` (the converter maps it with the rest). */
+  serverDial?: { frequency: number; mode?: string; bandwidthLow?: number; bandwidthHigh?: number };
 }
 
 /** ★ ONE FRAME OF THE ADVANCED RDS ANALYSER, exactly as VibeServer computes it.
