@@ -11,6 +11,12 @@
 //  ★ Trailing-only, deliberately. A leading send (first press goes at once) still costs TWO
 //    re-acquires for "> >" — the first one torn down half-way — and a single press waiting
 //    SETTLE_MS is invisible next to the second or more a multiplex takes to lock anyway.
+// ★★★ AND THE SAME RULE ON THE WEB AND THE WRIST (Stuart, 2026-10-21: "if I connect at 12b and rapidly
+//     tune down to 7D hammering the multiplex button multiple times a second … dont tune the SDR just
+//     hold it and tune on final move. However if I am tuning a multiplex and holding there for a second
+//     to see the waterfall then tuning again we need to tune as normal"). The web client sent a `dab`
+//     per press until then, and the phone tuned the watch's crown step by step. 450 ms trailing is the
+//     line between the two: a run of presses is one tune; a press, a look, a press is two.
 
 export const DAB_STEP_SETTLE_MS = 450;
 
@@ -26,6 +32,7 @@ export function dabWrap(i: number, n: number): number {
 
 export class DabBlockStepper {
   private target = -1;
+  private origin = -1;   // the block the burst started from — the one the server is on
   private timer: unknown = null;
   // ★ Plain fields, not constructor parameter properties: node runs this file type-stripped for the
   //   test, and strip-only mode refuses parameter properties.
@@ -34,6 +41,7 @@ export class DabBlockStepper {
   private readonly show: (i: number) => void;
   private readonly settleMs: number;
   private readonly timers: DabStepTimers;
+  private readonly clamp: boolean;
   constructor(
     n: number,
     /** Sends the block to the server — called once per settled burst. */
@@ -45,8 +53,12 @@ export class DabBlockStepper {
       set: (fn, ms) => setTimeout(fn, ms),
       clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
     },
+    /** ★ The ends of Band III: the app's drum and the crown WRAP (a ring); the web client's arrows
+     *  CLAMP (13F -> 5A in one press is not what a band scan meant). */
+    edges: 'wrap' | 'clamp' = 'wrap',
   ) {
     this.n = n; this.send = send; this.show = show; this.settleMs = settleMs; this.timers = timers;
+    this.clamp = edges === 'clamp';
   }
 
   /** The block a burst is heading for, or -1 when nothing is waiting to be sent. */
@@ -57,7 +69,10 @@ export class DabBlockStepper {
   step(current: number, steps: number): number {
     if (!steps) return this.target >= 0 ? this.target : current;
     const base = this.target >= 0 ? this.target : (current < 0 ? 0 : current);
-    const next = dabWrap(base + steps, this.n);
+    const next = this.clamp ? Math.max(0, Math.min(this.n - 1, base + steps)) : dabWrap(base + steps, this.n);
+    // ★ Pressed against an end of the band (clamp): nowhere to go, so nothing to show or send.
+    if (next === base) return next;
+    if (this.target < 0) this.origin = current;
     this.target = next;
     this.show(next);
     if (this.timer != null) this.timers.clear(this.timer);
@@ -65,7 +80,9 @@ export class DabBlockStepper {
       this.timer = null;
       const i = this.target;
       this.target = -1;
-      if (i >= 0) this.send(i);
+      // ★ There and back again (> > < <): the burst ended where it began, on the block the server is
+      //   already decoding. Sending it would tear that multiplex down and re-acquire it for nothing.
+      if (i >= 0 && i !== this.origin) this.send(i);
     }, this.settleMs);
     return next;
   }
@@ -75,6 +92,48 @@ export class DabBlockStepper {
     if (this.timer != null) this.timers.clear(this.timer);
     this.timer = null;
     this.target = -1;
+    this.origin = -1;
+  }
+}
+
+/** ★★★ THE LABEL DOES NOT SNAP BACK TO THE BLOCK WE LEFT (Stuart, 2026-10-21: "I tried to rapid tune
+ *  the Pi2 earlier and it kept snapping back"). After we send a block, `dab` reports naming the block we
+ *  LEFT keep arriving for a while — already on the wire, built by the server's DSP thread before our
+ *  request was read, or queued behind a slow reader (a Pi 2 is all three) — and "follow the server's
+ *  block" adopted each one, dragging the label back under the user's thumb.
+ *  ★ So, from our send: a report naming a block we have just LEFT (the one we were on, or an earlier
+ *    ask this one replaced) is DROPPED, whole — its station list belongs to that block too, and a stale
+ *    list you can tap is worse than an empty one. It ends when the server names the block we asked for,
+ *    or when DAB_ASK_HOLD_MS passes (the request failed, or someone moved the dial back — then the
+ *    server is right and we follow it), or at once when a report names a THIRD block: somebody else
+ *    genuinely moved the shared dial, and that is adopted immediately.
+ *  ★★★ THE SHARED-DIAL CONTRACT: this only holds the DISPLAY. Nothing is ever re-sent to "correct" the
+ *    server — recovery is not a user action; the server owns the state and we adopt it.
+ *  ★ Jr has had the same filter since 2026-09-10 (UberClient dabWantIndex, 6 s): "it jumped from 5a -
+ *    10a and for some reason started showing the 9A stations". Same bound, so ONE RULE, THREE READERS. */
+export const DAB_ASK_HOLD_MS = 6000;
+
+export class DabAskGuard {
+  private asked = -1;
+  private until = 0;
+  private readonly left = new Set<number>();
+  /** The block we are waiting for the server to name, or -1. */
+  pending(): number { return this.asked; }
+  /** We sent block `block`; `from` is the block the server last reported (-1 = none known). */
+  sent(block: number, from: number, now: number): void {
+    if (from >= 0 && from !== block) this.left.add(from);
+    if (this.asked >= 0 && this.asked !== block) this.left.add(this.asked);
+    this.left.delete(block);
+    this.asked = block;
+    this.until = now + DAB_ASK_HOLD_MS;
+  }
+  /** Leaving DAB, entering it with no block, a reconnect — nothing of ours is in flight any more. */
+  clear(): void { this.asked = -1; this.left.clear(); }
+  /** Should a report naming block `block` be believed now? (block < 0 = a report with no block.) */
+  accept(block: number, now: number): boolean {
+    if (this.asked < 0 || block < 0) return true;
+    if (block === this.asked || now >= this.until || !this.left.has(block)) { this.clear(); return true; }
+    return false;
   }
 }
 
