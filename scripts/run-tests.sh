@@ -32,6 +32,8 @@ flags_for() {
     # ★★★ Our own gain step through the real chain (2026-10-19): the smoother + the pipeline's guard,
     #     every case run with and without the step on the same noise seed. Optimised: ~30 runs of 8 s.
     test-gain-step)        echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★ A cost RATIO: optimised like the shipping build, or the idle side is all loop overhead.
+    test-gain-step-cost)   echo "-O2" ;;
     # ★ The Advanced RDS instrument (MpxMeasure) against a signal of known deviation, at several
     #   capture rates and passbands — the real pipeline end to end, so the same deps again.
     test-mpx-measure|test-rds-ps-frames) echo "-O2 -I $VDSP -I $KISS" ;;
@@ -201,6 +203,10 @@ done
 #   because that page is what a new owner meets first.
 printf '\n\033[1m── setup page ──\033[0m\n'
 if node scripts/check-setup-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ The August RTL stutter fixes (gain write off modeMtx/the DSP, one transfer, the client's hwinfo
+#     signature skip) — a gain change must never again stall the audio. See check-gain-write-path.mjs.
+printf '\n\033[1m── gain write path ──\033[0m\n'
+if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).
 if node scripts/test-setup-wifi-name.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ Fork labelling (directory forkOf): a fork's name is shown, checked; official names refused as fork names.
