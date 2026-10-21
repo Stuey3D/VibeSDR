@@ -11,10 +11,13 @@ RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-i
       build-essential crossbuild-essential-arm64 cmake pkg-config file ca-certificates curl \
       libncursesw5-dev:arm64 libc6:arm64 bzip2 \
       dpkg-dev apt-utils gnupg git rsync xz-utils binutils-aarch64-linux-gnu \
+      sdcc \
     && rm -rf /var/lib/apt/lists/*
-COPY sdrplay-inc/ /usr/local/include/
-RUN ls /usr/local/include/sdrplay_api.h \
-    && grep -q SDRPLAY_API_VERSION /usr/local/include/sdrplay_api.h
+# ★★★ sdcc BUILDS THE RSP BRIDGE FIRMWARE (OpenRSP, 2026-10-21): vendor/openrsp/firmware/src is 8051 C,
+#     compiled here into the three images the bundled RSP service uploads. A host tool, architecture-free;
+#     CMake refuses a release build without it. bookworm's 4.2.0 reproduces OpenRSP's released images
+#     byte for byte (SHA-256 checked against openrsp_3.15.2-20_arm64.deb).
+# ★★ The SDRplay headers are NO LONGER STAGED here: the API headers are OpenRSP's, in vendor/openrsp/include.
 COPY arm64-toolchain.cmake /opt/arm64-toolchain.cmake
 COPY build-deps.sh /opt/build-deps.sh
 # ★ Two compile jobs, niced: the Lenovo is a live receiver (build-debs-remote.sh passes DEPS_NICE=19).
