@@ -261,7 +261,7 @@ const HIGHLIGHT_MAJOR = HIGHLIGHTS[APP_VERSION.split('.')[0]] ? APP_VERSION.spli
 const CREDITS: { name: string; detail: string; url?: string }[] = [
   // ── THE PEOPLE ───────────────────────────────────────────────────────────────────────────────
   { name: 'M9PSY (madpsy) — UberSDR',
-    detail: 'The biggest thank-you of all. M9PSY got me into AI-assisted coding and encouraged this whole project into existence — without him there is no VibeSDR. UberSDR is the server this client was first built for, and VibeServer speaks its protocol. The on-device RTTY / NAVTEX, WEFAX and SSTV decoders are C++ ports of his UberSDR decoders; the NR2, noise-blanker and WebSDR-NR audio processing are ports of his web client’s; and the decoder wiring, the maps for HFDL, digital and CW spots, the colour palettes, band plans, bookmark format and the waterfall smoothing pipeline all started from his work. VibeServer’s SDRplay RSP driver on Linux is OpenRSP (openrsp.dev), which he develops — licensed under the GNU GPL v3. Cheers, mate.' },
+    detail: 'The biggest thank-you of all. M9PSY got me into AI-assisted coding and encouraged this whole project into existence — without him there is no VibeSDR. UberSDR is the server this client was first built for, and VibeServer speaks its protocol. The on-device RTTY / NAVTEX, WEFAX and SSTV decoders are C++ ports of his UberSDR decoders; the NR2, noise-blanker and WebSDR-NR audio processing are ports of his web client’s; and the decoder wiring, the maps for HFDL, digital and CW spots, the colour palettes, band plans, bookmark format and the waterfall smoothing pipeline all started from his work. Cheers, mate.' },
   { name: 'TGCFabian',
     detail: 'The biggest outside source of testing and ideas VibeSDR and VibeServer have had. HackRF support, the deviation monitor, the composite eye diagram, releasing the SDR when idle so other applications can use it, and running behind a reverse proxy all exist or work properly because of him, and he checked our MPX deviation against MPX Tool station by station. He also ran VibeServer in a genuinely complicated environment and kept reporting what broke there — which is what made it robust rather than merely working on the bench it was written on.' },
   { name: 'Onfliner',
@@ -333,8 +333,10 @@ const CREDITS: { name: string; detail: string; url?: string }[] = [
     detail: 'The Airspy R2 and Mini driver. Copyright (C) 2013-2016 Benjamin Vernoux, Youssef Touil and Ian Gilmour; airspy.c, airspy.h and airspy_commands.h are BSD-3-Clause, and the IQ converter and filter sources (iqconverter_float.c, iqconverter_int16.c, filters.h) are MIT. Bundled unmodified. Redistributed with those notices and their disclaimers of warranty; the Airspy name is not used to endorse or promote VibeSDR.' },
   { name: 'libhackrf — Great Scott Gadgets (BSD-3-Clause)',
     detail: 'The HackRF One driver, for HackRF support in VibeServer. Copyright (c) 2012-2022 Great Scott Gadgets, Jared Boone and Benjamin Vernoux. Bundled as a patched copy: upstream has no way to open a radio from a USB file descriptor, which is the only way an Android app is allowed to open one at all.' },
+  { name: 'OpenRSP (GPL-3.0-or-later)',
+    detail: 'The SDRplay RSP driver in VibeServer on Linux — API library, device service and USB bridge firmware, from openrsp.dev. Not affiliated with SDRplay Ltd.' },
   { name: 'SDRplay — SDRplay Ltd',
-    detail: 'The RSP API used by VibeServer. Its headers only — the closed-source library is never bundled, and is loaded at runtime if you have installed it. No SDRplay software, no SDRplay support, and nothing breaks.' },
+    detail: 'The RSP API. The closed-source library is never bundled; it is loaded at runtime where you have installed it, and is used in preference to OpenRSP on Linux when it is there.' },
   { name: 'KissFFT — Mark Borgerding (BSD-3-Clause)',
     detail: 'Copyright (c) 2003-2010 Mark Borgerding. The small, permissively-licensed FFT kernel inside VibeDSP — the waterfall and spectrum, the MMSE noise reduction, Auto Notch and the decoders.' },
   { name: 'PFFFT — Julien Pommier (FFTPACK licence)',

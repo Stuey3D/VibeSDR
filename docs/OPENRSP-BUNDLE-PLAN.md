@@ -86,8 +86,9 @@ Mac app or the GitHub APKs.**
 ### Quiet, as Stuart asked (2026-10-21)
 **Do not advertise "driver-free SDRplay" anywhere.** No website copy, no store copy, no tour, no feature-list
 line. We do not want to upset SDRplay. What goes in:
-- **Credits** (done on this branch). OpenRSP sits inside M9PSY's existing entry in `AboutOverlay.tsx`
-  `CREDITS` and in `README.md`'s credits table, with the GNU GPL v3 noted. The shipped-code table in README
+- **Credits** (done on this branch). OpenRSP has its OWN plain entry in `AboutOverlay.tsx` `CREDITS` ("OpenRSP
+  (GPL-3.0-or-later)") — NOT under M9PSY's name: he asked (2026-10-21) not to be credited for it, "just call it
+  OpenRSP". Never attach a person's name to OpenRSP in user-facing copy. The shipped-code table in README
   gains an OpenRSP row, and its SDRplay API row now says "never bundled".
 - **One plain line in the release notes** (AboutOverlay, the next version's entry, which does not exist yet; the
   version number was not to be changed here). Suggested wording:
