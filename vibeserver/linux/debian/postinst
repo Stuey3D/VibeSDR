@@ -18,6 +18,10 @@ case "$1" in
     if [ -x /usr/lib/vibeserver/armv6/vibeserver ] \
        && ! grep -qwE 'neon|asimd' /proc/cpuinfo 2>/dev/null; then
       install -m 0755 /usr/lib/vibeserver/armv6/vibeserver /usr/bin/vibeserver
+      # ★★ AND THE BUNDLED RSP SERVICE GOES: it is an ARMv7 build (OpenRSP, 2026-10-21) and would die
+      #    "Illegal instruction" in a restart loop. Its unit skips itself without the file
+      #    (ConditionFileIsExecutable), and the ARMv6 vibeserver never looks for the bundled library.
+      rm -f /usr/lib/vibeserver/openrsp/sdrplay_apiService
       echo "VibeServer: no NEON on this processor — installed the ARMv6 (scalar) build."
     fi
     # ── 0. THE SERVICE ACCOUNT ───────────────────────────────────────────────
@@ -226,6 +230,11 @@ case "$1" in
       #   Restarting it is safe on every version: it is socket-activated, so nothing loses a message.
       systemctl restart systemd-journald.service >/dev/null 2>&1 || true
       systemctl enable vibeserver.service >/dev/null 2>&1 || true
+      # ★★ THE BUNDLED RSP DRIVER SERVICE (OpenRSP, 2026-10-21). Enabled always — it skips itself when a
+      #    system SDRplay stack is installed, and on a CPU it cannot run on — and started below only if the
+      #    server was running, for the same reason as the radios.
+      #    Absent on i386 (no OpenRSP there yet): the `|| true` covers it.
+      systemctl enable vibeserver-rsp.service >/dev/null 2>&1 || true
       # ★★ THE WATCHER MUST BE ENABLED OR THE MAINTENANCE BUTTONS DO NOTHING. The daemon writes
       #    its request happily; without this unit running, nothing is watching for it, and the
       #    admin page reports success for an action that never happens — worse than an error.
@@ -243,6 +252,10 @@ case "$1" in
       #     four lines up promises. Restarting what was running is the intent; starting what was
       #     stopped is not.
       if [ -n "$WAS_ACTIVE" ]; then
+        # ★ The RSP service BEFORE the radios that are its clients. try-restart first: an upgrade replaces
+        #   its binary, and a running one would carry on from the deleted file (see below).
+        systemctl try-restart vibeserver-rsp.service >/dev/null 2>&1 || true
+        systemctl start vibeserver-rsp.service >/dev/null 2>&1 || true
         systemctl start vibeserver-radios.service >/dev/null 2>&1 || true
       fi
       # ★ The wizard enables and starts the service itself (tui.cpp), so telling people to run

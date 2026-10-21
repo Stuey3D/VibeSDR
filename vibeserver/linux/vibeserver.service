@@ -19,6 +19,11 @@ Wants=network-online.target
 #   the front door from serving the setup page, which is the one thing you need to fix it from.
 Wants=vibeserver-radios.service
 Before=vibeserver-radios.service
+# ★★ THE BUNDLED RSP DRIVER SERVICE (OpenRSP, 2026-10-21) — Wants=, for the same reason as the radios:
+#    it is PartOf= this unit, which propagates stop and restart but never start. It skips itself when a
+#    system SDRplay service is installed (see vibeserver-rsp.service), so this is harmless there.
+Wants=vibeserver-rsp.service
+After=vibeserver-rsp.service
 
 [Service]
 Type=simple

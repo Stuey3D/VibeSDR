@@ -140,11 +140,29 @@ while IFS= read -r f; do
   fi
 done < <(find "$X" -type f)
 [ "$ELVES" -gt 0 ] || fail "no ELF binaries in the package"
+# ★★★ THE BUNDLED RSP DRIVER IS IN IT, AND IS THE REAL THING (OpenRSP, 2026-10-21). Not on i386 (OpenRSP does not
+#     build for i386 Linux yet — see vibeserver/CMakeLists.txt). Three ways it could be present and useless:
+#     firmware that is not what its manifest says, a service compiled against the USB STUB (libusb not found —
+#     it then finds no receiver, ever), and a library missing API entry points.
+ORSP="$X/usr/lib/vibeserver/openrsp"
+ORSP_LINE="none (i386)"
+if [ "$ARCH" != i386 ]; then
+  for f in libsdrplay_api.so.3.15 libsdrplay_api.so.3 sdrplay_apiService firmware/own/manifest.sha256; do
+    [ -e "$ORSP/$f" ] || fail "no usr/lib/vibeserver/openrsp/$f in the package"
+  done
+  (cd "$ORSP/firmware/own" && sha256sum -c --quiet manifest.sha256) || fail "the RSP firmware does not match its manifest"
+  [ "$(strings "$ORSP/sdrplay_apiService" | count libusb)" -gt 20 ] || fail "the RSP service has no libusb in it (USB stub?)"
+  NAPI="$(readelf -W --dyn-syms "$ORSP/libsdrplay_api.so.3.15" | awk '$5=="GLOBAL" && $7!="UND"' | count ' sdrplay_api_')"
+  [ "$NAPI" -ge 24 ] || fail "libsdrplay_api.so.3.15 exports only $NAPI sdrplay_api_ symbols"
+  [ -f "$X/usr/share/doc/vibeserver/COPYING.openrsp" ] || fail "OpenRSP's licence is not in the package"
+  ORSP_LINE="library ($NAPI sdrplay_api_ exports), service, firmware $(cut -c1-12 "$ORSP/firmware/own/manifest.sha256" | tr '\n' ' ')"
+fi
 {
   echo "package   $(basename "$DEB")"
   echo "Depends   $DEPENDS"
   echo "ELF files $ELVES, all $WANT_ELF; highest GLIBC_ version needed: $MAXG"
   echo "vibeserver: $(file -b "$X/usr/bin/vibeserver" 2>/dev/null || echo '?')"
+  echo "OpenRSP   $ORSP_LINE"
   case "$ARCH" in
     armhf) echo "  $(readelf -A "$X/usr/bin/vibeserver" | grep -E 'Tag_CPU_arch:|Tag_Advanced_SIMD_arch:|Tag_FP_arch:' | tr -s ' ' | tr '\n' ' ')"
            [ -f "$X/usr/lib/vibeserver/armv6/vibeserver" ] || fail "no ARMv6 binary in lib/vibeserver/armv6"

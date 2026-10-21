@@ -1,0 +1,60 @@
+[Unit]
+# ★★★ THE RSP DRIVER SERVICE THAT COMES WITH VIBESERVER (2026-10-21). OpenRSP's device service
+#     (openrsp.dev, GPLv3, the OpenRSP authors; source in vendor/openrsp), built into the package so an
+#     SDRplay RSP works with nothing else installed. It owns the receivers' USB connections, uploads
+#     OpenRSP's bridge firmware, and serves every VibeServer process (vibeserver, vibeserver@<serial>)
+#     through shared memory in /dev/shm — the same protocol SDRplay's own service speaks.
+# ★★★ ONE RSP SERVICE PER MACHINE. If a SYSTEM SDRplay stack is installed — SDRplay's official API or
+#     OpenRSP's own sdrplay-api-open package, both of which put their service at the path below — that
+#     service owns the RSPs for every program on the machine (OpenWebRX, SDR++ …) and this one stays OUT
+#     of the way: two services would race to upload firmware and claim the same receiver. VibeServer
+#     then uses the system library too.
+#  ★★ KEEP IN STEP with sdrplayCandidates() in android/app/src/main/cpp/sdrplay_source.cpp, which asks
+#     the same one question (does /opt/sdrplay_api/sdrplay_apiService exist?) to pick the library.
+Description=VibeServer — RSP driver service (OpenRSP)
+Documentation=https://openrsp.dev
+ConditionPathExists=!/opt/sdrplay_api/sdrplay_apiService
+# ★ Removed by postinst on an ARMv6 CPU (Pi Zero / Pi 1), where this ARMv7 build cannot run.
+ConditionFileIsExecutable=/usr/lib/vibeserver/openrsp/sdrplay_apiService
+Before=vibeserver.service vibeserver-radios.service
+PartOf=vibeserver.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/vibeserver/openrsp/sdrplay_apiService
+# ★ It stops cleanly on SIGTERM (unlinking its /dev/shm objects) and bounds its own stop at 20 s.
+Restart=on-failure
+RestartSec=1
+TimeoutStopSec=25
+# ★★ UNPRIVILEGED. Upstream runs it as root; it needs only the USB devices (the udev rule gives plugdev
+#    the RSPs, as for every other radio) and /dev/shm, whose objects it creates mode 0666 for its clients.
+#    Measured 2026-10-21 in a bookworm container: as `vibeserver`, Open/GetDevices from both the same user
+#    and root succeed, and the objects are unlinked on stop.
+User=vibeserver
+Group=vibeserver
+SupplementaryGroups=plugdev
+# ★ Its stream threads ask for SCHED_FIFO/SCHED_RR (best effort): the same one capability as the radios.
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# ★★★ NOT PrivateTmp=disconnected and NOT PrivateDevices: /dev/shm and the USB devices are the whole job.
+PrivateTmp=yes
+DeviceAllow=char-usb_device rw
+UMask=0022
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+# ★ It never opens a network socket (OpenRSP's own claim, tested by its suite). AF_UNIX for the journal,
+#   AF_NETLINK for libusb's hotplug monitor.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target
