@@ -542,4 +542,9 @@ Stuart: "Pairing code with the app when setting up, only the server owner's app 
 - **Encrypted, pinned connection required** — the server is plain HTTP today. Shared work with GitHub #52.
 - Phase TX safeguards all apply; the dead-man unkey on a lost link is the critical one on mobile data.
 - Licensing is the operator's responsibility and matters more here (remote operation); ask the club before building.
-- OPEN: one paired device, or a few (phone + iPad)?
+- **Up to 5 paired devices**, apps only (Stuart, 2026-10-21). Listed by name + last used on the admin page.
+- **Jr on the watch transmits too** ("like a Dick Tracy watch"). Jr is standalone, so it pairs itself: the same
+  6-digit code typed on the watch, its own key in the watch Keychain, counting as one of the 5. Wrist detection +
+  watch passcode stand in for Face ID. Hold-to-talk on a big button (Action button on Ultra). The watch mic streams
+  through AVAudioEngine while Jr is frontmost; dropping the wrist or leaving the app unkeys at once (dead-man).
+  Mind arm64_32 (32-bit Int below watchOS 27) in the audio and key code. Latency/battery over LTE to be measured.
