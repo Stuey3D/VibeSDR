@@ -627,6 +627,11 @@ export interface AudioSheetProps {
   onServerDsp?:       (enabled: boolean) => void;
   onServerDspFilter?: (name: string) => void;
   onServerDspParam?:  (name: string, value: string) => void;
+  /** ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md): on a shared tuner the server's DSP (NR, notch, noise
+   *  blankers, NFM voice, de-emphasis, stereo, the broadcast-FM row) is everybody's, so those rows are dimmed while
+   *  the server has not let this listener in. The handlers are gated in SDRScreen (askGate → the nudge). Squelch,
+   *  recording, uncompressed audio and raw IQ are this listener's own and stay live. */
+  askLocked?: boolean;
 }
 
 export default function AudioSheet({
@@ -645,8 +650,9 @@ export default function AudioSheet({
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
   onOwrxSquelch, onOwrxSquelchAuto, onOwrxNr, owrxDspDefaults, visualGain = 0,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
-  dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
+  dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam, askLocked = false,
 }: AudioSheetProps) {
+  const askDim = askLocked ? { opacity: 0.35 } : null;   // ★ ask before tuning — see the prop
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
   const C = audioC(pt);
@@ -895,7 +901,7 @@ export default function AudioSheet({
 
           {/* Local SDR audio noise reduction — strength slider (0=off..20). */}
           {onLocalNR && (
-            <View style={st.bwRow}>
+            <View style={[st.bwRow, askDim]}>
               <Text style={st.bwLabel}>NR</Text>
               <NavSlider style={st.bwSlider}
                 minimumValue={0} maximumValue={20} step={1}
@@ -909,7 +915,7 @@ export default function AudioSheet({
 
           {/* Automatic notch (adaptive line enhancer) — on/off, all backends. */}
           {onNotch && (
-            <View style={st.bwRow}>
+            <View style={[st.bwRow, askDim]}>
               <Text style={[st.bwLabel, { width: 78 }]}>AUTO NOTCH</Text>
               <View style={{ flex: 1 }} />
               <Toggle label={notchOn ? 'ON' : 'OFF'} on={notchOn} onPress={() => onNotch?.(!notchOn)} />
@@ -941,7 +947,7 @@ export default function AudioSheet({
               NB in the row below. The web client has had this since the listener NB landed; the
               app did not (Stuart, 2026-09-15: "noise blanker missing"). Same word, same place. */}
           {onNbx && (
-            <View style={st.bwRow}>
+            <View style={[st.bwRow, askDim]}>
               <Text style={[st.bwLabel, { width: 78 }]}>NOISE BLANKER</Text>
               <View style={{ flex: 1 }} />
               <Toggle label={nbx ? 'ON' : 'OFF'} on={nbx} onPress={() => onNbx?.(!nbx)} />
@@ -951,7 +957,7 @@ export default function AudioSheet({
           {/* ★ NFM AUDIO — VOICE is how an NFM radio sounds (300 Hz-3 kHz: no CTCSS tone, softer
               hiss); RAW is the flat output for an external decoder that needs the low end. */}
           {onNfmVoice && (
-            <View style={st.bwRow}>
+            <View style={[st.bwRow, askDim]}>
               <Text style={[st.bwLabel, { width: 78 }]}>NFM AUDIO</Text>
               <View style={{ flex: 1 }} />
               <Toggle label={nfmVoice ? 'VOICE' : 'RAW'} on={nfmVoice} onPress={() => onNfmVoice?.(!nfmVoice)}
@@ -1009,7 +1015,7 @@ export default function AudioSheet({
               de-emphasis, stereo. 50µs Europe/UK, 75µs Americas/Korea. Tau is in SECONDS on the
               wire, which is easy to get wrong — see the wire-units note. */}
           {onDeemph && (
-            <NavRow><View style={st.bwRow}>
+            <NavRow><View style={[st.bwRow, askDim]}>
               <Text style={[st.bwLabel, { width: 78 }]}>DE-EMPH</Text>
               <View style={st.keyWrapEnd}>
               {([{ l: 'OFF', v: 0 }, { l: '50µs', v: 50e-6 }, { l: '75µs', v: 75e-6 }]).map((o) => (
@@ -1021,7 +1027,7 @@ export default function AudioSheet({
 
           {/* ★ WFM STEREO — off forces mono, which is cleaner on a weak or noisy signal. */}
           {onStereo && (
-            <View style={st.bwRow}>
+            <View style={[st.bwRow, askDim]}>
               <Text style={[st.bwLabel, { width: 78 }]}>WFM STEREO</Text>
               <View style={{ flex: 1 }} />
               <Toggle label={stereo ? 'ON' : 'OFF'} on={stereo} onPress={() => onStereo(!stereo)} />
@@ -1034,7 +1040,7 @@ export default function AudioSheet({
               ★ NR works in MONO too: the audio high-cut treats baseband hiss, which is there
                 whether you are in stereo or not; only the stereo half needs L-R. */}
           {(onFmNr || onFmIms || onFmCeq || onFmNb || onFmAutoBw) && (
-            <View style={st.bwRow}>
+            <View style={[st.bwRow, askDim]}>
               {/* ★★ "BROADCAST FM", not "FM DSP" — and the row label is load-bearing. This sheet
                   ALREADY has NR and NB buttons a few rows up, and those are the app's OWN
                   client-side audio DSP; these are the RADIO's, they act only on broadcast FM, and

@@ -285,6 +285,8 @@ public:
      *    wonder whether it was. See vsconfig::safeLinkUrl. */
     /** Is the session limit a GUARANTEE (soft) rather than a deadline? See sessionLimitSoft. */
     void setSessionLimitSoft(bool soft);
+    /** ★★ "Ask before tuning" on a shared dial — see RadioConfig::askBeforeTuning and vibe_tune_etiquette.h. */
+    void setAskBeforeTuning(bool on);
     /** ONE RADIO PER ADDRESS — see ServerConfig::oneRadioPerIp. Default true; the owner may allow
      *  several, which is reasonable privately and unwise on a public server. */
     void setOneRadioPerIp(bool on);

@@ -69,6 +69,8 @@ export type VibeServerConfig = {
   /** The time limit is a GUARANTEE rather than a deadline: kept past its time until someone waits.
    *  ★ Absent/false = hard, which is what a limit has always meant here. */
   sessionLimitSoft?: boolean;
+  /** ★★ Ask before tuning on a shared dial — a newcomer asks in chat first (docs/TUNING-ETIQUETTE.md). Off by default. */
+  askBeforeTuning?: boolean;
   /** Minutes with NO interaction before a listener is asked "still listening?", then released.
    *  0 = off (the default). The server clamps to a 15-minute floor, and a listener watching a
    *  decoder is never interrupted. Shared radios only. */
@@ -276,6 +278,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     // ★ Every one of these is applied on EVERY start, including the crash-restore path, so a
     //   rebuilt server is the same server rather than one that quietly lost half its settings.
     sessionLimitSoft: cfg.sessionLimitSoft ?? false,
+    askBeforeTuning: cfg.askBeforeTuning ?? false,
     idleKickMin: cfg.idleKickMin ?? 0,
     lockedCentre: cfg.lockedCentre ?? 0,
     zoomSpectrum: cfg.zoomSpectrum ?? false,

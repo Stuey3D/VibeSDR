@@ -32,6 +32,7 @@ import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindow';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
+import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
 import { lrDisplay } from '../../../src/services/lrMeter';
 /** ★ Set once an L/R reading has arrived — see lrDisplay (no flashing on a weak station). */
@@ -78,6 +79,7 @@ import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
+import { askBannerText, askLocked, ASK_NUDGE_TEXT, type AskState } from '../../../src/services/dialChat';
 // ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
 import { httpBase, wsBase, isValidServerHost } from './origin';
@@ -753,6 +755,50 @@ async function loadAudioPolicy(httpBase: string) {
  *  answer — not sure if our chat notification is too subtle"). Somebody else's tuning line (dialChat isTuningPhrase),
  *  while the chat is shut, takes over the banner for 8 s: three flashes, then held. The app does the same. */
 let bannerSaidText = '';
+/* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server's last word on this listener (dial message, via
+ *  dialChat.parseAsk). Drawn from, never decided here: body.askLocked dims the tuning controls, the banner says what
+ *  to do now, and a reach for a locked control nudges (nudgeAsk). null = no lock on this receiver. */
+let askNow: AskState | null = null;
+let askNudgeAt = 0;
+let askNudgeTimer: ReturnType<typeof setTimeout> | null = null;
+/** ★ A reach for a locked control: flash "ASK IN CHAT BEFORE TUNING" on the banner and the CHAT key. Once per
+ *  2.5 s — a drum flick or a held key is one reach, not forty. */
+function nudgeAsk() {
+  const now = Date.now();
+  if (now - askNudgeAt < 2500) return;
+  askNudgeAt = now;
+  flashSharedBanner(ASK_NUDGE_TEXT);
+  const b = document.getElementById('mChat');
+  if (b) {
+    b.classList.remove('askNudge'); void b.offsetWidth; b.classList.add('askNudge');   // ★ restart the flash
+    if (askNudgeTimer) clearTimeout(askNudgeTimer);
+    askNudgeTimer = setTimeout(() => b.classList.remove('askNudge'), 3000);
+  }
+}
+/** ★★ What is dimmed and shielded while locked — index.html body.askLocked lists the same ids. The tuning controls,
+ *  and (Stuart, 2026-10-21: "lock gain too") every receiver setting that changes what the others hear: the gain and
+ *  each driver's own front end (RSP / HF+ / Airspy / HackRF rows), RTL AGC, the tuner's IF filter, the sample rate,
+ *  direct sampling, the antenna, and the shared DSP (NR, notch, de-emphasis, stereo, the blankers, IMS / CEQ /
+ *  auto-bandwidth, NFM voice). Squelch, the waterfall and the raw-IQ / uncompressed rows are this listener's own. */
+const ASK_SHIELD_SEL = '#mVfoDial, #mVfoDown, #mVfoUp, #mMode, #bwLo, #bwHi, #bwHome, '
+  + '#rowGain, #rspCtls, #ahfCtls, #aspCtls, #hrfCtls, #rowTunerBw, #rowRate, #agc, #dsSeg, #antSeg, #rspAntSeg, '
+  + '#nr, #notch, #deemphSeg, #stereoBtn, #wspBtn, #imsBtn, #ceqBtn, #autoBwBtn, #nbBtn, #nbxBtn, #nfmVoiceBtn';
+/** ★★ THE DIMMED CONTROLS DO NOT TUNE — a touch on one is the reach that nudges. Captured before the drum, the step
+ *  keys and the passband sliders see it, and only while the server says this listener is locked. The spectrum click,
+ *  entry, bookmarks and the pad all reach SpectrumClient, whose own gate nudges the same way (onTuneLocked). */
+function wireAskShield() {
+  const sel = ASK_SHIELD_SEL;
+  const stop = (e: Event) => {
+    if (!askLocked(askNow)) return;
+    const t = e.target as Element | null;
+    if (!t || !t.closest || !t.closest(sel)) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.type === 'pointerdown' || e.type === 'keydown') nudgeAsk();
+  };
+  for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'click', 'wheel', 'input', 'keydown'])
+    document.addEventListener(ev, stop, { capture: true, passive: false });
+}
+if (typeof document !== 'undefined') wireAskShield();
 let bannerSaidTimers: ReturnType<typeof setTimeout>[] = [];
 function flashSharedBanner(text: string) {
   bannerSaidTimers.forEach(clearTimeout);
@@ -774,6 +820,13 @@ function updateSharedBanner() {
   if (!srvSharedDial) return;
   // ★★ A tuning line just arrived — the banner says it (flashSharedBanner; the app's SDRScreen bannerSaid).
   if (bannerSaidText) { ms.textContent = bannerSaidText; ms.title = 'Chat: ' + bannerSaidText; return; }
+  // ★★ Ask before tuning: while locked, what to do NOW (ask / awaiting a reply / when it is yours).
+  const askTxt = askNow ? askBannerText(askNow, false) : null;
+  if (askTxt) {
+    ms.classList.remove('alone'); ms.textContent = askTxt;
+    ms.title = 'Ask in the chat before tuning — a yes, or no answer within 15 seconds, lets you in';
+    return;
+  }
   // ★ Until the first count arrives (0), the cautious wording — never "free" on a guess.
   if (listenerCount <= 0) { ms.classList.remove('alone'); ms.textContent = 'SHARED TUNER · ASK BEFORE TUNING'; return; }
   const alone = listenerCount <= 1;
@@ -1364,6 +1417,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDial: (d) => {
       chatDial(d);
       dialModeNow = d.mode;
+      {
+        // ★★ ASK BEFORE TUNING — adopt the server's word; say so when the room lets this listener in.
+        const was = askNow;
+        askNow = d.askFirst ? { askFirst: true, tuneLocked: d.tuneLocked, askState: d.askState, askUntil: d.askUntil } : null;
+        document.body.classList.toggle('askLocked', askLocked(askNow));
+        if (askLocked(was) && !askLocked(askNow) && askNow && was?.askState) flashSharedBanner('GO AHEAD — YOURS TO TUNE');
+        updateSharedBanner();
+      }
       syncMediaSkip();
       const on = d.mode !== 'exclusive';
       /* ★ The receiver's sharing state decides who owns the SAMPLE RATE as well as the dial — see
@@ -1388,6 +1449,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onDialRefused: () => { chatRefused(); togglePanel('chatPanel'); },
+    // ★★ Ask before tuning — SpectrumClient refused a tune for us; show why (the chat key and the banner).
+    onTuneLocked: () => nudgeAsk(),
     onSaid: (from, id, admin, msg) => chatSaid(from, id, admin, msg),
     // ★★★ SOMEBODY ELSE MOVED THE DIAL — REDRAW WHAT THEY MOVED. The readout, the mode and the
     //     VFO marker are all drawn from values this client chose, and on a shared receiver it
@@ -1498,6 +1561,22 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  away", Stuart, 2026-09-06). TS 103 176 6.2.2: the list is a THING THE RECEIVER KEEPS, not
        *  a picture of this frame. Hold it while the channel is unchanged; a retune clears it
        *  (dabTune sets dabState = null), and a different ensemble replaces it. */
+      /* ★★★ A REPORT FROM THE BLOCK WE ARE LEAVING IS DROPPED, WHOLE (2026-10-21 — the Pi 2's snap-back).
+       *  Mid-burst (dabStepper pending) the label is ahead of the server by design; after the send, dabAsk
+       *  holds until the server names our block, 6 s pass, or a third block shows somebody else moved
+       *  the shared dial. Its list and live text belong to the old block too, so nothing of it is drawn.
+       *  ★ Display only: nothing is sent from here — the server owns the dial (shared-dial contract). */
+      if (dabOn && d.channel) {
+        const bi = DAB_BLOCKS.findIndex(b => b.name === d.channel);
+        if (bi >= 0) {
+          const burst = dabStepper.pending();
+          if (burst >= 0 && bi !== burst) return;
+          if (!dabAsk.accept(bi, Date.now())) return;
+          dabServerBlock = bi;
+        }
+      } else if (d.channel) {
+        dabServerBlock = DAB_BLOCKS.findIndex(b => b.name === d.channel);
+      }
       if (!dabOn) {
         /* ★★★ SOMEBODY ELSE PUT THIS RECEIVER ON A MULTIPLEX (or we reloaded while it was on):
          *  the box opens now, with no message to the server. See dabUiOn. */
@@ -6325,6 +6404,32 @@ const DAB_BLOCKS: { name: string; hz: number }[] = [
   ['13A',230784],['13B',232496],['13C',234208],['13D',235776],['13E',237488],['13F',239200],
 ].map(([n, k]) => ({ name: String(n), hz: Number(k) * 1000 }));
 
+/* ★★★ ONE RETUNE PER BURST OF PRESSES, AND NO SNAP-BACK (Stuart, 2026-10-21: "if I connect at 12b and
+ *  rapidly tune down to 7D hammering the multiplex button multiple times a second … dont tune the SDR
+ *  just hold it and tune on final move. However if I am tuning a multiplex and holding there for a
+ *  second to see the waterfall then tuning again we need to tune as normal"; then "I tried to rapid tune
+ *  the Pi2 earlier and it kept snapping back"). dabTune sent a `dab` on EVERY press, so a run of ten
+ *  presses was ten full re-acquires queued on the server. Now the app's rule, from the same code
+ *  (src/services/dabStepper.ts): the label moves on each press, the server is told the block the user
+ *  STOPPED on, once, DAB_STEP_SETTLE_MS after the last press. CLAMPED at the ends, as dabTune always was.
+ *  ★ dabAsk holds the label against reports still naming the block we LEFT (bounded; display only —
+ *    nothing is ever re-sent); dabServerBlock is the block the server last reported. */
+let dabServerBlock = -1;
+const dabAsk = new DabAskGuard();
+const dabStepper = new DabBlockStepper(DAB_BLOCKS.length,
+  (i) => {   // the settled block — the one send of the burst
+    dabAsk.sent(i, dabServerBlock, Date.now());
+    audio?.holdHealing(6000); spec?.dab(true, i);
+  },
+  (i) => {   // every press: the label, the remembered block, the arrows' names — at once
+    dabChannel = i;
+    savePref('dabChannel', DAB_BLOCKS[i].name);
+    dabState = null;
+    dabRender();
+    syncDialTips();   // ★ the arrows name the NEXT blocks — see syncDialTips
+  },
+  DAB_STEP_SETTLE_MS, undefined, 'clamp');
+
 /** TS 101 756 table 12 — the international programme type codes carried in FIG 0/17. */
 const DAB_PTY: string[] = ['None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
   'Culture', 'Science', 'Varied', 'Pop Music', 'Rock Music', 'Easy Listening', 'Light Classical',
@@ -7124,13 +7229,16 @@ function dabGoTo(hz: number, sid: number) {
   if (idx < 0) return;
   // ★ sid < 0 = "this block, whatever was playing" — a bookmark without a service id.
   const svc = sid >= 0 ? sid : undefined;
+  dabStepper.cancel();   // ★ a pick is the answer — a burst still settling must not override it
   if (!dabOn) {
     dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
     dabUiOn();
+    dabAsk.sent(idx, dabServerBlock, Date.now());
     audio?.holdHealing(6000); spec?.dab(true, idx, svc);
   } else if (idx !== dabChannel) {
     dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
     dabState = null;
+    dabAsk.sent(idx, dabServerBlock, Date.now());
     audio?.holdHealing(6000); spec?.dab(true, idx, svc);
   } else if (svc !== undefined) {
     audio?.holdHealing(6000); spec?.dabService(svc);
@@ -7139,15 +7247,11 @@ function dabGoTo(hz: number, sid: number) {
   syncDialTips();
 }
 
+/** Step the multiplex — every arrow, key, wheel and pad press in DAB ends here (via nudge). Coalesced:
+ *  see dabStepper above. ★ CLAMP, never wrap: 13F -> 5A in one press is not what a band scan meant. */
 function dabTune(delta: number) {
-  if (dabChannel < 0) dabChannel = DAB_BLOCKS.findIndex(b => b.name === '12B');
-  // ★ CLAMP, never wrap: 13F -> 5A in one press is not what a band scan meant.
-  dabChannel = Math.max(0, Math.min(DAB_BLOCKS.length - 1, dabChannel + delta));
-  savePref('dabChannel', DAB_BLOCKS[dabChannel].name);
-  dabState = null;
-  audio?.holdHealing(6000); spec?.dab(true, dabChannel);
-  dabRender();
-  syncDialTips();   // ★ the arrows name the NEXT blocks — see syncDialTips
+  const cur = dabChannel >= 0 ? dabChannel : DAB_BLOCKS.findIndex(b => b.name === '12B');
+  dabStepper.step(cur, delta);
 }
 
 /** ★★★ ZOOM IS BLOCKED IN DAB MODE — DISABLED, not merely ignored (AGENTS.md: a control that does
@@ -7363,6 +7467,7 @@ function dabSetMode(on: boolean) {
     } else {
       if (dabChannel < 0) dabChannel = dabRememberedChannel();
       dabUiOn();
+      dabAsk.sent(dabChannel, dabServerBlock, Date.now());
       audio?.holdHealing(6000); spec?.dab(true, dabChannel);
     }
   } else {
@@ -7378,6 +7483,7 @@ function dabSetMode(on: boolean) {
   dabRender();
 }
 function dabUiOff() {
+  dabStepper.cancel(); dabAsk.clear();   // ★ leaving DAB: a burst still settling dies, nothing is awaited
   spec?.dabScopes(false);
   dabQualityMeter.reset(); dabQuality = null;
   dabLockControls(false);

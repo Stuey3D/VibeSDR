@@ -124,16 +124,57 @@ POWERSAVE_RECHECK_SEC = 60
 #     the 3A+'s brcmfmac firmware SAE is the weak point (external auth / offload). Only PMF "disable" leaves SAE out
 #     ("do not operate in WPA3-Personal transition mode when PMF is set to disabled"), so the box asks for plain WPA2-PSK,
 #     which every transition-mode network must accept (MFPR=0 is part of the definition of transition mode).
-#  ★ So client networks are saved with PMF DISABLE (NM's 1). A network that turns out to need PMF (WPA2 with PMF
-#    required — rare; a WPA3-only network cannot be joined by this chip anyway) is caught by the one-off retry in
-#    join(): PMF "optional" (2), kept on that profile if it works. migrate_pmf() brings older profiles over.
-PMF_DISABLE, PMF_OPTIONAL = "1", "2"
+#  ✗ SUPERSEDED 2026-10-21 (below): that theory said "save every client network with PMF off". The device disproved it.
+# ★★★ DETECTION FIRST: READ WHAT THE NETWORK ADVERTISES, THEN ASK FOR EXACTLY THAT (Stuart, 2026-10-21: "can we not detect
+#     and enable it when it is needed").
+#  ★★ WHAT THE DEVICE SHOWED (the Portable, 2026-10-21). Stuart's iPhone hotspot, 5 GHz with Maximise Compatibility OFF
+#     (WPA2/WPA3 transition, 5220 MHz): a profile with PMF OFF was REFUSED at once; the same network with SAE allowed and
+#     PMF OPTIONAL joined (172.20.10.2). "This brcmfmac fumbles SAE" was wrong — and PMF off was wrong for exactly the
+#     network it was written for. Plain WPA2 networks (Meow!, the 2.4 GHz compatibility hotspot) join either way.
+#  ★★ HOW (Box.read_adverts → advert_of → plan_for): after every scan, `iw dev wlan0 scan dump` — the kernel's copy of
+#     what that scan already heard; no new radio work — is read for each network's RSN element: its AKM suites (PSK,
+#     SAE, PSK/SHA-256…) and its capabilities (MFP-capable = MFPC, MFP-required = MFPR). nmcli cannot say this: its
+#     RSN-FLAGS carry the key management but not MFP. Then:
+#        WPA3 only (SAE, no PSK)          → key-mgmt sae, PMF required
+#        WPA2/WPA3 transition (PSK + SAE) → key-mgmt wpa-psk (NM then offers SAE too), PMF optional
+#        WPA2 that says MFP capable       → wpa-psk, PMF optional   (MFP required → PMF required)
+#        WPA2 with no MFP at all          → wpa-psk, PMF off
+#        open                             → nothing to choose
+#        not heard (hidden / not on yet)  → wpa-psk, PMF optional — joins nearly everything
+#     Where iw has nothing for a network the scan listed, nmcli's own SECURITY column ("WPA2 WPA3", "WPA3", "WPA2") is the
+#     second opinion (no MFP in it, so plain WPA2 gets PMF optional). Several access points under one name that disagree
+#     (a mesh mid-upgrade) get wpa-psk + PMF optional — the one setting every one of them takes.
+#  ★★ THE SAFETY NET (Box.join): a network that refuses us at authentication or association is tried ONCE more with the
+#     next setting (fallback_of): optional → off, off → optional (the iPhone above), required → optional, SAE-only →
+#     wpa-psk optional. Whatever JOINS is remembered (WIFI_SEC_FILE) together with what the network advertised at the
+#     time — so it is never re-guessed while the network advertises the same thing, and is read afresh the moment that
+#     changes (a phone switched to Maximise Compatibility, a router moved to WPA3).
+PMF_DEFAULT, PMF_DISABLE, PMF_OPTIONAL, PMF_REQUIRED = "0", "1", "2", "3"
+WIFI_SEC_FILE = "/var/lib/vibeserver-pocket/wifi-security.json"   # ★ SSIDs: root only (0600), on the settings partition
+WIFI_SEC_KEEP = 20
 # ★★★ THE JOIN HISTORY (Stuart, 2026-10-20: "whether it connects or not who knows but it's a pain in the arse" — a box
 #     that leaves the home network for a hotspot vanishes from it, so nobody saw whether the join worked or why not).
 #     The last JOIN_KEEP attempts, on the settings partition (survives a power cycle), shown on the setup page. SSIDs are
 #     private: it travels only in the admin-gated state, like the saved networks.
 JOIN_HISTORY = "/var/lib/vibeserver-pocket/join-history.json"
 JOIN_KEEP = 20
+# ★★★ THE WI-FI LOG THAT SURVIVES A REBOOT (2026-10-21: the Portable's journal is in RAM — 16 MB, journald volatile, on
+#     purpose: a journal on the SD card is a write every few seconds — so every reboot and every update wiped it, and a
+#     whole afternoon's evidence went with it). KeptLog copies OUR lines, NetworkManager's, wpa_supplicant's and the
+#     kernel's Wi-Fi lines (brcmfmac, cfg80211, wlan0) from the RAM journal to the settings partition:
+#       · in batches — every WIFI_LOG_FLUSH_SEC, ~20 s after a join attempt (so a failed join's NetworkManager lines
+#         are kept even if the power goes next), and when the service is stopped (a reboot, an update);
+#       · bounded — WIFI_LOG_CAP per file, one rotation (wifi-log.txt → wifi-log.txt.1), so never more than 2 × the cap;
+#       · appended, never rewritten — a few KB a quarter-hour on a quiet box, nothing a card notices;
+#       · 0600 (SSIDs are private) and in Download diagnostics (vibeserver-diagnostics), secrets scrubbed there as
+#         everything else is. The journal is never made persistent: this is the part worth keeping, nothing else.
+WIFI_LOG = "/var/lib/vibeserver-pocket/wifi-log.txt"
+WIFI_LOG_CAP = 128 * 1024
+WIFI_LOG_FLUSH_SEC = 900
+WIFI_LOG_AFTER_JOIN_SEC = 20
+WIFI_LOG_MIN_GAP_SEC = 120          # ★ a phone hotspot asked for every two minutes must not mean a write every minute
+WIFI_LOG_UNITS = ("NetworkManager.service", "wpa_supplicant.service", "vibeserver-pocket.service")
+KERNEL_WIFI_LINE = re.compile(r"brcmf|cfg80211|ieee80211|wlan\d|regulatory|\bwifi\b", re.I)
 
 
 def pmf_value(v):
@@ -172,6 +213,236 @@ def powersave_disabled(v):
     else ("0 (default)", "3 (enable)", "" for a profile written before the field existed) means the global default,
     which on brcmfmac is ON."""
     return bool(re.match(r"\s*(2\b|disable\b)", v or ""))
+
+
+# ── What a network advertises (see DETECTION FIRST above) ──────────────────────────────────────
+def parse_iw_scan(text):
+    """`iw dev <dev> scan dump` (or `scan`) → {ssid: [bss, …]}, one dict per access point heard:
+    {"bssid", "freq" (MHz int|None), "signal" (dBm float|None), "privacy" (bool), "rsn" (bool), "wpa" (bool),
+     "akm" (set of iw's suite names: "PSK", "SAE", "PSK/SHA-256", "FT/PSK", "FT/SAE", "IEEE 802.1X", "OWE", …),
+     "mfpc", "mfpr" (bools)}.
+    ★ Defensive: an access point with no SSID line (hidden) is skipped; one printed twice (beacon + probe response IEs)
+      has its suites and flags UNITED; lines it does not know are ignored; the RSN capabilities are read from iw's words
+      AND its hex (bit 6 = MFPR, bit 7 = MFPC), so an iw that prints only the number is still understood."""
+    out = {}
+    bss, sect = None, None
+
+    def done(b):
+        if b and b.get("ssid") and b["ssid"].strip("\x00"):     # ★ hidden: empty, or NUL bytes in its place
+            out.setdefault(b["ssid"], []).append({k: v for k, v in b.items() if k != "ssid"})
+
+    for raw in (text or "").splitlines():
+        if raw.startswith("BSS "):
+            done(bss)
+            m = re.match(r"BSS ([0-9A-Fa-f:]{17})", raw)
+            bss = {"bssid": m.group(1).lower() if m else "", "ssid": "", "freq": None, "signal": None,
+                   "privacy": False, "rsn": False, "wpa": False, "akm": set(), "mfpc": False, "mfpr": False}
+            sect = None
+            continue
+        if bss is None:
+            continue
+        line = raw.strip()
+        if line.startswith("RSN:"):
+            sect, bss["rsn"] = "rsn", True
+            line = line[4:].strip()
+        elif line.startswith("WPA:"):
+            sect, bss["wpa"] = "wpa", True
+            line = line[4:].strip()
+        elif not line.startswith("*"):
+            sect = None
+        if sect is None:
+            if line.startswith("SSID: ") or line == "SSID:":
+                bss["ssid"] = bss["ssid"] or iw_unescape(line[6:])
+            elif line.startswith("freq:"):
+                m = re.match(r"freq:\s*(\d+)", line)
+                bss["freq"] = int(m.group(1)) if m else None
+            elif line.startswith("signal:"):
+                m = re.match(r"signal:\s*(-?\d+(?:\.\d+)?)", line)
+                bss["signal"] = float(m.group(1)) if m else None
+            elif line.startswith("capability:"):
+                bss["privacy"] = bss["privacy"] or bool(re.search(r"\bPrivacy\b", line))
+            continue
+        item = line.lstrip("*").strip()
+        if item.startswith("Authentication suites:"):
+            suites = item.split(":", 1)[1].split()
+            # ★ iw writes "IEEE 802.1X" as two words: put them back together.
+            joined, i = [], 0
+            while i < len(suites):
+                if suites[i].endswith("IEEE") and i + 1 < len(suites):     # "IEEE 802.1X", "FT/IEEE 802.1X", …
+                    joined.append(suites[i] + " " + suites[i + 1]); i += 2; continue
+                joined.append(suites[i]); i += 1
+            if sect == "rsn":
+                bss["akm"] |= set(joined)
+            else:
+                bss.setdefault("wpa_akm", set()).update(joined)
+        elif item.startswith("Capabilities:") and sect == "rsn":
+            bss["mfpc"] = bss["mfpc"] or "MFP-capable" in item
+            bss["mfpr"] = bss["mfpr"] or "MFP-required" in item
+            m = re.search(r"\(0x([0-9a-fA-F]+)\)", item)
+            if m:
+                v = int(m.group(1), 16)
+                bss["mfpc"] = bss["mfpc"] or bool(v & 0x80)
+                bss["mfpr"] = bss["mfpr"] or bool(v & 0x40)
+    done(bss)
+    return out
+
+
+_PSK_AKMS = {"PSK", "PSK/SHA-256", "FT/PSK"}
+_SAE_AKMS = {"SAE", "FT/SAE", "SAE-EXT-KEY", "FT/SAE-EXT-KEY"}
+
+
+def advert_kind(b):
+    """One access point → what it is, in one word: "open", "wpa1", "wpa3", "transition", "wpa2-mfpr", "wpa2-mfpc",
+    "wpa2", or "other" (enterprise, OWE — a password cannot join those)."""
+    akm = b.get("akm") or set()
+    if not b.get("rsn"):
+        if b.get("wpa"):
+            return "wpa1" if (b.get("wpa_akm") or {"PSK"}) & {"PSK"} else "other"
+        return "wpa1" if b.get("privacy") else "open"      # ★ Privacy with no RSN/WPA element = WEP: still a password
+    psk, sae = bool(akm & _PSK_AKMS), bool(akm & _SAE_AKMS)
+    if sae and not psk:
+        return "wpa3"
+    if sae and psk:
+        return "transition"
+    if not psk:
+        return "other"
+    if b.get("mfpr") or akm <= {"PSK/SHA-256"}:          # ★ PSK/SHA-256 alone is the 802.11w AKM: PMF it is
+        return "wpa2-mfpr" if b.get("mfpr") else "wpa2-mfpc"
+    return "wpa2-mfpc" if b.get("mfpc") else "wpa2"
+
+
+# How each kind is described to the owner (log, join history) — plain words.
+ADVERT_WORDS = {
+    "open": "open (no password)", "wpa1": "old WPA", "wpa3": "WPA3 only (PMF required)",
+    "transition": "WPA2/WPA3", "wpa2-mfpr": "WPA2, PMF required", "wpa2-mfpc": "WPA2, PMF capable",
+    "wpa2": "WPA2, no PMF", "other": "enterprise / OWE (not a password network)",
+}
+
+
+def advert_of(bsss):
+    """Every access point heard under one name → ONE verdict {"kind", "words", "n" (APs heard), "mixed" (bool)}. The
+    strongest decides when they agree; when they disagree (a mesh mid-upgrade, a router's 2.4 and 5 GHz set differently)
+    the verdict is "transition" — wpa-psk + PMF optional, which every PSK/SAE access point accepts — because NetworkManager
+    may pick any one of them. None for nothing heard."""
+    bsss = [b for b in (bsss or []) if isinstance(b, dict)]
+    if not bsss:
+        return None
+    bsss = sorted(bsss, key=lambda b: -(b.get("signal") if b.get("signal") is not None else -999))
+    kinds = [advert_kind(b) for b in bsss]
+    usable = [k for k in kinds if k not in ("other",)] or kinds
+    kind = usable[0]
+    mixed = len(set(usable)) > 1
+    if mixed:
+        kind = "transition" if all(k in ("wpa3", "transition", "wpa2-mfpr", "wpa2-mfpc", "wpa2") for k in usable) \
+            else usable[0]
+    words = ADVERT_WORDS.get(kind, kind) + (" (access points disagree: %s)" % "/".join(sorted(set(usable))) if mixed else "")
+    return {"kind": kind, "words": words, "n": len(bsss), "mixed": mixed, "fp": advert_fingerprint(bsss)}
+
+
+def advert_fingerprint(bsss):
+    """★★ WHAT A PROFILE WAS BUILT FROM, in a few bytes: every distinct (AKM suites, MFPC, MFPR) heard under the name —
+    NOT the BSSIDs (Stuart, 2026-10-21: "I have had Meow! over multiple different routers" — a new router or mesh node
+    with the same security is the same network to us; the same name with DIFFERENT security is not)."""
+    sigs = set()
+    for b in bsss:
+        if b.get("rsn"):
+            s = "+".join(sorted(b.get("akm") or [])) or "-"
+            s += "/" + ("R" if b.get("mfpr") else ("C" if b.get("mfpc") else "0"))
+        elif b.get("wpa"):
+            s = "WPA1"
+        else:
+            s = "WEP" if b.get("privacy") else "OPEN"
+        sigs.add(s)
+    return ",".join(sorted(sigs))
+
+
+# How strong each kind is, for the one log line a DOWNGRADE gets (a changed router — or an evil twin; never blocked).
+ADVERT_RANK = {"wpa3": 6, "transition": 5, "wpa2-mfpr": 4, "wpa2-mfpc": 3, "wpa2": 2, "wpa1": 1, "open": 0}
+
+
+def advert_from_nm(security):
+    """★ The second opinion: nmcli's SECURITY column, for a network iw had nothing on. No MFP in it."""
+    s = (security or "").upper().split()
+    if not s or s == ["--"]:
+        kind, words = "open", ADVERT_WORDS["open"]
+    elif "802.1X" in s or s == ["OWE"]:
+        kind, words = "other", ADVERT_WORDS["other"]
+    elif "WPA3" in s and "WPA2" not in s and "WPA1" not in s:
+        kind, words = "wpa3", ADVERT_WORDS["wpa3"]
+    elif "WPA3" in s:
+        kind, words = "transition", ADVERT_WORDS["transition"]
+    elif "WPA2" in s:
+        kind, words = "wpa2-mfpc", "WPA2 (PMF not reported)"   # ★ PMF unknown: optional joins both kinds of WPA2
+    else:
+        kind, words = "wpa1", ADVERT_WORDS["wpa1"]
+    return {"kind": kind, "words": words + " (nmcli)", "n": 0, "mixed": False, "fp": "nm:" + " ".join(s)}
+
+
+def plan_for(adv):
+    """What advertises `adv` → the profile to ask with: {"km": "wpa-psk"|"sae"|"", "pmf": PMF_*} or None (leave the
+    profile alone: open, or not a password network). adv None = not heard → wpa-psk + PMF optional."""
+    kind = adv["kind"] if adv else None
+    if kind in ("open", "other"):
+        return None
+    return {"wpa3": {"km": "sae", "pmf": PMF_REQUIRED},
+            "transition": {"km": "wpa-psk", "pmf": PMF_OPTIONAL},
+            "wpa2-mfpr": {"km": "wpa-psk", "pmf": PMF_REQUIRED},
+            "wpa2-mfpc": {"km": "wpa-psk", "pmf": PMF_OPTIONAL},
+            "wpa2": {"km": "wpa-psk", "pmf": PMF_DISABLE},
+            "wpa1": {"km": "wpa-psk", "pmf": PMF_DISABLE}}.get(kind, {"km": "wpa-psk", "pmf": PMF_OPTIONAL})
+
+
+PLAN_OPTIONAL = {"km": "wpa-psk", "pmf": PMF_OPTIONAL}
+PLAN_OFF = {"km": "wpa-psk", "pmf": PMF_DISABLE}
+
+
+def ladder_of(plan):
+    """★★ THE SAFETY NET after a refusal: every setting still to try, in order, after `plan` — the whole ladder, every
+    time (Stuart, 2026-10-21: a known network is no reason to give up; "the same SSID might now have different security
+    settings"). SAE-only or PMF required → wpa-psk + PMF optional (SAE and PSK both offered) → PMF off (plain WPA2-PSK);
+    PMF optional → off; PMF off → optional (a network that needs PMF but did not say so, or was not heard — Stuart's
+    iPhone, 2026-10-21)."""
+    plan = plan or PLAN_OPTIONAL
+    if plan.get("km") == "sae" or plan.get("pmf") == PMF_REQUIRED:
+        rest = [PLAN_OPTIONAL, PLAN_OFF]
+    elif plan.get("pmf") == PMF_DISABLE:
+        rest = [PLAN_OPTIONAL]
+    else:
+        rest = [PLAN_OFF]
+    return [dict(p) for p in rest if p != plan]
+
+
+def plan_words(plan):
+    """A profile's security in the history's words."""
+    if not plan or not plan.get("km"):
+        return "open"
+    km, pmf = plan["km"], plan.get("pmf") or PMF_DEFAULT
+    if km == "sae":
+        return "WPA3 (SAE), PMF required" if pmf == PMF_REQUIRED else "WPA3 (SAE), PMF %s" % (
+            {"1": "off", "2": "optional"}.get(pmf, "default"))
+    return {"1": "WPA2-PSK, PMF off", "2": "WPA2/WPA3 (SAE allowed), PMF optional",
+            "3": "WPA2/WPA3, PMF required"}.get(pmf, "WPA2/WPA3 (SAE allowed), PMF default")
+
+
+def load_wifi_sec(path):
+    """What worked, per network: {ssid: {"km", "pmf", "adv" (the kind advertised then), "t"}}; {} when missing."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    return {k: v for k, v in d.items() if isinstance(k, str) and isinstance(v, dict)
+            and v.get("km") in ("wpa-psk", "sae") and str(v.get("pmf", "")) in ("0", "1", "2", "3")}
+
+
+def save_wifi_sec(path, d):
+    keep = dict(sorted(d.items(), key=lambda kv: -int(kv[1].get("t", 0)))[:WIFI_SEC_KEEP])
+    try:
+        write_atomic(path, json.dumps(keep, ensure_ascii=False, sort_keys=True), mode=0o600)   # ★ SSIDs: root only
+    except OSError:
+        pass                                              # ★ no settings partition: it lasts until the restart
 
 DEFAULTS = {
     "SETUP_SSID": "VibeServer",     # Stuart: the first-boot hotspot is called "VibeServer"
@@ -466,7 +737,11 @@ class Box:
         self.link_ssid = ""           # ★ the network the RADIO is on (iw), not the name in the slot
         self._link_prev = None        # (tx packets, tx retries) at the last reading, for the retry %
         self.scan_info = {}           # ★ ssid -> {"freq", "security", "via": "scan"|"probe"} from the last look
-        self.retried = set()          # ★ networks the PMF retry has been tried on this run (once each)
+        self.retried = set()          # ★ networks the security ladder has been run on this run (once each)
+        self.after_join = None        # ★ called after every join attempt (KeptLog.soon — keep the evidence)
+        self.adverts = {}             # ★ ssid -> advert_of(…): what each network ADVERTISES, from `iw … scan dump`
+        self.sec_path = WIFI_SEC_FILE
+        self.sec_memory = load_wifi_sec(self.sec_path)   # ★ ssid -> what joined it, and what it advertised then
         self.history_path = JOIN_HISTORY
         self.history = load_history(self.history_path)
         self.power_save = None        # ★ the radio's own power save, as `iw … get power_save` says: "off" | "on" | None
@@ -655,6 +930,7 @@ class Box:
             return None
         best = self.parse_list(out)
         self.scan_info = {k: {"freq": v["freq"], "security": v["security"], "via": "scan"} for k, v in best.items()}
+        self.read_adverts(replace=True)
         self.scan_cache = sorted(({"ssid": v["ssid"], "signal": v["signal"], "secure": v["secure"]} for v in best.values()),
                                  key=lambda x: -x["signal"])[:40]
         self.scan_at = int(time.time())
@@ -701,6 +977,7 @@ class Box:
         if rc != 0:
             return set()
         got = self.parse_list(out)
+        self.read_adverts()
         hits = set()
         for x in ssids:
             on = ssid_on_air(x, set(got))
@@ -708,6 +985,87 @@ class Box:
                 hits.add(x)
                 self.scan_info.setdefault(on, {"freq": got[on]["freq"], "security": got[on]["security"], "via": "probe"})
         return hits
+
+    def read_adverts(self, replace=False):
+        """★★ WHAT EACH NETWORK ADVERTISES (DETECTION FIRST, above): `iw dev <dev> scan dump` is the kernel's copy of the
+        scan NetworkManager just made — reading it sends nothing on the air and costs one netlink dump. `replace` after a
+        full scan (a network that went is forgotten); merged after a directed probe or before a join. A failed dump
+        leaves what we had: nmcli's SECURITY column is the fallback (advert_for)."""
+        if not self.dev:
+            return
+        rc, out = self.sh.run(["iw", "dev", self.dev, "scan", "dump"], timeout=10)
+        if rc != 0:
+            if replace:
+                self.adverts = {}
+            return
+        got = {k: advert_of(v) for k, v in parse_iw_scan(out).items()}
+        if replace:
+            self.adverts = got
+        else:
+            self.adverts.update(got)
+
+    def advert_for(self, ssid):
+        """What network `ssid` advertises: from iw, else from nmcli's SECURITY column, else None (not heard)."""
+        a = self.adverts.get(ssid)
+        if a:
+            return a
+        info = self.scan_info.get(ssid)
+        return advert_from_nm(info.get("security", "")) if info else None
+
+    def profile_plan(self, name):
+        """The profile's security as it is saved: {"km", "pmf"} ("km" "" = open)."""
+        return {"km": self.get(name, "802-11-wireless-security.key-mgmt"),
+                "pmf": pmf_value(self.get(name, "802-11-wireless-security.pmf")) or PMF_DEFAULT}
+
+    def set_plan(self, name, plan):
+        self.nm_change(["nmcli", "connection", "modify", name, "802-11-wireless-security.key-mgmt", plan["km"],
+                        "802-11-wireless-security.pmf", plan["pmf"]])
+
+    def choose_security(self, name, ssid, adv):
+        """★★★ BEFORE EVERY JOIN: the profile is made to ask for what the network advertises NOW. What joined it before
+        (sec_memory) is used only while the network advertises EXACTLY what it did then (the fingerprint — AKM suites and
+        MFP flags, never the BSSID), or when it was not heard at all; anything else is read afresh. A downgrade is logged
+        in plain words — a replaced router, or another network using the same name — and never blocked (Stuart's routers
+        do change). Returns the plan the join will use."""
+        q = ssid.encode("unicode_escape").decode("ascii")
+        cur = self.profile_plan(name)
+        mem = self.sec_memory.get(ssid)
+        if adv and adv["kind"] in ("open", "other"):
+            log("network \"%s\" advertises %s — the saved password profile is left as it is" % (q, adv["words"]))
+            return cur
+        if mem and (adv is None or mem.get("fp") == adv.get("fp")):
+            plan = {"km": mem["km"], "pmf": str(mem["pmf"])}
+            why = ("not heard in the scan — using what joined it last time" if adv is None else
+                   "advertises %s, as when it last joined" % adv["words"])
+        else:
+            plan = plan_for(adv) or dict(PLAN_OPTIONAL)
+            if adv is None:
+                why = "not heard in the scan (hidden, or not on yet) — asking with the setting nearly everything takes"
+            else:
+                why = "advertises %s" % adv["words"]
+                if mem and mem.get("fp") != adv.get("fp"):
+                    was = mem.get("adv", "")
+                    if ADVERT_RANK.get(adv["kind"], 9) < ADVERT_RANK.get(was, -1):
+                        why += (" — WEAKER than the %s it advertised when it last joined: a replaced router, or another "
+                                "network using the same name. Joining as advertised" % ADVERT_WORDS.get(was, was))
+                    else:
+                        why += " — changed since it last joined (%s then), so read afresh" % ADVERT_WORDS.get(was, was or "not heard")
+        log("network \"%s\" %s — joining with %s" % (q, why, plan_words(plan)))
+        if plan != cur:
+            self.set_plan(name, plan)
+        return plan
+
+    def remember_security(self, ssid, adv, plan):
+        """What joined, and what the network advertised then — written only when it changed (the SD card)."""
+        old = self.sec_memory.get(ssid)
+        e = {"km": plan["km"], "pmf": plan["pmf"], "adv": adv["kind"] if adv else "", "fp": adv.get("fp", "") if adv else ""}
+        if old and not adv:
+            e["adv"], e["fp"] = old.get("adv", ""), old.get("fp", "")   # ★ not heard this time: keep what it was built from
+        if old and all(old.get(k) == v for k, v in e.items()):
+            return
+        e["t"] = int(time.time())
+        self.sec_memory[ssid] = e
+        save_wifi_sec(self.sec_path, self.sec_memory)
 
     def found_by_name_only(self, name, ssid):
         """★★ A network that answered only when asked by name is saved as "not visible" (802-11-wireless.hidden yes), so
@@ -789,24 +1147,6 @@ class Box:
                 fixed.append(n)
         if fixed:
             log("Wi-Fi power save switched off in %d saved profile(s) from an older build: %s" % (len(fixed), ", ".join(fixed)))
-        return fixed
-
-    def migrate_pmf(self):
-        """★★ PROFILES SAVED BEFORE THE PMF RULE (see PMF_DISABLE): every secured vibe-net-N still at NM's default PMF is
-        modified to PMF off. An explicit "optional"/"required" is left alone — that is the retry's verdict for a network
-        that needs it. Idempotent, by name, profile only (never a down/up). Returns the names it changed."""
-        fixed = []
-        for n, t in self.connection_names():
-            if t != "802-11-wireless" or not (n.startswith(NET_PREFIX) and n[len(NET_PREFIX):].isdigit()):
-                continue
-            if not self.get(n, "802-11-wireless-security.key-mgmt"):
-                continue                                  # open: no PMF to speak of
-            if pmf_value(self.get(n, "802-11-wireless-security.pmf")) not in ("", "0"):
-                continue
-            if self.nm_change(["nmcli", "connection", "modify", n, "802-11-wireless-security.pmf", PMF_DISABLE]) == 0:
-                fixed.append(n)
-        if fixed:
-            log("WPA2/WPA3 hotspots: %d saved network(s) set to plain WPA2 (PMF off): %s" % (len(fixed), ", ".join(fixed)))
         return fixed
 
     def powersave_check(self):
@@ -928,46 +1268,67 @@ class Box:
 
     def security_used(self, name):
         """What this profile asks for, in the history's words."""
-        if not self.get(name, "802-11-wireless-security.key-mgmt"):
-            return "open"
-        pmf = pmf_value(self.get(name, "802-11-wireless-security.pmf"))
-        return {"1": "WPA2-PSK, PMF off", "2": "WPA2/WPA3 (SAE allowed), PMF optional",
-                "3": "PMF required"}.get(pmf, "WPA2/WPA3 (SAE allowed), PMF default")
+        return plan_words(self.profile_plan(name))
 
     def join(self, name, ssid, via="scan"):
-        """★★★ JOIN A SAVED CLIENT NETWORK, RECORDED — and ONE retry with the other PMF setting when the network refused
-        us at authentication or association (never for "not found": nothing was there to refuse). PMF off → optional
-        (a WPA2 network that requires PMF); anything else → off (a WPA2/WPA3 transition network whose SAE this chip
-        fumbles). Once per network per run, so a wrong password costs one extra attempt, not one every rescan. A retry
-        that works is KEPT on the profile and logged; one that does not puts the profile back as it was."""
+        try:
+            return self._join(name, ssid, via)
+        finally:
+            if self.after_join:
+                self.after_join()
+
+    def _join(self, name, ssid, via="scan"):
+        """★★★ JOIN A SAVED CLIENT NETWORK, RECORDED. DETECTION FIRST: the kernel's scan results are read again and the
+        profile is made to ask for what the network advertises now (choose_security). If the network refuses us at
+        authentication or association (never for "not found": nothing was there to refuse), THE WHOLE LADDER is tried
+        (ladder_of: SAE → WPA2/WPA3 PMF optional → plain WPA2 PMF off, or off → optional) — once per network per run,
+        so a wrong password costs two or three attempts, not that many every rescan. Whatever joins is remembered with
+        what the network advertised then; if nothing does, the profile goes back to the detected setting."""
+        secured = bool(self.get(name, "802-11-wireless-security.key-mgmt"))
+        adv = None
+        if secured:
+            self.read_adverts()                       # ★ what the network says NOW — no radio work, the last scan's copy
+            adv = self.advert_for(ssid)
+            first = self.choose_security(name, ssid, adv)
         used = self.security_used(name)
         ok_ = self.up(name)
-        self.record(ssid, "joined" if ok_ else join_result(self.join_reason), self.join_reason, visible=via, name=name, used=used)
-        if ok_ or not self.get(name, "802-11-wireless-security.key-mgmt") or name in self.retried:
-            return ok_
+        self.record(ssid, "joined" if ok_ else join_result(self.join_reason), self.join_reason, visible=via, name=name,
+                    used=used, seen=adv["words"] if adv else None)
+        if ok_:
+            if secured:
+                self.remember_security(ssid, adv, self.profile_plan(name))
+            return True
+        if not secured or name in self.retried:
+            return False
         if join_result(self.join_reason) not in ("auth failed", "assoc timeout", "failed"):
             return False
         self.retried.add(name)
-        was = pmf_value(self.get(name, "802-11-wireless-security.pmf")) or "0"
-        other = PMF_OPTIONAL if was == PMF_DISABLE else PMF_DISABLE
-        self.nm_change(["nmcli", "connection", "modify", name, "802-11-wireless-security.pmf", other])
-        used2 = self.security_used(name)
-        ok_ = self.up(name)
-        self.record(ssid, "joined" if ok_ else join_result(self.join_reason), self.join_reason, visible=via, name=name, used=used2)
-        if ok_:
-            log("network \"%s\" refused \"%s\" but took \"%s\" — kept that way"
-                % (ssid.encode("unicode_escape").decode("ascii"), used, used2))
-        else:
-            self.nm_change(["nmcli", "connection", "modify", name, "802-11-wireless-security.pmf", was])
-        return ok_
+        q = ssid.encode("unicode_escape").decode("ascii")
+        for nxt in ladder_of(first):
+            log("network \"%s\" refused %s — trying %s" % (q, used, plan_words(nxt)))
+            self.set_plan(name, nxt)
+            used2 = self.security_used(name)
+            ok_ = self.up(name)
+            self.record(ssid, "joined" if ok_ else join_result(self.join_reason), self.join_reason, visible=via, name=name,
+                        used=used2, seen=adv["words"] if adv else None)
+            if ok_:
+                log("network \"%s\" took %s — remembered for as long as it advertises the same thing" % (q, used2))
+                self.remember_security(ssid, adv, nxt)
+                return True
+            used = used2
+            if join_result(self.join_reason) not in ("auth failed", "assoc timeout", "failed"):
+                break                                 # ★ gone, or DHCP: another security setting will not help
+        self.set_plan(name, first)                    # nothing took: back to what the network advertises
+        log("network \"%s\" refused every setting — left at %s (is the password right?)" % (q, plan_words(first)))
+        return False
 
-    def record(self, ssid, result, reason="", visible="scan", name="", used=None):
+    def record(self, ssid, result, reason="", visible="scan", name="", used=None, seen=None):
         """One line of the join history (see JOIN_HISTORY). The same network failing the same way again updates the last
         line (its time and a count) instead of pushing the useful lines out — an absent phone is asked for every two
         minutes."""
         info = self.scan_info.get(ssid_on_air(ssid, set(self.scan_info)) or ssid) or {}
         e = {"t": int(time.time()), "ssid": ssid, "freq": info.get("freq"), "band": band_of(info.get("freq")),
-             "seen": info.get("security", ""), "visible": visible,
+             "seen": seen or info.get("security", ""), "visible": visible,
              "used": used if used is not None else (self.security_used(name) if name else ""),
              "result": result, "reason": (reason or "")[:140], "n": 1}
         last = self.history[-1] if self.history else None
@@ -1355,13 +1716,17 @@ class Box:
                     "802-11-wireless.powersave", "2",
                     "802-11-wireless.hidden", "yes" if net["hidden"] else "no"]
             if psk:
-                args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
-                # ★★★ PLAIN WPA2 (PMF off) — see PMF_DISABLE. Kept only where the retry already proved this very network
-                #     needs PMF (same slot, same name, an explicit optional/required on it).
-                keep = (modify and self.get(name, "802-11-wireless.ssid") == net["ssid"]
-                        and pmf_value(self.get(name, "802-11-wireless-security.pmf")) in ("2", "3"))
-                if not keep:
-                    args += ["wifi-sec.pmf", PMF_DISABLE]
+                # ★★★ DETECTION FIRST (see above): saved asking for what the network advertised in the last scan — or,
+                #     not heard, wpa-psk + PMF optional. Every join reads it again (choose_security), so this is only the
+                #     first guess, and the one NetworkManager's own autoconnect uses at the next boot.
+                plan = None
+                if modify and self.get(name, "802-11-wireless.ssid") == net["ssid"]:
+                    plan = self.profile_plan(name)                  # same slot, same name: what it already had
+                    if plan["km"] not in ("wpa-psk", "sae"):
+                        plan = None
+                if plan is None:
+                    plan = plan_for(self.advert_for(net["ssid"])) or dict(PLAN_OPTIONAL)
+                args += ["wifi-sec.key-mgmt", plan["km"], "wifi-sec.psk", psk, "wifi-sec.pmf", plan["pmf"]]
             if self.nm_change(args, secret=True) != 0:
                 self.last_error = "network %d could not be saved" % rank
         for n in sorted(existing):
@@ -1370,6 +1735,12 @@ class Box:
                 self.delete(n)
         self.failed_until = {}
         self.fail_count = {}
+        self.retried = set()                    # ★ a re-save (a new password?) earns every network the full ladder again
+        # ★ What joined a network is kept only for networks still saved (SSIDs are private; nothing lingers).
+        names = {n["ssid"] for n in req["networks"]}
+        if any(k not in names for k in self.sec_memory):
+            self.sec_memory = {k: v for k, v in self.sec_memory.items() if k in names}
+            save_wifi_sec(self.sec_path, self.sec_memory)
         ap = req["ap"]
         if ap["keep"] and self.have(AP_NAME):
             self.nm_change(["nmcli", "connection", "modify", AP_NAME, "802-11-wireless.ssid", ap["ssid"]])
@@ -1868,7 +2239,8 @@ def setup_once(box):
     # ★★ Power save off in every profile we own, including those an older build saved (Phase 0.1) — by name, so it needs
     #    no radio and runs on a wired box too (a USB dongle's profile is ready when it appears).
     box.migrate_powersave()
-    box.migrate_pmf()
+    # ★ (migrate_pmf, which forced every saved network to PMF off, is gone: 2026-10-21 — each join now reads what the
+    #   network advertises and rewrites the profile to match; a profile left at PMF off by 11.0.9 is put right then.)
     # ★★ THE DNS HIJACK — every name resolves to the box, but ONLY on NM's shared (hotspot)
     #    connections: this directory is read by the dnsmasq NM starts for a hotspot and by nothing
     #    else, so the box's own lookups as a client are untouched.
@@ -1904,6 +2276,90 @@ def boot(box, configured=None):
     if not box.dev:
         log("no Wi-Fi device (yet) — answering on any wired link; a radio that appears later is managed then")
     setup_once(box)
+
+
+class KeptLog:
+    """★★★ The Wi-Fi lines of the RAM journal, copied in batches to the settings partition (see WIFI_LOG)."""
+
+    def __init__(self, sh, path=WIFI_LOG, cap=WIFI_LOG_CAP, wall=time.time):
+        self.sh, self.path, self.cap, self.wall = sh, path, cap, wall
+        self.since = None             # wall-clock second of the last copy; None = not yet this run (take the whole boot)
+        self.last_line = ""           # the newest line copied — the overlap of the next read is cut there
+        self.last_at = -1e9           # monotonic time of the last copy
+        self.next_at = sh.now() + 60  # ★ the first copy a minute in: the boot's own lines, once NetworkManager settled
+        # ★ A restarted service (Restart=always) reads the whole boot again: the last line already kept cuts the repeat.
+        try:
+            with open(path, "rb") as f:
+                f.seek(max(0, os.path.getsize(path) - 4096))
+                tail = [l for l in f.read().decode("utf-8", "replace").splitlines() if l and not l.startswith("────")]
+            self.last_line = tail[-1] if tail else ""
+        except OSError:
+            pass
+
+    def soon(self):
+        """After a join attempt: copy ~20 s from now (NetworkManager's lines about it will be in), but never more often
+        than WIFI_LOG_MIN_GAP_SEC."""
+        now = self.sh.now()
+        self.next_at = min(self.next_at, max(now + WIFI_LOG_AFTER_JOIN_SEC, self.last_at + WIFI_LOG_MIN_GAP_SEC))
+
+    def due(self):
+        return self.sh.now() >= self.next_at
+
+    def read_new(self):
+        """The journal's Wi-Fi lines since the last copy, oldest first (the microsecond timestamp leads each line, so the
+        two reads merge by it; lines of one read keep their order)."""
+        span = ["-b"] if self.since is None else ["--since", "@%d" % (self.since - 2)]   # ★ a small overlap, cut below
+        base = ["journalctl", "--no-pager", "-q", "-o", "short-iso-precise"] + span
+        rc, units = self.sh.run(base + sum((["-u", u] for u in WIFI_LOG_UNITS), []), timeout=60)
+        rc2, kern = self.sh.run(base + ["-k"], timeout=60)
+        lines = (units.splitlines() if rc == 0 else []) + \
+                [l for l in (kern.splitlines() if rc2 == 0 else []) if KERNEL_WIFI_LINE.search(l)]
+        lines = sorted((l for l in lines if l.strip() and not l.startswith("-- ")), key=lambda l: l.split(" ", 1)[0])
+        if self.last_line and self.last_line in lines:
+            i = len(lines) - 1 - lines[::-1].index(self.last_line)
+            lines = lines[i + 1:]
+        return lines
+
+    def flush(self, why=""):
+        """Copy what is new; returns the number of lines written. Never raises (a full or missing partition loses only
+        this copy)."""
+        self.last_at = self.sh.now()
+        self.next_at = self.last_at + WIFI_LOG_FLUSH_SEC
+        try:
+            first = self.since is None
+            lines = self.read_new()
+            self.since = int(self.wall())
+            if not lines and not first and not why:
+                return 0                                      # ★ nothing new: no write at all
+            if lines:
+                self.last_line = lines[-1]
+            text = ""
+            if first:
+                text += "──── %s: vibeserver-pocket started (this boot's Wi-Fi lines follow) ────\n" % \
+                        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.wall()))
+            text += "".join(l + "\n" for l in lines)
+            if why:
+                text += "──── %s: %s ────\n" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.wall())), why)
+            data = text.encode("utf-8")
+            if len(data) > self.cap:
+                data = data[-self.cap:]
+                data = data[data.find(b"\n") + 1:]
+            try:
+                size = os.path.getsize(self.path)
+            except OSError:
+                size = 0
+            if size and size + len(data) > self.cap:
+                os.replace(self.path, self.path + ".1")      # ★ the one rotation: never more than two files
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+            return len(lines)
+        except Exception as e:
+            log("could not keep the Wi-Fi log (%s) — it is in the RAM journal only" % type(e).__name__)
+            return 0
 
 
 CONVERGE = "/usr/lib/vibeserver/vibeserver-pocket-converge"
@@ -1951,6 +2407,20 @@ def main_loop():
     net = NetWatch(sh)
     net.start()
     gov = GovernorFollower()
+    kept = KeptLog(sh)
+    box.after_join = kept.soon
+    # ★ A stop (reboot, update, restart) copies the last lines first: SIGTERM ends the loop through the finally below.
+    import signal
+    def _term(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, _term)
+    try:
+        run_loop(sh, box, net, gov, kept, uid)
+    finally:
+        kept.flush("vibeserver-pocket stopped (a reboot, an update or a restart)")
+
+
+def run_loop(sh, box, net, gov, kept, uid):
     was_mode = None
     last_tick = 0
     # ★ What the kick words below need: a radio, switched on.
@@ -2024,6 +2494,8 @@ def main_loop():
                 box.last_error = "internal: %s" % type(e).__name__
                 log(box.last_error)
             box.write_state()
+            if kept.due():
+                kept.flush()
         sh.sleep(1)
 
 

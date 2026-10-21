@@ -18,6 +18,10 @@ case "$1" in
     if [ -x /usr/lib/vibeserver/armv6/vibeserver ] \
        && ! grep -qwE 'neon|asimd' /proc/cpuinfo 2>/dev/null; then
       install -m 0755 /usr/lib/vibeserver/armv6/vibeserver /usr/bin/vibeserver
+      # ★★ AND THE BUNDLED RSP SERVICE GOES: it is an ARMv7 build (OpenRSP, 2026-10-21) and would die
+      #    "Illegal instruction" in a restart loop. Its unit skips itself without the file
+      #    (ConditionFileIsExecutable), and the ARMv6 vibeserver never looks for the bundled library.
+      rm -f /usr/lib/vibeserver/openrsp/sdrplay_apiService
       echo "VibeServer: no NEON on this processor — installed the ARMv6 (scalar) build."
     fi
     # ── 0. THE SERVICE ACCOUNT ───────────────────────────────────────────────
@@ -242,6 +246,16 @@ case "$1" in
       #     the air. Measured on the Pi, 2026-08-26 — and it is not what "enabled but NOT started"
       #     four lines up promises. Restarting what was running is the intent; starting what was
       #     stopped is not.
+      # ★★ THE BUNDLED RSP DRIVER SERVICE (OpenRSP, 2026-10-21) is not enabled: an RSP's arrival starts it
+      #    (udev, 99-vibeserver-sdr.rules), and it skips itself when a system SDRplay service is installed or
+      #    on a CPU it cannot run on. Here, BEFORE the radios that are its clients: a running one is restarted
+      #    onto the new binary (it would carry on from the deleted file, see below), and an RSP that is
+      #    ALREADY plugged in gets its service now — the udev trigger above sends "change", not the "add"
+      #    that starts it. Absent on i386 (no OpenRSP there yet): the `|| true`s cover it.
+      systemctl try-restart vibeserver-rsp.service >/dev/null 2>&1 || true
+      if grep -qsx 1df7 /sys/bus/usb/devices/*/idVendor; then
+        systemctl start vibeserver-rsp.service >/dev/null 2>&1 || true
+      fi
       if [ -n "$WAS_ACTIVE" ]; then
         systemctl start vibeserver-radios.service >/dev/null 2>&1 || true
       fi

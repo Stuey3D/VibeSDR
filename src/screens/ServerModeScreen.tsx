@@ -174,7 +174,7 @@ const K = {
   pin: 'vs_pin', rate: 'vs_rate', fps: 'vs_fps', compress: 'vs_compress',
   webServer: 'vs_webserver',
   landingMsg: 'vs_landingmsg', landingUrl: 'vs_landingurl', landingLbl: 'vs_landinglbl',
-  idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft',
+  idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft', askFirst: 'vs_askfirst',
   batteryPauseAt: 'vs_batpause',
   keepAlive: 'vs_keepalive',
   rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax', rawIqLanMaxHz: 'vs_rawiqlanmaxhz',
@@ -248,6 +248,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [eibiMsg, setEibiMsg]       = useState('');
   /** The time limit as a GUARANTEE rather than a deadline, and the optional idle release. */
   const [limitSoft, setLimitSoft]   = useState(false);
+  /** ★★ Ask before tuning on a shared dial (docs/TUNING-ETIQUETTE.md). Off by default. */
+  const [askFirst, setAskFirst]     = useState(false);
   const [idleKick, setIdleKick]     = useState(0);
   /** ★ Suspend the server at this battery % (0 = never); it resumes 20 points above (2026-09-17). */
   const [batteryPauseAt, setBatteryPauseAt] = useState(0);
@@ -868,6 +870,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           setLandingUrl(s(K.landingUrl));
           setLandingLbl(s(K.landingLbl));
           setLimitSoft(s(K.limitSoft) === '1');
+          setAskFirst(s(K.askFirst) === '1');
           setIdleKick(Number(s(K.idleKick)) || 0);
           setBatteryPauseAt(Number(s(K.batteryPauseAt)) || 0);
           // ★ Absent = never chosen = this device's default (already the initial state), NOT off.
@@ -1468,7 +1471,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
 
   const live = useRef<any>({});
   live.current = {
-    limitSoft, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
+    limitSoft, askFirst, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters,
   };
@@ -1520,6 +1523,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★ The rest of the server's settings — the phone runs the same server, one radio at a
     //   time, so everything the desktop can set is set from here.
     sessionLimitSoft: live.current.limitSoft,
+    askBeforeTuning: live.current.askFirst,
     idleKickMin: live.current.idleKick,
     batteryPauseAt, batteryResumeAt: batteryPauseAt > 0 ? batteryPauseAt + 20 : 40,
     keepRadioAlive: keepAlive,
@@ -1608,7 +1612,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.adminPw, adminPw], [K.uncomp, String(uncomp)], [K.limitMin, String(limitMin)],
       [K.advanced, advanced ? '1' : '0'], [K.maxUsers, String(maxUsers)],
       [K.landingMsg, live.current.landingMsg], [K.landingUrl, live.current.landingUrl], [K.landingLbl, live.current.landingLbl],
-      [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.idleKick, String(live.current.idleKick)], [K.batteryPauseAt, String(batteryPauseAt)],
+      [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.askFirst, live.current.askFirst ? '1' : '0'], [K.idleKick, String(live.current.idleKick)], [K.batteryPauseAt, String(batteryPauseAt)],
       [K.keepAlive, keepAlive ? '1' : '0'],
       [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)], [K.rawIqLanMaxHz, String(live.current.rawIqLanMaxHz)],
       [K.decoderMax, String(live.current.decoderMax)],
@@ -3422,6 +3426,26 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       + 'to moderate.\n\nOne VFO means the DSP cost barely moves with the number of '
                       + 'listeners. What runs out is UPLINK.'}
                 </Text>
+                {/* ★★★ ASK BEFORE TUNING (Stuart, 2026-10-21) — directly after the count, as on the browser's setup page,
+                    and only on a shared dial: locked = everybody has their own VFO, one listener = nobody to ask, so
+                    the switch would do nothing there (AGENTS.md). Off by default. */}
+                {maxUsers > 1 && radioUse !== 'locked' && (
+                  <View style={[styles.card, { borderColor: C.border, marginTop: 8 }]}>
+                    <View style={styles.rowBetween}>
+                      <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                        Ask before tuning
+                      </Text>
+                      <Switch value={askFirst} onValueChange={setAskFirst}
+                        trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+                    </View>
+                    <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                      When somebody else is already listening, a newcomer's tuning controls — and the gain and receiver settings everybody hears — are dimmed until they
+                      ask in the chat. A "yes" lets them in at once, and so does no answer within 15 seconds. A "no"
+                      holds for five minutes at most, so nobody can keep the radio to themselves. Your answer as
+                      admin always counts first, then whoever has been listening longest.
+                    </Text>
+                  </View>
+                )}
 
                 {/* ★★★ EVERY MODE, NOT LOCKED ONLY (2026-09-18). The zoom FFT engages whenever a listener's view
                     is finer than the wide FFT's bins — in single-user and shared-VFO modes as much as

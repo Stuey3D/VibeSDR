@@ -1,0 +1,29 @@
+OpenRSP 3.15.2-20: driver and firmware source
+
+Build (Debian / Ubuntu):
+
+  sudo apt install build-essential cmake pkg-config libusb-1.0-0-dev libudev-dev sdcc make
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+  cmake --build build -j
+
+This builds build/libsdrplay_api.so.3.15, build/sdrplay_apiService,
+build/src/tools/rsp_info/rsp_info and the RSP bridge firmware from firmware/src:
+build/fw_own/fw_common.bin, fw_rsp1.bin and fw_rspduo.bin.
+
+Install:
+
+  sudo cmake --install build && sudo ldconfig
+  sudo /opt/sdrplay_api/sdrplay_apiService
+
+The library goes to /usr/local/lib (set -DCMAKE_INSTALL_PREFIX to change it), the service to
+/opt/sdrplay_api and the firmware to /usr/share/sdrplay_api/firmware/own. The API headers are
+in include/.
+
+The systemd unit, udev rules and hwdb file the released packages install are in system/linux.
+Configure with -DSDRPLAY_INSTALL_SYSTEM_FILES=ON to install them as well (to
+/etc/systemd/system, /etc/udev/rules.d and /etc/udev/hwdb.d), then:
+
+  sudo systemd-hwdb update && sudo udevadm control --reload && sudo udevadm trigger
+  sudo systemctl daemon-reload && sudo systemctl enable --now sdrplay
+
+Licence: GNU General Public License version 3 or later (COPYING).

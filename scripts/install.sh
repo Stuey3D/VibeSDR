@@ -554,15 +554,12 @@ elif [ "$BEFORE" = "$AFTER" ]; then
 else
   say "VibeServer upgraded from $BEFORE to $AFTER. Open: $URL"
 fi
-lsusb > "$TMP/lsusb" 2>/dev/null || true
-if grep -qiE 'sdrplay|1df7:' "$TMP/lsusb"; then
+if [ "$ARCH" = i386 ] || { [ "$ARCH" = armhf ] && ! grep -qw neon /proc/cpuinfo 2>/dev/null; }; then
   say ""
-  say "An SDRplay RSP is plugged in. Its driver comes from SDRplay under their own licence and is"
-  say "not installed by apt — see 'If you have an SDRplay RSP' at $REPO_URL"
+  say "RTL-SDR, Airspy and HackRF need nothing extra. SDRplay RSPs are not supported on this machine."
 else
   say ""
-  say "Using an SDRplay RSP? Its driver is SDRplay's own and needs installing separately:"
-  say "see 'If you have an SDRplay RSP' at $REPO_URL. RTL-SDR and Airspy need nothing extra."
+  say "RTL-SDR, Airspy, HackRF and SDRplay RSP need nothing extra."
 fi
 say ""
 say "Updates: the admin page's Install updates button, or 'sudo apt update && sudo apt upgrade'."

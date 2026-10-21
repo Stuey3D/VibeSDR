@@ -24,6 +24,7 @@ import {
   AppState,
   NativeModules,
   Platform,
+  Pressable,
   Share,
   StyleSheet,
   Text,
@@ -42,6 +43,7 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 import DrumWheel from './DrumWheel';
+import { askBannerText, askLocked, type AskState } from '../services/dialChat';
 import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
 import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import { useDerivedValue, useSharedValue, type SharedValue } from 'react-native-reanimated';
@@ -606,7 +608,12 @@ export interface ControlsBarProps {
                   *  answer — not sure if our chat notification is too subtle"). Set by SDRScreen for ~8 s, flashed on
                   *  and off at first; while set the banner SAYS it ("User 2: Can I tune?") — the one line everyone
                   *  on a shared dial is already looking at. */
-                 said?: string } | null;
+                 said?: string;
+                 /** ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server's word, present only while the
+                  *  owner's lock is in force. Locked: the VFO drum / keys dim, and a touch calls onLockedTouch
+                  *  (SDRScreen flashes the chat key and this banner) instead of tuning. */
+                 ask?: AskState;
+                 onLockedTouch?: () => void } | null;
   /** ★ STORMS — sferics about, decided by the SERVER on the wide FFT (rate per minute, seconds
    *  since the last flash). Answers "what are those lines across the waterfall?" before it is
    *  asked; the number rides in the accessibility label, as the web's tooltip. */
@@ -1159,9 +1166,25 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
 
 type SharedTuner = NonNullable<ControlsBarProps['sharedDial']>;
 
+/** ★★★ ASK BEFORE TUNING — laid over a locked VFO drum / keys. The control under it is dimmed by its slot; a touch
+ *  here does not tune, it nudges (SDRScreen flashes the chat key and the banner). Drawn only while locked, so an
+ *  unlocked dial — and every server without the owner's switch — is exactly as before. */
+function AskLockShield({ st }: { st?: SharedTuner | null }) {
+  if (!st || !askLocked(st.ask)) return null;
+  return (
+    <Pressable style={[StyleSheet.absoluteFill, { zIndex: 6 }]} onPressIn={st.onLockedTouch}
+      accessibilityRole="button" accessibilityLabel="Tuning locked"
+      accessibilityHint="Ask in the chat before tuning — other people are listening" />
+  );
+}
+const askDim = (st?: SharedTuner | null) => (st && askLocked(st.ask) ? 0.35 : 1);
+
 /** The SHARED TUNER banner's words — one copy for the bar's banner and the LED / analogue one (§4.1). */
 function sharedBannerText(st: SharedTuner, tight: boolean): string {
   if (st.said) return st.said;
+  // ★★ Ask before tuning: while locked the banner says what to do now (ask / waiting / when it is yours).
+  const ask = st.ask ? askBannerText(st.ask, tight) : null;
+  if (ask) return ask;
   return st.alone ? 'SHARED TUNER · FREE TO TUNE'
     : st.youPlus
       /* ★★★ "You+N": the count includes us, so N = total − 1 and nobody has to work out
@@ -1173,6 +1196,7 @@ function sharedBannerText(st: SharedTuner, tight: boolean): string {
 }
 function sharedBannerLabel(st: SharedTuner): string {
   if (st.said) return `Chat: ${st.said}`;
+  if (askLocked(st.ask)) return 'Shared tuner. Tuning is locked until you ask in the chat — a yes, or no answer in 15 seconds, lets you in.';
   return st.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
     : st.youPlus
       ? `Shared tuner. You and ${Math.max(1, st.listeners - 1)} other${st.listeners - 1 === 1 ? '' : 's'} listening — ask before tuning.`
@@ -2359,10 +2383,11 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
             backgroundColor: ct.handbackBg,
             opacity: handbackFlash, zIndex: 3,
           }} />
-        <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ vfo: r })}>
+        <ControlSlot style={{ flex: 1, opacity: askDim(sharedDial) }} report={r => onControlRects?.({ vfo: r })}>
           {vfoKeys
             ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} centreLabel={vfoMuxLabel} />
             : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} noInertia={vfoNoInertia} />}
+          <AskLockShield st={sharedDial} />
         </ControlSlot>
         {!singleDrum && (
           <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ zoom: r })}>
@@ -2608,10 +2633,11 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           `flex: 1` on the drum let its view grow past the height its canvas was drawn at (a tablet's
           44 pt drum sat in a 62 pt band). The trapezoid is 40 % of it (25 pt of the mockup's 62). */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
-        <ControlSlot style={{ flex: 1 }} report={onVfoRect}>
+        <ControlSlot style={{ flex: 1, opacity: askDim(sharedDial) }} report={onVfoRect}>
         {vfoKeys
           ? <TunerKeys type="vfo" height={BAND_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} centreLabel={vfoMuxLabel} landscape />
           : <DrumWheel type="vfo" height={BAND_H} onDelta={onVfoDelta} noInertia={vfoNoInertia} />}
+        <AskLockShield st={sharedDial} />
         </ControlSlot>
       </View>
 

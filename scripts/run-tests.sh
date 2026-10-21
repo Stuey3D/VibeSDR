@@ -32,6 +32,8 @@ flags_for() {
     # ★★★ Our own gain step through the real chain (2026-10-19): the smoother + the pipeline's guard,
     #     every case run with and without the step on the same noise seed. Optimised: ~30 runs of 8 s.
     test-gain-step)        echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★ A cost RATIO: optimised like the shipping build, or the idle side is all loop overhead.
+    test-gain-step-cost)   echo "-O2" ;;
     # ★ The Advanced RDS instrument (MpxMeasure) against a signal of known deviation, at several
     #   capture rates and passbands — the real pipeline end to end, so the same deps again.
     test-mpx-measure|test-rds-ps-frames) echo "-O2 -I $VDSP -I $KISS" ;;
@@ -146,6 +148,8 @@ deps_for() {
     test-bulk-pace)     echo "" ;;
     # ★★ A burst of tunes: the newest wins, paced by the server's load (vibe_tune_pace.h, 2026-10-05).
     test-tune-pace)     echo "" ;;
+    # ★★★ …and DAB block steps through the same hold (2026-10-21): a burst re-acquires on its last block.
+    test-dab-block-pace) echo "" ;;
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.
     test-room-passband) echo "" ;;
@@ -224,6 +228,10 @@ done
 #   because that page is what a new owner meets first.
 printf '\n\033[1m── setup page ──\033[0m\n'
 if node scripts/check-setup-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ The August RTL stutter fixes (gain write off modeMtx/the DSP, one transfer, the client's hwinfo
+#     signature skip) — a gain change must never again stall the audio. See check-gain-write-path.mjs.
+printf '\n\033[1m── gain write path ──\033[0m\n'
+if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).
 if node scripts/test-setup-wifi-name.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ Fork labelling (directory forkOf): a fork's name is shown, checked; official names refused as fork names.
@@ -401,6 +409,9 @@ if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else f
 # ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09): none on the everyday pad, only the dial's band while a
 #     question is open, every link a Signal Identification Wiki page, every DECODE a decoder we run, the watches agree.
 if node --no-warnings scripts/test_dial_answers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ ASK BEFORE TUNING, the clients' half (2026-10-21): the lock is READ from the dial message (an old server's silence
+#     = not locked), the banner says what to do and never runs wider, and app + web gate every tuning send on it.
+if node --no-warnings scripts/test_ask_before_tuning.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ The room's passband on a shared dial (2026-10-17): the web client adopts it from config and sends nothing;
 #     the app and Jr read the same fields. The server half is test-room-passband.cpp above.
 if node --no-warnings scripts/test_room_passband.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -629,6 +640,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── shared-dial chat phrases (end to end) ──\033[0m\n'
 node scripts/test-chat-phrases.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ ASK BEFORE TUNING end to end (2026-10-21): the server refuses a locked listener's tune at the socket and tells an
+#     old client why, a YES / no answer in 15 s lets them in, a NO holds. ~40 s, silent. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── ask before tuning (end to end) ──\033[0m\n'
+node scripts/test-ask-before-tuning.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ A TUNNEL WHOSE PROCESS LIVES BUT WHOSE ADDRESS IS DEAD IS REPLACED (2026-10-09, the Sony "online but not
 #     responding all day"): a stand-in cloudflared prints a hostname that does not exist and stays alive; the server
@@ -696,6 +712,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    D-pad, the list walks and scrolls, ✕ picks, ○ gives it back. The bench multiplex through the fake radio.
 printf '\n\033[1m── a game controller in DAB on the served page (simulated pad, bench multiplex) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-gamepad-dab.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ HAMMERING THE MULTIPLEX BUTTON TUNES ONCE (Stuart, 2026-10-21: "rapidly tune down to 7D … dont tune the SDR just
+#     hold it and tune on final move"; "I tried to rapid tune the Pi2 earlier and it kept snapping back"): the server
+#     holds a raw socket's per-press `dab` steps latest-wins (a lone press at once), and the served page sends one
+#     `dab` per burst with no snap-back. Same VIBESERVER_BIN rule; the browser half wants Edge. ~40 s.
+printf '\n\033[1m── DAB: a burst of multiplex presses is one tune (server + served page, end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dab-burst.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADMIN (Stuart, 2026-10-18: "in the admin menu there is no way to navigate it with the controller"): the highlight goes
 #    into the panel and stays there, carries on after the tables redraw, and ○ closes it.

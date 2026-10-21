@@ -19,7 +19,8 @@
 #   file, highlighted lines (VibeAGC and friends — DIAG_HIGHLIGHTS takes more), and the journal of our units,
 #   NetworkManager, avahi and the SDRplay service for the last 24 h. On a PORTABLE (the pocket marker) also the Wi-Fi
 #   story: link, regulatory domain, power save, the firmware line, NetworkManager's profiles WITHOUT secrets, the join
-#   history and the Wi-Fi service's state. A Portable's journal lives in RAM, so there the file says "since last boot".
+#   history, the Wi-Fi service's state, and the Wi-Fi log it keeps on the settings partition (the only part that
+#   survives a reboot). A Portable's journal lives in RAM, so there the journal section says "since last boot".
 # ★ Plain text, not an archive: a phone can open it, and so can whoever it is sent to.
 #
 # usage: vibeserver-diagnostics            (prints the bundle; vibeserver-maintenance redirects it)
@@ -37,6 +38,9 @@ DIRECTORY_STATE = "/var/lib/vibeserver/directory.json"
 POCKET_MARKER = "/etc/vibeserver-pocket/enabled"
 POCKET_STATE = "/run/vibeserver-pocket/state.json"
 JOIN_HISTORY = "/var/lib/vibeserver-pocket/join-history.json"
+# ★★★ THE PORTABLE'S WI-FI LOG KEPT ACROSS REBOOTS (vibeserver-pocket's KeptLog, 2026-10-21): the journal is in RAM, so
+#     these two capped files on the settings partition are the only Wi-Fi evidence from before the last reboot/update.
+WIFI_LOG = "/var/lib/vibeserver-pocket/wifi-log.txt"
 RADIO_STATUS_GLOB = "/run/vibeserver/radio-status-*.json"
 JOURNAL_MAX = 3 * 1024 * 1024          # ★ the journal section's cap (the newest lines kept); a phone carries the file
 UNITS = ("vibeserver*", "vibeserver-pocket*", "vibeserver-radios*", "vibeserver-maintenance*",
@@ -44,7 +48,7 @@ UNITS = ("vibeserver*", "vibeserver-pocket*", "vibeserver-radios*", "vibeserver-
 # ★ Lines lifted out of the journal into their own short section. The AGC work may add patterns (VibeAGC lines it
 #   wants from the field) — the bundle takes them with no other change.
 DIAG_HIGHLIGHTS = ("VibeAGC", "agc", "wifi qos", "waterfall yielding", "power save", "joining", "could not join",
-                   "answers only when asked", "kept that way", "brcmf", "overrun", "underrun", "dropped", "crash")
+                   "answers only when asked", "kept that way", "advertises", "refused", "took ", "brcmf", "overrun", "underrun", "dropped", "crash")
 HIGHLIGHT_MAX = 400
 TOOL_ENV = dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8")
 
@@ -146,7 +150,8 @@ def redact(text, secrets):
 
 
 def bundle(run=run, conf_paths=(SERVER_CONF, DIRECTORY_STATE), pocket_marker=POCKET_MARKER, pocket_state=POCKET_STATE,
-           join_history=JOIN_HISTORY, status_glob=RADIO_STATUS_GLOB, server_conf=SERVER_CONF, now=None):
+           join_history=JOIN_HISTORY, status_glob=RADIO_STATUS_GLOB, server_conf=SERVER_CONF, now=None,
+           wifi_log=WIFI_LOG):
     now = now or time.time()
     portable = os.path.exists(pocket_marker)
     out = []
@@ -207,6 +212,9 @@ def bundle(run=run, conf_paths=(SERVER_CONF, DIRECTORY_STATE), pocket_marker=POC
             out.append("(no join attempts recorded)")
         sec("wi-fi service state")
         out.append((read_text(pocket_state) or "(not written)").strip())
+        sec("wi-fi log kept across reboots (oldest first; NetworkManager, wpa_supplicant, kernel Wi-Fi, vibeserver-pocket)")
+        kept = "".join(read_text(p) or "" for p in (wifi_log + ".1", wifi_log)).rstrip()
+        out.append(kept or "(none kept yet)")
     rc, journal = run(["journalctl", "--since", "-24h", "--no-pager", "-o", "short-iso"]
                       + sum((["-u", u] for u in UNITS), []), timeout=90)
     journal = journal or ""

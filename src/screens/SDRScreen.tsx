@@ -64,7 +64,7 @@ import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
-import { DabBlockStepper, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
+import { DabBlockStepper, DabAskGuard, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../utils/dabQuality';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth, withReadAuth } from '../services/vibeAuth';
@@ -156,7 +156,7 @@ import ChatDrawer,
   { type ChatMessage, type ShareItem, useHiddenChatUsers } from '../components/ChatDrawer';
 import { openWebPage } from '../utils/openWebPage';
 import { padPhrases, bannerLine, BannerGate, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
-         type DialState } from '../services/dialChat';
+         askLocked, ASK_NUDGE_TEXT, type DialState } from '../services/dialChat';
 import { shareFromBookmark, shareSummary, parseShared, sharedLineText, shareTuneStep,
          type ShareOut, type SharedStation } from '../services/chatShare';
 import { blindTuneReason, blindTuneRefusal, mediaSkipEnabled, dialAlone,
@@ -2371,8 +2371,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       (i) => onDabBlockRef.current?.(i),
       (i) => setDabBlock(i));
   }
-  const stepDabBlock = (steps: number) => { dabStepper.current?.step(dabBlockRef.current, steps); };
+  const stepDabBlock = (steps: number) => {
+    if (askGate()) return;   // ★★ ask before tuning — the multiplex is everybody's
+    dabStepper.current?.step(dabBlockRef.current, steps);
+  };
   useEffect(() => () => dabStepper.current?.cancel(), []);
+  /* ★★★ NO SNAP-BACK (2026-10-21, Stuart on the Pi 2: "it kept snapping back"). After we send a block,
+   *  reports still naming the block we LEFT are dropped until the server names ours, 6 s pass, or a third
+   *  block shows somebody else moved the dial (DabAskGuard says why). Display only — nothing is re-sent.
+   *  serverDabBlockRef is the block the server last reported, i.e. the one a send leaves. */
+  const dabAskGuard = useRef(new DabAskGuard());
+  const serverDabBlockRef = useRef(-1);
   const dabBlockKeyRef = useRef('lsv_dab_block');
   useEffect(() => { dabOnRef.current = dabOn; }, [dabOn]);
   useEffect(() => { dabBoxOpenRef.current = dabBoxOpen; }, [dabBoxOpen]);
@@ -2450,6 +2459,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     dabWasOn.current = dabOn;
     if (!was || dabOn) return;
     dabStepper.current?.cancel();
+    dabAskGuard.current.clear();
     if (liveBadgeRef.current === 'DAB') { liveBadgeRef.current = undefined; liveStationRef.current = ''; }
     setLiveStation((cur) => liveStationAfterDab(was, dabOn, cur));
   }, [dabOn]);
@@ -2491,6 +2501,7 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  anybody means by it — they mean "show me that again". Leaving the mode is then the second
        *  press, or EXIT DAB in the window's own header. */
       if (!dabBoxOpenRef.current) { setDabBoxOpen(true); return; }
+      if (askGate()) return;   // ★★ ask before tuning — reopening the box above is only a view; leaving is not
       c.dab(false);
       setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined);
       return;
@@ -2508,10 +2519,12 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  decoder box opening on the multiplex the server was last on rather than 5a"). The server's
      *  last block is the answer every time; ours is only the drum's resting position until the
      *  first report replaces it. */
+    if (askGate()) return;   // ★★ ask before tuning — entering DAB moves everybody's radio
     const i = dabBlockRef.current;
     if (i >= 0) setDabBlock(i);
     setDabBoxOpen(true);
     setDabError(undefined);
+    dabAskGuard.current.clear();               // ★ no block asked — whatever the server names is right
     c.dab(true);
     setDabOn(true);
   }, []);
@@ -2523,6 +2536,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  box away; there is nothing to leave. */
   const exitDab = useCallback(() => {
     const c = client.current;
+    // ★★ Ask before tuning: a locked listener may still put the BOX away — only leaving the multiplex is refused.
+    if (dabExitAction(dabOnRef.current) === 'leave' && askLocked(dialStateRef.current)) { setDabBoxOpen(false); askGate(); return; }
     if (dabExitAction(dabOnRef.current) === 'leave') c?.dab?.(false);
     dabOnRef.current = false;
     setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined);
@@ -2535,6 +2550,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!c?.dab) return false;
     const idx = DAB_BLOCKS.findIndex(b => Math.abs(b.hz - hz) < 50_000);
     if (idx < 0) return false;
+    if (askGate()) return true;   // ★★ ask before tuning — handled (refused), so no fallback tune either
     markInteract();
     dabStepper.current?.cancel();             // ★ a bookmark is a pick — a pending burst must not override it
     const svc = sid >= 0 ? sid : undefined;   // ★ no service id = the block, whatever plays
@@ -2543,10 +2559,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabBoxOpen(true);
     setDabError(undefined);
     if (!dabOnRef.current) {
+      dabAskGuard.current.sent(idx, serverDabBlockRef.current, Date.now());
       c.dab(true, idx, svc);
       setDabOn(true); dabOnRef.current = true;
     } else if (idx !== dabBlockRef.current) {
       setDabState(null);
+      dabAskGuard.current.sent(idx, serverDabBlockRef.current, Date.now());
       c.dab(true, idx, svc);
     } else if (svc !== undefined) {
       c.dabService?.(svc);
@@ -2559,9 +2577,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onDabBlock = useCallback((i: number) => {
     const c = client.current;
     if (!c?.dab) return;
+    if (askGate()) return;                     // ★★ ask before tuning
     setDabBlock(i);
     setDabState(null);                         // ★ the last mux's numbers are not this one's
     AsyncStorage.setItem(dabBlockKeyRef.current, DAB_BLOCKS[i].name).catch(() => {});
+    dabAskGuard.current.sent(i, serverDabBlockRef.current, Date.now());   // ★ no snap-back — see dabAskGuard
     c.dab(true, i);
   }, []);
 
@@ -3963,6 +3983,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const mediaStepSkipRef = useRef<((dir: 'left' | 'right', recenter?: boolean) => void) | null>(null);
   mediaStepSkipRef.current = (dir: 'left' | 'right', recenter = true) => {
     const c = client.current; if (!c) return;
+    if (askGate()) return;   // ★★ ask before tuning — see askGate
     /* ★ In DAB the lock-screen skip steps the MULTIPLEX, for the same reason the drum does: there
      *  is nothing else a "next" can mean inside one block. */
     if (dabOnRef.current) {
@@ -4130,6 +4151,37 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ Each user number's `since` stamp as last heard — a change means the number has passed to somebody new. */
   const dialSinceRef = useRef<Map<number, number>>(new Map());
   useEffect(() => { dialStateRef.current = dialState; }, [dialState]);
+  /* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md, Stuart 2026-10-21). The server says this listener may not move
+   *  the shared dial yet (dial.tuneLocked) — so a tuning control is dimmed, and reaching for one does not tune: the
+   *  CHAT key flashes and the shared-tuner banner flashes "ASK IN CHAT BEFORE TUNING". askGate() is asked at the top
+   *  of each tuning handler, so the screen never draws a move the radio will not make; the client's own gate
+   *  (VibeServerWsClient.askBlocked) is the backstop for every other path, and calls onTuneLocked → nudgeAsk.
+   *  ★ Once per 2.5 s: a drum flick or a held key is one reach, not forty. */
+  const [askNudge, setAskNudge] = useState(false);
+  const askNudgeAt = useRef(0);
+  const nudgeAsk = useCallback(() => {
+    const now = Date.now();
+    if (now - askNudgeAt.current < 2500) return;
+    askNudgeAt.current = now;
+    setBannerSaid({ text: ASK_NUDGE_TEXT, at: now });
+    setAskNudge(true);
+  }, []);
+  useEffect(() => {
+    if (!askNudge) return;
+    const t = setTimeout(() => setAskNudge(false), 6000);
+    return () => clearTimeout(t);
+  }, [askNudge]);
+  /** @return true when the lock refused this reach (and the nudge has been shown). */
+  const askGate = useCallback((): boolean => {
+    if (!askLocked(dialStateRef.current)) return false;
+    nudgeAsk();
+    return true;
+  }, [nudgeAsk]);
+  /** ★★ The same gate for a sheet's handler — the shared DSP rows (NR, notch, de-emphasis, stereo, the blankers, the
+   *  broadcast-FM row): on a shared tuner they are everybody's (Stuart, 2026-10-21: "lock gain too"). Only the
+   *  handler the SHEET calls is wrapped, so a restore on connect never nudges (the client drops those silently). */
+  const askWrap = useCallback(<A extends unknown[]>(fn: (...a: A) => void) =>
+    (...a: A) => { if (askGate()) return; fn(...a); }, [askGate]);
   /// ★ Read inside the watch command handlers, which are registered once — a captured boolean
   ///   would be whatever it was when the screen mounted, i.e. always false.
   const sharedDialRef = useRef(false);
@@ -5585,6 +5637,16 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  showing it as one would put a red card over a receiver that is working perfectly. */
       onDab: (st, why) => {
         if (destroyed.current) return;
+        /* ★★★ A REPORT FROM THE BLOCK WE JUST LEFT IS DROPPED, WHOLE (DabAskGuard, 2026-10-21 — the Pi 2's
+         *  snap-back): its channel would drag the label back, and its list and live text belong to that
+         *  block too. Bounded; a third block (somebody else on the shared dial) is followed at once. */
+        if (st?.channel) {
+          const bi = dabBlockIndex(st.channel);
+          if (bi >= 0) {
+            if (!dabAskGuard.current.accept(bi, Date.now())) return;
+            serverDabBlockRef.current = bi;
+          }
+        }
         /* ★★★ HOLD THE LAST GOOD LIST — the web client's rule (TS 103 176 6.2.2: the list is a
          *  thing the receiver KEEPS, not a picture of this frame). A frame where the FIC did not
          *  read arrives with no services, and painting it blanks the list under the reader's
@@ -6295,9 +6357,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ── ★★ THE SHARED DIAL AND ITS CHAT ──────────────────────────────────────────
       onDial: (d) => {
         if (destroyed.current) return;
+        /* ★★ ASK BEFORE TUNING: the moment the room lets this listener in, SAY so on the banner — they asked and
+         *  are waiting, and controls quietly un-dimming is easy to miss. Only after an ask (open or a NO). */
+        const was = dialStateRef.current;
+        if (askLocked(was) && !askLocked(d) && d.askFirst && was?.askState)
+          setBannerSaid({ text: 'GO AHEAD — YOURS TO TUNE', at: Date.now() });
+        dialStateRef.current = d;       // ★ at once, not after the render — askGate reads it on the next touch
         setDialState(d);
         watchProvider.sendDial(d);      // Buddy needs this to know it must ARM before it may tune
       },
+      // ★★ Ask before tuning — the client refused a tune for us (VibeServerWsClient.askBlocked); show why.
+      onTuneLocked: () => { if (!destroyed.current) nudgeAsk(); },
       onDialMoved: (hz: number) => {
         if (destroyed.current) return;
         /* ★★★ ONLY WHEN SOMEBODY ELSE MOVED IT (Stuart, 2026-10-17): "when you tune a shared server
@@ -7799,6 +7869,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onVfoDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
+    if (askGate()) return;              // ★★ ask before tuning — see askGate
     if (dabDrumStep(pxDelta)) return;   // ★ see dabDrumStep — the block IS the tuning
     // Whole-profile data modes are locked to their block — VFO tuning just knocks
     // you off it (kills the decode, and the block is a nuisance to re-find). DAB had
@@ -7962,6 +8033,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     { hz: null, sentAt: 0, timer: null });
 
   const onVfoStep = useCallback((dir: -1 | 1) => {
+    if (askGate()) return;   // ★★ ask before tuning — see askGate
     markInteract();
     /* ★★★ IN DAB THE MAIN TUNING ARROWS STEP THE MULTIPLEX. Stuart, 2026-09-08: "the main tuning
      *  buttons do not cycle through the blocks and 2 extremely tiny buttons in the decoder header
@@ -8166,6 +8238,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
+    if (askGate()) return;                 // ★★ ask before tuning — see askGate
     if (dabOnRef.current) return;          // ★ see wfZoomBy — a tap is a view move too
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
@@ -8188,6 +8261,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onMode = useCallback((m: SDRMode) => {
     const c = client.current; if (!c) return;
+    if (m !== c.getStatus().mode && askGate()) return;   // ★★ ask before tuning; re-picking changes nothing
     /* ★★★ CHOOSING ANOTHER DEMODULATOR IS HOW YOU LEAVE DAB. DAB is a MODE the phone enters, not
      *  a demodulator the server switches to — so while it is on, the server refuses an ordinary
      *  mode change and this sent one anyway. The only exit was the Exit button ON the DAB screen,
@@ -8258,6 +8332,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Leading edge fires at once so a single tap is never delayed; the rest of a drag coalesces
   // and the TRAILING send guarantees the final width is the one the server ends up on.
   const sendBandwidth = useCallback((low: number, high: number) => {
+    if (askGate()) return;   // ★★ ask before tuning — the passband is everybody's on a shared dial
     bwPending.current = { low, high };
     const wait = 80 - (Date.now() - bwLastAt.current);
     if (wait <= 0) { flushBandwidth(); return; }
@@ -8274,6 +8349,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Atomic both-edges setter — single setBandwidth, no stale-closure edge
   const onFilterBoth = useCallback((low: number, high: number) => {
+    if (askGate()) return;   // ★★ ask before tuning — before the sliders move, not after
     sendBandwidth(low, high);
     setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: low, bandwidthHigh: high }));
   }, [sendBandwidth]);
@@ -8303,8 +8379,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [airChannelNow, status.frequency, status.mode, step]);
 
-  const onFilterLow  = useCallback((v: number) => { sendBandwidth(v, status.bandwidthHigh); setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: v })); }, [status.bandwidthHigh, sendBandwidth]);
-  const onFilterHigh = useCallback((v: number) => { sendBandwidth(status.bandwidthLow, v);  setStatus((prev: SDRStatus) => ({ ...prev, bandwidthHigh: v })); }, [status.bandwidthLow, sendBandwidth]);
+  const onFilterLow  = useCallback((v: number) => { if (askGate()) return; sendBandwidth(v, status.bandwidthHigh); setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: v })); }, [status.bandwidthHigh, sendBandwidth]);
+  const onFilterHigh = useCallback((v: number) => { if (askGate()) return; sendBandwidth(status.bandwidthLow, v);  setStatus((prev: SDRStatus) => ({ ...prev, bandwidthHigh: v })); }, [status.bandwidthLow, sendBandwidth]);
 
   // ── Audio-WS commands (set_dsp / squelch / gate are AUDIO-WS message types;
   //    the spectrum WS doesn't know them — the old client.setNRMode/setDsp
@@ -8554,6 +8630,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  the SAME tune message, so the server never runs the new frequency in the old mode. */
   const onTuneHz = useCallback((hz: number, mode?: SDRMode) => {
     const c = client.current; if (!c) return;
+    if (askGate()) return;   // ★★ ask before tuning — see askGate
     markInteract();
     const [loHz, hiHz] = tuneBoundsOf(c);
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
@@ -8775,14 +8852,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         dabStepper.current?.cancel();   // ★ the wrist's pick outranks a burst still settling on the phone
         onDabBlockRef.current?.(Math.max(0, Math.min(DAB_BLOCKS.length - 1, index)));
       },
+      /* ★★★ A CROWN STEP IS A PRESS, SO IT GOES THROUGH THE STEPPER (2026-10-21). It tuned the server on
+       *  every detent; now the label follows each one and the server hears the block the wrist STOPPED
+       *  on, once, after the settle — the phone's own keys' rule (services/dabStepper.ts). Still wraps:
+       *  the crown is a ring, and Buddy works its steps out from the SAME Band III table
+       *  (WatchLink.dabBlocks), so steps accumulate from where the burst is heading. */
       onDabBlockStep: (step: number) => {
         if (!dabOnRef.current || !step) return;
-        dabStepper.current?.cancel();
-        const n = DAB_BLOCKS.length;
-        const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
-        // ★ Still wraps: the crown is a ring, and Buddy sends a step it worked out from the SAME
-        //   Band III table (WatchLink.dabBlocks), so cur + step is where the wrist stopped.
-        onDabBlockRef.current?.(((cur + step) % n + n) % n);
+        dabStepper.current?.step(dabBlockRef.current, step);
       },
 
       onZoomDelta: (delta: number) => {
@@ -10265,7 +10342,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       ? (dialState.decoding ? `User ${dialState.tuner} decoding` : `User ${dialState.tuner} tuning`)
       : '',
     ...(bannerSaidShown ? { said: bannerSaidShown } : {}),
-  } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown]);
+    // ★★ Ask before tuning — the server's word on whether this listener may move the dial (dialChat.AskState).
+    ...(dialState.askFirst ? { ask: { askFirst: true, tuneLocked: dialState.tuneLocked, askState: dialState.askState,
+                                      askUntil: dialState.askUntil }, onLockedTouch: nudgeAsk } : {}),
+  } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown,
+             dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
@@ -11713,7 +11794,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           fmStereo={dabOn ? dabServiceStereo(dabState) : fmStereo}
           isRecording={isRecording}
           recSeconds={recSeconds}
-          chatUnread={chatUnread}
+          chatUnread={chatUnread || askNudge}   /* ★★ ask before tuning flashes the CHAT key — see nudgeAsk */
           onVfoDelta={onVfoDelta}
           onBwDelta={onBwDelta}
           /* ★★★ IN DAB THE TUNING CONTROL IS ALWAYS THE KEYS, whatever the user chose (Stuart,
@@ -12223,8 +12304,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
         localSquelch={hwSquelch}        onLocalSquelch={isLocal ? onLocalSquelch : undefined}
         kiwiSquelch={kiwiSquelch}       onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
-        localNR={hwNrLevel}             onLocalNR={isLocal ? onLocalNR : undefined}
-        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
+        localNR={hwNrLevel}             onLocalNR={isLocal ? askWrap(onLocalNR) : undefined}
+        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? askWrap(onLocalNotch) : onNetNotch}
         eibiEnabled={eibiEnabled}        onEibiToggle={onEibiToggle}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         serverDspEnabled={serverDspEnabled}
@@ -12541,25 +12622,25 @@ export default function SDRScreen({ route, navigation }: Props) {
         sqlAutoMargin={sqlAutoMargin}    onSqlAutoMargin={onSqlAutoMargin}
         sqlAutoOk={sqlAutoOk}
         localSquelch={hwSquelch}         onLocalSquelch={isLocal ? onLocalSquelch : undefined}
-        localNR={hwNrLevel}              onLocalNR={isLocal ? onLocalNR : undefined}
+        localNR={hwNrLevel}              onLocalNR={isLocal ? askWrap(onLocalNR) : undefined}
         kiwiSquelch={kiwiSquelch}        onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
         fmSquelch={fmSquelch}            onFmSquelch={onFmSquelch}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
-        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
+        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? askWrap(onLocalNotch) : onNetNotch}
         /* ★ V12 binaural tuning — offered only where an offset source exists: never DAB (or any whole-profile
              mode). (FM-DX is not this screen — it has no spectrum to read, and no row.) */
         binaural={binaural}
         onBinaural={binauralModeOk(status.mode) && !dabOn ? onBinaural : undefined}
-        deemph={hwDeemph}   onDeemph={onHwDeemph}
-        stereo={hwStereo}   onStereo={onHwStereo}
-        fmNr={fmNr}   onFmNr={vibeFmDsp ? onFmNr : undefined}
-        fmIms={fmIms} onFmIms={vibeFmDsp ? onFmIms : undefined}
-        fmAutoBw={fmAutoBw} onFmAutoBw={vibeFmDsp ? onFmAutoBw : undefined}
-        fmCeq={fmCeq} onFmCeq={vibeFmDsp ? onFmCeq : undefined}
-        fmNb={fmNb}   onFmNb={vibeFmDsp ? onFmNb : undefined}
-        nbx={fmNbx}   onNbx={vibeFmDsp ? onFmNbx : undefined}
+        deemph={hwDeemph}   onDeemph={askWrap(onHwDeemph)}
+        stereo={hwStereo}   onStereo={askWrap(onHwStereo)}
+        fmNr={fmNr}   onFmNr={vibeFmDsp ? askWrap(onFmNr) : undefined}
+        fmIms={fmIms} onFmIms={vibeFmDsp ? askWrap(onFmIms) : undefined}
+        fmAutoBw={fmAutoBw} onFmAutoBw={vibeFmDsp ? askWrap(onFmAutoBw) : undefined}
+        fmCeq={fmCeq} onFmCeq={vibeFmDsp ? askWrap(onFmCeq) : undefined}
+        fmNb={fmNb}   onFmNb={vibeFmDsp ? askWrap(onFmNb) : undefined}
+        nbx={fmNbx}   onNbx={vibeFmDsp ? askWrap(onFmNbx) : undefined}
         nfmVoice={fmNfmVoice}
-        onNfmVoice={nfmVoiceKnown && (status.mode === 'nfm' || status.mode === 'fm') ? onFmNfmVoice : undefined}
+        onNfmVoice={nfmVoiceKnown && (status.mode === 'nfm' || status.mode === 'fm') ? askWrap(onFmNfmVoice) : undefined}
         rawAudio={rawAudio}
         onRawAudio={rawAudioPolicy === 'choice' ? setRawAudio : undefined}
         iq={iqState}
@@ -12580,6 +12661,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onServerDsp={onServerDsp}
         onServerDspFilter={onServerDspFilter}
         onServerDspParam={onServerDspParam}
+        askLocked={askLocked(dialState)}
       />
       )} />
       </PanelBoundary>
@@ -12596,6 +12678,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onConverter={canConvert ? setConverter : undefined}
           radio={radioCaps}
           agcLocked={hwAgcLocked}
+          askLocked={askLocked(dialState) && !adminOk}   /* ★★ ask before tuning: the whole panel is the room's */
+          onAskLockedTouch={nudgeAsk}
           gainLocked={hwGainLocked}
           ifGrFloorDb={hwIfGrFloor}
           hasTunerBw={hwHasTunerBw}

@@ -56,6 +56,7 @@ struct Api {
     sdrplay_api_UnlockDeviceApi_t   Unlock = nullptr;
     sdrplay_api_GetErrorString_t    GetErrorString = nullptr;
     bool ok = false;
+    bool bundled = false;   // ★ the library shipped in the package (OpenRSP), not a system install
 };
 
 /** ★★★ ONLY LOAD A LIBRARY ROOT OWNS (2026-10-03 security pass). dlopen() runs the library's
@@ -108,6 +109,22 @@ static std::vector<std::string> sdrplayCandidates() {
     out.emplace_back("/usr/local/lib/libsdrplay_api.so.3");
     out.emplace_back("/usr/local/lib/libsdrplay_api.dylib");
 #else
+    // ★★★ THE BUNDLED DRIVER (OpenRSP, 2026-10-21) — the package ships its own library, service and
+    //     firmware in /usr/lib/vibeserver/openrsp, so an RSP works with nothing else installed. WHICH
+    //     LIBRARY COMES FIRST depends on ONE fact: is a SYSTEM SDRplay service installed? SDRplay's
+    //     official API and OpenRSP's sdrplay-api-open package both put theirs at the path below.
+    //  ★ Installed → the SYSTEM library first. That service owns the receivers for every program on
+    //    the machine, our own service stays out of its way (vibeserver-rsp.service has the same
+    //    condition), and the owner chose that stack on purpose — the Lenovo and the Pi 500 run it.
+    //    The bundled library stays a fallback: it speaks the same protocol to either service.
+    //  ★ Not installed → the BUNDLED library first, talking to vibeserver-rsp.service.
+    //  ★★ KEEP IN STEP with ConditionPathExists in linux/vibeserver-rsp.service: one question, two
+    //     readers. If they ever disagreed, the server would be a client of a service that is not running.
+#if defined(VIBE_OPENRSP_LIB)
+    struct stat svc{};
+    const bool systemStack = ::stat("/opt/sdrplay_api/sdrplay_apiService", &svc) == 0;
+    if (!systemStack) out.emplace_back(VIBE_OPENRSP_LIB);
+#endif
     // ★★ Linux: SDRplay's installer (install_lib.sh) puts the library in /usr/local/lib — that IS
     //    its documented home, so it stays, with the distribution paths after it. Every one is held
     //    to the root-owned check, which /usr/local/lib passes on any sane Linux.
@@ -118,6 +135,9 @@ static std::vector<std::string> sdrplayCandidates() {
     out.emplace_back("/usr/lib/x86_64-linux-gnu/libsdrplay_api.so.3");
     out.emplace_back("/usr/local/lib64/libsdrplay_api.so.3");
     out.emplace_back("/usr/lib64/libsdrplay_api.so.3");
+#if defined(VIBE_OPENRSP_LIB)
+    if (systemStack) out.emplace_back(VIBE_OPENRSP_LIB);
+#endif
 #endif
     return out;
 }
@@ -136,7 +156,16 @@ Api& api() {
             const std::string real = trustedLibrary(c, prefix);
             if (real.empty()) continue;
             a.h = dlopen(real.c_str(), RTLD_LAZY | RTLD_LOCAL);
-            if (a.h) break;
+            if (a.h) {
+                // ★ SAY WHICH ONE. With a bundled and a system stack both possible, "which driver is
+                //   this RSP on?" is the first question of any RSP report — one line, once per process.
+#if defined(VIBE_OPENRSP_LIB)
+                a.bundled = c == VIBE_OPENRSP_LIB;
+#endif
+                std::fprintf(stderr, "sdrplay: API library %s (%s)\n", real.c_str(),
+                             a.bundled ? "bundled OpenRSP" : "system");
+                break;
+            }
         }
 #if !defined(__APPLE__)
         // ★ Linux only, LAST: the bare soname, resolved by ld.so through ld.so.cache — whose
@@ -201,17 +230,26 @@ bool apiOpen(std::string& err) {
         //   installer into /opt and we are not permitted to redistribute it, so the package
         //   cannot pull it in and no amount of dependency declaration will help. Without the URL
         //   the message reads as "your radio is broken" rather than "one more download".
+#if defined(VIBE_OPENRSP_LIB)
+        // ★ This build SHIPS the driver, so "not installed" means the package's own files are missing
+        //   or damaged — reinstalling the package is the fix, not a download from anyone.
+        err = "The RSP driver that comes with VibeServer could not be loaded (" VIBE_OPENRSP_LIB
+              "). Reinstall the vibeserver package, then restart VibeServer.";
+#else
         err = "SDRplay API not installed. The RSP needs SDRplay's own driver, which we are not "
               "allowed to redistribute — download it from https://www.sdrplay.com/downloads "
               "(API/HW driver for Linux), run the installer, then restart VibeServer.";
+#endif
         return false;
     }
     std::lock_guard<std::mutex> lk(g_apiMtx);
     if (g_apiRefs > 0) { ++g_apiRefs; return true; }
     const sdrplay_api_ErrT e = api().Open();
     if (e != sdrplay_api_Success) {
+        // ★ NAME THE SERVICE THAT IS ACTUALLY MEANT. With the bundled library that is ours.
         err = std::string("sdrplay_api_Open: ") + errStr(e)
-            + " (is the SDRplay API service running?)";
+            + (api().bundled ? " (is vibeserver-rsp.service running? systemctl status vibeserver-rsp)"
+                             : " (is the SDRplay API service running?)");
         return false;
     }
     ++g_apiRefs;

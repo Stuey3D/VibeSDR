@@ -109,29 +109,10 @@ sudo apt install vibeserver</pre>
      you set is remembered, and upgrades never change a gain you have touched.</p>
 
   <h3>If you have an SDRplay RSP</h3>
-  <p><code>apt install</code> cannot fetch the SDRplay driver and this is not an oversight:
-     SDRplay distribute it under their own licence and we are not permitted to redistribute it.
-     RTL-SDR and Airspy HF+ need nothing extra.</p>
-<pre>curl -fL -o SDRplay_RSP_API-Linux-3.15.run \
-  "https://sdrplay.com/download/hardware-api-linux/?wpdmdl=1906"
-chmod +x SDRplay_RSP_API-Linux-3.15.run
-sudo ./SDRplay_RSP_API-Linux-3.15.run
-sudo reboot
-# once it is back:
-systemctl status sdrplay        # should be active (running)</pre>
-  <p>The installer is interactive &mdash; it pages a licence (space to scroll), then asks twice
-     for <code>y</code>. One file covers every architecture: it carries <code>armhf</code>,
-     <code>amd64</code> and <code>arm64</code>, so the Pi and a desktop take the same download.
-     <strong>Reboot when it finishes</strong>: the installer asks for it, and a replug is not
-     enough.</p>
-  <p class="fine">SDRplay moved their downloads in 2026 and the old
-     <code>sdrplay.com/software/&hellip;.run</code> links now 404. The address above is their
-     current one and works under <code>curl</code> on a headless box &mdash; no browser needed.
-     It is a download-manager id, so expect it to change when they publish the next version;
-     if it ever fails, the page to look at is
-     <a href="https://www.sdrplay.com/api/">sdrplay.com/api</a>.</p>
-  <p>Install it whenever you like &mdash; before or after VibeServer. If you add an RSP later,
-     <code>sudo systemctl restart vibeserver</code> is enough; the driver is loaded at runtime.</p>
+  <p>Nothing extra to install: on <code>amd64</code>, <code>arm64</code> and <code>armhf</code> the
+     package includes an RSP driver, the same as for RTL-SDR, Airspy and HackRF. If SDRplay&rsquo;s own
+     API is already installed on the machine, VibeServer uses that instead and leaves it alone.
+     RSPs are not supported on <code>i386</code> or on the ARMv6 Pi Zero and Pi 1.</p>
 
   <h3>Updating</h3>
 <pre>sudo apt update &amp;&amp; sudo apt upgrade</pre>

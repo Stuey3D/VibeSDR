@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.20)
 #     package takes its upstream version from here, and the macOS app's plist is bumped alongside
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
-project(vibeserver VERSION 11.0.9 LANGUAGES CXX C)
+project(vibeserver VERSION 11.0.10 LANGUAGES CXX C)
 # ★★★ V11 (2026-09-28): the app, Jr, every VibeServer host, Lite and the Mac app all move to major 11
 #     together (docs/BRIEF-v11-compatibility.md). A PRE-RELEASE is named on its OWN line, read by every
 #     reader of the line above (android CMake, lite gradle, mac/build-app.sh): the package becomes
@@ -424,41 +424,118 @@ target_compile_definitions(vibeserver_core PUBLIC VIBESERVER_VERSION_STR="${VIBE
     VIBE_DAB_PFFFT=1)   # ★ DAB OFDM through PFFFT — see vibe_dab_fft.h
 target_link_libraries(vibeserver_core PUBLIC "${RTLSDR_LIB}" "${USB_LIB}")
 
-# ── SDRplay (RSP): HEADERS ONLY, deliberately never linked ────────────────────
-# ★★ The API is a separate install living in /usr/local/lib, and it ships as a DYLIB with no
-# static archive. Linking it would repeat exactly the failure the librtlsdr block above warns
-# about: a notarised hardened-runtime app that hard-links a dylib from /usr/local CRASHES ON
-# LAUNCH for everyone who does not have that dylib — which is almost every user, since almost
-# nobody owns an RSP. Breaking the app for the majority to serve the minority is the wrong
-# trade, and it is avoidable: sdrplay_source.cpp dlopen()s the library on first use.
-# So we take the HEADERS (for the structs and typedefs) and link NOTHING. A machine without
-# the API simply reports zero SDRplay devices.
-find_path(SDRPLAY_INC sdrplay_api.h HINTS /usr/local/include /Library/SDRplayAPI/3.15.1/include)
+# ── SDRplay (RSP): the API is dlopen()ed, NEVER LINKED — and on Linux we now SHIP one (OpenRSP) ──
+# ★★ dlopen, still. A notarised hardened-runtime app that hard-links a dylib CRASHES ON LAUNCH for
+#    everyone who does not have it, and most owners have no RSP: sdrplay_source.cpp opens the library on
+#    first use, and a machine without one simply reports zero SDRplay devices.
+# ★★★ THE HEADERS ARE OURS NOW (2026-10-21): vendor/openrsp/include — OpenRSP's own API 3.15 headers,
+#     GPLv3, written for that project and proved ABI-identical to SDRplay's by its test suite. They used
+#     to be SDRplay's, staged into every build root by hand because we may not redistribute them; a
+#     clean chroot without them once SHIPPED two releases with RSP support silently compiled out. A
+#     header in the tree cannot go missing, so that whole failure (and the staging) is gone.
+set(OPENRSP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/openrsp")
+set(SDRPLAY_INC "${OPENRSP_DIR}/include")
+if(NOT EXISTS "${SDRPLAY_INC}/sdrplay_api.h")
+  message(FATAL_ERROR "vendor/openrsp/include/sdrplay_api.h is missing — the checkout is incomplete")
+endif()
 if(VIBE_X86_32)
-  # ★★ SDRplay PUBLISHES NO 32-BIT x86 API (3.x is x86-64, ARM32 and ARM64 only), so on i386 there is
-  #    no library an owner could ever install for us to dlopen. Compiled OUT rather than left to find
-  #    nothing — "a control that only works on one radio should not be there", and the same goes for a
-  #    radio that cannot work on the machine at all. Not a strict-build failure: there is nothing missing.
-  message(STATUS "SDRplay: not built on 32-bit x86 — SDRplay ships no i386 API")
-elseif(SDRPLAY_INC)
-  message(STATUS "SDRplay headers: ${SDRPLAY_INC} (runtime dlopen, not linked)")
+  # ★★ STILL OUT ON i386 (re-checked 2026-10-21). SDRplay ships no 32-bit x86 API, and OpenRSP 3.15.2-20
+  #    does not build for i386 Linux either: its client asserts the ILP32 shared-memory layout of armhf and
+  #    32-bit Windows (`sizeof(ServiceState) == 3144`), where 64-bit members are 8-byte aligned; the i386
+  #    SysV ABI aligns them to 4 and gets 3132. That is OpenRSP's to settle (raised with M9PSY — see
+  #    docs/OPENRSP-BUNDLE-PLAN.md), not something to paper over here. Compiled OUT, as before: there is no
+  #    library an owner could install for us to dlopen.
+  message(STATUS "SDRplay: not built on 32-bit x86 — no API exists for it (SDRplay's or OpenRSP's)")
+else()
+  message(STATUS "SDRplay API headers: ${SDRPLAY_INC} (OpenRSP; runtime dlopen, not linked)")
   target_include_directories(vibeserver_core PUBLIC "${SDRPLAY_INC}")
   target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_SDRPLAY)
-elseif(VIBESERVER_STRICT_RADIOS)
-  # ★★★ A RELEASE MUST NEVER BE QUIETLY MISSING A RADIO. This branch used to just print a note
-  #     and carry on, and the note scrolled past in a build log nobody reads. Moving packaging
-  #     into a clean bookworm chroot — which has no SDRplay headers, because the API is a
-  #     separate closed-source install — therefore SHIPPED two releases with RSP support silently
-  #     compiled out. Every RSP owner who installed them got "no radio found" from a receiver
-  #     that had, on the previous version, worked perfectly.
-  # ★★ The headers are just structs and typedefs and nothing is linked, so the fix is only to put
-  #    them in the build root. But the guard is the point: packaging fails loudly instead.
-  message(FATAL_ERROR
-          "SDRplay headers not found, and VIBESERVER_STRICT_RADIOS is on.\n"
-          "A package built now would report 'no radio' to every RSP owner.\n"
-          "Copy sdrplay_api*.h into the build root's /usr/local/include and try again.")
-else()
-  message(STATUS "SDRplay headers not found — building without RSP support")
+endif()
+
+# ── OpenRSP: the RSP driver stack, BUILT FROM vendor/openrsp AND SHIPPED IN THE PACKAGE (Linux) ─────
+# ★★★ Stuart, 2026-10-21: "bundle OpenRSP in all VibeServer builds" — an RSP needs no separate driver
+#     install, exactly like RTL-SDR / Airspy / HackRF. OpenRSP (openrsp.dev, GPLv3, the OpenRSP authors)
+#     replaces SDRplay's closed library, service AND USB bridge firmware; VibeSDR is GPLv3 too, and the
+#     source travels with us in vendor/openrsp (see VIBESDR-CHANGES there). Plan: docs/OPENRSP-BUNDLE-PLAN.md.
+# ★★ WHAT GOES IN THE .deb, all under /usr/lib/vibeserver/openrsp — NEVER at SDRplay's paths
+#    (/usr/local/lib, /opt/sdrplay_api, /usr/share/sdrplay_api), which the official API and the
+#    sdrplay-api-open package own; a shared path is a dpkg file conflict and a fight over who wins:
+#      libsdrplay_api.so.3(.15)   the API library sdrplay_source.cpp dlopen()s
+#      sdrplay_apiService         the device service, run by vibeserver-rsp.service
+#      firmware/own/*             OpenRSP's own bridge firmware, built here from firmware/src with sdcc
+# ★★★ A SERVICE, NOT IN-PROCESS. The library talks to a service over shared memory; on Android the
+#     service is embedded in the app, but here every radio is its OWN PROCESS (vibeserver@<serial>), and
+#     an embedded service in each would race the others to upload firmware and claim every RSP on the
+#     bus. One service owns the USB devices; every VibeServer process is a client of it, as before.
+# ★★ ExternalProject, upstream's own CMake: its version script, SIMD kernel flags and firmware rules
+#    are its business, and copying them here would drift. Cross builds hand it the same toolchain file.
+# ★ Not on ARMv6 (the Pi Zero / Pi 1 binary in the armhf package): Debian's armhf toolchain cannot
+#   produce ARMv6 code, and SDRplay never had an ARMv6 API either. postinst removes the ARMv7 service
+#   on such a CPU, and the ARMv6 vibeserver is built without the bundled path.
+option(VIBE_BUNDLE_OPENRSP "Linux: build and package the bundled RSP driver (vendor/openrsp)" ON)
+set(VIBE_OPENRSP_PREFIX "/usr/lib/vibeserver/openrsp")
+if(UNIX AND NOT APPLE AND VIBE_BUNDLE_OPENRSP AND NOT VIBE_X86_32 AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^armv6")
+  find_program(VIBE_SDCC sdcc)
+  if(NOT VIBE_SDCC)
+    # ★★★ Same rule as every radio library: a release is never quietly missing one. sdcc builds the
+    #     8051 bridge firmware; without it there is no firmware and an RSP never streams.
+    if(VIBESERVER_STRICT_RADIOS)
+      message(FATAL_ERROR "sdcc not found, and VIBESERVER_STRICT_RADIOS is on — the RSP bridge firmware "
+                          "cannot be built (apt install sdcc; the build images carry it).")
+    endif()
+    message(WARNING "sdcc not found — building WITHOUT the bundled OpenRSP (RSPs need a system SDRplay API)")
+  else()
+    include(ExternalProject)
+    set(_orsp_bin "${CMAKE_BINARY_DIR}/openrsp")
+    set(_orsp_args
+        -DCMAKE_BUILD_TYPE=Release
+        -DSDRPLAY_BUILD_TESTS=OFF
+        -DSDRPLAY_LINUX_UDEV=OFF
+        -DSDRPLAY_OWN_FIRMWARE=ON
+        "-DSDRPLAY_FIRMWARE_DIR=${VIBE_OPENRSP_PREFIX}/firmware")
+    if(CMAKE_TOOLCHAIN_FILE)
+      list(APPEND _orsp_args "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
+    else()
+      list(APPEND _orsp_args "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
+    endif()
+    if(VIBE_LINUX_SELFCONTAINED)
+      # ★★★ OUR libusb (static, no udev) and a static C++ runtime: the package's Depends stay libc6 only,
+      #     and check-deb-depends.cmake + build-deb.sh read every ELF in it to prove so.
+      list(APPEND _orsp_args
+          "-DSDRPLAY_LIBUSB_LIBRARY=${VIBE_LINUX_DEPS}/lib/libusb-1.0.a"
+          "-DSDRPLAY_LIBUSB_INCLUDE_DIR=${VIBE_LINUX_DEPS}/include/libusb-1.0"
+          -DSDRPLAY_STATIC_CXX_RUNTIME=ON
+          # ★★ …and the server's glibc 2.35 floor: static libstdc++ calls arc4random@GLIBC_2.36. Measured on
+          #    the first test build (bookworm arm64): both binaries needed 2.36; with this, 2.35.
+          "-DCMAKE_PROJECT_INCLUDE=${CMAKE_CURRENT_SOURCE_DIR}/linux/openrsp-glibc-floor.cmake")
+    endif()
+    set(_orsp_fw "${_orsp_bin}/fw_own")
+    ExternalProject_Add(openrsp
+        SOURCE_DIR "${OPENRSP_DIR}"
+        BINARY_DIR "${_orsp_bin}"
+        CMAKE_ARGS ${_orsp_args}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target sdrplay_api sdrplay_apiService own_firmware
+        INSTALL_COMMAND ""
+        BUILD_BYPRODUCTS "${_orsp_bin}/libsdrplay_api.so.3.15" "${_orsp_bin}/sdrplay_apiService"
+                         "${_orsp_fw}/manifest.sha256")
+    # ★★ The server looks HERE first when no system SDRplay service is installed — see sdrplay_source.cpp.
+    target_compile_definitions(vibeserver_core PUBLIC
+        VIBE_OPENRSP_LIB="${VIBE_OPENRSP_PREFIX}/libsdrplay_api.so.3"
+        VIBE_OPENRSP_SERVICE="${VIBE_OPENRSP_PREFIX}/sdrplay_apiService")
+    # ★ install(FILES) recreates the soname symlink as a symlink.
+    install(FILES "${_orsp_bin}/libsdrplay_api.so.3.15" "${_orsp_bin}/libsdrplay_api.so.3"
+            DESTINATION lib/vibeserver/openrsp)
+    install(PROGRAMS "${_orsp_bin}/sdrplay_apiService" DESTINATION lib/vibeserver/openrsp)
+    install(FILES "${_orsp_fw}/fw_common.bin" "${_orsp_fw}/fw_rsp1.bin" "${_orsp_fw}/fw_rspduo.bin"
+                  "${_orsp_fw}/manifest.sha256"
+            DESTINATION lib/vibeserver/openrsp/firmware/own)
+    install(FILES linux/vibeserver-rsp.service DESTINATION lib/systemd/system)
+    # ★★ GPLv3 §4/§6: the licence goes with the binaries, and the README says where the exact
+    #    Corresponding Source is (this repository's vendor/openrsp, and the openrsp.dev tarball it came from).
+    install(FILES "${OPENRSP_DIR}/COPYING" DESTINATION share/doc/vibeserver RENAME COPYING.openrsp)
+    install(FILES linux/README.openrsp "${OPENRSP_DIR}/VIBESDR-CHANGES" DESTINATION share/doc/vibeserver/openrsp)
+    message(STATUS "OpenRSP: bundled (vendor/openrsp → ${VIBE_OPENRSP_PREFIX}, firmware via ${VIBE_SDCC})")
+  endif()
 endif()
 
 # ── libairspyhf: Airspy HF+ Discovery / Dual Port ─────────────────────────────

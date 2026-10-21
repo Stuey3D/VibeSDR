@@ -1,0 +1,32 @@
+; sdrplay_api.dll export definition = the SDRplay API 3.15 Windows export table.
+; 24 named exports, ordinals 1-24 (= alphabetical order of the names), no data exports.
+; Ordinal 1 is the MSVC-decorated C++ name of sdrplay_api_GetInternalParams; our C++
+; implementation (src/client/api.cpp) carries the GCC name, aliased here.
+; This file is the x64 spelling; cmake/Windows.cmake derives the x86 file (32-bit pointer
+; arguments) from it. x86 exports are __cdecl and undecorated (API 3.15 ABI).
+LIBRARY sdrplay_api
+EXPORTS
+    "?sdrplay_api_GetInternalParams@@YA?AW4sdrplay_api_ErrT@@PEAXPEAPEAUsdrplay_api_InternalDeviceParamsT@@@Z" = _Z29sdrplay_api_GetInternalParamsPvPP33sdrplay_api_InternalDeviceParamsT @1
+    sdrplay_api_ApiVersion @2
+    sdrplay_api_Close @3
+    sdrplay_api_DebugEnable @4
+    sdrplay_api_DisableHeartbeat @5
+    sdrplay_api_GetDeviceParams @6
+    sdrplay_api_GetDevices @7
+    sdrplay_api_GetErrorString @8
+    sdrplay_api_GetInternalDeviceParams @9
+    sdrplay_api_GetLastError @10
+    sdrplay_api_GetLastErrorByType @11
+    sdrplay_api_Init @12
+    sdrplay_api_InternalUpdate @13
+    sdrplay_api_LockDeviceApi @14
+    sdrplay_api_Open @15
+    sdrplay_api_ReleaseDevice @16
+    sdrplay_api_SelectDevice @17
+    sdrplay_api_SelectDeviceCB @18
+    sdrplay_api_SwapRspDuoActiveTuner @19
+    sdrplay_api_SwapRspDuoDualTunerModeSampleRate @20
+    sdrplay_api_SwapRspDuoMode @21
+    sdrplay_api_Uninit @22
+    sdrplay_api_UnlockDeviceApi @23
+    sdrplay_api_Update @24

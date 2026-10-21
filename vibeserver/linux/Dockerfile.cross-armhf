@@ -9,9 +9,14 @@ RUN dpkg --add-architecture armhf && apt-get update && apt-get install -y --no-i
       build-essential crossbuild-essential-armhf cmake pkg-config file ca-certificates curl \
       libncursesw5-dev:armhf libc6:armhf bzip2 \
       dpkg-dev apt-utils gnupg git rsync xz-utils binutils-arm-linux-gnueabihf \
+      sdcc \
       clang lld mmdebstrap \
     && rm -rf /var/lib/apt/lists/*
-COPY sdrplay-inc/ /usr/local/include/
+# ★★★ sdcc BUILDS THE RSP BRIDGE FIRMWARE (OpenRSP, 2026-10-21): vendor/openrsp/firmware/src is 8051 C,
+#     compiled here into the three images the bundled RSP service uploads. A host tool, architecture-free;
+#     CMake refuses a release build without it. bookworm's 4.2.0 reproduces OpenRSP's released images
+#     byte for byte (SHA-256 checked against openrsp_3.15.2-20_arm64.deb).
+# ★★ The SDRplay headers are NO LONGER STAGED here: the API headers are OpenRSP's, in vendor/openrsp/include.
 COPY armhf-toolchain.cmake /opt/armhf-toolchain.cmake
 # ★ The ARMv7+NEON prefix the armhf package links (see build-deps.sh; same pins as the Mac).
 COPY build-deps.sh /opt/build-deps.sh

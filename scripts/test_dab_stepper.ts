@@ -17,7 +17,7 @@
  * Run: node --no-warnings scripts/test_dab_stepper.ts   (run-tests.sh does)
  */
 import { DabBlockStepper, dabWrap, liveStationAfterDab, DabExitGuard, dabExitAction,
-         DAB_EXIT_AWAIT_OFF_MS, DAB_EXIT_TAIL_MS } from '../src/services/dabStepper.ts';
+         DAB_EXIT_AWAIT_OFF_MS, DAB_EXIT_TAIL_MS, DabAskGuard, DAB_ASK_HOLD_MS } from '../src/services/dabStepper.ts';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -131,6 +131,110 @@ eq('wrap -43 → 39', dabWrap(-43, N), 39);
   s.step(4, 0); advance(500);
   eq('zero steps: nothing shown', shown, []);
   eq('zero steps: nothing sent', sent, []);
+}
+
+// ── there and back to where the burst began: the server is already on that block, so nothing is sent ──
+{
+  const s = mk();
+  s.step(10, 1); s.step(10, 1); s.step(10, -1); s.step(10, -1);
+  advance(500);
+  eq('there and back to the start: label followed every press', shown, [11, 12, 11, 10]);
+  eq('there and back to the start: NOTHING sent (no re-acquire of the block we are on)', sent, []);
+  eq('…and nothing is left pending', s.pending(), -1);
+}
+
+/* ── 2026-10-21, Stuart's own case: "connect at 12b and rapidly tune down to 7D hammering the multiplex
+ *    button multiple times a second … tune on final move. However if I am tuning a multiplex and holding
+ *    there for a second to see the waterfall then tuning again we need to tune as normal". ── */
+const B = ['5A','5B','5C','5D','6A','6B','6C','6D','7A','7B','7C','7D','8A','8B','8C','8D','9A','9B','9C','9D',
+           '10A','10N','10B','10C','10D','11A','11N','11B','11C','11D','12A','12N','12B','12C','12D',
+           '13A','13B','13C','13D','13E','13F'];
+eq('the Band III table here has 41 blocks', B.length, N);
+{
+  const s = mk();
+  const from = B.indexOf('12B'), to = B.indexOf('7D');
+  for (let k = 0; k < from - to; k++) { s.step(from, -1); advance(150); }   // ~6.7 presses a second
+  eq('12B → 7D hammered: the label walked every block', shown.length, from - to);
+  eq('12B → 7D hammered: the label ends on 7D', B[shown[shown.length - 1]], '7D');
+  eq('12B → 7D hammered: the SDR was not tuned on the way', sent, []);
+  advance(300);
+  eq('12B → 7D hammered: ONE tune, to 7D, on the final move', sent.map(i => B[i]), ['7D']);
+}
+{
+  const s = mk();
+  s.step(B.indexOf('12B'), -1); advance(1000);   // one press, hold a second to look at the waterfall
+  s.step(B.indexOf('12N'), -1); advance(1000);   // …then the next
+  eq('press, look a second, press: each tunes as normal', sent.map(i => B[i]), ['12N', '12A']);
+}
+
+// ── the web client's arrows CLAMP at the ends of Band III ──
+{
+  sent = []; shown = []; queue = []; now = 0;
+  const s = new DabBlockStepper(N, i => sent.push(i), i => shown.push(i), 450, timers, 'clamp');
+  s.step(N - 2, 1); s.step(N - 2, 1); s.step(N - 2, 1);
+  advance(500);
+  eq('clamp: three presses from 13E stop at 13F', shown, [N - 1]);
+  eq('clamp: one send, 13F', sent, [N - 1]);
+  s.step(N - 1, 1); advance(500);
+  eq('clamp: pressing on at 13F shows and sends nothing', [shown.length, sent.length], [1, 1]);
+  s.step(1, -5); advance(500);
+  eq('clamp: a big step down stops at 5A', sent, [N - 1, 0]);
+  const w = mk();
+  w.step(N - 1, 1); advance(500);
+  eq('wrap (the default — the app drum, the crown): 13F + 1 = 5A', sent, [0]);
+}
+
+// ── THE SNAP-BACK GUARD (2026-10-21, the Pi 2) ──
+{
+  const g = new DabAskGuard();
+  const b12 = B.indexOf('12B'), d7 = B.indexOf('7D'), a9 = B.indexOf('9A');
+  eq('nothing asked: every report is believed', g.accept(b12, 0), true);
+  g.sent(d7, b12, 1000);
+  eq('asked 7D: a report still naming 12B (the block we left) is dropped', g.accept(b12, 1200), false);
+  eq('…and still dropped just inside the bound', g.accept(b12, 1000 + DAB_ASK_HOLD_MS - 1), false);
+  eq('a report with no block is believed', g.accept(-1, 1300), true);
+  eq('the server names 7D: believed, and the guard ends', [g.accept(d7, 1500), g.pending()], [true, -1]);
+  eq('after that, 12B again is somebody else tuning — believed', g.accept(b12, 1600), true);
+
+  g.sent(d7, b12, 2000);
+  eq('a THIRD block (somebody else moved the shared dial): adopted at once', [g.accept(a9, 2100), g.pending()], [true, -1]);
+
+  g.sent(d7, b12, 3000);
+  eq('the server never names 7D: the bound ends the hold and the server is followed',
+     [g.accept(b12, 3000 + DAB_ASK_HOLD_MS), g.pending()], [true, -1]);
+
+  // Two asks in a row before the server caught up: neither block we left may drag the label back.
+  g.sent(B.indexOf('10A'), b12, 10_000);
+  g.sent(d7, B.indexOf('10A'), 10_500);
+  eq('second ask in flight: a late report of the FIRST ask is dropped', g.accept(B.indexOf('10A'), 10_600), false);
+  eq('…and so is one of the block we started on', g.accept(b12, 10_700), false);
+  eq('…and the hold is timed from the LATEST ask', g.accept(b12, 10_500 + DAB_ASK_HOLD_MS - 1), false);
+  eq('the newest ask is what ends it', g.accept(d7, 10_800), true);
+
+  g.sent(d7, b12, 20_000); g.clear();
+  eq('cleared (left DAB / a reconnect): the next report is believed', g.accept(b12, 20_100), true);
+}
+
+/* The app's/web's report handler reduced to the label: follow the server unless the stepper is mid-burst
+ * or the guard holds. Replays the Pi 2: reports twice a second, the server naming the new block 1.8 s
+ * after our send. Before the guard the label read 12B → 7D → 12B → 12B → … → 7D. */
+{
+  const g = new DabAskGuard();
+  let label = B.indexOf('12B'), server = B.indexOf('12B');
+  const labels: string[] = [];
+  const s = new DabBlockStepper(N, i => { g.sent(i, server, now); }, i => { label = i; }, 450, timers);
+  queue = []; now = 0;
+  const report = (blk: number) => {
+    if (s.pending() >= 0 && blk !== s.pending()) return;   // mid-burst: the report names where we are leaving
+    if (!g.accept(blk, now)) return;
+    label = blk; server = blk;
+  };
+  for (let k = 0; k < 21; k++) { s.step(label, -1); advance(150); if (k % 3 === 0) report(server); labels.push(B[label]); }
+  advance(450);                       // the send
+  for (let t = 0; t < 1800; t += 500) { advance(Math.min(500, 1800 - t)); report(B.indexOf('12B')); labels.push(B[label]); }
+  report(B.indexOf('7D')); labels.push(B[label]);
+  eq('Pi 2 replay: the label never went back to 12B after leaving it', labels.slice(1).includes('12B'), false);
+  eq('Pi 2 replay: it ends on 7D, confirmed by the server', [B[label], g.pending()], ['7D', -1]);
 }
 
 // ── leaving DAB ──

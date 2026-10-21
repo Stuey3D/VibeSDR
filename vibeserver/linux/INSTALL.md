@@ -22,7 +22,7 @@ One package for every architecture — apt picks **arm64**, **amd64**, **armhf**
   from the same armhf package (postinst picks it by CPU), and runs with restrictions.
 - **32-bit x86 needs SSE2** — any Pentium 4, Pentium M, Atom (the N270 netbooks included) or
   Athlon 64. A Pentium III or Athlon XP has none, and the package refuses to install there rather
-  than fail at runtime. SDRplay publish no 32-bit x86 driver, so RSPs are not offered on i386.
+  than fail at runtime. RSPs are not supported on i386.
 - Older or lower-end hardware will most likely run with restrictions: on a small machine the
   setup page measures what it can carry and switches heavy features off.
 
@@ -86,9 +86,9 @@ your distribution's versions of any of them. The package needs only the C librar
 everyday tools (`curl`, `gzip`, `adduser`), which apt fetches if they are missing. FFmpeg, for DAB+
 audio, is a recommended package and comes along by default.
 
-★ **The one exception is the SDRplay RSP driver**, and it is not an oversight: SDRplay distribute
-it under their own licence and we are not permitted to redistribute it, so it can never be a
-`Depends:` line. RTL-SDR and Airspy HF+ need nothing extra. See the section at the end.
+★ **The SDRplay RSP driver is included too** on amd64, arm64 and armhf, as its own small service
+(`vibeserver-rsp`). If SDRplay's own API is already installed, VibeServer uses that instead. See the
+section at the end.
 
 ### Prefer a file?
 
@@ -197,55 +197,22 @@ This writes one file, `/etc/apt/apt.conf.d/52vibesdr-auto-updates`, for unattend
 
 `--no-auto-updates` (or deleting the file) undoes it.
 
-## Before you start: the SDRplay RSP needs one extra download
+## SDRplay RSP receivers
 
-★★★ **`apt install vibeserver` cannot install it for you, and this is not an oversight.** The
-SDRplay API is SDRplay's own driver, distributed under their licence — we are not permitted to
-redistribute it, so it can never be a `Depends:` line. RTL-SDR and Airspy HF+ need nothing extra;
-only the RSP family does.
+★ **Nothing extra to install.** On amd64, arm64 and armhf the package includes an RSP driver, run as
+its own service, `vibeserver-rsp`, which starts when an RSP is plugged in. RTL-SDR, Airspy and
+HackRF need nothing extra either.
 
-On a headless box, download it from the command line — there is no browser to use:
+★ **Already have SDRplay's API installed?** Keep it. If `/opt/sdrplay_api/sdrplay_apiService` exists,
+`vibeserver-rsp` stays out of the way and VibeServer uses SDRplay's driver (their `sdrplay` service),
+exactly as before. Only one RSP service ever runs on a machine. To use the bundled driver instead,
+uninstall SDRplay's API and reboot.
 
-```sh
-curl -fL -o SDRplay_RSP_API-Linux-3.15.run \
-  "https://sdrplay.com/download/hardware-api-linux/?wpdmdl=1906"
-chmod +x SDRplay_RSP_API-Linux-3.15.run
-sudo ./SDRplay_RSP_API-Linux-3.15.run
-```
-
-★ It is INTERACTIVE: it pages a licence (space to scroll), then asks twice for `y`. One file
-covers every architecture — it carries `armhf`, `amd64` and `arm64` inside, so there is no separate
-Pi download, despite the website's wording.
-
-★★ **THE OLD `sdrplay.com/software/….run` LINKS ARE DEAD.** SDRplay moved their downloads behind a
-WordPress download manager in 2026 and every `SDRplay_RSP_API-Linux-3.15.x.run` address now 404s —
-including the one this page used to give (Stuart hit it on 2026-09-11). The address above is their
-current one and, importantly for a headless box, it resolves under `curl` with no browser and no
-User-Agent games: it redirects to SharePoint with a short-lived token that curl follows by itself.
-★ `wpdmdl=1906` is a download-manager file id, stable for this file but almost certainly new when
-they publish the next version. If it fails, the page to read is <https://www.sdrplay.com/api/>.
-★ Verified 2026-09-11: 499 KB, "SDRplay RSP API Install Package V3.15 (installer v2)".
-
-★★ **Then reboot.** The installer asks for it, and it means it: the service and the USB rules both
-need to come up cleanly, and a replug only does half of that.
+★ RSPs are not supported on i386, or on the ARMv6 build used by the Pi Zero, Zero W and Pi 1.
 
 ```sh
-sudo reboot
-# then, once it is back:
-systemctl status sdrplay        # should be active (running)
+systemctl status vibeserver-rsp    # with an RSP plugged in: active (running)
 ```
-
-★ The unit is **`sdrplay`**. It was `sdrplay_apiService` in older API versions, and this document
-said so for a while — checked against a real 3.15 install on 2026-08-07, which is the only way
-that sort of thing gets found.
-
-★ Do this **before** starting VibeServer. Without it the server runs perfectly and reports no
-radio, which reads as broken hardware rather than a missing driver — so the message it prints
-names the download.
-
-★ **Adding an RSP later?** Install the SDRplay API whenever you like, then
-`sudo systemctl restart vibeserver` — the driver is loaded at runtime, so a restart is all it
-takes. No reinstall, and your settings are untouched.
 
 ---
 
