@@ -365,6 +365,9 @@ if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else f
 # ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09): none on the everyday pad, only the dial's band while a
 #     question is open, every link a Signal Identification Wiki page, every DECODE a decoder we run, the watches agree.
 if node --no-warnings scripts/test_dial_answers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ ASK BEFORE TUNING, the clients' half (2026-10-21): the lock is READ from the dial message (an old server's silence
+#     = not locked), the banner says what to do and never runs wider, and app + web gate every tuning send on it.
+if node --no-warnings scripts/test_ask_before_tuning.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ The room's passband on a shared dial (2026-10-17): the web client adopts it from config and sends nothing;
 #     the app and Jr read the same fields. The server half is test-room-passband.cpp above.
 if node --no-warnings scripts/test_room_passband.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -558,6 +561,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     the same ids, and a live shared dial carries every one and drops an unknown one. Same VIBESERVER_BIN rule.
 printf '\n\033[1m── shared-dial chat phrases (end to end) ──\033[0m\n'
 node scripts/test-chat-phrases.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ ASK BEFORE TUNING end to end (2026-10-21): the server refuses a locked listener's tune at the socket and tells an
+#     old client why, a YES / no answer in 15 s lets them in, a NO holds. ~40 s, silent. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── ask before tuning (end to end) ──\033[0m\n'
+node scripts/test-ask-before-tuning.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ A TUNNEL WHOSE PROCESS LIVES BUT WHOSE ADDRESS IS DEAD IS REPLACED (2026-10-09, the Sony "online but not

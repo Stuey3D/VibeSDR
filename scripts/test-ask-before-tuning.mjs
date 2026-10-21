@@ -1,0 +1,156 @@
+// test-ask-before-tuning.mjs — ASK BEFORE TUNING, end to end through a real vibeserver (docs/TUNING-ETIQUETTE.md).
+//
+// ★★★ WHAT THE UNIT TESTS CANNOT SHOW: that the SERVER refuses a locked listener's tune at the socket (an OLD client
+//     that knows nothing of the lock simply does not tune, and is told why), that the dial message carries the lock to
+//     each listener, and that a chat line moves it — on the wire, with real sockets. The rule itself is pinned by
+//     vibeserver/test-tune-etiquette.cpp; the clients' reader by scripts/test_ask_before_tuning.ts.
+// ★ SILENT: no browser, no audio device — the fake dongle's samples go to sockets nobody plays.
+// usage: VIBESERVER_BIN=… node scripts/test-ask-before-tuning.mjs   (~40 s)
+import net from 'node:net';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+let pass = 0, fail = 0;
+const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
+
+const BIN = process.env.VIBESERVER_BIN || '';
+if (!BIN || !fs.existsSync(BIN)) {
+  console.log('   (not run — set VIBESERVER_BIN to a vibeserver built from this tree)');
+  process.exit(3);
+}
+
+/** A minimal WebSocket client (test-chat-phrases.mjs's), text frames only. */
+function ws(port, pathq) {
+  const key = crypto.randomBytes(16).toString('base64');
+  const s = net.connect(port, '127.0.0.1');
+  const st = { txt: [], open: false, closed: false };
+  let hs = false, buf = Buffer.alloc(0);
+  s.on('connect', () => s.write(`GET ${pathq} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
+  s.on('error', () => {});
+  s.on('close', () => { st.closed = true; });
+  s.on('data', (d) => {
+    buf = Buffer.concat([buf, d]);
+    if (!hs) { const j = buf.indexOf('\r\n\r\n'); if (j < 0) return; hs = true; st.open = true; buf = buf.subarray(j + 4); }
+    for (;;) {
+      if (buf.length < 2) break;
+      const op = buf[0] & 0x0f; let len = buf[1] & 0x7f, off = 2;
+      if (len === 126) { if (buf.length < 4) break; len = buf.readUInt16BE(2); off = 4; }
+      else if (len === 127) { if (buf.length < 10) break; len = Number(buf.readBigUInt64BE(2)); off = 10; }
+      if (buf.length < off + len) break;
+      const p = buf.subarray(off, off + len); buf = buf.subarray(off + len);
+      if (op === 0x9) { const q = Buffer.alloc(6 + p.length); q[0] = 0x8a; q[1] = 0x80 | p.length; q.writeUInt32BE(0, 2); p.copy(q, 6); s.write(q); continue; }
+      if (op === 0x1) st.txt.push(p.toString());
+    }
+  });
+  st.send = (o) => {
+    const b = Buffer.from(JSON.stringify(o));
+    const h = Buffer.alloc(b.length < 126 ? 6 : 8);
+    h[0] = 0x81;
+    if (b.length < 126) { h[1] = 0x80 | b.length; h.writeUInt32BE(0, 2); } else { h[1] = 0x80 | 126; h.writeUInt16BE(b.length, 2); h.writeUInt32BE(0, 4); }
+    s.write(Buffer.concat([h, b]));
+  };
+  st.close = () => { try { s.write(Buffer.from([0x88, 0x80, 0, 0, 0, 0])); } catch {} s.end(); };
+  /** The last message of a type, parsed. */
+  st.last = (type) => { for (let i = st.txt.length - 1; i >= 0; i--) if (st.txt[i].includes(`"type":"${type}"`)) return JSON.parse(st.txt[i]); return null; };
+  st.count = (type) => st.txt.filter((t) => t.includes(`"type":"${type}"`)).length;
+  return st;
+}
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-ask-'));
+for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
+const rtlPort = await freePort(), port = await freePort();
+const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2048000'], { stdio: 'ignore' });
+await sleep(300);
+const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
+              VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
+const logPath = path.join(dir, 'server.log');
+const log = fs.openSync(logPath, 'w');
+const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2048000', '--freq', '96100000',
+                        '--mode', 'wfm', '--users', '4', '--ask-before-tuning'], { env, stdio: ['ignore', log, log] });
+const stop = () => { try { srv.kill('SIGTERM'); } catch {} try { rtl.kill('SIGTERM'); } catch {} };
+process.on('exit', stop);
+for (let i = 0; i < 100; i++) {
+  const up = await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('connect', () => { c.end(); r(true); }); c.on('error', () => r(false)); });
+  if (up) break;
+  await sleep(100);
+}
+const join = async (sid) => { const s = ws(port, `/ws/user-spectrum?user_session_id=${sid}&bins=256`); await sleep(900); return s; };
+const vfo = (st) => { const c = st.last('config'); return c ? Number(c.vfo) : NaN; };
+const until = async (f, ms = 4000) => { for (let t = 0; t < ms; t += 100) { if (f()) return true; await sleep(100); } return f(); };
+
+try {
+  console.log('── alone, nothing is locked ──');
+  const a = await join('aaaa0001');
+  const da = a.last('dial');
+  ok(!!da && da.askFirst !== true && da.tuneLocked !== true, 'a lone listener is told no lock (askFirst absent: one listener is not company)');
+
+  console.log('── a newcomer is locked; the one who was here first is not ──');
+  const b = await join('bbbb0002');
+  await until(() => a.last('dial')?.askFirst === true);
+  ok(b.last('dial')?.askFirst === true && b.last('dial')?.tuneLocked === true, '★ the newcomer\'s dial says askFirst + tuneLocked');
+  ok(a.last('dial')?.askFirst === true && a.last('dial')?.tuneLocked === false, '★ the longest-connected listener is in force but free');
+
+  console.log('── the SERVER refuses a locked tune, however the client was written ──');
+  const before = vfo(a);
+  b.send({ type: 'tune', frequency: 97000000, mode: 'wfm' });   // ★ what an OLD client does: just send it
+  await sleep(1200);
+  ok(vfo(a) === before && before === 96100000, `★ the radio did not move for anybody (still ${before})`);
+  const n = b.last('notice');
+  ok(!!n && n.ask === 1 && /ask in chat before tuning/i.test(n.why || ''), `★ the old client is told why: "${n && n.why}"`);
+  ok(vfo(b) === 96100000, '…and handed the room\'s state back, so it re-adopts where the radio is');
+  const notices = b.count('notice');
+  b.send({ type: 'tune', frequency: 97100000 }); await sleep(400);
+  b.send({ type: 'tune', frequency: 97200000 }); await sleep(600);
+  ok(b.count('notice') === notices, 'a stream of refused tunes is ONE notice per 10 s, not a pill each');
+  const n2 = b.count('notice');
+  b.send({ type: 'tune', frequency: 96100000, mode: 'wfm' }); await sleep(600);
+  ok(b.count('notice') === n2, 'a re-assert of where the radio already is is dropped in silence (recovery is not a user action)');
+
+  console.log('── the free listener tunes as ever ──');
+  a.send({ type: 'tune', frequency: 96600000, mode: 'wfm' });
+  ok(await until(() => vfo(b) === 96600000), '★ the longest-connected listener moved the dial, and the newcomer followed');
+
+  console.log('── asking: a NO holds, the sayer\'s YES lets them in ──');
+  b.send({ type: 'say', id: 'ask_tune' });
+  ok(await until(() => b.last('dial')?.askState === 'open'), '"Can I tune?" opens the ask — the newcomer is told it is waiting');
+  ok((b.last('dial')?.askSecs ?? 0) > 10, `…with the seconds left (${b.last('dial')?.askSecs})`);
+  a.send({ type: 'say', id: 'listening_few_min' });
+  ok(await until(() => b.last('dial')?.askState === 'no'), '★ "I\'m listening to this one — a few more minutes, please?" is a NO');
+  ok((b.last('dial')?.askSecs ?? 0) > 280, `…held for the five-minute limit (${b.last('dial')?.askSecs} s left)`);
+  b.send({ type: 'tune', frequency: 98000000 }); await sleep(800);
+  ok(vfo(a) === 96600000, 'still refused while the NO stands');
+  await sleep(3200);                                               // flood control: one line per 3 s per session
+  a.send({ type: 'say', id: 'go_ahead' });
+  ok(await until(() => b.last('dial')?.tuneLocked === false), '★ "Go ahead, tune" from the one who said no: let in at once');
+  b.send({ type: 'tune', frequency: 98000000, mode: 'wfm' });
+  ok(await until(() => vfo(a) === 98000000), '★ …and now their tune moves the radio for everybody');
+
+  console.log('── no answer in 15 s lets a newcomer in ──');
+  const c = await join('cccc0003');
+  ok(await until(() => c.last('dial')?.tuneLocked === true), 'a third listener arrives locked');
+  c.send({ type: 'say', id: 'anyone_using' });
+  ok(await until(() => c.last('dial')?.askState === 'open'), '"Anyone using this?" asks too');
+  const t0 = Date.now();
+  ok(await until(() => c.last('dial')?.tuneLocked === false, 20000), `★ nobody answered: let in after ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  ok(Date.now() - t0 >= 13000, '…and not before the 15 s were up');
+
+  console.log('── when the room empties, the lock goes ──');
+  b.close(); c.close();
+  ok(await until(() => a.last('dial')?.askFirst !== true, 6000), 'alone again: the dial says no lock');
+  a.close();
+} catch (e) {
+  fail++; console.log(`   FAIL threw: ${e && e.stack || e}`);
+} finally {
+  stop();
+}
+const refused = fs.readFileSync(logPath, 'utf8').split('\n').filter((l) => l.includes('ask before tuning is on')).length;
+console.log(`   .. the server logged ${refused} refusal(s)`);
+console.log(`   ${pass} passed, ${fail} failed   (server log: ${logPath})`);
+process.exit(fail ? 1 : 0);

@@ -73,6 +73,7 @@ int main() {
     double t = 1000;
     b.onSaid(r, "b", "ask_tune", t);
     ok(b.onSaid(r, "a", "listening_few_min", t + 2), "'I'm listening to this one — a few more minutes, please?' is a NO");
+    ok(b.view(r, "b", t + 3).state == "no", "…said at once, not after the 15 s window runs out");
     b.tick(r, t + 15);
     ok(b.locked(r, "b"), "after the window, the NO stands");
     View v = b.view(r, "b", t + 60);

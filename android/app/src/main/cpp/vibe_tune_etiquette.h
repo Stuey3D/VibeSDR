@@ -201,7 +201,9 @@ public:
         auto it = reqs.find(s);
         if (v.locked && it != reqs.end()) {
             const Req& q = it->second;
-            if (q.open)                { v.state = "open"; v.secs = (int)(q.deadline - now + 0.999); }
+            // ★ A NO inside the window is said at once — the asker should not watch "waiting" count down to a
+            //   refusal. (A higher-ranked YES can still overrule it until the window closes.)
+            if (q.open && q.best != Reply::No) { v.state = "open"; v.secs = (int)(q.deadline - now + 0.999); }
             else if (q.noUntil > now)  { v.state = "no";   v.secs = (int)(q.noUntil - now + 0.999); }
             if (v.secs < 0) v.secs = 0;
         }

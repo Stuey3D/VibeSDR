@@ -238,6 +238,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var dialYou = 0
   @Published var dialListeners = 0
   @Published var dialDecoding = false
+  /// ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server, via the phone, says this listener may not move
+  /// the shared dial until they have asked in the chat. Only ever its word (askFirst + tuneLocked); absent = free.
+  /// The phone refuses the tune as well — this is so the wrist says WHY rather than turning a dead crown.
+  @Published var dialTuneLocked = false
+  @Published var dialAskState = ""
   /// This receiver shares one tuner between its listeners.
   var sharedDial: Bool { dialMode != "exclusive" }
   /// ★★ NEVER PERSISTED, and cleared whenever the receiver stops being shared: "armed" describes
@@ -250,6 +255,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// radio to turn your own knob would be ceremony.
   var canTune: Bool {
     guard sharedDial else { return true }
+    guard !dialTuneLocked else { return false }   // ★★ ask before tuning — see dialTuneLocked
     return dialArmed && Date().timeIntervalSince(armedAt) < Self.armMinutes * 60
   }
 
@@ -980,6 +986,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     dialTuner     = 0
     dialMine      = false
     dialDecoding  = false
+    dialTuneLocked = false; dialAskState = ""
     chatLines.removeAll()
     chatUnread    = 0
 
@@ -1714,6 +1721,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         dialYou       = (o["you"] as? Int) ?? 0
         dialListeners = (o["listeners"] as? Int) ?? 0
         dialDecoding  = (o["decoding"] as? Bool) ?? false
+        // ★★ Ask before tuning — the phone relays the server's dial state whole (watchProvider.sendDial).
+        let askFirst = (o["askFirst"] as? Bool) ?? false
+        dialTuneLocked = askFirst && ((o["tuneLocked"] as? Bool) ?? false)
+        dialAskState   = askFirst ? ((o["askState"] as? String) ?? "") : ""
+        if dialTuneLocked { dialArmed = false }
         // ★ A phrase rides the same message as an EVENT rather than as state, so a repeat of the
         //   same phrase is still delivered — "Thanks!" twice is two things said, not one.
         if let said = o["said"] as? [String: Any],

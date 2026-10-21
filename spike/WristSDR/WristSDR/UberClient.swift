@@ -692,6 +692,11 @@ final class UberClient: ObservableObject {
   @Published var dialYou = 0            // our own ordinal, so "You" can replace a number
   @Published var dialListeners = 0
   @Published var dialDecoding = false
+  /// ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the SERVER says this listener may not move the shared dial
+  /// yet: it has to ask in the chat first. Only ever the server's word (dial.askFirst + tuneLocked); an older server
+  /// sends neither, and this stays false. `dialAskState` is "" | "open" (asked, waiting) | "no" (asked to wait).
+  @Published var dialTuneLocked = false
+  @Published var dialAskState = ""
   /// True when this receiver shares one tuner between its listeners.
   var sharedDial: Bool { isVibe && dialMode != "exclusive" }
 
@@ -729,6 +734,7 @@ final class UberClient: ObservableObject {
   /// May this watch move the dial right now?
   var canTune: Bool {
     guard sharedDial else { return true }           // an ordinary receiver: always yours
+    guard !dialTuneLocked else { return false }     // ★★ ask before tuning — the server has not let us in
     guard dialArmed else { return false }
     return ProcessInfo.processInfo.systemUptime - max(armedAt, lastLocalTuneAt) < Self.armMinutes * 60
   }
@@ -2663,6 +2669,11 @@ final class UberClient: ObservableObject {
         self.dialYou       = (j["you"] as? NSNumber)?.intValue ?? 0
         self.dialListeners = (j["listeners"] as? NSNumber)?.intValue ?? 0
         self.dialDecoding  = (j["decoding"] as? Bool) ?? false
+        // ★★ Ask before tuning: read, never worked out. Absent (an older server, or the owner's switch off) = free.
+        let askFirst = (j["askFirst"] as? Bool) ?? false
+        self.dialTuneLocked = askFirst && ((j["tuneLocked"] as? Bool) ?? false)
+        self.dialAskState   = askFirst ? ((j["askState"] as? String) ?? "") : ""
+        if self.dialTuneLocked { self.dialArmed = false }   // ★ an arm from before the lock must not survive it
       }
       return
     }
@@ -3559,6 +3570,7 @@ final class UberClient: ObservableObject {
   /// a `tune` message carrying bandwidthLow/High on the AUDIO socket — the exact message the
   /// phone's native path emits (VibePowerModule.swift `sendWsJson(["type":"tune", ...])`).
   func setBandwidth(_ low: Double, _ high: Double) {
+    guard !(sharedDial && dialTuneLocked) else { return }   // ★★ ask before tuning — the passband is everybody's
     bwLow = low
     bwHigh = high
     lastLocalBwAt = ProcessInfo.processInfo.systemUptime   // ★ so its echo is not the room's — see adoptRoomPassband
@@ -3569,6 +3581,7 @@ final class UberClient: ObservableObject {
 
   func setMode(_ m: String) {
     guard m != mode else { return }
+    guard !(sharedDial && dialTuneLocked) else { return }   // ★★ ask before tuning — the demodulator is everybody's
     mode = m
     lastLocalTuneAt = ProcessInfo.processInfo.systemUptime   // ★ configs already sent with the OLD mode must not undo it
     clearRds()            // RDS is WFM-only; leaving/among modes must not leave a station name up

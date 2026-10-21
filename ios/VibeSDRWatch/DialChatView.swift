@@ -47,6 +47,28 @@ struct DialChatView: View {
         //   lessons where one will do. Mirrors Jr; keep the two in step.
         // ★★ It stays HERE, on the chat page, deliberately: reaching for the tuner walks you past
         //   the place you would ask for it.
+        // ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md): the server has not let this listener in yet, so arming is
+        //   not offered — the row says why and what to do. Mirrors Jr; keep the two in step.
+        if link.dialTuneLocked {
+          HStack(spacing: 8) {
+            Image(systemName: "bubble.left.and.exclamationmark.bubble.right")
+              .font(.system(size: 14)).frame(width: 36, height: 30)
+            VStack(alignment: .leading, spacing: 1) {
+              Text(link.dialAskState == "open" ? "AWAITING A REPLY"
+                   : link.dialAskState == "no" ? "ASKED TO WAIT" : "ASK BEFORE TUNING")
+                .font(.system(size: 11, weight: .bold))
+              Text(link.dialAskState == "open" ? "No answer in 15 s and it's yours"
+                   : link.dialAskState == "no" ? "Yours in 5 min at most"
+                   : "Ask in chat — others are listening")
+                .font(.system(size: 9)).opacity(0.75).lineLimit(2)
+            }
+            Spacer()
+          }
+          .foregroundColor(.orange)
+          .padding(.horizontal, 8).padding(.vertical, 6)
+          .frame(maxWidth: .infinity)
+          .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.14)))
+        } else {
         Button {
           link.dialArmed.toggle()
           WKInterfaceDevice.current().play(link.dialArmed ? .start : .stop)
@@ -78,6 +100,7 @@ struct DialChatView: View {
             .fill((link.dialArmed ? Color.green : Color.white).opacity(0.14)))
         }
         .buttonStyle(.plain)
+        }
 
         // ── The transcript ──────────────────────────────────────────────────────
         if link.chatLines.isEmpty {
