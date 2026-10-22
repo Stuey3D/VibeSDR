@@ -1805,6 +1805,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <br>The moment anybody connects, background decoding stops and the radio goes back to exactly where it was
           left. What it decodes is kept in the gallery (Server tab).</p>
         <div id="bgProfiles"></div>
+        <!-- ★★ SHARED BY TIME with "Let another program use this radio" (Stuart, 2026-10-22: "You cannot release a radio
+             and also hand it over to another app"). Both stay usable; this line says how they divide the day. -->
+        <p class="why hide" id="bgReleaseNote" style="border-left:3px solid var(--amber);padding-left:8px"></p>
       </div>
       <div id="hwPpb" class="hide">
         <label><span class="lbl">Calibration (ppb)</span>
@@ -5325,6 +5328,7 @@ function bgLoad(r) {
     $("bgOn").__wired = 1;
     $("bgOn").addEventListener("change", function () { bgModel.on = $("bgOn").checked; bgRender(); });
     $("bgWait").addEventListener("change", function () { bgModel.waitMin = parseFloat($("bgWait").value) || 5; });
+    if ($("releaseWhenIdle")) $("releaseWhenIdle").addEventListener("change", bgReleaseNote);
   }
   bgRender();
 }
@@ -5350,10 +5354,24 @@ function bgLocal(hhmm) {
   const t = ((+m[1] * 60 + +m[2] + off) % 1440 + 1440) % 1440;
   return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
 }
+/** ★★ The release and background decoding SHARE THE IDLE RADIO BY TIME: during a profile's hours VibeServer keeps it,
+ *  outside them "Let another program use this radio" works as set. One line says so when both are ticked. */
+function bgReleaseNote() {
+  const el = $("bgReleaseNote");
+  if (!el) return;
+  const rel = !!($("releaseWhenIdle") && $("releaseWhenIdle").checked);
+  const on = !!($("bgOn") && $("bgOn").checked);
+  const allDay = bgModel.profiles.length > 0 && bgModel.profiles.every(function (p) { return p.from === p.to; });
+  el.textContent = allDay
+    ? "Your profile runs all day, so this radio is never handed to another program while Background Decoding is on."
+    : "Outside your background profile hours, another program may use this radio. During them, VibeServer keeps it for background decoding.";
+  el.classList.toggle("hide", !(rel && on));
+}
 function bgRender() {
   const box = $("bgProfiles");
   if (!box) return;
   box.innerHTML = "";
+  bgReleaseNote();
   if (!bgModel.on) return;
   if (!bgModel.profiles.length) bgModel.profiles.push(bgNewProfile());
   const el = function (tag, attrs, text) {
@@ -5420,6 +5438,7 @@ function bgRender() {
       const was = p.from === p.to;
       p.from = t1.value || "00:00"; p.to = t2.value || "00:00";
       paintLoc();
+      bgReleaseNote();
       if (was !== (p.from === p.to)) bgRender();   // ★ the "another profile" line appears or goes
     };
     t1.onchange = onT; t2.onchange = onT;

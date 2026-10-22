@@ -5505,6 +5505,8 @@ static double vsBgWaitSec(const vibe::bg::Config& c) {
     if (const char* e = std::getenv("VIBESERVER_BG_WAIT_SEC"); e && *e) return std::max(0.0, std::atof(e));
     return c.waitSec;
 }
+/** ★ TEST-ONLY: may a fake rtl_tcp radio be released? See LocalSdrShim::releaseRadio. */
+static bool vsTestTcpRelease() { const char* e = std::getenv("VIBESERVER_TEST_TCP_RELEASE"); return e && *e == '1'; }
 /** ★ The box-wide "a listener needs a decoder slot" file, beside the slots themselves. */
 static std::string vsBgYieldPath() { const std::string d = vsDecoderSlotDir(); return d.empty() ? std::string() : d + "/bg-yield"; }
 /** ★ The owner's ceiling for raw IQ on the local network, in Hz (0 = none). The full span is
@@ -24674,9 +24676,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void bgStartLocked(const vibe::bg::Config& cfg, int idx) {
         const auto& prof = cfg.profiles[(size_t)idx];
         resumeCaptureIdle(/*fromBg=*/true);       // ★ a parked or released radio is taken back first
+        /* ★★ SHARED BY TIME (Stuart, 2026-10-22: "You cannot release a radio and also hand it over to another app").
+         *  Outside the profile hours the release worked as configured, so another program may hold the radio now. Then
+         *  background decoding cannot take it: say so plainly, and try again in a minute for as long as the profile is
+         *  due — never a tight loop against a holder. A listener arriving still comes first, as ever. */
         if (radioReleased.load()) {
-            LOGI("background decoding: the radio is not ours to take just now — will try again");
-            bgNotBefore_ = nowSecs() + 30; return;
+            LOGI("background decoding: profile %d is due but another program has the radio \xe2\x80\x94 trying again in 60 s", idx + 1);
+            bgNotBefore_ = nowSecs() + 60; return;
         }
         if (!bgSaved_.valid) {
             bgSaved_ = { true, rtlCenter.load(), viewCenter.load(), audioFreq.load() };
@@ -24781,12 +24787,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         // ★ Not running: a dial still held from a run that could not restore (it cannot happen today; belt and braces).
         if (bgSaved_.valid && anyone) bgStopLocked("a listener arrived", true);
-        if (anyone || want < 0) {
-            bgWanted_.store(false); bgEmptySince_ = 0; bgLoggedWait_ = false;
-            return;
-        }
-        bgWanted_.store(true);
+        /* ★★ OUTSIDE EVERY PROFILE'S HOURS THE RADIO IS NOT OURS: bgWanted_ is false, so the idle park and "Let another
+         *  program use this radio" work exactly as configured (Stuart: share by time). The wait is still counted from
+         *  the last listener LEAVING, not from the profile's start — so a profile that begins on an empty server starts
+         *  at once (taking the radio back if it was released), rather than minutes into its own hours. */
+        if (anyone) { bgWanted_.store(false); bgEmptySince_ = 0; bgLoggedWait_ = false; return; }
         if (bgEmptySince_ <= 0) bgEmptySince_ = now;
+        if (want < 0) { bgWanted_.store(false); bgLoggedWait_ = false; bgNotBefore_ = 0; return; }
+        bgWanted_.store(true);
         const double wait = vsBgWaitSec(cfg);
         if (!bgLoggedWait_) {
             bgLoggedWait_ = true;
@@ -24843,7 +24851,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (radioReleased.load()) {
             std::string err;
             if (!LocalSdrShim::instance().reacquireRadio(err)) {
-                LOGI("listener arrived but the radio is not ours to take back — %s", err.c_str());
+                if (fromBg) LOGI("background decoding: could not take the radio back — %s", err.c_str());
+                else LOGI("listener arrived but the radio is not ours to take back — %s", err.c_str());
                 /* ★★★ AND TELL THEM. The comment above this block promises the listener "a clear
                  *  reason"; until now the only thing that got one was the log. A listener on a
                  *  server whose dongle another program had simply watched nothing happen. */
@@ -33268,6 +33277,19 @@ bool LocalSdrShim::releaseRadio() {
     if (!p) return false;
     Impl* impl = p;
     if (impl->radioReleased.load()) return true;
+    /* ★ TEST-ONLY (VIBESERVER_TEST_TCP_RELEASE=1): a fake rtl_tcp radio can be "released" — its reader stops and the
+     *  server believes another program may have it — so the release / background decoding hand-over (V12) can be
+     *  driven end to end on the bench. reacquireRadio then fails while the file VIBESERVER_TEST_RADIO_BUSY names
+     *  exists ("another program has it"). Unset, a network radio is never released, exactly as before. */
+    if (impl->useTcp() && vsTestTcpRelease()) {
+        { std::lock_guard<std::mutex> il(impl->idleMtx);
+          impl->tcpRunning.store(false); joinOnce(impl->rtlThread, "tcp reader");
+          impl->captureIdle.store(true); }
+        impl->radioReleased.store(true);
+        impl->releasedAt.store(Impl::nowSecs());
+        LOGI("radio RELEASED — another program may open it now (test: rtl_tcp)");
+        return true;
+    }
     // ★ A network source owns nothing local, so there is nothing to hand over.
     if (impl->useTcp() || impl->useSpy()) return false;
     // ★ NAME EVERY SOURCE — a driver missing from here cannot be lent to another program at all:
@@ -33343,6 +33365,13 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     if (!p) { err = "server not running"; return false; }
     Impl* impl = p;
     if (!impl->radioReleased.load()) return true;
+    if (impl->useTcp() && vsTestTcpRelease()) {          // ★ TEST-ONLY — see releaseRadio
+        const char* busy = std::getenv("VIBESERVER_TEST_RADIO_BUSY");
+        if (busy && *busy && ::access(busy, F_OK) == 0) { err = "the radio is in use by another program on this machine"; return false; }
+        impl->radioReleased.store(false);
+        LOGI("radio taken back (test: rtl_tcp)");
+        return true;
+    }
     const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf(), hrf = impl->useHackRf();
     const bool asp = impl->useAirspy();      // ★ NAME EVERY SOURCE — see releaseRadio()
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);

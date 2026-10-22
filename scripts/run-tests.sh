@@ -261,6 +261,8 @@ if node scripts/check-directory-page.mjs; then pass=$((pass+1)); else fail=$((fa
 # ★ Behaviour, not syntax: the page's own functions driven against a stubbed DOM, because the bug
 #   this catches — one radio's sample rate landing in another's config during a tab switch — is
 #   perfectly valid JavaScript and perfectly well-formed HTML.
+# ★★ Background decoding + "let another program use it" share the idle radio BY TIME (2026-10-22): the setup page's line.
+if node scripts/test-setup-bg-release.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE GOVERNOR MENU OFFERS ONLY WHAT THIS MACHINE HAS (2026-10-19): the Lenovo's intel_pstate has no schedutil.
 if node scripts/test-setup-governors.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE WATERFALL RATE MENU SHOWS THE RATE THE SERVER RUNS (11.0.9): a hand-set 15 is "15 fps (set by hand)", never "Full · 20".
@@ -698,6 +700,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     nothing, switching it off gives the dial back. Front door + one radio process, as systemd runs them. ~40 s.
 printf '\n\033[1m── background decoding through the front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-frontdoor.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ …AND SHARED BY TIME WITH "LET ANOTHER PROGRAM USE THIS RADIO" (Stuart, 2026-10-22): outside the profile hours the
+#     release works as set; at the start a released radio is taken back; never released during them; at the end the
+#     dial back and the release after Let go after; a radio another program holds is retried every 60 s. ~2 min.
+printf '\n\033[1m── background decoding and the release share by time (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-release.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ A TUNNEL WHOSE PROCESS LIVES BUT WHOSE ADDRESS IS DEAD IS REPLACED (2026-10-09, the Sony "online but not
