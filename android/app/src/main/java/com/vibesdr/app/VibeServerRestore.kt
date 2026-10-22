@@ -216,7 +216,7 @@ object VibeServerRestore {
          *  the radio might have long since come back from, and the TV slept before the restore could open it. A radio
          *  that is listed IS back: forget the stamp and hold. Letting go stays for a radio genuinely off the bus. */
         val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager
-        if (mgr != null && mgr.deviceList.values.any { isServable(it) }) { noteRadioBack(ctx); return true }
+        if (mgr != null && mgr.deviceList.values.any { isServable(ctx, it) }) { noteRadioBack(ctx); return true }
         return VibeLocalSDR.holdCpuAwake(true, radioGoneForMs(ctx))
     }
 
@@ -240,7 +240,7 @@ object VibeServerRestore {
      *   remote. It is the same restore every other door uses.
      */
     fun onRadioAttached(ctx: Context, dev: UsbDevice?, why: String) {
-        if (dev != null && !isServable(dev)) return
+        if (dev != null && !isServable(ctx, dev)) return
         // ★★ An RSP re-enumerating after its firmware upload is the driver's to adopt (VibeRsp), whatever else follows.
         if (dev != null && VibeRsp.isRsp(dev)) VibeRsp.onAttached(ctx, dev)
         // ★ Nothing armed, nothing to do: a running server is always armed (arm at start, disarm at stop), and this
@@ -340,6 +340,7 @@ object VibeServerRestore {
                    "stopping the server; the owner starts it again when they want it")
         disarm(ctx)
         try { VibeLocalSDR.stopMdns() } catch (t: Throwable) { Log.w(TAG, "stopMdns: ${t.message}") }
+        VibeIcom.onServerStopping()   // ★ the AudioRecord thread first, then the engine it pushes into
         try { VibeLocalSDR.stopSpectrumSync() } catch (t: Throwable) { Log.w(TAG, "stopping the engine: ${t.message}") }
         VibeRsp.releaseAll(ctx)
         releaseServerConn()
@@ -388,6 +389,9 @@ object VibeServerRestore {
         if (fd < 0) { conn.close(); return "bad fd" }
         // ★★ An RSP goes to OpenRSP's service first — the same step as the app's start path (VibeRsp).
         if (VibeRsp.isRsp(dev)) VibeRsp.attach(ctx, conn, dev)?.let { conn.close(); return it }
+        // ★★★ An Icom: the CP2102 must still NAME one (the permission above lets us read its serial), or it is not touched.
+        val icom = VibeIcom.isCandidate(dev)
+        if (icom && !VibeIcom.isIcom(dev)) { conn.close(); return "that USB serial device is not the Icom this server ran" }
 
         // ★★★ THE SAME APPLY PATH THE APP USES — see VibeServerBoot. Nothing is reconstructed or
         //     assumed here any more: whatever the server was running with is what it comes back
@@ -401,6 +405,7 @@ object VibeServerRestore {
         if (cfg.length() == 0) { conn.close(); return "no stored config" }
 
         VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))   // see VibeServerBoot
+        if (icom) VibeIcom.prepareStart(cfg, dev)
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir, serveOnLan = true,
                                                 keepRadioAlive = VibeServerBoot.keepRadioAlive(ctx, cfg))
         VibeServerBoot.startBatteryMonitor(ctx)   // after start — see VibeLocalSdrModule
@@ -435,6 +440,9 @@ object VibeServerRestore {
         }
         holdServerConn(conn, dev)   // the shim works on its own dup; this must not be collected
         noteRadioBack(ctx)   // ★ whatever gap there was, the server has its radio again
+        // ★ An Icom's audio: starts if Android allows it now (a background restore usually cannot — the service starts it
+        //   the moment the owner opens the app; until then hwinfo says so). Never asks for a permission from here.
+        if (icom) VibeIcom.onServerStarted(ctx)
 
         // Hand back the identity + station list JS would normally have published.
         val loc = p.getString(K_LOCJSON, "") ?: ""
@@ -518,7 +526,7 @@ object VibeServerRestore {
             }
             // ★ Nothing for the engine to adopt. A radio that left (the detach broadcast stamped it) and is
             //   listed again with the engine's handle alive is back; one still missing is judged on the clock.
-            if (radioGoneForMs(ctx) >= 0 && mgr.deviceList.values.any { isServable(it) }) { noteRadioBack(ctx); return null }
+            if (radioGoneForMs(ctx) >= 0 && mgr.deviceList.values.any { isServable(ctx, it) }) { noteRadioBack(ctx); return null }
             return if (radioGoneTooLong(ctx)) RADIO_GONE_TOO_LONG else null
         }
         noteRadioGone(ctx, "the engine's USB handle died")
@@ -548,8 +556,19 @@ object VibeServerRestore {
     /** ★ What recoverUsbIfNeeded and restore answer when the radio outstayed RADIO_BLIP_WINDOW_MS. */
     const val RADIO_GONE_TOO_LONG = "the radio was gone too long to resume"
 
-    private fun isServable(dev: UsbDevice): Boolean =
-        VibeLocalSdrModule.isServableRadio(dev.vendorId, dev.productId)
+    /** ★★ Any radio a server here could be running on. VID/PID for the SDRs; a CP210x / Icom-VID device counts only
+     *  while the server (running or armed) is an ICOM — a CP2102 is as often somebody's GPS, and its coming and going
+     *  must not stamp an RTL server's radio as gone (VibeIcom). */
+    internal fun isServable(ctx: Context, dev: UsbDevice): Boolean =
+        VibeLocalSdrModule.isServableRadio(dev.vendorId, dev.productId) ||
+            (VibeIcom.isCandidate(dev) && servesIcom(ctx))
+
+    /** ★ Is this phone's server (running now, or armed to come back) an Icom? The stored radio id (K_VIDPID) says so
+     *  even in a fresh process. */
+    fun servesIcom(ctx: Context): Boolean {
+        val want = prefs(ctx).getInt(K_VIDPID, -1)
+        return (want >= 0 && VibeIcom.isCandidate(want ushr 16, want and 0xffff)) || VibeIcom.serving()
+    }
 
     internal fun isShimServing(): Boolean = try {
         VibeLocalSDR.getVibeServerStatus().contains("\"running\":true")
@@ -562,6 +581,7 @@ object VibeServerRestore {
      *    VID:PID, which also keeps a restore from handing an HF+ server some dongle on the same hub. */
     private fun isRestoreRadio(dev: UsbDevice, want: Int): Boolean {
         if (want < 0 || VibeLocalSdrModule.RTL_SDR_VIDPIDS.contains(want)) return isRtlSdr(dev)
+        // ★ An Icom's CP210x: matched by id here; restore() checks the serial still names an Icom once it may read it.
         return ((dev.vendorId shl 16) or dev.productId) == want
     }
 

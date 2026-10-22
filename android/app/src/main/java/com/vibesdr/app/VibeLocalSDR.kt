@@ -250,6 +250,28 @@ object VibeLocalSDR {
     private external fun nativeRspAttach(fd: Int, deviceName: String): Int
     private external fun nativeRspDetach(deviceName: String): Int
 
+    // ── ★★★ AN ICOM, RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md Phase 4) — see VibeIcom.kt and icom_source.h ──────────
+    /** The owner's Icom settings for the next startSpectrum of an Icom's USB port (start() routes it to the Icom). */
+    fun setIcomNext(baud: Int, civAddr: Int, ownerLock: Boolean, rfOpen: Boolean, scopeSpeed: Int, serial: String) {
+        ensureLoaded(); nativeSetIcomNext(baud, civAddr, ownerLock, rfOpen, scopeSpeed, serial)
+    }
+    /** One AudioRecord block, `frames` × `channels` int16 at the START of a DIRECT buffer. Dropped unless an Icom
+     *  wants audio. No-op when nothing is loaded. */
+    fun icomPushPcm(buf: java.nio.ByteBuffer, frames: Int, channels: Int, rate: Int) {
+        if (loaded) nativeIcomPushPcm(buf, frames, channels, rate)
+    }
+    /** What the app knows about the radio's audio, for hwinfo (`audio`, `audioProblem`). */
+    fun icomAudioState(describe: String, problem: String) { if (loaded) nativeIcomAudioState(describe, problem) }
+    /** Is an Icom being served, wanting the app's audio? False when nothing is loaded. */
+    fun icomAudioWanted(): Boolean = loaded && nativeIcomAudioWanted()
+    /** The running Icom's hwinfo `radio` object as JSON, or "" (no Icom, or nothing loaded). */
+    fun icomFacts(): String = if (loaded) nativeIcomFacts() else ""
+    private external fun nativeSetIcomNext(baud: Int, civAddr: Int, ownerLock: Boolean, rfOpen: Boolean, scopeSpeed: Int, serial: String)
+    private external fun nativeIcomPushPcm(buf: java.nio.ByteBuffer, frames: Int, channels: Int, rate: Int)
+    private external fun nativeIcomAudioState(describe: String, problem: String)
+    private external fun nativeIcomAudioWanted(): Boolean
+    private external fun nativeIcomFacts(): String
+
     /** ★★ The radio attached again: the fresh-fd back-off left by the OLD device instance is spent. */
     fun usbRadioAttached() { if (loaded) nativeUsbRadioAttached() }
     private external fun nativeUsbRadioAttached()
