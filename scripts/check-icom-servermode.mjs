@@ -87,6 +87,7 @@ has(S, '{icomMicMissing && icomFacts?.audioSupported !== false && (', '…only w
 has(S, "icomHere === 'maybe'", 'an unnamed CP210x is said to be "maybe an Icom"');
 has(S, 'An Icom? Press Start and allow it.', '…in the words the plan gives');
 has(S, '<IcomSettingsFields phone ', 'the shared settings, phone variant');
+has(S, 'ink={icomInk} Input={TextInput} />', '…with the TV-safe text field (a remote can move past it)');
 has(S, '<IcomFacts icom={icomRadioNow}', 'the shared facts while serving');
 has(S, 'if (isIcom && parseCivHex(icomCivTxt) === null)', 'Start refuses a CI-V address the radio could not have');
 const fieldsFn = C.slice(C.indexOf('export function IcomSettingsFields'));

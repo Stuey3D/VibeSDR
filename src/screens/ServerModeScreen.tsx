@@ -771,7 +771,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       </Text>
     </View>
     <IcomSettingsFields phone form={icomSettingsFrom(icomSet)} civTxt={icomCivTxt} onCivTxt={onIcomCiv}
-                        onSet={setIcomField} styles={icomStyles} ink={icomInk} />
+                        onSet={setIcomField} styles={icomStyles} ink={icomInk} Input={TextInput} />
   </>);
   const rateBlock = (<>
             {/* ★★ THE RADIO'S CAPTURE WIDTH, so it sits with the radio rather than with the

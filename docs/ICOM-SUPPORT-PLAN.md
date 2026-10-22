@@ -999,5 +999,4 @@ defaults, the baud and scope-speed lists = the setup page's, `SERVABLE_RADIOS` n
 
 **Not verified**: the screen has not been drawn (default/silver/black, phone/wide, Lite on a TV) — it reuses the
 screen's own hint/chip/switch/card styles; the permission button's round trip and the 3 s facts poll on a device;
-how a TV remote moves through the new card (TvTextInput is not used for the CI-V box — `IcomSettingsFields` uses
-React Native's TextInput, as the remote card always did).
+how a TV remote moves through the new card (the CI-V box is the screen's TvTextInput, passed in as `Input`).

@@ -15,7 +15,7 @@
  *   settings live in that app's server screen and shows the facts only.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Switch, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Switch, ActivityIndicator, type TextInputProps } from 'react-native';
 import {
   type IcomRadio, type IcomSettings, ICOM_BAUDS, ICOM_SCOPE_SPEED_NAMES, baudNote, transportText,
   preflightLines, icomSettingsFrom, parseCivHex, fmtCivHex, pickIcomSerial, withIcomSettings,
@@ -205,10 +205,12 @@ export function IcomFacts({ icom, styles, audio = true, portNote = true }:
  *              radio's USB input and its port is the USB device the owner allowed, so audio/port/serial-device are
  *              not settings there and are not drawn (AGENTS.md: no control that does nothing).
  */
-export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink, phone = false }: {
+export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink, phone = false, Input = TextInput }: {
   form: IcomSettings; civTxt: string; onCivTxt: (t: string) => void;
   onSet: <Kk extends keyof IcomSettings>(k: Kk, v: IcomSettings[Kk]) => void;
   styles: Styles; ink: IcomSwitchInk; phone?: boolean;
+  /** ★ The server screen passes TvTextInput, so a TV remote can move PAST the box (Lite on a TV box). */
+  Input?: React.ComponentType<TextInputProps>;
 }) {
   const civBad = parseCivHex(civTxt) === null;
   return (<>
@@ -219,7 +221,7 @@ export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink,
       &ldquo;Unlink from [REMOTE]&rdquo;.
     </Text>
     <Text style={styles.fieldLbl}>CI-V address (empty = the radio&rsquo;s own)</Text>
-    <TextInput value={civTxt} onChangeText={onCivTxt} maxLength={2} autoCapitalize="characters" autoCorrect={false}
+    <Input value={civTxt} onChangeText={onCivTxt} maxLength={2} autoCapitalize="characters" autoCorrect={false}
                placeholder="94" placeholderTextColor={ink.placeholder ?? '#777'} style={styles.convInput} />
     {civBad && (
       <Text style={[styles.note, styles.noteBad]}>
@@ -241,11 +243,11 @@ export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink,
     </View>
     {!phone && (<>
       <Text style={styles.fieldLbl}>Receive audio</Text>
-      <TextInput value={form.icomAudio} onChangeText={(t) => onSet('icomAudio', t)} autoCapitalize="none" autoCorrect={false}
+      <Input value={form.icomAudio} onChangeText={(t) => onSet('icomAudio', t)} autoCapitalize="none" autoCorrect={false}
                  placeholder="auto" placeholderTextColor={ink.placeholder ?? '#777'} style={styles.convInput} />
       <Text style={styles.note}>auto finds the radio&rsquo;s own USB audio; none serves the waterfall and dial only.</Text>
       <Text style={styles.fieldLbl}>Port</Text>
-      <TextInput value={form.icomPort} onChangeText={(t) => onSet('icomPort', t)} autoCapitalize="none" autoCorrect={false}
+      <Input value={form.icomPort} onChangeText={(t) => onSet('icomPort', t)} autoCapitalize="none" autoCorrect={false}
                  placeholder="usb" placeholderTextColor={ink.placeholder ?? '#777'} style={styles.convInput} />
       <View style={styles.toggleRow}>
         <Text style={[styles.toggleLabel, { flex: 1 }]}>Allow a serial device (/dev/&hellip;) as the port</Text>
