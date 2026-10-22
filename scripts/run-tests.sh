@@ -745,6 +745,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── a game controller in the admin panel (simulated pad, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-gamepad-admin.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 ICOM, THE WEB CLIENT (icomUi.ts): the real server on the fake IC-7300, a muted headless browser on this tree's
+#     web/dist — the panel from the radio's lists, every IQ control hidden, the owner lock for a listener, the admin's
+#     mode/FIL/span/zoom/ATT reaching the fake, the radio's S-meter, the TX banner, phone width and the looks.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-icom.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE KEYBOARD, ONE SCHEME (Stuart, 2026-10-18): arrows/WASD move the highlight, Enter, Backspace/Escape back,
 #     < > , . tune, - + = zoom; typing in the frequency field never hijacked; the old shortcuts do nothing.
