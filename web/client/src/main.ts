@@ -9524,7 +9524,7 @@ async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string, 
 // you can only dismiss with its own CLOSE button is a modal that traps people.
 
 const PANELS = ['menu', 'audioPanel', 'decodersPanel', 'recordingsPanel',
-                'bookmarksPanel', 'freqPanel', 'chatPanel', 'padGuide'];
+                'bookmarksPanel', 'freqPanel', 'chatPanel', 'padGuide', 'galleryPanel'];
 
 /** `reopenChat` = a share pick abandoned this way brings the chat back (see endSharePick). Only togglePanel
  *  passes false: opening another panel is the user moving on, and the chat must not reappear beside it. */
@@ -10346,6 +10346,7 @@ function initDecoders(host: string, auth: AuthState) {
     if (on) showDecBox('spots'); else if (!activeDec) hideDecBox();
   };
   $('mapBtn').onclick = openSpotsMap;
+  initGallery();   // ★★ V12: the GALLERY key in this menu — see initGallery
 
 
   // Output box chrome.
@@ -13412,6 +13413,87 @@ function initRecorder() {
     void renderRecordings();
   };
   $('recsClose').onclick = () => $('recordingsPanel').classList.remove('open');
+}
+
+// ── ★★ V12 THE GALLERY (2026-10-22) ──────────────────────────────────────────────────────────────────────────────
+// What THIS SERVER's decoders heard: background decoding while nobody listened (Stuart, for NickB's NAVTEX the night
+// Storm Austen came in), and listeners' own decoders. The server keeps it (vibe_gallery.h) and serves it read-only;
+// this lists it newest first, filters by decoder, opens a text item inline and downloads any item.
+// ★ Text from the air is shown with textContent, never as HTML.
+interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
+                        title: string; partial?: boolean; bytes: number }
+let galKind = '';
+function galUrl(path: string): string { return readAuthUrl(P(path)); }
+function galWhen(t: number): string {
+  const d = new Date(t * 1000);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())} UTC`;
+}
+function galFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
+async function renderGallery() {
+  const host = $('galList');
+  const note = $('galNote');
+  $('galView').hidden = true; host.hidden = false; $('galFilter').hidden = false;
+  host.innerHTML = '<div class="sres"><span class="n">Loading…</span></div>';
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery.json?limit=300${galKind ? `&kind=${galKind}` : ''}`), { cache: 'no-store' });
+    const j = await r.json() as { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number };
+    host.innerHTML = '';
+    if (!r.ok || j.error) { host.innerHTML = ''; note.textContent = j.error || 'This server has no gallery.'; return; }
+    const items = j.items || [];
+    note.textContent = j.enabled === false ? 'This server keeps no gallery.'
+      : `${j.count ?? items.length} item${(j.count ?? items.length) === 1 ? '' : 's'} on this server · ${formatSize(j.usedBytes || 0)}. Times are UTC.`;
+    if (!items.length) {
+      const row = document.createElement('div'); row.className = 'sres';
+      const n = document.createElement('span'); n.className = 'n';
+      n.textContent = galKind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.';
+      row.appendChild(n); host.appendChild(row); return;
+    }
+    for (const it of items) {
+      const row = document.createElement('div'); row.className = 'sres';
+      const f = document.createElement('span'); f.className = 'f'; f.textContent = galFreq(it.hz);
+      const n = document.createElement('span'); n.className = 'n';
+      n.appendChild(document.createTextNode(it.title || it.k.toUpperCase()));
+      const tag = (t: string) => { const s = document.createElement('span'); s.className = 'tag'; s.textContent = t; n.appendChild(s); };
+      tag(it.o === 'background' ? 'BACKGROUND' : 'LISTENER');
+      if (it.partial) tag('PARTIAL');
+      n.appendChild(document.createElement('br'));
+      const src = document.createElement('span'); src.className = 'src';
+      src.textContent = `${galWhen(it.t)} · ${(it.m || '').toUpperCase()} · ${it.d}${it.p ? ` · ${it.p}` : ''}${it.r ? ` · ${it.r}` : ''} · ${formatSize(it.bytes)}`;
+      n.appendChild(src);
+      row.appendChild(f); row.appendChild(n);
+      row.onclick = () => { void openGalleryItem(it); };
+      host.appendChild(row);
+    }
+  } catch {
+    host.innerHTML = '';
+    note.textContent = 'This server has no gallery (it may need updating).';
+  }
+}
+async function openGalleryItem(it: GalleryItem) {
+  const url = galUrl(`/vibeserver/gallery/file/${encodeURIComponent(it.f)}`);
+  ($('galDl') as HTMLAnchorElement).href = url + (url.includes('?') ? '&' : '?') + 'download=1';
+  ($('galDl') as HTMLAnchorElement).download = it.f;
+  $('galViewMeta').textContent = `${it.title} · ${galFreq(it.hz)} ${(it.m || '').toUpperCase()} · ${galWhen(it.t)}`
+    + ` · ${it.o === 'background' ? `background decoding${it.p ? ` (${it.p})` : ''}` : 'a listener\'s decoder'}`;
+  $('galList').hidden = true; $('galFilter').hidden = true; $('galView').hidden = false;
+  $('galText').textContent = 'Loading…';
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    $('galText').textContent = r.ok ? await r.text() : 'This item is no longer on the server (the gallery is full and keeps the newest).';
+  } catch { $('galText').textContent = 'Could not reach the server.'; }
+}
+function initGallery() {
+  $('galleryBtn').onclick = () => { togglePanel('galleryPanel'); if (isPanelOpen('galleryPanel')) void renderGallery(); };
+  $('galClose').onclick = () => $('galleryPanel').classList.remove('open');
+  $('galBack').onclick = () => { void renderGallery(); };
+  for (const b of Array.from($('galFilter').querySelectorAll('[data-kind]')) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      galKind = b.dataset.kind || '';
+      for (const o of Array.from($('galFilter').querySelectorAll('[data-kind]'))) o.classList.toggle('on', o === b);
+      void renderGallery();
+    };
+  }
 }
 
 async function renderRecordings() {

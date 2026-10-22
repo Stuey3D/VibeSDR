@@ -1407,7 +1407,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* Panels are centred POP-UPS, not side drawers — a full-height drawer holding
    five sliders is mostly empty space. Sized to their content, capped at 80vh.
    The huge box-shadow spread is the backdrop dim (no extra element needed). */
-#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel {
+#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel, #galleryPanel {
   position: fixed; top: 50%; left: 50%; z-index: 51;
   width: min(92vw, 520px); max-height: 82vh; overflow-y: auto;
   background: var(--ov-panel98, rgba(8,6,2,0.98)); border: 1px solid var(--btn-border);
@@ -1419,7 +1419,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   transition: opacity .14s ease-out, transform .14s ease-out, visibility .14s;
 }
 #menu.open, #bookmarksPanel.open, #decodersPanel.open, #chatPanel.open,
-#recordingsPanel.open, #audioPanel.open, #freqPanel.open {
+#recordingsPanel.open, #audioPanel.open, #freqPanel.open, #galleryPanel.open {
   opacity: 1; visibility: visible;
   transform: translate(-50%, -50%) scale(1);
 }
@@ -1433,13 +1433,21 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      (#splash, the audio gate) reserve both edges so the centre stays the centre.
      ★ Every overflow-y: auto container belongs in this list — scripts/test-web-scrollbar-lane.mjs
        measures them with classic scrollbars forced on. */
-#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel,
-#searchResults, #chatLog, #decText, #decBody, #rdsPanel, #adminPanelBody, #actLog {
+#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel, #galleryPanel,
+#galText, #searchResults, #chatLog, #decText, #decBody, #rdsPanel, #adminPanelBody, #actLog {
   scrollbar-gutter: stable;
 }
 #splash { scrollbar-gutter: stable both-edges; }
 /* Wider ones: bookmarks/recordings/decoders list real content. */
-#bookmarksPanel, #recordingsPanel, #decodersPanel { width: min(94vw, 640px); }
+#bookmarksPanel, #recordingsPanel, #decodersPanel, #galleryPanel { width: min(94vw, 640px); }
+/* ★★ V12 THE GALLERY — what this server's decoders heard, newest first; a NAVTEX message opens inline. */
+#galList .sres { cursor: pointer; flex-wrap: wrap; }
+#galList .sres .n { white-space: normal; }
+#galList .tag { font-size: 10px; letter-spacing: 1px; color: var(--unit); border: 1px solid var(--btn-border);
+                border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+#galText { white-space: pre-wrap; word-break: break-word; max-height: 55vh; overflow-y: auto;
+           font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--btn-text);
+           background: rgba(0,0,0,0.25); border: 1px solid var(--btn-border); border-radius: 8px; padding: 10px; margin: 8px 0; }
 #chatPanel { width: min(94vw, 460px); }
 
 /* ★ The transcript. Oldest at the top and it scrolls, because the last thing said is the thing
@@ -4221,6 +4229,11 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="decClose">CLOSE</button>
   </div>
 
+  <!-- ★★ V12: what this SERVER's decoders have heard — background decoding and listeners' — kept on the server. -->
+  <div class="btnRow">
+    <button class="btn" id="galleryBtn" title="What this server's decoders have heard — background decoding while nobody listened, and listeners' own">GALLERY</button>
+  </div>
+
   <h2>CLIENT DECODERS</h2>
   <div class="btnRow">
     <button class="btn" data-dec="rtty">RTTY</button>
@@ -4370,6 +4383,31 @@ select.btn { padding: 6px 8px; }
     Decoding runs on the server. Tap a spot to tune.
   </div>
   </div>
+</div>
+
+<!-- ★★ V12 THE GALLERY (2026-10-22): what this server's decoders heard — background decoding while nobody listened,
+     and listeners' own decoders — served read-only by the server (/vibeserver/gallery.json). Newest first, filtered by
+     decoder; a text item opens here, every item downloads. -->
+<div id="galleryPanel">
+  <div id="menuHead">
+    <span>GALLERY</span>
+    <button class="btn" id="galClose">CLOSE</button>
+  </div>
+  <div class="btnRow" id="galFilter">
+    <button class="btn on" data-kind="">ALL</button>
+    <button class="btn" data-kind="navtex">NAVTEX</button>
+    <button class="btn" data-kind="rtty">RTTY</button>
+  </div>
+  <div id="galList"></div>
+  <div id="galView" hidden>
+    <div class="btnRow">
+      <button class="btn" id="galBack">&#8592; BACK</button>
+      <a class="btn" id="galDl" href="#" download>DOWNLOAD</a>
+    </div>
+    <div class="hint" id="galViewMeta"></div>
+    <pre id="galText"></pre>
+  </div>
+  <p class="hint" id="galNote"></p>
 </div>
 
 <div id="recordingsPanel">

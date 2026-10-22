@@ -67,6 +67,8 @@ flags_for() {
     # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
     #   slot decode finishes in a second rather than ten.
     test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22): the real DSP chain AND the real decoders, end to end.
+    test-bgdecode)         echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
     test-bm-names) echo "-O2 -I android/app/src/main/cpp" ;;
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
@@ -128,6 +130,13 @@ deps_for() {
     #    not build is not a suite that passes, it is one nobody is running. Caught 2026-09-21.
     test-fir-simd)      echo "$VDSP/ddc.cpp" ;;
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
+    # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link.
+    test-bgdecode) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $VDSP/third_party/pffft/pffft.c \
+                              android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
+                              android/app/src/main/cpp/decoders/wefax_decoder.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp \
+                              android/app/src/main/cpp/decoders/time_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
     test-fd-passing)    echo "android/app/src/main/cpp/fd_passing.cpp" ;;
@@ -189,7 +198,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes)
+    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-bgdecode)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -676,6 +685,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     old client why, a YES / no answer in 15 s lets them in, a NO holds. ~40 s, silent. Same VIBESERVER_BIN rule.
 printf '\n\033[1m── ask before tuning (end to end) ──\033[0m\n'
 node scripts/test-ask-before-tuning.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ BACKGROUND DECODING + THE GALLERY end to end (V12, 2026-10-22, NickB's NAVTEX): the last listener leaves → after the
+#     (test-shortened) wait the radio goes to the profile centre and its decoders run; a profile boundary switches; a
+#     listener arriving stops it at once and lands on the dial the radio was LEFT on; the gallery over HTTP (path
+#     traversal refused); the config API round-trips profiles and refuses overlaps / an out-of-window VFO. ~45 s, silent.
+printf '\n\033[1m── background decoding + the gallery (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ A TUNNEL WHOSE PROCESS LIVES BUT WHOSE ADDRESS IS DEAD IS REPLACED (2026-10-09, the Sony "online but not
