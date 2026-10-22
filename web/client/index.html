@@ -4798,7 +4798,8 @@ select.btn { padding: 6px 8px; }
     change the radio for everyone listening, not just for you, and Bias-T puts DC on the feedline.
     You can still see what they are set to. Enter the admin password to unlock them.
   </div>
-  <div class="mrow rtlOnly">
+  <!-- ★ rtlRspOnly: the RSP takes ppm too (SdrplaySource::setPpm, 2026-10-22) — only the HF+ (ppb), HackRF and Airspy do not. -->
+  <div class="mrow rtlRspOnly">
     <label for="ppm">PPM</label>
     <input type="range" id="ppm" min="-50" max="50" value="0">
     <span class="val" id="ppmVal">0</span>

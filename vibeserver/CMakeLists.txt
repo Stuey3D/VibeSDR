@@ -821,6 +821,11 @@ add_executable(test-sdrplay-lib "${CMAKE_CURRENT_SOURCE_DIR}/test-sdrplay-lib.cp
 target_include_directories(test-sdrplay-lib PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-sdrplay-lib)
 add_test(NAME sdrplay-lib COMMAND test-sdrplay-lib)
+# ★★ What each RSP model has (vibe_rsp_caps.h) — the table behind every panel's RSP controls, spelt out per model.
+add_executable(test-rsp-caps "${CMAKE_CURRENT_SOURCE_DIR}/test-rsp-caps.cpp")
+target_include_directories(test-rsp-caps PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-rsp-caps)
+add_test(NAME rsp-caps COMMAND test-rsp-caps)
 add_executable(test-agc-rules "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-rules.cpp")
 target_include_directories(test-agc-rules PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-agc-rules)

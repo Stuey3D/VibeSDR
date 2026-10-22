@@ -230,6 +230,8 @@ printf '\n\033[1m── setup page ──\033[0m\n'
 if node scripts/check-setup-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ The August RTL stutter fixes (gain write off modeMtx/the DSP, one transfer, the client's hwinfo
 #     signature skip) — a gain change must never again stall the audio. See check-gain-write-path.mjs.
+printf '\n\033[1m── RSP hwinfo -> controls, per model ──\033[0m\n'
+if node scripts/check-rsp-caps.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── device filters (RSP only from Android 8.0) ──\033[0m\n'
 if node scripts/check-device-filter.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── gain write path ──\033[0m\n'

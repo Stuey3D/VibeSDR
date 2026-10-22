@@ -100,6 +100,24 @@ inline bool macRunBundledService(bool bundleHasService, bool systemStack) {
     return bundleHasService && !systemStack;
 }
 
+/** ★★ WHICH ANTENNA PORT A NAME MEANS. The exact name always wins. Otherwise a name that is the START or the END of
+ *  exactly ONE port's name, at a word boundary, is that port: "Hi-Z" → "Tuner 1 Hi-Z" and "Tuner 2" → "Tuner 2 50Ω"
+ *  on a Duo, so a per-band rule written for an RSP2 ("hf:Hi-Z") still means something there. Ambiguous ("Tuner 1",
+ *  "50Ω") or unknown → "", and the caller ignores it, as it always ignored an unknown name. */
+inline std::string resolvePort(const std::vector<std::string>& ports, const std::string& name) {
+    if (name.empty()) return {};
+    for (const auto& p : ports) if (p == name) return p;
+    std::string hit;
+    int n = 0;
+    for (const auto& p : ports) {
+        if (p.size() <= name.size()) continue;
+        const bool head = p.compare(0, name.size(), name) == 0 && p[name.size()] == ' ';
+        const bool tail = p.compare(p.size() - name.size(), name.size(), name) == 0 && p[p.size() - name.size() - 1] == ' ';
+        if (head || tail) { hit = p; ++n; }
+    }
+    return n == 1 ? hit : std::string();
+}
+
 /** Android: the embedded service needs ASharedMemory_create (API 26). Below that the RSP is not offered at
  *  all — "a control that only works on one radio should not be there" applies to an OS version too. */
 inline constexpr int kAndroidMinApi = 26;

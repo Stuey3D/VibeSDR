@@ -12739,6 +12739,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onRspHdr={(v) => (client.current as any)?.rspControl?.({ hdr: v })}
           onRspAmNotch={(v) => (client.current as any)?.rspControl?.({ amNotch: v })}
           onRspExtRef={(v) => (client.current as any)?.rspControl?.({ extRef: v })}
+          // ★ The RSP's bias-T — read back from radioCaps.biasTOn like its siblings, never mirrored here.
+          onRspBiasT={(v) => (client.current as any)?.rspControl?.({ biasT: v })}
           gainCapTenthDb={hwGainCap}
           aspCurve={aspCurve}
           onAspCurve={(sens) => { setAspCurve(sens ? 'sensitivity' : 'linearity');

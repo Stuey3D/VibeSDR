@@ -3130,6 +3130,9 @@ int main(int argc, char** argv) {
             r.rawIq = next.rawIq; r.rawIqMax = next.rawIqMax; r.rawIqLanMaxHz = next.rawIqLanMaxHz; r.nbWide = next.nbWide;
             r.blockedModes = next.blockedModes;
             r.antennaPort = next.antennaPort;   // ★ a listener's/admin's socket choice — was never folded (found 2026-10-09)
+            // ★★ AND THE REST OF THE RSP SWEEP (2026-10-22, the RSP setup audit): rsp_control persisted these three,
+            //    and they were never folded into this radio's entry, so a toggle survived only until the next restart.
+            r.rspHdr = next.rspHdr; r.rspAmNotch = next.rspAmNotch; r.rspExtRef = next.rspExtRef;
             // ★ The converter travels with the rest of the per-radio set — it describes what is
             //   bolted to THIS radio's aerial, so it is saved exactly where the gain and the ppm
             //   are. Left out, the setup page would appear to accept it and lose it on save.

@@ -5,6 +5,7 @@
 #include <sdrplay_api.h>
 #include <dlfcn.h>
 #include "vibe_sdrplay_lib.h"   // ★ the which-library / whose-service decision, pure and tested
+#include "vibe_rsp_caps.h"      // ★ what each model has — one table, tested (test-rsp-caps)
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>        // _NSGetExecutablePath — finding our own bundle
 #endif
@@ -1176,34 +1177,17 @@ int SdrplaySource::lnaStateCount(double hz) const {
     }
 }
 
-bool SdrplaySource::hasRfNotch() const {
-    switch (impl_->dev.hwVer) {
-        case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID: case SDRPLAY_RSP2_ID:
-        case SDRPLAY_RSPduo_ID: case SDRPLAY_RSPdx_ID: case SDRPLAY_RSPdxR2_ID: return true;
-        default: return false;
-    }
-}
-bool SdrplaySource::hasDabNotch() const {
-    switch (impl_->dev.hwVer) {
-        case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID:
-        case SDRPLAY_RSPduo_ID: case SDRPLAY_RSPdx_ID: case SDRPLAY_RSPdxR2_ID: return true;
-        default: return false;
-    }
-}
-bool SdrplaySource::hasBiasT() const { return hasDabNotch() || impl_->dev.hwVer == SDRPLAY_RSP2_ID; }
+// ★★ EVERY "DOES THIS MODEL HAVE IT" IS ONE TABLE NOW — vibe_rsp_caps.h, tested per model (test-rsp-caps) and held
+//    to the setup page's offline copy (check-rsp-caps.mjs). The same answers as the switches that were here.
+static_assert(SDRPLAY_RSP1_ID == rspcaps::kRsp1 && SDRPLAY_RSP1A_ID == rspcaps::kRsp1A && SDRPLAY_RSP1B_ID == rspcaps::kRsp1B
+           && SDRPLAY_RSP2_ID == rspcaps::kRsp2 && SDRPLAY_RSPduo_ID == rspcaps::kRspDuo
+           && SDRPLAY_RSPdx_ID == rspcaps::kRspDx && SDRPLAY_RSPdxR2_ID == rspcaps::kRspDxR2,
+              "vibe_rsp_caps.h's hwVer codes must be the API's");
+bool SdrplaySource::hasRfNotch() const  { return rspcaps::forHwVer(impl_->dev.hwVer).rfNotch; }
+bool SdrplaySource::hasDabNotch() const { return rspcaps::forHwVer(impl_->dev.hwVer).dabNotch; }
+bool SdrplaySource::hasBiasT() const    { return rspcaps::forHwVer(impl_->dev.hwVer).biasT; }
 
-std::string SdrplaySource::model() const {
-    switch (impl_->dev.hwVer) {
-        case SDRPLAY_RSP1_ID:    return "RSP1";
-        case SDRPLAY_RSP1A_ID:   return "RSP1A";
-        case SDRPLAY_RSP1B_ID:   return "RSP1B";
-        case SDRPLAY_RSP2_ID:    return "RSP2";
-        case SDRPLAY_RSPduo_ID:  return "RSPduo";
-        case SDRPLAY_RSPdx_ID:   return "RSPdx";
-        case SDRPLAY_RSPdxR2_ID: return "RSPdx-R2";
-        default:                 return "RSP";
-    }
-}
+std::string SdrplaySource::model() const { return rspcaps::forHwVer(impl_->dev.hwVer).model; }
 
 /** ★★★ THE TUNER'S DC OFFSET IS GAIN-DEPENDENT, SO IT MUST BE RECALIBRATED WHEN THE GAIN MOVES.
  *  The API corrects DC for us — DCenable and IQenable are both set, and dcCal defaults to 3
@@ -1621,9 +1605,7 @@ void SdrplaySource::setBiasT(bool on) {
  *  The remainder of the sweep. Every one existed in the API with no path to it from anywhere in
  *  this project. ✗ None is testable here — only RSP1A/1B on the bench.
  */
-bool SdrplaySource::hasHdr() const {
-    return impl_->dev.hwVer == SDRPLAY_RSPdx_ID || impl_->dev.hwVer == SDRPLAY_RSPdxR2_ID;
-}
+bool SdrplaySource::hasHdr() const { return rspcaps::forHwVer(impl_->dev.hwVer).hdr; }
 
 void SdrplaySource::setHdr(bool on) {
     if (!hasHdr() || !impl_->params || !impl_->params->devParams) return;
@@ -1635,7 +1617,7 @@ void SdrplaySource::setHdr(bool on) {
     std::fprintf(stderr, "sdrplay: HDR %s\n", on ? "on" : "off");
 }
 
-bool SdrplaySource::hasAmNotch() const { return impl_->dev.hwVer == SDRPLAY_RSPduo_ID; }
+bool SdrplaySource::hasAmNotch() const { return rspcaps::forHwVer(impl_->dev.hwVer).amNotch; }
 
 void SdrplaySource::setAmNotch(bool on) {
     if (!hasAmNotch() || !impl_->params || !impl_->params->rxChannelA) return;
@@ -1646,9 +1628,7 @@ void SdrplaySource::setAmNotch(bool on) {
                             sdrplay_api_Update_Ext1_None);
 }
 
-bool SdrplaySource::hasExtRefOut() const {
-    return impl_->dev.hwVer == SDRPLAY_RSP2_ID || impl_->dev.hwVer == SDRPLAY_RSPduo_ID;
-}
+bool SdrplaySource::hasExtRefOut() const { return rspcaps::forHwVer(impl_->dev.hwVer).extRef; }
 
 void SdrplaySource::setExtRefOut(bool on) {
     if (!hasExtRefOut() || !impl_->params || !impl_->params->devParams) return;
@@ -1686,6 +1666,8 @@ void SdrplaySource::setPpm(int ppm) {
  *  family, and every caller — the caps, the UI, the per-band rules — is driven by that list.
  */
 std::vector<std::string> SdrplaySource::antennaPorts() const {
+    return rspcaps::forHwVer(impl_->dev.hwVer).ports;   // ★ the table; the notes below say why each model's are what they are
+#if 0
     switch (impl_->dev.hwVer) {
         /* ★ A and B are 50Ω sockets; Hi-Z is the high-impedance AM port, which the API selects
          *  through amPortSel rather than antennaSel — a different field, same control to a user. */
@@ -1703,19 +1685,26 @@ std::vector<std::string> SdrplaySource::antennaPorts() const {
         case SDRPLAY_RSPduo_ID:  return { "Tuner 1 50\u03a9", "Tuner 1 Hi-Z", "Tuner 2 50\u03a9" };
         default:                 return {};
     }
+#endif
 }
 
 std::string SdrplaySource::antenna() const {
-    if (antennaPorts().empty()) return "";
-    return antenna_.empty() ? "A" : antenna_;      // A is every model's power-on default
+    const auto ports = antennaPorts();
+    if (ports.empty()) return "";
+    // ★ The FIRST port is every model's power-on default — "A" on an RSP2/dx, "Tuner 1 50Ω" on a Duo. This said "A"
+    //   for all of them, which on a Duo is not a port at all, so its selector came up with nothing chosen (2026-10-22).
+    return antenna_.empty() ? ports.front() : antenna_;
 }
 
-void SdrplaySource::setAntenna(const std::string& port) {
+void SdrplaySource::setAntenna(const std::string& wanted) {
     const auto ports = antennaPorts();
     if (ports.empty()) return;                     // single-socket radio: nothing to choose
     // ★ An unknown name is ignored rather than guessed at. The caller in the shim logs the
     //   choice and the ports the radio offers, which is where a mismatch is legible.
-    if (std::find(ports.begin(), ports.end(), port) == ports.end()) return;
+    // ★★ BUT A SHORT NAME THAT NAMES EXACTLY ONE PORT IS THAT PORT (sdrplaylib::resolvePort): a per-band rule
+    //    written "hf:Hi-Z" for an RSP2 now also finds "Tuner 1 Hi-Z" on a Duo, and "Tuner 2" its only socket.
+    const std::string port = sdrplaylib::resolvePort(ports, wanted);
+    if (port.empty()) return;
     antenna_ = port;                               // remembered across a re-Init — see the member
     if (!impl_->params || !impl_->params->rxChannelA) return;
     /* ★★★ UNDER api_mtx, LIKE EVERY OTHER API-TOUCHING CALL. close(), setFrequency and the gain

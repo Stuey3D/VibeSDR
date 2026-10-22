@@ -15265,25 +15265,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (jsonNum(msg, "extref", v)) { LocalSdrShim::instance().setRspExtRef(v != 0);
                                              vsPersist(std::string("{\"rspExtRef\":") + (v != 0 ? "true" : "false") + "}");
                                              LocalSdrShim::instance().broadcastHwInfo(); }
-            if (jsonNum(msg, "rfnotch", v))  { LocalSdrShim::instance().setRfNotch(v != 0);
-                                               vsPersist(std::string("{\"rfNotch\":") + (v != 0 ? "true" : "false") + "}"); }
-            if (jsonNum(msg, "dabnotch", v)) { LocalSdrShim::instance().setDabNotch(v != 0);
-                                               vsPersist(std::string("{\"dabNotch\":") + (v != 0 ? "true" : "false") + "}"); }
             /* ★★★ AND WHO IS ALLOWED TO. Two reasons a notch toggle must be refused here rather
              *  than merely hidden in the UI: AUTO owns these filters while it is on (a listener's
              *  flip would be undone at the next retune, which reads as a broken control), and an
              *  owner may simply not want listeners touching the front end of a shared radio.
              *  ★ Refused with a REASON, never silently — a control that does nothing and says
              *    nothing is the fault this project keeps having to fix. */
-            if ((jsonNum(msg, "rfnotch", v) || jsonNum(msg, "dabnotch", v))
-                && (vsAutoNotchOn() || !vsUserNotchAllowed()))
+            /* ★★ REFUSE FIRST, THEN APPLY (2026-10-22). The toggles used to be applied AND persisted a few lines
+             *    above this check, so the refusal was a notice about a change that had already happened: on a
+             *    receiver whose owner had reserved the notches a listener's flip still landed (and was saved). */
+            const bool notchAsked = jsonNum(msg, "rfnotch", v) || jsonNum(msg, "dabnotch", v);
+            if (notchAsked && (vsAutoNotchOn() || !vsUserNotchAllowed())) {
                 sendText(sock, vsAutoNotchOn()
                     ? "{\"type\":\"notice\",\"why\":\"the notches are on automatic \xe2\x80\x94 "
                       "this receiver sets them from the tuned frequency\"}"
                     : "{\"type\":\"notice\",\"why\":\"the server owner has reserved the notch filters\"}");
-            // ★ The RSP has its own bias-T, and it is the same hazard as the dongle's.
-            if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
+            } else if (notchAsked) {
+                if (jsonNum(msg, "rfnotch", v))  { LocalSdrShim::instance().setRfNotch(v != 0);
+                                                   vsPersist(std::string("{\"rfNotch\":") + (v != 0 ? "true" : "false") + "}"); }
+                if (jsonNum(msg, "dabnotch", v)) { LocalSdrShim::instance().setDabNotch(v != 0);
+                                                   vsPersist(std::string("{\"dabNotch\":") + (v != 0 ? "true" : "false") + "}"); }
+            }
+            // ★ The RSP has its own bias-T, and it is the same hazard as the dongle's. ★★ Persisted as the radio's
+            //   `biasT` (2026-10-22) — it was set and forgotten, so a restart put the feedline back to whatever the
+            //   setup page last said — and the new state broadcast, so every panel shows what the radio is doing.
+            if (jsonNum(msg, "biast", v) && adminGate("bias-T")) {
                 LocalSdrShim::instance().setBiasT(v != 0);
+                vsPersist(std::string("{\"biasT\":") + (v != 0 ? "true" : "false") + "}");
+                LocalSdrShim::instance().broadcastHwInfo();
+            }
             return;
         }
         /* ── DAB (experimental) ─────────────────────────────────────────────────────────────
@@ -18526,6 +18536,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const int n = (rsp && !lost) ? LocalSdrShim::instance().rfGainPositions() : 0;
                 j += ",\"lnaStates\":" + std::to_string(n);
             }
+            /* ★★★ AND WHAT THIS RSP MODEL HAS (2026-10-22, the RSP setup audit). The page drew HDR, the AM notch
+             *     and the 24 MHz reference for EVERY RSP and its antenna card never at all, because this endpoint
+             *     carried none of the capabilities the listener's hwinfo does. Now it carries the SAME object
+             *     (`radio`, radioCapsJson — one writer for both), so the page shows each control only on the models
+             *     that have it, with its current state, and the antenna card gets its list of ports. */
+            if (rsp && !lost) j += LocalSdrShim::instance().radioCapsJson();
             j += ",\"bands\":[";
             {
                 const auto& bs = vibebands::namedBands();
@@ -29034,6 +29050,17 @@ int LocalSdrShim::start(int fd, int vid, int pid,
         return startAirspyHfFd(fd, centerFreq, sampleRate, gainTenthDb,
                                fftSize, fftRate, mode, err);
     }
+    /* ★★★ AND AN SDRplay RSP (0x1df7, every model — 2026-10-22), through OpenRSP's EMBEDDED service. The fd is NOT
+     *     opened here: the app has already handed it to the service (VibeRsp.attach → SdrplaySource::androidAttach),
+     *     which owns the device from then on — uploads its firmware, waits for it to come back as a NEW USB device
+     *     (the app attaches that one too) and claims it. What we open is the API's device list, exactly as on a Pi.
+     *  ★ Index 0: the app attaches only the RSP it is serving (and that same radio after its re-enumeration).
+     *  ★ Five copies of "which driver is this" must agree: this, VibeLocalSdrModule's when-blocks, VibeRsp.RSP_PIDS,
+     *    res/xml-v26/device_filter.xml, and isServableRadio. */
+    if (vid == 0x1df7) {
+        (void)fd; (void)pid;
+        return startSdrplay(0, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, mode, err);
+    }
     /* ★ AND A HACKRF, down the same pipe for the same reason. 0x1d50:0x6089 is the HackRF One;
      *   the Jawbreaker and rad1o prototypes have their own ids and are NOT claimed here, because
      *   nothing about this driver has been tested against them. Mirrored in Kotlin
@@ -32853,6 +32880,20 @@ void LocalSdrShim::setBiasTee(bool on) {
         LOGI("bias-tee (Airspy): %s", on ? "ON — DC on the feedline" : "off");
         return;
     }
+    /* ★★★ AND THE SDRplay RSP (2026-10-22) — the same "else means dongle" hole, found by the RSP audit. The
+     *   setup page's Bias-T switch and the server's start-up `biasT` from the config both arrive HERE, and on an
+     *   RSP `p->dev` is null, so they were "remembered" and never written: the owner's setting did nothing. Routed
+     *   to setBiasT (kept in g_dsp, replayed on a reopen). A model without one (the RSP1) is told nothing at all,
+     *   and its panels draw no switch (hwinfo biasT:false). */
+    if (p->useSdrplay()) {
+        if (p->sdrp && p->sdrp->hasBiasT()) {
+            setBiasT(on);
+            LOGI("bias-tee (RSP): %s", on ? "ON — DC on the feedline" : "off");
+        } else {
+            LOGI("bias-tee ignored — this RSP model has none");
+        }
+        return;
+    }
     /* ★ Remembered BEFORE the device check, so an early call survives to be applied at open. */
     g_biasTeeWant.store(on ? 1 : 0, std::memory_order_relaxed);
     if (!p->dev) {
@@ -33933,7 +33974,10 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
     // ★★ AND WHETHER IT IS ON. Only the CAPABILITY was ever published, so a receiver could sit
     //    there with DC on its feedline and no screen anywhere would say so — which is exactly how
     //    one did (2026-08-08). A control you cannot read the state of is not a control.
-    j += std::string(",\"biasTOn\":") + (g_biasTeeOn.load() ? "true" : "false");
+    /* ★★ THE RSP's OWN STATE, NOT THE DONGLE'S (2026-10-22). This read g_biasTeeOn — the RTL path's flag, which
+     *    nothing on an RSP ever sets — so every RSP said "off" whatever DC was on its feedline. The RSP's bias-T is
+     *    kept in g_dsp.rspBiasT (setBiasT below, replayed on every reopen); only top-level `rspBiasT` had it right. */
+    j += std::string(",\"biasTOn\":") + (d.hasBiasT() && g_dsp.rspBiasT.load() > 0 ? "true" : "false");
     /* ★★★ WHAT THIS PARTICULAR RSP HAS, AND WHERE IT IS SET — GitHub #29. The client draws from
      *  this list and nothing else, so a single-socket radio (every RSP1) publishes an empty
      *  `antennas` and no selector appears anywhere. That is what keeps the new control off the

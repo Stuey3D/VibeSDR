@@ -1582,7 +1582,7 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <div id="hwPpm" class="hide">
         <label><span class="lbl">Frequency correction (ppm)</span>
           <input type="number" id="ppm" step="1" placeholder="0"></label>
-        <p class="why">Corrects a dongle whose crystal is slightly off. 0 unless you have measured it.</p>
+        <p class="why">Corrects a radio whose crystal is slightly off. 0 unless you have measured it.</p>
       </div>
       <!-- ★★★ AN UP/DOWN-CONVERTER IN FRONT OF THE AERIAL, and it is a SERVER setting for the
            reason the hint spells out: every listener on this radio is behind the same box, so the
@@ -3373,7 +3373,9 @@ const DRIVER_HW = {
   //    owner got wrong.
   airspyhf: { rates: [912000],
               biasT: false, rfNotch: false, lnaState: false },
-  sdrplay:  { rates: [2000000, 3000000, 4000000, 5000000, 6000000, 8000000, 10000000],
+  /* ★ The server's own list (supportedRates in the shim: 2 – 8 MS/s). 10 MS/s was offered here and nowhere else —
+   *   the radio refused it at the hardware and the owner saw a broken receiver (RSP audit, 2026-10-22). */
+  sdrplay:  { rates: [2000000, 2048000, 3000000, 4000000, 5000000, 6000000, 8000000],
               biasT: true,  rfNotch: true,  lnaState: true },
   /* ★★ HackRF — EXPERIMENTAL. The floor is the hardware's own 2 MSPS, which is ABOVE where an
    *    RTL dongle is usually run here, so a HackRF costs more DSP than any other supported radio
@@ -3391,6 +3393,33 @@ const DRIVER_HW = {
   airspy:   { rates: [2500000, 3000000, 6000000, 10000000],
               biasT: true,  rfNotch: false, lnaState: false },
 };
+
+/** ★★★ WHAT THIS PARTICULAR RSP HAS (2026-10-22). The RSP family does not share a front end: the RSP1 has no
+ *  notches and no bias-T, HDR is the dx family's, the AM notch the Duo's, the 24 MHz reference the RSP2's and the
+ *  Duo's. The page drew all of them for every RSP. Now: the RADIO's own answer when its process is running
+ *  (hw.radio — the same capability object the listener panels read), else the MODEL from the radio's name, which is
+ *  how the driver names it ("SDRplay RSPdx-R2 1234"), else — no way to tell — everything, as before, with the
+ *  radio refusing what it does not have. Mirrors SdrplaySource::has*() in sdrplay_source.cpp.
+ *  ★ AGENTS.md: "a control that only works on one radio should not be there". */
+function rspCaps(hw, r) {
+  const live = hw && hw.radio && hw.radio.driver === "sdrplay" ? hw.radio : null;
+  if (live) return { known: true, model: live.model || "", rfNotch: !!live.rfNotch, dabNotch: !!live.dabNotch,
+                     biasT: !!live.biasT, hdr: !!live.hdr, amNotch: !!live.amNotch, extRef: !!live.extRef,
+                     antennas: Array.isArray(live.antennas) ? live.antennas : [] };
+  const name = String((r && (r.label || r.name || r.model)) || "");
+  const m = /RSP\s*dx-?R2/i.test(name) ? "RSPdx-R2" : /RSP\s*dx/i.test(name) ? "RSPdx"
+          : /RSP\s*duo/i.test(name) ? "RSPduo" : /RSP\s*2/i.test(name) ? "RSP2"
+          : /RSP\s*1\s*B/i.test(name) ? "RSP1B" : /RSP\s*1\s*A/i.test(name) ? "RSP1A"
+          : /RSP\s*1(?![0-9AB])/i.test(name) ? "RSP1" : "";
+  if (!m) return { known: false, model: "", rfNotch: true, dabNotch: true, biasT: true, hdr: true, amNotch: true,
+                   extRef: true, antennas: [] };
+  const dx = m === "RSPdx" || m === "RSPdx-R2";
+  return { known: true, model: m,
+           rfNotch: m !== "RSP1", dabNotch: m !== "RSP1" && m !== "RSP2", biasT: m !== "RSP1",
+           hdr: dx, amNotch: m === "RSPduo", extRef: m === "RSP2" || m === "RSPduo",
+           antennas: m === "RSP2" ? ["A", "B", "Hi-Z"] : dx ? ["A", "B", "C"]
+                   : m === "RSPduo" ? ["Tuner 1 50\u03a9", "Tuner 1 Hi-Z", "Tuner 2 50\u03a9"] : [] };
+}
 
 /* ★★★ ONLY THE GOVERNORS THIS MACHINE HAS (2026-10-19). The Lenovo's intel_pstate offers performance and powersave; the
  *  menu offered schedutil anyway, the save "worked", vibeserver-governor rightly refused it, and the page went on showing
@@ -3514,6 +3543,15 @@ async function renderHw() {
   // ★ Only the sliders are re-wired, not the whole card: renderGain() rewrites the gain boxes from
   //   the stored config, which would wipe a figure the owner was part-way through typing.
   HW = hw;
+  /* ★★★ THE RSP's SOCKETS, FROM THE RADIO (2026-10-22). The antenna card and the per-band socket pickers read
+   *     r.antennas, which nothing ever filled — so neither appeared on any RSP. The radio's own list when it is
+   *     running, the model's when it is not (rspCaps). Not saved: it describes the hardware, not a setting. */
+  if (((hw && hw.driver) || r.driver) === "sdrplay") {
+    const ports = rspCaps(hw, r).antennas;
+    if (ports.length) Object.defineProperty(r, "antennas", { value: ports, enumerable: false, configurable: true, writable: true });
+    paintAntPortCard();
+    renderAntBands();
+  }
   // ★ Where THIS tab's radio answers — the DAB landing's scan must reach the radio, not the door.
   HW_PREFIX = mine ? "" : "/r/" + encodeURIComponent(r.serial || "");
   dabLandRender();
@@ -3548,8 +3586,11 @@ async function renderHw() {
     const cap = DRIVER_HW[(hw && hw.driver) || r.driver] || {};
     const drv = (hw && hw.driver) || r.driver || "";
     const show = (id, yes) => { const e = $(id); if (e) e.classList.toggle("hide", !yes); };
-    show("hwBiasT", !!cap.biasT);
-    show("hwPpm",   drv === "rtl" || drv === "rtlsdr");
+    // ★ An RSP's bias-T is per MODEL (none on the RSP1) — rspCaps; every other driver's is the driver's.
+    show("hwBiasT", drv === "sdrplay" ? rspCaps(hw, r).biasT : !!cap.biasT);
+    // ★★ ppm on an RSP too (2026-10-22): the server has always applied it (SdrplaySource::setPpm, on devParams), and
+    //    this page, the app and the browser all hid it as a dongle-only setting.
+    show("hwPpm",   drv === "rtl" || drv === "rtlsdr" || drv === "sdrplay");
     show("hwSerial", drv === "rtl" || drv === "rtlsdr");
     // ★ FROM WHAT WE ALREADY KNOW, not from the status request. It was filled inside that fetch,
     //   so any failure or 401 left the box blank while the dialog — which reads the radio directly
@@ -3650,31 +3691,38 @@ async function renderHw() {
         <em>starting</em> state &mdash; the receiver sets them from the frequency being received
         from the first retune onward. Untick it below to control them by hand.</div>
 
-      <!-- ★★★ THE REST OF THE dx FAMILY'S FRONT END. These are the same class of switch as the two
+      <!-- ★★★ THE REST OF THE RSP FRONT END. These are the same class of switch as the two
            notches above and are persisted in the same config, but only the app and the browser
            could reach them: the owner had no way to say what a receiver should come up with.
-           ★ Shown to every RSP, because this page is written once for the driver and the RADIO is
-             the thing that refuses what it does not have — the live panels hide what is absent. -->
+           ★★ EACH ROW ONLY ON THE MODELS THAT HAVE IT (rspCaps, 2026-10-22). They were shown to every
+              RSP, and the AM notch was labelled the dx family's when the server only ever applied it on
+              the RSPduo (SdrplaySource::hasAmNotch) — so a dx owner ticked a box that did nothing. -->
+      <div id="rspAmNotchRow">
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="rspAmNotch" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Medium-wave notch (RSPdx family)</span></label>
-      <div class="hint">A separate filter from the broadcast notch above, on the dx and dx-R2 only:
-        it cuts the medium-wave band ahead of the tuner. Useful on a wire antenna after dark, when
+        <span>AM broadcast notch (RSPduo)</span></label>
+      <div class="hint">A separate filter from the broadcast notch above, on the RSPduo's Hi-Z port (tuner 1):
+        it cuts the medium-wave broadcast band ahead of the tuner. Useful on a wire antenna after dark, when
         a local MW transmitter is what is overloading the front end. <b>Never on to listen to MW</b>
         &mdash; it removes exactly that.</div>
+      </div>
 
+      <div id="rspHdrRow">
       <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
         <input type="checkbox" id="rspHdr" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>HDR mode below 2 MHz (RSPdx family)</span></label>
       <div class="hint">The high dynamic range path, which the hardware handles itself. It is for
         exactly the case a long wire creates on medium wave and below: several strong broadcast
         signals at once, where the front end runs out of headroom before any one of them is loud.</div>
+      </div>
 
+      <div id="rspExtRefRow">
       <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
         <input type="checkbox" id="rspExtRef" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>24 MHz reference output</span></label>
+        <span>24 MHz reference output (RSP2, RSPduo)</span></label>
       <div class="hint">Puts this radio's clock out on the reference connector, for locking a second
         receiver to it. Leave it off unless something is plugged into that socket.</div>
+      </div>
 
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="rspDabDecim" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -3772,6 +3820,17 @@ async function renderHw() {
 
       <div class="hint">The RSP manages its own gain by default. To set it by hand, see the note
         below.</div>`;
+    {
+      // ★ Model-gated rows — see rspCaps. The RSP1 has no notches at all, so its owner sees neither.
+      const c = rspCaps(hw, r);
+      const vis = (id, yes) => { const e = $(id); if (e) e.style.display = yes ? "" : "none"; };
+      vis("rspAmNotchRow", c.amNotch); vis("rspHdrRow", c.hdr); vis("rspExtRefRow", c.extRef);
+      for (const [box, yes] of [["rfNotch", c.rfNotch], ["dabNotch", c.dabNotch]]) {
+        const lab = $(box) && $(box).closest("label");
+        if (lab) { lab.style.display = yes ? "" : "none";
+                   const h = lab.nextElementSibling; if (h && h.classList.contains("hint")) h.style.display = yes ? "" : "none"; }
+      }
+    }
   } else if (drv === "airspyhf") {
     el.innerHTML = `<p class="hint">The Airspy HF+ has no variable gain &mdash; it manages its own
       attenuator and preamp &mdash; so there is nothing to set here.</p>`;
@@ -4536,6 +4595,22 @@ function antBandRemove(r, list, i) {
   antCommit(r);
 }
 
+/** ★ The aerial card — painted when the tab is drawn AND again once the radio has said which sockets it has. */
+function paintAntPortCard() {
+  if (!$("antPortCard") || curRadio < 0) return;
+  const r = radio();
+  const ports = Array.isArray(r.antennas) ? r.antennas : [];
+  $("antPortCard").style.display = ports.length > 1 ? "" : "none";
+  if ($("antPortsNote")) $("antPortsNote").textContent = ports.length > 1
+    ? "This radio has " + ports.length + " sockets: " + ports.join(", ") + "."
+      + (r.driver === "sdrplay" && ports.some(p => /^Tuner /.test(p))
+         ? " On an RSPduo each is a tuner, so a change restarts the radio for a moment; a rule may say just \u201cHi-Z\u201d or \u201cTuner 2\u201d."
+         : "")
+    : "";
+  if ($("antennaMap")) $("antennaMap").value = r.antennaMap || "";
+  if ($("antennaPortLocked")) $("antennaPortLocked").checked = !!r.antennaPortLocked;
+}
+
 function renderAntBands() {
   const hostR = $("antRanges"), hostF = $("antFilters");
   if (!hostR || !hostF || curRadio < 0) return;
@@ -4703,15 +4778,7 @@ function fill() {
   paintRadioPinCard();
   /* ★ The aerial card follows the RADIO, not the driver name: `antennas` is the list the engine
    *  publishes from the hardware, so an RSP1 (one socket) and every dongle draw nothing. */
-  if ($("antPortCard")) {
-    const ports = Array.isArray(r.antennas) ? r.antennas : [];
-    $("antPortCard").style.display = ports.length > 1 ? "" : "none";
-    if ($("antPortsNote")) $("antPortsNote").textContent = ports.length > 1
-      ? "This radio has " + ports.length + " sockets: " + ports.join(", ") + "."
-      : "";
-    if ($("antennaMap")) $("antennaMap").value = r.antennaMap || "";
-    if ($("antennaPortLocked")) $("antennaPortLocked").checked = !!r.antennaPortLocked;
-  }
+  paintAntPortCard();
   if ($("radioPin")) {
     const pinSet = !!(r.pin || "").length;
     $("radioPin").value = "";
@@ -5172,8 +5239,9 @@ function collectRadio() {
     //     had just left: a dongle could be sent a ppb it can never use, and an Airspy a ppm. The
     //     driver is in the config and is true the instant the tab changes, which is the whole
     //     point of deriving a thing from data rather than from the DOM's current mood.
-    ...(DRIVER_HW[drv] && DRIVER_HW[drv].biasT ? {biasT: $("biasT").checked} : {}),
-    ...(drv === "rtl" || drv === "rtlsdr" ? {ppm: parseInt($("ppm").value || "0", 10)} : {}),
+    ...(drv === "sdrplay" ? (rspCaps(HW, radio()).biasT ? {biasT: $("biasT").checked} : {})
+       : DRIVER_HW[drv] && DRIVER_HW[drv].biasT ? {biasT: $("biasT").checked} : {}),
+    ...(drv === "rtl" || drv === "rtlsdr" || drv === "sdrplay" ? {ppm: parseInt($("ppm").value || "0", 10)} : {}),
     ...(drv === "airspyhf" ? {ppb: parseInt($("ppb").value || "0", 10)} : {}),
     releaseWhenIdle: $("releaseWhenIdle").checked,
     idleGrace: parseFloat($("idleGrace").value),

@@ -1035,7 +1035,10 @@ export abstract class VibeServerWsClient {
                    *  index: an index would mean this end and the radio agreeing on an ordering,
                    *  which is the sort of pact that survives until a model with four ports.
                    *  ★ hdr/amNotch/extRef are plain toggles the hardware handles. */
-                  antenna?: string; hdr?: boolean; amNotch?: boolean; extRef?: boolean }) {
+                  antenna?: string; hdr?: boolean; amNotch?: boolean; extRef?: boolean;
+                  /** ★ The RSP's own bias-T (2026-10-22): wire key `biast`, admin only on the server. There was
+                   *  no key here at all, so the app had no way to power an aerial on an RSP. */
+                  biasT?: boolean }) {
     const m: Record<string, unknown> = { type: 'rsp_control' };
     if (o.lna      !== undefined) m.lna      = o.lna;
     if (o.ifgr     !== undefined) m.ifgr     = o.ifgr;
@@ -1055,6 +1058,7 @@ export abstract class VibeServerWsClient {
     if (o.hdr      !== undefined) m.hdr      = o.hdr ? 1 : 0;
     if (o.amNotch  !== undefined) m.amnotch  = o.amNotch ? 1 : 0;
     if (o.extRef   !== undefined) m.extref   = o.extRef ? 1 : 0;
+    if (o.biasT    !== undefined) m.biast    = o.biasT ? 1 : 0;
     this._sendCtl(m);
   }
 

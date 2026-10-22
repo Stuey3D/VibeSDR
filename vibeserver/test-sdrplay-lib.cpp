@@ -89,6 +89,20 @@ int main() {
     ok(!insideBundleFrameworks(ct + "/Frameworks/", ct), "the directory itself: refused");
     ok(!insideBundleFrameworks(ct + "/Frameworks/x.so", ""), "no bundle at all: refused");
 
+    printf("\nAntenna names: exact first, then a short name that means exactly one port\n");
+    const std::vector<std::string> duo = {"Tuner 1 50\u03a9", "Tuner 1 Hi-Z", "Tuner 2 50\u03a9"};
+    const std::vector<std::string> rsp2 = {"A", "B", "Hi-Z"}, dx = {"A", "B", "C"};
+    ok(resolvePort(rsp2, "Hi-Z") == "Hi-Z", "RSP2: Hi-Z is Hi-Z");
+    ok(resolvePort(duo, "Hi-Z") == "Tuner 1 Hi-Z", "Duo: an RSP2-style rule 'Hi-Z' finds Tuner 1 Hi-Z");
+    ok(resolvePort(duo, "Tuner 2") == "Tuner 2 50\u03a9", "Duo: 'Tuner 2' is its only socket");
+    ok(resolvePort(duo, "Tuner 1").empty(), "Duo: 'Tuner 1' is two ports — ambiguous, ignored");
+    ok(resolvePort(duo, "50\u03a9").empty(), "Duo: '50Ω' is two ports — ambiguous, ignored");
+    ok(resolvePort(duo, "Tuner 1 Hi-Z") == "Tuner 1 Hi-Z", "Duo: the full name, exactly");
+    ok(resolvePort(dx, "C") == "C" && resolvePort(dx, "D").empty(), "dx: C is C, D is nothing");
+    ok(resolvePort(dx, "Hi-Z").empty(), "dx: no Hi-Z port, so a Hi-Z rule changes nothing");
+    ok(resolvePort({}, "A").empty(), "a single-socket radio: nothing to choose");
+    ok(resolvePort(duo, "Z").empty() && resolvePort(duo, "").empty(), "not a word-boundary match, or empty: nothing");
+
     printf("\nAndroid: the RSP needs API 26 (ASharedMemory_create)\n");
     ok(!androidRspSupported(21), "API 21 (Lite's floor, a Fire 7): not offered");
     ok(!androidRspSupported(25), "API 25: not offered");

@@ -250,9 +250,9 @@ public:
      *  ★★ NAMES ARE THE ONES PRINTED ON THE CASE — "A", "B", "C", "Hi-Z" — because the owner is
      *     looking at the box while they choose. They are also what travels on the wire and what
      *     a per-band rule is written in ("hf:Hi-Z, vhf:A"), so they must stay stable.
-     *  ★ The RSPduo is deliberately absent: its "antenna" is a TUNER SWAP (and Hi-Z lives on
-     *    tuner 1 only), which is a different operation from writing a field and re-Updating.
-     *    An empty list draws nothing, which is the honest answer until that is built and testable.
+     *  ★ The RSPduo's "antenna" is a TUNER SWAP (and Hi-Z lives on tuner 1 only): "Tuner 1 50Ω",
+     *    "Tuner 1 Hi-Z", "Tuner 2 50Ω", chosen before SelectDevice in SINGLE-TUNER mode, so a change
+     *    re-opens the radio (setAntenna). Dual-tuner (two radios from one Duo) is not offered.
      *  ✗ UNTESTED ON HARDWARE — nobody here owns a multi-antenna RSP (Stuart, 2026-09-24: "I will
      *    not be able to test this myself though as all my SDR's are single antenna modes"). */
     /* ── ★★ THE REST OF WHAT AN RSP HAS ──────────────────────────────────────────────────────

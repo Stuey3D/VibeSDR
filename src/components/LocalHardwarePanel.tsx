@@ -1053,6 +1053,32 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.radio?.extRefOn ? K.gold : '#ccc'} />
                 </View>
               )}
+              {/* ★★★ BIAS-T AND PPM ON AN RSP (2026-10-22, the RSP setup audit). The server always took both
+                  (rsp_control `biast`, admin-gated; `{type:"ppm"}` → SdrplaySource::setPpm), and this panel
+                  only ever drew them for a dongle — so an RSP owner could not power an active aerial or
+                  correct the clock from the app at all. Same gate as the dongle's rows (canProtected: owner /
+                  unlocked), and bias-T only on a model that HAS one (radio.biasT — never on an RSP1). The
+                  state is the RADIO's (radio.biasTOn), never this phone's guess. */}
+              {canProtected && p.radio?.biasT && (
+                <View style={styles.toggleRow}>
+                  <Text style={styles.toggleLabel}>Bias-T (antenna power)</Text>
+                  {p.radio?.biasTOn === undefined
+                    ? <Text style={styles.note}>not reported</Text>
+                    : <Switch value={!!p.radio?.biasTOn}
+                        onValueChange={(v) => p.onRspBiasT?.(v)}
+                        trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.radio?.biasTOn ? K.gold : '#ccc'} />}
+                </View>
+              )}
+              {canProtected && p.ppm !== undefined && (
+                <>
+                  <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
+                  <View style={styles.stepperRow}>
+                    <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) - 1)) && kbNav && { borderColor: focusC.ring, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+                    <Text style={styles.stepVal}>{p.ppm > 0 ? `+${p.ppm}` : p.ppm} ppm</Text>
+                    <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) + 1)) && kbNav && { borderColor: focusC.ring, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+                  </View>
+                </>
+              )}
             </>
           ) : isAsp ? (
             <>
