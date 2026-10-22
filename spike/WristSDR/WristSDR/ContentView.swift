@@ -551,6 +551,22 @@ link.setAutoContrast(wfAutoContrast)
           .padding(.bottom, 2)
           .transition(.opacity)
         }
+        /* ★★★ AN ICOM TRANSMITTING, OR NOT ANSWERING — state, not an advisory, so not dismissible: it goes when the
+         *  radio says so. The server has already muted the audio and frozen the waterfall during TX; without this
+         *  the silence reads as a fault. The app's and the browser's words (IcomRadio.banner). */
+        if let ic = link.icom, !ic.banner.isEmpty {
+          HStack(alignment: .top, spacing: 5) {
+            Image(systemName: ic.tx ? "dot.radiowaves.left.and.right" : "cable.connector.slash")
+              .font(.system(size: 11, weight: .bold))
+            Text(ic.banner).font(.system(size: 11, weight: .medium)).multilineTextAlignment(.leading)
+          }
+          .foregroundStyle(.white)
+          .padding(.horizontal, 10).padding(.vertical, 6)
+          .background((ic.tx ? Color.red : Color.orange).opacity(0.9), in: RoundedRectangle(cornerRadius: 10))
+          .padding(.bottom, 2)
+          .accessibilityElement(children: .combine)
+          .transition(.opacity)
+        }
         // Heavy-server advisory — non-fatal, dismissible. Only appears on the phone relay with a
         // cranked server (see SpikeLink.bandwidthWarning). Tap to dismiss; re-arms if it clears.
         if let warn = link.bandwidthWarning, !bwDismissed {
@@ -625,7 +641,11 @@ link.setAutoContrast(wfAutoContrast)
          *  dial refuses to open the pad and says where the arm switch is instead. */
         Button {
           guard !locked else { return }
-          if let v = link.vibe, v.sharedDial, !v.canTune {
+          // ★ An Icom under the owner lock: the pad would take the digits and the tune would be refused — say who
+          //   tunes it instead, in the same words as a crown turn.
+          if link.vibe?.icomFollowLocked == true {
+            link.notify(IcomRadio.followNote, for: 3)
+          } else if let v = link.vibe, v.sharedDial, !v.canTune {
             link.notify("Tuning locked \u{2014} arm it on the chat page first", for: 3)
           } else {
             showNumpad = true
@@ -2240,7 +2260,11 @@ link.setAutoContrast(wfAutoContrast)
      * ★ Band name is what it displaces, and that is the right trade — knowing WHY the waterfall
      *   is empty beats being told which band it is empty on. */
     let deaf = (link.vibe?.gainIsAtMinimum ?? false) && station.isEmpty
-    let label = deaf ? "GAIN AT MINIMUM" : (station.isEmpty ? link.bandName : station)
+    // ★★ AN ICOM: the RADIO's mode, by its own name ("USB-D", "RTTY-R"), leads the label — it is what the owner set
+    //    at the radio and the one thing on this screen that says which mode you are hearing. No gain to be deaf at.
+    let icomMode = link.icom.map { IcomRadio.modeLabel($0.modeNow) } ?? ""
+    let label = !icomMode.isEmpty ? (link.bandName.isEmpty ? icomMode : "\(icomMode) · \(link.bandName)")
+              : deaf ? "GAIN AT MINIMUM" : (station.isEmpty ? link.bandName : station)
     return Group {
       if !label.isEmpty {
         Text(label)
