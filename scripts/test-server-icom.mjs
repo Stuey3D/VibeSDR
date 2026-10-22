@@ -61,6 +61,7 @@ function ws(port, pathq) {
       if (op === 0x2) {
         st.bin++; st.binBytes += p.length;
         if (p.length >= 22 && p.toString('latin1', 0, 4) === 'SPEC') { st.lastLen = p.length; st.lastCentre = Number(p.readBigUInt64LE(14)); st.spec = (st.spec || 0) + 1; }
+        else if (p[0] === 0x01 && p.length >= 13) st.decoded = (st.decoded || '') + p.subarray(13).toString();   // a decoder's text: 0x01, ts u64, len u32, text
       }
     }
   });
@@ -188,6 +189,41 @@ try {
   try { fake.stdin.write('quit\n'); } catch {}
   await sleep(200);
   fake.kill('SIGTERM');
+}
+// ── ★★ PHASE 2: THE RADIO'S AUDIO REACHES THE DECODERS. Real off-air RTTY (Stuart's library, JARTS 2026-10-18)
+//    played as the "radio's USB audio" through the same capture path a real codec uses (paced at 48 kHz),
+//    and the server's own FSK decoder must read it. Skipped — and said so — where the library is absent.
+{
+  const wav = path.join(os.homedir(), 'VibeSDR-test-audio', 'rtty', 'jarts_DK_599_usb.wav');
+  if (!fs.existsSync(wav)) {
+    console.log(`   not run — the RTTY decode phase needs ${wav}`);
+  } else {
+    console.log('── the radio\'s audio feeds the decoders (real RTTY through --icom-audio wav:) ──');
+    const fake2 = spawn(FAKE, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out2 = ''; fake2.stdout.on('data', (d) => { out2 += d.toString(); });
+    await until(() => /FAKE_ICOM_PTY (\S+)/.test(out2), 3000);
+    const pty2 = (out2.match(/FAKE_ICOM_PTY (\S+)/) || [])[1];
+    const port2 = await freePort();
+    const log2Path = path.join(dir, 'server2.log');
+    const srv2 = spawn(BIN, ['--icom', pty2, '--icom-tty-ok', '--icom-audio', `wav:${wav}`, '--port', String(port2), '--users', '2', '--idle-grace', '0'],
+                       { env, stdio: ['ignore', fs.openSync(log2Path, 'w'), fs.openSync(log2Path, 'a')] });
+    try {
+      ok(await until(() => getJson(port2, '/vibeserver.json').then((j) => !!j), 8000), 'second server up, audio from the WAV');
+      const sid3 = 'icom0003-cccc';
+      const sp = ws(port2, `/ws/user-spectrum?user_session_id=${sid3}&bins=256`);
+      const au2 = ws(port2, `/ws/audio?user_session_id=${sid3}`);
+      const dx = ws(port2, `/ws/dxcluster?user_session_id=${sid3}`);
+      await sleep(800);
+      // tones 1624 / 1801 Hz (README.txt in the library): centre 1712, shift 177, 45.45 Bd ITA2
+      dx.send({ type: 'audio_extension_attach', extension_name: 'fsk', center_frequency: 1712, shift: 177, baud_rate: 45.45 });
+      ok(await until(() => /599|DKWVM|D2VM/.test(dx.decoded || ''), 25000), `★ the server's RTTY decoder reads the radio's audio: "${(dx.decoded || '').replace(/\s+/g, ' ').slice(0, 60)}"`);
+      sp.close(); au2.close(); dx.close();
+    } finally {
+      srv2.kill('SIGTERM'); await sleep(400);
+      try { fake2.stdin.write('quit\n'); } catch {}
+      fake2.kill('SIGTERM');
+    }
+  }
 }
 if (fail) console.log(`   server log: ${logPath}\n   fake log tail: ${fakeOut.slice(-600)}`);
 console.log(`icom end-to-end: ${pass} passed, ${fail} failed`);
