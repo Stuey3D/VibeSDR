@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { usePopupTheme, type PopupTokens } from './PopupShell';
+import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
 import { withReadAuth } from '../services/vibeAuth';
 
 export interface GalleryItem {
@@ -85,11 +85,11 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
                  + (open.partial ? ' · PARTIAL' : '')}
               </Text>
               {isImage(open) ? (
-                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ alignItems: 'center' }} maximumZoomScale={4}>
+                <ScrollView style={{ flex: 1 }} contentContainerStyle={[scrollLane, { alignItems: 'center' }]} maximumZoomScale={4}>
                   <Image source={{ uri: fileUrl(open) }} style={s.image} resizeMode="contain" />
                 </ScrollView>
               ) : (
-                <ScrollView style={s.textBox}><Text selectable style={s.mono}>{text || 'Loading…'}</Text></ScrollView>
+                <ScrollView style={s.textBox} contentContainerStyle={scrollLane}><Text selectable style={s.mono}>{text || 'Loading…'}</Text></ScrollView>
               )}
               <TouchableOpacity onPress={() => { void Linking.openURL(fileUrl(open) + (fileUrl(open).includes('?') ? '&' : '?') + 'download=1'); }}
                                 style={[s.key, { alignSelf: 'flex-start', marginTop: 8 }]} accessibilityRole="button">
@@ -107,7 +107,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
                 ))}
               </View>
               {items == null ? <ActivityIndicator style={{ marginTop: 24 }} /> : (
-                <FlatList data={items} keyExtractor={(it) => it.f}
+                <FlatList data={items} keyExtractor={(it) => it.f} contentContainerStyle={scrollLane}
                   ListEmptyComponent={<Text style={s.dim}>{kind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.'}</Text>}
                   renderItem={({ item: it }) => (
                     <TouchableOpacity onPress={() => { void show(it); }} style={s.row} accessibilityRole="button">
