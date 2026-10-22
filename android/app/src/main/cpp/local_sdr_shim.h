@@ -328,6 +328,13 @@ public:
      *  refused with a message the listener sees. See vibe_decoder_host.h. */
     static void setDecoderMax(int max);
     static int  decoderDefaultMax();
+    /** ★★ V12 BACKGROUND DECODING (vibe_bgdecode.h): this radio's profiles, as RadioConfig::bgDecode stores them. Live.
+     *  @return false (and `err`) when the JSON does not parse — the old settings stay. */
+    static bool setBackgroundDecoding(const std::string& json, std::string& err);
+    /** ★★ THE GALLERY (vibe_gallery.h): its directory (shared by every radio on the machine), the owner's size in MB
+     *  (0 = keep nothing), whether listeners may read it, and whether a listener's own decodes are kept. */
+    static void setGallery(const std::string& dir, double limitMb, bool publicRead, bool saveLive);
+    static void setGalleryRadioLabel(const std::string& label);
     /** ★ The directory every radio process on the box shares for the decoder slots (flock files).
      *  Empty = count in this process only (Android, the Mac app's single engine). Set at startup. */
     static void setDecoderSlotDir(const std::string& dir);

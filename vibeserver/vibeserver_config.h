@@ -691,6 +691,11 @@ struct RadioConfig {
      *  most 5 minutes. Admin outranks everybody, then the longest-connected. OFF by default and on upgrade.
      *  docs/TUNING-ETIQUETTE.md, android/app/src/main/cpp/vibe_tune_etiquette.h. Per radio, like the limit. */
     bool   askBeforeTuning = false;
+    /** ★★ V12 BACKGROUND DECODING (vibe_bgdecode.h) — this radio's profiles, as ONE JSON string: the reader here is a
+     *  flat key scanner, and a nested array of profiles would let this radio's "freq" be found inside a profile (the
+     *  same reason antennaSwitch is a string). Empty = off, which is every radio before this existed. Validated at the
+     *  save (overlaps, VFOs outside the window); applied live. */
+    std::string bgDecode;
 
     /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
      *  off is the default: this is an option for a busy shared receiver, not a policy.
@@ -854,6 +859,13 @@ struct ServerConfig {
      *  measures each decoder here and writes its recommendation into this field; the owner can
      *  change it on the setup page, the admin page or in the app. */
     int         decoderMax = 0;
+    /** ★★ V12 THE GALLERY (vibe_gallery.h): what the decoders heard — background decoding's, and a listener's own
+     *  unless `gallerySaveLive` is off. MACHINE-level: one directory every radio writes into, under the data dir.
+     *  `galleryMb` is the owner's size (the setup page shows the disk's free space beside it); when full, the OLDEST
+     *  items go. 0 = keep nothing. `galleryPublic`: everyone may read it (Stuart's default) — off, only the owner. */
+    int         galleryMb = 100;
+    bool        galleryPublic = true;
+    bool        gallerySaveLive = true;
     int         port = 0;      // the ONE port that leaves the machine
     bool        web = true;
     std::vector<RadioConfig> radios;

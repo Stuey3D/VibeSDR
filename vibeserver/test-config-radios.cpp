@@ -66,6 +66,10 @@ int main() {
                          fm.askBeforeTuning = true;   // ★ ask before tuning (2026-10-21) — per radio
         RadioConfig rtl; rtl.serial = "00000003"; rtl.driver = "rtlsdr"; rtl.label = "VHF";
                          rtl.enabled = false;      // switched off in the TUI
+        // ★★ V12 background decoding (2026-10-22) — Nick's NAVTEX profile, a JSON string INSIDE the radio entry. Its
+        //    "hz"/"from"/"to" must not leak into the flat reader of this radio or the next (hf's freq is checked below).
+        hf.bgDecode = R"({"on":true,"waitMin":5,"profiles":[{"centre":500000,"from":"00:00","to":"00:00","vfos":[{"hz":489500,"mode":"usb","dec":"navtex"},{"hz":517500,"mode":"lsb","dec":"navtex"}]}]})";
+        s.galleryMb = 250; s.galleryPublic = false; s.gallerySaveLive = false;
         s.radios = {hf, fm, rtl};
 
         const std::string j = toJson(s);
@@ -82,7 +86,12 @@ int main() {
                "★ per-radio listener limits are independent");
             ok(back.radios[1].askBeforeTuning && !back.radios[0].askBeforeTuning && !back.radios[2].askBeforeTuning,
                "★ 'ask before tuning' survives the round trip, on the radio it was set on and no other");
+            ok(back.radios[0].bgDecode == hf.bgDecode && back.radios[1].bgDecode.empty() && back.radios[2].bgDecode.empty(),
+               "★ background decoding profiles survive the round trip byte for byte, on their own radio", back.radios[0].bgDecode);
+            ok(back.radios[0].lockFreq == 6800000 && back.radios[0].freq == hf.freq,
+               "★ …and the profile's own numbers do not leak into the radio's fields");
         }
+        ok(back.galleryMb == 250 && !back.galleryPublic && !back.gallerySaveLive, "the gallery's size and switches round-trip");
         ok(back.adminPass == "Test123", "the shared password is stated once");
     }
 

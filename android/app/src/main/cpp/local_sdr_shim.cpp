@@ -124,6 +124,7 @@
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
+#include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_squelch_msg.h"       // ★ squelch on/off: explicit `on`, else the legacy db > -100
 #include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
@@ -5479,6 +5480,33 @@ static vibe::FileSlots& vsDecoderSlots() {
     static vibe::FileSlots slots(vsDecoderSlotDir(), [] { return vsDecoderMax(); });
     return slots;
 }
+
+// ── ★★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22 — vibe_bgdecode.h, vibe_gallery.h) ───────────────────
+// The owner's profiles for THIS radio (RadioConfig::bgDecode, applied live on a save), and the machine's gallery
+// switches (ServerConfig). The engine itself is Impl::bgRun_, driven by Impl::bgTick on the housekeeping thread.
+static std::mutex          g_bgMtx;
+static vibe::bg::Config    g_bgCfg;
+static std::atomic<int>    g_bgCfgGen{0};             // ★ bumped on every change — a running profile restarts on it
+static std::atomic<bool>   g_gallerySaveLive{true};   // ★ keep a LISTENER's decodes too (Stuart: default ON)
+static std::atomic<bool>   g_galleryPublic{true};     // ★ the gallery is everyone's to read unless the owner says not
+/** ★ TEST-ONLY knobs, read from the environment so no build differs from the one that ships:
+ *  VIBESERVER_BG_WAIT_SEC overrides the owner's wait; VIBESERVER_BG_TEST_CLOCK names a file holding "HH:MM" that
+ *  stands in for the UTC clock (a profile boundary is then a file write, not a night's wait). */
+static int vsBgUtcMinute() {
+    if (const char* f = std::getenv("VIBESERVER_BG_TEST_CLOCK"); f && *f)
+        if (FILE* fp = std::fopen(f, "r")) {
+            char b[16] = {0}; const bool got = std::fgets(b, sizeof b, fp) != nullptr; std::fclose(fp);
+            if (got) { const int m = vibe::bg::parseHhMm(b); if (m >= 0) return m; }
+        }
+    const std::time_t t = std::time(nullptr); std::tm g{}; gmtime_r(&t, &g);
+    return g.tm_hour * 60 + g.tm_min;
+}
+static double vsBgWaitSec(const vibe::bg::Config& c) {
+    if (const char* e = std::getenv("VIBESERVER_BG_WAIT_SEC"); e && *e) return std::max(0.0, std::atof(e));
+    return c.waitSec;
+}
+/** ★ The box-wide "a listener needs a decoder slot" file, beside the slots themselves. */
+static std::string vsBgYieldPath() { const std::string d = vsDecoderSlotDir(); return d.empty() ? std::string() : d + "/bg-yield"; }
 /** ★ The owner's ceiling for raw IQ on the local network, in Hz (0 = none). The full span is
  *  offered only when the capture rate is within it — the radio's own rates, no resampling — so an
  *  owner on Wi-Fi or a small box can keep an RTL at 2.4 MS/s off the LAN while still serving
@@ -8193,6 +8221,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     void spectroFeed(const float* sum, int bins, int n) {
         if (bins <= 0 || n <= 0 || g_vsLockedCentre.load() <= 0.0) return;   // fixed profile only
+        // ★ V12: and only while the capture IS at that profile — background decoding moves it, and a night of NAVTEX
+        //   at 500 kHz is not a picture of the locked window.
+        if (std::fabs(rtlCenter.load() - g_vsLockedCentre.load()) > 1.0) return;
         // ★ fftAccum holds SUMS over FFT_AVG frames, not averages — the caller divides at its own
         //   emit site. Divide here too, or every row is offset by 10*log10(FFT_AVG) and the whole
         //   image sits at the wrong level.
@@ -18013,6 +18044,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/benchmark", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
                 || path0.rfind("/vibeserver/conditions", 0) == 0
+                // ★★ V12: the GALLERY is the machine's — one directory every radio writes into (vibe_gallery.h).
+                || path0.rfind("/vibeserver/gallery", 0) == 0
                 // ★ The shortwave schedule is a MACHINE-wide file (/var/lib/vibeserver/eibi.csv),
                 //   shared by every radio process, and the setup page that asks for it is served
                 //   by this door. Refusing it here made the page report "could not reach the
@@ -20029,6 +20062,70 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(j.size()) + "\r\n\r\n" + j);
             LOGI("rtl serial change requested by %s — %s", sock->peerAddress().c_str(), msg.c_str());
             sock->close(); return;
+        // ── ★★ V12: THE GALLERY, READ-ONLY (vibe_gallery.h) ─────────────────────────────────────────────────────
+        // GET /vibeserver/gallery.json[?kind=navtex&limit=200] — the items, newest first.
+        // GET /vibeserver/gallery/file/<name>[?download=1]      — one item, inline (a .txt shown in the page) or saved.
+        // ★★★ A name is only ever LOOKED UP (Store::resolve: the safe alphabet, listed in the index, opened O_NOFOLLOW).
+        // ★ Everyone's to read (Stuart) unless the owner switched it off — then the owner, with the password, still can.
+        } else if (reqLine.rfind("GET /vibeserver/gallery", 0) == 0) {
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            auto reply = [&](const char* status, const char* ctype, const std::string& body, const std::string& extra = "") {
+                sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: " + ctype
+                              + "\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n" + extra
+                              + "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            const size_t sp = reqLine.find(' ', 4);
+            const std::string target = reqLine.substr(4, sp == std::string::npos ? std::string::npos : sp - 4);
+            const size_t qm = target.find('?');
+            const std::string path = target.substr(0, qm), query = qm == std::string::npos ? "" : target.substr(qm + 1);
+            auto qv = [&](const char* k) {
+                const std::string key = std::string(k) + "=";
+                size_t p = 0;
+                while ((p = query.find(key, p)) != std::string::npos) {
+                    if (p == 0 || query[p - 1] == '&') { const size_t e = query.find('&', p); return query.substr(p + key.size(), e == std::string::npos ? std::string::npos : e - p - key.size()); }
+                    p += key.size();
+                }
+                return std::string();
+            };
+            auto& g = vibe::gallery::shared();
+            if (!g_galleryPublic.load() && !adminOkFor(reqLine, sock)) {
+                reply("403 Forbidden", "application/json", "{\"items\":[],\"enabled\":false,\"error\":\"the owner has made this server's gallery private\"}");
+                return;
+            }
+            if (path == "/vibeserver/gallery.json") {
+                std::string kind;
+                for (char c : qv("kind")) if ((c >= 'a' && c <= 'z') || c == '-') kind += c;
+                int limit = std::atoi(qv("limit").c_str());
+                if (limit <= 0 || limit > 1000) limit = 300;
+                std::string j = g.listJson(kind.substr(0, 16), (size_t)limit);
+                // ★ Plus whether this server keeps anything at all — a client shows "this server keeps no gallery" honestly.
+                j.insert(1, std::string("\"enabled\":") + (g.enabled() ? "true" : "false") + ",");
+                reply("200 OK", "application/json", j);
+                return;
+            }
+            const std::string pre = "/vibeserver/gallery/file/";
+            std::string fpath, ctype;
+            if (path.rfind(pre, 0) != 0 || !g.resolve(path.substr(pre.size()), fpath, ctype)) {
+                reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}");
+                return;
+            }
+            std::string body;
+            const int fd = ::open(fpath.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            if (fd >= 0) {
+                struct stat st{};
+                if (::fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size <= 16 * 1024 * 1024) {
+                    body.resize((size_t)st.st_size);
+                    size_t got = 0;
+                    while (got < body.size()) { const ssize_t n = ::read(fd, &body[got], body.size() - got); if (n <= 0) break; got += (size_t)n; }
+                    body.resize(got);
+                } else { ::close(fd); reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}"); return; }
+                ::close(fd);
+            } else { reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}"); return; }
+            const std::string name = path.substr(pre.size());
+            reply("200 OK", ctype.c_str(), body, qv("download") == "1"
+                  ? "Content-Disposition: attachment; filename=\"" + name + "\"\r\n" : "Content-Disposition: inline\r\n");
+            return;
         } else if (reqLine.rfind("GET /vibeserver/eibi", 0) == 0) {
             // ★ The daemon owns the fetching (it has the filesystem and the network); the shim
             //   only exposes it, and on a phone no handler is registered so this reports
@@ -22766,6 +22863,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (auto& kv : clientDsp) if (kv.second && kv.second->session == session) return kv.second->vfoHz;
             return audioFreq.load();
         };
+        /* ★★ V12: A LISTENER'S DECODES GO TO THE GALLERY TOO (Stuart, 2026-10-22: "decodes from a listener who manually
+         *  ran a decoder are saved to the gallery too"), labelled live — unless the owner switched that off, or this is
+         *  the decoder-only sidecar decoding a NETWORK radio for this phone's own app. The dial is followed: a listener
+         *  who retunes mid-message starts another (as the box clears NAVTEX on a retune). */
+        if (!decoderOnly) {
+            auto dial = e.dialHz;
+            e.tap = [this, session, dial](const std::string& ext, const std::string& msg) -> vibe::DecoderTapPtr {
+                if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
+                vibe::gallery::Meta m;
+                m.kind = vibe::bg::galleryKindFor(ext, msg);
+                if (m.kind.empty()) return nullptr;
+                m.origin = "live";
+                m.decoder = ext == "fsk" ? (msg.find("\"auto\":true") != std::string::npos ? "rtty-auto" : "rtty") : ext;
+                m.freqHz = dial ? dial() : 0.0;
+                std::string md;
+                { std::lock_guard<std::mutex> lk(clientMtx);
+                  for (auto& kv : clientDsp) if (kv.second && kv.second->session == session && !session.empty()) { md = kv.second->mode; break; } }
+                if (md.empty()) { std::lock_guard<std::recursive_mutex> ml(modeMtx); md = mode; }
+                m.mode = md;
+                return std::make_shared<vibe::bg::GalleryTap>(vibe::gallery::shared(), m, dial);
+            };
+        }
         return e;
     }
 
@@ -22787,6 +22906,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // FT8 spots), so they need the same protection as the spectrum path — a browser tab that
         // stops draining its decoder stream must not stall the decoders for everyone else.
         outboxOpen(sock);
+        // ★★ V12: a decoder socket is somebody — background decoding stops for it, as for a spectrum socket.
+        if (!decoderOnly) bgStopForListener("a decoder socket connected");
         // ★★★ WHICH HOST. On a per-VFO radio, this listener's own — by session, or by the one
         //     listener at this address for a client too old to say (decoderSessionByAddress). On
         //     a shared dial or a one-pipeline radio, THE host, and a second socket is a MIRROR of
@@ -22843,7 +22964,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
                     continue;
                 }
-                const auto r = host->start(ext, payload, peer);
+                auto r = host->start(ext, payload, peer);
+                // ★★ V12: never refused because the box is busy decoding for NOBODY — background decoding on every radio
+                //    of this machine gives its slots back, and the listener's decoder is tried again.
+                if (r == DecoderHost::Start::Refused && !decoderOnly && bgYieldForListener()) r = host->start(ext, payload, peer);
                 if (r == DecoderHost::Start::Refused) {
                     LOGI("decoder %s refused — all %d decoder slots on this server are in use", ext.c_str(), vsDecoderSlots().max());
                     sendDecoderRefusal(sock, "decoder", ext, "limit", decoderLimitMessage(vsDecoderSlots().max()));
@@ -22871,7 +22995,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 } else if (!host) {
                     sendDecoderRefusal(sock, "spots", "ft8", "no_session",
                         "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
-                } else if (host->startSpots() == DecoderHost::Start::Refused) {
+                } else if (host->startSpots() == DecoderHost::Start::Refused
+                           && (decoderOnly || !bgYieldForListener() || host->startSpots() == DecoderHost::Start::Refused)) {
                     LOGI("digital spots refused — all %d decoder slots on this server are in use", vsDecoderSlots().max());
                     sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
                 } else if (!perVfo) {
@@ -23932,6 +24057,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     ★ Only in shared/locked mode — a personal receiver never builds any of it, so
             //       the phone and Mac paths are byte-for-byte what they were.
             feedClientChannels(buf.data(), (int)buf.size());
+            // ★★ V12 background decoding: a COPY into its own bounded queue, nothing more on this thread.
+            if (bgActive_.load(std::memory_order_relaxed)) bgRun_.feedIq(buf.data(), (int)buf.size());
             {
                 const auto t1 = std::chrono::steady_clock::now();
                 const double wideMs = std::chrono::duration<double,std::milli>(tMid - t0).count();
@@ -24499,7 +24626,179 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return true;
     }
 
+    // ── ★★★ BACKGROUND DECODING (V12, 2026-10-22) — the WHEN; vibe_bgdecode.h is the HOW ─────────────────────────
+    //
+    // ★★★ THE SHARED-DIAL CONTRACT STILL HOLDS. The server owns the radio's state and background decoding is the server
+    //     using it while nobody is here — so it must leave NO TRACE for the next person: the moment anyone arrives (a
+    //     spectrum, audio or decoder socket), everything stops and the radio goes back to the dial it was on BEFORE
+    //     background decoding moved it, so the newcomer lands exactly where they would have without it — never on the
+    //     NAVTEX centre. RECOVERY IS NOT A USER ACTION, and neither is this: nothing here is sent to anybody.
+    // ★★ "NOBODY LISTENING FOR `wait`" IS ONE TRIGGER. A dedicated radio (docs/v12/RADIO-ROLES.md) will start the
+    //    runner and never stop it; that is why the runner knows nothing about listeners.
+    // ★ While a profile is due (bgWanted_), the idle park is held off: parking and waking a radio is the most dangerous
+    //   thing this server does to it (see g_vsIdleGraceSec), and doing it five minutes before taking it back is waste.
+    vibe::bg::BgRunner bgRun_;
+    std::mutex         bgOpMtx_;                // ★ one start/stop at a time — the tick, an arrival
+    std::atomic<bool>  bgActive_{false};        // the runner is running (read by the DSP thread on every block)
+    std::atomic<bool>  bgWanted_{false};        // a profile is due or running: hold the idle park off
+    double bgEmptySince_ = 0, bgRetryAt_ = 0, bgNotBefore_ = 0;   // ★ decoder retry (running) · start retry (radio not ours)
+    int    bgProfile_ = -1, bgGen_ = -1;
+    bool   bgLoggedWait_ = false;
+    struct { bool valid = false; double centre = 0, view = 0, audio = 0; } bgSaved_;
+
+    /** Anybody here at all? Spectrum, audio (a pocketed app), a decoder socket, a channel kept alive by its audio.
+     *  ★ Caller holds clientMtx. */
+    bool bgSomeoneHereLocked() {
+        if (specListenerCountLocked() > 0) return true;
+        if (audioClient && audioClient->isOpen()) return true;
+        for (const auto& d : dxSocks) if (d && d->isOpen()) return true;
+        for (const auto& kv : clientDsp)
+            if (kv.second && ((kv.second->spec && kv.second->spec->isOpen()) || (kv.second->audio && kv.second->audio->isOpen()))) return true;
+        return sharedDecoderNeedsAudio();
+    }
+    /** ★★ Put the capture at `centre` and the shared dial at `audio`, as one move. Through retune() first (unlocked) so
+     *  the AGC's bookkeeping, the band's gain cap and the permitted ranges all see an ordinary tune; then the hardware
+     *  is placed EXACTLY (retune only recentres when the dial leaves the window, and the VFOs were validated against
+     *  this centre). A postponed pan move is cancelled, or it would drag the capture back. */
+    void bgPlace(double centre, double view, double audio) {
+        if (g_vsLockedCentre.load() <= 0.0) retune(audio);
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
+        pendingDongle = 0.0;
+        rtlCenter.store(centre);
+        if (!useSpy()) viewCenter.store(view);
+        audioFreq.store(audio);
+        tuneHw(centre);
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+    }
+    /** Start profile `idx`. Caller holds bgOpMtx_. */
+    void bgStartLocked(const vibe::bg::Config& cfg, int idx) {
+        const auto& prof = cfg.profiles[(size_t)idx];
+        resumeCaptureIdle(/*fromBg=*/true);       // ★ a parked or released radio is taken back first
+        if (radioReleased.load()) {
+            LOGI("background decoding: the radio is not ours to take just now — will try again");
+            bgNotBefore_ = nowSecs() + 30; return;
+        }
+        if (!bgSaved_.valid) {
+            bgSaved_ = { true, rtlCenter.load(), viewCenter.load(), audioFreq.load() };
+            LOGI("background decoding: nobody here for %.0f s — moving the radio from %.3f kHz (dial %.3f) to the profile %d centre %.3f kHz",
+                 vsBgWaitSec(cfg), bgSaved_.centre / 1e3, bgSaved_.audio / 1e3, idx + 1, prof.centreHz / 1e3);
+        } else {
+            LOGI("background decoding: moving the radio to the profile %d centre %.3f kHz (it goes back to %.3f kHz when somebody arrives)",
+                 idx + 1, prof.centreHz / 1e3, bgSaved_.audio / 1e3);
+        }
+        bgPlace(prof.centreHz, prof.centreHz, prof.centreHz);
+        vibe::bg::BgRunner::Params p;
+        p.profileIdx = idx; p.profile = prof;
+        p.sampleRate = sampleRate; p.centreHz = rtlCenter.load(); p.hwOffsetHz = hwOffsetHz();
+        int n = 4096; while (n < 65536 && n < sampleRate / 40.0) n <<= 1;   // ★ ~25 ms blocks, as a listener's channel
+        p.fftSize = n;
+        p.slots = &vsDecoderSlots();
+        p.store = vibe::gallery::shared().enabled() ? &vibe::gallery::shared() : nullptr;
+        p.yieldPath = vsBgYieldPath();
+        p.log = [](const std::string& t) { LOGI("%s", t.c_str()); };
+        // ★ The window is checked again against the rate the radio REALLY runs at (the save checked the configured one).
+        const double half = vibe::bg::halfWindowHz(sampleRate);
+        p.profile.vfos.clear();
+        for (const auto& v : prof.vfos) {
+            if (std::fabs(v.hz - p.centreHz) > half)
+                LOGI("background decoding: VFO %.3f kHz is outside what the radio sees at %.0f kS/s — skipped", v.hz / 1e3, sampleRate / 1e3);
+            else p.profile.vfos.push_back(v);
+        }
+        bgRun_.start(p);
+        bgActive_.store(true);
+        bgWanted_.store(true);
+        bgProfile_ = idx;
+        bgGen_ = g_bgCfgGen.load();
+        bgRetryAt_ = nowSecs() + 60;
+    }
+    /** Stop it, and (if `restore`) put the radio back where it was before background decoding moved it. Caller holds
+     *  bgOpMtx_. The runner's taps write what they held as they stop — a message cut off is kept, marked partial. */
+    void bgStopLocked(const char* why, bool restore) {
+        if (bgActive_.exchange(false)) {
+            bgRun_.stop(false);
+            LOGI("background decoding stopped — %s", why);
+        }
+        bgProfile_ = -1;
+        if (restore && bgSaved_.valid) {
+            bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio);
+            LOGI("background decoding: the radio is back on %.3f kHz (centre %.3f), where it was left",
+                 bgSaved_.audio / 1e3, bgSaved_.centre / 1e3);
+            bgSaved_.valid = false;
+        }
+    }
+    /** ★★★ SOMEBODY ARRIVED — stop at once, give the dial back, start the wait again from their leaving. Called on the
+     *  connect path BEFORE the newcomer is told anything (resumeCaptureIdle runs before the landing and the config). */
+    void bgStopForListener(const char* who) {
+        bgWanted_.store(false);
+        if (!bgActive_.load() && !bgSaved_.valid) { bgEmptySince_ = 0; return; }
+        std::lock_guard<std::mutex> op(bgOpMtx_);
+        bgEmptySince_ = 0; bgLoggedWait_ = false;
+        bgStopLocked(who, true);
+    }
+    /** ★★ A listener here was refused a decoder slot: let background decoding on EVERY radio of this machine give its
+     *  slots back (vibe_bgdecode.h requestYield), then wait briefly for one to come free. @return true if one did. */
+    bool bgYieldForListener() {
+        const std::string y = vsBgYieldPath();
+        bgStopForListener("a listener needs a decoder slot");
+        if (y.empty()) return vsDecoderSlots().inUse() < vsDecoderSlots().max();
+        vibe::bg::BgRunner::requestYield(y);
+        for (int i = 0; i < 30; i++) {          // ★ other radios notice within half a second
+            if (vsDecoderSlots().inUse() < vsDecoderSlots().max()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        return false;
+    }
+    /** ★★ THE TICK — every two seconds, on the housekeeping thread (the one that already runs the idle park). */
+    void bgTick() {
+        if (stopping.load() || frontDoorOnly || decoderOnly) return;
+        vibe::bg::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
+        const bool can = cfg.on && !cfg.profiles.empty() && !useIcom() && !g_dabMode.load(std::memory_order_relaxed);
+        bool anyone;
+        { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
+        const int want = can ? vibe::bg::activeProfile(cfg, vsBgUtcMinute()) : -1;
+        const double now = nowSecs();
+        std::lock_guard<std::mutex> op(bgOpMtx_);
+        if (bgActive_.load()) {
+            if (anyone) { bgStopLocked("a listener arrived", true); bgEmptySince_ = 0; bgWanted_.store(false); return; }
+            if (bgRun_.yielded()) {
+                bgStopLocked("its decoder slots went to a listener on another radio", true);
+                bgEmptySince_ = now; bgWanted_.store(false); return;    // ★ and the wait starts again
+            }
+            if (want != bgProfile_ || g_bgCfgGen.load() != bgGen_) {
+                if (want >= 0) {
+                    LOGI("background decoding: %s — switching to profile %d", want != bgProfile_ ? "a profile boundary" : "the settings changed", want + 1);
+                    bgStopLocked("profile switch", false);
+                    bgStartLocked(cfg, want);
+                } else {
+                    bgStopLocked(can ? "no profile covers this time of day" : "switched off", true);
+                    bgWanted_.store(false);
+                }
+                return;
+            }
+            if (now >= bgRetryAt_) { bgRetryAt_ = now + 60; bgRun_.retryRefused(); }
+            return;
+        }
+        // ★ Not running: a dial still held from a run that could not restore (it cannot happen today; belt and braces).
+        if (bgSaved_.valid && anyone) bgStopLocked("a listener arrived", true);
+        if (anyone || want < 0) {
+            bgWanted_.store(false); bgEmptySince_ = 0; bgLoggedWait_ = false;
+            return;
+        }
+        bgWanted_.store(true);
+        if (bgEmptySince_ <= 0) bgEmptySince_ = now;
+        const double wait = vsBgWaitSec(cfg);
+        if (!bgLoggedWait_) {
+            bgLoggedWait_ = true;
+            LOGI("background decoding: nobody here — profile %d starts in %.0f s unless somebody arrives", want + 1,
+                 std::max(0.0, wait - (now - bgEmptySince_)));
+        }
+        if (now - bgEmptySince_ >= wait && now >= bgNotBefore_) bgStartLocked(cfg, want);
+    }
+
     void armIdlePark() {
+        // ★★ V12: not while background decoding is due or running — see bgWanted_.
+        if (bgWanted_.load()) return;
         // ★ Applied here rather than when the park FIRES: the radio may be released or paused by
         //   then, and a gain written to a stopped device is a gain nobody applied. The grace
         //   period is about not disturbing a reload — and a reload does not care what the gain is
@@ -24527,12 +24826,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         idleParkDueAt.store(nowSecs() + g);
         LOGI("no listeners — idle park in %.0fs (grace period)", g);
     }
-    void resumeCaptureIdle() {
+    void resumeCaptureIdle(bool fromBg = false) {
+        // ★★ V12: a listener arriving ends background decoding FIRST, and gets the dial back (see bgStopForListener).
+        //    `fromBg` is background decoding taking the radio back for itself, which must not stop itself.
+        if (!fromBg) bgStopForListener("a listener arrived");
         // ★ A listener is back, so any pending park is off. This runs EARLY in the connect path,
         //   which is exactly what makes the grace period work for a page reload: the park was
         //   only ever scheduled, so it is cancelled before it can happen.
         if (idleParkDueAt.exchange(0.0) > 0.0)
-            LOGI("listener returned within the grace period — idle park cancelled");
+            LOGI("%s", fromBg ? "background decoding takes the radio — idle park cancelled"
+                              : "listener returned within the grace period — idle park cancelled");
         // ★★ TAKE THE RADIO BACK FIRST, because everything below assumes a device. If another
         //    program has it we carry on WITHOUT one rather than failing the connection: the
         //    listener gets the server, the band plan and a clear reason, which is far better than
@@ -25768,6 +26071,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     dirty flag and its own interval, so a second caller costs nothing. */
                 g_vsConnLog.saveIfDue();
 
+                // ── ★★ V12: background decoding — before the park, which it holds off while a profile is due ──
+                bgTick();
+
                 // ── Deferred idle park (see armIdlePark / g_vsIdleGraceSec) ──────────────
                 // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have
                 //   happened during the grace period, so the decision is taken against the state
@@ -25790,7 +26096,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //    working picture is worth risking (Stuart, 2026-08-08: "I'd rather not break
                 //    something that works"). The COST is real and is now stated on the toggle that
                 //    chooses it, which is where an owner can weigh it.
-                if (idleParkDueAt.load() == 0.0 && !captureIdle.load() && !radioReleased.load()
+                if (idleParkDueAt.load() == 0.0 && !captureIdle.load() && !radioReleased.load() && !bgWanted_.load()
                     && !(g_vsProvidesSpectrogram.load() && !g_vsReleaseWhenIdle.load())) {
                     bool empty;
                     { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
@@ -25814,7 +26120,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   settling?", and two readers of one rule is how half-applied fixes ship. */
                     const bool settling = useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 6
                                           && !g_vibeAgcRspOn.load(std::memory_order_relaxed);
-                    if (!empty) { idleParkDueAt.store(0.0); }
+                    if (!empty || bgWanted_.load()) { idleParkDueAt.store(0.0); }
                     else if (settling) { /* hold the deadline open and re-check next tick */ }
                     else if (g_vsReleaseWhenIdle.load()) {
                         // ★★★ RELEASE, NOT PARK — and note this bypasses the shared-receiver rule
@@ -27723,6 +28029,27 @@ void LocalSdrShim::setDecoderSlotDir(const std::string& dir) {
     vsDecoderMaxPublish();
 }
 int LocalSdrShim::decoderDefaultMax() { return vsDecoderDefaultMax(); }
+/* ★★ BACKGROUND DECODING (V12, 2026-10-22). Applied live: the housekeeping tick reads it every two seconds, and a
+ *  running profile restarts on the new settings (or stops, if the owner switched it off). A config that does not
+ *  parse is logged and leaves the radio as it is — never half-applied. */
+bool LocalSdrShim::setBackgroundDecoding(const std::string& json, std::string& err) {
+    vibe::bg::Config c;
+    if (!vibe::bg::parse(json, c, err)) { LOGI("background decoding: %s — not applied", err.c_str()); return false; }
+    { std::lock_guard<std::mutex> lk(g_bgMtx); g_bgCfg = c; }
+    g_bgCfgGen.fetch_add(1);
+    LOGI("background decoding: %s, wait %d s, %zu profile(s)", c.on ? "ON" : "off", c.waitSec, c.profiles.size());
+    return true;
+}
+void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publicRead, bool saveLive) {
+    auto& g = vibe::gallery::shared();
+    g.setDir(dir);
+    g.setLimitBytes(limitMb > 0 ? (uint64_t)(limitMb * 1024.0 * 1024.0) : 0);
+    g_galleryPublic.store(publicRead);
+    g_gallerySaveLive.store(saveLive);
+    LOGI("gallery: %s, %.0f MB, %s, listeners' decodes %s", g.dir().empty() ? "(no directory)" : g.dir().c_str(), limitMb,
+         publicRead ? "visible to everyone" : "hidden", saveLive ? "kept" : "not kept");
+}
+void LocalSdrShim::setGalleryRadioLabel(const std::string& label) { vibe::gallery::shared().setRadioLabel(label); }
 void LocalSdrShim::setAdminIdleMinutes(int minutes) {
     g_vsAdminIdleMin.store(minutes >= 0 ? minutes : 0);
     LOGI("admin idle re-lock: %d min", g_vsAdminIdleMin.load());
@@ -30687,6 +31014,10 @@ void LocalSdrShim::stopLocked() {
     // ★ Every decoder host: each drains and joins its own vibe-decode thread before its decoders are
     //   deleted, and gives its slots back — before `delete impl` destroys the outboxes they write to.
     STOP_STAGE("the decoders");
+    // ★★ V12: background decoding first — its decoders write what they hold (an RTTY buffer, a message half in) on a
+    //    CLEAN shutdown, so a restart for an update loses nothing that was decoded.
+    { std::lock_guard<std::mutex> op(impl->bgOpMtx_);
+      if (impl->bgActive_.exchange(false)) { impl->bgRun_.stop(false); LOGI("background decoding stopped — the server is stopping"); } }
     impl->decoders_.shutdownAll();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
     { std::lock_guard<std::mutex> lk(impl->notchMtx); delete impl->notchEng; impl->notchEng = nullptr; }

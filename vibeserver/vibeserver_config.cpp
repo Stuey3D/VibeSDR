@@ -589,6 +589,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("spectrogram", r.spectrogram);
     I("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
     B("askBeforeTuning", r.askBeforeTuning);   // ★ and written in radioToJson below — the setup page reads that one
+    S("bgDecode", r.bgDecode);                 // ★ V12 background decoding — written in radioToJson below too
+    if (r.bgDecode.size() > 8000) r.bgDecode.clear();   // a corrupt or hostile blob is dropped, never half-applied
     I("idleKickMin", r.idleKickMin);
     I("dabScanLabels", r.dabScanLabels);
     dropBlockedDabLanding(r.blockedModes, r.landingDabChannel, r.landingDabSid, r.landingDabService);
@@ -659,6 +661,7 @@ std::string radioToJson(const RadioConfig& r) {
     B("spectrogram", r.spectrogram);
     N("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
     B("askBeforeTuning", r.askBeforeTuning);
+    S("bgDecode", r.bgDecode);                 // ★ V12 — see the reader
     N("idleKickMin", r.idleKickMin);
     N("dabScanLabels", r.dabScanLabels);
     // ★★★ AND WHAT A NEWER VERSION WROTE, back exactly as it was (see RadioConfig::unknownKeys). Last, after every
@@ -790,6 +793,8 @@ std::string toJson(const ServerConfig& c) {
     B("oneRadioPerIp", c.oneRadioPerIp);
     N("maxRadiosPerIp", c.maxRadiosPerIp);
     N("decoderMax", c.decoderMax);
+    // ★★ V12 the gallery — machine-level, read below too.
+    N("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     // ★ The owner's standing message for the landing screen, and its link. See ServerConfig.
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
@@ -880,6 +885,9 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     c.oneRadioPerIp = (c.maxRadiosPerIp != 0);
     I("decoderMax", c.decoderMax);
     if (c.decoderMax < 0) c.decoderMax = 0;
+    I("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
+    if (c.galleryMb < 0) c.galleryMb = 0;
+    if (c.galleryMb > 1024 * 1024) c.galleryMb = 1024 * 1024;
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
     // ★★★ WHATEVER THE SOURCE, IT PASSES THROUGH HERE — a hand-edited file, a restored backup or

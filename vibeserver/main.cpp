@@ -71,6 +71,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include "vibeserver_config.h"
+#include "vibe_bgdecode_config.h"   // ★★ V12 background decoding: the save-time validation
+#include "vibe_gallery.h"           // ★★ V12 the gallery's disk figures for the setup page
 #include "vibe_bands.h"
 #include "vibe_dab_channels.h"   // ★ the Band III list the setup page's DAB landing offers
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark and its DAB rows — see setBenchmarkHandlers below
@@ -260,6 +262,10 @@ struct Opts {
     // ★★ Ask before tuning on a shared dial (docs/TUNING-ETIQUETTE.md). Normally per radio in config.json
     //    (RadioConfig::askBeforeTuning); this flag is for a server run from the command line, and the tests.
     bool        askBeforeTuning = false;
+    // ★★ V12: background decoding for a server run from the command line, and the tests — the same JSON the setup page
+    //    stores in RadioConfig::bgDecode. Overrides the config's. --gallery-mb likewise (-1 = the config's).
+    std::string bgDecode;
+    int         galleryMb = -1;
     // ★ RSP front-end notches. OFF unless the operator asks: the RF notch covers broadcast FM.
     double      idleGrace = 300.0;   // seconds before an unattended radio idle-parks
     bool        rfNotch  = false;
@@ -525,6 +531,8 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--no-zoom-spectrum") o.zoomSpectrum = false;
         else if (a == "--zoom-spectrum")    o.zoomSpectrum = true;
         else if (a == "--ask-before-tuning") o.askBeforeTuning = true;
+        else if (a == "--bg-decode")      o.bgDecode        = need(i);
+        else if (a == "--gallery-mb")     o.galleryMb       = std::atoi(need(i));
         else if (a == "--idle-grace") o.idleGrace = std::atof(need(i));
         else if (a == "--rf-notch")   o.rfNotch  = true;
         else if (a == "--dab-notch")  o.dabNotch = true;
@@ -2247,6 +2255,22 @@ int main(int argc, char** argv) {
             // ★ The JSON ends "}\n", so j.back() was never '}' and dirStatus NEVER reached the setup page
             //   (found 2026-09-28). Splice before the LAST brace, wherever the trailing whitespace is.
             if (const auto at = j.rfind('}'); at != std::string::npos) j.insert(at, ",\"dirStatus\":" + vibedir::statusJson());
+            /* ★★ V12 THE GALLERY'S DISK — the setup page shows the space LEFT beside the size the owner sets (Stuart:
+             *  "showing the REMAINING disk/SD space beside it"), and what the gallery holds now. */
+            {
+                const std::string gdir = vsDataDir() + "/gallery";
+                char b[160];
+                std::snprintf(b, sizeof b, ",\"galleryFreeBytes\":%llu,\"galleryUsedBytes\":%llu",
+                              (unsigned long long)vibe::gallery::Store::freeBytesAt(vsDataDir()),
+                              (unsigned long long)vibe::gallery::shared().usedBytes());
+                (void)gdir;
+                if (const auto at = j.rfind('}'); at != std::string::npos) j.insert(at, b);
+                // ★ And the server's own UTC offset: profile times are UTC, and the page shows the server's LOCAL time
+                //   beside them — which is not the browser's when the owner sets it up from elsewhere.
+                const std::time_t now = std::time(nullptr); std::tm lt{}; localtime_r(&now, &lt);
+                std::snprintf(b, sizeof b, ",\"serverUtcOffsetMin\":%ld", (long)(lt.tm_gmtoff / 60));
+                if (const auto at = j.rfind('}'); at != std::string::npos) j.insert(at, b);
+            }
             /* ★★ THE BAND III BLOCK NAMES, FROM THE TABLE THE RECEIVER TUNES — for the DAB landing
              *  station's block selector, whose stored value is an INDEX into that table. Sent here as
              *  well as in /vibeserver/hardware so a radio that is not running (no hardware answer)
@@ -2342,8 +2366,22 @@ int main(int argc, char** argv) {
                 }
             }
 
+            /* ★★ V12 BACKGROUND DECODING IS REFUSED AT THE SAVE, IN WORDS — overlapping profiles named, a VFO the radio
+             *  cannot see around its centre at its sample rate (vibe_bgdecode.h validate). The rule belongs to the box,
+             *  not to the page (the PIN-collision rule): a hand-edited post meets the same wall. */
+            for (const auto& r : next.radios) {
+                if (r.bgDecode.empty()) continue;
+                vibe::bg::Config bc; std::string be;
+                const double rate = r.mode == vsconfig::Mode::LockedRange && r.lockRate > 0 ? r.lockRate : r.rate;
+                if (!vibe::bg::parse(r.bgDecode, bc, be) || !vibe::bg::validate(bc, rate, be)) {
+                    err = (r.label.empty() ? r.driver : r.label) + " \xe2\x80\x94 " + be;
+                    return false;
+                }
+            }
             if (!vsconfig::saveServer(g_configPath, next, err)) return false;
             g_serverConfig = next;
+            // ★★ V12 the gallery is the machine's — every process applies it from the saved file.
+            LocalSdrShim::setGallery(vsDataDir() + "/gallery", next.galleryMb, next.galleryPublic, next.gallerySaveLive);
             // ★★ THE LISTING FOLLOWS THE SAVE. Without this the switch wrote the file and changed
             //    nothing until a restart — the same trap the gain settings fell into above, and
             //    an owner turning public listing OFF would have stayed listed for as long as the
@@ -2369,6 +2407,9 @@ int main(int argc, char** argv) {
                     LocalSdrShim::setGainLimits(g_runtimeConfig.gainLimits);
                     // ★ The aerials, live (2026-10-09): the external switch, the per-band aerial list and the lock.
                     applyAntennaSwitch(r.antennaSwitch);
+                    // ★★ V12 background decoding, live — the tick picks it up within two seconds (validated above).
+                    { std::string be; LocalSdrShim::setBackgroundDecoding(r.bgDecode, be); }
+                    LocalSdrShim::setGalleryRadioLabel(r.label.empty() ? r.driver : r.label);
                     LocalSdrShim::instance().setRspAntennaMap(g_runtimeConfig.antennaMap);
                     LocalSdrShim::instance().setAntennaLocked(g_runtimeConfig.antennaPortLocked);
                     // ★ In the same breath as the gain ceilings, for the same reason: both are
@@ -2409,6 +2450,15 @@ int main(int argc, char** argv) {
                                 g_runtimeConfig.agcLock);
                     break;
                 }
+            /* ★★ V12 background decoding on a SIMPLE server, live: the loop above matches on the radio's serial, which a
+             *  one-radio machine may not have (see "WHICH RADIO AM I?" in main) — the PRIMARY radio is this process then.
+             *  A front door takes it too and ignores it (it owns no radio — the shim's tick returns at once). */
+            if (g_myRadioSerial.empty() && !next.radios.empty()) {
+                const int pi = vsconfig::primaryRadio(next);
+                if (pi >= 0 && pi < (int)next.radios.size()) {
+                    std::string be; LocalSdrShim::setBackgroundDecoding(next.radios[(size_t)pi].bgDecode, be);
+                }
+            }
             if (next.configured) LocalSdrShim::setConfigured(true);
             // ★★★ LET THE ANSWER GET OUT FIRST. Restarting is requested from inside the HTTP
             //     handler, and the main loop can act on it before the reply has finished crossing
@@ -4116,6 +4166,17 @@ int main(int argc, char** argv) {
         LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);
         // ★★ Ask before tuning (2026-10-21) — per radio, beside the limit; off unless the owner chose it.
         LocalSdrShim::instance().setAskBeforeTuning(mine ? mine->askBeforeTuning : o.askBeforeTuning);
+        // ★★ V12 BACKGROUND DECODING + THE GALLERY (2026-10-22). The profiles are this radio's (--bg-decode for a server
+        //    run from the command line and the tests); the gallery is the machine's, one directory under the data dir
+        //    that every radio writes into. A front door decodes nothing but SERVES the gallery, so it is told too.
+        {
+            std::string be;
+            const std::string bj = !o.bgDecode.empty() ? o.bgDecode : (mine ? mine->bgDecode : std::string());
+            if (!bj.empty() && !frontDoorOnly) LocalSdrShim::setBackgroundDecoding(bj, be);
+            LocalSdrShim::setGallery(vsDataDir() + "/gallery", o.galleryMb >= 0 ? o.galleryMb : g_serverConfig.galleryMb,
+                                     g_serverConfig.galleryPublic, g_serverConfig.gallerySaveLive);
+            LocalSdrShim::setGalleryRadioLabel(mine ? (mine->label.empty() ? mine->driver : mine->label) : std::string());
+        }
         // ★ MACHINE-level, not per radio: the rule is about one visitor holding SEVERAL of this
         //   machine's radios, so it cannot be a property of any one of them.
         // ★ The CAP, not the switch — the switch is derived from it in the config reader so the
