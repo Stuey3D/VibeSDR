@@ -2259,6 +2259,21 @@ int main(int argc, char** argv) {
                 const size_t close = j.rfind('}');
                 if (close != std::string::npos) j.insert(close, b);
             }
+            /* ★★★ WHY AN ICOM IS NOT RUNNING, in its own words — almost always the PREFLIGHT ("USB SEND is RTS
+             *     … set it to OFF"). Its process wrote that into the radio's status file and exited; without
+             *     this the setup page could only say "not running", and the owner would never learn which
+             *     menu item to change. Keyed by serial; only Icoms, only while a status is on file. */
+            {
+                std::string ic;
+                for (const auto& r : out.radios) {
+                    if (r.driver != "icom") continue;
+                    const RadioStatus st = radioStatusRead(r.serial);
+                    if (!st.present || st.detail.empty()) continue;
+                    ic += std::string(ic.empty() ? "" : ",") + "\"" + jsonEscape(r.serial) + "\":\"" + jsonEscape(st.detail) + "\"";
+                }
+                const size_t close = j.rfind('}');
+                if (!ic.empty() && close != std::string::npos) j.insert(close, ",\"icomStatus\":{" + ic + "}");
+            }
             return j;
         },
         [](const std::string& json, std::string& err) -> bool {

@@ -846,7 +846,58 @@ body.wifiFirst .wifiFirstOnly { display: block; }
            receiver HAS.
            ★ I chased this for an evening — a driver gate, a dead radio, a lost `configured` flag —
            and it was markup nesting the entire time. The gate in renderHw() was innocent. -->
-      <div class="card">
+      <!-- ★★★ AN ICOM TRANSCEIVER — RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md). Shown only when this tab's radio
+           is an Icom (icomRender); every IQ card that means nothing on it (the window, gain, rate, bias-T)
+           is hidden instead — AGENTS.md: never a control whose every use is a no-op. -->
+      <div class="card hide" id="icomCard">
+        <h2>Icom transceiver</h2>
+        <p class="why">VibeServer <b>listens through</b> your Icom and never transmits. It tunes the radio over
+           CI-V, shows the radio&rsquo;s own scope as the waterfall and streams the radio&rsquo;s receive audio.</p>
+        <div class="hint" id="icomModel"></div>
+        <div id="icomPreflight" style="margin:10px 0 14px"></div>
+        <label><span class="lbl">CI-V baud rate</span>
+          <select id="icomBaud">
+            <option value="115200">115200 (recommended)</option><option value="57600">57600</option>
+            <option value="38400">38400</option><option value="19200">19200</option>
+            <option value="9600">9600</option><option value="4800">4800</option></select>
+          <div class="hint">Must match the radio: <b>MENU &gt; SET &gt; Connectors &gt; CI-V &gt; CI-V USB Baud Rate</b>
+            (or set the radio to Auto). The scope shares this serial line with everything else, so the speed IS the
+            waterfall&rsquo;s speed: 115200 gives about 19 lines a second, 19200 only about 3. Also set
+            <b>CI-V USB Port</b> to &ldquo;Unlink from [REMOTE]&rdquo;.</div></label>
+        <label><span class="lbl">CI-V address</span>
+          <input id="icomCiv" maxlength="2" placeholder="Empty = the radio's own (94 on an IC-7300)">
+          <div class="hint">Two hex digits. Only change it if you changed <b>CI-V Address</b> on the radio.</div></label>
+        <label><span class="lbl">Scope speed</span>
+          <select id="icomScopeSpeed"><option value="0">Fast</option><option value="1">Mid</option><option value="2">Slow</option></select>
+          <div class="hint">The radio&rsquo;s own sweep speed. Slow sweeps are smoother and leave more of the serial line for tuning.</div></label>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <input type="checkbox" id="icomOwnerLock" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Listeners follow the radio &mdash; only you tune it</span></label>
+        <div class="hint" id="icomLockHint">On: listeners hear whatever you are on and cannot retune your radio
+          mid-QSO. You tune from the radio or from VibeSDR signed in as admin. <b>This only protects the radio once an
+          admin password is set</b> &mdash; without one, anyone can sign in as admin.</div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <input type="checkbox" id="icomRfOpen" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Listeners may change ATT, preamp, AGC, RF gain, NB, NR and ANF</span></label>
+        <label><span class="lbl">Receive audio</span>
+          <input id="icomAudio" placeholder="auto">
+          <div class="hint"><b>auto</b> finds the radio&rsquo;s own USB audio next to its CI-V port. <b>none</b> serves the
+            waterfall and dial only. On Linux, a sound server (PulseAudio/PipeWire) holding the radio&rsquo;s audio stops
+            VibeServer opening it. On a Mac, allow VibeServer under Privacy &amp; Security &gt; Microphone.</div></label>
+        <label><span class="lbl">Port</span>
+          <input id="icomPort" placeholder="usb">
+          <div class="hint"><b>usb</b> = the radio&rsquo;s USB port, found by its own name. VibeServer drives the radio&rsquo;s
+            USB chip directly and <b>never raises its DTR or RTS lines</b>, which some menu settings use to transmit.</div></label>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <input type="checkbox" id="icomTtyOk" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Allow a serial device (/dev/&hellip;) as the port</span></label>
+        <p class="why" style="color:var(--warn)">Opening a serial device raises its DTR and RTS lines for an instant. If the
+           radio&rsquo;s <b>USB SEND</b> or <b>USB Keying</b> is set to DTR or RTS, that keys the transmitter. Only tick this
+           if those are OFF &mdash; VibeServer checks them every time it connects and refuses to start if they are not.</p>
+        <p class="why"><b>Only one program can hold the radio&rsquo;s USB port.</b> Close wfview, wfweb, WSJT-X&rsquo;s rig
+           control and any logger that talks to the radio, or VibeServer cannot reach it.</p>
+      </div>
+      <div class="card" id="radioStartCard">
         <h2>Radio</h2>
         <p class="why">How this radio starts, and where its gain is set. Gain itself lives in the
            client, behind the admin password, where you can see the waterfall while you move it.</p>
@@ -3448,6 +3499,57 @@ function govOffer() {
   gsel.value = want;
 }
 
+/* ★★★ THE ICOM CARD (receive only). Shown for driver "icom" alone, and then the IQ cards are hidden: an Icom
+ *  has no sample rate, no gain table, no window to lock and no bias-T, and a card full of dead controls would
+ *  read as a broken radio (AGENTS.md). The facts come from the radio itself (hw.radio = the same object as
+ *  hwinfo's); the settings from this radio's config entry. */
+function icomRender(hw, r, drv) {
+  const isIcom = drv === "icom";
+  const card = $("icomCard");
+  if (!card) return;
+  card.classList.toggle("hide", !isIcom);
+  // ★ Hidden for an Icom and put BACK for any other radio (a tab switch must not leave them gone). The gain
+  //   card is the exception: renderGain() owns its visibility for every other driver.
+  // ★ startCard too: an Icom ignores the landing frequency — the radio is where its owner left it.
+  for (const id of ["rangeCard", "gainCard", "radioHwCard", "radioStartCard", "startCard"]) {
+    const e = document.getElementById(id);
+    if (!e) continue;
+    if (isIcom) e.classList.add("hide");
+    else if (id !== "gainCard") e.classList.remove("hide");
+  }
+  if (!isIcom) return;
+  const ic = (hw && hw.radio && hw.radio.driver === "icom") ? hw.radio : null;
+  const esc = (t) => String(t == null ? "" : t).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+  if (ic) {
+    $("icomModel").innerHTML = `<b>${esc(ic.model)}</b> &middot; CI-V address ${esc(ic.civ)} &middot; ${esc(ic.baud)} baud &middot; `
+      + (ic.linesHeldLow ? "USB chip driven directly, DTR/RTS held low" : "serial device (DTR/RTS raised on open)")
+      + ` &middot; scope ${esc(ic.scope && ic.scope.fps)} lines/s`
+      + (ic.audio ? ` &middot; audio: ${esc(ic.audio)}` : "")
+      + (ic.audioProblem ? `<br><span style="color:var(--warn)">Audio: ${esc(ic.audioProblem)}</span>` : "");
+    const pf = ic.preflight || {};
+    const rows = (pf.items || []).map((it) =>
+      `<div style="display:flex;gap:8px"><span style="color:${it.ok ? "var(--good)" : "var(--bad)"}">${it.ok ? "&#10003;" : "&#10007;"}</span>`
+      + `<span><b>${esc(it.name)}</b>: ${esc(it.value)}${it.ok ? "" : ` &mdash; change it at <b>${esc(it.where)}</b>`}</span></div>`).join("");
+    $("icomPreflight").innerHTML = `<div style="color:${pf.passed ? "var(--good)" : "var(--bad)"}">${esc(pf.summary)}</div>${rows}`;
+  } else {
+    // ★ Not running: usually the preflight refused it, and the reason is in the radio's status line.
+    const why = (cfg && cfg.icomStatus && r && cfg.icomStatus[r.serial]) || "";
+    $("icomModel").textContent = (r && r.label) || "Icom transceiver";
+    $("icomPreflight").innerHTML = `<div style="color:var(--warn)">This radio is not running${why ? ": " + esc(why) : "."}</div>`
+      + `<div class="hint">VibeServer reads the radio&rsquo;s USB SEND, USB Keying and VOX settings every time it connects, and will not `
+      + `start the radio while any of them could make it transmit. It never changes them itself.</div>`;
+  }
+  const set = (id, v) => { const e = $(id); if (e && document.activeElement !== e) { if (typeof v === "boolean") e.checked = v; else e.value = v; } };
+  set("icomBaud", String(r.icomBaud || 115200));
+  set("icomCiv", r.icomCiv ? Number(r.icomCiv).toString(16).toUpperCase() : "");
+  set("icomScopeSpeed", String(r.icomScopeSpeed || 0));
+  set("icomOwnerLock", r.icomOwnerLock !== false);
+  set("icomRfOpen", !!r.icomRfOpen);
+  set("icomAudio", r.icomAudio || "auto");
+  set("icomPort", r.icomPort || "usb");
+  set("icomTtyOk", !!r.icomTtyOk);
+}
+
 async function renderHw() {
   let hw = null;
   const r = radio();
@@ -3557,6 +3659,7 @@ async function renderHw() {
     //   in another (Stuart, 2026-08-08). The request only ever refreshes what is beneath it.
     if ($("rtlSerialNow")) $("rtlSerialNow").value = (radio().serial || "").trim();
     show("hwPpb",   drv === "airspyhf");
+    icomRender(hw, r, drv);
   }
 
   // ★ Show what the processor is ACTUALLY doing, next to the control that asks for it.
@@ -5175,6 +5278,17 @@ function collectRadio() {
     ...(DRIVER_HW[drv] && DRIVER_HW[drv].biasT ? {biasT: $("biasT").checked} : {}),
     ...(drv === "rtl" || drv === "rtlsdr" ? {ppm: parseInt($("ppm").value || "0", 10)} : {}),
     ...(drv === "airspyhf" ? {ppb: parseInt($("ppb").value || "0", 10)} : {}),
+    // ★ An Icom's own settings — only for an Icom, so no other radio's config ever carries them.
+    ...(drv === "icom" ? {
+      icomBaud: parseInt($("icomBaud").value, 10) || 115200,
+      icomCiv: parseInt($("icomCiv").value || "0", 16) || 0,
+      icomScopeSpeed: parseInt($("icomScopeSpeed").value, 10) || 0,
+      icomOwnerLock: $("icomOwnerLock").checked,
+      icomRfOpen: $("icomRfOpen").checked,
+      icomAudio: ($("icomAudio").value || "auto").trim(),
+      icomPort: ($("icomPort").value || "usb").trim(),
+      icomTtyOk: $("icomTtyOk").checked,
+    } : {}),
     releaseWhenIdle: $("releaseWhenIdle").checked,
     idleGrace: parseFloat($("idleGrace").value),
     // ★ ALWAYS, not just when locked. A one-listener radio is precisely the one someone can sit

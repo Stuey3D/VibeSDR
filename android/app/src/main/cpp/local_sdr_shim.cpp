@@ -18797,7 +18797,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    the label travel: the page never learns an edge, so the two cannot drift into
             //    disagreeing about where "VHF airband" ends — which is the kind of difference
             //    nobody notices until a listener is somewhere the owner thought they had blocked.
-            if (!rsp && !hf && !hrf && !lost) {
+            if (!rsp && !hf && !hrf && !lost && !useIcom()) {   // ★ an Icom has no gain table
                 std::vector<int> g = LocalSdrShim::instance().getTunerGains();
                 for (size_t i = 0; i < g.size(); i++) { if (i) j += ','; j += std::to_string(g[i]); }
             }
@@ -18883,6 +18883,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 j += "]";
             }
+            // ★★ AN ICOM's setup facts — model, CI-V address, baud, the preflight in plain words, the transport —
+            //    are the same object hwinfo carries (one writer, radioCapsJsonCore), as `radio` here too.
+            if (!noRadio && useIcom()) j += LocalSdrShim::instance().radioCapsJsonCore();
             j += "}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
