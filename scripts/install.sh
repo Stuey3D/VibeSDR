@@ -355,6 +355,9 @@ sources_disable_ours() { awk 'BEGIN{RS="";ORS="\n\n"} /apt\.vibesdr\.net/ && !/(
 for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
   [ -f "$f" ] || continue
   [ "$f" = "$LIST" ] && continue
+  # ★★ The admin page's "Receive beta updates" source (suite beta, written by vibeserver-maintenance with the same
+  #    signed-by as ours) is the owner's choice, not an older copy: running the installer again must not untick it.
+  [ "$f" = "/etc/apt/sources.list.d/vibesdr-beta.list" ] && continue
   # ★ ACTIVE entries only: an entry this script already switched off must not trigger a second
   #   pass, which would overwrite the original backup with the already-disabled copy.
   case "$f" in

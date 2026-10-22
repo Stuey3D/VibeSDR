@@ -3280,7 +3280,8 @@ int main(int argc, char** argv) {
     //    re-detected until it is physically replugged — the button would STRAND the receiver.
     //    Same rule as AGENTS.md: remove a control that cannot work rather than leave it visible.
 #if defined(__linux__) && !defined(__ANDROID__)
-    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove,diagnostics");
+    // ★ beta-on / beta-off / update-stable: the "Receive beta updates" tick-box and its way back (2026-10-22).
+    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove,diagnostics,beta-on,beta-off,update-stable");
 #else
     LocalSdrShim::setMaintenanceActions("");   // no section at all, rather than an empty one
 #endif
@@ -4214,6 +4215,47 @@ int main(int argc, char** argv) {
         return true;
     });
 
+#if defined(__linux__) && !defined(__ANDROID__)
+    /* ★★★ RECEIVE BETA UPDATES (Stuart, 2026-10-22: "user ticks it and then V12 gets offered, user unticks it V11 gets
+     *  offered instead"). Both halves are READ FROM THE SYSTEM on every status call, never remembered here:
+     *   · ticked = the beta apt source exists (the root helper's beta-on writes it, beta-off removes it) — so the box
+     *     can never show a tick that apt does not act on, whoever changed the file;
+     *   · the offer = what the helper last worked out from apt (update-offer, root:vibeserver 0640 in its own
+     *     directory, read with O_NOFOLLOW like the log). An offer written under the OTHER tick state is marked
+     *     stale rather than shown, so the page never says "back to stable" with beta ticked. */
+    LocalSdrShim::setUpdateOfferHandler([]() -> std::string {
+        struct stat bl{};
+        const bool beta = ::lstat("/etc/apt/sources.list.d/vibesdr-beta.list", &bl) == 0 && S_ISREG(bl.st_mode);
+        std::string fBeta, installed, offer, version, checked;
+        const int fd = ::open("/var/lib/vibeserver-maint/update-offer", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd >= 0) {
+            char buf[1024]; const ssize_t n = ::read(fd, buf, sizeof buf - 1); ::close(fd);
+            std::string body(buf, n > 0 ? (size_t)n : 0), line;
+            std::istringstream in(body);
+            while (std::getline(in, line)) {
+                const size_t eq = line.find('=');
+                if (eq == std::string::npos) continue;
+                const std::string k = line.substr(0, eq);
+                std::string v;
+                // ★ A version's characters and nothing else — this lands in JSON and on a page.
+                for (char c : line.substr(eq + 1))
+                    if (std::isalnum((unsigned char)c) || c == '.' || c == '+' || c == '~' || c == ':' || c == '-') v += c;
+                if (k == "beta") fBeta = v; else if (k == "installed") installed = v;
+                else if (k == "offer") offer = v; else if (k == "version") version = v;
+                else if (k == "checked") checked = v;
+            }
+        }
+        const bool stale = !offer.empty() && fBeta != (beta ? "1" : "0");
+        std::string j = std::string("{\"beta\":") + (beta ? "true" : "false");
+        j += ",\"installed\":\"" + installed + "\"";
+        j += ",\"offer\":\"" + (stale ? std::string() : offer) + "\"";
+        j += ",\"version\":\"" + (stale ? std::string() : version) + "\"";
+        j += std::string(",\"stale\":") + (stale ? "true" : "false");
+        j += ",\"checked\":" + std::to_string(checked.empty() ? 0LL : std::atoll(checked.c_str())) + "}";
+        return j;
+    });
+#endif
+
     LocalSdrShim::setAdminLogHandler([](std::string& text, bool& running, int& exitCode) {
         text.clear(); running = false; exitCode = 0;
         struct stat rq{};
@@ -4284,7 +4326,12 @@ int main(int argc, char** argv) {
                                           "sdrplay-restart",
                                           /* ★ Download diagnostics: the helper builds the file, the
                                            *  handler below serves it (2026-10-20). */
-                                          "diagnostics" };
+                                          "diagnostics",
+                                          /* ★★ RECEIVE BETA UPDATES (2026-10-22): the tick-box adds or removes
+                                           *  the beta apt source; update-stable is the one DOWNGRADE, sent only
+                                           *  by a person pressing BACK TO STABLE — never by the schedule, which
+                                           *  sends `update` (--only-upgrade). See the helper. */
+                                          "beta-on", "beta-off", "update-stable" };
         bool known = false;
         for (const char* a : kActions) if (action == a) { known = true; break; }
         if (!known) { err = "unknown action: " + action; return false; }

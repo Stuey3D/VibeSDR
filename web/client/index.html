@@ -2794,6 +2794,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 .aBanForm input:focus, .aBanForm select:focus { outline: none; border-color: var(--amber); }
 .aBanForm #banCidr { flex: 1 1 260px; font-variant-numeric: tabular-nums; }
+/* ★ Receive beta updates — the admin page's only tick-box. The native control, tinted, so it reads as one on every
+   theme without a custom drawing to keep in step. */
+.aBeta { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; margin: 4px 0 8px; }
+.aBeta input { accent-color: var(--amber); width: 18px; height: 18px; margin: 1px 0 0; flex: none; cursor: pointer; }
+.aBeta input:disabled { cursor: progress; }
 
 .aActions { display: flex; gap: 6px; flex-wrap: wrap; }
 /* ★ Same shape as .aActions but for a row that mixes a text field with its buttons — wraps on a
@@ -3879,6 +3884,14 @@ select.btn { padding: 6px 8px; }
            owner to send us. Built as root by the maintenance helper, secrets removed, saved by this browser. -->
       <button class="btn" id="actDiag" hidden>DOWNLOAD DIAGNOSTICS</button>
     </div>
+    <!-- ★★★ RECEIVE BETA UPDATES (Stuart, 2026-10-22). Ticked = the beta apt source exists on this machine, READ BACK
+         from the server on every refresh, never just remembered by this page. Ticking only changes what UPDATE
+         VIBESERVER offers; unticking on a beta turns that button into BACK TO STABLE. Linux servers only. -->
+    <label class="aBeta" id="betaRow" hidden>
+      <input type="checkbox" id="betaOptIn">
+      <span><b>Receive beta updates (V12)</b> &mdash; new features early; untick to return to the stable version.</span>
+    </label>
+    <p class="dim wrap aNote" id="updOffer" hidden></p>
     <p class="dim wrap aNote" id="actDiagNote" hidden>
       <b>Download diagnostics</b> saves a text file of this server&rsquo;s logs and settings from the last day, to send
       to us if something is not working. It never contains passwords, but it does contain this server&rsquo;s

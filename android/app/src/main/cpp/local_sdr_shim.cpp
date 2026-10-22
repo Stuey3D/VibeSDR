@@ -4889,6 +4889,7 @@ static std::atomic<int>            g_biasTeeWant{-1};   // -1 = never asked
 static LocalSdrShim::AdminActionFn g_vsAdminActionFn;
 static LocalSdrShim::AdminLogFn    g_vsAdminLogFn;
 static LocalSdrShim::AdminDiagFn   g_vsAdminDiagFn;      // ★ guarded by g_vsConfigMtx — see setAdminDiagnosticsHandler
+static LocalSdrShim::UpdateOfferFn g_vsUpdateOfferFn;    // ★ guarded by g_vsConfigMtx — Linux daemon only (beta updates)
 static LocalSdrShim::GeoIpFn       g_vsGeoIpFn;
 /** ★ Station artwork by PI/ECC/frequency (RadioDNS). Declared with the other handlers rather than
  *  beside its setter, because the ENDPOINT that reads it is thousands of lines above that. */
@@ -27584,6 +27585,11 @@ std::string LocalSdrShim::adminStatusJson() {
     }
     { std::lock_guard<std::mutex> lk(g_vsMaintMtx);
       j += ",\"maintenance\":\"" + vibeadmin::esc(g_vsMaintActions) + "\""; }
+    // ★★ RECEIVE BETA UPDATES (2026-10-22): the tick-box's state and what UPDATE VIBESERVER would install, as the root
+    //    helper last worked them out. Absent wherever the daemon installs no handler (every non-Linux server).
+    { LocalSdrShim::UpdateOfferFn fn;
+      { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsUpdateOfferFn; }
+      if (fn) { const std::string u = fn(); if (!u.empty()) j += ",\"updates\":" + u; } }
     // ★ The GPU map's optional High Detail pack (vibe_mapgl.h). Present on EVERY platform —
     //   `available:false` is how the page learns this server cannot download it.
     j += ",\"mapglDetail\":" + vibemapgl::statusJson();
@@ -28134,6 +28140,10 @@ void LocalSdrShim::setAdminActionHandler(AdminActionFn fn) {
 void LocalSdrShim::setAdminDiagnosticsHandler(AdminDiagFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsAdminDiagFn = std::move(fn);
+}
+void LocalSdrShim::setUpdateOfferHandler(UpdateOfferFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsUpdateOfferFn = std::move(fn);
 }
 void LocalSdrShim::setAdminLogHandler(AdminLogFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
