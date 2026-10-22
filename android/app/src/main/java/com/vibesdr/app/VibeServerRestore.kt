@@ -241,6 +241,8 @@ object VibeServerRestore {
      */
     fun onRadioAttached(ctx: Context, dev: UsbDevice?, why: String) {
         if (dev != null && !isServable(dev)) return
+        // ★★ An RSP re-enumerating after its firmware upload is the driver's to adopt (VibeRsp), whatever else follows.
+        if (dev != null && VibeRsp.isRsp(dev)) VibeRsp.onAttached(ctx, dev)
         // ★ Nothing armed, nothing to do: a running server is always armed (arm at start, disarm at stop), and this
         //   keeps an ordinary plug-in from loading the engine at all.
         if (!isArmed(ctx)) return
@@ -339,6 +341,7 @@ object VibeServerRestore {
         disarm(ctx)
         try { VibeLocalSDR.stopMdns() } catch (t: Throwable) { Log.w(TAG, "stopMdns: ${t.message}") }
         try { VibeLocalSDR.stopSpectrumSync() } catch (t: Throwable) { Log.w(TAG, "stopping the engine: ${t.message}") }
+        VibeRsp.releaseAll(ctx)
         releaseServerConn()
         try { VibeLocalSDR.setServeOnLan(false) } catch (t: Throwable) { Log.w(TAG, "setServeOnLan: ${t.message}") }
         try { VibeLocalSDR.setVibeServerAuth("") } catch (t: Throwable) { Log.w(TAG, "clearing the secret: ${t.message}") }
@@ -383,6 +386,8 @@ object VibeServerRestore {
         val conn = mgr.openDevice(dev) ?: return "openDevice returned null"
         val fd = conn.fileDescriptor
         if (fd < 0) { conn.close(); return "bad fd" }
+        // ★★ An RSP goes to OpenRSP's service first — the same step as the app's start path (VibeRsp).
+        if (VibeRsp.isRsp(dev)) VibeRsp.attach(ctx, conn, dev)?.let { conn.close(); return it }
 
         // ★★★ THE SAME APPLY PATH THE APP USES — see VibeServerBoot. Nothing is reconstructed or
         //     assumed here any more: whatever the server was running with is what it comes back

@@ -181,6 +181,8 @@ def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'R
               // ★ stage 2: the bridge modules ServerModeScreen talks to — the main app's own files.
               //   They import only React's classic bridge API, which 0.73 has.
               'VibeLocalSdrModule.kt', 'VibeMdnsModule.kt',
+              // ★★ The SDRplay RSP (OpenRSP embedded): firmware, the USB hand-off and the re-enumeration watch.
+              'VibeRsp.kt',
               // ★ Puts a running server back after an update (MY_PACKAGE_REPLACED). Missing from Lite, so a
               //   reinstall left a TV box's server stopped until somebody walked to it (2026-09-19).
               'VibeUpdateReceiver.kt',
@@ -203,8 +205,9 @@ tasks.register('syncShared', Sync) {
     into "${buildDir}/shared-src/com/vibesdr/app"
 }
 tasks.register('syncSharedRes', Sync) {
-    from("${MAIN}/res/xml") { include 'device_filter.xml' }
-    into "${buildDir}/shared-res/xml"
+    // ★ And the API 26 one, which adds the SDRplay RSPs (their driver needs Android 8.0) — see its comment.
+    from("${MAIN}/res") { include 'xml/device_filter.xml', 'xml-v26/device_filter.xml' }
+    into "${buildDir}/shared-res"
 }
 tasks.register('syncJniLibs', Sync) {
     // ★★★ FAIL LOUDLY WITHOUT THE TUNNEL. cloudflared is gitignored (27 MB), so a fresh clone or an agent's
@@ -245,6 +248,10 @@ preBuild.dependsOn syncShared, syncSharedRes, syncJniLibs, bundleJs, syncFonts
 // ★★★ The GPU map files the server serves at /mapgl/ — the MAIN app's script, so both APKs carry the
 //     same pack by construction (briefs/BRIEF-server-gpu-maps.md §2).
 apply from: "${MAIN}/../../mapgl-assets.gradle"
+// ★★★ The RSP driver (OpenRSP) — the MAIN app's script, so Lite carries the same driver. armeabi-v7a only, as
+//     Lite is; it runs on Android 8.0+ only (API 26), and below that Lite simply does not offer an RSP.
+ext.openRspAbis = ['armeabi-v7a']
+apply from: "${MAIN}/../../openrsp.gradle"
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'

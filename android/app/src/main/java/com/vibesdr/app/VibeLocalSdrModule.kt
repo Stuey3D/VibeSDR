@@ -171,6 +171,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     private fun isHackRf(dev: UsbDevice): Boolean =
         dev.vendorId == HACKRF_VID && dev.productId == HACKRF_PID
 
+    /** ★★★ An SDRplay RSP (2026-10-22) — every model, through the OpenRSP driver inside the app. FALSE below
+     *  Android 8.0 (API 26): the driver cannot run there, so the radio is not one this app offers. See VibeRsp. */
+    private fun isRsp(dev: UsbDevice): Boolean = VibeRsp.isRsp(dev)
+
     /** ★ An Airspy R2 or Mini (2026-09-22) — see AIRSPY_VID. */
     private fun isAirspy(dev: UsbDevice): Boolean =
         dev.vendorId == AIRSPY_VID && dev.productId == AIRSPY_PID
@@ -196,12 +200,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         //   this puts the same two facts on the LISTING, where the UI decides what to call it
         //   before anything is opened. Same family as [[else_means_dongle_trap]]: with two radios
         //   supported, "it is a device we know" no longer implies "it is a dongle".
-        /* ★★★ A THREE-WAY FACT, NOT A TWO-WAY ONE. This was `if (isAirspyHf) "airspyhf" else
-         * "rtl"`, which does not fail — it silently calls a HackRF a dongle, and everything
+        /* ★★★ A FIVE-WAY FACT, NOT A TWO-WAY ONE (the RSP made it five, 2026-10-22). This was `if (isAirspyHf)
+         * "airspyhf" else "rtl"`, which does not fail — it silently calls a HackRF a dongle, and everything
          * downstream that switches on `kind` then draws a dongle's gain list for a radio that
          * has three stages and no AGC. Adding a driver means revisiting every else-branch that
          * assumed there were only two. */
         m.putString("kind", when {
+            isRsp(dev)      -> "sdrplay"
             isAirspyHf(dev) -> "airspyhf"
             isAirspy(dev)   -> "airspy"
             isHackRf(dev)   -> "hackrf"
@@ -781,6 +786,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             ?: run { promise.reject("open_failed", "openDevice returned null"); return }
         val fd = conn.fileDescriptor
         if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
+        // ★★ An RSP goes to OpenRSP's service, not to the engine — see VibeRsp and LocalSdrShim::start.
+        if (isRsp(dev)) VibeRsp.attach(reactContext, conn, dev)?.let { conn.close(); promise.reject("rsp", it); return }
         sessionConn = conn
 
         val centerFreq = if (opts.hasKey("centerFreq")) opts.getDouble("centerFreq") else 100_000_000.0
@@ -808,6 +815,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
          *  memory — and an RTL's 2.4 MS/s was restored onto an HF+ that tops out at 912 kHz. The
          *  serial (readable now that permission is granted) separates two of the same kind. */
         res.putString("radioKind", when {
+            isRsp(dev) -> "sdrplay"
             isAirspyHf(dev) -> "airspyhf"; isAirspy(dev) -> "airspy"
             isHackRf(dev) -> "hackrf"; else -> "rtl" })
         res.putString("radioSerial", try { dev.serialNumber ?: "" } catch (_: SecurityException) { "" })
@@ -923,6 +931,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             ?: run { promise.reject("open_failed", "openDevice returned null"); return }
         val fd = conn.fileDescriptor
         if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
+        // ★★ An RSP goes to OpenRSP's service, not to the engine — see VibeRsp and LocalSdrShim::start.
+        if (isRsp(dev)) VibeRsp.attach(reactContext, conn, dev)?.let { conn.close(); promise.reject("rsp", it); return }
         sessionConn = conn
         // ★ Shared with the re-enumeration recovery, which closes it when it has to replace it.
         VibeServerRestore.holdServerConn(conn, dev)   // ★ and which radio — see heldVidPid
@@ -1059,6 +1069,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val product = (dev.productName ?: "").trim()
         val maker = (dev.manufacturerName ?: "").trim()
         val fallback = when {
+            isRsp(dev)      -> VibeRsp.modelName(dev.productId)
             isAirspyHf(dev) -> "Airspy HF+"
             isAirspy(dev)   -> "Airspy"      // ★ R2 or Mini — the board id at open says which
             isHackRf(dev)   -> "HackRF One"
@@ -1076,6 +1087,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             ?: run { promise.resolve(null); return }
         val res = Arguments.createMap()
         res.putString("driver", when {
+            isRsp(dev)      -> "sdrplay"    // ★ the same name every VibeServer reports for an RSP
             isAirspyHf(dev) -> "airspyhf"
             isAirspy(dev)   -> "airspy"     // ★ was missing: an Airspy R2/Mini reported "rtl" here (2026-09-28)
             isHackRf(dev)   -> "hackrf"
@@ -1501,6 +1513,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // this to a background thread so the bridge never stalls; the internal callers WANT to
         // wait, because every one of them is about to touch the device again.
         try { VibeLocalSDR.stopSpectrumSync() } catch (_: Throwable) {}
+        // ★ After the engine has stopped: the RSP driver's devices are let go (nothing is streaming from them now).
+        VibeRsp.releaseAll(reactContext)
         tcpWifiLock.release()
         sessionConn?.let { try { it.close() } catch (_: Exception) {} }
         sessionConn = null
@@ -1709,6 +1723,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
          *  reachable without a module instance. The service asks it of a USB device that has just
          *  DETACHED, to know whether the server's radio is what left (VibeServerRestore.noteRadioGone). */
         internal fun isServableRadio(vid: Int, pid: Int): Boolean =
+            VibeRsp.isRsp(vid, pid) ||      // ★ API 26+ only — VibeRsp.supported
             RTL_SDR_VIDPIDS.contains((vid shl 16) or pid) ||
             (vid == AIRSPYHF_VID && pid == AIRSPYHF_PID) ||
             (vid == HACKRF_VID && pid == HACKRF_PID) ||

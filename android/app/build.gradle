@@ -262,6 +262,10 @@ tasks.named('preBuild') { dependsOn 'copyCloudflared' }
 // ★★★ The GPU map files the Android VibeServer serves at /mapgl/ — see mapgl-assets.gradle.
 apply from: file('mapgl-assets.gradle')
 
+// ★★★ The RSP driver (OpenRSP) and its firmware — see openrsp.gradle. Both ABIs this app ships.
+ext.openRspAbis = ['arm64-v8a', 'armeabi-v7a']
+apply from: file('openrsp.gradle')
+
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
 // android.packagingOptions.pickFirsts=/LICENSE,**/picasa.ini
