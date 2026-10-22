@@ -9510,6 +9510,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         return b;
     }
+    /** ★★ WHEN EACH LISTENER ARRIVED, FOR THE RANK — its own 2-minute memory, not the session limit's 15 (Seniority). */
+    vibeask::Seniority askSeniority = askSeniorityFromEnv();
+    /** ★ TEST-ONLY: VIBE_ASK_RANK_FORGET_S shortens the 2-minute place-keeping so scripts/test-ask-before-tuning.mjs can
+     *  watch a long absence in seconds. Never set on a real server; out-of-range values are ignored. */
+    static vibeask::Seniority askSeniorityFromEnv() {
+        vibeask::Seniority s;
+        if (const char* e = std::getenv("VIBE_ASK_RANK_FORGET_S")) {
+            const double v = std::atof(e);
+            if (v >= 1.0 && v <= 3600.0) s.forgetS = v;
+        }
+        return s;
+    }
+    /** The seniority key each socket arrived under, so its close is counted exactly once (askRankLeaveLocked). */
+    std::map<net::Socket*, std::string> sockRankKey;
+    /** A socket stops counting towards its listener's presence. Idempotent. Call WITH clientMtx held. */
+    void askRankLeaveLocked(net::Socket* sk, double now) {
+        auto it = sockRankKey.find(sk);
+        if (it == sockRankKey.end()) return;
+        askSeniority.leave(it->second, now);
+        sockRankKey.erase(it);
+    }
     /** What each spectrum socket was last told, so the tick re-sends `dial` only to somebody whose view CHANGED. */
     std::map<net::Socket*, vibeask::View> askSent;
     /** ★ One refusal notice per session per 10 s, and one full-state reply per socket per second: a held tune
@@ -9521,31 +9542,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool askInForceLocked() { return g_vsAskBeforeTuning.load() && vsSharedDial() && specListenerCountLocked() > 1; }
 
     /** ★★ THE ROOM, AS THE RULE NEEDS IT. Call WITH clientMtx held.
-     *  ★★ "LONGEST-CONNECTED" IS THE SESSION LIMIT'S OWN CLOCK — `sockSince`, the turn start keyed on the browser and
-     *     address, so a reload does not jump the queue and the rank agrees with the countdown on screen. The earliest
-     *     of a session's sockets is theirs.
+     *  ★★ "LONGEST-CONNECTED" IS askSeniority — keyed on the browser and address like the turn clock, so a reload
+     *     does not jump the queue, but remembered for only 2 minutes away (Stuart, 2026-10-22: the turn clock's 15
+     *     let somebody leave for 14 minutes and come back with full control). The earliest of a session's sockets
+     *     is theirs. `sockSince` (the turn clock) still decides who is past the time limit.
      *  ★ Past the limit = the same test the countdown uses (secsLeftFor): limit set, not admin, not loopback. */
     vibeask::Room askRoomLocked(double now) {
         vibeask::Room r;
         r.inForce = askInForceLocked();
         if (!r.inForce) return r;
-        std::map<std::string, std::pair<double, bool>> seen;   // session -> (earliest since, loopback)
+        struct Seen { double arrived, turn; bool loopback; };
+        std::map<std::string, Seen> seen;   // session -> (earliest arrival, earliest turn start, loopback)
         for (auto& [sk, sess] : sockSession) {
             if (sess.empty() || !sk) continue;
             auto si = sockSince.find(sk);
-            const double since = si != sockSince.end() && si->second > 0 ? si->second : now;
+            const double turn = si != sockSince.end() && si->second > 0 ? si->second : now;
+            auto ri = sockRankKey.find(sk);
+            const double arrived = ri != sockRankKey.end() ? askSeniority.since(ri->second, now) : now;
             auto it = seen.find(sess);
             const bool lb = isLoopback(sk->peerAddress());
-            if (it == seen.end()) seen[sess] = { since, lb };
-            else { it->second.first = std::min(it->second.first, since); it->second.second = it->second.second || lb; }
+            if (it == seen.end()) seen[sess] = { arrived, turn, lb };
+            else { it->second.arrived = std::min(it->second.arrived, arrived); it->second.turn = std::min(it->second.turn, turn);
+                   it->second.loopback = it->second.loopback || lb; }
         }
         const int limitMin = g_vsSessionLimitMin.load();
         for (auto& [sess, v] : seen) {
             vibeask::Person p;
             p.session = sess;
             p.admin = isAdminSessionLocked(sess);
-            p.since = v.first;
-            p.overLimit = limitMin > 0 && !p.admin && !v.second && (now - v.first) >= (double)limitMin * 60.0;
+            p.since = v.arrived;
+            p.overLimit = limitMin > 0 && !p.admin && !v.loopback && (now - v.turn) >= (double)limitMin * 60.0;
             auto h = dialHandles.find(sess);
             p.handle = h != dialHandles.end() ? h->second : 0;
             r.people.push_back(p);
@@ -20202,6 +20228,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               //     sockets 15 s apart from one address both told 1800). Same rule as the
               //     occupant and the per-client DSP: a reload does not buy a fresh half hour.
               sockSince[sock.get()] = turnStartForLocked(turnKeyLocked(sock.get(), sock->peerAddress()), Impl::nowSecs());
+              // ★ …and their place in the ask-before-tuning order, which forgets after 2 minutes away (askSeniority).
+              if (!sockRankKey.count(sock.get())) {
+                  const std::string rk = turnKeyLocked(sock.get(), sock->peerAddress());
+                  sockRankKey[sock.get()] = rk;
+                  askSeniority.arrive(rk, Impl::nowSecs());
+              }
               if (sessionTurnKey.size() > 256)   // ★ bounded: drop sessions whose turn has gone
                   for (auto it = sessionTurnKey.begin(); it != sessionTurnKey.end(); )
                       it = turnBook.has(it->second) ? std::next(it) : sessionTurnKey.erase(it);
@@ -21763,6 +21795,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               }
           }
           sockSince.erase(sock.get());
+          askRankLeaveLocked(sock.get(), Impl::nowSecs());
           sockWarned.erase(sock.get());
           sockHandover.erase(sock.get());
           { std::lock_guard<std::mutex> rl(rdsxMtx);
@@ -24866,6 +24899,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx);
           sockHandover.erase(victim.sk.get());
           sockSince.erase(victim.sk.get());              // ★ not a candidate again while it drains
+          askRankLeaveLocked(victim.sk.get(), now);      // ★ ended by the limit: gone from the order too
           if (!addr.empty()) {
               cooldownUntil[addr] = now + kSessionCooldownSec;
               std::string tk = turnKeyLocked(victim.sk.get(), addr);

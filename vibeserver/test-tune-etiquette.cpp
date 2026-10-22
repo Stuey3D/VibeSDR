@@ -235,6 +235,30 @@ int main() {
     ok(!b.onSaid(r, "a", "ask_tune", 1000), "an ask from somebody already free opens nothing");
   }
 
+  {   // ★★★ THE PLACE IN THE ORDER FORGETS AFTER 2 MINUTES AWAY (Stuart, 2026-10-22: "It would be a bit unfair for a
+      //     user to disconnect for 14 mins then come back with full control"). The session limit keeps its 15.
+    Seniority s;
+    ok(s.arrive("app", 100) == 100, "the first arrival is stamped when it arrives");
+    ok(s.arrive("app", 101) == 100, "a second socket of the same listener keeps the first stamp");
+    ok(s.arrive("friend", 200) == 200, "a newcomer is stamped later");
+    s.leave("app", 300); s.leave("app", 300);
+    ok(s.arrive("app", 312) == 100, "back 12 s later (Stuart's test): a blip keeps the place");
+    s.leave("app", 400);
+    ok(s.arrive("app", 400 + kGoneForgetS) == 100, "back at exactly 2 minutes: still the same visit");
+    s.leave("app", 1000);
+    ok(s.arrive("app", 1000 + kGoneForgetS + 1) == 1000 + kGoneForgetS + 1, "away over 2 minutes: back as the newest arrival");
+    s.leave("app", 2000);
+    ok(s.arrive("app", 2000 + 14 * 60) == 2000 + 14 * 60, "away 14 minutes: no full control on return");
+    s.leave("nobody", 5000);
+    ok(s.since("nobody", 5000) == 5000, "an unknown key reads as arriving now");
+    Seniority t;
+    t.arrive("x", 0); t.leave("x", 0);
+    t.arrive("y", 1000);
+    ok(!t.byKey.count("x"), "the long gone are forgotten (the map stays bounded)");
+    ok(rankOrder({ P("app", s.since("app", 3000)), P("friend", s.since("friend", 3000)) })[0] == "friend",
+       "so after a long absence the friend outranks the returning app");
+  }
+
   std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
   return fails ? 1 : 0;
 }
