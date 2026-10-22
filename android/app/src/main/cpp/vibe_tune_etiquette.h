@@ -27,6 +27,12 @@ constexpr double kAskWindowS = 15.0;
 constexpr double kNoHoldS = 5.0 * 60.0;
 /** ★ A grant outlives a reconnect: the same hold the user numbers use (the shim's handleHoldSec, 2 minutes). */
 constexpr double kGoneForgetS = 120.0;
+/** ★★★ A GRANT LAPSES AFTER THIS LONG WITH NO ACCEPTED RECEIVER CHANGE (Stuart, 2026-10-22: "if actively tuning
+ *  they stay up but if left on a station for a few mins they lock again"). Every gated frame the server ACCEPTS
+ *  from the session — a tune, a mode, a passband, a gain, the shared DSP (askRefuses' kGated) — restarts it; a
+ *  refused one does not, and neither do zoom/pan/squelch/chat (free, they do not move the shared dial) or the
+ *  server's own recovery (not the person). On a lapse the listener is a newcomer again: ask, YES / 15 s / NO. */
+constexpr double kGrantIdleS = 3.0 * 60.0;
 
 /** One session in the room, as the shim sees it. */
 struct Person {
@@ -77,6 +83,9 @@ struct View {
     bool locked = false;    ///< tuneLocked
     std::string state;      ///< "" | "open" (asked, waiting) | "no" (told no)
     int secs = 0;           ///< seconds left in `state`
+    /** ★ Seconds until a grant lapses if they change nothing more; -1 = no grant that matters (not granted, or they
+     *  would be free without one). Informational — NOT part of ==, so the countdown alone re-sends nothing. */
+    int grantSecs = -1;
     bool operator==(const View& o) const { return inForce == o.inForce && locked == o.locked && state == o.state; }
     bool operator!=(const View& o) const { return !(*this == o); }
 };
@@ -91,9 +100,26 @@ public:
         Reply  best = Reply::None;
         double noUntil = 0;        ///< a standing NO ends here
         double lastSeen = 0;
+        double lastAct = 0;        ///< ★ the grant's idle clock: when it was granted, or its last accepted change
     };
     std::map<std::string, Req> reqs;
-    double askWindowS = kAskWindowS, noHoldS = kNoHoldS;
+    double askWindowS = kAskWindowS, noHoldS = kNoHoldS, grantIdleS = kGrantIdleS;
+
+    /** ★★ LET THEM IN — every grant goes through here, so the idle clock always starts at the grant. */
+    static void grant(Req& q, double now) { q.granted = true; q.lastAct = now; }
+
+    /** Does this session hold a grant? O(log n) on a handful of sessions, no allocation. */
+    bool holdsGrant(const std::string& s) const {
+        auto it = reqs.find(s);
+        return it != reqs.end() && it->second.granted;
+    }
+
+    /** ★★★ THE SERVER ACCEPTED A RECEIVER-CHANGING FRAME FROM THIS SESSION — the grant's idle clock restarts.
+     *  Hot path (every accepted tune): one map lookup, no allocation. Nothing to do for a session with no grant. */
+    void acted(const std::string& s, double now) {
+        auto it = reqs.find(s);
+        if (it != reqs.end() && it->second.granted) it->second.lastAct = now;
+    }
 
     /** Position in the order, 0 = highest. -1 = not here. */
     static int rankOf(const std::vector<std::string>& order, const std::string& s) {
@@ -108,10 +134,15 @@ public:
     /** ★★★ MAY THIS SESSION MOVE THE DIAL? The ONE answer every path gets. */
     bool locked(const Room& r, const std::string& s) const {
         if (!r.inForce) return false;
+        if (holdsGrant(s)) return false;
+        return lockedWithoutGrant(r, s);
+    }
+
+    /** Would this session be locked if it held no grant? (Admin and top-of-the-order are free regardless.) */
+    static bool lockedWithoutGrant(const Room& r, const std::string& s) {
+        if (!r.inForce) return false;
         const Person* p = find(r, s);
         if (p && p->admin) return false;                       // ★ admins are never locked
-        auto it = reqs.find(s);
-        if (it != reqs.end() && it->second.granted) return false;
         // ★ Nobody ranked above you is here: you are the one being protected, not the one who asks.
         const auto order = rankOrder(r.people);
         const int me = rankOf(order, s);
@@ -156,18 +187,19 @@ public:
             if (standingNo) {
                 // ★ After the window only a YES matters — from above the NO's sayer. A second NO buys no time.
                 if (m != Reply::Yes) continue;
-                q.noUntil = 0; q.granted = true; q.best = Reply::Yes; q.bestBy = from;
+                q.noUntil = 0; grant(q, now); q.best = Reply::Yes; q.bestBy = from;
                 changed = true;
                 continue;
             }
             q.best = m; q.bestBy = from;
-            if (m == Reply::Yes) { if (!q.granted) changed = true; q.granted = true; q.noUntil = 0; }
+            if (m == Reply::Yes) { if (!q.granted) { changed = true; grant(q, now); } q.noUntil = 0; }
             else                 { if (q.granted || q.noUntil <= now) changed = true; q.granted = false; q.noUntil = now + noHoldS; }
         }
         return changed;
     }
 
-    /** The clock: windows close, NOs lapse, the absent are forgotten. @return true if anybody's view changed. */
+    /** The clock: windows close, NOs lapse, idle grants lapse, the absent are forgotten.
+     *  @return true if anybody's view changed. */
     bool tick(const Room& r, double now) {
         bool changed = false;
         const auto order = rankOrder(r.people);
@@ -176,16 +208,22 @@ public:
             const int ar = rankOf(order, it->first);
             if (ar >= 0) q.lastSeen = now;
             else if (now - q.lastSeen > kGoneForgetS) { it = reqs.erase(it); continue; }
+            // ★★★ AN IDLE GRANT LAPSES: back to a newcomer — no ask open, no NO standing, they must ask again. The
+            //     clock keeps running through a short absence (it is the Req's, which a reconnect keeps).
+            if (q.granted && now - q.lastAct >= grantIdleS) {
+                q.granted = false; q.open = false; q.noUntil = 0; q.best = Reply::None; q.bestBy.clear();
+                changed = true;
+            }
             if (q.open && now >= q.deadline) {
                 q.open = false;
-                if (q.best != Reply::No) q.granted = true;     // ★ a YES, or nobody answered
+                if (q.best != Reply::No && !q.granted) grant(q, now);   // ★ a YES, or nobody answered
                 changed = true;
             }
             if (!q.open && q.noUntil > 0) {
                 // ★★ A NO ENDS: on time, or when its sayer has gone or is no longer above the asker.
                 const int nr = rankOf(order, q.bestBy);
                 if (now >= q.noUntil || nr < 0 || (ar >= 0 && nr >= ar)) {
-                    q.noUntil = 0; q.granted = true; changed = true;
+                    q.noUntil = 0; grant(q, now); changed = true;
                 }
             }
             ++it;
@@ -206,6 +244,9 @@ public:
             if (q.open && q.best != Reply::No) { v.state = "open"; v.secs = (int)(q.deadline - now + 0.999); }
             else if (q.noUntil > now)  { v.state = "no";   v.secs = (int)(q.noUntil - now + 0.999); }
             if (v.secs < 0) v.secs = 0;
+        } else if (!v.locked && it != reqs.end() && it->second.granted && lockedWithoutGrant(r, s)) {
+            const double left = it->second.lastAct + grantIdleS - now;
+            v.grantSecs = left > 0 ? (int)(left + 0.999) : 0;
         }
         return v;
     }
