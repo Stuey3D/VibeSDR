@@ -16,7 +16,7 @@ import { withReadAuth } from '../services/vibeAuth';
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
-  title: string; partial?: boolean; bytes: number;
+  title: string; partial?: boolean; wl?: boolean; bytes: number;
 }
 const KINDS: { id: string; label: string }[] = [
   { id: '', label: 'ALL' }, { id: 'navtex', label: 'NAVTEX' }, { id: 'rtty', label: 'RTTY' },
@@ -114,7 +114,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
                       <Text style={s.freq}>{galleryFreq(it.hz)}</Text>
                       <View style={{ flex: 1 }}>
                         <Text style={s.name}>{it.title || it.k.toUpperCase()}
-                          <Text style={s.tag}>{`  ${it.o === 'background' ? 'BACKGROUND' : 'LISTENER'}${it.partial ? ' · PARTIAL' : ''}`}</Text>
+                          <Text style={s.tag}>{`  ${it.o === 'background' ? (it.wl ? 'BACKGROUND · LISTENER ON' : 'BACKGROUND') : 'LISTENER'}${it.partial ? ' · PARTIAL' : ''}`}</Text>
                         </Text>
                         <Text style={s.dim}>{`${galleryWhen(it.t)} · ${(it.m || '').toUpperCase()} · ${it.d}${it.p ? ` · ${it.p}` : ''}${it.r ? ` · ${it.r}` : ''} · ${size(it.bytes)}`}</Text>
                       </View>

@@ -43,7 +43,7 @@ api.bgLoad({ driver: 'airspyhf', bgDecode: JSON.stringify(NICK) });
 ok(note.classList.contains('hide'), 'release not ticked: no line');
 els.releaseWhenIdle.checked = true; els.releaseWhenIdle.onchange();
 ok(!note.classList.contains('hide') && note.textContent === ALLDAY, `release ticked + an all-day profile: "${note.textContent}"`);
-const tt = els.bgProfiles.children[0].all().filter((e) => e.attrs.type === 'time');
+const tt = els.bgProfiles.children.filter((c) => c.attrs.class === 'bgProf')[0].all().filter((e) => e.attrs.type === 'time');
 tt[0].value = '18:00'; tt[1].value = '06:00'; tt[0].onchange();
 ok(!note.classList.contains('hide') && note.textContent === WINDOW, `release ticked + an 18:00–06:00 profile: "${note.textContent}"`);
 els.bgOn.checked = false; els.bgOn.onchange();

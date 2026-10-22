@@ -138,6 +138,34 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
   only). Both list items newest first with filters by decoder. Text items open inline (shown as text, never HTML) and
   images open as images; both clients can download or save an item.
 
+## Listeners first: priority, in range, locked radios (2026-10-22, beta3)
+
+- **Priority is the VFO order.** The setup page shows a tier list (rank numbers, a drag handle, ▲/▼ for keyboard and pad)
+  wherever the slots can run short: on several radios, while "keep decoding in range" is on, or on a locked radio. Only a
+  single unlocked radio with that switch off has no contention; there a profile is capped at the box's decoder slots
+  ("This server can run 8 decoders at once — that's the most VFOs a profile can have"), and the save refuses more.
+- **Listeners always win a decoder slot.** A listener's decoder that finds none pauses the LOWEST-ranked running
+  background VFO on the box, that one only. A tie on rank is broken by the radio running the most. The paused VFO's
+  output is written first (partial where cut off). It resumes, the highest-ranked paused first, within ~3 s of a slot
+  freeing. Across radio processes this is `BgRegistry`: `bg-<pid>.state` (ranks, running or paused, under flock) and
+  `bg-<pid>.drop` (one byte per request) beside the slot files.
+- **Keep decoding stations still in range while listeners are on** (per radio, default on). A listener arriving still
+  gets the radio back on its own dial. Every VFO inside the window the radio now captures carries on: re-cut against
+  the new centre, not rebuilt, so a message in progress is not split. The rest pause, and follow the window as the
+  listener retunes. The radio's centre, dial and rate are never moved for a background VFO. When the last listener
+  leaves, the normal start applies after the wait: the radio moves and is re-cut, nothing is rebuilt. Items decoded with
+  a listener on carry `"wl":true` ("BACKGROUND · LISTENER ON").
+- **Locked-range radios** never move.
+  - A profile has no RF centre of its own; its VFOs must sit inside the locked window, and the save refuses one outside.
+  - Background decoding runs all through its hours, listeners or not, and starts at once (the wait is for radios it
+    would move).
+  - It may use only the FREE listener places (max listeners − listeners), as well as free decoder slots. A real listener
+    is never refused because of it: the lowest VFO gives up its channel.
+  - Background VFOs are never counted as listeners anywhere. They are not listener channels at all.
+- Tests: `test-bg-priority.cpp` (36), `test-bg-decode-slots.mjs` (two radio processes), `test-bg-decode-inrange.mjs`
+  (648 kHz with Nick's profile, tune away and back, a decoder claim, switched off, a locked radio),
+  `test-setup-bg-tiers.mjs`.
+
 ## Not wanted
 
 PSKReporter (parked: "not really designed as a PSKReporting service").

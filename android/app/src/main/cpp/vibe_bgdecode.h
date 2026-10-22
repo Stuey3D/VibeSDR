@@ -422,6 +422,136 @@ inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& met
     return nullptr;
 }
 
+// ── Priority across the box: which background VFO gives way to a listener ───────────────────────────────────────
+/** ★★★ LISTENERS FIRST, BACKGROUND IN ITS OWN ORDER (Stuart, 2026-10-22: "background decoding gets a tier list drag the
+ *  VFO's into order of priority, then the decoder slots are for real listeners as highest priority so a background decode
+ *  will have to drop off until its free again").
+ *  ★ A profile's VFO order IS its priority: row 1 is rank 1, the highest. Background decoding takes any free slots from
+ *    the top of its list; when a LISTENER's decoder finds none, the LOWEST-ranked running background VFO on the whole box
+ *    pauses — that one only (a tie on rank: the radio running the most background decoders) — and when a slot frees,
+ *    the highest-ranked PAUSED one gets it back.
+ *  ★ The box is several processes (one per radio), so the state is files beside the decoder slots:
+ *    `bg-<id>.state` — this radio's background VFOs, "<rank> <1 running | 0 paused>" a line — held under an exclusive
+ *    flock for as long as the process lives (a dead one's file is unlocked, so it counts for nothing); and
+ *    `bg-<id>.drop` — one byte appended per listener asking that radio to pause one more VFO, taken by its runner within
+ *    half a second. Appends, so two listeners at once pause two VFOs, not one twice. */
+class BgRegistry {
+public:
+    struct Entry { std::string id; int rank = 0; bool running = false; };
+    BgRegistry() = default;
+    ~BgRegistry() { close(); }
+    BgRegistry(const BgRegistry&) = delete;
+    BgRegistry& operator=(const BgRegistry&) = delete;
+    void open(const std::string& dir, const std::string& id) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (fd_ >= 0 || dir.empty()) return;
+        dir_ = dir; id_ = id;
+        ::unlink(dropPath(dir_, id_).c_str());              // ★ requests meant for an earlier run of this radio are stale
+        fd_ = ::open(statePath(dir_, id_).c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        if (fd_ >= 0 && ::flock(fd_, LOCK_EX | LOCK_NB) != 0) { ::close(fd_); fd_ = -1; }
+    }
+    void close() {
+        std::lock_guard<std::mutex> lk(m_);
+        if (fd_ < 0) return;
+        ::unlink(statePath(dir_, id_).c_str());
+        ::unlink(dropPath(dir_, id_).c_str());
+        ::flock(fd_, LOCK_UN); ::close(fd_); fd_ = -1;
+    }
+    bool isOpen() const { std::lock_guard<std::mutex> lk(m_); return fd_ >= 0; }
+    const std::string& dir() const { return dir_; }
+    const std::string& id() const { return id_; }
+    /** This radio's VFOs, rank and running/paused. */
+    void publish(const std::vector<std::pair<int, bool>>& v) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (fd_ < 0) return;
+        std::string b;
+        for (auto& e : v) b += std::to_string(e.first) + (e.second ? " 1\n" : " 0\n");
+        if (b == last_) return;
+        last_ = b;
+        if (::ftruncate(fd_, 0) == 0 && !b.empty()) (void)!::pwrite(fd_, b.data(), b.size(), 0);
+    }
+    /** Pause requests waiting for THIS radio (and clear them). */
+    int takeDrops() {
+        std::string p; { std::lock_guard<std::mutex> lk(m_); if (fd_ < 0) return 0; p = dropPath(dir_, id_); }
+        struct stat st{};
+        if (::stat(p.c_str(), &st) != 0 || st.st_size <= 0) return 0;
+        ::unlink(p.c_str());
+        return (int)st.st_size;
+    }
+    /** Every live radio's background VFOs. */
+    static std::vector<Entry> all(const std::string& dir) {
+        std::vector<Entry> out;
+        if (dir.empty()) return out;
+        DIR* d = ::opendir(dir.c_str());
+        if (!d) return out;
+        while (dirent* e = ::readdir(d)) {
+            const std::string f = e->d_name;
+            if (f.rfind("bg-", 0) != 0 || f.size() < 10 || f.compare(f.size() - 6, 6, ".state") != 0) continue;
+            const std::string id = f.substr(3, f.size() - 9);
+            const int fd = ::open((dir + "/" + f).c_str(), O_RDONLY | O_CLOEXEC);
+            if (fd < 0) continue;
+            const bool alive = ::flock(fd, LOCK_SH | LOCK_NB) != 0;   // ★ held by its process = alive
+            if (!alive) ::flock(fd, LOCK_UN);
+            char b[1024] = {0};
+            const ssize_t got = alive ? ::pread(fd, b, sizeof b - 1, 0) : 0;
+            ::close(fd);
+            if (got <= 0) continue;
+            const char* q = b;
+            int rank = 0, run = 0, used = 0;
+            while (std::sscanf(q, "%d %d\n%n", &rank, &run, &used) == 2 && used > 0) { out.push_back({ id, rank, run == 1 }); q += used; }
+        }
+        ::closedir(d);
+        return out;
+    }
+    /** ★ The radio whose background gives way: the lowest-ranked RUNNING VFO box-wide; a tie, the radio running the most.
+     *  "" = no background decoder is running anywhere. */
+    static std::string victim(const std::string& dir, int* rankOut = nullptr) {
+        const auto v = all(dir);
+        std::map<std::string, int> running;
+        for (auto& e : v) if (e.running) running[e.id]++;
+        std::string id; int rank = 0;
+        for (auto& e : v) {
+            if (!e.running) continue;
+            if (id.empty() || e.rank > rank || (e.rank == rank && running[e.id] > running[id])) { id = e.id; rank = e.rank; }
+        }
+        if (rankOut) *rankOut = rank;
+        return id;
+    }
+    /** The best rank PAUSED anywhere on the box (0 = none) — a radio resumes its own only if nobody waits ahead of it. */
+    static int bestPaused(const std::string& dir) {
+        int best = 0;
+        for (auto& e : all(dir)) if (!e.running && (best == 0 || e.rank < best)) best = e.rank;
+        return best;
+    }
+    static void requestDrop(const std::string& dir, const std::string& id) {
+        const int fd = ::open(dropPath(dir, id).c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+        if (fd < 0) return;
+        (void)!::write(fd, "x", 1);
+        ::close(fd);
+    }
+    /** ★★★ A LISTENER'S DECODER FOUND NO FREE SLOT: pause the lowest-ranked background VFO on the box and wait (briefly)
+     *  for its slot. @return true when a slot is free — the caller claims it at once. False: no background decoder was
+     *  running anywhere (the box is full of LISTENERS' decoders), or none freed in time. */
+    static bool makeRoomForListener(DecoderSlots& slots, const std::string& dir, int timeoutMs = 3000) {
+        if (slots.inUse() < slots.max()) return true;
+        const std::string id = victim(dir);
+        if (id.empty()) return false;
+        requestDrop(dir, id);
+        for (int t = 0; t < timeoutMs; t += 50) {
+            if (slots.inUse() < slots.max()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return slots.inUse() < slots.max();
+    }
+
+private:
+    static std::string statePath(const std::string& d, const std::string& id) { return d + "/bg-" + id + ".state"; }
+    static std::string dropPath(const std::string& d, const std::string& id) { return d + "/bg-" + id + ".drop"; }
+    mutable std::mutex m_;
+    std::string dir_, id_, last_;
+    int fd_ = -1;
+};
+
 // ── The engine ──────────────────────────────────────────────────────────────────────────────────────────────────
 class BgRunner {
 public:
@@ -435,9 +565,14 @@ public:
         int         fftSize = 16384;
         DecoderSlots* slots = nullptr;
         gallery::Store* store = nullptr;
-        std::string yieldPath;         ///< ★ box-wide "a listener needs a slot" — see requestYield()
+        BgRegistry* registry = nullptr;   ///< ★ the box's priority list (pause the lowest, resume the highest) — see BgRegistry
         double      lat = NAN, lon = NAN;  ///< ★ this server's position, for the FT8 summary's distances (NaN = none)
         std::function<void(const std::string&)> log;
+        /** ★★ How many VFO CHANNELS may run at once besides the slots (a LOCKED radio: its free user slots — Stuart,
+         *  "10 user slots … treat each slot as an idle radio"). Empty = no limit but the slots. Read lock-free. */
+        std::function<int()> channelBudget;
+        /** ★ A listener is on (the items say so: "decoded while a listener was on"). */
+        bool listenerOn = false;
     };
     BgRunner() = default;
     ~BgRunner() { stop(false); }
@@ -457,19 +592,13 @@ public:
             c->bins = std::min(b, p_.fftSize);
             c->rate = p_.sampleRate * (double)c->bins / (double)p_.fftSize;
             c->slice.assign((size_t)c->bins, cf32{0.0f, 0.0f});
-            const double binHz = p_.sampleRate / (double)p_.fftSize;
-            const double off = c->vfo.hz - p_.centreHz - p_.hwOffsetHz;
-            c->centreBin = (int)std::lround(off / binHz);
-            const double resid = off - c->centreBin * binHz;
             c->rx.reset(new vibedsp::RxPipeline());
             vibedsp::RxPipeline::Callbacks cb{};
             cb.ctx = c.get();
             cb.audio = &BgRunner::audioCb;
             c->rx->start(c->rate, 1024, 10.0, 48000, cb);
             c->rx->setRdsEnabled(false);
-            c->rx->setTune(resid, c->vfo.mode == "lsb" ? vibedsp::RxPipeline::Mode::SSB_LSB
-                                : c->vfo.mode == "nfm" ? vibedsp::RxPipeline::Mode::NFM : vibedsp::RxPipeline::Mode::SSB_USB,
-                           passbandHz(c->vfo));
+            place(*c);
             DecoderHost::Env env;
             env.log = p_.log;
             env.slots = p_.slots;
@@ -480,19 +609,23 @@ public:
                 const Vfo v = c->vfo; const int pi = p_.profileIdx;
                 auto lg = p_.log;
                 const std::string tag = "VFO " + std::to_string(i + 1) + " (" + khz(v.hz) + ")";
-                env.tap = [st, v, pi, lg, tag](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
+                auto lo_ = listenerOnFlag_;
+                env.tap = [st, v, pi, lg, tag, lo_](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
                     gallery::Meta m;
                     m.kind = galleryKindFor(ext, msg);
                     if (m.kind.empty()) return nullptr;
                     m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = v.dec;
                     m.profile = "Profile " + std::to_string(pi + 1);
+                    m.listenerOn = lo_;
                     return makeGalleryTap(*st, m, nullptr, lg, tag);
                 };
                 const double la = p_.lat, lo = p_.lon;
-                env.spotTap = [st, v, pi, la, lo]() -> DecoderTapPtr {
+                auto lo2 = listenerOnFlag_;
+                env.spotTap = [st, v, pi, la, lo, lo2]() -> DecoderTapPtr {
                     gallery::Meta m;
                     m.kind = "ft8"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "ft8";
                     m.profile = "Profile " + std::to_string(pi + 1);
+                    m.listenerOn = lo2;
                     return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
                 };
             }
@@ -500,21 +633,47 @@ public:
             chans_.push_back(std::move(c));
         }
         startedAt_ = std::time(nullptr);
-        yielded_.store(false);
-        markRunning(true);
+        listenerOnFlag_->store(p_.listenerOn);
         startDecoders();
+        publish();
         run_.store(true);
         { std::lock_guard<std::mutex> lk(qm_); q_.clear(); qSamples_ = 0; gap_ = false; }
         th_ = std::thread([this] { loop(); });
         running_.store(true);
+        int inWin = 0; for (auto& c : chans_) if (c->inWindow) ++inWin;
         say("background decoding: profile " + std::to_string(p_.profileIdx + 1) + ", RF centre " + khz(p_.centreHz) + ", "
-            + std::to_string(chans_.size()) + " VFO(s), " + std::to_string(started_) + " decoder(s) running");
+            + std::to_string(chans_.size()) + " VFO(s), " + std::to_string(started_) + " decoder(s) running"
+            + (inWin < (int)chans_.size() ? " (" + std::to_string(inWin) + " inside the radio's window)" : std::string())
+            + (p_.listenerOn ? " \xe2\x80\x94 with a listener on" : ""));
     }
-    /** (Re)try any decoder the slots refused — the box was full when this started. Cheap when all are running. */
-    void retryRefused() {
-        if (!running_.load() || yielded_.load()) return;
-        for (auto& c : chans_) if (!c->decoding) startOne(*c);
+    /** ★★★ THE RADIO MOVED UNDER US (a listener retuned it, or background decoding moved it to the profile centre, or a
+     *  listener arrived and it went back to their dial): every channel is re-cut against the new centre — WITHOUT
+     *  rebuilding it, so a message in progress on a VFO that stays in the window is not split. VFOs that leave the
+     *  window pause (their output written, partial where cut off); VFOs that come back resume (slots and budget
+     *  permitting). A different sample rate needs a rebuild: the caller restarts instead. */
+    void retarget(double centreHz, double hwOffsetHz, bool listenerOn) {
+        if (!running_.load()) return;
+        std::lock_guard<std::mutex> sl(slotMtx_);
+        listenerOnFlag_->store(listenerOn);
+        int left = 0, back = 0;
+        {
+            std::lock_guard<std::mutex> cl(chanMtx_);
+            p_.centreHz = centreHz; p_.hwOffsetHz = hwOffsetHz; p_.listenerOn = listenerOn;
+            for (auto& c : chans_) {
+                const bool was = c->inWindow;
+                place(*c);
+                if (was && !c->inWindow) { if (c->decoding) { pauseOne(*c, "left the radio's window"); } ++left; }
+                if (!was && c->inWindow) ++back;
+            }
+        }
+        if (back) lastResume_ = {};    // ★ come back promptly (the next slotTick)
+        publish();
+        if (left || back) say("background decoding: the radio moved to " + khz(centreHz) + " \xe2\x80\x94 "
+                              + std::to_string(left) + " VFO(s) left its window, " + std::to_string(back) + " came back in");
     }
+    double centreHz() const { return p_.centreHz; }
+    double sampleRate() const { return p_.sampleRate; }
+    int  inWindowCount() const { int n = 0; for (auto& c : chans_) if (c->inWindow) ++n; return n; }
     /** ★★ Stop NOW: the worker joined, every decoder stopped (its tap writes what it held — partial where cut off),
      *  every slot back. Idempotent. */
     void stop(bool sayIt = true) {
@@ -524,12 +683,14 @@ public:
         if (th_.joinable()) th_.join();
         for (auto& c : chans_) if (c->host) c->host->shutdown();
         chans_.clear();
-        markRunning(false);
+        if (p_.registry) p_.registry->publish({});
         if (was && sayIt) say("background decoding stopped");
     }
     bool running() const { return running_.load(); }
-    /** True once another process's listener asked for a slot back (requestYield) and this runner let its decoders go. */
-    bool yielded() const { return yielded_.load(); }
+    /** The VFOs paused for listeners (or waiting for a first slot) — rank order. */
+    int  decodersPaused() const { int n = 0; for (auto& c : chans_) if (!c->decoding) ++n; return n; }
+    /** ★ Test seam: run the worker's slot housekeeping now (pause requests, resumes) rather than within its 0.5 s. */
+    void slotTickForTest() { slotTick(true); }
     int  decodersRunning() const { int n = 0; for (auto& c : chans_) if (c->decoding) ++n; return n; }
     uint64_t droppedSamples() const { return dropped_.load(); }
     uint64_t fedSamples() const { uint64_t n = 0; for (auto& c : chans_) if (c->host) n += c->host->fedSamples(); return n; }
@@ -553,40 +714,6 @@ public:
         qcv_.notify_one();
     }
 
-    /** ★★★ A LISTENER ON ANOTHER RADIO OF THIS MACHINE NEEDS A DECODER SLOT. Every radio is its own process and the
-     *  slots are box-wide, so the request is a file every runner watches (its mtime): each lets its decoders go at
-     *  once and its owner stops it (the shim's tick). A listener's decoder is never refused because the box was busy
-     *  decoding for nobody. */
-    /** ★ Is background decoding running anywhere on the box? (Each runner holds <slot dir>/bg-run-<pid>.lock under flock
-     *  while it runs.) A refused listener waits for a yield only when there is something to yield — otherwise the box is
-     *  full of LISTENERS' decoders and the refusal is immediate, as it always was. */
-    static bool anyRunning(const std::string& yieldPath) {
-        const size_t sl = yieldPath.rfind('/');
-        if (sl == std::string::npos) return false;
-        const std::string dir = yieldPath.substr(0, sl);
-        DIR* d = ::opendir(dir.c_str());
-        if (!d) return false;
-        bool any = false;
-        while (dirent* e = ::readdir(d)) {
-            const std::string f = e->d_name;
-            if (f.rfind("bg-run-", 0) != 0) continue;
-            const int fd = ::open((dir + "/" + f).c_str(), O_RDONLY | O_CLOEXEC);
-            if (fd < 0) continue;
-            if (::flock(fd, LOCK_SH | LOCK_NB) != 0) any = true; else ::flock(fd, LOCK_UN);
-            ::close(fd);
-            if (any) break;
-        }
-        ::closedir(d);
-        return any;
-    }
-    static void requestYield(const std::string& path) {
-        if (path.empty()) return;
-        const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-        if (fd < 0) return;
-        const std::string t = std::to_string((long long)std::time(nullptr)) + "\n";
-        (void)!::write(fd, t.data(), t.size());
-        ::close(fd);
-    }
 
 private:
     struct Chan {
@@ -598,42 +725,105 @@ private:
         std::unique_ptr<vibedsp::RxPipeline> rx;
         std::shared_ptr<DecoderHost> host;
         bool decoding = false;
+        bool inWindow = true;    // ★ inside what the radio captures now (a listener's dial may have moved it away)
         uint64_t lastDrop = 0;
     };
+    /** Cut this VFO's channel against the current centre, and say whether it is inside the window at all. */
+    void place(Chan& c) {
+        const double binHz = p_.sampleRate / (double)p_.fftSize;
+        const double off = c.vfo.hz - p_.centreHz - p_.hwOffsetHz;
+        c.inWindow = std::fabs(c.vfo.hz - p_.centreHz) <= halfWindowHz(p_.sampleRate);
+        c.centreBin = (int)std::lround(off / binHz);
+        const double resid = off - c.centreBin * binHz;
+        c.rx->setTune(resid, c.vfo.mode == "lsb" ? vibedsp::RxPipeline::Mode::SSB_LSB
+                           : c.vfo.mode == "nfm" ? vibedsp::RxPipeline::Mode::NFM : vibedsp::RxPipeline::Mode::SSB_USB,
+                      passbandHz(c.vfo));
+    }
+    /** ★ The channels the budget allows now (a locked radio's free user slots); a large number when there is none. */
+    int budget() const { return p_.channelBudget ? std::max(0, p_.channelBudget()) : 1 << 20; }
+    int runningCount() const { int n = 0; for (auto& c : chans_) if (c->decoding) ++n; return n; }
     static void audioCb(void* ctx, const float* pcm, int frames, int ch, int) {
         auto* c = (Chan*)ctx;
         if (c && c->host && frames > 0) c->host->feed(pcm, frames, ch == 2 ? 2 : 1);
     }
-    void startDecoders() { started_ = 0; for (auto& c : chans_) { startOne(*c); if (c->decoding) ++started_; } }
+    /** ★ From the top of the list down: background takes any free slots, in its own priority order. */
+    void startDecoders() {
+        started_ = 0;
+        for (auto& c : chans_) {
+            if (!c->inWindow) continue;
+            if (runningCount() >= budget()) { say("background decoding: VFO " + name(*c) + " waiting \xe2\x80\x94 every user slot of this radio is taken (listeners come first)"); continue; }
+            startOne(*c);
+            if (c->decoding) ++started_;
+            else say("background decoding: VFO " + name(*c) + " waiting \xe2\x80\x94 no decoder slot free (listeners come first)");
+        }
+    }
     void startOne(Chan& c) {
         const DecoderDef* d = decoderDef(c.vfo.dec);
         if (!d || !c.host) return;
         // ★ FT8/FT4 is the host's spotter (its own slot), every other decoder its audio-extension decoder.
         const auto r = *d->ext ? c.host->start(d->ext, attachMsg(c.vfo)) : c.host->startSpots();
         c.decoding = r == DecoderHost::Start::Ok || r == DecoderHost::Start::Joined;
-        if (r == DecoderHost::Start::Refused)
-            say("background decoding: VFO " + std::to_string(c.index + 1) + " (" + khz(c.vfo.hz) + ") — no decoder slot free; will retry");
+    }
+    /** ★ Pause one VFO for a listener: its decoder stops — the tap WRITES what it held (an RTTY buffer; a chart or
+     *  picture in progress as PARTIAL) — and its slot is free. The channel keeps running, decoder-less (the host takes
+     *  no audio while nothing runs), which is cheaper than tearing down and rebuilding the pipeline when it comes back. */
+    void pauseOne(Chan& c, const char* why = "a listener needed a decoder slot") {
+        if (!c.host || !c.decoding) return;
+        c.host->stop(); c.host->stopSpots();
+        c.decoding = false;
+        say("background decoding: VFO " + name(c) + " paused \xe2\x80\x94 " + why);
+    }
+    std::string name(const Chan& c) const {
+        const DecoderDef* d = decoderDef(c.vfo.dec);
+        return std::to_string(c.index + 1) + " (" + khz(c.vfo.hz) + " " + (d ? d->label : "?") + ")";
+    }
+    void publish() {
+        if (!p_.registry) return;
+        std::vector<std::pair<int, bool>> v;
+        for (auto& c : chans_) if (c->inWindow) v.push_back({ c->index + 1, c->decoding });   // ★ out of the window = not waiting
+        p_.registry->publish(v);
+    }
+    /** ★★ The slot housekeeping, on the worker thread twice a second: listeners' pause requests first (lowest rank
+     *  first), then — every 3 s, `force` for a test — the highest-ranked paused VFO back when a slot is free and nobody
+     *  on the box waits ahead of it. Never a tight loop: a stat() and a directory read at most. */
+    void slotTick(bool force = false) {
+        std::lock_guard<std::mutex> sl(slotMtx_);
+        bool changed = false;
+        // ★★ The channel budget (a locked radio's free user slots): over it, the lowest running VFO gives up its channel.
+        while (runningCount() > budget()) {
+            Chan* low = nullptr;
+            for (auto& c : chans_) if (c->decoding) low = c.get();
+            if (!low) break;
+            pauseOne(*low, "a listener took this radio's last user slot"); changed = true;
+        }
+        for (int n = p_.registry ? p_.registry->takeDrops() : 0; n > 0; --n) {
+            Chan* low = nullptr;
+            for (auto& c : chans_) if (c->decoding) low = c.get();       // ★ rows are in rank order: the last running is the lowest
+            if (!low) break;
+            pauseOne(*low); changed = true;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        // ★ Never straight back into a slot just given up: the listener it was for claims it within moments, and a
+        //   resume in the same breath would take it first. Resumes wait 3 s after any pause.
+        if (changed) lastResume_ = now;
+        else if (force || now - lastResume_ > std::chrono::seconds(3)) {
+            lastResume_ = now;
+            for (auto& c : chans_) {
+                if (c->decoding || !c->inWindow) continue;
+                if (!p_.slots || p_.slots->inUse() >= p_.slots->max() || runningCount() >= budget()) break;
+                const int best = p_.registry ? BgRegistry::bestPaused(p_.registry->dir()) : 0;
+                if (best && c->index + 1 > best) break;             // ★ a higher-ranked VFO on another radio is waiting
+                c->rx->noteInputGap();                              // ★ its channel was not fed while paused
+                startOne(*c);
+                if (!c->decoding) break;
+                say("background decoding: VFO " + name(*c) + " resumed");
+                changed = true;
+                break;                                               // ★ one at a time — the box is re-read next round
+            }
+        }
+        if (changed) publish();
     }
     void say(const std::string& s) { if (p_.log) p_.log(s); }
-    void markRunning(bool on) {
-        if (on && runFd_ < 0 && !p_.yieldPath.empty()) {
-            const size_t sl = p_.yieldPath.rfind('/');
-            if (sl == std::string::npos) return;
-            runPath_ = p_.yieldPath.substr(0, sl) + "/bg-run-" + std::to_string((long long)::getpid()) + ".lock";
-            runFd_ = ::open(runPath_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
-            if (runFd_ >= 0 && ::flock(runFd_, LOCK_EX | LOCK_NB) != 0) { ::close(runFd_); runFd_ = -1; }
-        } else if (!on && runFd_ >= 0) {
-            ::unlink(runPath_.c_str()); ::flock(runFd_, LOCK_UN); ::close(runFd_); runFd_ = -1;
-        }
-    }
-    int runFd_ = -1;
-    std::string runPath_;
-    /** The yield file's mtime is newer than this run's start. Checked twice a second, a stat() each. */
-    bool yieldAsked() const {
-        if (p_.yieldPath.empty()) return false;
-        struct stat st{};
-        return ::stat(p_.yieldPath.c_str(), &st) == 0 && st.st_mtime >= startedAt_;
-    }
     void loop() {
         vibeDecoderThread("vibe-bgdsp");
         auto lastYieldCheck = std::chrono::steady_clock::now();
@@ -668,20 +858,14 @@ private:
                     c->lastDrop = d;
                 }
             }
-            if (now - lastYieldCheck > std::chrono::milliseconds(500)) {
-                lastYieldCheck = now;
-                if (!yielded_.load() && yieldAsked()) {
-                    // ★ Let the slots go HERE, from this thread, at once — the owner's tick does the rest.
-                    for (auto& c : chans_) { if (c->host) c->host->shutdown(); c->decoding = false; }
-                    yielded_.store(true);
-                    say("background decoding: a listener on this machine needs a decoder slot — giving them back");
-                }
-            }
-            if (buf.empty() || yielded_.load()) continue;
+            if (now - lastYieldCheck > std::chrono::milliseconds(500)) { lastYieldCheck = now; slotTick(); }
+            if (buf.empty()) continue;
             if (gap) for (auto& c : chans_) c->rx->noteInputGap();
+            std::lock_guard<std::mutex> cl(chanMtx_);
             chan_->feed(buf.data(), (int)buf.size(), [&](const cf32* bins, int) {
                 const long long bi = chan_->blockIndex();
                 for (auto& c : chans_) {
+                    if (!c->decoding) continue;          // ★ a paused or out-of-window channel costs nothing
                     const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
                     if (got > 0) c->rx->feed(c->slice.data(), got);
                 }
@@ -698,7 +882,11 @@ private:
     std::deque<std::vector<cf32>> q_;
     size_t qSamples_ = 0;
     bool gap_ = false;
-    std::atomic<bool> run_{false}, running_{false}, yielded_{false};
+    std::atomic<bool> run_{false}, running_{false};
+    std::chrono::steady_clock::time_point lastResume_{};
+    std::mutex slotMtx_;
+    std::mutex chanMtx_;   // ★ the worker's channel cut vs retarget()
+    std::shared_ptr<std::atomic<bool>> listenerOnFlag_ = std::make_shared<std::atomic<bool>>(false);   // ★ the worker's slotTick and a test's slotTickForTest
     std::atomic<uint64_t> dropped_{0};
     std::chrono::steady_clock::time_point lastDropLog_{};
     uint64_t lastIqDrop_ = 0;

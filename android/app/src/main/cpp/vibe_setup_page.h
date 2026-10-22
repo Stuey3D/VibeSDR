@@ -98,6 +98,10 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .bgTimes{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
   .bgTimes input{width:auto}
   button.linkish{background:none;border:none;color:var(--amber);padding:4px 0;text-decoration:underline;cursor:pointer}
+  .bgRank{min-width:1.4em;text-align:right;color:var(--amber);font-variant-numeric:tabular-nums}
+  .bgHandle{cursor:grab;touch-action:none;user-select:none;padding:0 6px;font-size:18px;color:var(--dim)}
+  .bgVfo.dragging{outline:1px dashed var(--amber)}
+  button.bgMove{padding:2px 8px;min-width:0}
   /* ★ An ANCHOR styled as the primary button: it is a navigation, so it should be a real link
      (middle-click, open in a new tab, copy the address) rather than a button running location=. */
   /* ★ The converter quick-picks: the NAME reads first and the LO sits under it as the fact being
@@ -1806,6 +1810,11 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           decoders for background decoding.
           <br>The moment anybody connects, background decoding stops and the radio goes back to exactly where it was
           left. What it decodes is kept in the gallery (Server tab).</p>
+        <!-- ★★ Stuart, 2026-10-22: background VFOs still inside the radio's window keep decoding while listeners are on;
+             the radio is never moved for them. Default ON. -->
+        <label style="display:flex;gap:8px;align-items:center;margin:6px 0">
+          <input type="checkbox" id="bgKeepInRange" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Keep decoding stations still in range while listeners are on</span></label>
         <div id="bgProfiles"></div>
         <!-- ★★ SHARED BY TIME with "Let another program use this radio" (Stuart, 2026-10-22: "You cannot release a radio
              and also hand it over to another app"). Both stay usable; this line says how they divide the day. -->
@@ -5304,15 +5313,18 @@ const BG_DECODERS = [
   { id: "ft8",          label: "FT8 / FT4 (summary)",          tone: 0,    modes: ["usb"] },
 ];
 const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodulators some background decoder works on
-let bgModel = { on: false, waitMin: 5, profiles: [] };
+let bgModel = { on: false, waitMin: 5, keepInRange: true, profiles: [] };
+let bgRadio = null;   // ★ the radio the editor shows — its mode decides "locked", its users the user slots
 function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: [{ hz: 0, mode: "usb", dec: "navtex" }] }; }
 function bgLoad(r) {
-  bgModel = { on: false, waitMin: 5, profiles: [] };
+  bgRadio = r || null;
+  bgModel = { on: false, waitMin: 5, keepInRange: true, profiles: [] };
   try {
     const j = r && r.bgDecode ? JSON.parse(r.bgDecode) : null;
     if (j && typeof j === "object") {
       bgModel.on = !!j.on;
       bgModel.waitMin = j.waitMin > 0 ? j.waitMin : 5;
+      bgModel.keepInRange = j.keepInRange !== false;
       bgModel.profiles = Array.isArray(j.profiles) ? j.profiles.map(function (p) {
         return { centre: +p.centre || 0, from: p.from || "00:00", to: p.to || "00:00",
                  vfos: (Array.isArray(p.vfos) ? p.vfos : []).map(function (v) {
@@ -5324,6 +5336,7 @@ function bgLoad(r) {
   const drv = String((r && r.driver) || "");
   if ($("hwBg")) $("hwBg").classList.toggle("hide", drv === "icom");
   if ($("bgOn")) $("bgOn").checked = bgModel.on;
+  if ($("bgKeepInRange")) $("bgKeepInRange").checked = bgModel.keepInRange;
   if ($("bgWait")) {
     const w = String(bgModel.waitMin);
     if (![].some.call($("bgWait").options, function (o) { return o.value === w; })) {
@@ -5335,7 +5348,10 @@ function bgLoad(r) {
     $("bgOn").__wired = 1;
     $("bgOn").addEventListener("change", function () { bgModel.on = $("bgOn").checked; bgRender(); });
     $("bgWait").addEventListener("change", function () { bgModel.waitMin = parseFloat($("bgWait").value) || 5; });
+    if ($("bgKeepInRange")) $("bgKeepInRange").addEventListener("change", function () { bgModel.keepInRange = $("bgKeepInRange").checked; bgRender(); });
     if ($("releaseWhenIdle")) $("releaseWhenIdle").addEventListener("change", bgReleaseNote);
+    // ★ The slots decide the cap (one radio) and the slot line (several): follow "Decoders at once" as it is typed.
+    if ($("decoderMax")) $("decoderMax").addEventListener("input", bgRender);
   }
   bgRender();
 }
@@ -5344,7 +5360,10 @@ function bgCollect() {
   bgModel.waitMin = parseFloat(($("bgWait") || {}).value) || 5;
   // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
   if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0; }); })) return "";
-  return JSON.stringify({ on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles });
+  bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
+  const out = { on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles };
+  if (!bgModel.keepInRange) out.keepInRange = false;    // ★ absent = on, as the server reads it
+  return JSON.stringify(out);
 }
 /** "13:00" from "12:00" and the server's offset — the server's local time, which is not the browser's. */
 function bgLocal(hhmm) {
@@ -5367,6 +5386,18 @@ function bgReleaseNote() {
     : "Outside your background profile hours, another program may use this radio. During them, VibeServer keeps it for background decoding.";
   el.classList.toggle("hide", !(rel && on));
 }
+/* ★★★ DECODER SLOTS (Stuart, 2026-10-22), decided by how many radios this box has — the radio tabs above:
+ *  · ONE radio: nothing competes for the slots (a listener arriving stops background decoding completely), so a profile
+ *    simply may not have more VFOs than the box has decoders. No tier list.
+ *  · SEVERAL radios: a TIER LIST — drag the VFOs (or ▲ / ▼) into priority order, row 1 first. Background takes whatever
+ *    slots are free from the top down; a real listener's decoder always wins, the lowest VFO pausing until a slot frees.
+ *  The page re-decides on every render, so adding a second radio turns the tier list on. */
+function bgRadioCount() { return (Array.isArray(cfg.radios) ? cfg.radios : []).filter(function (r) { return r && r.enabled !== false; }).length; }
+function bgSlots() {
+  const typed = parseInt((($("decoderMax") || {}).value) || "0", 10) || 0;
+  return typed > 0 ? typed : (cfg.decoderSlotsDefault > 0 ? cfg.decoderSlotsDefault : 0);
+}
+const BG_MAX_VFOS = 16;   // ★ vibe_bgdecode_config.h kMaxVfos — a sensible ceiling on a multi-radio box
 function bgRender() {
   const box = $("bgProfiles");
   if (!box) return;
@@ -5380,22 +5411,86 @@ function bgRender() {
     if (text != null) e.textContent = text;
     return e;
   };
+  const multi = bgRadioCount() > 1;
+  const slots = bgSlots();
+  const r0 = bgRadio || {};
+  const locked = r0.mode === "locked" && r0.lockFreq > 0;
+  const keep = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
+  /* ★★ THE TIER LIST wherever the slots can run short (Stuart, 2026-10-22): several radios on the box; or background that
+   *  keeps running while listeners are on (in range, or a locked radio, whose window never moves). Only a single
+   *  unlocked radio with "keep decoding in range" OFF has no contention — there the VFOs are simply capped at the slots. */
+  const tiers = multi || keep || locked;
+  const cap = tiers || !slots ? BG_MAX_VFOS : Math.min(slots, BG_MAX_VFOS);
+  if (locked) {
+    const rate = r0.lockRate > 0 ? r0.lockRate : (r0.rate || 0);
+    const half = rate > 0 ? rate / 2 - Math.min(50000, rate * 0.15) - 3000 : 0;
+    box.appendChild(el("p", { class: "why", id: "bgLockedNote" },
+      "This radio\u2019s range is locked (" + (Math.max(0, r0.lockFreq - half) / 1e6).toFixed(3) + "\u2013" + ((r0.lockFreq + half) / 1e6).toFixed(3)
+      + " MHz): background VFOs must sit inside it. They decode all through their profile\u2019s hours, listeners or not \u2014 the radio is never moved."));
+  }
+  if (tiers) {
+    box.appendChild(el("p", { class: "why", id: "bgTierNote" },
+      "On CPU-limited servers with a limited number of decoders, real listeners get decoder priority \u2014 the lowest VFO "
+      + "in this list pauses when a listener needs a decoder and resumes when one is free."));
+  } else if (slots) {
+    box.appendChild(el("p", { class: "why", id: "bgCapNote" },
+      "This server can run " + slots + (slots === 1 ? " decoder" : " decoders") + " at once \u2014 that\u2019s the most VFOs a profile can have."));
+  }
   bgModel.profiles.forEach(function (p, pi) {
     const card = el("div", { class: "bgProf" });
     const h = el("h3", null, "Profile " + (pi + 1));
     const del = el("button", { type: "button", class: "ghost" }, "Delete profile");
     del.onclick = function () { bgModel.profiles.splice(pi, 1); bgRender(); };
     h.appendChild(del); card.appendChild(h);
-    // RF centre
-    const cl = el("label"); cl.appendChild(el("span", { class: "lbl" }, "RF Centre"));
-    const cw = el("span", { style: "display:flex;gap:8px;align-items:center" });
-    const ci = el("input", { type: "number", step: "0.1", min: "0", placeholder: "500", style: "max-width:140px" });
-    ci.value = p.centre > 0 ? String(p.centre / 1e3) : "";
-    ci.oninput = function () { p.centre = Math.round((parseFloat(ci.value) || 0) * 1e3); };
-    cw.appendChild(ci); cw.appendChild(el("span", null, "kHz")); cl.appendChild(cw); card.appendChild(cl);
-    // VFO rows
+    // RF centre — not on a locked radio: its window is the owner's lock, and background never moves it
+    if (!locked) {
+      const cl = el("label"); cl.appendChild(el("span", { class: "lbl" }, "RF Centre"));
+      const cw = el("span", { style: "display:flex;gap:8px;align-items:center" });
+      const ci = el("input", { type: "number", step: "0.1", min: "0", placeholder: "500", style: "max-width:140px" });
+      ci.value = p.centre > 0 ? String(p.centre / 1e3) : "";
+      ci.oninput = function () { p.centre = Math.round((parseFloat(ci.value) || 0) * 1e3); };
+      cw.appendChild(ci); cw.appendChild(el("span", null, "kHz")); cl.appendChild(cw); card.appendChild(cl);
+    } else if (!(p.centre > 0)) p.centre = r0.lockFreq;   // ★ stored as the lock, which is what it runs at
+    // VFO rows — on a multi-radio box, a tier list: rank, a drag handle, ▲ / ▼
+    const rows = [];
+    const move = function (from, to) {
+      if (to < 0 || to >= p.vfos.length || to === from) return;
+      const v = p.vfos.splice(from, 1)[0]; p.vfos.splice(to, 0, v); bgRender();
+    };
     p.vfos.forEach(function (v, vi) {
       const row = el("div", { class: "bgVfo" });
+      rows.push(row);
+      if (tiers) {
+        row.appendChild(el("span", { class: "bgRank", title: "Priority \u2014 1 is the highest" }, String(vi + 1)));
+        // ★ A real drag handle — pointer events cover a mouse and a finger; ▲ / ▼ beside it for a keyboard or a pad.
+        const hd = el("span", { class: "bgHandle", role: "button", "aria-label": "Drag to reorder", title: "Drag to change the priority" }, "\u2261");
+        hd.onpointerdown = function (e) {
+          if (hd.setPointerCapture && e.pointerId != null) { try { hd.setPointerCapture(e.pointerId); } catch (x) {} }
+          hd.__drag = { from: vi };
+          row.classList.add("dragging");
+          if (e.preventDefault) e.preventDefault();
+        };
+        hd.onpointermove = function (e) {
+          if (!hd.__drag) return;
+          let to = rows.length - 1;
+          for (let k = 0; k < rows.length; k++) {
+            const r = rows[k].getBoundingClientRect();
+            if (e.clientY < r.top + r.height / 2) { to = k; break; }
+          }
+          hd.__drag.to = to;
+        };
+        hd.onpointerup = hd.onpointercancel = function () {
+          const d = hd.__drag; hd.__drag = null; row.classList.remove("dragging");
+          if (d && d.to != null) move(d.from, d.to);
+        };
+        row.appendChild(hd);
+        const up = el("button", { type: "button", class: "ghost bgMove", "aria-label": "Move up", title: "Higher priority" }, "\u25B2");
+        const dn = el("button", { type: "button", class: "ghost bgMove", "aria-label": "Move down", title: "Lower priority" }, "\u25BC");
+        if (vi === 0) up.setAttribute("disabled", ""); if (vi === p.vfos.length - 1) dn.setAttribute("disabled", "");
+        up.onclick = function () { move(vi, vi - 1); };
+        dn.onclick = function () { move(vi, vi + 1); };
+        row.appendChild(up); row.appendChild(dn);
+      }
       row.appendChild(el("span", null, "VFO " + (vi + 1)));
       const fi = el("input", { type: "number", step: "0.1", min: "0", placeholder: "517.5" });
       fi.value = v.hz > 0 ? String(v.hz / 1e3) : "";
@@ -5424,7 +5519,24 @@ function bgRender() {
       fi.oninput = upd; md.onchange = function () { v.mode = md.value; fillDec(); upd(); }; dc.onchange = upd;
       card.appendChild(row);
     });
-    if (p.vfos.length < 8) {
+    // ★ One radio: rows past the box's decoders are KEPT (a box that went from several radios back to one) but said
+    //   plainly not to run; the server refuses a save with more, in words.
+    if (!tiers && slots && p.vfos.length > slots) {
+      const over = []; for (let k = slots + 1; k <= p.vfos.length; k++) over.push(String(k));
+      const list = over.length === 1 ? over[0] : over.slice(0, -1).join(", ") + " and " + over[over.length - 1];
+      card.appendChild(el("div", { class: "hint", style: "color:#ff8a7d" },
+        "VFO " + list + (over.length === 1 ? " won\u2019t" : " won\u2019t") + " run \u2014 this server can run " + slots + " decoders."));
+    }
+    if (tiers && locked) {
+      const users = r0.users > 0 ? r0.users : 1;
+      card.appendChild(el("div", { class: "hint bgSlotLine" }, "up to " + users + " background VFOs while nobody listens (this radio\u2019s "
+        + users + " user slots)" + (slots ? " \u00b7 " + slots + " decoders on this server" : "") + " \u00b7 listeners always come first"));
+    } else if (tiers && slots) {
+      card.appendChild(el("div", { class: "hint bgSlotLine" }, p.vfos.length + (p.vfos.length === 1 ? " VFO" : " VFOs") + " \u00b7 up to "
+        + Math.min(p.vfos.length, slots) + " of this server\u2019s " + slots + " decoder slots \u00b7 listeners always come first; "
+        + "the lowest in the list pauses when a listener needs a decoder"));
+    }
+    if (p.vfos.length < cap) {
       const add = el("button", { type: "button", class: "linkish" }, "+ Add another VFO");
       add.onclick = function () { p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); bgRender(); };
       card.appendChild(add);

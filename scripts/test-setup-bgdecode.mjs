@@ -39,7 +39,7 @@ const box = els.bgProfiles;
 const buttons = () => box.all().filter((e) => e.tag === 'button');
 const btn = (label) => buttons().find((e) => e.textContent === label);
 ok(els.bgOn.checked && els.bgWait.value === '5', 'Nick\'s config loads: on, 5 minutes');
-ok(box.children.length === 1 && box.text().includes('Profile 1'), 'one profile drawn');
+ok(box.children.filter((c) => c.attrs.class === 'bgProf').length === 1 && box.text().includes('Profile 1'), 'one profile drawn');
 ok(box.all().filter((e) => e.textContent.startsWith('VFO ')).length === 2, 'two VFO rows');
 ok(!box.text().includes('Listening for'), 'no per-VFO "Listening for … kHz" line (Stuart: not needed, odd for WEFAX or RTTY)');
 ok(box.text().includes('UTC — all day'), '00:00 – 00:00 says all day');
@@ -47,7 +47,7 @@ ok(!btn('Want to add another background decoding profile?'), '★ NO "add anothe
 ok(api.bgCollect() === JSON.stringify(NICK), `saved back unchanged: ${api.bgCollect()}`);
 
 // the decoders offered follow the demodulator
-const row2 = box.children[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
+const row2 = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
 const [md, dc] = row2.children.filter((e) => e.tag === 'select');
 ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8', 'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8');
 md.value = 'lsb'; md.onchange();
@@ -58,7 +58,7 @@ md.value = 'nfm'; md.onchange();
 ok(dc.children.map((o) => o.value).join() === 'sstv' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers only SSTV, and the VFO becomes SSTV');
 
 // times: a window brings the "another profile" line; following it adds a second profile
-const times = box.children[0].all().filter((e) => e.attrs.type === 'time');
+const times = box.children.filter((c) => c.attrs.class === 'bgProf')[0].all().filter((e) => e.attrs.type === 'time');
 times[0].value = '18:00'; times[1].value = '06:00'; times[0].onchange();
 ok(!!btn('Want to add another background decoding profile?'), '★ a profile with times brings "Want to add another background decoding profile?"');
 ok(box.text().includes('UTC (19:00 – 07:00 server time)'), 'the server\'s local time beside the UTC times (server at UTC+1)');
@@ -74,7 +74,7 @@ ok(api.model().profiles.length === 1 && api.model().profiles[0].from === '18:00'
 
 // off with nothing set stores nothing; an Icom does not get the control
 api.bgLoad({ driver: 'rtlsdr', bgDecode: '' });
-ok(!els.bgOn.checked && box.children.length === 0 && api.bgCollect() === '', 'a radio that never had it: off, nothing drawn, nothing stored');
+ok(!els.bgOn.checked && box.children.filter((c) => c.attrs.class === 'bgProf').length === 0 && api.bgCollect() === '', 'a radio that never had it: off, nothing drawn, nothing stored');
 api.bgLoad({ driver: 'icom', bgDecode: '' });
 ok(els.hwBg.classList.contains('hide'), 'an Icom: hidden (one physical receiver, no IQ to cut channels from)');
 

@@ -73,7 +73,7 @@ const ADMIN = 'bg-admin-pass';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-bgdec-'));
 for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
-  configured: true, name: 'Background Decoding Test', locator: 'IO92nh', adminPass: ADMIN, galleryMb: 50,
+  configured: true, name: 'Background Decoding Test', locator: 'IO92nh', adminPass: ADMIN, galleryMb: 50, decoderMax: 4,
   radios: [{ serial: 'bgdec-test', label: 'Test radio', enabled: true, configured: true, users: 4, rate: 2048000,
              bgDecode: JSON.stringify(BG) }],
 }));
@@ -145,8 +145,10 @@ try {
   ok(logCount(/back on 7100\.000/) === 0, '...and the switch did NOT give the dial back in between (nobody is here to give it to)');
 
   console.log('── somebody arrives: everything stops at once, and they land where the radio was LEFT ──');
+  const stopsAtArrival = logCount(/background decoding stopped — /);
   const b = ws(port, '/ws/user-spectrum?user_session_id=bgbb0002&bins=256');
-  ok(await until(() => logCount(/background decoding stopped — a listener arrived/) >= 1, 3000), '★ background decoding stopped the moment a listener connected');
+  // ★ ("Keep decoding stations still in range" is on by default: profile 2's VFO is not in the window of the dial the radio goes back to, so it stops.)
+  ok(await until(() => logCount(/background decoding stopped — /) > stopsAtArrival, 3000), '★ background decoding stopped the moment a listener connected');
   ok(/the radio is back on 7100\.000 kHz/.test(logText()), '★ ...and the radio is back on 7100.000 kHz');
   ok(await until(() => vfo(b) === 7100000, 3000), `★ the newcomer is on 7100.000 kHz — not the NAVTEX or RTTY centre (${vfo(b)})`);
   await sleep(WAIT_S * 1000 + 2500);
@@ -157,7 +159,7 @@ try {
   ok(await until(() => logCount(/profile 2, RF centre 4600\.0 kHz/) === 2, 15000), 'nobody again: profile 2 is back after the wait');
   const stopsBefore = logCount(/background decoding stopped — /);
   const dx = ws(port, '/ws/dxcluster?user_session_id=bgcc0003');
-  ok(await until(() => logCount(/background decoding stopped — a decoder socket connected/) >= 1, 3000), '★ a decoder socket alone counts as somebody');
+  ok(await until(() => logCount(/background decoding stopped — /) > stopsBefore, 3000), '★ a decoder socket alone counts as somebody');
   ok(logCount(/background decoding stopped — /) === stopsBefore + 1, '...stopped once');
   dx.close();
 
@@ -200,6 +202,11 @@ try {
      `★ overlapping profiles refused, named: "${overlap.j.error}"`);
   const far = await post(withBg({ on: true, waitMin: 5, profiles: [{ ...NICK, vfos: [...NICK.vfos, { hz: 2500000, mode: 'usb', dec: 'navtex' }] }] }));
   ok(far.status === 400 && /VFO 3 \(2500\.0 kHz\).*2048 kS\/s/.test(far.j.error || ''), `★ a VFO the radio cannot see is refused, saying why: "${far.j.error}"`);
+  // ★★ A single-radio server: a profile may have no more VFOs than the box has decoder slots (decoderMax 4 here).
+  const five = await post(withBg({ on: true, waitMin: 5, keepInRange: false, profiles: [{ ...NICK, to: '00:00',
+    vfos: [0, 1, 2, 3, 4].map((i) => ({ hz: 489500 + i * 2000, mode: 'usb', dec: 'navtex' })) }] }));
+  ok(five.status === 400 && /Profile 1 has 5 VFOs — this server can run 4 decoders at once/.test(five.j.error || ''),
+     `★ 5 VFOs on a one-radio server with 4 decoder slots: refused, in words: "${five.j.error}"`);
   const nickOnly = { on: true, waitMin: 10, profiles: [{ ...NICK, to: '00:00' }] };
   const good = await post(withBg(nickOnly));
   ok(good.status === 200, `Nick's profile (all day) saves (${good.status} ${JSON.stringify(good.j)})`);

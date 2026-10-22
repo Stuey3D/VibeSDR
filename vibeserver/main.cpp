@@ -2279,6 +2279,10 @@ int main(int argc, char** argv) {
                 const std::time_t now = std::time(nullptr); std::tm lt{}; localtime_r(&now, &lt);
                 std::snprintf(b, sizeof b, ",\"serverUtcOffsetMin\":%ld", (long)(lt.tm_gmtoff / 60));
                 if (const auto at = j.rfind('}'); at != std::string::npos) j.insert(at, b);
+                // ★ This box's decoder slots when the owner left "Decoders at once" blank — the setup page caps a
+                //   single-radio server's profile at them, and says how many a multi-radio one has.
+                std::snprintf(b, sizeof b, ",\"decoderSlotsDefault\":%d", LocalSdrShim::decoderDefaultMax());
+                if (const auto at = j.rfind('}'); at != std::string::npos) j.insert(at, b);
             }
             /* ★★ THE BAND III BLOCK NAMES, FROM THE TABLE THE RECEIVER TUNES — for the DAB landing
              *  station's block selector, whose stored value is an INDEX into that table. Sent here as
@@ -2378,11 +2382,23 @@ int main(int argc, char** argv) {
             /* ★★ V12 BACKGROUND DECODING IS REFUSED AT THE SAVE, IN WORDS — overlapping profiles named, a VFO the radio
              *  cannot see around its centre at its sample rate (vibe_bgdecode.h validate). The rule belongs to the box,
              *  not to the page (the PIN-collision rule): a hand-edited post meets the same wall. */
+            /* ★★ A SINGLE-RADIO box caps a profile at its decoder slots (Stuart, 2026-10-22) — nothing competes for them
+             *  there; on a multi-radio box background takes whatever is free, listeners first (BgRegistry). Counted as the
+             *  setup page counts its radio tabs: the enabled radios. */
+            int enabledRadios = 0;
+            for (const auto& r : next.radios) if (r.enabled) ++enabledRadios;
+            const int slotCap = enabledRadios <= 1 ? (next.decoderMax > 0 ? next.decoderMax : LocalSdrShim::decoderDefaultMax()) : 0;
             for (const auto& r : next.radios) {
                 if (r.bgDecode.empty()) continue;
                 vibe::bg::Config bc; std::string be;
                 const double rate = r.mode == vsconfig::Mode::LockedRange && r.lockRate > 0 ? r.lockRate : r.rate;
-                if (!vibe::bg::parse(r.bgDecode, bc, be) || !vibe::bg::validate(bc, rate, be)) {
+                // ★ A locked radio's window never moves: no RF centre of its own, VFOs inside the lock. And the single-radio
+                //   cap applies only where nothing competes for the slots — not while listeners keep background running
+                //   (keepInRange), and not on a locked radio (it runs during listeners too).
+                const bool locked = r.mode == vsconfig::Mode::LockedRange && r.lockFreq > 0;
+                const bool parsed = vibe::bg::parse(r.bgDecode, bc, be);
+                const int cap = (!parsed || bc.keepInRange || locked) ? 0 : slotCap;
+                if (!parsed || !vibe::bg::validate(bc, rate, be, cap, locked ? r.lockFreq : 0)) {
                     err = (r.label.empty() ? r.driver : r.label) + " \xe2\x80\x94 " + be;
                     return false;
                 }

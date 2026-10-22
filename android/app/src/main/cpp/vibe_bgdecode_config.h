@@ -30,11 +30,15 @@ struct Profile {
 struct Config {
     bool on = false;
     int  waitSec = 300;            ///< after the last listener leaves (the owner's, default 5 minutes)
+    /** ★★ "Keep decoding stations still in range while listeners are on" (Stuart, 2026-10-22, default ON): when a listener
+     *  arrives the radio goes back to its own dial as ever, and every VFO still inside the window it now captures keeps
+     *  decoding — the radio is never moved for them. Off: background decoding stops entirely while anyone is here. */
+    bool keepInRange = true;
     std::vector<Profile> profiles;
 };
 
 constexpr size_t kMaxProfiles = 4;
-constexpr size_t kMaxVfos = 8;
+constexpr size_t kMaxVfos = 16;   // ★ a sensible ceiling; a SINGLE-radio server is capped lower, at its decoder slots
 
 /** ★ What a background VFO may decode, which demodulators it works on, and what it is told. `toneHz` is where the
  *  signal sits in the AUDIO (USB: RF = dial + tone; LSB: RF = dial − tone): NAVTEX on 518 kHz is dial 517.5 USB or
@@ -121,6 +125,7 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
     if (!antswitch::Parser(json).parse(j) || j.kind != antswitch::Json::Obj) { err = "background decoding: not valid JSON"; return false; }
     if (const auto* v = j.get("on")) out.on = v->kind == antswitch::Json::Bool && v->b;
     if (const auto* v = j.get("waitMin")) if (v->kind == antswitch::Json::Num) out.waitSec = (int)std::lround(v->n * 60.0);
+    if (const auto* v = j.get("keepInRange")) if (v->kind == antswitch::Json::Bool) out.keepInRange = v->b;
     if (out.waitSec < 0) out.waitSec = 0;
     if (out.waitSec > 24 * 3600) out.waitSec = 24 * 3600;
     const auto* ps = j.get("profiles");
@@ -149,6 +154,7 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
 inline std::string toJson(const Config& c) {
     std::string o = std::string("{\"on\":") + (c.on ? "true" : "false") + ",\"waitMin\":";
     char b[64]; std::snprintf(b, sizeof b, "%g", c.waitSec / 60.0); o += b;
+    if (!c.keepInRange) o += ",\"keepInRange\":false";   // ★ absent = on (the default), so older settings read back unchanged
     o += ",\"profiles\":[";
     for (size_t i = 0; i < c.profiles.size(); i++) {
         const auto& p = c.profiles[i];
@@ -183,15 +189,27 @@ inline double halfWindowHz(double rate) { return rate / 2.0 - std::min(50000.0, 
 
 static inline std::string khz(double hz) { char b[32]; std::snprintf(b, sizeof b, "%.1f kHz", hz / 1e3); return b; }
 
-/** ★★ WHAT THE SAVE REFUSES, IN WORDS. `rate` is the radio's sample rate (0 = unknown: the window is not checked). */
-inline bool validate(const Config& c, double rate, std::string& err) {
+/** ★★ WHAT THE SAVE REFUSES, IN WORDS. `rate` is the radio's sample rate (0 = unknown: the window is not checked).
+ *  `slotCap` > 0: a SINGLE-radio server (Stuart, 2026-10-22) — a profile may have no more VFOs than the box has decoder
+ *  slots, because nothing else competes for them there (a listener arriving stops background decoding completely).
+ *  On a multi-radio server the cap is 0: background takes whatever slots are free, in its own priority order. */
+/** `lockCentre` > 0: a LOCKED-RANGE radio (Stuart, 2026-10-22) — its window never moves, a profile has no RF centre of
+ *  its own, and every VFO must sit inside the locked window. */
+inline bool validate(const Config& c, double rate, std::string& err, int slotCap = 0, double lockCentre = 0) {
     if (c.profiles.size() > kMaxProfiles) { err = "background decoding: at most " + std::to_string(kMaxProfiles) + " profiles"; return false; }
     if (c.on && c.profiles.empty()) { err = "background decoding is on but has no profile — add one, or switch it off"; return false; }
     for (size_t i = 0; i < c.profiles.size(); i++) {
         const auto& p = c.profiles[i];
         const std::string name = "Profile " + std::to_string(i + 1);
-        if (!(p.centreHz > 0)) { err = name + ": set an RF centre"; return false; }
+        if (!(p.centreHz > 0) && !(lockCentre > 0)) { err = name + ": set an RF centre"; return false; }
+        const double centre = lockCentre > 0 ? lockCentre : p.centreHz;
         if (p.vfos.empty()) { err = name + ": add at least one VFO"; return false; }
+        if (slotCap > 0 && p.vfos.size() > (size_t)slotCap) {
+            err = name + " has " + std::to_string(p.vfos.size()) + " VFOs \xe2\x80\x94 this server can run " + std::to_string(slotCap)
+                + (slotCap == 1 ? " decoder" : " decoders") + " at once, and that is the most VFOs a profile can have. Remove "
+                + std::to_string(p.vfos.size() - (size_t)slotCap) + ", or raise \"Decoders at once\" on the Server tab.";
+            return false;
+        }
         if (p.vfos.size() > kMaxVfos) { err = name + ": at most " + std::to_string(kMaxVfos) + " VFOs"; return false; }
         for (size_t k = 0; k < p.vfos.size(); k++) {
             const auto& v = p.vfos[k];
@@ -208,7 +226,14 @@ inline bool validate(const Config& c, double rate, std::string& err) {
             }
             if (rate > 0) {
                 const double half = halfWindowHz(rate);
-                const double off = std::fabs(v.hz - p.centreHz);
+                const double off = std::fabs(v.hz - centre);
+                if (off > half && lockCentre > 0) {
+                    char b[300];
+                    std::snprintf(b, sizeof b, "%s (%s) is outside this radio's locked range (%.3f\xe2\x80\x93%.3f MHz) \xe2\x80\x94 on a locked "
+                                  "radio background VFOs must sit inside it.", vn.c_str(), khz(v.hz).c_str(),
+                                  std::max(0.0, centre - half) / 1e6, (centre + half) / 1e6);
+                    err = b; return false;
+                }
                 if (off > half) {
                     char b[300];
                     std::snprintf(b, sizeof b, "%s (%s) is %s from the RF centre %s — at %.0f kS/s this radio sees about "

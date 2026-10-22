@@ -5509,8 +5509,6 @@ static double vsBgWaitSec(const vibe::bg::Config& c) {
 }
 /** ★ TEST-ONLY: may a fake rtl_tcp radio be released? See LocalSdrShim::releaseRadio. */
 static bool vsTestTcpRelease() { const char* e = std::getenv("VIBESERVER_TEST_TCP_RELEASE"); return e && *e == '1'; }
-/** ★ The box-wide "a listener needs a decoder slot" file, beside the slots themselves. */
-static std::string vsBgYieldPath() { const std::string d = vsDecoderSlotDir(); return d.empty() ? std::string() : d + "/bg-yield"; }
 /** ★ The owner's ceiling for raw IQ on the local network, in Hz (0 = none). The full span is
  *  offered only when the capture rate is within it — the radio's own rates, no resampling — so an
  *  owner on Wi-Fi or a small box can keep an RTL at 2.4 MS/s off the LAN while still serving
@@ -24650,11 +24648,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // ★ While a profile is due (bgWanted_), the idle park is held off: parking and waking a radio is the most dangerous
     //   thing this server does to it (see g_vsIdleGraceSec), and doing it five minutes before taking it back is waste.
     vibe::bg::BgRunner bgRun_;
+    vibe::bg::BgRegistry bgReg_;                // ★ this radio's background VFOs, as the box sees them (pause / resume)
     std::mutex         bgOpMtx_;                // ★ one start/stop at a time — the tick, an arrival
     std::atomic<bool>  bgActive_{false};        // the runner is running (read by the DSP thread on every block)
     std::atomic<bool>  bgWanted_{false};        // a profile is due or running: hold the idle park off
     double bgEmptySince_ = 0, bgRetryAt_ = 0, bgNotBefore_ = 0;   // ★ decoder retry (running) · start retry (radio not ours)
     int    bgProfile_ = -1, bgGen_ = -1;
+    bool   bgMoved_ = false;        // ★ the radio is on the profile centre (it goes back when somebody arrives)
+    bool   bgListenerOn_ = false;   // ★ what the runner was last told
     bool   bgLoggedWait_ = false;
     struct { bool valid = false; double centre = 0, view = 0, audio = 0; } bgSaved_;
 
@@ -24683,7 +24684,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
     }
     /** Start profile `idx`. Caller holds bgOpMtx_. */
-    void bgStartLocked(const vibe::bg::Config& cfg, int idx) {
+    /** ★ Is this radio's window LOCKED (the owner pinned the centre)? Then background decoding never moves it. */
+    bool bgLocked() const { return g_vsLockedCentre.load() > 0.0 && !useIcom(); }
+    /** Build the runner's parameters for profile `idx` at the radio's CURRENT centre. */
+    vibe::bg::BgRunner::Params bgParams(const vibe::bg::Config& cfg, int idx, bool listenerOn) {
+        vibe::bg::BgRunner::Params p;
+        p.profileIdx = idx; p.profile = cfg.profiles[(size_t)idx];
+        p.sampleRate = sampleRate; p.centreHz = rtlCenter.load(); p.hwOffsetHz = hwOffsetHz();
+        int n = 4096; while (n < 65536 && n < sampleRate / 40.0) n <<= 1;   // ★ ~25 ms blocks, as a listener's channel
+        p.fftSize = n;
+        p.slots = &vsDecoderSlots();
+        p.store = vibe::gallery::shared().enabled() ? &vibe::gallery::shared() : nullptr;
+        // ★★ The box's priority list (Stuart: listeners first, background in its own order) — beside the slots.
+        bgReg_.open(vsDecoderSlotDir(), std::to_string((long long)::getpid()));
+        p.registry = bgReg_.isOpen() ? &bgReg_ : nullptr;
+        p.lat = g_bgLat.load(); p.lon = g_bgLon.load();
+        p.log = [](const std::string& t) { LOGI("%s", t.c_str()); };
+        p.listenerOn = listenerOn;
+        /* ★★ A LOCKED RADIO'S USER SLOTS (Stuart: "10 user slots if my RSP1B is running 0 users then treat each slot as an
+         *  idle radio"): background may run as many VFO channels as there are FREE listener slots — so a listener is never
+         *  refused or told "full" because of it; the lowest VFO gives up its channel the moment one is needed. Read from
+         *  the cached listener count: lock-free, safe on the runner's thread. */
+        if (bgLocked()) p.channelBudget = [] { return std::max(0, g_vsMaxUsers.load() - s_listenersCached.load(std::memory_order_relaxed)); };
+        return p;
+    }
+    /** Start profile `idx`. `move`: put the radio on the profile centre first (nobody here, unlocked); otherwise run the
+     *  VFOs inside the window the radio has NOW (a listener is on, or the window is locked). Caller holds bgOpMtx_. */
+    void bgStartLocked(const vibe::bg::Config& cfg, int idx, bool move = true, bool listenerOn = false) {
         const auto& prof = cfg.profiles[(size_t)idx];
         resumeCaptureIdle(/*fromBg=*/true);       // ★ a parked or released radio is taken back first
         /* ★★ SHARED BY TIME (Stuart, 2026-10-22: "You cannot release a radio and also hand it over to another app").
@@ -24694,36 +24721,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("background decoding: profile %d is due but another program has the radio \xe2\x80\x94 trying again in 60 s", idx + 1);
             bgNotBefore_ = nowSecs() + 60; return;
         }
-        if (!bgSaved_.valid) {
-            bgSaved_ = { true, rtlCenter.load(), viewCenter.load(), audioFreq.load() };
-            LOGI("background decoding: nobody here for %.0f s — moving the radio from %.3f kHz (dial %.3f) to the profile %d centre %.3f kHz",
-                 vsBgWaitSec(cfg), bgSaved_.centre / 1e3, bgSaved_.audio / 1e3, idx + 1, prof.centreHz / 1e3);
-        } else {
-            LOGI("background decoding: moving the radio to the profile %d centre %.3f kHz (it goes back to %.3f kHz when somebody arrives)",
-                 idx + 1, prof.centreHz / 1e3, bgSaved_.audio / 1e3);
+        if (move && !bgLocked()) {
+            if (!bgSaved_.valid) {
+                bgSaved_ = { true, rtlCenter.load(), viewCenter.load(), audioFreq.load() };
+                LOGI("background decoding: nobody here for %.0f s — moving the radio from %.3f kHz (dial %.3f) to the profile %d centre %.3f kHz",
+                     vsBgWaitSec(cfg), bgSaved_.centre / 1e3, bgSaved_.audio / 1e3, idx + 1, prof.centreHz / 1e3);
+            } else {
+                LOGI("background decoding: moving the radio to the profile %d centre %.3f kHz (it goes back to %.3f kHz when somebody arrives)",
+                     idx + 1, prof.centreHz / 1e3, bgSaved_.audio / 1e3);
+            }
+            bgPlace(prof.centreHz, prof.centreHz, prof.centreHz);
         }
-        bgPlace(prof.centreHz, prof.centreHz, prof.centreHz);
-        vibe::bg::BgRunner::Params p;
-        p.profileIdx = idx; p.profile = prof;
-        p.sampleRate = sampleRate; p.centreHz = rtlCenter.load(); p.hwOffsetHz = hwOffsetHz();
-        int n = 4096; while (n < 65536 && n < sampleRate / 40.0) n <<= 1;   // ★ ~25 ms blocks, as a listener's channel
-        p.fftSize = n;
-        p.slots = &vsDecoderSlots();
-        p.store = vibe::gallery::shared().enabled() ? &vibe::gallery::shared() : nullptr;
-        p.yieldPath = vsBgYieldPath();
-        p.lat = g_bgLat.load(); p.lon = g_bgLon.load();
-        p.log = [](const std::string& t) { LOGI("%s", t.c_str()); };
-        // ★ The window is checked again against the rate the radio REALLY runs at (the save checked the configured one).
-        const double half = vibe::bg::halfWindowHz(sampleRate);
-        p.profile.vfos.clear();
-        for (const auto& v : prof.vfos) {
-            if (std::fabs(v.hz - p.centreHz) > half)
-                LOGI("background decoding: VFO %.3f kHz is outside what the radio sees at %.0f kS/s — skipped", v.hz / 1e3, sampleRate / 1e3);
-            else p.profile.vfos.push_back(v);
-        }
-        bgRun_.start(p);
+        bgRun_.start(bgParams(cfg, idx, listenerOn));
         bgActive_.store(true);
-        bgWanted_.store(true);
+        bgMoved_ = move && !bgLocked();
+        if (!listenerOn) bgWanted_.store(true);
         bgProfile_ = idx;
         bgGen_ = g_bgCfgGen.load();
         bgRetryAt_ = nowSecs() + 60;
@@ -24735,7 +24747,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             bgRun_.stop(false);
             LOGI("background decoding stopped — %s", why);
         }
-        bgProfile_ = -1;
+        bgProfile_ = -1; bgMoved_ = false;
         if (restore && bgSaved_.valid) {
             bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio);
             LOGI("background decoding: the radio is back on %.3f kHz (centre %.3f), where it was left",
@@ -24743,29 +24755,46 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             bgSaved_.valid = false;
         }
     }
-    /** ★★★ SOMEBODY ARRIVED — stop at once, give the dial back, start the wait again from their leaving. Called on the
-     *  connect path BEFORE the newcomer is told anything (resumeCaptureIdle runs before the landing and the config). */
+    /** ★★ Would any of profile `idx`'s VFOs be inside the window the radio has now? */
+    bool bgAnyInWindow(const vibe::bg::Config& cfg, int idx) const {
+        const double c = rtlCenter.load(), half = vibe::bg::halfWindowHz(sampleRate);
+        for (const auto& v : cfg.profiles[(size_t)idx].vfos) if (std::fabs(v.hz - c) <= half) return true;
+        return false;
+    }
+    /** ★★★ SOMEBODY ARRIVED. As ever: the radio goes back to the dial it was left on BEFORE background decoding moved it,
+     *  on the connect path, before the newcomer is told anything. THEN (Stuart, 2026-10-22, "Keep decoding stations still
+     *  in range while listeners are on", default on) every VFO still inside the window the radio now captures carries on
+     *  — re-cut against the new centre, not rebuilt, so a message in progress is not split — and the rest pause. The
+     *  radio's centre, dial and rate are never moved for a background VFO. A LOCKED radio's window never moves at all,
+     *  so nothing changes there but the "listener on" label. Switched off: background decoding stops, as before. */
     void bgStopForListener(const char* who) {
         bgWanted_.store(false);
         if (!bgActive_.load() && !bgSaved_.valid) { bgEmptySince_ = 0; return; }
+        vibe::bg::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
         std::lock_guard<std::mutex> op(bgOpMtx_);
         bgEmptySince_ = 0; bgLoggedWait_ = false;
+        if (bgActive_.load() && (bgLocked() || cfg.keepInRange)) {
+            if (bgSaved_.valid) {
+                bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio);
+                LOGI("background decoding: the radio is back on %.3f kHz (centre %.3f), where it was left — %s",
+                     bgSaved_.audio / 1e3, bgSaved_.centre / 1e3, who);
+                bgSaved_.valid = false;
+            }
+            bgMoved_ = false;
+            bgRun_.retarget(rtlCenter.load(), hwOffsetHz(), true);
+            if (bgRun_.inWindowCount() == 0) bgStopLocked("no background VFO is inside the radio's window now", false);
+            else LOGI("background decoding: %d VFO(s) still in range carry on while a listener is on", bgRun_.inWindowCount());
+            return;
+        }
         bgStopLocked(who, true);
     }
-    /** ★★ A listener here was refused a decoder slot: let background decoding on EVERY radio of this machine give its
-     *  slots back (vibe_bgdecode.h requestYield), then wait briefly for one to come free. @return true if one did. */
+    /** ★★★ A LISTENER'S DECODER FOUND NO FREE SLOT (Stuart, 2026-10-22: "the decoder slots are for real listeners as
+     *  highest priority so a background decode will have to drop off until its free again"). The LOWEST-ranked running
+     *  background VFO on the whole box pauses — that one only, this radio's own included — and the claim waits a moment
+     *  for its slot (in practice the half second the runner takes to see the request). @return true if a slot is free. */
     bool bgYieldForListener() {
-        const std::string y = vsBgYieldPath();
-        bgStopForListener("a listener needs a decoder slot");
-        if (y.empty()) return vsDecoderSlots().inUse() < vsDecoderSlots().max();
-        // ★ Nothing to yield anywhere on the box: the slots are LISTENERS', and the refusal is immediate (as before V12).
-        if (!vibe::bg::BgRunner::anyRunning(y)) return false;
-        vibe::bg::BgRunner::requestYield(y);
-        for (int i = 0; i < 30; i++) {          // ★ other radios notice within half a second
-            if (vsDecoderSlots().inUse() < vsDecoderSlots().max()) return true;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        return false;
+        return vibe::bg::BgRegistry::makeRoomForListener(vsDecoderSlots(), vsDecoderSlotDir());
     }
     /** ★★ THE TICK — every two seconds, on the housekeeping thread (the one that already runs the idle park). */
     void bgTick() {
@@ -24777,44 +24806,88 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
         const int want = can ? vibe::bg::activeProfile(cfg, vsBgUtcMinute()) : -1;
         const double now = nowSecs();
+        const bool locked = bgLocked();
         std::lock_guard<std::mutex> op(bgOpMtx_);
-        if (bgActive_.load()) {
-            if (anyone) { bgStopLocked("a listener arrived", true); bgEmptySince_ = 0; bgWanted_.store(false); return; }
-            if (bgRun_.yielded()) {
-                bgStopLocked("its decoder slots went to a listener on another radio", true);
-                bgEmptySince_ = now; bgWanted_.store(false); return;    // ★ and the wait starts again
+        // ── no profile due, or switched off: stop, give the dial back ──
+        if (want < 0) {
+            if (bgActive_.load() || bgSaved_.valid) {
+                bgStopLocked(can ? "no profile covers this time of day" : "switched off", true);
             }
-            if (want != bgProfile_ || g_bgCfgGen.load() != bgGen_) {
-                if (want >= 0) {
-                    LOGI("background decoding: %s — switching to profile %d", want != bgProfile_ ? "a profile boundary" : "the settings changed", want + 1);
-                    bgStopLocked("profile switch", false);
-                    bgStartLocked(cfg, want);
-                } else {
-                    bgStopLocked(can ? "no profile covers this time of day" : "switched off", true);
-                    bgWanted_.store(false);
-                }
-                return;
-            }
-            if (now >= bgRetryAt_) { bgRetryAt_ = now + 60; bgRun_.retryRefused(); }
+            bgWanted_.store(false); bgLoggedWait_ = false; bgNotBefore_ = 0;
+            if (anyone) bgEmptySince_ = 0; else if (bgEmptySince_ <= 0) bgEmptySince_ = now;
             return;
         }
-        // ★ Not running: a dial still held from a run that could not restore (it cannot happen today; belt and braces).
-        if (bgSaved_.valid && anyone) bgStopLocked("a listener arrived", true);
-        /* ★★ OUTSIDE EVERY PROFILE'S HOURS THE RADIO IS NOT OURS: bgWanted_ is false, so the idle park and "Let another
-         *  program use this radio" work exactly as configured (Stuart: share by time). The wait is still counted from
-         *  the last listener LEAVING, not from the profile's start — so a profile that begins on an empty server starts
-         *  at once (taking the radio back if it was released), rather than minutes into its own hours. */
-        if (anyone) { bgWanted_.store(false); bgEmptySince_ = 0; bgLoggedWait_ = false; return; }
+        // ── a profile switch or new settings: start again (at the window in use; the wait does not restart) ──
+        if (bgActive_.load() && (want != bgProfile_ || g_bgCfgGen.load() != bgGen_)) {
+            LOGI("background decoding: %s — switching to profile %d", want != bgProfile_ ? "a profile boundary" : "the settings changed", want + 1);
+            const bool wasMoved = bgMoved_;
+            bgStopLocked("profile switch", false);
+            if (anyone && !locked && !cfg.keepInRange) { bgStopLocked("a listener is on", true); return; }
+            bgStartLocked(cfg, want, wasMoved && !anyone, anyone);
+            return;
+        }
+        /* ★★★ A LOCKED RADIO: the window never moves, so background decoding runs ALL THE TIME during its profile's hours —
+         *  listeners on or not, and at once (the wait is only for radios it would move). Listeners first for the slots and
+         *  for this radio's user slots (BgRunner's budget). The park is held off only while nobody is here. */
+        if (locked) {
+            if (!anyone) bgWanted_.store(true); else bgWanted_.store(false);
+            if (!bgActive_.load()) {
+                if (now >= bgNotBefore_) bgStartLocked(cfg, want, false, anyone);
+                return;
+            }
+            if (bgRun_.sampleRate() != sampleRate) { bgStopLocked("the sample rate changed", false); bgStartLocked(cfg, want, false, anyone); return; }
+            if (bgRun_.centreHz() != rtlCenter.load() || anyone != bgListenerOn_) bgRun_.retarget(rtlCenter.load(), hwOffsetHz(), anyone);
+            bgListenerOn_ = anyone;
+            return;
+        }
+        // ── somebody here (unlocked) ──
+        if (anyone) {
+            bgWanted_.store(false); bgEmptySince_ = 0; bgLoggedWait_ = false;
+            if (!cfg.keepInRange) { if (bgActive_.load() || bgSaved_.valid) bgStopLocked("a listener arrived", true); return; }
+            if (bgSaved_.valid) {   // ★ belt and braces: an arrival the connect path did not see — give the dial back first
+                bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio); bgSaved_.valid = false; bgMoved_ = false;
+            }
+            // ★★ In range while a listener is on: follow the radio wherever the listener's dial takes it.
+            if (bgActive_.load()) {
+                if (bgRun_.sampleRate() != sampleRate) { bgStopLocked("the sample rate changed", false); }
+                else {
+                    if (bgRun_.centreHz() != rtlCenter.load() || !bgListenerOn_) bgRun_.retarget(rtlCenter.load(), hwOffsetHz(), true);
+                    bgListenerOn_ = true;
+                    if (bgRun_.inWindowCount() == 0) bgStopLocked("no background VFO is inside the radio's window now", false);
+                    return;
+                }
+            }
+            if (bgAnyInWindow(cfg, want) && now >= bgNotBefore_) { bgStartLocked(cfg, want, false, true); bgListenerOn_ = true; }
+            return;
+        }
+        // ── nobody here (unlocked): after the wait, the radio goes to the profile centre ──
+        bgListenerOn_ = false;
         if (bgEmptySince_ <= 0) bgEmptySince_ = now;
-        if (want < 0) { bgWanted_.store(false); bgLoggedWait_ = false; bgNotBefore_ = 0; return; }
         bgWanted_.store(true);
         const double wait = vsBgWaitSec(cfg);
+        if (bgActive_.load() && bgMoved_) return;            // ★ running as it should be
         if (!bgLoggedWait_) {
             bgLoggedWait_ = true;
             LOGI("background decoding: nobody here — profile %d starts in %.0f s unless somebody arrives", want + 1,
                  std::max(0.0, wait - (now - bgEmptySince_)));
         }
-        if (now - bgEmptySince_ >= wait && now >= bgNotBefore_) bgStartLocked(cfg, want);
+        if (now - bgEmptySince_ < wait || now < bgNotBefore_) {
+            // ★ Until then, VFOs already running in range carry on, now labelled as without a listener.
+            if (bgActive_.load()) bgRun_.retarget(rtlCenter.load(), hwOffsetHz(), false);
+            return;
+        }
+        if (bgActive_.load()) {
+            // ★★ ALREADY RUNNING IN RANGE: move the radio and RE-CUT — those VFOs are not torn down and rebuilt.
+            const auto& prof = cfg.profiles[(size_t)want];
+            bgSaved_ = { true, rtlCenter.load(), viewCenter.load(), audioFreq.load() };
+            LOGI("background decoding: nobody here for %.0f s — moving the radio from %.3f kHz (dial %.3f) to the profile %d centre %.3f kHz",
+                 wait, bgSaved_.centre / 1e3, bgSaved_.audio / 1e3, want + 1, prof.centreHz / 1e3);
+            bgPlace(prof.centreHz, prof.centreHz, prof.centreHz);
+            bgRun_.retarget(rtlCenter.load(), hwOffsetHz(), false);
+            bgMoved_ = true;
+            return;
+        }
+        bgStartLocked(cfg, want, true, false);
     }
 
     void armIdlePark() {

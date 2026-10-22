@@ -13421,7 +13421,7 @@ function initRecorder() {
 // this lists it newest first, filters by decoder, opens a text item inline and downloads any item.
 // ★ Text from the air is shown with textContent, never as HTML.
 interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
-                        title: string; partial?: boolean; bytes: number }
+                        title: string; partial?: boolean; wl?: boolean; bytes: number }
 let galKind = '';
 function galUrl(path: string): string { return readAuthUrl(P(path)); }
 function galWhen(t: number): string {
@@ -13455,7 +13455,7 @@ async function renderGallery() {
       const n = document.createElement('span'); n.className = 'n';
       n.appendChild(document.createTextNode(it.title || it.k.toUpperCase()));
       const tag = (t: string) => { const s = document.createElement('span'); s.className = 'tag'; s.textContent = t; n.appendChild(s); };
-      tag(it.o === 'background' ? 'BACKGROUND' : 'LISTENER');
+      tag(it.o === 'background' ? (it.wl ? 'BACKGROUND \u00b7 LISTENER ON' : 'BACKGROUND') : 'LISTENER');
       if (it.partial) tag('PARTIAL');
       n.appendChild(document.createElement('br'));
       const src = document.createElement('span'); src.className = 'src';

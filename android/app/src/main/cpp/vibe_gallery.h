@@ -28,6 +28,7 @@
 //    is never written into an item.
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -136,6 +137,9 @@ struct Meta {
     std::string title;       ///< what the list shows ("Station G · Met warning · #98")
     bool        partial = false;   ///< cut off (a listener arrived, the profile changed) — said, never hidden
     int64_t     utc = 0;     ///< when it began, seconds
+    /** ★ Background decoding that ran ON while a listener was here (Stuart, 2026-10-22: "Keep decoding stations still in
+     *  range while listeners are on") — read when the item is written, so a message that saw one is marked. */
+    std::shared_ptr<std::atomic<bool>> listenerOn;
 };
 
 // ── The store ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -366,7 +370,7 @@ private:
             + "\",\"t\":" + std::to_string((long long)(m.utc ? m.utc : nowUtc())) + ",\"hz\":" + hz
             + ",\"m\":\"" + jsonEsc(m.mode) + "\",\"d\":\"" + jsonEsc(m.decoder) + "\",\"p\":\"" + jsonEsc(printable(m.profile, 40))
             + "\",\"r\":\"" + jsonEsc(radio) + "\",\"title\":\"" + jsonEsc(printable(m.title, 120)) + "\""
-            + (m.partial ? ",\"partial\":true" : "") + "}\n";
+            + (m.partial ? ",\"partial\":true" : "") + (m.listenerOn && m.listenerOn->load() ? ",\"wl\":true" : "") + "}\n";
         writeFile(dir + "/index.jsonl", l, true) || writeFile(dir + "/index.jsonl", l, false);
     }
     /** ★★ OLDEST OUT until the gallery fits — never one of `keep` (the item just written, an RTTY run still open). The
