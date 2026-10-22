@@ -9,6 +9,13 @@ const S = read('src/screens/SDRScreen.tsx');
 const L = read('src/components/LocalHardwarePanel.tsx');
 const M = read('src/components/MenuSheet.tsx');
 const W = read('src/services/VibeServerWsClient.ts');
+const WP = read('src/services/watchProvider.ts');
+const NM = read('ios/VibeSDR/VibeWatchModule.m');
+const NS = read('ios/VibeSDR/VibeWatchModule.swift');
+const BL = read('ios/VibeSDRWatch/WatchLink.swift');
+const BM = read('ios/VibeSDRWatch/ControlMenu.swift');
+const BC = read('ios/VibeSDRWatch/ContentView.swift');
+const BT = read('ios/VibeSDRWatch/VibeSDRWatchApp.swift');
 let pass = 0, fail = 0;
 const has = (src, needle, what) => { const ok = src.includes(needle); ok ? pass++ : fail++; console.log(`   ${ok ? 'ok  ' : 'FAIL'} ${what}`); };
 const count = (src, needle, n, what) => { const c = src.split(needle).length - 1; const ok = c === n; ok ? pass++ : fail++; console.log(`   ${ok ? 'ok  ' : 'FAIL'} ${what} (${c}/${n})`); };
@@ -51,6 +58,26 @@ has(S, '(icomRef.current ? icomDbmRef.current : null)', "the S-meter from the ra
 has(W, "msg.type === 'icom'", 'the status line is read');
 has(W, '!this.sharedDial && !icomNow', 'no tune re-assert on an Icom');
 has(W, 'nearestSpanIndex(spans, binBandwidth * n)', 'zoom lands on a span rung');
+// ── Buddy (the iPhone's watch remote) ──
+has(S, 'watchProvider.sendIcom(icomWatchState(icom, adminOk))', 'buddy: the phone tells the wrist (state from icomRadio, not a copy)');
+has(S, 'watchProvider.sendIcom(icomWatchState(icomRef.current, adminOkRef.current), why)', 'buddy: refusals reach the wrist');
+has(S, "icomControl?.({ mode: m })", 'buddy: MODE goes through the client\'s icomControl');
+has(S, "icomControl?.({ fil: n })", 'buddy: FILTER goes through the client\'s icomControl');
+has(S, 'icomNow ? -1 : sqlN', 'buddy: no squelch line on an Icom');
+has(S, 'sMeter(icomDbmRef.current + 73)', "buddy: the wrist's meter is the radio's S-meter");
+has(W, '&& this.askBlocked()) return false;', 'icomControl: mode/FIL/span under the owner lock refused locally (4 s note)');
+has(WP, "if (this.icomQuiet) { this.idleSince = 0; return 'radio'; }", 'buddy: a TX-frozen scope is not a dead link (no socket rebuild)');
+has(WP, 'Native?.sendIcom?.(this.lastIcom)', 'buddy: re-sent to a wrist that restarted (flushAll)');
+has(NM, 'RCT_EXTERN_METHOD(sendIcom : (NSString *)json)', 'buddy: the bridge exports sendIcom');
+has(NS, '@objc(sendIcom:)', 'buddy: the native sender exists');
+has(BL, 'case "icom":', 'buddy: the wrist reads it');
+has(BL, 'icom = nil; icomNotice = nil', 'buddy: forgotten on a new session');
+has(BM, 'if link.icom == nil {\n            tile(name: "BW"', 'buddy: no BW / SQL on an Icom');
+has(BM, 'tile(name: "MODE"', 'buddy: the radio\'s MODE tile');
+has(BM, 'tile(name: "FILTER"', 'buddy: the FILTER tile');
+has(BC, 'if let ic = link.icom, !ic.banner.isEmpty', 'buddy: the TX / not-answering banner');
+has(BC, 'if link.why == "radio" { return nil }', 'buddy: no link-fault pill while the radio transmits');
+has(BT, 'On an **Icom** transceiver the menu', 'buddy: the tutorial says where the Icom controls are');
 // ★★★ receive only: nothing in the app builds a transmit message.
 for (const [name, src] of [['SDRScreen', S], ['panel', L], ['ws client', W]])
   { const bad = /type:\s*['"](ptt|tx|transmit)['"]|\bptt\s*:/i.test(src); !bad ? pass++ : fail++;

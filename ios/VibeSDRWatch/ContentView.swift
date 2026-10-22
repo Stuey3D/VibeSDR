@@ -442,6 +442,37 @@ struct ContentView: View {
         // ALL transient pills stack HERE, just above the band-label pill — the one place chrome
         // lives, over seconds-old waterfall rather than the newest rows you tune by. Lock/unlock
         // confirmation on top, then the link-hint pill (was top-anchored), then the band row.
+        /* ★★★ AN ICOM: the server says when the OWNER is transmitting (receive paused — the audio is muted and the
+         *  scope frozen ON PURPOSE) or the radio has stopped answering CI-V. Without the words, a still waterfall
+         *  and silence read as a broken app. Red for TX, amber for not answering — Jr's colours. */
+        if let ic = link.icom, !ic.banner.isEmpty {
+          HStack(spacing: 4) {
+            Image(systemName: ic.tx ? "antenna.radiowaves.left.and.right" : "exclamationmark.triangle.fill")
+              .font(.system(size: 10, weight: .bold))
+            Text(ic.banner).font(.system(size: 10, weight: .semibold))
+              .lineLimit(2).multilineTextAlignment(.center)
+          }
+          .foregroundStyle(.white)
+          .padding(.horizontal, 8).padding(.vertical, 3)
+          .background((ic.tx ? Color.red : Color.orange).opacity(0.9), in: RoundedRectangle(cornerRadius: 9))
+          .padding(.horizontal, 6)
+          .padding(.bottom, 2)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(ic.banner)
+        }
+        // ★ A refusal under the Icom owner lock ("the owner tunes it") — at most one per 4 s, gone after 4 s.
+        if let n = link.icomNotice {
+          Text(n)
+            .font(.system(size: 10, weight: .semibold))
+            .lineLimit(3).multilineTextAlignment(.center)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.15), lineWidth: 1))
+            .padding(.horizontal, 6)
+            .padding(.bottom, 2)
+            .transition(.opacity)
+        }
         if let lockPill {
           Text(lockPill)
             .font(.system(size: 13, weight: .semibold, design: .rounded))
@@ -1291,6 +1322,8 @@ struct ContentView: View {
     // and a "Phone saving power" pill on a perfectly-smooth waterfall just reads as a fault that isn't.
     // Kept as a guard (not a hint) so rows-still-flowing doesn't fall through to serverHop/wristHop.
     if link.why == "powersave" { return nil }
+    // ★ An Icom transmitting / off CI-V: the scope is frozen on purpose and the Icom banner says so.
+    if link.why == "radio" { return nil }
 
     // 1. The phone TOLD us it is rebuilding the link. Outranks everything below:
     //    of course the rows have stopped — that is what a reconnect IS.
@@ -1537,6 +1570,9 @@ struct ContentView: View {
     // of throwing up the black "spectrum stopped" box. (The companion's hard overlay is for a
     // lost watch↔phone link, which doesn't exist here.)
     if link.why == "reconnecting" { return nil }
+    // ★ AN ICOM THAT IS TRANSMITTING OR OFF CI-V sends no sweeps by design — the red/amber banner explains it,
+    //   and "iPhone lost the server" over it would be false.
+    if link.why == "radio", link.reachable { return nil }
 
     if !link.reachable {
       return ("iphone.slash", "Reconnecting to iPhone")
@@ -1812,7 +1848,13 @@ struct ContentView: View {
     // Prefer a LIVE station name (RDS ps on FM broadcast) over the static band name — "BBC R2"
     // beats "FM Broadcast Band" when we know it. Falls back to the band name off-station.
     let station = link.stationName.trimmingCharacters(in: .whitespaces)
-    let label = station.isEmpty ? link.bandName : station
+    let plain = station.isEmpty ? link.bandName : station
+    // ★ An Icom: lead with the RADIO's mode ("USB-D · 20m") — the main readout shows our client mode, and
+    //   USB-D vs USB is exactly what a data operator needs to see at a glance (Jr does the same).
+    let label: String = {
+      guard let m = link.icom?.modeLabel, !m.isEmpty else { return plain }
+      return plain.isEmpty ? m : "\(m) · \(plain)"
+    }()
     return Group {
       if !label.isEmpty {
         Text(label)

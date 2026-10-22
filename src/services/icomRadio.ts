@@ -542,3 +542,53 @@ export function icomPresence(radio: { driver?: string; icomConfirmed?: boolean }
   if (!radio || radio.driver !== 'icom') return 'none';
   return radio.icomConfirmed === false ? 'maybe' : 'icom';
 }
+
+// ── BUDDY (the iPhone's watch remote) — what the phone tells the wrist about an Icom ─────────────────
+/* ★★★ BUDDY ONLY MIRRORS THE PHONE, so it gets every Icom decision READY-MADE: the radio's mode names already
+ *  labelled, FIL1/2/3 with this mode's factory widths, the span label, the banner words and the owner-lock
+ *  verdict. It draws them and computes nothing — the rules stay here, ONE RULE, ONE MORE READER (the app, the
+ *  web, Jr, and now the wrist through the phone). Sent by watchProvider.sendIcom; drawn by Buddy's ControlMenu
+ *  and ContentView (ios/VibeSDRWatch). Its commands come back as `icomMode` / `icomFil` and go through the
+ *  phone's own client (icomControl → icomControlMsg), so a value the radio did not list can never reach it. */
+export interface IcomWatchState {
+  model: string;
+  /** The radio's own modes: id is what `icom_control` takes, label is how the radio's panel writes it. */
+  modes: { id: string; label: string }[];
+  mode: string;
+  modeLabel: string;
+  /** FIL1/2/3 with this mode's factory width ('' when the radio published none). */
+  fils: { n: number; width: string }[];
+  fil: number;
+  /** The scope span as the radio labels it ("±25k"), '' unknown. */
+  span: string;
+  /** "The radio is transmitting — …" / "… not answering …", '' none. TX outranks link-down. */
+  banner: string;
+  tx: boolean;
+  link: boolean;
+  /** This listener may change mode/FIL/span (owner lock off, or a signed-in admin). */
+  mayTune: boolean;
+  /** What a listener under the owner lock is told, '' when they may tune. */
+  follow: string;
+}
+
+/** The radio → Buddy's state; null = not an Icom (the wrist drops every Icom branch). */
+export function icomWatchState(radio: IcomRadio | null, admin: boolean): IcomWatchState | null {
+  if (!radio) return null;
+  const widths = icomFilterWidths(radio, radio.modeNow);
+  const filters = radio.filters.length ? radio.filters : [];
+  return {
+    model: radio.model,
+    modes: radio.modes.map((id) => ({ id, label: icomModeLabel(id) })),
+    mode: radio.modeNow,
+    modeLabel: icomModeLabel(radio.modeNow),
+    fils: filters.map((n) => ({ n, width: fmtWidth(widths[n - 1] ?? 0) })),
+    fil: radio.filNow,
+    span: fmtSpan(radio.scope.span),
+    banner: icomBanner(radio),
+    tx: radio.tx,
+    link: radio.linkUp,
+    mayTune: icomMayTune(radio, admin),
+    // ★ The SAME words the app's banner and the client's 4 s refusal use — icomFollowNote, not a copy.
+    follow: icomFollowNote(radio, admin),
+  };
+}

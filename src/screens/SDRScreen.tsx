@@ -16,7 +16,7 @@
 
 import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
 import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode,
-         type IcomStatus } from '../services/icomRadio';
+         icomWatchState, sMeter, type IcomStatus } from '../services/icomRadio';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
 import { VS_SQL_OFF, vsSqlOn, vsSqlEffective, vsSqlRestore } from '../services/vibeSquelch';
 import { APP_PROTO } from '../constants/version';
@@ -4264,6 +4264,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [noticeSeen, setNoticeSeen] = useState('');
   const [adminSet, setAdminSet] = useState(false);
   const [adminOk,  setAdminOk]  = useState(false);
+  /** ★ Read by the watch's Icom refusal notice (onRefused), which runs outside a render. */
+  const adminOkRef = useRef(adminOk); adminOkRef.current = adminOk;
+  /* ★★★ AN ICOM, TOLD TO BUDDY (the watch remote): the radio's mode names, FIL1/2/3, the banner and the owner-lock
+   *  verdict, decided ONCE in icomRadio.icomWatchState. Every other radio sends null, which clears the wrist. */
+  useEffect(() => { watchProvider.sendIcom(icomWatchState(icom, adminOk)); }, [icom, adminOk]);
+  useEffect(() => () => { watchProvider.sendIcom(null); }, []);
   /* ★★★ THE BLIND TUNES OBEY THE SHARED DIAL, AS THEY ALWAYS HAVE ON FM-DX. The lock-screen /
    *    headphone / car ⏮⏭, a car-list pick and Siri cannot see the SHARED TUNER banner, so they
    *    cannot ask — and on one shared tuner they retune every listener. FM-DX switched ⏮⏭ off in
@@ -6384,6 +6390,11 @@ export default function SDRScreen({ route, navigation }: Props) {
        *     VTS too so we arent inventing new popups." */
       onRefused: (why: string) => {
         if (!destroyed.current) showVtsNoticeRef.current?.(why, 7000);
+        /* ★★ AND ON THE WRIST, on an Icom: a crown spin or a MODE tap from Buddy under the owner lock is refused
+         *  here (VibeServerWsClient.askBlocked — already one per 4 s), and without this the wrist just snapped
+         *  back with no word of why. */
+        if (!destroyed.current && icomRef.current)
+          watchProvider.sendIcom(icomWatchState(icomRef.current, adminOkRef.current), why);
       },
       // ── ★★ THE SHARED DIAL AND ITS CHAT ──────────────────────────────────────────
       onDial: (d) => {
@@ -6841,13 +6852,21 @@ export default function SDRScreen({ route, navigation }: Props) {
           // Send the meter TEXT THE PHONE DRAWS, not a metric of the watch's choosing.
           // OWRX/Kiwi have no SNR (snrDb is hardcoded 0 on them), so a wrist that
           // rendered SNR showed a permanent "—" while its bar moved perfectly well.
+          /* ★★ AN ICOM: the wrist reads the RADIO's S-meter ("S7", "S9+20"; "TX" while the owner transmits),
+           *  whatever unit the phone's own meter is set to — in SNR mode that would be a figure derived from the
+           *  scope, whose bins are relative to REF and mean nothing (contract: "use the icom status line"). No
+           *  squelch line either: an Icom has none of ours. */
+          const icomNow = icomRef.current;
+          const icomMeter = icomNow
+            ? (icomNow.tx ? 'TX' : (icomDbmRef.current == null ? '' : (sMeter(icomDbmRef.current + 73)?.text ?? '')))
+            : null;
           watchProvider.setSignal(
             snrDb, sm.level,
-            meterText(signalModeRef.current, {
+            icomMeter ?? meterText(signalModeRef.current, {
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6, link: 0,
             }),
-            sqlN,
+            icomNow ? -1 : sqlN,
           );
           // Backgrounded (watch-only) frames must NOT drive the meter bus: it
           // re-renders a React leaf per frame, and per-frame React commits in the
@@ -8832,6 +8851,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       // fat-fingered 999 MHz lands on the band edge rather than nowhere.
       onTuneHz: (hz: number) => { if (hz > 0) onTuneHzRef.current?.(hz); },
       onMode: (m: string) => { if (m) onModeRef.current?.(m as SDRMode); },
+      /* ★★★ AN ICOM'S OWN MODE AND FILTER from Buddy — through the client's icomControl, the app's own path: it
+       *  drops a value the radio did not list and refuses under the owner lock with the 4 s notice (which
+       *  onRefused forwards back to the wrist). Nothing here decides anything. */
+      onIcomMode: (m: string) => { if (m && icomRef.current) (client.current as any)?.icomControl?.({ mode: m }); },
+      onIcomFil: (n: number) => { if (n > 0 && icomRef.current) (client.current as any)?.icomControl?.({ fil: n }); },
       onStep: (hz: number) => { if (hz > 0) setStep(hz); },
       // Thin-remote passband from the wrist — both edges (Hz offsets from carrier), atomically.
       onBandwidth: (lo: number, hi: number) => onFilterBoth(lo, hi),
