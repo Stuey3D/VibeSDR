@@ -15,6 +15,8 @@
  */
 
 import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
+import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode,
+         type IcomStatus } from '../services/icomRadio';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
 import { VS_SQL_OFF, vsSqlOn, vsSqlEffective, vsSqlRestore } from '../services/vibeSquelch';
 import { APP_PROTO } from '../constants/version';
@@ -4238,6 +4240,21 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ What the serving radio IS. Everything the hardware panel offers hangs off this, so the
   // controls match the receiver instead of assuming a dongle.
   const [radioCaps, setRadioCaps] = useState<RadioCaps | null>(null);
+  /* ★★★ AN ICOM TRANSCEIVER (driver "icom", RECEIVE ONLY — docs/ICOM-SUPPORT-PLAN.md). Its status line arrives up
+   *  to 4×/s for the S-meter; ONLY the non-meter part goes into screen state (mode, FIL, TX, link, span), and the
+   *  meter goes to a ref the frame emit reads — re-rendering this whole screen 4×/s for a needle is the power-audit
+   *  fault the RSP stats once had. `icom` is null for every other radio, and every Icom branch below tests it. */
+  const [icomLive, setIcomLive] = useState<IcomStatus | null>(null);
+  const icomLiveKey = useRef('');
+  /** The S-meter as dBm (S9 = −73, the meters' own S9_DB), or null. Fed to the bar like OWRX's S-meter. */
+  const icomDbmRef = useRef<number | null>(null);
+  const icom = useMemo(() => {
+    const r = isIcom(radioCaps) ? parseIcomRadio(radioCaps) : null;
+    return r ? mergeIcomStatus(r, icomLive) : null;
+  }, [radioCaps, icomLive]);
+  const icomRef = useRef(icom); icomRef.current = icom;
+  /** The listener note under the owner lock, once dismissed — for this screen's life (one connection). */
+  const [icomNoteSeen, setIcomNoteSeen] = useState(false);
   // ★ Admin lock, mirrored from the server. `set` comes with hwinfo, `ok` changes when we
   // unlock — so the panel can show the lock the server is ALREADY enforcing.
   /** The owner's message to listeners, or '' — see onNotice. */
@@ -6095,6 +6112,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         // a recovery that is working perfectly well.
         watchProvider.setReconnecting(busy);
       },
+      onIcomStatus: (st) => {
+        if (destroyed.current) return;
+        icomDbmRef.current = st.sDbOverS9 == null ? null : -73 + st.sDbOverS9;
+        // ★ Screen state only when something BUT the meter moved (see icomLive).
+        const key = `${st.freq}|${st.mode}|${st.fil}|${st.tx}|${st.link}|${st.span}|${st.scopeMode}|${Math.round(st.fps)}`;
+        if (key !== icomLiveKey.current) { icomLiveKey.current = key; setIcomLive(st); }
+      },
       onLink: (q) => {
         if (destroyed.current) return;
         const b = meterBus.current;
@@ -6262,6 +6286,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       onRadioCaps:  (caps) => {
         if (destroyed.current) return;
         setRadioCaps(caps);
+        // ★ A radio that is not an Icom has no Icom status: drop a stale one (a server whose radio changed).
+        if (!isIcom(caps)) { icomDbmRef.current = null; icomLiveKey.current = ''; setIcomLive(null); }
         /* ★ ADOPT THE AIRSPY'S OWN STATE. Every one of these rides on the caps the engine sends
          *  with hwinfo, so the panel opens showing the radio rather than a default we invented. */
         if (caps.driver === 'airspy') {
@@ -6596,7 +6622,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           // SNR. When present it's the honest absolute level source (and, lacking
           // an SNR feed, drives the bar in every mode); otherwise fall back to
           // the spectrum-derived peak as before.
-          const owrxDbm = owrxSmeterRef.current;
+          /* ★★ AN ICOM'S S-METER IS THE RADIO'S OWN (its `icom` status line, Hamlib's IC-7300 calibration), read
+           *  like OWRX's — a real channel level in dBm. NEVER the scope: its bins are relative to the radio's REF
+           *  level, not dBFS, so a level derived from them would move with REF and mean nothing. */
+          const owrxDbm = owrxSmeterRef.current ?? (icomRef.current ? icomDbmRef.current : null);
           // Radiod (UberSDR/VibeServer) reports channel BASEBAND POWER — zoom-independent, the way the
           // ka9q web S-meter reads. Use it for the dBFS/S-meter level instead of the spectrum peak (which
           // scales with zoom). Kiwi/local/OWRX keep their own level source.
@@ -11889,6 +11918,27 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★ Somebody else moved the dial. Same furniture as the owner's notice — this is the same
              kind of thing (the receiver telling you something) and inventing a second look for it
              would only make the screen busier. */}
+      {/* ★★★ AN ICOM'S OWN STATE, in the receiver-says-something furniture: the OWNER transmitting (the server has
+          already muted the audio and frozen the waterfall — this says the silence is not a fault), or the radio off
+          CI-V. Not dismissible: it clears itself when the radio does. Outranks the listener note below. */}
+      {!!icomBanner(icom) && (
+        <View style={[styles.ownerNotice, { top: insets.top + 8 + (ownerNotice && ownerNotice !== noticeSeen ? 56 : 0) }]}
+              pointerEvents="none" accessibilityLiveRegion="polite">
+          <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={2}>{icomBanner(icom)}</Text>
+        </View>
+      )}
+      {/* ★★ "Listeners follow the radio": a listener under the owner lock is told ONCE per connection why the dial
+          will not move for them — dismissible like the owner's notice, because it is true all evening. */}
+      {!icomBanner(icom) && !!icomFollowNote(icom, adminOk) && !icomNoteSeen && !dialHint && (
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Dismiss" onPress={() => setIcomNoteSeen(true)}
+          style={[styles.ownerNotice, { top: insets.top + 8 + (ownerNotice && ownerNotice !== noticeSeen ? 56 : 0) }]}>
+          <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={2}>{icomFollowNote(icom, adminOk)}</Text>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Dismiss" hitSlop={8}
+            onPress={() => setIcomNoteSeen(true)} style={styles.ownerNoticeX}>
+            <Text style={styles.ownerNoticeXTxt}>×</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      )}
       {!!dialHint && (
         <View style={[styles.ownerNotice, { top: insets.top + 8 }]} pointerEvents="none">
           <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={2}>{dialHint}</Text>
@@ -12124,7 +12174,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Floating CENTRE ON VFO — unlocked + VFO off-screen (BRIEF §5.8) */}
       <PanelBoundary name="Centre button" resetKey={vfoOffscreen && !controlsHidden}>
-      <CenterVfoButton visible={vfoOffscreen && !controlsHidden} bottom={pillBottom + 56} onPress={onCentreVfo} />
+      <CenterVfoButton visible={vfoOffscreen && !controlsHidden && !icom /* ★ an Icom's window is the radio's — a pan does nothing */} bottom={pillBottom + 56} onPress={onCentreVfo} />
       </PanelBoundary>
 
       {/* Menu sheet */}
@@ -12284,7 +12334,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         frameRate={frameRate}           onFrameRate={onFrameRate}
         wfScroll={wfScroll}             onWfScroll={onWfScroll}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
-        linkMode={linkMode}             onLinkMode={onLinkMode}
+        linkMode={linkMode}             onLinkMode={icom ? undefined : onLinkMode}   /* ★ an Icom's rate is the radio's */
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
         hapticsEnabled={hapticsEnabled} onHaptics={onHaptics}
@@ -12297,12 +12347,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
         onKeyHelp={() => { setMenuOpen(false); setKeyHelpOpen(true); }}
         onPadGuide={() => { setMenuOpen(false); openPadGuide(); }}
-        vfoLocked={vfoLocked}           onToggleVfoLock={onToggleVfoLock}
+        vfoLocked={vfoLocked}           onToggleVfoLock={icom ? undefined : onToggleVfoLock}
         onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
         onDispSaveGlobal={onDispSaveGlobal}
         snrSquelch={snrSquelch}         onSnrSquelch={onSnrSquelch}
         fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
-        localSquelch={hwSquelch}        onLocalSquelch={isLocal ? onLocalSquelch : undefined}
+        localSquelch={hwSquelch}        onLocalSquelch={isLocal && !icom ? onLocalSquelch : undefined}
         kiwiSquelch={kiwiSquelch}       onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
         localNR={hwNrLevel}             onLocalNR={isLocal ? askWrap(onLocalNR) : undefined}
         notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? askWrap(onLocalNotch) : onNetNotch}
@@ -12433,9 +12483,13 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  that receiver does not have (Stuart, 2026-09-05). Applies to the DEFAULT list too,
          *  which is why the fallback is spelled out here instead of left to ModeSelector. */
         modes={(() => {
-          const base = isLocal ? LOCAL_MODES
+          /* ★★★ AN ICOM: only the client modes its radio modes map to (usb/lsb/am/cwu/cwl/nfm) — never WFM, which
+           *  an HF transceiver does not have. The radio's own names (USB-D, RTTY …) are in the radio panel. */
+          const icomModes = icom ? new Set(icom.modes.map(icomClientMode)) : null;
+          const base0 = isLocal ? LOCAL_MODES
                     : route.params.serverType === 'owrx' ? serverModes
                     : LOCAL_MODES;
+          const base = icomModes && base0 ? base0.filter((m) => icomModes.has(String(m.id).toLowerCase())) : base0;
           if (!base || !blockedModes.size) return isLocal || route.params.serverType === 'owrx' ? base : undefined;
           const kept = base.filter(m => !blockedModes.has(String(m.id).toLowerCase()));
           return kept.length ? kept : base;
@@ -12621,7 +12675,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         sqlAuto={sqlAuto}                onSqlAuto={setSquelchAuto}
         sqlAutoMargin={sqlAutoMargin}    onSqlAutoMargin={onSqlAutoMargin}
         sqlAutoOk={sqlAutoOk}
-        localSquelch={hwSquelch}         onLocalSquelch={isLocal ? onLocalSquelch : undefined}
+        localSquelch={hwSquelch}         onLocalSquelch={isLocal && !icom ? onLocalSquelch : undefined}   /* ★ an Icom: the radio squelches, not us */
         localNR={hwNrLevel}              onLocalNR={isLocal ? askWrap(onLocalNR) : undefined}
         kiwiSquelch={kiwiSquelch}        onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
         fmSquelch={fmSquelch}            onFmSquelch={onFmSquelch}
@@ -12630,22 +12684,22 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★ V12 binaural tuning — offered only where an offset source exists: never DAB (or any whole-profile
              mode). (FM-DX is not this screen — it has no spectrum to read, and no row.) */
         binaural={binaural}
-        onBinaural={binauralModeOk(status.mode) && !dabOn ? onBinaural : undefined}
-        deemph={hwDeemph}   onDeemph={askWrap(onHwDeemph)}
-        stereo={hwStereo}   onStereo={askWrap(onHwStereo)}
-        fmNr={fmNr}   onFmNr={vibeFmDsp ? askWrap(onFmNr) : undefined}
-        fmIms={fmIms} onFmIms={vibeFmDsp ? askWrap(onFmIms) : undefined}
-        fmAutoBw={fmAutoBw} onFmAutoBw={vibeFmDsp ? askWrap(onFmAutoBw) : undefined}
-        fmCeq={fmCeq} onFmCeq={vibeFmDsp ? askWrap(onFmCeq) : undefined}
-        fmNb={fmNb}   onFmNb={vibeFmDsp ? askWrap(onFmNb) : undefined}
-        nbx={fmNbx}   onNbx={vibeFmDsp ? askWrap(onFmNbx) : undefined}
+        onBinaural={binauralModeOk(status.mode) && !dabOn && !icom ? onBinaural : undefined}   /* ★ no IQ, no offset source */
+        deemph={hwDeemph}   onDeemph={icom ? undefined : askWrap(onHwDeemph)}   /* ★ an Icom has no WFM chain to de-emphasise */
+        stereo={hwStereo}   onStereo={icom ? undefined : askWrap(onHwStereo)}
+        fmNr={fmNr}   onFmNr={vibeFmDsp && !icom ? askWrap(onFmNr) : undefined}
+        fmIms={fmIms} onFmIms={vibeFmDsp && !icom ? askWrap(onFmIms) : undefined}
+        fmAutoBw={fmAutoBw} onFmAutoBw={vibeFmDsp && !icom ? askWrap(onFmAutoBw) : undefined}
+        fmCeq={fmCeq} onFmCeq={vibeFmDsp && !icom ? askWrap(onFmCeq) : undefined}
+        fmNb={fmNb}   onFmNb={vibeFmDsp && !icom ? askWrap(onFmNb) : undefined}
+        nbx={fmNbx}   onNbx={vibeFmDsp && !icom ? askWrap(onFmNbx) : undefined}
         nfmVoice={fmNfmVoice}
-        onNfmVoice={nfmVoiceKnown && (status.mode === 'nfm' || status.mode === 'fm') ? askWrap(onFmNfmVoice) : undefined}
+        onNfmVoice={nfmVoiceKnown && !icom && (status.mode === 'nfm' || status.mode === 'fm') ? askWrap(onFmNfmVoice) : undefined}
         rawAudio={rawAudio}
         onRawAudio={rawAudioPolicy === 'choice' ? setRawAudio : undefined}
         iq={iqState}
         iqLocal={/^https?:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|localhost)/i.test(connectBase)}
-        onIqOut={rawIqMode && rawIqMode !== 'off' && !sharedDial ? (on, rate) => client.current?.iqOut?.(on, rate) : undefined}
+        onIqOut={rawIqMode && rawIqMode !== 'off' && !sharedDial && !icom ? (on, rate) => client.current?.iqOut?.(on, rate) : undefined}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         onOwrxSquelchAuto={isOwrx ? () => client.current?.autoSquelch?.() : undefined}
         visualGain={visualGain}
@@ -12677,6 +12731,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           converter={canConvert ? converter : undefined}
           onConverter={canConvert ? setConverter : undefined}
           radio={radioCaps}
+          /* ★★★ AN ICOM: the panel draws the radio's own controls instead of every IQ one (icomRadio.ts). Sent as
+             icom_control; the server judges the owner lock / RF-admin and answers a refusal with a notice + config. */
+          icom={icom}
+          onIcomControl={(f) => (client.current as any)?.icomControl?.(f)}
+          icomSetup={icom ? { doorBase: baseUrl, connectBase, authQ: adminAuthQ,
+                              onOpenSetupPage: vibeSetupUrl ? () => { setHwOpen(false); onAdminLink(vibeSetupUrl, 'Setup'); } : undefined }
+                          : undefined}
           agcLocked={hwAgcLocked}
           askLocked={askLocked(dialState) && !adminOk}   /* ★★ ask before tuning: the whole panel is the room's */
           onAskLockedTouch={nudgeAsk}

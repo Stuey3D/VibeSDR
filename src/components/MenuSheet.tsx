@@ -1678,9 +1678,10 @@ function MenuSheetBody({
               <Btn label="" icon="zoomIn"  a11y="Zoom in"  onPress={onZoomIn}  style={{ flex: 1 }} />
               <Btn label="MAX"    onPress={onZoomMax} style={{ flex: 1 }} />
             </BtnRow>
-            <BtnRow>
+            {/* ★ Absent when the screen passes none — an Icom's window is the radio's own (a pan does nothing). */}
+            {!!onToggleVfoLock && <BtnRow>
               <VfoLockBtn locked={vfoLocked} onPress={onToggleVfoLock} full />
-            </BtnRow>
+            </BtnRow>}
             <BtnRow>
               <Btn label="DISPLAY SETTINGS" icon="monitor" full
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />

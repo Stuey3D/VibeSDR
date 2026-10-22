@@ -13,6 +13,7 @@ import { usePopupTheme, useGlassTheme, usePopupFrame, engraveText, PopupPlate, P
          type PopupTokens } from './PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode, useNavFocus } from './PanelNav';
+import IcomSetupCard from './IcomSetupCard';
 import GainSlider, { gainSliderInk } from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
@@ -170,8 +171,9 @@ export interface LocalHardwarePanelProps {
   icom?: IcomRadio | null;
   /** Sends `icom_control` (VibeServerWsClient.icomControl — only values the radio listed survive). */
   onIcomControl?: (f: IcomControlFields) => void;
-  /** ★ The owner's setup facts + settings (IcomSetupCard), drawn under the controls for a signed-in admin. */
-  icomSetup?: React.ReactNode;
+  /** ★ Where the owner's Icom setup lives (IcomSetupCard, drawn under the controls for a SIGNED-IN admin only):
+   *  the front door's base, this radio's base, and the admin credential the app already holds. */
+  icomSetup?: { doorBase: string; connectBase: string; authQ: string; onOpenSetupPage?: () => void };
   /** ★★★ The owner has FIXED the gain on this band: the ceiling IS the setting, and the server
    *  refuses every gain message from anybody. Unlike agcLocked this applies to EVERY driver —
    *  including the HackRF, where there is no AGC to reason about and the lock still closes both
@@ -710,7 +712,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               the owner the FEATURE is broken (AGENTS.md). "Else means dongle": this test comes FIRST. */}
           {p.icom ? (
             <IcomSection icom={p.icom} admin={!!p.adminOk} onControl={p.onIcomControl} slot={slot}
-                         styles={styles} K={K} setup={p.icomSetup} />
+                         styles={styles} K={K}
+                         setup={p.adminOk && p.icomSetup
+                           ? <IcomSetupCard icom={p.icom} styles={styles} K={K} {...p.icomSetup} /> : null} />
           ) : (<>
           {/* ★★ GAIN IS NOT ONE CONTROL ACROSS RADIOS. A dongle has a tuner gain TABLE; an
               HF+ has an AGC, an attenuator in 6 dB steps and a preamp, and no table at all —
