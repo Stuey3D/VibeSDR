@@ -20,15 +20,23 @@
  *
  * ★ AN UNKNOWN ID IS DROPPED, never shown raw: a newer server may know a phrase this build does
  *   not, and `decode_done` on screen would be worse than nothing.
+ *
+ * ★★★ IN THE LISTENER'S OWN LANGUAGE (2026-10-22). Stuart in the UK and Kiko in Brazil on one dial: the id travels, so
+ *     Stuart reads "Can I tune?" and Kiko reads "Posso sintonizar?". The WORDS live in i18n/chat/<lang>.json, written
+ *     natively per meaning (chat only — owner-approved), and reach this file as chatWords.generated.ts
+ *     (scripts/gen-chat-phrases.mjs). Which language: see chatLangChoice. Nothing outside the chat and the
+ *     shared-tuner banner is translated — the rest of the app stays English.
  */
+
+import { CHAT_PHRASE_META, CHAT_WORDS, CHAT_LANG_OF, CHAT_LANG_OF_COUNTRY, CHAT_LANG_FLAG,
+         type ChatLang, type ChatChromeKey } from './chatWords.generated.ts';
+export type { ChatLang } from './chatWords.generated.ts';
 
 /** ★ `group`/`key`: phrases drawn as ONE row — a label and a short key each ("This sounds" Awesome · Weird …).
  *  ★ An ANSWER (group 'answer') also says which band it belongs to, its Signal Identification Wiki page and — when this
- *    app has one — the decoder that reads it. See ANSWERS below. */
+ *    app has one — the decoder that reads it (i18n/chat/phrases.json). */
 export type Phrase = { id: string; text: string; group?: string; key?: string;
                        band?: 'hf' | 'vhf'; wiki?: string; decoder?: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'time' };
-/** The label a phrase group's row starts with. */
-export const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds', answer: "It's" };
 
 /** ★★ THE SIGNAL IDENTIFICATION WIKI (Stuart, 2026-10-09: "Anyone know what this is with no way of someone telling
  *  them"). Linked, never copied or framed: opened in the system's in-app browser (SFSafariViewController / Chrome
@@ -37,81 +45,117 @@ export const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds
 export const SIGID_HOME = 'https://www.sigidwiki.com/wiki/Signal_Identification_Guide';
 const SIGID_PAGE = 'https://www.sigidwiki.com/wiki/';
 
-/** In the order a conversation actually runs: ask, act, answer, thank. */
-export const DIAL_PHRASES: Phrase[] = [
-  { id: 'ask_tune',       text: 'Can I tune?' },
-  { id: 'anyone_using',   text: 'Anyone using this?' },
-  { id: 'tuning_now',     text: 'Tuning now' },
-  { id: 'go_ahead',       text: 'Go ahead, tune' },
-  { id: 'please_hold',    text: 'Please hold — chasing DX' },
-  { id: 'yes_go_ahead',   text: "Yes, I'm on it — but go ahead and tune" },
-  { id: 'yes_hold',       text: "Yes, I'm on it — please hold on" },
-  // ★★ ASK BEFORE TUNING's gentle NO (2026-10-21): the requested "Do you mind, I am listening here", without the edge.
-  { id: 'listening_few_min', text: "I'm listening to this one — a few more minutes, please?" },
-  { id: 'mid_decode',     text: "I'm running a decoder — can you wait please?" },
-  // ★★ THE LONG ONES EARN THEIR PLACE. A WEFAX chart or an SSTV frame is ten minutes of holding
-  //    still, and "please wait" with no duration is what makes people ask again ninety seconds
-  //    later. Saying HOW LONG is the difference between a queue and an argument.
-  { id: 'decoding_10min', text: 'Decoding — about 10 minutes' },
-  { id: 'decode_done',    text: 'Decode finished — all yours' },
-  { id: 'wont_tune',      text: "OK, I won't tune yet" },
-  { id: 'all_yours',      text: 'Done — all yours' },
-  { id: 'thanks',         text: 'Thanks!' },
-  { id: 'sorry',          text: "Sorry, didn't realise!" },
-  // ★ The other side of "sorry" (Stuart, 2026-10-05): somebody moved the shared dial off what you were hearing.
-  { id: 'tune_back',      text: 'Tuning back — I was listening to that' },
-  // ★★ THE SOCIAL ONES (Stuart, 2026-10-08): "make it a little more social without opening it up to full text chat". Still ids only — a fixed, friendly vocabulary nobody can be abused with; "Not my kind of music" is the diplomatic way to move the dial on.
-  { id: 'hello', text: 'Hello everyone!' },
-  { id: 'just_scanning', text: "Just scanning to see what's about" },
-  { id: 'what_is_this', text: 'Anyone know what this is?' },
-  // ★ "THIS SOUNDS …" IS ONE ROW (Stuart, 2026-10-08: "This sounds awesome could be a selection") — each choice its own id, drawn as a 'This sounds' label and a key per word (group/key below); a message reads in full.
-  { id: 'sounds_awesome', text: 'This sounds awesome!', group: 'sounds', key: 'Awesome' },
-  { id: 'sounds_great', text: 'This sounds great', group: 'sounds', key: 'Great' },
-  { id: 'sounds_interesting', text: 'This sounds interesting', group: 'sounds', key: 'Interesting' },
-  { id: 'sounds_weird', text: 'This sounds weird', group: 'sounds', key: 'Weird' },
-  { id: 'sounds_distorted', text: 'This sounds distorted', group: 'sounds', key: 'Distorted' },
-  { id: 'sounds_bad', text: 'This sounds bad', group: 'sounds', key: 'Bad' },
-  { id: 'nice_catch', text: 'Nice catch!' },
-  { id: 'not_my_music', text: 'Not my kind of music' },
-  { id: 'good_conditions', text: 'Conditions are great today' },
-  { id: 'poor_conditions', text: 'Conditions are poor today' },
-  { id: 'off_73', text: 'Off now — 73!' },
-  /* ★★★ THE ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09). Still ids, never typed — free text would need
-   *  the stores' user-generated-content machinery (filtering, reporting, a moderator) and lose the watches, the TV
-   *  remotes and translation. Drawn as one "It's …" row ONLY while somebody else's question is open (answerRowOpen),
-   *  and only the half for the band the dial is on, so the everyday pad does not grow. A message reads in full and
-   *  carries a WIKI key (and DECODE, where this receiver runs that decoder). */
-  { id: 'not_sure', text: 'Not sure, sorry', group: 'answer', key: 'Not sure' },
-  { id: 'is_wefax',  text: "It's WEFAX (weather fax)", group: 'answer', key: 'WEFAX', band: 'hf', wiki: 'WEFAX', decoder: 'wefax' },
-  { id: 'is_rtty',   text: "It's RTTY", group: 'answer', key: 'RTTY', band: 'hf', wiki: 'RTTY', decoder: 'rtty' },
-  { id: 'is_navtex', text: "It's NAVTEX", group: 'answer', key: 'NAVTEX', band: 'hf', wiki: 'NAVTEX', decoder: 'navtex' },
-  { id: 'is_sstv',   text: "It's SSTV (slow-scan TV)", group: 'answer', key: 'SSTV', band: 'hf', wiki: 'SSTV', decoder: 'sstv' },
-  { id: 'is_ft8',    text: "It's FT8", group: 'answer', key: 'FT8', band: 'hf', wiki: 'FT8' },
-  { id: 'is_cw',     text: "It's Morse (CW)", group: 'answer', key: 'Morse', band: 'hf', wiki: 'Morse_Code_(CW)' },
-  { id: 'is_ssb',    text: "It's SSB voice", group: 'answer', key: 'SSB voice', band: 'hf', wiki: 'Single_Sideband_Voice' },
-  { id: 'is_drm',    text: "It's DRM (digital radio)", group: 'answer', key: 'DRM', band: 'hf', wiki: 'DRM' },
-  { id: 'is_stanag', text: "It's STANAG (military data)", group: 'answer', key: 'STANAG', band: 'hf', wiki: 'STANAG_4285' },
-  { id: 'is_ale',    text: "It's ALE", group: 'answer', key: 'ALE', band: 'hf', wiki: 'ALE' },
-  { id: 'is_hfdl',   text: "It's HFDL (aircraft data)", group: 'answer', key: 'HFDL', band: 'hf', wiki: 'HFDL' },
-  { id: 'is_codar',  text: "It's CODAR (ocean radar)", group: 'answer', key: 'CODAR', band: 'hf', wiki: 'CODAR' },
-  { id: 'is_oth',    text: "It's over-the-horizon radar", group: 'answer', key: 'OTH radar', band: 'hf', wiki: 'Over_the_Horizon_Radar' },
-  { id: 'is_time',   text: "It's a time signal", group: 'answer', key: 'Time signal', band: 'hf', decoder: 'time' },
-  { id: 'is_dmr',    text: "It's DMR", group: 'answer', key: 'DMR', band: 'vhf', wiki: 'DMR' },
-  { id: 'is_dstar',  text: "It's D-STAR", group: 'answer', key: 'D-STAR', band: 'vhf', wiki: 'D-STAR' },
-  { id: 'is_p25',    text: "It's P25", group: 'answer', key: 'P25', band: 'vhf', wiki: 'P25' },
-  { id: 'is_nxdn',   text: "It's NXDN", group: 'answer', key: 'NXDN', band: 'vhf', wiki: 'NXDN' },
-  { id: 'is_dpmr',   text: "It's dPMR", group: 'answer', key: 'dPMR', band: 'vhf', wiki: 'DPMR' },
-  { id: 'is_pocsag', text: "It's POCSAG (pager)", group: 'answer', key: 'POCSAG', band: 'vhf', wiki: 'POCSAG' },
-  { id: 'is_aprs',   text: "It's APRS", group: 'answer', key: 'APRS', band: 'vhf', wiki: 'APRS' },
-  { id: 'is_adsb',   text: "It's ADS-B (aircraft)", group: 'answer', key: 'ADS-B', band: 'vhf', wiki: 'ADS-B' },
-  { id: 'is_acars',  text: "It's ACARS (aircraft data)", group: 'answer', key: 'ACARS', band: 'vhf', wiki: 'ACARS' },
-  { id: 'is_ais',    text: "It's AIS (ships)", group: 'answer', key: 'AIS', band: 'vhf', wiki: 'AIS' },
-  { id: 'is_apt',    text: "It's a weather satellite (APT)", group: 'answer', key: 'Weather sat', band: 'vhf', wiki: 'Automatic_Picture_Transmission_(APT)' },
-  { id: 'is_fm_bc',  text: "It's an FM broadcast station", group: 'answer', key: 'FM broadcast', band: 'vhf', wiki: 'FM_Broadcast_Radio' },
-];
+/* ── ★★★ WHICH LANGUAGE (Stuart, 2026-10-22: "we detect the listeners country and offer the appropriate, and where no
+ *  appropriate we offer English and we offer a little drop down menu … such as an english person on holiday to
+ *  portugal listening on a local friends laptop") ─────────────────────────────────────────────────────────────────
+ *  In order, the first that answers:
+ *    1. PICKED — the chat's own language menu, remembered on this device ('auto' = not picked);
+ *    2. DEVICE — the phone's / browser's language list, first tag we have words for. Before the country because it is
+ *       the person's OWN setting: a Brazilian with an English phone gets English, the Englishman abroad keeps his;
+ *    3. COUNTRY — the server's GeoIP answer for THIS listener ("cc", sent to its own socket only), for a device whose
+ *       language we do not speak. Only one-language countries map (BE, CH, CA … pick nothing);
+ *    4. ENGLISH.
+ *  ★ It changes only how THIS device draws the chat. What is SENT is an id, in every language. */
+export const CHAT_LANG_NAMES: Readonly<Record<ChatLang, string>> =
+  Object.fromEntries(Object.entries(CHAT_WORDS).map(([k, v]) => [k, v.name])) as Record<ChatLang, string>;
+export const isChatLang = (x: unknown): x is ChatLang => typeof x === 'string' && x in CHAT_WORDS;
 
-const TEXT: Record<string, string> = Object.fromEntries(DIAL_PHRASES.map(p => [p.id, p.text]));
-const BY_ID: Record<string, Phrase> = Object.fromEntries(DIAL_PHRASES.map(p => [p.id, p]));
+/** The first of these language tags ("pt-BR", "en_GB", "de") that we have words for, or null. */
+export function deviceChatLang(tags: readonly string[] | null | undefined): ChatLang | null {
+  for (const t of tags ?? []) {
+    const primary = String(t).toLowerCase().split(/[-_]/)[0];
+    if (primary && CHAT_LANG_OF[primary]) return CHAT_LANG_OF[primary];
+  }
+  return null;
+}
+/** The language of a one-language country ("BR" → pt-BR), or null. */
+export function countryChatLang(cc: string | null | undefined): ChatLang | null {
+  return (cc && CHAT_LANG_OF_COUNTRY[String(cc).toUpperCase()]) || null;
+}
+/** ★ The choice itself — a pure function, so the order is pinned by scripts/test_chat_i18n.ts. */
+export function chatLangChoice(o: { picked?: string | null; device?: readonly string[] | null; cc?: string | null }): ChatLang {
+  if (isChatLang(o.picked)) return o.picked;
+  return deviceChatLang(o.device) ?? countryChatLang(o.cc) ?? 'en';
+}
+
+let lang: ChatLang = 'en';
+let langIn: { picked?: string | null; device?: readonly string[] | null; cc?: string | null } = {};
+let words = CHAT_WORDS.en;
+const langListeners = new Set<(l: ChatLang) => void>();
+/** The language the chat is drawn in now. */
+export function chatLang(): ChatLang { return lang; }
+/** ★ Feed the choice any of its inputs as they become known (the picked one from storage, the device's list at start,
+ *  the server's cc when it arrives); the rest are kept. Returns the language now in force. */
+export function setChatLangInputs(next: { picked?: string | null; device?: readonly string[] | null; cc?: string | null }): ChatLang {
+  const wasDetected = chatLangDetected(), was = lang;
+  langIn = { ...langIn, ...next };
+  const l = chatLangChoice(langIn);
+  if (l !== was) { lang = l; words = CHAT_WORDS[l]; rebuild(); }
+  // ★ Told on a change of language OR of what Default would pick (the country arriving while a language is picked:
+  //   the menu's Default entry says what it resolves to). A copy of the set — a listener may re-subscribe while told.
+  if (l !== was || chatLangDetected() !== wasDetected) for (const f of [...langListeners]) f(l);
+  return lang;
+}
+/** What the menu shows as chosen: 'auto' unless a language was picked. */
+export function chatLangPicked(): ChatLang | 'auto' { return isChatLang(langIn.picked) ? langIn.picked : 'auto'; }
+/** What Default resolves to right now (the device, else the country, else English) — whatever was picked. */
+export function chatLangDetected(): ChatLang { return chatLangChoice({ ...langIn, picked: null }); }
+
+/* ── ★★ THE LANGUAGE MENU'S LABELS (Stuart, 2026-10-22): "Default", then each language with a small flag and its own
+ *  name — 🇧🇷 Português (Brasil). Default SAYS what it resolves to ("Default · 🇧🇷 Português (Brasil)"), so a listener
+ *  can see what was detected before overriding it; the closed key shows the same. ─────────────────────────────────── */
+/** ★ Can this platform draw a flag emoji? Windows' emoji font draws a regional-indicator pair as two plain letters, so
+ *  there the flag is a small COUNTRY-CODE badge instead — never a broken glyph. Everything else we run on (iOS, iPadOS,
+ *  macOS, Android, tvOS, Linux and ChromeOS browsers) draws them. Fed what the platform says about itself. */
+export function flagsDrawn(platform: string | null | undefined): boolean {
+  return !/^win|windows/i.test(platform ?? '');
+}
+/** A language's flag: the emoji where flags are drawn, else null (draw `CHAT_LANG_FLAG[l]` as a badge). */
+export function chatLangFlag(l: ChatLang, emoji: boolean): { emoji: string | null; cc: string } {
+  const cc = CHAT_LANG_FLAG[l];
+  return { emoji: emoji ? String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : null, cc };
+}
+/** One entry of the menu as plain text: "🇧🇷 Português (Brasil)", or "BR Português (Brasil)" without flags. */
+export function chatLangLabel(l: ChatLang, emoji: boolean): string {
+  const f = chatLangFlag(l, emoji);
+  return `${f.emoji ?? f.cc} ${CHAT_LANG_NAMES[l]}`;
+}
+/** The Default entry, and the closed key while nothing is picked: "Default · 🇧🇷 Português (Brasil)" — "Default" in the
+ *  language showing now. */
+export function chatLangDefaultLabel(emoji: boolean): string {
+  return `${chatT('langDefault')} · ${chatLangLabel(chatLangDetected(), emoji)}`;
+}
+/** The closed key: what is in force, said the way the menu says it. */
+export function chatLangKeyLabel(emoji: boolean): string {
+  const p = chatLangPicked();
+  return p === 'auto' ? chatLangDefaultLabel(emoji) : chatLangLabel(p, emoji);
+}
+
+/** Be told when the language changes (a pick, or a cc arriving). Returns the unsubscribe. */
+export function onChatLang(f: (l: ChatLang) => void): () => void { langListeners.add(f); return () => { langListeners.delete(f); }; }
+
+/** ★ The chat's own furniture in the chosen language — "{n}", "{who}", "{time}" … filled from `vars`. */
+export function chatT(key: ChatChromeKey, vars: Record<string, string | number> = {}): string {
+  return (words.chrome[key] ?? CHAT_WORDS.en.chrome[key]).replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+}
+
+const BY_ID: Record<string, (typeof CHAT_PHRASE_META)[number]> = Object.fromEntries(CHAT_PHRASE_META.map(p => [p.id, p]));
+/** In the order a conversation actually runs: ask, act, answer, thank — in the chosen language. ★ Rebuilt when the
+ *  language changes (a live binding: readers see the new list). */
+export let DIAL_PHRASES: Phrase[] = [];
+/** The label a phrase group's row starts with ("This sounds", "O som tá"). */
+export let PHRASE_GROUP_LABEL: Record<string, string> = {};
+/** ★ What the shared-tuner banner flashes when a locked control is touched. Caps, like the banner it replaces. */
+export let ASK_NUDGE_TEXT = '';
+function rebuild() {
+  DIAL_PHRASES = CHAT_PHRASE_META.map((p) => {
+    const w = words.phrases[p.id];
+    return { ...p, text: w.text, ...(w.key ? { key: w.key } : {}) };
+  });
+  PHRASE_GROUP_LABEL = { ...words.groups };
+  ASK_NUDGE_TEXT = chatT('askNudge');
+}
+rebuild();
 
 /** How long "Anyone know what this is?" keeps the answer row open, unless somebody answers first. */
 export const ANSWER_WINDOW_MS = 5 * 60_000;
@@ -126,21 +170,15 @@ export function padPhrases(questionOpen: boolean, hz: number): Phrase[] {
 /** ★★ THE TUNING CONVERSATION — the lines that go on the SHARED TUNER banner when they arrive (Stuart, 2026-10-09:
  *  "keep it to asking for tuning messages not the full signal ID messages"). Who may move the dial, and when; not
  *  the social lines, the "This sounds …" row, the answers or a shared station. */
-/* ★ Each with its BANNER wording — short enough for the narrowest banner (Stuart chose this over scrolling, 2026-10-09:
- *  the longest full line, "I'm running a decoder — can you wait please?", is 44 characters and the banner ~34). The
- *  chat keeps the full sentence. "U2: " + these stays within 28. */
-const TUNING_BANNER: Record<string, string> = {
-  ask_tune: 'Can I tune?', anyone_using: 'Anyone using this?', tuning_now: 'Tuning now',
-  go_ahead: 'Go ahead, tune', please_hold: 'Please hold — DX', yes_go_ahead: 'On it — go ahead',
-  yes_hold: 'On it — please hold', listening_few_min: 'Listening — a few min?', mid_decode: 'Decoding — please wait', decoding_10min: 'Decoding ~10 min',
-  decode_done: 'Decode done — all yours', wont_tune: "OK, won't tune yet", all_yours: 'Done — all yours',
-  tune_back: 'Tuning back',
-};
-export const isTuningPhrase = (id: string) => id in TUNING_BANNER;
+/* ★ Each with its BANNER wording (i18n/chat/<lang>.json `banner`) — short enough for the narrowest banner (Stuart chose
+ *  this over scrolling, 2026-10-09: the longest full line, "I'm running a decoder — can you wait please?", is 44
+ *  characters and the banner ~34). The chat keeps the full sentence. "U2: " + these stays within 28, in every language
+ *  (scripts/test_chat_i18n.ts). Which ids are tuning lines is the same in all of them — the English file says. */
+export const isTuningPhrase = (id: string) => !!CHAT_WORDS.en.phrases[id]?.banner;
 /** The banner's line for somebody's tuning phrase ("U2: Can I tune?"), or null for any other phrase. */
 export function bannerLine(from: number, id: string): string | null {
-  const t = TUNING_BANNER[id];
-  return t ? `U${from}: ${t}` : null;
+  const t = words.phrases[id]?.banner;
+  return t ? `${chatT('userShort', { n: from })}: ${t}` : null;
 }
 
 /** ★★ THE BANNER CANNOT BE SPAMMED (Stuart, 2026-10-09: "the issue becomes if users are spamming it"). The server
@@ -173,7 +211,7 @@ export function phraseDecoder(id: string): Phrase['decoder'] | null { return BY_
 
 /** The text for a phrase id, or null if this build cannot draw it (drop it — see the header). */
 export function phraseText(id: string): string | null {
-  return TEXT[id] ?? null;
+  return words.phrases[id]?.text ?? null;
 }
 
 /** What the server says about the room. `mode` is 'exclusive' on an ordinary receiver. */
@@ -227,23 +265,32 @@ export const ASK_SHARED_SETTINGS = new Set<string>([
   'nr', 'notch', 'deemph', 'stereo', 'nfmvoice', 'wsp', 'nb', 'nbx', 'ceq', 'ims', 'autobw',
 ]);
 
-/** ★ What the shared-tuner banner flashes when a locked control is touched. Caps, like the banner it replaces. */
-export const ASK_NUDGE_TEXT = 'ASK IN CHAT BEFORE TUNING';
 
 /** ★★ The shared-tuner banner's standing words while locked — what to do NOW, not a rule to remember.
  *  ★ `tight` drops the "SHARED TUNER · " prefix first (SE in Display Zoom), never the words that matter.
  *  ★ A NO says WHEN it ends as a clock time, so the banner does not have to tick every second. */
 export function askBannerText(d: AskState, tight: boolean, clock?: (ms: number) => string): string | null {
   if (!askLocked(d)) return null;
-  const pre = tight ? '' : 'SHARED TUNER · ';
-  // ★ No longer than today's "SHARED TUNER · ASK TO TUNE · 2/5 👤", which is what the narrowest layout was fitted to.
-  if (d.askState === 'open') return `${pre}AWAITING A REPLY`;
+  const pre = tight ? '' : `${chatT('bannerShared')} · `;
+  // ★ No longer than today's "SHARED TUNER · ASK TO TUNE · 2/5 👤", which is what the narrowest layout was fitted to —
+  //   in every language (scripts/test_chat_i18n.ts measures each).
+  if (d.askState === 'open') return `${pre}${chatT('bannerAwaiting')}`;
   if (d.askState === 'no' && d.askUntil) {
     const t = clock ? clock(d.askUntil)
       : (() => { const x = new Date(d.askUntil); return `${String(x.getHours()).padStart(2, '0')}:${String(x.getMinutes()).padStart(2, '0')}`; })();
-    return `${pre}YOURS TO TUNE ${t}`;
+    return `${pre}${chatT('bannerYoursAt', { time: t })}`;
   }
-  return `${pre}ASK IN CHAT TO TUNE`;
+  return `${pre}${chatT('bannerAskInChat')}`;
+}
+
+/** ★★ The SHARED TUNER banner's standing words when the ask lock is not in force — one copy for the app's bar and the
+ *  browser's: FREE TO TUNE alone, ASK TO TUNE · 3/5 👤 with company, ASK BEFORE TUNING before the count is known
+ *  (listeners < 0). `tight` drops the prefix (SE in Display Zoom), never the words that matter. */
+export function sharedTunerText(alone: boolean, listeners: number, max: number, tight = false): string {
+  const pre = tight ? '' : `${chatT('bannerShared')} · `;
+  if (listeners < 0) return `${pre}${chatT('bannerAskBefore')}`;
+  if (alone) return `${pre}${chatT('bannerFree')}`;
+  return `${pre}${chatT('bannerAsk')} · ${listeners}${max > 1 ? `/${max}` : ''} 👤`;
 }
 
 /** True when this receiver shares one dial between its listeners. */
@@ -261,20 +308,32 @@ export function isSharedDial(d: DialState | null): boolean {
  *   an exclusivity the server does not enforce and Stuart deliberately did not want.
  */
 export function dialSummary(d: DialState): string {
-  const bits: string[] = [`${d.listeners} listening`];
-  if (d.mode === 'spectator')      bits.push('the owner tunes this receiver');
-  else if (d.decoding)             bits.push(d.mine ? 'you are decoding' : `User ${d.tuner} is decoding`);
+  return dialSummaryParts(d, false).join(' · ');
+}
+/** The strip's pieces. `hint` (the browser) points at the ask key below: "ask before tuning — Can I tune? below". */
+export function dialSummaryParts(d: DialState, hint: boolean): string[] {
+  const bits: string[] = [chatT('listening', { n: d.listeners })];
+  const user = (n: number) => chatT('user', { n });
+  if (d.mode === 'spectator')      bits.push(chatT('ownerTunes'));
+  else if (d.decoding)             bits.push(d.mine ? chatT('youDecoding') : chatT('userDecoding', { who: user(d.tuner) }));
   // ★ Ask before tuning: say what to do, never "go ahead" to somebody the server will refuse.
-  else if (askLocked(d))           bits.push(d.askState === 'open' ? 'you asked — waiting for a reply'
-                                           : d.askState === 'no' ? 'asked to wait a few minutes' : 'ask before tuning');
-  else if (d.tuner && d.mine)      bits.push('you tuned last');
-  else if (d.tuner)                bits.push(`User ${d.tuner} is tuning`);
-  else                             bits.push('nobody is tuning — go ahead');
-  return bits.join(' · ');
+  else if (askLocked(d))           bits.push(d.askState === 'open' ? chatT('askedWaiting')
+                                           : d.askState === 'no' ? chatT('askedToWait')
+                                           : hint ? chatT('askBeforeBelow', { ask: phraseText('ask_tune') ?? '' }) : chatT('askBefore'));
+  else if (d.tuner && d.mine)      bits.push(chatT('youTunedLast'));
+  else if (d.tuner)                bits.push(chatT('userTuning', { who: user(d.tuner) }));
+  else                             bits.push(chatT('nobodyTuning'));
+  return bits;
 }
 
 /** How a speaker is named. ★ "You" rather than your own ordinal: everybody else sees a number, and
  *  you know which is yours, but reading your own words back as a stranger's is oddly cold. */
 export function speakerName(from: number, you: number): string {
-  return from === you ? 'You' : `User ${from}`;
+  return from === you ? chatT('you') : chatT('user', { n: from });
+}
+
+/** "— User 1 joined 17:40 UTC —": a number passed to somebody new (`since` = when the server gave it, in seconds). */
+export function joinedLine(from: number, you: number, since: number): string {
+  const time = new Date(since * 1000).toISOString().slice(11, 16);
+  return from === you ? chatT('joinedYou', { time }) : chatT('joined', { who: chatT('user', { n: from }), time });
 }
