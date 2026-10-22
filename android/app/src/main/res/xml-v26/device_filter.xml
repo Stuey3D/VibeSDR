@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB radios VibeSDR can drive directly. VID/PID allowlist mirrors
+     VibeLocalSdrModule.RTL_SDR_VIDPIDS. Android device_filter uses DECIMAL.
+     ★★ THIS FILE IS THE PLUG-AND-PLAY. Android offers "open VibeSDR with this device" only
+     for what is listed here, so a radio missing from it is one the user has to go and find
+     the app for — which is precisely the friction Fabian praised its absence of
+     ("Install app -> Plug in SDR -> Serve web -> Connect, done", 2026-07-27). -->
+<resources>
+    <usb-device vendor-id="3034" product-id="10290" />  <!-- 0x0bda:0x2832 -->
+    <usb-device vendor-id="3034" product-id="10296" />  <!-- 0x0bda:0x2838 -->
+    <usb-device vendor-id="1043" product-id="26240" />  <!-- 0x0413:0x6680 -->
+    <usb-device vendor-id="1043" product-id="28431" />  <!-- 0x0413:0x6f0f -->
+    <usb-device vendor-id="1112" product-id="28799" />  <!-- 0x0458:0x707f -->
+    <usb-device vendor-id="3277" product-id="169" />  <!-- 0x0ccd:0x00a9 -->
+    <usb-device vendor-id="3277" product-id="179" />  <!-- 0x0ccd:0x00b3 -->
+    <usb-device vendor-id="3277" product-id="180" />  <!-- 0x0ccd:0x00b4 -->
+    <usb-device vendor-id="3277" product-id="181" />  <!-- 0x0ccd:0x00b5 -->
+    <usb-device vendor-id="3277" product-id="183" />  <!-- 0x0ccd:0x00b7 -->
+    <usb-device vendor-id="3277" product-id="184" />  <!-- 0x0ccd:0x00b8 -->
+    <usb-device vendor-id="3277" product-id="185" />  <!-- 0x0ccd:0x00b9 -->
+    <usb-device vendor-id="3277" product-id="192" />  <!-- 0x0ccd:0x00c0 -->
+    <usb-device vendor-id="3277" product-id="198" />  <!-- 0x0ccd:0x00c6 -->
+    <usb-device vendor-id="3277" product-id="211" />  <!-- 0x0ccd:0x00d3 -->
+    <usb-device vendor-id="3277" product-id="215" />  <!-- 0x0ccd:0x00d7 -->
+    <usb-device vendor-id="3277" product-id="224" />  <!-- 0x0ccd:0x00e0 -->
+    <usb-device vendor-id="5460" product-id="20512" />  <!-- 0x1554:0x5020 -->
+    <usb-device vendor-id="5620" product-id="305" />  <!-- 0x15f4:0x0131 -->
+    <usb-device vendor-id="5620" product-id="307" />  <!-- 0x15f4:0x0133 -->
+    <usb-device vendor-id="6235" product-id="1568" />  <!-- 0x185b:0x0620 -->
+    <usb-device vendor-id="6235" product-id="1616" />  <!-- 0x185b:0x0650 -->
+    <usb-device vendor-id="6235" product-id="1664" />  <!-- 0x185b:0x0680 -->
+    <usb-device vendor-id="7040" product-id="54163" />  <!-- 0x1b80:0xd393 -->
+    <usb-device vendor-id="7040" product-id="54164" />  <!-- 0x1b80:0xd394 -->
+    <usb-device vendor-id="7040" product-id="54165" />  <!-- 0x1b80:0xd395 -->
+    <usb-device vendor-id="7040" product-id="54167" />  <!-- 0x1b80:0xd397 -->
+    <usb-device vendor-id="7040" product-id="54168" />  <!-- 0x1b80:0xd398 -->
+    <usb-device vendor-id="7040" product-id="54173" />  <!-- 0x1b80:0xd39d -->
+    <usb-device vendor-id="7040" product-id="54180" />  <!-- 0x1b80:0xd3a4 -->
+    <usb-device vendor-id="7040" product-id="54184" />  <!-- 0x1b80:0xd3a8 -->
+    <usb-device vendor-id="7040" product-id="54191" />  <!-- 0x1b80:0xd3af -->
+    <usb-device vendor-id="7040" product-id="54192" />  <!-- 0x1b80:0xd3b0 -->
+    <usb-device vendor-id="7449" product-id="4353" />  <!-- 0x1d19:0x1101 -->
+    <usb-device vendor-id="7449" product-id="4354" />  <!-- 0x1d19:0x1102 -->
+    <usb-device vendor-id="7449" product-id="4355" />  <!-- 0x1d19:0x1103 -->
+    <usb-device vendor-id="7449" product-id="4356" />  <!-- 0x1d19:0x1104 -->
+    <usb-device vendor-id="8013" product-id="43011" />  <!-- 0x1f4d:0xa803 -->
+    <usb-device vendor-id="8013" product-id="47107" />  <!-- 0x1f4d:0xb803 -->
+    <usb-device vendor-id="8013" product-id="51203" />  <!-- 0x1f4d:0xc803 -->
+    <usb-device vendor-id="8013" product-id="53894" />  <!-- 0x1f4d:0xd286 -->
+    <usb-device vendor-id="8013" product-id="55299" />  <!-- 0x1f4d:0xd803 -->
+
+    <!-- Airspy HF+ (Discovery / Dual Port). One VID/PID for the whole family — the models
+         are told apart by their serial, not by USB id. -->
+    <usb-device vendor-id="1003" product-id="32780" />  <!-- 0x03eb:0x800c -->
+
+    <!-- HackRF One — EXPERIMENTAL. Only the One: the Jawbreaker (0x604b) and rad1o (0xcc15)
+         prototypes have their own ids and are deliberately NOT listed, because the driver has
+         never been tested against them and offering the app for a device it then refuses is
+         worse than not offering at all. Mirrors VibeLocalSdrModule.HACKRF_VID/PID. -->
+    <usb-device vendor-id="7504" product-id="24713" />  <!-- 0x1d50:0x6089 -->
+    <usb-device vendor-id="7504" product-id="24737" />  <!-- 0x1d50:0x60a1 — Airspy R2 / Mini -->
+
+    <!-- ★★★ SDRplay RSP (2026-10-22) — driven by the OpenRSP driver inside the app. ONLY IN xml-v26: the driver's
+         service needs Android 8.0 (API 26), so below that the app is never offered for an RSP — the base
+         res/xml/device_filter.xml, read on older Android, has none of these. Everything above this block must stay
+         IDENTICAL to that file (scripts/check-device-filter.mjs compares them). Mirrors VibeRsp.RSP_PIDS. -->
+    <usb-device vendor-id="7671" product-id="9472" />   <!-- 0x1df7:0x2500 RSP1 -->
+    <usb-device vendor-id="7671" product-id="12288" />  <!-- 0x1df7:0x3000 RSP1A -->
+    <usb-device vendor-id="7671" product-id="12304" />  <!-- 0x1df7:0x3010 RSP2 / RSP2pro -->
+    <usb-device vendor-id="7671" product-id="12320" />  <!-- 0x1df7:0x3020 RSPduo -->
+    <usb-device vendor-id="7671" product-id="12336" />  <!-- 0x1df7:0x3030 RSPdx -->
+    <usb-device vendor-id="7671" product-id="12368" />  <!-- 0x1df7:0x3050 RSP1B -->
+    <usb-device vendor-id="7671" product-id="12384" />  <!-- 0x1df7:0x3060 RSPdx-R2 -->
+</resources>

@@ -815,6 +815,17 @@ add_test(NAME thread-rank COMMAND test-thread-rank)
 set_tests_properties(thread-rank PROPERTIES SKIP_RETURN_CODE 77)
 # ★★★ VibeAGC (2026-10-20): the retune-forget split, carrierless headroom, the bursty channel level and the bounded
 #     record (vibe_agc_rules.h, vibe_agc_record.h) — pure, no radio. Silent: synthetic SSB speech, nothing played.
+# ★★★ WHICH RSP DRIVER AND WHOSE SERVICE (vibe_sdrplay_lib.h, 2026-10-22): an installed SDRplay stack wins, the
+#     bundle's own library is accepted only from inside the bundle — on a scratch root, never the real /Library.
+add_executable(test-sdrplay-lib "${CMAKE_CURRENT_SOURCE_DIR}/test-sdrplay-lib.cpp")
+target_include_directories(test-sdrplay-lib PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-sdrplay-lib)
+add_test(NAME sdrplay-lib COMMAND test-sdrplay-lib)
+# ★★ What each RSP model has (vibe_rsp_caps.h) — the table behind every panel's RSP controls, spelt out per model.
+add_executable(test-rsp-caps "${CMAKE_CURRENT_SOURCE_DIR}/test-rsp-caps.cpp")
+target_include_directories(test-rsp-caps PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-rsp-caps)
+add_test(NAME rsp-caps COMMAND test-rsp-caps)
 add_executable(test-agc-rules "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-rules.cpp")
 target_include_directories(test-agc-rules PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-agc-rules)

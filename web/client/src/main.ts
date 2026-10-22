@@ -15670,6 +15670,9 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   // "which one is real?" confusion the RSP bias-T duplication caused.
   for (const el of Array.from(document.querySelectorAll('.rtlOnly')) as HTMLElement[])
     el.hidden = isRsp || isAhf || isHrf || isAsp;
+  // ★★ …except frequency correction, which an RSP has too (the server always applied it to one; this hid it).
+  for (const el of Array.from(document.querySelectorAll('.rtlRspOnly')) as HTMLElement[])
+    el.hidden = isAhf || isHrf || isAsp;
   /* ★★★ WHAT THIS RECEIVER'S OWNER ACTUALLY SET, under the control that obeys it — and, on a V4 or
    *  V4L, that the control is not needed at all. Both come from hwinfo (autoDs / dsBelowHz / ds),
    *  which had to be taught to send them: `dsActive` alone says what the hardware is doing this

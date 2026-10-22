@@ -111,6 +111,16 @@ public:
      *  user-initiated Refresh, never automatically — retrying a wedged system lock on a
      *  timer is what caused the pile-up in the first place. */
     static void retryApi();
+    /* ── ★★ ANDROID: THE APP HANDS US ITS USB DEVICES (OpenRSP embedded mode, 2026-10-22) ──────────
+     *  An Android app may not enumerate USB, so OpenRSP's service — which runs INSIDE this process — is
+     *  given each RSP's UsbManager fd. The RSP RE-ENUMERATES after its firmware upload (a NEW device, a new
+     *  fd), so the app attaches again on that USB_DEVICE_ATTACHED; the same deviceName replaces the entry.
+     *  All four are no-ops (androidSupported() false) off Android and below API 26. */
+    static void androidSetFirmwareDir(const std::string& dir);
+    static bool androidSupported();
+    /** 0, or a negative errno. `deviceName` is UsbDevice.getDeviceName(). */
+    static int  androidAttach(int fd, const std::string& deviceName);
+    static int  androidDetach(const std::string& deviceName);
 private:
     static std::string deviceNameLocked(int index);
 public:
@@ -240,9 +250,9 @@ public:
      *  ★★ NAMES ARE THE ONES PRINTED ON THE CASE — "A", "B", "C", "Hi-Z" — because the owner is
      *     looking at the box while they choose. They are also what travels on the wire and what
      *     a per-band rule is written in ("hf:Hi-Z, vhf:A"), so they must stay stable.
-     *  ★ The RSPduo is deliberately absent: its "antenna" is a TUNER SWAP (and Hi-Z lives on
-     *    tuner 1 only), which is a different operation from writing a field and re-Updating.
-     *    An empty list draws nothing, which is the honest answer until that is built and testable.
+     *  ★ The RSPduo's "antenna" is a TUNER SWAP (and Hi-Z lives on tuner 1 only): "Tuner 1 50Ω",
+     *    "Tuner 1 Hi-Z", "Tuner 2 50Ω", chosen before SelectDevice in SINGLE-TUNER mode, so a change
+     *    re-opens the radio (setAntenna). Dual-tuner (two radios from one Duo) is not offered.
      *  ✗ UNTESTED ON HARDWARE — nobody here owns a multi-antenna RSP (Stuart, 2026-09-24: "I will
      *    not be able to test this myself though as all my SDR's are single antenna modes"). */
     /* ── ★★ THE REST OF WHAT AN RSP HAS ──────────────────────────────────────────────────────

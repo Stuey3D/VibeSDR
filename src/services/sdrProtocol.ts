@@ -279,6 +279,8 @@ export interface RadioCaps {
   hdr?: boolean;     hdrOn?: boolean;        // RSPdx: high dynamic range below 2 MHz
   amNotch?: boolean; amNotchOn?: boolean;    // RSPduo: AM broadcast notch on the Hi-Z port
   extRef?: boolean;  extRefOn?: boolean;     // RSP2 / Duo: 24 MHz reference output
+  /** ★ Bias-T state, beside the `biasT` capability (RSP: from the radio's own setting since 2026-10-22). */
+  biasTOn?: boolean;
 }
 
 export type { DabState } from './dabTypes';

@@ -11,8 +11,8 @@ Status at a glance:
 | Linux .deb amd64 / arm64 / armhf | **Built.** vendor/openrsp is built and packaged. A full arm64 package was built and its gates passed in a local bookworm container. armhf and amd64 OpenRSP were cross-compiled and checked. Not yet run with a receiver. |
 | Linux .deb i386 | **Blocked upstream.** OpenRSP 3.15.2-20 does not build for i386 Linux (see §6). RSPs stay compiled out, as before. |
 | Linux ARMv6 binary (in the armhf package) | **Excluded.** It never had SDRplay; postinst removes the ARMv7 RSP service on a CPU without NEON. |
-| Mac VibeServer.app | **Planned (§5.2).** OpenRSP's macOS layer exists. Its installer is not out yet, and we need a supervisor in the app. |
-| Android app server + VibeServer Lite | **Planned (§5.3).** OpenRSP's Android build embeds the service and takes UsbManager fds, which is exactly what we need. This is a V12 feature with Kotlin USB work, and device testing comes first. |
+| Mac VibeServer.app | **Built (§5.2), branch `v12-rsp-platforms`.** Library, service, firmware and licence bundled; the app supervises the service when no SDRplay API is installed. Bundle gate passed. Not yet run with a receiver. |
+| Android app server + VibeServer Lite | **Built (§5.3), branch `v12-rsp-platforms`.** libsdrplay_api.so (embedded service) for arm64-v8a + armeabi-v7a in the app, armeabi-v7a in Lite, dlopen'd on API ≥ 26 only; firmware as checked assets; USB attach/re-attach/detach in VibeRsp.kt. Debug APKs built and inspected. Not yet run with a receiver. |
 | iOS / iPadOS / App Store builds | **Out** (decided 10-19; licence reason in §2). |
 
 ## 1. What OpenRSP is (from openrsp.dev and the source)
@@ -219,92 +219,115 @@ Taking it over silently would change other programs' driver under them.
 - `vibeserver-maintenance sdrplay-restart` restarts whichever of sdrplay / sdrplay_apiService /
   vibeserver-rsp is active. Diagnostics already collects `vibeserver*` units, which includes ours.
 
-### 5.2 Mac VibeServer.app — PLANNED
+### 5.2 Mac VibeServer.app — BUILT (2026-10-22, branch `v12-rsp-platforms`)
 OpenRSP's Darwin layer is complete (POSIX shm with the 31-character name limit handled, Darwin semaphores,
 IOKit hotplug), and upstream reports streaming at 2/8/10 MS/s on Apple silicon.
 
-**Compile check done on this Mac (2026-10-21).** arm64, `CMAKE_OSX_DEPLOYMENT_TARGET=14.0` (our MACOS_MINIMUM),
-built against `vibeserver/mac/deps/prefix/lib/libusb-1.0.a` through our explicit-libusb switch, which now adds
-the IOKit/CoreFoundation/Security frameworks on APPLE (5818cac7):
-- `libsdrplay_api.so.3.15` has 101 exports and links only libc++ and libSystem; its install name is
-  `@rpath/libsdrplay_api.so.3`.
-- `sdrplay_apiService` links the three frameworks + libc++ + libSystem, minos 14.0.
+What was built (steps 1–4 of the earlier plan):
+1. **Build** — `vibeserver/mac/build-app.sh`, section "OpenRSP". arm64 at `MACOS_MINIMUM` (14.0) against
+   `deps/prefix/lib/libusb-1.0.a` through our explicit-libusb switch (VIBESDR-CHANGES 2, frameworks added in
+   5818cac7). It builds from a **staged copy** of vendor/openrsp with the pinned firmware dropped in as
+   `firmware/own`, because OpenRSP's configure wants sdcc or prebuilt images and this Mac has no sdcc 4.2.0.
+   - ★★ **Homebrew's sdcc 4.6.0 does NOT reproduce the released images** (measured: fw_common 0171e881… vs
+     0508cc60…). A different compiler's firmware is firmware nobody has run on a receiver, so the Mac and Android
+     ship the **pinned set in `vendor/openrsp-firmware/own`** (identical to openrsp_3.15.2-20, reproducible from
+     vendor/openrsp/firmware/src with bookworm's sdcc 4.2.0 — see its README). Linux still builds them from source.
+   - Gates in the script: the firmware matches its manifest (twice: source and bundle), the library exports all
+     13 entry points we resolve, and the service has libusb in it (not the USB stub).
+   - `VIBE_BUILD_JOBS` caps every compile in the script (unset = as before).
+2. **Bundle** — `Contents/MacOS/vibeserver-rspd` (the service, our own name), `Contents/Frameworks/
+   libsdrplay_api.so.3.15` + `.so.3` symlink, `Contents/Resources/openrsp/firmware/own/*`,
+   `Contents/Resources/COPYING.openrsp`, `Resources/openrsp/{README.openrsp,VIBESDR-CHANGES}`
+   (vibeserver/mac/README.openrsp is the Mac wording). ★ `notarise-and-release.sh` now also signs `*.so.*` —
+   its `-name "*.so"` would have left libsdrplay_api.so.3.15 unsigned and failed notarisation.
+3. **Supervise** — `vibeserver/mac/RspDriver.swift`. Started from `applicationDidFinishLaunching` BEFORE the
+   auto-start's device count (with a 0.8 s settle and a refresh), only when `vs_sdrplay_run_bundled_service()`
+   says so — i.e. the bundle has the service AND no system stack is installed (`/Library/LaunchDaemons/
+   com.sdrplay.service.plist` or `/Library/SDRplayAPI/*/bin/sdrplay_apiService`). Env
+   `SDRPLAY_OWN_FIRMWARE_DIR=<Resources>/openrsp/firmware/own`. Restarted 1 s after an unexpected exit; five exits
+   in a minute = give up and log. A stale `vibeserver-rspd` of ours (crashed/force-quit app) is reaped first.
+   SIGTERM on quit, after the server has stopped.
+4. **Library choice** — `sdrplay_source.cpp` `__APPLE__` branch: candidates via
+   `sdrplaylib::candidateOrder(macSystemStack(), bundled, system)` — system first when installed, bundled the
+   fallback; bundled first otherwise. The bundle is found from the executable's real path (Simple mode = the
+   app, Full mode = vibeserver-engine; both in Contents/MacOS). The root-owned check is replaced **for our own
+   library only** by `insideBundleFrameworks` (its real path directly inside our Frameworks/). The log line says
+   `(bundled OpenRSP)` or `(system)`.
+   - `disable-library-validation` **stays**: SDRplay's own signed library is still a fallback.
 
-Nothing is wired into the app yet. Steps:
-1. **Build.** In `mac/build-app.sh`, build OpenRSP with `-DCMAKE_OSX_ARCHITECTURES=arm64
-   -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_MIN` against the deps prefix's static `libusb-1.0.a`. Our
-   `SDRPLAY_LIBUSB_LIBRARY` interface target must add `-framework IOKit -framework CoreFoundation -framework
-   Security` on APPLE: a small extension of VibeSDR change 2. Firmware is built with Homebrew `sdcc` (check it
-   reproduces the manifest), or built once on Linux and checked against the manifest.
-2. **Bundle.**
-   - `Contents/MacOS/vibeserver-rspd` (the service; MacOS/ is where the notarise script signs executables).
-   - `Contents/Frameworks/libsdrplay_api.so.3.15` (+ `.so.3` symlink).
-   - `Contents/Resources/openrsp/firmware/own/*`.
-   - Licence in `Contents/Resources/COPYING.openrsp`.
+The decision logic is one header, `android/app/src/main/cpp/vibe_sdrplay_lib.h`, and the Swift side calls into
+it (`vs_sdrplay_system_stack`, `vs_sdrplay_run_bundled_service`) rather than copying it.
 
-   Sign both binaries with our Developer ID inside the notarised app, as usual.
-3. **Supervise from the app.** `VibeServerApp.swift` starts `vibeserver-rspd` as a child (env
-   `SDRPLAY_OWN_FIRMWARE_DIR=<Resources>/openrsp/firmware/own` — non-code files must not sit in MacOS/), and
-   restarts it on exit. It does this **only if no system stack is present**: the Mac fact is
-   `/Library/LaunchDaemons/com.sdrplay.service.plist` or `/Library/SDRplayAPI/*/bin/sdrplay_apiService`. This
-   Mac has SDRplay 3.15.1 installed, so test it both ways. It runs once for the app; Simple mode (in-process
-   server) and Full mode (engine processes) are both clients. Stop it on quit.
-4. **Library choice** (`sdrplay_source.cpp`, the `__APPLE__` branch).
-   - With no system stack: `<bundle>/Contents/Frameworks/libsdrplay_api.so.3` first, found from the executable
-     path.
-   - The root-owned check cannot apply: an app in /Applications is owned by its user. Accept it only if its real
-     path is inside our own bundle, so the threat the check addressed (a file planted in a user-writable search
-     path) does not return.
-   - `disable-library-validation` stays while SDRplay's own signed library is a fallback. If the bundled one
-     becomes the only one, drop it and let library validation enforce our Team ID.
-5. Wait for OpenRSP's macOS installer and Intel testing upstream. Upstream marks Intel untested; we ship arm64
-   only, so that does not block us.
+**Measured / verified on this Mac (it has SDRplay 3.15.1 installed and its service running):**
+- `build-app.sh --no-copy` in the worktree: **gate PASSED**, 5 Mach-O all arm64 minos 14.0 — `vibeserver-rspd`
+  (894 KB; IOKit, CoreFoundation, Security, libc++, libSystem) and `libsdrplay_api.so.3.15` (155 KB; libc++,
+  libSystem; install name `@rpath/libsdrplay_api.so.3`; 101 exports).
+- A harness `dlopen`ed the bundled library and resolved all 12 entry points (`GetErrorString(0)` = Success).
+- **test-sdrplay-lib** (ctest + run-tests.sh), on a scratch root: both stacks' detection both ways (empty disk,
+  versioned service, daemon plist only, library only), the supervisor rule, the library order, bundle-from-
+  executable and the in-bundle check (including `..`, sibling directories, subdirectories).
+- ✗ **Not run:** the bundled SERVICE. SDRplay's service is running on this Mac, the two would share the same
+  shared-memory names, and I would not risk unlinking theirs. ✗ No RSP was attached. See "Open for Stuart".
 
-### 5.3 Android app server + VibeServer Lite — PLANNED (V12, headline but QUIET)
+### 5.3 Android app server + VibeServer Lite — BUILT (2026-10-22, branch `v12-rsp-platforms`)
 Upstream fits our model exactly: `libsdrplay_api.so` with the **service embedded** and
-`sdrplay_android_usb_attach(fd, deviceName)` for **UsbManager fds** — answering question (1) from 10-19. It
-**re-enumerates after the firmware upload**: "the app then gets a NEW device and a new fd; re-attaching the same
-deviceName replaces the old entry" — question (2), so expect a second attach. It forces bulk transfers (phones
-drop isochronous packets), and gets 8 MS/s gap-free on a Pixel 8a. Requires API 26+.
+`sdrplay_android_usb_attach(fd, deviceName)` for **UsbManager fds**. It **re-enumerates after the firmware
+upload** — inside the first `GetDevices`, which waits up to 15 s for the new device (bcdDevice ≠ 0x0200) — so
+the app must attach the NEW device during that wait. It forces bulk transfers. Requires API 26+.
 
-Steps:
-1. **Native build: proved on this Mac (2026-10-21, NDK 27.1, SDK cmake 3.22.1 + ninja, `-DANDROID_PLATFORM=android-26
-   -DANDROID_STL=c++_static`, `SDRPLAY_ANDROID_LIBUSB_SRC` = a local libusb 1.0.27 tree, SHA-256-checked — never
-   let CMake download at build time).**
-   - **Both ABIs build.** NEEDED is libandroid/liblog/libm/libdl/libc only. The library exports the 23 plain
-     `sdrplay_api_*` functions plus the eight `sdrplay_android_*` embedding calls (usb_attach/detach/count,
-     service_start/stop/running, client_mode, status_json), and **no `libusb_*`** (upstream hides its libusb).
-   - Stripped, it is **1.20 MB (arm64) and 0.80 MB (armeabi-v7a)**.
-   - ★★★ **NDK 27.1 linked it 4 KB-aligned (LOAD 0x1000) by default.** Only with
-     **`-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON`** did arm64 come out at 0x4000. That flag (or
-     `-Wl,-z,max-page-size=16384`) is mandatory, and the build script must refuse an unaligned arm64 build,
-     the way the sdr-kit scripts do (play_16kb_page_size). Note that memory's "r27 aligns by default" did not
-     hold here.
-2. **Never linked, dlopen'd, and only on API ≥ 26.** Lite's minSdk is 21 (the main app's comes from
-   `rootProject.ext.minSdkVersion`; check it, as it is likely below 26 too).
-   The library needs `ASharedMemory_create` (API 26), so it must not be a DT_NEEDED of libvibelocalsdr. Below 26
-   the RSP is simply not offered: "a control that only works on one radio should not be there" applies to an OS
-   version too.
-3. **The Android branch of `sdrplay_source.cpp`.** `dlopen("libsdrplay_api.so")` from the app's own lib dir; the
-   root-owned check does not apply, because the app's own lib dir is trusted by the platform. Before `Open`:
-   `sdrplay_android_service_start(<filesDir>/openrsp/firmware)`, with the firmware copied from assets on first
-   run and checked against the manifest. Define `VIBE_HAVE_SDRPLAY` in `android/app/src/main/cpp/CMakeLists.txt`
-   with `vendor/openrsp/include`.
-4. **Kotlin.**
-   - Add `1df7` + the 7 PIDs to `res/xml/device_filter.xml`.
-   - Add `isRsp(dev)` → driver `"sdrplay"` in the three when-blocks of `VibeLocalSdrModule.kt` (the "three-way
-     fact" comment there now becomes five-way).
-   - Request permission and pass `connection.fileDescriptor` + `dev.deviceName` to `sdrplay_android_usb_attach`.
-   - On `USB_DEVICE_ATTACHED` for the re-enumerated RSP, attach the new fd again (and detach on DETACHED).
-   - Measure whether Android asks a **second permission** after re-enumeration. The device-filter intent with
-     "always open" should grant it silently, but confirm on the XCover and the Tab A9.
-5. **The gain model** is already the RSP's (LNA states + IF gain reduction) in `LocalHardwarePanel` /
-   `radioCaps` from hwinfo, since VibeServer Linux serves RSPs today. Check that the app's hwinfo path needs no
-   Android-specific case (app has no hardcoded settings).
-6. **Potato phones.** Measure the APK size and RAM cost on the 1 GB armeabi-v7a class. The library is about
-   0.8 MB per ABI, and the service's ring buffers are allocated only while an RSP streams.
-7. **Licence before Play:** see §2. The AAB waits for M9PSY's App Store/Play permission. The GitHub APK and Lite
-   can ship as soon as steps 1–6 pass.
+What was built:
+1. **Native build** — `android/app/openrsp/build-openrsp-android.sh`, run by `android/app/openrsp.gradle`, which
+   BOTH apps apply (`ext.openRspAbis`: main app arm64-v8a + armeabi-v7a, Lite armeabi-v7a). Not via
+   externalNativeBuild: that runs at the app's minSdk (24 / 21) and only packages what it links. API 26,
+   `c++_static`, `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON`, Release, against **`vendor/libusb-1.0.27`** (unmodified,
+   every file checked against its SHA256SUMS first — CMake never downloads). From a staged copy with the pinned
+   firmware, like the Mac. **The script refuses**: an arm64 build not at 0x4000/0x10000, any of the 17 entry points
+   missing (13 API + 4 `sdrplay_android_*`), any exported `libusb_*`, any NEEDED outside
+   libandroid/liblog/libm/libdl/libc. Inputs are declared, so the task is up to date when nothing moved.
+   CPU: nice 19, `-j 2` (`VIBE_BUILD_JOBS`).
+2. **Never linked, dlopen'd, only on API ≥ 26** — `android/app/src/main/cpp/CMakeLists.txt` adds
+   `vendor/openrsp/include` + `VIBE_HAVE_SDRPLAY` only. Measured: `libvibelocalsdr.so` NEEDED has no
+   libsdrplay_api.
+3. **sdrplay_source.cpp Android branch** — `dlopen("libsdrplay_api.so")` (the app's lib dir, by name) only when
+   `android_get_device_api_level() >= 26`; resolves the embedding calls; `apiOpen` starts the embedded service with
+   the app's checked firmware dir before `Open`, and refuses with a reason if the app never prepared it.
+   `SdrplaySource::androidSetFirmwareDir / androidSupported / androidAttach / androidDetach`, bound in
+   `vibe_localsdr_jni.cpp` (`VibeLocalSDR.rsp*`). `LocalSdrShim::start` routes VID 0x1df7 to `startSdrplay(0, …)`:
+   the fd is already the driver's.
+4. **Kotlin** — `VibeRsp.kt` (shared with Lite: added to its SHARED list):
+   - firmware copied from `assets/openrsp/firmware/own` to `filesDir/openrsp/firmware/own`, **every image checked
+     against manifest.sha256** (MessageDigest) before the driver is told; a mismatch = no RSP.
+   - `attach(conn, dev)` on both start paths (local listening, VibeServer start, and the crash/attach restore in
+     VibeServerRestore). While a session is live, a receiver on its own HandlerThread handles ATTACHED (open +
+     attach; if Android has not granted the re-enumerated device, `requestPermission` straight away so the driver's
+     15 s wait is not missed), DETACHED (detach + close) and our permission result. `releaseAll` after the engine
+     stops. `VibeServerRestore.onRadioAttached` (the activity's attach, which carries the grant) also calls it.
+   - `isRsp` → `"sdrplay"` in the module's when-blocks (kind, radioKind, driver, model name from the PID) and in
+     `isServableRadio`. **API < 26 is not offered at all**: `VibeRsp.supported` is false, and the RSP USB ids live
+     only in **`res/xml-v26/device_filter.xml`** (Lite syncs both). `scripts/check-device-filter.mjs` (run-tests.sh)
+     holds the two filters and `VibeRsp.RSP_PIDS` together.
+   - The firmware re-enumeration looks like a blip to the server's own watch (DETACHED → gone, ATTACHED → back),
+     well inside the blip window, so it does not stop a server.
+5. **Gain model / hwinfo** — no Android-specific case: the app reads the RSP's caps from hwinfo exactly as from a
+   Linux RSP server. ServerModeScreen gained the RSP rate list, ppm, and hides bias-T on an RSP1.
+6. **Potato phones — measured on the debug APKs:**
+   | | main app (arm64 + v7a) | Lite (v7a) |
+   |---|---|---|
+   | libsdrplay_api.so (stripped, as packaged) | 1,203,128 B arm64 (LOAD 0x4000) + 797,848 B v7a (LOAD 0x1000) | 797,848 B |
+   | …compressed in the APK | 516,841 + 436,191 B | 436,191 B |
+   | firmware assets | 10.9 KB (7.7 KB compressed) | same |
+   | extra code in libvibelocalsdr (sdrplay_source real body vs stub, v7a -O3) | ~42 KB text | ~42 KB |
+   - **APK delta ≈ 0.96 MB (main), ≈ 0.45 MB (Lite).** With legacy packaging the phone's own ABI is extracted on
+     install: +1.2 MB (arm64) / +0.8 MB (v7a) on disk.
+   - **Idle RAM: zero by construction** on a phone with no RSP — the library is not loaded, no thread, no receiver,
+     no service until an RSP is attached (the service's ring buffers only while one streams). ✗ Not measured on a
+     device (no permitted device was available: the Tab A9 was not paired, the XCover and Sony are off-limits).
+7. **Licence before Play:** decided 10-21 (§2) — the Play AAB may carry it.
+
+✗ **Unverified on hardware:** everything that needs an RSP on a phone — the firmware upload, the re-enumeration
+re-attach, and **whether Android asks a SECOND time** for the re-enumerated device when the owner did not tick
+"use by default" (if it does and the owner is slow, the first Start fails and a second Start works, because the
+device is then already in firmware mode).
 
 ### 5.4 iOS / iPadOS — OUT
 As decided 10-19: DriverKit is iPad-only, it needs per-maker vendor-ID entitlements, and a third-party GPL
@@ -380,7 +403,58 @@ apt's backup and restore are not involved:
 software, apt install, RSP plugged in → it serves with nothing else installed. Also confirm
 `dpkg -s vibeserver | grep Depends` is libc6 + tools only.
 
-## 8. Commits on this branch
+## 8. RSP setup GUI — audit and what changed (2026-10-22)
+Audited every RSP control across the app panel (local + remote), ServerModeScreen, the web client and the setup page.
+One table now says what each model has: `android/app/src/main/cpp/vibe_rsp_caps.h`, read by `SdrplaySource::has*()`
+and therefore by hwinfo `radio.*`, which every panel gates on. Per model:
+
+| Model | FM/MW notch | DAB notch | Bias-T | HDR | AM notch | 24 MHz ref | Antenna choice |
+|---|---|---|---|---|---|---|---|
+| RSP1 | – | – | – | – | – | – | – |
+| RSP1A / RSP1B | ✓ | ✓ | ✓ | – | – | – | – |
+| RSP2 | ✓ | – | ✓ | – | – | ✓ | A / B / Hi-Z |
+| RSPduo | ✓ | ✓ | ✓ | – | ✓ (tuner 1 Hi-Z) | ✓ | Tuner 1 50Ω / Tuner 1 Hi-Z / Tuner 2 50Ω (single-tuner mode; a change re-opens) |
+| RSPdx / dx-R2 | ✓ | ✓ | ✓ | ✓ (below 2 MHz) | – | – | A / B / C |
+
+LNA state, IF gain reduction / IF AGC, AGC target, sample rate (bandwidth follows it) were already complete and
+per model (LNA count from the radio). Fixed:
+- **RSP bias-T did nothing from the setup page or the config** (setBiasTee had no RSP branch); hwinfo `radio.biasTOn`
+  read the dongle's flag; `rsp_control biast` was never persisted. The app panel had no RSP bias-T switch at all — now
+  it has one, only where `radio.biasT`.
+- **ppm** for an RSP: the server always applied it; app panel, web client, setup page and ServerModeScreen now show it.
+- **Setup page**: `/vibeserver/hardware` now carries the radio's caps; HDR / AM notch / ext ref / the notches are drawn
+  only on the models with them (live caps, else the model in the radio's name, else all as before); the AM notch was
+  labelled "RSPdx family" though only the Duo has one; **the antenna card was never drawn** (nothing filled
+  `r.antennas`) — now it is, with the port list; the sdrplay rate list offered 10 MS/s, which the server does not.
+- Notch toggles were applied and saved BEFORE the "owner reserved / automatic" refusal — now refused first.
+- `rspHdr` / `rspAmNotch` / `rspExtRef` were never folded into the radio's config entry (lost on restart).
+- Duo: `antenna()` defaulted to "A" (not a Duo port); a short name that names exactly one port resolves, so a per-band
+  rule `hf:Hi-Z` works on a Duo too (`sdrplaylib::resolvePort`).
+- Not added (decided): AGC loop dynamics (attack/decay) stay wire-only — expert knobs nobody asked for; dual-tuner Duo
+  (two radios from one Duo) — a different feature. HDR bandwidth stays at its default, as before.
+- Tests: `test-rsp-caps` (50 checks, the whole table), `check-rsp-caps.mjs` (setup page's offline copy == the table,
+  every caps key the server writes is read by the app panel and the web client, each app control gated on its key),
+  `test-sdrplay-lib` (39), `check-device-filter.mjs`.
+- Copy: the AGENTS.md grep list was checked — no tour card, About feature list, watch tip or website line says where an
+  RSP's bias-T/ppm/notches are, so nothing misdirects. One quiet line was added to the V12 release notes.
+
+## 9. Open for Stuart
+1. **Sign + notarise the Mac app** from the worktree build — see the hand-off (never `/Applications`).
+2. **Mac, both paths, with an RSP:** (a) as is (SDRplay 3.15.1 installed) → log `sdrplay: API library
+   /Library/SDRplayAPI/… (system)`, no `vibeserver-rspd` process; (b) the bundled path needs SDRplay's service out of
+   the way (e.g. `sudo launchctl bootout system/com.sdrplay.service` for the session, or a Mac without it) → `pgrep
+   vibeserver-rspd`, log `(bundled OpenRSP)`, firmware upload in Console, audio. Quit → the service exits.
+3. **Android with an RSP (Tab A9 or the Pixel class, Android 8+):** plug in, Start; watch `adb logcat -s VibeRsp
+   VibeLocalSDR` for `firmware ready`, `attached`, then `re-attached` after the re-enumeration. Note whether a SECOND
+   permission dialog appears (with and without "use by default" ticked). Then Lite on an ARMv7 Android 8+ box.
+4. **Idle RAM on a 1 GB phone** with no RSP: should be unchanged (nothing loads) — worth one `dumpsys meminfo` A/B.
+5. **Decide**: drop `disable-library-validation` once the bundled library is the only one you want on the Mac (it
+   stays while SDRplay's signed library is the fallback).
+6. **Decide**: whether a Mac with SDRplay installed should ever prefer ours (today: never — theirs wins, as on Linux).
+7. Firmware provenance: if you want the Mac/Android images built in-tree rather than pinned, the build needs sdcc
+   4.2.0 (a bookworm container step); 4.6.0 produces different images.
+
+## 10. Commits on this branch
 - `e9ce7e26` vendor: OpenRSP 3.15.2-20 source, unmodified
 - `a19c6b44` vendor/openrsp: three opt-in build switches (VIBESDR-CHANGES)
 - `8a449d5f` VibeServer Linux: build and package OpenRSP

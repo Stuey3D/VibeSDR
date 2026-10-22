@@ -236,6 +236,20 @@ object VibeLocalSDR {
     fun adoptFreshUsbFd(fd: Int): Boolean = loaded && nativeAdoptFreshUsbFd(fd)
     private external fun nativeUsbNeedsFreshFd(): Boolean
     private external fun nativeAdoptFreshUsbFd(fd: Int): Boolean
+    // ── ★★★ THE SDRplay RSP (OpenRSP embedded, 2026-10-22) — see VibeRsp.kt and sdrplay_source.h ──────────
+    /** Where the app copied and checked the RSP firmware (filesDir/openrsp/firmware, holding own/). */
+    fun rspSetFirmwareDir(dir: String) { ensureLoaded(); nativeRspSetFirmwareDir(dir) }
+    /** API ≥ 26 and the driver library loaded. */
+    fun rspSupported(): Boolean { ensureLoaded(); return nativeRspSupported() }
+    /** Hand OpenRSP's service a UsbManager fd (it dups it). 0, or a negative errno. */
+    fun rspAttach(fd: Int, deviceName: String): Int { ensureLoaded(); return nativeRspAttach(fd, deviceName) }
+    /** The device left the bus (USB_DEVICE_DETACHED). No-op when nothing is loaded. */
+    fun rspDetach(deviceName: String): Int = if (loaded) nativeRspDetach(deviceName) else -2
+    private external fun nativeRspSetFirmwareDir(dir: String)
+    private external fun nativeRspSupported(): Boolean
+    private external fun nativeRspAttach(fd: Int, deviceName: String): Int
+    private external fun nativeRspDetach(deviceName: String): Int
+
     /** ★★ The radio attached again: the fresh-fd back-off left by the OLD device instance is spent. */
     fun usbRadioAttached() { if (loaded) nativeUsbRadioAttached() }
     private external fun nativeUsbRadioAttached()

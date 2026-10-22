@@ -128,7 +128,7 @@ add_library(vibelocalsdr SHARED
     #   Full mode does not link without it, and nothing else references it, so its absence is
     #   invisible until the day Full mode is switched on.
     fd_passing.cpp
-    # ★ BOTH radio sources, even though Android has no SDRplay. They are written as
+    # ★ BOTH radio sources (Android has an RSP too since 2026-10-22, see VIBE_HAVE_SDRPLAY below). They are written as
     # "real implementation #ifdef <SDK> #else no-op stubs", and the shim references their
     # methods unconditionally — a runtime branch still emits a link-time symbol, so leaving
     # one out does not save anything, it just fails to link (found on iOS, 2026-07-27).
@@ -220,6 +220,11 @@ target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_AIRSPY)
 # ★ VIBE_HACKRF_HAS_FD says this libhackrf is the PATCHED one, so HackRfSource::openFd() can call
 #   hackrf_open_fd(). A desktop build links a stock libhackrf and must not — see the #ifndef there.
 target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAS_HACKRF VIBE_HACKRF_HAS_FD)
+# ★★★ THE SDRplay RSP (2026-10-22): OpenRSP's own API headers (GPLv3, ABI-identical to API 3.15), so
+#     sdrplay_source.cpp compiles its real body. The LIBRARY is not linked here — it needs API 26 and this target
+#     builds at the app's minSdk — it is built by openrsp.gradle and dlopen()ed on API ≥ 26 only.
+target_include_directories(vibelocalsdr PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vendor/openrsp/include")
+target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_SDRPLAY)
 
 target_link_libraries(vibelocalsdr PRIVATE
     vibedsp

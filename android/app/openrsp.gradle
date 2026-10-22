@@ -1,0 +1,45 @@
+// ★★★ THE RSP DRIVER IN THE APK — OpenRSP's libsdrplay_api.so (service embedded) + its bridge firmware.
+// Applied by android/app/build.gradle AND lite/android/app/build.gradle, so both APKs carry the same driver by
+// construction (the mapgl-assets.gradle pattern). docs/OPENRSP-BUNDLE-PLAN.md §5.3.
+//
+//  ★ Set `ext.openRspAbis` before applying: the main app ships arm64-v8a + armeabi-v7a, Lite armeabi-v7a.
+//  ★★ BUILT FROM SOURCE ON EVERY BUILD THAT NEEDS IT (vendor/openrsp + vendor/libusb-1.0.27), not a committed
+//     binary — the Gradle task is up to date when none of its inputs moved, so it costs nothing after the first.
+//     Not through externalNativeBuild: that build runs at the app's minSdk (21/24) and OpenRSP needs API 26,
+//     and externalNativeBuild packages only what it links (this is never linked — it is dlopen()ed).
+//  ★★ THE FIRMWARE GOES IN AS AN ASSET (assets/openrsp/firmware/own). The app copies it to filesDir and checks
+//     every image against manifest.sha256 before the driver may use it (VibeRsp.kt).
+def orspHere   = buildscript.sourceFile.parentFile                 // android/app
+def orspRepo   = new File(orspHere, '../..').canonicalFile
+def orspScript = new File(orspHere, 'openrsp/build-openrsp-android.sh')
+def orspAbis   = project.ext.has('openRspAbis') ? project.ext.openRspAbis : ['arm64-v8a', 'armeabi-v7a']
+def orspOut    = file("${buildDir}/openrsp-jniLibs")
+def orspWork   = file("${buildDir}/openrsp-build")
+def orspAssets = file("${buildDir}/openrsp-assets")
+def orspFw     = new File(orspRepo, 'vendor/openrsp-firmware/own')
+
+tasks.register('buildOpenRsp', Exec) {
+    inputs.dir(new File(orspRepo, 'vendor/openrsp'))
+    inputs.dir(new File(orspRepo, 'vendor/libusb-1.0.27'))
+    inputs.dir(orspFw)
+    inputs.file(orspScript)
+    inputs.property('abis', orspAbis.join(','))
+    outputs.dir(orspOut)
+    doFirst {
+        delete orspOut
+        mkdir orspWork
+    }
+    // ★★ nice + 2 jobs: this Mac overheated when builds ran unrestrained (VIBE_BUILD_JOBS overrides).
+    commandLine(['nice', '-n', '19', 'bash', orspScript.absolutePath, orspOut.absolutePath, orspWork.absolutePath] + orspAbis)
+    environment 'ANDROID_NDK', android.ndkDirectory.absolutePath
+    environment 'ANDROID_SDK', android.sdkDirectory.absolutePath
+}
+
+tasks.register('syncOpenRspFirmware', Sync) {
+    from(orspFw) { include 'fw_common.bin', 'fw_rsp1.bin', 'fw_rspduo.bin', 'manifest.sha256' }
+    into new File(orspAssets, 'openrsp/firmware/own')
+}
+
+android.sourceSets.main.jniLibs.srcDirs += [orspOut]
+android.sourceSets.main.assets.srcDirs  += [orspAssets]
+tasks.named('preBuild') { dependsOn 'buildOpenRsp', 'syncOpenRspFirmware' }

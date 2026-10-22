@@ -31,6 +31,10 @@ echo "==> minimum macOS $MACOS_MIN (vibeserver/mac/MACOS_MINIMUM)"
 "$MAC/build-deps.sh"
 DEPS="$MAC/deps"
 
+# ★★ VIBE_BUILD_JOBS caps the compile (the Mac overheated with several agents' builds at once). Unset = as many
+#    jobs as CMake likes, which is what this script always did.
+JOBS="${VIBE_BUILD_JOBS:-}"
+
 echo "==> Building the C++ core"
 # ★★★ STRICT: a release build must contain every radio the release claims to contain. Without
 #     this flag a missing brew formula removes a driver silently, leaving one cmake STATUS line as
@@ -49,7 +53,7 @@ cmake -S "$ROOT/vibeserver" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" -DCMAKE_OSX_ARCHITECTURES=arm64 \
       -DVIBE_MAC_DEPS="$DEPS/prefix" >"$LOGS/configure.log" 2>&1 \
   || { tail -40 "$LOGS/configure.log"; echo "!! cmake configure failed"; exit 1; }
-cmake --build "$BUILD" --target vibeserver_core -j >"$LOGS/core.log" 2>&1 \
+cmake --build "$BUILD" --target vibeserver_core -j $JOBS >"$LOGS/core.log" 2>&1 \
   || { tail -40 "$LOGS/core.log"; echo "!! vibeserver_core build failed"; exit 1; }
 # ★★★ AND THE FRONT-DOOR BINARY, WHICH FULL MODE SPAWNS. Simple mode runs the server IN-PROCESS
 #     (vs_start) and needs none of this; Full mode is multi-process by design — a front door that
@@ -61,8 +65,47 @@ cmake --build "$BUILD" --target vibeserver_core -j >"$LOGS/core.log" 2>&1 \
 # ★ Relinked EVERY time (the rm), so the engine's link — and any ld warning in it — is in THIS
 #   build's log. An up-to-date target is a skipped link and a log that proves nothing.
 rm -f "$BUILD/vibeserver"
-cmake --build "$BUILD" --target vibeserver -j >"$LOGS/engine.log" 2>&1 \
+cmake --build "$BUILD" --target vibeserver -j $JOBS >"$LOGS/engine.log" 2>&1 \
   || { tail -40 "$LOGS/engine.log"; echo "!! vibeserver (engine) build failed"; exit 1; }
+
+# ── OpenRSP: the RSP driver stack, built from vendor/openrsp and carried INSIDE the app (2026-10-22) ──────
+# ★★★ docs/OPENRSP-BUNDLE-PLAN.md §5.2. An RSP then works with nothing else installed, as RTL-SDR, Airspy and
+#     HackRF already do. GPLv3, the OpenRSP authors; the licence and VIBESDR-CHANGES travel in Resources/.
+#  ★ arm64 at MACOS_MIN, against the SAME static libusb the core links (deps/prefix) through our explicit-libusb
+#    switch (VIBESDR-CHANGES 2), which also adds the IOKit/CoreFoundation/Security frameworks it needs.
+#  ★★ FROM A STAGED COPY, with the pinned firmware set dropped in as firmware/own: OpenRSP's configure needs
+#     either sdcc or prebuilt images in its source tree, and this Mac has no sdcc 4.2.0 — Homebrew's 4.6.0
+#     builds DIFFERENT images (vendor/openrsp-firmware/README). The vendor tree itself is never written to.
+#  ★ The firmware the app ships is that pinned set, checked against its manifest here and again by the
+#    service before every upload.
+ORSP_SRC="$BUILD/openrsp-src"; ORSP_BIN="$BUILD/openrsp-mac"; ORSP_FW="$ROOT/vendor/openrsp-firmware/own"
+echo "==> Building OpenRSP (the RSP driver)"
+( cd "$ORSP_FW" && shasum -a 256 -c manifest.sha256 >/dev/null ) \
+  || { echo "!! vendor/openrsp-firmware/own does not match its manifest"; exit 1; }
+mkdir -p "$ORSP_SRC"
+rsync -a --delete --exclude firmware/own "$ROOT/vendor/openrsp/" "$ORSP_SRC/"
+mkdir -p "$ORSP_SRC/firmware/own" && cp "$ORSP_FW/"* "$ORSP_SRC/firmware/own/"
+cmake -S "$ORSP_SRC" -B "$ORSP_BIN" -DCMAKE_BUILD_TYPE=Release -DSDRPLAY_BUILD_TESTS=OFF \
+      -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" \
+      -DSDRPLAY_LIBUSB_LIBRARY="$DEPS/prefix/lib/libusb-1.0.a" \
+      -DSDRPLAY_LIBUSB_INCLUDE_DIR="$DEPS/prefix/include/libusb-1.0" >"$LOGS/openrsp-configure.log" 2>&1 \
+  || { tail -30 "$LOGS/openrsp-configure.log"; echo "!! OpenRSP configure failed"; exit 1; }
+cmake --build "$ORSP_BIN" --target sdrplay_api sdrplay_apiService -j $JOBS >"$LOGS/openrsp.log" 2>&1 \
+  || { grep -E "error" "$LOGS/openrsp.log" | head -20; echo "!! OpenRSP build failed"; exit 1; }
+ORSP_LIB="$ORSP_BIN/libsdrplay_api.so.3.15"; ORSP_SVC="$ORSP_BIN/sdrplay_apiService"
+# ★★★ THE GATES — the Linux package's, on the Mac artefacts. A library missing an entry point we resolve
+#     reports zero RSPs; a service without libusb is OpenRSP's USB STUB, which runs and finds nothing.
+#     Count, never `grep -q` under pipefail (SIGPIPE turns a match into a failure).
+for f in sdrplay_api_Open sdrplay_api_Close sdrplay_api_GetDevices sdrplay_api_SelectDevice \
+         sdrplay_api_ReleaseDevice sdrplay_api_GetDeviceParams sdrplay_api_Init sdrplay_api_Uninit \
+         sdrplay_api_Update sdrplay_api_LockDeviceApi sdrplay_api_UnlockDeviceApi sdrplay_api_GetErrorString \
+         sdrplay_api_ApiVersion; do
+  [ "$(nm -gU "$ORSP_LIB" | grep -c " _$f\$" || true)" -ge 1 ] \
+    || { echo "!! OpenRSP library lacks $f"; exit 1; }
+done
+[ "$(nm "$ORSP_SVC" | grep -c '_libusb_open$' || true)" -ge 1 ] \
+  || { echo "!! the OpenRSP service has no libusb in it — it would be the USB stub"; exit 1; }
+echo "==> OpenRSP built ($(nm -gU "$ORSP_LIB" | grep -c ' _' || true) exports)"
 
 echo "==> Assembling the bundle"
 rm -rf "$APP"
@@ -184,6 +227,7 @@ swiftc \
   "$MAC/VibeServerApp.swift" \
   "$MAC/EibiStations.swift" \
   "$MAC/FullMode.swift" \
+  "$MAC/RspDriver.swift" \
   $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"} \
   -lc++ \
   `# ★ ONE RULE, TWO READERS: CMakeLists.txt links these for vibeserver/dab-offline; this line is the app's own.` \
@@ -206,6 +250,23 @@ swiftc \
 #     producing a bundle that launched the CLI when double-clicked. It built cleanly and the only
 #     symptom was an .app that answered --list-radios. (Caught 2026-08-10, immediately.)
 cp "$BUILD/vibeserver" "$APP/Contents/MacOS/vibeserver-engine"
+
+# ★★★ THE RSP DRIVER (OpenRSP) — see the build step above and docs/OPENRSP-BUNDLE-PLAN.md §5.2.
+#  ★ The service in MacOS/ (the notarise script signs every executable there by enumeration), the library in
+#    Frameworks/ (sdrplay_source.cpp accepts it only from there), the firmware in Resources/ (non-code files must
+#    not sit in MacOS/ — the app passes their path in SDRPLAY_OWN_FIRMWARE_DIR). "vibeserver-rspd", not
+#    SDRplay's own name: nothing here may look like their installed stack.
+mkdir -p "$APP/Contents/Frameworks" "$APP/Contents/Resources/openrsp/firmware/own"
+cp "$ORSP_SVC" "$APP/Contents/MacOS/vibeserver-rspd"
+cp "$ORSP_LIB" "$APP/Contents/Frameworks/libsdrplay_api.so.3.15"
+ln -sf libsdrplay_api.so.3.15 "$APP/Contents/Frameworks/libsdrplay_api.so.3"
+cp "$ORSP_FW/"* "$APP/Contents/Resources/openrsp/firmware/own/"
+cp "$ROOT/vendor/openrsp/COPYING" "$APP/Contents/Resources/COPYING.openrsp"
+cp "$ROOT/vendor/openrsp/VIBESDR-CHANGES" "$APP/Contents/Resources/openrsp/VIBESDR-CHANGES"
+cp "$MAC/README.openrsp" "$APP/Contents/Resources/openrsp/README.openrsp"
+( cd "$APP/Contents/Resources/openrsp/firmware/own" && shasum -a 256 -c manifest.sha256 >/dev/null ) \
+  || { echo "!! bundled RSP firmware does not match its manifest"; exit 1; }
+echo "==> bundled OpenRSP (service, library, firmware, licence)"
 
 # The web client the server hands to browsers is baked into the core, so there is nothing to copy.
 

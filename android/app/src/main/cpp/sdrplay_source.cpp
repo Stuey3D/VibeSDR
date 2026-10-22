@@ -4,6 +4,14 @@
 #ifdef VIBE_HAVE_SDRPLAY
 #include <sdrplay_api.h>
 #include <dlfcn.h>
+#include "vibe_sdrplay_lib.h"   // ★ the which-library / whose-service decision, pure and tested
+#include "vibe_rsp_caps.h"      // ★ what each model has — one table, tested (test-rsp-caps)
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>        // _NSGetExecutablePath — finding our own bundle
+#endif
+#if defined(__ANDROID__)
+#include <android/api-level.h>  // android_get_device_api_level — the RSP needs API 26
+#endif
 #include <glob.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -55,9 +63,38 @@ struct Api {
     sdrplay_api_LockDeviceApi_t     Lock = nullptr;
     sdrplay_api_UnlockDeviceApi_t   Unlock = nullptr;
     sdrplay_api_GetErrorString_t    GetErrorString = nullptr;
+#if defined(__ANDROID__)
+    // ★★ OpenRSP's EMBEDDING CALLS (sdrplay_android.h). Android has no daemon: the service core runs
+    //    inside this process, and the app hands it UsbManager fds because an app may not enumerate USB.
+    int (*AndroidServiceStart)(const char*) = nullptr;
+    int (*AndroidUsbAttach)(int, const char*) = nullptr;
+    int (*AndroidUsbDetach)(const char*, int) = nullptr;
+    int (*AndroidUsbCount)() = nullptr;
+#endif
     bool ok = false;
     bool bundled = false;   // ★ the library shipped in the package (OpenRSP), not a system install
 };
+
+#if defined(__APPLE__)
+/** ★ Our bundle's Contents directory, from the REAL path of the running executable (the app in Simple
+ *  mode, vibeserver-engine in Full mode — both live in Contents/MacOS), or "" outside a bundle. */
+static std::string macBundleContents() {
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::vector<char> raw(size + 1, '\0');
+    if (_NSGetExecutablePath(raw.data(), &size) != 0) return {};
+    char real[PATH_MAX];
+    if (!::realpath(raw.data(), real)) return {};
+    return sdrplaylib::bundleContentsOf(real);
+}
+#endif
+
+#if defined(__ANDROID__)
+/** ★ Where the app copied (and checked) OpenRSP's firmware set — filesDir/openrsp/firmware, holding own/.
+ *  Set by the app before anything opens the API; empty = the app never prepared it, so no RSP. */
+static std::mutex  g_androidFwMtx;
+static std::string g_androidFwDir;
+#endif
 
 /** ★★★ ONLY LOAD A LIBRARY ROOT OWNS (2026-10-03 security pass). dlopen() runs the library's
  *  constructors inside the server — and the Mac app is signed with disable-library-validation
@@ -96,18 +133,38 @@ static std::vector<std::string> sdrplayCandidates() {
     //    3.15.1 path. The file there is libsdrplay_api.so.3.xx, NOT .dylib: the old list named a
     //    .dylib in that directory that the installer never creates, so it had only ever worked via
     //    /usr/local/lib.
+    std::vector<std::string> sys;
     glob_t g{};
     if (::glob("/Library/SDRplayAPI/*/lib/libsdrplay_api*", 0, nullptr, &g) == 0) {
-        for (size_t i = 0; i < g.gl_pathc; i++) out.emplace_back(g.gl_pathv[i]);
+        for (size_t i = 0; i < g.gl_pathc; i++) sys.emplace_back(g.gl_pathv[i]);
     }
     ::globfree(&g);
-    std::sort(out.begin(), out.end(), std::greater<std::string>());
+    std::sort(sys.begin(), sys.end(), std::greater<std::string>());
     // ★ The installer ALSO links /usr/local/lib/libsdrplay_api.{so.3,dylib} into that directory, and
     //   an older install may have only those. Kept for that reason — but see api(): a /usr/local
     //   candidate is accepted only if it RESOLVES into /Library/SDRplayAPI/, so a planted file
     //   there is never loaded.
-    out.emplace_back("/usr/local/lib/libsdrplay_api.so.3");
-    out.emplace_back("/usr/local/lib/libsdrplay_api.dylib");
+    sys.emplace_back("/usr/local/lib/libsdrplay_api.so.3");
+    sys.emplace_back("/usr/local/lib/libsdrplay_api.dylib");
+    // ★★★ THE BUNDLED DRIVER (OpenRSP, 2026-10-22) — VibeServer.app carries its own library
+    //     (Contents/Frameworks), service (Contents/MacOS/vibeserver-rspd) and firmware, so an RSP works
+    //     with nothing else installed. Same rule as Linux, same reason: an INSTALLED SDRplay stack wins
+    //     (the app does not start its own service then — VibeServerApp.swift asks the same function),
+    //     and the bundled library is the fallback, since it speaks the same protocol to either service.
+    //  ★ Outside a bundle (the command-line vibeserver in a build tree) there is no bundled driver.
+    const std::string contents = macBundleContents();
+    std::string bundled = contents.empty() ? std::string() : contents + "/Frameworks/libsdrplay_api.so.3";
+    if (!bundled.empty() && !sdrplaylib::pathExists(bundled)) bundled.clear();
+    out = sdrplaylib::candidateOrder(sdrplaylib::macSystemStack(), bundled, sys);
+#elif defined(__ANDROID__)
+    // ★★★ ANDROID: ONLY OUR OWN, FROM THE APP'S OWN LIBRARY DIRECTORY (2026-10-22). OpenRSP's Android build
+    //     with the service EMBEDDED — there is no system SDRplay stack on a phone to defer to. A bare name
+    //     resolves in the app's linker namespace, whose search path is the APK's own lib directory, which the
+    //     platform trusts and the app cannot write — so the root-owned check below does not apply here.
+    //  ★★ NEVER LINKED, AND NEVER LOADED BELOW API 26: the library needs ASharedMemory_create (API 26), so a
+    //     DT_NEEDED on it would stop libvibelocalsdr loading at all on a Fire 7 or a 1 GB Android 7 phone.
+    //     Below 26 there is simply no RSP (the app does not list one either: VibeRsp.kt, device_filter xml-v26).
+    if (sdrplaylib::androidRspSupported(android_get_device_api_level())) out.emplace_back("libsdrplay_api.so");
 #else
     // ★★★ THE BUNDLED DRIVER (OpenRSP, 2026-10-21) — the package ships its own library, service and
     //     firmware in /usr/lib/vibeserver/openrsp, so an RSP works with nothing else installed. WHICH
@@ -121,8 +178,7 @@ static std::vector<std::string> sdrplayCandidates() {
     //  ★★ KEEP IN STEP with ConditionPathExists in linux/vibeserver-rsp.service: one question, two
     //     readers. If they ever disagreed, the server would be a client of a service that is not running.
 #if defined(VIBE_OPENRSP_LIB)
-    struct stat svc{};
-    const bool systemStack = ::stat("/opt/sdrplay_api/sdrplay_apiService", &svc) == 0;
+    const bool systemStack = sdrplaylib::linuxSystemStack();
     if (!systemStack) out.emplace_back(VIBE_OPENRSP_LIB);
 #endif
     // ★★ Linux: SDRplay's installer (install_lib.sh) puts the library in /usr/local/lib — that IS
@@ -146,28 +202,49 @@ Api& api() {
     static Api a;
     static std::once_flag once;
     std::call_once(once, [&]{
-        for (const std::string& c : sdrplayCandidates()) {
 #if defined(__APPLE__)
-            const char* prefix = c.compare(0, 20, "/Library/SDRplayAPI/") == 0 ? nullptr
-                                                                             : "/Library/SDRplayAPI/";
-#else
-            const char* prefix = nullptr;
+        const std::string contents = macBundleContents();
 #endif
-            const std::string real = trustedLibrary(c, prefix);
+        for (const std::string& c : sdrplayCandidates()) {
+#if defined(__ANDROID__)
+            // ★ See sdrplayCandidates(): the app's own lib directory, by name — nothing to resolve or own-check.
+            const std::string real = c;
+            const bool ours = true;
+#elif defined(__APPLE__)
+            // ★★ OUR OWN BUNDLE'S DRIVER is held to "its real path is inside our bundle's Frameworks"
+            //    (sdrplaylib::insideBundleFrameworks) instead of root ownership, which an app in
+            //    /Applications cannot have. Everything else keeps the root-owned check.
+            std::string real;
+            bool ours = false;
+            if (!contents.empty() && c.compare(0, contents.size(), contents) == 0) {
+                char rp[PATH_MAX];
+                if (::realpath(c.c_str(), rp) && sdrplaylib::insideBundleFrameworks(rp, contents)) {
+                    real = rp; ours = true;
+                }
+            } else {
+                const char* prefix = c.compare(0, 20, "/Library/SDRplayAPI/") == 0 ? nullptr
+                                                                                 : "/Library/SDRplayAPI/";
+                real = trustedLibrary(c, prefix);
+            }
+#else
+            const std::string real = trustedLibrary(c, nullptr);
+            const bool ours = false;
+#endif
             if (real.empty()) continue;
             a.h = dlopen(real.c_str(), RTLD_LAZY | RTLD_LOCAL);
             if (a.h) {
                 // ★ SAY WHICH ONE. With a bundled and a system stack both possible, "which driver is
                 //   this RSP on?" is the first question of any RSP report — one line, once per process.
+                a.bundled = ours;
 #if defined(VIBE_OPENRSP_LIB)
-                a.bundled = c == VIBE_OPENRSP_LIB;
+                a.bundled = a.bundled || c == VIBE_OPENRSP_LIB;
 #endif
                 std::fprintf(stderr, "sdrplay: API library %s (%s)\n", real.c_str(),
                              a.bundled ? "bundled OpenRSP" : "system");
                 break;
             }
         }
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(__ANDROID__)
         // ★ Linux only, LAST: the bare soname, resolved by ld.so through ld.so.cache — whose
         //   directories are root's configuration. Kept so a library installed somewhere the list
         //   above does not name (a distro package in an unusual multiarch dir) still works. The
@@ -190,6 +267,14 @@ Api& api() {
         a.Lock            = (sdrplay_api_LockDeviceApi_t)   sym("sdrplay_api_LockDeviceApi");
         a.Unlock          = (sdrplay_api_UnlockDeviceApi_t) sym("sdrplay_api_UnlockDeviceApi");
         a.GetErrorString  = (sdrplay_api_GetErrorString_t)  sym("sdrplay_api_GetErrorString");
+#if defined(__ANDROID__)
+        a.AndroidServiceStart = (int (*)(const char*))      sym("sdrplay_android_service_start");
+        a.AndroidUsbAttach    = (int (*)(int, const char*)) sym("sdrplay_android_usb_attach");
+        a.AndroidUsbDetach    = (int (*)(const char*, int)) sym("sdrplay_android_usb_detach");
+        a.AndroidUsbCount     = (int (*)())                 sym("sdrplay_android_usb_count");
+        // ★ Without the embedding calls there is no service to talk to, so the library is no use here.
+        if (!a.AndroidServiceStart || !a.AndroidUsbAttach || !a.AndroidUsbDetach) { a.ok = false; return; }
+#endif
         a.ok = a.Open && a.Close && a.GetDevices && a.SelectDevice && a.ReleaseDevice
             && a.GetDeviceParams && a.Init && a.Uninit && a.Update && a.Lock && a.Unlock;
     });
@@ -230,7 +315,16 @@ bool apiOpen(std::string& err) {
         //   installer into /opt and we are not permitted to redistribute it, so the package
         //   cannot pull it in and no amount of dependency declaration will help. Without the URL
         //   the message reads as "your radio is broken" rather than "one more download".
-#if defined(VIBE_OPENRSP_LIB)
+#if defined(__ANDROID__)
+        // ★ The APK carries the driver; below Android 8 (API 26) it cannot run at all, and the app does
+        //   not offer an RSP there — so reaching this means the app's own copy is missing or damaged.
+        err = sdrplaylib::androidRspSupported(android_get_device_api_level())
+            ? "The RSP driver inside the app could not be loaded. Reinstall the app."
+            : "SDRplay RSP receivers need Android 8.0 or later on this device.";
+#elif defined(__APPLE__)
+        err = "No RSP driver could be loaded. Reinstall VibeServer (it carries its own), "
+              "or install SDRplay's API from https://www.sdrplay.com/downloads, then restart VibeServer.";
+#elif defined(VIBE_OPENRSP_LIB)
         // ★ This build SHIPS the driver, so "not installed" means the package's own files are missing
         //   or damaged — reinstalling the package is the fix, not a download from anyone.
         err = "The RSP driver that comes with VibeServer could not be loaded (" VIBE_OPENRSP_LIB
@@ -244,12 +338,33 @@ bool apiOpen(std::string& err) {
     }
     std::lock_guard<std::mutex> lk(g_apiMtx);
     if (g_apiRefs > 0) { ++g_apiRefs; return true; }
+#if defined(__ANDROID__)
+    // ★★★ THE SERVICE RUNS IN THIS PROCESS, and must be up before Open (sdrplay_android.h). Idempotent:
+    //     it answers 0 when already running. The firmware directory is the app's checked copy — without
+    //     it the service would start and then fail every upload, so refuse here with the reason.
+    {
+        std::string fw;
+        { std::lock_guard<std::mutex> fl(g_androidFwMtx); fw = g_androidFwDir; }
+        if (fw.empty()) { err = "the RSP firmware has not been prepared by the app"; return false; }
+        if (api().AndroidServiceStart(fw.c_str()) != 0) {
+            err = "the RSP driver's service could not start in this app";
+            return false;
+        }
+    }
+#endif
     const sdrplay_api_ErrT e = api().Open();
     if (e != sdrplay_api_Success) {
         // ★ NAME THE SERVICE THAT IS ACTUALLY MEANT. With the bundled library that is ours.
         err = std::string("sdrplay_api_Open: ") + errStr(e)
+#if defined(__APPLE__)
+            + (api().bundled ? " (the RSP driver VibeServer runs is not answering — quit and reopen VibeServer)"
+                             : " (is the SDRplay API service running?)");
+#elif defined(__ANDROID__)
+            + " (the RSP driver inside the app is not answering)";
+#else
             + (api().bundled ? " (is vibeserver-rsp.service running? systemctl status vibeserver-rsp)"
                              : " (is the SDRplay API service running?)");
+#endif
         return false;
     }
     ++g_apiRefs;
@@ -287,6 +402,35 @@ struct SdrplaySource::Impl {
     // rather than allocated per callback — this runs on the API's streaming thread.
     std::vector<int16_t> ilv;
 };
+
+#if defined(__ANDROID__)
+// ★★ ANDROID USB HAND-OFF — see sdrplay_source.h. The app owns the device (UsbManager); we pass its fd on.
+void SdrplaySource::androidSetFirmwareDir(const std::string& dir) {
+    std::lock_guard<std::mutex> fl(g_androidFwMtx);
+    g_androidFwDir = dir;
+}
+bool SdrplaySource::androidSupported() {
+    return sdrplaylib::androidRspSupported(android_get_device_api_level()) && api().ok;
+}
+int SdrplaySource::androidAttach(int fd, const std::string& deviceName) {
+    if (!androidSupported()) return -38;   // -ENOSYS: not on this device
+    const int r = api().AndroidUsbAttach(fd, deviceName.empty() ? nullptr : deviceName.c_str());
+    std::fprintf(stderr, "sdrplay: USB attach %s fd=%d -> %d (%d registered)\n", deviceName.c_str(), fd, r,
+                 api().AndroidUsbCount ? api().AndroidUsbCount() : -1);
+    return r;
+}
+int SdrplaySource::androidDetach(const std::string& deviceName) {
+    if (!androidSupported()) return -38;
+    const int r = api().AndroidUsbDetach(deviceName.c_str(), -1);
+    std::fprintf(stderr, "sdrplay: USB detach %s -> %d\n", deviceName.c_str(), r);
+    return r;
+}
+#else
+void SdrplaySource::androidSetFirmwareDir(const std::string&) {}
+bool SdrplaySource::androidSupported() { return false; }
+int  SdrplaySource::androidAttach(int, const std::string&) { return -38; }
+int  SdrplaySource::androidDetach(const std::string&) { return -38; }
+#endif
 
 bool SdrplaySource::available() {
     std::string err;
@@ -1033,34 +1177,17 @@ int SdrplaySource::lnaStateCount(double hz) const {
     }
 }
 
-bool SdrplaySource::hasRfNotch() const {
-    switch (impl_->dev.hwVer) {
-        case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID: case SDRPLAY_RSP2_ID:
-        case SDRPLAY_RSPduo_ID: case SDRPLAY_RSPdx_ID: case SDRPLAY_RSPdxR2_ID: return true;
-        default: return false;
-    }
-}
-bool SdrplaySource::hasDabNotch() const {
-    switch (impl_->dev.hwVer) {
-        case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID:
-        case SDRPLAY_RSPduo_ID: case SDRPLAY_RSPdx_ID: case SDRPLAY_RSPdxR2_ID: return true;
-        default: return false;
-    }
-}
-bool SdrplaySource::hasBiasT() const { return hasDabNotch() || impl_->dev.hwVer == SDRPLAY_RSP2_ID; }
+// ★★ EVERY "DOES THIS MODEL HAVE IT" IS ONE TABLE NOW — vibe_rsp_caps.h, tested per model (test-rsp-caps) and held
+//    to the setup page's offline copy (check-rsp-caps.mjs). The same answers as the switches that were here.
+static_assert(SDRPLAY_RSP1_ID == rspcaps::kRsp1 && SDRPLAY_RSP1A_ID == rspcaps::kRsp1A && SDRPLAY_RSP1B_ID == rspcaps::kRsp1B
+           && SDRPLAY_RSP2_ID == rspcaps::kRsp2 && SDRPLAY_RSPduo_ID == rspcaps::kRspDuo
+           && SDRPLAY_RSPdx_ID == rspcaps::kRspDx && SDRPLAY_RSPdxR2_ID == rspcaps::kRspDxR2,
+              "vibe_rsp_caps.h's hwVer codes must be the API's");
+bool SdrplaySource::hasRfNotch() const  { return rspcaps::forHwVer(impl_->dev.hwVer).rfNotch; }
+bool SdrplaySource::hasDabNotch() const { return rspcaps::forHwVer(impl_->dev.hwVer).dabNotch; }
+bool SdrplaySource::hasBiasT() const    { return rspcaps::forHwVer(impl_->dev.hwVer).biasT; }
 
-std::string SdrplaySource::model() const {
-    switch (impl_->dev.hwVer) {
-        case SDRPLAY_RSP1_ID:    return "RSP1";
-        case SDRPLAY_RSP1A_ID:   return "RSP1A";
-        case SDRPLAY_RSP1B_ID:   return "RSP1B";
-        case SDRPLAY_RSP2_ID:    return "RSP2";
-        case SDRPLAY_RSPduo_ID:  return "RSPduo";
-        case SDRPLAY_RSPdx_ID:   return "RSPdx";
-        case SDRPLAY_RSPdxR2_ID: return "RSPdx-R2";
-        default:                 return "RSP";
-    }
-}
+std::string SdrplaySource::model() const { return rspcaps::forHwVer(impl_->dev.hwVer).model; }
 
 /** ★★★ THE TUNER'S DC OFFSET IS GAIN-DEPENDENT, SO IT MUST BE RECALIBRATED WHEN THE GAIN MOVES.
  *  The API corrects DC for us — DCenable and IQenable are both set, and dcCal defaults to 3
@@ -1478,9 +1605,7 @@ void SdrplaySource::setBiasT(bool on) {
  *  The remainder of the sweep. Every one existed in the API with no path to it from anywhere in
  *  this project. ✗ None is testable here — only RSP1A/1B on the bench.
  */
-bool SdrplaySource::hasHdr() const {
-    return impl_->dev.hwVer == SDRPLAY_RSPdx_ID || impl_->dev.hwVer == SDRPLAY_RSPdxR2_ID;
-}
+bool SdrplaySource::hasHdr() const { return rspcaps::forHwVer(impl_->dev.hwVer).hdr; }
 
 void SdrplaySource::setHdr(bool on) {
     if (!hasHdr() || !impl_->params || !impl_->params->devParams) return;
@@ -1492,7 +1617,7 @@ void SdrplaySource::setHdr(bool on) {
     std::fprintf(stderr, "sdrplay: HDR %s\n", on ? "on" : "off");
 }
 
-bool SdrplaySource::hasAmNotch() const { return impl_->dev.hwVer == SDRPLAY_RSPduo_ID; }
+bool SdrplaySource::hasAmNotch() const { return rspcaps::forHwVer(impl_->dev.hwVer).amNotch; }
 
 void SdrplaySource::setAmNotch(bool on) {
     if (!hasAmNotch() || !impl_->params || !impl_->params->rxChannelA) return;
@@ -1503,9 +1628,7 @@ void SdrplaySource::setAmNotch(bool on) {
                             sdrplay_api_Update_Ext1_None);
 }
 
-bool SdrplaySource::hasExtRefOut() const {
-    return impl_->dev.hwVer == SDRPLAY_RSP2_ID || impl_->dev.hwVer == SDRPLAY_RSPduo_ID;
-}
+bool SdrplaySource::hasExtRefOut() const { return rspcaps::forHwVer(impl_->dev.hwVer).extRef; }
 
 void SdrplaySource::setExtRefOut(bool on) {
     if (!hasExtRefOut() || !impl_->params || !impl_->params->devParams) return;
@@ -1543,6 +1666,8 @@ void SdrplaySource::setPpm(int ppm) {
  *  family, and every caller — the caps, the UI, the per-band rules — is driven by that list.
  */
 std::vector<std::string> SdrplaySource::antennaPorts() const {
+    return rspcaps::forHwVer(impl_->dev.hwVer).ports;   // ★ the table; the notes below say why each model's are what they are
+#if 0
     switch (impl_->dev.hwVer) {
         /* ★ A and B are 50Ω sockets; Hi-Z is the high-impedance AM port, which the API selects
          *  through amPortSel rather than antennaSel — a different field, same control to a user. */
@@ -1560,19 +1685,26 @@ std::vector<std::string> SdrplaySource::antennaPorts() const {
         case SDRPLAY_RSPduo_ID:  return { "Tuner 1 50\u03a9", "Tuner 1 Hi-Z", "Tuner 2 50\u03a9" };
         default:                 return {};
     }
+#endif
 }
 
 std::string SdrplaySource::antenna() const {
-    if (antennaPorts().empty()) return "";
-    return antenna_.empty() ? "A" : antenna_;      // A is every model's power-on default
+    const auto ports = antennaPorts();
+    if (ports.empty()) return "";
+    // ★ The FIRST port is every model's power-on default — "A" on an RSP2/dx, "Tuner 1 50Ω" on a Duo. This said "A"
+    //   for all of them, which on a Duo is not a port at all, so its selector came up with nothing chosen (2026-10-22).
+    return antenna_.empty() ? ports.front() : antenna_;
 }
 
-void SdrplaySource::setAntenna(const std::string& port) {
+void SdrplaySource::setAntenna(const std::string& wanted) {
     const auto ports = antennaPorts();
     if (ports.empty()) return;                     // single-socket radio: nothing to choose
     // ★ An unknown name is ignored rather than guessed at. The caller in the shim logs the
     //   choice and the ports the radio offers, which is where a mismatch is legible.
-    if (std::find(ports.begin(), ports.end(), port) == ports.end()) return;
+    // ★★ BUT A SHORT NAME THAT NAMES EXACTLY ONE PORT IS THAT PORT (sdrplaylib::resolvePort): a per-band rule
+    //    written "hf:Hi-Z" for an RSP2 now also finds "Tuner 1 Hi-Z" on a Duo, and "Tuner 2" its only socket.
+    const std::string port = sdrplaylib::resolvePort(ports, wanted);
+    if (port.empty()) return;
     antenna_ = port;                               // remembered across a re-Init — see the member
     if (!impl_->params || !impl_->params->rxChannelA) return;
     /* ★★★ UNDER api_mtx, LIKE EVERY OTHER API-TOUCHING CALL. close(), setFrequency and the gain
@@ -1869,6 +2001,10 @@ struct SdrplaySource::Impl {};
 SdrplaySource::SdrplaySource() = default;
 SdrplaySource::~SdrplaySource() = default;
 bool SdrplaySource::available() { return false; }
+void SdrplaySource::androidSetFirmwareDir(const std::string&) {}
+bool SdrplaySource::androidSupported() { return false; }
+int  SdrplaySource::androidAttach(int, const std::string&) { return -38; }
+int  SdrplaySource::androidDetach(const std::string&) { return -38; }
 int  SdrplaySource::deviceCount() { return 0; }
 bool SdrplaySource::lastListOk() { return false; }
 std::string SdrplaySource::deviceName(int) { return ""; }

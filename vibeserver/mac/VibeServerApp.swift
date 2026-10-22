@@ -1366,11 +1366,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         server.onChange = { [weak self] in self?.render() }
-        if server.autoStart && server.deviceCount > 0 { server.start() }
+        // ★★★ THE RSP DRIVER FIRST (RspDriver.swift): the auto-start below counts the radios, and an RSP is
+        //     only countable once its service is up. Started only when no SDRplay API is installed; when it is,
+        //     a short wait lets the service create its objects before that first look.
+        if RspDriver.shared.startIfWanted() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self else { return }
+                self.server.refreshDevices()   // ★ Server() first counted in init, before the driver was up
+                if self.server.autoStart && self.server.deviceCount > 0 { self.server.start() }
+                self.render()
+            }
+        } else if server.autoStart && server.deviceCount > 0 { server.start() }
         render()
     }
 
-    func applicationWillTerminate(_ note: Notification) { server.stop() }
+    // ★ The server's radios go first (they are the driver's clients), then the driver.
+    func applicationWillTerminate(_ note: Notification) { server.stop(); RspDriver.shared.stop() }
 
     // ── The menu-bar face ────────────────────────────────────────────────────
     /// Icon plus a listener COUNT, so a glance answers "is anyone using my radio?" — which matters

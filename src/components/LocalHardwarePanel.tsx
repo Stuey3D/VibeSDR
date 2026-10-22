@@ -1053,6 +1053,39 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.radio?.extRefOn ? K.gold : '#ccc'} />
                 </View>
               )}
+              {/* ★★★ BIAS-T AND PPM ON AN RSP (2026-10-22, the RSP setup audit). The server always took both
+                  (rsp_control `biast`, admin-gated; `{type:"ppm"}` → SdrplaySource::setPpm), and this panel
+                  only ever drew them for a dongle — so an RSP owner could not power an active aerial or
+                  correct the clock from the app at all. Same gate as the dongle's rows (canProtected: owner /
+                  unlocked), and bias-T only on a model that HAS one (radio.biasT — never on an RSP1). The
+                  state is the RADIO's (radio.biasTOn), never this phone's guess. */}
+              {canProtected && p.radio?.biasT && (() => {
+                // ★ A pad or key reaches it too: Enter flips it, the row carries the ring (the Seg pattern).
+                const on = slot(() => p.onRspBiasT?.(!p.radio?.biasTOn));
+                return (
+                <View style={[styles.toggleRow, on && kbNav && { borderColor: focusC.ring, borderWidth: 2, borderRadius: 8 }]}>
+                  <Text style={styles.toggleLabel}>Bias-T (antenna power)</Text>
+                  {/* nav-registered: the row above is this switch's slot (Enter toggles), ring on the row */}
+                  {p.radio?.biasTOn === undefined
+                    ? <Text style={styles.note}>not reported</Text>
+                    : <Switch value={!!p.radio?.biasTOn}
+                        onValueChange={(v) => p.onRspBiasT?.(v)}
+                        trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.radio?.biasTOn ? K.gold : '#ccc'} />}
+                </View>
+                );
+              })()}
+              {canProtected && p.ppm !== undefined && (
+                <>
+                  <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
+                  {/* nav-registered: both steppers take a slot() in their style, as the dongle's ppm row does */}
+                  <View style={styles.stepperRow}>
+                    <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) - 1)) && kbNav && { borderColor: focusC.ring, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+                    {/* nav-registered: slot() in the style below */}
+                    <Text style={styles.stepVal}>{p.ppm > 0 ? `+${p.ppm}` : p.ppm} ppm</Text>
+                    <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) + 1)) && kbNav && { borderColor: focusC.ring, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+                  </View>
+                </>
+              )}
             </>
           ) : isAsp ? (
             <>

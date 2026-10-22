@@ -1,0 +1,28 @@
+OpenRSP in VibeServer.app
+=========================
+
+This app contains OpenRSP, an independent, open-source driver stack for RSP-family receivers
+(https://openrsp.dev), so that an RSP works with VibeServer with nothing else installed:
+
+  Contents/Frameworks/libsdrplay_api.so.3.15        the API library VibeServer loads
+  Contents/MacOS/vibeserver-rspd                     the device service, run by the app while it is open
+  Contents/Resources/openrsp/firmware/own/           OpenRSP's USB bridge firmware
+
+OpenRSP is not made, endorsed or supported by SDRplay Ltd. Please report problems with it to the VibeSDR
+project, not to SDRplay. Copyright (C) 2026 the OpenRSP authors. It is free software under the GNU General
+Public License, version 3 or later: see Contents/Resources/COPYING.openrsp.
+
+Source code
+-----------
+The Corresponding Source of these files is the directory vendor/openrsp of the VibeSDR source code, at the
+release tag matching this app's version: https://github.com/Stuey3D/VibeSDR
+It is OpenRSP 3.15.2-20 (https://openrsp.dev/downloads/openrsp-3.15.2-20-src.tar.gz, SHA-256
+288828d04beb4ecb0812ee8a3635b31b539c9b1b4dbb4344e2f127fd6ec20057) with the build changes listed in
+VIBESDR-CHANGES beside this file. vibeserver/mac/build-app.sh (section "OpenRSP") shows how it is built;
+the firmware images are vendor/openrsp-firmware (see its README).
+
+If an SDRplay API is already installed
+--------------------------------------
+If SDRplay's own API is installed (/Library/SDRplayAPI, with its launch daemon), that installation keeps
+the receivers for every program on this Mac: VibeServer does not start its own service, and uses the
+installed library. Nothing of it is changed or removed. Uninstall it to use the driver in this app instead.

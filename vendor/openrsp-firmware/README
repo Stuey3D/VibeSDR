@@ -1,0 +1,22 @@
+OpenRSP bridge firmware, set "own" — the images the Mac app and the Android apps ship
+=====================================================================================
+
+What:     fw_common.bin, fw_rsp1.bin, fw_rspduo.bin + manifest.sha256 — the 8051 USB bridge firmware the
+          RSP driver uploads to the receiver at every power-up (it is never stored on the receiver).
+Source:   vendor/openrsp/firmware/src (GPL-3.0-or-later, the OpenRSP authors; see vendor/openrsp/COPYING).
+          These are BUILT FROM THAT SOURCE: `make -C vendor/openrsp/firmware/src own` with sdcc 4.2.0
+          (Debian bookworm) reproduces them byte for byte.
+Release:  identical to the images in OpenRSP's own 3.15.2-20 package (openrsp_3.15.2-20_arm64.deb, SHA-256
+          ed6961277b1019125bd517ec70e8cd17b75a26e198fc3a464b8901a98f26e58a, per openrsp.dev SHA256SUMS),
+          /usr/share/sdrplay_api/firmware/own — the images upstream tested on real receivers.
+
+★★★ WHY A PINNED COPY AND NOT A BUILD STEP (2026-10-22). The Linux packages build these from source with
+    the build image's sdcc (vibeserver/CMakeLists.txt, "OpenRSP"). The Mac and the Android Gradle build have
+    no sdcc 4.2.0: Homebrew's sdcc 4.6.0 builds the same source into DIFFERENT images (fw_common.bin
+    0171e881…, not 0508cc60…). A different compiler's firmware is firmware nobody has run on a receiver, and
+    this is the one component that talks to the RSP's USB bridge directly — so those builds ship the tested
+    images instead, and check them against this manifest at build time AND (Android) at run time.
+  ★ To re-verify: in any bookworm container, `apt install sdcc make python3`, `make -C firmware/src own
+    O=/tmp/fw` from vendor/openrsp, then `diff /tmp/fw/own_build/manifest.sha256 own/manifest.sha256`.
+  ★ On an OpenRSP update: replace vendor/openrsp, rebuild the firmware on Linux, compare its manifest with
+    the new upstream package's, then copy the images here in the same commit.

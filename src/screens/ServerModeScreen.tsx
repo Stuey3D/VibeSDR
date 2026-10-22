@@ -116,6 +116,19 @@ const RATE_OPTIONS_HRF = [
   { label: '5 MS/s',            value: 5_000_000 },
   { label: '8 MS/s (heavy)',    value: 8_000_000 },
 ];
+// ★★★ SDRplay RSP (2026-10-22, the OpenRSP driver inside the app, Android 8.0+). Mirrors supportedRates() in the shim
+// (2 – 8 MS/s) and `sdrplay` in vibe_setup_page.h's DRIVER_HW — edit together. Above 6.048 MS/s the converter gives up
+// bits (12-bit to 8.064), and a phone's DSP pays for every one of them, so the light end is marked.
+const RATE_OPTIONS_RSP = [
+  { label: 'Client-controlled',          value: 0 },
+  { label: '2 MS/s (lightest)',          value: 2_000_000 },
+  { label: '2.048 MS/s',                 value: 2_048_000 },
+  { label: '3 MS/s',                     value: 3_000_000 },
+  { label: '4 MS/s',                     value: 4_000_000 },
+  { label: '5 MS/s',                     value: 5_000_000 },
+  { label: '6 MS/s (14-bit top)',        value: 6_000_000 },
+  { label: '8 MS/s (12-bit, heavy)',     value: 8_000_000 },
+];
 // Airspy HF+ Discovery / Dual Port. ★ The radio's own list still wins once it is running —
 // this is which menu to draw, not a claim about the hardware.
 const RATE_OPTIONS_AHF = [
@@ -550,6 +563,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   useEffect(() => { void getConnectedRadio().then(setRadio); }, []);
   // ★ THREE RADIOS, THREE MENUS — not a two-way choice with a default any more.
   const rateOptionsAll = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF
+                       : radio?.driver === 'sdrplay'  ? RATE_OPTIONS_RSP
                        : radio?.driver === 'hackrf'   ? RATE_OPTIONS_HRF
                        : radio?.driver === 'airspy'   ? RATE_OPTIONS_ASP
                        : RATE_OPTIONS_RTL;
@@ -587,6 +601,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    */
   const isAhf = radio?.driver === 'airspyhf';
   const hasHwSetup = !isAhf;
+  /* ★★ AN RSP's BIAS-T IS PER MODEL: the original RSP1 has none (SdrplaySource::hasBiasT). The model is the USB product
+   *  id's (VibeRsp.modelName), known before anything is opened. Every other radio here with hardware setup has one. */
+  const isRsp = radio?.driver === 'sdrplay';
+  const hasBiasT = hasHwSetup && !(isRsp && radio?.model === 'SDRplay RSP1');
   /* ★★★ THE GAIN + AGC + IF-FILTER BLOCK IS THE DONGLE'S, AND ONLY THE DONGLE'S.
    *   Every control in it is an R820T fact: a 29-step gain TABLE (RTL_GAINS, hardcoded),
    *   VibeAGC — which does not exist for any other radio — its lock, and the IF filter, whose
@@ -603,6 +621,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   // The rate ceiling to quote in prose, so the hint cannot drift from the list above it.
   const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz'
                      : radio?.driver === 'hackrf'   ? '8 MS/s'
+                     : radio?.driver === 'sdrplay'  ? '8 MS/s'
                      : radio?.driver === 'airspy'   ? '10 MS/s'
                      : '2.4 MHz';
 
@@ -1573,7 +1592,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     converterInputHiHz: (Number(convHiMhz) || 0) * 1e6,
     // ★★ The bias-T now travels with the rest (it was a separate call after start, so a restore, an
     //    attach resume and the scan engine all ran with no DC on the aerial). Radios with none send nothing.
-    biasT: hasHwSetup ? biasT : undefined,
+    biasT: hasBiasT ? biasT : undefined,
   });
   const serverConfigRef = useRef(serverConfig);
   serverConfigRef.current = serverConfig;
@@ -2913,6 +2932,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   </TouchableOpacity>
                 ))}
               </View>
+            </>)}
+            {/* ★ ppm on an RSP too — the engine applies it there (SdrplaySource::setPpm); only direct sampling is RTL's. */}
+            {(isRtl || isRsp) && (<>
               <Text style={[styles.section, { color: C.section, fontFamily: F, marginTop: 16 }]}>FREQUENCY CORRECTION</Text>
               <TextInput value={ppm} onChangeText={(t) => { setPpm(t); AsyncStorage.setItem(K.ppm, t); }}
                 placeholder="ppm — 0 for a TCXO dongle" placeholderTextColor={C.placeholderDim} keyboardType="numbers-and-punctuation"
@@ -2960,6 +2982,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     + 'selectivity comes from the sample rate.'
                   /* ★ The R2 / Mini fell through to the HackRF's sentence below — "else means
                    *   dongle", in prose. Its gain is its own, and lives in the hardware panel. */
+                  /* ★★ And the RSP, which fell through to the HackRF's sentence too (2026-10-22). */
+                  : isRsp
+                  ? 'The RSP\'s gain is two stages — an RF (LNA) state and an IF gain reduction — run by '
+                    + 'SDRplay\'s own IF AGC with the RF stage following it. A listener sets them, and the '
+                    + 'RSP\'s notch filters, aerial socket and other front-end switches, from the hardware '
+                    + 'panel while listening; each appears only on the models that have it.'
                   : radio?.driver === 'airspy'
                   ? 'The Airspy R2 / Mini sets its gain from the hardware panel: Linear or Sensitive '
                     + 'move one preset position (0–21) along that curve, and Free sets the LNA, mixer '
@@ -2976,7 +3004,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {/* ★★★ HARDWARE, AND ONLY WHERE THERE IS ANY. See isAhf: the HF+ has no rate to choose,
                 no bias-T and a locked AGC, so it gets a sentence instead of a panel of dead
                 switches. */}
-            {hasHwSetup ? (<>
+            {hasBiasT ? (<>
               <Text style={[styles.section, { color: C.section, fontFamily: F }]}>BIAS-T</Text>
               <TouchableOpacity onPress={() => { const v = !biasT; setBiasT(v);
                                                  AsyncStorage.setItem(K.biasT, v ? '1' : '0'); }}
@@ -2990,12 +3018,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 Powers an antenna amplifier or an active loop. Leave it off for anything else — DC
                 into the wrong antenna can damage it.
               </Text>
-            </>) : (
+            </>) : isAhf ? (
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                 The Airspy HF+ has nothing to set up here — one fixed sample rate, no bias-T, and
                 its AGC stays on.
               </Text>
-            )}
+            ) : null /* ★ an RSP1: simply no bias-T, and nothing to say about it */}
 
             {/* ★★ TIME LIMIT — only earns its place on a PUBLIC receiver. */}
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>TIME LIMIT PER LISTENER</Text>

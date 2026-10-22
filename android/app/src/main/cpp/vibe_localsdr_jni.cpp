@@ -13,6 +13,7 @@
 #include <vector>
 #include <rtl-sdr.h>
 #include "local_sdr_shim.h"
+#include "sdrplay_source.h"   // ★ the RSP's Android USB hand-off
 #include "vibe_usb_recovery.h"   // ★ the gone-radio rules Kotlin reads — see nativeGiveUpOnGoneRadio
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark — see nativeRunBenchmark
 /* ★★ vibemap::setDir — where this server keeps its map pack. Android has no directory next to the
@@ -400,9 +401,37 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerSessionLimit(JNIEnv*, jobje
 //     setup done on the phone rather than a web gui/tui"). Everything below already existed on the
 //     shim and was reachable ONLY from vibeserver/main.cpp — so the engine on the phone supported
 //     it and nothing could ask for it. These are the bindings that close that gap.
-// ★ Deliberately NOT bound: the SDRplay controls (rfNotch, dabNotch, IF gain reduction, LNA
-//   state). No RSP is driven from a phone, and a control that can never apply is the "control that
-//   only works on one radio" fault in AGENTS.md.
+// ★ Not bound as setters here: the SDRplay controls (rfNotch, dabNotch, IF gain reduction, LNA state).
+//   Since 2026-10-22 an RSP IS driven from a phone (OpenRSP embedded, below), and those controls reach it the
+//   way they reach every RSP server: the listener's `rsp_control` over the server's own socket, gated by the
+//   radio's hwinfo — not a second, phone-only path.
+
+// ★★★ THE SDRplay RSP ON ANDROID (OpenRSP embedded; docs/OPENRSP-BUNDLE-PLAN.md §5.3). The app owns the USB
+//     device and hands the fd on; OpenRSP's in-process service uploads the firmware and claims the receiver.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRspSetFirmwareDir(JNIEnv* env, jobject, jstring dir) {
+    const char* c = env->GetStringUTFChars(dir, nullptr);
+    vibe::SdrplaySource::androidSetFirmwareDir(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(dir, c);
+}
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRspSupported(JNIEnv*, jobject) {
+    return vibe::SdrplaySource::androidSupported() ? JNI_TRUE : JNI_FALSE;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRspAttach(JNIEnv* env, jobject, jint fd, jstring name) {
+    const char* c = env->GetStringUTFChars(name, nullptr);
+    const int r = vibe::SdrplaySource::androidAttach((int)fd, c ? c : "");
+    if (c) env->ReleaseStringUTFChars(name, c);
+    return (jint)r;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRspDetach(JNIEnv* env, jobject, jstring name) {
+    const char* c = env->GetStringUTFChars(name, nullptr);
+    const int r = vibe::SdrplaySource::androidDetach(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(name, c);
+    return (jint)r;
+}
 
 // The limit is a GUARANTEE rather than a deadline — kept past its time until somebody waits.
 extern "C" JNIEXPORT void JNICALL
