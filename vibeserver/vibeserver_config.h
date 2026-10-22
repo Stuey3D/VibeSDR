@@ -18,6 +18,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace vsconfig {
 
@@ -687,6 +688,12 @@ struct RadioConfig {
      *    nobody to reclaim it for. */
     int    idleKickMin = 0;
     int    dabScanLabels = -1;   ///< whole-multiplex DAB label scan: -1 build default (off on 32-bit ARM), 0 off, 1 on
+    /** ★★★ KEYS THIS VERSION DOES NOT KNOW, KEPT AS WRITTEN (11.0.10-4, for "Receive beta updates"). A V12 beta
+     *  writes settings 11.x has never heard of (an Icom's port, say); an owner who unticks beta and goes back to 11
+     *  must find them all again when they tick it once more, so a load + save here never drops one. Raw JSON text:
+     *  the key as it appeared between its quotes, and its value exactly as written. Read by fromJson, written back
+     *  by toJson after the keys this version owns. Never interpreted. */
+    std::vector<std::pair<std::string, std::string>> unknownKeys;
 };
 
 /** The whole machine: what every radio shares, plus the radios themselves. */
@@ -832,6 +839,8 @@ struct ServerConfig {
     int         port = 0;      // the ONE port that leaves the machine
     bool        web = true;
     std::vector<RadioConfig> radios;
+    /** ★★★ Top-level keys this version does not know, kept as written — see RadioConfig::unknownKeys. */
+    std::vector<std::pair<std::string, std::string>> unknownKeys;
 };
 
 /** ★★★ READS BOTH FORMATS. A file with no `radios` array is today's single-radio config, and is
