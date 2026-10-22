@@ -20097,7 +20097,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             if (path == "/vibeserver/gallery.json") {
                 std::string kind;
-                for (char c : qv("kind")) if ((c >= 'a' && c <= 'z') || c == '-') kind += c;
+                // ★ Digits too (beta 4, the Lenovo): "ft8" was cut to "ft", so the FT8 tab matched nothing while ALL showed it.
+                for (char c : qv("kind")) if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') kind += c;
                 int limit = std::atoi(qv("limit").c_str());
                 if (limit <= 0 || limit > 1000) limit = 300;
                 std::string j = g.listJson(kind.substr(0, 16), (size_t)limit);
@@ -24801,6 +24802,51 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool bgYieldForListener() {
         return vibe::bg::BgRegistry::makeRoomForListener(vsDecoderSlots(), vsDecoderSlotDir());
     }
+    /** ★★ V12 beta 4 — THE ADMIN PAGE'S LINE for this radio (adminStatusJson, behind admin auth; nothing here reaches a
+     *  listener). What background decoding is doing NOW, in the tick's own terms, and the runner's per-VFO figures:
+     *    "off"      switched off, or no profile set (or a mode it cannot run beside: Icom, DAB)
+     *    "idle"     no profile covers this time of day
+     *    "waiting"  nobody here; the profile starts (moves the radio) in `startsIn` s — VFOs in range may already run
+     *    "running"  on the profile's own centre (or a LOCKED radio's window, listeners or not)
+     *    "listener" a listener is on: VFOs inside their window carry on, the rest are out of range
+     *    "paused"   a listener is on and nothing can run (switched to stop for listeners, or none in their window)
+     *    "busy"     another program has the radio (shared by time) — tried again in `retryIn` s
+     *  ★ Under bgOpMtx_, so the runner cannot be started or stopped under the read. */
+    std::string bgStatusJson() {
+        vibe::bg::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
+        bool anyone;
+        { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
+        const bool can = cfg.on && !cfg.profiles.empty() && !useIcom() && !g_dabMode.load(std::memory_order_relaxed);
+        const int want = can ? vibe::bg::activeProfile(cfg, vsBgUtcMinute()) : -1;
+        const double now = nowSecs();
+        std::lock_guard<std::mutex> op(bgOpMtx_);
+        const bool active = bgActive_.load();
+        std::string state, why;
+        double startsIn = -1, retryIn = -1;
+        if (!cfg.on || cfg.profiles.empty()) state = "off";
+        else if (!can) { state = "off"; why = useIcom() ? "not on an Icom radio" : "not while the radio is on DAB"; }
+        else if (want < 0 && !active) state = "idle";
+        else if (!active && radioReleased.load() && bgNotBefore_ > now) { state = "busy"; retryIn = bgNotBefore_ - now; }
+        else if (bgLocked()) state = active ? "running" : "waiting";
+        else if (anyone) state = active ? "listener" : "paused";
+        else if (active && bgMoved_) state = "running";
+        else {
+            state = "waiting";
+            const double since = bgEmptySince_ > 0 ? now - bgEmptySince_ : 0;
+            startsIn = std::max(0.0, vsBgWaitSec(cfg) - since);
+            if (bgNotBefore_ > now) startsIn = std::max(startsIn, bgNotBefore_ - now);
+        }
+        char b[96];
+        std::string j = "{\"state\":\"" + state + "\",\"why\":\"" + vibe::gallery::jsonEsc(why) + "\""
+                      + ",\"profile\":" + std::to_string((active ? bgProfile_ : want) + 1)
+                      + ",\"profiles\":" + std::to_string(cfg.profiles.size())
+                      + ",\"locked\":" + (bgLocked() ? "true" : "false");
+        if (startsIn >= 0) { std::snprintf(b, sizeof b, ",\"startsIn\":%.0f", startsIn); j += b; }
+        if (retryIn >= 0)  { std::snprintf(b, sizeof b, ",\"retryIn\":%.0f", retryIn); j += b; }
+        if (active) j += ",\"runner\":" + bgRun_.statusJson();
+        return j + "}";
+    }
     /** ★★ THE TICK — every two seconds, on the housekeeping thread (the one that already runs the idle park). */
     void bgTick() {
         if (stopping.load() || frontDoorOnly || decoderOnly) return;
@@ -28373,6 +28419,8 @@ std::string LocalSdrShim::adminStatusJson() {
     // ★ Say plainly that there is no shell here, so a page never has to guess whether the
     //   button is missing because the server is old or because we chose not to ship one.
     j += ",\"terminal\":false";
+    // ★★ V12 beta 4: background decoding on this radio, for the admin page's line (Impl::bgStatusJson).
+    if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"bgDecode\":" + bi->bgStatusJson();
     return j + "}";
 }
 

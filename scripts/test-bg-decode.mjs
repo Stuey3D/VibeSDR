@@ -81,8 +81,12 @@ fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
 const gdir = path.join(dir, 'data', 'gallery');
 fs.mkdirSync(gdir);
 fs.writeFileSync(path.join(gdir, '20261022-230000-navtex-518k0-abcd.txt'), 'NAVTEX · Station G · Met warning · #98\n\nZCZC GB98\nGALE WARNING\nNNNN\n');
-fs.writeFileSync(path.join(gdir, 'index.jsonl'), JSON.stringify({ f: '20261022-230000-navtex-518k0-abcd.txt', k: 'navtex', o: 'background', t: 1761174000,
+// ★ beta 4: an FT8 summary (OLDER, so it lists second) — the FT8 tab sends kind=ft8, which the server once cut to "ft"
+fs.writeFileSync(path.join(gdir, 'index.jsonl'), JSON.stringify({ f: '20261022-220000-ft8-1840k0-ef01.txt', k: 'ft8', o: 'background', t: 1761170400, hz: 1840000, m: 'usb', d: 'ft8',
+                     p: 'Profile 1', r: 'Test radio', title: 'FT8 summary · 142 spots · 23 countries' }) + '\n'
+  + JSON.stringify({ f: '20261022-230000-navtex-518k0-abcd.txt', k: 'navtex', o: 'background', t: 1761174000,
   hz: 517500, m: 'usb', d: 'navtex', p: 'Profile 1', r: 'Test radio bgdec-test', title: 'Station G · Met warning · #98' }) + '\n');   // ★ an older build wrote the serial
+fs.writeFileSync(path.join(gdir, '20261022-220000-ft8-1840k0-ef01.txt'), 'FT8 / FT4 summary\n\nSpots heard:       142\n');
 fs.writeFileSync(path.join(gdir, 'secret.txt'), 'not in the index');
 fs.writeFileSync(path.join(dir, 'data', 'config-copy.json'), 'outside the gallery');
 const clock = path.join(dir, 'clock');
@@ -165,8 +169,8 @@ try {
 
   console.log('── the gallery, over HTTP ──');
   const g = await fetch(`${H}/vibeserver/gallery.json`).then((r) => r.json());
-  ok(g.enabled === true && g.items?.length === 1 && g.items[0].title === 'Station G · Met warning · #98' && g.items[0].o === 'background',
-     `listed: ${g.items?.length} item, enabled, labelled background (${JSON.stringify(g.items?.[0] || {}).slice(0, 120)}…)`);
+  ok(g.enabled === true && g.items?.length === 2 && g.items[0].title === 'Station G · Met warning · #98' && g.items[0].o === 'background',
+     `listed: ${g.items?.length} items (newest the NAVTEX), enabled, labelled background (${JSON.stringify(g.items?.[0] || {}).slice(0, 120)}…)`);
   ok(!JSON.stringify(g).includes('bgdec-test') && g.items[0].r === 'Test radio', `★ the radio's SERIAL is nowhere in gallery.json, even on an item stored with it (r: "${g.items[0]?.r}")`);
   ok(g.limitBytes === 50 * 1024 * 1024, `the owner's size reached the server (${g.limitBytes} bytes = 50 MB)`);
   const one = await fetch(`${H}/vibeserver/gallery/file/20261022-230000-navtex-518k0-abcd.txt`);
@@ -186,6 +190,9 @@ try {
   ok(/^HTTP\/1\.1 404/.test(raw) && !raw.includes('outside the gallery'), '★ refused: a raw ../ that no browser would normalise away');
   const k = await fetch(`${H}/vibeserver/gallery.json?kind=rtty`).then((r) => r.json());
   ok(Array.isArray(k.items) && k.items.length === 0, 'filtered by decoder: no RTTY yet');
+  const k8 = await fetch(`${H}/vibeserver/gallery.json?kind=ft8`).then((r) => r.json());
+  ok(Array.isArray(k8.items) && k8.items.length === 1 && k8.items[0].k === 'ft8' && /142 spots/.test(k8.items[0].title),
+     `★ kind=ft8 (the FT8 tab) returns the FT8 summary — the digit is kept (${k8.items && k8.items.length})`);
 
   console.log('── the config API: the profiles round-trip; the save refuses what cannot work, in words ──');
   const got = await fetch(`${H}/vibeserver/config?${await adminQ()}`).then((r) => r.json());

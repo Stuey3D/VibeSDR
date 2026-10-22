@@ -327,6 +327,13 @@ inline double greatCircleKm(double la1, double lo1, double la2, double lo2) {
 class Ft8SummaryTap : public DecoderTap {
 public:
     static constexpr size_t kMaxCalls = 20000;
+    /** ★★ V12 beta 4: the run's ONE item is rewritten in place this often while the run goes on (Stuart's owner saw
+     *  "no ft8 decodes" on a 1840 kHz VFO running all evening — the summary was only written at the run's end or at UTC
+     *  midnight). Every 10 min (the owner: "it's only a summary, so the writes are tiny"), and ONLY when the counts
+     *  changed since the last write (dirty_). Atomic: Store::replace writes a temp file and renames it over the item,
+     *  and the index the same way, so a power cut mid-write leaves the previous card whole. A crash loses at most the
+     *  last 10 min. Still written at the end and at UTC midnight. */
+    static constexpr int64_t kPeriodSec = 10 * 60;
     Ft8SummaryTap(gallery::Store& store, gallery::Meta meta, double lat, double lon)
         : store_(store), meta_(std::move(meta)), lat_(lat), lon_(lon) { reset(gallery::nowUtc()); }
     ~Ft8SummaryTap() override { finish(true); }
@@ -335,7 +342,7 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         if (done_ || call.empty()) return;
         const int64_t now = gallery::nowUtc();
-        if (now / 86400 != from_ / 86400) { write(now); reset(now); }
+        if (now / 86400 != from_ / 86400) { write(now, true); reset(now); }
         ++spots_; (ft4 ? ft4_ : ft8_)++;
         const std::string ctry = callsign::country(call);
         if (calls_.size() < kMaxCalls && !calls_.count(call)) {
@@ -343,18 +350,32 @@ public:
             if (!ctry.empty()) countryCalls_[ctry]++;
         }
         if (!ctry.empty()) countrySpots_[ctry]++;
+        if (meta_.liveSpots) meta_.liveSpots->store(spots_, std::memory_order_relaxed);
+        if (meta_.liveCountries) meta_.liveCountries->store(countrySpots_.size(), std::memory_order_relaxed);
+        dirty_ = true;
         double la, lo;
         if (std::isfinite(lat_) && std::isfinite(lon_) && gridToLatLon(grid, la, lo)) {
             const double km = greatCircleKm(lat_, lon_, la, lo);
             if (km > farKm_) { farKm_ = km; farCall_ = call; farGrid_ = grid; farCountry_ = ctry; }
         }
     }
+    /** ★ The decode thread's clock: midnight (a quiet band still closes its day) and the 10-minute rewrite. */
+    void tick() override {
+        std::lock_guard<std::mutex> lk(m_);
+        if (done_) return;
+        const int64_t now = gallery::nowUtc();
+        if (now / 86400 != from_ / 86400) { write(now, true); reset(now); return; }
+        if (dirty_ && now - lastWrite_ >= kPeriodSec) write(now, false);
+    }
     void finish(bool) override {
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;
         done_ = true;
-        write(gallery::nowUtc());
+        write(gallery::nowUtc(), true);
     }
+    /** ★ Test seam: the periodic rewrite, now. */
+    void writeNowForTest() { std::lock_guard<std::mutex> lk(m_); if (dirty_) write(gallery::nowUtc(), false); }
+    std::string itemName() const { std::lock_guard<std::mutex> lk(m_); return name_; }
     /** The record as text — what the gallery item holds (public for the test). */
     std::string text(int64_t to) const {
         std::string o = "FT8 / FT4 summary \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " USB \xc2\xb7 "
@@ -392,8 +413,14 @@ private:
     void reset(int64_t now) {
         from_ = now; spots_ = ft8_ = ft4_ = 0; calls_.clear(); countrySpots_.clear(); countryCalls_.clear();
         farKm_ = 0; farCall_.clear(); farGrid_.clear(); farCountry_.clear();
+        name_.clear(); lastWrite_ = now; dirty_ = false;
+        if (meta_.liveSpots) meta_.liveSpots->store(0, std::memory_order_relaxed);
+        if (meta_.liveCountries) meta_.liveCountries->store(0, std::memory_order_relaxed);
     }
-    void write(int64_t now) {
+    /** Write the run's item: the first time a new one (held open, so it is not evicted mid-run), after that the SAME
+     *  one in place. `last`: the run (or its UTC day) is over — the item is closed. */
+    void write(int64_t now, bool last) {
+        lastWrite_ = now;
         if (spots_ == 0) return;
         gallery::Meta m = meta_;
         m.utc = from_;
@@ -401,7 +428,13 @@ private:
         std::snprintf(t, sizeof t, "FT8 summary \xc2\xb7 %lu spots \xc2\xb7 %zu countries%s%s", spots_, countrySpots_.size(),
                       farKm_ > 0 ? " \xc2\xb7 furthest " : "", farKm_ > 0 ? (farCountry_.empty() ? farCall_ : farCountry_).c_str() : "");
         m.title = t;
-        store_.add(m, "txt", text(now));
+        const std::string body = text(now);
+        if (name_.empty() || !store_.replace(name_, m, body)) {
+            if (!name_.empty()) store_.close(name_);
+            name_ = store_.create(m, "txt", body);
+        }
+        dirty_ = false;
+        if (last && !name_.empty()) { store_.close(name_); name_.clear(); }
     }
     gallery::Store& store_;
     gallery::Meta meta_;
@@ -414,6 +447,9 @@ private:
     std::map<std::string, unsigned long> countrySpots_, countryCalls_;
     double farKm_ = 0;
     std::string farCall_, farGrid_, farCountry_;
+    std::string name_;            // ★ the run's item, once written — rewritten in place after that
+    int64_t lastWrite_ = 0;
+    bool dirty_ = false;
 };
 
 /** ★ One factory for every decoder's gallery copy — background decoding's and a listener's alike. */
@@ -620,7 +656,8 @@ public:
                 const std::string tag = "VFO " + std::to_string(i + 1) + " (" + khz(v.hz) + ")";
                 auto lo_ = listenerOnFlag_;
                 const double la0 = p_.lat, lo0 = p_.lon;
-                env.tap = [st, v, pi, lg, tag, lo_, la0, lo0](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
+                auto last = c->lastItem;
+                env.tap = [st, v, pi, lg, tag, lo_, la0, lo0, last](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
                     gallery::Meta m;
                     m.kind = galleryKindFor(ext, msg);
                     if (m.kind.empty()) return nullptr;
@@ -628,15 +665,18 @@ public:
                     m.profile = "Profile " + std::to_string(pi + 1);
                     m.listenerOn = lo_;
                     m.lat = la0; m.lon = lo0;
+                    m.lastItemAt = last;
                     return makeGalleryTap(*st, m, nullptr, lg, tag);
                 };
                 const double la = p_.lat, lo = p_.lon;
                 auto lo2 = listenerOnFlag_;
-                env.spotTap = [st, v, pi, la, lo, lo2]() -> DecoderTapPtr {
+                auto last2 = c->lastItem; auto ls = c->liveSpots, lc = c->liveCountries;
+                env.spotTap = [st, v, pi, la, lo, lo2, last2, ls, lc]() -> DecoderTapPtr {
                     gallery::Meta m;
                     m.kind = "ft8"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "ft8";
                     m.profile = "Profile " + std::to_string(pi + 1);
                     m.listenerOn = lo2;
+                    m.lastItemAt = last2; m.liveSpots = ls; m.liveCountries = lc;
                     return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
                 };
             }
@@ -644,6 +684,7 @@ public:
             chans_.push_back(std::move(c));
         }
         startedAt_ = std::time(nullptr);
+        { std::lock_guard<std::mutex> ck(cpuMtx_); cpu_.clear(); }   // ★ new channels, new counters: the CPU window starts again
         listenerOnFlag_->store(p_.listenerOn);
         startDecoders();
         publish();
@@ -730,6 +771,58 @@ public:
         qcv_.notify_one();
     }
 
+    /** ★★ V12 beta 4 — THE ADMIN PAGE'S LINE (admin only; LocalSdrShim::adminStatusJson). Per VFO: running / paused (and
+     *  why) / out of the radio's window, the decoder's lock, the last item written, and its CPU as % of ONE core,
+     *  averaged over ~10 s. ★ Measured, never estimated: every figure is a thread reading its own CPU clock around its own
+     *  work (vibeThreadCpuNs) — the worker around the shared FFT and each VFO's cut + demodulator, each decode thread
+     *  around its decoder — so the counters cost two clock reads per block and nothing samples anything until the page
+     *  asks (it polls every 2 s while open). The channeliser's FFT serves every VFO at once: it is reported as
+     *  "channels", never shared out by guesswork. "cpuPct": null until two samples ≥ 1 s apart exist. */
+    std::string statusJson() {
+        std::lock_guard<std::mutex> cl(chanMtx_);
+        std::lock_guard<std::mutex> ck(cpuMtx_);
+        const auto now = std::chrono::steady_clock::now();
+        CpuSample cur{ now, sharedNs_.load(std::memory_order_relaxed), {} };
+        for (auto& c : chans_) cur.vfo.push_back(c->demodNs.load(std::memory_order_relaxed) + (c->host ? c->host->cpuNs() : 0));
+        if (!cpu_.empty() && cpu_.back().vfo.size() != cur.vfo.size()) cpu_.clear();   // ★ a restart: new VFOs
+        if (cpu_.empty() || now - cpu_.back().t >= std::chrono::milliseconds(1500)) cpu_.push_back(cur);
+        while (cpu_.size() > 2 && now - cpu_[1].t >= std::chrono::seconds(10)) cpu_.pop_front();
+        const CpuSample* base = nullptr;
+        if (!cpu_.empty() && now - cpu_.front().t >= std::chrono::seconds(1)) base = &cpu_.front();
+        const double wallNs = base ? (double)std::chrono::duration_cast<std::chrono::nanoseconds>(now - base->t).count() : 0;
+        auto pct = [&](uint64_t a, uint64_t b) -> std::string {
+            if (!base || wallNs <= 0) return "null";
+            char t[32]; std::snprintf(t, sizeof t, "%.2f", 100.0 * (double)(a >= b ? a - b : 0) / wallNs); return t;
+        };
+        std::string j = "{\"running\":" + std::string(running_.load() ? "true" : "false")
+            + ",\"profile\":" + std::to_string(p_.profileIdx + 1)
+            + ",\"centreHz\":" + std::to_string((long long)std::llround(p_.centreHz))
+            + ",\"inRangeOnly\":" + (p_.inRangeOnly ? "true" : "false")
+            + ",\"listenerOn\":" + (p_.listenerOn ? "true" : "false");
+        uint64_t sumNow = cur.shared, sumBase = base ? base->shared : 0;
+        j += ",\"channelsCpuPct\":" + pct(cur.shared, sumBase) + ",\"vfos\":[";
+        for (size_t i = 0; i < chans_.size(); i++) {
+            const auto& c = *chans_[i];
+            const DecoderDef* d = decoderDef(c.vfo.dec);
+            const std::string state = !c.inWindow ? "out" : c.decoding ? "running" : "paused";
+            const int fs = c.decoding && c.host ? c.host->fskState() : -1;
+            const char* lock = fs < 0 ? "" : fs == 3 ? "locked" : fs == 0 ? "no signal" : "hunting";
+            sumNow += cur.vfo[i]; if (base) sumBase += base->vfo[i];
+            char hz[32]; std::snprintf(hz, sizeof hz, "%.0f", c.vfo.hz);
+            if (i) j += ",";
+            j += std::string("{\"hz\":") + hz + ",\"dec\":\"" + gallery::jsonEsc(c.vfo.dec) + "\",\"label\":\"" + gallery::jsonEsc(d ? d->label : c.vfo.dec)
+               + "\",\"state\":\"" + state + "\",\"why\":\"" + gallery::jsonEsc(state == "paused" ? c.pauseWhy : std::string())
+               + "\",\"lock\":\"" + lock + "\",\"last\":" + std::to_string((long long)c.lastItem->load(std::memory_order_relaxed))
+               + ",\"cpuPct\":" + pct(cur.vfo[i], base ? base->vfo[i] : 0)
+               // ★ FT8/FT4: the summary's running count, so a quiet card is not read as "no decodes"
+               + (d && !*d->ext ? ",\"spots\":" + std::to_string((unsigned long long)c.liveSpots->load(std::memory_order_relaxed))
+                                + ",\"countries\":" + std::to_string((unsigned long long)c.liveCountries->load(std::memory_order_relaxed)) : std::string())
+               + "}";
+        }
+        j += "],\"cpuPct\":" + pct(sumNow, sumBase) + "}";
+        return j;
+    }
+
 
 private:
     struct Chan {
@@ -743,6 +836,13 @@ private:
         bool decoding = false;
         bool inWindow = true;    // ★ inside what the radio captures now (a listener's dial may have moved it away)
         uint64_t lastDrop = 0;
+        // ★ V12 beta 4, the admin page: this VFO's demodulator CPU (the worker's own clock around its cut and feed),
+        //   when its decoder last wrote an item, and why it is paused if it is.
+        std::atomic<uint64_t> demodNs{0};
+        std::shared_ptr<std::atomic<int64_t>> lastItem = std::make_shared<std::atomic<int64_t>>(0);
+        std::shared_ptr<std::atomic<uint64_t>> liveSpots = std::make_shared<std::atomic<uint64_t>>(0),
+                                               liveCountries = std::make_shared<std::atomic<uint64_t>>(0);
+        std::string pauseWhy;
     };
     /** Cut this VFO's channel against the current centre, and say whether it is inside the window at all. */
     void place(Chan& c) {
@@ -767,7 +867,7 @@ private:
         started_ = 0;
         for (auto& c : chans_) {
             if (!c->inWindow) continue;
-            if (runningCount() >= budget()) { say("background decoding: VFO " + name(*c) + " waiting \xe2\x80\x94 every user slot of this radio is taken (listeners come first)"); continue; }
+            if (runningCount() >= budget()) { c->pauseWhy = "waiting \xe2\x80\x94 every user slot of this radio is taken (listeners come first)"; say("background decoding: VFO " + name(*c) + " waiting \xe2\x80\x94 every user slot of this radio is taken (listeners come first)"); continue; }
             startOne(*c);
             if (c->decoding) ++started_;
             else say("background decoding: VFO " + name(*c) + " waiting \xe2\x80\x94 no decoder slot free (listeners come first)");
@@ -779,6 +879,7 @@ private:
         // ★ FT8/FT4 is the host's spotter (its own slot), every other decoder its audio-extension decoder.
         const auto r = *d->ext ? c.host->start(d->ext, attachMsg(c.vfo)) : c.host->startSpots();
         c.decoding = r == DecoderHost::Start::Ok || r == DecoderHost::Start::Joined;
+        c.pauseWhy = c.decoding ? "" : "waiting for a decoder slot (listeners come first)";
     }
     /** ★ Pause one VFO for a listener: its decoder stops — the tap WRITES what it held (an RTTY buffer; a chart or
      *  picture in progress as PARTIAL) — and its slot is free. The channel keeps running, decoder-less (the host takes
@@ -787,6 +888,7 @@ private:
         if (!c.host || !c.decoding) return;
         c.host->stop(); c.host->stopSpots();
         c.decoding = false;
+        c.pauseWhy = why;
         say("background decoding: VFO " + name(c) + " paused \xe2\x80\x94 " + why);
     }
     std::string name(const Chan& c) const {
@@ -878,14 +980,22 @@ private:
             if (buf.empty()) continue;
             if (gap) for (auto& c : chans_) c->rx->noteInputGap();
             std::lock_guard<std::mutex> cl(chanMtx_);
+            // ★ V12 beta 4: what this thread costs, on its OWN clock — the shared FFT, and each VFO's cut + demodulator.
+            const uint64_t t0 = vibeThreadCpuNs();
+            uint64_t perVfo = 0;
             chan_->feed(buf.data(), (int)buf.size(), [&](const cf32* bins, int) {
                 const long long bi = chan_->blockIndex();
                 for (auto& c : chans_) {
                     if (!c->decoding) continue;          // ★ a paused or out-of-window channel costs nothing
+                    const uint64_t a = vibeThreadCpuNs();
                     const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
                     if (got > 0) c->rx->feed(c->slice.data(), got);
+                    const uint64_t d = vibeThreadCpuNs() - a;
+                    c->demodNs.fetch_add(d, std::memory_order_relaxed); perVfo += d;
                 }
             });
+            const uint64_t all = vibeThreadCpuNs() - t0;
+            sharedNs_.fetch_add(all > perVfo ? all - perVfo : 0, std::memory_order_relaxed);
         }
     }
 
@@ -908,6 +1018,10 @@ private:
     uint64_t lastIqDrop_ = 0;
     std::time_t startedAt_ = 0;
     int started_ = 0;
+    std::atomic<uint64_t> sharedNs_{0};   // ★ the worker's channeliser (one FFT for every VFO) — not any one VFO's
+    struct CpuSample { std::chrono::steady_clock::time_point t; uint64_t shared; std::vector<uint64_t> vfo; };
+    std::deque<CpuSample> cpu_;           // ★ statusJson's ~10 s window: at most 7 samples, taken only when asked
+    std::mutex cpuMtx_;
 };
 
 } // namespace bg

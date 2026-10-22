@@ -145,6 +145,11 @@ struct Meta {
     /** ★ V12 beta 4: THIS server's position (NaN = none set) — with the dial, what names a NAVTEX station
      *  (vibe_navtex_stations.h). Not written to the index. */
     double      lat = NAN, lon = NAN;
+    /** ★ V12 beta 4: stamped (UTC seconds) whenever this meta's decoder writes a new item — the admin page's "last
+     *  message 22:53" for a background VFO. */
+    std::shared_ptr<std::atomic<int64_t>> lastItemAt;
+    /** ★ V12 beta 4: an FT8/FT4 summary's running count — spots and countries so far — for the admin page's live line. */
+    std::shared_ptr<std::atomic<uint64_t>> liveSpots, liveCountries;
 };
 
 // ── The store ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -228,6 +233,32 @@ public:
         struct stat st{};
         if (::stat((dir + "/" + name).c_str(), &st) != 0) return false;
         if (!writeFile(dir + "/" + name, text, true)) return false;
+        evictLocked(dir, limit, openNames());
+        return true;
+    }
+    /** ★★ V12 beta 4: an item REWRITTEN IN PLACE (the FT8 summary every 10 min: one card per run, not one per
+     *  rewrite). The file is replaced whole (tmp + rename, so a reader never sees half of it) and its index line takes the
+     *  new title where it stands. False when it is gone (evicted, the folder cleared) — the caller starts a new one. */
+    bool replace(const std::string& name, const Meta& m, const std::string& body) {
+        if (!safeName(name)) return false;
+        std::string dir; uint64_t limit; std::string radio;
+        { std::lock_guard<std::mutex> lk(m_); dir = dir_; limit = limit_; radio = radio_; }
+        if (dir.empty() || limit == 0) return false;
+        Lock fl(dir);
+        std::vector<std::string> lines = readIndex(dir);
+        size_t at = lines.size();
+        for (size_t i = 0; i < lines.size(); i++) if (lineStr(lines[i], "f") == name) { at = i; break; }
+        struct stat st{};
+        if (at == lines.size() || ::stat((dir + "/" + name).c_str(), &st) != 0) return false;
+        const std::string tmpf = dir + "/." + name + ".tmp";
+        if (!writeFile(tmpf, body, false) || ::rename(tmpf.c_str(), (dir + "/" + name).c_str()) != 0) { ::unlink(tmpf.c_str()); return false; }
+        std::string l = indexLine(m, name, radio);
+        if (!l.empty() && l.back() == '\n') l.pop_back();
+        lines[at] = l;
+        std::string all; for (auto& x : lines) all += x + "\n";
+        const std::string tmp = dir + "/index.jsonl.tmp";
+        if (writeFile(tmp, all, false)) ::rename(tmp.c_str(), (dir + "/index.jsonl").c_str());
+        if (m.lastItemAt) m.lastItemAt->store(nowUtc(), std::memory_order_relaxed);
         evictLocked(dir, limit, openNames());
         return true;
     }
@@ -370,13 +401,18 @@ private:
         return out;
     }
     static void appendIndex(const std::string& dir, const Meta& m, const std::string& name, const std::string& radio) {
+        if (m.lastItemAt) m.lastItemAt->store(nowUtc(), std::memory_order_relaxed);
+        const std::string l = indexLine(m, name, radio);
+        writeFile(dir + "/index.jsonl", l, true) || writeFile(dir + "/index.jsonl", l, false);
+    }
+    static std::string indexLine(const Meta& m, const std::string& name, const std::string& radio) {
         char hz[32]; std::snprintf(hz, sizeof hz, "%.0f", m.freqHz);
         std::string l = "{\"f\":\"" + jsonEsc(name) + "\",\"k\":\"" + jsonEsc(m.kind) + "\",\"o\":\"" + jsonEsc(m.origin)
             + "\",\"t\":" + std::to_string((long long)(m.utc ? m.utc : nowUtc())) + ",\"hz\":" + hz
             + ",\"m\":\"" + jsonEsc(m.mode) + "\",\"d\":\"" + jsonEsc(m.decoder) + "\",\"p\":\"" + jsonEsc(printable(m.profile, 40))
             + "\",\"r\":\"" + jsonEsc(radio) + "\",\"title\":\"" + jsonEsc(printable(m.title, 120)) + "\""
             + (m.partial ? ",\"partial\":true" : "") + (m.listenerOn && m.listenerOn->load() ? ",\"wl\":true" : "") + "}\n";
-        writeFile(dir + "/index.jsonl", l, true) || writeFile(dir + "/index.jsonl", l, false);
+        return l;
     }
     /** ★★ OLDEST OUT until the gallery fits — never one of `keep` (the item just written, an RTTY run still open). The
      *  index is REWRITTEN (tmp + rename) without what went, and lines whose file has vanished are dropped with them. */

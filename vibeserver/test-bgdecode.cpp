@@ -12,6 +12,8 @@
 //      appended in pieces (never per character).
 //    · end to end without a server: synthetic IQ with a NAVTEX station at 518 kHz, centre 500 kHz, through BgRunner's
 //      channelizer + demodulators + decoders → a NAVTEX message in the gallery, from a USB VFO AND an LSB VFO.
+#include <dirent.h>
+#include <sys/stat.h>
 #include "vibe_bgdecode.h"
 
 #include <cmath>
@@ -584,9 +586,52 @@ static void phase2() {
     }
 }
 
+// ── 7b. ★ V12 beta 4: the FT8 summary is rewritten IN PLACE every 10 min while the run goes on — one card per run ────
+static void ft8Periodic() {
+    std::printf("── FT8 summary: one item per run, rewritten in place (atomically), only when the counts changed ──\n");
+    gallery::Store s; s.setDir(tmpDir("ft8p"));
+    gallery::Meta m; m.kind = "ft8"; m.origin = "background"; m.freqHz = 1840000; m.mode = "usb"; m.decoder = "ft8";
+    m.liveSpots = std::make_shared<std::atomic<uint64_t>>(0); m.liveCountries = std::make_shared<std::atomic<uint64_t>>(0);
+    auto count = [&] { size_t n = 0; const std::string l = s.listJson("ft8", 50); for (size_t at = 0; (at = l.find("\"f\":", at)) != std::string::npos; at++) n++; return n; };
+    bg::Ft8SummaryTap t(s, m, 52.3125, -0.875);
+    t.spot(false, "G4IRX", "IO92", -5, 1840500); t.spot(false, "DL1ABC", "JO31", -12, 1841000); t.spot(false, "EA4XYZ", "IN80", -15, 1841200);
+    ok(m.liveSpots->load() == 3 && m.liveCountries->load() == 3, "★ the live count for the admin line: 3 spots, 3 countries (" + std::to_string(m.liveSpots->load()) + ", " + std::to_string(m.liveCountries->load()) + ")");
+    ok(count() == 0, "nothing written before the first 10 minutes");
+    t.writeNowForTest();
+    const std::string name = t.itemName();
+    ok(count() == 1 && !name.empty() && s.listJson("ft8", 5).find("3 spots") != std::string::npos, "★ the first rewrite: ONE item, \"3 spots\"");
+    std::string path, ct; s.resolve(name, path, ct);
+    struct stat st1{}; ::stat(path.c_str(), &st1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    t.writeNowForTest();
+    struct stat st2{}; ::stat(path.c_str(), &st2);
+    ok(st1.st_mtime == st2.st_mtime && st1.st_ino == st2.st_ino, "★ counts unchanged → not rewritten");
+    t.spot(true, "OH2XX", "KP20", -8, 1842000);
+    t.writeNowForTest();
+    struct stat st3{}; ::stat(path.c_str(), &st3);
+    const std::string l2 = s.listJson("ft8", 5);
+    ok(count() == 1 && t.itemName() == name && l2.find("4 spots") != std::string::npos && l2.find("4 countries") != std::string::npos,
+       "★ more spots → the SAME item rewritten: one card, \"4 spots · 4 countries\"");
+    ok(st3.st_ino != st1.st_ino, "...replaced by a rename (a new inode — never written over in place)");
+    { DIR* d = ::opendir(s.dir().c_str()); bool tmp = false; while (dirent* e = d ? ::readdir(d) : nullptr) if (std::string(e->d_name).find(".tmp") != std::string::npos) tmp = true; if (d) ::closedir(d);
+      ok(!tmp, "no temp file left behind"); }
+    t.finish(false);
+    const std::string l3 = s.listJson("ft8", 5);
+    ok(count() == 1 && l3.find(name) != std::string::npos, "★ the run's end writes the same item, still one card");
+    { std::string body; FILE* f = std::fopen(path.c_str(), "r"); char b[4096]; size_t n; while (f && (n = std::fread(b, 1, sizeof b, f)) > 0) body.append(b, n); if (f) std::fclose(f);
+      ok(body.find("Spots heard:       4") != std::string::npos, "the card holds the whole run's figures"); }
+    // ★ the item went (the owner cleared the folder) — the next write starts a new one, it never fails silently
+    bg::Ft8SummaryTap t2(s, m, NAN, NAN);
+    t2.spot(false, "G4IRX", "IO92", -5, 1840500); t2.writeNowForTest();
+    const std::string n2 = t2.itemName(); std::string p2; s.resolve(n2, p2, ct); ::unlink(p2.c_str());
+    t2.spot(false, "M0ABC", "IO91", -5, 1840500); t2.writeNowForTest();
+    ok(!t2.itemName().empty() && t2.itemName() != n2, "an item removed under a run → the next write makes a new one");
+}
+
 int main() {
     config();
     phase2();
+    ft8Periodic();
     sideband();
     navtexAsm();
     store();

@@ -525,6 +525,7 @@ if node --no-warnings scripts/test_navtex.ts >/dev/null; then pass=$((pass+1)); 
 # ★★ NAVTEX STATIONS (V12 beta 4): scripts/navtex-stations/navtex-stations.json (NGA Pub. 117) → the clients' and the
 #    server's readers through scripts/gen-navtex-stations.mjs — stale output fails here. The rule's cases are in
 #    test_navtex.ts above and vibeserver/test-bgdecode.cpp.
+if node --no-warnings scripts/test_admin_bg.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_admin_bg.ts"; fi
 if node scripts/gen-navtex-stations.mjs --check >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/gen-navtex-stations.mjs --check (stale — run it)"; fi
 if bash scripts/test-rtty-auto.sh >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test-rtty-auto.sh"; fi
 if node --no-warnings scripts/test_tune_hint.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_tune_hint.ts"; fi
@@ -720,6 +721,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     off it stops as before; a locked radio is never moved, starts at once, gives up user slots to real listeners. ~60 s.
 printf '\n\033[1m── background decoding in range while listeners are on, and on locked radios (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-inrange.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE ADMIN PAGE'S BACKGROUND-DECODING LINE (V12 beta 4): waiting → running with MEASURED CPU per VFO and for the
+#    channeliser → carrying on with a listener → a VFO paused for a listener's decoder, and why → paused; an FT8 VFO's
+#    live spot count; none of it without the admin password. ~40 s. The wording: scripts/test_admin_bg.ts.
+printf '\n\033[1m── background decoding: the admin line (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-admin.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ …AND SHARED BY TIME WITH "LET ANOTHER PROGRAM USE THIS RADIO" (Stuart, 2026-10-22): outside the profile hours the
 #     release works as set; at the start a released radio is taken back; never released during them; at the end the

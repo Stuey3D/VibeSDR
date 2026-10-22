@@ -64,6 +64,7 @@
 
 #include <fcntl.h>
 #include <sys/file.h>
+#include <time.h>
 #include <unistd.h>
 
 namespace vibe {
@@ -177,6 +178,15 @@ private:
 
 /** The words a listener sees when the box is full. ONE definition: the server sends it and every
  *  client shows it verbatim, so the web client, the app and Jr cannot drift apart on it. */
+/** ★ V12 beta 4: CPU time THIS thread has used, ns (CLOCK_THREAD_CPUTIME_ID — Linux, Android, macOS ≥ 10.12, iOS). Read
+ *  by the thread itself around its own work, so nothing samples another thread's clock: the admin page's "% of one
+ *  core" for background decoding (BgRunner::statusJson). 0 where the clock is missing. */
+inline uint64_t vibeThreadCpuNs() {
+    timespec ts{};
+    if (::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
 inline std::string decoderLimitMessage(int max) {
     return "All " + std::to_string(max) + (max == 1 ? " decoder slot" : " decoder slots")
          + " on this server " + (max == 1 ? "is" : "are") + " in use \xe2\x80\x94 try again shortly.";
@@ -402,6 +412,10 @@ public:
     }
     uint64_t fedSamples() const { return fed_.load(std::memory_order_relaxed); }
     uint64_t droppedSamples() const { return dropped_.load(std::memory_order_relaxed); }
+    /** ★ V12 beta 4: the decode thread's CPU, ns, since this host was made (its own clock, read around each block). */
+    uint64_t cpuNs() const { return cpuNs_.load(std::memory_order_relaxed); }
+    /** ★ The FSK decoder's state as it last said (0 no signal, 1–2 hunting, 3 locked — the 0x03 op); -1 = none running. */
+    int fskState() const { return fskState_.load(std::memory_order_relaxed); }
     /** Frames waiting for the decode thread — a feeder that must NOT lose audio (a test, the
      *  benchmark) paces itself on this; the server never does, it drops. */
     size_t queued() { std::lock_guard<std::mutex> lk(qM_); return qFrames_; }
@@ -514,6 +528,7 @@ private:
           if (t) t->finish(running_()); }
         delete fsk_;   fsk_ = nullptr;
         delete rttyAuto_; rttyAuto_ = nullptr;
+        fskState_.store(-1, std::memory_order_relaxed);
         delete wefax_; wefax_ = nullptr;
         delete sstv_;  sstv_ = nullptr;
         delete time_;  time_ = nullptr;
@@ -643,12 +658,13 @@ private:
              *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
              *  into the text. A client that sends "auto" also sends a preset's values, which an older server simply uses. */
             rttyAuto_ = new RttyAuto(48000);
+            fskState_.store(0, std::memory_order_relaxed);
             rttyAuto_->onChar = [this](char32_t ch) {
                 std::lock_guard<std::mutex> bl(textMtx_);
                 if (ch < 0x80) textBuf_.push_back((char)ch);
                 else if (ch < 0x800) { textBuf_.push_back((char)(0xC0 | (ch >> 6))); textBuf_.push_back((char)(0x80 | (ch & 0x3F))); }
             };
-            rttyAuto_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+            rttyAuto_->onState = [this](int st) { fskState_.store(st, std::memory_order_relaxed); uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
             // ★ 0x06 | i16 BE: the tuning guide, in AUDIO Hz (+ = the tones should go up in pitch); 0 = clear.
             rttyAuto_->onTuneHint = [this](int hz) {
                 const int16_t v = (int16_t)std::max(-32000, std::min(32000, hz));
@@ -666,13 +682,14 @@ private:
             std::string enc = str(msg, "encoding"); if (enc.empty()) enc = navtex ? "CCIR476" : "ITA2";
             std::string framing = str(msg, "framing"); if (framing.empty()) framing = navtex ? "4/7" : "5N1.5";
             fsk_ = new FskDecoder(48000, cf, sh, baud, framing, enc, inv);
+            fskState_.store(0, std::memory_order_relaxed);
             if (msg.find("\"usos\":true") != std::string::npos) fsk_->setUsos(true);   // ★ unshift on space (manual RTTY)
             fsk_->onChar = [this](char32_t ch) {
                 std::lock_guard<std::mutex> bl(textMtx_);
                 if (ch < 0x80) textBuf_.push_back((char)ch);
                 else if (ch < 0x800) { textBuf_.push_back((char)(0xC0 | (ch >> 6))); textBuf_.push_back((char)(0x80 | (ch & 0x3F))); }
             };
-            fsk_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+            fsk_->onState = [this](int st) { fskState_.store(st, std::memory_order_relaxed); uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
             /* ★★ NAVTEX: THE FEC'S OWN COUNT OF EACH MESSAGE (2026-10-05) — clean / repaired / lost, sent as op 0x07
              *  BEHIND the text that carries its NNNN (queued here, sent after the text frame in decode_), so the box
              *  attaches it to the message it just closed. Clients older than this ignore an op they do not know
@@ -827,8 +844,10 @@ private:
             qUtc_.pop_front();
             qFrames_ -= v.size();
             lk.unlock();
+            const uint64_t c0 = vibeThreadCpuNs();
             decode_(v.data(), (int)v.size());
             spots_(v.data(), (int)v.size(), utc);
+            cpuNs_.fetch_add(vibeThreadCpuNs() - c0, std::memory_order_relaxed);
             lk.lock();
         }
     }
@@ -903,6 +922,8 @@ private:
         if (dec.empty()) return;
         if (ft8_) ft8_->process(dec.data(), (int)dec.size(), captureUtc);
         if (ft4_) ft4_->process(dec.data(), (int)dec.size(), captureUtc);
+        // ★ V12 beta 4: the spots tap's clock too — the FT8 summary is rewritten every 10 min while its counts change.
+        { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->tick(); }
     }
 
     Env env_;
@@ -954,6 +975,8 @@ private:
     bool   qStop_ = false;
     std::thread qThread_;
     std::atomic<uint64_t> fed_{0}, dropped_{0};
+    std::atomic<uint64_t> cpuNs_{0};
+    std::atomic<int>      fskState_{-1};
 };
 
 // ── The router: which host a socket, and a block of audio, belongs to ───────────────────────────
