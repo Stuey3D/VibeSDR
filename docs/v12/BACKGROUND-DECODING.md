@@ -88,6 +88,12 @@ Setup → Server holds the gallery settings:
   2. every other radio of the machine is asked to give its slots back by writing `<slot dir>/bg-yield` — each runner
      checks that file's mtime twice a second, lets its decoders go, and its tick stops it and starts the wait again;
   3. the listener's decoder is tried again, after waiting up to 3 s for a slot to free.
+- **A save reaches the radio's own process.** On a multi-radio Linux box the setup page saves through the FRONT DOOR,
+  which owns no radio (the 12.0.0~beta2 bug on the Lenovo: the door applied the profile to itself and the RSP's process
+  idled and was released). Every radio process therefore watches `config.json` (its stamp, every 2 s) and applies its
+  own `bgDecode` and the machine's gallery settings when they change; re-applying the same settings restarts nothing.
+  The RSP keepalive's "probe done — releasing again" is held off while a profile is due or running.
+  `scripts/test-bg-decode-frontdoor.mjs` runs that layout.
 - **Not on an Icom** (one physical receiver, no IQ to cut channels from; the control is hidden there) and **not in DAB**.
 
 ## The gallery
@@ -143,6 +149,7 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 | `vibeserver/test-bgdecode.cpp` | 75 | Config, validation and the clock; LSB inversion (RTTY and NAVTEX); the NAVTEX cutter; the store (eviction, path safety); a listener tap; Nick's profile end to end on synthetic IQ (USB **and** LSB VFOs file the same message); WEFAX/SSTV complete, partial and noise; PNG; the FT8 summary. |
 | `vibeserver/test-config-radios.cpp` | — | `bgDecode` and the gallery fields round-trip, and nothing leaks into the radio's own fields. |
 | `scripts/test-bg-decode.mjs` | 38 | A real server on fake-rtl-tcp: wait → move, profile boundary, arrival → stop + dial restored, a decoder socket on its own, gallery HTTP and path traversal, config API round-trip and refusals, the save applied live. |
+| `scripts/test-bg-decode-frontdoor.mjs` | 12 | Front door + a radio process: a save through the door reaches the radio, no park/release once due, an unrelated save restarts nothing. |
 | `scripts/test-setup-bgdecode.mjs` | 20 | The setup page's real editor against a DOM stand-in. |
 
 The live test uses two test-only environment variables:
