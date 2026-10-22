@@ -511,3 +511,34 @@ export function preflightLines(p: IcomPreflight | null): { ok: boolean; text: st
     text: `${it.name}: ${it.value || '?'}${it.ok ? '' : ` — change it at ${it.where || 'the radio’s menu'}`}`,
   }));
 }
+
+/* ── A PHONE SERVING ITS OWN ICOM (ServerModeScreen, Android Phase 4) ─────────────────────────────────────────── */
+
+/** ★★ The keys Android's server reads from the start config (VibeIcom.prepareStart: optInt/optBoolean with these
+ *  names and defaults). scripts/check-icom-servermode.mjs holds this list against the Kotlin. The phone's audio is
+ *  AudioRecord on the radio's USB input and its port is the device the owner allowed, so icomAudio / icomPort /
+ *  icomTtyOk are not settings there. */
+export const ICOM_PHONE_KEYS = ['icomBaud', 'icomCiv', 'icomScopeSpeed', 'icomOwnerLock', 'icomRfOpen'] as const;
+export type IcomPhoneFields = Pick<IcomSettings, (typeof ICOM_PHONE_KEYS)[number]>;
+
+/** The five fields for the phone's start config, at definite values (so a crash-restore starts the radio exactly as
+ *  the screen did), from whatever was stored — a missing or damaged store gives the setup page's defaults, owner
+ *  lock ON. ★ The baud is one the radio's menu offers, or 115200. */
+export function icomPhoneFields(stored: unknown): IcomPhoneFields {
+  const s = icomSettingsFrom(stored);
+  return {
+    icomBaud: (ICOM_BAUDS as readonly number[]).includes(s.icomBaud) ? s.icomBaud : 115200,
+    icomCiv: s.icomCiv,
+    icomScopeSpeed: s.icomScopeSpeed,
+    icomOwnerLock: s.icomOwnerLock,
+    icomRfOpen: s.icomRfOpen,
+  };
+}
+
+/** The connected radio as the phone reports it before anything is opened (getConnectedRadio) → what the server
+ *  screen says about it. 'none' = not an Icom; 'maybe' = a USB serial chip Android will not name until the owner
+ *  allows it (Android 10+); 'icom' = named by its own USB strings. */
+export function icomPresence(radio: { driver?: string; icomConfirmed?: boolean } | null | undefined): 'none' | 'maybe' | 'icom' {
+  if (!radio || radio.driver !== 'icom') return 'none';
+  return radio.icomConfirmed === false ? 'maybe' : 'icom';
+}

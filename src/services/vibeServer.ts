@@ -6,6 +6,7 @@ import { latLonToGrid, gridToLatLon } from './grid';
 import type { ServerBookmark } from './stations';
 import { bookmarkPassband, parseBookmarksAny } from './userBookmarks';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { AndroidConnectedRadio } from './androidIcom';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
 // audio + waterfall over a WebSocket, ~25x lighter than raw RTL-TCP IQ). The
@@ -202,6 +203,16 @@ export type VibeServerConfig = {
   ppm?: number;
   /** ★ DC on the feedline for a powered aerial. Absent = leave the radio alone (a radio with none). */
   biasT?: boolean;
+  /** ★★★ AN ICOM, RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md Phase 4) — the five settings Android's server reads
+   *  (VibeIcom.prepareStart), in the Linux config's names: the radio's CI-V USB baud, its CI-V address (0 = the
+   *  radio's own), the scope's sweep speed (0 fast, 1 mid, 2 slow), "listeners follow the radio" (default ON) and
+   *  whether listeners may change its RF settings. Read only when the radio IS an Icom; sent at definite values on
+   *  every start so a crash-restore brings the radio back as the owner set it. */
+  icomBaud?: number;
+  icomCiv?: number;
+  icomScopeSpeed?: number;
+  icomOwnerLock?: boolean;
+  icomRfOpen?: boolean;
   /** Manual direct sampling: 0 off, 1 I branch, 2 Q branch. */
   directSampling?: number;
   /** ★ Switch direct sampling on by itself below `directSamplingBelowHz` — the owner's choice, and
@@ -357,6 +368,15 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
      *  was not this screen's — the crash restore, the attach resume, the DAB scan engine — left a powered
      *  aerial with no DC. VibeServerBoot applies it once the radio is open. */
     ...(cfg.biasT != null ? { biasT: cfg.biasT === true } : {}),
+    /* ★★★ THE ICOM'S FIVE, at definite values with the setup page's defaults (owner lock ON). Every other radio
+     *  ignores them (VibeIcom.prepareStart runs only for an Icom), so they are sent whatever is plugged in: the
+     *  screen learns which radio it is once, on opening, and an Icom plugged in after that must still start with
+     *  the owner's settings rather than none. */
+    icomBaud: cfg.icomBaud ?? 115200,
+    icomCiv: cfg.icomCiv ?? 0,
+    icomScopeSpeed: cfg.icomScopeSpeed ?? 0,
+    icomOwnerLock: cfg.icomOwnerLock ?? true,
+    icomRfOpen: cfg.icomRfOpen ?? false,
   };
 }
 
@@ -1076,7 +1096,7 @@ export function setVibeServerUncompressedAudio(mode: 0 | 1 | 2): void {
 /** ★ The radio currently plugged in, from its USB descriptor — no device open, no permission
  *  prompt. Null when nothing supported is attached. Used to draw the right menus BEFORE the
  *  server exists; the radio's definitive capabilities still come from hwinfo once running. */
-export async function getConnectedRadio(): Promise<{ driver: string; model: string } | null> {
+export async function getConnectedRadio(): Promise<AndroidConnectedRadio | null> {
   try { return (await Local?.getConnectedRadio?.()) ?? null; } catch { return null; }
 }
 

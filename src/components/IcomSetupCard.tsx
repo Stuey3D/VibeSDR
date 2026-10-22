@@ -15,7 +15,7 @@
  *   settings live in that app's server screen and shows the facts only.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Switch, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Switch, ActivityIndicator, type TextInputProps } from 'react-native';
 import {
   type IcomRadio, type IcomSettings, ICOM_BAUDS, ICOM_SCOPE_SPEED_NAMES, baudNote, transportText,
   preflightLines, icomSettingsFrom, parseCivHex, fmtCivHex, pickIcomSerial, withIcomSettings,
@@ -71,7 +71,7 @@ export default function IcomSetupCard({ icom, styles, K, doorBase, connectBase, 
   const save = async () => {
     if (!cfg || !serial || !form) return;
     const civ = parseCivHex(civTxt);
-    if (civ === null) { setMsg('The CI-V address is two hex digits (94 on an IC-7300), or empty for the radio’s own.'); return; }
+    if (civ === null) return;   // ★ IcomSettingsFields already says why, under the box
     const body = withIcomSettings(cfg, serial, { ...form, icomCiv: civ });
     if (!body) { setMsg('This radio is no longer in the server’s settings.'); return; }
     setState('saving'); setMsg('');
@@ -88,9 +88,49 @@ export default function IcomSetupCard({ icom, styles, K, doorBase, connectBase, 
     }
   };
 
-  const pf = icom.preflight;
   const set = <Kk extends keyof IcomSettings>(k: Kk, v: IcomSettings[Kk]) => setForm((f) => (f ? { ...f, [k]: v } : f));
-  const Choice = <T extends string | number>({ opts, value, fmt, onPick }: { opts: readonly T[]; value: T; fmt: (v: T) => string; onPick: (v: T) => void }) => (
+  const ink: IcomSwitchInk = { trackOn: K.abtn, trackOff: '#444', thumbOn: K.gold, thumbOff: '#ccc' };
+
+  return (<>
+    <Text style={styles.section}>ICOM SETUP (OWNER)</Text>
+    <IcomFacts icom={icom} styles={styles} />
+
+    {state === 'loading' && <ActivityIndicator color={K.gold} style={{ marginTop: 8 }} />}
+    {state === 'unsupported' && (
+      <Text style={styles.note}>This server keeps its radio settings in its own app &mdash; change them there.</Text>
+    )}
+    {form && serial ? (<>
+      <IcomSettingsFields form={form} civTxt={civTxt} onCivTxt={setCivTxt} onSet={set} styles={styles} ink={ink} />
+      <TouchableOpacity style={[styles.adminBtn, { marginTop: 14, alignSelf: 'flex-start' }]} disabled={state === 'saving'} onPress={save}>
+        <Text style={styles.adminBtnTxt}>{state === 'saving' ? 'SAVING…' : 'SAVE AND RESTART'}</Text>
+      </TouchableOpacity>
+      <Text style={styles.note}>Saving restarts VibeServer, so listeners reconnect.</Text>
+    </>) : (state === 'idle' && cfg && !serial && (
+      <Text style={styles.note}>This server has more than one Icom &mdash; change its settings on the setup page.</Text>
+    ))}
+    {!!msg && <Text style={[styles.note, state === 'error' && styles.noteBad]}>{msg}</Text>}
+    {!!onOpenSetupPage && (
+      <TouchableOpacity style={[styles.adminBtn, { marginTop: 10, alignSelf: 'flex-start' }]} onPress={onOpenSetupPage}>
+        <Text style={styles.adminBtnTxt}>OPEN THE SETUP PAGE</Text>
+      </TouchableOpacity>
+    )}
+  </>);
+}
+
+/* ── The two halves, shared with the app's OWN server screen ────────────────────────────────────────────────────
+ * ★★ ONE CARD, TWO HOMES (2026-10-22): this card (a remote VibeServer, saved through /vibeserver/config) and
+ *    ServerModeScreen's Icom card (a phone serving its own radio, saved into the start config) draw the same facts
+ *    and the same settings from these two components, so the words and the order cannot drift apart. Each home
+ *    passes its own styles under the same names (section, note, noteBad, noteStrong, fieldLbl, segRow, seg,
+ *    segActive, segTxt, segTxtActive, convInput, toggleRow, toggleLabel) and its own switch colours. */
+
+/** Switch colours — each home keeps its own look. */
+export interface IcomSwitchInk { trackOn: string; trackOff: string; thumbOn: string; thumbOff: string; placeholder?: string }
+
+/** A row of keys, one lit. Only values the caller lists are offered. */
+export function IcomChoice<T extends string | number>({ opts, value, fmt, onPick, styles }:
+  { opts: readonly T[]; value: T; fmt: (v: T) => string; onPick: (v: T) => void; styles: Styles }) {
+  return (
     <View style={styles.segRow}>
       {opts.map((o) => (
         <TouchableOpacity key={String(o)} style={[styles.seg, o === value && styles.segActive]} onPress={() => onPick(o)}>
@@ -99,17 +139,27 @@ export default function IcomSetupCard({ icom, styles, K, doorBase, connectBase, 
       ))}
     </View>
   );
+}
 
+/**
+ * The radio's own facts (hwinfo.radio): model, CI-V, baud and why it matters, transport, audio, refused frames, the
+ * transmit-safety preflight with each menu path, and who may tune.
+ * @param audio false = the caller shows the audio state itself (the phone knows more than hwinfo: the permission and
+ *              the USB input Android picked), so it is not said twice.
+ * @param portNote false = leave out "close wfview / WSJT-X / your logger": on a phone nothing else is on that cable.
+ */
+export function IcomFacts({ icom, styles, audio = true, portNote = true }:
+  { icom: IcomRadio; styles: Styles; audio?: boolean; portNote?: boolean }) {
+  const pf = icom.preflight;
   return (<>
-    <Text style={styles.section}>ICOM SETUP (OWNER)</Text>
     <Text style={styles.toggleLabel}>
       {icom.model}{icom.civ ? ` · CI-V ${icom.civ}` : ''}{icom.baud ? ` · ${icom.baud} baud` : ''}
       {icom.scope.fps > 0 ? ` · scope ${icom.scope.fps.toFixed(1)} lines/s` : ''}
     </Text>
     <Text style={styles.note}>{transportText(icom)}{icom.transport ? ` (${icom.transport})` : ''}.</Text>
     <Text style={styles.note}>{baudNote(icom.baud)}</Text>
-    {!!icom.audio && <Text style={styles.note}>Audio: {icom.audio}</Text>}
-    {!!icom.audioProblem && <Text style={[styles.note, styles.noteBad]}>Audio: {icom.audioProblem}</Text>}
+    {audio && !!icom.audio && <Text style={styles.note}>Audio: {icom.audio}</Text>}
+    {audio && !!icom.audioProblem && <Text style={[styles.note, styles.noteBad]}>Audio: {icom.audioProblem}</Text>}
     {icom.refusedFrames > 0 && (
       <Text style={[styles.note, styles.noteBad]}>
         VibeServer refused {icom.refusedFrames} command{icom.refusedFrames === 1 ? '' : 's'} that were not on its receive-only list.
@@ -133,55 +183,76 @@ export default function IcomSetupCard({ icom, styles, K, doorBase, connectBase, 
     <Text style={styles.note}>
       VibeServer reads these every time it connects and never changes them itself. It never transmits.
     </Text>
-    <Text style={[styles.note, styles.noteStrong]}>
-      Only one program can hold the radio&rsquo;s USB port. Close wfview, wfweb, WSJT-X&rsquo;s rig control and any
-      logger that talks to the radio, or VibeServer cannot reach it.
-    </Text>
+    {portNote && (
+      <Text style={[styles.note, styles.noteStrong]}>
+        Only one program can hold the radio&rsquo;s USB port. Close wfview, wfweb, WSJT-X&rsquo;s rig control and any
+        logger that talks to the radio, or VibeServer cannot reach it.
+      </Text>
+    )}
 
     <Text style={styles.fieldLbl}>Who may tune</Text>
     <Text style={styles.note}>
       {icom.ownerLock ? 'Listeners follow the radio — only you tune it.' : 'Listeners may tune the radio.'}{' '}
       {icom.rfOpen ? 'Listeners may change its RF settings.' : 'Its RF settings are yours alone.'}
     </Text>
+  </>);
+}
 
-    {state === 'loading' && <ActivityIndicator color={K.gold} style={{ marginTop: 8 }} />}
-    {state === 'unsupported' && (
-      <Text style={styles.note}>This server keeps its radio settings in its own app &mdash; change them there.</Text>
-    )}
-    {form && serial ? (<>
-      <Text style={styles.fieldLbl}>CI-V baud rate (must match the radio)</Text>
-      <Choice opts={ICOM_BAUDS} value={form.icomBaud as (typeof ICOM_BAUDS)[number]} fmt={(b) => String(b)} onPick={(b) => set('icomBaud', b)} />
-      <Text style={styles.note}>
-        On the radio: MENU &gt; SET &gt; Connectors &gt; CI-V &gt; CI-V USB Baud Rate, and CI-V USB Port to
-        &ldquo;Unlink from [REMOTE]&rdquo;.
+/**
+ * The owner's settings, in the setup page's names and order.
+ * @param phone true = a phone serving its own radio: only the five keys Android's server reads (VibeIcom.prepareStart —
+ *              icomBaud, icomCiv, icomScopeSpeed, icomOwnerLock, icomRfOpen). Its audio is Android's AudioRecord on the
+ *              radio's USB input and its port is the USB device the owner allowed, so audio/port/serial-device are
+ *              not settings there and are not drawn (AGENTS.md: no control that does nothing).
+ */
+export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink, phone = false, Input = TextInput }: {
+  form: IcomSettings; civTxt: string; onCivTxt: (t: string) => void;
+  onSet: <Kk extends keyof IcomSettings>(k: Kk, v: IcomSettings[Kk]) => void;
+  styles: Styles; ink: IcomSwitchInk; phone?: boolean;
+  /** ★ The server screen passes TvTextInput, so a TV remote can move PAST the box (Lite on a TV box). */
+  Input?: React.ComponentType<TextInputProps>;
+}) {
+  const civBad = parseCivHex(civTxt) === null;
+  return (<>
+    <Text style={styles.fieldLbl}>CI-V baud rate (must match the radio)</Text>
+    <IcomChoice styles={styles} opts={ICOM_BAUDS} value={form.icomBaud as (typeof ICOM_BAUDS)[number]} fmt={(b) => String(b)} onPick={(b) => onSet('icomBaud', b)} />
+    <Text style={styles.note}>
+      On the radio: MENU &gt; SET &gt; Connectors &gt; CI-V &gt; CI-V USB Baud Rate, and CI-V USB Port to
+      &ldquo;Unlink from [REMOTE]&rdquo;.
+    </Text>
+    <Text style={styles.fieldLbl}>CI-V address (empty = the radio&rsquo;s own)</Text>
+    <Input value={civTxt} onChangeText={onCivTxt} maxLength={2} autoCapitalize="characters" autoCorrect={false}
+               placeholder="94" placeholderTextColor={ink.placeholder ?? '#777'} style={styles.convInput} />
+    {civBad && (
+      <Text style={[styles.note, styles.noteBad]}>
+        The CI-V address is two hex digits (94 on an IC-7300), or empty for the radio&rsquo;s own.
       </Text>
-      <Text style={styles.fieldLbl}>CI-V address (empty = the radio&rsquo;s own)</Text>
-      <TextInput value={civTxt} onChangeText={setCivTxt} maxLength={2} autoCapitalize="characters" autoCorrect={false}
-                 placeholder="94" placeholderTextColor="#777" style={styles.convInput} />
-      <Text style={styles.fieldLbl}>Scope speed</Text>
-      <Choice opts={[0, 1, 2] as const} value={form.icomScopeSpeed as 0 | 1 | 2} fmt={(v) => ICOM_SCOPE_SPEED_NAMES[v]} onPick={(v) => set('icomScopeSpeed', v)} />
-      <View style={styles.toggleRow}>
-        <Text style={[styles.toggleLabel, { flex: 1 }]}>Listeners follow the radio &mdash; only you tune it</Text>
-        <Switch value={form.icomOwnerLock} onValueChange={(v) => set('icomOwnerLock', v)}
-                trackColor={{ true: K.abtn, false: '#444' }} thumbColor={form.icomOwnerLock ? K.gold : '#ccc'} />
-      </View>
-      <Text style={styles.note}>This only protects the radio once an admin password is set.</Text>
-      <View style={styles.toggleRow}>
-        <Text style={[styles.toggleLabel, { flex: 1 }]}>Listeners may change ATT, preamp, AGC, RF gain, NB, NR and ANF</Text>
-        <Switch value={form.icomRfOpen} onValueChange={(v) => set('icomRfOpen', v)}
-                trackColor={{ true: K.abtn, false: '#444' }} thumbColor={form.icomRfOpen ? K.gold : '#ccc'} />
-      </View>
+    )}
+    <Text style={styles.fieldLbl}>Scope speed</Text>
+    <IcomChoice styles={styles} opts={[0, 1, 2] as const} value={form.icomScopeSpeed as 0 | 1 | 2} fmt={(v) => ICOM_SCOPE_SPEED_NAMES[v]} onPick={(v) => onSet('icomScopeSpeed', v)} />
+    <View style={styles.toggleRow}>
+      <Text style={[styles.toggleLabel, { flex: 1 }]}>Listeners follow the radio &mdash; only you tune it</Text>
+      <Switch value={form.icomOwnerLock} onValueChange={(v) => onSet('icomOwnerLock', v)}
+              trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomOwnerLock ? ink.thumbOn : ink.thumbOff} />
+    </View>
+    <Text style={styles.note}>This only protects the radio once an admin password is set.</Text>
+    <View style={styles.toggleRow}>
+      <Text style={[styles.toggleLabel, { flex: 1 }]}>Listeners may change ATT, preamp, AGC, RF gain, NB, NR and ANF</Text>
+      <Switch value={form.icomRfOpen} onValueChange={(v) => onSet('icomRfOpen', v)}
+              trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomRfOpen ? ink.thumbOn : ink.thumbOff} />
+    </View>
+    {!phone && (<>
       <Text style={styles.fieldLbl}>Receive audio</Text>
-      <TextInput value={form.icomAudio} onChangeText={(t) => set('icomAudio', t)} autoCapitalize="none" autoCorrect={false}
-                 placeholder="auto" placeholderTextColor="#777" style={styles.convInput} />
+      <Input value={form.icomAudio} onChangeText={(t) => onSet('icomAudio', t)} autoCapitalize="none" autoCorrect={false}
+                 placeholder="auto" placeholderTextColor={ink.placeholder ?? '#777'} style={styles.convInput} />
       <Text style={styles.note}>auto finds the radio&rsquo;s own USB audio; none serves the waterfall and dial only.</Text>
       <Text style={styles.fieldLbl}>Port</Text>
-      <TextInput value={form.icomPort} onChangeText={(t) => set('icomPort', t)} autoCapitalize="none" autoCorrect={false}
-                 placeholder="usb" placeholderTextColor="#777" style={styles.convInput} />
+      <Input value={form.icomPort} onChangeText={(t) => onSet('icomPort', t)} autoCapitalize="none" autoCorrect={false}
+                 placeholder="usb" placeholderTextColor={ink.placeholder ?? '#777'} style={styles.convInput} />
       <View style={styles.toggleRow}>
         <Text style={[styles.toggleLabel, { flex: 1 }]}>Allow a serial device (/dev/&hellip;) as the port</Text>
-        <Switch value={form.icomTtyOk} onValueChange={(v) => set('icomTtyOk', v)}
-                trackColor={{ true: K.abtn, false: '#444' }} thumbColor={form.icomTtyOk ? K.gold : '#ccc'} />
+        <Switch value={form.icomTtyOk} onValueChange={(v) => onSet('icomTtyOk', v)}
+                trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomTtyOk ? ink.thumbOn : ink.thumbOff} />
       </View>
       {form.icomTtyOk && (
         <Text style={[styles.note, styles.noteBad]}>
@@ -189,18 +260,6 @@ export default function IcomSetupCard({ icom, styles, K, doorBase, connectBase, 
           Keying is set to DTR or RTS, that keys the transmitter. Only allow this if those are OFF.
         </Text>
       )}
-      <TouchableOpacity style={[styles.adminBtn, { marginTop: 14, alignSelf: 'flex-start' }]} disabled={state === 'saving'} onPress={save}>
-        <Text style={styles.adminBtnTxt}>{state === 'saving' ? 'SAVING…' : 'SAVE AND RESTART'}</Text>
-      </TouchableOpacity>
-      <Text style={styles.note}>Saving restarts VibeServer, so listeners reconnect.</Text>
-    </>) : (state === 'idle' && cfg && !serial && (
-      <Text style={styles.note}>This server has more than one Icom &mdash; change its settings on the setup page.</Text>
-    ))}
-    {!!msg && <Text style={[styles.note, state === 'error' && styles.noteBad]}>{msg}</Text>}
-    {!!onOpenSetupPage && (
-      <TouchableOpacity style={[styles.adminBtn, { marginTop: 10, alignSelf: 'flex-start' }]} onPress={onOpenSetupPage}>
-        <Text style={styles.adminBtnTxt}>OPEN THE SETUP PAGE</Text>
-      </TouchableOpacity>
-    )}
+    </>)}
   </>);
 }

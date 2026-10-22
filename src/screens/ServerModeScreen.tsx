@@ -27,6 +27,8 @@ const BLOCKABLE: { id: string; label: string }[] = [
   { id: 'ft8', label: 'FT8 / FT4' }, { id: 'time', label: 'Time signals' },
   { id: 'spots', label: 'Digital spots / map' },
 ];
+/** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). */
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
@@ -59,6 +61,12 @@ import {
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { loadActiveEibi } from '../services/eibi';
+import { IcomFacts, IcomSettingsFields, type IcomSwitchInk } from '../components/IcomSetupCard';
+import {
+  type IcomSettings, type IcomPhoneFields, icomPhoneFields, icomPresence, icomSettingsFrom, parseIcomRadio,
+  parseCivHex, fmtCivHex,
+} from '../services/icomRadio';
+import { androidIcomFacts, icomAskForAudio, type AndroidIcomFacts, type AndroidConnectedRadio } from '../services/androidIcom';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
 
 /** ★ `tokens`: the main app's glass tokens in the user's colours (screens/ServerModeThemed.tsx); Lite passes none. */
@@ -211,6 +219,8 @@ const K = {
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
   landingDabCh: 'vs_landingdabch', landingDabSid: 'vs_landingdabsid', landingDabSvc: 'vs_landingdabsvc',
   radioLabel: 'vs_radiolabel',
+  /** ★ An Icom's five settings (icomPhoneFields), one JSON value — see the ICOM TRANSCEIVER card. */
+  icom: 'vs_icom',
 };
 
 /** ★★★ HOW LONG THE SETTINGS SCREEN WAITS FOR A DAB QUICK SCAN, and the number its hint QUOTES — one
@@ -219,6 +229,15 @@ const K = {
  *  and stopped, and the loopback request has 3 s to connect and 25 s to answer (dabScanHttp). 45 s
  *  covers all of that on a slow box with room to spare, and nothing ever counts past it. */
 const DAB_SCAN_LIMIT_S = 45;
+
+/** ★★ WHAT THIS SCREEN CAN SERVE, in one sentence for the two places that say it (no radio found; a Start that
+ *  failed). Kept in step with the drivers getConnectedRadio reports (rtl, airspyhf, airspy, hackrf, sdrplay, icom)
+ *  and with icom_models.h's supported Icom models by scripts/check-icom-servermode.mjs. */
+/** The engine's audio sentences start in lower case (they follow "Audio: " elsewhere); here one stands alone. */
+const capFirst = (t: string) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+
+const SERVABLE_RADIOS = 'VibeServer can serve an RTL-SDR, an Airspy HF+, an Airspy R2 or Mini, a HackRF, an SDRplay '
+  + 'RSP (Android 8.0 or later) or \u2014 receive only \u2014 an Icom IC-7300 on its USB lead.';
 
 /** Is DAB in the owner's blocked-modes list? Same reading as the engine's (any case, , ; or space). */
 const dabBlockedNow = (csv: string) =>
@@ -559,7 +578,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   // ★ Per-listener time limit, minutes. 0 = unlimited — right for a private receiver.
   const [limitMin, setLimitMin]   = useState(0);
   // ★ Which radio is attached, so the menus match it. VID/PID only — see getConnectedRadio.
-  const [radio, setRadio] = useState<{ driver: string; model: string } | null>(null);
+  const [radio, setRadio] = useState<AndroidConnectedRadio | null>(null);
   useEffect(() => { void getConnectedRadio().then(setRadio); }, []);
   // ★ THREE RADIOS, THREE MENUS — not a two-way choice with a default any more.
   const rateOptionsAll = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF
@@ -600,7 +619,36 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    * ★ Where a listener LANDS is not hardware and applies to both — it stays on show.
    */
   const isAhf = radio?.driver === 'airspyhf';
-  const hasHwSetup = !isAhf;
+  /* ★★★ AN ICOM TRANSCEIVER, RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md Phase 4, 2026-10-22). Branched on FIRST, like
+   *  every reader of `driver` must be ("else means dongle"): it has no sample rate, no gain table, no window to lock,
+   *  no bias-T, no ppm, no converter, no IQ — the radio's own scope is the waterfall and its own audio is what
+   *  listeners hear. So every IQ card below is hidden for it (the setup page hides the same cards, icomRender) and
+   *  the ICOM TRANSCEIVER card takes their place. 'maybe' = a USB serial chip Android will not name until the owner
+   *  allows it (Android 10+): Start asks, then the engine checks before a byte is sent. */
+  const icomHere = icomPresence(radio);
+  const isIcom = icomHere !== 'none';
+  // ★ An Icom serves ONE dial (the radio's), so the locked-centre questions do not exist for it.
+  const radioUseEff: 'single' | 'locked' = isIcom ? 'single' : radioUse;
+  // ★ RTL-TCP is raw IQ, which an Icom does not give (the rtl_tcp server never opens its CP2102).
+  const protoEff: Proto = isIcom ? 'vibeserver' : proto;
+  const hasHwSetup = !isAhf && !isIcom;
+  /** ★ The Icom's five settings (the start config's icom* keys), stored as one value (K.icom). The CI-V address is
+   *  held as TEXT while typed, and only a valid one reaches the settings. */
+  const [icomSet, setIcomSet] = useState<IcomPhoneFields>(() => icomPhoneFields(null));
+  const [icomCivTxt, setIcomCivTxt] = useState('');
+  /** ★ What Android knows (androidIcom.ts): the permission, the USB input picked, capture state, and — while an Icom
+   *  is served — the engine's own hwinfo `radio` (model, CI-V, baud, transport, preflight). */
+  const [icomFacts, setIcomFacts] = useState<AndroidIcomFacts | null>(null);
+  const setIcomField = <Kk extends keyof IcomSettings>(k: Kk, v: IcomSettings[Kk]) => {
+    const next = icomPhoneFields({ ...icomSet, [k]: v });
+    setIcomSet(next);
+    void AsyncStorage.setItem(K.icom, JSON.stringify(next));
+  };
+  const onIcomCiv = (t: string) => {
+    setIcomCivTxt(t);
+    const c = parseCivHex(t);
+    if (c !== null) setIcomField('icomCiv', c);
+  };
   /* ★★ AN RSP's BIAS-T IS PER MODEL: the original RSP1 has none (SdrplaySource::hasBiasT). The model is the USB product
    *  id's (VibeRsp.modelName), known before anything is opened. Every other radio here with hardware setup has one. */
   const isRsp = radio?.driver === 'sdrplay';
@@ -655,6 +703,75 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   The width is the capture rate above, so the window runs half that either side.
                 </Text>
 
+  </>);
+  /* ★★ THE ICOM CARD'S PIECES IN THIS SCREEN'S LOOK. IcomFacts / IcomSettingsFields are the components the remote
+   *  setup card draws (one set of words, one order); they take their styles by role, and here the roles are this
+   *  screen's own — hints, chips like DIRECT SAMPLING's, switches like every other — so default/silver/black and
+   *  Lite's palette all hold. */
+  const icomStyles = {
+    section: [styles.section, { color: C.section, fontFamily: F }],
+    toggleLabel: { color: C.text, fontFamily: F, fontSize: 14 },
+    note: [styles.hint, { color: C.textDim, fontFamily: F }],
+    noteBad: { ...meaningText(C.m, C.badSoft) },
+    noteStrong: { color: C.text },
+    fieldLbl: [styles.hint, { color: C.text, fontFamily: F, marginTop: 14 }],
+    segRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
+    seg: [styles.chip, { borderColor: C.border }],
+    segActive: { borderColor: C.keyBorderAct },
+    segTxt: { color: C.keyQuiet, fontFamily: F, fontSize: 12 },
+    segTxtActive: { color: C.keyAct },
+    convInput: [styles.input, { color: C.text, fontFamily: F, borderColor: C.border, marginTop: 4 }],
+    toggleRow: [styles.rowBetween, { marginTop: 12 }],
+  };
+  const icomInk: IcomSwitchInk = { trackOn: C.trackOn, trackOff: C.trackOff, thumbOn: C.thumb, thumbOff: C.thumb,
+                                   placeholder: C.placeholderDim };
+  const icomRadioNow = parseIcomRadio(icomFacts?.radio);
+  const icomMicMissing = (icomFacts ? icomFacts.micPermission : radio?.micPermission) === false;
+  /* ★★★ THE ICOM TRANSCEIVER CARD — in RADIO SETTINGS, where every other radio's gain and hardware cards are. The
+   *  facts first (what it is, what VibeServer will and will not do to it, what Android will ask), then the five
+   *  settings Android's server reads. Saved as they change; Start applies them (as everything else here). */
+  const icomSetupBlock = (<>
+    <Text style={[styles.section, { color: C.section, fontFamily: F }]}>ICOM TRANSCEIVER — RECEIVE ONLY</Text>
+    <View style={[styles.card, { borderColor: C.border }]}>
+      {icomHere === 'maybe' ? (
+        <Text style={[styles.hint, { ...meaningText(C.m, C.warn), fontFamily: F, marginTop: 0 }]}>
+          {'An Icom? Press Start and allow it. Android names a USB serial device only once you allow it, so '
+           + 'VibeSDR cannot tell yet. Start reads the device’s own name first and uses it only if it is an Icom '
+           + 'VibeServer supports (the IC-7300); anything else — a GPS, a programming lead — is left untouched.'}
+        </Text>
+      ) : (
+        <Text style={{ color: C.text, fontFamily: F, fontSize: 15 }}>{radio?.model || 'Icom'}</Text>
+      )}
+      <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
+        {'Shared as a receiver — VibeServer never transmits. The radio’s own scope is the waterfall, its '
+         + 'received audio is what listeners hear, and only receive commands are ever sent to it. Each time it '
+         + 'connects it reads the radio’s USB SEND, USB Keying and VOX settings, and will not start the radio '
+         + 'if any of them could key the transmitter.'}
+      </Text>
+      {icomFacts?.audioSupported === false ? (
+        <Text style={[styles.hint, { ...meaningText(C.m, C.badSoft), fontFamily: F, marginTop: 0 }]}>
+          {'This Android version cannot prove which input it records from, so listeners get the dial and the '
+           + 'waterfall but not the radio’s audio (Android 7.0 or later is needed for that).'}
+        </Text>
+      ) : icomMicMissing ? (
+        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
+          {'The radio’s audio reaches this device as a USB audio input, which Android counts as a microphone, '
+           + 'so you will be asked to allow it when the server starts. VibeSDR records only the radio’s USB '
+           + 'audio — never this device’s own microphone — and only while serving.'}
+        </Text>
+      ) : null}
+      <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
+        {'After the radio is unplugged or this device restarts, Android asks again for the radio — tap Allow. '
+         /* ★ Lite has no browser to return to; its listeners are on other devices. */
+         + (isLite
+            ? 'Listeners tune it from VibeSDR or a web browser; '
+            : 'To listen yourself, start the server, then “Return to browse” and open it like any other server; ')
+         + 'in VibeSDR the radio’s own controls (mode, filters, scope span, preamp, ATT, AGC, RF gain) are in the '
+         + 'cog under its name.'}
+      </Text>
+    </View>
+    <IcomSettingsFields phone form={icomSettingsFrom(icomSet)} civTxt={icomCivTxt} onCivTxt={onIcomCiv}
+                        onSet={setIcomField} styles={icomStyles} ink={icomInk} Input={TextInput} />
   </>);
   const rateBlock = (<>
             {/* ★★ THE RADIO'S CAPTURE WIDTH, so it sits with the radio rather than with the
@@ -756,6 +873,23 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /** ★ The read is past its first few seconds — said plainly, never as an error. */
   const [prefsSlow, setPrefsSlow] = useState(false);
   const [running, setRunning] = useState<VibeServerInfo | null>(null);
+  /* ★★ AN ICOM'S FACTS — read once while stopped (is the permission held? can this Android prove which input it
+   *  records?), and every 3 s while serving (capture starting, Android routing it away, the engine's preflight). Only
+   *  for an Icom: no other radio's screen makes this call. A reading identical to the last one changes nothing. */
+  useEffect(() => {
+    if (!isIcom) { setIcomFacts(null); return; }
+    let alive = true;
+    const read = () => {
+      void androidIcomFacts().then((f) => {
+        if (!alive) return;
+        setIcomFacts((prev) => (JSON.stringify(prev) === JSON.stringify(f) ? prev : f));
+      });
+    };
+    read();
+    if (!running) return () => { alive = false; };
+    const t = setInterval(read, 3000);
+    return () => { alive = false; clearInterval(t); };
+  }, [isIcom, running]);
   /* ★ The antenna switch applies LIVE on a running server — a change of antenna names or bands must not need a restart
    *  (and a restart would bounce every listener). Debounced so typing a name is one apply, not one per letter. */
   useEffect(() => {
@@ -868,6 +1002,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           // ★ Absent = AGC OFF. An existing server must not come back with the AGC quietly enabled
           //   by an upgrade — it may raise the gain above what the owner set.
           { const ragc = g(K.rtlAgc); if (ragc != null) setRtlAgc(ragc === '1'); }
+          // ★ An Icom's settings; absent or damaged = the setup page's defaults (owner lock ON).
+          { const ic = g(K.icom); if (ic) { try { const f = icomPhoneFields(JSON.parse(ic)); setIcomSet(f); setIcomCivTxt(fmtCivHex(f.icomCiv)); } catch { /* defaults stand */ } } }
           { const glk = g(K.gainLocks); if (glk != null) setGainLocks(glk); }
           { const gsp = g(K.gainSplits); if (gsp != null) setGainSplits(gsp); }
           { const lim = g(K.limitMin); if (lim != null) setLimitMin(Number(lim) || 0); }
@@ -1184,7 +1320,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       .map((t) => bands.find((b) => b.id === t)?.label || t).join(', ');
         await (NativeModules as any).VibeLocalSDR?.tunnelRepublish?.(
           nm, where?.grid || '', running.port, radioLabel.trim() || radio?.model || '', radio?.driver || '',
-          (antenna || '').trim(), cov, radioUse === 'locked',
+          (antenna || '').trim(), cov, radioUseEff === 'locked',
           publicTemp ? shareSeconds() : 0);
       } catch { /* the listing keeps the window it had */ }
     })();
@@ -1219,7 +1355,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         //     were to take my moto and say set it up from a holiday destination would the map move
         //     with it"). Resolved first, then compared, so a move is a change like any other.
         const sig = [nm, cov, (antenna || '').trim(), radioLabel.trim() || radio?.model, radio?.driver,
-                     radioUse === 'locked', where?.grid || ''].join('|');
+                     radioUseEff === 'locked', where?.grid || ''].join('|');
         if (republished.current === sig) return;
         republished.current = sig;
         // ★★ AND THE NAME THE RECEIVER ANSWERS TO FOLLOWS THE PUBLIC ONE. publishLocation() runs
@@ -1234,7 +1370,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           //    PERMANENT" — so this correction, which exists only to refresh the aerial and the
           //    band names, would have wiped the end off a temporary share every time it ran.
           //  ★ This runs on a timer: an offer that renewed itself would never end.
-          (antenna || '').trim(), cov, radioUse === 'locked', -1);
+          (antenna || '').trim(), cov, radioUseEff === 'locked', -1);
       } catch { /* the listing simply keeps what it had */ }
     })();
     // ★★ AND CHECK AGAIN ON A SLOW BEAT. Every other input here changes because somebody typed
@@ -1408,8 +1544,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *   tops out below 2.048 MS/s; a locked centre with its own VFOs cannot move onto a multiplex; a
    *   rate pinned below 2.048 MS/s cannot carry one unless DAB may borrow the rate. The engine
    *   checks all of this again at the moment of landing and falls back to the frequency above. */
-  const dabLandCapable = !!radio && radio.driver !== 'airspyhf' && dabBlocks.length > 0
-    && !(advanced && radioUse === 'locked' && maxUsers > 1)
+  const dabLandCapable = !!radio && radio.driver !== 'airspyhf' && !isIcom && dabBlocks.length > 0
+    && !(advanced && radioUseEff === 'locked' && maxUsers > 1)
     && (rate === 0 || rate >= 2_048_000 || dabRateBoost);
   const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes);
   const dabLandOn = dabLandOffered && landingDabCh >= 0 && landingDabCh < dabBlocks.length;
@@ -1549,10 +1685,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★ Raw IQ out. Default OFF, like uncompressed audio. Sent as set; the SERVER refuses it
     //   on a shared dial, so the card stays visible everywhere (Stuart, 2026-09-09: "the card
     //   should be in the GUI on the app screen on the phone").
-    rawIq: (maxUsers > 1 && radioUse !== 'locked') ? 0 : live.current.rawIq,
+    rawIq: (maxUsers > 1 && radioUseEff !== 'locked') ? 0 : live.current.rawIq,
     // ★ One stream on a one-listener radio; the count only means something on a locked window.
-    rawIqMax: radioUse === 'locked' ? live.current.rawIqMax : (live.current.rawIq > 0 ? 1 : 0),
-    rawIqLanMaxHz: radioUse !== 'locked' ? live.current.rawIqLanMaxHz : 0,
+    rawIqMax: radioUseEff === 'locked' ? live.current.rawIqMax : (live.current.rawIq > 0 ? 1 : 0),
+    rawIqLanMaxHz: radioUseEff !== 'locked' ? live.current.rawIqLanMaxHz : 0,
     // ★ Decoders at once — the benchmark's figure unless the owner chose another; 0 = the default.
     decoderMax: live.current.decoderMax,
     idleGraceSec: live.current.idleGrace,
@@ -1563,7 +1699,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
     // ★★ Locked mode only. In single-user mode the centre follows the listener, which is what
     //    the phone has always done and is right for one person retuning the radio themselves.
-    ...(advanced && radioUse === 'locked'
+    ...(advanced && radioUseEff === 'locked'
       ? { lockedCentre: live.current.lockedCentre, spectrogram: live.current.spectrogram }
       : {}),
     // ★ Sent in EVERY mode — see the ZOOM DETAIL card's note.
@@ -1593,6 +1729,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★★ The bias-T now travels with the rest (it was a separate call after start, so a restore, an
     //    attach resume and the scan engine all ran with no DC on the aerial). Radios with none send nothing.
     biasT: hasBiasT ? biasT : undefined,
+    // ★★★ An Icom's five (VibeIcom.prepareStart reads them only for an Icom) — see nativeServerConfig.
+    icomBaud: icomSet.icomBaud, icomCiv: icomSet.icomCiv, icomScopeSpeed: icomSet.icomScopeSpeed,
+    icomOwnerLock: icomSet.icomOwnerLock, icomRfOpen: icomSet.icomRfOpen,
   });
   const serverConfigRef = useRef(serverConfig);
   serverConfigRef.current = serverConfig;
@@ -1678,12 +1817,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       setRunning(info);
       runningRef.current = true;
       setStarting(false);
+      // ★ An Icom Android would not name before the owner allowed it is named now — the screen and the directory
+      //   say "Icom IC-7300" rather than "Icom radio?". Cheap: USB descriptors only, nothing is opened.
+      void getConnectedRadio().then(setRadio);
       // ★★★ BIAS-T THE MOMENT THE RADIO IS UP — now carried IN the config (serverConfig) and applied by
       //     VibeServerBoot once the radio is open, on every start path, not only this one.
       if (advertise) advertiseServer(n, info.port, 'vibeserver', effectivePin !== '');
     } catch (e: any) {
       setStarting(false);
-      setError(e?.message ?? 'Could not start VibeServer. Is a supported SDR plugged in via USB OTG?');
+      void getConnectedRadio().then(setRadio);   // ★ e.g. "that USB serial device is not an Icom" — say what IS there
+      setError(e?.message ?? ('Could not start VibeServer. Is a supported radio plugged in via USB OTG? ' + SERVABLE_RADIOS));
     }
   // ★★★ EVERY PIECE OF STATE THIS READS MUST BE LISTED. adminPw, uncomp and limitMin were
   // missing, so `start` was frozen with their INITIAL values — '' and 0 — and no amount of
@@ -1786,8 +1929,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
           <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>VibeServer</Text>
           <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-            {`Serving this device's ${radio?.model ?? 'SDR'} with server-side DSP.`} Leaving this screen
-            stops the server and frees the dongle — except with "Return to browse", which leaves it
+            {isIcom
+              ? `Serving this device's ${icomRadioNow?.model ? 'Icom ' + icomRadioNow.model : radio?.model || 'Icom'} \u2014 receive only.`
+              : `Serving this device's ${radio?.model ?? 'SDR'} with server-side DSP.`} Leaving this screen
+            stops the server and frees the {isIcom ? 'radio' : 'dongle'} — except with "Return to browse", which leaves it
             running so you can listen to it yourself over loopback.
           </Text>
 
@@ -1815,7 +1960,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   server already holds, so asking again would be asking twice.
               ★★ VibeServer only: RTL-TCP has no landing page, no PIN and no session limits, so it
                  has nothing to put in front of the public. */}
-            {publicSupported && proto === 'vibeserver' ? (
+            {publicSupported && protoEff === 'vibeserver' ? (
             <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
               <Text style={[styles.section, { color: C.section, fontFamily: F, marginTop: 0 }]}>
                 ADVERTISE ON VIBESDR.NET
@@ -1930,7 +2075,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                                                             //   own VFO in a fixed window; anything
                                                             //   else with room for several is ONE
                                                             //   shared dial.
-                                                            radioUse === 'locked',
+                                                            radioUseEff === 'locked',
                                                             // ★★★ HOW LONG THE SHARE IS OFFERED
                                                             //   FOR, in seconds — 0 = permanent.
                                                             //   Converted here where the words
@@ -1986,9 +2131,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {/* The client drives the capture rate (and the frame rate) live. Showing
                 them here is how the HOST sees the server answering the client —
                 otherwise a remote change is invisible from this end. */}
-            <Row C={C} F={F} k="SAMPLE RATE"
+            {/* ★ An Icom has no sample rate — its waterfall is the radio's scope (see the ICOM card below). */}
+            {!isIcom && <Row C={C} F={F} k="SAMPLE RATE"
               v={status?.sampleRate ? `${(status.sampleRate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s` : '—'}
-              vc={client ? C.text : C.textMuted} />
+              vc={client ? C.text : C.textMuted} />}
             <Row C={C} F={F} k="FRAME RATE"
               v={status?.fftRate ? `${Math.round(status.fftRate)} fps` : '—'}
               vc={client ? C.text : C.textMuted} />
@@ -2000,6 +2146,39 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               v={status?.cpu ? `${status.cpu.toFixed(0)}% of 1 core${status?.cores ? ` (of ${status.cores})` : ''}` : '—'}
               vc={client ? C.text : C.textMuted} />
           </View>
+
+          {/* ★★★ AN ICOM WHILE SERVING — the facts the engine found (model, CI-V, baud, the transmit-safety check
+              with each menu path) and the one thing only the owner can fix from here: the radio's audio. Android
+              counts the radio's USB audio as a microphone, so a refusal is offered again here (icomAskForAudio
+              repeats the explained ask; it does nothing unless an Icom is being served). */}
+          {isIcom && (
+            <View style={[styles.card, { borderColor: C.border, marginTop: 10, gap: 0 }]}>
+              <Text style={[styles.section, { color: C.section, fontFamily: F, marginTop: 0 }]}>ICOM — RECEIVE ONLY</Text>
+              {icomRadioNow
+                ? <IcomFacts icom={icomRadioNow} styles={icomStyles} audio={false} portNote={false} />
+                : <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                    {'Its details appear once VibeServer has reached the radio.'}
+                  </Text>}
+              <Text style={icomStyles.fieldLbl}>The radio&rsquo;s audio</Text>
+              {icomFacts?.audioRunning ? (
+                <Text style={[styles.hint, { color: C.text, fontFamily: F }]}>
+                  {`Recording ${icomFacts.audioDevice || 'the radio\u2019s USB audio'} \u2014 listeners hear the radio.`}
+                </Text>
+              ) : (icomFacts?.audioProblem || icomRadioNow?.audioProblem) ? (
+                <Text style={[styles.hint, { ...meaningText(C.m, C.badSoft), fontFamily: F }]}>
+                  {capFirst(icomFacts?.audioProblem || icomRadioNow?.audioProblem || '')}
+                </Text>
+              ) : (
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>Not started yet.</Text>
+              )}
+              {icomMicMissing && icomFacts?.audioSupported !== false && (
+                <TouchableOpacity onPress={() => icomAskForAudio()}
+                  style={[styles.regen, { borderColor: C.keyBorderAct, marginLeft: 0, marginTop: 10, alignSelf: 'flex-start' }]}>
+                  <Text style={{ color: C.keyAct, fontFamily: F, fontSize: 13 }}>ALLOW THE RADIO&rsquo;S AUDIO</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
 
           <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
             The PIN protects tuning control — it is not audio encryption. Use a VPN
@@ -2063,7 +2242,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
         <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>Server mode</Text>
         <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-          {`Share this device's ${radio?.model ?? 'SDR'} over your network.`}
+          {!radio
+            ? `Share a radio plugged into this device over your network. ${SERVABLE_RADIOS}`
+            : icomHere === 'maybe'
+            ? 'Share this device\u2019s radio over your network \u2014 if it is an Icom, press Start and allow it.'
+            : `Share this device's ${radio.model || 'SDR'} over your network.`}
         </Text>
 
         {/* ★★★ WHAT THIS BOX CAN CARRY — at the top, because every setting below is a promise about work this
@@ -2194,14 +2377,22 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 been committed by AsyncStorage's SQLite when the process churns is lost, which
                 fits the one start tonight that did not stick while the next one did. Writing on
                 selection means the value is already on disk long before any of that. */}
-        <ProtoCard C={C} F={F} active={proto === 'vibeserver'}
+        <ProtoCard C={C} F={F} active={protoEff === 'vibeserver'}
           onPress={() => { setProto('vibeserver'); void AsyncStorage.setItem(K.proto, 'vibeserver'); }}
           title="VibeServer" tag="Recommended"
           desc="More secure, less data. Server-side DSP, compressed audio + waterfall, PIN protected." />
+        {/* ★★ NOT FOR AN ICOM: RTL-TCP is the radio's raw IQ, and an Icom gives none — its scope and its audio
+            only exist through VibeServer. The stored choice is kept for the next radio (protoEff). */}
+        {isIcom ? (
+          <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0, marginBottom: 8 }]}>
+            An Icom is shared through VibeServer only: RTL-TCP sends a radio&rsquo;s raw IQ, and an Icom has none.
+          </Text>
+        ) : (
         <ProtoCard C={C} F={F} active={proto === 'rtltcp'}
           onPress={() => { setProto('rtltcp'); void AsyncStorage.setItem(K.proto, 'rtltcp'); }}
           title="RTL-TCP" tag="Compatible"
           desc="Raw IQ, maximum compatibility. Needs a fast, stable network. No PIN." />
+        )}
         </>)}
 
         {/* ★★ "LOCAL NAME", not "advertised name" — it names this server ON THIS NETWORK, and
@@ -2227,11 +2418,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {advertise
               ? 'This server appears automatically on other VibeSDR devices on the network.'
               : "Hidden — clients must enter this device's address by hand. Good on a public hotspot" +
-                (proto === 'rtltcp' ? ' (RTL-TCP has no PIN).' : '.')}
+                (protoEff === 'rtltcp' ? ' (RTL-TCP has no PIN).' : '.')}
           </Text>
         </View>
 
-        {proto === 'vibeserver' ? (
+        {protoEff === 'vibeserver' ? (
           <>
             {/* ─── SERVER SETTINGS ───────────────────────────────────────────────────────────
                 ★★ Everything from here to RADIO SETTINGS belongs to the SERVER — who may reach it,
@@ -2502,10 +2693,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 rather than the choice the page is organised around (Stuart, 2026-08-12: "the
                 simple and full button is at the bottom and doesnt change the GUI"). */}
             {/* Waterfall frame rate */}
+            {/* ★ Not on an Icom: its waterfall is the radio's own scope, as fast as the CI-V baud lets it sweep
+                (the ICOM TRANSCEIVER card's baud and scope speed), so an FFT rate would be a dead control. */}
+            {!isIcom && (<>
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WATERFALL RATE</Text>
             {FPS_TIERS.map(t => (
               <OptRow key={t.key} C={C} F={F} active={fps === t.key} label={t.label} onPress={() => setFps(t.key)} />
             ))}
+            </>)}
 
             {/* ★★★ NO "COMPRESSED AUDIO" SWITCH — UNCOMPRESSED AUDIO above supersedes it. That
                 three-way setting already says what this server sends: Off (Opus only), Listener's
@@ -2663,7 +2858,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 radio has a locked range and a listener count; a single-user one has neither and
                 gets the allow/block lists instead. Asked last, as the web page once did, the
                 owner answers questions the next answer makes irrelevant. */}
-            {advanced && (<>
+            {advanced && !isIcom && (<>
               <Text style={[styles.section, { color: C.section, fontFamily: F }]}>HOW WILL IT BE USED?</Text>
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 {/* ★★★ NAMED FOR WHAT ACTUALLY DIFFERS: whether the centre is pinned, and so
@@ -2689,8 +2884,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
 
             {/* ★★ WHERE A LISTENER LANDS — not hardware, so it applies to either radio. Same name
                 as the macOS settings window uses, so an owner who runs both meets one idea once. */}
-            {radioUse === 'locked' && centreBlock}
-            {radioUse === 'locked' && rateBlock}
+            {radioUseEff === 'locked' && centreBlock}
+            {radioUseEff === 'locked' && rateBlock}
+            {/* ★★ NOT ON AN ICOM: the server never tunes it (plan, decision 7) — a new listener hears wherever its
+                owner left it — so a landing frequency would be a setting that does nothing. */}
+            {!isIcom && (<>
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WHERE LISTENERS START</Text>
             {/* ★★★ A DAB STATION AS THE LANDING — Stuart's words, 2026-09-28: "just above the entry for
                 frequency and demod selector have a use DAB station as landing station? tap yes and then
@@ -2806,8 +3004,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               Where a listener is tuned when they first open the page. Their browser remembers where
               they were after that, so this mostly affects first-time visitors.
             </Text>
+            </>)}
 
-            {isRtl ? (<>
+            {isIcom ? icomSetupBlock : isRtl ? (<>
             {/* ★★★ THE GAIN THE RADIO STARTS AT, and returns to when the last listener leaves.
                 It was buried in Advanced beside the gain LIMITS, which is a different idea —
                 limits are what a listener may not exceed, this is where the radio sits by default.
@@ -2999,7 +3198,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               </Text>
             )}
 
-            {radioUse !== 'locked' && rateBlock}
+            {radioUseEff !== 'locked' && !isIcom && rateBlock}
 
             {/* ★★★ HARDWARE, AND ONLY WHERE THERE IS ANY. See isAhf: the HF+ has no rate to choose,
                 no bias-T and a locked AGC, so it gets a sentence instead of a panel of dead
@@ -3193,7 +3392,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {/* ★★ THE SPECTROGRAM AND THE POWER SAVER CANNOT BOTH BE ON, and the reason is
                 physical rather than a rule: a radio that stops capturing cannot picture a band it
                 is not listening to. Same on Linux. */}
-            {idleGrace === 0 && advanced && radioUse === 'locked' && (
+            {idleGrace === 0 && advanced && radioUseEff === 'locked' && (
               <View style={[styles.card, { borderColor: C.border, marginTop: 10 }]}>
                 <View style={styles.rowBetween}>
                   <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -3221,7 +3420,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                        somebody sitting on one frequency for an hour is the best listener there
                        is. Watching a decoder counts as using the radio, so a weather-fax image is
                        never interrupted. */}
-                {radioUse === 'locked' && (<>
+                {radioUseEff === 'locked' && (<>
                 <Text style={[styles.section, { color: C.section, fontFamily: F }]}>IDLE LISTENERS</Text>
                 <View style={[styles.card, { borderColor: C.border }]}>
                   <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
@@ -3310,7 +3509,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
 
                 {/* ★ Not in Lite: an rtl_tcp stream for external decoders — Lite is a VibeServer only (Stuart, 2026-09-18),
                     and the extra IQ stream is weight a small box should not carry. */}
-                {!isLite && (<>
+                {/* ★ …nor for an Icom, which has no IQ to send. */}
+                {!isLite && !isIcom && (<>
                 {/* ★★★ RAW IQ OUT. A listener on the web client or the app can ask for the
                     channel they are tuned to as an rtl_tcp stream — 48 kHz over the tunnel, up to
                     250 kHz on the local network — for a decoder the browser cannot run (DSD, a
@@ -3323,7 +3523,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     {/* ★ On a shared dial the server refuses it, so the choice is held at Off and
                         the buttons are inert — shown, so the owner sees why, never enable-able. */}
                     {([[0, 'Off'], [1, 'Local only'], [2, 'Local & public']] as const).map(([n, lbl]) => {
-                      const shared = maxUsers > 1 && radioUse !== 'locked';
+                      const shared = maxUsers > 1 && radioUseEff !== 'locked';
                       const sel = (shared ? 0 : rawIq) === n;
                       return (
                       <TouchableOpacity key={n} disabled={shared} onPress={() => setRawIq(n)}
@@ -3336,7 +3536,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       </TouchableOpacity>);
                     })}
                   </View>
-                  {rawIq > 0 && radioUse !== 'locked' && maxUsers <= 1 && (
+                  {rawIq > 0 && radioUseEff !== 'locked' && maxUsers <= 1 && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Local network up to</Text>
                       {/* ★ The radio's own rates — no choice needs a resampler. */}
@@ -3351,7 +3551,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                         </TouchableOpacity>); })}
                     </View>
                   )}
-                  {rawIq > 0 && radioUse === 'locked' && (
+                  {rawIq > 0 && radioUseEff === 'locked' && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                       <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Streams at once</Text>
                       <TextInput
@@ -3372,7 +3572,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     reliable end to end. On your own network the ceiling is yours: 250 kHz suits any
                     device and any Wi-Fi; the full span is about 40 Mb/s at 2.4 MHz and wants a wired
                     link. The port only opens while somebody has it on, and closes with their session.
-                    {maxUsers > 1 && radioUse !== 'locked'
+                    {maxUsers > 1 && radioUseEff !== 'locked'
                       ? '\n\nNOT AVAILABLE IN SHARED VFO MODE: an rtl_tcp client\'s tune would move every listener. Set one listener, or a locked centre, to offer it.'
                       : ''}
                   </Text>
@@ -3442,7 +3642,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   {maxUsers === 1
                     ? 'One listener at a time, each with the full settings surface — the second '
                       + 'person sees IN USE and waits. Right for a receiver you mostly use yourself.'
-                    : radioUse === 'locked'
+                    : radioUseEff === 'locked'
                     ? `Up to ${maxUsers} listeners share the radio, each with their own tuning inside `
                       + 'what the radio is receiving.\n\nThe extra DSP is close to nothing — they '
                       + 'share one FFT. What actually runs out is UPLINK, so on a small device this is a '
@@ -3457,7 +3657,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 {/* ★★★ ASK BEFORE TUNING (Stuart, 2026-10-21) — directly after the count, as on the browser's setup page,
                     and only on a shared dial: locked = everybody has their own VFO, one listener = nobody to ask, so
                     the switch would do nothing there (AGENTS.md). Off by default. */}
-                {maxUsers > 1 && radioUse !== 'locked' && (
+                {maxUsers > 1 && radioUseEff !== 'locked' && (
                   <View style={[styles.card, { borderColor: C.border, marginTop: 8 }]}>
                     <View style={styles.rowBetween}>
                       <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -3481,7 +3681,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     locked — but this switch only showed (and was only SENT) in locked mode, so the
                     XCover's shared dial ran with it off and went blocky at depth (Stuart: "really
                     blocky… like there isnt enough bins at the highest zoom rate"). */}
-                <>
+                {/* ★ Not on an Icom: its zoom is the radio's own span ladder, never our FFT. */}
+                {!isIcom && (<>
                 {/* ★★★ REAL BINS AT DEEP ZOOM. Without it a shared receiver interpolates, and the
                     waterfall turns to blocks the moment anybody zooms in — which a listener reads
                     as a poor receiver rather than a setting. */}
@@ -3508,14 +3709,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   </Text>
                 </View>
 
-                </>
+                </>)}
 
 
                 {/* ★★★ NOT IN LOCKED-RANGE MODE. The window IS the limit there, so an allow/block
                     list is a second answer to a question already answered — and two ways to say
                     the same thing is how they end up disagreeing. The web setup page gates it the
                     same way, for the same reason. */}
-                {radioUse === 'single' && (<>
+                {radioUseEff === 'single' && (<>
                 <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WHERE LISTENERS MAY TUNE</Text>
                 {/* ★★ PICK A BAND OR TYPE A RANGE — the browser's shape, and the same string on
                     the wire. The free-text box asked the owner to remember a syntax and told them
@@ -3555,7 +3756,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   Modes and decoders — tap to switch off
                 </Text>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
-                  {BLOCKABLE.map((m) => {
+                  {/* ★ On an Icom, WFM, DAB and Advanced RDS do not exist (an IQ demodulator's, and no Icom row in
+                      icom_models.h has a WFM mode), so a chip to block them would block nothing. */}
+                  {BLOCKABLE.filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id))).map((m) => {
                     const off = blockedModes.split(/[,;\s]+/).filter(Boolean).includes(m.id);
                     return (
                       <TouchableOpacity key={m.id}
@@ -3593,7 +3796,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     ceiling has no second band to differ from — the whole receiver takes the one
                     gain. The web page hides it in this mode for the same reason (Stuart,
                     2026-08-21: "per band gain isnt needed in this mode as it is a locked range").*/}
-                {radioUse === 'single' && (<>
+                {/* ★ Not on an Icom: these are ceilings on OUR gain stages; an Icom's RF gain is the radio's own,
+                    and who may touch it is the ICOM TRANSCEIVER card's "listeners may change its RF settings". */}
+                {radioUseEff === 'single' && !isIcom && (<>
                 <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PER-BAND CEILINGS</Text>
                 <BandLimitEditor C={C} F={F} bands={bands} kind="gain" allowAll
                   /* ★★★ THE AIRSPY R2 / MINI's LIMIT IS A CURVE AND A POSITION ON IT, not dB — its
@@ -3724,6 +3929,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 ? { borderColor: C.danger, backgroundColor: C.dangerBg }
                 : { borderColor: C.ok,     backgroundColor: C.okBg }]}
               onPress={() => {
+                // ★ An Icom's CI-V address must be one the radio could have — the box says why, under it.
+                if (isIcom && parseCivHex(icomCivTxt) === null) {
+                  setError('The Icom\u2019s CI-V address is two hex digits (94 on an IC-7300), or empty for the radio\u2019s own.');
+                  return;
+                }
                 if (needsAdminPw) {
                   setError('Set an admin password below, then Start. It is what stops a listener '
                          + 'reaching the admin page and changing your radio — and it is what '
