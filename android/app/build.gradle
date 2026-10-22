@@ -289,7 +289,7 @@ apply from: file('openrsp.gradle')
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
-    implementation("androidx.media:media:1.7.0")
+    implementation("androidx.media:media:1.8.0")
     // ★ V12 TRANSCRIBE: on-device translation (models download on Wi-Fi, on request — TranscribeEngine33).
     implementation("com.google.mlkit:translate:17.0.3")
     // ★ 2026-10-05: media3-exoplayer / media3-session 1.4.1 removed. Nothing in this app imports
