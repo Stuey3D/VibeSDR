@@ -919,6 +919,9 @@ static int startIcomFrom(const Opts& o, const std::string& port, const std::stri
 
 static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv) {
     if (haveServiceManager()) return;   // ★ systemd is doing it; two supervisors would fight
+    // ★ TEST-ONLY: the test starts the radio processes itself, as systemd's vibeserver@<serial> units do on a Linux box
+    //   (scripts/test-bg-decode-frontdoor.mjs runs that layout on fake rtl_tcp radios, which a front door cannot spawn).
+    if (const char* e = std::getenv("VIBESERVER_NO_RADIO_SPAWN"); e && *e == '1') return;
 
     std::vector<std::string> serials;
     for (const auto& r : srv.radios)
@@ -993,7 +996,8 @@ static std::string jsonEscape(const std::string& in) {
     return o;
 }
 
-namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
+namespace { std::string g_bgLastApplied;   // ★ V12: the bgDecode this radio process last applied (see the main loop's watch)
+std::string g_configPath; vsconfig::Config g_runtimeConfig;
             /** ★ The WHOLE machine, so the setup page can show a tab per radio. This process runs
              *  exactly one of them (g_myRadioSerial); the rest it only reads and writes on their
              *  behalf, which is why every write re-reads the file first. */
@@ -2408,7 +2412,7 @@ int main(int argc, char** argv) {
                     // ★ The aerials, live (2026-10-09): the external switch, the per-band aerial list and the lock.
                     applyAntennaSwitch(r.antennaSwitch);
                     // ★★ V12 background decoding, live — the tick picks it up within two seconds (validated above).
-                    { std::string be; LocalSdrShim::setBackgroundDecoding(r.bgDecode, be); }
+                    { std::string be; LocalSdrShim::setBackgroundDecoding(r.bgDecode, be); g_bgLastApplied = r.bgDecode; }
                     LocalSdrShim::setGalleryRadioLabel(r.label.empty() ? r.driver : r.label);
                     LocalSdrShim::instance().setRspAntennaMap(g_runtimeConfig.antennaMap);
                     LocalSdrShim::instance().setAntennaLocked(g_runtimeConfig.antennaPortLocked);
@@ -2453,10 +2457,11 @@ int main(int argc, char** argv) {
             /* ★★ V12 background decoding on a SIMPLE server, live: the loop above matches on the radio's serial, which a
              *  one-radio machine may not have (see "WHICH RADIO AM I?" in main) — the PRIMARY radio is this process then.
              *  A front door takes it too and ignores it (it owns no radio — the shim's tick returns at once). */
-            if (g_myRadioSerial.empty() && !next.radios.empty()) {
+            if (g_myRadioSerial.empty() && !next.radios.empty() && !g_amFrontDoor.load()) {
                 const int pi = vsconfig::primaryRadio(next);
                 if (pi >= 0 && pi < (int)next.radios.size()) {
                     std::string be; LocalSdrShim::setBackgroundDecoding(next.radios[(size_t)pi].bgDecode, be);
+                    g_bgLastApplied = next.radios[(size_t)pi].bgDecode;
                 }
             }
             if (next.configured) LocalSdrShim::setConfigured(true);
@@ -4173,6 +4178,7 @@ int main(int argc, char** argv) {
             std::string be;
             const std::string bj = !o.bgDecode.empty() ? o.bgDecode : (mine ? mine->bgDecode : std::string());
             if (!bj.empty() && !frontDoorOnly) LocalSdrShim::setBackgroundDecoding(bj, be);
+            g_bgLastApplied = bj;
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", o.galleryMb >= 0 ? o.galleryMb : g_serverConfig.galleryMb,
                                      g_serverConfig.galleryPublic, g_serverConfig.gallerySaveLive);
             LocalSdrShim::setGalleryRadioLabel(mine ? (mine->label.empty() ? mine->driver : mine->label) : std::string());
@@ -4533,6 +4539,52 @@ int main(int argc, char** argv) {
 
     while (!g_stop) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        /* ★★★ V12 BACKGROUND DECODING REACHES THE RADIO'S OWN PROCESS (Lenovo, 2026-10-22). The setup page saves
+         *  through whichever process answered it — on a multi-radio Linux box that is the FRONT DOOR, which owns no
+         *  radio — so the save path's live apply reached nobody who could act on it, and the RSP's process idled and
+         *  released the radio with Nick's profile sitting in the file. config.json is the one shared truth (the
+         *  config GET already re-reads it for the same reason), so every radio process watches it: a changed stamp is
+         *  re-read and THIS radio's background decoding and the machine's gallery settings applied, within ~2 s of any
+         *  save, by any process. Only on a change of the values, so an unrelated save restarts nothing.
+         *  ★ --bg-decode on the command line wins over the file, as everywhere (command line > config.json). */
+        if (!frontDoorOnly && !g_configPath.empty()) {
+            static int cfgTick = 0;
+            static long long lastStamp = -1;
+            static std::string lastGallery;
+            if (++cfgTick >= 2) {
+                cfgTick = 0;
+                struct stat cst{};
+                if (::stat(g_configPath.c_str(), &cst) == 0) {
+                    const long long stamp = (long long)cst.st_mtime * 1000000000LL + (long long)cst.st_size;
+                    if (lastStamp < 0) lastStamp = stamp;            // ★ the first look only remembers it
+                    else if (stamp != lastStamp) {
+                        lastStamp = stamp;
+                        vsconfig::ServerConfig fresh; std::string e;
+                        if (vsconfig::loadServer(g_configPath, fresh, e)) {
+                            const vsconfig::RadioConfig* mine = nullptr;
+                            for (const auto& r : fresh.radios) if (!g_myRadioSerial.empty() && r.serial == g_myRadioSerial) { mine = &r; break; }
+                            if (!mine && g_myRadioSerial.empty() && !fresh.radios.empty()) {
+                                const int pi = vsconfig::primaryRadio(fresh);
+                                if (pi >= 0 && pi < (int)fresh.radios.size()) mine = &fresh.radios[(size_t)pi];
+                            }
+                            if (mine && o.bgDecode.empty() && mine->bgDecode != g_bgLastApplied) {
+                                g_bgLastApplied = mine->bgDecode;
+                                std::string be;
+                                LocalSdrShim::setBackgroundDecoding(mine->bgDecode, be);
+                                std::printf("VibeServer: background decoding re-read from %s\n", g_configPath.c_str());
+                            }
+                            const std::string gk = std::to_string(fresh.galleryMb) + (fresh.galleryPublic ? "p" : "-") + (fresh.gallerySaveLive ? "l" : "-");
+                            if (gk != lastGallery) {
+                                if (!lastGallery.empty())
+                                    LocalSdrShim::setGallery(vsDataDir() + "/gallery", o.galleryMb >= 0 ? o.galleryMb : fresh.galleryMb,
+                                                             fresh.galleryPublic, fresh.gallerySaveLive);
+                                lastGallery = gk;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // ★ The DSP path only raises a FLAG; the write happens here, off that thread.
         LocalSdrShim::instance().saveSpectrogramIfDue();
         LocalSdrShim::instance().saveConnLogIfDue();

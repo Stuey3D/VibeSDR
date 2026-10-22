@@ -696,6 +696,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── background decoding + the gallery (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ …AND ON A MULTI-RADIO BOX (Lenovo, 12.0.0~beta2): a save made through the FRONT DOOR reaches the radio's own
+#     process (it watches config.json), the park/release is held off while a profile is due, an unrelated save restarts
+#     nothing, switching it off gives the dial back. Front door + one radio process, as systemd runs them. ~40 s.
+printf '\n\033[1m── background decoding through the front door (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-frontdoor.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ A TUNNEL WHOSE PROCESS LIVES BUT WHOSE ADDRESS IS DEAD IS REPLACED (2026-10-09, the Sony "online but not
 #     responding all day"): a stand-in cloudflared prints a hostname that does not exist and stays alive; the server
