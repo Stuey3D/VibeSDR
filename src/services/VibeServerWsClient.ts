@@ -55,7 +55,7 @@
 
 import type { DabState } from './dabTypes';
 import type { ShareOut } from './chatShare';
-import { isIcom, parseIcomRadio, parseIcomStatus, icomControlMsg, nearestSpanIndex, mergeIcomStatus,
+import { isIcom, parseIcomRadio, parseIcomStatus, icomControlMsg, nearestSpanIndex, mergeIcomStatus, icomFollowNote,
          type IcomRadio, type IcomControlFields } from './icomRadio';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzipToStringCapped } from '../utils/boundedInflate';   // ★ capped: a gzip bomb is dropped, not inflated
@@ -274,9 +274,22 @@ export abstract class VibeServerWsClient {
    *  only the server's word sets it, and an old server's silence leaves it false (docs/TUNING-ETIQUETTE.md). */
   protected tuneLocked = false;
   private askStateAskedAt = 0;
+  /** ★ This socket is a signed-in admin (hwinfo.adminOk / the `admin` reply) — what an Icom's owner lock asks. */
+  private adminOkNow = false;
+  private icomFollowSaidAt = 0;
   /** @return true when the lock refused the caller. Asks the server for the room's state (at most once a second),
    *  so anything the screen already drew optimistically snaps back to where the radio really is. */
   protected askBlocked(): boolean {
+    /* ★★★ AN ICOM UNDER THE OWNER LOCK ("listeners follow the radio"): the server refuses a listener's tune, mode
+     *  and width with a notice each — so a drum spin would be a notice per detent. Refused HERE instead, with the
+     *  same words at most every 4 s, and the room's state re-asked so the optimistic readout snaps back. A
+     *  signed-in admin (this socket's admin_unlock, adminOk) passes, exactly as the server judges it. */
+    if (this.icom && this.icom.ownerLock && !this.adminOkNow) {
+      const now = Date.now();
+      if (now - this.icomFollowSaidAt > 4000) { this.icomFollowSaidAt = now; this.callbacks.onRefused?.(icomFollowNote(this.icom, false)); }
+      if (now - this.askStateAskedAt > 1000) { this.askStateAskedAt = now; this.requestState(); }
+      return true;
+    }
     if (!this.tuneLocked) return false;
     this.callbacks.onTuneLocked?.();
     const now = Date.now();
@@ -2458,6 +2471,7 @@ export abstract class VibeServerWsClient {
       // ★★ `superseded` = an owner proved the same password more recently, so this session is no
       //    longer admin. Distinct from `refused` (the password was wrong): nothing was mistyped
       //    here, and the honest response is to let the credential go rather than to re-assert it.
+      this.adminOkNow = msg.ok === true;
       this.callbacks.onAdminState?.({
         set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true,
         superseded: msg.superseded === true });
@@ -2693,6 +2707,7 @@ export abstract class VibeServerWsClient {
       }
       if (typeof msg.adminSet === 'boolean') {
         this.adminSet = msg.adminSet;
+        this.adminOkNow = msg.adminOk === true;
         this.callbacks.onAdminState?.({ set: msg.adminSet, ok: msg.adminOk === true });
       // ★ Absent on a server too old to send it — the clock then keeps showing the phone's time
       //   rather than going blank.
