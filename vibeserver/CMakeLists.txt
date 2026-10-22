@@ -841,6 +841,14 @@ add_executable(test-fir-simd "${CMAKE_CURRENT_SOURCE_DIR}/test-fir-simd.cpp" "${
 target_include_directories(test-fir-simd PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
 target_compile_options(test-fir-simd PRIVATE -O3 -ffp-contract=fast)
 add_test(NAME fir-simd COMMAND test-fir-simd)
+# ── ★★★ ICOM (docs/ICOM-SUPPORT-PLAN.md) — the receive-only promise is a TEST, and it joins ctest ──
+#     test-icom-civ is plan §3.2: every cmd/sub pair at 0-6 data bytes against an independent copy of
+#     the allow-list. "Nothing ships until the exhaustive allow-list test … passes" (plan §8).
+add_executable(test-icom-civ "${CMAKE_CURRENT_SOURCE_DIR}/test-icom-civ.cpp")
+target_include_directories(test-icom-civ PRIVATE "${CPP_DIR}")
+target_compile_options(test-icom-civ PRIVATE -O2)
+vibe_sanitize(test-icom-civ)
+add_test(NAME icom-civ COMMAND test-icom-civ)
 # The offline replay harness: the same chain over a VIBE_IQ_DUMP capture, in seconds.
 # ★ dab-offline and the receiver test take the PFFFT path so the SERVER's transform is what gets
 #   replayed and tested; the other DAB tests keep the header-only radix-2, which is the reference.
