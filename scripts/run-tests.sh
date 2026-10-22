@@ -119,6 +119,8 @@ deps_for() {
     test-pocket)        echo "$SRC/pocket.cpp" ;;
     # ★★ The config survives a pulled plug: atomic save, last-good .bak, refusal of a truncated file.
     test-config-durable) echo "$SRC/vibeserver_config.cpp" ;;
+    # ★★★ Going back from a V12 beta keeps V12's settings: unknown config keys survive a load + save (11.0.10-4).
+    test-config-keep)   echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
     # ★★★ An admin read must never hold the connection log's lock while it works (Pi 2 IQ overruns
     #     with the admin page open, 2026-10-01). Header-only; slow resolvers make it CPU-independent.
@@ -257,6 +259,14 @@ if python3 vibeserver/linux/test_vibeserver_diagnostics.py; then pass=$((pass+1)
 #     without the marker, idempotent, config.txt lines once, an owner's own change kept, the package list drives what
 #     Update installs — and vibeserver-maintenance's `update` with apt + overlayroot-chroot stubbed.
 if python3 vibeserver/linux/pocket/test_pocket_converge.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ RECEIVE BETA UPDATES (2026-10-22). The root helper's beta-on / beta-off / update-stable with apt stubbed, and the
+#     choice of what Update VibeServer installs (beta on/off × installed × listed, the downgrade back to stable included).
+if python3 vibeserver/linux/test_vibeserver_maintenance.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …what the admin page says about it, and which action its button sends (updateOffer.ts).
+if node --no-warnings scripts/test_update_offer.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ …and the apt repository's two suites: a beta publish never touches stable (and the reverse), one revision never
+#     names two files, the prune is per suite. publish-apt.sh itself, index-only, with the Debian tools stubbed.
+if python3 scripts/test_publish_apt_suites.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The web playout (worklet AND the main-thread fallback) must come back clean by itself after the
 #   server has delivered audio in bursts — the Sony's narrow-WFM overload, 2026-09-29. Silent.
 if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

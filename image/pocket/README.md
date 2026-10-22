@@ -96,6 +96,11 @@ The vibeserver package carries the Portable's operating-system setup as well as 
 
 "Update all packages" does the same after its system upgrade.
 
+**Beta updates on a Portable.** The *Receive beta updates* tick-box (`beta-on` / `beta-off`) writes or removes
+`/etc/apt/sources.list.d/vibesdr-beta.list` in the real root through `overlayroot-chroot` and in the live overlay,
+so the tick survives a reboot and shows at once. *Back to stable* (`update-stable`) installs the newest stable
+version the same way as an Update, then reboots. See `vibeserver/linux/INSTALL.md`, "Beta updates".
+
 **Two kinds of step:**
 
 - **Enforced every time.** These are the product: our own units enabled, our own drop-in files, and

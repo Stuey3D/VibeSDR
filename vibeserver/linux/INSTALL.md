@@ -197,6 +197,45 @@ This writes one file, `/etc/apt/apt.conf.d/52vibesdr-auto-updates`, for unattend
 
 `--no-auto-updates` (or deleting the file) undoes it.
 
+### Beta updates (opt-in) — and going back
+
+From 11.0.10-4 the admin page's **Maintenance** section has a tick-box, **Receive beta updates (V12)**.
+
+- **Tick it** and the server adds one file, `/etc/apt/sources.list.d/vibesdr-beta.list`, naming the `beta`
+  suite of the same repository with the same key, then runs `apt update` straight away. The line under
+  the buttons then names the newest beta, e.g. *"12.0.0~beta1-1 available (beta)"*. Nothing is installed
+  until you press **Update VibeServer**.
+- **Untick it** and that file is removed and `apt update` runs again. On a server running a beta, the
+  line then reads *"11.0.10-4 available — back to stable"* and the button becomes **Back to stable
+  (11.0.10-4)**. Pressing it installs the newest stable version (a downgrade, asked for by name, with
+  `--allow-downgrades`); your settings are kept, and ticking the box again brings the beta back.
+- The tick shows what is **on the machine**: it is ticked exactly when that file exists, however it got
+  there.
+- **Automatic updates and betas.** A scheduled update (the admin page's own schedule, or
+  unattended-upgrades from `VIBE_AUTO_UPDATES=1`) installs a beta only on a server whose owner ticked
+  the box, because only those servers have the beta suite in their sources. Nothing automatic ever goes
+  **back**: apt never downgrades by itself, and only a person pressing **Back to stable** does.
+
+By hand, the tick is:
+
+```bash
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net beta main" \
+  | sudo tee /etc/apt/sources.list.d/vibesdr-beta.list
+sudo apt update && sudo apt install vibeserver
+```
+
+and going back is:
+
+```bash
+sudo rm /etc/apt/sources.list.d/vibesdr-beta.list && sudo apt update
+apt-cache madison vibeserver                       # the newest "stable/main" line is the one to go back to
+sudo apt install --allow-downgrades vibeserver=<that version>
+```
+
+★ Settings survive the round trip. 11.0.10-4 onwards keeps every `config.json` key it does not know
+(the ones a V12 beta adds) when it saves, so going back to 11 and then forward to the beta again loses
+nothing. An 11.x release older than 11.0.10-4 would drop them on its next save.
+
 ## SDRplay RSP receivers
 
 ★ **Nothing extra to install.** On amd64, arm64 and armhf the package includes an RSP driver, run as
