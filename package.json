@@ -39,7 +39,7 @@
     "@types/pako": "^2.0.4",
     "@types/react": "~19.2.2",
     "babel-preset-expo": "~57.0.0",
-    "esbuild": "^0.28.1",
+    "esbuild": "^0.28.2",
     "jsdom": "^30.1.2",
     "patch-package": "^8.0.1",
     "typescript": "~6.0.3"
