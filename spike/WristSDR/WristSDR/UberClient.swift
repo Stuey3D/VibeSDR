@@ -549,6 +549,78 @@ final class UberClient: ObservableObject {
   @Published var hasFmDsp = false
   var hasHardwareControls: Bool { isVibe }
 
+  // ── ★★★ AN ICOM TRANSCEIVER (hwinfo.radio.driver "icom", RECEIVE ONLY) ─────────────────────────────
+  // docs/ICOM-SUPPORT-PLAN.md "hwinfo + wire contract for clients (built)"; the rules are IcomRadio.swift's, ported
+  // from src/services/icomRadio.ts. An IC-7300 is not an IQ radio: the waterfall is the radio's own 475-point scope,
+  // the audio is the radio's own demodulator, and the radio IS the dial — its owner's hand moves it, and a client
+  // follows. Every IQ control (gain, rate, VibeAGC, IF, RDS, DAB, our squelch, the FM DSP) is hidden, not dimmed.
+  /// The radio, as hwinfo described it and the status line has since updated it. nil = not an Icom.
+  @Published var icom: IcomRadio? = nil
+  /// The S-meter from the `{"type":"icom"}` line, dB over S9. nil = not read yet.
+  @Published var icomSDb: Double? = nil
+  /// ★ `config.icom` — on every config, so the fact is known even when a config beats hwinfo to the wire.
+  private var configSaysIcom = false
+  /// True on an Icom. Branch on THIS before any default ("else means dongle").
+  var isIcom: Bool { icom != nil || configSaysIcom || icomRemembered }
+  /// ★★ REMEMBERED PER RADIO, because the first decisions are made before hwinfo arrives: whether to assert a
+  ///    saved tune on connect (never, on an Icom — a resume must not retune a stranger's transceiver) and which
+  ///    span the subscribe asks for. Cleared the moment hwinfo names another radio.
+  private var icomKey: String { "vibe.icom.\(host)\(radioPath)" }
+  private var icomRemembered: Bool { UserDefaults.standard.bool(forKey: icomKey) }
+  /// ★ Under the OWNER LOCK ("Listeners follow the radio", default ON) only a SIGNED-IN admin may tune, change
+  ///   mode, FIL or span — `adminOk` is this socket's sign-in, exactly what the server judges.
+  var icomFollowLocked: Bool {
+    guard let ic = icom else { return false }
+    return !ic.mayTune(admin: adminOk)
+  }
+  /// A refusal to put on the wrist, with a sequence number SpikeLink watches (one notice per bump).
+  private(set) var icomNotice = ""
+  @Published private(set) var icomNoticeSeq = 0
+  private var icomNoticeAt: Double = -100
+  /// ★★ ONE NOTICE PER 4 s — the app's rule. A crown spin under the owner lock is a refusal per detent; a pill
+  ///    per detent would be noise, and the server would send one per tune.
+  private func icomSay(_ text: String) {
+    let now = ProcessInfo.processInfo.systemUptime
+    guard now - icomNoticeAt > 4 else { return }
+    icomNoticeAt = now
+    icomNotice = text
+    icomNoticeSeq &+= 1
+  }
+  /// ★ Refused HERE, before anything moves or is sent, while the owner lock holds this listener — the readout must
+  ///   not wander off and snap back 1.5 s later. Returns true when it refused.
+  private func icomRefused() -> Bool {
+    guard icomFollowLocked else { return false }
+    icomSay(IcomRadio.followNote)
+    return true
+  }
+  /// The radio's state changed (hwinfo or the status line): the passband DRAWN for its FIL follows it — written,
+  /// never sent — and the mode mirrors the radio's, in the client vocabulary the passband lines use.
+  private func applyIcomState() {
+    guard let ic = icom else { return }
+    if !ic.modeNow.isEmpty, ProcessInfo.processInfo.systemUptime - lastLocalTuneAt > 1.5 {
+      let cm = IcomRadio.clientMode(ic.modeNow)
+      if cm != mode { mode = cm }
+    }
+    let d = Self.modeBW[mode] ?? (low: -1_500, high: 1_500)
+    if let pb = ic.passband(defaultLow: d.low, defaultHigh: d.high) {
+      if bwLow != pb.low { bwLow = pb.low }
+      if bwHigh != pb.high { bwHigh = pb.high }
+    }
+  }
+  /// ★ The radio sends no sweeps ON PURPOSE while it transmits or is off CI-V — not a dead link: no re-subscribe,
+  ///   no reconnect, no audio self-heal.
+  var icomQuiet: Bool { icom?.quiet ?? false }
+  /// The radio's own mode by its own name — "USB-D", "RTTY-R". Picked from the radio's list, sent as icom_control.
+  func setIcomMode(_ radioMode: String) {
+    guard let ic = icom, !icomRefused(), !(sharedDial && dialTuneLocked) else { return }
+    if let m = ic.controlMessage(mode: radioMode) { specSock.send(json: m) }   // ★ lit by the radio's answer, never by this tap
+  }
+  /// FIL1/2/3, from the radio's list.
+  func setIcomFil(_ fil: Int) {
+    guard let ic = icom, !icomRefused(), !(sharedDial && dialTuneLocked) else { return }
+    if let m = ic.controlMessage(fil: fil) { specSock.send(json: m) }
+  }
+
   private func onHwInfo(_ j: [String: Any]) {
     // ★★ SESSION LIMIT AND ADMIN STATE RIDE **HWINFO**, not config. I read them off
     // `config` first and nothing ever appeared — no notice, no countdown, no lock —
@@ -557,10 +629,26 @@ final class UberClient: ObservableObject {
     // silent: no error, no warning, just a feature that never happens.
     if let n = (j["sessionLimitMin"] as? NSNumber)?.intValue { sessionLimitMin = n }
     if let n = (j["sessionSecsLeft"] as? NSNumber)?.intValue { sessionSecsLeft = n }
+    /* ★★★ AN ICOM? Decided FIRST, because it decides what everything below may mean: the generic hwinfo fields
+     *  outside `radio` (gains, gainNow, rates, rateNow, agc, deemph, the FM DSP …) are still sent on an Icom and
+     *  mean NOTHING there (contract: "ignore them when radio.driver === icom"). */
+    if let r = j["radio"] as? [String: Any] {
+      icom = IcomRadio.parse(r)
+      if icom != nil {
+        UserDefaults.standard.set(true, forKey: icomKey)
+        applyIcomState()
+      } else {
+        icomSDb = nil
+        UserDefaults.standard.removeObject(forKey: icomKey)
+      }
+    }
+    if let b = j["adminOk"] as? Bool { adminOk = b }   // ★ before the gate below: the owner lock asks it
+    let onIcom = icom != nil
+    if onIcom { hasFmDsp = false }
     // ★★ THE SERVER'S WORD ON ITS OWN DSP — sticky AND shared, so what this watch last asked for is
     //    irrelevant. Receiving any of them is also what REVEALS the controls: an older VibeServer,
     //    or a backend without them, never sends them and Jr draws nothing.
-    if j["wsp"] != nil || j["ims"] != nil || j["ceq"] != nil || j["nb"] != nil {
+    if !onIcom, j["wsp"] != nil || j["ims"] != nil || j["ceq"] != nil || j["nb"] != nil {
       hasFmDsp = true
       // ★ Absent means an older server that HAS the treatment but does not talk about it, so the
       //   default is ON rather than OFF — the same rule the phone and the browser use.
@@ -608,6 +696,12 @@ final class UberClient: ObservableObject {
         if let v = (r["biast"] as? NSNumber)?.intValue { hrfBiasT = v != 0 }
       }
       if rspIfGr < ifGrMin || rspIfGr > ifGrMax { rspIfGr = min(max(40, ifGrMin), ifGrMax) }
+    }
+    // ★★★ NOTHING BELOW MEANS ANYTHING ON AN ICOM — no gain table, no capture rate, no de-emphasis — and the
+    //     replay at the end would PUSH this watch's remembered dongle settings at a transceiver. Stop here.
+    if onIcom {
+      offeredGains = []; offeredRates = []; lockedRate = 0; agcLocked = false; gainCap = -1
+      return
     }
     if let g = j["gains"] as? [Int] { offeredGains = g }
     if let r = j["rates"] as? [Int] { offeredRates = r }
@@ -1792,6 +1886,13 @@ final class UberClient: ObservableObject {
       //     2026-08-23). Dropping `vibeRestored` here does both halves at once: nothing is asserted,
       //     and the first config is ADOPTED instead, so Jr shows the frequency the room is actually
       //     on rather than the one it wanted.
+      // ★★ AND ON AN ICOM ALWAYS: the radio IS the dial and stays where its owner left it — a resume asserting
+      //    our remembered frequency would retune a stranger's transceiver (or, under the owner lock, earn a
+      //    refusal on every return). Known before connecting only because it is remembered per radio.
+      if isIcom, vibeRestored {
+        vibeRestored = false
+        NSLog("[UberClient] Icom — not asserting the saved tune; the radio is the dial")
+      }
       if vibeSharedByCount, vibeRestored {
         vibeRestored = false
         NSLog("[UberClient] shared dial (%d listeners allowed) — not asserting the saved tune", vibeMaxUsers)
@@ -2044,7 +2145,7 @@ final class UberClient: ObservableObject {
       Vitals.crumb("UBER spec READY — subscribing")
       Task { @MainActor in
         guard let self, self.specOpenSeq == seq else { return }
-        self.sendView(self.frequency, self.viewBinBw > 0 ? self.viewBinBw : 100)
+        self.subscribeSpectrum()
         // ★★★ AND ASK FOR A FRAME RATE, WHICH JR NEVER DID.
         self.applyVibeFrameRate()
         self.armSpectrumWatchdog()
@@ -2072,13 +2173,14 @@ final class UberClient: ObservableObject {
     // frames aren't, the paint gate fails open and draws with a zero/stale span — a waterfall
     // that never scales, while frameCount happily ticks. Checking frames alone let that slide
     // through forever (audio fine, waterfall dead-on-arrival). Require the config too.
-    func healthy() -> Bool { frameCount != n && specConfigSeq == specSubscribeSeq }
+    // ★ An Icom transmitting or off CI-V sends no sweeps ON PURPOSE (the server froze the scope) — healthy.
+    func healthy() -> Bool { (frameCount != n && specConfigSeq == specSubscribeSeq) || icomQuiet }
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: 5_000_000_000)
       guard !self.goingIdle, self.specOpenSeq == seq else { return }   // torn down / newer socket supersedes
       guard !healthy() else { return }                       // frames AND config — all well
       self.specWsState = "spec ready but not INITIALISED · re-subscribing"
-      self.sendView(self.frequency, self.viewBinBw > 0 ? self.viewBinBw : 100)
+      self.subscribeSpectrum()
 
       try? await Task.sleep(nanoseconds: 5_000_000_000)
       guard !self.goingIdle, self.specOpenSeq == seq else { return }
@@ -2623,7 +2725,23 @@ final class UberClient: ObservableObject {
      *  ★ Same omission as the phone's, where `notice` WAS handled but only `text` was read. One
      *     rule, three readers, and the refusal half was missing in every one. */
     if type == "notice" {
-      if let why = j["why"] as? String, !why.isEmpty { status = why }
+      if let why = j["why"] as? String, !why.isEmpty {
+        // ★ On an Icom a refusal is the owner lock or the radio saying no — into the wrist's notice pill, at most
+        //   once per 4 s (icomSay), never into `status`, which the audio self-heal and link logic read as state.
+        if isIcom { icomSay(SafeText.clean(why, max: 140)) } else { status = why }
+      }
+      return
+    }
+    /* ★★★ AN ICOM'S STATUS LINE — the S-meter (≤ 4/s), TX, link, mode, FIL, span; on join straight after hwinfo and
+     *  on every change. The S-meter is drawn from THIS, never from SPEC bins: the scope is relative to the radio's
+     *  REF level, not dBFS. The status line is newer than the last hwinfo for what it carries (merged()). */
+    if type == "icom" {
+      guard let st = IcomStatus.parse(j) else { return }
+      icomSDb = st.sDbOverS9
+      if let ic = icom {
+        let next = ic.merged(st)
+        if next != ic { icom = next; applyIcomState() }
+      }
       return
     }
     if type == "rspstat" {
@@ -2738,6 +2856,7 @@ final class UberClient: ObservableObject {
     }
     Vitals.crumb("UBER json: type=\(type)")
     guard type == "config" else { return }
+    configSaysIcom = (j["icom"] as? Bool) == true   // ★ the Icom fact rides every config — see isIcom
     /* ★★★ THE SCALE IS CHECKED BEFORE IT IS ADOPTED. binCount sizes an array (a negative one
      *  TRAPS, a vast one is an allocation the watch cannot make), and centreFreq/binBandwidth feed
      *  every Int conversion of the view below — Int(Double) traps on NaN, infinity and anything past
@@ -2850,7 +2969,9 @@ final class UberClient: ObservableObject {
        let sv = Wire.inRange(j["vfo"], 1...1.0e11),
        ProcessInfo.processInfo.systemUptime - lastLocalTuneAt > 1.5 {
       let moved = abs(sv - frequency)
-      if moved > 100 {
+      // ★★ ON AN ICOM THE RADIO IS THE DIAL, and its owner tunes in 10 Hz steps at the knob: every move is news,
+      //    and the readout must not lag the radio by up to 100 Hz.
+      if moved > (isIcom ? 0.5 : 100) {
         Vitals.crumb("UBER shared dial: another listener moved it to \(Wire.i64(sv))")
         frequency = sv
         clearRds()          // it is a different station now — the old name must not linger
@@ -2860,7 +2981,11 @@ final class UberClient: ObservableObject {
           if let d = Self.modeBW[m] { bwLow = d.low; bwHigh = d.high }
         }
         let bw = max(abs(bwHigh - bwLow), 3_000)
-        if moved > bw {
+        // ★ Never a view request on an Icom: the scope's window is the RADIO's, and the server re-sends config
+        //   whenever its edges move. A zoom from here could only re-span somebody else's radio.
+        if isIcom {
+          viewCenterHz = centerHz
+        } else if moved > bw {
           viewCenterHz = sv
           sendViewCoalesced(sv, viewBinBw > 0 ? viewBinBw : binBandwidth)
         }
@@ -2869,7 +2994,16 @@ final class UberClient: ObservableObject {
         //   we used to be — it compares centerHz against `frequency`, which we have just moved.
       }
     }
-    if isVibe, vibeAdopted { adoptRoomPassband(j) }
+    if isVibe, vibeAdopted, !isIcom { adoptRoomPassband(j) }
+    // ★ On an Icom the mode is the RADIO's, whether or not the frequency moved with it (the owner can switch
+    //   USB → RTTY without touching the knob) — and the passband drawn is its FIL's. Our own change is not undone
+    //   by a config that was sent before it landed.
+    if isIcom, ProcessInfo.processInfo.systemUptime - lastLocalTuneAt > 1.5,
+       let m = (j["mode"] as? String)?.lowercased(), !m.isEmpty, m != mode, Self.modeBW[m] != nil {
+      mode = m
+      if let d = Self.modeBW[m] { bwLow = d.low; bwHigh = d.high }
+      applyIcomState()
+    }
 
     // VFO-LOCKED CENTRE. drawVFO puts the needle at the display centre, so the view must stay
     // centred on the tuned frequency. A config whose centre has drifted from it — the wide
@@ -2897,7 +3031,7 @@ final class UberClient: ObservableObject {
       // ★★★ ON A SHARED VIEW, THE SERVER'S CENTRE IS NOT A DRIFT TO BE CORRECTED — it is where
       //     the other listeners are looking. Correcting it drags their waterfall to our VFO.
       //     Adopt it, exactly as we already adopt their `vfo`.
-      if sharedView {
+      if sharedView || isIcom {   // ★ an Icom: the centre is the RADIO's (fixed scope mode is not centred on the VFO)
         viewCenterHz = centerHz          // adopt in silence — this is normal, not a clamp
       } else {
         if centreAsserts < 2 {
@@ -2942,7 +3076,7 @@ final class UberClient: ObservableObject {
       //     connecting the same as the app and web client").
       //  ★ DROPPED, not deferred: adopt what the server is showing and leave the memory on disk
       //    for the next time this receiver is opened exclusively.
-      if sharedView { pendingRestoreSpanHz = nil }
+      if sharedView || isIcom { pendingRestoreSpanHz = nil }   // ★ an Icom: never restore a span onto the radio
       if let want = pendingRestoreSpanHz, bins.count > 0 {
         pendingRestoreSpanHz = nil
         let wantBinBw = want / Double(bins.count)
@@ -2972,7 +3106,7 @@ final class UberClient: ObservableObject {
       //     forced its own zoom back and FOUGHT a live user mid-session, twice, before giving in.
       //     Worse than imposing on arrival, because it happens while they are using the dial.
       //     Where the view is shared, a change we did not request is simply the news.
-      if sharedView {
+      if sharedView || isIcom {   // ★ an Icom: the owner changed the span at the radio — that is the news
         // ★ ADOPTED BUT NOT REMEMBERED. This span is somebody else's choice; writing it to
         //   ViewMemory would have a stranger's zoom decide where THIS receiver opens the next
         //   time you have it to yourself. Only our own acked zoom (the branch above) is saved.
@@ -3075,6 +3209,29 @@ final class UberClient: ObservableObject {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
   }
 
+  /// The span a (re)subscribe asks for. ★★ On an Icom it is the radio's OWN current span, which the server treats as
+  /// no change — a joiner adopts, it never imposes (a zoom there re-spans the transceiver for everybody). Before
+  /// the radio has said, the server's last scale; before that, the old default.
+  private var subscribeBinBw: Double {
+    if isIcom {
+      let n = Double(binCount > 0 ? binCount : 1024)
+      if let sp = icom?.span, sp > 0 { return sp / n }
+      if binBandwidth > 0 { return binBandwidth }
+    }
+    return viewBinBw > 0 ? viewBinBw : 100
+  }
+
+  /// Ask for the band. ★ On an Icom whose span is not known yet there is nothing honest to ask for — any span would
+  /// be ours, not the radio's — so ask only for the config (`reset`, which the server answers on an Icom with
+  /// sendConfig and nothing else); the frames are the radio's sweeps either way.
+  private func subscribeSpectrum() {
+    if isIcom, (icom?.span ?? 0) <= 0, binBandwidth <= 0 {
+      specSock.send(json: ["type": "reset"])
+      return
+    }
+    sendView(frequency, subscribeBinBw)
+  }
+
   private func sendView(_ freq: Double, _ binBwRequested: Double) {
     // ★★★ CLAMP HERE — THE ONE PLACE EVERY VIEW GOES THROUGH. The first cut bounded the span
     //     inside zoom(), which is only ONE of the paths that sends a view: a restored view, a
@@ -3091,7 +3248,9 @@ final class UberClient: ObservableObject {
     let lowestHz = 10_000.0
     let centrable = max(2 * (freq - lowestHz), 100_000)   // a VFO-centred view cannot cross 0 Hz
     let maxBinBw = min(widestUsefulSpan, centrable) / bins
-    let binBw = min(binBwRequested, maxBinBw)
+    // ★ Not on an Icom: its zoom IS the span ladder (5 kHz … 1 MHz), the server picks the nearest rung, and the
+    //   VFO-centring bound would refuse the 1 MHz rung below ~510 kHz for no reason the radio has.
+    let binBw = isIcom ? binBwRequested : min(binBwRequested, maxBinBw)
     if binBw < binBwRequested {
       Vitals.crumb("UBER span clamped: asked \(Wire.i64(binBwRequested * bins)) Hz, sending \(Wire.i64(binBw * bins)) Hz (VFO \(Wire.i64(freq)))")
     }
@@ -3301,6 +3460,7 @@ final class UberClient: ObservableObject {
       Task { @MainActor in
         try? await Task.sleep(nanoseconds: 500_000_000)   // let the audio socket come up first
         guard !self.goingIdle else { return }
+        guard !self.isIcom else { return }   // ★ hwinfo said Icom meanwhile — the radio is the dial, and has no squelch of ours
         self.sendTune()
         // ★ And the remembered squelch, on the same beat — the gate is per session server-side.
         if self.savedSquelchOn {
@@ -3439,7 +3599,8 @@ final class UberClient: ObservableObject {
   /// Main actor, once a second (the rate timer). See the note on `heal`.
   private func healTick() {
     let snap = audio.healthSnapshot
-    let expected = status == "live" && everHadAudio && snap.live && !snap.paused && !goingIdle
+    // ★ An Icom transmitting or off CI-V: the server MUTED the audio on purpose — silence is not a fault to repair.
+    let expected = status == "live" && everHadAudio && snap.live && !snap.paused && !goingIdle && !icomQuiet
     let d = heal.tick(now: ProcessInfo.processInfo.systemUptime, rx: audioRxTotal,
                       played: snap.played, expected: expected)
     guard d.action != .none else { return }
@@ -3474,6 +3635,11 @@ final class UberClient: ObservableObject {
     // ★ Int64: on arm64_32 `Int` is 32-bit and traps past 2.147e9, which a tune in Hz
     //   reaches on an SDRplay RSP (2 GHz) — uncomfortably close, and a trap is a crash.
     let msg: [String: Any] = ["type": "tune", "frequency": Int64(frequency), "mode": mode]
+    /* ★★ AN ICOM: THE SPECTRUM SOCKET — the one that carries admin_unlock and icom_control. With several listeners
+     *    allowed the server judges the owner lock PER SOCKET (adminNow → adminSocks), so a tune on the audio socket
+     *    from a watch signed in on the spectrum socket would be refused as a listener's. The reason for the audio
+     *    route below does not apply: on an Icom every server-side tune is ignored — the radio is the state. */
+    if isIcom { specSock.send(json: msg); return }
     /* ★★★ THE AUDIO SOCKET, AND ONLY IT — see the long note in the phone’s SdrWsClient._routeTune.
      *  Routing a tune past the side that holds the session’s frequency makes a reconnect re-tune backwards. */
     audioSock.send(json: msg)
@@ -3518,8 +3684,12 @@ final class UberClient: ObservableObject {
 
   /// Tuning range. UberSDR is HF-only (≤30 MHz); a VibeServer serves an RTL-SDR dongle that reaches VHF/UHF
   /// (up to ~1.8 GHz), so the 30 MHz clamp would have locked the whole VHF/UHF band away.
-  private var freqMin: Double { 10_000 }
-  private var freqMax: Double { isVibe ? 1_800_000_000 : 30_000_000 }
+  /// ★ On an Icom, the RADIO's receive range (hwinfo `ranges`) — the server would refuse a tune outside it anyway.
+  private var freqMin: Double { if let ic = icom, ic.rangeHi > ic.rangeLo { return max(ic.rangeLo, 1) }; return 10_000 }
+  private var freqMax: Double {
+    if let ic = icom, ic.rangeHi > ic.rangeLo { return ic.rangeHi }
+    return isVibe ? 1_800_000_000 : 30_000_000
+  }
   var tuneMinHz: Double { freqMin }
   var tuneMaxHz: Double { freqMax }
   func setAutoContrast(_ v: Double) { proc.autoContrast = v }
@@ -3561,6 +3731,7 @@ final class UberClient: ObservableObject {
     // ★ The shared dial is disarmed by default — see `canTune`. Silently ignoring a crown turn is
     //   correct here: the UI shows the disarmed state, so this is not a surprise, and beeping at
     //   somebody whose sleeve moved would be worse than doing nothing.
+    guard !icomRefused() else { return }   // ★ the owner lock: refused here, one notice per 4 s — before the arm
     guard canTune else { return }
     let base = delta > 0 ? (frequency / step).rounded(.down) : (frequency / step).rounded(.up)
     let f = max(freqMin, min(freqMax, (base + Double(delta)) * step))
@@ -3570,7 +3741,8 @@ final class UberClient: ObservableObject {
     clearRds()            // moved off the old station — don't show its name on the new frequency
     saveVibeState()
     sendTuneThrottled()   // 100ms debounce — match the companion/main app (see sendTuneThrottled)
-    sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
+    // ★ Not on an Icom: its scope follows the VFO by itself (centre mode) and a zoom could only re-span it.
+    if !isIcom { sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth) }
   }
 
   /// App playback gain (0…1), forwarded to the audio engine's master mixer — the only volume a
@@ -3582,6 +3754,9 @@ final class UberClient: ObservableObject {
   /// phone's native path emits (VibePowerModule.swift `sendWsJson(["type":"tune", ...])`).
   func setBandwidth(_ low: Double, _ high: Double) {
     guard !(sharedDial && dialTuneLocked) else { return }   // ★★ ask before tuning — the passband is everybody's
+    // ★★ An Icom has FIL1/2/3, not a passband: the menu draws the FIL picker instead (setIcomFil). Nothing that
+    //    reaches here can be honoured as drawn, so nothing is sent.
+    guard !isIcom else { return }
     bwLow = low
     bwHigh = high
     lastLocalBwAt = ProcessInfo.processInfo.systemUptime   // ★ so its echo is not the room's — see adoptRoomPassband
@@ -3593,6 +3768,13 @@ final class UberClient: ObservableObject {
   func setMode(_ m: String) {
     guard m != mode else { return }
     guard !(sharedDial && dialTuneLocked) else { return }   // ★★ ask before tuning — the demodulator is everybody's
+    /* ★★ AN ICOM: the mode is the RADIO's. A client mode (a bookmark's "usb") goes as a `mode` message — the server
+     *    maps it and refuses one the radio has not got — and the mirror is NOT moved: the radio's answer moves it. */
+    if isIcom {
+      guard !icomRefused() else { return }
+      specSock.send(json: ["type": "mode", "mode": m])
+      return
+    }
     mode = m
     lastLocalTuneAt = ProcessInfo.processInfo.systemUptime   // ★ configs already sent with the OLD mode must not undo it
     clearRds()            // RDS is WFM-only; leaving/among modes must not leave a station name up
@@ -3620,6 +3802,7 @@ final class UberClient: ObservableObject {
   /// Absolute tune, for the numpad — jump straight from 648 kHz AM to the 40m band
   /// without spinning the crown across 6 MHz.
   func tuneTo(_ hz: Double) {
+    guard !icomRefused() else { return }   // ★ first: under the owner lock, arming the shared dial changes nothing
     guard canTune else { return }
     let f = max(freqMin, min(freqMax, hz))
     guard f != frequency else { return }
@@ -3628,7 +3811,7 @@ final class UberClient: ObservableObject {
     clearRds()            // jumped bands — drop the old station's name immediately
     saveVibeState()
     sendTune()
-    sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
+    if !isIcom { sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth) }
   }
 
   /// FRAME RATE, in our back pocket.
@@ -3702,6 +3885,18 @@ final class UberClient: ObservableObject {
   /// thing that beats the bin-resolution ceiling, and it is why the watch feels sharp.
   func zoom(delta: Int) {
     guard delta != 0, viewBinBw > 0 else { return }
+    /* ★★★ AN ICOM: ZOOM IS THE RADIO'S SPAN LADDER (plan §2.2) — 475 real points over one of its rungs, nothing
+     *  in between and nothing past the narrowest (zooming the picture would invent resolution). One rung per
+     *  detent, compounding through the coalesced send; the server picks the nearest rung and its config is the
+     *  answer. The span is the radio's, so the owner lock covers it. */
+    if let ic = icom, !ic.spans.isEmpty {
+      guard !icomRefused() else { return }
+      let n = Double(max(binCount, 1))
+      var rung = viewBinBw * n
+      for _ in 0..<min(abs(delta), 8) { rung = IcomRadio.spanStep(ic.spans, current: rung, dir: delta) }
+      sendViewCoalesced(frequency, rung / n)
+      return
+    }
     // Half an octave per detent. The server zooms in DISCRETE octaves, so a small per-detent
     // creep (was /6 = 6 clicks) produced no visible change until the server's nearest level
     // finally flipped — the "ring fills as you spin, then pops back" stickiness. Half-octave

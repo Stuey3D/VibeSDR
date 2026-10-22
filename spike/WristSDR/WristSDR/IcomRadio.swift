@@ -28,6 +28,9 @@ struct IcomRadio: Equatable {
   /// The scope's span ladder, TOTAL widths in Hz (5 kHz … 1 MHz on a 7300).
   var spans: [Double]
   var span: Double
+  /// The radio's receive range, Hz — the outer edges of hwinfo `ranges` (30 kHz – 74.8 MHz on a 7300). 0 = unknown.
+  var rangeLo: Double
+  var rangeHi: Double
   var tx: Bool
   /// ★ ABSENT is not DOWN — only an explicit false says the radio stopped answering.
   var linkUp: Bool
@@ -42,6 +45,13 @@ struct IcomRadio: Equatable {
     if let m = r["filterWidths"] as? [String: Any] {
       for (k, v) in m { let w = nums(v); if !w.isEmpty { fw[k] = w } }
     }
+    var lo = Double.infinity, hi = 0.0
+    for pair in r["ranges"] as? [Any] ?? [] {
+      let p: [Double] = nums(pair)
+      guard p.count == 2, p[0] >= 0, p[1] > p[0] else { continue }
+      lo = min(lo, p[0]); hi = max(hi, p[1])
+    }
+    if hi <= 0 { lo = 0 }
     return IcomRadio(
       model: (r["model"] as? String).flatMap { $0.isEmpty ? nil : SafeText.clean($0, max: 32) } ?? "Icom",
       modes: strs(r["modes"]),
@@ -51,6 +61,8 @@ struct IcomRadio: Equatable {
       filterWidths: fw,
       spans: nums(sc["spans"]).filter { $0 > 0 && $0 <= 1.0e8 },
       span: num(sc["span"]),
+      rangeLo: lo,
+      rangeHi: hi,
       tx: flag(r["tx"]),
       linkUp: !isFalse(r["linkUp"]),
       ownerLock: !isFalse(r["ownerLock"]))
