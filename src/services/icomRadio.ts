@@ -420,3 +420,94 @@ export function icomBanner(radio: IcomRadio | null): string {
   if (!radio.linkUp) return 'The radio is not answering — VibeServer is retrying';
   return '';
 }
+
+// ── The owner's SETUP (the server's config, per radio — the same fields the setup page's Icom card saves) ──
+/* ★★ ONE SET OF FIELDS, THREE EDITORS: the server's setup page (vibe_setup_page.h icomRender / collect()), the
+ *  app's Icom setup card for a remote VibeServer (GET/POST /vibeserver/config at the door, with the admin
+ *  ticket), and the app's own server screen (ServerModeScreen, Android Phase 4). Names and defaults are the
+ *  setup page's, letter for letter, so a save from any of them reads back the same in the others. */
+
+/** The radio's own CI-V USB baud menu (MENU > SET > Connectors > CI-V > CI-V USB Baud Rate). */
+export const ICOM_BAUDS = [115200, 57600, 38400, 19200, 9600, 4800] as const;
+/** Scope speed as the CONFIG stores it (0 fast, 1 mid, 2 slow) — the live control uses the names. */
+export const ICOM_SCOPE_SPEED_NAMES = ['Fast', 'Mid', 'Slow'] as const;
+
+export interface IcomSettings {
+  icomBaud: number;
+  /** 0 = the radio's own (0x94 on an IC-7300). */
+  icomCiv: number;
+  icomScopeSpeed: number;
+  /** ★ Default ON — "listeners follow the radio" (plan §3.4). */
+  icomOwnerLock: boolean;
+  icomRfOpen: boolean;
+  /** 'auto' finds the radio's USB audio; 'none' = waterfall and dial only; or a device name. */
+  icomAudio: string;
+  /** 'usb' = the radio's USB port by its own name, or a path. */
+  icomPort: string;
+  /** Allow a /dev/… serial device (DTR/RTS raised for an instant on open). */
+  icomTtyOk: boolean;
+}
+
+/** A radio's config entry → its Icom settings, with the setup page's defaults. */
+export function icomSettingsFrom(r: unknown): IcomSettings {
+  const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+  const baud = num(o.icomBaud, 115200);
+  return {
+    icomBaud: baud > 0 ? baud : 115200,
+    icomCiv: Math.max(0, Math.min(0xff, Math.round(num(o.icomCiv, 0)))),
+    icomScopeSpeed: [0, 1, 2].includes(num(o.icomScopeSpeed, 0)) ? num(o.icomScopeSpeed, 0) : 0,
+    icomOwnerLock: o.icomOwnerLock !== false,
+    icomRfOpen: o.icomRfOpen === true,
+    icomAudio: (str(o.icomAudio) || 'auto').trim() || 'auto',
+    icomPort: (str(o.icomPort) || 'usb').trim() || 'usb',
+    icomTtyOk: o.icomTtyOk === true,
+  };
+}
+
+/** "94" → 0x94, "" → 0 (the radio's own), anything that is not one or two hex digits → null. */
+export function parseCivHex(t: string): number | null {
+  const s = String(t ?? '').trim();
+  if (!s) return 0;
+  if (!/^[0-9a-f]{1,2}$/i.test(s)) return null;
+  return parseInt(s, 16);
+}
+export function fmtCivHex(n: number): string { return n > 0 ? n.toString(16).toUpperCase().padStart(2, '0') : ''; }
+
+/** ★ WHICH RADIO in the server's config is the Icom we are listening to. A radio behind a front door is
+ *  `/r/<serial>`, so the serial from the connect address wins; on a single-radio server, the one Icom in the
+ *  list. null = cannot tell (more than one Icom and no serial) — the card then sends the owner to the setup
+ *  page rather than guess which transceiver to reconfigure. */
+export function pickIcomSerial(cfg: unknown, connectPath?: string): string | null {
+  const radios = (cfg && typeof cfg === 'object' && Array.isArray((cfg as { radios?: unknown }).radios)
+    ? (cfg as { radios: unknown[] }).radios : []) as Record<string, unknown>[];
+  const m = /\/r\/([^/?#]+)/.exec(connectPath || '');
+  if (m) {
+    const want = decodeURIComponent(m[1]);
+    return radios.some((r) => r && r.serial === want) ? want : null;
+  }
+  const icoms = radios.filter((r) => r && r.driver === 'icom' && typeof r.serial === 'string');
+  return icoms.length === 1 ? String(icoms[0].serial) : null;
+}
+
+/** The whole config back, with ONE radio's Icom fields replaced — everything else exactly as read (the POST
+ *  replaces the whole file, as the setup page's does). Returns null when the serial is not in it. */
+export function withIcomSettings(cfg: unknown, serial: string, s: IcomSettings): Record<string, unknown> | null {
+  if (!cfg || typeof cfg !== 'object') return null;
+  const c = cfg as Record<string, unknown>;
+  const radios = Array.isArray(c.radios) ? (c.radios as Record<string, unknown>[]) : [];
+  const i = radios.findIndex((r) => r && r.serial === serial);
+  if (i < 0) return null;
+  const next = radios.slice();
+  next[i] = { ...radios[i], ...s };
+  return { ...c, radios: next };
+}
+
+/** The preflight in plain lines for the setup card: ✓/✗, the item, its value and — when it fails — the exact
+ *  radio menu path to change it. */
+export function preflightLines(p: IcomPreflight | null): { ok: boolean; text: string }[] {
+  if (!p) return [];
+  return p.items.map((it) => ({
+    ok: it.ok,
+    text: `${it.name}: ${it.value || '?'}${it.ok ? '' : ` — change it at ${it.where || 'the radio’s menu'}`}`,
+  }));
+}
