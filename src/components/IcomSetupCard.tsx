@@ -125,7 +125,7 @@ export default function IcomSetupCard({ icom, styles, K, doorBase, connectBase, 
  *    segActive, segTxt, segTxtActive, convInput, toggleRow, toggleLabel) and its own switch colours. */
 
 /** Switch colours — each home keeps its own look. */
-export interface IcomSwitchInk { trackOn: string; trackOff: string; thumbOn: string; thumbOff: string }
+export interface IcomSwitchInk { trackOn: string; trackOff: string; thumbOn: string; thumbOff: string; placeholder?: string }
 
 /** A row of keys, one lit. Only values the caller lists are offered. */
 export function IcomChoice<T extends string | number>({ opts, value, fmt, onPick, styles }:
@@ -220,7 +220,7 @@ export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink,
     </Text>
     <Text style={styles.fieldLbl}>CI-V address (empty = the radio&rsquo;s own)</Text>
     <TextInput value={civTxt} onChangeText={onCivTxt} maxLength={2} autoCapitalize="characters" autoCorrect={false}
-               placeholder="94" placeholderTextColor="#777" style={styles.convInput} />
+               placeholder="94" placeholderTextColor={ink.placeholder ?? '#777'} style={styles.convInput} />
     {civBad && (
       <Text style={[styles.note, styles.noteBad]}>
         The CI-V address is two hex digits (94 on an IC-7300), or empty for the radio&rsquo;s own.
@@ -242,11 +242,11 @@ export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink,
     {!phone && (<>
       <Text style={styles.fieldLbl}>Receive audio</Text>
       <TextInput value={form.icomAudio} onChangeText={(t) => onSet('icomAudio', t)} autoCapitalize="none" autoCorrect={false}
-                 placeholder="auto" placeholderTextColor="#777" style={styles.convInput} />
+                 placeholder="auto" placeholderTextColor={ink.placeholder ?? '#777'} style={styles.convInput} />
       <Text style={styles.note}>auto finds the radio&rsquo;s own USB audio; none serves the waterfall and dial only.</Text>
       <Text style={styles.fieldLbl}>Port</Text>
       <TextInput value={form.icomPort} onChangeText={(t) => onSet('icomPort', t)} autoCapitalize="none" autoCorrect={false}
-                 placeholder="usb" placeholderTextColor="#777" style={styles.convInput} />
+                 placeholder="usb" placeholderTextColor={ink.placeholder ?? '#777'} style={styles.convInput} />
       <View style={styles.toggleRow}>
         <Text style={[styles.toggleLabel, { flex: 1 }]}>Allow a serial device (/dev/&hellip;) as the port</Text>
         <Switch value={form.icomTtyOk} onValueChange={(v) => onSet('icomTtyOk', v)}
