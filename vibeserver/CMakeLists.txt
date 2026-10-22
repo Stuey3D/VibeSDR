@@ -22,13 +22,13 @@ cmake_minimum_required(VERSION 3.20)
 #     package takes its upstream version from here, and the macOS app's plist is bumped alongside
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
-project(vibeserver VERSION 11.0.10 LANGUAGES CXX C)
+project(vibeserver VERSION 12.0.0 LANGUAGES CXX C)
 # ★★★ V11 (2026-09-28): the app, Jr, every VibeServer host, Lite and the Mac app all move to major 11
 #     together (docs/BRIEF-v11-compatibility.md). A PRE-RELEASE is named on its OWN line, read by every
 #     reader of the line above (android CMake, lite gradle, mac/build-app.sh): the package becomes
 #     11.0.0~b1, which dpkg sorts ABOVE 5.6.x and BELOW 11.0.0, so both upgrades are clean.
 #     ★ Empty it for the release. Never publish a ~ version AFTER its release — it would sort below it.
-set(VIBESERVER_PRERELEASE "")
+set(VIBESERVER_PRERELEASE "beta1")
 
 # ── ★★★ SANITISER BUILDS FOR THE TESTS AND THE OFFLINE REPLAY ────────────────────────────────
 #

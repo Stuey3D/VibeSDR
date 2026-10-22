@@ -411,6 +411,11 @@ public:
      *  `diagnostics`), already scrubbed, and its download name. False + err = nothing to hand over (not built yet). */
     using AdminDiagFn = std::function<bool(std::string& body, std::string& fileName, std::string& err)>;
     static void setAdminDiagnosticsHandler(AdminDiagFn fn);
+    /** ★★ RECEIVE BETA UPDATES (2026-10-22): a JSON object for the admin status — {"beta":bool,"installed","offer",
+     *  "version","checked"} — read by the DAEMON from the system (the beta apt source exists or not; the offer the root
+     *  helper wrote), never remembered. "" = say nothing. Only the Linux daemon installs one. */
+    using UpdateOfferFn = std::function<std::string()>;
+    static void setUpdateOfferHandler(UpdateOfferFn fn);
 
     /** ★★ IP -> ISO-3166 country, for the flags beside listeners and the top-countries tally.
      *  Registered by the DAEMON, which owns the dataset (see vibeserver/geoip.cpp for why it is

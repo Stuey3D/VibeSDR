@@ -1377,7 +1377,7 @@ const MODE_NAMES = {
   iq48: 'IQ48',   // ★ not a mode the radio lists — derived from rawIq === 'public' (capsOf)
 };
 const MODE_ORDER = Object.keys(MODE_NAMES);
-const VIBEIQ_URL = 'https://github.com/Stuey3D/VibeSDR/releases/tag/vibeiq-v1.0.0';
+const VIBEIQ_URL = 'https://github.com/Stuey3D/VibeSDR/releases/tag/vibeiq-v1.0.1';
 const modesOf = (r) => (Array.isArray(r && r.modes) ? r.modes : []).map((m) => String(m).toLowerCase())
                          .filter((m) => MODE_NAMES[m] && m !== 'iq48');
 /** Everything a radio can be filtered by: its modes and decoders, plus IQ48 when its raw IQ is

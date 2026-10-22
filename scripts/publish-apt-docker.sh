@@ -67,14 +67,26 @@ ARCHES="arm64 amd64 armhf i386"   # ★ armhf joined 2026-09-22 — cross-compil
 # ★★ i386 IS 32-BIT x86 — Kiko's Atom N270 netbook in Brazil ran 11.0.4 built from source because apt
 #    had nothing for it, and the mission is exactly that machine (Stuart, 2026-10-17). SSE2 floor;
 #    preinst refuses a CPU without it. Built natively on the Lenovo like amd64 (see the refusal below).
+# ★★ --suite beta (2026-10-22): publish a V12 beta into suite `beta` only — the same rules and guards as
+#    publish-apt-remote.sh (see its header); publish-apt.sh does the work from VIBE_SUITE.
+SUITE="stable"
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN="--dry-run" ;;
     --arch)    shift; ARCHES="${1//,/ }" ;;
-    *) echo "usage: $0 [--dry-run] [--arch arm64|amd64|armhf|i386|'arm64 amd64 armhf i386']"; exit 1 ;;
+    --suite)   shift; SUITE="${1:-}" ;;
+    *) echo "usage: $0 [--dry-run] [--arch arm64|amd64|armhf|i386|'arm64 amd64 armhf i386'] [--suite stable|beta]"; exit 1 ;;
   esac
   shift
 done
+case "$SUITE" in stable|beta) ;; *) echo "!! --suite must be stable or beta"; exit 1;; esac
+_up="$(grep -oE 'project\([^)]*VERSION[[:space:]]+[0-9.]+' "$(cd "$(dirname "$0")/.." && pwd)/vibeserver/CMakeLists.txt" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+_pre="$(sed -n 's/^set(VIBESERVER_PRERELEASE "\([A-Za-z0-9]*\)").*/\1/p' "$(cd "$(dirname "$0")/.." && pwd)/vibeserver/CMakeLists.txt" | head -1)"
+case "$SUITE:$_pre" in
+  beta:)        echo "!! $_up is not a prerelease — a beta is versioned like 12.0.0~beta1 (VIBESERVER_PRERELEASE)"; exit 1 ;;
+  stable:beta*) echo "!! $_up~$_pre is a BETA — it would be offered to every server. Publish it with --suite beta"; exit 1 ;;
+esac
+echo "==> suite: $SUITE"
 
 command -v docker >/dev/null || { echo "docker not found (brew install colima docker)"; exit 1; }
 # ★★★ BUILDKIT, AND IT IS NOT OPTIONAL ONCE A SECOND ARCHITECTURE EXISTS. The LEGACY builder
@@ -255,6 +267,7 @@ for A in $ARCHES; do
     -v "$APT_DIR":/work/VibeServer \
     -v "$KEY_FILE":/tmp/signing-key.asc:ro \
     -e APT_DIR=/work/VibeServer \
+    -e VIBE_SUITE="$SUITE" \
     ${PREBUILT_ENV} ${CROSS_ENV} \
     -e JOBS="$JOBS_FOR_ARCH" \
     "$IMAGE" /bin/bash -euo pipefail -c '
@@ -274,8 +287,8 @@ done
 # ★★★ SAY WHAT THE REPOSITORY NOW OFFERS EACH ARCHITECTURE, out of the signed index rather than out
 #     of what we believe we just did. A stale architecture is silent everywhere else: apt on the
 #     machine left behind reports no updates and no error.
-echo "==> the repository now offers:"
-for d in "$APT_DIR/dists/stable/main"/binary-*; do
+echo "==> the repository now offers ($SUITE suite):"
+for d in "$APT_DIR/dists/$SUITE/main"/binary-*; do
   [ -e "$d" ] || continue
   printf '      %-8s %s\n' "$(basename "$d" | sed 's/^binary-//')" \
     "$(grep -oE '^Version: [0-9][^ ]*' "$d/Packages" 2>/dev/null | awk '{print $2}' | sort -V | tail -1)"

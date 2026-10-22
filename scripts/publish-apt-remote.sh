@@ -5,6 +5,13 @@
 #   scripts/publish-apt-remote.sh --dry-run            # everything except the push (commits locally)
 #   APT_DIR=<scratch clone> scripts/publish-apt-remote.sh --dry-run --test-rev 0~remote1
 #                                                      # rehearse the whole pipeline at a test revision
+#   scripts/publish-apt-remote.sh --suite beta         # a V12 BETA: suite `beta` only (2026-10-22)
+#
+# ★★★ TWO SUITES (2026-10-22, "Receive beta updates"). --suite beta publishes into dists/beta + pool/beta, which only
+#     a server whose owner ticked Receive beta updates has in its sources; the stable suite is not touched (and a stable
+#     publish never touches beta). Signed with the same key. GUARDED BOTH WAYS, because the mistake is invisible from
+#     here and lands on every machine: a beta suite takes only a prerelease version (12.0.0~beta1), and the stable
+#     suite REFUSES a ~beta version — that would offer the beta to every server in the world.
 #
 # ★★★ WHO DOES WHAT (Stuart, 2026-10-18: "the docker build can we do that remotely on the lenovo going forward
 #     that has loads of space"). The Mac's Docker VM is gone. So:
@@ -39,15 +46,19 @@ GPGCONF="$(dirname "$GPG")/gpgconf"
 ARCHES="amd64 arm64 armhf i386"
 DRY_RUN=""
 TEST_REV=""
+SUITE="stable"
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)  DRY_RUN=1 ;;
     --test-rev) shift; TEST_REV="$1" ;;
     --arch)     shift; ARCHES="${1//,/ }" ;;
-    *) echo "usage: $0 [--dry-run] [--test-rev 0~tag] [--arch 'amd64 arm64 armhf i386']"; exit 1 ;;
+    --suite)    shift; SUITE="${1:-}" ;;
+    *) echo "usage: $0 [--dry-run] [--test-rev 0~tag] [--arch 'amd64 arm64 armhf i386'] [--suite stable|beta]"; exit 1 ;;
   esac
   shift
 done
+case "$SUITE" in stable|beta) ;; *) echo "!! --suite must be stable or beta"; exit 1;; esac
+echo "==> suite: $SUITE"
 for A in $ARCHES; do
   case "$A" in amd64|arm64|armhf|i386) ;; *) echo "!! unknown architecture $A"; exit 1;; esac
 done
@@ -141,13 +152,19 @@ RUNC="docker run --rm --user $HUID:$HGID -e HOME=/tmp -v \$HOME/$RSRC:/src:ro"
 declare_ver() { eval "VER_$1=\$2"; }
 getver() { eval "echo \"\${VER_$1:-}\""; }
 for A in $ARCHES; do
-  v="$(rsh "$RUNC -v \$HOME/$RAPT:/apt:ro -e APT_DIR=/apt -e VIBE_PUBLISH_ARCH=$A debian:bookworm-slim \
+  v="$(rsh "$RUNC -v \$HOME/$RAPT:/apt:ro -e APT_DIR=/apt -e VIBE_PUBLISH_ARCH=$A -e VIBE_SUITE=$SUITE debian:bookworm-slim \
             bash /src/scripts/publish-apt.sh --next-rev" | tail -1)"
   case "$v" in [0-9]*-[0-9]*) ;; *) echo "!! [$A] could not read the next revision (got '$v')"; exit 1;; esac
   declare_ver "$A" "$v"
   echo "==> [$A] next version: $v"
 done
 UPSTREAM="$(getver "${ARCHES%% *}")"; UPSTREAM="${UPSTREAM%-*}"
+# ★★★ THE SUITE MUST MATCH THE VERSION — see the header. Checked before a minute is spent building.
+case "$SUITE:$UPSTREAM" in
+  beta:*~*)         ;;
+  beta:*)           echo "!! $UPSTREAM is not a prerelease — a beta is versioned like 12.0.0~beta1 (VIBESERVER_PRERELEASE)"; exit 1 ;;
+  stable:*~beta*)   echo "!! $UPSTREAM is a BETA — it would be offered to every server. Publish it with --suite beta"; exit 1 ;;
+esac
 if [ -n "$TEST_REV" ]; then
   for A in $ARCHES; do declare_ver "$A" "$UPSTREAM-$TEST_REV"; done
   echo "==> TEST revision: building and indexing $UPSTREAM-$TEST_REV for every architecture (dry run, scratch repository)"
@@ -176,7 +193,7 @@ rsh "docker image inspect vibeserver-build:bookworm-amd64 >/dev/null 2>&1 || \
        (cd ~/$RSRC/vibeserver/linux && nice -n 19 docker build --platform linux/amd64 --build-arg DEPS_NICE=19 -q \
           -f Dockerfile.build -t vibeserver-build:bookworm-amd64 . >/dev/null)"
 echo "==> indexing on $HOST:"
-rsh "$RUNC --cpus 2 -v \$HOME/$RAPT:/apt -v \$HOME/vibeout:/debs:ro -e APT_DIR=/apt -e VIBE_INDEX_ONLY=1 $TESTENV \
+rsh "$RUNC --cpus 2 -v \$HOME/$RAPT:/apt -v \$HOME/vibeout:/debs:ro -e APT_DIR=/apt -e VIBE_INDEX_ONLY=1 -e VIBE_SUITE=$SUITE $TESTENV \
        vibeserver-build:bookworm-amd64 nice -n 19 bash -euo pipefail -c '$LOOP'" | sed 's/^/    /'
 
 # ── 5. the result comes back — dists/, the pool's additions and removals, the page ────────────
@@ -185,7 +202,8 @@ SYNCED_BACK=1
 rsync_host --delete --exclude .git "$HOST:$RAPT/" "$APT_DIR/"
 
 # ── 6. sign HERE ───────────────────────────────────────────────────────────────────────────────
-DIST="$APT_DIR/dists/stable"
+# ★ THIS SUITE's Release only; the other suite's signed files came back unchanged and stay as they were.
+DIST="$APT_DIR/dists/$SUITE"
 rm -f "$DIST/InRelease" "$DIST/Release.gpg"
 "$GPG" --batch --yes --default-key "$FPR" --clearsign -o "$DIST/InRelease" "$DIST/Release"
 "$GPG" --batch --yes --default-key "$FPR" --armor --detach-sign -o "$DIST/Release.gpg" "$DIST/Release"
@@ -226,7 +244,7 @@ grep -q "^Architectures: $(cd "$DIST/main" && ls -d binary-* | sed 's/^binary-//
 echo "==> every index and package matches its checksum; Release lists $(sed -n 's/^Architectures: //p' "$DIST/Release")"
 
 # ── 8. what the repository will offer ──────────────────────────────────────────────────────────
-echo "==> the repository will offer:"
+echo "==> the repository will offer ($SUITE suite):"
 for d in "$DIST/main"/binary-*; do
   printf '      %-8s %s\n' "$(basename "$d" | sed 's/^binary-//')" \
     "$(grep -oE '^Version: [0-9][^ ]*' "$d/Packages" | awk '{print $2}' | sort -V | tail -1)"
@@ -237,7 +255,7 @@ VERS=""; for A in $ARCHES; do VERS="$VERS $(getver "$A")"; done
 VERS="$(echo "$VERS" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 git -C "$APT_DIR" add -A
 git -C "$APT_DIR" -c user.name="VibeSDR release" -c user.email="packages@vibesdr.net" \
-    commit -q -m "vibeserver $VERS ($ARCHES)${TEST_REV:+ — TEST, never pushed}" || { echo "!! nothing to commit"; exit 1; }
+    commit -q -m "vibeserver $VERS ($ARCHES)$([ "$SUITE" = beta ] && echo ' — BETA suite')${TEST_REV:+ — TEST, never pushed}" || { echo "!! nothing to commit"; exit 1; }
 _ok=1
 echo "==> committed in $APT_DIR: $(git -C "$APT_DIR" log --oneline -1)"
 git -C "$APT_DIR" show --stat --format= HEAD | tail -1

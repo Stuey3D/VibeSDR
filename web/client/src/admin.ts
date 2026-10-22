@@ -23,6 +23,7 @@ import { loadMapGLScripts, mapglLoad, probeMapGL } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { loadLeafletInto } from './leafletAsset';
 import { pushBack } from './gamepad';
+import { betaConfirmText, updateButton, updateOfferText, type UpdateState } from './updateOffer';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
  *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
  *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
@@ -42,6 +43,14 @@ async function ensureVibeMap(): Promise<void> {
 let host = '';
 /** Set by initAdmin so closeAdmin can stop the maintenance-log poll too. */
 let stopFollowing: () => void = () => {};
+/** ★★ RECEIVE BETA UPDATES — the last `updates` the server sent and the actions it offers, so the update button sends
+ *  what its label says; and, while a beta-on/beta-off runs, the tick-box is left alone (the next status after the
+ *  helper finishes says what the system now holds). */
+let lastUpdates: UpdateState | null = null;
+let lastOffered: string[] = [];
+let betaBusy = false;
+/** Called once when the action being followed in #actLog finishes, whichever way. */
+let onActionFinished: (() => void) | null = null;
 let password = '';
 let timer = 0;
 let open = false;
@@ -1600,7 +1609,20 @@ async function refresh() {
       if (sched) sched.hidden = !offered.includes('update');
       if (schedAll) schedAll.hidden = !offered.includes('update-all');
       if (snote) snote.hidden = !canUpdate;
-
+      // ★★★ RECEIVE BETA UPDATES. The tick is the server's answer every refresh (does the beta apt source exist?),
+      //     never this page's memory of a click — except while its own beta-on/beta-off is still running.
+      const u = st.updates && typeof st.updates === 'object' ? st.updates as UpdateState : null;
+      lastUpdates = u; lastOffered = offered;
+      const canBeta = !!u && offered.includes('beta-on') && offered.includes('beta-off');
+      const row = document.getElementById('betaRow');
+      const box = document.getElementById('betaOptIn') as HTMLInputElement | null;
+      if (row) row.hidden = !canBeta;
+      if (box && canBeta && !betaBusy) { box.checked = !!u!.beta; box.disabled = false; }
+      const line = document.getElementById('updOffer');
+      const t = offered.includes('update') ? updateOfferText(u) : '';
+      if (line) { line.textContent = t; line.hidden = !t; }
+      const ub = document.getElementById('actUpdate');
+      if (ub) ub.textContent = updateButton(offered.includes('update-stable') ? u : null).label;
     }
 
     // ★ The note explained a short page. The page is no longer short — only the visitor MAP is
@@ -1970,11 +1992,13 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
       if (++idleRounds < 12 && !text) return;
       window.clearInterval(logTimer);
       logTimer = 0;
-      if (!text) { msg('actMsg', 'The maintenance helper did not start. Is vibeserver-maintenance.path enabled?'); return; }
+      const fin = onActionFinished; onActionFinished = null;
+      if (!text) { msg('actMsg', 'The maintenance helper did not start. Is vibeserver-maintenance.path enabled?'); fin?.(); return; }
       const failed = Number(j.exitCode) !== 0;
       box.classList.toggle('failed', failed);
       box.classList.toggle('done', !failed);
       msg('actMsg', failed ? `Finished with errors (exit ${j.exitCode}).` : 'Finished.');
+      fin?.();
     };
     void tick();
     logTimer = window.setInterval(tick, 900);
@@ -2008,11 +2032,29 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
         ? 'Restarting VibeServer. Reload this page in a few seconds.'
         : action === 'update'
         ? 'Installing updates. VibeServer will restart itself if a new version is fitted.'
+        : action === 'update-stable'
+        ? 'Going back to the stable version. VibeServer will restart itself when it is fitted.'
+        : action === 'beta-on'
+        ? 'Turning on beta updates…'
+        : action === 'beta-off'
+        ? 'Turning off beta updates…'
         : 'Checking for updates.');
     } catch (e) {
       msg('actMsg', (e as Error).message);
+      const fin = onActionFinished; onActionFinished = null; fin?.();
     }
   };
+  // ★★★ RECEIVE BETA UPDATES. Asked first; then the root helper adds or removes the beta apt source and works out the
+  //     new offer. The box is held (disabled) until that finishes — and released either way, so a failed run never
+  //     leaves a dead control — and the next refresh shows what the SYSTEM now says, not what was clicked.
+  $('betaOptIn')?.addEventListener('change', () => {
+    const box = $('betaOptIn') as HTMLInputElement;
+    const want = box.checked;
+    if (!window.confirm(betaConfirmText(want))) { box.checked = !want; return; }
+    betaBusy = true; box.disabled = true;
+    onActionFinished = () => { betaBusy = false; box.disabled = false; void refresh(); };
+    void act(want ? 'beta-on' : 'beta-off');
+  });
   // ── Scheduled updates ───────────────────────────────────────────────────────────────────
   {
     const DAYS = [['-2', 'never'], ['-1', 'every day'], ['0', 'Sundays'], ['1', 'Mondays'],
@@ -2139,7 +2181,11 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
       msg('actMsg', (e as Error).message);
     } finally { btn.disabled = false; }
   });
-  $('actUpdate')?.addEventListener('click', () => act('update', 'Update VibeServer to the latest version?'));
+  // ★★ UPDATE VIBESERVER — or, with beta updates off on a beta, BACK TO STABLE (update-stable, the one downgrade).
+  $('actUpdate')?.addEventListener('click', () => {
+    const b = updateButton(lastOffered.includes('update-stable') ? lastUpdates : null);
+    void act(b.action, b.confirm);
+  });
   $('actUpdateAll')?.addEventListener('click', () => act('update-all',
     'Upgrade EVERY package on this machine?\n\n'
     + 'This is a full system upgrade, running unattended. It keeps security fixes current, but an '

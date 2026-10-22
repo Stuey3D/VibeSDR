@@ -361,6 +361,59 @@ console.log('\n8c. A PLATFORM THAT CANNOT DO MAINTENANCE IS NOT OFFERED IT');
   ok($('actReboot').hidden === false, 'a Linux server gets them all back');
 }
 
+console.log('\n8d. RECEIVE BETA UPDATES — the tick is the SERVER\'S answer, the button says what it does');
+{
+  const LINUX = STATUS.maintenance + ',beta-on,beta-off,update-stable';
+  // ★ An 11.0.10-3 server (no beta actions, no `updates`): no tick-box, the button as it always was.
+  ok($('betaRow').hidden === true, 'a server without the beta actions draws no tick-box');
+  ok(text('actUpdate') === 'UPDATE VIBESERVER', 'and the update button keeps its old label', text('actUpdate'));
+
+  responses.status = { ...STATUS, maintenance: LINUX,
+    updates: { beta: true, installed: '11.0.10-4', offer: 'beta', version: '12.0.0~beta1-1', stale: false, checked: 1 } };
+  mod.openAdmin('127.0.0.1:48111', 'secret');
+  await new Promise((r) => setTimeout(r, 200));
+  ok($('betaRow').hidden === false, 'a server offering beta-on/beta-off draws the tick-box');
+  ok($('betaOptIn').checked === true, 'ticked, because the server says the beta source exists');
+  ok(/Receive beta updates \(V12\)/.test(text('betaRow')), 'and it says what it is', text('betaRow'));
+  ok(text('updOffer').startsWith('12.0.0~beta1-1 available (beta).'), 'the offer line names the beta', text('updOffer'));
+  ok(text('actUpdate') === 'UPDATE VIBESERVER', 'the button still says update');
+
+  responses.status = { ...STATUS, maintenance: LINUX,
+    updates: { beta: false, installed: '12.0.0~beta1-1', offer: 'back-to-stable', version: '11.0.10-4', stale: false, checked: 1 } };
+  mod.openAdmin('127.0.0.1:48111', 'secret');
+  await new Promise((r) => setTimeout(r, 200));
+  ok($('betaOptIn').checked === false, 'unticked when the server says the source is gone');
+  ok(text('updOffer').startsWith('11.0.10-4 available — back to stable.'), 'the offer line says back to stable', text('updOffer'));
+  ok(text('actUpdate') === 'BACK TO STABLE (11.0.10-4)', 'and the button says what it will do', text('actUpdate'));
+
+  // ★★ Pressing it sends update-stable; ticking sends beta-on. Count what is POSTed.
+  const posted = [];
+  const real = global.fetch;
+  global.fetch = window.fetch = async (url, init) => {
+    if (init?.method === 'POST' && /\/vibeserver\/admin\/action/.test(String(url))) {
+      try { posted.push(JSON.parse(init.body).action); } catch { posted.push('?'); }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    }
+    return real(url, init);
+  };
+  // ★ The buttons are wired by initAdmin (guarded: a second call wires nothing twice).
+  mod.initAdmin(() => '127.0.0.1:48111', () => 'secret');
+  window.confirm = global.confirm = () => true;   // ★ act() calls the bare global
+  $('actUpdate').click();
+  await new Promise((r) => setTimeout(r, 200));
+  ok(posted.includes('update-stable') && !posted.includes('update'), 'BACK TO STABLE posts update-stable, not update', JSON.stringify(posted));
+  $('betaOptIn').checked = true;
+  $('betaOptIn').dispatchEvent(new window.Event('change'));
+  await new Promise((r) => setTimeout(r, 200));
+  ok(posted.includes('beta-on'), 'ticking posts beta-on', JSON.stringify(posted));
+  ok($('betaOptIn').disabled === true, 'and the box is held while the helper runs');
+  window.confirm = global.confirm = () => false;
+  global.fetch = window.fetch = real;
+  responses.status = STATUS;
+  mod.openAdmin('127.0.0.1:48111', 'secret');
+  await new Promise((r) => setTimeout(r, 200));
+}
+
 console.log('\n9. CLOSING STOPS THE POLLING');
 {
   mod.closeAdmin();

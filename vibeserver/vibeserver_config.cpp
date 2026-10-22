@@ -1,6 +1,8 @@
 #include "vibeserver_config.h"
 #include <vector>
 #include <algorithm>
+#include <set>
+#include <utility>
 
 #include <cstdio>
 #include <cstdlib>
@@ -25,8 +27,14 @@ namespace {
 //   small enough to be obviously correct. If the schema ever needs nesting, take a real parser —
 //   do not grow this one.
 
+/** ★★ WHICH KEYS A READER ASKED FOR — set around one parse so the keys it never asked about can be KEPT (see
+ *  RadioConfig::unknownKeys). Every getter goes through findKey, so this sees exactly what this version reads,
+ *  with no second list to fall out of step with it. thread_local: config is read from more than one thread. */
+thread_local std::set<std::string>* t_keysAsked = nullptr;
+
 /** Find `"key"` at the top level and return the index just past its colon, or npos. */
 size_t findKey(const std::string& s, const std::string& key) {
+    if (t_keysAsked) t_keysAsked->insert(key);
     const std::string pat = "\"" + key + "\"";
     size_t i = 0;
     while ((i = s.find(pat, i)) != std::string::npos) {
@@ -130,6 +138,76 @@ bool getObjectArray(const std::string& s, const std::string& key,
         if (c == ']' && depth == 0) return true;        // the array ended cleanly
     }
     return false;                                        // ran off the end: unterminated
+}
+
+/** The end of the JSON value starting at s[i] (string, object, array or scalar), or npos if it is malformed. */
+size_t skipValue(const std::string& s, size_t i) {
+    if (i >= s.size()) return std::string::npos;
+    if (s[i] == '"') {
+        for (++i; i < s.size(); ++i) {
+            if (s[i] == '\\') { ++i; continue; }
+            if (s[i] == '"') return i + 1;
+        }
+        return std::string::npos;
+    }
+    if (s[i] == '{' || s[i] == '[') {
+        int depth = 0; bool inStr = false, esc = false;
+        for (; i < s.size(); ++i) {
+            const char c = s[i];
+            if (inStr) { if (esc) esc = false; else if (c == '\\') esc = true; else if (c == '"') inStr = false; continue; }
+            if (c == '"') { inStr = true; continue; }
+            if (c == '{' || c == '[') depth++;
+            else if ((c == '}' || c == ']') && --depth == 0) return i + 1;
+        }
+        return std::string::npos;
+    }
+    const size_t a = i;
+    while (i < s.size() && s[i] != ',' && s[i] != '}' && s[i] != ']' && !isspace((unsigned char)s[i])) ++i;
+    return i == a ? std::string::npos : i;
+}
+
+/** ★★ THE MEMBERS OF ONE OBJECT — its own keys only, never a nested object's — as raw text (the key between its
+ *  quotes, the value exactly as written). False, and nothing to keep, if the object is not well formed. */
+bool objectMembers(const std::string& s, std::vector<std::pair<std::string, std::string>>& out) {
+    out.clear();
+    auto ws = [&](size_t& i) { while (i < s.size() && isspace((unsigned char)s[i])) ++i; };
+    size_t i = 0; ws(i);
+    if (i >= s.size() || s[i] != '{') return false;
+    ++i;
+    for (;;) {
+        ws(i);
+        if (i >= s.size()) return false;
+        if (s[i] == '}') return true;
+        if (s[i] != '"') return false;
+        const size_t ke = skipValue(s, i);
+        if (ke == std::string::npos) return false;
+        std::string key = s.substr(i + 1, ke - i - 2);
+        i = ke; ws(i);
+        if (i >= s.size() || s[i] != ':') return false;
+        ++i; ws(i);
+        const size_t ve = skipValue(s, i);
+        if (ve == std::string::npos) return false;
+        out.emplace_back(std::move(key), s.substr(i, ve - i));
+        i = ve; ws(i);
+        if (i < s.size() && s[i] == ',') { ++i; continue; }
+        if (i < s.size() && s[i] == '}') return true;
+        return false;
+    }
+}
+
+/** ★★★ KEEP WHAT WE DO NOT KNOW. The members of `obj` that this version neither asked for (`asked`) nor writes
+ *  itself (`written`), merged into `keep`: a key already kept is updated in place, one not mentioned stays — a
+ *  PATCH must not have an opinion about fields it does not mention, the same rule as everything else here. */
+void keepUnknown(const std::string& obj, const std::set<std::string>& asked, const std::set<std::string>& written,
+                 std::vector<std::pair<std::string, std::string>>& keep) {
+    std::vector<std::pair<std::string, std::string>> m;
+    if (!objectMembers(obj, m)) return;
+    for (auto& kv : m) {
+        if (asked.count(kv.first) || written.count(kv.first)) continue;
+        bool found = false;
+        for (auto& k : keep) if (k.first == kv.first) { k.second = kv.second; found = true; break; }
+        if (!found) keep.push_back(std::move(kv));
+    }
 }
 
 std::string esc(const std::string& in) {
@@ -583,8 +661,21 @@ std::string radioToJson(const RadioConfig& r) {
     B("askBeforeTuning", r.askBeforeTuning);
     N("idleKickMin", r.idleKickMin);
     N("dabScanLabels", r.dabScanLabels);
+    // ★★★ AND WHAT A NEWER VERSION WROTE, back exactly as it was (see RadioConfig::unknownKeys). Last, after every
+    //     key this version owns — and a kept key is never one of ours, so the flat reader cannot be misled.
+    for (const auto& kv : r.unknownKeys) o += "\"" + kv.first + "\":" + kv.second + ",";
     if (!o.empty() && o.back() == ',') o.pop_back();
     return o + "}";
+}
+
+/** The keys this version's radio writer emits — computed from the writer itself, once, so they cannot drift. */
+const std::set<std::string>& writtenRadioKeys() {
+    static const std::set<std::string> k = [] {
+        std::set<std::string> out; std::vector<std::pair<std::string, std::string>> m;
+        if (objectMembers(radioToJson(RadioConfig{}), m)) for (auto& kv : m) out.insert(kv.first);
+        return out;
+    }();
+    return k;
 }
 
 /** ★★★ TODAY'S FILE, READ AS A ONE-RADIO MACHINE. Every install in the field has this shape, and
@@ -703,6 +794,9 @@ std::string toJson(const ServerConfig& c) {
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
     N("port", c.port); B("web", c.web);
+    // ★★★ Top-level keys a newer version wrote, kept as written (see RadioConfig::unknownKeys) — after every key this
+    //     version owns, before `radios`.
+    for (const auto& kv : c.unknownKeys) o += "  \"" + kv.first + "\": " + kv.second + ",\n";
     o += "  \"radios\": [";
     for (size_t i = 0; i < c.radios.size(); i++) {
         o += (i ? ",\n    " : "\n    ");
@@ -712,7 +806,27 @@ std::string toJson(const ServerConfig& c) {
     return o;
 }
 
+namespace {
+const std::set<std::string>& writtenTopKeys() {
+    static const std::set<std::string> k = [] {
+        std::set<std::string> out; std::vector<std::pair<std::string, std::string>> m;
+        ServerConfig c; c.tunnelResume = 1;              // ★ the one key written only when set
+        if (objectMembers(toJson(c), m)) for (auto& kv : m) out.insert(kv.first);
+        return out;
+    }();
+    return k;
+}
+/** Records the keys asked for while it lives (nesting-safe: puts the outer recorder back). */
+struct AskedKeys {
+    std::set<std::string> keys;
+    std::set<std::string>* outer;
+    AskedKeys() : outer(t_keysAsked) { t_keysAsked = &keys; }
+    ~AskedKeys() { t_keysAsked = outer; }
+};
+} // namespace
+
 bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
+    AskedKeys asked;   // ★ for the keys to KEEP — see just before the radios are merged
     std::vector<std::string> objs;
     const bool haveRadios = getObjectArray(j, "radios", objs);
     if (!haveRadios && c.radios.empty()) {
@@ -774,6 +888,11 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     I("uncompressed", c.uncompressed);
     I("port", c.port); B("web", c.web);
 
+    // ★★★ THE TOP-LEVEL KEYS THIS VERSION NEVER ASKED FOR, KEPT (11.0.10-4 — going back from a V12 beta must not cost
+    //     the owner the settings V12 wrote). Only a document with a radios array: an old single-radio file is
+    //     MIGRATED above, and its leftovers are the old shape, not a newer version's settings.
+    if (haveRadios) keepUnknown(j, asked.keys, writtenTopKeys(), c.unknownKeys);
+
     if (haveRadios) {
         // ★★★ MERGE BY SERIAL — NEVER REPLACE THE LIST. Replacing it meant one bad save could
         //     delete every radio on the machine, and one did: a page holding a stale (or empty)
@@ -786,7 +905,13 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
         // ★ An entry we have never seen is still ADDED — that is how a newly attached radio
         //   arrives — so this is not "ignore the client", it is "do not let it delete".
         for (const auto& o : objs) {
-            RadioConfig incoming; radioFromJson(o, incoming);
+            RadioConfig incoming;
+            {
+                AskedKeys ra;
+                radioFromJson(o, incoming);
+                double ordAsk = 0; (void)getNum(o, "order", ordAsk);   // ★ read by the merge below, so it is ours
+                keepUnknown(o, ra.keys, writtenRadioKeys(), incoming.unknownKeys);
+            }
             if (incoming.serial.empty()) continue;      // cannot be matched, cannot be trusted
             bool merged = false;
             // ★ A page or app that predates the display order posts no `order`; that must not
@@ -796,6 +921,15 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
             for (auto& existing : c.radios)
                 if (existing.serial == incoming.serial) {
                     if (!hasOrder) incoming.order = existing.order;
+                    // ★★ A page that posts the radio knows nothing of the kept keys: keep the existing ones,
+                    //    updated by any the post did carry (the patch rule, one level down).
+                    auto kept = existing.unknownKeys;
+                    for (auto& kv : incoming.unknownKeys) {
+                        bool f = false;
+                        for (auto& k : kept) if (k.first == kv.first) { k.second = kv.second; f = true; break; }
+                        if (!f) kept.push_back(kv);
+                    }
+                    incoming.unknownKeys = std::move(kept);
                     existing = incoming; merged = true; break;
                 }
             if (!merged) c.radios.push_back(incoming);

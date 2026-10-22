@@ -158,6 +158,108 @@ pocket_converge() {
     || log "!! Portable: the settings check did not finish — the next Update runs it again"
 }
 
+# ★★★ BETA UPDATES — AN OPT-IN, AND THE WAY BACK (Stuart, 2026-10-22: "In the admin menu have an opt in message to
+#     receive beta updates, user ticks it and then V12 gets offered, user unticks it V11 gets offered instead").
+#     The tick IS ONE FILE: /etc/apt/sources.list.d/vibesdr-beta.list, naming suite `beta` of the same repository with
+#     the same key. Present = ticked. The daemon reads the tick from that file's existence and never remembers it
+#     itself, so the box can never claim beta is on when apt would not offer one (or the other way round).
+#  ★★ beta-on ADDS a source; it never replaces the stable one. apt then offers the newest of both suites, and a V12
+#     beta (12.0.0~betaN) sorts above every 11.x — so "Update VibeServer" installs it, nothing else needed.
+#  ★★ beta-off REMOVES the file. apt never downgrades by itself, so a box running a beta stays on it, and the page
+#     offers the newest STABLE version as "back to stable" — installed only by `update-stable`, which is only ever
+#     asked for by a person pressing the button. The scheduled update sends `update`, which can never downgrade
+#     (--only-upgrade), so nothing unattended ever goes backwards.
+#  ★ The beta line copies the options of the stable line (arch=, signed-by=) — two sources for one host with
+#    different Signed-By values make apt refuse to update AT ALL. No stable line of ours (a hand-made .sources
+#    file, say): the installer's own form, if our keyring is there; otherwise refused, rather than guessed.
+STABLE_LIST=/etc/apt/sources.list.d/vibesdr.list
+BETA_LIST=/etc/apt/sources.list.d/vibesdr-beta.list
+KEYRING=/usr/share/keyrings/vibesdr.gpg
+OFFER=$LOGDIR/update-offer
+beta_is_on() { [ -f "$BETA_LIST" ] && [ ! -L "$BETA_LIST" ]; }
+beta_line() {
+  local opts=""
+  if [ -f "$STABLE_LIST" ] && [ ! -L "$STABLE_LIST" ]; then
+    opts=$(sed -nE 's#^[[:space:]]*deb[[:space:]]+(\[[^]]*\])[[:space:]]+https?://apt\.vibesdr\.net/?[[:space:]]+stable[[:space:]]+main([[:space:]].*)?$#\1#p' \
+             "$STABLE_LIST" | head -1 | tr -cd 'A-Za-z0-9 =,/._[]-')
+  fi
+  if [ -z "$opts" ]; then
+    [ -s "$KEYRING" ] || return 1
+    opts="[arch=$(dpkg --print-architecture) signed-by=$KEYRING]"
+  fi
+  echo "deb $opts https://apt.vibesdr.net beta main"
+}
+# ★ Written (or removed) where apt will read it: on a sealed Portable that is the REAL root, through apt_do, AND
+#   the live overlay, so the page shows the change before the reboot that a later Update makes. rm, then a temp
+#   file renamed into place, so a half-written list is never seen and a link in the way is replaced, not followed.
+beta_write() {
+  # shellcheck disable=SC2016
+  local sh='rm -f "$1" "$1.tmp"; [ -n "$2" ] || exit 0
+    ( umask 022 && printf "%s\n" "# VibeServer BETA updates. Written by the admin page (Receive beta updates);" \
+        "# untick it there, or delete this file and run apt update, to go back to stable releases only." "$2" > "$1.tmp" ) \
+      && mv -f "$1.tmp" "$1"'
+  apt_do /bin/sh -c "$sh" sh "$BETA_LIST" "$1"
+  if [ "$OVERLAY" = 1 ]; then /bin/sh -c "$sh" sh "$BETA_LIST" "$1"; fi
+}
+# >>> offer_for — WHAT "Update VibeServer" WOULD INSTALL. A pure function of four values; scripts/…/test_vibeserver_
+#     maintenance.py runs it on its own, with every combination. Prints "<kind> <version>":
+#       beta | stable      a newer version than the one installed, and which suite it comes from
+#       back-to-stable     beta updates are OFF and the installed version is newer than the newest stable one
+#                          (a beta): the newest stable, a DOWNGRADE, done only by `update-stable`
+#       none               nothing to do          unknown   the repository named no VibeServer at all (offline?)
+#  ★ With beta ON and a beta installed that is newer than everything published (an older beta pruned): none.
+#  ★ The same version in both suites counts as stable.
+ver_gt() { dpkg --compare-versions "$1" gt "$2"; }
+offer_for() {   # $1 beta on (1/0)  $2 installed  $3 newest stable  $4 newest beta
+  local best="" kind=""
+  if [ "$1" = 1 ] && [ -n "$4" ] && { [ -z "$3" ] || ver_gt "$4" "$3"; }; then best=$4; kind=beta
+  elif [ -n "$3" ]; then best=$3; kind=stable
+  fi
+  if [ -z "$best" ]; then echo "unknown"; return 0; fi
+  if [ -z "$2" ] || ver_gt "$best" "$2"; then echo "$kind $best"; return 0; fi
+  if [ "$1" != 1 ] && ver_gt "$2" "$best"; then echo "back-to-stable $best"; return 0; fi
+  echo "none"
+}
+# ★ The newest version of ours in one suite, from `apt-cache madison vibeserver` on stdin
+#   (" vibeserver | 11.0.10-4 | https://apt.vibesdr.net stable/main arm64 Packages").
+newest_in() {
+  local best="" v
+  for v in $(awk -F'|' -v s=" $1/" 'index($3, "apt.vibesdr.net") && index($3, s) { gsub(/[[:space:]]/, "", $2); print $2 }' \
+               | tr -cd 'A-Za-z0-9.+~:\n-'); do
+    if [ -z "$best" ] || ver_gt "$v" "$best"; then best=$v; fi
+  done
+  echo "$best"
+}
+# <<< offer_for
+# ★★ THE OFFER, WRITTEN FOR THE ADMIN PAGE after every action that can change it. Root's directory, root:vibeserver
+#    0640, the same arrangement as the log: the daemon reads it and can never replace or redirect it. Never fatal.
+OFFER_KIND=""; OFFER_VER=""; OFFER_INST=""
+write_offer() {
+  local m s b o on=0
+  beta_is_on && on=1
+  m=$(apt_do apt-cache madison vibeserver 2>/dev/null || true)
+  OFFER_INST=$(dpkg-query -W -f='${Version}' vibeserver 2>/dev/null | tr -cd 'A-Za-z0-9.+~:-' || true)
+  s=$(printf '%s\n' "$m" | newest_in stable)
+  b=$(printf '%s\n' "$m" | newest_in beta)
+  o=$(offer_for "$on" "$OFFER_INST" "$s" "$b")
+  OFFER_KIND=${o%% *}; OFFER_VER=""; [ "$o" = "$OFFER_KIND" ] || OFFER_VER=${o#* }
+  rm -f "$OFFER" "$OFFER.tmp" 2>/dev/null || true
+  ( umask 027 && printf 'beta=%s\ninstalled=%s\noffer=%s\nversion=%s\nstable=%s\nbetaver=%s\nchecked=%s\n' \
+      "$on" "$OFFER_INST" "$OFFER_KIND" "$OFFER_VER" "$s" "$b" "$(date +%s)" > "$OFFER.tmp" ) 2>/dev/null || return 0
+  chgrp vibeserver "$OFFER.tmp" 2>/dev/null || true
+  mv -f "$OFFER.tmp" "$OFFER" 2>/dev/null || true
+}
+say_offer() {
+  case "$OFFER_KIND" in
+    beta)           echo "A NEW VIBESERVER IS AVAILABLE: $OFFER_VER (beta)." ;;
+    stable)         echo "A NEW VIBESERVER IS AVAILABLE: $OFFER_VER." ;;
+    back-to-stable) echo "Beta updates are off. $OFFER_VER is the newest stable VibeServer (this is $OFFER_INST);"
+                    echo "press BACK TO STABLE to return to it. Your settings are kept." ;;
+    none)           echo "VibeServer itself is up to date ($OFFER_INST)." ;;
+    *)              echo "The repository did not list VibeServer — is this machine online?" ;;
+  esac
+}
+
 case "$action" in
   restart)      log "restarting vibeserver";     systemctl restart vibeserver ;;
   # ★ Asked for by the server's own stall watchdog, not by a button: sdrplay_apiService stopped
@@ -193,12 +295,48 @@ case "$action" in
                   echo "$n package(s) can be upgraded:"
                   apt list --upgradable 2>/dev/null | grep '^[a-z0-9]' | cut -d/ -f1 | paste -sd' ' -
                   echo
-                  apt list --upgradable 2>/dev/null | grep -q '^vibeserver/' \
-                    && echo "A NEW VIBESERVER IS AVAILABLE." \
-                    || echo "VibeServer itself is up to date."
                 else
-                  echo "Everything is up to date."
-                fi ;;
+                  echo "Every system package is up to date."
+                fi
+                # ★★ VIBESERVER'S LINE COMES FROM THE OFFER (beta, stable, or back to stable), not from
+                #    `apt list --upgradable` — that never lists a downgrade, so with beta updates just
+                #    switched off it would say "up to date" on a box the page is offering to take back.
+                write_offer
+                say_offer ;;
+  # ★★★ THE BETA TICK-BOX (see "BETA UPDATES" above). Each ends with a fresh index and a fresh offer, so the page
+  #     says what UPDATE VIBESERVER will now do the moment the tick lands.
+  beta-on)      log "turning on beta updates"
+                line=$(beta_line) || { log "!! the VibeServer repository is not set up the usual way here (no $STABLE_LIST"
+                                       log "!! and no $KEYRING) — run the one-line installer once, then tick this again"; exit 1; }
+                beta_write "$line"
+                log "added: $line"
+                apt_do apt-get update
+                echo
+                write_offer
+                say_offer ;;
+  beta-off)     log "turning off beta updates"
+                beta_write ""
+                apt_do apt-get update
+                echo
+                write_offer
+                say_offer ;;
+  # ★★★ BACK TO STABLE — the one action that installs an OLDER VibeServer, and only by a person's press. Everything is
+  #     decided again HERE, never taken from the request: beta must be off, and the version is the newest one the
+  #     STABLE suite lists, from apt itself. Settings survive — 11.0.10-4 onwards keeps config keys it does not know.
+  update-stable) log "returning to the stable VibeServer"
+                apt_do apt-get update
+                write_offer
+                if beta_is_on; then log "!! beta updates are still ticked — untick them first"; exit 1; fi
+                if [ "$OFFER_KIND" != back-to-stable ] || [ -z "$OFFER_VER" ]; then
+                  log "nothing to go back to:"; say_offer; exit 0
+                fi
+                log "installing vibeserver $OFFER_VER (was $OFFER_INST)"
+                apt_do apt-get install -y --allow-downgrades \
+                  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+                  "vibeserver=$OFFER_VER"
+                pocket_converge
+                write_offer
+                after_install ;;
   update-all)   log "installing ALL available system updates"
                 apt_do apt-get update
                 # ★★ THE WHOLE SYSTEM, not just us. Offered because an owner who never logs in
@@ -211,6 +349,7 @@ case "$action" in
                   -o Dpkg::Options::=--force-confdef \
                   -o Dpkg::Options::=--force-confold upgrade
                 pocket_converge
+                write_offer
                 after_install ;;
   update)       log "installing updates"
                 apt_do apt-get update
@@ -219,6 +358,8 @@ case "$action" in
                 apt_do apt-get install -y --only-upgrade vibeserver
                 # ★ A Portable's system packages + OS settings (see pocket_converge). Nothing elsewhere.
                 pocket_converge
+                # ★ The page's offer line follows (after a restart this process may already be gone — harmless).
+                write_offer
                 after_install ;;
   maps-install) log "installing the detail map pack"
                 # ★★★ THE FULL MAP PACK, ON REQUEST. The server ships the basic pack; the detail
