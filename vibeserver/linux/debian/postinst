@@ -62,6 +62,12 @@ case "$1" in
     if getent group video >/dev/null; then
       adduser vibeserver video >/dev/null 2>&1 || usermod -a -G video vibeserver >/dev/null 2>&1 || true
     fi
+    # ★★ `audio` — an Icom transceiver's RECEIVE audio is its USB codec, an ALSA capture device, and on
+    #    Debian /dev/snd is root:audio 0660. Same shape as `video` above: membership, never root; only where
+    #    the group exists (every Debian has it). The units list it in SupplementaryGroups= too.
+    if getent group audio >/dev/null; then
+      adduser vibeserver audio >/dev/null 2>&1 || usermod -a -G audio vibeserver >/dev/null 2>&1 || true
+    fi
 
     # ── 1. The config: NEVER clobber the user's edits ────────────────────────
     # ★ Copied from /usr/share on FIRST install only. Shipping it as a packaged file would let

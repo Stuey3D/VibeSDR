@@ -26,3 +26,19 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="1df7", ATTRS{idProduct}=="3060", MODE="0660"
 # ★★ …and the RSP's arrival STARTS the bundled RSP service — only machines with an RSP ever run it. Whole
 #    device only (not each interface). The unit skips itself when a system SDRplay service is installed.
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1df7", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vibeserver-rsp.service"
+# ★★★ ICOM TRANSCEIVERS — RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md). VibeServer talks CI-V to the radio's
+#     own USB serial chip over libusb (DTR/RTS are never raised — §3.3) and captures its USB audio codec.
+#  ★★ ONLY the radio's chip, not every CP2102: an Icom programs its model into the chip's USB serial
+#     ("IC-7300 03001234"), so the rules match that and leave somebody's GPS or programming lead alone.
+#  ★★ ID_MM_DEVICE_IGNORE: ModemManager probes CP210x and CDC-ACM ports with AT commands the moment they
+#     appear. Bytes we did not choose must never reach a transceiver — and its probe OPENS the tty, which
+#     raises DTR/RTS (the keying lines when USB SEND / USB Keying are set to them).
+# IC-7300 (and other CP2102-based Icoms): Silicon Labs CP2102 10c4:ea60, serial "IC-…"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="IC-*", MODE="0660", GROUP="plugdev", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="IC-*", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Dual CP2105 10c4:ea70 (some later Icoms [unverified]), same rule
+SUBSYSTEM=="usb", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea70", ATTRS{serial}=="IC-*", MODE="0660", GROUP="plugdev", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea70", ATTRS{serial}=="IC-*", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Native-USB Icoms (IC-705 / IC-9700 / IC-7300MK2 present CDC-ACM ports under Icom's own vendor id) [unverified per model]
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0c26", MODE="0660", GROUP="plugdev", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0c26", ENV{ID_MM_DEVICE_IGNORE}="1"
