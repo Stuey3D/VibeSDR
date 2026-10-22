@@ -55,6 +55,8 @@
 
 import type { DabState } from './dabTypes';
 import type { ShareOut } from './chatShare';
+import { isIcom, parseIcomRadio, parseIcomStatus, icomControlMsg, nearestSpanIndex,
+         type IcomRadio, type IcomControlFields } from './icomRadio';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzipToStringCapped } from '../utils/boundedInflate';   // ★ capped: a gzip bomb is dropped, not inflated
 import { VibePowerModule } from '../components/AudioPlayer';
@@ -256,6 +258,9 @@ export abstract class VibeServerWsClient {
   // Max zoom-OUT span (Hz). 0 = use maxHz. Local hardware reports its full
   // device bandwidth via config.maxBandwidth so you can't zoom out past it.
   private maxSpanHz = 0;
+  /** ★★★ THE CONNECTED RADIO IS AN ICOM (hwinfo.radio.driver "icom", receive only) — null otherwise.
+   *  Read by zoom() (the span ladder) and icomControl() (only values the radio listed are ever sent). */
+  private icom: IcomRadio | null = null;
 
   // VFO lock / waterfall panning (see SDRBackend.setFollowMode/panSpan).
   // followVfo=true reproduces today's behaviour: tune() recentres the view.
@@ -717,6 +722,20 @@ export abstract class VibeServerWsClient {
     // channel both sides). The server goes deeper but past this the
     // spectrum shows artefacts and looks frozen even though it isn't
     // (device-confirmed on both platforms 2026-06-12).
+    /* ★★★ AN ICOM: ZOOM IS THE RADIO'S SPAN LADDER (docs/ICOM-SUPPORT-PLAN.md §2.2). The scope is 475
+     *  real points over one of 8 spans, so every zoom lands on a RUNG — nothing in between, and nothing
+     *  past the narrowest (zooming the picture would invent resolution). ★★ And NOT capped by
+     *  config.maxBandwidth: on an Icom the server sends the CURRENT span there (displaySpan()), so the
+     *  ordinary cap below would forbid ever zooming out again. The 6 kHz floor would hide the 5 kHz rung. */
+    if (this.icom && this.icom.scope.spans.length) {
+      const spans = this.icom.scope.spans;
+      const i = nearestSpanIndex(spans, binBandwidth * n);
+      const rung = spans[i];
+      this.view.centerHz     = f;
+      this.view.binBandwidth = rung / n;
+      this._sendView(f, rung / n);
+      return;
+    }
     const spanCap = this.maxSpanHz > 0 ? this.maxSpanHz : this.maxHz;
     const bb = Math.max(6_000 / n, Math.min(binBandwidth, spanCap / n));
     this.view.centerHz     = f;
@@ -998,6 +1017,18 @@ export abstract class VibeServerWsClient {
     if (o.ppb    !== undefined) m.ppb    = o.ppb;
     if (o.agc    !== undefined) m.agc    = o.agc ? 1 : 0;
     this._sendCtl(m);
+  }
+
+  /** ★★★ AN ICOM'S OWN CONTROLS (`icom_control`, receive only): mode/FIL/span/scope mode under the owner
+   *  lock, ATT/preamp/AGC/RF gain/NB/NR/ANF/scope speed admin-only unless the owner opened them — the
+   *  SERVER judges both and answers a refusal with a notice and a fresh config. ★ icomControlMsg() drops
+   *  any value the radio did not list, so a stale panel cannot send one; there is no transmit field to
+   *  build. Returns false when nothing was sent. */
+  icomControl(f: IcomControlFields): boolean {
+    const m = icomControlMsg(this.icom, f);
+    if (!m) return false;
+    this._sendCtl(m as unknown as Record<string, unknown>);
+    return true;
   }
 
   /** ★★★ HackRF One controls. Same shape — only the keys present are applied.
@@ -2380,6 +2411,14 @@ export abstract class VibeServerWsClient {
       this.callbacks.onSaid?.(Number(msg.from) || 0, String(msg.id || ''), msg as Record<string, unknown>);
       return;
     }
+    /* ★★ AN ICOM'S STATUS LINE — the S-meter (≤ 4/s), TX, link, mode, FIL, span. Sent on join straight after
+     *  hwinfo and on every change. The S-meter is drawn from THIS, never from SPEC bins: the scope is
+     *  relative to the radio's REF level, not dBFS. */
+    if (msg.type === 'icom') {
+      const st = parseIcomStatus(msg);
+      if (st) this.callbacks.onIcomStatus?.(st);
+      return;
+    }
     if (msg.type === 'notice') {
       /* ★★★ ONE TYPE, TWO MESSAGES, AND THE REFUSAL WAS BEING THROWN AWAY.
        *  `text` is the owner's STANDING notice (persistent, posted from the setup page); `why` is
@@ -2621,7 +2660,12 @@ export abstract class VibeServerWsClient {
        *     timer or a reconciliation pass here — each of those is a second route by another name.
        *  ★ The web client has no equivalent of this block at all, which is the whole reason it
        *    "just works": it has nothing that can assert a frequency nobody asked for. */
-      if (this.hadSession && this.status.frequency > 0 && !this.sharedDial) {
+      /* ★★★ NEVER ON AN ICOM EITHER: the radio IS the dial — its owner's hand or the front panel moved it,
+       *  and a resume re-asserting our stale frequency would retune a stranger's transceiver (or, under
+       *  the owner lock, earn a refusal on every return from the background). One physical receiver,
+       *  so it is a shared dial even with one listener allowed. */
+      const icomNow = isIcom(msg.radio);
+      if (this.hadSession && this.status.frequency > 0 && !this.sharedDial && !icomNow) {
         this.tune(this.status.frequency, this.status.mode, { recenter: true });
       } else if (this.hadSession && this.sharedDial) {
         this.dbg('shared dial — not re-asserting our tune on this hwinfo; the room owns the dial');
@@ -2632,6 +2676,7 @@ export abstract class VibeServerWsClient {
       // this — see RadioCaps. Forwarded verbatim rather than normalised: a driver we do not
       // know yet must still be able to say what it is.
       if (msg.radio && typeof msg.radio === 'object') {
+        this.icom = parseIcomRadio(msg.radio);
         this.callbacks.onRadioCaps?.(msg.radio as RadioCaps);
       }
       if (typeof msg.adminSet === 'boolean') {
