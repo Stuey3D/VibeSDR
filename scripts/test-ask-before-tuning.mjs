@@ -70,7 +70,9 @@ const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mj
 await sleep(300);
 // ★ TEST-ONLY: the grant's idle lapse (kGrantIdleS, 3 minutes) shortened to GRANT_IDLE_S so the suite can watch it.
 const GRANT_IDLE_S = 10;
-const env = { ...process.env, VIBE_ASK_GRANT_IDLE_S: String(GRANT_IDLE_S), VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
+// ★ TEST-ONLY: the place in the order is kept across a reconnect for 2 minutes (kGoneForgetS); shortened to RANK_FORGET_S.
+const RANK_FORGET_S = 4;
+const env = { ...process.env, VIBE_ASK_GRANT_IDLE_S: String(GRANT_IDLE_S), VIBE_ASK_RANK_FORGET_S: String(RANK_FORGET_S), VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
               VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const logPath = path.join(dir, 'server.log');
 const log = fs.openSync(logPath, 'w');
@@ -83,7 +85,7 @@ for (let i = 0; i < 100; i++) {
   if (up) break;
   await sleep(100);
 }
-const join = async (sid) => { const s = ws(port, `/ws/user-spectrum?user_session_id=${sid}&bins=256`); await sleep(900); return s; };
+const join = async (sid, bid) => { const s = ws(port, `/ws/user-spectrum?user_session_id=${sid}&bins=256${bid ? `&bid=${bid}` : ''}`); await sleep(900); return s; };
 const vfo = (st) => { const c = st.last('config'); return c ? Number(c.vfo) : NaN; };
 const until = async (f, ms = 4000) => { for (let t = 0; t < ms; t += 100) { if (f()) return true; await sleep(100); } return f(); };
 
@@ -217,6 +219,28 @@ try {
   b.close(); c.close();
   ok(await until(() => a.last('dial')?.askFirst !== true, 6000), 'alone again: the dial says no lock');
   a.close();
+  await sleep(1500);
+
+  // ★★★ Stuart, 2026-10-22: his app left and came back 12 s later with full control over a friend who had joined
+  //     after him — the place was the session limit's, remembered for 15 minutes away. "It would be a bit unfair for
+  //     a user to disconnect for 14 mins then come back with full control." Now a blip keeps the place; longer than
+  //     2 minutes away (here RANK_FORGET_S) and the returner is the newcomer. Each has its own browser id, as the
+  //     web client and the app send, so they are two people on one address.
+  console.log(`── leaving keeps your place for a blip, not longer (place kept ${RANK_FORGET_S} s here, 2 minutes on a server) ──`);
+  let e1 = await join('eeee0001', 'browserE');
+  const f1 = await join('ffff0001', 'browserF');
+  ok(await until(() => f1.last('dial')?.tuneLocked === true) && e1.last('dial')?.tuneLocked === false, 'the first arrival is free, the second locked');
+  e1.close(); await sleep(1000);
+  e1 = await join('eeee0002', 'browserE');   // ★ a new session id, as the app makes on a reconnect
+  ok(await until(() => e1.last('dial')?.askFirst === true) && await until(() => e1.last('dial')?.tuneLocked === false),
+     '★ back after a 1 s blip with a new session: still first, still free');
+  ok(f1.last('dial')?.tuneLocked === true, '…and the friend is still the one who asks');
+  e1.close();
+  await sleep((RANK_FORGET_S + 2) * 1000);
+  e1 = await join('eeee0003', 'browserE');
+  ok(await until(() => e1.last('dial')?.tuneLocked === true), `★ back after ${RANK_FORGET_S + 2} s away: the returner is the newcomer and is locked`);
+  ok(await until(() => f1.last('dial')?.tuneLocked === false), '★ …and the friend who stayed is now the one in charge');
+  e1.close(); f1.close();
 } catch (e) {
   fail++; console.log(`   FAIL threw: ${e && e.stack || e}`);
 } finally {

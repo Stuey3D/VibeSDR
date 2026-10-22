@@ -38,7 +38,7 @@ constexpr double kGrantIdleS = 3.0 * 60.0;
 struct Person {
     std::string session;
     bool   admin = false;      ///< the signed-in admin — never locked, outranks everybody
-    double since = 0;          ///< when their turn began (the session limit's own clock; lower = here longer)
+    double since = 0;          ///< when they arrived (Seniority below, NOT the session limit's clock; lower = here longer)
     bool   overLimit = false;  ///< their session time limit has run out — drops to the BOTTOM of the order
     int    handle = 0;         ///< their user number, a stable tie-break
 };
@@ -249,6 +249,45 @@ public:
             v.grantSecs = left > 0 ? (int)(left + 0.999) : 0;
         }
         return v;
+    }
+};
+
+/** ★★★ "LONGEST-CONNECTED" HAS ITS OWN SHORT MEMORY (Stuart, 2026-10-22). It used to be the session limit's turn clock,
+ *  which remembers a listener for 15 minutes away (vibeturn::kTurnBreakS) so a reload cannot buy a fresh time limit.
+ *  For the lock that was too long: "It would be a bit unfair for a user to disconnect for 14 mins then come back with
+ *  full control." Here a listener keeps their place across a reconnect of up to kGoneForgetS (2 minutes, the same hold
+ *  as a grant and the user numbers: enough to ride out a connection blip); away longer and they come back as the
+ *  newest arrival. The session limit's own clock is untouched.
+ *  Keyed like the turn clock (browser where the client sends one, address otherwise), counted per socket: a listener
+ *  is here while any of their sockets is open, and the absence starts when the last one closes. */
+class Seniority {
+public:
+    struct Entry { double since = 0; int live = 0; double leftAt = 0; };
+    std::map<std::string, Entry> byKey;
+    double forgetS = kGoneForgetS;
+
+    /** A socket under `key` opened. @return when this listener arrived, for the rank. */
+    double arrive(const std::string& key, double now) {
+        for (auto it = byKey.begin(); it != byKey.end(); ) {   // ★ bounded: the long gone are forgotten
+            if (it->second.live <= 0 && now - it->second.leftAt > forgetS && it->first != key) it = byKey.erase(it);
+            else ++it;
+        }
+        if (key.empty()) return now;
+        Entry& e = byKey[key];
+        if (e.live <= 0 && (e.since <= 0 || now - e.leftAt > forgetS)) e.since = now;   // ★ new, or away too long
+        e.live++;
+        return e.since;
+    }
+    /** A socket under `key` closed. */
+    void leave(const std::string& key, double now) {
+        auto it = byKey.find(key);
+        if (it == byKey.end()) return;
+        if (--it->second.live <= 0) { it->second.live = 0; it->second.leftAt = now; }
+    }
+    /** When the listener under `key` arrived, or `now` if unknown. */
+    double since(const std::string& key, double now) const {
+        auto it = byKey.find(key);
+        return it != byKey.end() && it->second.since > 0 ? it->second.since : now;
     }
 };
 

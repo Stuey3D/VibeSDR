@@ -15,8 +15,12 @@ banner above the frequency. This is the opt-in lock that makes the ask happen.
 ## Who may tune
 The server keeps a **rank order** of the sessions present:
 1. the signed-in **admin** (never locked, always outranks everybody);
-2. everybody else, **longest-connected first** — by the turn start the session limit already keeps
-   (`sockSince`, keyed on the browser/address, so a reload does not jump the queue);
+2. everybody else, **longest-connected first** — by when they arrived, keyed on the browser/address so a
+   reload does not jump the queue. **A place is kept across a reconnect of up to 2 minutes** (`kGoneForgetS`,
+   `vibeask::Seniority`): enough to ride out a connection blip. Away longer and they come back as the newest
+   arrival. (Until 2026-10-22 this was the session limit's turn clock, which remembers a listener for 15 minutes
+   away. Stuart: *"It would be a bit unfair for a user to disconnect for 14 mins then come back with full
+   control."* The session limit keeps its 15 minutes; only the order forgets sooner.)
 3. but a listener whose **session time limit has run out** drops to the **bottom** (still ordered by
    connection time among themselves).
 
@@ -67,9 +71,10 @@ reconnect within the 2-minute user-number hold keeps it — and it keeps running
 | A NO holds at most | 5 minutes | `kNoHoldS` |
 | A grant with no accepted receiver change → locked again | 3 minutes | `kGrantIdleS` |
 | Grant (and its idle clock) kept across a reconnect | 2 minutes | `kGoneForgetS` |
+| Place in the order kept across a reconnect | 2 minutes | `kGoneForgetS` (`Seniority`) |
 
-`VIBE_ASK_GRANT_IDLE_S` (1–3600) overrides `kGrantIdleS` — **for tests only** (the live suite runs it at
-10 s); never set on a real server.
+`VIBE_ASK_GRANT_IDLE_S` (1–3600) overrides `kGrantIdleS`, and `VIBE_ASK_RANK_FORGET_S` (1–3600) the place-keeping —
+**for tests only** (the live suite runs them at 10 s and 4 s); never set on a real server.
 
 ## Enforcement — the server owns all of it
 Per the shared-dial contract the server holds the lock state, the ranks and the timers, and states the
