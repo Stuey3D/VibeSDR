@@ -10834,7 +10834,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
-      body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall.',
+      body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
     { id: 'step', title: 'Step rate',
       body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change.',
@@ -10878,7 +10878,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    styles, so nothing here pointed at the row; the whole sentence re-read against AudioSheet, MenuSheet and
     //    FreqModal once more — unchanged.
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch, binaural tuning, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch, binaural tuning, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
