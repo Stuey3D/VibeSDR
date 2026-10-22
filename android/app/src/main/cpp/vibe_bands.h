@@ -568,6 +568,9 @@ inline Ranges driverCoverage(const std::string& driver) {
     // ★ Airspy R2 / Mini: 24 - 1800 MHz (R820T2 tuner, no HF without an upconverter). Until
     //   2026-09-28 it reached here as "rtl" and claimed medium wave it cannot hear.
     if (driver == "airspy")   return { {24.0e6, 1.8e9} };
+    // ★ An Icom (receive only): the IC-7300's receive range — the only model served so far (icom_models.h;
+    //   every other Icom is refused at open). A running radio publishes its own model's ranges.
+    if (driver == "icom")     return { {30.0e3, 74.8e6} };
     return {};                                   // unknown: say nothing rather than guess
 }
 

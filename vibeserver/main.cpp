@@ -38,6 +38,7 @@
 #include "crash_report.h"   // ★ a fatal signal names its thread and PC in the journal (2026-10-06)
 #include "vibedsp/vibe_denormals.h"   // ★ FTZ/DAZ inherited by every thread — see main()
 #include "airspyhf_source.h"
+#include "icom_transport.h"    // ★ listUsbIcoms — an Icom found by its USB serial, without a byte sent
 #include "hackrf_source.h"
 #include "airspy_source.h"
 #include "sdrplay_source.h"
@@ -273,6 +274,11 @@ struct Opts {
     bool        antennaPortLocked = false;
     std::string antennaMap;
     bool        rspHdr = false;
+    // ★ Icom (driver "icom") — see vibeserver_config.h Config::icomPort. --icom <port> starts one directly.
+    std::string icomPort = "usb", icomAudio = "auto";
+    int         icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0;
+    bool        icomOwnerLock = true, icomRfOpen = false, icomTtyOk = false;
+    bool        icomGiven = false;   ///< --icom on the command line: start the Icom, skip discovery
     bool        rspAmNotch = false;
     bool        rspExtRef = false;
     bool        dabAgcOverride = true;
@@ -370,6 +376,11 @@ void usage() {
         "                              cost, so it pays from about three listeners up.\n"
         "                    Both give the same detail at high zoom.\n"
         "  --no-web          do not serve the browser client at GET /\n"
+        "  --icom PORT          an Icom transceiver, RECEIVE ONLY: usb | usb:<bus>-<ports> | /dev/… (with --icom-tty-ok)\n"
+        "  --icom-baud N        the radio's CI-V USB Baud Rate (default 115200)\n"
+        "  --icom-civ HEX       CI-V address (default: the model's own, 94 on an IC-7300)\n"
+        "  --icom-audio SPEC    auto | none | alsa:hw:C,D | coreaudio:NAME | tone | wav:FILE\n"
+        "  --icom-open-tuning   listeners may tune (default: only the admin; listeners follow the radio)\n"
         "  -h, --help\n\n"
         "By default the dongle is driven DIRECTLY over libusb — nothing else to install or run.\n"
         "--tcp is for development against a remote or synthetic source.\n"
@@ -469,6 +480,18 @@ bool parse(int argc, char** argv, Opts& o) {
             o.radio = -1;
             o.radioSerial = need(i);
         }
+        /* ★★★ AN ICOM, NAMED DIRECTLY (receive only — docs/ICOM-SUPPORT-PLAN.md). The front door names an
+         *     Icom by `--radio-serial` like any radio (detectRadios lists it); this is for a person or a
+         *     test pointing at one port: `--icom usb`, `--icom usb:1-1.2`, or `--icom /dev/ttyX
+         *     --icom-tty-ok` (tools/icom/fake-icom serves a pty). */
+        else if (a == "--icom")             { o.icomPort = need(i); o.icomGiven = true; o.useUsb = true; }
+        else if (a == "--icom-baud")        { o.icomBaud = std::atoi(need(i)); }
+        else if (a == "--icom-civ")         { o.icomCiv = (int)std::strtol(need(i), nullptr, 16); }
+        else if (a == "--icom-audio")       { o.icomAudio = need(i); }
+        else if (a == "--icom-scope-speed") { o.icomScopeSpeed = std::atoi(need(i)); }
+        else if (a == "--icom-tty-ok")      { o.icomTtyOk = true; }
+        else if (a == "--icom-open-tuning") { o.icomOwnerLock = false; }
+        else if (a == "--icom-rf-open")     { o.icomRfOpen = true; }
         else if (a == "--tcp") {
             o.useUsb = false;
             std::string v = need(i);
@@ -615,6 +638,8 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.antennaPort = c.antennaPort; o.antennaPortLocked = c.antennaPortLocked;
     o.antennaMap = c.antennaMap;
     o.rspHdr = c.rspHdr; o.rspAmNotch = c.rspAmNotch; o.rspExtRef = c.rspExtRef;
+    o.icomPort = c.icomPort; o.icomBaud = c.icomBaud; o.icomCiv = c.icomCiv; o.icomAudio = c.icomAudio;
+    o.icomScopeSpeed = c.icomScopeSpeed; o.icomOwnerLock = c.icomOwnerLock; o.icomRfOpen = c.icomRfOpen; o.icomTtyOk = c.icomTtyOk;
     o.dabAgcOverride = c.dabAgcOverride; o.dabAgcTarget = c.dabAgcTarget; o.rfAgc = c.rfAgc; o.rspDabDecim = c.rspDabDecim; o.rfAgcStart = c.rfAgcStart;
     o.agcSet = c.agcSet; o.agcSetLock = c.agcSetLock;
     o.port = c.port; o.web = c.web;
@@ -651,6 +676,8 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.antennaPort = o.antennaPort; c.antennaPortLocked = o.antennaPortLocked;
     c.antennaMap = o.antennaMap;
     c.rspHdr = o.rspHdr; c.rspAmNotch = o.rspAmNotch; c.rspExtRef = o.rspExtRef;
+    c.icomPort = o.icomPort; c.icomBaud = o.icomBaud; c.icomCiv = o.icomCiv; c.icomAudio = o.icomAudio;
+    c.icomScopeSpeed = o.icomScopeSpeed; c.icomOwnerLock = o.icomOwnerLock; c.icomRfOpen = o.icomRfOpen; c.icomTtyOk = o.icomTtyOk;
     c.dabAgcOverride = o.dabAgcOverride; c.dabAgcTarget = o.dabAgcTarget; c.rfAgc = o.rfAgc; c.rspDabDecim = o.rspDabDecim; c.rfAgcStart = o.rfAgcStart;
     c.agcSet = o.agcSet; c.agcSetLock = o.agcSetLock;
     c.port = o.port; c.web = o.web;
@@ -868,6 +895,17 @@ static std::string selfExePath() {
 #else
     return {};
 #endif
+}
+
+/** ★★★ AN ICOM, FROM THE OPTIONS — receive only (docs/ICOM-SUPPORT-PLAN.md). `port` is the transport
+ *  spec (usb, usb:<bus>-<ports>, /dev/…); `serial` the radio's USB serial ("IC-7300 03001234"), which
+ *  names the model before a byte is sent. */
+static int startIcomFrom(const Opts& o, const std::string& port, const std::string& serial, std::string& err) {
+    vibe::LocalSdrShim::IcomStart s;
+    s.port = port; s.baud = o.icomBaud; s.civAddr = o.icomCiv; s.audio = o.icomAudio;
+    s.scopeSpeed = o.icomScopeSpeed; s.ttyOk = o.icomTtyOk; s.ownerLock = o.icomOwnerLock;
+    s.rfOpen = o.icomRfOpen; s.modelHint = serial; s.freqHint = o.freq;
+    return vibe::LocalSdrShim::instance().startIcom(s, err);
 }
 
 static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv) {
@@ -2221,6 +2259,21 @@ int main(int argc, char** argv) {
                 const size_t close = j.rfind('}');
                 if (close != std::string::npos) j.insert(close, b);
             }
+            /* ★★★ WHY AN ICOM IS NOT RUNNING, in its own words — almost always the PREFLIGHT ("USB SEND is RTS
+             *     … set it to OFF"). Its process wrote that into the radio's status file and exited; without
+             *     this the setup page could only say "not running", and the owner would never learn which
+             *     menu item to change. Keyed by serial; only Icoms, only while a status is on file. */
+            {
+                std::string ic;
+                for (const auto& r : out.radios) {
+                    if (r.driver != "icom") continue;
+                    const RadioStatus st = radioStatusRead(r.serial);
+                    if (!st.present || st.detail.empty()) continue;
+                    ic += std::string(ic.empty() ? "" : ",") + "\"" + jsonEscape(r.serial) + "\":\"" + jsonEscape(st.detail) + "\"";
+                }
+                const size_t close = j.rfind('}');
+                if (!ic.empty() && close != std::string::npos) j.insert(close, ",\"icomStatus\":{" + ic + "}");
+            }
             return j;
         },
         [](const std::string& json, std::string& err) -> bool {
@@ -3448,6 +3501,10 @@ int main(int argc, char** argv) {
     } else if (!o.useUsb) {
         port = shim.startTcp(o.tcpHost, o.tcpPort, o.freq, o.rate, o.gain,
                              o.fftSize, o.fftRate, o.mode, err);
+    } else if (o.icomGiven) {
+        // ★ An Icom named on the command line (`--icom`): no discovery, no other radio considered.
+        std::printf("VibeServer: using an Icom at %s (receive only)\n", o.icomPort.c_str());
+        port = startIcomFrom(o, o.icomPort, "", err);
     } else if (o.radioGiven) {
         // ★ Resolve a serial to today's index. Done HERE, at start, so a radio that has moved in
         //   the list since the config was written still lands on the right hardware.
@@ -3523,6 +3580,16 @@ int main(int argc, char** argv) {
              *   two-source world written as "the other one" mis-handles the third every time;
              *   this is the fourth, and it gets its own branch rather than falling into the
              *   dongle's `else`, which would start an RTL capture against a HackRF index. */
+            if (drv == "icom") {
+                /* ★★★ THE SIXTH SOURCE, AND NOT AN IQ ONE. Named, never inferred — "else means dongle"
+                 *     would start an RTL capture against an Icom's index. The radio is found again by
+                 *     its USB serial (which carries the model), unless the owner pinned a port. */
+                std::string where = o.icomPort;
+                if (where.empty() || where == "usb")
+                    for (const auto& u : icom::listUsbIcoms())
+                        if (u.serial == o.radioSerial) { where = u.path; break; }
+                port = startIcomFrom(o, where.empty() ? "usb" : where, o.radioSerial, err);
+            } else
             if (drv == "hackrf")
                 port = shim.startHackRf(drvIdx, o.freq, o.rate, o.gain,
                                         o.fftSize, o.fftRate, o.mode, err);
@@ -3602,6 +3669,15 @@ int main(int argc, char** argv) {
         /* ★★★ AND THE AIRSPY R2 / MINI, appended AFTER the HackRF in detectRadios() so no
          *     existing index moves — so it is tested first here, above the HackRF's range. */
         const int nHrf = vibe::HackRfSource::deviceCount();
+        // ★★★ AND THE ICOM, appended after the R2/Mini in detectRadios() — so it is tested first here.
+        const int nAsp = vibe::AirspySource::deviceCount();
+        const auto icoms = icom::listUsbIcoms();
+        if (o.radio >= nRtl + nRsp + nAhf + nHrf + nAsp
+            && o.radio < nRtl + nRsp + nAhf + nHrf + nAsp + (int)icoms.size()) {
+            const auto& u = icoms[(size_t)(o.radio - nRtl - nRsp - nAhf - nHrf - nAsp)];
+            std::printf("VibeServer: using %s at %s (receive only)\n", u.model.c_str(), u.path.c_str());
+            port = startIcomFrom(o, u.path, u.serial, err);
+        } else
         if (o.radio >= nRtl + nRsp + nAhf + nHrf) {
             std::printf("VibeServer: using Airspy R2/Mini %d\n",
                         o.radio - nRtl - nRsp - nAhf - nHrf);

@@ -261,6 +261,20 @@ struct Config {
     /* ★ The rest of the RSP sweep. Each is ignored by a model that lacks it — the capability is
      *  checked in SdrplaySource, not here, so a shared config across radios cannot misfire. */
     bool rspHdr = false;        ///< RSPdx/dx-R2: high dynamic range below 2 MHz
+    /** ★★★ ICOM (driver "icom", receive only — docs/ICOM-SUPPORT-PLAN.md). Per radio; empty/zero =
+     *  the defaults below, so a config that never had an Icom reads exactly as before.
+     *   icomPort       "usb" (the first Icom on USB) | "usb:<bus>-<ports>" | a /dev path (needs icomTtyOk)
+     *   icomBaud       must match the radio's CI-V USB Baud Rate: 115200 ≈ 19 scope sweeps/s, 19200 ≈ 3
+     *   icomCiv        0 = the model's own address (0x94 on a 7300)
+     *   icomAudio      "auto" | "none" | "alsa:hw:<c>,<d>" | "coreaudio:<name>" | "tone" | "wav:<file>"
+     *   icomScopeSpeed 0 fast, 1 mid, 2 slow (the radio's own sweep speed)
+     *   icomOwnerLock  ★ DEFAULT ON: "Listeners follow the radio" — only the admin tunes (plan §3.4)
+     *   icomRfOpen     listeners may change ATT/preamp/AGC/RF gain/NB/NR/ANF (default: admin only)
+     *   icomTtyOk      the owner allows a serial device, accepting its DTR/RTS glitch on open */
+    std::string icomPort = "usb";
+    int  icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0;
+    std::string icomAudio = "auto";
+    bool icomOwnerLock = true, icomRfOpen = false, icomTtyOk = false;
     bool rspAmNotch = false;    ///< RSPduo: AM broadcast notch on the Hi-Z port
     bool rspExtRef = false;     ///< RSP2/Duo: 24 MHz reference output
     /* ★ DAB drops the IF AGC target for OFDM peak headroom — see kDabAgcSetPoint in the shim.
@@ -547,6 +561,10 @@ struct RadioConfig {
      *  the per-band preset is antennaMap (names) and the lock antennaPortLocked, shared with the RSP's sockets. */
     std::string antennaSwitch;
     bool   rspHdr = false, rspAmNotch = false, rspExtRef = false;
+    // ★ Icom — see the note on Config::icomPort. Carried with its neighbours at every copy site.
+    std::string icomPort = "usb", icomAudio = "auto";
+    int    icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0;
+    bool   icomOwnerLock = true, icomRfOpen = false, icomTtyOk = false;
     bool   dabAgcOverride = true;
     int    dabAgcTarget = -40;
     bool   rfAgc = false;

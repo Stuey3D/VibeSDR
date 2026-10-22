@@ -852,6 +852,14 @@ add_executable(test-fir-simd "${CMAKE_CURRENT_SOURCE_DIR}/test-fir-simd.cpp" "${
 target_include_directories(test-fir-simd PRIVATE "${CPP_DIR}" "${CPP_DIR}/vibedsp")
 target_compile_options(test-fir-simd PRIVATE -O3 -ffp-contract=fast)
 add_test(NAME fir-simd COMMAND test-fir-simd)
+# ── ★★★ ICOM (docs/ICOM-SUPPORT-PLAN.md) — the receive-only promise is a TEST, and it joins ctest ──
+#     test-icom-civ is plan §3.2: every cmd/sub pair at 0-6 data bytes against an independent copy of
+#     the allow-list. "Nothing ships until the exhaustive allow-list test … passes" (plan §8).
+add_executable(test-icom-civ "${CMAKE_CURRENT_SOURCE_DIR}/test-icom-civ.cpp")
+target_include_directories(test-icom-civ PRIVATE "${CPP_DIR}")
+target_compile_options(test-icom-civ PRIVATE -O2)
+vibe_sanitize(test-icom-civ)
+add_test(NAME icom-civ COMMAND test-icom-civ)
 # The offline replay harness: the same chain over a VIBE_IQ_DUMP capture, in seconds.
 # ★ dab-offline and the receiver test take the PFFFT path so the SERVER's transform is what gets
 #   replayed and tested; the other DAB tests keep the header-only radix-2, which is the reference.
@@ -884,6 +892,44 @@ if(APPLE)
 endif()
 find_package(Threads REQUIRED)
 target_link_libraries(vibeserver_core PUBLIC Threads::Threads)
+
+# ── ★★★ ICOM (receive only — docs/ICOM-SUPPORT-PLAN.md) ──────────────────────────────────────
+#     CI-V over libusb (the radio's CP2102, DTR/RTS never raised), the scope as the waterfall and the
+#     radio's USB codec as audio. Its own small library so the tests link exactly what the server does
+#     — and NOTHING new from the system: libusb is ours already, ALSA is driven by its kernel ioctls
+#     (no libasound), CoreAudio is a system framework.
+add_library(vibe_icom STATIC
+    "${CPP_DIR}/icom_source.cpp"
+    "${CPP_DIR}/icom_transport.cpp"
+    "${CPP_DIR}/icom_audio.cpp")
+target_include_directories(vibe_icom PUBLIC "${CPP_DIR}" "${CPP_DIR}/vibedsp")
+if(LIBUSB_INC)
+  target_include_directories(vibe_icom PRIVATE "${LIBUSB_INC}")
+endif()
+target_link_libraries(vibe_icom PUBLIC "${USB_LIB}" Threads::Threads)
+if(APPLE)
+  target_link_libraries(vibe_icom PUBLIC "-framework IOKit" "-framework CoreFoundation" "-framework Security"
+                                         "-framework AudioToolbox" "-framework CoreAudio")
+endif()
+target_link_libraries(vibeserver_core PUBLIC vibe_icom)
+target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_ICOM)
+# ★ The pretend IC-7300 on a pty, for scripts/test-server-icom.mjs (and anyone without a radio).
+add_executable(fake-icom "${CMAKE_CURRENT_SOURCE_DIR}/../tools/icom/fake-icom.cpp")
+target_include_directories(fake-icom PRIVATE "${CPP_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(fake-icom PRIVATE Threads::Threads)
+# ★★ IcomSource against the fake radio: preflight refusals, tuning both ways, TX mute, unplug/replug,
+#    and ZERO disallowed frames at the far end. Real threads and the baud rate's own pacing — ~15 s.
+add_executable(test-icom-source "${CMAKE_CURRENT_SOURCE_DIR}/test-icom-source.cpp")
+target_include_directories(test-icom-source PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test-icom-source PRIVATE vibe_icom)
+vibe_sanitize(test-icom-source)
+add_test(NAME icom-source COMMAND test-icom-source)
+# ★ The scope assembler, synthetic frames + every capture under test/fixtures/icom/ (Saber's go there).
+add_executable(test-icom-scope "${CMAKE_CURRENT_SOURCE_DIR}/test-icom-scope.cpp")
+target_include_directories(test-icom-scope PRIVATE "${CPP_DIR}")
+target_compile_definitions(test-icom-scope PRIVATE VIBE_ICOM_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/../test/fixtures/icom")
+vibe_sanitize(test-icom-scope)
+add_test(NAME icom-scope COMMAND test-icom-scope)
 
 # ── Linux install + .deb packaging ────────────────────────────────────────────
 # ★★ A RELEASE IS NOT A BINARY. A working install is FOUR files — the binary, the systemd unit,

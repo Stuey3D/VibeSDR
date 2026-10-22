@@ -162,6 +162,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key>               <true/>
   <!-- macOS asks before we can be reached on the LAN; explain why rather than letting the bare
        system prompt be the user's first experience of the app. -->
+  <!-- ★★ AN ICOM TRANSCEIVER'S RECEIVE AUDIO arrives as a USB "microphone" (its audio codec), so macOS
+       asks for microphone access the first time an Icom is served. Say what it is for in plain words;
+       it is the only audio input VibeServer ever opens, and it never records the Mac's own microphone. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>VibeServer streams your Icom radio's receive audio to your listeners. The radio's USB audio appears to macOS as a microphone; VibeServer never uses the Mac's own microphone.</string>
   <key>NSLocalNetworkUsageDescription</key>
   <string>VibeServer shares this Mac's radio with your phone, watch and browser on your local network.</string>
   <!-- Optional, and only ever on an explicit button press: it fills in the receiver's Maidenhead
@@ -190,7 +195,10 @@ PLIST
 
 echo "==> Compiling the Swift app"
 # -import-objc-header pulls in the flat C API; Swift needs no C++ interop.
-LIBS=$(cd "$BUILD" && ls libvibeserver_core.a libvibedsp.a 2>/dev/null | sed "s|^|$BUILD/|")
+# ★★★ libvibe_icom.a TOO — the Icom source (CI-V, scope, audio) is its own library in CMakeLists.txt, linked
+#     into vibeserver_core PUBLICly; this hand-written link line is the SECOND READER of that list (see the
+#     libhackrf note below) and the .app would fail on undefined icom:: symbols without it.
+LIBS=$(cd "$BUILD" && ls libvibeserver_core.a libvibe_icom.a libvibedsp.a 2>/dev/null | sed "s|^|$BUILD/|")
 RTLSDR=$(grep -m1 '^RTLSDR_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
 USBLIB=$(grep -m1 '^USB_LIB:'    "$BUILD/CMakeCache.txt" | cut -d= -f2)
 OPUSLIB=$(grep -m1 '^OPUS_LIB:'  "$BUILD/CMakeCache.txt" | cut -d= -f2)

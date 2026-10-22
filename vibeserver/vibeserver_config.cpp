@@ -235,6 +235,8 @@ std::string toJson(const Config& c) {
     S("antennaPort", c.antennaPort); B("antennaPortLocked", c.antennaPortLocked);
     S("antennaMap", c.antennaMap);
     B("rspHdr", c.rspHdr); B("rspAmNotch", c.rspAmNotch); B("rspExtRef", c.rspExtRef);
+    S("icomPort", c.icomPort); N("icomBaud", c.icomBaud); N("icomCiv", c.icomCiv); S("icomAudio", c.icomAudio);
+    N("icomScopeSpeed", c.icomScopeSpeed); B("icomOwnerLock", c.icomOwnerLock); B("icomRfOpen", c.icomRfOpen); B("icomTtyOk", c.icomTtyOk);
     B("dabAgcOverride", c.dabAgcOverride); N("dabAgcTarget", c.dabAgcTarget); B("rfAgc", c.rfAgc); B("rspDabDecim", c.rspDabDecim); N("rfAgcStart", c.rfAgcStart); N("agcSet", c.agcSet); B("agcSetLock", c.agcSetLock);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
@@ -323,6 +325,11 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getBool(s, "rspHdr", c.rspHdr);
     getBool(s, "rspAmNotch", c.rspAmNotch);
     getBool(s, "rspExtRef", c.rspExtRef);
+    getStr(s, "icomPort", c.icomPort); getStr(s, "icomAudio", c.icomAudio);
+    if (getNum(s, "icomBaud", d)) c.icomBaud = (int)d;
+    if (getNum(s, "icomCiv", d)) c.icomCiv = (int)d;
+    if (getNum(s, "icomScopeSpeed", d)) c.icomScopeSpeed = (int)d;
+    getBool(s, "icomOwnerLock", c.icomOwnerLock); getBool(s, "icomRfOpen", c.icomRfOpen); getBool(s, "icomTtyOk", c.icomTtyOk);
     getBool(s, "dabAgcOverride", c.dabAgcOverride);
     if (getNum(s, "dabAgcTarget", d)) c.dabAgcTarget = (int)d;
     getBool(s, "rfAgc", c.rfAgc);
@@ -444,6 +451,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
      *  only one of them updated. `rfNotch` two fields down is the template they should have
      *  followed from the start. */
     B("rspHdr", r.rspHdr); B("rspAmNotch", r.rspAmNotch); B("rspExtRef", r.rspExtRef);
+    S("icomPort", r.icomPort); I("icomBaud", r.icomBaud); I("icomCiv", r.icomCiv); S("icomAudio", r.icomAudio);   // ★ Icom, read AND written
+    I("icomScopeSpeed", r.icomScopeSpeed); B("icomOwnerLock", r.icomOwnerLock); B("icomRfOpen", r.icomRfOpen); B("icomTtyOk", r.icomTtyOk);
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     // ★ The aerial's ranges and filters (2026-10-06) — read here AND written in radioToJson. Clamped
     //   rather than refused: an over-long list keeps its first entries instead of vanishing.
@@ -523,6 +532,8 @@ std::string radioToJson(const RadioConfig& r) {
      *  only one of them updated. `rfNotch` two fields down is the template they should have
      *  followed from the start. */
     B("rspHdr", r.rspHdr); B("rspAmNotch", r.rspAmNotch); B("rspExtRef", r.rspExtRef);
+    S("icomPort", r.icomPort); N("icomBaud", r.icomBaud); N("icomCiv", r.icomCiv); S("icomAudio", r.icomAudio);   // ★ Icom, read AND written
+    N("icomScopeSpeed", r.icomScopeSpeed); B("icomOwnerLock", r.icomOwnerLock); B("icomRfOpen", r.icomRfOpen); B("icomTtyOk", r.icomTtyOk);
     // ★ The aerial. Written HERE as well as read above — the setup page reads this writer, and
     //   the note further down records what a field in only one of them costs.
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
@@ -634,6 +645,8 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.antennaPort = one.antennaPort; r.antennaPortLocked = one.antennaPortLocked;
     r.antennaMap = one.antennaMap;
     r.rspHdr = one.rspHdr; r.rspAmNotch = one.rspAmNotch; r.rspExtRef = one.rspExtRef;
+    r.icomPort = one.icomPort; r.icomBaud = one.icomBaud; r.icomCiv = one.icomCiv; r.icomAudio = one.icomAudio;
+    r.icomScopeSpeed = one.icomScopeSpeed; r.icomOwnerLock = one.icomOwnerLock; r.icomRfOpen = one.icomRfOpen; r.icomTtyOk = one.icomTtyOk;
     r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget; r.rfAgc = one.rfAgc; r.rspDabDecim = one.rspDabDecim; r.rfAgcStart = one.rfAgcStart;
     r.agcSet = one.agcSet; r.agcSetLock = one.agcSetLock;
     r.allowRanges = one.allowRanges; r.blockRanges = one.blockRanges;
@@ -1069,6 +1082,8 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     if (!r.antennaMap.empty())  c.antennaMap  = r.antennaMap;
     if (r.antennaPortLocked)    c.antennaPortLocked = true;
     c.rspHdr = r.rspHdr; c.rspAmNotch = r.rspAmNotch; c.rspExtRef = r.rspExtRef;
+    c.icomPort = r.icomPort; c.icomBaud = r.icomBaud; c.icomCiv = r.icomCiv; c.icomAudio = r.icomAudio;
+    c.icomScopeSpeed = r.icomScopeSpeed; c.icomOwnerLock = r.icomOwnerLock; c.icomRfOpen = r.icomRfOpen; c.icomTtyOk = r.icomTtyOk;
     c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget; c.rfAgc = r.rfAgc; c.rspDabDecim = r.rspDabDecim; c.rfAgcStart = r.rfAgcStart;
     c.agcSet = r.agcSet; c.agcSetLock = r.agcSetLock;
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;

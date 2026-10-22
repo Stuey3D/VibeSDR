@@ -4,6 +4,7 @@
 #include "sdrplay_source.h"
 #include "hackrf_source.h"
 #include "airspy_source.h"
+#include "icom_transport.h"
 #include <algorithm>
 #include "sdr_presence.h"   // sysfsClaimedCounts
 #if __has_include(<libusb.h>)
@@ -98,6 +99,25 @@ std::vector<DetectedRadio> detectRadios() {
             r.serial = r.name.substr(open + 1, close - open - 1);
         r.driverIndex = i;
         out.push_back(r);
+    }
+
+    /* ★★★ ICOM TRANSCEIVERS — LAST, so no existing flat index moves (receive only; docs/ICOM-SUPPORT-PLAN.md).
+     *     NOT "every CP2102": that chip is in GPS units, programming leads and half the hobby world, and
+     *     claiming one would detach its kernel driver from under whoever is using it. An Icom programs its
+     *     model into the chip's USB serial ("IC-7300 03001234"), read from sysfs on Linux with nothing
+     *     opened and nothing sent — that string IS the identity, and it is unique per radio. The radio
+     *     must then still answer CI-V (19 00) at start, or IcomSource refuses it. */
+    {
+        int k = 0;
+        for (const auto& u : icom::listUsbIcoms()) {
+            DetectedRadio r;
+            r.driver = "icom";
+            r.name = "Icom " + (u.model.empty() ? std::string("radio") : u.model)
+                   + (u.serial.empty() ? std::string() : " (" + u.serial + ")");
+            r.serial = u.serial.empty() ? u.path : u.serial;
+            r.driverIndex = k++;
+            out.push_back(r);
+        }
     }
 
     for (size_t i = 0; i < out.size(); i++) out[i].index = (int)i;

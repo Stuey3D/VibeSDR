@@ -156,6 +156,9 @@ struct VibeRtlTunerOps {
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
 #include "vibe_chat_share.h"        // ★ "share a station" in the canned chat: validate, name, say
 #include "vibe_tune_etiquette.h"    // ★★ "Ask before tuning": who may move a shared dial (docs/TUNING-ETIQUETTE.md)
+#if VIBE_HAVE_ICOM
+#include "icom_source.h"            // ★★★ an Icom transceiver as a RECEIVER (docs/ICOM-SUPPORT-PLAN.md)
+#endif
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -1573,7 +1576,10 @@ static std::atomic<int>    g_vsMaxUsers{1};
 static bool vsSharedDial();
 
 static constexpr double    kDialShowSec = 120.0;
-static bool vsSharedDial() { return g_vsLockedCentre.load() <= 0.0 && g_vsMaxUsers.load() > 1; }
+/** ★★★ AN ICOM IS ALWAYS A SHARED DIAL (plan §2.2): there is ONE physical receiver, so a locked
+ *  centre cannot give anybody a VFO of their own. Set for the life of an Icom session. */
+static std::atomic<bool> g_icomOn{false};
+static bool vsSharedDial() { return (g_vsLockedCentre.load() <= 0.0 || g_icomOn.load()) && g_vsMaxUsers.load() > 1; }
 
 // Station list (EiBi + anything else the app has) served at GET /stations for the
 // web client's search. Supplied BY THE APP — it already downloads and caches EiBi,
@@ -5814,6 +5820,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool useAirspyHf() const { return (bool)ahf; }
     bool useHackRf()   const { return (bool)hrf; }
     bool useAirspy()   const { return (bool)asp; }
+    // ── ★★★ ICOM (driver "icom", receive only) ─────────────────────────────────────────────
+    // ★★ NOT IN anySource(), DELIBERATELY. That guard opens the IQ setters (rate, gain, direct
+    //    sampling …) and every one of them would then fall to "else means dongle" against a radio
+    //    that has no IQ at all. An Icom answers only the paths that name it: icomControl(), the
+    //    hwinfo branch, the status lines. Everything IQ-shaped stays a no-op, which is the truth.
+#if VIBE_HAVE_ICOM
+    std::unique_ptr<icom::IcomSource> icom;
+    bool useIcom() const { return (bool)icom; }
+#else
+    bool useIcom() const { return false; }
+#endif
+    std::atomic<double> icomSpanHz{0.0};   ///< the scope's span — what displaySpan() is on an Icom
+    bool icomOwnerLock = true, icomRfOpen = false;
+    std::string icomRadioMode;             ///< the radio's own mode name ("usbd", "rtty") — under modeMtx
+    std::vector<stereo_t> icomPack;        ///< PCM → onAudio(); grows once, never per block
+    std::vector<uint8_t> icomFrame;        ///< one SPEC frame; grows once per wire width
+    double icomLastCentre = 0, icomLastSpan = 0, icomStatusAt = 0;
 
     /** ★★★ "IS THERE A RADIO AT ALL?" — ONE LIST, BECAUSE THE HAND-WRITTEN ONES KEEP ROTTING.
      *
@@ -5943,7 +5966,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     /** The part of the capture that is actually receivable. */
     double usableSpan() const { return std::max(sampleRate * 0.5, sampleRate - 2.0 * edgeCutoffHz()); }
-    double displaySpan() const { return spyFftSpan > 0.0 ? spyFftSpan : usableSpan(); }
+    double displaySpan() const {
+        if (const double is = icomSpanHz.load(std::memory_order_relaxed); is > 0.0) return is;   // ★ the radio's scope span
+        return spyFftSpan > 0.0 ? spyFftSpan : usableSpan();
+    }
 
     int tcpTunerType = 0;
     /** ★★★ The rtl_tcp greeting's GAIN COUNT (2026-09-22). A real rtl_tcp in front of a dongle sends
@@ -6925,6 +6951,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
     void tuneHw(double logicalCenter) {
+        if (useIcom()) return;               // ★ no IQ tuner here — see retune()
         noteHwMoved();                       // ★ see g_hwMovedAt — a retune is not a sferic
         /* ★★★ ONLY WHEN THE TUNER REALLY MOVED (vibe_agc_rules.h §4, Stuart 2026-10-20). A new noise floor
          *  (g_bestFloorDb) and a failed step that belongs to the OLD frequency (g_ovlBadGain) are facts about
@@ -8209,6 +8236,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★ The gate. Per-client DSP exists only where it means something: a SHARED receiver, where
      *  the owner has locked the centre and more than one listener is allowed. */
     bool perClientDsp() const {
+        if (useIcom()) return false;   // ★★★ one physical receiver — see g_icomOn
         // ★ THIS IS THE LOCKED-CENTRE MODE, and vsSharedDial() is exactly its complement: a pinned
         //   window gives every listener their own VFO, an unpinned one gives them all the same
         //   dial. Two settings, two modes, no third flag to keep in step.
@@ -14034,6 +14062,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void retune(double freq) {
         // ★ There is no VFO in DAB — the ensemble IS the capture. See flushPendingDongle.
         if (g_dabMode.load(std::memory_order_relaxed)) return;
+        // ★★★ NOR ON AN ICOM: the radio is the dial, and only icomControl() — a PERSON's tune — moves it.
+        //     A landing, a resume or a recovery is not a user action (shared_dial_contract).
+        if (useIcom()) return;
         // ★★ ONE LINE PER TUNE, KEPT. Tuning is a deliberate act a few times a minute, not a
         //    stream — this costs nothing and answers the question that has now been asked twice:
         //    did the server receive the tune and act on it, or not receive it at all? "It only
@@ -14275,6 +14306,254 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (auto& c : allSpecClients()) if (c && c->isOpen()) sendConfig(c);
     }
 
+    // ══ ★★★ ICOM — the radio's scope, audio and state into the ordinary fan-out ═══════════════════
+    // (docs/ICOM-SUPPORT-PLAN.md §2.2). Nothing here runs the engine: no FFT, no demodulator. The
+    // scope becomes SPEC frames over the radio's own edges, the radio's audio enters at onAudio()
+    // (so Opus, the decoders, NR and the notch all work), and every change the radio reports is
+    // re-broadcast as full state — the radio IS the server state (shared_dial_contract).
+
+    /** The radio's mode → the client's mode vocabulary (spectrum.ts SDRMode), for the passband and
+     *  the mode buttons. The exact radio mode travels beside it as `radioMode`. ★ RTTY on an Icom
+     *  is LSB-sided (mark high) by default, RTTY-R the other way. */
+    static const char* icomToClientMode(const std::string& m) {
+        if (m == "usb" || m == "usbd" || m == "rttyr") return "usb";
+        if (m == "lsb" || m == "lsbd" || m == "rtty")  return "lsb";
+        if (m == "am") return "am";
+        if (m == "cw") return "cwu";
+        if (m == "cwr") return "cwl";
+        if (m == "fm") return "nfm";
+        return "usb";
+    }
+    /** A client's mode name → the radio's. Radio names pass through; "" = this radio has none. */
+    static std::string clientToIcomMode(const std::string& m) {
+        if (m == "usb" || m == "lsb" || m == "am" || m == "cw" || m == "cwr" || m == "rtty" || m == "rttyr"
+            || m == "usbd" || m == "lsbd" || m == "fm") return m;
+        if (m == "sam") return "am";
+        if (m == "cwu") return "cw";
+        if (m == "cwl") return "cwr";
+        if (m == "nfm") return "fm";
+        return "";
+    }
+    /** ★★★ THE OWNER, FOR AN ICOM, IS A SIGNED-IN ADMIN — and nothing else. NOT adminGate()'s loopback
+     *  shortcut: a tunnel or a reverse proxy on the box arrives as 127.0.0.1, so "loopback is the owner"
+     *  would hand every internet listener the owner's transceiver dial. ★ With NO admin password set,
+     *  admin_unlock grants anyone (that is the server's existing model), so the owner lock only means
+     *  something once a password is set — the setup page says so beside the switch. */
+    bool icomAdmin(const std::shared_ptr<net::Socket>& sock) { return adminNow(sock); }
+    void icomConfigAll() {
+        // ★ To EVERY listener, shared dial or not — broadcastConfig() is a no-op with one listener
+        //   allowed, and that one still has to see the radio move under the owner's hand.
+        for (auto& c : allSpecClients()) if (c && c->isOpen()) sendConfig(c);
+    }
+#if VIBE_HAVE_ICOM
+    std::string icomStatusJson(const icom::RadioState& st) {
+        char b[512];
+        const double sDb = st.sRaw >= 0 ? icom::IcomSource::sRawToDbOverS9(st.sRaw) : -999.0;
+        std::snprintf(b, sizeof b,
+            "{\"type\":\"icom\",\"freq\":%llu,\"mode\":\"%s\",\"fil\":%d,\"sRaw\":%d,\"sDbOverS9\":%.1f,"
+            "\"tx\":%s,\"link\":%s,\"fps\":%.1f,\"span\":%u,\"scopeMode\":\"%s\"}",
+            (unsigned long long)st.freq, st.mode.c_str(), st.fil, st.sRaw, sDb,
+            st.tx ? "true" : "false", st.linkUp ? "true" : "false", st.sweepsPerSec,
+            (unsigned)(st.spanHalfHz * 2), st.scopeMode ? "fixed" : "centre");
+        return b;
+    }
+    /** The CI-V thread says something changed. ★ Called with no source lock held. */
+    void onIcomState(unsigned what) {
+        if (!icom) return;
+        const icom::RadioState st = icom->state();
+        if (what & (icom::IcomSource::kFreq | icom::IcomSource::kMode)) {
+            if (st.freq) audioFreq.store((double)st.freq);   // ★ the decoders' dial (FT8 spots = dial + offset)
+            {
+                std::lock_guard<std::recursive_mutex> lk(modeMtx);
+                icomRadioMode = st.mode;
+                if (!st.mode.empty()) mode = icomToClientMode(st.mode);
+            }
+            if (st.scopeMode == 0 && st.freq) viewCenter.store((double)st.freq);   // the next sweep confirms the edges
+            icomConfigAll();
+        }
+        const unsigned big = icom::IcomSource::kRf | icom::IcomSource::kScope | icom::IcomSource::kTx | icom::IcomSource::kLink;
+        if (what & big) for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
+        // ★ The status line: on any change, but the S-meter alone at most 4 times a second.
+        const double t = nowSecs();
+        if ((what & ~icom::IcomSource::kMeter) || t - icomStatusAt >= 0.25) {
+            icomStatusAt = t;
+            const std::string j = icomStatusJson(st);
+            for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, j);
+        }
+    }
+    /** ★★ ONE SWEEP → ONE SPEC ROW PER WIRE WIDTH, over the radio's own edges. On the CI-V thread. */
+    void onIcomSweep(const icom::Sweep& sw) {
+        lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);   // ★ alive, for every "is the radio there?" reader
+        const double centre = sw.centreHz(), span = sw.spanHz();
+        if (std::fabs(centre - icomLastCentre) >= 1.0 || std::fabs(span - icomLastSpan) >= 1.0) {
+            icomLastCentre = centre; icomLastSpan = span;
+            icomSpanHz.store(span); viewCenter.store(centre); rtlCenter.store(centre);
+            zoomFactor.store(1.0);
+            icomConfigAll();   // ★ binBandwidth changed: the client must rescale BEFORE the next row
+        }
+        auto peers = allSpecPeers();
+        if (peers.empty()) return;
+        const std::vector<char> due = dueForFrame(peers);
+        const icom::Model& m = icom->model();
+        uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        const uint64_t f = (uint64_t)llround(centre);
+        for (size_t i = 0; i < peers.size(); i++) {
+            if (!due[i] || !peers[i].sock || peers[i].bins <= 0) continue;
+            const int w = peers[i].bins;
+            bool done = false;
+            for (size_t k = 0; k < i; k++) if (due[k] && peers[k].sock && peers[k].bins == w) { done = true; break; }
+            if (done) continue;                                   // this width was built for an earlier peer
+            if (icomFrame.size() < (size_t)(22 + w)) icomFrame.resize((size_t)(22 + w));
+            uint8_t* fr = icomFrame.data();
+            fr[0]='S'; fr[1]='P'; fr[2]='E'; fr[3]='C'; fr[4]=0x01; fr[5]=0x03;
+            std::memcpy(fr + 6, &ts, 8);
+            std::memcpy(fr + 14, &f, 8);
+            icom::sweepToWire(sw, w, fr + 22, m.ampMax, m.dbRange);
+            size_t sent = 0;
+            for (size_t j = i; j < peers.size(); j++)
+                if (due[j] && peers[j].sock && peers[j].bins == w) { sendWs(peers[j].sock, 0x2, fr, (size_t)(22 + w), Out::Spectrum); sent++; }
+            vsSpecBytes.fetch_add((22 + w) * sent, std::memory_order_relaxed);
+        }
+    }
+    /** The radio's audio → onAudio(), as mono (the 7300 sends the same audio on both channels). */
+    void onIcomPcm(const int16_t* pcm, int frames, int ch, int rate) {
+        if (frames <= 0 || rate != (int)AUDIO_SR) return;
+        lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
+        if ((int)icomPack.size() < frames) icomPack.resize((size_t)frames);
+        const float k = 1.0f / 32768.0f;
+        for (int i = 0; i < frames; i++) {
+            const float l = pcm[i * ch] * k, r = ch == 2 ? pcm[i * ch + 1] * k : l;
+            const float v = 0.5f * (l + r);
+            icomPack[i].l = v; icomPack[i].r = v;
+        }
+        onAudio(icomPack.data(), frames, 1);
+    }
+#endif
+    /** ★★★ AN ICOM'S CONTROLS — every message that would move the radio, judged HERE and turned into
+     *  allow-listed CI-V by IcomSource (never raw bytes from a client). Returns true when handled.
+     *  ★ The IQ-shaped controls (gain, IF filter, rate, DAB, raw IQ, …) are swallowed: none of them
+     *    exists on this radio, and letting them fall through would reach dongle code ("else means dongle").
+     *  ★★ OWNER LOCK (default ON, plan §3.4): "Listeners follow the radio" — only the admin tunes.
+     *     RF settings (ATT, preamp, AGC, RF gain, NB/NR/ANF) are admin-only unless the owner opens them.
+     *  ★★ sock == nullptr is the SERVER talking to itself (a landing, a resume): ignored — the radio is the
+     *     state, and recovery is not a user action. */
+    bool icomControl(const std::shared_ptr<net::Socket>& sock, const std::string& type, const std::string& msg) {
+        if (!useIcom()) return false;
+#if VIBE_HAVE_ICOM
+        static const char* const kNotHere[] = {
+            "gain", "agc", "tunerbw", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control",
+            "hackrf_control", "antenna", "sampleRate", "directSampling", "autoDirectSampling", "biasT", "ppm",
+            "rawIq", "iqout", "iqtune", "rdsx", "dab", "dab_service", "dab_scopes", "dab_resync", "dab_erase",
+            "dabBoost", "autobw", "ims", "ceq", "nb", "nbx", "stereo", "deemph", "nfmvoice", "squelch", "fftRate" };
+        for (const char* k : kNotHere)
+            if (type == k) { LOGI("icom: '%s' ignored — this radio has no such control", type.c_str()); return true; }
+        const bool radioMsg = type == "tune" || type == "mode" || type == "bandwidth" || type == "zoom"
+                           || type == "reset" || type == "icom_control";
+        if (!radioMsg) return false;
+        if (!sock) { LOGI("icom: a server-side '%s' ignored — the radio is the dial", type.c_str()); return true; }
+        const bool admin = icomAdmin(sock);
+        const bool mayTune = admin || !icomOwnerLock;
+        const bool mayRf = admin || icomRfOpen;
+        std::string why;
+        auto refuse = [&](const std::string& w) {
+            LOGI("icom: refused %s — %s", type.c_str(), w.c_str());
+            sendText(sock, "{\"type\":\"notice\",\"why\":\"" + jsonEscape(w) + "\"}");
+        };
+        static const char* kFollow = "The owner has set this radio so that listeners follow it \xE2\x80\x94 only the owner tunes it";
+        static const char* kRfAdmin = "Only the owner can change this radio's RF settings";
+        const icom::Model& m = icom->model();
+        auto nearestSpan = [&](double want) -> uint32_t {
+            uint32_t best = 0; double bestD = 1e30;
+            for (int i = 0; i < m.nSpans; i++) {
+                const double t = 2.0 * m.spansHalfHz[i];
+                const double d = std::fabs(std::log(t / std::max(1.0, want)));
+                if (d < bestD) { bestD = d; best = (uint32_t)t; }
+            }
+            return best;
+        };
+        auto nearestFil = [&](double width) -> int {
+            std::string cur; { std::lock_guard<std::recursive_mutex> lk(modeMtx); cur = icomRadioMode; }
+            const char* fam = icom::widthFamily(cur.empty() ? "usb" : cur.c_str());
+            for (int i = 0; i < m.nWidths; i++)
+                if (!std::strcmp(m.widths[i].mode, fam)) {
+                    int best = 1; double bd = 1e30;
+                    for (int f = 0; f < 3; f++) { const double d = std::fabs(m.widths[i].fil[f] - width); if (d < bd) { bd = d; best = f + 1; } }
+                    return best;
+                }
+            return 0;
+        };
+        if (type == "reset") { sendConfig(sock); return true; }
+        if (type == "zoom") {
+            // ★★ ZOOM IS THE SPAN LADDER (plan §2.2). The centre is the radio's, so a pan is answered
+            //    with the config that says where it really is; a span picks the nearest real rung.
+            double bb = 0;
+            if (jsonNum(msg, "binBandwidth", bb) && bb > 0) {
+                const uint32_t want = nearestSpan(bb * (double)binsFor(sock));
+                const icom::RadioState st = icom->state();
+                // ★ Under the owner lock a listener's zoom is answered by the config alone — no notice. Every
+                //   existing client restores its own span on join, and a pill per join would be noise; the
+                //   config IS the answer ("a joiner adopts", shared_dial_joiner_imposes_view).
+                if (want && want != st.spanHalfHz * 2 && st.scopeMode == 0 && mayTune && !icom->setSpanTotal(want, why))
+                    refuse(why);
+            }
+            sendConfig(sock);
+            return true;
+        }
+        if (type == "tune" || type == "mode" || type == "bandwidth") {
+            if (!mayTune) { refuse(kFollow); sendConfig(sock); return true; }
+            const std::string cm = jsonStr(msg, "mode");
+            if (!cm.empty() && cm != "dab") {
+                const std::string im = clientToIcomMode(cm);
+                std::string curClient; { std::lock_guard<std::recursive_mutex> lk(modeMtx); curClient = mode; }
+                // ★ A tune that merely restates the mode the client already mirrors is not a mode change —
+                //   USB-D shows as "usb" to a client, and must not be flipped to plain USB by its echo.
+                if (cm != curClient) {
+                    if (im.empty() || vsModeRefused(cm)) refuse("This radio has no " + cm + " mode");
+                    else if (!icom->setMode(im, 0, why)) refuse(why);
+                }
+            }
+            double hz = 0;
+            if (type == "tune" && jsonNum(msg, "frequency", hz) && hz > 0) {
+                if (!icom->tune((uint64_t)llround(hz), why)) refuse(why);
+                else {
+                    std::lock_guard<std::mutex> lk(clientMtx);
+                    auto it = sockSession.find(sock.get());
+                    if (it != sockSession.end() && !it->second.empty()) dialTouchLocked(it->second);
+                }
+            }
+            // ★ Width → FIL1/2/3 only on a BANDWIDTH message: every tune carries the client's mirrored
+            //   passband, and taking it from there would flip the radio's filter on each step.
+            if (type == "bandwidth") {
+                double lo = 0, hi = 0, bw = 0;
+                double width = (jsonNum(msg, "bandwidthLow", lo) && jsonNum(msg, "bandwidthHigh", hi)) ? hi - lo
+                             : (jsonNum(msg, "bandwidth", bw) ? bw : 0);
+                if (width > 0) { const int fil = nearestFil(width); if (fil > 0 && !icom->setFilter(fil, why)) refuse(why); }
+            }
+            return true;
+        }
+        // type == "icom_control" — the radio's own controls, named as the radio names them.
+        double v = 0;
+        std::string sv;
+        if (!(sv = jsonStr(msg, "mode")).empty())      { if (!mayTune) refuse(kFollow); else if (!icom->setMode(sv, 0, why)) refuse(why); }
+        if (jsonNum(msg, "fil", v))                   { if (!mayTune) refuse(kFollow); else if (!icom->setFilter((int)v, why)) refuse(why); }
+        if (jsonNum(msg, "span", v))                  { if (!mayTune) refuse(kFollow); else if (!icom->setSpanTotal((uint32_t)v, why)) refuse(why); }
+        if (!(sv = jsonStr(msg, "scopeMode")).empty()) { if (!mayTune) refuse(kFollow); else if (!icom->setScopeMode(sv == "fixed" ? 1 : sv == "centre" ? 0 : -1, why)) refuse(why); }
+        if (!(sv = jsonStr(msg, "scopeSpeed")).empty()) { if (!mayRf) refuse(kRfAdmin); else if (!icom->setScopeSpeed(sv == "fast" ? 0 : sv == "mid" ? 1 : sv == "slow" ? 2 : -1, why)) refuse(why); }
+        if (jsonNum(msg, "att", v))                   { if (!mayRf) refuse(kRfAdmin); else if (!icom->setAtt((int)v, why)) refuse(why); }
+        if (jsonNum(msg, "preamp", v))                { if (!mayRf) refuse(kRfAdmin); else if (!icom->setPreamp((int)v, why)) refuse(why); }
+        if (!(sv = jsonStr(msg, "agc")).empty())       { if (!mayRf) refuse(kRfAdmin); else if (!icom->setAgc(sv == "fast" ? 1 : sv == "mid" ? 2 : sv == "slow" ? 3 : -1, why)) refuse(why); }
+        if (jsonNum(msg, "rfGain", v))                { if (!mayRf) refuse(kRfAdmin); else if (!icom->setRfGain((int)v, why)) refuse(why); }
+        if (msg.find("\"nb\"") != std::string::npos)  { if (!mayRf) refuse(kRfAdmin); else if (!icom->setNb(jsonOn(msg, "nb"), why)) refuse(why); }
+        if (msg.find("\"nr\"") != std::string::npos)  { if (!mayRf) refuse(kRfAdmin); else if (!icom->setNr(jsonOn(msg, "nr"), why)) refuse(why); }
+        if (msg.find("\"anf\"") != std::string::npos) { if (!mayRf) refuse(kRfAdmin); else if (!icom->setAnf(jsonOn(msg, "anf"), why)) refuse(why); }
+        return true;
+#else
+        (void)sock; (void)type; (void)msg;
+        return false;
+#endif
+    }
+
     void sendConfig(const std::shared_ptr<net::Socket>& sock) {
         // NB: displaySpan(), not sampleRate. On SpyServer the waterfall is the
         // server's wide FFT while the IQ is narrow, so the client's zoom/pan model
@@ -14295,6 +14574,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string pbField;
         auto me = dspFor(sock);
         if (!me) pbField = roomPb.configField(mode);
+        // ★ An Icom: the radio's OWN mode beside the client-vocabulary one ("usbd" shows as "usb").
+        if (useIcom()) { std::lock_guard<std::recursive_mutex> lk(modeMtx); pbField = ",\"radioMode\":\"" + icomRadioMode + "\",\"icom\":true"; }
         if (me) {
             myMode = me->mode; myVfo = me->vfoHz;
             // ★ Its own view, or the shared one — the client scales its axis by what we say here,
@@ -14808,6 +15089,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         auto sharedGate = [&](const char* what) -> bool {
             return g_vsLockedCentre.load() <= 0.0 || adminGate(what);
         };
+        // ★★★ AN ICOM ANSWERS ITS OWN CONTROLS, after the admin sign-in above and before ANY of the IQ paths below.
+        if (useIcom() && icomControl(sock, type, msg)) return;
         if (type == "hackrf_control") {
             /* ★★★ THE RF AMP IS BEHIND adminGate, NOT sharedGate, AND THAT IS THE WHOLE POINT OF
              *     THIS BRANCH. Every other gain control on every other radio is a listening
@@ -17362,6 +17645,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             j += std::string(",\"rspBiasT\":") + (vsDesiredRspBiasT() ? "true" : "false");
         j += "}";
         sendText(sock, j);
+#if VIBE_HAVE_ICOM
+        // ★ And the Icom's live status straight after it, so a joiner has the S-meter and TX state at once
+        //   rather than at the radio's next change (which, on a quiet band, may be a long wait).
+        if (useIcom()) sendText(sock, icomStatusJson(icom->state()));
+#endif
     }
 
     /** Remember the edges a listener just applied to the shared chain, at the width it is really
@@ -18489,7 +18777,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool asp = !noRadio && LocalSdrShim::instance().isAirspy();   // ★ R2/Mini: was reported "rtl" (2026-09-28)
             const bool lost = noRadio || deviceLost.load();
             std::string j = std::string("{\"driver\":\"")
-                          + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : hrf ? "hackrf" : asp ? "airspy" : "rtl")
+                          + (lost ? "none" : useIcom() ? "icom" : rsp ? "sdrplay" : hf ? "airspyhf" : hrf ? "hackrf" : asp ? "airspy" : "rtl")
                           + "\",\"present\":" + (lost ? "false" : "true")
                           + ",\"rates\":[" + supportedRates() + "]"
                           // ★ What the dongle calls itself, so the setup page can warn that a
@@ -18520,7 +18808,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    the label travel: the page never learns an edge, so the two cannot drift into
             //    disagreeing about where "VHF airband" ends — which is the kind of difference
             //    nobody notices until a listener is somewhere the owner thought they had blocked.
-            if (!rsp && !hf && !hrf && !lost) {
+            if (!rsp && !hf && !hrf && !lost && !useIcom()) {   // ★ an Icom has no gain table
                 std::vector<int> g = LocalSdrShim::instance().getTunerGains();
                 for (size_t i = 0; i < g.size(); i++) { if (i) j += ','; j += std::to_string(g[i]); }
             }
@@ -18612,6 +18900,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 j += "]";
             }
+            // ★★ AN ICOM's setup facts — model, CI-V address, baud, the preflight in plain words, the transport —
+            //    are the same object hwinfo carries (one writer, radioCapsJsonCore), as `radio` here too.
+            if (!noRadio && useIcom()) j += LocalSdrShim::instance().radioCapsJsonCore();
             j += "}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
@@ -27431,7 +27722,7 @@ std::string LocalSdrShim::adminStatusJson() {
     {
         const bool lost = p && p->deviceLost.load();
         j += std::string(",\"radio\":{\"present\":") + (lost ? "false" : "true")
-           + ",\"driver\":\"" + (lost ? "none" : isSdrplay() ? "sdrplay"
+           + ",\"driver\":\"" + (lost ? "none" : isIcom() ? "icom" : isSdrplay() ? "sdrplay"
                                               : isAirspyHf() ? "airspyhf"
                                               : isHackRf()   ? "hackrf"
                                               : isAirspy()   ? "airspy" : "rtl") + "\"";   // ★ R2/Mini was "rtl" (2026-09-28)
@@ -28264,7 +28555,15 @@ void LocalSdrShim::setVibeServerTuneLimits(const std::string& allowCsv, const st
  *    caller must omit the field rather than publish a span nobody promised, the same rule the gain
  *    readouts follow: if the driver cannot tell us, show nothing.
  */
+/** ★ The Icom's own receive ranges, set once in startIcom() before the listener exists. */
+static vibebands::Ranges g_icomRanges;
 static vibebands::Ranges vsTunableRanges() {
+    // ★★★ AN ICOM FIRST: its coverage is the MODEL's (icom_models.h), never a dongle's, and a locked
+    //     centre means nothing on a radio whose scope is the waterfall.
+    if (g_icomOn.load()) {
+        const vibebands::Ranges perm = vsPermittedRanges(g_icomRanges);
+        return perm.empty() ? g_icomRanges : perm;
+    }
     const double lockC = g_vsLockedCentre.load(), lockR = g_vsLockedRate.load();
     if (lockC > 0.0 && lockR > 0.0)
         return { { lockC - lockR / 2.0, lockC + lockR / 2.0 } };
@@ -28314,6 +28613,7 @@ static bool vsDabCapable() {
     return vsDabCapableHw();
 }
 static bool vsDabCapableHw() {
+    if (g_icomOn.load()) return false;   // ★ an HF transceiver's audio is not a DAB ensemble (plan §2.3)
     /* ★★ NOTHING TO DECODE WITH = NOT CAPABLE, and this comes first because it is the one
      *  restriction no amount of tuning, rate or operator setting can work around. */
     if (!vsDabDecoderAvailable()) return false;
@@ -30185,6 +30485,11 @@ void LocalSdrShim::stopLocked() {
     STOP_STAGE("the hardware writer");
     impl->stopHwWriter();
     STOP_STAGE("stopping the radio's stream");
+#if VIBE_HAVE_ICOM
+    // ★ The Icom's CI-V and audio threads call into impl — stopped (and the scope's data output switched
+    //   back off) before anything they touch is destroyed.
+    if (impl->useIcom()) { impl->icom->close(); g_icomOn.store(false); }
+#endif
     if (impl->dev) rtlsdr_cancel_async(impl->dev);
     if (impl->useSpy()) {
         impl->tcpRunning.store(false);
@@ -33132,6 +33437,82 @@ void LocalSdrShim::setFftRate(double fps) {
     LOGI("fft rate: %.1f fps (engine %.1f) — server default", fps, fps * FFT_AVG);
 }
 bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
+bool LocalSdrShim::isIcom() const { return p && p->useIcom(); }
+
+/* ★★★ AN ICOM AS A RECEIVER (docs/ICOM-SUPPORT-PLAN.md §2.2). Not startAirspyHfCommon's shape with the IQ
+ *     taken out — there is no engine at all: no startEngine(), no buildAudio(), no DSP thread. The CI-V
+ *     thread feeds onIcomSweep()/onIcomState() and the capture thread feeds onIcomPcm() → onAudio(),
+ *     and the housekeeping thread does what it does for any server (ticks, idle, ask-before-tuning).
+ *  ★★ AND NO HOTPLUG WATCH: that watchdog's recovery reopens IQ radios. IcomSource has its own
+ *     (silence > 3 s or the USB gone → reconnect every 3 s, preflight again). */
+int LocalSdrShim::startIcom(const IcomStart& o, std::string& err) {
+#if !VIBE_HAVE_ICOM
+    (void)o;
+    err = "this build of VibeServer has no Icom support";
+    return -1;
+#else
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { LOGI("stale shim found on Icom start — tearing down"); stopLocked(); }
+    auto* impl = new Impl();
+    impl->sampleRate = AUDIO_SR;      // ★ no IQ: the only rate on an Icom is its audio's
+    impl->fftSize = 1024;
+    impl->fftRate = 20.0; impl->baseFftRate = 20.0;
+    impl->mode = "usb";
+    impl->audioGain.store(1.0f);      // the radio's own AF level; buildAudio()'s per-mode trim does not apply
+    impl->icomOwnerLock = o.ownerLock;
+    impl->icomRfOpen = o.rfOpen;
+    impl->icom = std::make_unique<icom::IcomSource>();
+    Impl* self = impl;
+    impl->icom->setSweepSink([self](const icom::Sweep& s) { self->onIcomSweep(s); });
+    impl->icom->setPcmSink([self](const int16_t* pcm, int n, int ch, int rate) { self->onIcomPcm(pcm, n, ch, rate); });
+    impl->icom->setStateSink([self](unsigned w) {
+        if (w & icom::IcomSource::kLink) setRadioProblem(self->icom->state().linkUp ? std::string() : std::string("the radio is not answering on CI-V"));
+        self->onIcomState(w);
+    });
+    impl->icom->setLostSink([](const std::string& why) { setRadioProblem(why); });
+    g_icomOn.store(true);
+    icom::IcomConfig c;
+    c.port = o.port; c.baud = o.baud; c.civAddr = o.civAddr; c.audio = o.audio;
+    c.scopeSpeed = o.scopeSpeed; c.ttyOk = o.ttyOk; c.modelHint = o.modelHint;
+    if (!impl->icom->open(c, err)) { g_icomOn.store(false); delete impl; return -1; }
+    {
+        const icom::Model& m = impl->icom->model();
+        g_icomRanges.clear();
+        for (int i = 0; i < m.nRanges; i++) g_icomRanges.push_back({ (double)m.ranges[i].lo, (double)m.ranges[i].hi });
+        const icom::RadioState st = impl->icom->state();
+        const double f = st.freq ? (double)st.freq : o.freqHint;
+        impl->audioFreq.store(f); impl->rtlCenter.store(f); impl->viewCenter.store(f);
+        impl->icomSpanHz.store(st.spanHalfHz ? 2.0 * st.spanHalfHz : 50000.0);
+        impl->icomRadioMode = st.mode;
+        if (!st.mode.empty()) impl->mode = Impl::icomToClientMode(st.mode);
+    }
+    int chosen = -1;
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
+        catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
+    }
+    if (!impl->listener) {
+        err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049";
+        impl->icom->close(); g_icomOn.store(false); delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+    impl->startHousekeeping();
+    p = impl;
+    LOGI("Icom %s started (RECEIVE ONLY): %.3f kHz %s, port=%d, owner lock %s",
+         impl->icom->model().name, impl->audioFreq.load() / 1e3, impl->icomRadioMode.c_str(), chosen,
+         o.ownerLock ? "ON (listeners follow the radio)" : "off");
+    return chosen;
+#endif
+}
 bool LocalSdrShim::isHackRf()   const { return p && p->useHackRf(); }
 bool LocalSdrShim::isAirspy()   const { return p && p->useAirspy(); }
 
@@ -33828,6 +34209,61 @@ std::string LocalSdrShim::radioCapsJson() const {
 }
 std::string LocalSdrShim::radioCapsJsonCore() const {
     if (!p) return "";
+#if VIBE_HAVE_ICOM
+    /* ★★★ ICOM FIRST, BEFORE EVERY OTHER BRANCH — "else means dongle" (the HF+ was announced as an RTL in
+     *     July). THE CLIENT CONTRACT is docs/ICOM-SUPPORT-PLAN.md "hwinfo + wire contract for clients
+     *     (built)": every list here is the radio's, and the client draws exactly these controls and hides
+     *     the IQ ones (sample rate, VibeAGC, IF ladder, gain table, direct sampling, bias-T, ppm, raw IQ,
+     *     RDS, DAB, multi-VFO, fps tiers). */
+    if (p->useIcom()) {
+        const icom::IcomSource& ic = *p->icom;
+        const icom::Model& m = ic.model();
+        const icom::RadioState st = ic.state();
+        const icom::Preflight& pf = ic.preflight();
+        auto q = [](const std::string& x) { return "\"" + Impl::jsonEscape(x) + "\""; };
+        char civ[8]; std::snprintf(civ, sizeof civ, "%02X", ic.civAddr());
+        std::string j = ",\"radio\":{\"driver\":\"icom\",\"model\":" + q(m.name) + ",\"civ\":\"" + civ + "\"";
+        j += ",\"link\":\"usb\",\"transport\":" + q(ic.transportKind()) + ",\"linesHeldLow\":" + (ic.linesHeldLow() ? "true" : "false");
+        j += ",\"baud\":" + std::to_string(ic.baud());
+        j += ",\"noIq\":true,\"sharedOnly\":true,\"canTransmit\":false";   // ★ VibeServer never transmits
+        j += ",\"modes\":[";
+        for (int i = 0; i < m.nModes; i++) j += (i ? "," : "") + q(m.modes[i]);
+        j += "],\"modeNow\":" + q(st.mode) + ",\"filters\":[1,2,3],\"filNow\":" + std::to_string(st.fil);
+        j += ",\"filterWidths\":{";
+        for (int i = 0; i < m.nWidths; i++)
+            j += std::string(i ? "," : "") + "\"" + m.widths[i].mode + "\":[" + std::to_string(m.widths[i].fil[0]) + ","
+               + std::to_string(m.widths[i].fil[1]) + "," + std::to_string(m.widths[i].fil[2]) + "]";
+        j += "},\"att\":[";
+        for (int i = 0; i < m.nAtt; i++) j += (i ? "," : "") + std::to_string(civ::bcdByte(m.att[i]));
+        j += "],\"attNow\":" + std::to_string(st.att) + ",\"preamp\":[";
+        for (int i = 0; i <= m.preampMax; i++) j += (i ? "," : "") + std::to_string(i);
+        static const char* kAgc[] = {"", "fast", "mid", "slow"};
+        j += "],\"preampNow\":" + std::to_string(st.preamp) + ",\"agc\":[\"fast\",\"mid\",\"slow\"],\"agcNow\":\""
+           + (st.agc >= 1 && st.agc <= 3 ? kAgc[st.agc] : "mid") + "\"";
+        j += ",\"rfGain\":[0,255],\"rfGainNow\":" + std::to_string(st.rfGain);
+        j += std::string(",\"nb\":true,\"nbNow\":") + (st.nb ? "true" : "false") + ",\"nr\":true,\"nrNow\":" + (st.nr ? "true" : "false")
+           + ",\"anf\":true,\"anfNow\":" + (st.anf ? "true" : "false");
+        j += ",\"scope\":{\"points\":" + std::to_string(m.points) + ",\"spans\":[";
+        for (int i = 0; i < m.nSpans; i++) j += (i ? "," : "") + std::to_string(2 * m.spansHalfHz[i]);
+        char fps[16]; std::snprintf(fps, sizeof fps, "%.1f", st.sweepsPerSec);
+        j += "],\"span\":" + std::to_string(2 * st.spanHalfHz) + ",\"modes\":[\"centre\",\"fixed\"],\"mode\":\""
+           + (st.scopeMode ? "fixed" : "centre") + "\",\"speeds\":[\"fast\",\"mid\",\"slow\"],\"fps\":" + fps + "}";
+        j += ",\"ranges\":[";
+        for (int i = 0; i < m.nRanges; i++) j += std::string(i ? "," : "") + "[" + std::to_string(m.ranges[i].lo) + "," + std::to_string(m.ranges[i].hi) + "]";
+        j += "]";
+        j += std::string(",\"tx\":") + (st.tx ? "true" : "false") + ",\"linkUp\":" + (st.linkUp ? "true" : "false");
+        j += std::string(",\"ownerLock\":") + (p->icomOwnerLock ? "true" : "false") + ",\"rfOpen\":" + (p->icomRfOpen ? "true" : "false");
+        j += ",\"audio\":" + q(ic.audioDescription()) + ",\"audioProblem\":" + q(ic.audioProblem());
+        j += std::string(",\"preflight\":{\"passed\":") + (pf.passed ? "true" : "false") + ",\"verified\":" + (pf.verified ? "true" : "false")
+           + ",\"summary\":" + q(pf.summary) + ",\"items\":[";
+        for (size_t i = 0; i < pf.items.size(); i++)
+            j += std::string(i ? "," : "") + "{\"name\":" + q(pf.items[i].name) + ",\"value\":" + q(pf.items[i].value)
+               + ",\"ok\":" + (pf.items[i].ok ? "true" : "false") + ",\"gate\":" + (pf.items[i].gate ? "true" : "false")
+               + ",\"where\":" + q(pf.items[i].where) + "}";
+        j += "]},\"refusedFrames\":" + std::to_string(ic.refusedFrames()) + "}";
+        return j;
+    }
+#endif
     // ★ AIRSPY FIRST. The RTL branch below is an `if (!useSdrplay())` early return, so ANY
     // third driver falls into it and is reported as a dongle — which is exactly what happened:
     // an Airspy HF+ announced itself as driver "rtl" and the client drew dongle controls for

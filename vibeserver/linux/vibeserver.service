@@ -44,7 +44,8 @@ RestartSec=5
 # Run as an ordinary system user, not root. USB access comes from the udev rules shipped alongside.
 User=vibeserver
 Group=vibeserver
-SupplementaryGroups=plugdev
+# ★ `audio` for an Icom's USB audio codec (/dev/snd/pcmC*D*c) — receive audio only, never playback.
+SupplementaryGroups=plugdev audio
 # Modest hardening — this thing may be exposed to the internet.
 # ★★★ LET THE REAL-TIME THREADS TAKE THE PRIORITY THEY ASK FOR. The DSP, the source reader, the
 # DAB decoder and each listener's encode all call setpriority(-19) on themselves; a unit running as
@@ -91,6 +92,13 @@ StateDirectory=vibeserver
 ReadWritePaths=/var/lib/vibeserver /etc/vibeserver
 # ★ The radio needs raw USB; everything else stays off.
 DeviceAllow=char-usb_device rw
+# ★★ An Icom's RECEIVE audio is an ALSA capture device (icom_audio.cpp drives /dev/snd by its kernel
+#    interface — no libasound). DeviceAllow= closes every device not listed, so without this the radio's
+#    dial and waterfall would work and its audio would be refused with EPERM.
+DeviceAllow=char-alsa rw
+# ★ And the owner's OPT-IN serial fallback for an Icom (icomTtyOk): the default path is libusb above.
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-ttyACM rw
 # ★★ The Pi's firmware mailbox, READ-ONLY — the true ARM clock and the throttle flags (vibe_vcio.h).
 #    DeviceAllow= closes every other device, so group `video` alone would still be refused here.
 #    On a machine with no /dev/vcio systemd logs that it cannot find it and carries on.

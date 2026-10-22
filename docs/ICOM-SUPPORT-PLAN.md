@@ -1,6 +1,9 @@
 # Icom transceiver support: research and plan
 
-*Research and plan only. Nothing here is built yet. Written 2026-10-21 for Stuart. Saber is the tester.*
+*Written 2026-10-21 for Stuart. Saber is the tester.* **Status 2026-10-22: Phase 0 (capture kit), Phase 1
+server side and Phase 2 (macOS build) are BUILT on branch `v12-icom` and tested against a fake radio — see
+"Built 2026-10-22" at the end, the client contract ("hwinfo + wire contract for clients (built)"), and
+"Open for Stuart". Nothing has touched a real Icom yet.*
 *Labels used throughout: **[verified]** means checked against a source or our own code. **[unverified]**
 means believed true but not yet tested. **[decide]** means Stuart has to choose. **[Saber]** means
 only a capture from Saber's radio can settle it.*
@@ -553,3 +556,212 @@ Stuart: "Pairing code with the app when setting up, only the server owner's app 
   watch passcode stand in for Face ID. Hold-to-talk on a big button (Action button on Ultra). The watch mic streams
   through AVAudioEngine while Jr is frontmost; dropping the wrist or leaving the app unkeys at once (dead-man).
   Mind arm64_32 (32-bit Int below watchOS 27) in the audio and key code. Latency/battery over LTE to be measured.
+
+---
+
+## hwinfo + wire contract for clients (built)
+
+*Built on branch `v12-icom`, 2026-10-22. This is what the SERVER sends and accepts for an Icom, frozen so
+the app, the web client, Jr and the Android port can be built from it. Server code: `radioCapsJsonCore()`
+(icom branch), `Impl::icomControl()`, `onIcomSweep()`, `onIcomState()`, `sendConfig()` in
+`android/app/src/main/cpp/local_sdr_shim.cpp`; the radio itself in `icom_source.*`. Proven against the
+fake radio by `scripts/test-server-icom.mjs`.*
+
+### How a client knows it is talking to an Icom
+
+`hwinfo.radio.driver === "icom"`. Branch on that **before any default** (AGENTS.md; "else means dongle").
+`config.icom === true` says the same on every config. `/vibeserver.json` → `tunable` is the model's
+receive range (`[[30000,74800000]]` on a 7300) and `dab` is `false`.
+
+### `hwinfo.radio` (sent on join, on `{"type":"state"}`, and again whenever RF/scope/TX/link state changes)
+
+```json
+"radio":{"driver":"icom","model":"IC-7300","civ":"94","link":"usb","transport":"cp210x","linesHeldLow":true,
+ "baud":115200,"noIq":true,"sharedOnly":true,"canTransmit":false,
+ "modes":["lsb","usb","am","cw","rtty","fm","cwr","rttyr","usbd","lsbd"],"modeNow":"usbd",
+ "filters":[1,2,3],"filNow":1,
+ "filterWidths":{"ssb":[3000,2400,1800],"cw":[1200,500,250],"rtty":[2400,500,250],"am":[9000,6000,3000],"fm":[15000,10000,7000]},
+ "att":[0,20],"attNow":0,"preamp":[0,1,2],"preampNow":1,"agc":["fast","mid","slow"],"agcNow":"mid",
+ "rfGain":[0,255],"rfGainNow":255,"nb":true,"nbNow":false,"nr":true,"nrNow":false,"anf":true,"anfNow":false,
+ "scope":{"points":475,"spans":[5000,10000,20000,50000,100000,200000,500000,1000000],"span":50000,
+          "modes":["centre","fixed"],"mode":"centre","speeds":["fast","mid","slow"],"fps":19.9},
+ "ranges":[[30000,74800000]],"tx":false,"linkUp":true,"ownerLock":true,"rfOpen":false,
+ "audio":"ALSA hw:2,0 (CODEC)","audioProblem":"",
+ "preflight":{"passed":true,"verified":false,"summary":"Safe to receive: …",
+              "items":[{"name":"USB SEND","value":"OFF","ok":true,"gate":true,"where":"MENU > SET > Connectors > …"}, …]},
+ "refusedFrames":0}
+```
+
+- **Every list comes from here, never a constant** (`feedback_app_no_hardcoded_settings`). `att` is in dB;
+  `preamp` 0 = OFF, 1 = P.AMP1, 2 = P.AMP2; `scope.spans` are TOTAL widths in Hz.
+- `filterWidths` are the radio's FACTORY widths for FIL1/2/3 per mode family (`ssb` covers usb/lsb/usbd/lsbd,
+  `cw` covers cw/cwr, `rtty` covers rtty/rttyr). The owner can change them in the radio and CI-V does not
+  report them, so draw the passband from these as approximate.
+- `ownerLock` true (the default) = "Listeners follow the radio": only a **signed-in admin** (`admin_unlock`
+  accepted on this socket) may tune, change mode/filter/span/scope mode. `rfOpen` false (the default) = ATT,
+  preamp, AGC, RF gain, NB, NR, ANF and scope speed are admin-only. A refused control is answered with
+  `{"type":"notice","why":"…"}` and a fresh `config`; the client should disable those controls for a
+  non-admin rather than let them bounce.
+- `tx` true = the OWNER is transmitting: show a "station transmitting" banner. The server has already muted
+  the audio and frozen the waterfall; do not treat the silence as a fault.
+- `linkUp` false = the radio stopped answering (unplugged, switched off). The server retries every 3 s.
+- `preflight` is for the setup page and an admin; listeners never need it. `canTransmit:false` is
+  unconditional in this phase.
+- The **generic hwinfo fields outside `radio`** (`gains`, `gainNow`, `agc`, `digitalAgc`, `ds*`, `biasT`,
+  `adcPeak`, `ifGrFloor` …) are still sent and **mean nothing on an Icom** — ignore them when
+  `radio.driver === "icom"`.
+
+### `config` (unchanged shape, Icom meanings)
+
+- `vfo` = the radio's frequency. `centerFreq` = the centre of the radio's CURRENT sweep (centre mode: the
+  VFO; fixed mode: the middle of the fixed edges). `binBandwidth × binCount` = the sweep's real span.
+  The server re-sends `config` whenever the sweep's edges move, BEFORE the next SPEC row, so rescale on it.
+- `mode` is in the client vocabulary (`usb lsb am cwu cwl nfm`); `radioMode` is the radio's own
+  (`usbd`, `rtty`, `cwr`, …) — show `radioMode` (e.g. "USB-D", "RTTY") on the mode button.
+  Mapping: usb/usbd/rttyr→usb, lsb/lsbd/rtty→lsb, cw→cwu, cwr→cwl, fm→nfm, am→am.
+- `shared` is true whenever more than one listener is allowed; an Icom never gives anyone a private VFO.
+
+### SPEC frames
+
+Same 22-byte header and u8 bins as every radio (FFT order, DC first; byte = dB + 256). One frame per radio
+sweep, at the radio's rate (`radio.scope.fps`: ~19/s at 115200 baud, ~3/s at 19200), resampled to the
+client's `?bins=` by sample-and-hold up / peak-hold down — 475 real points, never interpolated. The
+amplitude (0-160 on a 7300) is placed over 80 dB with the floor at −130 dB, i.e. relative to the radio's REF
+level, **not** dBFS. The waterfall's colour auto-range works as for any radio; an S-meter derived from SPEC
+bins is meaningless — use the `icom` status line.
+
+### `{"type":"icom", …}` status line (new)
+
+Sent on join (straight after hwinfo), on every change, and with the S-meter at most 4 times a second:
+`{"type":"icom","freq":7074000,"mode":"usbd","fil":1,"sRaw":48,"sDbOverS9":-30.4,"tx":false,"link":true,"fps":19.9,"span":50000,"scopeMode":"centre"}`.
+`sDbOverS9` uses Hamlib's published IC-7300 calibration (0 = S9, −54 = S0, +60 = S9+60); S-units =
+9 + sDbOverS9/6 below S9. Draw the S-meter from this.
+
+### What a client SENDS
+
+| Message | On an Icom |
+|---|---|
+| `{"type":"tune","frequency":…,"mode":…}` | Tunes the RADIO (owner lock applies). A `mode` equal to the one in `config.mode` is ignored (so "usb" never flips USB-D to USB); another one is mapped (table above). `bandwidthLow/High` inside a tune are ignored. |
+| `{"type":"mode","mode":…}` | Mode change, same mapping. `wfm`, `sam`-as-SAM and `dab` do not exist (sam maps to AM). |
+| `{"type":"bandwidth","bandwidthLow","bandwidthHigh"}` | The NEAREST of FIL1/2/3 by `filterWidths` for the current mode. |
+| `{"type":"zoom","binBandwidth":…}` | **The span ladder**: the nearest rung of `scope.spans` to binBandwidth × your bins. A pan (`frequency`) does nothing — the radio's window is centred on its VFO; the reply `config` says where it is. |
+| `{"type":"icom_control", …}` (new) | Any of: `mode` (radio names, e.g. `"rtty"`, `"usbd"`), `fil` 1-3, `span` (total Hz, a rung), `scopeMode` `"centre"`/`"fixed"`, `scopeSpeed` `"fast"`/`"mid"`/`"slow"`, `att` (dB from the list), `preamp` 0-2, `agc` `"fast"`/`"mid"`/`"slow"`, `rfGain` 0-255, `nb`/`nr`/`anf` true/false. Several fields in one message are fine. |
+| `nr`, `notch`, `say`/chat, decoders, `state`, `ping`, admin sign-in, recording | Unchanged — they work on the radio's audio. |
+| `gain`, `agc` (VibeAGC), `tunerbw`, `rsp_control`, `ahf_control`, `airspy_control`, `hackrf_control`, `antenna`, `sampleRate`, `directSampling`, `autoDirectSampling`, `biasT`, `ppm`, `rawIq`, `iqout`, `iqtune`, `rdsx`, every `dab*`, `autobw`, `ims`, `ceq`, `nb`/`nbx` (OUR blanker), `stereo`, `deemph`, `nfmvoice`, `squelch`, `fftRate` | **Swallowed** (logged, no effect). Do not draw the controls that send them. |
+
+Clients never send CI-V and never can: the server builds every frame from a typed table and checks the whole
+frame against the allow-list (plan §3.2) before it is written.
+
+### Client controls that do NOT apply on an Icom (hide them — plan §2.3, AGENTS.md)
+
+Sample-rate picker · the gain slider / gain table · VibeAGC and its lock · the IF filter ladder and Auto IF ·
+direct sampling (manual and auto) · bias-T · ppm/ppb · the dongle/RSP/HF+/Airspy/HackRF panels ·
+squelch (ours) and our noise blanker · RDS, Advanced RDS, MPX, stereo pilot, de-emphasis, NFM voice ·
+DAB and the DAB landing · raw IQ out, IQ recording, VibeIQ pairing · multi-VFO / locked-centre / per-listener
+VFO UI · spectrum fps tiers and the 4-slot governor display · Spatialise Stereo · binaural · any digital
+zoom past the span ladder · HFDL and other IQ decoders (audio decoders — FT8/FT4, RTTY, CW, NAVTEX, WEFAX,
+SSTV — DO work, inside the radio's passband, at `config.vfo`).
+**Draw instead:** mode buttons from `radio.modes` (label from `radioMode`), FIL1/2/3, a span selector on the
+zoom drum (`scope.spans`), centre/fixed, ATT, preamp, AGC fast/mid/slow, RF gain 0-255, NB/NR/ANF (the
+RADIO's), an S-meter from the `icom` line, the TX banner, and a "listeners follow the radio" notice when
+`ownerLock` is on and the user is not admin. Copy: update the tour/About grep list in AGENTS.md for "Icom",
+and say in the tour that zoom = the radio's span.
+
+
+---
+
+## Built 2026-10-22 (branch `v12-icom`)
+
+### What exists
+
+| Piece | Where | Tested by |
+|---|---|---|
+| CI-V codec + **whole-frame allow-list** (§3.2) | `android/app/src/main/cpp/civ_codec.h` | `vibeserver/test-icom-civ.cpp` (ctest `icom-civ`): every cmd/sub pair at 0-6 data bytes, ~7.8 M frames, against an independent copy of the table; the named transmit frames refused by name |
+| Models table (address, scope caps, spans, ranges, modes, preflight menu items) | `icom_models.h` | via the source tests |
+| Scope assembler + sweep → SPEC row | `icom_scope.h` | `test-icom-scope.cpp` (ctest `icom-scope`) + replay of every `test/fixtures/icom/*.civhex` |
+| Transports: CP210x and CDC-ACM over libusb (DTR/RTS never raised), opt-in tty, memory | `icom_transport.{h,cpp}` | memory + pty paths in the tests; **libusb paths compile only — no radio here** |
+| Receive-audio capture: raw ALSA ioctls (Linux), CoreAudio AUHAL (macOS), tone/WAV test sources | `icom_audio.{h,cpp}` | tone/WAV in the tests; ALSA compile-checked with the NDK's Linux headers; **not run on Linux** |
+| `IcomSource`: identify, preflight gate, request queue (tuning first, coalesced), transceive + 1 s poll, TX mute/freeze, watchdog + reconnect (preflight again) | `icom_source.{h,cpp}` | `test-icom-source.cpp` (ctest `icom-source`, 50 checks, zero violations at the fake) |
+| Shim integration (`startIcom`, scope → SPEC, audio → `onAudio`, `icomControl`, hwinfo, status line) | `local_sdr_shim.{h,cpp}` (guarded by `VIBE_HAVE_ICOM`, set only by the vibeserver CMake) | `scripts/test-server-icom.mjs` (41 checks, incl. real off-air RTTY decoded through the radio-audio path) |
+| Detection (`detectRadios` appends Icoms by USB serial), `--icom*` flags, `icom*` config fields | `radios.cpp`, `main.cpp`, `vibeserver_config.*` | e2e (`--icom`), config round-trip by the existing setup tests |
+| Setup page Icom card | `vibe_setup_page.h` | `scripts/test-setup-icom.mjs`, `check-setup-page.mjs` |
+| udev (+ ModemManager ignore), systemd `DeviceAllow=char-alsa`, `audio` group | `vibeserver/linux/` | review only |
+| macOS: audio-input entitlement, `NSMicrophoneUsageDescription`, `libvibe_icom.a` on the app's link line | `vibeserver/mac/` | the .app's swiftc link verified against this tree; **not signed** |
+| Phase 0 capture kit + README for Saber | `tools/icom/civ-capture.py`, `tools/icom/README.md` | run against `tools/icom/fake-icom` (19.6 sweeps/s at 115200, zero violations); its output is a committed fixture |
+| Fake IC-7300 on a pty (also a witness: two independent transmit checks) | `vibeserver/icom_fake_radio.h`, `tools/icom/fake-icom.cpp` | used by all of the above |
+
+### Decisions made while building (Stuart was at work; each is easy to reverse)
+
+1. **Audio on Linux = the ALSA kernel interface directly, not vendored tinyalsa.** Capture needs five ioctls
+   (HW_PARAMS, SW_PARAMS, PREPARE, READI_FRAMES, DROP) — exactly what tinyalsa does underneath — in ~150
+   lines, with nothing new in `vendor/`, no playback or mixer code that could ever be pointed at the radio's
+   MOD input, and no `libasound2` (the no-external-deps rule). Needs `<sound/asound.h>` at build time, which
+   every build image already has (linux-libc-dev via build-essential / crossbuild-essential / the armhf
+   sysroot's libc6-dev).
+2. **An Icom is recognised by its USB serial string** ("IC-7300 03001234" — the radio programs its model into
+   the CP2102), read from sysfs on Linux with nothing opened and nothing sent. A CP2102 that does not name an
+   Icom is never touched (GPS units, programming leads). An owner can still point `icomPort` at any port. The
+   radio must then answer `19 00` with a model we know, or it is refused.
+3. **The discovery chain never auto-picks an Icom.** With no radio configured, VibeServer still picks the
+   SDRs it always did; a transceiver is served only when the owner chose it (setup's radio list, `--radio`,
+   or `--icom`).
+4. **libusb for BOTH chip kinds; the tty only behind `icomTtyOk`.** CDC-ACM radios (705/9700/MK2) are also
+   driven over libusb with SET_CONTROL_LINE_STATE(0) first. The tty fallback exists for platforms where the
+   OS driver owns the chip (likely macOS) and for the fake radio, and the setup page explains its risk.
+5. **The preflight fails CLOSED**: a keying item that cannot be read counts as unsafe. The IC-7300 menu item
+   numbers (USB SEND 00 89, USB Keying CW 00 90, RTTY 00 91, DATA MOD 00 67) are **[unverified]** —
+   `menuVerified=false`, and the setup page says so. The libusb path never raises DTR/RTS, so the preflight is
+   the second wall, not the first. VOX is read by its own command (16 46), not a menu number.
+6. **Owner lock ("Listeners follow the radio") defaults ON and means a SIGNED-IN admin** (`admin_unlock` on
+   that socket) — deliberately NOT adminGate's loopback shortcut, because a tunnel or reverse proxy on the box
+   arrives as 127.0.0.1. With no admin password set anyone can sign in (the server's existing model), so the
+   setup page says the lock only protects the radio once a password is set. **RF settings** (ATT, preamp,
+   AGC, RF gain, NB/NR/ANF, scope speed) are admin-only unless `icomRfOpen` (plan §3.4 [decide] → this default).
+7. **Server-side tunes are ignored on an Icom** (landing, resume, recovery): the radio is the dial and stays
+   where its owner left it. `retune()`/`tuneHw()` are no-ops for it, and the landing card is hidden.
+8. **Width → FIL only on a `bandwidth` message**, never from the passband a client tucks inside every `tune`
+   (that would flip the radio's filter on each step). **Zoom → the nearest span rung** (log distance); a pan
+   is answered with the config that says where the radio really is.
+9. **Scope amplitude → wire dB**: 0..ampMax over 80 dB with the floor at −130 dB (relative to REF, not dBFS);
+   rows are resampled sample-and-hold up / peak-hold down — never interpolated.
+10. **TX**: audio muted while `1C 00` reads 1 and for 300 ms after; scope frozen; `radio.tx` + status line.
+11. **Only the IC-7300 is "known"**; the other rows (MK2, 705, 9700, 7610, R8600) identify and are REFUSED
+    with a plain message until someone with one tests them.
+12. **On close** only the scope DATA OUTPUT we switched on is switched off (`27 11 00`); the radio's own scope
+    display is the owner's and is left on.
+13. **The capture kit's `--menu-scan` is opt-in and goes beyond the plan's seven frames**: it READS menu items
+    0001-0110 (`1A 05 hh ll`, no value) so the preflight numbers can be pinned on Saber's radio. Reads only,
+    still allow-list checked — but it is a change to the Phase 0 brief, so it is listed under Open for Stuart.
+14. **Threads**: one CI-V thread (spectrum priority — it is the waterfall) and one audio-capture thread (audio
+    priority); no DSP thread, no hotplug watch (IcomSource has its own watchdog). Per-sweep work allocates
+    only what `onSpectrum` already does (`allSpecPeers`, `dueForFrame`); the SPEC buffer and PCM buffer grow
+    once.
+
+### Open for Stuart
+
+- **Saber's Phase 0 run** (`tools/icom/README.md`): real 7300 frames into `test/fixtures/icom/`, the measured
+  sweeps/s, and — with `--menu-scan` (approve it, decision 13) — the real menu numbers for USB SEND / USB
+  Keying / DATA MOD. Until then the preflight's numbers are guesses that fail closed.
+- **Defaults to confirm**: owner lock ON, RF settings admin-only (decision 6).
+- **macOS CP210x**: if macOS's own driver owns the 7300's CP2102 (likely), libusb cannot claim it without
+  root, and the only path is the tty with `icomTtyOk` (a DTR/RTS glitch on open). Options: accept that with
+  the preflight as the guard; run the engine with the privilege to detach; or apply for
+  `com.apple.vm.device-access`. Needs a Mac + 7300 to know. **[unverified]**
+- **Signing/notarising the Mac app**: nothing new to do beyond the usual `vibeserver/mac/notarise-and-release.sh`
+  run with NO argument (never on /Applications — memory rule). The entitlements file now carries
+  `com.apple.security.device.audio-input`, which that script already applies to every executable in the
+  bundle. Check on the notarised build that the microphone prompt names VibeServer when the engine first opens
+  the radio's audio (TCC attribution to a child process is **[unverified]**), and that `codesign -d
+  --entitlements -` on `Contents/MacOS/vibeserver-engine` shows it.
+- **Linux**: built and unit-tested on macOS only; the ALSA and sysfs paths were compile-checked with the NDK's
+  Linux headers, not run. The first apt build will be their first real compile on Linux.
+- **Android (Phase 4), LAN (Phase 3), clients** are not started. The shim compiles without `VIBE_HAVE_ICOM`,
+  so Android/iOS are unaffected. Client work starts from the contract section above.
+- **Copy**: when the client ships, add "Icom" to AGENTS.md's grep list (tours, About, website).
+
+### Not verified without a real radio
+
+DTR/RTS staying low on a real CP2102 (dummy load!); the 7300's exact `27 00` division bytes and whether its
+scope commands take the `00` selector byte; the preflight menu numbers; echo/transceive behaviour on Saber's
+settings; the codec's ALSA/CoreAudio names; the sibling-card search on a real USB topology; real sweep rate at
+115200; S-meter calibration on the radio; behaviour while wfweb holds the port; CDC-ACM radios entirely.
