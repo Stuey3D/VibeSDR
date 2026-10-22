@@ -1,7 +1,7 @@
 // test-setup-bgdecode.mjs — the setup page's BACKGROUND DECODING editor (V12, 2026-10-22), its REAL code against a DOM
 // stand-in: Nick's profile loads and saves back unchanged; the VFO rows run frequency → demodulator → decoder with only
 // the decoders that fit the demodulator; "Want to add another background decoding profile?" appears ONLY under a
-// profile that is not all day; profiles delete; the dial hint; off with nothing set stores nothing.
+// profile that is not all day; profiles delete; no per-VFO hint line; off with nothing set stores nothing.
 import fs from 'node:fs';
 
 const src = fs.readFileSync(new URL('../android/app/src/main/cpp/vibe_setup_page.h', import.meta.url), 'utf8');
@@ -41,7 +41,7 @@ const btn = (label) => buttons().find((e) => e.textContent === label);
 ok(els.bgOn.checked && els.bgWait.value === '5', 'Nick\'s config loads: on, 5 minutes');
 ok(box.children.length === 1 && box.text().includes('Profile 1'), 'one profile drawn');
 ok(box.all().filter((e) => e.textContent.startsWith('VFO ')).length === 2, 'two VFO rows');
-ok(box.text().includes('Listening for NAVTEX on 518.000 kHz (the dial sits 0.5 kHz below it in USB)'), 'the dial hint for 517.5 USB');
+ok(!box.text().includes('Listening for'), 'no per-VFO "Listening for … kHz" line (Stuart: not needed, odd for WEFAX or RTTY)');
 ok(box.text().includes('UTC — all day'), '00:00 – 00:00 says all day');
 ok(!btn('Want to add another background decoding profile?'), '★ NO "add another profile" under an all-day profile');
 ok(api.bgCollect() === JSON.stringify(NICK), `saved back unchanged: ${api.bgCollect()}`);
@@ -53,7 +53,7 @@ ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather
 md.value = 'lsb'; md.onchange();
 ok(!dc.children.some((o) => o.value === 'wefax' || o.value === 'sstv' || o.value === 'ft8') && dc.value === 'navtex',
    'LSB offers only NAVTEX and RTTY (no negative charts), and keeps NAVTEX');
-ok(row2.text().includes('Listening for NAVTEX on 517.000 kHz'), '...and the hint follows: 517.5 LSB is listening on 517.0');
+ok(api.model().profiles[0].vfos[1].mode === 'lsb' && !row2.text().includes('Listening for'), '...the VFO is LSB now, and still no hint line');
 md.value = 'nfm'; md.onchange();
 ok(dc.children.map((o) => o.value).join() === 'sstv' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers only SSTV, and the VFO becomes SSTV');
 

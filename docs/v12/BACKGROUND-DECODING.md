@@ -25,8 +25,8 @@ Setup → Radio, below the power-save/hand-off settings (Stuart's wording):
   - overlapping profiles, naming both and the minute they clash;
   - a VFO the radio cannot see at its sample rate, giving the distance and the radio's ±window;
   - a decoder on a demodulator it does not work on.
-- Each VFO row shows where the dial sits relative to the signal ("Listening for NAVTEX on 518.000 kHz (the dial sits
-  0.5 kHz below it in USB)").
+- The frequency typed is the DIAL, as a listener would type it. (A per-VFO "Listening for … kHz" line was tried and
+  removed — Stuart: "they arent needed, and would look odd to someone setting up wefax or rtty".)
 
 Nick's case: centre 500 kHz; VFO 1 489.5 kHz USB NAVTEX; VFO 2 517.5 kHz USB NAVTEX; all day.
 
