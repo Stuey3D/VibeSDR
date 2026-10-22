@@ -9499,8 +9499,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return true;
     }
 
-    /** What the occupancy strip draws, from THIS listener's point of view. */
-    std::string dialJsonLocked(const std::string& forSession) {
+    /** ★★ EACH SOCKET'S COUNTRY (GeoIP, ISO alpha-2; "" = loopback, LAN or no answer), for the chat's language
+     *  (2026-10-22: "we detect the listeners country and offer the appropriate"). Told to THAT socket only, in its own
+     *  `dial` — never in anything broadcast: one listener's country must never reach another. Under clientMtx. */
+    std::map<net::Socket*, std::string> sockCc;
+
+    /** What the occupancy strip draws, from THIS listener's point of view. `sk` = the socket it goes to (its cc). */
+    std::string dialJsonLocked(const std::string& forSession, const net::Socket* sk = nullptr) {
         std::string j = "{\"type\":\"dial\",\"mode\":\"";
         j += dialOpen() ? "open" : "exclusive";
         // ★ WHO MOVED IT LAST — a handle, never an identity. 0 = nobody has, or it has faded.
@@ -9511,6 +9516,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ WHY THE DIAL IS NOT MOVING, when it is not. A decode runs for ten minutes with no
         //    interaction, and a room that cannot see that is a room that starts retuning over it.
         if (decodingNow()) j += ",\"decoding\":true";
+        // ★ THIS listener's own country — the chat picks its language from it when the device's is not one it speaks
+        //   (dialChat.ts chatLangChoice). Absent when unknown; two capital letters or nothing, so it needs no escaping.
+        if (sk) {
+            auto c = sockCc.find(const_cast<net::Socket*>(sk));
+            if (c != sockCc.end() && c->second.size() == 2 && std::isupper((unsigned char)c->second[0])
+                && std::isupper((unsigned char)c->second[1])) j += ",\"cc\":\"" + c->second + "\"";
+        }
         // ★★ ASK BEFORE TUNING — only while the owner has it on, so a new client on an old server (or with the switch
         //    off) is told nothing and dims nothing. The listener is TOLD; it never works the lock out for itself.
         if (g_vsAskBeforeTuning.load()) {
@@ -9722,7 +9734,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const std::string sess = it == sockSession.end() ? std::string() : it->second;
                 const vibeask::View v = askBook.view(room, sess, now);
                 auto& was = askSent[sock.get()];
-                if (v != was) { was = v; out.emplace_back(sock, dialJsonLocked(sess)); }
+                if (v != was) { was = v; out.emplace_back(sock, dialJsonLocked(sess, sock.get())); }
             }
             for (auto it = askSent.begin(); it != askSent.end(); ) it = live.count(it->first) ? std::next(it) : askSent.erase(it);
             for (auto it = askStateAt.begin(); it != askStateAt.end(); ) it = live.count(it->first) ? std::next(it) : askStateAt.erase(it);
@@ -9868,7 +9880,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!sock || !sock->isOpen()) continue;
                 auto it = sockSession.find(sock.get());
                 const std::string sess = it == sockSession.end() ? std::string() : it->second;
-                out.emplace_back(sock, dialJsonLocked(sess));
+                out.emplace_back(sock, dialJsonLocked(sess, sock.get()));
                 askNoteSentLocked(sock.get(), sess);
             }
         }
@@ -9949,7 +9961,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::lock_guard<std::mutex> lk(clientMtx);
             auto it = sockSession.find(sock.get());
             const std::string sess = it == sockSession.end() ? std::string() : it->second;
-            sendText(sock, dialJsonLocked(sess));
+            sendText(sock, dialJsonLocked(sess, sock.get()));
             askNoteSentLocked(sock.get(), sess);   // ★ see askNoteSentLocked
         }
     }
@@ -20526,7 +20538,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
         // ★ Who this socket belongs to, before anything can ask. See sockSession.
-        { std::lock_guard<std::mutex> lk(clientMtx); sockProto[sock.get()] = proto; }
+        // ★ Its country, looked up HERE with no lock held (the GeoIP handler takes the config lock) — see sockCc.
+        const std::string cc = vsCountry(sock->peerAddress());
+        { std::lock_guard<std::mutex> lk(clientMtx); sockProto[sock.get()] = proto; sockCc[sock.get()] = cc; }
         if (!session.empty())
             { std::lock_guard<std::mutex> lk(clientMtx); sockSession[sock.get()] = session;
               if (!browser.empty()) sockBrowser[sock.get()] = browser;
@@ -21833,7 +21847,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (tuneHold.holding()) applyHeldTune();
         { std::lock_guard<std::mutex> pl(dabPeerMtx); dabPeers.erase(sock.get()); }
         { std::lock_guard<std::mutex> tl(teleMtx); teleLast.erase(sock.get()); }
-        { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get());
+        { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get()); sockCc.erase(sock.get());
           /* ★★ AND THE SESSION'S LIVENESS STAMP, WHEN THIS WAS ITS LAST SOCKET (audit 2026-10-03).
            *  It was written on every text frame and never erased, so every session that ever spoke
            *  stayed in the map for the life of the process. Kept while a sibling socket of the
@@ -22098,6 +22112,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               const std::string ses = it != sockSession.end() ? it->second : std::string();
               sockSession.erase(sock.get());
               sockBrowser.erase(sock.get());
+              sockCc.erase(sock.get());
               if (!ses.empty()) {
                   bool left = false;
                   for (auto& kv : sockSession) if (kv.second == ses) { left = true; break; }

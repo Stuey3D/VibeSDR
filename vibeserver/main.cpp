@@ -22,6 +22,7 @@
 #include "directory.h"
 #include <functional>
 #include <algorithm>
+#include <map>
 #include <cctype>
 #include <fstream>
 #include <sstream>
@@ -4172,7 +4173,26 @@ int main(int argc, char** argv) {
     geoip::setDir(vsDataDir());
     if (!geoip::load())
         std::printf("VibeServer: no country data yet — downloading in the background.\n");
-    LocalSdrShim::setGeoIpHandler([](const std::string& ip) { return geoip::lookup(ip); });
+    /* ★ TEST-ONLY: VIBE_TEST_GEOIP="127.0.0.1=BR,…" answers for those addresses, so scripts/test-chat-phrases.mjs can see a
+     *  listener's own country reach its own dial (the chat's language) — loopback has none in the real data. Never set on
+     *  a real server; anything malformed is ignored. */
+    static std::map<std::string, std::string> testGeo = [] {
+        std::map<std::string, std::string> m;
+        if (const char* e = std::getenv("VIBE_TEST_GEOIP")) {
+            std::string all = e;
+            for (size_t i = 0; i < all.size();) {
+                size_t j = all.find(',', i); if (j == std::string::npos) j = all.size();
+                const std::string kv = all.substr(i, j - i); const size_t eq = kv.find('=');
+                if (eq != std::string::npos && kv.size() - eq - 1 == 2) m[kv.substr(0, eq)] = kv.substr(eq + 1);
+                i = j + 1;
+            }
+        }
+        return m;
+    }();
+    LocalSdrShim::setGeoIpHandler([](const std::string& ip) {
+        if (!testGeo.empty()) { auto t = testGeo.find(ip); if (t != testGeo.end()) return t->second; }
+        return geoip::lookup(ip);
+    });
 
     // ── ★★ WHICH NETWORK an address belongs to — for the listener list and for ASN BANS ───────
     // ★★★ THIS IS WHAT MAKES BLOCKING WORK AGAINST ABUSE. A single address is a treadmill: ban
