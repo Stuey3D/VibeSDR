@@ -3635,10 +3635,11 @@ final class UberClient: ObservableObject {
     // ★ Int64: on arm64_32 `Int` is 32-bit and traps past 2.147e9, which a tune in Hz
     //   reaches on an SDRplay RSP (2 GHz) — uncomfortably close, and a trap is a crash.
     let msg: [String: Any] = ["type": "tune", "frequency": Int64(frequency), "mode": mode]
-    /* ★★ AN ICOM: THE SPECTRUM SOCKET — the one that carries admin_unlock and icom_control. With several listeners
-     *    allowed the server judges the owner lock PER SOCKET (adminNow → adminSocks), so a tune on the audio socket
-     *    from a watch signed in on the spectrum socket would be refused as a listener's. The reason for the audio
-     *    route below does not apply: on an Icom every server-side tune is ignored — the radio is the state. */
+    /* ★★ AN ICOM: THE SPECTRUM SOCKET — the one that carries admin_unlock and icom_control, so every control that
+     *    asks the owner lock travels on the socket the sign-in was made on (the server's adminNow can judge per
+     *    socket when several listeners are allowed; against the fake IC-7300 both sockets of one session passed,
+     *    2026-10-22, but one route cannot disagree with itself). The reason for the audio route below does not
+     *    apply: on an Icom every server-side tune is ignored — the radio is the state. */
     if isIcom { specSock.send(json: msg); return }
     /* ★★★ THE AUDIO SOCKET, AND ONLY IT — see the long note in the phone’s SdrWsClient._routeTune.
      *  Routing a tune past the side that holds the session’s frequency makes a reconnect re-tune backwards. */
