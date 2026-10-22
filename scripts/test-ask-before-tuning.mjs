@@ -5,7 +5,7 @@
 //     each listener, and that a chat line moves it — on the wire, with real sockets. The rule itself is pinned by
 //     vibeserver/test-tune-etiquette.cpp; the clients' reader by scripts/test_ask_before_tuning.ts.
 // ★ SILENT: no browser, no audio device — the fake dongle's samples go to sockets nobody plays.
-// usage: VIBESERVER_BIN=… node scripts/test-ask-before-tuning.mjs   (~40 s)
+// usage: VIBESERVER_BIN=… node scripts/test-ask-before-tuning.mjs   (~75 s)
 import net from 'node:net';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -68,7 +68,9 @@ for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
 const rtlPort = await freePort(), port = await freePort();
 const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2048000'], { stdio: 'ignore' });
 await sleep(300);
-const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
+// ★ TEST-ONLY: the grant's idle lapse (kGrantIdleS, 3 minutes) shortened to GRANT_IDLE_S so the suite can watch it.
+const GRANT_IDLE_S = 10;
+const env = { ...process.env, VIBE_ASK_GRANT_IDLE_S: String(GRANT_IDLE_S), VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
               VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const logPath = path.join(dir, 'server.log');
 const log = fs.openSync(logPath, 'w');
@@ -152,6 +154,35 @@ try {
   const gainBefore = refusedLines('gain', 'bbbb0002');
   b.send({ type: 'gain', value: 300 }); await sleep(400);
   ok(refusedLines('gain', 'bbbb0002') === gainBefore, '…and their gain is accepted too');
+
+  console.log(`── a grant lapses when left on a station (Stuart, 2026-10-22; idle lapse shortened to ${GRANT_IDLE_S} s) ──`);
+  const gs = b.last('dial')?.askGrantSecs;
+  ok(typeof gs === 'number' && gs > 0 && gs <= GRANT_IDLE_S, `★ the granted listener's dial carries askGrantSecs (${gs})`);
+  ok(a.last('dial')?.askGrantSecs === undefined, '…the top listener\'s does not (no grant to lose)');
+  // ★ Actively tuning: an accepted change every 3 s for 1.6× the lapse — never locked.
+  const tActive = Date.now();
+  let f = 98000000, stayedUp = true, tLastTune = 0;
+  while (Date.now() - tActive < GRANT_IDLE_S * 1600) {
+    f += 100000; b.send({ type: 'tune', frequency: f, mode: 'wfm' }); tLastTune = Date.now(); await sleep(3000);
+    if (b.last('dial')?.tuneLocked === true) stayedUp = false;
+  }
+  ok(stayedUp && vfo(a) === f, `★ actively tuning for ${((Date.now() - tActive) / 1000).toFixed(0)} s: the grant stays up (radio at ${vfo(a)})`);
+  // ★ Left on a station: zoom and squelch are free and do not count — the grant lapses all the same.
+  const zoomer = setInterval(() => { b.send({ type: 'zoom', frequency: f, binBandwidth: 500 }); b.send({ type: 'squelch', db: -60, on: false }); }, 1500);
+  const lapsed = await until(() => b.last('dial')?.tuneLocked === true, (GRANT_IDLE_S + 6) * 1000);
+  clearInterval(zoomer);
+  const idleS = (Date.now() - tLastTune) / 1000;   // ★ from their LAST accepted change; the 2 s tick adds up to 2 s
+  ok(lapsed && idleS >= GRANT_IDLE_S - 0.5, `★ left on a station (zooming only): locked again ${idleS.toFixed(1)} s after their last tune`);
+  ok(b.last('dial')?.askFirst === true && !b.last('dial')?.askState && b.last('dial')?.askGrantSecs === undefined,
+     '…exactly like a newcomer: no ask open, no NO, no grant countdown');
+  b.send({ type: 'tune', frequency: 99000000, mode: 'wfm' }); await sleep(1000);
+  ok(vfo(a) === f, '…and their tune is refused again');
+  // ★ They ask again: the 15 s rule is unchanged. a YES lets them back in at once.
+  await sleep(3200);
+  b.send({ type: 'say', id: 'ask_tune' });
+  ok(await until(() => b.last('dial')?.askState === 'open'), 'asking again opens a fresh window');
+  a.send({ type: 'say', id: 'go_ahead' });
+  ok(await until(() => b.last('dial')?.tuneLocked === false), '…and a YES lets them back in');
 
   console.log('── no answer in 15 s lets a newcomer in ──');
   const c = await join('cccc0003');

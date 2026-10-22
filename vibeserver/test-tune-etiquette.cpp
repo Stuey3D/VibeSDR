@@ -150,6 +150,77 @@ int main() {
     ok(b.locked(r, "b"), "away longer than the hold: a newcomer again");
   }
 
+  {   // ★★★ A GRANT LAPSES WHEN LEFT ON A STATION (Stuart, 2026-10-22: "if actively tuning they stay up but if left
+      //     on a station for a few mins they lock again") — kGrantIdleS with no ACCEPTED receiver change.
+    ok(kGrantIdleS == 180.0, "the idle lapse is three minutes");
+    Book b; Room r; r.inForce = true; r.people = { P("a", 100), P("b", 200) };
+    const double t = 1000;
+    b.onSaid(r, "b", "ask_tune", t);
+    b.onSaid(r, "a", "go_ahead", t);                    // granted at t
+    ok(!b.locked(r, "b") && b.view(r, "b", t + 10).grantSecs == 170, "a granted listener is told how long the grant has left (170 s)");
+    ok(b.view(r, "a", t + 10).grantSecs == -1, "…the top listener has no grant to lose (-1, absent on the wire)");
+    b.tick(r, t + 15);                                  // the ask window closes (already granted)
+    ok(!b.tick(r, t + 179) && !b.locked(r, "b"), "179 s idle: still granted");
+    ok(b.tick(r, t + 181) && b.locked(r, "b"), "181 s idle: locked again");
+    View v = b.view(r, "b", t + 181);
+    ok(v.locked && v.state.empty() && v.grantSecs == -1, "…exactly like a newcomer: no ask open, no NO standing");
+    ok(b.onSaid(r, "b", "ask_tune", t + 190) && b.view(r, "b", t + 190).state == "open", "…and asking again opens a fresh 15 s window");
+    ok(b.tick(r, t + 205) && !b.locked(r, "b"), "…which, unanswered, lets them in again");
+    ok(!b.tick(r, t + 205 + 179) && !b.locked(r, "b"), "…and the idle clock started from THAT grant");
+
+    Book c;
+    c.onSaid(r, "b", "ask_tune", t);
+    c.onSaid(r, "a", "go_ahead", t);
+    c.tick(r, t + 15);
+    c.acted("b", t + 170);                              // an accepted tune at 170 s
+    ok(!c.tick(r, t + 181) && !c.locked(r, "b"), "an accepted tune at 170 s resets the clock: still granted at 181 s");
+    ok(c.view(r, "b", t + 181).grantSecs == 169, "…with 169 s left");
+    ok(!c.tick(r, t + 170 + 179) && !c.locked(r, "b"), "…179 s after that tune: still granted");
+    ok(c.tick(r, t + 170 + 181) && c.locked(r, "b"), "…181 s after it: locked");
+    // A refused frame does not count: the shim calls acted() only for frames it ACCEPTED, and acted() on somebody
+    // with no grant (a locked listener) records nothing that a later grant could inherit.
+    c.acted("b", t + 400);                              // refused while locked — the shim would not call this, but even so
+    c.onSaid(r, "b", "ask_tune", t + 400);
+    c.onSaid(r, "a", "go_ahead", t + 401);
+    ok(c.view(r, "b", t + 401).grantSecs == 180, "a frame from a LOCKED listener leaves no trace; the new grant's clock starts at the grant");
+  }
+
+  {   // ★ The grant's clock survives a reconnect — and keeps running through it.
+    Book b; Room r; r.inForce = true; r.people = { P("a", 100), P("b", 200) };
+    const double t = 1000;
+    b.onSaid(r, "b", "ask_tune", t);
+    b.onSaid(r, "a", "go_ahead", t);
+    b.acted("b", t + 100);
+    b.tick(r, t + 105);                                 // here (the shim ticks every 2 s), then the link drops
+    Room away = r; away.people = { P("a", 100) };
+    b.tick(away, t + 110);
+    b.tick(away, t + 200);                              // away 90 s, inside kGoneForgetS
+    ok(!b.locked(r, "b"), "back within the hold: still granted");
+    ok(b.view(r, "b", t + 200).grantSecs == 80, "…and the clock is the one from before the drop (80 s left), not a fresh one");
+    ok(b.tick(r, t + 281) && b.locked(r, "b"), "…so it lapses 180 s after the last tune, reconnect or not");
+  }
+
+  {   // ★ Top-ranked never locks, grant or no grant.
+    Book b; Room r; r.inForce = true; r.people = { P("a", 100), P("b", 200) };
+    const double t = 1000;
+    b.onSaid(r, "b", "ask_tune", t);
+    b.onSaid(r, "a", "go_ahead", t);
+    Room top = r; top.people = { P("b", 200) };         // "a" leaves for good: b is top
+    b.tick(top, t + 500);
+    ok(!b.locked(top, "b"), "idle past the lapse, but nobody ranked above is here: not locked");
+    ok(b.view(top, "b", t + 500).grantSecs == -1, "…and no grant countdown to show");
+    Room ra = r; ra.people.push_back(P("adm", 900, true));
+    b.tick(ra, t + 900);
+    ok(!b.locked(ra, "adm") && !b.locked(r, "a"), "an admin and the longest-connected listener never lapse into a lock");
+  }
+
+  {   // ★ The idle lapse is one number, and a Book can be told another (the live suite shortens it).
+    Book b; b.grantIdleS = 5; Room r; r.inForce = true; r.people = { P("a", 100), P("b", 200) };
+    b.onSaid(r, "b", "ask_tune", 0);
+    b.onSaid(r, "a", "go_ahead", 0);
+    ok(!b.tick(r, 4) && b.tick(r, 5) && b.locked(r, "b"), "grantIdleS is honoured");
+  }
+
   {   // ★ The vocabulary.
     ok(isAsk("ask_tune") && isAsk("anyone_using") && !isAsk("thanks"), "the asks are 'Can I tune?' and 'Anyone using this?'");
     ok(replyMeaning("go_ahead") == Reply::Yes && replyMeaning("yes_go_ahead") == Reply::Yes
