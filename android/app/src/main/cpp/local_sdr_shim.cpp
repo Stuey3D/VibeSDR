@@ -26164,7 +26164,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         rspProbeHoldUntil = 0.0;
                         bool empty;
                         { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
-                        if (empty) {
+                        // ★★ V12: and not when background decoding is due or running — it may have started during the
+                        //    hold (it took the radio back), and releasing it then would cut the decoders off (Lenovo, beta2).
+                        if (empty && !bgWanted_.load()) {
                             LOGI("RSP keepalive: probe done — releasing again");
                             LocalSdrShim::instance().releaseRadio();
                         }
@@ -28035,7 +28037,12 @@ int LocalSdrShim::decoderDefaultMax() { return vsDecoderDefaultMax(); }
 bool LocalSdrShim::setBackgroundDecoding(const std::string& json, std::string& err) {
     vibe::bg::Config c;
     if (!vibe::bg::parse(json, c, err)) { LOGI("background decoding: %s — not applied", err.c_str()); return false; }
-    { std::lock_guard<std::mutex> lk(g_bgMtx); g_bgCfg = c; }
+    {
+        std::lock_guard<std::mutex> lk(g_bgMtx);
+        // ★ The same settings again (a radio process re-reading config.json after somebody else's save) restart nothing.
+        if (vibe::bg::toJson(g_bgCfg) == vibe::bg::toJson(c)) return true;
+        g_bgCfg = c;
+    }
     g_bgCfgGen.fetch_add(1);
     LOGI("background decoding: %s, wait %d s, %zu profile(s)", c.on ? "ON" : "off", c.waitSec, c.profiles.size());
     return true;
