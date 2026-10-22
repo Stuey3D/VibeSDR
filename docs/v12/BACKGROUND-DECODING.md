@@ -123,10 +123,16 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
 
   Countries come from `vibe_callsign_country.h`, which is generated from the app's `src/services/callsignCountry.ts` by
   `scripts/gen-callsign-country.mjs`, so the app and the server name countries the same way. Nothing is written for a
-  run that heard nothing.
+  run that heard nothing. **One item per run (beta 4):** it is first written after 10 minutes and then REWRITTEN IN
+  PLACE every 10 minutes while the run goes on, only when the counts changed (`Store::replace`: a temp file renamed over
+  the item, and the index the same way, so a power cut leaves the previous card whole). It is written again at the run's
+  end and at UTC midnight (a new item for the new day). The admin line shows the live count meanwhile.
 - **Pictures** are written as PNG by `vibe_png.h`, using `vibe_gzip.h`'s deflate, so no new library is needed.
 - **HTTP, read-only:**
-  - `GET /vibeserver/gallery.json?kind=&limit=` lists the items newest first;
+  - `GET /vibeserver/gallery.json?kind=&limit=` lists the items newest first (the old request: up to 1000, default 300);
+  - **pages (beta 4):** `?offset=&limit=&kind=` — at most 100 a page (default 25), with `total` (how many match the
+    filter) and `offset` added. Served from an in-memory copy of the index, rebuilt only when `index.jsonl` changes
+    (inode, size or mtime) or every 30 s, so a page costs one `stat()` per item shown. `kind` keeps digits (`ft8`).
   - `GET /vibeserver/gallery/file/<name>[?download=1]` serves one item.
 
   Both are gated by the PIN like every other read. If the owner made the gallery private, only the admin can read it. A
@@ -135,7 +141,10 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
   2. it is listed in the index;
   3. it opens with `O_NOFOLLOW`.
 - **Clients.** The web client has GALLERY in the DECODERS menu; the app has GALLERY in Mode → CLIENT DECODERS (VibeServer
-  only). Both list items newest first with filters by decoder. Text items open inline (shown as text, never HTML) and
+  only). Both list items newest first with filters by decoder, **25 a page** with the pager at the bottom ("‹ Newer ·
+  1 … 6 7 8 … 14 · Older ›", "Page 7 of 14" — `src/utils/galleryPager.ts`, one rule for both); a filter change goes to
+  page 1; BACK from an item returns to the same page, scroll and row (the row keeps the focus, so keyboard, D-pad and
+  controller carry on from it). An older server without pages gets the old request and no pager. Text items open inline (shown as text, never HTML) and
   images open as images; both clients can download or save an item.
 
 ## Listeners first: priority, in range, locked radios (2026-10-22, beta3)
@@ -166,6 +175,38 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
   (648 kHz with Nick's profile, tune away and back, a decoder claim, switched off, a locked radio),
   `test-setup-bg-tiers.mjs`.
 
+## NAVTEX: which station sent it (2026-10-22, beta 4)
+
+A NAVTEX header names its transmitter by one letter (`ZCZC BA10` is station B), and a dozen stations round the world
+share each letter. The gallery, the web client's NAVTEX box and the app's now say **"B · Oostende, Belgium 🇧🇪 · Nav
+warning · #10"** when the station can be named, and "Station B" as before when it cannot.
+
+- **The table** is `scripts/navtex-stations/navtex-stations.json`, parsed by `scripts/navtex-stations/parse-pub117.py`
+  from **NGA Pub. 117, Radio Navigational Aids, Chapter 3 (300C.1 / 300C.2 NAVTEX Stations)** — a US Government work,
+  public domain; 2021 edition (PDF dated 2021-03-11), fetched 2026-10-22 from msi.nga.mil. The Admiralty List of Radio
+  Signals is copyright and is not used. 159 stations, 220 transmitters; one entry (Hamburg's 518 kHz S) has no frequency
+  in the source and is left out; Pub. 117 lists **no HF (4209.5 kHz) letters**, so HF stays the letter only. The parser
+  also checks every letter against its broadcast-time slot and reports the source's own irregularities on stderr.
+- **One rule, two readers:** `node scripts/gen-navtex-stations.mjs` writes `src/utils/navtexStations.generated.ts`
+  (app + browser) and `android/app/src/main/cpp/vibe_navtex_stations.h` (gallery titles); `--check` in run-tests.sh.
+- **The rule — a likelihood, not a cut-off** (owner-approved, so genuine DX gets named). Every station with the letter on
+  the band (±3 kHz of the dial) is scored from the message: **positions in the text** (all the NAVTEX formats; a lost
+  `_` or an impossible value is ignored) by the station's median distance to them — the strongest evidence; if no
+  candidate is within 1000 km of its warning's positions, none of them sent it; **its name in the text** (same letter
+  and band) — decisive; **language** by stopwords (×4 on 490, ×1.5 elsewhere); and **distance from this server** as a
+  soft prior, 1/(1+(d/800 km)²). The best at ≥3× the next is named, with "· DX 6,800 km" past 1500 km (MF) / 2500 km
+  (HF); two close → "W · Corsen 🇫🇷 or Valentia 🇮🇪?"; no evidence and nothing within 1500 / 2500 km → the letter only.
+  The weights and word lists are written into both readers by the generator.
+- **The Lenovo's evening, through the real texts** (IO92nh): 490 A Malin Head, B Oostende, L Hamburg, U Cullercoats,
+  F letter only; 518 G Cullercoats, I Varberg, J Stockholm, L Rogaland, N Orlandet, O Portpatrick, P Den Helder,
+  V Oostende, M letter only (a Swedish warning whose positions no Pub. 117 M station is near — likely a station newer
+  than the 2021 edition), W "Corsen or Valentia?" unless the message has positions.
+- **Pub. 117 disagrees with itself in places:** the 300C tables (used here) and the per-country sections differ for a
+  few stations — Oostende's 518 letters are V and T in the table, M and T in the Belgium section; Corsen is 518 W in the
+  table, A in the France section. The table is used throughout; a later edition may settle it. Pub. 117 lists no NAVTEX
+  for Jamaica (its section has VHF Ch. 13 and 8291 kHz voice only); the Caribbean stations it has are Isabella (Puerto
+  Rico, R 518), Miami (A 518), New Orleans (G 518) and Curaçao (H 518).
+
 ## Not wanted
 
 PSKReporter (parked: "not really designed as a PSKReporting service").
@@ -174,11 +215,16 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 
 | Suite | Checks | What it covers |
 |---|---|---|
-| `vibeserver/test-bgdecode.cpp` | 75 | Config, validation and the clock; LSB inversion (RTTY and NAVTEX); the NAVTEX cutter; the store (eviction, path safety); a listener tap; Nick's profile end to end on synthetic IQ (USB **and** LSB VFOs file the same message); WEFAX/SSTV complete, partial and noise; PNG; the FT8 summary. |
+| `vibeserver/test-bgdecode.cpp` | 139 | Config, validation and the clock; LSB inversion (RTTY and NAVTEX); the NAVTEX cutter; the store (eviction, path safety); a listener tap; Nick's profile end to end on synthetic IQ (USB **and** LSB VFOs file the same message); WEFAX/SSTV complete, partial and noise; PNG; the FT8 summary. |
 | `vibeserver/test-config-radios.cpp` | — | `bgDecode` and the gallery fields round-trip, and nothing leaks into the radio's own fields. |
-| `scripts/test-bg-decode.mjs` | 38 | A real server on fake-rtl-tcp: wait → move, profile boundary, arrival → stop + dial restored, a decoder socket on its own, gallery HTTP and path traversal, config API round-trip and refusals, the save applied live. |
+| `scripts/test-bg-decode.mjs` | 41 | A real server on fake-rtl-tcp: wait → move, profile boundary, arrival → stop + dial restored, a decoder socket on its own, gallery HTTP and path traversal, config API round-trip and refusals, the save applied live. |
 | `scripts/test-bg-decode-frontdoor.mjs` | 12 | Front door + a radio process: a save through the door reaches the radio, no park/release once due, an unrelated save restarts nothing. |
 | `scripts/test-setup-bgdecode.mjs` | 20 | The setup page's real editor against a DOM stand-in. |
+| `scripts/test_navtex.ts` | 170 | The NAVTEX cutter (fades, gap markers) and the station rule — the Lenovo's letters, positions, DX, "or". (beta 4) |
+| `scripts/test-bg-decode-admin.mjs` | 15 | The admin line end to end: every state, measured CPU per VFO and for the channels, FT8's live count, nothing without the admin password. (beta 4) |
+| `scripts/test_admin_bg.ts` | 17 | The admin line's wording. (beta 4) |
+| `scripts/test-web-gallery-pages.mjs` | 20 | Pages through the real server and the real built page in headless Edge: totals per filter, the old request unchanged, the pager, filter reset, BACK to the same page/scroll/row. (beta 4) |
+| `scripts/test_gallery_pager.ts` | 13 | The pager's numbering (one rule for web and app). (beta 4) |
 
 The live test uses two test-only environment variables:
 - `VIBESERVER_BG_WAIT_SEC` overrides the owner's wait;

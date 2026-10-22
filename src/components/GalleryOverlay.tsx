@@ -5,6 +5,10 @@
  * decoder, a NAVTEX message / RTTY run / FT8 summary opens as text, a WEFAX chart or SSTV picture as an image, and
  * OPEN hands the item to the phone (its own browser saves or shares it).
  * ★ Text from the air is shown as text, never parsed or linked. Read-only: nothing here changes the server.
+ * ★★ V12 beta 4 — PAGES (utils/galleryPager.ts, the web client's rule): 25 a page, newest first, the pager at the
+ *   bottom ("‹ Newer · 1 … 6 7 8 … 14 · Older ›", "Page 7 of 14"); the filter kept across pages, page 1 on a filter
+ *   change; BACK from an item returns to the same page and scroll — the list stays MOUNTED (hidden) under the item, so
+ *   it is neither reloaded nor scrolled back to the top. An older server sends no "total": its newest 300, no pager.
  * ★ Offered only on a VibeServer (SDRScreen passes `galleryAvail` from client.isVibe): a GALLERY key on a receiver that
  *   has none would be a dead control (AGENTS.md).
  */
@@ -13,6 +17,7 @@ import { ActivityIndicator, FlatList, Image, Linking, Modal, Platform, ScrollVie
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
 import { withReadAuth } from '../services/vibeAuth';
+import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -37,7 +42,10 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
   const s = useMemo(() => makeStyles(pt), [pt]);
   const b = base.replace(/\/+$/, '');
   const [kind, setKind] = useState('');
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
   const [items, setItems] = useState<GalleryItem[] | null>(null);
+  const listRef = React.useRef<FlatList<GalleryItem>>(null);
   const [note, setNote] = useState('');
   const [open, setOpen] = useState<GalleryItem | null>(null);
   const [text, setText] = useState('');
@@ -45,15 +53,26 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
   const load = useCallback(async () => {
     setItems(null); setNote('');
     try {
-      const r = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?limit=300${kind ? `&kind=${kind}` : ''}`, readAuth), { cache: 'no-store' } as any);
-      const j = await r.json();
-      if (!r.ok || j?.error) { setItems([]); setNote(String(j?.error || 'This server has no gallery.')); return; }
+      let r = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?${galleryPageQuery(page, kind)}`, readAuth), { cache: 'no-store' } as any);
+      let j = await r.json();
+      const paged = typeof j?.total === 'number';
+      if (r.ok && !j?.error && !paged) {   // ★ an older server: its newest 300, no pages
+        r = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?limit=300${kind ? `&kind=${kind}` : ''}`, readAuth), { cache: 'no-store' } as any);
+        j = await r.json();
+      }
+      if (!r.ok || j?.error) { setItems([]); setPages(1); setNote(String(j?.error || 'This server has no gallery.')); return; }
+      const n = paged ? galleryPageCount(j.total) : 1;
+      setPages(n);
+      if (paged && page > n && j.total > 0) { setPage(n); return; }   // ★ the gallery shrank under us
       setItems(Array.isArray(j.items) ? j.items : []);
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
       setNote(j.enabled === false ? 'This server keeps no gallery.'
         : `${j.count ?? 0} item${j.count === 1 ? '' : 's'} on this server · ${size(j.usedBytes || 0)}. Times are UTC.`);
     } catch { setItems([]); setNote('This server has no gallery (it may need updating).'); }
-  }, [b, kind, readAuth]);
-  useEffect(() => { if (visible && !open) void load(); }, [visible, open, load]);
+  }, [b, kind, page, readAuth]);
+  // ★ Loaded on opening, a filter and a page — NOT on BACK from an item (the list under it is still there).
+  useEffect(() => { if (visible) void load(); }, [visible, load]);
+  useEffect(() => { if (!visible) { setOpen(null); setPage(1); } }, [visible]);
 
   const fileUrl = (it: GalleryItem) => withReadAuth(`${b}/vibeserver/gallery/file/${encodeURIComponent(it.f)}`, readAuth);
   const isImage = (it: GalleryItem) => /\.png$/i.test(it.f);
@@ -77,7 +96,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
               <Text style={s.keyText}>{open ? '‹ BACK' : 'CLOSE'}</Text>
             </TouchableOpacity>
           </View>
-          {open ? (
+          {open && (
             <View style={{ flex: 1 }}>
               <Text style={s.meta}>
                 {`${open.title} · ${galleryFreq(open.hz)} ${(open.m || '').toUpperCase()} · ${galleryWhen(open.t)} · `
@@ -96,18 +115,41 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
                 <Text style={s.keyText}>OPEN / SAVE</Text>
               </TouchableOpacity>
             </View>
-          ) : (
-            <View style={{ flex: 1 }}>
+          )}
+          {/* ★ The list stays mounted under an open item (display: none), so BACK lands on the same page and scroll. */}
+            <View style={open ? { display: 'none' } : { flex: 1 }}>
               <View style={s.filters}>
                 {KINDS.map((k) => (
-                  <TouchableOpacity key={k.id || 'all'} onPress={() => setKind(k.id)}
+                  <TouchableOpacity key={k.id || 'all'} onPress={() => { setKind(k.id); setPage(1); }}
                                     style={[s.key, kind === k.id && { borderColor: pt.ink.selected, backgroundColor: pt.ink.selectedBg }]}>
                     <Text style={[s.keyText, kind === k.id && { color: pt.ink.selected }]}>{k.label}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
               {items == null ? <ActivityIndicator style={{ marginTop: 24 }} /> : (
-                <FlatList data={items} keyExtractor={(it) => it.f} contentContainerStyle={scrollLane}
+                <FlatList ref={listRef} data={items} keyExtractor={(it) => it.f} contentContainerStyle={scrollLane}
+                  ListFooterComponent={pages > 1 ? (
+                    <View style={s.pager} accessibilityRole="toolbar">
+                      <TouchableOpacity onPress={() => setPage(galleryClampPage(page - 1, pages))} disabled={page <= 1}
+                                        style={[s.key, page <= 1 && s.off]} accessibilityRole="button" accessibilityLabel="Newer page">
+                        <Text style={s.keyText}>{'\u2039 Newer'}</Text>
+                      </TouchableOpacity>
+                      {galleryPagerSlots(page, pages).map((sl, i) => sl === 'gap'
+                        ? <Text key={`g${i}`} style={s.gap}>{'\u2026'}</Text>
+                        : (
+                          <TouchableOpacity key={sl} onPress={() => setPage(sl)} accessibilityRole="button" accessibilityLabel={`Page ${sl}`}
+                                            accessibilityState={{ selected: sl === page }}
+                                            style={[s.key, sl === page && { borderColor: pt.ink.selected, backgroundColor: pt.ink.selectedBg }]}>
+                            <Text style={[s.keyText, sl === page && { color: pt.ink.selected }]}>{String(sl)}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      <TouchableOpacity onPress={() => setPage(galleryClampPage(page + 1, pages))} disabled={page >= pages}
+                                        style={[s.key, page >= pages && s.off]} accessibilityRole="button" accessibilityLabel="Older page">
+                        <Text style={s.keyText}>{'Older \u203a'}</Text>
+                      </TouchableOpacity>
+                      <Text style={s.pageLab}>{galleryPageLabel(page, pages)}</Text>
+                    </View>
+                  ) : null}
                   ListEmptyComponent={<Text style={s.dim}>{kind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.'}</Text>}
                   renderItem={({ item: it }) => (
                     <TouchableOpacity onPress={() => { void show(it); }} style={s.row} accessibilityRole="button">
@@ -123,7 +165,6 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
               )}
               {!!note && <Text style={s.dim}>{note}</Text>}
             </View>
-          )}
         </SafeAreaView>
       </View>
     </Modal>
@@ -149,5 +190,9 @@ function makeStyles(pt: PopupTokens) {
     textBox: { flex: 1, borderWidth: 1, borderColor: pt.ink.border, borderRadius: 8, padding: 10, backgroundColor: 'rgba(0,0,0,0.25)' },
     mono: { color: pt.ink.text, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 13, lineHeight: 19 },
     image: { width: '100%', aspectRatio: 1.2, backgroundColor: '#fff' },
+    pager: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 10 },
+    gap: { color: pt.ink.textDim, marginRight: 6, marginBottom: 6 },
+    pageLab: { color: pt.ink.textDim, fontSize: 12, marginLeft: 'auto', marginBottom: 6 },
+    off: { opacity: 0.35 },
   });
 }

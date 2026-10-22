@@ -12,6 +12,9 @@
 //      appended in pieces (never per character).
 //    · end to end without a server: synthetic IQ with a NAVTEX station at 518 kHz, centre 500 kHz, through BgRunner's
 //      channelizer + demodulators + decoders → a NAVTEX message in the gallery, from a USB VFO AND an LSB VFO.
+#include <cstring>
+#include <dirent.h>
+#include <sys/stat.h>
 #include "vibe_bgdecode.h"
 
 #include <cmath>
@@ -190,9 +193,33 @@ static void navtexAsm() {
     got.clear();
     a.push("ZCZC FA02\r\nLOCK LOST HERE", 400000); a.lockState(3, 400000); a.lockState(1, 401000);
     a.tick(402000); ok(got.empty(), "lock lost 1 s: held open (it may be a blip)");
-    a.tick(402600);
-    ok(got.size() == 1 && got[0].endLost && got[0].id == "FA02", "lost for good (1.6 s): the message ends at the loss");
+    a.tick(402600); ok(got.empty(), "lock lost 1.6 s: still open (beta4: a fade does not close a message)");
+    a.tick(400000 + 76000);
+    ok(got.size() == 1 && got[0].endLost && got[0].id == "FA02" && got[0].text == "LOCK LOST HERE", "silent for good (75 s): the message ends at the loss");
     got.clear();
+    // ★★★ FADES (Lenovo, beta3, 517.5 kHz: lock lost 5–15 s at a time): ONE item, two gap markers, "gaps: 2 (27 s)".
+    {
+        gallery::NavtexAsm f; std::vector<gallery::NavtexMsg> m;
+        f.onMessage = [&](const gallery::NavtexMsg& x) { m.push_back(x); };
+        int64_t t = 600000;
+        f.lockState(3, t);
+        f.push("ZCZC VA28\r\nDOVER STRAIT WIND SOUTHWEST 6\r\n", t += 3000);
+        f.lockState(1, t += 100); f.push("XQ_", t + 500); f.lockState(3, t += 12000);
+        f.push("THAMES SOUTHWEST 5 TO 7\r\n", t += 2000);
+        f.lockState(1, t += 100); f.lockState(3, t += 15000);
+        f.push("DOVER RAIN LATER\r\nNNNN\r\n", t += 2000);
+        ok(m.size() == 1 && m[0].id == "VA28" && !m[0].endLost && !m[0].startLost, "★ two long fades mid-message: ONE message, ZCZC to NNNN");
+        ok(m.size() == 1 && m[0].text.find("signal lost 12 s") != std::string::npos && m[0].text.find("signal lost 15 s") != std::string::npos
+           && m[0].text.find("XQ_") == std::string::npos, "...two gap markers, the hunting garbage dropped: " + (m.empty() ? std::string() : m[0].text));
+        ok(m.size() == 1 && gallery::NavtexAsm::title(m[0]).find("gaps: 2 (27 s)") != std::string::npos, "...and the title says gaps: 2 (27 s): " + (m.empty() ? std::string() : gallery::NavtexAsm::title(m[0])));
+        m.clear();
+        f.lockState(3, t += 1000);
+        f.push("ZCZC VA29\r\nFIRST STATION\r\n", t += 2000);
+        f.lockState(1, t += 100); f.lockState(3, t += 8000);
+        f.push("ZCZC LB04\r\nSECOND STATION\r\nNNNN\r\n", t += 2000);
+        ok(m.size() == 2 && m[0].id == "VA29" && m[0].endLost && m[1].id == "LB04" && m[1].text.find("FIRST") == std::string::npos,
+           "★ a fade then a DIFFERENT ZCZC: two items (the takeover protection)");
+    }
     // ★★ THE LENOVO SPLIT (NickB, 490 kHz, 2026-10-22): a real-shaped stream — header, text, four resyncs each relocked
     //    within a second, NNNN — is ONE message, ZCZC to NNNN.
     {
@@ -267,6 +294,35 @@ static void store() {
     ok(s.add(m, "txt", "x").empty(), "size 0 = the gallery keeps nothing");
 }
 
+// ── 4b. ★ V12 beta 4: the gallery in PAGES — offset/limit, the filter's total, the index read once ───────────────────
+static void galleryPages() {
+    std::printf("── the gallery in pages: offset + limit, the filter's total, an in-memory index ──\n");
+    gallery::Store s; s.setDir(tmpDir("pages"));
+    for (int i = 0; i < 60; i++) {
+        gallery::Meta m; m.kind = i % 3 == 0 ? "ft8" : "navtex"; m.origin = "background"; m.freqHz = 518000; m.mode = "usb";
+        m.decoder = m.kind; m.utc = 1792700000 + i; m.title = "item " + std::to_string(i);
+        s.add(m, "txt", "body " + std::to_string(i));
+    }
+    auto num = [](const std::string& j, const char* k) { const size_t p = j.find(std::string("\"") + k + "\":"); return p == std::string::npos ? -1L : std::atol(j.c_str() + p + std::strlen(k) + 3); };
+    auto n = [](const std::string& j) { size_t c = 0; for (size_t at = 0; (at = j.find("\"f\":", at)) != std::string::npos; at++) c++; return c; };
+    const std::string p1 = s.listJson("", 25, 0), p3 = s.listJson("", 25, 50);
+    ok(n(p1) == 25 && num(p1, "total") == 60 && num(p1, "offset") == 0 && p1.find("\"item 59\"") != std::string::npos,
+       "page 1: 25 items, newest first, total 60");
+    ok(n(p3) == 10 && p3.find("\"item 9\"") != std::string::npos && p3.find("\"item 0\"") != std::string::npos, "page 3: the last 10, down to the oldest");
+    const std::string f1 = s.listJson("ft8", 25, 0);
+    ok(n(f1) == 20 && num(f1, "total") == 20 && f1.find("\"k\":\"navtex\"") == std::string::npos, "★ filtered: FT8 only, total 20 for the filter");
+    ok(num(s.listJson("navtex", 25, 0), "total") == 40, "NAVTEX: total 40");
+    const std::string old = s.listJson("", 300);
+    ok(n(old) == 60 && old.find("\"total\"") == std::string::npos && num(old, "count") == 60, "★ an old request (no offset): every item, the old shape");
+    const unsigned long b0 = s.cacheBuilds();
+    for (int i = 0; i < 5; i++) s.listJson("", 25, i * 25);
+    ok(s.cacheBuilds() == b0, "★ pages from the cache: the index is not re-read per page");
+    gallery::Meta m; m.kind = "navtex"; m.origin = "live"; m.freqHz = 490000; m.mode = "usb"; m.decoder = "navtex"; m.title = "item new";
+    s.add(m, "txt", "new");
+    const std::string after = s.listJson("", 25, 0);
+    ok(s.cacheBuilds() == b0 + 1 && num(after, "total") == 61 && after.find("\"item new\"") != std::string::npos, "an append invalidates it: the new item at once");
+}
+
 // ── 5. a decoder host's tap writes the gallery ──────────────────────────────────────────────────────────────────
 static void hostTap() {
     std::printf("── a listener's decoder: the tap files NAVTEX messages as 'live' ──\n");
@@ -324,8 +380,74 @@ static void gapMidMessage() {
     h->stop();
     const std::string list = s.listJson("navtex", 10);
     size_t n = 0; for (size_t at = 0; (at = list.find("\"f\":", at)) != std::string::npos; at++) n++;
-    ok(n == 1 && list.find("Station B") != std::string::npos && list.find("\"partial\":true") == std::string::npos,
+    // ★ V12 beta 4: no position here, but the text says OOSTENDERADIO — so the title names it (navtexStations below)
+    ok(n == 1 && list.find("B \xc2\xb7 Oostende") != std::string::npos && list.find("\"partial\":true") == std::string::npos,
        "★ ONE item, from its header, not partial (" + std::to_string(n) + "): " + list.substr(0, 220));
+}
+
+// ── 5c. ★ V12 beta 4: the NAVTEX STATION by name — the same cases as scripts/test_navtex.ts, so the rule's two readers
+//        (vibe_navtex_stations.h, navtexStations.generated.ts) cannot drift ────────────────────────────────────────────
+static void navtexStations() {
+    std::printf("── NAVTEX stations: letter + band + this server's position (NGA Pub. 117) ──\n");
+    const double LA = 52.3125, LO = -0.875;   // IO92nh, the Lenovo
+    auto L = [&](char b1, double hz, const std::string& text = "", double la = 52.3125, double lo = -0.875) {
+        return navtex::label(b1, hz, la, lo, text);
+    };
+    auto starts = [](const std::string& s, const std::string& p) { return s.compare(0, p.size(), p) == 0; };
+    ok(L('B', 489500) == "B \xc2\xb7 Oostende, Belgium \xf0\x9f\x87\xa7\xf0\x9f\x87\xaa", "B on 490 = Oostende, Belgium + flag: " + L('B', 489500));
+    ok(starts(L('U', 489500), "U \xc2\xb7 Cullercoats, United Kingdom"), "U on 490 = Cullercoats");
+    ok(starts(L('A', 489500), "A \xc2\xb7 Malin Head, Ireland"), "A on 490 = Malin Head");
+    ok(starts(L('L', 489500), "L \xc2\xb7 Hamburg, Germany"), "L on 490 = Hamburg");
+    ok(starts(L('G', 517500), "G \xc2\xb7 Cullercoats"), "G on 518 = Cullercoats");
+    ok(starts(L('V', 517500), "V \xc2\xb7 Oostende"), "V on 518 = Oostende");
+    ok(starts(L('L', 517500), "L \xc2\xb7 Rogaland, Norway"), "L on 518 = Rogaland");
+    ok(starts(L('J', 517500), "J \xc2\xb7 Stockholm, Sweden"), "J on 518 = Stockholm");
+    ok(starts(L('I', 517500), "I \xc2\xb7 Varberg, Sweden"), "I on 518 = Varberg");
+    ok(starts(L('N', 517500), "N \xc2\xb7 Orlandet, Norway"), "N on 518 = Orlandet");
+    ok(L('M', 517500) == "Station M", "M on 518: out of reach — the letter only");
+    ok(L('W', 517500) == "W \xc2\xb7 Corsen \xf0\x9f\x87\xab\xf0\x9f\x87\xb7 or Valentia \xf0\x9f\x87\xae\xf0\x9f\x87\xaa?", "W, no evidence: both, asked: " + L('W', 517500));
+    ok(starts(L('W', 517500, "VALENTIA RADIO GALE WARNING"), "W \xc2\xb7 Valentia, Ireland"), "the text names Valentia");
+    ok(starts(L('W', 517500, "CROSS CORSEN"), "W \xc2\xb7 Corsen, France"), "the text names Corsen");
+    { const std::string w = L('W', 517500, "ZCZC WB51\nMRSC MALIN, EJM.\nGALE WARNING THURSDAY 22 OCTOBER 2149 UTC 12\nSHANNON\nVIOLENT STORM FORCE 11\nNNNN");
+      const std::string tail = " or Valentia \xf0\x9f\x87\xae\xf0\x9f\x87\xaa?";
+      ok(w.size() > tail.size() && w.compare(w.size() - tail.size(), tail.size(), tail) == 0, "tonight's W (MALIN not on W/518): still the two"); }
+    ok(starts(L('W', 517500, "IRISH COASTAL WARNING\nSUBMARINE CABLE OPERATIONS IN POSITION 51-30.2N 010-45.0W AND 51-41N 010-30W"), "W \xc2\xb7 Valentia, Ireland"), "W off SW Ireland → Valentia");
+    ok(starts(L('W', 517500, "AVURNAV BREST 1234\nZONE 48-10N 005-20W\n48-15.5N 005-05.0W"), "W \xc2\xb7 Corsen, France"), "W off Brittany → Corsen");
+    ok(starts(L('B', 489500, "ZCZC BA10\nKUSTWACHT OOSTENDE BERICHT\nWRAK OP POSITIE 51-14.13N 002-54.22E\nNNNN"), "B \xc2\xb7 Oostende, Belgium"), "BA10 with Belgian coordinates → Oostende");
+    { const std::string r = L('R', 517500, "ZCZC RA21\nNAVAREA IV 0912/26\nCARIBBEAN SEA. PUERTO RICO.\nUNLIGHTED BUOY ADRIFT IN 18-20.5N 066-30.2W AND 18-11N 065-58W.\nNNNN");
+      ok(starts(r, "R \xc2\xb7 Isabella, United States") && r.find(" \xc2\xb7 DX 6,") != std::string::npos, "★ the Caribbean warning → Isabella, DX: " + r); }
+    ok(L('M', 517500, "SWEDISH NAV WARN 1/26\nSKAGERRAK. KOSTER.\nSOUTH CARDINAL MARK MISSING\nPSN 58-41.9N 010-51.2E") == "Station M", "tonight's M: no M station near its positions → the letter only");
+    ok(starts(L('L', 489500, "NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E"), "L \xc2\xb7 Hamburg, Germany"), "German comma decimals");
+    ok(starts(L('J', 517500, "SWEDISH NAV WARN 225/26\nBOTHNIAN SEA. 60-40.1N 017-55.0E"), "J \xc2\xb7 Stockholm, Sweden"), "J with a Baltic position → Stockholm");
+    ok(L('L', 489500, "NCC-HAMBURG", -33.9, 18.4).find(" \xc2\xb7 DX 9,") != std::string::npos, "named from far away → DX 9,…: " + L('L', 489500, "NCC-HAMBURG", -33.9, 18.4));
+    { auto P = navtex::positions;
+      auto one = [&](const char* t, double la, double lo) { auto p = P(t); return p.size() == 1 && std::fabs(p[0].first - la) < 0.01 && std::fabs(p[0].second - lo) < 0.01; };
+      ok(one("IN 51-14.13N 002-54.22E.", 51.2355, 2.9037) && one("5114N 00254E", 51.2333, 2.9) && one("51 14.1N 002 54.2E", 51.235, 2.9033)
+         && one("54-19,2N  005-44,2E", 54.32, 5.7367) && one("33-55S 018-25E", -33.9167, 18.4167), "positions: every NAVTEX format, as the clients read them");
+      ok(P("PSN 58-41.9N 010-51._E").empty() && P("99-10N 010-10E 51-75N 002-00E 51-10N 190-00E").empty() && P("TEL 1234567 2149 UTC 12 CHART 28").empty(),
+         "a lost '_', out-of-range values and plain numbers are not positions"); }
+    ok(L('B', 489500, "", NAN, NAN) == "Station B", "no position → the letter only");
+    ok(starts(L('B', 489500, "OOSTENDERADIO NAV WARNING", NAN, NAN), "B \xc2\xb7 Oostende"), "no position, the text names it");
+    ok(starts(L('L', 489500, "NCC-HAMBURG", -33.9, 18.4), "L \xc2\xb7 Hamburg"), "the text wins wherever the server is");
+    ok(L('B', 4209500) == "Station B", "HF: no HF letters in Pub. 117");
+    ok(L('B', 10e6) == "Station B", "not a NAVTEX channel");
+    ok(L('B', 489500, "", -33.9, 18.4) == "Station B", "Cape Town: nothing within reach");
+    // the gallery's title, through the tap
+    gallery::Store s; s.setDir(tmpDir("stations"));
+    gallery::Meta m; m.kind = "navtex"; m.origin = "background"; m.freqHz = 489500; m.mode = "usb"; m.decoder = "navtex";
+    m.lat = LA; m.lon = LO;
+    {
+        bg::GalleryTap t(s, m);
+        t.text("ZCZC BA10\r\nOOSTENDERADIO\r\nNAV WARNING\r\nNNNN\r\n");
+        t.finish(false);
+    }
+    const std::string list = s.listJson("navtex", 10);
+    ok(list.find("B \xc2\xb7 Oostende, Belgium") != std::string::npos && list.find("Nav warning") != std::string::npos,
+       "★ the gallery item is titled with the station: " + list.substr(0, 260));
+    gallery::Meta m2 = m; m2.lat = NAN; m2.lon = NAN;
+    gallery::Store s2; s2.setDir(tmpDir("stations2"));
+    { bg::GalleryTap t(s2, m2); t.text("ZCZC BA11\r\nNAV WARNING\r\nNNNN\r\n"); t.finish(false); }
+    ok(s2.listJson("navtex", 10).find("Station B") != std::string::npos, "no position, no name in the text → \"Station B\" as before");
 }
 
 // ── 6. end to end: IQ → channels → demodulators → decoders → gallery ────────────────────────────────────────────
@@ -511,14 +633,59 @@ static void phase2() {
     }
 }
 
+// ── 7b. ★ V12 beta 4: the FT8 summary is rewritten IN PLACE every 10 min while the run goes on — one card per run ────
+static void ft8Periodic() {
+    std::printf("── FT8 summary: one item per run, rewritten in place (atomically), only when the counts changed ──\n");
+    gallery::Store s; s.setDir(tmpDir("ft8p"));
+    gallery::Meta m; m.kind = "ft8"; m.origin = "background"; m.freqHz = 1840000; m.mode = "usb"; m.decoder = "ft8";
+    m.liveSpots = std::make_shared<std::atomic<uint64_t>>(0); m.liveCountries = std::make_shared<std::atomic<uint64_t>>(0);
+    auto count = [&] { size_t n = 0; const std::string l = s.listJson("ft8", 50); for (size_t at = 0; (at = l.find("\"f\":", at)) != std::string::npos; at++) n++; return n; };
+    bg::Ft8SummaryTap t(s, m, 52.3125, -0.875);
+    t.spot(false, "G4IRX", "IO92", -5, 1840500); t.spot(false, "DL1ABC", "JO31", -12, 1841000); t.spot(false, "EA4XYZ", "IN80", -15, 1841200);
+    ok(m.liveSpots->load() == 3 && m.liveCountries->load() == 3, "★ the live count for the admin line: 3 spots, 3 countries (" + std::to_string(m.liveSpots->load()) + ", " + std::to_string(m.liveCountries->load()) + ")");
+    ok(count() == 0, "nothing written before the first 10 minutes");
+    t.writeNowForTest();
+    const std::string name = t.itemName();
+    ok(count() == 1 && !name.empty() && s.listJson("ft8", 5).find("3 spots") != std::string::npos, "★ the first rewrite: ONE item, \"3 spots\"");
+    std::string path, ct; s.resolve(name, path, ct);
+    struct stat st1{}; ::stat(path.c_str(), &st1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    t.writeNowForTest();
+    struct stat st2{}; ::stat(path.c_str(), &st2);
+    ok(st1.st_mtime == st2.st_mtime && st1.st_ino == st2.st_ino, "★ counts unchanged → not rewritten");
+    t.spot(true, "OH2XX", "KP20", -8, 1842000);
+    t.writeNowForTest();
+    struct stat st3{}; ::stat(path.c_str(), &st3);
+    const std::string l2 = s.listJson("ft8", 5);
+    ok(count() == 1 && t.itemName() == name && l2.find("4 spots") != std::string::npos && l2.find("4 countries") != std::string::npos,
+       "★ more spots → the SAME item rewritten: one card, \"4 spots · 4 countries\"");
+    ok(st3.st_ino != st1.st_ino, "...replaced by a rename (a new inode — never written over in place)");
+    { DIR* d = ::opendir(s.dir().c_str()); bool tmp = false; while (dirent* e = d ? ::readdir(d) : nullptr) if (std::string(e->d_name).find(".tmp") != std::string::npos) tmp = true; if (d) ::closedir(d);
+      ok(!tmp, "no temp file left behind"); }
+    t.finish(false);
+    const std::string l3 = s.listJson("ft8", 5);
+    ok(count() == 1 && l3.find(name) != std::string::npos, "★ the run's end writes the same item, still one card");
+    { std::string body; FILE* f = std::fopen(path.c_str(), "r"); char b[4096]; size_t n; while (f && (n = std::fread(b, 1, sizeof b, f)) > 0) body.append(b, n); if (f) std::fclose(f);
+      ok(body.find("Spots heard:       4") != std::string::npos, "the card holds the whole run's figures"); }
+    // ★ the item went (the owner cleared the folder) — the next write starts a new one, it never fails silently
+    bg::Ft8SummaryTap t2(s, m, NAN, NAN);
+    t2.spot(false, "G4IRX", "IO92", -5, 1840500); t2.writeNowForTest();
+    const std::string n2 = t2.itemName(); std::string p2; s.resolve(n2, p2, ct); ::unlink(p2.c_str());
+    t2.spot(false, "M0ABC", "IO91", -5, 1840500); t2.writeNowForTest();
+    ok(!t2.itemName().empty() && t2.itemName() != n2, "an item removed under a run → the next write makes a new one");
+}
+
 int main() {
     config();
     phase2();
+    ft8Periodic();
     sideband();
     navtexAsm();
     store();
+    galleryPages();
     hostTap();
     gapMidMessage();
+    navtexStations();
     runner();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;

@@ -48,7 +48,8 @@ import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
-import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle } from '../../../src/utils/navtex';
+import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../../../src/utils/galleryPager';
+import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 import { VS_SQL_OFF, vsSqlOn, vsSqlRestore } from '../../../src/services/vibeSquelch';
@@ -9940,6 +9941,10 @@ let nvHz = 0;
 const NAVTEX_RETUNE_HZ = 3000;
 let nvViewPrev = false;
 let nvRenderQueued = false;
+/** ★ V12: what names the station ("B · Oostende, Belgium 🇧🇪"): the dial the text came from and THIS server's position. */
+function nvPlace(): NavtexPlace {
+  return { dialHz: nvHz || spec?.frequency || 0, lat: serverLoc?.lat ?? NaN, lon: serverLoc?.lon ?? NaN };
+}
 /** Redraw the NAVTEX view — at most once a frame, since RTTY-style text arrives a character or two at a time. */
 function queueNavtexRender() {
   if (nvRenderQueued) return;
@@ -9956,7 +9961,7 @@ function renderNavtex() {
   const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
   view.classList.toggle('has', !!shown);
   if (shown) {
-    $('nvTitle').textContent = navtexTitle(shown);
+    $('nvTitle').textContent = navtexTitle(shown, nvPlace());
     const pct = navtexLostPct(shown);
     // ★ Where it is, under the title too — on a phone the header's status is the first thing squeezed out.
     $('nvMeta').textContent = [nvViewPrev ? 'PREVIOUS' : !shown.done ? 'RECEIVING' : 'STANDING BY',
@@ -9989,7 +9994,7 @@ function saveNavtex() {
   const m = nvViewPrev ? navtexAsm.prev : navtexAsm.live;
   if (!m) return;
   const name = navtexFileName(m);
-  const blob = new Blob([navtexFileText(m)], { type: 'text/plain;charset=utf-8' });
+  const blob = new Blob([navtexFileText(m, nvPlace())], { type: 'text/plain;charset=utf-8' });
   const file = new File([blob], name, { type: 'text/plain' });
   const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
   if (nav.canShare?.({ files: [file] })) { nav.share?.({ files: [file] }).catch(() => {}); return; }
@@ -13430,14 +13435,32 @@ function galWhen(t: number): string {
   return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())} UTC`;
 }
 function galFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
-async function renderGallery() {
+/** ★★ V12 beta 4 — PAGES (galleryPager.ts): 25 a page, newest first, the pager at the bottom; the filter kept across
+ *  pages and page 1 on a filter change; BACK from an item returns to the same page AND scroll, with the item's row
+ *  focused again (keyboard, D-pad and controller land where they left). An older server without pages answers with no
+ *  "total": then the list is its newest 300, as before, and no pager is drawn. */
+let galPage = 1;
+let galScroll = 0;
+let galOpenedRow = -1;
+async function renderGallery(page = galPage) {
   const host = $('galList');
   const note = $('galNote');
+  const pager = $('galPager');
   $('galView').hidden = true; host.hidden = false; $('galFilter').hidden = false;
   host.innerHTML = '<div class="sres"><span class="n">Loading…</span></div>';
+  pager.hidden = true;
   try {
-    const r = await fetch(galUrl(`/vibeserver/gallery.json?limit=300${galKind ? `&kind=${galKind}` : ''}`), { cache: 'no-store' });
-    const j = await r.json() as { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number };
+    let r = await fetch(galUrl(`/vibeserver/gallery.json?${galleryPageQuery(page, galKind)}`), { cache: 'no-store' });
+    type GJ = { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number; total?: number };
+    let j = await r.json() as GJ;
+    let paged = typeof j.total === 'number';
+    if (r.ok && !j.error && !paged) {   // ★ an older server: its newest 300, no pages
+      r = await fetch(galUrl(`/vibeserver/gallery.json?limit=300${galKind ? `&kind=${galKind}` : ''}`), { cache: 'no-store' });
+      j = await r.json() as GJ;
+    }
+    const pages = paged ? galleryPageCount(j.total!) : 1;
+    if (paged && page > pages && j.total! > 0) { void renderGallery(pages); return; }   // ★ the gallery shrank under us
+    galPage = paged ? galleryClampPage(page, pages) : 1;
     host.innerHTML = '';
     if (!r.ok || j.error) { host.innerHTML = ''; note.textContent = j.error || 'This server has no gallery.'; return; }
     const items = j.items || [];
@@ -13449,26 +13472,63 @@ async function renderGallery() {
       n.textContent = galKind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.';
       row.appendChild(n); host.appendChild(row); return;
     }
-    for (const it of items) {
+    items.forEach((it, idx) => {
       const row = document.createElement('div'); row.className = 'sres';
+      // ★ A focusable row: Tab / arrows / D-pad reach it, Enter or the controller's A opens it.
+      row.tabIndex = 0; row.setAttribute('role', 'button');
       const f = document.createElement('span'); f.className = 'f'; f.textContent = galFreq(it.hz);
       const n = document.createElement('span'); n.className = 'n';
       n.appendChild(document.createTextNode(it.title || it.k.toUpperCase()));
       const tag = (t: string) => { const s = document.createElement('span'); s.className = 'tag'; s.textContent = t; n.appendChild(s); };
-      tag(it.o === 'background' ? (it.wl ? 'BACKGROUND \u00b7 LISTENER ON' : 'BACKGROUND') : 'LISTENER');
+      tag(it.o === 'background' ? (it.wl ? 'BACKGROUND · LISTENER ON' : 'BACKGROUND') : 'LISTENER');
       if (it.partial) tag('PARTIAL');
       n.appendChild(document.createElement('br'));
       const src = document.createElement('span'); src.className = 'src';
       src.textContent = `${galWhen(it.t)} · ${(it.m || '').toUpperCase()} · ${it.d}${it.p ? ` · ${it.p}` : ''}${it.r ? ` · ${it.r}` : ''} · ${formatSize(it.bytes)}`;
       n.appendChild(src);
       row.appendChild(f); row.appendChild(n);
-      row.onclick = () => { void openGalleryItem(it); };
+      const open = () => { galScroll = $('galleryPanel').scrollTop; galOpenedRow = idx; void openGalleryItem(it); };
+      row.onclick = open;
+      row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
       host.appendChild(row);
-    }
+    });
+    if (paged && pages > 1) renderGalleryPager(pages);
   } catch {
     host.innerHTML = '';
     note.textContent = 'This server has no gallery (it may need updating).';
   }
+}
+/** "‹ Newer · 1 … 6 7 8 … 14 · Older ›" and "Page 7 of 14" — buttons, so every input reaches them. */
+function renderGalleryPager(pages: number) {
+  const pager = $('galPager');
+  pager.innerHTML = '';
+  const go = (p: number) => { galScroll = 0; galOpenedRow = -1; void renderGallery(p).then(() => { $('galleryPanel').scrollTop = 0; }); };
+  const btn = (label: string, p: number, on = false, aria = '') => {
+    const b = document.createElement('button'); b.className = 'btn' + (on ? ' on' : ''); b.textContent = label;
+    if (aria) b.setAttribute('aria-label', aria);
+    if (on) b.setAttribute('aria-current', 'page');
+    b.disabled = p < 1 || p > pages;
+    b.onclick = () => go(p);
+    pager.appendChild(b);
+  };
+  btn('‹ Newer', galPage - 1, false, 'Newer page');
+  for (const sl of galleryPagerSlots(galPage, pages)) {
+    if (sl === 'gap') { const g = document.createElement('span'); g.className = 'gap'; g.textContent = '…'; pager.appendChild(g); }
+    else btn(String(sl), sl, sl === galPage, `Page ${sl}`);
+  }
+  btn('Older ›', galPage + 1, false, 'Older page');
+  const lab = document.createElement('span'); lab.className = 'lab'; lab.textContent = galleryPageLabel(galPage, pages);
+  pager.appendChild(lab);
+  pager.hidden = false;
+}
+/** ★ BACK: the list as it was — same page, same scroll, the row that was opened focused — no reload. */
+function galleryBack() {
+  if (!$('galList').childElementCount) { void renderGallery(); return; }
+  $('galView').hidden = true; $('galList').hidden = false; $('galFilter').hidden = false;
+  $('galPager').hidden = $('galPager').childElementCount === 0;
+  $('galleryPanel').scrollTop = galScroll;
+  const row = $('galList').children[galOpenedRow] as HTMLElement | undefined;
+  row?.focus({ preventScroll: true });
 }
 async function openGalleryItem(it: GalleryItem) {
   const url = galUrl(`/vibeserver/gallery/file/${encodeURIComponent(it.f)}`);
@@ -13476,7 +13536,9 @@ async function openGalleryItem(it: GalleryItem) {
   ($('galDl') as HTMLAnchorElement).download = it.f;
   $('galViewMeta').textContent = `${it.title} · ${galFreq(it.hz)} ${(it.m || '').toUpperCase()} · ${galWhen(it.t)}`
     + ` · ${it.o === 'background' ? `background decoding${it.p ? ` (${it.p})` : ''}` : 'a listener\'s decoder'}`;
-  $('galList').hidden = true; $('galFilter').hidden = true; $('galView').hidden = false;
+  $('galList').hidden = true; $('galFilter').hidden = true; $('galPager').hidden = true; $('galView').hidden = false;
+  $('galleryPanel').scrollTop = 0;
+  $('galBack').focus({ preventScroll: true });
   // ★ A chart or a picture is shown as itself; the browser fetches it (same origin, the same read auth).
   const img = $('galImg') as HTMLImageElement;
   if (/\.png$/i.test(it.f)) {
@@ -13491,14 +13553,15 @@ async function openGalleryItem(it: GalleryItem) {
   } catch { $('galText').textContent = 'Could not reach the server.'; }
 }
 function initGallery() {
-  $('galleryBtn').onclick = () => { togglePanel('galleryPanel'); if (isPanelOpen('galleryPanel')) void renderGallery(); };
+  $('galleryBtn').onclick = () => { togglePanel('galleryPanel'); if (isPanelOpen('galleryPanel')) { galPage = 1; void renderGallery(1); } };
   $('galClose').onclick = () => $('galleryPanel').classList.remove('open');
-  $('galBack').onclick = () => { void renderGallery(); };
+  $('galBack').onclick = () => galleryBack();
   for (const b of Array.from($('galFilter').querySelectorAll('[data-kind]')) as HTMLButtonElement[]) {
     b.onclick = () => {
       galKind = b.dataset.kind || '';
       for (const o of Array.from($('galFilter').querySelectorAll('[data-kind]'))) o.classList.toggle('on', o === b);
-      void renderGallery();
+      galPage = 1; galScroll = 0; galOpenedRow = -1;   // ★ a new filter starts at its newest page
+      void renderGallery(1);
     };
   }
 }

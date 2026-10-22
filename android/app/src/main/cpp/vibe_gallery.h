@@ -45,6 +45,8 @@
 #include <string>
 #include <vector>
 
+#include "vibe_navtex_stations.h"
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -140,6 +142,14 @@ struct Meta {
     /** ★ Background decoding that ran ON while a listener was here (Stuart, 2026-10-22: "Keep decoding stations still in
      *  range while listeners are on") — read when the item is written, so a message that saw one is marked. */
     std::shared_ptr<std::atomic<bool>> listenerOn;
+    /** ★ V12 beta 4: THIS server's position (NaN = none set) — with the dial, what names a NAVTEX station
+     *  (vibe_navtex_stations.h). Not written to the index. */
+    double      lat = NAN, lon = NAN;
+    /** ★ V12 beta 4: stamped (UTC seconds) whenever this meta's decoder writes a new item — the admin page's "last
+     *  message 22:53" for a background VFO. */
+    std::shared_ptr<std::atomic<int64_t>> lastItemAt;
+    /** ★ V12 beta 4: an FT8/FT4 summary's running count — spots and countries so far — for the admin page's live line. */
+    std::shared_ptr<std::atomic<uint64_t>> liveSpots, liveCountries;
 };
 
 // ── The store ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -226,6 +236,32 @@ public:
         evictLocked(dir, limit, openNames());
         return true;
     }
+    /** ★★ V12 beta 4: an item REWRITTEN IN PLACE (the FT8 summary every 10 min: one card per run, not one per
+     *  rewrite). The file is replaced whole (tmp + rename, so a reader never sees half of it) and its index line takes the
+     *  new title where it stands. False when it is gone (evicted, the folder cleared) — the caller starts a new one. */
+    bool replace(const std::string& name, const Meta& m, const std::string& body) {
+        if (!safeName(name)) return false;
+        std::string dir; uint64_t limit; std::string radio;
+        { std::lock_guard<std::mutex> lk(m_); dir = dir_; limit = limit_; radio = radio_; }
+        if (dir.empty() || limit == 0) return false;
+        Lock fl(dir);
+        std::vector<std::string> lines = readIndex(dir);
+        size_t at = lines.size();
+        for (size_t i = 0; i < lines.size(); i++) if (lineStr(lines[i], "f") == name) { at = i; break; }
+        struct stat st{};
+        if (at == lines.size() || ::stat((dir + "/" + name).c_str(), &st) != 0) return false;
+        const std::string tmpf = dir + "/." + name + ".tmp";
+        if (!writeFile(tmpf, body, false) || ::rename(tmpf.c_str(), (dir + "/" + name).c_str()) != 0) { ::unlink(tmpf.c_str()); return false; }
+        std::string l = indexLine(m, name, radio);
+        if (!l.empty() && l.back() == '\n') l.pop_back();
+        lines[at] = l;
+        std::string all; for (auto& x : lines) all += x + "\n";
+        const std::string tmp = dir + "/index.jsonl.tmp";
+        if (writeFile(tmp, all, false)) ::rename(tmp.c_str(), (dir + "/index.jsonl").c_str());
+        if (m.lastItemAt) m.lastItemAt->store(nowUtc(), std::memory_order_relaxed);
+        evictLocked(dir, limit, openNames());
+        return true;
+    }
     /** The run is finished: it may now be evicted like anything else. */
     void close(const std::string& name) { std::lock_guard<std::mutex> lk(m_); open_.erase(name); }
     /** Bytes in one item, 0 if absent. */
@@ -235,32 +271,44 @@ public:
         return ::stat((dir() + "/" + name).c_str(), &st) == 0 ? (uint64_t)st.st_size : 0;
     }
 
-    /** ★ The list, NEWEST FIRST, for /vibeserver/gallery.json. `kind` filters ("" = all); at most `limit` items. */
-    std::string listJson(const std::string& kind, size_t limit) const {
+    /** ★ The list, NEWEST FIRST, for /vibeserver/gallery.json. `kind` filters ("" = all); at most `limit` items.
+     *  ★★ V12 beta 4 — PAGES: `offset` ≥ 0 skips that many of the FILTERED list and adds "total" (how many match the
+     *  filter) and "offset", so a client draws "Page 2 of 14". offset < 0 is the old request, answered exactly as before
+     *  (an older app asks for limit=300 and gets the newest 300).
+     *  ★ From a small in-memory copy of the index (Cache): rebuilt only when index.jsonl changes (its inode, size or
+     *    mtime — every writer, in any process on the box, rewrites or appends it) or every 30 s for files that vanished;
+     *    a page then costs a stat() per item SHOWN, never one per item kept. */
+    std::string listJson(const std::string& kind, size_t limit, long offset = -1) const {
         const std::string dir = this->dir();
         std::string items;
-        uint64_t used = 0; size_t total = 0;
+        uint64_t used = 0; size_t total = 0, matched = 0;
         if (!dir.empty()) {
             Lock fl(dir, /*shared=*/true);
-            std::vector<std::string> lines = readIndex(dir);
-            for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
-                const std::string f = lineStr(*it, "f");
-                if (!safeName(f)) continue;
-                struct stat st{};
-                if (::stat((dir + "/" + f).c_str(), &st) != 0) continue;
-                used += (uint64_t)st.st_size; ++total;
-                if (!kind.empty() && lineStr(*it, "k") != kind) continue;
+            std::shared_ptr<const Cache> c = cache(dir);
+            total = c->rows.size();
+            used = c->used;
+            size_t skip = offset > 0 ? (size_t)offset : 0;
+            for (auto it = c->rows.rbegin(); it != c->rows.rend(); ++it) {
+                if (!kind.empty() && it->kind != kind) continue;
+                ++matched;
+                if (skip) { --skip; continue; }
                 if (limit == 0) continue;
+                struct stat st{};
+                if (::stat((dir + "/" + it->f).c_str(), &st) != 0) continue;   // ★ gone since the cache was built
                 --limit;
-                std::string l = redactLine(*it);
+                std::string l = redactLine(it->line);
                 if (!l.empty() && l.back() == '}') l.pop_back();
                 if (!items.empty()) items += ',';
                 items += l + ",\"bytes\":" + std::to_string((unsigned long long)st.st_size) + "}";
             }
         }
-        return "{\"items\":[" + items + "],\"count\":" + std::to_string(total) + ",\"usedBytes\":"
-             + std::to_string((unsigned long long)used) + ",\"limitBytes\":" + std::to_string((unsigned long long)limitBytes()) + "}";
+        std::string j = "{\"items\":[" + items + "],\"count\":" + std::to_string(total) + ",\"usedBytes\":"
+             + std::to_string((unsigned long long)used) + ",\"limitBytes\":" + std::to_string((unsigned long long)limitBytes());
+        if (offset >= 0) j += ",\"total\":" + std::to_string(matched) + ",\"offset\":" + std::to_string(offset);
+        return j + "}";
     }
+    /** ★ Test seam: how many times the index has been read into the cache. */
+    unsigned long cacheBuilds() const { return cacheBuilds_.load(); }
     /** ★★★ A NAME FROM THE NETWORK → a path, only if it is one of ours. */
     bool resolve(const std::string& name, std::string& path, std::string& ctype) const {
         if (!safeName(name)) return false;
@@ -365,13 +413,18 @@ private:
         return out;
     }
     static void appendIndex(const std::string& dir, const Meta& m, const std::string& name, const std::string& radio) {
+        if (m.lastItemAt) m.lastItemAt->store(nowUtc(), std::memory_order_relaxed);
+        const std::string l = indexLine(m, name, radio);
+        writeFile(dir + "/index.jsonl", l, true) || writeFile(dir + "/index.jsonl", l, false);
+    }
+    static std::string indexLine(const Meta& m, const std::string& name, const std::string& radio) {
         char hz[32]; std::snprintf(hz, sizeof hz, "%.0f", m.freqHz);
         std::string l = "{\"f\":\"" + jsonEsc(name) + "\",\"k\":\"" + jsonEsc(m.kind) + "\",\"o\":\"" + jsonEsc(m.origin)
             + "\",\"t\":" + std::to_string((long long)(m.utc ? m.utc : nowUtc())) + ",\"hz\":" + hz
             + ",\"m\":\"" + jsonEsc(m.mode) + "\",\"d\":\"" + jsonEsc(m.decoder) + "\",\"p\":\"" + jsonEsc(printable(m.profile, 40))
             + "\",\"r\":\"" + jsonEsc(radio) + "\",\"title\":\"" + jsonEsc(printable(m.title, 120)) + "\""
             + (m.partial ? ",\"partial\":true" : "") + (m.listenerOn && m.listenerOn->load() ? ",\"wl\":true" : "") + "}\n";
-        writeFile(dir + "/index.jsonl", l, true) || writeFile(dir + "/index.jsonl", l, false);
+        return l;
     }
     /** ★★ OLDEST OUT until the gallery fits — never one of `keep` (the item just written, an RTTY run still open). The
      *  index is REWRITTEN (tmp + rename) without what went, and lines whose file has vanished are dropped with them. */
@@ -402,6 +455,49 @@ private:
         if (writeFile(tmp, body, false)) ::rename(tmp.c_str(), (dir + "/index.jsonl").c_str());
     }
 
+    /** The index as listJson reads it: each live line (its file exists) with its name and kind, oldest first. */
+    struct Cache {
+        struct Row { std::string line, f, kind; };
+        std::vector<Row> rows;
+        uint64_t used = 0;
+        std::string dir;
+        ino_t ino = 0; off_t size = -1; int64_t mtimeNs = -1;
+        std::chrono::steady_clock::time_point built;
+    };
+    /** ★ Caller holds the directory lock (shared is enough). */
+    std::shared_ptr<const Cache> cache(const std::string& dir) const {
+        struct stat st{};
+        const bool have = ::stat((dir + "/index.jsonl").c_str(), &st) == 0;
+#if defined(__APPLE__)
+        const int64_t mt = have ? (int64_t)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec : -1;
+#else
+        const int64_t mt = have ? (int64_t)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec : -1;
+#endif
+        const auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lk(cacheMtx_);
+            if (cache_ && cache_->dir == dir && cache_->ino == (have ? st.st_ino : 0) && cache_->size == (have ? st.st_size : -1)
+                && cache_->mtimeNs == mt && now - cache_->built < std::chrono::seconds(30)) return cache_;
+        }
+        auto c = std::make_shared<Cache>();
+        c->dir = dir; c->ino = have ? st.st_ino : 0; c->size = have ? st.st_size : -1; c->mtimeNs = mt; c->built = now;
+        for (auto& l : readIndex(dir)) {
+            const std::string f = lineStr(l, "f");
+            if (!safeName(f)) continue;
+            struct stat fs{};
+            if (::stat((dir + "/" + f).c_str(), &fs) != 0) continue;
+            c->used += (uint64_t)fs.st_size;
+            c->rows.push_back({ l, f, lineStr(l, "k") });
+        }
+        ++cacheBuilds_;
+        std::lock_guard<std::mutex> lk(cacheMtx_);
+        cache_ = c;
+        return c;
+    }
+    mutable std::mutex cacheMtx_;
+    mutable std::shared_ptr<const Cache> cache_;
+    mutable std::atomic<unsigned long> cacheBuilds_{0};
+
     mutable std::mutex m_;
     std::string dir_, radio_;
     std::vector<std::string> redact_;
@@ -425,6 +521,9 @@ struct NavtexMsg {
     int64_t startedAt = 0;    // UTC seconds
     int lost = 0, chars = 0;
     bool haveFec = false; unsigned long fecClean = 0, fecRepaired = 0, fecLost = 0;
+    int gaps = 0; int64_t gapMs = 0;   // ★ fades survived (navtex.ts navtexGapMarker) — shown in the text and the title
+    /** ★ V12 beta 4: "B · Oostende, Belgium 🇧🇪" when the station could be named (navtex::label), else empty → "Station B". */
+    std::string station;
 };
 
 class NavtexAsm {
@@ -450,8 +549,8 @@ public:
     /** 75 s of nothing: an unfinished message ends "[end lost]". A lock lost and not regained within kLockBlipMs: the
      *  message ends where it was lost. */
     void tick(int64_t now) {
-        if (cut_.on && !cut_.relocked && !locked_ && now - cut_.atMs >= kLockBlipMs) { closeAtCut(now); return; }
         if (!lastTextAt_ || now - lastTextAt_ < kEndLostMs) return;
+        if (cut_.on && !cut_.relocked) { closeAtCut(now); return; }   // ★ silent for good while unlocked: ends at the loss
         if (inMsg_ || alnum(seg_) >= kOrphanMin) finish(build(seg_, true));
         seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; cut_ = Cut();
     }
@@ -465,8 +564,18 @@ public:
             seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
             return;
         }
+        // ★★★ A FADE IS NOT AN END (Lenovo, beta3: 517.5 kHz lost lock 5–15 s at a time): carry on in the same message, the
+        //     gap shown where it was ("[… signal lost 12 s …]") and the hunting garbage dropped. Only NNNN, a new ZCZC or
+        //     75 s of silence close a message — navtex.ts, the same rule.
         if (!was && locked_ && cut_.on && !cut_.relocked) {
-            if (now - cut_.atMs >= kLockBlipMs) { closeAtCut(now); return; }
+            const int64_t lost = now - cut_.atMs;
+            if (lost >= kLockBlipMs) {
+                const size_t at = std::min(cut_.at, seg_.size());
+                char m[64]; std::snprintf(m, sizeof m, "\n[\xe2\x80\xa6 signal lost %lld s \xe2\x80\xa6]\n", (long long)std::max<int64_t>(1, (lost + 500) / 1000));
+                seg_ = seg_.substr(0, at) + m;
+                gaps_++; gapMs_ += lost;
+                scanFrom_ = std::min(scanFrom_, at);
+            }
             cut_.relocked = true;
         }
     }
@@ -476,7 +585,7 @@ public:
         seg_.clear(); inMsg_ = false; scanFrom_ = 0; cut_ = Cut();
     }
     /** A retune: the text from here is another transmission — drop what was arriving (as the client's clearLive). */
-    void clearLive() { seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; locked_ = false; cut_ = Cut(); }
+    void clearLive() { seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; locked_ = false; cut_ = Cut(); gaps_ = 0; gapMs_ = 0; }
     /** Lock losses seen (blips included) — for the log. */
     unsigned long lockLosses() const { return lockLosses_; }
 
@@ -490,14 +599,16 @@ public:
             default: return b2 >= 'A' && b2 <= 'Z' ? std::string("Subject ") + b2 : "Subject ?";
         }
     }
-    /** "Station G · Met warning · #98 · 2 repaired" — navtexTitle(). */
+    /** "Station G · Met warning · #98 · 2 repaired" — navtexTitle(); "B · Oostende, Belgium 🇧🇪 · …" once m.station is set. */
     static std::string title(const NavtexMsg& m) {
         if (m.startLost) return "Start lost";
         const std::string mid = "\xc2\xb7";
-        std::string t = std::string("Station ") + (m.id.size() == 4 && m.id[0] >= 'A' && m.id[0] <= 'Z' ? std::string(1, m.id[0]) : "?");
+        std::string t = !m.station.empty() ? m.station
+                      : std::string("Station ") + (m.id.size() == 4 && m.id[0] >= 'A' && m.id[0] <= 'Z' ? std::string(1, m.id[0]) : "?");
         t += " " + mid + " " + subject(m.id.size() == 4 ? m.id[1] : '?');
         const bool serial = m.id.size() == 4 && std::isdigit((unsigned char)m.id[2]) && std::isdigit((unsigned char)m.id[3]);
         t += " " + mid + " #" + (serial ? m.id.substr(2) : "??");
+        if (m.gaps) t += " " + mid + " gaps: " + std::to_string(m.gaps) + " (" + std::to_string((long long)((m.gapMs + 500) / 1000)) + " s)";
         if (m.haveFec) {
             if (m.fecRepaired) t += " " + mid + " " + std::to_string(m.fecRepaired) + " repaired";
             if (m.fecLost) t += " " + mid + " " + std::to_string(m.fecLost) + " lost";
@@ -577,6 +688,7 @@ private:
         m.text = cleanText(body);
         for (char c : m.text) { if (c == '_') { m.lost++; m.chars++; } else if (std::isalnum((unsigned char)c)) m.chars++; }
         m.endLost = endLost;
+        m.gaps = gaps_; m.gapMs = gapMs_;
         if (inMsg_) { m.id = hdrId_; m.startedAt = hdrAt_ / 1000; }
         else { m.startLost = true; m.startedAt = segStartedAt_ / 1000; }
         return m;
@@ -587,7 +699,7 @@ private:
         if (inMsg_ || alnum(body) >= kOrphanMin) finish(build(body, true));
         seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
     }
-    void finish(const NavtexMsg& m) { if (onMessage) onMessage(m); }
+    void finish(const NavtexMsg& m) { gaps_ = 0; gapMs_ = 0; if (onMessage) onMessage(m); }
     void scan(int64_t now) {
         for (;;) {
             int kind = 0; size_t at = 0, end = 0; std::string id; long waitAt = -1;
@@ -608,7 +720,7 @@ private:
                 inMsg_ = false;
             } else {
                 if (inMsg_ || alnum(before) >= kOrphanMin) finish(build(before, true));
-                inMsg_ = true; hdrId_ = id; hdrAt_ = now;
+                inMsg_ = true; hdrId_ = id; hdrAt_ = now; gaps_ = 0; gapMs_ = 0;
             }
             seg_.erase(0, end);
             segStartedAt_ = now; scanFrom_ = 0;
@@ -621,6 +733,7 @@ private:
     size_t scanFrom_ = 0;
     struct Cut { bool on = false; size_t at = 0; int64_t atMs = 0; bool relocked = false; } cut_;
     unsigned long lockLosses_ = 0;
+    int gaps_ = 0; int64_t gapMs_ = 0;
 };
 
 } // namespace gallery

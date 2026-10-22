@@ -2,6 +2,7 @@
 // Real-shaped traffic: CR CR LF line ends, '_' for a lost character (fsk_decoder.cpp), chunks split anywhere.
 import { NavtexAssembler, NAVTEX_END_LOST_MS, navtexTitle, navtexLostPct, navtexBody, navtexFileName, navtexFileText }
   from '../src/utils/navtex.ts';
+import { navtexStationLabel, navtexPositions } from '../src/utils/navtexStations.generated.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -224,7 +225,32 @@ for (const bad of ['Z__C GB98', 'ZC C GB98', 'ZCZC ____', 'ZCZC _ _9', 'ZCZE GB9
   let u = feed(b, 'ZCZC GA01\r\r\nHALF A MESSAGE', 4);
   b.lockState(1, u);
   ok(!b.tick(u + 1000) && b.receiving, 'lost 1 s: still open (it may be a blip)');
-  ok(b.tick(u + 1600) && b.live?.endLost && b.live.text === 'HALF A MESSAGE', 'lost 1.6 s: closed [end lost] at the cut');
+  // ★ beta4 (Lenovo, real fades of 5–15 s): a lock loss never closes a message — only NNNN, a new ZCZC, or 75 s of silence.
+  ok(!b.tick(u + 1600) && b.receiving, 'lost 1.6 s: still open (it may be a fade)');
+  ok(b.tick(u + NAVTEX_END_LOST_MS + 1) && b.live?.endLost && b.live.text === 'HALF A MESSAGE', 'silent for 75 s: closed [end lost], at the cut');
+}
+// 11c. ★★★ FADES (Lenovo, 12.0.0~beta3, 517.5 kHz: lock lost 5–15 s at a time): ONE message, the gaps shown and counted.
+{
+  const a = new NavtexAssembler();
+  a.lockState(3, T0);
+  let t = feed(a, 'ZCZC VA28\r\r\nDOVER STRAIT WIND SOUTHWEST 6\r\r\n', 4);
+  a.lockState(1, t); feed(a, 'XQ_', 3, t + 500); a.lockState(3, t + 12_000); t += 12_100;   // a 12 s fade, garbage while hunting
+  t = feed(a, 'THAMES SOUTHWEST 5 TO 7\r\r\n', 4, t);
+  a.lockState(1, t); a.lockState(3, t + 15_000); t += 15_100;                               // and a 15 s one
+  t = feed(a, 'DOVER RAIN LATER\r\r\nNNNN\r\r\n', 4, t);
+  const m = a.live!;
+  ok(m.id === 'VA28' && m.done && !m.endLost && !m.startLost && a.prev === null, '★ two long fades mid-message: ONE message, ZCZC to NNNN, not partial');
+  ok((m.text.match(/signal lost/g) || []).length === 2 && m.text.includes('[\u2026 signal lost 12 s \u2026]') && m.text.includes('[\u2026 signal lost 15 s \u2026]'),
+     '...with two gap markers where it faded: ' + JSON.stringify(m.text));
+  ok(!m.text.includes('XQ_'), '...and the hunting garbage dropped');
+  ok(m.gaps === 2 && navtexTitle(m).includes('gaps: 2 (27 s)'), `...its title says so: "${navtexTitle(m)}"`);
+  // A fade, then ANOTHER station's ZCZC: two messages (the takeover protection).
+  const b = new NavtexAssembler();
+  b.lockState(3, T0);
+  let u = feed(b, 'ZCZC VA29\r\r\nFIRST STATION TEXT\r\r\n', 4);
+  b.lockState(1, u); b.lockState(3, u + 8000); u += 8100;
+  u = feed(b, 'ZCZC LB04\r\r\nSECOND STATION\r\r\nNNNN\r\r\n', 4, u);
+  ok(b.prev?.id === 'VA29' && b.prev.endLost && b.live?.id === 'LB04' && !b.live.text.includes('FIRST'), '★ a fade then a different ZCZC: two messages');
 }
 
 // 12. ★★ CO-CHANNEL TAKEOVER on one frequency (NickB, 2026-10-12, 490 kHz: E transmitting, C comes up on top with a
@@ -257,16 +283,16 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   t = feed(a, 'ZCZC CB01\r\r\nGALE WARNING SOLE SEVERE GALE 9 IMMINENT\r\r\nFITZRO', 4, t);
   ok(a.prev?.id === 'EA12' && a.prev.endLost && a.prev.done && a.prev.text.endsWith('POSITI'), "C's ZCZC ends E at the cut: [end lost], its text as far as it came");
   ok(a.live?.id === 'CB01' && !a.live.done && a.prev?.id === 'EA12' && !a.prev.text.includes('X_Q'), 'C arriving, E under PREV, the garbage dropped');
-  ok(!a.lockState(0, t), 'fade: the lock lost — C held open at the cut');
-  ok(a.lockState(3, t + 2000), '...relocked 2 s later (longer than a blip): C closes at the cut');
-  ok(a.live?.id === 'CB01' && a.live.endLost && a.live.text.endsWith('FITZRO'), 'C [end lost], only its own text');
+  // ★★ beta4 (Stuart, the Lenovo's real fades): a lock loss no longer closes a message at all — only a ZCZC does. So C
+  //    fading with no NNNN and E's remainder arriving after it now stays in C's message, with the gap SHOWN where it was;
+  //    a NEW ZCZC still always splits (the takeover protection above, and the next test).
+  ok(!a.lockState(0, t), 'fade: the lock lost — C held open');
+  ok(!a.lockState(3, t + 2000) && a.receiving && a.live?.id === 'CB01', '...relocked 2 s later: C carries on, with a gap marker');
   feed(a, E2, 4, t + 2000);
   const m = a.live!;
-  ok(m.startLost && m.id === null && m.text.startsWith('ON 48-20N'), "E's remainder is [start lost], not C: " + JSON.stringify(m.text.slice(0, 20)));
-  ok(a.prev?.id === 'CB01' && !a.prev.text.includes('48-20N'), 'nothing of E joined C');
-  // E's own NNNN closes the fragment — it is not attached to C (or to E) by guesswork, and takes no FEC count.
+  ok(m.id === 'CB01' && m.text.includes('[\u2026 signal lost 2 s \u2026]') && m.gaps === 1, 'what follows a fade joins C after the marker (the trade made for real fades)');
   feed(a, 'NNNN\r\r\n', 4, t + 60_000);
-  ok(a.live?.startLost === true && a.live.done && !a.setFec({ clean: 1, repaired: 0, lost: 0 }), 'its NNNN ends the fragment; no count');
+  ok(a.live?.id === 'CB01' && a.live.done && !a.live.endLost, 'and the NNNN closes it as one message');
 }
 {
   // Only a 3 → below-3 change is an event: NoSignal ↔ hunting while unlocked, a first report, a lock regained.
@@ -294,6 +320,71 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   const v = a.version;
   a.reset();
   ok(a.live === null && a.prev === null && !a.receiving && a.version > v, 'reset clears and bumps the version');
+}
+
+// 11. ★ V12 beta 4: the STATION by name (navtexStations.generated.ts, NGA Pub. 117) — the Lenovo's evening of
+//     2026-10-22 at IO92nh (Moulton, Northamptonshire). The server's copy of the rule is tested with the same cases in
+//     vibeserver/test-bgdecode.cpp.
+{
+  const LA = 52.3125, LO = -0.875;
+  const L = (b1: string, hz: number, text = '', la = LA, lo = LO) => navtexStationLabel(b1, hz, la, lo, text);
+  ok(L('B', 489500) === 'B · Oostende, Belgium \u{1F1E7}\u{1F1EA}', 'B on 490 from Moulton = Oostende, Belgium + flag: ' + L('B', 489500));
+  ok(L('U', 489500).startsWith('U · Cullercoats, United Kingdom'), 'U on 490 = Cullercoats');
+  ok(L('A', 489500).startsWith('A · Malin Head, Ireland'), 'A on 490 = Malin Head');
+  ok(L('L', 489500).startsWith('L · Hamburg, Germany'), 'L on 490 = Hamburg (731 km)');
+  ok(L('G', 517500).startsWith('G · Cullercoats, United Kingdom'), 'G on 518 = Cullercoats');
+  ok(L('V', 517500).startsWith('V · Oostende, Belgium'), 'V on 518 = Oostende');
+  ok(L('L', 517500).startsWith('L · Rogaland, Norway'), 'L on 518 = Rogaland (813 km): ' + L('L', 517500));
+  ok(L('J', 517500).startsWith('J · Stockholm, Sweden'), 'J on 518 = Stockholm (1053 km)');
+  ok(L('I', 517500).startsWith('I · Varberg, Sweden'), 'I on 518 = Varberg (1004 km)');
+  ok(L('N', 517500).startsWith('N · Orlandet, Norway'), 'N on 518 = Orlandet (1400 km)');
+  ok(L('M', 517500) === 'Station M', 'M on 518: Casablanca is 2150 km away — the letter only, never a guess');
+  ok(L('W', 517500) === 'W \u00b7 Corsen \u{1F1EB}\u{1F1F7} or Valentia \u{1F1EE}\u{1F1EA}?', 'W on 518 with no evidence: Corsen 520 km / Valentia 648 km — both, asked: ' + L('W', 517500));
+  ok(L('W', 517500, 'VALENTIA RADIO GALE WARNING').startsWith('W · Valentia, Ireland'), 'the text names Valentia → Valentia');
+  ok(L('W', 517500, 'CROSS CORSEN').startsWith('W · Corsen, France'), 'the text names Corsen → Corsen');
+  ok(L('W', 517500, 'ZCZC WB51\nMRSC MALIN, EJM.\nGALE WARNING THURSDAY 22 OCTOBER 2149 UTC 12\nSHANNON\nVIOLENT STORM FORCE 11\nNNNN').endsWith(' or Valentia \u{1F1EE}\u{1F1EA}?'),
+     "tonight's W (MRSC MALIN — Malin Head is not on W/518, so it does not count; no positions): still the two");
+  // ★★ the likelihood score (owner-approved): positions, language, DX
+  ok(L('W', 517500, 'IRISH COASTAL WARNING\nSUBMARINE CABLE OPERATIONS IN POSITION 51-30.2N 010-45.0W AND 51-41N 010-30W').startsWith('W \u00b7 Valentia, Ireland'),
+     'a W whose positions are off SW Ireland → Valentia: ' + L('W', 517500, '51-30.2N 010-45.0W 51-41N 010-30W'));
+  ok(L('W', 517500, 'AVURNAV BREST 1234\nZONE 48-10N 005-20W\n48-15.5N 005-05.0W').startsWith('W \u00b7 Corsen, France'), 'a W off Brittany → Corsen');
+  ok(L('B', 489500, 'ZCZC BA10\nKUSTWACHT OOSTENDE BERICHT\nWRAK OP POSITIE 51-14.13N 002-54.22E\nNNNN').startsWith('B \u00b7 Oostende, Belgium'),
+     'BA10 with its coordinates off the Belgian coast → Oostende');
+  const carib = 'ZCZC RA21\nNAVAREA IV 0912/26\nCARIBBEAN SEA. PUERTO RICO.\nUNLIGHTED BUOY ADRIFT IN 18-20.5N 066-30.2W AND 18-11N 065-58W.\nNNNN';
+  const rc = L('R', 517500, carib);
+  ok(/^R · Isabella, United States 🇺🇸 · DX [0-9],[0-9]00 km$/.test(rc), '★ a Caribbean warning with Caribbean positions on R/518 from the UK → Isabella (Puerto Rico), DX: ' + rc);
+  ok(L('R', 517500) === 'Station R' || !L('R', 517500).includes('Isabella'), 'the same letter with no evidence never names Isabella from the UK');
+  ok(L('M', 517500, 'SWEDISH NAV WARN 1/26\nSKAGERRAK. KOSTER.\nSOUTH CARDINAL MARK MISSING\nPSN 58-41.9N 010-51.2E') === 'Station M',
+     "tonight's M: a Swedish warning, positions in the Skagerrak, and no M station within 1000 km of them — not one of Pub. 117's: the letter only");
+  ok(L('L', 489500, 'NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E').startsWith('L \u00b7 Hamburg, Germany'), 'German comma decimals parse');
+  ok(L('J', 517500, 'SWEDISH NAV WARN 225/26\nBOTHNIAN SEA. 60-40.1N 017-55.0E') .startsWith('J \u00b7 Stockholm, Sweden'), 'J with a Baltic position → Stockholm');
+  ok(L('B', 489500, '', NaN, NaN) === 'Station B', 'no server position → the letter only');
+  ok(L('B', 489500, 'OOSTENDERADIO NAV WARNING', NaN, NaN).startsWith('B · Oostende'), 'no position, but the text names it');
+  ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).startsWith('L · Hamburg'), 'the text wins wherever the server is');
+  ok(L('B', 4209500) === 'Station B', 'HF 4209.5: Pub. 117 lists no HF letters — the letter only');
+  ok(L('B', 10_000_000) === 'Station B', 'not on a NAVTEX channel → the letter only');
+  ok(L('B', 489500, '', -33.9, 18.4) === 'Station B', 'B on 490 from Cape Town: no evidence, nothing near');
+  ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).includes(' \u00b7 DX 9,'), 'named from far away → "DX 9,…00 km": ' + L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4));
+  // the position parser
+  {
+    const P = navtexPositions;
+    const one = (t: string) => { const p = P(t); return p.length === 1 ? p[0] : null; };
+    const near = (a: [number, number] | null, la: number, lo: number) => !!a && Math.abs(a[0] - la) < 0.01 && Math.abs(a[1] - lo) < 0.01;
+    ok(near(one('IN 51-14.13N 002-54.22E.'), 51.2355, 2.9037), 'DD-MM.mmN DDD-MM.mmE');
+    ok(near(one('5114N 00254E'), 51.2333, 2.9), 'DDMMN DDDMME');
+    ok(near(one('51 14.1N 002 54.2E'), 51.235, 2.9033), 'DD MM.mN DDD MM.mE');
+    ok(near(one('54-19,2N  005-44,2E'), 54.32, 5.7367), 'comma decimals, two spaces');
+    ok(near(one('33-55S 018-25E'), -33.9167, 18.4167), 'south and east');
+    ok(P('PSN 58-41.9N 010-51._E').length === 0, "a lost '_' → ignored, never half-read");
+    ok(P('99-10N 010-10E 51-75N 002-00E 51-10N 190-00E').length === 0, 'out-of-range degrees and minutes → ignored');
+    ok(P('TEL 1234567 2149 UTC 12 CHART 28').length === 0, 'numbers that are not positions → none');
+  }
+  const m = new NavtexAssembler();
+  feed(m, 'ZCZC BA10\r\r\nOOSTENDERADIO\r\r\nNNNN\r\r\n', 5);
+  const t = navtexTitle(m.live!, { dialHz: 489500, lat: LA, lon: LO });
+  ok(t.startsWith('B · Oostende, Belgium \u{1F1E7}\u{1F1EA} · Nav warning · #10'), 'the title carries the station: ' + t);
+  ok(navtexTitle(m.live!).startsWith('Station B · Nav warning'), 'no place → "Station B" as before');
+  ok(navtexFileText(m.live!, { dialHz: 489500, lat: LA, lon: LO }).startsWith('NAVTEX · B · Oostende'), 'SAVE writes the station too');
 }
 
 console.log(`navtex: ${pass} passed, ${fail} failed`);

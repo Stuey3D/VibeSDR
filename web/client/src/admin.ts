@@ -24,6 +24,7 @@ import { loadVibemapSource } from './chunkCache';
 import { loadLeafletInto } from './leafletAsset';
 import { pushBack } from './gamepad';
 import { betaConfirmText, updateButton, updateOfferText, type UpdateState } from './updateOffer';
+import { bgLines } from './adminBg';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
  *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
  *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
@@ -460,6 +461,24 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
   }
 
   $('adminHealth').innerHTML = out.join('');
+  renderBg(radios);
+}
+
+/** ★★ V12 beta 4: what background decoding is doing on each radio (adminBg.ts). The section is there only when some
+ *  radio has it set up — an owner who never used it sees nothing new. A row per VFO, so the block keeps its height
+ *  while the numbers change. */
+function renderBg(radios: Array<{ radio: string; data: any }>) {
+  const blocks: string[] = [];
+  for (const r of radios) {
+    const l = bgLines(r.data?.bgDecode);
+    if (!l) continue;
+    const radio = r.data?.radio ?? {};
+    const name = r.radio || (radio.present ? String(radio.driver).toUpperCase() : 'RADIO');
+    blocks.push(`<div class="aBg${l.warn ? ' warn' : ''}"><div class="h"><b>${esc(name)}</b> \u00b7 ${esc(l.head)}</div>`
+      + l.rows.map((x) => `<div class="r">${esc(x)}</div>`).join('') + '</div>');
+  }
+  $('secBg').hidden = !blocks.length;
+  $('adminBg').innerHTML = blocks.join('');
 }
 
 /** Distinct addresses per country across the WHOLE machine, newest 24h, biggest first.

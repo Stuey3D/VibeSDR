@@ -32,6 +32,7 @@
 /** ★ 75 s of nothing ends a message whose NNNN was lost. A NAVTEX message never pauses mid-text (100 baud, FEC
  *  repeats every character), so a minute of silence means the transmission has ended, not a gap in it — and it is
  *  short enough that a reader is not left looking at "receiving" long after the station has gone quiet. */
+import { navtexStationLabel } from './navtexStations.generated.ts';   // ★ .ts: Node runs this file directly (scripts/test_navtex.ts)
 export const NAVTEX_END_LOST_MS = 75_000;
 /** Letters/digits an orphan fragment (no header seen) must hold before it is shown as a "[start lost]" message. */
 export const ORPHAN_MIN_ALNUM = 16;
@@ -42,6 +43,12 @@ export const ORPHAN_MIN_ALNUM = 16;
  *  own ZCZC arrives — either way the message ends where the lock was lost, and the text after that point (the takeover,
  *  or the decoder's garbage while hunting) is not glued onto it. */
 export const LOCK_BLIP_MS = 1500;
+/** ★★★ A FADE IS NOT AN END EITHER (Lenovo, 12.0.0~beta3, 2026-10-22: 517.5 kHz lost lock for 5–15 s at a time — real
+ *  fades — and each one still split a message). A lock loss never closes a message now: it closes only on its NNNN, a
+ *  new ZCZC (the co-channel takeover protection, unchanged) or NAVTEX_END_LOST_MS of silence. A gap longer than
+ *  LOCK_BLIP_MS is SHOWN in the text where it happened, and counted in the title ("gaps: 2 (27 s)"); the decoder's
+ *  hunting garbage between the loss and the relock is dropped. */
+export function navtexGapMarker(ms: number): string { return `[\u2026 signal lost ${Math.max(1, Math.round(ms / 1000))} s \u2026]`; }
 
 export interface NavtexMessage {
   /** B1B2B3B4 as received ('_' where lost), or null when the start was lost. */
@@ -63,6 +70,9 @@ export interface NavtexMessage {
   /** Characters lost ('_') and characters received (letters, digits, '_') in the text. */
   lost: number;
   chars: number;
+  /** ★ Fades the message survived (see navtexGapMarker): how many, and their total length in ms. */
+  gaps?: number;
+  gapMs?: number;
   /** ★ The decoder's OWN per-message FEC count, when the server sends one (VibeServer op 0x07, 2026-10-05) — absent
    *  from an older server, UberSDR or OpenWebRX, which leave the '_'-derived figures above as the only measure. */
   fec?: NavtexFec;
@@ -95,14 +105,22 @@ export function navtexSubject(b2: string | null): string | null {
   return SUBJECTS[b2] ?? `Subject ${b2}`;
 }
 
+/** Where a message was heard: the dial and the RECEIVING SERVER's position (NaN when it has none) — what names its
+ *  station (navtexStation, from NGA Pub. 117). */
+export interface NavtexPlace { dialHz: number; lat: number; lon: number }
+
 /** "Station G · Met warning · #98", or "[start lost]" for a message joined part way through. With the server's FEC
- *  count: "Station G · Met warning · #98 · 2 repaired · 1 lost" — or "· no errors" when every character read clean. */
-export function navtexTitle(m: NavtexMessage): string {
+ *  count: "Station G · Met warning · #98 · 2 repaired · 1 lost" — or "· no errors" when every character read clean.
+ *  ★ With `place`, the station by name: "B · Oostende, Belgium 🇧🇪 · Met warning · #10" — the server's gallery titles
+ *    use the same table and rule (vibe_navtex_stations.h). */
+export function navtexTitle(m: NavtexMessage, place?: NavtexPlace | null): string {
   if (m.startLost) return 'Start lost';
   const parts: string[] = [];
-  parts.push(m.station ? `Station ${m.station}` : 'Station ?');
+  parts.push(place ? navtexStationLabel(m.station, place.dialHz, place.lat, place.lon, m.text)
+                   : m.station ? `Station ${m.station}` : 'Station ?');
   parts.push(navtexSubject(m.subject) ?? 'Subject ?');
   parts.push(m.serial ? `#${m.serial}` : '#??');
+  if (m.gaps) parts.push(`gaps: ${m.gaps} (${Math.round((m.gapMs ?? 0) / 1000)} s)`);
   if (m.fec) {
     // ★ Only what happened: a repaired count of 0 is not news. A REPAIRED character prints exactly like a clean one,
     //   so this is the only place a reader can learn the FEC worked for it (the '_' count cannot see it).
@@ -146,12 +164,12 @@ export function navtexFileName(m: NavtexMessage): string {
 }
 
 /** The saved file: two lines saying what and when, then the message exactly as shown. */
-export function navtexFileText(m: NavtexMessage): string {
+export function navtexFileText(m: NavtexMessage, place?: NavtexPlace | null): string {
   const d = new Date(m.startedAt);
   const when = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} `
              + `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())} UTC`;
   const pct = navtexLostPct(m);
-  const head = `NAVTEX · ${navtexTitle(m)}\nReceived ${when}${pct != null ? ` · ${pct}% of characters lost` : ''}`;
+  const head = `NAVTEX · ${navtexTitle(m, place)}\nReceived ${when}${pct != null ? ` · ${pct}% of characters lost` : ''}`;
   return `${head}\n\n${navtexBody(m)}\n`;
 }
 
@@ -258,12 +276,15 @@ export class NavtexAssembler {
   /** ★★ The lock was lost while text was arriving: where in `seg` (the cut) and when. Decided by what follows — a relock
    *  inside LOCK_BLIP_MS then NNNN = a blip, one message; a longer loss, or another ZCZC = the message ends at the cut. */
   private pendingCut: { at: number; atMs: number; relocked: boolean } | null = null;
+  /** ★ The fades the message arriving has survived. */
+  private gaps = 0;
+  private gapMs = 0;
   /** Bumped on every visible change, so a UI can tell cheaply whether to redraw. */
   version = 0;
 
   reset(): void {
     this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = 0; this.lastTextAt = 0;
-    this.scanFrom = 0; this.finished = []; this.liveCleared = false; this.locked = null; this.pendingCut = null; this.version++;
+    this.scanFrom = 0; this.finished = []; this.liveCleared = false; this.locked = null; this.pendingCut = null; this.gaps = 0; this.gapMs = 0; this.version++;
   }
 
   /** ★★ CLR, and a RETUNE (NickB, 2026-10-12: "changing from 518 to 490 when it's mid way through a message so it gets
@@ -274,7 +295,7 @@ export class NavtexAssembler {
    *  sends the picture to PREV. reset() is the other thing — a fresh box (open / close / switch), nothing kept. */
   clearLive(): void {
     this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = 0; this.lastTextAt = 0;
-    this.scanFrom = 0; this.liveCleared = this.finished.length > 0; this.locked = null; this.pendingCut = null; this.version++;
+    this.scanFrom = 0; this.liveCleared = this.finished.length > 0; this.locked = null; this.pendingCut = null; this.gaps = 0; this.gapMs = 0; this.version++;
   }
 
   /** Feed decoded characters as they arrive. */
@@ -289,9 +310,9 @@ export class NavtexAssembler {
 
   /** Close a message whose NNNN never came, once the station has been quiet for NAVTEX_END_LOST_MS. */
   tick(nowMs: number): boolean {
-    // ★ A lock lost and not regained within LOCK_BLIP_MS: the message ends where it was lost.
-    if (this.pendingCut && !this.pendingCut.relocked && this.locked === false && nowMs - this.pendingCut.atMs >= LOCK_BLIP_MS) return this.closeAtCut(nowMs);
     if (!this.lastTextAt || nowMs - this.lastTextAt < NAVTEX_END_LOST_MS) return false;
+    // ★ Silent for good while the lock was lost: the message ends where it was lost.
+    if (this.pendingCut && !this.pendingCut.relocked) return this.closeAtCut(nowMs);
     const cur = this.current();
     if (!cur) return false;
     this.finish({ ...cur, endLost: true, done: true });
@@ -321,10 +342,20 @@ export class NavtexAssembler {
       this.version++;
       return false;
     }
-    // Relocked: after a LONG loss the message ends at the cut (a takeover, a fade); after a blip it carries on.
+    // Relocked: a blip carries on invisibly; a FADE carries on too, with the gap shown where it happened (the hunting
+    // garbage after the cut dropped). Either way the cut is kept until the next boundary: a ZCZC still ends it there.
     if (!was && this.locked && this.pendingCut && !this.pendingCut.relocked) {
-      if (nowMs - this.pendingCut.atMs >= LOCK_BLIP_MS) return this.closeAtCut(nowMs);
-      this.pendingCut.relocked = true;          // ★ a blip — but the cut is kept until the next boundary: a ZCZC still ends it there
+      const lost = nowMs - this.pendingCut.atMs;
+      if (lost >= LOCK_BLIP_MS) {
+        const at = this.pendingCut.at;
+        this.seg = this.seg.slice(0, at) + '\n' + navtexGapMarker(lost) + '\n';
+        this.gaps++; this.gapMs += lost;
+        this.scanFrom = Math.min(this.scanFrom, at);
+        this.pendingCut = { at, atMs: this.pendingCut.atMs, relocked: true };
+        this.version++;
+        return false;
+      }
+      this.pendingCut.relocked = true;
     }
     return false;
   }
@@ -371,6 +402,7 @@ export class NavtexAssembler {
   }
 
   private finish(m: NavtexMessage): void {
+    this.gaps = 0; this.gapMs = 0;         // ★ the next message starts with none
     this.finished.push(m);
     this.liveCleared = false;
     if (this.finished.length > 2) this.finished.splice(0, this.finished.length - 2);
@@ -386,10 +418,11 @@ export class NavtexAssembler {
         id, station: L(id[0]), subject: L(id[1]),
         serial: /^[0-9]{2}$/.test(id.slice(2)) ? id.slice(2) : null,
         text, startLost: false, endLost, done, startedAt: this.hdr.startedAt, lost, chars,
+        ...(this.gaps ? { gaps: this.gaps, gapMs: this.gapMs } : {}),
       };
     }
     return { id: null, station: null, subject: null, serial: null, text, startLost: true, endLost, done,
-             startedAt: this.segStartedAt, lost, chars };
+             startedAt: this.segStartedAt, lost, chars, ...(this.gaps ? { gaps: this.gaps, gapMs: this.gapMs } : {}) };
   }
 
   private cur: { v: number; m: NavtexMessage | null } = { v: -1, m: null };
@@ -430,6 +463,7 @@ export class NavtexAssembler {
         if (this.inMsg || alnum(before) >= ORPHAN_MIN_ALNUM) this.finish(this.build(before, true, true));
         this.inMsg = true;
         this.hdr = { id: found.id, startedAt: nowMs };
+        this.gaps = 0; this.gapMs = 0;
       }
       this.seg = this.seg.slice(found.end);
       this.segStartedAt = nowMs;

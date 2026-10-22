@@ -1442,6 +1442,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #bookmarksPanel, #recordingsPanel, #decodersPanel, #galleryPanel { width: min(94vw, 640px); }
 /* ★★ V12 THE GALLERY — what this server's decoders heard, newest first; a NAVTEX message opens inline. */
 #galList .sres { cursor: pointer; flex-wrap: wrap; }
+#galList .sres:focus-visible { outline: 2px solid var(--freq); outline-offset: -2px; }
+#galPager { flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+#galPager .gap { color: var(--unit); padding: 0 2px; }
+#galPager .lab { color: var(--unit); font-size: 11px; margin-left: auto; }
+#galPager .btn:disabled { opacity: 0.35; }
 #galList .sres .n { white-space: normal; }
 #galList .tag { font-size: 10px; letter-spacing: 1px; color: var(--unit); border: 1px solid var(--btn-border);
                 border-radius: 4px; padding: 0 4px; margin-left: 4px; }
@@ -2772,6 +2777,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    indistinguishable from a very cold Pi, and an owner who believes it will not check the fan. */
 .aCard.none .v  { color: var(--unit); font-size: 14px; }
 
+/* ★ V12 beta 4: background decoding — a line per radio, a row per VFO (fixed rows: the block does not jump). */
+#adminBg .aBg { background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 8px;
+  padding: 8px 11px; margin-bottom: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+#adminBg .aBg.warn { border-color: rgba(255,180,0,0.75); }
+#adminBg .aBg .h { color: var(--freq); overflow-wrap: anywhere; }
+#adminBg .aBg .r { color: var(--unit); margin-top: 3px; padding-left: 12px; overflow-wrap: anywhere; }
 #adminGraphs { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 #adminGraphs figure { margin: 0; background: var(--btn-bg); border: 1px solid var(--btn-border);
                       border-radius: 8px; padding: 8px 10px; }
@@ -3737,6 +3748,12 @@ select.btn { padding: 6px 8px; }
     <h2>HEALTH</h2>
     <div id="adminHealth" class="aCards"></div>
 
+    <!-- ★ V12 beta 4: background decoding per radio (admin.ts renderBg) — hidden unless a radio has it set up. -->
+    <div id="secBg" hidden>
+    <h2>BACKGROUND DECODING <span class="dim">— measured, % of one core over ~10 s</span></h2>
+    <div id="adminBg"></div>
+    </div>
+
     <h2>THE LAST HOUR</h2>
     <div id="adminGraphs"></div>
 
@@ -4403,6 +4420,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-kind="ft8">FT8</button>
   </div>
   <div id="galList"></div>
+  <!-- ★ V12 beta 4: pages (main.ts renderGalleryPager) — "‹ Newer · 1 … 6 7 8 … 14 · Older ›", "Page 7 of 14". -->
+  <div class="btnRow" id="galPager" hidden></div>
   <div id="galView" hidden>
     <div class="btnRow">
       <button class="btn" id="galBack">&#8592; BACK</button>

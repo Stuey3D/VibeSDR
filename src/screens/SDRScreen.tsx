@@ -1609,6 +1609,10 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  (which falls back to Region 1) chose 9 (Stuart, 2026-10-04). /location has lon, or a grid. */
             const lon = typeof j?.lon === 'number' ? j.lon : gridToLatLon(j?.grid || j?.locator || '')?.lon;
             if (typeof lon === 'number' && Number.isFinite(lon)) setRecvLon(lon);
+            // ★ V12: and the whole position, for naming a NAVTEX station from its letter (DecoderPanel receiverPos).
+            const lat = typeof j?.lat === 'number' ? j.lat : gridToLatLon(j?.grid || j?.locator || '')?.lat;
+            setServerPos(typeof lat === 'number' && typeof lon === 'number' && Number.isFinite(lat) && Number.isFinite(lon)
+                         && (lat !== 0 || lon !== 0) ? { lat, lon } : null);
           }
         } catch { if (!cancelled) setReceiverIso(''); }
         return;
@@ -9183,6 +9187,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // status page (recvLon via onReceiverLon — OWRX/UberSDR /status.json,
   // KiwiSDR /status). NOT the device location.
   const [recvLon, setRecvLon] = useState<number | null>(null);
+  /** ★ V12: a VibeServer's own position from /location (lat/lon or its locator) — names NAVTEX stations. */
+  const [serverPos, setServerPos] = useState<{ lat: number; lon: number } | null>(null);
   const ituRegion = useMemo(
     () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
@@ -11453,6 +11459,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <DecoderPanel
           activeDecoder={activeDecoder}
           tunedHz={status.frequency}
+          receiverPos={serverPos ?? recvLoc}
           decoderText={decoderText}
           aircraft={aircraft}
           decoderStatus={decoderStatus}

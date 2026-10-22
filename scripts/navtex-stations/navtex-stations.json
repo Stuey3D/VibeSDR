@@ -1,0 +1,2317 @@
+{
+ "source": "NGA Pub. 117 Radio Navigational Aids, Chapter 3, 300C.1 and 300C.2 (NAVTEX Stations). A US Government work, public domain. https://msi.nga.mil — Publications → Radio Navigational Aids → Chapter 3.",
+ "edition": "2021 edition (PDF dated 2021-03-11), fetched 2026-10-22 from msi.nga.mil (117chapter3.pdf)",
+ "stations": [
+  {
+   "country": "United States",
+   "name": "Boston (NMF)",
+   "lat": 41.717,
+   "lon": -70.5,
+   "rangeNm": "200",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "F"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "Portsmouth/ CAMSLANT (NMN)",
+   "lat": 36.717,
+   "lon": -76.0,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "N"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "Charleston (NME)",
+   "lat": 32.85,
+   "lon": -79.983,
+   "rangeNm": "200",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "E"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "Miami (NMA)",
+   "lat": 25.617,
+   "lon": -80.383,
+   "rangeNm": "240",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "A"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "Isabella (NMR)",
+   "lat": 18.467,
+   "lon": -67.067,
+   "rangeNm": "200",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "R"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "New Orleans (NMG)",
+   "lat": 29.883,
+   "lon": -89.95,
+   "rangeNm": "200",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "G"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "Cambria (NMQ)",
+   "lat": 35.517,
+   "lon": -121.05,
+   "rangeNm": "350",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "Q"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "Point Reyes RCF (San Francisco) CAMSPAC (NMC)",
+   "lat": 37.917,
+   "lon": -122.733,
+   "rangeNm": "350",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "C"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "Astoria (NMW)",
+   "lat": 46.167,
+   "lon": -123.817,
+   "rangeNm": "216",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "W"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "Kodiak (NOX)",
+   "lat": 57.767,
+   "lon": -152.567,
+   "rangeNm": "200",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "J"
+    },
+    {
+     "khz": 518.0,
+     "b1": "X"
+    }
+   ]
+  },
+  {
+   "country": "United States",
+   "name": "Honolulu (NMO)",
+   "lat": 21.417,
+   "lon": -158.15,
+   "rangeNm": "350",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "O"
+    }
+   ]
+  },
+  {
+   "country": "Algeria",
+   "name": "Bordj-el-Kiffan (7TA)",
+   "lat": 36.733,
+   "lon": 3.167,
+   "rangeNm": "150",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "V"
+    },
+    {
+     "khz": 518.0,
+     "b1": "B"
+    }
+   ]
+  },
+  {
+   "country": "Argentina",
+   "name": "Bahia Blanca (L2I)",
+   "lat": -38.717,
+   "lon": -62.1,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "D"
+    },
+    {
+     "khz": 518.0,
+     "b1": "P"
+    }
+   ]
+  },
+  {
+   "country": "Argentina",
+   "name": "Buenos Aires (L2B)",
+   "lat": -34.6,
+   "lon": -58.367,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "F"
+    },
+    {
+     "khz": 518.0,
+     "b1": "R"
+    }
+   ]
+  },
+  {
+   "country": "Argentina",
+   "name": "Comodoro Rivadavia (L2W)",
+   "lat": -45.85,
+   "lon": -67.417,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "C"
+    },
+    {
+     "khz": 518.0,
+     "b1": "O"
+    }
+   ]
+  },
+  {
+   "country": "Argentina",
+   "name": "Mar del Plata (L2P)",
+   "lat": -38.05,
+   "lon": -57.533,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "E"
+    },
+    {
+     "khz": 518.0,
+     "b1": "Q"
+    }
+   ]
+  },
+  {
+   "country": "Argentina",
+   "name": "Rio Gallegos (L3D)",
+   "lat": -51.517,
+   "lon": -65.05,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "B"
+    },
+    {
+     "khz": 518.0,
+     "b1": "N"
+    }
+   ]
+  },
+  {
+   "country": "Argentina",
+   "name": "Ushuaia (L3K)",
+   "lat": -54.8,
+   "lon": -68.3,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "A"
+    },
+    {
+     "khz": 518.0,
+     "b1": "M"
+    }
+   ]
+  },
+  {
+   "country": "Azores",
+   "name": "Horta (CTH)",
+   "lat": 38.533,
+   "lon": -28.633,
+   "rangeNm": "640",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "J"
+    },
+    {
+     "khz": 518.0,
+     "b1": "F"
+    }
+   ]
+  },
+  {
+   "country": "Belgium",
+   "name": "Oostende (OST)",
+   "lat": 51.183,
+   "lon": 2.8,
+   "rangeNm": "150",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "B"
+    },
+    {
+     "khz": 518.0,
+     "b1": "V"
+    },
+    {
+     "khz": 518.0,
+     "b1": "T"
+    }
+   ]
+  },
+  {
+   "country": "Bahrain",
+   "name": "Bahrain (A9M)",
+   "lat": 26.15,
+   "lon": 50.467,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "B"
+    }
+   ]
+  },
+  {
+   "country": "Bermuda",
+   "name": "Bermuda (ZBR)",
+   "lat": 32.383,
+   "lon": -64.683,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "B"
+    }
+   ]
+  },
+  {
+   "country": "Bulgaria",
+   "name": "Varna (LZW)",
+   "lat": 43.067,
+   "lon": 27.767,
+   "rangeNm": "350",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "J"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Chebogue(VAR-9)",
+   "lat": 43.733,
+   "lon": -66.117,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "V"
+    },
+    {
+     "khz": 518.0,
+     "b1": "U"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Iqaluit (VFF)",
+   "lat": 63.717,
+   "lon": -68.55,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "S"
+    },
+    {
+     "khz": 518.0,
+     "b1": "T"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Cartwright (VOK)",
+   "lat": 53.7,
+   "lon": -57.183,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "X"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Prescott (XMJ 329)",
+   "lat": 44.933,
+   "lon": -81.233,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "H"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Amphitrite Point (Prince Rupert)",
+   "lat": 48.917,
+   "lon": -125.55,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "H"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Mosie (VCK)",
+   "lat": 50.2,
+   "lon": -66.117,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "D"
+    },
+    {
+     "khz": 518.0,
+     "b1": "C"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Robin Hood Bay (VON)",
+   "lat": 47.617,
+   "lon": -52.667,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "O"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Port Caledonia (VCO)",
+   "lat": 46.183,
+   "lon": -59.9,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "J"
+    },
+    {
+     "khz": 518.0,
+     "b1": "Q"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Thunder Bay (CAN)",
+   "lat": 48.567,
+   "lon": -88.65,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "P"
+    }
+   ]
+  },
+  {
+   "country": "Canada",
+   "name": "Digby Island (Prince Rupert)",
+   "lat": 54.3,
+   "lon": -130.417,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "D"
+    }
+   ]
+  },
+  {
+   "country": "Canary Islands",
+   "name": "Las Palmas (EAL)",
+   "lat": 28.417,
+   "lon": -16.383,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "A"
+    },
+    {
+     "khz": 518.0,
+     "b1": "I"
+    }
+   ]
+  },
+  {
+   "country": "Cape Verde",
+   "name": "Ribeira de Vinha (D4A)",
+   "lat": 16.85,
+   "lon": -25.0,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "P"
+    },
+    {
+     "khz": 518.0,
+     "b1": "U"
+    }
+   ]
+  },
+  {
+   "country": "Chile",
+   "name": "Antofagasta (CBA)",
+   "lat": -23.617,
+   "lon": -70.417,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "H"
+    },
+    {
+     "khz": 518.0,
+     "b1": "A"
+    }
+   ]
+  },
+  {
+   "country": "Chile",
+   "name": "Isla de Pascua (CBY)",
+   "lat": -27.15,
+   "lon": -109.417,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "G"
+    },
+    {
+     "khz": 518.0,
+     "b1": "F"
+    }
+   ]
+  },
+  {
+   "country": "Chile",
+   "name": "Magallanes (CBM)",
+   "lat": -53.15,
+   "lon": -70.967,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "L"
+    },
+    {
+     "khz": 518.0,
+     "b1": "E"
+    }
+   ]
+  },
+  {
+   "country": "Chile",
+   "name": "Puerto Montt (CBP)",
+   "lat": -41.5,
+   "lon": -72.967,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "K"
+    },
+    {
+     "khz": 518.0,
+     "b1": "D"
+    }
+   ]
+  },
+  {
+   "country": "Chile",
+   "name": "Talcahuano (CBT)",
+   "lat": -36.717,
+   "lon": -73.117,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "J"
+    },
+    {
+     "khz": 518.0,
+     "b1": "E"
+    }
+   ]
+  },
+  {
+   "country": "Chile",
+   "name": "Valparaiso (CBV)",
+   "lat": -32.8,
+   "lon": -71.483,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "I"
+    },
+    {
+     "khz": 518.0,
+     "b1": "B"
+    }
+   ]
+  },
+  {
+   "country": "China",
+   "name": "Dalian (XSZ)",
+   "lat": 38.85,
+   "lon": 121.517,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "R"
+    }
+   ]
+  },
+  {
+   "country": "China",
+   "name": "Fuzhou (XSL)",
+   "lat": 26.033,
+   "lon": 119.3,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "O"
+    }
+   ]
+  },
+  {
+   "country": "China",
+   "name": "Guangzhou (XSQ)",
+   "lat": 23.15,
+   "lon": 113.483,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "N"
+    }
+   ]
+  },
+  {
+   "country": "China",
+   "name": "Hong Kong (VRX)",
+   "lat": 22.217,
+   "lon": 114.25,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "L"
+    }
+   ]
+  },
+  {
+   "country": "China",
+   "name": "Sanya (XSI)",
+   "lat": 18.25,
+   "lon": 109.5,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "M"
+    }
+   ]
+  },
+  {
+   "country": "China",
+   "name": "Shanghai (XSG)",
+   "lat": 31.117,
+   "lon": 121.55,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "Q"
+    }
+   ]
+  },
+  {
+   "country": "Columbia",
+   "name": "Santa Maria",
+   "lat": -11.05,
+   "lon": -74.233,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "K"
+    },
+    {
+     "khz": 518.0,
+     "b1": "E"
+    }
+   ]
+  },
+  {
+   "country": "Columbia",
+   "name": "Buenaventura",
+   "lat": 3.9,
+   "lon": -77.067,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "C"
+    },
+    {
+     "khz": 518.0,
+     "b1": "O"
+    }
+   ]
+  },
+  {
+   "country": "Croatia",
+   "name": "Split (9AS)",
+   "lat": 43.183,
+   "lon": 16.433,
+   "rangeNm": "85",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "Q"
+    }
+   ]
+  },
+  {
+   "country": "Cyprus",
+   "name": "Cyprus (5BA)",
+   "lat": 35.05,
+   "lon": 33.283,
+   "rangeNm": "200",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "M"
+    }
+   ]
+  },
+  {
+   "country": "Ecuador",
+   "name": "Ayora (HCY)",
+   "lat": -0.717,
+   "lon": -90.317,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "A"
+    },
+    {
+     "khz": 518.0,
+     "b1": "L"
+    }
+   ]
+  },
+  {
+   "country": "Egypt",
+   "name": "Al Quseir (SUK)",
+   "lat": 26.1,
+   "lon": 34.283,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "V"
+    }
+   ]
+  },
+  {
+   "country": "Egypt",
+   "name": "Alexandria (SUH)",
+   "lat": 31.2,
+   "lon": 29.867,
+   "rangeNm": "350",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "N"
+    }
+   ]
+  },
+  {
+   "country": "Egypt",
+   "name": "Ismailia (SUZ)",
+   "lat": 30.467,
+   "lon": 32.367,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "X"
+    }
+   ]
+  },
+  {
+   "country": "Estonia",
+   "name": "Tallinn (ESA)",
+   "lat": 59.5,
+   "lon": 24.5,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "U"
+    }
+   ]
+  },
+  {
+   "country": "Faroe Island",
+   "name": "Torshavn (OXJ)",
+   "lat": 62.017,
+   "lon": -6.8,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "D"
+    }
+   ]
+  },
+  {
+   "country": "France",
+   "name": "Corsen (FRC)",
+   "lat": 48.467,
+   "lon": -5.05,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "E"
+    },
+    {
+     "khz": 518.0,
+     "b1": "W"
+    }
+   ]
+  },
+  {
+   "country": "France",
+   "name": "La Garde(FRL)",
+   "lat": 43.1,
+   "lon": 5.983,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "S"
+    }
+   ]
+  },
+  {
+   "country": "Germany",
+   "name": "Haburg (DDH-49)",
+   "lat": 53.667,
+   "lon": 9.817,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "L"
+    }
+   ]
+  },
+  {
+   "country": "Greece",
+   "name": "Kerkyra (SVK)",
+   "lat": 39.617,
+   "lon": 19.917,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "K"
+    }
+   ]
+  },
+  {
+   "country": "Greece",
+   "name": "Irakleio(SVH)",
+   "lat": 35.333,
+   "lon": 25.117,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "H"
+    }
+   ]
+  },
+  {
+   "country": "Greece",
+   "name": "Limnos (SVL)",
+   "lat": 34.867,
+   "lon": 25.067,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "L"
+    }
+   ]
+  },
+  {
+   "country": "Greenland",
+   "name": "Kook Island (OXI)",
+   "lat": 64.067,
+   "lon": -52.017,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "W"
+    }
+   ]
+  },
+  {
+   "country": "Greenland",
+   "name": "Simiutaq (OXF)",
+   "lat": 60.683,
+   "lon": -46.6,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "M"
+    }
+   ]
+  },
+  {
+   "country": "Greenland",
+   "name": "Upernavik (OYN)",
+   "lat": 72.783,
+   "lon": -56.2,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "I"
+    }
+   ]
+  },
+  {
+   "country": "Guam",
+   "name": "Guam (NRV)",
+   "lat": 13.483,
+   "lon": 144.833,
+   "rangeNm": "100",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "V"
+    }
+   ]
+  },
+  {
+   "country": "Iceland",
+   "name": "Grindavik (TFK)",
+   "lat": 63.783,
+   "lon": -22.517,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "K"
+    },
+    {
+     "khz": 518.0,
+     "b1": "X"
+    }
+   ]
+  },
+  {
+   "country": "Iceland",
+   "name": "Saudanes (TFA)",
+   "lat": 66.183,
+   "lon": -1.3,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "E"
+    },
+    {
+     "khz": 518.0,
+     "b1": "R"
+    }
+   ]
+  },
+  {
+   "country": "India",
+   "name": "Mumbai (Bombay)(VWB)",
+   "lat": 19.083,
+   "lon": 72.833,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "G"
+    }
+   ]
+  },
+  {
+   "country": "India",
+   "name": "Chennai (Madras)(VWM)",
+   "lat": 13.083,
+   "lon": 80.283,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "P"
+    }
+   ]
+  },
+  {
+   "country": "Indonesia",
+   "name": "Ambon (PKE)",
+   "lat": -3.7,
+   "lon": 128.2,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "B"
+    }
+   ]
+  },
+  {
+   "country": "Indonesia",
+   "name": "Jakarta (PKX)",
+   "lat": -6.1,
+   "lon": 106.9,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "E"
+    }
+   ]
+  },
+  {
+   "country": "Indonesia",
+   "name": "Jayapura (PNK)",
+   "lat": -2.517,
+   "lon": 140.717,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "A"
+    }
+   ]
+  },
+  {
+   "country": "Indonesia",
+   "name": "Makassar (PKF)",
+   "lat": -5.1,
+   "lon": 119.433,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "D"
+    }
+   ]
+  },
+  {
+   "country": "Iran lamic Republic of)",
+   "name": "Busherhr (EQM)",
+   "lat": 28.983,
+   "lon": 50.817,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "D"
+    },
+    {
+     "khz": 518.0,
+     "b1": "A"
+    }
+   ]
+  },
+  {
+   "country": "Iran lamic Republic of)",
+   "name": "Abbas Radio (EQI)",
+   "lat": 27.1,
+   "lon": 56.05,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "I"
+    },
+    {
+     "khz": 518.0,
+     "b1": "F"
+    }
+   ]
+  },
+  {
+   "country": "Iran lamic Republic of)",
+   "name": "Fereydoonkenar (EQO)",
+   "lat": 36.7,
+   "lon": 52.55,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "J"
+    },
+    {
+     "khz": 518.0,
+     "b1": "G"
+    }
+   ]
+  },
+  {
+   "country": "Ireland",
+   "name": "Malin Head (EJM)",
+   "lat": 55.367,
+   "lon": -7.35,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "A"
+    },
+    {
+     "khz": 518.0,
+     "b1": "Q"
+    }
+   ]
+  },
+  {
+   "country": "Ireland",
+   "name": "Valentia (EJK)",
+   "lat": 51.933,
+   "lon": -10.35,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "W"
+    }
+   ]
+  },
+  {
+   "country": "Israel",
+   "name": "Haifa (4XO)",
+   "lat": 32.817,
+   "lon": 35.0,
+   "rangeNm": "200",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "P"
+    },
+    {
+     "khz": 518.0,
+     "b1": "P"
+    }
+   ]
+  },
+  {
+   "country": "Italy",
+   "name": "Augusta (IQA)",
+   "lat": 37.233,
+   "lon": 15.233,
+   "rangeNm": "320",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "V"
+    }
+   ]
+  },
+  {
+   "country": "Italy",
+   "name": "Cagliari (IDC)",
+   "lat": 39.217,
+   "lon": 9.233,
+   "rangeNm": "320",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "T"
+    }
+   ]
+  },
+  {
+   "country": "Italy",
+   "name": "Rome (IAR)",
+   "lat": 41.617,
+   "lon": 12.483,
+   "rangeNm": "320",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "R"
+    }
+   ]
+  },
+  {
+   "country": "Italy",
+   "name": "Trieste (IQX)",
+   "lat": 45.683,
+   "lon": 13.767,
+   "rangeNm": "320",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "U"
+    }
+   ]
+  },
+  {
+   "country": "Japan",
+   "name": "Kushiro (JNX)",
+   "lat": 42.95,
+   "lon": 144.6,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 424.0,
+     "b1": "K"
+    },
+    {
+     "khz": 518.0,
+     "b1": "K"
+    }
+   ]
+  },
+  {
+   "country": "Japan",
+   "name": "Moji (JNR)",
+   "lat": 34.017,
+   "lon": 130.933,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 424.0,
+     "b1": "H"
+    },
+    {
+     "khz": 518.0,
+     "b1": "H"
+    }
+   ]
+  },
+  {
+   "country": "Japan",
+   "name": "Naha (JNB)",
+   "lat": 26.083,
+   "lon": 127.667,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 424.0,
+     "b1": "G"
+    },
+    {
+     "khz": 518.0,
+     "b1": "G"
+    }
+   ]
+  },
+  {
+   "country": "Japan",
+   "name": "Otaru (JNL)",
+   "lat": 43.317,
+   "lon": 140.45,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 424.0,
+     "b1": "J"
+    },
+    {
+     "khz": 518.0,
+     "b1": "J"
+    }
+   ]
+  },
+  {
+   "country": "Japan",
+   "name": "Yokohama (JGC)",
+   "lat": 35.233,
+   "lon": 139.917,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 424.0,
+     "b1": "I"
+    },
+    {
+     "khz": 518.0,
+     "b1": "I"
+    }
+   ]
+  },
+  {
+   "country": "Madeira",
+   "name": "Porto Santo (CTQ)",
+   "lat": 33.067,
+   "lon": -16.35,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "M"
+    },
+    {
+     "khz": 518.0,
+     "b1": "P"
+    }
+   ]
+  },
+  {
+   "country": "Malaysia",
+   "name": "Miri (9WR)",
+   "lat": 4.417,
+   "lon": 114.017,
+   "rangeNm": "350",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "T"
+    }
+   ]
+  },
+  {
+   "country": "Malaysia",
+   "name": "Penang (9MG)",
+   "lat": 5.433,
+   "lon": 100.4,
+   "rangeNm": "350",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "U"
+    }
+   ]
+  },
+  {
+   "country": "Malaysia",
+   "name": "Sandakan (9WS)",
+   "lat": 5.9,
+   "lon": 118.0,
+   "rangeNm": "350",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "S"
+    }
+   ]
+  },
+  {
+   "country": "Malta",
+   "name": "Malta (9HD)",
+   "lat": 35.983,
+   "lon": 14.533,
+   "rangeNm": "350",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "T"
+    }
+   ]
+  },
+  {
+   "country": "Mauritius",
+   "name": "Mauritius (3BM)",
+   "lat": -20.183,
+   "lon": 57.467,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "C"
+    }
+   ]
+  },
+  {
+   "country": "Morocco",
+   "name": "Casablanca (CNP)",
+   "lat": 33.6,
+   "lon": -7.633,
+   "rangeNm": "180",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "M"
+    }
+   ]
+  },
+  {
+   "country": "Namibia",
+   "name": "Walvis Bay (V5W)",
+   "lat": -23.05,
+   "lon": 14.633,
+   "rangeNm": "378",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "B"
+    }
+   ]
+  },
+  {
+   "country": "Netherlands",
+   "name": "Den Helder (PBK)",
+   "lat": 52.95,
+   "lon": 4.783,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "P"
+    }
+   ]
+  },
+  {
+   "country": "Netherlands Antilles",
+   "name": "Curacao (PJC)",
+   "lat": 12.167,
+   "lon": -68.867,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "H"
+    }
+   ]
+  },
+  {
+   "country": "Nigeria",
+   "name": "Lagos (5OW)",
+   "lat": 6.433,
+   "lon": 3.317,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "S"
+    }
+   ]
+  },
+  {
+   "country": "Nigeria",
+   "name": "Port Harcourt (5OZ)",
+   "lat": 4.383,
+   "lon": 7.167,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "E"
+    }
+   ]
+  },
+  {
+   "country": "North Korea",
+   "name": "Hungnam (HMH)",
+   "lat": 39.833,
+   "lon": 127.683,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "E"
+    },
+    {
+     "khz": 518.0,
+     "b1": "E"
+    }
+   ]
+  },
+  {
+   "country": "North Korea",
+   "name": "Pyongyang (HMZ)",
+   "lat": 39.0,
+   "lon": 125.717,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "D"
+    },
+    {
+     "khz": 518.0,
+     "b1": "D"
+    }
+   ]
+  },
+  {
+   "country": "Norway",
+   "name": "Bodo (LGP)",
+   "lat": 67.267,
+   "lon": 14.383,
+   "rangeNm": "450",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "B"
+    }
+   ]
+  },
+  {
+   "country": "Norway",
+   "name": "Orlandet (LGD)",
+   "lat": 63.667,
+   "lon": 9.55,
+   "rangeNm": "450",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "N"
+    }
+   ]
+  },
+  {
+   "country": "Norway",
+   "name": "Rogaland (LGQ)",
+   "lat": 58.65,
+   "lon": 5.6,
+   "rangeNm": "450",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "L"
+    }
+   ]
+  },
+  {
+   "country": "Norway",
+   "name": "Vardo (LGV)",
+   "lat": 70.367,
+   "lon": 31.1,
+   "rangeNm": "450",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "V"
+    }
+   ]
+  },
+  {
+   "country": "Oman",
+   "name": "Muscat (A4M)",
+   "lat": 23.6,
+   "lon": 58.5,
+   "rangeNm": "270",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "M"
+    }
+   ]
+  },
+  {
+   "country": "Pakistan",
+   "name": "Karachi (ASK)",
+   "lat": 24.85,
+   "lon": 67.05,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "P"
+    }
+   ]
+  },
+  {
+   "country": "Peru",
+   "name": "Callao (OBC-3)",
+   "lat": -12.033,
+   "lon": -77.117,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "U"
+    }
+   ]
+  },
+  {
+   "country": "Peru",
+   "name": "Mollendo (OBF-4)",
+   "lat": -17.017,
+   "lon": -72.017,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "W"
+    }
+   ]
+  },
+  {
+   "country": "Peru",
+   "name": "Paita (OBY-2)",
+   "lat": -5.083,
+   "lon": -81.117,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "S"
+    }
+   ]
+  },
+  {
+   "country": "Philippines",
+   "name": "Davao (DWT)",
+   "lat": 7.067,
+   "lon": 125.6,
+   "rangeNm": "320",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "K"
+    }
+   ]
+  },
+  {
+   "country": "Philippines",
+   "name": "Manila (DZS)",
+   "lat": 14.583,
+   "lon": 121.05,
+   "rangeNm": "320",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "J"
+    }
+   ]
+  },
+  {
+   "country": "Philippines",
+   "name": "Puerto Princesa (DVS)",
+   "lat": 9.733,
+   "lon": 118.717,
+   "rangeNm": "320",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "I"
+    }
+   ]
+  },
+  {
+   "country": "Portugal",
+   "name": "Monsanto (CTV)",
+   "lat": 38.733,
+   "lon": -9.183,
+   "rangeNm": "520",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "G"
+    },
+    {
+     "khz": 518.0,
+     "b1": "R"
+    }
+   ]
+  },
+  {
+   "country": "Romania",
+   "name": "Constanza (YQV)",
+   "lat": 44.1,
+   "lon": 28.617,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "G"
+    }
+   ]
+  },
+  {
+   "country": "Russian Federation",
+   "name": "Archangel (UGE)",
+   "lat": 64.55,
+   "lon": 40.533,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "L"
+    }
+   ]
+  },
+  {
+   "country": "Russian Federation",
+   "name": "Astrakhan (UJB)",
+   "lat": 46.3,
+   "lon": 47.967,
+   "rangeNm": "250",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "W"
+    }
+   ]
+  },
+  {
+   "country": "Russian Federation",
+   "name": "Kholmsk (UFO)",
+   "lat": 47.033,
+   "lon": 142.05,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "B"
+    }
+   ]
+  },
+  {
+   "country": "Russian Federation",
+   "name": "Magadan (UIB)",
+   "lat": 59.683,
+   "lon": 150.15,
+   "rangeNm": "120",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "D"
+    }
+   ]
+  },
+  {
+   "country": "Russian Federation",
+   "name": "Murmansk (UHY)",
+   "lat": 68.767,
+   "lon": 32.967,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "K"
+    }
+   ]
+  },
+  {
+   "country": "Russian Federation",
+   "name": "Novorossiysk (UDN)",
+   "lat": 44.6,
+   "lon": 37.967,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "A"
+    }
+   ]
+  },
+  {
+   "country": "Russian Federation",
+   "name": "Okhotsk (UCV-2)",
+   "lat": 59.367,
+   "lon": 143.2,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "G"
+    }
+   ]
+  },
+  {
+   "country": "Russian Federation",
+   "name": "Petropavlovsk (UBE-2)",
+   "lat": 53.25,
+   "lon": 158.417,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "C"
+    }
+   ]
+  },
+  {
+   "country": "Russian Federation",
+   "name": "Vladivostok (UIK)",
+   "lat": 43.383,
+   "lon": 131.9,
+   "rangeNm": "230",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "A"
+    }
+   ]
+  },
+  {
+   "country": "Saudi Arabia",
+   "name": "Jeddah (HZH)",
+   "lat": 21.383,
+   "lon": 39.167,
+   "rangeNm": "390",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "H"
+    }
+   ]
+  },
+  {
+   "country": "Senegal",
+   "name": "Dakar (6VA)",
+   "lat": 14.767,
+   "lon": -17.333,
+   "rangeNm": "200",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "M"
+    },
+    {
+     "khz": 518.0,
+     "b1": "C"
+    }
+   ]
+  },
+  {
+   "country": "Singapore",
+   "name": "Singapore (9VG-49)",
+   "lat": 1.35,
+   "lon": 103.983,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "C"
+    }
+   ]
+  },
+  {
+   "country": "South Africa",
+   "name": "Cape Town (ZSC)",
+   "lat": -33.667,
+   "lon": 18.717,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "C"
+    }
+   ]
+  },
+  {
+   "country": "South Africa",
+   "name": "Durban (ZSD)",
+   "lat": -29.8,
+   "lon": 30.817,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "O"
+    }
+   ]
+  },
+  {
+   "country": "South Africa",
+   "name": "Port Elizabeth (ZSQ)",
+   "lat": -34.033,
+   "lon": 25.55,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "I"
+    }
+   ]
+  },
+  {
+   "country": "South Korea",
+   "name": "Chukpyon (HL)",
+   "lat": 37.05,
+   "lon": 129.433,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "V"
+    },
+    {
+     "khz": 518.0,
+     "b1": "V"
+    }
+   ]
+  },
+  {
+   "country": "South Korea",
+   "name": "Pyonsan (HL)",
+   "lat": 35.6,
+   "lon": 126.483,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "W"
+    },
+    {
+     "khz": 518.0,
+     "b1": "W"
+    }
+   ]
+  },
+  {
+   "country": "Spain",
+   "name": "Cabo de la Nao (EAV)",
+   "lat": 38.717,
+   "lon": 0.15,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "M"
+    },
+    {
+     "khz": 518.0,
+     "b1": "X"
+    }
+   ]
+  },
+  {
+   "country": "Spain",
+   "name": "Coruna (EAR)",
+   "lat": 43.367,
+   "lon": -8.45,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "W"
+    },
+    {
+     "khz": 518.0,
+     "b1": "D"
+    }
+   ]
+  },
+  {
+   "country": "Spain",
+   "name": "Tarifa (EAC)",
+   "lat": 36.017,
+   "lon": -5.583,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "T"
+    },
+    {
+     "khz": 518.0,
+     "b1": "G"
+    }
+   ]
+  },
+  {
+   "country": "Svalbard",
+   "name": "Svalbard (LGS)",
+   "lat": 78.067,
+   "lon": 13.617,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "A"
+    }
+   ]
+  },
+  {
+   "country": "Sweden",
+   "name": "Hanosand (SAH)",
+   "lat": 64.467,
+   "lon": 21.6,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "H"
+    }
+   ]
+  },
+  {
+   "country": "Sweden",
+   "name": "Stockholm (SDJ)",
+   "lat": 55.483,
+   "lon": 14.317,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "J"
+    }
+   ]
+  },
+  {
+   "country": "Sweden",
+   "name": "Varberg (SAS)",
+   "lat": 57.117,
+   "lon": 12.4,
+   "rangeNm": "300",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "I"
+    }
+   ]
+  },
+  {
+   "country": "Taiwan",
+   "name": "Chi-Lung (XSX)",
+   "lat": 25.15,
+   "lon": 121.733,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "P"
+    }
+   ]
+  },
+  {
+   "country": "Taiwan",
+   "name": "Linyan (XSW)",
+   "lat": 22.483,
+   "lon": 120.417,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "P"
+    }
+   ]
+  },
+  {
+   "country": "Thailand",
+   "name": "Bangkok (HAS)",
+   "lat": 13.017,
+   "lon": 100.017,
+   "rangeNm": "200",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "F"
+    }
+   ]
+  },
+  {
+   "country": "Tunisia",
+   "name": "Tunis (3VX)",
+   "lat": 36.883,
+   "lon": 10.183,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "V"
+    }
+   ]
+  },
+  {
+   "country": "Turkey",
+   "name": "Antalya (TAL)",
+   "lat": 36.15,
+   "lon": 32.433,
+   "rangeNm": "",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "D"
+    },
+    {
+     "khz": 518.0,
+     "b1": "F"
+    }
+   ]
+  },
+  {
+   "country": "Turkey",
+   "name": "Istanbul (TAH)",
+   "lat": 41.067,
+   "lon": 28.95,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "B"
+    },
+    {
+     "khz": 518.0,
+     "b1": "D"
+    }
+   ]
+  },
+  {
+   "country": "Turkey",
+   "name": "Izmir (TAN)",
+   "lat": 38.267,
+   "lon": 26.267,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "C"
+    },
+    {
+     "khz": 518.0,
+     "b1": "D"
+    }
+   ]
+  },
+  {
+   "country": "Turkey",
+   "name": "Samsun (TAF)",
+   "lat": 41.383,
+   "lon": 36.183,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "A"
+    },
+    {
+     "khz": 518.0,
+     "b1": "E"
+    }
+   ]
+  },
+  {
+   "country": "Ukraine",
+   "name": "Kerch (UUO)",
+   "lat": 45.367,
+   "lon": 36.483,
+   "rangeNm": "120",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "U"
+    },
+    {
+     "khz": 518.0,
+     "b1": "G"
+    }
+   ]
+  },
+  {
+   "country": "Ukraine",
+   "name": "Odessa (UUT)",
+   "lat": 46.483,
+   "lon": 30.733,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "X"
+    },
+    {
+     "khz": 518.0,
+     "b1": "C"
+    }
+   ]
+  },
+  {
+   "country": "United Kingdom",
+   "name": "Cullercoats (GCC)",
+   "lat": 55.033,
+   "lon": -1.433,
+   "rangeNm": "270",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "U"
+    },
+    {
+     "khz": 518.0,
+     "b1": "G"
+    }
+   ]
+  },
+  {
+   "country": "United Kingdom",
+   "name": "Niton (GNI)",
+   "lat": 50.583,
+   "lon": -1.3,
+   "rangeNm": "270",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "I"
+    },
+    {
+     "khz": 490.0,
+     "b1": "T"
+    },
+    {
+     "khz": 518.0,
+     "b1": "E"
+    },
+    {
+     "khz": 518.0,
+     "b1": "K"
+    }
+   ]
+  },
+  {
+   "country": "United Kingdom",
+   "name": "Portpatrick (GPK)",
+   "lat": 54.85,
+   "lon": -5.117,
+   "rangeNm": "270",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "C"
+    },
+    {
+     "khz": 518.0,
+     "b1": "O"
+    }
+   ]
+  },
+  {
+   "country": "Uruguay",
+   "name": "La Paloma (CWM-27)",
+   "lat": -34.667,
+   "lon": -54.15,
+   "rangeNm": "280",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "A"
+    },
+    {
+     "khz": 518.0,
+     "b1": "F"
+    }
+   ]
+  },
+  {
+   "country": "Vietnam",
+   "name": "Da Nang (XVT)",
+   "lat": 16.067,
+   "lon": 108.217,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "K"
+    }
+   ]
+  },
+  {
+   "country": "Vietnam",
+   "name": "Hai Phong (XVG)",
+   "lat": 20.733,
+   "lon": 106.733,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 490.0,
+     "b1": "W"
+    }
+   ]
+  },
+  {
+   "country": "Vietnam",
+   "name": "Ho Chi Minh Ville (XVS)",
+   "lat": 10.783,
+   "lon": 106.667,
+   "rangeNm": "400",
+   "tx": [
+    {
+     "khz": 518.0,
+     "b1": "X"
+    }
+   ]
+  }
+ ]
+}
