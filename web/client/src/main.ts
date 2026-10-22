@@ -823,7 +823,7 @@ function updateSharedBanner() {
   const askTxt = askNow ? askBannerText(askNow, false) : null;
   if (askTxt) {
     ms.classList.remove('alone'); ms.textContent = askTxt;
-    ms.title = 'Ask in the chat before tuning — a yes, or no answer within 15 seconds, lets you in';
+    ms.title = 'Ask in the chat before tuning — a yes, or no answer within 15 seconds, lets you in; three minutes without changing anything and you ask again';
     return;
   }
   // ★ Until the first count arrives (0), the cautious wording — never "free" on a guess.
