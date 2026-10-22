@@ -847,9 +847,15 @@ and has no transmit field to build. Tested by `scripts/test_icom_radio.ts` (129 
   locally with one notice per 4 s, server refusals into the same notice; zoom = one rung per crown detent; no
   re-subscribe, reconnect pill, stall overlay or audio self-heal while the radio transmits or is off CI-V.
 - **Verified:** type-check + watch-simulator build; the wire replayed against vibeserver + the fake IC-7300 (scratch
-  probe, 15 checks). **Not verified:** on a watch or simulator screen; fixed scope mode (Jr draws the VFO at the
-  centre, so the needle is misplaced when the radio's scope is FIXED); first-ever connect to an Icom with the lock
-  OFF still sends the default ~100 kHz subscribe span before Jr knows it is an Icom.
+  probe, 15 checks). **Not verified:** on a watch or simulator screen.
+- **Fixed 2026-10-22 (branch `v12-icom-buddy`):** FIXED scope mode — the carrier line (and its passband edges, and the
+  band ticker's axis) is placed at the tuned frequency within the sweep's real edges (`config.centerFreq` ±
+  binBandwidth × binCount / 2, `IcomRadio.vfoFraction` / `edges`); tuned past an edge, no line, a chevron at that edge.
+  `scopeMode` is parsed from hwinfo `scope.mode` and merged from the status line. First visit — on a VibeServer Jr has
+  never seen (remembered per radio, `vibe.seen.<host><radio>`), the spectrum socket sends `state` and NO zoom; the
+  first config decides (`IcomRadio.sendViewAtOpen` / `sendHeldViewOnFirstConfig`): an ordinary per-listener SDR gets
+  the held view at once (one extra round trip, first connect only), an Icom or a shared dial is adopted — the app's
+  `_restoreViewOnConfig` rule. Checked by `scripts/test-jr-icom.sh` (59 rule checks + 5 wiring checks).
 
 ### Decisions (each easy to reverse)
 
@@ -872,9 +878,18 @@ and has no transmit field to build. Tested by `scripts/test_icom_radio.ts` (129 
 
 ### Not done / not verified
 
-- **Buddy (the iPhone's watch remote) and the Android watch face** have no Icom branch: on an Icom server they would
-  still draw their IQ controls (SQL, BW, the client mode list with WFM). Buddy only mirrors the phone, so it needs a
-  phone → watch field first (`watchProvider` + the native WatchLink payload). **Jr is done** — see below.
+- **Buddy (the iPhone's watch remote) is done** (branch `v12-icom-buddy`): the phone sends `icomRadio.icomWatchState`
+  (radio's mode names + labels, FIL1/2/3 with this mode's factory widths, span label, banner words, owner-lock verdict
+  and note) on a new `icom` watch message (`watchProvider.sendIcom`, native `sendIcom` with the transferUserInfo
+  fallback, re-sent by flushAll, `on:false` for any other radio). Buddy's menu: MODE / STEP / FILTER / SPAN in place
+  of DEMOD / Zoom, no BW and no SQL; band label leads with the radio's mode; red TX / amber not-answering banner; the
+  wrist meter is the radio's S-meter ("TX" while keyed), no squelch line. MODE/FILTER go back as `icomMode`/`icomFil`
+  through the client's `icomControl`, which now refuses mode/FIL/span/scope mode under the owner lock locally
+  (`askBlocked`, one note per 4 s); refusals are forwarded to the wrist, and a listener's tap on MODE/FILTER shows the
+  note on the wrist (once per 4 s). A TX-frozen scope reports `why: radio`, so no "lost the server" pill and no
+  watch-driven socket rebuild. Type-checked (`scripts/typecheck-buddy.sh`); `test_icom_radio.ts` +20,
+  `check-icom-app-gates.mjs` +19. **Not verified:** on a watch / simulator screen, the phone's `VibeWatchModule`
+  change not compiled (no iOS app build was run). **The Android watch face** still has no Icom branch.
 - **The app UI has not been run**: no simulator/device build was allowed. Theme (default/silver/black,
   transparency on/off) and phone/wide layout of the new sheet section and banners are unverified on screen; they
   reuse the existing sheet's styles and the owner-notice banner, which already pass those checks.
