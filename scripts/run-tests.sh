@@ -206,8 +206,9 @@ for t in "$SRC"/test-*.cpp; do
   #   the shim, opus, fftw) cannot be expressed that way and is a CMake target instead. Listing it
   #   here rather than renaming it keeps it discoverable beside its siblings.
   #     test-radio-api — links vibeserver_core; built by `cmake --build … --target test-radio-api`.
+  #     test-icom-source — links vibe_icom (libusb, ALSA/CoreAudio, the source's threads); ctest `icom-source`.
   case "$name" in
-    test-radio-api) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
+    test-radio-api|test-icom-source) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
   esac
   printf '\n\033[1m── %s ──\033[0m\n' "$name"
   # shellcheck disable=SC2046
