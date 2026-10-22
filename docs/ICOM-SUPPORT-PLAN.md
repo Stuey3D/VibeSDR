@@ -955,3 +955,49 @@ Everything on hardware: the wrapped-fd CP2102 path on a phone's usbfs (claim + a
 staying low (dummy load!), AudioRecord's routing to the codec, the microphone FGS promotion on Android 14/15, the
 re-plug hand-back, idle and serving RAM on a 1 GB phone. The fd transport could not be run against the fake radio on
 the host: the fake is a pty, and `libusb_wrap_sys_device` needs a usbfs node.
+
+---
+
+## The app's own server screen on an Icom — built 2026-10-22, branch `v12-icom-servermode`
+
+*The "UI wiring" item from Phase 4's Open list. ServerModeScreen is also VibeServer Lite's only screen
+(`lite/app/index.js` renders it), so both get this. Type-checked and source-checked only — no device, no native build.*
+
+**What the screen shows for an Icom (`driver === "icom"` from `getConnectedRadio`)**
+
+- **Stopped, RADIO SETTINGS → ICOM TRANSCEIVER — RECEIVE ONLY** (in place of the gain / VibeAGC / IF filter / direct
+  sampling / ppm / converter block): the model; for a CP210x Android has not named yet (`icomConfirmed === false`)
+  "An Icom? Press Start and allow it…"; what VibeServer does and never does (scope = waterfall, audio passed on, receive
+  commands only, USB SEND / USB Keying / VOX read on every connect); the microphone note when `micPermission` is false,
+  or the Android-7 note when `audioSupported` is false; "Android asks again after a re-plug or restart"; where the
+  radio's own controls are when listening (the cog under its name — matches the tour). Then the five settings through
+  the shared `IcomSettingsFields phone` (baud from `ICOM_BAUDS` = the setup page's list, CI-V hex, scope speed, owner
+  lock default ON, RF open), stored as `vs_icom`, sent on every start by `nativeServerConfig` at definite values
+  (`icomPhoneFields`). Start refuses an invalid CI-V address with the reason.
+- **Serving**: an ICOM — RECEIVE ONLY card under the address card with the engine's facts (`IcomFacts`: model, CI-V,
+  baud + why, transport, preflight with menu paths, who may tune), the radio's audio state from `androidIcomFacts()`
+  (polled every 3 s, only for an Icom) and ALLOW THE RADIO'S AUDIO → `icomAskForAudio()` when the permission is missing.
+  No SAMPLE RATE row. The sub-line says "receive only" and "frees the radio".
+- **Hidden for an Icom**: RTL-TCP (replaced by a sentence — an Icom has no IQ), WATERFALL RATE, HOW WILL IT BE USED /
+  centre / CAPTURE WIDTH (the radio is one dial: `radioUseEff = 'single'`), WHERE LISTENERS START + DAB landing (the
+  server never tunes an Icom), bias-T, ZOOM DETAIL, RAW IQ OUT, PER-BAND CEILINGS, and the WFM / DAB / Adv RDS
+  block chips. Kept: listeners, allow/block ranges (`vsPermittedRanges` applies to an Icom), the other mode/decoder
+  blocks, time limits, ask-before-tuning, decoders, power/keep-alive, security, location, directory.
+- **Copy**: "what can be served" (no radio found; a failed Start) names the Icom IC-7300, receive only
+  (`SERVABLE_RADIOS`); About's V12 note says the app's server screen and Lite serve one too.
+
+**Decisions (easy to reverse)**: the five keys are sent for every radio (only `VibeIcom.prepareStart` reads them, and
+the screen reads the radio once on opening — an Icom plugged in later still starts with the owner's settings); the
+phone form has no audio/port/serial-device fields (Android's audio is AudioRecord, its port the allowed device);
+`IcomSetupCard` was split into `IcomFacts` + `IcomSettingsFields` so the remote card and this screen share one set of
+words.
+
+**Tests**: `scripts/check-icom-servermode.mjs` (55, in run-tests.sh) — the five keys = `prepareStart`'s names and
+defaults, the baud and scope-speed lists = the setup page's, `SERVABLE_RADIOS` names exactly icom_models.h's
+`known` models, every gate above, nothing that transmits; `test_icom_radio.ts` +12 (`icomPhoneFields`,
+`icomPresence`).
+
+**Not verified**: the screen has not been drawn (default/silver/black, phone/wide, Lite on a TV) — it reuses the
+screen's own hint/chip/switch/card styles; the permission button's round trip and the 3 s facts poll on a device;
+how a TV remote moves through the new card (TvTextInput is not used for the CI-V box — `IcomSettingsFields` uses
+React Native's TextInput, as the remote card always did).
