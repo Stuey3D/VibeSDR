@@ -815,7 +815,26 @@ was run (see "Not verified").*
 
 ### Measurements
 
-MEASUREMENTS_PLACEHOLDER
+Debug APKs (`app-current-debug.apk`, Lite `app-debug.apk`), measured against the same tree with the three Icom files
+and `VIBE_HAVE_ICOM` taken out of CMake:
+
+| | arm64-v8a | armeabi-v7a |
+|---|---|---|
+| libvibelocalsdr.so, as packaged (stripped) | 7,614,144 → 7,743,688 B (**+129.5 KB**) | 6,354,556 → 6,446,860 B (**+92.3 KB**) |
+| …compressed in the APK | +56.2 KB | +56.3 KB |
+| Kotlin (VibeIcom + IcomAudio + Api24 .class) | 30.8 KB of class files, ~15 KB as dex | same |
+
+- **APK delta ≈ 0.13 MB (main app, both ABIs), ≈ 0.07 MB (Lite, v7a only).** Legacy packaging extracts the phone's own
+  ABI on install: +130 KB (arm64) / +92 KB (v7a) on disk.
+- **Idle RAM: zero by construction** on a phone with no Icom — the code is in a library that already loads for any USB
+  radio; no Icom thread, libusb context, AudioRecord, receiver or allocation exists until an Icom server starts, and
+  `IcomAudio`'s classes are not even loaded. Serving: one CI-V thread + one AudioRecord thread (a 960 B direct buffer;
+  AudioRecord's own buffer ~8-16 KB) on top of the engine. ✗ Not measured on a device.
+- **16 KB pages:** every arm64 .so in the main APK has LOAD alignment ≥ 0x4000 (all 30 checked, readelf);
+  `zipalign -c -P 16` passes.
+- **Checks run:** `test-icom-source` (66 checks, ASan+UBSan, incl. 16 new), `test-icom-civ` (7.8 M frames),
+  `test-icom-scope`, `check-device-filter.mjs` (8, incl. 4 new), `check-lite-api.py` on the Lite APK (OK at minSdk 21),
+  NDK syntax checks of the shim/JNI for arm64. Both debug APKs build (`gradle --max-workers=2`, nice 19).
 
 ### Open for Stuart (Android)
 
