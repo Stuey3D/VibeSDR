@@ -20100,8 +20100,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ Digits too (beta 4, the Lenovo): "ft8" was cut to "ft", so the FT8 tab matched nothing while ALL showed it.
                 for (char c : qv("kind")) if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') kind += c;
                 int limit = std::atoi(qv("limit").c_str());
-                if (limit <= 0 || limit > 1000) limit = 300;
-                std::string j = g.listJson(kind.substr(0, 16), (size_t)limit);
+                // ★★ V12 beta 4 — PAGES: with offset= the page is at most 100 (default 25) and the answer carries the
+                //    filter's total; without it, exactly the old request (an older app's limit=300, newest first).
+                const std::string off = qv("offset");
+                long offset = -1;
+                if (!off.empty()) {
+                    offset = std::max(0L, std::atol(off.c_str()));
+                    if (limit <= 0) limit = 25;
+                    if (limit > 100) limit = 100;
+                } else if (limit <= 0 || limit > 1000) limit = 300;
+                std::string j = g.listJson(kind.substr(0, 16), (size_t)limit, offset);
                 // ★ Plus whether this server keeps anything at all — a client shows "this server keeps no gallery" honestly.
                 j.insert(1, std::string("\"enabled\":") + (g.enabled() ? "true" : "false") + ",");
                 reply("200 OK", "application/json", j);

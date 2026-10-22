@@ -271,32 +271,44 @@ public:
         return ::stat((dir() + "/" + name).c_str(), &st) == 0 ? (uint64_t)st.st_size : 0;
     }
 
-    /** ★ The list, NEWEST FIRST, for /vibeserver/gallery.json. `kind` filters ("" = all); at most `limit` items. */
-    std::string listJson(const std::string& kind, size_t limit) const {
+    /** ★ The list, NEWEST FIRST, for /vibeserver/gallery.json. `kind` filters ("" = all); at most `limit` items.
+     *  ★★ V12 beta 4 — PAGES: `offset` ≥ 0 skips that many of the FILTERED list and adds "total" (how many match the
+     *  filter) and "offset", so a client draws "Page 2 of 14". offset < 0 is the old request, answered exactly as before
+     *  (an older app asks for limit=300 and gets the newest 300).
+     *  ★ From a small in-memory copy of the index (Cache): rebuilt only when index.jsonl changes (its inode, size or
+     *    mtime — every writer, in any process on the box, rewrites or appends it) or every 30 s for files that vanished;
+     *    a page then costs a stat() per item SHOWN, never one per item kept. */
+    std::string listJson(const std::string& kind, size_t limit, long offset = -1) const {
         const std::string dir = this->dir();
         std::string items;
-        uint64_t used = 0; size_t total = 0;
+        uint64_t used = 0; size_t total = 0, matched = 0;
         if (!dir.empty()) {
             Lock fl(dir, /*shared=*/true);
-            std::vector<std::string> lines = readIndex(dir);
-            for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
-                const std::string f = lineStr(*it, "f");
-                if (!safeName(f)) continue;
-                struct stat st{};
-                if (::stat((dir + "/" + f).c_str(), &st) != 0) continue;
-                used += (uint64_t)st.st_size; ++total;
-                if (!kind.empty() && lineStr(*it, "k") != kind) continue;
+            std::shared_ptr<const Cache> c = cache(dir);
+            total = c->rows.size();
+            used = c->used;
+            size_t skip = offset > 0 ? (size_t)offset : 0;
+            for (auto it = c->rows.rbegin(); it != c->rows.rend(); ++it) {
+                if (!kind.empty() && it->kind != kind) continue;
+                ++matched;
+                if (skip) { --skip; continue; }
                 if (limit == 0) continue;
+                struct stat st{};
+                if (::stat((dir + "/" + it->f).c_str(), &st) != 0) continue;   // ★ gone since the cache was built
                 --limit;
-                std::string l = redactLine(*it);
+                std::string l = redactLine(it->line);
                 if (!l.empty() && l.back() == '}') l.pop_back();
                 if (!items.empty()) items += ',';
                 items += l + ",\"bytes\":" + std::to_string((unsigned long long)st.st_size) + "}";
             }
         }
-        return "{\"items\":[" + items + "],\"count\":" + std::to_string(total) + ",\"usedBytes\":"
-             + std::to_string((unsigned long long)used) + ",\"limitBytes\":" + std::to_string((unsigned long long)limitBytes()) + "}";
+        std::string j = "{\"items\":[" + items + "],\"count\":" + std::to_string(total) + ",\"usedBytes\":"
+             + std::to_string((unsigned long long)used) + ",\"limitBytes\":" + std::to_string((unsigned long long)limitBytes());
+        if (offset >= 0) j += ",\"total\":" + std::to_string(matched) + ",\"offset\":" + std::to_string(offset);
+        return j + "}";
     }
+    /** ★ Test seam: how many times the index has been read into the cache. */
+    unsigned long cacheBuilds() const { return cacheBuilds_.load(); }
     /** ★★★ A NAME FROM THE NETWORK → a path, only if it is one of ours. */
     bool resolve(const std::string& name, std::string& path, std::string& ctype) const {
         if (!safeName(name)) return false;
@@ -442,6 +454,49 @@ private:
         const std::string tmp = dir + "/index.jsonl.tmp";
         if (writeFile(tmp, body, false)) ::rename(tmp.c_str(), (dir + "/index.jsonl").c_str());
     }
+
+    /** The index as listJson reads it: each live line (its file exists) with its name and kind, oldest first. */
+    struct Cache {
+        struct Row { std::string line, f, kind; };
+        std::vector<Row> rows;
+        uint64_t used = 0;
+        std::string dir;
+        ino_t ino = 0; off_t size = -1; int64_t mtimeNs = -1;
+        std::chrono::steady_clock::time_point built;
+    };
+    /** ★ Caller holds the directory lock (shared is enough). */
+    std::shared_ptr<const Cache> cache(const std::string& dir) const {
+        struct stat st{};
+        const bool have = ::stat((dir + "/index.jsonl").c_str(), &st) == 0;
+#if defined(__APPLE__)
+        const int64_t mt = have ? (int64_t)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec : -1;
+#else
+        const int64_t mt = have ? (int64_t)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec : -1;
+#endif
+        const auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lk(cacheMtx_);
+            if (cache_ && cache_->dir == dir && cache_->ino == (have ? st.st_ino : 0) && cache_->size == (have ? st.st_size : -1)
+                && cache_->mtimeNs == mt && now - cache_->built < std::chrono::seconds(30)) return cache_;
+        }
+        auto c = std::make_shared<Cache>();
+        c->dir = dir; c->ino = have ? st.st_ino : 0; c->size = have ? st.st_size : -1; c->mtimeNs = mt; c->built = now;
+        for (auto& l : readIndex(dir)) {
+            const std::string f = lineStr(l, "f");
+            if (!safeName(f)) continue;
+            struct stat fs{};
+            if (::stat((dir + "/" + f).c_str(), &fs) != 0) continue;
+            c->used += (uint64_t)fs.st_size;
+            c->rows.push_back({ l, f, lineStr(l, "k") });
+        }
+        ++cacheBuilds_;
+        std::lock_guard<std::mutex> lk(cacheMtx_);
+        cache_ = c;
+        return c;
+    }
+    mutable std::mutex cacheMtx_;
+    mutable std::shared_ptr<const Cache> cache_;
+    mutable std::atomic<unsigned long> cacheBuilds_{0};
 
     mutable std::mutex m_;
     std::string dir_, radio_;

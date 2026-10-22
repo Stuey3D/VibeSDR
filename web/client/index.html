@@ -1442,6 +1442,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #bookmarksPanel, #recordingsPanel, #decodersPanel, #galleryPanel { width: min(94vw, 640px); }
 /* ★★ V12 THE GALLERY — what this server's decoders heard, newest first; a NAVTEX message opens inline. */
 #galList .sres { cursor: pointer; flex-wrap: wrap; }
+#galList .sres:focus-visible { outline: 2px solid var(--freq); outline-offset: -2px; }
+#galPager { flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+#galPager .gap { color: var(--unit); padding: 0 2px; }
+#galPager .lab { color: var(--unit); font-size: 11px; margin-left: auto; }
+#galPager .btn:disabled { opacity: 0.35; }
 #galList .sres .n { white-space: normal; }
 #galList .tag { font-size: 10px; letter-spacing: 1px; color: var(--unit); border: 1px solid var(--btn-border);
                 border-radius: 4px; padding: 0 4px; margin-left: 4px; }
@@ -4415,6 +4420,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-kind="ft8">FT8</button>
   </div>
   <div id="galList"></div>
+  <!-- ★ V12 beta 4: pages (main.ts renderGalleryPager) — "‹ Newer · 1 … 6 7 8 … 14 · Older ›", "Page 7 of 14". -->
+  <div class="btnRow" id="galPager" hidden></div>
   <div id="galView" hidden>
     <div class="btnRow">
       <button class="btn" id="galBack">&#8592; BACK</button>

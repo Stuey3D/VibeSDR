@@ -123,10 +123,16 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
 
   Countries come from `vibe_callsign_country.h`, which is generated from the app's `src/services/callsignCountry.ts` by
   `scripts/gen-callsign-country.mjs`, so the app and the server name countries the same way. Nothing is written for a
-  run that heard nothing.
+  run that heard nothing. **One item per run (beta 4):** it is first written after 10 minutes and then REWRITTEN IN
+  PLACE every 10 minutes while the run goes on, only when the counts changed (`Store::replace`: a temp file renamed over
+  the item, and the index the same way, so a power cut leaves the previous card whole). It is written again at the run's
+  end and at UTC midnight (a new item for the new day). The admin line shows the live count meanwhile.
 - **Pictures** are written as PNG by `vibe_png.h`, using `vibe_gzip.h`'s deflate, so no new library is needed.
 - **HTTP, read-only:**
-  - `GET /vibeserver/gallery.json?kind=&limit=` lists the items newest first;
+  - `GET /vibeserver/gallery.json?kind=&limit=` lists the items newest first (the old request: up to 1000, default 300);
+  - **pages (beta 4):** `?offset=&limit=&kind=` — at most 100 a page (default 25), with `total` (how many match the
+    filter) and `offset` added. Served from an in-memory copy of the index, rebuilt only when `index.jsonl` changes
+    (inode, size or mtime) or every 30 s, so a page costs one `stat()` per item shown. `kind` keeps digits (`ft8`).
   - `GET /vibeserver/gallery/file/<name>[?download=1]` serves one item.
 
   Both are gated by the PIN like every other read. If the owner made the gallery private, only the admin can read it. A
@@ -135,7 +141,10 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
   2. it is listed in the index;
   3. it opens with `O_NOFOLLOW`.
 - **Clients.** The web client has GALLERY in the DECODERS menu; the app has GALLERY in Mode → CLIENT DECODERS (VibeServer
-  only). Both list items newest first with filters by decoder. Text items open inline (shown as text, never HTML) and
+  only). Both list items newest first with filters by decoder, **25 a page** with the pager at the bottom ("‹ Newer ·
+  1 … 6 7 8 … 14 · Older ›", "Page 7 of 14" — `src/utils/galleryPager.ts`, one rule for both); a filter change goes to
+  page 1; BACK from an item returns to the same page, scroll and row (the row keeps the focus, so keyboard, D-pad and
+  controller carry on from it). An older server without pages gets the old request and no pager. Text items open inline (shown as text, never HTML) and
   images open as images; both clients can download or save an item.
 
 ## Listeners first: priority, in range, locked radios (2026-10-22, beta3)
@@ -206,11 +215,16 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 
 | Suite | Checks | What it covers |
 |---|---|---|
-| `vibeserver/test-bgdecode.cpp` | 75 | Config, validation and the clock; LSB inversion (RTTY and NAVTEX); the NAVTEX cutter; the store (eviction, path safety); a listener tap; Nick's profile end to end on synthetic IQ (USB **and** LSB VFOs file the same message); WEFAX/SSTV complete, partial and noise; PNG; the FT8 summary. |
+| `vibeserver/test-bgdecode.cpp` | 139 | Config, validation and the clock; LSB inversion (RTTY and NAVTEX); the NAVTEX cutter; the store (eviction, path safety); a listener tap; Nick's profile end to end on synthetic IQ (USB **and** LSB VFOs file the same message); WEFAX/SSTV complete, partial and noise; PNG; the FT8 summary. |
 | `vibeserver/test-config-radios.cpp` | — | `bgDecode` and the gallery fields round-trip, and nothing leaks into the radio's own fields. |
-| `scripts/test-bg-decode.mjs` | 38 | A real server on fake-rtl-tcp: wait → move, profile boundary, arrival → stop + dial restored, a decoder socket on its own, gallery HTTP and path traversal, config API round-trip and refusals, the save applied live. |
+| `scripts/test-bg-decode.mjs` | 41 | A real server on fake-rtl-tcp: wait → move, profile boundary, arrival → stop + dial restored, a decoder socket on its own, gallery HTTP and path traversal, config API round-trip and refusals, the save applied live. |
 | `scripts/test-bg-decode-frontdoor.mjs` | 12 | Front door + a radio process: a save through the door reaches the radio, no park/release once due, an unrelated save restarts nothing. |
 | `scripts/test-setup-bgdecode.mjs` | 20 | The setup page's real editor against a DOM stand-in. |
+| `scripts/test_navtex.ts` | 170 | The NAVTEX cutter (fades, gap markers) and the station rule — the Lenovo's letters, positions, DX, "or". (beta 4) |
+| `scripts/test-bg-decode-admin.mjs` | 15 | The admin line end to end: every state, measured CPU per VFO and for the channels, FT8's live count, nothing without the admin password. (beta 4) |
+| `scripts/test_admin_bg.ts` | 17 | The admin line's wording. (beta 4) |
+| `scripts/test-web-gallery-pages.mjs` | 20 | Pages through the real server and the real built page in headless Edge: totals per filter, the old request unchanged, the pager, filter reset, BACK to the same page/scroll/row. (beta 4) |
+| `scripts/test_gallery_pager.ts` | 13 | The pager's numbering (one rule for web and app). (beta 4) |
 
 The live test uses two test-only environment variables:
 - `VIBESERVER_BG_WAIT_SEC` overrides the owner's wait;

@@ -12,6 +12,7 @@
 //      appended in pieces (never per character).
 //    · end to end without a server: synthetic IQ with a NAVTEX station at 518 kHz, centre 500 kHz, through BgRunner's
 //      channelizer + demodulators + decoders → a NAVTEX message in the gallery, from a USB VFO AND an LSB VFO.
+#include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
 #include "vibe_bgdecode.h"
@@ -291,6 +292,35 @@ static void store() {
     }
     s.setLimitBytes(0);
     ok(s.add(m, "txt", "x").empty(), "size 0 = the gallery keeps nothing");
+}
+
+// ── 4b. ★ V12 beta 4: the gallery in PAGES — offset/limit, the filter's total, the index read once ───────────────────
+static void galleryPages() {
+    std::printf("── the gallery in pages: offset + limit, the filter's total, an in-memory index ──\n");
+    gallery::Store s; s.setDir(tmpDir("pages"));
+    for (int i = 0; i < 60; i++) {
+        gallery::Meta m; m.kind = i % 3 == 0 ? "ft8" : "navtex"; m.origin = "background"; m.freqHz = 518000; m.mode = "usb";
+        m.decoder = m.kind; m.utc = 1792700000 + i; m.title = "item " + std::to_string(i);
+        s.add(m, "txt", "body " + std::to_string(i));
+    }
+    auto num = [](const std::string& j, const char* k) { const size_t p = j.find(std::string("\"") + k + "\":"); return p == std::string::npos ? -1L : std::atol(j.c_str() + p + std::strlen(k) + 3); };
+    auto n = [](const std::string& j) { size_t c = 0; for (size_t at = 0; (at = j.find("\"f\":", at)) != std::string::npos; at++) c++; return c; };
+    const std::string p1 = s.listJson("", 25, 0), p3 = s.listJson("", 25, 50);
+    ok(n(p1) == 25 && num(p1, "total") == 60 && num(p1, "offset") == 0 && p1.find("\"item 59\"") != std::string::npos,
+       "page 1: 25 items, newest first, total 60");
+    ok(n(p3) == 10 && p3.find("\"item 9\"") != std::string::npos && p3.find("\"item 0\"") != std::string::npos, "page 3: the last 10, down to the oldest");
+    const std::string f1 = s.listJson("ft8", 25, 0);
+    ok(n(f1) == 20 && num(f1, "total") == 20 && f1.find("\"k\":\"navtex\"") == std::string::npos, "★ filtered: FT8 only, total 20 for the filter");
+    ok(num(s.listJson("navtex", 25, 0), "total") == 40, "NAVTEX: total 40");
+    const std::string old = s.listJson("", 300);
+    ok(n(old) == 60 && old.find("\"total\"") == std::string::npos && num(old, "count") == 60, "★ an old request (no offset): every item, the old shape");
+    const unsigned long b0 = s.cacheBuilds();
+    for (int i = 0; i < 5; i++) s.listJson("", 25, i * 25);
+    ok(s.cacheBuilds() == b0, "★ pages from the cache: the index is not re-read per page");
+    gallery::Meta m; m.kind = "navtex"; m.origin = "live"; m.freqHz = 490000; m.mode = "usb"; m.decoder = "navtex"; m.title = "item new";
+    s.add(m, "txt", "new");
+    const std::string after = s.listJson("", 25, 0);
+    ok(s.cacheBuilds() == b0 + 1 && num(after, "total") == 61 && after.find("\"item new\"") != std::string::npos, "an append invalidates it: the new item at once");
 }
 
 // ── 5. a decoder host's tap writes the gallery ──────────────────────────────────────────────────────────────────
@@ -652,6 +682,7 @@ int main() {
     sideband();
     navtexAsm();
     store();
+    galleryPages();
     hostTap();
     gapMidMessage();
     navtexStations();
