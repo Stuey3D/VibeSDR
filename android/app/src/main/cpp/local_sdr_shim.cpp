@@ -14491,10 +14491,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (jsonNum(msg, "binBandwidth", bb) && bb > 0) {
                 const uint32_t want = nearestSpan(bb * (double)binsFor(sock));
                 const icom::RadioState st = icom->state();
-                if (want && want != st.spanHalfHz * 2 && st.scopeMode == 0) {
-                    if (!mayTune) refuse(kFollow);
-                    else if (!icom->setSpanTotal(want, why)) refuse(why);
-                }
+                // ★ Under the owner lock a listener's zoom is answered by the config alone — no notice. Every
+                //   existing client restores its own span on join, and a pill per join would be noise; the
+                //   config IS the answer ("a joiner adopts", shared_dial_joiner_imposes_view).
+                if (want && want != st.spanHalfHz * 2 && st.scopeMode == 0 && mayTune && !icom->setSpanTotal(want, why))
+                    refuse(why);
             }
             sendConfig(sock);
             return true;
