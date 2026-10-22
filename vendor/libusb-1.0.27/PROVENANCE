@@ -1,0 +1,14 @@
+libusb 1.0.27 — for the OpenRSP driver inside the Android apps
+==============================================================
+
+Source:   https://github.com/libusb/libusb/releases/download/v1.0.27/libusb-1.0.27.tar.bz2
+SHA-256:  ffaa41d741a8a3bee244ac8e54a72ea05bf2879663c098c82fc5757853441575 (verified on download; the same
+          hash vendor/openrsp/src/platform/android/Android.cmake pins as SDRPLAY_ANDROID_LIBUSB_SHA256)
+Licence:  GNU LGPL 2.1 or later (COPYING).
+Contents: COPYING, AUTHORS, README and the libusb/ directory, UNMODIFIED. SHA256SUMS lists every file, and
+          android/openrsp/build-openrsp-android.sh refuses to build if any of them differs.
+
+★★ WHY IT IS IN THE TREE. OpenRSP's Android build downloads this tarball at CONFIGURE time unless
+   SDRPLAY_ANDROID_LIBUSB_SRC names an extracted tree. A build that reaches the network is a build that breaks
+   offline and can change under us, so it is pointed here instead. OpenRSP compiles it STATICALLY with hidden
+   visibility into libsdrplay_api.so, so it never meets the libusb1.0.so the other radios use (1.0.26, sdr-kit).
