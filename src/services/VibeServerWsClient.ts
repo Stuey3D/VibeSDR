@@ -55,7 +55,7 @@
 
 import type { DabState } from './dabTypes';
 import type { ShareOut } from './chatShare';
-import { isIcom, parseIcomRadio, parseIcomStatus, icomControlMsg, nearestSpanIndex,
+import { isIcom, parseIcomRadio, parseIcomStatus, icomControlMsg, nearestSpanIndex, mergeIcomStatus,
          type IcomRadio, type IcomControlFields } from './icomRadio';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzipToStringCapped } from '../utils/boundedInflate';   // ★ capped: a gzip bomb is dropped, not inflated
@@ -1969,7 +1969,9 @@ export abstract class VibeServerWsClient {
       }
       let stalls = 0;
       for (let i = 0; i < h.length; i++) if (h[i] > med * 2.5 + 50) stalls++;
-      const starving = this.lastFrameAt > 0 &&
+      // ★ An Icom transmitting / off CI-V sends no sweeps ON PURPOSE — that is not a starving link.
+      const icomQuiet = !!this.icom && (this.icom.tx || !this.icom.linkUp);
+      const starving = !icomQuiet && this.lastFrameAt > 0 &&
         now - this.lastFrameAt > Math.max(2000, med * 4);
       if (now - this.lastReconnectAt < 8000 || stalls >= 3 || starving || this.rttJit > 250) {
         q = 1;
@@ -2059,14 +2061,21 @@ export abstract class VibeServerWsClient {
     }
 
     // 2. NO FIRST FRAME — the socket opened into a session that isn't there.
-    if (this.framesThisSocket === 0 && this.wsOpenedAt > 0 &&
+    // ★ …unless it is an Icom that has told us (hwinfo, on this socket) it is transmitting or off CI-V.
+    const icomSaysWhy = !!this.icom && (this.icom.tx || !this.icom.linkUp);
+    if (!icomSaysWhy && this.framesThisSocket === 0 && this.wsOpenedAt > 0 &&
         now - this.wsOpenedAt > NO_FIRST_FRAME_MS) {
       this.forceResubscribe('no-first-frame');
       return;
     }
 
     // 3. FRAME STALENESS — backstop for a server that pongs but stops sending.
-    if (this.framesThisSocket > 0 && this.lastFrameAt > 0 &&
+    // ★★★ NOT WHILE AN ICOM SAYS WHY. The server FREEZES the scope while the owner transmits (a QSO over
+    //     is easily longer than 10 s) and has no sweeps to send while the radio is not answering on CI-V;
+    //     both arrive as state (radio.tx / linkUp, the icom status line). Reopening the socket then fixes
+    //     nothing and churns the session — the pong timeout above still catches a dead link.
+    const icomQuiet = !!this.icom && (this.icom.tx || !this.icom.linkUp);
+    if (!icomQuiet && this.framesThisSocket > 0 && this.lastFrameAt > 0 &&
         now - this.lastFrameAt > this._staleLimitMs()) {
       this.forceResubscribe('frames-stale');
       return;
@@ -2416,7 +2425,10 @@ export abstract class VibeServerWsClient {
      *  relative to the radio's REF level, not dBFS. */
     if (msg.type === 'icom') {
       const st = parseIcomStatus(msg);
-      if (st) this.callbacks.onIcomStatus?.(st);
+      if (st) {
+        if (this.icom) this.icom = mergeIcomStatus(this.icom, st);   // ★ TX/link for the watchdog below
+        this.callbacks.onIcomStatus?.(st);
+      }
       return;
     }
     if (msg.type === 'notice') {
