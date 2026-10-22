@@ -29,6 +29,7 @@
 		A1B2C3D40001FR0NTD00R001 /* FrontDoor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */; };
 		A1B2C3D40001ADM1NSECRET01 /* AdminSecret.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002ADM1NSECRET02 /* AdminSecret.swift */; };
 		A1B2C3D4000171SPR0MP7001 /* TlsTrustPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000271SPR0MP7002 /* TlsTrustPrompt.swift */; };
+		A1B2C3D4000171C0MRAD1001 /* IcomRadio.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000271C0MRAD1002 /* IcomRadio.swift */; };
 		A1B2C3D40001715TRU570001 /* TlsTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002715TRU570002 /* TlsTrust.swift */; };
 		A1B2C3D40001715P1N000001 /* TlsPin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002715P1N000002 /* TlsPin.swift */; };
 		5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FF50C437861299AAC27394 /* SignalProcessor.swift */; };
@@ -95,6 +96,7 @@
 		A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontDoor.swift; sourceTree = "<group>"; };
 		A1B2C3D40002ADM1NSECRET02 /* AdminSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminSecret.swift; sourceTree = "<group>"; };
 		A1B2C3D4000271SPR0MP7002 /* TlsTrustPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TlsTrustPrompt.swift; sourceTree = "<group>"; };
+		A1B2C3D4000271C0MRAD1002 /* IcomRadio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IcomRadio.swift; sourceTree = "<group>"; };
 		A1B2C3D40002715TRU570002 /* TlsTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TlsTrust.swift; sourceTree = "<group>"; };
 		A1B2C3D40002715P1N000002 /* TlsPin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TlsPin.swift; sourceTree = "<group>"; };
 		3EEC2B3FFA6441C4C3A46B8F /* FmdxMp3Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxMp3Decoder.swift; sourceTree = "<group>"; };
@@ -189,6 +191,7 @@
 				A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */,
 				A1B2C3D40002ADM1NSECRET02 /* AdminSecret.swift */,
 				A1B2C3D4000271SPR0MP7002 /* TlsTrustPrompt.swift */,
+				A1B2C3D4000271C0MRAD1002 /* IcomRadio.swift */,
 				A1B2C3D40002715TRU570002 /* TlsTrust.swift */,
 				A1B2C3D40002715P1N000002 /* TlsPin.swift */,
 				DC1001D6D5D78E308A2F855C /* OwrxSocket.swift */,
@@ -378,6 +381,7 @@
 				A1B2C3D40001FR0NTD00R001 /* FrontDoor.swift in Sources */,
 				A1B2C3D40001ADM1NSECRET01 /* AdminSecret.swift in Sources */,
 				A1B2C3D4000171SPR0MP7001 /* TlsTrustPrompt.swift in Sources */,
+				A1B2C3D4000171C0MRAD1001 /* IcomRadio.swift in Sources */,
 				A1B2C3D40001715TRU570001 /* TlsTrust.swift in Sources */,
 				A1B2C3D40001715P1N000001 /* TlsPin.swift in Sources */,
 				F2566A4100EC8550A4BEFB78 /* OwrxSocket.swift in Sources */,

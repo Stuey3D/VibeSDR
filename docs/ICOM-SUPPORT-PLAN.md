@@ -830,6 +830,27 @@ and has no transmit field to build. Tested by `scripts/test_icom_radio.ts` (129 
   span / zoom reach it, USB-D from the picker reaches it, TX banner, 390 px with no overflow, five looks legible,
   no page exceptions, zero disallowed frames.
 
+### What JR (the standalone watch app) does on an Icom — branch `v12-icom-jr`
+
+- **One rule, a fourth reader:** `spike/WristSDR/WristSDR/IcomRadio.swift` ports the parts of `icomRadio.ts` a watch
+  draws (parser, status-line merge, owner lock, labels, FIL widths/passband, span ladder, S-meter, banner words, a
+  receive-only `icom_control` builder for mode/FIL). Checked by `scripts/test-jr-icom.sh` (34 checks, macOS).
+- **Hidden:** the IQ Radio page (gain, VibeAGC, digital AGC, rate, RSP/HF+/HackRF, de-emphasis, FM DSP, bias-T), our
+  SQL and the BW editor, WFM/DAB in the mode list. The generic hwinfo IQ fields are ignored and the per-host dongle
+  replay never runs.
+- **Drawn:** MODE tile (radio's names) and FILTER tile (FIL1/2/3 + factory widths) in the menu; the band label leads
+  with the radio's mode; the frequency pill's meter is the radio's S-meter; red TX / amber not-answering banners; an
+  Icom Radio page (model, RECEIVE ONLY, mode, S-meter, filter, follow note, the owner's sign-in).
+- **Wire:** the radio is the dial — every vfo move and mode change adopted, no saved tune/squelch/span asserted on
+  connect (remembered per radio so it is known before hwinfo), a subscribe that asks for the radio's own span or only
+  `reset`; tune/mode/zoom/icom_control on the spectrum socket (where admin_unlock is); under the owner lock refused
+  locally with one notice per 4 s, server refusals into the same notice; zoom = one rung per crown detent; no
+  re-subscribe, reconnect pill, stall overlay or audio self-heal while the radio transmits or is off CI-V.
+- **Verified:** type-check + watch-simulator build; the wire replayed against vibeserver + the fake IC-7300 (scratch
+  probe, 15 checks). **Not verified:** on a watch or simulator screen; fixed scope mode (Jr draws the VFO at the
+  centre, so the needle is misplaced when the radio's scope is FIXED); first-ever connect to an Icom with the lock
+  OFF still sends the default ~100 kHz subscribe span before Jr knows it is an Icom.
+
 ### Decisions (each easy to reverse)
 
 1. **A control a listener may not use is hidden and its STATE shown read-only** (e.g. "P.AMP1 · ATT OFF · AGC
@@ -851,8 +872,9 @@ and has no transmit field to build. Tested by `scripts/test_icom_radio.ts` (129 
 
 ### Not done / not verified
 
-- **The watch (Jr) and the iOS/Android watch faces** have no Icom branch: on an Icom server they would still draw
-  their IQ controls. Swift could not be built on this branch.
+- **Buddy (the iPhone's watch remote) and the Android watch face** have no Icom branch: on an Icom server they would
+  still draw their IQ controls (SQL, BW, the client mode list with WFM). Buddy only mirrors the phone, so it needs a
+  phone → watch field first (`watchProvider` + the native WatchLink payload). **Jr is done** — see below.
 - **The app UI has not been run**: no simulator/device build was allowed. Theme (default/silver/black,
   transparency on/off) and phone/wide layout of the new sheet section and banners are unverified on screen; they
   reuse the existing sheet's styles and the owner-notice banner, which already pass those checks.

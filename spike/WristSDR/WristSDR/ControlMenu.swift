@@ -323,6 +323,7 @@ struct ControlMenu: View {
   @State private var showAutoStop = false
   @State private var showBw = false
   @State private var showSquelch = false
+  @State private var showFil = false
   @State private var showBookmarks = false
   @State private var showDisplay = false
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
@@ -420,7 +421,8 @@ struct ControlMenu: View {
           //
           // NAME the control, then show its VALUE — a tile reading just "USB"/"9k" leaves you guessing
           // what it's the setting FOR. The name makes it a control; the value makes the menu a readout.
-          tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
+          // ★ On an Icom the RADIO's mode by its own name (USB-D, RTTY-R), from the radio's own list.
+          tile(name: link.isIcom ? "MODE" : "DEMOD", value: link.modeLabel, h: h) { showModes = true }
           tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
@@ -437,9 +439,18 @@ struct ControlMenu: View {
             dismiss(); link.setMuted(!link.muted)
           }
           // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
+          // ★★ AN ICOM HAS FIL1/2/3, NOT A PASSBAND — the radio's own filters, picked from its list; and no squelch
+          //    of ours at all (the audio is the radio's, already through its own squelch). AGENTS.md: a control that
+          //    only works on one radio is not drawn on another.
+          if let ic = link.icom {
+            if !ic.filters.isEmpty {
+              tile(name: "FILTER", value: ic.filLabel(ic.filNow), h: h) { showFil = true }
+            }
+          } else {
           tile(name: "BW", value: bwLabel, h: h) { showBw = true }
           // Squelch: SNR audio gate. Value = threshold in dB (Off = open).
           tile(name: "SQL", value: link.sql < 0 ? "Off" : "On", h: h) { showSquelch = true }
+          }
           // (The OWRX DAB tile was removed — its programme picker + speed fix live on the main DAB
           //  screen. This is a different thing: the way IN, on a VibeServer, where DAB is a MODE
           //  and not a profile, so there is nothing else that could ever start it.)
@@ -549,6 +560,16 @@ struct ControlMenu: View {
        *  here it went to the server as a mode name and only widened the passband (Stuart,
        *  2026-09-09: "selecting DAB just widens the passband"). OWRX keeps them: there dab and
        *  adsb ARE profile modes. Same rule Buddy's menu already applies. */
+      if let ic = link.icom {
+        // ★★★ AN ICOM: the RADIO's modes, by its own names, sent as icom_control — the radio's answer (the status
+        //     line) relights the tile, never this tap. Under the owner lock the tap says who tunes it instead.
+        PickerList(title: "Mode",
+                   items: ic.modes.map(IcomRadio.modeLabel),
+                   current: IcomRadio.modeLabel(ic.modeNow)) { label in
+          if let m = ic.modes.first(where: { IcomRadio.modeLabel($0) == label }) { link.setIcomMode(m) }
+          showModes = false; dismiss()
+        }
+      } else {
       PickerList(title: "Demod",
                  // ★ A VibeServer has WFM, NFM, AM, USB, LSB and BOTH CW sidebands — no SAM. A bare
                  //   "cw" went to the server and it chose a sideband for you (2026-09-15).
@@ -558,6 +579,19 @@ struct ControlMenu: View {
                  current: link.dabActive ? "dab" : link.mode) { m in
         if m == "dab", link.vibe != nil { link.setDabMode(true) } else { link.setMode(m) }
         showModes = false; dismiss()
+      }
+      }
+    }
+    .sheet(isPresented: $showFil) {
+      if let ic = link.icom {
+        // ★ FIL1/2/3 with the radio's FACTORY widths for this mode (approximate — the owner can change them in the
+        //   radio and CI-V does not say).
+        PickerList(title: "Filter",
+                   items: ic.filters.map { ic.filLabel($0) },
+                   current: ic.filLabel(ic.filNow)) { label in
+          if let f = ic.filters.first(where: { ic.filLabel($0) == label }) { link.setIcomFil(f) }
+          showFil = false; dismiss()
+        }
       }
     }
     .sheet(isPresented: $showSteps) {
@@ -808,7 +842,9 @@ struct HardwareSheet: View {
       }.foregroundColor(.orange)
       // ★ Say which of the two situations this is. "Most of this is yours" and "none of
       //   this is yours" want different sentences, and the second one is the whole screen.
-      Text(radio.dialTuneLocked
+      Text(radio.icom != nil
+           ? "Listeners follow this radio. Its owner signs in here to tune it from the watch."
+           : radio.dialTuneLocked
            ? "Signed in as admin you are never locked. Enter the admin password to take the receiver over."
            : nothingForUser
            ? "Every control on this receiver is set by its owner. There is nothing here for a listener to change."
@@ -862,7 +898,50 @@ struct HardwareSheet: View {
     ownerLocked && !(hasAnyGainControl && canGain) && !canSpan
   }
 
+  /* ★★★ AN ICOM GETS ITS OWN PAGE, AND NOTHING OF THE IQ ONE. Every control below this (gain, VibeAGC, digital AGC,
+   *  span/rate, the RSP/HF+/HackRF stages, de-emphasis, the FM DSP, bias-T) acts on an IQ radio the server does not
+   *  have — it swallows them all on an Icom — so drawing any of them would be a dead control (AGENTS.md). What the
+   *  page keeps is what is TRUE here: which radio, that it is receive only, what it is doing, who tunes it, and the
+   *  way in for its owner (signing in is what lifts the owner lock). The radio's own RF settings (ATT, preamp, AGC,
+   *  RF gain, NB/NR) are the owner's by default and live in the app and the browser, not on a wrist. */
   var body: some View {
+    if let ic = radio.icom { icomBody(ic) } else { iqBody }
+  }
+
+  private func icomBody(_ ic: IcomRadio) -> some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 5) {
+          Image(systemName: "antenna.radiowaves.left.and.right").font(.system(size: 10, weight: .bold))
+          Text(ic.model).font(.system(size: 12, weight: .semibold))
+          Spacer()
+          Text("RECEIVE ONLY").font(.system(size: 9, weight: .bold)).foregroundColor(.green)
+        }
+        .foregroundColor(.white.opacity(0.75))
+        HStack(spacing: 7) {
+          cell(title: "MODE", value: IcomRadio.modeLabel(ic.modeNow).isEmpty ? "—" : IcomRadio.modeLabel(ic.modeNow), lit: false)
+          cell(title: "S-METER", value: IcomRadio.sMeter(radio.icomSDb)?.text ?? "S—", lit: false)
+        }
+        if !ic.filters.isEmpty {
+          cell(title: "FILTER", value: ic.filLabel(ic.filNow), lit: false)
+        }
+        if !ic.banner.isEmpty {
+          Text(ic.banner).font(.system(size: 11, weight: .semibold)).foregroundColor(ic.tx ? .red : .orange)
+        }
+        Text(radio.icomFollowLocked
+             ? IcomRadio.followNote
+             : "This watch follows the radio: what you hear is what it is tuned to, in its own mode and filter.")
+          .font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
+          .fixedSize(horizontal: false, vertical: true)
+        // ★ The owner's way in: signed in, the owner lock no longer applies to this watch.
+        if radio.adminSet && !radio.adminOk { adminCard }
+      }
+      .padding(.horizontal, 6).padding(.bottom, 10)
+    }
+    .navigationTitle("Radio")
+  }
+
+  private var iqBody: some View {
     ScrollView {
       // ★★★ ASK BEFORE TUNING (Stuart, 2026-10-21: "lock gain too"): on a shared tuner every control on this page
       //   changes what everybody hears, so while the server has not let this listener in, the page is dimmed and

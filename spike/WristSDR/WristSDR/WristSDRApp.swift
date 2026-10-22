@@ -83,6 +83,10 @@ func sdrTutorialTips(isOwrx: Bool) -> [TutorialTip] {
     //   marginal link is most likely to drop. Without this line the first few seconds look like
     //   the app is bad rather than careful.
     .init(icon: "waveform.path.ecg", text: "With **Automatic Link Management** on, the waterfall starts slower while we work out how much the connection can carry. The link glyph cycles while it decides, then speeds up if the link is good."),
+    // ★★ AN ICOM (V12, receive only). Always listed, not only on an Icom: this card is shown ONCE, and somebody whose
+    //    first session was an ordinary SDR would otherwise never be told. AGENTS.md "where things are": the mode and
+    //    filter are in the menu (MODE / FILTER tiles), the meter is the frequency pill, zoom is the radio's span.
+    .init(icon: "dot.radiowaves.left.and.right", text: "On an **Icom** transceiver Jr **follows the radio**: the frequency pill shows the radio's own **S-meter**, the band label its own **mode** (USB-D, RTTY), and zoom steps through the radio's spans. It is receive only, and usually only its owner tunes it."),
   ]
   if isOwrx {
     t.append(.init(icon: "wifi.exclamationmark", text: "Some OWRX servers stream heavily and can overwhelm the phone's Bluetooth link. If it stutters, use the watch's **own Wi-Fi or cellular** — you'll also see a warning pill when it happens."))

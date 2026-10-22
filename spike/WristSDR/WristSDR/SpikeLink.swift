@@ -450,6 +450,19 @@ final class SpikeLink: ObservableObject {
   /// the hardware controls don't have to be mirrored through the whole SDRClient protocol.
   var vibe: UberClient? { if let u = client as? UberClient, u.isVibe { return u }; return nil }
   var hasHardwareControls: Bool { vibe != nil }
+  /// ★★★ An ICOM transceiver (receive only), mirrored from the client each tick. nil = any other radio. The views
+  /// branch on it: the radio's mode by its own name, FIL instead of a passband, the radio's S-meter, the TX and
+  /// not-answering banners — and none of the IQ controls (our squelch, gain, rate, DAB). See IcomRadio.swift.
+  @Published var icom: IcomRadio? = nil
+  var isIcom: Bool { icom != nil }
+  private var icomNoticeSeen = 0
+  /// The radio's own mode for this watch's labels ("USB-D"); the client-vocabulary `mode` everywhere else.
+  var modeLabel: String {
+    if let ic = icom, !ic.modeNow.isEmpty { return IcomRadio.modeLabel(ic.modeNow) }
+    return mode.uppercased()
+  }
+  func setIcomMode(_ radioMode: String) { noteActivity(); vibe?.setIcomMode(radioMode) }
+  func setIcomFil(_ fil: Int) { noteActivity(); vibe?.setIcomFil(fil) }
 
   /// LEARNED station memory for the FM-DX dial. On the phone this was built as you tuned; the watch
   /// COMPANION piggybacked off the phone over WCSession. The standalone spike has no phone, so it learns
@@ -828,6 +841,14 @@ final class SpikeLink: ObservableObject {
     let offerName = (client as? UberClient)?.radioChoiceName ?? ""
     if radioChoiceName != offerName { radioChoiceName = offerName }
     if let u = client as? UberClient, vibeDiag != u.vibeDiag { vibeDiag = u.vibeDiag }
+    let ic = (client as? UberClient)?.icom
+    if icom != ic { icom = ic }
+    // ★ An Icom refusal (the owner lock, or the radio saying no) — one pill per bump; UberClient already holds it to
+    //   one per 4 s.
+    if let u = client as? UberClient, u.icomNoticeSeq != icomNoticeSeen {
+      icomNoticeSeen = u.icomNoticeSeq
+      if !u.icomNotice.isEmpty { notify(u.icomNotice, for: 3) }
+    }
     if let u = client as? UberClient {
       if evicted != u.evicted { evicted = u.evicted }
       // ★ The SERVER's word on the session, not our local clock. The countdown is a
@@ -898,9 +919,21 @@ final class SpikeLink: ObservableObject {
     if filtHi != client.bwHigh { filtHi = client.bwHigh }
     // Signal meter — bar fill + SNR text, computed for free by the spectrum DSP. Round the
     // text so it doesn't invalidate the view on sub-dB jitter.
+    if icom != nil {
+      /* ★★★ AN ICOM'S METER IS THE RADIO'S OWN — from the `icom` status line, in S-units, whatever unit the Display
+       *  menu picked: the scope is relative to the radio's REF level, not dBFS, so an SNR or dBFS figure derived
+       *  from it would be a number about nothing. "S—" until the radio has been read. */
+      let sm = IcomRadio.sMeter((client as? UberClient)?.icomSDb)
+      let lv = sm?.frac ?? 0
+      if abs(level - lv) > 0.005 { level = lv }
+      let mt = sm?.text ?? "S\u{2014}"
+      if meter != mt { meter = mt }
+      if sql >= 0 { sql = -1 }   // ★ our squelch does not exist on an Icom — never draw its needle
+    } else {
     if abs(level - client.signalLevel) > 0.005 { level = client.signalLevel }
     let mt = Self.meterText(unit: meterUnit, snrDb: client.signalDb, dbfs: client.signalDbfs + visualGainDb)
     if meter != mt { meter = mt }
+    }
     let sn = sqlNorm(needleDb(client))  // signal on the needle's 0..1 scale, per backend
     if abs(sqlSignal - sn) > 0.004 { sqlSignal = sn }
     // ★ A squelch remembered for this VibeServer (GitHub #28) — put the needle where the gate is.
@@ -1087,7 +1120,9 @@ final class SpikeLink: ObservableObject {
     //     (Stuart, 2026-09-17: "dropping the spectrum connection", the link detector silent). Three
     //     seconds without a row is fifteen missing frames at 5 fps — that is a stall worth naming.
     let rowGap = lastRowAt.map { Date().timeIntervalSince($0) } ?? 0
-    let recovering = everGotRow && rowGap > 3.0 && !isBackground
+    // ★ An Icom transmitting or off CI-V sends no sweeps ON PURPOSE (the server froze the scope): its banner says
+    //   so, and a "reconnecting" pill beside it would be a false alarm.
+    let recovering = everGotRow && rowGap > 3.0 && !isBackground && !(vibe?.icomQuiet ?? false)
     let newWhy = recovering ? "reconnecting" : "live"
     if why != newWhy { why = newWhy }
 
