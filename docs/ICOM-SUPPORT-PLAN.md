@@ -812,6 +812,22 @@ and has no transmit field to build. Tested by `scripts/test_icom_radio.ts` (129 
   fields, POST the whole thing back (it restarts the server, as the setup page says). A phone server answers 501
   and the card shows the facts only. "OPEN THE SETUP PAGE" is there too.
 
+### What the BROWSER does on an Icom (`web/client`, page rebuilt into `vibe_web_page.h`)
+
+- A `#icomCtls` panel (`icomUi.ts`) with the same controls as the app's sheet, lit only from the radio's answer.
+  The card's mode picker offers the radio's modes, with FIL1/2/3 in place of the bandwidth sliders; the meter is
+  S-units from the status line ("TX" while the owner transmits); RECEIVER reads "Icom IC-7300 · receive only".
+- One `body.icom` class + `.icomHide` tags hide every IQ control (rate, gain, VibeAGC, IF filter, `.rtlOnly`,
+  `.rtlRspOnly`, the RSP/HF+/HackRF/Airspy panels, our squelch and NB, NFM voice, the broadcast-FM rows, raw IQ,
+  VFO-centre lock, the fps row, WFM, DAB), so the next radio gets all of it back at once.
+- Zoom snaps to span rungs (cap = the widest rung, the 5 kHz rung reachable); `tune()` never sends a zoom; the first
+  config always adopts where the radio is; under the owner lock tune/zoom are stopped in the page with a
+  rate-limited pill; the link bars do not drop while the scope is frozen for TX.
+- Tested by `scripts/test-web-icom.mjs` (61 checks, real server on the fake + muted headless Edge on this tree's
+  `web/dist` through a proxy): hidden controls and their return, a listener cannot move the fake, the admin's mode /
+  span / zoom reach it, USB-D from the picker reaches it, TX banner, 390 px with no overflow, five looks legible,
+  no page exceptions, zero disallowed frames.
+
 ### Decisions (each easy to reverse)
 
 1. **A control a listener may not use is hidden and its STATE shown read-only** (e.g. "P.AMP1 · ATT OFF · AGC
