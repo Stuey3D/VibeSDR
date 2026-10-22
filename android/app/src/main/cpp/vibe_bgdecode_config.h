@@ -6,6 +6,7 @@
 #include "vibe_gallery.h"        // jsonEsc
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -35,17 +36,25 @@ struct Config {
 constexpr size_t kMaxProfiles = 4;
 constexpr size_t kMaxVfos = 8;
 
-/** ★ What a background VFO may decode, and what it is told. PHASE 1: the text decoders — NAVTEX and RTTY. `toneHz` is
- *  where the signal sits in the AUDIO (USB: RF = dial + tone; LSB: RF = dial − tone): NAVTEX on 518 kHz is dial 517.5
- *  USB or 518.5 LSB. `inverted` is the preset's polarity on USB — LSB mirrors the audio, so the decoder is told the
- *  OPPOSITE there (★★ NickB, 2026-10-22: LSB to dodge local interference; the mark/space swap is ours to make). */
-struct DecoderDef { const char* id; const char* label; const char* ext; double toneHz; double shift; double baud; bool inverted; bool autoRtty; };
+/** ★ What a background VFO may decode, which demodulators it works on, and what it is told. `toneHz` is where the
+ *  signal sits in the AUDIO (USB: RF = dial + tone; LSB: RF = dial − tone): NAVTEX on 518 kHz is dial 517.5 USB or
+ *  518.5 LSB; a WEFAX carrier is the dial + 1.9 kHz; SSTV and FT8 frequencies are quoted as the dial itself (tone 0).
+ *  `inverted` is the preset's polarity on USB — LSB mirrors the audio, so the decoder is told the OPPOSITE there
+ *  (★★ NickB, 2026-10-22: LSB to dodge local interference; the mark/space swap is ours to make).
+ *  ★ `modes` lists only what works: WEFAX and SSTV are NOT offered on LSB — mirrored audio is a negative chart and a
+ *    scrambled picture, and neither decoder can be told otherwise — and SSTV on NFM is the ISS on 145.800.
+ *  ★ `ext` "" = the FT8/FT4 spotter (DecoderHost::startSpots), kept as a run's SUMMARY, not as spots. */
+struct DecoderDef { const char* id; const char* label; const char* ext; const char* kind; const char* modes;
+                    double toneHz; double shift; double baud; bool inverted; bool autoRtty; };
 inline const std::vector<DecoderDef>& decoders() {
     static const std::vector<DecoderDef> d = {
-        { "navtex",       "NAVTEX",                     "navtex", 500,  170, 100,   false, false },
-        { "rtty",         "RTTY (auto)",                "fsk",    1000, 170, 45.45, false, true  },
-        { "rtty-ham",     "RTTY 45.45 Bd 170 Hz",       "fsk",    1000, 170, 45.45, false, false },
-        { "rtty-weather", "RTTY 50 Bd 450 Hz (weather)", "fsk",   1000, 450, 50,    true,  false },
+        { "navtex",       "NAVTEX",                      "navtex", "navtex", "usb,lsb", 500,  170, 100,   false, false },
+        { "rtty",         "RTTY (auto)",                 "fsk",    "rtty",   "usb,lsb", 1000, 170, 45.45, false, true  },
+        { "rtty-ham",     "RTTY 45.45 Bd 170 Hz",        "fsk",    "rtty",   "usb,lsb", 1000, 170, 45.45, false, false },
+        { "rtty-weather", "RTTY 50 Bd 450 Hz (weather)", "fsk",    "rtty",   "usb,lsb", 1000, 450, 50,    true,  false },
+        { "wefax",        "WEFAX (120 LPM)",             "wefax",  "wefax",  "usb",     1900, 0,   0,     false, false },
+        { "sstv",         "SSTV",                        "sstv",   "sstv",   "usb,nfm", 0,    0,   0,     false, false },
+        { "ft8",          "FT8 / FT4 (summary)",         "",       "ft8",    "usb",     0,    0,   0,     false, false },
     };
     return d;
 }
@@ -53,15 +62,23 @@ inline const DecoderDef* decoderDef(const std::string& id) {
     for (const auto& d : decoders()) if (id == d.id) return &d;
     return nullptr;
 }
-/** The demodulators a background VFO offers — only those with a decoder that works on them (AGENTS.md: no control
- *  whose every use is a no-op). Phase 2 adds what WEFAX / SSTV / FT8 need. */
-inline bool demodOk(const std::string& m) { return m == "usb" || m == "lsb"; }
-inline bool decoderFitsDemod(const std::string& dec, const std::string& mode) { return decoderDef(dec) && demodOk(mode); }
+/** The demodulators a background VFO offers — only those some decoder works on (AGENTS.md: no control whose every use
+ *  is a no-op). */
+inline bool demodOk(const std::string& m) { return m == "usb" || m == "lsb" || m == "nfm"; }
+inline bool decoderFitsDemod(const std::string& dec, const std::string& mode) {
+    const DecoderDef* d = decoderDef(dec);
+    if (!d || !demodOk(mode)) return false;
+    const std::string ms = std::string(",") + d->modes + ",";
+    return ms.find("," + mode + ",") != std::string::npos;
+}
+/** The demodulator's passband for a background channel: SSB 2.7 kHz (FT8 3 kHz — its sub-band is 200-3000 Hz),
+ *  NFM 12.5 kHz. */
+inline double passbandHz(const Vfo& v) { return v.mode == "nfm" ? 12500.0 : v.dec == "ft8" ? 3000.0 : 2700.0; }
 
 /** The signal frequency a VFO is listening for (NAVTEX at 517.5 USB → 518.0). */
 inline double signalHz(const Vfo& v) {
     const DecoderDef* d = decoderDef(v.dec);
-    const double tone = d ? d->toneHz : 0;
+    const double tone = d && v.mode != "nfm" ? d->toneHz : 0;
     return v.mode == "lsb" ? v.hz - tone : v.hz + tone;
 }
 
@@ -69,11 +86,18 @@ inline double signalHz(const Vfo& v) {
 inline std::string attachMsg(const Vfo& v) {
     const DecoderDef* d = decoderDef(v.dec);
     if (!d) return "{}";
+    const std::string id = d->id;
     const bool inv = d->inverted != (v.mode == "lsb");      // ★ LSB mirrors the tones — tell the decoder
     char b[320];
-    if (std::string(d->id) == "navtex")
+    if (id == "navtex")
         std::snprintf(b, sizeof b, "{\"center_frequency\":%.0f,\"shift\":%.0f,\"baud_rate\":%.0f,\"inverted\":%s}",
                       d->toneHz, d->shift, d->baud, inv ? "true" : "false");
+    // ★ WEFAX unattended: wait for the START TONE and end on the STOP TONE, so every chart is one item with its
+    //   phasing and header bar — never a run-on strip (the UberSDR lesson, docs/v12/DECODERS-GALLERY.md).
+    else if (id == "wefax")
+        std::snprintf(b, sizeof b, "{\"lpm\":120,\"image_width\":1809,\"carrier\":%.0f,\"deviation\":400,"
+                      "\"auto_start\":true,\"auto_stop\":true}", d->toneHz);
+    else if (id == "sstv" || id == "ft8") std::snprintf(b, sizeof b, "{}");
     else
         std::snprintf(b, sizeof b, "{\"center_frequency\":%.0f,\"shift\":%.0f,\"baud_rate\":%.2f,\"encoding\":\"ITA2\","
                       "\"framing\":\"5N1.5\",\"inverted\":%s%s}",
@@ -173,8 +197,15 @@ inline bool validate(const Config& c, double rate, std::string& err) {
             const auto& v = p.vfos[k];
             const std::string vn = name + ", VFO " + std::to_string(k + 1);
             if (!(v.hz > 0)) { err = vn + ": set a frequency"; return false; }
-            if (!demodOk(v.mode)) { err = vn + ": background decoding runs on USB or LSB"; return false; }
-            if (!decoderFitsDemod(v.dec, v.mode)) { err = vn + ": choose a decoder"; return false; }
+            if (!demodOk(v.mode)) { err = vn + ": background decoding runs on USB, LSB or NFM"; return false; }
+            if (!decoderDef(v.dec)) { err = vn + ": choose a decoder"; return false; }
+            if (!decoderFitsDemod(v.dec, v.mode)) {
+                std::string need = decoderDef(v.dec)->modes, m = v.mode;
+                for (auto& c : need) c = c == ',' ? '/' : (char)std::toupper((unsigned char)c);
+                for (auto& c : m) c = (char)std::toupper((unsigned char)c);
+                err = vn + ": " + std::string(decoderDef(v.dec)->label) + " does not work on " + m + " \xe2\x80\x94 it needs " + need;
+                return false;
+            }
             if (rate > 0) {
                 const double half = halfWindowHz(rate);
                 const double off = std::fabs(v.hz - p.centreHz);

@@ -5489,6 +5489,8 @@ static vibe::bg::Config    g_bgCfg;
 static std::atomic<int>    g_bgCfgGen{0};             // ★ bumped on every change — a running profile restarts on it
 static std::atomic<bool>   g_gallerySaveLive{true};   // ★ keep a LISTENER's decodes too (Stuart: default ON)
 static std::atomic<bool>   g_galleryPublic{true};     // ★ the gallery is everyone's to read unless the owner says not
+// ★ This server's position, for the FT8 summary's "furthest" (setReceiverPosition). NaN = none set.
+static std::atomic<double> g_bgLat{NAN}, g_bgLon{NAN};
 /** ★ TEST-ONLY knobs, read from the environment so no build differs from the one that ships:
  *  VIBESERVER_BG_WAIT_SEC overrides the owner's wait; VIBESERVER_BG_TEST_CLOCK names a file holding "HH:MM" that
  *  stands in for the UTC clock (a profile boundary is then a file write, not a night's wait). */
@@ -22882,7 +22884,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   for (auto& kv : clientDsp) if (kv.second && kv.second->session == session && !session.empty()) { md = kv.second->mode; break; } }
                 if (md.empty()) { std::lock_guard<std::recursive_mutex> ml(modeMtx); md = mode; }
                 m.mode = md;
-                return std::make_shared<vibe::bg::GalleryTap>(vibe::gallery::shared(), m, dial);
+                return vibe::bg::makeGalleryTap(vibe::gallery::shared(), m, dial);
+            };
+            // ★★ …and a listener's FT8/FT4: the same SUMMARY background decoding keeps, one per spotting session.
+            e.spotTap = [dial]() -> vibe::DecoderTapPtr {
+                if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
+                vibe::gallery::Meta m;
+                m.kind = "ft8"; m.origin = "live"; m.decoder = "ft8"; m.mode = "usb";
+                m.freqHz = dial ? dial() : 0.0;
+                return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
             };
         }
         return e;
@@ -24695,6 +24705,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         p.slots = &vsDecoderSlots();
         p.store = vibe::gallery::shared().enabled() ? &vibe::gallery::shared() : nullptr;
         p.yieldPath = vsBgYieldPath();
+        p.lat = g_bgLat.load(); p.lon = g_bgLon.load();
         p.log = [](const std::string& t) { LOGI("%s", t.c_str()); };
         // ★ The window is checked again against the rate the radio REALLY runs at (the save checked the configured one).
         const double half = vibe::bg::halfWindowHz(sampleRate);
@@ -29455,6 +29466,7 @@ void LocalSdrShim::clearLogoCache() {
     if (fn) fn();
 }
 void LocalSdrShim::setReceiverPosition(double lat, double lon) {
+    g_bgLat.store(lat); g_bgLon.store(lon);   // ★ V12: the FT8 summary measures its distances from here too
     dabTxDbInit();
     g_dab.setReceiverPosition(lat, lon);
     LOGI("[DAB] receiver position for transmitter distances: %.4f, %.4f", lat, lon);

@@ -31,14 +31,19 @@
 #include "vibe_bgdecode_config.h"   // ★ the profiles, validate(), attachMsg()
 #include "vibe_decoder_host.h"
 #include "vibe_gallery.h"
+#include "vibe_png.h"
+#include "vibe_callsign_country.h"
 #include "vibedsp/vibedsp.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <condition_variable>
 #include <cstdio>
 #include <ctime>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -171,11 +176,232 @@ private:
     size_t saved_ = 0;
 };
 
-/** The kind a decoder extension is filed under — "" = not kept (phase 1 keeps the text decoders). */
+/** The kind a decoder extension is filed under — "" = not kept (the time signals: a clock is not a keepsake). */
 inline std::string galleryKindFor(const std::string& ext, const std::string& msg) {
     if (ext == "navtex") return "navtex";
     if (ext == "fsk") return msg.find("CCIR476") != std::string::npos ? "navtex" : "rtty";
+    if (ext == "wefax" || ext == "sstv") return ext;
     return "";
+}
+
+// ── The gallery's copy of a picture decoder ──────────────────────────────────────────────────────────────────────
+/** ★★ WEFAX and SSTV: one PNG per picture, written when it COMPLETES (WEFAX's stop tone, SSTV's end of frame). A picture
+ *  cut off — a listener arriving, the profile changing, a new start tone before the stop — is saved ONCE, marked
+ *  PARTIAL, as far as it got (Stuart: "a chart/picture cut off … is saved once, marked PARTIAL").
+ *  ★ Reads the host's own frames (the ones the client draws): WEFAX 0x02 start · 0x01 line(u32 ln, u32 w, px) · 0x03
+ *    stop; SSTV 0x07 start(u32 w, u32 h) · 0x01 line(u32 y, u32 w, rgb) · 0x02 mode name · 0x05 complete. A redraw
+ *    re-sends lines by index, so they simply replace.
+ *  ★ Bounded: a chart is at most kMaxLines lines (~5 MB grey); past that it is saved and a new one begun. Too few lines
+ *    to be a picture (noise that tripped a start tone) are not kept. */
+class GalleryImageTap : public DecoderTap {
+public:
+    static constexpr uint32_t kMaxLines = 3000, kMaxWidth = 4096;
+    GalleryImageTap(gallery::Store& store, gallery::Meta meta) : store_(store), meta_(std::move(meta)) { sstv_ = meta_.kind == "sstv"; }
+    ~GalleryImageTap() override { finish(true); }
+    void frame(const uint8_t* d, size_t n) override {
+        if (n < 1) return;
+        std::lock_guard<std::mutex> lk(m_);
+        if (done_) return;
+        auto u32 = [&](size_t o) { return (uint32_t)d[o] << 24 | (uint32_t)d[o + 1] << 16 | (uint32_t)d[o + 2] << 8 | d[o + 3]; };
+        const uint8_t op = d[0];
+        if (!sstv_) {
+            if (op == 0x02 && n == 1) { save(true); begin(0, 0); return; }
+            if (op == 0x03 && n == 1) { save(false); return; }
+            if (op == 0x01 && n >= 9) {
+                const uint32_t ln = u32(1), w = u32(5);
+                if (w == 0 || w > kMaxWidth || n < 9 + (size_t)w) return;
+                if (!open_) begin(0, 0);
+                if (w_ == 0) w_ = w;
+                if (w != w_) return;
+                if (ln >= kMaxLines) { save(true); begin(0, 0); w_ = w; }
+                const uint32_t row = ln >= kMaxLines ? ln % kMaxLines : ln;
+                put(row, d + 9, w);
+            }
+            return;
+        }
+        if (op == 0x07 && n >= 9) { save(true); begin(u32(1), u32(5)); return; }
+        if (op == 0x02 && n >= 3) { const size_t l = ((size_t)d[1] << 8) | d[2]; if (n >= 3 + l) mode_ = gallery::printable(std::string((const char*)d + 3, l), 40); return; }
+        if (op == 0x05) { save(false); return; }
+        if (op == 0x01 && n >= 9 && open_) {
+            const uint32_t y = u32(1), w = u32(5);
+            if (w == 0 || w != w_ || y >= h_ || n < 9 + (size_t)w * 3) return;
+            put(y, d + 9, w * 3);
+        }
+    }
+    void finish(bool) override {
+        std::lock_guard<std::mutex> lk(m_);
+        if (done_) return;
+        done_ = true;
+        save(true);
+    }
+    size_t saved() const { std::lock_guard<std::mutex> lk(m_); return saved_; }
+
+private:
+    void begin(uint32_t w, uint32_t h) {
+        open_ = true; px_.clear(); lines_ = 0; maxRow_ = 0; started_ = gallery::nowUtc();
+        w_ = w > kMaxWidth ? 0 : w; h_ = h > 2000 ? 0 : h;
+        if (sstv_ && w_ && h_) px_.assign((size_t)w_ * h_ * 3, 0);
+    }
+    void put(uint32_t row, const uint8_t* p, size_t bytes) {
+        const size_t off = (size_t)row * bytes;
+        if (px_.size() < off + bytes) px_.resize(off + bytes, 255);
+        std::memcpy(px_.data() + off, p, bytes);
+        lines_++;
+        if (row + 1 > maxRow_) maxRow_ = row + 1;
+    }
+    /** Write what is held, once. `partial`: it did not reach its end. */
+    void save(bool partial) {
+        if (!open_) return;
+        open_ = false;
+        const uint32_t minLines = sstv_ ? 16 : 50;
+        if (w_ == 0 || lines_ < minLines || maxRow_ == 0) { px_.clear(); return; }
+        const int ch = sstv_ ? 3 : 1;
+        const uint32_t h = sstv_ ? (partial ? maxRow_ : h_) : maxRow_;
+        px_.resize((size_t)w_ * h * ch, 255);
+        const std::string png = png::encode((int)w_, (int)h, ch, px_.data());
+        px_.clear(); px_.shrink_to_fit();
+        if (png.empty()) return;
+        gallery::Meta m = meta_;
+        m.utc = started_;
+        m.partial = partial;
+        m.title = (sstv_ ? "SSTV" + (mode_.empty() ? std::string() : " \xc2\xb7 " + mode_) : std::string("WEFAX chart"))
+                + " \xc2\xb7 " + std::to_string(w_) + "\xc3\x97" + std::to_string(h);
+        if (!store_.add(m, "png", png).empty()) ++saved_;
+    }
+    gallery::Store& store_;
+    gallery::Meta meta_;
+    mutable std::mutex m_;
+    bool sstv_ = false, open_ = false, done_ = false;
+    uint32_t w_ = 0, h_ = 0, lines_ = 0, maxRow_ = 0;
+    std::vector<uint8_t> px_;
+    std::string mode_;
+    int64_t started_ = 0;
+    size_t saved_ = 0;
+};
+
+// ── FT8 / FT4: a SUMMARY, not the spots ─────────────────────────────────────────────────────────────────────────
+/** Maidenhead (4 or 6 characters) → the square's centre. False for anything that is not a grid (FT8's "RR73" is not). */
+inline bool gridToLatLon(const std::string& g, double& lat, double& lon) {
+    if (g.size() < 4) return false;
+    const char A = (char)std::toupper((unsigned char)g[0]), B = (char)std::toupper((unsigned char)g[1]);
+    if (A < 'A' || A > 'R' || B < 'A' || B > 'R' || !std::isdigit((unsigned char)g[2]) || !std::isdigit((unsigned char)g[3])) return false;
+    if (g == "RR73") return false;
+    lon = (A - 'A') * 20.0 - 180.0 + (g[2] - '0') * 2.0;
+    lat = (B - 'A') * 10.0 - 90.0 + (g[3] - '0') * 1.0;
+    if (g.size() >= 6 && std::isalpha((unsigned char)g[4]) && std::isalpha((unsigned char)g[5])) {
+        lon += (std::tolower((unsigned char)g[4]) - 'a') * (2.0 / 24.0) + 1.0 / 24.0;
+        lat += (std::tolower((unsigned char)g[5]) - 'a') * (1.0 / 24.0) + 0.5 / 24.0;
+    } else { lon += 1.0; lat += 0.5; }
+    return true;
+}
+inline double greatCircleKm(double la1, double lo1, double la2, double lo2) {
+    const double r = M_PI / 180.0;
+    const double a = std::sin((la2 - la1) * r / 2), b = std::sin((lo2 - lo1) * r / 2);
+    const double h = a * a + std::cos(la1 * r) * std::cos(la2 * r) * b * b;
+    return 2 * 6371.0 * std::asin(std::min(1.0, std::sqrt(h)));
+}
+
+/** ★★ STUART'S SUMMARY (2026-10-22: "FT8 in background: NOT spot files — a SUMMARY record per run/day"): spots heard,
+ *  the furthest (country + km from THIS server's own position), the most frequent country, the rarest, how many
+ *  countries. One .txt per run, split at UTC midnight; nothing is written for a run that heard nothing.
+ *  ★ Bounded: the per-call table holds at most kMaxCalls (FT8 on a busy band at night is a few thousand calls). */
+class Ft8SummaryTap : public DecoderTap {
+public:
+    static constexpr size_t kMaxCalls = 20000;
+    Ft8SummaryTap(gallery::Store& store, gallery::Meta meta, double lat, double lon)
+        : store_(store), meta_(std::move(meta)), lat_(lat), lon_(lon) { reset(gallery::nowUtc()); }
+    ~Ft8SummaryTap() override { finish(true); }
+    void spot(bool ft4, const std::string& call, const std::string& grid, int snr, double rfHz) override {
+        (void)snr; (void)rfHz;
+        std::lock_guard<std::mutex> lk(m_);
+        if (done_ || call.empty()) return;
+        const int64_t now = gallery::nowUtc();
+        if (now / 86400 != from_ / 86400) { write(now); reset(now); }
+        ++spots_; (ft4 ? ft4_ : ft8_)++;
+        const std::string ctry = callsign::country(call);
+        if (calls_.size() < kMaxCalls && !calls_.count(call)) {
+            calls_[call] = ctry;
+            if (!ctry.empty()) countryCalls_[ctry]++;
+        }
+        if (!ctry.empty()) countrySpots_[ctry]++;
+        double la, lo;
+        if (std::isfinite(lat_) && std::isfinite(lon_) && gridToLatLon(grid, la, lo)) {
+            const double km = greatCircleKm(lat_, lon_, la, lo);
+            if (km > farKm_) { farKm_ = km; farCall_ = call; farGrid_ = grid; farCountry_ = ctry; }
+        }
+    }
+    void finish(bool) override {
+        std::lock_guard<std::mutex> lk(m_);
+        if (done_) return;
+        done_ = true;
+        write(gallery::nowUtc());
+    }
+    /** The record as text — what the gallery item holds (public for the test). */
+    std::string text(int64_t to) const {
+        std::string o = "FT8 / FT4 summary \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " USB \xc2\xb7 "
+                      + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
+                      + (meta_.profile.empty() ? std::string() : " (" + meta_.profile + ")") + "\n"
+                      + gallery::utcStamp(from_, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + gallery::utcStamp(to, "%H:%M UTC") + "\n\n";
+        char b[256];
+        std::snprintf(b, sizeof b, "Spots heard:       %lu (FT8 %lu, FT4 %lu) from %zu stations\n", spots_, ft8_, ft4_, calls_.size());
+        o += b;
+        std::snprintf(b, sizeof b, "Countries:         %zu\n", countrySpots_.size());
+        o += b;
+        if (farKm_ > 0) {
+            std::snprintf(b, sizeof b, "Furthest:          %s (%s, %s) \xe2\x80\x94 %.0f km\n", farCall_.c_str(),
+                          farCountry_.empty() ? "country unknown" : farCountry_.c_str(), farGrid_.c_str(), farKm_);
+            o += b;
+        } else if (!std::isfinite(lat_)) o += "Furthest:          (this server has no position set \xe2\x80\x94 add a locator in Setup)\n";
+        std::string most, rare; unsigned long mostN = 0, rareN = 0;
+        for (const auto& kv : countrySpots_) {
+            if (kv.second > mostN) { mostN = kv.second; most = kv.first; }
+            if (rare.empty() || kv.second < rareN) { rareN = kv.second; rare = kv.first; }
+        }
+        if (!most.empty()) { std::snprintf(b, sizeof b, "Most frequent:     %s (%lu spots)\n", most.c_str(), mostN); o += b; }
+        if (!rare.empty() && rare != most) { std::snprintf(b, sizeof b, "Rarest:            %s (%lu spot%s)\n", rare.c_str(), rareN, rareN == 1 ? "" : "s"); o += b; }
+        if (!countryCalls_.empty()) {
+            o += "\nStations by country:\n";
+            std::vector<std::pair<unsigned long, std::string>> v;
+            for (const auto& kv : countryCalls_) v.push_back({ kv.second, kv.first });
+            std::sort(v.begin(), v.end(), [](const auto& a, const auto& c) { return a.first != c.first ? a.first > c.first : a.second < c.second; });
+            for (const auto& e : v) { std::snprintf(b, sizeof b, "  %-24s %lu\n", e.second.c_str(), e.first); o += b; }
+        }
+        return o;
+    }
+
+private:
+    void reset(int64_t now) {
+        from_ = now; spots_ = ft8_ = ft4_ = 0; calls_.clear(); countrySpots_.clear(); countryCalls_.clear();
+        farKm_ = 0; farCall_.clear(); farGrid_.clear(); farCountry_.clear();
+    }
+    void write(int64_t now) {
+        if (spots_ == 0) return;
+        gallery::Meta m = meta_;
+        m.utc = from_;
+        char t[160];
+        std::snprintf(t, sizeof t, "FT8 summary \xc2\xb7 %lu spots \xc2\xb7 %zu countries%s%s", spots_, countrySpots_.size(),
+                      farKm_ > 0 ? " \xc2\xb7 furthest " : "", farKm_ > 0 ? (farCountry_.empty() ? farCall_ : farCountry_).c_str() : "");
+        m.title = t;
+        store_.add(m, "txt", text(now));
+    }
+    gallery::Store& store_;
+    gallery::Meta meta_;
+    double lat_, lon_;
+    mutable std::mutex m_;
+    bool done_ = false;
+    int64_t from_ = 0;
+    unsigned long spots_ = 0, ft8_ = 0, ft4_ = 0;
+    std::map<std::string, std::string> calls_;
+    std::map<std::string, unsigned long> countrySpots_, countryCalls_;
+    double farKm_ = 0;
+    std::string farCall_, farGrid_, farCountry_;
+};
+
+/** ★ One factory for every decoder's gallery copy — background decoding's and a listener's alike. */
+inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr) {
+    if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
+    if (meta.kind == "navtex" || meta.kind == "rtty") return std::make_shared<GalleryTap>(st, meta, std::move(dial));
+    return nullptr;
 }
 
 // ── The engine ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -192,6 +418,7 @@ public:
         DecoderSlots* slots = nullptr;
         gallery::Store* store = nullptr;
         std::string yieldPath;         ///< ★ box-wide "a listener needs a slot" — see requestYield()
+        double      lat = NAN, lon = NAN;  ///< ★ this server's position, for the FT8 summary's distances (NaN = none)
         std::function<void(const std::string&)> log;
     };
     BgRunner() = default;
@@ -206,7 +433,7 @@ public:
         for (size_t i = 0; i < p_.profile.vfos.size(); i++) {
             auto c = std::make_unique<Chan>();
             c->owner = this; c->vfo = p_.profile.vfos[i]; c->index = (int)i;
-            const double need = std::max(2700.0 * 2.5, 24000.0);
+            const double need = std::max(passbandHz(c->vfo) * 2.5, 24000.0);
             int b = 64;
             while (b < p_.fftSize && p_.sampleRate * (double)b / (double)p_.fftSize < need) b <<= 1;
             c->bins = std::min(b, p_.fftSize);
@@ -222,7 +449,9 @@ public:
             cb.audio = &BgRunner::audioCb;
             c->rx->start(c->rate, 1024, 10.0, 48000, cb);
             c->rx->setRdsEnabled(false);
-            c->rx->setTune(resid, c->vfo.mode == "lsb" ? vibedsp::RxPipeline::Mode::SSB_LSB : vibedsp::RxPipeline::Mode::SSB_USB, 2700.0);
+            c->rx->setTune(resid, c->vfo.mode == "lsb" ? vibedsp::RxPipeline::Mode::SSB_LSB
+                                : c->vfo.mode == "nfm" ? vibedsp::RxPipeline::Mode::NFM : vibedsp::RxPipeline::Mode::SSB_USB,
+                           passbandHz(c->vfo));
             DecoderHost::Env env;
             env.log = p_.log;
             env.slots = p_.slots;
@@ -237,7 +466,14 @@ public:
                     if (m.kind.empty()) return nullptr;
                     m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = v.dec;
                     m.profile = "Profile " + std::to_string(pi + 1);
-                    return std::make_shared<GalleryTap>(*st, m);
+                    return makeGalleryTap(*st, m);
+                };
+                const double la = p_.lat, lo = p_.lon;
+                env.spotTap = [st, v, pi, la, lo]() -> DecoderTapPtr {
+                    gallery::Meta m;
+                    m.kind = "ft8"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "ft8";
+                    m.profile = "Profile " + std::to_string(pi + 1);
+                    return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
                 };
             }
             c->host = std::make_shared<DecoderHost>(env, "bg:" + std::to_string(i));
@@ -327,7 +563,8 @@ private:
     void startOne(Chan& c) {
         const DecoderDef* d = decoderDef(c.vfo.dec);
         if (!d || !c.host) return;
-        const auto r = c.host->start(d->ext, attachMsg(c.vfo));
+        // ★ FT8/FT4 is the host's spotter (its own slot), every other decoder its audio-extension decoder.
+        const auto r = *d->ext ? c.host->start(d->ext, attachMsg(c.vfo)) : c.host->startSpots();
         c.decoding = r == DecoderHost::Start::Ok || r == DecoderHost::Start::Joined;
         if (r == DecoderHost::Start::Refused)
             say("background decoding: VFO " + std::to_string(c.index + 1) + " (" + khz(c.vfo.hz) + ") — no decoder slot free; will retry");

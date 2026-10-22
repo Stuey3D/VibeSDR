@@ -317,8 +317,128 @@ static void runner() {
     ok(r.droppedSamples() == 0, "no IQ dropped at this pace (" + std::to_string((unsigned long long)r.droppedSamples()) + ")");
 }
 
+// ── 7. phase 2: pictures, FT8 summaries, the decoders' demodulators ─────────────────────────────────────────────
+static std::vector<uint8_t> be32(uint32_t v) { return { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v }; }
+static std::string readFile(const std::string& p) {
+    std::string b; FILE* f = std::fopen(p.c_str(), "rb"); if (!f) return b;
+    char t[4096]; size_t k; while ((k = std::fread(t, 1, sizeof t, f)) > 0) b.append(t, k); std::fclose(f); return b;
+}
+static void phase2() {
+    std::printf("── phase 2: which decoder on which demodulator ──\n");
+    std::string err;
+    bg::Config c; c.on = true;
+    bg::Profile p; p.centreHz = 8000000; p.vfos = { bg::Vfo{8038100, "lsb", "wefax"} };
+    c.profiles = { p };
+    ok(!bg::validate(c, 2048000, err) && err.find("WEFAX (120 LPM) does not work on LSB") != std::string::npos && err.find("needs USB") != std::string::npos,
+       "WEFAX on LSB is refused, saying why (a mirrored chart is a negative): " + err);
+    c.profiles[0].vfos = { bg::Vfo{8038100, "usb", "wefax"}, bg::Vfo{8000000, "usb", "ft8"} };
+    ok(bg::validate(c, 2048000, err), "WEFAX + FT8 on USB validate");
+    ok(std::fabs(bg::signalHz(c.profiles[0].vfos[0]) - 8040000) < 1, "WEFAX dial 8038.1 USB is the 8040.0 kHz carrier");
+    ok(bg::attachMsg(c.profiles[0].vfos[0]).find("\"auto_start\":true") != std::string::npos, "...started on its START TONE, ended on its stop tone");
+    bg::Profile iss; iss.centreHz = 145800000; iss.vfos = { bg::Vfo{145800000, "nfm", "sstv"} };
+    c.profiles = { iss };
+    ok(bg::validate(c, 2048000, err) && std::fabs(bg::signalHz(iss.vfos[0]) - 145800000) < 1, "SSTV on NFM (the ISS, 145.800) validates");
+    c.profiles[0].vfos[0].dec = "navtex";
+    ok(!bg::validate(c, 2048000, err), "NAVTEX on NFM is refused: " + err);
+
+    std::printf("── WEFAX and SSTV pictures: complete, PARTIAL, and noise not kept ──\n");
+    gallery::Store s; s.setDir(tmpDir("pics"));
+    gallery::Meta m; m.kind = "wefax"; m.origin = "background"; m.freqHz = 8038100; m.mode = "usb"; m.decoder = "wefax"; m.profile = "Profile 1";
+    auto wline = [](uint32_t ln, uint32_t w, uint8_t v) {
+        std::vector<uint8_t> f{ 0x01 }; for (auto b : be32(ln)) f.push_back(b); for (auto b : be32(w)) f.push_back(b);
+        for (uint32_t i = 0; i < w; i++) f.push_back((uint8_t)(i * 255 / w ^ v)); return f; };
+    {
+        auto t = bg::makeGalleryTap(s, m);
+        const uint8_t st = 0x02, sp = 0x03;
+        t->frame(&st, 1);
+        for (uint32_t i = 0; i < 200; i++) { auto f = wline(i, 1809, (uint8_t)i); t->frame(f.data(), f.size()); }
+        t->frame(&sp, 1);
+        t->frame(&st, 1);                                                    // the next chart starts…
+        for (uint32_t i = 0; i < 80; i++) { auto f = wline(i, 1809, 0); t->frame(f.data(), f.size()); }
+        t->finish(true);                                                     // …and a listener arrives
+        auto t2 = bg::makeGalleryTap(s, m);
+        t2->frame(&st, 1);
+        for (uint32_t i = 0; i < 10; i++) { auto f = wline(i, 1809, 0); t2->frame(f.data(), f.size()); }
+        t2->finish(true);
+    }
+    const std::string wl = s.listJson("wefax", 10);
+    int complete = 0, partial = 0;
+    for (size_t at = 0; (at = wl.find("\"f\":", at)) != std::string::npos; at++) {
+        const std::string item = wl.substr(at, wl.find('}', at) - at);
+        if (item.find("\"partial\":true") != std::string::npos) partial++; else complete++;
+    }
+    ok(complete == 1 && wl.find("1809\xc3\x97" "200") != std::string::npos, "★ a chart ended by its stop tone: one PNG, 1809×200");
+    ok(partial == 1 && wl.find("1809\xc3\x97" "80") != std::string::npos, "★ a chart cut off by a listener: saved ONCE, marked partial");
+    ok(complete + partial == 2, "...and 10 lines of noise after a false start tone are not kept");
+    {
+        std::string path, ct; const std::string f = gallery::lineStr(wl, "f");
+        const std::string png = s.resolve(f, path, ct) ? readFile(path) : "";
+        ok(ct == "image/png" && png.size() > 33 && png.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0 && png.compare(12, 4, "IHDR") == 0
+           && png.compare(png.size() - 8, 4, "IEND") == 0, "it is a PNG (" + std::to_string(png.size()) + " bytes)");
+        const uint32_t crcOk = vibegz::crc32((const uint8_t*)png.data() + 12, 17);
+        const uint32_t crcIn = (uint32_t)(uint8_t)png[29] << 24 | (uint32_t)(uint8_t)png[30] << 16 | (uint32_t)(uint8_t)png[31] << 8 | (uint8_t)png[32];
+        ok(crcOk == crcIn, "...its IHDR CRC checks");
+        std::FILE* o = std::fopen((std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp") + "/bgdec-wefax.png").c_str(), "wb");
+        if (o) { std::fwrite(png.data(), 1, png.size(), o); std::fclose(o); }
+    }
+    {
+        gallery::Meta sm = m; sm.kind = "sstv"; sm.decoder = "sstv"; sm.freqHz = 14230000;
+        auto t = bg::makeGalleryTap(s, sm);
+        std::vector<uint8_t> st{ 0x07 }; for (auto b : be32(320)) st.push_back(b); for (auto b : be32(256)) st.push_back(b);
+        t->frame(st.data(), st.size());
+        const std::string mode = "Scottie 1";
+        std::vector<uint8_t> mf{ 0x02, 0, (uint8_t)mode.size() }; mf.insert(mf.end(), mode.begin(), mode.end()); t->frame(mf.data(), mf.size());
+        for (uint32_t y = 0; y < 256; y++) {
+            std::vector<uint8_t> f{ 0x01 }; for (auto b : be32(y)) f.push_back(b); for (auto b : be32(320)) f.push_back(b);
+            for (int i = 0; i < 320 * 3; i++) f.push_back((uint8_t)(i + y)); t->frame(f.data(), f.size());
+        }
+        std::vector<uint8_t> done{ 0x05, 0, 0, 0, 0 }; t->frame(done.data(), done.size());
+        t->frame(st.data(), st.size());
+        for (uint32_t y = 0; y < 100; y++) {
+            std::vector<uint8_t> f{ 0x01 }; for (auto b : be32(y)) f.push_back(b); for (auto b : be32(320)) f.push_back(b);
+            for (int i = 0; i < 320 * 3; i++) f.push_back(7); t->frame(f.data(), f.size());
+        }
+        t->finish(true);
+    }
+    const std::string sl = s.listJson("sstv", 10);
+    ok(sl.find("SSTV \xc2\xb7 Scottie 1 \xc2\xb7 320\xc3\x97" "256") != std::string::npos, "★ an SSTV picture, complete, titled with its mode");
+    ok(sl.find("320\xc3\x97" "100") != std::string::npos && sl.find("\"partial\":true") != std::string::npos, "★ a picture cut off is saved, partial, as far as it got");
+
+    std::printf("── FT8 / FT4: a summary, not the spots ──\n");
+    ok(callsign::country("G4IRX") == "England" && callsign::country("DL1ABC") == "Germany" && callsign::country("VK2XYZ") == "Australia"
+       && callsign::country("F/DL1ABC") == "Germany" && callsign::country("Q0QQQ").empty(), "callsign → country (the app's own table, generated)");
+    double la, lo;
+    ok(bg::gridToLatLon("IO92", la, lo) && std::fabs(la - 52.5) < 0.01 && std::fabs(lo + 1.0) < 0.01, "IO92 is 52.5 N 1.0 W");
+    ok(!bg::gridToLatLon("RR73", la, lo) && !bg::gridToLatLon("73", la, lo), "RR73 / 73 are not grids");
+    {
+        gallery::Meta fm; fm.kind = "ft8"; fm.origin = "background"; fm.freqHz = 14074000; fm.mode = "usb"; fm.decoder = "ft8"; fm.profile = "Profile 2";
+        double sla, slo; bg::gridToLatLon("IO92nh", sla, slo);
+        bg::Ft8SummaryTap t(s, fm, sla, slo);
+        for (int i = 0; i < 5; i++) t.spot(false, "DL1ABC", "JO31", -5, 14075000);
+        t.spot(false, "DL2XYZ", "JN58", -9, 14075500);
+        t.spot(true, "VK2XYZ", "QF56", -20, 14081000);
+        t.spot(false, "G4IRX", "IO92", 3, 14074500);
+        t.spot(false, "Q0QQQ", "RR73", 0, 14074600);
+        const std::string txt = t.text(gallery::nowUtc());
+        ok(txt.find("Spots heard:       9 (FT8 8, FT4 1) from 5 stations") != std::string::npos, "spots heard, by mode, and stations");
+        ok(txt.find("Countries:         3") != std::string::npos, "3 countries (an unknown prefix is not one)");
+        ok(txt.find("Furthest:          VK2XYZ (Australia, QF56)") != std::string::npos && txt.find(" km") != std::string::npos, "★ furthest: VK2XYZ, Australia, with km from this server");
+        ok(txt.find("Most frequent:     Germany (6 spots)") != std::string::npos, "most frequent country: Germany");
+        ok(txt.find("Rarest:            Australia (1 spot)") != std::string::npos, "rarest country: Australia (1 spot, the first of the ties)");
+        std::printf("%s", txt.c_str());
+        t.finish(true);
+        ok(s.listJson("ft8", 10).find("FT8 summary \xc2\xb7 9 spots \xc2\xb7 3 countries \xc2\xb7 furthest Australia") != std::string::npos,
+           "★ one summary item in the gallery, titled with the headline");
+        bg::Ft8SummaryTap quiet(s, fm, sla, slo);
+        quiet.finish(true);
+        size_t n = 0; for (size_t at = 0; (at = s.listJson("ft8", 10).find("\"f\":", at)) != std::string::npos; at++) n++;
+        ok(n == 1, "a run that heard nothing writes nothing");
+    }
+}
+
 int main() {
     config();
+    phase2();
     sideband();
     navtexAsm();
     store();
