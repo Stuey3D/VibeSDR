@@ -124,6 +124,16 @@ sudo apt install vibeserver</pre>
      updating itself, the operating system is left exactly as it was.</p>
 <pre>curl -fsSL https://apt.vibesdr.net/install.sh | sudo VIBE_AUTO_UPDATES=1 bash</pre>
 
+  <h3>Beta updates (opt-in)</h3>
+  <p>The next VibeServer is published as betas in a separate suite, <code>beta</code>, of this same
+     repository and key: <span class="ver">__BETAVERSIONS__</span>. On the admin page, tick
+     <strong>Receive beta updates</strong> and <strong>Update VibeServer</strong> offers the newest beta;
+     untick it and it offers the newest stable version again (<strong>Back to stable</strong>), keeping
+     your settings. Nothing installs until you press the button. By hand, the tick is one extra line:</p>
+<pre>echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net beta main" \
+  | sudo tee /etc/apt/sources.list.d/vibesdr-beta.list
+sudo apt update &amp;&amp; sudo apt install vibeserver</pre>
+
   <h3>Prefer a single file?</h3>
   <p>Install the <code>.deb</code> with <code>apt install ./&hellip;</code> &mdash; with the
      <code>./</code> &mdash; so apt still resolves the dependencies. Never

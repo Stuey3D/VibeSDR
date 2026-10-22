@@ -43,7 +43,13 @@ SIGN_KEY="packages@vibesdr.net"
 #   VIBE_TEST_REV=0~…  (index-only) publish under a TEST revision into a scratch copy of the repository, for a
 #                      dry run of the whole pipeline. `0~` sorts below -1, so it can never shadow a real
 #                      package; the Mac script refuses it without --dry-run, and no marker is written for it.
+#   VIBE_SUITE=beta    (2026-10-22, "Receive beta updates") publish into suite `beta` instead of `stable`: its own
+#                      dists/beta (Packages, Release, signed the same way) and its own pool directory, pool/beta, so
+#                      each suite's index lists ONLY its own packages and each prunes only its own. Same key, same
+#                      Origin/Label. A beta publish never touches dists/stable or pool/main, and the reverse.
 INDEX_ONLY="${VIBE_INDEX_ONLY:-}"
+SUITE="${VIBE_SUITE:-stable}"
+case "$SUITE" in stable|beta) ;; *) echo "!! VIBE_SUITE must be stable or beta (got '$SUITE')"; exit 1;; esac
 NEXT_REV=0
 DRY_RUN=0
 # ★ An `if`, not `&&` — as the last command in the line, a REAL publish (no --dry-run) made the
@@ -121,8 +127,13 @@ elif [ ! -d "$APT_DIR/.git" ]; then
 else
   git -C "$APT_DIR" pull --ff-only -q || true
 fi
-POOL="$APT_DIR/pool/main/v/vibeserver"
-DIST="$APT_DIR/dists/stable"
+# ★★★ ONE POOL DIRECTORY PER SUITE (2026-10-22). dpkg-scanpackages indexes a DIRECTORY, so a beta sitting beside the
+#     stable packages would be listed in the STABLE index — every machine in the world offered V12 without asking.
+#     Stable keeps pool/main exactly where it has always been (its Filename: lines do not change); betas live in
+#     pool/beta. Both are under the one repository root, served by the same Pages site.
+POOL_ROOT="pool/main"; [ "$SUITE" = beta ] && POOL_ROOT="pool/beta"
+POOL="$APT_DIR/$POOL_ROOT/v/vibeserver"
+DIST="$APT_DIR/dists/$SUITE"
 # ★ Not for --next-rev: an empty binary-<arch> directory would add that architecture to the next Release.
 [ "$NEXT_REV" = 1 ] || mkdir -p "$POOL" "$DIST/main/binary-$ARCH"
 
@@ -154,16 +165,21 @@ PRE="$(sed -n 's/^set(VIBESERVER_PRERELEASE "\([A-Za-z0-9]*\)").*/\1/p' "$SRC_DI
 #     reason. An (upstream, revision) pair may safely repeat across architectures: they are
 #     different files with different Filename: lines and apt indexes them separately. What must
 #     never repeat is the pair WITHIN one architecture, and that is exactly what this now tracks.
+# ★★★ AND ACROSS BOTH SUITES (2026-10-22). A machine with beta updates ticked sees BOTH indexes, so one (upstream,
+#     revision) pair must never name two different files, whichever suite each went to. The pools and indexes of
+#     both are read; the marker below was never per suite. (The PRUNE is per suite — see there.)
 bump() { [ -n "${1:-}" ] && [ "$1" -gt "$HIGH" ] 2>/dev/null && HIGH="$1"; return 0; }
 HIGH=0
-for f in "$POOL"/vibeserver_"${UPSTREAM}"-*_"${ARCH}".deb; do
+for f in "$APT_DIR"/pool/main/v/vibeserver/vibeserver_"${UPSTREAM}"-*_"${ARCH}".deb \
+         "$APT_DIR"/pool/beta/v/vibeserver/vibeserver_"${UPSTREAM}"-*_"${ARCH}".deb; do
   [ -e "$f" ] || continue
   bump "$(basename "$f" | sed -nE "s/^vibeserver_${UPSTREAM}-([0-9]+)_.*/\1/p")"
 done
-PKGS="$DIST/main/binary-$ARCH/Packages"
-if [ -f "$PKGS" ]; then
-  bump "$(grep -oE "^Version: ${UPSTREAM}-[0-9]+" "$PKGS" | grep -oE '[0-9]+$' | sort -n | tail -1)"
-fi
+for PKGS in "$APT_DIR"/dists/stable/main/binary-"$ARCH"/Packages "$APT_DIR"/dists/beta/main/binary-"$ARCH"/Packages; do
+  if [ -f "$PKGS" ]; then
+    bump "$(grep -oE "^Version: ${UPSTREAM}-[0-9]+" "$PKGS" | grep -oE '[0-9]+$' | sort -n | tail -1)"
+  fi
+done
 # ★★ The marker is PER UPSTREAM VERSION. It used to be one shared file, which carried 2.0.0's
 #    revision 15 into 3.0.0 and would have started it at 16 — legal, but it reads like fourteen
 #    releases nobody can find. What must never repeat is an (upstream, revision) PAIR, and
@@ -185,7 +201,7 @@ if [ -n "${VIBE_TEST_REV:-}" ]; then
   echo "==> TEST revision $VIBE_TEST_REV instead of $REV — a dry run into a scratch repository"
   REV="$VIBE_TEST_REV"; FULLVER="${UPSTREAM}-${REV}"; TEST_REV=1
 fi
-echo "==> publishing vibeserver $FULLVER ($ARCH)"
+echo "==> publishing vibeserver $FULLVER ($ARCH) to suite $SUITE"
 
 # ★★★ WHAT GETS COPIED INTO THE BUILD ROOT — and what emphatically does not.
 #     The Linux build reads `vibeserver/` and `android/app/src/main/cpp/`. It has never read
@@ -436,7 +452,12 @@ KEEP=3
 #     order ls broke the tie in — it could delete 11.0.7-1 and keep 11.0.4-3. The package just copied in is
 #     always kept (KEEP-1 others beside it), so even a test revision that sorts low survives its own publish.
 #   ★ sort -V orders Debian versions correctly for ours (digits, dots, -rev, ~pre); both routes run bookworm.
-mapfile -t OLD < <(for f in "$POOL"/vibeserver_*_"$ARCH".deb "$POOL"/.prebuilt-vibeserver_*_"$ARCH".deb; do
+# ★★ PER SUITE: $POOL is this suite's own directory, so a beta publish can never prune a stable package (or the
+#    reverse). A read loop rather than mapfile, which bash 3.2 lacks — so scripts/test_publish_apt_suites.py can run
+#    this exact script on the Mac with the Debian tools stubbed.
+OLD=()
+while IFS= read -r _old; do OLD+=("$_old"); done < <(
+                   for f in "$POOL"/vibeserver_*_"$ARCH".deb "$POOL"/.prebuilt-vibeserver_*_"$ARCH".deb; do
                      [ -e "$f" ] && [ "$f" != "$NEWDEB" ] || continue
                      v="$(basename "$f" | sed -E 's/^(\.prebuilt-)?vibeserver_//; s/_[^_]*\.deb$//')"
                      printf '%s\t%s\n' "$v" "$f"
@@ -448,8 +469,10 @@ fi
 
 # ── Index ────────────────────────────────────────────────────────────────────
 # ★ Paths in Packages must be RELATIVE TO THE REPOSITORY ROOT, so scanpackages runs from there.
-( cd "$APT_DIR" && dpkg-scanpackages --arch "$ARCH" pool /dev/null \
-    > "dists/stable/main/binary-$ARCH/Packages" )
+# ★★ THIS SUITE'S POOL ONLY (pool/main for stable, pool/beta for beta) — see POOL_ROOT. It scanned all of `pool`
+#    before suites existed; with only pool/main in it, the stable index is byte-for-byte what it was.
+( cd "$APT_DIR" && dpkg-scanpackages --arch "$ARCH" "$POOL_ROOT" /dev/null \
+    > "dists/$SUITE/main/binary-$ARCH/Packages" )
 gzip -9kf "$DIST/main/binary-$ARCH/Packages"
 echo "==> indexed $(grep -c '^Package:' "$DIST/main/binary-$ARCH/Packages") package(s)"
 
@@ -464,16 +487,23 @@ echo "==> indexed $(grep -c '^Package:' "$DIST/main/binary-$ARCH/Packages") pack
 ALL_ARCHES="$(cd "$DIST/main" && ls -d binary-* 2>/dev/null | sed 's/^binary-//' | sort | tr '\n' ' ' | sed 's/ $//')"
 echo "==> repository architectures: $ALL_ARCHES"
 
-cat > "$APT_DIR/aptftp.conf" <<EOF
+# ★★ ONE CONFIG PER SUITE: aptftp.conf stays stable's (unchanged), aptftp-beta.conf is beta's. Same Origin and Label
+#    on purpose: a machine whose owner ticked beta AND turned on automatic updates (install.sh --auto-updates, which
+#    matches origin=VibeSDR,label=VibeSDR) takes betas automatically too — and a machine without the beta source
+#    never sees the suite at all, so the shared pattern cannot reach it. unattended-upgrades never downgrades.
+# ★ NO NotAutomatic/ButAutomaticUpgrades: with them apt would hold a ticked box on stable and the tick would do nothing.
+CONF="aptftp.conf"; DESC="VibeServer — turn an SDR into a network receiver"
+if [ "$SUITE" = beta ]; then CONF="aptftp-beta.conf"; DESC="VibeServer betas — the next version early (opt-in)"; fi
+cat > "$APT_DIR/$CONF" <<EOF
 APT::FTPArchive::Release::Origin "VibeSDR";
 APT::FTPArchive::Release::Label "VibeSDR";
-APT::FTPArchive::Release::Suite "stable";
-APT::FTPArchive::Release::Codename "stable";
+APT::FTPArchive::Release::Suite "$SUITE";
+APT::FTPArchive::Release::Codename "$SUITE";
 APT::FTPArchive::Release::Architectures "$ALL_ARCHES";
 APT::FTPArchive::Release::Components "main";
-APT::FTPArchive::Release::Description "VibeServer — turn an SDR into a network receiver";
+APT::FTPArchive::Release::Description "$DESC";
 EOF
-( cd "$APT_DIR" && apt-ftparchive -c aptftp.conf release dists/stable > dists/stable/Release )
+( cd "$APT_DIR" && apt-ftparchive -c "$CONF" release "dists/$SUITE" > "dists/$SUITE/Release" )
 
 # ── Sign ─────────────────────────────────────────────────────────────────────
 # ★★★ NOT HERE ON THE LENOVO ROUTE: the key is on the Mac only. The Mac signs Release (InRelease + Release.gpg),
@@ -492,9 +522,17 @@ fi
 #    by whichever one published LAST, so anything derived from $ARCH/$FULLVER alone would advertise
 #    amd64's version to Pi users half the time. Both substitutions are read back out of the signed
 #    indexes instead, so the page cannot disagree with what apt will actually serve.
-ARCHVERSIONS=""; DEBLINES=""
-for a in $ALL_ARCHES; do
-  av="$(grep -oE "^Version: [0-9][^ ]*" "$DIST/main/binary-$a/Packages" 2>/dev/null | awk '{print $2}' | sort -V | tail -1)"
+# ★★ BOTH SUITES, whichever one just published: the stable versions and .deb lines from dists/stable, the betas listed
+#    on their own line from dists/beta — so a beta publish cannot leave the page advertising a beta as "current".
+SDIST="$APT_DIR/dists/stable"; BDIST="$APT_DIR/dists/beta"
+ARCHVERSIONS=""; DEBLINES=""; BETAVERSIONS=""
+for a in $(cd "$BDIST/main" 2>/dev/null && ls -d binary-* 2>/dev/null | sed 's/^binary-//' | sort); do
+  bv="$(grep -oE "^Version: [0-9][^ ]*" "$BDIST/main/binary-$a/Packages" 2>/dev/null | awk '{print $2}' | sort -V | tail -1)"
+  if [ -n "$bv" ]; then BETAVERSIONS="${BETAVERSIONS:+$BETAVERSIONS, }$a $bv"; fi
+done
+[ -n "$BETAVERSIONS" ] || BETAVERSIONS="no beta published at the moment"
+for a in $(cd "$SDIST/main" 2>/dev/null && ls -d binary-* 2>/dev/null | sed 's/^binary-//' | sort); do
+  av="$(grep -oE "^Version: [0-9][^ ]*" "$SDIST/main/binary-$a/Packages" 2>/dev/null | awk '{print $2}' | sort -V | tail -1)"
   [ -n "$av" ] || continue
   # ★★★ NO BARE `&` HERE. In a sed REPLACEMENT `&` means "everything the pattern matched", so an
   #     innocent `&middot;` separator expanded to `__ARCHVERSIONS__middot;` and published the
@@ -504,8 +542,8 @@ for a in $ALL_ARCHES; do
 done
 # ★ Escape & in both replacements, for the reason above — the versions carry none today, but a
 #   separator or a filename gaining one must not be able to corrupt the page silently.
-ARCHVERSIONS="${ARCHVERSIONS//&/\\&}"; DEBLINES="${DEBLINES//&/\\&}"
-sed -e "s/__ARCHVERSIONS__/$ARCHVERSIONS/g" \
+ARCHVERSIONS="${ARCHVERSIONS//&/\\&}"; DEBLINES="${DEBLINES//&/\\&}"; BETAVERSIONS="${BETAVERSIONS//&/\\&}"
+sed -e "s/__ARCHVERSIONS__/$ARCHVERSIONS/g" -e "s/__BETAVERSIONS__/$BETAVERSIONS/g" \
     "$SRC_DIR/scripts/apt-index.html" \
   | sed -e "s|__DEBLINES__|$DEBLINES|g" > "$APT_DIR/index.html"
 # ★★ THE ONE-LINE INSTALLER rides along with every publish, like the page, so
@@ -523,13 +561,13 @@ touch "$APT_DIR/.nojekyll"     # Pages would otherwise skip files starting with 
 #     fetches this commit over SSH and pushes it — the Mac already has the credential, the key
 #     backup and Time Machine, and its clone is the copy of the pool that must survive.
 if [ -n "$INDEX_ONLY" ]; then
-  echo "==> indexed $FULLVER ($ARCH) — unsigned; the Mac signs and commits"
+  echo "==> indexed $FULLVER ($ARCH, $SUITE) — unsigned; the Mac signs and commits"
   exit 0
 fi
 cd "$APT_DIR"
 git add -A
 git -c user.name="VibeSDR release" -c user.email="packages@vibesdr.net" \
-    commit -q -m "vibeserver $FULLVER ($ARCH)" || { echo "nothing to commit"; exit 0; }
+    commit -q -m "vibeserver $FULLVER ($ARCH)$([ "$SUITE" = beta ] && echo ' — BETA suite')" || { echo "nothing to commit"; exit 0; }
 echo "==> committed $FULLVER locally ($APT_DIR)"
 [ "$DRY_RUN" = "1" ] && { echo "==> dry run: stopping here"; exit 0; }
 echo "==> now run on the Mac:  scripts/publish-apt-push.sh"
