@@ -83,7 +83,7 @@ import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
-import { askBannerText, askLocked, ASK_NUDGE_TEXT, type AskState } from '../../../src/services/dialChat';
+import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, type AskState } from '../../../src/services/dialChat';
 // ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
 import { httpBase, wsBase, isValidServerHost } from './origin';
@@ -893,13 +893,16 @@ function updateSharedBanner() {
     return;
   }
   // ★ Until the first count arrives (0), the cautious wording — never "free" on a guess.
-  if (listenerCount <= 0) { ms.classList.remove('alone'); ms.textContent = 'SHARED TUNER · ASK BEFORE TUNING'; return; }
+  // ★ In the chat's language (dialChat sharedTunerText — the app's bar reads the same words).
+  if (listenerCount <= 0) { ms.classList.remove('alone'); ms.textContent = sharedTunerText(false, -1, 0); return; }
   const alone = listenerCount <= 1;
   ms.classList.toggle('alone', alone);
-  ms.innerHTML = alone ? 'SHARED TUNER · FREE TO TUNE'
-    : `SHARED TUNER · ASK TO TUNE · ${listenerCount}${listenerMax > 1 ? `/${listenerMax}` : ''} `
-      + `<svg viewBox="0 0 16 16" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" `
-      + `style="vertical-align:-0.12em"><circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5z"/></svg>`;
+  // ★ The words go in as TEXT (a text node), the person glyph as markup: no translated string is ever parsed as HTML.
+  ms.textContent = alone ? sharedTunerText(true, listenerCount, listenerMax)
+    : sharedTunerText(false, listenerCount, listenerMax).replace(/ 👤$/, ' ');
+  if (!alone) ms.insertAdjacentHTML('beforeend',
+      `<svg viewBox="0 0 16 16" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" `
+      + `style="vertical-align:-0.12em"><circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5z"/></svg>`);
   ms.title = alone ? 'Nobody else is listening — free to tune'
     : `${listenerCount} listening on this shared dial — ask in chat before tuning`;
 }

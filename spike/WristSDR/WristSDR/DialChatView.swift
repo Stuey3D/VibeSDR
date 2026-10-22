@@ -51,12 +51,13 @@ struct DialChatView: View {
             Image(systemName: "bubble.left.and.exclamationmark.bubble.right")
               .font(.system(size: 14)).frame(width: 36, height: 30)
             VStack(alignment: .leading, spacing: 1) {
-              Text(radio.dialAskState == "open" ? "AWAITING A REPLY"
-                   : radio.dialAskState == "no" ? "ASKED TO WAIT" : "ASK BEFORE TUNING")
+              // ★ In the watch's language, like the phrases (CannedDial.t — i18n/chat/*.json).
+              Text(radio.dialAskState == "open" ? CannedDial.t("bannerAwaiting")
+                   : radio.dialAskState == "no" ? CannedDial.t("watchAskedToWait") : CannedDial.t("bannerAskBefore"))
                 .font(.system(size: 11, weight: .bold))
-              Text(radio.dialAskState == "open" ? "No answer in 15 s and it's yours"
-                   : radio.dialAskState == "no" ? "Yours in 5 min at most"
-                   : "Ask in chat — others are listening")
+              Text(radio.dialAskState == "open" ? CannedDial.t("watchAskOpenSub")
+                   : radio.dialAskState == "no" ? CannedDial.t("watchAskNoSub")
+                   : CannedDial.t("watchAskSub"))
                 .font(.system(size: 9)).opacity(0.75).lineLimit(2)
             }
             Spacer()
@@ -101,7 +102,7 @@ struct DialChatView: View {
 
         // ── The transcript ──────────────────────────────────────────────────────
         if radio.chatLines.isEmpty {
-          Text("Nobody has said anything yet.")
+          Text(CannedDial.t("watchEmpty"))
             .font(.system(size: 10)).foregroundColor(.white.opacity(0.45))
             .padding(.vertical, 4)
         } else {
@@ -148,24 +149,25 @@ struct DialChatView: View {
       }
       .padding(.horizontal, 4)
     }
-    .navigationTitle("CHAT")
+    .navigationTitle(CannedDial.t("chatTitle"))
     // ★ Opening the room IS reading it. The badge exists to say "something happened while you were
     //   looking at the waterfall", and it has done its job the moment you are here.
     .onAppear { radio.chatUnread = 0 }
   }
 
   private var roomLine: String {
-    var bits = ["\(radio.dialListeners) listening"]
+    let user = CannedDial.t("user", ["n": "\(radio.dialTuner)"])
+    var bits = [CannedDial.t("listening", ["n": "\(radio.dialListeners)"])]
     if radio.dialMode == "spectator" {
-      bits.append("the owner tunes this one")
+      bits.append(CannedDial.t("watchOwnerTunes"))
     } else if radio.dialDecoding {
-      bits.append(radio.dialMine ? "you are decoding" : "User \(radio.dialTuner) is decoding")
+      bits.append(radio.dialMine ? CannedDial.t("youDecoding") : CannedDial.t("userDecoding", ["who": user]))
     } else if radio.dialTuner != 0 && radio.dialMine {
-      bits.append("you tuned last")
+      bits.append(CannedDial.t("youTunedLast"))
     } else if radio.dialTuner != 0 {
-      bits.append("User \(radio.dialTuner) is tuning")
+      bits.append(CannedDial.t("userTuning", ["who": user]))
     } else {
-      bits.append("nobody is tuning")
+      bits.append(CannedDial.t("watchNobody"))
     }
     return bits.joined(separator: " · ")
   }

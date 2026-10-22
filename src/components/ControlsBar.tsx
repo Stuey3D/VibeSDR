@@ -43,7 +43,7 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 import DrumWheel from './DrumWheel';
-import { askBannerText, askLocked, type AskState } from '../services/dialChat';
+import { askBannerText, askLocked, sharedTunerText, chatT, type AskState } from '../services/dialChat';
 import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
 import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import { useDerivedValue, useSharedValue, type SharedValue } from 'react-native-reanimated';
@@ -604,6 +604,9 @@ export interface ControlsBarProps {
                  /** ★ FM-DX: one tuner fanned out, no session cap — say "You+N" rather than a
                   *  total over a denominator it does not have (Stuart's wording, 2026-09-22). */
                  youPlus?: boolean;
+                 /** ★ The chat's language (dialChat chatLang) — not read here; its change is what redraws the banner's
+                  *  words (sharedTunerText / askBannerText speak it). */
+                 lang?: string;
                  /** ★★ A CHAT LINE JUST ARRIVED (Stuart, 2026-10-09: "I was asking if I could tune and getting no
                   *  answer — not sure if our chat notification is too subtle"). Set by SDRScreen for ~8 s, flashed on
                   *  and off at first; while set the banner SAYS it ("User 2: Can I tune?") — the one line everyone
@@ -1186,14 +1189,15 @@ function sharedBannerText(st: SharedTuner, tight: boolean): string {
   // ★★ Ask before tuning: while locked the banner says what to do now (ask / waiting / when it is yours).
   const ask = st.ask ? askBannerText(st.ask, tight) : null;
   if (ask) return ask;
-  return st.alone ? 'SHARED TUNER · FREE TO TUNE'
+  // ★ In the chat's language (dialChat sharedTunerText) — the banner is where a chat line lands, so it speaks it too.
+  return st.alone ? sharedTunerText(true, st.listeners, st.max)
     : st.youPlus
       /* ★★★ "You+N": the count includes us, so N = total − 1 and nobody has to work out
        *  whether they are in it. No "/max" — FM-DX has no cap to report. */
       //  ★ On the narrowest layouts (SE in Display Zoom) the prefix goes, never the words
       //    that matter — truncating mid-word is the one outcome that is not allowed.
       ? `${tight ? '' : 'Shared Tuner - '}Ask Before Tuning (You+${Math.max(1, st.listeners - 1)})`
-      : `SHARED TUNER · ASK TO TUNE · ${st.listeners}${st.max > 1 ? `/${st.max}` : ''} 👤`;
+      : sharedTunerText(false, st.listeners, st.max);
 }
 function sharedBannerLabel(st: SharedTuner): string {
   if (st.said) return `Chat: ${st.said}`;
@@ -2797,11 +2801,10 @@ function SharedStatus({ st, size, short = false }: { st: SharedTuner; size: numb
   const colour = st.alone ? dk.bannerFree : dk.bannerAsk;
   return (
     <View style={{ flexShrink: 1, minWidth: 0 }} accessibilityRole="text" accessibilityLabel={sharedBannerLabel(st)}>
-      <SharedText text={short ? SHARED_SHORT : sharedBannerText(st, true)} colour={colour} size={size} />
+      <SharedText text={short ? chatT('bannerShort') : sharedBannerText(st, true)} colour={colour} size={size} />
     </View>
   );
 }
-const SHARED_SHORT = 'SHARED';
 function SharedText({ text, colour, size }: { text: string; colour: string; size: number }) {
   const dk = useFaceplate().deck;
   const sd = React.useContext(StatusDisplayContext);
@@ -3047,7 +3050,7 @@ const StatusMeasure = React.memo(function StatusMeasure({ onUnit, utc, srv, srvS
       <ClockRow clock={clockShort} color={clockColor} font={font} size={clockFont} onUnit={onShort} />
       <Unit id="rec" onUnit={onUnit}><RecSlot recording text={recText} font={font} size={clockFont} /></Unit>
       {sharedFull !== null && <Unit id="shared" onUnit={onUnit}><SharedText text={sharedFull} colour={clockColor} size={clockFont} /></Unit>}
-      {sharedFull !== null && <Unit id="sharedShort" onUnit={onUnit}><SharedText text={SHARED_SHORT} colour={clockColor} size={clockFont} /></Unit>}
+      {sharedFull !== null && <Unit id="sharedShort" onUnit={onUnit}><SharedText text={chatT('bannerShort')} colour={clockColor} size={clockFont} /></Unit>}
       {(dspNr || dspNb || dspAn) && <Unit id="dsp" onUnit={onUnit}><DspBadges nr={dspNr} nb={dspNb} an={dspAn} font={font} /></Unit>}
       <LinkIndicator readout={link} noNode={noNode} onUnit={onUnit} />
       </StatusGhostContext.Provider>

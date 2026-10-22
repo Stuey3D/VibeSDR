@@ -22,87 +22,33 @@
  */
 
 import {
-  shareSummary, parseShared, sharedLineText, shareTuneStep, shareFromManual, manualFieldFrom,
+  shareSummary, parseShared, sharedStationText, shareTuneStep, shareFromManual, manualFieldFrom,
   MANUAL_SHARE_MODES, SHARE_MODE_LABEL, type ShareOut, type SharedStation,
 } from '../../../src/services/chatShare';
 import { kbField } from './padKeyboard';
 import { answerBand, isAnswer, isQuestion, bannerLine, BannerGate, phraseDecoder, phraseWiki, ANSWER_WINDOW_MS, DIAL_PHRASES,
-         askLocked, type AskState } from '../../../src/services/dialChat';
+         PHRASE_GROUP_LABEL, phraseText, chatT, dialSummaryParts, joinedLine, speakerName, setChatLangInputs, chatLangPicked,
+         onChatLang, isChatLang, CHAT_LANG_NAMES, flagsDrawn, chatLangFlag, chatLangDetected, type AskState,
+         type ChatLang } from '../../../src/services/dialChat';
 
-/** The vocabulary, in the order a conversation actually runs: ask, act, answer, thank.
- *  ★★ TAKEN FROM JR, NOT INVENTED HERE — `Canned.fmdx` in Chat.swift, plus the long-decode lines.
- *     One vocabulary across the watch, the phone and the browser, so a conversation reads the same
- *     wherever it is held. Change a wording freely; change or remove an ID and the two ends stop
- *     understanding each other. */
-export const PHRASES: Array<{ id: string; text: string; group?: string; key?: string }> = [
-  { id: 'ask_tune',       text: 'Can I tune?' },
-  { id: 'anyone_using',   text: 'Anyone using this?' },
-  { id: 'tuning_now',     text: 'Tuning now' },
-  { id: 'go_ahead',       text: 'Go ahead, tune' },
-  { id: 'please_hold',    text: 'Please hold — chasing DX' },
-  { id: 'yes_go_ahead',   text: "Yes, I'm on it — but go ahead and tune" },
-  { id: 'yes_hold',       text: "Yes, I'm on it — please hold on" },
-  // ★★ ASK BEFORE TUNING's gentle NO (2026-10-21): the requested "Do you mind, I am listening here", without the edge.
-  { id: 'listening_few_min', text: "I'm listening to this one — a few more minutes, please?" },
-  { id: 'mid_decode',     text: "I'm running a decoder — can you wait please?" },
-  { id: 'decoding_10min', text: 'Decoding — about 10 minutes' },
-  { id: 'decode_done',    text: 'Decode finished — all yours' },
-  { id: 'wont_tune',      text: "OK, I won't tune yet" },
-  { id: 'all_yours',      text: 'Done — all yours' },
-  { id: 'thanks',         text: 'Thanks!' },
-  { id: 'sorry',          text: "Sorry, didn't realise!" },
-  { id: 'tune_back',      text: 'Tuning back — I was listening to that' },
-  // ★★ THE SOCIAL ONES (Stuart, 2026-10-08): "make it a little more social without opening it up to full text chat". Still ids only — a fixed, friendly vocabulary nobody can be abused with; "Not my kind of music" is the diplomatic way to move the dial on.
-  { id: 'hello', text: 'Hello everyone!' },
-  { id: 'just_scanning', text: "Just scanning to see what's about" },
-  { id: 'what_is_this', text: 'Anyone know what this is?' },
-  // ★ "THIS SOUNDS …" IS ONE ROW (Stuart, 2026-10-08: "This sounds awesome could be a selection") — each choice its own id, drawn as a 'This sounds' label and a key per word (group/key below); a message reads in full.
-  { id: 'sounds_awesome', text: 'This sounds awesome!', group: 'sounds', key: 'Awesome' },
-  { id: 'sounds_great', text: 'This sounds great', group: 'sounds', key: 'Great' },
-  { id: 'sounds_interesting', text: 'This sounds interesting', group: 'sounds', key: 'Interesting' },
-  { id: 'sounds_weird', text: 'This sounds weird', group: 'sounds', key: 'Weird' },
-  { id: 'sounds_distorted', text: 'This sounds distorted', group: 'sounds', key: 'Distorted' },
-  { id: 'sounds_bad', text: 'This sounds bad', group: 'sounds', key: 'Bad' },
-  { id: 'nice_catch', text: 'Nice catch!' },
-  { id: 'not_my_music', text: 'Not my kind of music' },
-  { id: 'good_conditions', text: 'Conditions are great today' },
-  { id: 'poor_conditions', text: 'Conditions are poor today' },
-  { id: 'off_73', text: 'Off now — 73!' },
-  // ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09) — one "It's …" row, drawn only while somebody
-  //   else's question is open and only the half for the band the dial is on. Band, wiki page and decoder come from the
-  //   app's dialChat.ts (one rule, two readers); the ids and wording are listed here like every other phrase.
-  { id: 'not_sure', text: 'Not sure, sorry', group: 'answer', key: 'Not sure' },
-  { id: 'is_wefax',  text: "It's WEFAX (weather fax)", group: 'answer', key: 'WEFAX' },
-  { id: 'is_rtty',   text: "It's RTTY", group: 'answer', key: 'RTTY' },
-  { id: 'is_navtex', text: "It's NAVTEX", group: 'answer', key: 'NAVTEX' },
-  { id: 'is_sstv',   text: "It's SSTV (slow-scan TV)", group: 'answer', key: 'SSTV' },
-  { id: 'is_ft8',    text: "It's FT8", group: 'answer', key: 'FT8' },
-  { id: 'is_cw',     text: "It's Morse (CW)", group: 'answer', key: 'Morse' },
-  { id: 'is_ssb',    text: "It's SSB voice", group: 'answer', key: 'SSB voice' },
-  { id: 'is_drm',    text: "It's DRM (digital radio)", group: 'answer', key: 'DRM' },
-  { id: 'is_stanag', text: "It's STANAG (military data)", group: 'answer', key: 'STANAG' },
-  { id: 'is_ale',    text: "It's ALE", group: 'answer', key: 'ALE' },
-  { id: 'is_hfdl',   text: "It's HFDL (aircraft data)", group: 'answer', key: 'HFDL' },
-  { id: 'is_codar',  text: "It's CODAR (ocean radar)", group: 'answer', key: 'CODAR' },
-  { id: 'is_oth',    text: "It's over-the-horizon radar", group: 'answer', key: 'OTH radar' },
-  { id: 'is_time',   text: "It's a time signal", group: 'answer', key: 'Time signal' },
-  { id: 'is_dmr',    text: "It's DMR", group: 'answer', key: 'DMR' },
-  { id: 'is_dstar',  text: "It's D-STAR", group: 'answer', key: 'D-STAR' },
-  { id: 'is_p25',    text: "It's P25", group: 'answer', key: 'P25' },
-  { id: 'is_nxdn',   text: "It's NXDN", group: 'answer', key: 'NXDN' },
-  { id: 'is_dpmr',   text: "It's dPMR", group: 'answer', key: 'dPMR' },
-  { id: 'is_pocsag', text: "It's POCSAG (pager)", group: 'answer', key: 'POCSAG' },
-  { id: 'is_aprs',   text: "It's APRS", group: 'answer', key: 'APRS' },
-  { id: 'is_adsb',   text: "It's ADS-B (aircraft)", group: 'answer', key: 'ADS-B' },
-  { id: 'is_acars',  text: "It's ACARS (aircraft data)", group: 'answer', key: 'ACARS' },
-  { id: 'is_ais',    text: "It's AIS (ships)", group: 'answer', key: 'AIS' },
-  { id: 'is_apt',    text: "It's a weather satellite (APT)", group: 'answer', key: 'Weather sat' },
-  { id: 'is_fm_bc',  text: "It's an FM broadcast station", group: 'answer', key: 'FM broadcast' },
-];
+/* ★★ THE VOCABULARY IS THE APP'S — dialChat.DIAL_PHRASES, in the listener's language (2026-10-22: Stuart in the UK and
+ *  Kiko in Brazil on one dial; the id travels, each end draws its own words). One list for the app, the browser and —
+ *  generated from the same i18n/chat/*.json — both watches. Change a WORDING there; change or remove an ID and the ends
+ *  stop understanding each other. */
 
-const TEXT: Record<string, string> = Object.fromEntries(PHRASES.map(p => [p.id, p.text]));
-/** The label a phrase group's row starts with (the app: dialChat.ts PHRASE_GROUP_LABEL). */
-const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds', answer: "It's" };
+/* ★★★ WHICH LANGUAGE (dialChat chatLangChoice): the chat's own menu (remembered in THIS browser), else the browser's
+ *  language list, else the country the server says this listener is in, else English. Read at load so the shared-tuner
+ *  banner speaks it from the first frame. ★ localStorage can be absent or throw (a private window, blocked site data):
+ *  the page then simply starts on the automatic choice. */
+const LANG_KEY = 'vibe.chat.lang';
+function storedLang(): string | null { try { return localStorage.getItem(LANG_KEY); } catch { return null; } }
+function storeLang(v: ChatLang | 'auto') {
+  try { if (v === 'auto') localStorage.removeItem(LANG_KEY); else localStorage.setItem(LANG_KEY, v); } catch { /* not remembered */ }
+}
+if (typeof navigator !== 'undefined') {
+  const picked = storedLang();
+  setChatLangInputs({ device: navigator.languages?.length ? navigator.languages : [navigator.language], picked: isChatLang(picked) ? picked : null });
+}
 
 /* ★★★ THE ONE PHRASE THAT CARRIES FACTS (Stuart, 2026-09-20): "Hey, check out 96.1 MHz Advanced RDS". A shared
  *  receiver is a room of people finding things, and the canned vocabulary let them agree who tunes but never
@@ -174,8 +120,66 @@ let isOpen = false;
 
 const $ = (id: string) => document.getElementById(id);
 
+/** ★ The panel's own words, in the chat's language (index.html carries the English for a page with no script). */
+function labelPanel() {
+  const head = document.querySelector('#chatPanel #menuHead span'); if (head) head.textContent = chatT('chatTitle');
+  const close = $('chatClose'); if (close) close.textContent = chatT('close');
+  const say = document.querySelector('#chatPanel h2'); if (say) say.textContent = chatT('say');
+  const hint = document.querySelector('#chatPanel p.hint'); if (hint) hint.textContent = chatT('webHint');
+  // ★ The menu's CHAT key keeps its unread pip (a child span): only its own text node changes.
+  const m = $('mChat'); const t = m?.firstChild; if (t && t.nodeType === 3) t.textContent = chatT('chatTitle');
+}
+
+/* ★★ THE LANGUAGE MENU (Stuart, 2026-10-22: "a little drop down menu for a user to override it such as an english person
+ *  on holiday to portugal listening on a local friends laptop"). A small key in the panel's head opens a row of keys —
+ *  Automatic, then each language in its own name — not a <select>: a game controller's enter on a <select> opens the
+ *  browser's own picker, which the pad cannot drive. Plain buttons are what gamepad.ts already walks. It changes only how
+ *  THIS browser draws the chat; what is sent is an id in every language. */
+function langMenu(): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'chatLang';
+  const key = document.createElement('button');
+  key.className = 'btn chatLangKey';
+  key.title = 'Chat language';
+  const row = document.createElement('div');
+  row.className = 'chatLangRow'; row.hidden = true;
+  // ★ A flag, or — where flags are not drawn (Windows) — its country code in a small badge (dialChat flagsDrawn).
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const emoji = flagsDrawn(nav.userAgentData?.platform || nav.platform || nav.userAgent);
+  const fill = (el: HTMLElement, l: ChatLang, prefix?: string) => {
+    el.textContent = prefix ? `${prefix} · ` : '';
+    const f = chatLangFlag(l, emoji);
+    const flag = document.createElement('span');
+    flag.className = f.emoji ? 'chatFlag' : 'chatFlag chatFlagBadge';
+    flag.textContent = f.emoji ?? f.cc;
+    el.append(flag, ` ${CHAT_LANG_NAMES[l]}`);
+  };
+  const draw = () => {
+    const p = chatLangPicked();
+    // ★ Default SAYS what it resolves to — "Default · 🇧🇷 Português (Brasil)" — on the closed key too.
+    if (p === 'auto') fill(key, chatLangDetected(), `🌐 ${chatT('langDefault')}`); else fill(key, p, '🌐');
+    row.innerHTML = '';
+    for (const v of ['auto', ...Object.keys(CHAT_LANG_NAMES)] as Array<ChatLang | 'auto'>) {
+      const b = document.createElement('button');
+      b.className = 'btn' + (v === p ? ' on' : '');
+      if (v === 'auto') fill(b, chatLangDetected(), chatT('langDefault')); else { fill(b, v); b.lang = v; }
+      b.onclick = () => { storeLang(v); setChatLangInputs({ picked: v === 'auto' ? null : v }); row.hidden = true; draw(); };
+      row.appendChild(b);
+    }
+  };
+  key.onclick = () => { row.hidden = !row.hidden; };
+  draw();
+  wrap.append(key, row);
+  return wrap;
+}
+
+let langUnsub: (() => void) | null = null;
 export function initChat(d: Deps) {
   deps = d;
+  labelPanel();
+  // ★ A new language (the menu, or the server's country arriving) redraws the pad, the panel and every line already said.
+  langUnsub?.();
+  langUnsub = onChatLang(() => { if (deps) initChat(deps); relabelLog(); if (dial) onDial(dial); });
   const list = $('chatPhrases');
   if (list) {
     list.innerHTML = '';
@@ -197,7 +201,7 @@ export function initChat(d: Deps) {
     /* ★ A phrase GROUP ("This sounds" Awesome · Weird …) is one row — its label, then a short key per member — where
      *  its first member stands (Stuart, 2026-10-08). The app's ChatDrawer does the same. */
     const done = new Set<string>();
-    for (const p of PHRASES) {
+    for (const p of DIAL_PHRASES) {
       if (!p.group) { list.appendChild(mkKey(p, p.text)); continue; }
       if (done.has(p.group)) continue;
       done.add(p.group);
@@ -208,7 +212,7 @@ export function initChat(d: Deps) {
       lbl.className = 'chatGroupLbl';
       lbl.textContent = PHRASE_GROUP_LABEL[p.group] ?? '';
       row.appendChild(lbl);
-      for (const q of PHRASES.filter((x) => x.group === p.group)) {
+      for (const q of DIAL_PHRASES.filter((x) => x.group === p.group)) {
         const k = mkKey(q, q.key ?? q.text);
         k.dataset.id = q.id;
         row.appendChild(k);
@@ -230,12 +234,12 @@ export function initChat(d: Deps) {
     const row = document.createElement('div');
     row.className = 'chatCheckOut';
     const lead = document.createElement('span');
-    lead.className = 'chatCheckLead'; lead.textContent = 'Check out';
+    lead.className = 'chatCheckLead'; lead.textContent = chatT('checkOut');
     const bmBtn = document.createElement('button');
-    bmBtn.className = 'btn chatShareBtn'; bmBtn.textContent = '📻 Bookmark';
+    bmBtn.className = 'btn chatShareBtn'; bmBtn.textContent = `📻 ${chatT('bookmark')}`;
     bmBtn.title = 'Pick a station from the search and bookmark lists';
     const manBtn = document.createElement('button');
-    manBtn.className = 'btn chatShareBtn'; manBtn.textContent = 'Manual';
+    manBtn.className = 'btn chatShareBtn'; manBtn.textContent = chatT('manual');
     manBtn.title = 'Type a frequency and choose a demodulator';
     row.append(lead, bmBtn, manBtn);
 
@@ -245,9 +249,9 @@ export function initChat(d: Deps) {
     const draftTxt = document.createElement('span');
     draftTxt.className = 'chatShareDraftTxt';
     const draftSend = document.createElement('button');
-    draftSend.className = 'btn'; draftSend.textContent = 'Send';
+    draftSend.className = 'btn'; draftSend.textContent = chatT('send');
     const draftX = document.createElement('button');
-    draftX.className = 'btn'; draftX.textContent = '×'; draftX.title = 'Discard';
+    draftX.className = 'btn'; draftX.textContent = '×'; draftX.title = chatT('discard');
     draft.append(draftTxt, draftSend, draftX);
     let draftOut: ShareOut | null = null;
     const clearDraft = () => { draftOut = null; draft.hidden = true; draftTxt.textContent = ''; };
@@ -257,7 +261,7 @@ export function initChat(d: Deps) {
       draftOut = out;
       // ★ The NAME is the listener's own label and is shown only here — textContent, and never sent: the
       //   room hears the name THE RECEIVER knows (chatShare.ts). The summary says what will actually go.
-      draftTxt.textContent = `Check out ${title ? `${title} · ` : ''}${shareSummary(out)}`;
+      draftTxt.textContent = `${chatT('checkOut')} ${title ? `${title} · ` : ''}${shareSummary(out)}`;
       draft.hidden = false;
       manual.hidden = true; manBtn.classList.remove('on');
     };
@@ -266,7 +270,7 @@ export function initChat(d: Deps) {
     const manual = document.createElement('div');
     manual.className = 'chatManual'; manual.hidden = true;
     const freq = document.createElement('input');
-    freq.type = 'text'; freq.inputMode = 'decimal'; freq.placeholder = 'frequency';
+    freq.type = 'text'; freq.inputMode = 'decimal'; freq.placeholder = chatT('freqPlaceholder');
     freq.className = 'chatFreq'; freq.spellcheck = false; freq.autocomplete = 'off';
     const unit = document.createElement('select');
     for (const u of ['MHz', 'kHz']) { const o = document.createElement('option'); o.value = u; o.textContent = u; unit.appendChild(o); }
@@ -279,7 +283,7 @@ export function initChat(d: Deps) {
       const o = document.createElement('option'); o.value = m; o.textContent = SHARE_MODE_LABEL[m] || m.toUpperCase(); mode.appendChild(o);
     }
     const manSend = document.createElement('button');
-    manSend.className = 'btn'; manSend.textContent = 'Send';
+    manSend.className = 'btn'; manSend.textContent = chatT('send');
     manual.append(freq, unit, mode, manSend);
     // ★ The controller keyboard (padKeyboard.ts): its number pad's kHz/MHz key is this unit picker, and ↵ is Send.
     kbField(freq, {
@@ -319,6 +323,8 @@ export function initChat(d: Deps) {
 
     box.append(row, draft, manual);
     list.insertBefore(box, list.firstChild);
+    // ★ Last, out of the way of the phrases: most people never need it (the automatic choice is right).
+    list.appendChild(langMenu());
   }
 }
 
@@ -367,12 +373,15 @@ function setQuestionOpen(until: number) {
 }
 
 const sinceByUser = new Map<number, number>();
+/** How to redraw each line in the log in another language (see onChatLang in initChat). */
+const relabels = new Map<HTMLElement, () => void>();
+function relabelLog() { for (const [el, f] of relabels) if (el.isConnected) f(); else relabels.delete(el); }
 export function onSaid(from: number, id: string, admin = false, msg?: Record<string, unknown>) {
   /* ★★ A share is drawn from the SERVER's line (chatShare.parseShared): the station as THE RECEIVER named it.
    *  The sender's label never travelled and there is no client name field to trust. One with nothing usable is
    *  dropped rather than drawn as a bare "shared". Every other phrase is a fixed string. */
   const share = id === 'check_out' ? parseShared(msg) : null;
-  const text = id === 'check_out' ? (share ? sharedLineText(share) : '') : TEXT[id];
+  const text = id === 'check_out' ? (share ? chatT('sharedLine', { station: sharedStationText(share) }) : '') : phraseText(id);
   if (!text) return;                       // an id this build cannot draw — see the header note
   const mine = !!dial && from === dial.you;
   if (isQuestion(id) && !mine) setQuestionOpen(Date.now() + ANSWER_WINDOW_MS);
@@ -387,8 +396,9 @@ export function onSaid(from: number, id: string, admin = false, msg?: Record<str
   if (log && since && seen !== undefined && seen !== since) {
     const j = document.createElement('div');
     j.className = 'chatJoin';
-    const who = (dial && from === dial.you) ? 'You' : `User ${from}`;
-    j.textContent = `— ${who} joined ${new Date(since * 1000).toISOString().slice(11, 16)} UTC —`;
+    const you = dial?.you ?? 0;
+    j.textContent = joinedLine(from, you, since);
+    relabels.set(j, () => { j.textContent = joinedLine(from, you, since); });
     log.appendChild(j);
   }
   if (log) {
@@ -405,18 +415,25 @@ export function onSaid(from: number, id: string, admin = false, msg?: Record<str
      *   what the sender WAS when the line was said, so history does not rewrite itself.
      * ★ Marked on your OWN lines too. "You (admin)" is worth knowing — it is the difference
      *   between a request and an instruction, and you may not remember you are still signed in. */
-    const base = (dial && from === dial.you) ? 'You' : `User ${from}`;
-    who.textContent = admin ? `${base} (admin)` : base;
+    const you = dial?.you ?? 0;
+    const name = () => { const base = speakerName(from, you); return admin ? chatT('admin', { who: base }) : base; };
+    who.textContent = name();
     if (admin) who.classList.add('chatAdmin');
     const what = document.createElement('span');
     what.textContent = text;               // textContent, never innerHTML — see the header note
     row.append(who, what);
+    // ★ Said in one language, redrawn in the next if the listener changes it: the id is what arrived.
+    relabels.set(row, () => {
+      who.textContent = name();
+      what.textContent = share ? chatT('sharedLine', { station: sharedStationText(share) }) : (phraseText(id) ?? text);
+      for (const k of Array.from(row.querySelectorAll<HTMLElement>('[data-chrome]'))) k.textContent = chatT(k.dataset.chrome as 'tuneKey' | 'decodeKey');
+    });
     /* ★★ A station somebody found is worth a tap — but ARRIVING tunes nothing. TUNE is this listener's choice,
      *  through the host's ordinary tune path; on a shared dial somebody else is on, it asks first. */
     if (share && deps?.tuneShare) {
       const go = document.createElement('button');
       go.className = 'btn chatTune';
-      go.textContent = 'TUNE';
+      go.textContent = chatT('tuneKey'); go.dataset.chrome = 'tuneKey';
       go.title = 'Tune this receiver there';
       go.onclick = () => onShareTune(share, row);
       row.append(go);
@@ -436,7 +453,7 @@ export function onSaid(from: number, id: string, admin = false, msg?: Record<str
     if (dec && deps?.openDecoder && deps.canDecode?.(dec)) {
       const d = document.createElement('button');
       d.className = 'btn chatTune';
-      d.textContent = 'DECODE';
+      d.textContent = chatT('decodeKey'); d.dataset.chrome = 'decodeKey';
       d.title = 'Open the decoder for this signal';
       d.onclick = () => deps?.openDecoder?.(dec);
       row.append(d);
@@ -444,7 +461,7 @@ export function onSaid(from: number, id: string, admin = false, msg?: Record<str
     // ★ Same rule as the decoder box: only follow a reader who is at the bottom (B11).
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
     log.appendChild(row);
-    while (log.children.length > 40) log.removeChild(log.firstChild!);
+    while (log.children.length > 40) { relabels.delete(log.firstChild as HTMLElement); log.removeChild(log.firstChild!); }
     if (atBottom) log.scrollTop = log.scrollHeight;
   }
   if (!isOpen && !(dial && from === dial.you)) {
@@ -460,7 +477,7 @@ function onShareTune(s: SharedStation, row: HTMLElement) {
   if (step === 'refused') { onDialRefused(); return; }
   if (step === 'no-dab') {
     const strip = $('dialStrip');
-    if (strip) { strip.hidden = false; strip.textContent = 'This receiver cannot play DAB.'; }
+    if (strip) { strip.hidden = false; strip.textContent = chatT('noDab'); }
     return;
   }
   if (step === 'tune') { deps?.tuneShare?.(s); return; }
@@ -470,15 +487,15 @@ function onShareTune(s: SharedStation, row: HTMLElement) {
   ask.className = 'chatAsk';
   const others = Math.max(1, (dial?.listeners ?? 2) - 1);
   const why = document.createElement('span');
-  why.textContent = `${others === 1 ? 'Somebody else is' : `${others} others are`} listening — tuning moves it for everyone.`;
+  why.textContent = others === 1 ? chatT('othersOne') : chatT('othersMany', { n: others });
   const askBtn = document.createElement('button');
-  askBtn.className = 'btn'; askBtn.textContent = 'Ask "Can I tune?"';
+  askBtn.className = 'btn'; askBtn.textContent = chatT('askButton', { ask: phraseText('ask_tune') ?? '' });
   askBtn.onclick = () => { deps?.say('ask_tune'); ask.remove(); };
   const now = document.createElement('button');
-  now.className = 'btn'; now.textContent = 'Tune now';
+  now.className = 'btn'; now.textContent = chatT('tuneNow');
   now.onclick = () => { ask.remove(); deps?.tuneShare?.(s); };
   const no = document.createElement('button');
-  no.className = 'btn'; no.textContent = 'Cancel';
+  no.className = 'btn'; no.textContent = chatT('cancel');
   no.onclick = () => ask.remove();
   ask.append(why, askBtn, now, no);
   row.after(ask);
@@ -491,21 +508,10 @@ export function onDial(d: DialState) {
   if (!strip) return;
   if (d.mode === 'exclusive') { strip.hidden = true; return; }
   strip.hidden = false;
-  const bits: string[] = [];
-  bits.push(`${d.listeners} listening`);
-  // ★★ WHO MOVED IT LAST, not who owns it — nobody owns it. Said plainly, because a frequency
-  //    that changes under you with no explanation reads as the receiver glitching, and that is
-  //    the one thing a shared dial must never look like.
-  if (d.mode === 'spectator') bits.push('the owner tunes this receiver');
-  else if (d.decoding)        bits.push(d.mine ? 'you are decoding' : `User ${d.tuner} is decoding`);
-  // ★★ Ask before tuning — never "go ahead" to somebody the server will refuse (dialChat.dialSummary says the same).
-  else if (askLocked(d))      bits.push(d.askState === 'open' ? 'you asked — waiting for a reply'
-                                      : d.askState === 'no' ? 'asked to wait a few minutes' : 'ask before tuning — Can I tune? below');
-  // ★ "You are tuning", not "you have the dial": nobody HOLDS it. Saying otherwise would promise
-  //   an exclusivity the server does not enforce and Stuart deliberately did not want.
-  else if (d.tuner && d.mine) bits.push('you tuned last');
-  else if (d.tuner)           bits.push(`User ${d.tuner} is tuning`);
-  else                        bits.push('nobody is tuning — go ahead');
+  // ★★ WHO MOVED IT LAST, not who owns it — nobody owns it. Said plainly, because a frequency that changes under you
+  //    with no explanation reads as the receiver glitching. The words are the app's (dialChat dialSummaryParts, in the
+  //    chat's language); the browser's adds where the ask key is ("ask before tuning — Can I tune? below").
+  const bits = dialSummaryParts({ ...d, decoding: !!d.decoding }, true);
   strip.textContent = bits.join(' · ');
   strip.classList.toggle('busy', !!d.decoding);
 }
@@ -526,7 +532,7 @@ export function onDialRefused() {
   const strip = $('dialStrip');
   if (!strip) return;
   strip.hidden = false;
-  strip.textContent = 'This receiver is set to listen only — the owner tunes it.';
+  strip.textContent = chatT('listenOnly');
   strip.classList.add('busy');
 }
 

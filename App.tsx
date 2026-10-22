@@ -54,6 +54,11 @@ import type { SDRMode }     from './src/services/UberSDRClient';
 import { useDeepLinks }     from './src/linking/useDeepLinks';
 import { crumb }            from './src/services/crumbs';
 import { initMacAudio }     from './src/services/macAudio';
+import { initChatLanguage } from './src/services/chatLangNative';
+
+// ★★ The canned chat speaks the listener's language (dialChat.ts chatLangChoice): the device's list now, the drawer's
+//    remembered pick when storage answers, the server's country when a shared dial says it. Once, at launch.
+initChatLanguage();
 
 // ★★ MEMORY DIAGNOSTICS BUILD ONLY (android/.../VibeDiag.kt, -PvibeDiag=true): the Hermes heap every 10 s, beside the
 //    native line, so a leak can be placed on the JS side or the native side. Never runs in a normal build.

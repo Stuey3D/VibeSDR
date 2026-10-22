@@ -22,7 +22,7 @@ import { DabAssembler } from '../../../src/services/dabAssemble';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg } from '../../../src/services/vibeSquelch';
 import { roomMode, roomPassband } from '../../../src/services/roomPassband';
-import { parseAsk, askLocked, ASK_SHARED_SETTINGS, type AskState } from '../../../src/services/dialChat';
+import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs, type AskState } from '../../../src/services/dialChat';
 // ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the shared contract module the app reads too (ONE RULE, TWO READERS).
 import { parseIcomStatus, icomControlMsg, nearestSpanIndex, spanStep,
          type IcomStatus, type IcomRadio, type IcomControlFields } from '../../../src/services/icomRadio';
@@ -1326,6 +1326,9 @@ export class SpectrumClient {
         break;
       case 'dial': {
         // ★★ Ask before tuning — the server's answer, through the app's own reader (dialChat.parseAsk).
+        // ★ This listener's own country (server GeoIP, sent to this socket only) — the chat's language when the device's
+        //   is not one it speaks (dialChat chatLangChoice). Absent on an old server, on loopback / LAN: English then.
+        setChatLangInputs({ cc: typeof msg.cc === 'string' ? msg.cc : null });
         const ask = parseAsk(msg);
         this.tuneLocked = askLocked(ask);
         this.cb.onDial?.({

@@ -9,7 +9,8 @@
  * Chat button pulses blue in ControlsBar when chatUnread=true.
  */
 
-import { PHRASE_GROUP_LABEL } from '../services/dialChat';
+import { PHRASE_GROUP_LABEL, chatT, chatLangPicked, chatLangKeyLabel, chatLangLabel, chatLangDefaultLabel, CHAT_LANG_NAMES,
+         type ChatLang } from '../services/dialChat';
 import React, {
   useCallback, useEffect, useRef, useState,
 } from 'react';
@@ -57,6 +58,9 @@ export interface ChatMessage {
    *  one, the decoder that reads it: drawn as WIKI / DECODE keys (dialChat ANSWERS). */
   wiki?: string;
   decoder?: string;
+  /** ★ A canned line's words in the chat's CURRENT language (the id is what arrived) — so changing the language
+   *  redraws what was already said. Absent = `user` / `text` as stored. */
+  relabel?: () => { user?: string; text: string };
 }
 
 /** One row of the share picker. `title` may be the user's OWN bookmark label — shown on their own
@@ -101,6 +105,10 @@ export interface ChatDrawerProps {
   canDecode?:        (decoder: string) => boolean;
   /** One line about the room — who is tuning, how many are here, why it is not moving. */
   dialLine?:         string;
+  /** ★★ THE CHAT'S LANGUAGE MENU (canned mode — 2026-10-22). `chatLang` is the language in force (a change redraws);
+   *  `onPickLang` takes a language or 'auto'. Absent = no menu. */
+  chatLang?:         string;
+  onPickLang?:       (v: ChatLang | 'auto') => void;
   /** ★★★ "CHECK OUT [Bookmark] [Manual]" (canned mode — Stuart, 2026-10-01: the old picker was "a bit
    *  of a rubbish UI"). Absent/false = no Check out row (a chat without canned mode has a text box,
    *  and FM-DX has its own chat). */
@@ -186,6 +194,7 @@ function ChatDrawerBody({
   onMute, muted = false,
   users = [], syncedUser = null, zoomSync = false,
   onToggleSync, onToggleZoomSync, onUserTap, textOnly = false, canned, onSay, onOpenWiki, onDecode, canDecode, dialLine,
+  chatLang, onPickLang,
   shareEnabled = false, onPickShare, shareDraft, onClearShareDraft, manualStartHz = 0, manualStartMode,
   onShare, onShareTune,
   hiddenUsers = NO_HIDDEN, onHideUser, onShowHidden,
@@ -234,6 +243,7 @@ function ChatDrawerBody({
   const [nameInput, setNameInput] = useState('');
   const [msgInput,  setMsgInput]  = useState('');
   const [showUsers, setShowUsers] = useState(false);
+  const [langOpen,  setLangOpen]  = useState(false);
   const listRef = useRef<FlatList>(null);
   // ★★ CANNED MODE IS ALWAYS "JOINED". Every gate below asked `myCallsign`, which conflated two
   //    different questions: "may I speak?" and "have I chosen a name?". On a shared dial there are
@@ -395,7 +405,7 @@ function ChatDrawerBody({
             ) : (
               <Text style={[cd.title, { color: cc.title, fontFamily: ff }, cd.engrave]}>
                 {showUsers ? `USERS · ${users.length}`
-                  : isCanned ? 'CHAT'
+                  : isCanned ? chatT('chatTitle')
                   : myCallsign ? `CHAT · ${myCallsign}` : 'CHAT'}
               </Text>
             )}
@@ -521,7 +531,7 @@ function ChatDrawerBody({
             <FlatList
               ref={listRef}
               data={shown}
-              extraData={menuFor}
+              extraData={`${menuFor}|${chatLang ?? ''}`}
               keyExtractor={(m: ChatMessage) => m.id}
               style={cd.msgList}
               /* ★ scroll lane: msgContent's own 14 pt side padding */
@@ -535,7 +545,8 @@ function ChatDrawerBody({
                 if (n?.contentSize && n?.layoutMeasurement)
                   followTail.current = n.contentSize.height - (n.contentOffset.y + n.layoutMeasurement.height) < 24;
               }}
-              renderItem={({ item: m }: { item: ChatMessage }) => {
+              renderItem={({ item: m0 }: { item: ChatMessage }) => {
+                const m = m0.relabel ? { ...m0, ...m0.relabel() } : m0;
                 const hideable = hideOn && canHide(m, myCallsign);
                 const row = (
                 <View style={[cd.msg, m.type === 'system' && cd.msgSystem]}>
@@ -560,17 +571,17 @@ function ChatDrawerBody({
                   {/* ★★ TUNE is the RECEIVER's choice — arriving never moves anything. On a shared dial
                        the host asks first when somebody else is on it (chatShare.shareTuneStep). */}
                   {!!m.share && !!onShareTune && (pt.metal ? (
-                    <PopupKey label="TUNE" height={24} fontSize={10} style={cd.tuneKey} hitSlop={6}
+                    <PopupKey label={chatT('tuneKey')} height={24} fontSize={10} style={cd.tuneKey} hitSlop={6}
                       accessibilityLabel="Tune to the shared station" onPress={() => onShareTune?.(m.share!)} />
                   ) : (
                     <TouchableOpacity style={[cd.tuneBtn, { borderColor: cc.btnBdr }]} hitSlop={6} activeOpacity={0.75}
                       accessibilityLabel="Tune to the shared station" onPress={() => onShareTune?.(m.share!)}>
-                      <Text style={[cd.tuneTxt, { color: cc.btnText, fontFamily: t.font }]}>TUNE</Text>
+                      <Text style={[cd.tuneTxt, { color: cc.btnText, fontFamily: t.font }]}>{chatT('tuneKey')}</Text>
                     </TouchableOpacity>
                   ))}
                   {/* ★ An answer's WIKI and DECODE keys — the same two shapes as TUNE. */}
                   {([['WIKI', m.wiki && onOpenWiki ? () => onOpenWiki(m.wiki!) : null, 'Read about this signal on the Signal Identification Wiki'],
-                     ['DECODE', m.decoder && onDecode && canDecode?.(m.decoder) ? () => onDecode(m.decoder!) : null, 'Open the decoder for this signal']] as const)
+                     [chatT('decodeKey'), m.decoder && onDecode && canDecode?.(m.decoder) ? () => onDecode(m.decoder!) : null, 'Open the decoder for this signal']] as const)
                     .map(([label, press, a11y]) => !press ? null : pt.metal ? (
                       <PopupKey key={label} label={label} height={24} fontSize={10} style={cd.tuneKey} hitSlop={6}
                         accessibilityLabel={a11y} onPress={press} />
@@ -639,22 +650,22 @@ function ChatDrawerBody({
                    them rather than imitating them here. */}
               {isCanned && shareEnabled && !shareDraft && (<>
                 <Text style={[cd.cannedLine, cd.checkLbl, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}>
-                  Check out
+                  {chatT('checkOut')}
                 </Text>
-                {shareKey('__bm', '📻 Bookmark', () => { setManualOpen(false); onPickShare?.(); })}
-                {shareKey('__man', manualOpen ? '✎ Manual ▾' : '✎ Manual', openManual, { active: manualOpen })}
+                {shareKey('__bm', `📻 ${chatT('bookmark')}`, () => { setManualOpen(false); onPickShare?.(); })}
+                {shareKey('__man', `✎ ${chatT('manual')}${manualOpen ? ' ▾' : ''}`, openManual, { active: manualOpen })}
               </>)}
               {/* ★★ THE PICKED STATION, waiting for Send. Its label is this user's own and stays on this
                    screen; the room hears the name the receiver knows (chatShare). */}
               {isCanned && shareEnabled && !!shareDraft && (
                 <View style={cd.manualBox}>
                   <Text style={[cd.cannedLine, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]} numberOfLines={2}>
-                    Check out {shareDraft.title}{shareDraft.detail ? `  ·  ${shareDraft.detail}` : ''}
+                    {chatT('checkOut')} {shareDraft.title}{shareDraft.detail ? `  ·  ${shareDraft.detail}` : ''}
                   </Text>
                   <View style={cd.manualRow}>
-                    {shareKey('__send', 'Send', () => { sendShareOut(shareDraft.out); onClearShareDraft?.(); },
+                    {shareKey('__send', chatT('send'), () => { sendShareOut(shareDraft.out); onClearShareDraft?.(); },
                               { active: true, disabled: shareCool })}
-                    {shareKey('__other', 'Pick another', () => onPickShare?.())}
+                    {shareKey('__other', chatT('pickAnother'), () => onPickShare?.())}
                     {shareKey('__x', '✕', () => onClearShareDraft?.())}
                   </View>
                 </View>
@@ -666,7 +677,7 @@ function ChatDrawerBody({
                       style={[cd.manualInp, { borderColor: manualBad ? (pt.metal ? '#ff6a5a' : pt.ink.m.bad) : cc.inputBdr, color: cc.inputCl, fontFamily: ff }, cd.inputMetal]}
                       value={manualVal}
                       onChangeText={(v: string) => { setManualVal(v.replace(/[^0-9.,]/g, '')); setManualBad(false); }}
-                      placeholder="frequency"
+                      placeholder={chatT('freqPlaceholder')}
                       placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
                       keyboardType="decimal-pad" returnKeyType="send" onSubmitEditing={sendManual}
                       maxLength={12} autoCorrect={false}
@@ -679,9 +690,9 @@ function ChatDrawerBody({
                                                           () => setManualMode(m), { active: manualMode === m }))}
                   </View>
                   <View style={cd.manualRow}>
-                    {shareKey('__msend', 'Send', sendManual, { active: true, disabled: shareCool })}
+                    {shareKey('__msend', chatT('send'), sendManual, { active: true, disabled: shareCool })}
                     {manualBad && (
-                      <Text style={[cd.cannedLine, cd.manualErr, { fontFamily: ff }]}>Enter a frequency, e.g. 96.6 MHz</Text>
+                      <Text style={[cd.cannedLine, cd.manualErr, { fontFamily: ff }]}>{chatT('freqHint')}</Text>
                     )}
                   </View>
                 </View>
@@ -719,6 +730,23 @@ function ChatDrawerBody({
                   </React.Fragment>
                 );
               })}
+              {/* ★★ THE LANGUAGE MENU (Stuart, 2026-10-22: "a little drop down menu for a user to override it such as an
+                   english person on holiday to portugal listening on a local friends laptop"). Last, small, out of the
+                   phrases' way: 🌐 and the language in force; open, a row of keys — Automatic, then each language in
+                   its own name. Keys, not a native picker, so a finger, the TV remote's focus and (when the drawer is
+                   pad-navigable) a controller all reach them the way they reach the phrases. Changes only how THIS
+                   device draws the chat — ids are what is sent. */}
+              {!!onPickLang && (
+                <View style={cd.langRow}>
+                  {/* ★ Flags as emoji: every platform the app runs on draws them (dialChat flagsDrawn — Windows is the
+                       browser's case). Default says what it resolves to: "Default · 🇧🇷 Português (Brasil)". */}
+                  {shareKey('__lang', `🌐 ${chatLangKeyLabel(true)}${langOpen ? ' ▾' : ''}`,
+                            () => setLangOpen((o: boolean) => !o), { active: langOpen })}
+                  {langOpen && (['auto', ...Object.keys(CHAT_LANG_NAMES)] as Array<ChatLang | 'auto'>)
+                    .map((v) => shareKey(`__lang_${v}`, v === 'auto' ? chatLangDefaultLabel(true) : chatLangLabel(v, true),
+                                         () => { setLangOpen(false); onPickLang(v); }, { active: chatLangPicked() === v }))}
+                </View>
+              )}
               </ScrollView>
             </View>
           )}
@@ -876,6 +904,8 @@ const makeCd = (pt: PopupTokens) => { const d = <T,>(metal: T, def: T): T => (pt
   // ★ The picked station / the manual field: a full-width block under the Check out row.
   manualBox: { width: '100%', gap: 6, marginBottom: 4 },
   manualRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  // ★ The language menu: its own full-width line at the end of the pad, keys right-aligned (out of the phrases' way).
+  langRow:   { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 6, width: '100%', marginTop: 4 },
   manualInp: { minWidth: 110, flexGrow: 1, maxWidth: 180, height: 32, borderWidth: 1, borderRadius: 8,
                paddingHorizontal: 8, fontSize: 14 },
   // An error is a MEANING (bad): red, or white bold under red text (decoderTokens meaningsFor).

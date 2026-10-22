@@ -93,7 +93,7 @@ import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
 import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 import { vsSquelchMsg } from './vibeSquelch';
-import { parseAsk, askLocked, ASK_SHARED_SETTINGS } from './dialChat';
+import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs } from './dialChat';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
  *
@@ -2419,6 +2419,9 @@ export abstract class VibeServerWsClient {
       // ★ Remembered because it changes what an "unsolicited" centre MEANS — see the config handler.
       this.sharedDial = String(msg.mode || 'exclusive') !== 'exclusive';
       // ★★ Ask before tuning: the server's answer, read by the one reader the browser shares (dialChat.parseAsk).
+      // ★ This listener's own country (server GeoIP, sent to this socket only) — the chat's language when the device's
+      //   is not one it speaks (dialChat chatLangChoice). Absent on an old server, on loopback / LAN: English then.
+      setChatLangInputs({ cc: typeof msg.cc === 'string' ? msg.cc : null });
       const ask = parseAsk(msg);
       this.tuneLocked = askLocked(ask);
       this.callbacks.onDial?.({

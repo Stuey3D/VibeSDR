@@ -1510,6 +1510,15 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #chatPhrases .chatGroup .btn { flex: 0 1 auto; }
 /* ★ The phone rule above makes every phrase full width; the share keys sit side by side instead. */
 #chatPhrases .chatShare .btn { flex: 1 1 auto; text-align: center; }
+/* ★ The chat's language menu (2026-10-22): a small key last in the pad, its row of languages under it when open. */
+#chatPhrases .chatLang { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; width: 100%; margin-top: 4px; }
+#chatPhrases .chatLang .chatLangKey { flex: 0 0 auto; font-size: 11px; opacity: 0.75; }
+#chatPhrases .chatLangRow { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; width: 100%; }
+#chatPhrases .chatLangRow[hidden] { display: none; }
+#chatPhrases .chatLangRow .btn { flex: 0 1 auto; }
+/* ★ Where flags are not drawn (Windows), the country code in a small neutral badge instead of a broken glyph. */
+#chatPhrases .chatFlagBadge { display: inline-block; font-size: 0.72em; font-weight: 700; letter-spacing: 0.04em; padding: 0 3px;
+  border: 1px solid currentColor; border-radius: 3px; opacity: 0.8; line-height: 1.25; vertical-align: 0.08em; }
 #chatPhrases .chatShareDraft .btn, #chatPhrases .chatManual .btn { flex: 0 0 auto; }
 .chatManual .chatFreq { flex: 1 1 7em; min-width: 6em; }
 .chatManual input, .chatManual select {

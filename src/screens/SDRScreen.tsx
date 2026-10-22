@@ -158,8 +158,9 @@ import ChatDrawer,
   { type ChatMessage, type ShareItem, useHiddenChatUsers } from '../components/ChatDrawer';
 import { openWebPage } from '../utils/openWebPage';
 import { padPhrases, bannerLine, BannerGate, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
-         askLocked, ASK_NUDGE_TEXT, type DialState } from '../services/dialChat';
-import { shareFromBookmark, shareSummary, parseShared, sharedLineText, shareTuneStep,
+         askLocked, ASK_NUDGE_TEXT, chatT, chatLang, chatLangDetected, onChatLang, joinedLine, type DialState } from '../services/dialChat';
+import { pickChatLanguage } from '../services/chatLangNative';
+import { shareFromBookmark, shareSummary, parseShared, sharedStationText, shareTuneStep,
          type ShareOut, type SharedStation } from '../services/chatShare';
 import { blindTuneReason, blindTuneRefusal, mediaSkipEnabled, dialAlone,
          type BlindTuneAction, type BlindTuneInput } from '../services/blindTuneGate';
@@ -3721,6 +3722,11 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  means anything, and the only one in which anybody but the owner may turn the dial. */
   const sharedDial = !!dialState && dialState.mode !== 'exclusive';
   const [chatOpen,     setChatOpen]     = useState(false);
+  /* ★★ The chat's language (dialChat chatLangChoice) as STATE, so a pick in the drawer or the server's country arriving
+   *  redraws the pad, the transcript and the shared-tuner banner at once. */
+  //   ★ What Default resolves to is in the key too: the country arriving with a language picked changes only that.
+  const [chatLangNow,  setChatLangNow]  = useState<string>(`${chatLang()}|${chatLangDetected()}`);
+  useEffect(() => onChatLang((l) => setChatLangNow(`${l}|${chatLangDetected()}`)), []);
   const [chatUnread,   setChatUnread]   = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   /* ★★ A CHAT LINE ON THE SHARED-TUNER BANNER (Stuart, 2026-10-09). Somebody else's line, while the drawer is shut,
@@ -6435,7 +6441,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onDialRefused: () => {
         if (destroyed.current) return;
         // ★ An explanation, not an error: this receiver is listen-only and the owner tunes it.
-        setDialHint('This receiver is set to listen only — the owner tunes it.');
+        setDialHint(chatT('listenOnly'));
       },
       /* ★★★ A RESTORE IS A PERSON ASKING, JUST NOT IN THIS SESSION — so it counts, and the audio
        *  socket's seal opens for it. Without the bump the re-assert carries the same numbers the
@@ -6454,7 +6460,8 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  the sender's label never travelled, and there is no client name field to trust. Arriving
          *  tunes NOTHING — the TUNE key beside it is the receiver's own choice (onShareTune). */
         const share = id === 'check_out' ? parseShared(msg) : null;
-        const text = share ? sharedLineText(share) : phraseText(id);
+        const words = () => share ? chatT('sharedLine', { station: sharedStationText(share) }) : phraseText(id);
+        const text = words();
         if (!text) return;              // an id this build cannot draw — see dialChat's header
         const you = dialStateRef.current?.you ?? 0;
         const mine = from === you;
@@ -6463,6 +6470,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           type: mine ? 'own' : 'other',
           user: speakerName(from, you),
           text,
+          // ★ The id arrived, not the words: a language changed later redraws this line in the new one.
+          relabel: () => ({ user: speakerName(from, you), text: words() ?? text }),
           ts: new Date().toISOString().slice(11, 16).replace(':', '') + 'z',
           ...(share ? { share } : {}),
           ...(phraseWiki(id) ? { wiki: phraseWiki(id)! } : {}),
@@ -6482,7 +6491,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (since) dialSinceRef.current.set(from, since);
         const joined: ChatMessage[] = newHolder ? [{
           id: `dial-join-${from}-${since}`, type: 'system',
-          text: `— ${speakerName(from, you)} joined ${new Date(since * 1000).toISOString().slice(11, 16)} UTC —`,
+          text: joinedLine(from, you, since),
+          relabel: () => ({ text: joinedLine(from, you, since) }),
           ts: new Date().toISOString().slice(11, 16).replace(':', '') + 'z',
         }] : [];
         setChatMessages((prev: ChatMessage[]) => [...prev, ...joined, line].slice(-60));
@@ -10361,17 +10371,17 @@ export default function SDRScreen({ route, navigation }: Props) {
                    typeof sh.bwLo === 'number' && typeof sh.bwHi === 'number' ? [sh.bwLo, sh.bwHi] : null);
     };
     const step = shareTuneStep(sh, dialStateRef.current, { admin: adminOk, dabCapable });
-    if (step === 'refused') { setDialHint('This receiver is set to listen only — the owner tunes it.'); return; }
-    if (step === 'no-dab')  { setDialHint('This receiver cannot play DAB.'); return; }
+    if (step === 'refused') { setDialHint(chatT('listenOnly')); return; }
+    if (step === 'no-dab')  { setDialHint(chatT('noDab')); return; }
     if (step === 'ask') {
       const others = Math.max(1, (dialStateRef.current?.listeners ?? 2) - 1);
       appAlert(
-        'Ask to tune',
-        `${others === 1 ? 'Somebody else is' : `${others} others are`} listening to this receiver — tuning moves it for everyone.`,
+        chatT('askToTune'),
+        others === 1 ? chatT('othersOne') : chatT('othersMany', { n: others }),
         [
-          { text: 'Ask "Can I tune?"', onPress: () => client.current?.say?.('ask_tune') },
-          { text: 'Tune now', onPress: go },
-          { text: 'Cancel', style: 'cancel' },
+          { text: chatT('askButton', { ask: phraseText('ask_tune') ?? '' }), onPress: () => client.current?.say?.('ask_tune') },
+          { text: chatT('tuneNow'), onPress: go },
+          { text: chatT('cancel'), style: 'cancel' },
         ],
       );
       return;
@@ -10405,14 +10415,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★ NAME THE TUNER, NOT YOURSELF. "User 2 tuning" is the warning; your own last move
     //    is not news to you, and putting it here would make the badge cry wolf.
     tuning: (dialState.tuner && !dialState.mine)
-      ? (dialState.decoding ? `User ${dialState.tuner} decoding` : `User ${dialState.tuner} tuning`)
+      ? chatT(dialState.decoding ? 'userDecoding' : 'userTuning', { who: chatT('user', { n: dialState.tuner }) })
       : '',
+    // ★ The banner's words are the chat's language — a change must reach the memoised bar (ControlsBar sharedBannerText).
+    lang: chatLangNow,
     ...(bannerSaidShown ? { said: bannerSaidShown } : {}),
     // ★★ Ask before tuning — the server's word on whether this listener may move the dial (dialChat.AskState).
     ...(dialState.askFirst ? { ask: { askFirst: true, tuneLocked: dialState.tuneLocked, askState: dialState.askState,
                                       askUntil: dialState.askUntil }, onLockedTouch: nudgeAsk } : {}),
   } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown,
-             dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk]);
+             dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk, chatLangNow]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
@@ -13096,6 +13108,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onDecToggle(d as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'time');
         }}
         dialLine={dialState ? dialSummary(dialState) : undefined}
+        chatLang={chatLangNow}
+        onPickLang={pickChatLanguage}
         shareEnabled={sharedDial}
         onPickShare={onPickShare}
         shareDraft={shareDraft}
