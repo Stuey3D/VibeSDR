@@ -278,6 +278,8 @@ interface ModeSelectorProps {
      *  DAB fully rather than restore the box" — which is correct for THIS button; it is the
      *  decoder box's own X that was conflating the window with the mode. */
     dabAvail?: boolean; dabOn?: boolean; onDab?: () => void;
+    /** ★★ V12 THE GALLERY — what a VibeServer's decoders heard (GalleryOverlay). Only on a VibeServer. */
+    galleryAvail?: boolean; onGallery?: () => void;
     /** ★★★ THE SLUGS THIS RECEIVER PUBLISHES (`/api/extensions`), or null for "never asked".
      *  A decoder the server does not run is a DEAD CONTROL — it presses, and nothing happens. So
      *  the row is filtered to what is actually there. null offers everything, because a failed
@@ -933,6 +935,21 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   <Text numberOfLines={1}
                         style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: decoderControls.dabOn ? dec : t.btnText }]}>
                     DAB
+                  </Text>
+                </TouchableOpacity>
+                )}</NavItem>
+              )}
+              {decoderControls.galleryAvail && (
+                <NavItem key="gallery" onPress={() => decoderControls.onGallery?.()}>{(navFocused, navRef) => pt.metal ? (
+                  <MetalKey navRef={navRef} focused={navFocused} label="GALLERY" active={false}
+                    onPress={() => decoderControls.onGallery?.()} />
+                ) : (
+                <TouchableOpacity ref={navRef as any}
+                  style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                          navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+                  onPress={() => decoderControls.onGallery?.()} activeOpacity={0.8}>
+                  <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>
+                    GALLERY
                   </Text>
                 </TouchableOpacity>
                 )}</NavItem>

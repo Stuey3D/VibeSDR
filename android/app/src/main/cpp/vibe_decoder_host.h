@@ -212,6 +212,9 @@ struct DecoderTap {
     virtual void tick() {}
     /** The decoder stopped. Write what is held; `interrupted` = it was cut off, not finished. */
     virtual void finish(bool /*interrupted*/) {}
+    /** One FT8/FT4 spot (the spots tap only — see Env::spotTap): the sender's call and grid as received, its SNR, and
+     *  the RF frequency it was heard on. */
+    virtual void spot(bool /*ft4*/, const std::string& /*call*/, const std::string& /*grid*/, int /*snr*/, double /*rfHz*/) {}
 };
 using DecoderTapPtr = std::shared_ptr<DecoderTap>;
 
@@ -230,6 +233,9 @@ public:
         /** ★★ THE GALLERY'S COPY (2026-10-22): asked once per decoder start with what was started; null = nothing kept.
          *  Empty = no gallery (Android, a test, the decoder-only sidecar). */
         std::function<DecoderTapPtr(const std::string& ext, const std::string& msg)> tap;
+        /** ★★ …and FT8/FT4's: asked once when the spotter starts, finished when it stops (the gallery keeps a SUMMARY of
+         *  a run, not the spots — Stuart, 2026-10-22). */
+        std::function<DecoderTapPtr()> spotTap;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -330,6 +336,7 @@ public:
             return queued() > 48000;
         };
         spotDecim_ = 0; spotAcc_ = 0.0f;
+        if (env_.spotTap) { DecoderTapPtr t = env_.spotTap(); std::lock_guard<std::mutex> tl(tapMtx_); spotTap_ = std::move(t); }
         spotsOn_ = true;
         spotsActive_.store(true, std::memory_order_relaxed);
         log("digital spots (FT8/FT4) started");
@@ -341,6 +348,7 @@ public:
         spotsActive_.store(false, std::memory_order_relaxed);
         delete ft8_; ft8_ = nullptr;
         delete ft4_; ft4_ = nullptr;
+        { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(spotTap_); } if (t) t->finish(true); }
         if (spotsSlot_ >= 0) { if (env_.slots) env_.slots->release(spotsSlot_); spotsSlot_ = -1; }
     }
     /** Everything off, the queue drained and its thread joined. Idempotent. */
@@ -780,6 +788,7 @@ private:
             return o;
         };
         const std::string c = safe(callDe, 32), g = safe(grid, 8);
+        { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->spot(isFt4, c, g, snr, rfHz); }
         char buf[384];
         const int n = std::snprintf(buf, sizeof(buf),
             "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
@@ -919,6 +928,7 @@ private:
     std::mutex sstvSendMtx_;
     std::mutex tapMtx_;
     DecoderTapPtr tap_;                       // ★ the gallery's copy of the running decoder — see DecoderTap
+    DecoderTapPtr spotTap_;                   // ★ …and of the FT8/FT4 spotter (a summary — see Env::spotTap)
     DecoderTapPtr tap() { std::lock_guard<std::mutex> tl(tapMtx_); return tap_; }
 
     std::mutex spotsMtx_;

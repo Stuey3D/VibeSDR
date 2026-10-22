@@ -43,7 +43,7 @@ static const char* kV12 = R"({
      "icomPort":"","icomBaud":0,"binauralWidth":0.75,"v12Nested":{"gain":999,"label":"nested, not mine"}},
     {"serial":"IC7300-1234","driver":"icom","label":"IC-7300","enabled":true,"configured":true,
      "icomPort":"/dev/ttyUSB0","icomBaud":115200,"icomCiv":148,"icomAudio":"hw:CARD=CODEC","icomScopeSpeed":2,
-     "icomOwnerLock":true,"icomRfOpen":false,"icomTtyOk":true}
+     "icomOwnerLock":true,"icomRfOpen":false,"icomTtyOk":true,"v13Dial":7}
   ]
 }
 )";
@@ -97,11 +97,12 @@ int main() {
        "a page posts the Icom radio with only the keys it knows");
     const std::string after = vsconfig::toJson(p);
     ok(after.find("\"label\":\"Shack\"") != std::string::npos, "the post's change lands");
-    ok(after.find("\"icomPort\":\"/dev/ttyUSB0\"") != std::string::npos && after.find("\"icomCiv\":148") != std::string::npos,
-       "and that radio's V12 keys survive it");
-    ok(vsconfig::fromJson("{\"radios\":[{\"serial\":\"IC7300-1234\",\"icomCiv\":150}]}", p, err)
-       && vsconfig::toJson(p).find("\"icomCiv\":150") != std::string::npos
-       && count(vsconfig::toJson(p), "\"icomCiv\"") == 1,
+    // ★ On V12 the Icom keys are this version's OWN (read and written), so a post without them is an ordinary edit;
+    //   what must survive is a key this version does NOT know — a stand-in for whatever V13 adds.
+    ok(after.find("\"v13Dial\":7") != std::string::npos, "and that radio's unknown (future) keys survive it");
+    ok(vsconfig::fromJson("{\"radios\":[{\"serial\":\"IC7300-1234\",\"v13Dial\":9}]}", p, err)
+       && vsconfig::toJson(p).find("\"v13Dial\":9") != std::string::npos
+       && count(vsconfig::toJson(p), "\"v13Dial\"") == 1,
        "a post that DOES carry a kept key updates it in place, once");
 
     // ★ An old single-radio file (no radios array) is migrated, as ever — its leftovers are not "newer settings".

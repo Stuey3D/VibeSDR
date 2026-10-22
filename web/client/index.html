@@ -1445,6 +1445,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #galList .sres .n { white-space: normal; }
 #galList .tag { font-size: 10px; letter-spacing: 1px; color: var(--unit); border: 1px solid var(--btn-border);
                 border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+#galImg { display: block; max-width: 100%; max-height: 60vh; margin: 8px auto; border-radius: 6px; background: #fff; image-rendering: auto; }
 #galText { white-space: pre-wrap; word-break: break-word; max-height: 55vh; overflow-y: auto;
            font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--btn-text);
            background: rgba(0,0,0,0.25); border: 1px solid var(--btn-border); border-radius: 8px; padding: 10px; margin: 8px 0; }
@@ -4397,6 +4398,9 @@ select.btn { padding: 6px 8px; }
     <button class="btn on" data-kind="">ALL</button>
     <button class="btn" data-kind="navtex">NAVTEX</button>
     <button class="btn" data-kind="rtty">RTTY</button>
+    <button class="btn" data-kind="wefax">WEFAX</button>
+    <button class="btn" data-kind="sstv">SSTV</button>
+    <button class="btn" data-kind="ft8">FT8</button>
   </div>
   <div id="galList"></div>
   <div id="galView" hidden>
@@ -4406,6 +4410,7 @@ select.btn { padding: 6px 8px; }
     </div>
     <div class="hint" id="galViewMeta"></div>
     <pre id="galText"></pre>
+    <img id="galImg" alt="" hidden>
   </div>
   <p class="hint" id="galNote"></p>
 </div>

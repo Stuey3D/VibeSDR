@@ -175,21 +175,41 @@ static void navtexAsm() {
     std::printf("── NAVTEX messages (src/utils/navtex.ts, ported) ──\n");
     gallery::NavtexAsm a; std::vector<gallery::NavtexMsg> got;
     a.onMessage = [&](const gallery::NavtexMsg& m) { got.push_back(m); };
-    a.push("ZCZC GB9", 100); a.push("8\r\nGALE WARNING\r\nNN", 101); a.push("NN\r\n", 102);
+    a.push("ZCZC GB9", 100000); a.push("8\r\nGALE WARNING\r\nNN", 101000); a.push("NN\r\n", 102000);
     ok(got.size() == 1 && got[0].id == "GB98" && got[0].text == "GALE WARNING" && !got[0].endLost && got[0].startedAt == 101,
        "a message split across chunks: one, id GB98, text exact");
     ok(gallery::NavtexAsm::title(got[0]).find("Station G") == 0 && gallery::NavtexAsm::title(got[0]).find("Met warning") != std::string::npos, "titled as the box titles it");
     got.clear();
-    a.push("ZC_C EA12\r\nNAV WARNING ONE\r\nZCZC EA13\r\nSECOND\r\nNN_N\r\n", 200);
+    a.push("ZC_C EA12\r\nNAV WARNING ONE\r\nZCZC EA13\r\nSECOND\r\nNN_N\r\n", 200000);
     ok(got.size() == 2 && got[0].id == "EA12" && got[0].endLost && got[1].id == "EA13" && !got[1].endLost,
        "a damaged ZCZC still opens; a new header ends the last [end lost]; NN_N closes");
     got.clear();
-    a.push("ZCZC FA01\r\nHALF A MESSAGE THEN THE STATION FADES", 300);
-    a.tick(300 + 74); ok(got.empty(), "74 s of quiet: still arriving");
-    a.tick(300 + 76); ok(got.size() == 1 && got[0].endLost, "76 s: closed [end lost]");
+    a.push("ZCZC FA01\r\nHALF A MESSAGE THEN THE STATION FADES", 300000);
+    a.tick(300000 + 74000); ok(got.empty(), "74 s of quiet: still arriving");
+    a.tick(300000 + 76000); ok(got.size() == 1 && got[0].endLost, "76 s: closed [end lost]");
     got.clear();
-    a.push("ZCZC FA02\r\nLOCK LOST HERE", 400); a.lockState(3, 400); a.lockState(1, 401);
-    ok(got.size() == 1 && got[0].endLost && got[0].id == "FA02", "the decoder losing its lock ends the message");
+    a.push("ZCZC FA02\r\nLOCK LOST HERE", 400000); a.lockState(3, 400000); a.lockState(1, 401000);
+    a.tick(402000); ok(got.empty(), "lock lost 1 s: held open (it may be a blip)");
+    a.tick(402600);
+    ok(got.size() == 1 && got[0].endLost && got[0].id == "FA02", "lost for good (1.6 s): the message ends at the loss");
+    got.clear();
+    // ★★ THE LENOVO SPLIT (NickB, 490 kHz, 2026-10-22): a real-shaped stream — header, text, four resyncs each relocked
+    //    within a second, NNNN — is ONE message, ZCZC to NNNN.
+    {
+        gallery::NavtexAsm b; std::vector<gallery::NavtexMsg> m;
+        b.onMessage = [&](const gallery::NavtexMsg& x) { m.push_back(x); };
+        int64_t t = 500000;
+        b.lockState(3, t);
+        b.push("ZCZC BA09\r\n070825 UTC OCT\r\nOOSTENDERADIO LOKAAL BERICHT LB013/26\r\n", t += 4000);
+        for (int k = 0; k < 4; k++) {
+            b.lockState(1, t += 500); b.lockState(3, t += 800); b.tick(t += 100);
+            b.push("KUSTROUTE DEEL " + std::to_string(k) + " BIJZONDERE MARKERINGSBOEI\r\n", t += 3000);
+        }
+        b.push("NNNN\r\n", t += 1000);
+        ok(m.size() == 1 && m[0].id == "BA09" && !m[0].endLost && !m[0].startLost && m[0].text.find("DEEL 3") != std::string::npos,
+           "★ four lock blips mid-message: ONE message, ZCZC BA09 to NNNN (" + std::to_string(m.size()) + " item(s))");
+        ok(b.lockLosses() == 4, "...and the blips were seen (4 lock losses, for the log)");
+    }
 }
 
 // ── 4. the gallery ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -222,6 +242,27 @@ static void store() {
     ok(!s.resolve("notlisted.txt", p, ct), "★ a file in the folder that is NOT in the index is refused");
     ok(!s.resolve(names[0], p, ct), "an evicted item no longer resolves");
     ok(gallery::Store::freeBytesAt(s.dir()) > 0, "free space on the disk is known");
+    {   // ★★★ THE SERIAL NEVER REACHES THE GALLERY (Lenovo, 2026-10-22: "r":"SDRplay RSP1A 2235030199" on every item)
+        gallery::Store g; g.setDir(tmpDir("serial"));
+        g.setRadioLabel("SDRplay RSP1A 2235030199");                  // an older build: no redaction yet
+        gallery::Meta mm; mm.kind = "navtex"; mm.origin = "background"; mm.freqHz = 489500; mm.mode = "usb"; mm.title = "Station B";
+        const std::string old = g.add(mm, "txt", "ZCZC BA09\nNNNN\n");
+        ok(g.listJson("", 10).find("2235030199") != std::string::npos, "(an item an older build stored WITH the serial)");
+        g.setRedact({ "2235030199", "00000003" });
+        g.setRadioLabel("SDRplay RSP1A 2235030199");
+        const std::string fresh = g.add(mm, "txt", "ZCZC BA10\nNNNN\n");
+        const std::string j = g.listJson("", 10);
+        ok(j.find("2235030199") == std::string::npos && j.find("\"r\":\"SDRplay RSP1A\"") != std::string::npos,
+           "★ no serial in gallery.json — old item stripped, new item stored without it: " + j.substr(0, 160));
+        std::string idx; { FILE* f = std::fopen((g.dir() + "/index.jsonl").c_str(), "r"); char b[4096]; size_t k; while (f && (k = std::fread(b, 1, sizeof b, f)) > 0) idx.append(b, k); if (f) std::fclose(f); }
+        ok(idx.find("2235030199") == std::string::npos, "★ ...and the index on disk was rewritten without it");
+        std::string p1, c1;
+        bool clean = true;
+        for (const auto& n : { old, fresh }) { if (n.find("2235030199") != std::string::npos) clean = false;
+            if (g.resolve(n, p1, c1)) { FILE* f = std::fopen(p1.c_str(), "r"); char b[512]; size_t k; std::string body; while (f && (k = std::fread(b, 1, sizeof b, f)) > 0) body.append(b, k); if (f) std::fclose(f); if (body.find("2235030199") != std::string::npos) clean = false; } }
+        ok(clean, "★ ...nor in any file name or served file");
+        ok(gallery::stripTokens("RTL-SDR (00000003)", { "00000003" }) == "RTL-SDR", "a serial in brackets leaves no empty brackets");
+    }
     s.setLimitBytes(0);
     ok(s.add(m, "txt", "x").empty(), "size 0 = the gallery keeps nothing");
 }
@@ -251,6 +292,40 @@ static void hostTap() {
     const std::string list = s.listJson("navtex", 10);
     ok(list.find("\"o\":\"live\"") != std::string::npos && list.find("Station G") != std::string::npos,
        "★ the message is in the gallery, labelled live: " + list.substr(0, 200));
+}
+
+// ── 5b. a real-shaped NAVTEX transmission with a short GAP mid-message: one item, ZCZC to NNNN ─────────────────────
+static void gapMidMessage() {
+    std::printf("── a short gap mid-message (a fade, a resync) does not split the message ──\n");
+    gallery::Store s; s.setDir(tmpDir("gap"));
+    DecoderHost::Env env;
+    env.dialHz = [] { return 489500.0; };
+    env.tap = [&s](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
+        gallery::Meta m; m.kind = bg::galleryKindFor(ext, msg); m.origin = "background"; m.freqHz = 489500; m.mode = "usb"; m.decoder = "navtex";
+        return bg::makeGalleryTap(s, m);
+    };
+    auto h = std::make_shared<DecoderHost>(env, "gap");
+    h->start("navtex", "{}");
+    const std::string text = "ZCZC BA09\r\n070825 UTC OCT\r\nOOSTENDERADIO LOKAAL BERICHT LB013/26\r\nKUSTROUTE DE PANNE OOSTENDE\r\n"
+                             "BIJZONDERE MARKERINGSBOEI JACHTTON ZAL WORDEN GEPLAATST OP POSITIE\r\nNNNN\r\n";
+    auto a = fskAudio(navBits(text), 100, 500, 170, +1);
+    // ★ A 0.4 s fade two-thirds of the way through (in the text, after the header): the transmitter carries on, so the
+    //   samples are SILENCED, not removed — the decoder loses characters, and the lock, and must pick the message up again.
+    const size_t cut = a.size() * 2 / 3;
+    for (size_t i = cut; i < cut + (size_t)(48000 * 0.4) && i < a.size(); i++) a[i] = 0;
+    std::vector<float> f(a.size()); for (size_t i = 0; i < a.size(); i++) f[i] = a[i] / 32768.0f;
+    for (size_t i = 0; i < f.size(); i += 4800) {
+        h->feed(&f[i], (int)std::min<size_t>(4800, f.size() - i));
+        while (h->queued() > 48000) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));    // ★ ~30× real time: the blip rule runs on the wall clock
+    }
+    while (h->queued() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    h->stop();
+    const std::string list = s.listJson("navtex", 10);
+    size_t n = 0; for (size_t at = 0; (at = list.find("\"f\":", at)) != std::string::npos; at++) n++;
+    ok(n == 1 && list.find("Station B") != std::string::npos && list.find("\"partial\":true") == std::string::npos,
+       "★ ONE item, from its header, not partial (" + std::to_string(n) + "): " + list.substr(0, 220));
 }
 
 // ── 6. end to end: IQ → channels → demodulators → decoders → gallery ────────────────────────────────────────────
@@ -317,12 +392,133 @@ static void runner() {
     ok(r.droppedSamples() == 0, "no IQ dropped at this pace (" + std::to_string((unsigned long long)r.droppedSamples()) + ")");
 }
 
+// ── 7. phase 2: pictures, FT8 summaries, the decoders' demodulators ─────────────────────────────────────────────
+static std::vector<uint8_t> be32(uint32_t v) { return { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v }; }
+static std::string readFile(const std::string& p) {
+    std::string b; FILE* f = std::fopen(p.c_str(), "rb"); if (!f) return b;
+    char t[4096]; size_t k; while ((k = std::fread(t, 1, sizeof t, f)) > 0) b.append(t, k); std::fclose(f); return b;
+}
+static void phase2() {
+    std::printf("── phase 2: which decoder on which demodulator ──\n");
+    std::string err;
+    bg::Config c; c.on = true;
+    bg::Profile p; p.centreHz = 8000000; p.vfos = { bg::Vfo{8038100, "lsb", "wefax"} };
+    c.profiles = { p };
+    ok(!bg::validate(c, 2048000, err) && err.find("WEFAX (120 LPM) does not work on LSB") != std::string::npos && err.find("needs USB") != std::string::npos,
+       "WEFAX on LSB is refused, saying why (a mirrored chart is a negative): " + err);
+    c.profiles[0].vfos = { bg::Vfo{8038100, "usb", "wefax"}, bg::Vfo{8000000, "usb", "ft8"} };
+    ok(bg::validate(c, 2048000, err), "WEFAX + FT8 on USB validate");
+    ok(std::fabs(bg::signalHz(c.profiles[0].vfos[0]) - 8040000) < 1, "WEFAX dial 8038.1 USB is the 8040.0 kHz carrier");
+    ok(bg::attachMsg(c.profiles[0].vfos[0]).find("\"auto_start\":true") != std::string::npos, "...started on its START TONE, ended on its stop tone");
+    bg::Profile iss; iss.centreHz = 145800000; iss.vfos = { bg::Vfo{145800000, "nfm", "sstv"} };
+    c.profiles = { iss };
+    ok(bg::validate(c, 2048000, err) && std::fabs(bg::signalHz(iss.vfos[0]) - 145800000) < 1, "SSTV on NFM (the ISS, 145.800) validates");
+    c.profiles[0].vfos[0].dec = "navtex";
+    ok(!bg::validate(c, 2048000, err), "NAVTEX on NFM is refused: " + err);
+
+    std::printf("── WEFAX and SSTV pictures: complete, PARTIAL, and noise not kept ──\n");
+    gallery::Store s; s.setDir(tmpDir("pics"));
+    gallery::Meta m; m.kind = "wefax"; m.origin = "background"; m.freqHz = 8038100; m.mode = "usb"; m.decoder = "wefax"; m.profile = "Profile 1";
+    auto wline = [](uint32_t ln, uint32_t w, uint8_t v) {
+        std::vector<uint8_t> f{ 0x01 }; for (auto b : be32(ln)) f.push_back(b); for (auto b : be32(w)) f.push_back(b);
+        for (uint32_t i = 0; i < w; i++) f.push_back((uint8_t)(i * 255 / w ^ v)); return f; };
+    {
+        auto t = bg::makeGalleryTap(s, m);
+        const uint8_t st = 0x02, sp = 0x03;
+        t->frame(&st, 1);
+        for (uint32_t i = 0; i < 200; i++) { auto f = wline(i, 1809, (uint8_t)i); t->frame(f.data(), f.size()); }
+        t->frame(&sp, 1);
+        t->frame(&st, 1);                                                    // the next chart starts…
+        for (uint32_t i = 0; i < 80; i++) { auto f = wline(i, 1809, 0); t->frame(f.data(), f.size()); }
+        t->finish(true);                                                     // …and a listener arrives
+        auto t2 = bg::makeGalleryTap(s, m);
+        t2->frame(&st, 1);
+        for (uint32_t i = 0; i < 10; i++) { auto f = wline(i, 1809, 0); t2->frame(f.data(), f.size()); }
+        t2->finish(true);
+    }
+    const std::string wl = s.listJson("wefax", 10);
+    int complete = 0, partial = 0;
+    for (size_t at = 0; (at = wl.find("\"f\":", at)) != std::string::npos; at++) {
+        const std::string item = wl.substr(at, wl.find('}', at) - at);
+        if (item.find("\"partial\":true") != std::string::npos) partial++; else complete++;
+    }
+    ok(complete == 1 && wl.find("1809\xc3\x97" "200") != std::string::npos, "★ a chart ended by its stop tone: one PNG, 1809×200");
+    ok(partial == 1 && wl.find("1809\xc3\x97" "80") != std::string::npos, "★ a chart cut off by a listener: saved ONCE, marked partial");
+    ok(complete + partial == 2, "...and 10 lines of noise after a false start tone are not kept");
+    {
+        std::string path, ct; const std::string f = gallery::lineStr(wl, "f");
+        const std::string png = s.resolve(f, path, ct) ? readFile(path) : "";
+        ok(ct == "image/png" && png.size() > 33 && png.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0 && png.compare(12, 4, "IHDR") == 0
+           && png.compare(png.size() - 8, 4, "IEND") == 0, "it is a PNG (" + std::to_string(png.size()) + " bytes)");
+        const uint32_t crcOk = vibegz::crc32((const uint8_t*)png.data() + 12, 17);
+        const uint32_t crcIn = (uint32_t)(uint8_t)png[29] << 24 | (uint32_t)(uint8_t)png[30] << 16 | (uint32_t)(uint8_t)png[31] << 8 | (uint8_t)png[32];
+        ok(crcOk == crcIn, "...its IHDR CRC checks");
+        std::FILE* o = std::fopen((std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp") + "/bgdec-wefax.png").c_str(), "wb");
+        if (o) { std::fwrite(png.data(), 1, png.size(), o); std::fclose(o); }
+    }
+    {
+        gallery::Meta sm = m; sm.kind = "sstv"; sm.decoder = "sstv"; sm.freqHz = 14230000;
+        auto t = bg::makeGalleryTap(s, sm);
+        std::vector<uint8_t> st{ 0x07 }; for (auto b : be32(320)) st.push_back(b); for (auto b : be32(256)) st.push_back(b);
+        t->frame(st.data(), st.size());
+        const std::string mode = "Scottie 1";
+        std::vector<uint8_t> mf{ 0x02, 0, (uint8_t)mode.size() }; mf.insert(mf.end(), mode.begin(), mode.end()); t->frame(mf.data(), mf.size());
+        for (uint32_t y = 0; y < 256; y++) {
+            std::vector<uint8_t> f{ 0x01 }; for (auto b : be32(y)) f.push_back(b); for (auto b : be32(320)) f.push_back(b);
+            for (int i = 0; i < 320 * 3; i++) f.push_back((uint8_t)(i + y)); t->frame(f.data(), f.size());
+        }
+        std::vector<uint8_t> done{ 0x05, 0, 0, 0, 0 }; t->frame(done.data(), done.size());
+        t->frame(st.data(), st.size());
+        for (uint32_t y = 0; y < 100; y++) {
+            std::vector<uint8_t> f{ 0x01 }; for (auto b : be32(y)) f.push_back(b); for (auto b : be32(320)) f.push_back(b);
+            for (int i = 0; i < 320 * 3; i++) f.push_back(7); t->frame(f.data(), f.size());
+        }
+        t->finish(true);
+    }
+    const std::string sl = s.listJson("sstv", 10);
+    ok(sl.find("SSTV \xc2\xb7 Scottie 1 \xc2\xb7 320\xc3\x97" "256") != std::string::npos, "★ an SSTV picture, complete, titled with its mode");
+    ok(sl.find("320\xc3\x97" "100") != std::string::npos && sl.find("\"partial\":true") != std::string::npos, "★ a picture cut off is saved, partial, as far as it got");
+
+    std::printf("── FT8 / FT4: a summary, not the spots ──\n");
+    ok(callsign::country("G4IRX") == "England" && callsign::country("DL1ABC") == "Germany" && callsign::country("VK2XYZ") == "Australia"
+       && callsign::country("F/DL1ABC") == "Germany" && callsign::country("Q0QQQ").empty(), "callsign → country (the app's own table, generated)");
+    double la, lo;
+    ok(bg::gridToLatLon("IO92", la, lo) && std::fabs(la - 52.5) < 0.01 && std::fabs(lo + 1.0) < 0.01, "IO92 is 52.5 N 1.0 W");
+    ok(!bg::gridToLatLon("RR73", la, lo) && !bg::gridToLatLon("73", la, lo), "RR73 / 73 are not grids");
+    {
+        gallery::Meta fm; fm.kind = "ft8"; fm.origin = "background"; fm.freqHz = 14074000; fm.mode = "usb"; fm.decoder = "ft8"; fm.profile = "Profile 2";
+        double sla, slo; bg::gridToLatLon("IO92nh", sla, slo);
+        bg::Ft8SummaryTap t(s, fm, sla, slo);
+        for (int i = 0; i < 5; i++) t.spot(false, "DL1ABC", "JO31", -5, 14075000);
+        t.spot(false, "DL2XYZ", "JN58", -9, 14075500);
+        t.spot(true, "VK2XYZ", "QF56", -20, 14081000);
+        t.spot(false, "G4IRX", "IO92", 3, 14074500);
+        t.spot(false, "Q0QQQ", "RR73", 0, 14074600);
+        const std::string txt = t.text(gallery::nowUtc());
+        ok(txt.find("Spots heard:       9 (FT8 8, FT4 1) from 5 stations") != std::string::npos, "spots heard, by mode, and stations");
+        ok(txt.find("Countries:         3") != std::string::npos, "3 countries (an unknown prefix is not one)");
+        ok(txt.find("Furthest:          VK2XYZ (Australia, QF56)") != std::string::npos && txt.find(" km") != std::string::npos, "★ furthest: VK2XYZ, Australia, with km from this server");
+        ok(txt.find("Most frequent:     Germany (6 spots)") != std::string::npos, "most frequent country: Germany");
+        ok(txt.find("Rarest:            Australia (1 spot)") != std::string::npos, "rarest country: Australia (1 spot, the first of the ties)");
+        std::printf("%s", txt.c_str());
+        t.finish(true);
+        ok(s.listJson("ft8", 10).find("FT8 summary \xc2\xb7 9 spots \xc2\xb7 3 countries \xc2\xb7 furthest Australia") != std::string::npos,
+           "★ one summary item in the gallery, titled with the headline");
+        bg::Ft8SummaryTap quiet(s, fm, sla, slo);
+        quiet.finish(true);
+        size_t n = 0; for (size_t at = 0; (at = s.listJson("ft8", 10).find("\"f\":", at)) != std::string::npos; at++) n++;
+        ok(n == 1, "a run that heard nothing writes nothing");
+    }
+}
+
 int main() {
     config();
+    phase2();
     sideband();
     navtexAsm();
     store();
     hostTap();
+    gapMidMessage();
     runner();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;

@@ -173,6 +173,7 @@ import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
+import GalleryOverlay from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
 import { usePocketWifi } from '../hooks/usePocketWifi';
 import { IS_TV } from '../utils/tv';
 import { STEP_833, airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
@@ -3049,6 +3050,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aboutOpen,     setAboutOpen]     = useState(false);
   const [keyHelpOpen,   setKeyHelpOpen]   = useState(false);
   const [recordingsOpen, setRecordingsOpen] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);   // ★★ V12: the server's GALLERY (GalleryOverlay)
   // Mute the live SDR while a recording plays so they don't fight over the audio
   // session; restore the prior mute state when the browser closes.
   const preRecMuteRef = useRef(false);
@@ -12507,6 +12509,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       </PanelBoundary>
       <FkaSplash onOpenHelp={() => setKeyHelpOpen(true)} />
       <PanelBoundary name="Recordings" onClose={() => setRecordingsOpen(false)} resetKey={recordingsOpen}>
+      <GalleryOverlay
+        visible={galleryOpen}
+        base={connectBase}
+        readAuth={radioAuthSuffix || route.params.authSuffix || ''}
+        onClose={() => setGalleryOpen(false)}
+      />
       <RecordingsOverlay
         visible={recordingsOpen}
         onClose={() => setRecordingsOpen(false)}
@@ -12595,6 +12603,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           dabAvail: dabCapable,
           dabOn,
           onDab: () => { markInteract(); setModeSelOpen(false); toggleDab(); },
+          /* ★★ V12 THE GALLERY — what the SERVER's decoders heard (background decoding and listeners'). A VibeServer
+           *  only: nothing else keeps one, and a key that opens an empty list there would be a dead control. */
+          galleryAvail: !!(client.current as any)?.isVibe,
+          onGallery: () => { markInteract(); setModeSelOpen(false); setGalleryOpen(true); },
         } : null}
         transcribeControls={txCaps?.available ? {
           active: activeDecoder === 'transcribe',
