@@ -195,6 +195,26 @@ struct DecoderPeer {
 };
 using DecoderPeerPtr = std::shared_ptr<DecoderPeer>;
 
+/** ★★★ A SECOND READER OF EVERYTHING A HOST SENDS — the GALLERY's (vibe_gallery.h, V12 2026-10-22). Not a peer: a peer
+ *  is a SOCKET, counted to decide "mirror or owner" (addPeer) and pruned when it closes; a tap is the server keeping a
+ *  copy, and must change neither. One tap per running decoder, made by Env::tap when the decoder starts and FINISHED
+ *  when it stops (a replace, a detach, a listener leaving, a shutdown) — which is the moment a half-received NAVTEX
+ *  message or an RTTY buffer is written.
+ *  ★ Called on the DECODE thread (text, frame, tick) and on whichever thread stops the decoder (finish) — the tap has
+ *    its own lock. It must never call back into the host. */
+struct DecoderTap {
+    virtual ~DecoderTap() = default;
+    /** Decoded text, as the 0x01 text frame carries it. */
+    virtual void text(const std::string&) {}
+    /** Every binary frame the host broadcasts (0x03 state, 0x07 NAVTEX counts, image lines …). */
+    virtual void frame(const uint8_t*, size_t) {}
+    /** Once per block of audio decoded — the clock a periodic write or a 75-s "end lost" runs on. */
+    virtual void tick() {}
+    /** The decoder stopped. Write what is held; `interrupted` = it was cut off, not finished. */
+    virtual void finish(bool /*interrupted*/) {}
+};
+using DecoderTapPtr = std::shared_ptr<DecoderTap>;
+
 class DecoderHost {
 public:
     struct Env {
@@ -207,6 +227,9 @@ public:
          *  rung, the snail.) FT8/FT4 read it before every EXTRA decode pass — loaded = one pass, today's cost.
          *  Empty = never loaded. */
         std::function<bool()> loaded;
+        /** ★★ THE GALLERY'S COPY (2026-10-22): asked once per decoder start with what was started; null = nothing kept.
+         *  Empty = no gallery (Android, a test, the decoder-only sidecar). */
+        std::function<DecoderTapPtr(const std::string& ext, const std::string& msg)> tap;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -272,6 +295,7 @@ public:
                     log(std::string("decoder attach failed: ") + ex.what());
                     return Start::Refused;
                 }
+                if (env_.tap) { DecoderTapPtr t = env_.tap(ext, msg); std::lock_guard<std::mutex> tl(tapMtx_); tap_ = std::move(t); }
                 return Start::Ok;
             }
         }
@@ -395,6 +419,7 @@ public:
     void broadcast(const uint8_t* d, size_t n) {
         for (auto& p : snapshotPeers()) p->binary(d, n);
         record(d, n);
+        if (DecoderTapPtr t = tap()) t->frame(d, n);
     }
     void broadcastText(const std::string& s) { for (auto& p : snapshotPeers()) p->text(s); }
 
@@ -476,6 +501,9 @@ private:
 
     bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_; }
     void clearLocked_() {
+        // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
+        { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
+          if (t) t->finish(running_()); }
         delete fsk_;   fsk_ = nullptr;
         delete rttyAuto_; rttyAuto_ = nullptr;
         delete wefax_; wefax_ = nullptr;
@@ -518,6 +546,7 @@ private:
         m[9] = (uint8_t)(len >> 24); m[10] = (uint8_t)(len >> 16); m[11] = (uint8_t)(len >> 8); m[12] = (uint8_t)len;
         std::memcpy(m.data() + 13, text.data(), text.size());
         for (auto& p : snapshotPeers()) p->binary(m.data(), m.size());
+        if (DecoderTapPtr t = tap()) t->text(text);
     }
     static void put32(std::vector<uint8_t>& v, uint32_t x) {
         v.push_back((uint8_t)(x >> 24)); v.push_back((uint8_t)(x >> 16));
@@ -848,6 +877,7 @@ private:
             }
             broadcast(m, sizeof m);
         }
+        if (DecoderTapPtr t = tap()) t->tick();
     }
     void spots_(const float* data, int count, double captureUtc) {
         std::lock_guard<std::mutex> lk(spotsMtx_);
@@ -887,6 +917,9 @@ private:
     std::string textBuf_, morse_;
     std::vector<NavtexRx::Counts> nvCounts_;   // ★ NAVTEX per-message FEC counts, sent after the text (0x07)
     std::mutex sstvSendMtx_;
+    std::mutex tapMtx_;
+    DecoderTapPtr tap_;                       // ★ the gallery's copy of the running decoder — see DecoderTap
+    DecoderTapPtr tap() { std::lock_guard<std::mutex> tl(tapMtx_); return tap_; }
 
     std::mutex spotsMtx_;
     Ft8Decoder* ft8_ = nullptr;
