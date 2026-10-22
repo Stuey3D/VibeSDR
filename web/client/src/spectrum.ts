@@ -23,6 +23,9 @@ import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tu
 import { vsSquelchMsg } from '../../../src/services/vibeSquelch';
 import { roomMode, roomPassband } from '../../../src/services/roomPassband';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, type AskState } from '../../../src/services/dialChat';
+// ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the shared contract module the app reads too (ONE RULE, TWO READERS).
+import { parseIcomStatus, icomControlMsg, nearestSpanIndex, spanStep,
+         type IcomStatus, type IcomRadio, type IcomControlFields } from '../../../src/services/icomRadio';
 
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
@@ -93,6 +96,10 @@ export interface Config {
    *  is wherever the owner's landing frequency put it. A first-time visitor has nothing
    *  remembered, so without this it parked on the view centre instead of where it was sent. */
   serverVfo?: number;
+  /** ★ An Icom: the RADIO's own mode name ("usbd", "rtty", "cwr") beside the client-vocabulary `serverMode`. */
+  radioMode?: string;
+  /** ★ config.icom — the server is serving an Icom transceiver (the same fact as hwinfo.radio.driver). */
+  icom?: boolean;
 }
 
 export interface RdsMeta {
@@ -415,6 +422,10 @@ export interface SpectrumCallbacks {
   /** ★ The server REFUSED something this listener asked for, in its own words — a different
    *  message from the owner's standing notice, and it must not displace it. See case 'notice'. */
   onRefused?: (why: string) => void;
+  /** ★ An Icom's `{"type":"icom"}` status line (src/services/icomRadio.ts). */
+  onIcomStatus?: (st: IcomStatus) => void;
+  /** ★ Something tried to move an Icom the owner has locked — nothing was sent (see icomFollowLocked). */
+  onIcomFollowLocked?: () => void;
   /** ★ A transient server message for the VTS bar — the gain start-up, a direct-sampling
    *  switch. Neither the owner's standing notice nor a refusal pill: those slots are taken
    *  (Stuart, 2026-09-15: "gain warning should be in the VTS like it is in the app"). */
@@ -894,6 +905,8 @@ export class SpectrumClient {
           maxBandwidth:   msg.maxBandwidth ?? this.cfg.maxBandwidth,
           serverMode:     typeof msg.mode === 'string' ? msg.mode : this.cfg.serverMode,
           serverVfo:      typeof msg.vfo === 'number' && msg.vfo > 0 ? msg.vfo : this.cfg.serverVfo,
+          radioMode:      typeof msg.radioMode === 'string' ? msg.radioMode : undefined,
+          icom:           msg.icom === true,
         };
         // ★★★ SOMEBODY ELSE MOVED THE DIAL — GIVE THIS LISTENER THE SAME RESET THE TUNER GETS.
         //
@@ -924,7 +937,10 @@ export class SpectrumClient {
         // bunch toward the VFO and the ticker reads a span the dongle can't actually see (Stuart
         // 2026-07-24). Clamp the held span to the new maxBandwidth and re-request so the server's
         // crop matches. Runs even mid-gesture, because an over-wide view is never valid.
-        if (cfg.maxBandwidth > 0 && cfg.binCount > 0) {
+        // ★★ NOT ON AN ICOM: there config.maxBandwidth is the CURRENT scope span (displaySpan()), so this clamp
+        //    would pin the view to the rung it is on and a zoom-out could never reach a wider one. The
+        //    ladder's own widest rung is the cap there — see zoom().
+        if (cfg.maxBandwidth > 0 && cfg.binCount > 0 && !this.icomSpans && !cfg.icom) {
           const widestBinBw = cfg.maxBandwidth / cfg.binCount;   // binBw for the full-capture span
           if (this.view.binBandwidth > widestBinBw * 1.001) {
             this.view.binBandwidth = widestBinBw;
@@ -1118,6 +1134,13 @@ export class SpectrumClient {
             : { present: false },
         });
         break;
+      /* ★★★ AN ICOM'S STATUS LINE — mode, FIL, the S-meter (≤4/s), TX, link, scope rate/span/mode. Sent on join,
+       *  on every change. The S-meter is drawn from THIS, never from SPEC bins (they are relative to REF). */
+      case 'icom': {
+        const st = parseIcomStatus(msg);
+        if (st) this.cb.onIcomStatus?.(st);
+        break;
+      }
       case 'notice':
         /* ★★★ ONE TYPE, TWO COMPLETELY DIFFERENT MESSAGES — AND ONE OF THEM WAS BEING DROPPED.
          *
@@ -1535,6 +1558,10 @@ export class SpectrumClient {
     }
     if (mode) this.setMode(mode);
     else this.tunePacer.push(null);   // ★ paced by the server's load — see tunePacer
+    // ★★ AN ICOM'S VIEW FOLLOWS THE RADIO BY ITSELF — the scope is centred on its VFO, and a `zoom` sent
+    //    here would be a span change (a retarget picks a "landing" span) on the owner's radio. Only a
+    //    deliberate zoom moves the span.
+    if (this.icomSpans) return;
     if (this.followVfo || opts?.recenter) {
       const n = this.cfg.binCount || 4096;
       let bb: number;
@@ -1582,6 +1609,22 @@ export class SpectrumClient {
     this._send({ type: 'bandwidth', bandwidthLow: low, bandwidthHigh: high });
   }
 
+  /* ★★★ AN ICOM'S ZOOM IS THE RADIO'S SPAN LADDER (plan §2.2). The scope has 475 real points, so a span
+   *  between the rungs or narrower than the narrowest would be digital zoom — INVENTED resolution. Set by
+   *  main.ts from hwinfo.radio.scope.spans; null on every other radio. Every zoom below is quantised to a
+   *  rung and the CENTRE is always the radio's (a pan does nothing: the window follows the VFO, and the
+   *  server answers with the config that says where it really is). */
+  icomSpans: number[] | null = null;
+
+  /** ★ Send `{"type":"icom_control", …}` — only values the radio listed survive (icomControlMsg); false =
+   *  nothing was sendable. Receive-side fields only: there is no transmit message to build. */
+  sendIcomControl(radio: IcomRadio | null, f: IcomControlFields): boolean {
+    const m = icomControlMsg(radio, f);
+    if (!m) return false;
+    this._send(m as unknown as Record<string, unknown>);
+    return true;
+  }
+
   /** Current display span (Hz). */
   spanHz(): number {
     const n = this.cfg.binCount || 4096;
@@ -1626,6 +1669,18 @@ export class SpectrumClient {
   zoom(frequency: number, binBandwidth: number) {
     if (this.dabHeld) return;            // ★ see dabHeld — a zoom narrows the IF under the mux
     const n = this.cfg.binCount || 4096;
+    if (this.icomSpans) {
+      if (this.icomFollowLocked) { this.cb.onIcomFollowLocked?.(); return; }
+      // ★ The nearest RUNG (log distance, the server's own rule), centred on the radio. No MIN_SPAN_HZ
+      //   floor (the 5 kHz rung is real) and no maxBandwidth cap (that is the current rung on an Icom).
+      const i = nearestSpanIndex(this.icomSpans, binBandwidth * n);
+      if (i < 0) return;
+      const bb = this.icomSpans[i] / n;
+      this.view.centerHz = Math.round(this.cfg.centerFreq || this.frequency);
+      this.view.binBandwidth = bb;
+      this._sendView(this.view.centerHz, bb);
+      return;
+    }
     const spanCap = this.cfg.maxBandwidth > 0 ? this.cfg.maxBandwidth : 30e6;
     const bb = Math.max(MIN_SPAN_HZ / n, Math.min(binBandwidth, spanCap / n));
     this.view.centerHz = Math.round(frequency);
@@ -1650,6 +1705,14 @@ export class SpectrumClient {
     const bb = this.view.binBandwidth || this.cfg.binBandwidth;
     if (!bb) return;
     const n = this.cfg.binCount || 4096;
+    // ★★ AN ICOM: one press = one RUNG of the radio's ladder, whatever the factor — a wheel's 1.1× would
+    //    otherwise round back to the rung it is on and the zoom would never move.
+    if (this.icomSpans) {
+      if (factor === 1) return;
+      const rung = spanStep(this.icomSpans, bb * n, factor > 1 ? +1 : -1);
+      if (rung > 0) this.zoom(this.frequency, rung / n);
+      return;
+    }
 
     // Clamp FIRST, so the anchor maths uses the span we'll actually get —
     // otherwise, at the zoom limit, the centre would keep sliding towards the
@@ -1706,7 +1769,13 @@ export class SpectrumClient {
   private tuneLocked = false;
   private askStateAt = 0;
   isTuneLocked(): boolean { return this.tuneLocked; }
+  /** ★★ AN ICOM UNDER THE OWNER LOCK ("Listeners follow the radio") for a listener who is not the signed-in
+   *  admin: tune, mode, passband and span would only be refused by the server (notice + config), so they are
+   *  stopped HERE and the page says why — a control that bounces reads as a broken one. Set by main.ts from
+   *  icomMayTune(); false on every other radio. */
+  icomFollowLocked = false;
   private askBlocked(): boolean {
+    if (this.icomFollowLocked) { this.cb.onIcomFollowLocked?.(); return true; }
     if (!this.tuneLocked) return false;
     this.cb.onTuneLocked?.();
     const now = performance.now();

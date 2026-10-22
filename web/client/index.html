@@ -788,6 +788,21 @@ body.askLocked #dsSeg, body.askLocked #antSeg, body.askLocked #rspAntSeg, body.a
 body.askLocked #deemphSeg, body.askLocked #stereoBtn, body.askLocked #wspBtn, body.askLocked #imsBtn,
 body.askLocked #ceqBtn, body.askLocked #autoBwBtn, body.askLocked #nbBtn, body.askLocked #nbxBtn,
 body.askLocked #nfmVoiceBtn { opacity: 0.35; }
+/* ★★★ AN ICOM (driver "icom", RECEIVE ONLY): everything the IQ path powers does not exist on this radio — the sample
+   rate, the gain table and VibeAGC, the IF filter, direct sampling, bias-T, ppm, the other radios' panels, OUR squelch
+   and noise blanker, the broadcast-FM processing, raw IQ, the locked-centre switch and the spectrum data rate. HIDDEN,
+   not greyed: an inert control teaches the listener the feature is broken. A class on <body>, so no later per-driver
+   code can un-hide one of them, and the next radio gets them all back the moment it is not an Icom (main.ts). */
+body.icom .icomHide, body.icom #rowRate, body.icom #rateLocked, body.icom #rowGain, body.icom #rowAgc,
+body.icom #rowTunerBw, body.icom .rtlOnly, body.icom .rtlRspOnly, body.icom #rspCtls, body.icom #ahfCtls,
+body.icom #hrfCtls, body.icom #aspCtls, body.icom #nbxRow, body.icom #nfmVoiceRow, body.icom #iqRow,
+body.icom #iqNote, body.icom #mSqlLine, body.icom #mModeMenu .mBwSep:not(.icomFilSep), body.icom #mModeMenu .bwRow { display: none !important; }
+/* ★★ Listeners follow the radio (the owner lock): the tuning controls are dimmed — visibly locked, not missing —
+   and a touch says why (main.ts onIcomFollowLocked). Same look as ask-before-tuning's lock. */
+body.icomFollow #mVfoDial, body.icomFollow #mVfoDown, body.icomFollow #mVfoUp, body.icomFollow #mMode,
+body.icomFollow #mZoomDial { opacity: 0.35; }
+/* ★ The TX banner outranks everything on the card: the owner is transmitting and the server has paused receive. */
+#mShared.icomTx { color: #fff; background: rgba(170, 20, 20, 0.9); border-color: rgba(255, 120, 120, 0.8); }
 #mChat.askNudge { animation: chatBreathe 0.45s ease-in-out 6 alternate; }
 @media (prefers-reduced-motion: reduce) { #mChat.askNudge { animation: none; box-shadow: inset 0 0 0 2px var(--amber); } }
 #mPillIn.shared #mFreq { font-size: 1.5em; }
@@ -4027,7 +4042,7 @@ select.btn { padding: 6px 8px; }
        the phone and watch use. You point the ball just above the noise while watching the real
        signal move underneath it, so "just above the noise" is something you SEE rather than a
        figure you guess. Drag fully left to switch squelch off. -->
-  <div class="sqlBlock">
+  <div class="sqlBlock icomHide">
     <label>SQUELCH</label>
     <div id="sqlBar" class="sqlBar" title="Drag the ball to set the squelch; drag fully left for OFF">
       <div class="sqlTrack"><div id="sqlFill" class="sqlFill"></div></div>
@@ -4130,8 +4145,8 @@ select.btn { padding: 6px 8px; }
     <label>NFM AUDIO</label>
     <div class="seg"><button class="btn on" id="nfmVoiceBtn" title="VOICE: 300 Hz to 3 kHz, as a normal NFM radio sounds — removes the repeater's sub-audible CTCSS tone and softens the hiss. RAW: the flat, unfiltered demodulator output, for piping into an external decoder (pagers, 9600-baud packet) that needs the low frequencies.">VOICE</button></div>
   </div>
-  <div class="msub">BROADCAST FM</div>
-  <div class="mrow">
+  <div class="msub icomHide">BROADCAST FM</div>
+  <div class="mrow icomHide">
     <label>FM DE-EMPHASIS</label>
     <div class="seg" id="deemphSeg">
       <button class="btn" data-tau="0">OFF</button>
@@ -4146,7 +4161,7 @@ select.btn { padding: 6px 8px; }
        ★ NR here is NOT the NOISE REDUCTION slider above: that one is the audio denoiser (built for
        voice, and never usable on music). This is the FM weak-signal processing — stereo high-blend
        plus the matching audio high-cut, which is a pair of moving filters and has no artefacts. -->
-  <div class="mrow">
+  <div class="mrow icomHide">
     <label>PROCESSING</label>
     <div class="seg"><button class="btn on" id="stereoBtn" title="Stereo decoding. Off forces mono — which is a legitimate thing to want on a weak signal, though NR now treats mono hiss too, so it is no longer the only way to escape it.">ST ON</button><button class="btn on"
       id="wspBtn" title="NR — weak-signal noise treatment: stereo high-blend plus an audio high-cut. WORKS IN MONO TOO — the high-cut treats baseband hiss, which is there whether you are in stereo or not; only the stereo half needs L-R. Acts only on a noisy signal: a strong station is bypassed entirely. Turn off to A/B what it is doing.">NR ON</button><button class="btn on"
@@ -4390,7 +4405,7 @@ select.btn { padding: 6px 8px; }
      view IS locked or whether pressing it WILL lock it, and the two readings are opposites
      (Stuart). The row now names the setting — VFO CENTRE, i.e. does the view stay centred on
      the dial — and the button reads its current state, LOCKED or FREE. -->
-<div class="mrow mOnly">
+<div class="mrow mOnly icomHide">
   <label>VFO CENTRE</label>
   <button class="mPanelBtn" id="mPanelLock"
           title="LOCKED: the view stays centred on the dial. FREE: pan the view independently.">LOCKED</button>
@@ -4437,6 +4452,11 @@ select.btn { padding: 6px 8px; }
        the fact that the LNA was wide open and flooding the front end.
        ★ AND THE DIRECTION IS INVERTED, which is what catches people out: you set a gain
        REDUCTION, so 20 dB is MAXIMUM gain and 59 dB is minimum. The labels say so. -->
+  <!-- ★★★ AN ICOM TRANSCEIVER, RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md; icomUi.ts builds the inside). Every list is
+       the radio's own (hwinfo.radio) and every lit button is what the RADIO reports. Shown for driver "icom" alone;
+       body.icom hides every IQ-side control instead (the CSS rule beside .askLocked) — AGENTS.md: a control that only
+       works on one radio should not be there. -->
+  <div id="icomCtls" hidden></div>
   <div id="rspCtls" hidden>
     <!-- ★ The one number that makes two independent sliders readable: what you have
          ACTUALLY got. SDRconnect shows it above its gain controls for the same reason. -->
@@ -4924,7 +4944,7 @@ select.btn { padding: 6px 8px; }
   <!-- WATERFALL DATA RATE — real frames/sec from the SERVER. Auto = adaptive link management (brings in
        as much as the link carries, up to the chosen Speed, capped at the server's 20). Speed options
        above are filtered to >= this so you never ask for frames you'd only throw away. -->
-  <div class="mrow">
+  <div class="mrow icomHide">
     <label>WATERFALL DATA RATE</label>
     <div class="seg" id="wfRateSeg">
       <button class="btn on" data-wfrate="0">AUTO</button>
@@ -4933,7 +4953,7 @@ select.btn { padding: 6px 8px; }
       <button class="btn" data-wfrate="5">5</button>
     </div>
   </div>
-  <div class="rowNote">How many real frames per second the server sends. Lower cuts the data used but can
+  <div class="rowNote icomHide">How many real frames per second the server sends. Lower cuts the data used but can
     miss brief signals. Auto adapts to the link, up to your chosen speed.</div>
   <!-- ★ The IDLE SAVER switch went with the feature. It slowed the spectrum after 30 s without a
        touch, which read "nobody is looking" from "nobody is touching" — backwards on a waterfall,
