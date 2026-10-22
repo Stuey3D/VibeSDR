@@ -93,6 +93,10 @@ class RtlTcpServerService : Service() {
             val svc = instance ?: return
             svc.handler.post { svc.promoteMicrophone() }
         }
+        private fun ContextCompat_startForegroundService(ctx: Context, i: Intent) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i)
+            else ctx.startService(i)
+        }
     }
 
     private fun wantsMicType(): Boolean =
@@ -118,11 +122,6 @@ class RtlTcpServerService : Service() {
         if (!VibeLocalSDR.icomAudioWanted() || IcomAudio.running) return
         if (wantsMicType()) promoteMicrophone()
         IcomAudio.startIfPossible(applicationContext)
-
-        private fun ContextCompat_startForegroundService(ctx: Context, i: Intent) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i)
-            else ctx.startService(i)
-        }
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
