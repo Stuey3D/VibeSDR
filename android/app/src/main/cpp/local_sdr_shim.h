@@ -335,6 +335,8 @@ public:
      *  (0 = keep nothing), whether listeners may read it, and whether a listener's own decodes are kept. */
     static void setGallery(const std::string& dir, double limitMb, bool publicRead, bool saveLive);
     static void setGalleryRadioLabel(const std::string& label);
+    /** ★★★ The machine's radio serials: never written into a gallery item, and stripped from any already stored. */
+    static void setGalleryRedact(const std::vector<std::string>& serials);
     /** ★ The directory every radio process on the box shares for the decoder slots (flock files).
      *  Empty = count in this process only (Android, the Mac app's single engine). Set at startup. */
     static void setDecoderSlotDir(const std::string& dir);

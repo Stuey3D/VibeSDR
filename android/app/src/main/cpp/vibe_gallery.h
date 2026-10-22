@@ -80,6 +80,9 @@ inline std::string utcStamp(int64_t t, const char* fmt) {
     char b[48]; std::strftime(b, sizeof b, fmt, &g); return b;
 }
 inline int64_t nowUtc() { return (int64_t)std::time(nullptr); }
+inline int64_t nowUtcMs() {
+    return (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
 /** "518.000 kHz" / "14.0740 MHz" — how the item names its frequency. */
 inline std::string freqText(double hz) {
     char b[32];
@@ -104,6 +107,21 @@ inline double lineNum(const std::string& l, const char* key) {
     const std::string k = std::string("\"") + key + "\":";
     size_t p = l.find(k); if (p == std::string::npos) return 0;
     return std::strtod(l.c_str() + p + k.size(), nullptr);
+}
+
+/** ★★★ A RADIO'S SERIAL NEVER REACHES THE GALLERY (Lenovo, 2026-10-22: every item said "SDRplay RSP1A 2235030199" — the
+ *  gallery is public, and serials are kept out of public view; the radio URLs were changed to hide them). Each token is
+ *  removed wherever it appears, and the spaces it leaves are tidied. */
+inline std::string stripTokens(std::string s, const std::vector<std::string>& tokens) {
+    for (const auto& t : tokens) {
+        if (t.size() < 3) continue;
+        for (size_t p; (p = s.find(t)) != std::string::npos;) s.erase(p, t.size());
+    }
+    std::string o;
+    for (char c : s) { if (c == ' ' && (o.empty() || o.back() == ' ')) continue; o += c; }
+    while (!o.empty() && (o.back() == ' ' || o.back() == '-' || o.back() == '(')) o.pop_back();
+    for (size_t p; (p = o.find(" ()")) != std::string::npos;) o.erase(p, 3);
+    return o;
 }
 
 // ── What an item is ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -136,7 +154,23 @@ public:
     /** 0 = the gallery keeps nothing (saving is off); the owner's figure otherwise. */
     void setLimitBytes(uint64_t b) { std::lock_guard<std::mutex> lk(m_); limit_ = b; }
     uint64_t limitBytes() const { std::lock_guard<std::mutex> lk(m_); return limit_; }
-    void setRadioLabel(const std::string& r) { std::lock_guard<std::mutex> lk(m_); radio_ = printable(r, 60); }
+    void setRadioLabel(const std::string& r) { std::lock_guard<std::mutex> lk(m_); radio_ = stripTokens(printable(r, 60), redact_); }
+    /** ★★★ The machine's radio SERIALS: never written into an item, and stripped from any item an older build wrote
+     *  (the index is rewritten once, here, under the lock). */
+    void setRedact(const std::vector<std::string>& serials) {
+        std::string dir;
+        { std::lock_guard<std::mutex> lk(m_); redact_.clear(); for (auto& t : serials) if (t.size() >= 3) redact_.push_back(t);
+          radio_ = stripTokens(radio_, redact_); dir = dir_; }
+        if (dir.empty() || serials.empty()) return;
+        Lock fl(dir);
+        std::vector<std::string> lines = readIndex(dir);
+        bool changed = false;
+        for (auto& l : lines) { const std::string c = redactLine(l); if (c != l) { l = c; changed = true; } }
+        if (!changed) return;
+        std::string body; for (auto& l : lines) body += l + "\n";
+        const std::string tmp = dir + "/index.jsonl.tmp";
+        if (writeFile(tmp, body, false)) ::rename(tmp.c_str(), (dir + "/index.jsonl").c_str());
+    }
     std::string radioLabel() const { std::lock_guard<std::mutex> lk(m_); return radio_; }
     bool enabled() const { std::lock_guard<std::mutex> lk(m_); return !dir_.empty() && limit_ > 0; }
 
@@ -214,7 +248,7 @@ public:
                 if (!kind.empty() && lineStr(*it, "k") != kind) continue;
                 if (limit == 0) continue;
                 --limit;
-                std::string l = *it;
+                std::string l = redactLine(*it);
                 if (!l.empty() && l.back() == '}') l.pop_back();
                 if (!items.empty()) items += ',';
                 items += l + ",\"bytes\":" + std::to_string((unsigned long long)st.st_size) + "}";
@@ -271,6 +305,22 @@ private:
         ~Lock() { if (fd >= 0) { ::flock(fd, LOCK_UN); ::close(fd); } }
     };
     std::set<std::string> openNames() const { std::lock_guard<std::mutex> lk(m_); return open_; }
+    /** One index line with every serial removed from its radio and title. */
+    std::string redactLine(const std::string& l) const {
+        std::vector<std::string> red; { std::lock_guard<std::mutex> lk(m_); red = redact_; }
+        if (red.empty()) return l;
+        bool any = false; for (auto& t : red) if (l.find(t) != std::string::npos) { any = true; break; }
+        if (!any) return l;
+        std::string o = l;
+        for (const char* key : { "r", "title" }) {
+            const std::string k = std::string("\"") + key + "\":\"";
+            const size_t p = o.find(k); if (p == std::string::npos) continue;
+            const size_t a = p + k.size();
+            size_t e = a; while (e < o.size() && !(o[e] == '"' && o[e - 1] != '\\')) e++;
+            o.replace(a, e - a, stripTokens(o.substr(a, e - a), red));
+        }
+        return o;
+    }
     static std::string kindToken(const std::string& k) {
         std::string o; for (char c : k) if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) o += c;
         return o.empty() ? "item" : o.substr(0, 12);
@@ -350,6 +400,7 @@ private:
 
     mutable std::mutex m_;
     std::string dir_, radio_;
+    std::vector<std::string> redact_;
     uint64_t limit_ = kDefaultLimit;
     std::set<std::string> open_;
 };
@@ -374,10 +425,14 @@ struct NavtexMsg {
 
 class NavtexAsm {
 public:
-    static constexpr int64_t kEndLostSec = 75;
+    static constexpr int64_t kEndLostMs = 75000;
+    /** ★★ A LOCK LOST FOR LESS THAN THIS IS A BLIP, NOT AN END — navtex.ts LOCK_BLIP_MS, the same rule (2026-10-22: NickB's
+     *  clean 490 kHz messages came out as "[end lost]" + "[start lost]" pieces, each relock ~1 s after a resync). */
+    static constexpr int64_t kLockBlipMs = 1500;
     static constexpr size_t  kOrphanMin = 16, kSegMax = 16384;
     std::function<void(const NavtexMsg&)> onMessage;
 
+    /** All times are UTC MILLISECONDS (the message's startedAt is stored in seconds). */
     void push(const std::string& chunk, int64_t now) {
         if (chunk.empty()) return;
         if (seg_.empty()) segStartedAt_ = now;
@@ -385,30 +440,41 @@ public:
         scan(now);
         if (seg_.size() > kSegMax) {      // ★ the bound: whatever this is, it is not a message any more
             if (inMsg_ || alnum(seg_) >= kOrphanMin) finish(build(seg_, true));
-            seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
+            seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now; cut_ = Cut();
         }
     }
-    /** 75 s of nothing: an unfinished message ends "[end lost]". */
+    /** 75 s of nothing: an unfinished message ends "[end lost]". A lock lost and not regained within kLockBlipMs: the
+     *  message ends where it was lost. */
     void tick(int64_t now) {
-        if (!lastTextAt_ || now - lastTextAt_ < kEndLostSec) return;
+        if (cut_.on && !cut_.relocked && !locked_ && now - cut_.atMs >= kLockBlipMs) { closeAtCut(now); return; }
+        if (!lastTextAt_ || now - lastTextAt_ < kEndLostMs) return;
         if (inMsg_ || alnum(seg_) >= kOrphanMin) finish(build(seg_, true));
-        seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0;
+        seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; cut_ = Cut();
     }
-    /** The decoder's lock (op 0x03, state 3 = reading). Losing it ends what was arriving. */
+    /** The decoder's lock (op 0x03, state 3 = reading). A loss is not an end until it outlasts a blip (see navtex.ts). */
     void lockState(int st, int64_t now) {
         const bool was = locked_;
         locked_ = st >= 3;
-        if (!was || locked_) return;
-        if (inMsg_ || alnum(seg_) >= kOrphanMin) finish(build(seg_, true));
-        seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
+        if (was && !locked_) {
+            lockLosses_++;
+            if (inMsg_ || alnum(seg_) >= kOrphanMin) { if (!cut_.on || cut_.relocked) cut_ = Cut{ true, seg_.size(), now, false }; return; }
+            seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
+            return;
+        }
+        if (!was && locked_ && cut_.on && !cut_.relocked) {
+            if (now - cut_.atMs >= kLockBlipMs) { closeAtCut(now); return; }
+            cut_.relocked = true;
+        }
     }
     /** The decoder stopped: what was arriving is saved as far as it got (end lost). */
     void flush() {
         if (inMsg_ || alnum(seg_) >= kOrphanMin) finish(build(seg_, true));
-        seg_.clear(); inMsg_ = false; scanFrom_ = 0;
+        seg_.clear(); inMsg_ = false; scanFrom_ = 0; cut_ = Cut();
     }
     /** A retune: the text from here is another transmission — drop what was arriving (as the client's clearLive). */
-    void clearLive() { seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; locked_ = false; }
+    void clearLive() { seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; locked_ = false; cut_ = Cut(); }
+    /** Lock losses seen (blips included) — for the log. */
+    unsigned long lockLosses() const { return lockLosses_; }
 
     static std::string subject(char b2) {
         switch (b2) {
@@ -507,9 +573,15 @@ private:
         m.text = cleanText(body);
         for (char c : m.text) { if (c == '_') { m.lost++; m.chars++; } else if (std::isalnum((unsigned char)c)) m.chars++; }
         m.endLost = endLost;
-        if (inMsg_) { m.id = hdrId_; m.startedAt = hdrAt_; }
-        else { m.startLost = true; m.startedAt = segStartedAt_; }
+        if (inMsg_) { m.id = hdrId_; m.startedAt = hdrAt_ / 1000; }
+        else { m.startLost = true; m.startedAt = segStartedAt_ / 1000; }
         return m;
+    }
+    void closeAtCut(int64_t now) {
+        const std::string body = seg_.substr(0, std::min(cut_.at, seg_.size()));
+        cut_ = Cut();
+        if (inMsg_ || alnum(body) >= kOrphanMin) finish(build(body, true));
+        seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
     }
     void finish(const NavtexMsg& m) { if (onMessage) onMessage(m); }
     void scan(int64_t now) {
@@ -523,7 +595,10 @@ private:
                 if (nnnnAt(seg_, i)) { kind = 2; at = i; end = i + 4; break; }
             }
             if (!kind) { scanFrom_ = waitAt >= 0 ? (size_t)waitAt : (seg_.size() > 3 ? seg_.size() - 3 : 0); return; }
-            const std::string before = seg_.substr(0, at);
+            // ★ A lock lost in this segment: a new HEADER = a takeover, the message ends at the cut; NNNN = it was a blip.
+            const size_t upto = (cut_.on && kind == 1) ? std::min(cut_.at, at) : at;
+            cut_ = Cut();
+            const std::string before = seg_.substr(0, upto);
             if (kind == 2) {
                 if (inMsg_ || alnum(before) >= kOrphanMin) finish(build(before, false));
                 inMsg_ = false;
@@ -540,6 +615,8 @@ private:
     std::string hdrId_;
     int64_t hdrAt_ = 0, segStartedAt_ = 0, lastTextAt_ = 0;
     size_t scanFrom_ = 0;
+    struct Cut { bool on = false; size_t at = 0; int64_t atMs = 0; bool relocked = false; } cut_;
+    unsigned long lockLosses_ = 0;
 };
 
 } // namespace gallery

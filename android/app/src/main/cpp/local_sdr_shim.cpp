@@ -24758,6 +24758,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const std::string y = vsBgYieldPath();
         bgStopForListener("a listener needs a decoder slot");
         if (y.empty()) return vsDecoderSlots().inUse() < vsDecoderSlots().max();
+        // ★ Nothing to yield anywhere on the box: the slots are LISTENERS', and the refusal is immediate (as before V12).
+        if (!vibe::bg::BgRunner::anyRunning(y)) return false;
         vibe::bg::BgRunner::requestYield(y);
         for (int i = 0; i < 30; i++) {          // ★ other radios notice within half a second
             if (vsDecoderSlots().inUse() < vsDecoderSlots().max()) return true;
@@ -28077,6 +28079,7 @@ void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publi
          publicRead ? "visible to everyone" : "hidden", saveLive ? "kept" : "not kept");
 }
 void LocalSdrShim::setGalleryRadioLabel(const std::string& label) { vibe::gallery::shared().setRadioLabel(label); }
+void LocalSdrShim::setGalleryRedact(const std::vector<std::string>& serials) { vibe::gallery::shared().setRedact(serials); }
 void LocalSdrShim::setAdminIdleMinutes(int minutes) {
     g_vsAdminIdleMin.store(minutes >= 0 ? minutes : 0);
     LOGI("admin idle re-lock: %d min", g_vsAdminIdleMin.load());

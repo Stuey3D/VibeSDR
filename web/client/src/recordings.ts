@@ -65,7 +65,8 @@ export async function deleteRecording(id: string): Promise<void> {
 }
 
 export function formatSize(bytes: number): string {
-  return bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.round(bytes / 1e3)} KB`;
+  // ★ Under 1 KB in BYTES (the gallery showed a 181-byte NAVTEX message as "0 KB", 2026-10-22).
+  return bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : bytes < 1000 ? `${Math.max(0, Math.round(bytes))} B` : `${Math.round(bytes / 1e3)} KB`;
 }
 
 export function formatDuration(sec: number): string {

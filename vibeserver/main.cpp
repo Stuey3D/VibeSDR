@@ -996,7 +996,12 @@ static std::string jsonEscape(const std::string& in) {
     return o;
 }
 
-namespace { std::string g_bgLastApplied;   // ★ V12: the bgDecode this radio process last applied (see the main loop's watch)
+namespace {
+/** ★★★ Every radio's serial on this machine — kept out of the gallery (LocalSdrShim::setGalleryRedact). */
+std::vector<std::string> gallerySerials(const vsconfig::ServerConfig& c) {
+    std::vector<std::string> v; for (const auto& r : c.radios) if (!r.serial.empty()) v.push_back(r.serial); return v;
+}
+std::string g_bgLastApplied;   // ★ V12: the bgDecode this radio process last applied (see the main loop's watch)
 std::string g_configPath; vsconfig::Config g_runtimeConfig;
             /** ★ The WHOLE machine, so the setup page can show a tab per radio. This process runs
              *  exactly one of them (g_myRadioSerial); the rest it only reads and writes on their
@@ -2386,6 +2391,7 @@ int main(int argc, char** argv) {
             g_serverConfig = next;
             // ★★ V12 the gallery is the machine's — every process applies it from the saved file.
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", next.galleryMb, next.galleryPublic, next.gallerySaveLive);
+            LocalSdrShim::setGalleryRedact(gallerySerials(next));
             // ★★ THE LISTING FOLLOWS THE SAVE. Without this the switch wrote the file and changed
             //    nothing until a restart — the same trap the gain settings fell into above, and
             //    an owner turning public listing OFF would have stayed listed for as long as the
@@ -4181,6 +4187,7 @@ int main(int argc, char** argv) {
             g_bgLastApplied = bj;
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", o.galleryMb >= 0 ? o.galleryMb : g_serverConfig.galleryMb,
                                      g_serverConfig.galleryPublic, g_serverConfig.gallerySaveLive);
+            LocalSdrShim::setGalleryRedact(gallerySerials(g_serverConfig));   // ★★★ before the label: a serial never reaches an item
             LocalSdrShim::setGalleryRadioLabel(mine ? (mine->label.empty() ? mine->driver : mine->label) : std::string());
         }
         // ★ MACHINE-level, not per radio: the rule is about one visitor holding SEVERAL of this
@@ -4573,6 +4580,7 @@ int main(int argc, char** argv) {
                                 LocalSdrShim::setBackgroundDecoding(mine->bgDecode, be);
                                 std::printf("VibeServer: background decoding re-read from %s\n", g_configPath.c_str());
                             }
+                            LocalSdrShim::setGalleryRedact(gallerySerials(fresh));
                             const std::string gk = std::to_string(fresh.galleryMb) + (fresh.galleryPublic ? "p" : "-") + (fresh.gallerySaveLive ? "l" : "-");
                             if (gk != lastGallery) {
                                 if (!lastGallery.empty())

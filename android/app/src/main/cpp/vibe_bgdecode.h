@@ -51,7 +51,9 @@
 #include <utility>
 #include <vector>
 
+#include <dirent.h>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -76,7 +78,7 @@ public:
         if (done_) return;
         followDial();
         const int64_t now = gallery::nowUtc();
-        if (navtex_) { saveHeld(false); asm_.push(t, now); return; }
+        if (navtex_) { saveHeld(false); asm_.push(t, gallery::nowUtcMs()); return; }
         buf_ += t;
         if (buf_.size() >= 8192 || now - lastFlush_ >= 60) flushRun(now);
     }
@@ -84,7 +86,13 @@ public:
         if (!navtex_ || n < 1) return;
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;
-        if (d[0] == 0x03 && n >= 2) asm_.lockState(d[1], gallery::nowUtc());
+        if (d[0] == 0x03 && n >= 2) {
+            // ★ Lock transitions, into the log (2026-10-22: the next real run must SHOW what split a message, if anything).
+            const bool lk = d[1] >= 3;
+            if (log_ && lk != lockedNow_) log_(std::string("background decoding: ") + tag_ + (lk ? " NAVTEX lock" : " NAVTEX lock lost"));
+            lockedNow_ = lk;
+            asm_.lockState(d[1], gallery::nowUtcMs());
+        }
         else if (d[0] == 0x07 && n >= 13) {
             // ★ The FEC's own count, sent BEHIND the text carrying its NNNN — so it belongs to the message just held.
             auto u32 = [&](size_t o) { return (unsigned long)d[o] << 24 | (unsigned long)d[o + 1] << 16 | (unsigned long)d[o + 2] << 8 | d[o + 3]; };
@@ -99,7 +107,7 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;
         const int64_t now = gallery::nowUtc();
-        if (navtex_) { asm_.tick(now); if (!held_.empty() && now - heldAt_ >= 2) saveHeld(true); return; }
+        if (navtex_) { asm_.tick(gallery::nowUtcMs()); if (!held_.empty() && now - heldAt_ >= 2) saveHeld(true); return; }
         if (!buf_.empty() && now - lastFlush_ >= 60) flushRun(now);
     }
     void finish(bool interrupted) override {
@@ -112,6 +120,8 @@ public:
     }
     size_t saved() const { std::lock_guard<std::mutex> lk(m_); return saved_; }
     std::string lastName() const { std::lock_guard<std::mutex> lk(m_); return lastName_; }
+    /** Background decoding's taps say what they see (lock transitions) under the VFO's name. */
+    void setLog(std::function<void(const std::string&)> f, std::string tag) { std::lock_guard<std::mutex> lk(m_); log_ = std::move(f); tag_ = std::move(tag); }
 
 private:
     void followDial() {
@@ -170,6 +180,9 @@ private:
     mutable std::mutex m_;
     bool navtex_ = false, done_ = false;
     gallery::NavtexAsm asm_;
+    std::function<void(const std::string&)> log_;
+    std::string tag_;
+    bool lockedNow_ = false;
     std::vector<gallery::NavtexMsg> held_;
     int64_t heldAt_ = 0, lastFlush_ = 0, runDay_ = 0;
     std::string buf_, run_, lastName_;
@@ -398,9 +411,14 @@ private:
 };
 
 /** ★ One factory for every decoder's gallery copy — background decoding's and a listener's alike. */
-inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr) {
+inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr,
+                                    std::function<void(const std::string&)> log = nullptr, const std::string& tag = "") {
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
-    if (meta.kind == "navtex" || meta.kind == "rtty") return std::make_shared<GalleryTap>(st, meta, std::move(dial));
+    if (meta.kind == "navtex" || meta.kind == "rtty") {
+        auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
+        if (log) t->setLog(std::move(log), tag);
+        return t;
+    }
     return nullptr;
 }
 
@@ -460,13 +478,15 @@ public:
             if (p_.store) {
                 gallery::Store* st = p_.store;
                 const Vfo v = c->vfo; const int pi = p_.profileIdx;
-                env.tap = [st, v, pi](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
+                auto lg = p_.log;
+                const std::string tag = "VFO " + std::to_string(i + 1) + " (" + khz(v.hz) + ")";
+                env.tap = [st, v, pi, lg, tag](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
                     gallery::Meta m;
                     m.kind = galleryKindFor(ext, msg);
                     if (m.kind.empty()) return nullptr;
                     m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = v.dec;
                     m.profile = "Profile " + std::to_string(pi + 1);
-                    return makeGalleryTap(*st, m);
+                    return makeGalleryTap(*st, m, nullptr, lg, tag);
                 };
                 const double la = p_.lat, lo = p_.lon;
                 env.spotTap = [st, v, pi, la, lo]() -> DecoderTapPtr {
@@ -481,6 +501,7 @@ public:
         }
         startedAt_ = std::time(nullptr);
         yielded_.store(false);
+        markRunning(true);
         startDecoders();
         run_.store(true);
         { std::lock_guard<std::mutex> lk(qm_); q_.clear(); qSamples_ = 0; gap_ = false; }
@@ -503,6 +524,7 @@ public:
         if (th_.joinable()) th_.join();
         for (auto& c : chans_) if (c->host) c->host->shutdown();
         chans_.clear();
+        markRunning(false);
         if (was && sayIt) say("background decoding stopped");
     }
     bool running() const { return running_.load(); }
@@ -535,6 +557,28 @@ public:
      *  slots are box-wide, so the request is a file every runner watches (its mtime): each lets its decoders go at
      *  once and its owner stops it (the shim's tick). A listener's decoder is never refused because the box was busy
      *  decoding for nobody. */
+    /** ★ Is background decoding running anywhere on the box? (Each runner holds <slot dir>/bg-run-<pid>.lock under flock
+     *  while it runs.) A refused listener waits for a yield only when there is something to yield — otherwise the box is
+     *  full of LISTENERS' decoders and the refusal is immediate, as it always was. */
+    static bool anyRunning(const std::string& yieldPath) {
+        const size_t sl = yieldPath.rfind('/');
+        if (sl == std::string::npos) return false;
+        const std::string dir = yieldPath.substr(0, sl);
+        DIR* d = ::opendir(dir.c_str());
+        if (!d) return false;
+        bool any = false;
+        while (dirent* e = ::readdir(d)) {
+            const std::string f = e->d_name;
+            if (f.rfind("bg-run-", 0) != 0) continue;
+            const int fd = ::open((dir + "/" + f).c_str(), O_RDONLY | O_CLOEXEC);
+            if (fd < 0) continue;
+            if (::flock(fd, LOCK_SH | LOCK_NB) != 0) any = true; else ::flock(fd, LOCK_UN);
+            ::close(fd);
+            if (any) break;
+        }
+        ::closedir(d);
+        return any;
+    }
     static void requestYield(const std::string& path) {
         if (path.empty()) return;
         const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
@@ -554,6 +598,7 @@ private:
         std::unique_ptr<vibedsp::RxPipeline> rx;
         std::shared_ptr<DecoderHost> host;
         bool decoding = false;
+        uint64_t lastDrop = 0;
     };
     static void audioCb(void* ctx, const float* pcm, int frames, int ch, int) {
         auto* c = (Chan*)ctx;
@@ -570,6 +615,19 @@ private:
             say("background decoding: VFO " + std::to_string(c.index + 1) + " (" + khz(c.vfo.hz) + ") — no decoder slot free; will retry");
     }
     void say(const std::string& s) { if (p_.log) p_.log(s); }
+    void markRunning(bool on) {
+        if (on && runFd_ < 0 && !p_.yieldPath.empty()) {
+            const size_t sl = p_.yieldPath.rfind('/');
+            if (sl == std::string::npos) return;
+            runPath_ = p_.yieldPath.substr(0, sl) + "/bg-run-" + std::to_string((long long)::getpid()) + ".lock";
+            runFd_ = ::open(runPath_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+            if (runFd_ >= 0 && ::flock(runFd_, LOCK_EX | LOCK_NB) != 0) { ::close(runFd_); runFd_ = -1; }
+        } else if (!on && runFd_ >= 0) {
+            ::unlink(runPath_.c_str()); ::flock(runFd_, LOCK_UN); ::close(runFd_); runFd_ = -1;
+        }
+    }
+    int runFd_ = -1;
+    std::string runPath_;
     /** The yield file's mtime is newer than this run's start. Checked twice a second, a stat() each. */
     bool yieldAsked() const {
         if (p_.yieldPath.empty()) return false;
@@ -588,6 +646,28 @@ private:
                 if (!q_.empty()) { buf = std::move(q_.front()); q_.pop_front(); qSamples_ -= buf.size(); gap = std::exchange(gap_, false); }
             }
             const auto now = std::chrono::steady_clock::now();
+            /* ★★ DROPS, INTO THE LOG, once a minute when there were any (2026-10-22): the IQ queue (this thread fell behind
+             *  the radio) and each VFO's decoder queue (its decoder fell behind). A message split on a quiet box must be
+             *  explainable from the log the next morning. */
+            if (now - lastDropLog_ > std::chrono::seconds(60)) {
+                lastDropLog_ = now;
+                const uint64_t iq = dropped_.load();
+                if (iq > lastIqDrop_ && p_.sampleRate > 0) {
+                    char b[160]; std::snprintf(b, sizeof b, "background decoding: %.1f s of IQ dropped in the last minute (the channels fell behind the radio)",
+                                               (double)(iq - lastIqDrop_) / p_.sampleRate);
+                    say(b);
+                }
+                lastIqDrop_ = iq;
+                for (auto& c : chans_) {
+                    const uint64_t d = c->host ? c->host->droppedSamples() : 0;
+                    if (d > c->lastDrop) {
+                        char b[200]; std::snprintf(b, sizeof b, "background decoding: VFO %d (%s) — %.1f s of audio dropped in the last minute (its decoder fell behind)",
+                                                   c->index + 1, khz(c->vfo.hz).c_str(), (double)(d - c->lastDrop) / 48000.0);
+                        say(b);
+                    }
+                    c->lastDrop = d;
+                }
+            }
             if (now - lastYieldCheck > std::chrono::milliseconds(500)) {
                 lastYieldCheck = now;
                 if (!yielded_.load() && yieldAsked()) {
@@ -620,6 +700,8 @@ private:
     bool gap_ = false;
     std::atomic<bool> run_{false}, running_{false}, yielded_{false};
     std::atomic<uint64_t> dropped_{0};
+    std::chrono::steady_clock::time_point lastDropLog_{};
+    uint64_t lastIqDrop_ = 0;
     std::time_t startedAt_ = 0;
     int started_ = 0;
 };

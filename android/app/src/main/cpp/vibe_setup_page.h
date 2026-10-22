@@ -1794,6 +1794,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <label style="display:flex;gap:8px;align-items:center">
           <input type="checkbox" id="bgOn" style="width:16px;height:16px;accent-color:var(--amber)">
           <span><b>Background Decoding</b></span></label>
+        <!-- ★ Stuart's headline (2026-10-22), above his own text, which stays as it is. -->
+        <p class="why" style="margin-bottom:4px"><b>Background Decoding — make your radios work while the server is idle.</b></p>
         <p class="why">When the last user leaves the server after
           <select id="bgWait" style="width:auto;display:inline-block">
             <option value="1">1 minute</option><option value="2">2 minutes</option>

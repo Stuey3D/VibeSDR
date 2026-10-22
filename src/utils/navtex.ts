@@ -35,6 +35,13 @@
 export const NAVTEX_END_LOST_MS = 75_000;
 /** Letters/digits an orphan fragment (no header seen) must hold before it is shown as a "[start lost]" message. */
 export const ORPHAN_MIN_ALNUM = 16;
+/** ★★ A LOCK LOST FOR LESS THAN THIS IS A BLIP, NOT AN END (2026-10-22). NickB's NAVTEX overnight on 490 kHz came out as
+ *  one message cut into "[end lost]" + a run of "[start lost]" pieces, each a few lines, on a clean signal: the decoder
+ *  resyncs on a weak patch and relocks within about a second (NavtexRx: ≤ ~110 bits), and every relock had closed the
+ *  message. A co-channel TAKEOVER (NickB, 2026-10-12) still splits: its lock stays lost for longer, or the new station's
+ *  own ZCZC arrives — either way the message ends where the lock was lost, and the text after that point (the takeover,
+ *  or the decoder's garbage while hunting) is not glued onto it. */
+export const LOCK_BLIP_MS = 1500;
 
 export interface NavtexMessage {
   /** B1B2B3B4 as received ('_' where lost), or null when the start was lost. */
@@ -248,12 +255,15 @@ export class NavtexAssembler {
   private locked: boolean | null = null;
   /** ★ clearLive() ran and no message has finished since: LIVE is empty and the last finished message is PREV's. */
   private liveCleared = false;
+  /** ★★ The lock was lost while text was arriving: where in `seg` (the cut) and when. Decided by what follows — a relock
+   *  inside LOCK_BLIP_MS then NNNN = a blip, one message; a longer loss, or another ZCZC = the message ends at the cut. */
+  private pendingCut: { at: number; atMs: number; relocked: boolean } | null = null;
   /** Bumped on every visible change, so a UI can tell cheaply whether to redraw. */
   version = 0;
 
   reset(): void {
     this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = 0; this.lastTextAt = 0;
-    this.scanFrom = 0; this.finished = []; this.liveCleared = false; this.locked = null; this.version++;
+    this.scanFrom = 0; this.finished = []; this.liveCleared = false; this.locked = null; this.pendingCut = null; this.version++;
   }
 
   /** ★★ CLR, and a RETUNE (NickB, 2026-10-12: "changing from 518 to 490 when it's mid way through a message so it gets
@@ -264,7 +274,7 @@ export class NavtexAssembler {
    *  sends the picture to PREV. reset() is the other thing — a fresh box (open / close / switch), nothing kept. */
   clearLive(): void {
     this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = 0; this.lastTextAt = 0;
-    this.scanFrom = 0; this.liveCleared = this.finished.length > 0; this.locked = null; this.version++;
+    this.scanFrom = 0; this.liveCleared = this.finished.length > 0; this.locked = null; this.pendingCut = null; this.version++;
   }
 
   /** Feed decoded characters as they arrive. */
@@ -279,6 +289,8 @@ export class NavtexAssembler {
 
   /** Close a message whose NNNN never came, once the station has been quiet for NAVTEX_END_LOST_MS. */
   tick(nowMs: number): boolean {
+    // ★ A lock lost and not regained within LOCK_BLIP_MS: the message ends where it was lost.
+    if (this.pendingCut && !this.pendingCut.relocked && this.locked === false && nowMs - this.pendingCut.atMs >= LOCK_BLIP_MS) return this.closeAtCut(nowMs);
     if (!this.lastTextAt || nowMs - this.lastTextAt < NAVTEX_END_LOST_MS) return false;
     const cur = this.current();
     if (!cur) return false;
@@ -301,11 +313,31 @@ export class NavtexAssembler {
   lockState(state: number, nowMs: number): boolean {
     const was = this.locked;
     this.locked = state >= 3;
-    if (!was || this.locked) return false;
-    // The text so far is one transmission's: a message closes [end lost], an orphan of real text becomes its own
-    // "[start lost] … [end lost]" fragment, and a few characters of noise are dropped rather than glued to the next.
+    if (was && !this.locked) {
+      // ★★ Not closed yet — see LOCK_BLIP_MS. A few characters of noise with no message open are dropped at once.
+      // ★ A later loss after a blip moves the cut: the blip's text is the message's.
+      if (this.inMsg || alnum(this.seg) >= ORPHAN_MIN_ALNUM) { if (!this.pendingCut || this.pendingCut.relocked) this.pendingCut = { at: this.seg.length, atMs: nowMs, relocked: false }; return false; }
+      this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = nowMs; this.scanFrom = 0;
+      this.version++;
+      return false;
+    }
+    // Relocked: after a LONG loss the message ends at the cut (a takeover, a fade); after a blip it carries on.
+    if (!was && this.locked && this.pendingCut && !this.pendingCut.relocked) {
+      if (nowMs - this.pendingCut.atMs >= LOCK_BLIP_MS) return this.closeAtCut(nowMs);
+      this.pendingCut.relocked = true;          // ★ a blip — but the cut is kept until the next boundary: a ZCZC still ends it there
+    }
+    return false;
+  }
+
+  /** The text up to the lock loss is one transmission's: a message closes [end lost], an orphan of real text becomes its
+   *  own "[start lost] … [end lost]" fragment; what came after the cut (hunting garbage) is dropped. */
+  private closeAtCut(nowMs: number): boolean {
+    const cut = this.pendingCut;
+    this.pendingCut = null;
+    if (!cut) return false;
+    const body = this.seg.slice(0, cut.at);
     let closed = false;
-    if (this.inMsg || alnum(this.seg) >= ORPHAN_MIN_ALNUM) { this.finish(this.build(this.seg, true, true)); closed = true; }
+    if (this.inMsg || alnum(body) >= ORPHAN_MIN_ALNUM) { this.finish(this.build(body, true, true)); closed = true; }
     this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = nowMs; this.scanFrom = 0;
     this.version++;
     return closed;
@@ -384,7 +416,11 @@ export class NavtexAssembler {
         this.scanFrom = waitAt >= 0 ? waitAt : Math.max(0, this.seg.length - 3);
         return;
       }
-      const before = this.seg.slice(0, found.at);
+      // ★ A lock lost earlier in this segment: a NEW HEADER means it was a takeover — the message ends at the cut, and the
+      //   text between the cut and this header is dropped. NNNN means it was a blip — one message, carried on.
+      const cutAt = this.pendingCut && found.kind === 'hdr' ? this.pendingCut.at : -1;
+      this.pendingCut = null;
+      const before = this.seg.slice(0, cutAt >= 0 ? Math.min(cutAt, found.at) : found.at);
       if (found.kind === 'end') {
         // NNNN: the message (or a "[start lost]" fragment, if it holds real text) is complete.
         if (this.inMsg || alnum(before) >= ORPHAN_MIN_ALNUM) this.finish(this.build(before, true, false));

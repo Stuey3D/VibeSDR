@@ -82,7 +82,7 @@ const gdir = path.join(dir, 'data', 'gallery');
 fs.mkdirSync(gdir);
 fs.writeFileSync(path.join(gdir, '20261022-230000-navtex-518k0-abcd.txt'), 'NAVTEX · Station G · Met warning · #98\n\nZCZC GB98\nGALE WARNING\nNNNN\n');
 fs.writeFileSync(path.join(gdir, 'index.jsonl'), JSON.stringify({ f: '20261022-230000-navtex-518k0-abcd.txt', k: 'navtex', o: 'background', t: 1761174000,
-  hz: 517500, m: 'usb', d: 'navtex', p: 'Profile 1', r: 'Test radio', title: 'Station G · Met warning · #98' }) + '\n');
+  hz: 517500, m: 'usb', d: 'navtex', p: 'Profile 1', r: 'Test radio bgdec-test', title: 'Station G · Met warning · #98' }) + '\n');   // ★ an older build wrote the serial
 fs.writeFileSync(path.join(gdir, 'secret.txt'), 'not in the index');
 fs.writeFileSync(path.join(dir, 'data', 'config-copy.json'), 'outside the gallery');
 const clock = path.join(dir, 'clock');
@@ -165,6 +165,7 @@ try {
   const g = await fetch(`${H}/vibeserver/gallery.json`).then((r) => r.json());
   ok(g.enabled === true && g.items?.length === 1 && g.items[0].title === 'Station G · Met warning · #98' && g.items[0].o === 'background',
      `listed: ${g.items?.length} item, enabled, labelled background (${JSON.stringify(g.items?.[0] || {}).slice(0, 120)}…)`);
+  ok(!JSON.stringify(g).includes('bgdec-test') && g.items[0].r === 'Test radio', `★ the radio's SERIAL is nowhere in gallery.json, even on an item stored with it (r: "${g.items[0]?.r}")`);
   ok(g.limitBytes === 50 * 1024 * 1024, `the owner's size reached the server (${g.limitBytes} bytes = 50 MB)`);
   const one = await fetch(`${H}/vibeserver/gallery/file/20261022-230000-navtex-518k0-abcd.txt`);
   const body = await one.text();

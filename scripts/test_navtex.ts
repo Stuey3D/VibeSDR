@@ -204,6 +204,29 @@ for (const bad of ['Z__C GB98', 'ZC C GB98', 'ZCZC ____', 'ZCZC _ _9', 'ZCZE GB9
   ok(b.tick(T0 + 10 * NAVTEX_END_LOST_MS) === false, 'no [end lost] tick after a clear');
 }
 
+// 11b. ★★ A BLIP IS NOT AN END (NickB's 490 kHz overnight, 2026-10-22: one clean message came out as "[end lost]" and five
+//      "[start lost]" pieces — the decoder resynced on weak patches and relocked within a second each time).
+{
+  const a = new NavtexAssembler();
+  a.lockState(3, T0);
+  let t = feed(a, 'ZCZC BA09\r\r\n070825 UTC OCT\r\r\nOOSTENDERADIO LOKAAL BERICHT LB013/26\r\r\n', 4);
+  for (let k = 0; k < 4; k++) {                                // four resyncs, each relocked in under a second
+    a.lockState(1, t); a.lockState(3, t + 800); t += 900;
+    t = feed(a, `KUSTROUTE DEEL ${k} BIJZONDERE MARKERINGSBOEI\r\r\n`, 4, t);
+  }
+  t = feed(a, 'NNNN\r\r\n', 4, t);
+  const m = a.live!;
+  ok(m.id === 'BA09' && m.done && !m.endLost && !m.startLost && a.prev === null, '★ four blips mid-message: still ONE message, ZCZC to NNNN');
+  ok(m.text.includes('DEEL 0') && m.text.includes('DEEL 3'), '...with all of its text');
+  // And a lock lost for good mid-message ends it at the cut once LOCK_BLIP_MS has passed (tick), not 75 s later.
+  const b = new NavtexAssembler();
+  b.lockState(3, T0);
+  let u = feed(b, 'ZCZC GA01\r\r\nHALF A MESSAGE', 4);
+  b.lockState(1, u);
+  ok(!b.tick(u + 1000) && b.receiving, 'lost 1 s: still open (it may be a blip)');
+  ok(b.tick(u + 1600) && b.live?.endLost && b.live.text === 'HALF A MESSAGE', 'lost 1.6 s: closed [end lost] at the cut');
+}
+
 // 12. ★★ CO-CHANNEL TAKEOVER on one frequency (NickB, 2026-10-12, 490 kHz: E transmitting, C comes up on top with a
 //     short message and drops, E is decoded again — "the remainder of E got assigned to C until the next E message").
 const E1 = 'ZCZC EA12\r\r\nFRENCH NAV WARNING 412 ROUTE IROISE\r\r\nBUOY UNLIT IN POSITI';
@@ -226,15 +249,17 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   const a = new NavtexAssembler();
   a.lockState(3, T0);
   let t = feed(a, E1, 4);
-  ok(a.lockState(1, t), 'takeover: the lock lost closes E');
-  ok(a.live?.id === 'EA12' && a.live.endLost && a.live.done && a.live.text.endsWith('POSITI'), 'E [end lost], its text as far as it came');
+  // ★★ 2026-10-22: a lock lost no longer closes AT ONCE (a one-second resync split NickB's clean messages) — the CUT is
+  //    remembered, and C's own ZCZC (or a loss longer than LOCK_BLIP_MS) ends E there.
+  ok(!a.lockState(1, t) && a.receiving, 'takeover: the lock lost — E is held open at the cut, not closed yet');
   t = feed(a, 'X_Q', 1, t);                                   // a few characters of garbage while it hunts
   a.lockState(3, t);
   t = feed(a, 'ZCZC CB01\r\r\nGALE WARNING SOLE SEVERE GALE 9 IMMINENT\r\r\nFITZRO', 4, t);
-  ok(a.live?.id === 'CB01' && !a.live.done && a.prev?.id === 'EA12', 'C arriving, E under PREV, the garbage dropped');
-  ok(a.lockState(0, t), 'fade: the lock lost closes C');
+  ok(a.prev?.id === 'EA12' && a.prev.endLost && a.prev.done && a.prev.text.endsWith('POSITI'), "C's ZCZC ends E at the cut: [end lost], its text as far as it came");
+  ok(a.live?.id === 'CB01' && !a.live.done && a.prev?.id === 'EA12' && !a.prev.text.includes('X_Q'), 'C arriving, E under PREV, the garbage dropped');
+  ok(!a.lockState(0, t), 'fade: the lock lost — C held open at the cut');
+  ok(a.lockState(3, t + 2000), '...relocked 2 s later (longer than a blip): C closes at the cut');
   ok(a.live?.id === 'CB01' && a.live.endLost && a.live.text.endsWith('FITZRO'), 'C [end lost], only its own text');
-  a.lockState(3, t + 2000);
   feed(a, E2, 4, t + 2000);
   const m = a.live!;
   ok(m.startLost && m.id === null && m.text.startsWith('ON 48-20N'), "E's remainder is [start lost], not C: " + JSON.stringify(m.text.slice(0, 20)));

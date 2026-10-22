@@ -175,21 +175,41 @@ static void navtexAsm() {
     std::printf("── NAVTEX messages (src/utils/navtex.ts, ported) ──\n");
     gallery::NavtexAsm a; std::vector<gallery::NavtexMsg> got;
     a.onMessage = [&](const gallery::NavtexMsg& m) { got.push_back(m); };
-    a.push("ZCZC GB9", 100); a.push("8\r\nGALE WARNING\r\nNN", 101); a.push("NN\r\n", 102);
+    a.push("ZCZC GB9", 100000); a.push("8\r\nGALE WARNING\r\nNN", 101000); a.push("NN\r\n", 102000);
     ok(got.size() == 1 && got[0].id == "GB98" && got[0].text == "GALE WARNING" && !got[0].endLost && got[0].startedAt == 101,
        "a message split across chunks: one, id GB98, text exact");
     ok(gallery::NavtexAsm::title(got[0]).find("Station G") == 0 && gallery::NavtexAsm::title(got[0]).find("Met warning") != std::string::npos, "titled as the box titles it");
     got.clear();
-    a.push("ZC_C EA12\r\nNAV WARNING ONE\r\nZCZC EA13\r\nSECOND\r\nNN_N\r\n", 200);
+    a.push("ZC_C EA12\r\nNAV WARNING ONE\r\nZCZC EA13\r\nSECOND\r\nNN_N\r\n", 200000);
     ok(got.size() == 2 && got[0].id == "EA12" && got[0].endLost && got[1].id == "EA13" && !got[1].endLost,
        "a damaged ZCZC still opens; a new header ends the last [end lost]; NN_N closes");
     got.clear();
-    a.push("ZCZC FA01\r\nHALF A MESSAGE THEN THE STATION FADES", 300);
-    a.tick(300 + 74); ok(got.empty(), "74 s of quiet: still arriving");
-    a.tick(300 + 76); ok(got.size() == 1 && got[0].endLost, "76 s: closed [end lost]");
+    a.push("ZCZC FA01\r\nHALF A MESSAGE THEN THE STATION FADES", 300000);
+    a.tick(300000 + 74000); ok(got.empty(), "74 s of quiet: still arriving");
+    a.tick(300000 + 76000); ok(got.size() == 1 && got[0].endLost, "76 s: closed [end lost]");
     got.clear();
-    a.push("ZCZC FA02\r\nLOCK LOST HERE", 400); a.lockState(3, 400); a.lockState(1, 401);
-    ok(got.size() == 1 && got[0].endLost && got[0].id == "FA02", "the decoder losing its lock ends the message");
+    a.push("ZCZC FA02\r\nLOCK LOST HERE", 400000); a.lockState(3, 400000); a.lockState(1, 401000);
+    a.tick(402000); ok(got.empty(), "lock lost 1 s: held open (it may be a blip)");
+    a.tick(402600);
+    ok(got.size() == 1 && got[0].endLost && got[0].id == "FA02", "lost for good (1.6 s): the message ends at the loss");
+    got.clear();
+    // ★★ THE LENOVO SPLIT (NickB, 490 kHz, 2026-10-22): a real-shaped stream — header, text, four resyncs each relocked
+    //    within a second, NNNN — is ONE message, ZCZC to NNNN.
+    {
+        gallery::NavtexAsm b; std::vector<gallery::NavtexMsg> m;
+        b.onMessage = [&](const gallery::NavtexMsg& x) { m.push_back(x); };
+        int64_t t = 500000;
+        b.lockState(3, t);
+        b.push("ZCZC BA09\r\n070825 UTC OCT\r\nOOSTENDERADIO LOKAAL BERICHT LB013/26\r\n", t += 4000);
+        for (int k = 0; k < 4; k++) {
+            b.lockState(1, t += 500); b.lockState(3, t += 800); b.tick(t += 100);
+            b.push("KUSTROUTE DEEL " + std::to_string(k) + " BIJZONDERE MARKERINGSBOEI\r\n", t += 3000);
+        }
+        b.push("NNNN\r\n", t += 1000);
+        ok(m.size() == 1 && m[0].id == "BA09" && !m[0].endLost && !m[0].startLost && m[0].text.find("DEEL 3") != std::string::npos,
+           "★ four lock blips mid-message: ONE message, ZCZC BA09 to NNNN (" + std::to_string(m.size()) + " item(s))");
+        ok(b.lockLosses() == 4, "...and the blips were seen (4 lock losses, for the log)");
+    }
 }
 
 // ── 4. the gallery ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -222,6 +242,27 @@ static void store() {
     ok(!s.resolve("notlisted.txt", p, ct), "★ a file in the folder that is NOT in the index is refused");
     ok(!s.resolve(names[0], p, ct), "an evicted item no longer resolves");
     ok(gallery::Store::freeBytesAt(s.dir()) > 0, "free space on the disk is known");
+    {   // ★★★ THE SERIAL NEVER REACHES THE GALLERY (Lenovo, 2026-10-22: "r":"SDRplay RSP1A 2235030199" on every item)
+        gallery::Store g; g.setDir(tmpDir("serial"));
+        g.setRadioLabel("SDRplay RSP1A 2235030199");                  // an older build: no redaction yet
+        gallery::Meta mm; mm.kind = "navtex"; mm.origin = "background"; mm.freqHz = 489500; mm.mode = "usb"; mm.title = "Station B";
+        const std::string old = g.add(mm, "txt", "ZCZC BA09\nNNNN\n");
+        ok(g.listJson("", 10).find("2235030199") != std::string::npos, "(an item an older build stored WITH the serial)");
+        g.setRedact({ "2235030199", "00000003" });
+        g.setRadioLabel("SDRplay RSP1A 2235030199");
+        const std::string fresh = g.add(mm, "txt", "ZCZC BA10\nNNNN\n");
+        const std::string j = g.listJson("", 10);
+        ok(j.find("2235030199") == std::string::npos && j.find("\"r\":\"SDRplay RSP1A\"") != std::string::npos,
+           "★ no serial in gallery.json — old item stripped, new item stored without it: " + j.substr(0, 160));
+        std::string idx; { FILE* f = std::fopen((g.dir() + "/index.jsonl").c_str(), "r"); char b[4096]; size_t k; while (f && (k = std::fread(b, 1, sizeof b, f)) > 0) idx.append(b, k); if (f) std::fclose(f); }
+        ok(idx.find("2235030199") == std::string::npos, "★ ...and the index on disk was rewritten without it");
+        std::string p1, c1;
+        bool clean = true;
+        for (const auto& n : { old, fresh }) { if (n.find("2235030199") != std::string::npos) clean = false;
+            if (g.resolve(n, p1, c1)) { FILE* f = std::fopen(p1.c_str(), "r"); char b[512]; size_t k; std::string body; while (f && (k = std::fread(b, 1, sizeof b, f)) > 0) body.append(b, k); if (f) std::fclose(f); if (body.find("2235030199") != std::string::npos) clean = false; } }
+        ok(clean, "★ ...nor in any file name or served file");
+        ok(gallery::stripTokens("RTL-SDR (00000003)", { "00000003" }) == "RTL-SDR", "a serial in brackets leaves no empty brackets");
+    }
     s.setLimitBytes(0);
     ok(s.add(m, "txt", "x").empty(), "size 0 = the gallery keeps nothing");
 }
@@ -251,6 +292,40 @@ static void hostTap() {
     const std::string list = s.listJson("navtex", 10);
     ok(list.find("\"o\":\"live\"") != std::string::npos && list.find("Station G") != std::string::npos,
        "★ the message is in the gallery, labelled live: " + list.substr(0, 200));
+}
+
+// ── 5b. a real-shaped NAVTEX transmission with a short GAP mid-message: one item, ZCZC to NNNN ─────────────────────
+static void gapMidMessage() {
+    std::printf("── a short gap mid-message (a fade, a resync) does not split the message ──\n");
+    gallery::Store s; s.setDir(tmpDir("gap"));
+    DecoderHost::Env env;
+    env.dialHz = [] { return 489500.0; };
+    env.tap = [&s](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
+        gallery::Meta m; m.kind = bg::galleryKindFor(ext, msg); m.origin = "background"; m.freqHz = 489500; m.mode = "usb"; m.decoder = "navtex";
+        return bg::makeGalleryTap(s, m);
+    };
+    auto h = std::make_shared<DecoderHost>(env, "gap");
+    h->start("navtex", "{}");
+    const std::string text = "ZCZC BA09\r\n070825 UTC OCT\r\nOOSTENDERADIO LOKAAL BERICHT LB013/26\r\nKUSTROUTE DE PANNE OOSTENDE\r\n"
+                             "BIJZONDERE MARKERINGSBOEI JACHTTON ZAL WORDEN GEPLAATST OP POSITIE\r\nNNNN\r\n";
+    auto a = fskAudio(navBits(text), 100, 500, 170, +1);
+    // ★ A 0.4 s fade two-thirds of the way through (in the text, after the header): the transmitter carries on, so the
+    //   samples are SILENCED, not removed — the decoder loses characters, and the lock, and must pick the message up again.
+    const size_t cut = a.size() * 2 / 3;
+    for (size_t i = cut; i < cut + (size_t)(48000 * 0.4) && i < a.size(); i++) a[i] = 0;
+    std::vector<float> f(a.size()); for (size_t i = 0; i < a.size(); i++) f[i] = a[i] / 32768.0f;
+    for (size_t i = 0; i < f.size(); i += 4800) {
+        h->feed(&f[i], (int)std::min<size_t>(4800, f.size() - i));
+        while (h->queued() > 48000) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));    // ★ ~30× real time: the blip rule runs on the wall clock
+    }
+    while (h->queued() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    h->stop();
+    const std::string list = s.listJson("navtex", 10);
+    size_t n = 0; for (size_t at = 0; (at = list.find("\"f\":", at)) != std::string::npos; at++) n++;
+    ok(n == 1 && list.find("Station B") != std::string::npos && list.find("\"partial\":true") == std::string::npos,
+       "★ ONE item, from its header, not partial (" + std::to_string(n) + "): " + list.substr(0, 220));
 }
 
 // ── 6. end to end: IQ → channels → demodulators → decoders → gallery ────────────────────────────────────────────
@@ -443,6 +518,7 @@ int main() {
     navtexAsm();
     store();
     hostTap();
+    gapMidMessage();
     runner();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
