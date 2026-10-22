@@ -2763,7 +2763,8 @@ export abstract class VibeServerWsClient {
         this.callbacks.onHwRateNow?.(msg.rateNow);
       // ★ Whether the server's own AGC is running — see onHwAgc.
       // ★★ The server writes it as 1/0, not true/false — a boolean-only test never fired.
-      if (typeof msg.agc === 'boolean' || typeof msg.agc === 'number')
+      // ★ …and on an Icom (hwinfo `radio` parsed above) none of these generic fields means anything (contract).
+      if ((typeof msg.agc === 'boolean' || typeof msg.agc === 'number') && !this.icom)
         this.callbacks.onHwAgc?.(msg.agc === true || msg.agc === 1);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
       // >0 = the host PINNED the capture rate. The server ignores our sampleRate
@@ -2791,7 +2792,7 @@ export abstract class VibeServerWsClient {
         this.callbacks.onHwBlockedModes?.((msg.blocked as string[]).map(x => String(x).toLowerCase()));
       // ★ Only when the server actually states it — an older server has no such filter and must
       //   not be read as "wide open", which is a claim about hardware we have not been told about.
-      if (msg.tunerBw !== undefined)
+      if (msg.tunerBw !== undefined && !this.icom)
         this.callbacks.onHwTunerBw?.(Number(msg.tunerBw) || 0, msg.tunerBwAuto === true);
       // ★ The filter's manual widths, the owner's ceiling and its lock — see onHwIfPolicy. Sent
       //   beside tunerBw, so only a server that has the filter says anything here.
@@ -2857,11 +2858,13 @@ export abstract class VibeServerWsClient {
       /* ★★★ THE RADIO'S IF FILTER AND GAIN, FROM THE SAME MESSAGE AS ITS FREQUENCY AND ZOOM —
        *  the server's full state in one place (2026-09-22). hwinfo still carries them for older
        *  servers; these fields are absent there, so nothing changes against one. */
-      if (typeof msg.ifBw === 'number')
+      // ★ An Icom has no IF filter, gain table or VibeAGC of ours — the generic fields still ride the config and
+      //   MEAN NOTHING there (contract), so they must not paint "IF wide" / a gain on the readout.
+      if (typeof msg.ifBw === 'number' && !this.icom && msg.icom !== true)
         this.callbacks.onHwTunerBw?.(msg.ifBw, msg.ifAuto === true);
-      if (typeof msg.gainNow === 'number' && msg.gainNow >= 0)
+      if (typeof msg.gainNow === 'number' && msg.gainNow >= 0 && !this.icom && msg.icom !== true)
         this.callbacks.onHwGainNow?.(msg.gainNow);
-      if (typeof msg.agc === 'number' || typeof msg.agc === 'boolean')
+      if ((typeof msg.agc === 'number' || typeof msg.agc === 'boolean') && !this.icom && msg.icom !== true)
         this.callbacks.onHwAgc?.(msg.agc === true || msg.agc === 1);      // Local hardware advertises its full span here → cap zoom-out to it.
       if (typeof msg.maxBandwidth === 'number') this.maxSpanHz = msg.maxBandwidth;
       if (typeof msg.centerFreq   === 'number') this.status.centerHz     = msg.centerFreq;

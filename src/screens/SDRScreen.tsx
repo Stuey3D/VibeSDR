@@ -6288,6 +6288,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         setRadioCaps(caps);
         // ★ A radio that is not an Icom has no Icom status: drop a stale one (a server whose radio changed).
         if (!isIcom(caps)) { icomDbmRef.current = null; icomLiveKey.current = ''; setIcomLive(null); }
+        else {
+          // ★ An Icom: no IF filter / gain / VibeAGC of ours to report — clear anything an earlier hwinfo painted.
+          const b = meterBus.current;
+          if (b && (b.value.ifText || b.value.agcText)) b.emit({ ...b.value, ifText: '', agcText: '' });
+        }
         /* ★ ADOPT THE AIRSPY'S OWN STATE. Every one of these rides on the caps the engine sends
          *  with hwinfo, so the panel opens showing the radio rather than a default we invented. */
         if (caps.driver === 'airspy') {
