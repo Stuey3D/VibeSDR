@@ -4266,6 +4266,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [adminOk,  setAdminOk]  = useState(false);
   /** ★ Read by the watch's Icom refusal notice (onRefused), which runs outside a render. */
   const adminOkRef = useRef(adminOk); adminOkRef.current = adminOk;
+  // ★ The Icom listener note (icomNoteSeen) also clears itself after 15 s: a pad or a TV remote has no way to tap its ×, and it would otherwise cover the
+  //   top of the screen all evening. The same note stays in the radio panel under the cog.
+  const icomNoteShowing = !!icom && !!icomFollowNote(icom, adminOk) && !icomNoteSeen;
+  useEffect(() => {
+    if (!icomNoteShowing) return;
+    const t = setTimeout(() => setIcomNoteSeen(true), 15000);
+    return () => clearTimeout(t);
+  }, [icomNoteShowing]);
   /* ★★★ AN ICOM, TOLD TO BUDDY (the watch remote): the radio's mode names, FIL1/2/3, the banner and the owner-lock
    *  verdict, decided ONCE in icomRadio.icomWatchState. Every other radio sends null, which clears the wrist. */
   useEffect(() => { watchProvider.sendIcom(icomWatchState(icom, adminOk)); }, [icom, adminOk]);
@@ -11964,9 +11972,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★★ "Listeners follow the radio": a listener under the owner lock is told ONCE per connection why the dial
           will not move for them — dismissible like the owner's notice, because it is true all evening. */}
       {!icomBanner(icom) && !!icomFollowNote(icom, adminOk) && !icomNoteSeen && !dialHint && (
+        // nav-skip: a passing notice, not a control — it clears itself after 15 s (icomNoteShowing), so a pad never needs it
         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Dismiss" onPress={() => setIcomNoteSeen(true)}
           style={[styles.ownerNotice, { top: insets.top + 8 + (ownerNotice && ownerNotice !== noticeSeen ? 56 : 0) }]}>
           <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={2}>{icomFollowNote(icom, adminOk)}</Text>
+          {/* nav-skip: the same notice's × (touch only); it clears itself after 15 s */}
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Dismiss" hitSlop={8}
             onPress={() => setIcomNoteSeen(true)} style={styles.ownerNoticeX}>
             <Text style={styles.ownerNoticeXTxt}>×</Text>

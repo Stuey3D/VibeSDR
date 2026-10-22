@@ -1751,6 +1751,9 @@ function IcomSection({ icom, admin, onControl, slot, styles, K, setup }: {
   K: { gold: string; abtn: string; fill: string }; setup?: React.ReactNode;
 }) {
   const send = (f: IcomControlFields) => onControl?.(f);
+  const focusC = useNavFocus();
+  const kbNav = useKeyboardMode();
+  const slotRing = (on: boolean) => on && kbNav && { borderColor: focusC.ring, borderWidth: 2, borderRadius: 8 };
   const mayTune = icomMayTune(icom, admin);
   const mayRf = icomMayRf(icom, admin);
   const widths = icomFilterWidths(icom);
@@ -1822,12 +1825,24 @@ function IcomSection({ icom, admin, onControl, slot, styles, K, setup }: {
       {icom.rfGain && (<>
         <Text style={styles.fieldLbl}>RF gain</Text>
         <View style={styles.sliderRow}>
-          <Slider style={{ flex: 1, height: 40 }}
-                  minimumValue={icom.rfGain[0]} maximumValue={icom.rfGain[1]} step={1}
+          {/* ★ A pad cannot drag a slider: − / + are its slots (a tenth of the range a press), the slider stays for touch. */}
+          {(() => {
+            const [lo, hi] = icom.rfGain!;
+            const stepBy = (d: number) => send({ rfGain: Math.max(lo, Math.min(hi, rfNow + d * Math.max(1, Math.round((hi - lo) / 10)))) });
+            return (<>
+              <TouchableOpacity style={[styles.stepBtn, slotRing(slot(() => stepBy(-1)))]} onPress={() => stepBy(-1)}>
+                <Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+              {/* nav-skip: touch-only drag; the − / + beside it are the pad's slots */}
+              <Slider style={{ flex: 1, height: 40 }}
+                  minimumValue={lo} maximumValue={hi} step={1}
                   value={rfNow}
                   onValueChange={(v: number) => setRfDrag(Math.round(v))}
                   onSlidingComplete={(v: number) => { setRfDrag(null); send({ rfGain: Math.round(v) }); }}
                   minimumTrackTintColor={K.fill} maximumTrackTintColor="#444" thumbTintColor={K.gold} />
+              <TouchableOpacity style={[styles.stepBtn, slotRing(slot(() => stepBy(1)))]} onPress={() => stepBy(1)}>
+                <Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+            </>);
+          })()}
           <Text style={styles.sliderEnd}>{rfGainPct(rfNow, icom.rfGain)}%</Text>
         </View>
       </>)}
@@ -1835,8 +1850,9 @@ function IcomSection({ icom, admin, onControl, slot, styles, K, setup }: {
         <Text style={styles.fieldLbl}>The radio&rsquo;s noise controls</Text>
         {([['nb', 'NB', icom.nb, icom.nbNow], ['nr', 'NR', icom.nr, icom.nrNow], ['anf', 'ANF', icom.anf, icom.anfNow]] as const)
           .filter(([, , has]) => has).map(([k, label, , now]) => (
-            <View key={k} style={styles.toggleRow}>
+            <View key={k} style={[styles.toggleRow, slotRing(slot(() => send({ [k]: !now } as IcomControlFields)))]}>
               <Text style={styles.toggleLabel}>{label}</Text>
+              {/* nav-registered: the row above is this switch's slot (Enter toggles), ring on the row */}
               <Switch value={now} onValueChange={(v) => send({ [k]: v } as IcomControlFields)}
                       trackColor={{ true: K.abtn, false: '#444' }} thumbColor={now ? K.gold : '#ccc'} />
             </View>
