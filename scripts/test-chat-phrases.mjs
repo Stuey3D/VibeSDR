@@ -24,16 +24,20 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
 
 // ── (1) the five lists ──
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
-const idsTs = (f) => [...read(f).matchAll(/\{ id: '([a-z0-9_]+)',\s*text:/g)].map((m) => m[1]);
-const idsSwift = (f) => { const t = read(f); const s = t.indexOf('static let all', t.indexOf('enum CannedDial')); const e = t.indexOf('\n  ]', s);   // ★ not the first ']' — the type [(id: String, text: String)] has one
+// ★★ Since 2026-10-22 the words come from i18n/chat/*.json (scripts/gen-chat-phrases.mjs): the ids in order are
+//    phrases.json; the app and the browser read them from the generated TS, each watch from its generated table.
+const idsJson = () => JSON.parse(read('i18n/chat/phrases.json')).phrases.map((p) => p.id);
+const idsTs = (f) => { const t = read(f); const s = t.indexOf('CHAT_PHRASE_META'); const e = t.indexOf('\n];', s);
+  return [...t.slice(s, e).matchAll(/\{id: '([a-z0-9_]+)'/g)].map((m) => m[1]); };
+const idsSwift = (f) => { const t = read(f); const s = t.indexOf('static let en: [(id: String, text: String)] = [', t.indexOf('enum ChatWords')); const e = t.indexOf('\n  ]', s);   // ★ not the first ']' — the type [(id: String, text: String)] has one
   return [...t.slice(s, e).matchAll(/\("([a-z0-9_]+)",/g)].map((m) => m[1]); };
 const idsServer = () => { const t = read('android/app/src/main/cpp/local_sdr_shim.cpp');
   const s = t.indexOf('chatPhrases() {'); const e = t.indexOf('};', s);
   return [...t.slice(s, e).matchAll(/^\s*"([a-z0-9_]+)",/gm)].map((m) => m[1]).filter((i) => i !== 'check_out'); };
 const lists = {
   server: idsServer(),
-  app: idsTs('src/services/dialChat.ts'),
-  web: idsTs('web/client/src/chat.ts'),
+  'i18n/chat/phrases.json': idsJson(),
+  'app + web (chatWords.generated.ts)': idsTs('src/services/chatWords.generated.ts'),
   'watch (Buddy)': idsSwift('ios/VibeSDRWatch/Chat.swift'),
   'watch (Jr)': idsSwift('spike/WristSDR/WristSDR/Chat.swift'),
 };
@@ -91,7 +95,9 @@ for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
 const rtlPort = await freePort(), port = await freePort();
 const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2048000'], { stdio: 'ignore' });
 await sleep(300);
-const env = { ...process.env, VIBESERVER_HANDLE_HOLD_SEC: '6', VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
+// ★ VIBE_TEST_GEOIP: loopback "is" in Brazil, so each listener's own country can be seen reaching its own dial (the chat's
+//   language, 2026-10-22). Loopback has no country in the real data — which is what a LAN listener gets: no cc at all.
+const env = { ...process.env, VIBE_TEST_GEOIP: '127.0.0.1=BR', VIBESERVER_HANDLE_HOLD_SEC: '6', VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
               VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const logPath = path.join(dir, 'server.log');
 const log = fs.openSync(logPath, 'w');
@@ -110,6 +116,10 @@ try {
   const b = ws(port, `/ws/user-spectrum?user_session_id=bbbbbbbb&bins=256`);
   await sleep(800);
   const heard = () => b.txt.filter((t) => t.includes('"type":"said"')).map((t) => JSON.parse(t).id);
+  // ★★ THE LISTENER'S COUNTRY GOES TO THAT LISTENER, IN ITS OWN DIAL — never in anything the room shares.
+  const dials = (st) => st.txt.filter((t) => t.includes('"type":"dial"')).map((t) => JSON.parse(t));
+  ok(dials(a).length > 0 && dials(a).every((d) => d.cc === 'BR') && dials(b).every((d) => d.cc === 'BR'),
+     `each listener's own dial carries its own country (${dials(a).map((d) => d.cc).join(',')})`);
   let missing = [];
   for (const id of lists.server) {
     const before = heard().length;
@@ -118,6 +128,7 @@ try {
     if (heard().length === before || heard()[heard().length - 1] !== id) missing.push(id);
     await sleep(3100);                                           // the server's flood control: one line per 3 s
   }
+  ok(b.txt.filter((t) => t.includes('"type":"said"')).every((t) => !/"cc"/.test(t)), 'a chat line the room shares carries no country');
   ok(missing.length === 0, `★ every one of the ${lists.server.length} phrases reached the other listener${missing.length ? ' — not: ' + missing.join(' ') : ''}`);
   const before = heard().length;
   a.send({ type: 'say', id: 'free text <b>hi</b>' });

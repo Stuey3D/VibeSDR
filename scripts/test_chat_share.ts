@@ -160,8 +160,9 @@ ok('summary', shareSummary(shareDab('12B', 0xc0d2)!) === 'DAB 12B (225.648 MHz) 
   const drawer = readFileSync(new URL('../src/components/ChatDrawer.tsx', import.meta.url), 'utf8');
   const screen = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
   const web = readFileSync(new URL('../web/client/src/chat.ts', import.meta.url), 'utf8');
-  ok('ChatDrawer: Check out [Bookmark] [Manual] in canned mode', /Check out/.test(drawer) && /isCanned && shareEnabled/.test(drawer)
-     && /'📻 Bookmark'/.test(drawer) && /Manual/.test(drawer));
+  // ★ The words are the chat's language since 2026-10-22 (dialChat chatT — i18n/chat/*.json).
+  ok('ChatDrawer: Check out [Bookmark] [Manual] in canned mode', /chatT\('checkOut'\)/.test(drawer) && /isCanned && shareEnabled/.test(drawer)
+     && /`📻 \$\{chatT\('bookmark'\)\}`/.test(drawer) && /chatT\('manual'\)/.test(drawer));
   ok('ChatDrawer: Manual sends what shareFromManual built', /shareFromManual\(manualVal, manualUnit, manualMode\)/.test(drawer));
   ok('ChatDrawer: TUNE on a shared line calls onShareTune', /onShareTune\?\.\(m\.share!?\)/.test(drawer));
   ok('SDRScreen: the pick is built by chatShare', /const out = shareFromBookmark\(b\)/.test(screen));

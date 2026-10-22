@@ -425,6 +425,11 @@ if node --no-warnings scripts/test_dial_answers.ts; then pass=$((pass+1)); else 
 # ★★★ ASK BEFORE TUNING, the clients' half (2026-10-21): the lock is READ from the dial message (an old server's silence
 #     = not locked), the banner says what to do and never runs wider, and app + web gate every tuning send on it.
 if node --no-warnings scripts/test_ask_before_tuning.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE CANNED CHAT IN EVERY LANGUAGE (2026-10-22): i18n/chat/*.json → the app, the browser and both watches through
+#     scripts/gen-chat-phrases.mjs (stale output fails here); every language has every id and fits English's widths (the
+#     banner's 28, the shared-tuner banner, the watch); the choice order picked > device > country > English; the menu; and
+#     the server telling each listener only its own country.
+if node --no-warnings scripts/test_chat_i18n.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ The room's passband on a shared dial (2026-10-17): the web client adopts it from config and sends nothing;
 #     the app and Jr read the same fields. The server half is test-room-passband.cpp above.
 if node --no-warnings scripts/test_room_passband.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
