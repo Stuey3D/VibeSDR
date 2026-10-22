@@ -179,8 +179,17 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     private fun isAirspy(dev: UsbDevice): Boolean =
         dev.vendorId == AIRSPY_VID && dev.productId == AIRSPY_PID
 
-    /** Any radio we can open directly over USB. */
-    private fun isSupportedRadio(dev: UsbDevice): Boolean = isServableRadio(dev.vendorId, dev.productId)
+    /** ★★★ An Icom transceiver, RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md Phase 4) — its CP210x (or Icom-VID port) whose
+     *  product or serial string names a model the engine supports. A bare CP2102 is never called an Icom. See VibeIcom. */
+    private fun isIcom(dev: UsbDevice): Boolean = VibeIcom.isIcom(dev)
+
+    /** Any radio we can open directly over USB — and that a SERVER can run (an Icom included). */
+    private fun isSupportedRadio(dev: UsbDevice): Boolean = isServableRadio(dev.vendorId, dev.productId) || isIcom(dev)
+
+    /** ★ What LOCAL listening opens: every radio but an Icom. An Icom's audio needs the server's microphone-type
+     *  foreground service and the permission flow that only the server start has, so it is served (and listened to
+     *  through the server), not opened as a local radio — plan Phase 4, Open for Stuart. */
+    private fun isLocalRadio(dev: UsbDevice): Boolean = isServableRadio(dev.vendorId, dev.productId) && !VibeIcom.isCandidate(dev)
 
     private fun describe(dev: UsbDevice, hasPermission: Boolean): WritableMap {
         val m = Arguments.createMap()
@@ -206,6 +215,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
          * has three stages and no AGC. Adding a driver means revisiting every else-branch that
          * assumed there were only two. */
         m.putString("kind", when {
+            isIcom(dev)     -> "icom"       // ★ before the else: a CP2102 is not a dongle
             isRsp(dev)      -> "sdrplay"
             isAirspyHf(dev) -> "airspyhf"
             isAirspy(dev)   -> "airspy"
@@ -516,7 +526,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                 }
                 if (known) { promise.resolve("{\"ok\":true,\"known\":true,\"services\":[]}"); return@Thread }
                 val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return@Thread }
-                val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
+                val dev = mgr.deviceList.values.firstOrNull { isLocalRadio(it)   /* ★ IQ radios only — never an Icom's CP2102 */ }
                     ?: run { promise.reject("no_device", "No SDR found — plug the radio in to scan"); return@Thread }
                 if (!mgr.hasPermission(dev)) {
                     promise.reject("no_permission", "Allow this app to use the radio (start the server once), then scan again")
@@ -677,7 +687,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun openAndProbe(promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isLocalRadio(it)   /* ★ IQ radios only — never an Icom's CP2102 */ }
             ?: run { promise.reject("no_device", "No SDR found"); return }
 
         if (mgr.hasPermission(dev)) {
@@ -764,8 +774,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startSpectrum(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
-            ?: run { promise.reject("no_device", "No SDR found"); return }
+        val dev = mgr.deviceList.values.firstOrNull { isLocalRadio(it) }
+            ?: run {
+                promise.reject("no_device",
+                    if (mgr.deviceList.values.any { isIcom(it) }) "An Icom is shared through VibeServer — start the server and listen to it there"
+                    else "No SDR found")
+                return
+            }
         if (!mgr.hasPermission(dev)) {
             // Reuse the permission flow, then retry once granted.
             openAndProbeThen(mgr, dev, promise) { startSpectrumNow(mgr, dev, opts, promise) }
@@ -884,9 +899,17 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun startVibeServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
         val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
+            ?: mgr.deviceList.values.firstOrNull { VibeIcom.unconfirmed(mgr, it) }   // ★ an Icom Android will not name yet
             ?: run { promise.reject("no_device", "No SDR found"); return }
         if (!mgr.hasPermission(dev)) {
-            openAndProbeThen(mgr, dev, promise) { startVibeServerNow(mgr, dev, opts, promise) }
+            openAndProbeThen(mgr, dev, promise) {
+                /* ★★ A CP2102 IS ONLY AN ICOM ONCE ITS SERIAL SAYS SO — readable now the owner has granted it (Android
+                 *    10+ hides it until then). Not one: say so plainly and touch nothing; it is somebody's GPS. */
+                if (VibeIcom.isCandidate(dev) && !isIcom(dev))
+                    promise.reject("not_icom", "That USB serial device is not an Icom radio VibeServer supports " +
+                        "(it says \"${VibeIcom.serialOf(dev) ?: dev.productName ?: "nothing"}\") — it was not used")
+                else startVibeServerNow(mgr, dev, opts, promise)
+            }
             return
         }
         startVibeServerNow(mgr, dev, opts, promise)
@@ -951,6 +974,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
         // ★ Before start: the engine cannot read the descriptor on an fd-open. See usbModelName().
         VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
+        // ★★★ An Icom: the owner's CI-V settings first, then the SAME start every radio takes (start() routes it).
+        if (isIcom(dev)) VibeIcom.prepareStart(cfg, dev)
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId,
                                                 reactContext.filesDir, serveOnLan = true,
                                                 keepRadioAlive = VibeServerBoot.keepRadioAlive(reactContext, cfg))
@@ -1001,6 +1026,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             VibeLocalSDR.startMdns(hostSlug(name), ip)
         }
         RtlTcpServerService.start(reactContext, name, ip, port, "vibeserver")
+        /* ★★★ AN ICOM'S AUDIO — recorded by the app, so started here, with the app in front (Android's while-in-use
+         *     rule). The microphone permission is asked for NOW, only now, with a plain explanation first; refused,
+         *     the dial and waterfall still serve and hwinfo says why there is no audio. */
+        if (isIcom(dev)) {
+            VibeIcom.onServerStarted(reactContext)
+            VibeIcom.askForMicIfNeeded(reactContext.currentActivity, reactContext)
+        }
         // Remember the live config so the service can rebuild the shim if the process
         // dies under it (START_STICKY brings the service back, but not the radio).
         if (autoRestore) {
@@ -1068,6 +1100,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     private fun radioModelName(dev: android.hardware.usb.UsbDevice): String {
         val product = (dev.productName ?: "").trim()
         val maker = (dev.manufacturerName ?: "").trim()
+        // ★ An Icom is named by its model, never by the CP2102 it talks through ("Silicon Labs CP2102 USB to UART…").
+        VibeIcom.identify(dev)?.let { return "Icom $it" }
         val fallback = when {
             isRsp(dev)      -> VibeRsp.modelName(dev.productId)
             isAirspyHf(dev) -> "Airspy HF+"
@@ -1084,8 +1118,20 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun getConnectedRadio(promise: Promise) {
         val mgr = usbManager ?: run { promise.resolve(null); return }
         val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
+            ?: mgr.deviceList.values.firstOrNull { VibeIcom.unconfirmed(mgr, it) }
             ?: run { promise.resolve(null); return }
         val res = Arguments.createMap()
+        /* ★★★ AN ICOM, OR MAYBE ONE. `icomConfirmed` false = a CP210x Android will not identify until the owner grants it
+         *     (Android 10+ hides its serial): the screen should say "an Icom? press Start and allow it", and Start checks
+         *     before it uses it. ★ "icom" before the else — a CP2102 is not a dongle ("else means dongle"). */
+        if (VibeIcom.isCandidate(dev)) {
+            res.putString("driver", "icom")
+            res.putBoolean("icomConfirmed", isIcom(dev))
+            res.putString("model", if (isIcom(dev)) radioModelName(dev) else "Icom radio? (USB serial — press Start and allow it to check)")
+            res.putBoolean("micPermission", VibeIcom.hasMicPermission(reactContext))
+            promise.resolve(res)
+            return
+        }
         res.putString("driver", when {
             isRsp(dev)      -> "sdrplay"    // ★ the same name every VibeServer reports for an RSP
             isAirspyHf(dev) -> "airspyhf"
@@ -1101,6 +1147,28 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         //    left alone, or an Airspy would come out "Airspy Airspy HF+".
         res.putString("model", radioModelName(dev))
         promise.resolve(res)
+    }
+
+    /** ★★★ THE ICOM'S SETUP FACTS for the server screen — JSON (VibeIcom.facts): the engine's own hwinfo `radio`
+     *  (model, CI-V address, baud, transport, linesHeldLow, the preflight with each menu item and where it is, audio and
+     *  audioProblem) plus what only Android knows (micPermission, audioRunning, audioDevice). "{}"-shaped with only the
+     *  Android half when no Icom server is running. Read-only; nothing is opened. */
+    @ReactMethod
+    fun icomSetup(promise: Promise) {
+        try { promise.resolve(VibeIcom.facts(reactContext).toString()) }
+        catch (t: Throwable) { promise.reject("icom_setup", t.message ?: "$t") }
+    }
+
+    /** ★ The owner tapped "allow the radio's audio" on the setup card — the same explained ask as at Start. Does
+     *  nothing unless an Icom is being served. */
+    @ReactMethod
+    fun icomAskForAudio() {
+        if (!VibeIcom.serving()) return
+        VibeIcom.askForMicIfNeeded(reactContext.currentActivity, reactContext)
+        if (VibeIcom.hasMicPermission(reactContext)) {
+            RtlTcpServerService.wantMicrophone(reactContext)
+            IcomAudio.startIfPossible(reactContext)
+        }
     }
 
     @ReactMethod
@@ -1275,7 +1343,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
-        val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
+        val dev = mgr.deviceList.values.firstOrNull { isLocalRadio(it)   /* ★ IQ radios only — never an Icom's CP2102 */ }
             ?: run { promise.reject("no_device", "No SDR found"); return }
         if (!mgr.hasPermission(dev)) {
             openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(mgr, dev, opts, promise) }
@@ -1512,6 +1580,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // ★ The cost is that teardown now blocks its caller. The user-facing @ReactMethod hands
         // this to a background thread so the bridge never stalls; the internal callers WANT to
         // wait, because every one of them is about to touch the device again.
+        // ★ An Icom's AudioRecord thread stops pushing BEFORE the source it pushes into is torn down.
+        VibeIcom.onServerStopping()
         try { VibeLocalSDR.stopSpectrumSync() } catch (_: Throwable) {}
         // ★ After the engine has stopped: the RSP driver's devices are let go (nothing is streaming from them now).
         VibeRsp.releaseAll(reactContext)

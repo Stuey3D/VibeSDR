@@ -836,8 +836,8 @@ public:
     /** ★★★ AN ICOM TRANSCEIVER AS A RECEIVER — driver "icom", RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md).
      *  Not an IQ source: CI-V tunes the radio, its scope is the waterfall and its USB audio goes in
      *  after the demodulator. Always a SHARED dial. Fails (with the owner's plain-words reason in
-     *  `err`) when the radio's own menu could key it — see icom_source.h. Linux and macOS servers;
-     *  a no-op returning -1 where the build has no Icom support (VIBE_HAVE_ICOM unset: Android, iOS). */
+     *  `err`) when the radio's own menu could key it — see icom_source.h. Linux, macOS and Android
+     *  servers; a no-op returning -1 where the build has no Icom support (VIBE_HAVE_ICOM unset: iOS). */
     struct IcomStart {
         std::string port = "usb", audio = "auto", modelHint;
         int baud = 115200, civAddr = 0, scopeSpeed = 0;
@@ -848,6 +848,13 @@ public:
     };
     int startIcom(const IcomStart& o, std::string& err);
     bool isIcom() const;
+    /** ★★ ANDROID (plan Phase 4): the owner's Icom settings for the NEXT start(fd, vid, pid) of an Icom — the app
+     *  sets them, then calls the same start() every radio uses, and start() routes the radio's CP210x / Icom-VID
+     *  descriptor to startIcom with port "fd:<our dup>" and audio "push". Static: set before a shim exists. */
+    static void setIcomNext(const IcomStart& o);
+    /** ★ The Icom's live facts for the app's server screen (the same "radio" object hwinfo carries), or "" when
+     *  the running server is not an Icom. */
+    std::string icomFactsJson() const;
 private:
     int startAirspyHfCommon(int index, int fd, double centerFreq, double sampleRate,
                             int gainTenthDb, int fftSize, double fftRate,

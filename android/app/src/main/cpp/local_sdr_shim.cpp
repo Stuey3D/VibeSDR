@@ -1579,6 +1579,9 @@ static constexpr double    kDialShowSec = 120.0;
 /** ★★★ AN ICOM IS ALWAYS A SHARED DIAL (plan §2.2): there is ONE physical receiver, so a locked
  *  centre cannot give anybody a VFO of their own. Set for the life of an Icom session. */
 static std::atomic<bool> g_icomOn{false};
+// ★ Android: the owner's Icom settings for the next start(fd…) of an Icom — see LocalSdrShim::setIcomNext.
+static std::mutex g_icomNextMtx;
+static LocalSdrShim::IcomStart g_icomNext;
 static bool vsSharedDial() { return (g_vsLockedCentre.load() <= 0.0 || g_icomOn.load()) && g_vsMaxUsers.load() > 1; }
 
 // Station list (EiBi + anything else the app has) served at GET /stations for the
@@ -29361,6 +29364,32 @@ int LocalSdrShim::start(int fd, int vid, int pid,
         (void)fd; (void)pid;
         return startSdrplay(0, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, mode, err);
     }
+    /* ★★★ AND AN ICOM (plan Phase 4, 2026-10-22) — the radio's own CP210x (0x10c4:0xea60/0xea70) or a native-USB Icom
+     *     (VID 0x0c26). RECEIVE ONLY, exactly as on Linux: startIcom, with the descriptor wrapped by libusb ("fd:") and
+     *     the audio pushed in from the app's AudioRecord ("push"). The app only sends a CP210x here after its USB serial
+     *     named an Icom (VibeIcom.kt), and the transport looks again before it claims or writes a byte.
+     *  ★ The fd is DUPPED: the transport owns its copy (closes it on stop), and the app keeps its connection.
+     *  ★ Six copies of "which driver is this" must agree: this, VibeIcom.kt (ids + KNOWN_MODELS), VibeLocalSdrModule's
+     *    when-blocks, isServableRadio, icom_models.h's `known` rows, and scripts/check-device-filter.mjs (which also
+     *    holds that NO Icom id is in either device filter — see VibeIcom.kt for why). */
+    if ((vid == 0x10c4 && (pid == 0xea60 || pid == 0xea70)) || vid == 0x0c26) {
+#if VIBE_HAVE_ICOM && defined(__ANDROID__)
+        const int d = ::dup(fd);
+        if (d < 0) { err = "could not duplicate the radio's USB descriptor"; return -1; }
+        IcomStart o;
+        { std::lock_guard<std::mutex> lk(g_icomNextMtx); o = g_icomNext; }
+        o.port = "fd:" + std::to_string(d);
+        o.audio = "push";
+        o.ttyOk = false;          // ★ there is no tty path on a phone, and nothing may ask for one
+        o.freqHint = centerFreq;
+        (void)sampleRate; (void)gainTenthDb; (void)fftSize; (void)fftRate; (void)mode;
+        return startIcom(o, err);   // ★ the transport owns `d` from here, success or failure
+#else
+        (void)fd;
+        err = "this build has no Icom support";
+        return -1;
+#endif
+    }
     /* ★ AND A HACKRF, down the same pipe for the same reason. 0x1d50:0x6089 is the HackRF One;
      *   the Jawbreaker and rad1o prototypes have their own ids and are NOT claimed here, because
      *   nothing about this driver has been tested against them. Mirrored in Kotlin
@@ -31123,6 +31152,10 @@ void LocalSdrShim::setGain(int gainTenthDb) {
 int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -1; }
 bool LocalSdrShim::usbNeedsFreshFd() const {
 #ifdef __ANDROID__
+#if VIBE_HAVE_ICOM
+    // ★ An Icom's link has its own reconnect (IcomSource, every 3 s); the app only supplies the new descriptor.
+    if (p && p->useIcom()) return p->icom->wantsFreshFd();
+#endif
     // ★ Not before the back-off after a fresh fd that would not open — see freshFdFails (2026-10-05).
     return p && p->usbFdDead.load() && p->freshUsbFd.load() < 0
              && Impl::nowSecs() >= p->freshFdRetryAt.load();
@@ -31132,6 +31165,9 @@ bool LocalSdrShim::usbNeedsFreshFd() const {
 }
 bool LocalSdrShim::usbHandleDead() const {
 #ifdef __ANDROID__
+#if VIBE_HAVE_ICOM
+    if (p && p->useIcom()) return p->icom->usbGone();
+#endif
     return p && p->usbFdDead.load();
 #else
     return false;
@@ -31151,6 +31187,16 @@ std::string LocalSdrShim::radioProblemText() const { return radioProblem(); }
 bool LocalSdrShim::adoptFreshUsbFd(int fd) {
 #ifdef __ANDROID__
     if (!p || fd < 0) return false;
+#if VIBE_HAVE_ICOM
+    if (p->useIcom()) {
+        if (!p->icom->usbGone()) { LOGI("Icom: a fresh USB handle was offered but ours is alive — not taken"); return false; }
+        const int d = ::dup(fd);
+        if (d < 0) { LOGE("Icom: dup() of the fresh USB handle failed (errno %d)", errno); return false; }
+        if (!p->icom->offerFd(d)) { ::close(d); return false; }
+        LOGI("Icom: Android handed the radio back on a fresh USB handle — the CI-V link reconnects on it (preflight again)");
+        return true;
+    }
+#endif
     // ★ Only when asked: swapping a LIVE handle under a running stream is how a working radio dies.
     // ★ Named per radio (2026-10-05): the HF+ comes back through this door too now, and a log that
     //   says "RTL-SDR" about an Airspy sends whoever reads Nick's Diagnostics after the wrong radio.
@@ -33438,6 +33484,16 @@ void LocalSdrShim::setFftRate(double fps) {
 }
 bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
 bool LocalSdrShim::isIcom() const { return p && p->useIcom(); }
+void LocalSdrShim::setIcomNext(const IcomStart& o) {
+    std::lock_guard<std::mutex> lk(g_icomNextMtx);
+    g_icomNext = o;
+}
+std::string LocalSdrShim::icomFactsJson() const {
+    if (!p || !p->useIcom()) return "";
+    const std::string c = radioCapsJsonCore();
+    static const std::string k = ",\"radio\":";
+    return c.rfind(k, 0) == 0 ? c.substr(k.size()) : std::string();
+}
 
 /* ★★★ AN ICOM AS A RECEIVER (docs/ICOM-SUPPORT-PLAN.md §2.2). Not startAirspyHfCommon's shape with the IQ
  *     taken out — there is no engine at all: no startEngine(), no buildAudio(), no DSP thread. The CI-V

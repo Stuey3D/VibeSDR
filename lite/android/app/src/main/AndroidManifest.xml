@@ -6,6 +6,10 @@
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+  <!-- ★★★ An Icom's received audio arrives on a USB audio codec, which Android treats as a microphone (the main app's
+       manifest has the whole note — docs/ICOM-SUPPORT-PLAN.md Phase 4). Asked for only when an Icom is served. -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <!-- ★ "Start automatically when power returns" — Android 5.0–7.0 only (VibeBootStart.MAX_SDK). -->
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
@@ -37,7 +41,7 @@
       <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                  android:resource="@xml/device_filter"/>
     </activity>
-    <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice"
+    <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice|microphone"
              android:exported="false"/>
     <!-- ★★ PUT A RUNNING SERVER BACK AFTER AN UPDATE — the main app's VibeUpdateReceiver, synced. Without it
          every Lite update left the server stopped until somebody pressed Start, which on a TV box means

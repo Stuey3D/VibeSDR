@@ -1,7 +1,8 @@
 # Icom transceiver support: research and plan
 
 *Written 2026-10-21 for Stuart. Saber is the tester.* **Status 2026-10-22: Phase 0 (capture kit), Phase 1
-server side and Phase 2 (macOS build) are BUILT on branch `v12-icom` and tested against a fake radio — see
+server side and Phase 2 (macOS build) are BUILT on branch `v12-icom`; Phase 4 (Android app server + Lite) is BUILT on
+`v12-icom-android` and tested against a fake radio — see
 "Built 2026-10-22" at the end, the client contract ("hwinfo + wire contract for clients (built)"), and
 "Open for Stuart". Nothing has touched a real Icom yet.*
 *Labels used throughout: **[verified]** means checked against a source or our own code. **[unverified]**
@@ -455,8 +456,9 @@ The control/CI-V/audio UDP streams with `txenable = 0`. The scope arrives at ful
 is the fix for "low fps". Clean-room from captures, or the wfview exception (§4 **[decide]**). It
 needs a LAN-radio owner, so ask on Discord.
 
-### Phase 4: Android VibeServer Lite over USB (about 2 weeks, risky)
+### Phase 4: Android VibeServer Lite over USB (about 2 weeks, risky) — **BUILT 2026-10-22, branch `v12-icom-android`**
 UsbManager fd for CI-V, AudioRecord on the USB device, a microphone foreground service. XCover first.
+See "Phase 4 built (Android)" at the end.
 
 ### Phase 5: app connects straight to a LAN Icom (2-3 weeks plus store review)
 Owner-only local mode. It reuses the Phase 3 C++ (licence-clean), compiled into iOS and Android.
@@ -755,7 +757,7 @@ and say in the tour that zoom = the radio's span.
   --entitlements -` on `Contents/MacOS/vibeserver-engine` shows it.
 - **Linux**: built and unit-tested on macOS only; the ALSA and sysfs paths were compile-checked with the NDK's
   Linux headers, not run. The first apt build will be their first real compile on Linux.
-- **Android (Phase 4), LAN (Phase 3), clients** are not started. The shim compiles without `VIBE_HAVE_ICOM`,
+- **Android (Phase 4)** is built — see "Phase 4 built (Android)" below. **LAN (Phase 3)** is not started; clients are on `v12-icom-ui`. The shim compiles without `VIBE_HAVE_ICOM`,
   so Android/iOS are unaffected. Client work starts from the contract section above.
 - **Copy**: when the client ships, add "Icom" to AGENTS.md's grep list (tours, About, website).
 
@@ -857,3 +859,99 @@ and has no transmit field to build. Tested by `scripts/test_icom_radio.ts` (129 
 - **The IcomSetupCard save** has not been exercised against a real VibeServer (the fake e2e has no admin config
   round-trip from the app). The round-trip logic (`withIcomSettings`) is unit-tested, including that the admin
   password survives.
+
+---
+
+## Phase 4 built (Android app server + VibeServer Lite) — 2026-10-22, branch `v12-icom-android`
+
+*Built while Stuart was at work ("ICOM for all platforms"). Nothing has touched a real Icom on Android; no device test
+was run (see "Not verified").*
+
+### What exists
+
+| Piece | Where | Notes |
+|---|---|---|
+| The engine's Icom source in the Android library (both ABIs, both apps) | `cpp/CMakeLists.txt` (`icom_*.cpp`, `VIBE_HAVE_ICOM`) | The same three files as Linux/macOS. No thread, libusb context or allocation until an Icom is started. No ALSA code on Android (`icom_audio.cpp` excludes it). |
+| **Wrapped-fd transport** `fd:<n>` | `icom_transport.{h,cpp}` | `libusb_wrap_sys_device` on the UsbManager descriptor (NO_DEVICE_DISCOVERY, as every vendored driver here), then the **same** CP210x setup as Linux: SET_MHS both-low and flow "held inactive" BEFORE IFC_ENABLE. No kernel tty exists on a phone, so nothing raises DTR/RTS behind us. A CP210x whose serial does not name a known model is refused **before anything is claimed or written** (a string-descriptor read is a control IN, never a UART byte). The transport owns a dup of the fd. |
+| Re-plug | `IcomSource::usbGone/wantsFreshFd/offerFd`, shim `usbNeedsFreshFd/usbHandleDead/adoptFreshUsbFd` | usbfs binds an fd to one device instance. The app's existing fresh-fd recovery (VibeServerRestore.recoverUsbIfNeeded, the 5-minute blip rule) now covers an Icom: it opens the radio afresh and hands the dup in; IcomSource's own 3 s reconnect adopts it — **identify + preflight again**. |
+| **"push" audio source** | `icom_audio.{h,cpp}` (`pushPcm`, `setPushState`, `pushWanted`) | snd-usb-audio owns the codec. The app records it and pushes 10 ms blocks; they enter IcomSource's sink, so the **TX mute**, onAudio(), Opus and the decoders are the Linux path. Dropped when no Icom is served; stop() returning means no block is in flight. |
+| Start routing | `LocalSdrShim::start` (VID 0x10c4 ea60/ea70, or 0x0c26) → `startIcom` with `fd:<dup>`, `push`, `ttyOk=false`; `setIcomNext` (owner's settings), `icomFactsJson` | One start path for every radio, as for the HF+/RSP. |
+| JNI | `vibe_localsdr_jni.cpp`: `nativeSetIcomNext`, `nativeIcomPushPcm` (direct ByteBuffer, no copy), `nativeIcomAudioState`, `nativeIcomAudioWanted`, `nativeIcomFacts` | |
+| Kotlin `VibeIcom` + `IcomAudio` (shared with Lite) | `VibeIcom.kt` | Detection, settings (`icomBaud`, `icomCiv`, `icomScopeSpeed`, `icomOwnerLock` default ON, `icomRfOpen` — the Linux config names), the explained permission ask, the AudioRecord bridge, setup facts. |
+| AudioRecord bridge | `IcomAudio` | API 24+: the radio's `TYPE_USB_DEVICE` input (named "USB Audio CODEC" or a known model; else the only USB input; several unnamed = refuse, say unplug the others), 48 kHz mono PCM16, `UNPROCESSED` if the phone has it else `VOICE_RECOGNITION` (never `MIC`). **Once a second it checks `getRoutedDevice()` is still that input — anything else (the phone's own microphone after the codec dropped off) stops capture.** Listeners never hear the room. `isClientSilenced` (API 29) → "open VibeSDR once". |
+| Microphone permission | `VibeIcom.askForMicIfNeeded` | Asked **only** when an Icom server has just started (or from the setup card's button), with a plain explanation dialog first; never at app start, never for another radio. Refused → dial + waterfall serve, hwinfo `audioProblem` says why. |
+| Foreground service | `RtlTcpServerService` | Manifest type `connectedDevice|microphone`; `startForeground` adds `microphone` only when an Icom is served, RECORD_AUDIO is held and the app is visible (Android 14 rule). A background restore runs connectedDevice only; the 2 s tick promotes the type and starts audio the moment the owner opens the app. |
+| Which-radio branches | `VibeLocalSdrModule`, `VibeServerRestore`, `RtlTcpServerService` | `describe().kind`, `getConnectedRadio` (`driver:"icom"`, `icomConfirmed`, `micPermission`), model name "Icom IC-7300" (never the CP2102's own strings), start/restore/stop paths. IQ-only paths (local listening, probe, DAB scan engine, rtl_tcp server) use `isLocalRadio` and **never open an Icom's CP2102** (librtlsdr's register writes must not reach it). A CP210x counts as "the server's radio" for attach/detach only while the server is an Icom (stored K_VIDPID), so a GPS unplugging never stamps an RTL server's radio as gone. |
+| Setup facts for the screen | `@ReactMethod icomSetup` → `VibeIcom.facts`; `icomAskForAudio`; TS `src/services/androidIcom.ts` | hwinfo `radio` (model, civ, baud, transport, linesHeldLow, preflight items with menu paths, audio, audioProblem) + micPermission, audioRunning, audioDevice, audioProblem, audioSupported. |
+| Tests | `vibeserver/test-icom-source.cpp` (+16 checks), `scripts/check-device-filter.mjs` (+4) | push audio reaches the engine unchanged, is TX-muted, re-sends hwinfo on a state change, goes nowhere after close; `fd:` parsed and refused cleanly off Linux/Android; zero disallowed frames. Filter check: no Icom id in either filter; `KNOWN_MODELS` = icom_models.h's known rows; Kotlin USB ids = icom_transport.cpp's. |
+
+### Decisions made while building (each easy to reverse)
+
+1. **No Icom id in the device filters.** Android matches a serial only exactly, and 10c4:ea60 alone would offer
+   VibeSDR for every CP2102 gadget (GPS, ESP32, programming leads). No native-USB (0x0c26) model is supported yet, and
+   offering the app for a radio it refuses is a dead control. The owner starts the server from the app, which asks
+   for the device. `check-device-filter.mjs` holds this.
+2. **An Icom = a candidate id AND its product or serial string starts with a known model** (`IC-7300`, word boundary,
+   so `IC-7300MK2` is not one). Android 10+ hides the serial until the device is granted, so an ungranted CP2102 is
+   "maybe an Icom" (`icomConfirmed:false`); Start asks for the device, then checks; not one → refused in words, untouched.
+3. **Audio needs Android 7.0 (API 24)**: without `getRoutedDevice` we cannot prove we are recording the radio and not
+   the phone's microphone. Below 24 the server serves dial + waterfall and says why. Lite's 5.x/6.x boxes therefore
+   get no Icom audio.
+4. **No local listening on an Icom**: the local session has no microphone-type service or permission flow. An Icom is
+   served, and listened to through the server ("An Icom is shared through VibeServer…").
+5. **The kernel driver**: libusb's auto-detach on the wrapped fd (USBDEVFS_DISCONNECT_CLAIM, as the app's own
+   `claimInterface(force)` does) — the app does not claim first, so there is one owner of the claim.
+6. **Audio source** `UNPROCESSED` if supported, else `VOICE_RECOGNITION` (CDD: no AGC/NS by default).
+7. **A background restore never asks** for a permission and never adds the microphone type; it says
+   "open VibeSDR once to give the server the radio's audio", and the service finishes the job on the next visible tick.
+
+### Measurements
+
+Debug APKs (`app-current-debug.apk`, Lite `app-debug.apk`), measured against the same tree with the three Icom files
+and `VIBE_HAVE_ICOM` taken out of CMake:
+
+| | arm64-v8a | armeabi-v7a |
+|---|---|---|
+| libvibelocalsdr.so, as packaged (stripped) | 7,614,144 → 7,743,688 B (**+129.5 KB**) | 6,354,556 → 6,446,860 B (**+92.3 KB**) |
+| …compressed in the APK | +56.2 KB | +56.3 KB |
+| Kotlin (VibeIcom + IcomAudio + Api24 .class) | 30.8 KB of class files, ~15 KB as dex | same |
+
+- **APK delta ≈ 0.13 MB (main app, both ABIs), ≈ 0.07 MB (Lite, v7a only).** Legacy packaging extracts the phone's own
+  ABI on install: +130 KB (arm64) / +92 KB (v7a) on disk.
+- **Idle RAM: zero by construction** on a phone with no Icom — the code is in a library that already loads for any USB
+  radio; no Icom thread, libusb context, AudioRecord, receiver or allocation exists until an Icom server starts, and
+  `IcomAudio`'s classes are not even loaded. Serving: one CI-V thread + one AudioRecord thread (a 960 B direct buffer;
+  AudioRecord's own buffer ~8-16 KB) on top of the engine. ✗ Not measured on a device.
+- **16 KB pages:** every arm64 .so in the main APK has LOAD alignment ≥ 0x4000 (all 30 checked, readelf);
+  `zipalign -c -P 16` passes.
+- **Checks run:** `test-icom-source` (66 checks, ASan+UBSan, incl. 16 new), `test-icom-civ` (7.8 M frames),
+  `test-icom-scope`, `check-device-filter.mjs` (8, incl. 4 new), `check-lite-api.py` on the Lite APK (OK at minSdk 21),
+  NDK syntax checks of the shim/JNI for arm64. Both debug APKs build (`gradle --max-workers=2`, nice 19).
+
+### Open for Stuart (Android)
+
+- **Play declarations.** The main app now declares `RECORD_AUDIO` and `FOREGROUND_SERVICE_MICROPHONE`. Play needs the
+  microphone FGS task declared (with the usual video) and audio in the Data safety form ("recorded only from a
+  connected radio's USB audio, only while serving it, never stored by us"). Alternatively ship the Icom in Lite only and
+  keep both permissions out of the Play app — **[decide]**.
+- **A second USB permission after every re-plug or reboot.** No device-filter entry means no "use by default" tick, so
+  a re-plugged or rebooted Icom server waits for a tap on Allow (the restore notification already says "Waiting for USB
+  permission"). The 5-minute blip rule still applies.
+- **Phones where AudioRecord cannot pick the USB codec.** Some vendors route USB input oddly or not at all; the bridge
+  refuses rather than record the wrong input, and says so. Needs a real 7300 on the XCover / Tab A9 to learn how common.
+- **The codec's Android name** ("USB Audio CODEC" is the TI PCM2900 default) and whether the 7300's CP2102 product
+  string names the radio (then Android 10+ identifies it before a grant) — **[Saber]** `lsusb -v`.
+- **Android routes system sounds to a newly attached USB audio device** (the radio's MOD input). VOX is a hard preflight
+  gate and nothing keys the radio, but a phone's notification sounds could reach the MOD input; worth a dummy-load look.
+- **UI wiring** (branch `v12-icom-ui`): ServerModeScreen's Icom card should call `androidIcomFacts()` (setup facts and
+  audio state), offer `icomAskForAudio()` when `micPermission` is false, show "an Icom? press Start and allow it" when
+  `getConnectedRadio().icomConfirmed === false`, and hide the SDR-only settings (sample rate, gain, bias-T, ppm, direct
+  sampling, DAB) for `driver === "icom"`. The Icom config keys the app should send in its server config: `icomBaud`,
+  `icomCiv`, `icomScopeSpeed`, `icomOwnerLock`, `icomRfOpen`.
+
+### Not verified (no radio, no device test)
+
+Everything on hardware: the wrapped-fd CP2102 path on a phone's usbfs (claim + auto-detach under SELinux), DTR/RTS
+staying low (dummy load!), AudioRecord's routing to the codec, the microphone FGS promotion on Android 14/15, the
+re-plug hand-back, idle and serving RAM on a 1 GB phone. The fd transport could not be run against the fake radio on
+the host: the fake is a pty, and `libusb_wrap_sys_device` needs a usbfs node.

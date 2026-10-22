@@ -133,6 +133,11 @@ add_library(vibelocalsdr SHARED
     # methods unconditionally — a runtime branch still emits a link-time symbol, so leaving
     # one out does not save anything, it just fails to link (found on iOS, 2026-07-27).
     sdrplay_source.cpp airspyhf_source.cpp hackrf_source.cpp airspy_source.cpp
+    # ★★★ ICOM, RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md Phase 4, 2026-10-22) — the same three files the Linux and Mac
+    #     servers build: the CI-V allow-list, the libusb CP210x/CDC transport (here on a UsbManager fd, "fd:"), and the
+    #     audio sources (here the "push" one, fed by the app's AudioRecord). Nothing in them runs until an Icom is
+    #     started: no thread, no libusb context, no allocation at load.
+    icom_source.cpp icom_transport.cpp icom_audio.cpp
     ${AIRSPYHF_SRC}
     ${HACKRF_SRC}
     ${AIRSPY_SRC}
@@ -225,6 +230,9 @@ target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAS_HACKRF VIBE_HACKRF_HAS_
 #     builds at the app's minSdk — it is built by openrsp.gradle and dlopen()ed on API ≥ 26 only.
 target_include_directories(vibelocalsdr PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vendor/openrsp/include")
 target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_SDRPLAY)
+# ★★★ ICOM (see the source list above). icom_transport.cpp includes <libusb.h> unqualified — the sdr-kit include dir,
+#     the same one libairspyhf/libhackrf/libairspy find it in.
+target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_ICOM)
 
 target_link_libraries(vibelocalsdr PRIVATE
     vibedsp

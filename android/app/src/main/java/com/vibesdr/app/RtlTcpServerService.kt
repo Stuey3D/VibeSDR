@@ -64,10 +64,64 @@ class RtlTcpServerService : Service() {
             ctx.stopService(Intent(ctx, RtlTcpServerService::class.java))
         }
 
+        /* ★★★ AN ICOM'S AUDIO NEEDS THE `microphone` FOREGROUND TYPE (docs/ICOM-SUPPORT-PLAN.md Phase 4).
+         *  Android 11+ lets an app record in the background only through a foreground service that carries it, and
+         *  Android grants that type only while the app is IN FRONT (14+: startForeground throws otherwise). So the type
+         *  is added when an Icom wants audio, the permission is held and the app is visible — at Start, on the
+         *  permission's answer, or on the tick once the owner opens the app after a background restore.
+         *  ★ Only for an Icom: no other radio's server ever asks for the microphone. */
+        @Volatile private var instance: RtlTcpServerService? = null
+        @Volatile internal var micTypeActive = false
+            private set
+
+        /** The app's process is showing an activity (the service alone makes it 125, FOREGROUND_SERVICE — not that). */
+        fun appVisible(ctx: Context): Boolean = try {
+            val mi = android.app.ActivityManager.RunningAppProcessInfo()
+            android.app.ActivityManager.getMyMemoryState(mi)
+            mi.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+                mi.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+        } catch (_: Throwable) { false }
+
+        /** May the radio's audio be recorded right now and go on being recorded once the app is in the background?
+         *  Below Android 11 any foreground service will do; from 11 the service must carry the microphone type, or the
+         *  app must be in front (it then gets the type straight after — the server's start path starts the service). */
+        fun mayRecordNow(ctx: Context): Boolean =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.R || micTypeActive || appVisible(ctx)
+
+        /** The microphone permission just arrived (or the app came to the front): add the type now if we can. */
+        fun wantMicrophone(ctx: Context) {
+            val svc = instance ?: return
+            svc.handler.post { svc.promoteMicrophone() }
+        }
         private fun ContextCompat_startForegroundService(ctx: Context, i: Intent) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i)
             else ctx.startService(i)
         }
+    }
+
+    private fun wantsMicType(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && VibeIcom.serving() &&
+            VibeIcom.hasMicPermission(this) && appVisible(this)
+
+    /** ★ Re-issue startForeground with connectedDevice|microphone. Allowed for a running foreground service while the
+     *  app is visible; a refusal is logged and the server goes on without the radio's audio, saying so. */
+    private fun promoteMicrophone() {
+        if (micTypeActive || !wantsMicType()) return
+        try {
+            ServiceCompat.startForeground(this, NOTIF_ID, buildNotification(statusText()),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            micTypeActive = true
+            Log.i(TAG, "foreground service now carries the microphone type — the Icom's audio can be recorded in the background")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Android would not add the microphone type: $t")
+        }
+    }
+
+    /** ★ On the tick: an Icom that wants audio and has none starts it the moment Android allows. */
+    private fun tickIcomAudio() {
+        if (!VibeLocalSDR.icomAudioWanted() || IcomAudio.running) return
+        if (wantsMicType()) promoteMicrophone()
+        IcomAudio.startIfPossible(applicationContext)
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -83,6 +137,7 @@ class RtlTcpServerService : Service() {
             updateNotification()
             pollUsbRecovery()
             applyCpuHold()
+            try { tickIcomAudio() } catch (t: Throwable) { Log.w(TAG, "Icom audio tick: $t") }
             handler.postDelayed(this, 2000)
         }
     }
@@ -189,7 +244,7 @@ class RtlTcpServerService : Service() {
             override fun onReceive(c: Context, i: Intent) {
                 @Suppress("DEPRECATION")
                 val dev = i.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE) ?: return
-                if (!VibeLocalSdrModule.isServableRadio(dev.vendorId, dev.productId)) return
+                if (!VibeServerRestore.isServable(applicationContext, dev)) return   // ★ incl. an Icom's CP210x, only for an Icom server
                 when (i.action) {
                     UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                         if (!VibeServerRestore.isShimServing()) return
@@ -345,9 +400,14 @@ class RtlTcpServerService : Service() {
 
     private fun startForegroundInternal() {
         val notif = buildNotification("Starting…")
+        instance = this
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // ★ connectedDevice always; + microphone only for an Icom with the permission, while the app is in front.
+            val mic = wantsMicType()
             ServiceCompat.startForeground(
-                this, NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+                this, NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                    (if (mic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0))
+            micTypeActive = mic
         } else {
             startForeground(NOTIF_ID, notif)
         }
@@ -502,6 +562,7 @@ class RtlTcpServerService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
+        if (instance === this) { instance = null; micTypeActive = false }
         detachReceiver?.let { r ->
             try { unregisterReceiver(r) } catch (t: Throwable) { Log.w(TAG, "unregistering the detach watch: $t") }
         }

@@ -28,6 +28,16 @@
        for ever. Same shape as ACCESS_FINE_LOCATION, which was declared here and never requested.
        ★ If a real dataSync service is ever built, add this back WITH the service in the same
        edit — the permission and the foregroundServiceType belong together. -->
+  <!-- ★★★ AN ICOM'S RECEIVED AUDIO (docs/ICOM-SUPPORT-PLAN.md Phase 4, 2026-10-22). The radio sends its audio to the
+       phone on a USB audio codec, and Android treats every audio input as a microphone. RECORD_AUDIO is ASKED FOR only
+       when an Icom is being served (VibeIcom.askForMicIfNeeded, with a plain explanation first) — never at start-up,
+       never for any other radio — and AudioRecord is pinned to the radio's USB input; if Android routes it anywhere
+       else (this phone's own microphone) capture STOPS (IcomAudio). FOREGROUND_SERVICE_MICROPHONE is the Android 14
+       half: the server's foreground service carries the microphone type only while an Icom wants audio.
+       ★ Play: both need declaring (the microphone FGS task, and audio in the Data safety form) — see the plan's
+         "Open for Stuart". -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.INTERNET"/>
@@ -137,7 +147,7 @@
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity-alias>
-    <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
+    <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice|microphone" android:exported="false"/>
     <!-- ★★★ PUT A RUNNING SERVER BACK AFTER AN UPDATE — see VibeUpdateReceiver. A package replace
          stops the app and Android does not recreate the service, so an unattended receiver went
          dark and stayed dark; MY_PACKAGE_REPLACED is the one signal that says it happened. -->

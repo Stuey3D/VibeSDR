@@ -183,6 +183,9 @@ def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'R
               'VibeLocalSdrModule.kt', 'VibeMdnsModule.kt',
               // ★★ The SDRplay RSP (OpenRSP embedded): firmware, the USB hand-off and the re-enumeration watch.
               'VibeRsp.kt',
+              // ★★★ An Icom transceiver, receive only (docs/ICOM-SUPPORT-PLAN.md Phase 4): which CP210x is an Icom, the
+              //     owner's CI-V settings, the microphone permission ask and the AudioRecord bridge for its USB audio.
+              'VibeIcom.kt',
               // ★ Puts a running server back after an update (MY_PACKAGE_REPLACED). Missing from Lite, so a
               //   reinstall left a TV box's server stopped until somebody walked to it (2026-09-19).
               'VibeUpdateReceiver.kt',
