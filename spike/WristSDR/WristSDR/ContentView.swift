@@ -1344,17 +1344,39 @@ link.setAutoContrast(wfAutoContrast)
   /// Nothing is blurred: it would only smear the signal under the line, and it
   /// would re-blur 30x/sec on the watch GPU for the privilege.
   private func drawVFO(_ ctx: GraphicsContext, _ size: CGSize) {
-    let x = size.width / 2
+    var x = size.width / 2
     let h = size.height
     let c = link.needle
     let k = max(0.2, link.needleI / 5)   // 1-10, 5 = the phone's stock look
+    /* ★★★ EXCEPT ON AN ICOM WHOSE SCOPE IS FIXED. The radio's window is then pinned between edges its owner set and
+     *  the VFO moves ACROSS it (or off it), so dead-centre would put the line on a frequency nobody is tuned to.
+     *  Placed from the sweep's real edges (config centre ± span/2 — IcomRadio.vfoFraction); outside them, no
+     *  carrier line at all, just a chevron at the edge the radio is tuned beyond. */
+    if let ic = link.icom, ic.scopeFixed {
+      guard let f = IcomRadio.vfoFraction(vfo: link.frequency, centre: link.scopeCentre, span: link.scopeSpan) else {
+        guard link.scopeSpan > 0, link.scopeCentre > 0 else { return }
+        let right = link.frequency > link.scopeCentre
+        let ex: CGFloat = right ? size.width - 2 : 2
+        let d: CGFloat = right ? -7 : 7
+        let tri = Path { p in
+          p.move(to: CGPoint(x: ex, y: h / 2))
+          p.addLine(to: CGPoint(x: ex + d, y: h / 2 - 6))
+          p.addLine(to: CGPoint(x: ex + d, y: h / 2 + 6))
+          p.closeSubpath()
+        }
+        ctx.fill(tri, with: .color(c.opacity(0.9)))
+        return
+      }
+      x = size.width * f
+    }
 
     // ── Passband edges: 1px dashed, drawn at their TRUE offsets from the carrier.
     //    Not mirrored: on LSB both edges fall to the LEFT of the carrier, on USB
     //    both to the right, and CW is offset — mirroring a single width would draw
     //    every mode as AM.
-    if link.span > 0, link.filtHi != link.filtLo {
-      let hzToPx = size.width / link.span
+    let pbSpan = (link.icom?.scopeFixed == true && link.scopeSpan > 0) ? link.scopeSpan : link.span
+    if pbSpan > 0, link.filtHi != link.filtLo {
+      let hzToPx = size.width / pbSpan
       let dash = StrokeStyle(lineWidth: 1, dash: [3, 3])
       for edge in [link.filtLo, link.filtHi] {
         let ex = x + edge * hzToPx
@@ -2194,8 +2216,10 @@ link.setAutoContrast(wfAutoContrast)
         with: .color(.white.opacity(0.18)), lineWidth: 1)
       return
     }
-    let lo = link.frequency - link.span / 2
-    let hi = link.frequency + link.span / 2
+    // ★ An Icom in FIXED scope mode: the axis is the radio's fixed window, not one around the VFO (see drawVFO).
+    let fixed = link.icom?.scopeFixed == true && link.scopeSpan > 0
+    let (lo, hi) = IcomRadio.edges(vfo: link.frequency, centre: link.scopeCentre,
+                                   span: fixed ? link.scopeSpan : link.span, fixed: fixed)
     let x = { (hz: Double) in (hz - lo) / (hi - lo) * size.width }
 
     // BAND-PLAN COLOUR WASH, PER SEGMENT. Each band paints only ITS OWN slice of the visible

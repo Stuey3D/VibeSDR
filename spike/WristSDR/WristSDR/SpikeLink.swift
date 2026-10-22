@@ -46,6 +46,11 @@ final class SpikeLink: ObservableObject {
   //   dial through SpikeLink.
   @Published var frequency = 0.0 { didSet { if frequency != oldValue { updateBand(); WatchAudio.setNowPlaying(freqHz: frequency, mode: mode) } } }
   @Published var span = 0.0
+  /// ★★ AN ICOM IN FIXED SCOPE MODE: the sweep's REAL window as the server's last config gave it — `centerFreq` (the
+  ///   middle of the fixed edges) and binBandwidth × binCount. The carrier line and the band ticker are placed from
+  ///   these (IcomRadio.vfoFraction / edges); every other radio's view is VFO-centred and never reads them.
+  @Published var scopeCentre = 0.0
+  @Published var scopeSpan = 0.0
   /// Bookmark gating (all Hz), mirrored from the client each tick. `tuneMin/Max` is the window
   /// reachable RIGHT NOW (OWRX = current profile only); `coverMin/Max` is the server's broad
   /// coverage, used to filter which bookmarks are even shown. See BookmarkStore / BookmarksView.
@@ -909,6 +914,11 @@ final class SpikeLink: ObservableObject {
     }
     let sp = client.displaySpanHz   // the on-screen width, held across a reconnect (no snap)
     if span != sp { span = sp }
+    if icom?.scopeFixed == true, let u = client as? UberClient {
+      if scopeCentre != u.centerHz { scopeCentre = u.centerHz }
+      let ss = u.binBandwidth * Double(max(u.binCount, 0))
+      if scopeSpan != ss { scopeSpan = ss }
+    }
     // Bookmark gating ranges (see canTune/inCoverage). Cheap to mirror; changes rarely.
     if tuneMin  != client.tuneMinHz  { tuneMin  = client.tuneMinHz  }
     if tuneMax  != client.tuneMaxHz  { tuneMax  = client.tuneMaxHz  }
