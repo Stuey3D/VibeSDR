@@ -4,6 +4,9 @@
 #   commit SHA, because the SHAs could not be resolved when this was written; once they are pinned,
 #   Dependabot updates the SHA and its trailing `# vX` comment together.
 # ★ Weekly and few at a time: these are proposals to review, not merges.
+# ★★ target-branch: v12-experimental (Stuart, 2026-10-22). 11.x is frozen, so updates are proposed against V12 and
+#    reach main with the V12 release. This file is read from main (the default branch). When V12 BECOMES main,
+#    delete these lines. Security updates ignore target-branch and still open against main.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -11,15 +14,18 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    target-branch: v12-experimental
 
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    target-branch: v12-experimental
 
   - package-ecosystem: gradle
     directory: /android
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    target-branch: v12-experimental
