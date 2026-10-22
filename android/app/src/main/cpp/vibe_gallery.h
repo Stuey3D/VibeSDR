@@ -45,6 +45,8 @@
 #include <string>
 #include <vector>
 
+#include "vibe_navtex_stations.h"
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -140,6 +142,9 @@ struct Meta {
     /** ★ Background decoding that ran ON while a listener was here (Stuart, 2026-10-22: "Keep decoding stations still in
      *  range while listeners are on") — read when the item is written, so a message that saw one is marked. */
     std::shared_ptr<std::atomic<bool>> listenerOn;
+    /** ★ V12 beta 4: THIS server's position (NaN = none set) — with the dial, what names a NAVTEX station
+     *  (vibe_navtex_stations.h). Not written to the index. */
+    double      lat = NAN, lon = NAN;
 };
 
 // ── The store ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -426,6 +431,8 @@ struct NavtexMsg {
     int lost = 0, chars = 0;
     bool haveFec = false; unsigned long fecClean = 0, fecRepaired = 0, fecLost = 0;
     int gaps = 0; int64_t gapMs = 0;   // ★ fades survived (navtex.ts navtexGapMarker) — shown in the text and the title
+    /** ★ V12 beta 4: "B · Oostende, Belgium 🇧🇪" when the station could be named (navtex::label), else empty → "Station B". */
+    std::string station;
 };
 
 class NavtexAsm {
@@ -501,11 +508,12 @@ public:
             default: return b2 >= 'A' && b2 <= 'Z' ? std::string("Subject ") + b2 : "Subject ?";
         }
     }
-    /** "Station G · Met warning · #98 · 2 repaired" — navtexTitle(). */
+    /** "Station G · Met warning · #98 · 2 repaired" — navtexTitle(); "B · Oostende, Belgium 🇧🇪 · …" once m.station is set. */
     static std::string title(const NavtexMsg& m) {
         if (m.startLost) return "Start lost";
         const std::string mid = "\xc2\xb7";
-        std::string t = std::string("Station ") + (m.id.size() == 4 && m.id[0] >= 'A' && m.id[0] <= 'Z' ? std::string(1, m.id[0]) : "?");
+        std::string t = !m.station.empty() ? m.station
+                      : std::string("Station ") + (m.id.size() == 4 && m.id[0] >= 'A' && m.id[0] <= 'Z' ? std::string(1, m.id[0]) : "?");
         t += " " + mid + " " + subject(m.id.size() == 4 ? m.id[1] : '?');
         const bool serial = m.id.size() == 4 && std::isdigit((unsigned char)m.id[2]) && std::isdigit((unsigned char)m.id[3]);
         t += " " + mid + " #" + (serial ? m.id.substr(2) : "??");

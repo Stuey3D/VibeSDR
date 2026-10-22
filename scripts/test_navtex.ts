@@ -2,6 +2,7 @@
 // Real-shaped traffic: CR CR LF line ends, '_' for a lost character (fsk_decoder.cpp), chunks split anywhere.
 import { NavtexAssembler, NAVTEX_END_LOST_MS, navtexTitle, navtexLostPct, navtexBody, navtexFileName, navtexFileText }
   from '../src/utils/navtex.ts';
+import { navtexStationLabel } from '../src/utils/navtexStations.generated.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -319,6 +320,41 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   const v = a.version;
   a.reset();
   ok(a.live === null && a.prev === null && !a.receiving && a.version > v, 'reset clears and bumps the version');
+}
+
+// 11. ★ V12 beta 4: the STATION by name (navtexStations.generated.ts, NGA Pub. 117) — the Lenovo's evening of
+//     2026-10-22 at IO92nh (Moulton, Northamptonshire). The server's copy of the rule is tested with the same cases in
+//     vibeserver/test-bgdecode.cpp.
+{
+  const LA = 52.3125, LO = -0.875;
+  const L = (b1: string, hz: number, text = '', la = LA, lo = LO) => navtexStationLabel(b1, hz, la, lo, text);
+  ok(L('B', 489500) === 'B · Oostende, Belgium \u{1F1E7}\u{1F1EA}', 'B on 490 from Moulton = Oostende, Belgium + flag: ' + L('B', 489500));
+  ok(L('U', 489500).startsWith('U · Cullercoats, United Kingdom'), 'U on 490 = Cullercoats');
+  ok(L('A', 489500).startsWith('A · Malin Head, Ireland'), 'A on 490 = Malin Head');
+  ok(L('L', 489500).startsWith('L · Hamburg, Germany'), 'L on 490 = Hamburg (731 km)');
+  ok(L('G', 517500).startsWith('G · Cullercoats, United Kingdom'), 'G on 518 = Cullercoats');
+  ok(L('V', 517500).startsWith('V · Oostende, Belgium'), 'V on 518 = Oostende');
+  ok(L('L', 517500).startsWith('L · Rogaland, Norway'), 'L on 518 = Rogaland (813 km): ' + L('L', 517500));
+  ok(L('J', 517500).startsWith('J · Stockholm, Sweden'), 'J on 518 = Stockholm (1053 km)');
+  ok(L('I', 517500).startsWith('I · Varberg, Sweden'), 'I on 518 = Varberg (1004 km)');
+  ok(L('N', 517500).startsWith('N · Orlandet, Norway'), 'N on 518 = Orlandet (1400 km)');
+  ok(L('M', 517500) === 'Station M', 'M on 518: Casablanca is 2150 km away — the letter only, never a guess');
+  ok(L('W', 517500) === 'Station W', 'W on 518: Corsen 520 km and Valentia 648 km — ambiguous, the letter only');
+  ok(L('W', 517500, 'VALENTIA RADIO GALE WARNING').startsWith('W · Valentia, Ireland'), 'the text names Valentia → Valentia');
+  ok(L('W', 517500, 'CROSS CORSEN').startsWith('W · Corsen, France'), 'the text names Corsen → Corsen');
+  ok(L('W', 517500, 'MRSC MALIN, EJM.') === 'Station W', 'a station named in the text but NOT on W/518 (Malin Head) does not count');
+  ok(L('B', 489500, '', NaN, NaN) === 'Station B', 'no server position → the letter only');
+  ok(L('B', 489500, 'OOSTENDERADIO NAV WARNING', NaN, NaN).startsWith('B · Oostende'), 'no position, but the text names it');
+  ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).startsWith('L · Hamburg'), 'the text wins wherever the server is');
+  ok(L('B', 4209500) === 'Station B', 'HF 4209.5: Pub. 117 lists no HF letters — the letter only');
+  ok(L('B', 10_000_000) === 'Station B', 'not on a NAVTEX channel → the letter only');
+  ok(L('B', 489500, '', -33.9, 18.4) === 'Station B', 'B on 490 from Cape Town: nothing within reach');
+  const m = new NavtexAssembler();
+  feed(m, 'ZCZC BA10\r\r\nOOSTENDERADIO\r\r\nNNNN\r\r\n', 5);
+  const t = navtexTitle(m.live!, { dialHz: 489500, lat: LA, lon: LO });
+  ok(t.startsWith('B · Oostende, Belgium \u{1F1E7}\u{1F1EA} · Nav warning · #10'), 'the title carries the station: ' + t);
+  ok(navtexTitle(m.live!).startsWith('Station B · Nav warning'), 'no place → "Station B" as before');
+  ok(navtexFileText(m.live!, { dialHz: 489500, lat: LA, lon: LO }).startsWith('NAVTEX · B · Oostende'), 'SAVE writes the station too');
 }
 
 console.log(`navtex: ${pass} passed, ${fail} failed`);

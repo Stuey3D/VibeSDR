@@ -522,6 +522,10 @@ if node --no-warnings scripts/test_wefax_lost.ts >/dev/null; then pass=$((pass+1
 # ★★ NAVTEX MESSAGES (src/utils/navtex.ts, 2026-10-05): ZCZC…NNNN blocks from the text stream with a damaged header
 #    or trailer, [start lost] / [end lost], one PREV like WEFAX, every chunk size.
 if node --no-warnings scripts/test_navtex.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_navtex.ts"; fi
+# ★★ NAVTEX STATIONS (V12 beta 4): scripts/navtex-stations/navtex-stations.json (NGA Pub. 117) → the clients' and the
+#    server's readers through scripts/gen-navtex-stations.mjs — stale output fails here. The rule's cases are in
+#    test_navtex.ts above and vibeserver/test-bgdecode.cpp.
+if node scripts/gen-navtex-stations.mjs --check >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/gen-navtex-stations.mjs --check (stale — run it)"; fi
 if bash scripts/test-rtty-auto.sh >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test-rtty-auto.sh"; fi
 if node --no-warnings scripts/test_tune_hint.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_tune_hint.ts"; fi
 # ★★★ A REOPENED SPECTRUM SOCKET CARRIES THE LISTENER'S OWN VFO BACK on a per-listener dial, and NEVER on a

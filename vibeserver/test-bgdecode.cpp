@@ -348,8 +348,57 @@ static void gapMidMessage() {
     h->stop();
     const std::string list = s.listJson("navtex", 10);
     size_t n = 0; for (size_t at = 0; (at = list.find("\"f\":", at)) != std::string::npos; at++) n++;
-    ok(n == 1 && list.find("Station B") != std::string::npos && list.find("\"partial\":true") == std::string::npos,
+    // ★ V12 beta 4: no position here, but the text says OOSTENDERADIO — so the title names it (navtexStations below)
+    ok(n == 1 && list.find("B \xc2\xb7 Oostende") != std::string::npos && list.find("\"partial\":true") == std::string::npos,
        "★ ONE item, from its header, not partial (" + std::to_string(n) + "): " + list.substr(0, 220));
+}
+
+// ── 5c. ★ V12 beta 4: the NAVTEX STATION by name — the same cases as scripts/test_navtex.ts, so the rule's two readers
+//        (vibe_navtex_stations.h, navtexStations.generated.ts) cannot drift ────────────────────────────────────────────
+static void navtexStations() {
+    std::printf("── NAVTEX stations: letter + band + this server's position (NGA Pub. 117) ──\n");
+    const double LA = 52.3125, LO = -0.875;   // IO92nh, the Lenovo
+    auto L = [&](char b1, double hz, const std::string& text = "", double la = 52.3125, double lo = -0.875) {
+        return navtex::label(b1, hz, la, lo, text);
+    };
+    auto starts = [](const std::string& s, const std::string& p) { return s.compare(0, p.size(), p) == 0; };
+    ok(L('B', 489500) == "B \xc2\xb7 Oostende, Belgium \xf0\x9f\x87\xa7\xf0\x9f\x87\xaa", "B on 490 = Oostende, Belgium + flag: " + L('B', 489500));
+    ok(starts(L('U', 489500), "U \xc2\xb7 Cullercoats, United Kingdom"), "U on 490 = Cullercoats");
+    ok(starts(L('A', 489500), "A \xc2\xb7 Malin Head, Ireland"), "A on 490 = Malin Head");
+    ok(starts(L('L', 489500), "L \xc2\xb7 Hamburg, Germany"), "L on 490 = Hamburg");
+    ok(starts(L('G', 517500), "G \xc2\xb7 Cullercoats"), "G on 518 = Cullercoats");
+    ok(starts(L('V', 517500), "V \xc2\xb7 Oostende"), "V on 518 = Oostende");
+    ok(starts(L('L', 517500), "L \xc2\xb7 Rogaland, Norway"), "L on 518 = Rogaland");
+    ok(starts(L('J', 517500), "J \xc2\xb7 Stockholm, Sweden"), "J on 518 = Stockholm");
+    ok(starts(L('I', 517500), "I \xc2\xb7 Varberg, Sweden"), "I on 518 = Varberg");
+    ok(starts(L('N', 517500), "N \xc2\xb7 Orlandet, Norway"), "N on 518 = Orlandet");
+    ok(L('M', 517500) == "Station M", "M on 518: out of reach — the letter only");
+    ok(L('W', 517500) == "Station W", "W on 518: Corsen / Valentia ambiguous — the letter only");
+    ok(starts(L('W', 517500, "VALENTIA RADIO GALE WARNING"), "W \xc2\xb7 Valentia, Ireland"), "the text names Valentia");
+    ok(starts(L('W', 517500, "CROSS CORSEN"), "W \xc2\xb7 Corsen, France"), "the text names Corsen");
+    ok(L('W', 517500, "MRSC MALIN, EJM.") == "Station W", "a name not on W/518 does not count");
+    ok(L('B', 489500, "", NAN, NAN) == "Station B", "no position → the letter only");
+    ok(starts(L('B', 489500, "OOSTENDERADIO NAV WARNING", NAN, NAN), "B \xc2\xb7 Oostende"), "no position, the text names it");
+    ok(starts(L('L', 489500, "NCC-HAMBURG", -33.9, 18.4), "L \xc2\xb7 Hamburg"), "the text wins wherever the server is");
+    ok(L('B', 4209500) == "Station B", "HF: no HF letters in Pub. 117");
+    ok(L('B', 10e6) == "Station B", "not a NAVTEX channel");
+    ok(L('B', 489500, "", -33.9, 18.4) == "Station B", "Cape Town: nothing within reach");
+    // the gallery's title, through the tap
+    gallery::Store s; s.setDir(tmpDir("stations"));
+    gallery::Meta m; m.kind = "navtex"; m.origin = "background"; m.freqHz = 489500; m.mode = "usb"; m.decoder = "navtex";
+    m.lat = LA; m.lon = LO;
+    {
+        bg::GalleryTap t(s, m);
+        t.text("ZCZC BA10\r\nOOSTENDERADIO\r\nNAV WARNING\r\nNNNN\r\n");
+        t.finish(false);
+    }
+    const std::string list = s.listJson("navtex", 10);
+    ok(list.find("B \xc2\xb7 Oostende, Belgium") != std::string::npos && list.find("Nav warning") != std::string::npos,
+       "★ the gallery item is titled with the station: " + list.substr(0, 260));
+    gallery::Meta m2 = m; m2.lat = NAN; m2.lon = NAN;
+    gallery::Store s2; s2.setDir(tmpDir("stations2"));
+    { bg::GalleryTap t(s2, m2); t.text("ZCZC BA11\r\nNAV WARNING\r\nNNNN\r\n"); t.finish(false); }
+    ok(s2.listJson("navtex", 10).find("Station B") != std::string::npos, "no position, no name in the text → \"Station B\" as before");
 }
 
 // ── 6. end to end: IQ → channels → demodulators → decoders → gallery ────────────────────────────────────────────
@@ -543,6 +592,7 @@ int main() {
     store();
     hostTap();
     gapMidMessage();
+    navtexStations();
     runner();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;

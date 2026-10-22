@@ -22884,6 +22884,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   for (auto& kv : clientDsp) if (kv.second && kv.second->session == session && !session.empty()) { md = kv.second->mode; break; } }
                 if (md.empty()) { std::lock_guard<std::recursive_mutex> ml(modeMtx); md = mode; }
                 m.mode = md;
+                m.lat = g_bgLat.load(); m.lon = g_bgLon.load();   // ★ names a NAVTEX station (vibe_navtex_stations.h)
                 return vibe::bg::makeGalleryTap(vibe::gallery::shared(), m, dial);
             };
             // ★★ …and a listener's FT8/FT4: the same SUMMARY background decoding keeps, one per spotting session.

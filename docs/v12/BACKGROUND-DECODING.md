@@ -166,6 +166,27 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
   (648 kHz with Nick's profile, tune away and back, a decoder claim, switched off, a locked radio),
   `test-setup-bg-tiers.mjs`.
 
+## NAVTEX: which station sent it (2026-10-22, beta 4)
+
+A NAVTEX header names its transmitter by one letter (`ZCZC BA10` is station B), and a dozen stations round the world
+share each letter. The gallery, the web client's NAVTEX box and the app's now say **"B · Oostende, Belgium 🇧🇪 · Nav
+warning · #10"** when the station can be named, and "Station B" as before when it cannot.
+
+- **The table** is `scripts/navtex-stations/navtex-stations.json`, parsed by `scripts/navtex-stations/parse-pub117.py`
+  from **NGA Pub. 117, Radio Navigational Aids, Chapter 3 (300C.1 / 300C.2 NAVTEX Stations)** — a US Government work,
+  public domain; 2021 edition (PDF dated 2021-03-11), fetched 2026-10-22 from msi.nga.mil. The Admiralty List of Radio
+  Signals is copyright and is not used. 159 stations, 220 transmitters; one entry (Hamburg's 518 kHz S) has no frequency
+  in the source and is left out; Pub. 117 lists **no HF (4209.5 kHz) letters**, so HF stays the letter only. The parser
+  also checks every letter against its broadcast-time slot and reports the source's own irregularities on stderr.
+- **One rule, two readers:** `node scripts/gen-navtex-stations.mjs` writes `src/utils/navtexStations.generated.ts`
+  (app + browser) and `android/app/src/main/cpp/vibe_navtex_stations.h` (gallery titles); `--check` in run-tests.sh.
+- **The rule:** the band is the NAVTEX channel within ±3 kHz of the dial. A candidate (same letter, same band) whose name
+  the text spells ("OOSTENDERADIO", "NCC-HAMBURG") wins wherever it is. Otherwise the nearest candidate to THIS server
+  within 1500 km (MF) / 2500 km (HF). Two candidates within reach and the second under 1.5× as far → ambiguous → the
+  letter only. No server position and no name in the text → the letter only.
+- **Why 1500 km, not 700:** the Lenovo (IO92nh) logged Norwegian warnings from Rogaland (813 km) and Orlandet
+  (1400 km), Swedish from Stockholm (1053 km) and Danish from Varberg (1004 km) in one evening.
+
 ## Not wanted
 
 PSKReporter (parked: "not really designed as a PSKReporting service").

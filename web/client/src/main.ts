@@ -48,7 +48,7 @@ import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
-import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle } from '../../../src/utils/navtex';
+import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 import { VS_SQL_OFF, vsSqlOn, vsSqlRestore } from '../../../src/services/vibeSquelch';
@@ -9940,6 +9940,10 @@ let nvHz = 0;
 const NAVTEX_RETUNE_HZ = 3000;
 let nvViewPrev = false;
 let nvRenderQueued = false;
+/** ★ V12: what names the station ("B · Oostende, Belgium 🇧🇪"): the dial the text came from and THIS server's position. */
+function nvPlace(): NavtexPlace {
+  return { dialHz: nvHz || spec?.frequency || 0, lat: serverLoc?.lat ?? NaN, lon: serverLoc?.lon ?? NaN };
+}
 /** Redraw the NAVTEX view — at most once a frame, since RTTY-style text arrives a character or two at a time. */
 function queueNavtexRender() {
   if (nvRenderQueued) return;
@@ -9956,7 +9960,7 @@ function renderNavtex() {
   const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
   view.classList.toggle('has', !!shown);
   if (shown) {
-    $('nvTitle').textContent = navtexTitle(shown);
+    $('nvTitle').textContent = navtexTitle(shown, nvPlace());
     const pct = navtexLostPct(shown);
     // ★ Where it is, under the title too — on a phone the header's status is the first thing squeezed out.
     $('nvMeta').textContent = [nvViewPrev ? 'PREVIOUS' : !shown.done ? 'RECEIVING' : 'STANDING BY',
@@ -9989,7 +9993,7 @@ function saveNavtex() {
   const m = nvViewPrev ? navtexAsm.prev : navtexAsm.live;
   if (!m) return;
   const name = navtexFileName(m);
-  const blob = new Blob([navtexFileText(m)], { type: 'text/plain;charset=utf-8' });
+  const blob = new Blob([navtexFileText(m, nvPlace())], { type: 'text/plain;charset=utf-8' });
   const file = new File([blob], name, { type: 'text/plain' });
   const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
   if (nav.canShare?.({ files: [file] })) { nav.share?.({ files: [file] }).catch(() => {}); return; }

@@ -143,7 +143,13 @@ private:
     void saveHeld(bool all, bool partialTail = false) {
         if (held_.empty() || (!all && gallery::nowUtc() - heldAt_ < 2)) return;
         for (size_t i = 0; i < held_.size(); i++) {
-            const auto& m = held_[i];
+            auto m = held_[i];
+            // ★ V12 beta 4: name the station from its letter, the dial and this server's position — the rule the listener's
+            //   box uses (navtexStations.generated.ts), so the gallery and the box say the same thing.
+            if (m.id.size() == 4) {
+                const char b1 = m.id[0];
+                if (navtex::resolve(b1, meta_.freqHz, meta_.lat, meta_.lon, m.text)) m.station = navtex::label(b1, meta_.freqHz, meta_.lat, meta_.lon, m.text);
+            }
             gallery::Meta mm = meta_;
             mm.utc = m.startedAt;
             mm.title = gallery::NavtexAsm::title(m);
@@ -613,13 +619,15 @@ public:
                 auto lg = p_.log;
                 const std::string tag = "VFO " + std::to_string(i + 1) + " (" + khz(v.hz) + ")";
                 auto lo_ = listenerOnFlag_;
-                env.tap = [st, v, pi, lg, tag, lo_](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
+                const double la0 = p_.lat, lo0 = p_.lon;
+                env.tap = [st, v, pi, lg, tag, lo_, la0, lo0](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
                     gallery::Meta m;
                     m.kind = galleryKindFor(ext, msg);
                     if (m.kind.empty()) return nullptr;
                     m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = v.dec;
                     m.profile = "Profile " + std::to_string(pi + 1);
                     m.listenerOn = lo_;
+                    m.lat = la0; m.lon = lo0;
                     return makeGalleryTap(*st, m, nullptr, lg, tag);
                 };
                 const double la = p_.lat, lo = p_.lon;

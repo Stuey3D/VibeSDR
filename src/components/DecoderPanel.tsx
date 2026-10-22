@@ -83,6 +83,9 @@ export interface DecoderPanelProps {
   notice?:       { text: string; action?: string; onAction?: () => void } | null;
   /** ★ NAVTEX: the stream cut into messages (utils/navtex), fed by SDRScreen as text arrives. */
   navtex?:       NavtexAssembler | null;
+  /** ★ V12: the RECEIVING server's position — with the dial, what names a NAVTEX station ("B · Oostende, Belgium 🇧🇪").
+   *  null/absent → the letter only ("Station B"), as before. */
+  receiverPos?:  { lat: number; lon: number } | null;
   onClose:       () => void;
   /** Image canvas (WEFAX/SSTV) — SDRScreen drives lines via this ref. */
   imageRef?:      React.RefObject<DecoderImageHandle | null>;
@@ -237,7 +240,7 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0,
+  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null,
 }: DecoderPanelProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
@@ -376,6 +379,8 @@ export default function DecoderPanel({
    *  CLR does (SDRScreen's onClear → NavtexAssembler.clearLive): the message arriving is dropped, the finished ones stay
    *  under PREV, and LIVE stands by for the next ZCZC. The dial is the shared one, so another listener's retune counts. */
   const lastNavtexHz = useRef(tunedHz);
+  /** ★ The dial the text came from (lastNavtexHz — a retune clears the box) and the receiver's position. */
+  const nvPlace = { dialHz: lastNavtexHz.current || tunedHz, lat: receiverPos?.lat ?? NaN, lon: receiverPos?.lon ?? NaN };
   useEffect(() => {
     if (!isNavtex || !tunedHz) { lastNavtexHz.current = tunedHz; return; }
     // ★ Measured from where the message was being received, not from the last step — a drag across the band arrives
@@ -390,7 +395,7 @@ export default function DecoderPanel({
     const m = nvShown;
     if (!m) return;
     const name = navtexFileName(m);
-    const body = navtexFileText(m);
+    const body = navtexFileText(m, nvPlace);
     try {
       // ★ A REAL .txt FILE on iOS / Mac (Save to Files, AirDrop, Mail with an attachment) — the same reason
       //   DecoderImageCanvas.save writes a file rather than a data: URL. Android's share sheet ignores `url`, so
@@ -1354,7 +1359,7 @@ export default function DecoderPanel({
               <>
                 <View style={[dp.nvHead, { borderBottomColor: tk.divider }]}>
                   <Text style={[dp.nvTitle, { color: tk.accent, fontFamily: FONT }]} numberOfLines={2}>
-                    {navtexTitle(nvShown)}
+                    {navtexTitle(nvShown, nvPlace)}
                   </Text>
                   <Text style={[dp.nvMeta, { color: tk.muted, fontFamily: FONT }]} numberOfLines={1}>
                     {/* ★ Where it is, under the title too — on an SE the header's status is the first thing squeezed out. */}
