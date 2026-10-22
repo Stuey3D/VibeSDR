@@ -5287,13 +5287,18 @@ function addr() {
 // ★ The model lives in bgModel and the DOM is redrawn from it; the inputs write straight back into the model, so a
 //   redraw (a row added or removed) never loses what was typed.
 // ★ Mirrors vibe_bgdecode_config.h: the decoders, their audio tone (USB: signal = dial + tone; LSB: dial − tone).
+// ★ `modes`: only what works — WEFAX and SSTV are not offered on LSB (a mirrored chart is a negative), SSTV on NFM is
+//   the ISS on 145.800. FT8/FT4 is kept as a SUMMARY of the run (spots, countries, the furthest), not as spots.
 const BG_DECODERS = [
-  { id: "navtex",       label: "NAVTEX",                       tone: 500 },
-  { id: "rtty",         label: "RTTY (auto)",                  tone: 1000 },
-  { id: "rtty-ham",     label: "RTTY 45.45 Bd 170 Hz",         tone: 1000 },
-  { id: "rtty-weather", label: "RTTY 50 Bd 450 Hz (weather)",  tone: 1000 },
+  { id: "navtex",       label: "NAVTEX",                       tone: 500,  modes: ["usb", "lsb"] },
+  { id: "rtty",         label: "RTTY (auto)",                  tone: 1000, modes: ["usb", "lsb"] },
+  { id: "rtty-ham",     label: "RTTY 45.45 Bd 170 Hz",         tone: 1000, modes: ["usb", "lsb"] },
+  { id: "rtty-weather", label: "RTTY 50 Bd 450 Hz (weather)",  tone: 1000, modes: ["usb", "lsb"] },
+  { id: "wefax",        label: "WEFAX (120 LPM)",              tone: 1900, modes: ["usb"] },
+  { id: "sstv",         label: "SSTV",                         tone: 0,    modes: ["usb", "nfm"] },
+  { id: "ft8",          label: "FT8 / FT4 (summary)",          tone: 0,    modes: ["usb"] },
 ];
-const BG_DEMODS = { usb: "USB", lsb: "LSB" };   // ★ only demodulators a background decoder works on
+const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodulators some background decoder works on
 let bgModel = { on: false, waitMin: 5, profiles: [] };
 function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: [{ hz: 0, mode: "usb", dec: "navtex" }] }; }
 function bgLoad(r) {
@@ -5338,6 +5343,7 @@ function bgCollect() {
 function bgSignalText(v) {
   const d = BG_DECODERS.find(function (x) { return x.id === v.dec; });
   if (!d || !(v.hz > 0)) return "";
+  if (!d.tone || v.mode === "nfm") return d.label.split(" ")[0] + " on " + (v.hz / 1e3).toFixed(3) + " kHz " + BG_DEMODS[v.mode] + ".";
   const sig = v.mode === "lsb" ? v.hz - d.tone : v.hz + d.tone;
   return "Listening for " + d.label.split(" ")[0] + " on " + (sig / 1e3).toFixed(3) + " kHz (the dial sits "
        + (d.tone / 1e3).toFixed(1) + " kHz " + (v.mode === "lsb" ? "above" : "below") + " it in " + BG_DEMODS[v.mode] + ").";
@@ -5386,8 +5392,15 @@ function bgRender() {
       for (const k in BG_DEMODS) { const o = el("option", { value: k }, BG_DEMODS[k]); md.appendChild(o); }
       md.value = v.mode; row.appendChild(md);
       const dc = el("select");
-      BG_DECODERS.forEach(function (d) { dc.appendChild(el("option", { value: d.id }, d.label)); });
-      dc.value = v.dec; row.appendChild(dc);
+      // ★ Only the decoders that make sense for this demodulator (Stuart) — refilled when the demodulator changes.
+      const fillDec = function () {
+        dc.innerHTML = "";
+        const fit = BG_DECODERS.filter(function (d) { return d.modes.indexOf(md.value) >= 0; });
+        fit.forEach(function (d) { dc.appendChild(el("option", { value: d.id }, d.label)); });
+        if (!fit.some(function (d) { return d.id === v.dec; })) v.dec = fit.length ? fit[0].id : "";
+        dc.value = v.dec;
+      };
+      fillDec(); row.appendChild(dc);
       const rm = el("button", { type: "button", class: "ghost" }, "Remove");
       rm.onclick = function () { p.vfos.splice(vi, 1); if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); bgRender(); };
       row.appendChild(rm);
@@ -5397,7 +5410,7 @@ function bgRender() {
         v.hz = Math.round((parseFloat(fi.value) || 0) * 1e3); v.mode = md.value; v.dec = dc.value;
         hint.textContent = bgSignalText(v);
       };
-      fi.oninput = upd; md.onchange = upd; dc.onchange = upd;
+      fi.oninput = upd; md.onchange = function () { v.mode = md.value; fillDec(); upd(); }; dc.onchange = upd;
       card.appendChild(row);
     });
     if (p.vfos.length < 8) {

@@ -13477,6 +13477,13 @@ async function openGalleryItem(it: GalleryItem) {
   $('galViewMeta').textContent = `${it.title} · ${galFreq(it.hz)} ${(it.m || '').toUpperCase()} · ${galWhen(it.t)}`
     + ` · ${it.o === 'background' ? `background decoding${it.p ? ` (${it.p})` : ''}` : 'a listener\'s decoder'}`;
   $('galList').hidden = true; $('galFilter').hidden = true; $('galView').hidden = false;
+  // ★ A chart or a picture is shown as itself; the browser fetches it (same origin, the same read auth).
+  const img = $('galImg') as HTMLImageElement;
+  if (/\.png$/i.test(it.f)) {
+    $('galText').hidden = true; img.hidden = false; img.src = url;
+    return;
+  }
+  img.hidden = true; img.removeAttribute('src'); $('galText').hidden = false;
   $('galText').textContent = 'Loading…';
   try {
     const r = await fetch(url, { cache: 'no-store' });
