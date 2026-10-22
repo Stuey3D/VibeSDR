@@ -26,6 +26,8 @@ Anything that tells a user WHERE something is:
 - `src/components/AboutOverlay.tsx` — release notes AND the feature lists
 - `spike/WristSDR/WristSDR/*.swift` and `ios/VibeSDRWatch/*.swift` — `TutorialSheet` / `*TutorialTips`
 - `website/index.html`
+- ★ Icom (V12): the `sdrTour` drum + cog cards, `AboutOverlay` (V12 note + feature list) and the web tutorial say an
+  Icom's controls are in the cog under the radio's name and that zoom steps its scope span. Move either, fix all three.
 
 ## The rule
 Grep for the control's OLD home and its NAME before you finish the move. A tour that misdirects is

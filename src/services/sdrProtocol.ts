@@ -213,7 +213,7 @@ export interface RdsExt {
  *  dongle's gain slider for it is not a cosmetic error: the control does nothing useful and
  *  the ones that would work are absent. Show only what the driver reports. */
 export interface RadioCaps {
-  driver: 'rtl' | 'sdrplay' | 'airspyhf' | string;
+  driver: 'rtl' | 'sdrplay' | 'airspyhf' | 'icom' | string;
   model: string;
   /** ★ An rtl_tcp stream whose server reported NO gains — relayed IQ (a VibeServer's raw-IQ output,
    *  an UberSDR), not a dongle. There is no tuner at the far end: no gain, no VibeAGC, no dongle
@@ -281,6 +281,27 @@ export interface RadioCaps {
   extRef?: boolean;  extRefOn?: boolean;     // RSP2 / Duo: 24 MHz reference output
   /** ★ Bias-T state, beside the `biasT` capability (RSP: from the radio's own setting since 2026-10-22). */
   biasTOn?: boolean;
+  // ── ★★★ ICOM TRANSCEIVER (driver === 'icom', RECEIVE ONLY — docs/ICOM-SUPPORT-PLAN.md) ──
+  /* Not an IQ radio: a 475-point scope, the radio's own audio and CI-V. The full typed shape is IcomRadio in
+   * icomRadio.ts — parse with parseIcomRadio(caps) rather than reading these loose; they are listed here so
+   * the wire contract is visible where every other radio's is. `ranges` above is shared.
+   * ★ The generic hwinfo fields outside `radio` (gains, agc, ds*, biasT, adcPeak …) MEAN NOTHING on an Icom.
+   * ★★ Branch on driver 'icom' BEFORE any default ("else means dongle"), and hide every IQ control
+   *    (ICOM_HIDDEN_CONTROLS) — never leave one visible and inert (AGENTS.md). */
+  civ?: string; link?: string; transport?: string; linesHeldLow?: boolean; baud?: number;
+  noIq?: boolean; sharedOnly?: boolean; canTransmit?: boolean;
+  modes?: string[]; modeNow?: string; filters?: number[]; filNow?: number;
+  filterWidths?: Record<string, number[]>;
+  /** ⚠ on an Icom `att` is the dB LIST ([0,20]) and `agc` the speed list — not the HF+'s meanings. */
+  att?: number[]; attNow?: number; preamp?: number[]; preampNow?: number; agc?: string[]; agcNow?: string;
+  rfGain?: number[]; rfGainNow?: number;
+  nb?: boolean; nbNow?: boolean; nr?: boolean; nrNow?: boolean; anf?: boolean; anfNow?: boolean;
+  scope?: { points: number; spans: number[]; span: number; modes: string[]; mode: string; speeds: string[]; fps: number };
+  tx?: boolean; linkUp?: boolean; ownerLock?: boolean; rfOpen?: boolean;
+  audio?: string; audioProblem?: string;
+  preflight?: { passed: boolean; verified: boolean; summary: string;
+                items: { name: string; value: string; ok: boolean; gate: boolean; where: string }[] };
+  refusedFrames?: number;
 }
 
 export type { DabState } from './dabTypes';
@@ -440,6 +461,8 @@ export interface SDRCallbacks {
   onRdsExt?:    (x: RdsExt) => void;
   /** What the serving radio is and what it can do (hwinfo.radio). */
   onRadioCaps?: (caps: RadioCaps) => void;
+  /** ★ An Icom's `{"type":"icom"}` status line (S-meter, TX, link, mode, FIL, span) — see icomRadio.ts. */
+  onIcomStatus?: (st: import('./icomRadio').IcomStatus) => void;
   /** ★ RSP live state, ~10/s while an SDRplay is serving. `sysGain` is the API's own computed
    *  TOTAL system gain and `overload` is the radio's own ADC-clipping event — neither is inferred
    *  from the spectrum the way a dongle's would have to be. `settling` covers the moment after a

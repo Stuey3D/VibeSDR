@@ -1678,9 +1678,10 @@ function MenuSheetBody({
               <Btn label="" icon="zoomIn"  a11y="Zoom in"  onPress={onZoomIn}  style={{ flex: 1 }} />
               <Btn label="MAX"    onPress={onZoomMax} style={{ flex: 1 }} />
             </BtnRow>
-            <BtnRow>
+            {/* ★ Absent when the screen passes none — an Icom's window is the radio's own (a pan does nothing). */}
+            {!!onToggleVfoLock && <BtnRow>
               <VfoLockBtn locked={vfoLocked} onPress={onToggleVfoLock} full />
-            </BtnRow>
+            </BtnRow>}
             <BtnRow>
               <Btn label="DISPLAY SETTINGS" icon="monitor" full
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
@@ -1880,10 +1881,11 @@ function MenuSheetBody({
                     minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{wfSharpness}</Text>
                 </View>
-                <BtnRow>
+                {/* ★ Absent when the screen passes no handler — an Icom's 475-point scope is drawn as it comes. */}
+                {!!onSpatialSmooth && <BtnRow>
                   <Btn label="SPATIAL SMOOTH" active={spatialSmooth}
                        onPress={() => onSpatialSmooth?.(!spatialSmooth)} />
-                </BtnRow>
+                </BtnRow>}
 
                 {/* Spectrum Trace */}
                 <SubLabel label="Spectrum Trace" />
@@ -1891,13 +1893,13 @@ function MenuSheetBody({
                   <Btn label="SHOW" active={specShow}  onPress={() => onSpecShow?.(!specShow)} />
                   <Btn label="HIDE" active={!specShow} onPress={() => onSpecShow?.(false)} />
                 </BtnRow>
-                <View style={styles.sliderWrap}>
+                {!!onSpecSmoothing && <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Smoothing</Text>
                   <NavSlider style={{flex:1}} minimumValue={1} maximumValue={10} step={1}
                     value={specSmoothing} onValueChange={onSpecSmoothing ?? (() => {})}
                     minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{specSmoothing}</Text>
-                </View>
+                </View>}
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Floor</Text>
                   <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
@@ -1944,6 +1946,7 @@ function MenuSheetBody({
                     history, so anything that changes it rescales the picture — deriving it from the
                     live data rate is what made the waterfall compress and expand. A constant cannot
                     do that. Speed therefore follows the data rate, which is what SHARP always did. */}
+                {!!onWfScroll && (<>
                 <SubLabel label="Waterfall Speed" />
                 <BtnRow>
                   <Btn label="SHARP"   active={wfScroll==='sharp'}   onPress={() => onWfScroll?.('sharp')} />
@@ -1957,6 +1960,7 @@ function MenuSheetBody({
                     ? 'Two rows per frame — a little interpolation, twice the scroll speed.'
                     : 'Four rows per frame — continuous motion on a slow feed, less real detail.'}
                 </Text>
+                </>)}
 
                 {/* ★★★ THE IDLE SAVER IS GONE, AND SO IS ITS SWITCH. It slowed the spectrum after
                     30 s without a touch, which read "nobody is looking" from "nobody is touching" —

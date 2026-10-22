@@ -55,6 +55,8 @@
 
 import type { DabState } from './dabTypes';
 import type { ShareOut } from './chatShare';
+import { isIcom, parseIcomRadio, parseIcomStatus, icomControlMsg, nearestSpanIndex, mergeIcomStatus, icomFollowNote,
+         type IcomRadio, type IcomControlFields } from './icomRadio';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzipToStringCapped } from '../utils/boundedInflate';   // ★ capped: a gzip bomb is dropped, not inflated
 import { VibePowerModule } from '../components/AudioPlayer';
@@ -256,6 +258,9 @@ export abstract class VibeServerWsClient {
   // Max zoom-OUT span (Hz). 0 = use maxHz. Local hardware reports its full
   // device bandwidth via config.maxBandwidth so you can't zoom out past it.
   private maxSpanHz = 0;
+  /** ★★★ THE CONNECTED RADIO IS AN ICOM (hwinfo.radio.driver "icom", receive only) — null otherwise.
+   *  Read by zoom() (the span ladder) and icomControl() (only values the radio listed are ever sent). */
+  private icom: IcomRadio | null = null;
 
   // VFO lock / waterfall panning (see SDRBackend.setFollowMode/panSpan).
   // followVfo=true reproduces today's behaviour: tune() recentres the view.
@@ -269,9 +274,22 @@ export abstract class VibeServerWsClient {
    *  only the server's word sets it, and an old server's silence leaves it false (docs/TUNING-ETIQUETTE.md). */
   protected tuneLocked = false;
   private askStateAskedAt = 0;
+  /** ★ This socket is a signed-in admin (hwinfo.adminOk / the `admin` reply) — what an Icom's owner lock asks. */
+  private adminOkNow = false;
+  private icomFollowSaidAt = 0;
   /** @return true when the lock refused the caller. Asks the server for the room's state (at most once a second),
    *  so anything the screen already drew optimistically snaps back to where the radio really is. */
   protected askBlocked(): boolean {
+    /* ★★★ AN ICOM UNDER THE OWNER LOCK ("listeners follow the radio"): the server refuses a listener's tune, mode
+     *  and width with a notice each — so a drum spin would be a notice per detent. Refused HERE instead, with the
+     *  same words at most every 4 s, and the room's state re-asked so the optimistic readout snaps back. A
+     *  signed-in admin (this socket's admin_unlock, adminOk) passes, exactly as the server judges it. */
+    if (this.icom && this.icom.ownerLock && !this.adminOkNow) {
+      const now = Date.now();
+      if (now - this.icomFollowSaidAt > 4000) { this.icomFollowSaidAt = now; this.callbacks.onRefused?.(icomFollowNote(this.icom, false)); }
+      if (now - this.askStateAskedAt > 1000) { this.askStateAskedAt = now; this.requestState(); }
+      return true;
+    }
     if (!this.tuneLocked) return false;
     this.callbacks.onTuneLocked?.();
     const now = Date.now();
@@ -717,6 +735,20 @@ export abstract class VibeServerWsClient {
     // channel both sides). The server goes deeper but past this the
     // spectrum shows artefacts and looks frozen even though it isn't
     // (device-confirmed on both platforms 2026-06-12).
+    /* ★★★ AN ICOM: ZOOM IS THE RADIO'S SPAN LADDER (docs/ICOM-SUPPORT-PLAN.md §2.2). The scope is 475
+     *  real points over one of 8 spans, so every zoom lands on a RUNG — nothing in between, and nothing
+     *  past the narrowest (zooming the picture would invent resolution). ★★ And NOT capped by
+     *  config.maxBandwidth: on an Icom the server sends the CURRENT span there (displaySpan()), so the
+     *  ordinary cap below would forbid ever zooming out again. The 6 kHz floor would hide the 5 kHz rung. */
+    if (this.icom && this.icom.scope.spans.length) {
+      const spans = this.icom.scope.spans;
+      const i = nearestSpanIndex(spans, binBandwidth * n);
+      const rung = spans[i];
+      this.view.centerHz     = f;
+      this.view.binBandwidth = rung / n;
+      this._sendView(f, rung / n);
+      return;
+    }
     const spanCap = this.maxSpanHz > 0 ? this.maxSpanHz : this.maxHz;
     const bb = Math.max(6_000 / n, Math.min(binBandwidth, spanCap / n));
     this.view.centerHz     = f;
@@ -998,6 +1030,18 @@ export abstract class VibeServerWsClient {
     if (o.ppb    !== undefined) m.ppb    = o.ppb;
     if (o.agc    !== undefined) m.agc    = o.agc ? 1 : 0;
     this._sendCtl(m);
+  }
+
+  /** ★★★ AN ICOM'S OWN CONTROLS (`icom_control`, receive only): mode/FIL/span/scope mode under the owner
+   *  lock, ATT/preamp/AGC/RF gain/NB/NR/ANF/scope speed admin-only unless the owner opened them — the
+   *  SERVER judges both and answers a refusal with a notice and a fresh config. ★ icomControlMsg() drops
+   *  any value the radio did not list, so a stale panel cannot send one; there is no transmit field to
+   *  build. Returns false when nothing was sent. */
+  icomControl(f: IcomControlFields): boolean {
+    const m = icomControlMsg(this.icom, f);
+    if (!m) return false;
+    this._sendCtl(m as unknown as Record<string, unknown>);
+    return true;
   }
 
   /** ★★★ HackRF One controls. Same shape — only the keys present are applied.
@@ -1938,7 +1982,9 @@ export abstract class VibeServerWsClient {
       }
       let stalls = 0;
       for (let i = 0; i < h.length; i++) if (h[i] > med * 2.5 + 50) stalls++;
-      const starving = this.lastFrameAt > 0 &&
+      // ★ An Icom transmitting / off CI-V sends no sweeps ON PURPOSE — that is not a starving link.
+      const icomQuiet = !!this.icom && (this.icom.tx || !this.icom.linkUp);
+      const starving = !icomQuiet && this.lastFrameAt > 0 &&
         now - this.lastFrameAt > Math.max(2000, med * 4);
       if (now - this.lastReconnectAt < 8000 || stalls >= 3 || starving || this.rttJit > 250) {
         q = 1;
@@ -2028,14 +2074,21 @@ export abstract class VibeServerWsClient {
     }
 
     // 2. NO FIRST FRAME — the socket opened into a session that isn't there.
-    if (this.framesThisSocket === 0 && this.wsOpenedAt > 0 &&
+    // ★ …unless it is an Icom that has told us (hwinfo, on this socket) it is transmitting or off CI-V.
+    const icomSaysWhy = !!this.icom && (this.icom.tx || !this.icom.linkUp);
+    if (!icomSaysWhy && this.framesThisSocket === 0 && this.wsOpenedAt > 0 &&
         now - this.wsOpenedAt > NO_FIRST_FRAME_MS) {
       this.forceResubscribe('no-first-frame');
       return;
     }
 
     // 3. FRAME STALENESS — backstop for a server that pongs but stops sending.
-    if (this.framesThisSocket > 0 && this.lastFrameAt > 0 &&
+    // ★★★ NOT WHILE AN ICOM SAYS WHY. The server FREEZES the scope while the owner transmits (a QSO over
+    //     is easily longer than 10 s) and has no sweeps to send while the radio is not answering on CI-V;
+    //     both arrive as state (radio.tx / linkUp, the icom status line). Reopening the socket then fixes
+    //     nothing and churns the session — the pong timeout above still catches a dead link.
+    const icomQuiet = !!this.icom && (this.icom.tx || !this.icom.linkUp);
+    if (!icomQuiet && this.framesThisSocket > 0 && this.lastFrameAt > 0 &&
         now - this.lastFrameAt > this._staleLimitMs()) {
       this.forceResubscribe('frames-stale');
       return;
@@ -2380,6 +2433,17 @@ export abstract class VibeServerWsClient {
       this.callbacks.onSaid?.(Number(msg.from) || 0, String(msg.id || ''), msg as Record<string, unknown>);
       return;
     }
+    /* ★★ AN ICOM'S STATUS LINE — the S-meter (≤ 4/s), TX, link, mode, FIL, span. Sent on join straight after
+     *  hwinfo and on every change. The S-meter is drawn from THIS, never from SPEC bins: the scope is
+     *  relative to the radio's REF level, not dBFS. */
+    if (msg.type === 'icom') {
+      const st = parseIcomStatus(msg);
+      if (st) {
+        if (this.icom) this.icom = mergeIcomStatus(this.icom, st);   // ★ TX/link for the watchdog below
+        this.callbacks.onIcomStatus?.(st);
+      }
+      return;
+    }
     if (msg.type === 'notice') {
       /* ★★★ ONE TYPE, TWO MESSAGES, AND THE REFUSAL WAS BEING THROWN AWAY.
        *  `text` is the owner's STANDING notice (persistent, posted from the setup page); `why` is
@@ -2407,6 +2471,7 @@ export abstract class VibeServerWsClient {
       // ★★ `superseded` = an owner proved the same password more recently, so this session is no
       //    longer admin. Distinct from `refused` (the password was wrong): nothing was mistyped
       //    here, and the honest response is to let the credential go rather than to re-assert it.
+      this.adminOkNow = msg.ok === true;
       this.callbacks.onAdminState?.({
         set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true,
         superseded: msg.superseded === true });
@@ -2621,7 +2686,12 @@ export abstract class VibeServerWsClient {
        *     timer or a reconciliation pass here — each of those is a second route by another name.
        *  ★ The web client has no equivalent of this block at all, which is the whole reason it
        *    "just works": it has nothing that can assert a frequency nobody asked for. */
-      if (this.hadSession && this.status.frequency > 0 && !this.sharedDial) {
+      /* ★★★ NEVER ON AN ICOM EITHER: the radio IS the dial — its owner's hand or the front panel moved it,
+       *  and a resume re-asserting our stale frequency would retune a stranger's transceiver (or, under
+       *  the owner lock, earn a refusal on every return from the background). One physical receiver,
+       *  so it is a shared dial even with one listener allowed. */
+      const icomNow = isIcom(msg.radio);
+      if (this.hadSession && this.status.frequency > 0 && !this.sharedDial && !icomNow) {
         this.tune(this.status.frequency, this.status.mode, { recenter: true });
       } else if (this.hadSession && this.sharedDial) {
         this.dbg('shared dial — not re-asserting our tune on this hwinfo; the room owns the dial');
@@ -2632,10 +2702,12 @@ export abstract class VibeServerWsClient {
       // this — see RadioCaps. Forwarded verbatim rather than normalised: a driver we do not
       // know yet must still be able to say what it is.
       if (msg.radio && typeof msg.radio === 'object') {
+        this.icom = parseIcomRadio(msg.radio);
         this.callbacks.onRadioCaps?.(msg.radio as RadioCaps);
       }
       if (typeof msg.adminSet === 'boolean') {
         this.adminSet = msg.adminSet;
+        this.adminOkNow = msg.adminOk === true;
         this.callbacks.onAdminState?.({ set: msg.adminSet, ok: msg.adminOk === true });
       // ★ Absent on a server too old to send it — the clock then keeps showing the phone's time
       //   rather than going blank.
@@ -2691,7 +2763,8 @@ export abstract class VibeServerWsClient {
         this.callbacks.onHwRateNow?.(msg.rateNow);
       // ★ Whether the server's own AGC is running — see onHwAgc.
       // ★★ The server writes it as 1/0, not true/false — a boolean-only test never fired.
-      if (typeof msg.agc === 'boolean' || typeof msg.agc === 'number')
+      // ★ …and on an Icom (hwinfo `radio` parsed above) none of these generic fields means anything (contract).
+      if ((typeof msg.agc === 'boolean' || typeof msg.agc === 'number') && !this.icom)
         this.callbacks.onHwAgc?.(msg.agc === true || msg.agc === 1);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
       // >0 = the host PINNED the capture rate. The server ignores our sampleRate
@@ -2719,7 +2792,7 @@ export abstract class VibeServerWsClient {
         this.callbacks.onHwBlockedModes?.((msg.blocked as string[]).map(x => String(x).toLowerCase()));
       // ★ Only when the server actually states it — an older server has no such filter and must
       //   not be read as "wide open", which is a claim about hardware we have not been told about.
-      if (msg.tunerBw !== undefined)
+      if (msg.tunerBw !== undefined && !this.icom)
         this.callbacks.onHwTunerBw?.(Number(msg.tunerBw) || 0, msg.tunerBwAuto === true);
       // ★ The filter's manual widths, the owner's ceiling and its lock — see onHwIfPolicy. Sent
       //   beside tunerBw, so only a server that has the filter says anything here.
@@ -2785,11 +2858,13 @@ export abstract class VibeServerWsClient {
       /* ★★★ THE RADIO'S IF FILTER AND GAIN, FROM THE SAME MESSAGE AS ITS FREQUENCY AND ZOOM —
        *  the server's full state in one place (2026-09-22). hwinfo still carries them for older
        *  servers; these fields are absent there, so nothing changes against one. */
-      if (typeof msg.ifBw === 'number')
+      // ★ An Icom has no IF filter, gain table or VibeAGC of ours — the generic fields still ride the config and
+      //   MEAN NOTHING there (contract), so they must not paint "IF wide" / a gain on the readout.
+      if (typeof msg.ifBw === 'number' && !this.icom && msg.icom !== true)
         this.callbacks.onHwTunerBw?.(msg.ifBw, msg.ifAuto === true);
-      if (typeof msg.gainNow === 'number' && msg.gainNow >= 0)
+      if (typeof msg.gainNow === 'number' && msg.gainNow >= 0 && !this.icom && msg.icom !== true)
         this.callbacks.onHwGainNow?.(msg.gainNow);
-      if (typeof msg.agc === 'number' || typeof msg.agc === 'boolean')
+      if ((typeof msg.agc === 'number' || typeof msg.agc === 'boolean') && !this.icom && msg.icom !== true)
         this.callbacks.onHwAgc?.(msg.agc === true || msg.agc === 1);      // Local hardware advertises its full span here → cap zoom-out to it.
       if (typeof msg.maxBandwidth === 'number') this.maxSpanHz = msg.maxBandwidth;
       if (typeof msg.centerFreq   === 'number') this.status.centerHz     = msg.centerFreq;

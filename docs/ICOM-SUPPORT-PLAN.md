@@ -765,3 +765,95 @@ DTR/RTS staying low on a real CP2102 (dummy load!); the 7300's exact `27 00` div
 scope commands take the `00` selector byte; the preflight menu numbers; echo/transceive behaviour on Saber's
 settings; the codec's ALSA/CoreAudio names; the sibling-card search on a real USB topology; real sweep rate at
 115200; S-meter calibration on the radio; behaviour while wfweb holds the port; CDC-ACM radios entirely.
+
+---
+
+## Clients built 2026-10-22 (branch `v12-icom-ui`) — the app and the browser
+
+*Built from the contract above while Stuart was at work. Nothing here has met a real radio; the web half was driven
+against the fake IC-7300 (`scripts/test-web-icom.mjs`), the app half is type-checked and source-checked only (no
+native build was allowed on this branch — another agent held the Android build).*
+
+### One rule, two readers: `src/services/icomRadio.ts`
+
+hwinfo.radio and the `{"type":"icom"}` line are parsed ONCE, in a file with no imports that the app and
+`web/client` both use: the hide list (`ICOM_HIDDEN_CONTROLS`), owner lock / RF-admin (`icomMayTune`, `icomMayRf`),
+labels (USB-D, CW-R, ±25k, P.AMP1), the span ladder (`nearestSpanIndex`, `spanStep`), the S-meter (`sMeter`, 6 dB
+per S-unit from `sDbOverS9`), the banner words, and `icomControlMsg`, which only ever emits values the radio listed
+and has no transmit field to build. Tested by `scripts/test_icom_radio.ts` (129 checks) and, for the app's gates,
+`scripts/check-icom-app-gates.mjs` (38). Both are in `run-tests.sh`.
+
+### What the APP does on an Icom
+
+- **The radio's controls** are in the cog under the radio's name (the existing hardware sheet, `LocalHardwarePanel`):
+  an Icom branch FIRST, then nothing of the IQ body (gain table, VibeAGC, IF ladder, rate, ppm, bias-T, DS, the
+  RSP/HF+/Airspy/HackRF stages). Drawn: MODE from `radio.modes` (USB-D, RTTY …), FIL1/2/3 with the factory widths,
+  SCOPE SPAN from `scope.spans`, CENTRE/FIXED, preamp, ATT, AGC, RF gain (sent on release), the radio's NB/NR/ANF,
+  scope speed.
+- **Hidden elsewhere**: our squelch (audio sheet + menu), de-emphasis, stereo, every FM DSP key (NR/IMS/auto BW/
+  CEQ/NB/NBX), NFM voice, binaural, raw IQ out, link mode, VFO lock + centre-on-VFO, WFM in the mode list (the list
+  is the client modes the radio's modes map to), and the spectrum smoothing / spatial smoothing / waterfall-speed
+  controls (see below). DAB and Advanced RDS were already unreachable (`dab:false`, no WFM).
+- **S-meter** from the status line (dBm = −73 + sDbOverS9, read like OWRX's S-meter), never from SPEC bins.
+- **Banners** in the owner-notice furniture: "The radio is transmitting — receive paused", "The radio is not
+  answering — VibeServer is retrying"; and, for a listener under the owner lock, "Everyone hears what the radio is
+  tuned to — the owner tunes it." (dismissible).
+- **The wire**: `icomControl()` sends `icom_control`; zoom lands on a span rung and is NOT capped by
+  `config.maxBandwidth` (on an Icom that is the CURRENT span, so the ordinary cap would forbid zooming out); a resume
+  never re-asserts our tune; under the owner lock a listener's tune/mode/width is refused locally with one notice
+  per 4 s (the server would send one per drum detent); the generic hwinfo/config IF/gain/AGC fields are ignored.
+- **No false alarms**: no frame-stale / no-first-frame reconnect and no red link bars while the radio says it is
+  transmitting or off CI-V (the server freezes the scope on purpose).
+- **Owner setup** (`IcomSetupCard`, inside the radio sheet, signed-in admin only): the facts from hwinfo (model,
+  CI-V, baud with the 115200 ≈ 19/s vs 19200 ≈ 3/s note, transport and DTR/RTS, preflight with the exact menu item,
+  audio device/problem, refused-frame count, "only one program can hold the radio's USB port"), and the settings
+  (baud, CI-V, scope speed, owner lock, RF open, audio, port, serial-device opt-in) saved through the setup page's
+  own endpoint: GET `/vibeserver/config` at the door with the admin ticket, change only this radio's `icom*`
+  fields, POST the whole thing back (it restarts the server, as the setup page says). A phone server answers 501
+  and the card shows the facts only. "OPEN THE SETUP PAGE" is there too.
+
+### What the BROWSER does on an Icom (`web/client`, page rebuilt into `vibe_web_page.h`)
+
+- A `#icomCtls` panel (`icomUi.ts`) with the same controls as the app's sheet, lit only from the radio's answer.
+  The card's mode picker offers the radio's modes, with FIL1/2/3 in place of the bandwidth sliders; the meter is
+  S-units from the status line ("TX" while the owner transmits); RECEIVER reads "Icom IC-7300 · receive only".
+- One `body.icom` class + `.icomHide` tags hide every IQ control (rate, gain, VibeAGC, IF filter, `.rtlOnly`,
+  `.rtlRspOnly`, the RSP/HF+/HackRF/Airspy panels, our squelch and NB, NFM voice, the broadcast-FM rows, raw IQ,
+  VFO-centre lock, the fps row, WFM, DAB), so the next radio gets all of it back at once.
+- Zoom snaps to span rungs (cap = the widest rung, the 5 kHz rung reachable); `tune()` never sends a zoom; the first
+  config always adopts where the radio is; under the owner lock tune/zoom are stopped in the page with a
+  rate-limited pill; the link bars do not drop while the scope is frozen for TX.
+- Tested by `scripts/test-web-icom.mjs` (61 checks, real server on the fake + muted headless Edge on this tree's
+  `web/dist` through a proxy): hidden controls and their return, a listener cannot move the fake, the admin's mode /
+  span / zoom reach it, USB-D from the picker reaches it, TX banner, 390 px with no overflow, five looks legible,
+  no page exceptions, zero disallowed frames.
+
+### Decisions (each easy to reverse)
+
+1. **A control a listener may not use is hidden and its STATE shown read-only** (e.g. "P.AMP1 · ATT OFF · AGC
+   MID · RF 100%"), rather than greyed — the house rule (hidden, not greyed) and the contract (don't let refused
+   controls bounce) both hold, and a listener still sees what the radio is doing.
+2. **Scope speed shows no selected key**: the radio does not report its sweep speed, so lighting FAST would be a
+   guess.
+3. **No smoothing on an Icom**: spectrum smoothing 1, averaging 0, spatial smoothing off, waterfall SHARP (one row
+   per sweep). A 3/s sweep under a 20 fps EMA lags by seconds, and interpolated rows invent data between real
+   sweeps. The listener's own settings are kept for other radios; the controls are not offered while on an Icom.
+4. **The app's own server screen (ServerModeScreen) is NOT changed here**: an Icom on the Android app server is
+   Phase 4, being built on `v12-icom-android`, and the native config keys do not exist yet — a setup section there
+   now would be a set of dead controls. That branch can reuse `icomSettingsFrom`, `ICOM_BAUDS`, `parseCivHex`,
+   `preflightLines` and `IcomSetupCard`'s layout.
+5. **The website is not changed**: its promise is "nothing ships that I haven't driven myself on real hardware",
+   and no client has met a real Icom yet. The About V12 note and feature list say "experimental" and "receive only".
+6. **The mode button on the main screen shows the client mode (USB for USB-D)**; the radio's own name is in the
+   radio sheet. Showing `radioMode` on the main mode key is a follow-up if Saber wants it.
+
+### Not done / not verified
+
+- **The watch (Jr) and the iOS/Android watch faces** have no Icom branch: on an Icom server they would still draw
+  their IQ controls. Swift could not be built on this branch.
+- **The app UI has not been run**: no simulator/device build was allowed. Theme (default/silver/black,
+  transparency on/off) and phone/wide layout of the new sheet section and banners are unverified on screen; they
+  reuse the existing sheet's styles and the owner-notice banner, which already pass those checks.
+- **The IcomSetupCard save** has not been exercised against a real VibeServer (the fake e2e has no admin config
+  round-trip from the app). The round-trip logic (`withIcomSettings`) is unit-tested, including that the admin
+  password survives.

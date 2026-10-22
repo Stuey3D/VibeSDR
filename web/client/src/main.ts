@@ -19,6 +19,10 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
 (window as unknown as { __vibeFaults: () => unknown }).__vibeFaults =
   () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
+// ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the contract module the app reads too, and the browser's panel.
+import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeLabel, icomClientMode, icomBanner,
+         sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
+import { renderIcomPanel, icomPassband } from './icomUi';
 import { initPocketConn } from './pocketConn';
 import { initGamepad, pushBack, activePadLayout } from './gamepad';
 import { initPadKeyboard, kbField } from './padKeyboard';
@@ -676,6 +680,53 @@ function refreshIqRow() {
   }
 }
 let adminUnlocked = false;
+
+/* ★★★ THE ICOM, AS THE RADIO LAST SAID (hwinfo.radio, then each `{"type":"icom"}` line merged in). null = this
+ *  server is not serving an Icom. The S-meter rides separately: it arrives up to 4 times a second and repaints
+ *  the meter only — never the panel. */
+let icomR: IcomRadio | null = null;
+let icomSDb: number | null = null;
+let icomFollowPillAt = 0;
+/** ★ Everything that hangs off the Icom's state, in one place: the panel, the body classes that hide the IQ
+ *  controls and dim the dial, SpectrumClient's span ladder + owner-lock gate, the drawn passband, the banner.
+ *  Cheap and idempotent — called on hwinfo, on every status line and on an admin change. */
+function icomRefresh() {
+  const ic = icomR;
+  document.body.classList.toggle('icom', !!ic);
+  const follow = !!ic && !icomMayTune(ic, adminUnlocked);
+  document.body.classList.toggle('icomFollow', follow);
+  if (spec) {
+    spec.icomSpans = ic && ic.scope.spans.length ? ic.scope.spans : null;
+    spec.icomFollowLocked = follow;
+    // ★ The passband DRAWN for the radio's FIL (factory widths, so approximate) — written, never sent.
+    if (ic) {
+      const cm = icomClientMode(ic.modeNow) as SDRMode;
+      const pb = icomPassband(ic, cm, MODE_BANDWIDTHS[cm] ?? [0, 3000]);
+      if (pb && spec.mode === cm) { spec.bandwidthLow = pb[0]; spec.bandwidthHigh = pb[1]; }
+    }
+  }
+  const root = document.getElementById('icomCtls');
+  if (root) renderIcomPanel(root, ic, adminUnlocked, {
+    send: (f) => { if (spec && !spec.sendIcomControl(icomR, f)) showPill('This radio does not offer that setting', 4000); },
+  });
+  // ★ The picker's FIL row, if it is open, follows the radio too.
+  const fr = document.getElementById('mIcomFil');
+  if (fr && ic) for (const x of Array.from(fr.querySelectorAll('button')) as HTMLButtonElement[])
+    x.classList.toggle('on', Number(x.dataset.fil) === ic.filNow);
+  updateSharedBanner();
+}
+/** ★ hwinfo.radio → the Icom state, or null for any other radio (which puts every IQ control back). */
+function applyIcomCaps(caps: unknown) {
+  const was = !!icomR;
+  icomR = parseIcomRadio(caps);
+  if (!icomR) { icomSDb = null; if (was) icomRefresh(); return; }
+  // ★★ OUR squelch is client-judged against SPEC bins, which on an Icom are relative to the radio's REF, not
+  //    dBFS — so it would gate on a number that means nothing. Off for this connection (NOT saved: the
+  //    listener's choice still applies on every other receiver), and its row is hidden (body.icom).
+  if (vsSqlOn(squelchDb)) applySquelch(VS_SQL_OFF, false);
+  sqlAuto = false;
+  icomRefresh();
+}
 /** ★★ THE ADMIN PASSWORD, IN MEMORY ONLY, for the duration of this tab.
  *  The admin API signs every request with HMAC(password, fresh nonce), so the page genuinely
  *  needs the secret itself — a stored nonce would work exactly once.
@@ -815,6 +866,20 @@ function flashSharedBanner(text: string) {
 function updateSharedBanner() {
   const ms = document.getElementById('mShared');
   if (!ms) return;
+  /* ★★★ AN ICOM SAYS WHAT THE RADIO IS DOING FIRST: the owner transmitting (the server has muted the audio and
+   *  frozen the waterfall — the silence is not a fault), the radio not answering, or — for a listener under the
+   *  owner lock — that everyone hears what the radio is tuned to. Otherwise the ordinary shared-dial wording. */
+  if (icomR) {
+    const b = icomBanner(icomR);
+    const f = icomFollowNote(icomR, adminUnlocked);
+    ms.classList.toggle('icomTx', icomR.tx);
+    if (b || f) {
+      ms.hidden = false; ms.classList.remove('alone');
+      ms.textContent = (b || 'Listeners follow the radio').toUpperCase();
+      ms.title = b || f;
+      return;
+    }
+  } else ms.classList.remove('icomTx');
   ms.hidden = !srvSharedDial;
   syncMediaSkip();   // ★ the lock-screen ⏮⏭ follow the same count the banner does
   if (!srvSharedDial) return;
@@ -846,6 +911,7 @@ function updateSharedBanner() {
  *  concludes the app lacks it; one who sees it greyed with a reason understands the operator
  *  made a choice — and knows there is a way in if the receiver is theirs. */
 function refreshAdminRow() {
+  if (icomR) icomRefresh();   // ★ the owner lock / RF-admin rules turn on admin, so the Icom panel repaints here too
   const show = srvAdminProtected;
   // ★★★ THE PASSWORD BOX FOLLOWS THE TICKET, NOT THE SOCKET. Hiding it whenever `adminUnlocked`
   //     was true meant an owner whose PAGE TICKET had expired — while the socket unlock was still
@@ -1272,22 +1338,25 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //    SESSION starts, and the server already knows whether this is one (it applies the
         //    landing itself when nobody is listening). Sending it from here would re-park a busy
         //    receiver on the owner's default.
-        const adopt = srvSharedDial ? (cfg.serverVfo ?? cfg.centerFreq) : (last?.hz ?? cfg.serverVfo ?? cfg.centerFreq);
+        // ★★★ AN ICOM IS ALWAYS ADOPTED, shared or not: the radio is where its owner left it, and a remembered dial
+        //     restored from here would retune the owner's transceiver (or bounce off the owner lock) on page load.
+        const adoptOnly = srvSharedDial || cfg.icom === true;
+        const adopt = adoptOnly ? (cfg.serverVfo ?? cfg.centerFreq) : (last?.hz ?? cfg.serverVfo ?? cfg.centerFreq);
         spec!.frequency = clampTune(adopt);
         // Server's mode wins over the client's built-in default on a fresh visit — the owner can
         // set the starting demodulator, and defaulting to nfm showed the wrong mode + a thin NFM
         // passband until the user clicked. A remembered session still wins over both.
-        const initialMode = (srvSharedDial ? (cfg.serverMode ?? spec!.mode)
-                                           : (last?.mode ?? cfg.serverMode ?? spec!.mode)) as SDRMode;
+        const initialMode = (adoptOnly ? (cfg.serverMode ?? spec!.mode)
+                                       : (last?.mode ?? cfg.serverMode ?? spec!.mode)) as SDRMode;
         // ★ `false` on a shared dial: setMode's second argument SENDS the mode to the server, and
         //   the mode is shared here too — adopting what the radio is already doing must not be
         //   broadcast back to it as a change.
         // ★★ On a shared dial SpectrumClient has already adopted the room's mode AND passband from this
         //    same config (roomPassband.ts) — resetting the edges to the mode's default here threw the
         //    room's away on every join.
-        setMode(initialMode, !srvSharedDial && !!last, srvSharedDial && spec!.mode === initialMode);
+        setMode(initialMode, !adoptOnly && !!last, adoptOnly && spec!.mode === initialMode);
         renderFreq();
-        if (srvSharedDial) { /* adopted above — say nothing, move nothing */ }
+        if (adoptOnly) { /* adopted above — say nothing, move nothing */ }
         else if (last) spec!.tune(clampTune(last.hz), last.mode, { recenter: true });
         // ★ A first-time visitor must be TUNED to the landing frequency, not merely shown it —
         //   setting spec.frequency only moves the dial readout; the demodulator has to be told.
@@ -1512,6 +1581,27 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ A refusal in the server's own words, in the TRANSIENT slot — never the owner's notice
     //   slot, which somebody posted deliberately and which must not be clobbered by it.
     onRefused: (why: string) => showPill(why, 9000),
+    /* ★★★ AN ICOM'S STATUS LINE. The S-meter repaints the meter only; any other change (mode, FIL, TX, link,
+     *  span, scope mode/rate) is merged into the radio and repaints the panel and the banner. */
+    onIcomStatus: (st: IcomStatus) => {
+      icomSDb = st.sDbOverS9;
+      if (icomR) {
+        const next = mergeIcomStatus(icomR, st);
+        const changed = next.modeNow !== icomR.modeNow || next.filNow !== icomR.filNow || next.tx !== icomR.tx
+          || next.linkUp !== icomR.linkUp || next.scope.span !== icomR.scope.span || next.scope.mode !== icomR.scope.mode
+          || Math.abs(next.scope.fps - icomR.scope.fps) >= 0.5;
+        icomR = next;
+        if (changed) icomRefresh();
+      }
+      mobileUi?.paintSignal();
+    },
+    // ★ Rate-limited: a held arrow key would otherwise stack one pill per step.
+    onIcomFollowLocked: () => {
+      const now = performance.now();
+      if (now - icomFollowPillAt < 4000) return;
+      icomFollowPillAt = now;
+      showPill(icomFollowNote(icomR, adminUnlocked) || 'Only the owner tunes this radio', 6000);
+    },
     /* ★★ A NEWER SERVER LINE REPLACES THE OLDER ONE (B10). vtsNotice drops a second 'srv' while the
      *  first is up ("already said"), so crossing back over the direct-sampling boundary inside the
      *  first line's time left "Direct Sample Active · Gain not available" on screen for its full
@@ -4557,8 +4647,59 @@ let snrSmooth = 0;
  *  Kiwi/OpenWebRX/SpyServer world is the APP's, not this one's.) */
 let srvChanDb = -160, srvFloorDb = -120, srvSigValid = false;
 
+/** ★★ AN ICOM'S S-METER IS THE RADIO'S OWN (`15 02` via the status line), in S-units / S9+dB. The SPEC bins are
+ *  relative to the radio's REF level, not dBFS, so a meter derived from them would be a number that means
+ *  nothing — and SNR/dBFS readings are not offered at all. null = not an Icom. */
+function icomSignal() {
+  if (!icomR) return null;
+  const s = sMeter(icomSDb);
+  return { level: s ? s.frac : 0, snr: NaN, dbfs: NaN, sUnit: s ? s.text : 'S\u2014',
+           text: icomR.tx ? 'TX' : s ? s.text : 'S\u2014', sqlNorm: -1, sqlClosed: false };
+}
+/** ★ FIL1/2/3 under the modes in the picker (the bandwidth sliders' place on an Icom). Lit from the radio's own
+ *  report; a tap SENDS and closes nothing — the answer arrives as a status line and relights it. */
+function icomFilRow(): HTMLElement | null {
+  const ic = icomR;
+  if (!ic || !ic.filters.length) return null;
+  const wrap = document.createElement('div');
+  const sep = document.createElement('div');
+  sep.className = 'mBwSep icomFilSep';
+  sep.textContent = 'FILTER';
+  wrap.appendChild(sep);
+  const g = document.createElement('div');
+  g.className = 'mModeGrid';
+  g.id = 'mIcomFil';
+  const widths = icomFilterWidths(ic);
+  const may = icomMayTune(ic, adminUnlocked);
+  for (const f of ic.filters) {
+    const b = document.createElement('button');
+    b.className = 'mModeOpt' + (f === ic.filNow ? ' on' : '');
+    b.dataset.fil = String(f);
+    b.textContent = `FIL${f}${widths[f - 1] ? ` ${fmtWidth(widths[f - 1])}` : ''}`;
+    b.disabled = !may;
+    b.onclick = () => {
+      if (!icomR || !spec) return;
+      spec.sendIcomControl(icomR, { fil: f });   // ★ lit by the radio's answer (icomRefresh), never by this tap
+    };
+    g.appendChild(b);
+  }
+  wrap.appendChild(g);
+  return wrap;
+}
+/** The mode picker on an Icom: the label back to the radio's mode name, sent as icom_control. */
+function icomPickMode(label: string) {
+  if (!icomR || !spec) return;
+  const m = icomR.modes.find((x) => icomModeLabel(x).toLowerCase() === label.toLowerCase());
+  if (!m) return;
+  if (!icomMayTune(icomR, adminUnlocked)) {
+    showPill(icomFollowNote(icomR, adminUnlocked) || 'Only the owner tunes this radio', 6000); return;
+  }
+  spec.sendIcomControl(icomR, { mode: m });
+}
+
 function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   if (!spec) return;
+  if (icomR) return;   // ★ the radio's own meter — see icomSignal()
   const n = bins.length;
   const hzPerBin = bwHz / n;
   const lo = centerHz - bwHz / 2;
@@ -5105,7 +5246,9 @@ function updateLink() {
   else {
     // ★ MEASURED, not requested — see medianGap(). A server sending a steady 8 fps is solid.
     const expected = medianGap();
-    const since = performance.now() - lastFrameAt;
+    // ★★ AN ICOM FREEZES ITS SCOPE WHILE THE OWNER TRANSMITS (the server stops the rows on purpose), so silence
+    //    then is not a dead link — and its normal rate can be ~3 lines/s at 19200 baud, which medianGap() adapts to.
+    const since = icomR?.tx ? 0 : performance.now() - lastFrameAt;
     if (since > 5000)              linkQ = 0;   // nothing for five seconds — gone
     else if (since > expected * 8) linkQ = 1;   // stalling / reconnecting
     else if (since > expected * 3) linkQ = 2;   // jitter, dropped frames
@@ -7698,11 +7841,12 @@ function buildControls() {
      *  server is no longer running, because DAB replaces the whole chain rather than being an
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
-    mode:       () => dabOn ? 'DAB' : (spec?.mode ?? ''),
+    // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
-    signal:     () => ({
+    signal:     () => icomSignal() ?? ({
       level: sigSmooth, snr: snrSmooth, dbfs: lastSigDb, sUnit: toSUnit(lastSigDb),
       // ★ The squelch threshold in the SAME normalisation the gradient is drawn in, so the
       //   line lands exactly where the signal would have to reach to open the gate. −1 = off.
@@ -7720,14 +7864,17 @@ function buildControls() {
      *  desktop bar's mode row, so an owner who switched a demodulator off still had it offered in
      *  the only picker anybody uses, and picking it was a no-op. AGENTS.md: never draw a control whose every use is a
      *  no-op. The list is read fresh on every open, so a mid-session change takes effect. */
-    modes:      () => MODES.filter(m => !isModeBlocked(m)) as unknown as string[],
+    // ★★ AN ICOM'S MODES ARE THE RADIO'S, labelled as its panel writes them (no WFM, no DAB, no SAM).
+    modes:      () => icomR ? icomR.modes.map(icomModeLabel) : MODES.filter(m => !isModeBlocked(m)) as unknown as string[],
     /* ★★★ CHOOSING A DEMODULATOR LEAVES DAB. DAB is not an SDRMode — it replaces the whole
      *  chain — so it sat alongside the others as a toggle and picking WFM did nothing but change
      *  a mode the server was not running. Stuart: "I used to be able to click WFM and it change
      *  but this time it stayed in DAB mode until I clicked the DAB button again."
      *  ★ Selecting FM plainly MEANS "stop doing DAB", and a picker where one entry is a toggle
      *    and the rest are a radio group is a picker that lies about what it does. */
-    setMode:    (m) => { if (dabOn) dabSetMode(false); setMode(m as SDRMode, true); airbandFollowPassband(); renderFreq(); },
+    modeExtra:  () => icomFilRow(),
+    setMode:    (m) => { if (icomR) { icomPickMode(m); return; }
+                         if (dabOn) dabSetMode(false); setMode(m as SDRMode, true); airbandFollowPassband(); renderFreq(); },
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
     openDecoders:  () => togglePanel('decodersPanel'),
@@ -15609,6 +15756,9 @@ function initHrfControls() {
 
 function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   radioCaps = caps;
+  // ★★★ AN ICOM FIRST — before any per-driver branch ("else means dongle"). Its own panel, and body.icom hides
+  //     every IQ-side control below whatever those branches decide (index.html, the rule beside .askLocked).
+  applyIcomCaps(caps);
   renderAntenna(caps);   // ★ every driver — before the per-driver branches below return
   setAntennaPort(caps?.antenna);   // ★ which socket — an RSP's ranges/filters can belong to one
   // ★★★ A NEW RADIO IS A NEW CONNECTION, so the once-per-connection notices are armed again.
@@ -15719,7 +15869,8 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
       }
     }
   }
-  $('radioName').textContent = caps?.model
+  $('radioName').textContent = icomR ? `Icom ${icomR.model} \u00b7 receive only`
+    : caps?.model
     ? (isRsp ? `SDRplay ${caps.model}` : caps.model)
     : (caps?.driver === 'rtl' ? 'RTL-SDR' : '—');
   // The dongle's single gain slider is meaningless on an RSP, and on an HF+ there is no

@@ -43,8 +43,11 @@ type Step = {
    *  things — the tour is text in one corner and motion in another, and only the title joins
    *  them up. */
   title: string;
-  body: string;
+  /** ★ Text, or a function of the receiver — an Icom's zoom is the radio's span ladder, so the card says so. */
+  body: string | (() => string);
 };
+/** ★ The server is serving an Icom transceiver (main.ts sets body.icom from hwinfo.radio.driver). */
+const onIcom = () => document.body.classList.contains('icom');
 
 // ★ Ids are the card's (#mcard) — the only control surface. (A retired desktop bar once carried
 //   look-alike ids; pointing at one lit up a bar nobody could see. It has since been deleted.)
@@ -52,9 +55,14 @@ const STEPS: Step[] = [
   {
     ids: ['mVfoDown', 'mVfoUp', 'mStep', 'mZoomOut', 'mZoomIn'],
     title: 'Tuning and zoom — ‹ ›, the step button, − and +',
-    body: 'These are your main controls. Use [[‹]] and [[›]] to move the dial by the amount shown '
-        + 'on the step button [[@mStep]] — press it to change the step. Use [[−]] and [[+]] to zoom '
-        + 'the spectrum and waterfall.',
+    // ★★ ON AN ICOM ZOOM IS THE RADIO'S OWN SCOPE SPAN (±2.5 kHz to ±500 kHz on an IC-7300) — one press, one rung.
+    //    There is nothing finer to zoom into: the scope has 475 points. Say so, or a listener hunts for more.
+    body: () => 'These are your main controls. Use [[‹]] and [[›]] to move the dial by the amount shown '
+        + 'on the step button [[@mStep]] — press it to change the step. '
+        + (onIcom()
+          ? 'Use [[−]] and [[+]] to step the Icom\u2019s own scope span, one setting at a time — the waterfall is the '
+            + 'radio\u2019s scope, so it cannot zoom finer than the radio shows.'
+          : 'Use [[−]] and [[+]] to zoom the spectrum and waterfall.'),
   },
   {
     // ★ The demodulator "button" is the MODE readout inside the pill — mobile.ts binds
@@ -68,13 +76,20 @@ const STEPS: Step[] = [
   {
     ids: ['mMenu'],
     title: 'MENU',
-    body: "[[MENU]] opens the display settings and the receiver's hardware controls. Its CONTROLS "
-        + 'section sets the colours of these controls, and how see-through the panels are.',
+    body: () => "[[MENU]] opens the display settings and the receiver's hardware controls. "
+        + (onIcom()
+          ? 'On this Icom those are the radio\u2019s own: mode, filter, span, ATT, preamp, AGC, RF gain, and its noise '
+            + 'blanker, noise reduction and notch. VibeSDR only listens through it \u2014 it never transmits. '
+          : '')
+        + 'Its CONTROLS section sets the colours of these controls, and how see-through the panels are.',
   },
   {
     ids: ['mAudio'],
     title: 'The speaker button',
-    body: 'The speaker button [[@mAudio]] holds the audio tools: noise reduction, notch filters and '
+    // ★ An Icom has no squelch of ours and no raw IQ (body.icom hides both) — do not describe them there.
+    body: () => onIcom()
+      ? 'The speaker button [[@mAudio]] holds the audio tools: noise reduction and notch filters, working on the radio\u2019s own audio.'
+      : 'The speaker button [[@mAudio]] holds the audio tools: noise reduction, notch filters and '
         + 'squelch — and raw IQ output where the receiver offers it.',
   },
   {
@@ -252,7 +267,7 @@ function render() {
   /* ★★ BUILT, NOT PARSED. `[[…]]` in the copy becomes a chip, and every other character is set as
    *  TEXT — so the panel never takes a string as markup and there is nothing for a station name or
    *  a receiver's own wording to inject through. */
-  for (const part of s.body.split(/(\[\[[^\]]+\]\])/)) {
+  for (const part of (typeof s.body === 'function' ? s.body() : s.body).split(/(\[\[[^\]]+\]\])/)) {
     if (!part) continue;
     if (part.startsWith('[[') && part.endsWith(']]')) {
       const tok = part.slice(2, -2);

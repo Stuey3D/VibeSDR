@@ -13,9 +13,14 @@ import { usePopupTheme, useGlassTheme, usePopupFrame, engraveText, PopupPlate, P
          type PopupTokens } from './PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode, useNavFocus } from './PanelNav';
+import IcomSetupCard from './IcomSetupCard';
 import GainSlider, { gainSliderInk } from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
+import {
+  type IcomRadio, type IcomControlFields, icomMayTune, icomMayRf, icomFollowNote, icomModeLabel,
+  icomFilterWidths, fmtWidth, fmtSpan, fmtAtt, fmtPreamp, rfGainPct, icomBanner,
+} from '../services/icomRadio';
 import { useRenderBank } from '../utils/renderBank';
 import {
   CONVERTER_PRESETS, type ConverterProfile, V4_WARNING,
@@ -161,6 +166,14 @@ export interface LocalHardwarePanelProps {
    *  every control here is dimmed and a touch calls onAskLockedTouch. docs/TUNING-ETIQUETTE.md. */
   askLocked?: boolean;
   onAskLockedTouch?: () => void;
+  /** ★★★ AN ICOM (driver "icom", receive only): the radio as hwinfo + its status line describe it. When set,
+   *  this panel draws the RADIO's controls and none of the IQ ones (docs/ICOM-SUPPORT-PLAN.md §2.4). */
+  icom?: IcomRadio | null;
+  /** Sends `icom_control` (VibeServerWsClient.icomControl — only values the radio listed survive). */
+  onIcomControl?: (f: IcomControlFields) => void;
+  /** ★ Where the owner's Icom setup lives (IcomSetupCard, drawn under the controls for a SIGNED-IN admin only):
+   *  the front door's base, this radio's base, and the admin credential the app already holds. */
+  icomSetup?: { doorBase: string; connectBase: string; authQ: string; onOpenSetupPage?: () => void };
   /** ★★★ The owner has FIXED the gain on this band: the ceiling IS the setting, and the server
    *  refuses every gain message from anybody. Unlike agcLocked this applies to EVERY driver —
    *  including the HackRF, where there is no AGC to reason about and the lock still closes both
@@ -625,6 +638,13 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                      rate and tuning stay open" — which is a lie on a receiver whose owner has
                      also fixed the AGC and pinned the rate, and that is exactly the receiver
                      where a listener finds nothing to do and no explanation. */
+                  : p.icom
+                    /* ★ An Icom's split is the server's own (decision 6): tuning follows the owner lock, the RF
+                       settings are admin-only unless opened. Say exactly which applies here. */
+                    ? (icomMayTune(p.icom, false)
+                        ? (icomMayRf(p.icom, false) ? 'The owner lets listeners tune this radio and change its RF settings.'
+                                                    : 'You can tune this radio. Its RF settings (ATT, preamp, AGC, RF gain, NB, NR, ANF) are the owner\u2019s.')
+                        : 'Listeners follow this radio \u2014 the owner tunes it. Enter the password to take it over.')
                   : nothingForUser
                     ? 'Every hardware control on this receiver is set by its owner. There is '
                       + 'nothing here for a listener to change — enter the password to take it over.'
@@ -686,6 +706,16 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               accessibilityRole="button" accessibilityLabel="Receiver settings locked"
               accessibilityHint="Ask in the chat before changing them — other people are listening" />
           )}
+          {/* ★★★ AN ICOM DRAWS ITS OWN CONTROLS AND NOTHING ELSE. Everything below this branch is an IQ radio's
+              (gain table, VibeAGC, IF ladder, rate, bias-T, ppm, direct sampling, the RSP/HF+/Airspy/HackRF stages)
+              — none of it exists on a transceiver that hands us demodulated audio, and an inert copy would teach
+              the owner the FEATURE is broken (AGENTS.md). "Else means dongle": this test comes FIRST. */}
+          {p.icom ? (
+            <IcomSection icom={p.icom} admin={!!p.adminOk} onControl={p.onIcomControl} slot={slot}
+                         styles={styles} K={K}
+                         setup={p.adminOk && p.icomSetup
+                           ? <IcomSetupCard icom={p.icom} styles={styles} K={K} {...p.icomSetup} /> : null} />
+          ) : (<>
           {/* ★★ GAIN IS NOT ONE CONTROL ACROSS RADIOS. A dongle has a tuner gain TABLE; an
               HF+ has an AGC, an attenuator in 6 dB steps and a preamp, and no table at all —
               so the slider was drawing an empty/meaningless scale while the controls that do
@@ -1685,6 +1715,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             </Text>
           )}
           </>}
+          </>)}
           </View>
           {p.isSpy && <Text style={[styles.note, { marginTop: 16 }]}>
             Frequency correction, bias-T, digital AGC and direct sampling are not part
@@ -1704,6 +1735,134 @@ const SHEET_BG_SOLID = solidOver(C.bg);
 /* ★★ Colour by ROLE in the user's colours (2026-10-12; see LocalHardwarePanel): text in the TEXT colour, keys and
  *   switches in the CONTROLS colour, meanings fixed. Built once per token object (PopupTokens are memoised). */
 const lhpCache = new WeakMap<PopupTokens, ReturnType<typeof makeLhpStyles>>();
+/* ★★★ THE ICOM'S CONTROLS (receive only) — docs/ICOM-SUPPORT-PLAN.md "hwinfo + wire contract for clients".
+ *  ★★ EVERY LIST IS THE RADIO'S: modes, FIL widths, spans, ATT steps, preamp, AGC speeds and the RF gain range
+ *     come from hwinfo.radio, and the selected value from the radio (hwinfo + the icom status line) — never from
+ *     what this panel last sent (feedback_app_no_hardcoded_settings; the shared-dial contract: the radio is the
+ *     server state, and its own front panel is another user).
+ *  ★★ WHO MAY: tuning (mode, FIL, span, centre/fixed) follows the OWNER LOCK; ATT/preamp/AGC/RF gain/NB/NR/ANF/
+ *     scope speed are admin-only unless the owner opened them. A control this listener may not use is NOT drawn
+ *     — its STATE is, as a read-only line, so a listener still sees what the radio is doing (the house rule:
+ *     hidden, not greyed; and the contract: never let a refused control bounce).
+ *  ★ No transmit control exists here or anywhere — the server reports canTransmit:false and has no TX path. */
+function IcomSection({ icom, admin, onControl, slot, styles, K, setup }: {
+  icom: IcomRadio; admin: boolean; onControl?: (f: IcomControlFields) => void;
+  slot: (run: () => void) => boolean; styles: ReturnType<typeof makeLhpStyles>;
+  K: { gold: string; abtn: string; fill: string }; setup?: React.ReactNode;
+}) {
+  const send = (f: IcomControlFields) => onControl?.(f);
+  const mayTune = icomMayTune(icom, admin);
+  const mayRf = icomMayRf(icom, admin);
+  const widths = icomFilterWidths(icom);
+  const follow = icomFollowNote(icom, admin);
+  const banner = icomBanner(icom);
+  // ★ RF gain moves on RELEASE only — a drag would queue a CI-V write per pixel on a 3/s serial line.
+  const [rfDrag, setRfDrag] = useState<number | null>(null);
+  const rfNow = rfDrag ?? icom.rfGainNow;
+  const onOff = (b: boolean) => (b ? 'ON' : 'off');
+  return (<>
+    {!!banner && <Text style={[styles.note, styles.noteBad]}>{banner}</Text>}
+    {!!follow && <Text style={[styles.note, styles.noteStrong]}>{follow}</Text>}
+    <Text style={styles.note}>
+      Receive only. You hear the radio&rsquo;s own audio, through its own filter, AGC and noise reduction, and the
+      waterfall is its scope ({icom.scope.points || 475} points{icom.scope.fps > 0 ? `, ${icom.scope.fps.toFixed(0)} lines a second` : ''}).
+    </Text>
+
+    <Text style={styles.section}>MODE</Text>
+    {mayTune && icom.modes.length ? (
+      <Seg slot={slot} options={icom.modes} value={icom.modeNow} fmt={icomModeLabel}
+           onChange={(m) => send({ mode: m })} />
+    ) : <Text style={styles.stepVal}>{icomModeLabel(icom.modeNow) || '—'}</Text>}
+
+    {icom.filters.length > 0 && (<>
+      <Text style={styles.section}>FILTER</Text>
+      {mayTune ? (
+        <Seg slot={slot} options={icom.filters} value={icom.filNow} fmt={(f) => `FIL${f}`}
+             sub={(f) => fmtWidth(widths[f - 1] ?? 0) || undefined}
+             onChange={(f) => send({ fil: f })} />
+      ) : <Text style={styles.stepVal}>FIL{icom.filNow}{widths[icom.filNow - 1] ? ` · ${fmtWidth(widths[icom.filNow - 1])}` : ''}</Text>}
+      <Text style={styles.note}>
+        Widths are the radio&rsquo;s factory settings &mdash; if the owner has changed them on the radio, the passband
+        shown is approximate.
+      </Text>
+    </>)}
+
+    {icom.scope.spans.length > 0 && (<>
+      <Text style={styles.section}>SCOPE SPAN</Text>
+      {mayTune && icom.scope.mode !== 'fixed' ? (
+        <Seg slot={slot} options={icom.scope.spans} value={icom.scope.span} fmt={fmtSpan}
+             onChange={(sp) => send({ span: sp })} />
+      ) : <Text style={styles.stepVal}>{fmtSpan(icom.scope.span)}</Text>}
+      <Text style={styles.note}>
+        Zoom steps through these spans &mdash; the radio&rsquo;s own. {icom.scope.mode === 'fixed'
+          ? 'The scope is in FIXED mode: the window stays put and the dial moves inside it, so the span is set on the radio.'
+          : 'The window is centred on the dial.'}
+      </Text>
+      {mayTune && icom.scope.modes.length > 1 && (
+        <Seg slot={slot} options={icom.scope.modes} value={icom.scope.mode}
+             fmt={(m) => (m === 'fixed' ? 'FIXED' : m === 'centre' ? 'CENTRE' : m.toUpperCase())}
+             onChange={(m) => send({ scopeMode: m })} />
+      )}
+    </>)}
+
+    <Text style={styles.section}>RF</Text>
+    {mayRf ? (<>
+      {icom.preamp.length > 1 && (<>
+        <Text style={styles.fieldLbl}>Preamp</Text>
+        <Seg slot={slot} options={icom.preamp} value={icom.preampNow} fmt={fmtPreamp} onChange={(v) => send({ preamp: v })} />
+      </>)}
+      {icom.att.length > 1 && (<>
+        <Text style={styles.fieldLbl}>Attenuator</Text>
+        <Seg slot={slot} options={icom.att} value={icom.attNow} fmt={fmtAtt} onChange={(v) => send({ att: v })} />
+      </>)}
+      {icom.agc.length > 0 && (<>
+        <Text style={styles.fieldLbl}>AGC</Text>
+        <Seg slot={slot} options={icom.agc} value={icom.agcNow} fmt={(a) => a.toUpperCase()} onChange={(v) => send({ agc: v })} />
+      </>)}
+      {icom.rfGain && (<>
+        <Text style={styles.fieldLbl}>RF gain</Text>
+        <View style={styles.sliderRow}>
+          <Slider style={{ flex: 1, height: 40 }}
+                  minimumValue={icom.rfGain[0]} maximumValue={icom.rfGain[1]} step={1}
+                  value={rfNow}
+                  onValueChange={(v: number) => setRfDrag(Math.round(v))}
+                  onSlidingComplete={(v: number) => { setRfDrag(null); send({ rfGain: Math.round(v) }); }}
+                  minimumTrackTintColor={K.fill} maximumTrackTintColor="#444" thumbTintColor={K.gold} />
+          <Text style={styles.sliderEnd}>{rfGainPct(rfNow, icom.rfGain)}%</Text>
+        </View>
+      </>)}
+      {(icom.nb || icom.nr || icom.anf) && (<>
+        <Text style={styles.fieldLbl}>The radio&rsquo;s noise controls</Text>
+        {([['nb', 'NB', icom.nb, icom.nbNow], ['nr', 'NR', icom.nr, icom.nrNow], ['anf', 'ANF', icom.anf, icom.anfNow]] as const)
+          .filter(([, , has]) => has).map(([k, label, , now]) => (
+            <View key={k} style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>{label}</Text>
+              <Switch value={now} onValueChange={(v) => send({ [k]: v } as IcomControlFields)}
+                      trackColor={{ true: K.abtn, false: '#444' }} thumbColor={now ? K.gold : '#ccc'} />
+            </View>
+          ))}
+      </>)}
+      {icom.scope.speeds.length > 1 && (<>
+        <Text style={styles.fieldLbl}>Scope speed</Text>
+        {/* ★ value '' — the radio does not report its sweep speed, so no key is lit (a lit FAST would be a guess). */}
+        <Seg slot={slot} options={icom.scope.speeds} value={''}
+             fmt={(v) => v.toUpperCase()} onChange={(v) => send({ scopeSpeed: v })} />
+        <Text style={styles.note}>The radio does not report its sweep speed, so none is shown as selected.</Text>
+      </>)}
+    </>) : (
+      <Text style={styles.stepVal}>
+        {[icom.preamp.length > 1 ? fmtPreamp(icom.preampNow) : '', icom.att.length > 1 ? `ATT ${fmtAtt(icom.attNow)}` : '',
+          icom.agcNow ? `AGC ${icom.agcNow.toUpperCase()}` : '',
+          icom.rfGain ? `RF ${rfGainPct(icom.rfGainNow, icom.rfGain)}%` : '',
+          icom.nb ? `NB ${onOff(icom.nbNow)}` : '', icom.nr ? `NR ${onOff(icom.nrNow)}` : '', icom.anf ? `ANF ${onOff(icom.anfNow)}` : '']
+          .filter(Boolean).join(' · ')}
+      </Text>
+    )}
+    {!mayRf && <Text style={styles.note}>The owner sets this radio&rsquo;s RF controls.</Text>}
+    {setup}
+  </>);
+}
+
 function lhpStyles(pt: PopupTokens) {
   let s = lhpCache.get(pt);
   if (!s) { s = makeLhpStyles(pt); lhpCache.set(pt, s); }

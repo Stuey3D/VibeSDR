@@ -47,11 +47,17 @@ export type MobileDeps = {
   openStepMenu: (anchor: HTMLElement) => void;
   /** 0..1 level for the pill's gradient, plus the three readings the meter can show. */
   signal: () => { level: number; snr: number; dbfs: number; sUnit: string;
-                  sqlNorm: number; sqlClosed: boolean };
+                  sqlNorm: number; sqlClosed: boolean;
+                  /** ★ A reading that overrides the SNR/S/dBFS cycle — an Icom's own S-meter ("S7", "S9+20", "TX"),
+                   *  where SNR and dBFS would be figures off SPEC bins that are relative to the radio's REF. */
+                  text?: string };
   openFreqEntry: () => void;
   /** The demodulators this client offers, and a setter. Drives the mode picker. */
   modes: () => string[];
   setMode: (m: string) => void;
+  /** ★ Drawn under the modes in the picker in place of the bandwidth sliders, when present — an Icom's FIL1/2/3
+   *  (the radio's filters ARE its bandwidth; continuous sliders would offer widths it does not have). */
+  modeExtra?: () => HTMLElement | null;
   openMenu: () => void;
   openAudio: () => void;
   openDecoders: () => void;
@@ -271,6 +277,8 @@ export function initMobileControls(deps: MobileDeps) {
       grid.appendChild(b);
     }
     menu.appendChild(grid);
+    const extra = deps.modeExtra?.();
+    if (extra) menu.appendChild(extra);
     // ★★★ THE BANDWIDTH ROW COMES WITH THE DEMODULATORS (Stuart): the mode and the width you
     //     listen at are one decision — pick USB and the first thing you reach for is how wide.
     // ★★ MOVED, NOT REBUILT. Two mirrored sliders with a SYNC toggle is real behaviour; a
@@ -444,7 +452,7 @@ export function initMobileControls(deps: MobileDeps) {
     // ★ While the gate is shut the pill says SQL instead of a number — see the CSS.
     const snrEl = $('mSnr');
     if (snrEl.classList.contains('sql') !== sig.sqlClosed) snrEl.classList.toggle('sql', sig.sqlClosed);
-    put(snrEl, sig.sqlClosed ? 'SQL' : meterText(sig));
+    put(snrEl, sig.sqlClosed ? 'SQL' : (sig.text ?? meterText(sig)));
     const sql = $('mSqlLine');
     if (sig.sqlNorm >= 0) { if (sql.hidden) sql.hidden = false; const l = `${sig.sqlNorm * 100}%`; if (sql.style.left !== l) sql.style.left = l; }
     else if (!sql.hidden) sql.hidden = true;

@@ -325,6 +325,11 @@ if node --no-warnings scripts/test_transcribeOrder.ts; then pass=$((pass+1)); el
 if node --no-warnings scripts/test_recordBuffer.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the iOS/Mac ring + the prefix-then-live writer order (macOS only: needs xcrun swiftc).
 if command -v xcrun >/dev/null 2>&1; then if bash scripts/test_recordBuffer_swift.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi; fi
+# ★★★ V12 ICOM, CLIENT SIDE (icomRadio.ts): hwinfo.radio + the status line as the server builds them, the hide list against the
+#     contract, owner lock / RF admin, the span ladder, the S-meter — and an icom_control that cannot carry a transmit field.
+if node --no-warnings scripts/test_icom_radio.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the APP's gates on an Icom (SDRScreen / LocalHardwarePanel / MenuSheet / the WS client): every IQ control hidden, the radio's drawn.
+if node scripts/check-icom-app-gates.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ LAN DISCOVERY (mdnsBrowse.ts): SEARCH AGAIN and the return from the background really restart the browse; stale rows go (Stuart 2026-10-20).
 if node --no-warnings scripts/test_mdns_browse.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ PER-SERVER CERTIFICATE PINS (tlsPin.ts, GitHub #52): the key, the fingerprint, what a certificate says, and which
@@ -739,6 +744,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    into the panel and stays there, carries on after the tables redraw, and ○ closes it.
 printf '\n\033[1m── a game controller in the admin panel (simulated pad, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-gamepad-admin.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 ICOM, THE WEB CLIENT (icomUi.ts): the real server on the fake IC-7300, a muted headless browser on this tree's
+#     web/dist — the panel from the radio's lists, every IQ control hidden, the owner lock for a listener, the admin's
+#     mode/FIL/span/zoom/ATT reaching the fake, the radio's S-meter, the TX banner, phone width and the looks.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-icom.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ THE KEYBOARD, ONE SCHEME (Stuart, 2026-10-18): arrows/WASD move the highlight, Enter, Backspace/Escape back,
