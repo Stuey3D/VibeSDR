@@ -180,12 +180,23 @@ warning · #10"** when the station can be named, and "Station B" as before when 
   also checks every letter against its broadcast-time slot and reports the source's own irregularities on stderr.
 - **One rule, two readers:** `node scripts/gen-navtex-stations.mjs` writes `src/utils/navtexStations.generated.ts`
   (app + browser) and `android/app/src/main/cpp/vibe_navtex_stations.h` (gallery titles); `--check` in run-tests.sh.
-- **The rule:** the band is the NAVTEX channel within ±3 kHz of the dial. A candidate (same letter, same band) whose name
-  the text spells ("OOSTENDERADIO", "NCC-HAMBURG") wins wherever it is. Otherwise the nearest candidate to THIS server
-  within 1500 km (MF) / 2500 km (HF). Two candidates within reach and the second under 1.5× as far → ambiguous → the
-  letter only. No server position and no name in the text → the letter only.
-- **Why 1500 km, not 700:** the Lenovo (IO92nh) logged Norwegian warnings from Rogaland (813 km) and Orlandet
-  (1400 km), Swedish from Stockholm (1053 km) and Danish from Varberg (1004 km) in one evening.
+- **The rule — a likelihood, not a cut-off** (owner-approved, so genuine DX gets named). Every station with the letter on
+  the band (±3 kHz of the dial) is scored from the message: **positions in the text** (all the NAVTEX formats; a lost
+  `_` or an impossible value is ignored) by the station's median distance to them — the strongest evidence; if no
+  candidate is within 1000 km of its warning's positions, none of them sent it; **its name in the text** (same letter
+  and band) — decisive; **language** by stopwords (×4 on 490, ×1.5 elsewhere); and **distance from this server** as a
+  soft prior, 1/(1+(d/800 km)²). The best at ≥3× the next is named, with "· DX 6,800 km" past 1500 km (MF) / 2500 km
+  (HF); two close → "W · Corsen 🇫🇷 or Valentia 🇮🇪?"; no evidence and nothing within 1500 / 2500 km → the letter only.
+  The weights and word lists are written into both readers by the generator.
+- **The Lenovo's evening, through the real texts** (IO92nh): 490 A Malin Head, B Oostende, L Hamburg, U Cullercoats,
+  F letter only; 518 G Cullercoats, I Varberg, J Stockholm, L Rogaland, N Orlandet, O Portpatrick, P Den Helder,
+  V Oostende, M letter only (a Swedish warning whose positions no Pub. 117 M station is near — likely a station newer
+  than the 2021 edition), W "Corsen or Valentia?" unless the message has positions.
+- **Pub. 117 disagrees with itself in places:** the 300C tables (used here) and the per-country sections differ for a
+  few stations — Oostende's 518 letters are V and T in the table, M and T in the Belgium section; Corsen is 518 W in the
+  table, A in the France section. The table is used throughout; a later edition may settle it. Pub. 117 lists no NAVTEX
+  for Jamaica (its section has VHF Ch. 13 and 8291 kHz voice only); the Caribbean stations it has are Isabella (Puerto
+  Rico, R 518), Miami (A 518), New Orleans (G 518) and Curaçao (H 518).
 
 ## Not wanted
 

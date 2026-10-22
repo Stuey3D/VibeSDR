@@ -375,10 +375,27 @@ static void navtexStations() {
     ok(starts(L('I', 517500), "I \xc2\xb7 Varberg, Sweden"), "I on 518 = Varberg");
     ok(starts(L('N', 517500), "N \xc2\xb7 Orlandet, Norway"), "N on 518 = Orlandet");
     ok(L('M', 517500) == "Station M", "M on 518: out of reach — the letter only");
-    ok(L('W', 517500) == "Station W", "W on 518: Corsen / Valentia ambiguous — the letter only");
+    ok(L('W', 517500) == "W \xc2\xb7 Corsen \xf0\x9f\x87\xab\xf0\x9f\x87\xb7 or Valentia \xf0\x9f\x87\xae\xf0\x9f\x87\xaa?", "W, no evidence: both, asked: " + L('W', 517500));
     ok(starts(L('W', 517500, "VALENTIA RADIO GALE WARNING"), "W \xc2\xb7 Valentia, Ireland"), "the text names Valentia");
     ok(starts(L('W', 517500, "CROSS CORSEN"), "W \xc2\xb7 Corsen, France"), "the text names Corsen");
-    ok(L('W', 517500, "MRSC MALIN, EJM.") == "Station W", "a name not on W/518 does not count");
+    { const std::string w = L('W', 517500, "ZCZC WB51\nMRSC MALIN, EJM.\nGALE WARNING THURSDAY 22 OCTOBER 2149 UTC 12\nSHANNON\nVIOLENT STORM FORCE 11\nNNNN");
+      const std::string tail = " or Valentia \xf0\x9f\x87\xae\xf0\x9f\x87\xaa?";
+      ok(w.size() > tail.size() && w.compare(w.size() - tail.size(), tail.size(), tail) == 0, "tonight's W (MALIN not on W/518): still the two"); }
+    ok(starts(L('W', 517500, "IRISH COASTAL WARNING\nSUBMARINE CABLE OPERATIONS IN POSITION 51-30.2N 010-45.0W AND 51-41N 010-30W"), "W \xc2\xb7 Valentia, Ireland"), "W off SW Ireland → Valentia");
+    ok(starts(L('W', 517500, "AVURNAV BREST 1234\nZONE 48-10N 005-20W\n48-15.5N 005-05.0W"), "W \xc2\xb7 Corsen, France"), "W off Brittany → Corsen");
+    ok(starts(L('B', 489500, "ZCZC BA10\nKUSTWACHT OOSTENDE BERICHT\nWRAK OP POSITIE 51-14.13N 002-54.22E\nNNNN"), "B \xc2\xb7 Oostende, Belgium"), "BA10 with Belgian coordinates → Oostende");
+    { const std::string r = L('R', 517500, "ZCZC RA21\nNAVAREA IV 0912/26\nCARIBBEAN SEA. PUERTO RICO.\nUNLIGHTED BUOY ADRIFT IN 18-20.5N 066-30.2W AND 18-11N 065-58W.\nNNNN");
+      ok(starts(r, "R \xc2\xb7 Isabella, United States") && r.find(" \xc2\xb7 DX 6,") != std::string::npos, "★ the Caribbean warning → Isabella, DX: " + r); }
+    ok(L('M', 517500, "SWEDISH NAV WARN 1/26\nSKAGERRAK. KOSTER.\nSOUTH CARDINAL MARK MISSING\nPSN 58-41.9N 010-51.2E") == "Station M", "tonight's M: no M station near its positions → the letter only");
+    ok(starts(L('L', 489500, "NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E"), "L \xc2\xb7 Hamburg, Germany"), "German comma decimals");
+    ok(starts(L('J', 517500, "SWEDISH NAV WARN 225/26\nBOTHNIAN SEA. 60-40.1N 017-55.0E"), "J \xc2\xb7 Stockholm, Sweden"), "J with a Baltic position → Stockholm");
+    ok(L('L', 489500, "NCC-HAMBURG", -33.9, 18.4).find(" \xc2\xb7 DX 9,") != std::string::npos, "named from far away → DX 9,…: " + L('L', 489500, "NCC-HAMBURG", -33.9, 18.4));
+    { auto P = navtex::positions;
+      auto one = [&](const char* t, double la, double lo) { auto p = P(t); return p.size() == 1 && std::fabs(p[0].first - la) < 0.01 && std::fabs(p[0].second - lo) < 0.01; };
+      ok(one("IN 51-14.13N 002-54.22E.", 51.2355, 2.9037) && one("5114N 00254E", 51.2333, 2.9) && one("51 14.1N 002 54.2E", 51.235, 2.9033)
+         && one("54-19,2N  005-44,2E", 54.32, 5.7367) && one("33-55S 018-25E", -33.9167, 18.4167), "positions: every NAVTEX format, as the clients read them");
+      ok(P("PSN 58-41.9N 010-51._E").empty() && P("99-10N 010-10E 51-75N 002-00E 51-10N 190-00E").empty() && P("TEL 1234567 2149 UTC 12 CHART 28").empty(),
+         "a lost '_', out-of-range values and plain numbers are not positions"); }
     ok(L('B', 489500, "", NAN, NAN) == "Station B", "no position → the letter only");
     ok(starts(L('B', 489500, "OOSTENDERADIO NAV WARNING", NAN, NAN), "B \xc2\xb7 Oostende"), "no position, the text names it");
     ok(starts(L('L', 489500, "NCC-HAMBURG", -33.9, 18.4), "L \xc2\xb7 Hamburg"), "the text wins wherever the server is");

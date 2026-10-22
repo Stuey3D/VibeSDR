@@ -232,7 +232,10 @@ export const NAVTEX_STATIONS: readonly NavtexStation[] = [
 export const NAVTEX_BANDS_KHZ: readonly number[] = [424, 490, 518, 4209.5];
 export const NAVTEX_REACH_MF_KM = 1500;
 export const NAVTEX_REACH_HF_KM = 2500;
-export const NAVTEX_AMBIGUOUS_RATIO = 1.5;
+/** ★ The weights — the SAME numbers as vibe_navtex_stations.h (both written from the generator's W). */
+export const NAVTEX_WEIGHTS = {"priorKm":800,"named":1000,"posFloor":0.01,"posGain":100,"posKm":200,"posFitKm":1000,"lang490":4,"langOther":1.5,"clear":3,"reachMf":1500,"reachHf":2500,"langMinHits":3,"langLead":1.5} as const;
+const STOP: Record<string, readonly string[]> = {"en":["THE","AND","OF","IS","ARE","TO","IN","AT","WITH","FROM","WILL","BE","BETWEEN","FOR"],"nl":["HET","EEN","VAN","NIET","BIJ","NAAR","TUSSEN","WORDT","ZAL","WORDEN","OOK","DIT","EN"],"de":["DER","DIE","DAS","UND","NICHT","AUF","BEI","VON","ZWISCHEN","WIRD","IST","MIT","NACH","DEN","DEM"],"fr":["LE","LES","ET","DES","DU","EST","UNE","ENTRE","SUR","DANS","AU","AUX"],"es":["EL","LOS","LAS","Y","DEL","CON","POR","PARA","UNA","ENTRE"],"pt":["OS","DO","DA","DOS","DAS","EM","COM","PARA","UMA","NAO","NO","NA"],"it":["IL","GLI","DELLA","DELLE","CON","PER","UNA","NON","TRA","DEL"],"no":["OG","IKKE","ER","TIL","FRA","MED","AV","PAA","VED","MELLOM","FYR"],"da":["OG","IKKE","ER","TIL","FRA","MED","AF","PAA","VED","MELLEM","FYR"],"sv":["OCH","INTE","AR","TILL","FRAN","MED","AV","PA","VID","MELLAN","FYR"],"pl":["NIE","JEST","ORAZ","MIEDZY","PRZEZ","NA","DO"]};
+const LANGS: Record<string, readonly string[]> = {"GB":["en"],"IE":["en"],"US":["en"],"CA":["en","fr"],"BM":["en"],"GU":["en"],"MT":["en"],"ZA":["en"],"NA":["en"],"NL":["nl"],"BE":["nl","fr"],"CW":["nl"],"DE":["de"],"FR":["fr"],"ES":["es"],"AR":["es"],"CL":["es"],"CO":["es"],"EC":["es"],"PE":["es"],"UY":["es"],"PT":["pt"],"CV":["pt"],"IT":["it"],"NO":["no","da"],"SJ":["no","da"],"DK":["da","no"],"FO":["da","no"],"SE":["sv"],"PL":["pl"]};
 
 function km(la1: number, lo1: number, la2: number, lo2: number): number {
   const r = Math.PI / 180;
@@ -241,6 +244,8 @@ function km(la1: number, lo1: number, la2: number, lo2: number): number {
 }
 // ★ ASCII letters only, exactly as the server's letters(): "Curaçao" is CURAAO on both sides.
 const letters = (s: string) => s.toUpperCase().replace(/[^A-Z]/g, '');
+const isD = (c: string | undefined) => c !== undefined && c >= '0' && c <= '9';
+const isAlnum = (c: string | undefined) => c !== undefined && ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'));
 
 /** The band a dial is on (±3 kHz — a USB dial sits half a kHz below the carrier), or null. */
 export function navtexBandKhz(dialHz: number): number | null {
@@ -249,25 +254,113 @@ export function navtexBandKhz(dialHz: number): number | null {
   return null;
 }
 
-/** Which station sent letter `b1`, heard on `dialHz` at a server at `lat`/`lon` (NaN = unknown), with the message
- *  `text` to corroborate. null = the letter only (unknown band, nothing within reach, or ambiguous). */
-export function navtexStation(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = ''): NavtexStation | null {
+/** One half of a position at i: nd degree digits, an optional '-' or ' ', two minute digits, an optional [.,] and
+ *  1–3 decimals, an optional space, a hemisphere letter. [value, end] or null. ★ The server's coordHalf() is this. */
+function coordHalf(s: string, i: number, nd: number, hem: string): [number, number] | null {
+  let j = i, deg = 0;
+  for (let k = 0; k < nd; k++, j++) { if (!isD(s[j])) return null; deg = deg * 10 + (s.charCodeAt(j) - 48); }
+  if (s[j] === '-' || s[j] === ' ') j++;
+  if (!isD(s[j]) || !isD(s[j + 1])) return null;
+  let min = (s.charCodeAt(j) - 48) * 10 + (s.charCodeAt(j + 1) - 48); j += 2;
+  if ((s[j] === '.' || s[j] === ',') && isD(s[j + 1])) {
+    j++; let f = 0.1;
+    for (let k = 0; k < 3 && isD(s[j]); k++, j++, f /= 10) min += (s.charCodeAt(j) - 48) * f;
+    if (isD(s[j])) return null;
+  }
+  if (s[j] === ' ') j++;
+  const h = s[j];
+  if (h === undefined || hem.indexOf(h) < 0) return null;
+  if (min >= 60 || deg > (nd === 2 ? 90 : 180)) return null;
+  const v = deg + min / 60;
+  return [h === 'S' || h === 'W' ? -v : v, j + 1];
+}
+/** Every position the message gives, [lat, lon]. */
+export function navtexPositions(text: string): Array<[number, number]> {
+  const s = text.toUpperCase(), out: Array<[number, number]> = [];
+  for (let i = 0; i < s.length && out.length < 64; i++) {
+    if (!isD(s[i]) || isD(s[i - 1])) continue;
+    const la = coordHalf(s, i, 2, 'NS');
+    if (!la) continue;
+    let j = la[1], gap = 0;
+    while ((s[j] === ' ' || s[j] === ',' || s[j] === '\t') && gap < 3) { j++; gap++; }
+    const lo = coordHalf(s, j, 3, 'EW');
+    if (!lo || isAlnum(s[lo[1]])) continue;
+    out.push([la[0], lo[0]]);
+    i = lo[1] - 1;
+  }
+  return out;
+}
+/** The languages the text reads as (stopwords), [] when it cannot say. */
+export function navtexLanguages(text: string): string[] {
+  const words = text.toUpperCase().split(/[^A-Z]+/).filter(Boolean);
+  const score: Record<string, number> = {};
+  for (const [l, list] of Object.entries(STOP)) { let n = 0; for (const w of words) if (list.includes(w)) n++; score[l] = n; }
+  const top = Math.max(0, ...Object.values(score));
+  if (top < NAVTEX_WEIGHTS.langMinHits) return [];
+  const got = Object.keys(STOP).filter((l) => score[l] >= Math.max(NAVTEX_WEIGHTS.langMinHits, top / NAVTEX_WEIGHTS.langLead));
+  return got.length <= 3 ? got : [];
+}
+
+export interface NavtexResolution {
+  /** One station (named), or the best two (too close to call). */
+  stations: NavtexStation[];
+  /** Each one's distance from the receiving server, km (NaN when the server's position is unknown). */
+  km: number[];
+  /** Beyond ordinary reach of the receiving server — the title says "DX". */
+  dx: boolean;
+}
+
+/** Which station sent letter `b1`, heard on `dialHz` at a server at `lat`/`lon` (NaN = unknown), judged from the
+ *  message `text`. null = the letter only. */
+export function navtexResolve(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = ''): NavtexResolution | null {
   if (!b1 || !/^[A-Z]$/.test(b1)) return null;
   const band = navtexBandKhz(dialHz);
   if (band == null) return null;
   const cands = NAVTEX_STATIONS.filter((s) => s.b1 === b1 && s.khz === band);
   if (!cands.length) return null;
-  if (text) {
-    const t = letters(text);
-    const named = cands.filter((s) => letters(s.name).length >= 5 && t.includes(letters(s.name)));
-    if (named.length === 1) return named[0];
-  }
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  const reach = band > 1000 ? NAVTEX_REACH_HF_KM : NAVTEX_REACH_MF_KM;
-  const near = cands.map((s) => ({ s, d: km(lat, lon, s.lat, s.lon) })).filter((x) => x.d <= reach).sort((a, b) => a.d - b.d);
-  if (!near.length) return null;
-  if (near.length > 1 && near[1].d < NAVTEX_AMBIGUOUS_RATIO * Math.max(near[0].d, 1)) return null;
-  return near[0].s;
+  const W = NAVTEX_WEIGHTS;
+  const here = Number.isFinite(lat) && Number.isFinite(lon);
+  const reach = band > 1000 ? W.reachHf : W.reachMf;
+  const t = letters(text);
+  const pos = navtexPositions(text);
+  const langs = navtexLanguages(text);
+  const scored = cands.map((s) => {
+    const d = here ? km(lat, lon, s.lat, s.lon) : NaN;
+    let sc = here ? 1 / (1 + (d / W.priorKm) ** 2) : 1;
+    const named = letters(s.name).length >= 5 && t.includes(letters(s.name));
+    if (named) sc *= W.named;
+    let med = Infinity;
+    if (pos.length) {
+      const ds = pos.map(([pa, po]) => km(s.lat, s.lon, pa, po)).sort((x, y) => x - y);
+      med = ds.length % 2 ? ds[(ds.length - 1) / 2] : (ds[ds.length / 2 - 1] + ds[ds.length / 2]) / 2;
+      sc *= W.posFloor + W.posGain / (1 + (med / W.posKm) ** 2);
+    }
+    const speaks = langs.length > 0 && (LANGS[s.iso] ?? []).some((l) => langs.includes(l));
+    if (speaks) sc *= band === 490 ? W.lang490 : W.langOther;
+    return { s, d, sc, named, med, speaks };
+  }).sort((x, y) => y.sc - x.sc || x.s.name.localeCompare(y.s.name));
+  const named = scored.some((x) => x.named);
+  const posFit = pos.length > 0 && scored.some((x) => x.med <= W.posFitKm);
+  if (pos.length && !posFit && !named) return null;            // ★ positions nowhere near any candidate: not one of them
+  const evidence = named || posFit || scored.some((x) => x.speaks);
+  const best = scored[0], next = scored[1];
+  if (!evidence && (!here || !(best.d <= reach))) return null;   // ★ no evidence and nothing near: the letter only
+  if (!next || best.sc >= W.clear * next.sc) return { stations: [best.s], km: [best.d], dx: here && best.d > reach };
+  return { stations: [best.s, next.s], km: [best.d, next.d], dx: false };
+}
+
+/** The station, when ONE can be named — or null. */
+export function navtexStation(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = ''): NavtexStation | null {
+  const r = navtexResolve(b1, dialHz, lat, lon, text);
+  return r && r.stations.length === 1 ? r.stations[0] : null;
+}
+
+/** "7,500" — to the nearest 100 km. */
+function kmText(d: number): string {
+  const t = String(Math.round(d / 100) * 100);
+  let o = '';
+  for (let i = 0; i < t.length; i++) { if (i && (t.length - i) % 3 === 0) o += ','; o += t[i]; }
+  return o;
 }
 
 /** "🇧🇪" from "BE". */
@@ -275,9 +368,12 @@ export function navtexFlag(iso: string): string {
   return /^[A-Z]{2}$/.test(iso) ? String.fromCodePoint(0x1f1e6 + iso.charCodeAt(0) - 65, 0x1f1e6 + iso.charCodeAt(1) - 65) : '';
 }
 
-/** "B · Oostende, Belgium 🇧🇪", or "Station B" when the station cannot be named. */
+/** "B · Oostende, Belgium 🇧🇪", "R · Isabella, United States 🇺🇸 · DX 6,700 km", "W · Corsen 🇫🇷 or Valentia 🇮🇪?", or
+ *  "Station B" when the station cannot be named. */
 export function navtexStationLabel(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = ''): string {
-  const s = navtexStation(b1, dialHz, lat, lon, text);
-  if (!s) return b1 ? `Station ${b1}` : 'Station ?';
-  return `${s.b1} \u00b7 ${s.name}, ${s.country} ${navtexFlag(s.iso)}`;
+  const r = navtexResolve(b1, dialHz, lat, lon, text);
+  if (!r) return b1 ? `Station ${b1}` : 'Station ?';
+  const [a, b] = r.stations;
+  if (b) return `${a.b1} \u00b7 ${a.name} ${navtexFlag(a.iso)} or ${b.name} ${navtexFlag(b.iso)}?`;
+  return `${a.b1} \u00b7 ${a.name}, ${a.country} ${navtexFlag(a.iso)}${r.dx ? ` \u00b7 DX ${kmText(r.km[0])} km` : ''}`;
 }

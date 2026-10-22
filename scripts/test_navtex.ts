@@ -2,7 +2,7 @@
 // Real-shaped traffic: CR CR LF line ends, '_' for a lost character (fsk_decoder.cpp), chunks split anywhere.
 import { NavtexAssembler, NAVTEX_END_LOST_MS, navtexTitle, navtexLostPct, navtexBody, navtexFileName, navtexFileText }
   from '../src/utils/navtex.ts';
-import { navtexStationLabel } from '../src/utils/navtexStations.generated.ts';
+import { navtexStationLabel, navtexPositions } from '../src/utils/navtexStations.generated.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -339,16 +339,46 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(L('I', 517500).startsWith('I · Varberg, Sweden'), 'I on 518 = Varberg (1004 km)');
   ok(L('N', 517500).startsWith('N · Orlandet, Norway'), 'N on 518 = Orlandet (1400 km)');
   ok(L('M', 517500) === 'Station M', 'M on 518: Casablanca is 2150 km away — the letter only, never a guess');
-  ok(L('W', 517500) === 'Station W', 'W on 518: Corsen 520 km and Valentia 648 km — ambiguous, the letter only');
+  ok(L('W', 517500) === 'W \u00b7 Corsen \u{1F1EB}\u{1F1F7} or Valentia \u{1F1EE}\u{1F1EA}?', 'W on 518 with no evidence: Corsen 520 km / Valentia 648 km — both, asked: ' + L('W', 517500));
   ok(L('W', 517500, 'VALENTIA RADIO GALE WARNING').startsWith('W · Valentia, Ireland'), 'the text names Valentia → Valentia');
   ok(L('W', 517500, 'CROSS CORSEN').startsWith('W · Corsen, France'), 'the text names Corsen → Corsen');
-  ok(L('W', 517500, 'MRSC MALIN, EJM.') === 'Station W', 'a station named in the text but NOT on W/518 (Malin Head) does not count');
+  ok(L('W', 517500, 'ZCZC WB51\nMRSC MALIN, EJM.\nGALE WARNING THURSDAY 22 OCTOBER 2149 UTC 12\nSHANNON\nVIOLENT STORM FORCE 11\nNNNN').endsWith(' or Valentia \u{1F1EE}\u{1F1EA}?'),
+     "tonight's W (MRSC MALIN — Malin Head is not on W/518, so it does not count; no positions): still the two");
+  // ★★ the likelihood score (owner-approved): positions, language, DX
+  ok(L('W', 517500, 'IRISH COASTAL WARNING\nSUBMARINE CABLE OPERATIONS IN POSITION 51-30.2N 010-45.0W AND 51-41N 010-30W').startsWith('W \u00b7 Valentia, Ireland'),
+     'a W whose positions are off SW Ireland → Valentia: ' + L('W', 517500, '51-30.2N 010-45.0W 51-41N 010-30W'));
+  ok(L('W', 517500, 'AVURNAV BREST 1234\nZONE 48-10N 005-20W\n48-15.5N 005-05.0W').startsWith('W \u00b7 Corsen, France'), 'a W off Brittany → Corsen');
+  ok(L('B', 489500, 'ZCZC BA10\nKUSTWACHT OOSTENDE BERICHT\nWRAK OP POSITIE 51-14.13N 002-54.22E\nNNNN').startsWith('B \u00b7 Oostende, Belgium'),
+     'BA10 with its coordinates off the Belgian coast → Oostende');
+  const carib = 'ZCZC RA21\nNAVAREA IV 0912/26\nCARIBBEAN SEA. PUERTO RICO.\nUNLIGHTED BUOY ADRIFT IN 18-20.5N 066-30.2W AND 18-11N 065-58W.\nNNNN';
+  const rc = L('R', 517500, carib);
+  ok(/^R · Isabella, United States 🇺🇸 · DX [0-9],[0-9]00 km$/.test(rc), '★ a Caribbean warning with Caribbean positions on R/518 from the UK → Isabella (Puerto Rico), DX: ' + rc);
+  ok(L('R', 517500) === 'Station R' || !L('R', 517500).includes('Isabella'), 'the same letter with no evidence never names Isabella from the UK');
+  ok(L('M', 517500, 'SWEDISH NAV WARN 1/26\nSKAGERRAK. KOSTER.\nSOUTH CARDINAL MARK MISSING\nPSN 58-41.9N 010-51.2E') === 'Station M',
+     "tonight's M: a Swedish warning, positions in the Skagerrak, and no M station within 1000 km of them — not one of Pub. 117's: the letter only");
+  ok(L('L', 489500, 'NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E').startsWith('L \u00b7 Hamburg, Germany'), 'German comma decimals parse');
+  ok(L('J', 517500, 'SWEDISH NAV WARN 225/26\nBOTHNIAN SEA. 60-40.1N 017-55.0E') .startsWith('J \u00b7 Stockholm, Sweden'), 'J with a Baltic position → Stockholm');
   ok(L('B', 489500, '', NaN, NaN) === 'Station B', 'no server position → the letter only');
   ok(L('B', 489500, 'OOSTENDERADIO NAV WARNING', NaN, NaN).startsWith('B · Oostende'), 'no position, but the text names it');
   ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).startsWith('L · Hamburg'), 'the text wins wherever the server is');
   ok(L('B', 4209500) === 'Station B', 'HF 4209.5: Pub. 117 lists no HF letters — the letter only');
   ok(L('B', 10_000_000) === 'Station B', 'not on a NAVTEX channel → the letter only');
-  ok(L('B', 489500, '', -33.9, 18.4) === 'Station B', 'B on 490 from Cape Town: nothing within reach');
+  ok(L('B', 489500, '', -33.9, 18.4) === 'Station B', 'B on 490 from Cape Town: no evidence, nothing near');
+  ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).includes(' \u00b7 DX 9,'), 'named from far away → "DX 9,…00 km": ' + L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4));
+  // the position parser
+  {
+    const P = navtexPositions;
+    const one = (t: string) => { const p = P(t); return p.length === 1 ? p[0] : null; };
+    const near = (a: [number, number] | null, la: number, lo: number) => !!a && Math.abs(a[0] - la) < 0.01 && Math.abs(a[1] - lo) < 0.01;
+    ok(near(one('IN 51-14.13N 002-54.22E.'), 51.2355, 2.9037), 'DD-MM.mmN DDD-MM.mmE');
+    ok(near(one('5114N 00254E'), 51.2333, 2.9), 'DDMMN DDDMME');
+    ok(near(one('51 14.1N 002 54.2E'), 51.235, 2.9033), 'DD MM.mN DDD MM.mE');
+    ok(near(one('54-19,2N  005-44,2E'), 54.32, 5.7367), 'comma decimals, two spaces');
+    ok(near(one('33-55S 018-25E'), -33.9167, 18.4167), 'south and east');
+    ok(P('PSN 58-41.9N 010-51._E').length === 0, "a lost '_' → ignored, never half-read");
+    ok(P('99-10N 010-10E 51-75N 002-00E 51-10N 190-00E').length === 0, 'out-of-range degrees and minutes → ignored');
+    ok(P('TEL 1234567 2149 UTC 12 CHART 28').length === 0, 'numbers that are not positions → none');
+  }
   const m = new NavtexAssembler();
   feed(m, 'ZCZC BA10\r\r\nOOSTENDERADIO\r\r\nNNNN\r\r\n', 5);
   const t = navtexTitle(m.live!, { dialHz: 489500, lat: LA, lon: LO });

@@ -3,9 +3,12 @@
 // Edition: 2021 edition (PDF dated 2021-03-11), fetched 2026-10-22 from msi.nga.mil (117chapter3.pdf)
 // ★ The rule is explained in the generator's header; src/utils/navtexStations.generated.ts is the clients' copy.
 #pragma once
+#include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vibe {
@@ -240,7 +243,11 @@ inline const Station* stations(size_t& n) {
     return t;
 }
 
-constexpr double kReachMfKm = 1500, kReachHfKm = 2500, kAmbiguousRatio = 1.5;
+// ★ The weights — the SAME numbers as navtexStations.generated.ts (both written from the generator's W).
+constexpr double kPriorKm = 800, kNamed = 1000, kPosFloor = 0.01, kPosGain = 100, kPosKm = 200,
+                 kPosFitKm = 1000, kLang490 = 4, kLangOther = 1.5, kClear = 3,
+                 kReachMfKm = 1500, kReachHfKm = 2500, kLangLead = 1.5;
+constexpr int kLangMinHits = 3;
 
 inline double bandKhz(double dialHz) {
     static const double bands[] = { 424, 490, 518, 4209.5 };
@@ -262,33 +269,174 @@ inline std::string letters(const std::string& s) {
     for (unsigned char c : s) if (std::isalpha(c) && c < 0x80) o += (char)std::toupper(c);
     return o;
 }
+inline std::string upperAscii(const std::string& s) { std::string o = s; for (auto& c : o) if (c >= 'a' && c <= 'z') c = (char)(c - 32); return o; }
+inline bool isD(const std::string& s, size_t i) { return i < s.size() && s[i] >= '0' && s[i] <= '9'; }
+inline bool isAlnumAt(const std::string& s, size_t i) { return i < s.size() && ((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'A' && s[i] <= 'Z')); }
 
-/** navtexStation() — nullptr = the letter only. */
-inline const Station* resolve(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
-    if (b1 < 'A' || b1 > 'Z') return nullptr;
+/** navtex coordHalf(): nd degree digits, optional '-'/' ', two minute digits, optional [.,] + 1–3 decimals, optional
+ *  space, a hemisphere letter. false = not a clean position. */
+inline bool coordHalf(const std::string& s, size_t i, int nd, const char* hem, double& v, size_t& end) {
+    size_t j = i; int deg = 0;
+    for (int k = 0; k < nd; k++, j++) { if (!isD(s, j)) return false; deg = deg * 10 + (s[j] - '0'); }
+    if (j < s.size() && (s[j] == '-' || s[j] == ' ')) j++;
+    if (!isD(s, j) || !isD(s, j + 1)) return false;
+    double min = (s[j] - '0') * 10 + (s[j + 1] - '0'); j += 2;
+    if (j < s.size() && (s[j] == '.' || s[j] == ',') && isD(s, j + 1)) {
+        j++; double f = 0.1;
+        for (int k = 0; k < 3 && isD(s, j); k++, j++, f /= 10) min += (s[j] - '0') * f;
+        if (isD(s, j)) return false;
+    }
+    if (j < s.size() && s[j] == ' ') j++;
+    if (j >= s.size() || !std::strchr(hem, s[j])) return false;
+    if (min >= 60 || deg > (nd == 2 ? 90 : 180)) return false;
+    const double x = deg + min / 60;
+    v = (s[j] == 'S' || s[j] == 'W') ? -x : x; end = j + 1;
+    return true;
+}
+/** navtexPositions(): every position the message gives. */
+inline std::vector<std::pair<double, double>> positions(const std::string& text) {
+    const std::string s = upperAscii(text);
+    std::vector<std::pair<double, double>> out;
+    for (size_t i = 0; i < s.size() && out.size() < 64; i++) {
+        if (!isD(s, i) || (i > 0 && isD(s, i - 1))) continue;
+        double la, lo; size_t e1, e2;
+        if (!coordHalf(s, i, 2, "NS", la, e1)) continue;
+        size_t j = e1; int gap = 0;
+        while (j < s.size() && (s[j] == ' ' || s[j] == ',' || s[j] == '\t') && gap < 3) { j++; gap++; }
+        if (!coordHalf(s, j, 3, "EW", lo, e2) || isAlnumAt(s, e2)) continue;
+        out.push_back({ la, lo });
+        i = e2 - 1;
+    }
+    return out;
+}
+struct LangList { const char* lang; std::vector<const char*> words; };
+inline const std::vector<LangList>& stopwords() {
+    static const std::vector<LangList> t = {
+        { "en", { "THE", "AND", "OF", "IS", "ARE", "TO", "IN", "AT", "WITH", "FROM", "WILL", "BE", "BETWEEN", "FOR" } },
+        { "nl", { "HET", "EEN", "VAN", "NIET", "BIJ", "NAAR", "TUSSEN", "WORDT", "ZAL", "WORDEN", "OOK", "DIT", "EN" } },
+        { "de", { "DER", "DIE", "DAS", "UND", "NICHT", "AUF", "BEI", "VON", "ZWISCHEN", "WIRD", "IST", "MIT", "NACH", "DEN", "DEM" } },
+        { "fr", { "LE", "LES", "ET", "DES", "DU", "EST", "UNE", "ENTRE", "SUR", "DANS", "AU", "AUX" } },
+        { "es", { "EL", "LOS", "LAS", "Y", "DEL", "CON", "POR", "PARA", "UNA", "ENTRE" } },
+        { "pt", { "OS", "DO", "DA", "DOS", "DAS", "EM", "COM", "PARA", "UMA", "NAO", "NO", "NA" } },
+        { "it", { "IL", "GLI", "DELLA", "DELLE", "CON", "PER", "UNA", "NON", "TRA", "DEL" } },
+        { "no", { "OG", "IKKE", "ER", "TIL", "FRA", "MED", "AV", "PAA", "VED", "MELLOM", "FYR" } },
+        { "da", { "OG", "IKKE", "ER", "TIL", "FRA", "MED", "AF", "PAA", "VED", "MELLEM", "FYR" } },
+        { "sv", { "OCH", "INTE", "AR", "TILL", "FRAN", "MED", "AV", "PA", "VID", "MELLAN", "FYR" } },
+        { "pl", { "NIE", "JEST", "ORAZ", "MIEDZY", "PRZEZ", "NA", "DO" } },
+    };
+    return t;
+}
+inline std::vector<std::string> isoLangs(const char* iso) {
+    static const std::vector<std::pair<const char*, std::vector<const char*>>> t = {
+        { "GB", { "en" } },
+        { "IE", { "en" } },
+        { "US", { "en" } },
+        { "CA", { "en", "fr" } },
+        { "BM", { "en" } },
+        { "GU", { "en" } },
+        { "MT", { "en" } },
+        { "ZA", { "en" } },
+        { "NA", { "en" } },
+        { "NL", { "nl" } },
+        { "BE", { "nl", "fr" } },
+        { "CW", { "nl" } },
+        { "DE", { "de" } },
+        { "FR", { "fr" } },
+        { "ES", { "es" } },
+        { "AR", { "es" } },
+        { "CL", { "es" } },
+        { "CO", { "es" } },
+        { "EC", { "es" } },
+        { "PE", { "es" } },
+        { "UY", { "es" } },
+        { "PT", { "pt" } },
+        { "CV", { "pt" } },
+        { "IT", { "it" } },
+        { "NO", { "no", "da" } },
+        { "SJ", { "no", "da" } },
+        { "DK", { "da", "no" } },
+        { "FO", { "da", "no" } },
+        { "SE", { "sv" } },
+        { "PL", { "pl" } },
+    };
+    for (auto& e : t) if (std::strcmp(e.first, iso) == 0) return std::vector<std::string>(e.second.begin(), e.second.end());
+    return {};
+}
+/** navtexLanguages(). */
+inline std::vector<std::string> languages(const std::string& text) {
+    const std::string s = upperAscii(text);
+    std::vector<std::string> words; std::string w;
+    for (char c : s) { if (c >= 'A' && c <= 'Z') w += c; else if (!w.empty()) { words.push_back(w); w.clear(); } }
+    if (!w.empty()) words.push_back(w);
+    const auto& L = stopwords();
+    std::vector<int> score(L.size(), 0); int top = 0;
+    for (size_t i = 0; i < L.size(); i++) {
+        for (auto& x : words) for (auto* sw : L[i].words) if (x == sw) { score[i]++; break; }
+        top = std::max(top, score[i]);
+    }
+    std::vector<std::string> got;
+    if (top < kLangMinHits) return got;
+    for (size_t i = 0; i < L.size(); i++) if (score[i] >= std::max((double)kLangMinHits, top / kLangLead)) got.push_back(L[i].lang);
+    if (got.size() > 3) got.clear();
+    return got;
+}
+
+/** navtexResolve(): 0 stations = the letter only; 1 = named; 2 = too close to call. */
+struct Resolution { std::vector<const Station*> stations; std::vector<double> km; bool dx = false; };
+inline Resolution resolveAll(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
+    Resolution r;
+    if (b1 < 'A' || b1 > 'Z') return r;
     const double band = bandKhz(dialHz);
-    if (band == 0) return nullptr;
+    if (band == 0) return r;
     size_t n = 0; const Station* t = stations(n);
-    std::vector<const Station*> c;
-    for (size_t i = 0; i < n; i++) if (t[i].b1 == b1 && t[i].khz == band) c.push_back(&t[i]);
-    if (c.empty()) return nullptr;
-    if (!text.empty()) {
-        const std::string tl = letters(text);
-        const Station* named = nullptr; int hits = 0;
-        for (auto* s : c) { const std::string nl = letters(s->name); if (nl.size() >= 5 && tl.find(nl) != std::string::npos) { named = s; ++hits; } }
-        if (hits == 1) return named;
-    }
-    if (!std::isfinite(lat) || !std::isfinite(lon)) return nullptr;
+    struct Sc { const Station* s; double d, sc, med; bool named, speaks; };
+    std::vector<Sc> c;
+    const bool here = std::isfinite(lat) && std::isfinite(lon);
     const double reach = band > 1000 ? kReachHfKm : kReachMfKm;
-    const Station* best = nullptr; double d1 = 1e18, d2 = 1e18;
-    for (auto* s : c) {
-        const double d = km(lat, lon, s->lat, s->lon);
-        if (d > reach) continue;
-        if (d < d1) { d2 = d1; d1 = d; best = s; } else if (d < d2) d2 = d;
+    const std::string tl = letters(text);
+    const auto pos = positions(text);
+    const auto langs = languages(text);
+    for (size_t i = 0; i < n; i++) {
+        if (t[i].b1 != b1 || t[i].khz != band) continue;
+        Sc x{ &t[i], here ? km(lat, lon, t[i].lat, t[i].lon) : NAN, 1, INFINITY, false, false };
+        x.sc = here ? 1.0 / (1.0 + std::pow(x.d / kPriorKm, 2)) : 1.0;
+        const std::string nl = letters(t[i].name);
+        x.named = nl.size() >= 5 && tl.find(nl) != std::string::npos;
+        if (x.named) x.sc *= kNamed;
+        if (!pos.empty()) {
+            std::vector<double> ds; for (auto& p : pos) ds.push_back(km(t[i].lat, t[i].lon, p.first, p.second));
+            std::sort(ds.begin(), ds.end());
+            x.med = ds.size() % 2 ? ds[(ds.size() - 1) / 2] : (ds[ds.size() / 2 - 1] + ds[ds.size() / 2]) / 2;
+            x.sc *= kPosFloor + kPosGain / (1.0 + std::pow(x.med / kPosKm, 2));
+        }
+        if (!langs.empty()) for (auto& l : isoLangs(t[i].iso)) if (std::find(langs.begin(), langs.end(), l) != langs.end()) { x.speaks = true; break; }
+        if (x.speaks) x.sc *= band == 490 ? kLang490 : kLangOther;
+        c.push_back(x);
     }
-    if (!best) return nullptr;
-    if (d2 < 1e17 && d2 < kAmbiguousRatio * std::fmax(d1, 1.0)) return nullptr;
-    return best;
+    if (c.empty()) return r;
+    std::stable_sort(c.begin(), c.end(), [](const Sc& a, const Sc& b) {
+        if (a.sc != b.sc) return a.sc > b.sc;
+        return std::strcmp(a.s->name, b.s->name) < 0;
+    });
+    bool named = false, posFit = false, speaks = false;
+    for (auto& x : c) { named |= x.named; posFit |= !pos.empty() && x.med <= kPosFitKm; speaks |= x.speaks; }
+    if (!pos.empty() && !posFit && !named) return r;
+    const bool evidence = named || posFit || speaks;
+    const Sc& best = c[0];
+    if (!evidence && (!here || !(best.d <= reach))) return r;
+    if (c.size() == 1 || best.sc >= kClear * c[1].sc) { r.stations = { best.s }; r.km = { best.d }; r.dx = here && best.d > reach; return r; }
+    r.stations = { best.s, c[1].s }; r.km = { best.d, c[1].d };
+    return r;
+}
+/** navtexStation(): the station when ONE can be named, else nullptr. */
+inline const Station* resolve(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
+    const Resolution r = resolveAll(b1, dialHz, lat, lon, text);
+    return r.stations.size() == 1 ? r.stations[0] : nullptr;
+}
+inline std::string kmText(double d) {
+    std::string s = std::to_string((long long)(std::llround(d / 100.0) * 100));
+    for (int i = (int)s.size() - 3; i > 0; i -= 3) s.insert((size_t)i, ",");
+    return s;
 }
 
 /** "🇧🇪" from "BE". */
@@ -303,11 +451,17 @@ inline std::string flag(const char* iso) {
     return o;
 }
 
-/** navtexStationLabel(): "B · Oostende, Belgium 🇧🇪", or "Station B". */
+/** navtexStationLabel(): "B · Oostende, Belgium 🇧🇪", "… · DX 6,700 km", "W · Corsen 🇫🇷 or Valentia 🇮🇪?", or "Station B". */
 inline std::string label(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
-    const Station* s = resolve(b1, dialHz, lat, lon, text);
-    if (!s) return std::string("Station ") + (b1 >= 'A' && b1 <= 'Z' ? std::string(1, b1) : "?");
-    return std::string(1, s->b1) + " \xc2\xb7 " + s->name + ", " + s->country + " " + flag(s->iso);
+    const Resolution r = resolveAll(b1, dialHz, lat, lon, text);
+    if (r.stations.empty()) return std::string("Station ") + (b1 >= 'A' && b1 <= 'Z' ? std::string(1, b1) : "?");
+    const Station* a = r.stations[0];
+    if (r.stations.size() == 2) {
+        const Station* b = r.stations[1];
+        return std::string(1, a->b1) + " \xc2\xb7 " + a->name + " " + flag(a->iso) + " or " + b->name + " " + flag(b->iso) + "?";
+    }
+    return std::string(1, a->b1) + " \xc2\xb7 " + a->name + ", " + a->country + " " + flag(a->iso)
+         + (r.dx ? " \xc2\xb7 DX " + kmText(r.km[0]) + " km" : std::string());
 }
 
 } // namespace navtex
