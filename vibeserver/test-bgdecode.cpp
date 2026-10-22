@@ -675,10 +675,52 @@ static void ft8Periodic() {
     ok(!t2.itemName().empty() && t2.itemName() != n2, "an item removed under a run → the next write makes a new one");
 }
 
+// ── 7c. ★ beta 4: the FT8 summary counts only real callsigns and their own grids (the Lenovo's "Furthest: DE … AA00") ──
+static void ft8Validation() {
+    std::printf("── FT8 summary: real callsigns, their own grids, a nameable country for the furthest ──\n");
+    std::string c, g;
+    ok(bg::ft8StationFromText("CQ DE G4ABC IO92", c, g) && c == "G4ABC" && g == "IO92", "\"CQ DE G4ABC IO92\" → G4ABC / IO92 (not DE / AA00): " + c + " " + g);
+    ok(bg::ft8StationFromText("CQ DX K1ABC FN42", c, g) && c == "K1ABC" && g == "FN42", "\"CQ DX K1ABC FN42\" → K1ABC / FN42");
+    ok(bg::ft8StationFromText("CQ K1ABC FN42", c, g) && c == "K1ABC" && g == "FN42", "\"CQ K1ABC FN42\" → K1ABC / FN42");
+    ok(bg::ft8StationFromText("G4ABC K1ABC FN42", c, g) && c == "K1ABC" && g == "FN42", "\"CALL1 CALL2 GRID\": the grid is CALL2's");
+    ok(bg::ft8StationFromText("G4ABC K1ABC RR73", c, g) && c == "K1ABC" && g.empty(), "RR73 is not a grid");
+    ok(bg::ft8StationFromText("G4ABC K1ABC AA00", c, g) && c == "K1ABC" && g.empty(), "AA00 is not a grid");
+    ok(bg::ft8StationFromText("EA8/G4ABC/P DL1XYZ -12", c, g) && c == "DL1XYZ" && g.empty(), "a report is not a grid");
+    ok(!bg::ft8StationFromText("CQ DE AA00", c, g) && !bg::ft8StationFromText("TNX 73 RRR", c, g) && !bg::ft8StationFromText("XQ#@ 12 ZZ", c, g)
+       && !bg::ft8StationFromText("", c, g), "junk lines produce nothing");
+    for (const char* w : { "DE", "CQ", "QRZ", "TO", "TU", "TNX", "RR73", "RRR", "73", "IO92", "AA00", "ABC", "1234" })
+        ok(!bg::ft8IsCallsign(w), std::string("not a callsign: ") + w);
+    for (const char* w : { "G4ABC", "K1ABC", "4X1AB", "9A1A", "EA8/G4ABC/P", "3DA0RU", "M0XYZ/QRP" })
+        ok(bg::ft8IsCallsign(w), std::string("a callsign: ") + w);
+    // the summary itself, through the tap
+    gallery::Store s; s.setDir(tmpDir("ft8v"));
+    gallery::Meta m; m.kind = "ft8"; m.origin = "background"; m.freqHz = 1840000; m.mode = "usb"; m.decoder = "ft8";
+    m.liveSpots = std::make_shared<std::atomic<uint64_t>>(0);
+    {
+        bg::Ft8SummaryTap t(s, m, 52.3125, -0.875);
+        t.spot(false, "DE", "AA00", -5, 1840500);          // ★ the Lenovo's
+        t.spot(false, "CQ", "IO92", -5, 1840500);
+        t.spot(false, "73", "", -5, 1840500);
+        ok(m.liveSpots->load() == 0, "★ DE / CQ / 73 are not spots (0 counted)");
+        t.spotText(false, "CQ DE G4ABC IO92");
+        t.spotText(false, "CQ DX K1ABC FN42");
+        t.spotText(false, "G4ABC K1ABC RR73");
+        t.spot(false, "Q1ABC", "QG00", -20, 1840500);       // ★ a call no country table knows (Q is unallocated), far away
+        t.spotText(false, "junk junk junk");
+        ok(m.liveSpots->load() == 4, "4 spots, all real callsigns (" + std::to_string(m.liveSpots->load()) + ")");
+        const std::string txt = t.text(gallery::nowUtc());
+        ok(txt.find("from 3 stations") != std::string::npos, "3 stations (G4ABC, K1ABC, Q1ABC)");
+        ok(txt.find("Furthest:          K1ABC") != std::string::npos && txt.find("country unknown") == std::string::npos
+           && txt.find("DE (") == std::string::npos && txt.find("AA00") == std::string::npos,
+           "★ the furthest is K1ABC (FN42) — never DE/AA00, never a station whose country is unknown:\n" + txt.substr(0, 400));
+    }
+}
+
 int main() {
     config();
     phase2();
     ft8Periodic();
+    ft8Validation();
     sideband();
     navtexAsm();
     store();

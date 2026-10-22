@@ -313,6 +313,55 @@ inline bool gridToLatLon(const std::string& g, double& lat, double& lon) {
     } else { lon += 1.0; lat += 0.5; }
     return true;
 }
+/** ★★ beta 4 (the Lenovo, 1840 kHz: "Furthest: DE (country unknown, AA00) — 15880 km"): what the SUMMARY counts.
+ *  A CALLSIGN: its longest '/'-part (the call itself — "G4ABC" of "EA8/G4ABC/P") is 3–10 letters and digits with at
+ *  least one digit and one letter, ending in a letter; never an FT8 word (DE CQ QRZ TO TU TNX RR73 RRR 73) and never a
+ *  grid. "DE", "73" and "RR73" all fail. */
+inline bool ft8IsCallsign(const std::string& in) {
+    std::string c;
+    for (char ch : in) c += (char)std::toupper((unsigned char)ch);
+    static const char* const words[] = { "DE", "CQ", "QRZ", "TO", "TU", "TNX", "RR73", "RRR", "73", "DX" };
+    for (const char* w : words) if (c == w) return false;
+    std::string best, part;
+    auto take = [&] { if (part.size() > best.size()) best = part; part.clear(); };
+    for (char ch : c) { if (ch == '/') take(); else part += ch; }
+    take();
+    if (best.size() < 3 || best.size() > 10) return false;
+    bool digit = false, letter = false;
+    for (char ch : best) {
+        if (ch >= '0' && ch <= '9') digit = true;
+        else if (ch >= 'A' && ch <= 'Z') letter = true;
+        else return false;
+    }
+    if (!digit || !letter || !(best.back() >= 'A' && best.back() <= 'Z')) return false;
+    for (const char* w : words) if (best == w) return false;
+    return true;
+}
+/** A GRID the summary trusts: a Maidenhead square AA–RR + 00–99, never RR73 (a sign-off) nor AA00 (the corner of the
+ *  map — a placeholder, never a real station). */
+inline bool ft8IsGrid(const std::string& g) {
+    if (g.size() != 4) return false;
+    if (!(g[0] >= 'A' && g[0] <= 'R' && g[1] >= 'A' && g[1] <= 'R' && g[2] >= '0' && g[2] <= '9' && g[3] >= '0' && g[3] <= '9')) return false;
+    return g != "RR73" && g != "AA00";
+}
+/** ★ A decoded MESSAGE → the transmitting station and ITS grid: "CQ [modifier] CALL GRID" → CALL's; "CALL1 CALL2 GRID"
+ *  → CALL2's (CALL1 is who it is sent to). A grid is never paired with anything but a callsign. False = no station. */
+inline bool ft8StationFromText(const std::string& text, std::string& call, std::string& grid) {
+    call.clear(); grid.clear();
+    std::vector<std::string> t; std::string w;
+    for (char ch : text) { if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') { if (!w.empty()) t.push_back(w); w.clear(); } else w += (char)std::toupper((unsigned char)ch); }
+    if (!w.empty()) t.push_back(w);
+    size_t i = 0;
+    if (!t.empty() && (t[0] == "CQ" || t[0] == "QRZ")) {
+        i = 1;
+        if (i < t.size() && !ft8IsCallsign(t[i])) ++i;            // ★ the modifier: DX, NA, DE, 123 …
+    } else if (t.size() >= 2 && ft8IsCallsign(t[0])) i = 1;       // ★ CALL1 CALL2 …: the sender is the second
+    else return false;
+    if (i >= t.size() || !ft8IsCallsign(t[i])) return false;
+    call = t[i];
+    if (i + 1 < t.size() && ft8IsGrid(t[i + 1])) grid = t[i + 1];
+    return true;
+}
 inline double greatCircleKm(double la1, double lo1, double la2, double lo2) {
     const double r = M_PI / 180.0;
     const double a = std::sin((la2 - la1) * r / 2), b = std::sin((lo2 - lo1) * r / 2);
@@ -337,10 +386,13 @@ public:
     Ft8SummaryTap(gallery::Store& store, gallery::Meta meta, double lat, double lon)
         : store_(store), meta_(std::move(meta)), lat_(lat), lon_(lon) { reset(gallery::nowUtc()); }
     ~Ft8SummaryTap() override { finish(true); }
-    void spot(bool ft4, const std::string& call, const std::string& grid, int snr, double rfHz) override {
+    void spot(bool ft4, const std::string& call, const std::string& gridIn, int snr, double rfHz) override {
         (void)snr; (void)rfHz;
+        // ★★ beta 4: only a real CALLSIGN is a spot, and only a real grid is its position (ft8IsCallsign / ft8IsGrid).
+        if (!ft8IsCallsign(call)) return;
+        const std::string grid = ft8IsGrid(gridIn) ? gridIn : std::string();
         std::lock_guard<std::mutex> lk(m_);
-        if (done_ || call.empty()) return;
+        if (done_) return;
         const int64_t now = gallery::nowUtc();
         if (now / 86400 != from_ / 86400) { write(now, true); reset(now); }
         ++spots_; (ft4 ? ft4_ : ft8_)++;
@@ -354,7 +406,8 @@ public:
         if (meta_.liveCountries) meta_.liveCountries->store(countrySpots_.size(), std::memory_order_relaxed);
         dirty_ = true;
         double la, lo;
-        if (std::isfinite(lat_) && std::isfinite(lon_) && gridToLatLon(grid, la, lo)) {
+        // ★ The furthest is a station with a valid call, ITS valid grid, and a country we can name — never "country unknown".
+        if (!ctry.empty() && !grid.empty() && std::isfinite(lat_) && std::isfinite(lon_) && gridToLatLon(grid, la, lo)) {
             const double km = greatCircleKm(lat_, lon_, la, lo);
             if (km > farKm_) { farKm_ = km; farCall_ = call; farGrid_ = grid; farCountry_ = ctry; }
         }
@@ -372,6 +425,11 @@ public:
         if (done_) return;
         done_ = true;
         write(gallery::nowUtc(), true);
+    }
+    /** A decoded message as TEXT ("CQ DX K1ABC FN42") → spot() for its transmitting station, if it has one. */
+    void spotText(bool ft4, const std::string& text) {
+        std::string c, g;
+        if (ft8StationFromText(text, c, g)) spot(ft4, c, g, 0, meta_.freqHz);
     }
     /** ★ Test seam: the periodic rewrite, now. */
     void writeNowForTest() { std::lock_guard<std::mutex> lk(m_); if (dirty_) write(gallery::nowUtc(), false); }
