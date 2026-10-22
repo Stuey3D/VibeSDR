@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <thread>
 #include "sdrplay_source.h"
+#include "vibe_sdrplay_lib.h"
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
 #include "airspy_source.h"
@@ -281,6 +282,13 @@ const char* vs_directory_status(void) {
 void vs_sdrplay_retry(void) { vibe::SdrplaySource::retryApi(); }
 
 int vs_sdrplay_api_stuck(void) { return vibe::SdrplaySource::apiUnresponsive() ? 1 : 0; }
+int vs_sdrplay_system_stack(void) {
+#if defined(__APPLE__)
+    return vibe::sdrplaylib::macSystemStack() ? 1 : 0;
+#else
+    return vibe::sdrplaylib::linuxSystemStack() ? 1 : 0;
+#endif
+}
 
 // ★ ONE FLAT LIST, now five drivers deep: dongles, then RSPs, then Airspy HF+, then HackRF, then
 // Airspy R2/Mini — the order detectRadios() uses, so the Mac app, the TUI and `--radio N` all mean

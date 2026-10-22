@@ -111,6 +111,16 @@ public:
      *  user-initiated Refresh, never automatically — retrying a wedged system lock on a
      *  timer is what caused the pile-up in the first place. */
     static void retryApi();
+    /* ── ★★ ANDROID: THE APP HANDS US ITS USB DEVICES (OpenRSP embedded mode, 2026-10-22) ──────────
+     *  An Android app may not enumerate USB, so OpenRSP's service — which runs INSIDE this process — is
+     *  given each RSP's UsbManager fd. The RSP RE-ENUMERATES after its firmware upload (a NEW device, a new
+     *  fd), so the app attaches again on that USB_DEVICE_ATTACHED; the same deviceName replaces the entry.
+     *  All four are no-ops (androidSupported() false) off Android and below API 26. */
+    static void androidSetFirmwareDir(const std::string& dir);
+    static bool androidSupported();
+    /** 0, or a negative errno. `deviceName` is UsbDevice.getDeviceName(). */
+    static int  androidAttach(int fd, const std::string& deviceName);
+    static int  androidDetach(const std::string& deviceName);
 private:
     static std::string deviceNameLocked(int index);
 public:
