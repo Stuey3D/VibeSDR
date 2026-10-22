@@ -797,7 +797,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <div class="hint">When somebody else is already listening, a newcomer&rsquo;s tuning controls &mdash; and the gain and receiver settings everybody hears &mdash; are dimmed
             until they ask in the chat. A &ldquo;yes&rdquo; lets them in at once, and so does no answer within
             15&nbsp;seconds. A &ldquo;no&rdquo; holds for five minutes at most, so nobody can keep the radio to
-            themselves. Your answer as admin always counts first, then whoever has been listening longest.</div>
+            themselves. Once in, the dial is theirs while they use it; three minutes without changing anything and
+            they ask again. Your answer as admin always counts first, then whoever has been listening longest.</div>
         </div>
         <!-- ★★★ THIS BOX IS WHAT TURNS AN UNLOCKED RADIO INTO AN FM-DX ONE, so it is where the
              consequence is explained rather than in a mode card. Two settings already say
