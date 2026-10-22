@@ -5339,13 +5339,6 @@ function bgCollect() {
   if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0; }); })) return "";
   return JSON.stringify({ on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles });
 }
-function bgSignalText(v) {
-  const d = BG_DECODERS.find(function (x) { return x.id === v.dec; });
-  if (!d || !(v.hz > 0)) return "";
-  const sig = v.mode === "lsb" ? v.hz - d.tone : v.hz + d.tone;
-  return "Listening for " + d.label.split(" ")[0] + " on " + (sig / 1e3).toFixed(3) + " kHz (the dial sits "
-       + (d.tone / 1e3).toFixed(1) + " kHz " + (v.mode === "lsb" ? "above" : "below") + " it in " + BG_DEMODS[v.mode] + ").";
-}
 /** "13:00" from "12:00" and the server's offset — the server's local time, which is not the browser's. */
 function bgLocal(hhmm) {
   const off = typeof cfg.serverUtcOffsetMin === "number" ? cfg.serverUtcOffsetMin : -new Date().getTimezoneOffset();
@@ -5409,11 +5402,9 @@ function bgRender() {
       const rm = el("button", { type: "button", class: "ghost" }, "Remove");
       rm.onclick = function () { p.vfos.splice(vi, 1); if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); bgRender(); };
       row.appendChild(rm);
-      const hint = el("div", { class: "hint" }, bgSignalText(v));
-      row.appendChild(hint);
+      // ★ No per-VFO "listening for … kHz" line (Stuart, 2026-10-22): it read as NAVTEX-only and odd for WEFAX or RTTY.
       const upd = function () {
         v.hz = Math.round((parseFloat(fi.value) || 0) * 1e3); v.mode = md.value; v.dec = dc.value;
-        hint.textContent = bgSignalText(v);
       };
       fi.oninput = upd; md.onchange = upd; dc.onchange = upd;
       card.appendChild(row);
