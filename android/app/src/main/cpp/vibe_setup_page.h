@@ -89,6 +89,15 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
          padding:11px 20px;font:600 15px/1 inherit;cursor:pointer}
   button:disabled{opacity:.5;cursor:default}
   button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  /* ★ V12 background decoding: a profile is a box of its own; a VFO is one row, in the order a listener picks */
+  .bgProf{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0}
+  .bgProf h3{font-size:13px;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center;color:var(--amber)}
+  .bgVfo{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
+  .bgVfo input{max-width:110px} .bgVfo select{width:auto}
+  .bgVfo .hint{margin:0;flex-basis:100%}
+  .bgTimes{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+  .bgTimes input{width:auto}
+  button.linkish{background:none;border:none;color:var(--amber);padding:4px 0;text-decoration:underline;cursor:pointer}
   /* ★ An ANCHOR styled as the primary button: it is a navigation, so it should be a real link
      (middle-click, open in a new tab, copy the address) rather than a button running location=. */
   /* ★ The converter quick-picks: the NAME reads first and the LO sits under it as the fact being
@@ -648,6 +657,25 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           once. The next one past the limit is refused and the listener is told why. The benchmark
           above measures each decoder on this machine and sets this for you; blank uses a cautious
           figure for this hardware.</div></label>
+      <!-- ★★ V12 THE GALLERY (2026-10-22): what the decoders heard — background decoding's, and a listener's own.
+           MACHINE-level: one folder every radio writes into. The owner sets its size beside the space left on the
+           disk (Stuart: "showing the REMAINING disk/SD space beside it"); when it is full the OLDEST items go. -->
+      <label><span class="lbl">Gallery size</span>
+        <span style="display:flex;gap:10px;align-items:center">
+          <input type="number" id="galleryMb" min="0" max="100000" step="10" style="max-width:120px"> <span>MB</span>
+          <span class="hint" id="galleryDisk" style="margin:0"></span></span>
+        <div class="hint">NAVTEX messages, RTTY and later charts and pictures, kept for anyone to look back through
+          (the <b>GALLERY</b> button in the decoders menu). When it is full the <b>oldest</b> items are overwritten,
+          so the newest night is always there. <b>0</b> keeps nothing. On an SD card, a modest figure (100 MB holds
+          tens of thousands of NAVTEX messages) saves the card.</div></label>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="galleryPublic" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Everyone may see the gallery</span></label>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="gallerySaveLive" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Keep listeners' decodes in the gallery too</span></label>
+      <div class="hint">Off: only background decoding is kept. Each item says whether it was decoded in the background
+        or by a listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.</div>
     </div>
 
       <div class="card">
@@ -1757,6 +1785,26 @@ body.wifiFirst .wifiFirstOnly { display: block; }
             other program matters as much as this one — but a listener arriving seconds later has
             to wait for it to come back, and cannot if the other program has taken it. A short
             wait absorbs somebody reloading their browser.</div></label>
+      </div>
+      <!-- ★★★ V12 BACKGROUND DECODING (Stuart, 2026-10-22, for NickB's NAVTEX the night Storm Austen came in). Beside the
+           power save and the hand-off, because it is the same question — what this radio does when nobody is
+           listening. The wording of the first line is Stuart's. A listener arriving stops it at once and gets the radio
+           back on the dial it was left on. -->
+      <div id="hwBg" style="margin-top:14px">
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="bgOn" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span><b>Background Decoding</b></span></label>
+        <p class="why">When the last user leaves the server after
+          <select id="bgWait" style="width:auto;display:inline-block">
+            <option value="1">1 minute</option><option value="2">2 minutes</option>
+            <option value="5">5 minutes</option><option value="10">10 minutes</option>
+            <option value="15">15 minutes</option><option value="30">30 minutes</option>
+            <option value="60">1 hour</option></select>
+          the SDR will move to your selected RF Centre. Set an RF centre here and choose 1 or multiple VFO's and
+          decoders for background decoding.
+          <br>The moment anybody connects, background decoding stops and the radio goes back to exactly where it was
+          left. What it decodes is kept in the gallery (Server tab).</p>
+        <div id="bgProfiles"></div>
       </div>
       <div id="hwPpb" class="hide">
         <label><span class="lbl">Calibration (ppb)</span>
@@ -4832,6 +4880,17 @@ function fill() {
       : (cfg.oneRadioPerIp === false ? 0 : 1));
   // ★ Blank = 0 = the default for this hardware, which is what an older config means too.
   $("decoderMax").value = cfg.decoderMax > 0 ? String(cfg.decoderMax) : "";
+  // ★★ V12 the gallery. Absent = the defaults (100 MB, everyone, listeners kept) — what an older config means.
+  $("galleryMb").value = String(cfg.galleryMb != null ? cfg.galleryMb : 100);
+  $("galleryPublic").checked = cfg.galleryPublic !== false;
+  $("gallerySaveLive").checked = cfg.gallerySaveLive !== false;
+  (function () {
+    var el = $("galleryDisk"); if (!el) return;
+    var gb = function (b) { return b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB"; };
+    el.textContent = cfg.galleryFreeBytes > 0
+      ? gb(cfg.galleryFreeBytes) + " free on this disk" + (cfg.galleryUsedBytes > 0 ? " \u00b7 the gallery holds " + gb(cfg.galleryUsedBytes) : "")
+      : "";
+  })();
   // ★★ FILLED IN THE SAME EDIT THAT ADDED THE FIELDS. A control the page never populates shows
   //    the owner an empty box over a setting that is actually on, and the next save writes the
   //    blank back — which is how twelve settings reverted on every start once already.
@@ -5007,6 +5066,7 @@ function fill() {
   // ★ 300 s is the historical default, so a radio saved before this control existed
   //   keeps the behaviour it already had rather than silently changing.
   if ($("idleGrace")) $("idleGrace").value = String(r.idleGrace != null ? Math.round(r.idleGrace) : 300);
+  bgLoad(r);   // ★ V12 background decoding — see bgLoad
   $("sessionLimit").value = r.sessionLimitMin || 0;
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
   if ($("askFirst")) $("askFirst").checked = !!r.askBeforeTuning;   // ★ absent = off, as on every older config
@@ -5219,6 +5279,161 @@ function addr() {
 /** ★★ WHAT BELONGS TO THIS RADIO. Split from the machine's own settings deliberately: posting a
  *  radio's locked frequency as though it were a property of the SERVER is how three receivers
  *  would end up sharing one window. */
+// ── ★★★ V12 BACKGROUND DECODING (Stuart, 2026-10-22) ─────────────────────────────────────────────────────────────
+// A PROFILE: RF Centre, then VFO rows in the order a listener uses them — frequency → demodulator → decoder (only the
+// decoders that make sense for that demodulator), each removable, "+ Add another VFO" — then "Background profile
+// active between [00:00] - [00:00]" (UTC; 00:00–00:00 = all day). ONLY when a profile's times are anything other than
+// all day does "Want to add another background decoding profile?" appear beneath it. Every profile can be deleted.
+// ★ The model lives in bgModel and the DOM is redrawn from it; the inputs write straight back into the model, so a
+//   redraw (a row added or removed) never loses what was typed.
+// ★ Mirrors vibe_bgdecode_config.h: the decoders, their audio tone (USB: signal = dial + tone; LSB: dial − tone).
+const BG_DECODERS = [
+  { id: "navtex",       label: "NAVTEX",                       tone: 500 },
+  { id: "rtty",         label: "RTTY (auto)",                  tone: 1000 },
+  { id: "rtty-ham",     label: "RTTY 45.45 Bd 170 Hz",         tone: 1000 },
+  { id: "rtty-weather", label: "RTTY 50 Bd 450 Hz (weather)",  tone: 1000 },
+];
+const BG_DEMODS = { usb: "USB", lsb: "LSB" };   // ★ only demodulators a background decoder works on
+let bgModel = { on: false, waitMin: 5, profiles: [] };
+function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: [{ hz: 0, mode: "usb", dec: "navtex" }] }; }
+function bgLoad(r) {
+  bgModel = { on: false, waitMin: 5, profiles: [] };
+  try {
+    const j = r && r.bgDecode ? JSON.parse(r.bgDecode) : null;
+    if (j && typeof j === "object") {
+      bgModel.on = !!j.on;
+      bgModel.waitMin = j.waitMin > 0 ? j.waitMin : 5;
+      bgModel.profiles = Array.isArray(j.profiles) ? j.profiles.map(function (p) {
+        return { centre: +p.centre || 0, from: p.from || "00:00", to: p.to || "00:00",
+                 vfos: (Array.isArray(p.vfos) ? p.vfos : []).map(function (v) {
+                   return { hz: +v.hz || 0, mode: BG_DEMODS[v.mode] ? v.mode : "usb", dec: v.dec || "navtex" }; }) };
+      }) : [];
+    }
+  } catch (e) { /* ★ an unreadable setting shows as off with no profiles — the save then writes a good one */ }
+  // ★ An Icom has no IQ to cut channels from (one physical receiver): the control is not offered there (AGENTS.md).
+  const drv = String((r && r.driver) || "");
+  if ($("hwBg")) $("hwBg").classList.toggle("hide", drv === "icom");
+  if ($("bgOn")) $("bgOn").checked = bgModel.on;
+  if ($("bgWait")) {
+    const w = String(bgModel.waitMin);
+    if (![].some.call($("bgWait").options, function (o) { return o.value === w; })) {
+      const o = document.createElement("option"); o.value = w; o.textContent = w + " minutes"; $("bgWait").appendChild(o);
+    }
+    $("bgWait").value = w;
+  }
+  if (!$("bgOn").__wired) {
+    $("bgOn").__wired = 1;
+    $("bgOn").addEventListener("change", function () { bgModel.on = $("bgOn").checked; bgRender(); });
+    $("bgWait").addEventListener("change", function () { bgModel.waitMin = parseFloat($("bgWait").value) || 5; });
+  }
+  bgRender();
+}
+function bgCollect() {
+  bgModel.on = !!($("bgOn") && $("bgOn").checked);
+  bgModel.waitMin = parseFloat(($("bgWait") || {}).value) || 5;
+  // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
+  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0; }); })) return "";
+  return JSON.stringify({ on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles });
+}
+function bgSignalText(v) {
+  const d = BG_DECODERS.find(function (x) { return x.id === v.dec; });
+  if (!d || !(v.hz > 0)) return "";
+  const sig = v.mode === "lsb" ? v.hz - d.tone : v.hz + d.tone;
+  return "Listening for " + d.label.split(" ")[0] + " on " + (sig / 1e3).toFixed(3) + " kHz (the dial sits "
+       + (d.tone / 1e3).toFixed(1) + " kHz " + (v.mode === "lsb" ? "above" : "below") + " it in " + BG_DEMODS[v.mode] + ").";
+}
+/** "13:00" from "12:00" and the server's offset — the server's local time, which is not the browser's. */
+function bgLocal(hhmm) {
+  const off = typeof cfg.serverUtcOffsetMin === "number" ? cfg.serverUtcOffsetMin : -new Date().getTimezoneOffset();
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+  if (!m) return "";
+  const t = ((+m[1] * 60 + +m[2] + off) % 1440 + 1440) % 1440;
+  return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
+}
+function bgRender() {
+  const box = $("bgProfiles");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!bgModel.on) return;
+  if (!bgModel.profiles.length) bgModel.profiles.push(bgNewProfile());
+  const el = function (tag, attrs, text) {
+    const e = document.createElement(tag);
+    for (const k in (attrs || {})) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    return e;
+  };
+  bgModel.profiles.forEach(function (p, pi) {
+    const card = el("div", { class: "bgProf" });
+    const h = el("h3", null, "Profile " + (pi + 1));
+    const del = el("button", { type: "button", class: "ghost" }, "Delete profile");
+    del.onclick = function () { bgModel.profiles.splice(pi, 1); bgRender(); };
+    h.appendChild(del); card.appendChild(h);
+    // RF centre
+    const cl = el("label"); cl.appendChild(el("span", { class: "lbl" }, "RF Centre"));
+    const cw = el("span", { style: "display:flex;gap:8px;align-items:center" });
+    const ci = el("input", { type: "number", step: "0.1", min: "0", placeholder: "500", style: "max-width:140px" });
+    ci.value = p.centre > 0 ? String(p.centre / 1e3) : "";
+    ci.oninput = function () { p.centre = Math.round((parseFloat(ci.value) || 0) * 1e3); };
+    cw.appendChild(ci); cw.appendChild(el("span", null, "kHz")); cl.appendChild(cw); card.appendChild(cl);
+    // VFO rows
+    p.vfos.forEach(function (v, vi) {
+      const row = el("div", { class: "bgVfo" });
+      row.appendChild(el("span", null, "VFO " + (vi + 1)));
+      const fi = el("input", { type: "number", step: "0.1", min: "0", placeholder: "517.5" });
+      fi.value = v.hz > 0 ? String(v.hz / 1e3) : "";
+      row.appendChild(fi); row.appendChild(el("span", null, "kHz"));
+      const md = el("select");
+      for (const k in BG_DEMODS) { const o = el("option", { value: k }, BG_DEMODS[k]); md.appendChild(o); }
+      md.value = v.mode; row.appendChild(md);
+      const dc = el("select");
+      BG_DECODERS.forEach(function (d) { dc.appendChild(el("option", { value: d.id }, d.label)); });
+      dc.value = v.dec; row.appendChild(dc);
+      const rm = el("button", { type: "button", class: "ghost" }, "Remove");
+      rm.onclick = function () { p.vfos.splice(vi, 1); if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); bgRender(); };
+      row.appendChild(rm);
+      const hint = el("div", { class: "hint" }, bgSignalText(v));
+      row.appendChild(hint);
+      const upd = function () {
+        v.hz = Math.round((parseFloat(fi.value) || 0) * 1e3); v.mode = md.value; v.dec = dc.value;
+        hint.textContent = bgSignalText(v);
+      };
+      fi.oninput = upd; md.onchange = upd; dc.onchange = upd;
+      card.appendChild(row);
+    });
+    if (p.vfos.length < 8) {
+      const add = el("button", { type: "button", class: "linkish" }, "+ Add another VFO");
+      add.onclick = function () { p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); bgRender(); };
+      card.appendChild(add);
+    }
+    // times (UTC) with the server's local time beside
+    const tr = el("div", { class: "bgTimes" });
+    tr.appendChild(el("span", null, "Background profile active between"));
+    const t1 = el("input", { type: "time", step: "60" }); t1.value = p.from;
+    const t2 = el("input", { type: "time", step: "60" }); t2.value = p.to;
+    const loc = el("span", { class: "hint", style: "margin:0" });
+    const paintLoc = function () {
+      loc.textContent = p.from === p.to ? "UTC \u2014 all day" : "UTC (" + bgLocal(p.from) + " \u2013 " + bgLocal(p.to) + " server time)";
+    };
+    tr.appendChild(t1); tr.appendChild(el("span", null, "-")); tr.appendChild(t2); tr.appendChild(loc);
+    paintLoc();
+    const onT = function () {
+      const was = p.from === p.to;
+      p.from = t1.value || "00:00"; p.to = t2.value || "00:00";
+      paintLoc();
+      if (was !== (p.from === p.to)) bgRender();   // ★ the "another profile" line appears or goes
+    };
+    t1.onchange = onT; t2.onchange = onT;
+    card.appendChild(tr);
+    box.appendChild(card);
+    // ★ ONLY under a profile that is not all day — an all-day profile leaves no time for another.
+    if (pi === bgModel.profiles.length - 1 && p.from !== p.to && bgModel.profiles.length < 4) {
+      const more = el("button", { type: "button", class: "linkish" }, "Want to add another background decoding profile?");
+      more.onclick = function () { bgModel.profiles.push(bgNewProfile()); bgRender(); };
+      box.appendChild(more);
+    }
+  });
+}
+
 function collectRadio() {
   const locked = radio().mode === "locked";
   const drv = radio().driver || "";
@@ -5367,6 +5582,9 @@ function collectRadio() {
     // ★ Ask before tuning — saved as ticked even while hidden (one listener / locked), so raising the count later
     //   brings back what the owner chose; the server only applies it on a shared dial with company anyway.
     askBeforeTuning: !!($("askFirst") && $("askFirst").checked),
+    // ★★ V12 background decoding, as ONE JSON string (RadioConfig::bgDecode — see why there). The SERVER validates it
+    //    at the save (overlaps, VFOs outside the window) and says why in the error line.
+    ...($("hwBg") && !$("hwBg").classList.contains("hide") ? { bgDecode: bgCollect() } : {}),
     // ★ Sent as typed; the SERVER clamps to the 15-minute floor, so the page cannot be the thing
     //   that decides what is too short.
     idleKickMin: parseInt($("idleKick").value || "0", 10),
@@ -5421,6 +5639,9 @@ function stashServer() {
   //   limit, which is the safer of the two answers an older build can hold.
   cfg.oneRadioPerIp  = cfg.maxRadiosPerIp !== 0;
   cfg.decoderMax     = Math.max(0, parseInt($("decoderMax").value || "0", 10) || 0);
+  cfg.galleryMb = Math.max(0, parseInt($("galleryMb").value || "0", 10) || 0);
+  cfg.galleryPublic = $("galleryPublic").checked;
+  cfg.gallerySaveLive = $("gallerySaveLive").checked;
   cfg.dirList       = $("dirList").checked;
   cfg.tunnelResume  = $("tunnelResume").checked;
   cfg.dirName       = $("dirName").value.trim();
@@ -5454,6 +5675,9 @@ function collect() {
     maxRadiosPerIp: parseInt($("maxRadiosPerIp").value, 10) || 0,
     oneRadioPerIp: (parseInt($("maxRadiosPerIp").value, 10) || 0) !== 0,
     decoderMax:       Math.max(0, parseInt($("decoderMax").value || "0", 10) || 0),
+    galleryMb:        Math.max(0, parseInt($("galleryMb").value || "0", 10) || 0),
+    galleryPublic:    $("galleryPublic").checked,
+    gallerySaveLive:  $("gallerySaveLive").checked,
     dirList:          $("dirList").checked,
     tunnelResume:     $("tunnelResume").checked,
     dirName:          $("dirName").value.trim(),
