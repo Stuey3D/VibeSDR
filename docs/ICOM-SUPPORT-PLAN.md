@@ -553,3 +553,113 @@ Stuart: "Pairing code with the app when setting up, only the server owner's app 
   watch passcode stand in for Face ID. Hold-to-talk on a big button (Action button on Ultra). The watch mic streams
   through AVAudioEngine while Jr is frontmost; dropping the wrist or leaving the app unkeys at once (dead-man).
   Mind arm64_32 (32-bit Int below watchOS 27) in the audio and key code. Latency/battery over LTE to be measured.
+
+---
+
+## hwinfo + wire contract for clients (built)
+
+*Built on branch `v12-icom`, 2026-10-22. This is what the SERVER sends and accepts for an Icom, frozen so
+the app, the web client, Jr and the Android port can be built from it. Server code: `radioCapsJsonCore()`
+(icom branch), `Impl::icomControl()`, `onIcomSweep()`, `onIcomState()`, `sendConfig()` in
+`android/app/src/main/cpp/local_sdr_shim.cpp`; the radio itself in `icom_source.*`. Proven against the
+fake radio by `scripts/test-server-icom.mjs`.*
+
+### How a client knows it is talking to an Icom
+
+`hwinfo.radio.driver === "icom"`. Branch on that **before any default** (AGENTS.md; "else means dongle").
+`config.icom === true` says the same on every config. `/vibeserver.json` → `tunable` is the model's
+receive range (`[[30000,74800000]]` on a 7300) and `dab` is `false`.
+
+### `hwinfo.radio` (sent on join, on `{"type":"state"}`, and again whenever RF/scope/TX/link state changes)
+
+```json
+"radio":{"driver":"icom","model":"IC-7300","civ":"94","link":"usb","transport":"cp210x","linesHeldLow":true,
+ "baud":115200,"noIq":true,"sharedOnly":true,"canTransmit":false,
+ "modes":["lsb","usb","am","cw","rtty","fm","cwr","rttyr","usbd","lsbd"],"modeNow":"usbd",
+ "filters":[1,2,3],"filNow":1,
+ "filterWidths":{"ssb":[3000,2400,1800],"cw":[1200,500,250],"rtty":[2400,500,250],"am":[9000,6000,3000],"fm":[15000,10000,7000]},
+ "att":[0,20],"attNow":0,"preamp":[0,1,2],"preampNow":1,"agc":["fast","mid","slow"],"agcNow":"mid",
+ "rfGain":[0,255],"rfGainNow":255,"nb":true,"nbNow":false,"nr":true,"nrNow":false,"anf":true,"anfNow":false,
+ "scope":{"points":475,"spans":[5000,10000,20000,50000,100000,200000,500000,1000000],"span":50000,
+          "modes":["centre","fixed"],"mode":"centre","speeds":["fast","mid","slow"],"fps":19.9},
+ "ranges":[[30000,74800000]],"tx":false,"linkUp":true,"ownerLock":true,"rfOpen":false,
+ "audio":"ALSA hw:2,0 (CODEC)","audioProblem":"",
+ "preflight":{"passed":true,"verified":false,"summary":"Safe to receive: …",
+              "items":[{"name":"USB SEND","value":"OFF","ok":true,"gate":true,"where":"MENU > SET > Connectors > …"}, …]},
+ "refusedFrames":0}
+```
+
+- **Every list comes from here, never a constant** (`feedback_app_no_hardcoded_settings`). `att` is in dB;
+  `preamp` 0 = OFF, 1 = P.AMP1, 2 = P.AMP2; `scope.spans` are TOTAL widths in Hz.
+- `filterWidths` are the radio's FACTORY widths for FIL1/2/3 per mode family (`ssb` covers usb/lsb/usbd/lsbd,
+  `cw` covers cw/cwr, `rtty` covers rtty/rttyr). The owner can change them in the radio and CI-V does not
+  report them, so draw the passband from these as approximate.
+- `ownerLock` true (the default) = "Listeners follow the radio": only a **signed-in admin** (`admin_unlock`
+  accepted on this socket) may tune, change mode/filter/span/scope mode. `rfOpen` false (the default) = ATT,
+  preamp, AGC, RF gain, NB, NR, ANF and scope speed are admin-only. A refused control is answered with
+  `{"type":"notice","why":"…"}` and a fresh `config`; the client should disable those controls for a
+  non-admin rather than let them bounce.
+- `tx` true = the OWNER is transmitting: show a "station transmitting" banner. The server has already muted
+  the audio and frozen the waterfall; do not treat the silence as a fault.
+- `linkUp` false = the radio stopped answering (unplugged, switched off). The server retries every 3 s.
+- `preflight` is for the setup page and an admin; listeners never need it. `canTransmit:false` is
+  unconditional in this phase.
+- The **generic hwinfo fields outside `radio`** (`gains`, `gainNow`, `agc`, `digitalAgc`, `ds*`, `biasT`,
+  `adcPeak`, `ifGrFloor` …) are still sent and **mean nothing on an Icom** — ignore them when
+  `radio.driver === "icom"`.
+
+### `config` (unchanged shape, Icom meanings)
+
+- `vfo` = the radio's frequency. `centerFreq` = the centre of the radio's CURRENT sweep (centre mode: the
+  VFO; fixed mode: the middle of the fixed edges). `binBandwidth × binCount` = the sweep's real span.
+  The server re-sends `config` whenever the sweep's edges move, BEFORE the next SPEC row, so rescale on it.
+- `mode` is in the client vocabulary (`usb lsb am cwu cwl nfm`); `radioMode` is the radio's own
+  (`usbd`, `rtty`, `cwr`, …) — show `radioMode` (e.g. "USB-D", "RTTY") on the mode button.
+  Mapping: usb/usbd/rttyr→usb, lsb/lsbd/rtty→lsb, cw→cwu, cwr→cwl, fm→nfm, am→am.
+- `shared` is true whenever more than one listener is allowed; an Icom never gives anyone a private VFO.
+
+### SPEC frames
+
+Same 22-byte header and u8 bins as every radio (FFT order, DC first; byte = dB + 256). One frame per radio
+sweep, at the radio's rate (`radio.scope.fps`: ~19/s at 115200 baud, ~3/s at 19200), resampled to the
+client's `?bins=` by sample-and-hold up / peak-hold down — 475 real points, never interpolated. The
+amplitude (0-160 on a 7300) is placed over 80 dB with the floor at −130 dB, i.e. relative to the radio's REF
+level, **not** dBFS. The waterfall's colour auto-range works as for any radio; an S-meter derived from SPEC
+bins is meaningless — use the `icom` status line.
+
+### `{"type":"icom", …}` status line (new)
+
+Sent on join (straight after hwinfo), on every change, and with the S-meter at most 4 times a second:
+`{"type":"icom","freq":7074000,"mode":"usbd","fil":1,"sRaw":48,"sDbOverS9":-30.4,"tx":false,"link":true,"fps":19.9,"span":50000,"scopeMode":"centre"}`.
+`sDbOverS9` uses Hamlib's published IC-7300 calibration (0 = S9, −54 = S0, +60 = S9+60); S-units =
+9 + sDbOverS9/6 below S9. Draw the S-meter from this.
+
+### What a client SENDS
+
+| Message | On an Icom |
+|---|---|
+| `{"type":"tune","frequency":…,"mode":…}` | Tunes the RADIO (owner lock applies). A `mode` equal to the one in `config.mode` is ignored (so "usb" never flips USB-D to USB); another one is mapped (table above). `bandwidthLow/High` inside a tune are ignored. |
+| `{"type":"mode","mode":…}` | Mode change, same mapping. `wfm`, `sam`-as-SAM and `dab` do not exist (sam maps to AM). |
+| `{"type":"bandwidth","bandwidthLow","bandwidthHigh"}` | The NEAREST of FIL1/2/3 by `filterWidths` for the current mode. |
+| `{"type":"zoom","binBandwidth":…}` | **The span ladder**: the nearest rung of `scope.spans` to binBandwidth × your bins. A pan (`frequency`) does nothing — the radio's window is centred on its VFO; the reply `config` says where it is. |
+| `{"type":"icom_control", …}` (new) | Any of: `mode` (radio names, e.g. `"rtty"`, `"usbd"`), `fil` 1-3, `span` (total Hz, a rung), `scopeMode` `"centre"`/`"fixed"`, `scopeSpeed` `"fast"`/`"mid"`/`"slow"`, `att` (dB from the list), `preamp` 0-2, `agc` `"fast"`/`"mid"`/`"slow"`, `rfGain` 0-255, `nb`/`nr`/`anf` true/false. Several fields in one message are fine. |
+| `nr`, `notch`, `say`/chat, decoders, `state`, `ping`, admin sign-in, recording | Unchanged — they work on the radio's audio. |
+| `gain`, `agc` (VibeAGC), `tunerbw`, `rsp_control`, `ahf_control`, `airspy_control`, `hackrf_control`, `antenna`, `sampleRate`, `directSampling`, `autoDirectSampling`, `biasT`, `ppm`, `rawIq`, `iqout`, `iqtune`, `rdsx`, every `dab*`, `autobw`, `ims`, `ceq`, `nb`/`nbx` (OUR blanker), `stereo`, `deemph`, `nfmvoice`, `squelch`, `fftRate` | **Swallowed** (logged, no effect). Do not draw the controls that send them. |
+
+Clients never send CI-V and never can: the server builds every frame from a typed table and checks the whole
+frame against the allow-list (plan §3.2) before it is written.
+
+### Client controls that do NOT apply on an Icom (hide them — plan §2.3, AGENTS.md)
+
+Sample-rate picker · the gain slider / gain table · VibeAGC and its lock · the IF filter ladder and Auto IF ·
+direct sampling (manual and auto) · bias-T · ppm/ppb · the dongle/RSP/HF+/Airspy/HackRF panels ·
+squelch (ours) and our noise blanker · RDS, Advanced RDS, MPX, stereo pilot, de-emphasis, NFM voice ·
+DAB and the DAB landing · raw IQ out, IQ recording, VibeIQ pairing · multi-VFO / locked-centre / per-listener
+VFO UI · spectrum fps tiers and the 4-slot governor display · Spatialise Stereo · binaural · any digital
+zoom past the span ladder · HFDL and other IQ decoders (audio decoders — FT8/FT4, RTTY, CW, NAVTEX, WEFAX,
+SSTV — DO work, inside the radio's passband, at `config.vfo`).
+**Draw instead:** mode buttons from `radio.modes` (label from `radioMode`), FIL1/2/3, a span selector on the
+zoom drum (`scope.spans`), centre/fixed, ATT, preamp, AGC fast/mid/slow, RF gain 0-255, NB/NR/ANF (the
+RADIO's), an S-meter from the `icom` line, the TX banner, and a "listeners follow the radio" notice when
+`ownerLock` is on and the user is not admin. Copy: update the tour/About grep list in AGENTS.md for "Icom",
+and say in the tour that zoom = the radio's span.
