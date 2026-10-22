@@ -40,6 +40,13 @@ public:
     virtual bool write(const uint8_t* b, int n) = 0;
     virtual const char* kind() const = 0;          ///< "cp210x" | "cdc-acm" | "tty" | "memory"
     virtual bool linesHeldLow() const = 0;
+    /** ★ ANDROID ONLY (the "fd:" transport): a FRESH UsbManager descriptor for the same radio after it left the
+     *  bus and came back — usbfs binds an fd to the device INSTANCE it was opened on, so the old one answers
+     *  -ENODEV for ever. Ownership passes here; the next open() adopts it. False (and the caller keeps the fd)
+     *  for every other transport. Any thread. */
+    virtual bool offerFd(int fd) { (void)fd; return false; }
+    /** ★ The "fd:" transport has no usable descriptor and none waiting — only the app can open a new one. */
+    virtual bool wantsFd() const { return false; }
 };
 
 /** An Icom-looking device on the USB bus, found WITHOUT sending it a byte.
@@ -58,7 +65,13 @@ struct UsbIcom {
 };
 std::vector<UsbIcom> listUsbIcoms();
 
-/** "usb" (the first Icom found), "usb:<bus>-<ports>", or a /dev path (tty — needs ttyOk). */
+/** "usb" (the first Icom found), "usb:<bus>-<ports>", a /dev path (tty — needs ttyOk), or "fd:<n>".
+ *  ★★ "fd:<n>" IS ANDROID'S DOOR (plan Phase 4): an app may not enumerate USB, so UsbManager opens the radio and
+ *     hands us the descriptor, which libusb WRAPS (libusb_wrap_sys_device — the way every other radio reaches the
+ *     engine on Android). Then the SAME CP210x/CDC code as the "usb" path runs on it: lines held low before the
+ *     UART is enabled, and there is no kernel tty on Android to raise DTR/RTS behind our back. The transport takes
+ *     OWNERSHIP of <n> (pass a dup). ★ A CP210x whose USB serial does not name an Icom is refused before a single
+ *     byte is written to its UART — the app checked the same thing, this is the second look. */
 std::unique_ptr<CivTransport> makeTransport(const std::string& spec, int baud, bool ttyOk, std::string& err);
 
 /** The far end of a MemoryTransport: a fake radio, or a test. Called on the transport's thread. */

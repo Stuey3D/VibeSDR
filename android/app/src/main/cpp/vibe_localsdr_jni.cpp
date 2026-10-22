@@ -14,6 +14,9 @@
 #include <rtl-sdr.h>
 #include "local_sdr_shim.h"
 #include "sdrplay_source.h"   // ★ the RSP's Android USB hand-off
+#if VIBE_HAVE_ICOM
+#include "icom_audio.h"       // ★★★ the Icom's radio audio, pushed in from AudioRecord (plan Phase 4)
+#endif
 #include "vibe_usb_recovery.h"   // ★ the gone-radio rules Kotlin reads — see nativeGiveUpOnGoneRadio
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark — see nativeRunBenchmark
 /* ★★ vibemap::setDir — where this server keeps its map pack. Android has no directory next to the
@@ -464,6 +467,56 @@ static std::string jstr(JNIEnv* env, jstring j) {
     if (c) env->ReleaseStringUTFChars(j, c);
     return out;
 }
+
+// ★★★ ICOM, RECEIVE ONLY, ON ANDROID (docs/ICOM-SUPPORT-PLAN.md Phase 4). The app owns the radio's USB device and its
+//     audio: it sets the owner's Icom settings here, then calls the ordinary nativeStartSpectrum with the CP210x's fd
+//     (start() routes it to startIcom), and pushes AudioRecord's blocks in through nativeIcomPushPcm.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetIcomNext(JNIEnv* env, jobject, jint baud, jint civAddr, jboolean ownerLock,
+                                                   jboolean rfOpen, jint scopeSpeed, jstring serial) {
+    vibe::LocalSdrShim::IcomStart o;
+    o.baud = baud > 0 ? (int)baud : 115200;
+    o.civAddr = civAddr > 0 && civAddr < 0xE0 ? (int)civAddr : 0;
+    o.ownerLock = ownerLock == JNI_TRUE;
+    o.rfOpen = rfOpen == JNI_TRUE;
+    o.scopeSpeed = scopeSpeed >= 0 && scopeSpeed <= 2 ? (int)scopeSpeed : 0;
+    o.modelHint = jstr(env, serial);
+    vibe::LocalSdrShim::setIcomNext(o);
+}
+/** ★ One AudioRecord block (interleaved int16 at `rate`) — dropped unless an Icom's push source is live. Called on
+ *  the app's capture thread at audio priority; a direct ByteBuffer, so nothing is copied on the way in. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeIcomPushPcm(JNIEnv* env, jobject, jobject buf, jint frames, jint channels, jint rate) {
+#if VIBE_HAVE_ICOM
+    auto* p = buf ? (const int16_t*)env->GetDirectBufferAddress(buf) : nullptr;
+    const jlong cap = buf ? env->GetDirectBufferCapacity(buf) : 0;
+    if (!p || frames <= 0 || channels < 1 || (jlong)frames * channels * 2 > cap) return;
+    icom::pushPcm(p, (int)frames, (int)channels, (int)rate);
+#else
+    (void)env; (void)buf; (void)frames; (void)channels; (void)rate;
+#endif
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeIcomAudioState(JNIEnv* env, jobject, jstring describe, jstring problem) {
+#if VIBE_HAVE_ICOM
+    icom::setPushState(jstr(env, describe), jstr(env, problem));
+#else
+    (void)env; (void)describe; (void)problem;
+#endif
+}
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeIcomAudioWanted(JNIEnv*, jobject) {
+#if VIBE_HAVE_ICOM
+    return icom::pushWanted() ? JNI_TRUE : JNI_FALSE;
+#else
+    return JNI_FALSE;
+#endif
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeIcomFacts(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::instance().icomFactsJson().c_str());
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetAntennaSwitch(JNIEnv* env, jobject, jstring json, jstring map, jboolean locked) {
     vibe::LocalSdrShim::instance().setRspAntennaMap(jstr(env, map));

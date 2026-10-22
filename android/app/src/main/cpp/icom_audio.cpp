@@ -8,9 +8,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <vector>
-#if defined(__linux__)
+// ★ Not on Android: snd-usb-audio owns the codec and SELinux keeps an app off /dev/snd — the "push" source is the
+//   phone's way in, and an APK carries no code that pokes at ALSA nodes.
+#if defined(__linux__) && !defined(__ANDROID__)
 #  include <dirent.h>
 #  include <fcntl.h>
 #  include <limits.h>
@@ -346,12 +349,47 @@ private:
 };
 #endif
 
+// ── "push": Android's AudioRecord, pushed in from Java (see icom_audio.h) ───────────────────
+class PushSource;
+std::mutex g_pushMtx;
+PushSource* g_push = nullptr;           ///< the live one, under g_pushMtx
+std::string g_pushDesc = "Android USB audio (not started yet)", g_pushProblem;   ///< under g_pushMtx
+std::atomic<bool> g_pushChanged{false};
+
+class PushSource final : public AudioCapture {
+public:
+    bool start(PcmFn fn, std::string&) override {
+        std::lock_guard<std::mutex> lk(g_pushMtx);
+        fn_ = std::move(fn);
+        g_push = this;
+        return true;
+    }
+    void stop() override {
+        std::lock_guard<std::mutex> lk(g_pushMtx);
+        if (g_push == this) g_push = nullptr;
+        fn_ = nullptr;
+    }
+    ~PushSource() override { stop(); }
+    std::string describe() const override { std::lock_guard<std::mutex> lk(g_pushMtx); return g_pushDesc; }
+    std::string problem() const override { std::lock_guard<std::mutex> lk(g_pushMtx); return g_pushProblem; }
+    bool takeChanged() override { return g_pushChanged.exchange(false); }
+    void feed(const int16_t* p, int frames, int ch, int rate) { if (fn_) fn_(p, frames, ch, rate); }
+private:
+    PcmFn fn_;
+};
+
 }  // namespace
 
 std::unique_ptr<AudioCapture> makeAudio(const std::string& spec, const std::string& usbPath, std::string& err) {
     if (spec == "none") return nullptr;
     if (spec == "tone") return std::unique_ptr<AudioCapture>(new ToneSource());
     if (spec.rfind("wav:", 0) == 0) return std::unique_ptr<AudioCapture>(new WavSource(spec.substr(4)));
+    if (spec == "push") return std::unique_ptr<AudioCapture>(new PushSource());
+#if defined(__ANDROID__)
+    // ★ No ALSA node is ours to open on a phone (snd-usb-audio holds the codec, and SELinux keeps apps off /dev/snd):
+    //   "auto" there means the app's AudioRecord.
+    if (spec.empty() || spec == "auto") return std::unique_ptr<AudioCapture>(new PushSource());
+#endif
 #if VIBE_ICOM_ALSA
     if (spec.rfind("alsa:hw:", 0) == 0) {
         int c = -1, d = 0;
@@ -373,5 +411,18 @@ std::unique_ptr<AudioCapture> makeAudio(const std::string& spec, const std::stri
     err = "icomAudio \"" + spec + "\" is not available on this platform";
     return nullptr;
 }
+
+void pushPcm(const int16_t* pcm, int frames, int channels, int rate) {
+    if (!pcm || frames <= 0 || channels < 1 || channels > 2) return;
+    std::lock_guard<std::mutex> lk(g_pushMtx);
+    if (g_push) g_push->feed(pcm, frames, channels, rate);
+}
+void setPushState(const std::string& describe, const std::string& problem) {
+    std::lock_guard<std::mutex> lk(g_pushMtx);
+    if (describe == g_pushDesc && problem == g_pushProblem) return;
+    g_pushDesc = describe; g_pushProblem = problem;
+    g_pushChanged.store(true);
+}
+bool pushWanted() { std::lock_guard<std::mutex> lk(g_pushMtx); return g_push != nullptr; }
 
 }  // namespace icom

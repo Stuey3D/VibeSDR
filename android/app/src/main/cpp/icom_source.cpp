@@ -2,6 +2,7 @@
 // must keep all three true: sendFrame() is the ONLY write; open() refuses on a bad preflight; and
 // nothing here builds a frame except through civ::build.
 #include "icom_source.h"
+#include <unistd.h>
 #include "vibe_thread.h"
 #include <chrono>
 #include <cstdio>
@@ -20,7 +21,10 @@ double IcomSource::now() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-IcomSource::~IcomSource() { close(); }
+IcomSource::~IcomSource() {
+    close();
+    if (const int f = freshFd_.exchange(-1); f >= 0) ::close(f);
+}
 
 civ::Policy IcomSource::policyFor(const Model& m, uint8_t addr) {
     civ::Policy p;
@@ -213,6 +217,7 @@ bool IcomSource::open(const IcomConfig& cfg, std::string& err, std::unique_ptr<C
     lastByteAt_ = now();
     if (!identify(err) || !runPreflight(err)) { transport_->close(); transport_.reset(); return false; }
     readInitialState();
+    usbGone_.store(false);
     { std::lock_guard<std::mutex> lk(stMtx_); st_.linkUp = true; }
     // ★ Audio is a separate device: missing audio leaves a working dial and waterfall, and says so.
     audioErr_.clear();
@@ -261,8 +266,11 @@ void IcomSource::close() {
 bool IcomSource::reconnect() {
     if (!transport_) return false;
     transport_->close();
+    // ★ Android: the app's fresh descriptor for the re-plugged radio, if one has arrived (offerFd).
+    if (const int f = freshFd_.exchange(-1); f >= 0 && !transport_->offerFd(f)) ::close(f);
     std::string e;
     if (!transport_->open(e)) return false;
+    usbGone_.store(false);
     parser_.reset(); scope_.reset();
     lastByteAt_ = now();
     // ★★ THE PREFLIGHT AGAIN — a radio that went away may come back with its menu changed.
@@ -362,6 +370,7 @@ void IcomSource::ioLoop() {
             if (takeNext(r)) { if (sendFrame(r.out)) { inflight_ = r; inflightAt_ = t; } }
         }
         const int n = transport_->read(buf, sizeof buf, 10);
+        if (n < 0) usbGone_.store(true);
         if (n < 0 || t - lastByteAt_ > 3.0) {
             const std::string why = n < 0 ? "the radio's USB connection was lost" : "the radio stopped answering CI-V";
             ILOG("%s — will keep trying", why.c_str());
@@ -378,6 +387,7 @@ void IcomSource::ioLoop() {
             parser_.feed(buf, (size_t)n, [&](const civ::Frame& f) { onFrame(f, changed); });
         }
         if (audio_ && audio_->lost() && audioErr_.empty()) { audioErr_ = "the radio's audio device went away"; changed |= kLink; }
+        if (audio_ && audio_->takeChanged()) changed |= kLink;   // ★ Android: the app's audio state moved — re-send hwinfo
         notify(changed);
     }
 }
@@ -550,5 +560,14 @@ bool IcomSource::setScopeSpeed(int s, std::string& why) {
 
 RadioState IcomSource::state() const { std::lock_guard<std::mutex> lk(stMtx_); return st_; }
 std::string IcomSource::audioDescription() const { return audio_ ? audio_->describe() : std::string(); }
+std::string IcomSource::audioProblem() const {
+    if (!audioErr_.empty()) return audioErr_;
+    return audio_ ? audio_->problem() : std::string();
+}
+bool IcomSource::offerFd(int fd) {
+    if (fd < 0 || cfg_.port.rfind("fd:", 0) != 0) return false;
+    if (const int old = freshFd_.exchange(fd); old >= 0) ::close(old);
+    return true;
+}
 
 }  // namespace icom

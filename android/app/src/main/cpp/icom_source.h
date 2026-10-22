@@ -125,7 +125,14 @@ public:
     const char* transportKind() const { return transport_ ? transport_->kind() : "none"; }
     bool linesHeldLow() const { return transport_ && transport_->linesHeldLow(); }
     std::string audioDescription() const;
-    const std::string& audioProblem() const { return audioErr_; }
+    /** The open-time failure, else what the live source says is wrong now (the Android push source's state). */
+    std::string audioProblem() const;
+    /** ★ ANDROID: the radio left the bus — its usbfs descriptor is dead and only the app can open a new one. */
+    bool usbGone() const { return usbGone_.load(); }
+    /** True while usbGone() and no fresh descriptor is waiting (the app polls this, as for every radio). */
+    bool wantsFreshFd() const { return usbGone_.load() && cfg_.port.rfind("fd:", 0) == 0 && freshFd_.load() < 0; }
+    /** Hand in that fresh descriptor (ownership passes); the next reconnect adopts it. Any thread. */
+    bool offerFd(int fd);
     uint64_t refusedFrames() const { return refused_.load(); }
     uint64_t sweepsDropped() const { return scope_.dropped; }
     /** S-meter reading as dB relative to S9 (Hamlib's published 7300 calibration points). */
@@ -153,6 +160,8 @@ private:
     std::atomic<uint64_t> refused_{0};
     std::thread io_;
     std::atomic<bool> tx_{false};
+    std::atomic<bool> usbGone_{false};   ///< read() said the device is GONE (not merely quiet)
+    std::atomic<int>  freshFd_{-1};      ///< Android: a descriptor waiting for reconnect() (ownership is ours)
     std::atomic<double> txHoldUntil_{0.0};
 
     // ── The request queue: a fixed ring per lane, coalesced by (cmd, sub). ★ No allocation.

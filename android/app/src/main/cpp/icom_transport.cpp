@@ -2,7 +2,9 @@
 // changing the ORDER of anything in open(): the order is the safety property.
 #include "icom_transport.h"
 #include "icom_models.h"
+#include <atomic>
 #include <cerrno>
+#include <cstdlib>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -61,10 +63,15 @@ std::string readSerial(libusb_device* d, const libusb_device_descriptor& dd) {
 #if VIBE_ICOM_LIBUSB
 class UsbTransport final : public CivTransport {
 public:
-    UsbTransport(std::string spec, int baud) : spec_(std::move(spec)), baud_(baud) {}
-    ~UsbTransport() override { close(); }
+    UsbTransport(std::string spec, int baud, int fd = -1) : spec_(std::move(spec)), baud_(baud), ownFd_(fd) {}
+    ~UsbTransport() override {
+        close();
+        if (ownFd_ >= 0) ::close(ownFd_);
+        if (const int p = pendingFd_.exchange(-1); p >= 0) ::close(p);
+    }
 
     bool open(std::string& err) override {
+        if (spec_.rfind("fd:", 0) == 0) return openFd(err);
         if (libusb_init(&ctx_) != 0) { err = "libusb could not start"; ctx_ = nullptr; return false; }
         libusb_device** list = nullptr;
         const ssize_t n = libusb_get_device_list(ctx_, &list);
@@ -92,6 +99,54 @@ public:
         const int rc = libusb_open(pick, &h_);
         libusb_unref_device(pick);
         if (rc != 0 || !h_) { err = std::string("could not open the radio's USB port: ") + libusb_error_name(rc); h_ = nullptr; return false; }
+        return claimAndSetup(err);
+    }
+
+    /** ★★ ANDROID: the radio's UsbManager descriptor, wrapped. No enumeration (Android forbids it), no sysfs. */
+    bool openFd(std::string& err) {
+        // ★ A fresh descriptor the app opened after a re-plug replaces the dead one (see offerFd).
+        if (const int nf = pendingFd_.exchange(-1); nf >= 0) { if (ownFd_ >= 0) ::close(ownFd_); ownFd_ = nf; }
+        if (ownFd_ < 0) { err = "the radio's USB connection is gone — waiting for Android to hand it back"; return false; }
+#if defined(__ANDROID__)
+        // ★ The same switch every vendored driver here throws (airspy.c, hackrf.c): libusb must not try to scan
+        //   /dev/bus/usb, which an app may not read.
+        libusb_set_option(nullptr, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
+#endif
+        if (libusb_init(&ctx_) != 0) { err = "libusb could not start"; ctx_ = nullptr; return false; }
+        const int rc = libusb_wrap_sys_device(ctx_, (intptr_t)ownFd_, &h_);
+        if (rc != 0 || !h_) {
+            err = std::string("the radio's USB connection could not be used: ") + libusb_error_name(rc);
+            h_ = nullptr; close(); return false;
+        }
+        libusb_device_descriptor dd{};
+        if (libusb_get_device_descriptor(libusb_get_device(h_), &dd) != 0) { err = "the radio's USB descriptor could not be read"; close(); return false; }
+        const bool cp = dd.idVendor == kSilabsVid && (dd.idProduct == kCp2102Pid || dd.idProduct == kCp2105Pid);
+        const bool acm = dd.idVendor == kIcomVid;
+        if (!cp && !acm) { err = "that USB device is not an Icom radio's CI-V port"; close(); return false; }
+        if (cp) {
+            // ★★ THE SECOND LOOK at the serial, BEFORE anything is claimed or written — a string-descriptor read is a
+            //    control IN to the chip, never a byte on its UART. The app already checked; this file does not trust
+            //    a caller to have done so (a CP2102 is somebody's GPS as often as it is a radio).
+            unsigned char sn[128] = {0};
+            const int n = dd.iSerialNumber ? libusb_get_string_descriptor_ascii(h_, dd.iSerialNumber, sn, sizeof sn - 1) : 0;
+            const std::string serial = n > 0 ? std::string((const char*)sn, (size_t)n) : std::string();
+            if (!modelBySerial(serial.c_str())) {
+                err = "that USB serial chip does not name an Icom radio (serial \"" + serial + "\") — it was not touched";
+                close(); return false;
+            }
+        }
+        cdc_ = acm; path_ = "fd";
+        return claimAndSetup(err);
+    }
+
+    bool offerFd(int fd) override {
+        if (spec_.rfind("fd:", 0) != 0) return false;
+        if (const int old = pendingFd_.exchange(fd); old >= 0) ::close(old);
+        return true;
+    }
+    bool wantsFd() const override { return spec_.rfind("fd:", 0) == 0 && pendingFd_.load() < 0 && !live_.load(); }
+
+    bool claimAndSetup(std::string& err) {
         if (!findEndpoints(err)) { close(); return false; }
         // ★ The kernel driver (cp210x / cdc_acm) gives way for this session and comes back on close.
         //   It has NOT opened a tty unless another program holds one — see the plan's exclusive-port note.
@@ -100,17 +155,20 @@ public:
             const int c = libusb_claim_interface(h_, ifc_[i]);
             if (c != 0) {
                 err = c == LIBUSB_ERROR_BUSY
-                    ? "another program is using the radio's USB port — close wfview, wfweb, WSJT-X or any logger that talks to it"
+                    ? (path_ == "fd" ? std::string("another app is using the radio's USB port — close it and start again")
+                                     : std::string("another program is using the radio's USB port — close wfview, wfweb, WSJT-X or any logger that talks to it"))
                     : std::string("could not claim the radio's USB port: ") + libusb_error_name(c);
                 close(); return false;
             }
             claimed_[i] = true;
         }
         if (!(cdc_ ? setupCdc(err) : setupCp210x(err))) { close(); return false; }
+        live_.store(true);
         return true;
     }
 
     void close() override {
+        live_.store(false);
         if (h_) {
             // ★ Lines low on the way out too, then the UART off: nothing is left asserted for whoever
             //   opens it next (the kernel driver re-binds on release).
@@ -143,6 +201,9 @@ public:
 private:
     std::string spec_, path_;
     int baud_;
+    int ownFd_ = -1;                        ///< "fd:" only — ours (a dup); libusb_close never closes a wrapped fd
+    std::atomic<int> pendingFd_{-1};        ///< "fd:" only — a fresh descriptor waiting for the next open()
+    std::atomic<bool> live_{false};         ///< claimed and set up — read from other threads by wantsFd()
     libusb_context* ctx_ = nullptr;
     libusb_device_handle* h_ = nullptr;
     bool cdc_ = false;
@@ -328,6 +389,18 @@ std::vector<UsbIcom> listUsbIcoms() {
 }
 
 std::unique_ptr<CivTransport> makeTransport(const std::string& spec, int baud, bool ttyOk, std::string& err) {
+    if (spec.rfind("fd:", 0) == 0) {
+        char* end = nullptr;
+        const long fd = std::strtol(spec.c_str() + 3, &end, 10);
+        if (!end || *end || fd < 0) { err = "icomPort fd:<n> needs a descriptor number"; return nullptr; }
+#if VIBE_ICOM_LIBUSB && (defined(__linux__) || defined(__ANDROID__))
+        return std::unique_ptr<CivTransport>(new UsbTransport(spec, baud, (int)fd));
+#else
+        // ★ libusb_wrap_sys_device is a Linux/Android usbfs feature — elsewhere there is no such descriptor.
+        err = "a USB descriptor (fd:) can only be used on Android or Linux";
+        return nullptr;
+#endif
+    }
     if (spec.empty() || spec == "usb" || spec.rfind("usb:", 0) == 0) {
 #if VIBE_ICOM_LIBUSB
         return std::unique_ptr<CivTransport>(new UsbTransport(spec.empty() ? "usb" : spec, baud));

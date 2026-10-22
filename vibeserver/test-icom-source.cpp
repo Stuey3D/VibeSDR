@@ -140,6 +140,68 @@ int main() {
         IcomSource src; std::string err; IcomConfig c = cfgTone(); c.civAddr = 0x98; c.modelHint = "";
         ok(!src.open(c, err, makeMemoryTransport(&fake)) && err.find("IC-7610") != std::string::npos, "an IC-7610 is named and refused: " + err.substr(0, 80));
     }
+    // ── ★★ ANDROID'S TWO DOORS (plan Phase 4), as far as a host can reach them ──
+    //    "push": the app's AudioRecord pushes blocks in; they must reach the engine exactly as ALSA's do — TX-muted,
+    //    dropped when no Icom is served — and the app's audio state must reach hwinfo.
+    //    "fd:": the transport wraps a UsbManager descriptor; only Linux/Android usbfs has one, so here we check the
+    //    spec is understood and refused cleanly, and that the fresh-descriptor hand-off is inert on other transports.
+    std::printf("── Android: push audio + fd transport ──\n");
+    {
+        int16_t blk[480];
+        for (int i = 0; i < 480; i++) blk[i] = (int16_t)(1000 + i);
+        pushPcm(blk, 480, 1, 48000);
+        ok(!pushWanted(), "push: no Icom served — nothing wants audio, and a pushed block goes nowhere");
+        FakeIcomRadio fake;
+        IcomSource src;
+        std::atomic<int> got{0}, silent{0}, chOk{0};
+        src.setPcmSink([&](const int16_t* p, int n, int ch, int rate) {
+            got++;
+            if (ch == 1 && rate == 48000 && n == 480) chOk++;
+            bool z = true; for (int i = 0; i < n * ch; i++) if (p[i]) { z = false; break; }
+            if (z) silent++;
+        });
+        IcomConfig c = cfgTone(); c.audio = "push";
+        std::string err;
+        const bool opened = src.open(c, err, makeMemoryTransport(&fake));
+        ok(opened, "opens with audio=push: " + (opened ? std::string("ok") : err));
+        ok(pushWanted(), "push: the served Icom now wants the app's audio");
+        for (int i = 0; i < 20; i++) pushPcm(blk, 480, 1, 48000);
+        ok(got.load() == 20 && chOk.load() == 20 && silent.load() == 0, "20 pushed blocks reach the engine unchanged (48 kHz mono)");
+        setPushState("USB Audio CODEC (USB)", "");
+        ok(src.audioDescription() == "USB Audio CODEC (USB)" && src.audioProblem().empty(), "the app's device name is what hwinfo says");
+        std::atomic<int> links{0};
+        src.setStateSink([&](unsigned w) { if (w & IcomSource::kLink) links++; });
+        setPushState("USB Audio CODEC (USB)", "microphone permission refused");
+        ok(src.audioProblem() == "microphone permission refused", "and its problem, in its words");
+        ok(waitFor([&] { return links.load() > 0; }, 1000), "a changed audio state re-sends hwinfo (kLink)");
+        fake.tx = true;
+        ok(waitFor([&] { return src.state().tx; }, 1500), "the owner keys");
+        const int s0 = silent.load();
+        for (int i = 0; i < 10; i++) pushPcm(blk, 480, 1, 48000);
+        ok(silent.load() - s0 == 10, "★ pushed audio is MUTED while he transmits, exactly as ALSA's is");
+        fake.tx = false;
+        ok(!src.wantsFreshFd() && !src.usbGone(), "a memory transport never asks for a fresh descriptor");
+        ok(!src.offerFd(-1), "and offerFd refuses a bad descriptor");
+        src.close();
+        ok(!pushWanted(), "closed: the push source is gone");
+        const int g0 = got.load();
+        pushPcm(blk, 480, 1, 48000);
+        ok(got.load() == g0, "and a block pushed after close goes nowhere");
+        ok(fake.violations.load() == 0, "★ zero disallowed frames at the fake");
+        setPushState("Android USB audio (not started yet)", "");
+    }
+    {
+        std::string err;
+        auto t = makeTransport("fd:notanumber", 115200, false, err);
+        ok(!t && !err.empty(), "fd:<junk> refused: " + err);
+        err.clear();
+        t = makeTransport("fd:7", 115200, false, err);
+#if defined(__linux__)
+        ok(t != nullptr || err.find("USB") != std::string::npos, "fd:7 builds the wrapped-fd transport on Linux");
+#else
+        ok(!t && err.find("Android or Linux") != std::string::npos, "fd:7 refused cleanly where usbfs does not exist: " + err);
+#endif
+    }
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
