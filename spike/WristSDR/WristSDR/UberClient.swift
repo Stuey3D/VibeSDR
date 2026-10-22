@@ -567,6 +567,12 @@ final class UberClient: ObservableObject {
   ///    span the subscribe asks for. Cleared the moment hwinfo names another radio.
   private var icomKey: String { "vibe.icom.\(host)\(radioPath)" }
   private var icomRemembered: Bool { UserDefaults.standard.bool(forKey: icomKey) }
+  /// ★★ This radio has said what it is at least once (a config or hwinfo arrived), remembered per radio — so a later
+  ///    connect knows before the first message whether it may send its view at once (IcomRadio.sendViewAtOpen).
+  private var seenKey: String { "vibe.seen.\(host)\(radioPath)" }
+  private var radioSeen: Bool { UserDefaults.standard.bool(forKey: seenKey) }
+  /// ★ The first-ever connect held its view back until the first config said what the radio is; this is it.
+  private var heldFirstViewBinBw: Double? = nil
   /// ★ Under the OWNER LOCK ("Listeners follow the radio", default ON) only a SIGNED-IN admin may tune, change
   ///   mode, FIL or span — `adminOk` is this socket's sign-in, exactly what the server judges.
   var icomFollowLocked: Bool {
@@ -633,6 +639,7 @@ final class UberClient: ObservableObject {
      *  outside `radio` (gains, gainNow, rates, rateNow, agc, deemph, the FM DSP …) are still sent on an Icom and
      *  mean NOTHING there (contract: "ignore them when radio.driver === icom"). */
     if let r = j["radio"] as? [String: Any] {
+      UserDefaults.standard.set(true, forKey: seenKey)
       icom = IcomRadio.parse(r)
       if icom != nil {
         UserDefaults.standard.set(true, forKey: icomKey)
@@ -2857,6 +2864,7 @@ final class UberClient: ObservableObject {
     Vitals.crumb("UBER json: type=\(type)")
     guard type == "config" else { return }
     configSaysIcom = (j["icom"] as? Bool) == true   // ★ the Icom fact rides every config — see isIcom
+    if isVibe { UserDefaults.standard.set(true, forKey: seenKey) }   // ★ the radio has said what it is — see radioSeen
     /* ★★★ THE SCALE IS CHECKED BEFORE IT IS ADOPTED. binCount sizes an array (a negative one
      *  TRAPS, a vast one is an allocation the watch cannot make), and centreFreq/binBandwidth feed
      *  every Int conversion of the view below — Int(Double) traps on NaN, infinity and anything past
@@ -3003,6 +3011,19 @@ final class UberClient: ObservableObject {
       mode = m
       if let d = Self.modeBW[m] { bwLow = d.low; bwHigh = d.high }
       applyIcomState()
+    }
+
+    /* ★★★ THE VIEW HELD BACK ON A FIRST VISIT (subscribeSpectrum): the radio has now said what it is. An ordinary
+     *  per-listener SDR gets the view Jr would have sent at open, at once; an Icom or a shared dial is adopted as it
+     *  stands (IcomRadio.sendHeldViewOnFirstConfig). `return` like the restore branch below: the sendView bumps the
+     *  subscribe seq, so this config's scale is not painted and the answer's is. */
+    if let held = heldFirstViewBinBw {
+      heldFirstViewBinBw = nil
+      if IcomRadio.sendHeldViewOnFirstConfig(isIcom: isIcom, shared: sharedView) {
+        sendView(frequency, held)
+        return
+      }
+      Vitals.crumb("UBER first visit — \(isIcom ? "an Icom" : "a shared dial"): adopting the server's view")
     }
 
     // VFO-LOCKED CENTRE. drawVFO puts the needle at the display centre, so the view must stay
@@ -3227,6 +3248,18 @@ final class UberClient: ObservableObject {
   private func subscribeSpectrum() {
     if isIcom, (icom?.span ?? 0) <= 0, binBandwidth <= 0 {
       specSock.send(json: ["type": "reset"])
+      return
+    }
+    /* ★★★ A VIBESERVER JR HAS NEVER SEEN: no zoom until the first config says what the radio is (an Icom's span is
+     *  the transceiver's — see IcomRadio.sendViewAtOpen). Ask for the state (the server answers with config +
+     *  hwinfo at once, as it does on join) and hold the view; onSpectrumJSON sends it — or adopts — on that config.
+     *  ★ Costs one round trip, on the first connect to a server only: every later connect knows. */
+    if !IcomRadio.sendViewAtOpen(isVibe: isVibe, knownIcom: isIcom, seenBefore: radioSeen) {
+      if heldFirstViewBinBw == nil { heldFirstViewBinBw = subscribeBinBw }
+      specSubscribeSeq &+= 1   // ★ hold the paint until the config comes, exactly as a sent view would
+      gatedFrames = 0
+      Vitals.crumb("UBER first visit — holding the view until the radio says what it is")
+      specSock.send(json: ["type": "state"])
       return
     }
     sendView(frequency, subscribeBinBw)

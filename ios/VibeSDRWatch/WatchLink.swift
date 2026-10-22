@@ -259,6 +259,69 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     return dialArmed && Date().timeIntervalSince(armedAt) < Self.armMinutes * 60
   }
 
+  // ── ★★★ AN ICOM TRANSCEIVER (receive only) ────────────────────────────────────────────────────
+  // The phone's radio may be an Icom (docs/ICOM-SUPPORT-PLAN.md). It has the radio's own modes and
+  // FIL1/2/3 instead of our demodulators and passband, no squelch of ours, and a TX / not-answering
+  // state the server reports. The PHONE decides all of it (icomRadio.icomWatchState) and sends it
+  // ready-made on the `icom` kind; Buddy draws it and decides nothing — AGENTS.md: a control that only
+  // works on one radio is not drawn on another, and that branch is this optional.
+  struct IcomState: Equatable {
+    struct Mode: Equatable, Hashable { let id: String; let label: String }
+    struct Fil: Equatable, Hashable { let n: Int; let width: String }
+    var model = ""
+    var modes: [Mode] = []
+    var mode = ""
+    var modeLabel = ""
+    var fils: [Fil] = []
+    var fil = 0
+    var span = ""
+    var banner = ""
+    var tx = false
+    var link = true
+    var mayTune = false
+    var follow = ""
+    /// "FIL2 · 2.4k" — the tile and the picker say the same thing.
+    func filLabel(_ n: Int) -> String {
+      let w = fils.first { $0.n == n }?.width ?? ""
+      return w.isEmpty ? "FIL\(n)" : "FIL\(n) · \(w)"
+    }
+  }
+  /// nil = not an Icom (every other radio): Buddy draws exactly what it always did.
+  @Published var icom: IcomState? = nil
+  /// A refusal under the owner lock, shown in the bottom pill stack for a few seconds.
+  @Published var icomNotice: String? = nil
+  private var icomNoticeWork: DispatchWorkItem?
+  private var icomLocalNoticeAt = Date.distantPast
+
+  /// Show `text` as the Icom notice for 4 s. ★ The phone already rate-limits ITS refusals to one per 4 s; a
+  /// wrist-side refusal (a MODE tap under the lock) is held to the same rule here.
+  func showIcomNotice(_ text: String, local: Bool = false) {
+    let t = text.trimmingCharacters(in: .whitespaces)
+    guard !t.isEmpty else { return }
+    if local {
+      guard Date().timeIntervalSince(icomLocalNoticeAt) > 4 else { return }
+      icomLocalNoticeAt = Date()
+    }
+    icomNotice = t
+    icomNoticeWork?.cancel()
+    let w = DispatchWorkItem { [weak self] in self?.icomNotice = nil }
+    icomNoticeWork = w
+    DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: w)
+  }
+  /// The radio's own mode / filter, relayed. The PHONE sends them through its client's icomControl (only
+  /// values the radio listed, the owner lock judged there too). Under the lock the wrist does not ask at all —
+  /// it says why, once per 4 s, as the app does.
+  func setIcomMode(_ id: String) {
+    guard let ic = icom else { return }
+    guard ic.mayTune else { showIcomNotice(ic.follow, local: true); return }
+    send(["cmd": "icomMode", "val": id])
+  }
+  func setIcomFil(_ n: Int) {
+    guard let ic = icom else { return }
+    guard ic.mayTune else { showIcomNotice(ic.follow, local: true); return }
+    send(["cmd": "icomFil", "val": n])
+  }
+
   struct DialLine: Identifiable, Equatable { let id = UUID(); let from: Int; let phrase: String
     let at = Date() }   // ★ when it was said — an open question's answers expire (CannedDial.questionOpen)
   @Published var chatLines: [DialLine] = []
@@ -962,6 +1025,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     sessionEndsAt = nil; sessionLimitMin = 0
     pinRequest = nil
     fmdx = nil; isFmdx = false; dab = nil; aircraft = []
+    icom = nil; icomNotice = nil   // ★ the next radio says whether it is an Icom; never assume the last one's
     everGotRow = false; meter = ""
     bandName = ""; bandColor = nil; bandLo = 0; bandHi = 0
     waterfall.reset(); waterfall.setExpectedRowRate(Self.rowFps)  // fresh buffer, seeded rate
@@ -1738,6 +1802,41 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         // ★★ AND IT DISARMS ITSELF WHEN THE RECEIVER STOPS BEING SHARED. Moving to an exclusive
         //    radio and back must not leave a stale "armed" behind it.
         if dialMode == "exclusive" { dialArmed = false }
+      }
+
+    // ★★★ AN ICOM — see IcomState. `on:false` = the phone's radio is not one (or no longer): drop every Icom
+    //     branch. A `notice` is an EVENT riding the same message (a refusal under the owner lock); one the
+    //     system delivered late (queued while the link was down) is stale and dropped.
+    case "icom":
+      if let j = m[WK.json] as? String, let d = j.data(using: .utf8),
+         let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+        guard (o["on"] as? Bool) == true else { icom = nil; icomNotice = nil; break }
+        var ic = IcomState()
+        ic.model     = SafeText.clean(o["model"], max: 24)
+        ic.modes     = ((o["modes"] as? [[String: Any]]) ?? []).prefix(24).compactMap { e in
+          let id = SafeText.clean(e["id"], max: 12), label = SafeText.clean(e["label"], max: 12)
+          return id.isEmpty ? nil : IcomState.Mode(id: id, label: label.isEmpty ? id.uppercased() : label)
+        }
+        ic.mode      = SafeText.clean(o["mode"], max: 12)
+        ic.modeLabel = SafeText.clean(o["modeLabel"], max: 12)
+        ic.fils      = ((o["fils"] as? [[String: Any]]) ?? []).prefix(8).compactMap { e in
+          guard let n = e["n"] as? Int, (1...9).contains(n) else { return nil }
+          return IcomState.Fil(n: n, width: SafeText.clean(e["width"], max: 8))
+        }
+        ic.fil       = (o["fil"] as? Int) ?? 0
+        ic.span      = SafeText.clean(o["span"], max: 12)
+        ic.banner    = SafeText.clean(o["banner"], max: 80)
+        ic.tx        = (o["tx"] as? Bool) ?? false
+        ic.link      = (o["link"] as? Bool) ?? true
+        ic.mayTune   = (o["mayTune"] as? Bool) ?? false
+        ic.follow    = SafeText.clean(o["follow"], max: 100)
+        if icom != ic { icom = ic }
+        if let n = o["notice"] as? String {
+          let at = (o["at"] as? Double) ?? 0
+          if at <= 0 || abs(Date().timeIntervalSince1970 * 1000 - at) < 10_000 {
+            showIcomNotice(SafeText.clean(n, max: 100))
+          }
+        }
       }
 
     case "fmdx":

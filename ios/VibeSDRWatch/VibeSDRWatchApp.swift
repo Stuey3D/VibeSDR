@@ -249,6 +249,10 @@ func sdrTutorialTips(isOwrx: Bool) -> [TutorialTip] {
     //   the app is bad rather than careful.
     .init(icon: "waveform.path.ecg", text: "With **Automatic Link Management** on, the waterfall starts slower while we work out how much the connection can carry. The link glyph cycles while it decides, then speeds up if the link is good."),
   ]
+  /* ★ AGENTS.md: the copy that says where things are moves with the controls. On an Icom the menu's DEMOD, BW
+   *  and SQL are replaced (ControlMenu's `link.icom` branch) — say so, or someone hunts for a squelch that is
+   *  deliberately not there. Always listed: the tutorial is shown once, usually before any Icom. */
+  t.append(.init(icon: "dot.radiowaves.left.and.right", text: "On an **Icom** transceiver the menu has the radio's own **MODE** (USB-D, RTTY) and **FILTER** (FIL1-3) instead of Demod, BW and SQL, and Zoom steps through its **spans**. The frequency pill shows the radio's S-meter. It is receive only, and usually only its owner tunes it."))
   if isOwrx {
     t.append(.init(icon: "wifi.exclamationmark", text: "Some OWRX servers stream heavily and can overwhelm the phone's Bluetooth link. If it stutters, use the watch's **own Wi-Fi or cellular** — you'll also see a warning pill when it happens."))
     t.append(.init(icon: "arrow.uturn.backward", text: "OWRX profiles are shared by everyone on the server, so leaving the app (flick to the watch face) drops the session — you'll come back on the server's **default profile**, not the one you were on."))

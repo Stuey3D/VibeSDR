@@ -8,7 +8,7 @@ import {
   icomMayTune, icomMayRf, icomFollowNote, icomModeLabel, icomClientMode, icomWidthFamily, icomFilterWidths,
   fmtWidth, fmtSpan, nearestSpanIndex, spanStep, sMeter, baudSweepsEstimate, baudNote, icomControlMsg,
   icomBanner, fmtAtt, fmtPreamp, rfGainPct, icomSettingsFrom, parseCivHex, fmtCivHex, pickIcomSerial,
-  withIcomSettings, preflightLines, ICOM_BAUDS, ICOM_PHONE_KEYS, icomPhoneFields, icomPresence,
+  withIcomSettings, preflightLines, ICOM_BAUDS, ICOM_PHONE_KEYS, icomPhoneFields, icomPresence, icomWatchState,
 } from '../src/services/icomRadio.ts';
 
 let pass = 0, fail = 0;
@@ -192,6 +192,32 @@ eq(icomPresence({ driver: 'rtl' }), 'none', 'a dongle');
 eq(icomPresence({ driver: 'icom', icomConfirmed: true }), 'icom', 'named by its USB strings');
 eq(icomPresence({ driver: 'icom', icomConfirmed: false }), 'maybe', 'a CP210x Android has not named yet');
 eq(icomPresence({ driver: 'icom' }), 'icom', 'an older native side without the flag: an Icom');
+
+// ── Buddy (the iPhone's watch remote): everything ready-made, nothing for the wrist to decide ──
+{
+  const w = icomWatchState(r, false)!;
+  eq(icomWatchState(null, true), null, 'not an Icom → null (the wrist drops every Icom branch)');
+  eq(w.model, 'IC-7300', 'buddy: model');
+  eq(w.modes.length, r.modes.length, 'buddy: every mode the radio listed, none invented');
+  eq(w.modes.find((m) => m.id === 'usbd'), { id: 'usbd', label: 'USB-D' }, 'buddy: the radio\'s own name');
+  yes(!w.modes.some((m) => m.id === 'wfm' || m.id === 'dab'), 'buddy: no WFM / DAB');
+  eq([w.mode, w.modeLabel], ['usbd', 'USB-D'], 'buddy: current mode, labelled');
+  eq(w.fils, [{ n: 1, width: '3k' }, { n: 2, width: '2.4k' }, { n: 3, width: '1.8k' }], 'buddy: FIL1/2/3 with the SSB factory widths');
+  eq(w.fil, 1, 'buddy: current FIL');
+  eq(w.span, '±25k', 'buddy: span as the radio labels it');
+  eq([w.banner, w.tx, w.link], ['', false, true], 'buddy: no banner while receiving');
+  eq([w.mayTune, w.follow], [false, icomFollowNote(r, false)], 'buddy: a listener under the owner lock may not tune, and is told why in the app\'s words');
+  eq(icomWatchState(r, true)!.mayTune, true, 'buddy: a signed-in admin may');
+  eq(icomWatchState(r, true)!.follow, '', 'buddy: and is told nothing');
+  eq(icomWatchState({ ...r, ownerLock: false }, false)!.mayTune, true, 'buddy: lock off → anyone may');
+  const cw = icomWatchState({ ...r, modeNow: 'cw' }, false)!;
+  eq(cw.fils.map((f) => f.width), ['1.2k', '500', '250'], 'buddy: FIL widths follow the mode family');
+  const tx = icomWatchState({ ...r, tx: true }, false)!;
+  eq([tx.tx, tx.banner], [true, icomBanner({ ...r, tx: true })], 'buddy: the TX banner, in the shared words');
+  const down = icomWatchState({ ...r, linkUp: false }, false)!;
+  eq([down.link, down.banner], [false, icomBanner({ ...r, linkUp: false })], 'buddy: the not-answering banner');
+  yes(!/ptt|transmit"|"tx":true/i.test(JSON.stringify(icomWatchState(r, true))) , 'buddy: nothing that could key the radio');
+}
 
 console.log(`icom radio (client contract): ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

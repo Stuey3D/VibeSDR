@@ -308,6 +308,8 @@ struct ControlMenu: View {
   @State private var showBw = false
   @State private var showSquelch = false
   @State private var showDab = false
+  @State private var showIcomModes = false
+  @State private var showIcomFils = false
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
   /// Wrist-down spectrum timeout (seconds; 0 = never drop, keep it running at the cost of
   /// battery). ContentView reads the SAME key to time its suspend. See wristOptions.
@@ -385,10 +387,29 @@ struct ControlMenu: View {
           // ★ NAME the control, then show its VALUE — a tile reading just "USB" or "9k" shows the
           //   setting while leaving you to guess what it is the setting FOR. The name makes it a
           //   control; the value makes the menu double as a readout.
+          /* ★★★ AN ICOM TRANSCEIVER (link.icom, told by the phone): the RADIO's modes by its own names (USB-D,
+           *  RTTY, CW-R) and FIL1/2/3 in place of our demodulators and passband; zoom is the radio's span ladder.
+           *  Under the owner lock a listener still sees the values (the menu doubles as a readout) and a tap
+           *  says why it cannot change them — the app's rule (icomFollowNote, once per 4 s). */
+          if let ic = link.icom {
+            tile(name: "MODE", value: ic.modeLabel.isEmpty ? "—" : ic.modeLabel, h: h) {
+              if ic.mayTune { showIcomModes = true } else { dismiss(); link.showIcomNotice(ic.follow, local: true) }
+            }
+            tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
+            if !ic.fils.isEmpty {
+              tile(name: "FILTER", value: ic.fil > 0 ? ic.filLabel(ic.fil) : "—", h: h) {
+                if ic.mayTune { showIcomFils = true } else { dismiss(); link.showIcomNotice(ic.follow, local: true) }
+              }
+            }
+            tile(name: "SPAN", value: ic.span.isEmpty ? "Zoom" : ic.span, h: h) {
+              dismiss(); onPickCrown(.zoom)
+            }
+          } else {
           tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
           tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
+          }
           }
           // The iPhone's SYSTEM volume, not an app gain. The wrist shows the phone's
           // real level — including changes made ON the phone — so the two can never
@@ -417,8 +438,11 @@ struct ControlMenu: View {
           }
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
-          tile(name: "BW", value: bwLabel, h: h) { showBw = true }
-          tile(name: "SQL", value: link.sql < 0 ? "Off" : "On", h: h) { showSquelch = true }
+          // ★ Not on an Icom: its passband is FIL1/2/3 (above) and it has no squelch of ours (AGENTS.md).
+          if link.icom == nil {
+            tile(name: "BW", value: bwLabel, h: h) { showBw = true }
+            tile(name: "SQL", value: link.sql < 0 ? "Off" : "On", h: h) { showSquelch = true }
+          }
           // DAB — only on a DAB profile. Programme picker (OWRX plays nothing until a service is
           // chosen; we auto-pick the first) + the speed-fix presets for the dablin chipmunk.
           if link.mode == "dab" {
@@ -517,6 +541,21 @@ struct ControlMenu: View {
         // ★ "dab" is a MODE the phone enters, not a demodulator the server switches to.
         if m == "dab" { link.setDabMode(true) } else { link.setMode(m) }
         showModes = false; dismiss()
+      }
+    }
+    .sheet(isPresented: $showIcomModes) {
+      let ic = link.icom
+      PickerList(title: "Mode", items: (ic?.modes ?? []).map(\.label), current: ic?.modeLabel ?? "") { label in
+        if let m = ic?.modes.first(where: { $0.label == label }) { link.setIcomMode(m.id) }
+        showIcomModes = false; dismiss()
+      }
+    }
+    .sheet(isPresented: $showIcomFils) {
+      let ic = link.icom
+      PickerList(title: "Filter", items: (ic?.fils ?? []).map { ic?.filLabel($0.n) ?? "" },
+                 current: ic.map { $0.filLabel($0.fil) } ?? "") { label in
+        if let ic, let f = ic.fils.first(where: { ic.filLabel($0.n) == label }) { link.setIcomFil(f.n) }
+        showIcomFils = false; dismiss()
       }
     }
     .sheet(isPresented: $showDab) {

@@ -448,6 +448,19 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     s.sendMessage(["k": "dial", "j": json], replyHandler: nil, errorHandler: nil)
   }
 
+  /// ★★★ AN ICOM TRANSCEIVER (receive only) — the radio's mode names, FIL1/2/3, the TX / not-answering banner
+  /// and the owner-lock verdict, all decided on the phone (icomRadio.icomWatchState). A DURABLE fact about the
+  /// receiver, like DAB's: dropped, Buddy would draw a dongle's SQL and BW over a transceiver until something
+  /// forced a full flush — so it takes the same transferUserInfo fallback as sendDab. (A late refusal notice is
+  /// dropped by Buddy on its `at` stamp.)
+  @objc(sendIcom:)
+  func sendIcom(_ json: String) {
+    guard let s = session else { return }
+    let msg = ["k": "icom", "j": json]
+    guard linkAlive else { s.transferUserInfo(msg); return }
+    s.sendMessage(msg, replyHandler: nil, errorHandler: { _ in s.transferUserInfo(msg) })
+  }
+
   /// OWRX ADS-B — the live aircraft table. A LIST, not a band: the profile IS the
   /// content (1090 MHz), and there is nothing to tune.
   @objc(sendAircraft:)

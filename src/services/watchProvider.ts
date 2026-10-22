@@ -27,6 +27,7 @@ import { getColorLUT } from '../assets/colormapUtils';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { getBandsAtRegion, bandHex } from '../constants/bandPlan';
 import { crumb } from './crumbs';
+import type { IcomWatchState } from './icomRadio';
 
 const Native = NativeModules.VibeWatchModule as
   | {
@@ -40,6 +41,7 @@ const Native = NativeModules.VibeWatchModule as
       sendVolume(vol: number, muted: boolean): void;
       sendFmdx(json: string): void;
       sendDial(json: string): void;
+      sendIcom?(json: string): void;
       sendStations(json: string): void;
       sendDab(json: string): void;
       sendAircraft(json: string): void;
@@ -232,6 +234,11 @@ export interface WatchCommandHandlers {
   onFmdxEq?(on: boolean): void;
   onFmdxIms?(on: boolean): void;
   onFmdxAntenna?(id: number): void;
+  /** ★★★ AN ICOM'S OWN MODE / FILTER from the wrist (the radio's names, FIL 1-3). The phone sends them through
+   *  its client's icomControl, which drops anything the radio did not list and refuses locally under the owner
+   *  lock (one notice per 4 s) — Buddy never builds a radio command itself. */
+  onIcomMode?(mode: string): void;
+  onIcomFil?(fil: number): void;
 }
 
 class WatchProvider {
@@ -525,6 +532,10 @@ class WatchProvider {
           case 'fmdxEq':  handlers.onFmdxEq?.(e.val === true); break;
           case 'fmdxIms': handlers.onFmdxIms?.(e.val === true); break;
           case 'fmdxAnt': handlers.onFmdxAntenna?.(Number(e.val ?? 0)); break;
+          // ★ An Icom's own controls — only when the phone is on one (lastIcomState), so a stale wrist cannot
+          //   send a radio name to a dongle.
+          case 'icomMode': if (this.lastIcomState) handlers.onIcomMode?.(String(e.val ?? '')); break;
+          case 'icomFil':  if (this.lastIcomState) handlers.onIcomFil?.(Math.trunc(Number(e.val ?? 0))); break;
           // STOP from the wrist: leave the SDR screen — disconnect + return to the server list, idle.
           case 'stopsrv': this.stopHandler?.(); break;
           // The watch is telling us it's missing something we only send ON CHANGE
@@ -631,6 +642,34 @@ class WatchProvider {
     Native!.sendDial(j);
   }
   private lastDial = '';
+
+  /** ★★★ AN ICOM TRANSCEIVER, FORWARDED TO THE WRIST (icomRadio.icomWatchState — every label and verdict
+   *  ready-made, so Buddy draws and decides nothing). null = not an Icom: sent once as `{"on":false}` so a
+   *  wrist that was on an Icom drops its MODE/FILTER tiles and banner. State goes on change and is RETAINED
+   *  for flushAll, like the dial; `notice` is an EVENT (a refusal under the owner lock — the client already
+   *  rate-limits it to one per 4 s) and always goes. */
+  sendIcom(state: IcomWatchState | null, notice?: string) {
+    if (!this.available) return;
+    const base = state ? { on: true, ...state } : { on: false };
+    const j = JSON.stringify(base);
+    if (!notice) {
+      if (j === this.lastIcom) return;
+      this.lastIcom = j;
+      this.lastIcomState = state;
+      // ★ The quiet flag decides whyNoRows' answer — a transmitting radio's frozen scope is not a dead link.
+      this.icomQuiet = !!state && (state.tx || !state.link);
+      if (!this.isActive) return;
+      Native?.sendIcom?.(j);
+      this.nudgeState();
+      return;
+    }
+    if (!this.lastIcomState || !this.isActive) return;
+    // ★ `at` lets the wrist drop a notice the system delivered late (the native side may queue it).
+    Native?.sendIcom?.(JSON.stringify({ ...base, notice, at: Date.now() }));
+  }
+  private lastIcom = '';
+  private lastIcomState: IcomWatchState | null = null;
+  private icomQuiet = false;
   /** ★ The last STATE (not the event), so `need` can answer with it — see flushAll. */
   private lastDialState: { mode: string; tuner: number; mine: boolean; you: number;
                            listeners: number; decoding: boolean } | null = null;
@@ -892,6 +931,11 @@ class WatchProvider {
    *  (that's why the frequency kept updating), so it can carry the reason. */
   private whyNoRows(): string {
     if (this.specPaused) return 'paused';                      // socket closed for power
+    /* ★★★ AN ICOM THAT IS TRANSMITTING OR OFF CI-V SENDS NO SWEEPS ON PURPOSE (the server froze the scope).
+     *  Say so — 'radio' — rather than 'idle': idle is drawn as "iPhone lost the server" and, worse, escalates
+     *  to a socket rebuild (escalateIfStuck) that the client's own watchdogs deliberately skip for this. The
+     *  wrist's banner (sendIcom) carries the words. */
+    if (this.icomQuiet) { this.idleSince = 0; return 'radio'; }
     // A recovery IN PROGRESS is not a fault, and must not be drawn as one — the
     // watch shows a "reconnecting" pill over the last frames rather than a black
     // overlay. Ranks above 'idle': rows have of course stopped, that is what a
@@ -1126,6 +1170,9 @@ class WatchProvider {
      *   state going twice, and "send me everything" is the one caller that means it. */
     this.lastDial = '';
     if (this.lastDialState) this.sendDial(this.lastDialState);
+    // ★ And the Icom, for the same reason: told on change, so a restarted wrist would otherwise go on drawing a
+    //   dongle's SQL and BW over a transceiver (or an Icom's tiles over a dongle).
+    if (this.isActive && this.lastIcom) Native?.sendIcom?.(this.lastIcom);
     this.flushPhone();
     this.flushLogo();
     this.flushStations();

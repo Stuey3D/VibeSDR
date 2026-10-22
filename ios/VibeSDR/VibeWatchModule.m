@@ -36,6 +36,9 @@ RCT_EXTERN_METHOD(sendFmdx : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendDial : (NSString *)json)
 
+// ★ An Icom transceiver's state for Buddy — declared here or JS gets undefined (see sendRadios below).
+RCT_EXTERN_METHOD(sendIcom : (NSString *)json)
+
 RCT_EXTERN_METHOD(sendLogo : (NSString *)b64)
 
 RCT_EXTERN_METHOD(sendStations : (NSString *)json)

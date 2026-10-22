@@ -1040,6 +1040,11 @@ export abstract class VibeServerWsClient {
   icomControl(f: IcomControlFields): boolean {
     const m = icomControlMsg(this.icom, f);
     if (!m) return false;
+    /* ★★ The owner lock covers mode / FIL / span / scope mode — the same gate as tune() and setMode(), so a
+     *  listener's tap (the app panel hides these for them; Buddy's MODE/FILTER do not know) is refused HERE with
+     *  the one-per-4-s note instead of a server notice per tap. A signed-in admin passes, as the server judges. */
+    if ((m.mode !== undefined || m.fil !== undefined || m.span !== undefined || m.scopeMode !== undefined)
+        && this.askBlocked()) return false;
     this._sendCtl(m as unknown as Record<string, unknown>);
     return true;
   }

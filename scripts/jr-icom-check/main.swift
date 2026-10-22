@@ -65,5 +65,41 @@ check(r.controlMessage(mode: "usbd")?["mode"] as? String == "usbd", "mode msg")
 check(r.controlMessage(mode: "wfm") == nil && r.controlMessage(fil: 4) == nil, "refuses unlisted")
 let cm = r.controlMessage(mode: "usb", fil: 2)!
 check(Set(cm.keys) == ["type", "mode", "fil"] && cm["type"] as? String == "icom_control", "keys")
+// ── FIXED scope mode: the carrier line sits at the tuned frequency within the sweep's REAL edges ──
+check(!r.scopeFixed, "centre mode by default (hwinfo scope.mode)")
+var fx = r; fx.scopeMode = "fixed"
+check(fx.scopeFixed, "fixed")
+let fixedHw = IcomRadio.parse(["driver": "icom", "scope": ["mode": "fixed", "spans": [50000.0]]])!
+check(fixedHw.scopeFixed, "hwinfo scope.mode fixed parsed")
+check(IcomRadio.parse(["driver": "icom", "scope": ["mode": "sideways"]])!.scopeMode == "centre", "unknown scope mode → centre")
+let stFixed = IcomStatus.parse(["type": "icom", "scopeMode": "fixed", "sRaw": 10, "sDbOverS9": -20.0])!
+check(r.merged(stFixed).scopeFixed, "status line scopeMode fixed merges")
+let stNone = IcomStatus.parse(["type": "icom", "sRaw": 10])!
+check(fx.merged(stNone).scopeFixed, "a status line without scopeMode keeps hwinfo's")
+check(fx.merged(IcomStatus.parse(["type": "icom", "scopeMode": "centre"])!).scopeMode == "centre", "and back to centre")
+// fixed edges 7.000-7.100 MHz: centre 7.05 MHz, span 100 kHz
+check(IcomRadio.vfoFraction(vfo: 7_074_000, centre: 7_050_000, span: 100_000).map { abs($0 - 0.74) < 1e-9 } == true, "FT8 at 74 % across a 7.000-7.100 window")
+check(IcomRadio.vfoFraction(vfo: 7_000_000, centre: 7_050_000, span: 100_000) == 0, "left edge")
+check(IcomRadio.vfoFraction(vfo: 7_100_000, centre: 7_050_000, span: 100_000) == 1, "right edge")
+check(IcomRadio.vfoFraction(vfo: 7_150_000, centre: 7_050_000, span: 100_000) == nil, "tuned past the right edge → no line")
+check(IcomRadio.vfoFraction(vfo: 6_990_000, centre: 7_050_000, span: 100_000) == nil, "tuned below the left edge → no line")
+check(IcomRadio.vfoFraction(vfo: 7_074_000, centre: 7_050_000, span: 0) == nil, "no span yet → no line")
+check(IcomRadio.vfoFraction(vfo: 7_074_000, centre: 7_074_000, span: 50_000) == 0.5, "centre mode lands dead centre")
+check(IcomRadio.vfoFraction(vfo: 14_074_000.5, centre: 14_074_000.5, span: 1_000_000) == 0.5, "Double, not Int (arm64_32)")
+let e1 = IcomRadio.edges(vfo: 7_074_000, centre: 7_050_000, span: 100_000, fixed: true)
+check(e1.lo == 7_000_000 && e1.hi == 7_100_000, "ticker axis = the fixed window")
+let e2 = IcomRadio.edges(vfo: 7_074_000, centre: 7_050_000, span: 100_000, fixed: false)
+check(e2.lo == 7_024_000 && e2.hi == 7_124_000, "centre mode: the axis follows the VFO")
+
+// ── The FIRST VIEW on a VibeServer: no zoom on a radio Jr has never seen (it might be an Icom, lock off) ──
+check(!IcomRadio.sendViewAtOpen(isVibe: true, knownIcom: false, seenBefore: false), "never seen → hold the zoom until the first config")
+check(IcomRadio.sendViewAtOpen(isVibe: true, knownIcom: false, seenBefore: true), "seen before, not an Icom → zoom at once (ordinary connects unchanged)")
+check(IcomRadio.sendViewAtOpen(isVibe: true, knownIcom: true, seenBefore: true), "a remembered Icom → its own span / reset path")
+check(IcomRadio.sendViewAtOpen(isVibe: false, knownIcom: false, seenBefore: false), "UberSDR → unchanged")
+check(IcomRadio.sendHeldViewOnFirstConfig(isIcom: false, shared: false), "first config: an ordinary per-listener SDR gets the held view")
+check(!IcomRadio.sendHeldViewOnFirstConfig(isIcom: true, shared: false), "first config: an Icom (lock off, one listener) is adopted, never re-spanned")
+check(!IcomRadio.sendHeldViewOnFirstConfig(isIcom: true, shared: true), "first config: an Icom, shared → adopted")
+check(!IcomRadio.sendHeldViewOnFirstConfig(isIcom: false, shared: true), "first config: a shared dial → the joiner adopts")
+
 print("\(n - fails)/\(n) passed")
 exit(fails == 0 ? 0 : 1)

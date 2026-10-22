@@ -28,6 +28,10 @@ struct IcomRadio: Equatable {
   /// The scope's span ladder, TOTAL widths in Hz (5 kHz … 1 MHz on a 7300).
   var spans: [Double]
   var span: Double
+  /// ★ The scope's mode: "centre" (the window follows the VFO, which sits in the middle) or "fixed" (the window is
+  ///   pinned between two edges the owner set, and the VFO moves across it — or off it). From hwinfo scope.mode,
+  ///   then the status line's scopeMode.
+  var scopeMode: String = "centre"
   /// The radio's receive range, Hz — the outer edges of hwinfo `ranges` (30 kHz – 74.8 MHz on a 7300). 0 = unknown.
   var rangeLo: Double
   var rangeHi: Double
@@ -61,6 +65,7 @@ struct IcomRadio: Equatable {
       filterWidths: fw,
       spans: nums(sc["spans"]).filter { $0 > 0 && $0 <= 1.0e8 },
       span: num(sc["span"]),
+      scopeMode: (sc["mode"] as? String)?.lowercased() == "fixed" ? "fixed" : "centre",
       rangeLo: lo,
       rangeHi: hi,
       tx: flag(r["tx"]),
@@ -77,7 +82,26 @@ struct IcomRadio: Equatable {
     r.tx = st.tx
     r.linkUp = st.link
     if st.span > 0 { r.span = st.span }
+    if !st.scopeMode.isEmpty { r.scopeMode = st.scopeMode }
     return r
+  }
+
+  // ── Where the tuned frequency sits on the scope (FIXED mode) ─────────────────────────────────────
+  /// ★ True when the radio's scope is pinned between fixed edges, so the VFO is NOT the middle of the waterfall.
+  var scopeFixed: Bool { scopeMode == "fixed" }
+  /// ★★★ The tuned frequency's place across the scope, 0 = left edge … 1 = right edge, from the sweep's REAL
+  ///   edges: `config.centerFreq` is the middle of the fixed edges and binBandwidth × binCount is the span (the
+  ///   contract). nil = no span yet, or the VFO is outside the window (the owner tuned past an edge) — then
+  ///   no carrier line is drawn rather than one at a place it is not. In centre mode this is always 0.5.
+  static func vfoFraction(vfo: Double, centre: Double, span: Double) -> Double? {
+    guard span > 0, vfo.isFinite, centre.isFinite, centre > 0 else { return nil }
+    let f = 0.5 + (vfo - centre) / span
+    return (0...1).contains(f) ? f : nil
+  }
+  /// The frequencies at the scope's left and right edges — the band ticker's axis. Centre mode: around the VFO.
+  static func edges(vfo: Double, centre: Double, span: Double, fixed: Bool) -> (lo: Double, hi: Double) {
+    let mid = fixed && centre > 0 ? centre : vfo
+    return (mid - span / 2, mid + span / 2)
   }
 
   // ── Who may do what ─────────────────────────────────────────────────────────────────────────────
@@ -208,6 +232,24 @@ struct IcomRadio: Equatable {
     return out
   }
 
+  // ── The FIRST VIEW on a VibeServer socket (a zoom re-spans an Icom for everybody) ─────────────────
+  /// ★★★ May Jr send its own view (`zoom`) the moment the spectrum socket opens? Only when it already KNOWS this
+  ///   radio is not an Icom — it has been here before (a config or hwinfo was seen and remembered per radio) and
+  ///   it was no Icom. On a VibeServer it has NEVER seen, the driver is unknown until the first config / hwinfo,
+  ///   and Jr's default ~100 kHz view would land on an Icom with the owner lock OFF as a real span change on the
+  ///   transceiver. So it waits for that first config — the app's rule (VibeServerWsClient._restoreViewOnConfig:
+  ///   nothing view-related at open, decide on the first config). A known Icom never sends one at open either
+  ///   (subscribeBinBw / `reset`). Not a VibeServer (UberSDR): unchanged.
+  static func sendViewAtOpen(isVibe: Bool, knownIcom: Bool, seenBefore: Bool) -> Bool {
+    guard isVibe else { return true }
+    if knownIcom { return true }        // ★ subscribeSpectrum asks for the radio's OWN span / only `reset` there
+    return seenBefore
+  }
+  /// The first config after waiting: send the view Jr held back (an ordinary SDR that gives each listener their
+  /// own view), or ADOPT the server's (an Icom — the radio's span is the radio's — or a shared dial, where the
+  /// joiner adopts and never imposes).
+  static func sendHeldViewOnFirstConfig(isIcom: Bool, shared: Bool) -> Bool { !isIcom && !shared }
+
   // ── Defensive readers (the TypeScript's num/str/bool/nums/strs) ─────────────────────────────────
   private static func num(_ v: Any?) -> Double {
     guard let d = (v as? NSNumber)?.doubleValue, d.isFinite else { return 0 }
@@ -233,6 +275,8 @@ struct IcomStatus {
   var tx: Bool
   var link: Bool
   var span: Double
+  /// "centre" | "fixed" | "" (not sent — keep what hwinfo said).
+  var scopeMode: String = ""
 
   static func parse(_ m: [String: Any]) -> IcomStatus? {
     guard m["type"] as? String == "icom" else { return nil }
@@ -245,7 +289,11 @@ struct IcomStatus {
       sDbOverS9: sRaw >= 0 ? sDb : nil,
       tx: (m["tx"] as? Bool) ?? false,
       link: (m["link"] as? Bool) != false,
-      span: Wire.inRange(m["span"], 0...1.0e8) ?? 0)
+      span: Wire.inRange(m["span"], 0...1.0e8) ?? 0,
+      scopeMode: { () -> String in
+        switch (m["scopeMode"] as? String)?.lowercased() { case "fixed": return "fixed"; case "centre": return "centre"
+                                                           default: return "" }
+      }())
   }
 }
 
