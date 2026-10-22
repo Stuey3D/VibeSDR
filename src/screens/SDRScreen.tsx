@@ -11243,12 +11243,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         onPinchZoom={onWfPinchZoom}
         specShow={specShow}
         autoContrast={autoContrast}
-        specSmoothing={specSmoothing}
-        avgFrames={avgFrames}
+        /* ★★★ AN ICOM'S SCOPE IS 475 REAL POINTS AT THE RADIO'S RATE (≈19 sweeps/s at 115200 baud, ≈3 at 19200),
+           sample-and-held up to our bins by the server. Temporal smoothing sized for a 20 fps FFT would lag a
+           3 fps sweep by seconds, interpolated scroll would INVENT rows between sweeps, and spatial smoothing
+           blurs the hold steps into resolution the radio does not have. So: every sweep drawn as it came. The
+           listener's own settings are untouched and come back for any other radio. */
+        specSmoothing={icom ? 1 : specSmoothing}
+        avgFrames={icom ? 0 : avgFrames}
         specFloor={specFloor}
         specPeakScale={specPeakScale}
         peakHold={peakHold}
-        spatialSmooth={spatialSmooth}
+        spatialSmooth={icom ? false : spatialSmooth}
         smoothTune={smoothTune}
         lastInteractAt={lastInteractRef}
         wfBrightness={wfBrightness}
@@ -11256,7 +11261,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfSharpness={wfSharpness}
         minRangeDb={dabOn ? 15 : 30}
         frameRate={frameRate}
-        wfScroll={wfScroll}
+        wfScroll={icom ? 'sharp' : wfScroll}
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
            server, so the frame-generation multiplier stays constant for the whole session. */
         feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
@@ -12320,19 +12325,19 @@ export default function SDRScreen({ route, navigation }: Props) {
         hasBgImage={bgImageUrl != null}
         wfCoarse={wfCoarse}             onWfCoarse={setWfCoarse}
         autoContrast={autoContrast}     onAutoContrast={setAutoContrast}
-        spatialSmooth={spatialSmooth}   onSpatialSmooth={setSpatialSmooth}
+        spatialSmooth={spatialSmooth}   onSpatialSmooth={icom ? undefined : setSpatialSmooth}   /* ★ an Icom: see the WaterfallView props */
         wfBrightness={wfBrightness}     onWfBrightness={setWfBrightness}
         wfContrast={wfContrast}         onWfContrast={setWfContrast}
         wfSharpness={wfSharpness}       onWfSharpness={setWfSharpness}
         specShow={specShow}             onSpecShow={setSpecShow}
-        specSmoothing={specSmoothing}   onSpecSmoothing={setSpecSmoothing}
+        specSmoothing={specSmoothing}   onSpecSmoothing={icom ? undefined : setSpecSmoothing}
         avgFrames={avgFrames}           onAvgFrames={setAvgFrames}
         specFloor={specFloor}           onSpecFloor={setSpecFloor}
         visualGain={visualGain}         onVisualGain={setVisualGain}
         specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
         peakHold={peakHold}             onPeakHold={setPeakHold}
         frameRate={frameRate}           onFrameRate={onFrameRate}
-        wfScroll={wfScroll}             onWfScroll={onWfScroll}
+        wfScroll={wfScroll}             onWfScroll={icom ? undefined : onWfScroll}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         linkMode={linkMode}             onLinkMode={icom ? undefined : onLinkMode}   /* ★ an Icom's rate is the radio's */
         drumMode={drumMode}             onDrumMode={onDrumMode}
