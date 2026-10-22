@@ -76,7 +76,8 @@ echo "==> Cleaning extended attributes…"
 xattr -cr "$APP"
 
 echo "==> Signing (hardened runtime)…"
-find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 2>/dev/null \
+# ★ "*.so.*" too: the RSP driver is Frameworks/libsdrplay_api.so.3.15 (the API 3.15 name), which "*.so" misses.
+find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" -o -name "*.so.*" \) -print0 2>/dev/null \
   | xargs -0 -I{} codesign --force --timestamp --options runtime --sign "$IDENT" {} || true
 # ★★ THE ENTITLEMENT MATTERS. Library validation (part of the hardened runtime) allows only
 # libraries signed by our own Team ID — and SDRplay's API is signed by SDRPLAY LIMITED, so

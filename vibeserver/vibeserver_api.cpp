@@ -289,6 +289,9 @@ int vs_sdrplay_system_stack(void) {
     return vibe::sdrplaylib::linuxSystemStack() ? 1 : 0;
 #endif
 }
+int vs_sdrplay_run_bundled_service(int bundleHasService) {
+    return vibe::sdrplaylib::macRunBundledService(bundleHasService != 0, vs_sdrplay_system_stack() != 0) ? 1 : 0;
+}
 
 // ★ ONE FLAT LIST, now five drivers deep: dongles, then RSPs, then Airspy HF+, then HackRF, then
 // Airspy R2/Mini — the order detectRadios() uses, so the Mac app, the TUI and `--radio N` all mean

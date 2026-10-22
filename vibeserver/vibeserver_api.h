@@ -152,6 +152,9 @@ void vs_sdrplay_retry(void);
  *  decides whether the Mac app runs its own bundled RSP service (it must not, then) and which library the
  *  server loads. The same function answers both, so the two cannot disagree (vibe_sdrplay_lib.h). */
 int  vs_sdrplay_system_stack(void);
+/** ★ 1 when the Mac app should run its OWN bundled RSP service: it has one, and no system stack is installed
+ *  (vibe::sdrplaylib::macRunBundledService — the tested rule, not a second copy of it in Swift). */
+int  vs_sdrplay_run_bundled_service(int bundleHasService);
 
 /** Display name of device `index`, or "" if there is no such device. Valid until the next call. */
 const char* vs_device_name(int index);
