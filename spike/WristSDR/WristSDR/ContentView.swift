@@ -1726,6 +1726,7 @@ link.setAutoContrast(wfAutoContrast)
   private var rawHint: LinkHint? {
     guard stalledMessage == nil else { return nil }   // the hard overlay owns it
     guard link.everGotRow else { return nil }         // a cold boot is not a fault
+    if link.icom?.quiet == true { return nil }    // ★ an Icom keyed / off CI-V — its banner owns it
 
     let now = Date()
     let stateFresh = link.lastStateAt.map { now.timeIntervalSince($0) < hintStateFresh } ?? false
@@ -2000,6 +2001,9 @@ link.setAutoContrast(wfAutoContrast)
     // wrist-up over a weak link the status still says "background" but the black screen is a real
     // problem the user is staring at — let the stall message through. (Shower repro 2026-07-23.)
     if link.deliberatelyPaused || link.resumingFromPause { return nil }
+    // ★ An ICOM transmitting or off CI-V: the server froze the scope on purpose and the TX / not-answering banner
+    //   says so. No "lost the server" over a radio that is simply keyed.
+    if link.icom?.quiet == true { return nil }
     // A reconnect is NOT a hard fault on the standalone watch — the audio keeps playing and the
     // spectrum socket is coming back. Let the soft "Reconnecting" pill (rawHint) own it instead
     // of throwing up the black "spectrum stopped" box. (The companion's hard overlay is for a
