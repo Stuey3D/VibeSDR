@@ -190,9 +190,33 @@ static void navtexAsm() {
     got.clear();
     a.push("ZCZC FA02\r\nLOCK LOST HERE", 400000); a.lockState(3, 400000); a.lockState(1, 401000);
     a.tick(402000); ok(got.empty(), "lock lost 1 s: held open (it may be a blip)");
-    a.tick(402600);
-    ok(got.size() == 1 && got[0].endLost && got[0].id == "FA02", "lost for good (1.6 s): the message ends at the loss");
+    a.tick(402600); ok(got.empty(), "lock lost 1.6 s: still open (beta4: a fade does not close a message)");
+    a.tick(400000 + 76000);
+    ok(got.size() == 1 && got[0].endLost && got[0].id == "FA02" && got[0].text == "LOCK LOST HERE", "silent for good (75 s): the message ends at the loss");
     got.clear();
+    // ★★★ FADES (Lenovo, beta3, 517.5 kHz: lock lost 5–15 s at a time): ONE item, two gap markers, "gaps: 2 (27 s)".
+    {
+        gallery::NavtexAsm f; std::vector<gallery::NavtexMsg> m;
+        f.onMessage = [&](const gallery::NavtexMsg& x) { m.push_back(x); };
+        int64_t t = 600000;
+        f.lockState(3, t);
+        f.push("ZCZC VA28\r\nDOVER STRAIT WIND SOUTHWEST 6\r\n", t += 3000);
+        f.lockState(1, t += 100); f.push("XQ_", t + 500); f.lockState(3, t += 12000);
+        f.push("THAMES SOUTHWEST 5 TO 7\r\n", t += 2000);
+        f.lockState(1, t += 100); f.lockState(3, t += 15000);
+        f.push("DOVER RAIN LATER\r\nNNNN\r\n", t += 2000);
+        ok(m.size() == 1 && m[0].id == "VA28" && !m[0].endLost && !m[0].startLost, "★ two long fades mid-message: ONE message, ZCZC to NNNN");
+        ok(m.size() == 1 && m[0].text.find("signal lost 12 s") != std::string::npos && m[0].text.find("signal lost 15 s") != std::string::npos
+           && m[0].text.find("XQ_") == std::string::npos, "...two gap markers, the hunting garbage dropped: " + (m.empty() ? std::string() : m[0].text));
+        ok(m.size() == 1 && gallery::NavtexAsm::title(m[0]).find("gaps: 2 (27 s)") != std::string::npos, "...and the title says gaps: 2 (27 s): " + (m.empty() ? std::string() : gallery::NavtexAsm::title(m[0])));
+        m.clear();
+        f.lockState(3, t += 1000);
+        f.push("ZCZC VA29\r\nFIRST STATION\r\n", t += 2000);
+        f.lockState(1, t += 100); f.lockState(3, t += 8000);
+        f.push("ZCZC LB04\r\nSECOND STATION\r\nNNNN\r\n", t += 2000);
+        ok(m.size() == 2 && m[0].id == "VA29" && m[0].endLost && m[1].id == "LB04" && m[1].text.find("FIRST") == std::string::npos,
+           "★ a fade then a DIFFERENT ZCZC: two items (the takeover protection)");
+    }
     // ★★ THE LENOVO SPLIT (NickB, 490 kHz, 2026-10-22): a real-shaped stream — header, text, four resyncs each relocked
     //    within a second, NNNN — is ONE message, ZCZC to NNNN.
     {

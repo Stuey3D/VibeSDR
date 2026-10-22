@@ -224,7 +224,32 @@ for (const bad of ['Z__C GB98', 'ZC C GB98', 'ZCZC ____', 'ZCZC _ _9', 'ZCZE GB9
   let u = feed(b, 'ZCZC GA01\r\r\nHALF A MESSAGE', 4);
   b.lockState(1, u);
   ok(!b.tick(u + 1000) && b.receiving, 'lost 1 s: still open (it may be a blip)');
-  ok(b.tick(u + 1600) && b.live?.endLost && b.live.text === 'HALF A MESSAGE', 'lost 1.6 s: closed [end lost] at the cut');
+  // ★ beta4 (Lenovo, real fades of 5–15 s): a lock loss never closes a message — only NNNN, a new ZCZC, or 75 s of silence.
+  ok(!b.tick(u + 1600) && b.receiving, 'lost 1.6 s: still open (it may be a fade)');
+  ok(b.tick(u + NAVTEX_END_LOST_MS + 1) && b.live?.endLost && b.live.text === 'HALF A MESSAGE', 'silent for 75 s: closed [end lost], at the cut');
+}
+// 11c. ★★★ FADES (Lenovo, 12.0.0~beta3, 517.5 kHz: lock lost 5–15 s at a time): ONE message, the gaps shown and counted.
+{
+  const a = new NavtexAssembler();
+  a.lockState(3, T0);
+  let t = feed(a, 'ZCZC VA28\r\r\nDOVER STRAIT WIND SOUTHWEST 6\r\r\n', 4);
+  a.lockState(1, t); feed(a, 'XQ_', 3, t + 500); a.lockState(3, t + 12_000); t += 12_100;   // a 12 s fade, garbage while hunting
+  t = feed(a, 'THAMES SOUTHWEST 5 TO 7\r\r\n', 4, t);
+  a.lockState(1, t); a.lockState(3, t + 15_000); t += 15_100;                               // and a 15 s one
+  t = feed(a, 'DOVER RAIN LATER\r\r\nNNNN\r\r\n', 4, t);
+  const m = a.live!;
+  ok(m.id === 'VA28' && m.done && !m.endLost && !m.startLost && a.prev === null, '★ two long fades mid-message: ONE message, ZCZC to NNNN, not partial');
+  ok((m.text.match(/signal lost/g) || []).length === 2 && m.text.includes('[\u2026 signal lost 12 s \u2026]') && m.text.includes('[\u2026 signal lost 15 s \u2026]'),
+     '...with two gap markers where it faded: ' + JSON.stringify(m.text));
+  ok(!m.text.includes('XQ_'), '...and the hunting garbage dropped');
+  ok(m.gaps === 2 && navtexTitle(m).includes('gaps: 2 (27 s)'), `...its title says so: "${navtexTitle(m)}"`);
+  // A fade, then ANOTHER station's ZCZC: two messages (the takeover protection).
+  const b = new NavtexAssembler();
+  b.lockState(3, T0);
+  let u = feed(b, 'ZCZC VA29\r\r\nFIRST STATION TEXT\r\r\n', 4);
+  b.lockState(1, u); b.lockState(3, u + 8000); u += 8100;
+  u = feed(b, 'ZCZC LB04\r\r\nSECOND STATION\r\r\nNNNN\r\r\n', 4, u);
+  ok(b.prev?.id === 'VA29' && b.prev.endLost && b.live?.id === 'LB04' && !b.live.text.includes('FIRST'), '★ a fade then a different ZCZC: two messages');
 }
 
 // 12. ★★ CO-CHANNEL TAKEOVER on one frequency (NickB, 2026-10-12, 490 kHz: E transmitting, C comes up on top with a
@@ -257,16 +282,16 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   t = feed(a, 'ZCZC CB01\r\r\nGALE WARNING SOLE SEVERE GALE 9 IMMINENT\r\r\nFITZRO', 4, t);
   ok(a.prev?.id === 'EA12' && a.prev.endLost && a.prev.done && a.prev.text.endsWith('POSITI'), "C's ZCZC ends E at the cut: [end lost], its text as far as it came");
   ok(a.live?.id === 'CB01' && !a.live.done && a.prev?.id === 'EA12' && !a.prev.text.includes('X_Q'), 'C arriving, E under PREV, the garbage dropped');
-  ok(!a.lockState(0, t), 'fade: the lock lost — C held open at the cut');
-  ok(a.lockState(3, t + 2000), '...relocked 2 s later (longer than a blip): C closes at the cut');
-  ok(a.live?.id === 'CB01' && a.live.endLost && a.live.text.endsWith('FITZRO'), 'C [end lost], only its own text');
+  // ★★ beta4 (Stuart, the Lenovo's real fades): a lock loss no longer closes a message at all — only a ZCZC does. So C
+  //    fading with no NNNN and E's remainder arriving after it now stays in C's message, with the gap SHOWN where it was;
+  //    a NEW ZCZC still always splits (the takeover protection above, and the next test).
+  ok(!a.lockState(0, t), 'fade: the lock lost — C held open');
+  ok(!a.lockState(3, t + 2000) && a.receiving && a.live?.id === 'CB01', '...relocked 2 s later: C carries on, with a gap marker');
   feed(a, E2, 4, t + 2000);
   const m = a.live!;
-  ok(m.startLost && m.id === null && m.text.startsWith('ON 48-20N'), "E's remainder is [start lost], not C: " + JSON.stringify(m.text.slice(0, 20)));
-  ok(a.prev?.id === 'CB01' && !a.prev.text.includes('48-20N'), 'nothing of E joined C');
-  // E's own NNNN closes the fragment — it is not attached to C (or to E) by guesswork, and takes no FEC count.
+  ok(m.id === 'CB01' && m.text.includes('[\u2026 signal lost 2 s \u2026]') && m.gaps === 1, 'what follows a fade joins C after the marker (the trade made for real fades)');
   feed(a, 'NNNN\r\r\n', 4, t + 60_000);
-  ok(a.live?.startLost === true && a.live.done && !a.setFec({ clean: 1, repaired: 0, lost: 0 }), 'its NNNN ends the fragment; no count');
+  ok(a.live?.id === 'CB01' && a.live.done && !a.live.endLost, 'and the NNNN closes it as one message');
 }
 {
   // Only a 3 → below-3 change is an event: NoSignal ↔ hunting while unlocked, a first report, a lock regained.

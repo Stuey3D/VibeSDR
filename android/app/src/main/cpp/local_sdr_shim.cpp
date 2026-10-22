@@ -24656,6 +24656,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     int    bgProfile_ = -1, bgGen_ = -1;
     bool   bgMoved_ = false;        // ★ the radio is on the profile centre (it goes back when somebody arrives)
     bool   bgListenerOn_ = false;   // ★ what the runner was last told
+    std::string bgProfileJson_;     // ★ the running profile as saved — a save that leaves it alone restarts nothing
     bool   bgLoggedWait_ = false;
     struct { bool valid = false; double centre = 0, view = 0, audio = 0; } bgSaved_;
 
@@ -24732,7 +24733,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             bgPlace(prof.centreHz, prof.centreHz, prof.centreHz);
         }
-        bgRun_.start(bgParams(cfg, idx, listenerOn));
+        auto params = bgParams(cfg, idx, listenerOn);
+        params.inRangeOnly = !move && !bgLocked();     // ★ carrying on at someone else's centre — not "the profile started here"
+        bgRun_.start(params);
+        { vibe::bg::Config one; one.profiles = { prof }; bgProfileJson_ = vibe::bg::toJson(one); }
         bgActive_.store(true);
         bgMoved_ = move && !bgLocked();
         if (!listenerOn) bgWanted_.store(true);
@@ -24818,6 +24822,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         // ── a profile switch or new settings: start again (at the window in use; the wait does not restart) ──
+        /* ★★ A SAVE THAT DID NOT CHANGE THIS PROFILE'S VFOs restarts nothing (Lenovo, beta3: changing the wait from 1 to 5
+         *  minutes while VFOs carried on in range at a listener's 648 kHz rebuilt the runner — cutting messages — and
+         *  logged it as "profile 1, RF centre 648.0 kHz" as if the profile had started there). The new wait simply
+         *  applies from when the last listener left. */
+        if (bgActive_.load() && want == bgProfile_ && g_bgCfgGen.load() != bgGen_) {
+            vibe::bg::Config one; one.profiles = { cfg.profiles[(size_t)want] };
+            const std::string now1 = vibe::bg::toJson(one);
+            if (now1 == bgProfileJson_) { bgGen_ = g_bgCfgGen.load(); LOGI("background decoding: settings saved — profile %d unchanged, carrying on", want + 1); }
+        }
         if (bgActive_.load() && (want != bgProfile_ || g_bgCfgGen.load() != bgGen_)) {
             LOGI("background decoding: %s — switching to profile %d", want != bgProfile_ ? "a profile boundary" : "the settings changed", want + 1);
             const bool wasMoved = bgMoved_;

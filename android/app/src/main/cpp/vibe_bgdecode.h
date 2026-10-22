@@ -573,6 +573,9 @@ public:
         std::function<int()> channelBudget;
         /** ★ A listener is on (the items say so: "decoded while a listener was on"). */
         bool listenerOn = false;
+        /** ★ Started at a centre the profile did not choose (a listener's dial): the VFOs inside it carry on, and the log
+         *  says so rather than "profile N, RF centre <someone else's>". */
+        bool inRangeOnly = false;
     };
     BgRunner() = default;
     ~BgRunner() { stop(false); }
@@ -641,6 +644,11 @@ public:
         th_ = std::thread([this] { loop(); });
         running_.store(true);
         int inWin = 0; for (auto& c : chans_) if (c->inWindow) ++inWin;
+        if (p_.inRangeOnly)
+            say("background decoding: carrying on in range \xe2\x80\x94 profile " + std::to_string(p_.profileIdx + 1) + "'s VFOs inside the radio's window at "
+                + khz(p_.centreHz) + ": " + std::to_string(started_) + " of " + std::to_string(chans_.size()) + " decoding"
+                + (p_.listenerOn ? " \xe2\x80\x94 with a listener on" : ""));
+        else
         say("background decoding: profile " + std::to_string(p_.profileIdx + 1) + ", RF centre " + khz(p_.centreHz) + ", "
             + std::to_string(chans_.size()) + " VFO(s), " + std::to_string(started_) + " decoder(s) running"
             + (inWin < (int)chans_.size() ? " (" + std::to_string(inWin) + " inside the radio's window)" : std::string())

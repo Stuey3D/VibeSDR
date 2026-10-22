@@ -90,15 +90,28 @@ try {
   const a = ws(s.port, '/ws/user-spectrum?user_session_id=bgir0001&bins=256');
   await sleep(1500);
   a.send({ type: 'tune', frequency: 648000, mode: 'am' });
-  ok(await until(() => /profile 1, RF centre 648\.0 kHz, 2 VFO\(s\), 2 decoder\(s\) running — with a listener on/.test(s.L()), 10000),
-     '★ with the listener on 648 kHz, both NAVTEX VFOs (489.5, 517.5) run — at the radio\'s own centre');
+  ok(await until(() => /carrying on in range — profile 1's VFOs inside the radio's window at 648\.0 kHz: 2 of 2 decoding — with a listener on/.test(s.L()), 10000),
+     '★ with the listener on 648 kHz, both NAVTEX VFOs (489.5, 517.5) run — at the radio\'s own centre, and the log says "carrying on in range"');
+  ok(!/profile 1, RF centre 648/.test(s.L()), '...never logged as the profile starting at 648 kHz');
+  // ★★ beta4 oddity: a save that changes only the wait restarts nothing (it rebuilt the runner and cut messages).
+  {
+    const adminQ = async () => { const n = (await fetch(`http://127.0.0.1:${s.port}/vibeserver/auth`).then((r) => r.json())).nonce;
+      return `vs_admin_nonce=${n}&vs_admin_auth=${crypto.createHmac('sha256', ADMIN).update(n).digest('hex')}`; };
+    const got = await fetch(`http://127.0.0.1:${s.port}/vibeserver/config?${await adminQ()}`).then((r) => r.json());
+    const startsBefore = (s.L().match(/carrying on in range —/g) || []).length;
+    const body = { ...got, radios: got.radios.map((r) => ({ ...r, bgDecode: JSON.stringify({ ...NICK, waitMin: 1 }) })) };
+    const res = await fetch(`http://127.0.0.1:${s.port}/vibeserver/config?${await adminQ()}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    ok(res.status === 200 && await until(() => /settings saved — profile 1 unchanged, carrying on/.test(s.L()), 6000), '★ the wait changed (5 → 1 min) while carrying on in range: "settings saved — profile 1 unchanged, carrying on"');
+    await sleep(2500);
+    ok((s.L().match(/carrying on in range —/g) || []).length === startsBefore && !/background decoding stopped — profile switch/.test(s.L()), '...and the runner was NOT restarted (no message cut)');
+  }
   ok(!/moving the radio/.test(s.L()), '★ the radio was never moved for them');
   ok(Number(cfgOf(a)?.vfo) === 648000, `the listener's dial is untouched (${cfgOf(a)?.vfo})`);
   console.log('── the listener retunes far away: they pause; back: they resume ──');
   a.send({ type: 'tune', frequency: 7074000, mode: 'usb' });
   ok(await until(() => /no background VFO is inside the radio's window now|left the radio's window/.test(s.L()), 8000), '★ 7074 kHz: the VFOs left the window and stopped');
   a.send({ type: 'tune', frequency: 648000, mode: 'am' });
-  ok(await until(() => (s.L().match(/2 decoder\(s\) running — with a listener on|came back in/g) || []).length >= 2, 10000), '★ back to 648 kHz: they run again');
+  ok(await until(() => (s.L().match(/2 of 2 decoding — with a listener on|came back in/g) || []).length >= 2, 10000), '★ back to 648 kHz: they run again');
   console.log('── a listener\'s decoder with both slots taken: the last VFO pauses, the decoder starts ──');
   await sleep(1500);
   const dx = ws(s.port, '/ws/dxcluster?user_session_id=bgir0001');

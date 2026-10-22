@@ -425,6 +425,7 @@ struct NavtexMsg {
     int64_t startedAt = 0;    // UTC seconds
     int lost = 0, chars = 0;
     bool haveFec = false; unsigned long fecClean = 0, fecRepaired = 0, fecLost = 0;
+    int gaps = 0; int64_t gapMs = 0;   // ★ fades survived (navtex.ts navtexGapMarker) — shown in the text and the title
 };
 
 class NavtexAsm {
@@ -450,8 +451,8 @@ public:
     /** 75 s of nothing: an unfinished message ends "[end lost]". A lock lost and not regained within kLockBlipMs: the
      *  message ends where it was lost. */
     void tick(int64_t now) {
-        if (cut_.on && !cut_.relocked && !locked_ && now - cut_.atMs >= kLockBlipMs) { closeAtCut(now); return; }
         if (!lastTextAt_ || now - lastTextAt_ < kEndLostMs) return;
+        if (cut_.on && !cut_.relocked) { closeAtCut(now); return; }   // ★ silent for good while unlocked: ends at the loss
         if (inMsg_ || alnum(seg_) >= kOrphanMin) finish(build(seg_, true));
         seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; cut_ = Cut();
     }
@@ -465,8 +466,18 @@ public:
             seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
             return;
         }
+        // ★★★ A FADE IS NOT AN END (Lenovo, beta3: 517.5 kHz lost lock 5–15 s at a time): carry on in the same message, the
+        //     gap shown where it was ("[… signal lost 12 s …]") and the hunting garbage dropped. Only NNNN, a new ZCZC or
+        //     75 s of silence close a message — navtex.ts, the same rule.
         if (!was && locked_ && cut_.on && !cut_.relocked) {
-            if (now - cut_.atMs >= kLockBlipMs) { closeAtCut(now); return; }
+            const int64_t lost = now - cut_.atMs;
+            if (lost >= kLockBlipMs) {
+                const size_t at = std::min(cut_.at, seg_.size());
+                char m[64]; std::snprintf(m, sizeof m, "\n[\xe2\x80\xa6 signal lost %lld s \xe2\x80\xa6]\n", (long long)std::max<int64_t>(1, (lost + 500) / 1000));
+                seg_ = seg_.substr(0, at) + m;
+                gaps_++; gapMs_ += lost;
+                scanFrom_ = std::min(scanFrom_, at);
+            }
             cut_.relocked = true;
         }
     }
@@ -476,7 +487,7 @@ public:
         seg_.clear(); inMsg_ = false; scanFrom_ = 0; cut_ = Cut();
     }
     /** A retune: the text from here is another transmission — drop what was arriving (as the client's clearLive). */
-    void clearLive() { seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; locked_ = false; cut_ = Cut(); }
+    void clearLive() { seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; locked_ = false; cut_ = Cut(); gaps_ = 0; gapMs_ = 0; }
     /** Lock losses seen (blips included) — for the log. */
     unsigned long lockLosses() const { return lockLosses_; }
 
@@ -498,6 +509,7 @@ public:
         t += " " + mid + " " + subject(m.id.size() == 4 ? m.id[1] : '?');
         const bool serial = m.id.size() == 4 && std::isdigit((unsigned char)m.id[2]) && std::isdigit((unsigned char)m.id[3]);
         t += " " + mid + " #" + (serial ? m.id.substr(2) : "??");
+        if (m.gaps) t += " " + mid + " gaps: " + std::to_string(m.gaps) + " (" + std::to_string((long long)((m.gapMs + 500) / 1000)) + " s)";
         if (m.haveFec) {
             if (m.fecRepaired) t += " " + mid + " " + std::to_string(m.fecRepaired) + " repaired";
             if (m.fecLost) t += " " + mid + " " + std::to_string(m.fecLost) + " lost";
@@ -577,6 +589,7 @@ private:
         m.text = cleanText(body);
         for (char c : m.text) { if (c == '_') { m.lost++; m.chars++; } else if (std::isalnum((unsigned char)c)) m.chars++; }
         m.endLost = endLost;
+        m.gaps = gaps_; m.gapMs = gapMs_;
         if (inMsg_) { m.id = hdrId_; m.startedAt = hdrAt_ / 1000; }
         else { m.startLost = true; m.startedAt = segStartedAt_ / 1000; }
         return m;
@@ -587,7 +600,7 @@ private:
         if (inMsg_ || alnum(body) >= kOrphanMin) finish(build(body, true));
         seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
     }
-    void finish(const NavtexMsg& m) { if (onMessage) onMessage(m); }
+    void finish(const NavtexMsg& m) { gaps_ = 0; gapMs_ = 0; if (onMessage) onMessage(m); }
     void scan(int64_t now) {
         for (;;) {
             int kind = 0; size_t at = 0, end = 0; std::string id; long waitAt = -1;
@@ -608,7 +621,7 @@ private:
                 inMsg_ = false;
             } else {
                 if (inMsg_ || alnum(before) >= kOrphanMin) finish(build(before, true));
-                inMsg_ = true; hdrId_ = id; hdrAt_ = now;
+                inMsg_ = true; hdrId_ = id; hdrAt_ = now; gaps_ = 0; gapMs_ = 0;
             }
             seg_.erase(0, end);
             segStartedAt_ = now; scanFrom_ = 0;
@@ -621,6 +634,7 @@ private:
     size_t scanFrom_ = 0;
     struct Cut { bool on = false; size_t at = 0; int64_t atMs = 0; bool relocked = false; } cut_;
     unsigned long lockLosses_ = 0;
+    int gaps_ = 0; int64_t gapMs_ = 0;
 };
 
 } // namespace gallery
