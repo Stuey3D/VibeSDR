@@ -13,6 +13,8 @@
  *     0x01 | u64 BE timestamp | u32 BE length | UTF-8 text
  *     0x03 | u8 state
  *     0x07 | u32 BE clean | u32 BE repaired | u32 BE lost   NAVTEX: one message's FEC count, after its NNNN
+ *     0x08 | u32 BE length | JSON                          RTTY: a SYNOP/SHIP weather report in plain English (V12) —
+ *                                                         sent after the text that ended its report; src/utils/weatherReport.ts
  *
  *   WEFAX
  *     0x01 | u32 BE line | u32 BE width | width bytes greyscale
@@ -37,6 +39,7 @@
 import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
+import { parseWeatherFrame, type WeatherReport } from '../../../src/utils/weatherReport';
 
 export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | null;
 
@@ -57,6 +60,8 @@ export interface DecoderCallbacks {
   onState?: (state: number) => void;
   /** ★ RTTY AUTO's tuning guide (server 0x06 | i16 BE): audio-pitch move in Hz (+ = up), 0 = fine. */
   onTuneHint?: (audioHz: number) => void;
+  /** ★ RTTY: a SYNOP/SHIP report the SERVER translated (0x08, V12 2026-10-23) — drawn under the raw text it came from. */
+  onWeatherReport?: (r: WeatherReport) => void;
   /** ★ NAVTEX: the message just closed by NNNN, as the server's FEC counted it (0x07, 2026-10-05). */
   onNavtexFec?: (fec: { clean: number; repaired: number; lost: number }) => void;
   /** A new image is starting. height is 0 for WEFAX (it grows without bound). */
@@ -309,6 +314,9 @@ export class DecoderClient {
           this.cb.onState?.(dv.getUint8(1));
         } else if (op === 0x06 && buf.byteLength >= 3 && this.mode === 'rtty') {
           this.cb.onTuneHint?.(dv.getInt16(1, false));
+        } else if (op === 0x08 && this.mode === 'rtty') {
+          const r = parseWeatherFrame(new Uint8Array(buf));
+          if (r) this.cb.onWeatherReport?.(r);
         } else if (op === 0x07 && buf.byteLength >= 13 && this.mode === 'navtex') {
           this.cb.onNavtexFec?.({ clean: dv.getUint32(1, false), repaired: dv.getUint32(5, false), lost: dv.getUint32(9, false) });
         }

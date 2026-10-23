@@ -47,6 +47,7 @@ import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassb
 import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
+import { decTextNode, trimWxBox, weatherReportEl } from './weatherBox';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
 import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../../../src/utils/galleryPager';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
@@ -10100,15 +10101,9 @@ function initDecoders(host: string, auth: AuthState) {
       //    read history snapped straight back on every new character). Measured BEFORE any write, as
       //    before — the old code read it before replacing the text.
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-      let node: Text;
-      if (el.firstChild && el.firstChild === el.lastChild && el.firstChild.nodeType === 3) {
-        node = el.firstChild as Text;
-      } else {
-        // Another writer (clear, a refusal message) left something else — fold it into one node.
-        node = document.createTextNode(el.textContent || '');
-        el.textContent = '';
-        el.appendChild(node);
-      }
+      // ★ The one text node to append to — or, once a weather report (V12) sits in the box, the text node UNDER the
+      //   newest report (weatherBox.ts). Another writer (clear, a refusal message) leaving anything else is folded into one.
+      const node = decTextNode(el);
       // ★★★ ONLY THE TIME DECODERS SPEAK THE TERMINAL CONVENTION — RTTY's CARRIAGE RETURNS ARE
       //     DATA. CR is a character in the Baudot alphabet (see the tables in fsk_decoder.cpp) and
       //     stations really send it, usually as CR CR LF and sometimes bare. Treating those as
@@ -10141,9 +10136,21 @@ function initDecoders(host: string, auth: AuthState) {
           node.appendData(chunk);
         }
       }
-      if (node.length > 8000 + DEC_TRIM_SLACK) node.deleteData(0, node.length - 8000);
+      if (el.firstChild === node) { if (node.length > 8000 + DEC_TRIM_SLACK) node.deleteData(0, node.length - 8000); }
+      else trimWxBox(el, 8000, DEC_TRIM_SLACK);
       if (atBottom) el.scrollTop = el.scrollHeight;
       setDecLive(true);
+    },
+    // ★★ RTTY WEATHER REPORTS (V12, 2026-10-23): the SERVER translated a SYNOP/SHIP (vibe_synop.h → 0x08). It arrives
+    //    right after the text that ended its report, so it goes at the END of the box — under the raw groups it came from.
+    //    Collapsed to its one line; open it for the details and the raw groups again.
+    onWeatherReport: (r) => {
+      if (activeDec !== 'rtty') return;
+      const el = $('decText');
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      el.appendChild(weatherReportEl(r));
+      trimWxBox(el, 8000, 2000);
+      if (atBottom) el.scrollTop = el.scrollHeight;
     },
     onState: (st) => {
       // ★ Its status is the broadcast's — see renderNavtex. A lock lost mid-message ends it [end lost] (NickB 2026-10-12:

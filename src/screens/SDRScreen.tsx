@@ -211,6 +211,7 @@ import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
 import { tuneHintLabel } from '../utils/tuneHint';
 import { NavtexAssembler } from '../utils/navtex';
+import { stripWxMarkers, wxMarker, WX_MAX_KEPT, type WeatherReport } from '../utils/weatherReport';
 import { countryForCallsign } from '../services/callsignCountry';
 import { cleanText } from '../utils/safeText';
 import { onCollectionChanged, requestSync } from '../services/cloudSync';
@@ -4559,6 +4560,11 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  (utils/navtex) — so each message carries the minute it began (the save file is named by it), which a re-parse
    *  of the capped scrollback cannot know. Fed here, before the batching, from every source (the decoder socket and
    *  OWRX's text decoders); emptied with the text (open / close / switch / CLR). The panel reads it on its renders. */
+  /* ★★ RTTY WEATHER REPORTS (V12, 2026-10-23): the server's translation of each SYNOP/SHIP (0x08). A report rides in the
+   *  box's text as a MARKER at the point it arrived — under the raw groups it came from — and DecoderPanel draws it
+   *  there (utils/weatherReport, WeatherReportText). The newest WX_MAX_KEPT are kept; an older marker draws nothing. */
+  const wxReportsRef = useRef<Map<number, WeatherReport>>(new Map());
+  const wxSeqRef = useRef(0);
   const navtexAsmRef = useRef<NavtexAssembler | null>(null);
   if (!navtexAsmRef.current) navtexAsmRef.current = new NavtexAssembler();
   /** ★ A VibeServer's per-message FEC count (0x07) lands after the text batch may already have drawn — one render
@@ -4664,7 +4670,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       onText: (text: string) => {
         setDecoding(true);
         markDecodeOutput();          // ★ output = presence; see the idle-release effect
-        queueDecoderText(text);      // ★ batched — see DECODER_FLUSH_MS
+        queueDecoderText(stripWxMarkers(text));   // ★ batched — see DECODER_FLUSH_MS; only WE place a report marker
+      },
+      onWeatherReport: (r: WeatherReport) => {
+        if (activeDecRef.current !== 'rtty') return;
+        const m = wxReportsRef.current, id = ++wxSeqRef.current;
+        m.set(id, r);
+        while (m.size > WX_MAX_KEPT) { const first = m.keys().next().value; if (first === undefined) break; m.delete(first); }
+        queueDecoderText(wxMarker(id));          // ★ in the same batch as the text before it — so it lands under it
       },
       // ★ While RTTY AUTO's tuning guide is up it IS the status; the decoder's own state returns when it clears.
       onStatus: (s: string)  => { decStateText.current = s; if (!tuneHintText.current) queueDecoderStatus(s); },
@@ -11461,6 +11474,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           tunedHz={status.frequency}
           receiverPos={serverPos ?? recvLoc}
           decoderText={decoderText}
+          weatherReports={wxReportsRef.current}
           aircraft={aircraft}
           decoderStatus={decoderStatus}
           decoding={decoding}

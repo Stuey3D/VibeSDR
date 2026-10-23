@@ -37,6 +37,8 @@ import { SLANT_STEP, parseAlign, wefaxAlignKey, wefaxFormat, wefaxPreset, type W
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
+import WeatherReportText from './WeatherReportText';
+import type { WeatherReport } from '../utils/weatherReport';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel, DecoderBody,
          DECODER_FONT, decoderBodyInset, engraveStyle, useDecoderTokens, useDecoderStyles,
          type DecoderTokens } from './DecoderShell';
@@ -68,6 +70,8 @@ export interface DecoderPanelProps {
   onOpenFreq?: () => void;
   activeDecoder: DecoderType;
   decoderText:   string;
+  /** ★ V12: the RTTY weather reports the SERVER translated, by the id of the marker SDRScreen put in decoderText. */
+  weatherReports?: ReadonlyMap<number, WeatherReport>;
   /** ADS-B: the structured aircraft table. When present it REPLACES the text body —
    *  the records carry far more than the flattened "CALLSIGN 39700ft 434kt -25dB"
    *  line ever could (registry country, vertical trend, range and bearing). */
@@ -234,7 +238,7 @@ const FONT = DECODER_FONT;
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function DecoderPanel({
-  activeDecoder, decoderText, aircraft, decoderStatus, decoding, notice,
+  activeDecoder, decoderText, weatherReports, aircraft, decoderStatus, decoding, notice,
   bottomOffset, onClear, onClose, navtex,
   imageRef, onImageStatus,
   morseQuality = 'all', onMorseQuality,
@@ -1402,9 +1406,9 @@ export default function DecoderPanel({
             {...bodyScroll}
             showsVerticalScrollIndicator
           >
-            <Text style={[dp.output, { color: dc.output, fontFamily: FONT }]} selectable>
-              {decoderText}
-            </Text>
+            <WeatherReportText text={decoderText} reports={weatherReports}
+                               textStyle={[dp.output, { color: dc.output, fontFamily: FONT }]}
+                               accent={tk.accent} muted={dc.status} fontFamily={FONT} />
           </ScrollView>
         )}
 

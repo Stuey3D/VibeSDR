@@ -29,6 +29,8 @@
  *   RTTY/NAVTEX: 0x01 text  — u32 len @9, utf8 @13
  *                0x03 state — u8 @1: 0 no-signal, 1/2 sync, 3 decoding (rtty AND navtex)
  *   NAVTEX:      0x07 message FEC count — u32 BE clean @1, repaired @5, lost @9; sent after the text with its NNNN
+ *   RTTY:        0x08 weather report — u32 BE len @1, JSON @5 (utils/weatherReport.ts): a SYNOP/SHIP in plain English,
+ *                sent after the text that ended its report (VibeServer V12, 2026-10-23)
  *   WEFAX:       0x01 line  — u32 lineNo @1, u32 width @5, pixels u8[] @9
  *                0x02 START, 0x03 transmission complete
  *   SSTV:        0x07 imageStart — u32 w @1, u32 h @5
@@ -49,6 +51,7 @@ import { USER_AGENT } from '../constants/version';
 import { rttyFraming } from '../utils/rttySpec';
 import { guard, guardJson } from './faultLog';
 import { cleanText, cleanMode } from '../utils/safeText';
+import { parseWeatherFrame, type WeatherReport } from '../utils/weatherReport';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -183,6 +186,8 @@ export interface DecoderCallbacks {
   onError?:     (msg: string) => void;
   /** ★ RTTY AUTO's tuning guide (server 0x06): how far the tones should move in AUDIO pitch (+ = up), 0 = fine. */
   onTuneHint?:  (audioHz: number) => void;
+  /** ★ RTTY: a SYNOP/SHIP weather report the SERVER translated (0x08, V12) — drawn under the raw text so far. */
+  onWeatherReport?: (r: WeatherReport) => void;
   /** ★ NAVTEX: the message just closed by NNNN, as the server's FEC counted it (0x07, VibeServer 2026-10-05). */
   onNavtexFec?: (fec: { clean: number; repaired: number; lost: number }) => void;
   /** ★ NAVTEX: the server decoder's state (0x03: 0 no signal, 1 hunting, 3 reading) — a lock lost ends the open
@@ -713,6 +718,10 @@ export class DecoderClient {
         if (name === 'navtex') this.cb.onNavtexState?.(s);
       } else if (name === 'rtty' && t === 0x06 && u8.length >= 3) {
         this.cb.onTuneHint?.(v.getInt16(1, false));
+      } else if (name === 'rtty' && t === 0x08) {
+        // ★ A server older than V12 never sends it; a malformed one is dropped (parseWeatherFrame checks every field).
+        const r = parseWeatherFrame(u8);
+        if (r) this.cb.onWeatherReport?.(r);
       } else if (name === 'navtex' && t === 0x07 && u8.length >= 13) {
         // ★ A server older than 2026-10-05 never sends this; the box then keeps its '_'-derived "% lost".
         this.cb.onNavtexFec?.({ clean: v.getUint32(1, false), repaired: v.getUint32(5, false), lost: v.getUint32(9, false) });
