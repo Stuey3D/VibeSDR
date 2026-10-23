@@ -45,8 +45,8 @@ engine and the gallery now exist to carry more. The gaps are:
 
 | Tier | What | Why first |
 |---|---|---|
-| **1: next** (cheap, popular, standards public, mostly background-capable) | **CW (our own)**, **DSC MF/HF + VHF**, **WSPR**, **PSK31/63**, **APRS/AX.25 1200 + 300**, **AIS**, **SAM → ECSS → AM stereo** (already planned), **CTCSS/DCS tone ID**, **more time stations** (JJY, BPC, CHU, TDF), **signal tags phase 1** (band-plan layer + the FSK/RTTY detector already approved) | Each is S/M, light on a Pi 2, and either fills a gap users hit today (CW currently needs an UberSDR) or runs unattended into the gallery. |
-| **2: after** | **ACARS**, **VDL2**, **ADS-B 1090** (as a radio role), **HFDL (our own)**, **radiosondes (RS41)**, **FT8 multi-pass + JS8**, **FT4/FST4/FST4W/Q65/MSK144**, **MFSK family (Olivia, Contestia, MFSK16, Thor) + Hellschreiber**, **FreeDV + M17** (server-side Codec2), **amateur DMR/D-STAR/YSF signalling (no voice)**, **ALE 2G**, **Meteor LRPT** (already briefed), **DRM** (OS codec only), **signal tags phase 2** (IQ classifier), **aviation SELCAL**, **EAS/SAME** | Larger, or needs the channelizer to run several channels at once, or needs a whole radio. |
+| **1: next** (cheap, popular, standards public, mostly background-capable) | **ADS-B 1090 FIRST** (Stuart, 2026-10-23: an easy test, and it shows our own maps working for aircraft), **CW (our own)**, **DSC MF/HF + VHF**, **WSPR**, **PSK31/63**, **APRS/AX.25 1200 + 300**, **AIS**, **SAM → ECSS → AM stereo** (already planned), **CTCSS/DCS tone ID**, **more time stations** (JJY, BPC, CHU, TDF), **signal tags phase 1** (band-plan layer + the FSK/RTTY detector already approved) | Each is S/M, light on a Pi 2, and either fills a gap users hit today (CW currently needs an UberSDR) or runs unattended into the gallery. |
+| **2: after** | **ACARS**, **VDL2**, **HFDL (our own)**, **radiosondes (RS41)**, **FT8 multi-pass + JS8**, **FT4/FST4/FST4W/Q65/MSK144**, **MFSK family (Olivia, Contestia, MFSK16, Thor) + Hellschreiber**, **FreeDV + M17** (server-side Codec2), **amateur DMR/D-STAR/YSF signalling (no voice)**, **ALE 2G**, **Meteor LRPT** (already briefed), **DRM** (OS codec only), **signal tags phase 2** (IQ classifier), **aviation SELCAL**, **EAS/SAME** | Larger, or needs the channelizer to run several channels at once, or needs a whole radio. |
 | **3: later or by request** | STANAG 4285 / MIL-STD-188-110 (identify, plus demod for the unencrypted minority), ALE 3G, PACTOR/VARA (identify only), EPIRB 406, UAT 978 (US), Mode S beyond ADS-B, HRPT, Inmarsat EGC SafetyNET, a curated rtl_433 subset, LoRa (identify only) | Niche, heavy, needs special hardware, or legally awkward. |
 | **4: nice-to-have, app only** | **TV DX on the Android app's local hardware** (SDRplay / Airspy R2 / HackRF): "a portable TV of old, with advanced signal analysis", meaning watching plus MER/BER, constellation, echo profile, multiplex ID and a DX log (§4.5). Never on servers. | Stuart's final TV scope. |
 | **⚖ Admin opt-in only, off by default** | POCSAG, FLEX, non-amateur trunking control channels (P25/DMR Tier III/TETRA: system identity only) | Content is someone else's private message in the UK and elsewhere. |
@@ -54,6 +54,10 @@ engine and the gallery now exist to carry more. The gaps are:
 
 ### Top 10 recommendations
 
+0. **ADS-B 1090 — FIRST (Stuart, 2026-10-23).** An easy, very visible test: aircraft broadcast constantly, the decode
+   is well understood (DO-260B, CRC-24, CPR), and it puts **our own MapLibre map** to work for aircraft instead of only
+   showing OpenWebRX's. It needs a whole radio at ≥ 2 MS/s on 1090 MHz (an RTL or RSP; a radio role, §3), so it is
+   the first user of `RADIO-ROLES.md` "Dedicated". M.
 1. **Our own CW decoder.** Morse is currently only available through an UberSDR's `morse` extension
    (`DecoderClient.ts` speaks it). A VibeServer listener has none. S/M, trivial CPU, background-capable as a CW
    skimmer later.
@@ -68,8 +72,8 @@ engine and the gallery now exist to carry more. The gaps are:
    DXers notice it most. M.
 7. **PSK31/63.** The most-used amateur keyboard mode after FT8 and CW. S/M, trivial CPU.
 8. **CTCSS/DCS tone identification on NFM.** Tiny, and answers "what tone is this repeater?". S.
-9. **Signal tags, phase 1.** A band-plan layer plus the approved "looks like RTTY" detector, drawn in a dedicated
-   no-overlap lane (§5). M.
+9. **Signal tags, phase 1.** A band-plan layer plus the approved "looks like RTTY" detector, drawn as little floating
+   labels over the signals, display only (§5). S/M.
 10. **The decoder menu with pins** (§6). It is needed before the list doubles in length. S/M.
 
 ---
@@ -624,7 +628,7 @@ SDRplay is a driver test bench, not a product, but it shows that the bandwidth i
 - A Discord request asked for OpenWebRX+-style digital-mode markings on the top bar (WSPR, SSTV, FT8 spots).
 - Stuart said no to bookmarks on the top row because, on his OpenWebRX, they overlapped and became unreadable.
 - So: tags must tell a listener "that is RTTY / FT8 / DRM / NAVTEX" at a glance, **never overlap**, never cover the VTS
-  or the search box, and a tap must open the right decoder (or the sigidwiki page where we have none).
+  or the search box. They are display only (§5.4): the control deck stays the primary interaction.
 
 ### 5.2 Two layers, merged into one tag per signal
 
@@ -719,8 +723,8 @@ and only when something changed:
 ```
 
 That is ~100–400 bytes, against the 10 KB/s spectrum frame. `dec` is present only if this server offers that decoder
-on this radio, so the tap never lands on a dead control. `p` carries what stage 2 measured, so tapping an RTTY tag
-opens RTTY already set to 45.45/170. A client too old for `sigtags` ignores it.
+on this radio, so a label never names a decoder the user cannot pick. `p` carries what stage 2 measured, so an RTTY
+label can read "RTTY 45/170" and the user knows how to set the decoder. A client too old for `sigtags` ignores it.
 
 **Other backends.** On OpenWebRX/Kiwi/UberSDR we have no server classifier. The app may draw **layer A only** (a
 static band-plan table is not decoding), plus OWRX's own spot data where it sends it. Layer B is a VibeServer feature.
@@ -733,45 +737,37 @@ row for the person answering.
 
 ### 5.4 Drawing without clutter
 
-**Where.** Tags get their **own lane**: a 16–18 pt strip at the bottom edge of the spectrum, just above the waterfall.
-- They are not on the top row (Stuart's OWRX experience).
-- They are not inside the waterfall (which must never be obscured or frozen).
-- They are not over the VTS or the search box.
+★★ **Stuart, 2026-10-23: tags are DISPLAY ONLY.** They are little floating labels over the signals, so a user knows which
+decoder to pick. They are **not clickable**, and **not selectable by keyboard or controller**: no tap-to-tune, no info
+card, no focus group, no `T` key. The user still picks the decoder from the DIGITAL / DECODERS menu as now (§6).
 
-The lane is part of the layout, so the spectrum's height accounts for it. It is hidden when there are no tags, and it can
-be switched off (Display → Signal tags: Off / Detected only / All).
+**Where.** Each label floats **just above its signal's peak in the spectrum**.
+- Never on the top row (Stuart's OWRX experience), never inside the waterfall (it must never be obscured or frozen),
+  never over the VTS or the search box.
+- Labels ignore pointer and touch events (`pointer-events: none` on web, `pointerEvents="none"` in the app), so a drag
+  or tap on the spectrum behind them tunes exactly as it does today.
+- Display → Signal tags: Off / Detected only / All.
 
 **Placement, with no overlap (one deterministic rule, shared by web and app as `src/utils/tagLayout.ts`, like
 `galleryPager.ts`):**
-1. Build the candidates: layer-B tags as pills; layer-A allocations as **underline segments** (a 2 px coloured bar the
-   width of the sub-band along the lane's top edge, no text) unless a layer-B tag sits inside them.
+1. Build the candidates: layer-B tags as small labels; layer-A allocations as **faint underline segments** (a 2 px
+   coloured bar the width of the sub-band at the spectrum's base, no text) unless a layer-B tag sits inside them.
 2. Sort by priority:
    - the tag at the current dial;
-   - confirmed, then detected, then likely;
+   - confirmed, then detected, then likely ("?");
    - a decoder this server offers ahead of an identify-only kind;
    - then signal strength.
-3. Place each pill centred on its signal, clamped inside the lane and **outside the exclusion rectangles** the layout
-   passes in (the VTS, the search box, the zoom drum, the passband handles). If it collides with an already-placed
-   pill, try a shorter label ("RTTY 45/170" → "RTTY" → "R"), then shifting up to ±½ pill width, then **collapse**.
-4. **Collapse:** pills that cannot fit merge into a counted cluster "◆ 3" at their centroid. Tapping the cluster opens a
-   small list ("RTTY 45/170 · 14.0803", "PSK31 · 14.0705", "FT8 · 14.074 · 23 decodes"), each row with DECODE or WIKI.
-   At low zoom (a whole HF band on screen), whole sub-bands collapse to one cluster per sub-band ("FT8 ◆ 12").
-5. The labels use the standard font (memory `feedback_display_font_everywhere`: decoder pills are not display-font
+3. Place each label centred above its signal, clamped inside the spectrum and **outside the exclusion rectangles** the
+   layout passes in (the VTS, the search box, the zoom drum, the passband handles). If it collides with an
+   already-placed label, try a shorter label ("RTTY 45/170" → "RTTY" → "R"), then stacking one row higher, then
+   **merge**.
+4. **Merge:** labels that cannot fit become one plain counted label ("FT8 ×12") at their centroid. It is text, not a
+   button. At low zoom (a whole HF band on screen), each sub-band shows one such label.
+5. The labels use the standard font (memory `feedback_display_font_everywhere`: decoder labels are not display-font
    chrome). Colour comes from the theme tokens, checked on default, silver and black, with transparency on and off,
    phone and wide (memory `feedback_no_visible_polish_gaps`).
-6. **Stability:** a placed pill keeps its slot while it lives. Placement is recomputed only when the view changes or a
-   tag appears or goes, so labels do not dance as the waterfall scrolls.
-
-**Tap behaviour.**
-- A tap on a pill tunes to it, in the right mode, with the decoder opened and pre-set from `p`. Under the shared-dial
-  contract this is a user action, so the client sends it like any tune; tuning etiquette applies on a shared dial.
-- A long press (or the pad's secondary button) shows the info card: what it is, how sure we are, the sigidwiki link,
-  "no decoder on this server" where that is true.
-- An identify-only kind (PACTOR, encrypted DMR, STANAG) offers WIKI only.
-
-**Pad and keyboard.** The tag lane joins the spectrum's focus group: ◀/▶ steps between pills and clusters in screen
-order, enter = the tap, the secondary button = the info card. The keyboard uses `T` to cycle tags at the dial's side
-(add it to `KeyboardShortcuts.tsx` and the controller brief).
+6. **Stability:** a placed label keeps its slot while it lives. Placement is recomputed only when the view changes or a
+   tag appears or goes, so labels do not dance as the spectrum updates.
 
 **Watch and Jr:** no tags on the watch spectrum. At most, the tag at the dial appears as a word in the readout.
 
@@ -781,7 +777,7 @@ order, enter = the tap, the secondary button = the info card. The keyboard uses 
    - the layer-A table and the underline segments;
    - the approved FSK detector as the first layer-B kind;
    - "confirmed" tags from running decoders (FT8, NAVTEX, RTTY, WEFAX, SSTV already exist);
-   - the lane, the layout rule, tap-to-decode.
+   - the floating labels and the layout rule (display only).
 2. **Phase 2 (tier 2):** the stage-1 rule set for the table in §5.2, and stage-2 OFDM/PSK/preamble tests.
 3. **Phase 3:** background tags. Idle decoding's VFOs report into the same table, so a new listener lands and already
    sees "NAVTEX · 6 messages tonight" on 518.
@@ -885,8 +881,10 @@ reorder): **the keyboard and controller need nothing more than they have now.**
 
 ### 6.6 Tags and menu together
 
-The tag lane is the discovery path: a listener sees "RTTY?" and taps it. The menu is the habit path. Both open the
-same decoder with the same settings, through the same id table.
+★★ **The control deck remains the primary interaction** (Stuart, 2026-10-23: "this is a mobile app after all, it's
+designed for thumbs"). Tags only tell the listener what a signal is. The listener then picks the decoder from the
+DIGITAL / DECODERS menu on the deck, with the thumb, pad or keyboard, exactly as today. Nothing on the spectrum becomes
+a new place to tap, and the existing spectrum gestures (drag to tune, pinch to zoom) are untouched by the labels.
 
 ---
 
