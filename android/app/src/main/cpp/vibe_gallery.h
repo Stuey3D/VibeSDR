@@ -150,6 +150,9 @@ struct Meta {
     std::shared_ptr<std::atomic<int64_t>> lastItemAt;
     /** ★ V12 beta 4: an FT8/FT4 summary's running count — spots and countries so far — for the admin page's live line. */
     std::shared_ptr<std::atomic<uint64_t>> liveSpots, liveCountries;
+    /** ★ 2026-10-23: a STANDING card ("last10" — the FT8 summary's rolling last 10 minutes): one per radio, origin,
+     *  profile and dial, found again by the next run (Store::adoptSlot). Written to the index as "s". */
+    std::string slot;
 };
 
 // ── The store ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -239,7 +242,9 @@ public:
     /** ★★ V12 beta 4: an item REWRITTEN IN PLACE (the FT8 summary every 10 min: one card per run, not one per
      *  rewrite). The file is replaced whole (tmp + rename, so a reader never sees half of it) and its index line takes the
      *  new title where it stands. False when it is gone (evicted, the folder cleared) — the caller starts a new one. */
-    bool replace(const std::string& name, const Meta& m, const std::string& body) {
+    /** `toNewest`: the line also MOVES to the end of the index, so the card lists first (the rolling FT8 card).
+     *  ★ The cost of a replace is the whole index rewritten (tmp + rename) — ~250 bytes an item. */
+    bool replace(const std::string& name, const Meta& m, const std::string& body, bool toNewest = false) {
         if (!safeName(name)) return false;
         std::string dir; uint64_t limit; std::string radio;
         { std::lock_guard<std::mutex> lk(m_); dir = dir_; limit = limit_; radio = radio_; }
@@ -254,7 +259,7 @@ public:
         if (!writeFile(tmpf, body, false) || ::rename(tmpf.c_str(), (dir + "/" + name).c_str()) != 0) { ::unlink(tmpf.c_str()); return false; }
         std::string l = indexLine(m, name, radio);
         if (!l.empty() && l.back() == '\n') l.pop_back();
-        lines[at] = l;
+        if (toNewest) { lines.erase(lines.begin() + (long)at); lines.push_back(l); } else lines[at] = l;
         std::string all; for (auto& x : lines) all += x + "\n";
         const std::string tmp = dir + "/index.jsonl.tmp";
         if (writeFile(tmp, all, false)) ::rename(tmp.c_str(), (dir + "/index.jsonl").c_str());
@@ -264,6 +269,27 @@ public:
     }
     /** The run is finished: it may now be evicted like anything else. */
     void close(const std::string& name) { std::lock_guard<std::mutex> lk(m_); open_.erase(name); }
+    /** ★ 2026-10-23: the standing card for `m.slot` on this radio, origin, profile and dial — the newest if a crash left
+     *  more than one — HELD OPEN (never evicted) until close(). "" when there is none (the caller creates it). */
+    std::string adoptSlot(const Meta& m) {
+        if (m.slot.empty()) return "";
+        std::string dir, radio;
+        { std::lock_guard<std::mutex> lk(m_); dir = dir_; radio = radio_; }
+        if (dir.empty()) return "";
+        std::string found;
+        {
+            Lock fl(dir, /*shared=*/true);
+            char hz[32]; std::snprintf(hz, sizeof hz, "%.0f", m.freqHz);
+            for (const auto& l : readIndex(dir))
+                if (lineStr(l, "s") == jsonEsc(m.slot) && lineStr(l, "k") == jsonEsc(m.kind) && lineStr(l, "o") == jsonEsc(m.origin)
+                    && lineNum(l, "hz") == std::strtod(hz, nullptr) && lineStr(l, "p") == jsonEsc(printable(m.profile, 40))
+                    && lineStr(l, "r") == jsonEsc(radio)) found = lineStr(l, "f");
+            struct stat st{};
+            if (!found.empty() && (!safeName(found) || ::stat((dir + "/" + found).c_str(), &st) != 0)) found.clear();
+        }
+        if (!found.empty()) { std::lock_guard<std::mutex> lk(m_); open_.insert(found); }
+        return found;
+    }
     /** Bytes in one item, 0 if absent. */
     uint64_t sizeOf(const std::string& name) const {
         if (!safeName(name)) return 0;
@@ -423,7 +449,8 @@ private:
             + "\",\"t\":" + std::to_string((long long)(m.utc ? m.utc : nowUtc())) + ",\"hz\":" + hz
             + ",\"m\":\"" + jsonEsc(m.mode) + "\",\"d\":\"" + jsonEsc(m.decoder) + "\",\"p\":\"" + jsonEsc(printable(m.profile, 40))
             + "\",\"r\":\"" + jsonEsc(radio) + "\",\"title\":\"" + jsonEsc(printable(m.title, 120)) + "\""
-            + (m.partial ? ",\"partial\":true" : "") + (m.listenerOn && m.listenerOn->load() ? ",\"wl\":true" : "") + "}\n";
+            + (m.partial ? ",\"partial\":true" : "") + (m.listenerOn && m.listenerOn->load() ? ",\"wl\":true" : "")
+            + (m.slot.empty() ? std::string() : ",\"s\":\"" + jsonEsc(m.slot) + "\"") + "}\n";
         return l;
     }
     /** ★★ OLDEST OUT until the gallery fits — never one of `keep` (the item just written, an RTTY run still open). The

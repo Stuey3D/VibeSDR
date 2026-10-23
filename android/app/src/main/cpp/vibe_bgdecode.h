@@ -43,9 +43,11 @@
 #include <cstdio>
 #include <ctime>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -370,22 +372,89 @@ inline double greatCircleKm(double la1, double lo1, double la2, double lo2) {
     return 2 * 6371.0 * std::asin(std::min(1.0, std::sqrt(h)));
 }
 
-/** ★★ STUART'S SUMMARY (2026-10-22: "FT8 in background: NOT spot files — a SUMMARY record per run/day"): spots heard,
- *  the furthest (country + km from THIS server's own position), the most frequent country, the rarest, how many
- *  countries. One .txt per run, split at UTC midnight; nothing is written for a run that heard nothing.
- *  ★ Bounded: the per-call table holds at most kMaxCalls (FT8 on a busy band at night is a few thousand calls). */
+/** ★ One stretch of FT8/FT4 spots, counted: what both summary cards report (the hour's and the last 10 minutes').
+ *  ★ Bounded: at most kMaxCalls calls (FT8 on a busy band at night is a few thousand). */
+struct Ft8Tally {
+    static constexpr size_t kMaxCalls = 20000;
+    unsigned long spots = 0, ft8 = 0, ft4 = 0;
+    std::map<std::string, std::string> calls;
+    std::map<std::string, unsigned long> countrySpots, countryCalls;
+    double farKm = 0;
+    std::string farCall, farGrid, farCountry;
+    /** `km`: from this server to the call's own grid, NaN when either is unknown. */
+    void add(bool isFt4, const std::string& call, const std::string& grid, const std::string& ctry, double km) {
+        ++spots; (isFt4 ? ft4 : ft8)++;
+        if (calls.size() < kMaxCalls && !calls.count(call)) {
+            calls[call] = ctry;
+            if (!ctry.empty()) countryCalls[ctry]++;
+        }
+        if (!ctry.empty()) countrySpots[ctry]++;
+        // ★ The furthest is a station with a valid call, ITS valid grid, and a country we can name — never "country unknown".
+        if (!ctry.empty() && !grid.empty() && std::isfinite(km) && km > farKm) { farKm = km; farCall = call; farGrid = grid; farCountry = ctry; }
+    }
+    /** "9 spots · 3 countries · furthest Australia" */
+    std::string headline() const {
+        char t[160];
+        std::snprintf(t, sizeof t, "%lu spot%s \xc2\xb7 %zu countr%s%s%s", spots, spots == 1 ? "" : "s", countrySpots.size(),
+                      countrySpots.size() == 1 ? "y" : "ies", farKm > 0 ? " \xc2\xb7 furthest " : "", farKm > 0 ? farCountry.c_str() : "");
+        return t;
+    }
+    /** The figures, one per line (the beta 4 card's lines, unchanged). */
+    std::string figures(bool havePosition) const {
+        std::string o; char b[256];
+        std::snprintf(b, sizeof b, "Spots heard:       %lu (FT8 %lu, FT4 %lu) from %zu stations\n", spots, ft8, ft4, calls.size());
+        o += b;
+        std::snprintf(b, sizeof b, "Countries:         %zu\n", countrySpots.size());
+        o += b;
+        if (farKm > 0) {
+            std::snprintf(b, sizeof b, "Furthest:          %s (%s, %s) \xe2\x80\x94 %.0f km\n", farCall.c_str(), farCountry.c_str(), farGrid.c_str(), farKm);
+            o += b;
+        } else if (!havePosition) o += "Furthest:          (this server has no position set \xe2\x80\x94 add a locator in Setup)\n";
+        std::string most, rare; unsigned long mostN = 0, rareN = 0;
+        for (const auto& kv : countrySpots) {
+            if (kv.second > mostN) { mostN = kv.second; most = kv.first; }
+            if (rare.empty() || kv.second < rareN) { rareN = kv.second; rare = kv.first; }
+        }
+        if (!most.empty()) { std::snprintf(b, sizeof b, "Most frequent:     %s (%lu spots)\n", most.c_str(), mostN); o += b; }
+        if (!rare.empty() && rare != most) { std::snprintf(b, sizeof b, "Rarest:            %s (%lu spot%s)\n", rare.c_str(), rareN, rareN == 1 ? "" : "s"); o += b; }
+        if (!countryCalls.empty()) {
+            o += "\nStations by country:\n";
+            std::vector<std::pair<unsigned long, std::string>> v;
+            for (const auto& kv : countryCalls) v.push_back({ kv.second, kv.first });
+            std::sort(v.begin(), v.end(), [](const auto& a, const auto& c) { return a.first != c.first ? a.first > c.first : a.second < c.second; });
+            for (const auto& e : v) { std::snprintf(b, sizeof b, "  %-24s %lu\n", e.second.c_str(), e.first); o += b; }
+        }
+        return o;
+    }
+};
+
+/** ★★ STUART'S SUMMARY (2026-10-22: "FT8 in background: NOT spot files — a SUMMARY record"): spots heard, the furthest
+ *  (country + km from THIS server's own position), the most frequent country, the rarest, how many countries.
+ *  ★★★ TWO CARDS (2026-10-23), replacing beta 4's one card per run rewritten every 10 min:
+ *   • LAST 10 MINUTES — ONE standing card per VFO (Meta::slot "last10": the same radio, origin, profile and dial find
+ *     it again after a restart or a crash, Store::adoptSlot), always the rolling last 10 minutes. Rewritten at most once
+ *     a minute (kRefreshSec), only when the window changed (a spot arrived or one aged out), atomically (Store::replace:
+ *     tmp + rename, the index the same way) and moved to the top of the list. When the run ends it is written once more,
+ *     "to 18:37 UTC", and kept — a listener whose arrival stopped the run finds what it was hearing. It is the instant
+ *     look; the hours are the record.
+ *     ★ COST, stated: each refresh rewrites index.jsonl whole (~250 bytes an item — 125 KB for 500 items, 1.2 MB at the
+ *       5000 cap) — at most once a minute per FT8 VFO, and not at all on a quiet band.
+ *   • HOURLY — one card per UTC clock hour, written when the hour closes (store add, never rewritten, evicted oldest
+ *     first like everything else): for judging an antenna over days. A run that started or ended inside the hour
+ *     writes the part it heard, marked partial, with its minutes. Midnight is just an hour boundary.
+ *  Nothing is written for a stretch that heard nothing. Only real callsigns and their OWN grids count (ft8IsCallsign /
+ *  ft8IsGrid, beta 4). The admin line's live count is the RUN's, as before ("142 spots, 23 countries so far"). */
 class Ft8SummaryTap : public DecoderTap {
 public:
-    static constexpr size_t kMaxCalls = 20000;
-    /** ★★ V12 beta 4: the run's ONE item is rewritten in place this often while the run goes on (Stuart's owner saw
-     *  "no ft8 decodes" on a 1840 kHz VFO running all evening — the summary was only written at the run's end or at UTC
-     *  midnight). Every 10 min (the owner: "it's only a summary, so the writes are tiny"), and ONLY when the counts
-     *  changed since the last write (dirty_). Atomic: Store::replace writes a temp file and renames it over the item,
-     *  and the index the same way, so a power cut mid-write leaves the previous card whole. A crash loses at most the
-     *  last 10 min. Still written at the end and at UTC midnight. */
-    static constexpr int64_t kPeriodSec = 10 * 60;
-    Ft8SummaryTap(gallery::Store& store, gallery::Meta meta, double lat, double lon)
-        : store_(store), meta_(std::move(meta)), lat_(lat), lon_(lon) { reset(gallery::nowUtc()); }
+    static constexpr int64_t kWindowSec = 10 * 60, kRefreshSec = 60, kHourSec = 3600;
+    static constexpr size_t kMaxRecent = 20000;   // ★ spots held for the window (a busy band: ~1500 in 10 min)
+    Ft8SummaryTap(gallery::Store& store, gallery::Meta meta, double lat, double lon, std::function<int64_t()> clock = nullptr)
+        : store_(store), meta_(std::move(meta)), lat_(lat), lon_(lon), clock_(std::move(clock)) {
+        const int64_t now = this->now();
+        start_ = hourFrom_ = rollWrite_ = now;
+        if (meta_.liveSpots) meta_.liveSpots->store(0, std::memory_order_relaxed);
+        if (meta_.liveCountries) meta_.liveCountries->store(0, std::memory_order_relaxed);
+    }
     ~Ft8SummaryTap() override { finish(true); }
     void spot(bool ft4, const std::string& call, const std::string& gridIn, int snr, double rfHz) override {
         (void)snr; (void)rfHz;
@@ -394,121 +463,126 @@ public:
         const std::string grid = ft8IsGrid(gridIn) ? gridIn : std::string();
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;
-        const int64_t now = gallery::nowUtc();
-        if (now / 86400 != from_ / 86400) { write(now, true); reset(now); }
-        ++spots_; (ft4 ? ft4_ : ft8_)++;
+        const int64_t t = now();
+        closeHourIfDue(t);
         const std::string ctry = callsign::country(call);
-        if (calls_.size() < kMaxCalls && !calls_.count(call)) {
-            calls_[call] = ctry;
-            if (!ctry.empty()) countryCalls_[ctry]++;
-        }
-        if (!ctry.empty()) countrySpots_[ctry]++;
-        if (meta_.liveSpots) meta_.liveSpots->store(spots_, std::memory_order_relaxed);
-        if (meta_.liveCountries) meta_.liveCountries->store(countrySpots_.size(), std::memory_order_relaxed);
-        dirty_ = true;
-        double la, lo;
-        // ★ The furthest is a station with a valid call, ITS valid grid, and a country we can name — never "country unknown".
-        if (!ctry.empty() && !grid.empty() && std::isfinite(lat_) && std::isfinite(lon_) && gridToLatLon(grid, la, lo)) {
-            const double km = greatCircleKm(lat_, lon_, la, lo);
-            if (km > farKm_) { farKm_ = km; farCall_ = call; farGrid_ = grid; farCountry_ = ctry; }
-        }
+        double la, lo, km = NAN;
+        if (!grid.empty() && std::isfinite(lat_) && std::isfinite(lon_) && gridToLatLon(grid, la, lo)) km = greatCircleKm(lat_, lon_, la, lo);
+        hour_.add(ft4, call, grid, ctry, km);
+        recent_.push_back({ t, ft4, call, grid, ctry, km });
+        if (recent_.size() > kMaxRecent) recent_.pop_front();
+        lastSpot_ = t; rollDirty_ = true;
+        ++runSpots_;
+        if (!ctry.empty() && runCountries_.size() < 1000) runCountries_.insert(ctry);
+        if (meta_.liveSpots) meta_.liveSpots->store(runSpots_, std::memory_order_relaxed);
+        if (meta_.liveCountries) meta_.liveCountries->store(runCountries_.size(), std::memory_order_relaxed);
     }
-    /** ★ The decode thread's clock: midnight (a quiet band still closes its day) and the 10-minute rewrite. */
+    /** ★ The decode thread's clock: the hour closes on a quiet band too, and the window ages spots out. */
     void tick() override {
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;
-        const int64_t now = gallery::nowUtc();
-        if (now / 86400 != from_ / 86400) { write(now, true); reset(now); return; }
-        if (dirty_ && now - lastWrite_ >= kPeriodSec) write(now, false);
+        const int64_t t = now();
+        closeHourIfDue(t);
+        trim(t);
+        if (rollDirty_ && t - rollWrite_ >= kRefreshSec) writeRolling(t, false);
     }
     void finish(bool) override {
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;
         done_ = true;
-        write(gallery::nowUtc(), true);
+        const int64_t t = now();
+        closeHourIfDue(t);
+        writeHour(t);
+        trim(t);
+        writeRolling(t, true);
+        if (!rollName_.empty()) store_.close(rollName_);
     }
     /** A decoded message as TEXT ("CQ DX K1ABC FN42") → spot() for its transmitting station, if it has one. */
     void spotText(bool ft4, const std::string& text) {
         std::string c, g;
         if (ft8StationFromText(text, c, g)) spot(ft4, c, g, 0, meta_.freqHz);
     }
-    /** ★ Test seam: the periodic rewrite, now. */
-    void writeNowForTest() { std::lock_guard<std::mutex> lk(m_); if (dirty_) write(gallery::nowUtc(), false); }
-    std::string itemName() const { std::lock_guard<std::mutex> lk(m_); return name_; }
-    /** The record as text — what the gallery item holds (public for the test). */
-    std::string text(int64_t to) const {
-        std::string o = "FT8 / FT4 summary \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " USB \xc2\xb7 "
-                      + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
-                      + (meta_.profile.empty() ? std::string() : " (" + meta_.profile + ")") + "\n"
-                      + gallery::utcStamp(from_, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + gallery::utcStamp(to, "%H:%M UTC") + "\n\n";
-        char b[256];
-        std::snprintf(b, sizeof b, "Spots heard:       %lu (FT8 %lu, FT4 %lu) from %zu stations\n", spots_, ft8_, ft4_, calls_.size());
-        o += b;
-        std::snprintf(b, sizeof b, "Countries:         %zu\n", countrySpots_.size());
-        o += b;
-        if (farKm_ > 0) {
-            std::snprintf(b, sizeof b, "Furthest:          %s (%s, %s) \xe2\x80\x94 %.0f km\n", farCall_.c_str(),
-                          farCountry_.empty() ? "country unknown" : farCountry_.c_str(), farGrid_.c_str(), farKm_);
-            o += b;
-        } else if (!std::isfinite(lat_)) o += "Furthest:          (this server has no position set \xe2\x80\x94 add a locator in Setup)\n";
-        std::string most, rare; unsigned long mostN = 0, rareN = 0;
-        for (const auto& kv : countrySpots_) {
-            if (kv.second > mostN) { mostN = kv.second; most = kv.first; }
-            if (rare.empty() || kv.second < rareN) { rareN = kv.second; rare = kv.first; }
-        }
-        if (!most.empty()) { std::snprintf(b, sizeof b, "Most frequent:     %s (%lu spots)\n", most.c_str(), mostN); o += b; }
-        if (!rare.empty() && rare != most) { std::snprintf(b, sizeof b, "Rarest:            %s (%lu spot%s)\n", rare.c_str(), rareN, rareN == 1 ? "" : "s"); o += b; }
-        if (!countryCalls_.empty()) {
-            o += "\nStations by country:\n";
-            std::vector<std::pair<unsigned long, std::string>> v;
-            for (const auto& kv : countryCalls_) v.push_back({ kv.second, kv.first });
-            std::sort(v.begin(), v.end(), [](const auto& a, const auto& c) { return a.first != c.first ? a.first > c.first : a.second < c.second; });
-            for (const auto& e : v) { std::snprintf(b, sizeof b, "  %-24s %lu\n", e.second.c_str(), e.first); o += b; }
-        }
-        return o;
-    }
+    /** The rolling card's item name ("" before its first write). */
+    std::string rollingName() const { std::lock_guard<std::mutex> lk(m_); return rollName_; }
+    /** The hour so far as its card's text (public for the tests). */
+    std::string text(int64_t to) const { std::lock_guard<std::mutex> lk(m_); return hourText(to); }
 
 private:
-    void reset(int64_t now) {
-        from_ = now; spots_ = ft8_ = ft4_ = 0; calls_.clear(); countrySpots_.clear(); countryCalls_.clear();
-        farKm_ = 0; farCall_.clear(); farGrid_.clear(); farCountry_.clear();
-        name_.clear(); lastWrite_ = now; dirty_ = false;
-        if (meta_.liveSpots) meta_.liveSpots->store(0, std::memory_order_relaxed);
-        if (meta_.liveCountries) meta_.liveCountries->store(0, std::memory_order_relaxed);
+    struct Recent { int64_t t; bool ft4; std::string call, grid, ctry; double km; };
+    int64_t now() const { return clock_ ? clock_() : gallery::nowUtc(); }
+    std::string where() const {
+        return "FT8 / FT4 summary \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " USB \xc2\xb7 "
+             + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
+             + (meta_.profile.empty() ? std::string() : " (" + meta_.profile + ")") + "\n";
     }
-    /** Write the run's item: the first time a new one (held open, so it is not evicted mid-run), after that the SAME
-     *  one in place. `last`: the run (or its UTC day) is over — the item is closed. */
-    void write(int64_t now, bool last) {
-        lastWrite_ = now;
-        if (spots_ == 0) return;
+    bool havePos() const { return std::isfinite(lat_) && std::isfinite(lon_); }
+    std::string hourText(int64_t to) const {
+        const int64_t mins = (to - hourFrom_ + 30) / 60;
+        const bool whole = hourFrom_ % kHourSec == 0 && to - hourFrom_ >= kHourSec;
+        std::string o = where() + gallery::utcStamp(hourFrom_, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + gallery::utcStamp(to, "%H:%M UTC");
+        o += whole ? std::string(" \xc2\xb7 the hour\n\n") : " \xc2\xb7 " + std::to_string((long long)mins) + " of the hour's 60 minutes\n\n";
+        return o + hour_.figures(havePos());
+    }
+    /** The clock hour closed: its card, and a fresh tally for the next (from the hour's start). */
+    void closeHourIfDue(int64_t t) {
+        if (t / kHourSec == hourFrom_ / kHourSec) return;
+        writeHour((hourFrom_ / kHourSec + 1) * kHourSec);
+        hour_ = Ft8Tally();
+        hourFrom_ = t / kHourSec * kHourSec;
+    }
+    void writeHour(int64_t to) {
+        if (hour_.spots == 0) return;
         gallery::Meta m = meta_;
-        m.utc = from_;
-        char t[160];
-        std::snprintf(t, sizeof t, "FT8 summary \xc2\xb7 %lu spots \xc2\xb7 %zu countries%s%s", spots_, countrySpots_.size(),
-                      farKm_ > 0 ? " \xc2\xb7 furthest " : "", farKm_ > 0 ? (farCountry_.empty() ? farCall_ : farCountry_).c_str() : "");
-        m.title = t;
-        const std::string body = text(now);
-        if (name_.empty() || !store_.replace(name_, m, body)) {
-            if (!name_.empty()) store_.close(name_);
-            name_ = store_.create(m, "txt", body);
+        m.utc = hourFrom_;
+        m.partial = !(hourFrom_ % kHourSec == 0 && to - hourFrom_ >= kHourSec);
+        m.title = "FT8 " + gallery::utcStamp(hourFrom_, "%H:%M") + "\xe2\x80\x93" + gallery::utcStamp(to, "%H:%M UTC") + " \xc2\xb7 " + hour_.headline();
+        store_.add(m, "txt", hourText(to));
+    }
+    void trim(int64_t t) {
+        while (!recent_.empty() && recent_.front().t <= t - kWindowSec) { recent_.pop_front(); rollDirty_ = true; }
+    }
+    /** The rolling card, rewritten whole (or created, or adopted from an earlier run). `last`: the run is over. */
+    void writeRolling(int64_t t, bool last) {
+        rollWrite_ = t; rollDirty_ = false;
+        if (recent_.empty() && rollName_.empty() && lastSpot_ == 0) return;   // ★ never heard anything: no card
+        Ft8Tally w;
+        for (const auto& r : recent_) w.add(r.ft4, r.call, r.grid, r.ctry, r.km);
+        const int64_t from = std::max(start_, t - kWindowSec);
+        gallery::Meta m = meta_;
+        m.utc = from;
+        m.slot = "last10";
+        const std::string to = gallery::utcStamp(t, "%H:%M UTC");
+        std::string body = where();
+        if (last) body += "The last 10 minutes of the run, to " + to + " (" + gallery::utcStamp(from, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + to + ")\n\n";
+        else body += "The last 10 minutes: " + gallery::utcStamp(from, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + to + " (refreshed every minute; the hourly cards are the record)\n\n";
+        if (w.spots) {
+            body += w.figures(havePos());
+            m.title = std::string("FT8 last 10 min") + (last ? " to " + to : std::string()) + " \xc2\xb7 " + w.headline();
+        } else {
+            const std::string ls = lastSpot_ ? gallery::utcStamp(lastSpot_, "%H:%M UTC") : std::string();
+            body += "Nothing heard in the last 10 minutes" + (ls.empty() ? std::string() : " (the last spot was at " + ls + ")") + ".\n";
+            m.title = std::string("FT8 last 10 min") + (last ? " to " + to : std::string()) + " \xc2\xb7 nothing heard"
+                    + (ls.empty() ? std::string() : " since " + gallery::utcStamp(lastSpot_, "%H:%M"));
         }
-        dirty_ = false;
-        if (last && !name_.empty()) { store_.close(name_); name_.clear(); }
+        if (rollName_.empty()) rollName_ = store_.adoptSlot(m);
+        if (rollName_.empty() || !store_.replace(rollName_, m, body, /*toNewest=*/true)) {
+            if (!rollName_.empty()) store_.close(rollName_);
+            rollName_ = store_.create(m, "txt", body);
+        }
     }
     gallery::Store& store_;
     gallery::Meta meta_;
     double lat_, lon_;
+    std::function<int64_t()> clock_;
     mutable std::mutex m_;
     bool done_ = false;
-    int64_t from_ = 0;
-    unsigned long spots_ = 0, ft8_ = 0, ft4_ = 0;
-    std::map<std::string, std::string> calls_;
-    std::map<std::string, unsigned long> countrySpots_, countryCalls_;
-    double farKm_ = 0;
-    std::string farCall_, farGrid_, farCountry_;
-    std::string name_;            // ★ the run's item, once written — rewritten in place after that
-    int64_t lastWrite_ = 0;
-    bool dirty_ = false;
+    int64_t start_ = 0, hourFrom_ = 0, rollWrite_ = 0, lastSpot_ = 0;
+    Ft8Tally hour_;
+    std::deque<Recent> recent_;
+    bool rollDirty_ = false;
+    std::string rollName_;
+    uint64_t runSpots_ = 0;
+    std::set<std::string> runCountries_;
 };
 
 /** ★ One factory for every decoder's gallery copy — background decoding's and a listener's alike. */

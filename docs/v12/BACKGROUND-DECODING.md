@@ -36,7 +36,7 @@ Nick's case: centre 500 kHz; VFO 1 489.5 kHz USB NAVTEX; VFO 2 517.5 kHz USB NAV
 | RTTY auto / 45.45 Bd 170 Hz / 50 Bd 450 Hz | USB, LSB | 1000 Hz | text appended every minute or 8 KB; one file per UTC day (max 1 MB) |
 | WEFAX 120 LPM | USB | 1900 Hz (the carrier) | one PNG per chart, start tone to stop tone |
 | SSTV | USB, NFM | dial | one PNG per picture |
-| FT8 / FT4 | USB | dial | a **summary** per run/day, not the spots |
+| FT8 / FT4 | USB | dial | a **summary**, not the spots: a standing "last 10 minutes" card + one card per UTC hour |
 
 ★★ **LSB inverts mark and space.** NickB asked for LSB so he could dodge local interference. An FSK decoder on an LSB VFO
 is started with `inverted` flipped, so the same signal decodes identically on either sideband. `test-bgdecode` proves this
@@ -123,10 +123,25 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
 
   Countries come from `vibe_callsign_country.h`, which is generated from the app's `src/services/callsignCountry.ts` by
   `scripts/gen-callsign-country.mjs`, so the app and the server name countries the same way. Nothing is written for a
-  run that heard nothing. **One item per run (beta 4):** it is first written after 10 minutes and then REWRITTEN IN
-  PLACE every 10 minutes while the run goes on, only when the counts changed (`Store::replace`: a temp file renamed over
-  the item, and the index the same way, so a power cut leaves the previous card whole). It is written again at the run's
-  end and at UTC midnight (a new item for the new day). The admin line shows the live count meanwhile.
+  stretch that heard nothing. **Two kinds of card (2026-10-23, replacing beta 4's one card per run rewritten every 10
+  min):**
+  - **Last 10 minutes** — the instant look. ONE standing card per VFO ("FT8 last 10 min · 23 spots · 9 countries ·
+    furthest Japan"), always the rolling last 10 minutes. It is rewritten at most once a minute, and only when the
+    window changed (a spot arrived or one aged out), atomically (`Store::replace`: a temp file renamed over the item,
+    and the index the same way, so a power cut leaves the previous card whole), and moved to the top of the list. An
+    empty window says "nothing heard since 18:42". When the run ends it is written once more ("… to 20:20 UTC") and kept,
+    so a listener whose arrival stopped the run sees what it was hearing. The index marks it `"s":"last10"`; the next run
+    on the same radio, origin, profile and dial finds it again (`Store::adoptSlot`), so a restart or a crash never leaves
+    a second one.
+  - **Hourly** — the record, for judging an antenna over days. One card per UTC clock hour ("FT8 19:00–20:00 UTC · 412
+    spots · 31 countries · furthest Australia"), written when the hour closes and never rewritten; old ones are evicted
+    oldest first like everything else. A run that began or ended inside an hour writes the part it heard, marked
+    partial, with its minutes ("40 of the hour's 60 minutes"); a run stopped and restarted within one hour (a listener
+    came and went) leaves two partial cards for it. Midnight is just an hour boundary.
+  - **The cost, stated:** each rewrite of the last-10 card rewrites `index.jsonl` whole (about 250 bytes an item —
+    125 KB for 500 items, 1.2 MB at the 5000 cap), at most once a minute per FT8 VFO and not at all on a quiet band.
+    The hourly cards are one small append each.
+  The admin line's live count is still the run's ("142 spots, 23 countries so far").
 - **Pictures** are written as PNG by `vibe_png.h`, using `vibe_gzip.h`'s deflate, so no new library is needed.
 - **HTTP, read-only:**
   - `GET /vibeserver/gallery.json?kind=&limit=` lists the items newest first (the old request: up to 1000, default 300);
@@ -239,7 +254,7 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 
 | Suite | Checks | What it covers |
 |---|---|---|
-| `vibeserver/test-bgdecode.cpp` | 139 | Config, validation and the clock; LSB inversion (RTTY and NAVTEX); the NAVTEX cutter; the store (eviction, path safety); a listener tap; Nick's profile end to end on synthetic IQ (USB **and** LSB VFOs file the same message); WEFAX/SSTV complete, partial and noise; PNG; the FT8 summary. |
+| `vibeserver/test-bgdecode.cpp` | 200 | Config, validation and the clock; LSB inversion (RTTY and NAVTEX); the NAVTEX cutter; the store (eviction, path safety); a listener tap; Nick's profile end to end on synthetic IQ (USB **and** LSB VFOs file the same message); WEFAX/SSTV complete, partial and noise; PNG; the FT8 summary — the last-10 card (one card, a minute's cadence, the window rolling, moved to the top, adopted by the next run) and the hourly cards (partial and whole hours) on a test clock; the NAVTEX station rule. |
 | `vibeserver/test-config-radios.cpp` | — | `bgDecode` and the gallery fields round-trip, and nothing leaks into the radio's own fields. |
 | `scripts/test-bg-decode.mjs` | 41 | A real server on fake-rtl-tcp: wait → move, profile boundary, arrival → stop + dial restored, a decoder socket on its own, gallery HTTP and path traversal, config API round-trip and refusals, the save applied live. |
 | `scripts/test-bg-decode-frontdoor.mjs` | 12 | Front door + a radio process: a save through the door reaches the radio, no park/release once due, an unrelated save restarts nothing. |
@@ -260,5 +275,6 @@ The live test uses two test-only environment variables:
   Android there is no background decoding and no gallery. The shim is ready for it: a JNI setter and the app's server
   screen are all that is missing.
 - **SSTV on LSB** (the 80 m/40 m convention) needs the audio mirrored in frequency before the decoder sees it.
-- **The FT8 summary** is written when a run ends and at UTC midnight. A crash loses the summary of the run in progress.
+- **The FT8 summary**: a crash loses the hour in progress (its card is written when the hour closes or the run ends);
+  the last-10 card is at most a minute behind.
 - **The cross-radio slot yield** is covered by its code paths, but the live test runs a single process.
