@@ -825,8 +825,8 @@ DECODERS
   Aviation · Maritime · Broadcast · Satellite · Time), each row with a one-line description and a ☆/★ pin toggle. A
   running decoder that lives in the dropdown lights the dropdown's head, as `activeDecInOthers` does now.
 - **GALLERY** stays at the bottom of the decoder section (VibeServer only), as now.
-- **The order of pins:** the order pinned. Reorder by drag on touch, and with ▲/▼ on pad and keyboard (the same
-  pattern as the background-decoding tier list). Max 8 pins; pinning a ninth asks to replace the last.
+- **The order of pins:** the order pinned (see §6.5: pinning is done in EDIT mode). Max 8 pins; pinning a ninth asks to
+  replace the last.
 - The same model is used for OWRX's list, so a VibeSDR user's habits carry between backends: pins are by **decoder
   id**, mapped per backend (our `rtty` is OWRX's `rtty`/UberSDR's `fsk`; ids are mapped in one table, as
   `ModeSelector`'s `slug` mapping does today).
@@ -861,24 +861,21 @@ Following AGENTS.md ("a control that only works in one scenario should not be th
 - A decoder that runs on this server but is **busy** (no free slot) stays drawn and says so when tapped ("all 4 decoder
   slots are in use; one will free when …"). That is a real, temporary state, not a dead control.
 
-### 6.5 Game controller and keyboard
+### 6.5 Pinning: a small EDIT button, and NO new controls (Stuart, 2026-10-23)
 
-Following the controller/keyboard audit (`CONTROLLER-AUDIT.md`, memory `gamepad_mapping`):
+★★ Stuart's decision, which replaces the earlier proposal (secondary face button to pin, `D`/`P` shortcuts, drag/▲▼
+reorder): **the keyboard and controller need nothing more than they have now.**
 
-- **The pinned keys** are one `NavRow` (two rows at most). D-pad moves the highlight; enter (R on no-stick pads, ✕ on
-  stick pads) runs the decoder; back (L / ○) leaves.
-- **The dropdown head** is a `NavItem`; enter opens the list in place.
-  - In the list, up/down moves and enter runs.
-  - **The secondary face button (Y/△, or "P" on a keyboard) toggles the pin**, with a VoiceOver/TalkBack announcement
-    "PSK31 pinned".
-  - Left/right on a pinned row in the "reorder" state moves it, the same as ▲/▼ in the background tiers.
-  - Back closes the list and returns focus to its head.
-- **Keyboard:**
-  - `D` opens the decoder menu;
-  - typing letters in the open list jumps to the first match ("ap" → APRS);
-  - Enter runs, `P` pins, Esc closes.
+- **Selecting a decoder stays exactly as today:** highlight the DIGITAL / DECODERS dropdown, then select to open it;
+  the D-pad (or arrow keys) scrolls; select runs the decoder; back closes the menu.
+- **Pinning is a small EDIT button at the top of the decoder section.** EDIT expands the whole decoder list into
+  ordinary buttons in the sheet. The user scrolls the sheet down and selects a button to pin or unpin it (★/☆ on the
+  button, with a VoiceOver/TalkBack announcement such as "PSK31 pinned"). EDIT again, or back, returns the sheet to its
+  normal layout.
+- Because EDIT mode is just a list of buttons, it works by touch, mouse, keyboard and pad with the existing navigation
+  (`NavRow`/`NavItem`). There is no new binding to learn, document or tour.
+- **Pin order** is the order pinned. Reordering is left out unless someone asks for it.
 
-  Add these to `KeyboardShortcuts.tsx` and to `BRIEF-controller-keyboard.md`.
 - **Focus memory:** reopening the sheet puts focus on the running decoder, or the last one used.
 - **Copy to update when this moves (AGENTS.md):**
   - the `sdrTour` card that names CLIENT DECODERS;
