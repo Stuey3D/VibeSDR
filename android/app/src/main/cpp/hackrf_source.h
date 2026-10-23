@@ -2,7 +2,7 @@
 //
 // ★★★ NOBODY HERE HAS ONE. This driver was written against libhackrf's API and the published
 // hardware description, and has never been run against a radio by its author. Exactly one person
-// can test it (a listener who owns one), which is why it is Experimental, why it is mentioned only
+// can test it (a listener who owns one: Saber, who HAS now tested it on their HackRF — Stuart, 2026-10-23), which is why it is Experimental, why it is mentioned only
 // in the README and the release notes, and why it is NOT advertised in the app. Treat every
 // hardware claim below as "what the documentation says", not "what was measured" — the rest of
 // this codebase earns its comments by measurement and this file cannot, yet.
