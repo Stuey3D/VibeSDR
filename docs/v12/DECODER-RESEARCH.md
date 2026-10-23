@@ -600,9 +600,9 @@ In short, there are two halves, side by side on one screen:
 - a vendored, patched `libhackrf` with an Android fd entry point (commits fa77237d, eb86ade9);
 - manual gain only, no VibeAGC.
 
-It has **never been run against real hardware**. `hackrf.c` itself carries a BSD-3-Clause header, though the directory's
+It **has been tested on real hardware by Saber** (Stuart, 2026-10-23); the "never run" note in the code comments is out of date. `hackrf.c` itself carries a BSD-3-Clause header, though the directory's
 `COPYING` file is GPL-2 (upstream's repository-wide file). Worth tidying, so the vendored library's licence is stated
-unambiguously. What TV needs from it: a hardware test, a 10–16 MS/s path through the DSP thread, and the Android
+unambiguously. What TV needs from it: a 10–16 MS/s path through the DSP thread, and the Android
 throughput probe.
 
 **Effort:**
