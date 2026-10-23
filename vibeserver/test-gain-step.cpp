@@ -431,6 +431,37 @@ int main() {
            std::to_string(unlocked) + " unlocked blocks");
     }
 
+    // ── A >30 dB edge inside a flagged window must not crash (2026-10-23, the Lenovo's SEGV) ─────────────────
+    // A listener tuned an RSP from 1.8 MHz to 1090 MHz: flagged rungs, then an edge over 30 dB. The finder rightly
+    // keeps no step for it, but measured one anyway at found_ = -1, reading billions of samples before the line.
+    // Seeded random packets, flags, rungs and blasts (run under ASan it faulted on the first seed before the fix).
+    {
+        bool finite = true; unsigned steps = 0;
+        for (unsigned seed = 1; seed <= 12; ++seed) {
+            std::mt19937 r(seed);
+            std::normal_distribution<float> nd(0.f, 1.f);
+            GainStepSmoother g; g.configure(2.0e6);
+            double lvl = 1e-3;
+            std::vector<cf32> buf;
+            for (int it = 0; it < 600; ++it) {
+                const int n = (int)(r() % 4) == 0 ? (int)(r() % 40000) + 1 : (int)(r() % 2048) + 1;
+                buf.resize((size_t)n);
+                for (int k = 0; k < n; ++k) {
+                    if (r() % 3000 == 0) lvl *= std::pow(10.0, ((int)(r() % 81) - 40) / 20.0);   // rungs up to ±40 dB
+                    if (r() % 20000 == 0) lvl = (r() % 2) ? 1e-6 : 1e3;                           // a signal arriving
+                    buf[(size_t)k] = cf32(nd(r) * (float)lvl, nd(r) * (float)lvl);
+                }
+                if (r() % 7 == 0) g.noteStepAtStart();
+                if (r() % 11 == 0) g.noteStepSoon(0.3);
+                g.process(buf.data(), n);
+                if (!std::isfinite(g.correctionDb())) finite = false;
+            }
+            steps += g.steps();
+        }
+        ok(finite, "★ a >30 dB edge inside a flagged window: no crash, the correction stays finite",
+           "steps " + std::to_string(steps));
+    }
+
     std::printf(failures ? "\nFAILED %d\n" : "\nall good\n", failures);
     return failures ? 1 : 0;
 }
