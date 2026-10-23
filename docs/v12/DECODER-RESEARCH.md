@@ -228,10 +228,54 @@ Pager content is private messaging (medical and fire pagers carry names, address
 | NOAA APT | 137.1/137.62/137.9125 MHz | NOAA KLM User's Guide ✓ | WXtoImg (closed), SatDump (GPL-3), noaa-apt (GPL-3) | S | light | — | ✗ **service ended** (NOAA-18 June 2025, -15 and -19 August 2025). Archive-file decoder at most. |
 | **Meteor-M LRPT** | 137.1 / 137.9 MHz, 72k QPSK or 80k OQPSK | CCSDS 131.0-B ✓ + Planeta format notes | SatDump (GPL-3), meteor_demod/decode (MIT, check) | L | heavy but deferrable | ✓ (pass scheduler) | **2** (`DECODERS-GALLERY.md`) |
 | HRPT / AHRPT | 1.7 GHz, needs a tracking dish | ✓ | SatDump | XL | beyond Pi 2 | — | 3 |
-| ISS / amateur sats: SSTV, APRS, 9600 packet, CW/BPSK telemetry | 145.800, 145.825, 435–438 MHz | ✓ | — | reuse | — | ✓ | via 1/2 |
+| ISS / amateur sats: SSTV, APRS, 9600 packet, CW/BPSK telemetry | 145.800, 145.825, 435–438 MHz | ✓ | gr-satellites (GPL-3) | reuse + per-sat framing (M) | light | ✓ (pass-triggered) | via 1/2; needs the satellite engine's Doppler (§3.7A) |
 | Orbcomm | 137–138 MHz | P (undocumented) | gr-orbcomm? (unclear) | M | light | — | 3, ⚖ commercial messaging: identify/telemetry only |
 | Iridium | 1616–1626.5 MHz | P | gr-iridium (GPL-3), iridium-toolkit | L | heavy | — | ✗ content; §4.3 |
 | Radiosondes (RS41, DFM, M10/M20) | 400–406 MHz (403/404/405 in Europe) | RE (Vaisala does not publish) | rs1729/RS (licence check), radiosonde_auto_rx (GPL-3) | M per family (RS41 first: GFSK 4800, RS(255,231), Vaisala XOR) | light | ✓✓ | **2** (very popular, legal weather data) |
+
+#### 3.7A Satellite decoders and the satellite engine
+
+Doppler tracking and pass prediction are designed in **`SATELLITE-ENGINE.md`**:
+- SGP4 from CelesTrak OMM, `sats.json` mirrored on vibesdr.net;
+- an open-loop Doppler prediction plus a closed-loop trim, applied in the channel's DDC/NCO;
+- the `loop` types `fll` / `none` / `costas`.
+
+The satellite decoders, the gallery and client-assisted decode are in **`DECODERS-GALLERY.md`**, and the pass-window
+scheduler and dedicated radios are in **`RADIO-ROLES.md` §3.1**. Nothing here redesigns them. This table only says what
+each satellite decoder needs from them.
+
+| Decoder | Doppler from the engine | Pass predictions | Engine `loop` | Covered by the satellite briefs? |
+|---|---|---|---|---|
+| NOAA APT | — (service ended 2025; archive files only) | — | — | ✓ (`DECODERS-GALLERY.md` trap: do not build) |
+| **Meteor-M LRPT** | ✓ feed-forward (±3.1 kHz at 137 MHz) | ✓ capture window, max-elevation gate | `costas` | ✓ both briefs, plus RADIO-ROLES |
+| HRPT / AHRPT (1.7 GHz) | ✓ about 12 times the 137 MHz figures (roughly ±38 kHz, several hundred Hz/s; scaled, not measured) | ✓ and **antenna tracking** (a dish on a rotator) | `costas` | ✗ gap |
+| Orbcomm (137–138 MHz) | ✓ (±3 kHz class) | ✓ | demod-tracked (`costas`-like) | ✗ gap (and ⚖, §3.7) |
+| **CubeSat telemetry**: AFSK 1200 and **GMSK/FSK 9600 AX.25** (435–438 MHz), CW beacons | ✓ essential: ±10 kHz, ~215 Hz/s at 70 cm, more than a 9k6 demodulator's own AFC should chase | ✓ | `fll` for AFSK on FM; demod-tracked for GMSK | partly: ISS AFSK 1200 only; ✗ 9k6 and per-satellite framing |
+| **FUNcube-1 (AO-73) / FUNcube-family BPSK 1200 telemetry** (145.935 MHz) | ✓ (±3.3 kHz) | ✓ | demod-tracked (BPSK carrier recovery) | ✗ gap |
+| FUNcube/linear transponders (SSB/CW) | model only (each uplinker has their own error) | ✓ | `none` | ✓ as the engine's phase 3 (v2) |
+| **ISS SSTV** (145.800 MHz NFM) | ✓ | ✓ (and event dates) | `fll` | ✓ (engine first consumer; gallery phase 2) |
+| **ISS APRS digipeater** (145.825 MHz) | ✓ | ✓ | `fll` | ✓ (gallery phase 3) |
+| LoRa satellites (TinyGS-class, 400–437 MHz) | ✓ | ✓ | demod-tracked | ✗ gap, and **not recommended**: LoRa is identify-only (§3.8, patent uncertainty) |
+| Geostationary (GOES HRIT, GK-2A LRIT, Inmarsat EGC) | — (fixed) | — | — | ✗ not covered; tier 3, needs a dish or patch antenna |
+
+**Gaps in the satellite briefs (to add there, not here):**
+1. **The `sats.json` `mode` values.** Only `NFM`, `AFSK1200` and `LRPT` appear. It needs at least `GMSK9600`/`FSK9600`,
+   `BPSK1200` (FUNcube), `BPSK`/`QPSK` with a symbol rate, `CW` and `HRPT`, plus a **framing** field (AX.25, CCSDS,
+   FUNcube, per-satellite custom). SatNOGS DB supplies mode and baud, but not a framing our decoder can act on.
+2. **Generic CubeSat telemetry decoding.** No brief covers per-satellite frame formats or turning telemetry into
+   readable values. References: gr-satellites (GPL-3, black box only) and SatNOGS DB's decoders/Kaitai structs
+   (licence to check).
+3. **"Demod-tracked" as an explicit `loop` kind.** `costas` is written for LRPT. GMSK, BPSK and LoRa demodulators also
+   do their own fine tracking and want feed-forward only. The behaviour is the same, but it should be named generally.
+4. **Background decoding is clock-scheduled, not pass-triggered.** `BACKGROUND-DECODING.md` profiles are UTC time windows;
+   RADIO-ROLES' scheduler has pass windows. A **pass-triggered background VFO** (an ISS APRS/SSTV pass on a radio that is
+   otherwise idle, inside the in-range rule) is the missing link between the two engines.
+5. **Rotator-driven tracking for dish passes** (HRPT, and later high-gain Yagis). `ANTENNA-SWITCH-ROTATOR.md` drives
+   `rotctld` by azimuth for UberSDR and VibeServer, but has no elevation and no pass track.
+6. **Wide captures:** HRPT needs about 3 MS/s and an L-band front end; nothing gates it on capture bandwidth yet (the same
+   rule as DAB/ADS-B in §6.4).
+7. **9k6 on the shared dial:** a 9600 Bd GMSK channel is about 15–20 kHz wide plus ±10 kHz of Doppler. Check it fits the
+   channel's IF on a narrow (Airspy HF+ 660 kHz-class) capture before offering it.
 
 ### 3.8 Utility VHF/UHF
 
