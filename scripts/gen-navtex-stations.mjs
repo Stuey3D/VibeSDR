@@ -65,6 +65,68 @@ function shortName(n) {
   return s;
 }
 
+// ★★ POSITIONS PUB. 117 (AS PARSED) GETS WRONG — corrected here, in the open, from the Wikipedia list below.
+//    Saudanes: Pub. 117 gives 66-11N 001-18W, a point in the Norwegian Sea; the station is on Iceland's north-east coast,
+//    66°11′N 18°57′W (Wikipedia). Limnos: Pub. 117 gives 34-52N, south of Crete; Limnos is at 39°54′N 25°11′E.
+const POSITION_FIX = { 'Saudanes': [66.186, -18.952], 'Limnos': [39.906, 25.181] };
+
+// ★★★ THE SUPPLEMENTARY LIST — transmitters MISSING from Pub. 117 (2021), each with its evidence. Added BESIDE the
+//     table, never instead of it: where a source disagrees with Pub. 117 the Pub. 117 entry stays a candidate (the
+//     likelihood rule picks between them from the message), and the disagreement is written down below.
+//   Sources:
+//     [WP] Wikipedia, "List of Navtex stations", https://en.wikipedia.org/wiki/List_of_Navtex_stations, revision
+//          1371431375 (2026-08-26). FACTS ONLY (name, letter, kHz, country, position) — the article's text is
+//          CC BY-SA and none of it is copied. Positions are its {{coord}} values, rounded to 0.001°.
+//     [RX] Received at Stuart's server (IO92nh) on 2026-10-23, 489.5 kHz USB: "ZCZC EA17 / 230440 UTC OCT 26 /
+//          MONDOLFO RADIO / COSTAVURNAV NR. 576/26 …" — an Italian warning for platforms off Ravenna, the station naming
+//          itself in its header. Pub. 117's only E on 490 near Europe is Corsen, so the gallery said "Corsen, France".
+//     [IN] Marina Militare (Istituto Idrografico), Avvisi ai Naviganti notice listing Mondolfo NAVTEX as U on 518 kHz
+//          and E on 490 kHz — seen 2026-10-23 only as a search engine's summary of the PDF (marina.difesa.it, "Riepilogativo
+//          RDS"); the PDF itself returned 404, so it is corroboration, not the source. [WP] is the source we read.
+//   Disagreements with Pub. 117, where Pub. 117 is KEPT (Wikipedia's entry is not shown to be newer):
+//     518: Vardø C [WP] / V; Tallinn F [WP] / U; Kerch B [WP] / G; İzmir I [WP] / D; Malta O [WP] / T; Murmansk C [WP] /
+//          K; Arkhangelsk F [WP] / L; Talcahuano C [WP] / J, E. 490: Jukbyeon J [WP] / V; Byeonsan K [WP] / W; Easter
+//          Island G on 490 [WP] (no position) / G on 518. Not added: what [WP] marks inactive (Kelibia T 518, Constanța
+//          L 490, Bahía Blanca D 490, Kaohsiung P 518 — Casablanca M 518, also inactive there, stays from Pub. 117);
+//          Guayaquil M 518 (no position).
+//   Where [WP] names a transmitter site for a Pub. 117 station (Pinneberg for Hamburg, Punta Arenas for Magallanes,
+//   Serapeum for Ismailia) the Pub. 117 name is kept, so a message naming its station ("NCC-HAMBURG") still matches.
+const SUPPLEMENT = [
+  // Italy: [WP] lists a newer network than Pub. 117 2021 (Rome R, Cagliari T, Trieste U, Augusta V on 518).
+  { name: 'Mondolfo', country: 'Italy', lat: 43.748, lon: 13.142, tx: [['E', 490], ['U', 518]],
+    evidence: 'E 490: [RX] + [WP]; U 518: [WP] + [IN] (Pub. 117 has Trieste on U 518 — kept)' },
+  { name: 'La Maddalena', country: 'Italy', lat: 41.223, lon: 9.399, tx: [['R', 518], ['I', 490]],
+    evidence: '[WP] (Pub. 117 has Rome on R 518 — kept)' },
+  { name: 'Sellia Marina', country: 'Italy', lat: 38.873, lon: 16.720, tx: [['V', 518], ['W', 490]],
+    evidence: '[WP] (Pub. 117 has Augusta on V 518 — kept)' },
+  { name: 'Piombino', country: 'Italy', lat: 42.917, lon: 10.533, tx: [['N', 490]],
+    evidence: '[WP]; it gives no position, so this is the TOWN\'s (Wikipedia "Piombino", revision 1375293261)' },
+  // France
+  { name: 'Corsen', country: 'France', lat: 48.467, lon: -5.05, tx: [['A', 518]],
+    evidence: '[WP], and Pub. 117\'s own France section; its 300C table says W (kept)' },
+  { name: 'La Garde', country: 'France', lat: 43.104, lon: 5.991, tx: [['W', 518]], evidence: '[WP] (Pub. 117: S 490 only)' },
+  // Germany — Pub. 117 lists Hamburg's S on 518 with no frequency (left out of its table); [WP] gives 518, at Pinneberg.
+  { name: 'Hamburg', country: 'Germany', lat: 53.673, lon: 9.809, tx: [['S', 518]], evidence: '[WP] (transmitter at Pinneberg)' },
+  // Norway — the Oslofjord/Skagerrak station; explains the Lenovo's "tonight's M" (a Skagerrak warning on M 518).
+  { name: 'Jeløy', country: 'Norway', lat: 59.436, lon: 10.589, tx: [['M', 518]], evidence: '[WP]' },
+  // Greece — a national (490) service Pub. 117 does not list.
+  { name: 'Kerkyra', country: 'Greece', lat: 39.607, lon: 19.891, tx: [['P', 490]], evidence: '[WP]' },
+  { name: 'Irakleio', country: 'Greece', lat: 35.323, lon: 25.749, tx: [['Q', 490], ['S', 4209.5]], evidence: '[WP]' },
+  { name: 'Limnos', country: 'Greece', lat: 39.906, lon: 25.181, tx: [['R', 490]], evidence: '[WP]' },
+  // Chile — the Spanish 490 service, on the same letters as Pub. 117's 518 entries.
+  { name: 'Antofagasta', country: 'Chile', lat: -23.491, lon: -70.425, tx: [['H', 490]], evidence: '[WP]' },
+  { name: 'Valparaiso', country: 'Chile', lat: -32.802, lon: -71.485, tx: [['I', 490]], evidence: '[WP]' },
+  { name: 'Talcahuano', country: 'Chile', lat: -36.715, lon: -73.108, tx: [['J', 490]], evidence: '[WP]' },
+  { name: 'Puerto Montt', country: 'Chile', lat: -41.490, lon: -72.958, tx: [['K', 490]], evidence: '[WP]' },
+  { name: 'Magallanes', country: 'Chile', lat: -52.948, lon: -71.057, tx: [['L', 490]], evidence: '[WP] (Punta Arenas)' },
+  // HF 4209.5 kHz — Pub. 117 lists no HF letters at all; these are [WP]'s.
+  { name: 'Istanbul', country: 'Turkey', lat: 41.067, lon: 28.95, tx: [['M', 4209.5]], evidence: '[WP]' },
+  { name: 'Ismailia', country: 'Egypt', lat: 30.470, lon: 32.367, tx: [['X', 4209.5]], evidence: '[WP] (Serapeum)' },
+  { name: 'New Orleans', country: 'United States', lat: 29.885, lon: -89.946, tx: [['G', 4209.5]], evidence: '[WP]' },
+  { name: 'Shanghai', country: 'China', lat: 31.109, lon: 121.544, tx: [['Q', 4209.5]], evidence: '[WP]' },
+  { name: 'Hai Phong', country: 'Vietnam', lat: 20.733, lon: 106.733, tx: [['W', 4209.5]], evidence: '[WP]' },
+];
+
 const rows = [];
 const problems = [];
 for (const s of src.stations) {
@@ -72,7 +134,16 @@ for (const s of src.stations) {
   if (!c) { problems.push(`no ISO code for Pub. 117 country "${s.country}"`); continue; }
   const name = shortName(s.name);
   if (!name) { problems.push(`a station at ${s.lat}, ${s.lon} has no name`); continue; }
-  for (const t of s.tx) rows.push({ b1: t.b1, khz: t.khz, name, iso: c[0], country: c[1] ?? s.country, lat: s.lat, lon: s.lon });
+  const [lat, lon] = POSITION_FIX[name] ?? [s.lat, s.lon];
+  for (const t of s.tx) rows.push({ b1: t.b1, khz: t.khz, name, iso: c[0], country: c[1] ?? s.country, lat, lon });
+}
+for (const s of SUPPLEMENT) {
+  const c = COUNTRY[s.country];
+  if (!c || !s.evidence) { problems.push(`supplement "${s.name}": no ISO code or no evidence`); continue; }
+  for (const [b1, khz] of s.tx) {
+    if (rows.some((r) => r.b1 === b1 && r.khz === khz && r.name === s.name)) { problems.push(`supplement "${s.name}" ${b1} ${khz}: already in Pub. 117`); continue; }
+    rows.push({ b1, khz, name: s.name, iso: c[0], country: c[1] ?? s.country, lat: s.lat, lon: s.lon });
+  }
 }
 if (problems.length || rows.length < 150) {
   for (const p of problems) console.error('  ✗ ' + p);
@@ -83,7 +154,7 @@ rows.sort((a, b) => a.b1.localeCompare(b.b1) || a.khz - b.khz || a.name.localeCo
 
 // ★★ THE WEIGHTS AND WORD LISTS — written into BOTH readers from here, so they cannot differ.
 const W = { priorKm: 800, named: 1000, posFloor: 0.01, posGain: 100, posKm: 200, posFitKm: 1000, lang490: 4, langOther: 1.5,
-            clear: 3, reachMf: 1500, reachHf: 2500, langMinHits: 3, langLead: 1.5 };
+            clear: 3, reachMf: 1500, reachHf: 2500, langMinHits: 3, langLead: 1.5, nameLines: 4, posCountryKm: 400 };
 // ★ Short, common, distinctive function words, upper-case ASCII as NAVTEX prints them (no diacritics: FRAN, PAA).
 const STOP = {
   en: ['THE', 'AND', 'OF', 'IS', 'ARE', 'TO', 'IN', 'AT', 'WITH', 'FROM', 'WILL', 'BE', 'BETWEEN', 'FOR'],
@@ -92,7 +163,10 @@ const STOP = {
   fr: ['LE', 'LES', 'ET', 'DES', 'DU', 'EST', 'UNE', 'ENTRE', 'SUR', 'DANS', 'AU', 'AUX'],
   es: ['EL', 'LOS', 'LAS', 'Y', 'DEL', 'CON', 'POR', 'PARA', 'UNA', 'ENTRE'],
   pt: ['OS', 'DO', 'DA', 'DOS', 'DAS', 'EM', 'COM', 'PARA', 'UMA', 'NAO', 'NO', 'NA'],
-  it: ['IL', 'GLI', 'DELLA', 'DELLE', 'CON', 'PER', 'UNA', 'NON', 'TRA', 'DEL'],
+  // ★ + DI SULLE ALLA SONO NELLA DEI SUL NELLE DEGLI (2026-10-23): Mondolfo's warning read as no language with the
+  //   first ten. Never ALLE (German "all").
+  it: ['IL', 'GLI', 'DELLA', 'DELLE', 'CON', 'PER', 'UNA', 'NON', 'TRA', 'DEL', 'DI', 'SULLE', 'ALLA', 'SONO', 'NELLA', 'DEI',
+       'SUL', 'NELLE', 'DEGLI'],
   no: ['OG', 'IKKE', 'ER', 'TIL', 'FRA', 'MED', 'AV', 'PAA', 'VED', 'MELLOM', 'FYR'],
   da: ['OG', 'IKKE', 'ER', 'TIL', 'FRA', 'MED', 'AF', 'PAA', 'VED', 'MELLEM', 'FYR'],
   sv: ['OCH', 'INTE', 'AR', 'TILL', 'FRAN', 'MED', 'AV', 'PA', 'VID', 'MELLAN', 'FYR'],
@@ -105,10 +179,16 @@ const LANGS = {
   EC: ['es'], PE: ['es'], UY: ['es'], PT: ['pt'], CV: ['pt'], IT: ['it'], NO: ['no', 'da'], SJ: ['no', 'da'],
   DK: ['da', 'no'], FO: ['da', 'no'], SE: ['sv'], PL: ['pl'],
 };
+// ★ A language that names ONE country among the NAVTEX nations — used only to say where a station the table does not
+//   know is (b). English, French, Spanish, Portuguese, Dutch, Norwegian/Danish are spoken in several, so they say nothing.
+const LANG_COUNTRY = { it: ['IT', 'Italy'], de: ['DE', 'Germany'], sv: ['SE', 'Sweden'], pl: ['PL', 'Poland'] };
+// ★ "<NAME> RADIO" lines that are not a station's name.
+const GENERIC = ['COAST', 'COASTAL', 'COAST GUARD', 'MARITIME', 'NAVTEX', 'THIS IS', 'PORT', 'MRCC', 'MRSC', 'CROSS', 'THE', 'NAVAREA'];
 
 const HEAD = `GENERATED by scripts/gen-navtex-stations.mjs from scripts/navtex-stations/navtex-stations.json. Do not edit.
 // Source: ${src.source}
-// Edition: ${src.edition}`;
+// Edition: ${src.edition}
+// Supplement: ${SUPPLEMENT.length} stations missing from that edition (evidence in the generator), and ${Object.keys(POSITION_FIX).length} positions corrected.`;
 
 const ts = `// navtexStations.generated.ts — ${HEAD}
 // ★ The rule is explained in the generator's header; vibe_navtex_stations.h is the server's copy of the same rule.
@@ -127,6 +207,8 @@ export const NAVTEX_REACH_HF_KM = ${W.reachHf};
 export const NAVTEX_WEIGHTS = ${JSON.stringify(W)} as const;
 const STOP: Record<string, readonly string[]> = ${JSON.stringify(STOP)};
 const LANGS: Record<string, readonly string[]> = ${JSON.stringify(LANGS)};
+const LANG_COUNTRY: Record<string, readonly [string, string]> = ${JSON.stringify(LANG_COUNTRY)};
+const GENERIC: readonly string[] = ${JSON.stringify(GENERIC)};
 
 function km(la1: number, lo1: number, la2: number, lo2: number): number {
   const r = Math.PI / 180;
@@ -174,6 +256,8 @@ export function navtexPositions(text: string): Array<[number, number]> {
     if (!la) continue;
     let j = la[1], gap = 0;
     while ((s[j] === ' ' || s[j] === ',' || s[j] === '\\t') && gap < 3) { j++; gap++; }
+    // ★ ITA2: a figures-shift '-' printed in letters shift is an 'A' ("44 31.4N A   012 30.6E", Mondolfo 2026-10-23).
+    if ((s[j] === '-' || s[j] === 'A') && s[j + 1] === ' ') { j++; for (let k = 0; k < 3 && s[j] === ' '; k++) j++; }
     const lo = coordHalf(s, j, 3, 'EW');
     if (!lo || isAlnum(s[lo[1]])) continue;
     out.push([la[0], lo[0]]);
@@ -192,13 +276,72 @@ export function navtexLanguages(text: string): string[] {
   return got.length <= 3 ? got : [];
 }
 
+/** The station a message names ITSELF in its first lines — "MONDOLFO RADIO", "OOSTENDERADIO", "ISTANBUL NAVTEX" —
+ *  as [name, suffix], or null. ★ The server's textName() is this, character for character. */
+export function navtexTextName(text: string): [string, string] | null {
+  const lines = text.toUpperCase().split('\\n').map((l) => l.replace(/[\\r\\t]/g, ' ').trim()).filter((l) => l.length > 0);
+  const from = lines.length && lines[0].startsWith('ZCZC') ? 1 : 0;
+  for (let i = from; i < lines.length && i < from + NAVTEX_WEIGHTS.nameLines; i++) {
+    let l = lines[i];
+    while (l.length && '.,:;'.includes(l[l.length - 1])) l = l.slice(0, -1);
+    if (l.length > 32) continue;
+    const suffix = l.endsWith('RADIO') ? 'RADIO' : l.endsWith('NAVTEX') ? 'NAVTEX' : '';
+    if (!suffix) continue;
+    const n = l.slice(0, l.length - suffix.length).trim().split(' ').filter((w) => w.length > 0).join(' ');
+    if (!n.length || n[0] < 'A' || n[0] > 'Z') continue;
+    let clean = true;
+    for (const c of n) if (!((c >= 'A' && c <= 'Z') || c === ' ' || c === '-' || c === "'")) clean = false;
+    if (!clean || letters(n).length < 4 || GENERIC.includes(n)) continue;
+    return [n, suffix];
+  }
+  return null;
+}
+/** "MONDOLFO" + "RADIO" → "Mondolfo Radio". */
+function titleCase(s: string): string {
+  let o = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    o += i === 0 || s[i - 1] === ' ' || s[i - 1] === '-' || s[i - 1] === "'" ? c : c.toLowerCase();
+  }
+  return o;
+}
+
+/** A station the TABLE does not have, named by its own message. */
+export interface NavtexTextStation { name: string; iso: string; country: string }
+
 export interface NavtexResolution {
-  /** One station (named), or the best two (too close to call). */
+  /** One station (named), or the best two (too close to call). Empty when \`text\` is set. */
   stations: NavtexStation[];
+  /** ★ (b) The message names a station that is none of the candidates, and its positions or language rule them all
+   *  out: that name, with the country where it can soundly be said ("E · Mondolfo Radio, Italy 🇮🇹?"). */
+  text?: NavtexTextStation;
   /** Each one's distance from the receiving server, km (NaN when the server's position is unknown). */
   km: number[];
   /** Beyond ordinary reach of the receiving server — the title says "DX". */
   dx: boolean;
+}
+
+/** Where a station the table does not have is: a station of that name elsewhere in the table (another letter or
+ *  band) gives its own name and country; else the country of the table station nearest the message's positions
+ *  (median, within posCountryKm), if the text's language — when there is one — is spoken there; else a language spoken
+ *  in only one NAVTEX country; else no country. */
+function textStation(tn: [string, string], pos: Array<[number, number]>, langs: string[]): NavtexTextStation {
+  const own = NAVTEX_STATIONS.find((s) => letters(s.name) === letters(tn[0]));
+  if (own) return { name: own.name, iso: own.iso, country: own.country };
+  const name = titleCase(tn[0] + ' ' + tn[1]);
+  if (pos.length) {
+    let best: NavtexStation | null = null, bestMed = Infinity;
+    for (const s of NAVTEX_STATIONS) {
+      const ds = pos.map(([pa, po]) => km(s.lat, s.lon, pa, po)).sort((x, y) => x - y);
+      const med = ds.length % 2 ? ds[(ds.length - 1) / 2] : (ds[ds.length / 2 - 1] + ds[ds.length / 2]) / 2;
+      if (med < bestMed) { bestMed = med; best = s; }
+    }
+    if (best && bestMed <= NAVTEX_WEIGHTS.posCountryKm && (!langs.length || (LANGS[best.iso] ?? []).some((l) => langs.includes(l))))
+      return { name, iso: best.iso, country: best.country };
+  }
+  const only = langs.length === 1 ? LANG_COUNTRY[langs[0]] : undefined;
+  if (only) return { name, iso: only[0], country: only[1] };
+  return { name, iso: '', country: '' };
 }
 
 /** Which station sent letter \`b1\`, heard on \`dialHz\` at a server at \`lat\`/\`lon\` (NaN = unknown), judged from the
@@ -232,6 +375,15 @@ export function navtexResolve(b1: string | null | undefined, dialHz: number, lat
   }).sort((x, y) => y.sc - x.sc || x.s.name.localeCompare(y.s.name));
   const named = scored.some((x) => x.named);
   const posFit = pos.length > 0 && scored.some((x) => x.med <= W.posFitKm);
+  // ★★ (b) THE STATION NAMES ITSELF AND IT IS NOT A CANDIDATE (Mondolfo, 2026-10-23: an Italian warning off Ravenna was
+  //    "Corsen, France"). Only when the message ALSO rules every candidate out — positions that fit none of them, or,
+  //    with no positions, a language none of them speaks. Positions that fit a candidate always keep it: a station
+  //    may send another language (Niton's T on 490 is French), and language alone never outweighs the table.
+  const tn = navtexTextName(text);
+  if (tn && !named && !scored.some((x) => letters(x.s.name) === letters(tn[0]))) {
+    const contradicted = !posFit && (pos.length > 0 || (langs.length > 0 && !scored.some((x) => x.speaks)));
+    if (contradicted) return { stations: [], km: [], dx: false, text: textStation(tn, pos, langs) };
+  }
   if (pos.length && !posFit && !named) return null;            // ★ positions nowhere near any candidate: not one of them
   const evidence = named || posFit || scored.some((x) => x.speaks);
   const best = scored[0], next = scored[1];
@@ -264,6 +416,7 @@ export function navtexFlag(iso: string): string {
 export function navtexStationLabel(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = ''): string {
   const r = navtexResolve(b1, dialHz, lat, lon, text);
   if (!r) return b1 ? \`Station \${b1}\` : 'Station ?';
+  if (r.text) return \`\${b1} \\u00b7 \${r.text.name}\${r.text.country ? \`, \${r.text.country} \${navtexFlag(r.text.iso)}\` : ''}?\`;
   const [a, b] = r.stations;
   if (b) return \`\${a.b1} \\u00b7 \${a.name} \${navtexFlag(a.iso)} or \${b.name} \${navtexFlag(b.iso)}?\`;
   return \`\${a.b1} \\u00b7 \${a.name}, \${a.country} \${navtexFlag(a.iso)}\${r.dx ? \` \\u00b7 DX \${kmText(r.km[0])} km\` : ''}\`;
@@ -356,6 +509,8 @@ inline std::vector<std::pair<double, double>> positions(const std::string& text)
         if (!coordHalf(s, i, 2, "NS", la, e1)) continue;
         size_t j = e1; int gap = 0;
         while (j < s.size() && (s[j] == ' ' || s[j] == ',' || s[j] == '\\t') && gap < 3) { j++; gap++; }
+        // ★ ITA2: a figures-shift '-' printed in letters shift is an 'A' (navtexPositions, the same rule).
+        if (j + 1 < s.size() && (s[j] == '-' || s[j] == 'A') && s[j + 1] == ' ') { j++; for (int k = 0; k < 3 && j < s.size() && s[j] == ' '; k++) j++; }
         if (!coordHalf(s, j, 3, "EW", lo, e2) || isAlnumAt(s, e2)) continue;
         out.push_back({ la, lo });
         i = e2 - 1;
@@ -395,8 +550,82 @@ inline std::vector<std::string> languages(const std::string& text) {
     return got;
 }
 
-/** navtexResolve(): 0 stations = the letter only; 1 = named; 2 = too close to call. */
-struct Resolution { std::vector<const Station*> stations; std::vector<double> km; bool dx = false; };
+inline const std::vector<const char*>& genericNames() {
+    static const std::vector<const char*> t = { ${GENERIC.map((g) => `"${g}"`).join(', ')} };
+    return t;
+}
+/** navtexTextName(): the station a message names ITSELF in its first lines ("MONDOLFO RADIO", "OOSTENDERADIO"),
+ *  {name, suffix}, or two empty strings. */
+inline std::pair<std::string, std::string> textName(const std::string& text) {
+    std::vector<std::string> lines; std::string cur;
+    const std::string s = upperAscii(text);
+    auto trim = [](std::string x) {
+        size_t a = 0, b = x.size();
+        while (a < b && x[a] == ' ') a++;
+        while (b > a && x[b - 1] == ' ') b--;
+        return x.substr(a, b - a);
+    };
+    for (size_t i = 0; i <= s.size(); i++) {
+        if (i == s.size() || s[i] == '\\n') { const std::string t = trim(cur); if (!t.empty()) lines.push_back(t); cur.clear(); }
+        else cur += (s[i] == '\\r' || s[i] == '\\t') ? ' ' : s[i];
+    }
+    const size_t from = !lines.empty() && lines[0].compare(0, 4, "ZCZC") == 0 ? 1 : 0;
+    for (size_t i = from; i < lines.size() && i < from + ${W.nameLines}; i++) {
+        std::string l = lines[i];
+        while (!l.empty() && std::strchr(".,:;", l.back()) && l.back() != 0) l.pop_back();
+        if (l.size() > 32) continue;
+        auto ends = [&](const char* x) { const size_t n = std::strlen(x); return l.size() >= n && l.compare(l.size() - n, n, x) == 0; };
+        const std::string suffix = ends("RADIO") ? "RADIO" : ends("NAVTEX") ? "NAVTEX" : "";
+        if (suffix.empty()) continue;
+        std::string n, w;
+        const std::string body = l.substr(0, l.size() - suffix.size()) + " ";
+        for (char c : body) { if (c == ' ') { if (!w.empty()) { if (!n.empty()) n += ' '; n += w; w.clear(); } } else w += c; }
+        if (n.empty() || n[0] < 'A' || n[0] > 'Z') continue;
+        bool clean = true;
+        for (char c : n) if (!((c >= 'A' && c <= 'Z') || c == ' ' || c == '-' || c == '\\'')) clean = false;
+        if (!clean || letters(n).size() < 4) continue;
+        bool generic = false; for (auto* g : genericNames()) if (n == g) generic = true;
+        if (generic) continue;
+        return { n, suffix };
+    }
+    return { "", "" };
+}
+inline std::string titleCase(const std::string& s) {
+    std::string o;
+    for (size_t i = 0; i < s.size(); i++) {
+        const char c = s[i];
+        o += (i == 0 || s[i - 1] == ' ' || s[i - 1] == '-' || s[i - 1] == '\\'') ? c : (char)std::tolower((unsigned char)c);
+    }
+    return o;
+}
+inline double medianKm(double la, double lo, const std::vector<std::pair<double, double>>& pos) {
+    std::vector<double> ds; for (auto& p : pos) ds.push_back(km(la, lo, p.first, p.second));
+    std::sort(ds.begin(), ds.end());
+    return ds.size() % 2 ? ds[(ds.size() - 1) / 2] : (ds[ds.size() / 2 - 1] + ds[ds.size() / 2]) / 2;
+}
+
+/** navtexResolve(): 0 stations = the letter only (or, with textName set, a station the table does not have, named by its
+ *  own message); 1 = named; 2 = too close to call. */
+struct Resolution { std::vector<const Station*> stations; std::vector<double> km; bool dx = false;
+                    std::string textName, textIso, textCountry; };
+/** navtexResolve's textStation(): where a station the table does not have is. */
+inline void textStation(Resolution& r, const std::pair<std::string, std::string>& tn,
+                        const std::vector<std::pair<double, double>>& pos, const std::vector<std::string>& langs) {
+    size_t n = 0; const Station* t = stations(n);
+    const std::string want = letters(tn.first);
+    for (size_t i = 0; i < n; i++) if (letters(t[i].name) == want) { r.textName = t[i].name; r.textIso = t[i].iso; r.textCountry = t[i].country; return; }
+    r.textName = titleCase(tn.first + " " + tn.second);
+    if (!pos.empty()) {
+        const Station* best = nullptr; double bestMed = INFINITY;
+        for (size_t i = 0; i < n; i++) { const double m = medianKm(t[i].lat, t[i].lon, pos); if (m < bestMed) { bestMed = m; best = &t[i]; } }
+        bool spoken = langs.empty();
+        if (best) for (auto& l : isoLangs(best->iso)) if (std::find(langs.begin(), langs.end(), l) != langs.end()) spoken = true;
+        if (best && bestMed <= ${W.posCountryKm} && spoken) { r.textIso = best->iso; r.textCountry = best->country; return; }
+    }
+    if (langs.size() == 1) {
+${Object.entries(LANG_COUNTRY).map(([l, [iso, c]]) => `        if (langs[0] == "${l}") { r.textIso = "${iso}"; r.textCountry = "${c}"; return; }`).join('\n')}
+    }
+}
 inline Resolution resolveAll(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
     Resolution r;
     if (b1 < 'A' || b1 > 'Z') return r;
@@ -434,6 +663,14 @@ inline Resolution resolveAll(char b1, double dialHz, double lat, double lon, con
     });
     bool named = false, posFit = false, speaks = false;
     for (auto& x : c) { named |= x.named; posFit |= !pos.empty() && x.med <= kPosFitKm; speaks |= x.speaks; }
+    // ★★ (b) the message names a station that is none of the candidates and rules them all out (navtexResolve).
+    const auto tn = textName(text);
+    if (!tn.first.empty() && !named) {
+        bool isCand = false; const std::string want = letters(tn.first);
+        for (auto& x : c) if (letters(x.s->name) == want) isCand = true;
+        const bool contradicted = !posFit && (!pos.empty() || (!langs.empty() && !speaks));
+        if (!isCand && contradicted) { textStation(r, tn, pos, langs); return r; }
+    }
     if (!pos.empty() && !posFit && !named) return r;
     const bool evidence = named || posFit || speaks;
     const Sc& best = c[0];
@@ -441,6 +678,11 @@ inline Resolution resolveAll(char b1, double dialHz, double lat, double lon, con
     if (c.size() == 1 || best.sc >= kClear * c[1].sc) { r.stations = { best.s }; r.km = { best.d }; r.dx = here && best.d > reach; return r; }
     r.stations = { best.s, c[1].s }; r.km = { best.d, c[1].d };
     return r;
+}
+/** The gallery's test: one station named, or a station named by its own message (never the "or" pair). */
+inline bool nameable(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
+    const Resolution r = resolveAll(b1, dialHz, lat, lon, text);
+    return r.stations.size() == 1 || !r.textName.empty();
 }
 /** navtexStation(): the station when ONE can be named, else nullptr. */
 inline const Station* resolve(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
@@ -468,6 +710,8 @@ inline std::string flag(const char* iso) {
 /** navtexStationLabel(): "B · Oostende, Belgium 🇧🇪", "… · DX 6,700 km", "W · Corsen 🇫🇷 or Valentia 🇮🇪?", or "Station B". */
 inline std::string label(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
     const Resolution r = resolveAll(b1, dialHz, lat, lon, text);
+    if (!r.textName.empty())
+        return std::string(1, b1) + " \\xc2\\xb7 " + r.textName + (r.textCountry.empty() ? std::string() : ", " + r.textCountry + " " + flag(r.textIso.c_str())) + "?";
     if (r.stations.empty()) return std::string("Station ") + (b1 >= 'A' && b1 <= 'Z' ? std::string(1, b1) : "?");
     const Station* a = r.stations[0];
     if (r.stations.size() == 2) {

@@ -338,7 +338,8 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(L('J', 517500).startsWith('J · Stockholm, Sweden'), 'J on 518 = Stockholm (1053 km)');
   ok(L('I', 517500).startsWith('I · Varberg, Sweden'), 'I on 518 = Varberg (1004 km)');
   ok(L('N', 517500).startsWith('N · Orlandet, Norway'), 'N on 518 = Orlandet (1400 km)');
-  ok(L('M', 517500) === 'Station M', 'M on 518: Casablanca is 2150 km away — the letter only, never a guess');
+  // ★ 2026-10-23: Jeløy (Norway, M 518) is in the supplementary list (Wikipedia) — Pub. 117 2021 had only Casablanca
+  ok(L('M', 517500) === 'M \u00b7 Jeløy \u{1F1F3}\u{1F1F4} or Casablanca \u{1F1F2}\u{1F1E6}?', 'M on 518, no evidence: Jeløy (1040 km) and Casablanca (2150 km) too close to call: ' + L('M', 517500));
   ok(L('W', 517500) === 'W \u00b7 Corsen \u{1F1EB}\u{1F1F7} or Valentia \u{1F1EE}\u{1F1EA}?', 'W on 518 with no evidence: Corsen 520 km / Valentia 648 km — both, asked: ' + L('W', 517500));
   ok(L('W', 517500, 'VALENTIA RADIO GALE WARNING').startsWith('W · Valentia, Ireland'), 'the text names Valentia → Valentia');
   ok(L('W', 517500, 'CROSS CORSEN').startsWith('W · Corsen, France'), 'the text names Corsen → Corsen');
@@ -354,8 +355,8 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   const rc = L('R', 517500, carib);
   ok(/^R · Isabella, United States 🇺🇸 · DX [0-9],[0-9]00 km$/.test(rc), '★ a Caribbean warning with Caribbean positions on R/518 from the UK → Isabella (Puerto Rico), DX: ' + rc);
   ok(L('R', 517500) === 'Station R' || !L('R', 517500).includes('Isabella'), 'the same letter with no evidence never names Isabella from the UK');
-  ok(L('M', 517500, 'SWEDISH NAV WARN 1/26\nSKAGERRAK. KOSTER.\nSOUTH CARDINAL MARK MISSING\nPSN 58-41.9N 010-51.2E') === 'Station M',
-     "tonight's M: a Swedish warning, positions in the Skagerrak, and no M station within 1000 km of them — not one of Pub. 117's: the letter only");
+  ok(L('M', 517500, 'SWEDISH NAV WARN 1/26\nSKAGERRAK. KOSTER.\nSOUTH CARDINAL MARK MISSING\nPSN 58-41.9N 010-51.2E').startsWith('M \u00b7 Jeløy, Norway'),
+     "tonight's M: a Swedish warning, positions in the Skagerrak — Jeløy (supplement), 85 km from them; Pub. 117 2021 had no M near");
   ok(L('L', 489500, 'NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E').startsWith('L \u00b7 Hamburg, Germany'), 'German comma decimals parse');
   ok(L('J', 517500, 'SWEDISH NAV WARN 225/26\nBOTHNIAN SEA. 60-40.1N 017-55.0E') .startsWith('J \u00b7 Stockholm, Sweden'), 'J with a Baltic position → Stockholm');
   ok(L('B', 489500, '', NaN, NaN) === 'Station B', 'no server position → the letter only');
@@ -365,6 +366,36 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(L('B', 10_000_000) === 'Station B', 'not on a NAVTEX channel → the letter only');
   ok(L('B', 489500, '', -33.9, 18.4) === 'Station B', 'B on 490 from Cape Town: no evidence, nothing near');
   ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).includes(' \u00b7 DX 9,'), 'named from far away → "DX 9,…00 km": ' + L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4));
+  // ★★ 2026-10-23 — MONDOLFO. Received on 489.5 kHz USB at Stuart's server; it was labelled "E · Corsen, France".
+  const MONDOLFO = 'ZCZC EA17\n230440 UTC OCT 26\nMONDOLFO RADIO\n\nCOSTAVURNAV NR. 576/26 OTT 17 (1 RILANCIO)\nMAR ADRIATICO  RAVENNA\n'
+    + 'SULLE SEGUENTI PIATTAFORME IN PSN:\n 44 31.4N A   012 30.6E  GARIBALDI A NR. 4039.2 EFF\n'
+    + 'I SISTEMI DI AUSILIO ALLA NAVIGAZIONE ISTALLATI NON SONO FUNZIONANTI\nNNNN';
+  ok(L('E', 489500, MONDOLFO) === 'E \u00b7 Mondolfo, Italy \u{1F1EE}\u{1F1F9}', '★ the Mondolfo message → Mondolfo, Italy (supplement): ' + L('E', 489500, MONDOLFO));
+  ok(!L('E', 489500, MONDOLFO).includes('Corsen'), '★ never Corsen again');
+  // (b) a station the table does NOT have, naming itself — on T 490, where the candidates are Niton and Tarifa
+  const ANCONA = MONDOLFO.replace('ZCZC EA17', 'ZCZC TA17').replace('MONDOLFO RADIO', 'ANCONA RADIO');
+  ok(L('T', 489500, ANCONA) === 'T \u00b7 Ancona Radio, Italy \u{1F1EE}\u{1F1F9}?',
+     '★ (b) named by its text, Adriatic positions + Italian rule out Niton and Tarifa → its own name, Italy?: ' + L('T', 489500, ANCONA));
+  const ANCONA_NOPOS = 'ZCZC TA17\nANCONA RADIO\nI SISTEMI DI AUSILIO ALLA NAVIGAZIONE NON SONO FUNZIONANTI SULLE PIATTAFORME';
+  ok(L('T', 489500, ANCONA_NOPOS) === 'T \u00b7 Ancona Radio, Italy \u{1F1EE}\u{1F1F9}?', '(b) no positions, Italian only → Italy from the language: ' + L('T', 489500, ANCONA_NOPOS));
+  ok(L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nGALE WARNING\nSTORM IN 30-00N 040-00W') === 'T \u00b7 Widget Radio?',
+     '(b) mid-Atlantic positions, English: no sound country → the name only: ' + L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nSTORM IN 30-00N 040-00W'));
+  ok(L('M', 517500, 'ZCZC MA01\nOOSTENDERADIO\nWRAK OP POSITIE 51-14.13N 002-54.22E') === 'M \u00b7 Oostende, Belgium \u{1F1E7}\u{1F1EA}?',
+     '(b) a table station on another letter names itself → its own name and country, asked');
+  ok(L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nTHE BUOY IS MISSING AND WILL BE REPLACED FROM MONDAY').startsWith('T \u00b7 Niton, United Kingdom'),
+     '(b) an unknown name whose English Niton speaks → no contradiction, Niton as before');
+  ok(L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nWRECK 50-30N 001-10W').startsWith('T \u00b7 Niton, United Kingdom'),
+     '(b) an unknown name, positions that fit Niton → Niton (positions outrank the name)');
+  // ★★ Niton's T on 490 sends FRENCH (Météo-France for the Channel): language alone never overrides the table
+  const NITON_FR = 'ZCZC TA45\n230800 UTC OCT 26\nORIGINE METEO-FRANCE\nBULLETIN METEOROLOGIQUE SPECIAL POUR LA MANCHE\n'
+    + 'AVIS DE GRAND FRAIS A COUP DE VENT SUR LES ZONES ET DANS LE PAS DE CALAIS. MER AGITEE A FORTE ENTRE LE CAP ET LA HAGUE\nNNNN';
+  ok(L('T', 489500, NITON_FR) === 'T \u00b7 Niton, United Kingdom \u{1F1EC}\u{1F1E7}', '★ Niton T in French stays Niton: ' + L('T', 489500, NITON_FR));
+  ok(L('T', 489500, NITON_FR + '\n49-50N 001-20W 50-10.5N 000-30.0E').startsWith('T \u00b7 Niton, United Kingdom'), 'Niton T in French with Channel positions: Niton');
+  ok(L('T', 489500, NITON_FR.replace('ORIGINE METEO-FRANCE', 'CROSS RADIO')).startsWith('T \u00b7 Niton'), '"CROSS RADIO" is not a station name');
+  // the supplement's other fixes
+  ok(L('U', 517500, 'ZCZC UA03\nMONDOLFO RADIO\nNAV WARNING').startsWith('U \u00b7 Mondolfo, Italy'), 'U 518 naming Mondolfo → Mondolfo (supplement; Trieste kept)');
+  ok(L('S', 517500, 'NCC-HAMBURG\nNAUT. WARN.').startsWith('S \u00b7 Hamburg, Germany'), 'S 518 = Hamburg (Pub. 117 gave no frequency)');
+  ok(L('S', 4209500, 'GREEK NAVTEX 4209.5\n35-20N 025-10E').startsWith('S \u00b7 Irakleio, Greece'), 'HF 4209.5: a Wikipedia letter, with a fitting position');
   // the position parser
   {
     const P = navtexPositions;
@@ -378,6 +409,9 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
     ok(P('PSN 58-41.9N 010-51._E').length === 0, "a lost '_' → ignored, never half-read");
     ok(P('99-10N 010-10E 51-75N 002-00E 51-10N 190-00E').length === 0, 'out-of-range degrees and minutes → ignored');
     ok(P('TEL 1234567 2149 UTC 12 CHART 28').length === 0, 'numbers that are not positions → none');
+    ok(near(one(' 44 31.4N A   012 30.6E  GARIBALDI A'), 44.5233, 12.51), "ITA2: a lost figures-shift '-' printed as A between the halves");
+    ok(near(one('44-31N - 012-30E'), 44.5167, 12.5), "a '-' between the halves");
+    ok(P('51-10N AND 002-00E').length === 0, "a word between the halves is not a lost '-'");
   }
   const m = new NavtexAssembler();
   feed(m, 'ZCZC BA10\r\r\nOOSTENDERADIO\r\r\nNNNN\r\r\n', 5);

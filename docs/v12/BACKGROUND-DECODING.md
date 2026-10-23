@@ -185,8 +185,21 @@ warning · #10"** when the station can be named, and "Station B" as before when 
   from **NGA Pub. 117, Radio Navigational Aids, Chapter 3 (300C.1 / 300C.2 NAVTEX Stations)** — a US Government work,
   public domain; 2021 edition (PDF dated 2021-03-11), fetched 2026-10-22 from msi.nga.mil. The Admiralty List of Radio
   Signals is copyright and is not used. 159 stations, 220 transmitters; one entry (Hamburg's 518 kHz S) has no frequency
-  in the source and is left out; Pub. 117 lists **no HF (4209.5 kHz) letters**, so HF stays the letter only. The parser
-  also checks every letter against its broadcast-time slot and reports the source's own irregularities on stderr.
+  in the source and is left out; Pub. 117 lists **no HF (4209.5 kHz) letters**. The parser also checks every letter
+  against its broadcast-time slot and reports the source's own irregularities on stderr.
+- **The supplementary list (2026-10-23)** — `SUPPLEMENT` in the generator, each entry with its evidence: stations,
+  letters and frequencies missing from the 2021 edition. Started by **Mondolfo** (Italy, E on 490): a real Italian
+  warning for platforms off Ravenna, heading itself "MONDOLFO RADIO", was labelled "E · Corsen, France" because
+  Pub. 117 knows no other E on 490 near Europe. The rest come from Wikipedia's
+  [List of Navtex stations](https://en.wikipedia.org/wiki/List_of_Navtex_stations) (revision 1371431375,
+  2026-08-26 — facts only; its text is CC BY-SA and is not copied): Italy's newer network (Mondolfo U 518, La
+  Maddalena R 518 / I 490, Sellia Marina V 518 / W 490, Piombino N 490), Corsen A 518, La Garde W 518, Hamburg S 518
+  (Pub. 117 gave no frequency), **Jeløy M 518** (Norway — this is the Lenovo's "tonight's M"), Greece's 490 service
+  (Kerkyra P, Irakleio Q, Limnos R), Chile's 490 service, and six **HF 4209.5** letters (Istanbul M, Ismailia X,
+  Irakleio S, New Orleans G, Shanghai Q, Hai Phong W). Supplements are ADDED beside Pub. 117, never instead: where the
+  two disagree (Vardø, Tallinn, Kerch, İzmir, Malta, Murmansk, Arkhangelsk, Talcahuano, two Korean 490 letters)
+  Pub. 117 is kept and the disagreement is written in the generator. Two Pub. 117 positions are corrected there too
+  (Saudanes was in the Norwegian Sea, Limnos south of Crete).
 - **One rule, two readers:** `node scripts/gen-navtex-stations.mjs` writes `src/utils/navtexStations.generated.ts`
   (app + browser) and `android/app/src/main/cpp/vibe_navtex_stations.h` (gallery titles); `--check` in run-tests.sh.
 - **The rule — a likelihood, not a cut-off** (owner-approved, so genuine DX gets named). Every station with the letter on
@@ -197,10 +210,21 @@ warning · #10"** when the station can be named, and "Station B" as before when 
   soft prior, 1/(1+(d/800 km)²). The best at ≥3× the next is named, with "· DX 6,800 km" past 1500 km (MF) / 2500 km
   (HF); two close → "W · Corsen 🇫🇷 or Valentia 🇮🇪?"; no evidence and nothing within 1500 / 2500 km → the letter only.
   The weights and word lists are written into both readers by the generator.
+- **A station the table does not have (2026-10-23).** When a message names itself in its first lines ("MONDOLFO
+  RADIO", "OOSTENDERADIO", "… NAVTEX") and that name is none of the candidates, AND the message rules every candidate
+  out — positions that fit none of them, or, with no positions, a language none of them speaks — no table station is
+  named. The label is the message's own name, with a country where one can soundly be said: a station of that name on
+  another letter or band gives its own; else the country of the table station nearest the positions (≤ 400 km, and
+  speaking the text's language if it has one); else a language spoken in only one NAVTEX country (Italian, German,
+  Swedish, Polish); else none — "T · Ancona Radio, Italy 🇮🇹?", "T · Widget Radio?". Positions that fit a candidate
+  always keep it, and language alone never overrides the table: **Niton's T on 490 sends French** ("ORIGINE
+  METEO-FRANCE") and stays "T · Niton, United Kingdom". The gallery shows this label too (never the "or" pair).
+  The position reader also takes an `A` (or `-`) between the two halves: in ITA2 a figures-shift `-` received in
+  letters shift prints as `A` ("44 31.4N A 012 30.6E").
 - **The Lenovo's evening, through the real texts** (IO92nh): 490 A Malin Head, B Oostende, L Hamburg, U Cullercoats,
   F letter only; 518 G Cullercoats, I Varberg, J Stockholm, L Rogaland, N Orlandet, O Portpatrick, P Den Helder,
-  V Oostende, M letter only (a Swedish warning whose positions no Pub. 117 M station is near — likely a station newer
-  than the 2021 edition), W "Corsen or Valentia?" unless the message has positions.
+  V Oostende, M **Jeløy** (a Swedish warning with Skagerrak positions — the station was newer than the 2021 edition;
+  with no text it is "Jeløy or Casablanca?"), W "Corsen or Valentia?" unless the message has positions.
 - **Pub. 117 disagrees with itself in places:** the 300C tables (used here) and the per-country sections differ for a
   few stations — Oostende's 518 letters are V and T in the table, M and T in the Belgium section; Corsen is 518 W in the
   table, A in the France section. The table is used throughout; a later edition may settle it. Pub. 117 lists no NAVTEX
@@ -220,7 +244,7 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 | `scripts/test-bg-decode.mjs` | 41 | A real server on fake-rtl-tcp: wait → move, profile boundary, arrival → stop + dial restored, a decoder socket on its own, gallery HTTP and path traversal, config API round-trip and refusals, the save applied live. |
 | `scripts/test-bg-decode-frontdoor.mjs` | 12 | Front door + a radio process: a save through the door reaches the radio, no park/release once due, an unrelated save restarts nothing. |
 | `scripts/test-setup-bgdecode.mjs` | 20 | The setup page's real editor against a DOM stand-in. |
-| `scripts/test_navtex.ts` | 170 | The NAVTEX cutter (fades, gap markers) and the station rule — the Lenovo's letters, positions, DX, "or". (beta 4) |
+| `scripts/test_navtex.ts` | 187 | The NAVTEX cutter (fades, gap markers) and the station rule — the Lenovo's letters, positions, DX, "or"; Mondolfo, a self-named station the table lacks, Niton's French T. (beta 4, 2026-10-23) |
 | `scripts/test-bg-decode-admin.mjs` | 15 | The admin line end to end: every state, measured CPU per VFO and for the channels, FT8's live count, nothing without the admin password. (beta 4) |
 | `scripts/test_admin_bg.ts` | 17 | The admin line's wording. (beta 4) |
 | `scripts/test-web-gallery-pages.mjs` | 20 | Pages through the real server and the real built page in headless Edge: totals per filter, the old request unchanged, the pager, filter reset, BACK to the same page/scroll/row. (beta 4) |

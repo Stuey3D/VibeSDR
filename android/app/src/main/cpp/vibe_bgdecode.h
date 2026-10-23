@@ -145,10 +145,11 @@ private:
         for (size_t i = 0; i < held_.size(); i++) {
             auto m = held_[i];
             // ★ V12 beta 4: name the station from its letter, the dial and this server's position — the rule the listener's
-            //   box uses (navtexStations.generated.ts), so the gallery and the box say the same thing.
+            //   box uses (navtexStations.generated.ts), so the gallery and the box say the same thing. ★ Also a station the
+            //   table lacks, named by its own message ("E · Mondolfo Radio, Italy 🇮🇹?"); never the "or" pair.
             if (m.id.size() == 4) {
                 const char b1 = m.id[0];
-                if (navtex::resolve(b1, meta_.freqHz, meta_.lat, meta_.lon, m.text)) m.station = navtex::label(b1, meta_.freqHz, meta_.lat, meta_.lon, m.text);
+                if (navtex::nameable(b1, meta_.freqHz, meta_.lat, meta_.lon, m.text)) m.station = navtex::label(b1, meta_.freqHz, meta_.lat, meta_.lon, m.text);
             }
             gallery::Meta mm = meta_;
             mm.utc = m.startedAt;
