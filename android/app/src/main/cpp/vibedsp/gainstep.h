@@ -428,7 +428,11 @@ private:
                                      savedTo_ = hintTo_; savedExact_ = exact_;
                                      if (exact_) startHold(found_, g0); }
                 hintFrom_ = hintTo_ = -1; nextEdge_ = best + kSeg;
-                finalise(g0, len, out0, nOut);
+                // ★★★ ONLY A FOUND STEP IS MEASURED (2026-10-23, the Lenovo's SEGV). Over 30 dB leaves found_ at -1, and
+                //   finalise() then read the line at found_ - g0 = -1 - g0: billions of samples before it once the stream
+                //   had run a while. A listener tuning an RSP from 1.8 MHz to 1090 MHz (a >30 dB edge inside a flagged
+                //   window) crashed the radio's DSP thread with it.
+                if (found_ >= 0) finalise(g0, len, out0, nOut);
                 return;
             }
         }
@@ -439,6 +443,7 @@ private:
      *  a tone on an AM carrier left a 15 dB step mis-measured by 1.6 dB over those). Decided no later
      *  than the step's own sample leaving the delay line. */
     void finalise(long long g0, int len, long long out0, int nOut) {
+        if (found_ < 0 || found_ < g0) { found_ = -1; return; }           // nothing found, or it has left the line
         const long long gEnd = g0 + len;
         const long long avail = gEnd - found_;
         if (avail < est_ && found_ >= out0 + nOut + kSeg) return;          // more to come, and time to wait
