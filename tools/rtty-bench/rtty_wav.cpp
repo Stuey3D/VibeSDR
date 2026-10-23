@@ -8,15 +8,30 @@
 //   rtty_wav in.wav CCIR476 [centre=500] [shift=170] [baud=100] [inverted=0] — the same, with NAVTEX's defaults
 //   (★ 2026-10-04: the encoding argument was added for NAVTEX; the ITA2 and auto forms above are unchanged.)
 //   (DWD weather RTTY: 450 Hz shift, 50 baud, inverted — the app's 'weather' preset.)
+//   SYNOP=1 rtty_wav … — also print each SYNOP/SHIP report the server would translate (vibe_synop.h), as the 0x08
+//   frame's line and details (V12, 2026-10-23). Build with -I android/app/src/main/cpp (it reads vibe_synop_stations.h).
 //   Convert first if needed:  ffmpeg -i rec.m4a -ac 1 -ar 48000 -c:a pcm_s16le in.wav
 #include "decoders/fsk_decoder.h"
 #include "decoders/rtty_auto.h"
+#include "vibe_synop.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
+/** ★ SYNOP=1: the server's translator over the decoded text, as the decoder host runs it. */
+static void synopOut(const std::string& text) {
+    if (!std::getenv("SYNOP")) return;
+    vibe::synop::Reader rd;
+    auto v = rd.push(text);
+    for (auto& x : rd.flush()) v.push_back(x);
+    std::fprintf(stderr, "── SYNOP/SHIP: %zu report(s)\n", v.size());
+    for (auto& x : v) {
+        std::printf("  raw:  %s\n  line: %s\n", x.report.raw.c_str(), x.report.line.c_str());
+        for (auto& d : x.report.details) std::printf("        %s\n", d.c_str());
+    }
+}
 static int runFsk(const std::vector<int16_t>& mono, size_t frames, double cf, double sh, double baud,
                   const std::string& fr, const std::string& enc, bool inv) {
     /* ★ NAVTEX_OPTS (2026-10-05): switch one of NavtexRx's measured changes off for an A/B on the same build, e.g.
@@ -41,6 +56,7 @@ static int runFsk(const std::vector<int16_t>& mono, size_t frames, double cf, do
     d.onChar = [&](char32_t c) { chars++; if (c == U'\r') return; out += c < 128 ? (char)c : '?'; };
     for (size_t i = 0; i < mono.size(); i += 960) d.process(&mono[i], (int)std::min<size_t>(960, mono.size() - i));
     std::printf("%s\n", out.c_str());
+    synopOut(out);
     std::fprintf(stderr, "── %.1f s, %ld chars, resyncs %lu\n", frames / 48000.0, chars, d.resyncs());
     if (const vibe::NavtexRx* n = d.navtex())
         std::fprintf(stderr, "── NAVTEX: %lu clean, %lu repaired, %lu lost; %s polarity; AFC %+.1f Hz\n", n->total.clean,
@@ -73,6 +89,7 @@ int main(int argc, char** argv) {
         a.onTuneHint = [&](int hz) { std::fprintf(stderr, "── tune hint: %+d Hz (audio)\n", hz); };
         for (size_t i = 0; i < mono.size(); i += 960) a.process(&mono[i], (int)std::min<size_t>(960, mono.size() - i));
         std::printf("%s\n", out.c_str());
+        synopOut(out);
         std::fprintf(stderr, "── auto chose: %s", a.chosen().empty() ? "nothing\n" : a.chosen().c_str());
         return 0;
     }
