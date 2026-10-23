@@ -49,6 +49,8 @@ import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../..
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
 import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../../../src/utils/galleryPager';
+import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
+         galleryTranslateLines } from '../../../src/utils/galleryTranslate';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
@@ -13539,6 +13541,7 @@ async function openGalleryItem(it: GalleryItem) {
   $('galList').hidden = true; $('galFilter').hidden = true; $('galPager').hidden = true; $('galView').hidden = false;
   $('galleryPanel').scrollTop = 0;
   $('galBack').focus({ preventScroll: true });
+  galTrReset();
   // ★ A chart or a picture is shown as itself; the browser fetches it (same origin, the same read auth).
   const img = $('galImg') as HTMLImageElement;
   if (/\.png$/i.test(it.f)) {
@@ -13549,13 +13552,81 @@ async function openGalleryItem(it: GalleryItem) {
   $('galText').textContent = 'Loading…';
   try {
     const r = await fetch(url, { cache: 'no-store' });
-    $('galText').textContent = r.ok ? await r.text() : 'This item is no longer on the server (the gallery is full and keeps the newest).';
+    const body = r.ok ? await r.text() : 'This item is no longer on the server (the gallery is full and keeps the newest).';
+    $('galText').textContent = body;
+    if (r.ok) void galTranslateSetup(it, body);
   } catch { $('galText').textContent = 'Could not reach the server.'; }
+}
+
+/* ★★ V12 TRANSLATE in the gallery viewer (2026-10-23) — the BROWSER's own on-device Translator and LanguageDetector
+ *    (Chrome/Edge 138+). Where the browser has no Translator, or cannot do this pair, the key is never drawn (AGENTS.md:
+ *    no dead controls). Line by line, so the layout survives; ZCZC/NNNN, figures, positions, fade markers and garbage
+ *    stay as received (src/utils/galleryTranslate.ts — the app's rule). Into the browser's language; shown in place,
+ *    marked MACHINE TRANSLATION, and ORIGINAL toggles back. */
+let galTrSeq = 0;
+function galTrReset() {
+  galTrSeq++;
+  $('galTr').hidden = true; $('galTr').classList.remove('on'); $('galTr').textContent = 'TRANSLATE';
+  $('galTrNote').hidden = true; $('galTrNote').textContent = '';
+}
+const langLabel = (id: string) => { try { return new Intl.DisplayNames([navigator.language || 'en'], { type: 'language' }).of(id) || id; } catch { return id; } };
+async function galTranslateSetup(it: GalleryItem, body: string) {
+  galTrReset();
+  const seq = galTrSeq;
+  const TR = (globalThis as any).Translator, LD = (globalThis as any).LanguageDetector;
+  if (!TR?.availability || !TR?.create) return;
+  const target = (navigator.language || '').split('-')[0];
+  const lines = galleryTranslateLines(body, it.k);
+  const text = galleryTranslatableText(lines);
+  if (!text || !target) return;
+  const hint = galleryHintLanguage(it.title);
+  let source = '';
+  try {   // ★ the browser's detector only when it is already here — a download needs the user's press
+    if (LD?.availability && (await LD.availability()) === 'available') {
+      const best = (await (await LD.create()).detect(text))?.[0];
+      if (best && best.confidence >= 0.5 && best.detectedLanguage !== 'und') source = best.detectedLanguage;
+    }
+  } catch { /* no detector: the stopwords */ }
+  source = source || galleryGuessLanguage(text, hint);
+  if (seq !== galTrSeq || !galleryCanTranslate(lines, source, target)) return;
+  let avail = 'unavailable';
+  try { avail = await TR.availability({ sourceLanguage: source, targetLanguage: target }); } catch { /* unavailable */ }
+  if (seq !== galTrSeq || avail === 'unavailable') return;
+  let done: string | null = null, showing = false, busy = false;
+  const btn = $('galTr') as HTMLButtonElement, note = $('galTrNote');
+  btn.hidden = false;
+  btn.title = `Translate from ${langLabel(source)} into ${langLabel(target)}, in this browser`;
+  btn.onclick = async () => {
+    if (busy) return;
+    if (done != null) {
+      showing = !showing;
+      $('galText').textContent = showing ? done : body;
+      btn.textContent = showing ? 'ORIGINAL' : 'TRANSLATE'; btn.classList.toggle('on', showing); note.hidden = !showing;
+      return;
+    }
+    busy = true; btn.textContent = avail === 'available' ? 'TRANSLATING…' : 'DOWNLOADING…';
+    try {
+      const tr = await TR.create({ sourceLanguage: source, targetLanguage: target });
+      const r = await galleryTranslate(lines, target, async (t) => ({ ok: true, text: await tr.translate(t) }));
+      if (seq !== galTrSeq) return;
+      if (!r.done) throw new Error(r.reason || 'nothing translated');
+      done = r.text; showing = true;
+      $('galText').textContent = done;
+      btn.textContent = 'ORIGINAL'; btn.classList.add('on');
+      note.textContent = `MACHINE TRANSLATION \u00b7 ${langLabel(source)} \u2192 ${langLabel(target)} \u00b7 in this browser`
+        + (r.failed ? ` \u00b7 ${r.failed} line${r.failed === 1 ? '' : 's'} left as received` : '');
+      note.hidden = false;
+    } catch (e: any) {
+      if (seq !== galTrSeq) return;
+      btn.textContent = 'TRANSLATE';
+      note.textContent = `This browser could not translate it (${String(e?.message ?? e)}).`; note.hidden = false;
+    } finally { busy = false; }
+  };
 }
 function initGallery() {
   $('galleryBtn').onclick = () => { togglePanel('galleryPanel'); if (isPanelOpen('galleryPanel')) { galPage = 1; void renderGallery(1); } };
   $('galClose').onclick = () => $('galleryPanel').classList.remove('open');
-  $('galBack').onclick = () => galleryBack();
+  $('galBack').onclick = () => { galTrReset(); galleryBack(); };
   for (const b of Array.from($('galFilter').querySelectorAll('[data-kind]')) as HTMLButtonElement[]) {
     b.onclick = () => {
       galKind = b.dataset.kind || '';

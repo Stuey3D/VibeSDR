@@ -461,6 +461,9 @@ function kmText(d: number): string {
   return o;
 }
 
+/** The languages a station's country broadcasts in ('IT' → ['it']) — the gallery's TRANSLATE takes its hint here. */
+export function navtexIsoLanguages(iso: string): readonly string[] { return LANGS[iso] ?? []; }
+
 /** "🇧🇪" from "BE". */
 export function navtexFlag(iso: string): string {
   return /^[A-Z]{2}$/.test(iso) ? String.fromCodePoint(0x1f1e6 + iso.charCodeAt(0) - 65, 0x1f1e6 + iso.charCodeAt(1) - 65) : '';

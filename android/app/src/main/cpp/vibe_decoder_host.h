@@ -922,7 +922,7 @@ private:
         if (dec.empty()) return;
         if (ft8_) ft8_->process(dec.data(), (int)dec.size(), captureUtc);
         if (ft4_) ft4_->process(dec.data(), (int)dec.size(), captureUtc);
-        // ★ V12 beta 4: the spots tap's clock too — the FT8 summary is rewritten every 10 min while its counts change.
+        // ★ The spots tap's clock too — the FT8 summary's last-10-minutes card rolls and its hourly card closes on it.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->tick(); }
     }
 

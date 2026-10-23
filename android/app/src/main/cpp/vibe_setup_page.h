@@ -5302,7 +5302,7 @@ function addr() {
 //   redraw (a row added or removed) never loses what was typed.
 // ★ Mirrors vibe_bgdecode_config.h: the decoders, their audio tone (USB: signal = dial + tone; LSB: dial − tone).
 // ★ `modes`: only what works — WEFAX and SSTV are not offered on LSB (a mirrored chart is a negative), SSTV on NFM is
-//   the ISS on 145.800. FT8/FT4 is kept as a SUMMARY of the run (spots, countries, the furthest), not as spots.
+//   the ISS on 145.800. FT8/FT4 is kept as a SUMMARY (the last 10 minutes, and each UTC hour), not as spots.
 const BG_DECODERS = [
   { id: "navtex",       label: "NAVTEX",                       tone: 500,  modes: ["usb", "lsb"] },
   { id: "rtty",         label: "RTTY (auto)",                  tone: 1000, modes: ["usb", "lsb"] },

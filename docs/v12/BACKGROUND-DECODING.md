@@ -161,6 +161,17 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
   page 1; BACK from an item returns to the same page, scroll and row (the row keeps the focus, so keyboard, D-pad and
   controller carry on from it). An older server without pages gets the old request and no pager. Text items open inline (shown as text, never HTML) and
   images open as images; both clients can download or save an item.
+- **TRANSLATE (2026-10-23)** beside ‹ BACK on a NAVTEX message or RTTY text (never an FT8 summary — that is our own
+  English). The app uses the phone's on-device translator, the one TRANSCRIBE's captions use: Apple's Translation on
+  iOS 26+ (`VibeTranscriber.translateText`, its pack sheet; the language read by NaturalLanguage,
+  `detectTextLanguage`, with the station's language as the prior), ML Kit on Android (`TextTranslate.kt`, packs on
+  Wi-Fi only, any Android version; no detector is bundled, so the language comes from the NAVTEX stopwords and the
+  station). The target is TRANSCRIBE's TRANSLATE TO, or the phone's language when that is off. The web client uses the
+  browser's own `Translator` / `LanguageDetector` into the browser's language, and draws no key where the browser has
+  none or cannot do the pair. One rule for both (`src/utils/galleryTranslate.ts`): line by line so the layout
+  survives; our header, ZCZC/NNNN, figures and positions, `[… signal lost N s …]` markers and garbage lines stay as
+  received; all-capitals lines go in lower case and come back in capitals. Shown in place, marked MACHINE
+  TRANSLATION, ORIGINAL toggles back; no key when the text is already in the target language.
 
 ## Listeners first: priority, in range, locked radios (2026-10-22, beta3)
 
@@ -264,6 +275,7 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 | `scripts/test_admin_bg.ts` | 17 | The admin line's wording. (beta 4) |
 | `scripts/test-web-gallery-pages.mjs` | 20 | Pages through the real server and the real built page in headless Edge: totals per filter, the old request unchanged, the pager, filter reset, BACK to the same page/scroll/row. (beta 4) |
 | `scripts/test_gallery_pager.ts` | 13 | The pager's numbering (one rule for web and app). (beta 4) |
+| `scripts/test_gallery_translate.ts` | 26 | TRANSLATE's rule: the lines sent and kept, the Mondolfo text as Italian, Niton's French, the station hint, no key in the target language, the layout put back. (2026-10-23) |
 
 The live test uses two test-only environment variables:
 - `VIBESERVER_BG_WAIT_SEC` overrides the owner's wait;

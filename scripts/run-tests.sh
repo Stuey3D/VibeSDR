@@ -526,6 +526,8 @@ if node --no-warnings scripts/test_navtex.ts >/dev/null; then pass=$((pass+1)); 
 #    server's readers through scripts/gen-navtex-stations.mjs — stale output fails here. The rule's cases are in
 #    test_navtex.ts above and vibeserver/test-bgdecode.cpp.
 if node --no-warnings scripts/test_gallery_pager.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_gallery_pager.ts"; fi
+# ★ The gallery's TRANSLATE (2026-10-23): which lines are sent, the source language and its hint, the layout kept.
+if node --no-warnings scripts/test_gallery_translate.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_gallery_translate.ts"; fi
 if node --no-warnings scripts/test_admin_bg.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_admin_bg.ts"; fi
 if node scripts/gen-navtex-stations.mjs --check >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/gen-navtex-stations.mjs --check (stale — run it)"; fi
 if bash scripts/test-rtty-auto.sh >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test-rtty-auto.sh"; fi

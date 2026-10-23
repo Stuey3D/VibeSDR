@@ -21,6 +21,23 @@ RCT_EXTERN_METHOD(download
                   : (RCTPromiseResolveBlock)resolve rejecter
                   : (RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(textTranslateInfo
+                  : (RCTPromiseResolveBlock)resolve rejecter
+                  : (RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(detectTextLanguage
+                  : (NSString *)text hints
+                  : (NSArray<NSString *> *)hints resolver
+                  : (RCTPromiseResolveBlock)resolve rejecter
+                  : (RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(translateText
+                  : (NSString *)text source
+                  : (NSString *)source target
+                  : (NSString *)target resolver
+                  : (RCTPromiseResolveBlock)resolve rejecter
+                  : (RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(keep
                   : (NSArray<NSString *> *)languages resolver
                   : (RCTPromiseResolveBlock)resolve rejecter

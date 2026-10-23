@@ -11,6 +11,11 @@
  *   it is neither reloaded nor scrolled back to the top. An older server sends no "total": its newest 300, no pager.
  * ★ Offered only on a VibeServer (SDRScreen passes `galleryAvail` from client.isVibe): a GALLERY key on a receiver that
  *   has none would be a dead control (AGENTS.md).
+ * ★★ TRANSLATE (2026-10-23) beside ‹ BACK on a text item: the message through the phone's own translator — the one
+ *   TRANSCRIBE's captions use (Apple Translation / ML Kit), into TRANSLATE TO (the phone's language when that is off).
+ *   Line by line, so the layout survives; ZCZC/NNNN, figures, positions, fade markers and garbage are left as received
+ *   (utils/galleryTranslate.ts). Shown in place, marked MACHINE TRANSLATION, ORIGINAL toggles back. Drawn only when the
+ *   phone can translate, the language is known and is not already the target.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -18,6 +23,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
 import { withReadAuth } from '../services/vibeAuth';
 import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
+import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
+         galleryTranslateLines, type GalleryTrLine } from '../utils/galleryTranslate';
+import { detectTextLanguage, langName, textTranslateInfo, translateText } from '../services/transcriber';
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -35,8 +43,9 @@ export function galleryWhen(t: number): string {
 export function galleryFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
 function size(b: number): string { return b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`; }
 
-export default function GalleryOverlay({ visible, base, readAuth = '', onClose }: {
-  visible: boolean; base: string; readAuth?: string; onClose: () => void;
+export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose }: {
+  /** TRANSCRIBE's TRANSLATE TO ('' = off → the phone's own language). */
+  visible: boolean; base: string; readAuth?: string; translateTo?: string; onClose: () => void;
 }) {
   const pt = usePopupTheme();
   const s = useMemo(() => makeStyles(pt), [pt]);
@@ -49,6 +58,13 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
   const [note, setNote] = useState('');
   const [open, setOpen] = useState<GalleryItem | null>(null);
   const [text, setText] = useState('');
+  const [textOk, setTextOk] = useState(false);
+  // ★ TRANSLATE: the plan (what is sent, from what, into what), the result, which is shown, and what to say.
+  const [trPlan, setTrPlan] = useState<{ lines: GalleryTrLine[]; source: string; target: string } | null>(null);
+  const [trText, setTrText] = useState<string | null>(null);
+  const [showTr, setShowTr] = useState(false);
+  const [trBusy, setTrBusy] = useState(false);
+  const [trNote, setTrNote] = useState('');
 
   const load = useCallback(async () => {
     setItems(null); setNote('');
@@ -77,12 +93,43 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
   const fileUrl = (it: GalleryItem) => withReadAuth(`${b}/vibeserver/gallery/file/${encodeURIComponent(it.f)}`, readAuth);
   const isImage = (it: GalleryItem) => /\.png$/i.test(it.f);
   const show = async (it: GalleryItem) => {
-    setOpen(it); setText('');
+    setOpen(it); setText(''); setTextOk(false);
     if (isImage(it)) return;
     try {
       const r = await fetch(fileUrl(it), { cache: 'no-store' } as any);
       setText(r.ok ? await r.text() : 'This item is no longer on the server (the gallery is full and keeps the newest).');
+      setTextOk(r.ok);
     } catch { setText('Could not reach the server.'); }
+  };
+  // ★ Whether to draw TRANSLATE for the item now open — worked out once its text is here.
+  useEffect(() => {
+    setTrPlan(null); setTrText(null); setShowTr(false); setTrBusy(false); setTrNote('');
+    if (!open || !textOk || !text || isImage(open)) return;
+    let dead = false;
+    void (async () => {
+      const info = await textTranslateInfo();
+      if (dead || !info.available) return;
+      const target = translateTo || info.deviceLanguage || '';
+      const lines = galleryTranslateLines(text, open.k);
+      const body = galleryTranslatableText(lines);
+      if (!body || !target) return;
+      const hint = galleryHintLanguage(open.title);
+      const guess = galleryGuessLanguage(body, hint);
+      // ★ iOS: NaturalLanguage reads it, with the station's language and the stopword guess as its priors.
+      const source = (info.detect ? await detectTextLanguage(body, [hint, guess].filter(Boolean)) : '') || guess;
+      if (!dead && galleryCanTranslate(lines, source, target)) setTrPlan({ lines, source, target });
+    })();
+    return () => { dead = true; };
+  }, [open, text, textOk, translateTo]);
+  const onTranslate = async () => {
+    if (!trPlan || trBusy) return;
+    if (trText != null) { setShowTr(v => !v); return; }
+    setTrBusy(true); setTrNote('');
+    const r = await galleryTranslate(trPlan.lines, trPlan.target, (t) => translateText(t, trPlan.source, trPlan.target));
+    setTrBusy(false);
+    if (!r.done) { setTrNote(r.reason || 'The translation did not work on this phone.'); return; }
+    setTrText(r.text); setShowTr(true);
+    setTrNote(r.failed ? `${r.failed} line${r.failed === 1 ? '' : 's'} left as received${r.reason ? ` (${r.reason})` : ''}` : '');
   };
   const close = () => { setOpen(null); onClose(); };
 
@@ -92,9 +139,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
         <SafeAreaView style={s.panel} edges={['top', 'bottom']}>
           <View style={s.head}>
             <Text style={s.title}>GALLERY</Text>
-            <TouchableOpacity onPress={open ? () => setOpen(null) : close} style={s.key} accessibilityRole="button">
-              <Text style={s.keyText}>{open ? '‹ BACK' : 'CLOSE'}</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row' }}>
+              {open && trPlan && (
+                <TouchableOpacity onPress={() => { void onTranslate(); }} style={[s.key, showTr && { borderColor: pt.ink.selected, backgroundColor: pt.ink.selectedBg }]}
+                                  accessibilityRole="button" accessibilityState={{ busy: trBusy, selected: showTr }}
+                                  accessibilityLabel={showTr ? 'Show the original' : `Translate from ${langName(trPlan.source)}`}>
+                  <Text style={[s.keyText, showTr && { color: pt.ink.selected }]}>{trBusy ? 'TRANSLATING…' : showTr ? 'ORIGINAL' : 'TRANSLATE'}</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={open ? () => setOpen(null) : close} style={s.key} accessibilityRole="button">
+                <Text style={s.keyText}>{open ? '‹ BACK' : 'CLOSE'}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
           {open && (
             <View style={{ flex: 1 }}>
@@ -108,7 +164,17 @@ export default function GalleryOverlay({ visible, base, readAuth = '', onClose }
                   <Image source={{ uri: fileUrl(open) }} style={s.image} resizeMode="contain" />
                 </ScrollView>
               ) : (
-                <ScrollView style={s.textBox} contentContainerStyle={scrollLane}><Text selectable style={s.mono}>{text || 'Loading…'}</Text></ScrollView>
+                <>
+                  {(showTr || !!trNote) && (
+                    <Text style={s.trNote}>
+                      {(showTr && trPlan ? `MACHINE TRANSLATION · ${langName(trPlan.source)} → ${langName(trPlan.target)} · on this device` : '')
+                       + (showTr && trNote ? ' · ' : '') + trNote}
+                    </Text>
+                  )}
+                  <ScrollView style={s.textBox} contentContainerStyle={scrollLane}>
+                    <Text selectable style={s.mono}>{(showTr && trText != null ? trText : text) || 'Loading…'}</Text>
+                  </ScrollView>
+                </>
               )}
               <TouchableOpacity onPress={() => { void Linking.openURL(fileUrl(open) + (fileUrl(open).includes('?') ? '&' : '?') + 'download=1'); }}
                                 style={[s.key, { alignSelf: 'flex-start', marginTop: 8 }]} accessibilityRole="button">
@@ -187,6 +253,7 @@ function makeStyles(pt: PopupTokens) {
     tag: { color: pt.ink.textFaint, fontSize: 10, letterSpacing: 1 },
     dim: { color: pt.ink.textDim, fontSize: 12, marginTop: 4 },
     meta: { color: pt.ink.textDim, fontSize: 12, marginBottom: 8 },
+    trNote: { color: pt.ink.selected, fontSize: 11, letterSpacing: 1, marginBottom: 6 },
     textBox: { flex: 1, borderWidth: 1, borderColor: pt.ink.border, borderRadius: 8, padding: 10, backgroundColor: 'rgba(0,0,0,0.25)' },
     mono: { color: pt.ink.text, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 13, lineHeight: 19 },
     image: { width: '100%', aspectRatio: 1.2, backgroundColor: '#fff' },

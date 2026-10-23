@@ -177,3 +177,34 @@ export function transcribeLanguageList(caps: TranscribeCaps | null): { code: str
 
 /** A stored choice → the row it belongs to: 'auto', or the language code (older builds stored 'fr-BE'). */
 export function transcribeChoiceCode(stored: string): string { return stored === 'auto' ? 'auto' : baseOf(stored); }
+
+/* ★★ V12 GALLERY TRANSLATE (2026-10-23) — a TEXT through the same on-device translator as the captions: Apple's
+ *   Translation on iOS 26+ (VibeTranscriber.swift translateText, its language packs and download sheet), ML Kit on
+ *   Android (TextTranslate.kt — packs on Wi-Fi only, as the captions). Nothing leaves the phone. An older native build
+ *   without these methods → not available, and the gallery draws no TRANSLATE (AGENTS.md: no dead controls). */
+export interface TextTranslateInfo {
+  available: boolean;
+  reason?: string;
+  /** The phone's own translation target ('en-GB', 'pt-BR') — used when TRANSLATE TO is off. */
+  deviceLanguage?: string;
+  /** The platform can identify a text's language itself (iOS NaturalLanguage). */
+  detect?: boolean;
+}
+let textInfo: Promise<TextTranslateInfo> | null = null;
+export function textTranslateInfo(): Promise<TextTranslateInfo> {
+  if (!Native?.textTranslateInfo || !Native?.translateText) return Promise.resolve({ available: false, reason: 'Not in this build' });
+  if (!textInfo) {
+    textInfo = Native.textTranslateInfo().catch((e: any) => { textInfo = null; return { available: false, reason: String(e?.message ?? e) }; });
+  }
+  return textInfo as Promise<TextTranslateInfo>;
+}
+/** One line or paragraph, source → target (language ids). { ok, text } or { ok: false, reason }. */
+export function translateText(text: string, source: string, target: string): Promise<{ ok: boolean; text?: string; reason?: string }> {
+  if (!Native?.translateText) return Promise.resolve({ ok: false, reason: 'Not in this build' });
+  return Native.translateText(text, source, target).catch((e: any) => ({ ok: false, reason: String(e?.message ?? e) }));
+}
+/** The text's language by the platform's own detector (iOS), with `hints` as its priors; '' when it cannot say. */
+export function detectTextLanguage(text: string, hints: string[]): Promise<string> {
+  if (!Native?.detectTextLanguage) return Promise.resolve('');
+  return Native.detectTextLanguage(text, hints).then((r: any) => (Number(r?.p) >= 0.5 ? String(r?.lang || '') : '')).catch(() => '');
+}

@@ -287,6 +287,78 @@ class VibeTranscriber: RCTEventEmitter {
     (engineBox as? TranscribeEngine)?.stop()
     engineBox = nil
   }
+
+  /* ★★ V12 GALLERY TRANSLATE (2026-10-23) — a TEXT through the same translator as the captions (Translator below:
+   *   Apple's Translation, its language packs and its own download sheet — never a silent download). JS sends one line
+   *   at a time (src/utils/galleryTranslate.ts), so a NAVTEX message keeps its layout. */
+
+  /// { available, detect, deviceLanguage } — iOS 26 for TranslationSession(installedSource:target:), as the captions.
+  @objc func textTranslateInfo(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard #available(iOS 26.0, *) else { resolve(["available": false, "reason": "Needs iOS 26 or later"]); return }
+    Task { resolve(["available": true, "detect": true, "deviceLanguage": await SpeechEngines.deviceTranslateTarget()]) }
+  }
+
+  /// The language of `text` by NaturalLanguage, `hints` (language codes — the station's, the stopword guess) as its
+  /// priors. { lang, p } — lang "" when it cannot say. A teleprinter's capitals are read in lower case.
+  @objc func detectTextLanguage(_ text: String, hints: [String], resolver resolve: @escaping RCTPromiseResolveBlock,
+                                rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let r = NLLanguageRecognizer()
+    var h: [NLLanguage: Double] = [:]
+    for x in hints where !x.isEmpty { h[NLLanguage(rawValue: x)] = 0.3 }
+    if !h.isEmpty { r.languageHints = h }
+    r.processString(text.lowercased())
+    if let best = r.languageHypotheses(withMaximum: 3).max(by: { $0.value < $1.value }) {
+      resolve(["lang": best.key.rawValue, "p": best.value])
+    } else {
+      resolve(["lang": "", "p": 0])
+    }
+  }
+
+  /// One line, `source` → `target` (language ids). { ok: true, text } or { ok: false, reason }.
+  @objc func translateText(_ text: String, source: String, target: String, resolver resolve: @escaping RCTPromiseResolveBlock,
+                           rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard #available(iOS 26.0, *) else { resolve(["ok": false, "reason": "Needs iOS 26 or later"]); return }
+    Task {
+      let (out, why) = await TextTranslators.shared.translate(text, source: source, target: target)
+      if let out { resolve(["ok": true, "text": out]) } else { resolve(["ok": false, "reason": why]) }
+    }
+  }
+}
+
+/// ★ The gallery's translator: ONE prepared pair at a time (a language pack is the memory; a NAVTEX message is one
+/// pair). A pair that failed (the pack sheet declined, a pair the device cannot do) is dropped, so the next press asks
+/// again rather than failing silently for ever.
+@available(iOS 26.0, *)
+final actor TextTranslators {
+  static let shared = TextTranslators()
+  private var key = ""
+  private var tr: Translator?
+  private let note = NoteBox()
+
+  func translate(_ text: String, source: String, target: String) async -> (String?, String) {
+    let k = "\(source)>\(target)"
+    if k != key || tr == nil {
+      key = k
+      note.set("")
+      let box = note
+      let t = Translator(source: Locale.Language(identifier: source), target: Locale.Language(identifier: target)) { box.set($0) }
+      tr = t
+      await t.prepare()
+    }
+    guard let t = tr else { return (nil, "") }
+    if let out = await t.translate(text) { return (out, "") }
+    let why = note.get()
+    tr = nil; key = ""
+    return (nil, why.isEmpty ? "The translator could not do this line" : why)
+  }
+}
+
+/// The last thing the Translator said (its pack sheet, "not available on this device") — the reason JS shows.
+final class NoteBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var text = ""
+  func set(_ s: String) { lock.lock(); text = s; lock.unlock() }
+  func get() -> String { lock.lock(); defer { lock.unlock() }; return text }
 }
 
 // MARK: - Speech engines

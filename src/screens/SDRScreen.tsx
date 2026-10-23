@@ -12520,6 +12520,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         visible={galleryOpen}
         base={connectBase}
         readAuth={radioAuthSuffix || route.params.authSuffix || ''}
+        translateTo={txTarget}
         onClose={() => setGalleryOpen(false)}
       />
       <RecordingsOverlay

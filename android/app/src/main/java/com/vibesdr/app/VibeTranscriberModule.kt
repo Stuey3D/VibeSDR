@@ -75,6 +75,21 @@ class VibeTranscriberModule(private val ctx: ReactApplicationContext) : ReactCon
         TranscribeEngine.download(ctx, language, translateTo, p)
     }
 
+    /** ★★ V12 GALLERY TRANSLATE: { available, detect, deviceLanguage }. ML Kit runs on every SDK this app does, so it is
+     *  always available; no text-language detector is bundled (JS reads the language from its stopwords and the
+     *  NAVTEX station — src/utils/galleryTranslate.ts). */
+    @ReactMethod
+    fun textTranslateInfo(p: Promise) {
+        val m = Arguments.createMap()
+        m.putBoolean("available", true); m.putBoolean("detect", false)
+        m.putString("deviceLanguage", java.util.Locale.getDefault().language)
+        p.resolve(m)
+    }
+
+    /** One line, source → target (language codes): { ok, text } or { ok: false, reason }. TextTranslate.kt. */
+    @ReactMethod
+    fun translateText(text: String, source: String, target: String, p: Promise) { TextTranslate.translate(text, source, target, p) }
+
     /** The dial, for SSB auto-tune of the recogniser's feed: 'usb'/'lsb' arm it, any change resets it. */
     @ReactMethod
     fun tuning(mode: String, freqHz: Double) { VibeTranscribeTap.setTuning(mode, freqHz) }

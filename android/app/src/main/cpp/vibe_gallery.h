@@ -239,7 +239,7 @@ public:
         evictLocked(dir, limit, openNames());
         return true;
     }
-    /** ★★ V12 beta 4: an item REWRITTEN IN PLACE (the FT8 summary every 10 min: one card per run, not one per
+    /** ★★ V12 beta 4: an item REWRITTEN IN PLACE (the FT8 summary's last-10-minutes card: one card, not one per
      *  rewrite). The file is replaced whole (tmp + rename, so a reader never sees half of it) and its index line takes the
      *  new title where it stands. False when it is gone (evicted, the folder cleared) — the caller starts a new one. */
     /** `toNewest`: the line also MOVES to the end of the index, so the card lists first (the rolling FT8 card).
