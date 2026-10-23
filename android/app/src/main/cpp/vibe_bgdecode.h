@@ -103,6 +103,15 @@ public:
             saveHeld(true);
         }
     }
+    /** ★★ A translated weather report (V12, 2026-10-23): written INLINE, under the raw groups it came from — the text
+     *  that carried its '=' (and the end of that line) is already in buf_. Indented, so the raw stays the raw. */
+    void report(const synop::Report& r) override {
+        std::lock_guard<std::mutex> lk(m_);
+        if (done_ || navtex_) return;
+        if (!buf_.empty() && buf_.back() != '\n') buf_ += '\n';
+        buf_ += "    \xc2\xbb " + r.line + "\n";
+        for (const auto& d : r.details) buf_ += "        " + d + "\n";
+    }
     void tick() override {
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;

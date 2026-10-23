@@ -17,6 +17,9 @@
 //   --wfm MHz   adds a WFM STEREO station at that absolute frequency: 75 kHz deviation, a 19 kHz
 //               pilot and a 38 kHz L-R subcarrier locked to it, a different tone in each ear — so
 //               the stereo decoder has something real to lock to (2026-09-28, the audio-dropout hunt).
+//   --rtty MHz  adds an RTTY signal centred at that absolute frequency: DWD's weather shape, 50 Bd, 450 Hz shift (mark
+//               high), ITA2 with LTRS/FIGS, sending --rtty-text over and over (default: a short SYNOP bulletin; "\\r"
+//               "\\n" in the text are CR/LF). Tune USB 1 kHz below it and the tones sit at 775 / 1225 Hz.
 //   --dab FILE  while the dongle is tuned inside Band III (174-240 MHz), replay FILE (unsigned 8-bit
 //               IQ at 2.048 MS/s, e.g. bench-clip/dab-bench-clean.vbu8) on a loop instead of the
 //               synthetic signal, so DAB locks, decodes and produces real audio on the bench.
@@ -35,6 +38,26 @@ const PORT  = arg('port', 1234);
 let   RATE  = arg('rate', 2_400_000);
 const TONES = arg('tones', 3);
 const WFM_HZ = arg('wfm', 0) * 1e6;
+const RTTY_HZ = arg('rtty', 0) * 1e6;
+const RTTY_TEXT = (() => { const i = process.argv.indexOf('--rtty-text'); return i >= 0 ? process.argv[i + 1].replace(/\\r/g, '\r').replace(/\\n/g, '\n') : ''; })()
+  || 'RYRYRYRYRYRY\r\nZCZC 123\r\nAAXX 23064\r\n10384 41/96 82508 10118 20072 30115 40206=\r\nNNNN\r\n';
+/** ★ The RTTY text as a list of bit durations: [mark?, bits] — start 1 space, 5 data LSB first, 1.5 stop. */
+const RTTY_BITS = (() => {
+  if (!RTTY_HZ) return [];
+  const LT = '\0E\nA SIU\rDRJNFCKTZLWHYPQOBG\0MXV\0';
+  const FG = { '3': 1, '-': 3, '8': 6, '7': 7, '4': 10, '5': 16, '2': 19, '6': 21, '0': 22, '1': 23, '9': 24, '.': 28, '/': 29, '=': 30 };
+  const out = []; let figs = false;
+  const code = (c) => { out.push([0, 1]); for (let k = 0; k < 5; k++) out.push([(c >> k) & 1, 1]); out.push([1, 1.5]); };
+  for (let i = 0; i < 4; i++) code(31);
+  for (const ch of RTTY_TEXT) {
+    if (ch === ' ' || ch === '\r' || ch === '\n') { code(ch === ' ' ? 4 : ch === '\r' ? 8 : 2); continue; }
+    if (ch in FG) { if (!figs) { code(27); figs = true; } code(FG[ch]); continue; }
+    const l = LT.indexOf(ch);
+    if (l > 0) { if (figs) { code(31); figs = false; } code(l); }
+  }
+  for (let i = 0; i < 4; i++) code(31);
+  return out;
+})();
 const dabArg = (() => { const i = process.argv.indexOf('--dab'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const DAB_IQ = dabArg ? fs.readFileSync(dabArg) : null;
 if (DAB_IQ) console.log(`[fake-rtl-tcp] DAB clip ${dabArg}: ${(DAB_IQ.length / 2 / 2.048e6).toFixed(2)} s at 2.048 MS/s`);
@@ -63,6 +86,8 @@ const srv = net.createServer((sock) => {
   let dabPos = 0;         // replay position in DAB_IQ (bytes)
   // WFM stereo generator state (see --wfm)
   let fmPhase = 0, pilotPh = 0, lPh = 0, rPh = 0;
+  // RTTY generator state (see --rtty): one oscillator, its rotation switched between mark and space (phase-continuous)
+  const rtOsc = { re: 1, im: 0 }; let rtBit = 0, rtLeft = 0, rtRot = null, rtFor = '';
 
   // ── Pacing ────────────────────────────────────────────────────────────────
   // ★ DEADLINE-BASED, not sleep-based. The original did `generate 50ms of IQ`
@@ -139,11 +164,27 @@ const srv = net.createServer((sock) => {
           re += 0.5 * Math.cos(fmPhase); im += 0.5 * Math.sin(fmPhase);
         }
       }
+      if (RTTY_HZ && RTTY_BITS.length) {
+        const off = RTTY_HZ - centreHz;
+        if (Math.abs(off) < rate / 2) {
+          if (rtFor !== `${off}|${rate}`) {
+            rtFor = `${off}|${rate}`;
+            const wm = 2 * Math.PI * (off + 225) / rate, ws = 2 * Math.PI * (off - 225) / rate;
+            rtRot = [{ c: Math.cos(ws), s: Math.sin(ws) }, { c: Math.cos(wm), s: Math.sin(wm) }];
+          }
+          if (rtLeft <= 0) { rtBit = (rtBit + 1) % RTTY_BITS.length; rtLeft += RTTY_BITS[rtBit][1] * rate / 50; }
+          rtLeft--;
+          const r = rtRot[RTTY_BITS[rtBit][0]];
+          const nr = rtOsc.re * r.c - rtOsc.im * r.s; rtOsc.im = rtOsc.re * r.s + rtOsc.im * r.c; rtOsc.re = nr;
+          re += 0.25 * rtOsc.re; im += 0.25 * rtOsc.im;
+        }
+      }
       buf[i * 2]     = Math.max(0, Math.min(255, Math.round(127.5 + re * 127)));
       buf[i * 2 + 1] = Math.max(0, Math.min(255, Math.round(127.5 + im * 127)));
     }
     for (const o of osc)  renorm(o);
     for (const o of aosc) renorm(o);
+    renorm(rtOsc);
 
     nextDue += CHUNK_MS;
     // If we fell badly behind (debugger, laptop sleep), give up on catching up

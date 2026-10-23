@@ -40,6 +40,7 @@
 #include "decoders/sstv_decoder.h"
 #include "decoders/time_decoder.h"
 #include "decoders/ft8_decoder.h"
+#include "vibe_synop.h"
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -218,6 +219,10 @@ struct DecoderTap {
     virtual void text(const std::string&) {}
     /** Every binary frame the host broadcasts (0x03 state, 0x07 NAVTEX counts, image lines …). */
     virtual void frame(const uint8_t*, size_t) {}
+    /** ★ One RTTY weather report translated (vibe_synop.h) — called right after the text that carried it, so a copy that
+     *  keeps the text can write the translation UNDER its report. (It also arrives as the 0x08 frame, for a tap that
+     *  only keeps frames.) */
+    virtual void report(const synop::Report&) {}
     /** Once per block of audio decoded — the clock a periodic write or a 75-s "end lost" runs on. */
     virtual void tick() {}
     /** The decoder stopped. Write what is held; `interrupted` = it was cut off, not finished. */
@@ -523,6 +528,9 @@ private:
 
     bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_; }
     void clearLocked_() {
+        // ★ A weather report still waiting for its '=' (the decoder stopped mid-report) is read now, so the gallery's
+        //   copy gets its line before it is finished.
+        if (synop_) { sendReports_(synop_->flush()); synop_.reset(); }
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
           if (t) t->finish(running_()); }
@@ -658,6 +666,7 @@ private:
              *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
              *  into the text. A client that sends "auto" also sends a preset's values, which an older server simply uses. */
             rttyAuto_ = new RttyAuto(48000);
+            synop_.reset(new synop::Reader());   // ★ SYNOP/SHIP in plain English beside the raw groups (vibe_synop.h)
             fskState_.store(0, std::memory_order_relaxed);
             rttyAuto_->onChar = [this](char32_t ch) {
                 std::lock_guard<std::mutex> bl(textMtx_);
@@ -682,6 +691,7 @@ private:
             std::string enc = str(msg, "encoding"); if (enc.empty()) enc = navtex ? "CCIR476" : "ITA2";
             std::string framing = str(msg, "framing"); if (framing.empty()) framing = navtex ? "4/7" : "5N1.5";
             fsk_ = new FskDecoder(48000, cf, sh, baud, framing, enc, inv);
+            if (!navtex && enc != "CCIR476") synop_.reset(new synop::Reader());   // ★ RTTY only — NAVTEX is plain language
             fskState_.store(0, std::memory_order_relaxed);
             if (msg.find("\"usos\":true") != std::string::npos) fsk_->setUsos(true);   // ★ unshift on space (manual RTTY)
             fsk_->onChar = [this](char32_t ch) {
@@ -860,9 +870,20 @@ private:
         qCv_.notify_all();
         if (qThread_.joinable()) qThread_.join();
     }
+    /** 0x08 | u32 BE length | UTF-8 JSON (synop::Report::json): one translated weather report. */
+    void sendReport_(const synop::Report& r) {
+        const std::string j = r.json();
+        std::vector<uint8_t> m; m.reserve(5 + j.size());
+        m.push_back(0x08); put32(m, (uint32_t)j.size());
+        m.insert(m.end(), j.begin(), j.end());
+        broadcast(m.data(), m.size());
+        if (DecoderTapPtr t = tap()) t->report(r);
+    }
+    void sendReports_(const std::vector<synop::Reader::Out>& v) { for (auto& r : v) sendReport_(r.report); }
     void decode_(const float* data, int count) {
         std::string text;
         std::vector<NavtexRx::Counts> counts;
+        std::vector<synop::Reader::Out> reports;
         {
             std::lock_guard<std::mutex> lk(decMtx_);
             if (!running_()) return;
@@ -892,8 +913,27 @@ private:
             else if (fsk_) fsk_->process(mono.data(), count);
             else if (rttyAuto_) rttyAuto_->process(mono.data(), count);
             { std::lock_guard<std::mutex> bl(textMtx_); text.swap(textBuf_); counts.swap(nvCounts_); }
+            if (synop_) {
+                const auto now = std::chrono::steady_clock::now();
+                if (!text.empty()) { reports = synop_->push(text); lastText_ = now; }
+                // ★ A report whose '=' was the last thing sent: nothing follows to end its line — out after 3 s quiet.
+                else if (synop_->held() && now - lastText_ > std::chrono::seconds(3)) reports = synop_->releaseHeld(0);
+            }
         }
-        if (!text.empty()) textFrame(text);
+        /* ★★ 0x08 WEATHER REPORT — each SYNOP/SHIP the text just finished, sent IN ITS PLACE in the text: the text up to the
+         *  end of the report's line, then its frame, then the rest. A client draws it under the raw groups it came from;
+         *  one older than this ignores an op it does not know (DecoderClient / decoders.ts act only on 0x01/0x03/0x06/0x07)
+         *  and keeps the raw text exactly as before. */
+        if (!reports.empty()) {
+            size_t from = 0;
+            for (auto& r : reports) {
+                const size_t at = std::min(r.at, text.size());
+                if (at > from) textFrame(text.substr(from, at - from));
+                from = std::max(from, at);
+                sendReport_(r.report);
+            }
+            if (from < text.size()) textFrame(text.substr(from));
+        } else if (!text.empty()) textFrame(text);
         // ★ 0x07 | u32 BE clean | u32 BE repaired | u32 BE lost — after the text, never before it (see fsk attach).
         for (const auto& c : counts) {
             uint8_t m[13]; m[0] = 0x07;
@@ -936,6 +976,8 @@ private:
     std::string name_, startKey_;
     FskDecoder*   fsk_   = nullptr;
     RttyAuto*     rttyAuto_ = nullptr;   // ★ RTTY with "auto":true — finds shift, baud and polarity itself
+    std::unique_ptr<synop::Reader> synop_;   // ★ RTTY's weather reports in plain English (0x08) — decode thread, under decMtx_
+    std::chrono::steady_clock::time_point lastText_{};
     WefaxDecoder* wefax_ = nullptr;
     SstvDecoder*  sstv_  = nullptr;
     TimeDecoder*  time_  = nullptr;
