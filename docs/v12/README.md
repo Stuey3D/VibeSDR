@@ -14,3 +14,5 @@ IDs, benchmark, health chip, crash reporter), what this week's fixes add (exact-
 shared-dial contract for the tracker, WEFAX lessons) and corrections. Read those first.
 
 Other V12 items: [VIRTUAL-AUDIO-CABLE-PLAN.md](../VIRTUAL-AUDIO-CABLE-PLAN.md); the iPhone Duo half-open layout (memory).
+
+RTTY weather reports in plain English (2026-10-23): [SYNOP.md](SYNOP.md) — SYNOP/SHIP translated on the server, the 0x08 frame, the NOAA station list.

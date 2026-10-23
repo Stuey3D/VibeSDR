@@ -68,7 +68,7 @@ flags_for() {
     #   slot decode finishes in a second rather than ten.
     test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22): the real DSP chain AND the real decoders, end to end.
-    test-bgdecode|test-bg-priority) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
+    test-bgdecode|test-bg-priority|test-synop-host) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
     test-bm-names) echo "-O2 -I android/app/src/main/cpp" ;;
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
@@ -131,7 +131,7 @@ deps_for() {
     test-fir-simd)      echo "$VDSP/ddc.cpp" ;;
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
     # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link.
-    test-bgdecode|test-bg-priority) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-bgdecode|test-bg-priority|test-synop-host) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $VDSP/third_party/pffft/pffft.c \
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
@@ -198,7 +198,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-bgdecode|test-bg-priority)
+    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-bgdecode|test-bg-priority|test-synop-host)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -528,6 +528,16 @@ if node --no-warnings scripts/test_navtex.ts >/dev/null; then pass=$((pass+1)); 
 if node --no-warnings scripts/test_gallery_pager.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_gallery_pager.ts"; fi
 if node --no-warnings scripts/test_admin_bg.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_admin_bg.ts"; fi
 if node scripts/gen-navtex-stations.mjs --check >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/gen-navtex-stations.mjs --check (stale — run it)"; fi
+# ★★ SYNOP STATIONS (V12, 2026-10-23): scripts/synop-stations/wmo-stations.tsv (NOAA NCEI ISD, public domain) → the server's
+#    table (vibe_synop_stations.h) through scripts/gen-synop-stations.mjs — stale output fails here. The translator itself:
+#    vibeserver/test-synop.cpp (parser) and test-synop-host.cpp (decoder host + gallery), both in the C++ loop above.
+if node scripts/gen-synop-stations.mjs --check >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/gen-synop-stations.mjs --check (stale — run it)"; fi
+# ★★ …and the web and app halves: the 0x08 frame read, checked and placed (src/utils/weatherReport.ts, the web box in jsdom).
+if node --no-warnings scripts/test_weather_report.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_weather_report.ts"; fi
+if node scripts/test-web-weather-box.mjs >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test-web-weather-box.mjs"; fi
+# ★ The real DDK2 recording through the real decoder: the text test-synop.cpp pastes is still what it prints. Exit 3 = not run.
+bash scripts/test-synop-real.sh >/dev/null 2>&1; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "  ✗ scripts/test-synop-real.sh"; fi
 if bash scripts/test-rtty-auto.sh >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test-rtty-auto.sh"; fi
 if node --no-warnings scripts/test_tune_hint.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_tune_hint.ts"; fi
 # ★★★ A REOPENED SPECTRUM SOCKET CARRIES THE LISTENER'S OWN VFO BACK on a per-listener dial, and NEVER on a
@@ -691,6 +701,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     decoder stops. Same VIBESERVER_BIN rule.
 # ★★★ ONE CANNED VOCABULARY IN FIVE PLACES (2026-10-08, nine social phrases): server, app, web and both watches list
 #     the same ids, and a live shared dial carries every one and drops an unknown one. Same VIBESERVER_BIN rule.
+# ★★★ RTTY WEATHER REPORTS end to end (V12, 2026-10-23): the fake dongle transmits a DWD-shaped SYNOP bulletin, a listener
+#     runs RTTY AUTO, and the server sends the 0x08 translation after its report's text, and the gallery keeps it inline.
+#     ~25 s, silent. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── RTTY SYNOP translation (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-synop.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── shared-dial chat phrases (end to end) ──\033[0m\n'
 node scripts/test-chat-phrases.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
