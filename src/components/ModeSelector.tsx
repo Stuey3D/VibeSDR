@@ -278,6 +278,11 @@ interface ModeSelectorProps {
      *  DAB fully rather than restore the box" — which is correct for THIS button; it is the
      *  decoder box's own X that was conflating the window with the mode. */
     dabAvail?: boolean; dabOn?: boolean; onDab?: () => void;
+    /** ★★ V12 ADS-B, beside DAB and for the same reasons (a whole-radio mode, not a demodulator). Unlike DAB a
+     *  refusal is DRAWN: `adsbWhy` set = the key is dimmed, the reason is printed under the row, and a press
+     *  explains (SDRScreen) — a hidden or silently-greyed key reads as a missing feature. adsbAvail false = an
+     *  older server with no word on ADS-B: no key. */
+    adsbAvail?: boolean; adsbWhy?: string; adsbOn?: boolean; onAdsb?: () => void;
     /** ★★ V12 THE GALLERY — what a VibeServer's decoders heard (GalleryOverlay). Only on a VibeServer. */
     galleryAvail?: boolean; onGallery?: () => void;
     /** ★★★ THE SLUGS THIS RECEIVER PUBLISHES (`/api/extensions`), or null for "never asked".
@@ -360,9 +365,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
    *  decoders section is dropped and DAB is drawn with the demodulators. */
-  const dabInGrid = !!decoderControls?.dabAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown;
+  /* ★ ADS-B is the same kind of key as DAB, so it goes wherever DAB goes — together in the grid, or together in
+   *  the decoders row. */
+  const adsbShown = !!decoderControls?.adsbAvail;
+  const wholeAvail = !!decoderControls?.dabAvail || adsbShown;
+  const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown;
   const decSectionShown = !!decoderControls && !dabInGrid
-    && (clientDecs.length > 0 || advRdsShown || !!decoderControls.dabAvail);
+    && (clientDecs.length > 0 || advRdsShown || wholeAvail);
   const { theme: theme0 } = useTheme();
   const surf = usePopupSurface();
   const pt = usePopupTheme();
@@ -406,6 +415,40 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       </Text>
     </TouchableOpacity>
     )}</NavItem>
+  ) : null;
+  /* ★★ V12 THE ADS-B KEY — one definition for both places it can sit (in the grid beside DAB, or in the decoders row).
+   *  REFUSED ≠ ABSENT (memory: disabled_control_reads_as_absent): a refused key is dimmed AND its reason is printed
+   *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
+   *  nothing, which a listener reports as "ADS-B is missing". */
+  const adsbOff = !!decoderControls?.adsbWhy;
+  const adsbLit = !!decoderControls?.adsbOn;
+  const adsbKey = (inGrid: boolean) => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="adsb" onPress={() => dc.onAdsb?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="ADS-B" active={adsbLit} pip
+          onPress={() => dc.onAdsb?.()} fontSize={inGrid ? 13 : 12} style={adsbOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={adsbOff ? `ADS-B, unavailable: ${dc.adsbWhy}` : 'ADS-B'}
+        style={[st.btn, { borderColor: adsbLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+                adsbLit && { backgroundColor: decBg },
+                adsbOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onAdsb?.()} activeOpacity={0.8}>
+        <Text numberOfLines={1}
+              style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: adsbLit ? dec : t.btnText }]}>
+          ADS-B
+        </Text>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
+  // ★ The reason, in the server's own words, where it can be read without pressing anything.
+  const adsbWhyLine = adsbOff ? (
+    <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+      {`ADS-B unavailable — ${decoderControls!.adsbWhy}`}
+    </Text>
   ) : null;
   /* ★ The settings drop in under the key while it is selected, as RTTY's and TIME's do. AUTO detects the spoken
    *  language; a chosen language downloads its speech model once (the box says so). TRANSLATE TO is a list,
@@ -730,7 +773,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             </TouchableOpacity>
             )}</NavItem>
           ))}
-          {dabInGrid && decoderControls && (
+          {dabInGrid && decoderControls?.dabAvail && (
             <NavItem key="dab" onPress={() => decoderControls.onDab?.()}>{(navFocused, navRef) => pt.metal ? (
               <MetalKey navRef={navRef} focused={navFocused} label="DAB" active={!!decoderControls.dabOn} pip
                 onPress={() => decoderControls.onDab?.()} fontSize={13} />
@@ -749,7 +792,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             </TouchableOpacity>
             )}</NavItem>
           )}
+          {dabInGrid && adsbShown && adsbKey(true)}
         </View></NavRow>
+        {dabInGrid && adsbShown && adsbWhyLine}
 
         {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
             LEFT to widen the lower sideband, the RIGHT one RIGHT to widen the
@@ -939,6 +984,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </TouchableOpacity>
                 )}</NavItem>
               )}
+              {adsbShown && adsbKey(false)}
               {decoderControls.galleryAvail && (
                 <NavItem key="gallery" onPress={() => decoderControls.onGallery?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label="GALLERY" active={false}
@@ -973,6 +1019,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               )}
               {txShown && transcribeKey}
             </View></NavRow>
+            {adsbShown && adsbWhyLine}
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                                        : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>

@@ -122,6 +122,9 @@ export interface LocalHardwarePanelProps {
    *  ignores both messages in the mode. The pickers stayed live and did nothing (Stuart,
    *  2026-09-09); in DAB each is a note saying who holds it, as the web pins them. */
   dabOn?: boolean;
+  /** ★ V12 ADS-B holds the rate (it NEVER changes it — it runs at the rate it found) and the IF filter (the capture
+   *  width) while it runs; the server ignores both messages, so each is a note saying who holds it, as for DAB. */
+  adsbOn?: boolean;
   /** SpyServer: the server owns the radio, so most RTL-specific controls do not
    *  apply. Gain does (it is in the protocol); sample rate, PPM, bias-T, digital
    *  AGC and direct sampling do not — some have no wire representation at all,
@@ -1405,6 +1408,10 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           <Text style={styles.section}>SAMPLE RATE</Text>
           {p.dabOn ? (
             <Text style={styles.note}>2.048M — held by DAB while it runs. Leave DAB to change it.</Text>
+          ) : p.adsbOn ? (
+            <Text style={styles.note}>
+              {`${(p.sampleRate / 1e6).toFixed(p.sampleRate % 1e6 === 0 ? 1 : 3).replace(/0+$/, '').replace(/\.$/, '.0')}M — held by ADS-B while it runs. Leave ADS-B to change it.`}
+            </Text>
           ) : p.lockedRate && p.lockedRate > 0 ? (
             // The SERVER pinned the rate — it IGNORES a sampleRate message outright.
             // Showing a picker whose every use is silently dropped is worse than
@@ -1453,11 +1460,15 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                  and nobody has to know what an IF filter is. It is also the only setting that
                  cannot be got wrong by leaving it alone.
               ★ Drawn only when the server has actually told us it has one — see hasTunerBw. */}
+          {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && p.adsbOn && !p.dabOn && <>
+          <Text style={styles.section}>IF FILTER</Text>
+          <Text style={styles.note}>The capture width — held by ADS-B: a 1090 MHz reply is about 2 MHz wide, so a narrower filter would cut it.</Text>
+          </>}
           {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && p.dabOn && <>
           <Text style={styles.section}>IF FILTER</Text>
           <Text style={styles.note}>2.048 MHz — held by DAB: wide enough for a 1.536 MHz ensemble, narrow enough to keep the next block out.</Text>
           </>}
-          {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && !p.dabOn && (() => {
+          {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && !p.dabOn && !p.adsbOn && (() => {
             const now = p.tunerBw ?? 0;
             /* ★ What is in force, in words — the whole row when the filter is not this listener's,
              *  and the Auto chip's own label otherwise ("Auto · 1.4 MHz now"). */
