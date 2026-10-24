@@ -38,6 +38,9 @@ echo "using cmake: $CMAKE ($("$CMAKE" --version | head -1))"
 git clone --quiet https://github.com/osmocom/rtl-sdr.git "$WORK/src"
 git -C "$WORK/src" checkout --quiet "$TAG"
 git -C "$WORK/src" apply "$HERE/librtlsdr-android.patch"
+# ★★ …and the cancel guard every VibeServer build carries (vibeserver/linux/librtlsdr-cancel-wait.patch): the async
+#    reader waits for its transfers to come home before freeing them. See the note in vibeserver/linux/build-deps.sh.
+git -C "$WORK/src" apply "$HERE/../../../../../../vibeserver/linux/librtlsdr-cancel-wait.patch"
 
 for ABI in arm64-v8a armeabi-v7a; do
   # ★★★ 16 KB PAGES ARE A PLAY REQUIREMENT, NOT A NICETY. Since 2025-11-01 every update targeting

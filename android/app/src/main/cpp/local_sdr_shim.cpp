@@ -8866,6 +8866,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (want <= 0) want = std::min(baseFftRate, kIdleFps);
         const double mr = g_vsMaxFftRate.load();     // the owner's ceiling still wins
         if (mr > 0 && want > mr) want = mr;
+        /* ★★ ADS-B: A VERY SLOW WATERFALL, NOT NONE (Stuart, 2026-10-24: "drop it to a very slow rate and hide it in
+         *  favour of the map, that way we save CPU but preserve gain etc functions"). The clients put the map over it;
+         *  the engine still runs, so the RSP's AGC kick, the gain telemetry and the link meter all keep working — the
+         *  lesson of DAB's first build, when skipping the chain made every client read a dead link. Its cost is per
+         *  FRAME (one block gathered per frame, the rest dropped), so 1 fps saves most of it. */
+        if (g_adsbMode.load(std::memory_order_relaxed) && want > 1.0) want = 1.0;
         /* ★★ AND THE GOVERNOR'S, BELOW THE OWNER'S (vibe_spec_governor.h): only while this box is starved for CPU,
          *  20 → 10 → 5. It never raises anything — the owner's top and a listener's lower ask both still hold — and
          *  the idle floor (2 fps) is below every rung, so it is never touched. */
@@ -12962,6 +12968,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_adsb.start(runRate, g_bgLat.load(), g_bgLon.load());
         adsbLastReport_ = adsbLastGain_ = nowSecs();
         g_adsbMode.store(true);
+        recomputeEngineRate();               // ★ the waterfall slows to a crawl behind the map — see recomputeEngineRate
         applyAutoIf();
         tuneHw(logical);
         {
@@ -12994,6 +13001,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         g_adsb.stop();
+        recomputeEngineRate();               // ★ the waterfall back at the listeners' rate
         const AdsbSaved& s = adsbSaved_;
         rx.setSpectrumOnly(false);
         rx.requestReset();
@@ -13076,6 +13084,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     AdsbSaved adsbHandOff() {
         if (!g_adsbMode.exchange(false)) return adsbSaved_;
         g_adsb.stop();
+        recomputeEngineRate();
         std::vector<std::shared_ptr<net::Socket>> socks;
         { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
         for (auto& sk : socks) sendText(sk, "{\"type\":\"adsb_off\"}");

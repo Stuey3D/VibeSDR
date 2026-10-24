@@ -66,7 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   takes EVERY path from it (VIBE_LINUX_DEPS) — a missing file is a configure error, not a fallback.
 # ★ Same versions as vibeserver/mac/build-deps.sh, verified inside the script (SHA-256 for the
 #   tarballs, the full commit for rtl-sdr, the V4L strings, no udev symbols).
-COPY build-deps.sh /opt/build-deps.sh
+COPY build-deps.sh librtlsdr-cancel-wait.patch /opt/
 # ★ Two compile jobs, niced: the Mac overheats and the Lenovo is a live receiver.
 ARG DEPS_JOBS=2
 # ★ build-debs-remote.sh passes DEPS_NICE=19 on the Lenovo, which is a live receiver.

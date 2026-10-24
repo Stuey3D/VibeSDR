@@ -1,0 +1,122 @@
+diff --git a/src/librtlsdr.c b/src/librtlsdr.c
+index 55d2ef1..d5bc3f9 100644
+--- a/src/librtlsdr.c
++++ b/src/librtlsdr.c
+@@ -97,6 +97,9 @@ struct rtlsdr_dev {
+ 	void *cb_ctx;
+ 	enum rtlsdr_async_status async_status;
+ 	int async_cancel;
++	/* ★ VibeSDR: transfers submitted and not yet completed. Completions run on WHICHEVER thread pumps
++	 * libusb events — the reader, or any thread doing a synchronous control transfer — so atomics. */
++	int xfer_inflight;
+ 	int use_zerocopy;
+ 	/* rtl demod context */
+ 	uint32_t rate; /* Hz */
+@@ -1722,11 +1725,20 @@ static void LIBUSB_CALL _libusb_callback(struct libusb_transfer *xfer)
+ {
+ 	rtlsdr_dev_t *dev = (rtlsdr_dev_t *)xfer->user_data;
+ 
++	/* ★ VibeSDR: this transfer is home. */
++	__atomic_sub_fetch(&dev->xfer_inflight, 1, __ATOMIC_ACQ_REL);
++
+ 	if (LIBUSB_TRANSFER_COMPLETED == xfer->status) {
+ 		if (dev->cb)
+ 			dev->cb(xfer->buffer, xfer->actual_length, dev->cb_ctx);
+ 
+-		libusb_submit_transfer(xfer); /* resubmit transfer */
++		/* ★ VibeSDR: resubmit ONLY while still running. Upstream resubmits unconditionally, so a transfer
++		 * completing after a cancel had begun went straight back out — in flight again behind the cancel. */
++		if (RTLSDR_RUNNING == __atomic_load_n(&dev->async_status, __ATOMIC_ACQUIRE)) {
++			__atomic_add_fetch(&dev->xfer_inflight, 1, __ATOMIC_ACQ_REL);
++			if (libusb_submit_transfer(xfer) < 0)
++				__atomic_sub_fetch(&dev->xfer_inflight, 1, __ATOMIC_ACQ_REL);
++		}
+ 		dev->xfer_errors = 0;
+ 	} else if (LIBUSB_TRANSFER_CANCELLED != xfer->status) {
+ #ifndef _WIN32
+@@ -1885,6 +1897,7 @@ int rtlsdr_read_async(rtlsdr_dev_t *dev, rtlsdr_read_async_cb_t cb, void *ctx,
+ 
+ 	dev->async_status = RTLSDR_RUNNING;
+ 	dev->async_cancel = 0;
++	dev->xfer_inflight = 0;
+ 
+ 	dev->cb = cb;
+ 	dev->cb_ctx = ctx;
+@@ -1911,8 +1924,10 @@ int rtlsdr_read_async(rtlsdr_dev_t *dev, rtlsdr_read_async_cb_t cb, void *ctx,
+ 					  (void *)dev,
+ 					  BULK_TIMEOUT);
+ 
++		__atomic_add_fetch(&dev->xfer_inflight, 1, __ATOMIC_ACQ_REL);
+ 		r = libusb_submit_transfer(dev->xfer[i]);
+ 		if (r < 0) {
++			__atomic_sub_fetch(&dev->xfer_inflight, 1, __ATOMIC_ACQ_REL);
+ 			fprintf(stderr, "Failed to submit transfer %i\n"
+ 					"Please increase your allowed " 
+ 					"usbfs buffer size with the "
+@@ -1940,41 +1955,37 @@ int rtlsdr_read_async(rtlsdr_dev_t *dev, rtlsdr_read_async_cb_t cb, void *ctx,
+ 		}
+ 
+ 		if (RTLSDR_CANCELING == dev->async_status) {
++			/* ★★★ VibeSDR: WAIT FOR EVERY TRANSFER TO COME HOME BEFORE FREEING ANY.
++			 * Upstream cancelled, treated libusb's "already cancelling" (NOT_FOUND) as "finished", and freed
++			 * all the transfers while the kernel still held their URBs. The next thing to pump events — the
++			 * caller's own control transfer (set_sample_rate) — reaped a URB whose transfer, and its mutex,
++			 * were gone: usbi_mutex_lock asserted and the process aborted (VibeServer, live rate changes on
++			 * the Sony TV and the Pi 2). Cancel each once, then handle events until none is in flight. */
++			struct timeval step = { 0, 100000 };
++			int k, spins;
+ 			next_status = RTLSDR_INACTIVE;
+ 
+ 			if (!dev->xfer)
+ 				break;
+ 
+-			for(i = 0; i < dev->xfer_buf_num; ++i) {
+-				if (!dev->xfer[i])
+-					continue;
+-
+-				if (LIBUSB_TRANSFER_CANCELLED !=
+-						dev->xfer[i]->status) {
+-					r = libusb_cancel_transfer(dev->xfer[i]);
+-					/* handle events after canceling
+-					 * to allow transfer status to
+-					 * propagate */
+-#ifdef _WIN32
+-					Sleep(1);
+-#endif
+-					libusb_handle_events_timeout_completed(dev->ctx,
+-									       &zerotv, NULL);
+-					if (r < 0)
+-						continue;
+-
+-					next_status = RTLSDR_CANCELING;
+-				}
+-			}
+-
+-			if (dev->dev_lost || RTLSDR_INACTIVE == next_status) {
+-				/* handle any events that still need to
+-				 * be handled before exiting after we
+-				 * just cancelled all transfers */
+-				libusb_handle_events_timeout_completed(dev->ctx,
+-								       &zerotv, NULL);
+-				break;
++			for (i = 0; i < dev->xfer_buf_num; ++i)
++				if (dev->xfer[i])
++					libusb_cancel_transfer(dev->xfer[i]);   /* a transfer already home just says so */
++
++			for (spins = 0; spins < 20 &&
++			     __atomic_load_n(&dev->xfer_inflight, __ATOMIC_ACQUIRE) > 0; ++spins)
++				libusb_handle_events_timeout_completed(dev->ctx, &step, NULL);
++
++			k = __atomic_load_n(&dev->xfer_inflight, __ATOMIC_ACQUIRE);
++			if (k > 0) {
++				/* ★ Two seconds and still not home: never free memory the kernel may still write.
++				 * Leak this set (a few hundred KB, once) rather than corrupt the heap. */
++				fprintf(stderr, "rtlsdr: %d transfer(s) still in flight after cancel — "
++					"leaving their buffers allocated\n", k);
++				dev->xfer = NULL;
++				dev->xfer_buf = NULL;
+ 			}
++			break;
+ 		}
+ 	}
+ 

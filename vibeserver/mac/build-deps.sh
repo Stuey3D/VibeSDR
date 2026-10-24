@@ -134,10 +134,16 @@ fi
 
 # ── librtlsdr 2.0.3 (osmocom/rtl-sdr 797f814) ────────────────────────────────────────────────
 RTL_SHA=797f8143266d983c56d8f35d2d442527529dd8a5
-RTL_STAMP="librtlsdr $RTL_SHA libusb=$USB_VER min=$MIN arch=$ARCH $CCVER"
+RTL_PATCH="$(cd "$(dirname "$0")" && pwd)/../linux/librtlsdr-cancel-wait.patch"
+RTL_STAMP="librtlsdr $RTL_SHA patch=$(shasum -a 256 "$RTL_PATCH" | cut -c1-12) libusb=$USB_VER min=$MIN arch=$ARCH $CCVER"
 if stamp_ok librtlsdr "$RTL_STAMP" "$PREFIX/lib/librtlsdr.a"; then echo "==> librtlsdr 2.0.3: up to date"; else
   echo "==> librtlsdr 2.0.3 ($RTL_SHA): building for macOS $MIN"
   git_at https://github.com/osmocom/rtl-sdr.git "$RTL_SHA" "$WORK/rtl"
+  # ★★ OUR ONE PATCH TO librtlsdr (V12, 2026-10-24): rtlsdr_read_async's cancel waits for every transfer to come home
+    #    before freeing any (upstream freed them with URBs still in the kernel; the next control transfer could then lock a
+    #    destroyed mutex — the usbi_mutex_lock abort seen on live rate changes in September). Not reproducible since on any
+    #    host (500+ live rate changes, 2026-10-24), so it is a GUARD, not a proven fix. See librtlsdr-cancel-wait.patch.
+  git -C "$WORK/rtl" apply "$RTL_PATCH" || { echo "!! librtlsdr-cancel-wait.patch did not apply"; exit 1; }
   # ★ The static target only: the rtl_* tools and the dylib are not shipped, so building them would
   #   be work (and a dylib lying around to be linked by mistake) for nothing.
   # ★ libusb passed BY PATH — PkgConfig is disabled above, so this cannot resolve to Homebrew's.

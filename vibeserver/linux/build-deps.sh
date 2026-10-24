@@ -136,6 +136,11 @@ git init -q "$WORK/rtl"
 git -C "$WORK/rtl" fetch -q --depth 1 https://github.com/osmocom/rtl-sdr.git "$RTL_SHA"
 git -C "$WORK/rtl" checkout -q FETCH_HEAD
 [ "$(git -C "$WORK/rtl" rev-parse HEAD)" = "$RTL_SHA" ] || { echo "!! rtl-sdr is not at $RTL_SHA — refusing"; exit 1; }
+# ★★ OUR ONE PATCH TO librtlsdr (V12, 2026-10-24): rtlsdr_read_async's cancel waits for every transfer to come home
+#    before freeing any (upstream freed them with URBs still in the kernel; the next control transfer could then lock a
+#    destroyed mutex — the usbi_mutex_lock abort seen on live rate changes in September). Not reproducible since on any
+#    host (500+ live rate changes, 2026-10-24), so it is a GUARD, not a proven fix. See librtlsdr-cancel-wait.patch.
+git -C "$WORK/rtl" apply "$(dirname "$0")/librtlsdr-cancel-wait.patch" || { echo "!! librtlsdr-cancel-wait.patch did not apply"; exit 1; }
 # ★ libusb BY PATH, pkg-config disabled — the same arrangement as the Mac build, so it cannot resolve
 #   to a system libusb. DETACH_KERNEL_DRIVER as the shipped .so had it (a dongle the DVB driver holds).
 CC_ONLY="${CC%% *}"   # cmake wants the compiler alone; the cross profiles' flags come from the toolchain file
