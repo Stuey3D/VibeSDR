@@ -115,7 +115,8 @@ export function routeShort(r: AdsbRoute | undefined): string {
   const iata = !!(r.fromIata && r.toIata);
   return `${iata ? r.fromIata : r.from} → ${iata ? r.toIata : r.to}`;
 }
-/** The list row's second line: operator · type · registration · route — what there is, in that order. */
+/** The list row's second line: operator · type · route · registration — what there is, in that order. ★ The route
+ *  before the registration: on a narrow list the end is what gets cut, and the card carries the registration anyway. */
 export function adsbInfoLine(a: AdsbInfo): string {
-  return [a.op || (a.opName === 'Private' ? 'Private' : ''), a.t, a.r, routeShort(a.route)].filter(Boolean).join(' · ');
+  return [a.op || (a.opName === 'Private' ? 'Private' : ''), a.t, routeShort(a.route), a.r].filter(Boolean).join(' · ');
 }

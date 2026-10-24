@@ -215,6 +215,8 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   ok(M.opBadge({ op: 'RYR' }) === 'RYR' && M.opBadge({ op: '<s>' }) === '' && M.opBadge({}) === '', 'operator badge');
   ok(M.imgKey('RYR-B738') === 'RYR-B738' && M.imgKey('../etc') === '' && M.imgKey('a/b') === '' && M.imgKey('x'.repeat(41)) === '', 'image keys are the server index\'s keys only');
   ok(M.WAKE.H === 'Heavy' && M.WAKE.J === 'Super', 'wake categories');
+  ok(M.shortAirport('London Luton Airport') === 'London Luton' && M.shortAirport('Belfast International Airport') === 'Belfast'
+     && M.shortAirport('RAF Lakenheath') === 'RAF Lakenheath', 'airport names shortened for the card');
   ok(M.toneKey({ hex: '43c0a1', seen_pos: 1 }) === 'military', 'military takes the blue');
   ok(M.toneKey({ hex: '43c0a1', squawk: '7700', seen_pos: 1 }) === 'alert', 'an emergency still wins over military');
   ok(M.toneKey({ hex: '43c0a1', alt_baro: 'ground' }) === 'ground', 'on the ground is still grey');

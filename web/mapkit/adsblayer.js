@@ -402,6 +402,8 @@
     const a = r.fromIata && r.toIata ? r.fromIata : r.from, b = r.fromIata && r.toIata ? r.toIata : r.to;
     return a && b ? String(a) + ' \u2192 ' + String(b) : '';
   }
+  /** "London Luton Airport" → "London Luton": the words every airport's name ends with carry nothing on a card. */
+  function shortAirport(n) { return String(n || '').replace(/\s+(International\s+)?(Airport|Airfield|Aerodrome|Air Base)$/i, '').trim(); }
   /** The operator's text badge: the ICAO designator, else nothing (a private operator has none). */
   function opBadge(a) { return a && /^[A-Z0-9]{2,4}$/.test(String(a.op || '')) ? String(a.op) : ''; }
   /** Only keys the server can have named: letters, digits, '-', '_' (vibe_adsb_data.h Images::validKey). */
@@ -411,7 +413,7 @@
                   wrapLon, distNm, bearingDeg, destination, cardinal, deadReckon, iconFor, altText, altShort,
                   vsText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
-                  engText, flagEmoji, routeShort, opBadge, imgKey, WAKE };
+                  engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport };
 
   /* ══ ICONS — one geometry, two renderers ═══════════════════════════════════════════════════════
    * Every icon is a list of parts in a 40×40 box, nose up (north), centre (20,20): f = filled path,
@@ -573,7 +575,7 @@
       + p + ' button:focus-visible{outline:1px solid rgba(' + T.hi + ',0.8);outline-offset:-2px}'
       + '.vsadsb-pop-' + th + ' .maplibregl-popup-content,.vsadsb-pop-' + th + ' .leaflet-popup-content-wrapper{background:rgba(' + T.bg + ',0.96);'
       + 'border:1px solid rgba(' + T.border + ',0.30);color:rgba(' + T.ink + ',0.90);font:13px ui-monospace,"SF Mono",Menlo,Consolas,monospace;'
-      + 'border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,0.5)}'
+      + 'border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,0.5);max-height:min(46vh,360px);overflow-y:auto}'
       + '.vsadsb-pop-' + th + ' .leaflet-popup-content{margin:0}'
       + '.vsadsb-pop-' + th + ' .leaflet-popup-tip{background:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-bottom .maplibregl-popup-tip{border-top-color:rgba(' + T.bg + ',0.96)}'
@@ -592,7 +594,11 @@
       + '.vsadsb-pop-' + th + ' .op{display:flex;align-items:center;gap:8px;margin:-2px 0 6px;min-height:20px}'
       + '.vsadsb-pop-' + th + ' .op img{max-width:85px;max-height:20px;object-fit:contain}'
       + '.vsadsb-pop-' + th + ' .badge{border:1px solid rgba(' + T.border + ',0.55);border-radius:3px;padding:0 4px;font-size:11px;letter-spacing:1px;color:rgba(' + T.hi + ',0.95)}'
-      + '.vsadsb-pop-' + th + ' .sil{display:block;max-width:85px;max-height:20px;margin:0 0 6px;object-fit:contain}'
+      + '.vsadsb-pop-' + th + ' .sil{display:block;max-width:85px;max-height:20px;object-fit:contain;margin-left:auto}'
+      + '.vsadsb-pop-' + th + ' .idb{margin:0 0 7px;padding-bottom:6px;border-bottom:1px solid rgba(' + T.border + ',0.18);line-height:16px}'
+      + '.vsadsb-pop-' + th + ' .idb .l{color:rgba(' + T.ink + ',0.95)}'
+      + '.vsadsb-pop-' + th + ' .idb .d,.vsadsb-pop-' + th + ' .idb .l.d{color:rgba(' + T.ink + ',0.65);font-size:12px}'
+      + '.vsadsb-pop-' + th + ' .idb .rt{color:rgba(' + T.hi + ',0.95)}'
       + '.vsadsb-pop-' + th + ' .off{text-decoration:line-through;opacity:0.6}'
       + '.vsadsb-pop-' + th + ' .ph{display:block;margin:8px 0 0}.vsadsb-pop-' + th + ' .ph img{display:block;width:100%;max-width:256px;border-radius:4px}'
       + '.vsadsb-pop-' + th + ' .ph span{display:block;font-size:10px;opacity:0.75;margin-top:2px}'
@@ -1006,20 +1012,22 @@
       const em = emergencyOf(a);
       // ── what it is (the server's aircraft data) ──
       const known = !!(a.r || a.t || a.opName || a.country || a.route);
-      row('Registration', a.r ? String(a.r) : '');
-      row('Aircraft', [a.t, a.desc].filter(Boolean).join(' \u00b7 ') + (SPECIES[a.species] ? ' (' + SPECIES[a.species] + ')' : ''));
-      row('Operator', a.opName ? String(a.opName) + (a.op && a.op !== a.opName ? ' (' + a.op + ')' : '') : '');
-      row('Country', a.countryName || a.country ? ((flagOrCode(a.country) ? flagOrCode(a.country) + ' ' : '') + String(a.countryName || a.country)) : '');
-      if (isMilitary(a)) row('Status', 'Military');
-      row('Wake', WAKE[a.wtc] ? WAKE[a.wtc] : '');
-      row('Engines', engText(a.eng));
+      /* ★★ COMPACT LINES, NOT TABLE ROWS: a table row per field wrapped to a dozen lines on a phone and pushed the card's
+       *  top under the map's own top bar (390 pt, bench 2026-10-24). One line each: what it is, who flies it, where. */
+      const idl = [];
+      const line = (html, cls) => { if (html) idl.push('<div class="' + (cls || 'l') + '">' + html + '</div>'); };
+      line([a.t, a.desc, a.r].filter(Boolean).map(esc).join(' \u00b7 ') + (SPECIES[a.species] ? ' (' + esc(SPECIES[a.species]) + ')' : ''));
+      const fl = flagOrCode(a.country);
+      line([a.opName ? esc(a.opName) : '', a.countryName || a.country ? (fl ? esc(fl) + ' ' : '') + esc(a.countryName || a.country) : ''].filter(Boolean).join(' \u00b7 '));
+      line([isMilitary(a) ? 'MILITARY' : '', WAKE[a.wtc] ? WAKE[a.wtc] + ' wake' : '', engText(a.eng)].filter(Boolean).map(esc).join(' \u00b7 '), 'l d');
       const rt = a.route && typeof a.route === 'object' ? a.route : null;
       if (rt && rt.from && rt.to) {
-        const end = (code, iata, nm, place) => esc((iata || code) + (nm ? ' ' + nm : place ? ' ' + place : ''));
-        const txt = end(rt.from, rt.fromIata, rt.fromName, rt.fromPlace) + ' \u2192 ' + end(rt.to, rt.toIata, rt.toName, rt.toPlace);
-        // ★ a filed route the aircraft is nowhere near (a reused callsign, a diversion): shown struck through, said why
-        rowHtml('Route', rt.plausible === false ? '<span class="off" title="The aircraft is far from this filed route">' + txt + '</span>' : txt);
-        if (Array.isArray(rt.stops) && rt.stops.length > 2) row('Stops', rt.stops.map(String).join(' \u2013 '));
+        // ★ short: the code, then the airport's name without its "International Airport" tail
+        const end = (code, iata, nm, place) => esc((iata || code) + ((nm = shortAirport(nm) || place || '') ? ' ' + nm : ''));
+        let txt = end(rt.from, rt.fromIata, rt.fromName, rt.fromPlace) + ' \u2192 ' + end(rt.to, rt.toIata, rt.toName, rt.toPlace);
+        if (Array.isArray(rt.stops) && rt.stops.length > 2) txt += ' <span class="d">(' + rt.stops.map(esc).join(' \u2013 ') + ')</span>';
+        // ★ a filed route the aircraft is nowhere near (a reused callsign, a diversion): struck through, and said why
+        line(rt.plausible === false ? '<span class="off" title="The aircraft is far from this filed route">' + txt + '</span>' : '\u2708 ' + txt, 'l rt');
       }
       row('Altitude', altText(a.alt_baro) + (num(a.alt_geom) != null && a.alt_baro !== 'ground' ? '  (GNSS ' + Math.round(a.alt_geom).toLocaleString('en-GB') + ' ft)' : ''));
       row('Climb', vsText(a.baro_rate));
@@ -1030,7 +1038,7 @@
         const d = distNm(rx.lat, rx.lon, s.fix.lat, s.fix.lon), b = bearingDeg(rx.lat, rx.lon, s.fix.lat, s.fix.lon);
         row('From you', (d < 10 ? d.toFixed(1) : Math.round(d)) + ' NM · ' + Math.round(b) + '° ' + cardinal(b));
       }
-      row(a.t ? 'Category' : 'Type', CAT_NAME[String(a.category || '').toUpperCase()] || '');
+      if (!a.t) row('Type', CAT_NAME[String(a.category || '').toUpperCase()] || '');   // ★ the real type says more
       const seen = num(a.seen);
       row('Heard', seen == null ? '' : seen < 2 ? 'just now' : Math.round(seen) + ' s ago');
       row('Signal', num(a.rssi) != null ? a.rssi.toFixed(1) + ' dBFS' + (num(a.messages) != null ? ' · ' + a.messages + ' msgs' : '') : '');
@@ -1048,8 +1056,8 @@
       const sub = cleanFlight(a.flight) || a.r ? s.hex.toUpperCase() : '';
       return (em ? '<div class="em">' + esc(em) + '</div>' : '')
         + '<div class="t">' + esc(name) + (sub ? '<i>' + esc(sub) + '</i>' : '') + '</div>'
-        + (logo || badge ? '<div class="op">' + (logo || badge) + '</div>' : '')
-        + sil
+        + (logo || badge || sil ? '<div class="op">' + (logo || badge) + sil + '</div>' : '')
+        + (idl.length ? '<div class="idb">' + idl.join('') + '</div>' : '')
         + '<table>' + rows.join('') + '</table>' + photo + credit;
     }
     function select(hex) {

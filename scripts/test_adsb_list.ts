@@ -62,7 +62,7 @@ eq('input not mutated', tie.map((t) => t.icao), ['bbbbbb', 'aaaaaa']);
   const raw = st.apply([{ hex: '4ca2d6', flight: 'RYR8CK', lat: 52, lon: -2 }, { hex: '3f0001', lat: 51, lon: 0 }, { hex: '400ab0' }]);
   const rs = adsbListRows(adsbToAircraft(raw as any, { lat: 52, lon: -1 }));
   const ry = rs.find((r) => r.hex === '4ca2d6')!;
-  eq('second line: operator · type · registration · route', ry.info, 'RYR \u00b7 B738 \u00b7 EI-DLJ \u00b7 ACE \u2192 BHX');
+  eq('second line: operator · type · route · registration', ry.info, 'RYR \u00b7 B738 \u00b7 ACE \u2192 BHX \u00b7 EI-DLJ');
   eq('flag + badge + logo key', [ry.flag, ry.op, ry.logo], ['\u{1F1EE}\u{1F1EA}', 'RYR', 'RYR-B738']);
   eq('the server says military (a block the old rule does not know)', rs.find((r) => r.hex === '3f0001')!.military, true);
   eq('military sorts above the nearest civil', rs[0].hex, '3f0001');

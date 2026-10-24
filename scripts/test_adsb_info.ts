@@ -43,7 +43,7 @@ eq('full replaces everything', [st.size, st.get('400001')], [1, undefined]);
 // ── words ──
 eq('route short', routeShort(full.route), 'ACE → BHX');
 eq('implausible: no short route', routeShort({ from: 'EGLL', to: 'KJFK', plausible: false }), '');
-eq('info line', adsbInfoLine(full), 'RYR · B738 · EI-DLJ · ACE → BHX');
+eq('info line', adsbInfoLine(full), 'RYR · B738 · ACE → BHX · EI-DLJ');
 eq('flag', [flagEmoji('IE'), flagEmoji('I'), flagEmoji(null)], ['\u{1F1EE}\u{1F1EA}', '', '']);
 
 // ── the web list's rows (web/client/src/adsb.ts), bundled ──
@@ -60,7 +60,7 @@ eq('flag', [flagEmoji('IE'), flagEmoji('I'), flagEmoji(null)], ['\u{1F1EE}\u{1F1
   const html: string = mod.adsbListHtml(report, { lat: 52, lon: -1 }, 'http://srv/adsb/');
   ok('flag before the callsign', html.includes('<span class="flag" title="IE">\u{1F1EE}\u{1F1EA}</span>RYR8CK'));
   ok('the owner\'s logo replaces the badge', html.includes('<img class="oplogo" src="http://srv/adsb/logo/RYR-B738" alt="RYR">'));
-  ok('type · registration · route on the second line', html.includes('B738 · EI-DLJ · ACE → BHX'));
+  ok('type · route · registration on the second line', html.includes('B738 · ACE → BHX · EI-DLJ'));
   ok('server-military row is military', /data-hex="3f0001"/.test(html) && html.indexOf('3f0001') < html.indexOf('4ca2d6') && html.includes('adsbRow mil'));
   ok('no data: hex on the second line as before', html.includes('<small>400123</small>'));
   const noLogo: string = mod.adsbListHtml(report, null, '');
