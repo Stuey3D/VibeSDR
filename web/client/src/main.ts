@@ -7911,7 +7911,10 @@ function adsbGainRender() {
   key.hidden = !can;
   if (!can) { pop.hidden = true; return; }
   const auto = r!.gainAuto === 1, busy = r!.gainBusy === 1;
-  const html = `<span class="k">GAIN</span> ${r!.gain!.toFixed(1)}${auto ? ' · AUTO' : ' dB'}`;
+  /* ★ TRAINING (Stuart, 2026-10-24: "when the AGC is learning there should be a little AGC training icon so that a user
+   *  knows why the message rate has dropped suddenly") — the ramp and the ten-minute look both try gains that decode
+   *  less for a few seconds; the key says so while they do. */
+  const html = `<span class="k">GAIN</span> ${r!.gain!.toFixed(1)}${auto ? ' · AUTO' : ' dB'}${auto && busy ? ' <span class="tr" title="Finding the gain that decodes the most — the message rate dips while each step is tried">TRAINING</span>' : ''}`;
   if (key.innerHTML !== html) key.innerHTML = html;
   $('adsbGainNow').textContent = `${r!.gain!.toFixed(1)} dB`;
   ($('adsbGainAuto') as HTMLButtonElement).classList.toggle('on', auto);

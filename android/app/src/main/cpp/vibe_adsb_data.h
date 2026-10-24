@@ -336,7 +336,16 @@ public:
         rescanLocked();
         const auto& idx = kind ? sil_ : logo_;
         auto it = idx.find(upper(key));
-        if (it == idx.end()) return false;
+        /* ★★ A MISS RE-READS THE FOLDER (at most every 30 s). The packs are installed by ONE radio's process (its admin
+         *  page) while another — the machine's front door, which a tunnel reaches — serves /adsb/logo/ from its own index,
+         *  read every five minutes: Stuart's logos were "?" through the tunnel until it caught up (2026-10-24). */
+        if (it == idx.end() && time(nullptr) - scanned_ >= 30) {
+            scanned_ = 0;
+            rescanLocked();
+            const auto& idx2 = kind ? sil_ : logo_;
+            it = idx2.find(upper(key));
+            if (it == idx2.end()) return false;
+        } else if (it == idx.end()) return false;
         if (path) *path = dir_ + (kind ? "/Silhouettes/" : "/OperatorFlags/") + it->second;
         if (mime) {
             const std::string& f = it->second;

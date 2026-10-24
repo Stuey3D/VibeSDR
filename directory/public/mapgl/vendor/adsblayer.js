@@ -1099,7 +1099,7 @@
         const src = ph && ph.thumbnail_large && ph.thumbnail_large.src || ph && ph.thumbnail && ph.thumbnail.src;
         const p = src && /^https:\/\//.test(src) && ph.link ? { src: String(src), link: String(ph.link), by: String(ph.photographer || '') } : null;
         photoCache.set(s.hex, { at: now(), p });
-        if (selected === s.hex && popup && ac.has(s.hex)) { const h = cardHtml(ac.get(s.hex)); if (h !== popupHtml) { popupHtml = h; if (gl) popup.setHTML(h); else popup.setContent(h); } }
+        if (selected === s.hex && popup && ac.has(s.hex)) { const h = cardHtml(ac.get(s.hex)); if (h !== popupHtml) setCard(h); }
       }).catch((e) => { console.error('adsblayer: photo lookup', e); photoCache.set(s.hex, { at: now(), p: null }); });
       return null;
     }
@@ -1167,7 +1167,7 @@
         + '<div class="t">' + esc(name) + (sub ? '<i>' + esc(sub) + '</i>' : '') + MIN_BTN(false) + '</div>'
         + (logo || badge || sil ? '<div class="op">' + (logo || badge) + sil + '</div>' : '')
         + (idl.length ? '<div class="idb">' + idl.join('') + '</div>' : '')
-        + '<table>' + rows.join('') + '</table>' + photo + credit;
+        + '<div class="vsadsb-dyn"><table>' + rows.join('') + '</table></div>' + photo + credit;
     }
     function select(hex) {
       if (hex === selected && popup) return;
@@ -1266,6 +1266,28 @@
       }
       return drawing;
     }
+    /* ★★ THE CARD'S FIGURES CHANGE EVERY SECOND ("Heard", the message count), ITS PICTURES DO NOT. Replacing the whole card
+     *  made new <img>s each report — and an image whose first load had failed showed Safari's "?" flickering every
+     *  second (Stuart, 2026-10-24: the list showed the logo, the card did not). Only the table is replaced when nothing
+     *  else changed; the logo, silhouette and photo stay the nodes that loaded. */
+    const DYN_OPEN = '<div class="vsadsb-dyn">', DYN_CLOSE = '</table></div>';
+    function splitDyn(h) {
+      const a = h.indexOf(DYN_OPEN);
+      if (a < 0) return null;
+      const b = h.indexOf(DYN_CLOSE, a);
+      if (b < 0) return null;
+      return { out: h.slice(0, a) + h.slice(b + DYN_CLOSE.length), dyn: h.slice(a + DYN_OPEN.length, b + '</table>'.length) };
+    }
+    function setCard(h) {
+      const el = popup && popup.getElement ? popup.getElement() : null;
+      const o = popupHtml ? splitDyn(popupHtml) : null, n = splitDyn(h);
+      if (el && o && n && o.out === n.out) {
+        const d = el.querySelector('.vsadsb-dyn');
+        if (d) { d.innerHTML = n.dyn; popupHtml = h; return; }
+      }
+      popupHtml = h;
+      if (gl) popup.setHTML(h); else popup.setContent(h);
+    }
     function onMinClick(e) {
       const b = e.target && e.target.closest ? e.target.closest('.vsadsb-min') : null;
       if (!b) return;
@@ -1336,7 +1358,7 @@
       for (const s of ac.values()) if (!seen.has(s.hex) && !s.goneAt) s.goneAt = t;
       if (selected && popup && ac.has(selected)) {
         const h = cardHtml(ac.get(selected));
-        if (h !== popupHtml) { popupHtml = h; if (gl) popup.setHTML(h); else popup.setContent(h); }
+        if (h !== popupHtml) setCard(h);
       }
       cameraStep(false);
       kick();

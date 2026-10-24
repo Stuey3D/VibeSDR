@@ -20899,7 +20899,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
             }
             if (bytes.empty()) {
-                sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: max-age=300\r\n"
+                // ★ kept 30 s, not 5 min: a pack installed a moment ago must not stay a broken image in the browser
+                sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: max-age=30\r\n"
                               "Connection: close\r\nContent-Length: 0\r\n\r\n");
             } else {
                 std::string r = vsAirImageReply(bytes, mime, vsAirEtag(bytes), ifNoneMatch, false, "max-age=86400");

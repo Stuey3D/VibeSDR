@@ -1158,6 +1158,10 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
  *   says what the radio is at; its card holds AUTO and the radio's own gain steps */
 #adsbTop #adsbGain { font-size: 12px; padding: 6px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #adsbGain .k { opacity: 0.6; letter-spacing: 1.5px; }
+#adsbGain .tr { margin-left: 4px; padding: 1px 5px; border-radius: 4px; font-size: 10px; letter-spacing: 1.2px;
+  color: #0b0b0b; background: rgba(255, 184, 51, 0.85); animation: adsbTrain 1.6s ease-in-out infinite; }
+@keyframes adsbTrain { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #adsbGain .tr { animation: none; } }
 #adsbGainPop { position: absolute; top: 8px; right: max(10px, env(safe-area-inset-right, 0px)); z-index: 1200; width: min(300px, calc(100vw - 32px));
   box-sizing: border-box; padding: 12px; border-radius: 10px; background: rgba(8, 6, 2, 0.94); border: 1px solid rgba(255, 160, 0, 0.35);
   color: rgba(255, 184, 51, 0.92); font-size: 12px; letter-spacing: 1px; display: grid; gap: 10px; }
