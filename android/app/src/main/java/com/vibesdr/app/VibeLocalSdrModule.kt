@@ -575,6 +575,25 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }.start()
     }
 
+    /** ★★★ A radio that fell over at a rate a mode boosted to (vibe_rate_guard.h): what is recorded, for the red line
+     *  beside the rate switch. The files dir backs it whether or not the server is running. */
+    @ReactMethod
+    fun rateGuardState(promise: Promise) {
+        try {
+            VibeLocalSDR.setRateGuardBase(VibeServerBoot.rateGuardBase(reactContext.filesDir))
+            promise.resolve(VibeLocalSDR.rateGuardJson())
+        } catch (t: Throwable) { promise.reject("rate_guard", t.message ?: "$t") }
+    }
+    /** The owner has read it: forget it, so the rate switch can be ticked again. */
+    @ReactMethod
+    fun rateGuardClear(promise: Promise) {
+        try {
+            VibeLocalSDR.setRateGuardBase(VibeServerBoot.rateGuardBase(reactContext.filesDir))
+            VibeLocalSDR.rateGuardClear()
+            promise.resolve(VibeLocalSDR.rateGuardJson())
+        } catch (t: Throwable) { promise.reject("rate_guard", t.message ?: "$t") }
+    }
+
     private fun dabScanHttp(port: Int, block: String, known: Boolean): String {
         val url = java.net.URL("http://127.0.0.1:$port/vibeserver/dab-scan?block=" +
             java.net.URLEncoder.encode(block, "UTF-8") + (if (known) "&known=1" else ""))

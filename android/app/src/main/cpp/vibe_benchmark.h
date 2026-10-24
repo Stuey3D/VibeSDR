@@ -355,13 +355,14 @@ inline double measureUplinkKBps() {
  *  {"v":1,"at":<epoch>,"rows":[{id,label,rate,pct,grade,thread}],"recommendRate":<Hz>,"lockedUsers":{nfm,am,ssb}}. */
 inline std::string runBenchmark(const std::function<void(int, int, const std::string&)>& progress = nullptr,
                                 double secondsPerScenario = 4.0, double uplinkKBps = -2,
-                                const std::function<std::vector<benchdetail::Result>()>& moreRows = nullptr) {
+                                const std::function<std::vector<benchdetail::Result>()>& moreRows = nullptr,
+                                int moreRowSteps = 2) {
     /* ★★ THIS THREAD PLAYS vibe-dsp — it feeds every scenario (runOne) and runs the decoder rows — so it flushes
      *  denormals as the served one does (vibeAudioThread). Without it the bench would charge a quiet signal's
      *  denormals to a box whose server never pays them. See vibedsp/vibe_denormals.h. */
     vibeFlushDenormals();
     // ★ moreRows: rows a host adds that need more than vibedsp — DAB (vibe_benchmark_dab.h: runDabRows), which
-    //   pulls in the DAB service and its audio decoder. A row graded "none" (pct -1) could not be measured.
+    //   pulls in the DAB service and its audio decoder, and ADS-B (vibe_benchmark_adsb.h: runAdsbRows). A row graded "none" (pct -1) could not be measured.
     // -2 = measure it here (desktop/Linux); an Android host passes its own figure, or -1 for "could not".
     /* ★ The step count is fixed before anything runs so the bar never jumps backwards: the network probe, the
      *  scenarios, the four locked-range listeners, and the two DAB rows when a host supplies them. */
@@ -369,7 +370,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         auto& p = benchProgress();
         p.running.store(true);
         p.step.store(0);
-        p.steps.store(1 + 1 + 7 + 4 + 6 + (moreRows ? 2 : 0));
+        p.steps.store(1 + 1 + 7 + 4 + 6 + (moreRows ? moreRowSteps : 0));   // ★ DAB's 2, + ADS-B's 2 where the host adds them
         { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
     }
     /* ★★★ FIRST, WHILE THE MACHINE IS COOLEST: the all-core clock calibration the throttle snail is

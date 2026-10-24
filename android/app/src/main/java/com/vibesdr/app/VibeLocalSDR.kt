@@ -122,8 +122,8 @@ object VibeLocalSDR {
     fun getVibeServerStatus(): String { return if (loaded) nativeGetVibeServerStatus() else "{\"running\":false}" }
     /** ★ The server benchmark — see VibeBenchmark, which stops the radio first and calls this off the main
      *  thread. Blocks for a minute or two. */
-    fun runBenchmark(clipPath: String, uplinkKBps: Double): String =
-        if (loaded) nativeRunBenchmark(clipPath, uplinkKBps) else ""
+    fun runBenchmark(clipPath: String, adsbClipPath: String, uplinkKBps: Double): String =
+        if (loaded) nativeRunBenchmark(clipPath, adsbClipPath, uplinkKBps) else ""
     fun getNetStatus(): String { return if (loaded) nativeGetNetStatus() else "{\"tcp\":false}" }
     /** ★ Live benchmark progress — {running, step, steps, label}. See nativeBenchProgress. */
     fun benchProgress(): String =
@@ -308,6 +308,14 @@ object VibeLocalSDR {
         ensureLoaded(); nativeSetDabPolicy(rateBoost, adsbExtreme, blockedCsv)
     }
     private external fun nativeSetDabPolicy(rateBoost: Boolean, adsbExtreme: Boolean, blockedCsv: String)
+    /** ★★★ A radio that fell over at a rate a mode boosted to (vibe_rate_guard.h) — <base>.json / <base>.marker in the
+     *  files dir. Set BEFORE setDabPolicy (VibeServerBoot): a run that died there turns the rate switch off. */
+    fun setRateGuardBase(base: String) { ensureLoaded(); nativeSetRateGuardBase(base) }
+    fun rateGuardJson(): String { ensureLoaded(); return nativeRateGuardJson() }
+    fun rateGuardClear() { ensureLoaded(); nativeRateGuardClear() }
+    private external fun nativeSetRateGuardBase(base: String)
+    private external fun nativeRateGuardJson(): String
+    private external fun nativeRateGuardClear()
     /** ★★ Where a NEW session starts (Hz + demodulator). hz <= 0 / "" = no landing. */
     fun setVibeServerLanding(hz: Double, mode: String) { ensureLoaded(); nativeSetVibeServerLanding(hz, mode) }
     private external fun nativeSetVibeServerLanding(hz: Double, mode: String)
@@ -515,5 +523,5 @@ object VibeLocalSDR {
     private external fun nativeSetServerSampleRate(rate: Double)
     private external fun nativeGetServerStatus(): String
     private external fun nativeGetVibeServerStatus(): String
-    private external fun nativeRunBenchmark(clipPath: String, uplinkKBps: Double): String
+    private external fun nativeRunBenchmark(clipPath: String, adsbClipPath: String, uplinkKBps: Double): String
 }

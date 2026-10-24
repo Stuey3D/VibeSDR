@@ -212,6 +212,9 @@ object VibeServerBoot {
     /** ★ `keepRadioAlive` is REQUIRED too, for the same reason: it needs a Context for its default, which this
      *  function has never had, and a defaulted parameter is how a new start path ships without it. Callers pass
      *  keepRadioAlive(ctx, cfg). */
+    /** ★ Where the boosted-rate guard lives (vibe_rate_guard.h): one radio per phone, so one file. */
+    fun rateGuardBase(filesDir: File): String = File(filesDir, "vibe_rate_guard").absolutePath
+
     fun applyAndStart(cfg: JSONObject, fd: Int, vendorId: Int, productId: Int, filesDir: File,
                       serveOnLan: Boolean, keepRadioAlive: Boolean): Int {
         val centerFreq = cfg.n("centerFreq", 100_000_000.0)
@@ -330,6 +333,8 @@ object VibeServerBoot {
              *  property of the RADIO and its aerial, like the resting gain below — not of
              *  sharing or management, which is what Advanced governs. An HF-only radio should
              *  not offer WFM whether or not its owner has opened the Advanced pane. */
+            // ★★ A radio that fell over at a boosted rate — FIRST: a run that died there turns the rate switch off below.
+            VibeLocalSDR.setRateGuardBase(rateGuardBase(filesDir))
             // ★ adsbExtreme absent = false: ADS-B at 3.2 MS/s is never the default (an RTL may drop samples there).
             VibeLocalSDR.setDabPolicy(cfg.b("dabRateBoost", false), cfg.b("adsbExtreme", false), cfg.s("blockedModes"))
             // ★ Absent = -1 = the build's default, so the main app (which never sends it) is unchanged.

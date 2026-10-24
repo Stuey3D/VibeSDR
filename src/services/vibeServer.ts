@@ -7,6 +7,7 @@ import type { ServerBookmark } from './stations';
 import { bookmarkPassband, parseBookmarksAny } from './userBookmarks';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AndroidConnectedRadio } from './androidIcom';
+import type { RateGuardState } from './rateGuard';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
 // audio + waterfall over a WebSocket, ~25x lighter than raw RTL-TCP IQ). The
@@ -441,6 +442,16 @@ export async function dabScanOutcome(): Promise<DabScanOutcome | null> {
 export async function dabQuickScan(block: string, known: boolean, cfg: VibeServerConfig): Promise<DabScanResult> {
   if (!Local?.dabQuickScan) return { ok: false, why: 'this build cannot scan' };
   return JSON.parse(await Local.dabQuickScan(block, known, JSON.stringify(nativeServerConfig(cfg)))) as DabScanResult;
+}
+
+/** ★★★ A radio that fell over at a rate a mode boosted to (src/services/rateGuard.ts reads it). */
+export async function rateGuardState(): Promise<RateGuardState | null> {
+  if (!Local?.rateGuardState) return null;
+  try { return JSON.parse(String(await Local.rateGuardState())) as RateGuardState; } catch { return null; }
+}
+export async function rateGuardClear(): Promise<RateGuardState | null> {
+  if (!Local?.rateGuardClear) return null;
+  try { return JSON.parse(String(await Local.rateGuardClear())) as RateGuardState; } catch { return null; }
 }
 
 /**

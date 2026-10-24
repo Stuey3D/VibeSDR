@@ -19,6 +19,7 @@
 #endif
 #include "vibe_usb_recovery.h"   // ★ the gone-radio rules Kotlin reads — see nativeGiveUpOnGoneRadio
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark — see nativeRunBenchmark
+#include "vibe_benchmark_adsb.h"  // ★ …and its ADS-B rows (CPU only)
 /* ★★ vibemap::setDir — where this server keeps its map pack. Android has no directory next to the
  *  executable and no /usr, which is what vibe_mapdata.h searches, so the path is set explicitly
  *  from the data dir down in nativeSetAdminPaths.
@@ -876,12 +877,15 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
  *  ★ `clipPath` is the DAB clip Kotlin downloaded (empty = no DAB rows, never a guessed figure) and `uplinkKBps`
  *    is the upload speed Kotlin measured, because the C++ path shells out to curl, which Android does not have. */
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeRunBenchmark(JNIEnv* env, jobject, jstring clipPath, jdouble uplinkKBps) {
-    const char* cp = clipPath ? env->GetStringUTFChars(clipPath, nullptr) : nullptr;
-    const std::string clip = cp ? cp : "";
-    if (cp) env->ReleaseStringUTFChars(clipPath, cp);
+Java_com_vibesdr_app_VibeLocalSDR_nativeRunBenchmark(JNIEnv* env, jobject, jstring clipPath, jstring adsbClipPath,
+                                                     jdouble uplinkKBps) {
+    auto str = [&](jstring s) { std::string o; if (!s) return o; const char* c = env->GetStringUTFChars(s, nullptr);
+                                if (c) { o = c; env->ReleaseStringUTFChars(s, c); } return o; };
+    const std::string clip = str(clipPath), adsbClip = str(adsbClipPath);
     const std::string j = vibe::runBenchmark(nullptr, 6.0, (double)uplinkKBps,
-                                             [&] { return vibe::runDabRows(clip, 6.0); });
+                                             [&] { auto r = vibe::runDabRows(clip, 6.0);
+                                                   for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
+                                                   return r; }, 4);
     return env->NewStringUTF(j.c_str());
 }
 
@@ -1363,6 +1367,23 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetDecoderMax(JNIEnv*, jobject, jint max
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetNbWide(JNIEnv*, jobject, jint mode) {
     vibe::LocalSdrShim::setVibeServerNbWide((int)mode);
+}
+/* ★★★ A RADIO THAT FELL OVER AT A RATE A MODE BOOSTED TO — the same guard as the daemon's (vibe_rate_guard.h), kept in
+ *  the app's files dir. setRateGuardBase BEFORE setDabPolicy: a marker left by a run that died at a boosted rate turns
+ *  the rate switch off there. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetRateGuardBase(JNIEnv* env, jobject, jstring base) {
+    const char* c = base ? env->GetStringUTFChars(base, nullptr) : nullptr;
+    vibe::LocalSdrShim::setRateGuardBase(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(base, c);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRateGuardJson(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::rateGuardJson().c_str());
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRateGuardClear(JNIEnv*, jobject) {
+    vibe::LocalSdrShim::rateGuardClear();
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabPolicy(JNIEnv* env, jobject,

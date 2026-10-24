@@ -91,6 +91,10 @@ flags_for() {
     # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
     #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
     test-adsb)             echo "-O2" ;;
+    # ★★ ADS-B's sample supply (vibe_adsb_capture.h — the live capture %), the boosted-rate stall/crash guard
+    #    (vibe_rate_guard.h) and the benchmark's ADS-B row on a fake source (vibe_benchmark_adsb.h, which pulls in the
+    #    benchmark's headers). ~12 s: two parts feed in real time, as the server does.
+    test-adsb-capture)     echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
     *)               echo "" ;;
   esac
 }
