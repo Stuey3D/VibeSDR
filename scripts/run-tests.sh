@@ -432,6 +432,8 @@ if node --no-warnings scripts/test_dab_licensed.ts; then pass=$((pass+1)); else 
 if node --no-warnings scripts/test_adsb_report.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and the map's live list (adsbList.ts): row text, nearest first without shuffling, clear of the zoom stack.
 if node --no-warnings scripts/test_adsb_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ …and V12 aircraft data on the clients (adsbInfo.ts): the adsb_info sanitiser + store, and the web list's rows with it.
+if node --no-warnings scripts/test_adsb_info.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 echo "── image metadata (EXIF / GPS / XMP) ──"
 if python3 scripts/strip-image-metadata.py --check; then pass=$((pass+1)); echo "  none"; else fail=$((fail+1)); echo "  ✗ run: python3 scripts/strip-image-metadata.py"; fi
 # ★★★ A FACEPLATE CANNOT LOCK YOU OUT (faceplate.ts CRASH SAFETY): the mark is armed before a risky

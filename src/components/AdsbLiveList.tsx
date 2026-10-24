@@ -19,7 +19,7 @@
  */
 import { scrollLane } from '../constants/popupTokens';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated, Easing, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, usePanelNav, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
@@ -43,6 +43,9 @@ export interface AdsbLiveListProps {
   onFootprint?: (w: number, h: number) => void;
   /** The map's colours as rgb triplets (MapOverlay `ink`): text, controls, controls-as-legend. */
   ink: { x: string; k: string; kt: string };
+  /** ★ V12: where the server serves the owner's operator logos ("http(s)://host/adsb/"), or null — the row then shows
+   *  the operator's ICAO code as a badge. The server names a logo only when the file exists. */
+  logoBase?: string | null;
   /** The modal's window and the parent's safe-area insets (the hook reads 0 inside a Modal — BrowserOverlay's note). */
   areaW: number;
   areaH: number;
@@ -81,7 +84,7 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
           <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator
                       keyboardShouldPersistTaps="handled">
             {rows.length ? rows.map((r) => (
-              <NavRow key={r.hex}><Row s={s} r={r} onPress={() => p.onFocus(r.hex)} /></NavRow>
+              <NavRow key={r.hex}><Row s={s} r={r} logoBase={p.logoBase ?? null} onPress={() => p.onFocus(r.hex)} /></NavRow>
             )) : (
               <Text style={s.note} numberOfLines={2}>
                 {p.started ? 'Listening on 1090 MHz — no aircraft yet.' : 'Taking the receiver to 1090 MHz…'}
@@ -126,19 +129,24 @@ function LegendKey({ s, onPress }: { s: S; onPress: () => void }) {
   );
 }
 
-function Row({ s, r, onPress }: { s: S; r: AdsbListRow; onPress: () => void }) {
+function Row({ s, r, onPress, logoBase }: { s: S; r: AdsbListRow; onPress: () => void; logoBase: string | null }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
   return (
     <TouchableOpacity ref={viewRef as never} style={[s.row, !r.placed && s.rowUnplaced]} onPress={onPress}
                       disabled={!r.placed} activeOpacity={0.7} accessibilityRole="button"
-                      accessibilityLabel={`${r.label}${r.alt ? ', ' + r.alt : ''}${r.kt ? ', ' + r.kt : ''}${r.range ? ', ' + r.range : ''}`}>
+                      accessibilityLabel={`${r.label}${r.info ? ', ' + r.info : ''}${r.alt ? ', ' + r.alt : ''}${r.kt ? ', ' + r.kt : ''}${r.range ? ', ' + r.range : ''}`}>
       {r.emergency && <EmBreath />}
-      <View style={s.callBox}>
-        <Text style={[s.call, r.emergency && s.emerg, r.military && !r.emergency && s.mil]} numberOfLines={1}>{r.label}</Text>
-        {r.bars > 0 && <SigBars n={r.bars} />}
-        {r.badge ? <Text style={[s.tag, s.tagEm]} numberOfLines={1}>{r.badge}</Text>
-          : r.military ? <Text style={[s.tag, s.tagMil]}>MIL</Text> : null}
+      <View style={s.callCol}>
+        <View style={s.callBox}>
+          {!!r.flag && <Text style={s.flag}>{r.flag}</Text>}
+          <Text style={[s.call, r.emergency && s.emerg, r.military && !r.emergency && s.mil]} numberOfLines={1}>{r.label}</Text>
+          {r.bars > 0 && <SigBars n={r.bars} />}
+          {r.badge ? <Text style={[s.tag, s.tagEm]} numberOfLines={1}>{r.badge}</Text>
+            : r.military ? <Text style={[s.tag, s.tagMil]}>MIL</Text> : null}
+        </View>
+        {/* ★ V12 aircraft data: operator (the owner's logo, else its code as a badge) · type · registration · route */}
+        {!!r.info && <InfoLine s={s} r={r} logoBase={logoBase} />}
       </View>
       <Text style={[s.cell, s.alt, !!r.altCol && { color: r.altCol }]} numberOfLines={1}>{r.alt}{r.trend ? ` ${r.trend}` : ''}</Text>
       <Text style={[s.cell, s.kt]} numberOfLines={1}>{r.kt}</Text>
@@ -148,6 +156,19 @@ function Row({ s, r, onPress }: { s: S; r: AdsbListRow; onPress: () => void }) {
   );
 }
 
+function InfoLine({ s, r, logoBase }: { s: S; r: AdsbListRow; logoBase: string | null }) {
+  const [logoOk, setLogoOk] = useState(true);
+  const head = r.op && r.info.startsWith(r.op) ? r.op : '';
+  const rest = head ? r.info.slice(head.length).replace(/^ \u00b7 /, '') : r.info;
+  const uri = logoBase && r.logo && logoOk ? logoBase + 'logo/' + encodeURIComponent(r.logo) : '';
+  return (
+    <View style={s.infoBox}>
+      {uri ? <Image source={{ uri }} style={s.logo} resizeMode="contain" onError={() => setLogoOk(false)} accessibilityLabel={r.op} />
+        : head ? <Text style={s.opBadge}>{head}</Text> : null}
+      <Text style={s.info} numberOfLines={1}>{rest}</Text>
+    </View>
+  );
+}
 /** ★★ An emergency row breathes red (the map's 1.2 s breath — never a hard blink); still when the system asks for less
  *  motion. Drawn behind the row's text. */
 function EmBreath() {
@@ -201,7 +222,14 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   // ★ Sized for 240 pt (an SE in Display Zoom): 8 + 4·3 + 50 + 40 + 60 + 8 leaves the callsign ~62 pt, 8–9 characters.
   row:    { height: LIST_ROW_H, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: 4 },
   rowUnplaced: { opacity: 0.5 },
-  callBox:{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
+  callCol:{ flex: 1, minWidth: 0, justifyContent: 'center' },
+  callBox:{ minWidth: 0, flexDirection: 'row', alignItems: 'center' },
+  flag:   { fontSize: 11, marginRight: 4 },
+  infoBox:{ minWidth: 0, flexDirection: 'row', alignItems: 'center', marginTop: 1 },
+  info:   { fontFamily: F, fontSize: 9.5, color: `rgba(${ink.x},0.62)`, flexShrink: 1, minWidth: 0, letterSpacing: 0.3 },
+  opBadge:{ fontFamily: F, fontSize: 8, fontWeight: '700', letterSpacing: 0.6, color: `rgba(${ink.x},0.80)`, borderWidth: StyleSheet.hairlineWidth,
+            borderColor: `rgba(${ink.x},0.55)`, borderRadius: 2, paddingHorizontal: 3, marginRight: 4, overflow: 'hidden' },
+  logo:   { width: 40, height: 10, marginRight: 4 },
   call:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.95)`, flexShrink: 1, minWidth: 0 },
   emerg:  { color: '#ff6a50' },
   mil:    { color: 'rgb(140,195,255)' },

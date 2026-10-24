@@ -383,6 +383,17 @@ const CREDITS: { name: string; detail: string; url?: string }[] = [
     detail: 'Czechia’s DAB transmitter sites (“Rozhlasové vysílače”, data.gov.cz; no copyright or database right claimed), shown as “ČTÚ record”.' },
   { name: 'RDI — Rijksinspectie Digitale Infrastructuur, the Netherlands',
     detail: 'The Netherlands’ DAB transmitter sites (“Overzicht DAB en DVB‑T2 zenders”, CC0 1.0), shown as “RDI record”.' },
+  /* ★★ V12 ADS-B AIRCRAFT DATA (docs/v12/ADSB-DATA-RESEARCH.md §3) — the Mictronics line is ODC-By 1.0 §4.3's
+   *  notice, a CONDITION wherever its fields are shown (the map's card carries it too). Same list as the web client's
+   *  About and vibeserver/adsb-data/CREDITS.md. Each VibeServer downloads these itself, weekly. */
+  { name: 'Mictronics aircraft database',
+    detail: 'Registrations, aircraft types and operators on the ADS-B map. Contains information from Mictronics aircraft database, which is made available under the ODC Attribution License (ODC-By 1.0). Downloaded weekly by each VibeServer, never by the app.',
+    url: 'https://github.com/Mictronics/aircraft-database' },
+  { name: 'Virtual Radar Server standing data — Andrew Whewell and VRS users',
+    detail: 'CC0 1.0. Flight routes, airports, airlines, aircraft models, the military and territory address blocks and country names on the ADS-B map — contributed by Virtual Radar Server users through Andrew Whewell’s SDM site. We use the published data only, never VRS’s own services.',
+    url: 'https://github.com/vradarserver/standing-data' },
+  { name: 'ICAO Annex 10 — 24-bit address allocations',
+    detail: 'The country an aircraft is registered in, from its transponder address alone — our own table of the allocations, cross-checked against the VRS data.' },
   { name: 'NOAA Space Weather Prediction Center',
     detail: 'Public domain. The solar flux and K index behind VibeServer’s band conditions.' },
   { name: 'The regional internet registries and iptoasn.com',

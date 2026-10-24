@@ -11,6 +11,7 @@
 // ★ Every field is checked for its TYPE, never trusted: this is somebody else's server's JSON, and
 //   a string where a number belongs must become "unknown", not NaN in a table cell.
 import type { Aircraft } from './SDRBackend';
+import { adsbInfoLine, type AdsbInfo } from './adsbInfo.ts';
 
 /** What `/vibeserver.json` says about ADS-B on THIS radio. `undefined` = an older server (no field):
  *  draw no control at all. `{ ok: false, why }` = draw it DISABLED, with the reason (never hidden). */
@@ -30,8 +31,9 @@ export function parseAdsbCapability(j: unknown): AdsbCap | undefined {
   return undefined;
 }
 
-/** One aircraft as the server sends it (dump1090 names; absent = unknown). Kept for the map. */
-export interface AdsbAircraftRaw {
+/** One aircraft as the server sends it (dump1090 names; absent = unknown). Kept for the map.
+ *  ★ V12: plus what it IS (AdsbInfo — r, t, op, country, route …), merged in from adsb_info (adsbInfo.ts). */
+export interface AdsbAircraftRaw extends AdsbInfo {
   hex: string;
   flight?: string;
   category?: string;
@@ -158,6 +160,15 @@ export function adsbToAircraft(list: AdsbAircraftRaw[], rx: { lat: number; lon: 
     if (a.seen !== undefined) row.seen = a.seen;
     if (ground) row.onGround = true;
     if (a.emergency) row.emergency = a.emergency;
+    // ★ V12 aircraft data (merged from adsb_info): what the aircraft IS, for the list's second line
+    if (a.r) row.reg = a.r;
+    if (a.country) row.ccode = a.country;
+    if (a.countryName) row.country = a.countryName;
+    if (a.op) row.op = a.op;
+    if (a.mil) row.mil = true;
+    if (a.logo) row.logo = a.logo;
+    const info = adsbInfoLine(a);
+    if (info) row.info = info;
     // ★ Drop undefined keys: this array is JSON'd to the watch every few seconds.
     for (const k of Object.keys(row) as (keyof Aircraft)[]) if (row[k] === undefined) delete row[k];
     return row;

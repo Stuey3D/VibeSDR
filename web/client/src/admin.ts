@@ -1611,8 +1611,10 @@ async function refresh() {
       // ★ High Detail Maps live here too, and a server can offer them with no package actions at
       //   all (an Android phone) — so the section shows for either.
       const md = st.mapglDetail && typeof st.mapglDetail === 'object' ? st.mapglDetail : null;
-      if (sec) sec.hidden = offered.length === 0 && !md;
+      const ad = st.adsbData && typeof st.adsbData === 'object' ? st.adsbData : null;
+      if (sec) sec.hidden = offered.length === 0 && !md && !ad;
       renderMapglDetail(md);
+      renderAdsbData(ad);
       for (const [id, act] of [['actUpdateCheck', 'update-check'], ['actUpdate', 'update'],
                                ['actUpdateAll', 'update-all'],
                                ['actRestart', 'restart'], ['actReboot', 'reboot'],
@@ -1810,6 +1812,86 @@ async function mapglDetailClick(msg: (id: string, text: string) => void) {
   // ★ Show the server's answer now rather than at the next 2-second tick.
   try { mapglShown = ''; renderMapglDetail((await get('status')).mapglDetail ?? null); }
   catch (e) { console.error('High Detail Maps: status after the action could not be read', e); }
+}
+
+// ── ★★ V12 ADS-B aircraft data + the owner's logos (beside the map pack, the same pattern) ─────────────────
+//
+// ★★ WHAT THE SERVER SAYS, EVERY REFRESH — st.adsbData (vibe_adsb_data_update.h statusJson): the tables' dates and
+//    sources, the weekly update's switch and its last result, the installed logo / silhouette counts, the credits.
+let adsbShown = '';
+const fmtDay = (unix: number) => unix > 0 ? new Date(unix * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+function renderAdsbData(d: any) {
+  const ids = ['adsbDataRow', 'adsbDataUpdRow', 'adsbImgRow', 'adsbImgCountRow', 'adsbDataNote'];
+  if (!d) { for (const id of ids) { const el = document.getElementById(id); if (el) el.hidden = true; } adsbShown = ''; return; }
+  for (const id of ids) { const el = document.getElementById(id); if (el) el.hidden = false; }
+  const n = (v: unknown) => (Number(v) || 0).toLocaleString('en-GB');
+  let sentence: string;
+  if (d.micFile || d.vrsFile) {
+    const parts = [];
+    if (d.micFile) parts.push(`${n(d.aircraft)} aircraft (Mictronics, ${fmtDay(d.micBuilt)})`);
+    if (d.vrsFile) parts.push(`${n(d.routes)} routes and ${n(d.airports)} airports (VRS, ${fmtDay(d.vrsBuilt)})`);
+    sentence = `Aircraft data: ${parts.join('; ')}.`;
+  } else {
+    sentence = 'Aircraft data: the starter only (countries, military blocks, airlines and types) — registrations and '
+             + 'routes arrive with the first download.';
+  }
+  const stat = [d.micStatus ? `Mictronics: ${d.micStatus}` : '', d.vrsStatus ? `VRS: ${d.vrsStatus}` : ''].filter(Boolean).join(' · ');
+  if (d.busy) sentence += ' Checking for updates now…';
+  else if (Number(d.checked) > 0) sentence += ` Last checked ${fmtDay(d.checked)}${stat ? ` (${stat})` : ''}.`;
+  if (d.updates && Number(d.next) > 0 && !d.busy) sentence += ` Next check ${fmtDay(d.next)}.`;
+  if (d.available === false) sentence += ' This server cannot download updates itself.';
+  const counts = `Your operator logos: ${n(d.logos)} · silhouettes: ${n(d.silhouettes)}.`;
+  const key = sentence + '|' + counts + '|' + d.updates + '|' + d.available + '|' + d.busy;
+  if (key === adsbShown) return;
+  adsbShown = key;
+  const t = document.getElementById('adsbDataText'); if (t) t.textContent = sentence;
+  const chk = document.getElementById('adsbDataCheck') as HTMLButtonElement | null;
+  // ★ no button that can only fail (AGENTS.md): a server with no downloader gets none
+  if (chk) { chk.hidden = d.available === false; chk.disabled = !!d.busy; }
+  const upd = document.getElementById('adsbDataUpd') as HTMLInputElement | null;
+  if (upd) { upd.checked = !!d.updates; upd.disabled = d.available === false; }
+  const c = document.getElementById('adsbImgCount'); if (c) c.textContent = counts;
+  const lr = document.getElementById('adsbLogoRm'); if (lr) lr.hidden = !(Number(d.logos) > 0);
+  const sr = document.getElementById('adsbSilRm'); if (sr) sr.hidden = !(Number(d.silhouettes) > 0);
+  const note = document.getElementById('adsbDataNote');
+  if (note) note.textContent = 'Contains information from the Mictronics aircraft database, which is made available under the '
+    + 'ODC Attribution License; routes, airports, airlines and types from Virtual Radar Server standing data (CC0). '
+    + 'Logos and silhouettes are your own: a VRS-style zip (OperatorFlags/ and Silhouettes/ folders; files named by '
+    + 'operator code, registration, operator-type or ICAO address; .png .bmp .svg .gif .jpg). Nothing of ours is shipped.';
+}
+
+async function adsbDataAction(action: string, done: string, msg: (id: string, text: string) => void) {
+  try { await post('action', { action }); msg('actMsg', done); }
+  catch (e) {
+    console.error(`aircraft data: ${action} failed`, e);
+    const m = String((e as Error).message || 'the server refused');
+    msg('actMsg', m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.'));
+  }
+  try { adsbShown = ''; renderAdsbData((await get('status')).adsbData ?? null); }
+  catch (e) { console.error('aircraft data: status after the action could not be read', e); }
+}
+
+/** ★★ The zip upload: the FILE as the body (up to 64 MB), admin-proved like every other call. The server unpacks it
+ *  safely (vibe_adsb_images_install.h) and answers with "Installed N logos and M silhouettes (K skipped: …)". */
+async function adsbImgUpload(msg: (id: string, text: string) => void) {
+  const f = (document.getElementById('adsbImgFile') as HTMLInputElement | null)?.files?.[0];
+  if (!f) { msg('actMsg', 'Choose a .zip of logos or silhouettes first.'); return; }
+  if (f.size > 64 * 1048576) { msg('actMsg', 'That zip is larger than 64 MB — split it, or remove what is not images.'); return; }
+  const kind = (document.getElementById('adsbImgKind') as HTMLSelectElement | null)?.value || 'auto';
+  const go = document.getElementById('adsbImgGo') as HTMLButtonElement | null;
+  if (go) go.disabled = true;
+  msg('actMsg', `Uploading ${f.name} (${Math.max(1, Math.round(f.size / 1048576))} MB)…`);
+  try {
+    const r = await fetch(`${base()}/vibeserver/admin/adsb-images?${await q()}&kind=${encodeURIComponent(kind)}`, { method: 'POST', body: f });
+    const j = await r.json().catch(() => ({}));
+    msg('actMsg', String(j.message || j.error || `HTTP ${r.status}`));
+  } catch (e) {
+    console.error('aircraft data: logo zip upload failed', e);
+    msg('actMsg', 'The upload did not reach the server.');
+  }
+  if (go) go.disabled = false;
+  try { adsbShown = ''; renderAdsbData((await get('status')).adsbData ?? null); }
+  catch (e) { console.error('aircraft data: status after the upload could not be read', e); }
 }
 
 // ── Open / close ──────────────────────────────────────────────────────────────────────────────
@@ -2211,5 +2293,13 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     + 'OS upgrade can occasionally need attention and nobody will be watching.'));
   $('actRestart')?.addEventListener('click', () => act('restart', 'Restart VibeServer?'));
   $('mapglDetailBtn')?.addEventListener('click', () => void mapglDetailClick(msg));
+  $('adsbDataCheck')?.addEventListener('click', () => void adsbDataAction('adsb-data-check', 'Checking for aircraft-data updates — this line says when it is done.', msg));
+  $('adsbDataUpd')?.addEventListener('change', (e) => {
+    const on = (e.target as HTMLInputElement).checked;
+    void adsbDataAction(on ? 'adsb-updates-on' : 'adsb-updates-off', on ? 'Weekly aircraft-data updates on.' : 'Weekly aircraft-data updates off — the data you have stays.', msg);
+  });
+  $('adsbImgGo')?.addEventListener('click', () => void adsbImgUpload(msg));
+  $('adsbLogoRm')?.addEventListener('click', () => { if (window.confirm('Remove every operator logo from this server?')) void adsbDataAction('adsb-logos-remove', 'Logos removed.', msg); });
+  $('adsbSilRm')?.addEventListener('click', () => { if (window.confirm('Remove every silhouette from this server?')) void adsbDataAction('adsb-silhouettes-remove', 'Silhouettes removed.', msg); });
   $('actReboot')?.addEventListener('click', () => act('reboot', 'Reboot the whole machine?'));
 }

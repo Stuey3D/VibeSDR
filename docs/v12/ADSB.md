@@ -46,6 +46,32 @@ client must disable those controls (as in DAB). Entering ADS-B from DAB is allow
 
 Aircraft not heard for 60 s are dropped by the server.
 
+**What each aircraft IS** (V12 aircraft data, 2026-10-24 — design and licences: `ADSB-DATA-RESEARCH.md`) arrives in its
+own message, ONCE per aircraft and again only when it changes (a callsign arrives, the route is re-judged), just before
+the report it belongs to; a socket that joins gets the whole set (`full:1`) before its first report:
+
+`{"type":"adsb_info","aircraft":{"4ca2d6":{"r":"EI-DLJ","t":"B738","desc":"BOEING 737-800","wtc":"M","eng":"2J",
+"species":"L","country":"IE","countryName":"Ireland","op":"RYR","opName":"Ryanair","logo":"RYR-B738","sil":"B738",
+"route":{"from":"GCRR","to":"EGBB","fromIata":"ACE","toIata":"BHX","fromName":"…","toName":"…","fromPlace":"…",
+"toPlace":"…","stops":[…],"plausible":true}}}}` — `{}` for a hex = it no longer has any. All fields optional.
+
+| field | | source |
+|---|---|---|
+| `r`, `t`, `desc` | registration, ICAO type, its description (readsb's names) | Mictronics (ODC-By), VRS overlay (CC0) |
+| `wtc`, `eng`, `species` | wake L/M/H/J, engines `2J` (count + J/T/P/E/R), L/H/S/A/G/T | type tables |
+| `country`, `countryName` | ISO alpha-2 of the state of REGISTRY | our Annex 10 table + VRS territories |
+| `mil` | `1` = military (omitted otherwise) | VRS military blocks, the Mictronics flag |
+| `op`, `opName` | ICAO operator from the callsign; never a person's name — `"Private"` | Mictronics + VRS airlines |
+| `logo`, `sil` | a key the server has a file for: `GET /adsb/logo/<key>`, `/adsb/silhouette/<key>` (the OWNER's own) | admin page upload |
+| `route` | the leg the aircraft is on; `plausible:false` = far from it (shown struck through) | VRS routes (CC0) |
+
+- The clients merge these into each aircraft by hex (`src/services/adsbInfo.ts`, both clients), so the list and the
+  shared layer's card read `a.r`, `a.op` … directly. Military: **the server says (`mil`), else the old rule**.
+- The data: `<data dir>/adsb/vrs.vad` + `mic.vad` (mmap'd, binary-searched), a CC0 starter compiled in
+  (`vibe_adsb_starter.h`), a weekly jittered conditional download (`vibe_adsb_data_update.h`); the admin page shows it,
+  switches it off, and installs the owner's logo/silhouette zips. Photos (Planespotters, client-side) are built but
+  OFF until their terms are read at first hand — the TODO in `adsblayer.js`.
+
 **Category → icon** (DO-260B emitter category):
 A1 light (< 7 t: light prop) · A2 small (7–34 t: regional/bizjet) · A3 large (34–136 t: narrow-body jet) ·
 A4 high-vortex large (B757) · A5 heavy (> 136 t: wide-body/jumbo) · A6 high performance (> 5 g, > 400 kt: fighter) ·

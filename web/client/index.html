@@ -1212,6 +1212,14 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 #adsbLegendBtn:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: 1px; }
 #adsbLive.min #adsbLegendBtn { display: none; }
 #adsbList .adsbRow .id small { font-size: 9.5px; opacity: .6; letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ★ V12 aircraft data in the row: the flag before the callsign; on the second line the operator's logo (the owner's
+   own, max 12 px high) or its ICAO code as a small badge, then type · registration · route */
+#adsbList .adsbRow .id .flag { font-size: 11px; margin-right: 5px; letter-spacing: 0; }
+#adsbList .adsbRow .id .cc { display: inline-block; font-size: 8px; line-height: 11px; padding: 0 3px; margin-right: 5px; border: 1px solid currentColor;
+  border-radius: 2px; opacity: .7; letter-spacing: .5px; vertical-align: 1px; }
+#adsbList .adsbRow .id small .op { display: inline-block; padding: 0 3px; border: 1px solid currentColor; border-radius: 2px; font-size: 8.5px;
+  line-height: 10px; letter-spacing: .8px; font-weight: 700; }
+#adsbList .adsbRow .id small .oplogo { height: 11px; max-width: 48px; vertical-align: -2px; object-fit: contain; }
 #adsbList .adsbRow .alt, #adsbList .adsbRow .spd, #adsbList .adsbRow .rng { text-align: right; white-space: nowrap; font-size: 11.5px; }
 #adsbList .adsbRow .alt { min-width: 4.9em; }
 #adsbList .adsbRow .spd { min-width: 3.4em; opacity: .8; }
@@ -4141,6 +4149,31 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="mapglDetailBtn" hidden></button>
     </div>
     <div id="mapglDetailBar" hidden><i></i></div>
+    <!-- ★★ V12 ADS-B AIRCRAFT DATA — beside the map pack, the same pattern: one sentence of what is TRUE now (the
+         data's date and source, read from the server every refresh), the weekly update's switch and CHECK NOW, and
+         the owner's own operator logos / silhouettes: a zip upload (VRS OperatorFlags/ + Silhouettes/ packs, or a
+         flat folder with a choice), the installed counts and Remove all. We ship no logos — they are trademarks. -->
+    <div id="adsbDataRow" class="aRow" hidden>
+      <span id="adsbDataText" class="dim wrap"></span>
+      <button class="btn" id="adsbDataCheck">CHECK NOW</button>
+    </div>
+    <div class="aBanForm" id="adsbDataUpdRow" hidden>
+      <label class="dim" style="align-self:center"><input type="checkbox" id="adsbDataUpd"> Download aircraft-data updates weekly</label>
+    </div>
+    <div class="aBanForm" id="adsbImgRow" hidden>
+      <label class="dim" style="align-self:center;min-width:9em">Logos / silhouettes</label>
+      <input type="file" id="adsbImgFile" accept=".zip,application/zip" class="btn" style="max-width:15em">
+      <select id="adsbImgKind" class="btn" title="Where files go that are not in an OperatorFlags or Silhouettes folder">
+        <option value="auto">by folder name</option><option value="logo">all are logos</option><option value="silhouette">all are silhouettes</option>
+      </select>
+      <button class="btn" id="adsbImgGo">INSTALL .ZIP</button>
+    </div>
+    <div id="adsbImgCountRow" class="aRow" hidden>
+      <span id="adsbImgCount" class="dim wrap"></span>
+      <button class="btn" id="adsbLogoRm" hidden>REMOVE ALL LOGOS</button>
+      <button class="btn" id="adsbSilRm" hidden>REMOVE ALL SILHOUETTES</button>
+    </div>
+    <p class="dim wrap aNote" id="adsbDataNote" hidden></p>
     <p class="dim wrap" id="actMsg"></p>
     <!-- ★★ THE OUTPUT, UNDER THE BUTTON THAT CAUSED IT. "Install updates" can run for minutes;
          without this it was a button that went quiet, and quiet is indistinguishable from broken
@@ -5414,6 +5447,18 @@ select.btn { padding: 6px 8px; }
     <b>BAKOM</b> (Federal Office of Communications, Switzerland, opendata.swiss); <b>&#268;T&Uacute;</b>
     (Czech Telecommunication Office, data.gov.cz); <b>RDI</b> (Rijksinspectie Digitale Infrastructuur,
     the Netherlands, CC0).
+  </div>
+  <!-- ★★ V12 ADS-B aircraft data (docs/v12/ADSB-DATA-RESEARCH.md §3): ODC-By §4.3 asks for this notice wherever the
+       Mictronics fields are shown; the card carries it too. Same list as the app's About and vibeserver/adsb-data/CREDITS.md. -->
+  <div class="lbl wrap">
+    ADS-B aircraft details (registration, type, operator, route): contains information from the
+    <a href="https://github.com/Mictronics/aircraft-database" target="_blank" rel="noopener">Mictronics aircraft database</a>,
+    which is made available under the
+    <a href="https://opendatacommons.org/licenses/by/1-0/" target="_blank" rel="noopener">ODC Attribution License</a>;
+    routes, airports, airlines and types from
+    <a href="https://github.com/vradarserver/standing-data" target="_blank" rel="noopener">Virtual Radar Server standing data</a>
+    (Andrew Whewell and VRS users, CC0); country of registry from ICAO Annex 10 address allocations (our own table).
+    Each server downloads these itself, weekly. Country flags are your system&rsquo;s emoji.
   </div>
   <div class="lbl wrap">
     Tested by TGCFabian, Onfliner, Hans van Eijsden, PU5WHB, xavxx and Michael DL8LDN.

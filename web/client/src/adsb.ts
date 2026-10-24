@@ -15,6 +15,7 @@ import type { AdsbAircraft, AdsbReport } from './spectrum';
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
 import { loadVibemapSource } from './chunkCache';
+import { flagEmoji, adsbInfoLine } from '../../../src/services/adsbInfo';
 
 export type LatLon = { lat: number; lon: number };
 
@@ -101,7 +102,8 @@ export function adsbRows(r: AdsbReport, rx: LatLon | null) {
   const rows = r.aircraft.map((a) => {
     const lat = num(a.lat), lon = num(a.lon);
     const rb = rx && lat != null && lon != null ? rangeBearing(rx, lat, lon) : null;
-    const em = emergencyBadge(a.squawk, a.emergency), mil = isMilitaryHex(String(a.hex || ''), a.flight);
+    // ★★ military: the SERVER SAYS (mil:1 — its Annex 10 + VRS block table, the Mictronics flag), else the old rule
+    const em = emergencyBadge(a.squawk, a.emergency), mil = a.mil === 1 || isMilitaryHex(String(a.hex || ''), a.flight);
     return { a, hex: cleanHex(a.hex), rb, located: lat != null && lon != null, em, mil, rank: em ? 0 : mil ? 1 : 2 };
   }).filter((x) => x.hex);
   /** ★★ THE ORDER (Stuart, 2026-10-24): emergencies first, then military, then the nearest to the receiver. */
@@ -130,7 +132,33 @@ function barsHtml(n: number): string {
   return `<span class="sig l${n}" title="Signal ${n} of 3">${[1, 2, 3].map((k) => `<i class="${k <= n ? 'on' : ''}"></i>`).join('')}</span>`;
 }
 
-export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null): string {
+/** Where this server serves the owner's logos ("…/adsb/"), '' where the page has no http(s) origin. Machine-wide, like
+ *  /mapgl/: the front door answers it too. */
+export function adsbImageBase(): string {
+  if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return '';
+  return location.origin + '/adsb/';
+}
+/** ★ Windows draws regional-indicator pairs as two letters, not a flag: there the code is shown as a small chip. */
+function flagHtml(iso: unknown): string {
+  const c = String(iso ?? '').toUpperCase();
+  if (!/^[A-Z]{2}$/.test(c)) return '';
+  const win = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent || '');
+  return win ? `<span class="cc" title="${esc(c)}">${esc(c)}</span>` : `<span class="flag" title="${esc(c)}">${flagEmoji(c)}</span>`;
+}
+/** ★ The row's second line: what the aircraft IS (operator logo or badge · type · registration · route), from the
+ *  server's aircraft data; the hex and squawk when there is none (an older server, an unknown airframe). */
+export function adsbSecondLine(a: AdsbAircraft, hex: string, sq: string, imgBase: string): string {
+  const info = adsbInfoLine(a);
+  if (!info) return `${esc(hex.toUpperCase())}${sq ? ` · ${esc(sq)}` : ''}`;
+  const logo = imgBase && a.logo ? `<img class="oplogo" src="${esc(imgBase + 'logo/' + a.logo)}" alt="${esc(a.op || '')}">` : '';
+  // the operator code becomes a badge (or the logo replaces it); the rest is plain text
+  const parts = info.split(' \u00b7 ');
+  const head = a.op && parts[0] === a.op ? (logo || `<span class="op">${esc(a.op)}</span>`) : '';
+  const rest = (head ? parts.slice(1) : parts).map(esc).join(' · ');
+  return `${head}${head && rest ? ' ' : ''}${rest}${sq ? ` · ${esc(sq)}` : ''}`;
+}
+
+export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = ''): string {
   if (!r) return '<div class="adsbEmpty">Listening on 1090 MHz — aircraft appear here as they are heard.</div>';
   const rows = adsbRows(r, rx);
   if (!rows.length) return '<div class="adsbEmpty">No aircraft heard yet. Each one appears as its transponder is decoded.</div>';
@@ -150,7 +178,7 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null): string {
     const tag = badge ? `<span class="tag em">${esc(badge)}</span>` : mil ? '<span class="tag mil">MIL</span>' : '';
     return `<div class="adsbRow${em ? ' em' : ''}${mil && !em ? ' mil' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
       + ` title="${located ? 'Show on the map' : 'No position yet — not on the map'}">`
-      + `<span class="id"><b>${esc(call || hex.toUpperCase())}${barsHtml(adsbBars(a.rssi))}${tag}</b><small>${esc(hex.toUpperCase())}${sq ? ` · ${esc(sq)}` : ''}</small></span>`
+      + `<span class="id"><b>${flagHtml(a.country)}${esc(call || a.r || hex.toUpperCase())}${barsHtml(adsbBars(a.rssi))}${tag}</b><small>${adsbSecondLine(a, hex, sq, imgBase)}</small></span>`
       + `<span class="alt"${altStyle}>${esc(altText(a.alt_baro))}${trend}</span>`
       + `<span class="spd">${gs != null ? `${Math.round(gs)} kt` : ''}</span>`
       + `<span class="rng">${where}</span>`
@@ -249,7 +277,10 @@ export class AdsbMap {
 
   private attach(map: any) {
     const w = window as any;
-    this.layer = w.VibeAdsbLayer.create(map, { receiver: this.rx, prefs: loadPrefs(), onPrefs: savePrefs, theme: 'dark' });
+    // ★ imageBase: the owner's logos/silhouettes (named by the server only when they exist). photos: OFF until the
+    //   Planespotters terms are read at first hand — see the TODO in adsblayer.js.
+    this.layer = w.VibeAdsbLayer.create(map, { receiver: this.rx, prefs: loadPrefs(), onPrefs: savePrefs, theme: 'dark',
+                                                imageBase: adsbImageBase() || null });
     if (this.pending) { this.layer.update(this.pending); this.pending = null; }
     if (this.obstacle) { try { this.layer.setObstacle?.(this.obstacle); } catch (e) { console.error('[adsb] setObstacle', e); } }
   }

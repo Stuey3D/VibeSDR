@@ -107,6 +107,12 @@ export interface Aircraft {
   seen?:     number;      // seconds since any message
   onGround?: boolean;     // alt_baro "ground" (altitude is then 0)
   emergency?: string;     // non-zero emergency state
+  /* ★ V12 VibeServer aircraft data (adsbInfo.ts) — the server's adsb_info, in the list's terms. `reg`, `ccode` and
+   *   `country` above carry the registration, the ISO code and the country's name. */
+  info?:     string;      // the list's second line: operator · type · registration · route (adsbInfoLine)
+  op?:       string;      // ICAO operator designator (the badge)
+  mil?:      boolean;     // the SERVER says military (its block table, the Mictronics flag)
+  logo?:     string;      // a key the server's /adsb/logo/<key> has (the owner's own image)
 }
 
 /** A demodulator the backend offers (OWRX reports these; UI gates the picker). */
