@@ -23,7 +23,7 @@
  *                                               drawReceiver: true });   // false = the host draws its own
  *     layer.update(aircraftArray)    // ADSB.md aircraft objects, the server's whole list each time
  *     layer.setReceiver(lat, lon)
- *     layer.setPrefs({autoZoom, fit, rings})
+ *     layer.setPrefs({autoZoom, fit, rings, labels})
  *     layer.setObstacle({corner:'bottom-left', w, h} | null)   — the host's live list, kept clear of aircraft
  *     layer.toggleLegend(on?)   — the colour key, opened above that list (the host's (i) button)
  *     layer.focus(hex)               // select an aircraft and open its card (a list row was tapped)
@@ -604,7 +604,7 @@
 
     let rx = opts.receiver && isFinite(opts.receiver.lat) && isFinite(opts.receiver.lon) ? { lat: +opts.receiver.lat, lon: +opts.receiver.lon } : null;
     if (rx && rx.lat === 0 && rx.lon === 0) rx = null;      // ★ Null Island is "unknown", as on the HFDL map
-    const prefs = Object.assign({ autoZoom: true, fit: true, rings: true }, opts.prefs || {});
+    const prefs = Object.assign({ autoZoom: true, fit: true, rings: true, labels: true }, opts.prefs || {});
     const onPrefs = typeof opts.onPrefs === 'function' ? opts.onPrefs : null;
     /* ★ drawReceiver:false — the host draws its own receiver marker (the app's page already has the HFDL
      *  house); the layer still uses the position for rings, distances and the camera. Default true. */
@@ -628,6 +628,9 @@
     const bAuto = mk('AUTO', 'Auto-zoom: keep every aircraft in view');
     const bFit = mk('FIT', 'Fit to aircraft: the receiver need not be in the middle');
     const bRings = mk('RINGS', 'Range rings in nautical miles around the receiver');
+    /* ★ LABELS (Stuart, 2026-10-24: "on a busy screen they may be a bit of a mess"): off = no labels, except the aircraft
+     *  you have selected, which keeps its own so you can still read it. */
+    const bLabels = mk('LABELS', 'Callsign and altitude beside each aircraft');
     const bCentre = mk('⌖', 'Recentre on the aircraft');
     bCentre.setAttribute('aria-label', 'Recentre');
     // ★ The map must not take the control's taps as map gestures (a drag that starts on a button).
@@ -663,6 +666,7 @@
         : paused ? 'Auto-zoom paused because you moved the map — tap to resume' : 'Auto-zoom on — tap to turn it off';
       bFit.classList.toggle('on', !!prefs.fit || !rx);
       bRings.classList.toggle('on', !!prefs.rings && !!rx);
+      bLabels.classList.toggle('on', prefs.labels !== false);
       // ★ A control that cannot do anything is shown disabled with the reason, never left inert (AGENTS.md).
       bFit.disabled = !rx; bRings.disabled = !rx;
       if (!rx) { bFit.title = bRings.title = 'The receiver’s position is not known on this server'; }
@@ -681,6 +685,7 @@
     });
     bFit.addEventListener('click', () => { setPref('fit', !prefs.fit); az.reset(); paintCtl(); if (prefs.autoZoom && !paused) cameraStep(true); });
     bRings.addEventListener('click', () => { setPref('rings', !prefs.rings); paintCtl(); drawRings(); });
+    bLabels.addEventListener('click', () => { setPref('labels', prefs.labels === false); paintCtl(); labelAt = 0; kick(); });
     bCentre.addEventListener('click', () => { paused = false; az.reset(); paintCtl(); cameraStep(true); });
     paintCtl();
 
@@ -1094,6 +1099,7 @@
         const txt = labelText(s), lines = txt.split('\n');
         const w = (Math.max.apply(null, lines.map((l) => l.length)) + 2) * 6.1 + 4, h = lines.length * 11.5 + 2;   // + the arrow
         // ★ Priority: the selected aircraft, an emergency, then the nearest to the receiver (or the newest heard).
+        if (prefs.labels === false && s.hex !== selected) continue;   // ★ LABELS off: only the selected one
         const pri = s.hex === selected ? -2 : emergencyOf(s.a) ? -1
           : rx ? distNm(rx.lat, rx.lon, s.disp.lat, s.disp.lon) : (num(s.a.seen) || 0);
         items.push({ id: s.hex, x: p.x, y: p.y, w, h, pri });
@@ -1214,6 +1220,7 @@
       setPrefs(p) {
         if (!p) return;
         let moved = false;
+        if (typeof p.labels === 'boolean' && prefs.labels !== p.labels) { prefs.labels = p.labels; paintCtl(); labelAt = 0; kick(); }
         for (const k of ['autoZoom', 'fit', 'rings']) if (typeof p[k] === 'boolean' && prefs[k] !== p[k]) { prefs[k] = p[k]; moved = true; }
         if (!moved) return;
         paused = false; az.reset(); paintCtl(); drawRings();

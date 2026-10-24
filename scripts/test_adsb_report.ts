@@ -85,8 +85,9 @@ eq('status: none yet', adsbStatusText(null), 'starting…');
 eq('status: listening', adsbStatusText(parseAdsbMessage({ aircraft: [], msgRate: 3.4 })), 'listening… · 3 msg/s');
 eq('status: counts', adsbStatusText(r), '4 aircraft (2 placed) · 210 msg/s');
 eq('prefs default', parseAdsbMapPrefs(null), ADSB_MAP_PREFS_DEFAULT);
-eq('prefs kept', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false}'), { autoZoom: false, fit: true, rings: false });
-eq('prefs junk → defaults per key', parseAdsbMapPrefs('{"autoZoom":"no","fit":true}'), { autoZoom: true, fit: true, rings: true });
+eq('prefs kept', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false,"labels":false}'), { autoZoom: false, fit: true, rings: false, labels: false });
+eq('an old save without labels keeps them on', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false}'), { autoZoom: false, fit: true, rings: false, labels: true });
+eq('prefs junk → defaults per key', parseAdsbMapPrefs('{"autoZoom":"no","fit":true}'), { autoZoom: true, fit: true, rings: true, labels: true });
 eq('prefs unparseable', parseAdsbMapPrefs('{'), ADSB_MAP_PREFS_DEFAULT);
 
 console.log(`test_adsb_report: ${passes} passed, ${fails} failed`);

@@ -182,8 +182,8 @@ export function adsbStatusText(r: AdsbReport | null): string {
 }
 
 /** The map's in-map toggles (the shared layer draws them; the app remembers them per device). */
-export interface AdsbMapPrefs { autoZoom: boolean; fit: boolean; rings: boolean }
-export const ADSB_MAP_PREFS_DEFAULT: AdsbMapPrefs = { autoZoom: true, fit: false, rings: true };
+export interface AdsbMapPrefs { autoZoom: boolean; fit: boolean; rings: boolean; labels: boolean }
+export const ADSB_MAP_PREFS_DEFAULT: AdsbMapPrefs = { autoZoom: true, fit: false, rings: true, labels: true };
 export function parseAdsbMapPrefs(s: string | null | undefined): AdsbMapPrefs {
   try {
     const j = s ? JSON.parse(s) : null;
@@ -191,6 +191,7 @@ export function parseAdsbMapPrefs(s: string | null | undefined): AdsbMapPrefs {
     const b = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
     return { autoZoom: b(j.autoZoom, ADSB_MAP_PREFS_DEFAULT.autoZoom),
              fit: b(j.fit, ADSB_MAP_PREFS_DEFAULT.fit),
-             rings: b(j.rings, ADSB_MAP_PREFS_DEFAULT.rings) };
+             rings: b(j.rings, ADSB_MAP_PREFS_DEFAULT.rings),
+             labels: b(j.labels, ADSB_MAP_PREFS_DEFAULT.labels) };
   } catch { return { ...ADSB_MAP_PREFS_DEFAULT }; }
 }
