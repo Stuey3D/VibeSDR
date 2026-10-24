@@ -282,9 +282,20 @@ private:
  * ★ Works on the radio's OWN gain list (LocalSdrShim::getTunerGains: the RTL's table, SDRplay 0–49 dB, the
  *   Airspy/HackRF lists), so it is one rule for every radio rather than a control that works on one.
  */
+/* ★★★ THE GAIN RULE — MAXIMUM, AND DOWN ONLY FOR DYNAMIC RANGE (Stuart, 2026-10-24: "maximum gain for the RTL in
+ *  ADSB mode and if we can be inspired by the way that my flight aware box handles the gain"). His FlightAware Pi runs
+ *  dump1090-fa 10.2 with --gain 60 (the top) and --adaptive-range, ADAPTIVE_BURST=no: it starts at the top and comes
+ *  down only while the noise floor leaves too little room under full scale — settled at 38.6 dB, noise −30.6 dBFS, ~11 %
+ *  of its signals "strong", two gain changes in fifteen minutes, ~1600 msg/s. Our own rule after that behaviour (its
+ *  code is GPL and not used): a strong aircraft is NOT a reason to come down — a reply that clips is still decoded, and
+ *  backing off for it (our first rule: more than 5 % within 3 dB of full scale) loses every distant one. That rule held
+ *  the Pi 500 V4L at 40–44 dB against the Pi 2's 49.6.
+ *  ★ The votes and holds that keep it calm are the shim's (adsbTick): down after 6 s of asking, up after 30 s, never
+ *    up within 60 s of a cut. */
 struct GainRule {
-    double noiseLow = -32, noiseHigh = -22;   ///< dBFS: aim for the noise floor between these
-    double strongMax = 0.05;                  ///< more than 5 % of replies within 3 dB of full scale: too hot
+    double rangeDb = 30;       ///< the noise floor must sit at least this far below full scale (dump1090-fa's 30 dB)
+    double climbSpareDb = 3;   ///< climb only with this much to spare — about one rung at the top of an R820T's list
+    double strongMax = 0.05;   ///< levelHeld radios only: more than 5 % of replies within 3 dB of full scale = too hot
     /** ★★ THE RADIO HOLDS THE LEVEL ITSELF (an SDRplay: our gain picks the LNA state and its IF AGC stays on). The
      *  noise floor then does not follow the gain — the Lenovo's RSP sat at −43 dBFS while the rule climbed 37 → 49 dB
      *  for nothing. Such a radio only ever steps DOWN, when replies clip; it never climbs past where it started. */
@@ -294,8 +305,8 @@ struct GainRule {
     int decide(const Health& h) const {
         if (!h.valid) return 0;
         if (levelHeld) return h.strongFrac > strongMax ? -1 : 0;
-        if (h.strongFrac > strongMax || h.noiseDbfs > noiseHigh) return -1;
-        if (h.noiseDbfs < noiseLow && h.strongFrac < strongMax / 4) return +1;
+        if (h.noiseDbfs > -rangeDb) return -1;
+        if (h.noiseDbfs < -(rangeDb + climbSpareDb)) return +1;
         return 0;
     }
 };

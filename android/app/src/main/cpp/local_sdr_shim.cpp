@@ -12894,7 +12894,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::vector<int> adsbGains_;
     int adsbGainIdx_ = -1, adsbGainSet_ = -999;
     double adsbLastReport_ = 0, adsbLastGain_ = 0;
-    double adsbHoldUntil_ = 0; int adsbUpVotes_ = 0;   // the gain rule's hysteresis — see adsbTick
+    double adsbHoldUntil_ = 0; int adsbUpVotes_ = 0, adsbDownVotes_ = 0;   // the gain rule's hysteresis — see adsbTick
     std::atomic<bool> rateBoostFellBack_{false};       // ★ the watchdog's boosted-rate recovery ran — see rateBoostStalled
     /** ★ When rtl_tcp last delivered (tcpReadLoop). lastIqAt is the USB/driver sources' — an rtl_tcp radio never
      *  stamps it (its stalls are counted as netStalls, not called an unplug) — so the guard asks this instead. */
@@ -12985,12 +12985,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         iqStopDirect();                      // ★ raw IQ out cannot follow the receiver onto 1090
         rx.setSpectrumOnly(true);            // ★ no audio: there is nothing to listen to
         LocalSdrShim::instance().setAgc(false);   // the DONGLE's AGC — it chases the bursts
-        // ★ The radio's own gain list; start three-quarters up it and let the rule find the level
+        /* ★ The radio's own gain list. An RTL starts at the TOP, as dump1090-fa does (--gain 60) — see GainRule; the
+         *  rule only ever brings it down for dynamic range. An SDRplay starts three-quarters up, as before: it only
+         *  steps down (levelHeld), and its top LNA state is the one most likely to overload. */
         adsbGains_ = LocalSdrShim::instance().getTunerGains();
         adsbGainIdx_ = -1; adsbGainSet_ = -999;
-        adsbHoldUntil_ = 0; adsbUpVotes_ = 0;
+        adsbHoldUntil_ = 0; adsbUpVotes_ = 0; adsbDownVotes_ = 0;
         if (!adsbGains_.empty()) {
-            adsbGainIdx_ = int(adsbGains_.size() * 3 / 4);
+            adsbGainIdx_ = useSdrplay() ? int(adsbGains_.size() * 3 / 4) : int(adsbGains_.size()) - 1;
             adsbGainSet_ = adsbGains_[size_t(adsbGainIdx_)];
             LocalSdrShim::instance().setGain(adsbGainSet_);
         }
@@ -13181,14 +13183,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibeadsb::GainRule rule;
         rule.levelHeld = useSdrplay();   // ★ the RSP's IF AGC holds the level — see GainRule::levelHeld
         int d = rule.decide(h);
-        /* ★★ HYSTERESIS. Deciding afresh every 2 s HUNTED on the FlightAware antenna (live, 2026-10-24): the share of
-         *  near-clipping replies sat at the 5 % line, so 20.7 / 22.9 / 25.4 / 28 dB in turn, a step every 2 s. Down at
-         *  once (clipping costs replies now); then no climb for 30 s, and a climb only after 10 s of asking for it. */
-        if (d < 0) { adsbHoldUntil_ = t + 30.0; adsbUpVotes_ = 0; }
-        else if (d > 0) {
-            if (t < adsbHoldUntil_ || ++adsbUpVotes_ < 5) d = 0;
+        /* ★★ HYSTERESIS — calm, as the FlightAware box is (two changes in fifteen minutes). A cut needs 6 s of asking
+         *  (3 ticks; a noise floor that rose for one burst of traffic is not a reason), then no climb for 60 s, and a
+         *  climb needs 30 s of asking (15 ticks). The first rule cut at once and climbed after 10 s, and hunted. An
+         *  SDRplay (levelHeld) still cuts at once: there the vote is replies clipping now. */
+        if (d < 0) {
+            adsbUpVotes_ = 0;
+            if (!rule.levelHeld && ++adsbDownVotes_ < 3) d = 0;
+            else { adsbDownVotes_ = 0; adsbHoldUntil_ = t + 60.0; }
+        } else if (d > 0) {
+            adsbDownVotes_ = 0;
+            if (t < adsbHoldUntil_ || ++adsbUpVotes_ < 15) d = 0;
             else adsbUpVotes_ = 0;
-        } else adsbUpVotes_ = 0;
+        } else { adsbUpVotes_ = 0; adsbDownVotes_ = 0; }
         const int next = std::max(0, std::min(int(adsbGains_.size()) - 1, adsbGainIdx_ + d));
         if (next == adsbGainIdx_ && cur >= 0) return;
         adsbGainIdx_ = next;
@@ -17132,8 +17139,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     which is how an owner ends up unable to investigate their own radio.
                  *  ★ It is still exactly one rule: the lock binds everyone who has not proved the
                  *    admin password. Proving it is what "unlock the controls" MEANS. */
-                if (wantsManual && LocalSdrShim::agcLocked() && !adminNow(sock)) {
+                /* ★★★ ONLY WHILE THE AGC IS ACTUALLY ON (Stuart, 2026-10-24, the Pi 500 V4L: "gain is broken on the V4L
+                 *  the slider has no effect … the AGC is off as I disabled it as a previous admin session"). The lock
+                 *  protects a RUNNING VibeAGC from a listener; once the admin has switched it off there is nothing to
+                 *  protect, the client draws the slider live (hwinfo agc:false), and refusing it left every listener —
+                 *  the owner included, in a later session — with a slider that moved and did nothing. An RTL only:
+                 *  that is the one radio whose AGC is this flag; the others keep the rule as it was.
+                 *  ★ A refusal re-sends this listener the true state, as the AGC branch does, so the slider snaps
+                 *    back rather than sitting on a value the radio is not using. */
+                const bool rtlAgcIdle = (dev != nullptr || useTcp()) && !g_vibeAgcRtlOn.load(std::memory_order_relaxed);
+                if (wantsManual && LocalSdrShim::agcLocked() && !rtlAgcIdle && !adminNow(sock)) {
                     LOGI("manual gain refused — the owner has locked the AGC on");
+                    sendHwInfo(sock);
                     return;
                 }
                 /* ★★★ AND IN DAB, AN EXPLICIT GAIN MUST STOP THE LOOP. Entering DAB switches
