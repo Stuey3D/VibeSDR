@@ -198,9 +198,11 @@ cp -L /etc/resolv.conf "$R/etc/resolv.conf"
 printf '#!/bin/sh\nexit 101\n' > "$R/usr/sbin/policy-rc.d"; chmod 0755 "$R/usr/sbin/policy-rc.d"
 
 # ── 4. Customise: Armbian → the Pi Portable's own customise.sh → Armbian ───────────────────────────────────────────
-mkdir -p "$R/tmp/pocket-files" "$R/tmp/pocket-debs"
+mkdir -p "$R/tmp/pocket-files" "$R/tmp/pocket-debs" "$R/tmp/sbc-files"
 cp "$POCKET_FILES/customise.sh" "$POCKET_FILES/config.json" "$POCKET_FILES/pocket.conf" "$R/tmp/pocket-files/"
-cp "$HERE/customise-armbian.sh" "$R/tmp/pocket-files/"
+# ★ Its own directory: the Pi customise.sh deletes /tmp/pocket-files when it finishes (first build, 2026-10-25: the
+#   post step then found no script).
+cp "$HERE/customise-armbian.sh" "$R/tmp/sbc-files/"
 if [ -n "${VIBESERVER_DEB:-}" ]; then cp "$VIBESERVER_DEB" "$R/tmp/pocket-debs/"; fi
 if [ "${NO_MAPS:-0}" != 1 ]; then
   MAPGL_H="$REPO/android/app/src/main/cpp/vibe_mapgl.h"
@@ -213,15 +215,15 @@ if [ "${NO_MAPS:-0}" != 1 ]; then
   say "High Detail Maps baked in ($MAPGL_BYTES bytes, PMTiles)"
 fi
 say "customising (emulated $ARCH: slow)"
-nice -n 19 chroot "$R" /bin/bash /tmp/pocket-files/customise-armbian.sh pre
+nice -n 19 chroot "$R" /bin/bash /tmp/sbc-files/customise-armbian.sh pre
 nice -n 19 chroot "$R" /usr/bin/env POCKET_COUNTRY="$COUNTRY" POCKET_HOSTNAME=vibeserversetup \
     /bin/bash /tmp/pocket-files/customise.sh
-nice -n 19 chroot "$R" /bin/bash /tmp/pocket-files/customise-armbian.sh post
+nice -n 19 chroot "$R" /bin/bash /tmp/sbc-files/customise-armbian.sh post
 chroot "$R" /usr/bin/dpkg-query -W -f '${Package} ${Version} ${Architecture}\n' \
     vibeserver network-manager avahi-daemon overlayroot ffmpeg 'linux-image-*' 'linux-u-boot-*' 'linux-dtb-*' \
     > "$OUT/$OUT_NAME.packages.txt" 2>/dev/null || true
 rm -f "$R/usr/sbin/policy-rc.d"
-rm -rf "$R/tmp/pocket-files" "$R/tmp/pocket-debs"
+rm -rf "$R/tmp/pocket-files" "$R/tmp/pocket-debs" "$R/tmp/sbc-files"
 rm -f "$R/etc/resolv.conf"
 if [ -n "$RESOLV_LINK" ]; then ln -s "$RESOLV_LINK" "$R/etc/resolv.conf"; rm -f "$R/etc/resolv.conf.vibe-keep"
 else mv -f "$R/etc/resolv.conf.vibe-keep" "$R/etc/resolv.conf" 2>/dev/null || true; fi
