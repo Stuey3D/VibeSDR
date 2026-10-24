@@ -662,7 +662,11 @@
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-left .maplibregl-popup-tip{border-right-color:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-right .maplibregl-popup-tip{border-left-color:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + ' .maplibregl-popup-close-button,.vsadsb-pop-' + th + ' .leaflet-popup-close-button{color:rgba(' + T.ink + ',0.5);font-size:16px}'
-      + '.vsadsb-pop-' + th + ' .t{font-size:15px;font-weight:600;color:rgba(' + T.hi + ',1);margin-bottom:6px;letter-spacing:0.8px}'
+      + '.vsadsb-pop-' + th + ' .t{font-size:15px;font-weight:600;color:rgba(' + T.hi + ',1);margin-bottom:6px;letter-spacing:0.8px;padding-right:38px}'
+      + '.vsadsb-pop-' + th + ' .t.mn{margin:0}'
+      + '.vsadsb-pop-' + th + ' .vsadsb-min{position:absolute;top:3px;right:24px;background:none;border:0;padding:2px 6px;cursor:pointer;'
+      + 'font:16px ui-monospace,"SF Mono",Menlo,Consolas,monospace;line-height:1;color:rgba(' + T.ink + ',0.5)}'
+      + '.vsadsb-pop-' + th + ' .vsadsb-min:hover{color:rgba(' + T.hi + ',0.95)}'
       + '.vsadsb-pop-' + th + ' .t i{font-style:normal;font-size:12px;font-weight:400;color:rgba(' + T.ink + ',0.65);margin-left:6px}'
       + '.vsadsb-pop-' + th + ' table{border-collapse:collapse}'
       + '.vsadsb-pop-' + th + ' td{padding:1px 0;vertical-align:top}'
@@ -1099,9 +1103,16 @@
       }).catch((e) => { console.error('adsblayer: photo lookup', e); photoCache.set(s.hex, { at: now(), p: null }); });
       return null;
     }
+    /* ★ MINIMISE (Stuart, 2026-10-24: "can the card have a minimise button so you can view the track only"): the card folds
+     *  to its name, the aircraft stays selected and its trail drawn; the same key opens it again. It stays folded for the
+     *  next aircraft picked (stepping through trails), until opened. */
+    let cardMin = false;
+    const MIN_BTN = (folded) => '<button type="button" class="vsadsb-min" title="' + (folded ? 'Show the card' : 'Fold the card — the trail stays')
+      + '" aria-label="' + (folded ? 'Show the card' : 'Fold the card') + '">' + (folded ? '+' : '\u2013') + '</button>';
     function cardHtml(s) {
       const a = s.a;
       const name = cleanFlight(a.flight) || String(a.r || '') || s.hex.toUpperCase();
+      if (cardMin) return '<div class="t mn">' + esc(name) + MIN_BTN(true) + '</div>';
       const rows = [];
       const row = (k, v) => { if (v) rows.push('<tr><td>' + esc(k) + '</td><td>' + esc(v) + '</td></tr>'); };
       const rowHtml = (k, html) => { if (html) rows.push('<tr><td>' + esc(k) + '</td><td>' + html + '</td></tr>'); };
@@ -1153,7 +1164,7 @@
         + '<a href="https://github.com/vradarserver/standing-data" target="_blank">VRS standing data</a> (CC0)</div>' : '';
       const sub = cleanFlight(a.flight) || a.r ? s.hex.toUpperCase() : '';
       return (em ? '<div class="em">' + esc(em) + '</div>' : '')
-        + '<div class="t">' + esc(name) + (sub ? '<i>' + esc(sub) + '</i>' : '') + '</div>'
+        + '<div class="t">' + esc(name) + (sub ? '<i>' + esc(sub) + '</i>' : '') + MIN_BTN(false) + '</div>'
         + (logo || badge || sil ? '<div class="op">' + (logo || badge) + sil + '</div>' : '')
         + (idl.length ? '<div class="idb">' + idl.join('') + '</div>' : '')
         + '<table>' + rows.join('') + '</table>' + photo + credit;
@@ -1255,6 +1266,17 @@
       }
       return drawing;
     }
+    function onMinClick(e) {
+      const b = e.target && e.target.closest ? e.target.closest('.vsadsb-min') : null;
+      if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      cardMin = !cardMin;
+      if (selected && popup && ac.has(selected)) {
+        popupHtml = cardHtml(ac.get(selected));
+        if (gl) popup.setHTML(popupHtml); else popup.setContent(popupHtml);
+      }
+    }
+    container.addEventListener('click', onMinClick, true);
     function closePopup() {
       const p = popup; popup = null; popupHex = null;
       if (p) { try { if (gl) p.remove(); else lm.closePopup(p); } catch (e) { console.error('adsblayer: popup close', e); } }
@@ -1535,6 +1557,7 @@
         closePopup();
         try { ctl.remove(); leg.remove(); } catch (e) { /* gone with the map */ }
         for (const ev of ['pointerdown', 'touchstart', 'wheel', 'keydown']) container.removeEventListener(ev, onInput, { capture: true });
+        container.removeEventListener('click', onMinClick, true);
         if (gl) {
           gl.off('movestart', onMoveStart); gl.off('moveend', onMoveEnd); gl.off('click', onGlClick); gl.off('mousemove', onGlHover);
           for (const id of ['vsadsb-labels', 'vsadsb-icons', 'vsadsb-ring', 'vsadsb-halo', 'vsadsb-trail', 'vsadsb-trail-glow', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings']) if (gl.getLayer && gl.getLayer(id)) gl.removeLayer(id);
