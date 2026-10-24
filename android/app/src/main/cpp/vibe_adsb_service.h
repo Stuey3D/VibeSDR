@@ -401,7 +401,7 @@ public:
      *  lower gain must clearly BEAT the best (a plateau stays high). */
     int start(const std::vector<int>& order, double t, bool climbing = false) {
         order_ = order; rates_.assign(order.size(), -1); at_ = 0; legAt_ = t; countFrom_ = -1; best_ = -1; below_ = 0;
-        climbing_ = climbing;
+        climbing_ = climbing; cliffAfterBest_ = false;
         return order_.empty() ? -1 : order_[0];
     }
     int step(double t, uint64_t msgsTotal) {
@@ -417,7 +417,12 @@ public:
         if (best_ < 0 || rates_[at_] > (climbing_ ? 0.97 : 1.05) * rates_[size_t(best_)]) best_ = int(at_);
         // ★ past the peak = two rungs in a row each more than 5 % under the best (one could be a quiet moment)
         below_ = int(at_) > best_ && rates_[at_] < 0.95 * rates_[size_t(best_)] ? below_ + 1 : 0;
-        const bool pastPeak = below_ >= 2 && rates_[size_t(best_)] >= kQuietMsgs;
+        /* ★★ A CLIFF STOPS IT AT ONCE (Stuart's V4L, beta13: 43.4 dB = 196 msg/s, 44.5 = 52, and the ramp went on to try
+         *  49.6 = 8 — eight seconds of nearly nothing). A rung under HALF the best is the front end overloading, and
+         *  every rung past it is worse: no second rung is needed to prove it. */
+        const bool cliff = int(at_) > best_ && rates_[at_] < 0.5 * rates_[size_t(best_)] && rates_[size_t(best_)] >= kQuietMsgs;
+        if (cliff && int(at_) == best_ + 1) cliffAfterBest_ = true;
+        const bool pastPeak = cliff || (below_ >= 2 && rates_[size_t(best_)] >= kQuietMsgs);
         ++at_;
         if (pastPeak) at_ = order_.size();
         if (!active()) return result();
@@ -426,7 +431,14 @@ public:
     }
     /** True once over, with a sky busy enough to have judged by. */
     bool found() const { return !active() && best_ >= 0 && rates_[size_t(best_)] >= kQuietMsgs; }
-    int result() const { return best_ >= 0 ? order_[size_t(best_)] : (order_.empty() ? -1 : order_[0]); }
+    /** The gain to settle on. ★ OFF THE CLIFF'S EDGE: when the rung after the best fell off a cliff and the rung before
+     *  it is on the same plateau (within 5 %), the one before — the V4L's 40.2 dB rather than 43.4, the same 196 msg/s,
+     *  with a busier band's headroom. */
+    int result() const {
+        if (best_ < 0) return order_.empty() ? -1 : order_[0];
+        if (cliffAfterBest_ && best_ > 0 && rates_[size_t(best_ - 1)] >= 0.95 * rates_[size_t(best_)]) return order_[size_t(best_ - 1)];
+        return order_[size_t(best_)];
+    }
     double bestRate() const { return best_ >= 0 ? rates_[size_t(best_)] : 0; }
     const std::vector<int>& order() const { return order_; }
     const std::vector<double>& rates() const { return rates_; }   ///< -1 = not tried
@@ -436,7 +448,7 @@ private:
     std::vector<double> rates_;
     size_t at_ = 0;
     int best_ = -1, below_ = 0;
-    bool climbing_ = false;
+    bool climbing_ = false, cliffAfterBest_ = false;
     double legAt_ = 0, countFrom_ = -1;
     uint64_t countMsgs_ = 0;
 };

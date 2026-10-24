@@ -105,6 +105,17 @@ int main() {
         auto ru = search(up, v4lr, legs, true);
         ok(ru.found() && ru.result() == 24, "the V4L + LaNA: the ramp climbs to the peak's neighbourhood (24 of 22/24/26) and stops");
         ok(ru.rates()[0] >= 0 && ru.rates()[0] < ru.rates()[5], "  ...having measured the middle below the peak (8 s at the dead top at most)");
+        // ★★ Stuart's real V4L curve (beta13 log, 23:39): 25.4=52 29.7=85 33.8=155 37.2=182 40.2=196 43.4=196 44.5=52 49.6=8
+        //    — the ramp's rungs 14 16 … 28 of the R820T list, by index
+        std::vector<double> real(29, 0);
+        real[14] = 52; real[16] = 85; real[18] = 155; real[20] = 182; real[22] = 196; real[24] = 196; real[26] = 52; real[28] = 8;
+        auto rr = search(up, real, legs, true);
+        ok(rr.found() && rr.result() == 22, "the real V4L curve: settles one rung back from the cliff's edge (22 = 40.2, not 24 = 43.4)");
+        ok(rr.rates()[7] < 0, "  ...and never tries the dead top: the cliff at 44.5 stops the ramp at once");
+        std::vector<double> sharp(29, 0);
+        for (int i = 0; i < 29; ++i) sharp[size_t(i)] = i <= 24 ? 50 + i * 6.0 : 10;
+        auto rs = search(up, sharp, legs, true);
+        ok(rs.found() && rs.result() == 24, "a rising curve that then falls off a cliff: the best stays (the rung before is not on a plateau)");
         std::vector<double> pi2(29, 0);
         for (int i = 0; i < 29; ++i) pi2[size_t(i)] = 100 + i * 10.0;   // a bare antenna: more gain, more aircraft
         auto rp = search(up, pi2, legs, true);
