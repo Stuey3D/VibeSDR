@@ -1093,6 +1093,28 @@ body.wifiFirst .wifiFirstOnly { display: block; }
              scan and then a selection box for the station"). Drawn ONLY for a radio that can do DAB —
              an Airspy HF+ never sees it (AGENTS.md: no control that cannot act). When DAB is blocked
              on the radio the toggle is not offered, and the note below says why the landing went. -->
+        <!-- ★★★ V12: ADS-B AS THE LANDING (Stuart, 2026-10-24: "can we set ADSB as a landing page for an SDR and when it
+             is set that way have a tick box to keep it running when nobody is connected that way a new connection
+             instantly sees a list of planes and a full map"). Drawn only where ADS-B can run on this radio (adsbLandOffer
+             — AGENTS.md); where only a setting stands in the way, #adsbLandNote says which. The keep-running tick box
+             lives only beneath the choice, and is OFF unless ticked. One landing at a time: choosing it hides the DAB one. -->
+        <div id="adsbLandWrap" class="hide">
+          <label style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="adsbLandOn">
+            <span>Use ADS-B (the aircraft map) as the landing page?</span></label>
+          <div id="adsbLandBox" class="hide" style="margin-top:10px">
+            <div class="hint">A new listener goes straight to the full-screen map of aircraft, with the list beside it.
+              EXIT ADS-B takes them to the frequency below. Where several people share one dial it keeps whatever it
+              was left on, but after the server restarts the first listener always starts here.</div>
+            <label style="display:flex;align-items:center;gap:10px;margin-top:10px">
+              <input type="checkbox" id="adsbKeep">
+              <span>Keep ADS-B running when nobody is connected</span></label>
+            <div class="hint" id="adsbKeepNote">A new listener sees every aircraft at once, instead of a map that fills
+              over the next minute. <b>It costs CPU all the time</b> (about 13&nbsp;% of a Pi&nbsp;3 core) and this radio
+              never idles: it is not parked or handed to another program, and its Background Decoding does not run.</div>
+          </div>
+        </div>
+        <div class="hint" id="adsbLandNote"></div>
         <div id="dabLandWrap" class="hide">
           <label style="display:flex;align-items:center;gap:10px">
             <input type="checkbox" id="dabLandOn">
@@ -1116,6 +1138,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <div class="hint" id="plainLandHead" style="display:none;margin-top:10px">If the DAB station
           cannot be opened &mdash; the radio busy on something that stops it reaching DAB &mdash;
           listeners start here instead:</div>
+        <div class="hint" id="adsbPlainHead" style="display:none;margin-top:10px">EXIT ADS-B goes here, and
+          listeners start here whenever ADS-B cannot be opened:</div>
         <div class="row" id="plainLandRow">
           <label><span class="lbl">Frequency (kHz)</span>
             <input type="number" id="landingFreq" step="0.1"></label>
@@ -1778,6 +1802,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
            arrives; if the other program still has it, they are told so plainly.
            <strong>It stops this radio contributing the spectrogram and band conditions</strong>,
            because it spends its idle time letting the device go.</p>
+        <p class="why hide" id="releaseAdsbNote" style="border-left:3px solid var(--amber);padding-left:8px">ADS-B is
+          kept running on this radio when nobody is connected, so it is never let go while that is ticked.</p>
         <!-- ★★ HOW LONG TO WAIT, because the right answer depends on what else wants the radio.
              It was fixed at five minutes with nothing to change it — long enough that the other
              program is still waiting when somebody gives up (Stuart, 2026-08-08: "5 minutes is a
@@ -1825,6 +1851,10 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <!-- ★★ SHARED BY TIME with "Let another program use this radio" (Stuart, 2026-10-22: "You cannot release a radio
              and also hand it over to another app"). Both stay usable; this line says how they divide the day. -->
         <p class="why hide" id="bgReleaseNote" style="border-left:3px solid var(--amber);padding-left:8px"></p>
+        <!-- ★★ V12: kept-running ADS-B owns the idle radio (the shim's bgTick says the same) — see adsbLandShow. -->
+        <p class="why hide" id="bgAdsbNote" style="border-left:3px solid var(--amber);padding-left:8px">ADS-B is kept
+          running on this radio when nobody is connected (Where new listeners start), so these profiles do not run.
+          Untick it there to decode in the background instead.</p>
       </div>
       <div id="hwPpb" class="hide">
         <label><span class="lbl">Calibration (ppb)</span>
@@ -2623,12 +2653,61 @@ async function dabLandLoadKnown(idx) {
     }
   } catch (e) { $("dabLandScanMsg").textContent = "Could not read the stations this radio has heard: " + e.message; }
 }
+/* ── ★★★ V12: ADS-B AS THE LANDING, AND KEEP IT RUNNING (Stuart, 2026-10-24) ───────────────────────────────────────
+ *  Stored on the radio as landingAdsb + adsbKeepRunning (vibeserver_config.h — see Config::landingAdsb). The shim
+ *  ignores both wherever ADS-B cannot run (vsAdsbWhyNot), so this page only has to be honest about it.
+ *  adsbLandOffer is pure so scripts/test-setup-adsb-landing.mjs runs the real rule:
+ *    hw      — could this radio do ADS-B at all (the running radio's answer, else the driver: an HF+ cannot reach 1090
+ *              MHz, an Icom is a transceiver's audio). false = the toggle is not drawn and nothing is said.
+ *    offer   — and with the settings on this page now: not blocked, and 2.4 MS/s or the rate switch.
+ *    why     — when hw but not offer, the one setting in the way, in words. */
+const ADSB_MIN_RATE = 2400000;
+function adsbLandOffer(r, hw, f) {
+  const drv = String((r && r.driver) || "");
+  let can;
+  if (hw && typeof hw.adsbHw === "boolean" && !hw.offline) can = hw.adsbHw;
+  else can = drv !== "airspyhf" && drv !== "icom";
+  if (r && r.mode === "locked" && (f.users || 1) > 1) can = false;   // ★ a locked centre with own VFOs (vsAdsbWhyNot)
+  if (!can) return { hw: false, offer: false, why: "" };
+  if (f.blocked) return { hw: true, offer: false, why: "ADS-B is switched off for this radio, so it cannot be the landing page." };
+  if (!f.boost && f.rate > 0 && f.rate < ADSB_MIN_RATE)
+    return { hw: true, offer: false, why: "ADS-B needs a capture of 2.4 MS/s — set the sample rate to 2.4 MS/s or more, "
+      + "or tick \u201cChange the sample rate when a mode needs it\u201d, to make it the landing page." };
+  return { hw: true, offer: true, why: "" };
+}
+function adsbLandForm() {
+  return { users: parseInt(($("users") || {}).value || "1", 10) || 1,
+           rate: parseFloat(($("rate") || {}).value || "0") || 0,
+           boost: !!($("dabRateBoost") && $("dabRateBoost").checked && !$("dabRateBoost").disabled),
+           blocked: modeBlockSet().has("adsb") };
+}
+/** Draw it. Returns whether ADS-B is the landing in force (so the DAB landing gives way). */
+function adsbLandShow(r, o) {
+  const wrap = $("adsbLandWrap"); if (!wrap) return false;
+  wrap.classList.toggle("hide", !o.offer);
+  const on = o.offer && !!r.landingAdsb;
+  const keep = on && !!r.adsbKeepRunning;
+  $("adsbLandOn").checked = on;
+  $("adsbLandBox").classList.toggle("hide", !on);
+  $("adsbKeep").checked = keep;
+  // ★ Only a radio that COULD do it hears why it cannot; an HF+ is told nothing (AGENTS.md).
+  $("adsbLandNote").textContent = o.hw && !o.offer
+    ? o.why + (r.landingAdsb ? ` Until then listeners start on ${plainLandingWords()}.` : "") : "";
+  $("adsbPlainHead").style.display = on ? "" : "none";
+  // ★★ Kept-running ADS-B owns the idle radio: say so where the owner would otherwise expect it to idle.
+  if ($("bgAdsbNote")) $("bgAdsbNote").classList.toggle("hide", !keep);
+  if ($("bgProfiles")) $("bgProfiles").style.opacity = keep ? ".45" : "";
+  if ($("releaseAdsbNote")) $("releaseAdsbNote").classList.toggle("hide", !keep);
+  return on;
+}
 function dabLandRender() {
   const wrap = $("dabLandWrap"); if (!wrap) return;
   const r = radio();
   const hwCan = dabLandHwCan();
   const blocked = modeBlockSet().has("dab");
-  const offer = hwCan && !blocked;
+  // ★ One landing at a time: with ADS-B chosen the DAB toggle steps aside (the shim lets ADS-B win the same way).
+  const adsbOn = adsbLandShow(r, adsbLandOffer(r, HW, adsbLandForm()));
+  const offer = hwCan && !blocked && !adsbOn;
   wrap.classList.toggle("hide", !offer);
   const on = offer && Number(r.landingDabChannel) >= 0;
   $("dabLandOn").checked = on;
@@ -2637,6 +2716,7 @@ function dabLandRender() {
   $("plainLandHead").style.display = on ? "" : "none";
   $("plainLandRow").style.opacity = on ? ".55" : "";
   const note = $("dabLandNote");
+  if (adsbOn) { note.textContent = ""; $("plainLandRow").style.opacity = ""; $("plainLandHead").style.display = "none"; return; }
   if (!offer && Number(r.landingDabChannel) >= 0 && !blocked)
     note.textContent = "This radio cannot reach DAB with its current settings, so its DAB landing "
       + `station will not be used — listeners will start on ${plainLandingWords()} instead.`;
@@ -2657,6 +2737,8 @@ function dabLandRender() {
 function dabLandOnBlockedChange(mode, blockedNow) {
   // ★★★ BLOCKING DAB REMOVES THE DAB LANDING STATION — and says so, in a sentence.
   const r = radio();
+  // ★ V12: blocking ADS-B clears its landing too (the note in adsbLandShow then says why it is not offered)
+  if (mode === "adsb") { if (blockedNow) { r.landingAdsb = false; r.adsbKeepRunning = false; } dabLandRender(); return; }
   if (mode !== "dab") return;
   if (blockedNow && Number(r.landingDabChannel) >= 0) {
     r.landingDabChannel = -1; r.landingDabSid = 0; r.landingDabService = "";
@@ -2747,6 +2829,17 @@ function dabLandInit() {
     r.landingDabService = sid > 0 && opt ? opt.textContent : "";
   });
   $("dabLandScan").addEventListener("click", dabLandScanRun);
+  // ★★ V12 ADS-B landing: choosing it clears a DAB landing (one landing at a time); unticking it clears keep-running.
+  $("adsbLandOn").addEventListener("change", () => {
+    const r = radio();
+    r.landingAdsb = $("adsbLandOn").checked;
+    if (r.landingAdsb) { r.landingDabChannel = -1; r.landingDabSid = 0; r.landingDabService = ""; }
+    else r.adsbKeepRunning = false;
+    dabLandRender();
+  });
+  $("adsbKeep").addEventListener("change", () => { radio().adsbKeepRunning = $("adsbKeep").checked; dabLandRender(); });
+  // ★ The offer follows the rate and the rate switch as they change, not only on the next tab switch.
+  for (const id of ["rate", "dabRateBoost"]) if ($(id)) $(id).addEventListener("change", dabLandRender);
   // ★ The sentence names the fallback, so it follows the fallback when the owner edits it.
   for (const id of ["landingFreq", "demodMode"]) $(id).addEventListener("change", () => {
     if (radio()._dabLandRemoved)
@@ -5606,6 +5699,9 @@ function collectRadio() {
     //     the MODE stuck, because demodMode below was never gated, and the frequency did not).
     // ★ lockFreq and users stay gated: those genuinely only exist for a locked radio.
     landingFreq: Math.round(parseFloat($("landingFreq").value || "0") * 1e3),
+    // ★★ V12 — edited straight onto the radio (adsbLandShow); keep-running never without the landing.
+    landingAdsb: !!radio().landingAdsb,
+    adsbKeepRunning: !!radio().landingAdsb && !!radio().adsbKeepRunning,
     antenna: ($("antenna").value || "").trim(),
     antennaIcon: antIconSel,
     // ★ The aerial's ranges and filters: the rows write the finished text straight onto the radio

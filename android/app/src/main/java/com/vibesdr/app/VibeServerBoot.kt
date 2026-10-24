@@ -197,6 +197,7 @@ object VibeServerBoot {
     fun privateScanConfig(owner: JSONObject): JSONObject {
         val c = JSONObject(owner.toString())
         for (k in listOf("pin", "adminPassword", "mode", "landingDabChannel", "landingDabSid", "landingDabService",
+                         "landingAdsb", "adsbKeepRunning",
                          "lockedCentre", "lockedRate", "rateLock", "sessionLimitMin", "idleKickMin",
                          "batteryPauseAt", "rawIq", "rawIqMax", "uncompressedAudio"))
             c.remove(k)
@@ -286,6 +287,10 @@ object VibeServerBoot {
         VibeLocalSDR.setVibeServerLandingDab(
             if (dabBlocked) -1 else cfg.i("landingDabChannel", -1),
             if (dabBlocked) 0 else cfg.i("landingDabSid", 0))
+        // ★★ V12: ADS-B as the landing, and keep it running when nobody is connected (only with the landing). The engine
+        //    ignores both where ADS-B cannot run on this radio (vsAdsbWhyNot), so a blocked ADS-B never lands either.
+        val adsbLand = cfg.b("landingAdsb", false)
+        VibeLocalSDR.setVibeServerLandingAdsb(adsbLand, adsbLand && cfg.b("adsbKeepRunning", false))
         // ★★ The multiplex (and station) it was LEFT on, surviving a restart — see the JNI note.
         VibeLocalSDR.setDabMemoryPath(File(filesDir, "vibe_dab_memory.txt").absolutePath)
         // ★ The owner's name for the radio ("SDR display name"); blank = the USB port's name, as before.
