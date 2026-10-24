@@ -849,7 +849,10 @@
       popupHtml = cardHtml(s); popupHex = selected;
       if (gl) {
         if (!ML) { console.error('adsblayer: maplibregl is not on the page — no aircraft card'); return; }
-        const p = new ML.Popup({ closeButton: true, closeOnClick: false, className: 'vsadsb-pop-' + th, maxWidth: '280px', offset: 16 })
+        /* ★★ focusAfterOpen OFF: MapLibre focuses the card's x on EVERY setHTML, and the card is refreshed each
+         *  report — so the keyboard's and the controller's next Enter closed the card instead of pressing what
+         *  was highlighted (web client, ADS-B list, 2026-10-24). The x is still a button anyone can reach. */
+        const p = new ML.Popup({ closeButton: true, closeOnClick: false, focusAfterOpen: false, className: 'vsadsb-pop-' + th, maxWidth: '280px', offset: 16 })
           .setLngLat([s.disp.lon, s.disp.lat]).setHTML(popupHtml);
         // ★ Only THIS card's close clears the selection — closePopup() forgets the card before removing it.
         p.on('close', () => { if (popup === p) { popup = null; popupHex = null; selected = null; kick(); } });
