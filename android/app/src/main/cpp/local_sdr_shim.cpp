@@ -1412,6 +1412,10 @@ static std::atomic<bool>   g_dabSavedDigAgc{false};
  *  ★ Persisted, unlike the digital-AGC toggle: this is a decision about the machine, which is
  *    exactly the kind of thing that should survive a restart. */
 static std::atomic<bool>   g_dabRateBoost{false};
+/* ★★ ADS-B AT 3.2 MS/s ON AN RTL — "extreme" (Stuart, 2026-10-24): never the default, only with the rate switch above,
+ *  and only for the person after the last aircraft. On his sky the same 20 s held 19 % more messages at 3.2 than at 2.4
+ *  (memory adsb_v12), but an RTL may drop samples there, costs more CPU and runs hotter. Other radios ignore it. */
+static std::atomic<bool>   g_adsbExtreme{false};
 /** Set by dabRestore(); consumed by the DSP loop once any pending rebuild has landed. */
 static std::atomic<bool>   g_dabRetuneAfterRebuild{false};
 
@@ -12861,7 +12865,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  had, take the whole radio, give it back EXACTLY as found. Two differences: no rate change ever (see
      *  g_adsbMode), and the gain is ADS-B's own rule (vibeadsb::GainRule), not VibeAGC. */
     struct AdsbSaved {
-        double lockedCentre = 0, lockedRate = 0, rtl = 0, audio = 0, view = 0;
+        double lockedCentre = 0, lockedRate = 0, rtl = 0, audio = 0, view = 0, rate = 0;
         int gainTarget = -1, hwGain = -1, lna = -1, agcSet = -999, ds = -1;
         bool agcOn = false, digAgc = false;
     } adsbSaved_;
@@ -12877,9 +12881,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (auto& sk : socks) sendText(sk, r);
     }
 
-    void adsbEnter() {
+    /** The rate ADS-B runs at. ★ Without the owner's switch: whatever the radio already runs (vsAdsbWhyNot has made sure
+     *  it is enough). With it: the current rate if that is already 2.4 MS/s or more (Stuart's RSP1A at 3 MS/s — no
+     *  change, no rebuild), else the radio's smallest rate at or above 2.4 MS/s, an RSP taking 3 MS/s; an RTL with
+     *  "extreme" set takes 3.2 MS/s whatever it was on. */
+    double adsbTargetRate() {
+        const double cur = sampleRate;
+        if (!g_dabRateBoost.load(std::memory_order_relaxed)) return cur;
+        const bool rtl = dev != nullptr || useTcp();
+        if (rtl && g_adsbExtreme.load(std::memory_order_relaxed)) return 3.2e6;
+        if (cur >= vibeadsb::Service::kMinRateHz) return cur;
+        if (useSdrplay()) return 3.0e6;
+        double best = 0;
+        const std::string list = supportedRates();
+        for (size_t i = 0; i < list.size();) {
+            size_t j = list.find(',', i); if (j == std::string::npos) j = list.size();
+            const double v = strtod(list.substr(i, j - i).c_str(), nullptr);
+            if (v >= vibeadsb::Service::kMinRateHz && (best == 0 || v < best)) best = v;
+            i = j + 1;
+        }
+        return best > 0 ? best : cur;
+    }
+
+    /** `preSaved`: the listener's state is already in adsbSaved_, handed over from DAB (dabHandOffToAdsb). */
+    void adsbEnter(bool preSaved = false) {
         if (g_adsbMode.load()) { sendAdsbAll(); return; }
         AdsbSaved& s = adsbSaved_;
+        if (!preSaved) {
         s.lockedCentre = g_vsLockedCentre.load(); s.lockedRate = g_vsLockedRate.load();
         s.gainTarget = g_gainTarget.load(std::memory_order_relaxed);
         s.agcOn = g_vibeAgcRtlOn.load(std::memory_order_relaxed);
@@ -12888,6 +12916,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         s.agcSet = vsDesiredAgcSet();
         s.digAgc = g_rtlDigitalAgc.load(std::memory_order_relaxed);
         s.rtl = rtlCenter.load(); s.audio = audioFreq.load(); s.view = viewCenter.load();
+        s.rate = sampleRate;
         s.ds = -1;
         {
             const int ds = g_dsNow.load(std::memory_order_relaxed);
@@ -12897,6 +12926,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LocalSdrShim::instance().setDirectSampling(0);
             }
         }
+        }   // !preSaved
         iqStopDirect();                      // ★ raw IQ out cannot follow the receiver onto 1090
         rx.setSpectrumOnly(true);            // ★ no audio: there is nothing to listen to
         LocalSdrShim::instance().setAgc(false);   // the DONGLE's AGC — it chases the bursts
@@ -12918,7 +12948,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         audioFreq.store(centre);
         viewCenter.store(centre);
         noteHwMoved();
-        g_adsb.start(sampleRate, g_bgLat.load(), g_bgLon.load());
+        // ★★ ONE RATE CHANGE AT MOST, and only with the owner's switch (adsbTargetRate). Centre first, then the rate:
+        //    the change rebuilds the source at rtlCenter — DAB's order, for DAB's reason.
+        {
+            const double want = adsbTargetRate();
+            if (std::fabs(want - sampleRate) > 1000.0) {
+                LOGI("[ADS-B] rate %.3f -> %.3f MS/s (the owner lets modes change it)", sampleRate / 1e6, want / 1e6);
+                LocalSdrShim::instance().setSampleRate(want);
+                rtlCenter.store(logical);
+            }
+        }
+        const double runRate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
+        g_adsb.start(runRate, g_bgLat.load(), g_bgLon.load());
         adsbLastReport_ = adsbLastGain_ = nowSecs();
         g_adsbMode.store(true);
         applyAutoIf();
@@ -12934,9 +12975,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             for (auto& v : views) clientRetune(v.get());
             updateZoomView();
-            for (auto& sk : socks) sendConfig(sk);
+            // ★ hwinfo too: it carries rateNow, and a rate ADS-B changed was otherwise shown stale to every listener
+            for (auto& sk : socks) { sendConfig(sk); sendHwInfo(sk); }
         }
-        LOGI("[ADS-B] mode ON: 1090 MHz at %.3f MS/s (no rate change), gain %s", sampleRate / 1e6,
+        LOGI("[ADS-B] mode ON: 1090 MHz at %.3f MS/s, gain %s", runRate / 1e6,
              adsbGainSet_ >= 0 ? (std::to_string(adsbGainSet_ / 10.0).substr(0, 4) + " dB").c_str() : "unchanged");
         sendAdsbAll();
     }
@@ -12970,6 +13012,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (s.agcSet != -999) LocalSdrShim::instance().setIfAgcSetPoint(s.agcSet);
         else if (useSdrplay()) LocalSdrShim::instance().setIfAgcSetPoint(-30);
         agcForget("ADS-B off: the gain that suited 1090 MHz does not suit a carrier");
+        if (s.rate > 0.0 && std::fabs(s.rate - sampleRate) > 1000.0) {   // ★ the rate it found, if ADS-B changed it
+            noteHwMoved();
+            LocalSdrShim::instance().setSampleRate(s.rate);
+        }
         if (s.ds > 0) { LOGI("[ADS-B] mode OFF: direct sampling back to %d", s.ds); LocalSdrShim::instance().setDirectSampling(s.ds); }
         // ★ The dial and the view first, then the tuner: tuneHw reads the VFO, which must already be the listener's
         if (s.audio > 0.0) audioFreq.store(s.audio);
@@ -12986,7 +13032,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (tell) {
             std::vector<std::shared_ptr<net::Socket>> socks;
             { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
-            for (auto& sk : socks) { sendText(sk, "{\"type\":\"adsb_off\"}"); sendConfig(sk); }
+            for (auto& sk : socks) { sendText(sk, "{\"type\":\"adsb_off\"}"); sendConfig(sk); sendHwInfo(sk); }
         }
     }
 
@@ -13020,6 +13066,45 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LocalSdrShim::instance().setGain(adsbGainSet_);
         LOGI("[ADS-B] gain %.1f dB (noise %.1f dBFS, %.0f msg/s, %.1f %% strong)", adsbGainSet_ / 10.0,
              h.noiseDbfs, h.msgsPerSec, h.strongFrac * 100);
+    }
+
+    /* ★★★ HANDOVER BETWEEN WHOLE-RADIO MODES (Stuart, 2026-10-24: "moving from ADS-B to DAB changes the rate on move,
+     *  and vice versa"). Leaving one for the other must not put the listener's radio back first and then take it again —
+     *  that is TWO rate changes (two teardowns, the 32-bit hazard twice) where one will do. The mode being left hands
+     *  over what it saved of the listener's state, stops, and restores nothing; the mode being entered makes the one
+     *  change it needs; and leaving to ordinary listening later puts back exactly what was there before either. */
+    AdsbSaved adsbHandOff() {
+        if (!g_adsbMode.exchange(false)) return adsbSaved_;
+        g_adsb.stop();
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        for (auto& sk : socks) sendText(sk, "{\"type\":\"adsb_off\"}");
+        LOGI("[ADS-B] handing the receiver straight to DAB (one rate change, not two)");
+        return adsbSaved_;
+    }
+    void dabHandOffToAdsb() {
+        AdsbSaved& s = adsbSaved_;
+        s.lockedCentre = g_dabSavedCentre.load(); s.lockedRate = g_dabSavedRate.load();
+        s.gainTarget = g_dabSavedGain.load(); s.agcOn = g_dabSavedAgcOn.load();
+        s.hwGain = g_dabSavedHwGain.load(std::memory_order_relaxed);
+        s.lna = g_dabSavedLna.exchange(-1, std::memory_order_relaxed);
+        s.agcSet = g_dabSavedAgcSet.load(); s.digAgc = g_dabSavedDigAgc.load();
+        s.ds = g_dabSavedDs.exchange(-1, std::memory_order_relaxed);
+        s.rtl = g_dabSavedRtl.load(); s.audio = g_dabSavedAudio.load(); s.view = g_dabSavedView.load();
+        s.rate = g_dabSavedActualRate.load();
+        // ★ DAB's own off path, minus the restore: leaving it for ADS-B is a choice, so the block is not remembered
+        g_dabWantChannel.store(-1, std::memory_order_relaxed);
+        g_dabWantSid.store(0, std::memory_order_relaxed);
+        vsPersist("{\"dabChannel\":-1,\"dabSid\":0}");
+        dabModeEnd();
+        dabPrimed_ = false;
+        stopDabClock();
+        g_dabLockHeld.store(false);
+        dabPeersForget();
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        for (auto& sk : socks) sendText(sk, "{\"type\":\"dab_off\"}");
+        LOGI("[DAB] handing the receiver straight to ADS-B (one rate change, not two)");
     }
 
     void dabRestore() {
@@ -15857,8 +15942,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return;
             }
             // ★ One whole-radio mode at a time: DAB leaves through its own door, which tells every listener
-            if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
-            adsbEnter();
+            // ★ From DAB: a handover, not leave-then-enter — see adsbHandOff
+            if (g_dabMode.load(std::memory_order_relaxed) && g_dabLockHeld.load()) { dabHandOffToAdsb(); adsbEnter(true); }
+            else adsbEnter();
             return;
         }
         if (type == "dab") {
@@ -15939,7 +16025,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  one holding the multiplex centre, and a client still holding it computes every
                  *  subsequent tune from a dial in the wrong band. */
                 dabPeersForget();   // ★ the next DAB session starts every dab=2 socket from a full list
-                for (auto& sk : socks) { sendText(sk, "{\"type\":\"dab_off\"}"); sendConfig(sk); }
+                for (auto& sk : socks) { sendText(sk, "{\"type\":\"dab_off\"}"); sendConfig(sk); sendHwInfo(sk); }
                 if (socks.empty()) { sendText(sock, "{\"type\":\"dab_off\"}"); sendConfig(sock); }
                 return;
             }
@@ -16027,22 +16113,37 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★★★ TAKE THE LOCK OFF FIRST — see g_dabLockHeld. Anything below that moves the
              *  radio is undone by the rebuild while the lock still stands. */
             // ★ One whole-radio mode at a time: ADS-B gives the receiver back first, so DAB saves the listener's state
-            if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
+            // ★ From ADS-B: a handover — ADS-B's saved state becomes DAB's, and nothing is restored in between
+            bool preSaved = false;
+            if (g_adsbMode.load(std::memory_order_relaxed)) {
+                const AdsbSaved a = adsbHandOff();
+                g_dabSavedCentre.store(a.lockedCentre); g_dabSavedRate.store(a.lockedRate);
+                g_dabSavedGain.store(a.gainTarget); g_dabSavedAgcOn.store(a.agcOn);
+                g_dabSavedHwGain.store(a.hwGain, std::memory_order_relaxed);
+                g_dabSavedLna.store(a.lna, std::memory_order_relaxed);
+                g_dabSavedAgcSet.store(a.agcSet); g_dabSavedDigAgc.store(a.digAgc);
+                g_dabSavedDs.store(a.ds, std::memory_order_relaxed);
+                g_dabSavedRtl.store(a.rtl); g_dabSavedAudio.store(a.audio); g_dabSavedView.store(a.view);
+                g_dabSavedActualRate.store(a.rate);
+                preSaved = true;
+            }
             if (!g_dabLockHeld.exchange(true)) {
+                if (!preSaved) {
                 g_dabSavedCentre.store(g_vsLockedCentre.load());
                 g_dabSavedRate.store(g_vsLockedRate.load());
                 g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
                 g_dabSavedAgcOn.store(g_vibeAgcRtlOn.load(std::memory_order_relaxed));
                 g_dabSavedHwGain.store(lastGainTenthDb, std::memory_order_relaxed);   // ★ see g_dabSavedHwGain
+                }
                 /* ★ The RSP's LNA state too. DAB's rule opens the front end for a weak
                  *   multiplex; back on medium wave that state pinned the IF at 59 and the window
                  *   rule took a rung 7 s after EVERY return (suite runs 1-3, 23:55-00:25, one
                  *   step per exit). The state the carrier had is the state it gets back. */
-                g_dabSavedLna.store(useSdrplay() && sdrp ? sdrp->currentLnaState() : -1, std::memory_order_relaxed);
+                if (!preSaved) g_dabSavedLna.store(useSdrplay() && sdrp ? sdrp->currentLnaState() : -1, std::memory_order_relaxed);
                 /* ★ The RSP's IF AGC target, dropped to leave OFDM its peak headroom — see
                  *   kDabAgcSetPoint. Only when this radio HAS one, and only if it is not already
                  *   at or below it: an owner who has deliberately set -45 must not be raised. */
-                g_dabSavedAgcSet.store(vsDesiredAgcSet());
+                if (!preSaved) g_dabSavedAgcSet.store(vsDesiredAgcSet());
                 if (useSdrplay() && g_dabAgcOverride.load(std::memory_order_relaxed)) {
                     const int want = g_dabAgcTarget.load(std::memory_order_relaxed);
                     const int cur  = vsDesiredAgcSet();
@@ -16059,10 +16160,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         LocalSdrShim::instance().setIfAgcSetPoint(want);
                     }
                 }
-                g_dabSavedDigAgc.store(g_rtlDigitalAgc.load(std::memory_order_relaxed));
+                if (!preSaved) g_dabSavedDigAgc.store(g_rtlDigitalAgc.load(std::memory_order_relaxed));
                 /* ★★ The tuner, not the ADC, for Band III — see g_dabSavedDs. Only a MANUAL direct-sampling
                  *  setting on a dongle; the automatic crossover switches itself at the tune below. */
-                {
+                if (!preSaved) {
                     const int ds = g_dsNow.load(std::memory_order_relaxed);
                     if (ds > 0 && dev && !g_autoDs.load(std::memory_order_relaxed)) {
                         g_dabSavedDs.store(ds, std::memory_order_relaxed);
@@ -16072,10 +16173,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         g_dabSavedDs.store(-1, std::memory_order_relaxed);
                     }
                 }
+                if (!preSaved) {
                 g_dabSavedRtl.store(rtlCenter.load());
                 g_dabSavedAudio.store(audioFreq.load());
                 g_dabSavedView.store(viewCenter.load());
                 g_dabSavedActualRate.store(sampleRate);
+                }
                 /* ★★★ ON ENTRY ONLY — AND THIS IS THE WHOLE BUG. The reset used to run on every
                  *  "dab on" message, and STEPPING A MULTIPLEX SENDS ONE, so a listener's manual
                  *  gain was wiped every time they pressed the next-mux button. That is what
@@ -16271,7 +16374,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 for (auto& v : views) clientRetune(v.get());
                 updateZoomView();
-                for (auto& sk : socks) sendConfig(sk);
+                for (auto& sk : socks) { sendConfig(sk); sendHwInfo(sk); }   // ★ hwinfo carries rateNow — DAB may have changed it
             }
             /* ★★★ ENTER AT THE GAIN THIS BLOCK LAST DECODED AT — here, at once, not on the AGC's
              *  first tick: that tick waits out the 2.5 s entry settle, and the seed landed 2.5 s
@@ -16316,6 +16419,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             double hz = 0;
             if (jsonNum(msg, "hz", hz) && hz > 0)
                 handleControl(sock, "{\"type\":\"tune\",\"frequency\":" + std::to_string((long long)hz) + "}");
+            return;
+        }
+        if (type == "adsbExtreme") {
+            double v = 0;
+            if (jsonNum(msg, "on", v) && adminGate("ADS-B at 3.2 MS/s")) {
+                g_adsbExtreme.store(v != 0, std::memory_order_relaxed);
+                vsPersist(std::string("{\"adsbExtreme\":") + (v != 0 ? "1" : "0") + "}");
+                LOGI("ADS-B 3.2 MS/s (extreme, RTL): %s", v != 0 ? "ON" : "off");
+                sendHwInfo(sock);
+            }
             return;
         }
         if (type == "dabBoost") {
@@ -29273,6 +29386,7 @@ void LocalSdrShim::setVibeServerRateLock(bool on) {
     LOGI("sample rate: %s", on ? "PINNED — listeners may not change it" : "listener's choice");
 }/** ★ DAB may borrow 2.048 MS/s on a receiver configured slower — see g_dabRateBoost. */
 void LocalSdrShim::setVibeServerDabRateBoost(bool on) { g_dabRateBoost.store(on, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerAdsbExtreme(bool on) { g_adsbExtreme.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerNbWide(int mode) {
     g_vsNbWide.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
     LOGI("wide impulse blanker: %s", mode == 0 ? "off" : mode == 2 ? "on" : "auto (below 30 MHz)");
@@ -29417,10 +29531,21 @@ static std::string vsAdsbWhyNot() {
     bool reach = false;
     for (const auto& x : t) if (double(x.lo) <= 1089.0e6 && double(x.hi) >= 1091.0e6) { reach = true; break; }
     if (!reach) return "this radio cannot tune to 1090 MHz";
-    const double running = LocalSdrShim::instance().captureSpanHz();
+    // ★★ THE OWNER'S SWITCH (Setup: "change the sample rate when a mode needs it", stored as dabRateBoost): with it on,
+    //    ADS-B may raise the rate itself, so the question is only whether the radio CAN capture at 2.4 MS/s.
+    if (g_dabRateBoost.load(std::memory_order_relaxed)) {
+        if (g_vsHwMaxRate.load(std::memory_order_relaxed) == 0) LocalSdrShim::instance().maxSampleRateHz();
+        if (double(g_vsHwMaxRate.load(std::memory_order_relaxed)) < vibeadsb::Service::kMinRateHz)
+            return "this radio cannot capture at 2.4 MS/s, which ADS-B needs";
+        return {};
+    }
+    // ★ From inside DAB, judge by the rate DAB gives back — DAB may be holding the radio at 2.048 for itself.
+    double running = LocalSdrShim::instance().captureSpanHz();
+    if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
     if (running < vibeadsb::Service::kMinRateHz) {
-        char b[160];
-        std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 this receiver runs at %.3f MS/s", running / 1e6);
+        char b[240];
+        std::snprintf(b, sizeof b, "ADS-B needs a capture of 2.4 MS/s or more \xe2\x80\x94 this receiver runs at %.3f MS/s "
+                      "(its owner can let it change rate for ADS-B in Setup)", running / 1e6);
         return b;
     }
     return {};
@@ -29557,6 +29682,8 @@ static std::string vsTunableJson() {
         const bool useful = hwMax >= vibedab::kCanonicalRateHz && eff < vibedab::kCanonicalRateHz;
         j += std::string(",\"dabBoost\":") + (g_dabRateBoost.load(std::memory_order_relaxed) ? "true" : "false");
         j += std::string(",\"dabBoostUseful\":") + (useful ? "true" : "false");
+        // ★ The same switch serves ADS-B (and any later mode with a rate of its own); 3.2 MS/s is offered for RTLs only
+        j += std::string(",\"adsbExtreme\":") + (g_adsbExtreme.load(std::memory_order_relaxed) ? "true" : "false");
     }
     /* ★★★ DIRECT SAMPLING, SAID OUT LOUD (Stuart, 2026-09-20). Two different questions, both answered here:
      *  ★★ `autoDs` — does this receiver reach HF BY ITSELF? On a Nooelec and its kin, everything below the
