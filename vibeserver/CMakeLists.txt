@@ -745,6 +745,19 @@ vibe_sanitize(test-mapgl-range)
 target_include_directories(test-mapgl-range PRIVATE "${CPP_DIR}")
 target_link_libraries(test-mapgl-range PRIVATE Threads::Threads)
 
+# ★★ V12 ADS-B aircraft data (vibe_adsb_data*.h, vibe_inflate.h, vibe_adsb_images_install.h): our inflater, the
+#    builder, the reader, enrichment, the logo route's path safety and the logo zip installer (zip slip, bombs).
+#    Header-only. Reads vibeserver/testdata-adsb/ relative to the repository root (run it from there).
+add_executable(test-adsb-data "${CMAKE_CURRENT_SOURCE_DIR}/test-adsb-data.cpp")
+vibe_sanitize(test-adsb-data)
+target_include_directories(test-adsb-data PRIVATE "${CPP_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test-adsb-data PRIVATE Threads::Threads)
+# ★ The reproducible half of the aircraft data — scripts/build-adsb-data.sh drives it (the starter header, the
+#   full tables for a check). The SAME builder the server's weekly update runs.
+add_executable(adsb-data-tool "${CMAKE_CURRENT_SOURCE_DIR}/adsb-data-tool.cpp")
+target_include_directories(adsb-data-tool PRIVATE "${CPP_DIR}")
+target_link_libraries(adsb-data-tool PRIVATE Threads::Threads)
+
 # ★★★ THE DAB TESTS ARE PART OF THE BUILD. Seventeen of them existed and not one was a target —
 #     each was "a two-line g++ command" nobody ran, which is how a 512-byte JSON buffer, an
 #     un-reversed X-PAD and a P/D flag read from the wrong bit all shipped past a test tree that

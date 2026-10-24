@@ -201,6 +201,22 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   ok(M.isMilitary({ hex: 'a00001', flight: 'RCH871' }), 'a US airlift callsign');
   ok(!M.isMilitary({ hex: '~43c0a1' }), 'a non-ICAO (~) address is not read as a block');
   ok(!M.isMilitary({ hex: '400001', flight: 'RRRX' }), 'a callsign must carry digits after the prefix');
+  // ★★ V12 aircraft data: the server's mil:1 wins (its block table + the Mictronics flag), else the rule above
+  ok(M.isMilitary({ hex: '3f1234', mil: 1 }), 'the server says military (a German block we do not list)');
+  ok(!M.isMilitary({ hex: '3f1234' }), '…and without the server it is not');
+}
+{
+  // ── V12 aircraft data in the card: the small pure helpers ──
+  ok(M.engText('2J') === '2 \u00d7 jet' && M.engText('4T') === '4 \u00d7 turboprop' && M.engText('') === '' && M.engText('9Z') === '', 'engines in words');
+  ok(M.flagEmoji('gb') === '\u{1F1EC}\u{1F1E7}' && M.flagEmoji('G') === '' && M.flagEmoji('<b') === '', 'flag emoji from ISO alpha-2 only');
+  ok(M.routeShort({ from: 'EHAM', to: 'EGSS', fromIata: 'AMS', toIata: 'STN', plausible: true }) === 'AMS \u2192 STN', 'route short, IATA');
+  ok(M.routeShort({ from: 'EHAM', to: 'EGSS', fromIata: 'AMS' }) === 'EHAM \u2192 EGSS', 'route short, ICAO when an end lacks IATA');
+  ok(M.routeShort({ from: 'EHAM', to: 'EGSS', plausible: false }) === '', 'an implausible route is not shown short');
+  ok(M.opBadge({ op: 'RYR' }) === 'RYR' && M.opBadge({ op: '<s>' }) === '' && M.opBadge({}) === '', 'operator badge');
+  ok(M.imgKey('RYR-B738') === 'RYR-B738' && M.imgKey('../etc') === '' && M.imgKey('a/b') === '' && M.imgKey('x'.repeat(41)) === '', 'image keys are the server index\'s keys only');
+  ok(M.WAKE.H === 'Heavy' && M.WAKE.J === 'Super', 'wake categories');
+  ok(M.shortAirport('London Luton Airport') === 'London Luton' && M.shortAirport('Belfast International Airport') === 'Belfast'
+     && M.shortAirport('RAF Lakenheath') === 'RAF Lakenheath', 'airport names shortened for the card');
   ok(M.toneKey({ hex: '43c0a1', seen_pos: 1 }) === 'military', 'military takes the blue');
   ok(M.toneKey({ hex: '43c0a1', squawk: '7700', seen_pos: 1 }) === 'alert', 'an emergency still wins over military');
   ok(M.toneKey({ hex: '43c0a1', alt_baro: 'ground' }) === 'ground', 'on the ground is still grey');

@@ -95,6 +95,9 @@ flags_for() {
     #    (vibe_rate_guard.h) and the benchmark's ADS-B row on a fake source (vibe_benchmark_adsb.h, which pulls in the
     #    benchmark's headers). ~12 s: two parts feed in real time, as the server does.
     test-adsb-capture)     echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
+    # ★★ V12 aircraft data: builder/reader/enrichment/logo zip installer on vibeserver/testdata-adsb (VIBE_ADSB_RAW
+    #    = a folder with the real downloads also checks known aircraft and routes — scripts/build-adsb-data.sh)
+    test-adsb-data)        echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }
@@ -441,6 +444,8 @@ if node --no-warnings scripts/test_capture_and_rate_guard.ts; then pass=$((pass+
 if node --no-warnings scripts/test_adsb_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADS-B FURTHEST key: the web map and the app map page name the same aircraft (one rule, two readers).
 if npx tsx scripts/test_adsb_furthest.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ …and V12 aircraft data on the clients (adsbInfo.ts): the adsb_info sanitiser + store, and the web list's rows with it.
+if node --no-warnings scripts/test_adsb_info.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 echo "── image metadata (EXIF / GPS / XMP) ──"
 if python3 scripts/strip-image-metadata.py --check; then pass=$((pass+1)); echo "  none"; else fail=$((fail+1)); echo "  ✗ run: python3 scripts/strip-image-metadata.py"; fi
 # ★★★ A FACEPLATE CANNOT LOCK YOU OUT (faceplate.ts CRASH SAFETY): the mark is armed before a risky

@@ -14,6 +14,7 @@
 #include "radios.h"
 #include "directory.h"
 #include "mapgl_curl.h"
+#include "adsb_data_curl.h"   // V12 ADS-B aircraft data
 
 #ifdef VIBE_HAVE_LIBRTLSDR
 #include <rtl-sdr.h>
@@ -136,6 +137,15 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
             //   neither, so its admin page could only say the download was unavailable (2026-09-28).
             vibemapgl::setDataDir(dir + "/mapgl");
             vibemapgl::installCurlDownloader();
+            // ★ V12 ADS-B aircraft data — the same as the daemon (main.cpp), so Simple mode is not the reader left out
+            vibeadsbdata::Updater::get().setDir(dir + "/adsb");
+            vibeadsbdata::Db::images().setDir(dir + "/adsb");
+#ifdef VIBESERVER_VERSION_STR
+            vibeadsbdata::installCurlFetcher(std::string("VibeServer/") + VIBESERVER_VERSION_STR + " (+https://vibesdr.net)");
+#else
+            vibeadsbdata::installCurlFetcher("VibeServer (+https://vibesdr.net)");
+#endif
+            vibeadsbdata::Updater::get().start();
         }
         geoip::load();
         asndb::load();

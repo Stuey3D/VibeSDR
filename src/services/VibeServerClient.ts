@@ -21,6 +21,7 @@ import { holdNativeHealing } from '../components/AudioPlayer';
 import { DabExitGuard } from './dabStepper';
 import { DabAssembler } from './dabAssemble';
 import { parseAdsbMessage } from './adsbTypes';
+import { AdsbInfoStore } from './adsbInfo';
 
 export {
   MODE_BANDWIDTHS,
@@ -133,6 +134,8 @@ export class VibeServerClient extends VibeServerWsClient {
   /** ★★★ Reports that arrive after our own `adsb off` are ghosts — the DabExitGuard rule, unchanged
    *  (a report already on the wire re-opened the box over the receiver we had just been given back). */
   private adsbExit = new DabExitGuard();
+  /** ★ What each aircraft is (adsb_info), per hex, merged into every report — adsbInfo.ts. */
+  private adsbInfo = new AdsbInfoStore();
   /** Date.now() of the last report — see adsbSilentMs. */
   private adsbLastAt = 0;
   /** ★ When the self-heal was last held for ADS-B — see the `adsb` case. */
@@ -220,6 +223,8 @@ export class VibeServerClient extends VibeServerWsClient {
         const now = Date.now();
         if (!this.adsbExit.accept(now)) return true;   // ★ a ghost after our own off — see adsbExit
         const r = parseAdsbMessage(msg);
+        // ★ V12 aircraft data: each aircraft with what it IS (adsb_info, sent once per aircraft, kept here per hex)
+        r.aircraft = this.adsbInfo.apply(r.aircraft);
         /* ★★ HOLD THE HEAL WHILE THE MODE RUNS — every few seconds, quietly (the hold extends, never
          *  shortens; logging one a second would bury the audio log). A report we did not ask for
          *  (a second listener joining a radio already in ADS-B) is the same silence. */
@@ -233,8 +238,15 @@ export class VibeServerClient extends VibeServerWsClient {
         this.callbacks.onAdsb?.(r);
         return true;
       }
+      /* ★★ V12 aircraft data: registration, type, operator, country, route — new or changed aircraft only (full:1 =
+       *  every one, to a socket that has just joined). Arrives just before the report it belongs to. */
+      case 'adsb_info':
+        if (!this.adsbExit.accept(Date.now())) return true;
+        this.adsbInfo.take(msg);
+        return true;
       case 'adsb_off':
         this.adsbExit.offConfirmed(Date.now());
+        this.adsbInfo.clear();
         this.adsbHeld = false;
         this.callbacks.onAdsb?.(null);
         return true;

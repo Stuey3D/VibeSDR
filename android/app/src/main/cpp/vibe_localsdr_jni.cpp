@@ -29,6 +29,7 @@
 #include "vibe_mapdata.h"
 // ★★★ The GPU map (/mapgl/) — the bundle + data dirs and the JNI downloader, wired below.
 #include "vibe_mapgl.h"
+#include "vibe_adsb_data_update.h"   // V12 ADS-B aircraft data — the weekly update (transport below)
 #include <functional>
 // ★ The daemon's own country/network lookup, compiled in here too — see the CMakeLists note.
 #include "../../../../../vibeserver/geoip.h"
@@ -174,6 +175,61 @@ Java_com_vibesdr_app_VibeMapGL_nativeInit(JNIEnv* env, jclass cls, jstring jData
         //   instead of offering a button that cannot work.
         LOGE("mapgl: VibeMapGL.download not found — High Detail download unavailable");
     }
+}
+
+// ── ★★ V12 ADS-B aircraft data: the weekly conditional download, through Kotlin (Android has no curl) ─────
+// ★ Same JNI rules as jniMapglDownload: the updater's own thread is attached and detached here, and the class is the
+//   global ref nativeInit cached (no FindClass on a native thread — it carries the system class loader).
+static jmethodID g_adsbFetchIf = nullptr;
+static std::string g_adsbUa;
+
+static vibeadsbdata::FetchResult jniAdsbFetch(const std::string& url, const std::string& dest,
+                                              const std::string& inm, const std::string& ims) {
+    vibeadsbdata::FetchResult r;
+    if (!g_vm || !g_mapglCls || !g_adsbFetchIf) { r.error = "no downloader"; return r; }
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) { r.error = "could not attach to the JVM"; return r; }
+        attached = true;
+    }
+    jstring a = env->NewStringUTF(url.c_str()), b = env->NewStringUTF(dest.c_str()), c = env->NewStringUTF(inm.c_str()),
+            d = env->NewStringUTF(ims.c_str()), e = env->NewStringUTF(g_adsbUa.c_str());
+    jstring res = (jstring)env->CallStaticObjectMethod(g_mapglCls, g_adsbFetchIf, a, b, c, d, e);
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); res = nullptr; r.error = "Java exception"; }
+    if (res) {
+        const char* s = env->GetStringUTFChars(res, nullptr);
+        std::string line = s ? s : "";
+        if (s) env->ReleaseStringUTFChars(res, s);
+        env->DeleteLocalRef(res);
+        std::vector<std::string> f; size_t o = 0;
+        while (f.size() < 3) { const size_t t = line.find('\t', o); if (t == std::string::npos) break; f.push_back(line.substr(o, t - o)); o = t + 1; }
+        f.push_back(line.substr(o));
+        if (f.size() == 4) { r.status = std::atoi(f[0].c_str()); r.etag = f[1]; r.lastModified = f[2]; r.error = f[3]; }
+    }
+    env->DeleteLocalRef(a); env->DeleteLocalRef(b); env->DeleteLocalRef(c); env->DeleteLocalRef(d); env->DeleteLocalRef(e);
+    if (attached) g_vm->DetachCurrentThread();
+    return r;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeMapGL_nativeInitAdsb(JNIEnv* env, jclass cls, jstring jData, jstring jImages, jstring jUa) {
+    if (!g_mapglCls) g_mapglCls = (jclass)env->NewGlobalRef(cls);
+    if (!g_adsbFetchIf) {
+        g_adsbFetchIf = env->GetStaticMethodID(cls, "fetchIf",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); g_adsbFetchIf = nullptr; }
+    }
+    auto str = [&](jstring j) { std::string o; if (j) { const char* c = env->GetStringUTFChars(j, nullptr); if (c) { o = c; env->ReleaseStringUTFChars(j, c); } } return o; };
+    const std::string data = str(jData), images = str(jImages);
+    g_adsbUa = str(jUa);
+    vibeadsbdata::Updater::get().setDir(data);
+    vibeadsbdata::Db::images().setDir(images);
+    vibeadsbdata::Updater::get().setUserAgent(g_adsbUa);
+    if (g_adsbFetchIf) vibeadsbdata::Updater::get().setFetcher(jniAdsbFetch);
+    else LOGE("adsb data: VibeMapGL.fetchIf not found — the weekly aircraft-data update is unavailable");
+    vibeadsbdata::Updater::get().start();
+    LOGI("adsb data: %s (images %s)", data.c_str(), images.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL

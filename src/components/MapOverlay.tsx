@@ -1294,7 +1294,10 @@ if(KIND==='adsb'){
         onPrefs:function(p){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'adsbPrefs',prefs:p}));},
         theme:'dark',
         // ★ The page draws HFDL's receiver marker itself (addRx) — the layer is asked not to add a second.
-        drawReceiver:false
+        drawReceiver:false,
+        // ★ V12: the owner's logos / silhouettes on this server (the card shows them when the server names one). Photos
+        //   stay OFF until the Planespotters terms are confirmed — the TODO in adsblayer.js.
+        imageBase:${JSON.stringify(opts?.local ? null : baseUrl.replace(/\/+$/, '') + '/adsb/')}
       });
     }catch(e){console.error('ADS-B layer could not start',e);adsbLayer=null;}
     return adsbLayer;
@@ -1932,6 +1935,7 @@ export default function MapOverlay(
             (AdsbLiveList's note). Only once the page is there: before that there is no map to find anything on. */}
         {kind === 'adsb' && !!pageUri && !packError && (
           <AdsbLiveList aircraft={adsbList ?? []} started={!!adsbStarted} onFocus={adsbFocus} onFootprint={adsbFootprint} onLegend={adsbLegend}
+                        logoBase={local ? null : baseUrl.replace(/\/+$/, '') + '/adsb/'}
                         ink={ink} areaW={winW} areaH={winH}
                         insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}

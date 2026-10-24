@@ -19,6 +19,7 @@
 
 import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services/faultLog';
 import { DabAssembler } from '../../../src/services/dabAssemble';
+import { AdsbInfoStore, type AdsbInfo } from '../../../src/services/adsbInfo';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg } from '../../../src/services/vibeSquelch';
 import { roomMode, roomPassband } from '../../../src/services/roomPassband';
@@ -318,7 +319,8 @@ export interface RadioCaps {
 }
 
 /** ★ One aircraft in an ADS-B report — dump1090 aircraft.json field names; absent = unknown (docs/v12/ADSB.md). */
-export interface AdsbAircraft {
+/** ★ V12 aircraft data: the details the server sends ONCE per aircraft (adsb_info, adsbInfo.ts), merged in. */
+export interface AdsbAircraft extends AdsbInfo {
   hex: string; flight?: string; category?: string;
   lat?: number; lon?: number; seen_pos?: number;
   alt_baro?: number | 'ground'; alt_geom?: number;
@@ -923,11 +925,19 @@ export class SpectrumClient {
         if (Date.now() < this.adsbQuietUntil) return;
         this.adsbHeld = true;           // ★ arrival = the receiver is in ADS-B, whoever put it there
         const list = Array.isArray(msg.aircraft) ? msg.aircraft.filter((a: any) => a && typeof a === 'object' && typeof a.hex === 'string') : [];
-        this.cb.onAdsb?.({ ...msg, aircraft: list.slice(0, 2000) } as AdsbReport);
+        // ★ each aircraft with what it IS (registration, type, operator, route) — sent once, kept here per hex
+        this.cb.onAdsb?.({ ...msg, aircraft: this.adsbInfo.apply(list.slice(0, 2000)) } as AdsbReport);
         return;
       }
+      /* ★★ V12 aircraft data: what each aircraft is, new or changed ones only (full:1 = all, to a joiner). Arrives just
+       *  BEFORE the report it belongs to, so that report is drawn with it. */
+      case 'adsb_info':
+        if (Date.now() < this.adsbQuietUntil) return;
+        this.adsbInfo.take(msg);
+        return;
       case 'adsb_off': {
         this.adsbHeld = false;
+        this.adsbInfo.clear();
         const now = Date.now();
         if (this.adsbQuietUntil > now) this.adsbQuietUntil = Math.min(this.adsbQuietUntil, now + 1500);
         this.cb.onAdsb?.(null);
@@ -1809,6 +1819,8 @@ export class SpectrumClient {
    *  bandwidth, zoom, reset, tunerbw and sampleRate while in it, so they are stopped here — the page
    *  greys the controls (adsbLockControls in main.ts). Set by our own entry and by any `adsb` report. */
   adsbHeld = false;
+  /** ★ What each aircraft is (adsb_info), per hex, merged into every report. */
+  private adsbInfo = new AdsbInfoStore();
   /** ★ A report already on the wire when our `adsb off` lands is a ghost — the DAB rule (dabQuietUntil). */
   private adsbQuietUntil = 0;
   adsb(on: boolean) {

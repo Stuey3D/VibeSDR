@@ -6,6 +6,7 @@
 // screen, and the list is the bit of the table you glance at — nearest first, a few rows, tap one to find it.
 // ★★ PURE: no React Native — scripts/test_adsb_list.ts runs it in node.
 import type { Aircraft } from './SDRBackend';
+import { flagEmoji } from './adsbInfo.ts';
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 /** ★ km → nautical miles: aviation's unit, and the range rings on the same map are drawn in NM. */
@@ -32,6 +33,12 @@ export interface AdsbListRow {
   /** ▲ ▼ ● beside the altitude (trendGlyph), and the altitude's colour (altColour) — '' when none. */
   trend: string;
   altCol: string;
+  /* ★ V12 aircraft data — the row's second line (adsbInfoLine), the flag of the state of registry and the operator's
+   *   badge / logo key; all '' from a server without the data. */
+  info: string;
+  flag: string;
+  op: string;
+  logo: string;
 }
 
 /** ★ SIGNAL BARS (Stuart, 2026-10-24: "a little 3 bar graph like everywhere else next to the flight number"). From
@@ -102,7 +109,9 @@ export function emergencyBadge(squawk: unknown, state: unknown): string {
 
 /** ★★ THE ORDER (Stuart, 2026-10-24): emergencies first, then military, then the nearest to the receiver. */
 export function adsbListRows(list: Aircraft[]): AdsbListRow[] {
-  const rank = (a: Aircraft) => (emergencyBadge(a.squawk, a.emergency) ? 0 : isMilitaryHex(a.icao, a.flight) ? 1 : 2);
+  // ★★ military: the SERVER SAYS (a.mil — its Annex 10 + VRS block table, the Mictronics flag), else the old rule
+  const mil = (a: Aircraft) => !!a.mil || isMilitaryHex(a.icao, a.flight);
+  const rank = (a: Aircraft) => (emergencyBadge(a.squawk, a.emergency) ? 0 : mil(a) ? 1 : 2);
   const sorted = [...list].sort((x, y) => {
     const rx = rank(x), ry = rank(y);
     if (rx !== ry) return rx - ry;
@@ -114,23 +123,28 @@ export function adsbListRows(list: Aircraft[]): AdsbListRow[] {
   });
   return sorted.map((a) => ({
     hex: a.icao,
-    label: a.flight?.trim() || a.icao.toUpperCase(),
+    label: a.flight?.trim() || a.reg || a.icao.toUpperCase(),
     alt: altText(a),
     kt: a.speed != null && Number.isFinite(a.speed) ? `${Math.round(a.speed)} kt` : '',
     range: rangeText(a),
     placed: a.lat != null && a.lon != null,
     emergency: !!emergencyBadge(a.squawk, a.emergency),
     badge: emergencyBadge(a.squawk, a.emergency),
-    military: isMilitaryHex(a.icao, a.flight),
+    military: mil(a),
     bars: adsbBars(a.rssi),
     trend: trendGlyph(a),
     altCol: !a.onGround && a.altitude != null && Number.isFinite(a.altitude) ? altColour(a.altitude) : '',
+    info: a.info ?? '',
+    flag: flagEmoji(a.ccode),
+    op: a.op ?? '',
+    logo: a.logo ?? '',
   }));
 }
 
 /* ── geometry ──────────────────────────────────────────────────────────────────────────────────────────────── */
 /** One row's height and the header's, pt — the list sizes from these (the component uses the same numbers). */
-export const LIST_ROW_H = 24;
+// ★ 32 (was 24): a second line under the callsign — operator · type · registration · route (V12 aircraft data)
+export const LIST_ROW_H = 32;
 export const LIST_HEAD_H = 30;
 /** ★ The map page's own top bar (#topbar in MapOverlay's page: 8 + 32 + 6, below the safe area). */
 export const MAP_TOPBAR_H = 46;

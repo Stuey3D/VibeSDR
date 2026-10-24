@@ -335,6 +335,9 @@
   const MIL_BLOCKS = [[0x43C000, 0x43CFFF], [0xAE0000, 0xAFFFFF]];
   const MIL_CALLS = /^(RRR|ASCOT|TARTN|RCH|NATO|GAF|CTM|IAM|BAF)\d/;
   function isMilitary(a) {
+    // ★★ THE SERVER SAYS FIRST (V12 aircraft data: its own Annex 10 + VRS block table and the Mictronics flag — mil:1),
+    //    else the old rule below, which a server without the data (or an older one) still relies on
+    if (a && (a.mil === 1 || a.mil === true)) return true;
     const h = parseInt(String(a.hex || '').replace(/^~/, ''), 16);
     if (h === h && String(a.hex || '')[0] !== '~') for (const [lo, hi] of MIL_BLOCKS) if (h >= lo && h <= hi) return true;
     return MIL_CALLS.test(String(a.flight || '').trim().toUpperCase());
@@ -370,10 +373,47 @@
     return vr != null && vr > 300 ? '\u25B2' : vr != null && vr < -300 ? '\u25BC' : '\u25CF';
   }
 
+  /* ══ WHAT THE AIRCRAFT IS (V12 aircraft data — the server's adsb_info fields, merged into each aircraft by the host) ══
+   * r, t, desc, wtc, eng, species, country, countryName, mil, op, opName, logo, sil, route {from, to, fromIata, toIata,
+   * fromName, toName, fromPlace, toPlace, stops, plausible}. All optional: an older server sends none, and the card
+   * is exactly what it was. */
+  const WAKE = { L: 'Light', M: 'Medium', H: 'Heavy', J: 'Super' };
+  const ENGINE = { J: 'jet', T: 'turboprop', P: 'piston', E: 'electric', R: 'rocket' };
+  const SPECIES = { H: 'helicopter', S: 'seaplane', A: 'amphibian', G: 'gyrocopter', T: 'tiltrotor' };
+  function engText(e) {
+    const m = /^([1-8C])([JTPER])?$/.exec(String(e || ''));
+    if (!m) return '';
+    const n = m[1] === 'C' ? 'coupled' : m[1];
+    return n + (m[2] ? ' \u00d7 ' + ENGINE[m[2]] : (m[1] === '1' ? ' engine' : ' engines'));
+  }
+  /** ★ A flag from the ISO code as regional-indicator emoji — no assets (the page is embedded in the server, and
+   *  ~250 SVG flags would be most of a web page per listener). Windows shows the two letters instead of a flag, so
+   *  there the caller shows the code as text (flagOrCode). */
+  function flagEmoji(iso) {
+    const c = String(iso || '').toUpperCase();
+    if (!/^[A-Z]{2}$/.test(c)) return '';
+    return String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65, 0x1F1E6 + c.charCodeAt(1) - 65);
+  }
+  function noEmojiFlags() { try { return /Windows/.test(global.navigator && global.navigator.userAgent || ''); } catch (e) { return false; } }
+  function flagOrCode(iso) { const c = String(iso || '').toUpperCase(); return /^[A-Z]{2}$/.test(c) ? (noEmojiFlags() ? c : flagEmoji(c)) : ''; }
+  /** "AMS → STN" — IATA when both ends have one, else ICAO; '' when there is no route or it is NOT plausible. */
+  function routeShort(r) {
+    if (!r || typeof r !== 'object' || r.plausible === false) return '';
+    const a = r.fromIata && r.toIata ? r.fromIata : r.from, b = r.fromIata && r.toIata ? r.toIata : r.to;
+    return a && b ? String(a) + ' \u2192 ' + String(b) : '';
+  }
+  /** "London Luton Airport" → "London Luton": the words every airport's name ends with carry nothing on a card. */
+  function shortAirport(n) { return String(n || '').replace(/\s+(International\s+)?(Airport|Airfield|Aerodrome|Air Base)$/i, '').trim(); }
+  /** The operator's text badge: the ICAO designator, else nothing (a private operator has none). */
+  function opBadge(a) { return a && /^[A-Z0-9]{2,4}$/.test(String(a.op || '')) ? String(a.op) : ''; }
+  /** Only keys the server can have named: letters, digits, '-', '_' (vibe_adsb_data.h Images::validKey). */
+  function imgKey(k) { const v = String(k || ''); return /^[A-Za-z0-9_-]{1,40}$/.test(v) ? v : ''; }
+
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
                   wrapLon, distNm, bearingDeg, destination, cardinal, deadReckon, iconFor, altText, altShort,
                   vsText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
-                  anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES };
+                  anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
+                  engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport };
 
   /* ══ ICONS — one geometry, two renderers ═══════════════════════════════════════════════════════
    * Every icon is a list of parts in a 40×40 box, nose up (north), centre (20,20): f = filled path,
@@ -538,7 +578,7 @@
       + p + ' button:focus-visible{outline:1px solid rgba(' + T.hi + ',0.8);outline-offset:-2px}'
       + '.vsadsb-pop-' + th + ' .maplibregl-popup-content,.vsadsb-pop-' + th + ' .leaflet-popup-content-wrapper{background:rgba(' + T.bg + ',0.96);'
       + 'border:1px solid rgba(' + T.border + ',0.30);color:rgba(' + T.ink + ',0.90);font:13px ui-monospace,"SF Mono",Menlo,Consolas,monospace;'
-      + 'border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,0.5)}'
+      + 'border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,0.5);max-height:min(46vh,360px);overflow-y:auto}'
       + '.vsadsb-pop-' + th + ' .leaflet-popup-content{margin:0}'
       + '.vsadsb-pop-' + th + ' .leaflet-popup-tip{background:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-bottom .maplibregl-popup-tip{border-top-color:rgba(' + T.bg + ',0.96)}'
@@ -553,6 +593,20 @@
       + '.vsadsb-pop-' + th + ' td:first-child{color:rgba(' + T.ink + ',0.65);padding-right:10px;white-space:nowrap}'
       + '.vsadsb-pop-' + th + ' td:last-child{color:rgba(' + T.ink + ',0.95)}'
       + '.vsadsb-pop-' + th + ' .em{color:#ff6a50;font-weight:600;letter-spacing:1px;margin-bottom:4px}'
+      // ★ V12 aircraft data: the operator line (logo or text badge), the route, the photo and the credits
+      + '.vsadsb-pop-' + th + ' .op{display:flex;align-items:center;gap:8px;margin:-2px 0 6px;min-height:20px}'
+      + '.vsadsb-pop-' + th + ' .op img{max-width:85px;max-height:20px;object-fit:contain}'
+      + '.vsadsb-pop-' + th + ' .badge{border:1px solid rgba(' + T.border + ',0.55);border-radius:3px;padding:0 4px;font-size:11px;letter-spacing:1px;color:rgba(' + T.hi + ',0.95)}'
+      + '.vsadsb-pop-' + th + ' .sil{display:block;max-width:85px;max-height:20px;object-fit:contain;margin-left:auto}'
+      + '.vsadsb-pop-' + th + ' .idb{margin:0 0 7px;padding-bottom:6px;border-bottom:1px solid rgba(' + T.border + ',0.18);line-height:16px}'
+      + '.vsadsb-pop-' + th + ' .idb .l{color:rgba(' + T.ink + ',0.95)}'
+      + '.vsadsb-pop-' + th + ' .idb .d,.vsadsb-pop-' + th + ' .idb .l.d{color:rgba(' + T.ink + ',0.65);font-size:12px}'
+      + '.vsadsb-pop-' + th + ' .idb .rt{color:rgba(' + T.hi + ',0.95)}'
+      + '.vsadsb-pop-' + th + ' .off{text-decoration:line-through;opacity:0.6}'
+      + '.vsadsb-pop-' + th + ' .ph{display:block;margin:8px 0 0}.vsadsb-pop-' + th + ' .ph img{display:block;width:100%;max-width:256px;border-radius:4px}'
+      + '.vsadsb-pop-' + th + ' .ph span{display:block;font-size:10px;opacity:0.75;margin-top:2px}'
+      + '.vsadsb-pop-' + th + ' a{color:rgba(' + T.hi + ',0.95)}'
+      + '.vsadsb-pop-' + th + ' .cr{margin-top:7px;font-size:9.5px;line-height:12px;opacity:0.6;max-width:256px}'
       // ★ The Leaflet fallback's icons, labels and the HFDL ring (keyframes verbatim).
       + '.vsadsb-ll{position:relative;width:40px;height:40px}'
       + '.vsadsb-ll svg{position:absolute;left:0;top:0}'
@@ -924,12 +978,60 @@
 
     /* ── the card ───────────────────────────────────────────────────────────────────────────── */
     let popup = null, popupHex = null, popupHtml = '';
+    /* ★ opts.imageBase: where this server serves the OWNER's logos and silhouettes ("…/adsb/"), or absent = none.
+     *   The server names a key (a.logo / a.sil) only when the file exists, so nothing here hunts through 404s. */
+    const imageBase = typeof opts.imageBase === 'string' ? opts.imageBase : null;
+    /* ★★★ PHOTOS ARE OFF — TODO(Stuart): read and save the Planespotters.net photo API terms
+     *     (https://www.planespotters.net/photo/api — behind a Cloudflare check that no script of ours can pass, so not
+     *     confirmed at first hand; research §2.5). The code below follows the terms as reported: fetched BY THIS SCREEN
+     *     only when a card opens, one request per aircraft, answers kept 24 h at most, the image from the address the
+     *     API returns, unchanged, never proxied; the photographer credited in text beside it and the thumbnail a plain
+     *     link to the photo's page. A host turns it on with opts.photos === true once the terms are confirmed. */
+    const photosOn = opts.photos === true;
+    const photoCache = new Map();          // hex → { at, p: {src, link, by} | null } | 'pending'
+    function photoFor(s) {
+      if (!photosOn || !global.fetch) return null;
+      const c = photoCache.get(s.hex);
+      if (c && c !== 'pending' && now() - c.at < 24 * 3600e3) return c.p;
+      if (c === 'pending') return null;
+      photoCache.set(s.hex, 'pending');
+      const reg = String(s.a.r || '');
+      const url = 'https://api.planespotters.net/pub/photos/' + (s.hex[0] === '~' ? 'reg/' + encodeURIComponent(reg) : 'hex/' + s.hex);
+      global.fetch(url).then((r) => r.ok ? r.json() : null).then((j) => {
+        const ph = j && Array.isArray(j.photos) ? j.photos[0] : null;
+        const src = ph && ph.thumbnail_large && ph.thumbnail_large.src || ph && ph.thumbnail && ph.thumbnail.src;
+        const p = src && /^https:\/\//.test(src) && ph.link ? { src: String(src), link: String(ph.link), by: String(ph.photographer || '') } : null;
+        photoCache.set(s.hex, { at: now(), p });
+        if (selected === s.hex && popup && ac.has(s.hex)) { const h = cardHtml(ac.get(s.hex)); if (h !== popupHtml) { popupHtml = h; if (gl) popup.setHTML(h); else popup.setContent(h); } }
+      }).catch((e) => { console.error('adsblayer: photo lookup', e); photoCache.set(s.hex, { at: now(), p: null }); });
+      return null;
+    }
     function cardHtml(s) {
       const a = s.a;
-      const name = cleanFlight(a.flight) || s.hex.toUpperCase();
+      const name = cleanFlight(a.flight) || String(a.r || '') || s.hex.toUpperCase();
       const rows = [];
       const row = (k, v) => { if (v) rows.push('<tr><td>' + esc(k) + '</td><td>' + esc(v) + '</td></tr>'); };
+      const rowHtml = (k, html) => { if (html) rows.push('<tr><td>' + esc(k) + '</td><td>' + html + '</td></tr>'); };
       const em = emergencyOf(a);
+      // ── what it is (the server's aircraft data) ──
+      const known = !!(a.r || a.t || a.opName || a.country || a.route);
+      /* ★★ COMPACT LINES, NOT TABLE ROWS: a table row per field wrapped to a dozen lines on a phone and pushed the card's
+       *  top under the map's own top bar (390 pt, bench 2026-10-24). One line each: what it is, who flies it, where. */
+      const idl = [];
+      const line = (html, cls) => { if (html) idl.push('<div class="' + (cls || 'l') + '">' + html + '</div>'); };
+      line([a.t, a.desc, a.r].filter(Boolean).map(esc).join(' \u00b7 ') + (SPECIES[a.species] ? ' (' + esc(SPECIES[a.species]) + ')' : ''));
+      const fl = flagOrCode(a.country);
+      line([a.opName ? esc(a.opName) : '', a.countryName || a.country ? (fl ? esc(fl) + ' ' : '') + esc(a.countryName || a.country) : ''].filter(Boolean).join(' \u00b7 '));
+      line([isMilitary(a) ? 'MILITARY' : '', WAKE[a.wtc] ? WAKE[a.wtc] + ' wake' : '', engText(a.eng)].filter(Boolean).map(esc).join(' \u00b7 '), 'l d');
+      const rt = a.route && typeof a.route === 'object' ? a.route : null;
+      if (rt && rt.from && rt.to) {
+        // ★ short: the code, then the airport's name without its "International Airport" tail
+        const end = (code, iata, nm, place) => esc((iata || code) + ((nm = shortAirport(nm) || place || '') ? ' ' + nm : ''));
+        let txt = end(rt.from, rt.fromIata, rt.fromName, rt.fromPlace) + ' \u2192 ' + end(rt.to, rt.toIata, rt.toName, rt.toPlace);
+        if (Array.isArray(rt.stops) && rt.stops.length > 2) txt += ' <span class="d">(' + rt.stops.map(esc).join(' \u2013 ') + ')</span>';
+        // ★ a filed route the aircraft is nowhere near (a reused callsign, a diversion): struck through, and said why
+        line(rt.plausible === false ? '<span class="off" title="The aircraft is far from this filed route">' + txt + '</span>' : '\u2708 ' + txt, 'l rt');
+      }
       row('Altitude', altText(a.alt_baro) + (num(a.alt_geom) != null && a.alt_baro !== 'ground' ? '  (GNSS ' + Math.round(a.alt_geom).toLocaleString('en-GB') + ' ft)' : ''));
       row('Climb', vsText(a.baro_rate));
       row('Speed', num(a.gs) != null ? Math.round(a.gs) + ' kt' : '');
@@ -939,13 +1041,27 @@
         const d = distNm(rx.lat, rx.lon, s.fix.lat, s.fix.lon), b = bearingDeg(rx.lat, rx.lon, s.fix.lat, s.fix.lon);
         row('From you', (d < 10 ? d.toFixed(1) : Math.round(d)) + ' NM · ' + Math.round(b) + '° ' + cardinal(b));
       }
-      row('Type', CAT_NAME[String(a.category || '').toUpperCase()] || '');
+      if (!a.t) row('Type', CAT_NAME[String(a.category || '').toUpperCase()] || '');   // ★ the real type says more
       const seen = num(a.seen);
       row('Heard', seen == null ? '' : seen < 2 ? 'just now' : Math.round(seen) + ' s ago');
       row('Signal', num(a.rssi) != null ? a.rssi.toFixed(1) + ' dBFS' + (num(a.messages) != null ? ' · ' + a.messages + ' msgs' : '') : '');
+      const logo = imageBase != null && imgKey(a.logo) ? '<img src="' + esc(imageBase + 'logo/' + imgKey(a.logo)) + '" alt="' + esc(a.op || '') + '">' : '';
+      const badge = !logo && opBadge(a) ? '<span class="badge">' + esc(opBadge(a)) + '</span>' : '';
+      const sil = imageBase != null && imgKey(a.sil) ? '<img class="sil" src="' + esc(imageBase + 'silhouette/' + imgKey(a.sil)) + '" alt="">' : '';
+      const ph = photoFor(s);
+      const photo = ph ? '<a class="ph" href="' + esc(ph.link) + '" target="_blank"><img src="' + esc(ph.src) + '" alt="Photo of ' + esc(a.r || name) + '">'
+        + '<span>\u00a9 ' + esc(ph.by) + ' \u00b7 Planespotters.net</span></a>' : '';
+      // ★★ ODC-By 1.0 §4.3: the notice goes WITH the produced work — wherever the Mictronics fields show
+      const credit = known ? '<div class="cr">Aircraft data: <a href="https://github.com/Mictronics/aircraft-database" target="_blank">Mictronics</a>'
+        + ' (contains information from Mictronics aircraft database, which is made available under the '
+        + '<a href="https://opendatacommons.org/licenses/by/1-0/" target="_blank">ODC Attribution License</a>) \u00b7 '
+        + '<a href="https://github.com/vradarserver/standing-data" target="_blank">VRS standing data</a> (CC0)</div>' : '';
+      const sub = cleanFlight(a.flight) || a.r ? s.hex.toUpperCase() : '';
       return (em ? '<div class="em">' + esc(em) + '</div>' : '')
-        + '<div class="t">' + esc(name) + (cleanFlight(a.flight) ? '<i>' + esc(s.hex.toUpperCase()) + '</i>' : '') + '</div>'
-        + '<table>' + rows.join('') + '</table>';
+        + '<div class="t">' + esc(name) + (sub ? '<i>' + esc(sub) + '</i>' : '') + '</div>'
+        + (logo || badge || sil ? '<div class="op">' + (logo || badge) + sil + '</div>' : '')
+        + (idl.length ? '<div class="idb">' + idl.join('') + '</div>' : '')
+        + '<table>' + rows.join('') + '</table>' + photo + credit;
     }
     function select(hex) {
       if (hex === selected && popup) return;

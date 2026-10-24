@@ -12,7 +12,7 @@ import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
-import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbCaptureWarning, cleanHex, AdsbMap } from './adsb';
+import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -7930,7 +7930,7 @@ function adsbRender() {
   }
   $('adsbLiveN').textContent = adsbReport ? String(adsbReport.aircraft.length) : '';
   const el = $('adsbList');
-  const html = adsbListHtml(adsbReport, myPos());
+  const html = adsbListHtml(adsbReport, myPos(), adsbImageBase());
   if (html === adsbListLast) return;       // ★ nothing changed — leave the DOM (and a hovered row) alone
   adsbListLast = html;
   /* ★ The highlighted row survives the redraw: the controller's highlight is a class on an element, and

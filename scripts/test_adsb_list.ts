@@ -35,7 +35,8 @@ const list = adsbToAircraft([
 ], rx);
 const rows = adsbListRows(list);
 eq('nearest first, unplaced by signal last', rows.map((r) => r.label), ['EMG', 'NEAR', 'FAR', '400003', '400004']);
-eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: '36,000 ft', kt: '451 kt', range: '60 NM N', placed: true, emergency: false, badge: '', military: false, bars: 0, trend: '●', altCol: 'hsl(265,90%,62%)' });
+eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: '36,000 ft', kt: '451 kt', range: '60 NM N', placed: true, emergency: false, badge: '', military: false, bars: 0, trend: '●', altCol: 'hsl(265,90%,62%)',
+                        info: '', flag: '', op: '', logo: '' });
 // ★ Signal bars (adsbBars): 3 from -12 dBFS, 2 from -22, else 1; none without a level.
 { const { adsbBars } = await import('../src/services/adsbList.ts');
   eq('bars', [adsbBars(-3), adsbBars(-12), adsbBars(-15), adsbBars(-22), adsbBars(-30), adsbBars(undefined)], [3, 3, 2, 2, 1, 0]); }
@@ -47,9 +48,32 @@ const tie = [{ icao: 'bbbbbb', distKm: 10 }, { icao: 'aaaaaa', distKm: 10 }];
 eq('ties are stable by address', adsbListRows(tie).map((r) => r.hex), adsbListRows([...tie].reverse()).map((r) => r.hex));
 eq('input not mutated', tie.map((t) => t.icao), ['bbbbbb', 'aaaaaa']);
 
+// ── V12 aircraft data: the second line, the flag, the server's military flag ──
+{
+  const { adsbToAircraft } = await import('../src/services/adsbTypes.ts');
+  const { AdsbInfoStore } = await import('../src/services/adsbInfo.ts');
+  const st = new AdsbInfoStore();
+  st.take({ type: 'adsb_info', aircraft: {
+    '4ca2d6': { r: 'EI-DLJ', t: 'B738', op: 'RYR', opName: 'Ryanair', country: 'IE', logo: 'RYR-B738',
+                route: { from: 'GCRR', to: 'EGBB', fromIata: 'ACE', toIata: 'BHX', plausible: true } },
+    '3f0001': { country: 'DE', mil: 1 },
+    '400ab0': { r: 'G-PRIV', t: 'C172', opName: 'Private', route: { from: 'EGLL', to: 'KJFK', plausible: false } },
+  } });
+  const raw = st.apply([{ hex: '4ca2d6', flight: 'RYR8CK', lat: 52, lon: -2 }, { hex: '3f0001', lat: 51, lon: 0 }, { hex: '400ab0' }]);
+  const rs = adsbListRows(adsbToAircraft(raw as any, { lat: 52, lon: -1 }));
+  const ry = rs.find((r) => r.hex === '4ca2d6')!;
+  eq('second line: operator · type · route · registration', ry.info, 'RYR \u00b7 B738 \u00b7 ACE \u2192 BHX \u00b7 EI-DLJ');
+  eq('flag + badge + logo key', [ry.flag, ry.op, ry.logo], ['\u{1F1EE}\u{1F1EA}', 'RYR', 'RYR-B738']);
+  eq('the server says military (a block the old rule does not know)', rs.find((r) => r.hex === '3f0001')!.military, true);
+  eq('military sorts above the nearest civil', rs[0].hex, '3f0001');
+  const pv = rs.find((r) => r.hex === '400ab0')!;
+  eq('private: no name, an implausible route left out, the registration labels it', [pv.info, pv.label], ['Private \u00b7 C172 \u00b7 G-PRIV', 'G-PRIV']);
+}
+
 // ── geometry ────────────────────────────────────────────────────────────────────────────────────
 eq('a tall phone: 8 rows', adsbListRowsFit(800), 8);
-eq('a phone held sideways: 4', adsbListRowsFit(320), 4);
+// ★ 3, not 4, since rows grew a second line (32 pt — V12 aircraft data); the list scrolls
+eq('a phone held sideways: 3', adsbListRowsFit(320), 3);
 eq('a short window: still 3', adsbListRowsFit(200), 3);
 for (const h of [500, 640, 700]) {
   const n = adsbListRowsFit(h);
