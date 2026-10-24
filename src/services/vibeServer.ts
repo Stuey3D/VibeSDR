@@ -128,6 +128,12 @@ export type VibeServerConfig = {
   landingDabChannel?: number;
   landingDabSid?: number;
   landingDabService?: string;
+  /** ★★ V12: ADS-B AS THE LANDING — a new listener goes straight to the aircraft map; the landing frequency stays the
+   *  fallback (EXIT ADS-B goes there). Beats a DAB landing. adsbKeepRunning (only with it): the radio sits in ADS-B
+   *  whenever nobody is connected, so the aircraft list is warm — continuous CPU, and the idle radio is ADS-B's. Both
+   *  ignored by the server where ADS-B cannot run on the radio. */
+  landingAdsb?: boolean;
+  adsbKeepRunning?: boolean;
   /** ★ The radio's display name ("SDR display name"). '' = the name from the USB port. */
   radioLabel?: string;
   /** ★ The rate switch: "change the sample rate when a mode needs it" — DAB 2.048 MS/s, ADS-B 2.4 — the base rate
@@ -317,6 +323,8 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     landingDabChannel: cfg.landingDabChannel ?? -1,
     landingDabSid: cfg.landingDabSid ?? 0,
     landingDabService: cfg.landingDabService ?? '',
+    landingAdsb: cfg.landingAdsb === true,
+    adsbKeepRunning: cfg.landingAdsb === true && cfg.adsbKeepRunning === true,
     radioLabel: (cfg.radioLabel ?? '').trim(),
     dabRateBoost: cfg.dabRateBoost === true,
     gainLimits: cfg.gainLimits ?? '',
