@@ -35,7 +35,10 @@ const list = adsbToAircraft([
 ], rx);
 const rows = adsbListRows(list);
 eq('nearest first, unplaced by signal last', rows.map((r) => r.label), ['EMG', 'NEAR', 'FAR', '400003', '400004']);
-eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: 'FL360', kt: '451 kt', range: '60 NM N', placed: true, emergency: false });
+eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: 'FL360', kt: '451 kt', range: '60 NM N', placed: true, emergency: false, bars: 0 });
+// ★ Signal bars (adsbBars): 3 from -12 dBFS, 2 from -22, else 1; none without a level.
+{ const { adsbBars } = await import('../src/services/adsbList.ts');
+  eq('bars', [adsbBars(-3), adsbBars(-12), adsbBars(-15), adsbBars(-22), adsbBars(-30), adsbBars(undefined)], [3, 3, 2, 2, 1, 0]); }
 eq('ground + emergency', [rows[0].alt, rows[0].emergency], ['GND', true]);
 eq('unplaced cannot be focused', rows[3].placed, false);
 eq('hex label is capitals', adsbListRows([{ icao: 'abc123' }])[0].label, 'ABC123');
