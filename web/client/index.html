@@ -1199,6 +1199,18 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 #adsbList .adsbRow.sel { background: rgba(255, 229, 102, 0.12); border-left-color: rgba(255, 229, 102, 0.7); }
 #adsbList .adsbRow .id { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
 #adsbList .adsbRow .id b { font-weight: 600; font-size: 12px; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ★ Signal bars beside the callsign (adsb.ts adsbBars): three ascending, the lit ones in the app's link colours. */
+#adsbList .adsbRow .sig { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 9px; margin-left: 6px; vertical-align: 0; }
+#adsbList .adsbRow .sig i { display: block; width: 2.5px; background: rgba(255, 184, 51, 0.22); border-radius: 1px; }
+#adsbList .adsbRow .sig i:nth-child(1) { height: 40%; } #adsbList .adsbRow .sig i:nth-child(2) { height: 70%; } #adsbList .adsbRow .sig i:nth-child(3) { height: 100%; }
+#adsbList .adsbRow .sig.l1 i.on { background: #e04040; } #adsbList .adsbRow .sig.l2 i.on { background: #e0b020; } #adsbList .adsbRow .sig.l3 i.on { background: #33cc44; }
+/* ★ The (i) beside the list's header: the map layer's colour key (toggleLegend), opened above the list. */
+#adsbLegendBtn { all: unset; box-sizing: border-box; position: absolute; top: 5px; right: 30px; width: 24px; height: 24px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font: italic 600 12px Georgia, serif; color: rgba(255, 184, 51, 0.8);
+  border: 1px solid rgba(255, 160, 0, 0.35); cursor: pointer; }
+#adsbLegendBtn.on, #adsbLegendBtn:hover { background: rgba(255, 160, 0, 0.14); }
+#adsbLegendBtn:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: 1px; }
+#adsbLive.min #adsbLegendBtn { display: none; }
 #adsbList .adsbRow .id small { font-size: 9.5px; opacity: .6; letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #adsbList .adsbRow .alt, #adsbList .adsbRow .spd, #adsbList .adsbRow .rng { text-align: right; white-space: nowrap; font-size: 11.5px; }
 #adsbList .adsbRow .alt { min-width: 4.9em; }
@@ -3855,6 +3867,7 @@ select.btn { padding: 6px 8px; }
     <div id="adsbMapHost"></div>
     <div id="adsbNote" hidden></div>
     <div id="adsbLive" data-navbox data-navstart=".adsbRow">
+      <button type="button" id="adsbLegendBtn" title="What the colours mean" aria-label="What the colours mean">i</button>
       <button type="button" id="adsbLiveHead" aria-expanded="true" title="Hide the list"><span id="adsbLiveTtl">AIRCRAFT</span><span id="adsbLiveN"></span><span class="chev" aria-hidden="true"></span></button>
       <div id="adsbList" data-navscroll></div>
     </div>

@@ -192,6 +192,45 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   ok(M.GLIDE_MS === 2200 && M.RING_MS === 1400 && M.RING_REPEATS === 3 && M.BREATHE_MS === 1200, 'the HFDL constants');
 }
 
+// ── military (Stuart, 2026-10-24): blue, from the military address blocks we are sure of and military callsigns ──
+{
+  ok(M.isMilitary({ hex: '43c0a1' }), 'UK military block 43C000-43CFFF');
+  ok(M.isMilitary({ hex: 'ae1234' }), 'US military block AE0000-AFFFFF');
+  ok(!M.isMilitary({ hex: '4840d6', flight: 'KLM1023' }), 'an airliner is not military');
+  ok(M.isMilitary({ hex: '400001', flight: 'RRR4951' }), 'an RAF callsign');
+  ok(M.isMilitary({ hex: 'a00001', flight: 'RCH871' }), 'a US airlift callsign');
+  ok(!M.isMilitary({ hex: '~43c0a1' }), 'a non-ICAO (~) address is not read as a block');
+  ok(!M.isMilitary({ hex: '400001', flight: 'RRRX' }), 'a callsign must carry digits after the prefix');
+  ok(M.toneKey({ hex: '43c0a1', seen_pos: 1 }) === 'military', 'military takes the blue');
+  ok(M.toneKey({ hex: '43c0a1', squawk: '7700', seen_pos: 1 }) === 'alert', 'an emergency still wins over military');
+  ok(M.toneKey({ hex: '43c0a1', alt_baro: 'ground' }) === 'ground', 'on the ground is still grey');
+}
+
+// ── the altitude arrow: direction from the vertical rate, colour from the altitude, fading through the spectrum ──
+{
+  ok(M.trendOf({ alt_baro: 20000, baro_rate: 1500 }) === '\u25B2', 'climbing = up arrow');
+  ok(M.trendOf({ alt_baro: 20000, baro_rate: -900 }) === '\u25BC', 'descending = down arrow');
+  ok(M.trendOf({ alt_baro: 35000, baro_rate: 64 }) === '\u25CF', 'level (within 300 ft/min) = the dot');
+  ok(M.trendOf({ alt_baro: 'ground' }) === '' && M.trendOf({ flight: 'X' }) === '', 'nothing on the ground or without an altitude');
+  near(M.altHue(0), 15, 0.01, 'near the ground: orange-red');
+  near(M.altHue(10000), 120, 0.01, '10 000 ft: green');
+  near(M.altHue(40000), 285, 0.01, 'FL400: violet');
+  ok(M.altHue(15000) > 120 && M.altHue(15000) < 180, 'between the stops it fades (15 000 ft between green and cyan)');
+  ok(M.altHue(60000) === 285 && M.altHue(-50) === 15, 'clamped at both ends');
+}
+
+// ── the live list's corner: the cheaper inset, and the camera kept clear of it ──
+{
+  const wide = M.insetFor({ corner: 'bottom-left', w: 420, h: 340 }, 2000, 1100);
+  ok(wide.l === 420 && wide.b === 0, 'wide screen: a left margin costs less than a bottom one');
+  const phone = M.insetFor({ corner: 'bottom-left', w: 360, h: 260 }, 390, 780);
+  ok(phone.b === 260 && phone.l === 0, 'phone: a bottom margin costs less than a left one');
+  const none = M.insetFor(null, 800, 600);
+  ok(!none.l && !none.r && !none.t && !none.b, 'no obstacle, no inset');
+  const capped = M.insetFor({ corner: 'bottom-left', w: 2000, h: 2000 }, 800, 600);
+  ok(capped.l <= 480 && capped.b <= 360, 'an inset never takes more than 60 % of the view');
+}
+
 // ── the generated copies (scripts/gen-adsblayer-source.mjs) ──
 {
   const copies = [['directory/public/mapgl/vendor/adsblayer.js', (t) => t],

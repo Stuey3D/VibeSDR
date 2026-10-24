@@ -36,8 +36,11 @@ export interface AdsbLiveListProps {
   started: boolean;
   /** A row was chosen — find it on the map (the layer's focus(hex)). */
   onFocus: (hex: string) => void;
-  /** The list's footprint changed (its width, 0 as a pill) — the page keeps the attribution clear of it. */
-  onFootprint?: (w: number) => void;
+  /** The (i) in the header: the map layer's colour key, opened above the list (toggleLegend). */
+  onLegend?: () => void;
+  /** The list's footprint changed (width and height, 0 × 0 as a pill) — the page keeps the attribution clear of it,
+   *  and the map layer keeps aircraft clear of it (setObstacle). */
+  onFootprint?: (w: number, h: number) => void;
   /** The map's colours as rgb triplets (MapOverlay `ink`): text, controls, controls-as-legend. */
   ink: { x: string; k: string; kt: string };
   /** The modal's window and the parent's safe-area insets (the hook reads 0 inside a Modal — BrowserOverlay's note). */
@@ -57,7 +60,8 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
   const width = adsbListWidth(innerW);
   const fit = adsbListRowsFit(innerH);
   const shown = Math.max(1, Math.min(fit, rows.length || 1));
-  useEffect(() => { p.onFootprint?.(open ? width : 0); }, [open, width]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const height = LIST_HEAD_H + shown * LIST_ROW_H;
+  useEffect(() => { p.onFootprint?.(open ? width : 0, open ? height : 0); }, [open, width, height]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ★ Flat: up/down (and left/right) walk pill/header → rows. Back is not taken here, so it reaches the map's overlay.
   const { navCtx, scrollProps } = usePanelNav(true, { flat: true });
@@ -71,6 +75,7 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
         <NavRow>
           <HeadKey s={s} open={open} onPress={() => setOpenKept(!open)}
                    label={open ? 'AIRCRAFT' : '✈'} count={rows.length} placed={placed} />
+          {open && p.onLegend && <LegendKey s={s} onPress={p.onLegend} />}
         </NavRow>
         {open && (
           <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator
@@ -109,6 +114,18 @@ function HeadKey({ s, open, onPress, label, count, placed }: {
   );
 }
 
+function LegendKey({ s, onPress }: { s: S; onPress: () => void }) {
+  const { focused, viewRef } = useNavButton(onPress);
+  const { ring } = useNavFocus();
+  return (
+    <TouchableOpacity ref={viewRef as never} style={s.legKey} onPress={onPress} activeOpacity={0.7}
+                      accessibilityRole="button" accessibilityLabel="What the colours mean">
+      <Text style={s.legTxt}>i</Text>
+      <NavRing on={focused} color={ring} radius={12} />
+    </TouchableOpacity>
+  );
+}
+
 function Row({ s, r, onPress }: { s: S; r: AdsbListRow; onPress: () => void }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
@@ -116,7 +133,10 @@ function Row({ s, r, onPress }: { s: S; r: AdsbListRow; onPress: () => void }) {
     <TouchableOpacity ref={viewRef as never} style={[s.row, !r.placed && s.rowUnplaced]} onPress={onPress}
                       disabled={!r.placed} activeOpacity={0.7} accessibilityRole="button"
                       accessibilityLabel={`${r.label}${r.alt ? ', ' + r.alt : ''}${r.kt ? ', ' + r.kt : ''}${r.range ? ', ' + r.range : ''}`}>
-      <Text style={[s.call, r.emergency && s.emerg]} numberOfLines={1}>{r.label}</Text>
+      <View style={s.callBox}>
+        <Text style={[s.call, r.emergency && s.emerg]} numberOfLines={1}>{r.label}</Text>
+        {r.bars > 0 && <SigBars n={r.bars} />}
+      </View>
       <Text style={[s.cell, s.alt]} numberOfLines={1}>{r.alt}</Text>
       <Text style={[s.cell, s.kt]} numberOfLines={1}>{r.kt}</Text>
       <Text style={[s.cell, s.rng]} numberOfLines={1}>{r.range}</Text>
@@ -124,6 +144,22 @@ function Row({ s, r, onPress }: { s: S; r: AdsbListRow; onPress: () => void }) {
     </TouchableOpacity>
   );
 }
+
+/** ★ Three ascending bars, the lit ones in the link colours (LinkBars / DabMeter's) — adsbBars decides how many. */
+function SigBars({ n }: { n: number }) {
+  const lit = n >= 3 ? '#33cc44' : n === 2 ? '#e0b020' : '#e04040';
+  return (
+    <View style={sig.box} accessibilityLabel={`signal ${n} of 3`}>
+      {[0.4, 0.7, 1].map((h, i) => (
+        <View key={i} style={[sig.bar, { height: 9 * h, backgroundColor: i < n ? lit : 'rgba(255,184,51,0.22)' }]} />
+      ))}
+    </View>
+  );
+}
+const sig = StyleSheet.create({
+  box: { flexDirection: 'row', alignItems: 'flex-end', gap: 1.5, height: 9, marginLeft: 5 },
+  bar: { width: 2.5, borderRadius: 1 },
+});
 
 const F = DECODER_FONT;
 /* ★ The page's own chrome values (MapOverlay #topbar / #legbtn): the amber-black at 0.92, a controls-colour border at
@@ -134,13 +170,17 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   head:   { height: LIST_HEAD_H, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10,
             borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: `rgba(${ink.k},0.25)` },
   pill:   { borderBottomWidth: 0, paddingHorizontal: 12 },
+  legKey: { position: 'absolute', right: 30, top: 3, width: 24, height: 24, borderRadius: 12, alignItems: 'center',
+            justifyContent: 'center', borderWidth: 1, borderColor: `rgba(${ink.k},0.35)` },
+  legTxt: { fontFamily: 'Georgia', fontStyle: 'italic', fontWeight: '600', fontSize: 12, color: `rgba(${ink.x},0.8)` },
   headTxt:{ fontFamily: F, fontSize: 11, letterSpacing: 1.5, color: `rgba(${ink.x},0.75)` },
   headCnt:{ fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.95)` },
   chev:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.kt},0.80)` },
   // ★ Sized for 240 pt (an SE in Display Zoom): 8 + 4·3 + 50 + 40 + 60 + 8 leaves the callsign ~62 pt, 8–9 characters.
   row:    { height: LIST_ROW_H, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: 4 },
   rowUnplaced: { opacity: 0.5 },
-  call:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.95)`, flex: 1, minWidth: 0 },
+  callBox:{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
+  call:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.95)`, flexShrink: 1, minWidth: 0 },
   emerg:  { color: '#ff6a50' },
   cell:   { fontFamily: F, fontSize: 11, color: `rgba(${ink.x},0.70)`, textAlign: 'right' },
   alt:    { width: 50 },

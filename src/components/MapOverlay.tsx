@@ -1297,8 +1297,11 @@ if(KIND==='adsb'){
   window.__adsbRx=function(lat,lon){RX_LAT=lat;RX_LON=lon;if(adsbLayer&&adsbLayer.setReceiver)adsbLayer.setReceiver(lat,lon);};
   /* ★ The live list (React Native, over this page): a row chosen = the layer's own focus (select, open the card, pan only
    *  if it is off screen); and the list's width, so the attribution keeps clear of it (the CSS above). */
+  window.__adsbLegend=function(){try{var L5=adsbMake();if(L5&&L5.toggleLegend)L5.toggleLegend();}catch(e){console.error('ADS-B legend',e);}};
   window.__adsbFocus=function(h){try{var L3=adsbMake();if(L3&&L3.focus)L3.focus(String(h));}catch(e){console.error('ADS-B focus',e);}};
-  window.__adsbListW=function(w){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');};
+  window.__adsbListW=function(w,h){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');
+    /* ★ and the layer keeps aircraft out from under it: the list sits 10 px in from the bottom-left corner (EDGE) */
+    try{var L4=adsbMake();if(L4&&L4.setObstacle)L4.setObstacle(w>0&&h>0?{corner:'bottom-left',w:Number(w)+20,h:Number(h)+20}:null);}catch(e){console.error('ADS-B obstacle',e);}};
   if(window.__pendingAdsb){window.__adsbPush(window.__pendingAdsb);window.__pendingAdsb=null;}
 }
 
@@ -1678,12 +1681,13 @@ export default function MapOverlay(
   /* ★ The live list's two calls into the page. The hex is the report's cleaned address (/^~?[0-9a-f]{6}$/, adsbTypes),
    *  and JSON.stringify makes it a string literal whatever it is — never source. The width is kept, so a page that
    *  (re)loads after the list measured itself still gets it (onLoadEnd). */
-  const adsbListW = useRef(0);
+  const adsbListW = useRef(0), adsbListH = useRef(0);
+  const adsbLegend = () => webRef.current?.injectJavaScript('window.__adsbLegend&&window.__adsbLegend();true;');
   const adsbFocus = (hex: string) =>
     webRef.current?.injectJavaScript(`window.__adsbFocus&&window.__adsbFocus(${JSON.stringify(String(hex))});true;`);
-  const adsbFootprint = (w: number) => {
-    adsbListW.current = w;
-    webRef.current?.injectJavaScript(`window.__adsbListW&&window.__adsbListW(${Math.round(w) || 0});true;`);
+  const adsbFootprint = (w: number, h: number) => {
+    adsbListW.current = w; adsbListH.current = h;
+    webRef.current?.injectJavaScript(`window.__adsbListW&&window.__adsbListW(${Math.round(w) || 0},${Math.round(h) || 0});true;`);
   };
 
   if (!visible || !kind) return null;
@@ -1772,7 +1776,7 @@ export default function MapOverlay(
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
           onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft);
-                             if (kind === 'adsb') adsbFootprint(adsbListW.current); }}
+                             if (kind === 'adsb') adsbFootprint(adsbListW.current, adsbListH.current); }}
           onMessage={(e) => {
             const d = e.nativeEvent.data;
             if (d === 'close') return onClose();
@@ -1874,7 +1878,7 @@ export default function MapOverlay(
         {/* ★★ V12 THE ADS-B LIVE LIST, bottom-left over the map — RN-drawn so the pad and keyboard reach it
             (AdsbLiveList's note). Only once the page is there: before that there is no map to find anything on. */}
         {kind === 'adsb' && !!pageUri && !packError && (
-          <AdsbLiveList aircraft={adsbList ?? []} started={!!adsbStarted} onFocus={adsbFocus} onFootprint={adsbFootprint}
+          <AdsbLiveList aircraft={adsbList ?? []} started={!!adsbStarted} onFocus={adsbFocus} onFootprint={adsbFootprint} onLegend={adsbLegend}
                         ink={ink} areaW={winW} areaH={winH}
                         insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}

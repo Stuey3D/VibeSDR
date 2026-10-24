@@ -24,6 +24,8 @@
  *     layer.update(aircraftArray)    // ADSB.md aircraft objects, the server's whole list each time
  *     layer.setReceiver(lat, lon)
  *     layer.setPrefs({autoZoom, fit, rings})
+ *     layer.setObstacle({corner:'bottom-left', w, h} | null)   — the host's live list, kept clear of aircraft
+ *     layer.toggleLegend(on?)   — the colour key, opened above that list (the host's (i) button)
  *     layer.focus(hex)               // select an aircraft and open its card (a list row was tapped)
  *     layer.destroy()
  *
@@ -234,6 +236,18 @@
     return false;
   }
 
+  /** ★★ AN OBSTACLE IN A CORNER (the live list) — the cheaper of two insets: a left (or right) margin as wide as it,
+   *  or a bottom (or top) margin as tall as it, whichever leaves more of the view. obs = { corner:'bottom-left'|…,
+   *  w, h } in CSS px, or null. Returns { l, r, t, b }. */
+  function insetFor(obs, w, h) {
+    const z = { l: 0, r: 0, t: 0, b: 0 };
+    if (!obs || !(obs.w > 0) || !(obs.h > 0) || !(w > 0) || !(h > 0)) return z;
+    const c = String(obs.corner || 'bottom-left');
+    const side = c.indexOf('right') >= 0 ? 'r' : 'l', end = c.indexOf('top') >= 0 ? 't' : 'b';
+    if (obs.w / w <= obs.h / h) z[side] = Math.min(obs.w, w * 0.6); else z[end] = Math.min(obs.h, h * 0.6);
+    return z;
+  }
+
   /** ★★★ AUTO-ZOOM, THE DECISIONS — calm by construction, never per frame.
    *   OUT at once when an aircraft leaves the view (a new one 200 NM out pulls the view out), and to a
    *     little FURTHER than strictly needed (slack), so the next second's drift does not ask again.
@@ -310,20 +324,56 @@
   /** The age tone — MapOverlay.tsx acTone's colours, judged on the POSITION's age (ADS-B drops an
    *  aircraft at 60 s, so its ladder is seconds, not HFDL's minutes). Ground is grey, an emergency red. */
   const TONES = {
-    dark:  { fresh: '80,255,120', aging: '180,255,80', stale: '255,190,40', ground: '150,160,170', alert: '255,80,60' },
-    light: { fresh: '20,140,60', aging: '110,150,20', stale: '190,120,0', ground: '90,100,110', alert: '210,40,30' },
+    dark:  { fresh: '80,255,120', aging: '180,255,80', stale: '255,190,40', ground: '150,160,170', alert: '255,80,60', military: '90,170,255' },
+    light: { fresh: '20,140,60', aging: '110,150,20', stale: '190,120,0', ground: '90,100,110', alert: '210,40,30', military: '20,90,200' },
   };
+  /** ★★ MILITARY (Stuart, 2026-10-24: "a colour for military if possible") — blue, clear of the age tones, the ground
+   *  grey and the emergency red. ADS-B carries no military flag, so it is recognised as the trackers do, from two
+   *  clues, and only where we are SURE: an ICAO address in a block a state keeps for its military — the UK's 43C000–
+   *  43CFFF and the US's AE0000–AFFFFF (more can be added as they are checked) — or a callsign prefix of a military
+   *  operator. Many military aircraft fly with these hidden; it never marks one that is not. */
+  const MIL_BLOCKS = [[0x43C000, 0x43CFFF], [0xAE0000, 0xAFFFFF]];
+  const MIL_CALLS = /^(RRR|ASCOT|TARTN|RCH|NATO|GAF|CTM|IAM|BAF)\d/;
+  function isMilitary(a) {
+    const h = parseInt(String(a.hex || '').replace(/^~/, ''), 16);
+    if (h === h && String(a.hex || '')[0] !== '~') for (const [lo, hi] of MIL_BLOCKS) if (h >= lo && h <= hi) return true;
+    return MIL_CALLS.test(String(a.flight || '').trim().toUpperCase());
+  }
   function toneKey(a) {
     if (emergencyOf(a)) return 'alert';
     if (onGround(a)) return 'ground';
+    if (isMilitary(a)) return 'military';
     const age = Number(a.seen_pos) || 0;
     return age < 10 ? 'fresh' : age < 30 ? 'aging' : 'stale';
+  }
+
+  /** ★★ THE ALTITUDE ARROW (Stuart, 2026-10-24): beside each label's altitude, ▲ climbing / ▼ descending / ● level
+   *  (within ±300 ft/min), coloured by ALTITUDE the way other ADS-B maps colour their aircraft — fading through the
+   *  spectrum, orange-red near the ground to violet at FL400. The aircraft keep their own age / emergency / military
+   *  colours; the arrow carries the altitude. Nothing for an aircraft on the ground or with no altitude.
+   *  ★ The glyphs are in the map font's 9472–9727 range (checked in the pbf), or MapLibre would draw nothing. */
+  const ALT_HUES = [[0, 15], [4000, 55], [10000, 120], [20000, 180], [30000, 235], [40000, 285]];
+  function altHue(ft) {
+    if (!(ft >= 0)) ft = 0;
+    for (let i = 1; i < ALT_HUES.length; i++) {
+      const [a0, h0] = ALT_HUES[i - 1], [a1, h1] = ALT_HUES[i];
+      if (ft <= a1) return h0 + (h1 - h0) * (ft - a0) / (a1 - a0);
+    }
+    return ALT_HUES[ALT_HUES.length - 1][1];
+  }
+  function altColour(ft, theme) { return 'hsl(' + altHue(ft).toFixed(0) + ',90%,' + (theme === 'light' ? '38%' : '62%') + ')'; }
+  function trendOf(a) {
+    if (!a || a.alt_baro === 'ground') return '';
+    const alt = num(a.alt_baro) != null ? num(a.alt_baro) : num(a.alt_geom);
+    if (alt == null) return '';
+    const vr = num(a.baro_rate) != null ? num(a.baro_rate) : num(a.geom_rate);
+    return vr != null && vr > 300 ? '\u25B2' : vr != null && vr < -300 ? '\u25BC' : '\u25CF';
   }
 
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
                   wrapLon, distNm, bearingDeg, destination, cardinal, deadReckon, iconFor, altText, altShort,
                   vsText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
-                  anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey };
+                  anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf };
 
   /* ══ ICONS — one geometry, two renderers ═══════════════════════════════════════════════════════
    * Every icon is a list of parts in a 40×40 box, nose up (north), centre (20,20): f = filled path,
@@ -465,7 +515,15 @@
   function css(th) {
     const T = THEME[th];
     const p = '.vsadsb-' + th;
-    return p + '.vsadsb-ctl{position:absolute;top:10px;right:10px;z-index:5;display:flex;gap:0;'
+    return p + '.vsadsb-leg{position:absolute;left:10px;bottom:10px;z-index:6;max-width:270px;padding:9px 11px 8px;'
+      + 'background:rgba(' + T.bg + ',0.95);border:1px solid rgba(' + T.border + ',0.30);border-radius:8px;'
+      + 'font:10.5px ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:rgba(' + T.ink + ',0.85);box-shadow:0 6px 24px rgba(0,0,0,0.45)}'
+      + p + '.vsadsb-leg .t{letter-spacing:1.5px;opacity:0.75;margin:6px 0 3px}' + p + '.vsadsb-leg .t:first-child{margin-top:0}'
+      + p + '.vsadsb-leg .r{display:flex;align-items:center;gap:7px;line-height:17px;white-space:nowrap}'
+      + p + '.vsadsb-leg .g{display:inline-block;width:12px;text-align:center;font-size:12px}'
+      + p + '.vsadsb-leg .bar{height:7px;border-radius:4px;margin:5px 0 2px}'
+      + p + '.vsadsb-leg .ax{display:flex;justify-content:space-between;opacity:0.7;font-size:9.5px}'
+      + p + '.vsadsb-ctl{position:absolute;top:10px;right:10px;z-index:5;display:flex;gap:0;'
       + 'background:rgba(' + T.bg + ',0.92);border:1px solid rgba(' + T.border + ',0.30);border-radius:8px;overflow:hidden;'
       + 'font:11px ui-monospace,"SF Mono",Menlo,Consolas,monospace;letter-spacing:1px;user-select:none;-webkit-user-select:none}'
       + p + ' button{all:unset;box-sizing:border-box;min-width:44px;height:32px;padding:0 9px;display:flex;align-items:center;justify-content:center;'
@@ -575,6 +633,29 @@
     // ★ The map must not take the control's taps as map gestures (a drag that starts on a button).
     for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'dblclick', 'wheel']) ctl.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     container.appendChild(ctl);
+
+    /* ── ★★ THE LEGEND (Stuart, 2026-10-24: "a little (i) button above the aircraft list which pops out a legend") —
+     *  what the aircraft colours and the altitude ARROW colours mean, drawn by the layer itself so the key can never
+     *  disagree with the map. The host's (i) button calls toggleLegend(); it opens above the host's list (setObstacle). */
+    const leg = doc.createElement('div');
+    leg.className = 'vsadsb-leg vsadsb-' + th;
+    leg.hidden = true;
+    const legRow = (rgb, glyph, what) => '<div class="r"><span class="g" style="color:rgb(' + rgb + ')">' + glyph + '</span>' + what + '</div>';
+    const grad = ALT_HUES.map((h) => 'hsl(' + h[1] + ',90%,' + (th === 'light' ? '38%' : '62%') + ') ' + (h[0] / 400).toFixed(1) + '%').join(',');
+    leg.innerHTML = '<div class="t">AIRCRAFT</div>'
+      + legRow(TONE.fresh, '\u2708', 'position under 10 s old')
+      + legRow(TONE.aging, '\u2708', '10\u201330 s old')
+      + legRow(TONE.stale, '\u2708', '30\u201360 s old (dropped at 60 s)')
+      + legRow(TONE.ground, '\u2708', 'on the ground')
+      + legRow(TONE.alert, '\u2708', 'emergency')
+      + legRow(TONE.military, '\u2708', 'military (where it can be told)')
+      + '<div class="t">ALTITUDE ARROWS</div>'
+      + '<div class="r"><span class="g">\u25B2</span>climbing \u00b7 <span class="g">\u25BC</span>descending \u00b7 <span class="g">\u25CF</span>level</div>'
+      + '<div class="bar" style="background:linear-gradient(90deg,' + grad + ')"></div>'
+      + '<div class="ax"><span>0</span><span>10k</span><span>20k</span><span>30k</span><span>40k ft</span></div>';
+    for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'dblclick', 'wheel']) leg.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
+    container.appendChild(leg);
+    function placeLegend() { leg.style.bottom = ((obstacle ? obstacle.h : 0) + 8) + 'px'; }
     function paintCtl() {
       bAuto.classList.toggle('on', !!prefs.autoZoom && !paused);
       bAuto.classList.toggle('paused', !!prefs.autoZoom && paused);
@@ -616,10 +697,26 @@
     }
     /* ★ The padding leaves room for the control (top right) and the icons' own size at the edges. */
     function padPx() { const v = viewSize(); return Math.max(36, Math.min(64, Math.min(v.w, v.h) * 0.08)); }
+    /* ★★ THE CLEAR PART OF THE MAP. The host's live list sits over a corner (setObstacle); fit, centring and the
+     *  "an aircraft has left the view" test all work inside what is left, or aircraft hide under the list (seen on
+     *  the Pi 2, 2026-10-24). The camera is computed for that clear rectangle, then the map's centre is offset so the
+     *  rectangle's centre lands where the camera wants it. */
+    let obstacle = null;
+    function clearRect() {
+      const v = viewSize(), i = insetFor(obstacle, v.w, v.h);
+      return { w: v.w - i.l - i.r, h: v.h - i.t - i.b, dx: (i.l - i.r) / 2, dy: (i.t - i.b) / 2 };
+    }
+    function shiftCam(cam, dx, dy) {          // the camera whose CLEAR centre is cam.center
+      if (!cam || (!dx && !dy)) return cam;
+      const ws = TILE * Math.pow(2, cam.zoom), c = merc(cam.center.lat, cam.center.lon);
+      const m = unmerc(c.x - dx / ws, c.y - dy / ws);
+      return { center: { lat: m.lat, lon: wrapLon(m.lon, cam.center.lon) }, zoom: cam.zoom };
+    }
     function target() {
-      const v = viewSize();
-      return cameraFor({ points: positioned(), rx, fit: prefs.fit || !rx, w: v.w, h: v.h, pad: padPx(), tileSize: TILE,
-                         minZoom: ZMIN, maxZoom: ZMAX, emptyZoom: gl ? 7 : 8 });
+      const r = clearRect();
+      const cam = cameraFor({ points: positioned(), rx, fit: prefs.fit || !rx, w: r.w, h: r.h, pad: padPx(), tileSize: TILE,
+                              minZoom: ZMIN, maxZoom: ZMAX, emptyZoom: gl ? 7 : 8 });
+      return shiftCam(cam, r.dx, r.dy);
     }
     function moveCamera(cam, ms) {
       ourMove++;
@@ -654,7 +751,8 @@
       const v = viewSize();
       let cur;
       try { cur = curCam(); } catch (e) { return; }   // ★ a Leaflet map with no view yet
-      const out = anyOutside(positioned(), cur, v.w, v.h, padPx() * 0.5, TILE);
+      const r = clearRect();
+      const out = anyOutside(positioned(), shiftCam(cur, -r.dx, -r.dy), r.w, r.h, padPx() * 0.5, TILE);
       const g = az.decide(now(), cur, tgt, out, v.w, v.h, TILE, busy());
       if (g) moveCamera(g, CAMERA_MS);
     }
@@ -765,7 +863,8 @@
                               'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'z'] },
                     paint: { 'icon-opacity': ['get', 'op'] } });
       gl.addLayer({ id: 'vsadsb-labels', type: 'symbol', source: 'vsadsb-ac', filter: ['has', 'lbl'],
-                    layout: { 'text-field': ['get', 'lbl'], 'text-font': ['JetBrains Mono Regular'], 'text-size': 10, 'text-line-height': 1.15,
+                    layout: { 'text-field': ['format', ['get', 'lbl'], {}, ['coalesce', ['get', 'arr'], ''], { 'text-color': ['coalesce', ['get', 'arrc'], T.label] }],
+                              'text-font': ['JetBrains Mono Regular'], 'text-size': 10, 'text-line-height': 1.15,
                               'text-anchor': 'left', 'text-justify': 'left', 'text-offset': [1.25, 0], 'text-allow-overlap': true,
                               'text-ignore-placement': true },
                     paint: { 'text-color': T.label, 'text-halo-color': T.halo, 'text-halo-width': 1.2, 'text-opacity': ['get', 'lo'] } });
@@ -985,7 +1084,7 @@
         const p = gl ? gl.project([s.disp.lon, s.disp.lat]) : lm.latLngToContainerPoint([s.disp.lat, s.disp.lon]);
         if (p.x < -20 || p.y < -20 || p.x > v.w + 20 || p.y > v.h + 20) continue;
         const txt = labelText(s), lines = txt.split('\n');
-        const w = Math.max.apply(null, lines.map((l) => l.length)) * 6.1 + 4, h = lines.length * 11.5 + 2;
+        const w = (Math.max.apply(null, lines.map((l) => l.length)) + 2) * 6.1 + 4, h = lines.length * 11.5 + 2;   // + the arrow
         // ★ Priority: the selected aircraft, an emergency, then the nearest to the receiver (or the newest heard).
         const pri = s.hex === selected ? -2 : emergencyOf(s.a) ? -1
           : rx ? distNm(rx.lat, rx.lon, s.disp.lat, s.disp.lon) : (num(s.a.seen) || 0);
@@ -1026,7 +1125,11 @@
         s.lt = t;
         const props = { h: s.hex, img: imgId(s.kind, tone, glow), rot: NO_ROTATE[s.kind] ? 0 : (s.hdg || 0),
                         op: +op.toFixed(3), z: glow ? 1000 : tone === 'alert' ? 900 : (s.a.alt_baro === 'ground' ? 0 : 1), col: 'rgb(' + TONE[tone] + ')' };
-        if (s.lo > 0.01) { props.lbl = labelText(s); props.lo = +(s.lo * op).toFixed(3); }
+        if (s.lo > 0.01) {
+          props.lbl = labelText(s); props.lo = +(s.lo * op).toFixed(3);
+          const tr = props.lbl.indexOf('\n') >= 0 ? trendOf(s.a) : '';   // ★ only beside an altitude line
+          if (tr) { props.lbl += ' '; props.arr = tr; props.arrc = altColour(num(s.a.alt_baro) != null ? num(s.a.alt_baro) : num(s.a.alt_geom), th); }
+        }
         const rp = ringProps(s, t);
         if (rp) { props.rr = +rp.rr.toFixed(2); props.ro = +rp.ro.toFixed(3); props.ho = +rp.ho.toFixed(3); }
         feats.push({ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: [s.disp.lon, s.disp.lat] } });
@@ -1066,8 +1169,12 @@
         el.style.opacity = String(op);
         const lb = el.querySelector('.lb');
         if (lb) {
-          const txt = labelText(s);
-          if (s.llLbl !== txt) { s.llLbl = txt; lb.textContent = txt; }
+          const txt = labelText(s), tr = txt.indexOf('\n') >= 0 ? trendOf(s.a) : '';
+          const key = txt + tr + (tr ? altColour(num(s.a.alt_baro), th) : '');
+          if (s.llLbl !== key) {
+            s.llLbl = key; lb.textContent = txt;
+            if (tr) { const sp = doc.createElement('span'); sp.textContent = ' ' + tr; sp.style.color = altColour(num(s.a.alt_baro) != null ? num(s.a.alt_baro) : num(s.a.alt_geom), th); lb.appendChild(sp); }
+          }
           lb.style.opacity = s.lblWant && !s.goneAt ? '1' : '0';
         }
       }
@@ -1081,6 +1188,20 @@
         rx = isFinite(la) && isFinite(lo) && !(la === 0 && lo === 0) && lat != null && lon != null ? { lat: la, lon: lo } : null;
         paintCtl(); drawRx(); drawRings(); az.reset();
         if (prefs.autoZoom && !paused) cameraStep(true);
+      },
+      /** The host's overlay in a corner (its live list), { corner, w, h } in CSS px, or null — see clearRect. */
+      setObstacle(o) {
+        const n = o && o.w > 0 && o.h > 0 ? { corner: o.corner || 'bottom-left', w: +o.w, h: +o.h } : null;
+        const same = (n && obstacle) ? (Math.abs(n.w - obstacle.w) < 4 && Math.abs(n.h - obstacle.h) < 4 && n.corner === obstacle.corner) : n === obstacle;
+        obstacle = n;
+        placeLegend();
+        if (!same && prefs.autoZoom && !paused) cameraStep(false);
+      },
+      /** Show or hide the colour key (the host's (i) button). on omitted = toggle. Returns whether it is shown. */
+      toggleLegend(on) {
+        leg.hidden = on == null ? !leg.hidden : !on;
+        placeLegend();
+        return !leg.hidden;
       },
       setPrefs(p) {
         if (!p) return;
@@ -1108,7 +1229,7 @@
         destroyed = true;
         if (rafId) cancelAnimationFrame(rafId);
         closePopup();
-        try { ctl.remove(); } catch (e) { /* gone with the map */ }
+        try { ctl.remove(); leg.remove(); } catch (e) { /* gone with the map */ }
         for (const ev of ['pointerdown', 'touchstart', 'wheel', 'keydown']) container.removeEventListener(ev, onInput, { capture: true });
         if (gl) {
           gl.off('movestart', onMoveStart); gl.off('moveend', onMoveEnd); gl.off('click', onGlClick); gl.off('mousemove', onGlHover);

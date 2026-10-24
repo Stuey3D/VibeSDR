@@ -24,6 +24,16 @@ export interface AdsbListRow {
   /** Has a position — only then can a tap find it on the map (the layer's focus() needs one). */
   placed: boolean;
   emergency: boolean;
+  /** Signal, 1–3 bars (adsbBars), 0 when the report has no level. */
+  bars: number;
+}
+
+/** ★ SIGNAL BARS (Stuart, 2026-10-24: "a little 3 bar graph like everywhere else next to the flight number"). From
+ *  the reply level in dBFS — relative to the radio's gain, so it compares aircraft with each other, not with other
+ *  servers: 3 bars from −12 dBFS, 2 from −22, else 1. ★ ONE RULE, TWO READERS: web/client/src/adsb.ts adsbBars. */
+export function adsbBars(rssi: number | undefined | null): number {
+  if (rssi == null || !Number.isFinite(rssi)) return 0;
+  return rssi >= -12 ? 3 : rssi >= -22 ? 2 : 1;
 }
 
 export function altText(a: Aircraft): string {
@@ -62,6 +72,7 @@ export function adsbListRows(list: Aircraft[]): AdsbListRow[] {
     range: rangeText(a),
     placed: a.lat != null && a.lon != null,
     emergency: !!a.emergency,
+    bars: adsbBars(a.rssi),
   }));
 }
 

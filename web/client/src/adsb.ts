@@ -81,6 +81,17 @@ export function adsbRows(r: AdsbReport, rx: LatLon | null) {
 
 /** ★ The live list's rows. Each is a button to the highlight (role) and to Tab (tabindex): tapped, clicked
  *  or entered, it shows that aircraft on the map (AdsbMap.focus). */
+/** ★ SIGNAL BARS — 3 from −12 dBFS, 2 from −22, else 1; 0 = no level. ONE RULE, TWO READERS: src/services/adsbList.ts. */
+export function adsbBars(rssi: unknown): number {
+  const v = num(rssi);
+  if (v == null) return 0;
+  return v >= -12 ? 3 : v >= -22 ? 2 : 1;
+}
+function barsHtml(n: number): string {
+  if (!n) return '';
+  return `<span class="sig l${n}" title="Signal ${n} of 3">${[1, 2, 3].map((k) => `<i class="${k <= n ? 'on' : ''}"></i>`).join('')}</span>`;
+}
+
 export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null): string {
   if (!r) return '<div class="adsbEmpty">Listening on 1090 MHz — aircraft appear here as they are heard.</div>';
   const rows = adsbRows(r, rx);
@@ -96,7 +107,7 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null): string {
     const em = emergency(a);
     return `<div class="adsbRow${em ? ' em' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
       + ` title="${located ? 'Show on the map' : 'No position yet — not on the map'}">`
-      + `<span class="id"><b>${esc(call || hex.toUpperCase())}</b><small>${esc(hex.toUpperCase())}${sq ? ` · ${esc(sq)}` : ''}</small></span>`
+      + `<span class="id"><b>${esc(call || hex.toUpperCase())}${barsHtml(adsbBars(a.rssi))}</b><small>${esc(hex.toUpperCase())}${sq ? ` · ${esc(sq)}` : ''}</small></span>`
       + `<span class="alt">${esc(altText(a.alt_baro))}${trend}</span>`
       + `<span class="spd">${gs != null ? `${Math.round(gs)} kt` : ''}</span>`
       + `<span class="rng">${where}</span>`
@@ -197,6 +208,7 @@ export class AdsbMap {
     const w = window as any;
     this.layer = w.VibeAdsbLayer.create(map, { receiver: this.rx, prefs: loadPrefs(), onPrefs: savePrefs, theme: 'dark' });
     if (this.pending) { this.layer.update(this.pending); this.pending = null; }
+    if (this.obstacle) { try { this.layer.setObstacle?.(this.obstacle); } catch (e) { console.error('[adsb] setObstacle', e); } }
   }
 
   /** Every report: the whole aircraft list, and the receiver if it has arrived or moved since. */
@@ -208,6 +220,18 @@ export class AdsbMap {
     if (this.layer) {
       try { this.layer.update(list); } catch (e) { console.error('[adsb] layer.update', e); }
     } else this.pending = list;
+  }
+
+  /** The live list's corner of the map, { corner, w, h } in CSS px or null: the layer keeps aircraft clear of it. */
+  setObstacle(o: { corner: string; w: number; h: number } | null) {
+    this.obstacle = o;
+    try { this.layer?.setObstacle?.(o); } catch (e) { console.error('[adsb] setObstacle', e); }
+  }
+  private obstacle: { corner: string; w: number; h: number } | null = null;
+
+  /** The colour key (the list's (i) button). Returns whether it is now shown. */
+  toggleLegend(): boolean {
+    try { return !!this.layer?.toggleLegend?.(); } catch (e) { console.error('[adsb] toggleLegend', e); return false; }
   }
 
   /** A list row: select it and open its card. False = not on the map (no position, or no map yet). */

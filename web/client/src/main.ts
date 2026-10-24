@@ -7753,6 +7753,19 @@ function adsbViewShow() {
     adsbResizeObs.observe($('adsbTop'));
   }
   if (!adsbMap) adsbMap = new AdsbMap($('adsbMapHost'), adsbNote);
+  /* ★★ The live list's footprint, measured from the map's bottom-left corner, so auto-zoom and fit keep aircraft
+   *  out from under it (seen on the Pi 2, 2026-10-24). Folded to its pill it still counts, just smaller. */
+  if (!adsbListObs && typeof ResizeObserver !== 'undefined') {
+    const measure = () => {
+      if (!adsbMap) return;
+      const host = $('adsbMapHost').getBoundingClientRect(), box = $('adsbLive').getBoundingClientRect();
+      const visible = box.width > 0 && box.height > 0 && !$('adsbLive').hidden;
+      adsbMap.setObstacle(visible ? { corner: 'bottom-left', w: Math.round(box.right - host.left + 8), h: Math.round(host.bottom - box.top + 8) } : null);
+    };
+    adsbListObs = new ResizeObserver(measure);
+    adsbListObs.observe($('adsbLive'));
+    adsbListObs.observe($('adsbMapHost'));
+  }
   adsbMap.open(myPos());
   adsbWatchAttrib();
   adsbSyncChat();
@@ -7885,6 +7898,7 @@ function adsbApplyPending() {
 }
 
 /** The bar's count and rate, and the list. */
+let adsbListObs: ResizeObserver | null = null;
 function adsbRender() {
   if (!adsbOn) return;
   $('adsbCnt').textContent = adsbReport ? String(adsbOnMap(adsbReport)) : '…';
@@ -8220,6 +8234,7 @@ function buildControls() {
   $('adsbExit').onclick = () => adsbSetMode(false);
   $('adsbChat').onclick = () => { if (!($('mChat') as HTMLButtonElement).disabled) { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); adsbSyncChat(); } };
   $('adsbLiveHead').onclick = () => adsbSetListMin(!$('adsbLive').classList.contains('min'));
+  $('adsbLegendBtn').onclick = () => { const on = !!adsbMap?.toggleLegend(); $('adsbLegendBtn').classList.toggle('on', on); };
   $('adsbList').addEventListener('click', (e) => {
     const row = (e.target as HTMLElement).closest('.adsbRow') as HTMLElement | null;
     if (row) adsbPick(row);
