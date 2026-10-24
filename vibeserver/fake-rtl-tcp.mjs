@@ -20,6 +20,9 @@
 //   --dab FILE  while the dongle is tuned inside Band III (174-240 MHz), replay FILE (unsigned 8-bit
 //               IQ at 2.048 MS/s, e.g. bench-clip/dab-bench-clean.vbu8) on a loop instead of the
 //               synthetic signal, so DAB locks, decodes and produces real audio on the bench.
+//   --adsb FILE while the dongle is tuned within 2 MHz of 1090 MHz, replay FILE (unsigned 8-bit IQ, as
+//               rtl_sdr writes it, at the rate the server asked for — record it at that rate) on a loop:
+//               real aircraft for ADS-B mode on the bench (V12, 2026-10-24).
 //
 // The signal is deliberately synthetic-but-plausible: a noise floor plus a few AM-modulated
 // carriers at fixed offsets from centre, so the waterfall shows real lines you can tune onto and
@@ -37,6 +40,9 @@ const TONES = arg('tones', 3);
 const WFM_HZ = arg('wfm', 0) * 1e6;
 const dabArg = (() => { const i = process.argv.indexOf('--dab'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const DAB_IQ = dabArg ? fs.readFileSync(dabArg) : null;
+const adsbArg = (() => { const i = process.argv.indexOf('--adsb'); return i >= 0 ? process.argv[i + 1] : ''; })();
+const ADSB_IQ = adsbArg ? fs.readFileSync(adsbArg) : null;
+if (ADSB_IQ) console.log(`[fake-rtl-tcp] ADS-B clip ${adsbArg}: ${ADSB_IQ.length / 2} samples`);
 if (DAB_IQ) console.log(`[fake-rtl-tcp] DAB clip ${dabArg}: ${(DAB_IQ.length / 2 / 2.048e6).toFixed(2)} s at 2.048 MS/s`);
 
 // Offsets from centre (Hz) and audio modulation for each synthetic station.
@@ -61,6 +67,7 @@ const srv = net.createServer((sock) => {
   let stopped = false;
   let centreHz = 100e6;   // what the client last tuned the "dongle" to
   let dabPos = 0;         // replay position in DAB_IQ (bytes)
+  let adsbPos = 0;        // replay position in ADSB_IQ (bytes)
   // WFM stereo generator state (see --wfm)
   let fmPhase = 0, pilotPh = 0, lPh = 0, rPh = 0;
 
@@ -110,7 +117,13 @@ const srv = net.createServer((sock) => {
     if (rate !== RATE) retune();
     const n = Math.max(1024, Math.round(rate * CHUNK_MS / 1000));
     const buf = Buffer.allocUnsafe(n * 2);
-    if (DAB_IQ && centreHz >= 174e6 && centreHz <= 240e6) {
+    if (ADSB_IQ && Math.abs(centreHz - 1090e6) <= 2e6) {
+      for (let k = 0; k < n * 2; ) {
+        const take = Math.min(n * 2 - k, ADSB_IQ.length - adsbPos);
+        ADSB_IQ.copy(buf, k, adsbPos, adsbPos + take);
+        k += take; adsbPos = (adsbPos + take) % ADSB_IQ.length;
+      }
+    } else if (DAB_IQ && centreHz >= 174e6 && centreHz <= 240e6) {
       for (let k = 0; k < n * 2; ) {
         const take = Math.min(n * 2 - k, DAB_IQ.length - dabPos);
         DAB_IQ.copy(buf, k, dabPos, dabPos + take);

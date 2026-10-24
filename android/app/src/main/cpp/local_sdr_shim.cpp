@@ -12969,9 +12969,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else if (useSdrplay()) LocalSdrShim::instance().setIfAgcSetPoint(-30);
         agcForget("ADS-B off: the gain that suited 1090 MHz does not suit a carrier");
         if (s.ds > 0) { LOGI("[ADS-B] mode OFF: direct sampling back to %d", s.ds); LocalSdrShim::instance().setDirectSampling(s.ds); }
-        if (s.rtl > 0.0) { rtlCenter.store(s.rtl); tuneHw(s.rtl); }
+        // ★ The dial and the view first, then the tuner: tuneHw reads the VFO, which must already be the listener's
         if (s.audio > 0.0) audioFreq.store(s.audio);
         if (s.view > 0.0) viewCenter.store(s.view);
+        if (s.rtl > 0.0) { rtlCenter.store(s.rtl); tuneHw(s.rtl); }
         if (agcBack) LocalSdrShim::instance().setGain(-1);
         autoIfFreshStart("ADS-B off");
         rx.setAutoBandwidth(0.0);
