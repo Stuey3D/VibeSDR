@@ -346,6 +346,24 @@ public:
         }
         return true;
     }
+    /** The logo key that ENDS with `tail` (an aircraft's type+registration, or its registration) — or "".
+     *  ★★ Stuart's packs name ~2 950 airframes after their OWNER'S OWN code, in no database: "100PCAVA109G-IOOK"
+     *     (100PCAV + A109 + G-IOOK), "1010AVGLF5N11GW", "SFSG-BFDK". Only the registration at the end can find them.
+     *     Several matches: the shortest (the least made-up prefix). ★ Tails under 5 characters are not looked for —
+     *     "N1" ends far too many names. */
+    std::string findEnding(const std::string& tail) {
+        if (tail.size() < 5 || !validKey(tail)) return {};
+        std::lock_guard<std::mutex> lk(m_);
+        rescanLocked();
+        std::string rt = upper(tail);
+        std::reverse(rt.begin(), rt.end());
+        std::string best;
+        for (auto it = std::lower_bound(logoRev_.begin(), logoRev_.end(), rt); it != logoRev_.end()
+             && it->compare(0, rt.size(), rt) == 0; ++it)
+            if (best.empty() || it->size() < best.size()) best = *it;
+        std::reverse(best.begin(), best.end());
+        return best;
+    }
     bool any(int kind) { std::lock_guard<std::mutex> lk(m_); rescanLocked(); return !(kind ? sil_ : logo_).empty(); }
     size_t count(int kind) { std::lock_guard<std::mutex> lk(m_); rescanLocked(); return (kind ? sil_ : logo_).size(); }
 
@@ -358,6 +376,10 @@ private:
         scanned_ = now;
         logo_ = scan(dir_ + "/OperatorFlags");
         sil_ = scan(dir_ + "/Silhouettes");
+        logoRev_.clear();                       // ★ the keys reversed and sorted — see findEnding
+        logoRev_.reserve(logo_.size());
+        for (const auto& kv : logo_) { logoRev_.push_back(kv.first); std::reverse(logoRev_.back().begin(), logoRev_.back().end()); }
+        std::sort(logoRev_.begin(), logoRev_.end());
     }
     static std::unordered_map<std::string, std::string> scan(const std::string& d) {
         std::unordered_map<std::string, std::string> m;
@@ -383,6 +405,7 @@ private:
     std::string dir_;
     time_t scanned_ = 0;
     std::unordered_map<std::string, std::string> logo_, sil_;
+    std::vector<std::string> logoRev_;
 };
 
 class Db {
@@ -516,9 +539,15 @@ public:
         std::vector<std::string> lc = {hexUpper};
         if (!i.op.empty() && !i.t.empty() && !i.r.empty()) lc.push_back(i.op + "-" + i.t + i.r);
         lc.push_back(i.r);
-        if (!i.op.empty() && !i.t.empty()) lc.push_back(i.op + "-" + i.t);
-        lc.push_back(i.op);
         for (const auto& k : lc) if (!k.empty() && im.find(0, k)) { i.logo = Images::upper(k); break; }
+        // ★ then a name made of the owner's own code + type + registration, or + registration (Images::findEnding)
+        if (i.logo.empty() && !i.r.empty()) { i.logo = im.findEnding(i.t + i.r); if (i.logo.empty()) i.logo = im.findEnding(i.r); }
+        if (i.logo.empty()) {
+            lc.clear();
+            if (!i.op.empty() && !i.t.empty()) lc.push_back(i.op + "-" + i.t);
+            lc.push_back(i.op);
+            for (const auto& k : lc) if (!k.empty() && im.find(0, k)) { i.logo = Images::upper(k); break; }
+        }
         for (const auto& k : {hexUpper, i.t}) if (!k.empty() && im.find(1, k)) { i.sil = Images::upper(k); break; }
     }
 

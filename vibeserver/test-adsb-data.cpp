@@ -299,6 +299,17 @@ static void testImages(const std::string& dir) {
     im.setDir(dir);
     Db::resolveImages("4CA2D6", i);
     CHECK(i.logo == "RYR-B738EI-DLJ", "the airframe's own livery first: %s", i.logo.c_str());
+    // ★★ the owner's own code, in no database: found by the type+registration, or the registration, at the end
+    for (const char* f : {"/OperatorFlags/100PCAVA109G-IOOK.bmp", "/OperatorFlags/SFSG-BFDK.bmp", "/OperatorFlags/XN1.bmp"})
+        if (FILE* fp = std::fopen((dir + f).c_str(), "wb")) { std::fputs("BM", fp); std::fclose(fp); }
+    im.setDir(dir);
+    { Info g; g.r = "G-IOOK"; g.t = "A109"; Db::resolveImages("400001", g);
+      CHECK(g.logo == "100PCAVA109G-IOOK", "an owner's code + type + registration: %s", g.logo.c_str()); }
+    { Info g; g.r = "G-BFDK"; g.t = "PA28"; Db::resolveImages("400002", g);
+      CHECK(g.logo == "SFSG-BFDK", "an owner's code + registration: %s", g.logo.c_str()); }
+    { Info g; g.r = "N1"; Db::resolveImages("A00001", g);
+      CHECK(g.logo.empty(), "a short registration does not match by its ending: %s", g.logo.c_str()); }
+    CHECK(im.findEnding("BFDK").empty(), "findEnding ignores tails under 5 characters");
     CHECK(classifyMember("GeneralAviation/G-CIGH.bmp") == 0, "the GeneralAviation pack installs with the logos (by registration)");
     // Remove all
     std::string err;
