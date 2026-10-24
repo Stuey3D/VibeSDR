@@ -749,3 +749,12 @@ Tests stay silent.
 - Repo: `vendor/openrsp/include/sdrplay_api_rspDuo.h`, `sdrplay_api_tuner.h`, `sdrplay_api.h`;
   `android/app/src/main/cpp/sdrplay_source.cpp` (`applyDuoChoice`, `noteSampleNum`, `grChanged`);
   `vibeserver/radios.h`; `vibeserver/main.cpp` (one process per radio, `/r/<id>` routing).
+
+## Addendum (Stuart, 2026-10-24): FT8 as the reference on the amateur bands
+
+The reference does not have to be constant or known — both receivers measure their DIFFERENCE on the same signal, so
+any signal both hear well enough will do. FT8 is a good one: each transmission is a constant-envelope (8-FSK) 12.6 s
+tone, the 20 m / 40 m FT8 segments usually carry dozens of stations at once, and the 2.4 s slot gaps are bridged by
+carrying the ppm estimate (§4.2). Cross-correlating the two receivers' IQ of one FT8 signal gives the relative
+frequency and phase directly, whatever is being sent. Constraint as for every reference: it must sit inside both
+captures (on an RTL at 2.4 MS/s the whole of 20 m is one capture) and be strong enough on BOTH antennas.
