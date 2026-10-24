@@ -343,4 +343,9 @@ export class VibeServerAdapter implements SDRBackend {
   dabScopes(on: boolean): void { this.vibe.dabScopes(on); }
   iqOut(on: boolean, rate = 48000): void { this.vibe.iqOut(on, rate); }
   get inDab(): boolean { return this.vibe.inDab; }
+  adsb(on: boolean): void { this.vibe.adsb(on); }
+  get inAdsb(): boolean { return this.vibe.inAdsb; }
+  /** ★ See VibeServerClient.adsbSilentMs — the screen lets a lapsed hold go. */
+  adsbSilentMs(): number { return this.vibe.adsbSilentMs(); }
+  adsbForget(): void { this.vibe.adsbForget(); }
 }

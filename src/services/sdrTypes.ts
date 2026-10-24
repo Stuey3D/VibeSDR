@@ -4,6 +4,7 @@ import { STEP_833, STEP_FM_ODD, isAirbandCom } from '../utils/airband';
 import { cleanText } from '../utils/safeText';
 import { cleanLines } from '../utils/cleanLines';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
+import { parseAdsbCapability, type AdsbCap } from './adsbTypes';
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 export type Mode = SDRMode; // alias
@@ -427,6 +428,10 @@ export interface ServerOccupancy {
    *  draw it. Per AGENTS.md: a control that is visible and refused reads as a broken feature, not
    *  a blocked one. Undefined on a server older than the field, which hides it — the safe way. */
   dab?: boolean;
+  /** ★ V12 ADS-B (docs/v12/ADSB.md). UNLIKE DAB IT IS NEVER HIDDEN WHEN REFUSED: `{ ok: false, why }`
+   *  draws the control disabled with the server's reason (a capture below 2.4 MS/s, the owner's
+   *  switch …) — a missing control reads as a missing feature. Undefined = an older server: none. */
+  adsb?: AdsbCap;
   /** ★ Raw IQ out: the owner's policy and the slots. Absent on an older server. */
   rawIq?: 'off' | 'local' | 'public';
   rawIqMax?: number;
@@ -474,6 +479,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       landingLinkUrl: safeUrl(j.landingLinkUrl, HTTP_SCHEMES) || undefined,
       landingLinkLabel: cleanText(j.landingLinkLabel, 80) || undefined,
       dab:       j.dab === true,
+      adsb:      parseAdsbCapability(j),
     };
   } catch { return null; }
   finally { clearTimeout(t); }

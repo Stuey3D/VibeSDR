@@ -59,6 +59,7 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioCaps } from '../services/UberSDRClient';
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
+import AdsbPanel from '../components/AdsbPanel';
 import DoorSpectrogram from '../components/DoorSpectrogram';
 import { RecElapsed } from '../components/RecElapsed';
 import { shareDabServices } from '../services/dabShareServices';
@@ -66,6 +67,7 @@ import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
+import { adsbToAircraft, type AdsbCap, type AdsbReport } from '../services/adsbTypes';
 import { DabBlockStepper, DabAskGuard, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../utils/dabQuality';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
@@ -735,12 +737,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     let dead = false;
     setDabCapable(false);
+    setAdsbCap(undefined);
     setAntBands(null);
     if ((route.params.serverType ?? 'ubersdr') !== 'vibeserver') return;
     fetchOccupancy(connectBase.replace(/\/+$/, ''))
       .then(o => {
         if (dead) return;
         setDabCapable(o?.dab === true);
+        /* ★ V12 ADS-B, from the SAME per-radio answer and for the same reason (the door owns no radio). Unlike DAB a
+         *  refusal is KEPT — the control is drawn disabled with the server's words (adsbTypes parseAdsbCapability). */
+        setAdsbCap(o?.adsb);
         const b = parseAntennaBands(o?.antennaRanges, o?.antennaFilters);
         setAntBands(hasAntennaBands(b) ? b : null);
       })
@@ -2399,6 +2405,39 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** OWRX ADS-B: the live aircraft table. Structured — it used to be flattened to
    *  text on arrival, which is why nothing but the decoder panel could use it. */
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
+  /* ── ADS-B on a VibeServer (V12, docs/v12/ADSB.md) ────────────────────────────────────────────
+   * ★★★ THE DAB PATTERN, NOT THE OWRX ONE. OWRX's ADS-B is a PROFILE and fills `aircraft` above through
+   *     onAircraft; VibeServer's is a MODE the phone enters and leaves by name (like DAB), so it has DAB's
+   *     pieces: the mode, the box (two different things — see dabBoxOpen), the refusal, the capability.
+   *     The report is mapped into the SAME `aircraft` (adsbToAircraft) because the watch's ADS-B screen and
+   *     the table both read that, and the raw report is kept for the map's shared layer. */
+  const [adsbCap, setAdsbCap] = useState<AdsbCap | undefined>(undefined);   // undefined = no control at all
+  const [adsbOn, setAdsbOn] = useState(false);
+  const adsbOnRef = useRef(false);
+  const [adsbBoxOpen, setAdsbBoxOpen] = useState(false);
+  const adsbBoxOpenRef = useRef(false);
+  const [adsbReport, setAdsbReport] = useState<AdsbReport | null>(null);
+  const [adsbError, setAdsbError] = useState<string | undefined>(undefined);
+  const [adsbTall, setAdsbTall] = useState(false);
+  useEffect(() => { AsyncStorage.getItem('lsv_adsb_tall').then(v => { if (v === '1') setAdsbTall(true); }).catch(() => {}); }, []);
+  const onAdsbTall = useCallback((v: boolean) => { setAdsbTall(v); AsyncStorage.setItem('lsv_adsb_tall', v ? '1' : '0').catch(() => {}); }, []);
+  useEffect(() => { adsbOnRef.current = adsbOn; }, [adsbOn]);
+  useEffect(() => { adsbBoxOpenRef.current = adsbBoxOpen; }, [adsbBoxOpen]);
+  /** ★ Everything ADS-B leaves behind, in one place — every door out (EXIT, the key, a mode pick, the server's
+   *  adsb_off, a lapsed hold) ends here, so none can leave a stale table on the wrist. */
+  const adsbUiOff = useCallback((keepBox = false) => {
+    adsbOnRef.current = false;
+    setAdsbOn(false); setAdsbReport(null); setAircraft([]);
+    if (!keepBox) {
+      setAdsbBoxOpen(false); setAdsbError(undefined);
+      setMapKind((k) => (k === 'adsb' ? null : k));   // ★ its map has nothing left to show
+    }
+  }, []);
+  /** ★★ NOTHING TO TUNE: a whole-profile data mode (OWRX DAB/ADS-B/ISM…) OR VibeServer's ADS-B, which leaves
+   *  `status.mode` on the demod it came from exactly as DAB does — so the mode string alone cannot say. Every
+   *  VFO path that asked isWholeProfileMode asks this instead (one rule, one reader); the client refuses too. */
+  const noTuneNow = (c: { getStatus(): { mode: unknown } }): boolean =>
+    adsbOnRef.current || isWholeProfileMode(String(c.getStatus().mode));
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   // ★ `name` is the STABILISED name (see psStab); `psRaw` is the PS exactly as it arrived, for the
@@ -2551,6 +2590,39 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined);
   }, []);
 
+  /** ★★ ENTER OR LEAVE ADS-B — the key in the demodulator sheet. toggleDab's rules exactly: pressed while the mode
+   *  runs with the box shut it brings the box back; pressed with the box up it leaves. The SERVER tunes (1090 MHz,
+   *  rate unchanged) and leaves DAB itself if it was in it (we then hear dab_off). */
+  const toggleAdsb = useCallback(() => {
+    const c = client.current;
+    if (!c?.adsb) return;                      // not a VibeServer — the key is not drawn either
+    if (adsbOnRef.current) {
+      if (!adsbBoxOpenRef.current) { setAdsbBoxOpen(true); return; }
+      if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
+      c.adsb(false);
+      adsbUiOff();
+      return;
+    }
+    if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to 1090
+    setAdsbError(undefined);
+    setAdsbReport(null);
+    setAdsbBoxOpen(true);
+    c.adsb(true);
+    adsbOnRef.current = true;
+    setAdsbOn(true);
+  }, [adsbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** ★ EXIT ADS-B — the box's key. Never toggleAdsb (the DAB lesson, dabExitAction): out of the mode it only puts
+   *  the box away; it can never ENTER. */
+  const exitAdsb = useCallback(() => {
+    const c = client.current;
+    const leave = dabExitAction(adsbOnRef.current) === 'leave';
+    // ★★ Ask before tuning: a locked listener may still put the BOX away — only leaving 1090 is refused.
+    if (leave && askLocked(dialStateRef.current)) { setAdsbBoxOpen(false); askGate(); return; }
+    if (leave) c?.adsb?.(false);
+    adsbUiOff();
+  }, [adsbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   /** ★ A DAB bookmark: the multiplex AND the service, in one go — the web client's dabGoTo.
    *  Enters DAB if needed, retunes if the block differs, otherwise just switches service. */
   const dabGoTo = useCallback((hz: number, sid: number) => {
@@ -2618,7 +2690,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  DAB screen could never appear for a VibeServer at all.
    *  ★ A reported state, not a settable one: nothing on the far end accepts "dab" as a mode
    *    command, which is exactly why it was removed from Buddy's demodulator grid. */
-  const watchMode = useCallback((m: string) => (dabOnRef.current ? 'dab' : m), []);
+  const watchMode = useCallback((m: string) => (dabOnRef.current ? 'dab' : adsbOnRef.current ? 'adsb' : m), []);
+  /* ★★ AND IN ADS-B IT IS "adsb" — the wrist ROUTES on it (WatchLink.screen: mode == "adsb" || aircraft) and a state
+   *  naming any other mode CLEARS its aircraft table (WatchLink "state": `if md != "adsb" { aircraft = [] }`). */
 
   const onDabSpeed = useCallback((scale: number) => {
     setDabSpeed(scale);
@@ -4006,7 +4080,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
-    if (isWholeProfileMode(String(c.getStatus().mode))) return;
+    if (noTuneNow(c)) return;
     const s = stepRef.current; if (!(s > 0)) return;
     const cur = c.getStatus().frequency;
     const snapped = stepTarget(cur, s, dir === 'right' ? 1 : -1, 'dir', String(c.getStatus().mode));
@@ -5767,6 +5841,18 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  exitDab). The web client closes its box on dab_off too (dabUiOff). */
           setDabOn(false); dabOnRef.current = false; setDabBoxOpen(false);
         }
+      },
+      /** ★ V12 ADS-B: a report about once a second while the receiver is in the mode. ITS ARRIVAL MEANS ADS-B IS ON
+       *  (ADSB.md) — including for a second listener joining a radio somebody else put on 1090, so the box opens on
+       *  the TRANSITION (an X-equivalent the user pressed — SMALL, a shut box — stays as they left it). `null` = the
+       *  mode ended (adsb_off; the server sends the restored config after it); `why` = the refusal, shown in the box. */
+      onAdsb: (r, why) => {
+        if (destroyed.current) return;
+        if (why) { adsbUiOff(true); setAdsbError(why); setAdsbBoxOpen(true); return; }
+        if (!r) { adsbUiOff(); return; }
+        if (!adsbOnRef.current) { adsbOnRef.current = true; setAdsbBoxOpen(true); setAdsbError(undefined); }
+        setAdsbOn(true);
+        setAdsbReport(r);
       },
       // ★★★ THE RADIO IS THE AUTHORITY ON ITS OWN GAIN, and until the server sent this the app had
       //     no way to know it — so the slider showed a value of its own and the owner's resting
@@ -7953,7 +8039,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // this guard; ADS-B did NOT, so the drum would happily drag you off 1090 MHz and
     // stop every aircraft decoding. One predicate now, so the next data mode can't
     // fall through the same gap. Ignore drum input.
-    if (isWholeProfileMode(String(c.getStatus().mode))) return;
+    if (noTuneNow(c)) return;
     markInteract();
     const s = stepRef.current;
     // Velocity-adaptive sensitivity: EMA of |px|/dt. A gesture gap resets to
@@ -8128,7 +8214,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       return;
     }
     const c = client.current; if (!c) return;
-    if (isWholeProfileMode(String(c.getStatus().mode))) return;   // DAB/ADS-B: nothing to tune
+    if (noTuneNow(c)) return;   // DAB/ADS-B: nothing to tune
     const s = stepRef.current; if (!(s > 0)) return;
 
     // Accumulate on our OWN running target, not getStatus().frequency — that
@@ -8293,7 +8379,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  the multiplex out — the web client's own fault on 2026-09-07 ("the spectrum can be clicked
      *  which knocks the multiplex tuning off"). The client refuses it; this stops the UI acting as
      *  though it worked, which is the difference between a locked control and a broken one. */
-    if (dabOnRef.current) return;
+    if (dabOnRef.current || adsbOnRef.current) return;   // ★ ADS-B: the server owns the view as well
     markInteract();
     const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     const a = wfZoomAcc.current;
@@ -8316,10 +8402,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
     if (askGate()) return;                 // ★★ ask before tuning — see askGate
-    if (dabOnRef.current) return;          // ★ see wfZoomBy — a tap is a view move too
+    if (dabOnRef.current || adsbOnRef.current) return;   // ★ see wfZoomBy — a tap is a view move too
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
-    if (isWholeProfileMode(String(c.getStatus().mode))) return;
+    if (noTuneNow(c)) return;
     markInteract();
     /* ★★ SNAP TO THE STEP. A finger lands a few hundred hertz off; on 5 kHz steps 9568.45 kHz
      *  means 9570, on 1 kHz 7073.14 means 7074 — the channel, not the pixel. The web client
@@ -8338,7 +8424,8 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onMode = useCallback((m: SDRMode) => {
     const c = client.current; if (!c) return;
-    if (m !== c.getStatus().mode && askGate()) return;   // ★★ ask before tuning; re-picking changes nothing
+    // ★★ ask before tuning; re-picking changes nothing — except in ADS-B, where any pick gives the radio back
+    if ((m !== c.getStatus().mode || adsbOnRef.current) && askGate()) return;
     /* ★★★ CHOOSING ANOTHER DEMODULATOR IS HOW YOU LEAVE DAB. DAB is a MODE the phone enters, not
      *  a demodulator the server switches to — so while it is on, the server refuses an ordinary
      *  mode change and this sent one anyway. The only exit was the Exit button ON the DAB screen,
@@ -8358,6 +8445,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       c.dab?.(false);
       dabOnRef.current = false;
       setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined);
+    }
+    /* ★★ AND OF ADS-B, by the same door: picking a demodulator means "give me the radio back on this", and the server
+     *  ignores a mode change while in ADS-B. Leave first (the server restores the receiver), then the pick lands. */
+    if (adsbOnRef.current) {
+      c.adsb?.(false);
+      adsbUiOff();
     }
     userTuneSeq.current++;   // ★ a PERSON asked (mode) — see the note on userTuneSeq
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
@@ -8449,7 +8542,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const key = `${userTuneSeq.current}|${airStepSeq.current}`;
     if (key === airPbSeen.current) return;
     airPbSeen.current = key;
-    if (dabOnRef.current) return;
+    if (dabOnRef.current || adsbOnRef.current) return;
     const pb = airbandPassband(status.frequency, String(status.mode), airChannelNow,
                                status.bandwidthLow, status.bandwidthHigh);
     if (pb) onFilterBoth(pb[0], pb[1]);
@@ -8847,7 +8940,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (sharedDialRef.current && !armed) return;
         markInteract();           // a watch tune is an interaction — wake the idle saver + clear its pill
         wakeSpectrumForWatch();   // a turning crown is proof the watch is watching
-        if (isWholeProfileMode(String(c.getStatus().mode))) return;   // locked to its ensemble
+        if (noTuneNow(c)) return;   // locked to its ensemble
         const s = stepRef.current; if (!(s > 0)) return;
         const now = Date.now();
         // Accumulate onto our OWN running target — NOT getStatus().frequency, which lags while
@@ -9113,7 +9206,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Mode/step: rare, so send immediately.
   useEffect(() => {
     watchProvider.sendState(status.frequency, watchMode(String(status.mode)), step);
-  }, [status.mode, step]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status.mode, step, adsbOn]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Frequency: the AUTHORITATIVE echo, throttled to 4/sec with the last value
   // always delivered. The watch no longer reads the frequency off the row stream —
@@ -9122,8 +9215,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // forward as the queue drained). Throttled state messages can't build a backlog,
   // and the trailing edge means the wrist always lands on the truth.
   useEffect(() => {
-    watchProvider.sendFreq(status.frequency, String(status.mode), step);
-  }, [status.frequency]);    // eslint-disable-line react-hooks/exhaustive-deps
+    // ★ "adsb" in ADS-B — a freq/state naming the old demod would clear the wrist's table (see watchMode).
+    watchProvider.sendFreq(status.frequency, adsbOnRef.current ? 'adsb' : String(status.mode), step);
+  }, [status.frequency, adsbOn]);    // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mirror the phone's own render settings into the watch's processor, so the
   // wrist keeps looking like a shrunk phone waterfall (it runs its own
@@ -9189,6 +9283,26 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [recvLon, setRecvLon] = useState<number | null>(null);
   /** ★ V12: a VibeServer's own position from /location (lat/lon or its locator) — names NAVTEX stations. */
   const [serverPos, setServerPos] = useState<{ lat: number; lon: number } | null>(null);
+  /* ★★ V12 ADS-B: THE REPORT INTO THE APP'S AIRCRAFT, ranged from THIS receiver (the server's own /location — the
+   *  NAVTEX naming's position), nearest first. Into `aircraft`, so the table and the WATCH (sendAircraft above,
+   *  unchanged from OWRX) read one list. Re-ranged if the position lands after the first report. */
+  useEffect(() => {
+    if (adsbReport) setAircraft(adsbToAircraft(adsbReport.aircraft, serverPos ?? recvLoc));
+  }, [adsbReport, serverPos, recvLoc]);
+  // ★ The wrist's ADS-B map plots around the receiver — a VibeServer's is serverPos (recvLoc is Kiwi / this device's).
+  useEffect(() => { if (serverPos) watchProvider.sendReceiver(serverPos.lat, serverPos.lon); }, [serverPos]);
+  /* ★★ A HOLD NOBODY LIFTED. A radio that left ADS-B while we were away (its last listener's socket closed and the
+   *  server gave the receiver back, telling nobody) sends no adsb_off to the socket that returns — so the dial would
+   *  stay locked here for ever. Ten seconds without a report while we believe we are in it: let the hold go, quietly.
+   *  If the server IS still in ADS-B its next report puts us straight back (the transition opens the box). */
+  useEffect(() => {
+    if (!adsbOn) return;
+    const t = setInterval(() => {
+      const c = client.current;
+      if ((c?.adsbSilentMs?.() ?? 0) > 10_000) { c?.adsbForget?.(); adsbUiOff(); }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [adsbOn, adsbUiOff]);
   const ituRegion = useMemo(
     () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
@@ -10888,7 +11002,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB and ADS-B, which take the whole receiver: ADS-B lists the aircraft heard on 1090 MHz, with a map.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
@@ -11461,7 +11575,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           tunedHz={status.frequency}
           receiverPos={serverPos ?? recvLoc}
           decoderText={decoderText}
-          aircraft={aircraft}
+          /* ★ VibeServer ADS-B has its own window (AdsbPanel); the shared `aircraft` must not also turn a running
+           *  client decoder's box into a second copy of the table. OWRX's ADS-B (adsbOn never set) is unchanged. */
+          aircraft={adsbOn || adsbBoxOpen ? undefined : aircraft}
           decoderStatus={decoderStatus}
           decoding={decoding}
           // Sit ABOVE the VTS bar (which shows the live station) rather than covering it —
@@ -11873,7 +11989,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           dabOn={dabOn}
           dabMeter={dabQuality}
           frequency={status.frequency}
-          mode={status.mode}
+          /* ★ In ADS-B the mode box reads ADSB, not the demod the receiver will come back to (status.mode stays on it,
+           *  as in DAB) — the OWRX ADS-B profile already reads this way (constants/modeBox composeModeLabel). */
+          mode={adsbOn ? ('adsb' as SDRMode) : status.mode}
           step={step}
           connected={connected}
           bottomInset={0}
@@ -12208,6 +12326,26 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  the receiver that is decoding this multiplex. connectBase resolves to /r/<id>. */
           base={connectBase.replace(/\/+$/, '')}
           readAuth={radioAuthSuffix || route.params.authSuffix || ''}
+        />
+        </PanelBoundary>
+      )}
+      </RotateFade>
+      {/* ★★ V12 THE ADS-B WINDOW — the DAB window's rules: portrait-only on a phone (a table needs the height),
+          `adsbBoxOpen` not `adsbOn` (the window and the mode are two things), above the VTS bar and the notices.
+          MAP opens HFDL's map in its 'adsb' kind (see MapOverlay). */}
+      <RotateFade>
+      {adsbBoxOpen && (!isLandscape || isTablet) && (
+        <PanelBoundary name="ADS-B" onClose={() => setAdsbBoxOpen(false)}>
+        <AdsbPanel
+          report={adsbReport}
+          aircraft={aircraft}
+          error={adsbError}
+          on={adsbOn}
+          onMap={() => { markInteract(); setMapKind('adsb'); }}
+          onExit={exitAdsb}
+          tall={adsbTall} onTall={onAdsbTall}
+          topLimit={boxTopLimit} topSafe={boxTopSafe}
+          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
         />
         </PanelBoundary>
       )}
@@ -12611,6 +12749,22 @@ export default function SDRScreen({ route, navigation }: Props) {
           dabAvail: dabCapable,
           dabOn,
           onDab: () => { markInteract(); setModeSelOpen(false); toggleDab(); },
+          /* ★★ V12 ADS-B, beside DAB. Drawn whenever the server STATES a capability (an older server states none and
+           *  gets no key); a refusal is drawn DISABLED WITH THE SERVER'S REASON and a press says it again — never
+           *  hidden, because a missing key reads as a missing feature (ADSB.md). While the mode runs the key always
+           *  works, so it can always be left. */
+          adsbAvail: adsbCap !== undefined || adsbOn,
+          adsbWhy: !adsbOn && adsbCap && !adsbCap.ok ? adsbCap.why : undefined,
+          adsbOn,
+          onAdsb: () => {
+            markInteract();
+            if (!adsbOnRef.current && adsbCap && !adsbCap.ok) {
+              appAlert('ADS-B unavailable', adsbCap.why || 'ADS-B is not available on this receiver');
+              return;
+            }
+            setModeSelOpen(false);
+            toggleAdsb();
+          },
           /* ★★ V12 THE GALLERY — what the SERVER's decoders heard (background decoding and listeners'). A VibeServer
            *  only: nothing else keeps one, and a key that opens an empty list there would be a dead control. */
           galleryAvail: !!(client.current as any)?.isVibe,
@@ -12942,6 +13096,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           serverRates={hwServerRates}
           lockedRate={hwLockedRate}
           dabOn={dabOn}
+          adsbOn={adsbOn}
           biasTee={adoptHw && !hwStated.biasT ? undefined : hwBiasTee}
           onBiasTee={onHwBiasTee}
           agc={adoptHw && !hwStated.digitalAgc ? undefined : hwAgc}
@@ -12968,6 +13123,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         baseUrl={baseUrl}
         sessionUuid={sessionUuid}
         onClose={() => setMapKind(null)}
+        /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
+         *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
+        rxLat={mapKind === 'adsb' ? (serverPos ?? recvLoc)?.lat ?? null : undefined}
+        rxLon={mapKind === 'adsb' ? (serverPos ?? recvLoc)?.lon ?? null : undefined}
+        adsbAircraft={mapKind === 'adsb' ? adsbReport?.aircraft ?? null : undefined}
       /></PanelBoundary>}
 
       {/* On-device FT8 spots map (Local/Kiwi): RN-fed spots (each with a grid),
