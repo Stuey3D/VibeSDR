@@ -7755,6 +7755,8 @@ function adsbViewShow() {
     adsbResizeObs.observe($('adsbTop'));
   }
   if (!adsbMap) adsbMap = new AdsbMap($('adsbMapHost'), adsbNote);
+  // ★ an icon tapped on the map (or its card closed): the list's row follows — and is scrolled into view
+  adsbMap.onSelect = (h) => adsbMarkSel(h || '', true);
   /* ★★ The live list's footprint, measured from the map's bottom-left corner, so auto-zoom and fit keep aircraft
    *  out from under it (seen on the Pi 2, 2026-10-24). Folded to its pill it still counts, just smaller. */
   if (!adsbListObs && typeof ResizeObserver !== 'undefined') {
