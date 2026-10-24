@@ -1151,6 +1151,9 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #adsbCnt { color: var(--btn-active-tx); font-size: 16px; font-variant-numeric: tabular-nums; }
 #adsbStat { flex: 0 1 auto; min-width: 0; font-size: 11px; letter-spacing: 0.5px; color: var(--text-dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ★★ The capture warning (adsbCaptureWarning): red, beside the rate; on a phone only "capture 74 %" stays. */
+#adsbCapture { flex: 0 1 auto; min-width: 0; font-size: 11px; letter-spacing: 0.5px; color: var(--red, #ff6b5e);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #adsbMain { position: relative; flex: 1 1 auto; min-height: 0; }
 #adsbMapHost { position: absolute; inset: 0; background: #123049; }
 #adsbNote { position: absolute; left: 50%; top: 52px; transform: translateX(-50%); z-index: 6;
@@ -1235,7 +1238,7 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 /* ★ A phone: the title loses its second word and the speed column goes before anything is squeezed to an
      ellipsis; the message rate goes too (the count is what matters at a glance). */
 @media (max-width: 560px) {
-  #adsbTitle .w, #adsbStat { display: none; }
+  #adsbTitle .w, #adsbStat, #adsbCapture .w { display: none; }
   #adsbTop { gap: 6px; }
   #adsbTop button { padding: 6px 9px; font-size: 12px; }
   #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) auto auto; }
@@ -3870,6 +3873,7 @@ select.btn { padding: 6px 8px; }
     <div id="adsbTitle">ADS-B <span class="w">AIRCRAFT MAP</span></div>
     <div id="adsbCntWrap" title="Aircraft on the map"><svg width="16" height="16" viewBox="0 0 26 26" aria-hidden="true"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="currentColor"/></svg><span id="adsbCnt">…</span></div>
     <span id="adsbStat"></span>
+    <span id="adsbCapture" hidden></span>
     <button type="button" id="adsbChat" title="Chat">CHAT<span class="unread" id="adsbChatUnread" hidden></span></button>
   </div>
   <div id="adsbMain">

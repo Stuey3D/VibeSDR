@@ -10,6 +10,7 @@
 //    the_code). See vsAdsbCapableHw in local_sdr_shim.cpp.
 #pragma once
 #include "vibe_adsb.h"
+#include "vibe_adsb_capture.h"   // ★ CaptureMeter — the live "capture N %"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -49,6 +50,7 @@ public:
         queued_ = 0;
         dropped_ = 0;
         t0_ = std::chrono::steady_clock::now();
+        cap_.reset(rateHz, 0.0);
         winMsgs_ = winStrong_ = 0; lastGood_ = 0; winStart_ = 0;
         health_ = Health{};
         run_ = true;
@@ -77,6 +79,7 @@ public:
             // ★★ BOUNDED IN TIME, NOT IN BLOCKS. A cap of 16 blocks was 8 ms of slack on an RSP, which hands over
             //    ~2 000 small blocks a second at 3 MS/s — the Lenovo's first live run dropped 64 at once. Half a second
             //    of capture whatever the block size; past that the OLDEST goes.
+            cap_.add(n, now());                             // ★ counted on ARRIVAL, before any drop — see CaptureMeter
             queued_ += n;
             queue_.push_back(std::move(b));
             while (queued_ > size_t(rate_ * kMaxQueuedSec) && queue_.size() > 1) {
@@ -86,13 +89,15 @@ public:
         cv_.notify_one();
     }
 
-    /** The aircraft report: {"type":"adsb", …Tracker::json…, "rate":…, "noise":…, "dropped":…}. */
+    /** The aircraft report: {"type":"adsb", …Tracker::json…, "rate":…, "noise":…, "dropped":…, "capture":…}.
+     *  ★ capture: % of the promised samples this service RECEIVED over the last ~10 s, -1 until it knows (CaptureMeter). */
     std::string report() {
         std::lock_guard<std::mutex> lk(mtx_);
-        std::string t = tracker_.json(now());
-        char tail[160];
-        std::snprintf(tail, sizeof tail, ",\"rate\":%.0f,\"noise\":%.1f,\"msgRate\":%.0f,\"dropped\":%llu}",
-                      rate_, health_.noiseDbfs, health_.msgsPerSec, (unsigned long long)dropped_);
+        const double tn = now();
+        std::string t = tracker_.json(tn);
+        char tail[192];
+        std::snprintf(tail, sizeof tail, ",\"rate\":%.0f,\"noise\":%.1f,\"msgRate\":%.0f,\"dropped\":%llu,\"capture\":%d}",
+                      rate_, health_.noiseDbfs, health_.msgsPerSec, (unsigned long long)dropped_, cap_.percent(tn));
         // Tracker::json is {"now":…,"messages":…,"aircraft":[…]} — open it up and add the type and the tail
         return "{\"type\":\"adsb\"," + t.substr(1, t.size() - 2) + tail;
     }
@@ -159,6 +164,7 @@ private:
     std::deque<std::vector<std::complex<float>>> queue_;
     size_t queued_ = 0;                                     // samples in queue_
     uint64_t dropped_ = 0;
+    CaptureMeter cap_;                                      // under mtx_
     std::chrono::steady_clock::time_point t0_;
     uint64_t winMsgs_ = 0, winStrong_ = 0, lastGood_ = 0;
     double winStart_ = 0;

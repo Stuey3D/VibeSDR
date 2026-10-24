@@ -12,7 +12,7 @@ import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
-import { adsbListHtml, adsbStatus, adsbOnMap, cleanHex, AdsbMap } from './adsb';
+import { adsbListHtml, adsbStatus, adsbOnMap, adsbCaptureWarning, cleanHex, AdsbMap } from './adsb';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -7903,6 +7903,22 @@ function adsbRender() {
   if (!adsbOn) return;
   $('adsbCnt').textContent = adsbReport ? String(adsbOnMap(adsbReport)) : '…';
   $('adsbStat').textContent = adsbStatus(adsbReport);
+  {
+    // ★★ The receiver dropping samples — said in red beside the rate (adsbCaptureWarning). Built from text nodes.
+    const w = adsbCaptureWarning(adsbReport), el = $('adsbCapture');
+    el.hidden = !w;
+    if (w) {
+      const key = w.short + w.rest;
+      if (el.dataset.k !== key) {
+        el.dataset.k = key;
+        el.textContent = '';
+        const b = document.createElement('b'); b.textContent = w.short;
+        const t = document.createElement('span'); t.className = 'w'; t.textContent = w.rest;
+        el.append(b, t);
+        el.title = key;
+      }
+    }
+  }
   $('adsbLiveN').textContent = adsbReport ? String(adsbReport.aircraft.length) : '';
   const el = $('adsbList');
   const html = adsbListHtml(adsbReport, myPos());
