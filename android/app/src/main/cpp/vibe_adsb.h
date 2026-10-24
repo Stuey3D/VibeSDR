@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -90,7 +91,7 @@ inline int dfLengthBytes(int df) { return df >= 16 ? 14 : 7; }
 struct Frame {
     uint8_t  b[14] = {};
     int      len = 0;          ///< 7 or 14
-    float    level = 0;        ///< pulse power, dBFS (mean of the four preamble pulses)
+    float    level = 0;        ///< pulse power, dBFS (mean of the four preamble pulses; |IQ|² of 1.0 = 0 dBFS)
     uint64_t sample = 0;       ///< position on the fine grid (125 ns units), for ordering
 };
 
@@ -246,6 +247,8 @@ public:
     uint64_t preambles() const { return preambles_; }   ///< preamble-shaped bumps that went on to bit slicing
     uint64_t triggers() const { return triggers_; }     ///< samples that passed stage 1
     uint64_t slices() const { return slices_; }         ///< replies sliced (one per phase tried)
+    /** The noise floor, dBFS (mean noise power). */
+    double noiseDbfs() const { return noiseP_ > 0 ? 10.0 * std::log10(noiseP_) : -99.0; }
 
 private:
     static constexpr size_t kPiece = 4096;
@@ -396,7 +399,7 @@ private:
         if (!plausibleDf(f.b[0] >> 3)) return false;
         f.len = dfLengthBytes(f.b[0] >> 3);
         for (int i = 8; i < f.len * 8; ++i) if (bitNext()) f.b[i >> 3] |= uint8_t(0x80 >> (i & 7));
-        f.level = 10.0f * std::log10(std::max(hi * hi, 1e-12f));
+        f.level = 10.0f * std::log10(std::max(hi, 1e-12f));   // hi is a mean POWER — dBFS, 1.0 = full scale
         f.sample = base_ + uint64_t(std::max(0.0, (double(i0) + off) / q_));
         return true;
     }
