@@ -314,6 +314,9 @@ object VibeLocalSDR {
     /** ★★★ A DAB station as the landing: block index into Band III (-1 = none) and the SId (0 = block only). */
     fun setVibeServerLandingDab(channel: Int, sid: Int) { ensureLoaded(); nativeSetVibeServerLandingDab(channel, sid) }
     private external fun nativeSetVibeServerLandingDab(channel: Int, sid: Int)
+    /** ★★ V12: ADS-B as the landing (the map as the first view), and keep it running with nobody connected. */
+    fun setVibeServerLandingAdsb(land: Boolean, keepRunning: Boolean) { ensureLoaded(); nativeSetVibeServerLandingAdsb(land, keepRunning) }
+    private external fun nativeSetVibeServerLandingAdsb(land: Boolean, keepRunning: Boolean)
     /** ★ The radio's display name ("SDR display name"); "" = the name from the USB port. */
     fun setRadioLabel(name: String) { ensureLoaded(); nativeSetRadioLabel(name) }
     private external fun nativeSetRadioLabel(name: String)

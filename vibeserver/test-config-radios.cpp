@@ -786,6 +786,41 @@ int main() {
         ok(m == 10 && f == 10, "legacyFps: neither saved leaves the new defaults");
     }
 
+    /* ★★★ V12: ADS-B AS THE LANDING + KEEP IT RUNNING — every hop a per-radio field takes, because this file has lost
+     *  one at each of them before (dabRateBoost at the flatten, the band lists at the API writer, landingDab* twice). */
+    std::printf("\nADS-B landing and keep-running travel every hop\n");
+    {
+        ServerConfig s;
+        s.configured = true; s.adminPass = "Test123";
+        RadioConfig r; r.serial = "ADSB1"; r.driver = "rtlsdr"; r.enabled = r.configured = true;
+        r.landingAdsb = true; r.adsbKeepRunning = true;
+        RadioConfig q; q.serial = "PLAIN"; q.driver = "rtlsdr"; q.enabled = q.configured = true;
+        s.radios = { r, q };
+        ServerConfig back;
+        ok(fromJson(toJson(s), back, err) && back.radios.size() == 2, "the machine round-trips", err);
+        if (back.radios.size() == 2) {
+            ok(back.radios[0].landingAdsb && back.radios[0].adsbKeepRunning, "★ the radio file keeps landingAdsb + adsbKeepRunning");
+            ok(!back.radios[1].landingAdsb && !back.radios[1].adsbKeepRunning, "and another radio keeps neither (both OFF by default)");
+            const Config c = effectiveFor(back, back.radios[0]);
+            ok(c.landingAdsb && c.adsbKeepRunning, "★ the flatten carries both to the worker (effectiveFor)");
+            Config c2;
+            ok(fromJson(toJson(c), c2, err, false) && c2.landingAdsb && c2.adsbKeepRunning, "the flat Config round-trips both", err);
+            const Config p = effectiveFor(back, back.radios[1]);
+            ok(!p.landingAdsb && !p.adsbKeepRunning, "the plain radio's flatten has neither");
+        }
+        // ★ The old single-radio file becomes a one-radio machine with them intact (migrateSingleRadio).
+        ServerConfig m;
+        ok(fromJson(R"({"configured":true,"adminPass":"x","landingAdsb":true,"adsbKeepRunning":true})", m, err)
+           && m.radios.size() == 1 && m.radios[0].landingAdsb && m.radios[0].adsbKeepRunning,
+           "★ a single-radio file migrates with both", err);
+        // ★ A live patch (the radio process's own save) can switch keep-running off and leave the landing.
+        Config live; live.landingAdsb = true; live.adsbKeepRunning = true;
+        ok(fromJson(R"({"adsbKeepRunning":false})", live, err, false) && live.landingAdsb && !live.adsbKeepRunning,
+           "a patch turning keep-running off leaves the landing alone", err);
+        Config none;
+        ok(!none.landingAdsb && !none.adsbKeepRunning, "★ never default on");
+    }
+
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
     if (failures) std::printf("%d FAILED\n", failures);
     return failures ? 1 : 0;

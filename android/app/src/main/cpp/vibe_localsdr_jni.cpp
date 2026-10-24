@@ -1389,6 +1389,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLandingDab(JNIEnv*, jobject, jint ch, jint sid) {
     vibe::LocalSdrShim::setVibeServerLandingDab((int)ch, sid > 0 ? (uint32_t)sid : 0u);
 }
+/** ★★ V12: ADS-B as the landing, and keep it running when nobody is connected — see LocalSdrShim::setVibeServerLandingAdsb. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLandingAdsb(JNIEnv*, jobject, jboolean land, jboolean keep) {
+    vibe::LocalSdrShim::setVibeServerLandingAdsb(land == JNI_TRUE, keep == JNI_TRUE);
+}
 /** ★ The radio's display name ("SDR display name"); empty = the name from the USB port. */
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetRadioLabel(JNIEnv* env, jobject, jstring name) {

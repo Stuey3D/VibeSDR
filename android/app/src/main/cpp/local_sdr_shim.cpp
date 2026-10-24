@@ -1066,6 +1066,9 @@ static std::atomic<uint32_t> g_dabWantSid{0};
  *    refuses rather than trusting a config that says both. */
 static std::atomic<int>      g_vsLandingDabCh{-1};
 static std::atomic<uint32_t> g_vsLandingDabSid{0};
+// ★★ V12: ADS-B as the landing, and keep it running with nobody here — LocalSdrShim::setVibeServerLandingAdsb.
+static std::atomic<bool>     g_vsLandingAdsb{false};
+static std::atomic<bool>     g_vsAdsbKeep{false};
 /** ★ The owner's display name for this radio (Android's "SDR display name") — see setRadioLabel. */
 static std::mutex            g_vsRadioLabelMtx;
 static std::string           g_vsRadioLabel;
@@ -1514,6 +1517,7 @@ static std::atomic<bool>   g_dabLockHeld{false};
  *  right answer for free. */
 static bool vsDabCapable();
 static std::string vsAdsbWhyNot();   // "" = ADS-B can run on this receiver now — see its definition
+static std::string vsAdsbHwWhyNot(); // "" = this radio could run ADS-B with the right settings — the setup page's half
 static bool vsDabCapableHw();   // ★ the same, ignoring the owner's block — see its definition
 // ★ Forward-declared alongside vsDabCapable for the same reason: the DAB entry path refuses
 //   thousands of lines above the definition, and it needs to name WHICH restriction bit.
@@ -13039,6 +13043,74 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
     }
 
+    /** ★★ The owner's PLAIN landing (landingFreq/demodMode), applied to the shared dial — what the connect path does for a
+     *  new session, here for ADS-B's sake: entering from it makes it what EXIT ADS-B gives back. */
+    void landOnPlainLanding() {
+        const double hz = g_vsLandingHz.load();
+        std::string lm; { std::lock_guard<std::mutex> lk(g_vsLandingMtx); lm = g_vsLandingMode; }
+        if (!lm.empty() && lm != mode) { mode = lm; buildAudio(); }
+        if (hz > 0) retune(hz);
+    }
+    /** ★★★ DOES "KEEP ADS-B RUNNING WHEN NOBODY IS CONNECTED" HOLD THE IDLE RADIO NOW? The owner ticked it (only possible
+     *  with ADS-B as the landing) AND ADS-B can actually run here — a radio whose rate, lock or block rules it out falls
+     *  back to the ordinary idle behaviour (park, release, background decoding), so the tick box never strands a radio.
+     *  ★ One rule, read by every idle decider: armIdlePark, the housekeeping arm/fire, the RSP probe, bgTick. */
+    bool adsbKeepHolds() const {
+        if (!g_vsAdsbKeep.load(std::memory_order_relaxed) || frontDoorOnly || decoderOnly) return false;
+        return g_adsbMode.load(std::memory_order_relaxed) || vsAdsbWhyNot().empty();
+    }
+    double adsbKeepRetryAt_ = 0;
+    bool   adsbKeepLoggedWhy_ = false, adsbKeepStarted_ = false;
+    /** ★★★ KEEP ADS-B RUNNING (V12, Stuart 2026-10-24: "a tick box to keep it running when nobody is connected that way a
+     *  new connection instantly sees a list of planes and a full map"). Every two seconds on the housekeeping thread,
+     *  after bgTick: with nobody here and the radio not already in a whole-radio mode, take the radio back if it was
+     *  parked or released, put it on the owner's plain landing (EXIT ADS-B's fallback) and enter ADS-B through the same
+     *  internal entry a listener's button uses. At the server's start that is within one tick, so the table fills
+     *  before anyone has connected; after the last listener leaves (from DAB, from ordinary listening, or after their
+     *  own choice to exit ADS-B) it goes back the same way.
+     *  ★★ THE RATE CHANGE (the owner's switch, dabRateBoost) HAPPENS HERE, ONCE — a listener connecting to a radio already
+     *     in ADS-B changes nothing. ★ NEVER FIGHT: another program holding a released radio is retried once a minute. */
+    void adsbKeepTick() {
+        if (stopping.load() || restarting.load() || frontDoorOnly || decoderOnly) return;
+        if (!g_vsAdsbKeep.load(std::memory_order_relaxed)) { adsbKeepLoggedWhy_ = false; return; }
+        if (g_adsbMode.load(std::memory_order_relaxed) || g_dabMode.load(std::memory_order_relaxed)) return;
+        bool anyone;
+        { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
+        if (anyone) return;
+        const std::string why = vsAdsbWhyNot();
+        if (!why.empty()) {
+            if (!adsbKeepLoggedWhy_) {
+                adsbKeepLoggedWhy_ = true;
+                LOGI("[ADS-B] keep running is set, but ADS-B cannot run on this receiver now (%s) — the ordinary idle "
+                     "behaviour applies", why.c_str());
+            }
+            return;
+        }
+        adsbKeepLoggedWhy_ = false;
+        const double now = nowSecs();
+        if (now < adsbKeepRetryAt_) return;
+        adsbKeepRetryAt_ = now + 60.0;
+        if (idleParkDueAt.exchange(0.0) > 0.0) LOGI("[ADS-B] keep running — idle park cancelled");
+        if (radioReleased.load() || captureIdle.load()) resumeCaptureIdle(true);
+        if (radioReleased.load()) {
+            LOGI("[ADS-B] keep running: another program has the radio — trying again in 60 s");
+            return;
+        }
+        /* ★ The radio's last state is about to BE ADS-B, so a multiplex remembered from the last listener is not resumed
+         *  over it on the next arrival (the shared dial keeps what it was left on — and it was left in ADS-B). */
+        if (g_dabWantChannel.load(std::memory_order_relaxed) >= 0) {
+            g_dabWantChannel.store(-1, std::memory_order_relaxed);
+            g_dabWantSid.store(0, std::memory_order_relaxed);
+            vsPersist("{\"dabChannel\":-1,\"dabSid\":0}");
+        }
+        landOnPlainLanding();
+        LOGI("[ADS-B] keep running: nobody is connected (%s) — entering ADS-B so the next listener finds the aircraft "
+             "table warm", adsbKeepStarted_ ? "the last listener left" : "the server has started");
+        handleControl(nullptr, "{\"type\":\"adsb\",\"on\":1}");
+        if (g_adsbMode.load(std::memory_order_relaxed)) { adsbKeepStarted_ = true; adsbKeepRetryAt_ = 0; }
+        else LOGI("[ADS-B] keep running: the entry did not open — trying again in 60 s");
+    }
+
     /** From the DSP loop while in ADS-B: the report once a second, the gain rule every two. */
     void adsbTick() {
         const double t = nowSecs();
@@ -19299,6 +19371,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!noRadio) {
                 j += std::string(",\"dabHw\":") + (vsDabCapableHw() ? "true" : "false")
                    + ",\"dab\":" + (vsDabCapable() ? "true" : "false");
+                // ★★ V12: the ADS-B landing's two facts, the same shape — `adsbHw` hides the toggle, `adsbHwWhy` says why
+                { const std::string aw = vsAdsbHwWhyNot();
+                  j += std::string(",\"adsbHw\":") + (aw.empty() ? "true" : "false");
+                  if (!aw.empty()) j += ",\"adsbHwWhy\":\"" + dabEscape(aw) + "\""; }
                 std::map<int, std::string> heard;
                 { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx); dabEnsLoadLocked(); heard = g_dabEnsMem; }
                 j += ",\"dabBlocks\":[";
@@ -21925,14 +22001,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    `mode = "dab"` (see the per-client tune path: "dab" is not a demodulator). */
             const bool newSession = firstOfSession && landedSession != session;
             const bool firstEver  = firstOfSession && !anySessionYet.exchange(true);
-            const int  landDabCh  = g_vsLandingDabCh.load(std::memory_order_relaxed);
+            /* ★★★ V12: ADS-B AS THE LANDING — the same rules as a DAB landing, in the same places below, because it is
+             *  the same kind of thing: a whole-radio mode whose box IS the viewer. It beats a DAB landing (a radio lands
+             *  on one thing; the setup page offers one or the other), and only where ADS-B can run now — otherwise the
+             *  DAB or plain landing applies exactly as if it were not set. Already in ADS-B (kept running with nobody
+             *  here — adsbKeepTick) counts as landable: the newcomer simply joins the warm table. */
+            const bool adsbLand   = g_vsLandingAdsb.load(std::memory_order_relaxed)
+                                 && (g_adsbMode.load(std::memory_order_relaxed) || vsAdsbWhyNot().empty());
+            const int  landDabCh  = adsbLand ? -1 : g_vsLandingDabCh.load(std::memory_order_relaxed);
             // ★ Rule 0: the first listener since this server started, on a server with a landing.
             bool plainLandingSet;
             { std::lock_guard<std::mutex> lk(g_vsLandingMtx);
               plainLandingSet = g_vsLandingExplicit.load()
                              && (g_vsLandingHz.load() > 0 || !g_vsLandingMode.empty()); }
             const bool startLanding = firstEver && !adminOk.load() && !preTuned
-                                   && (landDabCh >= 0 || plainLandingSet);
+                                   && (landDabCh >= 0 || plainLandingSet || adsbLand);
             /* ★★★ A RADIO SET TO START IN DAB STARTS IN DAB — WHOEVER ARRIVES FIRST (2026-10-05).
              *  Stuart: "No server seems to honour the start in DAB mode." The owner's app carries the
              *  admin credential on EVERY socket once the password is saved, so on every one of his
@@ -21949,6 +22032,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     start, made at the first arrival: the radio's first state, not a move of anybody.
              *  ★ After the first arrival every exemption stands exactly as before. */
             const bool startOnDab = firstEver && landDabCh >= 0;
+            const bool startOnAdsb = firstEver && adsbLand;   // ★ the same "first state, not a move" — see startOnDab
             /* ★★ AND SAY SO WHEN THE START LANDING IS NOT EVEN CONSIDERED (2026-10-05). The RC14 fault
              *  left NO line at all — the block above decided nothing in silence because the app's own
              *  audio socket made the room look occupied — and "no log" was the whole evidence. Only
@@ -21977,8 +22061,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     LOGI("[DAB] landing station ignored — block index %d is not a Band III block", landDabCh);
                 else landOnDab = true;
             }
-            if (!landOnDab && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
-                && !g_dabMode.load(std::memory_order_relaxed)
+            bool landOnAdsb = adsbLand && newSession
+                           && (startOnAdsb || (!adminOk.load() && !preTuned && !sharedDialNow));
+            // ★ A radio already in ADS-B was not "left on a block" — its last state IS ADS-B (kept running)
+            if (!landOnDab && !landOnAdsb && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
+                && !g_dabMode.load(std::memory_order_relaxed) && !g_adsbMode.load(std::memory_order_relaxed)
                 && newSession) {
                 const int want = g_dabWantChannel.load(std::memory_order_relaxed);
                 const uint32_t wantSid = g_dabWantSid.load(std::memory_order_relaxed);
@@ -22008,12 +22095,38 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 }
             }
+            if (landOnAdsb) {
+                if (g_adsbMode.load(std::memory_order_relaxed)) {
+                    LOGI("[ADS-B] new session — the radio is already in ADS-B (kept running with nobody here), so the "
+                         "aircraft table is already warm");
+                } else {
+                    /* ★★ THE PLAIN LANDING FIRST, THEN ADS-B. adsbEnter saves what it found and EXIT ADS-B gives exactly
+                     *  that back, so placing the radio on landingFreq/demodMode before entering is what makes them the
+                     *  FALLBACK — EXIT goes to the owner's landing, not wherever the last listener left the dial. */
+                    landOnPlainLanding();
+                    LOGI("[ADS-B] new session — landing in ADS-B (the owner's landing; EXIT ADS-B goes to %.3f kHz %s)",
+                         audioFreq.load() / 1e3, mode.c_str());
+                    handleControl(sock, "{\"type\":\"adsb\",\"on\":1}");
+                }
+                if (!g_adsbMode.load(std::memory_order_relaxed)) {
+                    LOGI("[ADS-B] the landing would not open — falling back to the plain landing");
+                    landOnAdsb = false;
+                } else {
+                    landedSession = session;
+                    // ★ Same bookkeeping as the plain landing — see the loopback warning there.
+                    if (sock) {
+                        const std::string pa = sock->peerAddress();
+                        if (pa == "127.0.0.1" || pa == "::1" || pa.rfind("127.", 0) == 0)
+                            g_vsLoopbackSessions.fetch_add(1);
+                    }
+                }
+            }
             if (sharedDialNow && firstOfSession && landedSession != session && !startLanding)
                 LOGI("shared dial — landing skipped, the radio keeps the dial it was left on");
             /* ★ Rule 0 reaches the plain landing too: on a shared dial the first listener since the start
              *   is put on it (the capture usually already sits there — the server starts on it — but a
              *   scan or a remembered multiplex may have moved the radio before anyone arrived). */
-            if (!landOnDab && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
+            if (!landOnDab && !landOnAdsb && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
                 && (!sharedDialNow || startLanding)) {
                 landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from
@@ -22731,8 +22844,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 dabRestore();
             }
             if (stillEmpty && !stopping.load() && g_adsbMode.load(std::memory_order_relaxed)) {
-                LOGI("[ADS-B] last listener left — the receiver goes back to where it was");
-                adsbLeave(false);
+                // ★★ V12: unless the owner keeps ADS-B running with nobody here — then it stays, table warm (adsbKeepTick)
+                if (adsbKeepHolds()) LOGI("[ADS-B] last listener left — staying in ADS-B (kept running when nobody is connected)");
+                else {
+                    LOGI("[ADS-B] last listener left — the receiver goes back to where it was");
+                    adsbLeave(false);
+                }
             }
             if (stillEmpty && !stopping.load()) armIdlePark();
             else LOGI("not parking — a new listener arrived while this socket was closing");
@@ -25173,7 +25290,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
         bool anyone;
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
-        const bool can = cfg.on && !cfg.profiles.empty() && !useIcom() && !g_dabMode.load(std::memory_order_relaxed);
+        const bool keepAdsb = adsbKeepHolds();
+        const bool can = cfg.on && !cfg.profiles.empty() && !useIcom() && !g_dabMode.load(std::memory_order_relaxed) && !keepAdsb;
         const int want = can ? vibe::bg::activeProfile(cfg, vsBgUtcMinute()) : -1;
         const double now = nowSecs();
         std::lock_guard<std::mutex> op(bgOpMtx_);
@@ -25181,7 +25299,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string state, why;
         double startsIn = -1, retryIn = -1;
         if (!cfg.on || cfg.profiles.empty()) state = "off";
-        else if (!can) { state = "off"; why = useIcom() ? "not on an Icom radio" : "not while the radio is on DAB"; }
+        else if (!can) { state = "off"; why = useIcom() ? "not on an Icom radio"
+                                             : keepAdsb ? "ADS-B is kept running on this radio when nobody is connected"
+                                             : "not while the radio is on DAB"; }
         else if (want < 0 && !active) state = "idle";
         else if (!active && radioReleased.load() && bgNotBefore_ > now) { state = "busy"; retryIn = bgNotBefore_ - now; }
         else if (bgLocked()) state = active ? "running" : "waiting";
@@ -25208,7 +25328,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (stopping.load() || frontDoorOnly || decoderOnly) return;
         vibe::bg::Config cfg;
         { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
-        const bool can = cfg.on && !cfg.profiles.empty() && !useIcom() && !g_dabMode.load(std::memory_order_relaxed);
+        /* ★★★ KEPT-RUNNING ADS-B OWNS THE IDLE RADIO, NOT BACKGROUND DECODING (V12, 2026-10-24). Both want the radio when
+         *  nobody is here, and they cannot share it: ADS-B takes the whole capture on 1090 MHz, where no profile's VFO can
+         *  be. The owner who ticked "keep ADS-B running" has said what the idle radio is FOR, more specifically than a
+         *  profile does, and the setup page greys the profiles for that radio and says so. "switched off" below gives the
+         *  dial back first, then adsbKeepTick enters ADS-B. */
+        const bool can = cfg.on && !cfg.profiles.empty() && !useIcom() && !g_dabMode.load(std::memory_order_relaxed)
+                      && !adsbKeepHolds();
         bool anyone;
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
         const int want = can ? vibe::bg::activeProfile(cfg, vsBgUtcMinute()) : -1;
@@ -25309,6 +25435,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void armIdlePark() {
         // ★★ V12: not while background decoding is due or running — see bgWanted_.
         if (bgWanted_.load()) return;
+        // ★★ V12: nor while ADS-B is kept running with nobody here — parking would empty the warm table (adsbKeepHolds).
+        if (adsbKeepHolds()) return;
         // ★ Applied here rather than when the park FIRES: the radio may be released or paused by
         //   then, and a gain written to a stopped device is a gain nobody applied. The grace
         //   period is about not disturbing a reload — and a reload does not care what the gain is
@@ -26584,6 +26712,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
                 // ── ★★ V12: background decoding — before the park, which it holds off while a profile is due ──
                 bgTick();
+                // ── ★★ V12: ADS-B kept running with nobody here — after bgTick, which has given the dial back by now ──
+                adsbKeepTick();
 
                 // ── Deferred idle park (see armIdlePark / g_vsIdleGraceSec) ──────────────
                 // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have
@@ -26608,6 +26738,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //    something that works"). The COST is real and is now stated on the toggle that
                 //    chooses it, which is where an owner can weigh it.
                 if (idleParkDueAt.load() == 0.0 && !captureIdle.load() && !radioReleased.load() && !bgWanted_.load()
+                    && !adsbKeepHolds()
                     && !(g_vsProvidesSpectrogram.load() && !g_vsReleaseWhenIdle.load())) {
                     bool empty;
                     { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
@@ -26631,7 +26762,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   settling?", and two readers of one rule is how half-applied fixes ship. */
                     const bool settling = useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 6
                                           && !g_vibeAgcRspOn.load(std::memory_order_relaxed);
-                    if (!empty || bgWanted_.load()) { idleParkDueAt.store(0.0); }
+                    if (!empty || bgWanted_.load() || adsbKeepHolds()) { idleParkDueAt.store(0.0); }
                     else if (settling) { /* hold the deadline open and re-check next tick */ }
                     else if (g_vsReleaseWhenIdle.load()) {
                         // ★★★ RELEASE, NOT PARK — and note this bypasses the shared-receiver rule
@@ -26677,7 +26808,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
                         // ★★ V12: and not when background decoding is due or running — it may have started during the
                         //    hold (it took the radio back), and releasing it then would cut the decoders off (Lenovo, beta2).
-                        if (empty && !bgWanted_.load()) {
+                        if (empty && !bgWanted_.load() && !adsbKeepHolds()) {
                             LOGI("RSP keepalive: probe done — releasing again");
                             LocalSdrShim::instance().releaseRadio();
                         }
@@ -29521,6 +29652,23 @@ static bool vsDabDecoderAvailable() {
  *      condition, never an action: below 2.4 MS/s a 0.5 µs pulse can split evenly across two samples and both
  *      halves of a bit look alike (on Stuart's sky, the same 20 s: 2.048 MS/s heard 8 500 messages, 2.4 MS/s
  *      32 600, 3.2 MS/s 38 900 — test-adsb and memory adsb_v12). */
+/** ★★ V12: COULD THIS RADIO DO ADS-B IF ITS OWNER'S SETTINGS ALLOWED? The setup page needs it apart from
+ *  vsAdsbWhyNot, exactly as DAB's landing needs vsDabCapableHw: "cannot" hides the ADS-B landing toggle (AGENTS.md),
+ *  while a block or a rate the owner can change is said in words beside it. Ignores the owner's block, the running
+ *  rate and the rate switch — the page reads those from its own form. */
+static std::string vsAdsbHwWhyNot() {
+    if (g_icomOn.load()) return "this radio is a transceiver's audio, not a wideband capture";
+    if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && g_vsMaxUsers.load(std::memory_order_relaxed) > 1)
+        return "this receiver's centre frequency is locked by its owner";
+    const vibebands::Ranges t = vsTunableRanges();
+    bool reach = false;
+    for (const auto& x : t) if (double(x.lo) <= 1089.0e6 && double(x.hi) >= 1091.0e6) { reach = true; break; }
+    if (!reach) return "this radio cannot tune to 1090 MHz";
+    if (g_vsHwMaxRate.load(std::memory_order_relaxed) == 0) LocalSdrShim::instance().maxSampleRateHz();
+    const uint32_t hw = g_vsHwMaxRate.load(std::memory_order_relaxed);
+    if (hw > 0 && double(hw) < vibeadsb::Service::kMinRateHz) return "this radio cannot capture at 2.4 MS/s, which ADS-B needs";
+    return {};
+}
 static std::string vsAdsbWhyNot() {
     if (vsModeBlocked("adsb")) return "the server owner has switched ADS-B off on this receiver";
     if (g_icomOn.load()) return "this radio is a transceiver's audio, not a wideband capture";
@@ -30192,6 +30340,15 @@ void LocalSdrShim::setVibeServerLandingDab(int ch, uint32_t sid) {
     g_vsLandingDabSid.store(ok ? sid : 0, std::memory_order_relaxed);
     if (ok) LOGI("[DAB] landing station: block %s, service 0x%X", vibedab::kBandIII[ch].name, unsigned(sid));
     else if (ch >= 0) LOGI("[DAB] landing station ignored — block index %d is not a Band III block", ch);
+}
+void LocalSdrShim::setVibeServerLandingAdsb(bool land, bool keepRunning) {
+    // ★ Keep-running is a refinement of the landing, never on its own: the page shows it only beneath the choice.
+    const bool keep = land && keepRunning;
+    const bool was = g_vsLandingAdsb.exchange(land, std::memory_order_relaxed);
+    const bool wasKeep = g_vsAdsbKeep.exchange(keep, std::memory_order_relaxed);
+    if (was != land || wasKeep != keep || land)
+        LOGI("[ADS-B] landing: %s%s", land ? "a new listener lands in ADS-B" : "off",
+             keep ? " — and it keeps running when nobody is connected" : "");
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
 void LocalSdrShim::setNativeSetup(bool on) { g_vsNativeSetup.store(on); }

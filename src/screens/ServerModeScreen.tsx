@@ -218,6 +218,7 @@ const K = {
   proxies: 'vs_proxies', radioUse: 'vs_radiouse', oneRadioPerIp: 'vs_oneradioperip',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
   landingDabCh: 'vs_landingdabch', landingDabSid: 'vs_landingdabsid', landingDabSvc: 'vs_landingdabsvc',
+  landingAdsb: 'vs_landingadsb', adsbKeep: 'vs_adsbkeep',
   radioLabel: 'vs_radiolabel',
   /** ★ An Icom's five settings (icomPhoneFields), one JSON value — see the ICOM TRANSCEIVER card. */
   icom: 'vs_icom',
@@ -554,6 +555,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [landingDabCh, setLandingDabCh]   = useState(-1);
   const [landingDabSid, setLandingDabSid] = useState(0);
   const [landingDabSvc, setLandingDabSvc] = useState('');
+  /** ★★ V12: ADS-B AS THE LANDING (Stuart, 2026-10-24) — a new listener goes straight to the aircraft map; the frequency
+   *  above is EXIT ADS-B's fallback. adsbKeep (only beneath it, off by default): the radio sits in ADS-B whenever nobody
+   *  is connected, so the list is warm for the next one — continuous CPU, and the idle radio is ADS-B's. */
+  const [landingAdsb, setLandingAdsb] = useState(false);
+  const [adsbKeep, setAdsbKeep]       = useState(false);
   const [dabBlocks, setDabBlocks]         = useState<DabBlock[]>([]);
   const [dabStations, setDabStations]     = useState<Record<number, { sid: number; label: string }[]>>({});
   const [dabScanBusy, setDabScanBusy]     = useState(false);
@@ -1054,6 +1060,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             if (ch !== '' && Number.isFinite(Number(ch))) setLandingDabCh(Number(ch)); }
           setLandingDabSid(Number(s(K.landingDabSid)) || 0);
           setLandingDabSvc(s(K.landingDabSvc));
+          setLandingAdsb(g(K.landingAdsb) === '1'); setAdsbKeep(g(K.adsbKeep) === '1');
           { const ru = g(K.radioUse); if (ru === 'locked' || ru === 'single') setRadioUse(ru); }
           { const lhz = g(K.landingHz); if (lhz != null && Number.isFinite(Number(lhz))) setLandingHz(Number(lhz)); }
           { const lmd = g(K.landingMode); if (lmd) setLandingMode(lmd); }
@@ -1549,7 +1556,17 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const dabLandCapable = !!radio && radio.driver !== 'airspyhf' && !isIcom && dabBlocks.length > 0
     && !(advanced && radioUseEff === 'locked' && maxUsers > 1)
     && (rate === 0 || rate >= 2_048_000 || dabRateBoost);
-  const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes);
+  /** ★★ V12: the ADS-B landing, by the same rule as the engine's vsAdsbWhyNot — 1090 MHz in reach (not an HF+, not an
+   *   Icom), not a locked centre with its own VFOs, 2.4 MS/s or the rate switch, and ADS-B not switched off. Hidden
+   *   otherwise (AGENTS.md); the engine checks again at the moment of landing and falls back to the frequency. */
+  const adsbBlockedNow = blockedModes.split(/[,; ]/).some((m) => m.trim().toLowerCase() === 'adsb');
+  const adsbLandOffered = !!radio && radio.driver !== 'airspyhf' && !isIcom && !adsbBlockedNow
+    && !(advanced && radioUseEff === 'locked' && maxUsers > 1)
+    && (rate === 0 || rate >= 2_400_000 || dabRateBoost);
+  const adsbLandOn = adsbLandOffered && landingAdsb;
+  const adsbKeepOn = adsbLandOn && adsbKeep;
+  // ★ One landing at a time: with ADS-B chosen the DAB toggle steps aside (the engine lets ADS-B win the same way).
+  const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes) && !adsbLandOn;
   const dabLandOn = dabLandOffered && landingDabCh >= 0 && landingDabCh < dabBlocks.length;
   const runDabScan = async () => {
     const ch = landingDabCh;
@@ -1631,6 +1648,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     limitSoft, askFirst, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters,
+    landingAdsb, adsbKeep,
   };
 
   /* ★★★ THE CONFIG THE SERVER STARTS WITH, BUILT IN ONE PLACE (2026-09-29). Start sends it, and so does
@@ -1669,6 +1687,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       ? { landingDabChannel: -1, landingDabSid: 0, landingDabService: '' }
       : { landingDabChannel: live.current.landingDabCh, landingDabSid: live.current.landingDabSid,
           landingDabService: live.current.landingDabSvc }),
+    // ★★ V12 — keep-running never without the landing; the engine ignores both where ADS-B cannot run.
+    landingAdsb: !!live.current.landingAdsb,
+    adsbKeepRunning: !!live.current.landingAdsb && !!live.current.adsbKeep,
     radioLabel: live.current.radioLabel,
     /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
      *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
@@ -1793,6 +1814,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.oneRadioPerIp, oneRadioPerIp ? '1' : '0'],
       [K.landingDabCh, String(live.current.landingDabCh)], [K.landingDabSid, String(live.current.landingDabSid)],
       [K.landingDabSvc, live.current.landingDabSvc], [K.radioLabel, live.current.radioLabel],
+      [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -2897,6 +2919,50 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 frequency and demod selector have a use DAB station as landing station? tap yes and then
                 a block selector pops up and you choose a block … then next to that a quick station
                 scan and then a selection box for the station". Only on a radio that can do DAB. */}
+            {/* ★★ V12: ADS-B AS THE LANDING, and the keep-running box beneath it (Stuart, 2026-10-24: "a new connection
+                instantly sees a list of planes and a full map"). Only where ADS-B can run on this radio. */}
+            {adsbLandOffered && (
+              <View style={[styles.card, { borderColor: adsbLandOn ? C.keySelBorder : C.border, marginBottom: 8 }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>
+                    Use ADS-B (the aircraft map) as the landing page?
+                  </Text>
+                  <Switch value={adsbLandOn}
+                    onValueChange={(v) => {
+                      setLandingAdsb(v); AsyncStorage.setItem(K.landingAdsb, v ? '1' : '0');
+                      if (v) setDabLanding(-1, 0, '');   // ★ one landing at a time
+                      else { setAdsbKeep(false); AsyncStorage.setItem(K.adsbKeep, '0'); }
+                    }} />
+                </View>
+                {adsbLandOn && (<>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                    A new listener goes straight to the full-screen map of aircraft. EXIT ADS-B takes them to the
+                    frequency below.
+                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+                    <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>
+                      Keep ADS-B running when nobody is connected
+                    </Text>
+                    <Switch value={adsbKeepOn}
+                      onValueChange={(v) => { setAdsbKeep(v); AsyncStorage.setItem(K.adsbKeep, v ? '1' : '0'); }} />
+                  </View>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                    A new listener sees every aircraft at once, instead of a map that fills over the next minute. It
+                    costs CPU (and battery) all the time, and the radio never idles or powers down while it is on.
+                  </Text>
+                </>)}
+              </View>
+            )}
+            {!adsbLandOffered && landingAdsb && !isIcom && (
+              <Text style={[styles.hint, { color: C.warn, fontFamily: F, marginBottom: 8 }]}>
+                {`ADS-B cannot run on this radio with these settings (it needs 2.4 MS/s, or the rate switch), so it will not be the landing \u2014 listeners will start on ${plainLandingWords()} instead.`}
+              </Text>
+            )}
+            {adsbLandOn && (
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 6 }]}>
+                EXIT ADS-B goes here, and listeners start here whenever ADS-B cannot be opened:
+              </Text>
+            )}
             {dabLandOffered && (
               <View style={[styles.card, { borderColor: dabLandOn ? C.keySelBorder : C.border, marginBottom: 8 }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>

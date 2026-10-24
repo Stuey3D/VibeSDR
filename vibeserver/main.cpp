@@ -2018,6 +2018,8 @@ int main(int argc, char** argv) {
     //     moment of landing if the radio cannot do DAB. See the precedence note in the accept path.
     LocalSdrShim::setVibeServerLandingDab(g_runtimeConfig.landingDabChannel,
                                           uint32_t(std::max(0, g_runtimeConfig.landingDabSid)));
+    // ★★ V12: ADS-B as the landing, and "keep it running when nobody is connected" — see Config::landingAdsb.
+    LocalSdrShim::setVibeServerLandingAdsb(g_runtimeConfig.landingAdsb, g_runtimeConfig.adsbKeepRunning);
 
     // ── ★★★ mDNS: ADVERTISE THE NAME THE OWNER CHOSE ────────────────────────────────────────
     // This was STORED and never acted on — main.cpp never called startMdns at all, so the Linux
@@ -2243,6 +2245,7 @@ int main(int argc, char** argv) {
                 r.demodMode = c.demodMode; r.landingFreq = c.landingFreq;
                 r.landingDabChannel = c.landingDabChannel; r.landingDabSid = c.landingDabSid;
                 r.landingDabService = c.landingDabService;
+                r.landingAdsb = c.landingAdsb; r.adsbKeepRunning = c.adsbKeepRunning;
                 r.users = c.users; r.maxBw = c.maxBw; r.maxFps = c.maxFps; r.fftRate = c.fftRate;
                 r.uncompressed = c.uncompressed;
                 r.releaseWhenIdle = c.releaseWhenIdle;
@@ -2471,6 +2474,7 @@ int main(int argc, char** argv) {
                     LocalSdrShim::setVibeServerLandingExplicit(g_runtimeConfig.landingFreq > 0);
                     LocalSdrShim::setVibeServerLandingDab(g_runtimeConfig.landingDabChannel,
                                                           uint32_t(std::max(0, g_runtimeConfig.landingDabSid)));
+                    LocalSdrShim::setVibeServerLandingAdsb(g_runtimeConfig.landingAdsb, g_runtimeConfig.adsbKeepRunning);
                     std::printf("VibeServer: gain limits/rest gain/AGC lock applied live "
                                 "(rest=%d, agcLock=%d)\n", g_runtimeConfig.restGain,
                                 g_runtimeConfig.agcLock);
@@ -3251,6 +3255,7 @@ int main(int argc, char** argv) {
             r.dabSid = next.dabSid;           // ...and the station on it, so the resume plays it
             r.landingDabChannel = next.landingDabChannel; r.landingDabSid = next.landingDabSid;
             r.landingDabService = next.landingDabService;
+            r.landingAdsb = next.landingAdsb; r.adsbKeepRunning = next.adsbKeepRunning;
             r.users = next.users; r.maxBw = next.maxBw; r.maxFps = next.maxFps;
             r.fftRate = next.fftRate; r.uncompressed = next.uncompressed;
             r.releaseWhenIdle = next.releaseWhenIdle;
@@ -4595,6 +4600,21 @@ int main(int argc, char** argv) {
                                 std::string be;
                                 LocalSdrShim::setBackgroundDecoding(mine->bgDecode, be);
                                 std::printf("VibeServer: background decoding re-read from %s\n", g_configPath.c_str());
+                            }
+                            /* ★★ V12 and the ADS-B landing / keep-running, for the same reason: a front-door save must
+                             *  reach the process that owns the radio. Keep-running owns the idle radio, so a change must
+                             *  not wait for a restart — ticked, the radio is in ADS-B within one housekeeping tick. */
+                            if (mine) {
+                                static int lastAdsb = -1;
+                                const int a = (mine->landingAdsb ? 1 : 0) | (mine->adsbKeepRunning ? 2 : 0);
+                                if (a != lastAdsb) {
+                                    if (lastAdsb >= 0) {
+                                        LocalSdrShim::setVibeServerLandingAdsb(mine->landingAdsb, mine->adsbKeepRunning);
+                                        std::printf("VibeServer: ADS-B landing re-read from %s (land %d, keep running %d)\n",
+                                                    g_configPath.c_str(), mine->landingAdsb ? 1 : 0, mine->adsbKeepRunning ? 1 : 0);
+                                    }
+                                    lastAdsb = a;
+                                }
                             }
                             LocalSdrShim::setGalleryRedact(gallerySerials(fresh));
                             const std::string gk = std::to_string(fresh.galleryMb) + (fresh.galleryPublic ? "p" : "-") + (fresh.gallerySaveLive ? "l" : "-");

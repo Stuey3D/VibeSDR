@@ -302,6 +302,7 @@ std::string toJson(const Config& c) {
     // ★ The DAB landing station — see Config::landingDabChannel.
     N("landingDabChannel", c.landingDabChannel); N("landingDabSid", c.landingDabSid);
     S("landingDabService", c.landingDabService);
+    B("landingAdsb", c.landingAdsb); B("adsbKeepRunning", c.adsbKeepRunning);   // ★ V12 — see Config::landingAdsb
     N("users", c.users); N("maxBw", c.maxBw); N("maxFps", c.maxFps); N("fftRate", c.fftRate);
     N("uncompressed", c.uncompressed);
     B("releaseWhenIdle", c.releaseWhenIdle);
@@ -385,6 +386,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     { double v; if (getNum(s, "landingDabChannel", v)) c.landingDabChannel = (int)v;
                 if (getNum(s, "landingDabSid", v))     c.landingDabSid = (int)v; }
     getStr(s, "landingDabService", c.landingDabService);
+    getBool(s, "landingAdsb", c.landingAdsb); getBool(s, "adsbKeepRunning", c.adsbKeepRunning);
     if (getNum(s, "users", d))       c.users = (int)d;
     if (getNum(s, "maxBw", d))       c.maxBw = d;
     { const bool hm = getNum(s, "maxFps", d);  if (hm) c.maxFps = d;
@@ -558,6 +560,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     // ★ The DAB landing station — read AND written (radioToJson), the pair this file keeps losing.
     I("landingDabChannel", r.landingDabChannel); I("landingDabSid", r.landingDabSid);
     S("landingDabService", r.landingDabService);
+    B("landingAdsb", r.landingAdsb); B("adsbKeepRunning", r.adsbKeepRunning);   // ★ V12 — read AND written
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     S("gainLimits", r.gainLimits); S("ifBwLimits", r.ifBwLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
     // ★ The three that turn a ceiling into a setting — added to BOTH writers, see the note below.
@@ -630,6 +633,7 @@ std::string radioToJson(const RadioConfig& r) {
     N("dabSid", r.dabSid);
     N("landingDabChannel", r.landingDabChannel); N("landingDabSid", r.landingDabSid);
     S("landingDabService", r.landingDabService);
+    B("landingAdsb", r.landingAdsb); B("adsbKeepRunning", r.adsbKeepRunning);   // ★ V12 — see the reader
     // ★★★ THE BAND LISTS MUST TRAVEL. There are TWO radio writers — one for the file and one for
     //     the config API — and only the file one had these. The setup page reads the API, so the
     //     lists it showed were always empty and the ones it saved were always blank: an owner set
@@ -728,6 +732,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.dabChannel = one.dabChannel; r.dabSid = one.dabSid;
     r.landingDabChannel = one.landingDabChannel; r.landingDabSid = one.landingDabSid;
     r.landingDabService = one.landingDabService;
+    r.landingAdsb = one.landingAdsb; r.adsbKeepRunning = one.adsbKeepRunning;
     r.users = one.users; r.maxBw = one.maxBw; r.maxFps = one.maxFps; r.fftRate = one.fftRate;
     r.uncompressed = one.uncompressed;
     r.releaseWhenIdle = one.releaseWhenIdle;
@@ -1200,6 +1205,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.dabChannel = r.dabChannel; c.dabSid = r.dabSid;
     c.landingDabChannel = r.landingDabChannel; c.landingDabSid = r.landingDabSid;
     c.landingDabService = r.landingDabService;
+    c.landingAdsb = r.landingAdsb; c.adsbKeepRunning = r.adsbKeepRunning;   // ★ V12 — or the worker never sees them
     // ★★★ AN UNLOCKED RADIO STARTS WHERE ITS LISTENERS WILL. A locked radio's centre is the
     //     owner's fixed window and must not move. An unlocked one has no window to protect, and
     //     leaving the capture on `freq` meant the radio sat on a band nobody was going to use —
