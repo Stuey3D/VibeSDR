@@ -1225,8 +1225,12 @@ static std::string vsAirImageReply(const std::vector<uint8_t>& bytes, const std:
     const std::string hdrs = std::string("Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: ETag\r\n"
                                          "X-Content-Type-Options: nosniff\r\nCache-Control: ")
                            + (immutable ? "public, max-age=31536000, immutable" : cache) + "\r\nETag: " + etag + "\r\nConnection: close\r\n";
+    /* ★★ THE 304 CARRIES ITS Content-Type TOO (Stuart, 2026-10-25, Safari: operator logos a broken "?", flickering, while
+     *  the same files fetched fine). Every reply here is `nosniff`, and the list and card re-create their <img>s, so
+     *  Safari revalidates — and a 304 with nosniff and no type is a response it may refuse to draw. RFC 9110 lets a 304
+     *  repeat the representation's headers; sending the type costs one line. */
     if (!ifNoneMatch.empty() && ifNoneMatch.find(etag) != std::string::npos)
-        return "HTTP/1.1 304 Not Modified\r\n" + hdrs + "\r\n";
+        return "HTTP/1.1 304 Not Modified\r\nContent-Type: " + mime + "\r\n" + hdrs + "\r\n";
     return "HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\n" + hdrs + "Content-Length: " + std::to_string(bytes.size()) + "\r\n\r\n"
          + std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
