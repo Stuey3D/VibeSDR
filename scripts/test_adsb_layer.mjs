@@ -238,6 +238,8 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
     ok(blocks(t) === blocks(lay) && !!blocks(lay), `${rel} uses the layer's military address blocks`);
     ok(calls(t) === calls(lay) && !!calls(lay), `${rel} uses the layer's military callsigns`);
   }
+  // ★ Stuart, 2026-10-24: the key says "Military", not the hedged "military (where it can be told)".
+  ok(/legRow\(TONE\.military, '\\u2708', 'Military'\)/.test(lay) && !/can be told/.test(lay), 'the legend row reads "Military"');
 }
 
 // ── the live list's corner: the cheaper inset, and the camera kept clear of it ──

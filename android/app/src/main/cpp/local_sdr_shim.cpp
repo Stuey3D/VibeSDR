@@ -1420,10 +1420,8 @@ static std::atomic<bool>   g_dabRateBoost{false};
 static vibe::RateGuard     g_rateGuard;
 /** ★ Set when boot() found a crash before the persist handler existed — see setConfigPersistHandler. */
 static std::atomic<bool>   g_rateGuardUnpersisted{false};
-/* ★★ ADS-B AT 3.2 MS/s ON AN RTL — "extreme" (Stuart, 2026-10-24): never the default, only with the rate switch above,
- *  and only for the person after the last aircraft. On his sky the same 20 s held 19 % more messages at 3.2 than at 2.4
- *  (memory adsb_v12), but an RTL may drop samples there, costs more CPU and runs hotter. Other radios ignore it. */
-static std::atomic<bool>   g_adsbExtreme{false};
+/* ✗ ADS-B AT 3.2 MS/s ON AN RTL ("extreme") was offered in beta9/10 and REMOVED (Stuart, 2026-10-24): on the Pi 2 it
+ *  dropped samples and heard far fewer aircraft, not more. An RTL runs ADS-B at 2.4 MS/s; an RSP at 3 MS/s. */
 /** Set by dabRestore(); consumed by the DSP loop once any pending rebuild has landed. */
 static std::atomic<bool>   g_dabRetuneAfterRebuild{false};
 
@@ -12927,13 +12925,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     /** The rate ADS-B runs at. ★ Without the owner's switch: whatever the radio already runs (vsAdsbWhyNot has made sure
      *  it is enough). With it: the current rate if that is already 2.4 MS/s or more (Stuart's RSP1A at 3 MS/s — no
-     *  change, no rebuild), else the radio's smallest rate at or above 2.4 MS/s, an RSP taking 3 MS/s; an RTL with
-     *  "extreme" set takes 3.2 MS/s whatever it was on. */
+     *  change, no rebuild), else the radio's smallest rate at or above 2.4 MS/s, an RSP taking 3 MS/s. */
     double adsbTargetRate() {
         const double cur = sampleRate;
         if (!g_dabRateBoost.load(std::memory_order_relaxed)) return cur;
-        const bool rtl = dev != nullptr || useTcp();
-        if (rtl && g_adsbExtreme.load(std::memory_order_relaxed)) return 3.2e6;
         if (cur >= vibeadsb::Service::kMinRateHz) return cur;
         if (useSdrplay()) return 3.0e6;
         double best = 0;
@@ -16477,16 +16472,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             double hz = 0;
             if (jsonNum(msg, "hz", hz) && hz > 0)
                 handleControl(sock, "{\"type\":\"tune\",\"frequency\":" + std::to_string((long long)hz) + "}");
-            return;
-        }
-        if (type == "adsbExtreme") {
-            double v = 0;
-            if (jsonNum(msg, "on", v) && adminGate("ADS-B at 3.2 MS/s")) {
-                g_adsbExtreme.store(v != 0, std::memory_order_relaxed);
-                vsPersist(std::string("{\"adsbExtreme\":") + (v != 0 ? "1" : "0") + "}");
-                LOGI("ADS-B 3.2 MS/s (extreme, RTL): %s", v != 0 ? "ON" : "off");
-                sendHwInfo(sock);
-            }
             return;
         }
         if (type == "dabBoost") {
@@ -29502,7 +29487,6 @@ void LocalSdrShim::setRateGuardBase(const std::string& base) {
 }
 std::string LocalSdrShim::rateGuardJson() { return g_rateGuard.json(); }
 void LocalSdrShim::rateGuardClear() { g_rateGuard.clear(); }
-void LocalSdrShim::setVibeServerAdsbExtreme(bool on) { g_adsbExtreme.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerNbWide(int mode) {
     g_vsNbWide.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
     LOGI("wide impulse blanker: %s", mode == 0 ? "off" : mode == 2 ? "on" : "auto (below 30 MHz)");
@@ -29798,8 +29782,7 @@ static std::string vsTunableJson() {
         const bool useful = hwMax >= vibedab::kCanonicalRateHz && eff < vibedab::kCanonicalRateHz;
         j += std::string(",\"dabBoost\":") + (g_dabRateBoost.load(std::memory_order_relaxed) ? "true" : "false");
         j += std::string(",\"dabBoostUseful\":") + (useful ? "true" : "false");
-        // ★ The same switch serves ADS-B (and any later mode with a rate of its own); 3.2 MS/s is offered for RTLs only
-        j += std::string(",\"adsbExtreme\":") + (g_adsbExtreme.load(std::memory_order_relaxed) ? "true" : "false");
+        // ★ The same switch serves ADS-B (and any later mode with a rate of its own)
     }
     /* ★★★ DIRECT SAMPLING, SAID OUT LOUD (Stuart, 2026-09-20). Two different questions, both answered here:
      *  ★★ `autoDs` — does this receiver reach HF BY ITSELF? On a Nooelec and its kin, everything below the

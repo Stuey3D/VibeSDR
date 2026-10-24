@@ -1619,18 +1619,6 @@ body.wifiFirst .wifiFirstOnly { display: block; }
          one gets it even when the span above is narrower or locked, and the radio goes back to this span when the
          mode ends. Unticked, a mode is offered only when this span is already enough. Worth it on a small machine
          run at 1.024 MS/s to keep FM light.</div>
-      <!-- ★★ ADS-B AT 3.2 MS/s — AN RTL ONLY, NEVER THE DEFAULT (Stuart: "for RTLs an option to boost to 3.2 MS/s
-           with the warnings … never by default but as an option for the person after the extreme performance").
-           Measured on his sky: 19 % more messages than 2.4. HIDDEN on every other radio (AGENTS.md — a control
-           that only works on one radio is not drawn on the others: an RSP or HackRF takes 3 MS/s anyway), and
-           greyed until the switch above is ticked, because without it ADS-B never changes the rate at all. -->
-      <div id="adsbExtremeBox" class="hide">
-      <label class="row" id="adsbExtremeRow" style="gap:8px;margin-top:10px;margin-left:24px">
-        <input type="checkbox" id="adsbExtreme" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>ADS-B at 3.2 MS/s (extreme)</span></label>
-      <div class="note" id="adsbExtremeNote" style="margin-left:24px">May hear more aircraft, but needs more CPU, an RTL
-         may drop samples at 3.2 MS/s and the dongle runs hotter. Needs the switch above.</div>
-      </div>
       <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
            the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
            (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
@@ -3569,8 +3557,8 @@ function rspCaps(hw, r) {
  *  only writes this radio's rate on a change — see the "change" handler). Rebuilt per radio tab, so one radio's odd value
  *  never appears on another's menu. ★ The rate shown is the one the server RUNS: fftRate under the maxFps ceiling;
  *  both unset (0) is the server default — Default · 10 since 2026-10-20 (it was Full · 20). */
-/** ★★ The rate switch ("change the sample rate when a mode needs it", config key dabRateBoost) and, beneath it,
- *  the RTL-only ADS-B 3.2 MS/s option. Its own function so scripts/test-setup-mode-rate.mjs runs the real thing.
+/** ★★ The rate switch ("change the sample rate when a mode needs it", config key dabRateBoost).
+ *  Its own function so scripts/test-setup-mode-rate.mjs runs the real thing.
  *  ★ `can`: the running radio's own answer, else its driver — the Airspy HF+ tops out at 912 kS/s. */
 function modeRateShow(r) {
   const can = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
@@ -3579,16 +3567,7 @@ function modeRateShow(r) {
   $("dabRateBoostRow").style.opacity = can ? "" : "0.45";
   $("dabRateBoostNote").style.display = can ? "" : "none";
   $("dabRateBoostNo").style.display = can ? "none" : "";
-  // ★ RTL only — a local dongle ("rtl"/"rtlsdr") or one read over rtl_tcp. The flag is kept in the config either
-  //   way (the server ignores it off an RTL); only the control is not drawn where it cannot act.
-  const drv = String(r.driver || "");
-  const rtl = drv === "rtl" || drv === "rtlsdr" || drv === "rtl_tcp" || drv === "rtltcp";
-  $("adsbExtremeBox").classList.toggle("hide", !(can && rtl));
   if (typeof rateGuardShow === "function") rateGuardShow();
-  const live = can && rtl && $("dabRateBoost").checked;
-  $("adsbExtreme").disabled = !live;
-  $("adsbExtreme").checked = !!r.adsbExtreme;
-  $("adsbExtremeRow").style.opacity = live ? "" : "0.45";
 }
 /** ★★★ A STALL OR CRASH AT A RATE A MODE BOOSTED TO (HW.rateGuard, vibe_rate_guard.h): the red line, and the switch
  *  disabled until the owner clears it. ONE RULE, TWO READERS: the app's src/services/rateGuard.ts rateGuardLine draws
@@ -5229,9 +5208,7 @@ function fill() {
       !((radio().driver || "") === "hackrf" && $("gainLock").checked));
   });
   $("rateLock").addEventListener("change", () => { radio().rateLock = $("rateLock").checked; });
-  // ★ The switch re-draws the extreme option beneath it, which is live only while the switch is ticked.
-  $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; modeRateShow(radio()); });
-  $("adsbExtreme").addEventListener("change", () => { radio().adsbExtreme = $("adsbExtreme").checked; });
+  $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; });
   $("rateGuardClear").addEventListener("click", rateGuardClear);
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {

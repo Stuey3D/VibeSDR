@@ -148,8 +148,6 @@ public:
     /** {fault,at,rate,mode,blocked,say} — for the setup page, the app and the hardware endpoint. */
     static std::string rateGuardJson();
     static void rateGuardClear();
-    /** ADS-B at 3.2 MS/s on an RTL ("extreme"): only with the rate switch above; never the default. */
-    static void setVibeServerAdsbExtreme(bool on);
     /** ★ Raw IQ out: 0 off, 1 local network only, 2 local + public (tunnel); maxUsers 0 = host default. */
     static void setVibeServerRawIq(int mode, int maxUsers, int lanMaxHz = 0);
     /** ★ A transient line for every listener's VTS bar (the `vts` notice field). */
