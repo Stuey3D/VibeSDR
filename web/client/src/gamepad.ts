@@ -119,7 +119,10 @@ function scope(): HTMLElement {
   const open = [...document.querySelectorAll<HTMLElement>('.open:not([data-navbox]), [data-navscope]')].filter(visible);
   if (open.length) {
     // The one drawn on top: highest z-index, later in the page on a tie.
-    return open.reduce((a, b) => ((+getComputedStyle(b).zIndex || 0) >= (+getComputedStyle(a).zIndex || 0) ? b : a));
+    const top = open.reduce((a, b) => ((+getComputedStyle(b).zIndex || 0) >= (+getComputedStyle(a).zIndex || 0) ? b : a));
+    // ★ A box INSIDE that scope which has the D-pad keeps it (ADS-B's list inside its map view): the scope is where the
+    //   box lives, not something opened over it.
+    return grabbed && top.contains(grabbed) ? grabbed : top;
   }
   // ★ A box that has the D-pad comes AFTER the panels and pop-ups: one opened from inside it (a header key's menu) or by
   //   the mouse over it is on top, and takes the D-pad until it closes.
@@ -170,6 +173,16 @@ function highlight(el: HTMLElement | null) {
   current = el;
   adjusting = false;
   if (el) { el.classList.add('gpFocus'); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); lastBox = box(el); }
+}
+
+/** ★ A list that redraws itself under the highlight (the ADS-B list, once a second) hands over the new copy of the
+ *  highlighted row, so the highlight stays lit on it rather than on the detached old one. Only while the old one
+ *  is gone — never a way to move the highlight. */
+export function padRehighlight(el: HTMLElement) {
+  if (!current || current.isConnected) return;
+  current = el;
+  el.classList.add('gpFocus');
+  lastBox = box(el);
 }
 
 function move(dir: Dir) {

@@ -73,8 +73,8 @@ B7 space vehicle · C1 emergency surface vehicle · C2 service surface vehicle �
   - A refusal (`adsb_error`) closes the map and shows the reason as an alert.
   - **Apple TV** has no WebView: there the old box (`AdsbPanel`, AircraftPanel list, EXIT ADS-B, no MAP key) is the
     interface. Android TV has one and gets the map (`IS_APPLE_TV`, src/utils/tv.ts).
-- **The web client:** like DAB, choosing ADS-B opens the decoder box; the box lists aircraft and has a **MAP button in
-  its header** (below).
+- **The web client (2026-10-24): the map IS the view too** — full screen over the page, EXIT ADS-B in a top bar,
+  a live list in the bottom corner (below).
 - **The map** (our own MapLibre maps, GPU — the same stack as the HFDL map; in the web client too):
   - **auto-zoom** (toggle): the view always just contains every aircraft with a position; one appearing 200 NM out
     pulls the view out; when it drops off the view comes back in to the next furthest. Smooth, not jumpy.
@@ -130,12 +130,27 @@ layer.destroy()
 ## The web client (web/client/src/adsb.ts + main.ts, beside DAB)
 
 - `ADS-B` sits beside `DAB` in the demodulator menu: live when `adsb: true`, greyed when `false` (a tap shows
-  `adsbWhy`), absent on an older server. An `adsb` report opens the box whoever started the mode; `adsb_off`
-  closes it; `adsb_error` is shown as a pill.
-- The box: aircraft nearest first (by last heard without a receiver position), MAP and EXIT ADS-B in the
-  header, no ✕. The map is a same-origin popup (the spots map's mechanism) on the GPU map in the `aero`
-  profile, fed each report by postMessage. A tapped row shows that aircraft on the open map. Prefs live in the
-  window's localStorage (`vibesdr.adsbMapPrefs`).
+  `adsbWhy`), absent on an older server. An `adsb` report opens the map view whoever started the mode (a second
+  listener joining, or a page loaded into a radio already in ADS-B, lands straight on it); `adsb_off` closes it;
+  `adsb_error` is shown as a pill.
+- **THE MAP IS THE MODE** (Stuart, 2026-10-24 — supersedes the decoder box + MAP button + popup window):
+  `#adsbView` covers the page, the waterfall and the deck are hidden behind it (made inert, their drawing paused
+  as behind the START screen; nothing underneath is rearranged, so leaving restores them exactly).
+  - Top bar, the HFDL map's (MapOverlay.tsx `#topbar`): **EXIT ADS-B** at the left (sends `{type:'adsb',on:0}`),
+    the title, the count on the map + heard + msg/s, and **CHAT** (the deck's key is under the map; same panel,
+    same unread count, greyed with it).
+  - The GPU map in the page (MapLibre from this server's `/mapgl/`, `aero` profile, greyline), the Leaflet map
+    where there is no WebGL 2; made on entry, destroyed on exit. The layer comes from the bundle as a string.
+  - The server health pill stays, moved below the map's AUTO / FIT / RINGS. Panels, pills, the owner's notice,
+    the tour and the START / idle / busy screens are all above the view (it sits at z-index 47).
+  - **The live list**, bottom left: nearest first (last heard without a receiver position), callsign / hex ·
+    squawk, FL / ft + climb, kt (not on a phone), NM + compass bearing; ~7 rows then it scrolls; a row → the
+    aircraft's card on the map (`layer.focus`). Its head collapses it to a pill (remembered, `vibesdr.adsbListMin`).
+    The credits close to their ⓘ on a narrow map; opened, the list lifts above them.
+  - Keyboard / controller: the view is a `[data-navscope]` — the highlight stays in it; the list is a
+    `[data-navbox]` like the DAB list (enter takes the D-pad, rows are the stops, back gives it back). Back with
+    nothing else open **leaves ADS-B**, as the HFDL map's back closes it.
+  - Prefs live in the page's localStorage (`vibesdr.adsbMapPrefs`).
 - Held while in ADS-B: tune, arrows, step, zoom, FIT, frequency entry, IF filter, passband, sample rate
   (greyed with the reason, and stopped in SpectrumClient). A demodulator picked in ADS-B leaves the mode and is
   applied to the dial the server gives back (no 1090 MHz tune is sent).

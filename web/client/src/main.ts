@@ -12,7 +12,7 @@ import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
-import { adsbListHtml, adsbStatus, adsbMapHtml, cleanHex } from './adsb';
+import { adsbListHtml, adsbStatus, adsbOnMap, cleanHex, AdsbMap } from './adsb';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -25,7 +25,7 @@ import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeL
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
 import { renderIcomPanel, icomPassband } from './icomUi';
 import { initPocketConn } from './pocketConn';
-import { initGamepad, pushBack, activePadLayout } from './gamepad';
+import { initGamepad, pushBack, activePadLayout, padRehighlight } from './gamepad';
 import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
@@ -3287,11 +3287,14 @@ function renderFrame(frameTs: number) {
   //   ★ Kill switch is still one line: setHoldMs(0) restores the pre-buffer waterfall exactly.
   const w = wf;
   if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
-  const drawWf = !NO_WF && !startScreenUp;
+  /* ★ ADS-B's map covers the page as the START screen does (opaque, full-screen): nothing behind it is
+   *  drawn, and rows still arrive (1 fps in ADS-B) so the picture is current the moment the map goes. */
+  const drawWf = !NO_WF && !startScreenUp && !adsbViewUp;
   if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick(frameTs));   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
-  // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen is the ONLY exception
-  //     (Stuart, 2026-09-30: "it must never stop"). A draw-skip under an open panel was tried and removed.
+  // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen and ADS-B's full-screen map
+  //     (which hides it entirely, by Stuart's design) are the ONLY exceptions (Stuart, 2026-09-30: "it must never
+  //     stop"). A draw-skip under an open panel was tried and removed.
   if (drawWf) guard('web-render', 'waterfall-draw', () => w.draw());
   const t2 = measuring ? performance.now() : 0;
 
@@ -3310,7 +3313,7 @@ function renderFrame(frameTs: number) {
   // stale span while the waterfall drew the new one (Stuart 2026-07-24 — "wrong but back"). Keep the
   // VFO/rf-centre terms so tuning still forces a redraw.
   const key = `${spec.frequency}|${spec.rfCenterHz()}|${wf.spanHz}|${wf.displayCenterHz()}|${window.innerWidth}`;
-  if (key !== lastViewKey && !startScreenUp) {
+  if (key !== lastViewKey && !startScreenUp && !adsbViewUp) {
     lastViewKey = key;
     guard('web-render', 'scale', drawScale);
     guard('web-render', 'bands', drawBands);
@@ -7646,25 +7649,36 @@ function dabUiOff() {
 
 /* ══ ADS-B (V12, docs/v12/ADSB.md) ═════════════════════════════════════════════════════════════════
  * ★★★ A WHOLE-RADIO MODE, LIKE DAB, AND IT FOLLOWS DAB'S RULES: the server takes the receiver to
- *     1090 MHz and gives it back exactly as it found it; the decoder box opens the moment a report
- *     arrives (whoever started it — a second listener joins the mode, never restarts it); tuning and
- *     zoom are greyed with the reason while it runs; there is no ✕ (closing the box would strand the
- *     listener in a mode with nothing on screen) and EXIT ADS-B sits in the header.
+ *     1090 MHz and gives it back exactly as it found it; the view opens the moment a report arrives
+ *     (whoever started it — a second listener joins the mode, never restarts it); tuning and zoom are
+ *     held with the reason while it runs; there is no ✕, only EXIT ADS-B.
+ * ★★★ THE MAP IS THE MODE (Stuart, 2026-10-24): "when ADS-B is selected the waterfall drops and the
+ *     full-screen map is on, an Exit ADS-B button is at the top of the screen, same as our HFDL map
+ *     exit", with "a live list in the bottom corner". #adsbView covers the page; the decoder box, the
+ *     MAP button and the popup window it replaced are gone. The server slows the waterfall to 1 fps in
+ *     ADS-B (the engine, gain and link telemetry stay alive); the page stops DRAWING it behind the map
+ *     (adsbViewUp in renderFrame), exactly as behind the START screen.
  * ★★ THE SERVER DECIDES WHETHER IT IS OFFERED (vibeserver.json `adsb`): true = a live control; false =
  *    the control is drawn DISABLED with the server's own reason (`adsbWhy` — "the capture is below
- *    2.4 MS/s", "a transceiver"…), never hidden; no field = an older server, no control at all.
- * ★ The receiver never changes sample rate for it (Stuart, 2026-10-24) — that is the server's rule, and
- *   the rate picker is simply held while ADS-B runs. */
+ *    2.4 MS/s", "a transceiver"…), never hidden; no field = an older server, no control at all. */
 let adsbCap: { ok: boolean; why: string } | null = null;
 let adsbOn = false;
 let adsbReport: AdsbReport | null = null;
-let adsbPrevDecTitle = '';
 /** ★ A demodulator picked while in ADS-B: leaving takes a round trip (adsb:0 → the server restores the
  *  dial → a config), so the pick waits for that config, exactly as dabRestore does — a mode sent with
  *  the 1090 MHz readout would tune the radio straight back to 1090. */
 let adsbPendingMode: SDRMode | null = null;
-let adsbMapWin: Window | null = null;
 let adsbListLast = '';
+let adsbMap: AdsbMap | null = null;
+/** ★ The map is covering the page: renderFrame skips the waterfall, trace, scale and band strip. */
+let adsbViewUp = false;
+/** The row last tapped — kept lit across the once-a-second redraws while it is still in the list. */
+let adsbSel = '';
+const ADSB_MIN_KEY = 'vibesdr.adsbListMin';
+/** ★ What #adsbView made inert, so leaving gives back exactly that (and nothing that was inert anyway). */
+let adsbInerted: HTMLElement[] = [];
+let adsbResizeObs: ResizeObserver | null = null;
+let adsbAttribObs: MutationObserver | null = null;
 
 /** Read the capability from a radio's own vibeserver.json (see loadAudioPolicy). */
 function adsbReadCap(j: any) {
@@ -7682,64 +7696,149 @@ function adsbUiOn() {
   adsbOn = true;
   if (spec) spec.adsbHeld = true;
   setTimeout(syncDialTips, 0);
-  /* ★ ADS-B takes the box whole, as DAB does: a running decoder is stopped (it would only be decoding
-   *  the noise at 1090 MHz), the spot list, its filters and any image are put away. */
+  /* ★ ADS-B takes the whole radio, as DAB does: a running decoder is stopped (it would only be decoding
+   *  the noise at 1090 MHz), the spot list, its filters and any image are put away, and the box closes —
+   *  the map is what there is to watch. Spots come back on leaving if they are still on (adsbUiOff). */
   if (activeDec === 'rds') { spec?.rdsxLight(false); $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); }
   if (activeDec) { decoders?.detach(); activeDec = null; syncDecButtons(); }
   $('spotList').classList.remove('on');
   $('spotFilters').classList.remove('show');
   $('decImage').classList.remove('on');
-  $('decBox').classList.remove('wide', 'navtex', 'min');
-  $<HTMLButtonElement>('decPrev').style.display = 'none';
-  $<HTMLButtonElement>('decSave').style.display = 'none';
-  $('decAdj').style.display = 'none';
+  if (!dabOn) $('decBox').classList.remove('open');
   wholeRadioLock(true, 'ADS-B');
-  const dt = document.getElementById('decText'); if (dt) dt.style.display = 'none';
-  $('adsbList').style.display = 'block';
-  $('adsbMap').style.display = '';
-  $('decClr').style.display = 'none';
-  $('decHide').style.display = 'none';      // ★ no ✕ — see the note above
-  $('rdsSize').classList.add('show');
-  applyRdsSize();
-  const box = $('decBox');
-  box.classList.add('open', 'adsb');
-  const t = $('decTitle');
-  if (t.textContent !== 'ADS-B') adsbPrevDecTitle = t.textContent || '';
-  t.textContent = 'ADS-B';
-  $('decStatus').textContent = adsbStatus(adsbReport);
   applyRateOptions();
   populateHw();                // ★ the rate picker is held — see populateHw
-  adsbRender();
+  adsbViewShow();
   updateVts();
 }
 
-/** The UI half of leaving ADS-B — the box closed, every control given back. */
+/** The UI half of leaving ADS-B — the map gone, every control given back. */
 function adsbUiOff() {
   adsbOn = false;
   adsbReport = null;
   adsbListLast = '';
+  adsbSel = '';
   if (spec) spec.adsbHeld = false;
   setTimeout(syncDialTips, 0);
   wholeRadioLock(false, 'ADS-B');
-  const dt = document.getElementById('decText'); if (dt) dt.style.display = '';
-  $('adsbList').style.display = 'none';
-  $('adsbList').innerHTML = '';
-  $('adsbMap').style.display = 'none';
-  $('decClr').style.display = '';
-  $('decHide').style.display = '';
-  $('rdsSize').classList.remove('show');
-  $('decStatus').textContent = '';
-  const box = $('decBox');
-  box.classList.remove('adsb');
-  // ★ Only close the box if ADS-B still owns it — DAB may have taken it in the same breath.
-  if (!dabOn) box.classList.remove('open');
-  const t = $('decTitle');
-  if (t.textContent === 'ADS-B') t.textContent = adsbPrevDecTitle;
+  adsbViewHide();
   applyRateOptions();
   populateHw();
-  pushAdsbToMap(true);
   updateVts();
   if (!dabOn && decoders?.spotsEnabled) showDecBox('spots');
+}
+
+/* ── THE VIEW ─────────────────────────────────────────────────────────────────────────────────── */
+
+function adsbViewShow() {
+  const v = $('adsbView');
+  if (!v.hidden) { adsbRender(); return; }
+  v.hidden = false;
+  adsbViewUp = true;
+  document.body.classList.add('adsbMap');
+  /* ★★ INERT UNDER THE MAP: what it covers can be neither tabbed to nor read out, and the controller's
+   *  highlight cannot wander under it (gamepad.ts also scopes to [data-navscope]). #app is the waterfall
+   *  AND the card. Panels, pills and the health pill live outside it and stay live. */
+  adsbInerted = [];
+  for (const id of ['app', 'vts']) {
+    const el = document.getElementById(id);
+    if (el && !el.inert) { el.inert = true; adsbInerted.push(el); }
+  }
+  let min = false;
+  try { min = localStorage.getItem(ADSB_MIN_KEY) === '1'; } catch { /* private window: open */ }
+  adsbSetListMin(min, false);
+  adsbLayout();
+  if (typeof ResizeObserver !== 'undefined') {
+    adsbResizeObs = new ResizeObserver(adsbLayout);
+    adsbResizeObs.observe($('adsbTop'));
+  }
+  if (!adsbMap) adsbMap = new AdsbMap($('adsbMapHost'), adsbNote);
+  adsbMap.open(myPos());
+  adsbWatchAttrib();
+  adsbSyncChat();
+  adsbRender();
+}
+
+function adsbViewHide() {
+  const v = $('adsbView');
+  if (v.hidden) return;
+  adsbMap?.close();
+  adsbResizeObs?.disconnect(); adsbResizeObs = null;
+  adsbAttribObs?.disconnect(); adsbAttribObs = null;
+  v.hidden = true;
+  adsbViewUp = false;
+  document.body.classList.remove('adsbMap');
+  for (const el of adsbInerted) el.inert = false;
+  adsbInerted = [];
+  adsbNote('');
+  $('adsbList').innerHTML = '';
+  $('adsbCnt').textContent = '…';
+  $('adsbStat').textContent = '';
+  $('adsbLiveN').textContent = '';
+  // ★ The scale and band strip were not drawn while the map was up; a resize meanwhile must not leave them stale.
+  lastViewKey = '';
+}
+
+/** ★ The bar's height, for the health pill's place under the map's toggles (index.html body.adsbMap). */
+function adsbLayout() {
+  const h = $('adsbTop').getBoundingClientRect().height;
+  if (h > 0) document.documentElement.style.setProperty('--adsbTopH', `${Math.round(h)}px`);
+}
+
+/** ★★ THE CREDITS STAY READABLE. MapLibre's compact credits open across the bottom of a phone-width map
+ *  — under the list. Closed to their ⓘ at first on a narrow map; opened (by a tap on ⓘ), the list
+ *  lifts above them, so neither covers the other. */
+function adsbWatchAttrib() {
+  let tries = 0;
+  const find = () => {
+    if (!adsbViewUp) return;
+    const at = document.querySelector<HTMLElement>('#adsbMapHost .maplibregl-ctrl-attrib, #adsbMapHost .leaflet-control-attribution');
+    if (!at) { if (++tries < 40) setTimeout(find, 250); return; }
+    const live = $('adsbLive');
+    const sync = () => {
+      const open = at.classList.contains('maplibregl-compact-show') || at.classList.contains('leaflet-control-attribution');
+      const r = at.getBoundingClientRect(), l = live.getBoundingClientRect();
+      // ★ Only when they would actually meet: on a wide map the credits are a short line in the other corner.
+      const clash = open && r.width > 0 && r.left < l.right + 8;
+      document.documentElement.style.setProperty('--adsbAttribH', `${Math.round(r.height)}px`);
+      live.classList.toggle('lift', clash);
+    };
+    if (at.classList.contains('maplibregl-compact-show') && $('adsbMapHost').clientWidth < 640) at.classList.remove('maplibregl-compact-show');
+    adsbAttribObs = new MutationObserver(sync);
+    adsbAttribObs.observe(at, { attributes: true, attributeFilter: ['class'] });
+    sync();
+  };
+  find();
+}
+
+function adsbNote(text: string) {
+  const n = $('adsbNote');
+  n.textContent = text;
+  n.hidden = !text;
+}
+
+/** The list's head: collapse to a pill, or open. Remembered on this device. */
+function adsbSetListMin(min: boolean, save = true) {
+  const live = $('adsbLive');
+  live.classList.toggle('min', min);
+  const h = $('adsbLiveHead');
+  h.setAttribute('aria-expanded', min ? 'false' : 'true');
+  h.title = min ? 'Show the aircraft list' : 'Hide the list';
+  if (save) { try { localStorage.setItem(ADSB_MIN_KEY, min ? '1' : '0'); } catch { /* private window: this visit only */ } }
+  adsbAttribObs?.takeRecords();
+}
+
+/** ★ CHAT IS IN THE BAR: its key on the card is under the map. The same panel, the same unread count,
+ *  greyed exactly when the card's is (a private receiver has no chat). */
+function adsbSyncChat() {
+  const src = document.getElementById('mChat') as HTMLButtonElement | null;
+  const b = document.getElementById('adsbChat') as HTMLButtonElement | null;
+  if (!src || !b) return;
+  b.disabled = src.disabled;
+  b.title = src.title || 'Chat';
+  b.classList.toggle('chatBreathing', src.classList.contains('chatBreathing'));
+  const su = document.getElementById('mChatUnread'), du = document.getElementById('adsbChatUnread');
+  if (su && du) { du.textContent = su.textContent; du.hidden = su.hidden; }
 }
 
 /** A listener's press: in or out. ★ From DAB the server leaves DAB itself (`dab_off`), so only DAB's
@@ -7767,15 +7866,15 @@ function onAdsbReport(r: AdsbReport | null) {
     return;
   }
   adsbReport = r;
-  if (!adsbOn) adsbUiOn();   // ★ somebody else put the receiver in ADS-B (or we joined it)
+  if (!adsbOn) adsbUiOn();   // ★ somebody else put the receiver in ADS-B (or we joined it, or the page loaded into it)
   /* ★★ THE AUDIO SELF-HEAL IS HELD FOR AS LONG AS THE REPORTS KEEP COMING. There is nothing to hear at
    *  1090 MHz and the server sends next to no audio in ADS-B (measured on the bench: 131 bytes in 6 s), so
    *  the heal judged the silence a fault and reopened the audio socket every 6 s for the whole session.
    *  Renewed each report (once a second), so it lapses on its own a few seconds after ADS-B ends. */
   audio?.holdHealing(8000);
-  $('decStatus').textContent = adsbStatus(r);
+  adsbMap?.update(r.aircraft, myPos());
+  adsbSyncChat();
   adsbRender();
-  pushAdsbToMap(false);
 }
 
 /** Spend a demodulator picked during ADS-B on the first config out of it (see adsbPendingMode). */
@@ -7785,55 +7884,40 @@ function adsbApplyPending() {
   setMode(m, true); airbandFollowPassband(); renderFreq();
 }
 
+/** The bar's count and rate, and the list. */
 function adsbRender() {
-  const el = document.getElementById('adsbList');
-  if (!el || !adsbOn) return;
-  const html = adsbListHtml(adsbReport, myPos(), !!adsbMapWin && !adsbMapWin.closed);
+  if (!adsbOn) return;
+  $('adsbCnt').textContent = adsbReport ? String(adsbOnMap(adsbReport)) : '…';
+  $('adsbStat').textContent = adsbStatus(adsbReport);
+  $('adsbLiveN').textContent = adsbReport ? String(adsbReport.aircraft.length) : '';
+  const el = $('adsbList');
+  const html = adsbListHtml(adsbReport, myPos());
   if (html === adsbListLast) return;       // ★ nothing changed — leave the DOM (and a hovered row) alone
   adsbListLast = html;
+  /* ★ The highlighted row survives the redraw: the controller's highlight is a class on an element, and
+   *  the element is about to be replaced. Found again by its aircraft. */
+  const hiHex = (el.querySelector('.adsbRow.gpFocus') as HTMLElement | null)?.dataset.hex || '';
+  const focusHex = (document.activeElement as HTMLElement | null)?.closest?.('#adsbList .adsbRow') ? (document.activeElement as HTMLElement).dataset.hex || '' : '';
+  const top = el.scrollTop;
   el.innerHTML = html;
+  el.scrollTop = top;
+  if (adsbSel) el.querySelector(`.adsbRow[data-hex="${adsbSel}"]`)?.classList.add('sel');
+  if (hiHex) { const r = el.querySelector<HTMLElement>(`.adsbRow[data-hex="${cleanHex(hiHex)}"]`); if (r) padRehighlight(r); }
+  if (focusHex) (el.querySelector(`.adsbRow[data-hex="${cleanHex(focusHex)}"]`) as HTMLElement | null)?.focus({ preventScroll: true });
 }
 
-/** ★ The open map window gets every report; `ended` tells it the mode is over. Silent and cheap when no
- *  map is open. ★★ Never '*': only while the window is still on this page's origin (see pushSpotsToMap). */
-function pushAdsbToMap(ended: boolean) {
-  if (!adsbMapWin) return;
-  if (adsbMapWin.closed) { adsbMapWin = null; return; }
-  const to = /^https?:$/.test(location.protocol) ? location.origin : '/';
-  try {
-    if (ended) adsbMapWin.postMessage({ type: 'vibesdr-adsb-off' }, to);
-    else if (adsbReport) adsbMapWin.postMessage({ type: 'vibesdr-adsb', aircraft: adsbReport.aircraft, rx: myPos() }, to);
-  } catch { adsbMapWin = null; }
-}
-
-/** The MAP button in the box header — the spots map's mechanism (openSpotsMap), drawing with the shared
- *  ADS-B layer (web/mapkit/adsblayer.js) on the GPU map in the 'aero' profile. */
-function openAdsbMap() {
-  if (adsbMapWin && !adsbMapWin.closed) { adsbMapWin.focus(); return; }
-  const w = window.open('', '_blank');
-  if (!w) { showPill('The map window was blocked — allow pop-ups for this receiver', 6000); return; }
-  adsbMapWin = w;
-  const origin = /^https?:$/.test(location.protocol) ? location.origin : '';
-  void Promise.all([probeMapGL(), loadVibemapSource(), import('./generated/adsbLayerSource')]).then(([kit, vm, al]) => {
-    if (w.closed) return;
-    w.document.write(adsbMapHtml({
-      kit, rx: myPos(), layerJs: al.ADSB_LAYER_JS, vibemapJs: vm.VIBEMAP_JS,
-      leaflet: LEAFLET_ASSET ? { js: origin + LEAFLET_ASSET.js, css: origin + LEAFLET_ASSET.css,
-                                 jsSri: LEAFLET_ASSET.jsSri, cssSri: LEAFLET_ASSET.cssSri } : null,
-      dataBase: origin ? origin + '/mapdata/v1/' : '/mapdata/v1/',
-      openerOrigin: location.origin, title: 'VibeSDR — ADS-B Aircraft Map',
-    }));
-    w.document.close();
-    // ★ The first picture now, not in up to a second: the window has its script by the time write() returns.
-    setTimeout(() => pushAdsbToMap(!adsbOn), 50);
-    adsbListLast = ''; adsbRender();       // rows become "show on the map"
-  }).catch((e) => {
-    console.error('[map] the ADS-B map could not load', e);
-    if (w.closed) return;
-    w.document.write('<!doctype html><meta charset="utf-8"><body style="background:#090602;color:#ffb833;'
-      + 'font:14px monospace;padding:2em">The map did not finish loading. Close this window and try again.');
-    w.document.close();
-  });
+/** A row tapped, clicked or entered: that aircraft on the map. */
+function adsbPick(row: HTMLElement) {
+  const hex = cleanHex(row.dataset.hex);
+  if (!hex) return;
+  if (!adsbMap?.focus(hex)) {
+    showPill(row.classList.contains('nopos') ? 'No position heard from that aircraft yet — it is not on the map'
+                                             : 'The map is still loading', 3500);
+    return;
+  }
+  adsbSel = hex;
+  for (const r of Array.from($('adsbList').querySelectorAll('.adsbRow.sel'))) r.classList.remove('sel');
+  row.classList.add('sel');
 }
 
 /** ★★★ ZOOM AND TUNING ARE HELD IN A WHOLE-RADIO MODE — DISABLED, not merely ignored (AGENTS.md: a control
@@ -7867,9 +7951,9 @@ function wholeRadioLock(on: boolean, who: 'DAB' | 'ADS-B') {
     fb.classList.toggle('dabLocked', on);
     fb.title = on ? `Locked in ${who} mode — exit ${who} to tune` : '';
   }
-  /* ★ The way out, on the box itself — #dabExit / #adsbExit in index.html. */
-  const ex = document.getElementById(who === 'DAB' ? 'dabExit' : 'adsbExit');
-  if (ex) (ex as HTMLElement).style.display = on ? '' : 'none';
+  /* ★ The way out, on the box itself — #dabExit in index.html. (ADS-B's, #adsbExit, is in its map view's bar.) */
+  const ex = who === 'DAB' ? document.getElementById('dabExit') : null;
+  if (ex) ex.style.display = on ? '' : 'none';
   /* ★ THE IF FILTER IS DAB'S while a multiplex is being received — 2.048 MHz for the ensemble.
    *  Greyed, not merely ignored (AGENTS.md), with the reason on the control (Stuart, 2026-09-08). */
   const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
@@ -8131,14 +8215,22 @@ function buildControls() {
    *  server, and gives back the zoom, the arrows, the IF filter and the frequency entry. */
   { const xb = document.getElementById('dabExit');
     if (xb) (xb as HTMLElement).onclick = () => dabSetMode(false); }
-  /* ★ ADS-B's header: EXIT ADS-B (the whole way out, as EXIT DAB) and MAP; a row shows its aircraft on the map. */
+  /* ★ ADS-B's map view: EXIT ADS-B (the whole way out, as EXIT DAB), CHAT (the card's key is under the map),
+   *  the list's head (collapse / open) and its rows (that aircraft on the map). */
   $('adsbExit').onclick = () => adsbSetMode(false);
-  $('adsbMap').onclick = () => openAdsbMap();
+  $('adsbChat').onclick = () => { if (!($('mChat') as HTMLButtonElement).disabled) { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); adsbSyncChat(); } };
+  $('adsbLiveHead').onclick = () => adsbSetListMin(!$('adsbLive').classList.contains('min'));
   $('adsbList').addEventListener('click', (e) => {
     const row = (e.target as HTMLElement).closest('.adsbRow') as HTMLElement | null;
-    if (!row || !adsbMapWin || adsbMapWin.closed) return;
-    const to = /^https?:$/.test(location.protocol) ? location.origin : '/';
-    try { adsbMapWin.postMessage({ type: 'vibesdr-adsb-focus', hex: cleanHex(row.dataset.hex) }, to); adsbMapWin.focus(); } catch { adsbMapWin = null; }
+    if (row) adsbPick(row);
+  });
+  // ★ Tab users: Enter or Space on a focused row (a div — the browser gives it no Enter of its own).
+  $('adsbList').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row = (e.target as HTMLElement).closest('.adsbRow') as HTMLElement | null;
+    if (!row) return;
+    e.preventDefault(); e.stopPropagation();
+    adsbPick(row);
   });
   initBookmarks();
   buildMenu();
@@ -9883,7 +9975,7 @@ function initPanels() {
     //     ★ The popups are exempt too: #stepMenu and #mModeMenu are anchored menus rather than
     //     PANELS members, so a click on one of their options counted as "outside".
     if (!PANELS.some(id => $(id).contains(t))
-        && !t.closest('#mcard') && !t.closest('#mCentreFloat')
+        && !t.closest('#mcard') && !t.closest('#mCentreFloat') && !t.closest('#adsbTop')
         && !t.closest('#stepMenu') && !t.closest('#mModeMenu')) closePanels();
   });
 }
@@ -17037,6 +17129,9 @@ function initKeyboard() {
       if (admin && !admin.hidden) { closeAdmin(); return true; }
       const anyOpen = !!document.querySelector('.open');
       closePanels();
+      /* ★★ ADS-B: back with nothing else open LEAVES IT — the map is the mode, and its back closes it, as the
+       *  HFDL map's does in the app. One layer at a time: a panel over the map closes first. */
+      if (!anyOpen && adsbOn && adsbViewUp) { adsbSetMode(false); return true; }
       return anyOpen;
     },
     guide: () => togglePadGuide(),
