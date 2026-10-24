@@ -88,6 +88,9 @@ flags_for() {
     test-fd-radio-recovery) echo "-DVIBE_HAS_HACKRF -DVIBE_HACKRF_HAS_FD -DVIBE_HAVE_AIRSPY -I android/app/src/main/cpp/libairspy -lpthread" ;;
     # ★★ FT8's extra passes, their CPU gate and the capture-clock slot (2026-10-05) — optimised, it times passes.
     test-ft8-passes)       echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
+    #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
+    test-adsb)             echo "-O2" ;;
     *)               echo "" ;;
   esac
 }
