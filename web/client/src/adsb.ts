@@ -1,15 +1,20 @@
 /**
- * adsb.ts — the web client's ADS-B box list and its map window (V12, docs/v12/ADSB.md).
+ * adsb.ts — the web client's ADS-B map view: the full-screen map and its live list (V12, docs/v12/ADSB.md).
  *
- * ★★ THE PAGE'S HALF ONLY. Entering and leaving the mode, the locked controls and the box itself are
- *    main.ts's (beside DAB, whose rules they follow); the aircraft on the map are web/mapkit/adsblayer.js,
- *    the one layer the app draws with too. This file turns a report into the list the box shows, and
- *    writes the map window that hosts the layer.
+ * ★★★ THE MAP IS THE MODE (Stuart, 2026-10-24: "when ADS-B is selected the waterfall drops and the full-screen
+ *     map is on, an Exit ADS-B button is at the top of the screen, same as our HFDL map exit", with "a live list
+ *     in the bottom corner"). It replaced the decoder box + MAP button + popup window: nothing at 1090 MHz is
+ *     worth a waterfall (the server slows it to 1 fps), and a map in a second window was one more thing to find.
+ * ★★ THE PAGE'S HALF ONLY. Entering and leaving the mode and the locked controls are main.ts's (beside DAB,
+ *    whose rules they follow); the aircraft on the map are web/mapkit/adsblayer.js, the one layer the app draws
+ *    with too. This file turns a report into the list's rows, and makes and unmakes the map itself.
  * ★ Everything in a report came off the air or over the network: every string is escaped where it meets
  *   HTML, and the callsign is cut to the characters a callsign has.
  */
 import type { AdsbAircraft, AdsbReport } from './spectrum';
-import type { MapGLKit } from './mapgl';
+import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
+import { loadLeafletInto } from './leafletAsset';
+import { loadVibemapSource } from './chunkCache';
 
 export type LatLon = { lat: number; lon: number };
 
@@ -43,15 +48,16 @@ function emergency(a: AdsbAircraft): boolean {
   return sq === '7500' || sq === '7600' || sq === '7700' || (!!a.emergency && a.emergency !== 'none' && a.emergency !== 0 && a.emergency !== '0');
 }
 
-/** "14 aircraft · 9 on map · 212 msg/s" — the box header's status. */
+/** The map's top bar: how many have a position (the count, on the map) and, beside it, how many are heard
+ *  at all and the message rate — "14 heard · 212 msg/s". */
+export function adsbOnMap(r: AdsbReport | null): number {
+  return r ? r.aircraft.filter((a) => num(a.lat) != null && num(a.lon) != null).length : 0;
+}
 export function adsbStatus(r: AdsbReport | null): string {
   if (!r) return 'listening on 1090 MHz…';
-  const n = r.aircraft.length;
-  const pos = r.aircraft.filter((a) => num(a.lat) != null && num(a.lon) != null).length;
   const rate = num(r.msgRate);
-  // ★ Short enough for one line beside MAP and EXIT on a wide box ("on the map · 1458 msg/s" wrapped).
   const r1 = rate == null ? '' : rate >= 1000 ? ` · ${(rate / 1000).toFixed(1)}k msg/s` : ` · ${Math.round(rate)} msg/s`;
-  return `${n} aircraft${n ? ` · ${pos} on map` : ''}${r1}`;
+  return `${r.aircraft.length} heard${r1}`;
 }
 
 /** ★ The list, nearest first when the receiver's position is known (the app's AircraftPanel order),
@@ -72,7 +78,10 @@ export function adsbRows(r: AdsbReport, rx: LatLon | null) {
   return rows;
 }
 
-export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, mapOpen: boolean): string {
+
+/** ★ The live list's rows. Each is a button to the highlight (role) and to Tab (tabindex): tapped, clicked
+ *  or entered, it shows that aircraft on the map (AdsbMap.focus). */
+export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null): string {
   if (!r) return '<div class="adsbEmpty">Listening on 1090 MHz — aircraft appear here as they are heard.</div>';
   const rows = adsbRows(r, rx);
   if (!rows.length) return '<div class="adsbEmpty">No aircraft heard yet. Each one appears as its transponder is decoded.</div>';
@@ -85,7 +94,8 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, mapOpen: b
     const where = rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${COMPASS[Math.round(rb.brg / 45) % 8]}</span>`
       : located ? '<span class="dim">located</span>' : '<span class="dim">no position</span>';
     const em = emergency(a);
-    return `<div class="adsbRow${em ? ' em' : ''}${located ? '' : ' nopos'}" data-hex="${esc(hex)}"${mapOpen && located ? ' title="Show on the map"' : ''}>`
+    return `<div class="adsbRow${em ? ' em' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
+      + ` title="${located ? 'Show on the map' : 'No position yet — not on the map'}">`
       + `<span class="id"><b>${esc(call || hex.toUpperCase())}</b><small>${esc(hex.toUpperCase())}${sq ? ` · ${esc(sq)}` : ''}</small></span>`
       + `<span class="alt">${esc(altText(a.alt_baro))}${trend}</span>`
       + `<span class="spd">${gs != null ? `${Math.round(gs)} kt` : ''}</span>`
@@ -94,142 +104,132 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, mapOpen: b
   }).join('');
 }
 
-/* ══ THE MAP WINDOW ═══════════════════════════════════════════════════════════════════════════════
- * ★★ The spots map's mechanism (openSpotsMap in main.ts): a same-origin about:blank window, opened inside
- *    the click, written once we know whether the GPU map is on offer, fed by postMessage. The GPU map's
- *    files come from THIS server's /mapgl/ (absolute — the window's own location says nothing); the layer
- *    and the Leaflet fallback's renderer arrive as STRINGS, so the window never depends on a file an
- *    older install might lack.
- * ★ The basemap is the 'aero' profile — airports and runways, as on the HFDL map. */
-export interface AdsbMapOpts {
-  kit: MapGLKit | null;
-  rx: LatLon | null;
-  layerJs: string;
-  vibemapJs: string;
-  leaflet: { js: string; css: string; jsSri: string; cssSri: string } | null;
-  dataBase: string;
-  openerOrigin: string;
-  title: string;
+/* ══ THE MAP ══════════════════════════════════════════════════════════════════════════════════════
+ * ★★ IN THE PAGE, NOT A WINDOW. The GPU map (MapLibre + our packs, every file from THIS server's /mapgl/ —
+ *    mapgl.ts) in the 'aero' profile, the airports and runways of the HFDL map; the Leaflet map (from the
+ *    receiver's own /vs/, SRI-checked) where there is no WebGL 2 or no /mapgl/. The aircraft are the shared
+ *    layer (adsblayer.js), carried as a STRING in the bundle so the map never depends on a file an older
+ *    install might lack; CSP allows the inline script it becomes ('unsafe-inline', no eval).
+ * ★★ MADE ON ENTRY, DESTROYED ON EXIT. A MapLibre map holds a WebGL context and tens of MB of tiles; a
+ *    listener who leaves ADS-B for the rest of the evening must not carry it (the 1 GB phones — memory
+ *    android_potato_phone_users). Every async step checks `gen`, so an exit while it is still loading
+ *    leaves nothing behind.
+ * ★ The toggles' prefs live in this page's localStorage (vibesdr.adsbMapPrefs — the popup's key, kept so a
+ *   listener's AUTO / FIT / RINGS carry over). */
+const PREFS_KEY = 'vibesdr.adsbMapPrefs';
+function loadPrefs(): Record<string, boolean> | null {
+  try { const v = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); return v && typeof v === 'object' ? v : null; } catch { return null; }
+}
+function savePrefs(p: unknown) {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* private window: the toggles still work for this visit */ }
+}
+function runSource(src: string) {
+  const el = document.createElement('script');
+  el.textContent = src;          // ★ runs synchronously on append — the global exists on the next line
+  document.head.appendChild(el);
 }
 
-export function adsbMapHtml(o: AdsbMapOpts): string {
-  // Closing tags assembled at runtime — a literal one would end the page's OWN inline script.
-  const ES = '<' + '/script>';
-  const ST = '<' + '/style>';
-  const safe = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c');
-  const k = o.kit;
-  const glHead = k ? `<link rel="stylesheet" href="${esc(k.base)}vendor/maplibre-gl.css">
-<script src="${esc(k.base)}vendor/maplibre-gl.js">${ES}
-<script src="${esc(k.base)}vendor/pmtiles.js">${ES}
-<script src="${esc(k.base)}vendor/vibemapgl.js">${ES}` : '';
-  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(o.title)}</title>
-${glHead}
-<style>
-  :root{--amber:#ffb833;--dim:rgba(255,184,51,0.55);--bg:rgba(9,6,2,0.94);--bdr:rgba(255,160,0,0.30);--hi:#ffe566}
-  html,body{height:100%;margin:0;background:#090602;font:12px ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:var(--amber)}
-  #wrap{display:flex;flex-direction:column;height:100%}
-  #top{display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--bg);border-bottom:1px solid var(--bdr);flex:0 0 auto;min-width:0}
-  #ttl{letter-spacing:2px;color:rgba(255,184,51,0.8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-  #top .sp{flex:1 1 auto}
-  #cnt{color:var(--hi);font-size:14px}
-  #cntl{color:var(--dim);white-space:nowrap}
-  #main{position:relative;flex:1 1 auto;min-height:0}
-  #m{position:absolute;inset:0}
-  #note{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);z-index:20;background:var(--bg);border:1px solid var(--bdr);
-    border-radius:8px;padding:8px 14px;color:var(--amber);letter-spacing:1px;max-width:calc(100% - 40px);text-align:center;display:none}
-  .maplibregl-ctrl-group{background:var(--bg)!important;border:1px solid var(--bdr)}
-  .maplibregl-ctrl-group button+button{border-top:1px solid rgba(255,160,0,0.20)}
-  .maplibregl-ctrl-group button .maplibregl-ctrl-icon{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:.7}
-  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(9,6,2,0.7);color:var(--dim);font-size:10px}
-  .maplibregl-ctrl-attrib a{color:var(--dim)}
-  .maplibregl-ctrl-attrib-button{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:.55}
-  .leaflet-container{background:#123049}
-  .leaflet-bar a{background:var(--bg);color:var(--amber);border-color:var(--bdr)}
-  .leaflet-control-attribution{background:rgba(9,6,2,0.7)!important;color:var(--dim)}
-  .leaflet-control-attribution a{color:var(--dim)}
-  @media (max-width:420px){#ttl{letter-spacing:1px}#cntl{display:none}}
-${ST}
-<div id="wrap">
-  <div id="top"><span id="ttl">ADS-B AIRCRAFT MAP</span><span class="sp"></span><span id="cnt">0</span><span id="cntl">on the map</span></div>
-  <div id="main"><div id="m"></div><div id="note"></div></div>
-</div>
-<script>
-const GL = ${k ? safe(k) : 'null'};
-let RX = ${safe(o.rx)};
-const LAYER_SRC = ${safe(o.layerJs)};
-const VIBEMAP_SRC = ${safe(o.vibemapJs)};
-const LEAFLET = ${safe(o.leaflet)};
-const GL_DATA_BASE = ${safe(o.dataBase)};
-const OPENER_ORIGIN = ${safe(o.openerOrigin)};
-const PREFS_KEY = 'vibesdr.adsbMapPrefs';
-let layer = null, pending = null;
-function note(t) { const n = document.getElementById('note'); n.textContent = t || ''; n.style.display = t ? 'block' : 'none'; }
-function loadPrefs() { try { const v = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); return v && typeof v === 'object' ? v : null; } catch (e) { return null; } }
-function savePrefs(p) { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (e) { /* private window: the toggles still work for this visit */ } }
-function evalSrc(src) { const el = document.createElement('script'); el.textContent = src; document.head.appendChild(el); }
-function count(list) {
-  let n = 0;
-  for (const a of list || []) if (a && a.lat != null && a.lon != null) n++;
-  document.getElementById('cnt').textContent = String(n);
-}
-function attach(map) {
-  evalSrc(LAYER_SRC);
-  if (!window.VibeAdsbLayer) { note('The aircraft layer did not load.'); return; }
-  layer = VibeAdsbLayer.create(map, { receiver: RX, prefs: loadPrefs(), onPrefs: savePrefs, theme: 'dark' });
-  if (pending) { layer.update(pending); pending = null; }
-}
-function bootGPU() {
-  if (!GL || !window.VibeMapGL || !window.maplibregl) return false;
-  try {
-    const load = (path, kind) => fetch(path).then((r) => {
-      if (!r.ok) { console.error('GPU map: ' + path + ' answered HTTP ' + r.status); return null; }
-      return kind === 'text' ? r.text() : r.arrayBuffer();
-    }).catch((e) => { console.error('GPU map: ' + path + ' could not be fetched', e); return null; });
-    const vm = VibeMapGL.createNow(document.getElementById('m'), {
-      style: GL.style, load, base: GL.base, rangeBase: GL.base, detail: GL.detail, profile: 'aero',
-      center: RX ? [RX.lon, RX.lat] : [0, 30], zoom: RX ? 6 : 1.5,
-    });
-    if (!vm) return false;
-    vm.ready.catch((e) => console.error('GPU map: the style did not load', e));
-    vm.setNight(true);          // ★ the greyline on every map, as on the HFDL map
-    vm.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
-    attach(vm.map);
-    return true;
-  } catch (e) { console.error('GPU map unavailable — using the Leaflet map', e); return false; }
-}
-function bootLeaflet() {
-  if (!LEAFLET) { note('The map could not be loaded on this server.'); return; }
-  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = LEAFLET.css; css.integrity = LEAFLET.cssSri;
-  document.head.appendChild(css);
-  const js = document.createElement('script'); js.src = LEAFLET.js; js.integrity = LEAFLET.jsSri;
-  js.onload = () => {
-    evalSrc(VIBEMAP_SRC);
-    const map = L.map('m', { worldCopyJump: true, preferCanvas: true });
-    map.setView(RX ? [RX.lat, RX.lon] : [30, 0], RX ? 7 : 2);
-    if (window.VibeMap) window.VibeMap.attach(map, { dataBase: GL_DATA_BASE, profile: 'aero' });
-    attach(map);
-  };
-  js.onerror = () => note('The map could not be loaded on this server.');
-  document.head.appendChild(js);
-}
-if (!bootGPU()) bootLeaflet();
-/* ★★ ONLY THE PAGE THAT OPENED THIS WINDOW may feed it, and only from its origin. */
-window.addEventListener('message', (ev) => {
-  if (ev.source !== window.opener || ev.origin !== OPENER_ORIGIN) return;
-  const d = ev.data;
-  if (!d || typeof d !== 'object') return;
-  if (d.type === 'vibesdr-adsb') {
-    note('');
-    const list = Array.isArray(d.aircraft) ? d.aircraft : [];
-    count(list);
-    if (d.rx && (!RX || d.rx.lat !== RX.lat || d.rx.lon !== RX.lon)) { RX = d.rx; if (layer) layer.setReceiver(RX.lat, RX.lon); }
-    if (layer) layer.update(list); else pending = list;
-  } else if (d.type === 'vibesdr-adsb-focus' && layer) {
-    layer.focus(String(d.hex || ''));
-  } else if (d.type === 'vibesdr-adsb-off') {
-    note('ADS-B has ended on this receiver — the last aircraft heard stay until you close this window.');
+export class AdsbMap {
+  private gen = 0;
+  private vm: any = null;
+  private lmap: any = null;
+  private layer: any = null;
+  private pending: AdsbAircraft[] | null = null;
+  private rx: LatLon | null = null;
+  private booting = false;
+
+  constructor(private host: HTMLElement, private note: (text: string) => void) {}
+
+  /** Make the map, if it is not made or being made. The host must be on screen (MapLibre sizes from it). */
+  open(rx: LatLon | null) {
+    this.rx = rx;
+    if (this.layer || this.booting) return;
+    this.booting = true;
+    const my = ++this.gen;
+    void this.boot(my).catch((e) => {
+      console.error('[adsb] the map could not load', e);
+      if (my === this.gen) this.note('The map did not finish loading — the list still updates.');
+    }).finally(() => { if (my === this.gen) this.booting = false; });
   }
-});
-${ES}`;
+
+  private async boot(my: number) {
+    const w = window as any;
+    const kit = await probeMapGL();
+    if (my !== this.gen) return;
+    const { ADSB_LAYER_JS } = await import('./generated/adsbLayerSource');
+    if (my !== this.gen) return;
+    if (!w.VibeAdsbLayer) runSource(ADSB_LAYER_JS);
+    if (!w.VibeAdsbLayer) { this.note('The aircraft layer did not load.'); return; }
+    const rx = this.rx;
+    if (kit && await loadMapGLScripts(kit.base)) {
+      if (my !== this.gen) return;
+      try {
+        const vm = w.VibeMapGL.createNow(this.host, {
+          style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail, profile: 'aero',
+          center: rx ? [rx.lon, rx.lat] : [0, 30], zoom: rx ? 6 : 1.5,
+        });
+        if (vm) {
+          this.vm = vm;
+          vm.ready.catch((e: unknown) => console.error('ADS-B GPU map: the style did not load', e));
+          vm.setNight(true);          // ★ the greyline on every map, as on the HFDL map
+          vm.map.addControl(new w.maplibregl.NavigationControl({ showCompass: false }), 'top-left');
+          this.attach(vm.map);
+          return;
+        }
+      } catch (e) {
+        console.error('ADS-B GPU map failed — using the Leaflet map', e);
+        try { this.vm?.destroy(); } catch (e2) { console.error('ADS-B GPU map: tidy-up failed', e2); }
+        this.vm = null;
+        this.host.innerHTML = '';
+      }
+    }
+    if (!await loadLeafletInto(document)) { if (my === this.gen) this.note('The map could not be loaded on this server — the list still updates.'); return; }
+    if (my !== this.gen) return;
+    if (!w.VibeMap) { const { VIBEMAP_JS } = await loadVibemapSource(); if (my !== this.gen) return; if (!w.VibeMap) runSource(VIBEMAP_JS); }
+    const L = w.L;
+    this.lmap = L.map(this.host, { worldCopyJump: true, preferCanvas: true });
+    this.lmap.setView(rx ? [rx.lat, rx.lon] : [30, 0], rx ? 7 : 2);
+    if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', profile: 'aero' });
+    this.attach(this.lmap);
+  }
+
+  private attach(map: any) {
+    const w = window as any;
+    this.layer = w.VibeAdsbLayer.create(map, { receiver: this.rx, prefs: loadPrefs(), onPrefs: savePrefs, theme: 'dark' });
+    if (this.pending) { this.layer.update(this.pending); this.pending = null; }
+  }
+
+  /** Every report: the whole aircraft list, and the receiver if it has arrived or moved since. */
+  update(list: AdsbAircraft[], rx: LatLon | null) {
+    if (rx && (!this.rx || rx.lat !== this.rx.lat || rx.lon !== this.rx.lon)) {
+      this.rx = rx;
+      try { this.layer?.setReceiver(rx.lat, rx.lon); } catch (e) { console.error('[adsb] setReceiver', e); }
+    }
+    if (this.layer) {
+      try { this.layer.update(list); } catch (e) { console.error('[adsb] layer.update', e); }
+    } else this.pending = list;
+  }
+
+  /** A list row: select it and open its card. False = not on the map (no position, or no map yet). */
+  focus(hex: string): boolean {
+    try { return !!this.layer?.focus(cleanHex(hex)); } catch (e) { console.error('[adsb] focus', e); return false; }
+  }
+
+  /** The MapLibre map (for its container's controls), or null. */
+  glMap(): any { return this.vm?.map ?? null; }
+
+  /** Unmake everything — the layer, the map, its WebGL context, its tiles. */
+  close() {
+    this.gen++;
+    this.booting = false;
+    this.pending = null;
+    try { this.layer?.destroy(); } catch (e) { console.error('[adsb] layer.destroy', e); }
+    this.layer = null;
+    try { this.vm?.destroy(); } catch (e) { console.error('[adsb] map destroy', e); }
+    this.vm = null;
+    try { this.lmap?.remove(); } catch (e) { console.error('[adsb] Leaflet remove', e); }
+    this.lmap = null;
+    this.host.innerHTML = '';
+    this.host.className = '';        // ★ MapLibre / Leaflet leave their container classes behind
+  }
 }
