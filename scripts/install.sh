@@ -557,7 +557,11 @@ elif [ "$BEFORE" = "$AFTER" ]; then
 else
   say "VibeServer upgraded from $BEFORE to $AFTER. Open: $URL"
 fi
-if [ "$ARCH" = i386 ] || { [ "$ARCH" = armhf ] && ! grep -qw neon /proc/cpuinfo 2>/dev/null; }; then
+# ★ The same NEON test as the architecture check above and the package's postinst: `neon` on a 32-bit
+#   kernel, `asimd` on a 64-bit kernel running a 32-bit userland (a Pi 3/4 or an Armbian board with an
+#   arm64 kernel). Testing `neon` alone told those machines SDRplay was unsupported while the NEON build,
+#   which has it, was the one installed.
+if [ "$ARCH" = i386 ] || { [ "$ARCH" = armhf ] && ! cpu_has 'neon|asimd'; }; then
   say ""
   say "RTL-SDR, Airspy and HackRF need nothing extra. SDRplay RSPs are not supported on this machine."
 else
