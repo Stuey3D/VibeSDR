@@ -305,6 +305,8 @@ func adsbTutorialTips() -> [TutorialTip] {
     .init(icon: "airplane", text: "Live aircraft decoded from 1090 MHz — **nearest first**, with distance from the receiver."),
     .init(icon: "map", text: "Tap **Map** to see them on a map with the receiver's home marker."),
     .init(icon: "digitalcrown.horizontal.press", text: "**Turn the crown** to scroll the list."),
-    .init(icon: "line.3.horizontal", text: "The **menu** button has profiles and servers — there's nothing to tune here."),
+    /* ★ "profiles" alone was OpenWebRX's ADS-B: a VibeServer's (V12) is a mode, with no profiles in the menu —
+     *  the PROFILES row is drawn only when the server has them (ControlMenu). */
+    .init(icon: "line.3.horizontal", text: "The **menu** button has servers (and an OpenWebRX server's profiles) — there's nothing to tune here."),
   ]
 }
