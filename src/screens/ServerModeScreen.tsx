@@ -3707,6 +3707,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       ? 'Recomputes real detail as listeners zoom, instead of magnifying what is '
                         + 'already on screen. Uses slightly more CPU, and is what makes a shared '
                         + 'receiver worth zooming into.'
+                        /* ★ Stuart, 2026-10-24: off the locked range each deeper zoom is recomputed on the spot,
+                            and on a slow machine that shows as a pause. Not in locked range, where the window's
+                            full detail is computed for everyone already. */
+                        + (radioUseEff === 'locked' ? '' : ' On a slower machine there may be a slight delay '
+                          + 'when zooming in at the higher zoom levels, while the detail is recalculated.')
                       : 'Without it a close-in view goes blocky — the wide picture is magnified '
                         + 'rather than recomputed.'}
                   </Text>

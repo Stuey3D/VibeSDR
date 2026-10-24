@@ -863,6 +863,11 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <div class="hint">Recomputes real detail as listeners zoom, instead of magnifying what is
           already on screen. Without it a close-in view goes blocky. Costs a little CPU and is
           what makes a shared receiver worth zooming into.</div>
+        <!-- ★ Stuart, 2026-10-24: off the locked range, each deeper zoom is recomputed on the spot and he saw the
+             pause — the option stays, the owner is told. Not in locked range, where the window's full detail is
+             already being computed for everyone. Shown by setMode(). -->
+        <div class="hint" id="zoomSpectrumSlow">On a slower machine there may be a slight delay when zooming in
+          at the higher zoom levels, while the detail is recalculated.</div>
 
 
       <!-- ★★★ OUTSIDE #lockedOnly, AND THAT IS THE WHOLE FIX. This card sat INSIDE it, so the
@@ -2390,6 +2395,7 @@ function setMode(locked) {
   $("modeSingle").classList.toggle("sel", !locked);
   if (typeof renderBands === "function") renderBands();
   $("lockedOnly").classList.toggle("hide", !locked);
+  $("zoomSpectrumSlow").classList.toggle("hide", locked);
   layoutLockedRadio(locked);
   // ★★ THE SHARED DIAL IS NOT A MODE — it is this mode with the Listeners box set above one, so
   //    the note explaining it follows the COUNT rather than a switch. See usersNote().
