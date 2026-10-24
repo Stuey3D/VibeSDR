@@ -57,11 +57,21 @@ import { VIBEMAP_JS } from '../generated/vibemapSource';
  *     actually opened, so carrying them costs install size and not memory.
  *     Regenerate with: node scripts/gen-mapdata-source.mjs */
 import { MAPDATA_FILES } from '../generated/mapdataBundle';
+/* ★★★ V12: THE SHARED ADS-B LAYER, AS A STRING, the same way and for the same reason as VIBEMAP_JS — it may only
+ *     be INTERPOLATED into the page. Regenerate with: node scripts/gen-adsblayer-source.mjs (gen-vibemap-source runs
+ *     it too). ★★ Until web/mapkit/adsblayer.js is merged this is a STUB (ADSB_LAYER_IS_STUB) — plain markers. */
+import { ADSB_LAYER_JS } from '../generated/adsbLayerSource';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { parseAdsbMapPrefs, type AdsbAircraftRaw, type AdsbMapPrefs } from '../services/adsbTypes';
 import { noteFault } from '../services/faultLog';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 
-export type MapKind = 'hfdl' | 'digi' | 'cw';
+/* ★ 'adsb' (V12) = VibeServer's own ADS-B 1090. HOSTED EXACTLY AS 'hfdl' IS — the same GPU path, the 'aero'
+ *  profile (airports, runways), the same receiver marker, chrome and transitions — so opening it feels like
+ *  opening the HFDL map (Stuart: "ASMR grade sublime"). Only the FEED differs: React Native pushes each report
+ *  in (like the local spots map's pushSpots), and the shared layer draws the aircraft. */
+export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb';
 
 interface MapOverlayProps {
   visible: boolean;
@@ -87,13 +97,17 @@ interface MapOverlayProps {
   disconnected?: boolean;
   onBackToList?: () => void;
   onRetry?: () => void;
+  /** ★ kind 'adsb': the latest report's aircraft, in the SERVER's field names (the shared layer's input). */
+  adsbAircraft?: AdsbAircraftRaw[] | null;
 }
 
 // ── HTML document builder ─────────────────────────────────────────────────────
 
 function buildHtml(
   kind: MapKind, baseUrl: string, uuid: string,
-  opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean; glBase?: string },
+  opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean; glBase?: string;
+          /** kind 'adsb': the in-map toggles as this device last left them. */
+          adsbPrefs?: AdsbMapPrefs },
   /** ★★ The user's colours as rgb TRIPLETS (2026-10-12): `x` text (lifted for contrast), `k` controls, `kt` controls as
    *  a legend. The page is rebuilt when they change — and they can only change from the menus, after leaving this
    *  screen (Stuart: "to change the colour of the map means youd have to exit its screen anyway"). */
@@ -130,15 +144,20 @@ function buildHtml(
     "form-action 'none'",
   ].join('; ');
   const isHfdl = kind === 'hfdl';
+  const isAdsb = kind === 'adsb';
+  /* ★★ THE AIRCRAFT MAPS SHARE ONE LOOK: ADS-B wears HFDL's amber-black page, its 'aero' basemap and its chrome.
+   *  `aero` is the look; `isHfdl` stays for what is HFDL's alone (SNAP, the ground stations, the flight toast). */
+  const aero = isHfdl || isAdsb;
+  const isSpots = kind === 'digi' || kind === 'cw';
   /* ★★★ THE MAP'S MENUS FOLLOW THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere"; the map:
    *  "to change the colour of the map means youd have to exit its screen anyway"). They were HFDL amber and spots
    *  green. Now TEXT (titles, counts, labels, popups, stats) = the text colour (`T.x`); KEYS, selectors, borders,
    *  scrollbars = the controls colour (`T.k`, legends `T.kt`). ★ KEPT, because they MEAN something: the spot-age and
    *  signal-strength dots, the band colours, the aircraft's yellow selection ring and its signal meter. The
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
-  const T = { bg: isHfdl ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
-  const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
-  const CNT_ICON = isHfdl
+  const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
+  const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+  const CNT_ICON = aero
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
     : kind === 'cw'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.x},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
@@ -152,6 +171,7 @@ function buildHtml(
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>${VIBEMAP_JS}</script>
+${isAdsb ? `<script>${ADSB_LAYER_JS}</script>` : ''}
 ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script src="${glBase}vendor/maplibre-gl.js"></script><script src="${glBase}vendor/pmtiles.js"></script><script src="${glBase}vendor/vibemapgl.js"></script><script src="${glBase}vendor/vibemapgl-compat.js"></script>` : ''}
 <style>
   html,body{margin:0;padding:0;height:100%;background:${T.bg};overflow:hidden;}
@@ -168,7 +188,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   #topbar{display:flex;align-items:center;gap:8px;padding:6px 10px;
     padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));
     padding-top:max(8px,env(safe-area-inset-top));
-    background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.97);border-bottom:1px solid rgba(${T.k},0.18);flex-shrink:0;z-index:2;}
+    background:rgba(${aero ? '9,6,2' : '6,9,6'},0.97);border-bottom:1px solid rgba(${T.k},0.18);flex-shrink:0;z-index:2;}
   #back{background:rgba(${T.k},0.08);border:1px solid rgba(${T.k},0.30);border-radius:8px;
     color:rgba(${T.kt},0.85);font-family:inherit;font-size:14px;letter-spacing:1px;padding:5px 10px;
     cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
@@ -221,25 +241,25 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   .leaflet-fade-anim .leaflet-tile{will-change:opacity;}
   /* skin map theming */
   .leaflet-tile{filter:brightness(0.65) saturate(0.7);}
-  .leaflet-popup-content-wrapper{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.k},0.30);color:rgba(${T.x},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;}
-  .leaflet-popup-tip{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
+  .leaflet-popup-content-wrapper{background:rgba(${aero ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.k},0.30);color:rgba(${T.x},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;}
+  .leaflet-popup-tip{background:rgba(${aero ? '9,6,2' : '6,9,6'},0.96);}
   .leaflet-popup-close-button{color:rgba(${T.kt},0.50)!important;}
   .leaflet-popup-content{margin:10px 12px;font-family:'Courier New',monospace;}
-  .leaflet-control-zoom a{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);color:rgba(${T.kt},0.70);border-color:rgba(${T.k},0.20);}
+  .leaflet-control-zoom a{background:rgba(${aero ? '9,6,2' : '6,9,6'},0.90);color:rgba(${T.kt},0.70);border-color:rgba(${T.k},0.20);}
   .leaflet-bottom{padding-bottom:max(8px,env(safe-area-inset-bottom));}
-  .leaflet-control-attribution{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.x},0.25);font-size:10px;}
+  .leaflet-control-attribution{background:rgba(${aero ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.x},0.25);font-size:10px;}
   /* ★ THE GPU MAP'S CONTROLS WEAR THE SAME CLOTHES as the Leaflet ones above — same colours, font and
    *  sizes — so switching renderer does not restyle the page. */
-  .maplibregl-popup-content{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.k},0.30);color:rgba(${T.x},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;padding:10px 12px;}
-  .maplibregl-popup-anchor-bottom .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip{border-top-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
-  .maplibregl-popup-anchor-top .maplibregl-popup-tip,.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,.maplibregl-popup-anchor-top-right .maplibregl-popup-tip{border-bottom-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
-  .maplibregl-popup-anchor-left .maplibregl-popup-tip{border-right-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
-  .maplibregl-popup-anchor-right .maplibregl-popup-tip{border-left-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
+  .maplibregl-popup-content{background:rgba(${aero ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.k},0.30);color:rgba(${T.x},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;padding:10px 12px;}
+  .maplibregl-popup-anchor-bottom .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip{border-top-color:rgba(${aero ? '9,6,2' : '6,9,6'},0.96);}
+  .maplibregl-popup-anchor-top .maplibregl-popup-tip,.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,.maplibregl-popup-anchor-top-right .maplibregl-popup-tip{border-bottom-color:rgba(${aero ? '9,6,2' : '6,9,6'},0.96);}
+  .maplibregl-popup-anchor-left .maplibregl-popup-tip{border-right-color:rgba(${aero ? '9,6,2' : '6,9,6'},0.96);}
+  .maplibregl-popup-anchor-right .maplibregl-popup-tip{border-left-color:rgba(${aero ? '9,6,2' : '6,9,6'},0.96);}
   .maplibregl-popup-close-button{color:rgba(${T.kt},0.50);font-size:16px;}
-  .maplibregl-ctrl-group{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);border:1px solid rgba(${T.k},0.20);}
+  .maplibregl-ctrl-group{background:rgba(${aero ? '9,6,2' : '6,9,6'},0.90);border:1px solid rgba(${T.k},0.20);}
   .maplibregl-ctrl-group button+button{border-top:1px solid rgba(${T.k},0.20);}
   .maplibregl-ctrl-group button .maplibregl-ctrl-icon{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:0.7;}
-  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.x},0.45);font-size:10px;}
+  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(${aero ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.x},0.45);font-size:10px;}
   .maplibregl-ctrl-attrib a{color:rgba(${T.x},0.55);}
   .maplibregl-ctrl-attrib-button{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:0.55;}
   /* skin lsv-hfdl pulse + rings (verbatim keyframes) */
@@ -280,7 +300,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     left:max(10px,env(safe-area-inset-left));right:calc(52px + env(safe-area-inset-right));
     width:fit-content;max-width:calc(100% - 62px - env(safe-area-inset-left) - env(safe-area-inset-right));
     margin:0 auto;box-sizing:border-box;display:flex;align-items:baseline;gap:0.6em;
-    z-index:1000;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.93);border:1px solid rgba(${T.k},0.30);border-radius:20px;
+    z-index:1000;background:rgba(${aero ? '9,6,2' : '6,9,6'},0.93);border:1px solid rgba(${T.k},0.30);border-radius:20px;
     padding:6px 14px;font-size:13px;letter-spacing:1px;
     color:rgba(${T.x},0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;
     overflow:hidden;cursor:pointer;pointer-events:none;}
@@ -297,10 +317,10 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   #legend{position:absolute;bottom:max(44px,calc(env(safe-area-inset-bottom) + 34px));left:max(10px,env(safe-area-inset-left));
     z-index:1000;font-size:12px;letter-spacing:0.8px;color:rgba(${T.x},0.80);pointer-events:auto;}
   #legbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
-    background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.88);border:1px solid rgba(${T.k},0.30);border-radius:8px;cursor:pointer;
+    background:rgba(${aero ? '9,6,2' : '6,9,6'},0.88);border:1px solid rgba(${T.k},0.30);border-radius:8px;cursor:pointer;
     font-size:16px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.kt},0.80);}
   #legbtn:active{background:rgba(${T.k},0.15);}
-  #legbody{display:none;position:absolute;bottom:0;left:34px;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.92);
+  #legbody{display:none;position:absolute;bottom:0;left:34px;background:rgba(${aero ? '9,6,2' : '6,9,6'},0.92);
     border:1px solid rgba(${T.k},0.18);border-radius:8px;padding:7px 9px;white-space:nowrap;
     max-height:min(320px,calc(100vh - 200px));overflow-y:scroll;overflow-x:hidden;
     -webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;}
@@ -355,7 +375,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
-${!isHfdl ? `
+${isSpots ? `
 <div id="filters">
   <span class="flabel">FILTER</span>
   ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option><option>FT8</option><option>FT4</option><option>FT2</option><option>WSPR</option><option>JS8</option></select>` : ''}
@@ -370,7 +390,14 @@ ${!isHfdl ? `
     <div id="legbtn" title="Legend">&#9432;</div>
     <div id="legbody">
       <div class="scroll-arrow scroll-arrow-up" id="arr-up">&#9650;</div>
-      ${isHfdl ? `
+      ${isAdsb ? `
+      <div class="lg-sec">ADS-B 1090</div>
+      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+      <div class="lg-row"><span>&#9992;</span><span>Icon = aircraft type, turned to its track</span></div>
+      <div class="lg-row"><span>&#9711;</span><span>Range rings in nautical miles</span></div>
+      <div class="lg-sec">ON THE MAP</div>
+      <div class="lg-row"><span>Auto-zoom &middot; Fit &middot; Rings</span></div>
+      ` : isHfdl ? `
       <div class="lg-sec">AIRCRAFT AGE</div>
       <div class="lg-row"><span class="lg-dot" style="background:rgba(80,255,120,0.92);"></span><span>&lt; 2 min</span></div>
       <div class="lg-row"><span class="lg-dot" style="background:rgba(180,255,80,0.88);"></span><span>&lt; 5 min</span></div>
@@ -404,7 +431,7 @@ ${!isHfdl ? `
       <div class="scroll-arrow scroll-arrow-dn" id="arr-dn">&#9660;</div>
     </div>
   </div>
-  ${!isHfdl ? `
+  ${isSpots ? `
   <div id="statsbtnwrap"><div id="statsbtn" title="Stats">&#128202;</div></div>
   <div id="stsheet">
     <button class="st-close" id="stclose">&#10005; CLOSE</button>
@@ -483,7 +510,7 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgrange',id:id,off:off,len:len}));
       setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
-      profile:(KIND==='hfdl'?'aero':'spots'),center:[0,30],zoom:1});
+      profile:((KIND==='hfdl'||KIND==='adsb')?'aero':'spots'),center:[0,30],zoom:1});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -713,7 +740,7 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
    *  resolves to the FILESYSTEM ROOT — /mapdata/v1/... — which exists nowhere and fails silently,
    *  one layer at a time, exactly the quiet blank this rework exists to end. */
   dataBase: 'mapdata/v1/',
-  profile: KIND === 'hfdl' ? 'aero' : 'spots'
+  profile: (KIND === 'hfdl' || KIND === 'adsb') ? 'aero' : 'spots'
 });
 /* ★★★ THE STARTUP TILE WARM-UP IS GONE. It fetched 21 tiles from OpenStreetMap on every
  *  map open to hide the black gaps during a flyTo — and it did not hide them, because the arc
@@ -766,7 +793,7 @@ function age(ms){var s=Math.floor((Date.now()-ms)/1000);if(s<5)return'just now';
 function distKm(lat,lon){if(!RX_LAT&&!RX_LON)return null;var R=6371,r=Math.PI/180;var dLat=(lat-RX_LAT)*r,dLon=(lon-RX_LON)*r;var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(RX_LAT*r)*Math.cos(lat*r)*Math.sin(dLon/2)*Math.sin(dLon/2);return Math.round(R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)));}
 
 var RX_SVG='<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,10 17,10 17,21 13,21 13,15 9,15 9,21 5,21 5,10 1,10" fill="rgba(255,200,60,0.85)" stroke="rgba(0,0,0,0.5)" stroke-width="1"/></svg>';
-function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1000}).addTo(map).bindPopup('<div style="font-size:13px;letter-spacing:1px;">&#127968; Your receiver</div>');map.setView([RX_LAT,RX_LON],KIND==='hfdl'?4:3);}}
+function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1000}).addTo(map).bindPopup('<div style="font-size:13px;letter-spacing:1px;">&#127968; Your receiver</div>');map.setView([RX_LAT,RX_LON],KIND==='hfdl'?4:KIND==='adsb'?7:3);}}
 
 // Local/Kiwi (on-device decoder): RX position is injected (no /api/description).
 // 0,0 = Null Island = unknown → offer a "set location" button that asks RN for a
@@ -780,6 +807,10 @@ function showSetLoc(){
 }
 if(LOCAL){
   if(RX_LAT||RX_LON)addRx(); else showSetLoc();
+}else if(KIND==='adsb'){
+  /* ★ ADS-B: the receiver is the SERVER's own /location, which React Native already holds and injects (a VibeServer
+   *  has no UberSDR /api/description). Unknown = no marker; the aircraft still draw, without range. */
+  if(RX_LAT||RX_LON)addRx();
 }else{
   hostFetch('/api/description').then(function(d){ if(!d) throw 0; return d; }).then(function(d){
     var gps=d&&d.receiver&&d.receiver.gps;
@@ -1207,6 +1238,41 @@ if(KIND==='hfdl'){
   setInterval(fetchAC,5000);
 }
 
+// ════════ ADS-B 1090 (V12) — the shared layer, fed by React Native ════════
+/* ★★★ THE LAYER DRAWS THE AIRCRAFT — icons by category, the glide, the breathe (never on the first batch), auto-zoom,
+ *  fit and range rings with their in-map toggles (web/mapkit/adsblayer.js, the web client's same file). This page only
+ *  hosts it on HFDL's map: the receiver marker above, the count in the top bar, and the prefs handed back to React
+ *  Native to keep per device. ★ Reports arrive by injection (__adsbPush), never a socket of the page's own: the app's
+ *  spectrum socket already carries them, and a second would be a second listener on somebody's radio. */
+if(KIND==='adsb'){
+  var ADSB_PREFS=${JSON.stringify(opts?.adsbPrefs ?? null)};
+  var adsbLayer=null;
+  function adsbMake(){
+    if(adsbLayer||!window.VibeAdsbLayer)return adsbLayer;
+    try{
+      adsbLayer=VibeAdsbLayer.create(map,{
+        receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,
+        prefs:ADSB_PREFS,
+        onPrefs:function(p){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'adsbPrefs',prefs:p}));},
+        theme:'dark',
+        // ★ The page draws HFDL's receiver marker itself (addRx) — the layer is asked not to add a second.
+        drawReceiver:false
+      });
+    }catch(e){console.error('ADS-B layer could not start',e);adsbLayer=null;}
+    return adsbLayer;
+  }
+  window.__adsbPush=function(json){
+    try{
+      var a=JSON.parse(json);if(!Array.isArray(a))return;
+      var placed=0;for(var i=0;i<a.length;i++)if(a[i]&&a[i].lat!=null&&a[i].lon!=null)placed++;
+      cnt.textContent=String(placed);
+      var L2=adsbMake();if(L2)L2.update(a);
+    }catch(e){console.error('ADS-B: bad report',e);}
+  };
+  window.__adsbRx=function(lat,lon){RX_LAT=lat;RX_LON=lon;if(adsbLayer&&adsbLayer.setReceiver)adsbLayer.setReceiver(lat,lon);};
+  if(window.__pendingAdsb){window.__adsbPush(window.__pendingAdsb);window.__pendingAdsb=null;}
+}
+
 // ════════ DIGI / CW spots (skin lsv-digmap / lsv-cwmap parity) ════════
 if(KIND==='digi'||KIND==='cw'){
   var isCW=(KIND==='cw');
@@ -1426,6 +1492,9 @@ if(KIND==='digi'||KIND==='cw'){
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+/** ★ The ADS-B map's in-map toggles, per device (not per server: they are how this person likes the map). */
+const ADSB_PREFS_KEY = 'lsv_adsb_map_prefs';
+
 /** SpotRow → the digital_spot `data` shape the WebView's norm() expects. */
 function spotToData(s: SpotRow) {
   return {
@@ -1437,7 +1506,7 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry }:
+    disconnected, onBackToList, onRetry, adsbAircraft }:
     MapOverlayProps & { spots?: SpotRow[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -1486,10 +1555,28 @@ export default function MapOverlay(
   const textRgb = fp.settings.display === 'nixie' ? '255,154,85' : fp.text.rgb;
   const ink = useMemo(() => ({ x: controlsText(textRgb), k: fp.controls.rgb, kt: controlsText(fp.controls.rgb) }),
                       [textRgb, fp.controls.rgb]);
+  /* ★★ THE ADS-B MAP'S TOGGLES ARE REMEMBERED PER DEVICE (auto-zoom, fit, rings — drawn by the shared layer, which
+   *  hands every change back as an `adsbPrefs` message). Read once before the page is built and passed IN; a change
+   *  is written to storage and kept in a ref, never put back into the page's source — that would rebuild the map
+   *  under the user's finger for a toggle it has already applied. */
+  const adsbPrefsRef = useRef<AdsbMapPrefs | null>(null);
+  const [adsbPrefsReady, setAdsbPrefsReady] = useState(false);
+  useEffect(() => {
+    if (kind !== 'adsb' || adsbPrefsReady) return;
+    let dead = false;
+    AsyncStorage.getItem(ADSB_PREFS_KEY)
+      .then((v) => { adsbPrefsRef.current = parseAdsbMapPrefs(v); })
+      .catch(() => { adsbPrefsRef.current = parseAdsbMapPrefs(null); })
+      .finally(() => { if (!dead) setAdsbPrefsReady(true); });
+    return () => { dead = true; };
+  }, [kind, adsbPrefsReady]);
   const html = useMemo(
-    () => (kind && glOk !== null ? buildHtml(kind, baseUrl, sessionUuid,
-      { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase }, ink) : ''),
-    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink],
+    () => (kind && glOk !== null && (kind !== 'adsb' || adsbPrefsReady) ? buildHtml(kind, baseUrl, sessionUuid,
+      { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase,
+        adsbPrefs: adsbPrefsRef.current ?? undefined }, ink) : ''),
+    // ★ adsbPrefsRef is read at build time only (see above) — deliberately not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
    *
@@ -1543,6 +1630,21 @@ export default function MapOverlay(
   };
   // Live updates push only the new ones.
   useEffect(() => { if (visible) pushSpots(spots); }, [local, visible, spots]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ★ ADS-B: the whole table each report (about once a second) — it REPLACES, it does not accumulate (the server drops
+   *  an aircraft after 60 s), so there is nothing to de-duplicate. Before the page's handler exists the latest is
+   *  parked in __pendingAdsb and picked up on start. ★★ Double-encoded: the JSON travels as a JS STRING literal, so a
+   *  callsign can never become source (and U+2028/2029 are escaped, the mapdata rule below). */
+  const pushAdsb = (list?: AdsbAircraftRaw[] | null) => {
+    if (kind !== 'adsb' || !list) return;
+    const lit = JSON.stringify(JSON.stringify(list))
+      .replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
+      .replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
+    webRef.current?.injectJavaScript(
+      `(window.__adsbPush?window.__adsbPush(${lit}):(window.__pendingAdsb=${lit}));true;`,
+    );
+  };
+  useEffect(() => { if (visible) pushAdsb(adsbAircraft); }, [kind, visible, adsbAircraft]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!visible || !kind) return null;
 
@@ -1629,7 +1731,7 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); }}
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft); }}
           onMessage={(e) => {
             const d = e.nativeEvent.data;
             if (d === 'close') return onClose();
@@ -1640,6 +1742,14 @@ export default function MapOverlay(
             let m: { t?: string; id?: string; file?: string } | null = null;
             try { m = JSON.parse(d); }
             catch (err) { noteFault('map-webview', 'bad-json', err, `len=${String(d).length}`); return; }
+            /* ★ The ADS-B layer's toggles changed — remember them for this device (see adsbPrefsRef). Re-parsed, so
+             *  only three booleans ever reach storage whatever the page sent. */
+            if (m && (m as any).t === 'adsbPrefs') {
+              const pr = parseAdsbMapPrefs(JSON.stringify((m as any).prefs ?? null));
+              adsbPrefsRef.current = pr;
+              AsyncStorage.setItem(ADSB_PREFS_KEY, JSON.stringify(pr)).catch(() => {});
+              return;
+            }
             /* ★★★ THE INSTANCE FETCH, DONE HERE INSTEAD OF IN THE PAGE. See hostFetch: RN is not
              *  bound by browser CORS, so this reaches an UberSDR that sends no CORS headers —
              *  which is what the instance-origin trick was for, and it frees the page to live on

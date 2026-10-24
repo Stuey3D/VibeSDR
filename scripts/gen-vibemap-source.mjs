@@ -108,3 +108,7 @@ console.log(`gen-vibemap-source: ${src.length} bytes`);
 console.log(`  -> ${TS_OUT.replace(root + '/', '')}`);
 console.log(`  -> ${WEB_OUT.replace(root + '/', '')}`);
 console.log(`  -> ${CLIENT_OUT.replace(root + '/', '')}`);
+
+/* ★★ AND THE ADS-B LAYER BESIDE IT (V12): the map page for kind 'adsb' carries web/mapkit/adsblayer.js
+ *  the same way — one command regenerates both, so neither can be left a version behind the other. */
+await import('./gen-adsblayer-source.mjs');
