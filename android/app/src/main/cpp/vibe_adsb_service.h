@@ -137,6 +137,11 @@ public:
         return o + "}}";
     }
 
+    /** One aircraft's trail, for GET /adsb/trail/<hex> — see vibe_adsb.h kTrailStepNm. */
+    std::string trail(const std::string& hex) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        return tracker_.trailJson(hex);
+    }
     Health health() {
         std::lock_guard<std::mutex> lk(mtx_);
         Health h = health_;
@@ -330,9 +335,12 @@ public:
     static constexpr int kLegs = 6;           ///< alternating, the proposed gain first: 3 legs each
 
     bool active() const { return legs_ > 0; }
-    /** Start trying `proposed` against `current` (indices into the radio's gain list). Returns the index to set now. */
-    int start(int current, int proposed, double t) {
-        idx_[0] = current; idx_[1] = proposed;
+    /** Start trying `proposed` against `current` (indices into the radio's gain list). Returns the index to set now.
+     *  `breaksTie`: the noise rule's proposal (true) is taken unless it CLEARLY loses — messages first, the noise rule
+     *  breaks ties (an empty sky, or an overloaded top where both sides decode nothing). An exploring step (false)
+     *  must clearly WIN. "Clearly" = by 3 % and by two standard deviations of the counts (they are Poisson). */
+    int start(int current, int proposed, double t, bool breaksTie = true) {
+        idx_[0] = current; idx_[1] = proposed; breaksTie_ = breaksTie;
         msgs_[0] = msgs_[1] = 0; secs_[0] = secs_[1] = 0;
         legs_ = kLegs; side_ = 1; legAt_ = t; countFrom_ = -1;
         return idx_[1];
@@ -350,9 +358,9 @@ public:
         secs_[side_] += t - countFrom_;
         if (--legs_ == 0) {
             const double r0 = rate(0), r1 = rate(1);
-            const bool up = idx_[1] > idx_[0];
-            // the higher gain keeps a tie: a proposed climb must not lose, a proposed cut must win
-            const bool keep = up ? r1 >= r0 : r1 > r0;
+            const double margin = std::max(0.03 * std::max(r0, r1),
+                                           2.0 * std::sqrt(r0 / std::max(1e-9, secs_[0]) + r1 / std::max(1e-9, secs_[1])));
+            const bool keep = breaksTie_ ? !(r0 - r1 > margin) : (r1 - r0 > margin);
             winner_ = keep ? idx_[1] : idx_[0];
             proposedWon_ = keep;
             return winner_;
@@ -371,7 +379,61 @@ private:
     int legs_ = 0, side_ = 0, winner_ = 0;
     double legAt_ = 0, countFrom_ = -1;
     uint64_t countMsgs_ = 0;
-    bool proposedWon_ = false;
+    bool proposedWon_ = false, breaksTie_ = true;
+};
+
+/* ★★★ THE SEARCH AT ENTRY — THE GAIN IS FOUND BY MESSAGES (Stuart, 2026-10-24, the Pi 500 V4L: a YouLoop into a Nooelec
+ *  LaNA, "2 aircraft on the loop vs 111 on flight aware, this loop on OWRX always surprised me with how good it was").
+ *  Its log: 49.6 and 48.0 dB decoded 0–1 msg/s at −18 dBFS (the LNA in front overloads the dongle at the top), 44.5 dB
+ *  14–40. No noise-floor rule knows where a given feed peaks — dump1090-fa's suits a bare antenna. So at entry we LOOK:
+ *  every other rung from the top down, ~8 s each, counting believed messages, and land on the best. It stops once past
+ *  the peak (two rungs in a row each more than 5 % under the best), so a feed that peaks at the top costs ~24 s.
+ *  ★ An empty sky (the best under 2 msg/s) proves nothing: the rule's own choice then stands (`found()` false). */
+class GainSearch {
+public:
+    static constexpr double kSettleS = 1.5, kCountS = 5.0;
+    static constexpr double kQuietMsgs = 2.0;   ///< msg/s: below this the sky is too empty to judge by
+
+    bool active() const { return at_ < order_.size(); }
+    /** `order`: indices into the gain list, tried in this order (the shim: the top, then every other rung down). */
+    int start(const std::vector<int>& order, double t) {
+        order_ = order; rates_.assign(order.size(), -1); at_ = 0; legAt_ = t; countFrom_ = -1; best_ = -1; below_ = 0;
+        return order_.empty() ? -1 : order_[0];
+    }
+    int step(double t, uint64_t msgsTotal) {
+        if (!active()) return result();
+        if (countFrom_ < 0) {
+            if (t - legAt_ >= kSettleS) { countFrom_ = t; countMsgs_ = msgsTotal; }
+            return order_[at_];
+        }
+        if (t - countFrom_ < kCountS) return order_[at_];
+        rates_[at_] = double(msgsTotal - countMsgs_) / (t - countFrom_);
+        // ★ a LOWER gain must clearly beat the best (5 %, past the counts' noise): a flat curve stays at the top — the
+        //   recording read 1351 at 49.6 and 1390 at 25.4 dB, and "25.4" would have been chosen for nothing
+        if (best_ < 0 || rates_[at_] > 1.05 * rates_[size_t(best_)]) best_ = int(at_);
+        // ★ past the peak = two rungs in a row each more than 5 % under the best (one could be a quiet moment)
+        below_ = int(at_) > best_ && rates_[at_] < 0.95 * rates_[size_t(best_)] ? below_ + 1 : 0;
+        const bool pastPeak = below_ >= 2 && rates_[size_t(best_)] >= kQuietMsgs;
+        ++at_;
+        if (pastPeak) at_ = order_.size();
+        if (!active()) return result();
+        legAt_ = t; countFrom_ = -1;
+        return order_[at_];
+    }
+    /** True once over, with a sky busy enough to have judged by. */
+    bool found() const { return !active() && best_ >= 0 && rates_[size_t(best_)] >= kQuietMsgs; }
+    int result() const { return best_ >= 0 ? order_[size_t(best_)] : (order_.empty() ? -1 : order_[0]); }
+    double bestRate() const { return best_ >= 0 ? rates_[size_t(best_)] : 0; }
+    const std::vector<int>& order() const { return order_; }
+    const std::vector<double>& rates() const { return rates_; }   ///< -1 = not tried
+    void cancel() { at_ = order_.size(); }
+private:
+    std::vector<int> order_;
+    std::vector<double> rates_;
+    size_t at_ = 0;
+    int best_ = -1, below_ = 0;
+    double legAt_ = 0, countFrom_ = -1;
+    uint64_t countMsgs_ = 0;
 };
 
 } // namespace vibeadsb

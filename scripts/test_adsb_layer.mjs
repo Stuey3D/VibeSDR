@@ -75,7 +75,41 @@ ok(M.altText(3420) === '3,400 ft', 'low altitude in feet too');
 ok(M.altText('ground') === 'GND', 'on the ground');
 ok(M.altText(undefined) === '—', 'unknown altitude');
 ok(M.altShort(36975) === '37,000 ft' && M.altShort(2500) === '2,500 ft' && M.altShort(null) === '', 'label altitude = the list\'s format');
-ok(M.vsText(50) === 'level' && M.vsText(1216).startsWith('↑ +1,216') && M.vsText(-640).startsWith('↓'), 'vertical rate');
+ok(M.vsText(50) === 'level' && M.vsText(1216).startsWith('↑ 1,216') && M.vsText(-640).startsWith('↓ 640'), 'vertical rate (the arrow says which way, no sign)');
+ok(M.vsLabel(-1920) === 'Descent' && M.vsLabel(1216) === 'Climb' && M.vsLabel(40) === 'Level' && M.vsLabel(null) === 'Vertical',
+   'the card row is named Descent / Climb / Level (Stuart: a descending aircraft read "Climb")');
+ok(M.vsCardText(0, 37000) === 'cruising' && M.vsCardText(64, 3000) === 'level' && M.vsCardText(-1920, 20700).startsWith('↓ 1,920'),
+   'level at FL200+ reads cruising, lower reads level (a hold is not a cruise)');
+
+// ── the trail: the step rule, and the blended altitude gradient ──
+{
+  const tr = [];
+  ok(M.trailPush(tr, 51.0, -1.0, 20000) && tr.length === 1, 'trail: the first point is kept');
+  ok(!M.trailPush(tr, 51.001, -1.0, 20000), 'trail: under 0.3 NM and 250 ft, not kept');
+  ok(M.trailPush(tr, 51.001, -1.0, 19700), 'trail: 300 ft of descent is a point, however close');
+  ok(M.trailPush(tr, 51.01, -1.0, 19700), 'trail: 0.5 NM on is a point');
+  const big = [];
+  for (let i = 0; i < M.TRAIL_MAX + 5; i++) M.trailPush(big, 50 + i * 0.01, 0, 1000);
+  ok(big.length <= M.TRAIL_MAX && big.length > M.TRAIL_MAX / 2, 'trail: at the cap it halves, it does not grow');
+  // a Heathrow arrival: FL400 down to 2 000 ft — violet at the start, orange-red at the head
+  const pts = [];
+  for (let i = 0; i <= 50; i++) pts.push([52.5 - i * 0.02, -1.5 + i * 0.01, 40000 - i * 760]);
+  const g = M.trailGradient(pts, 'dark', 1);
+  ok(g && g[0] === 'interpolate' && g[2][0] === 'line-progress', 'gradient: a line-progress interpolate');
+  const stops = [];
+  for (let i = 3; i < g.length; i += 2) stops.push([g[i], g[i + 1]]);
+  ok(stops.every((st, i) => i === 0 || st[0] > stops[i - 1][0]), 'gradient: stops rise strictly');
+  const hue = (c) => Number(/hsl\((\d+)/.exec(c)[1]);
+  ok(hue(stops[0][1]) === Math.round(M.altHue(40000)) && hue(stops[stops.length - 1][1]) === Math.round(M.altHue(2000)),
+     'gradient: FL400 violet at the old end, 2 000 ft orange at the head — the altitude arrows\' colours');
+  ok(stops.length > 20, 'gradient: blended (many stops), not three bands');
+  const half = M.trailGradient(pts, 'dark', 0.5);
+  ok(half[half.length - 1] === 'rgba(0,0,0,0)' && half.some((v, i) => i > 2 && typeof v === 'number' && v > 0.49 && v < 0.52 && half[i + 1] === 'rgba(0,0,0,0)'),
+     'gradient: the draw-in — drawn to half, transparent beyond');
+  ok(M.trailGradient([[51, 0, 1000]], 'dark', 1) === null, 'gradient: one point is no line');
+  const unk = M.trailGradient([[51, 0, null], [51.1, 0, 30000], [51.2, 0, null]], 'dark', 1);
+  ok(unk && unk.length >= 7, 'gradient: unknown altitudes take a known one');
+}
 ok(M.emergencyOf({ squawk: '7700' }) === 'EMERGENCY 7700' && M.emergencyOf({ emergency: 'none' }) === '' &&
    M.emergencyOf({ emergency: 'general' }) === 'EMERGENCY' && M.emergencyOf({}) === '', 'emergency states');
 

@@ -147,7 +147,21 @@
     const r = Number(rate);
     if (rate == null || !isFinite(r)) return '';
     if (Math.abs(r) < 100) return 'level';
-    return (r > 0 ? '↑ +' : '↓ −') + Math.abs(Math.round(r / 64) * 64).toLocaleString('en-GB') + ' ft/min';
+    return (r > 0 ? '↑ ' : '↓ ') + Math.abs(Math.round(r / 64) * 64).toLocaleString('en-GB') + ' ft/min';
+  }
+  /** ★ The card's row name says which way (Stuart, 2026-10-24: a descending aircraft read "Climb ↓ −1,920 ft/min").
+   *  Level is "Level" — "cruise" is only the level part at the top of a flight (Stuart asked; an aircraft level at
+   *  3 000 ft in a hold is not cruising), so the VALUE says cruising when it is level at FL200 or above. */
+  function vsLabel(rate) {
+    const r = Number(rate);
+    if (rate == null || !isFinite(r)) return 'Vertical';
+    if (Math.abs(r) < 100) return 'Level';
+    return r > 0 ? 'Climb' : 'Descent';
+  }
+  function vsCardText(rate, altFt) {
+    const r = Number(rate);
+    if (rate != null && isFinite(r) && Math.abs(r) < 100 && num(altFt) != null) return num(altFt) >= 20000 ? 'cruising' : 'level';
+    return vsText(rate);
   }
   function emergencyOf(a) {
     const e = a && a.emergency;
@@ -409,11 +423,71 @@
   /** Only keys the server can have named: letters, digits, '-', '_' (vibe_adsb_data.h Images::validKey). */
   function imgKey(k) { const v = String(k || ''); return /^[A-Za-z0-9_-]{1,40}$/.test(v) ? v : ''; }
 
+  /* ══ THE TRAIL — the selected aircraft's track, coloured by its altitude ═══════════════════════════
+   * ★★ Stuart, 2026-10-24: "clicking an aircraft should draw its track in as a rainbow coloured line to show its
+   *    altitude … approaching Heathrow I should see a line changing from purple down to orange … a nice blended
+   *    colour … It should flow … only show the trail for the selected aircraft or the map will get too messy".
+   *    So: ONE line, the selected aircraft's, in the altitude arrows' own colours (altHue — one key for both), BLENDED
+   *    along its length (MapLibre line-gradient over line-progress), its head on the gliding icon, and drawn in from
+   *    its oldest end when it is picked. The server keeps the whole trail (vibe_adsb.h kTrailStepNm, GET
+   *    /adsb/trail/<hex>); the layer keeps its own from the reports too, so a server without one (OWRX) still has
+   *    the part since the map opened. ★ Same step rule as the server's: 0.3 NM or 250 ft. */
+  const TRAIL_STEP_NM = 0.3, TRAIL_STEP_FT = 250, TRAIL_MAX = 1000, TRAIL_STOPS = 96, TRAIL_DRAW_MS = 1600;
+  /** Altitude of a report for the trail: feet, 0 on the ground, null unknown. */
+  function trailAlt(a) {
+    if (!a) return null;
+    if (a.alt_baro === 'ground') return 0;
+    const v = num(a.alt_baro) != null ? num(a.alt_baro) : num(a.alt_geom);
+    return v != null ? v : null;
+  }
+  /** Add [lat, lon, alt] to a trail by the step rule; true if it was added. Halves itself at TRAIL_MAX. */
+  function trailPush(tr, lat, lon, alt) {
+    const l = tr.length ? tr[tr.length - 1] : null;
+    if (l && distNm(l[0], l[1], lat, lon) < TRAIL_STEP_NM && !(alt != null && l[2] != null && Math.abs(alt - l[2]) >= TRAIL_STEP_FT)) return false;
+    if (tr.length >= TRAIL_MAX) { let w = 0; for (let k = 0; k < tr.length; k += 2) tr[w++] = tr[k]; tr.length = w; }
+    tr.push([lat, lon, alt]);
+    return true;
+  }
+  /** The line-gradient for a trail (each point [lat, lon, alt|null]): the colour at each point's share of the line's
+   *  length, sampled to at most TRAIL_STOPS stops; 'reveal' 0..1 = how much of it is drawn yet (the draw-in), the rest
+   *  transparent. An unknown altitude takes the last known one. Returns null when there is no line to draw. */
+  function trailGradient(pts, theme, reveal) {
+    if (!pts || pts.length < 2) return null;
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + distNm(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]));
+    const len = cum[cum.length - 1];
+    if (!(len > 0)) return null;
+    let known = null;
+    for (const p of pts) if (p[2] != null) { known = p[2]; break; }
+    if (known == null) known = 0;
+    const cols = pts.map((p) => { if (p[2] != null) known = p[2]; return altColour(known, theme); });
+    const pick = [];
+    const every = Math.max(1, Math.ceil(pts.length / TRAIL_STOPS));
+    for (let i = 0; i < pts.length; i += every) pick.push(i);
+    if (pick[pick.length - 1] !== pts.length - 1) pick.push(pts.length - 1);
+    const rv = reveal == null ? 1 : Math.max(0, Math.min(1, reveal));
+    const e = ['interpolate', ['linear'], ['line-progress']];
+    let last = -1;
+    for (const i of pick) {
+      const f = cum[i] / len;
+      if (f <= last) continue;                       // ★ stops must rise strictly
+      if (rv < 1 && f > rv) break;
+      e.push(f, cols[i]); last = f;
+    }
+    if (rv < 1) {
+      const head = Math.max(last + 1e-6, rv);
+      if (head < 1) { e.push(head, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)'); }
+    }
+    if (e.length < 7) e.push(1, e[e.length - 1]);    // ★ interpolate needs two stops
+    return e;
+  }
+
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
                   wrapLon, distNm, bearingDeg, destination, cardinal, deadReckon, iconFor, altText, altShort,
-                  vsText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
+                  vsText, vsLabel, vsCardText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
-                  engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport };
+                  engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport,
+                  trailPush, trailGradient, trailAlt, TRAIL_STEP_NM, TRAIL_STEP_FT, TRAIL_MAX };
 
   /* ══ ICONS — one geometry, two renderers ═══════════════════════════════════════════════════════
    * Every icon is a list of parts in a 40×40 box, nose up (north), centre (20,20): f = filled path,
@@ -670,6 +744,9 @@
     const ac = new Map();          // hex → state
     let firstUpdateAt = 0, firstPosBatchSeen = false;
     let selected = null;
+    /* ★ the selected aircraft's trail on the map — see trailGradient. 'at' = when it was picked (the draw-in). */
+    const TRAIL_NONE = ['interpolate', ['linear'], ['line-progress'], 0, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)'];
+    let trail = { hex: null, at: 0, dataAt: 0, dirty: false, shown: false, ll: null };
     let paused = false;            // ★ the user moved the map: auto-zoom waits until they say otherwise
     let ourMove = 0;               // camera moves we started, still running
     let destroyed = false;
@@ -913,6 +990,12 @@
                     paint: { 'text-color': T.ringLbl, 'text-halo-color': T.halo, 'text-halo-width': 1.2 } });
       gl.addLayer({ id: 'vsadsb-rx', type: 'symbol', source: 'vsadsb-rx',
                     layout: { 'icon-image': 'vsadsb-rx', 'icon-anchor': 'bottom', 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
+      // ★ THE TRAIL (trailGradient) — under the aircraft, a soft glow beneath a 3 px line, one gradient for both
+      gl.addSource('vsadsb-trail', { type: 'geojson', lineMetrics: true, data: empty });
+      gl.addLayer({ id: 'vsadsb-trail-glow', type: 'line', source: 'vsadsb-trail', layout: { 'line-cap': 'round', 'line-join': 'round' },
+                    paint: { 'line-width': 9, 'line-blur': 6, 'line-opacity': 0.35, 'line-gradient': TRAIL_NONE } });
+      gl.addLayer({ id: 'vsadsb-trail', type: 'line', source: 'vsadsb-trail', layout: { 'line-cap': 'round', 'line-join': 'round' },
+                    paint: { 'line-width': 3, 'line-gradient': TRAIL_NONE } });
       // ★ The breath (HFDL .pglow) and the ring (HFDL .ring), drawn only for the aircraft that are new.
       gl.addLayer({ id: 'vsadsb-halo', type: 'circle', source: 'vsadsb-ac', filter: ['has', 'ho'],
                     paint: { 'circle-radius': 15, 'circle-blur': 1, 'circle-color': ['get', 'col'], 'circle-opacity': ['get', 'ho'],
@@ -1033,7 +1116,7 @@
         line(rt.plausible === false ? '<span class="off" title="The aircraft is far from this filed route">' + txt + '</span>' : '\u2708 ' + txt, 'l rt');
       }
       row('Altitude', altText(a.alt_baro) + (num(a.alt_geom) != null && a.alt_baro !== 'ground' ? '  (GNSS ' + Math.round(a.alt_geom).toLocaleString('en-GB') + ' ft)' : ''));
-      row('Climb', vsText(a.baro_rate));
+      row(vsLabel(a.baro_rate), vsCardText(a.baro_rate, a.alt_baro === 'ground' ? null : a.alt_baro));
       row('Speed', num(a.gs) != null ? Math.round(a.gs) + ' kt' : '');
       row('Track', num(a.track) != null ? Math.round(a.track) + '° ' + cardinal(a.track) : '');
       row('Squawk', a.squawk ? String(a.squawk).replace(/[^0-7]/g, '').slice(0, 4) : '');
@@ -1041,6 +1124,8 @@
         const d = distNm(rx.lat, rx.lon, s.fix.lat, s.fix.lon), b = bearingDeg(rx.lat, rx.lon, s.fix.lat, s.fix.lon);
         row('From you', (d < 10 ? d.toFixed(1) : Math.round(d)) + ' NM · ' + Math.round(b) + '° ' + cardinal(b));
       }
+      // ★ how far the server has followed it (vibe_adsb.h setPos) — the trail on the map is that path
+      row('Tracked', num(a.tracked_nm) != null && a.tracked_nm >= 1 ? Math.round(a.tracked_nm) + ' NM' : '');
       if (!a.t) row('Type', CAT_NAME[String(a.category || '').toUpperCase()] || '');   // ★ the real type says more
       const seen = num(a.seen);
       row('Heard', seen == null ? '' : seen < 2 ? 'just now' : Math.round(seen) + ' s ago');
@@ -1069,6 +1154,7 @@
       closePopup();
       if (!selected) return;
       const s = ac.get(selected);
+      trailPick(selected);
       popupHtml = cardHtml(s); popupHex = selected;
       if (gl) {
         if (!ML) { console.error('adsblayer: maplibregl is not on the page — no aircraft card'); return; }
@@ -1087,6 +1173,73 @@
         popup = p; p.openOn(lm);
       }
       kick();
+    }
+    /* ★★ The trail of a newly picked aircraft: what this map has seen at once, then the server's whole trail when it
+     *  answers (it has kept it since it first heard the aircraft — the line reaches back past when the map opened). */
+    function trailPick(hex) {
+      trail.hex = hex; trail.at = now(); trail.dirty = true;
+      if (imageBase == null || typeof fetch !== 'function') return;
+      fetch(imageBase + 'trail/' + encodeURIComponent(hex), { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (!j || !Array.isArray(j.pts) || trail.hex !== hex || !ac.has(hex)) return;
+          const pts = [];
+          for (const p of j.pts) {
+            if (!Array.isArray(p)) continue;
+            const la = num(p[0]), lo = num(p[1]);
+            if (la == null || lo == null || Math.abs(la) > 90 || Math.abs(lo) > 180) continue;
+            pts.push([la, lo, num(p[2])]);
+          }
+          const s = ac.get(hex);
+          if (pts.length >= 2 && pts.length >= (s.tr ? s.tr.length : 0)) { s.tr = pts; trail.dirty = true; kick(); }
+        })
+        .catch(() => { /* ★ a server without trails (OWRX, an older VibeServer): this map's own is drawn */ });
+    }
+    /** Draw (or clear) the selected aircraft's trail. True while the draw-in is still running. */
+    function drawTrail(t) {
+      const s = selected && trail.hex === selected ? ac.get(selected) : null;
+      if (!s || !s.disp || !s.tr || !s.tr.length) {
+        if (trail.shown) {
+          trail.shown = false;
+          if (gl && glReady) {
+            const src = gl.getSource('vsadsb-trail');
+            if (src) src.setData({ type: 'FeatureCollection', features: [] });
+          } else if (trail.ll) { try { lm.removeLayer(trail.ll); } catch (e) { /* gone */ } trail.ll = null; }
+        }
+        if (!selected) trail.hex = null;
+        return false;
+      }
+      const k = Math.min(1, (t - trail.at) / TRAIL_DRAW_MS), rv = easeInOut(k);
+      const drawing = k < 1;
+      // ★ its head is the icon, gliding — four times a second is smooth at map scale, and cheap on a 1 GB phone
+      if (!trail.dirty && !drawing && t - trail.dataAt < 250) return false;
+      trail.dataAt = t; trail.dirty = false; trail.shown = true;
+      const pts = s.tr.slice();
+      pts.push([s.disp.lat, s.disp.lon, trailAlt(s.a)]);
+      if (gl) {
+        if (!glReady) return drawing;
+        const src = gl.getSource('vsadsb-trail');
+        const grad = trailGradient(pts, th, rv);
+        if (!src || !grad) return drawing;
+        src.setData({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: pts.map((p) => [p[1], p[0]]) } });
+        gl.setPaintProperty('vsadsb-trail', 'line-gradient', grad);
+        gl.setPaintProperty('vsadsb-trail-glow', 'line-gradient', grad);
+      } else if (!drawing || !trail.ll) {
+        // ★ Leaflet: no gradients — short segments, each in its own altitude colour, read as a blend
+        if (trail.ll) { try { lm.removeLayer(trail.ll); } catch (e) { /* gone */ } }
+        const g = LL.layerGroup();
+        const every = Math.max(1, Math.ceil(pts.length / 150));
+        let alt = null;
+        for (let i = 0; i + 1 < pts.length; i += every) {
+          const j = Math.min(pts.length - 1, i + every);
+          if (pts[i][2] != null) alt = pts[i][2];
+          LL.polyline([[pts[i][0], pts[i][1]], [pts[j][0], pts[j][1]]],
+                      { color: altColour(alt != null ? alt : 0, th), weight: 3, opacity: 0.95, interactive: false, lineCap: 'round' }).addTo(g);
+        }
+        g.addTo(lm);
+        trail.ll = g;
+      }
+      return drawing;
     }
     function closePopup() {
       const p = popup; popup = null; popupHex = null;
@@ -1126,6 +1279,8 @@
                       t: t - Math.max(0, Math.min(60, num(raw.seen_pos) || 0)) * 1000 };
         const same = s.fix && Math.abs(s.fix.lat - fix.lat) < 1e-7 && Math.abs(s.fix.lon - fix.lon) < 1e-7;
         if (same) { s.fix.gs = fix.gs; s.fix.track = fix.track; continue; }   // ★ the same fix again: keep flying it
+        if (!s.tr) s.tr = [];
+        if (trailPush(s.tr, lat, lon, trailAlt(raw)) && hex === trail.hex) trail.dirty = true;
         if (!s.disp) {
           s.fix = fix; s.disp = deadReckon(fix, t); s.corr = null; s.hdg = fix.track;
           s.shownAt = t;
@@ -1190,6 +1345,7 @@
       }
       if (t - labelAt > LABEL_EVERY_MS) { labelAt = t; decideLabels(); }
       if (gl) flushGl(t); else flushLl(t);
+      if (drawTrail(t)) animating = true;
       if (popup && selected && ac.has(selected)) {
         const s = ac.get(selected);
         if (s.disp) { if (gl) popup.setLngLat([s.disp.lon, s.disp.lat]); else popup.setLatLng([s.disp.lat, s.disp.lon]); }
@@ -1367,13 +1523,14 @@
         for (const ev of ['pointerdown', 'touchstart', 'wheel', 'keydown']) container.removeEventListener(ev, onInput, { capture: true });
         if (gl) {
           gl.off('movestart', onMoveStart); gl.off('moveend', onMoveEnd); gl.off('click', onGlClick); gl.off('mousemove', onGlHover);
-          for (const id of ['vsadsb-labels', 'vsadsb-icons', 'vsadsb-ring', 'vsadsb-halo', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings']) if (gl.getLayer && gl.getLayer(id)) gl.removeLayer(id);
-          for (const id of ['vsadsb-ac', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings']) if (gl.getSource && gl.getSource(id)) gl.removeSource(id);
+          for (const id of ['vsadsb-labels', 'vsadsb-icons', 'vsadsb-ring', 'vsadsb-halo', 'vsadsb-trail', 'vsadsb-trail-glow', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings']) if (gl.getLayer && gl.getLayer(id)) gl.removeLayer(id);
+          for (const id of ['vsadsb-ac', 'vsadsb-trail', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings']) if (gl.getSource && gl.getSource(id)) gl.removeSource(id);
         } else {
           lm.off('movestart', onMoveStart); lm.off('moveend', onMoveEnd);
           for (const s of ac.values()) removeLl(s);
           if (llRings) lm.removeLayer(llRings);
           if (llRx) lm.removeLayer(llRx);
+          if (trail.ll) lm.removeLayer(trail.ll);
         }
         ac.clear();
       },

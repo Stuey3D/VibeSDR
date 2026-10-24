@@ -82,6 +82,8 @@ export interface ProfileInfo {
  *  aircraft's REGISTRY, not where the flight departed: a Ryanair 737 is Irish wherever
  *  it took off from. */
 export interface Aircraft {
+  /** ★ V12: how far the server has followed it, km (adsbTypes.adsbToAircraft, from tracked_nm) */
+  trackedKm?: number;
   icao:      string;      // 24-bit address, hex — the only field always present
   flight?:   string;      // callsign, e.g. RYR4KL
   reg?:      string;      // registration, e.g. D-AENE (the server calls it `aircraft`)

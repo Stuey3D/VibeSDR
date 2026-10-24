@@ -99,6 +99,9 @@ export default function AircraftPanel({ aircraft, scrollRef }: {
                   {a.bearing != null ? COMPASS[Math.round(a.bearing / 45) % 8] : ''}
                   {a.rssi != null ? `  ${a.rssi.toFixed(0)}dB` : ''}
                 </Text>
+                {a.trackedKm != null && (
+                  <Text style={s.sub} numberOfLines={1}>{`tracked ${a.trackedKm} km`}</Text>
+                )}
               </View>
             </View>
           );

@@ -327,6 +327,8 @@ export interface AdsbAircraft extends AdsbInfo {
   gs?: number; track?: number; mag_heading?: number; tas?: number; ias?: number;
   baro_rate?: number; squawk?: string; emergency?: string | number;
   seen?: number; messages?: number; rssi?: number;
+  /** ★ how far the server has followed it, NM — the sum of its position steps (vibe_adsb.h setPos) */
+  tracked_nm?: number;
 }
 /** ★ The ADS-B report, once a second while the receiver is in ADS-B (docs/v12/ADSB.md). */
 export interface AdsbReport {

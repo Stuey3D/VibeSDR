@@ -206,6 +206,9 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = 
     const sq = String(a.squawk ?? '').replace(/[^0-7]/g, '').slice(0, 4);
     const where = rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${COMPASS[Math.round(rb.brg / 45) % 8]}</span>`
       : located ? '<span class="dim">located</span>' : '<span class="dim">no position</span>';
+    // ★ TRACKED FOR xx NM (Stuart, 2026-10-24): the path the server has followed it along, under its range
+    const trk = num(a.tracked_nm);
+    const tracked = trk != null && trk >= 1 ? `<small class="trk">tracked ${Math.round(trk)} NM</small>` : '';
     const em = emergency(a);
     const tag = badge ? `<span class="tag em">${esc(badge)}</span>` : mil ? '<span class="tag mil">MIL</span>' : '';
     return `<div class="adsbRow${em ? ' em' : ''}${mil && !em ? ' mil' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
@@ -213,7 +216,7 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = 
       + `<span class="id"><b>${flagHtml(a.country)}${esc(call || a.r || hex.toUpperCase())}${barsHtml(adsbBars(a.rssi))}${tag}</b><small>${adsbSecondLine(a, hex, sq, imgBase)}</small></span>`
       + `<span class="alt"${altStyle}>${esc(altText(a.alt_baro))}${trend}</span>`
       + `<span class="spd">${gs != null ? `${Math.round(gs)} kt` : ''}</span>`
-      + `<span class="rng">${where}</span>`
+      + `<span class="rng">${where}${tracked}</span>`
       + '</div>';
   }).join('');
 }

@@ -49,6 +49,8 @@ export interface AdsbAircraftRaw extends AdsbInfo {
   seen?: number;
   messages?: number;
   rssi?: number;
+  /** ★ how far the server has followed it, NM (vibe_adsb.h setPos) */
+  tracked_nm?: number;
 }
 
 /** A whole `adsb` report. */
@@ -107,7 +109,7 @@ export function parseAdsbMessage(msg: Record<string, unknown>): AdsbReport {
     if (a.alt_baro === 'ground') r.alt_baro = 'ground';
     else if (num(a.alt_baro) !== undefined) r.alt_baro = num(a.alt_baro);
     for (const k of ['seen_pos', 'alt_geom', 'gs', 'track', 'mag_heading', 'tas', 'ias',
-                     'baro_rate', 'seen', 'messages', 'rssi'] as const) {
+                     'baro_rate', 'seen', 'messages', 'rssi', 'tracked_nm'] as const) {
       const v = num(a[k]);
       if (v !== undefined) (r as unknown as Record<string, number>)[k] = v;
     }
@@ -172,6 +174,8 @@ export function adsbToAircraft(list: AdsbAircraftRaw[], rx: { lat: number; lon: 
     // ★ The raw extras ride along (the map and the box can use them; the watch's Codable ignores them).
     if (a.category) row.category = a.category;
     if (a.seen !== undefined) row.seen = a.seen;
+    // ★ tracked for xx — the server's NM in the panel's unit (km, as distKm)
+    if (a.tracked_nm !== undefined && a.tracked_nm >= 1) row.trackedKm = Math.round(a.tracked_nm * 1.852);
     if (ground) row.onGround = true;
     if (a.emergency) row.emergency = a.emergency;
     // ★ V12 aircraft data (merged from adsb_info): what the aircraft IS, for the list's second line

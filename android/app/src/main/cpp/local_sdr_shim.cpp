@@ -12896,6 +12896,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     double adsbLastReport_ = 0, adsbLastGain_ = 0;
     double adsbHoldUntil_ = 0; int adsbUpVotes_ = 0, adsbDownVotes_ = 0;   // the gain rule's hysteresis — see adsbTick
     vibeadsb::GainTrial adsbTrial_;                                       // a proposed step, tried A/B — see adsbTick
+    vibeadsb::GainSearch adsbSearch_;                                     // the look at entry — see vibeadsb::GainSearch
+    double adsbExploreAt_ = 0; bool adsbExploreUp_ = false;               // the ten-minute look either side
     double adsbNoCutUntil_ = 0, adsbNoClimbUntil_ = 0;                    // after a step lost its trial
     std::atomic<bool> rateBoostFellBack_{false};       // ★ the watchdog's boosted-rate recovery ran — see rateBoostStalled
     /** ★ When rtl_tcp last delivered (tcpReadLoop). lastIqAt is the USB/driver sources' — an rtl_tcp radio never
@@ -12993,7 +12995,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         adsbGains_ = LocalSdrShim::instance().getTunerGains();
         adsbGainIdx_ = -1; adsbGainSet_ = -999;
         adsbHoldUntil_ = 0; adsbUpVotes_ = 0; adsbDownVotes_ = 0;
-        adsbTrial_.cancel(); adsbNoCutUntil_ = adsbNoClimbUntil_ = 0;
+        adsbTrial_.cancel(); adsbSearch_.cancel(); adsbNoCutUntil_ = adsbNoClimbUntil_ = 0;
+        adsbExploreAt_ = 0; adsbExploreUp_ = false;
         if (!adsbGains_.empty()) {
             adsbGainIdx_ = useSdrplay() ? int(adsbGains_.size() * 3 / 4) : int(adsbGains_.size()) - 1;
             adsbGainSet_ = adsbGains_[size_t(adsbGainIdx_)];
@@ -13183,7 +13186,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ A LISTENER WHO SETS THE GAIN HAS IT. Any value we did not set ourselves pauses the rule; asking
         //    for automatic gain again (-1) hands it back.
         const int cur = g_gainTarget.load(std::memory_order_relaxed);
-        if (cur >= 0 && cur != adsbGainSet_) { adsbTrial_.cancel(); return; }   // ★ and a trial under way is void
+        if (cur >= 0 && cur != adsbGainSet_) { adsbTrial_.cancel(); adsbSearch_.cancel(); return; }   // ★ and a trial or search is void
         const vibeadsb::Health h = g_adsb.health();
         auto setIdx = [&](int i) {
             if (i == adsbGainIdx_ && cur >= 0) return;
@@ -13191,6 +13194,40 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             adsbGainSet_ = adsbGains_[size_t(i)];
             LocalSdrShim::instance().setGain(adsbGainSet_);
         };
+        const bool levelHeld = useSdrplay();   // ★ the RSP's IF AGC holds the level — see GainRule::levelHeld
+        // ★★★ FIRST, LOOK — vibeadsb::GainSearch (the V4L + LaNA: 0 msg/s at the top, 40 four rungs down). Not an SDRplay:
+        //     its gain picks an LNA state under its own AGC, and it only ever steps down for clipping.
+        if (!levelHeld && adsbExploreAt_ == 0 && !adsbSearch_.active()) {
+            std::vector<int> order;
+            for (int i = int(adsbGains_.size()) - 1; i >= int(adsbGains_.size()) / 3; i -= 2) order.push_back(i);
+            adsbExploreAt_ = t + 600.0;
+            if (order.size() >= 2) {
+                LOGI("[ADS-B] gain search: %zu gains from %.1f dB down, counting messages at each", order.size(), adsbGains_[size_t(order[0])] / 10.0);
+                setIdx(adsbSearch_.start(order, t));
+                return;
+            }
+        }
+        if (adsbSearch_.active()) {
+            setIdx(adsbSearch_.step(t, h.msgsTotal));
+            if (adsbSearch_.active()) return;
+            std::string tried;
+            for (size_t k = 0; k < adsbSearch_.order().size(); ++k) {
+                if (adsbSearch_.rates()[k] < 0) break;
+                char b[48]; std::snprintf(b, sizeof b, "%s%.1f=%.0f", k ? " " : "", adsbGains_[size_t(adsbSearch_.order()[k])] / 10.0, adsbSearch_.rates()[k]);
+                tried += b;
+            }
+            if (adsbSearch_.found()) {
+                setIdx(adsbSearch_.result());
+                adsbNoCutUntil_ = adsbNoClimbUntil_ = 0;
+                LOGI("[ADS-B] gain search (dB=msg/s): %s -> %.1f dB", tried.c_str(), adsbGainSet_ / 10.0);
+            } else {
+                // ★ too quiet to judge: the top, and the noise rule from there
+                setIdx(adsbSearch_.order()[0]);
+                LOGI("[ADS-B] gain search (dB=msg/s): %s -> too few aircraft to judge, %.1f dB and the noise rule", tried.c_str(), adsbGainSet_ / 10.0);
+            }
+            adsbExploreAt_ = t + 600.0;
+            return;
+        }
         // ★★★ A PROPOSED STEP IS TRIED, NOT TAKEN — see vibeadsb::GainTrial (the V4L's 250 → 170 msg/s)
         if (adsbTrial_.active()) {
             setIdx(adsbTrial_.step(t, h.msgsTotal));
@@ -13205,8 +13242,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             else adsbNoCutUntil_ = t + 600.0;
             return;
         }
+        // ★ every ten minutes, a look one rung either side (alternately) — kept only if it clearly decodes more: the sky
+        //   and the band change through an evening, and the search's answer with them
+        if (!levelHeld && t >= adsbExploreAt_) {
+            adsbExploreAt_ = t + 600.0;
+            adsbExploreUp_ = !adsbExploreUp_;
+            const int nb = adsbGainIdx_ + (adsbExploreUp_ ? 1 : -1);
+            if (nb >= 0 && nb < int(adsbGains_.size())) {
+                LOGI("[ADS-B] gain look %.1f -> %.1f dB (%.0f msg/s)", adsbGainSet_ / 10.0, adsbGains_[size_t(nb)] / 10.0, h.msgsPerSec);
+                setIdx(adsbTrial_.start(adsbGainIdx_, nb, t, false));
+                return;
+            }
+        }
         vibeadsb::GainRule rule;
-        rule.levelHeld = useSdrplay();   // ★ the RSP's IF AGC holds the level — see GainRule::levelHeld
+        rule.levelHeld = levelHeld;
         int d = rule.decide(h);
         /* ★★ HYSTERESIS — calm, as the FlightAware box is (two changes in fifteen minutes). A cut needs 6 s of asking
          *  (3 ticks; a noise floor that rose for one burst of traffic is not a reason), then no climb for 60 s, and a
@@ -20804,6 +20853,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    through 404s. ★★★ THE KEY IS LOOKED UP IN AN INDEX BUILT BY readdir() — it is never joined onto a path —
         //    and anything but [A-Za-z0-9_-]{1,40} is refused before that (vibe_adsb_data.h Images; test-adsb-data).
         //    An SVG goes out sandboxed (CSP), so an owner's file can never script this server's origin.
+        // ── ★★ V12 ADS-B: one aircraft's TRAIL — GET /adsb/trail/<hex>, the map's rainbow line when it is tapped (vibe_adsb.h
+        //    kTrailStepNm). THIS radio's decoder, so not a front-door path. The hex is parsed, never used as a path.
+        } else if (reqLine.rfind("GET /adsb/trail/", 0) == 0) {
+            size_t to = reqLine.find_first_of(" ?#", 16);
+            if (to == std::string::npos) to = reqLine.size();
+            const std::string hex = reqLine.substr(16, std::min<size_t>(to - 16, 8));
+            const std::string body = g_adsb.trail(hex);
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close(); return;
         } else if (reqLine.rfind("GET /adsb/logo/", 0) == 0 || reqLine.rfind("GET /adsb/silhouette/", 0) == 0) {
             const bool sil = reqLine.rfind("GET /adsb/silhouette/", 0) == 0;
             const size_t from = sil ? 21 : 15;

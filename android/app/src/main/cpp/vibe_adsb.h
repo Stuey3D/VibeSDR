@@ -25,6 +25,7 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -605,6 +606,18 @@ inline double distanceNm(double la1, double lo1, double la2, double lo2) {
 }
 
 // ── The aircraft table ───────────────────────────────────────────────────────────────────────────────
+/** One point of an aircraft's trail: where, and how high (kTrailNoAlt = unknown, 0 also = on the ground). */
+struct TrailPt { float lat = 0, lon = 0; int32_t alt = 0; };
+constexpr int32_t kTrailNoAlt = INT32_MIN;
+/* ★★ THE TRAIL (Stuart, 2026-10-24: "clicking an aircraft should draw its track in as a rainbow coloured line to show its
+ *  altitude … an aircraft approaching Heathrow I should see a line changing from purple down to orange"). Kept on the
+ *  SERVER, so a listener who joins late, or taps an aircraft that has been in view for half an hour, sees all of it.
+ *  A point every 0.3 NM or 250 ft of climb/descent; at 1 000 points every other one is dropped (the newest kept), so a
+ *  long track keeps its shape at half the detail — 12 KB an aircraft at most. */
+constexpr double kTrailStepNm = 0.3;
+constexpr int kTrailStepFt = 250;
+constexpr size_t kTrailMax = 1000;
+
 struct Aircraft {
     uint32_t icao = 0;
     bool     nonIcao = false;          ///< DF18 CF=1: an anonymous/temporary address
@@ -620,6 +633,8 @@ struct Aircraft {
     int      squawk = -1;
     int      emergency = 0;            ///< TC 28 emergency state, 0 = none
     double   seen = 0, seenPos = 0;    ///< seconds (the tracker's clock) of the last message / last position
+    double   trackedNm = 0;            ///< how far we have followed it: the sum of its position steps (setPos)
+    std::vector<TrailPt> trail;        ///< where it has been — see kTrailStepNm
     uint32_t messages = 0;
     float    level = -99;              ///< dBFS, smoothed
     // CPR state
@@ -683,6 +698,34 @@ public:
     }
 
     const std::unordered_map<uint32_t, Aircraft>& aircraft() const { return ac_; }
+    /** {"type":"adsb_trail","hex":"…","pts":[[lat,lon,alt|null],…]} (alt 0 on the ground) — empty pts when unknown. `hex` as the
+     *  report writes it (6 hex digits, "~" first for a non-ICAO address). */
+    std::string trailJson(const std::string& hex) const {
+        std::string h = hex;
+        const bool non = !h.empty() && h[0] == '~';
+        if (non) h.erase(0, 1);
+        uint32_t icao = 0; bool ok = h.size() == 6;
+        for (char c : h) {
+            const int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+            if (v < 0) { ok = false; break; }
+            icao = icao << 4 | uint32_t(v);
+        }
+        char b[64];
+        std::snprintf(b, sizeof b, "{\"type\":\"adsb_trail\",\"hex\":\"%s%06x\",\"pts\":[", non ? "~" : "", ok ? icao : 0);
+        std::string o = b;
+        auto it = ok ? ac_.find(icao) : ac_.end();
+        if (it != ac_.end() && it->second.nonIcao == non) {
+            bool first = true;
+            for (const TrailPt& p : it->second.trail) {
+                if (!first) o += ',';
+                first = false;
+                if (p.alt == kTrailNoAlt) std::snprintf(b, sizeof b, "[%.4f,%.4f,null]", p.lat, p.lon);
+                else std::snprintf(b, sizeof b, "[%.4f,%.4f,%d]", p.lat, p.lon, int(p.alt));
+                o += b;
+            }
+        }
+        return o + "]}";
+    }
     uint64_t good() const { return good_; }
     uint64_t rejected() const { return rejected_; }
     uint64_t repaired() const { return repaired_; }
@@ -717,6 +760,7 @@ public:
             if (a.hasVr) VIBE_ADSB_ADD(",\"baro_rate\":%d", a.vr);
             if (a.squawk >= 0) VIBE_ADSB_ADD(",\"squawk\":\"%04d\"", a.squawk);
             if (a.emergency) VIBE_ADSB_ADD(",\"emergency\":%d", a.emergency);
+            if (a.trackedNm >= 0.5) VIBE_ADSB_ADD(",\"tracked_nm\":%.0f", a.trackedNm);
             VIBE_ADSB_ADD(",\"seen\":%.1f,\"messages\":%u,\"rssi\":%.1f}", now - a.seen, a.messages, a.level);
             o.append(b, size_t(std::min(n, int(sizeof b) - 1)));
 #undef VIBE_ADSB_ADD
@@ -849,8 +893,30 @@ private:
         }
     }
 
+    /* ★ TRACKED FOR xx NM (Stuart, 2026-10-24) — the path we have followed it along, step by step. A step faster
+     *  than 1 200 kt is a bad fix that slipped through, not flight, and is not added (the position still moves). */
     static void setPos(Aircraft& a, double lat, double lon, double now) {
+        if (a.hasPos) {
+            const double d = distanceNm(a.lat, a.lon, lat, lon), dt = now - a.seenPos;
+            if (dt > 0 && d / dt * 3600.0 <= 1200.0) a.trackedNm += d;
+            else a.trail.clear();          // ★ a jump that is not flight: the old trail would draw a line across the map
+        }
         a.hasPos = true; a.lat = lat; a.lon = lon; a.seenPos = now;
+        const int32_t alt = a.onGround ? 0 : a.hasAlt ? int32_t(a.altBaro) : kTrailNoAlt;
+        bool add = a.trail.empty();
+        if (!add) {
+            const TrailPt& l = a.trail.back();
+            add = distanceNm(l.lat, l.lon, lat, lon) >= kTrailStepNm
+               || (alt != kTrailNoAlt && l.alt != kTrailNoAlt && std::abs(alt - l.alt) >= kTrailStepFt);
+        }
+        if (add) {
+            if (a.trail.size() >= kTrailMax) {
+                size_t w = 0;
+                for (size_t k = 0; k < a.trail.size(); k += 2) a.trail[w++] = a.trail[k];
+                a.trail.resize(w);
+            }
+            a.trail.push_back({float(lat), float(lon), alt});
+        }
     }
 
     std::unordered_map<uint32_t, Aircraft> ac_;
