@@ -93,7 +93,13 @@ export function adsbStatus(r: AdsbReport | null): string {
   if (!r) return 'listening on 1090 MHz…';
   const rate = num(r.msgRate);
   const r1 = rate == null ? '' : rate >= 1000 ? ` · ${(rate / 1000).toFixed(1)}k msg/s` : ` · ${Math.round(rate)} msg/s`;
-  return `${r.aircraft.length} heard${r1}`;
+  /* ★ THE RATE AND THE CAPTURE, ALWAYS (Stuart, 2026-10-24: "there is no capture rate display for ADS-B to check the
+   *  2.56MSPS setting") — the sample rate ADS-B runs at and the share of its samples the decoder received. Under
+   *  ADSB_CAPTURE_WARN_PCT the red warning beside this line says it instead (adsbCaptureWarning), so not twice. */
+  const sr = num(r.rate), cap = num(r.capture);
+  const r2 = sr != null && sr > 0 ? ` · ${(sr / 1e6).toFixed(sr % 1e5 === 0 ? 1 : 2)} MS/s` : '';
+  const r3 = cap != null && cap >= ADSB_CAPTURE_WARN_PCT ? ` · capture ${Math.round(cap)} %` : '';
+  return `${r.aircraft.length} heard${r1}${r2}${r3}`;
 }
 
 /** ★★ THE FURTHEST AIRCRAFT (Stuart, 2026-10-24: "We could put a Furthest aircraft here") — the located aircraft
