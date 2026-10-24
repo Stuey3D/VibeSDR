@@ -1154,6 +1154,21 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* ★ The furthest aircraft: a key like the others, quieter, its "FURTHEST" dimmed so the distance reads first. */
 #adsbTop #adsbFar { font-size: 12px; padding: 6px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #adsbFar .k { opacity: 0.6; letter-spacing: 1.5px; }
+/* ★ GAIN in ADS-B (Stuart, 2026-10-24: "there is no way of accessing the gain control when ADSB is enabled"): the key
+ *   says what the radio is at; its card holds AUTO and the radio's own gain steps */
+#adsbTop #adsbGain { font-size: 12px; padding: 6px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#adsbGain .k { opacity: 0.6; letter-spacing: 1.5px; }
+#adsbGainPop { position: absolute; top: 8px; right: max(10px, env(safe-area-inset-right, 0px)); z-index: 1200; width: min(300px, calc(100vw - 32px));
+  box-sizing: border-box; padding: 12px; border-radius: 10px; background: rgba(8, 6, 2, 0.94); border: 1px solid rgba(255, 160, 0, 0.35);
+  color: rgba(255, 184, 51, 0.92); font-size: 12px; letter-spacing: 1px; display: grid; gap: 10px; }
+#adsbGainPop[hidden] { display: none; }
+#adsbGainPop .hd { letter-spacing: 2px; }
+#adsbGainPop #adsbGainNow { color: var(--btn-active-tx); font-variant-numeric: tabular-nums; }
+#adsbGainPop button { font: inherit; padding: 7px 10px; border-radius: 8px; cursor: pointer; background: rgba(255, 160, 0, 0.08);
+  border: 1px solid rgba(255, 160, 0, 0.30); color: inherit; }
+#adsbGainPop button.on { background: rgba(255, 160, 0, 0.22); border-color: rgba(255, 184, 51, 0.7); color: var(--btn-active-tx); }
+#adsbGainPop input[type=range] { width: 100%; accent-color: #ffb833; }
+#adsbGainPop .nt { color: var(--text-dim); letter-spacing: 0.5px; line-height: 1.4; }
 /* ★★ The capture warning (adsbCaptureWarning): red, beside the rate; on a phone only "capture 74 %" stays. */
 #adsbCapture { flex: 0 1 auto; min-width: 0; font-size: 11px; letter-spacing: 0.5px; color: var(--red, #ff6b5e);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3889,11 +3904,18 @@ select.btn { padding: 6px 8px; }
     <div id="adsbCntWrap" title="Aircraft on the map"><svg width="16" height="16" viewBox="0 0 26 26" aria-hidden="true"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="currentColor"/></svg><span id="adsbCnt">…</span></div>
     <span id="adsbStat"></span>
     <span id="adsbCapture" hidden></span>
+    <button type="button" id="adsbGain" hidden title="The receiver's gain in ADS-B — automatic, or set it yourself"></button>
     <button type="button" id="adsbChat" title="Chat">CHAT<span class="unread" id="adsbChatUnread" hidden></span></button>
   </div>
   <div id="adsbMain">
     <div id="adsbMapHost"></div>
     <div id="adsbNote" hidden></div>
+    <div id="adsbGainPop" hidden role="dialog" aria-label="ADS-B gain">
+        <div class="hd">GAIN <span id="adsbGainNow"></span></div>
+        <button type="button" id="adsbGainAuto" title="Let the server find the gain that decodes the most">AUTO</button>
+        <input type="range" id="adsbGainSl" min="0" max="0" step="1" aria-label="Gain">
+        <div class="nt" id="adsbGainNote"></div>
+      </div>
     <div id="adsbLive" data-navbox data-navstart=".adsbRow">
       <button type="button" id="adsbLegendBtn" title="What the colours mean" aria-label="What the colours mean">i</button>
       <button type="button" id="adsbLiveHead" aria-expanded="true" title="Hide the list"><span id="adsbLiveTtl">AIRCRAFT</span><span id="adsbLiveN"></span><span class="chev" aria-hidden="true"></span></button>

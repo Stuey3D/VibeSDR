@@ -934,6 +934,12 @@ printf '\n\033[1m── ADS-B landing + keep running (end to end) ──\033[0m\
 node scripts/test-server-adsb-landing.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★ THE RATE PIN AND THE SHARED-DIAL RATE RULE BIND LISTENERS, NOT THE SIGNED-IN ADMIN (Stuart, 2026-10-24: "sample rate
+#    change isnt working … I am in admin mode"). Same VIBESERVER_BIN rule.
+printf '\n\033[1m── rate pin: listener refused, admin allowed (end to end) ──\033[0m\n'
+node scripts/test-rate-pin-admin.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ EXIT DAB STICKS (Stuart, 2026-10-05 23:06, Pi 2: the box "popped up again … over the MW signal"): no
 #     `dab` report after `dab_off` over many cycles, none in reply to a service pick out of DAB, no re-entry,
 #     and the log names who asked. Same VIBESERVER_BIN rule.

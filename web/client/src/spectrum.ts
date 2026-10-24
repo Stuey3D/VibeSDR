@@ -336,6 +336,8 @@ export interface AdsbReport {
   rate?: number; noise?: number; msgRate?: number; dropped?: number;
   /** ★ % of the promised samples the server's decoder RECEIVED over ~10 s; -1 until known (vibe_adsb_capture.h). */
   capture?: number;
+  /** ★ the gain ADS-B is at (dB), whether the server is choosing it (gainAuto 1) and still measuring (gainBusy 1) */
+  gain?: number; gainAuto?: number; gainBusy?: number;
 }
 
 /** What the server reports about a DAB multiplex. Every field is MEASURED — see briefs/BRIEF-dab.md;

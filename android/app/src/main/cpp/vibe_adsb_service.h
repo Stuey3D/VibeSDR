@@ -395,9 +395,13 @@ public:
     static constexpr double kQuietMsgs = 2.0;   ///< msg/s: below this the sky is too empty to judge by
 
     bool active() const { return at_ < order_.size(); }
-    /** `order`: indices into the gain list, tried in this order (the shim: the top, then every other rung down). */
-    int start(const std::vector<int>& order, double t) {
+    /** `order`: indices into the gain list, tried in this order. `climbing`: the order RISES (the shim's ramp from the
+     *  middle up — Stuart, 2026-10-24: "start in the middle and ramp up") — then a later, higher gain takes the lead
+     *  unless it is clearly WORSE (a plateau climbs on: the distant aircraft are the ones gain buys); falling, a later,
+     *  lower gain must clearly BEAT the best (a plateau stays high). */
+    int start(const std::vector<int>& order, double t, bool climbing = false) {
         order_ = order; rates_.assign(order.size(), -1); at_ = 0; legAt_ = t; countFrom_ = -1; best_ = -1; below_ = 0;
+        climbing_ = climbing;
         return order_.empty() ? -1 : order_[0];
     }
     int step(double t, uint64_t msgsTotal) {
@@ -410,7 +414,7 @@ public:
         rates_[at_] = double(msgsTotal - countMsgs_) / (t - countFrom_);
         // ★ a LOWER gain must clearly beat the best (5 %, past the counts' noise): a flat curve stays at the top — the
         //   recording read 1351 at 49.6 and 1390 at 25.4 dB, and "25.4" would have been chosen for nothing
-        if (best_ < 0 || rates_[at_] > 1.05 * rates_[size_t(best_)]) best_ = int(at_);
+        if (best_ < 0 || rates_[at_] > (climbing_ ? 0.97 : 1.05) * rates_[size_t(best_)]) best_ = int(at_);
         // ★ past the peak = two rungs in a row each more than 5 % under the best (one could be a quiet moment)
         below_ = int(at_) > best_ && rates_[at_] < 0.95 * rates_[size_t(best_)] ? below_ + 1 : 0;
         const bool pastPeak = below_ >= 2 && rates_[size_t(best_)] >= kQuietMsgs;
@@ -432,6 +436,7 @@ private:
     std::vector<double> rates_;
     size_t at_ = 0;
     int best_ = -1, below_ = 0;
+    bool climbing_ = false;
     double legAt_ = 0, countFrom_ = -1;
     uint64_t countMsgs_ = 0;
 };

@@ -71,9 +71,9 @@ int main() {
 
     // ★★★ GainSearch — the look at entry (the V4L + LaNA on a YouLoop: 0 msg/s at the top, 40 four rungs down)
     {
-        auto search = [](const std::vector<int>& order, const std::vector<double>& rateAt /* by index */, int& legs) {
+        auto search = [](const std::vector<int>& order, const std::vector<double>& rateAt /* by index */, int& legs, bool climbing = false) {
             vibeadsb::GainSearch g; double t = 0; uint64_t total = 0; legs = 0;
-            int at = g.start(order, t), last = at;
+            int at = g.start(order, t, climbing), last = at;
             for (int i = 0; i < 400 && g.active(); ++i) {
                 t += 2; total += uint64_t(rateAt[size_t(at)] * 2);
                 at = g.step(t, total);
@@ -98,6 +98,20 @@ int main() {
         flat[22] = 1379; flat[16] = 1390;
         auto fl = search(order, flat, legs);
         ok(fl.found() && fl.result() == 28, "a flat curve (the recording: 1351..1390, all within counting noise) stays at the top");
+        // ★★ THE RAMP — middle up (Stuart: "start in the middle and ramp up"), the R820T's 29 rungs: 14, 16 … 28
+        std::vector<int> up = {14, 16, 18, 20, 22, 24, 26, 28};
+        std::vector<double> v4lr(29, 0);
+        for (int i = 0; i < 29; ++i) v4lr[size_t(i)] = i <= 25 ? 20 + i * 6.0 : 170 - (i - 25) * 55.0;   // peak at 42.1 (25)
+        auto ru = search(up, v4lr, legs, true);
+        ok(ru.found() && ru.result() == 24, "the V4L + LaNA: the ramp climbs to the peak's neighbourhood (24 of 22/24/26) and stops");
+        ok(ru.rates()[0] >= 0 && ru.rates()[0] < ru.rates()[5], "  ...having measured the middle below the peak (8 s at the dead top at most)");
+        std::vector<double> pi2(29, 0);
+        for (int i = 0; i < 29; ++i) pi2[size_t(i)] = 100 + i * 10.0;   // a bare antenna: more gain, more aircraft
+        auto rp = search(up, pi2, legs, true);
+        ok(rp.found() && rp.result() == 28, "the Pi 2's bare antenna: the ramp climbs all the way to the top");
+        std::vector<double> plat(29, 300);
+        auto rpl = search(up, plat, legs, true);
+        ok(rpl.found() && rpl.result() == 28, "a plateau CLIMBS on (the distant aircraft are what gain buys)");
         std::vector<double> quiet(29, 0.3);
         auto q = search(order, quiet, legs);
         ok(!q.active() && !q.found() && q.result() == 28, "an empty sky proves nothing: not found, the top, the noise rule from there");

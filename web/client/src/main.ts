@@ -7899,6 +7899,30 @@ function adsbApplyPending() {
   setMode(m, true); airbandFollowPassband(); renderFreq();
 }
 
+/** ★ The ADS-B GAIN key and its card — the radio's own steps (hwGains), shown only where a gain can be set: not on a
+ *  radio with no gain list, not where the owner has fixed the gain (hwGainLocked hides every gain control), and AUTO is
+ *  the server's ramp (adsbTick). A step chosen here is the listener's until AUTO is pressed again. */
+let adsbGainTouchAt = 0;
+function adsbGainRender() {
+  const key = $('adsbGain') as HTMLButtonElement, pop = $('adsbGainPop');
+  const r = adsbReport, can = hwGains.length > 1 && !hwGainLocked && typeof r?.gain === 'number';
+  key.hidden = !can;
+  if (!can) { pop.hidden = true; return; }
+  const auto = r!.gainAuto === 1, busy = r!.gainBusy === 1;
+  const html = `<span class="k">GAIN</span> ${r!.gain!.toFixed(1)}${auto ? ' · AUTO' : ' dB'}`;
+  if (key.innerHTML !== html) key.innerHTML = html;
+  $('adsbGainNow').textContent = `${r!.gain!.toFixed(1)} dB`;
+  ($('adsbGainAuto') as HTMLButtonElement).classList.toggle('on', auto);
+  const sl = $('adsbGainSl') as HTMLInputElement;
+  const gMain = document.getElementById('gain') as HTMLInputElement | null;
+  sl.max = gMain?.max || String(hwGains.length - 1);   // ★ the owner's per-band ceiling (applyGainCap) holds here too
+  // ★ the slider follows the radio, except for a moment after the listener moved it (the report lags a second)
+  if (performance.now() - adsbGainTouchAt > 2500) sl.value = String(Math.max(0, nearestGainIdx(Math.round(r!.gain! * 10))));
+  $('adsbGainNote').textContent = auto
+    ? (busy ? 'Finding the gain that decodes the most — trying each step for a few seconds.' : 'Automatic: chosen by messages decoded, and checked again every ten minutes.')
+    : 'Set by hand. AUTO hands it back.';
+}
+
 /** The bar's count and rate, and the list. */
 let adsbListObs: ResizeObserver | null = null;
 function adsbRender() {
@@ -7912,6 +7936,7 @@ function adsbRender() {
     if (b.innerHTML !== h) b.innerHTML = h;
     b.hidden = !far;
   }
+  adsbGainRender();
   {
     // ★★ The receiver dropping samples — said in red beside the rate (adsbCaptureWarning). Built from text nodes.
     const w = adsbCaptureWarning(adsbReport), el = $('adsbCapture');
@@ -8269,6 +8294,14 @@ function buildControls() {
    *  the list's head (collapse / open) and its rows (that aircraft on the map). */
   $('adsbExit').onclick = () => adsbSetMode(false);
   $('adsbFar').onclick = () => { if (adsbFarHex) adsbMap?.focus(adsbFarHex); };
+  $('adsbGain').onclick = () => { const p = $('adsbGainPop'); p.hidden = !p.hidden; adsbGainRender(); };
+  $('adsbGainAuto').onclick = () => { adsbGainTouchAt = 0; spec?.setHwGain(0, true); };
+  ($('adsbGainSl') as HTMLInputElement).oninput = () => {
+    adsbGainTouchAt = performance.now();
+    const i = Number(($('adsbGainSl') as HTMLInputElement).value);
+    $('adsbGainNow').textContent = `${((hwGains[i] ?? 0) / 10).toFixed(1)} dB`;
+    spec?.setHwGain(hwGains[i] ?? 0, false);
+  };
   $('adsbChat').onclick = () => { if (!($('mChat') as HTMLButtonElement).disabled) { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); adsbSyncChat(); } };
   $('adsbLiveHead').onclick = () => adsbSetListMin(!$('adsbLive').classList.contains('min'));
   $('adsbLegendBtn').onclick = () => { const on = !!adsbMap?.toggleLegend(); $('adsbLegendBtn').classList.toggle('on', on); };
