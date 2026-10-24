@@ -201,6 +201,17 @@ struct Config {
     int    landingDabChannel = -1;
     int    landingDabSid = 0;
     std::string landingDabService;
+    /* ★★★ ADS-B AS THE LANDING (V12, Stuart 2026-10-24: "can we set ADSB as a landing page for an SDR and when it is
+     *  set that way have a tick box to keep it running when nobody is connected that way a new connection instantly sees
+     *  a list of planes and a full map"). landingAdsb: a new listener lands in ADS-B (the whole radio on 1090 MHz, the
+     *  map as the viewer) instead of on landingFreq/demodMode, which stay the FALLBACK — EXIT ADS-B goes there. It beats
+     *  a DAB landing if a hand-written file says both: a radio lands on one thing.
+     *  adsbKeepRunning (only with landingAdsb): the radio sits in ADS-B whenever nobody is here — from the server's start
+     *  and again after the last listener leaves — so the aircraft table is warm for the next arrival. Costs continuous
+     *  CPU (~13 % of a Pi 3 core) and owns the idle radio: background-decoding profiles and the idle park/release give
+     *  way to it. ★ Both OFF by default, and both ignored by the shim where ADS-B cannot run (vsAdsbWhyNot). */
+    bool   landingAdsb = false;
+    bool   adsbKeepRunning = false;
 
     // Listeners and ceilings
     int    users = 1;
@@ -442,6 +453,8 @@ struct RadioConfig {
     int    landingDabChannel = -1;       // ★ a DAB landing station — see Config::landingDabChannel
     int    landingDabSid = 0;
     std::string landingDabService;
+    bool   landingAdsb = false;          // ★ V12: land in ADS-B — see Config::landingAdsb
+    bool   adsbKeepRunning = false;      // ★ ...and stay in it with nobody here — see Config::adsbKeepRunning
     int    users = 1;
     /* ★★★ 20, NOT 15 — 15 WAS A RATE NOBODY COULD CHOOSE (2026-09-24). The setup page offers
      *  Full 20 / Half 10 / Quarter 5, but only wrote maxFps (a CEILING), so "Full" meant "no
