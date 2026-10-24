@@ -232,8 +232,12 @@ else mv -f "$R/etc/resolv.conf.vibe-keep" "$R/etc/resolv.conf" 2>/dev/null || tr
 rm -f "$R/var/lib/dbus/machine-id"
 
 # ── 5. Prove the root is a Portable ────────────────────────────────────────────────────────────────────────────────
+# ★ Never `cmd | grep -q` in a check: under pipefail grep -q's early exit can SIGPIPE the writer and report a match as a
+#   failure (the play_16kb_page_size lesson). Count with grep -c.
 check() { if eval "$2"; then echo "  ok  $1"; else die "CHECK FAILED: $1"; fi; }
-wants() { [ -e "$R/etc/systemd/system/multi-user.target.wants/$1" ] || [ -e "$R/etc/systemd/system/$2.wants/$1" ]; }
+# ★ -L, not -e: systemctl's links are ABSOLUTE (/usr/lib/systemd/system/…), so -e follows them into the BUILD HOST's
+#   tree and finds nothing (second build, 2026-10-25: "vibeserver-pocket enabled" failed although the converge enabled it).
+wants() { [ -L "$R/etc/systemd/system/$2.wants/$1" ]; }
 say "checking the root"
 check "the Portable marker"                     '[ -f "$R/etc/vibeserver-pocket/enabled" ]'
 check "hostname vibeserversetup"                '[ "$(cat "$R/etc/hostname")" = vibeserversetup ]'
@@ -254,7 +258,7 @@ check "root's password is NOT ours (Armbian's, forced change pending)" '[ -f "$R
 check "the U-Boot package is the board's"       'grep -q "linux-u-boot-$BOARD-" "$OUT/$OUT_NAME.packages.txt"'
 if [ "$NEON" = yes ] && [ "$ARCH" = armhf ]; then
   check "/usr/bin/vibeserver is the ARMv7 + NEON build" \
-        'readelf -A "$R/usr/bin/vibeserver" | grep -q "Tag_CPU_arch: v7" && readelf -A "$R/usr/bin/vibeserver" | grep -q "Tag_Advanced_SIMD_arch: NEON"'
+        '[ "$(readelf -A "$R/usr/bin/vibeserver" | grep -c -e "Tag_CPU_arch: v7" -e "Tag_Advanced_SIMD_arch: NEON" || true)" = 2 ]'
 fi
 grep -E '^vibeserver ' "$OUT/$OUT_NAME.packages.txt" | sed 's/^/  ok  installed: /'
 df -h "$R" | tail -1 | awk '{print "==> root: " $3 " used"}'
