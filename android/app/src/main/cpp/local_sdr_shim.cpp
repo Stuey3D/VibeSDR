@@ -24593,7 +24593,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     the owner's wide impulse blanker, below 30 MHz on auto. Both are one SIMD pass
              *     each over the block; VIBE_IQ_CLEAN=0 switches the cleaner off for A/B tests. */
             cleanCapture(buf.data(), (int)buf.size());
-            smoothGainSteps(buf.data(), (int)buf.size(), gainStepFlag);   // ★ our own gain steps — see gainStepGuard_
+            /* ★★★ NOT IN ADS-B (Stuart's Pi 500 V4, 2026-10-24: "the message rate seems a little low"). The smoother
+             *  measures the level either side of our own gain write — and at 1090 MHz that window is full of replies, so
+             *  a 1.3 dB write read as "+12.7 dB", "+21.2 dB", and the level was HELD: the whole capture turned down by
+             *  that much and glided back over ~1 s, in front of the decoder, after every step the ADS-B gain rule took
+             *  (one every 10 s while it hunted). The rule wants the real level anyway — it judges the noise floor. */
+            if (!g_adsbMode.load(std::memory_order_relaxed))
+                smoothGainSteps(buf.data(), (int)buf.size(), gainStepFlag);   // ★ our own gain steps — see gainStepGuard_
             iqTapFull(buf.data(), (int)buf.size(), sampleRate);       // ★ full-rate raw IQ out, if on
             // ★★★ IN SHARED MODE THE SHARED PIPELINE IS NOT RUN AT ALL. Its FFT is replaced by the
             //     channelizer's (emitWideFromBins), and its DEMODULATOR produced audio that NOBODY
@@ -32624,6 +32630,9 @@ void LocalSdrShim::overloadTick() {
     // ★★★ AGC OR NOTHING. A gain the owner typed is a decision, and the loop does not second-guess
     //     it — see the note by g_vibeAgcRtlOn for what this used to do and what it cost.
     if (!g_vibeAgcRtlOn.load(std::memory_order_relaxed)) return;
+    /* ★★ NOR IN ADS-B: the mode's own GainRule (vibe_adsb_service.h) owns the gain there, judged on the noise floor and
+     *  the replies near full scale. VibeAGC would read every strong reply as an overload and cut under it. */
+    if (g_adsbMode.load(std::memory_order_relaxed)) return;
     /* ★★★ NO GAIN TO STEER IN DIRECT SAMPLING (Stuart, 2026-09-19, 648 kHz on the Pi 2: "its trying to work
      *  thinking its overloaded" — the chip read OVERLOAD: GAIN ↓ 28.0 dB). On the Q branch the tuner and
      *  its gain are bypassed, so every step this loop takes is a no-op and every "overload" it reports
