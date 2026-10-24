@@ -2,6 +2,7 @@
 # image/sbc/run-in-docker.sh — run build.sh in a throwaway privileged Debian container on a Linux Docker host
 # (the Lenovo build box, 192.168.86.13), so nothing is installed on the host itself.
 #
+#   image/sbc/run-in-docker.sh boot-test <finished.img.xz> <output-dir>   boot a finished card under emulation
 #   image/sbc/run-in-docker.sh <board> <base.img.xz> <output-dir>     (env passes through: VIBESERVER_DEB COUNTRY NO_MAPS KEEP_WORK)
 #
 # ★★ CPU: --cpus 2 and nice -n 19 inside (build.sh), xz -T2. ONE build at a time — the script refuses to start while
@@ -31,5 +32,10 @@ exec docker run --rm --privileged --cpus 2 --label vibesdr-sbc-build -v /dev:/de
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk e2fsprogs util-linux gnupg \
         binutils qemu-user-static >/dev/null
+    # ★ "boot-test" in place of a board: boot a finished card (the second argument) under emulation — boot-test.sh.
+    if [ "'"$BOARD"'" = boot-test ]; then
+      apt-get install -y -qq --no-install-recommends systemd-container procps >/dev/null
+      exec nice -n 19 /repo/image/sbc/boot-test.sh "/base/'"$(basename "$BASE")"'" /out/boot-test
+    fi
     nice -n 19 /repo/image/sbc/build.sh "'"$BOARD"'" "/base/'"$(basename "$BASE")"'" /out
   '
