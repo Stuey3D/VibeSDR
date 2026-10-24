@@ -12894,11 +12894,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::vector<int> adsbGains_;
     int adsbGainIdx_ = -1, adsbGainSet_ = -999;
     double adsbLastReport_ = 0, adsbLastGain_ = 0;
-    double adsbHoldUntil_ = 0; int adsbUpVotes_ = 0, adsbDownVotes_ = 0;   // the gain rule's hysteresis — see adsbTick
-    vibeadsb::GainTrial adsbTrial_;                                       // a proposed step, tried A/B — see adsbTick
-    vibeadsb::GainSearch adsbSearch_;                                     // the look at entry — see vibeadsb::GainSearch
-    double adsbExploreAt_ = 0; bool adsbExploreUp_ = false;               // the ten-minute look either side
-    double adsbNoCutUntil_ = 0, adsbNoClimbUntil_ = 0;                    // after a step lost its trial
     std::atomic<bool> rateBoostFellBack_{false};       // ★ the watchdog's boosted-rate recovery ran — see rateBoostStalled
     /** ★ When rtl_tcp last delivered (tcpReadLoop). lastIqAt is the USB/driver sources' — an rtl_tcp radio never
      *  stamps it (its stalls are counted as netStalls, not called an unplug) — so the guard asks this instead. */
@@ -12994,11 +12989,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  steps down (levelHeld), and its top LNA state is the one most likely to overload. */
         adsbGains_ = LocalSdrShim::instance().getTunerGains();
         adsbGainIdx_ = -1; adsbGainSet_ = -999;
-        adsbHoldUntil_ = 0; adsbUpVotes_ = 0; adsbDownVotes_ = 0;
-        adsbTrial_.cancel(); adsbSearch_.cancel(); adsbNoCutUntil_ = adsbNoClimbUntil_ = 0;
-        adsbExploreAt_ = 0; adsbExploreUp_ = false;
         if (!adsbGains_.empty()) {
-            adsbGainIdx_ = useSdrplay() ? int(adsbGains_.size() * 3 / 4) : int(adsbGains_.size()) - 1;
+            adsbGainIdx_ = int(adsbGains_.size()) - 1;   // ★ the top, every radio — see adsbTick (locked, no rule)
             adsbGainSet_ = adsbGains_[size_t(adsbGainIdx_)];
             // ★ written below, once g_adsbMode is up — written here, the gain-step smoother (off in ADS-B) still
             //   ran on the blocks in between and held the capture down for its ~1 s glide at every entry
@@ -13186,96 +13178,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ A LISTENER WHO SETS THE GAIN HAS IT. Any value we did not set ourselves pauses the rule; asking
         //    for automatic gain again (-1) hands it back.
         const int cur = g_gainTarget.load(std::memory_order_relaxed);
-        if (cur >= 0 && cur != adsbGainSet_) { adsbTrial_.cancel(); adsbSearch_.cancel(); return; }   // ★ and a trial or search is void
-        const vibeadsb::Health h = g_adsb.health();
-        auto setIdx = [&](int i) {
-            if (i == adsbGainIdx_ && cur >= 0) return;
-            adsbGainIdx_ = i;
-            adsbGainSet_ = adsbGains_[size_t(i)];
+        if (cur >= 0 && cur != adsbGainSet_) return;
+        /* ★★★ LOCKED AT THE TOP — NO AUTOMATIC GAIN IN ADS-B (Stuart, 2026-10-24: "take any autogain out for the next
+         *  build and just lock adsb to the maximum 49.6db"). His OWRX ADS-B profile ran this V4L's feed at 49.6 dB and
+         *  heard far more than every rule we tried: the noise-floor rule (dump1090-fa's 30 dB), the A/B trial, the
+         *  search. vibeadsb::GainRule / GainTrial / GainSearch stay in vibe_adsb_service.h, tested, unused.
+         *  ★ A listener who moves the gain still has it (above); asking for automatic again (-1) puts the top back. */
+        const int top = int(adsbGains_.size()) - 1;
+        if (cur < 0 || adsbGainIdx_ != top) {
+            if (cur >= 0) return;            // a person's gain: theirs until they hand it back
+            adsbGainIdx_ = top;
+            adsbGainSet_ = adsbGains_[size_t(top)];
             LocalSdrShim::instance().setGain(adsbGainSet_);
-        };
-        const bool levelHeld = useSdrplay();   // ★ the RSP's IF AGC holds the level — see GainRule::levelHeld
-        // ★★★ FIRST, LOOK — vibeadsb::GainSearch (the V4L + LaNA: 0 msg/s at the top, 40 four rungs down). Not an SDRplay:
-        //     its gain picks an LNA state under its own AGC, and it only ever steps down for clipping.
-        if (!levelHeld && adsbExploreAt_ == 0 && !adsbSearch_.active()) {
-            std::vector<int> order;
-            for (int i = int(adsbGains_.size()) - 1; i >= int(adsbGains_.size()) / 3; i -= 2) order.push_back(i);
-            adsbExploreAt_ = t + 600.0;
-            if (order.size() >= 2) {
-                LOGI("[ADS-B] gain search: %zu gains from %.1f dB down, counting messages at each", order.size(), adsbGains_[size_t(order[0])] / 10.0);
-                setIdx(adsbSearch_.start(order, t));
-                return;
-            }
+            LOGI("[ADS-B] gain %.1f dB — the top, locked (automatic asked for)", adsbGainSet_ / 10.0);
         }
-        if (adsbSearch_.active()) {
-            setIdx(adsbSearch_.step(t, h.msgsTotal));
-            if (adsbSearch_.active()) return;
-            std::string tried;
-            for (size_t k = 0; k < adsbSearch_.order().size(); ++k) {
-                if (adsbSearch_.rates()[k] < 0) break;
-                char b[48]; std::snprintf(b, sizeof b, "%s%.1f=%.0f", k ? " " : "", adsbGains_[size_t(adsbSearch_.order()[k])] / 10.0, adsbSearch_.rates()[k]);
-                tried += b;
-            }
-            if (adsbSearch_.found()) {
-                setIdx(adsbSearch_.result());
-                adsbNoCutUntil_ = adsbNoClimbUntil_ = 0;
-                LOGI("[ADS-B] gain search (dB=msg/s): %s -> %.1f dB", tried.c_str(), adsbGainSet_ / 10.0);
-            } else {
-                // ★ too quiet to judge: the top, and the noise rule from there
-                setIdx(adsbSearch_.order()[0]);
-                LOGI("[ADS-B] gain search (dB=msg/s): %s -> too few aircraft to judge, %.1f dB and the noise rule", tried.c_str(), adsbGainSet_ / 10.0);
-            }
-            adsbExploreAt_ = t + 600.0;
-            return;
-        }
-        // ★★★ A PROPOSED STEP IS TRIED, NOT TAKEN — see vibeadsb::GainTrial (the V4L's 250 → 170 msg/s)
-        if (adsbTrial_.active()) {
-            setIdx(adsbTrial_.step(t, h.msgsTotal));
-            if (adsbTrial_.active()) return;
-            const bool won = adsbTrial_.proposedWon(), up = adsbTrial_.proposed() > adsbTrial_.current();
-            LOGI("[ADS-B] gain trial: %.1f dB %.0f msg/s vs %.1f dB %.0f msg/s -> %s %.1f dB (noise %.1f dBFS)",
-                 adsbGains_[size_t(adsbTrial_.proposed())] / 10.0, adsbTrial_.rate(1),
-                 adsbGains_[size_t(adsbTrial_.current())] / 10.0, adsbTrial_.rate(0),
-                 won ? "step taken," : "step refused, staying at", adsbGainSet_ / 10.0, h.noiseDbfs);
-            if (won) { if (!up) adsbHoldUntil_ = t + 60.0; }
-            else if (up) adsbNoClimbUntil_ = t + 600.0;     // ★ ten quiet minutes before the same question again
-            else adsbNoCutUntil_ = t + 600.0;
-            return;
-        }
-        // ★ every ten minutes, a look one rung either side (alternately) — kept only if it clearly decodes more: the sky
-        //   and the band change through an evening, and the search's answer with them
-        if (!levelHeld && t >= adsbExploreAt_) {
-            adsbExploreAt_ = t + 600.0;
-            adsbExploreUp_ = !adsbExploreUp_;
-            const int nb = adsbGainIdx_ + (adsbExploreUp_ ? 1 : -1);
-            if (nb >= 0 && nb < int(adsbGains_.size())) {
-                LOGI("[ADS-B] gain look %.1f -> %.1f dB (%.0f msg/s)", adsbGainSet_ / 10.0, adsbGains_[size_t(nb)] / 10.0, h.msgsPerSec);
-                setIdx(adsbTrial_.start(adsbGainIdx_, nb, t, false));
-                return;
-            }
-        }
-        vibeadsb::GainRule rule;
-        rule.levelHeld = levelHeld;
-        int d = rule.decide(h);
-        /* ★★ HYSTERESIS — calm, as the FlightAware box is (two changes in fifteen minutes). A cut needs 6 s of asking
-         *  (3 ticks; a noise floor that rose for one burst of traffic is not a reason), then no climb for 60 s, and a
-         *  climb needs 30 s of asking (15 ticks). The first rule cut at once and climbed after 10 s, and hunted. An
-         *  SDRplay (levelHeld) still asks at once: there the vote is replies clipping now. Either way the step is
-         *  then tried (GainTrial) and kept only for more messages; one that loses is not asked again for 10 min. */
-        if (d < 0) {
-            adsbUpVotes_ = 0;
-            if (t < adsbNoCutUntil_ || (!rule.levelHeld && ++adsbDownVotes_ < 3)) d = 0;
-            else adsbDownVotes_ = 0;
-        } else if (d > 0) {
-            adsbDownVotes_ = 0;
-            if (t < adsbHoldUntil_ || t < adsbNoClimbUntil_ || ++adsbUpVotes_ < 15) d = 0;
-            else adsbUpVotes_ = 0;
-        } else { adsbUpVotes_ = 0; adsbDownVotes_ = 0; }
-        const int next = std::max(0, std::min(int(adsbGains_.size()) - 1, adsbGainIdx_ + d));
-        if (next == adsbGainIdx_) { setIdx(next); return; }   // ★ puts back a gain someone handed back (-1)
-        LOGI("[ADS-B] gain trial %.1f -> %.1f dB (noise %.1f dBFS, %.0f msg/s, %.1f %% strong)", adsbGainSet_ / 10.0,
-             adsbGains_[size_t(next)] / 10.0, h.noiseDbfs, h.msgsPerSec, h.strongFrac * 100);
-        setIdx(adsbTrial_.start(adsbGainIdx_, next, t));
     }
 
     /* ★★★ HANDOVER BETWEEN WHOLE-RADIO MODES (Stuart, 2026-10-24: "moving from ADS-B to DAB changes the rate on move,

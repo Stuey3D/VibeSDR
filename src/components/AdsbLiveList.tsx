@@ -36,6 +36,8 @@ export interface AdsbLiveListProps {
   started: boolean;
   /** A row was chosen — find it on the map (the layer's focus(hex)). */
   onFocus: (hex: string) => void;
+  /** ★ The map's selected aircraft (an icon tapped, or a row) — its row is highlighted, as on the web list. */
+  selected?: string | null;
   /** The (i) in the header: the map layer's colour key, opened above the list (toggleLegend). */
   onLegend?: () => void;
   /** The list's footprint changed (width and height, 0 × 0 as a pill) — the page keeps the attribution clear of it,
@@ -84,7 +86,7 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
           <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator
                       keyboardShouldPersistTaps="handled">
             {rows.length ? rows.map((r) => (
-              <NavRow key={r.hex}><Row s={s} r={r} logoBase={p.logoBase ?? null} onPress={() => p.onFocus(r.hex)} /></NavRow>
+              <NavRow key={r.hex}><Row s={s} r={r} sel={!!p.selected && p.selected === r.hex} logoBase={p.logoBase ?? null} onPress={() => p.onFocus(r.hex)} /></NavRow>
             )) : (
               <Text style={s.note} numberOfLines={2}>
                 {p.started ? 'Listening on 1090 MHz — no aircraft yet.' : 'Taking the receiver to 1090 MHz…'}
@@ -129,11 +131,11 @@ function LegendKey({ s, onPress }: { s: S; onPress: () => void }) {
   );
 }
 
-function Row({ s, r, onPress, logoBase }: { s: S; r: AdsbListRow; onPress: () => void; logoBase: string | null }) {
+function Row({ s, r, sel, onPress, logoBase }: { s: S; r: AdsbListRow; sel: boolean; onPress: () => void; logoBase: string | null }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
   return (
-    <TouchableOpacity ref={viewRef as never} style={[s.row, !r.placed && s.rowUnplaced]} onPress={onPress}
+    <TouchableOpacity ref={viewRef as never} style={[s.row, !r.placed && s.rowUnplaced, sel && s.rowSel]} onPress={onPress}
                       disabled={!r.placed} activeOpacity={0.7} accessibilityRole="button"
                       accessibilityLabel={`${r.label}${r.info ? ', ' + r.info : ''}${r.alt ? ', ' + r.alt : ''}${r.kt ? ', ' + r.kt : ''}${r.range ? ', ' + r.range : ''}`}>
       {r.emergency && <EmBreath />}
@@ -221,6 +223,8 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   chev:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.kt},0.80)` },
   // ★ Sized for 240 pt (an SE in Display Zoom): 8 + 4·3 + 50 + 40 + 60 + 8 leaves the callsign ~62 pt, 8–9 characters.
   row:    { height: LIST_ROW_H, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: 4 },
+  // ★ the web list's .adsbRow.sel: a faint amber wash and a bar on the left
+  rowSel: { backgroundColor: 'rgba(255,229,102,0.12)', borderLeftWidth: 2, borderLeftColor: 'rgba(255,229,102,0.7)', paddingLeft: 6 },
   rowUnplaced: { opacity: 0.5 },
   callCol:{ flex: 1, minWidth: 0, justifyContent: 'center' },
   callBox:{ minWidth: 0, flexDirection: 'row', alignItems: 'center' },

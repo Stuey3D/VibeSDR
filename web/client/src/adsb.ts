@@ -315,7 +315,9 @@ export class AdsbMap {
     // ★ imageBase: the owner's logos/silhouettes (named by the server only when they exist). photos: OFF until the
     //   Planespotters terms are read at first hand — see the TODO in adsblayer.js.
     this.layer = w.VibeAdsbLayer.create(map, { receiver: this.rx, prefs: loadPrefs(), onPrefs: savePrefs, theme: 'dark',
-                                                imageBase: adsbImageBase() || null });
+                                                imageBase: adsbImageBase() || null,
+                                                // ★ an icon tapped on the map: the list's row follows (main.ts adsbMarkSel)
+                                                onSelect: (h: string | null) => { try { this.onSelect?.(h); } catch (e) { console.error('[adsb] onSelect', e); } } });
     if (this.pending) { this.layer.update(this.pending); this.pending = null; }
     if (this.obstacle) { try { this.layer.setObstacle?.(this.obstacle); } catch (e) { console.error('[adsb] setObstacle', e); } }
   }
@@ -342,6 +344,9 @@ export class AdsbMap {
   toggleLegend(): boolean {
     try { return !!this.layer?.toggleLegend?.(); } catch (e) { console.error('[adsb] toggleLegend', e); return false; }
   }
+
+  /** The selection changed on the map (an icon tapped, its card closed): null = none. */
+  onSelect: ((hex: string | null) => void) | null = null;
 
   /** A list row: select it and open its card. False = not on the map (no position, or no map yet). */
   focus(hex: string): boolean {

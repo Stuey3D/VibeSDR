@@ -1158,7 +1158,9 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #adsbCapture { flex: 0 1 auto; min-width: 0; font-size: 11px; letter-spacing: 0.5px; color: var(--red, #ff6b5e);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #adsbMain { position: relative; flex: 1 1 auto; min-height: 0; }
-#adsbMapHost { position: absolute; inset: 0; background: #123049; }
+/* ★ isolation: the map's own stacking context — Leaflet's panes carry z-index 400–700, and without one they sat OVER
+ *   the live list (the no-WebGL-2 map: the list could not be clicked — found by the headless trail check, 2026-10-24) */
+#adsbMapHost { position: absolute; inset: 0; background: #123049; isolation: isolate; z-index: 0; }
 #adsbNote { position: absolute; left: 50%; top: 52px; transform: translateX(-50%); z-index: 6;
   max-width: calc(100% - 32px); text-align: center; padding: 8px 14px; border-radius: 8px;
   background: var(--ov-panel96, rgba(8, 6, 2, 0.96)); border: 1px solid var(--btn-border); font-size: 12px; letter-spacing: 0.5px; }

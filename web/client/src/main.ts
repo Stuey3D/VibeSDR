@@ -7954,9 +7954,20 @@ function adsbPick(row: HTMLElement) {
                                              : 'The map is still loading', 3500);
     return;
   }
+  adsbMarkSel(hex, false);
+}
+/** ★ The list's highlighted row = the map's selected aircraft, whichever was tapped (Stuart, 2026-10-24: "when I select
+ *  an aircraft by clicking the icon on the map the line in the list doesnt update"). `reveal`: scroll it into the
+ *  list's view if it is not — only when the MAP chose it; a row the listener tapped is already where they are looking. */
+function adsbMarkSel(hex: string, reveal: boolean) {
   adsbSel = hex;
-  for (const r of Array.from($('adsbList').querySelectorAll('.adsbRow.sel'))) r.classList.remove('sel');
+  const list = $('adsbList');
+  for (const r of Array.from(list.querySelectorAll('.adsbRow.sel'))) r.classList.remove('sel');
+  if (!hex) return;
+  const row = list.querySelector<HTMLElement>(`.adsbRow[data-hex="${cleanHex(hex)}"]`);
+  if (!row) return;
   row.classList.add('sel');
+  if (reveal) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 /** ★★★ ZOOM AND TUNING ARE HELD IN A WHOLE-RADIO MODE — DISABLED, not merely ignored (AGENTS.md: a control
@@ -8261,8 +8272,19 @@ function buildControls() {
   $('adsbChat').onclick = () => { if (!($('mChat') as HTMLButtonElement).disabled) { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); adsbSyncChat(); } };
   $('adsbLiveHead').onclick = () => adsbSetListMin(!$('adsbLive').classList.contains('min'));
   $('adsbLegendBtn').onclick = () => { const on = !!adsbMap?.toggleLegend(); $('adsbLegendBtn').classList.toggle('on', on); };
-  $('adsbList').addEventListener('click', (e) => {
+  /* ★★ THE LIST IS REDRAWN EVERY REPORT (a busy sky changes it every second), so a press and its release can land
+   *  either side of a redraw: the row pressed is gone, the click lands on the list, and nothing happened — the headless
+   *  check missed one in one. The row is remembered at the PRESS and found again by its aircraft. */
+  let adsbDown = { hex: '', at: 0, x: 0, y: 0 };
+  $('adsbList').addEventListener('pointerdown', (e) => {
     const row = (e.target as HTMLElement).closest('.adsbRow') as HTMLElement | null;
+    adsbDown = { hex: row?.dataset.hex || '', at: performance.now(), x: e.clientX, y: e.clientY };
+  });
+  $('adsbList').addEventListener('click', (e) => {
+    let row = (e.target as HTMLElement).closest('.adsbRow') as HTMLElement | null;
+    if (!row && adsbDown.hex && performance.now() - adsbDown.at < 1000
+        && Math.abs(e.clientX - adsbDown.x) < 12 && Math.abs(e.clientY - adsbDown.y) < 12)
+      row = $('adsbList').querySelector<HTMLElement>(`.adsbRow[data-hex="${cleanHex(adsbDown.hex)}"]`);
     if (row) adsbPick(row);
   });
   // ★ Tab users: Enter or Space on a focused row (a div — the browser gives it no Enter of its own).

@@ -27,6 +27,8 @@
  *     layer.setObstacle({corner:'bottom-left', w, h} | null)   — the host's live list, kept clear of aircraft
  *     layer.toggleLegend(on?)   — the colour key, opened above that list (the host's (i) button)
  *     layer.focus(hex)               // select an aircraft and open its card (a list row was tapped)
+ *     opts.onSelect(hex | null)      // the selection changed ON THE MAP (an icon tapped, the card closed) — the host's
+ *                                    // list follows it (Stuart, 2026-10-24: clicking an icon left the list's row stale)
  *     layer.destroy()
  *
  *   map — a MapLibre map (VibeMapGL's vm.map), the Leaflet-shaped adapter vibemapgl-compat.js
@@ -740,6 +742,14 @@
     /* ★ drawReceiver:false — the host draws its own receiver marker (the app's page already has the HFDL
      *  house); the layer still uses the position for rings, distances and the camera. Default true. */
     const drawReceiver = opts.drawReceiver !== false;
+    const onSelect = typeof opts.onSelect === 'function' ? opts.onSelect : null;
+    let toldSel = null;
+    /** Tell the host when the selection changes — once per change, whoever changed it. */
+    function tellSel() {
+      if (toldSel === selected) return;
+      toldSel = selected;
+      if (onSelect) { try { onSelect(selected); } catch (e) { console.error('adsblayer: onSelect', e); } }
+    }
 
     const ac = new Map();          // hex → state
     let firstUpdateAt = 0, firstPosBatchSeen = false;
@@ -1152,6 +1162,7 @@
       if (hex === selected && popup) return;
       selected = hex && ac.has(hex) ? hex : null;
       closePopup();
+      tellSel();
       if (!selected) return;
       const s = ac.get(selected);
       trailPick(selected);
@@ -1164,12 +1175,12 @@
         const p = new ML.Popup({ closeButton: true, closeOnClick: false, focusAfterOpen: false, className: 'vsadsb-pop-' + th, maxWidth: '280px', offset: 16 })
           .setLngLat([s.disp.lon, s.disp.lat]).setHTML(popupHtml);
         // ★ Only THIS card's close clears the selection — closePopup() forgets the card before removing it.
-        p.on('close', () => { if (popup === p) { popup = null; popupHex = null; selected = null; kick(); } });
+        p.on('close', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.addTo(gl);
       } else {
         const p = LL.popup({ className: 'vsadsb-pop-' + th, maxWidth: 280, offset: [0, -10], autoPan: false, closeOnClick: false })
           .setLatLng([s.disp.lat, s.disp.lon]).setContent(popupHtml);
-        p.on('remove', () => { if (popup === p) { popup = null; popupHex = null; selected = null; kick(); } });
+        p.on('remove', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.openOn(lm);
       }
       kick();
@@ -1227,6 +1238,9 @@
       } else if (!drawing || !trail.ll) {
         // ★ Leaflet: no gradients — short segments, each in its own altitude colour, read as a blend
         if (trail.ll) { try { lm.removeLayer(trail.ll); } catch (e) { /* gone */ } }
+        // ★ its own pane, above the basemap (vibemap draws it on a canvas over Leaflet's overlay pane — the first
+        //   trail was drawn and hidden under it) and below the aircraft (markerPane, 600)
+        if (!lm.getPane('vsadsb-trail')) { const pn = lm.createPane('vsadsb-trail'); pn.style.zIndex = '590'; pn.style.pointerEvents = 'none'; }
         const g = LL.layerGroup();
         const every = Math.max(1, Math.ceil(pts.length / 150));
         let alt = null;
@@ -1234,7 +1248,7 @@
           const j = Math.min(pts.length - 1, i + every);
           if (pts[i][2] != null) alt = pts[i][2];
           LL.polyline([[pts[i][0], pts[i][1]], [pts[j][0], pts[j][1]]],
-                      { color: altColour(alt != null ? alt : 0, th), weight: 3, opacity: 0.95, interactive: false, lineCap: 'round' }).addTo(g);
+                      { color: altColour(alt != null ? alt : 0, th), weight: 3, opacity: 0.95, interactive: false, lineCap: 'round', pane: 'vsadsb-trail' }).addTo(g);
         }
         g.addTo(lm);
         trail.ll = g;
@@ -1324,7 +1338,7 @@
       lastFlush = t;
       let animating = false;
       for (const s of ac.values()) {
-        if (s.goneAt && t - s.goneAt > FADE_OUT_MS) { ac.delete(s.hex); if (selected === s.hex) { selected = null; closePopup(); } removeLl(s); continue; }
+        if (s.goneAt && t - s.goneAt > FADE_OUT_MS) { ac.delete(s.hex); if (selected === s.hex) { selected = null; closePopup(); tellSel(); } removeLl(s); continue; }
         if (!s.fix) continue;
         const p = deadReckon(s.fix, t);
         if (s.corr) {

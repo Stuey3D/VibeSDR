@@ -1292,6 +1292,8 @@ if(KIND==='adsb'){
         receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,
         prefs:ADSB_PREFS,
         onPrefs:function(p){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'adsbPrefs',prefs:p}));},
+        // ★ an icon tapped on the map (or its card closed): the live list's row follows
+        onSelect:function(h){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'adsbSel',hex:h||null}));},
         theme:'dark',
         // ★ The page draws HFDL's receiver marker itself (addRx) — the layer is asked not to add a second.
         drawReceiver:false,
@@ -1739,6 +1741,7 @@ export default function MapOverlay(
    *  (re)loads after the list measured itself still gets it (onLoadEnd). */
   const adsbListW = useRef(0), adsbListH = useRef(0);
   const adsbLegend = () => webRef.current?.injectJavaScript('window.__adsbLegend&&window.__adsbLegend();true;');
+  const [adsbSel, setAdsbSel] = useState<string | null>(null);
   const adsbFocus = (hex: string) =>
     webRef.current?.injectJavaScript(`window.__adsbFocus&&window.__adsbFocus(${JSON.stringify(String(hex))});true;`);
   const adsbFootprint = (w: number, h: number) => {
@@ -1845,6 +1848,11 @@ export default function MapOverlay(
             catch (err) { noteFault('map-webview', 'bad-json', err, `len=${String(d).length}`); return; }
             /* ★ The ADS-B layer's toggles changed — remember them for this device (see adsbPrefsRef). Re-parsed, so
              *  only three booleans ever reach storage whatever the page sent. */
+            if (m && (m as any).t === 'adsbSel') {
+              const h = (m as any).hex;
+              setAdsbSel(typeof h === 'string' && /^~?[0-9a-f]{6}$/.test(h) ? h : null);
+              return;
+            }
             if (m && (m as any).t === 'adsbPrefs') {
               const pr = parseAdsbMapPrefs(JSON.stringify((m as any).prefs ?? null));
               adsbPrefsRef.current = pr;
@@ -1934,7 +1942,7 @@ export default function MapOverlay(
         {/* ★★ V12 THE ADS-B LIVE LIST, bottom-left over the map — RN-drawn so the pad and keyboard reach it
             (AdsbLiveList's note). Only once the page is there: before that there is no map to find anything on. */}
         {kind === 'adsb' && !!pageUri && !packError && (
-          <AdsbLiveList aircraft={adsbList ?? []} started={!!adsbStarted} onFocus={adsbFocus} onFootprint={adsbFootprint} onLegend={adsbLegend}
+          <AdsbLiveList aircraft={adsbList ?? []} started={!!adsbStarted} onFocus={adsbFocus} selected={adsbSel} onFootprint={adsbFootprint} onLegend={adsbLegend}
                         logoBase={local ? null : baseUrl.replace(/\/+$/, '') + '/adsb/'}
                         ink={ink} areaW={winW} areaH={winH}
                         insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
