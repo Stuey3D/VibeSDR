@@ -91,6 +91,9 @@ flags_for() {
     # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
     #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
     test-adsb)             echo "-O2" ;;
+    # ★★ V12 aircraft data: builder/reader/enrichment/logo zip installer on vibeserver/testdata-adsb (VIBE_ADSB_RAW
+    #    = a folder with the real downloads also checks known aircraft and routes — scripts/build-adsb-data.sh)
+    test-adsb-data)        echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }
