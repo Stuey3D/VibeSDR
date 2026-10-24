@@ -17,6 +17,7 @@
  *   the same on every faceplate, with transparency on or off — it is part of the map, not a panel of the receiver.
  * ★ The decoder font — the display font is for the main controls only.
  */
+import { scrollLane } from '../constants/popupTokens';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -72,7 +73,7 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
                    label={open ? 'AIRCRAFT' : '✈'} count={rows.length} placed={placed} />
         </NavRow>
         {open && (
-          <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} showsVerticalScrollIndicator
+          <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator
                       keyboardShouldPersistTaps="handled">
             {rows.length ? rows.map((r) => (
               <NavRow key={r.hex}><Row s={s} r={r} onPress={() => p.onFocus(r.hex)} /></NavRow>
