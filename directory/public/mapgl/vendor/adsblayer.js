@@ -646,14 +646,14 @@
     const legRow = (rgb, glyph, what) => '<div class="r"><span class="g" style="color:rgb(' + rgb + ')">' + glyph + '</span>' + what + '</div>';
     const grad = ALT_HUES.map((h) => 'hsl(' + h[1] + ',90%,' + (th === 'light' ? '38%' : '62%') + ') ' + (h[0] / 400).toFixed(1) + '%').join(',');
     leg.innerHTML = '<div class="t">AIRCRAFT</div>'
-      + legRow(TONE.fresh, '\u2708', 'position under 10 s old')
+      + legRow(TONE.fresh, '\u2708', 'Position under 10 s old')
       + legRow(TONE.aging, '\u2708', '10\u201330 s old')
       + legRow(TONE.stale, '\u2708', '30\u201360 s old (dropped at 60 s)')
-      + legRow(TONE.ground, '\u2708', 'on the ground')
-      + legRow(TONE.alert, '\u2708', 'emergency')
-      + legRow(TONE.military, '\u2708', 'military (where it can be told)')
+      + legRow(TONE.ground, '\u2708', 'On the ground')
+      + legRow(TONE.alert, '\u2708', 'Emergency')
+      + legRow(TONE.military, '\u2708', 'Military')
       + '<div class="t">ALTITUDE (the text and its arrow)</div>'
-      + '<div class="r"><span class="g">\u25B2</span>climbing \u00b7 <span class="g">\u25BC</span>descending \u00b7 <span class="g">\u25CF</span>level</div>'
+      + '<div class="r"><span class="g">\u25B2</span>Climbing \u00b7 <span class="g">\u25BC</span>descending \u00b7 <span class="g">\u25CF</span>level</div>'
       + '<div class="bar" style="background:linear-gradient(90deg,' + grad + ')"></div>'
       + '<div class="ax"><span>0</span><span>10k</span><span>20k</span><span>30k</span><span>40k ft</span></div>';
     for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'dblclick', 'wheel']) leg.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });

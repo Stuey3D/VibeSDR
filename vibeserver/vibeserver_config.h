@@ -309,8 +309,6 @@ struct Config {
      *  weak device the slower rate is the REAL ceiling and a borrow it cannot sustain is worse
      *  than no DAB at all (Stuart, on the XCover at 1.2 MS/s). See g_dabRateBoost in the shim. */
     bool dabRateBoost = false;
-    /** ★ ADS-B at 3.2 MS/s on an RTL ("extreme"): only with dabRateBoost (the rate switch); never the default. */
-    bool adsbExtreme = false;
     int  rawIq = 0;               // ★ raw IQ out: 0 off, 1 local only, 2 local + public
     int  rawIqMax = 0;            // ★ total raw IQ listeners at once; 0 = host default
     /** ★ The highest raw IQ rate offered on the local network, in Hz (a one-listener radio only;
@@ -622,7 +620,6 @@ struct RadioConfig {
     int    ppm = 0;             // RTL frequency correction, parts per million
     int    ppb = 0;             // Airspy HF+ calibration, parts per billion
     bool   dabRateBoost = false;   // per radio — see Config::dabRateBoost
-    bool   adsbExtreme = false;    // per radio — see Config::adsbExtreme
     int    rawIq = 0;              // ★ raw IQ out: 0 off, 1 local network only, 2 local + public
     int    rawIqMax = 0;           // ★ total raw IQ listeners at once; 0 = the host's default
     int  rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling in Hz, 0 = none (one-listener radio only)
