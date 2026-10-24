@@ -330,6 +330,8 @@ export interface AdsbAircraft {
 export interface AdsbReport {
   now?: number; messages?: number; aircraft: AdsbAircraft[];
   rate?: number; noise?: number; msgRate?: number; dropped?: number;
+  /** ★ % of the promised samples the server's decoder RECEIVED over ~10 s; -1 until known (vibe_adsb_capture.h). */
+  capture?: number;
 }
 
 /** What the server reports about a DAB multiplex. Every field is MEASURED — see briefs/BRIEF-dab.md;

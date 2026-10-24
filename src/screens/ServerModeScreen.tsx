@@ -56,7 +56,7 @@ import {
   LOC_MOVING_KEY, setServerLocationMoving, migrateDeviceMode, watchLocationWhileServing,
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation,
-  getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive,
+  getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive, rateGuardState, rateGuardClear,
   type DabBlock, type DabScanResult, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
@@ -68,6 +68,7 @@ import {
 } from '../services/icomRadio';
 import { androidIcomFacts, icomAskForAudio, type AndroidIcomFacts, type AndroidConnectedRadio } from '../services/androidIcom';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
+import { rateGuardLine, type RateGuardState } from '../services/rateGuard';
 
 /** ★ `tokens`: the main app's glass tokens in the user's colours (screens/ServerModeThemed.tsx); Lite passes none. */
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'> & { tokens?: PopupTokens };
@@ -394,6 +395,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /** ★ THE RATE SWITCH — "change the sample rate when a mode needs it" (DAB 2.048 MS/s, ADS-B 2.4), the base rate
    *  back when the mode ends. Still stored as dabRateBoost / vs_dabboost, so a saved choice carries over. */
   const [dabRateBoost, setDabRateBoost] = useState(false);
+  /* ★★★ A stall or crash at a rate a mode boosted to (vibe_rate_guard.h), read from the engine's record on mount. While
+   *  one is recorded the switch is drawn off and disabled, and the saved choice is turned off too — the engine turned
+   *  it off, and this screen's copy would otherwise send it back at the next Start. */
+  const [rateGuard, setRateGuard] = useState<RateGuardState | null>(null);
   /** ★ LITE ONLY — the DAB whole-multiplex label scan (every station's name/text, not just the one playing).
    *  -1 = the server's default (OFF on VibeServer Lite: it costs a 32-bit box real CPU), 0 off, 1 on.
    *  Stuart, 2026-09-19: off on Lite "but with a toggle in the options"; the main app keeps it on, no switch. */
@@ -823,13 +828,24 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   The rate a mode takes is the receiver's decision, so the hint gives the figures. */}
               {/* ★★ GREYED ON THE AIRSPY HF+ (Stuart, 2026-10-10): it tops out at 912 kS/s and cannot
                   receive DAB or ADS-B at all, so the switch is shown off and does nothing, with the reason. */}
-              <OptRow C={C} F={F} active={!isAhf && dabRateBoost} disabled={isAhf}
+              <OptRow C={C} F={F} active={!isAhf && dabRateBoost && !rateGuard?.blocked} disabled={isAhf || !!rateGuard?.blocked}
                 label="Change the sample rate when a mode needs it"
                 hint={isAhf ? 'Not possible on the Airspy HF+ — it cannot reach 2.048 MS/s, so it cannot receive DAB or ADS-B.' : undefined}
                 onPress={() => {
                   const v = !dabRateBoost;
                   setDabRateBoost(v); AsyncStorage.setItem(K.dabRateBoost, v ? '1' : '0');
                 }} />
+              {/* ★★★ THE RADIO FELL OVER AT A RATE A MODE BOOSTED TO — in red, beside the switch it disables, with the
+                  owner's way back (rateGuard.ts; the setup page draws the same line). */}
+              {!!rateGuard?.fault && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                  <Text style={{ flex: 1, color: '#ff6b5e', fontFamily: F, fontSize: 12, lineHeight: 16 }}>{rateGuardLine(rateGuard)}</Text>
+                  <TouchableOpacity style={{ borderWidth: 1, borderColor: C.border, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 5 }}
+                    onPress={async () => { const st = await rateGuardClear(); setRateGuard(st); }}>
+                    <Text style={{ color: C.key, fontFamily: F, fontSize: 13 }}>Clear</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
               {!isAhf && (
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
                   DAB takes 2.048 MS/s and ADS-B 2.4 MS/s while they run, and {rate > 0
@@ -1075,6 +1091,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const blk = g(K.blockRanges); if (blk != null) setBlockRanges(blk); }
           { const bmd = g(K.blockedModes); if (bmd != null) setBlockedModes(bmd); }
           { const dbb = g(K.dabRateBoost); if (dbb != null) setDabRateBoost(dbb === '1'); }
+          // ★★ The engine's record of a fall-over at a boosted rate — it switches the saved choice off here too.
+          rateGuardState().then((st) => {
+            setRateGuard(st);
+            if (st?.blocked) { setDabRateBoost(false); AsyncStorage.setItem(K.dabRateBoost, '0'); }
+          }).catch(() => { /* an older build without the guard */ });
           { const gl = g(K.gainLimits); if (gl != null) setGainLimits(gl); }
           // ★ -1 is "leave it alone" and is a REAL value, so no `|| default` here.
           { const rg = g(K.restGain); if (rg != null && Number.isFinite(Number(rg))) setRestGain(Number(rg)); }

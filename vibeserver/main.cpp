@@ -76,6 +76,7 @@
 #include "vibe_bands.h"
 #include "vibe_dab_channels.h"   // ★ the Band III list the setup page's DAB landing offers
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark and its DAB rows — see setBenchmarkHandlers below
+#include "vibe_benchmark_adsb.h"  // ★ …and its ADS-B rows (CPU only — the radio is not touched)
 #include "eibi.h"
 #include "solar.h"
 #include "geoip.h"
@@ -1906,6 +1907,14 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLimits(o.maxBw, o.maxFps);
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
     LocalSdrShim::setVibeServerRateLock(o.rateLock);
+    /* ★★★ A RADIO THAT FELL OVER AT A RATE A MODE BOOSTED TO (vibe_rate_guard.h), beside the config, by serial (one per
+     *  radio on a multi-radio box). BEFORE the rate switch is applied: a marker left by a run that died at a boosted rate
+     *  switches it off. */
+    {
+        std::string tag;
+        for (char c : g_myRadioSerial) if (std::isalnum((unsigned char)c) || c == '-' || c == '_') tag += c;
+        LocalSdrShim::setRateGuardBase(vsBenchDir() + "/rate-guard-" + (tag.empty() ? std::string("radio") : tag));
+    }
     LocalSdrShim::setVibeServerDabRateBoost(o.dabRateBoost);
     LocalSdrShim::setVibeServerRawIq(o.rawIq, o.rawIqMax, o.rawIqLanMaxHz);
     LocalSdrShim::setVibeServerNbWide(o.nbWide);
@@ -2185,8 +2194,11 @@ int main(int argc, char** argv) {
                 const bool held = shim.isRunning() && !shim.radioIsReleased();
                 const bool released = held && shim.releaseRadio();
                 const std::string clip = vibe::ensureDabClip(vsBenchDir());
+                const std::string adsbClip = vibe::ensureAdsbClip(vsBenchDir());
                 const std::string j = vibe::runBenchmark(nullptr, 6.0, -2,
-                                                         [&] { return vibe::runDabRows(clip, 6.0); });
+                                                         [&] { auto r = vibe::runDabRows(clip, 6.0);
+                                                               for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
+                                                               return r; }, 4);
                 vsBenchSave(j);
                 if (released) {
                     /* ★★★ GIVE THE DEVICE TIME TO LET GO, AND KEEP ASKING. An immediate reacquire lost the race

@@ -1154,6 +1154,9 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* ★ The furthest aircraft: a key like the others, quieter, its "FURTHEST" dimmed so the distance reads first. */
 #adsbTop #adsbFar { font-size: 12px; padding: 6px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #adsbFar .k { opacity: 0.6; letter-spacing: 1.5px; }
+/* ★★ The capture warning (adsbCaptureWarning): red, beside the rate; on a phone only "capture 74 %" stays. */
+#adsbCapture { flex: 0 1 auto; min-width: 0; font-size: 11px; letter-spacing: 0.5px; color: var(--red, #ff6b5e);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #adsbMain { position: relative; flex: 1 1 auto; min-height: 0; }
 #adsbMapHost { position: absolute; inset: 0; background: #123049; }
 #adsbNote { position: absolute; left: 50%; top: 52px; transform: translateX(-50%); z-index: 6;
@@ -1238,7 +1241,7 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 /* ★ A phone: the title loses its second word and the speed column goes before anything is squeezed to an
      ellipsis; the message rate goes too (the count is what matters at a glance). */
 @media (max-width: 560px) {
-  #adsbTitle .w, #adsbStat, #adsbFar .n { display: none; }
+  #adsbTitle .w, #adsbStat, #adsbFar .n, #adsbCapture .w { display: none; }
   #adsbTop { gap: 6px; }
   #adsbTop button { padding: 6px 9px; font-size: 12px; }
   #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) auto auto; }
@@ -3874,6 +3877,7 @@ select.btn { padding: 6px 8px; }
     <button type="button" id="adsbFar" hidden title="The furthest aircraft from this receiver — tap to show it on the map"></button>
     <div id="adsbCntWrap" title="Aircraft on the map"><svg width="16" height="16" viewBox="0 0 26 26" aria-hidden="true"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="currentColor"/></svg><span id="adsbCnt">…</span></div>
     <span id="adsbStat"></span>
+    <span id="adsbCapture" hidden></span>
     <button type="button" id="adsbChat" title="Chat">CHAT<span class="unread" id="adsbChatUnread" hidden></span></button>
   </div>
   <div id="adsbMain">

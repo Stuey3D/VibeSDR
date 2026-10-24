@@ -141,6 +141,13 @@ public:
     static void setVibeServerRateLock(bool on);
     /** DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. */
     static void setVibeServerDabRateBoost(bool on);
+    /** ★★★ A RADIO THAT FELL OVER AT A RATE A MODE BOOSTED TO (vibe_rate_guard.h). `base` is a path prefix beside the
+     *  config (<base>.json, <base>.marker). Call it BEFORE setVibeServerDabRateBoost: a marker left by a run that died at
+     *  a boosted rate switches the rate switch off there. */
+    static void setRateGuardBase(const std::string& base);
+    /** {fault,at,rate,mode,blocked,say} — for the setup page, the app and the hardware endpoint. */
+    static std::string rateGuardJson();
+    static void rateGuardClear();
     /** ★ Raw IQ out: 0 off, 1 local network only, 2 local + public (tunnel); maxUsers 0 = host default. */
     static void setVibeServerRawIq(int mode, int maxUsers, int lanMaxHz = 0);
     /** ★ A transient line for every listener's VTS bar (the `vts` notice field). */

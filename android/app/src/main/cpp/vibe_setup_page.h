@@ -1636,6 +1636,12 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <label class="row" id="dabRateBoostRow" style="gap:8px;margin-top:10px">
         <input type="checkbox" id="dabRateBoost" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Change the sample rate when a mode needs it</span></label>
+      <!-- ★★★ THE RADIO FELL OVER AT A RATE A MODE BOOSTED TO (vibe_rate_guard.h): said in red beside the switch it
+           disables, with the owner's way back (rateGuardShow). -->
+      <div class="row hide" id="rateGuardRow" style="gap:8px;margin:6px 0 0 24px;align-items:center">
+        <span class="note" id="rateGuardText" style="margin:0;flex:1;min-width:200px;color:var(--bad)"></span>
+        <button type="button" class="ghost" id="rateGuardClear" style="padding:4px 12px;font-size:13px">Clear</button>
+      </div>
       <div class="note" id="dabRateBoostNo" style="display:none">Not possible on this radio &mdash; it cannot
          reach 2.048 MS/s, so it cannot receive DAB or ADS-B at all.</div>
       <div class="note" id="dabRateBoostNote">DAB needs 2.048 MS/s and ADS-B 2.4 MS/s. Ticked, a listener who chooses
@@ -3660,6 +3666,34 @@ function modeRateShow(r) {
   $("dabRateBoostRow").style.opacity = can ? "" : "0.45";
   $("dabRateBoostNote").style.display = can ? "" : "none";
   $("dabRateBoostNo").style.display = can ? "none" : "";
+  if (typeof rateGuardShow === "function") rateGuardShow();
+}
+/** ★★★ A STALL OR CRASH AT A RATE A MODE BOOSTED TO (HW.rateGuard, vibe_rate_guard.h): the red line, and the switch
+ *  disabled until the owner clears it. ONE RULE, TWO READERS: the app's src/services/rateGuard.ts rateGuardLine draws
+ *  the same sentence; the SERVER keeps the switch off itself while the fault stands. */
+function rateGuardLine(st) {
+  if (!st || !st.fault) return "";
+  const t = st.at > 0 ? new Date(st.at * 1000) : null;
+  return (st.say || "") + (t && isFinite(t.getTime()) ? " (" + t.toLocaleString() + ")" : "");
+}
+function rateGuardShow() {
+  const st = HW && !HW.offline ? HW.rateGuard : null;
+  const line = rateGuardLine(st);
+  $("rateGuardRow").classList.toggle("hide", !line);
+  $("rateGuardText").textContent = line;
+  if (line) {
+    $("dabRateBoost").disabled = true;
+    $("dabRateBoost").checked = false;   // ★ shown off: the server has switched it off
+    $("dabRateBoostRow").style.opacity = "0.45";
+  }
+}
+async function rateGuardClear() {
+  try {
+    const q = await authQueryFor(HW_PREFIX);
+    const j = await (await fetch(`${HW_PREFIX}/vibeserver/rate-guard?clear=1&${q}`, { method: "POST", cache: "no-store" })).json();
+    if (HW) HW.rateGuard = j;
+    modeRateShow(radio());
+  } catch (e) { $("rateGuardText").textContent = "Could not reach the radio: " + e.message; }
 }
 function fpsShow(r) {
   const sel = $("maxFps");
@@ -3818,6 +3852,7 @@ async function renderHw() {
   // ★ Only the sliders are re-wired, not the whole card: renderGain() rewrites the gain boxes from
   //   the stored config, which would wipe a figure the owner was part-way through typing.
   HW = hw;
+  modeRateShow(r);   // ★ the rate switch's red line reads HW.rateGuard, which has only now arrived
   /* ★★★ THE RSP's SOCKETS, FROM THE RADIO (2026-10-22). The antenna card and the per-band socket pickers read
    *     r.antennas, which nothing ever filled — so neither appeared on any RSP. The radio's own list when it is
    *     running, the model's when it is not (rspCaps). Not saved: it describes the hardware, not a setting. */
@@ -5273,6 +5308,7 @@ function fill() {
   });
   $("rateLock").addEventListener("change", () => { radio().rateLock = $("rateLock").checked; });
   $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; });
+  $("rateGuardClear").addEventListener("click", rateGuardClear);
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {
     const v = parseFloat($("maxFps").value) || 10; radio().maxFps = v; radio().fftRate = v; });

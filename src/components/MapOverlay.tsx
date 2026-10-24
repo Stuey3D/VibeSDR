@@ -106,6 +106,8 @@ interface MapOverlayProps {
   onRetry?: () => void;
   /** ★ kind 'adsb': the latest report's aircraft, in the SERVER's field names (the shared layer's input). */
   adsbAircraft?: AdsbAircraftRaw[] | null;
+  /** ★ kind 'adsb': the receiver is dropping samples (adsbTypes adsbCaptureWarning), or null. */
+  adsbCapture?: { short: string; rest: string } | null;
   /** ★ kind 'adsb': the same report in the app's shape, ranged from the receiver — the live list's rows. */
   adsbList?: Aircraft[];
   /** kind 'adsb': a report has arrived (the list then says "no aircraft yet", not "taking the receiver to 1090"). */
@@ -215,6 +217,9 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   #title{font-size:15px;letter-spacing:2px;color:rgba(${T.x},0.80);flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   #cntwrap{display:flex;align-items:center;gap:5px;font-size:13px;letter-spacing:1px;color:rgba(${T.x},0.60);flex-shrink:0;}
   #cnt{color:rgba(${T.x},0.90);font-size:16px;}
+  /* ★★ ADS-B: the receiver dropping samples (adsbCaptureWarning) — red, before the count; a phone keeps only "capture N %". */
+  #capwarn{flex:0 1 auto;min-width:0;font-size:11px;letter-spacing:0.5px;color:#ff6b5e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  @media (max-width:520px){#capwarn .w{display:none;}}
   #snap{background:rgba(${T.k},0.08);border:1px solid rgba(${T.k},0.30);border-radius:8px;
     color:rgba(${T.kt},0.60);font-size:12px;letter-spacing:0.5px;padding:5px 7px;cursor:pointer;
     font-family:inherit;-webkit-tap-highlight-color:transparent;touch-action:manipulation;line-height:1.2;text-align:center;flex-shrink:0;}
@@ -405,6 +410,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   <div id="title">${TITLE}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
   ${isAdsb ? '<button id="far" hidden title="The furthest aircraft from this receiver — tap to show it on the map"></button>' : ''}
+  ${isAdsb ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
 ${isSpots ? `
@@ -1326,6 +1332,13 @@ if(KIND==='adsb'){
   }
   (function(){var b=document.getElementById('far');if(b)b.onclick=function(){
     try{var L6=adsbMake();if(L6&&farHex&&L6.focus)L6.focus(farHex);}catch(e){console.error('ADS-B furthest',e);}};})();
+  /* ★ The capture warning, as text nodes (never HTML): [short, rest], or null to hide it. */
+  window.__adsbCapture=function(w){
+    var el=document.getElementById('capwarn');if(!el)return;
+    if(!w||!w.length){el.style.display='none';return;}
+    el.firstChild.textContent=String(w[0]);el.lastChild.textContent=String(w[1]||'');el.title=String(w[0])+String(w[1]||'');
+    el.style.display='';
+  };
   window.__adsbRx=function(lat,lon){RX_LAT=lat;RX_LON=lon;if(adsbLayer&&adsbLayer.setReceiver)adsbLayer.setReceiver(lat,lon);};
   /* ★ The live list (React Native, over this page): a row chosen = the layer's own focus (select, open the card, pan only
    *  if it is off screen); and the list's width, so the attribution keeps clear of it (the CSS above). */
@@ -1570,7 +1583,7 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, safeInsets }:
+    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, safeInsets }:
     MapOverlayProps & { spots?: SpotRow[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -1710,6 +1723,14 @@ export default function MapOverlay(
     );
   };
   useEffect(() => { if (visible) pushAdsb(adsbAircraft); }, [kind, visible, adsbAircraft]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ★★ The capture warning in the top bar (adsbCaptureWarning) — JSON literal, never source; only on a change.
+  const capKey = adsbCapture ? adsbCapture.short + adsbCapture.rest : '';
+  const pushCap = () => {
+    if (kind !== 'adsb') return;
+    webRef.current?.injectJavaScript(
+      `window.__adsbCapture&&window.__adsbCapture(${JSON.stringify(adsbCapture ? [adsbCapture.short, adsbCapture.rest] : null)});true;`);
+  };
+  useEffect(() => { if (visible) pushCap(); }, [kind, visible, capKey]); // eslint-disable-line react-hooks/exhaustive-deps
   /* ★ The live list's two calls into the page. The hex is the report's cleaned address (/^~?[0-9a-f]{6}$/, adsbTypes),
    *  and JSON.stringify makes it a string literal whatever it is — never source. The width is kept, so a page that
    *  (re)loads after the list measured itself still gets it (onLoadEnd). */
@@ -1807,7 +1828,7 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft);
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft); pushCap();
                              if (kind === 'adsb') adsbFootprint(adsbListW.current, adsbListH.current); }}
           onMessage={(e) => {
             const d = e.nativeEvent.data;

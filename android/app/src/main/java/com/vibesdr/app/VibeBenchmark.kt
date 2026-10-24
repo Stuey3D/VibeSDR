@@ -23,6 +23,9 @@ object VibeBenchmark {
     private const val TAG = "VibeBenchmark"
     private const val CLIP_URL =
         "https://github.com/Stuey3D/VibeSDR/releases/download/bench-clip-v1/dab-bench.vbu8.gz"
+    // ★ The ADS-B rows' clip (vibe_benchmark_adsb.h) — one second each of Stuart's 1090 MHz sky at 2.4 and 3.2 MS/s.
+    private const val ADSB_CLIP_URL =
+        "https://github.com/Stuey3D/VibeSDR/releases/download/bench-clip-v2/adsb-bench.vbu8.gz"
     private const val SPEEDTEST_URL = "https://vibeserver.vibesdr.net/api/speedtest"
     private const val RESULT = "benchmark.json"
 
@@ -38,9 +41,11 @@ object VibeBenchmark {
      */
     fun run(ctx: Context, wantDab: Boolean = true): JSONObject? {
         val clip = if (wantDab) ensureClip(ctx) else ""
+        // ★ CPU only — the ADS-B rows never touch the radio (the capture Test beside the 3.2 MS/s switch does that).
+        val adsbClip = ensureClip(ctx, ADSB_CLIP_URL, "adsb-bench.vbu8", "VIBEAB81")
         val uplink = measureUplinkKBps()
         val json = try {
-            VibeLocalSDR.runBenchmark(clip, uplink)
+            VibeLocalSDR.runBenchmark(clip, adsbClip, uplink)
         } catch (t: Throwable) {
             Log.w(TAG, "benchmark failed: $t"); return null
         }
@@ -60,12 +65,13 @@ object VibeBenchmark {
      * ★ It lands on a temporary name and is only moved into place once it looks like a clip: a part-download
      *   would grade the DAB rows "none" and read as a broken decoder rather than a bad download.
      */
-    fun ensureClip(ctx: Context): String {
-        val out = File(ctx.filesDir, "dab-bench.vbu8")
+    fun ensureClip(ctx: Context, url: String = CLIP_URL, name: String = "dab-bench.vbu8",
+                   magicWant: String = "VIBEBU81"): String {
+        val out = File(ctx.filesDir, name)
         if (out.exists() && out.length() > 1_000_000L) return out.absolutePath
-        val tmp = File(ctx.filesDir, "dab-bench.vbu8.part")
+        val tmp = File(ctx.filesDir, "$name.part")
         return try {
-            val c = (URL(CLIP_URL).openConnection() as HttpURLConnection).apply {
+            val c = (URL(url).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 20_000; readTimeout = 60_000; instanceFollowRedirects = true
                 // ★★ VibeTls: the clip is on GitHub, whose downloads chain to ISRG Root X1 — which Android
                 //    5.1 does not have ("Trust anchor for certification path not found", B10). Set on the
@@ -76,7 +82,7 @@ object VibeBenchmark {
             GZIPInputStream(c.inputStream).use { gz -> tmp.outputStream().use { gz.copyTo(it) } }
             c.disconnect()
             val ok = tmp.length() > 1_000_000L && tmp.inputStream().use { s ->
-                val magic = ByteArray(8); s.read(magic); String(magic) == "VIBEBU81"
+                val magic = ByteArray(8); s.read(magic); String(magic) == magicWant
             }
             if (ok && tmp.renameTo(out)) out.absolutePath else { tmp.delete(); "" }
         } catch (t: Throwable) {

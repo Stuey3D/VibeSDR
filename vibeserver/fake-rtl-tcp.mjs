@@ -23,6 +23,9 @@
 //   --adsb FILE while the dongle is tuned within 2 MHz of 1090 MHz, replay FILE (unsigned 8-bit IQ, as
 //               rtl_sdr writes it, at the rate the server asked for — record it at that rate) on a loop:
 //               real aircraft for ADS-B mode on the bench (V12, 2026-10-24).
+//   --stall-at HZ  a dongle that FALLS OVER at a rate: while the server has asked for HZ or more, send nothing at all
+//               (the socket stays open, the samples just stop) — the boosted-rate guard's bench (vibe_rate_guard.h,
+//               scripts/test-rate-guard.mjs). Below HZ the stream resumes.
 //
 // The signal is deliberately synthetic-but-plausible: a noise floor plus a few AM-modulated
 // carriers at fixed offsets from centre, so the waterfall shows real lines you can tune onto and
@@ -38,6 +41,7 @@ const PORT  = arg('port', 1234);
 let   RATE  = arg('rate', 2_400_000);
 const TONES = arg('tones', 3);
 const WFM_HZ = arg('wfm', 0) * 1e6;
+const STALL_AT = arg('stall-at', 0);
 const dabArg = (() => { const i = process.argv.indexOf('--dab'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const DAB_IQ = dabArg ? fs.readFileSync(dabArg) : null;
 const adsbArg = (() => { const i = process.argv.indexOf('--adsb'); return i >= 0 ? process.argv[i + 1] : ''; })();
@@ -114,6 +118,7 @@ const srv = net.createServer((sock) => {
 
   const tick = () => {
     if (stopped || sock.destroyed) return;
+    if (STALL_AT > 0 && RATE >= STALL_AT) { nextDue = Date.now(); setTimeout(tick, CHUNK_MS); return; }   // ★ --stall-at
     if (rate !== RATE) retune();
     const n = Math.max(1024, Math.round(rate * CHUNK_MS / 1000));
     const buf = Buffer.allocUnsafe(n * 2);

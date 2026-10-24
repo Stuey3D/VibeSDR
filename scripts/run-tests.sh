@@ -91,6 +91,10 @@ flags_for() {
     # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
     #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
     test-adsb)             echo "-O2" ;;
+    # ★★ ADS-B's sample supply (vibe_adsb_capture.h — the live capture %), the boosted-rate stall/crash guard
+    #    (vibe_rate_guard.h) and the benchmark's ADS-B row on a fake source (vibe_benchmark_adsb.h, which pulls in the
+    #    benchmark's headers). ~12 s: two parts feed in real time, as the server does.
+    test-adsb-capture)     echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
     *)               echo "" ;;
   esac
 }
@@ -430,6 +434,9 @@ if node --no-warnings scripts/test_dab_licensed.ts; then pass=$((pass+1)); else 
 # ★★ V12 ADS-B in the app: the report's dump1090 fields → the Aircraft the box AND the watch read; the per-radio
 #    capability (no field = no control, false = disabled WITH the reason, never hidden). adsbTypes.ts.
 if node --no-warnings scripts/test_adsb_report.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ Two rules, two readers each (2026-10-24): the ADS-B capture warning (app + web map bars) and the boosted-rate
+#    guard's red line (app server screen + setup page) — the real functions on the same cases.
+if node --no-warnings scripts/test_capture_and_rate_guard.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and the map's live list (adsbList.ts): row text, nearest first without shuffling, clear of the zoom stack.
 if node --no-warnings scripts/test_adsb_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADS-B FURTHEST key: the web map and the app map page name the same aircraft (one rule, two readers).
@@ -933,6 +940,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     step a wedged stop was on. Same VIBESERVER_BIN rule.
 printf '\n\033[1m── stop during a DAB start (end to end) ──\033[0m\n'
 node scripts/test-server-stop-during-dab.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ A RADIO THAT FALLS OVER AT A RATE A MODE BOOSTED IT TO (vibe_rate_guard.h, 2026-10-24): a fake rtl_tcp that stops
+#     at 2.4 MS/s — ADS-B left, the radio back at its base rate, the switch persisted off; then a planted crash marker
+#     found at start, recorded, cleared. Same VIBESERVER_BIN rule. ~30 s.
+printf '\n\033[1m── boosted-rate stall and crash (end to end) ──\033[0m\n'
+node scripts/test-rate-guard.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ SHARE A STATION THROUGH THE REAL SERVER: two listeners on a shared dial; the line the room receives is

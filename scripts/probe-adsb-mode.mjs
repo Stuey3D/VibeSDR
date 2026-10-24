@@ -32,7 +32,7 @@ for (let t = 0; t < 12; t++) {
   if (t === 2) adsbAudio0 = audioBytes;   // ★ settled: the entry's last in-flight frames are past
   if (last && t % 5 === 4) {
     const ac = last.aircraft || [];
-    console.log(`t=${t + 1}s reports ${reports} aircraft ${ac.length} with pos ${ac.filter(a => a.lat !== undefined).length} msgs ${last.messages} msgRate ${last.msgRate} noise ${last.noise} dropped ${last.dropped}`);
+    console.log(`t=${t + 1}s reports ${reports} aircraft ${ac.length} with pos ${ac.filter(a => a.lat !== undefined).length} msgs ${last.messages} msgRate ${last.msgRate} noise ${last.noise} dropped ${last.dropped} capture ${last.capture}`);
   }
 }
 console.log('audio during ADS-B', audioBytes - adsbAudio0, 'bytes');

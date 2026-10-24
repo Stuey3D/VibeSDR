@@ -115,6 +115,17 @@ export function adsbFurthestHtml(f: { nm: number; name: string } | null): string
   const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   return `<span class="k">FURTHEST</span> ${Math.round(f.nm)} NM<span class="n"> · ${esc(f.name)}</span>`;
 }
+/** ★★★ THE CAPTURE WARNING (Stuart, 2026-10-24) — the server counts the samples its ADS-B decoder RECEIVES against
+ *  what the rate promises (vibe_adsb_capture.h CaptureMeter: the dongle/USB and the server's own IQ queue, not the
+ *  decoder's own lag). Under 97 % the receiver is dropping samples, and replies are cut in half — the Pi 2 at 3.2 MS/s
+ *  heard a third of what 2.4 did. `short` stays on a phone; `rest` says what it means. Null when nothing is wrong or unknown.
+ *  ★★ ONE RULE, TWO READERS: src/services/adsbTypes.ts adsbCaptureWarning is the same — scripts/test_capture_and_rate_guard.ts. */
+export const ADSB_CAPTURE_WARN_PCT = 97;
+export function adsbCaptureWarning(r: AdsbReport | null): { short: string; rest: string } | null {
+  const c = r ? num(r.capture) : null;
+  if (c == null || c < 0 || c >= ADSB_CAPTURE_WARN_PCT) return null;
+  return { short: `capture ${Math.round(c)} %`, rest: ' — the receiver is dropping samples (its USB bus or this server cannot keep up)' };
+}
 
 /** ★ The list, nearest first when the receiver's position is known (the app's AircraftPanel order),
  *  else the most recently heard first. Aircraft without a position sort after the located ones. */

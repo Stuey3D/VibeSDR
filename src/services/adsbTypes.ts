@@ -55,6 +55,19 @@ export interface AdsbReport {
   messages: number;
   aircraft: AdsbAircraftRaw[];
   rate?: number; noise?: number; msgRate?: number; dropped?: number;
+  /** ★ % of the promised samples the server's decoder RECEIVED over ~10 s; -1 until known (vibe_adsb_capture.h). */
+  capture?: number;
+}
+
+/** ★★★ THE CAPTURE WARNING for the map's top bar (Stuart, 2026-10-24): under 97 % the receiver is dropping samples
+ *  before the decoder sees them (the dongle / USB bus, or the server's IQ queue — vibe_adsb_capture.h CaptureMeter).
+ *  `short` stays on a phone; `rest` says what it means. Null when all is well.
+ *  ★★ ONE RULE, TWO READERS: web/client/src/adsb.ts adsbCaptureWarning — scripts/test_capture_and_rate_guard.ts. */
+export const ADSB_CAPTURE_WARN_PCT = 97;
+export function adsbCaptureWarning(r: Pick<AdsbReport, 'capture' | 'rate'> | null | undefined): { short: string; rest: string } | null {
+  const c = r ? num(r.capture) : undefined;
+  if (c === undefined || c < 0 || c >= ADSB_CAPTURE_WARN_PCT) return null;
+  return { short: `capture ${Math.round(c)} %`, rest: ' \u2014 the receiver is dropping samples (its USB bus or this server cannot keep up)' };
 }
 
 /* ★ Bounded, printable text only — a callsign is drawn in a list and injected into a WebView. */
@@ -107,6 +120,7 @@ export function parseAdsbMessage(msg: Record<string, unknown>): AdsbReport {
     messages: num(msg.messages) ?? 0,
     aircraft,
     rate: num(msg.rate), noise: num(msg.noise), msgRate: num(msg.msgRate), dropped: num(msg.dropped),
+    capture: num(msg.capture),
   };
 }
 
