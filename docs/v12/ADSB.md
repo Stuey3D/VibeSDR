@@ -157,3 +157,30 @@ layer.destroy()
 - ★ **The server sends next to no audio in ADS-B** (bench: 131 B in 6 s), so the web client holds its audio
   self-heal for as long as reports keep coming, or it reopened the audio socket every 6 s. The app may need
   the same.
+
+## ADS-B as a radio's landing, and keep it running (2026-10-24)
+
+Stuart: *"can we set ADSB as a landing page for an SDR and when it is set that way have a tick box to keep it running when
+nobody is connected that way a new connection instantly sees a list of planes and a full map"*.
+
+- **Config, per radio:** `landingAdsb` (bool) and `adsbKeepRunning` (bool, meaningful only with `landingAdsb`). Both off by
+  default. `landingFreq`/`demodMode` stay the fallback: EXIT ADS-B goes there. A hand-written file that also has a DAB
+  landing lands in ADS-B (one landing per radio; both pages offer one or the other).
+- **Only where ADS-B can run** (`vsAdsbWhyNot` empty — not an HF+ or an Icom, not a locked centre with own-VFO listeners,
+  2.4 MS/s or the owner's rate switch, not blocked). Elsewhere the toggle is not drawn; where only a setting stands in the
+  way the setup page says which. `/vibeserver/hardware` carries `adsbHw` / `adsbHwWhy` for that.
+- **Landing:** the DAB landing's rules (local_sdr_shim.cpp, the spectrum accept path) — every new session on a radio that
+  is not a shared dial; on a shared dial only the first listener after a start. The plain landing is applied first, then
+  ADS-B is entered through the same internal `{"type":"adsb","on":1}` a listener's button sends.
+- **Keep running** (`adsbKeepTick`, every 2 s on the housekeeping thread): with nobody here and no whole-radio mode on,
+  the radio is taken back if parked/released, put on the plain landing and entered into ADS-B — at the server's start and
+  after the last listener leaves. The rate change, if any, happens then, once; a connection to a radio already in ADS-B
+  changes nothing and gets the full aircraft table in its first messages (measured: 122 aircraft within 3 ms of connect).
+- **Precedence — kept-running ADS-B owns the idle radio.** No idle park, no release to another program, no RSP keepalive
+  release, and Background Decoding profiles for that radio do not run (`bgTick`'s `can` is false; the admin line says
+  why; the setup page greys the profiles and says so). Chosen this way round because the owner who ticked it has said what
+  the idle radio is for more specifically than a profile does, and the two cannot share it: ADS-B takes the whole capture
+  at 1090 MHz where no profile VFO can be. A radio where ADS-B cannot run falls back to the ordinary idle behaviour.
+- **Cost:** continuous decoder CPU — about 13 % of a Pi 3 core at 2.4 MS/s — stated on the tick box.
+- Tests: `scripts/test-server-adsb-landing.mjs` (real server, fake rtl_tcp replaying the FlightAware clip),
+  `scripts/test-setup-adsb-landing.mjs` (the page's real functions), `vibeserver/test-config-radios.cpp` (every hop).
