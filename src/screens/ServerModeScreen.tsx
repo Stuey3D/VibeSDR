@@ -205,7 +205,7 @@ const K = {
   adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block', blockedModes: 'vs_blockedmodes',
-  dabRateBoost: 'vs_dabboost',
+  dabRateBoost: 'vs_dabboost', adsbExtreme: 'vs_adsbextreme',
   dabScanLabels: 'vs_dabscan',
   /** ★ RETIRED 2026-09-28 (the start-on-boot switch) — kept only so the stored value can be removed. */
   startOnBootRetired: 'vs_startonboot',
@@ -390,8 +390,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [blockRanges, setBlockRanges] = useState('');
   /** Modes and decoders switched off on this receiver, comma separated — see BLOCKABLE. */
   const [blockedModes, setBlockedModes] = useState('');
-  /** DAB may borrow the 2.048 MS/s it captures at, on a receiver configured slower. */
+  /** ★ THE RATE SWITCH — "change the sample rate when a mode needs it" (DAB 2.048 MS/s, ADS-B 2.4), the base rate
+   *  back when the mode ends. Still stored as dabRateBoost / vs_dabboost, so a saved choice carries over. */
   const [dabRateBoost, setDabRateBoost] = useState(false);
+  /** ★★ ADS-B at 3.2 MS/s on an RTL — never the default; acts only with the switch above on. */
+  const [adsbExtreme, setAdsbExtreme] = useState(false);
   /** ★ LITE ONLY — the DAB whole-multiplex label scan (every station's name/text, not just the one playing).
    *  -1 = the server's default (OFF on VibeServer Lite: it costs a 32-bit box real CPU), 0 off, 1 on.
    *  Stuart, 2026-09-19: off on Lite "but with a toggle in the options"; the main app keeps it on, no switch. */
@@ -802,35 +805,53 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   xcover I chose 1.2 for reliablility but in this case 2048 may be usable for DAB,
                   however on weaker devices 1.2 may be the genuine ceiling." A borrow the phone
                   cannot sustain is worse than no DAB.
-                ★ Only shown where it can matter, and the threshold is 2.048 rather than 2.4 ON
-                  PURPOSE: this toggle does not set the rate, it lifts the gate in vsDabCapable(),
-                  which asks whether the pinned rate clears kMinCaptureHz (2.048 — the narrowest
-                  capture that can still hold a 1.536 MHz ensemble). At 2.048 or above DAB is
-                  already offered, so there is nothing to unlock and the control would be a no-op.
-                  ★ Worth knowing: DAB RELEASES the pin while it runs (g_vsLockedRate is zeroed on
-                    entry and restored on exit), so a receiver pinned at 2.048 is taken to 2.4 with
-                    no toggle involved. That is why the sentence below says 2.4 whatever was pinned. */}
-            {rate > 0 && rate < 2_048_000 && (<>
+                ★ The threshold WAS 2.048 (DAB alone); since V12 the same switch lets ADS-B take 2.4,
+                  so it is shown below 2.4 — see the note on the switch itself. */}
+            {/* ★★★ NOW THE GENERAL SWITCH (V12, Stuart: "there should be a check box to change the rate to the
+                required rate for the demodulator for DAB and ADSB and any other modes that need it"). ADS-B needs
+                2.4 MS/s, so the switch matters below 2.4 now, not only below 2.048 — and with listeners choosing
+                their own span (rate 0) the radio may be running below either. ★ Still hidden where it is a no-op:
+                a non-RTL pinned at 2.4 or more already carries both modes. On an RTL it stays, because the 3.2 MS/s
+                option beneath it hangs off it. ★ Off by default: a live rate change is the 32-bit teardown hazard. */}
+            {(isAhf || isRtl || rate === 0 || rate < 2_400_000) && (<>
               {/* ★ NAMED FOR WHAT IT DOES, NOT FOR A NUMBER. Stuart, 2026-09-08: "what are you
                   labelling the boost button as in the UI? Since it can be either 2048 or 2.4m".
-                  The rate DAB borrows is the receiver's decision — 2.048 natively, 2.4 with a
-                  resampler if this dongle refuses 2.048 — so a label that promised one figure
-                  would be wrong on the other dongle. The hint gives both. */}
+                  The rate a mode takes is the receiver's decision, so the hint gives the figures. */}
               {/* ★★ GREYED ON THE AIRSPY HF+ (Stuart, 2026-10-10): it tops out at 912 kS/s and cannot
-                  receive DAB at all, so the switch is shown off and does nothing, with the reason. */}
+                  receive DAB or ADS-B at all, so the switch is shown off and does nothing, with the reason. */}
               <OptRow C={C} F={F} active={!isAhf && dabRateBoost} disabled={isAhf}
-                label="Let DAB raise the sample rate while it runs"
-                hint={isAhf ? 'Not possible on the Airspy HF+ — it cannot reach 2.048 MS/s, so it cannot receive DAB.' : undefined}
+                label="Change the sample rate when a mode needs it"
+                hint={isAhf ? 'Not possible on the Airspy HF+ — it cannot reach 2.048 MS/s, so it cannot receive DAB or ADS-B.' : undefined}
                 onPress={() => {
                   const v = !dabRateBoost;
                   setDabRateBoost(v); AsyncStorage.setItem(K.dabRateBoost, v ? '1' : '0');
                 }} />
-              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
-                DAB needs 2.048 MS/s (2.4 on a dongle that cannot do 2.048). With this on it takes
-                that rate while it is running and gives your {(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s
-                back afterwards. Leave it off on a slower device: if it cannot sustain the higher rate
-                the audio will break up, and the rate you picked is the one it can actually keep.
-              </Text>
+              {!isAhf && (
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
+                  DAB takes 2.048 MS/s and ADS-B 2.4 MS/s while they run, and {rate > 0
+                    ? `your ${(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s comes`
+                    : 'the rate comes'} back when the mode ends. Off, a mode is offered only when the rate is already
+                  enough. Leave it off on a slower device: if it cannot sustain the higher rate the audio will break
+                  up, and the rate you picked is the one it can actually keep.
+                </Text>
+              )}
+              {/* ★★ ADS-B AT 3.2 MS/s — AN RTL ONLY, NEVER THE DEFAULT (Stuart: "for RTLs an option to boost to
+                  3.2 MS/s with the warnings … never by default"). 19 % more messages than 2.4 on his sky. Drawn
+                  for the dongle alone (AGENTS.md: an RSP or HackRF takes 3 MS/s anyway), greyed until the switch
+                  above is on, because without it ADS-B never changes the rate. */}
+              {isRtl && (<>
+                <OptRow C={C} F={F} active={dabRateBoost && adsbExtreme} disabled={!dabRateBoost}
+                  label="ADS-B at 3.2 MS/s (extreme)"
+                  hint={dabRateBoost ? undefined : 'Needs the switch above.'}
+                  onPress={() => {
+                    const v = !adsbExtreme;
+                    setAdsbExtreme(v); AsyncStorage.setItem(K.adsbExtreme, v ? '1' : '0');
+                  }} />
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
+                  May hear more aircraft, but needs more CPU, an RTL may drop samples at 3.2 MS/s and the dongle
+                  runs hotter.
+                </Text>
+              </>)}
             </>)}
             {isLite && (<>
               <OptRow C={C} F={F} active={dabScanLabels === 1}
@@ -1066,6 +1087,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const blk = g(K.blockRanges); if (blk != null) setBlockRanges(blk); }
           { const bmd = g(K.blockedModes); if (bmd != null) setBlockedModes(bmd); }
           { const dbb = g(K.dabRateBoost); if (dbb != null) setDabRateBoost(dbb === '1'); }
+          { const axt = g(K.adsbExtreme); if (axt != null) setAdsbExtreme(axt === '1'); }
           { const gl = g(K.gainLimits); if (gl != null) setGainLimits(gl); }
           // ★ -1 is "leave it alone" and is a REAL value, so no `|| default` here.
           { const rg = g(K.restGain); if (rg != null && Number.isFinite(Number(rg))) setRestGain(Number(rg)); }
@@ -1661,6 +1683,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
     //   like the resting gain, not of sharing — see the note in VibeServerBoot.
     blockedModes, dabRateBoost,
+    // ★ Only an RTL's — sent false on any other radio, so a value saved while a dongle was plugged in cannot ride along.
+    adsbExtreme: isRtl && adsbExtreme,
     // ★★★ THE DAB LANDING STATION — never sent beside a DAB block (the engine refuses it too).
     ...(dabBlockedNow(blockedModes) || live.current.landingDabCh < 0
       ? { landingDabChannel: -1, landingDabSid: 0, landingDabService: '' }
@@ -1779,6 +1803,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon], [K.antSwitch, JSON.stringify(live.current.antSwitch)], [K.antRanges, live.current.antRanges], [K.antFilters, live.current.antFilters],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.blockedModes, blockedModes], [K.dabRateBoost, dabRateBoost ? '1' : '0'],
+      [K.adsbExtreme, adsbExtreme ? '1' : '0'],
       [K.gainLimits, gainLimits], [K.gainLocks, gainLocks], [K.gainSplits, gainSplits],
       [K.gainCurves, gainCurves], [K.ifBwLimits, ifBwLimits],
       [K.restGain, String(restGain)],
@@ -1844,7 +1869,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      blockedModes, dabRateBoost, dabScanLabels, isLite,
+      blockedModes, dabRateBoost, adsbExtreme, dabScanLabels, isLite,
       gainLimits, gainLocks, gainSplits, gainCurves, ifBwLimits, isRtl, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
       oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown,
       keepAlive]);

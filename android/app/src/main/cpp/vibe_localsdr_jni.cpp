@@ -1366,8 +1366,11 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetNbWide(JNIEnv*, jobject, jint mode) {
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabPolicy(JNIEnv* env, jobject,
-                                                     jboolean rateBoost, jstring blockedCsv) {
+                                                     jboolean rateBoost, jboolean adsbExtreme, jstring blockedCsv) {
+    // ★ rateBoost is the GENERAL rate switch now (DAB and ADS-B); adsbExtreme = ADS-B at 3.2 MS/s on an RTL, which
+    //   the shim honours only with the switch on. Both set on every start, so neither outlives the config.
     vibe::LocalSdrShim::setVibeServerDabRateBoost(rateBoost == JNI_TRUE);
+    vibe::LocalSdrShim::setVibeServerAdsbExtreme(adsbExtreme == JNI_TRUE);
     const char* b = blockedCsv ? env->GetStringUTFChars(blockedCsv, nullptr) : nullptr;
     vibe::LocalSdrShim::setVibeServerBlockedModes(b ? b : "");
     if (b) env->ReleaseStringUTFChars(blockedCsv, b);

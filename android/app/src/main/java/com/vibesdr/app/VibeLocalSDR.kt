@@ -302,9 +302,12 @@ object VibeLocalSDR {
     fun setTuneLimits(allowCsv: String, blockCsv: String) { ensureLoaded(); nativeSetTuneLimits(allowCsv, blockCsv) }
     private external fun nativeSetTuneLimits(allowCsv: String, blockCsv: String)
 
-    /** DAB may borrow 2.048 MS/s on a slower receiver, and the modes/decoders switched off. */
-    fun setDabPolicy(rateBoost: Boolean, blockedCsv: String) { ensureLoaded(); nativeSetDabPolicy(rateBoost, blockedCsv) }
-    private external fun nativeSetDabPolicy(rateBoost: Boolean, blockedCsv: String)
+    /** The rate switch — "change the sample rate when a mode needs it" (DAB 2.048, ADS-B 2.4; config key dabRateBoost),
+     *  ADS-B at 3.2 MS/s on an RTL (adsbExtreme — only acts with the switch on), and the modes/decoders switched off. */
+    fun setDabPolicy(rateBoost: Boolean, adsbExtreme: Boolean, blockedCsv: String) {
+        ensureLoaded(); nativeSetDabPolicy(rateBoost, adsbExtreme, blockedCsv)
+    }
+    private external fun nativeSetDabPolicy(rateBoost: Boolean, adsbExtreme: Boolean, blockedCsv: String)
     /** ★★ Where a NEW session starts (Hz + demodulator). hz <= 0 / "" = no landing. */
     fun setVibeServerLanding(hz: Double, mode: String) { ensureLoaded(); nativeSetVibeServerLanding(hz, mode) }
     private external fun nativeSetVibeServerLanding(hz: Double, mode: String)

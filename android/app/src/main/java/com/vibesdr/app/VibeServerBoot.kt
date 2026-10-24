@@ -330,7 +330,8 @@ object VibeServerBoot {
              *  property of the RADIO and its aerial, like the resting gain below — not of
              *  sharing or management, which is what Advanced governs. An HF-only radio should
              *  not offer WFM whether or not its owner has opened the Advanced pane. */
-            VibeLocalSDR.setDabPolicy(cfg.b("dabRateBoost", false), cfg.s("blockedModes"))
+            // ★ adsbExtreme absent = false: ADS-B at 3.2 MS/s is never the default (an RTL may drop samples there).
+            VibeLocalSDR.setDabPolicy(cfg.b("dabRateBoost", false), cfg.b("adsbExtreme", false), cfg.s("blockedModes"))
             // ★ Absent = -1 = the build's default, so the main app (which never sends it) is unchanged.
             VibeLocalSDR.setDabScanLabels(cfg.i("dabScanLabels", -1))
             // ★ Raw IQ out — the owner's mode and cap, same source as every other setting here.
