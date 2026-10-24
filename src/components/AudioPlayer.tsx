@@ -73,7 +73,9 @@ export const VibePowerModule = NativeModules.VibePowerModule as
  *  ★ Extends, never shortens. A native build without the method logs ONCE and carries on — the
  *    heal it would hold does not exist in that build either. */
 let holdHealingMissingLogged = false;
-export function holdNativeHealing(ms: number, why: string): void {
+/* ★ `quiet`: a REPEATED hold (ADS-B keeps one up for as long as the mode runs) is not news each time — the
+ *  first is logged, the renewals are not, or the audio log becomes a column of the same line. */
+export function holdNativeHealing(ms: number, why: string, quiet = false): void {
   const fn = VibePowerModule?.holdHealing;
   if (typeof fn !== 'function') {
     if (!holdHealingMissingLogged) {
@@ -84,7 +86,7 @@ export function holdNativeHealing(ms: number, why: string): void {
   }
   try {
     fn(ms);
-    noteAudioEvent(`self-heal held ${Math.round(ms / 1000)} s — ${why}`);
+    if (!quiet) noteAudioEvent(`self-heal held ${Math.round(ms / 1000)} s — ${why}`);
   } catch (e) {
     console.warn('[AudioPlayer] holdHealing failed:', e);
   }

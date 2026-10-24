@@ -20,6 +20,7 @@ import { parseDabMessage, dabSafeText, type DabState } from './dabTypes';
 import { holdNativeHealing } from '../components/AudioPlayer';
 import { DabExitGuard } from './dabStepper';
 import { DabAssembler } from './dabAssemble';
+import { parseAdsbMessage } from './adsbTypes';
 
 export {
   MODE_BANDWIDTHS,
@@ -120,6 +121,46 @@ export class VibeServerClient extends VibeServerWsClient {
     this.sendSpectrum({ type: 'dab_service', sid });
   }
 
+  // ─── ADS-B (V12, docs/v12/ADSB.md) ───────────────────────────────────────────────────────────
+  //
+  // ★★★ THE SAME SHAPE AS DAB, ON PURPOSE. The server takes the whole radio to 1090 MHz, decodes on
+  //     its own thread and reports once a second; the client never tunes, so `adsbHeld` locks
+  //     tune/zoom/pan/resetView through the same single reader dabHeld uses (SdrWsClient). The hold
+  //     is set and cleared with the REQUEST, for the reason dab() gives.
+  // ★★ DAB ↔ ADS-B IS THE SERVER'S JOB: entering one leaves the other through its own door, and
+  //    every listener hears `dab_off` / `adsb_off` first. Nothing here second-guesses that.
+
+  /** ★★★ Reports that arrive after our own `adsb off` are ghosts — the DabExitGuard rule, unchanged
+   *  (a report already on the wire re-opened the box over the receiver we had just been given back). */
+  private adsbExit = new DabExitGuard();
+  /** Date.now() of the last report — see adsbSilentMs. */
+  private adsbLastAt = 0;
+  /** ★ When the self-heal was last held for ADS-B — see the `adsb` case. */
+  private adsbHealHeldAt = 0;
+  static readonly ADSB_ENTER_HOLD_MS = 15_000;
+  static readonly ADSB_QUIET_HOLD_MS = 6_000;
+
+  adsb(on: boolean) {
+    if (this.askBlocked()) return;   // ★★ ask before tuning — it takes everybody's radio to 1090
+    /* ★★★ THERE IS NO AUDIO IN ADS-B (the server runs the receiver spectrum-only), and the native
+     *  self-heal reads a stream with no audio as a stall to repair. Held here for the entry, and
+     *  kept held by the reports while the mode runs (see the `adsb` case). */
+    holdNativeHealing(VibeServerClient.ADSB_ENTER_HOLD_MS, on ? 'ADS-B on' : 'ADS-B off');
+    if (on) { this.adsbExit.entered(); this.cancelPacedTune(); }
+    else this.adsbExit.left(Date.now());
+    this.adsbHeld = on;
+    if (on) this.adsbLastAt = Date.now();   // ★ the silence clock starts at the ask, not at 1970
+    this.sendSpectrum({ type: 'adsb', on: on ? 1 : 0 });
+  }
+
+  /** ★ How long since the last report while we believe the receiver is in ADS-B (0 when it is not).
+   *  A receiver that LEFT ADS-B while we were away (the last listener's socket closed and the
+   *  server gave the radio back, telling nobody) would otherwise leave the dial locked here for
+   *  ever — so the screen asks, and a long silence lets the hold go (adsbForget). */
+  adsbSilentMs(now = Date.now()): number { return this.adsbHeld ? now - this.adsbLastAt : 0; }
+  /** Drop the hold WITHOUT telling the server — it is not in ADS-B; we were merely told nothing. */
+  adsbForget() { this.adsbHeld = false; }
+
   /** ★ Raw IQ out for THIS session — the audio sheet's row. The server answers with `iqout`. */
   iqOut(on: boolean, rate = 48000) { this.sendSpectrum({ type: 'iqout', on: on ? 1 : 0, rate }); }
 
@@ -174,6 +215,32 @@ export class VibeServerClient extends VibeServerWsClient {
         this.dabHeld = false;
         this.dabSeenChannel = null; this.dabSeenSid = null;
         this.callbacks.onDab?.(null);
+        return true;
+      case 'adsb': {
+        const now = Date.now();
+        if (!this.adsbExit.accept(now)) return true;   // ★ a ghost after our own off — see adsbExit
+        const r = parseAdsbMessage(msg);
+        /* ★★ HOLD THE HEAL WHILE THE MODE RUNS — every few seconds, quietly (the hold extends, never
+         *  shortens; logging one a second would bury the audio log). A report we did not ask for
+         *  (a second listener joining a radio already in ADS-B) is the same silence. */
+        if (!this.adsbHeld || now - this.adsbHealHeldAt > 3000) {
+          this.adsbHealHeldAt = now;
+          holdNativeHealing(VibeServerClient.ADSB_QUIET_HOLD_MS, this.adsbHeld ? 'ADS-B running' : 'server reports ADS-B',
+                            this.adsbHeld);
+        }
+        this.adsbHeld = true;
+        this.adsbLastAt = now;
+        this.callbacks.onAdsb?.(r);
+        return true;
+      }
+      case 'adsb_off':
+        this.adsbExit.offConfirmed(Date.now());
+        this.adsbHeld = false;
+        this.callbacks.onAdsb?.(null);
+        return true;
+      case 'adsb_error':
+        this.adsbHeld = false;
+        this.callbacks.onAdsb?.(null, dabSafeText(msg.why, 200) || 'ADS-B is not available on this receiver');
         return true;
       case 'iqout':
         this.callbacks.onIqOut?.({

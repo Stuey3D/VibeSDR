@@ -1,0 +1,196 @@
+// adsbTypes.ts — VibeServer's ADS-B 1090 mode, as the app reads it (V12, docs/v12/ADSB.md).
+//
+// ★★★ ONE TABLE, TWO SHAPES. The server speaks dump1090's `aircraft.json` field names (hex,
+//     alt_baro, gs, baro_rate, track, messages …) because that is what every ADS-B tool already
+//     knows. The app has spoken OWRX's shape (icao, altitude, speed, vspeed, course, msgs) since
+//     OWRX ADS-B landed, and the decoder box (AircraftPanel) and the WATCH (WatchLink.Aircraft,
+//     a Codable keyed on exactly those names) both read it. So the report is mapped HERE, once,
+//     into the existing `Aircraft` — and the raw objects are kept beside it for the map, whose
+//     shared layer (web/mapkit/adsblayer.js) is written against the server's names.
+// ★★ PURE: no React Native, no imports at run time — scripts/test_adsb_report.ts runs it in node.
+// ★ Every field is checked for its TYPE, never trusted: this is somebody else's server's JSON, and
+//   a string where a number belongs must become "unknown", not NaN in a table cell.
+import type { Aircraft } from './SDRBackend';
+
+/** What `/vibeserver.json` says about ADS-B on THIS radio. `undefined` = an older server (no field):
+ *  draw no control at all. `{ ok: false, why }` = draw it DISABLED, with the reason (never hidden). */
+export interface AdsbCap { ok: boolean; why?: string }
+
+/** Read the capability from a radio's /vibeserver.json body. `modes` containing "adsb" is the same
+ *  as `adsb: true` (the directory's badge list) — ADSB.md, "Server contract". */
+export function parseAdsbCapability(j: unknown): AdsbCap | undefined {
+  if (!j || typeof j !== 'object') return undefined;
+  const o = j as Record<string, unknown>;
+  if (o.adsb === true) return { ok: true };
+  if (Array.isArray(o.modes) && o.modes.some((m) => m === 'adsb')) return { ok: true };
+  if (o.adsb === false) {
+    const why = cleanText(o.adsbWhy, 200);
+    return { ok: false, why: why || 'ADS-B is not available on this receiver' };
+  }
+  return undefined;
+}
+
+/** One aircraft as the server sends it (dump1090 names; absent = unknown). Kept for the map. */
+export interface AdsbAircraftRaw {
+  hex: string;
+  flight?: string;
+  category?: string;
+  lat?: number; lon?: number;
+  seen_pos?: number;
+  /** ft, or 'ground' */
+  alt_baro?: number | 'ground';
+  alt_geom?: number;
+  gs?: number; track?: number; mag_heading?: number; tas?: number; ias?: number;
+  baro_rate?: number;
+  squawk?: string;
+  emergency?: string;
+  seen?: number;
+  messages?: number;
+  rssi?: number;
+}
+
+/** A whole `adsb` report. */
+export interface AdsbReport {
+  now: number;
+  messages: number;
+  aircraft: AdsbAircraftRaw[];
+  rate?: number; noise?: number; msgRate?: number; dropped?: number;
+}
+
+/* ★ Bounded, printable text only — a callsign is drawn in a list and injected into a WebView. */
+function cleanText(v: unknown, max: number): string {
+  if (typeof v !== 'string') return '';
+  // eslint-disable-next-line no-control-regex
+  return v.replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, max);
+}
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+/** ★ The report is capped: the server drops an aircraft after 60 s, but a hostile or broken one
+ *  could send anything, and this array is rendered as a list and pushed into the map each second. */
+export const ADSB_MAX_AIRCRAFT = 1000;
+
+export function parseAdsbMessage(msg: Record<string, unknown>): AdsbReport {
+  const list = Array.isArray(msg.aircraft) ? msg.aircraft : [];
+  const aircraft: AdsbAircraftRaw[] = [];
+  for (const x of list) {
+    if (aircraft.length >= ADSB_MAX_AIRCRAFT) break;
+    if (!x || typeof x !== 'object') continue;
+    const a = x as Record<string, unknown>;
+    const hex = cleanText(a.hex, 8).toLowerCase();
+    if (!/^~?[0-9a-f]{6}$/.test(hex)) continue;          // ★ the one field that must be there
+    const r: AdsbAircraftRaw = { hex };
+    const flight = cleanText(a.flight, 12);
+    if (flight) r.flight = flight;
+    const cat = cleanText(a.category, 2).toUpperCase();
+    if (/^[A-D][0-7]$/.test(cat)) r.category = cat;
+    const lat = num(a.lat), lon = num(a.lon);
+    if (lat !== undefined && lon !== undefined && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+      r.lat = lat; r.lon = lon;
+    }
+    if (a.alt_baro === 'ground') r.alt_baro = 'ground';
+    else if (num(a.alt_baro) !== undefined) r.alt_baro = num(a.alt_baro);
+    for (const k of ['seen_pos', 'alt_geom', 'gs', 'track', 'mag_heading', 'tas', 'ias',
+                     'baro_rate', 'seen', 'messages', 'rssi'] as const) {
+      const v = num(a[k]);
+      if (v !== undefined) (r as unknown as Record<string, number>)[k] = v;
+    }
+    const sq = cleanText(typeof a.squawk === 'number' ? String(a.squawk) : a.squawk, 4);
+    if (/^[0-7]{4}$/.test(sq)) r.squawk = sq;
+    const em = typeof a.emergency === 'number' ? String(a.emergency) : cleanText(a.emergency, 16);
+    if (em && em !== '0' && em !== 'none') r.emergency = em;
+    aircraft.push(r);
+  }
+  return {
+    now: num(msg.now) ?? 0,
+    messages: num(msg.messages) ?? 0,
+    aircraft,
+    rate: num(msg.rate), noise: num(msg.noise), msgRate: num(msg.msgRate), dropped: num(msg.dropped),
+  };
+}
+
+/** Great-circle distance, km — the same formula (and the same rounding) OwrxAdapter uses, so a
+ *  row reads the same whichever server the aircraft came from. */
+export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+/** Initial bearing from the receiver to the aircraft, degrees (0–359). */
+export function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
+  const dl = (lon2 - lon1) * Math.PI / 180;
+  const y = Math.sin(dl) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360);
+}
+
+/** ★★ THE SERVER'S AIRCRAFT IN THE APP'S SHAPE, nearest first.
+ *  hex→icao, alt_baro→altitude ("ground" → 0 and `onGround`), gs→speed, baro_rate→vspeed,
+ *  track→course (the heading when there is no track), messages→msgs; distance and bearing are
+ *  OURS to compute from the receiver, exactly as OwrxAdapter does (the server sends position,
+ *  not range). `rx` null/0,0 = unknown receiver: no distances, sorted by signal instead. */
+export function adsbToAircraft(list: AdsbAircraftRaw[], rx: { lat: number; lon: number } | null): Aircraft[] {
+  const rxOk = !!rx && Number.isFinite(rx.lat) && Number.isFinite(rx.lon) && (rx.lat !== 0 || rx.lon !== 0);
+  const out = list.map((a): Aircraft => {
+    const hasPos = a.lat !== undefined && a.lon !== undefined;
+    const ground = a.alt_baro === 'ground';
+    const row: Aircraft = {
+      icao: a.hex,
+      flight: a.flight,
+      altitude: ground ? 0 : typeof a.alt_baro === 'number' ? a.alt_baro : undefined,
+      speed: a.gs,
+      vspeed: a.baro_rate,
+      course: a.track ?? a.mag_heading,
+      squawk: a.squawk,
+      rssi: a.rssi,
+      msgs: a.messages,
+      lat: a.lat, lon: a.lon,
+      distKm: hasPos && rxOk ? haversineKm(rx!.lat, rx!.lon, a.lat!, a.lon!) : undefined,
+      bearing: hasPos && rxOk ? bearingDeg(rx!.lat, rx!.lon, a.lat!, a.lon!) : undefined,
+    };
+    // ★ The raw extras ride along (the map and the box can use them; the watch's Codable ignores them).
+    if (a.category) row.category = a.category;
+    if (a.seen !== undefined) row.seen = a.seen;
+    if (ground) row.onGround = true;
+    if (a.emergency) row.emergency = a.emergency;
+    // ★ Drop undefined keys: this array is JSON'd to the watch every few seconds.
+    for (const k of Object.keys(row) as (keyof Aircraft)[]) if (row[k] === undefined) delete row[k];
+    return row;
+  });
+  // ★ AircraftPanel sorts again (it serves OWRX too); sorting here as well keeps the watch's order the same.
+  return out.sort((x, y) => {
+    if (x.distKm != null && y.distKm != null) return x.distKm - y.distKm;
+    if (x.distKm != null) return -1;
+    if (y.distKm != null) return 1;
+    return (y.rssi ?? -99) - (x.rssi ?? -99);
+  });
+}
+
+/** The decoder box's status line: what is being heard, in words. */
+export function adsbStatusText(r: AdsbReport | null): string {
+  if (!r) return 'starting…';
+  const n = r.aircraft.length;
+  const pos = r.aircraft.filter((a) => a.lat !== undefined).length;
+  const rate = r.msgRate !== undefined ? ` · ${Math.round(r.msgRate)} msg/s` : '';
+  if (!n) return `listening…${rate}`;
+  return `${n} aircraft${pos < n ? ` (${pos} placed)` : ''}${rate}`;
+}
+
+/** The map's in-map toggles (the shared layer draws them; the app remembers them per device). */
+export interface AdsbMapPrefs { autoZoom: boolean; fit: boolean; rings: boolean }
+export const ADSB_MAP_PREFS_DEFAULT: AdsbMapPrefs = { autoZoom: true, fit: false, rings: true };
+export function parseAdsbMapPrefs(s: string | null | undefined): AdsbMapPrefs {
+  try {
+    const j = s ? JSON.parse(s) : null;
+    if (!j || typeof j !== 'object') return { ...ADSB_MAP_PREFS_DEFAULT };
+    const b = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
+    return { autoZoom: b(j.autoZoom, ADSB_MAP_PREFS_DEFAULT.autoZoom),
+             fit: b(j.fit, ADSB_MAP_PREFS_DEFAULT.fit),
+             rings: b(j.rings, ADSB_MAP_PREFS_DEFAULT.rings) };
+  } catch { return { ...ADSB_MAP_PREFS_DEFAULT }; }
+}

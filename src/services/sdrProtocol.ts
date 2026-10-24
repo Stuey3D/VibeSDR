@@ -9,6 +9,7 @@
  * ✗ Nothing that DOES anything belongs in this file. A function here is a shared component again.
  */
 import type { DabState } from './dabTypes';
+import type { AdsbReport } from './adsbTypes';
 import type { AskState } from './dialChat';
 
 /** The one sentence a refused-as-too-old client shows; SDRScreen matches on it to add the button. */
@@ -387,6 +388,9 @@ export interface SDRCallbacks {
    *  multiplex (see DabState — every field is MEASURED, nothing inferred); null means DAB has
    *  ended, and `err` carries the server's refusal when it could not start. */
   onDab?:       (s: DabState | null, err?: string) => void;
+  /** ★ V12 ADS-B, VIBESERVER-ONLY like onDab: a report about once a second while the receiver is in
+   *  the mode (its arrival MEANS it is on — open the box); null = it ended; `err` = the refusal. */
+  onAdsb?:      (r: AdsbReport | null, err?: string) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?:     (m: IqOutState) => void;
   onHwGains?:   (gains: number[]) => void;

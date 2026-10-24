@@ -101,6 +101,12 @@ export interface Aircraft {
    *  records carry altitude and speed with no lat/lon at all. */
   distKm?:   number;
   bearing?:  number;      // degrees from the receiver
+  /* ★ V12 VibeServer ADS-B only (adsbTypes.ts) — OWRX does not send these. The watch's Codable
+   *   ignores keys it does not declare, so they cost the wrist nothing. */
+  category?: string;      // DO-260B emitter category, A0–D7 (the map's icon)
+  seen?:     number;      // seconds since any message
+  onGround?: boolean;     // alt_baro "ground" (altitude is then 0)
+  emergency?: string;     // non-zero emergency state
 }
 
 /** A demodulator the backend offers (OWRX reports these; UI gates the picker). */
@@ -265,6 +271,14 @@ export interface SDRBackend {
    *  an ensemble is one 1.536 MHz block with nothing to tune inside it, and on an RTL the IF
    *  filter follows the view, so a zoom cuts the multiplex out from under the decoder. */
   readonly inDab?: boolean;
+  /** ★ V12 ADS-B on a VibeServer (docs/v12/ADSB.md): the whole radio to 1090 MHz, decoded on the
+   *  server; tune/zoom/rate are refused while it runs, exactly as in DAB. */
+  adsb?(on: boolean): void;
+  /** True while the receiver is in ADS-B — the same lock as inDab. */
+  readonly inAdsb?: boolean;
+  /** ms since the last ADS-B report while held (0 when not in ADS-B) — and letting a lapsed hold go. */
+  adsbSilentMs?(): number;
+  adsbForget?(): void;
 
   /**
    * ★★ Carry an admin credential on every socket this backend opens.
