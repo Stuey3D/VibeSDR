@@ -300,6 +300,8 @@ private:
                 //     FlightAware antenna: noise near the floor, Mode A/C pulse trains) and the decoder took 3¼ Pi 3
                 //     cores. ★ Only 6.0–7.0 µs: the reply may start a sample after i, and a sample at 5.5 µs then
                 //     caught the last pulse's smear, one at 7.5 µs the first data bit (−8 % of real messages).
+                // ★ NOT "the four pulses within N dB of each other": at 6 dB it lost 1.7 % of a real sky's messages
+                //   (smear and noise make a weak preamble's pulses unequal), at 10 dB it saved 0.2 % of a core.
                 const float weakest = std::min(std::min(pm[i], pm[i + o1]), std::min(pm[i + o2], pm[i + o3])) * 0.5f;
                 bool quiet = pw[i + size_t(gapAt_)] < weakest;
                 for (int k = 0; k < 3 && quiet; ++k) quiet = pw[i + size_t(quietAt_[k])] < weakest;
@@ -327,21 +329,30 @@ private:
      *  ★★ ONE RUNNING SUM PER TRIGGER, BUILT ONLY AS FAR AS ASKED. Summing each window's samples afresh was a third
      *     of the decoder on the Pi 3 (1.4 million windows a second, nearly all of them slicing); a running sum kept
      *     for EVERY sample was worse still (a double stored per sample for windows almost never asked for). */
-    float win(float off) const {
-        return (cumAt(off + hf_) - cumAt(off)) * invH_;
-    }
-    float cumAt(float x) const {
-        const int k = int(x);                            // x ≥ 0 here
-        if (k + 1 >= lcN_) extend(k + 2);
-        return lc_[size_t(k)] + (x - float(k)) * lm_[k];
+    float win(float off) const {                          // ★ the trigger's sum must already reach off + h
+        return (cumFast(off + hf_) - cumFast(off)) * invH_;
     }
     float cumFast(float x) const {                       // cumAt, already extended far enough
         const int k = int(x);
         return lc_[size_t(k)] + (x - float(k)) * lm_[k];
     }
+    /** Make lc_ reach index upTo. ★ Four lanes at a time on NEON: a running sum is a chain of dependent adds
+     *  (4 cycles each on the A53), so each group of four is summed within itself and the carry added once. */
     void extend(int upTo) const {
         if (upTo > int(lc_.size()) - 1) upTo = int(lc_.size()) - 1;
-        for (int k = lcN_; k < upTo + 1; ++k) lc_[size_t(k)] = lc_[size_t(k - 1)] + lm_[k - 1];
+        int k = lcN_;
+#if VIBE_ADSB_NEON
+        float carry = lc_[size_t(k - 1)];
+        for (; k + 4 <= upTo + 1; k += 4) {
+            float32x4_t v = vld1q_f32(lm_ + k - 1);                       // x0 x1 x2 x3
+            v = vaddq_f32(v, vextq_f32(vdupq_n_f32(0), v, 3));            // x0, x0+x1, x1+x2, x2+x3
+            v = vaddq_f32(v, vextq_f32(vdupq_n_f32(0), v, 2));            // running sums within the four
+            v = vaddq_f32(v, vdupq_n_f32(carry));
+            vst1q_f32(&lc_[size_t(k)], v);
+            carry = vgetq_lane_f32(v, 3);
+        }
+#endif
+        for (; k < upTo + 1; ++k) lc_[size_t(k)] = lc_[size_t(k - 1)] + lm_[k - 1];
         lcN_ = std::max(lcN_, upTo + 1);
     }
     void startTrigger(size_t i0) const { lm_ = pow_.data() + i0; lc_[0] = 0; lcN_ = 1; }
@@ -396,6 +407,7 @@ private:
         if (i < 1) return 0;
         const size_t i0 = i - 1;
         startTrigger(i0);
+        extend(int(2.0f + 57 * qf_ + hf_) + 3);           // ★ everything the preamble search reads, once
         struct Cand { float off, score, hi; };
         Cand c[24]; int nc = 0;
         for (float off = 0; off < 2.0f && nc < 24; off += qf_) {
