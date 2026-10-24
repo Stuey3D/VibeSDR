@@ -31,6 +31,7 @@ struct Health {
     double   msgsPerSec = 0;      ///< believed messages
     double   strongFrac = 0;      ///< share of believed messages within 3 dB of full scale
     uint64_t dropped = 0;         ///< capture blocks lost because the decoder was behind (since start)
+    uint64_t msgsTotal = 0;       ///< believed messages since start, live — GainTrial counts its own windows from it
     bool     valid = false;
 };
 
@@ -54,7 +55,7 @@ public:
         dropped_ = 0;
         t0_ = std::chrono::steady_clock::now();
         cap_.reset(rateHz, 0.0);
-        winMsgs_ = winStrong_ = 0; lastGood_ = 0; winStart_ = 0;
+        winMsgs_ = winStrong_ = 0; lastGood_ = 0; winStart_ = 0; msgsTotal_ = 0;
         health_ = Health{};
         run_ = true;
         worker_ = std::thread([this] { loop(); });
@@ -140,6 +141,7 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         Health h = health_;
         h.dropped = dropped_;
+        h.msgsTotal = msgsTotal_;
         return h;
     }
 
@@ -169,7 +171,7 @@ private:
                 d->feed(b.data(), b.size(),
                         [&](const Frame& f) {
                             std::lock_guard<std::mutex> g(mtx_);
-                            if (tracker_.accept(f, t)) { ++winMsgs_; if (f.level > -3.0f) ++winStrong_; }
+                            if (tracker_.accept(f, t)) { ++winMsgs_; ++msgsTotal_; if (f.level > -3.0f) ++winStrong_; }
                         },
                         [&](uint32_t a) { std::lock_guard<std::mutex> g(mtx_); return tracker_.known(a, t); });
                 lk.lock();
@@ -262,7 +264,7 @@ private:
     uint64_t dropped_ = 0;
     CaptureMeter cap_;                                      // under mtx_
     std::chrono::steady_clock::time_point t0_;
-    uint64_t winMsgs_ = 0, winStrong_ = 0, lastGood_ = 0;
+    uint64_t winMsgs_ = 0, winStrong_ = 0, lastGood_ = 0, msgsTotal_ = 0;
     double winStart_ = 0;
     Health health_;
     // the aircraft details (decoder thread: work_; any thread under infoMtx_: the published JSON)
@@ -309,6 +311,67 @@ struct GainRule {
         if (h.noiseDbfs < -(rangeDb + climbSpareDb)) return +1;
         return 0;
     }
+};
+
+/* ★★★ A STEP MUST EARN ITS PLACE IN MESSAGES (Stuart, 2026-10-24, the Pi 500 V4L on beta11: "when I connect I see
+ *  around 250+ messages and after a minute or so it drops to 170 or so"). GainRule judges the noise floor, and on a
+ *  hot front end (that V4L: −16.9 dBFS at the top of its list) the floor says "come down" while the sky says the
+ *  opposite — the rule took it 49.6 → 44.5 dB and lost a third of the messages. dump1090-fa's 30 dB of range suits
+ *  Stuart's FlightAware antenna; it is not a law of every feed. So the rule only PROPOSES a step; the step is then
+ *  tried against where we are, A/B — the other gain, then this one, three times each — and kept only if it decoded
+ *  MORE. Alternating legs, not before/after, so a sky that fills or empties over the minute lands on both sides.
+ *  ★ A tie keeps the HIGHER gain: the top of the list is where we start (dump1090-fa's --gain 60) and the distant
+ *    aircraft are the ones a lower gain loses.
+ *  ★ The first ~2 s of each leg are not counted: the tuner and the decoder's noise floor (16 blocks) settle. */
+class GainTrial {
+public:
+    static constexpr double kSettleS = 1.5;   ///< after each gain write, not counted
+    static constexpr double kCountS = 6.0;    ///< counted per leg
+    static constexpr int kLegs = 6;           ///< alternating, the proposed gain first: 3 legs each
+
+    bool active() const { return legs_ > 0; }
+    /** Start trying `proposed` against `current` (indices into the radio's gain list). Returns the index to set now. */
+    int start(int current, int proposed, double t) {
+        idx_[0] = current; idx_[1] = proposed;
+        msgs_[0] = msgs_[1] = 0; secs_[0] = secs_[1] = 0;
+        legs_ = kLegs; side_ = 1; legAt_ = t; countFrom_ = -1;
+        return idx_[1];
+    }
+    /** Feed at any cadence (the shim's 2 s tick). Returns the index the radio should be at; once the trial is over
+     *  active() is false and the return value is the winner. */
+    int step(double t, uint64_t msgsTotal) {
+        if (!active()) return winner_;
+        if (countFrom_ < 0) {
+            if (t - legAt_ >= kSettleS) { countFrom_ = t; countMsgs_ = msgsTotal; }
+            return idx_[side_];
+        }
+        if (t - countFrom_ < kCountS) return idx_[side_];
+        msgs_[side_] += double(msgsTotal - countMsgs_);
+        secs_[side_] += t - countFrom_;
+        if (--legs_ == 0) {
+            const double r0 = rate(0), r1 = rate(1);
+            const bool up = idx_[1] > idx_[0];
+            // the higher gain keeps a tie: a proposed climb must not lose, a proposed cut must win
+            const bool keep = up ? r1 >= r0 : r1 > r0;
+            winner_ = keep ? idx_[1] : idx_[0];
+            proposedWon_ = keep;
+            return winner_;
+        }
+        side_ ^= 1; legAt_ = t; countFrom_ = -1;
+        return idx_[side_];
+    }
+    double rate(int side) const { return secs_[side] > 0 ? msgs_[side] / secs_[side] : 0; }   ///< 0 current, 1 proposed
+    bool proposedWon() const { return proposedWon_; }
+    int current() const { return idx_[0]; }
+    int proposed() const { return idx_[1]; }
+    void cancel() { legs_ = 0; }
+private:
+    int idx_[2] = {0, 0};
+    double msgs_[2] = {0, 0}, secs_[2] = {0, 0};
+    int legs_ = 0, side_ = 0, winner_ = 0;
+    double legAt_ = 0, countFrom_ = -1;
+    uint64_t countMsgs_ = 0;
+    bool proposedWon_ = false;
 };
 
 } // namespace vibeadsb

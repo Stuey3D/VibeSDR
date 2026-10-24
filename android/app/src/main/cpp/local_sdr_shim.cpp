@@ -12895,6 +12895,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     int adsbGainIdx_ = -1, adsbGainSet_ = -999;
     double adsbLastReport_ = 0, adsbLastGain_ = 0;
     double adsbHoldUntil_ = 0; int adsbUpVotes_ = 0, adsbDownVotes_ = 0;   // the gain rule's hysteresis — see adsbTick
+    vibeadsb::GainTrial adsbTrial_;                                       // a proposed step, tried A/B — see adsbTick
+    double adsbNoCutUntil_ = 0, adsbNoClimbUntil_ = 0;                    // after a step lost its trial
     std::atomic<bool> rateBoostFellBack_{false};       // ★ the watchdog's boosted-rate recovery ran — see rateBoostStalled
     /** ★ When rtl_tcp last delivered (tcpReadLoop). lastIqAt is the USB/driver sources' — an rtl_tcp radio never
      *  stamps it (its stalls are counted as netStalls, not called an unplug) — so the guard asks this instead. */
@@ -12991,10 +12993,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         adsbGains_ = LocalSdrShim::instance().getTunerGains();
         adsbGainIdx_ = -1; adsbGainSet_ = -999;
         adsbHoldUntil_ = 0; adsbUpVotes_ = 0; adsbDownVotes_ = 0;
+        adsbTrial_.cancel(); adsbNoCutUntil_ = adsbNoClimbUntil_ = 0;
         if (!adsbGains_.empty()) {
             adsbGainIdx_ = useSdrplay() ? int(adsbGains_.size() * 3 / 4) : int(adsbGains_.size()) - 1;
             adsbGainSet_ = adsbGains_[size_t(adsbGainIdx_)];
-            LocalSdrShim::instance().setGain(adsbGainSet_);
+            // ★ written below, once g_adsbMode is up — written here, the gain-step smoother (off in ADS-B) still
+            //   ran on the blocks in between and held the capture down for its ~1 s glide at every entry
         }
         agcForget("ADS-B: 1090 MHz is not the carrier we came off");
         g_vsLockedCentre.store(0.0);
@@ -13024,6 +13028,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_adsb.start(runRate, g_bgLat.load(), g_bgLon.load());
         adsbLastReport_ = adsbLastGain_ = nowSecs();
         g_adsbMode.store(true);
+        if (adsbGainIdx_ >= 0) LocalSdrShim::instance().setGain(adsbGainSet_);
         recomputeEngineRate();               // ★ the waterfall slows to a crawl behind the map — see recomputeEngineRate
         applyAutoIf();
         tuneHw(logical);
@@ -13178,31 +13183,50 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ A LISTENER WHO SETS THE GAIN HAS IT. Any value we did not set ourselves pauses the rule; asking
         //    for automatic gain again (-1) hands it back.
         const int cur = g_gainTarget.load(std::memory_order_relaxed);
-        if (cur >= 0 && cur != adsbGainSet_) return;
+        if (cur >= 0 && cur != adsbGainSet_) { adsbTrial_.cancel(); return; }   // ★ and a trial under way is void
         const vibeadsb::Health h = g_adsb.health();
+        auto setIdx = [&](int i) {
+            if (i == adsbGainIdx_ && cur >= 0) return;
+            adsbGainIdx_ = i;
+            adsbGainSet_ = adsbGains_[size_t(i)];
+            LocalSdrShim::instance().setGain(adsbGainSet_);
+        };
+        // ★★★ A PROPOSED STEP IS TRIED, NOT TAKEN — see vibeadsb::GainTrial (the V4L's 250 → 170 msg/s)
+        if (adsbTrial_.active()) {
+            setIdx(adsbTrial_.step(t, h.msgsTotal));
+            if (adsbTrial_.active()) return;
+            const bool won = adsbTrial_.proposedWon(), up = adsbTrial_.proposed() > adsbTrial_.current();
+            LOGI("[ADS-B] gain trial: %.1f dB %.0f msg/s vs %.1f dB %.0f msg/s -> %s %.1f dB (noise %.1f dBFS)",
+                 adsbGains_[size_t(adsbTrial_.proposed())] / 10.0, adsbTrial_.rate(1),
+                 adsbGains_[size_t(adsbTrial_.current())] / 10.0, adsbTrial_.rate(0),
+                 won ? "step taken," : "step refused, staying at", adsbGainSet_ / 10.0, h.noiseDbfs);
+            if (won) { if (!up) adsbHoldUntil_ = t + 60.0; }
+            else if (up) adsbNoClimbUntil_ = t + 600.0;     // ★ ten quiet minutes before the same question again
+            else adsbNoCutUntil_ = t + 600.0;
+            return;
+        }
         vibeadsb::GainRule rule;
         rule.levelHeld = useSdrplay();   // ★ the RSP's IF AGC holds the level — see GainRule::levelHeld
         int d = rule.decide(h);
         /* ★★ HYSTERESIS — calm, as the FlightAware box is (two changes in fifteen minutes). A cut needs 6 s of asking
          *  (3 ticks; a noise floor that rose for one burst of traffic is not a reason), then no climb for 60 s, and a
          *  climb needs 30 s of asking (15 ticks). The first rule cut at once and climbed after 10 s, and hunted. An
-         *  SDRplay (levelHeld) still cuts at once: there the vote is replies clipping now. */
+         *  SDRplay (levelHeld) still asks at once: there the vote is replies clipping now. Either way the step is
+         *  then tried (GainTrial) and kept only for more messages; one that loses is not asked again for 10 min. */
         if (d < 0) {
             adsbUpVotes_ = 0;
-            if (!rule.levelHeld && ++adsbDownVotes_ < 3) d = 0;
-            else { adsbDownVotes_ = 0; adsbHoldUntil_ = t + 60.0; }
+            if (t < adsbNoCutUntil_ || (!rule.levelHeld && ++adsbDownVotes_ < 3)) d = 0;
+            else adsbDownVotes_ = 0;
         } else if (d > 0) {
             adsbDownVotes_ = 0;
-            if (t < adsbHoldUntil_ || ++adsbUpVotes_ < 15) d = 0;
+            if (t < adsbHoldUntil_ || t < adsbNoClimbUntil_ || ++adsbUpVotes_ < 15) d = 0;
             else adsbUpVotes_ = 0;
         } else { adsbUpVotes_ = 0; adsbDownVotes_ = 0; }
         const int next = std::max(0, std::min(int(adsbGains_.size()) - 1, adsbGainIdx_ + d));
-        if (next == adsbGainIdx_ && cur >= 0) return;
-        adsbGainIdx_ = next;
-        adsbGainSet_ = adsbGains_[size_t(next)];
-        LocalSdrShim::instance().setGain(adsbGainSet_);
-        LOGI("[ADS-B] gain %.1f dB (noise %.1f dBFS, %.0f msg/s, %.1f %% strong)", adsbGainSet_ / 10.0,
-             h.noiseDbfs, h.msgsPerSec, h.strongFrac * 100);
+        if (next == adsbGainIdx_) { setIdx(next); return; }   // ★ puts back a gain someone handed back (-1)
+        LOGI("[ADS-B] gain trial %.1f -> %.1f dB (noise %.1f dBFS, %.0f msg/s, %.1f %% strong)", adsbGainSet_ / 10.0,
+             adsbGains_[size_t(next)] / 10.0, h.noiseDbfs, h.msgsPerSec, h.strongFrac * 100);
+        setIdx(adsbTrial_.start(adsbGainIdx_, next, t));
     }
 
     /* ★★★ HANDOVER BETWEEN WHOLE-RADIO MODES (Stuart, 2026-10-24: "moving from ADS-B to DAB changes the rate on move,
