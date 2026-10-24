@@ -177,7 +177,7 @@ import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import GalleryOverlay from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
 import { usePocketWifi } from '../hooks/usePocketWifi';
-import { IS_TV } from '../utils/tv';
+import { IS_TV, IS_APPLE_TV } from '../utils/tv';
 import { STEP_833, airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig } from '../utils/airband';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
@@ -2416,7 +2416,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *     list in the bottom corner"). It supersedes the box with a MAP key: entering — or a report arriving for a
    *     listener who joins a radio already on 1090 — goes STRAIGHT to MapOverlay's 'adsb' kind, whose opaque modal
    *     hides the waterfall (and stops it drawing, useCoversScreen; the server slows it to 1 fps meanwhile).
-   *     ★ `adsbViewOpen` is that screen — the MAP, or on Apple TV (no WebView there) the old box, AdsbPanel. */
+   *     ★ `adsbViewOpen` is that screen — the MAP, or on Apple TV (no WebView there; IS_APPLE_TV — Android TV has one
+   *       and gets the map) the old box, AdsbPanel. */
   const [adsbCap, setAdsbCap] = useState<AdsbCap | undefined>(undefined);   // undefined = no control at all
   const [adsbOn, setAdsbOn] = useState(false);
   const adsbOnRef = useRef(false);
@@ -3287,7 +3288,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
   /** ★ What the server-map overlay shows: ADS-B's map while its view is up (it is the mode's screen), else the server
    *  map somebody opened from the Mode sheet. Not on Apple TV (no WebView — the ADS-B box stands in there). */
-  const shownMap: MapKind | null = adsbViewOpen && !IS_TV ? 'adsb' : mapKind;
+  const shownMap: MapKind | null = adsbViewOpen && !IS_APPLE_TV ? 'adsb' : mapKind;
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -5863,7 +5864,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★ Apple TV: the box shows the reason (CLOSE puts it away). Elsewhere the map that opened on the press has
            *  nothing to show, so it closes and the reason comes as an alert — after the modal has gone, because iOS
            *  will not present an alert over a modal that is still being dismissed (it is dropped, silently). */
-          if (IS_TV) { adsbUiOff(true); setAdsbError(why); setAdsbViewOpen(true); return; }
+          if (IS_APPLE_TV) { adsbUiOff(true); setAdsbError(why); setAdsbViewOpen(true); return; }
           adsbUiOff();
           setTimeout(() => { if (!destroyed.current) appAlert('ADS-B unavailable', why); }, 450);
           return;
@@ -11021,7 +11022,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB and ADS-B, which take the whole receiver: ADS-B lists the aircraft heard on 1090 MHz, with a map.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB and ADS-B, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
@@ -12351,9 +12352,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       </RotateFade>
       {/* ★★ V12 THE ADS-B BOX — APPLE TV ONLY. Everywhere else ADS-B's screen is the full-screen map (MapOverlay
           'adsb', below); tvOS has no WebView, so there the box with the aircraft list is the whole interface, with the
-          DAB window's rules (`adsbViewOpen` not `adsbOn` — the window and the mode are two things). */}
+          DAB window's rules (`adsbViewOpen` not `adsbOn` — the window and the mode are two things). A TV is never a
+          portrait phone, so the box's phone-landscape gate is not needed here. */}
       <RotateFade>
-      {IS_TV && adsbViewOpen && (!isLandscape || isTablet) && (
+      {IS_APPLE_TV && adsbViewOpen && (
         <PanelBoundary name="ADS-B" onClose={() => setAdsbViewOpen(false)}>
         <AdsbPanel
           report={adsbReport}
@@ -13138,7 +13140,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★★★ V12: ADS-B'S SCREEN IS THIS MAP and it takes precedence over any server map that was open (an ADS-B report
           means the receiver is on 1090 — see onAdsb). Its close is EXIT ADS-B: it leaves the mode (exitAdsb), and
           adsb_off is what finally takes the map down. A crash in it only puts it away (the mode key brings it back). */}
-      {!IS_TV && <PanelBoundary name="Map" onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : setMapKind(null))}
+      {/* ★ IS_TV is true on ANDROID TV as well, which has a WebView: ADS-B's map is drawn there (it is the mode's only
+          screen off Apple TV); the other server maps keep their old gate (tv.ts IS_APPLE_TV). */}
+      {(!IS_TV || (shownMap === 'adsb' && !IS_APPLE_TV)) && <PanelBoundary name="Map" onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : setMapKind(null))}
                                 resetKey={shownMap !== null}><MapOverlay
         visible={shownMap !== null}
         kind={shownMap}

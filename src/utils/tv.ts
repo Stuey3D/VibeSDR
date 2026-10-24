@@ -28,6 +28,12 @@ import { Platform } from 'react-native';
 /** True on Apple TV. `Platform.OS` is still 'ios' there, so this is the only real test. */
 export const IS_TV: boolean = Platform.isTV === true;
 
+/** ★★ APPLE TV ONLY. `Platform.isTV` is ALSO true on ANDROID TV (React Native reads uiMode 'tv' there), and Android
+ *  TV HAS a WebView — so a surface cut for want of one should test this, not IS_TV. ★ So far only ADS-B's map does
+ *  (V12): the other server maps are still gated on IS_TV, i.e. absent on Android TV too — a choice nobody has made
+ *  on purpose yet, left as it was. */
+export const IS_APPLE_TV: boolean = IS_TV && Platform.OS === 'ios';
+
 /** Anything that renders into a WebView. There is no WKWebView on tvOS. */
 export const TV_HIDES_WEBVIEWS = IS_TV;
 

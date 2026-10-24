@@ -26,8 +26,9 @@ client must disable those controls (as in DAB). Entering ADS-B from DAB is allow
 **Server → client** (JSON text frames, to every spectrum socket):
 
 - `{"type":"adsb", "now":s, "messages":n, "aircraft":[…], "rate":Hz, "noise":dBFS, "msgRate":per s, "dropped":n}`
-  once a second while on, and immediately to a socket that joins. **Its arrival means ADS-B is on: open the box.**
-- `{"type":"adsb_off"}` then a `config` — close the box, the receiver is back where it was.
+  once a second while on, and immediately to a socket that joins. **Its arrival means ADS-B is on: open the mode's
+  screen** (the app: the full-screen map; the web client: the box).
+- `{"type":"adsb_off"}` then a `config` — close the map / box, the receiver is back where it was.
 - `{"type":"adsb_error","why":"…"}` — refused; show the reason.
 
 **An aircraft** (dump1090 `aircraft.json` field names; absent = unknown):
@@ -53,8 +54,27 @@ B7 space vehicle · C1 emergency surface vehicle · C2 service surface vehicle �
 
 ## Client behaviour (Stuart, 2026-10-23/24)
 
-- **Like DAB:** choosing ADS-B tunes the whole radio to 1090 and **opens the decoder box**; the box lists aircraft
-  (the existing `AircraftPanel` in the app) and has a **MAP button in its header**.
+- **The app (Stuart, 2026-10-24 — supersedes "box + MAP button"):** "when ADS-B is selected the waterfall drops and
+  the full-screen map is on, an Exit ADS-B button is at the top of the screen, same as our HFDL map exit", with "a live
+  list in the bottom corner".
+  - A report arriving (whoever started the mode, a second listener, connecting to a radio already on 1090) opens
+    `MapOverlay` kind `'adsb'` straight away — an opaque modal, so the waterfall stops drawing behind it
+    (`useCoversScreen`); the server slows it to 1 fps meanwhile (gain/AGC/link keep working).
+  - The top bar's key, in the HFDL key's place and style, reads **EXIT ADS-B** and **leaves the mode** (`exitAdsb`),
+    unlike HFDL's "← SDR", which only closes its map. Android back, a pad's Back and the keyboard's Backspace/Esc do the
+    same. `adsb_off` takes the map down and the receiver screen is back as before. On a locked dial (ask before
+    tuning) the exit is refused: the map is put away so the ask nudge can be seen, and the ADS-B key brings it back.
+  - **The live list** (`src/components/AdsbLiveList.tsx`, logic `src/services/adsbList.ts`, test
+    `scripts/test_adsb_list.ts`): bottom-left, nearest first — callsign/hex, FL (≥ 18 000 ft) or ft, kt, NM + compass —
+    3–8 rows (never over half the map), scrolling; a tap or Enter calls the layer's `focus(hex)`; the header folds it to
+    a ✈-count pill (kept per device, `lsv_adsb_list_open`). ★ Drawn by React Native over the WebView, not in the page,
+    so the D-pad/keyboard reach it through PanelNav (a pad is never seen by the WebView on iOS/Mac). The page moves its
+    ⓘ legend to the top-left in ADS-B and narrows the attribution to the room right of the list (`__adsbListW`).
+  - A refusal (`adsb_error`) closes the map and shows the reason as an alert.
+  - **Apple TV** has no WebView: there the old box (`AdsbPanel`, AircraftPanel list, EXIT ADS-B, no MAP key) is the
+    interface. Android TV has one and gets the map (`IS_APPLE_TV`, src/utils/tv.ts).
+- **The web client:** like DAB, choosing ADS-B opens the decoder box; the box lists aircraft and has a **MAP button in
+  its header** (below).
 - **The map** (our own MapLibre maps, GPU — the same stack as the HFDL map; in the web client too):
   - **auto-zoom** (toggle): the view always just contains every aircraft with a position; one appearing 200 NM out
     pulls the view out; when it drops off the view comes back in to the next furthest. Smooth, not jumpy.

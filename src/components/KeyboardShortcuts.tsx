@@ -71,7 +71,7 @@ const SECTIONS: Section[] = [
   {
     title: 'DECODER BOXES',
     body: [
-      'Move the highlight onto the box and press Enter to take it over. Up and down then move through the list — or scroll it, where there is nothing to select — and left and right reach the controls along its top. Backspace hands the keyboard back. On DAB and ADS-B the box takes the keyboard by itself, and Backspace still lets you out.',
+      'Move the highlight onto the box and press Enter to take it over. Up and down then move through the list — or scroll it, where there is nothing to select — and left and right reach the controls along its top. Backspace hands the keyboard back. On DAB and OpenWebRX\u2019s ADS-B the box takes the keyboard by itself, and Backspace still lets you out. A VibeServer\u2019s ADS-B is a full-screen map: up and down move through its aircraft list, Enter finds one on the map, and Backspace leaves ADS-B.',
     ],
   },
   {
