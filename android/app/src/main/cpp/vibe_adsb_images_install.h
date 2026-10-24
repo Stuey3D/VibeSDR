@@ -7,7 +7,8 @@
 //       in) and its BASENAME validated as a key (Images::validKey: letters, digits, '-', '_', ≤ 40) with an image
 //       extension; the file is written as `<target folder>/<key>.<ext>`, a name we built. Absolute names, drive
 //       letters and any ".." component reject the member outright, even though they could not escape anyway.
-//     - LIMITS: 64 MB uploaded, 256 MB unpacked in all, 4 MB a file, 20 000 files; inflation stops AT the cap
+//     - LIMITS: 64 MB uploaded, 256 MB unpacked in all, 4 MB a file, 65 535 entries (a plain zip's own ceiling —
+//       Stuart's VRS OperatorFlags pack is 30 398: ~15 200 flags + a Mac's __MACOSX twin of each; 20 000 refused it); inflation stops AT the cap
 //       (vibeinflate::zipRead), so a 1 KB member claiming 4 GB costs nothing. Encrypted and ZIP64 members are
 //       refused with a sentence, not misread.
 //     - ATOMIC: everything is unpacked into a temporary folder beside the target (old files hard-linked in first,
@@ -39,7 +40,7 @@ struct ImageInstall {
     }
 };
 
-constexpr size_t kImgUploadMax = 64u << 20, kImgTotalMax = 256u << 20, kImgFileMax = 4u << 20, kImgFilesMax = 20000;
+constexpr size_t kImgUploadMax = 64u << 20, kImgTotalMax = 256u << 20, kImgFileMax = 4u << 20, kImgFilesMax = 65535;
 
 /** Which folder a member belongs to from its path: 0 logo, 1 silhouette, -1 unknown, -2 refused (unsafe name). */
 inline int classifyMember(const std::string& rawName) {
@@ -53,7 +54,8 @@ inline int classifyMember(const std::string& rawName) {
         const std::string part = Images::upper(n.substr(o, e - o));
         if (part == "..") return -2;
         if (e != n.size()) {     // a folder name, not the file
-            if (part == "OPERATORFLAGS" || part == "OPFLAGS" || part == "FLAGS" || part == "LOGOS" || part == "OPERATORLOGOS") kind = 0;
+            if (part == "OPERATORFLAGS" || part == "OPFLAGS" || part == "FLAGS" || part == "LOGOS" || part == "OPERATORLOGOS"
+                || part == "GENERALAVIATION") kind = 0;   // ★ named by registration — looked up as one (resolveImages)
             else if (part == "SILHOUETTES" || part == "SILHOUETTE" || part == "TYPES" || part == "TYPE") kind = 1;
         }
         o = e + 1;
@@ -159,6 +161,9 @@ inline ImageInstall installImageZip(const uint8_t* zip, size_t n, int defaultKin
     std::string body;
     for (const auto& z : list) {
         if (z.dir()) continue;
+        // ★ a Mac's zip carries a "__MACOSX/._name" twin of every file — not the owner's files, not counted as skipped
+        //   (Stuart's OperatorFlags pack: 15 209 of them read "15 209 skipped", and looked like a failure)
+        if (z.name.compare(0, 9, "__MACOSX/") == 0) continue;
         const int cls = classifyMember(z.name);
         if (cls == -2) { skip("with an unsafe path"); continue; }
         const std::string file = memberFile(z.name);

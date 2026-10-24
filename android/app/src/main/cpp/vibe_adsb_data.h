@@ -509,7 +509,13 @@ public:
     static void resolveImages(const std::string& hexUpper, Info& i) {
         Images& im = images();
         i.logo.clear(); i.sil.clear();
-        std::vector<std::string> lc = {hexUpper, i.r};
+        /* ★★ THE PACK'S OWN NAMES (Stuart's OperatorFlagsList.csv, 2026-10-24): "EWG-A320D-ABDQ" = operator, type and
+         *  registration run together — one airframe's livery; "EWG-A320" = that operator's livery on a type; "EWG" = the
+         *  operator; and the GeneralAviation pack names a private aircraft by its registration alone ("G-CIGH"). Most
+         *  specific first. */
+        std::vector<std::string> lc = {hexUpper};
+        if (!i.op.empty() && !i.t.empty() && !i.r.empty()) lc.push_back(i.op + "-" + i.t + i.r);
+        lc.push_back(i.r);
         if (!i.op.empty() && !i.t.empty()) lc.push_back(i.op + "-" + i.t);
         lc.push_back(i.op);
         for (const auto& k : lc) if (!k.empty() && im.find(0, k)) { i.logo = Images::upper(k); break; }

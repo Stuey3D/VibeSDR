@@ -228,7 +228,7 @@ static void testImages(const std::string& dir) {
     const std::string pack = slurp(kFix + "images-deflated.zip");
     ImageInstall r = installImageZip((const uint8_t*)pack.data(), pack.size(), -1, dir);
     CHECK(r.error.empty() && r.logos == 2 && r.silhouettes == 2, "pack: %s", r.summary().c_str());
-    CHECK(r.skipped == 3 && has(r.summary(), "not the image their name says"), "skips counted with reasons: %s", r.summary().c_str());
+    CHECK(r.skipped == 2 && has(r.summary(), "not the image their name says"), "skips counted with reasons (the __MACOSX twin not among them): %s", r.summary().c_str());
     std::string path, mime;
     CHECK(im.find(0, "baw", &path, &mime) && mime == "image/png" && path == dir + "/OperatorFlags/BAW.png", "BAW logo (any case): %s", path.c_str());
     CHECK(im.find(0, "RYR-B738", nullptr, &mime) && mime == "image/bmp", "RYR-B738 bmp");
@@ -260,11 +260,46 @@ static void testImages(const std::string& dir) {
     r = installImageZip((const uint8_t*)enc.data(), enc.size(), 0, dir + "/enc");
     CHECK(r.logos == 0 && has(r.summary(), "encrypted"), "encrypted: %s", r.summary().c_str());
     CHECK(!installImageZip((const uint8_t*)"PK\5\6", 4, 0, dir).error.empty(), "garbage refused");
+    // ★★ A REAL VRS PACK IS BIG: Stuart's OperatorFlags.zip from a Mac is 30 398 entries (~15 200 flags + a __MACOSX
+    //    twin of each) — the old 20 000 cap refused it whole. Built here, stored: 15 200 flags + 15 200 twins.
+    {
+        std::string zb, cd; uint16_t count = 0;
+        auto u16 = [](std::string& o, uint32_t v) { o += char(v & 255); o += char((v >> 8) & 255); };
+        auto u32 = [&](std::string& o, uint32_t v) { u16(o, v & 0xFFFF); u16(o, v >> 16); };
+        auto add = [&](const std::string& name, const std::string& body) {
+            const uint32_t crc = vibeinflate::crc32(0, (const uint8_t*)body.data(), body.size()), at = uint32_t(zb.size());
+            u32(zb, 0x04034b50); u16(zb, 10); u16(zb, 0); u16(zb, 0); u32(zb, 0); u32(zb, crc);
+            u32(zb, uint32_t(body.size())); u32(zb, uint32_t(body.size())); u16(zb, uint32_t(name.size())); u16(zb, 0);
+            zb += name; zb += body;
+            u32(cd, 0x02014b50); u16(cd, 20); u16(cd, 10); u16(cd, 0); u16(cd, 0); u32(cd, 0); u32(cd, crc);
+            u32(cd, uint32_t(body.size())); u32(cd, uint32_t(body.size())); u16(cd, uint32_t(name.size()));
+            u16(cd, 0); u16(cd, 0); u16(cd, 0); u16(cd, 0); u32(cd, 0); u32(cd, at); cd += name;
+            ++count;
+        };
+        for (int i = 0; i < 15200; ++i) {
+            const std::string key = "OP" + std::to_string(i);
+            add("OperatorFlags/" + key + ".bmp", std::string("BM") + std::string(30, char(i)));
+            add("__MACOSX/OperatorFlags/._" + key + ".bmp", std::string(40, 'x'));
+        }
+        const uint32_t cdAt = uint32_t(zb.size());
+        zb += cd;
+        u32(zb, 0x06054b50); u16(zb, 0); u16(zb, 0); u16(zb, count); u16(zb, count);
+        u32(zb, uint32_t(cd.size())); u32(zb, cdAt); u16(zb, 0);
+        r = installImageZip((const uint8_t*)zb.data(), zb.size(), -1, dir + "/big");
+        CHECK(r.error.empty() && r.logos == 15200 && r.skipped == 0, "a 30 400-entry Mac pack installs, its twins unmentioned: %s",
+              r.summary().c_str());
+    }
     // the enrichment names an installed logo/silhouette, in VRS's order (the index back on the real folder)
     im.setDir(dir);
     Info i; i.r = "EI-DLJ"; i.op = "RYR"; i.t = "B738";
     Db::resolveImages("4CA2D6", i);
     CHECK(i.logo == "RYR-B738" && i.sil == "B738", "VRS order: logo %s sil %s", i.logo.c_str(), i.sil.c_str());
+    // ★★ one airframe's livery: operator, type and registration run together, as the pack names it (EWG-A320D-ABDQ)
+    if (FILE* f = std::fopen((dir + "/OperatorFlags/RYR-B738EI-DLJ.bmp").c_str(), "wb")) { std::fputs("BM", f); std::fclose(f); }
+    im.setDir(dir);
+    Db::resolveImages("4CA2D6", i);
+    CHECK(i.logo == "RYR-B738EI-DLJ", "the airframe's own livery first: %s", i.logo.c_str());
+    CHECK(classifyMember("GeneralAviation/G-CIGH.bmp") == 0, "the GeneralAviation pack installs with the logos (by registration)");
     // Remove all
     std::string err;
     CHECK(removeImages(dir, 0, err) && !im.find(0, "BAW") && im.find(1, "B738"), "remove all logos (silhouettes stay): %s", err.c_str());
