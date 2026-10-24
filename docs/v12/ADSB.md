@@ -68,3 +68,57 @@ B7 space vehicle · C1 emergency surface vehicle · C2 service surface vehicle �
   - **Smooth glide** between position updates.
   - **Airports and runways** as on the HFDL map.
 - The receiver position is the server's own location (`/location`), as the HFDL/spots maps already use.
+
+## The shared map layer — `web/mapkit/adsblayer.js` (web client + app)
+
+One file draws the aircraft on every ADS-B map. Edit only `web/mapkit/adsblayer.js`, then
+`node scripts/gen-adsblayer-source.mjs` (writes `web/client/src/generated/adsbLayerSource.ts`,
+`src/generated/adsbLayerSource.ts` — the string the app injects like `VIBEMAP_JS` — and
+`directory/public/mapgl/vendor/adsblayer.js`, which the server installs at `/mapgl/vendor/adsblayer.js`).
+`node scripts/test_adsb_layer.mjs` tests the maths and fails on a stale copy. No backticks in the file.
+
+```js
+const layer = VibeAdsbLayer.create(map, { receiver: {lat, lon} | null, prefs: {autoZoom, fit, rings} | null,
+                                          onPrefs: (prefs) => void, theme: 'dark' | 'light',
+                                          drawReceiver: true });   // ADDED: false = the host draws its own house
+layer.update(aircraftArray)   // the report's whole `aircraft` list, every report
+layer.setReceiver(lat, lon)   // 0,0 or null = unknown
+layer.setPrefs({autoZoom, fit, rings})
+layer.focus(hex)              // ADDED: select + open the card (a list row tapped); pans only if off screen
+layer.prefs()                 // ADDED: the current prefs
+layer.destroy()
+```
+
+- `map`: a MapLibre map (`vm.map`), the compat adapter — **the app's GPU path passes the Leaflet-shaped
+  wrapper from `VibeMapGLCompat.install`, as the HFDL map does; the layer detects it and draws on its `._gl`
+  (the underlying MapLibre map) directly**, GPU layers rather than compat markers —
+  or a real Leaflet map (fallback: DOM markers at a lower frame rate, same behaviour). **The host creates
+  the map with the `aero` profile** — that is where airports and runways come from (as on the HFDL map);
+  the layer draws only the aircraft, the receiver house, rings and the toggles. `drawReceiver: false`
+  (the app: its page already draws the HFDL receiver marker) skips the house only — the position still
+  drives rings, distances and the camera. `maplibregl` must be global
+  for the aircraft card.
+- Defaults `{autoZoom: true, fit: true, rings: true}`; `onPrefs` fires only when a person flips a toggle.
+  The host persists them. A camera move the layer did not start, within 1 s of a touch/click/wheel/key on
+  the map (or carrying MapLibre's `originalEvent`), **pauses** auto-zoom (AUTO shows hatched) until AUTO or
+  ⌖ is tapped. A host's own programmatic move does not pause it.
+- Feel = the HFDL map's constants: 2.2 s eased corrections over dead-reckoning (gs/track, ≤ 20 s), corrections
+  > 5 NM fade across instead; new aircraft get the HFDL ring ×3 + breath, never in the first batch nor the first
+  10 s; HFDL age tones by position age (green < 10 s, yellow-green < 30 s, amber), grey on the ground, red in
+  an emergency; labels decluttered twice a second (sticky, fade), FL from 18 000 ft (AircraftPanel's rule).
+
+## The web client (web/client/src/adsb.ts + main.ts, beside DAB)
+
+- `ADS-B` sits beside `DAB` in the demodulator menu: live when `adsb: true`, greyed when `false` (a tap shows
+  `adsbWhy`), absent on an older server. An `adsb` report opens the box whoever started the mode; `adsb_off`
+  closes it; `adsb_error` is shown as a pill.
+- The box: aircraft nearest first (by last heard without a receiver position), MAP and EXIT ADS-B in the
+  header, no ✕. The map is a same-origin popup (the spots map's mechanism) on the GPU map in the `aero`
+  profile, fed each report by postMessage. A tapped row shows that aircraft on the open map. Prefs live in the
+  window's localStorage (`vibesdr.adsbMapPrefs`).
+- Held while in ADS-B: tune, arrows, step, zoom, FIT, frequency entry, IF filter, passband, sample rate
+  (greyed with the reason, and stopped in SpectrumClient). A demodulator picked in ADS-B leaves the mode and is
+  applied to the dial the server gives back (no 1090 MHz tune is sent).
+- ★ **The server sends next to no audio in ADS-B** (bench: 131 B in 6 s), so the web client holds its audio
+  self-heal for as long as reports keep coming, or it reopened the audio socket every 6 s. The app may need
+  the same.

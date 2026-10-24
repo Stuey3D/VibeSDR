@@ -1123,6 +1123,38 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 }
 @keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
 
+/* ── ADS-B (V12) ─────────────────────────────────────────────────────────────────────────────
+   ★ The aircraft list, in the box's own palette (the DAB station list's tokens), so it sits right on
+     every theme. Columns: callsign/hex · altitude · speed · range + bearing. */
+#adsbList { padding: 4px 2px; font-variant-numeric: tabular-nums; }
+.adsbRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 2px 12px; align-items: center;
+           padding: 6px 9px; border-radius: 5px; border-left: 3px solid transparent; cursor: default; }
+.adsbRow[title] { cursor: pointer; }
+.adsbRow:hover { background: var(--btn-active-bg); }
+.adsbRow .id { min-width: 0; display: flex; flex-direction: column; }
+.adsbRow .id b { font-weight: 600; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adsbRow .id small { font-size: 10px; opacity: .6; letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adsbRow .alt, .adsbRow .spd, .adsbRow .rng { text-align: right; white-space: nowrap; font-size: 12px; }
+.adsbRow .alt { min-width: 5.4em; }
+.adsbRow .spd { min-width: 3.6em; opacity: .8; }
+.adsbRow .rng { min-width: 5.2em; }
+.adsbRow i { font-style: normal; font-size: 9px; margin-left: 3px; vertical-align: 1px; }
+.adsbRow i.up { color: #7dff9a; }
+.adsbRow i.dn { color: #ffb36b; }
+.adsbRow .brg, .adsbRow .dim { opacity: .6; }
+.adsbRow.nopos { opacity: .55; }
+.adsbRow.em { border-left-color: #e04040; background: rgba(224, 64, 64, 0.10); }
+.adsbEmpty { padding: 14px 10px; opacity: .6; font-size: 12px; line-height: 1.5; }
+/* ★ "ADS-B" broke at its hyphen into "ADS-" over "B" in the header (bench, 2026-10-24). */
+#decBox.adsb #decTitle { white-space: nowrap; }
+/* ★ A phone-width box drops the speed column before anything is squeezed to an ellipsis. */
+@container decbox (max-width: 360px) {
+  .adsbRow { grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 9px; }
+  .adsbRow .spd { display: none; }
+}
+/* ★ The greyed ADS-B entry in the demodulator menu: a tap still answers (with the server's reason). */
+.mModeOpt.dis { color: #777; border-style: dashed; border-color: rgba(255, 255, 255, 0.12); }
+
 /* ── DAB (experimental) ───────────────────────────────────────────────────────────────────── */
 #dabStations { padding: 6px 4px; }
 .dabSvc { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:5px;
@@ -2089,12 +2121,13 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      never covers the text. Ellipsis only if the summary truly cannot fit one full line.
    ★ Wide boxes are untouched: there the status sits inline with room to spare. */
 @container decbox (max-width: 420px) {
-  #decBox.dab #decBoxHead { padding-bottom: 22px; }
+  #decBox.dab #decBoxHead, #decBox.adsb #decBoxHead { padding-bottom: 22px; }
+  #decBox.adsb #decStatus,
   #decBox.dab #decStatus {
     position: absolute; left: 10px; right: 10px; bottom: 6px;
     line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  #decBox.dab .decHeadArr { bottom: 20px; }
+  #decBox.dab .decHeadArr, #decBox.adsb .decHeadArr { bottom: 20px; }
   /* ★ NAVTEX (2026-10-05): PREV + SAVE squeeze the status to a stray letter ("r") on a phone. The message's own
      title line says RECEIVING / STANDING BY / PREVIOUS, and the empty box says "standing by", so here it goes. */
   #decBox.navtex #decStatus { display: none; }
@@ -3333,6 +3366,11 @@ select.btn { padding: 6px 8px; }
          2026-09-20 (DabPanel.tsx) — one rule, two readers, and this was the reader without it. -->
     <button class="btn" id="dabExit" title="Leave DAB and return to the radio"
             style="display:none">EXIT DAB</button>
+    <!-- ★★ ADS-B (V12): the MAP lives in the header (Stuart's spec, docs/v12/ADSB.md) and the way out
+         beside it, as EXIT DAB — there is no ✕ in a whole-radio mode. -->
+    <button class="btn" id="adsbMap" title="Open the aircraft map" style="display:none">MAP</button>
+    <button class="btn" id="adsbExit" title="Leave ADS-B and return to the radio"
+            style="display:none">EXIT ADS-B</button>
     <button class="btn" id="decMin" title="Minimise">–</button>
     <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
   </div>
@@ -3372,6 +3410,8 @@ select.btn { padding: 6px 8px; }
     </div>
     <div id="dabStations" style="display:none"></div>
     <div id="dabSignal" style="display:none"></div>
+    <!-- ★ ADS-B: the aircraft heard, nearest first (web/client/src/adsb.ts). -->
+    <div id="adsbList" style="display:none"></div>
     <pre id="decText"></pre>
     <!-- ★★ NAVTEX, a message at a time (Stuart, 2026-10-05) — the stream cut into ZCZC…NNNN blocks by
          src/utils/navtex.ts, the same file the app uses. LIVE / PREV and SAVE are the image decoders' keys. -->

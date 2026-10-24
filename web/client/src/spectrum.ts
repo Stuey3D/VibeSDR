@@ -317,6 +317,21 @@ export interface RadioCaps {
   ranges?: [number, number][];
 }
 
+/** ★ One aircraft in an ADS-B report — dump1090 aircraft.json field names; absent = unknown (docs/v12/ADSB.md). */
+export interface AdsbAircraft {
+  hex: string; flight?: string; category?: string;
+  lat?: number; lon?: number; seen_pos?: number;
+  alt_baro?: number | 'ground'; alt_geom?: number;
+  gs?: number; track?: number; mag_heading?: number; tas?: number; ias?: number;
+  baro_rate?: number; squawk?: string; emergency?: string | number;
+  seen?: number; messages?: number; rssi?: number;
+}
+/** ★ The ADS-B report, once a second while the receiver is in ADS-B (docs/v12/ADSB.md). */
+export interface AdsbReport {
+  now?: number; messages?: number; aircraft: AdsbAircraft[];
+  rate?: number; noise?: number; msgRate?: number; dropped?: number;
+}
+
 /** What the server reports about a DAB multiplex. Every field is MEASURED — see briefs/BRIEF-dab.md;
  *  nothing here is inferred, which is the standard the Advanced RDS panel already sets. */
 export interface DabState {
@@ -596,6 +611,11 @@ export interface SpectrumCallbacks {
    *  Sent whole every time — the list changes rarely, and sending it entire means a client that
    *  joins mid-stream is never missing rows. */
   onDab?: (d: DabState) => void;
+  /** ★ ADS-B (V12, docs/v12/ADSB.md): the aircraft report, once a second while the receiver is in ADS-B
+   *  and at once on joining — its arrival MEANS ADS-B is on. null = the server left ADS-B (`adsb_off`). */
+  onAdsb?: (r: AdsbReport | null) => void;
+  /** The server refused ADS-B (`adsb_error`) — the reason, in words, for the listener. */
+  onAdsbError?: (why: string) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?: (m: { on: boolean; rate?: number; host?: string; port?: number; code?: string; token?: string; public?: boolean; full?: boolean; why?: string }) => void;
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
@@ -895,6 +915,24 @@ export class SpectrumClient {
       }
       case 'dab_error':
         this.cb.onNotice?.(String(msg.why ?? 'DAB is not available on this receiver'));
+        return;
+      /* ★★ ADS-B (V12) — the same three messages as DAB, and the same ghost guard (adsbQuietUntil). */
+      case 'adsb': {
+        if (Date.now() < this.adsbQuietUntil) return;
+        this.adsbHeld = true;           // ★ arrival = the receiver is in ADS-B, whoever put it there
+        const list = Array.isArray(msg.aircraft) ? msg.aircraft.filter((a: any) => a && typeof a === 'object' && typeof a.hex === 'string') : [];
+        this.cb.onAdsb?.({ ...msg, aircraft: list.slice(0, 2000) } as AdsbReport);
+        return;
+      }
+      case 'adsb_off': {
+        this.adsbHeld = false;
+        const now = Date.now();
+        if (this.adsbQuietUntil > now) this.adsbQuietUntil = Math.min(this.adsbQuietUntil, now + 1500);
+        this.cb.onAdsb?.(null);
+        return;
+      }
+      case 'adsb_error':
+        this.cb.onAdsbError?.(String(msg.why ?? 'ADS-B is not available on this receiver'));
         return;
       case 'config': {
         const cfg: Config = {
@@ -1551,7 +1589,7 @@ export class SpectrumClient {
     //    re-arm it, turning a smooth tune into stuttering silence. Below one bandwidth the
     //    buffered audio is still substantially the signal you are listening to, so it is kept.
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
-    if (this.dabHeld) return;            // ★ see dabHeld — the multiplex is the tuning
+    if (this.dabHeld || this.adsbHeld) return;            // ★ see dabHeld — the multiplex is the tuning
     const prev = this.frequency;
     this.lastLocalTuneAt = performance.now();   // ★ so a config echo is not mistaken for somebody else
     if (frequency) this.frequency = Math.round(frequency);
@@ -1587,6 +1625,7 @@ export class SpectrumClient {
   }
 
   setMode(mode: SDRMode) {
+    if (this.adsbHeld) return;           // ★ see adsbHeld — the page leaves ADS-B before picking a mode
     if (mode !== this.mode && this.askBlocked()) return;   // ★★ ask before tuning; re-picking changes nothing
     // ★ The mode's own tune carries the current frequency, so a frequency still held is already in it.
     this.tunePacer.cancel();
@@ -1603,6 +1642,7 @@ export class SpectrumClient {
   setBandwidth(low: number, high: number) {
     // ★ The one door every passband goes through (slider, bookmark, shared link), so the WFM floor
     //   is applied once, here — see WFM_MIN_BW_HZ.
+    if (this.adsbHeld) return;           // ★ see adsbHeld — the server ignores a passband in ADS-B
     [low, high] = clampPassband(this.mode, low, high);
     // ★★ Ask before tuning — the passband is everybody's on a shared dial. Only a CHANGE asks.
     if ((low !== this.bandwidthLow || high !== this.bandwidthHigh) && this.askBlocked()) return;
@@ -1670,7 +1710,7 @@ export class SpectrumClient {
 
   /** Set view centre + span. binBandwidth is clamped to sane zoom limits. */
   zoom(frequency: number, binBandwidth: number) {
-    if (this.dabHeld) return;            // ★ see dabHeld — a zoom narrows the IF under the mux
+    if (this.dabHeld || this.adsbHeld) return;            // ★ see dabHeld — a zoom narrows the IF under the mux
     const n = this.cfg.binCount || 4096;
     if (this.icomSpans) {
       if (this.icomFollowLocked) { this.cb.onIcomFollowLocked?.(); return; }
@@ -1704,7 +1744,7 @@ export class SpectrumClient {
    * the thing you're listening to stays put and the span closes in around it.
    */
   zoomBy(factor: number, anchorHz?: number) {
-    if (this.dabHeld) return;            // ★ see dabHeld
+    if (this.dabHeld || this.adsbHeld) return;            // ★ see dabHeld
     const bb = this.view.binBandwidth || this.cfg.binBandwidth;
     if (!bb) return;
     const n = this.cfg.binCount || 4096;
@@ -1763,6 +1803,20 @@ export class SpectrumClient {
   }
   dabService(sid: number) { if (this.askBlocked()) return; this._send({ type: 'dab_service', sid }); }
 
+  /** ★★ ADS-B HOLDS THE DIAL AND THE VIEW, as DAB does (see dabHeld): the server ignores tune, mode,
+   *  bandwidth, zoom, reset, tunerbw and sampleRate while in it, so they are stopped here — the page
+   *  greys the controls (adsbLockControls in main.ts). Set by our own entry and by any `adsb` report. */
+  adsbHeld = false;
+  /** ★ A report already on the wire when our `adsb off` lands is a ghost — the DAB rule (dabQuietUntil). */
+  private adsbQuietUntil = 0;
+  adsb(on: boolean) {
+    if (this.askBlocked()) return;     // ★★ ask before tuning — ADS-B takes the whole shared radio
+    if (on) this.tunePacer.cancel();
+    this.adsbQuietUntil = on ? 0 : Date.now() + 5000;
+    this.adsbHeld = on;
+    this._send({ type: 'adsb', on: on ? 1 : 0 });
+  }
+
   /* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server said this listener may not move the shared dial yet
    *  (dial.tuneLocked, read by dialChat.parseAsk — the app's reader, one file). THE ONE GATE for every way this page
    *  tunes — drum, keys, spectrum click, entry, bookmarks, search, a pad, the keyboard: tune(), setMode(),
@@ -1812,7 +1866,7 @@ export class SpectrumClient {
     this.zoom(frequency, this.view.binBandwidth || this.cfg.binBandwidth);
   }
 
-  resetView() { if (this.dabHeld) return; this._send({ type: 'reset' }); }
+  resetView() { if (this.dabHeld || this.adsbHeld) return; this._send({ type: 'reset' }); }
 
   /** Frame decimation: server emits only every Nth frame. NB this saves BANDWIDTH
    *  ONLY — the server still computes every FFT. Use setFftRate() to save power. */
@@ -1857,11 +1911,11 @@ export class SpectrumClient {
   setHwBiasT(on: boolean)  { this._send({ type: 'biasT', on }); }
   setHwAgc(on: boolean)    { this._send({ type: 'agc', on }); }
   setHwPpm(ppm: number)    { this._send({ type: 'ppm', value: Math.round(ppm) }); }
-  setHwSampleRate(r: number) { this._send({ type: 'sampleRate', value: Math.round(r) }); }
+  setHwSampleRate(r: number) { if (this.adsbHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
   /** ★ The tuner's IF filter in Hz; 0 = librtlsdr's automatic choice. RTL only. */
   /** ★ TEF6686-style automatic demodulator bandwidth. FM broadcast only; server-wide. */
   setAutoBw(on: boolean) { this._send({ type: 'autobw', on }); }
-  setTunerBandwidth(hz: number) { this._send({ type: 'tunerbw', value: Math.round(hz) }); }
+  setTunerBandwidth(hz: number) { if (this.adsbHeld) return; this._send({ type: 'tunerbw', value: Math.round(hz) }); }
   setHwDirectSampling(v: 0 | 1 | 2) { this._send({ type: 'directSampling', value: v }); }
   /** ★ The owner's AUTOMATIC crossover — admin-gated server side, because unlike direct sampling
    *  itself this PERSISTS and outlives whoever set it. Turning it off leaves the tuner wherever it
