@@ -89,7 +89,7 @@ struct Frame {
 
 /**
  * PPM demodulation, measured on a FINE grid: every half-bit window (0.5 µs) is the mean |IQ| over it, at
- * four starting points per half-bit (125 ns apart), from a running integral of the capture's magnitude.
+ * four starting points per half-bit (125 ns apart), summed from the capture's magnitude with fractional edges.
  *
  * ★★★ WHY NOT ONE SAMPLE PER HALF-BIT. At exactly 2 MS/s, with a reply that happens to start on a sample,
  *     one sample per half-bit is perfect — and that is the only case. A reply starting half a sample late
@@ -110,7 +110,6 @@ public:
     explicit Demod(double sampleRate)
         : rate_(sampleRate), h_(sampleRate * 0.5e-6), q_(sampleRate * 0.125e-6),
           span_(size_t(std::ceil(sampleRate * 121e-6)) + 4) {
-        cum_.push_back(0.0);
         for (int k = 0; k < 4; ++k) pulseAt_[k] = int(std::lround(kPulseUs[k] * 1e-6 * sampleRate));
     }
 
@@ -128,29 +127,50 @@ public:
     template <class Cb, class Known>
     void feed(const std::complex<float>* iq, size_t n, Cb&& onFrame, Known&& known) {
         if (!usable()) return;
-        mag_.reserve(mag_.size() + n);
-        cum_.reserve(cum_.size() + n);
-        for (size_t i = 0; i < n; ++i) {
-            const float a = std::sqrt(iq[i].real() * iq[i].real() + iq[i].imag() * iq[i].imag());
-            mag_.push_back(a);
-            cum_.push_back(cum_.back() + a);
-        }
-        const float* m = mag_.data();
-        while (pos_ + span_ < mag_.size()) {
-            const size_t i = pos_++;
-            const float v = m[i];
-            // a noise floor that follows slowly and ignores pulses: replies are short and sparse
-            noise_ += (std::min(v, noise_ * 3.0f) - noise_) * 1e-5f;
-            if (i < skip_ || i < 2) continue;
-            // stage 1: something above the floor at each of the four pulse positions (± a sample for smear)
-            const float thr = noise_ * 2.2f;
-            auto peak = [&](size_t k) { return std::max(m[k], m[k + 1]); };
-            if (peak(i) < thr) continue;
-            if (peak(i + size_t(pulseAt_[1])) < thr || peak(i + size_t(pulseAt_[2])) < thr || peak(i + size_t(pulseAt_[3])) < thr) continue;
-            // stage 2: the fine grid around here
+        // ★★ POWER, NOT MAGNITUDE, PER SAMPLE. A square root on every sample was most of the decoder's cost on
+        //    the Pi 3 (~125 cycles a sample in 32-bit mode); stage 1 compares powers, and only the few samples the
+        //    fine windows read are rooted (win()).
+        const size_t was = pow_.size();
+        pow_.resize(was + n);
+        float* pw = pow_.data();
+        for (size_t i = 0; i < n; ++i) pw[was + i] = iq[i].real() * iq[i].real() + iq[i].imag() * iq[i].imag();
+        size_t pos = pos_;
+        const size_t end = pow_.size() > span_ ? pow_.size() - span_ : 0;
+        const size_t o1 = size_t(pulseAt_[1]), o2 = size_t(pulseAt_[2]), o3 = size_t(pulseAt_[3]);
+        float np = noiseP_;
+        while (pos < end) {
+            const size_t i = pos++;
+            const float v = pw[i];
+            // ★★★ THE NOISE FLOOR = THE QUIETEST OF THE LAST 16 BLOCKS of 256 samples (~1.7 ms at 2.4 MS/s), ×1.1
+            //     for the bias of taking a minimum. Two running means came first and both were wrong: one crept up
+            //     from nothing (~80 000 samples of stage 2 at every start: two-thirds of the Pi 3 benchmark), and a
+            //     clipped one RUNS AWAY once more than a ninth of samples are pulses — busy airspace, or a burst of
+            //     replies (test-adsb: 20 % heard). Replies always leave quiet gaps; the quietest block is the floor.
+            if (warm_ < 32) { ++warm_; np += (v - np) / float(warm_); }  // a first guess, until a block is done
+            blockSum_ += v;
+            if (++blockN_ == 256) {
+                blocks_[blockAt_++ & 15] = blockSum_ / 256.0f;
+                const int have = std::min<uint32_t>(blockAt_, 16);
+                float lo = blocks_[0];
+                for (int k = 1; k < have; ++k) lo = std::min(lo, blocks_[k]);
+                np = lo * 1.1f;
+                blockSum_ = 0; blockN_ = 0;
+            }
+            if (i < skip_ || warm_ < 32) continue;
+            // stage 1: power above the floor at each of the four pulse positions (± a sample for smear) —
+            // 3.8 × the mean noise power is 2.2 × its mean magnitude
+            const float thr = np * 3.8f;
+            if (std::max(v, pw[i + 1]) < thr) continue;
+            if (std::max(pw[i + o1], pw[i + o1 + 1]) < thr || std::max(pw[i + o2], pw[i + o2 + 1]) < thr ||
+                std::max(pw[i + o3], pw[i + o3 + 1]) < thr) continue;
+            // stage 2: the fine grid around here. ★ The mean noise MAGNITUDE (Rayleigh: √(π/4 · power)) for its
+            //   thresholds, which are in magnitude like the windows.
+            noise_ = std::sqrt(np * 0.785398f);
             const size_t used = tryAt(double(i) - 1.0, onFrame, known);
             if (used) skip_ = i + used;
         }
+        pos_ = pos;
+        noiseP_ = np;
         trim();
     }
 
@@ -163,14 +183,19 @@ private:
     //    of its pulses, not near zero. The CRC, not this test, is what keeps noise out.
     static constexpr float kLoMax = 0.92f, kGapMax = 0.85f;
 
-    double integral(double x) const {                    // ∫ |IQ| from the buffer start to x (in samples)
-        const size_t k = size_t(x);
-        return cum_[k] + (x - double(k)) * mag_[k];
-    }
-    /** The mean |IQ| over the half-bit starting `fine` steps (125 ns) after x. */
+    /** The mean |IQ| over the half-bit starting `fine` steps (125 ns) after x: the samples it covers, the two at
+     *  its edges weighted by how much of them it covers.
+     *  ★ Summed here, only around a trigger — a running integral kept for every sample (a double stored per
+     *    sample) was most of the cost on the Pi 3 for windows that were almost never asked for. */
     float win(double x, int fine) const {
-        const double a = x + fine * q_;
-        return float((integral(a + h_) - integral(a)) / h_);
+        const double a = x + fine * q_, b = a + h_;
+        const size_t ka = size_t(a), kb = size_t(b);
+        const float* m = pow_.data();
+        if (ka == kb) return std::sqrt(m[ka]);
+        float s = std::sqrt(m[ka]) * float(double(ka + 1) - a);
+        for (size_t k = ka + 1; k < kb; ++k) s += std::sqrt(m[k]);
+        s += std::sqrt(m[kb]) * float(b - double(kb));
+        return s / float(h_);
     }
 
     /** Does a preamble start at x? Returns its score (pulses minus gaps), or 0. Fine offsets: 4 per half-bit. */
@@ -231,10 +256,7 @@ private:
     void trim() {
         if (pos_ < 262144) return;
         const size_t drop = pos_ - 4;                    // keep a little behind the cursor for the ± search
-        mag_.erase(mag_.begin(), mag_.begin() + long(drop));
-        const double c0 = cum_[drop];
-        cum_.erase(cum_.begin(), cum_.begin() + long(drop));
-        for (double& v : cum_) v -= c0;                    // keep the running sum small, so it stays exact
+        pow_.erase(pow_.begin(), pow_.begin() + long(drop));
         pos_ -= drop; skip_ = skip_ > drop ? skip_ - drop : 0;
         base_ += uint64_t(double(drop) / q_);
     }
@@ -246,11 +268,14 @@ private:
     double rate_, h_, q_;
     size_t span_;                                        // samples a whole reply needs ahead of its start
     int pulseAt_[4] = {};
-    std::vector<float> mag_;
-    std::vector<double> cum_;
+    std::vector<float> pow_;                            // |IQ|² per sample
     size_t pos_ = 0, skip_ = 0;
     uint64_t base_ = 0, preambles_ = 0;
-    float noise_ = 1e-3f;
+    float noise_ = 1e-3f;                               // mean noise magnitude, for stage 2
+    float noiseP_ = 0;                                  // mean noise power, for stage 1
+    uint32_t warm_ = 0;                                 // samples in the first guess (to 32)
+    float blockSum_ = 0; uint32_t blockN_ = 0, blockAt_ = 0;
+    float blocks_[16] = {};                             // mean power of the last 16 blocks
 };
 
 // ── Field decoding helpers ───────────────────────────────────────────────────────────────────────────
