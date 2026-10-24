@@ -261,6 +261,8 @@ if python3 vibeserver/linux/test_vibeserver_diagnostics.py; then pass=$((pass+1)
 if python3 vibeserver/linux/pocket/test_pocket_converge.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE READ-ONLY SEAL ON BOTH BOOT CHAINS (2026-10-25, image/sbc): cmdline.txt on a Raspberry Pi, extraargs= in
 #    armbianEnv.txt / dietpiEnv.txt on a U-Boot board — once, the owner's own arguments kept, nothing without the marker.
+#    And the build the card's processor can run (vibeserver-pocket-cpu): ARMv6 on a Pi Zero / Pi 1, nothing elsewhere.
+if python3 vibeserver/linux/pocket/test_pocket_cpu.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if python3 vibeserver/linux/pocket/test_pocket_seal.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ RECEIVE BETA UPDATES (2026-10-22). The root helper's beta-on / beta-off / update-stable with apt stubbed, and the
 #     choice of what Update VibeServer installs (beta on/off × installed × listed, the downgrade back to stable included).

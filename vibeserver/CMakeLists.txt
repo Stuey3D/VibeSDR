@@ -929,13 +929,17 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #     Depends/Recommends — an ordinary install must not pull a hotspot stack or an initramfs builder.
   install(PROGRAMS linux/pocket/vibeserver-pocket linux/pocket/vibeserver-pocket-data
                    linux/pocket/vibeserver-pocket-seal linux/pocket/vibeserver-pocket-converge
+                   linux/pocket/vibeserver-pocket-cpu
           DESTINATION lib/vibeserver)
   install(FILES linux/pocket/pocket-packages.txt DESTINATION lib/vibeserver)
+  # ★★ vibeserver-pocket-cpu (2026-10-25): a Portable card picks the ARMv6 build on a CPU without NEON at boot —
+  #    the card was installed on the BUILD machine, so postinst's own pick was for the wrong processor.
   # ★★ An Update's initramfs rebuild inside overlayroot-chroot (MODULES=dep cannot find / there) — see the file.
   install(FILES linux/pocket/vibeserver-pocket-initramfs.conf
           DESTINATION share/initramfs-tools/conf.d RENAME vibeserver-pocket)
   install(FILES linux/pocket/vibeserver-pocket.service linux/pocket/vibeserver-pocket-data.service
-                linux/pocket/vibeserver-pocket-seal.service DESTINATION lib/systemd/system)
+                linux/pocket/vibeserver-pocket-seal.service linux/pocket/vibeserver-pocket-cpu.service
+          DESTINATION lib/systemd/system)
 
   # ★★★ SHIP cloudflared, DO NOT ASK FOR IT. The public listing offers to make an address for an
   #     owner who has no port forward — the only route that works behind CGNAT — and that offer is

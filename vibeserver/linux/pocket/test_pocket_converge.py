@@ -107,7 +107,8 @@ LITE_UNITS = ["NetworkManager.service", "avahi-daemon.service", "bluetooth.servi
               "getty@.service", "serial-getty@.service", "udisks2.service", "nftables.service",
               "dphys-swapfile.service", "fake-hwclock.service", "rpi-display-backlight.service",
               "vibeserver.service", "vibeserver-radios.service", "vibeserver-maintenance.path",
-              "vibeserver-pocket.service", "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service"]
+              "vibeserver-pocket.service", "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service",
+              "vibeserver-pocket-cpu.service"]
 LITE_ENABLED = ["NetworkManager.service", "avahi-daemon.service", "bluetooth.service", "hciuart.service",
                 "ModemManager.service", "triggerhappy.service", "apt-daily.timer", "man-db.timer",
                 "keyboard-setup.service", "dphys-swapfile.service"]
@@ -222,7 +223,8 @@ def main():
         ok("#deny-interfaces=eth1\n" in av, "avahi: an already-commented line is left as it was")
         wants = os.path.join(r, "etc/systemd/system/multi-user.target.wants")
         for u in ("vibeserver.service", "vibeserver-pocket.service", "vibeserver-maintenance.path",
-                  "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service", "vibeserver-radios.service"):
+                  "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service", "vibeserver-radios.service",
+                  "vibeserver-pocket-cpu.service"):
             ok(os.path.lexists(os.path.join(wants, u)), "enabled: " + u)
         for u in ("bluetooth.service", "ModemManager.service", "apt-daily.timer", "dphys-swapfile.service"):
             ok(not os.path.lexists(os.path.join(wants, u)), "disabled: " + u)
