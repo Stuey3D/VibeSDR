@@ -19,7 +19,8 @@
  * USE (the contract — docs/v12/ADSB.md "The shared map layer"):
  *     const layer = VibeAdsbLayer.create(map, { receiver: {lat, lon} | null,
  *                                               prefs: {autoZoom, fit, rings} | null,
- *                                               onPrefs: (prefs) => void, theme: 'dark' | 'light' });
+ *                                               onPrefs: (prefs) => void, theme: 'dark' | 'light',
+ *                                               drawReceiver: true });   // false = the host draws its own
  *     layer.update(aircraftArray)    // ADSB.md aircraft objects, the server's whole list each time
  *     layer.setReceiver(lat, lon)
  *     layer.setPrefs({autoZoom, fit, rings})
@@ -354,10 +355,12 @@
     return parts;
   }
   const ICONS = {
-    jet: hfdlJet(1.15),
-    regional: hfdlJet(0.92),
-    b757: hfdlJet(1.25, { slim: true, long: true }),
-    heavy: hfdlJet(1.45, { engines: true }),
+    /* ★ The A3 jet is the HFDL icon at its own 26 px; the classes step either side of it. Larger was tried
+     *  first (×1.15) and London's stack read as a green blot on the bench recording (2026-10-24). */
+    jet: hfdlJet(1.0),
+    regional: hfdlJet(0.82),
+    b757: hfdlJet(1.1, { slim: true, long: true }),
+    heavy: hfdlJet(1.3, { engines: true }),
     light: [
       { f: ell(20, 21, 1.8, 7) },
       { f: 'M8,17.5H32V20.5H8Z' },
@@ -545,6 +548,9 @@
     if (rx && rx.lat === 0 && rx.lon === 0) rx = null;      // ★ Null Island is "unknown", as on the HFDL map
     const prefs = Object.assign({ autoZoom: true, fit: true, rings: true }, opts.prefs || {});
     const onPrefs = typeof opts.onPrefs === 'function' ? opts.onPrefs : null;
+    /* ★ drawReceiver:false — the host draws its own receiver marker (the app's page already has the HFDL
+     *  house); the layer still uses the position for rings, distances and the camera. Default true. */
+    const drawReceiver = opts.drawReceiver !== false;
 
     const ac = new Map();          // hex → state
     let firstUpdateAt = 0, firstPosBatchSeen = false;
@@ -783,6 +789,7 @@
     function onGlClick(e) { if (!glReady) return; select(hitHex(e.point)); }
     function onGlHover(e) { if (!glReady) return; gl.getCanvas().style.cursor = hitHex(e.point) ? 'pointer' : ''; }
     function drawRx() {
+      if (!drawReceiver) return;
       if (gl) {
         const s = glReady && gl.getSource('vsadsb-rx');
         if (s) s.setData({ type: 'FeatureCollection', features: rx ? [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [rx.lon, rx.lat] } }] : [] });

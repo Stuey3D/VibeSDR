@@ -11,7 +11,8 @@ import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
-import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState } from './spectrum';
+import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
+import { adsbListHtml, adsbStatus, adsbMapHtml, cleanHex } from './adsb';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -757,6 +758,7 @@ async function loadAudioPolicy(httpBase: string) {
   srvLan = false;
   srvSharedDial = false;
   dialModeNow = 'exclusive';   // ★ a new receiver's dial is unknown until it says
+  adsbCap = null;              // ★ an older server (or no answer) draws no ADS-B control
   landingStepDone = false;
   firstConfigDone = false;
   try {
@@ -789,6 +791,7 @@ async function loadAudioPolicy(httpBase: string) {
      *  tunable set after allow/block lists and the rate the receiver will actually run at — so a
      *  V4 locked to FM or held below 2.048 MS/s never draws the button at all. */
     dabCapable = j.dab === true;
+    adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     dabBoost = j.dabBoost === true;
     dabBoostUseful = j.dabBoostUseful === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
@@ -1307,6 +1310,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  are LEAVING), then record the position we have arrived at. */
       dabApplyRestore();
       dabNoteNonDab();
+      adsbApplyPending();          // ★ a mode picked while in ADS-B, spent on the dial the server gave back
 
       /* ★★★ THE FIRST CONFIG OF THE CONNECTION, not "while the frequency is zero". SpectrumClient adopts
        *  cfg.serverVfo BEFORE calling us, so on every server that reports its dial this block never ran:
@@ -1619,6 +1623,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onVts: (text: string) => { vtsClearNotice('srv'); vtsNotice('srv', text, '', 9000); },
     /* ★ DAB arrives twice a second with the whole station list — see briefs/BRIEF-dab.md for why it is
      *  sent entire rather than as deltas. A null means the server left DAB mode. */
+    /* ★ ADS-B (V12): a report means the receiver is in ADS-B; null = it left. See onAdsbReport. */
+    onAdsb: (r) => onAdsbReport(r),
+    onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     onDab: (d: DabState) => {
       if (!d) {
         /* ★★★ THE SERVER LEFT DAB WITHOUT US — the last listener went, or the owner took the
@@ -7407,41 +7414,7 @@ function dabTune(delta: number) {
  *  nothing when pressed reads as a broken feature). The hold itself is in SpectrumClient.dabHeld,
  *  which also covers the wheel, the keys and the waterfall; this is the visible half. The arrows
  *  stay live because in DAB they step the multiplex (see nudge). */
-function dabLockControls(on: boolean) {
-  /* ★ FIT too: resetting the view is a zoom like any other, and it was greyed only on the retired
-   *  desktop bar's FIT button — the card's (#mPanelFit, in the menu) stayed live and did nothing. */
-  for (const id of ['mZoomIn', 'mZoomOut', 'mPanelFit']) {
-    const el = document.getElementById(id) as HTMLButtonElement | null;
-    if (!el) continue;
-    el.disabled = on;
-    if (on) { el.dataset.dabTitle = el.title; el.title = 'Zoom is locked in DAB — the span is the multiplex'; }
-    else if (el.dataset.dabTitle !== undefined) { el.title = el.dataset.dabTitle; delete el.dataset.dabTitle; }
-  }
-  /* ★★★ AND THE FREQUENCY ENTRY, WHICH WAS THE ONE CONTROL LEFT LYING. The zoom, the arrows and the
-   *  IF filter were all given their DAB meaning or greyed; typing a frequency was not, so the panel
-   *  opened, took a number, and the server refused the tune — silently, since a refusal on a held
-   *  dial says nothing. A locked box with a padlock and a reason is the same rule applied to the
-   *  last reader (Stuart, 2026-09-25). The gate itself is in openFreqEntry(), which every route
-   *  goes through; this is the visible half. */
-  const lock = document.getElementById('mFreqLock');
-  const fb   = document.getElementById('mFreqBox');
-  if (lock) lock.hidden = !on;
-  if (fb) {
-    fb.classList.toggle('dabLocked', on);
-    fb.title = on ? 'Locked in DAB mode — exit DAB to tune' : '';
-  }
-  /* ★ The way out, on the box itself — see #dabExit in index.html. */
-  const ex = document.getElementById('dabExit');
-  if (ex) (ex as HTMLElement).style.display = on ? '' : 'none';
-  /* ★ THE IF FILTER IS DAB'S while a multiplex is being received — 2.048 MHz for the ensemble.
-   *  Greyed, not merely ignored (AGENTS.md), with the reason on the control (Stuart, 2026-09-08). */
-  const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
-  if (bw) {
-    bw.disabled = on;
-    if (on) { bw.dataset.dabTitle = bw.title; bw.title = 'Set by DAB — the filter is pinned to the multiplex while it is being received'; }
-    else if (bw.dataset.dabTitle !== undefined) { bw.title = bw.dataset.dabTitle; delete bw.dataset.dabTitle; }
-  }
-}
+function dabLockControls(on: boolean) { wholeRadioLock(on, 'DAB'); }
 
 /** The block to start on: the one this browser was last on, else 12B. Stuart, 2026-09-07:
  *  "it should remember where it was left as not all countries use 12B". */
@@ -7671,6 +7644,250 @@ function dabUiOff() {
   }
 }
 
+/* ══ ADS-B (V12, docs/v12/ADSB.md) ═════════════════════════════════════════════════════════════════
+ * ★★★ A WHOLE-RADIO MODE, LIKE DAB, AND IT FOLLOWS DAB'S RULES: the server takes the receiver to
+ *     1090 MHz and gives it back exactly as it found it; the decoder box opens the moment a report
+ *     arrives (whoever started it — a second listener joins the mode, never restarts it); tuning and
+ *     zoom are greyed with the reason while it runs; there is no ✕ (closing the box would strand the
+ *     listener in a mode with nothing on screen) and EXIT ADS-B sits in the header.
+ * ★★ THE SERVER DECIDES WHETHER IT IS OFFERED (vibeserver.json `adsb`): true = a live control; false =
+ *    the control is drawn DISABLED with the server's own reason (`adsbWhy` — "the capture is below
+ *    2.4 MS/s", "a transceiver"…), never hidden; no field = an older server, no control at all.
+ * ★ The receiver never changes sample rate for it (Stuart, 2026-10-24) — that is the server's rule, and
+ *   the rate picker is simply held while ADS-B runs. */
+let adsbCap: { ok: boolean; why: string } | null = null;
+let adsbOn = false;
+let adsbReport: AdsbReport | null = null;
+let adsbPrevDecTitle = '';
+/** ★ A demodulator picked while in ADS-B: leaving takes a round trip (adsb:0 → the server restores the
+ *  dial → a config), so the pick waits for that config, exactly as dabRestore does — a mode sent with
+ *  the 1090 MHz readout would tune the radio straight back to 1090. */
+let adsbPendingMode: SDRMode | null = null;
+let adsbMapWin: Window | null = null;
+let adsbListLast = '';
+
+/** Read the capability from a radio's own vibeserver.json (see loadAudioPolicy). */
+function adsbReadCap(j: any) {
+  const inModes = Array.isArray(j?.modes) && j.modes.includes('adsb');
+  if (j?.adsb === true || inModes) adsbCap = { ok: true, why: '' };
+  else if (j?.adsb === false) {
+    const why = typeof j.adsbWhy === 'string' ? j.adsbWhy.trim().slice(0, 200) : '';
+    adsbCap = { ok: false, why: why || 'ADS-B is not available on this receiver' };
+  } else adsbCap = null;
+}
+
+/** ★ The UI half of entering ADS-B, with no message to the server (as dabUiOn): used for our own
+ *  press AND when a report arrives because somebody else put the receiver in ADS-B. */
+function adsbUiOn() {
+  adsbOn = true;
+  if (spec) spec.adsbHeld = true;
+  setTimeout(syncDialTips, 0);
+  /* ★ ADS-B takes the box whole, as DAB does: a running decoder is stopped (it would only be decoding
+   *  the noise at 1090 MHz), the spot list, its filters and any image are put away. */
+  if (activeDec === 'rds') { spec?.rdsxLight(false); $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); }
+  if (activeDec) { decoders?.detach(); activeDec = null; syncDecButtons(); }
+  $('spotList').classList.remove('on');
+  $('spotFilters').classList.remove('show');
+  $('decImage').classList.remove('on');
+  $('decBox').classList.remove('wide', 'navtex', 'min');
+  $<HTMLButtonElement>('decPrev').style.display = 'none';
+  $<HTMLButtonElement>('decSave').style.display = 'none';
+  $('decAdj').style.display = 'none';
+  wholeRadioLock(true, 'ADS-B');
+  const dt = document.getElementById('decText'); if (dt) dt.style.display = 'none';
+  $('adsbList').style.display = 'block';
+  $('adsbMap').style.display = '';
+  $('decClr').style.display = 'none';
+  $('decHide').style.display = 'none';      // ★ no ✕ — see the note above
+  $('rdsSize').classList.add('show');
+  applyRdsSize();
+  const box = $('decBox');
+  box.classList.add('open', 'adsb');
+  const t = $('decTitle');
+  if (t.textContent !== 'ADS-B') adsbPrevDecTitle = t.textContent || '';
+  t.textContent = 'ADS-B';
+  $('decStatus').textContent = adsbStatus(adsbReport);
+  applyRateOptions();
+  populateHw();                // ★ the rate picker is held — see populateHw
+  adsbRender();
+  updateVts();
+}
+
+/** The UI half of leaving ADS-B — the box closed, every control given back. */
+function adsbUiOff() {
+  adsbOn = false;
+  adsbReport = null;
+  adsbListLast = '';
+  if (spec) spec.adsbHeld = false;
+  setTimeout(syncDialTips, 0);
+  wholeRadioLock(false, 'ADS-B');
+  const dt = document.getElementById('decText'); if (dt) dt.style.display = '';
+  $('adsbList').style.display = 'none';
+  $('adsbList').innerHTML = '';
+  $('adsbMap').style.display = 'none';
+  $('decClr').style.display = '';
+  $('decHide').style.display = '';
+  $('rdsSize').classList.remove('show');
+  $('decStatus').textContent = '';
+  const box = $('decBox');
+  box.classList.remove('adsb');
+  // ★ Only close the box if ADS-B still owns it — DAB may have taken it in the same breath.
+  if (!dabOn) box.classList.remove('open');
+  const t = $('decTitle');
+  if (t.textContent === 'ADS-B') t.textContent = adsbPrevDecTitle;
+  applyRateOptions();
+  populateHw();
+  pushAdsbToMap(true);
+  updateVts();
+  if (!dabOn && decoders?.spotsEnabled) showDecBox('spots');
+}
+
+/** A listener's press: in or out. ★ From DAB the server leaves DAB itself (`dab_off`), so only DAB's
+ *  UI is unwound here — sending dab:0 too would arm DAB's restore and race the ADS-B tune. */
+function adsbSetMode(on: boolean) {
+  if (on) {
+    if (adsbCap && !adsbCap.ok) { showPill(adsbCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.adsb(true); return; }   // ★ ask before tuning: spec says why
+    if (dabOn) { dabRestore = null; dabOn = false; dabState = null; syncStereoLight(); wf?.applySettings({ minRangeDb: 30 }); dabUiOff(); dabSetPane(dabPane); }
+    adsbPendingMode = null;
+    audio?.holdHealing(6000);
+    adsbUiOn();
+    spec?.adsb(true);
+  } else {
+    audio?.holdHealing(6000);
+    spec?.adsb(false);
+    adsbUiOff();
+  }
+}
+
+/** ★ A report (on) or the server's `adsb_off` (null). */
+function onAdsbReport(r: AdsbReport | null) {
+  if (!r) {
+    if (adsbOn) { audio?.holdHealing(6000); adsbUiOff(); }
+    return;
+  }
+  adsbReport = r;
+  if (!adsbOn) adsbUiOn();   // ★ somebody else put the receiver in ADS-B (or we joined it)
+  /* ★★ THE AUDIO SELF-HEAL IS HELD FOR AS LONG AS THE REPORTS KEEP COMING. There is nothing to hear at
+   *  1090 MHz and the server sends next to no audio in ADS-B (measured on the bench: 131 bytes in 6 s), so
+   *  the heal judged the silence a fault and reopened the audio socket every 6 s for the whole session.
+   *  Renewed each report (once a second), so it lapses on its own a few seconds after ADS-B ends. */
+  audio?.holdHealing(8000);
+  $('decStatus').textContent = adsbStatus(r);
+  adsbRender();
+  pushAdsbToMap(false);
+}
+
+/** Spend a demodulator picked during ADS-B on the first config out of it (see adsbPendingMode). */
+function adsbApplyPending() {
+  if (!adsbPendingMode || adsbOn || !spec) return;
+  const m = adsbPendingMode; adsbPendingMode = null;
+  setMode(m, true); airbandFollowPassband(); renderFreq();
+}
+
+function adsbRender() {
+  const el = document.getElementById('adsbList');
+  if (!el || !adsbOn) return;
+  const html = adsbListHtml(adsbReport, myPos(), !!adsbMapWin && !adsbMapWin.closed);
+  if (html === adsbListLast) return;       // ★ nothing changed — leave the DOM (and a hovered row) alone
+  adsbListLast = html;
+  el.innerHTML = html;
+}
+
+/** ★ The open map window gets every report; `ended` tells it the mode is over. Silent and cheap when no
+ *  map is open. ★★ Never '*': only while the window is still on this page's origin (see pushSpotsToMap). */
+function pushAdsbToMap(ended: boolean) {
+  if (!adsbMapWin) return;
+  if (adsbMapWin.closed) { adsbMapWin = null; return; }
+  const to = /^https?:$/.test(location.protocol) ? location.origin : '/';
+  try {
+    if (ended) adsbMapWin.postMessage({ type: 'vibesdr-adsb-off' }, to);
+    else if (adsbReport) adsbMapWin.postMessage({ type: 'vibesdr-adsb', aircraft: adsbReport.aircraft, rx: myPos() }, to);
+  } catch { adsbMapWin = null; }
+}
+
+/** The MAP button in the box header — the spots map's mechanism (openSpotsMap), drawing with the shared
+ *  ADS-B layer (web/mapkit/adsblayer.js) on the GPU map in the 'aero' profile. */
+function openAdsbMap() {
+  if (adsbMapWin && !adsbMapWin.closed) { adsbMapWin.focus(); return; }
+  const w = window.open('', '_blank');
+  if (!w) { showPill('The map window was blocked — allow pop-ups for this receiver', 6000); return; }
+  adsbMapWin = w;
+  const origin = /^https?:$/.test(location.protocol) ? location.origin : '';
+  void Promise.all([probeMapGL(), loadVibemapSource(), import('./generated/adsbLayerSource')]).then(([kit, vm, al]) => {
+    if (w.closed) return;
+    w.document.write(adsbMapHtml({
+      kit, rx: myPos(), layerJs: al.ADSB_LAYER_JS, vibemapJs: vm.VIBEMAP_JS,
+      leaflet: LEAFLET_ASSET ? { js: origin + LEAFLET_ASSET.js, css: origin + LEAFLET_ASSET.css,
+                                 jsSri: LEAFLET_ASSET.jsSri, cssSri: LEAFLET_ASSET.cssSri } : null,
+      dataBase: origin ? origin + '/mapdata/v1/' : '/mapdata/v1/',
+      openerOrigin: location.origin, title: 'VibeSDR — ADS-B Aircraft Map',
+    }));
+    w.document.close();
+    // ★ The first picture now, not in up to a second: the window has its script by the time write() returns.
+    setTimeout(() => pushAdsbToMap(!adsbOn), 50);
+    adsbListLast = ''; adsbRender();       // rows become "show on the map"
+  }).catch((e) => {
+    console.error('[map] the ADS-B map could not load', e);
+    if (w.closed) return;
+    w.document.write('<!doctype html><meta charset="utf-8"><body style="background:#090602;color:#ffb833;'
+      + 'font:14px monospace;padding:2em">The map did not finish loading. Close this window and try again.');
+    w.document.close();
+  });
+}
+
+/** ★★★ ZOOM AND TUNING ARE HELD IN A WHOLE-RADIO MODE — DISABLED, not merely ignored (AGENTS.md: a control
+ *  that does nothing when pressed reads as a broken feature). DAB and ADS-B share this one function so
+ *  the two can never disagree about which controls a whole-radio mode holds. The holds themselves are in
+ *  SpectrumClient (dabHeld / adsbHeld); this is the visible half.
+ *  ★ DAB keeps the arrows (they step the multiplex — see nudge); ADS-B has nothing to step, so they go too. */
+function wholeRadioLock(on: boolean, who: 'DAB' | 'ADS-B') {
+  const why = who === 'DAB' ? 'Zoom is locked in DAB — the span is the multiplex'
+                            : 'Locked in ADS-B — the receiver is held on 1090 MHz';
+  /* ★ FIT too: resetting the view is a zoom like any other, and it was greyed only on the retired
+   *  desktop bar's FIT button — the card's (#mPanelFit, in the menu) stayed live and did nothing. */
+  const ids = who === 'DAB' ? ['mZoomIn', 'mZoomOut', 'mPanelFit'] : ['mZoomIn', 'mZoomOut', 'mPanelFit', 'mVfoDown', 'mVfoUp', 'mStep'];
+  for (const id of ids) {
+    const el = document.getElementById(id) as HTMLButtonElement | null;
+    if (!el) continue;
+    el.disabled = on;
+    if (on) { if (el.dataset.lockTitle === undefined) el.dataset.lockTitle = el.title; el.title = why; }
+    else if (el.dataset.lockTitle !== undefined) { el.title = el.dataset.lockTitle; delete el.dataset.lockTitle; }
+  }
+  /* ★★★ AND THE FREQUENCY ENTRY, WHICH WAS THE ONE CONTROL LEFT LYING. The zoom, the arrows and the
+   *  IF filter were all given their DAB meaning or greyed; typing a frequency was not, so the panel
+   *  opened, took a number, and the server refused the tune — silently, since a refusal on a held
+   *  dial says nothing. A locked box with a padlock and a reason is the same rule applied to the
+   *  last reader (Stuart, 2026-09-25). The gate itself is in openFreqEntry(), which every route
+   *  goes through; this is the visible half. */
+  const lock = document.getElementById('mFreqLock');
+  const fb   = document.getElementById('mFreqBox');
+  if (lock) lock.hidden = !on;
+  if (fb) {
+    fb.classList.toggle('dabLocked', on);
+    fb.title = on ? `Locked in ${who} mode — exit ${who} to tune` : '';
+  }
+  /* ★ The way out, on the box itself — #dabExit / #adsbExit in index.html. */
+  const ex = document.getElementById(who === 'DAB' ? 'dabExit' : 'adsbExit');
+  if (ex) (ex as HTMLElement).style.display = on ? '' : 'none';
+  /* ★ THE IF FILTER IS DAB'S while a multiplex is being received — 2.048 MHz for the ensemble.
+   *  Greyed, not merely ignored (AGENTS.md), with the reason on the control (Stuart, 2026-09-08). */
+  const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
+  if (bw) {
+    bw.disabled = on;
+    if (on) { if (bw.dataset.lockTitle === undefined) bw.dataset.lockTitle = bw.title;
+              bw.title = who === 'DAB' ? 'Set by DAB — the filter is pinned to the multiplex while it is being received'
+                                       : 'Set by ADS-B — the filter is the whole capture while aircraft are decoded'; }
+    else if (bw.dataset.lockTitle !== undefined) { bw.title = bw.dataset.lockTitle; delete bw.dataset.lockTitle; }
+  }
+  /* ★ ADS-B: the passband sliders too — the server ignores a passband while it decodes 1090. */
+  if (who === 'ADS-B') {
+    for (const el of Array.from(document.querySelectorAll('.bwRow input, .bwRow button, .bwRow select')) as HTMLInputElement[]) {
+      el.disabled = on;
+    }
+  }
+}
+
 
 
 /** ★★★ ONE PLACE THAT KNOWS WHAT "MUTED" LOOKS LIKE.
@@ -7848,7 +8065,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -7880,6 +8097,8 @@ function buildControls() {
      *    and the rest are a radio group is a picker that lies about what it does. */
     modeExtra:  () => icomFilRow(),
     setMode:    (m) => { if (icomR) { icomPickMode(m); return; }
+                         // ★ ADS-B: leave, and spend the pick on the dial the server gives back (adsbPendingMode).
+                         if (adsbOn) { adsbPendingMode = m as SDRMode; adsbSetMode(false); return; }
                          if (dabOn) dabSetMode(false); setMode(m as SDRMode, true); airbandFollowPassband(); renderFreq(); },
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
@@ -7890,7 +8109,11 @@ function buildControls() {
     dabOn:         () => dabOn,
     // ★ Null between multiplexes (a retune sets dabState = null): the card then says it is searching.
     dabQuality:    () => (dabOn && dabState ? dabQuality : null),
-    toggleDab:     () => dabSetMode(!dabOn),
+    /* ★ DAB from ADS-B: the server leaves ADS-B itself (it sends adsb_off first), so only our UI unwinds here. */
+    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); dabSetMode(!dabOn); },
+    adsbCap:       () => adsbCap,
+    adsbOn:        () => adsbOn,
+    toggleAdsb:    () => adsbSetMode(!adsbOn),
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();
@@ -7908,6 +8131,15 @@ function buildControls() {
    *  server, and gives back the zoom, the arrows, the IF filter and the frequency entry. */
   { const xb = document.getElementById('dabExit');
     if (xb) (xb as HTMLElement).onclick = () => dabSetMode(false); }
+  /* ★ ADS-B's header: EXIT ADS-B (the whole way out, as EXIT DAB) and MAP; a row shows its aircraft on the map. */
+  $('adsbExit').onclick = () => adsbSetMode(false);
+  $('adsbMap').onclick = () => openAdsbMap();
+  $('adsbList').addEventListener('click', (e) => {
+    const row = (e.target as HTMLElement).closest('.adsbRow') as HTMLElement | null;
+    if (!row || !adsbMapWin || adsbMapWin.closed) return;
+    const to = /^https?:$/.test(location.protocol) ? location.origin : '/';
+    try { adsbMapWin.postMessage({ type: 'vibesdr-adsb-focus', hex: cleanHex(row.dataset.hex) }, to); adsbMapWin.focus(); } catch { adsbMapWin = null; }
+  });
   initBookmarks();
   buildMenu();
 
@@ -8156,7 +8388,7 @@ function updateMediaSession() {
   const dabSvc = dabOn && dabState
     ? (dabState.services.find(x => x.sid === dabState!.sid)?.label || dabState.label || '')
     : '';
-  const modeText = dabOn ? 'DAB' : spec.mode.toUpperCase();
+  const modeText = dabOn ? 'DAB' : adsbOn ? 'ADS-B' : spec.mode.toUpperCase();
   const station = dabSvc || rdsName || $('vtsName').textContent || '';
   // Artwork: the RTL-TCP art the app uses, so Now Playing looks the same whether
   // you're listening on the phone or in the browser. If the station has an RDS
@@ -9150,6 +9382,13 @@ function syncDialTips() {
     t('mStep', 'Tuning step — not used in DAB, where the arrows step the multiplex');
     t('mZoomOut', 'Zoom is held in DAB — the multiplex is the whole view');
     t('mZoomIn',  'Zoom is held in DAB — the multiplex is the whole view');
+    return;
+  }
+  /* ★ IN ADS-B THERE IS NOTHING TO STEP: the arrows, the step and the zoom are greyed (wholeRadioLock) and
+   *  their titles say why — written here too, because this runs after every step change. */
+  if (adsbOn) {
+    cap('mStepCapD', ''); cap('mStepCapU', '');
+    for (const id of ['mVfoDown', 'mVfoUp', 'mStep', 'mZoomOut', 'mZoomIn']) t(id, 'Locked in ADS-B — the receiver is held on 1090 MHz');
     return;
   }
   t('mVfoDown', `Tune down ${st}`);
@@ -14596,7 +14835,10 @@ function populateHw() {
       r.disabled = true;
       return;
     }
-    r.disabled = false;
+    /* ★ ADS-B never changes the rate (Stuart, 2026-10-24) and the server ignores a sampleRate while in it:
+     *  the picker shows the rate the radio runs, held, with the reason. */
+    r.disabled = adsbOn;
+    r.title = adsbOn ? 'Held in ADS-B — the receiver keeps its own capture rate' : '';
     /* ★★★ ADOPT, DO NOT ASSERT. This block runs on EVERY hwinfo, and it used to end by PUSHING
      *  the remembered preference at the server. The justification was real — with nothing to read,
      *  a silent client left the dropdown showing whatever was first while the radio ran at
@@ -15203,6 +15445,7 @@ function nudge(hz: number) {
    *  it were a standard VFO and not cycling through the DAB blocks like I wanted". A DAB station
    *  is not a frequency, so the only tuning gesture that means anything is the next block. */
   if (dabOn) { dabTune(hz < 0 ? -1 : 1); return; }
+  if (adsbOn) return;   // ★ held on 1090 MHz — the arrows are greyed (wholeRadioLock); keys and the wheel end here
   // Snap to the step grid so repeated nudges stay on round frequencies.
   // ★★ Through airbandStepFrom: the 8.33 kHz step is 25000/3 exactly (no drift), and in the airband
   //    in AM it walks channel NAMES the way an 8.33 set's knob does — see src/utils/airband.ts.
@@ -15242,7 +15485,7 @@ function airChanTag(ch: AirChannel | null, nameIsMain: boolean): string {
  *  own tune, mode or step change — never from a config echo, so a shared dial somebody else moved
  *  sends nothing from here. A bookmark's width is applied after this, and is never a default. */
 function airbandFollowPassband() {
-  if (!spec || dabOn) return;
+  if (!spec || dabOn || adsbOn) return;
   const pb = airbandPassband(spec.frequency, spec.mode, airChannelNow(), spec.bandwidthLow, spec.bandwidthHigh);
   if (pb) { applyBw(pb[0], pb[1]); syncBw(); }
 }
@@ -15334,6 +15577,7 @@ function setFreqUnit(u: FreqUnit) {
  *  ★ It used to be the onclick of the retired desktop bar's hidden #pill, which the card CLICKED. */
 function openFreqEntry() {
   if (dabOn) { showTuneGapMsg('Frequency is locked in DAB mode — there is no dial inside a multiplex. Press EXIT DAB to tune.'); return; }
+  if (adsbOn) { showTuneGapMsg('Frequency is locked in ADS-B — the receiver is held on 1090 MHz. Press EXIT ADS-B to tune.'); return; }
   togglePanel('freqPanel');
   const el = $<HTMLInputElement>('freqInput');
   el.value = (spec!.frequency / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
@@ -16726,7 +16970,7 @@ function initPointerFreq(c: HTMLCanvasElement) {
     raf = 0;
     if (!over) { setShown(false); return; }
     raf = requestAnimationFrame(frame);
-    if (held || !ptrFreqOn || dabOn || !spec || !wf || document.hidden) { setShown(false); return; }
+    if (held || !ptrFreqOn || dabOn || adsbOn || !spec || !wf || document.hidden) { setShown(false); return; }
     // ── reads first (layout is clean at the start of a frame) ──
     if (!rect) { rect = c.getBoundingClientRect(); cw = c.clientWidth; }
     const W = rect.width, H = rect.height;

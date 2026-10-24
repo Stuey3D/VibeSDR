@@ -77,6 +77,11 @@ export type MobileDeps = {
   /** ★★★ The DAB reception verdict (src/utils/dabQuality.ts) — null before a multiplex's first report. */
   dabQuality?: () => DabQuality | null;
   toggleDab: () => void;
+  /** ★★ ADS-B (V12) — a whole-radio mode like DAB, offered beside it. null = an older server (no entry);
+   *  ok false = drawn DISABLED with the server's reason, never hidden (docs/v12/ADSB.md). */
+  adsbCap: () => { ok: boolean; why: string } | null;
+  adsbOn: () => boolean;
+  toggleAdsb: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
   openChat: () => void;
@@ -311,6 +316,20 @@ export function initMobileControls(deps: MobileDeps) {
       dabRow.title = 'DAB (Experimental) — digital radio, Band III';
       dabRow.onclick = () => { deps.toggleDab(); close(); refresh(); };
       grid.appendChild(dabRow);
+    }
+    /* ★★ ADS-B beside DAB — the other whole-radio mode. When the server says it cannot run here the entry
+     *  is still drawn, greyed, and a tap says WHY (the server's own words) — a hidden entry teaches nobody
+     *  that the receiver could do it at 2.4 MS/s; a disabled <button> would swallow the tap on a phone,
+     *  where there is no tooltip to read. */
+    const ac = deps.adsbCap();
+    if (ac) {
+      const adsbRow = document.createElement('button');
+      adsbRow.className = 'mModeOpt' + (deps.adsbOn() ? ' on' : '') + (ac.ok ? '' : ' dis');
+      adsbRow.textContent = 'ADS-B';
+      adsbRow.title = ac.ok ? 'ADS-B — aircraft on 1090 MHz, with a map' : `ADS-B is not available: ${ac.why}`;
+      if (!ac.ok) adsbRow.setAttribute('aria-disabled', 'true');
+      adsbRow.onclick = () => { deps.toggleAdsb(); close(); refresh(); };
+      grid.appendChild(adsbRow);
     }
 
     const sole = deps.soleDecoder();
