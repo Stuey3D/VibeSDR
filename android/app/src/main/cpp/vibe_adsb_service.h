@@ -10,10 +10,13 @@
 //    the_code). See vsAdsbCapableHw in local_sdr_shim.cpp.
 #pragma once
 #include "vibe_adsb.h"
+#include "vibe_adsb_data.h"     // what an aircraft IS (registration, type, operator, route) — V12 aircraft data
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <map>
+#include <set>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -63,6 +66,8 @@ public:
         }
         cv_.notify_all();
         if (worker_.joinable()) worker_.join();
+        std::lock_guard<std::mutex> il(infoMtx_);
+        work_.clear(); infoJson_.clear(); infoDelta_.clear();
     }
 
     bool running() const { return run_.load(std::memory_order_relaxed); }
@@ -95,6 +100,35 @@ public:
                       rate_, health_.noiseDbfs, health_.msgsPerSec, (unsigned long long)dropped_);
         // Tracker::json is {"now":…,"messages":…,"aircraft":[…]} — open it up and add the type and the tail
         return "{\"type\":\"adsb\"," + t.substr(1, t.size() - 2) + tail;
+    }
+
+    /** ★★ WHAT EACH AIRCRAFT IS, SENT ONCE — not in the 1 fps report. `{"type":"adsb_info","aircraft":{"<hex>":{r, t,
+     *  desc, wtc, eng, species, country, countryName, mil, op, opName, logo, sil, route{…}}}}` (ADSB.md), for the
+     *  aircraft whose details are new or CHANGED since the last call (a callsign arrived, the route was judged).
+     *  "" when nothing changed. The clients keep the fields per hex until the aircraft leaves the report.
+     *  `{}` for a hex = it no longer has any. */
+    std::string takeInfoDelta() {
+        std::lock_guard<std::mutex> il(infoMtx_);
+        if (infoDelta_.empty()) return {};
+        std::string o = "{\"type\":\"adsb_info\",\"aircraft\":{";
+        bool first = true;
+        for (const auto& kv : infoDelta_) {
+            auto it = infoJson_.find(kv);
+            if (!first) o += ',';
+            first = false;
+            o += "\"" + kv + "\":" + (it == infoJson_.end() ? std::string("{}") : it->second);
+        }
+        infoDelta_.clear();
+        return o + "}}";
+    }
+    /** Everything known, for a socket that has just joined (sent before its first report). "" if nothing. */
+    std::string infoAll() {
+        std::lock_guard<std::mutex> il(infoMtx_);
+        if (infoJson_.empty()) return {};
+        std::string o = "{\"type\":\"adsb_info\",\"full\":1,\"aircraft\":{";
+        bool first = true;
+        for (const auto& kv : infoJson_) { if (!first) o += ','; first = false; o += "\"" + kv.first + "\":" + kv.second; }
+        return o + "}}";
     }
 
     Health health() {
@@ -145,9 +179,71 @@ private:
                 winMsgs_ = winStrong_ = 0;
                 winStart_ = t;
                 tracker_.expire(t, 60);
+                // ★★ ENRICH WITH THE TRACKER LOCK RELEASED: a first lookup may fault a page in from the SD card,
+                //    and report() — on the DSP thread — must never wait for that.
+                std::vector<Seen> snap;
+                snap.reserve(tracker_.aircraft().size());
+                for (const auto& kv : tracker_.aircraft()) {
+                    const Aircraft& a = kv.second;
+                    snap.push_back({a.icao, a.nonIcao, a.callsign, a.hasPos && t - a.seenPos <= 60, a.lat, a.lon});
+                }
+                lk.unlock();
+                enrich(snap, t);
+                lk.lock();
             }
         }
     }
+
+public:
+    // ★ public for test-adsb-data, which drives enrichment without demodulating IQ
+    struct Seen { uint32_t icao; bool nonIcao; std::string callsign; bool hasPos; double lat, lon; };
+    struct Work { vibeadsbdata::Info info; std::string callsign; double judged = -1e9; bool hexDone = false; std::string sent; };
+
+    /** Once per aircraft (and again when its callsign changes; its route re-judged every 15 s as it moves). On the
+     *  decoder thread, never the DSP thread. Publishes only what CHANGED. */
+    void enrich(const std::vector<Seen>& snap, double t) {
+        vibeadsbdata::Db& db = vibeadsbdata::Db::get();
+        std::unordered_map<uint32_t, bool> live;
+        std::vector<std::pair<std::string, std::string>> changed;    // hex → json ("" = gone)
+        for (const Seen& s : snap) {
+            if (s.nonIcao) continue;                                  // ★ an anonymous address is no aircraft's identity
+            live[s.icao] = true;
+            Work& w = work_[s.icao];
+            bool dirty = false;
+            if (!w.hexDone) { db.lookupHex(s.icao, w.info); w.hexDone = true; dirty = true; }
+            if (s.callsign != w.callsign) {
+                w.callsign = s.callsign;
+                db.lookupCallsign(s.callsign, w.info.r, s.icao, w.info);
+                w.judged = -1e9;
+                dirty = true;
+            }
+            if (s.hasPos && w.info.route.size() >= 2 && t - w.judged >= 15) {
+                vibeadsbdata::Db::judge(w.info, s.lat, s.lon);
+                w.judged = t;
+                dirty = true;
+            }
+            if (!dirty) continue;
+            char hx[8]; std::snprintf(hx, sizeof hx, "%06x", s.icao);
+            char hu[8]; std::snprintf(hu, sizeof hu, "%06X", s.icao);
+            vibeadsbdata::Db::resolveImages(hu, w.info);
+            const std::string j = w.info.json();
+            if (j != w.sent) { w.sent = j; changed.push_back({hx, j == "{}" ? std::string() : j}); }
+        }
+        std::vector<std::string> gone;
+        for (auto it = work_.begin(); it != work_.end();) {
+            if (live.count(it->first)) { ++it; continue; }
+            char hx[8]; std::snprintf(hx, sizeof hx, "%06x", it->first);
+            gone.push_back(hx);
+            it = work_.erase(it);
+        }
+        std::lock_guard<std::mutex> il(infoMtx_);
+        for (const auto& g : gone) { infoJson_.erase(g); infoDelta_.erase(g); }
+        for (const auto& c : changed) {
+            if (c.second.empty()) { if (infoJson_.erase(c.first)) infoDelta_.insert(c.first); }
+            else { infoJson_[c.first] = c.second; infoDelta_.insert(c.first); }
+        }
+    }
+private:
 
     std::mutex mtx_;
     std::condition_variable cv_;
@@ -163,6 +259,11 @@ private:
     uint64_t winMsgs_ = 0, winStrong_ = 0, lastGood_ = 0;
     double winStart_ = 0;
     Health health_;
+    // the aircraft details (decoder thread: work_; any thread under infoMtx_: the published JSON)
+    std::unordered_map<uint32_t, Work> work_;
+    std::mutex infoMtx_;
+    std::map<std::string, std::string> infoJson_;
+    std::set<std::string> infoDelta_;
 };
 
 /**

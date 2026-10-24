@@ -77,6 +77,7 @@
 #include "vibe_dab_channels.h"   // ★ the Band III list the setup page's DAB landing offers
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark and its DAB rows — see setBenchmarkHandlers below
 #include "eibi.h"
+#include "adsb_data_curl.h"   // V12 ADS-B aircraft data: curl transport + the updater
 #include "solar.h"
 #include "geoip.h"
 #include "asndb.h"
@@ -4311,6 +4312,21 @@ int main(int argc, char** argv) {
     }
     // ★ The desktop downloader (curl) — shared with Mac Simple mode, see mapgl_curl.h.
     vibemapgl::installCurlDownloader();
+    // ── ★★ V12 ADS-B AIRCRAFT DATA — <data dir>/adsb: the weekly tables (vibe_adsb_data_update.h) and the owner's
+    //    OperatorFlags/ + Silhouettes/ folders (VRS names). Shared by every radio process on the machine; one of
+    //    them downloads (flock), the others re-map the new files. The CC0 starter is compiled in, so a server with
+    //    no network still shows countries, military, operators and types.
+    {
+        const std::string ad = vsDataDir() + "/adsb";
+        vibeadsbdata::Updater::get().setDir(ad);
+        vibeadsbdata::Db::images().setDir(ad);
+#ifdef VIBESERVER_VERSION_STR
+        vibeadsbdata::installCurlFetcher(std::string("VibeServer/") + VIBESERVER_VERSION_STR + " (+https://vibesdr.net)");
+#else
+        vibeadsbdata::installCurlFetcher("VibeServer (+https://vibesdr.net)");
+#endif
+        vibeadsbdata::Updater::get().start();
+    }
     asndb::load();
     LocalSdrShim::setAsnHandler([](const std::string& ip, uint32_t& asn, std::string& name) {
         return asndb::lookup(ip, asn, name);

@@ -55,7 +55,17 @@ object VibeMapGL {
             val data = File(app.filesDir, "mapgl").apply { mkdirs() }
             // ★ The downloader and data dir first: an installed detail pack is served, and the
             //   admin page's Download button works, even if the bundled unpack fails.
-            if (!nativeReady) { nativeInit(data.absolutePath); nativeReady = true }
+            if (!nativeReady) {
+                nativeInit(data.absolutePath)
+                // ★★ V12 ADS-B aircraft data: the tables in filesDir/adsb (private, the server's own), the owner's
+                //    logo/silhouette folders under the APP-SPECIFIC EXTERNAL dir when there is one
+                //    (Android/data/<pkg>/files/adsb — reachable over USB), else beside the tables. The admin page's
+                //    zip upload fills them either way. Shared by the main app and Lite (this file is SHARED).
+                val adsb = File(app.filesDir, "adsb").apply { mkdirs() }
+                val ext = try { app.getExternalFilesDir("adsb") } catch (t: Throwable) { null }
+                nativeInitAdsb(adsb.absolutePath, (ext ?: adsb).absolutePath, "VibeServer-Android (+https://vibesdr.net)")
+                nativeReady = true
+            }
         } catch (t: Throwable) {
             Log.e(TAG, "GPU map not wired into the server: ${t.message}", t)
             return
@@ -201,9 +211,45 @@ object VibeMapGL {
         }
     }
 
+    /**
+     * ★★ V12 ADS-B AIRCRAFT DATA'S TRANSPORT (vibe_adsb_data_update.h owns the policy): a CONDITIONAL GET of
+     *  `url` into `dest`. Returns "status\tetag\tlast-modified\terror": 200 = the body is in dest, 304 = unchanged
+     *  (dest untouched), 0 = failed. Called from the server's own low-priority updater thread through JNI, once a
+     *  week. Same client as `download` (VibeTls roots, redirects followed — codeload.github.com redirects).
+     */
+    @JvmStatic
+    fun fetchIf(url: String, dest: String, ifNoneMatch: String, ifModifiedSince: String, userAgent: String): String {
+        return try {
+            val b = Request.Builder().url(url).header("User-Agent", userAgent)
+            if (ifNoneMatch.isNotEmpty()) b.header("If-None-Match", ifNoneMatch)
+            if (ifModifiedSince.isNotEmpty()) b.header("If-Modified-Since", ifModifiedSince)
+            http.newCall(b.build()).execute().use { r ->
+                val etag = r.header("ETag") ?: ""
+                val lm = r.header("Last-Modified") ?: ""
+                if (r.code == 304) return "304\t$etag\t$lm\t"
+                if (!r.isSuccessful) return "0\t\t\tHTTP ${r.code}"
+                val body = r.body ?: return "0\t\t\tno body"
+                val f = File(dest); f.parentFile?.mkdirs()
+                val buf = ByteArray(64 * 1024)
+                body.byteStream().use { input ->
+                    FileOutputStream(f, false).use { o ->
+                        while (true) { val n = input.read(buf); if (n < 0) break; o.write(buf, 0, n) }
+                        o.fd.sync()
+                    }
+                }
+                "200\t$etag\t$lm\t"
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "aircraft data fetch $url failed: ${t.message}")
+            "0\t\t\t${(t.message ?: "failed").replace('\t', ' ').replace('\n', ' ')}"
+        }
+    }
+
     // ── Native (vibe_localsdr_jni.cpp) ─────────────────────────────────────────────────────────
     /** Caches this class for the downloader, sets the data dir, installs the downloader. */
     @JvmStatic private external fun nativeInit(dataDir: String)
     @JvmStatic private external fun nativeSetBundleDir(dir: String)
     @JvmStatic private external fun nativeProgress(handle: Long, written: Long, total: Long)
+    /** V12 ADS-B aircraft data: its data dir, the owner's image folders, the transport (fetchIf); starts the weekly job. */
+    @JvmStatic private external fun nativeInitAdsb(dataDir: String, imagesDir: String, userAgent: String)
 }
