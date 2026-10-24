@@ -99,7 +99,7 @@ export function adsbStatus(r: AdsbReport | null): string {
  *  what the rate promises (vibe_adsb_capture.h CaptureMeter: the dongle/USB and the server's own IQ queue, not the
  *  decoder's own lag). Under 97 % the receiver is dropping samples, and replies are cut in half — the Pi 2 at 3.2 MS/s
  *  heard a third of what 2.4 did. `short` stays on a phone; `rest` says what it means. Null when nothing is wrong or unknown.
- *  ★★ ONE RULE, TWO READERS: src/services/adsbTypes.ts adsbCaptureWarning is the same — scripts/test_adsb_capture_warn.ts. */
+ *  ★★ ONE RULE, TWO READERS: src/services/adsbTypes.ts adsbCaptureWarning is the same — scripts/test_capture_and_rate_guard.ts. */
 export const ADSB_CAPTURE_WARN_PCT = 97;
 export function adsbCaptureWarning(r: AdsbReport | null): { short: string; rest: string } | null {
   const c = r ? num(r.capture) : null;

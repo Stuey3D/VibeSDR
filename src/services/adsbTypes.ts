@@ -62,7 +62,7 @@ export interface AdsbReport {
 /** ★★★ THE CAPTURE WARNING for the map's top bar (Stuart, 2026-10-24): under 97 % the receiver is dropping samples
  *  before the decoder sees them (the dongle / USB bus, or the server's IQ queue — vibe_adsb_capture.h CaptureMeter).
  *  `short` stays on a phone; `rest` says what it means. Null when all is well.
- *  ★★ ONE RULE, TWO READERS: web/client/src/adsb.ts adsbCaptureWarning — scripts/test_adsb_capture_warn.ts. */
+ *  ★★ ONE RULE, TWO READERS: web/client/src/adsb.ts adsbCaptureWarning — scripts/test_capture_and_rate_guard.ts. */
 export const ADSB_CAPTURE_WARN_PCT = 97;
 export function adsbCaptureWarning(r: Pick<AdsbReport, 'capture' | 'rate'> | null | undefined): { short: string; rest: string } | null {
   const c = r ? num(r.capture) : undefined;

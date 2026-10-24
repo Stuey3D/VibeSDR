@@ -416,6 +416,11 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     if (getNum(s, "agcSet", d)) c.agcSet = (int)d;
     getBool(s, "agcSetLock", c.agcSetLock);
     getBool(s, "zoomSpectrum", c.zoomSpectrum);
+    /* ★★ THE RATE SWITCH, ON THE LIVE-SETTING PATH TOO (2026-10-24). The radio object reads it (radioFromJson) but this
+     *  flat reader — the one the shim's persist patches go through — never did, so {"dabRateBoost":…} from the shim (the
+     *  admin's live toggle, the boosted-rate guard switching it off) was dropped and the switch came back at the next
+     *  start. Found by scripts/test-rate-guard.mjs. Absent = unchanged (getBool writes only when the key is present). */
+    getBool(s, "dabRateBoost", c.dabRateBoost);
     getStr(s, "cpuGovernor", c.cpuGovernor);
     getStr(s, "trustedProxies", c.trustedProxies);
     // ★ Absent = true (the rule enforced). getBool only writes when the key is present, so an older

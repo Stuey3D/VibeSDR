@@ -25,7 +25,7 @@ for (let t = 0; t < 12; t++) {
   await new Promise(r => setTimeout(r, 1000));
   if (last && t % 5 === 4) {
     const ac = last.aircraft || [];
-    console.log(`t=${t + 1}s reports ${reports} aircraft ${ac.length} with pos ${ac.filter(a => a.lat !== undefined).length} msgs ${last.messages} msgRate ${last.msgRate} noise ${last.noise} dropped ${last.dropped}`);
+    console.log(`t=${t + 1}s reports ${reports} aircraft ${ac.length} with pos ${ac.filter(a => a.lat !== undefined).length} msgs ${last.messages} msgRate ${last.msgRate} noise ${last.noise} dropped ${last.dropped} capture ${last.capture}`);
   }
 }
 if (errs.length) console.log('errors:', errs);

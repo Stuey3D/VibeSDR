@@ -157,3 +157,20 @@ layer.destroy()
 - ★ **The server sends next to no audio in ADS-B** (bench: 131 B in 6 s), so the web client holds its audio
   self-heal for as long as reports keep coming, or it reopened the audio socket every 6 s. The app may need
   the same.
+
+## Is the radio delivering every sample? (2026-10-24)
+
+- **Live `capture`** in every `adsb` report: the % of the samples the rate promises that the ADS-B service actually
+  RECEIVED over the last ~10 s (`vibe_adsb_capture.h` CaptureMeter; -1 for the first 3 s). It sees the dongle/USB
+  shortfall and the server's own IQ queue drops; the service's own queue drops stay in `dropped` (a slow CPU). Under
+  97 % both map top bars say, in red, "capture N % — the receiver is dropping samples" (`adsbCaptureWarning`, one rule
+  in `src/services/adsbTypes.ts` and `web/client/src/adsb.ts`).
+- **Benchmark rows** `adsb_2400` / `adsb_3000` (`vibe_benchmark_adsb.h`): CPU only, the radio untouched — one second
+  of Stuart's 1090 MHz sky at 2.4 and 3.0 MS/s fed in real time through `vibeadsb::Service`, scored like the DAB rows.
+  The clip (`adsb-bench.vbu8.gz`) is fetched on the first run from the `bench-clip-v2` GitHub release —
+  `vibeserver/bench-clip/README-adsb.txt`.
+- **A radio that falls over at a boosted rate** (`vibe_rate_guard.h`, ADS-B or DAB under the rate switch): a stall
+  (no IQ for 3 s) leaves the mode back at the base rate; a whole-process crash is found at the next start from the
+  marker written just before the boost. Either way the rate switch is OFF (persisted) and the setup page and the
+  app's server screen say so in red beside it until the owner clears it (`/vibeserver/rate-guard?clear=1`).
+  `scripts/test-rate-guard.mjs` drives both through the real server.

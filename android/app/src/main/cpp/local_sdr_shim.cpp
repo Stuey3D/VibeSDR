@@ -12886,6 +12886,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     double adsbLastReport_ = 0, adsbLastGain_ = 0;
     double adsbHoldUntil_ = 0; int adsbUpVotes_ = 0;   // the gain rule's hysteresis — see adsbTick
     std::atomic<bool> rateBoostFellBack_{false};       // ★ the watchdog's boosted-rate recovery ran — see rateBoostStalled
+    /** ★ When rtl_tcp last delivered (tcpReadLoop). lastIqAt is the USB/driver sources' — an rtl_tcp radio never
+     *  stamps it (its stalls are counted as netStalls, not called an unplug) — so the guard asks this instead. */
+    std::atomic<double> tcpDataAt{0.0};
 
     /* ★★★ A BOOSTED RATE STALLED (Stuart, 2026-10-24: "if the SDR crashes … can we detect that and restart the SDR at
      *  a safe rate"). The watchdog found no IQ for 3 s, or the stream died, while ADS-B or DAB had boosted the radio's
@@ -12902,16 +12905,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              why, rate / 1e6, mode.c_str(), mode.c_str());
         g_rateGuard.recordStall(rate, mode, (long long)vsNowEpoch());
         g_dabRateBoost.store(false, std::memory_order_relaxed);
-        vsPersist("{\"dabRateBoost\":0}");
+        vsPersist("{\"dabRateBoost\":false}");
         vsSayVts("The radio stopped responding at " + vibe::RateFault::rateText(rate) + " during " + mode
                  + " \xe2\x80\x94 " + mode + " has ended and the radio is back at its own rate.");
         if (g_adsbMode.load()) handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
         else if (g_dabMode.load()) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
         // ★ The leave relaunched the stream at the base rate; if IQ flows, a dead-stream flag from the boost is history.
-        const double before = lastIqAt.load(std::memory_order_relaxed);
-        for (int i = 0; i < 40 && lastIqAt.load(std::memory_order_relaxed) <= before; ++i)
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        if (lastIqAt.load(std::memory_order_relaxed) > before) captureDown.store(false);
+        auto heard = [this] { return std::max(lastIqAt.load(std::memory_order_relaxed), tcpDataAt.load(std::memory_order_relaxed)); };
+        const double before = heard();
+        for (int i = 0; i < 40 && heard() <= before; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (heard() > before) captureDown.store(false);
         // ★ Whatever the leave did, a radio no longer at the boosted rate is not boosted (setSampleRate settles it too).
         g_rateGuard.settled(sampleRate);
     }
@@ -16480,7 +16483,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             double v = 0;
             if (jsonNum(msg, "on", v) && adminGate("the DAB rate boost")) {
                 g_dabRateBoost.store(v != 0, std::memory_order_relaxed);
-                vsPersist(std::string("{\"dabRateBoost\":") + (v != 0 ? "1" : "0") + "}");
+                // ★★ true/false, never 1/0: the daemon's config reader (getBool) takes only the words, so "1"/"0" was
+                //    dropped silently and the switch came back at the next start (found 2026-10-24 by test-rate-guard).
+                vsPersist(std::string("{\"dabRateBoost\":") + (v != 0 ? "true" : "false") + "}");
                 LOGI("DAB rate boost: %s", v != 0 ? "ON (2.048 MS/s while DAB runs)" : "off");
                 sendHwInfo(sock);
             }
@@ -27108,11 +27113,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  at it. Leave the mode and the rate, record it in red; see rateBoostStalled. */
         {
             double bRate = 0; std::string bMode;
-            if (((silent && expectingIq) || captureDown.load()) && !radioReleased.load() && !rateBoostFellBack_.load()
+            // ★ rtl_tcp: its own clock (tcpDataAt), the same 3 s — a remote dongle that falls over at the boost is the
+            //   same fault, and the generic path never calls a network source silent.
+            const double tcpAt = tcpDataAt.load(std::memory_order_relaxed);
+            const bool tcpSilent = useTcp() && tcpAt > 0 && nowSecs() - tcpAt > 3.0;
+            if (((silent && expectingIq) || tcpSilent || captureDown.load()) && !radioReleased.load() && !rateBoostFellBack_.load()
                 && (g_adsbMode.load(std::memory_order_relaxed) || g_dabMode.load(std::memory_order_relaxed))
                 && g_rateGuard.boosted(&bRate, &bMode)) {
-                rateBoostStalled(bRate, bMode, silent ? "the radio stopped delivering samples (no IQ for 3 s)"
-                                                      : "the capture stream stopped");
+                rateBoostStalled(bRate, bMode, (silent || tcpSilent) ? "the radio stopped delivering samples (no IQ for 3 s)"
+                                                                     : "the capture stream stopped");
                 continue;
             }
         }
@@ -27697,6 +27706,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              now - lastData).count();
             if (gapMs >= kStallMs) netStalls.fetch_add(1, std::memory_order_relaxed);
             lastData = now;
+            tcpDataAt.store(nowSecs(), std::memory_order_relaxed);   // ★ the boosted-rate guard's clock — see rateBoostStalled
             int total = carry + got;
             enqueueIq(buf.data(), total / 2, /*blockIfFull=*/true);
             carry = total & 1;                    // keep the trailing half-sample byte
@@ -29482,7 +29492,7 @@ void LocalSdrShim::setRateGuardBase(const std::string& base) {
         g_dabRateBoost.store(false, std::memory_order_relaxed);
         ConfigPersistFn fn;
         { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsConfigPersist; }
-        if (fn) fn("{\"dabRateBoost\":0}"); else g_rateGuardUnpersisted.store(true);
+        if (fn) fn("{\"dabRateBoost\":false}"); else g_rateGuardUnpersisted.store(true);
     }
 }
 std::string LocalSdrShim::rateGuardJson() { return g_rateGuard.json(); }
@@ -30276,7 +30286,7 @@ void LocalSdrShim::setConfigPersistHandler(ConfigPersistFn fn) {
         g_vsConfigPersist = std::move(fn);
         if (g_vsConfigPersist && g_rateGuardUnpersisted.exchange(false)) late = g_vsConfigPersist;
     }
-    if (late) late("{\"dabRateBoost\":0}");   // ★ the crash boot() found — see setRateGuardBase
+    if (late) late("{\"dabRateBoost\":false}");   // ★ the crash boot() found — see setRateGuardBase
 }
 void LocalSdrShim::setVibeServerSavedFrontEnd(int lnaState, int ifGr, int ifAgc) {
     g_vsSavedLna.store(lnaState); g_vsSavedIfGr.store(ifGr); g_vsSavedIfAgc.store(ifAgc);
