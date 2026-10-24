@@ -12868,6 +12868,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::vector<int> adsbGains_;
     int adsbGainIdx_ = -1, adsbGainSet_ = -999;
     double adsbLastReport_ = 0, adsbLastGain_ = 0;
+    double adsbHoldUntil_ = 0; int adsbUpVotes_ = 0;   // the gain rule's hysteresis — see adsbTick
 
     void sendAdsbAll() {
         const std::string r = g_adsb.report();
@@ -12902,6 +12903,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ The radio's own gain list; start three-quarters up it and let the rule find the level
         adsbGains_ = LocalSdrShim::instance().getTunerGains();
         adsbGainIdx_ = -1; adsbGainSet_ = -999;
+        adsbHoldUntil_ = 0; adsbUpVotes_ = 0;
         if (!adsbGains_.empty()) {
             adsbGainIdx_ = int(adsbGains_.size() * 3 / 4);
             adsbGainSet_ = adsbGains_[size_t(adsbGainIdx_)];
@@ -13000,7 +13002,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const int cur = g_gainTarget.load(std::memory_order_relaxed);
         if (cur >= 0 && cur != adsbGainSet_) return;
         const vibeadsb::Health h = g_adsb.health();
-        const int d = vibeadsb::GainRule().decide(h);
+        vibeadsb::GainRule rule;
+        rule.levelHeld = useSdrplay();   // ★ the RSP's IF AGC holds the level — see GainRule::levelHeld
+        int d = rule.decide(h);
+        /* ★★ HYSTERESIS. Deciding afresh every 2 s HUNTED on the FlightAware antenna (live, 2026-10-24): the share of
+         *  near-clipping replies sat at the 5 % line, so 20.7 / 22.9 / 25.4 / 28 dB in turn, a step every 2 s. Down at
+         *  once (clipping costs replies now); then no climb for 30 s, and a climb only after 10 s of asking for it. */
+        if (d < 0) { adsbHoldUntil_ = t + 30.0; adsbUpVotes_ = 0; }
+        else if (d > 0) {
+            if (t < adsbHoldUntil_ || ++adsbUpVotes_ < 5) d = 0;
+            else adsbUpVotes_ = 0;
+        } else adsbUpVotes_ = 0;
         const int next = std::max(0, std::min(int(adsbGains_.size()) - 1, adsbGainIdx_ + d));
         if (next == adsbGainIdx_ && cur >= 0) return;
         adsbGainIdx_ = next;

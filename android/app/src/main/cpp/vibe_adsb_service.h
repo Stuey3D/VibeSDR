@@ -46,6 +46,7 @@ public:
         tracker_.setMaxRangeNm(360);                      // as dump1090-fa: a position further than this is a bad decode
         if (lat == lat && lon == lon) tracker_.setReceiver(lat, lon);
         queue_.clear();
+        queued_ = 0;
         dropped_ = 0;
         t0_ = std::chrono::steady_clock::now();
         winMsgs_ = winStrong_ = 0; lastGood_ = 0; winStart_ = 0;
@@ -73,8 +74,14 @@ public:
         std::vector<std::complex<float>> b(iq, iq + n);
         {
             std::lock_guard<std::mutex> lk(mtx_);
-            if (queue_.size() >= kMaxQueued) { queue_.pop_front(); ++dropped_; }
+            // ★★ BOUNDED IN TIME, NOT IN BLOCKS. A cap of 16 blocks was 8 ms of slack on an RSP, which hands over
+            //    ~2 000 small blocks a second at 3 MS/s — the Lenovo's first live run dropped 64 at once. Half a second
+            //    of capture whatever the block size; past that the OLDEST goes.
+            queued_ += n;
             queue_.push_back(std::move(b));
+            while (queued_ > size_t(rate_ * kMaxQueuedSec) && queue_.size() > 1) {
+                queued_ -= queue_.front().size(); queue_.pop_front(); ++dropped_;
+            }
         }
         cv_.notify_one();
     }
@@ -103,7 +110,7 @@ public:
     }
 
 private:
-    static constexpr size_t kMaxQueued = 16;               // ~0.1–0.4 s of capture, by the radio's block size
+    static constexpr double kMaxQueuedSec = 0.5;           // capture the decoder may fall behind by before dropping
 
     double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count(); }
 
@@ -114,6 +121,7 @@ private:
             while (run_ && !queue_.empty()) {
                 std::vector<std::complex<float>> b = std::move(queue_.front());
                 queue_.pop_front();
+                queued_ -= b.size();
                 Demod* d = demod_.get();
                 lk.unlock();
                 // ★ The tracker is touched only on this thread and under mtx_ for report(); the demodulator
@@ -149,6 +157,7 @@ private:
     std::unique_ptr<Demod> demod_;
     Tracker tracker_;
     std::deque<std::vector<std::complex<float>>> queue_;
+    size_t queued_ = 0;                                     // samples in queue_
     uint64_t dropped_ = 0;
     std::chrono::steady_clock::time_point t0_;
     uint64_t winMsgs_ = 0, winStrong_ = 0, lastGood_ = 0;
@@ -169,10 +178,15 @@ private:
 struct GainRule {
     double noiseLow = -32, noiseHigh = -22;   ///< dBFS: aim for the noise floor between these
     double strongMax = 0.05;                  ///< more than 5 % of replies within 3 dB of full scale: too hot
+    /** ★★ THE RADIO HOLDS THE LEVEL ITSELF (an SDRplay: our gain picks the LNA state and its IF AGC stays on). The
+     *  noise floor then does not follow the gain — the Lenovo's RSP sat at −43 dBFS while the rule climbed 37 → 49 dB
+     *  for nothing. Such a radio only ever steps DOWN, when replies clip; it never climbs past where it started. */
+    bool levelHeld = false;
 
     /** -1 = step down, +1 = step up, 0 = stay. */
     int decide(const Health& h) const {
         if (!h.valid) return 0;
+        if (levelHeld) return h.strongFrac > strongMax ? -1 : 0;
         if (h.strongFrac > strongMax || h.noiseDbfs > noiseHigh) return -1;
         if (h.noiseDbfs < noiseLow && h.strongFrac < strongMax / 4) return +1;
         return 0;
