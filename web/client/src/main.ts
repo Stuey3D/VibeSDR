@@ -12,7 +12,7 @@ import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
-import { adsbListHtml, adsbStatus, adsbOnMap, cleanHex, AdsbMap } from './adsb';
+import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, cleanHex, AdsbMap } from './adsb';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -7670,6 +7670,8 @@ let adsbReport: AdsbReport | null = null;
 let adsbPendingMode: SDRMode | null = null;
 let adsbListLast = '';
 let adsbMap: AdsbMap | null = null;
+/** The furthest aircraft's address, for the top bar's FURTHEST key (adsbRender). */
+let adsbFarHex = '';
 /** ★ The map is covering the page: renderFrame skips the waterfall, trace, scale and band strip. */
 let adsbViewUp = false;
 /** The row last tapped — kept lit across the once-a-second redraws while it is still in the list. */
@@ -7903,6 +7905,13 @@ function adsbRender() {
   if (!adsbOn) return;
   $('adsbCnt').textContent = adsbReport ? String(adsbOnMap(adsbReport)) : '…';
   $('adsbStat').textContent = adsbStatus(adsbReport);
+  {
+    const far = adsbFurthest(adsbReport, myPos()), b = $('adsbFar') as HTMLButtonElement;
+    adsbFarHex = far ? far.hex : '';
+    const h = adsbFurthestHtml(far);
+    if (b.innerHTML !== h) b.innerHTML = h;
+    b.hidden = !far;
+  }
   $('adsbLiveN').textContent = adsbReport ? String(adsbReport.aircraft.length) : '';
   const el = $('adsbList');
   const html = adsbListHtml(adsbReport, myPos());
@@ -8232,6 +8241,7 @@ function buildControls() {
   /* ★ ADS-B's map view: EXIT ADS-B (the whole way out, as EXIT DAB), CHAT (the card's key is under the map),
    *  the list's head (collapse / open) and its rows (that aircraft on the map). */
   $('adsbExit').onclick = () => adsbSetMode(false);
+  $('adsbFar').onclick = () => { if (adsbFarHex) adsbMap?.focus(adsbFarHex); };
   $('adsbChat').onclick = () => { if (!($('mChat') as HTMLButtonElement).disabled) { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); adsbSyncChat(); } };
   $('adsbLiveHead').onclick = () => adsbSetListMin(!$('adsbLive').classList.contains('min'));
   $('adsbLegendBtn').onclick = () => { const on = !!adsbMap?.toggleLegend(); $('adsbLegendBtn').classList.toggle('on', on); };

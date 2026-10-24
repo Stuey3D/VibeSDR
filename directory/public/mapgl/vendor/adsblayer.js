@@ -411,11 +411,14 @@
     regional: hfdlJet(0.82),
     b757: hfdlJet(1.1, { slim: true, long: true }),
     heavy: hfdlJet(1.3, { engines: true }),
+    /* ★ A Cessna's proportions from above: wing 11 m, tailplane 3.4 m, propeller 1.9 m. The prop was 7 of the
+     *  wing's 24 against a 9 tail, and read as a second tailplane on the nose (Stuart, 2026-10-24: "the propellor is
+     *  almost as big as the tail, this looked really odd"). Now ~a sixth of the wing, half the tail, at the nose. */
     light: [
       { f: ell(20, 21, 1.8, 7) },
       { f: 'M8,17.5H32V20.5H8Z' },
-      { f: 'M15.5,26.5H24.5V28.5H15.5Z' },
-      { s: 'M16.5,13.2H23.5', w: 1.4 },
+      { f: 'M16,26.5H24V28.5H16Z' },
+      { s: 'M18,13.6H22', w: 1.1 },
     ],
     fighter: [
       { f: 'M20,5L23,17L31,27L31,29L22.5,27L21.5,31L18.5,31L17.5,27L9,29L9,27L17,17Z' },

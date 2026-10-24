@@ -95,6 +95,27 @@ export function adsbStatus(r: AdsbReport | null): string {
   return `${r.aircraft.length} heard${r1}`;
 }
 
+/** ★★ THE FURTHEST AIRCRAFT (Stuart, 2026-10-24: "We could put a Furthest aircraft here") — the located aircraft
+ *  farthest from the receiver, for the top bar's key (tap = show it on the map). null without a receiver position or
+ *  a located aircraft. ONE RULE, TWO READERS: the app's MapOverlay page (__adsbPush) picks it the same way. */
+export function adsbFurthest(r: AdsbReport | null, rx: LatLon | null): { hex: string; nm: number; name: string } | null {
+  if (!r || !rx) return null;
+  let best: { hex: string; nm: number; name: string } | null = null;
+  for (const a of r.aircraft) {
+    const lat = num(a.lat), lon = num(a.lon), hex = cleanHex(a.hex);
+    if (lat == null || lon == null || !hex) continue;
+    const nm = rangeBearing(rx, lat, lon).nm;
+    if (!best || nm > best.nm) best = { hex, nm, name: String(a.flight || '').trim() || hex.toUpperCase() };
+  }
+  return best;
+}
+/** "FURTHEST 182 NM · RYR12K" — the name goes on a phone (CSS), the distance never does. */
+export function adsbFurthestHtml(f: { nm: number; name: string } | null): string {
+  if (!f) return '';
+  const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  return `<span class="k">FURTHEST</span> ${Math.round(f.nm)} NM<span class="n"> · ${esc(f.name)}</span>`;
+}
+
 /** ★ The list, nearest first when the receiver's position is known (the app's AircraftPanel order),
  *  else the most recently heard first. Aircraft without a position sort after the located ones. */
 export function adsbRows(r: AdsbReport, rx: LatLon | null) {
