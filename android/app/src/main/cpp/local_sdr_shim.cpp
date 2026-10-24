@@ -13785,8 +13785,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void sendClientAudio(ClientDsp* c, const std::shared_ptr<net::Socket>& sock,
                          const int16_t* pcm, int count, int ch) {
         if (count <= 0) return;
-        // ★ Same rule for the per-client path — see dabInject_.
+        // ★ Same rule for the per-client path — see dabInject_. And ADS-B — see onAudio.
         if (g_dabMode.load(std::memory_order_relaxed) && !dabInject_) return;
+        if (g_adsbMode.load(std::memory_order_relaxed)) return;
         std::vector<int16_t> monoBuf;
         if (c->forceMono && ch == 2) {
             monoBuf.resize((size_t)count);
@@ -13979,6 +13980,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (count <= 0) return;
         // ★ FM demodulated from a DAB block reaches nobody — see dabInject_.
         if (g_dabMode.load(std::memory_order_relaxed) && !dabInject_) return;
+        /* ★★ NOR DOES ANYTHING DEMODULATED AT 1090 MHz (Stuart, 2026-10-24: "in ADSB mode the audio needs to be
+         *  muted"). The chain still runs for the spectrum, so it made audio — loud noise — and both senders passed it
+         *  on. The clients already expect silence here (VibeServerClient.adsb holds the native self-heal for it), so
+         *  nothing is sent at all, as in DAB between services. */
+        if (g_adsbMode.load(std::memory_order_relaxed)) return;
         {
             for (int i = 0; i < count; i++) { audit.note(data[i].l); if (ch == 2) audit.note(data[i].r); }
             char line[160];

@@ -9,12 +9,14 @@ T=$(mktemp -d); echo '{}' > "$T/config.json"; mkdir -p "$T/data"
 node vibeserver/fake-rtl-tcp.mjs --port 47331 --rate 2400000 --adsb "$VIBE_ADSB_CLIP" > "$T/fake.log" 2>&1 & RTL=$!
 sleep 1
 VIBESERVER_CONFIG="$T/config.json" VIBESERVER_DATA_DIR="$T/data" nice -n 19 vibeserver/build/vibeserver \
-  --tcp 127.0.0.1:47331 --port 47332 --rate 2400000 --freq 96100000 > "$T/server.log" 2>&1 & SRV=$!
+  --tcp 127.0.0.1:47331 --port 47332 --rate 2400000 --freq 96100000 ${VIBE_ADSB_EXTRA:-} > "$T/server.log" 2>&1 & SRV=$!
 for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:47332/ && break; sleep 0.5; done
 OUT=$(node scripts/probe-adsb-mode.mjs http://127.0.0.1:47332)
 kill $SRV $RTL 2>/dev/null
 echo "$OUT"
 echo "$OUT" | grep -q "adsb = true" && echo "$OUT" | grep -q "adsb_off true after: centre 96100000" \
+  && echo "$OUT" | grep -q "audio before ADS-B flowing" && echo "$OUT" | grep -q "audio during ADS-B 0 bytes" \
+  && echo "$OUT" | grep -q "audio after ADS-B flowing" \
   && grep -q "tune ignored — ADS-B owns the receiver" "$T/server.log" \
   && [ "$(echo "$OUT" | sed -n 's/.*aircraft \([0-9]*\) with pos.*/\1/p' | tail -1)" -gt 50 ] \
   && { echo "test-adsb-mode: ok"; rm -rf "$T"; exit 0; }
