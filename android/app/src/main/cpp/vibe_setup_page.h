@@ -1599,14 +1599,32 @@ body.wifiFirst .wifiFirstOnly { display: block; }
            dabRateBoost per radio for weeks and the phone app's server screen has the switch; this
            page did not, so a Linux receiver pinned below 2.048 MS/s — exactly what a slow box is
            told to do — could not offer DAB at all. -->
+      <!-- ★★★ NOW THE GENERAL SWITCH (Stuart, 2026-10-24: "there should be a check box to change the rate to the
+           required rate for the demodulator for DAB and ADSB and any other modes that need it"). Same config key,
+           dabRateBoost, so every saved server keeps its choice. Ticked: DAB takes 2.048 MS/s and ADS-B 2.4 (an RSP
+           3 MS/s), each giving the base rate back when it ends. Unticked: a mode is offered only if the rate above
+           already suffices. ★ Off by default ON PURPOSE — a live rate change is the 32-bit teardown hazard. -->
       <label class="row" id="dabRateBoostRow" style="gap:8px;margin-top:10px">
         <input type="checkbox" id="dabRateBoost" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Let DAB borrow 2.048 MS/s while it plays</span></label>
+        <span>Change the sample rate when a mode needs it</span></label>
       <div class="note" id="dabRateBoostNo" style="display:none">Not possible on this radio &mdash; it cannot
-         reach 2.048 MS/s, so it cannot receive DAB at all.</div>
-      <div class="note" id="dabRateBoostNote">DAB needs a 2.048 MHz span. Ticked, a listener who chooses DAB gets it even
-         when the span above is narrower or locked; the radio goes back to this span when DAB ends.
-         Worth it on a small machine run at 1.024 MS/s to keep FM light.</div>
+         reach 2.048 MS/s, so it cannot receive DAB or ADS-B at all.</div>
+      <div class="note" id="dabRateBoostNote">DAB needs 2.048 MS/s and ADS-B 2.4 MS/s. Ticked, a listener who chooses
+         one gets it even when the span above is narrower or locked, and the radio goes back to this span when the
+         mode ends. Unticked, a mode is offered only when this span is already enough. Worth it on a small machine
+         run at 1.024 MS/s to keep FM light.</div>
+      <!-- ★★ ADS-B AT 3.2 MS/s — AN RTL ONLY, NEVER THE DEFAULT (Stuart: "for RTLs an option to boost to 3.2 MS/s
+           with the warnings … never by default but as an option for the person after the extreme performance").
+           Measured on his sky: 19 % more messages than 2.4. HIDDEN on every other radio (AGENTS.md — a control
+           that only works on one radio is not drawn on the others: an RSP or HackRF takes 3 MS/s anyway), and
+           greyed until the switch above is ticked, because without it ADS-B never changes the rate at all. -->
+      <div id="adsbExtremeBox" class="hide">
+      <label class="row" id="adsbExtremeRow" style="gap:8px;margin-top:10px;margin-left:24px">
+        <input type="checkbox" id="adsbExtreme" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>ADS-B at 3.2 MS/s (extreme)</span></label>
+      <div class="note" id="adsbExtremeNote" style="margin-left:24px">May hear more aircraft, but needs more CPU, an RTL
+         may drop samples at 3.2 MS/s and the dongle runs hotter. Needs the switch above.</div>
+      </div>
       <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
            the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
            (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
@@ -3240,13 +3258,8 @@ function renderGain() {
   // ★★ GREYED WHERE IT CANNOT HAPPEN (Stuart, 2026-10-10): the Airspy HF+ tops out at 912 kS/s, so
   //    "let DAB borrow 2.048 MS/s" is a promise it cannot keep. Same test as the DAB landing choice:
   //    the running radio's own answer, else its driver.
-  { const can = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
-    $("dabRateBoost").disabled = !can;
-    $("dabRateBoost").checked = can && !!r.dabRateBoost;
-    fpsShow(r);
-    $("dabRateBoostRow").style.opacity = can ? "" : "0.45";
-    $("dabRateBoostNote").style.display = can ? "" : "none";
-    $("dabRateBoostNo").style.display = can ? "none" : ""; }
+  modeRateShow(r);
+  fpsShow(r);
   $("dabScanLabels").value = String(r.dabScanLabels === 0 || r.dabScanLabels === 1 ? r.dabScanLabels : -1);
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
@@ -3550,6 +3563,26 @@ function rspCaps(hw, r) {
  *  only writes this radio's rate on a change — see the "change" handler). Rebuilt per radio tab, so one radio's odd value
  *  never appears on another's menu. ★ The rate shown is the one the server RUNS: fftRate under the maxFps ceiling;
  *  both unset (0) is the server default — Default · 10 since 2026-10-20 (it was Full · 20). */
+/** ★★ The rate switch ("change the sample rate when a mode needs it", config key dabRateBoost) and, beneath it,
+ *  the RTL-only ADS-B 3.2 MS/s option. Its own function so scripts/test-setup-mode-rate.mjs runs the real thing.
+ *  ★ `can`: the running radio's own answer, else its driver — the Airspy HF+ tops out at 912 kS/s. */
+function modeRateShow(r) {
+  const can = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
+  $("dabRateBoost").disabled = !can;
+  $("dabRateBoost").checked = can && !!r.dabRateBoost;
+  $("dabRateBoostRow").style.opacity = can ? "" : "0.45";
+  $("dabRateBoostNote").style.display = can ? "" : "none";
+  $("dabRateBoostNo").style.display = can ? "none" : "";
+  // ★ RTL only — a local dongle ("rtl"/"rtlsdr") or one read over rtl_tcp. The flag is kept in the config either
+  //   way (the server ignores it off an RTL); only the control is not drawn where it cannot act.
+  const drv = String(r.driver || "");
+  const rtl = drv === "rtl" || drv === "rtlsdr" || drv === "rtl_tcp" || drv === "rtltcp";
+  $("adsbExtremeBox").classList.toggle("hide", !(can && rtl));
+  const live = can && rtl && $("dabRateBoost").checked;
+  $("adsbExtreme").disabled = !live;
+  $("adsbExtreme").checked = !!r.adsbExtreme;
+  $("adsbExtremeRow").style.opacity = live ? "" : "0.45";
+}
 function fpsShow(r) {
   const sel = $("maxFps");
   for (const o of [...sel.options]) if (o.value !== "5" && o.value !== "10" && o.value !== "20") o.remove();
@@ -5161,7 +5194,9 @@ function fill() {
       !((radio().driver || "") === "hackrf" && $("gainLock").checked));
   });
   $("rateLock").addEventListener("change", () => { radio().rateLock = $("rateLock").checked; });
-  $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; });
+  // ★ The switch re-draws the extreme option beneath it, which is live only while the switch is ticked.
+  $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; modeRateShow(radio()); });
+  $("adsbExtreme").addEventListener("change", () => { radio().adsbExtreme = $("adsbExtreme").checked; });
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {
     const v = parseFloat($("maxFps").value) || 10; radio().maxFps = v; radio().fftRate = v; });
