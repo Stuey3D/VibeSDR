@@ -303,11 +303,11 @@ object VibeLocalSDR {
     private external fun nativeSetTuneLimits(allowCsv: String, blockCsv: String)
 
     /** The rate switch — "change the sample rate when a mode needs it" (DAB 2.048, ADS-B 2.4; config key dabRateBoost),
-     *  and the modes/decoders switched off. */
-    fun setDabPolicy(rateBoost: Boolean, blockedCsv: String) {
-        ensureLoaded(); nativeSetDabPolicy(rateBoost, blockedCsv)
+     *  ADS-B at 2.56 MS/s on an RTL (adsb256 — only acts with the switch on), and the modes/decoders switched off. */
+    fun setDabPolicy(rateBoost: Boolean, adsb256: Boolean, blockedCsv: String) {
+        ensureLoaded(); nativeSetDabPolicy(rateBoost, adsb256, blockedCsv)
     }
-    private external fun nativeSetDabPolicy(rateBoost: Boolean, blockedCsv: String)
+    private external fun nativeSetDabPolicy(rateBoost: Boolean, adsb256: Boolean, blockedCsv: String)
     /** ★★★ A radio that fell over at a rate a mode boosted to (vibe_rate_guard.h) — <base>.json / <base>.marker in the
      *  files dir. Set BEFORE setDabPolicy (VibeServerBoot): a run that died there turns the rate switch off. */
     fun setRateGuardBase(base: String) { ensureLoaded(); nativeSetRateGuardBase(base) }

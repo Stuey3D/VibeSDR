@@ -221,6 +221,7 @@ struct Opts {
     std::string gainCurves;              // Airspy R2/Mini curve per limited band: 0 linearity, 1 sensitivity
     bool        rateLock = false;        // the sample rate is PINNED, not merely capped
     bool        dabRateBoost = false;    // DAB may borrow 2.048 MS/s — see Config::dabRateBoost
+    bool        adsb256 = false;     // ADS-B at 2.56 MS/s on an RTL — see Config::adsb256
     int         rawIq = 0, rawIqMax = 0; // raw IQ out — see RadioConfig::rawIq
     int         rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling — see RadioConfig::rawIqLanMaxHz
     int         nbWide = 1;              // wide impulse blanker — see RadioConfig::nbWide
@@ -619,7 +620,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.ifBwLimits = c.ifBwLimits;
     o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
     o.ifGrLimits = c.ifGrLimits; o.gainSplits = c.gainSplits; o.gainCurves = c.gainCurves;
-    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanMaxHz = c.rawIqLanMaxHz; o.nbWide = c.nbWide;
+    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.adsb256 = c.adsb256; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanMaxHz = c.rawIqLanMaxHz; o.nbWide = c.nbWide;
     o.blockedModes = c.blockedModes;
     o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
     o.adminIdleMin    = c.adminIdleMin;
@@ -667,7 +668,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.ifBwLimits = o.ifBwLimits;
     c.gainLock = o.gainLock; c.gainLocks = o.gainLocks;
     c.ifGrLimits = o.ifGrLimits; c.gainSplits = o.gainSplits; c.gainCurves = o.gainCurves;
-    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanMaxHz = o.rawIqLanMaxHz; c.nbWide = o.nbWide;
+    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.adsb256 = o.adsb256; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanMaxHz = o.rawIqLanMaxHz; c.nbWide = o.nbWide;
     c.blockedModes = o.blockedModes;
     c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
     c.adminIdleMin    = o.adminIdleMin;
@@ -1917,6 +1918,7 @@ int main(int argc, char** argv) {
         LocalSdrShim::setRateGuardBase(vsBenchDir() + "/rate-guard-" + (tag.empty() ? std::string("radio") : tag));
     }
     LocalSdrShim::setVibeServerDabRateBoost(o.dabRateBoost);
+    LocalSdrShim::setVibeServerAdsb256(o.adsb256);
     LocalSdrShim::setVibeServerRawIq(o.rawIq, o.rawIqMax, o.rawIqLanMaxHz);
     LocalSdrShim::setVibeServerNbWide(o.nbWide);
     LocalSdrShim::setVibeServerBlockedModes(o.blockedModes);
@@ -3275,7 +3277,7 @@ int main(int argc, char** argv) {
             r.idleGrace = next.idleGrace;
             r.rfNotch = next.rfNotch; r.dabNotch = next.dabNotch; r.zoomSpectrum = next.zoomSpectrum;
             r.biasT = next.biasT; r.ppm = next.ppm; r.ppb = next.ppb;
-            r.directSampling = next.directSampling; r.dabRateBoost = next.dabRateBoost;
+            r.directSampling = next.directSampling; r.dabRateBoost = next.dabRateBoost; r.adsb256 = next.adsb256;
             r.rawIq = next.rawIq; r.rawIqMax = next.rawIqMax; r.rawIqLanMaxHz = next.rawIqLanMaxHz; r.nbWide = next.nbWide;
             r.blockedModes = next.blockedModes;
             r.antennaPort = next.antennaPort;   // ★ a listener's/admin's socket choice — was never folded (found 2026-10-09)

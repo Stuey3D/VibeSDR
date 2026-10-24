@@ -1425,8 +1425,11 @@ static std::atomic<bool>   g_dabRateBoost{false};
 static vibe::RateGuard     g_rateGuard;
 /** ★ Set when boot() found a crash before the persist handler existed — see setConfigPersistHandler. */
 static std::atomic<bool>   g_rateGuardUnpersisted{false};
-/* ✗ ADS-B AT 3.2 MS/s ON AN RTL ("extreme") was offered in beta9/10 and REMOVED (Stuart, 2026-10-24): on the Pi 2 it
- *  dropped samples and heard far fewer aircraft, not more. An RTL runs ADS-B at 2.4 MS/s; an RSP at 3 MS/s. */
+/* ★★ ADS-B AT 2.56 MS/s ON AN RTL (Stuart, 2026-10-24: "a simple use 2.56MSPS sample rate for ADSB (May Drop some
+ *  Samples)") — the rate his OpenWebRX ADS-B profile ran this V4L at. Never the default; an owner's switch of its own,
+ *  not tied to the rate switch (the switch IS the owner allowing ADS-B this rate). Other radios ignore it.
+ *  ✗ 3.2 MS/s ("extreme", beta9/10) stays removed: on the Pi 2 it dropped samples and heard far fewer aircraft. */
+static std::atomic<bool>   g_adsb256{false};
 /** Set by dabRestore(); consumed by the DSP loop once any pending rebuild has landed. */
 static std::atomic<bool>   g_dabRetuneAfterRebuild{false};
 
@@ -12953,9 +12956,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     /** The rate ADS-B runs at. ★ Without the owner's switch: whatever the radio already runs (vsAdsbWhyNot has made sure
      *  it is enough). With it: the current rate if that is already 2.4 MS/s or more (Stuart's RSP1A at 3 MS/s — no
-     *  change, no rebuild), else the radio's smallest rate at or above 2.4 MS/s, an RSP taking 3 MS/s. */
+     *  change, no rebuild), else the radio's smallest rate at or above 2.4 MS/s, an RSP taking 3 MS/s. An RTL with the
+     *  owner's 2.56 MS/s switch (g_adsb256) takes 2.56 whatever it was on — unless a run fell over at a boosted rate
+     *  (vibe_rate_guard.h), which holds it at the radio's own until the owner clears it. */
     double adsbTargetRate() {
         const double cur = sampleRate;
+        const bool rtl = dev != nullptr || useTcp();
+        if (rtl && g_adsb256.load(std::memory_order_relaxed) && !g_rateGuard.blocked()) return 2.56e6;
         if (!g_dabRateBoost.load(std::memory_order_relaxed)) return cur;
         if (cur >= vibeadsb::Service::kMinRateHz) return cur;
         if (useSdrplay()) return 3.0e6;
@@ -16640,6 +16647,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             double hz = 0;
             if (jsonNum(msg, "hz", hz) && hz > 0)
                 handleControl(sock, "{\"type\":\"tune\",\"frequency\":" + std::to_string((long long)hz) + "}");
+            return;
+        }
+        if (type == "adsb256") {
+            double v = 0;
+            if (jsonNum(msg, "on", v) && adminGate("ADS-B at 2.56 MS/s")) {
+                g_adsb256.store(v != 0, std::memory_order_relaxed);
+                vsPersist(std::string("{\"adsb256\":") + (v != 0 ? "1" : "0") + "}");
+                LOGI("ADS-B at 2.56 MS/s (RTL): %s", v != 0 ? "ON" : "off");
+                sendHwInfo(sock);
+            }
             return;
         }
         if (type == "dabBoost") {
@@ -29861,6 +29878,7 @@ void LocalSdrShim::setRateGuardBase(const std::string& base) {
 }
 std::string LocalSdrShim::rateGuardJson() { return g_rateGuard.json(); }
 void LocalSdrShim::rateGuardClear() { g_rateGuard.clear(); }
+void LocalSdrShim::setVibeServerAdsb256(bool on) { g_adsb256.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerNbWide(int mode) {
     g_vsNbWide.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
     LOGI("wide impulse blanker: %s", mode == 0 ? "off" : mode == 2 ? "on" : "auto (below 30 MHz)");
@@ -30173,7 +30191,8 @@ static std::string vsTunableJson() {
         const bool useful = hwMax >= vibedab::kCanonicalRateHz && eff < vibedab::kCanonicalRateHz;
         j += std::string(",\"dabBoost\":") + (g_dabRateBoost.load(std::memory_order_relaxed) ? "true" : "false");
         j += std::string(",\"dabBoostUseful\":") + (useful ? "true" : "false");
-        // ★ The same switch serves ADS-B (and any later mode with a rate of its own)
+        // ★ The same switch serves ADS-B (and any later mode with a rate of its own); ADS-B at 2.56 MS/s is its own switch, RTLs only
+        j += std::string(",\"adsb256\":") + (g_adsb256.load(std::memory_order_relaxed) ? "true" : "false");
     }
     /* ★★★ DIRECT SAMPLING, SAID OUT LOUD (Stuart, 2026-09-20). Two different questions, both answered here:
      *  ★★ `autoDs` — does this receiver reach HF BY ITSELF? On a Nooelec and its kin, everything below the

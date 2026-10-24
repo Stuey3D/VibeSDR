@@ -340,7 +340,7 @@ object VibeServerBoot {
              *  not offer WFM whether or not its owner has opened the Advanced pane. */
             // ★★ A radio that fell over at a boosted rate — FIRST: a run that died there turns the rate switch off below.
             VibeLocalSDR.setRateGuardBase(rateGuardBase(filesDir))
-            VibeLocalSDR.setDabPolicy(cfg.b("dabRateBoost", false), cfg.s("blockedModes"))
+            VibeLocalSDR.setDabPolicy(cfg.b("dabRateBoost", false), cfg.b("adsb256", false), cfg.s("blockedModes"))
             // ★ Absent = -1 = the build's default, so the main app (which never sends it) is unchanged.
             VibeLocalSDR.setDabScanLabels(cfg.i("dabScanLabels", -1))
             // ★ Raw IQ out — the owner's mode and cap, same source as every other setting here.

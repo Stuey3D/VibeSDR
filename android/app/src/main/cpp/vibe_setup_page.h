@@ -1648,6 +1648,16 @@ body.wifiFirst .wifiFirstOnly { display: block; }
          one gets it even when the span above is narrower or locked, and the radio goes back to this span when the
          mode ends. Unticked, a mode is offered only when this span is already enough. Worth it on a small machine
          run at 1.024 MS/s to keep FM light.</div>
+      <!-- ★★ ADS-B AT 2.56 MS/s — AN RTL ONLY, NEVER THE DEFAULT (Stuart, 2026-10-24: "a simple use 2.56MSPS sample
+           rate for ADSB (May Drop some Samples)" — his OpenWebRX ADS-B rate). HIDDEN on every other radio (AGENTS.md:
+           an RSP or HackRF takes 3 MS/s anyway). Its own switch: it does not need the one above. -->
+      <div id="adsb256Box" class="hide">
+      <label class="row" id="adsb256Row" style="gap:8px;margin-top:10px;margin-left:24px">
+        <input type="checkbox" id="adsb256" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Use 2.56 MS/s sample rate for ADS-B (may drop some samples)</span></label>
+      <div class="note" id="adsb256Note" style="margin-left:24px">ADS-B takes the radio to 2.56 MS/s instead of 2.4,
+         and back when it ends. Watch the capture figure in ADS-B: below 97 % the dongle is dropping samples.</div>
+      </div>
       <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
            the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
            (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
@@ -3656,8 +3666,8 @@ function rspCaps(hw, r) {
  *  only writes this radio's rate on a change — see the "change" handler). Rebuilt per radio tab, so one radio's odd value
  *  never appears on another's menu. ★ The rate shown is the one the server RUNS: fftRate under the maxFps ceiling;
  *  both unset (0) is the server default — Default · 10 since 2026-10-20 (it was Full · 20). */
-/** ★★ The rate switch ("change the sample rate when a mode needs it", config key dabRateBoost).
- *  Its own function so scripts/test-setup-mode-rate.mjs runs the real thing.
+/** ★★ The rate switch ("change the sample rate when a mode needs it", config key dabRateBoost) and, beneath it,
+ *  the RTL-only ADS-B 2.56 MS/s option. Its own function so scripts/test-setup-mode-rate.mjs runs the real thing.
  *  ★ `can`: the running radio's own answer, else its driver — the Airspy HF+ tops out at 912 kS/s. */
 function modeRateShow(r) {
   const can = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
@@ -3666,6 +3676,15 @@ function modeRateShow(r) {
   $("dabRateBoostRow").style.opacity = can ? "" : "0.45";
   $("dabRateBoostNote").style.display = can ? "" : "none";
   $("dabRateBoostNo").style.display = can ? "none" : "";
+  // ★ RTL only — a local dongle ("rtl"/"rtlsdr") or one read over rtl_tcp. The flag is kept in the config either
+  //   way (the server ignores it off an RTL); only the control is not drawn where it cannot act.
+  const drv = String(r.driver || "");
+  const rtl = drv === "rtl" || drv === "rtlsdr" || drv === "rtl_tcp" || drv === "rtltcp";
+  $("adsb256Box").classList.toggle("hide", !(can && rtl));
+  const live = can && rtl;
+  $("adsb256").disabled = !live;
+  $("adsb256").checked = !!r.adsb256;
+  $("adsb256Row").style.opacity = live ? "" : "0.45";
   if (typeof rateGuardShow === "function") rateGuardShow();
 }
 /** ★★★ A STALL OR CRASH AT A RATE A MODE BOOSTED TO (HW.rateGuard, vibe_rate_guard.h): the red line, and the switch
@@ -5307,7 +5326,9 @@ function fill() {
       !((radio().driver || "") === "hackrf" && $("gainLock").checked));
   });
   $("rateLock").addEventListener("change", () => { radio().rateLock = $("rateLock").checked; });
-  $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; });
+  // ★ The switch re-draws the option beneath it.
+  $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; modeRateShow(radio()); });
+  $("adsb256").addEventListener("change", () => { radio().adsb256 = $("adsb256").checked; });
   $("rateGuardClear").addEventListener("click", rateGuardClear);
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {
