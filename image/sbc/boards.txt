@@ -1,0 +1,26 @@
+# image/sbc/boards.txt — the boards image/sbc/build.sh knows. One line per board, fields separated by spaces;
+# everything after the eighth field is the board's display name.
+#
+# board    the Armbian board id (dl.armbian.com/<board>/) — also the image's file name
+# family   Armbian's LINUXFAMILY. Boards of one family share the kernel and the whole root filesystem; only U-Boot
+#          (outside the partition) and the device tree differ. See docs/SBC-IMAGES-PLAN.md, "one image per board".
+# arch     the Debian architecture of the image (armhf / arm64)
+# neon     yes = every SoC of the line has NEON: the build REFUSES an ARMv6 (scalar) /usr/bin/vibeserver on it
+# wifi     none | the onboard chip. Decides only what the box does FIRST: with Wi-Fi it raises the open
+#          "VibeServer" setup hotspot; without, it waits on Ethernet at vibeserversetup.local:48000. Both always work.
+# ram_mb   the smallest RAM the board ships with
+# channel  stable = an Armbian "supported" image; community = an Armbian community (trunk) build only
+# status   prototype = built by image/sbc and checked under emulation; planned = in the plan, not built yet
+#
+#board          family           arch   neon wifi        ram_mb channel   status    name
+orangepione     sunxi            armhf  yes  none        512    stable    prototype Orange Pi One (Allwinner H3)
+orangepipc      sunxi            armhf  yes  none        1024   community planned   Orange Pi PC (Allwinner H3)
+orangepilite    sunxi            armhf  yes  rtl8189ftv  512    community planned   Orange Pi Lite (Allwinner H3)
+orangepizero    sunxi            armhf  yes  xr819       256    community planned   Orange Pi Zero / Soft66IP (Allwinner H2+)
+nanopineo       sunxi            armhf  yes  none        256    community planned   NanoPi NEO (Allwinner H3)
+orangepizero3   sunxi64          arm64  yes  uwe5622     1024   community planned   Orange Pi Zero 3 (Allwinner H618)
+orangepizero2w  sunxi64          arm64  yes  uwe5622     1024   community planned   Orange Pi Zero 2W (Allwinner H618)
+lepotato        meson64          arm64  yes  none        1024   stable    planned   Libre Computer Le Potato (Amlogic S905X)
+orangepi5       rockchip-rk3588  arm64  yes  none        4096   stable    planned   Orange Pi 5 (Rockchip RK3588S)
+rock-5b         rockchip-rk3588  arm64  yes  none        4096   stable    planned   Radxa ROCK 5B (Rockchip RK3588)
+odroidxu4       odroidxu4        armhf  yes  none        2048   stable    planned   ODROID-XU4 (Samsung Exynos 5422)

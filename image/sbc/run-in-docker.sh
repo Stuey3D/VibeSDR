@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# image/sbc/run-in-docker.sh — run build.sh in a throwaway privileged Debian container on a Linux Docker host
+# (the Lenovo build box, 192.168.86.13), so nothing is installed on the host itself.
+#
+#   image/sbc/run-in-docker.sh <board> <base.img.xz> <output-dir>     (env passes through: VIBESERVER_DEB COUNTRY NO_MAPS KEEP_WORK)
+#
+# ★★ CPU: --cpus 2 and nice -n 19 inside (build.sh), xz -T2. ONE build at a time — the script refuses to start while
+#    another container from this script is running on the host.
+# ★★ THE HOST IS NOT CHANGED. --privileged is needed for loop devices and binfmt_misc; build.sh registers its qemu
+#    binfmt entry only if none exists, and removes it at exit. No AppArmor change, no package on the host.
+# ★ The repository is mounted read-only; only <output-dir> (and the base image's directory, read-only) is shared.
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+BOARD="${1:?usage: run-in-docker.sh <board> <base.img.xz> <output-dir>}"
+BASE="$(cd "$(dirname "${2:?base image}")" && pwd)/$(basename "$2")"
+mkdir -p "${3:?output dir}"; OUT="$(cd "$3" && pwd)"
+[ -f "$BASE" ] || { echo "no $BASE"; exit 1; }
+if [ -n "$(docker ps -q --filter label=vibesdr-sbc-build)" ]; then
+  echo "!! another image/sbc build is running on this host — one at a time"; exit 1
+fi
+DEBMNT=(); DEBENV=()
+if [ -n "${VIBESERVER_DEB:-}" ]; then
+  D="$(cd "$(dirname "$VIBESERVER_DEB")" && pwd)"
+  DEBMNT=(-v "$D":/deb:ro); DEBENV=(-e "VIBESERVER_DEB=/deb/$(basename "$VIBESERVER_DEB")")
+fi
+exec docker run --rm --privileged --cpus 2 --label vibesdr-sbc-build -v /dev:/dev \
+  -v "$REPO":/repo:ro -v "$(dirname "$BASE")":/base:ro -v "$OUT":/out "${DEBMNT[@]}" "${DEBENV[@]}" \
+  -e COUNTRY="${COUNTRY:-GB}" -e NO_MAPS="${NO_MAPS:-0}" -e KEEP_WORK="${KEEP_WORK:-0}" -e IMAGE_VERSION="${IMAGE_VERSION:-1}" \
+  debian:trixie-slim /bin/bash -euo pipefail -c '
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk e2fsprogs util-linux gnupg \
+        binutils qemu-user-static >/dev/null
+    nice -n 19 /repo/image/sbc/build.sh "'"$BOARD"'" "/base/'"$(basename "$BASE")"'" /out
+  '
