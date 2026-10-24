@@ -76,6 +76,8 @@ for (const f of ['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'vibemap-run
 for (const [src, name] of [['web/mapkit/vendor/maplibre-gl.js', 'maplibre-gl.js'], ['web/mapkit/vendor/maplibre-gl.css', 'maplibre-gl.css'],
                            ['web/mapkit/vendor/pmtiles.js', 'pmtiles.js'], ['web/mapkit/vibemapgl.js', 'vibemapgl.js'],
                            ['web/mapkit/vibemapgl-compat.js', 'vibemapgl-compat.js'],
+                           // ★ The ADS-B layer (V12) — gen-adsblayer-source.mjs writes it here too; this wipe must not lose it.
+                           ['web/mapkit/adsblayer.js', 'adsblayer.js'],
                            ['web/mapkit/vendor/LICENSE-maplibre-gl.txt', 'LICENSE-maplibre-gl.txt'], ['web/mapkit/vendor/LICENSE-pmtiles.txt', 'LICENSE-pmtiles.txt']])
   if (existsSync(path.join(root, src))) cpSync(path.join(root, src), path.join(DIR_OUT, 'vendor', name));
 writeFileSync(path.join(DIR_OUT, 'vibemap-style.js'),
