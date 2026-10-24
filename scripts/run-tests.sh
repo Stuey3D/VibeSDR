@@ -907,6 +907,14 @@ printf '\n\033[1m── DAB landing (end to end) ──\033[0m\n'
 node scripts/test-server-dab-landing.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ V12 ADS-B AS THE LANDING + KEEP IT RUNNING (Stuart, 2026-10-24: "a new connection instantly sees a list of planes
+#     and a full map"): in ADS-B with aircraft before anybody connects, a client's list within ~1 s, EXIT to the plain
+#     landing, back into ADS-B when they leave; keep-running off lands the first client; background decoding gives way;
+#     a radio that cannot run ADS-B falls back. Needs VIBESERVER_BIN and VIBE_ADSB_CLIP (exit 3 = not run).
+printf '\n\033[1m── ADS-B landing + keep running (end to end) ──\033[0m\n'
+node scripts/test-server-adsb-landing.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ EXIT DAB STICKS (Stuart, 2026-10-05 23:06, Pi 2: the box "popped up again … over the MW signal"): no
 #     `dab` report after `dab_off` over many cycles, none in reply to a service pick out of DAB, no re-entry,
 #     and the log names who asked. Same VIBESERVER_BIN rule.

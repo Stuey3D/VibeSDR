@@ -734,6 +734,10 @@ public:
      *  see the landing block in the spectrum accept path for the precedence against the remembered
      *  multiplex, and for why a blocked or incapable radio falls back to the plain landing. */
     static void setVibeServerLandingDab(int ch, uint32_t sid);
+    /** ★★★ V12: ADS-B AS THE LANDING (`land`), and KEEP IT RUNNING WHEN NOBODY IS CONNECTED (`keepRunning`, only
+     *  meaningful with `land`). Both ignored where ADS-B cannot run on this radio (vsAdsbWhyNot). See the landing block
+     *  in the spectrum accept path and adsbKeepTick for the precedence against DAB, background decoding and the park. */
+    static void setVibeServerLandingAdsb(bool land, bool keepRunning);
     /** ★ The radio's DISPLAY NAME ("SDR display name" — Linux's `label`), for a host that has no
      *  front door to publish it (Android). Empty = the name from the USB port, exactly as before.
      *  Published in /vibeserver.json as `radioLabel` only when set, so the directory publisher can
