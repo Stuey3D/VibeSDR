@@ -34,6 +34,13 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#define VIBE_ADSB_NEON 1
+#elif defined(__SSE2__) || defined(_M_X64)
+#include <emmintrin.h>
+#define VIBE_ADSB_SSE2 1
+#endif
 
 namespace vibeadsb {
 
@@ -87,9 +94,108 @@ struct Frame {
     uint64_t sample = 0;       ///< position on the fine grid (125 ns units), for ordering
 };
 
+/** |IQ|² for n samples, four at a time.
+ *  ★★★ POWER ALL THE WAY, NO SQUARE ROOTS. The windows add power, not magnitude (an energy detector): on Stuart's
+ *      sky at the FlightAware antenna that heard slightly MORE (26 726 messages vs 26 552, DF17 3 841 vs 3 810, the
+ *      synthetic tests unchanged) for 16 % of a Pi 3 core instead of 18.6 % — 32-bit NEON has no vector square
+ *      root, and a magnitude for every sample was the largest single cost left. */
+inline void power(const std::complex<float>* iq, size_t n, float* pw) {
+    size_t i = 0;
+    const float* f = reinterpret_cast<const float*>(iq);
+#if VIBE_ADSB_NEON
+    for (; i + 4 <= n; i += 4) {
+        const float32x4x2_t v = vld2q_f32(f + 2 * i);
+        vst1q_f32(pw + i, vmlaq_f32(vmulq_f32(v.val[0], v.val[0]), v.val[1], v.val[1]));
+    }
+#elif VIBE_ADSB_SSE2
+    for (; i + 4 <= n; i += 4) {
+        const __m128 a = _mm_loadu_ps(f + 2 * i), b = _mm_loadu_ps(f + 2 * i + 4);
+        const __m128 re = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0)), im = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1));
+        _mm_storeu_ps(pw + i, _mm_add_ps(_mm_mul_ps(re, re), _mm_mul_ps(im, im)));
+    }
+#endif
+    for (; i < n; ++i) pw[i] = f[2 * i] * f[2 * i] + f[2 * i + 1] * f[2 * i + 1];
+}
+
+/** max(p[k], p[k+1]) for n samples — a pulse's power whichever of two samples it smeared into. Stage 1 reads this,
+ *  one load per pulse position instead of two. */
+inline void pairMax(const float* p, size_t n, float* pm) {
+    size_t i = 0;
+#if VIBE_ADSB_NEON
+    for (; i + 4 <= n; i += 4) vst1q_f32(pm + i, vmaxq_f32(vld1q_f32(p + i), vld1q_f32(p + i + 1)));
+#elif VIBE_ADSB_SSE2
+    for (; i + 4 <= n; i += 4) _mm_storeu_ps(pm + i, _mm_max_ps(_mm_loadu_ps(p + i), _mm_loadu_ps(p + i + 1)));
+#endif
+    for (; i < n; ++i) pm[i] = std::max(p[i], p[i + 1]);
+}
+
+/** Stage 1 for samples i..i+3 at once: a bit set for each lane whose four preamble pulse positions (each ± one
+ *  sample: `pm` is pairMax) all reach `thr`. 0 for the overwhelming majority, a few instructions for four. */
+inline unsigned pulseMask4(const float* pm, size_t i, size_t o1, size_t o2, size_t o3, float thr) {
+#if VIBE_ADSB_NEON
+    const float32x4_t t = vdupq_n_f32(thr);
+    auto at = [&](size_t o) { return vcgeq_f32(vld1q_f32(pm + i + o), t); };
+    const uint32x4_t m = vandq_u32(vandq_u32(at(0), at(o1)), vandq_u32(at(o2), at(o3)));
+    const uint32x2_t h = vorr_u32(vget_low_u32(m), vget_high_u32(m));
+    if (!vget_lane_u32(vpmax_u32(h, h), 0)) return 0;
+    return (vgetq_lane_u32(m, 0) & 1) | (vgetq_lane_u32(m, 1) & 2) | (vgetq_lane_u32(m, 2) & 4) | (vgetq_lane_u32(m, 3) & 8);
+#elif VIBE_ADSB_SSE2
+    const __m128 t = _mm_set1_ps(thr);
+    auto at = [&](size_t o) { return _mm_cmpge_ps(_mm_loadu_ps(pm + i + o), t); };
+    return unsigned(_mm_movemask_ps(_mm_and_ps(_mm_and_ps(at(0), at(o1)), _mm_and_ps(at(o2), at(o3)))));
+#else
+    unsigned m = 0;
+    for (unsigned l = 0; l < 4; ++l) {
+        auto at = [&](size_t o) { return pm[i + l + o] >= thr; };
+        if (at(0) && at(o1) && at(o2) && at(o3)) m |= 1u << l;
+    }
+    return m;
+#endif
+}
+
+/** Sixteen candidates (i..i+15): pulseMask4 four times, one answer — see feedPiece. */
+inline unsigned pulseMask16(const float* pm, size_t i, size_t o1, size_t o2, size_t o3, float thr) {
+#if VIBE_ADSB_NEON
+    const float32x4_t t = vdupq_n_f32(thr);
+    auto m4 = [&](size_t j) {
+        auto at = [&](size_t o) { return vcgeq_f32(vld1q_f32(pm + j + o), t); };
+        return vandq_u32(vandq_u32(at(0), at(o1)), vandq_u32(at(o2), at(o3)));
+    };
+    const uint32x4_t a = m4(i), b = m4(i + 4), c = m4(i + 8), d = m4(i + 12);
+    const uint32x4_t any = vorrq_u32(vorrq_u32(a, b), vorrq_u32(c, d));
+    const uint32x2_t h = vorr_u32(vget_low_u32(any), vget_high_u32(any));
+    if (!vget_lane_u32(vpmax_u32(h, h), 0)) return 0;
+    unsigned m = 0;
+    const uint32x4_t v[4] = {a, b, c, d};
+    for (int g = 0; g < 4; ++g) {
+        uint32_t l[4]; vst1q_u32(l, v[g]);
+        for (int k = 0; k < 4; ++k) if (l[k]) m |= 1u << (4 * g + k);
+    }
+    return m;
+#else
+    return pulseMask4(pm, i, o1, o2, o3, thr) | pulseMask4(pm, i + 4, o1, o2, o3, thr) << 4 |
+           pulseMask4(pm, i + 8, o1, o2, o3, thr) << 8 | pulseMask4(pm, i + 12, o1, o2, o3, thr) << 12;
+#endif
+}
+
+/** The sum of 16 floats. */
+inline float sum16(const float* p) {
+#if VIBE_ADSB_NEON
+    const float32x4_t s = vaddq_f32(vaddq_f32(vld1q_f32(p), vld1q_f32(p + 4)), vaddq_f32(vld1q_f32(p + 8), vld1q_f32(p + 12)));
+    const float32x2_t h = vadd_f32(vget_low_f32(s), vget_high_f32(s));
+    return vget_lane_f32(vpadd_f32(h, h), 0);
+#elif VIBE_ADSB_SSE2
+    const __m128 s = _mm_add_ps(_mm_add_ps(_mm_loadu_ps(p), _mm_loadu_ps(p + 4)), _mm_add_ps(_mm_loadu_ps(p + 8), _mm_loadu_ps(p + 12)));
+    float l[4]; _mm_storeu_ps(l, s);
+    return (l[0] + l[1]) + (l[2] + l[3]);
+#else
+    float s = 0; for (int k = 0; k < 16; ++k) s += p[k]; return s;
+#endif
+}
+
 /**
- * PPM demodulation, measured on a FINE grid: every half-bit window (0.5 µs) is the mean |IQ| over it, at
- * four starting points per half-bit (125 ns apart), summed from the capture's magnitude with fractional edges.
+ * PPM demodulation, measured on a FINE grid: every half-bit window (0.5 µs) is the mean |IQ|² over it, at
+ * four starting points per half-bit (125 ns apart), with fractional edges.
  *
  * ★★★ WHY NOT ONE SAMPLE PER HALF-BIT. At exactly 2 MS/s, with a reply that happens to start on a sample,
  *     one sample per half-bit is perfect — and that is the only case. A reply starting half a sample late
@@ -99,8 +205,8 @@ struct Frame {
  *     50/50 — ADS-B mode asks for 2.4 MS/s or more.
  * ★★★ TWO STAGES, FOR THE PI 2. Measuring the fine grid everywhere is 8 million windows a second, nearly all
  *     of them noise: 6.5 % of an M-series core, so most of a Pi 2's. A cheap test on the raw samples first —
- *     four samples above the floor where the four preamble pulses would be — and the fine grid is measured
- *     only around a sample that passes.
+ *     four samples above the floor where the four preamble pulses would be, four candidates at once (NEON /
+ *     SSE2), then the quiet zone — and the fine grid is measured only around a sample that passes.
  * ★★ Where several phases pass the preamble, the checksum chooses: a DF11/17/18 that comes out intact (or one
  *    bit from it) on that phase. An address/parity reply proves itself only by naming an aircraft already
  *    tracked (`known`), or a wrong phase's rubbish would be passed on and the real frame behind it skipped.
@@ -109,8 +215,12 @@ class Demod {
 public:
     explicit Demod(double sampleRate)
         : rate_(sampleRate), h_(sampleRate * 0.5e-6), q_(sampleRate * 0.125e-6),
+          hf_(float(h_)), qf_(float(q_)), invH_(float(1.0 / h_)),
           span_(size_t(std::ceil(sampleRate * 121e-6)) + 4) {
         for (int k = 0; k < 4; ++k) pulseAt_[k] = int(std::lround(kPulseUs[k] * 1e-6 * sampleRate));
+        for (int k = 0; k < 3; ++k) quietAt_[k] = int(std::lround((6.0 + 0.5 * k) * 1e-6 * sampleRate));
+        gapAt_ = int(std::lround(2.5e-6 * sampleRate));
+        lc_.assign(span_ + 8, 0.0f);
     }
 
     bool usable() const { return rate_ >= 1.99e6; }
@@ -127,28 +237,47 @@ public:
     template <class Cb, class Known>
     void feed(const std::complex<float>* iq, size_t n, Cb&& onFrame, Known&& known) {
         if (!usable()) return;
-        // ★★ POWER, NOT MAGNITUDE, PER SAMPLE. A square root on every sample was most of the decoder's cost on
-        //    the Pi 3 (~125 cycles a sample in 32-bit mode); stage 1 compares powers, and only the few samples the
-        //    fine windows read are rooted (win()).
+        // ★★★ IN PIECES THAT FIT THE CACHE. Fed 65 536 samples at a time, the buffers grew to ~2.6 MB — five times
+        //     the Pi 3's L2 — and the SAME sky cost 32 % of a core instead of 6.5 % (every sample a trip to RAM).
+        //     The server hands over whatever block the radio makes, so the decoder must not depend on it.
+        for (size_t o = 0; o < n; o += kPiece) feedPiece(iq + o, std::min(kPiece, n - o), onFrame, known);
+    }
+
+    uint64_t preambles() const { return preambles_; }   ///< preamble-shaped bumps that went on to bit slicing
+    uint64_t triggers() const { return triggers_; }     ///< samples that passed stage 1
+    uint64_t slices() const { return slices_; }         ///< replies sliced (one per phase tried)
+
+private:
+    static constexpr size_t kPiece = 4096;
+
+    template <class Cb, class Known>
+    void feedPiece(const std::complex<float>* iq, size_t n, Cb& onFrame, Known& known) {
+        // ★★ |IQ|², FOUR AT A TIME (power()). A scalar square root on every sample was most of the decoder's cost
+        //    on the Pi 3 (~125 cycles a sample in 32-bit mode).
         const size_t was = pow_.size();
         pow_.resize(was + n);
-        float* pw = pow_.data();
-        for (size_t i = 0; i < n; ++i) pw[was + i] = iq[i].real() * iq[i].real() + iq[i].imag() * iq[i].imag();
+        power(iq, n, pow_.data() + was);
+        if (pow_.size() > 1) {
+            pm_.resize(pow_.size() - 1);
+            pairMax(pow_.data() + pmN_, pm_.size() - pmN_, pm_.data() + pmN_);
+            pmN_ = pm_.size();
+        }
+        const float* pw = pow_.data();
+        const float* pm = pm_.data();
         size_t pos = pos_;
-        const size_t end = pow_.size() > span_ ? pow_.size() - span_ : 0;
+        size_t end = pow_.size() > span_ ? pow_.size() - span_ : 0;
+        end = pos + ((end > pos ? end - pos : 0) & ~size_t(15));  // whole groups of 16: blocks stay aligned
         const size_t o1 = size_t(pulseAt_[1]), o2 = size_t(pulseAt_[2]), o3 = size_t(pulseAt_[3]);
         float np = noiseP_;
-        while (pos < end) {
-            const size_t i = pos++;
-            const float v = pw[i];
+        for (; pos < end; pos += 16) {
             // ★★★ THE NOISE FLOOR = THE QUIETEST OF THE LAST 16 BLOCKS of 256 samples (~1.7 ms at 2.4 MS/s), ×1.1
             //     for the bias of taking a minimum. Two running means came first and both were wrong: one crept up
             //     from nothing (~80 000 samples of stage 2 at every start: two-thirds of the Pi 3 benchmark), and a
             //     clipped one RUNS AWAY once more than a ninth of samples are pulses — busy airspace, or a burst of
             //     replies (test-adsb: 20 % heard). Replies always leave quiet gaps; the quietest block is the floor.
-            if (warm_ < 32) { ++warm_; np += (v - np) / float(warm_); }  // a first guess, until a block is done
-            blockSum_ += v;
-            if (++blockN_ == 256) {
+            if (warm_ < 32) for (size_t l = 0; l < 16 && warm_ < 32; ++l) { ++warm_; np += (pw[pos + l] - np) / float(warm_); }
+            blockSum_ += sum16(pw + pos);
+            if ((blockN_ += 16) == 256) {
                 blocks_[blockAt_++ & 15] = blockSum_ / 256.0f;
                 const int have = std::min<uint32_t>(blockAt_, 16);
                 float lo = blocks_[0];
@@ -156,107 +285,151 @@ public:
                 np = lo * 1.1f;
                 blockSum_ = 0; blockN_ = 0;
             }
-            if (i < skip_ || warm_ < 32) continue;
+            if (warm_ < 32 || pos + 15 < skip_) continue;
             // stage 1: power above the floor at each of the four pulse positions (± a sample for smear) —
-            // 3.8 × the mean noise power is 2.2 × its mean magnitude
+            // 3.8 × the mean noise power is 2.2 × its mean magnitude. ★ Sixteen candidates per answer from the
+            // vector unit: on 32-bit ARM moving a result out of NEON stalls the pipeline, so ask once, not four times.
             const float thr = np * 3.8f;
-            if (std::max(v, pw[i + 1]) < thr) continue;
-            if (std::max(pw[i + o1], pw[i + o1 + 1]) < thr || std::max(pw[i + o2], pw[i + o2 + 1]) < thr ||
-                std::max(pw[i + o3], pw[i + o3 + 1]) < thr) continue;
-            // stage 2: the fine grid around here. ★ The mean noise MAGNITUDE (Rayleigh: √(π/4 · power)) for its
-            //   thresholds, which are in magnitude like the windows.
-            noise_ = std::sqrt(np * 0.785398f);
-            const size_t used = tryAt(double(i) - 1.0, onFrame, known);
-            if (used) skip_ = i + used;
+            unsigned lanes = pulseMask16(pm, pos, o1, o2, o3, thr);
+            for (size_t l = 0; lanes; ++l, lanes >>= 1) {
+                if (!(lanes & 1)) continue;
+                const size_t i = pos + l;
+                if (i < skip_) continue;
+                // ★★★ …AND THE QUIET ZONE (6.0–7.0 µs) AND THE GAP AT 2.5 µs WELL BELOW THE WEAKEST PULSE. Without
+                //     the quiet zone one sample in seven of a real sky passed stage 1 (366 000 a second on Stuart's
+                //     FlightAware antenna: noise near the floor, Mode A/C pulse trains) and the decoder took 3¼ Pi 3
+                //     cores. ★ Only 6.0–7.0 µs: the reply may start a sample after i, and a sample at 5.5 µs then
+                //     caught the last pulse's smear, one at 7.5 µs the first data bit (−8 % of real messages).
+                const float weakest = std::min(std::min(pm[i], pm[i + o1]), std::min(pm[i + o2], pm[i + o3])) * 0.5f;
+                bool quiet = pw[i + size_t(gapAt_)] < weakest;
+                for (int k = 0; k < 3 && quiet; ++k) quiet = pw[i + size_t(quietAt_[k])] < weakest;
+                if (!quiet) continue;
+                // stage 2: the fine grid around here
+                noiseP_ = np;
+                ++triggers_;
+                const size_t used = tryAt(i, onFrame, known);
+                if (used) skip_ = i + used;
+            }
         }
         pos_ = pos;
         noiseP_ = np;
         trim();
     }
 
-    uint64_t preambles() const { return preambles_; }   ///< preamble-shaped bumps that went on to bit slicing
-
-private:
     static constexpr double kPulseUs[4] = {0.0, 1.0, 3.5, 4.5};
     // ★★ RELATIVE, AND LOOSE. Below 2.5 MS/s a 0.5 µs pulse straddles two samples and smears half into the gap
     //    beside it — the receiver's own filtering does the same — so the gaps of a clean preamble sit at 70–90 %
     //    of its pulses, not near zero. The CRC, not this test, is what keeps noise out.
-    static constexpr float kLoMax = 0.92f, kGapMax = 0.85f;
+    static constexpr float kLoMax = 0.85f, kGapMax = 0.72f;   // in power (≈ 0.92², 0.85² in magnitude)
 
-    /** The mean |IQ| over the half-bit starting `fine` steps (125 ns) after x: the samples it covers, the two at
-     *  its edges weighted by how much of them it covers.
-     *  ★ Summed here, only around a trigger — a running integral kept for every sample (a double stored per
-     *    sample) was most of the cost on the Pi 3 for windows that were almost never asked for. */
-    float win(double x, int fine) const {
-        const double a = x + fine * q_, b = a + h_;
-        const size_t ka = size_t(a), kb = size_t(b);
-        const float* m = pow_.data();
-        if (ka == kb) return std::sqrt(m[ka]);
-        float s = std::sqrt(m[ka]) * float(double(ka + 1) - a);
-        for (size_t k = ka + 1; k < kb; ++k) s += std::sqrt(m[k]);
-        s += std::sqrt(m[kb]) * float(b - double(kb));
-        return s / float(h_);
+    /** The mean |IQ|² over the half-bit starting `off` samples after the trigger's i0: two look-ups in the trigger's
+     *  own running sum (lc_), the edge samples weighted by how much of them the window covers.
+     *  ★★ ONE RUNNING SUM PER TRIGGER, BUILT ONLY AS FAR AS ASKED. Summing each window's samples afresh was a third
+     *     of the decoder on the Pi 3 (1.4 million windows a second, nearly all of them slicing); a running sum kept
+     *     for EVERY sample was worse still (a double stored per sample for windows almost never asked for). */
+    float win(float off) const {
+        return (cumAt(off + hf_) - cumAt(off)) * invH_;
     }
+    float cumAt(float x) const {
+        const int k = int(x);                            // x ≥ 0 here
+        if (k + 1 >= lcN_) extend(k + 2);
+        return lc_[size_t(k)] + (x - float(k)) * lm_[k];
+    }
+    float cumFast(float x) const {                       // cumAt, already extended far enough
+        const int k = int(x);
+        return lc_[size_t(k)] + (x - float(k)) * lm_[k];
+    }
+    void extend(int upTo) const {
+        if (upTo > int(lc_.size()) - 1) upTo = int(lc_.size()) - 1;
+        for (int k = lcN_; k < upTo + 1; ++k) lc_[size_t(k)] = lc_[size_t(k - 1)] + lm_[k - 1];
+        lcN_ = std::max(lcN_, upTo + 1);
+    }
+    void startTrigger(size_t i0) const { lm_ = pow_.data() + i0; lc_[0] = 0; lcN_ = 1; }
 
-    /** Does a preamble start at x? Returns its score (pulses minus gaps), or 0. Fine offsets: 4 per half-bit. */
-    float preambleAt(double x, float& hiOut) const {
-        float p[57];
-        for (int k : {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 44, 48, 52, 56}) p[k] = win(x, k);
+    /** Does a preamble start `off` samples after the trigger's i0? Returns its score (pulses minus gaps), or 0. Fine offsets
+     *  (125 ns) via qf_. ★ The first pulse and its neighbours first: most triggers fail there, for 3 windows not 14. */
+    float preambleAt(float off, float& hiOut) const {
+        auto w = [&](int fine) { return win(off + float(fine) * qf_); };
+        const float p0 = w(0), p4 = w(4), p8 = w(8);
+        if (!(p0 > p4 && p8 > p4)) return 0;
+        const float p12 = w(12), p24 = w(24), p28 = w(28), p32 = w(32), p36 = w(36);
         // pulses at 0, 1.0, 3.5, 4.5 µs → fine 0, 8, 28, 36; the half-bits between them must be lower
-        if (!(p[0] > p[4] && p[8] > p[4] && p[8] > p[12] && p[28] > p[24] && p[28] > p[32] && p[36] > p[32])) return 0;
-        const float hi = (p[0] + p[8] + p[28] + p[36]) * 0.25f;
-        if (hi < noise_ * 2.8f) return 0;                // ≈ 9 dB above the floor
-        const float lo = (p[4] + p[12] + p[24] + p[32]) * 0.25f;
+        if (!(p8 > p12 && p28 > p24 && p28 > p32 && p36 > p32)) return 0;
+        const float hi = (p0 + p8 + p28 + p36) * 0.25f;
+        if (hi < noiseP_ * 7.84f) return 0;              // ≈ 9 dB above the floor (power: 2.8²)
+        const float lo = (p4 + p12 + p24 + p32) * 0.25f;
         if (lo > hi * kLoMax) return 0;
-        const float gap = (p[16] + p[20] + p[44] + p[48] + p[52] + p[56]) / 6.0f;   // 2–3 µs and 5.5–7.5 µs
+        const float gap = (w(16) + w(20) + w(44) + w(48) + w(52) + w(56)) / 6.0f;   // 2–3 µs and 5.5–7.5 µs
         if (gap > hi * kGapMax) return 0;
         hiOut = hi;
         return hi - lo - gap;
     }
 
-    Frame slice(double x, float hi) const {
-        Frame f;
-        auto bitAt = [&](int i) { return win(x, 64 + 8 * i) > win(x, 68 + 8 * i); };   // data from 8 µs
-        for (int i = 0; i < 8; ++i) if (bitAt(i)) f.b[0] |= uint8_t(0x80 >> i);
+    /** Slice the reply; false (and stop) as soon as the first byte is not a reply we decode. */
+    bool slice(size_t i0, float off, float hi, Frame& f) const {
+        ++slices_;
+        f = Frame{};
+        // ★★ A bit compares the half-bit [a, a+h) with [a+h, a+2h), and the next bit starts at a+2h: so each bit is
+        //    TWO new look-ups in the running sum (C(a+h), C(a+2h)), not four — 2·C(a+h) > C(a) + C(a+2h). The sum is
+        //    extended to the whole reply once, up front.
+        extend(int(off + float(64 + 8 * 112) * qf_) + 3);
+        float ca = cumFast(off + 64 * qf_);
+        float x = off + 64 * qf_;
+        auto bitNext = [&]() {
+            const float cm = cumFast(x + hf_), cb = cumFast(x + 2 * hf_);
+            const bool one = 2 * cm > ca + cb;
+            ca = cb; x += 2 * hf_;
+            return one;
+        };
+        for (int i = 0; i < 8; ++i) if (bitNext()) f.b[0] |= uint8_t(0x80 >> i);
+        if (!plausibleDf(f.b[0] >> 3)) return false;
         f.len = dfLengthBytes(f.b[0] >> 3);
-        for (int i = 8; i < f.len * 8; ++i) if (bitAt(i)) f.b[i >> 3] |= uint8_t(0x80 >> (i & 7));
+        for (int i = 8; i < f.len * 8; ++i) if (bitNext()) f.b[i >> 3] |= uint8_t(0x80 >> (i & 7));
         f.level = 10.0f * std::log10(std::max(hi * hi, 1e-12f));
-        f.sample = base_ + uint64_t(std::max(0.0, x / q_));
-        return f;
+        f.sample = base_ + uint64_t(std::max(0.0, (double(i0) + off) / q_));
+        return true;
     }
 
-    /** Search the phases from x across the next two samples; returns the samples the reply used, or 0. */
+    /** Search the phases across two samples from one before i; returns the samples the reply used, or 0. */
     template <class Cb, class Known>
-    size_t tryAt(double x0, Cb& onFrame, Known& known) {
-        struct Cand { double x; float score, hi; };
+    size_t tryAt(size_t i, Cb& onFrame, Known& known) {
+        if (i < 1) return 0;
+        const size_t i0 = i - 1;
+        startTrigger(i0);
+        struct Cand { float off, score, hi; };
         Cand c[24]; int nc = 0;
-        for (double x = std::max(x0, 0.0); x < x0 + 2.0 && nc < 24; x += q_) {
-            float h; const float s = preambleAt(x, h);
-            if (s > 0) c[nc++] = {x, s, h};
+        for (float off = 0; off < 2.0f && nc < 24; off += qf_) {
+            float h; const float s = preambleAt(off, h);
+            if (s > 0) c[nc++] = {off, s, h};
         }
         if (!nc) return 0;
         ++preambles_;
         std::sort(c, c + nc, [](const Cand& a, const Cand& b) { return a.score > b.score; });
-        for (int i = 0; i < std::min(nc, 8); ++i) {
-            Frame f = slice(c[i].x, c[i].hi);
+        Frame f;
+        // ★★ The best four phases. Two (the best, and the best ≥ 250 ns from it) cost 4 % of a real sky's messages
+        //    on the Pi 3 for 2 % of a core; with the running sum a slicing is cheap enough to keep the other two.
+        for (int k = 0; k < std::min(nc, 4); ++k) {
+            if (!slice(i0, c[k].off, c[k].hi, f)) continue;
             const int df = f.b[0] >> 3;
             const uint32_t s = syndrome(f.b, f.len);
             bool good = false;
             if (df == 11) good = (s & ~0x7Fu) == 0;
             else if (df == 17 || df == 18) good = s == 0 || singleBitSyndromes().count(s);
-            else if (plausibleDf(df)) good = known(s);
+            else good = known(s);
             if (good) {
                 onFrame(f);
-                return size_t((c[i].x - x0) + (8 + f.len * 8) * 1e-6 * rate_);
+                return size_t(c[k].off) + size_t((8 + f.len * 8) * 1e-6 * rate_);
             }
         }
         return 0;
     }
 
     void trim() {
-        if (pos_ < 262144) return;
+        if (pos_ < 8192) return;                         // ★ small: see feed()
         const size_t drop = pos_ - 4;                    // keep a little behind the cursor for the ± search
         pow_.erase(pow_.begin(), pow_.begin() + long(drop));
+        pm_.erase(pm_.begin(), pm_.begin() + long(drop));
+        pmN_ -= drop;
         pos_ -= drop; skip_ = skip_ > drop ? skip_ - drop : 0;
         base_ += uint64_t(double(drop) / q_);
     }
@@ -266,13 +439,21 @@ private:
     }
 
     double rate_, h_, q_;
+    float hf_, qf_, invH_;                              // the same, single precision, for the windows
+    mutable std::vector<float> lc_;                     // the trigger's running sum of |IQ|² (see win)
+    mutable const float* lm_ = nullptr;
+    mutable int lcN_ = 0;
     size_t span_;                                        // samples a whole reply needs ahead of its start
     int pulseAt_[4] = {};
+    int quietAt_[3] = {};                               // 6.0, 6.5, 7.0 µs, in samples
+    int gapAt_ = 0;                                     // 2.5 µs: between the second and third pulses
     std::vector<float> pow_;                            // |IQ|² per sample
+    std::vector<float> pm_;                             // pairMax of pow_ (stage 1)
+    size_t pmN_ = 0;
     size_t pos_ = 0, skip_ = 0;
-    uint64_t base_ = 0, preambles_ = 0;
-    float noise_ = 1e-3f;                               // mean noise magnitude, for stage 2
-    float noiseP_ = 0;                                  // mean noise power, for stage 1
+    uint64_t base_ = 0, preambles_ = 0, triggers_ = 0;
+    mutable uint64_t slices_ = 0;
+    float noiseP_ = 0;                                  // mean noise power
     uint32_t warm_ = 0;                                 // samples in the first guess (to 32)
     float blockSum_ = 0; uint32_t blockN_ = 0, blockAt_ = 0;
     float blocks_[16] = {};                             // mean power of the last 16 blocks
