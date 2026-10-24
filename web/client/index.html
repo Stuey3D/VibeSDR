@@ -1217,11 +1217,20 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 #adsbList .adsbRow .spd { min-width: 3.4em; opacity: .8; }
 #adsbList .adsbRow .rng { min-width: 4.6em; }
 #adsbList .adsbRow i { font-style: normal; font-size: 8px; margin-left: 3px; vertical-align: 1px; }
-#adsbList .adsbRow i.up { color: #7dff9a; }
-#adsbList .adsbRow i.dn { color: #ffb36b; }
+/* ★ The arrow takes the altitude's colour from its span (adsb.ts altColour) — no colours of its own. */
 #adsbList .adsbRow .brg, #adsbList .adsbRow .dim { opacity: .6; }
 #adsbList .adsbRow.nopos { opacity: .55; cursor: default; }
-#adsbList .adsbRow.em { border-left-color: #e04040; background: rgba(224, 64, 64, 0.10); }
+/* ★★ Emergencies at the top, breathing red (the map's breath: 1.2 s, never a hard blink); military beneath them in the
+ *  map's military blue. Both carry a badge beside the callsign. */
+@keyframes adsbEmBreathe { 0%, 100% { background: rgba(224, 64, 64, 0.08); } 50% { background: rgba(224, 64, 64, 0.30); } }
+#adsbList .adsbRow.em { border-left-color: #e04040; animation: adsbEmBreathe 1.2s ease-in-out infinite; }
+#adsbList .adsbRow.mil { border-left-color: rgb(90, 170, 255); background: rgba(90, 170, 255, 0.07); }
+#adsbList .adsbRow.mil .id b { color: rgb(140, 195, 255); }
+#adsbList .adsbRow .tag { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 8.5px; font-weight: 700;
+  letter-spacing: .8px; line-height: 13px; vertical-align: 1px; }
+#adsbList .adsbRow .tag.em { background: #e04040; color: #fff; }
+#adsbList .adsbRow .tag.mil { background: rgba(90, 170, 255, 0.85); color: #06121f; }
+@media (prefers-reduced-motion: reduce) { #adsbList .adsbRow.em { animation: none; background: rgba(224, 64, 64, 0.22); } }
 #adsbList .adsbEmpty { padding: 10px 9px; opacity: .6; font-size: 11.5px; line-height: 1.5; }
 /* ★ A phone: the title loses its second word and the speed column goes before anything is squeezed to an
      ellipsis; the message rate goes too (the count is what matters at a glance). */

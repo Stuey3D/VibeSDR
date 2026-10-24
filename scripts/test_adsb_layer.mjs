@@ -69,12 +69,12 @@ for (const k of new Set(Object.values(want))) ok(ctx.VibeAdsbLayer.ICONS.include
 }
 
 // ── altitude / vertical rate text ──
-ok(M.altText(35000) === 'FL350', 'FL350');
-ok(M.altText(18000) === 'FL180', 'transition altitude reads as a flight level');
-ok(M.altText(3420) === '3,400 ft', 'feet below transition');
+ok(M.altText(35000) === '35,000 ft', 'feet, always (Stuart 2026-10-24) — no flight levels');
+ok(M.altText(12240) === '12,200 ft', 'to the nearest hundred, with the thousands comma');
+ok(M.altText(3420) === '3,400 ft', 'low altitude in feet too');
 ok(M.altText('ground') === 'GND', 'on the ground');
 ok(M.altText(undefined) === '—', 'unknown altitude');
-ok(M.altShort(36975) === 'FL370' && M.altShort(2500) === '2500' && M.altShort(null) === '', 'label altitude');
+ok(M.altShort(36975) === '37,000 ft' && M.altShort(2500) === '2,500 ft' && M.altShort(null) === '', 'label altitude = the list\'s format');
 ok(M.vsText(50) === 'level' && M.vsText(1216).startsWith('↑ +1,216') && M.vsText(-640).startsWith('↓'), 'vertical rate');
 ok(M.emergencyOf({ squawk: '7700' }) === 'EMERGENCY 7700' && M.emergencyOf({ emergency: 'none' }) === '' &&
    M.emergencyOf({ emergency: 'general' }) === 'EMERGENCY' && M.emergencyOf({}) === '', 'emergency states');
@@ -217,6 +217,27 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   near(M.altHue(40000), 285, 0.01, 'FL400: violet');
   ok(M.altHue(15000) > 120 && M.altHue(15000) < 180, 'between the stops it fades (15 000 ft between green and cyan)');
   ok(M.altHue(60000) === 285 && M.altHue(-50) === 15, 'clamped at both ends');
+}
+
+// ── ONE ALTITUDE COLOUR, THREE READERS: the layer, the web client's list and the app's list must agree ──
+{
+  for (const rel of ['web/client/src/adsb.ts', 'src/services/adsbList.ts']) {
+    const t = readFileSync(path.join(root, rel), 'utf8');
+    const m = t.match(/ALT_HUES[^=]*=\s*(\[\[[^;]*\]\])/);
+    ok(!!m && JSON.stringify(JSON.parse(m[1])) === JSON.stringify(M.ALT_HUES), `${rel} uses the layer's altitude colours`);
+  }
+}
+
+// ── ONE MILITARY RULE, THREE READERS ──
+{
+  const lay = readFileSync(path.join(root, 'web/mapkit/adsblayer.js'), 'utf8');
+  const blocks = (t) => (t.match(/MIL_BLOCKS[^=]*=\s*(\[\[[^;]*\]\])/) || [])[1];
+  const calls = (t) => (t.match(/MIL_CALLS\s*=\s*(\/[^\n;]*\/)/) || [])[1];
+  for (const rel of ['web/client/src/adsb.ts', 'src/services/adsbList.ts']) {
+    const t = readFileSync(path.join(root, rel), 'utf8');
+    ok(blocks(t) === blocks(lay) && !!blocks(lay), `${rel} uses the layer's military address blocks`);
+    ok(calls(t) === calls(lay) && !!calls(lay), `${rel} uses the layer's military callsigns`);
+  }
 }
 
 // ── the live list's corner: the cheaper inset, and the camera kept clear of it ──

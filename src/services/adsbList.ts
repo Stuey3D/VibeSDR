@@ -24,8 +24,14 @@ export interface AdsbListRow {
   /** Has a position — only then can a tap find it on the map (the layer's focus() needs one). */
   placed: boolean;
   emergency: boolean;
+  /** The emergency's badge ("7700 EMERGENCY", "7600 RADIO FAIL", "7500 HIJACK", "EMERGENCY"), '' when none. */
+  badge: string;
+  military: boolean;
   /** Signal, 1–3 bars (adsbBars), 0 when the report has no level. */
   bars: number;
+  /** ▲ ▼ ● beside the altitude (trendGlyph), and the altitude's colour (altColour) — '' when none. */
+  trend: string;
+  altCol: string;
 }
 
 /** ★ SIGNAL BARS (Stuart, 2026-10-24: "a little 3 bar graph like everywhere else next to the flight number"). From
@@ -40,9 +46,26 @@ export function altText(a: Aircraft): string {
   if (a.onGround) return 'GND';
   const ft = a.altitude;
   if (ft == null || !Number.isFinite(ft)) return '';
-  return ft >= 18_000
-    ? `FL${String(Math.round(ft / 100)).padStart(3, '0')}`
-    : `${(Math.round(ft / 100) * 100).toLocaleString('en-GB')} ft`;
+  return `${(Math.round(ft / 100) * 100).toLocaleString('en-GB')} ft`;   // ★ feet, always — as the map's labels
+}
+
+/** ★★ THE ALTITUDE COLOUR — the map's (web/mapkit/adsblayer.js ALT_HUES / altColour, dark), fading through the spectrum.
+ *  ONE RULE, THREE READERS (the layer, web/client/src/adsb.ts, this): scripts/test_adsb_layer.mjs fails if they part. */
+export const ALT_HUES: [number, number][] = [[0, 15], [4000, 55], [10000, 120], [20000, 180], [30000, 235], [40000, 285]];
+export function altColour(ft: number): string {
+  let h = ALT_HUES[ALT_HUES.length - 1][1];
+  const f = ft >= 0 ? ft : 0;
+  for (let i = 1; i < ALT_HUES.length; i++) {
+    const [a0, h0] = ALT_HUES[i - 1], [a1, h1] = ALT_HUES[i];
+    if (f <= a1) { h = h0 + (h1 - h0) * (f - a0) / (a1 - a0); break; }
+  }
+  return `hsl(${h.toFixed(0)},90%,62%)`;
+}
+/** ▲ climbing / ▼ descending / ● level (within ±300 ft/min) — the map's trendOf; '' on the ground or with no altitude. */
+export function trendGlyph(a: Aircraft): string {
+  if (a.onGround || a.altitude == null || !Number.isFinite(a.altitude)) return '';
+  const vr = a.vspeed;
+  return vr != null && vr > 300 ? '▲' : vr != null && vr < -300 ? '▼' : '●';
 }
 
 export function rangeText(a: Aircraft): string {
@@ -56,8 +79,33 @@ export function rangeText(a: Aircraft): string {
 /** ★ NEAREST FIRST — the same order as AircraftPanel and the watch (adsbToAircraft already sorts; sorted again here
  *  so the list never depends on its caller): placed by distance, then the unplaced by signal, then by address so two
  *  equal rows never swap places between reports (a list that shuffles under the finger is a list you cannot tap). */
+/* ★★ MILITARY — the map's rule (adsblayer.js MIL_BLOCKS / MIL_CALLS): an ICAO address in a block a state keeps for its
+ *  military (UK 43C000–43CFFF, US AE0000–AFFFFF) or a military operator's callsign. ONE RULE, THREE READERS (the layer,
+ *  web/client/src/adsb.ts, src/services/adsbList.ts): scripts/test_adsb_layer.mjs fails if they part. */
+export const MIL_BLOCKS: [number, number][] = [[0x43C000, 0x43CFFF], [0xAE0000, 0xAFFFFF]];
+export const MIL_CALLS = /^(RRR|ASCOT|TARTN|RCH|NATO|GAF|CTM|IAM|BAF)\d/;
+export function isMilitaryHex(hex: string, flight: string | undefined): boolean {
+  const h = String(hex || '');
+  const n = parseInt(h.replace(/^~/, ''), 16);
+  if (h[0] !== '~' && Number.isFinite(n)) for (const [lo, hi] of MIL_BLOCKS) if (n >= lo && n <= hi) return true;
+  return MIL_CALLS.test(String(flight || '').trim().toUpperCase());
+}
+/** ★ What the emergency is, for its badge: the squawk first (7500 / 7600 / 7700), else the declared state; '' when none. */
+export function emergencyBadge(squawk: unknown, state: unknown): string {
+  const sq = String(squawk ?? '');
+  if (sq === '7500') return '7500 HIJACK';
+  if (sq === '7600') return '7600 RADIO FAIL';
+  if (sq === '7700') return '7700 EMERGENCY';
+  const st = String(state ?? '');
+  return st && st !== 'none' && st !== '0' ? 'EMERGENCY' : '';
+}
+
+/** ★★ THE ORDER (Stuart, 2026-10-24): emergencies first, then military, then the nearest to the receiver. */
 export function adsbListRows(list: Aircraft[]): AdsbListRow[] {
+  const rank = (a: Aircraft) => (emergencyBadge(a.squawk, a.emergency) ? 0 : isMilitaryHex(a.icao, a.flight) ? 1 : 2);
   const sorted = [...list].sort((x, y) => {
+    const rx = rank(x), ry = rank(y);
+    if (rx !== ry) return rx - ry;
     if (x.distKm != null && y.distKm != null && x.distKm !== y.distKm) return x.distKm - y.distKm;
     if (x.distKm != null && y.distKm == null) return -1;
     if (y.distKm != null && x.distKm == null) return 1;
@@ -71,8 +119,12 @@ export function adsbListRows(list: Aircraft[]): AdsbListRow[] {
     kt: a.speed != null && Number.isFinite(a.speed) ? `${Math.round(a.speed)} kt` : '',
     range: rangeText(a),
     placed: a.lat != null && a.lon != null,
-    emergency: !!a.emergency,
+    emergency: !!emergencyBadge(a.squawk, a.emergency),
+    badge: emergencyBadge(a.squawk, a.emergency),
+    military: isMilitaryHex(a.icao, a.flight),
     bars: adsbBars(a.rssi),
+    trend: trendGlyph(a),
+    altCol: !a.onGround && a.altitude != null && Number.isFinite(a.altitude) ? altColour(a.altitude) : '',
   }));
 }
 

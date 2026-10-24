@@ -37,15 +37,50 @@ export function cleanFlight(v: unknown): string { return String(v ?? '').replace
 export function cleanHex(v: unknown): string { return String(v ?? '').replace(/[^~0-9A-Fa-f]/g, '').slice(0, 7).toLowerCase(); }
 
 /** Flight levels from the transition altitude, feet below — AircraftPanel.tsx's rule (18 000 ft). */
+/** ★ Feet, always — the map's labels say the same (adsblayer.js altText). */
 export function altText(alt: AdsbAircraft['alt_baro']): string {
   if (alt === 'ground') return 'GND';
   const ft = num(alt);
   if (ft == null) return '—';
-  return ft >= 18000 ? `FL${String(Math.round(ft / 100)).padStart(3, '0')}` : `${(Math.round(ft / 100) * 100).toLocaleString('en-GB')} ft`;
+  return `${(Math.round(ft / 100) * 100).toLocaleString('en-GB')} ft`;
+}
+/** ★★ THE ALTITUDE COLOUR — the map's (adsblayer.js ALT_HUES / altColour, dark): orange-red at the ground fading through
+ *  the spectrum to violet at 40 000 ft. ONE RULE, THREE READERS (the layer, this, src/services/adsbList.ts):
+ *  scripts/test_adsb_layer.mjs fails if they part. */
+export const ALT_HUES: [number, number][] = [[0, 15], [4000, 55], [10000, 120], [20000, 180], [30000, 235], [40000, 285]];
+export function altColour(ft: number): string {
+  let h = ALT_HUES[ALT_HUES.length - 1][1];
+  const f = ft >= 0 ? ft : 0;
+  for (let i = 1; i < ALT_HUES.length; i++) {
+    const [a0, h0] = ALT_HUES[i - 1], [a1, h1] = ALT_HUES[i];
+    if (f <= a1) { h = h0 + (h1 - h0) * (f - a0) / (a1 - a0); break; }
+  }
+  return `hsl(${h.toFixed(0)},90%,62%)`;
 }
 function emergency(a: AdsbAircraft): boolean {
   const sq = String(a.squawk ?? '');
   return sq === '7500' || sq === '7600' || sq === '7700' || (!!a.emergency && a.emergency !== 'none' && a.emergency !== 0 && a.emergency !== '0');
+}
+
+/* ★★ MILITARY — the map's rule (adsblayer.js MIL_BLOCKS / MIL_CALLS): an ICAO address in a block a state keeps for its
+ *  military (UK 43C000–43CFFF, US AE0000–AFFFFF) or a military operator's callsign. ONE RULE, THREE READERS (the layer,
+ *  web/client/src/adsb.ts, src/services/adsbList.ts): scripts/test_adsb_layer.mjs fails if they part. */
+export const MIL_BLOCKS: [number, number][] = [[0x43C000, 0x43CFFF], [0xAE0000, 0xAFFFFF]];
+export const MIL_CALLS = /^(RRR|ASCOT|TARTN|RCH|NATO|GAF|CTM|IAM|BAF)\d/;
+export function isMilitaryHex(hex: string, flight: string | undefined): boolean {
+  const h = String(hex || '');
+  const n = parseInt(h.replace(/^~/, ''), 16);
+  if (h[0] !== '~' && Number.isFinite(n)) for (const [lo, hi] of MIL_BLOCKS) if (n >= lo && n <= hi) return true;
+  return MIL_CALLS.test(String(flight || '').trim().toUpperCase());
+}
+/** ★ What the emergency is, for its badge: the squawk first (7500 / 7600 / 7700), else the declared state; '' when none. */
+export function emergencyBadge(squawk: unknown, state: unknown): string {
+  const sq = String(squawk ?? '');
+  if (sq === '7500') return '7500 HIJACK';
+  if (sq === '7600') return '7600 RADIO FAIL';
+  if (sq === '7700') return '7700 EMERGENCY';
+  const st = String(state ?? '');
+  return st && st !== 'none' && st !== '0' ? 'EMERGENCY' : '';
 }
 
 /** The map's top bar: how many have a position (the count, on the map) and, beside it, how many are heard
@@ -66,9 +101,12 @@ export function adsbRows(r: AdsbReport, rx: LatLon | null) {
   const rows = r.aircraft.map((a) => {
     const lat = num(a.lat), lon = num(a.lon);
     const rb = rx && lat != null && lon != null ? rangeBearing(rx, lat, lon) : null;
-    return { a, hex: cleanHex(a.hex), rb, located: lat != null && lon != null };
+    const em = emergencyBadge(a.squawk, a.emergency), mil = isMilitaryHex(String(a.hex || ''), a.flight);
+    return { a, hex: cleanHex(a.hex), rb, located: lat != null && lon != null, em, mil, rank: em ? 0 : mil ? 1 : 2 };
   }).filter((x) => x.hex);
+  /** ★★ THE ORDER (Stuart, 2026-10-24): emergencies first, then military, then the nearest to the receiver. */
   rows.sort((p, q) => {
+    if (p.rank !== q.rank) return p.rank - q.rank;
     if (p.rb && q.rb) return p.rb.nm - q.rb.nm;
     if (p.rb) return -1;
     if (q.rb) return 1;
@@ -96,19 +134,24 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null): string {
   if (!r) return '<div class="adsbEmpty">Listening on 1090 MHz — aircraft appear here as they are heard.</div>';
   const rows = adsbRows(r, rx);
   if (!rows.length) return '<div class="adsbEmpty">No aircraft heard yet. Each one appears as its transponder is decoded.</div>';
-  return rows.map(({ a, hex, rb, located }) => {
+  return rows.map(({ a, hex, rb, located, em: badge, mil }) => {
     const call = cleanFlight(a.flight);
     const vs = num(a.baro_rate);
-    const trend = vs == null || Math.abs(vs) < 300 ? '' : vs > 0 ? '<i class="up" title="Climbing">▲</i>' : '<i class="dn" title="Descending">▼</i>';
+    const altFt = num(a.alt_baro);
+    const trend = a.alt_baro === 'ground' || altFt == null ? ''
+      : vs != null && vs > 300 ? '<i class="up" title="Climbing">▲</i>' : vs != null && vs < -300 ? '<i class="dn" title="Descending">▼</i>'
+      : '<i class="lv" title="Level">●</i>';
+    const altStyle = altFt != null && a.alt_baro !== 'ground' ? ` style="color:${altColour(altFt)}"` : '';
     const gs = num(a.gs);
     const sq = String(a.squawk ?? '').replace(/[^0-7]/g, '').slice(0, 4);
     const where = rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${COMPASS[Math.round(rb.brg / 45) % 8]}</span>`
       : located ? '<span class="dim">located</span>' : '<span class="dim">no position</span>';
     const em = emergency(a);
-    return `<div class="adsbRow${em ? ' em' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
+    const tag = badge ? `<span class="tag em">${esc(badge)}</span>` : mil ? '<span class="tag mil">MIL</span>' : '';
+    return `<div class="adsbRow${em ? ' em' : ''}${mil && !em ? ' mil' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
       + ` title="${located ? 'Show on the map' : 'No position yet — not on the map'}">`
-      + `<span class="id"><b>${esc(call || hex.toUpperCase())}${barsHtml(adsbBars(a.rssi))}</b><small>${esc(hex.toUpperCase())}${sq ? ` · ${esc(sq)}` : ''}</small></span>`
-      + `<span class="alt">${esc(altText(a.alt_baro))}${trend}</span>`
+      + `<span class="id"><b>${esc(call || hex.toUpperCase())}${barsHtml(adsbBars(a.rssi))}${tag}</b><small>${esc(hex.toUpperCase())}${sq ? ` · ${esc(sq)}` : ''}</small></span>`
+      + `<span class="alt"${altStyle}>${esc(altText(a.alt_baro))}${trend}</span>`
       + `<span class="spd">${gs != null ? `${Math.round(gs)} kt` : ''}</span>`
       + `<span class="rng">${where}</span>`
       + '</div>';

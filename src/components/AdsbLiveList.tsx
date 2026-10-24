@@ -18,8 +18,8 @@
  * ★ The decoder font — the display font is for the main controls only.
  */
 import { scrollLane } from '../constants/popupTokens';
-import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AccessibilityInfo, Animated, Easing, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, usePanelNav, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
@@ -133,16 +133,38 @@ function Row({ s, r, onPress }: { s: S; r: AdsbListRow; onPress: () => void }) {
     <TouchableOpacity ref={viewRef as never} style={[s.row, !r.placed && s.rowUnplaced]} onPress={onPress}
                       disabled={!r.placed} activeOpacity={0.7} accessibilityRole="button"
                       accessibilityLabel={`${r.label}${r.alt ? ', ' + r.alt : ''}${r.kt ? ', ' + r.kt : ''}${r.range ? ', ' + r.range : ''}`}>
+      {r.emergency && <EmBreath />}
       <View style={s.callBox}>
-        <Text style={[s.call, r.emergency && s.emerg]} numberOfLines={1}>{r.label}</Text>
+        <Text style={[s.call, r.emergency && s.emerg, r.military && !r.emergency && s.mil]} numberOfLines={1}>{r.label}</Text>
         {r.bars > 0 && <SigBars n={r.bars} />}
+        {r.badge ? <Text style={[s.tag, s.tagEm]} numberOfLines={1}>{r.badge}</Text>
+          : r.military ? <Text style={[s.tag, s.tagMil]}>MIL</Text> : null}
       </View>
-      <Text style={[s.cell, s.alt]} numberOfLines={1}>{r.alt}</Text>
+      <Text style={[s.cell, s.alt, !!r.altCol && { color: r.altCol }]} numberOfLines={1}>{r.alt}{r.trend ? ` ${r.trend}` : ''}</Text>
       <Text style={[s.cell, s.kt]} numberOfLines={1}>{r.kt}</Text>
       <Text style={[s.cell, s.rng]} numberOfLines={1}>{r.range}</Text>
       <NavRing on={focused} color={ring} radius={4} />
     </TouchableOpacity>
   );
+}
+
+/** ★★ An emergency row breathes red (the map's 1.2 s breath — never a hard blink); still when the system asks for less
+ *  motion. Drawn behind the row's text. */
+function EmBreath() {
+  const v = useRef(new Animated.Value(0)).current;
+  const [still, setStill] = useState(false);
+  useEffect(() => { AccessibilityInfo.isReduceMotionEnabled().then(setStill).catch(() => {}); }, []);
+  useEffect(() => {
+    if (still) return;
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(v, { toValue: 1, duration: 600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      Animated.timing(v, { toValue: 0, duration: 600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [still, v]);
+  return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgb(224,64,64)',
+    opacity: still ? 0.22 : v.interpolate({ inputRange: [0, 1], outputRange: [0.08, 0.30] }) }]} />;
 }
 
 /** ★ Three ascending bars, the lit ones in the link colours (LinkBars / DabMeter's) — adsbBars decides how many. */
@@ -182,6 +204,11 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   callBox:{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
   call:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.95)`, flexShrink: 1, minWidth: 0 },
   emerg:  { color: '#ff6a50' },
+  mil:    { color: 'rgb(140,195,255)' },
+  tag:    { marginLeft: 5, paddingHorizontal: 4, borderRadius: 3, fontFamily: F, fontSize: 8.5, fontWeight: '700', letterSpacing: 0.8,
+            overflow: 'hidden' },
+  tagEm:  { backgroundColor: '#e04040', color: '#fff' },
+  tagMil: { backgroundColor: 'rgba(90,170,255,0.85)', color: '#06121f' },
   cell:   { fontFamily: F, fontSize: 11, color: `rgba(${ink.x},0.70)`, textAlign: 'right' },
   alt:    { width: 50 },
   kt:     { width: 40 },

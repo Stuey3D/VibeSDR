@@ -128,20 +128,20 @@
   }
 
   function onGround(a) { return a && a.alt_baro === 'ground'; }
-  /** Flight levels above the transition altitude, feet below — what you would hear on air. */
+  /** ★★ FEET, ALWAYS (Stuart, 2026-10-24: "we have the space to fit the altitude in as ft"): "12,200 ft", to the nearest
+   *  hundred. Flight levels went — the transition altitude they hang on differs by country (UK 3–6 000 ft, US 18 000),
+   *  and the colour of the text (altColour) already says how high at a glance. */
   function altText(alt) {
     if (alt === 'ground') return 'GND';
     const ft = Number(alt);
     if (alt == null || alt === '' || !isFinite(ft)) return '—';
-    if (ft >= TRANSITION_FT) return 'FL' + String(Math.round(ft / 100)).padStart(3, '0');
     return (Math.round(ft / 100) * 100).toLocaleString('en-GB') + ' ft';
   }
-  /** The short form for a map label: FL350, 3400, GND. */
+  /** The same for a map label, '' when unknown. */
   function altShort(alt) {
-    if (alt === 'ground') return 'GND';
-    const ft = Number(alt);
-    if (alt == null || alt === '' || !isFinite(ft)) return '';
-    return ft >= TRANSITION_FT ? 'FL' + String(Math.round(ft / 100)).padStart(3, '0') : String(Math.round(ft / 100) * 100);
+    if (alt == null || alt === '') return '';
+    if (alt !== 'ground' && !isFinite(Number(alt))) return '';
+    return altText(alt);
   }
   function vsText(rate) {
     const r = Number(rate);
@@ -373,7 +373,7 @@
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
                   wrapLon, distNm, bearingDeg, destination, cardinal, deadReckon, iconFor, altText, altShort,
                   vsText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
-                  anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf };
+                  anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES };
 
   /* ══ ICONS — one geometry, two renderers ═══════════════════════════════════════════════════════
    * Every icon is a list of parts in a 40×40 box, nose up (north), centre (20,20): f = filled path,
@@ -649,7 +649,7 @@
       + legRow(TONE.ground, '\u2708', 'on the ground')
       + legRow(TONE.alert, '\u2708', 'emergency')
       + legRow(TONE.military, '\u2708', 'military (where it can be told)')
-      + '<div class="t">ALTITUDE ARROWS</div>'
+      + '<div class="t">ALTITUDE (the text and its arrow)</div>'
       + '<div class="r"><span class="g">\u25B2</span>climbing \u00b7 <span class="g">\u25BC</span>descending \u00b7 <span class="g">\u25CF</span>level</div>'
       + '<div class="bar" style="background:linear-gradient(90deg,' + grad + ')"></div>'
       + '<div class="ax"><span>0</span><span>10k</span><span>20k</span><span>30k</span><span>40k ft</span></div>';
@@ -863,7 +863,7 @@
                               'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'z'] },
                     paint: { 'icon-opacity': ['get', 'op'] } });
       gl.addLayer({ id: 'vsadsb-labels', type: 'symbol', source: 'vsadsb-ac', filter: ['has', 'lbl'],
-                    layout: { 'text-field': ['format', ['get', 'lbl'], {}, ['coalesce', ['get', 'arr'], ''], { 'text-color': ['coalesce', ['get', 'arrc'], T.label] }],
+                    layout: { 'text-field': ['format', ['get', 'lbl'], {}, ['coalesce', ['get', 'al'], ''], { 'text-color': ['coalesce', ['get', 'alc'], T.label] }],
                               'text-font': ['JetBrains Mono Regular'], 'text-size': 10, 'text-line-height': 1.15,
                               'text-anchor': 'left', 'text-justify': 'left', 'text-offset': [1.25, 0], 'text-allow-overlap': true,
                               'text-ignore-placement': true },
@@ -1072,11 +1072,19 @@
       }
       if (animating) kick();
     }
-    function labelText(s) {
-      const name = cleanFlight(s.a.flight) || s.hex.toUpperCase();
+    function labelName(s) { return cleanFlight(s.a.flight) || s.hex.toUpperCase(); }
+    /** The altitude line, "12,200 ft ▲", or '' — drawn in the altitude colour (labelAltColour). */
+    function labelAlt(s) {
       const alt = altShort(s.a.alt_baro);
-      return alt ? name + '\n' + alt : name;
+      if (!alt) return '';
+      const tr = trendOf(s.a);
+      return tr ? alt + ' ' + tr : alt;
     }
+    function labelAltColour(s) {
+      if (s.a.alt_baro === 'ground') return 'rgb(' + TONE.ground + ')';
+      return altColour(num(s.a.alt_baro) != null ? num(s.a.alt_baro) : num(s.a.alt_geom), th);
+    }
+    function labelText(s) { const al = labelAlt(s); return al ? labelName(s) + '\n' + al : labelName(s); }
     function decideLabels() {
       const v = viewSize(), items = [];
       for (const s of ac.values()) {
@@ -1126,9 +1134,9 @@
         const props = { h: s.hex, img: imgId(s.kind, tone, glow), rot: NO_ROTATE[s.kind] ? 0 : (s.hdg || 0),
                         op: +op.toFixed(3), z: glow ? 1000 : tone === 'alert' ? 900 : (s.a.alt_baro === 'ground' ? 0 : 1), col: 'rgb(' + TONE[tone] + ')' };
         if (s.lo > 0.01) {
-          props.lbl = labelText(s); props.lo = +(s.lo * op).toFixed(3);
-          const tr = props.lbl.indexOf('\n') >= 0 ? trendOf(s.a) : '';   // ★ only beside an altitude line
-          if (tr) { props.lbl += ' '; props.arr = tr; props.arrc = altColour(num(s.a.alt_baro) != null ? num(s.a.alt_baro) : num(s.a.alt_geom), th); }
+          props.lbl = labelName(s); props.lo = +(s.lo * op).toFixed(3);
+          const al = labelAlt(s);   // ★ the altitude line and its arrow, in the altitude colour
+          if (al) { props.al = '\n' + al; props.alc = labelAltColour(s); }
         }
         const rp = ringProps(s, t);
         if (rp) { props.rr = +rp.rr.toFixed(2); props.ro = +rp.ro.toFixed(3); props.ho = +rp.ho.toFixed(3); }
@@ -1169,11 +1177,11 @@
         el.style.opacity = String(op);
         const lb = el.querySelector('.lb');
         if (lb) {
-          const txt = labelText(s), tr = txt.indexOf('\n') >= 0 ? trendOf(s.a) : '';
-          const key = txt + tr + (tr ? altColour(num(s.a.alt_baro), th) : '');
+          const al = labelAlt(s), col = al ? labelAltColour(s) : '';
+          const key = labelName(s) + '|' + al + '|' + col;
           if (s.llLbl !== key) {
-            s.llLbl = key; lb.textContent = txt;
-            if (tr) { const sp = doc.createElement('span'); sp.textContent = ' ' + tr; sp.style.color = altColour(num(s.a.alt_baro) != null ? num(s.a.alt_baro) : num(s.a.alt_geom), th); lb.appendChild(sp); }
+            s.llLbl = key; lb.textContent = labelName(s);
+            if (al) { lb.appendChild(doc.createElement('br')); const sp = doc.createElement('span'); sp.textContent = al; sp.style.color = col; lb.appendChild(sp); }
           }
           lb.style.opacity = s.lblWant && !s.goneAt ? '1' : '0';
         }

@@ -15,7 +15,7 @@ const eq = (what: string, got: unknown, want: unknown) => {
 };
 
 // ── text ────────────────────────────────────────────────────────────────────────────────────────
-eq('FL from 18 000 ft', altText({ icao: 'a', altitude: 35_000 }), 'FL350');
+eq('feet, always', altText({ icao: 'a', altitude: 35_000 }), '35,000 ft');
 eq('feet below', altText({ icao: 'a', altitude: 4_321 }), '4,300 ft');
 eq('ground', altText({ icao: 'a', altitude: 0, onGround: true }), 'GND');
 eq('unknown altitude', altText({ icao: 'a' }), '');
@@ -35,7 +35,7 @@ const list = adsbToAircraft([
 ], rx);
 const rows = adsbListRows(list);
 eq('nearest first, unplaced by signal last', rows.map((r) => r.label), ['EMG', 'NEAR', 'FAR', '400003', '400004']);
-eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: 'FL360', kt: '451 kt', range: '60 NM N', placed: true, emergency: false, bars: 0 });
+eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: '36,000 ft', kt: '451 kt', range: '60 NM N', placed: true, emergency: false, badge: '', military: false, bars: 0, trend: '●', altCol: 'hsl(265,90%,62%)' });
 // ★ Signal bars (adsbBars): 3 from -12 dBFS, 2 from -22, else 1; none without a level.
 { const { adsbBars } = await import('../src/services/adsbList.ts');
   eq('bars', [adsbBars(-3), adsbBars(-12), adsbBars(-15), adsbBars(-22), adsbBars(-30), adsbBars(undefined)], [3, 3, 2, 2, 1, 0]); }
@@ -64,5 +64,18 @@ eq('never below 160', adsbListWidth(100), 160);
 // ── collapse state ──────────────────────────────────────────────────────────────────────────────
 eq('open unless shut', [parseListOpen(null), parseListOpen('1'), parseListOpen('0'), parseListOpen('x')], [true, true, false, true]);
 
+// ★ The order (Stuart, 2026-10-24): emergencies first, then military, then the nearest.
+{
+  const { adsbListRows: rowsOf } = await import('../src/services/adsbList.ts');
+  const order = rowsOf([
+    { icao: '400001', flight: 'NEAR1', distKm: 2, lat: 52, lon: -1 },
+    { icao: '43c001', flight: 'RRR123', distKm: 90, lat: 52, lon: -1 },
+    { icao: '400002', flight: 'SQK77', distKm: 150, lat: 52, lon: -1, squawk: '7700' },
+    { icao: '400003', flight: 'MID', distKm: 40, lat: 52, lon: -1 },
+  ] as never).map((r: { label: string }) => r.label);
+  eq('emergency, then military, then the nearest', order, ['SQK77', 'RRR123', 'NEAR1', 'MID']);
+  const em = rowsOf([{ icao: '400002', flight: 'X', squawk: '7600' }] as never)[0];
+  eq('a radio-failure squawk is badged as one', [em.badge, em.emergency], ['7600 RADIO FAIL', true]);
+}
 console.log(fails ? `\n${fails} FAILED, ${passes} passed` : `adsb list: all ${passes} passed`);
 process.exit(fails ? 1 : 0);
