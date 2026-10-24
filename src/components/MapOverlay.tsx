@@ -28,7 +28,7 @@
  */
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
-import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useOverlay } from './PanelNav';
 import { NavCard, CardKey } from './NavCard';
 import { useCoversScreen } from '../hooks/useScreenCovered';
@@ -64,13 +64,20 @@ import { ADSB_LAYER_JS } from '../generated/adsbLayerSource';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseAdsbMapPrefs, type AdsbAircraftRaw, type AdsbMapPrefs } from '../services/adsbTypes';
 import { noteFault } from '../services/faultLog';
+import type { Aircraft } from '../services/SDRBackend';
+import AdsbLiveList from './AdsbLiveList';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 
 /* ★ 'adsb' (V12) = VibeServer's own ADS-B 1090. HOSTED EXACTLY AS 'hfdl' IS — the same GPU path, the 'aero'
  *  profile (airports, runways), the same receiver marker, chrome and transitions — so opening it feels like
  *  opening the HFDL map (Stuart: "ASMR grade sublime"). Only the FEED differs: React Native pushes each report
- *  in (like the local spots map's pushSpots), and the shared layer draws the aircraft. */
+ *  in (like the local spots map's pushSpots), and the shared layer draws the aircraft.
+ * ★★★ AND IT IS THE MODE'S SCREEN, NOT A VIEW OF IT (Stuart, 2026-10-24: "when ADS-B is selected the waterfall drops
+ *  and the full-screen map is on, an Exit ADS-B button is at the top of the screen, same as our HFDL map exit").
+ *  So where HFDL's key reads "← SDR" and only puts the map away, this one reads EXIT ADS-B and its onClose LEAVES THE
+ *  MODE (SDRScreen exitAdsb) — the key, Android back, and a pad's or keyboard's Back alike. The live list in the
+ *  bottom-left (AdsbLiveList) is React Native's, over the page. */
 export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb';
 
 interface MapOverlayProps {
@@ -99,6 +106,12 @@ interface MapOverlayProps {
   onRetry?: () => void;
   /** ★ kind 'adsb': the latest report's aircraft, in the SERVER's field names (the shared layer's input). */
   adsbAircraft?: AdsbAircraftRaw[] | null;
+  /** ★ kind 'adsb': the same report in the app's shape, ranged from the receiver — the live list's rows. */
+  adsbList?: Aircraft[];
+  /** kind 'adsb': a report has arrived (the list then says "no aircraft yet", not "taking the receiver to 1090"). */
+  adsbStarted?: boolean;
+  /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
+  safeInsets?: { top: number; bottom: number; left: number; right: number };
 }
 
 // ── HTML document builder ─────────────────────────────────────────────────────
@@ -367,10 +380,22 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   .st-sub{font-size:11px;color:rgba(${T.x},0.45);letter-spacing:0.5px;margin:-2px 0 6px;}
   .st-bar{height:3px;background:rgba(${T.x},0.12);border-radius:2px;margin:2px 0 6px;}
   .st-bf{height:3px;background:rgba(${T.x},0.65);border-radius:2px;transition:width 0.4s;}
+  ${isAdsb ? `
+  /* ★★ ADS-B: THE BOTTOM-LEFT CORNER IS THE LIVE LIST'S (React Native draws it over this page — AdsbLiveList), so the
+     legend's key moves to the top-left, the one corner nothing else uses (the layer's toggles are top-right), and opens
+     downwards from there. */
+  #legend{top:10px;bottom:auto;}
+  #legbody{top:0;bottom:auto;max-height:min(320px,calc(100vh - 140px));}
+  /* ★★ THE ATTRIBUTION STAYS READABLE BESIDE THE LIST: its text is narrowed to the room right of the list (the list
+     reports its width, __adsbListW; 0 as a pill) and wraps upwards instead of running underneath it. */
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib,.leaflet-bottom.leaflet-right .leaflet-control-attribution{
+    max-width:calc(100vw - var(--adsbListW,0px) - 40px - env(safe-area-inset-left) - env(safe-area-inset-right));white-space:normal;}` : ''}
 </style>
 </head><body>
 <div id="topbar">
-  <button id="back">&#8592; SDR</button>
+  ${isAdsb
+    ? '<button id="back" aria-label="Exit ADS-B and give the receiver back">EXIT ADS-B</button>'
+    : '<button id="back">&#8592; SDR</button>'}
   <div id="title">${TITLE}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
@@ -1270,6 +1295,10 @@ if(KIND==='adsb'){
     }catch(e){console.error('ADS-B: bad report',e);}
   };
   window.__adsbRx=function(lat,lon){RX_LAT=lat;RX_LON=lon;if(adsbLayer&&adsbLayer.setReceiver)adsbLayer.setReceiver(lat,lon);};
+  /* ★ The live list (React Native, over this page): a row chosen = the layer's own focus (select, open the card, pan only
+   *  if it is off screen); and the list's width, so the attribution keeps clear of it (the CSS above). */
+  window.__adsbFocus=function(h){try{var L3=adsbMake();if(L3&&L3.focus)L3.focus(String(h));}catch(e){console.error('ADS-B focus',e);}};
+  window.__adsbListW=function(w){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');};
   if(window.__pendingAdsb){window.__adsbPush(window.__pendingAdsb);window.__pendingAdsb=null;}
 }
 
@@ -1506,10 +1535,11 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry, adsbAircraft }:
+    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, safeInsets }:
     MapOverlayProps & { spots?: SpotRow[] },
 ) {
   const webRef = useRef<WebView>(null);
+  const { width: winW, height: winH } = useWindowDimensions();
   /* ★★ An OPAQUE full-screen modal over the receiver: the waterfall shader and the meters under it
    *  stop drawing while it is up (useScreenCovered) — otherwise the phone runs two GPU pictures, the
    *  map's and an invisible waterfall's. */
@@ -1645,6 +1675,16 @@ export default function MapOverlay(
     );
   };
   useEffect(() => { if (visible) pushAdsb(adsbAircraft); }, [kind, visible, adsbAircraft]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ The live list's two calls into the page. The hex is the report's cleaned address (/^~?[0-9a-f]{6}$/, adsbTypes),
+   *  and JSON.stringify makes it a string literal whatever it is — never source. The width is kept, so a page that
+   *  (re)loads after the list measured itself still gets it (onLoadEnd). */
+  const adsbListW = useRef(0);
+  const adsbFocus = (hex: string) =>
+    webRef.current?.injectJavaScript(`window.__adsbFocus&&window.__adsbFocus(${JSON.stringify(String(hex))});true;`);
+  const adsbFootprint = (w: number) => {
+    adsbListW.current = w;
+    webRef.current?.injectJavaScript(`window.__adsbListW&&window.__adsbListW(${Math.round(w) || 0});true;`);
+  };
 
   if (!visible || !kind) return null;
 
@@ -1731,7 +1771,8 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft); }}
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft);
+                             if (kind === 'adsb') adsbFootprint(adsbListW.current); }}
           onMessage={(e) => {
             const d = e.nativeEvent.data;
             if (d === 'close') return onClose();
@@ -1829,6 +1870,13 @@ export default function MapOverlay(
             }
           }}
         />
+        )}
+        {/* ★★ V12 THE ADS-B LIVE LIST, bottom-left over the map — RN-drawn so the pad and keyboard reach it
+            (AdsbLiveList's note). Only once the page is there: before that there is no map to find anything on. */}
+        {kind === 'adsb' && !!pageUri && !packError && (
+          <AdsbLiveList aircraft={adsbList ?? []} started={!!adsbStarted} onFocus={adsbFocus} onFootprint={adsbFootprint}
+                        ink={ink} areaW={winW} areaH={winH}
+                        insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}
         {disconnected && !ignored && (
           <View style={mo.discWrap} pointerEvents="box-none">

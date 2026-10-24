@@ -2408,30 +2408,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ── ADS-B on a VibeServer (V12, docs/v12/ADSB.md) ────────────────────────────────────────────
    * ★★★ THE DAB PATTERN, NOT THE OWRX ONE. OWRX's ADS-B is a PROFILE and fills `aircraft` above through
    *     onAircraft; VibeServer's is a MODE the phone enters and leaves by name (like DAB), so it has DAB's
-   *     pieces: the mode, the box (two different things — see dabBoxOpen), the refusal, the capability.
+   *     pieces: the mode, its screen (two different things — see dabBoxOpen), the refusal, the capability.
    *     The report is mapped into the SAME `aircraft` (adsbToAircraft) because the watch's ADS-B screen and
-   *     the table both read that, and the raw report is kept for the map's shared layer. */
+   *     the map's live list both read that, and the raw report is kept for the map's shared layer.
+   * ★★★ THE SCREEN IS THE FULL-SCREEN MAP (Stuart, 2026-10-24: "when ADS-B is selected the waterfall drops and the
+   *     full-screen map is on, an Exit ADS-B button is at the top of the screen, same as our HFDL map exit … a live
+   *     list in the bottom corner"). It supersedes the box with a MAP key: entering — or a report arriving for a
+   *     listener who joins a radio already on 1090 — goes STRAIGHT to MapOverlay's 'adsb' kind, whose opaque modal
+   *     hides the waterfall (and stops it drawing, useCoversScreen; the server slows it to 1 fps meanwhile).
+   *     ★ `adsbViewOpen` is that screen — the MAP, or on Apple TV (no WebView there) the old box, AdsbPanel. */
   const [adsbCap, setAdsbCap] = useState<AdsbCap | undefined>(undefined);   // undefined = no control at all
   const [adsbOn, setAdsbOn] = useState(false);
   const adsbOnRef = useRef(false);
-  const [adsbBoxOpen, setAdsbBoxOpen] = useState(false);
-  const adsbBoxOpenRef = useRef(false);
+  const [adsbViewOpen, setAdsbViewOpen] = useState(false);
+  const adsbViewOpenRef = useRef(false);
   const [adsbReport, setAdsbReport] = useState<AdsbReport | null>(null);
   const [adsbError, setAdsbError] = useState<string | undefined>(undefined);
   const [adsbTall, setAdsbTall] = useState(false);
   useEffect(() => { AsyncStorage.getItem('lsv_adsb_tall').then(v => { if (v === '1') setAdsbTall(true); }).catch(() => {}); }, []);
   const onAdsbTall = useCallback((v: boolean) => { setAdsbTall(v); AsyncStorage.setItem('lsv_adsb_tall', v ? '1' : '0').catch(() => {}); }, []);
   useEffect(() => { adsbOnRef.current = adsbOn; }, [adsbOn]);
-  useEffect(() => { adsbBoxOpenRef.current = adsbBoxOpen; }, [adsbBoxOpen]);
+  useEffect(() => { adsbViewOpenRef.current = adsbViewOpen; }, [adsbViewOpen]);
   /** ★ Everything ADS-B leaves behind, in one place — every door out (EXIT, the key, a mode pick, the server's
    *  adsb_off, a lapsed hold) ends here, so none can leave a stale table on the wrist. */
   const adsbUiOff = useCallback((keepBox = false) => {
     adsbOnRef.current = false;
     setAdsbOn(false); setAdsbReport(null); setAircraft([]);
-    if (!keepBox) {
-      setAdsbBoxOpen(false); setAdsbError(undefined);
-      setMapKind((k) => (k === 'adsb' ? null : k));   // ★ its map has nothing left to show
-    }
+    if (!keepBox) { setAdsbViewOpen(false); setAdsbError(undefined); }   // ★ the map goes with it (it is the view)
   }, []);
   /** ★★ NOTHING TO TUNE: a whole-profile data mode (OWRX DAB/ADS-B/ISM…) OR VibeServer's ADS-B, which leaves
    *  `status.mode` on the demod it came from exactly as DAB does — so the mode string alone cannot say. Every
@@ -2591,13 +2594,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   /** ★★ ENTER OR LEAVE ADS-B — the key in the demodulator sheet. toggleDab's rules exactly: pressed while the mode
-   *  runs with the box shut it brings the box back; pressed with the box up it leaves. The SERVER tunes (1090 MHz,
+   *  runs with its map put away (only a refused exit on a locked dial does that — see exitAdsb) it brings the map
+   *  back; otherwise it leaves. Entering opens the map AT ONCE, before the first report, so the press is answered. The SERVER tunes (1090 MHz,
    *  rate unchanged) and leaves DAB itself if it was in it (we then hear dab_off). */
   const toggleAdsb = useCallback(() => {
     const c = client.current;
     if (!c?.adsb) return;                      // not a VibeServer — the key is not drawn either
     if (adsbOnRef.current) {
-      if (!adsbBoxOpenRef.current) { setAdsbBoxOpen(true); return; }
+      if (!adsbViewOpenRef.current) { setAdsbViewOpen(true); return; }
       if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
       c.adsb(false);
       adsbUiOff();
@@ -2606,19 +2610,22 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to 1090
     setAdsbError(undefined);
     setAdsbReport(null);
-    setAdsbBoxOpen(true);
+    setAdsbViewOpen(true);
     c.adsb(true);
     adsbOnRef.current = true;
     setAdsbOn(true);
   }, [adsbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** ★ EXIT ADS-B — the box's key. Never toggleAdsb (the DAB lesson, dabExitAction): out of the mode it only puts
-   *  the box away; it can never ENTER. */
+  /** ★ EXIT ADS-B — the map's top-bar key, Android back and a pad's / keyboard's Back on the map (and the Apple TV box's
+   *  key). Never toggleAdsb (the DAB lesson, dabExitAction): out of the mode it only puts the view away; it can never
+   *  ENTER. ★★ On a LOCKED dial (ask before tuning) leaving 1090 is refused: the map is put away so the ask nudge —
+   *  drawn on the receiver screen, under the map's modal — can be seen, the mode carries on, and the ADS-B key in the
+   *  Mode sheet brings the map back (toggleAdsb). */
   const exitAdsb = useCallback(() => {
     const c = client.current;
     const leave = dabExitAction(adsbOnRef.current) === 'leave';
     // ★★ Ask before tuning: a locked listener may still put the BOX away — only leaving 1090 is refused.
-    if (leave && askLocked(dialStateRef.current)) { setAdsbBoxOpen(false); askGate(); return; }
+    if (leave && askLocked(dialStateRef.current)) { setAdsbViewOpen(false); askGate(); return; }
     if (leave) c?.adsb?.(false);
     adsbUiOff();
   }, [adsbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -3278,6 +3285,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
+  /** ★ What the server-map overlay shows: ADS-B's map while its view is up (it is the mode's screen), else the server
+   *  map somebody opened from the Mode sheet. Not on Apple TV (no WebView — the ADS-B box stands in there). */
+  const shownMap: MapKind | null = adsbViewOpen && !IS_TV ? 'adsb' : mapKind;
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -5843,14 +5853,23 @@ export default function SDRScreen({ route, navigation }: Props) {
         }
       },
       /** ★ V12 ADS-B: a report about once a second while the receiver is in the mode. ITS ARRIVAL MEANS ADS-B IS ON
-       *  (ADSB.md) — including for a second listener joining a radio somebody else put on 1090, so the box opens on
-       *  the TRANSITION (an X-equivalent the user pressed — SMALL, a shut box — stays as they left it). `null` = the
-       *  mode ended (adsb_off; the server sends the restored config after it); `why` = the refusal, shown in the box. */
+       *  (ADSB.md) — including for a second listener joining a radio somebody else put on 1090, or the app connecting
+       *  to one already there — so the MAP opens on the TRANSITION (a map put away by a refused exit stays away until
+       *  the key brings it back). `null` = the mode ended (adsb_off; the server sends the restored config after it):
+       *  the map closes and the receiver screen is back exactly as before. `why` = the refusal. */
       onAdsb: (r, why) => {
         if (destroyed.current) return;
-        if (why) { adsbUiOff(true); setAdsbError(why); setAdsbBoxOpen(true); return; }
+        if (why) {
+          /* ★ Apple TV: the box shows the reason (CLOSE puts it away). Elsewhere the map that opened on the press has
+           *  nothing to show, so it closes and the reason comes as an alert — after the modal has gone, because iOS
+           *  will not present an alert over a modal that is still being dismissed (it is dropped, silently). */
+          if (IS_TV) { adsbUiOff(true); setAdsbError(why); setAdsbViewOpen(true); return; }
+          adsbUiOff();
+          setTimeout(() => { if (!destroyed.current) appAlert('ADS-B unavailable', why); }, 450);
+          return;
+        }
         if (!r) { adsbUiOff(); return; }
-        if (!adsbOnRef.current) { adsbOnRef.current = true; setAdsbBoxOpen(true); setAdsbError(undefined); }
+        if (!adsbOnRef.current) { adsbOnRef.current = true; setAdsbViewOpen(true); setAdsbError(undefined); }
         setAdsbOn(true);
         setAdsbReport(r);
       },
@@ -11575,9 +11594,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           tunedHz={status.frequency}
           receiverPos={serverPos ?? recvLoc}
           decoderText={decoderText}
-          /* ★ VibeServer ADS-B has its own window (AdsbPanel); the shared `aircraft` must not also turn a running
+          /* ★ VibeServer ADS-B has its own screen (the map + live list); the shared `aircraft` must not also turn a running
            *  client decoder's box into a second copy of the table. OWRX's ADS-B (adsbOn never set) is unchanged. */
-          aircraft={adsbOn || adsbBoxOpen ? undefined : aircraft}
+          aircraft={adsbOn || adsbViewOpen ? undefined : aircraft}
           decoderStatus={decoderStatus}
           decoding={decoding}
           // Sit ABOVE the VTS bar (which shows the live station) rather than covering it —
@@ -12330,18 +12349,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       )}
       </RotateFade>
-      {/* ★★ V12 THE ADS-B WINDOW — the DAB window's rules: portrait-only on a phone (a table needs the height),
-          `adsbBoxOpen` not `adsbOn` (the window and the mode are two things), above the VTS bar and the notices.
-          MAP opens HFDL's map in its 'adsb' kind (see MapOverlay). */}
+      {/* ★★ V12 THE ADS-B BOX — APPLE TV ONLY. Everywhere else ADS-B's screen is the full-screen map (MapOverlay
+          'adsb', below); tvOS has no WebView, so there the box with the aircraft list is the whole interface, with the
+          DAB window's rules (`adsbViewOpen` not `adsbOn` — the window and the mode are two things). */}
       <RotateFade>
-      {adsbBoxOpen && (!isLandscape || isTablet) && (
-        <PanelBoundary name="ADS-B" onClose={() => setAdsbBoxOpen(false)}>
+      {IS_TV && adsbViewOpen && (!isLandscape || isTablet) && (
+        <PanelBoundary name="ADS-B" onClose={() => setAdsbViewOpen(false)}>
         <AdsbPanel
           report={adsbReport}
           aircraft={aircraft}
           error={adsbError}
           on={adsbOn}
-          onMap={() => { markInteract(); setMapKind('adsb'); }}
           onExit={exitAdsb}
           tall={adsbTall} onTall={onAdsbTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
@@ -13117,17 +13135,24 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★ NOT ON tvOS — MapOverlay is Leaflet in a WebView and there is no WKWebView on the
           platform. Gated at the RENDER so the component (and react-native-webview with it) is
           never mounted there. See src/utils/tv.ts and briefs/BRIEF-tvos-app.md §5b. */}
-      {!IS_TV && <PanelBoundary name="Map" onClose={() => setMapKind(null)} resetKey={mapKind !== null}><MapOverlay
-        visible={mapKind !== null}
-        kind={mapKind}
+      {/* ★★★ V12: ADS-B'S SCREEN IS THIS MAP and it takes precedence over any server map that was open (an ADS-B report
+          means the receiver is on 1090 — see onAdsb). Its close is EXIT ADS-B: it leaves the mode (exitAdsb), and
+          adsb_off is what finally takes the map down. A crash in it only puts it away (the mode key brings it back). */}
+      {!IS_TV && <PanelBoundary name="Map" onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : setMapKind(null))}
+                                resetKey={shownMap !== null}><MapOverlay
+        visible={shownMap !== null}
+        kind={shownMap}
         baseUrl={baseUrl}
         sessionUuid={sessionUuid}
-        onClose={() => setMapKind(null)}
+        onClose={() => (shownMap === 'adsb' ? exitAdsb() : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
          *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
-        rxLat={mapKind === 'adsb' ? (serverPos ?? recvLoc)?.lat ?? null : undefined}
-        rxLon={mapKind === 'adsb' ? (serverPos ?? recvLoc)?.lon ?? null : undefined}
-        adsbAircraft={mapKind === 'adsb' ? adsbReport?.aircraft ?? null : undefined}
+        rxLat={shownMap === 'adsb' ? (serverPos ?? recvLoc)?.lat ?? null : undefined}
+        rxLon={shownMap === 'adsb' ? (serverPos ?? recvLoc)?.lon ?? null : undefined}
+        adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}
+        adsbList={shownMap === 'adsb' ? aircraft : undefined}
+        adsbStarted={!!adsbReport}
+        safeInsets={insets}
       /></PanelBoundary>}
 
       {/* On-device FT8 spots map (Local/Kiwi): RN-fed spots (each with a grid),

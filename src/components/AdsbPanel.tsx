@@ -1,11 +1,16 @@
 /**
- * ADS-B on a VibeServer (V12, docs/v12/ADSB.md) — the decoder box.
+ * ADS-B on a VibeServer (V12, docs/v12/ADSB.md) — the decoder box, NOW FOR APPLE TV ONLY.
+ *
+ * ★★★ EVERYWHERE ELSE ADS-B'S SCREEN IS THE FULL-SCREEN MAP (MapOverlay 'adsb' + AdsbLiveList; Stuart, 2026-10-24:
+ *     "when ADS-B is selected the waterfall drops and the full-screen map is on"), which superseded this box and its
+ *     MAP key. tvOS has no WebView, so the map cannot exist there and this box stays the whole interface — without
+ *     the MAP key, which would open nothing. The notes below are from when it was the interface everywhere.
  *
  * ★★★ BUILT LIKE THE DAB BOX, BECAUSE IT IS THE SAME KIND OF THING. Choosing ADS-B takes the whole
  *     radio to 1090 MHz and the box IS the interface: there is nothing to tune, so the list of what
  *     is being heard is the screen (Stuart, 2026-10-23: "like DAB … opens the decoder box").
  *     The body is the existing AircraftPanel — the same table OWRX's ADS-B fills — and the header
- *     carries MAP (Stuart's spec: the map button lives IN THE BOX HEADER) and EXIT ADS-B.
+ *     carried MAP (the first spec: the map button IN THE BOX HEADER — superseded, see above) and EXIT ADS-B.
  * ★★ NO ✕, for the DAB box's reason (2026-09-20): closing the window would leave the receiver in a
  *    mode with nothing on screen to control it. EXIT ADS-B leaves the mode and the window together;
  *    SMALL is there for anyone who wants the waterfall back. After a REFUSAL (nothing to leave) the
@@ -32,7 +37,6 @@ export interface AdsbPanelProps {
   error?: string;
   /** True while the receiver is in ADS-B; false after a refusal (the exit key then only closes). */
   on: boolean;
-  onMap: () => void;
   onExit: () => void;
   bottomOffset: number;
   tall: boolean;
@@ -59,7 +63,6 @@ export default function AdsbPanel(p: AdsbPanelProps) {
   const bodyH = Math.round(tall ? bigBody : smallBody);
 
   const status = p.error ? 'not available' : adsbStatusText(p.report);
-  const anyPlaced = p.aircraft.some((a) => a.lat !== undefined && a.lon !== undefined);
 
   return (
     <DecoderShell bottom={p.bottomOffset} maxWidth={ADSB_MAX_W} tall={tall}>
@@ -68,8 +71,6 @@ export default function AdsbPanel(p: AdsbPanelProps) {
         <DecoderTitle>ADS-B</DecoderTitle>
         {/* ★ The text gives way, never the keys (the DAB box's SE lesson): EXIT must always be reachable. */}
         <Text style={[s.status, { flex: 1, flexShrink: 1, minWidth: 0 }]} numberOfLines={1}>{status}</Text>
-        {/* ★ MAP is offered whenever the mode runs — an empty sky is still a map with the receiver on it. */}
-        {p.on && <DecoderKey active={anyPlaced} onPress={p.onMap} accessibilityLabel="Aircraft map" label="MAP" />}
         {bigUseful && <DecoderKey active={tall} onPress={() => p.onTall(!tall)} label={tall ? 'SMALL' : 'BIG'} />}
         <DecoderKey onPress={p.onExit} label={p.on ? 'EXIT ADS-B' : 'CLOSE'} />
       </DecoderHeader>
