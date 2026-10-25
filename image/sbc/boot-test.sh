@@ -4,7 +4,7 @@
 # systemd boot, our units, the setup front door and the setup name, nothing about the hardware.
 #
 #   sudo image/sbc/boot-test.sh <vibeserver-portable-<board>-<date>.img.xz> <work-dir>
-#   (or through run-in-docker.sh's container: BOOT_TEST=1)
+#   (or: run-in-docker.sh boot-test <img.xz> <out>). Board cards and Raspberry Pi cards alike.
 #
 # What it does: decompresses a THROWAWAY copy, attaches root + vibedata, boots root with systemd-nspawn (QEMU user
 # mode; binfmt flags O+F — systemd 257 starts services by file descriptor) and a private network (only lo), waits for
@@ -23,12 +23,28 @@ cleanup() {
 }
 trap cleanup EXIT
 nice -n 19 xz -dc -T2 "$XZ" > "$IMG"
-read -r S1 Z1 <<< "$(sfdisk -d "$IMG" | sed -n 's/.*[^0-9]1 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p')"
-read -r S2 Z2 <<< "$(sfdisk -d "$IMG" | sed -n 's/.*[^0-9]2 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p')"
-LOOP1="$(losetup -f --show -o $((S1*512)) --sizelimit $((Z1*512)) "$IMG")"
-LOOP2="$(losetup -f --show -o $((S2*512)) --sizelimit $((Z2*512)) "$IMG")"
-mkdir -p "$R"; mount "$LOOP1" "$R"
-ARCH="$(sed -n 's/^ARCH=//p' "$R/etc/armbian-release")"
+# ★ Any card of ours (2026-10-25): a board card (root p1, vibedata p2, VIBESETUP p3) or a Raspberry Pi card (FAT boot p1,
+#   root p2, vibedata p3). Root = the ext4 partition holding /etc/os-release; settings = LABEL=vibedata.
+mkdir -p "$R"
+while read -r N S Z; do
+  L="$(losetup -f --show -o $((S*512)) --sizelimit $((Z*512)) "$IMG")"
+  T="$(blkid -p -o value -s TYPE "$L" 2>/dev/null || true)"; LB="$(blkid -p -o value -s LABEL "$L" 2>/dev/null || true)"
+  if [ "$LB" = vibedata ] && [ -z "$LOOP2" ]; then LOOP2="$L"; continue; fi
+  if [ "$T" = ext4 ] && [ -z "$LOOP1" ] && mount -o ro "$L" "$R" 2>/dev/null; then
+    if [ -f "$R/etc/os-release" ]; then umount "$R"; LOOP1="$L"; continue; fi
+    umount "$R"
+  fi
+  losetup -d "$L"
+# ★ [^ ]* then ONE OR MORE digits: with `.*[^0-9]\([0-9]*\)` the greedy .* left the number EMPTY (a Pi card's first run,
+#   2026-10-25: "could not find the root and vibedata partitions").
+done < <(sfdisk -d "$IMG" | sed -n 's/^[^ ]*[^0-9]\([0-9][0-9]*\) *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2 \3/p')
+[ -n "$LOOP1" ] && [ -n "$LOOP2" ] || { echo "!! could not find the root and vibedata partitions"; exit 1; }
+mount "$LOOP1" "$R"
+case "$(readelf -h "$R/usr/bin/true" 2>/dev/null | sed -n 's/^ *Machine: *//p')" in
+  *AArch64*) ARCH=arm64 ;;
+  *ARM*)     ARCH=arm ;;
+  *) echo "!! unknown architecture for $R/usr/bin/true"; exit 1 ;;
+esac
 # ★★ THIS COPY ONLY (it is deleted afterwards): systemd's per-service sandbox cannot be set up in a container nested in
 #    Docker under QEMU — the first run: "Failed to set up mount namespacing: Invalid argument" for NetworkManager and
 #    vibeserver, and journald failed on its credentials (qemu#1962, systemd#31219, as image/soft66ip found). A drop-in for
@@ -67,6 +83,23 @@ if ! chroot "$R" /bin/true 2>/dev/null; then
 fi
 # ★ The settings partition by label, as on the card: udev in the container cannot see it, so its fstab-less mount is
 #   done by vibeserver-pocket-data through blkid — the loop device is bound in for that.
+# ★★★ THE FIRST BOOT SEALS AND REBOOTS (11.0.11 on a board card: vibeserver-pocket-seal writes extraargs=overlayroot=tmpfs
+#     into /boot/armbianEnv.txt and reboots — and a reboot ENDS an nspawn container, so the first 11.0.11 board tests
+#     never reached the front door, 2026-10-25). So: boot once and let the seal run; prove it wrote the switch; then mark
+#     this COPY no-seal (nspawn cannot boot the kernel argument anyway) and boot again for everything else.
+SEAL="not applicable (no armbianEnv.txt — a Raspberry Pi card: its seal writes cmdline.txt on the boot partition, not mounted here)"
+if [ -f "$R/boot/armbianEnv.txt" ]; then
+  say "first boot: the read-only seal (it reboots the box when it has written the switch)"
+  timeout 900 systemd-nspawn -q --register=no --keep-unit --private-network -bD "$R" --bind="$LOOP2" \
+    > "$WD/boot-test-seal.log" 2>&1 || true
+  if grep -qE '^extraargs=(.*[[:space:]])?overlayroot=tmpfs([[:space:]]|$)' "$R/boot/armbianEnv.txt"; then
+    SEAL="ok — first boot wrote extraargs=overlayroot=tmpfs into /boot/armbianEnv.txt and rebooted"
+  else
+    SEAL="FAILED — no overlayroot=tmpfs in /boot/armbianEnv.txt after the first boot"
+  fi
+  say "seal: $SEAL"
+  touch "$R/etc/vibeserver-pocket/no-seal"
+fi
 say "booting the card's root (emulated $ARCH; a few minutes)"
 LOG="$WD/boot-test.log"
 timeout 900 systemd-nspawn -q --register=no --keep-unit --private-network -bD "$R" \
@@ -92,12 +125,15 @@ run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
 {
   echo "front door http://127.0.0.1:48000/ → HTTP $CODE"
   echo "hostname: $(run cat /etc/hostname)"
-  for u in vibeserver vibeserver-pocket vibeserver-pocket-data vibeserver-pocket-seal NetworkManager avahi-daemon systemd-networkd ssh; do
+  echo "read-only seal: $SEAL"
+  echo "vibeserver package: $(run dpkg-query -W -f '${Version} ${Architecture}' vibeserver)"
+  for u in vibeserver vibeserver-pocket vibeserver-pocket-data vibeserver-pocket-seal vibeserver-pocket-cpu NetworkManager avahi-daemon systemd-networkd ssh; do
     printf '%-24s %s\n' "$u" "$(run systemctl is-active "$u.service")"
   done
   echo "--- vibeserver-pocket (journal)"; run journalctl -b -u vibeserver-pocket --no-pager -n 15
   echo "--- vibeserver-pocket-seal"; run journalctl -b -u vibeserver-pocket-seal --no-pager -n 5
   echo "--- vibeserver-pocket-data"; run journalctl -b -u vibeserver-pocket-data --no-pager -n 8
+  echo "--- vibeserver-pocket-cpu"; run journalctl -b -u vibeserver-pocket-cpu --no-pager -n 5
   echo "--- ssh: units and TCP listeners (port 22 must NOT be listening)"
   run systemctl list-units --all --no-legend 'ssh*' 'sshd*'
   run ss -ltnp
@@ -108,4 +144,5 @@ run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
 run systemctl poweroff >/dev/null
 wait "$NS" 2>/dev/null || true
 [ "$CODE" = 200 ] || [ "$CODE" = 302 ] || { echo "!! the front door did not answer"; exit 1; }
+case "$SEAL" in FAILED*) echo "!! the read-only seal did not write its switch"; exit 1 ;; esac
 say "boot test passed (emulation only)"

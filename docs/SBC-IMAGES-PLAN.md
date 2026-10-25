@@ -348,3 +348,34 @@ run normal setup. Please send:
 - the admin page's **Download diagnostics** file. A Portable has no login: SSH is off and the console gettys are
   masked, so the file is the way to see the box;
 - whether Install updates works once.
+
+## 11.0.11 cards: status at the pause (2026-10-25, ~13:20 UTC)
+
+Built from the **published 11.0.11-1** packages on the Lenovo, in `~/vibe-sbc-out/11.0.11/` there. **Not uploaded.**
+Every card passed its **emulated** boot test (systemd-nspawn under QEMU; no real hardware):
+
+- the front door answered HTTP 200 on :48000;
+- hostname `vibeserversetup`;
+- package 11.0.11-1;
+- sshd off;
+- on every board card, the read-only seal wrote `extraargs=overlayroot=tmpfs` and rebooted on the first boot.
+
+| Card | File | Bytes | sha256 |
+|---|---|---|---|
+| Raspberry Pi 64-bit | vibeserver-pocket-arm64-20261025.img.xz | 1498203228 | 59ad757be1c02905c5f647d18361902aab80fe33ac6862729196bbefb2ae6ead |
+| Raspberry Pi 32-bit (0/1/2) | vibeserver-pocket-armhf-20261025.img.xz | 1496787716 | cbe396b07038f81ca774fb7068152ba2198ae651a1386dd663d6ac36a129dce9 |
+| Orange Pi One | vibeserver-portable-orangepione-20261025.img.xz | 882404220 | 3880f58538367a0a6447e0504d4e9857896c5f651abb58c15c9b627db07e5358 |
+| Orange Pi PC | vibeserver-portable-orangepipc-20261025.img.xz | 874609656 | 2236f45cf585e7f96d535180767e37f15a26dea34d876a8305097d992af0e5c6 |
+| Orange Pi Lite | vibeserver-portable-orangepilite-20261025.img.xz | 836773872 | 75789cb6a131f04e17c15a90acae8a5e875c3299bcffb12d030d9995958158c7 |
+| Orange Pi Zero 3 | vibeserver-portable-orangepizero3-20261025.img.xz | 1205320656 | 1b731295e1824c0e969ac30e1d2c1b9cc7b71bf92e7696c55ec41f21a9608b8f |
+| Orange Pi Zero 2W | vibeserver-portable-orangepizero2w-20261025.img.xz | 1223363792 | 497582c8b3faba24adfa3d73421fc3c766a2f9e02efecd004b38c855f4bf95b2 |
+| Le Potato | vibeserver-portable-lepotato-20261025.img.xz | 1178912252 | e0cafa2ed432f59e2af1429580f10eca1ec1ff5cf6a79aa5bbc73c24872255f3 |
+
+**Left to do: three cards, all Rockchip with GPT partition tables (Orange Pi 5, ROCK 5B, Radxa ZERO 3).**
+
+- Orange Pi 5, even after the GPT fixes (7d5132a2), still stops at "Failed to add #2 partition: Invalid argument".
+- **Next step:** look at the base image's GPT header (`sfdisk -d`), in particular its table-length and its first/last
+  LBA. Armbian may make the table with too few entries for a second partition. If so, rewrite it with 128 entries
+  before appending.
+- ROCK 5B was stopped mid-build at the pause, cleanly: its chroot was stopped, then `build.sh`'s own cleanup ran.
+- Radxa ZERO 3 has not been tried since the fix.
