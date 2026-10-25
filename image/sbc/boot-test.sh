@@ -35,7 +35,9 @@ while read -r N S Z; do
     umount "$R"
   fi
   losetup -d "$L"
-done < <(sfdisk -d "$IMG" | sed -n 's/.*[^0-9]\([0-9]*\) *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2 \3/p')
+# ★ [^ ]* then ONE OR MORE digits: with `.*[^0-9]\([0-9]*\)` the greedy .* left the number EMPTY (a Pi card's first run,
+#   2026-10-25: "could not find the root and vibedata partitions").
+done < <(sfdisk -d "$IMG" | sed -n 's/^[^ ]*[^0-9]\([0-9][0-9]*\) *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2 \3/p')
 [ -n "$LOOP1" ] && [ -n "$LOOP2" ] || { echo "!! could not find the root and vibedata partitions"; exit 1; }
 mount "$LOOP1" "$R"
 case "$(readelf -h "$R/usr/bin/true" 2>/dev/null | sed -n 's/^ *Machine: *//p')" in
