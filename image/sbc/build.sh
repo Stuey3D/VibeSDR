@@ -66,8 +66,8 @@ esac
 if [ "$RAM_MB" -lt 512 ] || [ "$STATUS" = dietpi ]; then
   die "$NAME has $RAM_MB MB — a Portable card needs 512 MB or more; use the DietPi ordinary-server image (image/soft66ip-dietpi) for this board"
 fi
-ONBOARDING="Ethernet first: VibeServerSetup.local:48000 (no onboard Wi-Fi; a USB Wi-Fi adapter gets the setup hotspot)"
-[ "$WIFI" = none ] || ONBOARDING="open \"VibeServer\" setup hotspot on the onboard $WIFI, and VibeServerSetup.local:48000 on Ethernet"
+ONBOARDING="Ethernet first: http://VibeServerSetup.local/ (or :48000; no onboard Wi-Fi; a USB Wi-Fi adapter present at first boot gets the setup hotspot, one added after setup is offered on the setup page)"
+[ "$WIFI" = none ] || ONBOARDING="open \"VibeServer\" setup hotspot on the onboard $WIFI, and http://VibeServerSetup.local/ (or :48000) on Ethernet"
 OUT_NAME="vibeserver-portable-$BOARD-$(date -u +%Y%m%d)"
 
 if [ "${DRY_RUN:-0}" = 1 ]; then
@@ -380,7 +380,11 @@ printf '%s\r\n' \
   "  3. The box raises its open \"VibeServer\" setup hotspot again; it deletes the file itself." \
   "Your radios, admin password and other settings are kept." \
   "" \
-  "On Ethernet the box is always at  http://vibeserversetup.local:48000  until it is set up." \
+  "On Ethernet the box is always at  http://vibeserversetup.local/  until it is set up" \
+  "(http://vibeserversetup.local:48000 works too)." \
+  "" \
+  "A USB Wi-Fi adapter plugged in AFTER setup is left switched off until you choose:" \
+  "the setup page asks \"New Wi-Fi hardware detected - configure it now?\"." \
   > "$WORK/fat/README-VibeServer.txt"
 umount "$WORK/fat"
 losetup -d "$LOOP"; LOOP=""

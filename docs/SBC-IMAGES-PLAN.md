@@ -357,7 +357,8 @@ Every card passed its **emulated** boot test (systemd-nspawn under QEMU; no real
 - the front door answered HTTP 200 on :48000;
 - hostname `vibeserversetup`;
 - package 11.0.11-1;
-- sshd off;
+- ~~sshd off~~ — **WRONG** (corrected 2026-10-25 evening): every board card's report said `ssh active` and
+  `0.0.0.0:22 LISTEN`. The test printed it and did not fail on it. See "Nick's real Orange Pi One" below;
 - on every board card, the read-only seal wrote `extraargs=overlayroot=tmpfs` and rebooted on the first boot.
 
 | Card | File | Bytes | sha256 |
@@ -385,3 +386,55 @@ and reads the protective MBR as DOS, so `sfdisk --relocate` did nothing. `sgdisk
 is first-lba (2048 on Armbian's Rockchip images), not 33 (96a9b01d). **All eleven 11.0.11 cards are now built.**
 ★ The pause itself: the ROCK 5B build stopped at the pause emptied the Lenovo's /dev through build.sh's cleanup
 (fixed 12e201b3; the Lenovo was rebooted).
+
+## Nick's real Orange Pi One (2026-10-25 evening): four faults, the cards withdrawn, the fixes
+
+Nick (G4IRX) flashed the 11.0.11 Orange Pi One card onto a real board (Allwinner H3, **no Wi-Fi**, Ethernet). The nine
+Armbian board cards were taken down from the `sbc-portable-11.0.11` pre-release the same evening (the notes carry a
+withdrawal notice); the two Raspberry Pi cards stayed. The fixes are on branch `sbc-fixes` (from `main`):
+
+| # | What Nick saw | Cause (evidence) | Fix | Commit |
+|---|---|---|---|---|
+| 1 | "ssh is running. I connected to root@vibeserversetup.local, pw 1234" | Nothing enabled sshd — **Armbian started it**: `armbian-firstrun` runs `service ssh restart` while `OPENSSHD_REGENERATE_HOST_KEYS=true` (its default), `armbian-firstlogin` runs `systemctl restart ssh.service`. `armbian-firstrun.service` is Type=simple, so the seal's `After=` did not wait for it: the seal could reboot under it and its self-disable land in RAM, so it ran on every boot. Read off the built card (mounted read-only); the boot tests had printed `ssh active`, sshd on 0.0.0.0:22. Every card also had the same SSH host keys, and Armbian's `PermitRootLogin yes`. | Debian's `sshd_not_to_be_run`; ssh.socket + sshd@ masked; first-run key regeneration off; host keys deleted; ssh generator masked; `PermitRootLogin no`; the seal waits for the first run; the owner's Enable SSH removes / restores the file. build.sh checks every way sshd can start; boot-test.sh fails on any. | d6d50d90 |
+| 2 | "vibeserversetup.local resolves to a link local ipv6, then a public ipv6, but no ipv4 … 'site not found'"; `http://<IPv4>:48000/` worked | The server listened on **IPv4 only** (`net::listen`: AF_INET, INADDR_ANY). Likely also avahi's default `publish-a-on-ipv6=no` (an answer sent over IPv6 carries no A record). | One dual-stack socket (AF_INET6, IPV6_V6ONLY=0), IPv4 fallback; IPv4 clients read exactly as before (`::ffff:` unwrapped where first read). IPv6 classes: fe80::/10 + fc00::/7 LAN, a global address LAN inside the box's own prefixes; brute-force lockout per /64 for remote IPv6. avahi: both addresses in every answer (converge). | 15d356cc, 672820d9 |
+| 3 | `http://vibeserversetup.local/` (no port) — "site not found" | The :80 redirect named the **Wi-Fi** interface and was IPv4 only; a wired box had none. | :80 → the front door on every link, IPv4 + IPv6, while the box is being set up; removed when the setup name retires. | 672820d9 |
+| 4 | "Wi-Fi not saved — Give this box's own hotspot a name" | The page counted an untouched Wi-Fi card as unsaved. | Already fixed: d2464c1c ("Disable Wi-Fi / no Wi-Fi present"). | d2464c1c |
+| — | (Stuart) USB Wi-Fi dongles added later | A radio appearing on a set-up box with nothing saved raised the OPEN setup hotspot on a live server. | A Wi-Fi hardware record; a new radio on a set-up box is left alone, the setup page asks "New Wi-Fi hardware detected — configure it now?" (Configure / Not now). No open hotspot on a set-up box unless the owner reset its Wi-Fi. | 18a5a37b, f5a3c5c1 |
+
+Nick also saw **DAB struggling**; he suspects his power supply. Not investigated — note only.
+
+**Proved here:** each fix by tests (pocket Python suites, test-ipclass, test-pocket, test-dualstack-clients against the
+real binary over 127.0.0.1, [::1], the Mac's own ULA and LAN IPv4, the setup-page tests); the new sshd checks against
+the shipped card's root and against it after the new section (chroot on an overlay); `sshd -T` says
+`permitrootlogin no`; the nft scripts with real nftables; the avahi file with avahi 0.8.
+**Reproduced under emulation:** the withdrawn orangepione card, booted by the new boot-test.sh (2026-10-25 22:30): on the
+second boot `armbian-firstrun` was still **enabled** (the seal had rebooted under it), `ssh.service` disabled but
+**active**, sshd on `0.0.0.0:22` and `*:22` — the test fails it. (A first version of the check, reading the state the
+moment the front door answered, passed the same card: the first run had not reached `service ssh restart` yet. The test
+now waits for the first run to finish and fails if it is still enabled.)
+**Not proved without hardware:** NetworkManager, DHCP and avahi on a real board; a real USB dongle's sysfs ids and
+NetworkManager's `managed no` on it; IPv6 NAT on Armbian's sunxi kernel (the redirect falls back to IPv4 alone).
+
+### Release notes for the fixed cards (draft — not published)
+
+> **VibeServer Portable cards for other boards — fixed (replaces the withdrawn 11.0.11 board cards)**
+>
+> Thanks to Nick (G4IRX), who ran the Orange Pi One card on a real board. The first board cards had four faults, all
+> fixed on these:
+>
+> - **SSH was switched on, with Armbian's default root password.** Armbian's own first-boot script started it. SSH is
+>   now off and cannot start until you switch it on in the admin page (Enable SSH: login `vibe`, your own password —
+>   root can never log in over SSH). Each box makes its own SSH keys. **If you flashed a withdrawn board card, re-flash
+>   it with one of these.**
+> - **The box now answers on IPv6 as well as IPv4.** On some networks `vibeserversetup.local` gave only IPv6 addresses
+>   and the page did not open.
+> - **`http://vibeserversetup.local/` works on Ethernet**, with no port number, until setup is finished
+>   (`http://vibeserversetup.local:48000/` still works).
+> - **A box with no Wi-Fi can finish setup** (there is a "Disable Wi-Fi / no Wi-Fi present" tick if the box gets it
+>   wrong).
+> - **A USB Wi-Fi adapter plugged in after setup** is left switched off until you choose: the setup page asks "New Wi-Fi
+>   hardware detected — configure it now?".
+>
+> These cards are still **tested under emulation only** apart from the Orange Pi One. If anything goes wrong, install
+> the board's own OS and add VibeServer with APT instead.
+
