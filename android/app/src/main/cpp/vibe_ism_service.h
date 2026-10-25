@@ -262,7 +262,10 @@ public:
         const std::string line = readable(r, nick);
         const bool fresh = d.count == 0;
         if (fresh) { d.id = ++nextId_; d.first = t; }
-        const bool repeat = !fresh && line == d.line && t - d.last < 3.0;
+        /* ★ A SUSPECTED FOB'S READING IS ALREADY ONE PRESS (FobWatch merged its frames and images), so it is never folded
+         *  as a repeat: Stuart's 16 presses 1-3 s apart chained through the 3 s fold into ONE reading (count 1, one log
+         *  line). Every other kind still folds — a sensor or a KeeLoq fob sends several frames per transmission. */
+        const bool repeat = !fresh && line == d.line && t - d.last < 3.0 && r.kind != "suspectfob";
         if (!repeat) ++d.count;
         d.r = r; d.nick = nick; d.line = line; d.last = t;
         ++decoded_;
