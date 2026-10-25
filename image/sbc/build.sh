@@ -279,7 +279,8 @@ rm -rf "$R/tmp/pocket-files" "$R/tmp/pocket-debs" "$R/tmp/sbc-files"
 rm -f "$R/etc/resolv.conf"
 if [ -n "$RESOLV_LINK" ]; then ln -s "$RESOLV_LINK" "$R/etc/resolv.conf"; rm -f "$R/etc/resolv.conf.vibe-keep"
 else mv -f "$R/etc/resolv.conf.vibe-keep" "$R/etc/resolv.conf" 2>/dev/null || true; fi
-# ★ Made on the box, not shared by every card (Armbian's first run makes new SSH host keys itself).
+# ★ Made on the box, not shared by every card. (SSH host keys: none on the card — customise-armbian.sh deletes the
+#   base's, and the owner's "Enable SSH" makes the box's own.)
 : > "$R/etc/machine-id"
 rm -f "$R/var/lib/dbus/machine-id"
 
@@ -301,7 +302,27 @@ check "vibeserver enabled"                      'wants vibeserver.service multi-
 check "NetworkManager enabled"                  'wants NetworkManager.service multi-user.target'
 check "avahi-daemon enabled"                    'wants avahi-daemon.service multi-user.target'
 check "systemd-networkd off"                    '! wants systemd-networkd.service multi-user.target'
-check "sshd off"                                '! wants ssh.service multi-user.target'
+# ★★★ EVERY WAY sshd CAN START (2026-10-25: "sshd off" checked one link, and Armbian's first run started sshd anyway).
+#     ssh_wanted: any ssh/sshd service or socket linked into ANY .wants/.requires directory (multi-user, sockets.target…).
+ssh_wanted() { find "$R/etc/systemd/system" "$R/usr/lib/systemd/system" \( -path '*.wants/*' -o -path '*.requires/*' \) 2>/dev/null \
+                 | sed 's|.*/||' | grep -c -E '^(ssh|sshd)(@.*)?\.(service|socket)$' || true; }
+masked() { [ -L "$R/etc/systemd/system/$1" ] && [ "$(readlink "$R/etc/systemd/system/$1")" = /dev/null ]; }
+ssh_preset() { cat "$R"/usr/lib/systemd/system-preset/* "$R"/etc/systemd/system-preset/* 2>/dev/null \
+                 | grep -c -E '^[[:space:]]*enable[[:space:]]+(ssh|sshd)' || true; }
+ssh_cond() { cat "$R"/usr/lib/systemd/system/ssh.service "$R"/usr/lib/systemd/system/ssh.socket 2>/dev/null | grep -c 'ConditionPathExists=!/etc/ssh/sshd_not_to_be_run' || true; }
+check "sshd: no ssh/sshd unit wanted by any target" '[ "$(ssh_wanted)" = 0 ]'
+check "sshd: no sshd.service alias link"         '[ ! -e "$R/etc/systemd/system/sshd.service" ] && [ ! -L "$R/etc/systemd/system/sshd.service" ]'
+check "sshd: ssh.socket and sshd@.service masked" 'masked ssh.socket && masked sshd@.service'
+check "sshd: Debian's sshd_not_to_be_run present" '[ -f "$R/etc/ssh/sshd_not_to_be_run" ]'
+check "sshd: ssh.service and ssh.socket honour it" '[ "$(ssh_cond)" = 2 ]'
+check "sshd: no preset enables it"               '[ "$(ssh_preset)" = 0 ]'
+check "sshd: Armbian's first run neither restarts sshd nor makes keys" \
+      'grep -q "^OPENSSHD_REGENERATE_HOST_KEYS=false" "$R/etc/default/armbian-firstrun"'
+check "sshd: no host keys on the card (each box makes its own)" '[ -z "$(ls "$R"/etc/ssh/ssh_host_* 2>/dev/null)" ]'
+check "sshd: systemd's ssh generator masked"     '[ "$(readlink "$R/etc/systemd/system-generators/systemd-ssh-generator")" = /dev/null ]'
+check "sshd: PermitRootLogin no, read first"     \
+      '[ "$(ls "$R/etc/ssh/sshd_config.d/" | head -1)" = 00-vibeserver-portable.conf ] && grep -q "^PermitRootLogin no" "$R/etc/ssh/sshd_config.d/00-vibeserver-portable.conf" && grep -q "^Include /etc/ssh/sshd_config.d/" "$R/etc/ssh/sshd_config"'
+check "sshd: no SysV rc start link"              '[ -z "$(ls "$R"/etc/rc[2-5].d/S*ssh 2>/dev/null)" ]'
 check "netplan hands Ethernet to NetworkManager" 'grep -q "renderer: NetworkManager" "$R/etc/netplan/10-vibeserver-networkmanager.yaml"'
 check "Armbian root resize off"                 '[ -f "$R/root/.no_rootfs_resize" ]'
 check "nmcli, iw, dnsmasq, nft, avahi present"  '[ -x "$R/usr/bin/nmcli" ] && [ -x "$R/usr/sbin/iw" -o -x "$R/usr/bin/iw" ] && [ -x "$R/usr/sbin/dnsmasq" ] && [ -x "$R/usr/sbin/nft" ] && [ -x "$R/usr/sbin/avahi-daemon" ]'

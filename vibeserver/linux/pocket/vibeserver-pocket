@@ -2232,7 +2232,8 @@ def avahi_limits(path=None):
 #     at all. This lets the owner switch SSH on from the admin page, with a password THEY type there.
 #  ★★ THE ACCOUNT: `vibe` (uid 1000) — the image's own login (customise.sh makes it, LOCKED), a member of sudo, and the
 #     account Raspberry Pi OS users expect. root is never given a password here: Debian's sshd refuses root password
-#     logins (PermitRootLogin prohibit-password) and that stays as it is. The owner logs in as vibe and uses sudo.
+#     logins (PermitRootLogin prohibit-password) and that stays as it is. ★★ Armbian's sshd_config says
+#     PermitRootLogin yes (root's password is the documented 1234), so a board card adds a drop-in that says no. The owner logs in as vibe and uses sudo.
 #  ★★ THE PASSWORD: handed to chpasswd on STDIN ("vibe:<password>"), never in an argument list, never logged. chpasswd
 #     hashes it as the system does (yescrypt on Trixie). What is KEPT is only that HASH, read back from /etc/shadow.
 #  ★★★ IT SURVIVES THE READ-ONLY ROOT. On a sealed Portable /etc/shadow and the running sshd live in the RAM overlay and
@@ -2242,6 +2243,13 @@ def avahi_limits(path=None):
 #     The host keys are kept there too, so the box does not present a new key — and a warning — after each power cycle.
 #  ★ Off = sshd stopped, vibe locked again (usermod -L), the hash forgotten. The host keys stay (they are not secret to
 #    anyone but the box, and keeping them means the next "on" is the same box to the owner's ssh client).
+#  ★★★ DEBIAN'S OWN "NEVER RUN sshd" FILE (2026-10-25, Nick's Orange Pi One: sshd was listening with root/1234). An
+#     Armbian card ships /etc/ssh/sshd_not_to_be_run (image/sbc/customise-armbian.sh): ssh.service and ssh.socket
+#     carry ConditionPathExists=!/etc/ssh/sshd_not_to_be_run (sshd@.service is masked there), so NOTHING that starts sshd through
+#     systemd — Armbian's first run (`service ssh restart`), its first console login (`systemctl restart ssh`), a
+#     package upgrade — can start it while the file is there. So ON removes it before the start (every boot too: on a
+#     sealed root the removal is in RAM) and OFF puts it back. A Raspberry Pi card has no such file and gains one only
+#     when the owner switches SSH OFF here — which is what "off" means.
 SSH_INBOX = "/var/lib/vibeserver/pocket-ssh.request"         # the daemon writes (0600), we read + delete
 SSH_STATE = "/var/lib/vibeserver-pocket/ssh.json"            # ★ on the settings partition; root 0600
 SSH_KEEP_KEYS = "/var/lib/vibeserver-pocket/ssh-host-keys"   # the box's own host keys, kept across boots
@@ -2367,6 +2375,19 @@ class SshAccess:
         write_atomic(self.state, json.dumps(doc), mode=0o600)
         os.chmod(self.state, 0o600)
 
+    def _no_run_file(self):
+        return os.path.join(self.etc, "sshd_not_to_be_run")
+
+    def _allow_sshd(self):
+        """Remove Debian's "never run sshd" file so the start below is not skipped by its condition."""
+        try:
+            os.unlink(self._no_run_file())
+        except FileNotFoundError:
+            pass
+
+    def _forbid_sshd(self):
+        write_atomic(self._no_run_file(), "VibeServer Portable: SSH is off (the owner's switch on the admin page)\n")
+
     def apply(self, req):
         """The owner's request (already validated). Returns True when it took."""
         self.last_error = ""
@@ -2375,6 +2396,7 @@ class SshAccess:
             log(self.last_error)
             return False
         if not req["on"]:
+            self._forbid_sshd()
             self.sh.run(["systemctl", "stop", SSH_UNIT], timeout=30)
             self.sh.run(["usermod", "-L", self.user], timeout=30)
             self._save({"v": 1, "on": False, "user": self.user})
@@ -2393,6 +2415,7 @@ class SshAccess:
             return False
         self._host_keys()
         self._save({"v": 1, "on": True, "user": self.user, "hash": h})
+        self._allow_sshd()
         self.sh.run(["systemctl", "start", SSH_UNIT], timeout=60)
         log("SSH switched ON by the owner — log in as %s" % self.user)
         return True
@@ -2411,6 +2434,7 @@ class SshAccess:
                 log(self.last_error)
                 return False
         self._host_keys()
+        self._allow_sshd()
         self.sh.run(["systemctl", "start", SSH_UNIT], timeout=60)
         log("SSH is on (the owner's switch, kept on the settings partition)")
         return True

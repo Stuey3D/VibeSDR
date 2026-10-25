@@ -26,6 +26,30 @@ grep -qw "overlayroot=tmpfs" "${SEAL_CMDLINE:-/proc/cmdline}" 2>/dev/null && exi
 [ -f "$SR/etc/vibeserver-pocket/no-seal" ] && { echo "vibeserver-pocket-seal: no-seal file present — root left writable"; exit 0; }
 command -v overlayroot-chroot >/dev/null || [ -n "$SR" ] || { echo "vibeserver-pocket-seal: overlayroot not installed — cannot seal"; exit 0; }
 
+# ★★★ WAIT FOR ARMBIAN'S FIRST RUN TO FINISH (2026-10-25, Nick's Orange Pi One: sshd listening with root/1234).
+#     armbian-firstrun.service is Type=simple, so `After=armbian-firstrun.service` only waits for it to START. It
+#     then rewrites /boot/armbianEnv.txt (a random MAC — the same file we write below) and, LAST, disables itself.
+#     Sealing and rebooting under it lost that disable: on a read-only root it was written to RAM, so the first run
+#     ran again on EVERY boot — new host keys, and its `service ssh restart` — and our armbianEnv.txt write raced
+#     its own. So: while it is still running, wait (it gives itself 2 minutes; we give it 150 s, then seal anyway).
+#     No such unit (a Raspberry Pi) → SubState is empty or "dead" → no wait.
+# ★ SEAL_SYSTEMCTL (tests only): a stand-in for systemctl. Under SEAL_ROOT without it there is nothing to ask.
+wait_for_armbian_firstrun() {
+  local sc="${SEAL_SYSTEMCTL:-systemctl}" n=0 st
+  [ -n "$SR" ] && [ -z "${SEAL_SYSTEMCTL:-}" ] && return 0
+  while [ "$n" -lt "${SEAL_FIRSTRUN_WAIT:-150}" ]; do
+    st="$("$sc" show -p SubState --value armbian-firstrun.service 2>/dev/null || true)"
+    case "$st" in
+      running|start|start-pre|start-post) ;;
+      *) [ "$n" -gt 0 ] && echo "vibeserver-pocket-seal: Armbian's first run finished after ${n} s"; return 0 ;;
+    esac
+    [ "$n" -eq 0 ] && echo "vibeserver-pocket-seal: waiting for Armbian's first run to finish before sealing"
+    sleep "${SEAL_SLEEP:-1}"; n=$((n + 1))
+  done
+  echo "vibeserver-pocket-seal: Armbian's first run still running after ${n} s — sealing anyway"
+}
+wait_for_armbian_firstrun
+
 reboot_now() {
   echo "vibeserver-pocket-seal: root will be read-only from the next boot — rebooting now"
   [ "${SEAL_NO_REBOOT:-0}" = 1 ] || systemctl --no-block reboot

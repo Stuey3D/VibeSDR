@@ -6,6 +6,7 @@ chain, exactly once, and nothing is touched where it must not be.
   · Armbian / DietPi-on-Armbian (image/sbc): overlayroot=tmpfs at the front of the FIRST extraargs= in
     /boot/armbianEnv.txt (or dietpiEnv.txt) — added as a line when there is none, the owner's own args kept.
   · Idempotent: a second run changes nothing.
+  · Armbian's first run still running: the seal waits for it (bounded), so its self-disable lands on the real root.
   · No marker, the no-seal file, no initramfs/uInitrd, already sealed: nothing written.
 Run: python3 vibeserver/linux/pocket/test_pocket_seal.py
 """
@@ -113,6 +114,46 @@ with tempfile.TemporaryDirectory() as t:
     mk(r, MARK)
     rc, out = run(r)
     check("no boot file at all: says so, exits 0", rc == 0 and "not sealing" in out, out)
+
+    # ── Armbian's first run still running (Type=simple: After= only waits for its START) ──
+    # ★ 2026-10-25: a seal that rebooted under it lost its self-disable → it ran (and restarted sshd) on every boot.
+    def fake_systemctl(root, running_for):
+        sc = os.path.join(root, "fake-systemctl")
+        cnt = os.path.join(root, "calls")
+        with open(sc, "w") as f:
+            f.write("#!/bin/bash\nn=$(cat %s 2>/dev/null || echo 0); n=$((n+1)); echo $n > %s\n"
+                    "if [ $n -le %d ]; then echo running; else echo exited; fi\n" % (cnt, cnt, running_for))
+        os.chmod(sc, 0o755)
+        return sc, cnt
+    r = os.path.join(t, "firstrun")
+    mk(r, dict(MARK, **{"/boot/armbianEnv.txt": ENV, "/boot/uInitrd": "x"}))
+    sc, cnt = fake_systemctl(r, 3)
+    cl = os.path.join(r, "proc-cmdline")
+    open(cl, "w").write("root=UUID=x\n")
+    p = subprocess.run(["bash", SEAL], capture_output=True, text=True,
+                       env=dict(os.environ, SEAL_ROOT=r, SEAL_NO_REBOOT="1", SEAL_CMDLINE=cl, SEAL_SYSTEMCTL=sc, SEAL_SLEEP="0"))
+    out = p.stdout + p.stderr
+    check("first run running: the seal waits for it", "waiting for Armbian's first run" in out and read(r, "/calls").strip() == "4", out)
+    check("first run finished: then seals", "overlayroot=tmpfs" in read(r, "/boot/armbianEnv.txt") and "finished after 3 s" in out, out)
+    r = os.path.join(t, "firstrun-stuck")
+    mk(r, dict(MARK, **{"/boot/armbianEnv.txt": ENV, "/boot/uInitrd": "x"}))
+    sc, cnt = fake_systemctl(r, 999)
+    cl = os.path.join(r, "proc-cmdline")
+    open(cl, "w").write("root=UUID=x\n")
+    p = subprocess.run(["bash", SEAL], capture_output=True, text=True,
+                       env=dict(os.environ, SEAL_ROOT=r, SEAL_NO_REBOOT="1", SEAL_CMDLINE=cl, SEAL_SYSTEMCTL=sc,
+                                SEAL_SLEEP="0", SEAL_FIRSTRUN_WAIT="5"))
+    out = p.stdout + p.stderr
+    check("first run stuck: bounded wait, then seals anyway", "sealing anyway" in out and "overlayroot=tmpfs" in read(r, "/boot/armbianEnv.txt"), out)
+    r = os.path.join(t, "pi-no-firstrun")
+    mk(r, dict(MARK, **{"/boot/firmware/cmdline.txt": "root=PARTUUID=ab-02\n", "/boot/firmware/initramfs8": "x"}))
+    sc = os.path.join(r, "fake-systemctl")
+    open(sc, "w").write("#!/bin/bash\necho dead\n"); os.chmod(sc, 0o755)
+    cl = os.path.join(r, "proc-cmdline"); open(cl, "w").write("root=x\n")
+    p = subprocess.run(["bash", SEAL], capture_output=True, text=True,
+                       env=dict(os.environ, SEAL_ROOT=r, SEAL_NO_REBOOT="1", SEAL_CMDLINE=cl, SEAL_SYSTEMCTL=sc, SEAL_SLEEP="0"))
+    check("no Armbian first run (a Pi): no wait", "waiting" not in p.stdout and "overlayroot=tmpfs" in read(r, "/boot/firmware/cmdline.txt"),
+          p.stdout)
 
 print("test_pocket_seal: %s" % ("PASS" if not fails else "%d FAILED" % fails))
 sys.exit(1 if fails else 0)

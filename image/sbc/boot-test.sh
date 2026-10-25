@@ -144,5 +144,10 @@ run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
 run systemctl poweroff >/dev/null
 wait "$NS" 2>/dev/null || true
 [ "$CODE" = 200 ] || [ "$CODE" = 302 ] || { echo "!! the front door did not answer"; exit 1; }
+# ★★★ SSH MUST BE OFF — a FAILURE, not a line in the report (2026-10-25: every 11.0.11 board card's report said
+#     `ssh active` and 0.0.0.0:22, and the test passed; Nick then logged in as root/1234 on a real Orange Pi One).
+#     This is the SECOND boot, so a first-run script that starts sshd on every boot shows here too.
+if grep -qE '^ssh +active' "$WD/boot-test-result.txt"; then echo "!! sshd is RUNNING and nobody switched SSH on"; exit 1; fi
+if grep -qE '^LISTEN .*:22 ' "$WD/boot-test-result.txt"; then echo "!! something is LISTENING on port 22"; exit 1; fi
 case "$SEAL" in FAILED*) echo "!! the read-only seal did not write its switch"; exit 1 ;; esac
 say "boot test passed (emulation only)"

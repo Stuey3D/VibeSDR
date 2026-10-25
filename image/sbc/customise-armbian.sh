@@ -85,11 +85,50 @@ EOF
   #     forced change at the first login (/root/.not_logged_in_yet) — no password of ours is made or stored. The
   #     converge masks the console gettys (HDMI and serial) on a Portable, as on the Pi, so nobody logs in at all
   #     until an owner deliberately re-enables one.
+  # ★★★ DISABLED WAS NOT OFF (Nick, G4IRX, real Orange Pi One, 2026-10-25: "I connected to root@vibeserversetup.local,
+  #     pw 1234"; the boot tests had printed `ssh active` and 0.0.0.0:22 too — and passed). Nothing ENABLED sshd: Armbian
+  #     STARTED it. armbian-firstrun runs `service ssh restart` when OPENSSHD_REGENERATE_HOST_KEYS=true (its default) —
+  #     a restart starts a stopped unit whether it is enabled or not — and armbian-firstlogin runs
+  #     `systemctl restart ssh.service` at the first console login. And because the seal could reboot under the first
+  #     run (vibeserver-pocket-seal now waits for it), its self-disable could land in the RAM overlay, so it ran again
+  #     on every boot. Every way sshd can start is now shut:
+  #       · /etc/ssh/sshd_not_to_be_run — Debian's own switch: ssh.service and ssh.socket carry
+  #         ConditionPathExists=! on it, so ANY start through systemd (first run, first login, a package upgrade, a
+  #         hand) is skipped. The owner's "Enable SSH" (vibeserver-pocket SshAccess) removes it, and puts it back on off.
+  #       · ssh.service, ssh.socket disabled; ssh.socket and sshd@.service (its per-connection
+  #         child, which has no such condition) MASKED: socket activation never runs here.
+  #         ssh.service itself is NOT masked: the owner's switch starts it, and a masked unit would make Armbian's first
+  #         console login fail its `systemctl restart ssh.service || exit 1` and rerun at every login. The condition
+  #         stops that restart without failing it.
+  #       · OPENSSHD_REGENERATE_HOST_KEYS=false — the first run neither restarts sshd nor makes keys.
+  #       · the image's host keys DELETED: every card was built from the same base, so every card had the SAME keys.
+  #         The owner's switch makes the box's own (ssh-keygen -A) the first time SSH goes on, and keeps them.
+  #       · systemd's ssh generator masked (AF_UNIX/vsock sshd sockets — local only, but nothing of ours uses them).
+  #       · PermitRootLogin no (a drop-in, read before Armbian's own "PermitRootLogin yes"): with the owner's SSH on, the
+  #         login is `vibe` with the owner's password — never root with Armbian's documented one.
+  #     build.sh checks every one of these; boot-test.sh fails a card on which sshd runs.
   systemctl disable ssh.service ssh.socket 2>/dev/null || true
+  rm -f /etc/systemd/system/sshd.service              # ★ the Alias= link `enable` made (gone with disable; belt and braces)
+  systemctl mask ssh.socket sshd@.service
+  install -d -m 0755 /etc/ssh /etc/ssh/sshd_config.d
+  echo "VibeServer Portable: SSH is off until the owner switches it on (the admin page)" > /etc/ssh/sshd_not_to_be_run
+  if [ -f /etc/default/armbian-firstrun ] && grep -q '^OPENSSHD_REGENERATE_HOST_KEYS=' /etc/default/armbian-firstrun; then
+    sed -i 's/^OPENSSHD_REGENERATE_HOST_KEYS=.*/OPENSSHD_REGENERATE_HOST_KEYS=false/' /etc/default/armbian-firstrun
+  else
+    echo "OPENSSHD_REGENERATE_HOST_KEYS=false" >> /etc/default/armbian-firstrun
+  fi
+  rm -f /etc/ssh/ssh_host_*
+  install -d -m 0755 /etc/systemd/system-generators
+  ln -sfn /dev/null /etc/systemd/system-generators/systemd-ssh-generator
+  cat > /etc/ssh/sshd_config.d/00-vibeserver-portable.conf <<'EOF'
+# Written by the VibeServer Portable image (image/sbc). sshd keeps the FIRST value it reads, and this file is read
+# before Armbian's "PermitRootLogin yes" in sshd_config: root never logs in over SSH. The owner's login is `vibe`.
+PermitRootLogin no
+EOF
   # ── 4. One log, in RAM — Pi OS Lite (Trixie) has no rsyslog; the converge puts journald in RAM ─────────────────────
   # ★ Armbian minimal runs rsyslog beside journald: the same lines twice, and the second copy is written to /var/log.
   systemctl disable rsyslog.service 2>/dev/null || true
-  say "pre: NetworkManager owns the network, root resize off, sshd off, rsyslog off"
+  say "pre: NetworkManager owns the network, root resize off, sshd off (masked/condition/no keys), rsyslog off"
   ;;
 post)
   # ── 5. The read-only root's initramfs: Armbian boots uInitrd, the U-Boot wrapper of initrd.img ───────────────────────
