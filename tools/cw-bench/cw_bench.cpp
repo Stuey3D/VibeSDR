@@ -313,15 +313,26 @@ static int cpu(double seconds) {
                      { "skimmer 192 kHz IQ", 192000, true, -90000, 90000 } };
     for (auto& w : ws) {
         Rng rng(1);
-        std::vector<Tone> ts;
-        for (double hz = w.lo + 200; hz < w.hi - 200; hz += 400) {
+        // ★ Each tone is mixed in and its envelope freed at once: held together, 376 envelopes at 192 kHz were ≈ 2 GB for
+        //   10 s — more than a 32-bit Pi can address (std::bad_alloc under armhf), for a bench that should run there.
+        std::vector<cf> iq; std::vector<float> re, one; std::vector<cf> oneIq;
+        size_t tones = 0;
+        for (double hz = w.lo + 200; hz < w.hi - 200; hz += 400, ++tones) {
             Keying k; k.wpm = 18 + 10 * rng.uni();
             std::string s; while (s.size() < seconds * k.wpm / 1.2 / 8) s += "CQ TEST G4ABC G4ABC  ";
-            Tone t; t.hz = hz; t.snrDb = 5 + 20 * rng.uni(); t.env = keyEnvelope(s, k, w.rate, rng);
-            ts.push_back(t);
+            std::vector<Tone> t1(1); t1[0].hz = hz; t1[0].snrDb = 5 + 20 * rng.uni(); t1[0].env = keyEnvelope(s, k, w.rate, rng);
+            synth(t1, w.rate, w.cplx, seconds, rng, oneIq, one, 0.0);
+            if (w.cplx) { if (iq.empty()) iq.swap(oneIq); else for (size_t i = 0; i < iq.size(); ++i) iq[i] += oneIq[i]; }
+            else { if (re.empty()) re.swap(one); else for (size_t i = 0; i < re.size(); ++i) re[i] += one[i]; }
         }
-        std::vector<cf> iq; std::vector<float> re;
-        synth(ts, w.rate, w.cplx, seconds, rng, iq, re);
+        {   // the noise, once
+            std::vector<Tone> none;
+            synth(none, w.rate, w.cplx, seconds, rng, oneIq, one, 1.0);
+            if (w.cplx) for (size_t i = 0; i < iq.size(); ++i) iq[i] += oneIq[i];
+            else for (size_t i = 0; i < re.size(); ++i) re[i] += one[i];
+            std::vector<cf>().swap(oneIq); std::vector<float>().swap(one);
+        }
+        std::vector<Tone> ts(tones);   // ★ only its size is reported
         Skimmer::Config cfg; cfg.rate = w.rate; cfg.complexIn = w.cplx; cfg.loHz = w.lo; cfg.hiHz = w.hi;
         cfg.maxSignals = 400;
         Skimmer sk(cfg);
