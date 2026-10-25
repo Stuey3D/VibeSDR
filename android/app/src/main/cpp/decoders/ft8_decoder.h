@@ -128,6 +128,7 @@ private:
     int pulseLo_ = 0, pulseHi_ = 0;        // where it is not ~0
     std::vector<float> dphi_;      // scratch: the reference's phase step per sample
     std::vector<float> prodRe_, prodIm_;   // scratch: audio × conj(reference)
+    std::vector<uint16_t> idx_;            // scratch: the reference's sine-table index per sample (300 KB FT8)
     std::vector<float> zr_, zi_, toneR_, toneI_;   // scratch: the decimated baseband and its tone tables
 };
 

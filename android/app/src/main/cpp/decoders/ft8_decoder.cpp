@@ -220,6 +220,7 @@ Ft8SlotDecoder::Ft8SlotDecoder(int sampleRate, bool ft4) : ft4_(ft4), rate_(samp
     dphi_.resize(span);
     prodRe_.resize((size_t)nn_ * nsps_);
     prodIm_.resize((size_t)nn_ * nsps_);
+    idx_.resize((size_t)nn_ * nsps_);
 }
 Ft8SlotDecoder::~Ft8SlotDecoder() { monitor_free(&mon_); }
 
@@ -394,13 +395,16 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
     const float* dp = &dphi_[(size_t)nsps_];                   // sample k of the waveform is dphi[k + nsps]
 
     // ── 3. audio × conj(reference) over the part of the signal inside the window ──
+    // ★ The reference's table index is kept per sample (idx_), so step 4 reads it instead of re-running the phase
+    //   accumulator — the same integer phase, so the same index, so the same reference (2026-10-25).
     const int kLo = std::max(0, -s0), kHi = std::min(N, n - s0);
     if (kHi <= kLo) return;
     uint32_t ph = 0;
     for (int k = 0; k < kLo; ++k) ph += base + (uint32_t)(int32_t)(dp[k] * toneStep);
-    const uint32_t phLo = ph;
+    uint16_t* idx = idx_.data();
     for (int k = kLo; k < kHi; ++k) {
         const int t = (int)(ph >> 20);
+        idx[k] = (uint16_t)t;
         const float x = a[s0 + k];
         prodRe_[(size_t)k] = x * tab.c[t];
         prodIm_[(size_t)k] = -x * tab.s[t];
@@ -408,18 +412,58 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
     }
 
     // ── 4. the amplitude (two-symbol normalised boxcar), and the subtraction ──
+    /* ★★ TWO HALVES AT ONCE, ONE DIVIDE PER CHANGE OF WIDTH (2026-10-25). This loop was 60 % of the subtraction:
+     *  the running sums are one long chain of dependent double adds (an add AND a subtract per sample), and two
+     *  double divides a sample (sr/cnt, si/cnt) — on a Cortex-A7's VFP ~30 cycles each, not pipelined. Now:
+     *  • the box width is constant except within one window of the ends, so ×(1/cnt), recomputed when cnt changes;
+     *  • each step adds the EXACT double difference of the entering and leaving products (two floats subtract
+     *    exactly in double), one dependent add instead of two;
+     *  • the signal's first and second halves run interleaved, each seeded by summing its own first box — four
+     *    independent chains instead of two.
+     *  All three only move the double sums in their last bits; rounded to the float amplitude that changes a sample
+     *  about once in 10⁸ (the decode lists on the real recordings are identical — commit message). */
+    struct Box {
+        double sr = 0, si = 0, inv = 0; int lo = 0, hi = 0, cnt = 0, invCnt = 0;
+    };
     const int half = nsps_;
-    double sr = 0, si = 0; int cnt = 0;
-    int lo = kLo, hi = kLo;
-    ph = phLo;
-    for (int k = kLo; k < kHi; ++k) {
+    const float* pr = prodRe_.data();
+    const float* pi = prodIm_.data();
+    auto seed = [&](Box& b, int k) {
+        b.lo = std::max(kLo, k - half); b.hi = std::min(kHi, k + half);
+        for (int j = b.lo; j < b.hi; ++j) { b.sr += pr[j]; b.si += pi[j]; }
+        b.cnt = b.hi - b.lo;
+    };
+    // the box for sample k, from the box for k-1
+    auto step = [&](Box& b, int k) {
         const int wantHi = std::min(kHi, k + half), wantLo = std::max(kLo, k - half);
-        while (hi < wantHi) { sr += prodRe_[(size_t)hi]; si += prodIm_[(size_t)hi]; ++hi; ++cnt; }
-        while (lo < wantLo) { sr -= prodRe_[(size_t)lo]; si -= prodIm_[(size_t)lo]; ++lo; --cnt; }
-        const float ar = (float)(sr / cnt), ai = (float)(si / cnt);
-        const int t = (int)(ph >> 20);
+        const bool in = b.hi < wantHi, out = b.lo < wantLo;
+        if (in && out) { b.sr += (double)pr[b.hi] - (double)pr[b.lo]; b.si += (double)pi[b.hi] - (double)pi[b.lo]; ++b.hi; ++b.lo; }
+        else if (in)   { b.sr += pr[b.hi]; b.si += pi[b.hi]; ++b.hi; ++b.cnt; }
+        else if (out)  { b.sr -= pr[b.lo]; b.si -= pi[b.lo]; ++b.lo; --b.cnt; }
+        if (b.cnt != b.invCnt) { b.inv = 1.0 / b.cnt; b.invCnt = b.cnt; }
+    };
+    auto sub = [&](const Box& b, int k) {
+        const float ar = (float)(b.sr * b.inv), ai = (float)(b.si * b.inv);
+        const int t = idx[k];
         a[s0 + k] -= 2.0f * (ar * tab.c[t] - ai * tab.s[t]);
-        ph += base + (uint32_t)(int32_t)(dp[k] * toneStep);
+    };
+    const int len = kHi - kLo, h1 = len / 2;
+    Box A, B;
+    seed(A, kLo);
+    A.inv = 1.0 / A.cnt; A.invCnt = A.cnt;
+    sub(A, kLo);
+    if (h1 > 0) {
+        const int kB = kLo + h1;          // the second half starts here
+        seed(B, kB);
+        B.inv = 1.0 / B.cnt; B.invCnt = B.cnt;
+        sub(B, kB);
+        for (int j = 1; j < h1; ++j) {
+            step(A, kLo + j); step(B, kB + j);
+            sub(A, kLo + j);  sub(B, kB + j);
+        }
+        for (int k = kB + h1; k < kHi; ++k) { step(B, k); sub(B, k); }   // the odd sample
+    } else {
+        for (int k = kLo + 1; k < kHi; ++k) { step(A, k); sub(A, k); }
     }
 }
 
