@@ -13,6 +13,9 @@
 #pragma once
 
 #include <algorithm>
+#include <map>
+#include <string>
+#include <vector>
 #include <atomic>
 #include <chrono>
 #include <sys/stat.h>
@@ -54,6 +57,41 @@ struct Health {
     bool  batPresent = false, batCharging = false;
     int   batPct = -1;
     Level bat = OK;
+    /** ★★ DECODERS THAT CANNOT KEEP UP (Stuart, 2026-10-25: "a little addition to the health card that says something
+     *  like Decoder too heavy"). Their readable names, sorted — see BehindWatch. Empty = all keeping up. */
+    std::vector<std::string> behind;
+};
+
+/** ★★ WHICH DECODER IS TOO HEAVY FOR THIS MACHINE — judged by what it THREW AWAY, not by CPU %. Every decoder queue
+ *  drops its oldest input rather than make audio wait (Network > Audio > Spectrum > Decoders), and counts the drop.
+ *  A busy box that keeps up shows nothing; a decoder that lost input in the last minute is named, whatever the
+ *  CPU figure says. Fed every health tick with each decoder's running drop count; a count that goes DOWN is a
+ *  decoder restarted (a fresh baseline, not a drop). Keys not fed for two minutes are forgotten. */
+class BehindWatch {
+public:
+    void note(const std::string& key, const std::string& label, uint64_t dropped, int64_t nowMs) {
+        auto it = m_.find(key);
+        if (it == m_.end()) { m_[key] = {label, dropped, -kHoldMs, nowMs}; return; }
+        E& e = it->second;
+        e.label = label; e.seenMs = nowMs;
+        if (dropped > e.dropped) e.lastDropMs = nowMs;
+        e.dropped = dropped;
+    }
+    std::vector<std::string> behind(int64_t nowMs) {
+        std::vector<std::string> out;
+        for (auto it = m_.begin(); it != m_.end();) {
+            if (nowMs - it->second.seenMs > 2 * kHoldMs) { it = m_.erase(it); continue; }
+            if (nowMs - it->second.lastDropMs < kHoldMs
+                && std::find(out.begin(), out.end(), it->second.label) == out.end()) out.push_back(it->second.label);
+            ++it;
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+    static constexpr int64_t kHoldMs = 60000;   ///< named for a minute after its last drop
+private:
+    struct E { std::string label; uint64_t dropped; int64_t lastDropMs, seenMs; };
+    std::map<std::string, E> m_;
 };
 
 namespace detail {
@@ -766,6 +804,12 @@ inline std::string json(const Health& h) {
     } else {
         j += ",\"bat\":{\"present\":false}";
     }
+    // ★ ADDITIVE and omitted when empty: an older client ignores it. Labels are our own fixed words, never user text.
+    if (!h.behind.empty()) {
+        j += ",\"behind\":[";
+        for (size_t i = 0; i < h.behind.size(); ++i) j += (i ? ",\"" : "\"") + h.behind[i] + "\"";
+        j += "]";
+    }
     return j + "}";
 }
 
@@ -773,7 +817,7 @@ inline std::string json(const Health& h) {
 inline bool differs(const Health& a, const Health& b) {
     return a.cpu != b.cpu || a.ram != b.ram || a.temp != b.temp || a.tempKind != b.tempKind
         || a.bat != b.bat || a.batPresent != b.batPresent || a.batCharging != b.batCharging
-        || a.batPct != b.batPct;
+        || a.batPct != b.batPct || a.behind != b.behind;
 }
 
 }  // namespace vibehealth

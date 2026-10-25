@@ -36,6 +36,8 @@ export interface Health {
   /** `kind: 'none'` means the slot is omitted entirely — not drawn grey. */
   temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: HealthLevel; pos?: number };
   bat: { present: boolean; pct?: number; charging?: boolean; level?: HealthLevel };
+  /** ★ Decoders too heavy for this server: they dropped input in the last minute (vibe_health.h BehindWatch). */
+  behind?: string[];
 }
 
 /** 0 OK · 1 Elevated · 2 High · 3 Critical. Verbatim from the web client's HEALTH_COLOURS. */
@@ -259,9 +261,13 @@ export default function HealthPill({
 
   /* ★ One sentence, because the icons carry no text of their own (§2a: per-slot labels are what turn
    *   this into a dashboard). Reads in the order the slots are drawn. */
+  /* ★★ "<decoder>: TOO HEAVY" under the icons — the web client's renderHealthPill line, ONE RULE TWO READERS (Stuart,
+   *  2026-10-25: "a little addition to the health card that says something like Decoder too heavy"). */
+  const behind = (health.behind ?? []).filter(Boolean).slice(0, 3);
   const label = 'Server health: processor ' + HEALTH_WORDS[cpu] + ', memory ' + HEALTH_WORDS[ram]
     + (temp ? `, ${temp.word}` : '')
-    + (health.bat.present ? `, battery ${batPct}%${health.bat.charging ? ' on power' : ''}` : '');
+    + (health.bat.present ? `, battery ${batPct}%${health.bat.charging ? ' on power' : ''}` : '')
+    + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : '');
 
   /* ★★ THE WORST POSITION, not the worst level — and the alpha ramps with it instead of stepping
    *  at level 1, because a frame that suddenly got more opaque was the second half of the snap.
@@ -302,6 +308,7 @@ export default function HealthPill({
           </>
         ) : null}
       </View>
+      {behind.map((b) => <Text key={b} style={styles.warn} numberOfLines={1}>{b}: TOO HEAVY</Text>)}
     </Animated.View>
   );
 }
@@ -397,6 +404,8 @@ const styles = StyleSheet.create({
     marginBottom: 3,
   },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  // ★ the caption's size, in the readout amber — the web client's #srvHealth .hWarn
+  warn: { fontSize: 9, lineHeight: 11, fontWeight: '700', letterSpacing: 0.7, color: '#ffb833', textAlign: 'center', marginTop: 3 },
   slot: { position: 'relative' },
   divider: { width: 1, alignSelf: 'stretch', backgroundColor: 'rgba(255,255,255,0.16)' },
   dot: { position: 'absolute', top: -1, right: -2, width: 4, height: 4, borderRadius: 2 },

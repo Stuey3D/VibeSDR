@@ -3197,6 +3197,9 @@ select.btn { padding: 6px 8px; }
 #srvHealth .hCap { font: 700 9px/1 system-ui, sans-serif; letter-spacing: 0.16em;
                    color: #B9C0B4; text-align: center; margin-bottom: 3px; }
 #srvHealth .hRow { display: flex; align-items: center; justify-content: center; gap: 8px; }
+/* ★ "<decoder>: TOO HEAVY" — the caption's own size and spacing, in the readout amber, under the icons (renderHealthPill). */
+#srvHealth .hWarn { font: 700 9px/1.2 system-ui, sans-serif; letter-spacing: 0.08em; color: #ffb833;
+                    text-align: center; margin-top: 3px; white-space: nowrap; }
 #srvHealth .hSlot { display: inline-flex; position: relative; }
 #srvHealth .hDiv { width: 1px; align-self: stretch; background: rgba(255,255,255,0.16); }
 /* ★ The percentage and the bolt are drawn INSIDE the outline now (see renderHealthPill), so this

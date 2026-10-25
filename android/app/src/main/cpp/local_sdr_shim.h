@@ -755,6 +755,8 @@ public:
     /** The public health signal — see vibe_health.h. `healthJson()` is the connect snapshot; it is
      *  empty until the first sample has been taken. */
     void healthTick();
+    /** Decoders that dropped input in the last minute, by readable name — the health pill's "too heavy" line. */
+    std::vector<std::string> decodersBehind(int64_t nowMs);
     static std::string healthJson();
     static void setConfigured(bool on);
 

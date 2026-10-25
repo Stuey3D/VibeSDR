@@ -30953,6 +30953,35 @@ static vibehealth::Sampler g_health;
 static vibehealth::Health  g_healthLast;
 static std::atomic<bool>   g_healthValid{false};
 
+/** ★★ The readable name of a listener's decoder host (vibe_decoder_host.h name() is the decoder's ext). */
+static std::string decoderLabel(const std::string& ext, bool spots) {
+    static const std::map<std::string, std::string> names = {
+        {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
+        {"cw", "CW"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+    std::string n;
+    if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
+    if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";
+    return n;
+}
+
+/** ★★ Who lost input in the last minute — see vibehealth::BehindWatch. Listeners' decoders, background decoding,
+ *  ADS-B and ISM: every decoder that runs behind a drop-never-wait queue. (Advanced RDS runs inside the DSP's own
+ *  pass, with no queue of its own to fall behind on, so it is not judged here.) */
+std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
+    static vibehealth::BehindWatch watch;
+    if (p) {
+        for (auto& kv : p->decoders_.all()) {
+            auto& hst = kv.second;
+            const std::string lb = decoderLabel(hst->name(), hst->spotsOn());
+            if (!lb.empty()) watch.note("dec:" + kv.first, lb, hst->droppedSamples(), nowMs);
+        }
+        if (p->bgRun_.running()) watch.note("bg", "Background decoding", p->bgRun_.droppedSamples(), nowMs);
+    }
+    if (g_adsb.running()) watch.note("adsb", "ADS-B", g_adsb.health().dropped, nowMs);
+    if (g_ism.running()) watch.note("ism", "ISM", g_ism.droppedBlocks(), nowMs);
+    return watch.behind(nowMs);
+}
+
 std::string LocalSdrShim::healthJson() {
     return g_healthValid.load() ? vibehealth::json(g_healthLast) : std::string();
 }
@@ -30968,7 +30997,8 @@ void LocalSdrShim::healthTick() {
      *  visible and hands the time back to the audio. */
     if (now - lastAt < 2000) return;
     lastAt = now;
-    const vibehealth::Health h = g_health.sample(g_vsBatteryLevel.load(), g_vsBatteryCharging.load());
+    vibehealth::Health h = g_health.sample(g_vsBatteryLevel.load(), g_vsBatteryCharging.load());
+    h.behind = decodersBehind(now);
     // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,
     //   so they follow every sample, not only the ones that changed a level.
     g_healthCpuLevel.store((int)h.cpu, std::memory_order_relaxed);

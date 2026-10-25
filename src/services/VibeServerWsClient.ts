@@ -120,6 +120,8 @@ export type ServerHealth = {
   ramPos?: number;
   temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: number; pos?: number };
   bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
+  /** ★ Decoders that dropped input in the last minute (vibe_health.h BehindWatch). Absent = none, or an older server. */
+  behind?: string[];
 };
 
 /** ★★★ ADDITIVE, SO THE CALLBACK LIVES HERE AND NOT IN THE SHARED SHAPE'S FILE.
@@ -2652,6 +2654,7 @@ export abstract class VibeServerWsClient {
           ? { present: true, pct: Number(b.pct) || 0, charging: b.charging === true,
               level: Number(b.level) || 0 }
           : { present: false },
+        behind: Array.isArray(msg.behind) ? msg.behind.filter((x: unknown) => typeof x === 'string') : undefined,
       });
       return;
     }

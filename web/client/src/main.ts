@@ -11270,6 +11270,7 @@ function renderHealthPill(h: {
   temp: { kind: string; level: number; pos?: number };
   cpuPos?: number; ramPos?: number;
   bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
+  behind?: string[];
 }): void {
   /* ★★★ A LATCH, NOT A ONE-OFF REMOVAL. Removing #srvBattery here only worked until the next
    *  `battery` message, which recreates it — so the old pill reappeared ON TOP of the new one
@@ -11346,12 +11347,20 @@ function renderHealthPill(h: {
     h.bat.level ?? 0);
   const ringAlpha = Math.round(0x73 + (0xbf - 0x73) * Math.min(1, Math.max(0, worstPos)));
   el.style.borderColor = `${healthColour(worst, worstPos)}${ringAlpha.toString(16).padStart(2, '0')}`;
-  el.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>`;
+  /* ★★ A DECODER TOO HEAVY FOR THIS MACHINE (Stuart, 2026-10-25: "a little addition to the health card that says
+   *  something like Decoder too heavy"). The server names a decoder only when it threw input away in the last minute
+   *  (vibe_health.h BehindWatch) — busy is not named, falling behind is. One short amber line each, under the icons;
+   *  the audio is unaffected by design, and the screen-reader sentence says so. */
+  const behind = Array.isArray(h.behind) ? h.behind.filter((b) => typeof b === 'string' && b).slice(0, 3) : [];
+  const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+  const warn = behind.map((b) => `<div class="hWarn">${esc(b)}: TOO HEAVY</div>`).join('');
+  el.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>${warn}`;
   /* ★ One sentence for a screen reader, since the icons carry no text. */
   el.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`
     + (h.temp.kind === 'sensor' ? `, temperature ${HEALTH_WORDS[h.temp.level]}`
        : h.temp.kind === 'none' ? '' : ', throttling')
-    + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : ''));
+    + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : '')
+    + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : ''));
 }
 
 function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, h = 20): string {
