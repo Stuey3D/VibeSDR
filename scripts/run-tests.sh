@@ -117,6 +117,9 @@ deps_for() {
     test-parent-watch)  echo "$SRC/parent_watch.cpp" ;;
     # ★★ The pocket image's daemon side: captive answers, the first-run claim, the Wi-Fi request.
     test-pocket)        echo "$SRC/pocket.cpp" ;;
+    # ★★★ The dual-stack listener and IPv6 client classes (2026-10-25): both families on one socket, an IPv4 client
+    #     reading exactly as before, the LAN prefixes and the /64 lockout key.
+    test-ipclass)       echo "android/app/src/main/cpp/net_shim.cpp" ;;
     # ★★ The config survives a pulled plug: atomic save, last-good .bak, refusal of a truncated file.
     test-config-durable) echo "$SRC/vibeserver_config.cpp" ;;
     # ★★★ Going back from a V12 beta keeps V12's settings: unknown config keys survive a load + save (11.0.10-4).
@@ -646,6 +649,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     stopped the full-rate stream under clientMtx, and its applyAutoIf() took clientMtx again). Same VIBESERVER_BIN rule.
 printf '\n\033[1m── raw IQ: a vanished client does not wedge the radio (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-iq-close-deadlock.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ DUAL-STACK (2026-10-25, Nick's Orange Pi One was reachable by name on IPv6 only): an IPv4 and an IPv6 client on
+#     one listener, each classified (local / lan) and logged exactly as an IPv4 client always was.
+printf '\n\033[1m── dual-stack: IPv4 and IPv6 clients, classified and logged (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dualstack-clients.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ PORTABLE WI-FI (2026-10-10): on a pocket box, on its own network, the menu offers Network | Own Wi-Fi with the

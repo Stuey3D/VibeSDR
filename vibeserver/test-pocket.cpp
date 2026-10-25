@@ -64,6 +64,11 @@ int main() {
     ok(!isPrivatePeer("127.0.0.1") && !isPrivatePeer("::1"), "loopback is NOT private — the tunnel arrives as loopback");
     ok(!isPrivatePeer("81.2.69.160") && !isPrivatePeer("172.32.0.1"), "public addresses are not private");
     ok(!isPrivatePeer("10.0.0.1x") && !isPrivatePeer("999.1.1.1"), "malformed addresses are not private");
+    // ★★ IPv6 (2026-10-25, the listener is dual-stack)
+    ok(isPrivatePeer("fe80::1c2b:3cff:fe4d:5e6f") && isPrivatePeer("febf::1"), "IPv6 link-local fe80::/10 is private");
+    ok(isPrivatePeer("fd12:3456:789a::5") && isPrivatePeer("fc00::1"), "IPv6 ULA fc00::/7 is private");
+    ok(!isPrivatePeer("fec0::1"), "fec0:: (outside fe80::/10) is not");
+    ok(!isPrivatePeer("2001:db8:ffff::77"), "a global IPv6 address on nobody's link here is NOT private");
 
     // ── validation ──
     ok(validPsk("12345678") && !validPsk("1234567"), "WPA2: eight characters is the minimum");

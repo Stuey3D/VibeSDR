@@ -1,5 +1,6 @@
 // pocket.cpp — see pocket.h. The pocket image's Wi-Fi, from the unprivileged daemon's side.
 #include "pocket.h"
+#include "vibe_ipclass.h"
 #include <cmath>
 
 #include <atomic>
@@ -224,7 +225,11 @@ bool isPrivatePeer(const std::string& ipIn) {
         // IPv6: ULA fc00::/7, link-local fe80::/10. Loopback ::1 is not private here, on purpose.
         if (ip.rfind("fc", 0) == 0 || ip.rfind("fd", 0) == 0) return true;
         if (ip.rfind("fe8", 0) == 0 || ip.rfind("fe9", 0) == 0 || ip.rfind("fea", 0) == 0 || ip.rfind("feb", 0) == 0) return true;
-        return false;
+        // ★★ A GLOBAL address on one of this box's own on-link prefixes (2026-10-25, the listener is dual-stack):
+        //    IPv6 has no NAT, so the owner's laptop beside a box on Nick's network has a public 2a0x:… address in the
+        //    box's /64 — without this, "the first password can only be set from the box's own network" refused the
+        //    person standing next to it. Loopback is never on-link here (vibe_ipclass.h skips lo).
+        return vibeip::onLinkV6(ip);
     }
     unsigned a = 0, b = 0, c = 0, d = 0; char tail = 0;
     if (std::sscanf(ip.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4) return false;
