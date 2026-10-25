@@ -687,6 +687,8 @@
       + '.vsadsb-pop-' + th + ' .ph span{display:block;font-size:10px;opacity:0.75;margin-top:2px}'
       + '.vsadsb-pop-' + th + ' a{color:rgba(' + T.hi + ',0.95)}'
       + '.vsadsb-pop-' + th + ' .cr{margin-top:7px;font-size:9.5px;line-height:12px;opacity:0.6;max-width:256px}'
+      // ★ the look-it-up links: one small line above the credits, readable, tappable (line-height for a finger)
+      + '.vsadsb-pop-' + th + ' .lk{margin-top:8px;font-size:11px;line-height:18px;max-width:256px}'
       // ★ The Leaflet fallback's icons, labels and the HFDL ring (keyframes verbatim).
       + '.vsadsb-ll{position:relative;width:40px;height:40px}'
       + '.vsadsb-ll svg{position:absolute;left:0;top:0}'
@@ -1157,6 +1159,20 @@
       const ph = photoFor(s);
       const photo = ph ? '<a class="ph" href="' + esc(ph.link) + '" target="_blank"><img src="' + esc(ph.src) + '" alt="Photo of ' + esc(a.r || name) + '">'
         + '<span>\u00a9 ' + esc(ph.by) + ' \u00b7 Planespotters.net</span></a>' : '';
+      /* ★★ LOOK IT UP ELSEWHERE (Stuart, 2026-10-25: "these are commercial sites and if they are happy for the traffic then
+       *  it is ok"). Plain links, keyed by the ICAO address (or the registration for Flightradar24) — nothing of theirs is
+       *  copied in, so no data licence applies. target=_blank on the web; in the app's map WebView every http(s) tap is
+       *  handed to the phone's browser (MapOverlay onShouldStartLoadWithRequest), never a web view on top of the map.
+       *  A non-ICAO address (TIS-B '~…') has no page by address on these sites, so only the registration link is offered. */
+      const icao = /^[0-9a-f]{6}$/.test(s.hex) ? s.hex : '';
+      const reg = String(a.r || '').trim();
+      const ext = [];
+      const link = (label, url) => { ext.push('<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(label) + '</a>'); };
+      if (icao) link('ADS-B Exchange', 'https://globe.adsbexchange.com/?icao=' + icao);
+      if (icao) link('FlightAware', 'https://www.flightaware.com/live/modes/' + icao + '/redirect');
+      if (reg) link('Flightradar24', 'https://www.flightradar24.com/data/aircraft/' + encodeURIComponent(reg.toLowerCase()));
+      if (icao) link('Planespotters', 'https://www.planespotters.net/hex/' + icao.toUpperCase());
+      const lookup = ext.length ? '<div class="lk">' + ext.join(' \u00b7 ') + '</div>' : '';
       // ★★ ODC-By 1.0 §4.3: the notice goes WITH the produced work — wherever the Mictronics fields show
       const credit = known ? '<div class="cr">Aircraft data: <a href="https://github.com/Mictronics/aircraft-database" target="_blank">Mictronics</a>'
         + ' (contains information from Mictronics aircraft database, which is made available under the '
@@ -1167,7 +1183,7 @@
         + '<div class="t">' + esc(name) + (sub ? '<i>' + esc(sub) + '</i>' : '') + MIN_BTN(false) + '</div>'
         + (logo || badge || sil ? '<div class="op">' + (logo || badge) + sil + '</div>' : '')
         + (idl.length ? '<div class="idb">' + idl.join('') + '</div>' : '')
-        + '<div class="vsadsb-dyn"><table>' + rows.join('') + '</table></div>' + photo + credit;
+        + '<div class="vsadsb-dyn"><table>' + rows.join('') + '</table></div>' + photo + lookup + credit;
     }
     function select(hex) {
       if (hex === selected && popup) return;
