@@ -4,7 +4,7 @@
 # systemd boot, our units, the setup front door and the setup name, nothing about the hardware.
 #
 #   sudo image/sbc/boot-test.sh <vibeserver-portable-<board>-<date>.img.xz> <work-dir>
-#   (or through run-in-docker.sh's container: BOOT_TEST=1)
+#   (or: run-in-docker.sh boot-test <img.xz> <out>). Board cards and Raspberry Pi cards alike.
 #
 # What it does: decompresses a THROWAWAY copy, attaches root + vibedata, boots root with systemd-nspawn (QEMU user
 # mode; binfmt flags O+F — systemd 257 starts services by file descriptor) and a private network (only lo), waits for
@@ -23,12 +23,26 @@ cleanup() {
 }
 trap cleanup EXIT
 nice -n 19 xz -dc -T2 "$XZ" > "$IMG"
-read -r S1 Z1 <<< "$(sfdisk -d "$IMG" | sed -n 's/.*[^0-9]1 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p')"
-read -r S2 Z2 <<< "$(sfdisk -d "$IMG" | sed -n 's/.*[^0-9]2 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p')"
-LOOP1="$(losetup -f --show -o $((S1*512)) --sizelimit $((Z1*512)) "$IMG")"
-LOOP2="$(losetup -f --show -o $((S2*512)) --sizelimit $((Z2*512)) "$IMG")"
-mkdir -p "$R"; mount "$LOOP1" "$R"
-ARCH="$(sed -n 's/^ARCH=//p' "$R/etc/armbian-release")"
+# ★ Any card of ours (2026-10-25): a board card (root p1, vibedata p2, VIBESETUP p3) or a Raspberry Pi card (FAT boot p1,
+#   root p2, vibedata p3). Root = the ext4 partition holding /etc/os-release; settings = LABEL=vibedata.
+mkdir -p "$R"
+while read -r N S Z; do
+  L="$(losetup -f --show -o $((S*512)) --sizelimit $((Z*512)) "$IMG")"
+  T="$(blkid -p -o value -s TYPE "$L" 2>/dev/null || true)"; LB="$(blkid -p -o value -s LABEL "$L" 2>/dev/null || true)"
+  if [ "$LB" = vibedata ] && [ -z "$LOOP2" ]; then LOOP2="$L"; continue; fi
+  if [ "$T" = ext4 ] && [ -z "$LOOP1" ] && mount -o ro "$L" "$R" 2>/dev/null; then
+    if [ -f "$R/etc/os-release" ]; then umount "$R"; LOOP1="$L"; continue; fi
+    umount "$R"
+  fi
+  losetup -d "$L"
+done < <(sfdisk -d "$IMG" | sed -n 's/.*[^0-9]\([0-9]*\) *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2 \3/p')
+[ -n "$LOOP1" ] && [ -n "$LOOP2" ] || { echo "!! could not find the root and vibedata partitions"; exit 1; }
+mount "$LOOP1" "$R"
+case "$(readelf -h "$R/usr/bin/true" 2>/dev/null | sed -n 's/^ *Machine: *//p')" in
+  *AArch64*) ARCH=arm64 ;;
+  *ARM*)     ARCH=arm ;;
+  *) echo "!! unknown architecture for $R/usr/bin/true"; exit 1 ;;
+esac
 # ★★ THIS COPY ONLY (it is deleted afterwards): systemd's per-service sandbox cannot be set up in a container nested in
 #    Docker under QEMU — the first run: "Failed to set up mount namespacing: Invalid argument" for NetworkManager and
 #    vibeserver, and journald failed on its credentials (qemu#1962, systemd#31219, as image/soft66ip found). A drop-in for
@@ -92,12 +106,14 @@ run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
 {
   echo "front door http://127.0.0.1:48000/ → HTTP $CODE"
   echo "hostname: $(run cat /etc/hostname)"
-  for u in vibeserver vibeserver-pocket vibeserver-pocket-data vibeserver-pocket-seal NetworkManager avahi-daemon systemd-networkd ssh; do
+  echo "vibeserver package: $(run dpkg-query -W -f '${Version} ${Architecture}' vibeserver)"
+  for u in vibeserver vibeserver-pocket vibeserver-pocket-data vibeserver-pocket-seal vibeserver-pocket-cpu NetworkManager avahi-daemon systemd-networkd ssh; do
     printf '%-24s %s\n' "$u" "$(run systemctl is-active "$u.service")"
   done
   echo "--- vibeserver-pocket (journal)"; run journalctl -b -u vibeserver-pocket --no-pager -n 15
   echo "--- vibeserver-pocket-seal"; run journalctl -b -u vibeserver-pocket-seal --no-pager -n 5
   echo "--- vibeserver-pocket-data"; run journalctl -b -u vibeserver-pocket-data --no-pager -n 8
+  echo "--- vibeserver-pocket-cpu"; run journalctl -b -u vibeserver-pocket-cpu --no-pager -n 5
   echo "--- ssh: units and TCP listeners (port 22 must NOT be listening)"
   run systemctl list-units --all --no-legend 'ssh*' 'sshd*'
   run ss -ltnp
