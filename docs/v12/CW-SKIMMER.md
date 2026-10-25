@@ -114,8 +114,9 @@ band still decode as broken text, and a few rows are noise read as fast E/I/T so
 The real 40 m recordings at 192 kHz: 0.33–0.36 % of an M5 core. With hundreds of signals the per-signal (scalar) lanes
 are most of the cost, which is why the SIMD gain is 25–35 % here rather than the 3–4× of the per-bin loops alone.
 
-**Pi 2 (Cortex-A7, 900 MHz): an ESTIMATE, not measured on the hardware.** The bench cross-builds for armhf (NEON,
-`-mfpu=neon-vfpv4`) and runs correctly under emulation; an A7 at 900 MHz is roughly 20–30× slower than an M5 performance
+**Pi 2 (Cortex-A7, 900 MHz): an ESTIMATE, not measured on the hardware.** The bench cross-builds for armhf (the release
+cross image, `-marm -mfpu=neon-vfpv4`, NEON kernels) and under qemu-arm (Cortex-A7) gives a fists table identical to the
+M5's and no false signal on noise — so the ARMv7 NEON path computes the same answers; its SPEED was not measured on a Pi. An A7 at 900 MHz is roughly 20–30× slower than an M5 performance
 core on this float work, which puts a busy 96 kHz skimmer at ≈ 7–11 % of one of its four cores and a listener's decoder
 under 0.5 %.
 
