@@ -14,7 +14,11 @@ extern "C"
 // ok == 87 means success.
 void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok);
 
+/// Belief propagation (sum-product, ft8_lib's fast tanh/atanh). VibeSDR (2026-10-25): bp_decode is the fast one — the
+/// same arithmetic in the same order as bp_decode_ref (ft8_lib's original), laid out by edge and four checks or four
+/// variables per SIMD vector; bp_decode_ref stays as the reference the test holds it to (test-ft8-fast).
 void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok);
+void bp_decode_ref(float codeword[], int max_iters, uint8_t plain[], int* ok);
 
 #ifdef __cplusplus
 }

@@ -88,6 +88,8 @@ flags_for() {
     test-fd-radio-recovery) echo "-DVIBE_HAS_HACKRF -DVIBE_HACKRF_HAS_FD -DVIBE_HAVE_AIRSPY -I android/app/src/main/cpp/libairspy -lpthread" ;;
     # ★★ FT8's extra passes, their CPU gate and the capture-clock slot (2026-10-05) — optimised, it times passes.
     test-ft8-passes)       echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★★ FT8's fast kernels against ft8_lib's originals, bit for bit (2026-10-25) — the server's -O2.
+    test-ft8-fast)         echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
     #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
     test-adsb)             echo "-O2" ;;
@@ -216,7 +218,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-bgdecode|test-bg-priority)
+    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-bgdecode|test-bg-priority)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c; do
         local o="$d/$(basename "$f" .c).o"
