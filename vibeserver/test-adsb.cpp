@@ -19,6 +19,33 @@ static Frame hexFrame(const char* h) {
     return f;
 }
 
+/** A DF17 airborne position (TC 11, barometric) for `icao` at lat/lon/alt, CPR-encoded even or odd, CRC set —
+ *  so a test can fly an aircraft along any path. CPR from the textbook formulae (NZ 15, 17-bit). */
+static Frame posFrame(uint32_t icao, double lat, double lon, int altFt, bool odd) {
+    auto mod = [](double x, double y) { return x - y * std::floor(x / y); };
+    const double i = odd ? 1 : 0, dLat = 360.0 / (60 - i);
+    const double yz = std::floor(131072.0 * mod(lat, dLat) / dLat + 0.5);
+    const double rLat = dLat * (yz / 131072.0 + std::floor(lat / dLat));
+    const double dLon = 360.0 / std::max(1.0, cprNL(rLat) - i);
+    const double xz = std::floor(131072.0 * mod(lon, dLon) / dLon + 0.5);
+    const uint32_t la = uint32_t(yz) & 0x1FFFF, lo = uint32_t(xz) & 0x1FFFF;
+    const uint32_t n = uint32_t((altFt + 1000) / 25);
+    const uint32_t alt = ((n >> 4) << 5) | 0x10 | (n & 0xF);
+    // ME bits 1-56: TC(5) SS(2) SAF(1) ALT(12) T(1) F(1) LAT(17) LON(17)
+    uint64_t me = (uint64_t(11) << 51) | (uint64_t(alt) << 36) | (uint64_t(odd) << 34) | (uint64_t(la) << 17) | lo;
+    Frame f; f.len = 14;
+    f.b[0] = 0x8D; f.b[1] = uint8_t(icao >> 16); f.b[2] = uint8_t(icao >> 8); f.b[3] = uint8_t(icao);
+    for (int k = 0; k < 7; ++k) f.b[4 + k] = uint8_t(me >> (48 - 8 * k));
+    const uint32_t p = syndrome(f.b, 14);                     // parity bytes are 0 here, so this is the CRC
+    f.b[11] = uint8_t(p >> 16); f.b[12] = uint8_t(p >> 8); f.b[13] = uint8_t(p);
+    return f;
+}
+static size_t trailPts(const Tracker& t, const char* hex) {
+    const std::string j = t.trailJson(hex);
+    size_t n = 0; for (char c : j) if (c == '[') ++n;
+    return n ? n - 1 : 0;                                       // minus the "pts":[ itself
+}
+
 static bool near(double a, double b, double tol) { return std::fabs(a - b) <= tol; }
 
 /** PPM-modulate frames into complex IQ at `rate`: each 0.5 µs chip integrated over every sample it overlaps,
@@ -192,6 +219,41 @@ int main() {
         d.feed(iq.data(), iq.size(), [&](const Frame& f) { t.accept(f, 0); }, [&](uint32_t a) { return t.known(a, 0); });
         CHECK(t.aircraft().empty(), "10 s of noise made %zu aircraft (%llu preambles)", t.aircraft().size(),
               (unsigned long long)d.preambles());
+    }
+
+    // ★★ THE TRAIL SURVIVES (2026-10-25: the longest-tracked aircraft showed no track). An airliner east at 450 kt,
+    //    a position every 0.5 s, for 40 minutes; the server's blocks put two fixes on ONE time stamp now and then,
+    //    and a frame is sometimes heard twice. Then 2 minutes unheard, and back: the trail it had carries on.
+    {
+        Tracker t;
+        const uint32_t icao = 0x4CA123;
+        double lat = 52.3, lon = -1.5;
+        const double stepDeg = 450.0 / 3600 * 0.5 / 60 / std::cos(lat * M_PI / 180);   // 0.5 s of 450 kt, east
+        size_t i = 0;
+        for (; i < 4800; ++i) {
+            const double ts = std::floor(i * 0.5 / 0.3) * 0.3;            // 300 ms blocks: pairs share a stamp
+            Frame f = posFrame(icao, lat, lon, 36000, i & 1);
+            CHECK(t.accept(f, ts) || i < 2, "position %zu accepted", i);
+            if (i % 7 == 0) t.accept(f, ts);                              // heard twice
+            lon += stepDeg;
+            t.expire(ts, 60);
+        }
+        const auto& a = t.aircraft().at(icao);
+        const size_t n1 = trailPts(t, "4ca123");
+        CHECK(a.trackedNm > 290 && a.trackedNm < 310, "tracked %.1f NM over 40 min at 450 kt (300 expected)", a.trackedNm);
+        CHECK(n1 > 400, "the whole 300 NM is in the trail: %zu points", n1);
+        // silent for 2 minutes — out of the table — then heard again further east
+        double ts = i * 0.5 + 120;
+        t.expire(ts, 60);
+        CHECK(t.aircraft().count(icao) == 0 && t.goneTrails() == 1, "gone from the table, trail kept");
+        lon += stepDeg * 240;
+        for (int k = 0; k < 4; ++k, ts += 0.5, lon += stepDeg) t.accept(posFrame(icao, lat, lon, 36000, k & 1), ts);
+        const size_t n2 = trailPts(t, "4ca123");
+        CHECK(n2 > n1, "back after 2 min: the trail carries on (%zu → %zu points)", n1, n2);
+        CHECK(t.aircraft().at(icao).trackedNm > 290, "and so does the distance tracked");
+        // a fix that is not flight (300 NM in a second) still clears the trail
+        t.accept(posFrame(icao, lat + 5, lon, 36000, 0), ts + 1); t.accept(posFrame(icao, lat + 5, lon, 36000, 1), ts + 1.5);
+        CHECK(trailPts(t, "4ca123") <= 2, "an impossible jump starts the trail again (%zu points)", trailPts(t, "4ca123"));
     }
 
     // JSON carries the familiar fields.
