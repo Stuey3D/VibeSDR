@@ -22,7 +22,7 @@
 #    the first login; sshd is OFF (the first network is an OPEN hotspot) and the converge masks the console gettys, as
 #    on the Pi image. The VibeServer admin password is typed by the owner in setup (vibeserver/pocket.cpp, claim).
 #
-# Needs, on a Linux host, as root: losetup, sfdisk, e2fsck, resize2fs, dumpe2fs, mkfs.ext4, blkid, xz, sha256sum,
+# Needs, on a Linux host, as root: losetup, sfdisk, sgdisk (gdisk), e2fsck, resize2fs, dumpe2fs, mkfs.ext4, blkid, xz, sha256sum,
 # gpg, curl, readelf, and qemu-user-static (qemu-arm / qemu-aarch64) — run-in-docker.sh installs all of them in a
 # throwaway Debian container. A qemu binfmt entry is registered for this run only if none exists, and removed at exit.
 #   VIBESERVER_DEB=/path/to.deb   install this local package instead of apt.vibesdr.net's stable one (a branch build)
@@ -94,7 +94,7 @@ fi
 
 [ -n "$BASE_XZ" ] && [ -n "$OUT" ] || die "usage: build.sh <board> <armbian-minimal.img.xz> <output-dir>"
 [ "$(id -u)" = 0 ] || die "run as root (it loop-mounts the image)"
-for t in losetup sfdisk e2fsck resize2fs dumpe2fs mkfs.ext4 mkfs.vfat blkid xz sha256sum gpg curl mount umount chroot readelf; do
+for t in losetup sfdisk sgdisk e2fsck resize2fs dumpe2fs mkfs.ext4 mkfs.vfat blkid xz sha256sum gpg curl mount umount chroot readelf; do
   command -v "$t" >/dev/null || die "missing tool: $t"
 done
 [ -f "$BASE_XZ" ] && [ -f "$BASE_XZ.sha" ] && [ -f "$BASE_XZ.asc" ] || die "need $BASE_XZ with .sha and .asc beside it"
@@ -164,12 +164,27 @@ S1="$(sfdisk -d "$IMG" | sed -n 's/.*start= *\([0-9]*\),.*/\1/p' | head -1)"
 LABEL_TYPE="$(sfdisk -d "$IMG" | sed -n 's/^label: *//p' | head -1)"
 case "$LABEL_TYPE" in dos|gpt) ;; *) die "unexpected partition table '$LABEL_TYPE'" ;; esac
 FIRST_BOOT_SECTOR=1; [ "$LABEL_TYPE" = gpt ] && FIRST_BOOT_SECTOR=34
-GPT_TAIL=0; [ "$LABEL_TYPE" = gpt ] && GPT_TAIL=33
+# ★★★ THE BACKUP AREA IS AS BIG AS THE GAP BEFORE THE FIRST USABLE SECTOR, not 33 (found 2026-10-25 on the Mac, replaying
+#     the Orange Pi 5 image). Armbian's Rockchip tables are standard (128 entries, sectors 2-33) but first-lba is 2048 —
+#     U-Boot lives in 34-2047 — and sgdisk -e, below, keeps the same room at the END: last usable = disk - first-lba.
+GPT_TAIL=0
+if [ "$LABEL_TYPE" = gpt ]; then
+  GPT_TAIL="$(sfdisk -d "$IMG" | sed -n 's/^first-lba: *//p' | head -1)"
+  case "$GPT_TAIL" in [0-9]*) [ "$GPT_TAIL" -ge 34 ] || GPT_TAIL=34 ;; *) die "no first-lba in the GPT" ;; esac
+fi
 # ★ GPT's backup header to the end of the file as it now is (after every resize of the file).
-#   ★ The operation is gpt-bak-std (the first try said gpt-bk-std, which sfdisk refuses — and with its error hidden, set -e
-#     ended the build silently). Its "PMBR size mismatch … will be corrected" notes are expected here.
+# ★★★ sgdisk -e, NOT sfdisk --relocate (2026-10-25). Once the file is CUT below where the backup header was, the primary
+#     header names a disk bigger than the file and libfdisk discards the whole GPT — it reads the protective MBR as a
+#     DOS table (one type-ee "partition" from sector 1), so --relocate "succeeds" doing nothing and the next --append
+#     fails: that was the "Failed to add #2 partition: Invalid argument" left at the pause. gdisk trusts a valid
+#     primary header, rebuilds the backup from it at the new end, and rewrites only sectors 0-33 and the last ones.
 gpt_fix() {
-  if [ "$LABEL_TYPE" = gpt ]; then sfdisk -q --relocate gpt-bak-std "$IMG" || die "sfdisk could not move GPT's backup header"; fi
+  if [ "$LABEL_TYPE" = gpt ]; then sgdisk -e "$IMG" >/dev/null || die "sgdisk could not move GPT's backup header"; fi
+}
+gpt_check() {   # after the last change: both headers and tables valid
+  if [ "$LABEL_TYPE" = gpt ]; then
+    sgdisk -v "$IMG" | grep -c 'No problems found' >/dev/null || { sgdisk -v "$IMG"; die "GPT does not verify"; }
+  fi
 }
 # ★ The boot loader is OUTSIDE the partitions: the MBR's boot code (bytes 0-445; on GPT the protective MBR) and U-Boot
 #   from sector 1 (MBR) or 34 (GPT, after the table) up to the first partition.
@@ -317,7 +332,7 @@ echo "$S1,$N1" | sfdisk -q --no-reread -N 1 "$IMG"
 S2=$(( (S1 + N1 + 8191) / 8192 * 8192 )); Z2=$(( DATA_MIB * 1024 * 1024 / 512 ))
 S3=$(( (S2 + Z2 + 8191) / 8192 * 8192 )); Z3=$(( SETUP_MIB * 1024 * 1024 / 512 ))
 [ $(( (S3 + Z3 + GPT_TAIL) * 512 )) -le "$(stat -c %s "$IMG")" ] || die "LAYOUT: root + settings + FAT do not fit the working file — raise GROW_MIB"
-# ★ Cut the file to its final size FIRST (plus GPT's backup area), move GPT's backup header there, then add partitions.
+# ★ Cut the file to its final size FIRST (plus GPT's backup area — GPT_TAIL), move GPT's backup header there, then add partitions.
 truncate -s $(( (S3 + Z3 + GPT_TAIL) * 512 )) "$IMG"
 gpt_fix
 T_LINUX=83; T_FAT=c; [ "$LABEL_TYPE" = gpt ] && { T_LINUX=L; T_FAT=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7; }
@@ -351,6 +366,7 @@ losetup -d "$LOOP"; LOOP=""
 
 # ── 7. Prove the finished file ─────────────────────────────────────────────────────────────────────────────────────
 [ "$(sfdisk -d "$IMG" | grep -c 'start=' || true)" = 3 ] || { sfdisk -d "$IMG"; die "LAYOUT: not 3 partitions"; }
+gpt_check
 T2="$(sfdisk -d "$IMG" | sed -n 's/.*[^0-9]2 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p')"
 [ "$T2" = "$S2 $Z2" ] || die "LAYOUT: partition 2 is '$T2', expected '$S2 $Z2'"
 CHK="$(losetup -f --show -r -o $(( S2 * 512 )) --sizelimit $(( Z2 * 512 )) "$IMG")"

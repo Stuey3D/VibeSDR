@@ -16,7 +16,9 @@ case "$NAME" in
   Armbian*_trixie_*_minimal.img.xz) ;;
   *) rm -f "$B.sha.tmp"; echo "!! $U.sha names '$NAME', not an Armbian Trixie minimal image"; exit 1 ;;
 esac
-[[ "${NAME,,}" == *"_${B,,}_"* ]] || { rm -f "$B.sha.tmp"; echo "!! $U.sha names '$NAME', which is not for $B"; exit 1; }
+# ★ tr, not ${NAME,,}: the Mac's /bin/bash is 3.2 (the builds moved there 2026-10-25).
+lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+case "$(lc "$NAME")" in *"_$(lc "$B")_"*) true ;; *) false ;; esac || { rm -f "$B.sha.tmp"; echo "!! $U.sha names '$NAME', which is not for $B"; exit 1; }
 mv -f "$B.sha.tmp" "$NAME.sha"
 curl -fsSL --retry 3 -o "$NAME.asc" "$U.asc"
 [ -s "$NAME" ] && sha256sum -c "$NAME.sha" >/dev/null 2>&1 && { echo "$D/$NAME (already here, checksum ok)"; exit 0; }

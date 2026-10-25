@@ -30,11 +30,11 @@ if [ -n "${VIBESERVER_DEB:-}" ]; then
   DEBMNT=(-v "$D":/deb:ro); DEBENV=(-e "VIBESERVER_DEB=/deb/$(basename "$VIBESERVER_DEB")")
 fi
 exec docker run --rm --privileged --cpus 2 --label vibesdr-sbc-build -v /dev:/dev \
-  -v "$REPO":/repo:ro -v "$(dirname "$BASE")":/base:ro -v "$OUT":/out "${DEBMNT[@]}" "${DEBENV[@]}" \
+  -v "$REPO":/repo:ro -v "$(dirname "$BASE")":/base:ro -v "$OUT":/out ${DEBMNT[@]+"${DEBMNT[@]}"} ${DEBENV[@]+"${DEBENV[@]}"} \
   -e COUNTRY="${COUNTRY:-GB}" -e NO_MAPS="${NO_MAPS:-0}" -e KEEP_WORK="${KEEP_WORK:-0}" -e IMAGE_VERSION="${IMAGE_VERSION:-1}" \
   debian:trixie-slim /bin/bash -euo pipefail -c '
     apt-get update -qq
-    apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk e2fsprogs dosfstools util-linux gnupg \
+    apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk gdisk e2fsprogs dosfstools util-linux gnupg \
         binutils qemu-user-static >/dev/null
     # ★ "boot-test" in place of a board: boot a finished card (the second argument) under emulation — boot-test.sh.
     if [ "'"$BOARD"'" = boot-test ]; then
