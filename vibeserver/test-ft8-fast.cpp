@@ -13,6 +13,9 @@
 //   3. the sync search: ftx_find_candidates (sixteen frequencies per vector) vs ftx_find_candidates_ref (ft8_lib's,
 //      one at a time), FT8 and FT4, on waterfalls of noise with Costas arrays planted in them, several minimum
 //      scores and heap sizes — the same candidates, in the same order, with the same scores.
+//   4. the spectrogram through PFFFT vs Kiss FFT. NOT bit-identical (a different FFT rounds differently) — so the test
+//      states how close: on a band of noise and GFSK-like tones, a waterfall byte (0.5 dB step) may differ by one step,
+//      never more, and in under 1 in 10,000 bins.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -221,11 +224,42 @@ static void testSearch() {
     ok(same == n, "identical candidate lists: " + std::to_string(same) + " / " + std::to_string(n) + " (" + std::to_string(found) + " candidates)");
 }
 
+static void testWaterfall() {
+    std::printf("\n4. spectrogram — PFFFT vs Kiss FFT (not bit-identical: how close)\n");
+    for (int ft4 = 0; ft4 < 2; ++ft4) {
+        monitor_config_t cfg = {};
+        cfg.f_min = 100; cfg.f_max = 3500; cfg.sample_rate = 12000; cfg.time_osr = 2; cfg.freq_osr = 2;
+        cfg.protocol = ft4 ? FTX_PROTOCOL_FT4 : FTX_PROTOCOL_FT8;
+        monitor_t a, b; monitor_init(&a, &cfg); monitor_init(&b, &cfg);
+        ok(a.pf_setup != nullptr, std::string(ft4 ? "FT4" : "FT8") + ": PFFFT takes nfft " + std::to_string(a.nfft));
+        void* const bSetup = b.pf_setup;
+        b.pf_setup = nullptr;                                            // b = Kiss FFT, as before
+        std::mt19937 rng(ft4 ? 5 : 6);
+        std::normal_distribution<float> g(0.0f, 0.02f);
+        const int n = a.wf.max_blocks * a.block_size;
+        std::vector<float> x((size_t)n);
+        for (int i = 0; i < n; ++i) {
+            float v = g(rng);
+            for (int s = 0; s < 25; ++s) v += 0.01f * (float)(s % 5 + 1) * std::sin(2.0f * 3.14159265f * (300.0f + 123.4f * s + 6.25f * (float)((i / a.block_size + s) % 8)) * i / 12000.0f);
+            x[(size_t)i] = v;
+        }
+        for (int pos = 0; pos + a.block_size <= n; pos += a.block_size) { monitor_process(&a, &x[(size_t)pos]); monitor_process(&b, &x[(size_t)pos]); }
+        const size_t sz = (size_t)a.wf.num_blocks * a.wf.block_stride;
+        long diff = 0; int worst = 0;
+        for (size_t i = 0; i < sz; ++i) { const int d = std::abs((int)a.wf.mag[i] - (int)b.wf.mag[i]); diff += d != 0; worst = std::max(worst, d); }
+        char line[160];
+        std::snprintf(line, sizeof line, "%s: %ld of %zu waterfall bytes differ (%.1e), by at most %d step", ft4 ? "FT4" : "FT8", diff, sz, (double)diff / (double)sz, worst);
+        ok(worst <= 1 && (double)diff / (double)sz < 1e-4, line);
+        monitor_free(&a); b.pf_setup = bSetup; monitor_free(&b);
+    }
+}
+
 int main() {
     std::printf("test-ft8-fast — the fast FT8 kernels against ft8_lib's originals\n");
     testBp();
     testOsd();
     testSearch();
+    testWaterfall();
     std::printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "ALL PASS", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;
 }

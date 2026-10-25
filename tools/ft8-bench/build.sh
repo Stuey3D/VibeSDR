@@ -5,9 +5,10 @@ cd "$(dirname "$0")/../.."
 CPP=android/app/src/main/cpp
 OUT="${OUT:-${TMPDIR:-/tmp}/ft8-bench}"
 mkdir -p "$OUT/obj"
-for f in $CPP/ft8_lib/ft8/*.c $CPP/ft8_lib/fft/kiss_fft.c $CPP/ft8_lib/fft/kiss_fftr.c $CPP/ft8_lib/common/monitor.c; do
+# ★ pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25); every real build already links it (vibedsp).
+for f in $CPP/ft8_lib/ft8/*.c $CPP/ft8_lib/fft/kiss_fft.c $CPP/ft8_lib/fft/kiss_fftr.c $CPP/ft8_lib/common/monitor.c $CPP/vibedsp/third_party/pffft/pffft.c; do
   o="$OUT/obj/$(basename "$f" .c).o"
-  [ "$o" -nt "$f" ] || cc -O2 -c -I "$CPP/ft8_lib" -o "$o" "$f"
+  cc -O2 -c -I "$CPP/ft8_lib" -o "$o" "$f"
 done
 c++ -std=c++17 -O2 -I "$CPP" -I "$CPP/ft8_lib" -o "$OUT/ft8_wav" tools/ft8-bench/ft8_wav.cpp "$CPP/decoders/ft8_decoder.cpp" "$OUT"/obj/*.o -lpthread
 echo "$OUT/ft8_wav"

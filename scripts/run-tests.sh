@@ -150,10 +150,11 @@ deps_for() {
     #    not build is not a suite that passes, it is one nobody is running. Caught 2026-09-21.
     test-fir-simd)      echo "$VDSP/ddc.cpp" ;;
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
-    # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link.
+    # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link — nor pffft,
+    #   which they carry too since monitor.c's STFT runs through it (2026-10-25).
     test-bgdecode|test-bg-priority) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
-                              $VDSP/zoomspec.cpp $VDSP/third_party/pffft/pffft.c \
+                              $VDSP/zoomspec.cpp \
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
                               android/app/src/main/cpp/decoders/wefax_decoder.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp \
                               android/app/src/main/cpp/decoders/time_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
@@ -220,9 +221,11 @@ cobjs_for() {
   case "$1" in
     test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-bgdecode|test-bg-priority)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
-      for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c; do
+      # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
+      #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
+      for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c $VDSP/third_party/pffft/pffft.c; do
         local o="$d/$(basename "$f" .c).o"
-        [ "$o" -nt "$f" ] || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
+        { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
     *) ;;

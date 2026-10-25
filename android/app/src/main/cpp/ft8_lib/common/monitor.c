@@ -5,6 +5,8 @@
 #include <ft8/debug.h>
 
 #include <stdlib.h>
+#include <string.h>
+#include "../../vibedsp/third_party/pffft/pffft.h"
 
 static float hann_i(int i, int N)
 {
@@ -84,6 +86,30 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
     me->fft_work = malloc(fft_work_size);
     me->fft_cfg = kiss_fftr_alloc(me->nfft, 0, me->fft_work, &fft_work_size);
 
+    /* ★★ THE STFT THROUGH PFFFT (VibeSDR, 2026-10-25 — the FT8 CPU work; not in upstream ft8_lib). The spectrogram is
+     *  rebuilt on every pass, and Kiss FFT was 1.5 of its 1.95 ms (an M5, 186 real FFTs of 3840). PFFFT — already in
+     *  every build, for DAB — does the same transform with NEON/SSE butterflies. Same transform, different rounding:
+     *  the waterfall stores 0.5 dB steps, so a bin changes only when its level sits within ~1e-6 dB of a step edge
+     *  (measured: the commit message). PFFFT needs N a multiple of 32 of the form 2^a 3^b 5^c — FT8 at 12 kHz is
+     *  3840, FT4 1152; any other size keeps Kiss FFT. */
+    me->pf_setup = NULL;
+    me->pf_in = me->pf_out = me->pf_work = NULL;
+    if ((me->nfft % 32) == 0)
+    {
+        int r = me->nfft;
+        while (r % 2 == 0) r /= 2;
+        while (r % 3 == 0) r /= 3;
+        while (r % 5 == 0) r /= 5;
+        if (r == 1)
+            me->pf_setup = pffft_new_setup(me->nfft, PFFFT_REAL);
+    }
+    if (me->pf_setup)
+    {
+        me->pf_in = (float*)pffft_aligned_malloc(sizeof(float) * (size_t)me->nfft);
+        me->pf_out = (float*)pffft_aligned_malloc(sizeof(float) * (size_t)me->nfft);
+        me->pf_work = (float*)pffft_aligned_malloc(sizeof(float) * (size_t)me->nfft);
+    }
+
     LOG(LOG_INFO, "N_FFT = %d\n", me->nfft);
     LOG(LOG_DEBUG, "FFT work area = %zu\n", fft_work_size);
 
@@ -116,6 +142,13 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 
 void monitor_free(monitor_t* me)
 {
+    if (me->pf_setup)
+    {
+        pffft_destroy_setup((PFFFT_Setup*)me->pf_setup);
+        pffft_aligned_free(me->pf_in);
+        pffft_aligned_free(me->pf_out);
+        pffft_aligned_free(me->pf_work);
+    }
     waterfall_free(&me->wf);
     free(me->fft_work);
     free(me->last_frame);
@@ -156,11 +189,24 @@ void monitor_process(monitor_t* me, const float* frame)
         }
 
         // Do DFT of windowed analysis frame
-        for (int pos = 0; pos < me->nfft; ++pos)
+        if (me->pf_setup)
         {
-            timedata[pos] = me->window[pos] * me->last_frame[pos];
+            // ★ PFFFT's ordered real output: [0] = DC, [1] = Nyquist, then (re, im) of bins 1 .. nfft/2 - 1
+            for (int pos = 0; pos < me->nfft; ++pos)
+                me->pf_in[pos] = me->window[pos] * me->last_frame[pos];
+            pffft_transform_ordered((PFFFT_Setup*)me->pf_setup, me->pf_in, me->pf_out, me->pf_work, PFFFT_FORWARD);
+            freqdata[0].r = me->pf_out[0]; freqdata[0].i = 0;
+            freqdata[me->nfft / 2].r = me->pf_out[1]; freqdata[me->nfft / 2].i = 0;
+            memcpy(&freqdata[1], me->pf_out + 2, sizeof(float) * (size_t)(me->nfft - 2));
         }
-        kiss_fftr(me->fft_cfg, timedata, freqdata);
+        else
+        {
+            for (int pos = 0; pos < me->nfft; ++pos)
+            {
+                timedata[pos] = me->window[pos] * me->last_frame[pos];
+            }
+            kiss_fftr(me->fft_cfg, timedata, freqdata);
+        }
 
         // Loop over possible frequency OSR offsets
         for (int freq_sub = 0; freq_sub < me->wf.freq_osr; ++freq_sub)

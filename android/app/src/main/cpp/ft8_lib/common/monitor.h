@@ -39,6 +39,11 @@ typedef struct
     // KISS FFT housekeeping variables
     void* fft_work;        ///< Work area required by Kiss FFT
     kiss_fftr_cfg fft_cfg; ///< Kiss FFT housekeeping object
+    // VibeSDR (2026-10-25): the STFT through PFFFT (NEON/SSE) when the FFT size allows it; Kiss FFT otherwise
+    void* pf_setup;        ///< PFFFT_Setup*, or NULL = Kiss FFT
+    float* pf_in;          ///< aligned nfft floats: the windowed frame
+    float* pf_out;         ///< aligned nfft floats: the ordered spectrum
+    float* pf_work;        ///< aligned nfft floats: PFFFT's scratch
 #ifdef WATERFALL_USE_PHASE
     int nifft;             ///< iFFT size
     void* ifft_work;       ///< Work area required by inverse Kiss FFT
