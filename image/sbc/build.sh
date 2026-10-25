@@ -152,7 +152,11 @@ case "$LABEL_TYPE" in dos|gpt) ;; *) die "unexpected partition table '$LABEL_TYP
 FIRST_BOOT_SECTOR=1; [ "$LABEL_TYPE" = gpt ] && FIRST_BOOT_SECTOR=34
 GPT_TAIL=0; [ "$LABEL_TYPE" = gpt ] && GPT_TAIL=33
 # ★ GPT's backup header to the end of the file as it now is (after every resize of the file).
-gpt_fix() { [ "$LABEL_TYPE" = gpt ] && sfdisk -q --relocate gpt-bk-std "$IMG" 2>/dev/null; true; }
+#   ★ The operation is gpt-bak-std (the first try said gpt-bk-std, which sfdisk refuses — and with its error hidden, set -e
+#     ended the build silently). Its "PMBR size mismatch … will be corrected" notes are expected here.
+gpt_fix() {
+  if [ "$LABEL_TYPE" = gpt ]; then sfdisk -q --relocate gpt-bak-std "$IMG" || die "sfdisk could not move GPT's backup header"; fi
+}
 # ★ The boot loader is OUTSIDE the partitions: the MBR's boot code (bytes 0-445; on GPT the protective MBR) and U-Boot
 #   from sector 1 (MBR) or 34 (GPT, after the table) up to the first partition.
 boot_region_sums() {
