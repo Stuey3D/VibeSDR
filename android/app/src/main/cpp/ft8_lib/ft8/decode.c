@@ -2,6 +2,7 @@
 #include "constants.h"
 #include "crc.h"
 #include "ldpc.h"
+#include "vibe_simd4.h"
 
 #include <stdbool.h>
 #include <math.h>
@@ -43,6 +44,7 @@ static float max2(float a, float b);
 static float max4(float a, float b, float c, float d);
 static void heapify_down(ftx_candidate_t heap[], int heap_size);
 static void heapify_up(ftx_candidate_t heap[], int heap_size);
+static void heap_offer(ftx_candidate_t heap[], int* heap_size, int num_candidates, const ftx_candidate_t* candidate);
 
 static void ftx_normalize_logl(float* log174);
 static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl);
@@ -187,13 +189,125 @@ static int ft4_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     return score;
 }
 
+/* ★★ THE SYNC SEARCH, SIXTEEN FREQUENCIES AT ONCE (VibeSDR, 2026-10-25 — the FT8 CPU work; not in upstream ft8_lib).
+ *  ft8_sync_score / ft4_sync_score above are the reference: for one candidate, the sum over its Costas symbols of
+ *  (expected tone − a neighbour) in the uint8 waterfall, divided by the number of terms. WHICH terms are summed
+ *  depends only on the candidate's time (the Costas pattern and the slot's edges), never on its frequency — and the
+ *  waterfall stores neighbouring frequencies in neighbouring bytes. So for one time position the terms are listed
+ *  once (as pairs of byte offsets), and sixteen consecutive frequency offsets are scored together: sixteen byte loads
+ *  per term, widened to int16 (at most 84 terms of ±255 — the sum fits). Integer sums are exact in any order, and the
+ *  division and the heap see the candidates in the original order, so the candidate list is the same, bit for bit
+ *  (test-ft8-fast). The search was ~1.6 ms of every FT8 pass on an M5, the same on every pass. */
+typedef struct
+{
+    int32_t a, b;    // byte offsets from the candidate's symbol-0 pointer: score += mag[a] - mag[b]
+} sync_term_t;
+
+static int sync_terms(const ftx_waterfall_t* wf, int time_offset, sync_term_t* terms)
+{
+    int n = 0;
+    const int bs = wf->block_stride;
+    if (wf->protocol == FTX_PROTOCOL_FT4)
+    {
+        for (int m = 0; m < FT4_NUM_SYNC; ++m)
+            for (int k = 0; k < FT4_LENGTH_SYNC; ++k)
+            {
+                int block = 1 + (FT4_SYNC_OFFSET * m) + k;
+                int block_abs = time_offset + block;
+                if (block_abs < 0)
+                    continue;
+                if (block_abs >= wf->num_blocks)
+                    break;
+                const int base = block * bs, sm = kFT4_Costas_pattern[m][k];
+                if (sm > 0) { terms[n].a = base + sm; terms[n].b = base + sm - 1; ++n; }
+                if (sm < 3) { terms[n].a = base + sm; terms[n].b = base + sm + 1; ++n; }
+                if ((k > 0) && (block_abs > 0)) { terms[n].a = base + sm; terms[n].b = base + sm - bs; ++n; }
+                if (((k + 1) < FT4_LENGTH_SYNC) && ((block_abs + 1) < wf->num_blocks)) { terms[n].a = base + sm; terms[n].b = base + sm + bs; ++n; }
+            }
+    }
+    else
+    {
+        for (int m = 0; m < FT8_NUM_SYNC; ++m)
+            for (int k = 0; k < FT8_LENGTH_SYNC; ++k)
+            {
+                int block = (FT8_SYNC_OFFSET * m) + k;
+                int block_abs = time_offset + block;
+                if (block_abs < 0)
+                    continue;
+                if (block_abs >= wf->num_blocks)
+                    break;
+                const int base = block * bs, sm = kFT8_Costas_pattern[k];
+                if (sm > 0) { terms[n].a = base + sm; terms[n].b = base + sm - 1; ++n; }
+                if (sm < 7) { terms[n].a = base + sm; terms[n].b = base + sm + 1; ++n; }
+                if ((k > 0) && (block_abs > 0)) { terms[n].a = base + sm; terms[n].b = base + sm - bs; ++n; }
+                if (((k + 1) < FT8_LENGTH_SYNC) && ((block_abs + 1) < wf->num_blocks)) { terms[n].a = base + sm; terms[n].b = base + sm + bs; ++n; }
+            }
+    }
+    return n;
+}
+
+/** The raw sums (before the division) for 16 consecutive frequency offsets starting at p. */
+static void sync_sum16(const uint8_t* p, const sync_term_t* terms, int n, int16_t out[16])
+{
+#if VIBE_FT8_NEON
+    int16x8_t lo = vdupq_n_s16(0), hi = vdupq_n_s16(0);
+    for (int i = 0; i < n; ++i)
+    {
+        const uint8x16_t a = vld1q_u8(p + terms[i].a), b = vld1q_u8(p + terms[i].b);
+        lo = vaddq_s16(lo, vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(a), vget_low_u8(b))));
+        hi = vaddq_s16(hi, vreinterpretq_s16_u16(vsubl_u8(vget_high_u8(a), vget_high_u8(b))));
+    }
+    vst1q_s16(out, lo);
+    vst1q_s16(out + 8, hi);
+#elif VIBE_FT8_SSE2
+    const __m128i z = _mm_setzero_si128();
+    __m128i lo = z, hi = z;
+    for (int i = 0; i < n; ++i)
+    {
+        const __m128i a = _mm_loadu_si128((const __m128i*)(p + terms[i].a));
+        const __m128i b = _mm_loadu_si128((const __m128i*)(p + terms[i].b));
+        lo = _mm_add_epi16(lo, _mm_sub_epi16(_mm_unpacklo_epi8(a, z), _mm_unpacklo_epi8(b, z)));
+        hi = _mm_add_epi16(hi, _mm_sub_epi16(_mm_unpackhi_epi8(a, z), _mm_unpackhi_epi8(b, z)));
+    }
+    _mm_storeu_si128((__m128i*)out, lo);
+    _mm_storeu_si128((__m128i*)(out + 8), hi);
+#else
+    int acc[16] = { 0 };
+    for (int i = 0; i < n; ++i)
+        for (int l = 0; l < 16; ++l)
+            acc[l] += (int)p[terms[i].a + l] - (int)p[terms[i].b + l];
+    for (int l = 0; l < 16; ++l)
+        out[l] = (int16_t)acc[l];
+#endif
+}
+
+static void heap_offer(ftx_candidate_t heap[], int* heap_size, int num_candidates, const ftx_candidate_t* candidate)
+{
+    // If the heap is full AND the current candidate is better than
+    // the worst in the heap, we remove the worst and make space
+    if ((*heap_size == num_candidates) && (candidate->score > heap[0].score))
+    {
+        --*heap_size;
+        heap[0] = heap[*heap_size];
+        heapify_down(heap, *heap_size);
+    }
+
+    // If there's free space in the heap, we add the current candidate
+    if (*heap_size < num_candidates)
+    {
+        heap[*heap_size] = *candidate;
+        ++*heap_size;
+        heapify_up(heap, *heap_size);
+    }
+}
+
 int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candidate_t heap[], int min_score)
 {
-    int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) = (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score : ft8_sync_score;
     int num_tones = (wf->protocol == FTX_PROTOCOL_FT4) ? 4 : 8;
 
     int heap_size = 0;
     ftx_candidate_t candidate;
+    sync_term_t terms[FT4_NUM_SYNC * FT4_LENGTH_SYNC * 4 > FT8_NUM_SYNC * FT8_LENGTH_SYNC * 4 ? FT4_NUM_SYNC * FT4_LENGTH_SYNC * 4 : FT8_NUM_SYNC * FT8_LENGTH_SYNC * 4];
 
     // Here we allow time offsets that exceed signal boundaries, as long as we still have all data bits.
     // I.e. we can afford to skip the first 7 or the last 7 Costas symbols, as long as we track how many
@@ -204,28 +318,31 @@ int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candi
         {
             for (candidate.time_offset = -10; candidate.time_offset < 20; ++candidate.time_offset)
             {
-                for (candidate.freq_offset = 0; (candidate.freq_offset + num_tones - 1) < wf->num_bins; ++candidate.freq_offset)
+                const int nt = sync_terms(wf, candidate.time_offset, terms);
+                candidate.freq_offset = 0;
+                const uint8_t* p0 = get_cand_mag(wf, &candidate);   // symbol 0, frequency offset 0
+                const int f_end = wf->num_bins - num_tones + 1;     // freq_offset + num_tones - 1 < num_bins
+                for (int f = 0; f < f_end; f += 16)
                 {
-                    candidate.score = sync_fun(wf, &candidate);
-
-                    if (candidate.score < min_score)
-                        continue;
-
-                    // If the heap is full AND the current candidate is better than
-                    // the worst in the heap, we remove the worst and make space
-                    if ((heap_size == num_candidates) && (candidate.score > heap[0].score))
+                    int16_t raw[16];
+                    const int lanes = (f_end - f < 16) ? f_end - f : 16;
+                    if (lanes == 16)
+                        sync_sum16(p0 + f, terms, nt, raw);
+                    else
+                        for (int l = 0; l < lanes; ++l)
+                        {
+                            int acc = 0;
+                            for (int i = 0; i < nt; ++i)
+                                acc += (int)p0[f + l + terms[i].a] - (int)p0[f + l + terms[i].b];
+                            raw[l] = (int16_t)acc;
+                        }
+                    for (int l = 0; l < lanes; ++l)
                     {
-                        --heap_size;
-                        heap[0] = heap[heap_size];
-                        heapify_down(heap, heap_size);
-                    }
-
-                    // If there's free space in the heap, we add the current candidate
-                    if (heap_size < num_candidates)
-                    {
-                        heap[heap_size] = candidate;
-                        ++heap_size;
-                        heapify_up(heap, heap_size);
+                        candidate.freq_offset = (int16_t)(f + l);
+                        candidate.score = (int16_t)(nt > 0 ? raw[l] / nt : raw[l]);
+                        if (candidate.score < min_score)
+                            continue;
+                        heap_offer(heap, &heap_size, num_candidates, &candidate);
                     }
                 }
             }
@@ -247,6 +364,35 @@ int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candi
         heapify_down(heap, len_unsorted);
     }
 
+    return heap_size;
+}
+
+/// The original search, one candidate at a time (ft8_lib's): the reference ftx_find_candidates is held to.
+int ftx_find_candidates_ref(const ftx_waterfall_t* wf, int num_candidates, ftx_candidate_t heap[], int min_score)
+{
+    int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) = (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score : ft8_sync_score;
+    int num_tones = (wf->protocol == FTX_PROTOCOL_FT4) ? 4 : 8;
+    int heap_size = 0;
+    ftx_candidate_t candidate;
+    for (candidate.time_sub = 0; candidate.time_sub < wf->time_osr; ++candidate.time_sub)
+        for (candidate.freq_sub = 0; candidate.freq_sub < wf->freq_osr; ++candidate.freq_sub)
+            for (candidate.time_offset = -10; candidate.time_offset < 20; ++candidate.time_offset)
+                for (candidate.freq_offset = 0; (candidate.freq_offset + num_tones - 1) < wf->num_bins; ++candidate.freq_offset)
+                {
+                    candidate.score = sync_fun(wf, &candidate);
+                    if (candidate.score < min_score)
+                        continue;
+                    heap_offer(heap, &heap_size, num_candidates, &candidate);
+                }
+    int len_unsorted = heap_size;
+    while (len_unsorted > 1)
+    {
+        ftx_candidate_t tmp = heap[len_unsorted - 1];
+        heap[len_unsorted - 1] = heap[0];
+        heap[0] = tmp;
+        len_unsorted--;
+        heapify_down(heap, len_unsorted);
+    }
     return heap_size;
 }
 

@@ -10,6 +10,9 @@
 //      hopeless to clean — the same `plain` and the same error count, every time.
 //   2. OSD-1: ft8Osd1 (eliminates in codeword order, popcount first) vs the first version (permuted columns, kept
 //      below as osd1Ref) — the same codeword and the same error count, including the near-misses BP gave up on.
+//   3. the sync search: ftx_find_candidates (sixteen frequencies per vector) vs ftx_find_candidates_ref (ft8_lib's,
+//      one at a time), FT8 and FT4, on waterfalls of noise with Costas arrays planted in them, several minimum
+//      scores and heap sizes — the same candidates, in the same order, with the same scores.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -22,6 +25,8 @@ extern "C" {
 #include "ft8/constants.h"
 #include "ft8/ldpc.h"
 #include "ft8/crc.h"
+#include "ft8/decode.h"
+#include "common/monitor.h"
 }
 #include "decoders/ft8_decoder.h"
 #include <algorithm>
@@ -172,10 +177,55 @@ static void testOsd() {
        + std::to_string(bpFailed) + ")");
 }
 
+static void testSearch() {
+    std::printf("\n3. sync search — ftx_find_candidates vs ft8_lib's ftx_find_candidates_ref\n");
+    std::mt19937 rng(42);
+    int same = 0, n = 0; long found = 0;
+    for (int ft4 = 0; ft4 < 2; ++ft4) {
+        monitor_config_t cfg = {};
+        cfg.f_min = 100; cfg.f_max = 3500; cfg.sample_rate = 12000; cfg.time_osr = 2; cfg.freq_osr = 2;
+        cfg.protocol = ft4 ? FTX_PROTOCOL_FT4 : FTX_PROTOCOL_FT8;
+        monitor_t mon; monitor_init(&mon, &cfg);
+        ftx_waterfall_t& wf = mon.wf;
+        for (int t = 0; t < 12; ++t) {
+            wf.num_blocks = t % 4 == 3 ? wf.max_blocks - 9 : wf.max_blocks;      // a short window too
+            const size_t sz = (size_t)wf.max_blocks * wf.block_stride;
+            for (size_t i = 0; i < sz; ++i) wf.mag[i] = (uint8_t)(std::min(255.0, std::max(0.0, 80 + 12.0 * std::normal_distribution<double>()(rng))));
+            for (int sig = 0; sig < 30; ++sig) {                                      // Costas arrays to find
+                const int ts = (int)(rng() % 2), fs = (int)(rng() % 2), f = (int)(rng() % (unsigned)(wf.num_bins - 8));
+                const int t0 = (int)(rng() % 25) - 8, lift = 10 + (int)(rng() % 120);
+                const int nsync = ft4 ? FT4_NUM_SYNC : FT8_NUM_SYNC, len = ft4 ? FT4_LENGTH_SYNC : FT8_LENGTH_SYNC;
+                for (int m = 0; m < nsync; ++m)
+                    for (int k = 0; k < len; ++k) {
+                        const int b = t0 + (ft4 ? 1 + FT4_SYNC_OFFSET * m + k : FT8_SYNC_OFFSET * m + k);
+                        if (b < 0 || b >= wf.num_blocks) continue;
+                        const int tone = ft4 ? kFT4_Costas_pattern[m][k] : kFT8_Costas_pattern[k];
+                        uint8_t& v = wf.mag[(size_t)b * wf.block_stride + ((size_t)ts * wf.freq_osr + fs) * wf.num_bins + f + tone];
+                        v = (uint8_t)std::min(255, v + lift);
+                    }
+            }
+            const int minScore = t % 3 == 0 ? 10 : t % 3 == 1 ? 0 : -3, cap = t % 2 ? 140 : 300;
+            std::vector<ftx_candidate_t> a((size_t)cap), b((size_t)cap);
+            const int na = ftx_find_candidates_ref(&wf, cap, a.data(), minScore);
+            const int nb = ftx_find_candidates(&wf, cap, b.data(), minScore);
+            bool eq = na == nb;
+            for (int i = 0; eq && i < na; ++i)
+                eq = a[(size_t)i].score == b[(size_t)i].score && a[(size_t)i].time_offset == b[(size_t)i].time_offset
+                  && a[(size_t)i].freq_offset == b[(size_t)i].freq_offset && a[(size_t)i].time_sub == b[(size_t)i].time_sub
+                  && a[(size_t)i].freq_sub == b[(size_t)i].freq_sub;
+            ++n; same += eq; found += na;
+            if (!eq) std::printf("     differ: %s case %d: %d vs %d candidates\n", ft4 ? "FT4" : "FT8", t, na, nb);
+        }
+        monitor_free(&mon);
+    }
+    ok(same == n, "identical candidate lists: " + std::to_string(same) + " / " + std::to_string(n) + " (" + std::to_string(found) + " candidates)");
+}
+
 int main() {
     std::printf("test-ft8-fast — the fast FT8 kernels against ft8_lib's originals\n");
     testBp();
     testOsd();
+    testSearch();
     std::printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "ALL PASS", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;
 }
