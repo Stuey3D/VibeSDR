@@ -320,6 +320,12 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         This box cannot save its settings &mdash; its settings partition is missing or unreadable.
         Anything set up now will be lost at the next restart. Re-flash the card with the latest image.
       </div>
+      <!-- ★★★ THE MANUAL OVERRIDE (Stuart, 2026-10-25, Nick's Orange Pi One: "autodetect wifi and hide the options, if that
+           fails then a manual toggle to ignore it"). Drawn only while the Wi-Fi form IS showing — i.e. when the box did not
+           say "no Wi-Fi" or "Wi-Fi off". Ticked on a box that reports a Wi-Fi radio and a cable, it is the real switch-off
+           (the warning above, then the root service); otherwise the page simply stops asking for, and saving, Wi-Fi. -->
+      <label id="wifiIgnoreRow" class="hide" style="display:flex;gap:8px;align-items:center;margin:4px 0 12px">
+        <input type="checkbox" id="wifiIgnore" style="width:auto;margin:0"> <span>Disable Wi-Fi / no Wi-Fi present</span></label>
       <div id="wifiEdit">
       <!-- ★★ UNSAVED, SAID AT THE TOP (Stuart, 2026-10-10: "I never noticed that button as I had to scroll to get it").
            Appears the moment anything in the card differs from what the box holds. -->
@@ -5882,6 +5888,10 @@ $("wifiDirtySave").onclick = () => $("wifiSave").click();
 /** ★ Has the owner changed the Wi-Fi card since it was loaded (order, a password, the hotspot, the country)? */
 function wifiDirty() {
   if (!POCKET || !WIFI || $("wifiCard").classList.contains("hide")) return false;
+  /* ★★★ A BOX WITH NO WI-FI HAS NO WI-FI CHANGES (Nick's Orange Pi One, 2026-10-25). The card is not hidden there — only
+   *  its form is — so the empty hotspot name made every collect throw, which counted as "unsaved", and the MAIN Save then
+   *  failed with "Wi-Fi not saved — Give this box's own hotspot a name": a wired box could never finish setup. */
+  if (wifiIgnored()) return false;
   try { return JSON.stringify(wifiCollect()) !== WIFI_BASELINE; } catch (e) { return true; }
 }
 
@@ -6060,10 +6070,39 @@ function wifiRender() {
   wifiRadioRender();
 }
 
+/** ★ Is the Wi-Fi form out of play — no radio, switched off, or the owner's "no Wi-Fi present" tick (a per-browser choice). */
+let WIFI_IGNORE = false;
+try { WIFI_IGNORE = localStorage.getItem("vibeWifiIgnore") === "1"; } catch (e) { /* private window: ask again */ }
+function wifiIgnored() {
+  const w = WIFI || {};
+  return w.hasWifi === false || w.wifiOff === true || WIFI_IGNORE;
+}
+$("wifiIgnore").onchange = () => {
+  const w = WIFI || {};
+  if ($("wifiIgnore").checked && w.hasWifi === true && w.wired === true && !(POCKET && POCKET.viaHotspot)) {
+    // ★ A real radio and a cable: switching off is the box's job, and it is asked twice (the warning above).
+    $("wifiIgnore").checked = false;
+    $("wifiRadio").classList.remove("hide");
+    $("wifiRadioBtn").click();
+    $("wifiRadio").scrollIntoView({behavior: "smooth", block: "center"});
+    return;
+  }
+  WIFI_IGNORE = $("wifiIgnore").checked;
+  try { localStorage.setItem("vibeWifiIgnore", WIFI_IGNORE ? "1" : "0"); } catch (e) { /* this page only */ }
+  wifiRender();
+  wifiDirtyRender();
+};
+
 /** ★★★ THE WIRED BOX (2026-10-13) — drawn LAST, because with no Wi-Fi or Wi-Fi off it hides what the others drew. */
 function wifiRadioRender() {
   const w = WIFI || {};
   const none = w.hasWifi === false, off = !none && w.wifiOff === true;
+  $("wifiIgnoreRow").classList.toggle("hide", none || off);
+  $("wifiIgnore").checked = WIFI_IGNORE && !none && !off;
+  if (WIFI_IGNORE && !none && !off) {
+    ["wifiSummary", "wifiEdit", "wifiFinish"].forEach(id => $(id).classList.add("hide"));
+    document.body.classList.remove("wifiFirst");
+  }
   const at = w.wired && w.wiredIp ? " at " + w.wiredIp : "";
   const canOff = !none && !off && w.wired === true && !(POCKET && POCKET.viaHotspot);
   $("wifiRadio").classList.toggle("hide", !(none || off || canOff));
