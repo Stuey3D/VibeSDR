@@ -95,12 +95,16 @@ export function ismAgo(sec: number): string {
   return m ? `${h} h ${m} min` : `${h} h`;
 }
 
-/** The status line: "433.92 MHz ISM · 6 devices · 41 bursts (3 unidentified) · capture 100 %". */
+/** The status line: "433.92 MHz ISM · 6 devices · 41 bursts (3 unidentified) · gain 33.8 dB auto · capture 100 %". */
 export function ismStatus(r: IsmReport): string {
   const parts: string[] = [];
   parts.push(r.custom ? `${(r.centre / 1e6).toFixed(3)} MHz` : (r.bandName || 'ISM'));
   parts.push(`${r.devices.length} ${r.devices.length === 1 ? 'device' : 'devices'}`);
   if (r.bursts !== undefined) parts.push(`${r.bursts} bursts${r.unknown ? ` (${r.unknown} unidentified)` : ''}`);
+  /* ★ THE GAIN ISM IS ACTUALLY USING (Stuart, 2026-10-25: "the gain is indicating 0dB but I know that not to be the case").
+   *  ISM sets the radio's gain itself (vibe_ism_service.h GainRule: 60 % up the radio's own list, down only on clipping)
+   *  and the dongle AGC off, so the ordinary gain readout has nothing true to say — the report's `gain` is the figure. */
+  if (r.gain !== undefined && r.gain >= 0) parts.push(`gain ${r.gain.toFixed(1)} dB${r.gainAuto === 1 ? ' auto' : ''}`);
   if (r.capture !== undefined && r.capture >= 0) parts.push(`capture ${r.capture} %`);
   return parts.join(' · ');
 }

@@ -276,5 +276,31 @@ for (const [label, radio, admin] of [
   } finally { S.stop(); }
 }
 
+// ── 9. THE SOCKET SWAP (2026-10-25, the Pi 2 after beta16): landed on DAB, every socket of the session closes for a
+//       moment, the SAME session comes straight back — it must find DAB still up, not FM. Before the grace the radio
+//       logged "last listener left", tore DAB down and returned to the landing FM in the same second. And a listener
+//       who really goes still lets the radio leave DAB once the grace is over.
+{
+  console.log('── shared dial (5), landed on 7C, the session swaps its sockets (gone < 1 s) ──');
+  const S = await server({ users: 5, landingDabChannel: BLOCK_7C, landingDabSid: 0 }, 'swap');
+  try {
+    const A = await listener(S.port, 'swap9999');
+    ok(inDab(A), `landed on 7C (${dabs(A.spec).length} dab reports)`);
+    A.close();
+    await sleep(600);
+    const A2 = await listener(S.port, 'swap9999');
+    const log1 = S.log();
+    ok(dabs(A2.spec).some((d) => d.channel === '7C') && !A2.spec.txt.some((t) => t.includes('"type":"dab_off"'))
+       && lastConfig(A2.spec).centerFreq === CENTRE_7C,
+       `the same session back within a second is still in DAB 7C (${dabs(A2.spec).length} reports, centerFreq ${lastConfig(A2.spec).centerFreq})`);
+    ok(/stays up for 5 s/.test(log1) && /listener returned within 5 s — DAB kept/.test(log1) && !/\[DAB\] mode OFF/.test(log1),
+       'the log says DAB waited and was kept, and DAB never went off');
+    A2.close();
+    await sleep(7000);
+    ok(/\[DAB\] last listener left — remembering block/.test(S.log()) && /\[DAB\] mode OFF/.test(S.log()),
+       'with nobody back after the grace, the radio leaves DAB (remembering the block)');
+  } finally { S.stop(); }
+}
+
 console.log(`\n   ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
