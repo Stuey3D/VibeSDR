@@ -2541,6 +2541,9 @@ const BLOCKABLE = [
    *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
    *  buttons were dead weight in its clients (Stuart, 2026-09-17). */
   { id: "spots",  label: "Digital spots / map" },
+  /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
+   *  presses near their house listed at all, however anonymous the list is: this is the switch. */
+  { id: "ism",    label: "ISM sensors" },
 ];
 
 /** The blocked list as a Set of ids, from this radio's CSV. */

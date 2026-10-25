@@ -68,8 +68,8 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   
   const shim = read('android/app/src/main/cpp/local_sdr_shim.cpp');
   const s = shim.indexOf('kGated = {'), e = shim.indexOf('};', s);
   const server = [...shim.slice(s, e).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1])
-    // ★ 'adsb' (V12) is a dial move like 'dab': the client gates it in adsb() with askBlocked, not by this settings list.
-    .filter((t) => !['tune', 'mode', 'bandwidth', 'dab', 'dab_service', 'adsb', 'iqtune'].includes(t)).sort();
+    // ★ 'adsb' and 'ism' (V12) are dial moves like 'dab': the client gates them in adsb()/ism() with askBlocked, not by this list.
+    .filter((t) => !['tune', 'mode', 'bandwidth', 'dab', 'dab_service', 'adsb', 'ism', 'iqtune'].includes(t)).sort();
   const jr = read('spike/WristSDR/WristSDR/UberClient.swift');
   const js = jr.indexOf('askSharedSettings: Set<String> = ['), je = jr.indexOf(']', js + 40);
   const jrList = [...jr.slice(js, je).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1]).sort();

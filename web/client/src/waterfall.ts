@@ -174,6 +174,8 @@ export class Waterfall {
 
   /** VFO marker position, Hz (the needle). */
   vfoHz = 0;
+  /** ★ ISM: there is no listening passband on a band capture — the needle and its LISTEN label are not drawn. */
+  vfoHidden = false;
   /** ★ Appended to the RF CENTRE label — e.g. " — controlled by VibeClarity" when the suite is
    *  choosing where the tuner sits, so a centre that moves on its own explains itself. */
   rfCenterNote = '';
@@ -852,7 +854,7 @@ export class Waterfall {
    * in canvas, so we get the v1 semantics for free: blurred halo + razor hairline.
    */
   private _drawVfo(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    if (!this.spanHz || !this.vfoHz) return;
+    if (!this.spanHz || !this.vfoHz || this.vfoHidden) return;
 
     const nX = this.hzToX(this.vfoHz, W);
     let loX = this.hzToX(this.vfoHz + this.filterLow, W);

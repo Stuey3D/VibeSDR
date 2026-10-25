@@ -82,6 +82,10 @@ export type MobileDeps = {
   adsbCap: () => { ok: boolean; why: string } | null;
   adsbOn: () => boolean;
   toggleAdsb: () => void;
+  /** ★ ISM (V12): null = not offered on this radio (no control at all); ok false = greyed with the reason. */
+  ismCap: () => { ok: boolean; why: string } | null;
+  ismOn: () => boolean;
+  toggleIsm: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
   openChat: () => void;
@@ -330,6 +334,18 @@ export function initMobileControls(deps: MobileDeps) {
       if (!ac.ok) adsbRow.setAttribute('aria-disabled', 'true');
       adsbRow.onclick = () => { deps.toggleAdsb(); close(); refresh(); };
       grid.appendChild(adsbRow);
+    }
+    /* ★★ ISM beside ADS-B — the third whole-radio mode, the same three states. Absent where the radio reaches no ISM band
+     *  (an HF+): a control that cannot work on this radio is not drawn (AGENTS.md). */
+    const ic = deps.ismCap();
+    if (ic) {
+      const ismRow = document.createElement('button');
+      ismRow.className = 'mModeOpt' + (deps.ismOn() ? ' on' : '') + (ic.ok ? '' : ' dis');
+      ismRow.textContent = 'ISM';
+      ismRow.title = ic.ok ? 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)' : `ISM is not available: ${ic.why}`;
+      if (!ic.ok) ismRow.setAttribute('aria-disabled', 'true');
+      ismRow.onclick = () => { deps.toggleIsm(); close(); refresh(); };
+      grid.appendChild(ismRow);
     }
 
     const sole = deps.soleDecoder();

@@ -100,6 +100,9 @@ flags_for() {
     # ★★ V12 aircraft data: builder/reader/enrichment/logo zip installer on vibeserver/testdata-adsb (VIBE_ADSB_RAW
     #    = a folder with the real downloads also checks known aircraft and routes — scripts/build-adsb-data.sh)
     test-adsb-data)        echo "-O2 -lpthread" ;;
+    # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
+    #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
+    test-ism)              echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }
@@ -933,6 +936,22 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── ADS-B landing + keep running (end to end) ──\033[0m\n'
 node scripts/test-server-adsb-landing.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ V12 ISM MODE (docs/v12/ISM-DECODER.md): the real server on a fake rtl_tcp replaying a synthetic 433 MHz clip made by
+#     test-ism --write-clip — the capability, the device list and its readable lines, the privacy rule ON THE WIRE, band
+#     steps (clamped), an exact frequency, EXIT giving the dial back; then the web client in headless Edge (--mute-audio).
+#     Needs VIBESERVER_BIN (exit 3 = not run); the web half also needs Edge.
+printf '\n\033[1m── ISM mode (end to end: server, then the web client) ──\033[0m\n'
+if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-ism" --write-clip "$OUT/ism-clip.u8" 434130000 2400000 >/dev/null
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-server-ism.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-web-ism.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/ism-clip.u8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-ism build'; notrun=$((notrun+1))
+fi
 
 # ★★ THE RATE PIN AND THE SHARED-DIAL RATE RULE BIND LISTENERS, NOT THE SIGNED-IN ADMIN (Stuart, 2026-10-24: "sample rate
 #    change isnt working … I am in admin mode"). Same VIBESERVER_BIN rule.
