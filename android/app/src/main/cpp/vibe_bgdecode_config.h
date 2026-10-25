@@ -4,6 +4,7 @@
 #pragma once
 #include "vibe_antswitch.h"      // ★ the strict little JSON reader — reused, not re-written
 #include "vibe_gallery.h"        // jsonEsc
+#include "vibe_ism_bands.h"      // ★ an ISM profile names one of these bands
 
 #include <algorithm>
 #include <cctype>
@@ -25,7 +26,14 @@ struct Profile {
     double centreHz = 500000;
     int    fromMin = 0, toMin = 0; ///< UTC minutes of the day; equal = all day
     std::vector<Vfo> vfos;
+    /** ★★ V12 2026-10-25 — AN ISM PROFILE (Stuart: ISM "selectable as a decoder in a background-decoding profile"). ISM
+     *  is a WHOLE-CAPTURE decoder: every sensor in a sub-band at once, with the radio centred for the band
+     *  (local_sdr_shim.cpp ismHwCentre) — so such a profile picks a BAND ("315" / "433" / "868" / "915",
+     *  vibe_ism_bands.h) instead of an RF centre and VFOs, and runs the listener's own ISM mode with nobody here.
+     *  Empty = an ordinary profile. Stored as "ism":"433"; its "centre" and "vfos" are ignored. */
+    std::string ism;
     bool allDay() const { return fromMin == toMin; }
+    bool isIsm() const { return !ism.empty(); }
 };
 struct Config {
     bool on = false;
@@ -137,6 +145,7 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
             const int f = parseHhMm(pj.str("from", "00:00")), t = parseHhMm(pj.str("to", "00:00"));
             if (f < 0 || t < 0) { err = "background decoding: a profile time is not HH:MM"; return false; }
             p.fromMin = f; p.toMin = t;
+            p.ism = pj.str("ism", "");
             if (const auto* vs = pj.get("vfos"); vs && vs->kind == antswitch::Json::Arr)
                 for (const auto& vj : vs->a) {
                     if (vj.kind != antswitch::Json::Obj) continue;
@@ -160,14 +169,18 @@ inline std::string toJson(const Config& c) {
         const auto& p = c.profiles[i];
         if (i) o += ',';
         std::snprintf(b, sizeof b, "%.0f", p.centreHz);
-        o += std::string("{\"centre\":") + b + ",\"from\":\"" + hhmm(p.fromMin) + "\",\"to\":\"" + hhmm(p.toMin) + "\",\"vfos\":[";
+        o += std::string("{\"centre\":") + b + ",\"from\":\"" + hhmm(p.fromMin) + "\",\"to\":\"" + hhmm(p.toMin) + "\"";
+        o += ",\"vfos\":[";
         for (size_t k = 0; k < p.vfos.size(); k++) {
             const auto& v = p.vfos[k];
             if (k) o += ',';
             std::snprintf(b, sizeof b, "%.0f", v.hz);
             o += std::string("{\"hz\":") + b + ",\"mode\":\"" + gallery::jsonEsc(v.mode) + "\",\"dec\":\"" + gallery::jsonEsc(v.dec) + "\"}";
         }
-        o += "]}";
+        o += "]";
+        // ★ V12 2026-10-25: absent on an ordinary profile, so older settings read back unchanged (the page's own order)
+        if (p.isIsm()) o += ",\"ism\":\"" + gallery::jsonEsc(p.ism) + "\"";
+        o += "}";
     }
     return o + "]}";
 }
@@ -195,12 +208,33 @@ static inline std::string khz(double hz) { char b[32]; std::snprintf(b, sizeof b
  *  On a multi-radio server the cap is 0: background takes whatever slots are free, in its own priority order. */
 /** `lockCentre` > 0: a LOCKED-RANGE radio (Stuart, 2026-10-22) — its window never moves, a profile has no RF centre of
  *  its own, and every VFO must sit inside the locked window. */
-inline bool validate(const Config& c, double rate, std::string& err, int slotCap = 0, double lockCentre = 0) {
+/** `ismOk` false: this radio reaches no ISM band at all (an Airspy HF+ tops out near 260 MHz; an Icom is a transceiver's
+ *  audio) — an ISM profile is refused there, in words (AGENTS.md: no control that cannot work on this radio). Whether it
+ *  reaches the CHOSEN band through the owner's own allow/block ranges is the radio's to say when the profile runs. */
+inline bool validate(const Config& c, double rate, std::string& err, int slotCap = 0, double lockCentre = 0, bool ismOk = true) {
     if (c.profiles.size() > kMaxProfiles) { err = "background decoding: at most " + std::to_string(kMaxProfiles) + " profiles"; return false; }
     if (c.on && c.profiles.empty()) { err = "background decoding is on but has no profile — add one, or switch it off"; return false; }
     for (size_t i = 0; i < c.profiles.size(); i++) {
         const auto& p = c.profiles[i];
         const std::string name = "Profile " + std::to_string(i + 1);
+        // ★★ AN ISM PROFILE: a band, not a centre and VFOs. It MOVES the radio onto the band, so never on a locked radio
+        //    (background decoding never moves one), and it needs the capture ISM mode needs (≥ 0.9 MS/s).
+        if (p.isIsm()) {
+            const vibeism::Band* b = vibeism::bandById(p.ism);
+            if (!b) { err = name + ": choose an ISM band (315, 433.92, 868 or 915 MHz)"; return false; }
+            if (!ismOk) { err = name + ": this radio cannot tune to an ISM band"; return false; }
+            if (lockCentre > 0) {
+                err = name + ": ISM puts the radio on the " + std::string(b->name) + " band, and this radio's range is locked \xe2\x80\x94 "
+                      "background decoding never moves a locked radio. Unlock it, or choose VFOs inside its range.";
+                return false;
+            }
+            if (rate > 0 && rate < vibeism::kMinRateHz) {
+                char t[200];
+                std::snprintf(t, sizeof t, "%s: ISM needs a capture of 0.9 MS/s or more \xe2\x80\x94 this radio runs at %.3f MS/s", name.c_str(), rate / 1e6);
+                err = t; return false;
+            }
+            continue;
+        }
         if (!(p.centreHz > 0) && !(lockCentre > 0)) { err = name + ": set an RF centre"; return false; }
         const double centre = lockCentre > 0 ? lockCentre : p.centreHz;
         if (p.vfos.empty()) { err = name + ": add at least one VFO"; return false; }

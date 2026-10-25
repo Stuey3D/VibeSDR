@@ -19,6 +19,7 @@
 //   clang++ -std=c++17 -O2 -I android/app/src/main/cpp -o /tmp/test-ism-gallery vibeserver/test-ism-gallery.cpp -lpthread
 #include "vibe_ism_service.h"
 #include "vibe_ism_gallery.h"
+#include "vibe_bgdecode_config.h"
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -278,6 +279,30 @@ int main() {
         for (auto& f : files(dir)) { struct stat s{}; if (f.find("-ism-") != std::string::npos && stat((dir + "/" + f).c_str(), &s) == 0 && (uint64_t)s.st_size > ismgal::DayLog::kPartMaxBytes + 8192) under = false; }
         ok(under, "no part is bigger than the cap (+ one buffer)");
         ok(idx.find("(2).txt\"") != std::string::npos, "part 2 downloads as \"… (2).txt\"");
+    }
+
+    // ── 8. an ISM background profile: the config ─────────────────────────────────────────────────────────────────
+    {
+        std::printf(" an ISM background profile (vibe_bgdecode_config.h)\n");
+        bg::Config c; std::string err;
+        const std::string js = "{\"on\":true,\"waitMin\":5,\"profiles\":[{\"centre\":0,\"from\":\"00:00\",\"to\":\"00:00\",\"vfos\":[],\"ism\":\"433\"}]}";
+        ok(bg::parse(js, c, err) && c.profiles.size() == 1 && c.profiles[0].isIsm() && c.profiles[0].ism == "433", "parses: profile 1 is ISM 433");
+        ok(bg::toJson(c) == js, "round-trips: " + bg::toJson(c));
+        ok(bg::validate(c, 2.4e6, err), "valid on an RTL at 2.4 MS/s (no centre, no VFOs needed)");
+        ok(!bg::validate(c, 2.4e6, err, 0, 0, /*ismOk=*/false) && err.find("cannot tune to an ISM band") != std::string::npos, "an HF+ / Icom: refused — " + err);
+        ok(!bg::validate(c, 2.4e6, err, 0, 433.92e6) && err.find("locked") != std::string::npos, "a locked radio: refused — " + err);
+        ok(!bg::validate(c, 768e3, err) && err.find("0.9 MS/s") != std::string::npos, "768 kS/s: refused — " + err);
+        bg::Config bad; bg::parse("{\"on\":true,\"profiles\":[{\"from\":\"00:00\",\"to\":\"00:00\",\"ism\":\"440\"}]}", bad, err);
+        ok(!bg::validate(bad, 2.4e6, err) && err.find("choose an ISM band") != std::string::npos, "an unknown band: refused — " + err);
+        // an ISM night + a NAVTEX day: two profiles, no overlap
+        bg::Config two;
+        bg::parse("{\"on\":true,\"profiles\":[{\"centre\":500000,\"from\":\"06:00\",\"to\":\"22:00\",\"vfos\":[{\"hz\":517500,\"mode\":\"usb\",\"dec\":\"navtex\"}]},"
+                  "{\"from\":\"22:00\",\"to\":\"06:00\",\"ism\":\"868\"}]}", two, err);
+        ok(bg::validate(two, 2.4e6, err) && bg::activeProfile(two, 23 * 60) == 1 && bg::activeProfile(two, 12 * 60) == 0, "NAVTEX by day + ISM 868 by night: valid, ISM at 23:00, NAVTEX at noon");
+        bg::Config ov; bg::parse("{\"on\":true,\"profiles\":[{\"ism\":\"433\"},{\"ism\":\"868\",\"from\":\"01:00\",\"to\":\"02:00\"}]}", ov, err);
+        ok(!bg::validate(ov, 2.4e6, err) && err.find("overlap") != std::string::npos, "two ISM profiles that overlap are refused and named — " + err);
+        bg::Config nick; bg::parse("{\"on\":true,\"waitMin\":5,\"profiles\":[{\"centre\":500000,\"from\":\"00:00\",\"to\":\"00:00\",\"vfos\":[{\"hz\":489500,\"mode\":\"usb\",\"dec\":\"navtex\"}]}]}", nick, err);
+        ok(bg::toJson(nick).find("ism") == std::string::npos, "an ordinary profile writes no \"ism\" key (older settings read back unchanged)");
     }
 
     // ── 7. the download name is header-safe ───────────────────────────────────────────────────────────────────────

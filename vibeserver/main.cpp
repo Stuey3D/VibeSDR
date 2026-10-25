@@ -2416,7 +2416,10 @@ int main(int argc, char** argv) {
                 const bool locked = r.mode == vsconfig::Mode::LockedRange && r.lockFreq > 0;
                 const bool parsed = vibe::bg::parse(r.bgDecode, bc, be);
                 const int cap = (!parsed || bc.keepInRange || locked) ? 0 : slotCap;
-                if (!parsed || !vibe::bg::validate(bc, rate, be, cap, locked ? r.lockFreq : 0)) {
+                // ★★ V12 2026-10-25: an ISM profile only where the radio reaches an ISM band at all — by its driver, as the
+                //    setup page offers it (the HF+ tops out near 260 MHz; an Icom is a transceiver's audio).
+                const bool ismOk = r.driver != "airspyhf" && r.driver != "icom";
+                if (!parsed || !vibe::bg::validate(bc, rate, be, cap, locked ? r.lockFreq : 0, ismOk)) {
                     err = (r.label.empty() ? r.driver : r.label) + " \xe2\x80\x94 " + be;
                     return false;
                 }
