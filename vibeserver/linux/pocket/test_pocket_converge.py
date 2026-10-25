@@ -119,7 +119,7 @@ def dpkg_status(pkgs):
 
 
 ALL_PKGS = ["network-manager", "dnsmasq-base", "nftables", "iw", "rfkill", "python3", "ca-certificates", "curl",
-            "gnupg", "avahi-daemon", "ffmpeg", "overlayroot", "initramfs-tools", "vibeserver"]
+            "gnupg", "avahi-daemon", "ffmpeg", "overlayroot", "initramfs-tools", "dosfstools", "vibeserver"]
 
 
 def make_root(tmp, marker=True, pkgs=ALL_PKGS):

@@ -24,3 +24,4 @@ avahi-daemon      # VibeServerSetup.local / vibepocket.local on every network
 ffmpeg            # ★★★ DAB+ audio on Linux — the package only RECOMMENDS it and the image installs without recommends
 overlayroot       # the read-only root (power-cut hardening)
 initramfs-tools   # overlayroot lives in the initramfs
+dosfstools        # fsck.vfat for the card's FAT partition (VIBESETUP on a board card) before it is mounted — 11.0.11

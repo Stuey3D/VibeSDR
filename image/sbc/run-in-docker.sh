@@ -30,7 +30,7 @@ exec docker run --rm --privileged --cpus 2 --label vibesdr-sbc-build -v /dev:/de
   -e COUNTRY="${COUNTRY:-GB}" -e NO_MAPS="${NO_MAPS:-0}" -e KEEP_WORK="${KEEP_WORK:-0}" -e IMAGE_VERSION="${IMAGE_VERSION:-1}" \
   debian:trixie-slim /bin/bash -euo pipefail -c '
     apt-get update -qq
-    apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk e2fsprogs util-linux gnupg \
+    apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk e2fsprogs dosfstools util-linux gnupg \
         binutils qemu-user-static >/dev/null
     # ★ "boot-test" in place of a board: boot a finished card (the second argument) under emulation — boot-test.sh.
     if [ "'"$BOARD"'" = boot-test ]; then

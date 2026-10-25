@@ -42,9 +42,10 @@ COUNTRY="${COUNTRY:-GB}"
 IMAGE_VERSION="${IMAGE_VERSION:-1}"
 # Armbian's image signing key (Igor Pecovnik) — every dl.armbian.com .asc is made with it (as image/soft66ip-dietpi).
 ARMBIAN_IMAGE_KEY="DF00FAF1C577104B50BF1D0093D6889F9F0E78D5"
-GROW_MIB=3072             # working room for NetworkManager, VibeServer, ffmpeg and the maps; shrunk again afterwards
+GROW_MIB=3584             # working room for NetworkManager, VibeServer, ffmpeg and the maps; shrunk again afterwards
 HEADROOM_MIB=1024         # left free in root after the shrink — room for an Update in the read-only root (as the Pi)
 DATA_MIB=256              # the settings partition, never grown (as the Pi)
+SETUP_MIB=16              # ★ the small FAT partition (LABEL=VIBESETUP) an owner can reach from Windows / macOS (11.0.11)
 
 say()  { printf '==> %s\n' "$*"; }
 die()  { printf 'build.sh: %s\n' "$*" >&2; exit 1; }
@@ -74,6 +75,7 @@ package ...... ${VIBESERVER_DEB:-vibeserver from https://apt.vibesdr.net stable 
 steps ........ verify sha + Armbian signature → decompress → grow root +$GROW_MIB MB → chroot under $QEMU
                → customise-armbian.sh pre → image/pocket customise.sh → customise-armbian.sh post
                → shrink root to used + $HEADROOM_MIB MB → settings partition $DATA_MIB MB (LABEL=vibedata)
+               → FAT partition $SETUP_MIB MB (LABEL=VIBESETUP: the Wi-Fi reset file, from any computer)
                → prove boot region unchanged, layout, NEON build, units → xz
 output ....... ${OUT:-<output-dir>}/$OUT_NAME.img.xz (+ .sha256, manifest)
 EOF
@@ -87,7 +89,7 @@ fi
 
 [ -n "$BASE_XZ" ] && [ -n "$OUT" ] || die "usage: build.sh <board> <armbian-minimal.img.xz> <output-dir>"
 [ "$(id -u)" = 0 ] || die "run as root (it loop-mounts the image)"
-for t in losetup sfdisk e2fsck resize2fs dumpe2fs mkfs.ext4 blkid xz sha256sum gpg curl mount umount chroot readelf; do
+for t in losetup sfdisk e2fsck resize2fs dumpe2fs mkfs.ext4 mkfs.vfat blkid xz sha256sum gpg curl mount umount chroot readelf; do
   command -v "$t" >/dev/null || die "missing tool: $t"
 done
 [ -f "$BASE_XZ" ] && [ -f "$BASE_XZ.sha" ] && [ -f "$BASE_XZ.asc" ] || die "need $BASE_XZ with .sha and .asc beside it"
@@ -280,25 +282,55 @@ echo "$S1,$N1" | sfdisk -q --no-reread -N 1 "$IMG"
 S2=$(( (S1 + N1 + 8191) / 8192 * 8192 )); Z2=$(( DATA_MIB * 1024 * 1024 / 512 ))
 [ $(( (S2 + Z2) * 512 )) -le "$(stat -c %s "$IMG")" ] || die "LAYOUT: root + settings do not fit the working file — raise GROW_MIB"
 echo "$S2,$Z2,83" | sfdisk -q --no-reread --append "$IMG"
-truncate -s $(( (S2 + Z2) * 512 )) "$IMG"
+# ★★ (Stuart, 2026-10-25) The FAT partition, after the settings: a board card's /boot is ext4, which Windows and macOS
+#    cannot write, so the forget-the-Wi-Fi file had nowhere a card reader could put it. vibeserver-pocket-data mounts
+#    LABEL=VIBESETUP at /run/vibeserver-setup and vibeserver-pocket acts on vibeserver-reset-wifi there (11.0.11).
+#    ★ AFTER the settings partition, so root stays partition 1 and the settings the partition after root (the repair's rule).
+S3=$(( (S2 + Z2 + 8191) / 8192 * 8192 )); Z3=$(( SETUP_MIB * 1024 * 1024 / 512 ))
+[ $(( (S3 + Z3) * 512 )) -le "$(stat -c %s "$IMG")" ] || die "LAYOUT: root + settings + FAT do not fit the working file — raise GROW_MIB"
+echo "$S3,$Z3,c" | sfdisk -q --no-reread --append "$IMG"
+truncate -s $(( (S3 + Z3) * 512 )) "$IMG"
 LOOP="$(losetup -f --show -o $(( S2 * 512 )) --sizelimit $(( Z2 * 512 )) "$IMG")"
 mkfs.ext4 -q -F -L vibedata "$LOOP"
 losetup -d "$LOOP"; LOOP=""
+LOOP="$(losetup -f --show -o $(( S3 * 512 )) --sizelimit $(( Z3 * 512 )) "$IMG")"
+mkfs.vfat -F 16 -n VIBESETUP "$LOOP" >/dev/null
+mkdir -p "$WORK/fat"; mount -t vfat "$LOOP" "$WORK/fat"
+# ★ CRLF: it is read in Notepad on Windows as often as anywhere.
+printf '%s\r\n' \
+  "VibeServer Portable - this small drive is for you." \
+  "" \
+  "To make this box FORGET ITS WI-FI (every saved network and its own hotspot):" \
+  "  1. Make an empty file here named:  vibeserver-reset-wifi" \
+  "     (vibeserver-reset-wifi.txt from Notepad works too)." \
+  "  2. Eject the card safely, put it back in the box and power it on." \
+  "  3. The box raises its open \"VibeServer\" setup hotspot again; it deletes the file itself." \
+  "Your radios, admin password and other settings are kept." \
+  "" \
+  "On Ethernet the box is always at  http://vibeserversetup.local:48000  until it is set up." \
+  > "$WORK/fat/README-VibeServer.txt"
+umount "$WORK/fat"
+losetup -d "$LOOP"; LOOP=""
 
 # ── 7. Prove the finished file ─────────────────────────────────────────────────────────────────────────────────────
-[ "$(sfdisk -d "$IMG" | grep -c 'start=' || true)" = 2 ] || { sfdisk -d "$IMG"; die "LAYOUT: not 2 partitions"; }
+[ "$(sfdisk -d "$IMG" | grep -c 'start=' || true)" = 3 ] || { sfdisk -d "$IMG"; die "LAYOUT: not 3 partitions"; }
 T2="$(sfdisk -d "$IMG" | sed -n 's/.*[^0-9]2 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p')"
 [ "$T2" = "$S2 $Z2" ] || die "LAYOUT: partition 2 is '$T2', expected '$S2 $Z2'"
 CHK="$(losetup -f --show -r -o $(( S2 * 512 )) --sizelimit $(( Z2 * 512 )) "$IMG")"
 LBL="$(blkid -p -o value -s LABEL "$CHK" 2>/dev/null || true)"; losetup -d "$CHK"
 [ "$LBL" = vibedata ] || die "LAYOUT: no vibedata filesystem at partition 2 (found '$LBL')"
+T3="$(sfdisk -d "$IMG" | sed -n 's/.*[^0-9]3 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p')"
+[ "$T3" = "$S3 $Z3" ] || die "LAYOUT: partition 3 is '$T3', expected '$S3 $Z3'"
+CHK="$(losetup -f --show -r -o $(( S3 * 512 )) --sizelimit $(( Z3 * 512 )) "$IMG")"
+LBL="$(blkid -p -o value -s LABEL "$CHK" 2>/dev/null || true)"; losetup -d "$CHK"
+[ "$LBL" = VIBESETUP ] || die "LAYOUT: no VIBESETUP FAT filesystem at partition 3 (found '$LBL')"
 loop_p1
 U2="$(blkid -p -o value -s UUID "$LOOP")"; e2fsck -fn "$LOOP" >/dev/null 2>&1 || die "root filesystem check failed"
 losetup -d "$LOOP"; LOOP=""
 [ "$U2" = "$ROOT_UUID" ] || die "root UUID changed ($ROOT_UUID -> $U2): armbianEnv.txt would not find it"
 BOOT_AFTER="$(boot_region_sums "$IMG")"
 [ "$BOOT_BEFORE" = "$BOOT_AFTER" ] || die "the boot region changed: $BOOT_BEFORE -> $BOOT_AFTER"
-say "boot region unchanged; layout: root $(( NEWROOT / 1024 / 1024 )) MB at $S1, vibedata $DATA_MIB MB at $S2; $(( (S2 + Z2) / 2048 )) MB raw"
+say "boot region unchanged; layout: root $(( NEWROOT / 1024 / 1024 )) MB at $S1, vibedata $DATA_MIB MB at $S2, VIBESETUP (FAT) $SETUP_MIB MB at $S3; $(( (S3 + Z3) / 2048 )) MB raw"
 sfdisk -d "$IMG" > "$OUT/$OUT_NAME.partition-table.txt"
 
 # ── 8. Compress ────────────────────────────────────────────────────────────────────────────────────────────────────

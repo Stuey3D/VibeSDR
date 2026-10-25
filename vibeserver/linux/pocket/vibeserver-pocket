@@ -75,7 +75,13 @@ DNSMASQ_CONF = "/etc/NetworkManager/dnsmasq-shared.d/vibeserver-captive.conf"
 # ★ A file on the BOOT partition — the one place an owner can reach with a card reader and no
 #   terminal. Its presence at boot forgets every saved network and the fallback hotspot, so the
 #   OPEN setup hotspot comes back. The admin password is NOT reset by it (see the doc's questions).
-RESET_FILES  = ("/boot/firmware/vibeserver-reset-wifi", "/boot/vibeserver-reset-wifi")
+#  ★★ (2026-10-25, 11.0.11) …and on the card's small FAT partition (LABEL=VIBESETUP, mounted by vibeserver-pocket-data at
+#     /run/vibeserver-setup): a board card's /boot is ext4, which Windows and macOS cannot write. The old places still work.
+#     Windows Notepad saves "vibeserver-reset-wifi" as "vibeserver-reset-wifi.txt" unless told not to, so that counts too.
+SETUP_PART   = "/run/vibeserver-setup"
+LOWER_ROOT   = "/media/root-ro"     # ★ overlayroot's view of the REAL root on a sealed box
+RESET_FILES  = tuple(d + "/vibeserver-reset-wifi" + x
+                     for d in ("/boot/firmware", "/boot", SETUP_PART) for x in ("", ".txt"))
 
 NET_PREFIX   = "vibe-net-"          # vibe-net-1 … vibe-net-3, in order
 AP_NAME      = "vibe-ap"            # the owner's secured fallback hotspot
@@ -2451,13 +2457,47 @@ def setup_once(box):
                 f.write(want)
     except OSError as e:
         log("could not write the captive DNS rule (%s)" % e.strerror)
-    for rf in RESET_FILES:
-        if os.path.exists(rf):
-            box.reset_wifi()
+    take_reset_files(box, sh)
+
+
+def take_reset_files(box, sh, files=None):
+    """★★ The owner's forget-the-Wi-Fi file(s): reset ONCE however many there are, then delete every one — so it acts
+    once, not at every boot. ★★ A Raspberry Pi card's boot partition is mounted READ-ONLY on a Portable, so a plain
+    unlink failed (EROFS) and the file stayed: the box forgot its Wi-Fi again at every boot. It is remounted rw for the
+    one delete, then ro again (2026-10-25). Returns how many were found."""
+    found = [rf for rf in (RESET_FILES if files is None else files) if os.path.exists(rf)]
+    if not found:
+        return 0
+    log("a reset file is on the card (%s) — forgetting every saved network and the hotspot" % os.path.basename(found[0]))
+    box.reset_wifi()
+    for rf in found:
+        # ★★ On a SEALED root a file under /boot that is part of root (an Armbian card) lives in the overlay's LOWER layer:
+        #    deleting it through the overlay only hides it until the next boot. So it is deleted there too.
+        low = LOWER_ROOT + rf
+        if os.path.lexists(low):
+            sh.run(["mount", "-o", "remount,rw", LOWER_ROOT], timeout=20)
             try:
-                os.unlink(rf)
-            except OSError:
-                pass
+                os.unlink(low)
+            except OSError as e:
+                log("could not delete %s on the real root (%s)" % (rf, e.strerror))
+            sh.run(["mount", "-o", "remount,ro", LOWER_ROOT], timeout=20)
+        try:
+            os.unlink(rf)
+            continue
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            if e.errno != 30:          # ★ EROFS only; anything else is reported and left
+                log("could not delete %s (%s)" % (rf, e.strerror))
+                continue
+        mp = os.path.dirname(rf)
+        sh.run(["mount", "-o", "remount,rw", mp], timeout=20)
+        try:
+            os.unlink(rf)
+        except OSError as e:
+            log("could not delete %s (%s) — the Wi-Fi will be forgotten again at the next boot" % (rf, e.strerror))
+        sh.run(["mount", "-o", "remount,ro", mp], timeout=20)
+    return len(found)
 
 
 def boot(box, configured=None):
