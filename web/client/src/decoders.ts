@@ -30,6 +30,11 @@
  *   FT8 / FT4 (text frame)
  *     {"type":"digital_spot","data":{mode,callsign,snr,frequency,band,grid,timestamp}}
  *
+ *   CW ('cw' on the listener's audio, 'cwskim' on a segment of IQ around the dial — V12, vibe_cw_run.h)
+ *     0x01 text (as RTTY — the primary signal, 'cw' only) · 0x03 | u8 state (0 nothing, 1 carriers, 3 decoding)
+ *     {"type":"cw_signals","data":{skimmer,centre?,width?,primary,signals:[{id,hz,audio,wpm,snr,q,active,last,first,call,country,text}]}}
+ *     {"type":"cw_spot","data":{callsign,frequency,audio,wpm,snr,how,country,timestamp}}
+ *
  * NB WEFAX and SSTV BOTH use 0x01 for a line, with different payloads — so
  * frames can only be parsed against the decoder currently attached. Never sniff.
  */
@@ -38,7 +43,16 @@ import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | null;
+
+/** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
+export interface CwSignal {
+  id: number; hz: number; audio: number; wpm: number; snr: number;
+  q: 'high' | 'medium' | 'low' | 'poor'; active: boolean; last: number; first: number;
+  call: string; country: string; text: string;
+}
+export interface CwList { skimmer: boolean; centre: number; width: number; primary: number; signals: CwSignal[] }
+export interface CwSpot { callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number }
 
 export interface Spot {
   mode: 'FT8' | 'FT4';
@@ -73,6 +87,10 @@ export interface DecoderCallbacks {
   onWefaxPhase?: (phase: number) => void;
   /** An FT8/FT4 decode. */
   onSpot?: (spot: Spot) => void;
+  /** ★ CW: the signals being decoded (at most once a second, only when changed). */
+  onCwSignals?: (list: CwList) => void;
+  /** ★ CW: a callsign heard identifying itself. */
+  onCwSpot?: (spot: CwSpot) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
    *  `message` is the server's own words, shown as they are (one definition, every client). */
   onRefused?: (message: string, what: 'decoder' | 'spots') => void;
@@ -96,6 +114,8 @@ export interface DecoderParams {
   use_phasing?: boolean;
   auto_start?: boolean;
   auto_stop?: boolean;
+  // CW skimmer: the segment around the dial, Hz
+  width?: number;
 }
 
 /** The shim's extension names. */
@@ -111,6 +131,9 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   // ★ The time signals. One extension; WHICH station is a parameter, exactly as RTTY's shift and
   //   baud are — they share a decoder and differ only in how the seconds are marked.
   time: 'time',
+  // ★ V12 CW: the listener's passband, or a skimmer over a segment around the dial (one engine on the server).
+  cw: 'cw',
+  cwskim: 'cwskim',
 };
 
 export class DecoderClient {
@@ -274,6 +297,32 @@ export class DecoderClient {
       this.cb.onRefused?.(String(msg.message || 'The server could not start that decoder.'), what);
       return;
     }
+    if (msg.type === 'cw_signals' && msg.data && Array.isArray(msg.data.signals)) {
+      if (this.mode !== 'cw' && this.mode !== 'cwskim') return;
+      const d = msg.data;
+      const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '');
+      const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+      const q = (v: unknown): CwSignal['q'] => (v === 'high' || v === 'medium' || v === 'low' ? v : 'poor');
+      this.cb.onCwSignals?.({
+        skimmer: d.skimmer === true, centre: num(d.centre), width: num(d.width), primary: num(d.primary),
+        signals: d.signals.slice(0, 80).map((x: any) => ({
+          id: num(x?.id), hz: num(x?.hz), audio: num(x?.audio), wpm: num(x?.wpm), snr: num(x?.snr), q: q(x?.q),
+          active: x?.active === true, last: num(x?.last), first: num(x?.first),
+          call: str(x?.call, 16), country: str(x?.country, 40), text: str(x?.text, 160),
+        })),
+      });
+      return;
+    }
+    if (msg.type === 'cw_spot' && msg.data) {
+      const d = msg.data;
+      if (typeof d.callsign !== 'string' || !d.callsign) return;
+      this.cb.onCwSpot?.({
+        callsign: d.callsign.slice(0, 16), frequency: Number(d.frequency) || 0, audio: Number(d.audio) || 0,
+        wpm: Number(d.wpm) || 0, snr: Number(d.snr) || 0, how: String(d.how || '').slice(0, 8),
+        country: String(d.country || '').slice(0, 40), timestamp: Number(d.timestamp) || Date.now(),
+      });
+      return;
+    }
     if (msg.type === 'digital_spot' && msg.data) {
       const d = msg.data;
       this.cb.onSpot?.({
@@ -301,6 +350,9 @@ export class DecoderClient {
       // ★ Same text framing: a decoded minute, and the state/carrier lines that say what the
       //   decoder is doing WHILE it waits — a panel silent for a minute looks broken.
       case 'time':
+      // ★ CW: the primary signal's text, as RTTY's; the skimmer sends no text frame, only its state (and JSON lists).
+      case 'cw':
+      case 'cwskim':
         if (op === 0x01 && buf.byteLength >= 13) {
           const len = dv.getUint32(9, false);           // big-endian
           const text = new TextDecoder().decode(new Uint8Array(buf, 13, Math.min(len, buf.byteLength - 13)));

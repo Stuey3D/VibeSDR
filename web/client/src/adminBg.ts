@@ -44,8 +44,10 @@ function hhmm(utcSec: number): string {
 
 /** One VFO's line: "490.0 NAVTEX · locked · last message 22:53 · 1.4 %". */
 export function bgVfoLine(v: BgVfo): string {
-  // ★ An FT8/FT4 summary VFO is "FT8" on this line (its menu label "FT8 / FT4 (summary)" is the setup page's).
-  const parts = [`${khz(v.hz)} ${typeof v.spots === 'number' ? 'FT8' : v.label || v.dec.toUpperCase()}`];
+  // ★ An FT8/FT4 summary VFO is "FT8" on this line (its menu label "FT8 / FT4 (summary)" is the setup page's); a CW
+  //   skimmer sends spots too, and is "CW skimmer" (V12 2026-10-25) — it read "FT8" until then.
+  const name = v.dec === 'cwskim' ? 'CW skimmer' : typeof v.spots === 'number' ? 'FT8' : v.label || v.dec.toUpperCase();
+  const parts = [`${khz(v.hz)} ${name}`];
   if (v.state === 'out') parts.push("out of range (outside the listener's window)");
   else if (v.state === 'paused') parts.push(`paused (${v.why || 'a listener needed the decoder slot'})`);
   else if (typeof v.spots === 'number') {
