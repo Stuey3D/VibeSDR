@@ -183,7 +183,7 @@ void power(const float* z, float* p, int n) {
     }
 #elif VIBE_SSE
     for (; i + 4 <= n; i += 4) {
-        __m128 re, im; sseLoad2(z + 2 * i, re, im);
+        __m128 re, im; vibedsp::sseLoad2(z + 2 * i, re, im);
         _mm_storeu_ps(p + i, _mm_add_ps(_mm_mul_ps(re, re), _mm_mul_ps(im, im)));
     }
 #endif
