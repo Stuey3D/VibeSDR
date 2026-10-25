@@ -3,8 +3,8 @@
 Only slots fully inside the reference capture window are scored."""
 import json, sys, re, calendar, time, statistics as st
 import os
-REF = os.environ.get('FT8_REF', 'uber_sse.txt')
-BAND = os.environ.get('FT8_BAND', '40m-ft8')      # ★ 2026-10-25: any FT8 band in the stream (80m-ft8, 20m-ft8 …)   # curl -sN http://<ubersdr>/api/decoder/stream > uber_sse.txt while recording
+REF = os.environ.get('FT8_REF', 'uber_sse.txt')   # curl -sN http://<ubersdr>/api/decoder/stream > uber_sse.txt while recording
+BAND = os.environ.get('FT8_BAND', '40m-ft8')      # ★ 2026-10-25: any FT8 band in the stream (80m-ft8, 20m-ft8 …)
 def utc(s): return calendar.timegm(time.strptime(s, '%Y-%m-%dT%H:%M:%SZ'))
 ref = {}
 first = last = None
