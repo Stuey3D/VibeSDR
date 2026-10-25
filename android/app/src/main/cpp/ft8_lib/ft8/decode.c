@@ -336,8 +336,14 @@ int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candi
                                 acc += (int)p0[f + l + terms[i].a] - (int)p0[f + l + terms[i].b];
                             raw[l] = (int16_t)acc;
                         }
+                    // ★ raw / nt < min_score exactly when raw < min_score · nt (min_score > 0, nt > 0, C's division
+                    //   truncating toward zero): most frequencies stop there, before a divide — ARMv7-A has no
+                    //   divide instruction, and the library call was 1 % of a whole decode on the Pi 2 build.
+                    const int skip_below = (min_score > 0 && nt > 0) ? min_score * nt : -0x7fffffff;
                     for (int l = 0; l < lanes; ++l)
                     {
+                        if (raw[l] < skip_below)
+                            continue;
                         candidate.freq_offset = (int16_t)(f + l);
                         candidate.score = (int16_t)(nt > 0 ? raw[l] / nt : raw[l]);
                         if (candidate.score < min_score)

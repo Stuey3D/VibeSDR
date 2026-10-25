@@ -8,6 +8,7 @@
 #include <string.h>
 #include <math.h>
 #include "../../vibedsp/third_party/pffft/pffft.h"
+#include "../ft8/vibe_simd4.h"
 
 static float hann_i(int i, int N)
 {
@@ -223,22 +224,20 @@ void monitor_process(monitor_t* me, const float* frame)
         kiss_fft_scalar timedata[me->nfft];
         kiss_fft_cpx freqdata[me->nfft / 2 + 1];
 
-        // Shift the new data into analysis frame
-        for (int pos = 0; pos < me->nfft - me->subblock_size; ++pos)
-        {
-            me->last_frame[pos] = me->last_frame[pos + me->subblock_size];
-        }
-        for (int pos = me->nfft - me->subblock_size; pos < me->nfft; ++pos)
-        {
-            me->last_frame[pos] = frame[frame_pos];
-            ++frame_pos;
-        }
+        // Shift the new data into analysis frame (★ memmove/memcpy: the C library's are vectorised; GCC will not
+        // vectorise a float loop on ARMv7 without -ffast-math — 2026-10-25)
+        memmove(me->last_frame, me->last_frame + me->subblock_size, sizeof(float) * (size_t)(me->nfft - me->subblock_size));
+        memcpy(me->last_frame + me->nfft - me->subblock_size, frame + frame_pos, sizeof(float) * (size_t)me->subblock_size);
+        frame_pos += me->subblock_size;
 
         // Do DFT of windowed analysis frame
         if (me->pf_setup)
         {
             // ★ PFFFT's ordered real output: [0] = DC, [1] = Nyquist, then (re, im) of bins 1 .. nfft/2 - 1
-            for (int pos = 0; pos < me->nfft; ++pos)
+            int pos = 0;
+            for (; pos + 4 <= me->nfft; pos += 4)
+                v4_store(me->pf_in + pos, v4_mul(v4_load(me->window + pos), v4_load(me->last_frame + pos)));
+            for (; pos < me->nfft; ++pos)
                 me->pf_in[pos] = me->window[pos] * me->last_frame[pos];
             pffft_transform_ordered((PFFFT_Setup*)me->pf_setup, me->pf_in, me->pf_out, me->pf_work, PFFFT_FORWARD);
             freqdata[0].r = me->pf_out[0]; freqdata[0].i = 0;

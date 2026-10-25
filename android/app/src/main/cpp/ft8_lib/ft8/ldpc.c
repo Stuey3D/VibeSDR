@@ -143,15 +143,17 @@ static int ldpc_check(uint8_t codeword[])
  *     1.0, and x·1.0 is exact, so the products are unchanged.
  *   • the parity check on packed bits (three 64-bit masks per check), not 522 byte loads.
  *   • the last iteration's message update, which the original computed and never read, is skipped.
- *  Result: the same `plain` and `ok` as bp_decode_ref for every input (test-ft8-fast checks it on real candidates). */
+ *  Result: the same `plain` and `ok` as bp_decode_ref for every input (test-ft8-fast checks it on real candidates).
+ *  ★ On ARMv7 the tanh/atanh divides are a refined reciprocal (vibe_simd4.h v4_div: no NEON divide there, and the
+ *    Pi 2's VFP divide was half of BP's time) — the messages move by ~2 ulp, the outcome has not been seen to. */
 static inline v4f v4_fast_tanh(v4f x)
 {
     const v4f x2 = v4_mul(x, x);
     const v4f a = v4_mul(x, v4_madd(x2, v4_add(x2, v4_set1(105.0f)), v4_set1(945.0f)));
     const v4f b = v4_madd(x2, v4_madd(x2, v4_set1(15.0f), v4_set1(420.0f)), v4_set1(945.0f));
     v4f r = v4_div(a, b);
-    r = v4_sel_lt(x, v4_set1(-4.97f), v4_set1(-1.0f), r);
-    return v4_sel_gt(x, v4_set1(4.97f), v4_set1(1.0f), r);
+    r = v4_sel_lt_negc(x, -4.97f, v4_set1(-1.0f), r);
+    return v4_sel_gt_posc(x, 4.97f, v4_set1(1.0f), r);
 }
 /** -2·fast_atanh(x) */
 static inline v4f v4_m2_fast_atanh(v4f x)
@@ -207,35 +209,38 @@ void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
             break;                  // ★ the original's last update is never read
 
         // Variable → check: the sum of the codeword and the OTHER two checks' messages, through tanh(-x/2)
-        for (int n = 0; n < LDPC_NP; n += 4)
+        // ★ pointers walked, not indices: ARMv7 NEON loads take no offset, and GCC rebuilt each address from sp
         {
-            const v4f c = v4_load(cw + n), t0 = v4_load(tov[0] + n), t1 = v4_load(tov[1] + n), t2 = v4_load(tov[2] + n);
+            const float* pc = cw; const float* p0 = tov[0]; const float* p1 = tov[1]; const float* p2 = tov[2];
+            const uint16_t* e0 = kLdpcVarEdge[0]; const uint16_t* e1 = kLdpcVarEdge[1]; const uint16_t* e2 = kLdpcVarEdge[2];
             const v4f h = v4_set1(-0.5f);
-            float o[3][4];
-            v4_store(o[0], v4_fast_tanh(v4_mul(v4_add(v4_add(c, t1), t2), h)));
-            v4_store(o[1], v4_fast_tanh(v4_mul(v4_add(v4_add(c, t0), t2), h)));
-            v4_store(o[2], v4_fast_tanh(v4_mul(v4_add(v4_add(c, t0), t1), h)));
-            for (int k = 0; k < 3; ++k)
-                for (int l = 0; l < 4; ++l)
-                    toc[kLdpcVarEdge[k][n + l]] = o[k][l];
+            for (int n = 0; n < LDPC_NP; n += 4, pc += 4, p0 += 4, p1 += 4, p2 += 4, e0 += 4, e1 += 4, e2 += 4)
+            {
+                const v4f c = v4_load(pc), t0 = v4_load(p0), t1 = v4_load(p1), t2 = v4_load(p2);
+                v4_scatter(toc, e0, v4_fast_tanh(v4_mul(v4_add(v4_add(c, t1), t2), h)));
+                v4_scatter(toc, e1, v4_fast_tanh(v4_mul(v4_add(v4_add(c, t0), t2), h)));
+                v4_scatter(toc, e2, v4_fast_tanh(v4_mul(v4_add(v4_add(c, t0), t1), h)));
+            }
         }
 
         // Check → variable: the product of the check's OTHER messages (in edge order), through -2·atanh
-        for (int m = 0; m < LDPC_MP; m += 4)
         {
-            v4f t[7];
-            for (int j = 0; j < 7; ++j)
-                t[j] = v4_load(toc + j * LDPC_MP + m);
-            for (int i = 0; i < 7; ++i)
+            float* const tv = &tov[0][0];
+            for (int m = 0; m < LDPC_MP; m += 4)
             {
-                v4f p = t[i == 0 ? 1 : 0];
-                for (int j = (i == 0 ? 2 : 1); j < 7; ++j)
-                    if (j != i)
-                        p = v4_mul(p, t[j]);
-                float o[4];
-                v4_store(o, v4_m2_fast_atanh(p));
-                for (int l = 0; l < 4; ++l)
-                    tov[kLdpcChkSlot[i][m + l]][kLdpcChkVar[i][m + l]] = o[l];
+                v4f t[7];
+                const float* q = toc + m;
+                for (int j = 0; j < 7; ++j, q += LDPC_MP)
+                    t[j] = v4_load(q);
+                const uint16_t* out = &kLdpcChkOut[0][m];
+                for (int i = 0; i < 7; ++i, out += LDPC_MP)
+                {
+                    v4f p = t[i == 0 ? 1 : 0];
+                    for (int j = (i == 0 ? 2 : 1); j < 7; ++j)
+                        if (j != i)
+                            p = v4_mul(p, t[j]);
+                    v4_scatter(tv, out, v4_m2_fast_atanh(p));
+                }
             }
         }
     }
