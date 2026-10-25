@@ -2603,7 +2603,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    signal's recent text, newest at the right. Dim rows have gone quiet (kept 10 minutes). */
 #cwList { display: none; margin-top: 6px; }
 #cwList.on { display: block; }
-#cwList .cwr { display: grid; grid-template-columns: 6.2em minmax(4.5em, 1fr) 3.4em 3.6em 4.2em 3.4em; gap: 2px 8px;
+#cwList .cwr { display: grid; grid-template-columns: 6.2em minmax(4.5em, 1fr) 4.8em 4.2em 4.4em 3.4em; gap: 2px 8px;
                align-items: baseline; font-size: 11px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
 #cwList .cwr:hover { background: rgba(255,255,255,0.05); }
 #cwList .cwr.primary { background: rgba(85,217,141,0.10); }
@@ -2611,8 +2611,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #cwList .f { color: var(--freq); font-variant-numeric: tabular-nums; }
 #cwList .c { color: var(--freq); letter-spacing: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #cwList .c.none { color: var(--text-dim); letter-spacing: 0; }
-#cwList .w, #cwList .s, #cwList .a { text-align: right; font-variant-numeric: tabular-nums; color: var(--unit); }
-#cwList .q { text-align: right; }
+/* ★ nowrap: "18 wpm" and "+23 dB" broke onto two lines in a column a character too narrow (2026-10-25 screenshot) */
+#cwList .w, #cwList .s, #cwList .a { text-align: right; font-variant-numeric: tabular-nums; color: var(--unit); white-space: nowrap; }
+#cwList .q { text-align: right; white-space: nowrap; }
 #cwList .q.high { color: #55d98d; } #cwList .q.medium { color: #c9d955; } #cwList .q.low { color: rgba(255,160,0,0.8); }
 #cwList .q.poor { color: var(--text-dim); }
 #cwList .tx { grid-column: 1 / -1; font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); font-size: 12px;
@@ -2620,9 +2621,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #cwList .tx bdi { direction: ltr; unicode-bidi: isolate; }
 #cwRows .idle, #cwSpots .idle { color: var(--text-dim); font-size: 11px; padding: 6px; }
 #cwSpotsHead { color: var(--text-dim); font-size: 10px; letter-spacing: 1px; margin: 8px 6px 2px; }
-#cwSpots .cws { display: grid; grid-template-columns: 3.2em 6.2em minmax(4.5em, 1fr) minmax(0, 1.2fr) 3.4em; gap: 8px;
+#cwSpots .cws { display: grid; grid-template-columns: 3.2em 6.2em minmax(4.5em, 1fr) minmax(0, 1.2fr) 4.8em; gap: 8px;
                 font-size: 11px; padding: 3px 6px; cursor: pointer; align-items: baseline; }
 #cwSpots .cws .t { color: var(--unit); font-variant-numeric: tabular-nums; }
+#cwSpots .cws .w { color: var(--unit); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #cwSpots .cws .ct { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ★ Narrow box (a phone): the same fields, wrapping onto two lines — nothing dropped (the spot list's rule). */
 @container decbox (max-width: 400px) {
@@ -4736,6 +4738,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-kind="wefax">WEFAX</button>
     <button class="btn" data-kind="sstv">SSTV</button>
     <button class="btn" data-kind="ft8">FT8</button>
+    <!-- ★★ V12 2026-10-25: CW — a listener's decoded text (a run, as RTTY's) and the skimmer's spots summary cards. -->
+    <button class="btn" data-kind="cw">CW</button>
     <!-- ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card. -->
     <button class="btn" data-kind="ism">ISM</button>
   </div>

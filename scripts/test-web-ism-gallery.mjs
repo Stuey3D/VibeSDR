@@ -101,7 +101,7 @@ try {
   const untilRows = async (n, ms = 6000) => { for (let t = 0; t < ms; t += 150) { const r = await rows(); if (r.length === n) return r; await sleep(150); } return rows(); };
   await ev(`document.getElementById('galleryBtn').click()`);
   const chips = await ev(`[...document.querySelectorAll('#galFilter [data-kind]')].map(b => b.textContent).join(' ')`);
-  ok(chips === 'ALL NAVTEX RTTY WEFAX SSTV FT8 ISM', `the chips: ${chips}`);
+  ok(chips === 'ALL NAVTEX RTTY WEFAX SSTV FT8 CW ISM', `the chips: ${chips}`);
   await ev(`document.querySelector('#galFilter [data-kind="ism"]').click()`);
   let r = await untilRows(2);
   ok(r.length === 2, `ISM: 2 rows — ${r.map((x) => x.slice(0, 70)).join(' | ')}`);

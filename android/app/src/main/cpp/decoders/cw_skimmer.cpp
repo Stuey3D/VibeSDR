@@ -586,10 +586,6 @@ struct Skimmer::Impl {
             if (best >= 10 || hopN - s.holdSince > hopsFor(4.0)) endHold(s);
         }
         if (s.pendingBest >= 0 && atWordBoundary(s.lane[s.best]) && atWordBoundary(s.lane[s.pendingBest])) {
-#ifdef CW_DEBUG
-            if (std::getenv("CW_TRACE")) std::fprintf(stderr, "switch %d: lane %d [%s] -> %d [%s]\n", s.id, s.best, s.lane[s.best].text.substr(s.lane[s.best].text.size() > 30 ? s.lane[s.best].text.size() - 30 : 0).c_str(),
-                                                      s.pendingBest, s.lane[s.pendingBest].text.substr(s.lane[s.pendingBest].text.size() > 30 ? s.lane[s.pendingBest].text.size() - 30 : 0).c_str());
-#endif
             s.best = s.pendingBest; s.pendingBest = -1;
         }
     }
@@ -702,11 +698,6 @@ struct Skimmer::Impl {
         // ★ Both impossible (the element gaps split in two either way): no update — splits() holds the centres apart.
         if (impossible && anchoredBad) { k[0] = k[1] = k[2] = 0; return ql; }
         // ★ A tie keeps the live centres (they carry Farnsworth and a fist's own spacing, which a 1:3:7 start can miss)
-#ifdef CW_DEBUG
-        if (std::getenv("CW_TRACE2")) std::fprintf(stderr, "clus dot %.1f live %.1f/%d %.1f/%d %.1f/%d q %.2f | anch %.1f/%d %.1f/%d %.1f/%d q %.2f %s\n", l.cDot,
-            std::exp(c[0]), k[0], std::exp(c[1]), k[1], std::exp(c[2]), k[2], ql, std::exp(ca[0]), ka[0], std::exp(ca[1]), ka[1], std::exp(ca[2]), ka[2], qa,
-            impossible ? "IMPOSSIBLE" : qa < 0.8f * ql && !anchoredBad ? "anchored" : "live");
-#endif
         if (impossible || (qa < 0.8f * ql && !anchoredBad)) { std::memcpy(c, ca, sizeof ca); std::memcpy(k, ka, sizeof ka); return qa; }
         return ql;
     }
@@ -738,9 +729,6 @@ struct Skimmer::Impl {
                 l.cG7 = n[2] ? std::exp(c[2]) : std::max(2.33f * l.cG3, 6.0f * l.cG1);
             }
             l.seedG = true;
-#ifdef CW_DEBUG
-            if (std::getenv("CW_TRACE")) std::fprintf(stderr, "seedG: g1 %.1f g3 %.1f g7 %.1f n %d %d %d\n", l.cG1, l.cG3, l.cG7, n[0], n[1], n[2]);
-#endif
         }
         splits(l);
     }
@@ -875,9 +863,6 @@ struct Skimmer::Impl {
             const float ratio = std::exp(hi - lo);
             if (nl > 0 && nh > 0 && ratio >= 2.2f && ratio <= 6.0f && rms <= 0.4f) {
                 const float k = std::exp(lo) / l.cDot;
-#ifdef CW_DEBUG
-                if (std::getenv("CW_TRACE")) std::fprintf(stderr, "flush %d lane %d: k %.2f lo %.1f hi %.1f rms %.2f g7 %.1f\n", s.id, li, k, std::exp(lo), std::exp(hi), rms, l.cG7);
-#endif
                 // ★ A real change of speed — not this fist's ordinary scatter: beyond ±15 %, and beyond what ten marks of
                 //   THIS spread could show by chance (a ±30 % straight key's over-start reads ±12 % from its own jitter).
                 const float need = std::max(0.15f, 2.5f * rms / std::sqrt((float)std::max(1, std::min(nl, nh))));
@@ -1149,20 +1134,9 @@ struct Skimmer::Impl {
         //   text is ≈ 3), or few real codes. Still noisy, the signal stays on hold; the housekeeping drops it in 8 s.
         const bool noise = l.overChars && ((float)l.overElems < 2.0f * (float)std::max(1u, l.overValid) || l.overValid * 10 < l.overChars * 6);
         if (noise) {
-#ifdef CW_DEBUG
-            if (std::getenv("CW_TRACE")) std::fprintf(stderr, "held noise dropped %d: [%s]\n", s.id, l.overText.c_str());
-#endif
             beginHold(s);
             return;
         }
-#ifdef CW_DEBUG
-        if (std::getenv("CW_TRACE"))
-            for (int q = 0; q < kLanes; ++q) {
-                const Lane& m = s.lane[q];
-                std::fprintf(stderr, "over %d c%.0f s%.2f lane %d%s: dot %.1f dash %.1f g1 %.1f g3 %.1f g7 %.1f | splits %.1f %.1f %.1f [%s]\n", s.id, 10 * std::log10(m.markLvl / m.mu), m.markSpread, q,
-                             q == b ? "*" : " ", m.cDot, m.cDash, m.cG1, m.cG3, m.cG7, m.markSplit, m.charSplit, m.wordSplit, m.overText.c_str());
-            }
-#endif
         for (Lane& m : s.lane) appendText(m, m.overText);   // ★ every lane keeps its own whole history
         if (!l.overText.empty()) show(s, l.overText);
         // ★ The over's words count toward spots as they would have live

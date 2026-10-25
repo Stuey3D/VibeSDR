@@ -30,7 +30,7 @@ for (const w of ['1', '2', '5', '10', '15', '30', '60']) { const o = new El('opt
 const document = { createElement: (t) => (t === 'select' ? mkSelect() : new El(t)) };
 const $ = (id) => els[id];
 const cfg = { serverUtcOffsetMin: 60 };
-const api = new Function('$', 'document', 'cfg', `${src.slice(a, b)}\nreturn { bgLoad, bgCollect, bgRender, model: () => bgModel };`)($, document, cfg);
+const api = new Function('$', 'document', 'cfg', `${src.slice(a, b)}\nreturn { bgLoad, bgCollect, bgRender, model: () => bgModel, decoders: () => BG_DECODERS };`)($, document, cfg);
 
 const NICK = { on: true, waitMin: 5, profiles: [{ centre: 500000, from: '00:00', to: '00:00',
   vfos: [{ hz: 489500, mode: 'usb', dec: 'navtex' }, { hz: 517500, mode: 'usb', dec: 'navtex' }] }] };
@@ -49,13 +49,22 @@ ok(api.bgCollect() === JSON.stringify(NICK), `saved back unchanged: ${api.bgColl
 // the decoders offered follow the demodulator
 const row2 = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
 const [md, dc] = row2.children.filter((e) => e.tag === 'select');
-ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8', 'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8');
+ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96',
+   'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8 and the CW skimmers (24/48/96 kHz)');
 md.value = 'lsb'; md.onchange();
-ok(!dc.children.some((o) => o.value === 'wefax' || o.value === 'sstv' || o.value === 'ft8') && dc.value === 'navtex',
+ok(!dc.children.some((o) => o.value === 'wefax' || o.value === 'sstv' || o.value === 'ft8' || o.value.startsWith('cw-skim')) && dc.value === 'navtex',
    'LSB offers only NAVTEX and RTTY (no negative charts), and keeps NAVTEX');
 ok(api.model().profiles[0].vfos[1].mode === 'lsb' && !row2.text().includes('Listening for'), '...the VFO is LSB now, and still no hint line');
 md.value = 'nfm'; md.onchange();
 ok(dc.children.map((o) => o.value).join() === 'sstv' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers only SSTV, and the VFO becomes SSTV');
+
+// ★ V12 CW: the page's decoder list mirrors the server's (vibe_bgdecode_config.h decoders()) — id, label, demodulators
+{
+  const cfg = fs.readFileSync(new URL('../android/app/src/main/cpp/vibe_bgdecode_config.h', import.meta.url), 'utf8');
+  const server = [...cfg.matchAll(/\{ "([a-z0-9-]+)",\s+"([^"]+)",\s+"[^"]*",\s+"[^"]*",\s+"([a-z,]+)"/g)].map((m) => `${m[1]}|${m[2]}|${m[3]}`);
+  const page = api.decoders().map((d) => `${d.id}|${d.label}|${d.modes.join(',')}`);
+  ok(server.length >= 10 && server.join() === page.join(), `setup page decoders = the server's (${page.length})`);
+}
 
 // times: a window brings the "another profile" line; following it adds a second profile
 const times = box.children.filter((c) => c.attrs.class === 'bgProf')[0].all().filter((e) => e.attrs.type === 'time');

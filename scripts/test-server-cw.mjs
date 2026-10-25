@@ -127,8 +127,11 @@ function checkSpots(spots, label) {
     ok(lists.length > 0 && last.data.skimmer === true, `cw_signals lists arrive (${lists.length}), marked skimmer`);
     ok(last && Math.abs(last.data.width - 48000) < 4000, `the segment searched is ≈ 48 kHz (${last && last.data.width})`);
     ok(last && last.data.signals.filter((x) => x.active).length >= 5, `≥ 5 active signals in the list (${last && last.data.signals.filter((x) => x.active).length})`);
-    const g = last && last.data.signals.find((x) => x.call === 'G4ABC');
-    ok(g && /G4ABC G4ABC/.test(g.text), `a row carries its text: "${g && g.text.slice(-40)}"`);
+    // ★ The list goes at most once a second, so the spot can arrive before the list that names the row: wait for it.
+    const gRow = () => jsons(L.dx, 'cw_signals').reverse().map((l) => l.data.signals.find((x) => x.call === 'G4ABC')).find(Boolean);
+    await until(() => !!gRow(), 4000);
+    const g = gRow();
+    ok(g && /G4ABC G4ABC/.test(g.text), `a row carries its text: "${g ? g.text.slice(-40) : `no G4ABC row in ${JSON.stringify(last && last.data.signals.map((x) => [x.hz, x.call, x.text.slice(-30)]))}`}"`);
     ok(lists.every((l) => l.data.signals.length <= 60), 'never more than 60 rows');
 
     // ★ ONE SIGNAL: tuned to G4ABC in CW (a carrier on the dial is the 600 Hz tone)

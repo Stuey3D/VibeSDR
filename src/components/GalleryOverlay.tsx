@@ -37,6 +37,8 @@ export interface GalleryItem {
 const KINDS: { id: string; label: string }[] = [
   { id: '', label: 'ALL' }, { id: 'navtex', label: 'NAVTEX' }, { id: 'rtty', label: 'RTTY' },
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' }, { id: 'ft8', label: 'FT8' },
+  // ★★ V12 2026-10-25: CW — a listener's decoded text (a run) and the skimmer's spots summary cards (vibe_bgdecode.h)
+  { id: 'cw', label: 'CW' },
   // ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card (vibe_ism_gallery.h)
   { id: 'ism', label: 'ISM' },
 ];

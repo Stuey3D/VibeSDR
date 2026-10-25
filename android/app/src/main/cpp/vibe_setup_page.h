@@ -5484,6 +5484,11 @@ const BG_DECODERS = [
   { id: "wefax",        label: "WEFAX (120 LPM)",              tone: 1900, modes: ["usb"] },
   { id: "sstv",         label: "SSTV",                         tone: 0,    modes: ["usb", "nfm"] },
   { id: "ft8",          label: "FT8 / FT4 (summary)",          tone: 0,    modes: ["usb"] },
+  // ★★ V12 2026-10-25: CW SKIMMERS — every CW signal in a segment CENTRED on the VFO's frequency, kept as a summary of
+  //    the spots (as FT8 is). "usb" because a VFO row has a demodulator; none runs for a skimmer (it is fed IQ).
+  { id: "cw-skim-24",   label: "CW skimmer, 24 kHz (summary)", tone: 0,    modes: ["usb"] },
+  { id: "cw-skim-48",   label: "CW skimmer, 48 kHz (summary)", tone: 0,    modes: ["usb"] },
+  { id: "cw-skim-96",   label: "CW skimmer, 96 kHz (summary)", tone: 0,    modes: ["usb"] },
 ];
 const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodulators some background decoder works on
 /* ★★ V12 2026-10-25 — AN ISM PROFILE (Stuart: ISM "selectable as a decoder in a background-decoding profile"). ISM is a

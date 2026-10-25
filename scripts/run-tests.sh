@@ -967,6 +967,22 @@ else
   echo '   not run — needs VIBESERVER_BIN and the test-ism build'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 CW (2026-10-25): the real server on a fake rtl_tcp replaying the bench's synthetic HF clip (five stations around
+#     7.030 MHz): the skimmer on a one-pipeline radio and a range-locked one, a second listener's own segment, ONE SIGNAL's
+#     text and its spot's RF (test-server-cw); then the web client in headless Edge (--mute-audio) — the CW button, the
+#     skimmer's list and spots, a tap to tune, ONE SIGNAL, 390 px, the gallery's CW chip (test-web-cw). The engine's own
+#     numbers are vibeserver/test-cw.cpp above; the measuring bench is scripts/test-cw.sh. Needs VIBESERVER_BIN.
+printf '\n\033[1m── CW (end to end: server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-cw.sh clip "$OUT/cw-clip.cu8" >/dev/null; then
+  VIBE_CW_CLIP="$OUT/cw-clip.cu8" node scripts/test-server-cw.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_CW_CLIP="$OUT/cw-clip.cu8" node scripts/test-web-cw.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/cw-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
+fi
+
 # ★★ THE RATE PIN AND THE SHARED-DIAL RATE RULE BIND LISTENERS, NOT THE SIGNED-IN ADMIN (Stuart, 2026-10-24: "sample rate
 #    change isnt working … I am in admin mode"). Same VIBESERVER_BIN rule.
 printf '\n\033[1m── rate pin: listener refused, admin allowed (end to end) ──\033[0m\n'

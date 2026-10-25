@@ -11361,7 +11361,9 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, 
  *  no-op (AGENTS.md). This rule used to hide the retired desktop bar's DECODERS button and nothing
  *  else, so the card kept offering the empty panel. */
 function anyDecoderLeft(): boolean {
-  return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d));
+  // ★ V12: CW counts only where this server has it (vibeserver.json "cw") — the button is hidden otherwise.
+  return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
+    || (cwCap && !blockedModes.has('cw'));
 }
 
 function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
