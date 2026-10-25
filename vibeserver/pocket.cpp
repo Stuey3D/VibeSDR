@@ -26,7 +26,7 @@ Paths& paths() {
         if (const char* d = std::getenv("VIBESERVER_POCKET_DIR"); d && *d) {
             const std::string b = d;
             q.marker = b + "/enabled"; q.state = b + "/state.json"; q.inbox = b + "/pocket-wifi.request";
-            q.kick = b + "/pocket-kick.request"; q.portFile = b + "/pocket-port";
+            q.kick = b + "/pocket-kick.request"; q.portFile = b + "/pocket-port"; q.sshInbox = b + "/pocket-ssh.request";
         }
         return q;
     }();
@@ -265,6 +265,12 @@ bool validPsk(const std::string& p) {
 }
 bool validCountry(const std::string& c) {
     return c.size() == 2 && c[0] >= 'A' && c[0] <= 'Z' && c[1] >= 'A' && c[1] <= 'Z';
+}
+
+bool validSshPassword(const std::string& p) {
+    if (p.size() < 8 || p.size() > 128) return false;
+    for (unsigned char c : p) if (c < 0x20 || c >= 0x7F) return false;
+    return true;
 }
 
 bool parseWifiRequest(const std::string& body, const std::vector<std::string>& saved,
@@ -617,6 +623,31 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
             if (!writePrivate(paths().kick, std::string(v->b ? "wifi-off" : "wifi-on") + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
             std::printf("VibeServer: pocket — the owner switched Wi-Fi %s\n", v->b ? "off" : "on");
             json(rp, 200, "OK", std::string("{\"ok\":true,\"off\":") + (v->b ? "true" : "false") + "}");
+            return true;
+        }
+        /* ★★★ ENABLE SSH (Stuart, 2026-10-25, 11.0.11). Body {"on":true,"pass":"…"} or {"on":false}. Default OFF: the image
+         *  ships sshd off because a Portable's first network is an OPEN hotspot. The owner types the password here; it is
+         *  written ONLY into the private request (0600, deleted by root the moment it is read), never logged, never kept by
+         *  us. The root service (vibeserver-pocket, SshAccess) sets it for the image's `vibe` login with chpasswd on stdin,
+         *  keeps only the system's hash on the settings partition, and starts sshd — every boot, so it survives the seal.
+         *  ★ The box's own network only, as the Wi-Fi off switch: never through the tunnel, never from a public address. */
+        if (what == "ssh" && isPost) {
+            if (rq.viaTunnel || !isPrivatePeer(rq.peer)) { fail(rp, 403, "Forbidden", "SSH can only be switched from the box's own network"); return true; }
+            JV j;
+            const bool parsed = parseJson(rq.body, j) && j.t == JV::Obj;
+            const JV* v = parsed ? j.get("on") : nullptr;
+            if (!v || v->t != JV::Bool) { fail(rp, 400, "Bad Request", "on must be true or false"); return true; }
+            std::string doc = "{\"on\":false}";
+            if (v->b) {
+                const std::string pass = j.str("pass");
+                if (!validSshPassword(pass)) { fail(rp, 400, "Bad Request", "the SSH password must be 8 to 128 ordinary characters (letters, digits, punctuation, spaces)"); return true; }
+                doc = "{\"on\":true,\"pass\":\"" + jesc(pass) + "\"}";
+            }
+            std::string err;
+            if (!writePrivate(paths().sshInbox, doc + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
+            // ★★★ NEVER THE PASSWORD.
+            std::printf("VibeServer: pocket — the owner switched SSH %s\n", v->b ? "on" : "off");
+            json(rp, 200, "OK", std::string("{\"ok\":true,\"on\":") + (v->b ? "true" : "false") + "}");
             return true;
         }
         if ((what == "switch" || what == "scan") && isPost) {

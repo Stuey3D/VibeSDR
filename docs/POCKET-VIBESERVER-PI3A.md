@@ -455,7 +455,10 @@ Use an iPhone. If SSH was enabled with Imager, the logs are:
       `full`.
     - `free -m` with the tunnel on and off (≈ 30 MB difference).
 13. **Factory Wi-Fi reset:** an empty `vibeserver-reset-wifi` on the boot partition → the open
-    "VibeServer" is back, and the admin password is unchanged.
+    "VibeServer" is back, and the admin password is unchanged. From 11.0.11 the file is then **deleted**: the
+    read-only boot partition is remounted for that one delete. Before, it could stay and be acted on at every boot.
+    `vibeserver-reset-wifi.txt` (Notepad) counts too. On a board card (image/sbc) the file goes on its FAT
+    `VIBESETUP` drive.
 14. **Ordinary installs untouched:** on the Pi 500 with the same package:
     - `systemctl status vibeserver-pocket vibeserver-pocket-data vibeserver-pocket-seal` → all three
       report "condition failed";

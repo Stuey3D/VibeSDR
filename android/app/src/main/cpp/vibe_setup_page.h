@@ -379,6 +379,26 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       </div>
       </div>
 
+      <!-- ★★★ ENABLE SSH (Stuart, 2026-10-25, 11.0.11) — a Portable only, OFF by default. The card ships with sshd off
+           because its first network is an OPEN hotspot. The owner switches it on here with a password THEY type; the box
+           sets it for its "vibe" login and keeps only the system's hash on the settings partition, so it survives a
+           restart. Not offered while the open setup hotspot is up (anyone on it could try the password). -->
+      <div class="card hide" id="sshCard">
+      <h2>SSH</h2>
+      <p class="why" id="sshText" style="white-space:pre-line"></p>
+      <div id="sshOnForm" class="hide">
+        <label>SSH password for the <b>vibe</b> login
+          <input type="password" id="sshPass" autocomplete="new-password" maxlength="128"></label>
+        <label>The same again
+          <input type="password" id="sshPass2" autocomplete="new-password" maxlength="128"></label>
+        <p class="note" style="margin:6px 0 10px">At least 8 characters. Choose one you do not use anywhere else — it also
+           unlocks <code>sudo</code> on this box. It is not kept anywhere you could read it back, so remember it.</p>
+        <button type="button" id="sshOnBtn">Turn SSH on</button>
+      </div>
+      <button type="button" class="ghost hide" id="sshOffBtn">Turn SSH off</button>
+      <span class="note" id="sshMsg" style="margin-left:10px"></span>
+      </div>
+
       <!-- ★★ ONE SHARING SWITCH (Stuart, 2026-10-16). The Portable had its own "Share with the world" card here —
            "Enable the tunnel" was the same switch as "List this server publicly", without the name. It went;
            its "after a restart" option moved under that switch for every server (Advertise on VibeSDR.net). -->
@@ -5801,6 +5821,52 @@ async function wifiLoad() {
   renderDirStatus(cfg && cfg.dirStatus);
   try { WIFI_BASELINE = JSON.stringify(wifiCollect()); } catch (e) { WIFI_BASELINE = ""; }
   wifiDirtyRender();
+  sshRender();
+}
+
+/** ★★★ ENABLE SSH (11.0.11). From the root service's state (WIFI.ssh): drawn only on a box that has sshd, and never while
+ *  the OPEN setup hotspot is up. The password goes to POST /vibeserver/pocket/ssh and nowhere else; this page never
+ *  gets it back. */
+function sshRender() {
+  const s = WIFI && WIFI.ssh;
+  const show = !!(POCKET && s && s.available === true && WIFI.mode !== "setup-ap");
+  $("sshCard").classList.toggle("hide", !show);
+  if (!show) return;
+  const host = (POCKET && POCKET.hostname) ? POCKET.hostname + ".local" : "this box";
+  $("sshText").textContent = s.on
+    ? "SSH is on. Log in from a computer on this network with:\nssh vibe@" + host
+      + "\nIt stays on after a restart until you turn it off here."
+    : "SSH is off. Turn it on to log in to this box from a computer (advanced — you do not need it to use VibeServer)."
+      + (s.lastError ? "\nLast problem: " + s.lastError + "." : "");
+  $("sshOnForm").classList.toggle("hide", !!s.on);
+  $("sshOffBtn").classList.toggle("hide", !s.on);
+}
+$("sshOnBtn").onclick = async () => {
+  const a = $("sshPass").value, b = $("sshPass2").value;
+  $("sshMsg").textContent = "";
+  if (a.length < 8 || a.length > 128 || !/^[\x20-\x7e]*$/.test(a)) {
+    $("sshMsg").textContent = "8 to 128 ordinary characters (letters, digits, punctuation, spaces)."; return;
+  }
+  if (a !== b) { $("sshMsg").textContent = "Those did not match. Try again."; return; }
+  await sshSet({on: true, pass: a});
+};
+$("sshOffBtn").onclick = () => sshSet({on: false});
+async function sshSet(body) {
+  $("sshOnBtn").disabled = $("sshOffBtn").disabled = true;
+  $("sshMsg").textContent = body.on ? "Turning SSH on…" : "Turning SSH off…";
+  try {
+    await wifiPost("/vibeserver/pocket/ssh", body);
+    $("sshPass").value = ""; $("sshPass2").value = "";
+    // ★ The root service acts on its next turn (a second or two): read its state back until it says so.
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      await wifiLoad();
+      if (WIFI && WIFI.ssh && !!WIFI.ssh.on === body.on) break;
+    }
+    const s = WIFI && WIFI.ssh;
+    $("sshMsg").textContent = s && !!s.on === body.on ? "" : (s && s.lastError ? s.lastError + "." : "The box has not confirmed it yet — reload in a moment.");
+  } catch (e) { $("sshMsg").textContent = String(e); }
+  $("sshOnBtn").disabled = $("sshOffBtn").disabled = false;
 }
 
 /** Show or hide the "Unsaved Wi-Fi changes" line (top of the card) and say so in the bottom bar too. */

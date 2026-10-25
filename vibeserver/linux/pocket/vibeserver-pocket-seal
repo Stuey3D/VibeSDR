@@ -10,30 +10,65 @@
 # ★★ RESUMABLE (Stuart: "whatever happens at first boot must survive a power cut mid-way"). cmdline.txt
 #    is replaced by temp file + fsync + rename + sync — a cut leaves the old line (no overlay: this runs
 #    again next boot) or the new one (sealed). Nothing else changes.
+# ★★ TWO BOOT CHAINS (2026-10-25, image/sbc). A Raspberry Pi's firmware reads the kernel command line from
+#    cmdline.txt on the boot partition. An Armbian board (Orange Pi, NanoPi, Le Potato, ROCK…) boots through U-Boot,
+#    whose boot.scr appends `extraargs=` from /boot/armbianEnv.txt (DietPi on such a board: /boot/dietpiEnv.txt, the
+#    same format) and loads /boot/uInitrd — the U-Boot wrapper of the same initramfs, which Armbian's kernel package
+#    hook regenerates after every update-initramfs. /boot there is a directory of root, not a partition. Same
+#    switch, same atomic replace, same reboot; only the file and the line differ.
 # ★ Runs before NetworkManager and the setup hotspot, so nobody is mid-setup when it reboots.
+# ★ SEAL_ROOT (tests only): a directory standing in for / — the unit never sets it. SEAL_NO_REBOOT=1 (tests): no reboot.
 set -u
-MARK=/etc/vibeserver-pocket/enabled
+SR="${SEAL_ROOT:-}"
+MARK="$SR/etc/vibeserver-pocket/enabled"
 [ -f "$MARK" ] || exit 0
-grep -qw "overlayroot=tmpfs" /proc/cmdline && exit 0         # already sealed: nothing to do
-[ -f /etc/vibeserver-pocket/no-seal ] && { echo "vibeserver-pocket-seal: no-seal file present — root left writable"; exit 0; }
-command -v overlayroot-chroot >/dev/null || { echo "vibeserver-pocket-seal: overlayroot not installed — cannot seal"; exit 0; }
+grep -qw "overlayroot=tmpfs" "${SEAL_CMDLINE:-/proc/cmdline}" 2>/dev/null && exit 0   # already sealed: nothing to do
+[ -f "$SR/etc/vibeserver-pocket/no-seal" ] && { echo "vibeserver-pocket-seal: no-seal file present — root left writable"; exit 0; }
+command -v overlayroot-chroot >/dev/null || [ -n "$SR" ] || { echo "vibeserver-pocket-seal: overlayroot not installed — cannot seal"; exit 0; }
 
-BOOT=/boot/firmware; [ -f "$BOOT/cmdline.txt" ] || BOOT=/boot
+reboot_now() {
+  echo "vibeserver-pocket-seal: root will be read-only from the next boot — rebooting now"
+  [ "${SEAL_NO_REBOOT:-0}" = 1 ] || systemctl --no-block reboot
+  exit 0
+}
+
+BOOT="$SR/boot/firmware"; [ -f "$BOOT/cmdline.txt" ] || BOOT="$SR/boot"
 CMD="$BOOT/cmdline.txt"
-[ -f "$CMD" ] || { echo "vibeserver-pocket-seal: no cmdline.txt"; exit 0; }
-# ★ The initramfs carries overlayroot; without one the kernel would boot straight past it.
-ls "$BOOT"/initramfs* >/dev/null 2>&1 || { echo "vibeserver-pocket-seal: no initramfs on $BOOT — not sealing"; exit 0; }
+if [ -f "$CMD" ]; then
+  # ── Raspberry Pi: cmdline.txt ──
+  # ★ The initramfs carries overlayroot; without one the kernel would boot straight past it.
+  ls "$BOOT"/initramfs* >/dev/null 2>&1 || { echo "vibeserver-pocket-seal: no initramfs on $BOOT — not sealing"; exit 0; }
+  sync
+  [ -n "$SR" ] || mount -o remount,rw "$BOOT" 2>/dev/null || true
+  if ! grep -qw "overlayroot=tmpfs" "$CMD"; then
+    NEW="$CMD.vibe-new"
+    { printf 'overlayroot=tmpfs '; tr -d '\n' < "$CMD"; printf '\n'; } > "$NEW"
+    sync "$NEW" 2>/dev/null || sync
+    mv -f "$NEW" "$CMD"
+    sync
+  fi
+  [ -n "$SR" ] || mount -o remount,ro "$BOOT" 2>/dev/null || true
+  reboot_now
+fi
 
-sync
-mount -o remount,rw "$BOOT" 2>/dev/null || true
-if ! grep -qw "overlayroot=tmpfs" "$CMD"; then
-  NEW="$CMD.vibe-new"
-  { printf 'overlayroot=tmpfs '; tr -d '\n' < "$CMD"; printf '\n'; } > "$NEW"
+ENVF=""
+for f in "$SR/boot/armbianEnv.txt" "$SR/boot/dietpiEnv.txt"; do [ -f "$f" ] && { ENVF="$f"; break; }; done
+[ -n "$ENVF" ] || { echo "vibeserver-pocket-seal: no cmdline.txt, armbianEnv.txt or dietpiEnv.txt — not sealing"; exit 0; }
+# ── U-Boot (Armbian / DietPi on Armbian): extraargs= in the boot environment file ──
+# ★ boot.scr loads uInitrd; without it the kernel would boot straight past overlayroot.
+[ -e "$SR/boot/uInitrd" ] || { echo "vibeserver-pocket-seal: no /boot/uInitrd — not sealing"; exit 0; }
+if ! grep -qE '^extraargs=(.*[[:space:]])?overlayroot=tmpfs([[:space:]]|$)' "$ENVF"; then
+  NEW="$ENVF.vibe-new"
+  if grep -q '^extraargs=' "$ENVF"; then
+    # ★ Only the FIRST extraargs= line counts in U-Boot's env import; the switch goes at its front, the rest is kept.
+    awk 'done != 1 && /^extraargs=/ { v = substr($0, 11); sub(/^[ \t]+/, "", v);
+                                       print "extraargs=overlayroot=tmpfs" (v == "" ? "" : " " v); done = 1; next } { print }' \
+        "$ENVF" > "$NEW"
+  else
+    { cat "$ENVF"; [ -z "$(tail -c1 "$ENVF")" ] || echo; echo "extraargs=overlayroot=tmpfs"; } > "$NEW"
+  fi
   sync "$NEW" 2>/dev/null || sync
-  mv -f "$NEW" "$CMD"
+  mv -f "$NEW" "$ENVF"
   sync
 fi
-mount -o remount,ro "$BOOT" 2>/dev/null || true
-echo "vibeserver-pocket-seal: root will be read-only from the next boot — rebooting now"
-systemctl --no-block reboot
-exit 0
+reboot_now

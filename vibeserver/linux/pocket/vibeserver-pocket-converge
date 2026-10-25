@@ -106,7 +106,10 @@ AVAHI_SUFFIX = "  # off: VibeServer pocket answers on every interface"
 #    vibeserver-pocket-data (the settings partition) and -seal (the one-time read-only seal; a no-op once sealed).
 ENABLE = ("NetworkManager.service", "vibeserver.service", "vibeserver-radios.service",
           "vibeserver-maintenance.path", "vibeserver-pocket.service", "avahi-daemon.service",
-          "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service")
+          "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service",
+          # ★★ (2026-10-25) the build this processor can run — ARMv6 on a Pi Zero / Pi 1; a no-op on any CPU with NEON and
+          #    on every package without the ARMv6 build (its unit's ConditionPathExists). See vibeserver-pocket-cpu.
+          "vibeserver-pocket-cpu.service")
 DIRS = ("/data", "/var/lib/vibeserver-pocket")
 
 # ── ONCE (ledger): the operating system's things a pocket radio never uses ─────────────────────────────────────────
