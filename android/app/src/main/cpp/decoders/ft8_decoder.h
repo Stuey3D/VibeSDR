@@ -132,8 +132,9 @@ private:
     std::vector<float> pulse_;     // GFSK frequency pulse, 3 symbols long
     int pulseLo_ = 0, pulseHi_ = 0;        // where it is not ~0
     std::vector<float> dphi_;      // scratch: the reference's phase step per sample
-    std::vector<float> prodRe_, prodIm_;   // scratch: audio × conj(reference)
-    std::vector<uint16_t> idx_;            // scratch: the reference's sine-table index per sample (300 KB FT8)
+    std::vector<float> refC_, refS_;       // scratch: the reference, cos and sin per sample (1.2 MB FT8)
+    std::vector<float> blkR_, blkI_;       // scratch: audio × conj(reference), summed per 16-sample block
+    std::vector<float> ampR_, ampI_;       // scratch: the amplitude at each block centre
     std::vector<float> zr_, zi_, toneR_, toneI_;   // scratch: the decimated baseband and its tone tables
 };
 
