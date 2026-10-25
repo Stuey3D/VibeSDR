@@ -217,6 +217,8 @@ if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((f
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).
 if node scripts/test-setup-wifi-name.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-wifi-wired.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ New Wi-Fi hardware on a set-up box (a USB dongle added later, 2026-10-25): "configure it now?" — Configure / Not now.
+if node scripts/test-setup-wifi-new.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ Fork labelling (directory forkOf): a fork's name is shown, checked; official names refused as fork names.
 if node --no-warnings directory/scripts/test-fork.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ "In use by another app" through the directory (2026-10-18): the listing carries it, a held radio is never FREE,

@@ -65,6 +65,8 @@ class FakeNM:
         self.ap_up_seen = []                        # (redirect loaded, state mode, door open) at each hotspot up
         self.state_path = None
         self.wifi_dev = "wlan0"                     # None = no Wi-Fi chip (a Pi 2)
+        self.more_wifi = []                         # ★ further radios (USB dongles), listed after wifi_dev
+        self.unmanaged = set()                      # radios told `nmcli device set … managed no`
         self.eth = None                             # None = no Ethernet port; else NM's state, e.g. "connected"
         self.radio = True                           # nmcli radio wifi on/off
         self.last_stderr = ""                       # ★ as Shell: the last failed command's stderr line
@@ -126,7 +128,12 @@ class FakeNM:
                 out += "eth0:ethernet:%s\n" % self.eth
             if self.wifi_dev:
                 out += "%s:wifi:%s\n" % (self.wifi_dev, ("connected" if self.active else "disconnected") if self.radio else "unavailable")
+            for d in self.more_wifi:
+                out += "%s:wifi:%s\n" % (d, "unmanaged" if d in self.unmanaged else "disconnected")
             return 0, out + "lo:loopback:unmanaged\n"
+        if a[:3] == ["nmcli", "device", "set"] and a[4] == "managed":
+            (self.unmanaged.add if a[5] == "no" else self.unmanaged.discard)(a[3])
+            return 0, ""
         if a[:3] == ["nmcli", "radio", "wifi"]:
             self.radio = a[3] == "on"
             if not self.radio:
@@ -1930,6 +1937,128 @@ def main():
     ok(vp.ssid_key("Stuart’s  iPhone ") == vp.ssid_key("stuart's iphone") and
        vp.ssid_key("A–B") == vp.ssid_key("a-b") and vp.ssid_key("Café") == vp.ssid_key("Café"),
        "the name key: apostrophes, dashes, spaces, capitals and Unicode composition all fold")
+
+    # ── ★★★ USB WI-FI DONGLES ADDED LATER (Stuart, 2026-10-25: "dont force a resetup if a wifi dongle is detected but when
+    #    a user goes into setup show an option for new wifi hardware detected, configure it now?") ──
+    with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as hwlog:
+        vp.HOSTNAME_FILE = os.path.join(tmp, "hostname"); vp.HOSTS_FILE = os.path.join(tmp, "hosts")
+        with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibepocket\n")
+        with open(vp.HOSTS_FILE, "w") as f: f.write("127.0.1.1\tvibepocket\n")
+        IDS = {"wlan0": "dev:brcmfmac:mmc1:0001:1", "wlx00c0ca123456": "usb:0bda:8179:00e04c000001",
+               "wlan1": "usb:148f:7601:port-1-1.2"}
+
+        def hwbox(name, wifi="wlan0", more=(), eth="connected", record=None, configured=True):
+            nm = FakeNM()
+            nm.wifi_dev, nm.more_wifi, nm.eth = wifi, list(more), eth
+            box = vp.Box(nm, dict(vp.DEFAULTS), state_path=os.path.join(tmp, name + "-state.json"))
+            nm.state_path = box.state_path
+            box.hw_path = os.path.join(tmp, name + "-hw.json")
+            box.reset_path = os.path.join(tmp, name + "-reset")
+            box.history_path = os.path.join(tmp, name + "-hist.json"); box.history = []
+            box.sec_path = os.path.join(tmp, name + "-sec.json"); box.sec_memory = {}
+            box.radio_info = lambda d: {"iface": d, "id": IDS[d], "driver": "rtl8xxxu" if d != "wlan0" else "brcmfmac",
+                                        "usb": IDS[d].split(":")[1] + ":" + IDS[d].split(":")[2] if IDS[d].startswith("usb") else ""}
+            if record is not None:
+                with open(box.hw_path, "w") as f: json.dump(record, f)
+            box.sync_hostname(configured)
+            return nm, box
+
+        def hotspots(nm):
+            return [c for c in nm.calls if c[3:5] == ["connection", "up"] and c[5] in (vp.SETUP_NAME, vp.AP_NAME)]
+
+        # 1 ── a set-up WIRED box with no Wi-Fi (Nick's Orange Pi One) — a dongle appears at boot ──
+        nm, box = hwbox("wired", wifi=None, more=["wlx00c0ca123456"], record={"v": 1, "known": {}, "ignored": {}})
+        vp.boot(box, configured=True)
+        run_for(nm, box, 300)
+        st = state_of(box)
+        ok(not hotspots(nm) and vp.SETUP_NAME not in nm.conns and nm.active == "",
+           "★★★ a NEW dongle on a set-up wired box: NO hotspot, no join, no re-setup")
+        ok(st["newWifi"] == [{"iface": "wlx00c0ca123456", "driver": "rtl8xxxu", "usb": "0bda:8179"}] and st["hasWifi"] is False,
+           "…state.json says newWifi (iface, driver, USB id); hasWifi stays false (nothing is managed)")
+        ok("wlx00c0ca123456" in nm.unmanaged, "…and NetworkManager is told not to manage it (it joins nothing on its own)")
+        # 2 ── Configure ──
+        box.adopt_new_radio()
+        run_for(nm, box, 300)
+        st = state_of(box)
+        ok(box.dev == "wlx00c0ca123456" and st["hasWifi"] is True and st["newWifi"] == [] and "wlx00c0ca123456" not in nm.unmanaged,
+           "Configure: the dongle becomes this box's Wi-Fi (managed by NM again), no longer 'new'")
+        ok(not hotspots(nm) and st["mode"] == "wifi-unset" and st["wifiUnset"] is True,
+           "★ …and with nothing saved yet it WAITS for the owner's settings — still no open hotspot on a live server")
+        ok("usb:0bda:8179:00e04c000001" in json.load(open(box.hw_path))["known"], "…recorded as known on the settings partition")
+        nm.air = {"Home": (60, "homepass1")}
+        box.apply(req([("Home", "homepass1", dict(hidden=False, keep=False))]))
+        run_for(nm, box, 120)
+        ok(nm.active == "vibe-net-1" and box.mode == "client" and not box.adopting,
+           "…the owner saves networks + its own hotspot: managed as normal (joins Home)")
+        # 3 ── the next boot: the same dongle is KNOWN ──
+        nm2, box2 = hwbox("wired", wifi=None, more=["wlx00c0ca123456"])
+        nm2.conns, nm2.air = nm.conns, nm.air
+        vp.boot(box2, configured=True)
+        run_for(nm2, box2, 120)
+        ok(box2.dev == "wlx00c0ca123456" and state_of(box2)["newWifi"] == [] and "wlx00c0ca123456" not in nm2.unmanaged
+           and nm2.active == "vibe-net-1", "a KNOWN dongle at boot: managed at once, not asked about again")
+        # 4 ── unplug it ──
+        nm2.more_wifi = []
+        run_for(nm2, box2, 60)
+        st = state_of(box2)
+        ok(box2.dev is None and st["mode"] == "wired" and st["hasWifi"] is False and st["newWifi"] == [],
+           "unplugged: wired only, nothing new, nothing broken")
+        ok("usb:0bda:8179:00e04c000001" in json.load(open(box2.hw_path))["known"], "…and it is still known (plug it back: managed)")
+        nm2.more_wifi = ["wlx00c0ca123456"]
+        run_for(nm2, box2, 60)
+        ok(box2.dev == "wlx00c0ca123456" and nm2.active == "vibe-net-1", "plugged back in: managed again, joins its network")
+        # 5 ── Not now / Ignore ──
+        nm, box = hwbox("ign", wifi=None, more=["wlan1"], record={"v": 1, "known": {}, "ignored": {}})
+        vp.boot(box, configured=True)
+        run_for(nm, box, 30)
+        box.ignore_new_radio()
+        run_for(nm, box, 30)
+        st = state_of(box)
+        ok(st["newWifi"] == [] and [i["iface"] for i in st["ignoredWifi"]] == ["wlan1"] and box.dev is None and not hotspots(nm),
+           "Not now: recorded known-but-off — not new, not managed, no hotspot")
+        nm3, box3 = hwbox("ign", wifi=None, more=["wlan1"])
+        vp.boot(box3, configured=True)
+        run_for(nm3, box3, 60)
+        ok(state_of(box3)["newWifi"] == [] and "wlan1" in nm3.unmanaged and box3.dev is None,
+           "…the next boot does not ask again, and NM still leaves it alone")
+        ok(box3.adopt_new_radio() and box3.dev == "wlan1", "…and Configure can still use it later (the page offers it)")
+        # 6 ── a box WITH onboard Wi-Fi on a network gains a dongle ──
+        nm, box = hwbox("onboard", wifi="wlan0", record={"v": 1, "known": {IDS["wlan0"]: {}}, "ignored": {}})
+        nm.air = {"Home": (60, "homepass1")}
+        box.apply(req([("Home", "homepass1", dict(hidden=False, keep=False))]))
+        run_for(nm, box, 120)
+        nm.more_wifi = ["wlan1"]
+        run_for(nm, box, 120)
+        ok(box.dev == "wlan0" and nm.active == "vibe-net-1" and [i["iface"] for i in state_of(box)["newWifi"]] == ["wlan1"]
+           and "wlan1" in nm.unmanaged, "onboard on Home + a new dongle: Home untouched, the dongle new and left alone")
+        box.adopt_new_radio()
+        ok(box.dev == "wlan1" and "wlan0" in nm.unmanaged and box.prefer_dev == "wlan1"
+           and ["nmcli", "connection", "modify", "vibe-net-1", "connection.interface-name", "wlan1"] in nm.calls,
+           "Configure it: the dongle takes over, the box's profiles move to it, the onboard radio is left alone")
+        # 7 ── migration: a box set up before this release (no record) keeps its onboard Wi-Fi ──
+        nm, box = hwbox("old", wifi="wlan0")
+        nm.air = {"Home": (60, "homepass1")}
+        box.apply(req([("Home", "homepass1", dict(hidden=False, keep=False))]))
+        run_for(nm, box, 120)
+        ok(box.dev == "wlan0" and nm.active == "vibe-net-1" and state_of(box)["newWifi"] == []
+           and IDS["wlan0"] in json.load(open(box.hw_path))["known"],
+           "★ an update on a box set up before the record existed: its radio is adopted, Wi-Fi carries on")
+        # 8 ── first boot (never set up) behaves exactly as before ──
+        nm, box = hwbox("first", wifi=None, more=["wlx00c0ca123456"], configured=False)
+        vp.boot(box, configured=False)
+        run_for(nm, box, int(vp.DEFAULTS["BOOT_GRACE_SEC"]) + 90)
+        ok(box.dev == "wlx00c0ca123456" and nm.active == vp.SETUP_NAME and box.mode == "setup-ap"
+           and "wlx00c0ca123456" not in nm.unmanaged, "a box NEVER set up: a dongle gets the open setup hotspot, as ever")
+        ok("usb:0bda:8179:00e04c000001" in json.load(open(box.hw_path))["known"], "…and is recorded as known (it is the one being set up)")
+        # 9 ── the owner's reset file still opens the door on a set-up box ──
+        nm, box = hwbox("reset", wifi="wlan0", record={"v": 1, "known": {IDS["wlan0"]: {}}, "ignored": {}})
+        box.reset_wifi()
+        run_for(nm, box, 60)
+        ok(nm.active == vp.SETUP_NAME, "a set-up box whose owner RESET the Wi-Fi: the open setup hotspot comes up (the way back in)")
+        nm.air = {"Home": (60, "homepass1")}
+        box.apply(req([("Home", "homepass1", dict(hidden=False, keep=False))]))
+        ok(not os.path.exists(box.reset_path), "…and the reset is over once Wi-Fi is saved")
+    ok("NEW Wi-Fi hardware" in hwlog.getvalue(), "the journal says why a radio is left alone")
 
     # ── ★★★ http://vibeserversetup.local/ ON ETHERNET, ONLY WHILE SETTING UP (Nick, G4IRX, a real Orange Pi One on a cable,
     #    2026-10-25: "entering http://vibeserversetup.local/ in the browser results in 'site not found'") ──

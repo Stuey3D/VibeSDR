@@ -369,6 +369,24 @@ int main() {
            "NOT wired: Wi-Fi off is refused (409, says to plug in Ethernet) and no kick is written — a box must not strand itself");
         ok(radio("{\"off\":false}").code == 200, "…switching it ON is always allowed");
 
+        // ★★★ NEW WI-FI HARDWARE (2026-10-25): Configure / Not now, admin-gated, a kick word each.
+        {
+            put(paths().state, "{\"mode\":\"wired\",\"ap\":{\"set\":false},\"hasWifi\":false,\"wired\":true,"
+                               "\"newWifi\":[{\"iface\":\"wlx00c0ca123456\",\"driver\":\"rtl8xxxu\",\"usb\":\"0bda:8179\"}]}\n");
+            Req n; n.method = "POST"; n.path = "/vibeserver/pocket/newwifi"; n.peer = "192.168.1.20"; n.body = "{\"action\":\"configure\"}";
+            Reply n0;
+            ok(handle(n, n0, h) && n0.code == 401, "new Wi-Fi hardware: needs the admin proof");
+            n.adminOk = true;
+            auto nw = [&](const std::string& body) { Req x = n; x.body = body; Reply y; handle(x, y, h); return y; };
+            ::unlink(paths().kick.c_str());
+            ok(nw("{\"action\":\"configure\"}").code == 200 && slurp(paths().kick) == "wifi-new-configure\n", "Configure writes wifi-new-configure");
+            ok(nw("{\"action\":\"ignore\"}").code == 200 && slurp(paths().kick) == "wifi-new-ignore\n", "Not now writes wifi-new-ignore");
+            ::unlink(paths().kick.c_str());
+            for (const char* b : {"{}", "{\"action\":\"wifi-off\"}", "{\"action\":1}", "nonsense"})
+                ok(nw(b).code == 400, (std::string("…refused: ") + b).c_str());
+            ok(slurp(paths().kick).empty(), "…and nothing refused reaches the root service");
+        }
+
         // ★★★ ENABLE SSH (11.0.11): admin-gated, the box's own network only, the password only in the private request.
         {
             Req s; s.method = "POST"; s.path = "/vibeserver/pocket/ssh"; s.peer = "192.168.1.20";

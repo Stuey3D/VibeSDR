@@ -655,6 +655,21 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
             json(rp, 200, "OK", std::string("{\"ok\":true,\"on\":") + (v->b ? "true" : "false") + "}");
             return true;
         }
+        /* ★★★ NEW WI-FI HARDWARE (Stuart, 2026-10-25: "when a user goes into setup show an option for new wifi hardware
+         *  detected, configure it now?"). A radio that appears on a set-up box is left alone by the root service and
+         *  listed in its state as newWifi. Body {"action":"configure"|"ignore"}: Configure makes it this box's Wi-Fi (the
+         *  page then opens the Wi-Fi form), Not now records it as known-but-off. The root service re-checks everything. */
+        if (what == "newwifi" && isPost) {
+            JV j;
+            const std::string action = parseJson(rq.body, j) && j.t == JV::Obj ? j.str("action") : std::string();
+            if (action != "configure" && action != "ignore") { fail(rp, 400, "Bad Request", "action must be \"configure\" or \"ignore\""); return true; }
+            if (!st.present) { fail(rp, 409, "Conflict", "the Wi-Fi service has not reported yet"); return true; }
+            std::string err;
+            if (!writePrivate(paths().kick, "wifi-new-" + action + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
+            std::printf("VibeServer: pocket — the owner chose to %s the new Wi-Fi hardware\n", action == "configure" ? "configure" : "ignore");
+            json(rp, 200, "OK", std::string("{\"ok\":true,\"action\":\"") + action + "\"}");
+            return true;
+        }
         if ((what == "switch" || what == "scan") && isPost) {
             std::string word = what;
             if (what == "scan") {
