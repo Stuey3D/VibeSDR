@@ -83,6 +83,23 @@ if ! chroot "$R" /bin/true 2>/dev/null; then
 fi
 # ★ The settings partition by label, as on the card: udev in the container cannot see it, so its fstab-less mount is
 #   done by vibeserver-pocket-data through blkid — the loop device is bound in for that.
+# ★★★ THE FIRST BOOT SEALS AND REBOOTS (11.0.11 on a board card: vibeserver-pocket-seal writes extraargs=overlayroot=tmpfs
+#     into /boot/armbianEnv.txt and reboots — and a reboot ENDS an nspawn container, so the first 11.0.11 board tests
+#     never reached the front door, 2026-10-25). So: boot once and let the seal run; prove it wrote the switch; then mark
+#     this COPY no-seal (nspawn cannot boot the kernel argument anyway) and boot again for everything else.
+SEAL="not applicable (no armbianEnv.txt — a Raspberry Pi card: its seal writes cmdline.txt on the boot partition, not mounted here)"
+if [ -f "$R/boot/armbianEnv.txt" ]; then
+  say "first boot: the read-only seal (it reboots the box when it has written the switch)"
+  timeout 900 systemd-nspawn -q --register=no --keep-unit --private-network -bD "$R" --bind="$LOOP2" \
+    > "$WD/boot-test-seal.log" 2>&1 || true
+  if grep -qE '^extraargs=(.*[[:space:]])?overlayroot=tmpfs([[:space:]]|$)' "$R/boot/armbianEnv.txt"; then
+    SEAL="ok — first boot wrote extraargs=overlayroot=tmpfs into /boot/armbianEnv.txt and rebooted"
+  else
+    SEAL="FAILED — no overlayroot=tmpfs in /boot/armbianEnv.txt after the first boot"
+  fi
+  say "seal: $SEAL"
+  touch "$R/etc/vibeserver-pocket/no-seal"
+fi
 say "booting the card's root (emulated $ARCH; a few minutes)"
 LOG="$WD/boot-test.log"
 timeout 900 systemd-nspawn -q --register=no --keep-unit --private-network -bD "$R" \
@@ -108,6 +125,7 @@ run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
 {
   echo "front door http://127.0.0.1:48000/ → HTTP $CODE"
   echo "hostname: $(run cat /etc/hostname)"
+  echo "read-only seal: $SEAL"
   echo "vibeserver package: $(run dpkg-query -W -f '${Version} ${Architecture}' vibeserver)"
   for u in vibeserver vibeserver-pocket vibeserver-pocket-data vibeserver-pocket-seal vibeserver-pocket-cpu NetworkManager avahi-daemon systemd-networkd ssh; do
     printf '%-24s %s\n' "$u" "$(run systemctl is-active "$u.service")"
@@ -126,4 +144,5 @@ run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
 run systemctl poweroff >/dev/null
 wait "$NS" 2>/dev/null || true
 [ "$CODE" = 200 ] || [ "$CODE" = 302 ] || { echo "!! the front door did not answer"; exit 1; }
+case "$SEAL" in FAILED*) echo "!! the read-only seal did not write its switch"; exit 1 ;; esac
 say "boot test passed (emulation only)"
