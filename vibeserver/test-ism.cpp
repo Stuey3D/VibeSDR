@@ -388,6 +388,81 @@ int main(int argc, char** argv) {
     }
 
     // 7. PRIVACY: the JSON never carries a TPMS ID, a fob's serial or hop code, or a fixed code
+    // ★ SUSPECTED KEY FOBS (FobWatch) — modelled on Stuart's car key as recorded 2026-10-25 (FSK ±42.7 kHz, Manchester
+    //   200 µs half-bits after an alternating preamble, 68 ms frames, three 161 ms apart). Never a protocol: the shape.
+    printf(" suspected key fobs\n");
+    {
+        // one frame: 16 bits of preamble (1010…), then a fixed made-up payload, Manchester, 200 µs halves = 2.5 kbit/s
+        auto keyFrame = []() {
+            Bits b; for (int i = 0; i < 16; ++i) b.push_back(i & 1);
+            const Bits p = bytesToBits(hexBytes("3C 96 A5 0F E1 72 5B C8 19 D4 6E 0B 93 A7 2D F0 58"));
+            b.insert(b.end(), p.begin(), p.end());
+            Tx tx; manchesterTx(tx, b, 200, 0); return tx.r;
+        };
+        const Runs fr = keyFrame();
+        // END TO END: three frames through the real front end at 2.4 MS/s → bursts the decoders refuse, FobWatch counts ONE press
+        {
+            std::vector<Sig> sigs;
+            for (int k = 0; k < 3; ++k) { Sig s; s.runs = fr; s.fsk = true; s.devHz = 42.7e3; s.offHz = 214e3; s.amp = 0.3; s.startS = 0.05 + 0.161 * k; sigs.push_back(s); }
+            std::vector<Burst> bs;
+            const auto x = synth(sigs, 2.4e6, 0.7, 0.01, 77);
+            const auto dec = runFront(x, 2.4e6, &bs);
+            CHECK(dec.empty(), "fob: a protocol decoder claimed the key (%zu)", dec.size());
+            double T = 0, len = 0; size_t cand = 0;
+            for (const Burst& b : bs) if (FobWatch::candidate(b, T, len)) ++cand;
+            CHECK(cand >= 3, "fob: %zu of %zu bursts look like a key frame (T %.0f µs, %.1f ms)", cand, bs.size(), T, len);
+            FobWatch fw; int presses = 0; Reading got;
+            for (const Burst& b : bs) { Reading r; if (fw.offer(b, 433.92e6, r)) { ++presses; got = r; } }
+            CHECK(presses == 1, "fob: three frames are %d presses, want 1", presses);
+            CHECK(got.kind == "suspectfob" && got.secret && approx(got.freqHz, 433.92e6 + 214e3, 10e3), "fob: the reading (%s, %.0f Hz)",
+                  got.kind.c_str(), got.freqHz);
+            Tracker tr; tr.accept(got, 1.0);
+            const std::string j = tr.json(1.0);
+            CHECK(j.find("Suspected key fob #1 \xc2\xb7 button press") != std::string::npos && j.find("\"kind\":\"suspectfob\"") != std::string::npos,
+                  "fob: the line %s", j.c_str());
+            CHECK(j.find("\"id\"") == std::string::npos && j.find("3C96") == std::string::npos, "fob: an id or bits in the JSON");
+        }
+        // THE RULES, on bursts made directly (seconds of timing without seconds of IQ)
+        auto frame = [&](double t, double offHz, double lvl = -10) {
+            Burst b; b.tSec = t; b.offHz = offHz; b.fsk = fr; b.fskDevHz = 42.7e3; b.levelDb = float(lvl); b.noiseDb = -45; return b;
+        };
+        auto count = [&](const std::vector<Burst>& v, FobWatch& fw) { int n = 0; for (const Burst& b : v) { Reading r; if (fw.offer(b, 433.92e6, r)) ++n; } return n; };
+        {
+            FobWatch fw; std::vector<Burst> v;
+            for (int k = 0; k < 6; ++k) v.push_back(frame(1.0 + 1.2 * k, 360e3));          // a sensor: one frame every 1.2 s
+            CHECK(count(v, fw) == 0, "fob: single frames every 1.2 s counted as presses");
+        }
+        {
+            FobWatch fw; std::vector<Burst> v;
+            for (int k = 0; k < 12; ++k) v.push_back(frame(1.0 + 0.161 * k, 214e3));        // a held button
+            CHECK(count(v, fw) == 1, "fob: a held button is not one press");
+        }
+        {
+            FobWatch fw; std::vector<Burst> v;
+            for (double t0 : {1.0, 2.3}) for (int k = 0; k < 3; ++k) v.push_back(frame(t0 + 0.161 * k, 214e3));   // 1.3 s apart
+            CHECK(count(v, fw) == 2, "fob: two presses 1.3 s apart are not two");
+        }
+        {
+            FobWatch fw; std::vector<Burst> v;                                              // overload images ±120 kHz
+            for (int k = 0; k < 3; ++k) { v.push_back(frame(1.0 + 0.161 * k, 214e3)); v.push_back(frame(1.001 + 0.161 * k, 94e3, -12)); v.push_back(frame(1.002 + 0.161 * k, 334e3, -12)); }
+            CHECK(count(v, fw) == 1, "fob: a press and its images are not one press");
+        }
+        {
+            FobWatch fw; std::vector<Burst> v;                                              // presses on a 10 s timer = a sensor
+            for (int p = 0; p < 5; ++p) for (int k = 0; k < 2; ++k) v.push_back(frame(1.0 + 10.0 * p + 0.161 * k, 500e3));
+            const int n = count(v, fw);
+            CHECK(n == 3, "fob: a 10 s timer gave %d presses before it was recognised, want 3", n);
+            CHECK(fw.takePeriodic().size() == 1, "fob: the timer was not reported");
+        }
+        {
+            FobWatch fw; Burst b = frame(1.0, 214e3); b.fsk.clear();                         // OOK: never
+            Burst b2 = b; b2.tSec = 1.161;
+            CHECK(count({b, b2}, fw) == 0, "fob: OOK bursts counted");
+            Burst w = frame(2.0, 214e3, -38); Burst w2 = frame(2.161, 214e3, -38);          // 7 dB over the noise: too weak to call
+            CHECK(count({w, w2}, fw) == 0, "fob: a 7 dB burst counted");
+        }
+    }
+
     printf(" privacy\n");
     {
         Tracker tr;

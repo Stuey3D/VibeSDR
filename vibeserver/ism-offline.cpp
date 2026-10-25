@@ -24,6 +24,7 @@ int main(int argc, char** argv) {
     FrontEnd fe(rate);
     fe.setDcGuardHz(15e3);
     Tracker tr;
+    FobWatch fobs;   // ★ undecoded presses → "Suspected key fob", as the server does
     double t = 0;
     uint64_t nb = 0, nd = 0;
     std::vector<uint8_t> u(1 << 20);
@@ -46,6 +47,8 @@ int main(int argc, char** argv) {
                         FrontEnd::shortestRun(b.fsk.empty() ? b.ook : b.fsk), all / 1000.0, all > 0 ? 100.0 * on / all : 0.0,
                         b.fskDevHz / 1000.0, got.empty() ? "" : "  → decoded");
         }
+        if (got.empty()) { Reading sf; if (fobs.offer(b, centre, sf)) got.push_back(sf); }
+        for (double hz : fobs.takePeriodic()) { tr.forget("suspectfob", hz, 50e3); std::printf("  (%.4f MHz is on a timer — a sensor, not a fob)\n", hz / 1e6); }
         for (auto& r : got) {
             ++nd;
             const int before = int(tr.size());

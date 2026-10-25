@@ -63,7 +63,7 @@ export function compass(deg: number): string { return COMPASS[Math.floor((((deg 
  *  is the server's own line, which is used as sent. */
 export function ismLine(d: IsmDevice, u: IsmUnits): string {
   if (!u.mph && u.pressure === 'psi') return d.line;
-  const secret = d.kind === 'tpms' || d.kind === 'keyfob' || d.kind === 'doorbell';
+  const secret = d.kind === 'tpms' || d.kind === 'keyfob' || d.kind === 'doorbell' || d.kind === 'suspectfob';
   const p: string[] = [d.name];
   if (secret && d.kind === 'tpms' && d.model) p.push(d.model);
   if (secret && d.kind === 'keyfob' && d.make) p.push(d.make);
@@ -79,7 +79,7 @@ export function ismLine(d: IsmDevice, u: IsmUnits): string {
   if (d.uv !== undefined) p.push(`UV ${Math.round(d.uv)}`);
   if (d.baro !== undefined) p.push(`${Math.round(d.baro)} hPa`);
   if (d.watts !== undefined) p.push(d.watts >= 1000 ? `${(d.watts / 1000).toFixed(2)} kW` : `${Math.round(d.watts)} W`);
-  if (d.kind === 'keyfob' || d.kind === 'doorbell') p.push(d.button ? `button ${d.button}` : d.note === 'learn' ? 'learn' : 'button press');
+  if (d.kind === 'keyfob' || d.kind === 'doorbell' || d.kind === 'suspectfob') p.push(d.button ? `button ${d.button}` : d.note === 'learn' ? 'learn' : 'button press');
   if (d.extra) p.push(d.extra);
   if (d.batt === 1) p.push('battery OK'); else if (d.batt === 0) p.push('battery low');
   if (!secret && d.ch !== undefined) p.push(`ch ${d.ch}`);
@@ -109,7 +109,8 @@ function esc(s: string): string { return s.replace(/[&<>"']/g, (c) => ({ '&': '&
 
 /** The list's HTML: newest first (the server's order), filtered by kind. */
 export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits): string {
-  const rows = r.devices.filter((d) => filter === 'all' || d.kind === filter);
+  // ★ KEY FOB shows the suspected ones too (vibe_ism_service.h FobWatch): a car key we cannot name is still a key fob
+  const rows = r.devices.filter((d) => filter === 'all' || d.kind === filter || (filter === 'keyfob' && d.kind === 'suspectfob'));
   if (!rows.length) {
     const what = filter === 'all' ? 'No sensors heard yet' : `Nothing of that kind heard yet`;
     return `<div class="ismEmpty">${what} — most send every 30–60 s; tyres only while the car moves.</div>`;

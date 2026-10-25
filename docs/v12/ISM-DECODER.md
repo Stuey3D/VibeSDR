@@ -126,7 +126,7 @@ Missing `on` = OFF. While in ISM: `tune` = an exact frequency; `mode`, `bandwidt
 once to a joiner — **its arrival means ISM is on**. `{"type":"ism_off"}` then a `config` — the radio is back.
 `{"type":"ism_error","why":"…"}` — refused.
 
-**A device**: `key` (`d<n>`, opaque) · `kind` (weather | tpms | sensor | doorbell | energy | keyfob) · `make` · `model` ·
+**A device**: `key` (`d<n>`, opaque) · `kind` (weather | tpms | sensor | doorbell | energy | keyfob | suspectfob) · `make` · `model` ·
 `name` · `line` (the readable text, metric, tyres in PSI) · `nick` (secret kinds only) · `id`, `ch` (public kinds only) ·
 `temp` °C · `hum` % · `wind`, `gust` km/h · `dir` ° · `rain` mm · `rainRate` mm/h · `kpa` · `uv` · `watts` · `baro` hPa ·
 `batt` 1/0 · `button` · `note` · `extra` · `freq` Hz · `level` dBFS · `snr` dB · `seen` s since last heard · `age` s since
@@ -141,6 +141,13 @@ first · `count` times heard. Absent = not carried.
   renumbers. (Our TPMS formats do not name a make — see the table; the nickname then reads "TPMS #2".)
 - **Key fobs** show only "Key fob #n · KeeLoq · button 2" — the button bits travel in clear on KeeLoq; **never the code,
   rolling or fixed, never raw bits**.
+- **Suspected key fobs** (2026-10-25, Stuart: "add them to a list that maybe says suspected keyfob"): an UNDECODED press
+  shaped like a car key — FSK 10-120 kHz deviation, ≥ 10 dB, 15-200 ms, Manchester-shaped runs, the same frame again
+  60-600 ms later — is listed as "Suspected key fob #n · button press" (`kind` suspectfob; the KEY FOB filter shows it).
+  No bits are read. One press = one count (a held button, the dongle's overload images ±120 kHz); anything on a timer
+  (three intervals alike, ≥ 8 s) is a sensor and its row goes. Modelled on Stuart's key recorded on the Pi 500 (434.134
+  MHz, ±42.7 kHz, 200 µs Manchester halves, 68 ms frames, three 161 ms apart): 16 presses of 16 found, nothing else on
+  434 MHz flagged (`vibe_ism_service.h` FobWatch; test-ism "suspected key fobs").
 - **Fixed-code remotes/doorbells** (EV1527/PT2262 — the key of many gates, garages and alarms) get the fob treatment:
   "Doorbell / remote #n · button A", the 20-bit code hashed like a TPMS ID.
 - **Weather stations, sensors, energy meters** may show a channel and a short ID (how an owner finds their own).

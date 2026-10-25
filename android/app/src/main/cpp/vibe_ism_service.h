@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -99,6 +100,7 @@ inline const char* compass(double deg) {
 inline const char* kindLabel(const std::string& k) {
     if (k == "tpms") return "TPMS";
     if (k == "keyfob") return "Key fob";
+    if (k == "suspectfob") return "Suspected key fob";
     if (k == "doorbell") return "Doorbell / remote";
     return "";
 }
@@ -134,7 +136,7 @@ inline std::string readable(const Reading& r, int nick, const Units& u = Units()
     if (r.uv == r.uv) p.push_back("UV " + fmt1(r.uv, 0));
     if (r.baroHpa == r.baroHpa) p.push_back(fmt1(r.baroHpa, 0) + " hPa");
     if (r.watts == r.watts) p.push_back(r.watts >= 1000 ? fmt1(r.watts / 1000.0, 2) + " kW" : fmt1(r.watts, 0) + " W");
-    if (r.kind == "keyfob" || r.kind == "doorbell") {
+    if (r.kind == "keyfob" || r.kind == "doorbell" || r.kind == "suspectfob") {
         if (!r.button.empty()) p.push_back("button " + r.button);
         else if (r.note == "learn") p.push_back("learn");
         else p.push_back("button press");
@@ -156,6 +158,95 @@ inline std::string jsonEsc(const std::string& s) {
     }
     return o;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  SUSPECTED KEY FOBS — a car key we cannot name still shows up (Stuart, 2026-10-25: "add them to a list that maybe
+//  says suspected keyfob"). His key had lit the waterfall and appeared nowhere in the list.
+//
+//  ★★ WHAT A PRESS LOOKS LIKE, measured on his key (raw IQ, the Pi 500's V4L, 16 presses): FSK at 434.134 MHz,
+//     ±42.7 kHz, every run 200 or 400 µs (Manchester, 2.5 kbit/s) after an alternating preamble, 68 ms frames, the
+//     SAME frame 2-4 times 161 ms apart (more while the button is held). Car keys are rolling-code and proprietary, so
+//     the name stays "suspected" — the shape, not a protocol, is the evidence. So a press is:
+//       · an UNDECODED burst, FSK (deviation 10-120 kHz), at least 10 dB over the noise, 15-200 ms long;
+//       · its runs Manchester-shaped: ≥ 90 % within a quarter of T or 2T, T = its shortest common run, 50-1000 µs;
+//       · REPEATED: an earlier such frame within 30 kHz, of the same length (±15 %), 60-600 ms before it.
+//  ★★ WHAT IS NOT, from the same recording: a neighbour's FSK sensor at 434.283 (one 47 ms frame every 1-2 s — never
+//     repeated inside 600 ms), a carrier blip at 434.139 every second (OOK, not FSK), and the DONGLE'S OWN IMAGES of the
+//     key ±120 kHz away when it overloads (0 dBFS) — one press is counted ONCE: after a press, nothing within 250 kHz
+//     counts until its frames have stopped for 0.5 s (a held button is one press). And anything that comes back on a
+//     TIMER (three intervals alike within 10 %, ≥ 8 s apart) is a sensor, not a hand on a button: that frequency stops
+//     counting and its row goes.
+//  ★★★ PRIVACY: no bits are read, kept or sent. The row is "Suspected key fob #n" by frequency (50 kHz) and symbol
+//     time — two fobs of one make on one frequency share a row, which is the price of never reading an ID.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+class FobWatch {
+public:
+    /** Offer an UNDECODED burst. True = it completes a press: `out` is the reading to show. */
+    bool offer(const Burst& b, double hwCentreHz, Reading& out) {
+        const double t = b.tSec, f = hwCentreHz + b.offHz + b.carrierHz;
+        while (!frames_.empty() && t - frames_.front().t > 1.5) frames_.pop_front();
+        double T = 0, lenMs = 0;
+        if (!candidate(b, T, lenMs)) return false;
+        // ★ the same press (or its images): it lasts while its frames keep coming — a held button is ONE press — and the
+        //   next press needs half a second of silence (his presses came 1.3 s apart; a fixed 1.5 s hold-off lost them)
+        if (t < quietUntil_ && std::fabs(f - quietHz_) < 250e3) { quietUntil_ = t + 0.5; return false; }
+        const long bucket = std::lround(f / 50e3);
+        if (periodic_.count(bucket)) return false;
+        bool repeat = false;
+        for (const Frame& p : frames_) {
+            const double dt = t - p.t;
+            if (dt >= 0.060 && dt <= 0.600 && std::fabs(f - p.f) < 30e3 && std::fabs(lenMs - p.lenMs) <= 0.15 * p.lenMs) { repeat = true; break; }
+        }
+        frames_.push_back({t, f, lenMs});
+        if (frames_.size() > 64) frames_.pop_front();
+        if (!repeat) return false;
+        quietUntil_ = t + 0.5; quietHz_ = f;
+        // ★ a timer, not a hand: three intervals alike, ≥ 8 s apart
+        auto& ts = presses_[bucket];
+        ts.push_back(t);
+        if (ts.size() > 4) ts.erase(ts.begin());
+        if (ts.size() == 4) {
+            const double a = ts[1] - ts[0], c = ts[2] - ts[1], d = ts[3] - ts[2];
+            const double lo = std::min(a, std::min(c, d)), hi = std::max(a, std::max(c, d));
+            if (lo >= 8.0 && hi <= lo * 1.1) { periodic_.insert(bucket); periodicHz_.push_back(f); return false; }
+        }
+        out = Reading();
+        out.kind = "suspectfob"; out.make = "FSK"; out.secret = true;
+        out.secretId = (uint64_t(bucket) << 12) ^ uint64_t(std::lround(T / 25.0));
+        out.freqHz = f; out.levelDb = b.levelDb; out.snrDb = b.levelDb - b.noiseDb;
+        ++presses_total_;
+        return true;
+    }
+    /** Frequencies found to be on a timer since the last clear — their rows are removed by the caller. */
+    std::vector<double> takePeriodic() { std::vector<double> v; v.swap(periodicHz_); return v; }
+    uint64_t presses() const { return presses_total_; }
+    void clear() { frames_.clear(); presses_.clear(); periodic_.clear(); periodicHz_.clear(); quietUntil_ = -1; }
+
+    /** The burst-level test, public for the tests. */
+    static bool candidate(const Burst& b, double& T, double& lenMs) {
+        if (b.fsk.size() < 24 || b.fskDevHz < 10e3 || b.fskDevHz > 120e3 || b.levelDb - b.noiseDb < 10) return false;
+        double all = 0; for (int d : b.fsk) all += std::abs(d);
+        lenMs = all / 1000.0;
+        if (lenMs < 15 || lenMs > 200) return false;
+        // T: the shortest run that at least a fifth of the runs sit at (one stray glitch must not set it)
+        std::vector<int> a; a.reserve(b.fsk.size()); for (int d : b.fsk) a.push_back(std::abs(d));
+        std::sort(a.begin(), a.end());
+        T = a[a.size() / 5];
+        if (T < 50 || T > 1000) return false;
+        size_t fit = 0;
+        for (int d : a) if (std::fabs(d - T) <= 0.25 * T || std::fabs(d - 2 * T) <= 0.25 * T) ++fit;
+        return double(fit) >= 0.9 * double(a.size());
+    }
+
+private:
+    struct Frame { double t, f, lenMs; };
+    std::deque<Frame> frames_;
+    std::map<long, std::vector<double>> presses_;
+    std::set<long> periodic_;
+    std::vector<double> periodicHz_;
+    double quietUntil_ = -1, quietHz_ = 0;
+    uint64_t presses_total_ = 0;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  THE DEVICE LIST — newest first, one line per device, repeats folded, last-heard time.
@@ -220,6 +311,11 @@ public:
         }
     }
     void clear() { devs_.clear(); pending_.clear(); }
+    /** Remove the rows of `kind` within `hz` of `freq` (a suspected fob found to be a sensor on a timer). */
+    void forget(const std::string& kind, double freq, double hz) {
+        for (auto it = devs_.begin(); it != devs_.end();)
+            if (it->second.r.kind == kind && std::fabs(it->second.r.freqHz - freq) < hz) it = devs_.erase(it); else ++it;
+    }
     size_t size() const { return devs_.size(); }
     uint64_t decoded() const { return decoded_; }
 
@@ -296,6 +392,7 @@ public:
         }
         queue_.clear(); queued_ = 0; dropped_ = 0;
         if (!keepList) { t0_ = std::chrono::steady_clock::now(); tracker_.clear(); bursts_ = 0; unknown_ = 0; }
+        fobs_.clear();   // ★ a new FrontEnd restarts burst time at 0
         cap_.reset(rateHz, now());
         health_ = Health{};
         run_ = true;
@@ -366,8 +463,15 @@ private:
                 std::vector<Reading> got;
                 std::vector<Burst> bs;
                 fe->feed(blk.data(), blk.size(), [&](const Burst& b) { bs.push_back(b); });
-                for (const Burst& b : bs) { size_t before = got.size(); decodeBurst(b, hc, got); if (got.size() == before) ++unknownLocal_; }
+                for (const Burst& b : bs) {
+                    size_t before = got.size(); decodeBurst(b, hc, got);
+                    if (got.size() != before) continue;
+                    ++unknownLocal_;
+                    Reading sf;
+                    if (fobs_.offer(b, hc, sf)) got.push_back(sf);       // ★ an undecoded press: "Suspected key fob"
+                }
                 lk.lock();
+                for (double hz : fobs_.takePeriodic()) tracker_.forget("suspectfob", hz, 50e3);
                 bursts_ += bs.size();
                 unknown_ += unknownLocal_; unknownLocal_ = 0;
                 const double t = now();
@@ -399,6 +503,7 @@ private:
     vibeadsb::CaptureMeter cap_;
     std::chrono::steady_clock::time_point t0_;
     Tracker tracker_;
+    FobWatch fobs_;
     Health health_;
 };
 
