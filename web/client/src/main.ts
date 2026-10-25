@@ -2488,6 +2488,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onStatus: (s) => { if (s === 'error') setStatus('error', 'audio'); },
   });
   applyRecBuf();
+  if (adsbOn || ismOn) audio.setQuiet(true);   // ★ a reconnect inside ADS-B / ISM stays quiet (syncAudioQuiet)
   // ★★★ TELL IT WHETHER THERE IS ANYWHERE TO FALL BACK TO. With the owner's policy OFF the
   //     server REFUSES a socket opened without `codec=opus`, so 'falling back' swapped a
   //     struggling Opus stream for no stream at all — silently. The player keeps rebuilding
@@ -2510,6 +2511,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         onStatus: (st) => { if (st === 'error') setStatus('error', 'audio'); },
       });
       applyRecBuf();
+      if (adsbOn || ismOn) audio.setQuiet(true);
       audio.start().catch((e) => console.error('audio restart failed', e));
     };
   }
@@ -7703,8 +7705,17 @@ function adsbReadCap(j: any) {
 
 /** ★ The UI half of entering ADS-B, with no message to the server (as dabUiOn): used for our own
  *  press AND when a report arrives because somebody else put the receiver in ADS-B. */
+/** ★ ADS-B and ISM have nothing to hear: the page lets go of the audio output while either is on (audio.ts setQuiet —
+ *  the AirPods followed a page "playing" silence). One rule for both, so a hand-over between them never plays a gap. */
+function syncAudioQuiet() {
+  const q = adsbOn || ismOn;
+  if (!audio || audio.quiet === q) return;
+  audio.setQuiet(q);
+  updateMediaSession();
+}
 function adsbUiOn() {
   adsbOn = true;
+  syncAudioQuiet();
   if (spec) spec.adsbHeld = true;
   setTimeout(syncDialTips, 0);
   /* ★ ADS-B takes the whole radio, as DAB does: a running decoder is stopped (it would only be decoding
@@ -7733,6 +7744,7 @@ function adsbUiOff() {
   if (spec) spec.adsbHeld = false;
   setTimeout(syncDialTips, 0);
   wholeRadioLock(false, 'ADS-B');
+  syncAudioQuiet();
   adsbViewHide();
   applyRateOptions();
   populateHw();
@@ -7954,6 +7966,7 @@ function ismLockControls(on: boolean) {
 }
 function ismUiOn() {
   ismOn = true;
+  syncAudioQuiet();
   if (spec) spec.ismHeld = true;
   if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (d) => ismStep(d));
   ismBox.show();
@@ -7963,6 +7976,7 @@ function ismUiOn() {
 }
 function ismUiOff() {
   ismOn = false;
+  syncAudioQuiet();
   ismReport = null;
   if (spec) spec.ismHeld = false;
   ismBox?.hide();
@@ -8689,7 +8703,7 @@ let lastMediaKey = '';
 
 function updateMediaSession() {
   if (!('mediaSession' in navigator) || !spec) return;
-  navigator.mediaSession.playbackState = audio?.muted ? 'paused' : 'playing';
+  navigator.mediaSession.playbackState = audio?.muted || audio?.quiet ? 'paused' : 'playing';
   const freq = `${(spec.frequency / 1e6).toFixed(3)} MHz`;
   /* ★★★ IN DAB, THE MODE IS DAB AND THE STATION IS THE SERVICE. spec.mode is the demodulator
    *  the server is NOT running while DAB is on, so the OS Now Playing card announced "WFM" over

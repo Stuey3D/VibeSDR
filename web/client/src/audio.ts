@@ -906,7 +906,7 @@ export class AudioPlayer {
           // Not zero: Chromium can treat a muted element as inaudible and skip the widget
           // entirely. The clip is silent by CONTENT, so this is still completely inaudible.
           this.anchorEl.volume = 1;
-          void this.anchorEl.play().catch(() => { /* resumed on the next gesture */ });
+          if (!this._quiet) void this.anchorEl.play().catch(() => { /* resumed on the next gesture */ });
         } catch { this.anchorEl = null; }
       } else {
         try {
@@ -917,7 +917,7 @@ export class AudioPlayer {
           // The GainNode already carries volume/mute; keep the element wide open or
           // the two would fight.
           this.mediaEl.volume = 1;
-          void this.mediaEl.play().catch(() => { /* resumed on the next gesture */ });
+          if (!this._quiet) void this.mediaEl.play().catch(() => { /* resumed on the next gesture */ });
         } catch {
           this.streamDest = null;
           this.mediaEl = null;
@@ -962,6 +962,8 @@ export class AudioPlayer {
                    && !location.hash.includes('legacyaudio');
     if (canWorker) this._startWorker();
     else           this._openWs();
+    // ★ quiet from the start (a page landing straight in ADS-B / ISM): the context is born suspended — see setQuiet
+    if (this._quiet && this.ctx && this.ctx.state === 'running') void this.ctx.suspend().catch(() => {});
   }
 
   /** Same ring buffer as the worklet, drained on the main thread instead. */
@@ -1807,7 +1809,7 @@ export class AudioPlayer {
       const anyEl = el as unknown as { srcObject: unknown; src: string };
       if ('srcObject' in el) { try { anyEl.srcObject = ms; } catch { anyEl.src = URL.createObjectURL(ms as unknown as MediaSource); } }
       else anyEl.src = URL.createObjectURL(ms as unknown as MediaSource);
-      void el.play().catch(() => { /* a gesture may still be needed; the source still opens */ });
+      if (!this._quiet) void el.play().catch(() => { /* a gesture may still be needed; the source still opens */ });
       let settled = false;
       ms.addEventListener('sourceopen', () => {
         try {
@@ -1959,7 +1961,7 @@ export class AudioPlayer {
           if (!sb.updating && el.currentTime - b.start(0) > 20) sb.remove(0, el.currentTime - 10);
         }
       } catch { /* between states */ }
-      if (el.paused && !this._muted) void el.play().catch(() => {});
+      if (!this._quiet && el.paused && !this._muted) void el.play().catch(() => {});
       // ★★ FED BUT NEVER PLAYING: 8 s of packets with the clock stuck is this path failing in a
       //    browser that claimed to support it. Give the session back to Web Audio rather than sit
       //    silent — the same rule the Opus decoder follows (rebuild, never limit permanently).
@@ -2068,7 +2070,7 @@ export class AudioPlayer {
        *     sourceopen, which never ran. A fix behind a door that never opens.
        *  ★ Rejection is expected and harmless when a gesture is still needed — the element keeps
        *    the source attached, sourceopen still fires, and the buffer fills meanwhile. */
-      void el.play().catch(() => { /* gesture may be required; the source still opens */ });
+      if (!this._quiet) void el.play().catch(() => { /* gesture may be required; the source still opens */ });
       let settled = false;
       ms.addEventListener('sourceopen', () => {
         try {
@@ -2108,7 +2110,7 @@ export class AudioPlayer {
           this.mseSeq = 1; this.mseTime = 0; this.mseDur = this._msePerAu(coreRateHz);
           this.mseQueue = [initSegment(tsRate, channels, asc)];
           this._mseDrain();
-          void el.play().catch(() => { /* a gesture may be needed; the buffer keeps filling */ });
+          if (!this._quiet) void el.play().catch(() => { /* a gesture may be needed; the buffer keeps filling */ });
           console.info(`[audio] DAB+ via MediaSource ${mime} @ ${coreRateHz} Hz, ${channels}ch`);
           if (!settled) { settled = true; resolve(true); }
         } catch (e) {
@@ -2512,6 +2514,7 @@ export class AudioPlayer {
    *  showed — "the audio will sit silent until I touch a control" (Stuart, 2026-09-14). Only once
    *  packets have arrived, so a connecting page is not told to tap for nothing. */
   get suspended(): boolean {
+    if (this._quiet) return false;   // ★ held on purpose (setQuiet) — not a gate for a tap
     if (this.omEl) return this.omEl.paused && this.omSeq > 0 && !this._muted;
     if (!this.ctx) return false;
     if (this.ctx.state === 'suspended' || (this.ctx.state as string) === 'interrupted') return true;
@@ -2673,7 +2676,7 @@ export class AudioPlayer {
   private _watchOutput() {
     if (this.stallWatch !== null) return;
     this.stallWatch = window.setInterval(() => {
-      if (!this.ctx) return;
+      if (!this.ctx || this._quiet) return;   // ★ an output we stopped (setQuiet) is not a stall
       const now = performance.now();
       /* ★★★ A HIDDEN WEBKIT TAB IS NOT A STALL. Safari throttles or pauses audio rendering in a
        *   background tab: the worklet stops draining and the context clock stops while the state
@@ -2731,7 +2734,7 @@ export class AudioPlayer {
       const c = ctx;
       void c.suspend().then(() => c.resume()).catch(() => {});
     }
-    if (this.mediaEl && this.mediaEl.paused && !this._muted) void this.mediaEl.play().catch(() => {});
+    if (!this._quiet && this.mediaEl && this.mediaEl.paused && !this._muted) void this.mediaEl.play().catch(() => {});
     // 2. A fresh playout node (and, below, its feed port to the Worker).
     if (this.node && this.gain) {
       try { this.node.disconnect(); } catch { /* already gone */ }
@@ -2840,6 +2843,7 @@ export class AudioPlayer {
    *  start audio and then tune or interact with the page". Now every play() is issued before any
    *  await, and the context resumes alongside. `interrupted` (Safari's third state) counts too. */
   async resume() {
+    if (this._quiet) return;   // ★ a whole-radio mode with nothing to hear holds the output — see setQuiet
     const plays: Promise<unknown>[] = [];
     if (this.mediaEl && this.mediaEl.paused) plays.push(this.mediaEl.play().catch(() => {}));
     if (this.omEl && this.omEl.paused) plays.push(this.omEl.play().catch(() => {}));
@@ -2863,6 +2867,29 @@ export class AudioPlayer {
     if (this.omEl) this.omEl.muted = m;
   }
   get muted() { return this._muted; }
+
+  /** ★★★ NOTHING TO HEAR, SO LET GO OF THE OUTPUT (Stuart, 2026-10-25: "I switch to the mac and VibeSDR pulls my Airpods
+   *  over for silence"). ADS-B and ISM send no audio (the server mutes them), but the page kept its output RUNNING —
+   *  the context, the playout element, Chromium's silent anchor — and to macOS a running output is an app playing, so
+   *  the AirPods' automatic switching took them for it. Quiet = every element paused and the context suspended; the
+   *  self-heal, the TAP TO START badge and the resume-on-gesture all stand down (an output we stopped is not a stall
+   *  and not a gate). The SOCKET stays open: the server sends nothing on it in these modes, and the two sockets are how
+   *  it counts this listener (landing, the leave grace). Leaving the mode (normally EXIT, a tap) plays it again. */
+  private _quiet = false;
+  get quiet() { return this._quiet; }
+  setQuiet(q: boolean) {
+    if (q === this._quiet) return;
+    this._quiet = q;
+    if (q) {
+      try { this.mediaEl?.pause(); } catch { /* gone */ }
+      try { this.omEl?.pause(); } catch { /* gone */ }
+      try { this.anchorEl?.pause(); } catch { /* gone */ }
+      if (this.ctx && this.ctx.state === 'running') void this.ctx.suspend().catch(() => {});
+    } else {
+      if (this.anchorEl && this.anchorEl.paused) void this.anchorEl.play().catch(() => { /* resumed on the next gesture */ });
+      void this.resume();
+    }
+  }
 
   close() {
     // ★ Stop the output watchdog with the output it watches — an interval that outlives its
