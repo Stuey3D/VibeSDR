@@ -316,7 +316,6 @@ open **http://vibeserversetup.local:48000** from a phone or PC on the same netwo
 run normal setup. Please send:
 
 - whether the name resolved, or whether the box had to be found by its IP;
-- `uname -a`, `free -m` and `systemctl --failed` (over SSH this needs sshd re-enabled, so the HDMI or serial console
-  is easier; the gettys are masked on a Portable, so a console login also needs unmasking first — or simply report
-  what the setup page shows);
+- the admin page's **Download diagnostics** file. A Portable has no login: SSH is off and the console gettys are
+  masked, so the file is the way to see the box;
 - whether Install updates works once.
