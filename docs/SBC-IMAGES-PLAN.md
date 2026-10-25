@@ -236,22 +236,51 @@ Armbian root, with an Armbian step before it and one after (`image/sbc/customise
 evening before its card is public. And under your public-image rule ("full parity"), no card should ship ahead of the
 packages and apps.
 
-## Questions for Stuart
+## Stuart's decisions (2026-10-25, ~01:15)
 
-1. **The name:** `VibeServerSetup.local` (as shipped) or `VibeServer-Setup.local` (as in your message)? See above.
-2. **The Pi 0/1/2 card:** OK to ship `vibeserver-pocket-cpu` and the U-Boot seal in 11.0.11, and rebuild both Pi cards
-   on it rather than on 11.0.10-5?
-3. **SSH on non-Pi Portables:** off (as on the Pi), and the console gettys masked, so no login at all out of the box.
-   Is that right, or do you want an admin-page "enable SSH" switch? It would need the owner to set a password there,
-   typed by them, never generated.
-4. **256 MB boards** (Orange Pi Zero, NanoPi NEO): Portable cards for them, or keep them on the Soft66IP-style DietPi
-   ordinary-server image?
-5. **The Wi-Fi reset file** on boards whose `/boot` is ext4: add a small FAT partition so Windows and Mac owners can
-   use it, or document "Ethernet + the setup page" as the way back instead?
-6. **Which boards next** after the Orange Pi One: the H618 Zero 3 / Zero 2W (popular, risky Wi-Fi), or Le Potato /
-   Orange Pi 5 (Ethernet only, lower risk)? Who has which board?
-7. **Naming of the downloads:** `vibeserver-portable-<board>-<date>.img.xz`, beside the Pi's
-   `vibeserver-pocket-<arch>-<date>`? The Pi files could be renamed to match at the next release.
+1. **The name stays `VibeServerSetup.local`**, with no hyphen. Nothing about it changes.
+2. **11.0.11, a stable VibeServer release, carries both fixes**: `vibeserver-pocket-cpu` and the U-Boot seal. Both Pi
+   cards and the board cards are built from the **published** 11.0.11 package (`image/pocket/fetch-release-deb.sh`).
+3. **Enable SSH** on the admin page, in 11.0.11:
+   - default off;
+   - the owner types the password;
+   - admin-gated;
+   - survives the read-only seal.
+   Built as follows:
+   - the account is the image's own `vibe` login (in sudo; root keeps Debian's no-password-login rule);
+   - the password goes to `chpasswd` on stdin;
+   - only the system's **hash** is kept, on the settings partition, along with the box's host keys;
+   - every boot puts it back and starts sshd;
+   - the switch is not offered while the open setup hotspot is up.
+4. **Boards with 256 MB stay on the DietPi ordinary-server image** (Orange Pi Zero, NanoPi NEO). **A Portable card
+   needs 512 MB or more**; `image/sbc/build.sh` refuses a smaller board and says which image to use instead.
+5. **A small FAT partition** for the forget-the-Wi-Fi file:
+   - **Board cards** get partition 3, `VIBESETUP`, 16 MB of FAT16, with a `README-VibeServer.txt`.
+   - **Pi cards** get no second one. Their boot partition already *is* FAT and every computer can write to it.
+   - **Fixed in passing:** on a Pi Portable that partition is mounted read-only. From the code, the file could never
+     be deleted after a reset, so the box forgot its Wi-Fi at *every* boot. It is now remounted for the one delete.
+   - The file counts in every old place too, and as Notepad's `.txt`.
+   - The settings-partition repair now uses "the partition after root" (3 on a Pi, 2 on a board).
+6. **The most popular boards are built after 11.0.11 is on apt stable**, one at a time on the Lenovo, each boot-tested
+   under emulation:
+   - both Pi cards;
+   - Orange Pi One, PC and Lite;
+   - Orange Pi Zero 3 and Zero 2W;
+   - Le Potato;
+   - Orange Pi 5;
+   - ROCK 5B;
+   - Radxa ZERO 3.
+   Any board whose Armbian image cannot be verified is skipped.
+7. **Download names:** `vibeserver-portable-<board>-<date>`, beside the Pi's `vibeserver-pocket-<arch>-<date>`.
+
+### The H3 cards: one card per board, each from that board's own image
+
+The Orange Pi One's Armbian image is a *stable* 26.8.1 build (kernel 6.18.44). The PC's and the Lite's exist only as
+*community trunk* 26.11.0 builds (kernel 6.18.57). Moving one finished root onto another board's U-Boot would put a
+26.8.1 system under a 26.11 boot loader, with that board's support packages taken from somewhere other than its own
+signed image. Building each card from **its own** signed Armbian image costs about 25 minutes per board and is the
+version Armbian itself tested. So "one build" for the H3 family means one recipe (the same customisation, the same
+checks) run three times, not one root copied three ways.
 
 ## Result: the Orange Pi One build (2026-10-25)
 

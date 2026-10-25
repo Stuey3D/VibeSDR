@@ -61,6 +61,11 @@ case "$ARCH" in
          ELF_MASK='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff' ;;
   *) die "boards.txt: unknown arch '$ARCH' for $BOARD" ;;
 esac
+# ★★★ 512 MB OR MORE (Stuart, 2026-10-25): a Portable carries NetworkManager, avahi, a RAM overlay and the hotspot on top
+#     of the ~205 MB a Pi 2 measured at rest. 256 MB boards stay on the DietPi ordinary-server image.
+if [ "$RAM_MB" -lt 512 ] || [ "$STATUS" = dietpi ]; then
+  die "$NAME has $RAM_MB MB — a Portable card needs 512 MB or more; use the DietPi ordinary-server image (image/soft66ip-dietpi) for this board"
+fi
 ONBOARDING="Ethernet first: VibeServerSetup.local:48000 (no onboard Wi-Fi; a USB Wi-Fi adapter gets the setup hotspot)"
 [ "$WIFI" = none ] || ONBOARDING="open \"VibeServer\" setup hotspot on the onboard $WIFI, and VibeServerSetup.local:48000 on Ethernet"
 OUT_NAME="vibeserver-portable-$BOARD-$(date -u +%Y%m%d)"
