@@ -22,7 +22,7 @@ COPY armhf-toolchain.cmake /opt/armhf-toolchain.cmake
 COPY build-deps.sh /opt/build-deps.sh
 # ★ Two compile jobs, niced: the Mac overheats and the Lenovo is a live receiver.
 ARG DEPS_JOBS=2
-# ★ build-debs-remote.sh passes DEPS_NICE=19 on the Lenovo, which is a live receiver.
+# ★ build-debs-remote.sh passes DEPS_NICE=19 on the Lenovo (a live receiver); 10 and DEPS_JOBS=8 on the Mac.
 ARG DEPS_NICE=10
 RUN JOBS=${DEPS_JOBS} nice -n ${DEPS_NICE} bash /opt/build-deps.sh /opt/vibe-deps armhf
 # ★★★ THE ARMv6 HALF — a RASPBIAN bookworm sysroot (see armv6-toolchain.cmake). `extract` unpacks

@@ -106,21 +106,35 @@ esac
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 WORK="$OUT/work-$BOARD"
-rm -rf "$WORK"; mkdir -p "$WORK"
+rm -rf --one-file-system "$WORK"; mkdir -p "$WORK"
 IMG="$WORK/stage.img"
 R="$WORK/root"
 LOOP=""
 BINFMT_OURS=""
+# ★★★ THIS DELETED THE LENOVO'S /dev (2026-10-25 13:15). run-in-docker.sh gives the container the HOST's /dev
+#     (-v /dev:/dev, for the loop devices), and step 3 bind-mounts it at $R/dev. The build was stopped mid-run, the
+#     umount of a busy $R/dev failed — ignored under set +e — and `rm -rf "$WORK"` walked into the bind mount and
+#     emptied the host's /dev: 7 entries left, the RSP's /dev/bus/usb gone, /dev/null recreated as a plain file by
+#     the next writer. Only a reboot puts it back. So: a busy mount is detached lazily (gone from the tree at once,
+#     released when its last user lets go), nothing is deleted while ANY mount is still under $WORK, and the
+#     delete itself never crosses into another filesystem.
+still_mounted() { awk -v w="$WORK" '$5 == w || index($5, w "/") == 1 { print $5 }' /proc/self/mountinfo; }
 cleanup() {
   set +e
   for m in "$R/proc/cpuinfo" "$R/dev/pts" "$R/dev" "$R/proc" "$R/sys" "$R/run" "$R"; do
-    mountpoint -q "$m" 2>/dev/null && umount "$m"
+    mountpoint -q "$m" 2>/dev/null && { umount "$m" || umount -l "$m"; }
   done
   [ -n "$LOOP" ] && losetup -d "$LOOP" 2>/dev/null
   if [ -n "$BINFMT_OURS" ] && [ -e "/proc/sys/fs/binfmt_misc/$BINFMT_OURS" ]; then
     echo -1 > "/proc/sys/fs/binfmt_misc/$BINFMT_OURS" && echo "==> removed the temporary $BINFMT_OURS binfmt entry"
   fi
-  [ "${KEEP_WORK:-0}" = 1 ] || rm -rf "$WORK"
+  [ "${KEEP_WORK:-0}" = 1 ] && return
+  if [ -n "$(still_mounted)" ]; then
+    echo "!! NOT deleting $WORK — still mounted under it (deleting would reach the host's /dev):" >&2
+    still_mounted | sed 's/^/!!   /' >&2
+    return
+  fi
+  rm -rf --one-file-system "$WORK"
 }
 trap cleanup EXIT
 loop_p1() {   # attach just partition 1 of $IMG (offset loop: no partition scanning needed inside a container)

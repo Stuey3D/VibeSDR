@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-debs-remote.sh — build the VibeServer packages for ALL FOUR architectures on the Lenovo.
+# build-debs-remote.sh — build the VibeServer packages for ALL FOUR architectures: x86 on the Lenovo, ARM on this Mac.
 #
 #   scripts/build-debs-remote.sh --rev 2                          # amd64 i386 armhf arm64, version <cmake>-2
 #   scripts/build-debs-remote.sh --rev 0~test1 --arch i386        # a test package, never published
@@ -7,17 +7,24 @@
 #   VIBE_X86_32_FLAGS='-march=i686 -msse2 -mfpmath=sse -mtune=bonnell' scripts/build-debs-remote.sh --rev 1+t --arch i386
 #   VIBE_PGO=generate VIBE_PGO_DIR=pgo-i386 scripts/build-debs-remote.sh --rev 1+pgo --arch i386   # instrumented binaries
 #   VIBE_PGO=use      VIBE_PGO_DIR=pgo-i386 scripts/build-debs-remote.sh --rev 1+atom2 --arch i386 # package built from them
+#   VIBE_ARM_ON_LENOVO=1 scripts/build-debs-remote.sh --rev 2     # BACKUP: the Mac's Docker is down — Lenovo builds all four
 #
 # ★★★ A RELEASE DOES NOT CALL THIS BY HAND — scripts/publish-apt-remote.sh does, with the revision the
-#     repository expects, then indexes on the Lenovo and signs on the Mac. Run this directly for test and
-#     hand-out builds (a `0~…` or `…+tag` revision).
+#     repository expects, then indexes and signs on the Mac. Run this directly for test and hand-out builds
+#     (a `0~…` or `…+tag` revision).
 #
-# ★★★ WHY THE LENOVO BUILDS EVERYTHING (Stuart, 2026-10-18: "the docker build can we do that remotely on the
-#     lenovo going forward that has loads of space"). The Mac's Docker VM (~/.colima, 13 GB) was deleted to
-#     free disk. The Lenovo (192.168.86.13, Ubuntu 24.04, x86-64, Docker, ~50 GB free) now builds:
-#       amd64, i386   natively — a linux/amd64 or linux/386 container on an x86-64 CPU (Dockerfile.build)
-#       armhf         cross, in an amd64 container (Dockerfile.cross-armhf; + the ARMv6 binary)
-#       arm64         cross, in an amd64 container (Dockerfile.cross-arm64) — used to be native on the Mac
+# ★★★ WHO BUILDS WHAT (Stuart, 2026-10-25, on the new M5 Pro with 1 TB: "bring all the builds back to the mac
+#     rather than relying on the Lenovo, we will keep X86 builds on the Lenovo for speed, but the mac for
+#     everything else as using the lenovo was causing some delays whilst it was working"). So:
+#       amd64, i386   on the LENOVO, natively — a linux/amd64 or linux/386 container on an x86-64 CPU
+#                     (Dockerfile.build). This Mac cannot run x86 code without emulation.
+#       arm64         on THIS MAC, natively — a linux/arm64 container (Dockerfile.build), as before 2026-10-18
+#       armhf         on THIS MAC, cross, in a linux/arm64 container (Dockerfile.cross-armhf; + the ARMv6 binary).
+#                     Apple Silicon has no 32-bit ARM mode, so armhf is a cross build here exactly as on the Lenovo.
+#     The two machines build AT THE SAME TIME, each one architecture after another; the output of each is
+#     prefixed with its name. The Lenovo's half is unchanged (nice 19, 4 jobs) — it is still a live receiver.
+#     The Mac's Docker is colima (8 CPUs, 12 GB, 100 GB disk — `colima start` brings it back with those).
+#     The Lenovo's cross images (Dockerfile.cross-arm64/-armhf on linux/amd64) are kept for VIBE_ARM_ON_LENOVO=1.
 #     ✗ NEVER an emulated container (qemu): amd64 under qemu on the Mac segfaulted the compiler on a
 #       different file every run (3 failures of 3). An arm64 container on the Lenovo would be the same.
 #     The recipe inside each container is ONE script for all four: vibeserver/linux/build-deb.sh.
@@ -40,8 +47,10 @@
 #   file after its object's absolute path.
 # ★ VIBE_REMOTE_SRC_DIR: the directory on the build host the tree is synced to (default vibesdr-src). Give a
 #   test build its own, so it cannot pull the tree out from under somebody else's build there.
-# ★ The .debs come back into vibeserver/build/prebuilt/ (gitignored) AND stay in ~/vibeout/<arch>/ on the
-#   Lenovo, where publish-apt-remote.sh indexes them. Build trees never leave the container.
+# ★ VIBE_LOCAL_SRC_DIR: the same, on this Mac (default ~/vibesdr-src). build-deb.sh COPIES the whole mounted
+#   tree, so it gets the same trimmed copy the Lenovo does — never the checkout with its 9 GB of node_modules.
+# ★ Every .deb ends up in vibeserver/build/prebuilt/ (gitignored), where publish-apt-remote.sh indexes it; the
+#   build's logs stay in ~/vibeout/<arch>/ on whichever machine built it. Build trees never leave the container.
 set -euo pipefail
 
 HOST="${VIBE_REMOTE_HOST:-${VIBE_X86_HOST:-192.168.86.13}}"
@@ -70,6 +79,18 @@ for A in $ARCHES; do
 done
 [ -z "$PGO" ] || [ "$ARCHES" = amd64 ] || [ "$ARCHES" = i386 ] || { echo "!! VIBE_PGO is for ONE x86 architecture"; exit 1; }
 
+# ── which machine builds which ─────────────────────────────────────────────────────────────────
+REMOTE_ARCHES=""; LOCAL_ARCHES=""
+for A in $ARCHES; do
+  case "$A:${VIBE_ARM_ON_LENOVO:-}" in
+    amd64:*|i386:*|*:1) REMOTE_ARCHES="$REMOTE_ARCHES $A" ;;
+    *)                  LOCAL_ARCHES="$LOCAL_ARCHES $A" ;;
+  esac
+done
+REMOTE_ARCHES="${REMOTE_ARCHES# }"; LOCAL_ARCHES="${LOCAL_ARCHES# }"
+LSRC="${VIBE_LOCAL_SRC_DIR:-$HOME/vibesdr-src}"
+LJOBS="${VIBE_LOCAL_JOBS:-8}"
+
 # ── a link that fails fast ─────────────────────────────────────────────────────────────────────
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 rsh() {   # rsh <remote command> — exit 255 is ssh's own failure, never the remote command's
@@ -84,28 +105,51 @@ rsh() {   # rsh <remote command> — exit 255 is ssh's own failure, never the re
 }
 rsync_to_host() { rsync -a --timeout=60 -e "ssh $SSH_OPTS" "$@" || { echo "!! rsync to/from $HOST failed (exit $?)" >&2; return 1; }; }
 
-rsh true || { echo "!! cannot reach $HOST"; exit 1; }
-[ -n "$SYNC_ONLY" ] || echo "==> $HOST before: $(rsh uptime)"
+if [ -n "$REMOTE_ARCHES" ]; then
+  rsh true || { echo "!! cannot reach $HOST"; exit 1; }
+  [ -n "$SYNC_ONLY" ] || echo "==> $HOST before: $(rsh uptime)"
+fi
+# ★ The Mac's half needs colima running. Started with no size flags: it keeps what ~/.colima/default/colima.yaml says.
+if [ -n "$LOCAL_ARCHES" ] && [ -z "$SYNC_ONLY" ]; then
+  command -v docker >/dev/null || { echo "!! no docker on this Mac (brew install colima docker)"; exit 1; }
+  docker info >/dev/null 2>&1 || { echo "==> starting colima"; colima start >/dev/null || { echo "!! colima would not start"; exit 1; }; }
+  [ "$(docker info --format '{{.Architecture}}')" = aarch64 ] || { echo "!! this Mac's Docker is not arm64 — refusing (it would emulate)"; exit 1; }
+fi
 
 # ★ No SDRplay headers to stage any more (2026-10-21): the API headers are OpenRSP's, committed in
 #   vendor/openrsp/include, and the images no longer COPY a sdrplay-inc/ directory.
 # ★ And the bundled tunnel: CMake refuses a package without it, so check here rather than after a build.
 bash "$SRC_DIR/tools/cloudflared-desktop/fetch.sh" >/dev/null
 
-echo "==> syncing the tree to $HOST:~/$RSRC"
-rsync_to_host --delete --exclude node_modules --exclude .git --exclude 'android/app/build' \
-  --exclude 'android/app/.cxx' --exclude 'ios/Pods' --exclude 'vibeserver/build' \
-  --exclude 'vibeserver/build-*' --exclude 'web/dist' --exclude .claude --exclude spike \
-  --exclude tvos --exclude lite --exclude '*.zip' --exclude '*.raw' --exclude '*.iq16' --exclude '*.cf32' \
-  --exclude fuzz-corpus --exclude .armhf-out --exclude '.prebuilt-*' \
-  "$SRC_DIR/" "$HOST:$RSRC/"
+# ★ ONE exclude list for both copies, so the Mac and the Lenovo build from the same tree.
+EXCLUDES=(--exclude node_modules --exclude .git --exclude 'android/app/build'
+  --exclude 'android/app/.cxx' --exclude 'ios/Pods' --exclude 'vibeserver/build'
+  --exclude 'vibeserver/build-*' --exclude 'web/dist' --exclude .claude --exclude spike
+  --exclude tvos --exclude lite --exclude '*.zip' --exclude '*.raw' --exclude '*.iq16' --exclude '*.cf32'
+  --exclude fuzz-corpus --exclude .armhf-out --exclude '.prebuilt-*')
+if [ -n "$REMOTE_ARCHES" ]; then
+  echo "==> syncing the tree to $HOST:~/$RSRC"
+  rsync_to_host --delete "${EXCLUDES[@]}" "$SRC_DIR/" "$HOST:$RSRC/"
+fi
+if [ -n "$LOCAL_ARCHES" ]; then
+  echo "==> copying the tree to $LSRC"
+  mkdir -p "$LSRC"
+  rsync -a --delete "${EXCLUDES[@]}" "$SRC_DIR/" "$LSRC/"
+fi
 
 [ -z "$SYNC_ONLY" ] || exit 0
 
 OUT="$SRC_DIR/vibeserver/build/prebuilt"
 mkdir -p "$OUT"
-DEBS=""
-for A in $ARCHES; do
+PGOMNT=""
+case "$PGO" in
+  generate) PGOMNT="-v \$HOME/$PGO_DIR:/pgo"; rsh "mkdir -p ~/$PGO_DIR" ;;
+  use)      PGOMNT="-v \$HOME/$PGO_DIR:/pgo:ro" ;;
+esac
+
+# ── the Lenovo's half: one architecture after another, nice 19, 4 jobs ─────────────────────────
+build_remote() {   # build_remote <arch>
+  local A="$1" IMAGE DF PLAT NAME ENVS DEB
   case "$A" in
     amd64) IMAGE=vibeserver-build:bookworm-amd64; DF=Dockerfile.build;        PLAT=linux/amd64 ;;
     i386)  IMAGE=vibeserver-build:bookworm-i386;  DF=Dockerfile.build;        PLAT=linux/386 ;;
@@ -114,13 +158,8 @@ for A in $ARCHES; do
   esac
   echo "==> [$A] build image $IMAGE ($DF, $PLAT — native on $HOST, never emulated)"
   rsh "cd ~/$RSRC/vibeserver/linux && nice -n 19 docker build --platform $PLAT --build-arg DEPS_NICE=19 -q \
-    -f $DF -t $IMAGE . >/dev/null"
+    -f $DF -t $IMAGE . >/dev/null" || return 1
   echo "==> [$A] build + package, revision $REV"
-  PGOMNT=""
-  case "$PGO" in
-    generate) PGOMNT="-v \$HOME/$PGO_DIR:/pgo"; rsh "mkdir -p ~/$PGO_DIR" ;;
-    use)      PGOMNT="-v \$HOME/$PGO_DIR:/pgo:ro" ;;
-  esac
   NAME="vibe-build-$A"
   ENVS="-e JOBS=4 -e VIBE_PGO=$(printf %q "$PGO") -e VIBE_EXTRA_CFLAGS=$(printf %q "${VIBE_EXTRA_CFLAGS:-}")"
   ENVS="$ENVS -e VIBE_X86_32_FLAGS=$(printf %q "${VIBE_X86_32_FLAGS:-}")"
@@ -128,17 +167,75 @@ for A in $ARCHES; do
        rm -rf ~/vibeout/$A && mkdir -p ~/vibeout/$A && \
        docker run --rm --name $NAME --platform $PLAT --cpus 4 \
          -v \$HOME/$RSRC:/work/VibeSDR:ro -v \$HOME/vibeout/$A:/out $PGOMNT $ENVS \
-         $IMAGE nice -n 19 bash /work/VibeSDR/vibeserver/linux/build-deb.sh $A $(printf %q "$REV") /out"
+         $IMAGE nice -n 19 bash /work/VibeSDR/vibeserver/linux/build-deb.sh $A $(printf %q "$REV") /out" || return 1
   if [ "$PGO" = generate ]; then
     echo "==> [$A] instrumented binaries in $HOST:~/vibeout/$A/pgogen/ — train them (counters -> ~/$PGO_DIR), then VIBE_PGO=use"
-    continue
+    return 0
   fi
   DEB="$(rsh "ls ~/vibeout/$A/vibeserver_*_$A.deb" | head -1)"
-  [ -n "$DEB" ] || { echo "!! [$A] no package came out"; exit 1; }
+  [ -n "$DEB" ] || { echo "!! [$A] no package came out"; return 1; }
   rsync_to_host "$HOST:$DEB" "$OUT/"
-  DEBS="$DEBS $OUT/$(basename "$DEB")"
+}
+
+# ── this Mac's half: native arm64 containers, nice 10 ──────────────────────────────────────────
+# ★ No --platform juggling: both images are linux/arm64, the VM's own architecture (armhf is a cross COMPILER
+#   in an arm64 container, not an armhf container). The image's dependency build is niced like the compile.
+build_local() {   # build_local <arch>
+  local A="$1" IMAGE DF NAME LOUT="$HOME/vibeout/$1" DEB
+  case "$A" in
+    arm64) IMAGE=vibeserver-build:bookworm-arm64; DF=Dockerfile.build ;;
+    armhf) IMAGE=vibeserver-cross:bookworm-armhf; DF=Dockerfile.cross-armhf ;;
+  esac
+  echo "==> [$A] build image $IMAGE ($DF, linux/arm64 — native on this Mac)"
+  ( cd "$LSRC/vibeserver/linux" && nice -n 10 docker build --platform linux/arm64 --build-arg DEPS_NICE=10 \
+      --build-arg DEPS_JOBS="$LJOBS" -q -f "$DF" -t "$IMAGE" . >/dev/null ) || return 1
+  echo "==> [$A] build + package, revision $REV"
+  NAME="vibe-build-$A"
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  rm -rf "$LOUT" && mkdir -p "$LOUT"
+  docker run --rm --name "$NAME" --platform linux/arm64 \
+    -v "$LSRC":/work/VibeSDR:ro -v "$LOUT":/out -e JOBS="$LJOBS" \
+    -e VIBE_EXTRA_CFLAGS="${VIBE_EXTRA_CFLAGS:-}" \
+    "$IMAGE" nice -n 10 bash /work/VibeSDR/vibeserver/linux/build-deb.sh "$A" "$REV" /out || return 1
+  DEB="$(ls "$LOUT"/vibeserver_*_"$A".deb 2>/dev/null | head -1)"
+  [ -n "$DEB" ] || { echo "!! [$A] no package came out"; return 1; }
+  cp "$DEB" "$OUT/"
+}
+
+# ── both at once ───────────────────────────────────────────────────────────────────────────────
+# ★ Each half runs in its own subshell and writes its exit status to a file — `wait` on a pipeline would
+#   report sed's status, not the build's. The first failure stops that machine's half; the other half is
+#   allowed to finish (a half-built set is never published: publish-apt-remote.sh checks every package).
+RC="$(mktemp -d "${TMPDIR:-/tmp}/vibe-build-rc.XXXXXX")"
+group() {   # group <remote|local> <arches>
+  local where="$1" A
+  for A in $2; do "build_$where" "$A" || { echo "!! [$A] FAILED on $where"; echo 1 > "$RC/$where"; return; }; done
+  echo 0 > "$RC/$where"
+}
+PIDS=""
+if [ -n "$REMOTE_ARCHES" ]; then
+  ( group remote "$REMOTE_ARCHES" 2>&1 | sed -u 's/^/  lenovo │ /' ) &
+  PIDS="$PIDS $!"
+fi
+if [ -n "$LOCAL_ARCHES" ]; then
+  ( group local "$LOCAL_ARCHES" 2>&1 | sed -u 's/^/  mac    │ /' ) &
+  PIDS="$PIDS $!"
+fi
+for p in $PIDS; do wait "$p" || true; done
+FAILED=""
+[ -z "$REMOTE_ARCHES" ] || [ "$(cat "$RC/remote" 2>/dev/null)" = 0 ] || FAILED="$FAILED lenovo($REMOTE_ARCHES)"
+[ -z "$LOCAL_ARCHES" ]  || [ "$(cat "$RC/local" 2>/dev/null)" = 0 ]  || FAILED="$FAILED mac($LOCAL_ARCHES)"
+rm -rf "$RC"
+[ -z "$FAILED" ] || { echo "!! build FAILED on:$FAILED — nothing was published"; exit 1; }
+[ "$PGO" != generate ] || exit 0
+
+[ -z "$REMOTE_ARCHES" ] || echo "==> $HOST after: $(rsh uptime)"
+DEBS=""
+for A in $ARCHES; do
+  D="$(ls -t "$OUT"/vibeserver_*-"$REV"_"$A".deb 2>/dev/null | head -1)"
+  [ -n "$D" ] || { echo "!! [$A] vibeserver_*-${REV}_$A.deb is not in $OUT"; exit 1; }
+  DEBS="$DEBS $D"
 done
-echo "==> $HOST after: $(rsh uptime)"
 echo "==> built:$DEBS"
 # ★ A test revision (0~…, …+atom1 — anything not a plain number) must never reach the pool: it is a hand-out
 #   to one tester. Say so instead of printing a publish line someone might paste.

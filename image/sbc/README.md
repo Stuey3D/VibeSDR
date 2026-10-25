@@ -21,7 +21,7 @@ The plan, which board families exist, and why each board needs its own card: [`d
 | `boot-test.sh` | Boots a finished card under emulation and checks the Portable comes up |
 | `customise-armbian.sh` | The Armbian half (`pre` / `post`) around the Pi image's own `customise.sh` |
 
-## Build (on the Lenovo, or any Linux Docker host)
+## Build (on the Mac in colima — the normal place from 2026-10-25 — or the Lenovo, or any Linux Docker host)
 
 ```bash
 # 1. The board's Armbian Trixie minimal image, with its .sha and .asc (Armbian's signature is checked by build.sh)
@@ -29,7 +29,7 @@ B=orangepione
 IMG=$(image/sbc/fetch-armbian.sh $B base)          # prints base/Armbian_…_minimal.img.xz
 
 # 2. Build (about 25 minutes for an armhf board on 2 CPUs; needs ~7 GB free beside the output)
-sudo image/sbc/run-in-docker.sh $B "$IMG" out
+sudo image/sbc/run-in-docker.sh $B "$IMG" out      # on the Mac: no sudo (colima's docker is yours)
 ls out/   # vibeserver-portable-<board>-<date>.img.xz + .sha256, .manifest.txt, .packages.txt, .partition-table.txt
 
 # 3. Boot it under emulation (systemd-nspawn + QEMU): units, hostname, the front door on :48000

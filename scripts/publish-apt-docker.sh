@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # publish-apt-docker.sh — build and publish VibeServer from the Mac, in a bookworm container.
 #
-# ★★★ THIS IS THE BACKUP ROUTE (2026-10-18). THE NORMAL ONE IS scripts/publish-apt-remote.sh: every package
-#     is built and indexed on the Lenovo (192.168.86.13), and the Mac only signs, commits and pushes. Use this
-#     script only when the Lenovo is unavailable. Both run the same publish-apt.sh, so the rules are the same.
+# ★★★ THIS IS THE OLD ROUTE. THE NORMAL ONE IS scripts/publish-apt-remote.sh (2026-10-25): x86 built on the Lenovo,
+#     ARM built, indexed, signed and pushed on the Mac. If the Lenovo is down, that script's `--arch 'arm64 armhf'`
+#     does what this one would. Both run the same publish-apt.sh, so the rules are the same.
+# ★ The colima notes below are from the old 228 GB Mac; the M5 Pro's VM is 8 CPUs / 12 GB / 100 GB and stays.
 # ★★★ ~/.colima WAS DELETED ON 2026-10-18 to free 13 GB, so this route needs its VM recreated first —
 #     SMALL, as explained further down (a 40 GB disk once took the Mac to 134 MB free):
 #         colima start --cpu 4 --memory 4 --disk 12

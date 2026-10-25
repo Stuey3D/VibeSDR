@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# image/sbc/run-in-docker.sh — run build.sh in a throwaway privileged Debian container on a Linux Docker host
-# (the Lenovo build box, 192.168.86.13), so nothing is installed on the host itself.
+# image/sbc/run-in-docker.sh — run build.sh in a throwaway privileged Debian container on a Linux Docker host, so
+# nothing is installed on the host itself. THE MAC (colima, arm64) from 2026-10-25 — arm64 boards then run natively
+# in the chroot, armhf (Pi) under qemu-arm; loop devices on the virtiofs-shared output folder were checked. The
+# Lenovo (192.168.86.13) still works, with qemu for both.
 #
 #   image/sbc/run-in-docker.sh boot-test <finished.img.xz> <output-dir>   boot a finished card under emulation
 #   image/sbc/run-in-docker.sh <board> <base.img.xz> <output-dir>     (env passes through: VIBESERVER_DEB COUNTRY NO_MAPS KEEP_WORK)
@@ -9,6 +11,8 @@
 #    another container from this script is running on the host.
 # ★★ THE HOST IS NOT CHANGED. --privileged is needed for loop devices and binfmt_misc; build.sh registers its qemu
 #    binfmt entry only if none exists, and removes it at exit. No AppArmor change, no package on the host.
+# ★★★ -v /dev:/dev IS THE HOST'S /dev (the VM's, on the Mac). build.sh bind-mounts it into the card's root, and a
+#     delete through that bind mount emptied the Lenovo's /dev on 2026-10-25 — see the guard in build.sh's cleanup.
 # ★ The repository is mounted read-only; only <output-dir> (and the base image's directory, read-only) is shared.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

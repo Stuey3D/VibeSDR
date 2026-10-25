@@ -13,8 +13,8 @@
 #    is backward compatible, so a binary built against 2.36 runs on 2.41 but never the reverse.
 #    Do not "update" this to a newer base image.
 #
-# ★ arm64 USED to be built from this file natively on Apple Silicon. Since 2026-10-18 it is cross-built on the
-#   Lenovo (Dockerfile.cross-arm64); this file still serves arm64 on the BACKUP route (publish-apt-docker.sh).
+# ★ arm64 IS built from this file natively on Apple Silicon again (2026-10-25, the M5 Pro — linux/arm64 in colima).
+#   10-18 → 10-25 it was cross-built on the Lenovo (Dockerfile.cross-arm64), which is now the VIBE_ARM_ON_LENOVO=1 backup.
 # ★★ amd64 AND i386 FROM THIS SAME FILE, on the Lenovo (scripts/build-debs-remote.sh): `--platform
 #    linux/386` takes bookworm's i386 image and every library below for i386, natively — an x86-64
 #    CPU runs 32-bit code directly. ONE recipe for every architecture, so the i386 package cannot
@@ -69,7 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY build-deps.sh /opt/build-deps.sh
 # ★ Two compile jobs, niced: the Mac overheats and the Lenovo is a live receiver.
 ARG DEPS_JOBS=2
-# ★ build-debs-remote.sh passes DEPS_NICE=19 on the Lenovo, which is a live receiver.
+# ★ build-debs-remote.sh passes DEPS_NICE=19 on the Lenovo (a live receiver); 10 and DEPS_JOBS=8 on the Mac.
 ARG DEPS_NICE=10
 RUN JOBS=${DEPS_JOBS} nice -n ${DEPS_NICE} bash /opt/build-deps.sh /opt/vibe-deps native
 

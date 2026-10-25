@@ -3,10 +3,10 @@
 #
 #   build-deb.sh <amd64|i386|armhf|arm64> <rev> <outdir>
 #
-# Run by scripts/build-debs-remote.sh on the Lenovo, never by hand on a host — the image IS the build root:
+# Run by scripts/build-debs-remote.sh (x86 on the Lenovo, ARM on the Mac), never by hand on a host — the image IS the build root:
 #   amd64 / i386  Dockerfile.build, --platform linux/amd64 / linux/386 (native on an x86-64 CPU)
-#   armhf         Dockerfile.cross-armhf on linux/amd64 (cross; carries the ARMv6 build in lib/vibeserver/armv6)
-#   arm64         Dockerfile.cross-arm64 on linux/amd64 (cross)
+#   armhf         Dockerfile.cross-armhf on linux/arm64 (Mac) or linux/amd64 (cross either way; carries the ARMv6 build in lib/vibeserver/armv6)
+#   arm64         Dockerfile.build on linux/arm64 (native, on the Mac) or Dockerfile.cross-arm64 on linux/amd64 (cross)
 # The source is read from /work/VibeSDR (mounted read-only) and COPIED to /build first.
 #
 # Environment (all optional):
@@ -47,9 +47,15 @@ case "$ARCH" in
     export DEB_HOST_ARCH=armhf DEB_HOST_MULTIARCH=arm-linux-gnueabihf DEB_HOST_GNU_TYPE=arm-linux-gnueabihf
     WANT_ELF="ARM, EABI5" ;;
   arm64)
-    [ -f /opt/arm64-toolchain.cmake ] || fail "not the arm64 cross image (Dockerfile.cross-arm64)"
-    CROSS=(-DCMAKE_TOOLCHAIN_FILE=/opt/arm64-toolchain.cmake)
-    export DEB_HOST_ARCH=arm64 DEB_HOST_MULTIARCH=aarch64-linux-gnu DEB_HOST_GNU_TYPE=aarch64-linux-gnu
+    # ★ TWO WAYS (2026-10-25): NATIVE in Dockerfile.build on Apple Silicon (the normal route again), or CROSS in
+    #   Dockerfile.cross-arm64 on the Lenovo (VIBE_ARM_ON_LENOVO=1). The cross image is told apart by its toolchain
+    #   file; anything else must itself be arm64, the same rule as the x86 branch above.
+    if [ -f /opt/arm64-toolchain.cmake ]; then
+      CROSS=(-DCMAKE_TOOLCHAIN_FILE=/opt/arm64-toolchain.cmake)
+      export DEB_HOST_ARCH=arm64 DEB_HOST_MULTIARCH=aarch64-linux-gnu DEB_HOST_GNU_TYPE=aarch64-linux-gnu
+    else
+      [ "$(dpkg --print-architecture)" = arm64 ] || fail "neither the arm64 cross image nor an arm64 container"
+    fi
     WANT_ELF="ARM aarch64" ;;
   *) fail "unknown architecture (amd64, i386, armhf, arm64)" ;;
 esac

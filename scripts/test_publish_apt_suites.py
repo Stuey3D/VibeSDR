@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ★★★ THE APT REPOSITORY'S TWO SUITES (2026-10-22, "Receive beta updates"): scripts/publish-apt.sh — the indexer both
-#     publish routes run — exercised for real in its index-only mode (what publish-apt-remote.sh runs on the Lenovo),
+#     publish routes run — exercised for real in its index-only mode (what publish-apt-remote.sh runs on the Mac, in Docker),
 #     on a scratch repository, with the Debian tools STUBBED (dpkg, dpkg-deb, dpkg-scanpackages, apt-ftparchive: none
 #     exist on the Mac). The stubs index what is on disk the way the real ones do; what is under test is the script's
 #     own logic:
@@ -11,7 +11,7 @@
 #         suite (a run of betas never prunes a stable package);
 #       · the landing page shows the stable version AND the beta line, whichever suite published last;
 #       · VIBE_SUITE other than stable/beta is refused.
-#     ★ NOT covered (needs the Lenovo, Docker and the signing key): the real dpkg-scanpackages/apt-ftparchive output,
+#     ★ NOT covered (needs Docker and the signing key): the real dpkg-scanpackages/apt-ftparchive output,
 #       signing, and the remote wrapper's sync/verify steps. No network, no key, nothing outside a temp directory.
 import os
 import re

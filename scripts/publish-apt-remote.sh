@@ -13,31 +13,34 @@
 #     here and lands on every machine: a beta suite takes only a prerelease version (12.0.0~beta1), and the stable
 #     suite REFUSES a ~beta version — that would offer the beta to every server in the world.
 #
-# ★★★ WHO DOES WHAT (Stuart, 2026-10-18: "the docker build can we do that remotely on the lenovo going forward
-#     that has loads of space"). The Mac's Docker VM is gone. So:
-#       the LENOVO (192.168.86.13)  BUILDS all four packages (scripts/build-debs-remote.sh — amd64/i386 native,
-#                                   armhf/arm64 cross, all in bookworm containers) and INDEXES them: a copy of the
-#                                   apt repository is synced over, scripts/publish-apt.sh runs in a bookworm
-#                                   container with VIBE_INDEX_ONLY=1 (pool, prune, Packages, Release, page).
-#       the MAC                     runs the gates, SIGNS the Release that comes back, commits, and pushes.
-#     The Mac has no dpkg tools, which is why the index cannot be built here.
+# ★★★ WHO DOES WHAT (Stuart, 2026-10-25, on the new M5 Pro: "keep X86 builds on the Lenovo for speed, but the mac
+#     for everything else as using the lenovo was causing some delays whilst it was working"). So:
+#       the LENOVO (192.168.86.13)  BUILDS amd64 + i386, natively, in bookworm containers — nothing else.
+#       the MAC                     BUILDS arm64 (native) + armhf (cross) in colima AT THE SAME TIME
+#                                   (scripts/build-debs-remote.sh), then asks publish-apt.sh which revision each
+#                                   architecture is owed, INDEXES (publish-apt.sh VIBE_INDEX_ONLY=1 in the arm64
+#                                   bookworm image, straight into $APT_DIR), runs the gates, SIGNS, commits, pushes.
+#     The apt repository never leaves the Mac now; only the source tree goes to the Lenovo, and only the two x86
+#     packages come back. (2026-10-18 → 10-25 the Lenovo built and indexed all four — the old Mac had no room.)
+#     If the Lenovo is down: `--arch 'arm64 armhf'` publishes the ARM half (and warns, as any partial publish does).
 # ★★★ THE SIGNING KEY NEVER LEAVES THE MAC (security audit 2026-10-03). It is read from
 #     ~/Documents/VibeSDR-keys (VIBESERVER_SIGNING_KEY) into a THROWAWAY GNUPGHOME that is deleted on every exit,
 #     success or failure. Nothing key-shaped is ever written to the Lenovo — it only ever sees an UNSIGNED Release.
-# ★★ THE BACKUP is scripts/publish-apt-docker.sh, for when the Lenovo is unavailable (it builds on the Mac and
-#    needs colima recreated first). Both routes run the same publish-apt.sh, so the rules cannot drift:
+# ★★ THE BACKUP for a Mac whose Docker will not run is VIBE_ARM_ON_LENOVO=1 (the Lenovo cross-builds the ARM
+#    half too, as it did 10-18 → 10-25). publish-apt-docker.sh is the older all-on-the-Mac route. Every route
+#    runs the same publish-apt.sh, so the rules cannot drift:
 #    per-arch revision high-water mark, KEEP=3 prune per arch, Release naming EVERY architecture in the pool,
 #    install.sh copied to the root, the page written from the signed indexes.
 # ★★ ALL FOUR ARCHITECTURES BY DEFAULT — a stale architecture is invisible from the publishing end (apt on the
 #    machine left behind reports no updates and no error). --arch exists for a genuine emergency.
 # ★ The Lenovo is a LIVE RECEIVER: nice 19, ≤4 jobs, --rm containers; ssh/rsync fail within a minute if its
 #   Wi-Fi drops. Nothing is published unless every step got through, and nothing is pushed on --dry-run.
+# ★ The Mac's Docker is colima (8 CPUs, 12 GB, 100 GB disk, in ~/.colima/default/colima.yaml); started if it is not.
 set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${VIBE_REMOTE_HOST:-192.168.86.13}"
 RSRC="${VIBE_REMOTE_SRC_DIR:-vibesdr-src}"
-RAPT="${VIBE_REMOTE_APT_DIR:-vibesdr-apt}"     # the Lenovo's working copy of the repository (no .git)
 APT_DIR="${APT_DIR:-$HOME/VibeServer}"
 KEY_FILE="${VIBESERVER_SIGNING_KEY:-$HOME/Documents/VibeSDR-keys/vibesdr-apt-signing-key.asc}"
 GPG="${GPG:-/opt/homebrew/bin/gpg}"
@@ -91,6 +94,10 @@ if ! git -C "$SRC_DIR" diff --quiet -- "$_page"; then
   exit 1
 fi
 bash -n "$SRC_DIR/scripts/install.sh" || { echo "!! scripts/install.sh has a syntax error"; exit 1; }
+# ★ The revision lookup and the index run in this Mac's Docker, whatever is being built where.
+command -v docker >/dev/null || { echo "!! no docker on this Mac (brew install colima docker)"; exit 1; }
+docker info >/dev/null 2>&1 || { echo "==> starting colima"; colima start >/dev/null || { echo "!! colima would not start"; exit 1; }; }
+[ "$(docker info --format '{{.Architecture}}')" = aarch64 ] || { echo "!! this Mac's Docker is not arm64 — refusing"; exit 1; }
 
 # ★★ THE KEY, checked before the long build — and the installer must name it (KEY_FPR in scripts/install.sh),
 #    or the one-liner would refuse the repository on every machine.
@@ -106,7 +113,7 @@ cleanup() {
   "$GPGCONF" --kill all >/dev/null 2>&1 || true
   rm -rf "$GNUPGHOME" "$WORK"
   if [ -n "$SYNCED_BACK" ] && [ "${_ok:-}" != 1 ]; then
-    echo "!! stopped after the index came back — $APT_DIR is modified and UNSIGNED/uncommitted. To discard:"
+    echo "!! stopped after indexing — $APT_DIR is modified and UNSIGNED/uncommitted. To discard:"
     echo "!!   git -C $APT_DIR reset --hard && git -C $APT_DIR clean -fd"
   fi
 }
@@ -126,34 +133,18 @@ echo "==> signing key $FPR (throwaway keyring on this Mac only)"
 # ★ A stale clone would compute revisions that are already public. ff-only: never merge anything here.
 git -C "$APT_DIR" pull --ff-only -q || { echo "!! could not fast-forward $APT_DIR — refusing"; exit 1; }
 
-# ── the link ───────────────────────────────────────────────────────────────────────────────────
-SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
-rsh() {
-  local rc=0
-  # shellcheck disable=SC2086
-  ssh $SSH_OPTS "$HOST" "$@" || rc=$?
-  [ "$rc" != 255 ] || echo "!! ssh to $HOST failed or DROPPED (exit 255) — nothing was published" >&2
-  return "$rc"
-}
-rsync_host() { rsync -a --timeout=60 -e "ssh $SSH_OPTS" "$@" || { echo "!! rsync with $HOST failed (exit $?) — nothing was published" >&2; return 1; }; }
-rsh true || { echo "!! cannot reach $HOST"; exit 1; }
-echo "==> $HOST: $(rsh uptime)"
-HUID="$(rsh id -u)"; HGID="$(rsh id -g)"
-
-# ── 1. the tree and the repository go over ─────────────────────────────────────────────────────
-VIBE_REMOTE_HOST="$HOST" VIBE_REMOTE_SRC_DIR="$RSRC" bash "$SRC_DIR/scripts/build-debs-remote.sh" --sync-only
-echo "==> syncing $APT_DIR (without .git) to $HOST:~/$RAPT"
-rsync_host --delete --exclude .git "$APT_DIR/" "$HOST:$RAPT/"
-
-# ── 2. which revision each architecture is owed ────────────────────────────────────────────────
+# ★ No link check here: build-debs-remote.sh checks the Lenovo before it starts, and only when an x86
+#   architecture is being built.
+UIDGID="$(id -u):$(id -g)"
+# ── 1. which revision each architecture is owed ────────────────────────────────────────────────
 # ★★ ASKED OF publish-apt.sh ITSELF (--next-rev), so the high-water-mark rule exists once. Plain bookworm-slim:
 #    the question needs only grep and sed, and it is asked before any build image exists.
-RUNC="docker run --rm --user $HUID:$HGID -e HOME=/tmp -v \$HOME/$RSRC:/src:ro"
+RUNC=(docker run --rm --user "$UIDGID" -e HOME=/tmp -v "$SRC_DIR":/src:ro)
 declare_ver() { eval "VER_$1=\$2"; }
 getver() { eval "echo \"\${VER_$1:-}\""; }
 for A in $ARCHES; do
-  v="$(rsh "$RUNC -v \$HOME/$RAPT:/apt:ro -e APT_DIR=/apt -e VIBE_PUBLISH_ARCH=$A -e VIBE_SUITE=$SUITE debian:bookworm-slim \
-            bash /src/scripts/publish-apt.sh --next-rev" | tail -1)"
+  v="$("${RUNC[@]}" -v "$APT_DIR":/apt:ro -e APT_DIR=/apt -e VIBE_PUBLISH_ARCH="$A" -e VIBE_SUITE="$SUITE" \
+         debian:bookworm-slim bash /src/scripts/publish-apt.sh --next-rev | tail -1)"
   case "$v" in [0-9]*-[0-9]*) ;; *) echo "!! [$A] could not read the next revision (got '$v')"; exit 1;; esac
   declare_ver "$A" "$v"
   echo "==> [$A] next version: $v"
@@ -170,7 +161,7 @@ if [ -n "$TEST_REV" ]; then
   echo "==> TEST revision: building and indexing $UPSTREAM-$TEST_REV for every architecture (dry run, scratch repository)"
 fi
 
-# ── 3. build on the Lenovo — one call per distinct revision (normally one call for all four) ───
+# ── 2. build: x86 on the Lenovo, ARM here — one call per distinct revision (normally one for all four) ──
 REVS=""
 for A in $ARCHES; do r="$(getver "$A")"; r="${r##*-}"; case " $REVS " in *" $r "*) ;; *) REVS="$REVS $r";; esac; done
 for r in $REVS; do
@@ -179,29 +170,27 @@ for r in $REVS; do
   VIBE_REMOTE_HOST="$HOST" VIBE_REMOTE_SRC_DIR="$RSRC" bash "$SRC_DIR/scripts/build-debs-remote.sh" --rev "$r" --arch "${as# }"
 done
 
-# ── 4. index on the Lenovo (publish-apt.sh, VIBE_INDEX_ONLY — no key there) ─────────────────────
+# ── 3. index HERE (publish-apt.sh, VIBE_INDEX_ONLY — the same step the Lenovo used to run) ──────
 # ★ One architecture after another in ONE container: they share Packages/Release/index.html, and the LAST pass
-#   writes the Release that names every architecture in the pool.
+#   writes the Release that names every architecture in the pool. It writes straight into $APT_DIR, as this
+#   user (--user), so git sees the result with nothing to sync back.
+PREBUILT="$SRC_DIR/vibeserver/build/prebuilt"
 LOOP=""
 for A in $ARCHES; do
   v="$(getver "$A")"
-  rsh "test -f ~/vibeout/$A/vibeserver_${v}_$A.deb" || { echo "!! [$A] vibeserver_${v}_$A.deb is not in ~/vibeout/$A on $HOST"; exit 1; }
-  LOOP="$LOOP VIBE_PREBUILT_DEB=/debs/$A/vibeserver_${v}_$A.deb VIBE_PUBLISH_ARCH=$A bash /src/scripts/publish-apt.sh;"
+  [ -f "$PREBUILT/vibeserver_${v}_$A.deb" ] || { echo "!! [$A] vibeserver_${v}_$A.deb is not in $PREBUILT"; exit 1; }
+  LOOP="$LOOP VIBE_PREBUILT_DEB=/debs/vibeserver_${v}_$A.deb VIBE_PUBLISH_ARCH=$A bash /src/scripts/publish-apt.sh;"
 done
-TESTENV=""; [ -z "$TEST_REV" ] || TESTENV="-e VIBE_TEST_REV=$TEST_REV"
-rsh "docker image inspect vibeserver-build:bookworm-amd64 >/dev/null 2>&1 || \
-       (cd ~/$RSRC/vibeserver/linux && nice -n 19 docker build --platform linux/amd64 --build-arg DEPS_NICE=19 -q \
-          -f Dockerfile.build -t vibeserver-build:bookworm-amd64 . >/dev/null)"
-echo "==> indexing on $HOST:"
-rsh "$RUNC --cpus 2 -v \$HOME/$RAPT:/apt -v \$HOME/vibeout:/debs:ro -e APT_DIR=/apt -e VIBE_INDEX_ONLY=1 -e VIBE_SUITE=$SUITE $TESTENV \
-       vibeserver-build:bookworm-amd64 nice -n 19 bash -euo pipefail -c '$LOOP'" | sed 's/^/    /'
-
-# ── 5. the result comes back — dists/, the pool's additions and removals, the page ────────────
-echo "==> bringing the index and pool back to $APT_DIR"
+TESTENV=(); [ -z "$TEST_REV" ] || TESTENV=(-e "VIBE_TEST_REV=$TEST_REV")
+docker image inspect vibeserver-build:bookworm-arm64 >/dev/null 2>&1 || \
+  (cd "$SRC_DIR/vibeserver/linux" && nice -n 10 docker build --platform linux/arm64 -q \
+     -f Dockerfile.build -t vibeserver-build:bookworm-arm64 . >/dev/null)
+echo "==> indexing on this Mac:"
 SYNCED_BACK=1
-rsync_host --delete --exclude .git "$HOST:$RAPT/" "$APT_DIR/"
+"${RUNC[@]}" --cpus 2 -v "$APT_DIR":/apt -v "$PREBUILT":/debs:ro -e APT_DIR=/apt -e VIBE_INDEX_ONLY=1 -e VIBE_SUITE="$SUITE" \
+  ${TESTENV[@]+"${TESTENV[@]}"} vibeserver-build:bookworm-arm64 nice -n 10 bash -euo pipefail -c "$LOOP" | sed 's/^/    /'
 
-# ── 6. sign HERE ───────────────────────────────────────────────────────────────────────────────
+# ── 4. sign HERE ───────────────────────────────────────────────────────────────────────────────
 # ★ THIS SUITE's Release only; the other suite's signed files came back unchanged and stay as they were.
 DIST="$APT_DIR/dists/$SUITE"
 rm -f "$DIST/InRelease" "$DIST/Release.gpg"
@@ -218,13 +207,13 @@ else
 fi
 echo "==> signed InRelease + Release.gpg with $FPR"
 
-# ── 7. verify what apt will verify, with nothing but the published KEY.gpg ─────────────────────
+# ── 5. verify what apt will verify, with nothing but the published KEY.gpg ─────────────────────
 "$GPG" --batch --dearmor < "$APT_DIR/KEY.gpg" > "$WORK/key.kbx.gpg"
 "$GPGV" --quiet --keyring "$WORK/key.kbx.gpg" "$DIST/InRelease" 2>"$WORK/v1" || { cat "$WORK/v1"; echo "!! InRelease does not verify"; exit 1; }
 "$GPGV" --quiet --keyring "$WORK/key.kbx.gpg" "$DIST/Release.gpg" "$DIST/Release" 2>"$WORK/v2" || { cat "$WORK/v2"; echo "!! Release.gpg does not verify"; exit 1; }
 echo "==> InRelease and Release.gpg verify against KEY.gpg"
 # ★★ Every index the Release lists must match its SHA256 line, and every package an index lists must match ITS
-#    SHA256 — the pool travelled over the network twice, and apt refuses the lot on one mismatch.
+#    SHA256 — two of the packages travelled over the network, and apt refuses the lot on one mismatch.
 awk '/^SHA256:/{f=1;next} /^[A-Za-z]/{f=0} f&&NF==3{print $1, $3}' "$DIST/Release" | while read -r sum path; do
   # ★ The Release lists ITSELF, with the checksum of a half-written file: publish-apt.sh runs
   #   `apt-ftparchive release dists/stable > dists/stable/Release`, so the file exists (truncated) while it is
@@ -243,14 +232,14 @@ grep -q "^Architectures: $(cd "$DIST/main" && ls -d binary-* | sed 's/^binary-//
   || { echo "!! Release does not list every architecture in dists/: $(grep ^Architectures: "$DIST/Release")"; exit 1; }
 echo "==> every index and package matches its checksum; Release lists $(sed -n 's/^Architectures: //p' "$DIST/Release")"
 
-# ── 8. what the repository will offer ──────────────────────────────────────────────────────────
+# ── 6. what the repository will offer ──────────────────────────────────────────────────────────
 echo "==> the repository will offer ($SUITE suite):"
 for d in "$DIST/main"/binary-*; do
   printf '      %-8s %s\n' "$(basename "$d" | sed 's/^binary-//')" \
     "$(grep -oE '^Version: [0-9][^ ]*' "$d/Packages" | awk '{print $2}' | sort -V | tail -1)"
 done
 
-# ── 9. commit (always), push (never on --dry-run) ──────────────────────────────────────────────
+# ── 7. commit (always), push (never on --dry-run) ──────────────────────────────────────────────
 VERS=""; for A in $ARCHES; do VERS="$VERS $(getver "$A")"; done
 VERS="$(echo "$VERS" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 git -C "$APT_DIR" add -A
