@@ -34,11 +34,18 @@ int main(int argc, char** argv) {
         ++nb;
         std::vector<Reading> got;
         Service::decodeBurst(b, centre, got);
-        if (listBursts)
-            std::printf("  burst %8.3f s  %9.4f MHz  level %5.1f dBFS  snr %4.1f dB  %s%zu runs (shortest %.0f µs)%s\n", b.tSec,
+        if (listBursts) {
+            // ★ The burst's shape for working on an unknown device (2026-10-25, Stuart's car key): its length, how much
+            //   of it the carrier was up (OOK mark share), and the FSK deviation when the discriminator ran.
+            double on = 0, all = 0;
+            for (int d : b.ook) { all += std::abs(d); if (d > 0) on += d; }
+            std::printf("  burst %8.3f s  %9.4f MHz  level %5.1f dBFS  snr %4.1f dB  %s%zu runs (shortest %.0f µs)  "
+                        "len %6.1f ms  mark %3.0f %%  dev %4.1f kHz%s\n", b.tSec,
                         (centre + b.offHz + b.carrierHz) / 1e6, b.levelDb, b.levelDb - b.noiseDb,
                         b.fsk.empty() ? "OOK " : "FSK ", b.fsk.empty() ? b.ook.size() : b.fsk.size(),
-                        FrontEnd::shortestRun(b.fsk.empty() ? b.ook : b.fsk), got.empty() ? "" : "  → decoded");
+                        FrontEnd::shortestRun(b.fsk.empty() ? b.ook : b.fsk), all / 1000.0, all > 0 ? 100.0 * on / all : 0.0,
+                        b.fskDevHz / 1000.0, got.empty() ? "" : "  → decoded");
+        }
         for (auto& r : got) {
             ++nd;
             const int before = int(tr.size());

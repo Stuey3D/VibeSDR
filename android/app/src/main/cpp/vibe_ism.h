@@ -105,7 +105,10 @@ public:
     static constexpr double kPrerollS = 0.006;   ///< channel starts this far before the first detection
     static constexpr double kCloseS = 0.025;     ///< no energy for this long = the burst is over (PT2262's sync is ~15 ms)
     static constexpr double kMaxBurstS = 1.6;    ///< a carrier that never stops is cut here (and its floor rises)
-    static constexpr double kMatchHz = 80e3;     ///< a detection this close to an open channel belongs to it (FSK's two tones)
+    static constexpr double kMatchHz = 120e3;    ///< a detection this close to an open channel belongs to it (FSK's two tones — see below)
+    /* ★★ 120 kHz, not 80 (2026-10-25). Stuart's car key, recorded on the Pi 500 (434.137 MHz), is FSK with its tones
+     *  83 kHz apart: at 80 kHz each tone opened its own channel and neither was the whole signal. Wide-deviation FSK
+     *  (car keys) needs the pair kept together; the 250 kHz channel holds both tones. test-ism unchanged (105/0). */
     static constexpr int    kMaxChans = 4;
     static constexpr float  kMinBurstSnrDb = 6.5f; ///< see slice(): noise alone reads ~4.5 dB
     static constexpr size_t kMaxRuns = 6000;      ///< more transitions than any sensor sends in 1.6 s = noise; not decoded
