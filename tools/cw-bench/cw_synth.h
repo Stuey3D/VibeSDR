@@ -130,6 +130,52 @@ inline void synth(std::vector<Tone>& tones, double rate, bool complexOut, double
         }
 }
 
+
+// ── human fists (shared by cw_bench and vibeserver/test-cw.cpp) ──
+/** ★★ HUMAN FISTS (Stuart, 2026-10-25: "we also need to compensate for variable WPM for real human operators"): a speed
+ *  ramp inside an over, a step between overs, a bug key, a straight key's jitter, odd weighting and spacing, Farnsworth.
+ *  Each case is a QSO's worth of overs (≈ 60 characters each, 1.5 s apart), 48 kHz IQ. */
+struct FistCase { const char* name; std::vector<Keying> overs; };
+/** A QSO's four overs, in turn. */
+static const std::string kOvers[4] = { "CQ CQ DE G4ABC G4ABC K  ", "G4ABC DE DL1XYZ GM UR RST 579 579 NAME HANS QTH BERLIN HW? BK  ",
+                                       "DL1XYZ DE G4ABC R TNX FER CALL UR 599 OP JOHN WX FINE TEMP 12C  ", "G4ABC DE DL1XYZ FB JOHN TNX QSO 73 ES GL SK  " };
+inline std::vector<FistCase> fistCases() {
+    auto K = [](double w) { Keying k; k.wpm = w; return k; };
+    auto rep = [](const Keying& k, int n = 8) { return std::vector<Keying>((size_t)n, k); };
+    std::vector<FistCase> v;
+    v.push_back({ "clean 20 WPM (reference)", rep(K(20)) });
+    { Keying k = K(15); k.wpmEnd = 25; v.push_back({ "ramp 15→25 WPM in each over", rep(k) }); }
+    { Keying k = K(28); k.wpmEnd = 16; v.push_back({ "ramp 28→16 WPM in each over", rep(k) }); }
+    { std::vector<Keying> o; for (double w : { 15, 28, 18, 32, 14, 26, 20, 35 }) o.push_back(K(w));
+      v.push_back({ "step between overs 15/28/18/32/14/26/20/35", o }); }
+    { Keying k = K(24); k.dotJitter = 0.02; k.dashJitter = 0.25; k.gapJitter = 0.25; k.dashRatio = 3.6;
+      v.push_back({ "bug key (dots exact, dashes/gaps ±25 %)", rep(k) }); }
+    for (double j : { 0.10, 0.15, 0.20, 0.30 }) { Keying k = K(18); k.jitter = j; k.riseMs = 3;
+      static char nm[4][48]; const int i = j < 0.12 ? 0 : j < 0.17 ? 1 : j < 0.25 ? 2 : 3;
+      std::snprintf(nm[i], sizeof nm[i], "straight key, σ %.0f %% per element", j * 100); v.push_back({ nm[i], rep(k) }); }
+    { Keying k = K(22); k.dashRatio = 2.5; v.push_back({ "dash:dot 2.5:1", rep(k) }); }
+    { Keying k = K(22); k.dashRatio = 4.0; v.push_back({ "dash:dot 4:1", rep(k) }); }
+    { Keying k = K(22); k.weight = 1.3; v.push_back({ "heavy keying (marks +30 %)", rep(k) }); }
+    { Keying k = K(22); k.weight = 0.75; v.push_back({ "light keying (marks −25 %)", rep(k) }); }
+    { Keying k = K(22); k.elemGap = 1.5; v.push_back({ "element gaps 1.5 dots", rep(k) }); }
+    { Keying k = K(22); k.elemGap = 0.7; v.push_back({ "element gaps 0.7 dot", rep(k) }); }
+    { Keying k = K(22); k.charGap = 5; k.wordGap = 10; k.gapJitter = 0.25; v.push_back({ "long, uneven char/word gaps", rep(k) }); }
+    { Keying k = K(25); k.farnsworth = 12; v.push_back({ "Farnsworth 25/12", rep(k) }); }
+    { Keying k = K(15); k.wpmEnd = 25; k.jitter = 0.15; k.dashRatio = 3.4; k.weight = 1.1;
+      v.push_back({ "all at once: ramp, σ 15 %, 3.4:1, heavy", rep(k) }); }
+    return v;
+}
+/** One fist case's whole QSO (48 kHz), each over followed by 1.5 s of silence; `sent` gets the text. */
+inline std::vector<float> fistEnvelope(const FistCase& fc, Rng& rng, std::string& sent) {
+    std::vector<float> env;
+    for (size_t i = 0; i < fc.overs.size(); ++i) {
+        auto e = keyEnvelope(kOvers[i % 4], fc.overs[i], 48000, rng, 1.5);
+        env.insert(env.end(), e.begin(), e.end());
+        sent += kOvers[i % 4];
+    }
+    return env;
+}
+
 // ── scoring: semi-global edit distance (the decoder may join late and stop early) ──
 inline std::string squash(const std::string& s) {
     std::string o; bool sp = true;
