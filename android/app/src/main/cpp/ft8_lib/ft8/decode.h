@@ -79,6 +79,8 @@ typedef struct
 /// @param[in] min_score Minimal score allowed for pruning unlikely candidates (can be zero for no effect)
 /// @return Number of candidates filled in the heap
 int ftx_find_candidates(const ftx_waterfall_t* power, int num_candidates, ftx_candidate_t heap[], int min_score);
+/// VibeSDR (2026-10-25): ft8_lib's original one-candidate-at-a-time search, the reference the vector one is tested against.
+int ftx_find_candidates_ref(const ftx_waterfall_t* wf, int num_candidates, ftx_candidate_t heap[], int min_score);
 
 /// Attempt to decode a message candidate. Extracts the bit probabilities, runs LDPC decoder, checks CRC and unpacks the message in plain text.
 /// @param[in] power Waterfall data collected during message slot
