@@ -93,6 +93,7 @@ int main(int argc, char** argv) {
     std::vector<float> w((size_t)win);
     const double fileEnd = fileStart + (double)pcm.size() / rate;
     double totMs = 0; int slots = 0;
+    double stage[3][Ft8SlotStats::kStages] = {}; int passRuns[3] = {}; long cands[3] = {}, osdN[3] = {};
     for (double S = std::ceil((fileStart - lead) / period) * period; S + lead + (double)use / rate <= fileEnd; S += period) {
         if (S < from || S >= to) continue;
         const long i0 = std::lround((S + lead - fileStart) * rate);
@@ -110,7 +111,20 @@ int main(int argc, char** argv) {
         std::printf("S %.1f %d %.2f %.2f %.2f %d %d %d\n", S, st.passes, st.passMs[0], st.passMs[1], st.passMs[2],
                     st.passDecodes[0], st.passDecodes[1], st.passDecodes[2]);
         totMs += st.passMs[0] + st.passMs[1] + st.passMs[2]; ++slots;
+        for (int p = 0; p < st.passes; ++p) {
+            ++passRuns[p]; cands[p] += st.candidates[p]; osdN[p] += st.osdTried[p];
+            for (int k = 0; k < Ft8SlotStats::kStages; ++k) stage[p][k] += st.stageMs[p][k];
+        }
     }
     std::fprintf(stderr, "%d slots, %.1f ms/slot mean\n", slots, slots ? totMs / slots : 0.0);
+    // ★ The profile (2026-10-25): mean ms per slot that ran the pass, by stage.
+    std::fprintf(stderr, "pass  runs  subtract waterfall   search     ldpc      osd     post   | cands  osd-tried\n");
+    for (int p = 0; p < 3; ++p) {
+        if (!passRuns[p]) continue;
+        const double r = passRuns[p];
+        std::fprintf(stderr, "  %d  %5d  %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f   | %5.1f  %5.1f\n", p + 1, passRuns[p],
+                     stage[p][0] / r, stage[p][1] / r, stage[p][2] / r, stage[p][3] / r, stage[p][4] / r, stage[p][5] / r,
+                     cands[p] / r, osdN[p] / r);
+    }
     return 0;
 }

@@ -437,23 +437,35 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             if (o.mayRunPass && !o.mayRunPass(pass, msSince(t0), st.passMs[pass - 2])) break;
         }
         const auto tp = std::chrono::steady_clock::now();
+        double* sm = st.stageMs[pass - 1];
+        auto lap = [&, t = tp]() mutable { const auto now = std::chrono::steady_clock::now();
+                                          const double d = std::chrono::duration<double, std::milli>(now - t).count(); t = now; return d; };
         for (const Sub& s : subs) subtract(audio, n, s.tones, s.start, s.f0);
         subs.clear();
+        sm[Ft8SlotStats::kSubtract] += lap();
         buildWaterfall(audio, n);
         noise_.assign((size_t)mon_.wf.block_stride, -1.0f);     // ★ unknown until a decode asks (colMean)
+        sm[Ft8SlotStats::kWaterfall] += lap();
         const ftx_waterfall_t* wf = &mon_.wf;
         const int nc = ftx_find_candidates(wf, o.maxCandidates, cands_.data(), o.minScore);
+        sm[Ft8SlotStats::kSearch] += lap();
+        st.candidates[pass - 1] = nc;
         int found = 0;
         for (int i = 0; i < nc; ++i) {
             if (o.abort && o.abort->load(std::memory_order_relaxed)) { st.passes = pass; return; }
             const ftx_candidate_t& c = cands_[(size_t)i];
             ftx_message_t msg; ftx_decode_status_t ds;
             bool viaOsd = false;
-            if (!ftx_decode_candidate(wf, &c, o.ldpcIters, &msg, &ds)) {
+            const bool bpOk = ftx_decode_candidate(wf, &c, o.ldpcIters, &msg, &ds);
+            sm[Ft8SlotStats::kLdpc] += lap();
+            if (!bpOk) {
                 if (o.osdMaxErrors <= 0 || c.score < o.osdMinScore) continue;
+                ++st.osdTried[pass - 1];
                 float llr[FTX_LDPC_N]; uint8_t a91[FTX_LDPC_K_BYTES];
                 ftx_candidate_log174(wf, &c, llr);
-                if (osd1(llr, o.osdMaxErrors, a91) < 0) continue;
+                const int osdErr = osd1(llr, o.osdMaxErrors, a91);
+                sm[Ft8SlotStats::kOsd] += lap();
+                if (osdErr < 0) continue;
                 ftx_message_init(&msg);
                 for (int b = 0; b < 10; ++b) msg.payload[b] = ft4_ ? (uint8_t)(a91[b] ^ kFT4_XOR_sequence[b]) : a91[b];
                 msg.payload[9] &= 0xF8;
@@ -464,7 +476,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             bool dup = false;   // ★ one message per slot, whichever pass and candidate found it first
             for (size_t r = first; r < out.size() && !dup; ++r)
                 dup = out[r].msg.hash == msg.hash && std::memcmp(out[r].msg.payload, msg.payload, sizeof msg.payload) == 0;
-            if (dup) continue;
+            if (dup) { sm[Ft8SlotStats::kPost] += lap(); continue; }
             Sub s;
             // ★ The tones as transmitted (ft4_encode applies FT4's XOR itself, as ftx_decode_candidate removed it).
             if (ft4_) ft4_encode(msg.payload, s.tones); else ft8_encode(msg.payload, s.tones);
@@ -483,6 +495,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             s.start = startSample; s.f0 = hz;
             subs.push_back(s);
             ++found;
+            sm[Ft8SlotStats::kPost] += lap();
         }
         st.passes = pass;
         st.passMs[pass - 1] = msSince(tp);

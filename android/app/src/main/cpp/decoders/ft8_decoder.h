@@ -86,6 +86,12 @@ struct Ft8SlotStats {
     int    passes = 0;
     double passMs[3] = {0, 0, 0};
     int    passDecodes[3] = {0, 0, 0};
+    /* ★ Where each pass's time went (2026-10-25, the CPU work): the profile the optimisations are judged by. A dozen
+     *  clock reads per candidate at most — under 0.1 % of a pass. */
+    enum Stage { kSubtract, kWaterfall, kSearch, kLdpc, kOsd, kPost, kStages };
+    double stageMs[3][kStages] = {};
+    int    candidates[3] = {0, 0, 0};   ///< candidates the search returned
+    int    osdTried[3] = {0, 0, 0};     ///< of them, how many failed BP and went to OSD
 };
 
 /** One slot, decoded synchronously: what the worker thread runs, and what the bench and the tests drive directly.
