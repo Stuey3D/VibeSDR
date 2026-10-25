@@ -127,6 +127,10 @@ export function adsbFurthestHtml(f: { nm: number; name: string } | null): string
 /** ★ A chip names an aircraft as the list does: its callsign, else its registration (adsb_info), else its address. */
 const flightName = (a: { flight?: unknown; r?: unknown }, hex: string) => String(a.flight || '').trim() || String(a.r || '').trim() || hex.toUpperCase();
 const hasName = (a: { flight?: unknown; r?: unknown }) => !!(String(a.flight || '').trim() || String(a.r || '').trim());
+/** ★★ A chip's tap shows the aircraft ON THE MAP — so a chip names only one that is on it (Stuart, 2026-10-25: "I am
+ *  clicking the longest tracked and it isnt selecting it"). The longest-followed aircraft is often far out and down to
+ *  the odd message: heard, but its last position over 60 s old, so the report carries none and the map cannot select it. */
+const onMap = (a: { lat?: unknown; lon?: unknown }) => num(a.lat) != null && num(a.lon) != null;
 
 /** ★★ THE LIST HEADER'S THREE CHIPS (Stuart, 2026-10-25, the top bar crowded on a portrait iPhone 17 Pro Max: "move the
  *  furthest flight chip to just the header of the aircraft list, and with that we can add a newest flight detected,
@@ -138,7 +142,7 @@ export function adsbLongestTracked(r: AdsbReport | null): { hex: string; nm: num
   let best: { hex: string; nm: number; name: string } | null = null;
   for (const a of r.aircraft) {
     const nm = num(a.tracked_nm), hex = cleanHex(a.hex);
-    if (nm == null || nm < 1 || !hex) continue;
+    if (nm == null || nm < 1 || !hex || !onMap(a)) continue;
     if (!best || nm > best.nm) best = { hex, nm, name: flightName(a, hex) };
   }
   return best;
@@ -167,7 +171,7 @@ export function adsbNewest(r: AdsbReport | null, firstSeen: Map<string, number>,
   const byHex = new Map<string, (typeof r.aircraft)[number]>();
   for (const a of r.aircraft) { const h = cleanHex(a.hex); if (h) byHex.set(h, a); }
   let best = '', at = 0;
-  for (const [h, t] of firstSeen) { const a = byHex.get(h); if (t > at && a && hasName(a)) { at = t; best = h; } }
+  for (const [h, t] of firstSeen) { const a = byHex.get(h); if (t > at && a && hasName(a) && onMap(a)) { at = t; best = h; } }
   if (!best) return null;
   const a = byHex.get(best)!;
   return { hex: best, name: flightName(a, best), ageS: Math.max(0, Math.round((nowMs - at) / 1000)) };
@@ -224,7 +228,13 @@ function barsHtml(n: number): string {
  *  /mapgl/: the front door answers it too. */
 export function adsbImageBase(): string {
   if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return '';
-  return location.origin + '/adsb/';
+  /* ★★★ THIS RADIO'S PATH, NOT THE FRONT DOOR'S (Stuart, 2026-10-25: "when i select other aircraft their trails are not
+   *  being drawn in … this radio is set for background adsb so should have built up a decent history but nope"). On a
+   *  server with a front door the page is /r/<id>/…; "/adsb/trail/<hex>" asked of the door got the door's HTML, the JSON
+   *  parse failed, the catch fell back to the map's own trail — so only what this map had seen since it opened, never the
+   *  server's. The door forwards /r/<id>/adsb/… to the radio, which keeps the trails (and the owner's logos). */
+  const m = /^\/r\/[^/?#]+/.exec(location.pathname);
+  return location.origin + (m ? m[0] : '') + '/adsb/';
 }
 /** ★ Windows draws regional-indicator pairs as two letters, not a flag: there the code is shown as a small chip. */
 function flagHtml(iso: unknown): string {

@@ -84,6 +84,9 @@ interface MapOverlayProps {
   visible: boolean;
   kind:    MapKind | null;
   baseUrl: string;          // http(s)://host — used for fetch + ws URLs
+  /** ★★ The RADIO's own address (http(s)://host/r/<id> behind a front door) — ADS-B trails and the owner's logos live
+   *  on the radio, and the door answers /adsb/… with its own page (2026-10-25). Absent = baseUrl. */
+  radioUrl?: string;
   /** Registered session UUID — required by /ws/dxcluster validation. */
   sessionUuid: string;
   onClose: () => void;
@@ -122,7 +125,7 @@ function buildHtml(
   kind: MapKind, baseUrl: string, uuid: string,
   opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean; glBase?: string;
           /** kind 'adsb': the in-map toggles as this device last left them. */
-          adsbPrefs?: AdsbMapPrefs },
+          adsbPrefs?: AdsbMapPrefs; radioUrl?: string },
   /** ★★ The user's colours as rgb TRIPLETS (2026-10-12): `x` text (lifted for contrast), `k` controls, `kt` controls as
    *  a legend. The page is rebuilt when they change — and they can only change from the menus, after leaving this
    *  screen (Stuart: "to change the colour of the map means youd have to exit its screen anyway"). */
@@ -1299,7 +1302,7 @@ if(KIND==='adsb'){
         drawReceiver:false,
         // ★ V12: the owner's logos / silhouettes on this server (the card shows them when the server names one). Photos
         //   stay OFF until the Planespotters terms are confirmed — the TODO in adsblayer.js.
-        imageBase:${JSON.stringify(opts?.local ? null : baseUrl.replace(/\/+$/, '') + '/adsb/')}
+        imageBase:${JSON.stringify(opts?.local ? null : (opts?.radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/')}
       });
     }catch(e){console.error('ADS-B layer could not start',e);adsbLayer=null;}
     return adsbLayer;
@@ -1587,7 +1590,7 @@ function spotToData(s: SpotRow) {
 }
 
 export default function MapOverlay(
-  { visible, kind, baseUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
+  { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
     disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, safeInsets }:
     MapOverlayProps & { spots?: SpotRow[] },
 ) {
@@ -1656,10 +1659,10 @@ export default function MapOverlay(
   const html = useMemo(
     () => (kind && glOk !== null && (kind !== 'adsb' || adsbPrefsReady) ? buildHtml(kind, baseUrl, sessionUuid,
       { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase,
-        adsbPrefs: adsbPrefsRef.current ?? undefined }, ink) : ''),
+        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl }, ink) : ''),
     // ★ adsbPrefsRef is read at build time only (see above) — deliberately not a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady],
+    [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
    *

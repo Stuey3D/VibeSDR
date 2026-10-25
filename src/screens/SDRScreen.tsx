@@ -13148,6 +13148,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         visible={shownMap !== null}
         kind={shownMap}
         baseUrl={baseUrl}
+        radioUrl={connectBase}
         sessionUuid={sessionUuid}
         onClose={() => (shownMap === 'adsb' ? exitAdsb() : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both

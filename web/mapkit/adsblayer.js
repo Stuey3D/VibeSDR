@@ -656,6 +656,13 @@
       + 'border:1px solid rgba(' + T.border + ',0.30);color:rgba(' + T.ink + ',0.90);font:13px ui-monospace,"SF Mono",Menlo,Consolas,monospace;'
       + 'border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,0.5);max-height:min(46vh,360px);overflow-y:auto}'
       + '.vsadsb-pop-' + th + ' .leaflet-popup-content{margin:0}'
+      // ★ MORE ABOVE / BELOW (moreCue): zero-height sticky rows, a small pill in the readout colour centred on the edge
+      + '.vsadsb-pop-' + th + ' .vsadsb-more{position:sticky;height:0;z-index:3;pointer-events:none;display:none}'
+      + '.vsadsb-pop-' + th + ' .vsadsb-more.up{top:0}.vsadsb-pop-' + th + ' .vsadsb-more.dn{bottom:0}'
+      + '.vsadsb-pop-' + th + ' .vsadsb-more-up .vsadsb-more.up,.vsadsb-pop-' + th + ' .vsadsb-more-dn .vsadsb-more.dn{display:block}'
+      + '.vsadsb-pop-' + th + ' .vsadsb-more span{position:absolute;left:50%;transform:translateX(-50%);font-size:10px;line-height:14px;'
+      + 'padding:0 10px;border-radius:7px;color:rgba(' + T.hi + ',0.95);background:rgba(' + T.bg + ',0.96);border:1px solid rgba(' + T.border + ',0.35)}'
+      + '.vsadsb-pop-' + th + ' .vsadsb-more.up span{top:0}.vsadsb-pop-' + th + ' .vsadsb-more.dn span{bottom:0}'
       + '.vsadsb-pop-' + th + ' .leaflet-popup-tip{background:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-bottom .maplibregl-popup-tip{border-top-color:rgba(' + T.bg + ',0.96)}'
       + '.vsadsb-pop-' + th + '.maplibregl-popup-anchor-top .maplibregl-popup-tip{border-bottom-color:rgba(' + T.bg + ',0.96)}'
@@ -1186,12 +1193,32 @@
         + '<a href="https://opendatacommons.org/licenses/by/1-0/" target="_blank">ODC Attribution License</a>) \u00b7 '
         + '<a href="https://github.com/vradarserver/standing-data" target="_blank">VRS standing data</a> (CC0)</div>' : '';
       const sub = cleanFlight(a.flight) || a.r ? s.hex.toUpperCase() : '';
-      return (em ? '<div class="em">' + esc(em) + '</div>' : '')
+      return MORE_UP + (em ? '<div class="em">' + esc(em) + '</div>' : '')
         + '<div class="t">' + esc(name) + (sub ? '<i>' + esc(sub) + '</i>' : '') + MIN_BTN(false) + '</div>'
         + (logo || badge || sil ? '<div class="op">' + (logo || badge) + sil + '</div>' : '')
         + (idl.length ? '<div class="idb">' + idl.join('') + '</div>' : '')
-        + '<div class="vsadsb-dyn"><table>' + rows.join('') + '</table></div>' + photo + lookup + credit;
+        + '<div class="vsadsb-dyn"><table>' + rows.join('') + '</table></div>' + photo + lookup + credit + MORE_DN;
     }
+    /* ★★ MORE ABOVE / MORE BELOW (Stuart, 2026-10-25: "on the little popup cards for the aircraft can you put a little down
+     *  arrow/up arrow or some way of showing that there is more info to scroll"). Two sticky markers, the first and last
+     *  thing in the card's scroller, shown only when there IS more that way; re-judged on every scroll, every refresh of
+     *  the card (setHTML makes a new scroller) and every resize. Zero height, so they never move the card's contents. */
+    const MORE_UP = '<div class="vsadsb-more up" aria-hidden="true"><span>▲</span></div>';
+    const MORE_DN = '<div class="vsadsb-more dn" aria-hidden="true"><span>▼</span></div>';
+    function moreCue() {
+      const el = popup && popup.getElement ? popup.getElement() : null;
+      const sc = el ? el.querySelector('.maplibregl-popup-content, .leaflet-popup-content-wrapper') : null;
+      if (!sc) return;
+      const up = sc.scrollTop > 2, dn = sc.scrollTop + sc.clientHeight < sc.scrollHeight - 2;
+      sc.classList.toggle('vsadsb-more-up', up);
+      sc.classList.toggle('vsadsb-more-dn', dn);
+    }
+    // ★ scroll does not bubble: caught on the way down, for whichever card is open
+    container.addEventListener('scroll', (e) => {
+      const t = e.target;
+      if (t && t.classList && (t.classList.contains('maplibregl-popup-content') || t.classList.contains('leaflet-popup-content-wrapper'))) moreCue();
+    }, true);
+    window.addEventListener('resize', () => requestAnimationFrame(moreCue));
     function select(hex) {
       if (hex === selected && popup) return;
       selected = hex && ac.has(hex) ? hex : null;
@@ -1217,6 +1244,8 @@
         p.on('remove', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.openOn(lm);
       }
+      requestAnimationFrame(moreCue);   // ★ once it is laid out — and again if the photo arrives and grows it
+      setTimeout(moreCue, 600);
       kick();
     }
     /* ★★ The trail of a newly picked aircraft: what this map has seen at once, then the server's whole trail when it
@@ -1306,10 +1335,11 @@
       const o = popupHtml ? splitDyn(popupHtml) : null, n = splitDyn(h);
       if (el && o && n && o.out === n.out) {
         const d = el.querySelector('.vsadsb-dyn');
-        if (d) { d.innerHTML = n.dyn; popupHtml = h; return; }
+        if (d) { d.innerHTML = n.dyn; popupHtml = h; moreCue(); return; }
       }
       popupHtml = h;
       if (gl) popup.setHTML(h); else popup.setContent(h);
+      moreCue();
     }
     function onMinClick(e) {
       const b = e.target && e.target.closest ? e.target.closest('.vsadsb-min') : null;
@@ -1319,6 +1349,7 @@
       if (selected && popup && ac.has(selected)) {
         popupHtml = cardHtml(ac.get(selected));
         if (gl) popup.setHTML(popupHtml); else popup.setContent(popupHtml);
+        moreCue();
       }
     }
     container.addEventListener('click', onMinClick, true);

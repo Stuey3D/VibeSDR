@@ -6,7 +6,7 @@
  * Run: npx tsx scripts/test_adsb_furthest.ts   (run-tests.sh does)
  */
 import { readFileSync } from 'node:fs';
-import { adsbFurthest, adsbFurthestHtml, adsbLongestTracked, adsbNewest, adsbChipHtml } from '../web/client/src/adsb.ts';
+import { adsbFurthest, adsbFurthestHtml, adsbLongestTracked, adsbNewest, adsbChipHtml, adsbImageBase } from '../web/client/src/adsb.ts';
 
 let fails = 0, passes = 0;
 const ok = (c: boolean, what: string) => { if (c) { passes++; return; } fails++; console.error(`FAIL ${what}`); };
@@ -42,9 +42,26 @@ if (fn) {
   run(document, 0, 0, ac);
   ok(b.hidden, 'app: no receiver position → hidden');
 }
+// ★★ TRAILS AND LOGOS FROM THE RADIO, NOT THE FRONT DOOR (2026-10-25: the door answered /adsb/trail/… with its own page)
+{
+  const at = (href: string) => { const u = new URL(href); (globalThis as any).location = { protocol: u.protocol, origin: u.origin, pathname: u.pathname }; return adsbImageBase(); };
+  ok(at('http://192.168.86.13:48000/r/59a1a7d0/') === 'http://192.168.86.13:48000/r/59a1a7d0/adsb/', 'behind a front door: /r/<id>/adsb/');
+  ok(at('http://192.168.86.13:48001/') === 'http://192.168.86.13:48001/adsb/', 'a radio on its own port: /adsb/');
+  ok(at('https://x.vibeserver.vibesdr.net/r/ab%20c/?pin=1') === 'https://x.vibeserver.vibesdr.net/r/ab%20c/adsb/', 'the id as the address bar has it, query left off');
+  delete (globalThis as any).location;
+}
 // ★ THE LIST HEADER'S OTHER TWO CHIPS (2026-10-25): FURTHEST TRACKED and NEWEST
 {
-  const rep = (ac: any[]) => ({ aircraft: ac } as any);
+  // ★ every aircraft ON THE MAP unless it says nopos — a chip only names one it can show (see onMap in adsb.ts)
+  const rep = (ac: any[]) => ({ aircraft: ac.map((a) => (a.nopos ? a : { lat: 52.3, lon: -0.9, ...a })) } as any);
+  {
+    const off = adsbLongestTracked(rep([{ hex: 'aaaaaa', flight: 'BAW1', tracked_nm: 40 }, { hex: 'bbbbbb', flight: 'BAW2', tracked_nm: 157, nopos: true }]));
+    ok(!!off && off.hex === 'aaaaaa', `tracked: the longest WITHOUT a position (157 NM, heard, no fix in 60 s) is not offered — it could not be selected (${JSON.stringify(off)})`);
+    const s0 = new Map<string, number>();
+    adsbNewest(rep([{ hex: 'aaaaaa', flight: 'BAW1' }]), s0, 1000);
+    const nn = adsbNewest(rep([{ hex: 'aaaaaa', flight: 'BAW1' }, { hex: 'cccccc', flight: 'EZY9', nopos: true }]), s0, 2000);
+    ok(nn === null, `newest: one with a name but no position yet waits (${JSON.stringify(nn)})`);
+  }
   const lg = adsbLongestTracked(rep([{ hex: 'aaaaaa', tracked_nm: 12 }, { hex: 'bbbbbb', flight: 'BAW12 ', tracked_nm: 140.6 }, { hex: 'cccccc', tracked_nm: 0.4 }]));
   ok(!!lg && lg.hex === 'bbbbbb' && lg.name === 'BAW12' && Math.round(lg.nm) === 141, `tracked: the longest (${JSON.stringify(lg)})`);
   ok(adsbLongestTracked(rep([{ hex: 'aaaaaa', tracked_nm: 0.5 }])) === null, 'tracked: under 1 NM is not a track');
