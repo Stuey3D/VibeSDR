@@ -12,7 +12,7 @@ import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
-import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
+import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand } from './ism';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -7677,6 +7677,9 @@ let adsbListLast = '';
 let adsbMap: AdsbMap | null = null;
 /** The furthest aircraft's address, for the top bar's FURTHEST key (adsbRender). */
 let adsbFarHex = '';
+/** ★ The list header's other two chips (adsb.ts adsbNewest / adsbLongestTracked) — the hex each one shows on a tap. */
+let adsbNewHex = '', adsbLongHex = '';
+const adsbFirstSeen = new Map<string, number>();
 /** ★ The map is covering the page: renderFrame skips the waterfall, trace, scale and band strip. */
 let adsbViewUp = false;
 /** The row last tapped — kept lit across the once-a-second redraws while it is still in the list. */
@@ -7723,6 +7726,7 @@ function adsbUiOn() {
 function adsbUiOff() {
   adsbOn = false;
   adsbReport = null;
+  adsbFirstSeen.clear();   // ★ the next visit's first report is "already there", not new
   adsbListLast = '';
   adsbSel = '';
   if (spec) spec.adsbHeld = false;
@@ -8035,11 +8039,17 @@ function adsbRender() {
   $('adsbCnt').textContent = adsbReport ? String(adsbOnMap(adsbReport)) : '…';
   $('adsbStat').textContent = adsbStatus(adsbReport);
   {
-    const far = adsbFurthest(adsbReport, myPos()), b = $('adsbFar') as HTMLButtonElement;
+    // ★ the list header's chips — written only when their text changes, so a tap or a highlight is not lost to a redraw
+    const put = (id: string, h: string) => { const b = $(id) as HTMLButtonElement; if (b.innerHTML !== h) b.innerHTML = h; b.hidden = !h; };
+    const nw = adsbNewest(adsbReport, adsbFirstSeen, Date.now());
+    adsbNewHex = nw ? nw.hex : '';
+    put('adsbNew', nw ? adsbChipHtml('NEWEST', '', nw.name) : '');
+    const far = adsbFurthest(adsbReport, myPos());
     adsbFarHex = far ? far.hex : '';
-    const h = adsbFurthestHtml(far);
-    if (b.innerHTML !== h) b.innerHTML = h;
-    b.hidden = !far;
+    put('adsbFar', adsbFurthestHtml(far));
+    const lg = adsbLongestTracked(adsbReport);
+    adsbLongHex = lg ? lg.hex : '';
+    put('adsbLong', lg ? adsbChipHtml('TRACKED', `${Math.round(lg.nm)} NM`, lg.name) : '');
   }
   adsbGainRender();
   {
@@ -8404,6 +8414,8 @@ function buildControls() {
    *  the list's head (collapse / open) and its rows (that aircraft on the map). */
   $('adsbExit').onclick = () => adsbSetMode(false);
   $('adsbFar').onclick = () => { if (adsbFarHex) adsbMap?.focus(adsbFarHex); };
+  $('adsbNew').onclick = () => { if (adsbNewHex) adsbMap?.focus(adsbNewHex); };
+  $('adsbLong').onclick = () => { if (adsbLongHex) adsbMap?.focus(adsbLongHex); };
   $('adsbGain').onclick = () => { const p = $('adsbGainPop'); p.hidden = !p.hidden; adsbGainRender(); };
   $('adsbGainAuto').onclick = () => { adsbGainTouchAt = 0; spec?.setHwGain(0, true); };
   ($('adsbGainSl') as HTMLInputElement).oninput = () => {

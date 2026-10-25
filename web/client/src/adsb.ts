@@ -116,11 +116,53 @@ export function adsbFurthest(r: AdsbReport | null, rx: LatLon | null): { hex: st
   }
   return best;
 }
-/** "FURTHEST 182 NM · RYR12K" — the name goes on a phone (CSS), the distance never does. */
-export function adsbFurthestHtml(f: { nm: number; name: string } | null): string {
-  if (!f) return '';
+/** "FURTHEST 182 NM · RYR12K" — one chip's text: the key dimmed, the figure, the flight. */
+export function adsbChipHtml(key: string, figure: string, name: string): string {
   const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  return `<span class="k">FURTHEST</span> ${Math.round(f.nm)} NM<span class="n"> · ${esc(f.name)}</span>`;
+  return `<span class="k">${esc(key)}</span>${figure ? ` ${esc(figure)}` : ''}<span class="n"> · ${esc(name)}</span>`;
+}
+export function adsbFurthestHtml(f: { nm: number; name: string } | null): string {
+  return f ? adsbChipHtml('FURTHEST', `${Math.round(f.nm)} NM`, f.name) : '';
+}
+const flightName = (a: { flight?: unknown }, hex: string) => String(a.flight || '').trim() || hex.toUpperCase();
+
+/** ★★ THE LIST HEADER'S THREE CHIPS (Stuart, 2026-10-25, the top bar crowded on a portrait iPhone 17 Pro Max: "move the
+ *  furthest flight chip to just the header of the aircraft list, and with that we can add a newest flight detected,
+ *  and furthest tracked chips too"). FURTHEST is adsbFurthest; these are the other two. Tap = show it on the map. */
+
+/** FURTHEST TRACKED: the aircraft the server has followed the furthest (tracked_nm, vibe_adsb.h setPos). */
+export function adsbLongestTracked(r: AdsbReport | null): { hex: string; nm: number; name: string } | null {
+  if (!r) return null;
+  let best: { hex: string; nm: number; name: string } | null = null;
+  for (const a of r.aircraft) {
+    const nm = num(a.tracked_nm), hex = cleanHex(a.hex);
+    if (nm == null || nm < 1 || !hex) continue;
+    if (!best || nm > best.nm) best = { hex, nm, name: flightName(a, hex) };
+  }
+  return best;
+}
+
+/** NEWEST: the aircraft first heard most recently. The report carries no "first heard", so the page notes when each
+ *  hex FIRST appears (`firstSeen`, kept here: call once per report). ★ The aircraft already in the first report are
+ *  not "new" — they were there before this listener arrived — so they are stamped 0 and never chosen; NEWEST stays
+ *  hidden until a genuinely new one turns up. An aircraft that leaves the report is forgotten, so one that comes back
+ *  counts as new again (the server forgets it too). */
+export function adsbNewest(r: AdsbReport | null, firstSeen: Map<string, number>, nowMs: number): { hex: string; name: string; ageS: number } | null {
+  if (!r) { firstSeen.clear(); return null; }
+  const fresh = firstSeen.size === 0;
+  const here = new Set<string>();
+  for (const a of r.aircraft) {
+    const hex = cleanHex(a.hex);
+    if (!hex) continue;
+    here.add(hex);
+    if (!firstSeen.has(hex)) firstSeen.set(hex, fresh ? 0 : nowMs);
+  }
+  for (const h of [...firstSeen.keys()]) if (!here.has(h)) firstSeen.delete(h);
+  let best = '', at = 0;
+  for (const [h, t] of firstSeen) if (t > at) { at = t; best = h; }
+  if (!best) return null;
+  const a = r.aircraft.find((x) => cleanHex(x.hex) === best);
+  return a ? { hex: best, name: flightName(a, best), ageS: Math.max(0, Math.round((nowMs - at) / 1000)) } : null;
 }
 /** ★★★ THE CAPTURE WARNING (Stuart, 2026-10-24) — the server counts the samples its ADS-B decoder RECEIVES against
  *  what the rate promises (vibe_adsb_capture.h CaptureMeter: the dongle/USB and the server's own IQ queue, not the

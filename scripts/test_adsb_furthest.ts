@@ -6,7 +6,7 @@
  * Run: npx tsx scripts/test_adsb_furthest.ts   (run-tests.sh does)
  */
 import { readFileSync } from 'node:fs';
-import { adsbFurthest, adsbFurthestHtml } from '../web/client/src/adsb.ts';
+import { adsbFurthest, adsbFurthestHtml, adsbLongestTracked, adsbNewest, adsbChipHtml } from '../web/client/src/adsb.ts';
 
 let fails = 0, passes = 0;
 const ok = (c: boolean, what: string) => { if (c) { passes++; return; } fails++; console.error(`FAIL ${what}`); };
@@ -41,6 +41,25 @@ if (fn) {
   ok(!b.hidden && b.innerHTML.includes(`${Math.round(f!.nm)} NM`), 'app: the same distance, shown');
   run(document, 0, 0, ac);
   ok(b.hidden, 'app: no receiver position → hidden');
+}
+// ★ THE LIST HEADER'S OTHER TWO CHIPS (2026-10-25): FURTHEST TRACKED and NEWEST
+{
+  const rep = (ac: any[]) => ({ aircraft: ac } as any);
+  const lg = adsbLongestTracked(rep([{ hex: 'aaaaaa', tracked_nm: 12 }, { hex: 'bbbbbb', flight: 'BAW12 ', tracked_nm: 140.6 }, { hex: 'cccccc', tracked_nm: 0.4 }]));
+  ok(!!lg && lg.hex === 'bbbbbb' && lg.name === 'BAW12' && Math.round(lg.nm) === 141, `tracked: the longest (${JSON.stringify(lg)})`);
+  ok(adsbLongestTracked(rep([{ hex: 'aaaaaa', tracked_nm: 0.5 }])) === null, 'tracked: under 1 NM is not a track');
+  ok(adsbChipHtml('TRACKED', '141 NM', 'BAW12') === '<span class="k">TRACKED</span> 141 NM<span class="n"> · BAW12</span>', 'tracked: the chip text');
+  ok(adsbChipHtml('NEWEST', '', '<b>') === '<span class="k">NEWEST</span><span class="n"> · &#60;b&#62;</span>', 'newest: the chip text, escaped');
+  const seen = new Map<string, number>();
+  ok(adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'bbbbbb' }]), seen, 1000) === null, 'newest: the first report is "already there", not new');
+  const n1 = adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'bbbbbb' }, { hex: 'cccccc', flight: 'EZY1' }]), seen, 5000);
+  ok(!!n1 && n1.hex === 'cccccc' && n1.name === 'EZY1' && n1.ageS === 0, `newest: one arrives (${JSON.stringify(n1)})`);
+  const n2 = adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'cccccc' }, { hex: 'dddddd' }]), seen, 9000);
+  ok(!!n2 && n2.hex === 'dddddd', 'newest: a later arrival takes over');
+  ok(!seen.has('bbbbbb'), 'newest: one that left is forgotten');
+  const n3 = adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'cccccc' }]), seen, 12000);
+  ok(!!n3 && n3.hex === 'cccccc' && n3.ageS === 7, `newest: the newest leaves → the one before it, with its age (${JSON.stringify(n3)})`);
+  ok(adsbNewest(null, seen, 13000) === null && seen.size === 0, 'newest: leaving ADS-B forgets them all');
 }
 console.log(fails ? `\n${fails} FAILED, ${passes} passed` : `adsb furthest: all ${passes} passed`);
 process.exit(fails ? 1 : 0);
