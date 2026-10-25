@@ -109,6 +109,34 @@ try {
                                return ${JSON.stringify(STATIONS.map(([, c]) => c))}.every(c => t.includes(c)); })()`;
   ok(await until(allSpotted, 60000), `every station spotted (${await ev(`[...document.querySelectorAll('#cwSpots .cws .c')].map(c => c.textContent).join(' ')`)})`);
   await sleep(1500);   // ★ the list goes once a second: let the row that names the last call arrive
+  // ★★ Scrolled down to SPOTS, the view stays there while the rows above are rebuilt (Stuart, 2026-10-25: "the new text
+  //    above kept pulling the view up again"). A short box so it must scroll; three list updates.
+  //    ★ AS SAFARI SEES IT: no native scroll anchoring (Edge's would hide the fault), and the content ABOVE grows — new
+  //      signals arriving on a busy band — by a 90 px block before the list, after the view was set.
+  await ev(`(() => { const b = document.getElementById('decBody'); b.style.maxHeight = '140px'; b.style.height = '140px';
+                     b.style.overflowAnchor = 'none';
+                     b.scrollTop = document.getElementById('cwSpotsHead').offsetTop - b.offsetTop;
+                     b.dispatchEvent(new Event('scroll'));   // ★ headless fires none for a scripted scroll; a finger always does
+                     return 1; })()`);
+  await sleep(300);
+  const headY = () => ev(`Math.round(document.getElementById('cwSpotsHead').getBoundingClientRect().top - document.getElementById('decBody').getBoundingClientRect().top)`);
+  const y0 = await headY(), top0 = await ev(`document.getElementById('decBody').scrollTop`);
+  await ev(`(() => { window.__cwRenders = 0; new MutationObserver(() => { window.__cwRenders++; }).observe(document.getElementById('cwRows'), { childList: true });
+                     return 1; })()`);
+  await ev(`(() => { const g = document.createElement('div'); g.id = 'cwGrowTest'; g.style.height = '90px';
+                     const l = document.getElementById('cwList'); l.parentNode.insertBefore(g, l); return 1; })()`);
+  await sleep(3200);
+  const y1 = await headY(), top1 = await ev(`document.getElementById('decBody').scrollTop`);
+  const renders = await ev(`window.__cwRenders`);
+  ok(renders >= 2, `the list was redrawn while we waited (${renders} times) — so the check below means something`);
+  ok(top0 > 0 && top1 > 0 && Math.abs(y1 - y0) <= 2, `scrolled to SPOTS, the view stays put through the list updates (heading at ${y0} → ${y1} px, scrollTop ${top0} → ${top1})`);
+  await ev(`(() => { const b = document.getElementById('decBody'); b.style.maxHeight = ''; b.style.height = ''; b.style.overflowAnchor = '';
+                     document.getElementById('cwGrowTest')?.remove(); b.scrollTop = 0; return 1; })()`);
+  // ★★ Lowest frequency first, whatever the confidence; the message coloured by it (Stuart, 2026-10-25).
+  const order = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#cwRows .cwr')].map(r => ({ f: parseFloat(r.querySelector('.f').textContent), q: (r.className.match(/q-(\\w+)/) || [])[1], col: getComputedStyle(r.querySelector('.tx')).color })))`));
+  ok(order.length >= 2 && order.every((r, i) => i === 0 || r.f >= order[i - 1].f), `the list runs lowest frequency first (${order.map((r) => r.f).join(' ')})`);
+  const want = { high: 'rgb(91, 227, 107)', medium: 'rgb(232, 197, 71)', low: 'rgb(255, 138, 61)', poor: 'rgb(255, 75, 75)' };
+  ok(order.every((r) => want[r.q] === r.col), `each message in its confidence colour (${order.map((r) => r.q + ' ' + r.col).join(', ')})`);
   const rows = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#cwRows .cwr')].map(r => ({ f: r.querySelector('.f').textContent, c: r.querySelector('.c').textContent, tx: r.querySelector('.tx').textContent })))`));
   for (const [off, call] of STATIONS) {
     const r = rows.find((x) => x.c === call);

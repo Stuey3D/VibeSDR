@@ -2614,7 +2614,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* ★ nowrap: "18 wpm" and "+23 dB" broke onto two lines in a column a character too narrow (2026-10-25 screenshot) */
 #cwList .w, #cwList .s, #cwList .a { text-align: right; font-variant-numeric: tabular-nums; color: var(--unit); white-space: nowrap; }
 #cwList .q { text-align: right; white-space: nowrap; }
-#cwList .q.high { color: #55d98d; } #cwList .q.medium { color: #c9d955; } #cwList .q.low { color: rgba(255,160,0,0.8); }
+/* ★ Confidence, marker AND message (Stuart, 2026-10-25: "poor can be red low can be orange then medium a yellowish amber
+ *  and green for high") — the health pill's own four (HEALTH_COLOURS), so a colour means the same thing everywhere. */
+#cwList .q.high, #cwList .cwr.q-high .tx { color: #5BE36B; }
+#cwList .q.medium, #cwList .cwr.q-medium .tx { color: #E8C547; }
+#cwList .q.low, #cwList .cwr.q-low .tx { color: #FF8A3D; }
+#cwList .q.poor, #cwList .cwr.q-poor .tx { color: #FF4B4B; }
 #cwList .q.poor { color: var(--text-dim); }
 #cwList .tx { grid-column: 1 / -1; font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); font-size: 12px;
               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }

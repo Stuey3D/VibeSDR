@@ -10546,6 +10546,13 @@ function cwTune(hz: number) {
 function renderCw() {
   const rows = $('cwRows');
   const l = cwLast;
+  /* ★★ THE VIEW STAYS WHERE THE LISTENER PUT IT (Stuart, 2026-10-25: "trying to look at the spots at the bottom … the new
+   *  text above kept pulling the view up again"). The rows are rebuilt about once a second and new signals add rows ABOVE
+   *  the spots, so a plain scrollTop jumped. Scrolled down at all = pinned to the SPOTS heading: it keeps its place on
+   *  screen whatever happens above it. At the top = stays at the top (new rows arrive where the eye already is). */
+  const body = document.getElementById('decBody');
+  const head = $('cwSpotsHead');
+  cwPinWatch(body);
   rows.textContent = '';
   if (!l || !l.signals.length) {
     const d = document.createElement('div'); d.className = 'idle';
@@ -10553,9 +10560,14 @@ function renderCw() {
                            : 'listening — tune a CW signal into the passband';
     rows.appendChild(d);
   }
-  for (const sg of l?.signals ?? []) {
+  /* ★★ LOWEST FREQUENCY FIRST, ALWAYS (Stuart, 2026-10-25: "the CW Skimmer list likes to reorder itself a lot so I think
+   *  we list it from frequency lowest to highest regardless of confidence"). A row keeps its place while its signal lives;
+   *  the order is the band's, as on the spectrum above. A signal with no RF frequency (ONE SIGNAL's audio) by its tone. */
+  const sigs = [...(l?.signals ?? [])].sort((a, b) => (a.hz > 0 && b.hz > 0 ? a.hz - b.hz : a.audio - b.audio) || a.id - b.id);
+  for (const sg of sigs) {
     const r = document.createElement('div');
-    r.className = 'cwr' + (sg.active ? '' : ' gone') + (!l!.skimmer && sg.id === l!.primary ? ' primary' : '');
+    // ★ q-<confidence> colours the message (#cwList .cwr.q-low .tx …): red poor, orange low, amber medium, green high (Stuart).
+    r.className = 'cwr q-' + sg.q + (sg.active ? '' : ' gone') + (!l!.skimmer && sg.id === l!.primary ? ' primary' : '');
     r.innerHTML =
       `<span class="f">${escapeHtml(cwFreq(sg))}</span>` +
       `<span class="c${sg.call ? '' : ' none'}">${escapeHtml(sg.call || '—')}</span>` +
@@ -10589,6 +10601,30 @@ function renderCw() {
     r.onclick = () => cwTune(s.frequency);
     sp.appendChild(r);
   }
+  // ★ Where the LISTENER left the heading — taken from their own scrolling (cwPinWatch), so growth that happened between two
+  //   updates is undone too, not just growth made by this one.
+  if (body && cwPinAt !== null) {
+    const want = Math.max(0, cwHeadInBox(body, head) - cwPinAt);
+    if (Math.abs(want - body.scrollTop) >= 1) { cwPinSetting = true; body.scrollTop = want; }
+  }
+}
+/** Where the heading sits in the box's CONTENT (not offsetTop: that is measured from the nearest positioned ancestor,
+ *  which growth above the list does not move). */
+function cwHeadInBox(body: HTMLElement, head: HTMLElement): number {
+  return head.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+}
+/** The SPOTS heading's distance from the top of the box's view as the listener last scrolled it; null = at the top. */
+let cwPinAt: number | null = null;
+let cwPinSetting = false;
+let cwPinBody: HTMLElement | null = null;
+function cwPinWatch(body: HTMLElement | null) {
+  if (!body || cwPinBody === body) return;
+  cwPinBody = body;
+  body.addEventListener('scroll', () => {
+    if (cwPinSetting) { cwPinSetting = false; return; }   // ★ our own restore, not the listener
+    if (activeDec !== 'cw') { cwPinAt = null; return; }
+    cwPinAt = body.scrollTop > 0 ? cwHeadInBox(body, $('cwSpotsHead')) - body.scrollTop : null;
+  }, { passive: true });
 }
 /* ★★★ NAVTEX — A MESSAGE AT A TIME (Stuart, 2026-10-05): "a hybrid of RTTY & WEFAX … message arrives and is displayed
  *  with the option to save it … next message arrives previous message gets moved in the background and user can
