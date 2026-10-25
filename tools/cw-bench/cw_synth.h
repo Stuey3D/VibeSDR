@@ -28,35 +28,45 @@ struct Rng {
 struct Keying {
     double wpm = 20, farnsworth = 0;   // farnsworth: the character speed stays wpm, the gaps are stretched to this overall speed
     double riseMs = 4;                 // raised-cosine edges; 0 = hard keying (key clicks)
-    double jitter = 0;                 // a human fist: each element's length varies by this fraction (σ)
-    double weight = 1.0;               // mark/space weighting: 1.1 = marks 10 % long
+    double jitter = 0;                 // a human fist: each element's length varies by this fraction (σ) — all of them
+    double weight = 1.0;               // mark/space weighting: 1.1 = marks 10 % long (the gap inside a character pays)
+    // ★★ HUMAN FISTS, each on its own (2026-10-25: "compensate for variable WPM for real human operators")
+    double wpmEnd = 0;                 // > 0: the speed RAMPS linearly from wpm to this across the text (an operator speeding up)
+    double dashRatio = 3.0;            // dash : dot (2.5–4 among real fists)
+    double elemGap = 1.0, charGap = 3.0, wordGap = 7.0;   // spacings, in dots
+    double dotJitter = -1, dashJitter = -1, gapJitter = -1;   // σ per kind (−1 = `jitter`); a bug: dots ≈ 0, dashes and gaps big
 };
 /** The key's envelope (0..1), sampled at `rate`, for `text` — then `tailSec` of silence. */
 inline std::vector<float> keyEnvelope(const std::string& text, const Keying& k, double rate, Rng& rng, double tailSec = 0.5) {
-    const double unit = 1.2 / k.wpm;
-    double gapUnit = unit;
-    if (k.farnsworth > 0 && k.farnsworth < k.wpm) {
-        // ARRL-style: the extra time is spread over the character and word gaps (19 of 50 units of PARIS)
-        const double ta = (60.0 * k.wpm - 37.2 * k.farnsworth) / (k.farnsworth * k.wpm);
-        gapUnit = ta / 19.0 * 1.0 / 1.0;   // seconds per gap unit
-    }
     std::vector<std::pair<double, bool>> seg;   // (seconds, keyed)
     auto add = [&](double sec, bool on) { if (sec > 0) seg.push_back({ sec, on }); };
-    auto jit = [&](double x) { return k.jitter > 0 ? std::max(0.3 * x, x * (1.0 + k.jitter * rng.gauss())) : x; };
+    const double jd = k.dotJitter >= 0 ? k.dotJitter : k.jitter, jh = k.dashJitter >= 0 ? k.dashJitter : k.jitter,
+                 jg = k.gapJitter >= 0 ? k.gapJitter : k.jitter;
+    auto jit = [&](double x, double j) { return j > 0 ? std::max(0.3 * x, x * (1.0 + j * rng.gauss())) : x; };
     add(0.3, false);
     for (size_t i = 0; i < text.size(); ++i) {
+        // ★ The speed at this point of the text (a ramp), and Farnsworth's stretched gaps
+        const double w = k.wpmEnd > 0 ? k.wpm + (k.wpmEnd - k.wpm) * (double)i / std::max<size_t>(1, text.size() - 1) : k.wpm;
+        const double unit = 1.2 / w;
+        double gapUnit = unit;
+        if (k.farnsworth > 0 && k.farnsworth < w) {
+            // ARRL-style: the extra time is spread over the character and word gaps (19 of 50 units of PARIS)
+            const double ta = (60.0 * w - 37.2 * k.farnsworth) / (k.farnsworth * w);
+            gapUnit = ta / 19.0;   // seconds per gap unit
+        }
         const char c = text[i];
-        if (c == ' ') { add(jit((k.farnsworth > 0 ? gapUnit : unit) * 4), false); continue; }   // 3 already after the char → 7
+        if (c == ' ') { add(jit(gapUnit * (k.wordGap - k.charGap), jg), false); continue; }   // the char gap is already there
         std::string code;
         if (c == '<') { const size_t e = text.find('>', i); code = morseCode(text.substr(i, e - i + 1)); i = e; }
         else code = morseCode(std::string(1, c));
         if (code.empty()) continue;
         for (size_t e = 0; e < code.size(); ++e) {
-            const double m = (code[e] == '-' ? 3 : 1) * unit;
-            add(jit(m * k.weight), true);
-            if (e + 1 < code.size()) add(jit(unit * (2.0 - k.weight)), false);
+            const bool dash = code[e] == '-';
+            const double m = (dash ? k.dashRatio : 1.0) * unit;
+            add(jit(m * k.weight, dash ? jh : jd), true);
+            if (e + 1 < code.size()) add(jit(unit * k.elemGap * (2.0 - k.weight), jg), false);
         }
-        add(jit((k.farnsworth > 0 ? gapUnit : unit) * 3), false);
+        add(jit(gapUnit * k.charGap, jg), false);
     }
     add(tailSec, false);
     double total = 0; for (auto& s : seg) total += s.first;

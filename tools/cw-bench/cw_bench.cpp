@@ -128,6 +128,86 @@ static int conditions() {
     return 0;
 }
 
+/** ★★ HUMAN FISTS (Stuart, 2026-10-25: "we also need to compensate for variable WPM for real human operators"): a speed
+ *  ramp inside an over, a step between overs, a bug key, a straight key's jitter, odd weighting and spacing, Farnsworth.
+ *  Each case is a QSO's worth of overs (≈ 60 characters each, 1.5 s apart), 48 kHz IQ. */
+struct FistCase { const char* name; std::vector<Keying> overs; };
+static double fistCer(const FistCase& fc, double snr, uint64_t seed, double* wpmOut = nullptr) {
+    Rng rng(seed);
+    const std::string ov[] = { "CQ CQ DE G4ABC G4ABC K  ", "G4ABC DE DL1XYZ GM UR RST 579 579 NAME HANS QTH BERLIN HW? BK  ",
+                               "DL1XYZ DE G4ABC R TNX FER CALL UR 599 OP JOHN WX FINE TEMP 12C  ", "G4ABC DE DL1XYZ FB JOHN TNX QSO 73 ES GL SK  " };
+    std::string sent; std::vector<float> env;
+    for (size_t i = 0; i < fc.overs.size(); ++i) {
+        const std::string t = ov[i % 4];
+        auto e = keyEnvelope(t, fc.overs[i], 48000, rng, 1.5);
+        env.insert(env.end(), e.begin(), e.end());
+        sent += t;
+    }
+    Tone t; t.hz = 2000; t.snrDb = snr; t.env = env;
+    std::vector<Tone> ts{ t }; std::vector<cf> iq; std::vector<float> re;
+    synth(ts, 48000, true, env.size() / 48000.0, rng, iq, re);
+    Skimmer::Config cfg; cfg.rate = 48000; cfg.complexIn = true; cfg.loHz = -20000; cfg.hiHz = 20000;
+    Skimmer sk(cfg);
+    auto r = run(sk, iq, re);
+    int e, n; cer(sent, textNear(r, t.hz), e, n);
+    if (wpmOut) { *wpmOut = 0; for (auto& v : sk.signals()) if (std::fabs(v.offsetHz - t.hz) < 40) { *wpmOut = v.wpm; break; } }
+    return 100.0 * e / std::max(1, (int)squash(sent).size());
+}
+static std::vector<FistCase> fistCases() {
+    auto K = [](double w) { Keying k; k.wpm = w; return k; };
+    auto rep = [](const Keying& k, int n = 8) { return std::vector<Keying>((size_t)n, k); };
+    std::vector<FistCase> v;
+    v.push_back({ "clean 20 WPM (reference)", rep(K(20)) });
+    { Keying k = K(15); k.wpmEnd = 25; v.push_back({ "ramp 15→25 WPM in each over", rep(k) }); }
+    { Keying k = K(28); k.wpmEnd = 16; v.push_back({ "ramp 28→16 WPM in each over", rep(k) }); }
+    { std::vector<Keying> o; for (double w : { 15, 28, 18, 32, 14, 26, 20, 35 }) o.push_back(K(w));
+      v.push_back({ "step between overs 15/28/18/32/14/26/20/35", o }); }
+    { Keying k = K(24); k.dotJitter = 0.02; k.dashJitter = 0.25; k.gapJitter = 0.25; k.dashRatio = 3.6;
+      v.push_back({ "bug key (dots exact, dashes/gaps ±25 %)", rep(k) }); }
+    for (double j : { 0.10, 0.15, 0.20, 0.30 }) { Keying k = K(18); k.jitter = j; k.riseMs = 3;
+      static char nm[4][48]; const int i = j < 0.12 ? 0 : j < 0.17 ? 1 : j < 0.25 ? 2 : 3;
+      std::snprintf(nm[i], sizeof nm[i], "straight key, σ %.0f %% per element", j * 100); v.push_back({ nm[i], rep(k) }); }
+    { Keying k = K(22); k.dashRatio = 2.5; v.push_back({ "dash:dot 2.5:1", rep(k) }); }
+    { Keying k = K(22); k.dashRatio = 4.0; v.push_back({ "dash:dot 4:1", rep(k) }); }
+    { Keying k = K(22); k.weight = 1.3; v.push_back({ "heavy keying (marks +30 %)", rep(k) }); }
+    { Keying k = K(22); k.weight = 0.75; v.push_back({ "light keying (marks −25 %)", rep(k) }); }
+    { Keying k = K(22); k.elemGap = 1.5; v.push_back({ "element gaps 1.5 dots", rep(k) }); }
+    { Keying k = K(22); k.elemGap = 0.7; v.push_back({ "element gaps 0.7 dot", rep(k) }); }
+    { Keying k = K(22); k.charGap = 5; k.wordGap = 10; k.gapJitter = 0.25; v.push_back({ "long, uneven char/word gaps", rep(k) }); }
+    { Keying k = K(25); k.farnsworth = 12; v.push_back({ "Farnsworth 25/12", rep(k) }); }
+    { Keying k = K(15); k.wpmEnd = 25; k.jitter = 0.15; k.dashRatio = 3.4; k.weight = 1.1;
+      v.push_back({ "all at once: ramp, σ 15 %, 3.4:1, heavy", rep(k) }); }
+    return v;
+}
+static int fistShow(int idx, double snr) {
+    auto cs = fistCases(); if (idx < 0 || idx >= (int)cs.size()) return 2;
+    const FistCase& fc = cs[(size_t)idx];
+    Rng rng(snr >= 5 ? 91 : 92);   // ★ the same seeds fists() uses, so a case shown is the case measured
+    const std::string ov[] = { "CQ CQ DE G4ABC G4ABC K  ", "G4ABC DE DL1XYZ GM UR RST 579 579 NAME HANS QTH BERLIN HW? BK  ",
+                               "DL1XYZ DE G4ABC R TNX FER CALL UR 599 OP JOHN WX FINE TEMP 12C  ", "G4ABC DE DL1XYZ FB JOHN TNX QSO 73 ES GL SK  " };
+    std::string sent; std::vector<float> env;
+    for (size_t i = 0; i < fc.overs.size(); ++i) { auto e = keyEnvelope(ov[i % 4], fc.overs[i], 48000, rng, 1.5); env.insert(env.end(), e.begin(), e.end()); sent += ov[i % 4]; }
+    Tone t; t.hz = 2000; t.snrDb = snr; t.env = env;
+    std::vector<Tone> ts{ t }; std::vector<cf> iq; std::vector<float> re;
+    synth(ts, 48000, true, env.size() / 48000.0, rng, iq, re);
+    Skimmer::Config cfg; cfg.rate = 48000; cfg.complexIn = true; cfg.loHz = -20000; cfg.hiHz = 20000;
+    Skimmer sk(cfg);
+    auto r = run(sk, iq, re);
+    std::printf("%s\nSENT: %s\n", fc.name, squash(sent).c_str());
+    for (auto& kv : r.text) std::printf("  id %d @ %+.0f: %s\n", kv.first, r.hz[kv.first], squash(kv.second).c_str());
+    return 0;
+}
+static int fists() {
+    std::printf("\n== human fists: 8 overs each (a QSO), 48 kHz IQ; CER (WPM measured at the end) ==\n");
+    std::printf("  %-44s  %14s  %14s\n", "case", "+5 dB", "0 dB");
+    for (auto& fc : fistCases()) {
+        double w1, w2;
+        const double a = fistCer(fc, 5, 91, &w1), b = fistCer(fc, 0, 92, &w2);
+        std::printf("  %-44s  %6.1f%% (%3.0f)  %6.1f%% (%3.0f)\n", fc.name, a, w1, b, w2);
+    }
+    return 0;
+}
+
 static int multi() {
     std::printf("\n== multi: 12 signals in 48 kHz IQ, 60–300 Hz apart, mixed speeds/SNR, half hard-keyed ==\n");
     Rng rng(4242);
@@ -357,6 +437,8 @@ int main(int argc, char** argv) {
     if (m == "conditions") return conditions();
     if (m == "one" && argc > 4) return one(std::atof(argv[2]), std::atof(argv[3]), std::string(argv[4]) == "iq", argc > 5 ? std::atof(argv[5]) : 700);
     if (m == "multi") return multi();
+    if (m == "fists") return fists();
+    if (m == "fist" && argc > 3) return fistShow(std::atoi(argv[2]), std::atof(argv[3]));
     if (m == "noise") return noise(argc > 2 ? std::atof(argv[2]) : 10);
     if (m == "bias") return bias();
     if (m == "clip" && argc > 4) return clip(argv[2], std::atof(argv[3]), std::atof(argv[4]));

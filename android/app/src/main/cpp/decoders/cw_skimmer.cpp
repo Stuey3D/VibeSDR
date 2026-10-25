@@ -359,7 +359,17 @@ struct Skimmer::Impl {
         float unit = 11.25f, markSplit = 22.5f, charSplit = 22.5f, wordSplit = 56.f;
         float marks[kRing] = {}; int nMarks = 0, mPos = 0;
         float gaps[kGapRing] = {}; int nGaps = 0, gPos = 0;
-        float dotC = 0, dashC = 0, markSpread = 1.f, gapRatio = 0; bool markSep = false;
+        float dotC = 0, dashC = 0, markSpread = 1.f, gapRatio = 0; bool markSep = false;   // ★ the ring's clusters: STATS
+        // ★★★ THE LIVE TIMING (human fists, 2026-10-25): five running centres, each followed element by element — the dot,
+        //     the dash, and the element / character / word gaps — so the dash:dot ratio (2.5–4:1), the weighting and the
+        //     spacing are each the sender's own, not 1:3:7 assumed. One odd element moves its centre at most 6 % (a
+        //     clipped step), so a speed CHANGE is followed within a few characters and a fumble is not.
+        float cDot = 11.25f, cDash = 33.75f, cG1 = 11.25f, cG3 = 33.75f, cG7 = 78.75f;
+        bool seedM = false, seedG = false;
+        int gapTick = 0, markTick = 0;
+        // ★★ A NEW OVER RE-SYNCS: after a pause the first marks are held (not decoded) until there are enough to say the
+        //    new speed, then decoded with it — an operator back at 30 WPM after 15 was read as all dots for a word.
+        bool buffering = false; std::vector<Run> ov;
         Assembler as;
         bool wordOpen = false;         // a character has been emitted since the last word space
         std::vector<Run> runs;         // ★ while tentative: every committed run, for the re-decode
@@ -368,6 +378,9 @@ struct Skimmer::Impl {
         unsigned chars = 0, valid = 0, elems = 0;   // ★ elems: in the valid characters — noise makes E and T, text ≈ 3
         float quality = 0, validRate = 0;
         float recentEpc = 2.5f;        // ★ elements per valid character, recently (a moving mean) — noise sinks to ≈ 1.5
+        // ★ This OVER's characters (since the last pause), held while the signal is on hold (Sig::overHold)
+        unsigned overChars = 0, overValid = 0, overElems = 0;
+        std::string overText; std::vector<std::string> overWords;
         double contrast() const { return onN && offN ? (onSum / onN) / std::max(1e-9, offSum / offN) : 0.0; }
     };
     struct Sig {
@@ -384,7 +397,13 @@ struct Skimmer::Impl {
         std::map<std::string, uint64_t> callSpotted;
         std::string call;
         int64_t firstMs = 0, lastMs = 0;
-        uint64_t noisySince = 0;       // ★ a confirmed signal whose keying stopped looking like Morse, since when (0 = it does)
+        uint64_t noisySince = 0;
+        int pendingBest = -1;          // ★ a better lane, waiting for a word boundary to take over (chooseLane)
+        /** ★★★ AN OVER STARTS ON HOLD (human fists: the reply is another operator, another speed). After a pause every lane
+         *  decodes the new over but none is shown; once one lane has read it clearly (or after a few seconds) the BEST LANE
+         *  FOR THIS OVER is chosen and its text so far shown in one piece — so a change of speed between overs, which can
+         *  move a signal to another lane, never loses the start of the over to the lane that suited the last one. */
+        bool overHold = false; uint64_t holdSince = 0;       // ★ a confirmed signal whose keying stopped looking like Morse, since when (0 = it does)
         const Lane& bestLane() const { return lane[best]; }
     };
     std::vector<std::unique_ptr<Sig>> sigs;
@@ -453,6 +472,7 @@ struct Skimmer::Impl {
         l.minRun = std::max(1, (int)std::lround(0.35f * dot));   // ★ a run shorter than a third of a dot is a flicker
         l.uLo = dotHops(sp.hi); l.uHi = dotHops(sp.lo);
         l.unit = dot; l.markSplit = 2.0f * dot; l.charSplit = 2.0f * dot; l.wordSplit = 5.0f * dot;
+        l.cDot = dot; l.cDash = 3 * dot; l.cG1 = dot; l.cG3 = 3 * dot; l.cG7 = 7 * dot;
         l.markLvl = markLvl;
         l.runs.reserve(128);
     }
@@ -548,7 +568,17 @@ struct Skimmer::Impl {
         s.noise = mu;
         bool anyOn = false;
         for (int i = 0; i < kLanes; ++i) { stepLane(s, i, p, mu); anyOn |= s.lane[i].on; }
-        if (anyOn) s.lastMark = hopN;
+        if (anyOn) {
+            if (s.overHold && !s.holdSince) s.holdSince = hopN;
+            s.lastMark = hopN;
+        } else if (s.confirmed && !s.overHold && hopN - s.lastMark == hopsFor(1.2)) beginHold(s);
+        if (s.overHold && s.holdSince) {
+            unsigned best = 0; for (const Lane& l : s.lane) best = std::max(best, l.overValid);
+            if (best >= 10 || hopN - s.holdSince > hopsFor(4.0)) endHold(s);
+        }
+        if (s.pendingBest >= 0 && atWordBoundary(s.lane[s.best]) && atWordBoundary(s.lane[s.pendingBest])) {
+            s.best = s.pendingBest; s.pendingBest = -1;
+        }
     }
     void stepLane(Sig& s, int li, float p, float mu) {
         Lane& l = s.lane[li];
@@ -579,10 +609,15 @@ struct Skimmer::Impl {
         // ★ Debounce: a run shorter than ≈ a third of the lane's dot is absorbed into the one around it.
         if (raw == l.on) { l.run += l.pend + 1; l.pend = 0; }
         else if (++l.pend >= l.minRun) {
-            if (l.on) onMark(s, l, l.run); else onGap(s, l, l.run);
+            if (l.on) onMark(s, li, l.run); else onGap(s, li, l.run);
             l.on = raw; l.run = l.pend; l.pend = 0;
         }
         if (!l.on) {
+            // ★ A held over-start ends at its first word gap (or a pause): decode it with the speed it showed.
+            //   ★ Not at the first long-looking gap with a handful of marks: at the OLD speed's word split, a slower
+            //     operator's character gap already looks like a word — six marks first, or a real pause.
+            if (l.buffering && !l.ov.empty() && ((l.run > l.wordSplit && countMarks(l.ov) >= 6) || l.run > (int)hopsFor(1.2)))
+                flushOver(s, li);
             // ★ Characters and word spaces are decided WHILE the gap runs, so text arrives without waiting for a mark.
             if (l.as.nel > 0 && l.run > l.charSplit) endChar(s, li, (float)l.run);
             if (l.wordOpen && l.run > l.wordSplit) endWord(s, li);
@@ -610,9 +645,10 @@ struct Skimmer::Impl {
             *rms = n ? (float)std::sqrt(q / n) : 1.f;
         }
     }
-    /** Three clusters of log gap length, started at 1, 3 and 7 units. */
-    static void threeMeans(const float* v, int n, float logUnit, float c[3], int cnt[3]) {
+    /** Three clusters of log gap length, started at 1, 3 and 7 units (or at `init`, the live centres). */
+    static void threeMeans(const float* v, int n, float logUnit, float c[3], int cnt[3], const float* init = nullptr) {
         c[0] = logUnit; c[1] = logUnit + std::log(3.0f); c[2] = logUnit + std::log(7.0f);
+        if (init) { c[0] = init[0]; c[1] = init[1]; c[2] = init[2]; }
         for (int it = 0; it < 8; ++it) {
             float sum[3] = { 0, 0, 0 }; cnt[0] = cnt[1] = cnt[2] = 0;
             const float t01 = 0.5f * (c[0] + c[1]), t12 = 0.5f * (c[1] + c[2]);
@@ -622,78 +658,182 @@ struct Skimmer::Impl {
             if (!moved) break;
         }
     }
+    /** ★ The ring's statistics (what morseLike and laneScore judge), and the live centres' first values from them. */
     void retime(Lane& l) {
-        // ★★ The speed, learnt from the keying: the marks' log lengths fall into two clusters, dots and dashes.
-        //    Only keying that LOOKS LIKE MORSE teaches it anything — two clusters ≈ 3:1 apart and tight (noise thresholded
-        //    at its median clusters too, at about 2.3:1); anything else leaves the lane's speed where it was.
         if (l.nMarks >= 4) {
             float lo, hi; int nl, nh;
             twoMeans(l.marks, std::min(l.nMarks, kRing), lo, hi, nl, nh, &l.markSpread);
-            float unit = l.unit;
             const float ratio = std::exp(hi - lo);
-            const bool morse = nl > 0 && nh > 0 && ratio >= 2.6f && ratio <= 6.0f && l.markSpread <= 0.4f;
-            if (morse) {
-                l.markSep = true; l.dotC = std::exp(lo); l.dashC = std::exp(hi);
-                // ★★ THE UNIT IS HALF THE DIFFERENCE, dash − dot = 2 units EXACTLY: whatever ends a mark early (the
-                //    threshold, the smoothing, the sender's weighting) shortens a dot and a dash by the same time, so the
-                //    difference carries no bias — where dot alone, or dash ÷ 3, reads a weak signal fast.
-                unit = 0.5f * (l.dashC - l.dotC);
-            } else if (hi - lo < 0.4f && l.markSpread <= 0.2f && l.nGaps >= 4) {
-                // ★ All one kind (a run of E/I/S/H or T/M/O): which kind is told by the element gaps (always one unit).
-                const float m = std::exp(0.5f * (lo + hi));
-                float a, b; int na, nb; twoMeans(l.gaps, std::min(l.nGaps, kGapRing), a, b, na, nb);
-                unit = m > 2.0f * std::exp(a) ? m / 3.0f : m;
-            }
-            unit = std::max(l.uLo, std::min(l.uHi, unit));          // ★ inside the lane's own range
-            l.unit = l.nMarks < 8 ? unit : 0.7f * l.unit + 0.3f * unit;
-            l.markSplit = l.markSep ? 0.5f * (l.dotC + l.dashC) : 2.0f * l.unit;
+            // ★ Noise thresholded at its median clusters too — at about 2.3:1. Morse is 2.5–4:1, more as measured.
+            l.markSep = nl > 0 && nh > 0 && ratio >= 2.4f && ratio <= 6.0f && l.markSpread <= 0.45f;
+            if (l.markSep) { l.dotC = std::exp(lo); l.dashC = std::exp(hi); }
+            if (!l.seedM && l.markSep && l.nMarks >= 6) { l.cDot = l.dotC; l.cDash = l.dashC; l.seedM = true; }
         }
-        // ★★ Gaps: THREE kinds — element (1 unit), character (3) and word (7) — clustered from the lane's unit. Real
-        //    fists leave long character gaps (4–5 units is common), and a word split taken as "5 units" broke calls in
-        //    two on the air ("IU 5 R DL"); the word gaps the sender actually leaves set it instead.
-        float cs = 2.0f * l.unit, ws = std::max(1.67f * cs, 5.0f * l.unit);
-        if (l.nGaps >= 6) {
+        if (l.nGaps >= 4) {
+            float a, b; int na, nb; twoMeans(l.gaps, std::min(l.nGaps, kGapRing), a, b, na, nb);
+            l.gapRatio = std::exp(b - a);
+        }
+        if (!l.seedG && l.seedM && l.nGaps >= 8) {
             float c[3]; int n[3];
-            threeMeans(l.gaps, std::min(l.nGaps, kGapRing), std::log(l.unit), c, n);
-            l.gapRatio = std::exp(c[1] - c[0]);
-            if (n[0] && n[1] && c[1] - c[0] > 0.55f) cs = std::exp(0.5f * (c[0] + c[1]));
-            if (n[1] && n[2] >= 2 && c[2] - c[1] > 0.45f) ws = std::exp(0.5f * (c[1] + c[2]));
-            else if (n[1]) ws = std::max(2.0f * std::exp(c[1]), 5.0f * l.unit);
+            threeMeans(l.gaps, std::min(l.nGaps, kGapRing), std::log(l.cDot), c, n);
+            if (n[0]) l.cG1 = std::exp(c[0]);
+            // ★ Text has more character gaps than word gaps. A "word" cluster that outnumbers the character one is the
+            //   character gaps stretched (Farnsworth: 25 WPM letters with 12 WPM spacing leaves 11-dot character gaps).
+            if (n[2] > n[1]) { l.cG3 = std::exp(c[2]); l.cG7 = 2.33f * l.cG3; }
+            else {
+                if (n[1]) l.cG3 = std::exp(c[1]);
+                l.cG7 = n[2] ? std::exp(c[2]) : std::max(2.33f * l.cG3, 6.0f * l.cG1);
+            }
+            l.seedG = true;
         }
-        l.charSplit = std::max(1.5f * l.unit, std::min(4.5f * l.unit, cs));
-        l.wordSplit = std::min(14.0f * l.unit, std::max(std::max(1.5f * l.charSplit, 4.5f * l.unit), ws));
+        splits(l);
     }
+    /** ★ The decisions from the live centres: each split the geometric mean of its two neighbours (so a 4:1 fist and a
+     *  2.5:1 fist are each split between their OWN dot and dash), the centres kept in order. */
+    void splits(Lane& l) {
+        const double hz = 1.0 / hopSec;
+        const float dMin = (float)(1.2 / 70.0 * hz) * 0.7f, dMax = (float)(1.2 / 4.0 * hz) * 1.5f;
+        l.cDot = std::max(dMin, std::min(dMax, l.cDot));
+        l.cDash = std::max(1.8f * l.cDot, std::min(6.0f * l.cDot, l.cDash));
+        l.cG1 = std::max(0.4f * l.cDot, std::min(2.5f * l.cDot, l.cG1));
+        l.cG3 = std::max(1.6f * l.cG1, std::min(12.0f * l.cDot, l.cG3));
+        // ★ A word gap is at least twice a character gap (7:3 by the book; Farnsworth stretches both alike) — without this
+        //   floor, character gaps read as word gaps taught the word centre to be one, and every letter became a word.
+        l.cG7 = std::max(2.0f * l.cG3, std::min(30.0f * l.cDot, l.cG7));
+        l.markSplit = std::sqrt(l.cDot * l.cDash);
+        l.charSplit = std::sqrt(l.cG1 * l.cG3);
+        l.wordSplit = std::sqrt(l.cG3 * l.cG7);
+        // ★★ THE UNIT (the speed shown, and the lane's range): the mean of the dot and the element gap — a threshold that
+        //    ends a mark early starts its gap early by the same time, and a heavy or light fist moves them oppositely,
+        //    so the mean is the sender's own unit whatever either does alone.
+        l.unit = 0.5f * (l.cDot + l.cG1);
+    }
+    /** One element's step toward its centre, clipped to 30 % of the centre (× the rate) — at most 6 % a time. */
+    static void follow(float& c, float len, float a) { c += a * std::max(-0.3f * c, std::min(0.3f * c, len - c)); }
     void logRun(const Sig& s, Lane& l, int len, bool mark) {
         if (s.confirmed || l.runs.size() >= kRunLog) return;
         l.runs.push_back({ (uint16_t)std::min(len, 65535), mark });
     }
-    void onMark(const Sig& s, Lane& l, int len) {
+    void onMark(Sig& s, int li, int len) {
+        Lane& l = s.lane[li];
         if (len <= 0) return;
         logRun(s, l, len, true);
         const float L = (float)len;
         l.marks[l.mPos] = std::log(L); l.mPos = (l.mPos + 1) % kRing; ++l.nMarks;
         retime(l);
+        if (l.buffering) { l.ov.push_back({ (uint16_t)std::min(len, 65535), true }); if (countMarks(l.ov) >= 10) flushOver(s, li); return; }
+        markElement(l, L);
+    }
+    void markElement(Lane& l, float L) {
         const bool dash = L > l.markSplit;
-        const float spread = l.markSep ? 0.5f * std::log(l.dashC / l.dotC) : 0.55f;
+        const float spread = 0.5f * std::log(l.cDash / l.cDot);
         l.as.conf = std::min(l.as.conf, margin(L, l.markSplit, spread));
         // ★ A mark far longer than a dash is not Morse (a carrier, a tune-up): the character is spoilt.
-        if (L > 7.0f * l.unit) l.as.overflow = true;
+        if (L > 2.5f * l.cDash) l.as.overflow = true;
+        else if (l.seedM) {
+            // ★★ A SPEED CHANGE MOVES EVERYTHING: the gaps are scaled by half the mark's own move (√f), so an operator
+            //    speeding up has their spacing followed at once — not only after each gap has been misread once. (The
+            //    gaps' own steps still set their RATIOS: Farnsworth, long character gaps, a fist's own spacing.)
+            float& c = dash ? l.cDash : l.cDot;
+            const float before = c;
+            follow(c, L, 0.2f);
+            // ★ …and the marks re-centred every 8 the same way (two-means over the last 24, from the live centres).
+            if (++l.markTick % 8 == 0 && l.nMarks >= 12) {
+                const int n = std::min(l.nMarks, kRing);
+                float lo = std::log(l.cDot), hi = std::log(l.cDash);
+                for (int it = 0; it < 6; ++it) {
+                    const float t = 0.5f * (lo + hi); float sl = 0, sh = 0; int nl = 0, nh = 0;
+                    for (int i = 0; i < n; ++i) { if (l.marks[i] < t) { sl += l.marks[i]; ++nl; } else { sh += l.marks[i]; ++nh; } }
+                    if (nl) lo = sl / nl;
+                    if (nh) hi = sh / nh;
+                }
+                if (hi - lo > std::log(1.8f)) { l.cDot = std::exp(lo); l.cDash = std::exp(hi); }
+            }
+            const float f = std::sqrt(c / before);
+            l.cG1 *= f; l.cG3 *= f; l.cG7 *= f;
+            splits(l);
+        }
         l.as.element(dash);
     }
-    void onGap(const Sig& s, Lane& l, int len) {
+    void onGap(Sig& s, int li, int len) {
+        Lane& l = s.lane[li];
         if (len <= 0) return;
         logRun(s, l, len, false);
         const float L = (float)len;
-        // ★ Long pauses (between overs) would drag the gap clusters away from the keying; only gaps up to 14 units count.
-        if (L < 14.0f * l.unit) { l.gaps[l.gPos] = std::log(L); l.gPos = (l.gPos + 1) % kGapRing; ++l.nGaps; }
+        // ★ Long pauses (between overs) would drag the gap clusters away from the keying; only gaps up to 30 units count (Farnsworth word gaps reach 27).
+        if (l.seedG ? L < 1.5f * l.cG7 : L < 30.0f * l.unit) { l.gaps[l.gPos] = std::log(L); l.gPos = (l.gPos + 1) % kGapRing; ++l.nGaps; }
+        if (l.buffering) { l.ov.push_back({ (uint16_t)std::min(len, 65535), false }); return; }
+        gapElement(l, L);
+        // ★ A PAUSE — the end of an over: what follows may be another speed (a reply, a different fist). Hold it.
+        if (l.seedM && L > std::max(2.5f * l.cG7, (float)(1.2 / hopSec))) { l.buffering = true; l.ov.clear(); }
         // the character itself ended inside stepLane (the gap passed charSplit while running)
+    }
+    void gapElement(Lane& l, float L) {
+        if (!l.seedG) return;
+        // ★★ RE-CENTRED FROM THE RECENT GAPS every 8: three-means over the last 40, started at the live centres — so a
+        //    centre a run of misread gaps has dragged (a long character gap read as a word, a word as a pause) is put back
+        //    where the sender's gaps really are. Between re-centrings each gap nudges its own class (below).
+        if (++l.gapTick % 8 == 0 && l.nGaps >= 12) {
+            float v[kGapRing]; int n = 0;
+            const float cap = std::log(3.0f * l.cG7);
+            for (int i = 0; i < std::min(l.nGaps, kGapRing); ++i) if (l.gaps[i] < cap) v[n++] = l.gaps[i];
+            float init[3] = { std::log(l.cG1), std::log(l.cG3), std::log(l.cG7) }, c[3]; int k[3];
+            threeMeans(v, n, 0, c, k, init);
+            if (k[0] >= 2) l.cG1 = std::exp(c[0]);
+            if (k[1] >= 2) l.cG3 = std::exp(c[1]);
+            // ★ The word centre only from three or more word gaps — fewer, and a run of long character gaps could take it
+            //   over. Left stale, though, it lets word gaps join the character cluster and drag it up.
+            if (k[2] >= 3) l.cG7 = std::exp(c[2]);
+        }
+        if (L < l.charSplit) follow(l.cG1, L, 0.2f);
+        else if (L < l.wordSplit) follow(l.cG3, L, 0.15f);
+        else if (L > 1.8f * l.cG3 && L < 2.0f * l.cG7) follow(l.cG7, L, 0.1f);   // ★ never pulled down by a long character gap
+        splits(l);
+    }
+    static int countMarks(const std::vector<Run>& v) { int n = 0; for (auto& r : v) n += r.mark; return n; }
+    /** ★★ Decode a held over-start: its marks say its speed (two clusters → the new dot and dash; the gaps scale with
+     *  them), then every held run is decoded with it, exactly as live. */
+    void flushOver(Sig& s, int li) {
+        Lane& l = s.lane[li];
+        l.buffering = false;
+        std::vector<Run> ov; ov.swap(l.ov);
+        float v[64]; int n = 0;
+        for (auto& r : ov) if (r.mark && n < 64) v[n++] = std::log((float)r.len);
+        if (n >= 4) {
+            float lo, hi; int nl, nh, dummy; float rms; (void)dummy;
+            twoMeans(v, n, lo, hi, nl, nh, &rms);
+            const float ratio = std::exp(hi - lo);
+            if (nl > 0 && nh > 0 && ratio >= 2.2f && ratio <= 6.0f && rms <= 0.4f) {
+                const float k = std::exp(lo) / l.cDot;
+                if (k < 0.85f || k > 1.18f) {   // ★ a real change of speed — not this fist's ordinary scatter
+                    l.cDot = std::exp(lo); l.cDash = std::exp(hi);
+                    l.cG1 *= k; l.cG3 *= k; l.cG7 *= k;
+                    // ★ …and the history with it, or the next re-centring would drag the centres back to the last over's speed
+                    //   — the OLDER entries only: this over's own marks and gaps are already in the rings at their true length.
+                    const float lk = std::log(k);
+                    int ovGaps = 0; for (auto& r : ov) ovGaps += !r.mark;
+                    for (int i = 0, m = std::min(l.nGaps, kGapRing), keep = std::min(ovGaps, m); i < m - keep; ++i)
+                        l.gaps[((l.gPos - keep - 1 - i) % kGapRing + kGapRing) % kGapRing] += lk;
+                    for (int i = 0, m = std::min(l.nMarks, kRing), keep = std::min(n, m); i < m - keep; ++i)
+                        l.marks[((l.mPos - keep - 1 - i) % kRing + kRing) % kRing] += lk;
+                    splits(l);
+                }
+            }
+        }
+        for (const Run& r : ov) {
+            if (r.mark) { markElement(l, (float)r.len); continue; }
+            const float L = (float)r.len;
+            if (l.as.nel > 0 && L > l.charSplit) endChar(s, li, L);
+            if (l.wordOpen && L > l.wordSplit) endWord(s, li);
+            gapElement(l, L);
+        }
     }
     void endChar(Sig& s, int li, float gapLen) {
         Lane& l = s.lane[li];
         const float c = std::min(l.as.conf, margin(gapLen, l.charSplit, 0.5f));
         const int nel = l.as.nel;
         const char* t = l.as.take();
-        ++l.chars;
+        ++l.chars; ++l.overChars;
         // ★★ QUALITY = how many characters are real codes (a running mean over the first 16, then a moving one) × how
         //    tight the timing is (the marks' spread about their dot and dash: a keyer ≈ 0.05, a good fist 0.15–0.25, noise
         //    ≥ 0.35). High / medium / low / poor at 0.75 / 0.5 / 0.3.
@@ -703,6 +843,7 @@ struct Skimmer::Impl {
         l.quality = l.validRate * tight;
         if (!t) return;
         ++l.valid; l.elems += (unsigned)nel;
+        ++l.overValid; l.overElems += (unsigned)nel;
         l.recentEpc += 0.1f * ((float)nel - l.recentEpc);
         if (li == s.best) s.lastMs = now();
         l.word += t;
@@ -717,13 +858,15 @@ struct Skimmer::Impl {
             l.words.push_back(l.word);
             if (l.words.size() > 8) l.words.erase(l.words.begin());
             l.word.clear();
-            if (li == s.best) checkCall(s);
+            if (s.overHold) l.overWords.push_back(l.words.back());
+            else if (li == s.best) checkCall(s);
         }
     }
     void emit(Sig& s, int li, const char* t) {
         Lane& l = s.lane[li];
         l.text += t;
         if (l.text.size() > 400) l.text.erase(0, l.text.size() - 300);
+        if (s.overHold) { l.overText += t; return; }
         if (s.confirmed && li == s.best && owner->onText) owner->onText(s.id, preciseOffset(s), t);
     }
     /** ★★ CONFIRMED — and the best lane's text so far DECODED AGAIN from its runs with the timing learnt since: the first
@@ -740,13 +883,14 @@ struct Skimmer::Impl {
                                  l.words = words; checkCall(s); }
         };
         for (const Run& r : l.runs) {
-            if (r.mark) { if (r.len > 7.0f * l.unit) as.overflow = true; as.element((float)r.len > l.markSplit); continue; }
+            if (r.mark) { if (r.len > 2.5f * l.cDash) as.overflow = true; as.element((float)r.len > l.markSplit); continue; }
             if (as.nel > 0 && r.len > l.charSplit) { if (const char* t = as.take()) { text += t; word += t; open = true; } }
             if (open && r.len > l.wordSplit) endWordR();
         }
         // ★ What follows is decoded live from the state at the end of the log: the character in progress (if the current
         //   gap or mark is still running) is the re-decoder's.
         l.as = as; l.word = word; l.words = words; l.wordOpen = open;
+        l.buffering = false; l.ov.clear();
         if (text.size() > 400) text.erase(0, text.size() - 300);
         l.text = text;
         for (auto& x : s.lane) { x.runs.clear(); x.runs.shrink_to_fit(); }
@@ -758,7 +902,7 @@ struct Skimmer::Impl {
         float sc = l.quality * ((float)l.valid / (float)std::max(1u, l.chars));
         if (!l.markSep) sc *= 0.6f;
         sc *= std::min(1.0f, (float)l.elems / (2.5f * (float)l.valid));
-        if (l.unit <= l.uLo * 1.03f || l.unit >= l.uHi * 0.97f) sc *= 0.5f;   // ★ pinned at its range: the wrong lane
+        if (l.unit < l.uLo * 0.8f || l.unit > l.uHi * 1.25f) sc *= 0.5f;   // ★ outside its range: the wrong lane
         return sc;
     }
     /** ★★ IS IT MORSE? Noise thresholded at its own median makes "marks" too — so a tentative signal is shown only when
@@ -767,8 +911,8 @@ struct Skimmer::Impl {
     bool morseLike(const Lane& l) const {
         if (l.nMarks < 20 || l.valid < 8 || !l.markSep) return false;
         const float ratio = l.dashC / l.dotC;
-        if (ratio < 2.6f || ratio > 6.0f || l.markSpread > 0.4f) return false;
-        if (l.unit <= l.uLo * 1.03f || l.unit >= l.uHi * 0.97f) return false;
+        if (ratio < 2.4f || ratio > 6.0f || l.markSpread > 0.45f) return false;
+        if (l.unit < l.uLo * 0.8f || l.unit > l.uHi * 1.25f) return false;
         if ((float)l.elems < 2.2f * (float)l.valid || l.recentEpc < 2.2f) return false;   // ★ noise decodes as E and T; text ≈ 3
         if (l.contrast() < 3.0) return false;     // ★ PSK31 and other narrow data modes key softly; CW goes to the noise
         return (float)l.valid >= 0.8f * (float)l.chars;
@@ -790,7 +934,7 @@ struct Skimmer::Impl {
             owner->onSpot(sp);
         }
     }
-    /** ★ The speed shown: PARIS, 1.2 s ÷ the unit — and the unit is (dash − dot) ÷ 2, which nothing biases (retime). */
+    /** ★ The speed shown: PARIS, 1.2 s ÷ the unit — the mean of the live dot and element gap (splits). */
     float wpmOf(const Sig& s) const { return (float)(1.2 / (s.bestLane().unit * hopSec)); }
     float snrOf(const Sig& s) const {
         return (float)(10.0 * std::log10(std::max(1e-3, (double)s.bestLane().markLvl / std::max(1e-30f, s.noise) - 1.0)));
@@ -860,27 +1004,56 @@ struct Skimmer::Impl {
         }
         sigs.erase(sigs.begin() + (long)i);
     }
+    /** ★★ WHICH LANE IS SHOWN — and the hand-over happens only at a WORD BOUNDARY in both lanes (neither has a character
+     *  or a word open, neither is keyed nor holding an over-start), so a speed change that moves a signal from one lane to
+     *  another mid-over loses no character and repeats none: the old lane has shown every word up to here, the new one
+     *  shows every word from here. Asked every 32 hops; the hand-over itself waits in stepSignal for the boundary. */
     void chooseLane(Sig& s) {
         int b = s.best; float bs = laneScore(s.lane[b]);
         for (int i = 0; i < kLanes; ++i) {
             const float sc = laneScore(s.lane[i]);
-            // ★ Hysteresis: another lane must be clearly better before the text shown changes hands.
-            if (i != s.best && sc > bs + 0.08f) { b = i; bs = sc; }
+            if (i != s.best && sc > bs + 0.08f) { b = i; bs = sc; }    // ★ hysteresis: clearly better
         }
-        if (b != s.best && s.confirmed) {
-            // ★ Handing over mid-stream: the new lane picks up at its next character; a word break keeps the joins clean.
-            if (owner->onText) owner->onText(s.id, preciseOffset(s), " ");
+        if (!s.confirmed) { s.best = b; s.pendingBest = -1; return; }
+        if (s.overHold) return;
+        s.pendingBest = b != s.best ? b : -1;
+    }
+    void beginHold(Sig& s) {
+        s.overHold = true; s.holdSince = 0; s.pendingBest = -1;
+        for (Lane& l : s.lane) { l.overChars = l.overValid = l.overElems = 0; l.overText.clear(); l.overWords.clear(); }
+    }
+    void endHold(Sig& s) {
+        s.overHold = false;
+        int b = s.best; float bs = -1;
+        for (int i = 0; i < kLanes; ++i) {
+            const Lane& l = s.lane[i];
+            if (!l.overChars) continue;
+            // ★ This over's own score: real codes, not just E and T, and the lane's timing tight
+            float sc = (float)l.overValid / (float)l.overChars * std::min(1.0f, (float)l.overElems / (2.4f * (float)std::max(1u, l.overValid)));
+            sc *= std::max(0.4f, std::min(1.0f, 1.0f - (l.markSpread - 0.12f) * 1.5f));
+            if (i == s.best) sc += 0.05f;       // ★ a tie keeps the lane that was shown
+            if (sc > bs) { bs = sc; b = i; }
         }
         s.best = b;
+        Lane& l = s.lane[b];
+        if (owner->onText && !l.overText.empty()) owner->onText(s.id, preciseOffset(s), l.overText);
+        // ★ The over's words count toward spots as they would have live
+        std::vector<std::string> keep = l.words;
+        std::vector<std::string> w;
+        for (auto& x : l.overWords) { w.push_back(x); if (w.size() > 8) w.erase(w.begin()); l.words = w; checkCall(s); }
+        l.words = keep;
     }
+    static bool atWordBoundary(const Lane& l) { return !l.on && !l.wordOpen && l.as.nel == 0 && !l.buffering; }
     void housekeeping() {
         const uint64_t endHops = hopsFor(20.0), tentHops = hopsFor(10.0);
         for (size_t i = 0; i < sigs.size();) {
             Sig& s = *sigs[i];
-            // ★ Drift: follow the long average's peak, one bin at a time.
+            // ★ Drift: follow the long average's peak, one bin at a time — ★ only while the signal stands clear of the
+            //   noise: in a pause the long average is noise in every bin, and following ITS peaks walked a station two
+            //   bins off its own carrier, where it was lost and found again as another signal.
             const float m = M[(size_t)s.bin];
-            if (s.bin - 1 >= kGuard && M[(size_t)(s.bin - 1)] > 1.15f * m && !nearSignalExcept(s.bin - 1, &s)) --s.bin;
-            else if (s.bin + 1 < nw - kGuard && M[(size_t)(s.bin + 1)] > 1.15f * m && !nearSignalExcept(s.bin + 1, &s)) ++s.bin;
+            if (m > 3.0f * noiseAt(s.bin) && s.bin - 1 >= kGuard && M[(size_t)(s.bin - 1)] > 1.15f * m && !nearSignalExcept(s.bin - 1, &s)) --s.bin;
+            else if (m > 3.0f * noiseAt(s.bin) && s.bin + 1 < nw - kGuard && M[(size_t)(s.bin + 1)] > 1.15f * m && !nearSignalExcept(s.bin + 1, &s)) ++s.bin;
             chooseLane(s);
             // ★ Ghosts: checked once a signal has a second of history, and every two seconds after.
             if (s.hfill >= kHist && (!s.ghostChecked || hopN - s.lastGhostCheck >= hopsFor(2.0))) {
