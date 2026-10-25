@@ -211,12 +211,6 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     color:rgba(${T.kt},0.85);font-family:inherit;font-size:14px;letter-spacing:1px;padding:5px 10px;
     cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
   #back:active{background:rgba(${T.k},0.18);}
-  /* ★ ADS-B's FURTHEST key — the web map's #adsbFar: the distance always, the callsign only where there is room. */
-  #far{background:rgba(${T.k},0.06);border:1px solid rgba(${T.k},0.22);border-radius:8px;color:rgba(${T.kt},0.85);
-    font-family:inherit;font-size:12px;padding:5px 8px;white-space:nowrap;flex-shrink:0;cursor:pointer;
-    -webkit-tap-highlight-color:transparent;touch-action:manipulation;font-variant-numeric:tabular-nums;}
-  #far .k{opacity:0.6;letter-spacing:1.5px;}
-  @media (max-width:560px){#far .n{display:none;}}
   #title{font-size:15px;letter-spacing:2px;color:rgba(${T.x},0.80);flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   #cntwrap{display:flex;align-items:center;gap:5px;font-size:13px;letter-spacing:1px;color:rgba(${T.x},0.60);flex-shrink:0;}
   #cnt{color:rgba(${T.x},0.90);font-size:16px;}
@@ -412,7 +406,6 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     : '<button id="back">&#8592; SDR</button>'}
   <div id="title">${TITLE}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
-  ${isAdsb ? '<button id="far" hidden title="The furthest aircraft from this receiver — tap to show it on the map"></button>' : ''}
   ${isAdsb ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
@@ -1312,34 +1305,11 @@ if(KIND==='adsb'){
       var a=JSON.parse(json);if(!Array.isArray(a))return;
       var placed=0;for(var i=0;i<a.length;i++)if(a[i]&&a[i].lat!=null&&a[i].lon!=null)placed++;
       cnt.textContent=String(placed);
-      adsbFar(a);
       var L2=adsbMake();if(L2)L2.update(a);
     }catch(e){console.error('ADS-B: bad report',e);}
   };
-  /* ★★ THE FURTHEST AIRCRAFT — web/client/src/adsb.ts adsbFurthest's rule (located, greatest great-circle distance
-   *  from the receiver), so both maps name the same aircraft. Tap = the layer's own focus. */
-  var farHex='';
-  function adsbFar(a){
-    var b=document.getElementById('far');if(!b)return;
-    var best=null,bn=-1;
-    if(RX_LAT||RX_LON){
-      var D=Math.PI/180;
-      for(var i=0;i<a.length;i++){var x=a[i];if(!x||x.lat==null||x.lon==null||!x.hex)continue;
-        var dp=(x.lat-RX_LAT)*D,dl=(x.lon-RX_LON)*D;
-        var h=Math.pow(Math.sin(dp/2),2)+Math.cos(RX_LAT*D)*Math.cos(x.lat*D)*Math.pow(Math.sin(dl/2),2);
-        var nm=2*6371008.8*Math.asin(Math.min(1,Math.sqrt(h)))/1852;
-        if(nm>bn){bn=nm;best=x;}}
-    }
-    if(!best){b.hidden=true;farHex='';return;}
-    farHex=String(best.hex).toLowerCase();   // ★ the ~ of a non-ICAO address kept, as cleanHex keeps it
-    var nm2=String(best.flight||'').trim()||farHex.toUpperCase();
-    var esc=nm2.replace(/[&<>"']/g,function(c){return '&#'+c.charCodeAt(0)+';';});
-    var html='<span class="k">FURTHEST</span> '+Math.round(bn)+' NM<span class="n"> &middot; '+esc+'</span>';
-    if(b.innerHTML!==html)b.innerHTML=html;
-    b.hidden=false;
-  }
-  (function(){var b=document.getElementById('far');if(b)b.onclick=function(){
-    try{var L6=adsbMake();if(L6&&farHex&&L6.focus)L6.focus(farHex);}catch(e){console.error('ADS-B furthest',e);}};})();
+  /* ★ FURTHEST (with NEWEST and LONGEST TRACKED) is the live list's header now — AdsbLiveList, adsbList.ts adsbChips —
+   *  as on the web, whose top bar crowded on a portrait iPhone (d48dfe43). */
   /* ★ The capture warning, as text nodes (never HTML): [short, rest], or null to hide it. */
   window.__adsbCapture=function(w){
     var el=document.getElementById('capwarn');if(!el)return;
@@ -1946,6 +1916,9 @@ export default function MapOverlay(
             (AdsbLiveList's note). Only once the page is there: before that there is no map to find anything on. */}
         {kind === 'adsb' && !!pageUri && !packError && (
           <AdsbLiveList aircraft={adsbList ?? []} started={!!adsbStarted} onFocus={adsbFocus} selected={adsbSel} onFootprint={adsbFootprint} onLegend={adsbLegend}
+                        raw={adsbAircraft ?? null}
+                        receiver={Number.isFinite(rxLat as number) && Number.isFinite(rxLon as number) && (rxLat || rxLon)
+                          ? { lat: rxLat as number, lon: rxLon as number } : null}
                         logoBase={local ? null : baseUrl.replace(/\/+$/, '') + '/adsb/'}
                         ink={ink} areaW={winW} areaH={winH}
                         insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />

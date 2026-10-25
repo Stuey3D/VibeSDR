@@ -24,8 +24,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, usePanelNav, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
 import type { Aircraft } from '../services/SDRBackend';
-import { adsbListRows, adsbListRowsFit, adsbListWidth, parseListOpen, LIST_HEAD_H, LIST_ROW_H, EDGE,
-         type AdsbListRow } from '../services/adsbList';
+import { adsbListRows, adsbListRowsFit, adsbListWidth, parseListOpen, adsbChips, LIST_HEAD_H, LIST_ROW_H, EDGE,
+         type AdsbListRow, type AdsbChip, type AdsbChipSrc } from '../services/adsbList';
+
+/** ★ The chips' row under the header (NEWEST · FURTHEST · LONGEST TRACKED) — one line, scrolled sideways on a phone. */
+const CHIP_ROW_H = 30;
 
 const OPEN_KEY = 'lsv_adsb_list_open';
 
@@ -48,6 +51,10 @@ export interface AdsbLiveListProps {
   /** ★ V12: where the server serves the owner's operator logos ("http(s)://host/adsb/"), or null — the row then shows
    *  the operator's ICAO code as a badge. The server names a logo only when the file exists. */
   logoBase?: string | null;
+  /** ★★ V12 the raw report (the server's fields: tracked_nm, r) and the receiver — the header's chips (adsbChips): NEWEST,
+   *  FURTHEST, LONGEST TRACKED, each only for an aircraft on the map; tap = find it (onFocus). The web's list header. */
+  raw?: AdsbChipSrc[] | null;
+  receiver?: { lat: number; lon: number } | null;
   /** The modal's window and the parent's safe-area insets (the hook reads 0 inside a Modal — BrowserOverlay's note). */
   areaW: number;
   areaH: number;
@@ -60,12 +67,16 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
   const setOpenKept = (v: boolean) => { setOpen(v); AsyncStorage.setItem(OPEN_KEY, v ? '1' : '0').catch(() => {}); };
 
   const rows = useMemo(() => adsbListRows(p.aircraft), [p.aircraft]);
+  /* ★ When each aircraft first appeared (NEWEST) — kept across reports, forgotten with the report (leaving ADS-B). */
+  const firstSeen = useRef(new Map<string, number>());
+  const chips = useMemo<AdsbChip[]>(() => adsbChips(p.raw ?? null, p.receiver ?? null, firstSeen.current, Date.now()),
+    [p.raw, p.receiver]);
   const innerW = p.areaW - p.insets.left - p.insets.right;
   const innerH = p.areaH - p.insets.top - p.insets.bottom;
   const width = adsbListWidth(innerW);
-  const fit = adsbListRowsFit(innerH);
+  const fit = adsbListRowsFit(innerH - (chips.length ? CHIP_ROW_H : 0));   // ★ the chips' row takes a row's room
   const shown = Math.max(1, Math.min(fit, rows.length || 1));
-  const height = LIST_HEAD_H + shown * LIST_ROW_H;
+  const height = LIST_HEAD_H + (chips.length ? CHIP_ROW_H : 0) + shown * LIST_ROW_H;
   useEffect(() => { p.onFootprint?.(open ? width : 0, open ? height : 0); }, [open, width, height]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ★ Flat: up/down (and left/right) walk pill/header → rows. Back is not taken here, so it reaches the map's overlay.
@@ -82,6 +93,14 @@ export default function AdsbLiveList(p: AdsbLiveListProps) {
                    label={open ? 'AIRCRAFT' : '✈'} count={rows.length} placed={placed} />
           {open && p.onLegend && <LegendKey s={s} onPress={p.onLegend} />}
         </NavRow>
+        {open && chips.length > 0 && (
+          <NavRow>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}
+                        contentContainerStyle={s.chipRowIn} keyboardShouldPersistTaps="handled">
+              {chips.map((c) => <Chip key={c.key} s={s} c={c} onPress={() => p.onFocus(c.hex)} />)}
+            </ScrollView>
+          </NavRow>
+        )}
         {open && (
           <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator
                       keyboardShouldPersistTaps="handled">
@@ -115,6 +134,21 @@ function HeadKey({ s, open, onPress, label, count, placed }: {
       {open && <View style={{ flex: 1 }} />}
       <Text style={s.chev}>{open ? '▾' : '▸'}</Text>
       <NavRing on={focused} color={ring} radius={open ? 8 : 15} />
+    </TouchableOpacity>
+  );
+}
+
+/** One header chip: the key dimmed, the figure, the flight — "FURTHEST 182 NM · RYR12K" (the web's adsbChipHtml). */
+function Chip({ s, c, onPress }: { s: S; c: AdsbChip; onPress: () => void }) {
+  const { focused, viewRef } = useNavButton(onPress);
+  const { ring } = useNavFocus();
+  return (
+    <TouchableOpacity ref={viewRef as never} style={s.chip} onPress={onPress} activeOpacity={0.7} accessibilityRole="button"
+                      accessibilityLabel={`${c.key.toLowerCase()}${c.figure ? ' ' + c.figure : ''}, ${c.name} — show it on the map`}>
+      <Text style={s.chipTxt} numberOfLines={1}>
+        <Text style={s.chipKey}>{c.key}</Text>{c.figure ? ` ${c.figure}` : ''}{` · ${c.name}`}
+      </Text>
+      <NavRing on={focused} color={ring} radius={7} />
     </TouchableOpacity>
   );
 }
@@ -246,4 +280,11 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   kt:     { width: 40 },
   rng:    { width: 60 },
   note:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.60)`, padding: 10, lineHeight: 17 },
+  // ★ the page's old #far key, as chips: the map's controls colour, the key's word dimmed
+  chipRow:{ height: CHIP_ROW_H, flexGrow: 0, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: `rgba(${ink.k},0.25)` },
+  chipRowIn: { alignItems: 'center', gap: 6, paddingHorizontal: 6 },
+  chip:   { height: 22, justifyContent: 'center', paddingHorizontal: 7, borderRadius: 7, borderWidth: 1,
+            borderColor: `rgba(${ink.k},0.30)`, backgroundColor: `rgba(${ink.k},0.06)` },
+  chipTxt:{ fontFamily: F, fontSize: 11, color: `rgba(${ink.kt},0.88)`, fontVariant: ['tabular-nums'] },
+  chipKey:{ fontSize: 9.5, letterSpacing: 1.2, color: `rgba(${ink.kt},0.60)` },
 });

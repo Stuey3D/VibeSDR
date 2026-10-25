@@ -1,12 +1,14 @@
 /**
  * ★★ THE FURTHEST AIRCRAFT KEY (Stuart, 2026-10-24: "We could put a Furthest aircraft here") — ONE RULE, TWO READERS:
- * the web map's adsbFurthest (web/client/src/adsb.ts) and the app map page's adsbFar (src/components/MapOverlay.tsx,
- * run here from its own source against a stand-in button). Both must name the same aircraft and the same distance.
+ * the web map's adsbFurthest (web/client/src/adsb.ts) and the app's (src/services/adsbList.ts adsbFurthestOf — the live
+ * list's header since 2026-10-25, as on the web). Both must name the same aircraft and the same distance; NEWEST and
+ * LONGEST TRACKED likewise (adsbNewestOf / adsbLongestTrackedOf, run on the same cases at the end).
  *
  * Run: npx tsx scripts/test_adsb_furthest.ts   (run-tests.sh does)
  */
 import { readFileSync } from 'node:fs';
 import { adsbFurthest, adsbFurthestHtml, adsbLongestTracked, adsbNewest, adsbChipHtml, adsbImageBase } from '../web/client/src/adsb.ts';
+import { adsbFurthestOf, adsbLongestTrackedOf, adsbNewestOf, adsbChips } from '../src/services/adsbList.ts';
 
 let fails = 0, passes = 0;
 const ok = (c: boolean, what: string) => { if (c) { passes++; return; } fails++; console.error(`FAIL ${what}`); };
@@ -28,19 +30,14 @@ ok(adsbFurthest({ type: 'adsb', aircraft: [ac[3]] } as never, rx) === null, 'web
 ok(/FURTHEST<\/span> \d+ NM<span class="n"> · ~2A0B1C<\/span>/.test(adsbFurthestHtml(f)), 'web: the key reads "FURTHEST n NM · name"');
 ok(!/<b>/.test(adsbFurthestHtml({ nm: 1, name: '<b>' })), 'web: a callsign is escaped');
 
-// ── the app's page, from its own source ──
-const src = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
-const fn = src.match(/\n  var farHex='';\n  function adsbFar\(a\)\{[\s\S]*?\n  \}\n/);
-ok(!!fn, 'app: adsbFar found in MapOverlay.tsx');
-if (fn) {
-  const b = { hidden: true, innerHTML: '' };
-  const document = { getElementById: (id: string) => (id === 'far' ? b : null) };
-  const run = new Function('document', 'RX_LAT', 'RX_LON', 'a', `${fn[0]}\nadsbFar(a); return farHex;`);
-  const hex = run(document, rx.lat, rx.lon, ac);
-  ok(hex === f?.hex, `app: the same aircraft as the web (${hex})`);
-  ok(!b.hidden && b.innerHTML.includes(`${Math.round(f!.nm)} NM`), 'app: the same distance, shown');
-  run(document, 0, 0, ac);
-  ok(b.hidden, 'app: no receiver position → hidden');
+// ── the app's list header (adsbList.ts), the same cases ──
+{
+  const fa = adsbFurthestOf(ac as never, rx);
+  ok(!!fa && fa.hex === f?.hex && fa.name === f?.name, `app: the same aircraft as the web (${fa && fa.hex})`);
+  ok(!!fa && Math.round(fa.nm) === Math.round(f!.nm), 'app: the same distance');
+  ok(adsbFurthestOf(ac as never, null) === null, 'app: no receiver position → no chip');
+  const mo = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
+  ok(!mo.includes('id="far"') && !mo.includes('adsbFar('), 'app: FURTHEST has left the map top bar (it is the list header\u2019s, as on the web)');
 }
 // ★★ TRAILS AND LOGOS FROM THE RADIO, NOT THE FRONT DOOR (2026-10-25: the door answered /adsb/trail/… with its own page)
 {
@@ -88,6 +85,28 @@ if (fn) {
   ok(!!q3 && q3.hex === 'bbbbbb', 'newest: the nameless one, now named, keeps its earlier arrival (not newer than G-ZXIH)');
   const t2 = adsbLongestTracked(rep([{ hex: 'cccccc', r: 'G-ABCD', tracked_nm: 9 }]));
   ok(!!t2 && t2.name === 'G-ABCD', 'tracked: no callsign → its registration');
+}
+// ── ONE RULE, TWO READERS: the app's NEWEST / LONGEST TRACKED on the web's cases, report by report ──
+{
+  const rep = (ac: any[]) => ac.map((a) => (a.nopos ? a : { lat: 52.3, lon: -0.9, ...a }));
+  const seq = [
+    [{ hex: 'aaaaaa' }, { hex: 'bbbbbb' }],
+    [{ hex: 'aaaaaa' }, { hex: 'bbbbbb' }, { hex: 'cccccc', flight: 'EZY1' }, { hex: '408000' }],
+    [{ hex: 'aaaaaa' }, { hex: 'cccccc', flight: 'EZY1' }, { hex: 'dddddd', flight: 'RYR2', tracked_nm: 33 }, { hex: '408000', r: 'G-ZXIH' }],
+    [{ hex: 'aaaaaa', tracked_nm: 140.6, flight: 'BAW12' }, { hex: 'cccccc', flight: 'EZY1' }, { hex: 'eeeeee', flight: 'NOPOS', nopos: true, tracked_nm: 300 }],
+  ];
+  const sw = new Map<string, number>(), sa = new Map<string, number>();
+  seq.forEach((list, i) => {
+    const t = 1000 * (i + 1);
+    const w = adsbNewest({ aircraft: rep(list) } as never, sw, t), a = adsbNewestOf(rep(list), sa, t);
+    ok(JSON.stringify(w) === JSON.stringify(a), `newest, report ${i + 1}: app ${JSON.stringify(a)} = web ${JSON.stringify(w)}`);
+    const lw = adsbLongestTracked({ aircraft: rep(list) } as never), la = adsbLongestTrackedOf(rep(list));
+    ok(JSON.stringify(lw) === JSON.stringify(la), `longest tracked, report ${i + 1}: app ${JSON.stringify(la)} = web ${JSON.stringify(lw)}`);
+  });
+  ok(adsbNewestOf(null, sa, 9999) === null && sa.size === 0, 'app newest: leaving forgets them all');
+  const chips = adsbChips(rep(seq[3]), rx, new Map(), 0);
+  ok(chips.map((c) => c.key).join(',') === 'FURTHEST,LONGEST TRACKED', `chips: in the web's order, only those with an aircraft (${chips.map((c) => c.key)})`);
+  ok(chips[1].figure === '141 NM' && chips[1].name === 'BAW12', 'chips: LONGEST TRACKED 141 NM · BAW12');
 }
 console.log(fails ? `\n${fails} FAILED, ${passes} passed` : `adsb furthest: all ${passes} passed`);
 process.exit(fails ? 1 : 0);
