@@ -1931,6 +1931,54 @@ def main():
        vp.ssid_key("A–B") == vp.ssid_key("a-b") and vp.ssid_key("Café") == vp.ssid_key("Café"),
        "the name key: apostrophes, dashes, spaces, capitals and Unicode composition all fold")
 
+    # ── ★★★ http://vibeserversetup.local/ ON ETHERNET, ONLY WHILE SETTING UP (Nick, G4IRX, a real Orange Pi One on a cable,
+    #    2026-10-25: "entering http://vibeserversetup.local/ in the browser results in 'site not found'") ──
+    with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
+        vp.HOSTNAME_FILE = os.path.join(tmp, "hostname"); vp.HOSTS_FILE = os.path.join(tmp, "hosts")
+        with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibeserversetup\n")
+        with open(vp.HOSTS_FILE, "w") as f: f.write("127.0.1.1\tvibeserversetup\n")
+        nm, box = make(tmp)
+        nm.wifi_dev, nm.eth, box.dev = None, "connected", None     # a board card with no Wi-Fi, on Ethernet
+        box.sync_hostname(False)
+        door = [d for d in nm.nft if vp.SETUP_TABLE in d]
+        ok(door and "tcp dport 80 redirect to :48000" in door[-1] and "iifname" not in door[-1],
+           "unconfigured, wired, no Wi-Fi: :80 → the front door on EVERY link (no interface named)")
+        ok(door and "table ip " in door[-1] and "table ip6 " in door[-1], "…for IPv4 AND IPv6 (the name may resolve to IPv6 first)")
+        n = len(nm.nft); box.sync_hostname(False); box.tick()
+        ok(len(nm.nft) == n, "…loaded once, not every few seconds")
+        box.sync_hostname(True)
+        ok(len(nm.nft) == n, "setup saved JUST NOW: the door stays (the page that pressed Save is still talking to :80)")
+        nm.t += vp.RETIRE_SEC + 5
+        box.sync_hostname(True)
+        ok(len(nm.nft) == n + 1 and "delete table ip " + vp.SETUP_TABLE in nm.nft[-1] and "redirect" not in nm.nft[-1]
+           and "delete table ip6 " + vp.SETUP_TABLE in nm.nft[-1],
+           "★ setup finished: the door is REMOVED, both families — a set-up server does not take over port 80")
+        box.sync_hostname(True)
+        ok(len(nm.nft) == n + 1, "…and stays removed (nothing re-run)")
+        # a box that BOOTS set up never opens it (only clears any left over)
+        nm2, box2 = make(tmp)
+        nm2.wifi_dev, nm2.eth, box2.dev = None, "connected", None
+        with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibepocket\n")
+        box2.sync_hostname(True)
+        ok(not any("redirect" in d for d in nm2.nft if vp.SETUP_TABLE in d),
+           "a box that boots already set up never redirects :80 on the wired network")
+        # ★ a kernel without IPv6 NAT: the whole script is refused → IPv4 alone
+        nm3, box3 = make(tmp)
+        nm3.wifi_dev, nm3.eth, box3.dev = None, "connected", None
+        tried = []
+        def no_ip6(args, data, timeout=20):
+            tried.append(data)
+            return 1 if "table ip6" in data and "redirect" in data else 0
+        box3.sh.run_input = no_ip6
+        box3.setup_door(True)
+        ok(len(tried) == 2 and "table ip6" not in tried[1] and "redirect to :48000" in tried[1] and box3.setup_door_port == 48000,
+           "no IPv6 NAT in the kernel: falls back to the IPv4 redirect, as before")
+        # the Wi-Fi hotspot's own redirect is IPv6-capable now too, and still names the radio
+        nm4, box4 = make(tmp)
+        box4.captive_on()
+        ok(nm4.nft and 'iifname "wlan0"' in nm4.nft[-1] and "table ip6 " + vp.NFT_TABLE in nm4.nft[-1],
+           "the Wi-Fi :80 redirect (unchanged rule: the radio's interface) now covers IPv6 too")
+
     ok(vp.terse_split(r"My\:Net\\x:70:WPA2") == ["My:Net\\x", "70", "WPA2"], "nmcli terse escapes are undone")
     ok(vp.iw_unescape(r"Caf\xc3\xa9") == "Café", "iw's \\x escapes are decoded")
 

@@ -89,6 +89,7 @@ SETUP_NAME   = "vibe-setup-ap"      # the OPEN first-boot hotspot
 PRIORITY     = {1: 30, 2: 20, 3: 10}
 AP_ADDR      = "10.42.0.1"          # ★ pinned: vibeserver/pocket.h's kApAddress says the same
 NFT_TABLE    = "vibeserver_captive"
+SETUP_TABLE  = "vibeserver_setup"   # ★ :80 on EVERY link while the box is being set up (see setup_door)
 # ★★ "The radio is in use" — every vibeserver process on the box touches this (RAM, /run) every 30 s while anyone is
 #    listening. The Own Wi-Fi hold ends once it has been quiet for RELEASE_SEC. Written by the server, read here.
 ACTIVE_FILE  = "/run/vibeserver/pocket-active"
@@ -729,6 +730,7 @@ class Box:
         self.last_client = sh.now()
         self.clients = 0
         self.captive_port = None
+        self.setup_door_port = None   # ★ the :80 → front door redirect on every link, while setting up (setup_door)
         self.host_synced = False
         self.saw_unconfigured = False
         self.configured_at = None
@@ -1407,11 +1409,9 @@ class Box:
             return
         # ★★ OUR OWN TABLE — NM's shared mode has its own NAT rules and this never touches them.
         #    The "add, delete, add" opening makes the load idempotent on any nft version.
-        rules = ("table ip %s\ndelete table ip %s\ntable ip %s {\n"
-                 "  chain pre {\n    type nat hook prerouting priority dstnat; policy accept;\n"
-                 "    iifname \"%s\" tcp dport 80 redirect to :%d\n  }\n}\n") % (
-                     NFT_TABLE, NFT_TABLE, NFT_TABLE, self.dev, port)
-        if self.sh.run_input(["nft", "-f", "-"], rules) == 0:
+        # ★★ IPv6 TOO (2026-10-25): the server listens dual-stack now, and a name that resolves to IPv6 first (Nick's
+        #    network) must reach :80 the same way. nft_redirect falls back to IPv4 alone on a kernel without IPv6 NAT.
+        if nft_redirect(self.sh, NFT_TABLE, port, 'iifname "%s" ' % self.dev):
             self.captive_port = port
         else:
             log("could not load the :80 redirect (is nftables installed?) — the phone's captive "
@@ -1430,6 +1430,9 @@ class Box:
         elif self.configured_at is None:
             self.configured_at = now
         retire = configured and (not self.saw_unconfigured or now - self.configured_at >= RETIRE_SEC)
+        # ★★★ http://vibeserversetup.local/ ON ETHERNET TOO, and only while setting up (2026-10-25). It goes with the
+        #     setup NAME, at the same moment — the page that pressed Save is still talking to :80 for RETIRE_SEC.
+        self.setup_door(not retire)
         want = RUN_HOST if retire else SETUP_HOST
         try:
             with open(HOSTNAME_FILE) as f:
@@ -1460,6 +1463,29 @@ class Box:
         # ★ avahi does not follow a hostname change by itself — a restart republishes at once.
         self.sh.run(["systemctl", "try-restart", "avahi-daemon.service"], timeout=20)
         log("answering as %s.local%s" % (want, "" if configured else " until setup is finished"))
+
+    def setup_door(self, on):
+        """★★★ PORT 80 ON EVERY LINK WHILE THE BOX IS BEING SET UP — Ethernet included (Nick, G4IRX, a real Orange Pi One
+        on Ethernet, 2026-10-25: "entering http://vibeserversetup.local/ in the browser results in 'site not found'"). The
+        :80 redirect was loaded for the Wi-Fi radio only (captive_on: `iifname <wlan>`), so a box set up over a cable —
+        every board card without Wi-Fi, a Pi 2 — needed :48000 typed, which the card's instructions never say. So, until
+        setup is finished: :80 → the front door on EVERY interface, IPv4 and IPv6, in a table of its own.
+        ★★ STOPS WHEN SETUP IS FINISHED — a set-up server does not take over port 80 on someone's LAN. Exactly when the
+           setup name retires (sync_hostname: at once on a box that boots set up; RETIRE_SEC after a Save in this run).
+        ★ The Wi-Fi-interface redirect (captive_on / captive_off) is not this, and is unchanged."""
+        port = self.front_door_port() if on else None
+        if self.setup_door_port == port:
+            return
+        if on:
+            if nft_redirect(self.sh, SETUP_TABLE, port, ""):
+                self.setup_door_port = port
+                log("http://%s.local/ (port 80) leads to the setup page on every link until setup is finished" % SETUP_HOST)
+            else:
+                log("could not load the setup :80 redirect (is nftables installed?) — use http://%s.local:%d/" % (SETUP_HOST, port))
+            return
+        if self.sh.run_input(["nft", "-f", "-"], nft_drop(SETUP_TABLE)) == 0:
+            self.setup_door_port = None
+            log("setup is finished — port 80 is left alone on the wired network")
 
     def captive_off(self):
         # ★★★ THE :80 REDIRECT STAYS, ON EVERY NETWORK (Stuart, 2026-10-10: the owner must reach the
@@ -2145,6 +2171,29 @@ def save_history(path, history):
         write_atomic(path, json.dumps(history[-JOIN_KEEP:], ensure_ascii=False), mode=0o600)   # ★ SSIDs: root only
     except OSError:
         pass                                              # ★ no settings partition: it lasts until the restart
+
+
+def nft_drop(table):
+    """An nft script that removes `table` in both families — "add, delete" so it is a no-op when it is not there."""
+    return "table ip %s\ndelete table ip %s\ntable ip6 %s\ndelete table ip6 %s\n" % (table, table, table, table)
+
+
+def nft_redirect(sh, table, port, match):
+    """★★ :80 → :port in our own `table`, IPv4 AND IPv6 (`match` narrows it, e.g. 'iifname "wlan0" '). One nft script,
+    loaded atomically — the "add, delete, add" opening makes it idempotent on any nft version. A kernel without IPv6 NAT
+    refuses the whole script: then IPv4 alone, as before 2026-10-25. NM's shared mode has its own NAT rules; these
+    never touch them. Returns True when loaded."""
+    def chain(fam):
+        return ("table %s %s {\n  chain pre {\n    type nat hook prerouting priority dstnat; policy accept;\n"
+                "    %stcp dport 80 redirect to :%d\n  }\n}\n") % (fam, table, match, port)
+    both = nft_drop(table) + chain("ip") + chain("ip6")
+    if sh.run_input(["nft", "-f", "-"], both) == 0:
+        return True
+    v4 = "table ip %s\ndelete table ip %s\n" % (table, table) + chain("ip")
+    if sh.run_input(["nft", "-f", "-"], v4) == 0:
+        log("IPv6 NAT is not available here — the :80 redirect (%s) is IPv4 only" % table)
+        return True
+    return False
 
 
 def write_atomic(path, text, mode=0o644):

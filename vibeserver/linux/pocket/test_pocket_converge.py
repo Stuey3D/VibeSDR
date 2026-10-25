@@ -221,6 +221,11 @@ def main():
         av = F(r, "etc/avahi/avahi-daemon.conf")
         ok("\n#allow-interfaces=wlan0  # off" in av and "\nallow-interfaces" not in av, "avahi: allow-interfaces switched off")
         ok("#deny-interfaces=eth1\n" in av, "avahi: an already-commented line is left as it was")
+        # ★★ 2026-10-25 (Nick's Orange Pi One: the name resolved to IPv6 addresses only)
+        ok(re.search(r"^publish-a-on-ipv6=yes", av, re.M) and re.search(r"^publish-aaaa-on-ipv4=yes", av, re.M),
+           "avahi: the A record in IPv6 answers and the AAAA in IPv4 answers (both families, both transports)")
+        pub = av.split("[publish]", 1)[1].split("\n[", 1)[0] if "[publish]" in av else ""
+        ok("publish-a-on-ipv6=yes" in pub, "…set in [publish], not elsewhere")
         wants = os.path.join(r, "etc/systemd/system/multi-user.target.wants")
         for u in ("vibeserver.service", "vibeserver-pocket.service", "vibeserver-maintenance.path",
                   "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service", "vibeserver-radios.service",
