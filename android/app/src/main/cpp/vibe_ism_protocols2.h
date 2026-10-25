@@ -189,22 +189,34 @@ inline bool decode(const Burst& b, std::vector<Reading>& out) {
 namespace acurite {
 
 inline bool decodePwm(const Burst& b, std::vector<Reading>& out) {
-    for (const Bits& row : slicePwm(b.ook, 240, 400, 1000, false, 0.35)) {
-        // the rain gauge first: 64 bits
-        for (size_t s = 0; s + 64 <= row.size(); ++s) {
-            const auto by = bytesAt(row, s, 8);
-            unsigned sum = 0; for (int i = 0; i < 7; ++i) sum += by[size_t(i)];
-            if ((sum & 0xFF) != by[7]) continue;
-            bool par = true; for (int i = 3; i < 7; ++i) par = par && evenParityOk(by[size_t(i)]);
-            if (!par || (by[0] == 0 && by[1] == 0 && by[2] == 0)) continue;
-            const uint32_t tips = uint32_t(by[3] & 0x7F) << 21 | uint32_t(by[4] & 0x7F) << 14 | uint32_t(by[5] & 0x7F) << 7 | (by[6] & 0x7F);
-            Reading r;
-            r.kind = "weather"; r.make = "AcuRite"; r.model = "00899 rain gauge";
-            char id[8]; std::snprintf(id, sizeof id, "%02X%02X%02X", by[0], by[1], by[2]); r.pubId = id;
-            r.extra = std::to_string(tips) + (tips == 1 ? " bucket tip" : " bucket tips");
-            out.push_back(r);
-            return true;
-        }
+    const auto rows = slicePwm(b.ook, 240, 400, 1000, false, 0.35);
+    // the rain gauge first: 64 bits
+    /* ★★ TWICE ALIKE, AND A COUNT A GAUGE COULD REACH (2026-10-25, the Pi 500 on 868: "AcuRite 00899 rain gauge ·
+     *  168091886 bucket tips" — 43 km of rain, from a 433 MHz device). An 8-bit sum and four parity bits, tried at every
+     *  offset of a noise row, pass now and then; the gauge sends each frame THREE times (each after its own sync, so each
+     *  in its own row), so the same 64 bits must pass at least twice in the burst, and the 28-bit counter must be one a
+     *  battery's life could reach (≤ 100 000 tips). */
+    {
+        std::vector<std::vector<uint8_t>> seen;
+        for (const Bits& row : rows)
+            for (size_t s = 0; s + 64 <= row.size(); ++s) {
+                const auto by = bytesAt(row, s, 8);
+                unsigned sum = 0; for (int i = 0; i < 7; ++i) sum += by[size_t(i)];
+                if ((sum & 0xFF) != by[7]) continue;
+                bool par = true; for (int i = 3; i < 7; ++i) par = par && evenParityOk(by[size_t(i)]);
+                if (!par || (by[0] == 0 && by[1] == 0 && by[2] == 0)) continue;
+                const uint32_t tips = uint32_t(by[3] & 0x7F) << 21 | uint32_t(by[4] & 0x7F) << 14 | uint32_t(by[5] & 0x7F) << 7 | (by[6] & 0x7F);
+                if (tips > 100000) continue;
+                if (std::find(seen.begin(), seen.end(), by) == seen.end()) { seen.push_back(by); continue; }
+                Reading r;
+                r.kind = "weather"; r.make = "AcuRite"; r.model = "00899 rain gauge";
+                char id[8]; std::snprintf(id, sizeof id, "%02X%02X%02X", by[0], by[1], by[2]); r.pubId = id;
+                r.extra = std::to_string(tips) + (tips == 1 ? " bucket tip" : " bucket tips");
+                out.push_back(r);
+                return true;
+            }
+    }
+    for (const Bits& row : rows) {
         for (size_t s = 0; s + 56 <= row.size(); ++s) {
             const auto by = bytesAt(row, s, 7);
             unsigned sum = 0; for (int i = 0; i < 6; ++i) sum += by[size_t(i)];
@@ -302,6 +314,15 @@ inline void decodeAll(const Burst& b, std::vector<Reading>& out) {
         decodeOne(v, out);
         if (out.size() > before) return;
     }
+}
+/** ★★ A FAMILY HEARD WHERE IT NEVER TRANSMITS IS NOISE (2026-10-25: an AcuRite 00899 and a TPMS "decoded" on 868 MHz on
+ *  the Pi 500). AcuRite, Oregon Scientific and both TPMS formats send on 315 / 433.92 / 915 only — never in the 863-870 MHz
+ *  SRD band — so a reading of theirs at 868 is refused. Families that do use 868 (La Crosse IT+, Fine Offset FSK,
+ *  Current Cost, fixed-code remotes, KeeLoq) are untouched. Applied by Service::decodeBurst, which knows the frequency. */
+inline bool bandPlausible(const Reading& r, double freqHz) {
+    const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6;
+    if (!srd868) return true;
+    return !(r.make == "AcuRite" || r.make == "Oregon Scientific" || r.kind == "tpms");
 }
 inline void decodeOne(const Burst& b, std::vector<Reading>& out) {
     if (oregon::decode(b, out)) return;

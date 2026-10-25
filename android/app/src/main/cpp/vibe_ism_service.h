@@ -441,8 +441,14 @@ public:
 
     /** ★ For tests: run the decoder chain on one burst exactly as the worker does (no thread, no queue). */
     static void decodeBurst(const Burst& b, double hwCentreHz, std::vector<Reading>& out) {
+        const size_t first = out.size();
         decodeAll(b, out);
-        for (auto& r : out) { r.freqHz = hwCentreHz + b.offHz + b.carrierHz; r.levelDb = b.levelDb; r.snrDb = b.levelDb - b.noiseDb; }
+        for (size_t i = first; i < out.size(); ++i) {
+            Reading& r = out[i];
+            r.freqHz = hwCentreHz + b.offHz + b.carrierHz; r.levelDb = b.levelDb; r.snrDb = b.levelDb - b.noiseDb;
+        }
+        // ★ a family heard where it never transmits is noise (bandPlausible) — the burst then counts as unidentified
+        out.erase(std::remove_if(out.begin() + long(first), out.end(), [](const Reading& r) { return !bandPlausible(r, r.freqHz); }), out.end());
     }
 
 private:

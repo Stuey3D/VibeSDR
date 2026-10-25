@@ -343,9 +343,17 @@ inline bool decodeA(const Burst& b, std::vector<Reading>& out) {
                         const auto by = bytesAt(bb, s + 2, 10);
                         const uint16_t want = uint16_t(by[8] << 8 | by[9]);
                         if (crc16(by.data(), 8, 0x1021, 0xFFFF) != want && crc16(by.data(), 8, 0x1021, 0x0000) != want) continue;
+                        /* ★★ A FRAME OF NOTHING IS NOT A TYRE (2026-10-25, the Pi 500 on 868: "TPMS #1 · type A · −40 °C").
+                         *  With the CRC's 0x0000 start an all-zero frame checks out (the CRC of zeros is zero), and a steady
+                         *  tone slices to exactly that — temperature byte 0 → −40 °C. Neither does an ID of all ones, or eight
+                         *  equal bytes. And 640 offset/polarity/phase guesses per row against a 16-bit check pass noise now
+                         *  and then on a band of 2 000 unidentified bursts, so a type A reading must be heard twice alike. */
+                        { bool same = true; for (int i = 1; i < 8; ++i) same = same && by[size_t(i)] == by[0]; if (same) continue; }
+                        if ((by[0] | by[1] | by[2] | by[3]) == 0 || (by[0] & by[1] & by[2] & by[3]) == 0xFF) continue;
                         const int t = int(by[5]) - 40;
                         if (t < -40 || t > 125) continue;
                         Reading rd;
+                        rd.confirm = true;
                         rd.kind = "tpms"; rd.make = "TPMS"; rd.model = "type A";
                         rd.secret = true;
                         rd.secretId = (uint64_t(3) << 40) | (uint64_t(by[0]) << 24 | uint64_t(by[1]) << 16 | uint64_t(by[2]) << 8 | by[3]);

@@ -390,6 +390,32 @@ int main(int argc, char** argv) {
     // 7. PRIVACY: the JSON never carries a TPMS ID, a fob's serial or hop code, or a fixed code
     // ★ SUSPECTED KEY FOBS (FobWatch) — modelled on Stuart's car key as recorded 2026-10-25 (FSK ±42.7 kHz, Manchester
     //   200 µs half-bits after an alternating preamble, 68 ms frames, three 161 ms apart). Never a protocol: the shape.
+    // ★ FALSE DECODES SEEN ON THE PI 500's 868 BAND (2026-10-25) — each must now be refused
+    printf(" false decodes refused\n");
+    {
+        Reading r; r.make = "AcuRite"; r.kind = "weather";
+        CHECK(!bandPlausible(r, 868.3e6) && bandPlausible(r, 433.92e6), "band: AcuRite refused at 868, kept at 433.92");
+        Reading t; t.kind = "tpms"; Reading lc; lc.make = "La Crosse"; lc.kind = "weather";
+        CHECK(!bandPlausible(t, 868.95e6) && bandPlausible(lc, 868.3e6), "band: TPMS refused at 868, La Crosse kept there");
+        // the rain gauge: ONE good frame is no longer enough (three repeats are sent; two must agree)
+        std::vector<uint8_t> by = hexBytes("A2 30 01 00 00 01 0B 00");     // 139 tips
+        for (int i = 3; i < 7; ++i) if (!evenParityOk(by[size_t(i)])) by[size_t(i)] ^= 0x80;
+        unsigned sum = 0; for (int i = 0; i < 7; ++i) sum += by[size_t(i)]; by[7] = uint8_t(sum);
+        Tx one; one.space(2250); for (int i = 0; i < 4; ++i) { one.mark(600); one.space(600); }
+        for (uint8_t x : bytesToBits(by)) { if (x) { one.mark(400); one.space(225); } else { one.mark(250); one.space(400); } }
+        one.space(2250);
+        Burst b1; b1.ook = one.r; std::vector<Reading> o1; acurite::decodePwm(b1, o1);
+        CHECK(o1.empty(), "rain gauge: a single frame decoded (%zu)", o1.size());
+        Burst b3; b3.ook = acuritePwm(by); std::vector<Reading> o3; acurite::decodePwm(b3, o3);
+        CHECK(o3.size() == 1 && o3[0].model == "00899 rain gauge", "rain gauge: three repeats still decode (%zu)", o3.size());
+        // an impossible tip count (here > 100 000) is refused even when repeated
+        std::vector<uint8_t> big = hexBytes("A2 30 01 FF FF FF FF 00");
+        for (int i = 3; i < 7; ++i) if (!evenParityOk(big[size_t(i)])) big[size_t(i)] ^= 0x80;
+        sum = 0; for (int i = 0; i < 7; ++i) sum += big[size_t(i)]; big[7] = uint8_t(sum);
+        Burst bb; bb.ook = acuritePwm(big); std::vector<Reading> ob; acurite::decodePwm(bb, ob);
+        CHECK(ob.empty(), "rain gauge: an impossible tip count decoded (%s)", ob.empty() ? "" : ob[0].extra.c_str());
+    }
+
     printf(" suspected key fobs\n");
     {
         // one frame: 16 bits of preamble (1010…), then a fixed made-up payload, Manchester, 200 µs halves = 2.5 kbit/s
