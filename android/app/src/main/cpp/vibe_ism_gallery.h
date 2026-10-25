@@ -311,7 +311,8 @@ private:
         o += devicesWord() + (devs_.empty() ? std::string() : ": " + mix()) + "\n";
         char b[200];
         std::snprintf(b, sizeof b, "Readings:     %llu\n", (unsigned long long)readings_); o += b;
-        if (const Dev* d = mostHeard()) o += "Most heard:   " + shown(*d) + " (" + std::to_string((unsigned long long)d->count) + kTimes + ")\n";
+        // ★ only when one stands out — "most heard (1×)" out of a tie of ones would name a device at random
+        if (const Dev* d = mostHeard(); d && d->count > 1) o += "Most heard:   " + shown(*d) + " (" + std::to_string((unsigned long long)d->count) + kTimes + ")\n";
         if (const Dev* d = newest()) o += "Newest:       " + shown(*d) + " (first heard " + gallery::utcStamp(d->first, "%H:%M:%S") + ")\n";
         if (dropped_) o += "Not listed:   " + std::to_string((unsigned long long)dropped_) + " (this card keeps the " + std::to_string(kMaxRows) + " most recently heard)\n";
         o += "\nThe last reading of each device, most recent first (last heard \xc2\xb7 first heard \xc2\xb7 readings \xc2\xb7 kind \xc2\xb7 reading):\n";

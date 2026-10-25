@@ -31,6 +31,13 @@ ok(bgVfoLine({ hz: 1840000, dec: 'ft8', label: 'FT8', state: 'running', spots: 1
    === '1840.0 FT8 \u00b7 running \u00b7 142 spots, 23 countries so far \u00b7 0.9 %', 'FT8 live count');
 ok(bgVfoLine({ hz: 1840000, dec: 'ft8', label: 'FT8', state: 'running', spots: 1, countries: 1 }).includes('1 spot, 1 country so far'), 'FT8 singulars');
 ok(bgDuration(45) === '45 s' && bgDuration(120) === '2 min', 'durations');
+// ★ V12 2026-10-25: an ISM profile — no VFOs, the band and the day instead
+const ism = bgLines({ state: 'running', profiles: 1, profile: 1, ism: { band: '433', name: '433.92 MHz ISM', devices: 6, today: '14 devices \u00b7 212 readings today' } })!;
+ok(ism.head === 'Background decoding \u00b7 profile 1 \u00b7 ISM 433.92 MHz ISM \u00b7 6 devices listed \u00b7 14 devices \u00b7 212 readings today' && ism.rows.length === 0 && !ism.warn,
+   `ISM running: ${ism.head}`);
+ok(bgLines({ state: 'waiting', profiles: 1, profile: 1, startsIn: 60, ism: { band: '868', name: '868 MHz SRD' } })!.head.includes('profile 1 (ISM 868 MHz SRD) starts in 1 min unless somebody arrives'), 'ISM waiting');
+const blk = bgLines({ state: 'blocked', profiles: 1, profile: 1, why: 'the server owner has switched ISM off on this receiver', retryIn: 50, ism: { band: '433', name: '433.92 MHz ISM' } })!;
+ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u2014 the server owner has switched ISM off on this receiver') && blk.head.includes('50 s'), `ISM blocked, warned: ${blk.head}`);
 
 console.log(`admin bg: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

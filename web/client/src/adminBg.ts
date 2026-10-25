@@ -15,9 +15,11 @@ export interface BgVfo {
   spots?: number; countries?: number;
 }
 export interface BgStatus {
-  state: 'off' | 'idle' | 'waiting' | 'running' | 'listener' | 'paused' | 'busy';
+  state: 'off' | 'idle' | 'waiting' | 'running' | 'listener' | 'paused' | 'busy' | 'blocked';
   why?: string; profile?: number; profiles?: number; locked?: boolean;
   startsIn?: number; retryIn?: number;
+  /** ★ V12 2026-10-25: an ISM profile — its band, and while it runs the devices listed now and the day so far. */
+  ism?: { band: string; name: string; devices?: number; today?: string };
   runner?: { running: boolean; inRangeOnly?: boolean; listenerOn?: boolean; channelsCpuPct?: number | null;
              cpuPct?: number | null; vfos: BgVfo[] };
 }
@@ -77,6 +79,9 @@ export function bgLines(bg: BgStatus | null | undefined): { head: string; rows: 
     case 'off':      head = bg.why ? `off — ${bg.why}` : 'off'; break;
     case 'idle':     head = 'no profile covers this time of day'; break;
     case 'busy':     head = `another program has the radio — trying again in ${bgDuration(bg.retryIn ?? 60)}`; warn = true; break;
+    // ★ an ISM profile this radio cannot run now (ISM blocked, the rate, the band out of its allowed ranges …)
+    case 'blocked':  head = `${p}${bg.ism ? ` (ISM ${bg.ism.name})` : ''} cannot run — ${bg.why || 'not on this radio now'}`
+                          + (bg.retryIn ? ` · tried again in ${bgDuration(bg.retryIn)}` : ''); warn = true; break;
     case 'paused':   head = `${p} · paused — a listener is on`; break;
     case 'waiting':
       head = bg.locked ? `${p} · starting`
@@ -84,8 +89,13 @@ export function bgLines(bg: BgStatus | null | undefined): { head: string; rows: 
              + (r ? ` · ${running} of ${vfos.length} decoding in range meanwhile` : '');
       break;
     case 'listener': head = `${p} · carrying on with a listener on · ${of}`; break;
-    default:         head = `${p} · ${of}${bg.locked ? ' · locked window' : ''}`;
+    default:
+      // ★ an ISM profile has no VFOs: "profile 1 · ISM 433.92 MHz ISM · 6 devices listed · 14 devices · 212 readings today"
+      head = bg.ism ? `${p} · ISM ${bg.ism.name}${typeof bg.ism.devices === 'number' ? ` · ${bg.ism.devices} device${bg.ism.devices === 1 ? '' : 's'} listed` : ''}`
+                      + (bg.ism.today ? ` · ${bg.ism.today}` : '')
+                    : `${p} · ${of}${bg.locked ? ' · locked window' : ''}`;
   }
+  if (bg.ism && bg.state === 'waiting' && !bg.locked) head = `${p} (ISM ${bg.ism.name}) starts in ${bgDuration(bg.startsIn ?? 0)} unless somebody arrives`;
   if (r) head += ` · ${pct(r.cpuPct)}`;
   const rows = r ? vfos.map(bgVfoLine) : [];
   if (r && running && typeof r.channelsCpuPct === 'number') rows.push(`channels (one FFT for every VFO) · ${pctShort(r.channelsCpuPct)}`);

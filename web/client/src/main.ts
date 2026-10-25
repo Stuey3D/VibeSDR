@@ -51,6 +51,7 @@ import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../..
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
 import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../../../src/utils/galleryPager';
+import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines } from '../../../src/utils/galleryTranslate';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
@@ -13988,7 +13989,7 @@ function initRecorder() {
 // this lists it newest first, filters by decoder, opens a text item inline and downloads any item.
 // ★ Text from the air is shown with textContent, never as HTML.
 interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
-                        title: string; partial?: boolean; wl?: boolean; bytes: number }
+                        title: string; partial?: boolean; wl?: boolean; bytes: number; s?: string; dn?: string }
 let galKind = '';
 function galUrl(path: string): string { return readAuthUrl(P(path)); }
 function galWhen(t: number): string {
@@ -13997,6 +13998,8 @@ function galWhen(t: number): string {
   return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())} UTC`;
 }
 function galFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
+// ★ V12 2026-10-25: who an item came from — galleryOrigin.ts (an ISM day can be "both"), the app's rule too.
+const galOriginTag = galleryOriginTag, galOriginWords = galleryOriginWords;
 /** ★★ V12 beta 4 — PAGES (galleryPager.ts): 25 a page, newest first, the pager at the bottom; the filter kept across
  *  pages and page 1 on a filter change; BACK from an item returns to the same page AND scroll, with the item's row
  *  focused again (keyboard, D-pad and controller land where they left). An older server without pages answers with no
@@ -14042,11 +14045,13 @@ async function renderGallery(page = galPage) {
       const n = document.createElement('span'); n.className = 'n';
       n.appendChild(document.createTextNode(it.title || it.k.toUpperCase()));
       const tag = (t: string) => { const s = document.createElement('span'); s.className = 'tag'; s.textContent = t; n.appendChild(s); };
-      tag(it.o === 'background' ? (it.wl ? 'BACKGROUND · LISTENER ON' : 'BACKGROUND') : 'LISTENER');
+      tag(galOriginTag(it));
       if (it.partial) tag('PARTIAL');
       n.appendChild(document.createElement('br'));
       const src = document.createElement('span'); src.className = 'src';
-      src.textContent = `${galWhen(it.t)} · ${(it.m || '').toUpperCase()} · ${it.d}${it.p ? ` · ${it.p}` : ''}${it.r ? ` · ${it.r}` : ''} · ${formatSize(it.bytes)}`;
+      // ★ only the parts an item has (an ISM day has no demodulator)
+      src.textContent = [galWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, it.r, formatSize(it.bytes)]
+        .filter((x) => !!x).join(' · ');
       n.appendChild(src);
       row.appendChild(f); row.appendChild(n);
       const open = () => { galScroll = $('galleryPanel').scrollTop; galOpenedRow = idx; void openGalleryItem(it); };
@@ -14095,9 +14100,9 @@ function galleryBack() {
 async function openGalleryItem(it: GalleryItem) {
   const url = galUrl(`/vibeserver/gallery/file/${encodeURIComponent(it.f)}`);
   ($('galDl') as HTMLAnchorElement).href = url + (url.includes('?') ? '&' : '?') + 'download=1';
-  ($('galDl') as HTMLAnchorElement).download = it.f;
-  $('galViewMeta').textContent = `${it.title} · ${galFreq(it.hz)} ${(it.m || '').toUpperCase()} · ${galWhen(it.t)}`
-    + ` · ${it.o === 'background' ? `background decoding${it.p ? ` (${it.p})` : ''}` : 'a listener\'s decoder'}`;
+  ($('galDl') as HTMLAnchorElement).download = it.dn || it.f;   // ★ "ISM 433.92 2026-10-25.txt" where the item names one
+  $('galViewMeta').textContent = `${it.title} · ${galFreq(it.hz)}${it.m ? ` ${it.m.toUpperCase()}` : ''} · ${galWhen(it.t)}`
+    + ` · ${galOriginWords(it)}`;
   $('galList').hidden = true; $('galFilter').hidden = true; $('galPager').hidden = true; $('galView').hidden = false;
   $('galleryPanel').scrollTop = 0;
   $('galBack').focus({ preventScroll: true });

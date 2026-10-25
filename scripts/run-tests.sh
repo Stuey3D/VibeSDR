@@ -954,6 +954,13 @@ if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-web-ism.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 ISM IN THE GALLERY (2026-10-25): a listener's session writes the day's log + card (nothing while it ran, the
+  #    list's own lines, no ID anywhere), then an ISM background profile runs with nobody here and gives way to a listener;
+  #    then the web gallery's ISM chip in headless Edge at desktop and 390 px.
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-server-ism-gallery.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-web-ism-gallery.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/ism-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-ism build'; notrun=$((notrun+1))

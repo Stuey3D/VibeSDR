@@ -173,6 +173,13 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
   received; all-capitals lines go in lower case and come back in capitals. Shown in place, marked MACHINE
   TRANSLATION, ORIGINAL toggles back; no key when the text is already in the target language.
 
+## ISM profiles and ISM in the gallery (2026-10-25)
+
+A profile can decode **ISM sensors on a whole band** instead of an RF centre + VFOs (`"ism":"433"`), and every ISM
+session — a listener's or background's — keeps the day's readings as a .txt and a summary card per band. See
+docs/v12/ISM-DECODER.md, "The gallery". In short: ISM runs only with nobody here (a whole-capture mode has nothing "in
+range" of a listener), through the listener's own ISM mode, and a listener arriving ends it through ISM's own door.
+
 ## Listeners first: priority, in range, locked radios (2026-10-22, beta3)
 
 - **Priority is the VFO order.** The setup page shows a tier list (rank numbers, a drag handle, ▲/▼ for keyboard and pad)
@@ -275,7 +282,10 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 | `scripts/test_admin_bg.ts` | 17 | The admin line's wording. (beta 4) |
 | `scripts/test-web-gallery-pages.mjs` | 20 | Pages through the real server and the real built page in headless Edge: totals per filter, the old request unchanged, the pager, filter reset, BACK to the same page/scroll/row. (beta 4) |
 | `scripts/test_gallery_pager.ts` | 13 | The pager's numbering (one rule for web and app). (beta 4) |
-| `scripts/test_gallery_translate.ts` | 26 | TRANSLATE's rule: the lines sent and kept, the Mondolfo text as Italian, Niton's French, the station hint, no key in the target language, the layout put back. (2026-10-23) |
+| `vibeserver/test-ism-gallery.cpp` | 56 | ISM's day log and summary card, an ISM profile's config (2026-10-25). |
+| `scripts/test-server-ism-gallery.mjs` | 33 | ISM in the gallery and an ISM profile through the real server (2026-10-25). |
+| `scripts/test-setup-bg-ism.mjs` | 18 | The setup editor's ISM profile (2026-10-25). |
+| `scripts/test_gallery_translate.ts` | 27 | TRANSLATE's rule: the lines sent and kept, the Mondolfo text as Italian, Niton's French, the station hint, no key in the target language, the layout put back. (2026-10-23) |
 
 The live test uses two test-only environment variables:
 - `VIBESERVER_BG_WAIT_SEC` overrides the owner's wait;
