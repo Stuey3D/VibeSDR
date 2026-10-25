@@ -13,6 +13,7 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
+import { IsmBox, type IsmReport, type IsmBand } from './ism';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -759,6 +760,7 @@ async function loadAudioPolicy(httpBase: string) {
   srvSharedDial = false;
   dialModeNow = 'exclusive';   // ★ a new receiver's dial is unknown until it says
   adsbCap = null;              // ★ an older server (or no answer) draws no ADS-B control
+  ismCap = null;               // ★ …nor an ISM one
   landingStepDone = false;
   firstConfigDone = false;
   try {
@@ -792,6 +794,7 @@ async function loadAudioPolicy(httpBase: string) {
      *  V4 locked to FM or held below 2.048 MS/s never draws the button at all. */
     dabCapable = j.dab === true;
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
+    ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     dabBoost = j.dabBoost === true;
     dabBoostUseful = j.dabBoostUseful === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
@@ -1625,6 +1628,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *  sent entire rather than as deltas. A null means the server left DAB mode. */
     /* ★ ADS-B (V12): a report means the receiver is in ADS-B; null = it left. See onAdsbReport. */
     onAdsb: (r) => onAdsbReport(r),
+    onIsm: (r) => onIsmReport(r),
+    onIsmError: (why: string) => { showPill(why, 7000); if (ismOn && !ismReport) ismUiOff(); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     onDab: (d: DabState) => {
       if (!d) {
@@ -7894,6 +7899,101 @@ function onAdsbReport(r: AdsbReport | null) {
   adsbRender();
 }
 
+/* ★★★ ISM MODE (V12, docs/v12/ISM-DECODER.md) — DAB's shape on the page: the waterfall stays live (the bursts on it are
+ *  half the point), the arrows step BANDS (nudge → ismStep), the readout shows the band (cardFreqText), zoom / IF filter /
+ *  passband are held (wholeRadioLock-style, with reasons), and the device list sits in a box over the lower waterfall
+ *  (ism.ts IsmBox). ★★ The SERVER owns the band (the shared-dial contract): a press sends a step, the next report says
+ *  where the radio is; nothing here is assumed. ★ Offered only where vibeserver.json says so: `ism` true (live) / false
+ *  (greyed, `ismWhy` on a tap) / absent (an HF+ reaches no ISM band — no control at all, AGENTS.md). */
+let ismCap: { ok: boolean; why: string; bands: IsmBand[]; landing: string } | null = null;
+let ismOn = false;
+let ismReport: IsmReport | null = null;
+let ismBox: IsmBox | null = null;
+function ismReadCap(j: any) {
+  const bands: IsmBand[] = Array.isArray(j?.ismBands)
+    ? j.ismBands.filter((b: any) => b && typeof b.id === 'string' && typeof b.name === 'string' && typeof b.hz === 'number').slice(0, 8)
+    : [];
+  if ((j?.ism === true || j?.ism === false) && bands.length) {
+    const why = typeof j.ismWhy === 'string' ? j.ismWhy.trim().slice(0, 200) : '';
+    ismCap = { ok: j.ism === true, why: j.ism === true ? '' : (why || 'ISM is not available on this receiver'), bands,
+               landing: typeof j.ismLanding === 'string' ? j.ismLanding : bands[0].id };
+  } else ismCap = null;
+}
+function ismNeighbours(): { prev: IsmBand | null; next: IsmBand | null } {
+  const bands = ismCap?.bands ?? [];
+  const i = bands.findIndex((b) => b.id === ismReport?.band);
+  if (i < 0) return { prev: null, next: null };
+  return { prev: i > 0 ? bands[i - 1] : null, next: i < bands.length - 1 ? bands[i + 1] : null };
+}
+function ismStep(d: number) {
+  const n = ismNeighbours();
+  if ((d < 0 && !n.prev) || (d > 0 && !n.next)) return;   // ★ clamped, as the server is — no dead send
+  audio?.holdHealing(6000);
+  spec?.ism(true, { step: d });
+}
+function ismLockControls(on: boolean) {
+  const why = 'Held in ISM — the view is the whole band';
+  for (const id of ['mZoomIn', 'mZoomOut', 'mPanelFit', 'mStep']) {
+    const el = document.getElementById(id) as HTMLButtonElement | null;
+    if (!el) continue;
+    el.disabled = on;
+    if (on) { if (el.dataset.lockTitle === undefined) el.dataset.lockTitle = el.title; el.title = why; }
+    else if (el.dataset.lockTitle !== undefined) { el.title = el.dataset.lockTitle; delete el.dataset.lockTitle; }
+  }
+  const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
+  if (bw) {
+    bw.disabled = on;
+    if (on) { if (bw.dataset.lockTitle === undefined) bw.dataset.lockTitle = bw.title; bw.title = 'Set by ISM — the filter is the whole capture while sensors are decoded'; }
+    else if (bw.dataset.lockTitle !== undefined) { bw.title = bw.dataset.lockTitle; delete bw.dataset.lockTitle; }
+  }
+}
+function ismUiOn() {
+  ismOn = true;
+  if (spec) spec.ismHeld = true;
+  if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (d) => ismStep(d));
+  ismBox.show();
+  ismLockControls(true);
+  if (wf) wf.vfoHidden = true;   // ★ no LISTEN needle on a band capture
+  setTimeout(syncDialTips, 0);
+}
+function ismUiOff() {
+  ismOn = false;
+  ismReport = null;
+  if (spec) spec.ismHeld = false;
+  ismBox?.hide();
+  ismLockControls(false);
+  if (wf) wf.vfoHidden = false;
+  setTimeout(syncDialTips, 0);
+  renderFreq();
+}
+/** A listener's press: in (the landing band) or out. */
+function ismSetMode(on: boolean) {
+  if (on) {
+    if (ismCap && !ismCap.ok) { showPill(ismCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.ism(true); return; }   // ★ ask before tuning: spec says why
+    if (dabOn) { dabRestore = null; dabOn = false; dabState = null; syncStereoLight(); wf?.applySettings({ minRangeDb: 30 }); dabUiOff(); dabSetPane(dabPane); }
+    audio?.holdHealing(6000);
+    ismUiOn();
+    // ★ no band named: the server enters where ISM last was, else the band nearest its own location (ismLanding)
+    spec?.ism(true);
+  } else {
+    audio?.holdHealing(6000);
+    spec?.ism(false);
+    ismUiOff();
+  }
+}
+/** ★ A report (on) or the server's `ism_off` (null). */
+function onIsmReport(r: IsmReport | null) {
+  if (!r) { if (ismOn) { audio?.holdHealing(6000); ismUiOff(); } return; }
+  const bandChanged = r.band !== ismReport?.band || r.custom !== ismReport?.custom;
+  ismReport = r;
+  if (!ismOn) ismUiOn();   // ★ somebody else put the receiver in ISM (or we joined it)
+  audio?.holdHealing(8000);   // ★ nothing to hear on a band: the server sends no audio (as in ADS-B)
+  const n = ismNeighbours();
+  ismBox?.update(r, { down: !!n.prev, up: !!n.next });
+  if (bandChanged) { syncDialTips(); renderFreq(); }
+}
+
 /** Spend a demodulator picked during ADS-B on the first config out of it (see adsbPendingMode). */
 function adsbApplyPending() {
   if (!adsbPendingMode || adsbOn || !spec) return;
@@ -8229,7 +8329,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -8263,6 +8363,8 @@ function buildControls() {
     setMode:    (m) => { if (icomR) { icomPickMode(m); return; }
                          // ★ ADS-B: leave, and spend the pick on the dial the server gives back (adsbPendingMode).
                          if (adsbOn) { adsbPendingMode = m as SDRMode; adsbSetMode(false); return; }
+                         // ★ ISM likewise: the pick waits for the dial the server gives back (adsbApplyPending runs off any config)
+                         if (ismOn) { adsbPendingMode = m as SDRMode; ismSetMode(false); return; }
                          if (dabOn) dabSetMode(false); setMode(m as SDRMode, true); airbandFollowPassband(); renderFreq(); },
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
@@ -8274,10 +8376,13 @@ function buildControls() {
     // ★ Null between multiplexes (a retune sets dabState = null): the card then says it is searching.
     dabQuality:    () => (dabOn && dabState ? dabQuality : null),
     /* ★ DAB from ADS-B: the server leaves ADS-B itself (it sends adsb_off first), so only our UI unwinds here. */
-    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); dabSetMode(!dabOn); },
+    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); dabSetMode(!dabOn); },
     adsbCap:       () => adsbCap,
     adsbOn:        () => adsbOn,
-    toggleAdsb:    () => adsbSetMode(!adsbOn),
+    toggleAdsb:    () => { if (ismOn && !adsbOn) ismUiOff(); adsbSetMode(!adsbOn); },
+    ismCap:        () => ismCap,
+    ismOn:         () => ismOn,
+    toggleIsm:     () => { if (adsbOn && !ismOn) adsbUiOff(); ismSetMode(!ismOn); },
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();
@@ -9579,6 +9684,17 @@ function syncDialTips() {
   }
   /* ★ IN ADS-B THERE IS NOTHING TO STEP: the arrows, the step and the zoom are greyed (wholeRadioLock) and
    *  their titles say why — written here too, because this runs after every step change. */
+  /* ★ IN ISM THE ARROWS STEP BANDS: they name the band each will take you to, blank at the ends (the server clamps). */
+  if (ismOn) {
+    const { prev, next } = ismNeighbours();
+    cap('mStepCapD', prev ? prev.id : ''); cap('mStepCapU', next ? next.id : '');
+    t('mVfoDown', prev ? `Previous ISM band — ${prev.name}` : 'The lowest ISM band this radio reaches');
+    t('mVfoUp',   next ? `Next ISM band — ${next.name}` : 'The highest ISM band this radio reaches');
+    t('mStep', 'Tuning step — not used in ISM, where the arrows step the band');
+    t('mZoomOut', 'Zoom is held in ISM — the band is the whole view');
+    t('mZoomIn',  'Zoom is held in ISM — the band is the whole view');
+    return;
+  }
   if (adsbOn) {
     cap('mStepCapD', ''); cap('mStepCapU', '');
     for (const id of ['mVfoDown', 'mVfoUp', 'mStep', 'mZoomOut', 'mZoomIn']) t(id, 'Locked in ADS-B — the receiver is held on 1090 MHz');
@@ -15638,6 +15754,9 @@ function nudge(hz: number) {
    *  it were a standard VFO and not cycling through the DAB blocks like I wanted". A DAB station
    *  is not a frequency, so the only tuning gesture that means anything is the next block. */
   if (dabOn) { dabTune(hz < 0 ? -1 : 1); return; }
+  /* ★★★ IN ISM THE ARROWS STEP BANDS (Stuart, 2026-10-25: "I always found it quite hard to tune the ISM on OWRX") — every
+   *  arrow, key, wheel and pad press ends here, as DAB's blocks do. The server clamps at the ends and owns the band. */
+  if (ismOn) { ismStep(hz < 0 ? -1 : 1); return; }
   if (adsbOn) return;   // ★ held on 1090 MHz — the arrows are greyed (wholeRadioLock); keys and the wheel end here
   // Snap to the step grid so repeated nudges stay on round frequencies.
   // ★★ Through airbandStepFrom: the 8.33 kHz step is 25000/3 exactly (no drift), and in the airband
@@ -15707,6 +15826,12 @@ let freqUnit: FreqUnit = 'mhz';
  */
 function cardFreqText(): { main: string; fine: string; unit: string; chan?: string } | null {
   if (!spec) return null;
+  /* ★★ IN ISM THE READOUT IS THE BAND (Stuart, 2026-10-25): its centre as the figure and its name as the tag — the server's
+   *  report says which, so a second listener sees the band whoever chose it. An exact frequency typed in ISM shows itself. */
+  if (ismOn && ismReport) {
+    const hz = ismReport.centre || spec.frequency;
+    return { main: (hz / 1e6).toFixed(3), fine: '', unit: 'MHz', chan: ismReport.custom ? 'ISM' : `ISM ${ismReport.band ?? ''}`.trim() };
+  }
   const hz = Math.round(spec.frequency);
   // ★ An airband channel: its NAME is the figure, in MHz — see renderFreq.
   const ch = airChannelNow();
@@ -15771,6 +15896,7 @@ function setFreqUnit(u: FreqUnit) {
 function openFreqEntry() {
   if (dabOn) { showTuneGapMsg('Frequency is locked in DAB mode — there is no dial inside a multiplex. Press EXIT DAB to tune.'); return; }
   if (adsbOn) { showTuneGapMsg('Frequency is locked in ADS-B — the receiver is held on 1090 MHz. Press EXIT ADS-B to tune.'); return; }
+  // ★ ISM: the box stays open — a typed frequency puts the capture there for an odd device (see go() below)
   togglePanel('freqPanel');
   const el = $<HTMLInputElement>('freqInput');
   el.value = (spec!.frequency / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
@@ -15834,6 +15960,9 @@ function initFreqEntry() {
     /* ★★ A TYPED FREQUENCY IN ANOTHER BAND TAKES THAT BAND'S MODE — the app's rule, one function (bandJumpDefaults).
      *  It kept yours, so 121.5 typed from FM went out as WFM (Stuart, 2026-10-03: airband must land on AM 8.33).
      *  Within a band the mode you chose stands; the step follows below either way. */
+    /* ★★ IN ISM A TYPED FREQUENCY IS AN EXACT CAPTURE CENTRE (an odd device off the usual channels): it goes through the ISM
+     *  door, the device list is kept, and the arrows still step bands from wherever the server says it now is. */
+    if (ismOn) { spec!.ism(true, { hz: got }); closePanels(); return; }
     const jumpMode = bandJumpDefaults(spec!.frequency, got, String(spec!.mode ?? ''), ituRegion()).mode;
     spec!.tune(got, jumpMode, { recenter: true, retarget: true });
     if (jumpMode) setMode(jumpMode, false);
