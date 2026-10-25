@@ -10,7 +10,7 @@
 //     textbook (Hann-windowed FFT power, a minimum-tracking noise floor, a complex NCO, integrate-and-dump, a polar
 //     discriminator, a hysteresis slicer).
 // ★★ Header-only and links nothing, like vibe_adsb.h, so test-ism builds with one g++ line (scripts/run-tests.sh).
-// ★★ CPU: the detector FFTs only one block in every kHopBlocks, so its cost is a fraction of a full-rate FFT; a channel
+// ★★ CPU: the detector FFTs one block every kHopUs (not every block), so its cost is a fraction of a full-rate FFT; a channel
 //    costs a mix and an add per capture sample, and only while a burst is on the air. Measured in test-ism (CPU row) and
 //    quoted in ISM-DECODER.md §CPU.
 #pragma once
@@ -21,6 +21,9 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#if defined(VIBE_DAB_PFFFT)
+#include "vibe_dab_fft.h"
+#endif
 
 namespace vibeism {
 
@@ -72,13 +75,32 @@ private:
     std::vector<cf> tw_;
 };
 
+/* ★★ THE DETECTOR'S FFT IS PFFFT WHERE THE BUILD LINKS IT (the server and the app define VIBE_DAB_PFFFT for DAB's OFDM —
+ *  vibe_dab_fft.h), the radix-2 above where it does not (test-ism's one-line build). On the Pi 500's A76 the radix-2 was
+ *  over half the front end's cost; PFFFT is NEON/SSE throughout. Same convention: forward, natural order, unscaled. */
+#if defined(VIBE_DAB_PFFFT)
+using DetFft = vibedab::Fft;
+#else
+using DetFft = SmallFft;
+#endif
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  THE FRONT END
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 class FrontEnd {
 public:
     static constexpr int    kN = 256;            ///< detector FFT size (≈ 9.4 kHz bins at 2.4 MS/s)
-    static constexpr int    kHopBlocks = 3;      ///< FFT one block of kN in every kHopBlocks — ~3 100 FFTs/s at 2.4 MS/s
+    /** How often the detector looks: one kN-point FFT every kHopUs of capture (~3 100 a second). ★ 32-BIT ARM (the Pi 2 —
+     *  the minimum spec — and Pi 0/1/3 on armhf) looks half as often: the detector FFT is most of the front end's cost on
+     *  an in-order core (Pi 500 A76: 2.0 of 3.4 % of a core), and a 10 ms burst still crosses ~15 frames. A TIME, not a
+     *  block count: at 3 MS/s "6 blocks" was a 1 ms hop, and test-ism lost bursts at it. VIBE_ISM_HOP_US overrides. */
+#if defined(VIBE_ISM_HOP_US)
+    static constexpr double kHopUs = VIBE_ISM_HOP_US;
+#elif defined(__arm__)
+    static constexpr double kHopUs = 640;
+#else
+    static constexpr double kHopUs = 320;
+#endif
     static constexpr double kChanRate = 250e3;   ///< a burst's channel rate (integrate-and-dump target)
     static constexpr double kPrerollS = 0.006;   ///< channel starts this far before the first detection
     static constexpr double kCloseS = 0.025;     ///< no energy for this long = the burst is over (PT2262's sync is ~15 ms)
@@ -102,7 +124,7 @@ public:
         floor_.assign(kN, 0.0f);
         pw_.assign(kN, 0.0f);
         fbuf_.resize(kN);
-        hop_ = kN * kHopBlocks;
+        hop_ = std::max(kN, int(std::lround(w_ * kHopUs * 1e-6)));
     }
 
     double workRate() const { return w_; }
@@ -113,22 +135,45 @@ public:
     /** Share of detector frames in the last second where any sample neared full scale — the gain rule's overload. */
     double clipFrac() const { return clipFrac_; }
     /** Ignore detections within this many Hz of the capture centre (the DC remnant). */
-    void setDcGuardHz(double hz) { dcGuardHz_ = hz; }
+    void setDcGuardHz(double hz) { dcGuardHz_ = hz; tablesOk_ = false; }
     /** Detect only between these offsets from the capture centre (the band's own span): the tuner's filter skirts
      *  outside it are where the floor moves fastest and false bursts cluster (Pi 500 RTL, 433.92, 2026-10-25). */
-    void setUsableHz(double lo, double hi) { useLo_ = lo; useHi_ = hi; }
+    void setUsableHz(double lo, double hi) { useLo_ = lo; useHi_ = hi; tablesOk_ = false; }
 
     /** Feed capture samples. `onBurst(const Burst&)` is called on THIS thread when a burst ends. */
     template <class F> void feed(const cf* x, size_t n, F&& onBurst) {
-        for (size_t i = 0; i < n; ++i) {
-            if (pre_ > 1) { preAcc_ += x[i]; if (++preCnt_ < pre_) continue; pushWork(preAcc_ * (1.0f / pre_), onBurst); preAcc_ = 0; preCnt_ = 0; }
-            else pushWork(x[i], onBurst);
+        if (pre_ > 1) {
+            for (size_t i = 0; i < n; ++i) {
+                preAcc_ += x[i]; if (++preCnt_ < pre_) continue;
+                pushWork(preAcc_ * (1.0f / pre_), onBurst); preAcc_ = 0; preCnt_ = 0;
+            }
+            return;
+        }
+        /* ★★ IN RUNS, NOT SAMPLE BY SAMPLE: the per-sample bookkeeping (ring index, peak, two boundary checks) was ~85 % of
+         *  the front end's cost on the M4 — the FFTs themselves 0.4 % of a core. Copy up to the next boundary (an FFT, or
+         *  the channels' 1024-sample step) in one tight loop the compiler vectorises, then do the boundary's work. */
+        const size_t mask = ring_.size() - 1;
+        size_t i = 0;
+        while (i < n) {
+            const size_t toFft = size_t(hop_ - sinceFft_), toChan = 1024 - size_t(total_ & 1023);
+            const size_t room = std::min(n - i, std::min(toFft, toChan));
+            float pk = blockPeak_;
+            size_t pos = size_t(total_ & mask);
+            for (size_t k = 0; k < room; ++k) {
+                const cf v = x[i + k];
+                ring_[(pos + k) & mask] = v;
+                pk = std::max(pk, std::max(std::fabs(v.real()), std::fabs(v.imag())));
+            }
+            blockPeak_ = pk;
+            total_ += room; sinceFft_ += int(room); i += room;
+            if ((total_ & 1023) == 0) for (auto& c : ch_) if (c.on && !c.pending) runChan(c, total_);
+            if (sinceFft_ >= hop_) { sinceFft_ = 0; detect(onBurst); }
         }
     }
 
     /** Close every open channel now (end of stream). */
     template <class F> void flush(F&& onBurst) {
-        for (auto& c : ch_) if (c.on) closeChan(c, onBurst);
+        for (auto& c : ch_) if (c.on) { if (c.pending) { c.on = false; c.pending = false; continue; } runChan(c, total_); closeChan(c, onBurst); }
     }
 
 private:
@@ -141,6 +186,10 @@ private:
         uint64_t next = 0;      ///< the next working sample (absolute) this channel has not yet consumed
         uint64_t start = 0, lastHit = 0;
         int hits = 0;           ///< detector frames that saw it — a noise spike is one; a burst is many
+        /** ★★ A CANDIDATE until seen twice. One noise bin in a few thousand crosses 10 dB, and mixing a channel for 25 ms
+         *  after each was ~75 % of the front end's whole cost on pure noise (M4: 2.8 % of a core → 0.8 %). Nothing is lost
+         *  by waiting: the channel mixes from its pre-roll in the ring when promoted. */
+        bool pending = false;
         float peakPow = 0, framePow = 0;   ///< its strongest bin power, ever and in the current detector frame
         float peakAbs = 0;
         std::vector<cf> bb;
@@ -153,7 +202,7 @@ private:
         if (a > blockPeak_) blockPeak_ = a;
         ++total_;
         // ★ channels consume up to "now" every 1024 samples (and at a detection), never more than the ring holds
-        if ((total_ & 1023) == 0) for (auto& c : ch_) if (c.on) runChan(c, total_);
+        if ((total_ & 1023) == 0) for (auto& c : ch_) if (c.on && !c.pending) runChan(c, total_);
         if (++sinceFft_ >= hop_) { sinceFft_ = 0; detect(onBurst); }
     }
 
@@ -195,27 +244,23 @@ private:
             for (int i = 0; i < kN; ++i) floor_[size_t(i)] = frames_ == 0 ? pw_[size_t(i)] : floor_[size_t(i)] + 0.15f * (pw_[size_t(i)] - floor_[size_t(i)]);
         }
         ++frames_;
-        const float thr = std::pow(10.0f, threshDb / 10.0f);
-        const double binHz = w_ / kN;
-        const double now = double(total_) / w_;
-        // ★ bin index → signed frequency: 0..N/2-1 positive, N/2..N-1 negative
-        auto binFreq = [&](int k) { return (k < kN / 2 ? k : k - kN) * binHz; };
+        if (thrDbCached_ != threshDb) { thrDbCached_ = threshDb; thr_ = std::pow(10.0f, threshDb / 10.0f); }
+        const float thr = thr_;
+        if (!tablesOk_) buildTables();
         // groups of over-threshold bins, scanned in frequency order (negative first), one-bin gaps bridged
-        int edge = int(kN * 0.05);
         struct G { double f, wsum; float peak, pmax; int width; };
         G groups[16]; int ng = 0;
         bool inG = false; int gapRun = 0; G cur{0, 0, 0, 0, 0};
         for (int j = 0; j < kN; ++j) {
-            const int k = (j + kN / 2) % kN;                 // -N/2 .. N/2-1
-            const int sk = k < kN / 2 ? k : k - kN;
-            const bool usable = std::abs(sk) < kN / 2 - edge && std::fabs(binFreq(k)) > dcGuardHz_
-                             && binFreq(k) >= useLo_ && binFreq(k) <= useHi_;
-            const float ex = usable && floor_[size_t(k)] > 0 ? pw_[size_t(k)] / floor_[size_t(k)] : 0.0f;
-            if (ex > thr) {
+            const int k = order_[size_t(j)];                // -N/2 .. N/2-1, as bins
+            const float p = pw_[size_t(k)];
+            // ★ no division: a bin is "over" when p > floor × thr; the ratio is worked out only for the few that are
+            if (usable_[size_t(k)] && p > floor_[size_t(k)] * thr) {
+                const float ex = p / floor_[size_t(k)];
                 if (!inG) { cur = G{0, 0, 0, 0, 0}; inG = true; }
                 gapRun = 0;
-                cur.f += binFreq(k) * pw_[size_t(k)]; cur.wsum += pw_[size_t(k)];
-                cur.peak = std::max(cur.peak, ex); cur.pmax = std::max(cur.pmax, pw_[size_t(k)]); ++cur.width;
+                cur.f += double(freq_[size_t(k)]) * p; cur.wsum += p;
+                cur.peak = std::max(cur.peak, ex); cur.pmax = std::max(cur.pmax, p); ++cur.width;
             } else if (inG && ++gapRun > 1) {
                 inG = false;
                 if (ng < 16) groups[ng++] = cur;
@@ -229,8 +274,7 @@ private:
             float& fl = floor_[size_t(k)];
             const float p = pw_[size_t(k)];
             const float a = p < fl * 3.0f ? 0.01f : 0.0003f;
-            fl += a * (p - fl);
-            if (fl < 1e-14f) fl = 1e-14f;
+            fl = std::max(1e-14f, fl + a * (p - fl));
         }
         if ((frames_ & 255) == 0) {
             std::vector<float> t(floor_.begin(), floor_.end());
@@ -250,7 +294,11 @@ private:
             const double f = gr.f / gr.wsum;
             Chan* hit = nullptr;
             for (auto& c : ch_) if (c.on && std::fabs(c.offHz - f) < kMatchHz) { hit = &c; break; }
-            if (hit) { hit->lastHit = total_; ++hit->hits; hit->peakPow = std::max(hit->peakPow, gr.pmax); hit->framePow = std::max(hit->framePow, gr.pmax); continue; }
+            if (hit) {
+                hit->lastHit = total_; ++hit->hits; hit->peakPow = std::max(hit->peakPow, gr.pmax); hit->framePow = std::max(hit->framePow, gr.pmax);
+                if (hit->pending) { hit->pending = false; runChan(*hit, total_); }   // ★ a second sighting: now it is worth mixing
+                continue;
+            }
             /* ★★ SPLATTER IS NOT A BURST. A strong OOK transmitter's keying edges spread −30…−45 dB sidebands hundreds of
              *  kHz either side; each would open a channel of its own. A newcomer 25 dB under a burst that is ON THE AIR
              *  while it is open is taken as its splatter (its keying edges splatter in the frames where it is
@@ -268,11 +316,25 @@ private:
         // close channels that went quiet, or ran too long
         for (auto& c : ch_) {
             if (!c.on) continue;
+            if (c.pending) { if (double(total_ - c.lastHit) > std::max(3.0 * hop_, 0.004 * w_)) { c.on = false; c.pending = false; } continue; }
             const double quiet = double(total_ - c.lastHit) / w_;
             const double len = double(total_ - c.start) / w_;
             if (quiet > kCloseS || len > kMaxBurstS) { runChan(c, total_); closeChan(c, onBurst); }
         }
-        (void)now;
+    }
+    /** The bin tables: scan order (most negative frequency first), each bin's frequency, and whether it may detect. */
+    void buildTables() {
+        const double binHz = w_ / kN;
+        const int edge = int(kN * 0.05);
+        order_.resize(kN); freq_.resize(kN); usable_.resize(kN);
+        for (int j = 0; j < kN; ++j) order_[size_t(j)] = (j + kN / 2) % kN;
+        for (int k = 0; k < kN; ++k) {
+            const int sk = k < kN / 2 ? k : k - kN;
+            const double f = sk * binHz;
+            freq_[size_t(k)] = float(f);
+            usable_[size_t(k)] = std::abs(sk) < kN / 2 - edge && std::fabs(f) > dcGuardHz_ && f >= useLo_ && f <= useHi_;
+        }
+        tablesOk_ = true;
     }
 
     void openChan(Chan& c, double f) {
@@ -283,6 +345,7 @@ private:
         c.next = c.start;
         c.lastHit = total_;
         c.hits = 1;
+        c.pending = true;
         c.peakPow = 0; c.framePow = 0;
         const double ph = -2.0 * M_PI * f / w_;
         c.inc = cf(float(std::cos(ph)), float(std::sin(ph)));
@@ -291,7 +354,6 @@ private:
         c.peakAbs = 0;
         c.bb.clear();
         c.bb.reserve(size_t(0.1 * chanRate()));
-        runChan(c, total_);
     }
 
     template <class F> void closeChan(Chan& c, F& onBurst) {
@@ -472,8 +534,12 @@ private:
     float blockPeak_ = 0;
     std::vector<cf> ring_;
     uint64_t total_ = 0, frames_ = 0, bursts_ = 0;
-    SmallFft fft_;
-    std::vector<float> win_, floor_, pw_;
+    DetFft fft_;
+    std::vector<float> win_, floor_, pw_, freq_;
+    std::vector<int> order_;
+    std::vector<uint8_t> usable_;
+    bool tablesOk_ = false;
+    float thr_ = 10.0f, thrDbCached_ = -1.0f;
     std::vector<cf> fbuf_;
     Chan ch_[kMaxChans];
 };

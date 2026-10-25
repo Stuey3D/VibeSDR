@@ -452,7 +452,7 @@ int main(int argc, char** argv) {
     {
         std::vector<Sig> sigs;
         for (int k = 0; k < 10; ++k) { Sig s{k % 2 ? wh1080("a1820d5a0306004e08d3") : oregonV3(withChecksum(oregonNibbles("F824" "1" "22" "0" "571" "0" "45" "0"), 17))};
-                                       s.offHz = -300e3 + 60e3 * k; s.startS = 0.3 + k * 0.9; sigs.push_back(s); }
+                                       s.offHz = -330e3 + 60e3 * k; s.startS = 0.3 + k * 0.9; sigs.push_back(s); }   // ★ none at DC (the guard)
         const auto x = synth(sigs, 2.4e6, 10.0, 0.02, 21);
         const auto t0 = std::chrono::steady_clock::now();
         std::vector<Burst> bs;
@@ -460,7 +460,7 @@ int main(int argc, char** argv) {
         const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         printf(" CPU: 10 s of capture at 2.4 MS/s (10 bursts) in %.3f s = %.1f %% of one core on this machine; %zu decoded\n",
                sec, sec * 10.0, got.size());
-        CHECK(got.size() >= 9, "CPU run decoded %zu of 10", got.size());
+        CHECK(got.size() >= 10, "CPU run decoded %zu of 10", got.size());   // ★ a burst may decode twice (a repeat): the tracker folds it
     }
 
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "ok", checks, fails);
