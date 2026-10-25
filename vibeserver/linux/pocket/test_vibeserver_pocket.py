@@ -2059,6 +2059,34 @@ def main():
         box.apply(req([("Home", "homepass1", dict(hidden=False, keep=False))]))
         ok(not os.path.exists(box.reset_path), "…and the reset is over once Wi-Fi is saved")
     ok("NEW Wi-Fi hardware" in hwlog.getvalue(), "the journal says why a radio is left alone")
+    # ── what a radio IS, from a sysfs laid out as Linux lays it out (USB dongle; SDIO chip; none) ──
+    with tempfile.TemporaryDirectory() as tmp:
+        def mk(path, text=None):
+            os.makedirs(os.path.dirname(path) if text is not None else path, exist_ok=True)
+            if text is not None:
+                open(path, "w").write(text)
+        usb = os.path.join(tmp, "devices/platform/soc/1c1b000.usb/usb3/3-1")
+        mk(os.path.join(usb, "3-1:1.0")); mk(os.path.join(usb, "idVendor"), "0bda\n"); mk(os.path.join(usb, "idProduct"), "8179\n")
+        mk(os.path.join(usb, "serial"), "00e04c000001\n")
+        mk(os.path.join(tmp, "bus/usb/drivers/rtl8xxxu"))
+        os.symlink(os.path.join(tmp, "bus/usb/drivers/rtl8xxxu"), os.path.join(usb, "3-1:1.0", "driver"))
+        sdio = os.path.join(tmp, "devices/platform/soc/1c10000.mmc/mmc_host/mmc1/mmc1:0001/mmc1:0001:1")
+        mk(sdio); mk(os.path.join(tmp, "bus/sdio/drivers/brcmfmac"))
+        os.symlink(os.path.join(tmp, "bus/sdio/drivers/brcmfmac"), os.path.join(sdio, "driver"))
+        net = os.path.join(tmp, "class/net")
+        for dev, target in (("wlx00e04c000001", os.path.join(usb, "3-1:1.0")), ("wlan0", sdio)):
+            mk(os.path.join(net, dev)); os.symlink(target, os.path.join(net, dev, "device"))
+        keep = vp.SYS_NET; vp.SYS_NET = net
+        try:
+            nm, box = make(tmp)
+            u, d, n = box.radio_info("wlx00e04c000001"), box.radio_info("wlan0"), box.radio_info("wlan9")
+        finally:
+            vp.SYS_NET = keep
+        ok(u == {"iface": "wlx00e04c000001", "driver": "rtl8xxxu", "usb": "0bda:8179", "id": "usb:0bda:8179:00e04c000001"},
+           "sysfs: a USB dongle is its vendor:product + serial, with its driver (%r)" % (u,))
+        ok(d["id"] == "dev:brcmfmac:mmc1:0001:1" and d["usb"] == "" and d["driver"] == "brcmfmac",
+           "sysfs: an SDIO chip (a Pi's brcmfmac) is its driver + bus address, not USB (%r)" % (d,))
+        ok(n["id"] == "if:wlan9", "no sysfs entry: the interface name is all there is")
 
     # ── ★★★ http://vibeserversetup.local/ ON ETHERNET, ONLY WHILE SETTING UP (Nick, G4IRX, a real Orange Pi One on a cable,
     #    2026-10-25: "entering http://vibeserversetup.local/ in the browser results in 'site not found'") ──

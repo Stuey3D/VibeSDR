@@ -896,7 +896,7 @@ class Box:
         boot and wlan1 on another, depending on the image's naming rules)."""
         base = os.path.join(SYS_NET, dev, "device")
         try:
-            real = os.path.realpath(base)
+            real = os.path.realpath(base) if os.path.exists(base) else ""
         except OSError:
             real = ""
         try:
