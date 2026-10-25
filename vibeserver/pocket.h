@@ -35,6 +35,7 @@ struct Paths {
     std::string inbox    = "/var/lib/vibeserver/pocket-wifi.request"; // we write (0600), root reads + deletes
     std::string kick     = "/var/lib/vibeserver/pocket-kick.request"; // one word: switch | scan | scan-force | wifi-off | wifi-on …
     std::string portFile = "/var/lib/vibeserver/pocket-port";         // our front door's port, for the :80 redirect
+    std::string sshInbox = "/var/lib/vibeserver/pocket-ssh.request";  // the owner's SSH switch (0600) — root reads + deletes
 };
 Paths& paths();
 
@@ -77,6 +78,7 @@ bool apActive();
 bool validSsid(const std::string& s);                  // 1–32 bytes, no control characters
 bool validPsk(const std::string& p);                   // 8–63 printable ASCII, or 64 hex
 bool validCountry(const std::string& c);               // two capital letters
+bool validSshPassword(const std::string& p);           // 8–128 printable ASCII (it ends up on chpasswd's line)
 
 struct Net { std::string ssid, psk; bool keep = false, hidden = false; };
 struct WifiRequest {

@@ -1957,6 +1957,8 @@ class Box:
             "settingsSaved": not os.path.exists(VOLATILE_FILE),
             # ★★★ The last JOIN_KEEP join attempts, oldest first (see JOIN_HISTORY) — admin-only, like the rest of this.
             "joins": self.history,
+            # ★★ The owner's SSH switch (11.0.11): on/off, the login name, whether this box has sshd at all. Never a hash.
+            "ssh": self.ssh.doc() if getattr(self, "ssh", None) else {"available": False, "on": False},
         }
         write_state_file(self.state_path, doc)
 
@@ -2218,6 +2220,196 @@ def avahi_limits(path=None):
     return out
 
 
+# ── SSH, switched on by the owner (2026-10-25, 11.0.11) ─────────────────────────────────────────────────────────────
+# ★★★ OFF BY DEFAULT, THE OWNER'S PASSWORD, NOTHING OF OURS (Stuart, 2026-10-25: "Enable SSH" for Portable / board cards).
+#     A Portable's first network is an OPEN hotspot, so the image ships sshd off and the console gettys masked: no login
+#     at all. This lets the owner switch SSH on from the admin page, with a password THEY type there.
+#  ★★ THE ACCOUNT: `vibe` (uid 1000) — the image's own login (customise.sh makes it, LOCKED), a member of sudo, and the
+#     account Raspberry Pi OS users expect. root is never given a password here: Debian's sshd refuses root password
+#     logins (PermitRootLogin prohibit-password) and that stays as it is. The owner logs in as vibe and uses sudo.
+#  ★★ THE PASSWORD: handed to chpasswd on STDIN ("vibe:<password>"), never in an argument list, never logged. chpasswd
+#     hashes it as the system does (yescrypt on Trixie). What is KEPT is only that HASH, read back from /etc/shadow.
+#  ★★★ IT SURVIVES THE READ-ONLY ROOT. On a sealed Portable /etc/shadow and the running sshd live in the RAM overlay and
+#     are gone at the next boot. So the switch, the user and the hash are kept on the SETTINGS PARTITION
+#     (/var/lib/vibeserver-pocket = /data/pocket, root 0600), and every boot puts them back: `chpasswd -e` with the
+#     hash, then `systemctl start ssh` (start, never enable — the image's "off" stays the default on the real root).
+#     The host keys are kept there too, so the box does not present a new key — and a warning — after each power cycle.
+#  ★ Off = sshd stopped, vibe locked again (usermod -L), the hash forgotten. The host keys stay (they are not secret to
+#    anyone but the box, and keeping them means the next "on" is the same box to the owner's ssh client).
+SSH_INBOX = "/var/lib/vibeserver/pocket-ssh.request"         # the daemon writes (0600), we read + delete
+SSH_STATE = "/var/lib/vibeserver-pocket/ssh.json"            # ★ on the settings partition; root 0600
+SSH_KEEP_KEYS = "/var/lib/vibeserver-pocket/ssh-host-keys"   # the box's own host keys, kept across boots
+SSH_ETC = "/etc/ssh"
+SSH_USER = "vibe"
+SSH_UNIT = "ssh.service"
+SSHD = "/usr/sbin/sshd"
+SHADOW = "/etc/shadow"
+SSH_PASS_MIN, SSH_PASS_MAX = 8, 128
+
+
+def valid_ssh_password(p):
+    """★ The same character rule as everywhere a password is typed: printable ASCII only — no newline (it would end
+    chpasswd's line), nothing a terminal could not type. 8 characters at least: this one opens a shell."""
+    return isinstance(p, str) and SSH_PASS_MIN <= len(p) <= SSH_PASS_MAX and all(0x20 <= ord(c) < 0x7F for c in p)
+
+
+def validate_ssh_request(req):
+    """{"on": true, "pass": "…"} or {"on": false} → (request, "") or (None, why). Re-checked here: the side that is root."""
+    if not isinstance(req, dict) or not isinstance(req.get("on"), bool):
+        return None, "on must be true or false"
+    if not req["on"]:
+        return {"on": False}, ""
+    if not valid_ssh_password(req.get("pass")):
+        return None, "the SSH password must be %d to %d ordinary characters" % (SSH_PASS_MIN, SSH_PASS_MAX)
+    return {"on": True, "pass": req["pass"]}, ""
+
+
+class SshAccess:
+    """The switch. Every path is an attribute so the tests run it on a temporary root (test_pocket_ssh.py)."""
+
+    def __init__(self, sh):
+        self.sh = sh
+        self.state, self.keep, self.etc, self.shadow, self.sshd = SSH_STATE, SSH_KEEP_KEYS, SSH_ETC, SHADOW, SSHD
+        self.user = SSH_USER
+        self.last_error = ""
+
+    # ── what the admin page is told: no hash, no password, ever ──
+    def doc(self):
+        st = self._load()
+        return {"available": self.available(), "on": bool(st.get("on")), "user": self.user, "lastError": self.last_error}
+
+    def available(self):
+        """openssh-server is on the image and the login exists — else the page does not offer the switch."""
+        if not os.path.exists(self.sshd):
+            return False
+        try:
+            import pwd
+            pwd.getpwnam(self.user)
+            return True
+        except (KeyError, ImportError):
+            return self._user_in(os.path.join(os.path.dirname(self.shadow), "passwd"))
+
+    def _user_in(self, path):
+        try:
+            with open(path) as f:
+                return any(line.split(":", 1)[0] == self.user for line in f)
+        except OSError:
+            return False
+
+    def _load(self):
+        try:
+            with open(self.state) as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _hash(self):
+        """The user's hash as the system wrote it — '' if none (locked: '!…', or '*')."""
+        try:
+            with open(self.shadow) as f:
+                for line in f:
+                    parts = line.rstrip("\n").split(":")
+                    if parts[0] == self.user and len(parts) > 1:
+                        return parts[1] if parts[1].startswith("$") else ""
+        except OSError:
+            pass
+        return ""
+
+    def _keys_in(self, d):
+        try:
+            return sorted(n for n in os.listdir(d) if n.startswith("ssh_host_") and n.endswith("_key"))
+        except OSError:
+            return []
+
+    def _copy_keys(self, src, dst):
+        os.makedirs(dst, mode=0o700, exist_ok=True)
+        for n in self._keys_in(src):
+            for name, mode in ((n, 0o600), (n + ".pub", 0o644)):
+                s = os.path.join(src, name)
+                if not os.path.isfile(s) or os.path.islink(s):
+                    continue
+                with open(s, "rb") as f:
+                    data = f.read()
+                t = os.path.join(dst, name)
+                cur = None
+                try:
+                    with open(t, "rb") as f:
+                        cur = f.read()
+                except OSError:
+                    pass
+                if cur != data:
+                    fd = os.open(t + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+                    try:
+                        os.write(fd, data)
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                    os.replace(t + ".tmp", t)
+
+    def _host_keys(self):
+        """The box's host keys: the kept ones put back, or (first time) the image's own kept, or new ones made."""
+        if self._keys_in(self.keep):
+            self._copy_keys(self.keep, self.etc)
+            return
+        if not self._keys_in(self.etc):
+            self.sh.run(["ssh-keygen", "-A"], timeout=120)
+        if self._keys_in(self.etc):
+            self._copy_keys(self.etc, self.keep)
+
+    def _save(self, doc):
+        write_atomic(self.state, json.dumps(doc), mode=0o600)
+        os.chmod(self.state, 0o600)
+
+    def apply(self, req):
+        """The owner's request (already validated). Returns True when it took."""
+        self.last_error = ""
+        if not self.available():
+            self.last_error = "SSH is not available on this box"
+            log(self.last_error)
+            return False
+        if not req["on"]:
+            self.sh.run(["systemctl", "stop", SSH_UNIT], timeout=30)
+            self.sh.run(["usermod", "-L", self.user], timeout=30)
+            self._save({"v": 1, "on": False, "user": self.user})
+            log("SSH switched OFF by the owner (%s locked)" % self.user)
+            return True
+        # ★★★ STDIN, never argv: the password exists in this process and in chpasswd's input, nowhere else.
+        if self.sh.run_input(["chpasswd"], "%s:%s\n" % (self.user, req["pass"])) != 0:
+            self.last_error = "the SSH password could not be set"
+            log(self.last_error)
+            return False
+        self.sh.run(["usermod", "-U", self.user], timeout=30)
+        h = self._hash()
+        if not h:
+            self.last_error = "the SSH password could not be read back"
+            log(self.last_error)
+            return False
+        self._host_keys()
+        self._save({"v": 1, "on": True, "user": self.user, "hash": h})
+        self.sh.run(["systemctl", "start", SSH_UNIT], timeout=60)
+        log("SSH switched ON by the owner — log in as %s" % self.user)
+        return True
+
+    def restore(self):
+        """At every start: a switch left ON is put back on a root that forgot it (the read-only overlay)."""
+        st = self._load()
+        if not st.get("on") or not isinstance(st.get("hash"), str) or not st["hash"].startswith("$"):
+            return False
+        if not self.available():
+            return False
+        if self._hash() != st["hash"]:
+            # ★ -e: the HASH is set as it is — the password itself was never kept.
+            if self.sh.run_input(["chpasswd", "-e"], "%s:%s\n" % (self.user, st["hash"])) != 0:
+                self.last_error = "the kept SSH password could not be put back"
+                log(self.last_error)
+                return False
+        self._host_keys()
+        self.sh.run(["systemctl", "start", SSH_UNIT], timeout=60)
+        log("SSH is on (the owner's switch, kept on the settings partition)")
+        return True
+
+
 def setup_once(box):
     sh = box.sh
     quiet_hardware(sh)
@@ -2276,6 +2468,12 @@ def boot(box, configured=None):
     if not box.dev:
         log("no Wi-Fi device (yet) — answering on any wired link; a radio that appears later is managed then")
     setup_once(box)
+    # ★★ The owner's SSH switch, put back on a root that forgot it (the read-only overlay) — see SshAccess.
+    if getattr(box, "ssh", None):
+        try:
+            box.ssh.restore()
+        except Exception as e:                # ★ never take the Wi-Fi service down over SSH
+            log("SSH restore failed (%s)" % type(e).__name__)
 
 
 class KeptLog:
@@ -2396,6 +2594,7 @@ def main_loop():
         return 0
     sh = Shell()
     box = Box(sh, load_conf())
+    box.ssh = SshAccess(sh)
     # ★★★ THE NAME BEFORE ANYTHING ELSE (Stuart, 2026-10-13: "the MDNS for vibeserversetup.local:48000 must be live the
     #     second it detects a network"). This used to wait up to 120 s for a Wi-Fi device and then EXIT without one — so
     #     on a Pi 2 the hostname was never synced (vibepocket.local never answered after setup) and no state was ever
@@ -2444,6 +2643,24 @@ def run_loop(sh, box, net, gov, kept, uid):
                 # ★ Saved while Wi-Fi is off: kept for when it is switched on, never a reason to switch it on.
                 if req["switch"] and not box.wifi_off:
                     box.leave_hotspot_and_try("the owner asked to switch now")
+            last_tick = 0
+        sreq = read_request_file(SSH_INBOX, uid, limit=1024)
+        if sreq is not None:
+            try:
+                req, err = validate_ssh_request(json.loads(sreq.decode("utf-8")))
+            except (ValueError, UnicodeDecodeError):
+                req, err = None, "not valid JSON"
+            del sreq
+            if req is None:
+                box.ssh.last_error = "SSH request refused: " + err
+                log(box.ssh.last_error)
+            else:
+                try:
+                    box.ssh.apply(req)
+                except Exception as e:        # ★ never die on it; the page shows the error
+                    box.ssh.last_error = "SSH: internal error (%s)" % type(e).__name__
+                    log(box.ssh.last_error)
+                req = None
             last_tick = 0
         kick = read_request_file(KICK, uid, limit=32)
         if kick is not None:
