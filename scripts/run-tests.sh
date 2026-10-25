@@ -103,6 +103,9 @@ flags_for() {
     # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
+    # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
+    #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
+    test-ism-gallery)      echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }
@@ -292,6 +295,9 @@ if node scripts/test-setup-adsb-landing.mjs; then pass=$((pass+1)); else fail=$(
 # ★★ V12 BACKGROUND DECODING's editor (2026-10-22): the page's real code — Nick's profile round-trips, decoders follow the
 #    demodulator, "add another profile" only under a timed one, delete, the dial hint.
 if node scripts/test-setup-bgdecode.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and an ISM PROFILE (2026-10-25): offered only where ISM can run (not an HF+, an Icom, a locked radio, ISM blocked),
+#    only the bands the radio reaches; a band instead of a centre and VFOs; saved as {"ism":"433"} and read back.
+if node scripts/test-setup-bg-ism.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A TUNNEL A PREVIOUS PROCESS LEFT ON OUR PORT IS RETIRED (2026-10-19, Kiko's four tunnels). Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -947,6 +953,13 @@ if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-server-ism.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-web-ism.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 ISM IN THE GALLERY (2026-10-25): a listener's session writes the day's log + card (nothing while it ran, the
+  #    list's own lines, no ID anywhere), then an ISM background profile runs with nobody here and gives way to a listener;
+  #    then the web gallery's ISM chip in headless Edge at desktop and 390 px.
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-server-ism-gallery.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-web-ism-gallery.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/ism-clip.u8"
 else

@@ -1,10 +1,14 @@
 // ism-offline.cpp — run the V12 ISM decoder (vibe_ism*.h) over a recorded capture and print what it heard.
-//   ism-offline <capture> <rate Hz> <centre Hz> [u8|cf32] [--bursts]
+//   ism-offline <capture> <rate Hz> <centre Hz> [u8|cf32] [--bursts] [--gallery <dir>]
 // u8 = rtl_tcp bytes (what VibeServer's raw IQ out sends), cf32 = interleaved float32. Prints one readable line per
 // decode (the same text the clients get), then a summary. --bursts also lists every burst with its slicing, for
 // working on an unknown device — ★ never with its bits: a key fob's code is not printed here either.
+// --gallery <dir> (V12 2026-10-25): also keep what was heard as the GALLERY does (vibe_ism_gallery.h) — the day's log and
+// summary card for the nearest band, written into <dir> on the capture's own clock (it starts "now") — so a real
+// recording proves the readable lines and the privacy rule in the files themselves.
 // Build: g++ -std=c++17 -O2 -I android/app/src/main/cpp -o ism-offline vibeserver/ism-offline.cpp -lpthread
 #include "vibe_ism_service.h"
+#include "vibe_ism_gallery.h"
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -18,7 +22,25 @@ int main(int argc, char** argv) {
     const double rate = std::atof(argv[2]), centre = std::atof(argv[3]);
     const bool f32 = argc > 4 && std::strcmp(argv[4], "cf32") == 0;
     bool listBursts = false;
-    for (int i = 4; i < argc; ++i) if (std::strcmp(argv[i], "--bursts") == 0) listBursts = true;
+    std::string galDir;
+    for (int i = 4; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--bursts") == 0) listBursts = true;
+        if (std::strcmp(argv[i], "--gallery") == 0 && i + 1 < argc) galDir = argv[++i];
+    }
+    vibe::gallery::Store store;
+    std::shared_ptr<vibe::ismgal::DayLog> galLog;
+    const int64_t wall0 = vibe::gallery::nowUtc();
+    double capT = 0;   // ★ the capture's own clock, for the gallery's lines
+    if (!galDir.empty()) {
+        store.setDir(galDir);
+        store.setLimitBytes(100ull << 20);
+        const Band* b = bandNearest(centre);
+        vibe::ismgal::DayLog::Options o;
+        o.bandId = b->id; o.bandName = b->name; o.bandHz = b->centreHz; o.origin = "live";
+        o.clock = [&] { return wall0 + int64_t(capT); };
+        galLog = std::make_shared<vibe::ismgal::DayLog>(store, o);
+        if (store.dir().empty()) { std::fprintf(stderr, "cannot write the gallery into %s\n", galDir.c_str()); return 1; }
+    }
     FILE* f = std::fopen(argv[1], "rb");
     if (!f) { std::perror(argv[1]); return 1; }
     FrontEnd fe(rate);
@@ -51,9 +73,9 @@ int main(int argc, char** argv) {
         for (double hz : fobs.takePeriodic()) { tr.forget("suspectfob", hz, 50e3); std::printf("  (%.4f MHz is on a timer — a sensor, not a fob)\n", hz / 1e6); }
         for (auto& r : got) {
             ++nd;
-            const int before = int(tr.size());
-            tr.accept(r, b.tSec);
-            (void)before;
+            Heard h;
+            capT = b.tSec;
+            if (tr.accept(r, b.tSec, galLog ? &h : nullptr) && galLog) galLog->heard(h);
             std::printf("%8.3f s  %9.4f MHz  %s\n", b.tSec, r.freqHz / 1e6, readable(r, 0).c_str());
         }
     };
@@ -64,6 +86,8 @@ int main(int argc, char** argv) {
         if (!n) break;
         fe.feed(x.data(), n, onBurst);
         t += n / rate;
+        capT = t;
+        if (galLog) galLog->tick();
     }
     fe.flush(onBurst);
     std::fclose(f);
@@ -71,5 +95,9 @@ int main(int argc, char** argv) {
     std::printf("\n%.1f s of capture: %llu bursts, %llu decodes, %zu devices; noise floor %.1f dBFS/bin; %.2f s CPU (%.1f %% of real time)\n",
                 t, (unsigned long long)nb, (unsigned long long)nd, tr.size(), fe.noiseDb(), sec, 100.0 * sec / std::max(t, 1e-9));
     std::printf("\nthe device list (as the clients get it):\n%s\n", tr.json(t).c_str());
+    if (galLog) {
+        galLog->finish();
+        std::printf("\nthe gallery (%s): log %s, card %s\n", galDir.c_str(), galLog->logName().c_str(), galLog->cardName().c_str());
+    }
     return 0;
 }

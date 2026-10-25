@@ -30,7 +30,8 @@ export function galleryLineTranslatable(line: string): boolean {
 /** The item's lines, each marked: send it, or keep it as received. `kind` is the gallery's ("navtex", "rtty", "ft8"). */
 export function galleryTranslateLines(text: string, kind: string): GalleryTrLine[] {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
-  if (kind === 'ft8') return lines.map((l) => ({ text: l, translate: false }));
+  // ★ FT8's summary and ISM's day (2026-10-25: sensor readings and the card) are English we wrote, every line
+  if (kind === 'ft8' || kind === 'ism') return lines.map((l) => ({ text: l, translate: false }));
   // ★ Our own header ("NAVTEX · B · Oostende … / Received … / 489.5 kHz USB · background decoding") is English we wrote.
   let body = 0;
   if (/^(NAVTEX|RTTY) · /.test(lines[0] ?? '')) {

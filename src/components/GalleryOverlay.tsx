@@ -23,6 +23,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
 import { withReadAuth } from '../services/vibeAuth';
 import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
+import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines, type GalleryTrLine } from '../utils/galleryTranslate';
 import { detectTextLanguage, langName, textTranslateInfo, translateText } from '../services/transcriber';
@@ -30,10 +31,14 @@ import { detectTextLanguage, langName, textTranslateInfo, translateText } from '
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
   title: string; partial?: boolean; wl?: boolean; bytes: number;
+  /** ★ V12 2026-10-25: a standing card's slot ("ismsum-433-…"), and an item's own download name ("ISM 433.92 2026-10-25.txt"). */
+  s?: string; dn?: string;
 }
 const KINDS: { id: string; label: string }[] = [
   { id: '', label: 'ALL' }, { id: 'navtex', label: 'NAVTEX' }, { id: 'rtty', label: 'RTTY' },
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' }, { id: 'ft8', label: 'FT8' },
+  // ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card (vibe_ism_gallery.h)
+  { id: 'ism', label: 'ISM' },
 ];
 const p2 = (n: number) => String(n).padStart(2, '0');
 export function galleryWhen(t: number): string {
@@ -155,8 +160,8 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
           {open && (
             <View style={{ flex: 1 }}>
               <Text style={s.meta}>
-                {`${open.title} · ${galleryFreq(open.hz)} ${(open.m || '').toUpperCase()} · ${galleryWhen(open.t)} · `
-                 + (open.o === 'background' ? `background decoding${open.p ? ` (${open.p})` : ''}` : 'a listener\'s decoder')
+                {`${open.title} · ${galleryFreq(open.hz)}${open.m ? ` ${open.m.toUpperCase()}` : ''} · ${galleryWhen(open.t)} · `
+                 + galleryOriginWords(open)
                  + (open.partial ? ' · PARTIAL' : '')}
               </Text>
               {isImage(open) ? (
@@ -222,9 +227,10 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       <Text style={s.freq}>{galleryFreq(it.hz)}</Text>
                       <View style={{ flex: 1 }}>
                         <Text style={s.name}>{it.title || it.k.toUpperCase()}
-                          <Text style={s.tag}>{`  ${it.o === 'background' ? (it.wl ? 'BACKGROUND · LISTENER ON' : 'BACKGROUND') : 'LISTENER'}${it.partial ? ' · PARTIAL' : ''}`}</Text>
+                          <Text style={s.tag}>{`  ${galleryOriginTag(it)}${it.partial ? ' · PARTIAL' : ''}`}</Text>
                         </Text>
-                        <Text style={s.dim}>{`${galleryWhen(it.t)} · ${(it.m || '').toUpperCase()} · ${it.d}${it.p ? ` · ${it.p}` : ''}${it.r ? ` · ${it.r}` : ''} · ${size(it.bytes)}`}</Text>
+                        {/* ★ only the parts an item has (an ISM day has no demodulator) — the web client's rule */}
+                        <Text style={s.dim}>{[galleryWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, it.r, size(it.bytes)].filter((x) => !!x).join(' · ')}</Text>
                       </View>
                     </TouchableOpacity>
                   )} />

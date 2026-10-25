@@ -1861,6 +1861,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
             <option value="60">1 hour</option></select>
           the SDR will move to your selected RF Centre. Set an RF centre here and choose 1 or multiple VFO's and
           decoders for background decoding.
+          <span id="bgIsmLine">Or let a profile decode ISM sensors (weather stations, tyre sensors, doorbells) on a whole
+          band instead.</span>
           <br>The moment anybody connects, background decoding stops and the radio goes back to exactly where it was
           left. What it decodes is kept in the gallery (Server tab).</p>
         <!-- ★★ Stuart, 2026-10-22: background VFOs still inside the radio's window keep decoding while listeners are on;
@@ -5484,6 +5486,28 @@ const BG_DECODERS = [
   { id: "ft8",          label: "FT8 / FT4 (summary)",          tone: 0,    modes: ["usb"] },
 ];
 const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodulators some background decoder works on
+/* ★★ V12 2026-10-25 — AN ISM PROFILE (Stuart: ISM "selectable as a decoder in a background-decoding profile"). ISM is a
+ *  WHOLE-CAPTURE decoder — every sensor in a sub-band at once, the radio centred for the band — so a profile that decodes
+ *  ISM picks a BAND instead of an RF centre and VFOs (vibe_bgdecode_config.h Profile::ism). Only the bands THIS radio
+ *  reaches (the running radio's own answer, HW.ismHwBands; else its driver — an Airspy HF+ reaches none, an Icom is a
+ *  transceiver's audio) and never on a locked radio: background decoding never moves one (AGENTS.md: a control that
+ *  cannot work on this radio is not drawn). */
+const BG_ISM_BANDS = [
+  { id: "315", label: "315 MHz (US / Japan: tyre sensors, key fobs, remotes)" },
+  { id: "433", label: "433.92 MHz (weather stations, sensors, doorbells, tyre sensors)" },
+  { id: "868", label: "868 MHz SRD (EU: LaCrosse, Bresser, Fine Offset)" },
+  { id: "915", label: "915 MHz (US: LaCrosse, Ambient, Fine Offset)" },
+];
+function bgIsmBands() {
+  const r0 = bgRadio || {};
+  const drv = String(r0.driver || "");
+  if (drv === "airspyhf" || drv === "icom") return [];
+  if (r0.mode === "locked" && r0.lockFreq > 0) return [];
+  try { if (typeof modeBlockSet === "function" && modeBlockSet().has("ism")) return []; } catch (e) { /* no mode list on this page */ }
+  const hw = typeof HW !== "undefined" ? HW : null;
+  if (hw && Array.isArray(hw.ismHwBands) && !hw.offline) return BG_ISM_BANDS.filter(function (b) { return hw.ismHwBands.indexOf(b.id) >= 0; });
+  return BG_ISM_BANDS.slice();
+}
 let bgModel = { on: false, waitMin: 5, keepInRange: true, profiles: [] };
 let bgRadio = null;   // ★ the radio the editor shows — its mode decides "locked", its users the user slots
 function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: [{ hz: 0, mode: "usb", dec: "navtex" }] }; }
@@ -5497,9 +5521,12 @@ function bgLoad(r) {
       bgModel.waitMin = j.waitMin > 0 ? j.waitMin : 5;
       bgModel.keepInRange = j.keepInRange !== false;
       bgModel.profiles = Array.isArray(j.profiles) ? j.profiles.map(function (p) {
-        return { centre: +p.centre || 0, from: p.from || "00:00", to: p.to || "00:00",
+        const q = { centre: +p.centre || 0, from: p.from || "00:00", to: p.to || "00:00",
                  vfos: (Array.isArray(p.vfos) ? p.vfos : []).map(function (v) {
                    return { hz: +v.hz || 0, mode: BG_DEMODS[v.mode] ? v.mode : "usb", dec: v.dec || "navtex" }; }) };
+        // ★ only an ISM profile carries "ism" — an ordinary one saves back exactly as it came
+        if (typeof p.ism === "string" && p.ism) { q.ism = p.ism; q.centre = 0; q.vfos = []; }
+        return q;
       }) : [];
     }
   } catch (e) { /* ★ an unreadable setting shows as off with no profiles — the save then writes a good one */ }
@@ -5530,7 +5557,7 @@ function bgCollect() {
   bgModel.on = !!($("bgOn") && $("bgOn").checked);
   bgModel.waitMin = parseFloat(($("bgWait") || {}).value) || 5;
   // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
-  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0; }); })) return "";
+  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0; }); })) return "";
   bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
   const out = { on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles };
   if (!bgModel.keepInRange) out.keepInRange = false;    // ★ absent = on, as the server reads it
@@ -5574,6 +5601,8 @@ function bgRender() {
   if (!box) return;
   box.innerHTML = "";
   bgReleaseNote();
+  // ★ The headline's ISM sentence only where an ISM profile can be chosen (AGENTS.md — never on an HF+ or an Icom)
+  if ($("bgIsmLine")) $("bgIsmLine").classList.toggle("hide", !bgIsmBands().length);
   if (!bgModel.on) return;
   if (!bgModel.profiles.length) bgModel.profiles.push(bgNewProfile());
   const el = function (tag, attrs, text) {
@@ -5613,6 +5642,43 @@ function bgRender() {
     const del = el("button", { type: "button", class: "ghost" }, "Delete profile");
     del.onclick = function () { bgModel.profiles.splice(pi, 1); bgRender(); };
     h.appendChild(del); card.appendChild(h);
+    /* ★★ WHAT THIS PROFILE DECODES — stations on VFOs, or ISM sensors on a whole band. Drawn only where ISM can run here
+     *  (bgIsmBands); a saved ISM profile on a radio that can no longer do it stays visible, said plainly, so the owner
+     *  sees why it does not run (the server refuses the save in words too). */
+    const ismBands = bgIsmBands();
+    if (ismBands.length || p.ism) {
+      const kl = el("label"); kl.appendChild(el("span", { class: "lbl" }, "Decodes"));
+      const ks = el("select", { class: "bgKind", style: "max-width:320px" });
+      ks.appendChild(el("option", { value: "vfo" }, "Stations on VFOs (RF centre + VFOs)"));
+      if (ismBands.length) ks.appendChild(el("option", { value: "ism" }, "ISM sensors on a whole band"));
+      ks.value = p.ism && ismBands.length ? "ism" : "vfo";
+      ks.onchange = function () {
+        if (ks.value === "ism") {
+          const land = ismBands.filter(function (b) { return b.id === "433"; })[0] || ismBands[0];
+          p.ism = land.id; p.centre = 0; p.vfos = [];
+        } else { delete p.ism; if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); }
+        bgRender();
+      };
+      kl.appendChild(ks); card.appendChild(kl);
+    }
+    if (p.ism) {
+      if (!ismBands.length) {
+        card.appendChild(el("div", { class: "hint", style: "color:#ff8a7d" }, "This profile decodes ISM, which this radio cannot do"
+          + (locked ? " \u2014 its range is locked, and background decoding never moves a locked radio." : ".")
+          + " Choose \u201cStations on VFOs\u201d or delete the profile."));
+      } else {
+        const bl = el("label"); bl.appendChild(el("span", { class: "lbl" }, "ISM band"));
+        const bs = el("select", { class: "bgIsmBand", style: "max-width:420px" });
+        ismBands.forEach(function (b) { bs.appendChild(el("option", { value: b.id }, b.label)); });
+        if (!ismBands.some(function (b) { return b.id === p.ism; })) p.ism = ismBands[0].id;
+        bs.value = p.ism;
+        bs.onchange = function () { p.ism = bs.value; };
+        bl.appendChild(bs); card.appendChild(bl);
+        card.appendChild(el("div", { class: "hint bgIsmNote" }, "ISM takes the whole radio onto the band and decodes every sensor in it "
+          + "\u2014 so it runs only while nobody is listening, and stops the moment anybody connects. Each day\u2019s readings "
+          + "and a summary go to the gallery. Tyre sensors, key fobs and remotes are only ever kept by nickname."));
+      }
+    } else {
     // RF centre — not on a locked radio: its window is the owner's lock, and background never moves it
     if (!locked) {
       const cl = el("label"); cl.appendChild(el("span", { class: "lbl" }, "RF Centre"));
@@ -5712,6 +5778,7 @@ function bgRender() {
       add.onclick = function () { p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); bgRender(); };
       card.appendChild(add);
     }
+    }   // ★ end of the VFO profile
     // times (UTC) with the server's local time beside
     const tr = el("div", { class: "bgTimes" });
     tr.appendChild(el("span", null, "Background profile active between"));

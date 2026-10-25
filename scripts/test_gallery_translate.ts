@@ -47,6 +47,9 @@ const MONDOLFO = 'NAVTEX · E · Mondolfo, Italy \u{1F1EE}\u{1F1F9} · Nav warni
 {
   const FT8 = 'FT8 / FT4 summary · 1840.000 kHz USB · background decoding\n\nSpots heard:       4 (FT8 4, FT4 0) from 2 stations';
   ok(!galleryTranslateLines(FT8, 'ft8').some((l) => l.translate), 'an FT8 summary (our English) — nothing is sent');
+  // ★ 2026-10-25: an ISM day's log and card are sensor readings in our English — nothing is sent either
+  const ISM = 'ISM 433.92 MHz · every reading heard on 2026-10-25 (UTC)\n\n17:01:12  433.920  Oregon Scientific THN132N · 10.5 °C · battery low · ch 1\n';
+  ok(!galleryTranslateLines(ISM, 'ism').some((l) => l.translate), 'an ISM log (our English, sensor readings) — nothing is sent');
   const RTTY = 'RTTY · 10100.8 kHz USB · background decoding\nStarted 2026-10-23 04:00 UTC\n\nWETTERBERICHT FUER DIE DEUTSCHE BUCHT\n';
   const R = galleryTranslateLines(RTTY, 'rtty');
   ok(R.filter((l) => l.translate).map((l) => l.text).join('|') === 'WETTERBERICHT FUER DIE DEUTSCHE BUCHT', 'RTTY: the header is ours, the text is sent');

@@ -219,6 +219,49 @@ Zoom, FIT, step and the IF filter are greyed with the reason; the arrows step ba
 
 Twelve families with their variants (≈ 25 models) in phase 1.
 
+## The gallery (2026-10-25)
+
+Stuart: *"ISM needs to be in the gallery too … same as OWRX does it but in our readable format."* `vibe_ism_gallery.h`
+(`DayLog`), fed by `vibe_ism_sink.h` from `Tracker::accept` — only what the LIST counts as a new reading (the 3 s repeat
+fold holds) reaches the gallery, and only its kind, name and readable line (nothing an ID could travel in).
+
+Two items per band per UTC day, whoever was listening — a listener in ISM mode (`live`, only while the owner keeps
+listeners' decodes) or a background-decoding ISM profile (`background`); a day written by both is marked `both`:
+
+- **The day's log** — downloads as `ISM 433.92 2026-10-25.txt` (index field `dn`). One line per reading, the list's line
+  exactly (server units: metric, PSI), prefixed with the UTC time and the burst's frequency in MHz:
+  `17:01:12  433.920  Oregon Scientific THN132N · 10.5 °C · battery low · ch 1`. **Never a write per reading:** held in
+  RAM, appended every minute or 8 KB, at UTC midnight, and when ISM stops (a band change, ISM off, a listener arriving
+  over background, a profile switch, a clean shutdown — `g_ism.stop()` in the shim's stop). A day past 4 MB splits into
+  parts (`… (2).txt`).
+- **The summary card** — FT8's rolling card mirrored: ONE standing card per band per day (`Store::replace`, tmp +
+  rename), rewritten at most once a minute and only when something new was heard, moved to the top; written once more
+  when ISM stops. "ISM 433.92 MHz · 2026-10-25 · 14 devices: 6 weather, 5 TPMS, 2 key fobs, 1 doorbell / remote", the
+  readings, the most heard, the newest, and **the last reading of each device** (last heard · first heard · count ·
+  kind · line), at most 2000 rows (the least recently heard go, counted as "not listed").
+- **A restart:** the day's log is found again (`Store::adoptSlot`, `anyOrigin`) and appended to; the card's own table
+  is read back (it is its own record), so the counts carry on. The nicknames cannot carry over — the salt is never
+  stored — so a car heard either side of a restart is two rows; new secret devices are numbered ABOVE the ones the day
+  already named (`DayLog::nickFloor` → `Tracker::reserveNicks`), so "TPMS #2" never means two cars on one card.
+- **Privacy:** the gallery is handed the Tracker's own names and lines and writes nothing else; `test-ism-gallery` and
+  `test-server-ism-gallery.mjs` search every file and the index for the clip's IDs and codes in decimal and hex.
+- **Clients:** an ISM chip in the web gallery (after FT8) and the app's GalleryOverlay; the open item's DOWNLOAD /
+  OPEN / SAVE uses the item's own name; no TRANSLATE (our English). "both" is tagged BACKGROUND + LISTENER
+  (`src/utils/galleryOrigin.ts`, one rule for both clients).
+
+### In background decoding
+
+A profile may decode **ISM on a band** instead of an RF centre + VFOs (`Profile::ism`, `"ism":"433"`): setup → the radio
+→ Background Decoding → "Decodes: ISM sensors on a whole band" → the band (only those this radio reaches, `ismHwBands`).
+ISM takes the whole capture, so it runs **only with nobody here**: after the wait, the shim enters the listener's own ISM
+mode on the band (`bgIsmStartLocked` → `ismEnter`, the radio's state saved exactly as the ISM button saves it); a
+listener arriving ends it through `ismLeave`, which gives the radio back exactly as found — the newcomer lands on the
+radio's own dial, never on the band. Never on a locked radio (refused at the save; background never moves one), never
+over another whole-radio mode (a listener's ISM or ADS-B in its 5 s leave grace — it waits), never where ISM cannot run
+(`vsIsmWhyNot`: blocked, < 0.9 MS/s, the band outside the allowed ranges — the admin line says "cannot run — why", tried
+again every minute, and the idle park is not held off for it). Kept-running ADS-B still owns the idle radio. Time slots
+mix freely: NAVTEX by day, ISM 868 by night.
+
 ## CPU
 
 Measured with `test-ism`'s CPU row and a front-end profile (10 s of 2.4 MS/s), niced:
@@ -247,6 +290,20 @@ armhf hop, more on a noisy band; ISM mode switches the audio chain off, which pa
 - `scripts/test-server-ism.mjs` (27 checks): the real server on `fake-rtl-tcp.mjs --ism` replaying `test-ism
   --write-clip`: capability, entering, the four devices and their exact lines, the privacy rule **on the wire**, steps
   433 → 868 → 915 (clamped), back by name, an exact frequency, a mode change ignored, EXIT giving the dial back.
+- `vibeserver/test-ism-gallery.cpp` (56 checks): the day's line exactly; nothing on disk before a minute or 8 KB; one
+  append; finish() writes the rest; the Tracker's fold reaching the file; the card (kinds, most heard, newest, last
+  reading per device, a 120-byte title, at most once a minute, only when changed); privacy in every file; midnight →
+  two logs and two cards; background + listener on one day = one file, "both"; another band, another file; a restart
+  appending to the log, reading the card back and numbering TPMS above the day's; the 4 MB parts; the ISM profile's
+  parse, round trip and refusals.
+- `scripts/test-server-ism-gallery.mjs` (33 checks): a listener's session through the real server writes the day's log
+  and card (nothing while it ran), lines equal to the list's, the download name, no ID anywhere; then an ISM profile
+  with nobody here: ISM mode by itself, the admin line, a listener arriving stops it and lands on 96.1 WFM, the same
+  day's items now "both", TPMS #2 after the restart.
+- `scripts/test-web-ism-gallery.mjs` (headless Edge `--mute-audio`): the ISM chip, the two rows, the card and the log
+  opening as text, the download names, no TRANSLATE, and at 390 px nothing scrolls sideways; four screenshots.
+- `scripts/test-setup-bg-ism.mjs` (18 checks): the setup editor's ISM profile — offered only where ISM can run, only the
+  reachable bands, saved as `{"ism":"433"}` and read back, an ordinary profile byte for byte as before.
 - `scripts/test-web-ism.mjs` (18 checks, headless Edge `--mute-audio`): the menu entry, the box, the lines, the
   readout, zoom held, ▶ and the card's arrow stepping bands, the top band greying ▶, the filter, kPa, a phone-width fit
   clear of the deck, EXIT.

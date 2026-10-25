@@ -117,6 +117,7 @@
 #include "vibe_dab_service.h"   // DAB (experimental) — see briefs/BRIEF-dab.md
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
 #include "vibe_ism_service.h"   // ISM sensors (V12) — our own clean-room decoders, docs/v12/ISM-DECODER.md
+#include "vibe_ism_gallery.h"   // ★★ V12 2026-10-25: ISM in the gallery — the day's log + summary card per band
 #include "vibe_rate_guard.h"    // ★ a radio that falls over at a rate a mode boosted it to — see g_rateGuard
 #include "vibe_adsb_data_update.h"     // V12 aircraft data: the weekly update + its admin status
 #include "vibe_adsb_images_install.h"  // V12: the owner's logo / silhouette zip upload
@@ -13353,6 +13354,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     int ismGainIdx_ = -1, ismGainSet_ = -999, ismGainStart_ = -1;
     bool ismManual_ = false;
     double ismLastReport_ = 0, ismLastGain_ = 0, ismQuietSince_ = 0;
+    /* ★★ V12 2026-10-25 — ISM IN THE GALLERY (Stuart: "ISM needs to be in the gallery too … same as OWRX does it but in
+     *  our readable format"; vibe_ism_gallery.h). Every run of the decoder service on a band hands its counted readings to
+     *  a DayLog: the day's .txt for that band and its summary card. WHO is listening is said, not hidden: "live" for a
+     *  listener's ISM mode (kept only while the owner keeps listeners' decodes — g_gallerySaveLive, as every other
+     *  decoder), "background" when a background-decoding profile put the radio on the band (bgIsmStart). */
+    std::string ismOrigin_ = "live", ismProfile_;
+    std::mutex ismLogMtx_;                              // ★ ismLog_ is read by the admin status from another thread
+    std::shared_ptr<vibe::ismgal::DayLog> ismLog_;
+    std::shared_ptr<vibe::ismgal::DayLog> ismMakeLog(const vibeism::Band& b) {
+        if (frontDoorOnly || decoderOnly) return nullptr;
+        auto& g = vibe::gallery::shared();
+        if (!g.enabled()) return nullptr;
+        if (ismOrigin_ != "background" && !g_gallerySaveLive.load()) return nullptr;
+        vibe::ismgal::DayLog::Options o;
+        o.bandId = b.id; o.bandName = b.name; o.bandHz = b.centreHz; o.origin = ismOrigin_; o.profile = ismProfile_;
+        return std::make_shared<vibe::ismgal::DayLog>(g, o);
+    }
 
     /** Can this radio tune the whole of `b`? (The HF+ reaches none: ISM is then not offered at all — AGENTS.md.) */
     static bool ismReach(const vibeism::Band& b) { return vsIsmReach(b); }
@@ -13388,7 +13406,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         audioFreq.store(customHz > 0 ? customHz : b.centreHz);
         viewCenter.store(hw);
         noteHwMoved();
-        g_ism.start(b, hw, rate, customHz, /*keepList=*/!entering);
+        /* ★★ The gallery's copy (see ismMakeLog). The run on the band before is STOPPED FIRST — its buffer written, its card
+         *  last written — so a new DayLog finding the same day's items (a typed frequency inside the band, a step back to
+         *  it) reads them back complete. Its nicknames go to the Tracker before it starts (DayLog's "A RESTART"). */
+        g_ism.stop();
+        auto log = ismMakeLog(b);
+        if (log) for (const auto& kv : log->nickFloor()) g_ism.reserveNicks(kv.first, kv.second);
+        { std::lock_guard<std::mutex> lk(ismLogMtx_); ismLog_ = log; }
+        g_ism.start(b, hw, rate, customHz, /*keepList=*/!entering, log);
         tuneHw(logical);
         zoomFactor.store(1.0);
         std::vector<std::shared_ptr<ClientDsp>> views;
@@ -13455,7 +13480,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return;
         }
-        g_ism.stop();
+        g_ism.stop();                                   // ★ the gallery's buffer and card are written here (Service::stop)
+        { std::lock_guard<std::mutex> lk(ismLogMtx_); ismLog_.reset(); }
+        ismOrigin_ = "live"; ismProfile_.clear();
         ismBand_ = nullptr; ismCustomHz_ = 0;
         const AdsbSaved& s = ismSaved_;
         rx.setSpectrumOnly(false);
@@ -13525,6 +13552,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** {"type":"ism", on, band | step | hz}. ★ The default is OFF, as DAB's and ADS-B's. */
     void ismControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         double onV = 0; jsonNum(msg, "on", onV);
+        // ★ A listener's control: what they hear is theirs ("live") — background decoding stopped before they got here.
+        if (!g_ismMode.load()) { ismOrigin_ = "live"; ismProfile_.clear(); }
         if (onV == 0) { ismLeave(true); return; }
         const std::string why = vsIsmWhyNot();
         if (!why.empty()) { if (sock) sendText(sock, "{\"type\":\"ism_error\",\"why\":\"" + dabEscape(why) + "\"}"); return; }
@@ -19831,6 +19860,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 { const std::string aw = vsAdsbHwWhyNot();
                   j += std::string(",\"adsbHw\":") + (aw.empty() ? "true" : "false");
                   if (!aw.empty()) j += ",\"adsbHwWhy\":\"" + dabEscape(aw) + "\""; }
+                // ★★ V12 2026-10-25: the ISM bands THIS radio reaches — the setup page offers an ISM background profile
+                //    only on these (none on an HF+ or an Icom: the control is not drawn there).
+                { j += ",\"ismHwBands\":[";
+                  bool first = true;
+                  if (!g_icomOn.load()) for (const auto& b : vibeism::bands()) if (vsIsmReach(b)) { j += std::string(first ? "\"" : ",\"") + b.id + "\""; first = false; }
+                  j += "]"; }
                 std::map<int, std::string> heard;
                 { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx); dabEnsLoadLocked(); heard = g_dabEnsMem; }
                 j += ",\"dabBlocks\":[";
@@ -21063,8 +21098,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 ::close(fd);
             } else { reply("404 Not Found", "application/json", "{\"error\":\"no such item\"}"); return; }
             const std::string name = path.substr(pre.size());
+            // ★ V12 2026-10-25: an item may carry its own download name ("ISM 433.92 2026-10-25.txt", Meta::dlName) —
+            //   only letters, digits, spaces and . - _ ( ) (downloadSafe, again here), so the header cannot be broken.
+            std::string dn = vibe::gallery::downloadSafe(g.field(name, "dn"));
+            if (dn.empty()) dn = name;
             reply("200 OK", ctype.c_str(), body, qv("download") == "1"
-                  ? "Content-Disposition: attachment; filename=\"" + name + "\"\r\n" : "Content-Disposition: inline\r\n");
+                  ? "Content-Disposition: attachment; filename=\"" + dn + "\"\r\n" : "Content-Disposition: inline\r\n");
             return;
         } else if (reqLine.rfind("GET /vibeserver/eibi", 0) == 0) {
             // ★ The daemon owns the fetching (it has the filesystem and the network); the shim
@@ -25686,6 +25725,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::string bgProfileJson_;     // ★ the running profile as saved — a save that leaves it alone restarts nothing
     bool   bgLoggedWait_ = false;
     struct { bool valid = false; double centre = 0, view = 0, audio = 0; } bgSaved_;
+    /* ★★ V12 2026-10-25 — AN ISM PROFILE (vibe_bgdecode_config.h Profile::ism). ISM takes the WHOLE capture, so it is not
+     *  a runner of VFO channels: with nobody here, background decoding enters the listener's own ISM mode on the
+     *  profile's band (ismEnter — the radio's state saved exactly as a listener's ISM button saves it) and the decoder
+     *  service's readings go to the gallery labelled background (ismOrigin_). A listener arriving ends it through ISM's
+     *  own door (ismLeave), which puts the radio back where it was — "listeners always win", the same as every profile.
+     *  ★ Never with a listener on (keepInRange cannot apply: there is no "in range" for a whole-capture mode), never on
+     *    a locked radio (refused at the save too), never over another whole-radio mode. */
+    bool        bgIsm_ = false;          // ★ the running profile is ISM: bgActive_ means "ISM mode is ours"
+    std::string bgIsmWhy_;               // ★ why the due ISM profile cannot run here now ("" = it can) — the admin line
 
     /** Anybody here at all? Spectrum, audio (a pocketed app), a decoder socket, a channel kept alive by its audio.
      *  ★ Caller holds clientMtx. */
@@ -25740,6 +25788,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  VFOs inside the window the radio has NOW (a listener is on, or the window is locked). Caller holds bgOpMtx_. */
     void bgStartLocked(const vibe::bg::Config& cfg, int idx, bool move = true, bool listenerOn = false) {
         const auto& prof = cfg.profiles[(size_t)idx];
+        // ★★ An ISM profile runs only with nobody here, on a radio it may move (see bgIsm_) — otherwise it waits, and the
+        //    radio is not even woken for it.
+        if (prof.isIsm()) {
+            if (bgLocked()) { bgIsmRefuse(idx, "this radio's range is locked \xe2\x80\x94 background decoding never moves a locked radio onto an ISM band"); return; }
+            if (!move || listenerOn) return;
+            bgIsmStartLocked(cfg, idx);
+            return;
+        }
         resumeCaptureIdle(/*fromBg=*/true);       // ★ a parked or released radio is taken back first
         /* ★★ SHARED BY TIME (Stuart, 2026-10-22: "You cannot release a radio and also hand it over to another app").
          *  Outside the profile hours the release worked as configured, so another program may hold the radio now. Then
@@ -25771,12 +25827,59 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bgGen_ = g_bgCfgGen.load();
         bgRetryAt_ = nowSecs() + 60;
     }
+    /** ★ The due ISM profile cannot run here now: said once in the log (and on the admin page), tried again in a minute. */
+    void bgIsmRefuse(int idx, const std::string& why) {
+        if (why != bgIsmWhy_) LOGI("background decoding: profile %d (ISM) cannot run \xe2\x80\x94 %s", idx + 1, why.c_str());
+        bgIsmWhy_ = why;
+        bgNotBefore_ = nowSecs() + 60;
+    }
+    /** ★★ Start an ISM profile: the radio onto its band in ISM mode, the readings to the gallery as background's. Caller
+     *  holds bgOpMtx_, and nobody is here. */
+    void bgIsmStartLocked(const vibe::bg::Config& cfg, int idx) {
+        const auto& prof = cfg.profiles[(size_t)idx];
+        const vibeism::Band* b = vibeism::bandById(prof.ism);
+        if (!b) { bgIsmRefuse(idx, "the profile names no ISM band"); return; }
+        // ★ Another whole-radio mode still on (a listener's ISM or ADS-B inside its 5 s leave grace): wait for its own
+        //   leave — never enter over it. Not an error; the next tick looks again.
+        if (g_adsbMode.load() || g_dabMode.load() || (g_ismMode.load() && !bgIsm_) || modeLeaveDueAt.load() > 0.0) return;
+        std::string why = vsIsmWhyNot();
+        if (why.empty() && !ismReach(*b)) why = std::string("this radio cannot tune the whole of the ") + b->name + " band (check its allowed ranges)";
+        if (!why.empty()) { bgIsmRefuse(idx, why); return; }
+        resumeCaptureIdle(/*fromBg=*/true);       // ★ a parked or released radio is taken back first
+        if (radioReleased.load()) {
+            LOGI("background decoding: profile %d (ISM) is due but another program has the radio \xe2\x80\x94 trying again in 60 s", idx + 1);
+            bgNotBefore_ = nowSecs() + 60; return;
+        }
+        // ★ An ordinary profile before this one moved the radio: give the dial back FIRST, so ISM saves the listener's
+        //   own state (ismSaved_) and puts THAT back when somebody arrives.
+        if (bgSaved_.valid) { bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio); bgSaved_.valid = false; }
+        bgIsmWhy_.clear();
+        LOGI("background decoding: nobody here for %.0f s \xe2\x80\x94 profile %d puts the radio on the %s band (ISM: every sensor "
+             "in it, to the gallery); it goes back to %.3f kHz when somebody arrives", vsBgWaitSec(cfg), idx + 1, b->name, audioFreq.load() / 1e3);
+        ismOrigin_ = "background"; ismProfile_ = "Profile " + std::to_string(idx + 1);
+        ismEnter(*b, 0);
+        bgIsm_ = true;
+        { vibe::bg::Config one; one.profiles = { prof }; bgProfileJson_ = vibe::bg::toJson(one); }
+        bgActive_.store(true);
+        bgMoved_ = true;
+        bgWanted_.store(true);
+        bgProfile_ = idx;
+        bgGen_ = g_bgCfgGen.load();
+    }
     /** Stop it, and (if `restore`) put the radio back where it was before background decoding moved it. Caller holds
      *  bgOpMtx_. The runner's taps write what they held as they stop — a message cut off is kept, marked partial. */
     void bgStopLocked(const char* why, bool restore) {
         if (bgActive_.exchange(false)) {
-            bgRun_.stop(false);
-            LOGI("background decoding stopped — %s", why);
+            if (bgIsm_) {
+                // ★ ISM's own door: the decoder service stops (the day's log and card written), the radio goes back to
+                //   exactly where ismEnter found it. Nobody is told anything — nobody was here.
+                bgIsm_ = false;
+                ismLeave(false);
+                LOGI("background decoding stopped — %s (ISM: the radio is back where it was)", why);
+            } else {
+                bgRun_.stop(false);
+                LOGI("background decoding stopped — %s", why);
+            }
         }
         bgProfile_ = -1; bgMoved_ = false;
         if (restore && bgSaved_.valid) {
@@ -25805,6 +25908,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(g_bgMtx); cfg = g_bgCfg; }
         std::lock_guard<std::mutex> op(bgOpMtx_);
         bgEmptySince_ = 0; bgLoggedWait_ = false;
+        // ★★ ISM is the whole capture: nothing of it is "in range" of a listener's dial — it ends, through its own door.
+        if (bgIsm_) { bgStopLocked(who, true); return; }
         if (bgActive_.load() && (bgLocked() || cfg.keepInRange)) {
             if (bgSaved_.valid) {
                 bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio);
@@ -25855,6 +25960,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                              : keepAdsb ? "ADS-B is kept running on this radio when nobody is connected"
                                              : "not while the radio is on DAB"; }
         else if (want < 0 && !active) state = "idle";
+        // ★ V12 2026-10-25: an ISM profile this radio cannot run now — said, in words, with when it is tried again
+        else if (!active && want >= 0 && cfg.profiles[(size_t)want].isIsm() && !bgIsmWhy_.empty()) {
+            state = "blocked"; why = bgIsmWhy_; if (bgNotBefore_ > now) retryIn = bgNotBefore_ - now;
+        }
         else if (!active && radioReleased.load() && bgNotBefore_ > now) { state = "busy"; retryIn = bgNotBefore_ - now; }
         else if (bgLocked()) state = active ? "running" : "waiting";
         else if (anyone) state = active ? "listener" : "paused";
@@ -25872,7 +25981,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       + ",\"locked\":" + (bgLocked() ? "true" : "false");
         if (startsIn >= 0) { std::snprintf(b, sizeof b, ",\"startsIn\":%.0f", startsIn); j += b; }
         if (retryIn >= 0)  { std::snprintf(b, sizeof b, ",\"retryIn\":%.0f", retryIn); j += b; }
-        if (active) j += ",\"runner\":" + bgRun_.statusJson();
+        // ★★ An ISM profile: the band, and the day so far ("14 devices · 212 readings today") — no VFO runner.
+        const int shownP = active ? bgProfile_ : want;
+        if (shownP >= 0 && (size_t)shownP < cfg.profiles.size() && cfg.profiles[(size_t)shownP].isIsm()) {
+            const vibeism::Band* ib = vibeism::bandById(cfg.profiles[(size_t)shownP].ism);
+            j += std::string(",\"ism\":{\"band\":\"") + vibe::gallery::jsonEsc(cfg.profiles[(size_t)shownP].ism) + "\",\"name\":\""
+               + vibe::gallery::jsonEsc(ib ? ib->name : "") + "\"";
+            if (active && bgIsm_) {
+                std::shared_ptr<vibe::ismgal::DayLog> lg;
+                { std::lock_guard<std::mutex> lk(ismLogMtx_); lg = ismLog_; }
+                j += ",\"devices\":" + std::to_string((unsigned long long)g_ism.deviceCount());
+                if (lg) j += ",\"today\":\"" + vibe::gallery::jsonEsc(lg->brief()) + "\"";
+            }
+            j += "}";
+        } else if (active) j += ",\"runner\":" + bgRun_.statusJson();
         return j + "}";
     }
     /** ★★ THE TICK — every two seconds, on the housekeeping thread (the one that already runs the idle park). */
@@ -25898,7 +26020,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (bgActive_.load() || bgSaved_.valid) {
                 bgStopLocked(can ? "no profile covers this time of day" : "switched off", true);
             }
-            bgWanted_.store(false); bgLoggedWait_ = false; bgNotBefore_ = 0;
+            bgWanted_.store(false); bgLoggedWait_ = false; bgNotBefore_ = 0; bgIsmWhy_.clear();
             if (anyone) bgEmptySince_ = 0; else if (bgEmptySince_ <= 0) bgEmptySince_ = now;
             return;
         }
@@ -25925,6 +26047,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  for this radio's user slots (BgRunner's budget). The park is held off only while nobody is here. */
         if (locked) {
             if (!anyone) bgWanted_.store(true); else bgWanted_.store(false);
+            if (cfg.profiles[(size_t)want].isIsm()) bgWanted_.store(false);   // ★ never runs on a locked radio: no park held off for it
             if (!bgActive_.load()) {
                 if (now >= bgNotBefore_) bgStartLocked(cfg, want, false, anyone);
                 return;
@@ -25937,6 +26060,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ── somebody here (unlocked) ──
         if (anyone) {
             bgWanted_.store(false); bgEmptySince_ = 0; bgLoggedWait_ = false;
+            if (bgIsm_) { bgStopLocked("a listener arrived", true); return; }   // ★ belt and braces — see bgStopForListener
             if (!cfg.keepInRange) { if (bgActive_.load() || bgSaved_.valid) bgStopLocked("a listener arrived", true); return; }
             if (bgSaved_.valid) {   // ★ belt and braces: an arrival the connect path did not see — give the dial back first
                 bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio); bgSaved_.valid = false; bgMoved_ = false;
@@ -25958,6 +26082,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bgListenerOn_ = false;
         if (bgEmptySince_ <= 0) bgEmptySince_ = now;
         bgWanted_.store(true);
+        // ★ An ISM profile this radio cannot run now (bgIsmWhy_) holds nothing off: the radio parks as it would without it.
+        if (cfg.profiles[(size_t)want].isIsm() && !bgActive_.load() && !bgIsmWhy_.empty()) bgWanted_.store(false);
         const double wait = vsBgWaitSec(cfg);
         if (bgActive_.load() && bgMoved_) return;            // ★ running as it should be
         if (!bgLoggedWait_) {
@@ -26024,8 +26150,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 dabRestore();
         }
         if (g_ismMode.load(std::memory_order_relaxed)) {
-            LOGI("[ISM] last listener left — the receiver goes back to where it was");
-            ismLeave(false);
+            // ★★ V12: unless background decoding put it there (an ISM profile) — that one ends when a listener ARRIVES
+            bool bgOwns;
+            { std::lock_guard<std::mutex> op(bgOpMtx_); bgOwns = bgIsm_; }
+            if (!bgOwns) {
+                LOGI("[ISM] last listener left — the receiver goes back to where it was");
+                ismLeave(false);
+            }
         }
         if (g_adsbMode.load(std::memory_order_relaxed)) {
             // ★★ V12: unless the owner keeps ADS-B running with nobody here — then it stays, table warm (adsbKeepTick)
@@ -32470,6 +32601,8 @@ void LocalSdrShim::stopLocked() {
     //    CLEAN shutdown, so a restart for an update loses nothing that was decoded.
     { std::lock_guard<std::mutex> op(impl->bgOpMtx_);
       if (impl->bgActive_.exchange(false)) { impl->bgRun_.stop(false); LOGI("background decoding stopped — the server is stopping"); } }
+    // ★★ V12: ISM's decoder too — its day's log is held in RAM, and a clean shutdown (an update, a restart) writes it.
+    g_ism.stop();
     impl->decoders_.shutdownAll();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
     { std::lock_guard<std::mutex> lk(impl->notchMtx); delete impl->notchEng; impl->notchEng = nullptr; }

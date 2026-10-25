@@ -153,7 +153,22 @@ struct Meta {
     /** ★ 2026-10-23: a STANDING card ("last10" — the FT8 summary's rolling last 10 minutes): one per radio, origin,
      *  profile and dial, found again by the next run (Store::adoptSlot). Written to the index as "s". */
     std::string slot;
+    /** ★ V12 2026-10-25 (ISM's daily items): the name a DOWNLOAD is saved as — "ISM 433.92 2026-10-25.txt" — written to
+     *  the index as "dn". Letters, digits, spaces, '.', '-', '_' and '(' ')' only (downloadSafe), so it cannot break a
+     *  Content-Disposition header or name a path. Empty = the item's own file name. */
+    std::string dlName;
 };
+/** What a download name may hold (Meta::dlName). Anything else is dropped. */
+inline std::string downloadSafe(const std::string& s) {
+    std::string o;
+    for (unsigned char c : s) {
+        if (o.size() >= 100) break;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == ' ' || c == '.' || c == '-'
+            || c == '_' || c == '(' || c == ')') o += (char)c;
+    }
+    while (!o.empty() && (o[0] == '.' || o[0] == ' ')) o.erase(0, 1);
+    return o;
+}
 
 // ── The store ───────────────────────────────────────────────────────────────────────────────────────────────────
 class Store {
@@ -271,7 +286,9 @@ public:
     void close(const std::string& name) { std::lock_guard<std::mutex> lk(m_); open_.erase(name); }
     /** ★ 2026-10-23: the standing card for `m.slot` on this radio, origin, profile and dial — the newest if a crash left
      *  more than one — HELD OPEN (never evicted) until close(). "" when there is none (the caller creates it). */
-    std::string adoptSlot(const Meta& m) {
+    /** `anyOrigin` (ISM's daily log and summary, 2026-10-25: "one file per UTC day per band"): background decoding and
+     *  a listener write into the SAME day's item, so its origin is not part of what finds it. */
+    std::string adoptSlot(const Meta& m, bool anyOrigin = false) {
         if (m.slot.empty()) return "";
         std::string dir, radio;
         { std::lock_guard<std::mutex> lk(m_); dir = dir_; radio = radio_; }
@@ -281,7 +298,7 @@ public:
             Lock fl(dir, /*shared=*/true);
             char hz[32]; std::snprintf(hz, sizeof hz, "%.0f", m.freqHz);
             for (const auto& l : readIndex(dir))
-                if (lineStr(l, "s") == jsonEsc(m.slot) && lineStr(l, "k") == jsonEsc(m.kind) && lineStr(l, "o") == jsonEsc(m.origin)
+                if (lineStr(l, "s") == jsonEsc(m.slot) && lineStr(l, "k") == jsonEsc(m.kind) && (anyOrigin || lineStr(l, "o") == jsonEsc(m.origin))
                     && lineNum(l, "hz") == std::strtod(hz, nullptr) && lineStr(l, "p") == jsonEsc(printable(m.profile, 40))
                     && lineStr(l, "r") == jsonEsc(radio)) found = lineStr(l, "f");
             struct stat st{};
@@ -289,6 +306,53 @@ public:
         }
         if (!found.empty()) { std::lock_guard<std::mutex> lk(m_); open_.insert(found); }
         return found;
+    }
+    /** ★ One field of an item's index line ("o", "title" …), as the index holds it (JSON-escaped). "" if absent. */
+    std::string field(const std::string& name, const char* key) const {
+        if (!safeName(name)) return "";
+        const std::string dir = this->dir();
+        if (dir.empty()) return "";
+        Lock fl(dir, true);
+        for (const auto& l : readIndex(dir)) if (lineStr(l, "f") == name) return lineStr(l, key);
+        return "";
+    }
+    /** ★ An item's index line rewritten from `m` where it stands — its file untouched (ISM's daily log, whose origin
+     *  becomes "both" the first time the other side writes into it). False when it is gone. */
+    bool retag(const std::string& name, const Meta& m) {
+        if (!safeName(name)) return false;
+        std::string dir, radio;
+        { std::lock_guard<std::mutex> lk(m_); dir = dir_; radio = radio_; }
+        if (dir.empty()) return false;
+        Lock fl(dir);
+        std::vector<std::string> lines = readIndex(dir);
+        size_t at = lines.size();
+        for (size_t i = 0; i < lines.size(); i++) if (lineStr(lines[i], "f") == name) { at = i; break; }
+        if (at == lines.size()) return false;
+        std::string l = indexLine(m, name, radio);
+        if (!l.empty() && l.back() == '\n') l.pop_back();
+        lines[at] = l;
+        std::string all; for (auto& x : lines) all += x + "\n";
+        const std::string tmp = dir + "/index.jsonl.tmp";
+        return writeFile(tmp, all, false) && ::rename(tmp.c_str(), (dir + "/index.jsonl").c_str()) == 0;
+    }
+    /** ★ An item's whole text, for a writer that rebuilds its state from what it wrote (ISM's summary after a restart).
+     *  Capped at `cap` bytes. False when it is not ours or not there. */
+    bool readItem(const std::string& name, std::string& out, size_t cap = 4u << 20) const {
+        std::string path, ctype;
+        if (!resolve(name, path, ctype)) return false;
+        const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0) return false;
+        out.clear();
+        char b[8192];
+        for (;;) {
+            const ssize_t n = ::read(fd, b, sizeof b);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) break;
+            out.append(b, (size_t)n);
+            if (out.size() >= cap) { out.resize(cap); break; }
+        }
+        ::close(fd);
+        return true;
     }
     /** Bytes in one item, 0 if absent. */
     uint64_t sizeOf(const std::string& name) const {
@@ -450,7 +514,8 @@ private:
             + ",\"m\":\"" + jsonEsc(m.mode) + "\",\"d\":\"" + jsonEsc(m.decoder) + "\",\"p\":\"" + jsonEsc(printable(m.profile, 40))
             + "\",\"r\":\"" + jsonEsc(radio) + "\",\"title\":\"" + jsonEsc(printable(m.title, 120)) + "\""
             + (m.partial ? ",\"partial\":true" : "") + (m.listenerOn && m.listenerOn->load() ? ",\"wl\":true" : "")
-            + (m.slot.empty() ? std::string() : ",\"s\":\"" + jsonEsc(m.slot) + "\"") + "}\n";
+            + (m.slot.empty() ? std::string() : ",\"s\":\"" + jsonEsc(m.slot) + "\"")
+            + (m.dlName.empty() ? std::string() : ",\"dn\":\"" + jsonEsc(downloadSafe(m.dlName)) + "\"") + "}\n";
         return l;
     }
     /** ★★ OLDEST OUT until the gallery fits — never one of `keep` (the item just written, an RTTY run still open). The

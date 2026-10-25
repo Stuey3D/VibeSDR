@@ -11,6 +11,8 @@
 #pragma once
 
 #include "vibe_ism_protocols.h"
+#include "vibe_ism_bands.h"    // the four bands, reachability, the landing band
+#include "vibe_ism_sink.h"     // ★ V12 2026-10-25: the gallery's copy of every new reading (vibe_ism_gallery.h)
 #include "vibe_adsb_capture.h"     // vibeadsb::CaptureMeter — the same live "capture N %" as ADS-B
 #include <atomic>
 #include <chrono>
@@ -29,42 +31,8 @@
 
 namespace vibeism {
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  THE BANDS — the tuning controls step between these in ISM mode (Stuart, 2026-10-25: "I always found it quite hard
-//  to tune the ISM on OWRX"). Each is one whole sub-band capture; nobody fine-tunes inside a band.
-// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-struct Band {
-    const char* id;       ///< what the clients send ("433")
-    const char* name;     ///< the frequency readout's text
-    double centreHz;      ///< the band's middle — the "frequency" the clients show
-    double dcOffsetHz;    ///< the RADIO is tuned this far above the middle, so its DC remnant misses the busy channel
-    double needHz;        ///< the span the band's devices occupy around centreHz (for reachability)
-};
-inline const std::vector<Band>& bands() {
-    static const std::vector<Band> b = {
-        {"315", "315 MHz ISM",    315.00e6, 250e3, 200e3},   // US/Japan TPMS, fobs, remotes
-        {"433", "433.92 MHz ISM", 433.92e6, 250e3, 870e3},   // 433.05–434.79: EU/UK sensors, weather, doorbells, TPMS
-        {"868", "868 MHz SRD",    868.60e6, 0,     350e3},   // 868.3 + 868.95 (EU): LaCrosse IT+, Bresser, Fine Offset
-        {"915", "915 MHz ISM",    915.00e6, 250e3, 200e3},   // US: LaCrosse, Ambient, Fine Offset 915 versions
-    };
-    return b;
-}
-inline const Band* bandById(const std::string& id) { for (const auto& b : bands()) if (id == b.id) return &b; return nullptr; }
-inline const Band* bandNearest(double hz) {
-    const Band* best = nullptr;
-    for (const auto& b : bands()) if (!best || std::fabs(b.centreHz - hz) < std::fabs(best->centreHz - hz)) best = &b;
-    return best;
-}
-/** ★ The landing band by the server's location: the Americas (ITU Region 2) → 315 MHz (TPMS and fobs there; Stuart's
- *  rule "US → 315/915 by what's most common"), everywhere else → 433.92. NAN position → 433.92. `can(id)` = reachable. */
-template <class Can> inline const Band* landingBand(double lat, double lon, Can can) {
-    const bool americas = lon == lon && lat == lat && lon < -25.0 && lon > -170.0;
-    const char* order[4] = {"433", "868", "315", "915"};
-    const char* amer[4] = {"315", "915", "433", "868"};
-    for (int i = 0; i < 4; ++i) { const Band* b = bandById(americas ? amer[i] : order[i]); if (b && can(*b)) return b; }
-    return nullptr;
-}
-static constexpr double kMinRateHz = 0.9e6;   ///< below this a band's devices do not fit (and the HF+ cannot reach one)
+// ★ THE BANDS live in vibe_ism_bands.h (2026-10-25) — the background-decoding config validates against them too.
+
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  SipHash-2-4 (Aumasson & Bernstein, 2012 — public algorithm, reference description) for the nickname keys.
@@ -259,8 +227,10 @@ public:
         k0_ = (uint64_t(rd()) << 32) ^ rd();
         k1_ = (uint64_t(rd()) << 32) ^ rd();
     }
-    /** Take a reading heard at `t` (seconds). Returns true when the list changed. ★ Wipes r.secretId. */
-    bool accept(Reading r, double t) {
+    /** Take a reading heard at `t` (seconds). Returns true when the list changed. ★ Wipes r.secretId.
+     *  `out` (when not null, and only when this returns true): the reading as the LIST counts it — its kind, its name and
+     *  its readable line, nothing else (vibe_ism_sink.h) — for the gallery's daily log. */
+    bool accept(Reading r, double t, Heard* out = nullptr) {
         std::string key;
         int nick = 0;
         if (r.secret) {
@@ -297,6 +267,7 @@ public:
         d.r = r; d.nick = nick; d.line = line; d.last = t;
         ++decoded_;
         prune(t);
+        if (!repeat && out) { out->kind = r.kind; out->name = deviceName(r, nick); out->line = line; out->freqHz = r.freqHz; out->secret = r.secret; }
         return !repeat;
     }
     void prune(double t) {
@@ -318,6 +289,10 @@ public:
     }
     size_t size() const { return devs_.size(); }
     uint64_t decoded() const { return decoded_; }
+    /** ★ V12 2026-10-25: the next nickname of `kind` will be above `floor` — today's gallery summary already names
+     *  "TPMS #1"…"#floor" from before a restart, and a fresh salt cannot tell whether a car is one of those, so a new
+     *  one must not take a name the day has already used. */
+    void reserveNicks(const std::string& kind, int floor) { int& n = nextNick_[kind]; if (floor > n) n = floor; }
 
     /** The device list, newest first: [{…}, …] */
     std::string json(double t) const {
@@ -379,9 +354,13 @@ public:
     /** Start on `band` with the radio tuned to `hwCentreHz` at `rateHz`. `customHz` > 0: a frequency typed in ISM mode
      *  (an odd device) — the whole capture is searched and the report names that frequency. `keepList`: a band step
      *  keeps the devices already heard (and the time base, so their "last heard" stays true); entering the mode clears. */
-    void start(const Band& band, double hwCentreHz, double rateHz, double customHz = 0, bool keepList = false) {
+    /** ★ V12 2026-10-25 — `sink`: who keeps the readings (the gallery's daily log and summary, vibe_ism_gallery.h). It
+     *  lives exactly as long as this run: stop() joins the worker, then calls its finish() (the RAM buffer written). */
+    void start(const Band& band, double hwCentreHz, double rateHz, double customHz = 0, bool keepList = false,
+               std::shared_ptr<Sink> sink = nullptr) {
         stop();
         std::lock_guard<std::mutex> lk(mtx_);
+        sink_ = std::move(sink);
         band_ = &band; hwCentre_ = hwCentreHz; rate_ = rateHz; customHz_ = customHz;
         fe_.reset(new FrontEnd(rateHz));
         fe_->setDcGuardHz(15e3);
@@ -402,7 +381,13 @@ public:
         { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; }
         cv_.notify_all();
         if (worker_.joinable()) worker_.join();
+        // ★ The worker is gone, so nothing else touches the sink: its buffer is written here, once.
+        std::shared_ptr<Sink> s;
+        { std::lock_guard<std::mutex> lk(mtx_); s.swap(sink_); }
+        if (s) s->finish();
     }
+    /** ★ See Tracker::reserveNicks. Before start(), from the day's summary card. */
+    void reserveNicks(const std::string& kind, int floor) { std::lock_guard<std::mutex> lk(mtx_); tracker_.reserveNicks(kind, floor); }
     bool running() const { return run_.load(std::memory_order_relaxed); }
     const Band* band() const { return band_; }
 
@@ -481,9 +466,13 @@ private:
                 bursts_ += bs.size();
                 unknown_ += unknownLocal_; unknownLocal_ = 0;
                 const double t = now();
-                for (auto& r : got) tracker_.accept(r, t);
+                std::vector<Heard> heard;
+                for (auto& r : got) { Heard h; if (tracker_.accept(r, t, sink_ ? &h : nullptr) && sink_) heard.push_back(std::move(h)); }
+                // ★ The gallery's copy OUTSIDE the lock: a report() asked for meanwhile never waits on a file.
+                if (!heard.empty()) { auto s = sink_; lk.unlock(); for (const auto& h : heard) s->heard(h); lk.lock(); }
             }
             const double t = now();
+            if (t - winStart >= 1.0 && sink_) { auto s = sink_; lk.unlock(); s->tick(); lk.lock(); }
             if (t - winStart >= 1.0 && fe_) {
                 winStart = t;
                 health_.noiseDb = fe_->noiseDb();
@@ -511,6 +500,7 @@ private:
     Tracker tracker_;
     FobWatch fobs_;
     Health health_;
+    std::shared_ptr<Sink> sink_;   // ★ only the worker reads it while running; start()/stop() swap it with the worker stopped
 };
 
 /** ★ ISM's gain rule. Sensors are short strong bursts over a quiet band, like ADS-B, so it is not VibeAGC: start
