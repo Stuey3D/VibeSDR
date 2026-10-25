@@ -26,8 +26,9 @@ const SHEET_BG = 'rgba(8,6,1,0.97)';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
+import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText } from '../services/cwList';
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -285,6 +286,10 @@ interface ModeSelectorProps {
     adsbAvail?: boolean; adsbWhy?: string; adsbOn?: boolean; onAdsb?: () => void;
     /** ★★ V12 THE GALLERY — what a VibeServer's decoders heard (GalleryOverlay). Only on a VibeServer. */
     galleryAvail?: boolean; onGallery?: () => void;
+    /** ★★ V12 CW — a VibeServer's own decoder: ONE SIGNAL (the passband) or SKIMMER (a 24/48/96 kHz segment centred on
+     *  the dial). Only where the server's vibeserver.json says `"cw": true`; its settings drop in under the row. */
+    cwAvail?: boolean; cwSkim?: boolean; cwWidth?: number;
+    onCwView?: (skim: boolean) => void; onCwWidth?: (w: number) => void;
     /** ★★★ THE SLUGS THIS RECEIVER PUBLISHES (`/api/extensions`), or null for "never asked".
      *  A decoder the server does not run is a DEAD CONTROL — it presses, and nothing happens. So
      *  the row is filtered to what is actually there. null offers everything, because a failed
@@ -362,6 +367,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     return ext.includes(slug);
   });
   const advRdsShown = !!decoderControls?.advRdsAvail && !isBlocked('rds');
+  const cwShown = !!decoderControls?.cwAvail && !isBlocked('cw');
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
    *  decoders section is dropped and DAB is drawn with the demodulators. */
@@ -369,9 +375,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  the decoders row. */
   const adsbShown = !!decoderControls?.adsbAvail;
   const wholeAvail = !!decoderControls?.dabAvail || adsbShown;
-  const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown;
+  const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !cwShown;
   const decSectionShown = !!decoderControls && !dabInGrid
-    && (clientDecs.length > 0 || advRdsShown || wholeAvail);
+    && (clientDecs.length > 0 || advRdsShown || wholeAvail || cwShown);
   const { theme: theme0 } = useTheme();
   const surf = usePopupSurface();
   const pt = usePopupTheme();
@@ -967,6 +973,24 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   )}</NavItem>
                 );
               })}
+              {cwShown && (() => {
+                const active = decoderControls.decMode === 'cw' && decoderControls.decOn;
+                const lit = decoderControls.decMode === 'cw';
+                return (
+                  <NavItem key="cw" onPress={() => decoderControls.onDecToggle('cw')}>{(navFocused, navRef) => pt.metal ? (
+                    <MetalKey navRef={navRef} focused={navFocused} label="CW" active={lit} pip
+                      onPress={() => decoderControls.onDecToggle('cw')} />
+                  ) : (
+                  <TouchableOpacity ref={navRef as any} accessibilityLabel="CW decoder"
+                    style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: 10 },
+                            active && { backgroundColor: decBg },
+                            navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+                    onPress={() => decoderControls.onDecToggle('cw')} activeOpacity={0.8}>
+                    <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>CW</Text>
+                  </TouchableOpacity>
+                  )}</NavItem>
+                );
+              })()}
               {decoderControls.dabAvail && (
                 <NavItem key="dab" onPress={() => decoderControls.onDab?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label="DAB" active={!!decoderControls.dabOn} pip
@@ -1046,6 +1070,27 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               </View>
             )}
             {txShown && transcribeCallout}
+            {/* ★ V12 CW: the web's VIEW and WIDTH rows and its hint (cwList cwHintText). WIDTH only for the skimmer. */}
+            {cwShown && decoderControls.decMode === 'cw' && (
+              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
+                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
+                <SubLabel label="VIEW" />
+                <OptRow>
+                  <SegBtn label="ONE SIGNAL" active={!decoderControls.cwSkim} onPress={() => decoderControls.onCwView?.(false)} />
+                  <SegBtn label="SKIMMER" active={!!decoderControls.cwSkim} onPress={() => decoderControls.onCwView?.(true)} />
+                </OptRow>
+                {!!decoderControls.cwSkim && (<>
+                  <SubLabel label="WIDTH" />
+                  <OptRow>{CW_WIDTHS.map((w) => (
+                    <SegBtn key={w} label={`${w / 1000} kHz`} active={(decoderControls.cwWidth ?? CW_DEFAULT_WIDTH) === w}
+                            onPress={() => decoderControls.onCwWidth?.(w)} />
+                  ))}</OptRow>
+                </>)}
+                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+                  {cwHintText(!!decoderControls.cwSkim, decoderControls.cwWidth ?? CW_DEFAULT_WIDTH)}
+                </Text>
+              </View>
+            )}
             {decoderControls.decMode === 'wefax' && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                                        : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>

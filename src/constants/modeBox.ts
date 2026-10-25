@@ -162,7 +162,9 @@ export function composeModeLabel(mode: string, decoder: string | null | undefine
   if (dab) return 'DAB';
   // ★ TRANSCRIBE listens to the audio, it is not a digimode riding the demod — the box keeps reading plain USB / WFM.
   const dec = decoder && decoder !== 'transcribe' ? (decoder === 'wefax' ? 'fax' : decoder) : '';
-  return modeDisplay(mode) + (dec && dec.toLowerCase() !== String(mode).toLowerCase() ? `: ${dec.toUpperCase()}` : '');
+  // ★ V12 CW on a CW demod reads "CW", never "CW: CW" (modeDisplay folds cwu / cwl to CW).
+  return modeDisplay(mode) + (dec && dec.toLowerCase() !== String(mode).toLowerCase()
+    && dec.toUpperCase() !== modeDisplay(mode) ? `: ${dec.toUpperCase()}` : '');
 }
 
 /** The longest reading the box's second line shows (formatReading: "-120dB", "S9+60", "120 dBf"). */
@@ -171,7 +173,7 @@ export const READING_LONGEST = '-120 dBf';
 /** Every client-side decoder the label can carry — DecoderPanel's DecoderType, held to it by the type
  *  check below (a decoder added there and not here fails `tsc`), so the test's "longest label" is the
  *  code's, not a guess. */
-export const CLIENT_DECODERS = (['rtty', 'navtex', 'wefax', 'sstv', 'morse', 'whisper', 'ft8', 'time', 'transcribe'] as const) satisfies
+export const CLIENT_DECODERS = (['rtty', 'navtex', 'wefax', 'sstv', 'morse', 'whisper', 'ft8', 'time', 'transcribe', 'cw'] as const) satisfies
   readonly NonNullable<DecoderType>[];
 type MissingDecoder = Exclude<NonNullable<DecoderType>, typeof CLIENT_DECODERS[number]>;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

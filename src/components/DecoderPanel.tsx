@@ -37,6 +37,8 @@ import { SLANT_STEP, parseAlign, wefaxAlignKey, wefaxFormat, wefaxPreset, type W
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
+import CwView, { cwItems } from './CwView';
+import type { CwList, CwSpot } from '../services/cwList';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel, DecoderBody,
          DECODER_FONT, decoderBodyInset, engraveStyle, useDecoderTokens, useDecoderStyles,
          type DecoderTokens } from './DecoderShell';
@@ -52,7 +54,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | null;
+                        | 'time' | 'transcribe' | 'cw' | null;
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
@@ -98,6 +100,9 @@ export interface DecoderPanelProps {
   spotsKind?:      SpotsKind | null;
   spots?:          SpotRow[];
   onTuneHz?:       (hz: number) => void;
+  /** ★ V12 CW (VibeServer): the signals list and spots for the CW view (CwView), and its tune (in CW). Set only while CW
+   *  is the decoder; `skim` = the skimmer is what is attached. */
+  cw?:             { skim: boolean; list: CwList | null; spots: CwSpot[]; onTune: (hz: number) => void } | null;
   /** OWRX DAB (§5.2): when an ensemble is tuned the panel shows the service list with logos;
    *  the speed-correction control (§4.5) rides in the header. NOT a decoder. */
   dabProgrammes?:  { id: number; name: string }[];
@@ -219,6 +224,8 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   // ★ Not "MSF" or "WWV" — the panel is the same control whichever station is being read, and the
   //   station itself appears in every line the decoder emits.
   time:    'TIME',
+  // ★ V12: a VibeServer's own CW decoder (the title says CW SKIMMER while the skimmer runs).
+  cw:      'CW',
   // ★ V12: ON-DEVICE speech-to-text (+ translation) of the audio we play — any backend. Not UberSDR's STT (`whisper`).
   transcribe: 'TRANSCRIBE',
 };
@@ -240,7 +247,7 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null,
+  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw = null,
 }: DecoderPanelProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
@@ -357,6 +364,9 @@ export default function DecoderPanel({
    *  arriving (or the last one finished); PREV the one before it — one only, as WEFAX keeps one picture.
    *  ★ Between messages it says STANDING BY, as WEFAX does between charts. */
   const isNavtex = activeDecoder === 'navtex' && !!navtex && !isSpotsMode && !isDabMode && !isImageMode && !isAircraftMode;
+  /** ★ V12 CW: the list + spots view (CwView) in place of the plain text body. */
+  const isCw = activeDecoder === 'cw' && !!cw && !isSpotsMode && !isDabMode && !isAircraftMode;
+  const cwRows = React.useMemo(() => (isCw ? cwItems(cw!.list, cw!.spots) : []), [isCw, cw]);
   const [nvViewPrev, setNvViewPrev] = useState(false);
   const [, setNvTick] = useState(0);
   // ★ A lost NNNN ends the message after 75 s of silence (NAVTEX_END_LOST_MS) — nothing else would redraw the box
@@ -626,12 +636,13 @@ export default function DecoderPanel({
   useEffect(() => { if (!decoderText || !minimised) followTail.current = true; }, [!decoderText, minimised]);
   useEffect(() => {
     // ★ NAVTEX's PREV is a finished message being READ — new text belongs to LIVE and must not move it.
-    if (minimised || !followTail.current || nvViewingPrev) return;
+    // ★ CW's text sits ABOVE its list: the view stays where the listener put it (CwView's pin), never the end.
+    if (minimised || !followTail.current || nvViewingPrev || isCw) return;
     const t = setTimeout(() => {
       try { outputRef.current?.scrollToEnd({ animated: false }); } catch {}
     }, 40);
     return () => clearTimeout(t);
-  }, [decoderText, minimised, nvViewingPrev]);
+  }, [decoderText, minimised, nvViewingPrev, isCw]);
 
   // ── Keyboard: the decoder box takes the keyboard on ENTER (the screen's highlight on it) ──
   //
@@ -698,7 +709,8 @@ export default function DecoderPanel({
   // The list this box is showing, if any. ADS-B and spots have nothing to select — Stuart:
   // "same kinda thing with ADSB except nothing to select just scroll" — so they navigate but
   // Enter does nothing rather than pretending to.
-  const listLen = isDabMode ? dabProgrammes.length : 0;
+  // ★ CW's rows (signals, then spots) are selectable too: Enter tunes to the one highlighted.
+  const listLen = isDabMode ? dabProgrammes.length : isCw ? cwRows.length : 0;
 
   // ★ The flash. Entering the box is otherwise invisible, and invisible focus has looked like a broken
   // keyboard three times over in this work. It announces itself once and then gets out of the
@@ -811,6 +823,7 @@ export default function DecoderPanel({
     }
     if (k === 'Enter') {
       if (kbZoneRef.current === 'header') hdrDone.current[hdrIdxRef.current]?.();
+      else if (listLenRef.current > 0 && cwSelectRef.current) cwSelectRef.current(listIdxRef.current);
       else if (listLenRef.current > 0) onSelectDabRef.current?.(listIdxRef.current);
       return true;
     }
@@ -828,6 +841,8 @@ export default function DecoderPanel({
   const kbZoneRef = useRef(kbZone);   kbZoneRef.current = kbZone;
   const hdrIdxRef = useRef(hdrIdx);   hdrIdxRef.current = hdrIdx;
   const listIdxRef = useRef(listIdx); listIdxRef.current = listIdx;
+  const cwSelectRef = useRef<((i: number) => void) | null>(null);
+  cwSelectRef.current = isCw ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) cw!.onTune(r.hz); } : null;
   const listLenRef = useRef(listLen); listLenRef.current = listLen;
   const isDabModeRef = useRef(isDabMode); isDabModeRef.current = isDabMode;
   const autoOwnRef = useRef(autoOwn); autoOwnRef.current = autoOwn;
@@ -985,6 +1000,7 @@ export default function DecoderPanel({
     ? 'DAB'
     : isSpotsMode
     ? (spotsKind === 'cw' ? 'CW SPOTS' : 'DIGITAL SPOTS')
+    : isCw && cw!.skim ? 'CW SKIMMER'
     : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
   return (
@@ -1379,7 +1395,12 @@ export default function DecoderPanel({
             )}
           </ScrollView>
         )}
-        {!minimised && !isNavtex && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && !!notice && (
+        {!minimised && isCw && (
+          <CwView skim={cw!.skim} list={cw!.list} spots={cw!.spots} text={decoderText} bodySize={bodySize}
+                  focusIdx={kbZone === 'list' ? listIdx : -1} onTune={cw!.onTune}
+                  scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
+        )}
+        {!minimised && !isNavtex && !isCw && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && !!notice && (
           <View style={dp.adjRow}>
             <Text style={[dp.output, { flex: 1, minWidth: 160, color: dc.output, fontFamily: FONT }]}>{notice.text}</Text>
             {!!notice.action && !!notice.onAction && (
@@ -1389,7 +1410,7 @@ export default function DecoderPanel({
             )}
           </View>
         )}
-        {!minimised && !isNavtex && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
+        {!minimised && !isNavtex && !isCw && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
           <ScrollView
             ref={outputRef}
             // ★★★ minHeight AS WELL AS maxHeight. As a cap alone, BIG did NOTHING on a text

@@ -113,6 +113,7 @@ import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
          type ChatUserRow }                            from '../services/DecoderClient';
+import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, type CwList, type CwSpot } from '../services/cwList';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { registerIqCode } from '../services/iqPairing';
 import AntennaBandNotice from '../components/AntennaBandNotice';
@@ -737,6 +738,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     let dead = false;
     setDabCapable(false);
+    setCwCapable(false);
     setAdsbCap(undefined);
     setAntBands(null);
     if ((route.params.serverType ?? 'ubersdr') !== 'vibeserver') return;
@@ -744,6 +746,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       .then(o => {
         if (dead) return;
         setDabCapable(o?.dab === true);
+        setCwCapable(o?.cw === true);   // ★ V12 CW — the same per-radio answer
         /* ★ V12 ADS-B, from the SAME per-radio answer and for the same reason (the door owns no radio). Unlike DAB a
          *  refusal is KEPT — the control is drawn disabled with the server's words (adsbTypes parseAdsbCapability). */
         setAdsbCap(o?.adsb);
@@ -2365,6 +2368,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => { AsyncStorage.getItem('lsv_dab_tall').then(v => { if (v === '0') setDabTall(false); }).catch(() => {}); }, []);
   const onDabTall = useCallback((v: boolean) => { setDabTall(v); AsyncStorage.setItem('lsv_dab_tall', v ? '1' : '0').catch(() => {}); }, []);
   const [dabCapable, setDabCapable] = useState(false);  // the SERVER decides — /vibeserver.json
+  /** ★ V12 CW: this radio's server runs its own CW decoder + skimmer (`"cw": true`, per radio). No word = no CW key. */
+  const [cwCapable, setCwCapable] = useState(false);
   /* ★ Refs beside the state because the two callbacks below are created ONCE (empty dep list, so
    *  they are stable for the ModeSelector's memo) and would otherwise close over the first render's
    *  values for ever — the stale-closure fault this file has been bitten by repeatedly. */
@@ -4678,6 +4683,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ CLR on TRANSCRIBE also starts the language detection again (Stuart, 2026-10-15: "the clear button should also
     //   force a redetect") — a cleared box is a fresh start, not the old station's language.
     if (activeDecRef.current === 'transcribe') { setDecoderText(''); txRedetectRef.current(); return; }
+    // ★ CW's CLR empties the text, the list and the spots (the web's decClr) — the next list arrives within a second.
+    if (activeDecRef.current === 'cw') { setDecoderText(''); setCwList(null); setCwSpots([]); return; }
     if (activeDecRef.current !== 'navtex') { setDecoderText(''); return; }
     decTextPending.current = ''; decTextReplace.current = null;
     navtexAsmRef.current?.clearLive();
@@ -4707,6 +4714,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const decoderClient   = useRef<DecoderClient | null>(null);
   const decoderImageRef = useRef<DecoderImageHandle | null>(null);
   const activeDecRef    = useRef<DecoderType>(null);
+  /* ★★ V12 CW (docs/v12/CW-SKIMMER.md) — the web client's CW panel (main.ts renderCw). ONE SIGNAL ('cw') decodes this
+   *  listener's passband; SKIMMER ('cwskim') every CW signal across a segment of `cwWidth` Hz centred on the dial. The
+   *  view and the width are remembered; changing either while CW runs is a re-attach (a different decoder on the server).
+   *  The list (at most once a second) and the spots go to the decoder box's CW view (CwView); the primary signal's text
+   *  is the ordinary decoder text. */
+  const [cwSkim, setCwSkim] = useState(false);
+  const [cwWidth, setCwWidth] = useState<number>(CW_DEFAULT_WIDTH);
+  const [cwList, setCwList] = useState<CwList | null>(null);
+  const [cwSpots, setCwSpots] = useState<CwSpot[]>([]);
 
   // Decoder transport base. Local/UberSDR serve /ws/dxcluster themselves; Kiwi
   // (no dxcluster) gets a native decoder sidecar fed its audio, so we point the
@@ -4772,6 +4788,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onImageDone: ()            => decoderImageRef.current?.imageDone(),
       onError:     (msg: string) => setDecoderStatus('error: ' + msg),
+      onCwSignals: (l) => {
+        if (activeDecRef.current !== 'cw') return;
+        setCwList(l);
+        setDecoding(l.signals.some((x) => x.active));
+        if (l.signals.length) markDecodeOutput();
+      },
+      onCwSpot: (sp) => { if (activeDecRef.current === 'cw') setCwSpots((prev) => mergeCwSpot(prev, sp)); },
       onSpot: (s) => {
         if (s.kind !== spotsKindRef.current) return;
         spotBufRef.current.push(s); // flushed by the 400ms tick — no setState here
@@ -4847,7 +4870,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -5227,6 +5250,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoderStatus('listening…');
     setDecoding(false);
     decoderImageRef.current?.reset();
+    setCwList(null); setCwSpots([]);
     if (!type) return;
     if (type === 'transcribe') {
       setDecoderStatus('Starting on-device speech…');
@@ -5261,6 +5285,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (decoderClient.current) decoderClient.current.timeStation = st as any;
       timeStationRef.current = st;
       setDecoderStatus(`${st.toUpperCase()}${forced ? '' : ' (auto)'} — waiting for the minute`);
+    }
+    if (type === 'cw' && decoderClient.current) {
+      decoderClient.current.cwSkim = cwSkimRef.current;
+      decoderClient.current.cwWidth = cwWidthRef.current;
+      setDecoderStatus(cwSkimRef.current ? 'listening across the segment…' : 'listening…');
     }
     tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
     decoderClient.current?.start(type);
@@ -5297,6 +5326,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoding(false);
     setDecoderText('');
     setDecoderStatus('listening…');
+    setCwList(null); setCwSpots([]);
   }, []);
 
   const stopSpots = useCallback(() => {
@@ -5322,7 +5352,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -5404,6 +5434,29 @@ export default function SDRScreen({ route, navigation }: Props) {
     setMorseQuality(q);
     if (decoderClient.current) decoderClient.current.morseQuality = q;
   }, []);
+
+  /* ★ V12 CW: ONE SIGNAL ↔ SKIMMER and the skimmer's width — remembered (the web keeps them for the page), and applied at
+   *  once when CW runs: each is a different decoder on the server, so a re-attach (the web's reattachIf('cw')). */
+  const cwSkimRef = useRef(false);
+  const cwWidthRef = useRef<number>(CW_DEFAULT_WIDTH);
+  useEffect(() => {
+    AsyncStorage.multiGet(['lsv_cw_view', 'lsv_cw_width']).then((kv) => {
+      const v = kv[0]?.[1], w = kv[1]?.[1];
+      if (v === 'skim') { cwSkimRef.current = true; setCwSkim(true); }
+      if (w) { cwWidthRef.current = cwWidthOf(w); setCwWidth(cwWidthRef.current); }
+    }).catch(() => {});
+  }, []);
+  const onCwView = useCallback((skim: boolean) => {
+    cwSkimRef.current = skim; setCwSkim(skim);
+    AsyncStorage.setItem('lsv_cw_view', skim ? 'skim' : 'one').catch(() => {});
+    if (activeDecRef.current === 'cw') openDecoder('cw');
+  }, [openDecoder]);
+  const onCwWidth = useCallback((w: number) => {
+    const v = cwWidthOf(w);
+    cwWidthRef.current = v; setCwWidth(v);
+    AsyncStorage.setItem('lsv_cw_width', String(v)).catch(() => {});
+    if (activeDecRef.current === 'cw' && cwSkimRef.current) openDecoder('cw');
+  }, [openDecoder]);
 
   // WEFAX LPM — same re-attach rule
   const [wefaxLpm, setWefaxLpm] = useState(120);
@@ -11404,8 +11457,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         centerHz={status.centerHz}
         bwHz={status.bwHz}
         tuneHz={status.frequency}
-        filterLow={status.bandwidthLow}
-        filterHigh={status.bandwidthHigh}
+        /* ★★ THE CW SKIMMER'S VFO IS ITS SEGMENT (Stuart, 2026-10-25) — drawn only, never sent (cwList cwDrawnPassband);
+         *  tuning moves it as ever, and the server's skimmer follows the dial. */
+        filterLow={cwDrawnPassband(activeDecoder === 'cw' && cwSkim, cwWidth, status.bandwidthLow, status.bandwidthHigh).low}
+        filterHigh={cwDrawnPassband(activeDecoder === 'cw' && cwSkim, cwWidth, status.bandwidthLow, status.bandwidthHigh).high}
         /* ★★★ THE VISUAL TRIM ON THE SPECTRUM — applied by shifting the RANGE, never by editing
          *  the bins. The adapters hand us a reused buffer (see the note on visualGain), so an
          *  in-place offset would accumulate every frame. Mapping through a range shifted by -vg is
@@ -11629,6 +11684,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           spotsKind={spotsKind}
           spots={spots}
           onTuneHz={onTuneHz}
+          /* ★ V12 CW: the list + spots, and a tap tunes to that signal in CW (the web's cwTune: recentred). */
+          cw={activeDecoder === 'cw' ? { skim: cwSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => { if (hz > 0) onTuneHz(hz, 'cwu' as SDRMode); } } : null}
           onOpenFreq={() => kbActions.current.onFreqOpen()}
           imageRef={decoderImageRef}
           onImageStatus={setDecoderStatus}
@@ -12790,6 +12847,10 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  only: nothing else keeps one, and a key that opens an empty list there would be a dead control. */
           galleryAvail: !!(client.current as any)?.isVibe,
           onGallery: () => { markInteract(); setModeSelOpen(false); setGalleryOpen(true); },
+          /* ★★ V12 CW — the server's own decoder and skimmer, only where its vibeserver.json says `"cw": true` (an older
+           *  server, or the owner's switch off, draws no key: AGENTS.md, no dead control). */
+          cwAvail: cwCapable && !!(client.current as any)?.isVibe,
+          cwSkim, cwWidth, onCwView, onCwWidth,
         } : null}
         transcribeControls={txCaps?.available ? {
           active: activeDecoder === 'transcribe',
