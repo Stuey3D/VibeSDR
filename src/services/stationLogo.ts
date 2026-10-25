@@ -68,6 +68,12 @@ export function tidyStationName(s: string): string {
  *    RDS name is authoritative and this is about finding artwork for it, not renaming it. */
 export function expandStationAbbrevs(s: string): string {
   return s
+    /* ★★ "WSOU-FM" IS NOT WHAT THE DIRECTORY CALLS IT EITHER. A North American heard-list entry is
+     *  the call sign from the PI with the service suffix, and the name search is a substring match:
+     *  radio-browser has "WSOU" and "WSOU 89.5FM", so "WSOU-FM" found nothing while the live panel,
+     *  searching the PS "WSOU", found the logo (Stuart, 2026-10-25, Yonkers server). A WHOLE name of
+     *  call sign + suffix only — "Kiss-FM London" is left alone. */
+    .replace(/^\s*([KWC][A-Z]{2,3})-(?:FM|AM|LP|LPFM|HD\d)\s*$/i, '$1')
     .replace(/\bR\s?(\d)\b/gi, 'Radio $1')      // BBC R2  -> BBC Radio 2
     .replace(/\s+/g, ' ')
     .trim();
