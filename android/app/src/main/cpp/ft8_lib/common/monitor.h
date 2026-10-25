@@ -44,6 +44,9 @@ typedef struct
     float* pf_in;          ///< aligned nfft floats: the windowed frame
     float* pf_out;         ///< aligned nfft floats: the ordered spectrum
     float* pf_work;        ///< aligned nfft floats: PFFFT's scratch
+    // VibeSDR (2026-10-25): the waterfall level by table (monitor.c, wf_quant_init) — no log10f per bin
+    float wf_thr[256];     ///< wf_thr[k] = the smallest power that stores as k
+    uint8_t wf_cell[4096]; ///< the stored level at the bottom of each (exponent, top 4 mantissa bits) cell
 #ifdef WATERFALL_USE_PHASE
     int nifft;             ///< iFFT size
     void* ifft_work;       ///< Work area required by inverse Kiss FFT
@@ -55,6 +58,10 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg);
 void monitor_reset(monitor_t* me);
 void monitor_process(monitor_t* me, const float* frame);
 void monitor_free(monitor_t* me);
+/// VibeSDR (2026-10-25): a bin power's stored level — by table (what monitor_process uses) and by log10f (the
+/// reference). For test-ft8-fast.
+uint8_t monitor_level(const monitor_t* me, float x);
+uint8_t monitor_level_ref(float x);
 
 #ifdef WATERFALL_USE_PHASE
 void monitor_resynth(const monitor_t* me, const candidate_t* candidate, float* signal);

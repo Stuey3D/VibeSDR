@@ -6,6 +6,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "../../vibedsp/third_party/pffft/pffft.h"
 
 static float hann_i(int i, int N)
@@ -55,6 +56,50 @@ static void waterfall_free(ftx_waterfall_t* me)
 {
     free(me->mag);
 }
+
+/* ★★ THE WATERFALL LEVEL WITHOUT A LOG PER BIN (VibeSDR, 2026-10-25 — the FT8 CPU work; not in upstream ft8_lib).
+ *  Each bin's power x is stored as (int)(2·10·log10f(x) + 240), clamped to 0..255 — a log10f per bin, ~200,000 a
+ *  pass, which on a Pi 2 (glibc's log10f, ~60 instructions) was 6 % of the whole decode. That function is monotonic
+ *  in x, so it is fully described by the 255 smallest x at which it reaches 1, 2 … 255 — found ONCE, at init, by
+ *  bisecting the float bit patterns through the very same expression (wf_quant_ref), on this platform, with this
+ *  compiler. A bin is then one table lookup on its top 13 bits (exponent + 4 mantissa bits: at most a 6.25 % range,
+ *  while a step is 12.2 %, so at most one threshold falls inside — 3 bits would be 12.5 %, too wide) and one compare. Same answer as log10f for every x
+ *  (test-ft8-fast checks all 255 edges and random levels). */
+static uint8_t wf_quant_ref(float x)
+{
+    float db = 10.0f * log10f(x);
+    int scaled = (int)(2 * db + 240);
+    return (uint8_t)((scaled < 0) ? 0 : ((scaled > 255) ? 255 : scaled));
+}
+static uint32_t f2u(float x) { uint32_t u; memcpy(&u, &x, 4); return u; }
+static float u2f(uint32_t u) { float x; memcpy(&x, &u, 4); return x; }
+static void wf_quant_init(monitor_t* me)
+{
+    // threshold[k] = the smallest positive float x with wf_quant_ref(x) >= k (positive floats order as their bits)
+    for (int k = 1; k < 256; ++k)
+    {
+        uint32_t lo = 1, hi = 0x7f800000u;          // smallest positive denormal .. +inf
+        if (wf_quant_ref(u2f(hi - 1)) < k) { me->wf_thr[k] = INFINITY; continue; }
+        while (lo < hi)
+        {
+            const uint32_t mid = lo + (hi - lo) / 2;
+            if (wf_quant_ref(u2f(mid)) >= k) hi = mid; else lo = mid + 1;
+        }
+        me->wf_thr[k] = u2f(lo);
+    }
+    me->wf_thr[0] = 0.0f;
+    for (uint32_t c = 0; c < 4096; ++c)             // the level at the bottom of each cell (positive floats only)
+        me->wf_cell[c] = c ? wf_quant_ref(u2f(c << 19)) : 0;
+}
+static inline uint8_t wf_quant(const monitor_t* me, float x)
+{
+    // x is 1e-12 + |X|^2: positive and finite
+    const uint8_t v = me->wf_cell[(f2u(x) >> 19) & 4095u];
+    return (uint8_t)(v + (v < 255 && x >= me->wf_thr[v + 1]));
+}
+
+uint8_t monitor_level(const monitor_t* me, float x) { return wf_quant(me, x); }
+uint8_t monitor_level_ref(float x) { return wf_quant_ref(x); }
 
 void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 {
@@ -138,6 +183,7 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
     me->symbol_period = symbol_period;
 
     me->max_mag = -120.0f;
+    wf_quant_init(me);
 }
 
 void monitor_free(monitor_t* me)
@@ -208,6 +254,7 @@ void monitor_process(monitor_t* me, const float* frame)
             kiss_fftr(me->fft_cfg, timedata, freqdata);
         }
 
+#ifdef WATERFALL_USE_PHASE
         // Loop over possible frequency OSR offsets
         for (int freq_sub = 0; freq_sub < me->wf.freq_osr; ++freq_sub)
         {
@@ -216,24 +263,40 @@ void monitor_process(monitor_t* me, const float* frame)
                 int src_bin = (bin * me->wf.freq_osr) + freq_sub;
                 float mag2 = (freqdata[src_bin].i * freqdata[src_bin].i) + (freqdata[src_bin].r * freqdata[src_bin].r);
                 float db = 10.0f * log10f(1E-12f + mag2);
-
-#ifdef WATERFALL_USE_PHASE
                 // Save the magnitude in dB and phase in radians
                 float phase = atan2f(freqdata[src_bin].i, freqdata[src_bin].r);
                 me->wf.mag[offset].mag = db;
                 me->wf.mag[offset].phase = phase;
-#else
-                // Scale decibels to unsigned 8-bit range and clamp the value
-                // Range 0-240 covers -120..0 dB in 0.5 dB steps
-                int scaled = (int)(2 * db + 240);
-                me->wf.mag[offset] = (scaled < 0) ? 0 : ((scaled > 255) ? 255 : scaled);
-#endif
                 ++offset;
-
                 if (db > me->max_mag)
                     me->max_mag = db;
             }
         }
+#else
+        // Loop over possible frequency OSR offsets — the level quantised by table, not log10f (wf_quant_init)
+        const float* spec = me->pf_setup ? me->pf_out : (const float*)freqdata;   // (re, im) pairs either way
+        float peak = 0.0f;
+        for (int freq_sub = 0; freq_sub < me->wf.freq_osr; ++freq_sub)
+        {
+            for (int bin = me->min_bin; bin < me->max_bin; ++bin)
+            {
+                int src_bin = (bin * me->wf.freq_osr) + freq_sub;
+                const float re = spec[2 * src_bin], im = spec[2 * src_bin + 1];
+                float mag2 = (im * im) + (re * re);
+                const float x = 1E-12f + mag2;
+                me->wf.mag[offset] = wf_quant(me, x);
+                ++offset;
+                if (x > peak)
+                    peak = x;
+            }
+        }
+        if (peak > 0.0f)
+        {
+            const float db = 10.0f * log10f(peak);   // ★ the debug statistic, once a frame: log10 is monotonic
+            if (db > me->max_mag)
+                me->max_mag = db;
+        }
+#endif
     }
 
     ++me->wf.num_blocks;

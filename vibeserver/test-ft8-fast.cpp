@@ -16,6 +16,8 @@
 //   4. the spectrogram through PFFFT vs Kiss FFT. NOT bit-identical (a different FFT rounds differently) — so the test
 //      states how close: on a band of noise and GFSK-like tones, a waterfall byte (0.5 dB step) may differ by one step,
 //      never more, and in under 1 in 10,000 bins.
+//   5. the waterfall level by table vs by log10f — every one of the 255 step edges (and a float either side) and
+//      a million random levels from -130 to +60 dB: identical.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -254,12 +256,32 @@ static void testWaterfall() {
     }
 }
 
+static void testLevel() {
+    std::printf("\n5. waterfall level — table vs log10f\n");
+    monitor_config_t cfg = {};
+    cfg.f_min = 100; cfg.f_max = 3500; cfg.sample_rate = 12000; cfg.time_osr = 2; cfg.freq_osr = 2; cfg.protocol = FTX_PROTOCOL_FT8;
+    monitor_t m; monitor_init(&m, &cfg);
+    long n = 0, same = 0;
+    auto chk = [&](float x) { ++n; same += monitor_level(&m, x) == monitor_level_ref(x); };
+    for (int k = 1; k < 256; ++k) {
+        const float t = m.wf_thr[k];
+        if (!std::isfinite(t)) continue;
+        chk(t); chk(std::nextafter(t, 0.0f)); chk(std::nextafter(t, INFINITY));
+    }
+    std::mt19937 rng(3);
+    std::uniform_real_distribution<float> u(-13.0f, 6.0f);
+    for (int i = 0; i < 1000000; ++i) chk(1e-12f + std::pow(10.0f, u(rng)));
+    ok(same == n, "identical levels: " + std::to_string(same) + " / " + std::to_string(n));
+    monitor_free(&m);
+}
+
 int main() {
     std::printf("test-ft8-fast — the fast FT8 kernels against ft8_lib's originals\n");
     testBp();
     testOsd();
     testSearch();
     testWaterfall();
+    testLevel();
     std::printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "ALL PASS", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;
 }
