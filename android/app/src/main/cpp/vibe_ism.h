@@ -137,7 +137,7 @@ private:
         double offHz = 0;
         cf rot{1, 0}, inc{1, 0};
         int mcnt = 0, renorm = 0;
-        cf acc{0, 0};
+        cf acc{0, 0}, acc2{0, 0};
         uint64_t next = 0;      ///< the next working sample (absolute) this channel has not yet consumed
         uint64_t start = 0, lastHit = 0;
         int hits = 0;           ///< detector frames that saw it — a noise spike is one; a burst is many
@@ -157,18 +157,24 @@ private:
         if (++sinceFft_ >= hop_) { sinceFft_ = 0; detect(onBurst); }
     }
 
+    /* ★★ THE CHANNEL FILTER IS A TRIANGLE (a second-order CIC, done as two weighted accumulators — no integrator to drift).
+     *  A plain integrate-and-dump of M samples leaks a strong burst one output rate away straight onto DC (its sinc's
+     *  null is only exact AT k·R), and test-ism's TPMS, 240 kHz from an empty channel, decoded twice. The triangle's
+     *  sinc² halves every sidelobe in dB for one more multiply-add per sample. */
     void runChan(Chan& c, uint64_t upto) {
         const size_t mask = ring_.size() - 1;
-        const float invM = 1.0f / chanM_;
+        const float norm = 1.0f / (float(chanM_) * float(chanM_ + 1));
         for (uint64_t s = c.next; s < upto; ++s) {
             const cf v = ring_[size_t(s & mask)];
             const float pa = std::max(std::fabs(v.real()), std::fabs(v.imag()));
             if (pa > c.peakAbs) c.peakAbs = pa;
-            c.acc += v * c.rot;
+            const cf m = v * c.rot;
             c.rot *= c.inc;
+            c.acc  += m * float(chanM_ - c.mcnt);     // the falling half of THIS output
+            c.acc2 += m * float(c.mcnt + 1);          // the rising half of the NEXT
             if (++c.mcnt >= chanM_) {
-                c.bb.push_back(c.acc * invM);
-                c.acc = 0; c.mcnt = 0;
+                c.bb.push_back(c.acc * norm);
+                c.acc = c.acc2; c.acc2 = 0; c.mcnt = 0;
                 if (++c.renorm >= 256) { c.renorm = 0; c.rot /= std::abs(c.rot); }
             }
         }
@@ -281,7 +287,7 @@ private:
         const double ph = -2.0 * M_PI * f / w_;
         c.inc = cf(float(std::cos(ph)), float(std::sin(ph)));
         c.rot = cf(1, 0);
-        c.mcnt = 0; c.renorm = 0; c.acc = 0;
+        c.mcnt = 0; c.renorm = 0; c.acc = 0; c.acc2 = 0;
         c.peakAbs = 0;
         c.bb.clear();
         c.bb.reserve(size_t(0.1 * chanRate()));

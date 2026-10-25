@@ -287,12 +287,12 @@ each satellite decoder needs from them.
 |---|---|---|---|---|---|---|
 | EPIRB / PLB / ELT 406 | 406.025–406.076 MHz, 400 bps BPSK, 520 ms bursts every ~50 s | Cospas-Sarsat T.001 ✓ (free) | dec406 (F4EHY, GPL?), SDRangel? | M | trivial | 3 (rarely heard; worth having as a background watch) |
 | 121.5 MHz homing tone | 121.5 / 243 MHz | swept-tone AM | — | S (identify) | trivial | tags |
-| rtl_433 ISM sensors | 433.92, 868, 315, 915 MHz | RE, 200+ device protocols | rtl_433 (GPL-2) | XL to match; S/M per family | light | 3: curated subset (weather stations only), §4.3 for TPMS |
+| ISM sensors (OWRX's rtl_433 "ISM") | 433.92, 868, 315, 915 MHz | RE, 200+ device protocols | rtl_433 (GPL-2) — **not used**: ours is clean-room from published descriptions | XL to match; S/M per family | light | **BUILDING (V12, branch `v12-ism`, 2026-10-25)** — `ISM-DECODER.md`: a whole-radio mode, readable lines, 12 families in phase 1; TPMS and fobs under the privacy rule below |
 | LoRa / Meshtastic | 433/868/915 MHz | Semtech CSS, patented; Meshtastic protocol open (GPL-3) | gr-lora, gr-lora_sdr (GPL-3) | L | medium | identify only ⚖ (patent status of a software receiver uncertain) |
 | wM-Bus (meters) | 868.95 MHz | EN 13757-4 $ | rtl-wmbus (BSD-2?) | M | light | 3, ⚖ privacy (consumption reveals occupancy) |
 | P25 / DMR Tier III / TETRA / NXDN trunking control channels | 380–470, 800 MHz | TIA-102 $, ETSI TS 102 361 ✓, EN 300 392 ✓ | OP25 (GPL-3), dsd-fme, sdrtrunk (GPL-3), osmo-tetra (AGPL) | L | light-medium | ⚖ system identity only, admin opt-in (§4.2) |
 | GSM / LTE / 5G | — | — | gr-gsm etc. | — | — | ✗ excluded |
-| Tyre pressure (TPMS), car keys | 315/433 MHz | RE | rtl_433 | — | — | ✗ (vehicle tracking, key capture) |
+| Tyre pressure (TPMS), car keys | 315/433 MHz | RE | rtl_433 | — | — | **IN, privacy-safe (Stuart, 2026-10-25 — overrides the ✗ here):** never an ID or a code; a per-server nickname ("TPMS #2") from a salted in-memory hash. `ISM-DECODER.md` §Privacy |
 
 ### 3.9 Time signals
 
@@ -402,7 +402,7 @@ each satellite decoder needs from them.
 | **Anything encrypted** | Never attempt decryption. A signal flagged as encrypted shows "encrypted" and nothing more. |
 | **Pay-TV, conditional access** | Never. |
 | **Iridium content, mobile phone content** (GSM/LTE/5G), cordless phones | Private communications; illegal to intercept content in the UK and the US. |
-| **Vehicle TPMS, car key fobs** | Vehicle tracking and key capture. |
+| ~~**Vehicle TPMS, car key fobs**~~ | ~~Vehicle tracking and key capture.~~ **Overridden by Stuart, 2026-10-25: included, under a privacy rule that answers both reasons** — TPMS shows make/family, pressure, temperature, battery/flags and NEVER the sensor ID; cars are told apart by a per-server nickname ("Toyota #2") derived from a salted hash held only in server memory (a new salt every restart; never sent, logged or stored). A key fob shows only "Key fob · <make> · button press" (the button when it is not secret) — never the code, rolling or fixed, never raw bits. Fixed-code remotes that could open a door or gate get the fob treatment. The rule holds on public AND private servers and in every API/JSON the server sends. `ISM-DECODER.md` §Privacy. |
 | **TV on servers, TV over the internet** | Declined by Stuart, 2026-10-23 (§4.5): broadcaster retransmission rights, codecs, bandwidth. TV is Android-local only. |
 
 ### 4.2 Digital voice systems: what we may offer without the codec

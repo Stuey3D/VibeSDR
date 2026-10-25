@@ -23,6 +23,9 @@
 //   --adsb FILE while the dongle is tuned within 2 MHz of 1090 MHz, replay FILE (unsigned 8-bit IQ, as
 //               rtl_sdr writes it, at the rate the server asked for — record it at that rate) on a loop:
 //               real aircraft for ADS-B mode on the bench (V12, 2026-10-24).
+//   --ism FILE  while the dongle is tuned within 2 MHz of 434 MHz, replay FILE (unsigned 8-bit IQ at the rate the server
+//               asked for, centred where ISM mode puts the radio) on a loop: sensors for ISM mode on the bench (V12,
+//               2026-10-25 — `test-ism --write-clip` makes one, scripts/test-server-ism.mjs uses it).
 //   --stall-at HZ  a dongle that FALLS OVER at a rate: while the server has asked for HZ or more, send nothing at all
 //               (the socket stays open, the samples just stop) — the boosted-rate guard's bench (vibe_rate_guard.h,
 //               scripts/test-rate-guard.mjs). Below HZ the stream resumes.
@@ -47,6 +50,9 @@ const DAB_IQ = dabArg ? fs.readFileSync(dabArg) : null;
 const adsbArg = (() => { const i = process.argv.indexOf('--adsb'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const ADSB_IQ = adsbArg ? fs.readFileSync(adsbArg) : null;
 if (ADSB_IQ) console.log(`[fake-rtl-tcp] ADS-B clip ${adsbArg}: ${ADSB_IQ.length / 2} samples`);
+const ismArg = (() => { const i = process.argv.indexOf('--ism'); return i >= 0 ? process.argv[i + 1] : ''; })();
+const ISM_IQ = ismArg ? fs.readFileSync(ismArg) : null;
+if (ISM_IQ) console.log(`[fake-rtl-tcp] ISM clip ${ismArg}: ${ISM_IQ.length / 2} samples`);
 if (DAB_IQ) console.log(`[fake-rtl-tcp] DAB clip ${dabArg}: ${(DAB_IQ.length / 2 / 2.048e6).toFixed(2)} s at 2.048 MS/s`);
 
 // Offsets from centre (Hz) and audio modulation for each synthetic station.
@@ -72,6 +78,7 @@ const srv = net.createServer((sock) => {
   let centreHz = 100e6;   // what the client last tuned the "dongle" to
   let dabPos = 0;         // replay position in DAB_IQ (bytes)
   let adsbPos = 0;        // replay position in ADSB_IQ (bytes)
+  let ismPos = 0;         // replay position in ISM_IQ (bytes)
   // WFM stereo generator state (see --wfm)
   let fmPhase = 0, pilotPh = 0, lPh = 0, rPh = 0;
 
@@ -122,7 +129,13 @@ const srv = net.createServer((sock) => {
     if (rate !== RATE) retune();
     const n = Math.max(1024, Math.round(rate * CHUNK_MS / 1000));
     const buf = Buffer.allocUnsafe(n * 2);
-    if (ADSB_IQ && Math.abs(centreHz - 1090e6) <= 2e6) {
+    if (ISM_IQ && Math.abs(centreHz - 434e6) <= 2e6) {
+      for (let k = 0; k < n * 2; ) {
+        const take = Math.min(n * 2 - k, ISM_IQ.length - ismPos);
+        ISM_IQ.copy(buf, k, ismPos, ismPos + take);
+        k += take; ismPos = (ismPos + take) % ISM_IQ.length;
+      }
+    } else if (ADSB_IQ && Math.abs(centreHz - 1090e6) <= 2e6) {
       for (let k = 0; k < n * 2; ) {
         const take = Math.min(n * 2 - k, ADSB_IQ.length - adsbPos);
         ADSB_IQ.copy(buf, k, adsbPos, adsbPos + take);

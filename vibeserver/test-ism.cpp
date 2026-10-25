@@ -201,7 +201,32 @@ static const Reading* findModel(const std::vector<Reading>& v, const std::string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-int main() {
+/** ★ --write-clip <out.u8> <radio centre Hz> <rate>: a few seconds of rtl_tcp u8 IQ holding an Oregon THGR810, a WH1080,
+ *  a TPMS (twice, so it confirms) and a fixed-code remote at known 433 MHz frequencies — the replay for
+ *  scripts/test-server-ism.mjs (fake-rtl-tcp.mjs --ism). */
+static int writeClip(const char* out, double centre, double rate) {
+    std::vector<Sig> s;
+    Sig a{oregonV3(withChecksum(oregonNibbles("F824" "2" "6B" "0" "481" "0" "26" "0"), 17))}; a.offHz = 433.92e6 - centre; a.startS = 0.3; s.push_back(a);
+    Sig b{wh1080("a1820d5a0306004e08d3")}; b.offHz = 433.85e6 - centre; b.startS = 0.9; s.push_back(b);
+    Sig c{tpmsBTx(0x11223344, 88, 18)}; c.offHz = 433.95e6 - centre; c.startS = 1.5; s.push_back(c);
+    Sig c2 = c; c2.startS = 2.1; s.push_back(c2);
+    Sig d{fixedCodeTx(0xA5C3E8)}; d.offHz = 434.00e6 - centre; d.startS = 2.6; s.push_back(d);
+    const auto x = synth(s, rate, 3.4, 0.02, 77);
+    FILE* f = std::fopen(out, "wb");
+    if (!f) return 1;
+    std::vector<uint8_t> u(x.size() * 2);
+    for (size_t i = 0; i < x.size(); ++i) {
+        u[2 * i]     = uint8_t(std::max(0.0f, std::min(255.0f, std::round(x[i].real() * 127.5f + 127.5f))));
+        u[2 * i + 1] = uint8_t(std::max(0.0f, std::min(255.0f, std::round(x[i].imag() * 127.5f + 127.5f))));
+    }
+    std::fwrite(u.data(), 1, u.size(), f);
+    std::fclose(f);
+    printf("wrote %zu samples (%.1f s) centred on %.3f MHz\n", x.size(), x.size() / rate, centre / 1e6);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc == 5 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     printf("test-ism — the V12 ISM decoder\n");
 
     // 1. Published worked examples, straight into the field parsers
