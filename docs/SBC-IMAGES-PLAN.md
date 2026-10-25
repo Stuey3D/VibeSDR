@@ -252,3 +252,71 @@ packages and apps.
    Orange Pi 5 (Ethernet only, lower risk)? Who has which board?
 7. **Naming of the downloads:** `vibeserver-portable-<board>-<date>.img.xz`, beside the Pi's
    `vibeserver-pocket-<arch>-<date>`? The Pi files could be renamed to match at the next release.
+
+## Result: the Orange Pi One build (2026-10-25)
+
+**`vibeserver-portable-orangepione-20261024.img.xz`**: 779 MB xz, 4.08 GB raw. A **8 GB card minimum**, as for the Pi.
+It is in the worktree's `image/sbc/out/` (git-ignored), with its `.sha256`, manifest, package list, partition table and
+the boot-test result. sha256 `96b504103146f33285adba4baf5207b78b1c8f082fd7b9b88469a3a1dfb63a7a`. **Not published.**
+
+- **Base:** `Armbian_26.8.1_Orangepione_trixie_current_6.18.44_minimal.img.xz`. This is Armbian's *stable*
+  (supported) image for the board, not a community nightly. The checksum and Armbian's signature (key
+  `DF00 FAF1 C577 104B 50BF 1D00 93D6 889F 9F0E 78D5`) were both checked.
+- **On it:**
+  - vibeserver **11.0.10-5** armhf from apt stable: the **ARMv7+NEON** build, checked with readelf;
+  - NetworkManager 1.52.1;
+  - avahi 0.8;
+  - overlayroot (Debian);
+  - ffmpeg 7.1;
+  - the High Detail Maps;
+  - Armbian's kernel 6.18.44 and U-Boot `linux-u-boot-orangepione-current` 26.8.1.
+- **Layout:** partition 1 root (`/boot` inside it) from sector 8192, 3.8 GB. Partition 2 `vibedata`, 256 MB. The
+  boot region (MBR boot code and U-Boot) is **byte-identical to Armbian's**, and the root UUID is unchanged.
+- **Build checks, all passed:**
+  - the marker, the hostname `vibeserversetup` and the first-boot config;
+  - enabled: vibeserver, vibeserver-pocket, -data, -seal, NetworkManager and avahi;
+  - off: systemd-networkd and sshd;
+  - netplan uses the NetworkManager renderer;
+  - Armbian's root resize is off;
+  - nmcli, iw, dnsmasq, nft and avahi are present, and so is overlayroot-chroot;
+  - root still carries Armbian's forced-change flag;
+  - the board's own U-Boot package is installed.
+  On a Linux PC it takes about 25 minutes on 2 CPUs.
+- **Emulated boot** (`boot-test.sh`: systemd-nspawn + QEMU, private network, systemd's sandbox switched off **on the
+  throwaway copy only**, because a container nested in Docker cannot set it up):
+  - the front door answered **HTTP 200 on :48000**;
+  - hostname `vibeserversetup`;
+  - vibeserver, vibeserver-pocket and vibeserver-pocket-data active. The pocket service reported "no Wi-Fi device
+    (yet) — answering on any wired link", which is the LAN-only onboarding;
+  - the settings partition mounted (91 KB used of 230 MB);
+  - ssh.service inactive and **nothing listening on TCP 22**. Only systemd's local AF_UNIX ssh sockets exist, which
+    the network cannot reach.
+  - **NetworkManager did not start under emulation.** QEMU's user mode has no netlink ("Cannot open netlink socket:
+    Protocol not supported"), so NetworkManager, and with it Ethernet DHCP and the name on the network, **can only be
+    proved on the board.**
+- **Expected on the board, from the 11.0.10-5 package:** the seal logs "no cmdline.txt" and the root stays
+  **writable**. That is safe, but there is no power-cut hardening until 11.0.11 carries the U-Boot seal; the next
+  Update then seals it.
+- **Found while building**, each fixed and committed:
+  1. the Pi `customise.sh` deletes `/tmp/pocket-files` at its end, which took the Armbian post-step script with it;
+  2. "enabled" was tested with `-e`, which follows systemctl's absolute links into the build host's tree;
+  3. on the host-side checks, `grep -q` under pipefail was swapped for counting;
+  4. the boot test's first runs met nspawn's D-Bus needs and the nested-container sandbox.
+- **Also seen, to check on the board:**
+  - Armbian minimal runs **systemd-resolved** (Raspberry Pi OS Lite does not). It answers LLMNR on 5355. If it also
+    answers mDNS it could compete with avahi for `.local`, so if the name does not resolve on the board, set
+    `MulticastDNS=no`.
+  - `fake-hwclock-load` fails (harmless).
+  - HDMI stays powered. Armbian's switch is a device-tree overlay (later step).
+
+### For Nick (Monday)
+
+Flash with balenaEtcher or Raspberry Pi Imager (Use custom), Ethernet in, power on, and wait about 3 minutes. Then
+open **http://vibeserversetup.local:48000** from a phone or PC on the same network, choose the admin password, then
+run normal setup. Please send:
+
+- whether the name resolved, or whether the box had to be found by its IP;
+- `uname -a`, `free -m` and `systemctl --failed` (over SSH this needs sshd re-enabled, so the HDMI or serial console
+  is easier; the gettys are masked on a Portable, so a console login also needs unmasking first — or simply report
+  what the setup page shows);
+- whether Install updates works once.

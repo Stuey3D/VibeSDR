@@ -16,7 +16,6 @@ IMG="$WD/boot-test.img"; R="$WD/boot-root"; LOOP1=""; LOOP2=""; BINFMT=""
 say() { printf '==> %s\n' "$*"; }
 cleanup() {
   set +e
-  machinectl terminate vibe-boot-test >/dev/null 2>&1
   mountpoint -q "$R" && umount "$R"
   [ -n "$LOOP1" ] && losetup -d "$LOOP1"; [ -n "$LOOP2" ] && losetup -d "$LOOP2"
   [ -n "$BINFMT" ] && [ -e "/proc/sys/fs/binfmt_misc/$BINFMT" ] && echo -1 > "/proc/sys/fs/binfmt_misc/$BINFMT"
@@ -30,6 +29,33 @@ LOOP1="$(losetup -f --show -o $((S1*512)) --sizelimit $((Z1*512)) "$IMG")"
 LOOP2="$(losetup -f --show -o $((S2*512)) --sizelimit $((Z2*512)) "$IMG")"
 mkdir -p "$R"; mount "$LOOP1" "$R"
 ARCH="$(sed -n 's/^ARCH=//p' "$R/etc/armbian-release")"
+# ★★ THIS COPY ONLY (it is deleted afterwards): systemd's per-service sandbox cannot be set up in a container nested in
+#    Docker under QEMU — the first run: "Failed to set up mount namespacing: Invalid argument" for NetworkManager and
+#    vibeserver, and journald failed on its credentials (qemu#1962, systemd#31219, as image/soft66ip found). A drop-in for
+#    EVERY service switches the sandbox off here so the units themselves can be seen running. The card is unchanged.
+mkdir -p "$R/etc/systemd/system/service.d"
+cat > "$R/etc/systemd/system/service.d/zz-boot-test-no-sandbox.conf" <<'EOF'
+[Service]
+ImportCredential=
+LoadCredential=
+ProtectSystem=no
+ProtectHome=no
+PrivateTmp=no
+PrivateDevices=no
+PrivateMounts=no
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectKernelLogs=no
+ProtectControlGroups=no
+ProtectClock=no
+ProtectHostname=no
+ProtectProc=default
+RestrictNamespaces=no
+SystemCallFilter=
+ReadWritePaths=
+ReadOnlyPaths=
+InaccessiblePaths=
+EOF
 if ! chroot "$R" /bin/true 2>/dev/null; then
   case "$ARCH" in
     arm)   Q=/usr/bin/qemu-arm-static; M='\x7f\x45\x4c\x46\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00' ;;
@@ -43,8 +69,8 @@ fi
 #   done by vibeserver-pocket-data through blkid — the loop device is bound in for that.
 say "booting the card's root (emulated $ARCH; a few minutes)"
 LOG="$WD/boot-test.log"
-timeout 900 systemd-nspawn -q --register=no --private-network --machine=vibe-boot-test -bD "$R" \
-  --bind="$LOOP2" --property=DeviceAllow="$LOOP2 rwm" \
+timeout 900 systemd-nspawn -q --register=no --keep-unit --private-network -bD "$R" \
+  --bind="$LOOP2" \
   > "$LOG" 2>&1 &
 NS=$!
 # Wait for the front door, from inside the container's network namespace.
@@ -72,6 +98,10 @@ run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
   echo "--- vibeserver-pocket (journal)"; run journalctl -b -u vibeserver-pocket --no-pager -n 15
   echo "--- vibeserver-pocket-seal"; run journalctl -b -u vibeserver-pocket-seal --no-pager -n 5
   echo "--- vibeserver-pocket-data"; run journalctl -b -u vibeserver-pocket-data --no-pager -n 8
+  echo "--- ssh: units and TCP listeners (port 22 must NOT be listening)"
+  run systemctl list-units --all --no-legend 'ssh*' 'sshd*'
+  run ss -ltnp
+  echo "--- vibeserver (journal)"; run journalctl -b -u vibeserver --no-pager -n 15
   echo "--- failed units"; run systemctl --failed --no-legend
   echo "--- memory"; run free -m
 } | tee "$WD/boot-test-result.txt"
