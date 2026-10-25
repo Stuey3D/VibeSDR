@@ -280,24 +280,27 @@ class Service {
 public:
     ~Service() { stop(); }
 
-    /** Start on `band` with the radio tuned to `hwCentreHz` at `rateHz`. */
-    void start(const Band& band, double hwCentreHz, double rateHz) {
+    /** Start on `band` with the radio tuned to `hwCentreHz` at `rateHz`. `customHz` > 0: a frequency typed in ISM mode
+     *  (an odd device) — the whole capture is searched and the report names that frequency. `keepList`: a band step
+     *  keeps the devices already heard (and the time base, so their "last heard" stays true); entering the mode clears. */
+    void start(const Band& band, double hwCentreHz, double rateHz, double customHz = 0, bool keepList = false) {
         stop();
         std::lock_guard<std::mutex> lk(mtx_);
-        band_ = &band; hwCentre_ = hwCentreHz; rate_ = rateHz; customHz_ = 0;
+        band_ = &band; hwCentre_ = hwCentreHz; rate_ = rateHz; customHz_ = customHz;
         fe_.reset(new FrontEnd(rateHz));
         fe_->setDcGuardHz(15e3);
+        // ★ detect inside the band's own span (+ a margin for drifting sensors), not on the tuner's skirts
+        if (customHz <= 0) {
+            const double mid = band.centreHz - hwCentreHz, half = band.needHz + 40e3;
+            fe_->setUsableHz(mid - half, mid + half);
+        }
         queue_.clear(); queued_ = 0; dropped_ = 0;
-        t0_ = std::chrono::steady_clock::now();
-        cap_.reset(rateHz, 0.0);
-        tracker_.clear();
-        bursts_ = 0; unknown_ = 0;
+        if (!keepList) { t0_ = std::chrono::steady_clock::now(); tracker_.clear(); bursts_ = 0; unknown_ = 0; }
+        cap_.reset(rateHz, now());
         health_ = Health{};
         run_ = true;
         worker_ = std::thread([this] { loop(); });
     }
-    /** A typed exact frequency inside ISM mode (an odd device): the capture follows, the list is kept. */
-    void setCustom(double hz) { std::lock_guard<std::mutex> lk(mtx_); customHz_ = hz; }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; }
         cv_.notify_all();

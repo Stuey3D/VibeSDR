@@ -85,6 +85,8 @@ public:
     static constexpr double kMaxBurstS = 1.6;    ///< a carrier that never stops is cut here (and its floor rises)
     static constexpr double kMatchHz = 80e3;     ///< a detection this close to an open channel belongs to it (FSK's two tones)
     static constexpr int    kMaxChans = 4;
+    static constexpr float  kMinBurstSnrDb = 6.5f; ///< see slice(): noise alone reads ~4.5 dB
+    static constexpr size_t kMaxRuns = 6000;      ///< more transitions than any sensor sends in 1.6 s = noise; not decoded
     float threshDb = 10.0f;                        ///< detection: a bin this far over its own noise floor
 
     explicit FrontEnd(double rateHz) : fft_(kN) {
@@ -112,6 +114,9 @@ public:
     double clipFrac() const { return clipFrac_; }
     /** Ignore detections within this many Hz of the capture centre (the DC remnant). */
     void setDcGuardHz(double hz) { dcGuardHz_ = hz; }
+    /** Detect only between these offsets from the capture centre (the band's own span): the tuner's filter skirts
+     *  outside it are where the floor moves fastest and false bursts cluster (Pi 500 RTL, 433.92, 2026-10-25). */
+    void setUsableHz(double lo, double hi) { useLo_ = lo; useHi_ = hi; }
 
     /** Feed capture samples. `onBurst(const Burst&)` is called on THIS thread when a burst ends. */
     template <class F> void feed(const cf* x, size_t n, F&& onBurst) {
@@ -197,7 +202,8 @@ private:
         for (int j = 0; j < kN; ++j) {
             const int k = (j + kN / 2) % kN;                 // -N/2 .. N/2-1
             const int sk = k < kN / 2 ? k : k - kN;
-            const bool usable = std::abs(sk) < kN / 2 - edge && std::fabs(binFreq(k)) > dcGuardHz_;
+            const bool usable = std::abs(sk) < kN / 2 - edge && std::fabs(binFreq(k)) > dcGuardHz_
+                             && binFreq(k) >= useLo_ && binFreq(k) <= useHi_;
             const float ex = usable && floor_[size_t(k)] > 0 ? pw_[size_t(k)] / floor_[size_t(k)] : 0.0f;
             if (ex > thr) {
                 if (!inG) { cur = G{0, 0, 0, 0, 0}; inG = true; }
@@ -346,6 +352,10 @@ public:
             noise = std::min(noise, std::max(all[size_t(n * 0.10)], 1e-9f));
             b.levelDb = 20.0f * std::log10(std::max(sig, 1e-9f));
             b.noiseDb = 20.0f * std::log10(std::max(noise, 1e-9f));
+            /* ★★ NOISE LOOKS LIKE THIS: the 95th percentile of a smoothed Rayleigh envelope sits ~4.5 dB over its median,
+             *  and that is what every false detection measured on Stuart's Pi 500 RTL at 433.92 (4.4–5.4 dB, ~5 a second
+             *  under VibeAGC's gain). A sensor worth slicing stands clear of it; the weakest test-ism decodes read 7+ dB. */
+            if (b.levelDb - b.noiseDb < kMinBurstSnrDb) return false;
         }
         for (size_t wi = 0; wi < 4; ++wi) {
             const size_t win = kWins[wi];
@@ -368,6 +378,7 @@ public:
             for (size_t i = 0; i < n; ++i) { if (!st && sm[i] > hi) st = true; else if (st && sm[i] < lo) st = false; on[i] = st; }
             Runs r = runsOf(on, us, false, int(win / 2) + 2);
             if (r.empty()) continue;
+            if (r.size() > kMaxRuns) { if (wi == 0) return false; continue; }
             if (on0.empty()) on0 = on;                      // the finest usable slice marks where the carrier is
             b.ookAll.push_back(std::move(r));
         }
@@ -450,7 +461,7 @@ public:
 private:
     int pre_ = 1, preCnt_ = 0, chanM_ = 1, hop_ = kN, sinceFft_ = 0;
     cf preAcc_{0, 0};
-    double w_ = 0, dcGuardHz_ = 0, noiseDb_ = -99, clipFrac_ = 0;
+    double w_ = 0, dcGuardHz_ = 0, noiseDb_ = -99, clipFrac_ = 0, useLo_ = -1e12, useHi_ = 1e12;
     int clipWin_ = 0, clipFrames_ = 0;
     float blockPeak_ = 0;
     std::vector<cf> ring_;
