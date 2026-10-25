@@ -143,16 +143,28 @@ nice -n 19 xz -dc -T2 "$BASE_XZ" > "$IMG"
 [ "$(sfdisk -d "$IMG" | grep -c 'start=' || true)" = 1 ] || die "expected ONE partition (an Armbian minimal image)"
 S1="$(sfdisk -d "$IMG" | sed -n 's/.*start= *\([0-9]*\),.*/\1/p' | head -1)"
 [ -n "$S1" ] && [ "$S1" -gt 16 ] || die "unexpected partition layout"
-# ★ The boot loader is OUTSIDE the partition: MBR boot code (bytes 0-445) and U-Boot (sector 1 up to the partition).
+# ★★ MBR OR GPT (2026-10-25: the Rockchip images — Orange Pi 5, ROCK 5B, Radxa ZERO 3 — are GPT; the first 11.0.11 run
+#    assumed MBR and sfdisk refused partition 2: "Failed to add #2 partition: Invalid argument", because growing or
+#    cutting the file leaves GPT's BACKUP header where the old end was). On GPT the header and entries (sectors 1-33) are
+#    the partition table itself and change with it, and a backup copy lives in the last 33 sectors of the disk.
+LABEL_TYPE="$(sfdisk -d "$IMG" | sed -n 's/^label: *//p' | head -1)"
+case "$LABEL_TYPE" in dos|gpt) ;; *) die "unexpected partition table '$LABEL_TYPE'" ;; esac
+FIRST_BOOT_SECTOR=1; [ "$LABEL_TYPE" = gpt ] && FIRST_BOOT_SECTOR=34
+GPT_TAIL=0; [ "$LABEL_TYPE" = gpt ] && GPT_TAIL=33
+# ★ GPT's backup header to the end of the file as it now is (after every resize of the file).
+gpt_fix() { [ "$LABEL_TYPE" = gpt ] && sfdisk -q --relocate gpt-bk-std "$IMG" 2>/dev/null; true; }
+# ★ The boot loader is OUTSIDE the partitions: the MBR's boot code (bytes 0-445; on GPT the protective MBR) and U-Boot
+#   from sector 1 (MBR) or 34 (GPT, after the table) up to the first partition.
 boot_region_sums() {
   { dd if="$1" bs=1 count=446 status=none | sha256sum | cut -d' ' -f1
-    dd if="$1" bs=512 skip=1 count=$(( S1 - 1 )) status=none | sha256sum | cut -d' ' -f1; } | paste -sd' '
+    dd if="$1" bs=512 skip=$FIRST_BOOT_SECTOR count=$(( S1 - FIRST_BOOT_SECTOR )) status=none | sha256sum | cut -d' ' -f1; } | paste -sd' '
 }
 BOOT_BEFORE="$(boot_region_sums "$IMG")"
-say "boot region (MBR code, sectors 1-$((S1 - 1))): $BOOT_BEFORE"
+say "boot region ($LABEL_TYPE; MBR code, sectors $FIRST_BOOT_SECTOR-$((S1 - 1))): $BOOT_BEFORE"
 
 # ── 2. Working room ────────────────────────────────────────────────────────────────────────────────────────────────
 truncate -s "+${GROW_MIB}M" "$IMG"
+gpt_fix
 echo ', +' | sfdisk -q --no-reread -N 1 "$IMG"
 loop_p1
 e2fsck -fy "$LOOP" >/dev/null || [ $? -le 1 ] || die "e2fsck failed"
@@ -285,16 +297,18 @@ losetup -d "$LOOP"; LOOP=""
 N1=$(( NEWROOT / 512 ))
 echo "$S1,$N1" | sfdisk -q --no-reread -N 1 "$IMG"
 S2=$(( (S1 + N1 + 8191) / 8192 * 8192 )); Z2=$(( DATA_MIB * 1024 * 1024 / 512 ))
-[ $(( (S2 + Z2) * 512 )) -le "$(stat -c %s "$IMG")" ] || die "LAYOUT: root + settings do not fit the working file — raise GROW_MIB"
-echo "$S2,$Z2,83" | sfdisk -q --no-reread --append "$IMG"
+S3=$(( (S2 + Z2 + 8191) / 8192 * 8192 )); Z3=$(( SETUP_MIB * 1024 * 1024 / 512 ))
+[ $(( (S3 + Z3 + GPT_TAIL) * 512 )) -le "$(stat -c %s "$IMG")" ] || die "LAYOUT: root + settings + FAT do not fit the working file — raise GROW_MIB"
+# ★ Cut the file to its final size FIRST (plus GPT's backup area), move GPT's backup header there, then add partitions.
+truncate -s $(( (S3 + Z3 + GPT_TAIL) * 512 )) "$IMG"
+gpt_fix
+T_LINUX=83; T_FAT=c; [ "$LABEL_TYPE" = gpt ] && { T_LINUX=L; T_FAT=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7; }
+echo "$S2,$Z2,$T_LINUX" | sfdisk -q --no-reread --append "$IMG"
 # ★★ (Stuart, 2026-10-25) The FAT partition, after the settings: a board card's /boot is ext4, which Windows and macOS
 #    cannot write, so the forget-the-Wi-Fi file had nowhere a card reader could put it. vibeserver-pocket-data mounts
 #    LABEL=VIBESETUP at /run/vibeserver-setup and vibeserver-pocket acts on vibeserver-reset-wifi there (11.0.11).
 #    ★ AFTER the settings partition, so root stays partition 1 and the settings the partition after root (the repair's rule).
-S3=$(( (S2 + Z2 + 8191) / 8192 * 8192 )); Z3=$(( SETUP_MIB * 1024 * 1024 / 512 ))
-[ $(( (S3 + Z3) * 512 )) -le "$(stat -c %s "$IMG")" ] || die "LAYOUT: root + settings + FAT do not fit the working file — raise GROW_MIB"
-echo "$S3,$Z3,c" | sfdisk -q --no-reread --append "$IMG"
-truncate -s $(( (S3 + Z3) * 512 )) "$IMG"
+echo "$S3,$Z3,$T_FAT" | sfdisk -q --no-reread --append "$IMG"
 LOOP="$(losetup -f --show -o $(( S2 * 512 )) --sizelimit $(( Z2 * 512 )) "$IMG")"
 mkfs.ext4 -q -F -L vibedata "$LOOP"
 losetup -d "$LOOP"; LOOP=""
@@ -335,7 +349,7 @@ losetup -d "$LOOP"; LOOP=""
 [ "$U2" = "$ROOT_UUID" ] || die "root UUID changed ($ROOT_UUID -> $U2): armbianEnv.txt would not find it"
 BOOT_AFTER="$(boot_region_sums "$IMG")"
 [ "$BOOT_BEFORE" = "$BOOT_AFTER" ] || die "the boot region changed: $BOOT_BEFORE -> $BOOT_AFTER"
-say "boot region unchanged; layout: root $(( NEWROOT / 1024 / 1024 )) MB at $S1, vibedata $DATA_MIB MB at $S2, VIBESETUP (FAT) $SETUP_MIB MB at $S3; $(( (S3 + Z3) / 2048 )) MB raw"
+say "boot region unchanged; layout: root $(( NEWROOT / 1024 / 1024 )) MB at $S1, vibedata $DATA_MIB MB at $S2, VIBESETUP (FAT) $SETUP_MIB MB at $S3; $(( (S3 + Z3 + GPT_TAIL) / 2048 )) MB raw, $LABEL_TYPE"
 sfdisk -d "$IMG" > "$OUT/$OUT_NAME.partition-table.txt"
 
 # ── 8. Compress ────────────────────────────────────────────────────────────────────────────────────────────────────
