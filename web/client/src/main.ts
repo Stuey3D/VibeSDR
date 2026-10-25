@@ -3274,8 +3274,13 @@ function renderFrame(frameTs: number) {
   guard('web-render', 'overlays', updateViewOverlays);
   // Passband drives the acrylic sidebands — so bandwidth is something you SEE
   // sitting on the signal, not a number you read.
-  wf.filterLow = spec.bandwidthLow;
-  wf.filterHigh = spec.bandwidthHigh;
+  /* ★★ THE CW SKIMMER'S VFO IS ITS SEGMENT (Stuart, 2026-10-25: "the VFO doesnt actually show me where i am tuning … the
+   *  VFO should grow to 96KHz and be tunable"). The skimmer decodes cwWidth Hz centred on the dial, so that is the box
+   *  drawn — drawn only, never sent: the listener's own CW passband is untouched and comes back when the skimmer closes.
+   *  Tuning moves the dial as ever, and the server's skimmer follows it. */
+  const skim = activeDec === 'cw' && cwSkim;
+  wf.filterLow = skim ? -cwWidth / 2 : spec.bandwidthLow;
+  wf.filterHigh = skim ? cwWidth / 2 : spec.bandwidthHigh;
   const measuring = isPerf();
   const t0 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL HOLD IS OFF. It froze the display while tuning (Stuart, 2026-08-10: "when I
