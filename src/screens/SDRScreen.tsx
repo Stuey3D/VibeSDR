@@ -59,6 +59,8 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioCaps } from '../services/UberSDRClient';
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
+import IsmPanel from '../components/IsmPanel';
+import { ismNeighbours, type IsmCap, type IsmReport } from '../services/ism';
 import AdsbPanel from '../components/AdsbPanel';
 import DoorSpectrogram from '../components/DoorSpectrogram';
 import { RecElapsed } from '../components/RecElapsed';
@@ -145,7 +147,7 @@ import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide } from '../util
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
-import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
+import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/AudioPlayer';
 import LocalAudioPlayer, { reviveLocalAudio } from '../components/LocalAudioPlayer';
 import { connectionRefreshPlan, canRefreshConnection, restartAudioOnRegister } from '../services/connectionRefresh';
 import LocalHardwarePanel from '../components/LocalHardwarePanel';
@@ -740,6 +742,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabCapable(false);
     setCwCapable(false);
     setAdsbCap(undefined);
+    setIsmCap(undefined);
     setAntBands(null);
     if ((route.params.serverType ?? 'ubersdr') !== 'vibeserver') return;
     fetchOccupancy(connectBase.replace(/\/+$/, ''))
@@ -747,6 +750,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (dead) return;
         setDabCapable(o?.dab === true);
         setCwCapable(o?.cw === true);   // ★ V12 CW — the same per-radio answer
+        setIsmCap(o?.ism);              // ★ V12 ISM — and the bands THIS radio reaches
         /* ★ V12 ADS-B, from the SAME per-radio answer and for the same reason (the door owns no radio). Unlike DAB a
          *  refusal is KEPT — the control is drawn disabled with the server's words (adsbTypes parseAdsbCapability). */
         setAdsbCap(o?.adsb);
@@ -2434,6 +2438,37 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => { AsyncStorage.getItem('lsv_adsb_tall').then(v => { if (v === '1') setAdsbTall(true); }).catch(() => {}); }, []);
   const onAdsbTall = useCallback((v: boolean) => { setAdsbTall(v); AsyncStorage.setItem('lsv_adsb_tall', v ? '1' : '0').catch(() => {}); }, []);
   useEffect(() => { adsbOnRef.current = adsbOn; }, [adsbOn]);
+  /* ── ISM on a VibeServer (V12, docs/v12/ISM-DECODER.md) — DAB's shape: the waterfall stays live (the bursts on it are half
+   *  the point), the tune keys / drum / pad step BANDS (ismStep), an exact frequency goes through the frequency box, zoom and
+   *  the view are held, and the device list is a box over the lower waterfall (IsmPanel). ★★ The SERVER owns the band (the
+   *  shared-dial contract): a press sends a step, the next report says where the radio is. ★ Offered only where the
+   *  radio's vibeserver.json says so (ismCap: absent = no control, an HF+ reaches no band; ok false = greyed with why). */
+  const [ismCap, setIsmCap] = useState<IsmCap | undefined>(undefined);
+  const [ismOn, setIsmOn] = useState(false);
+  const ismOnRef = useRef(false);
+  const [ismReport, setIsmReport] = useState<IsmReport | null>(null);
+  const [ismError, setIsmError] = useState<string | undefined>(undefined);
+  const [ismBoxOpen, setIsmBoxOpen] = useState(false);
+  const [ismTall, setIsmTall] = useState(false);
+  useEffect(() => { AsyncStorage.getItem('lsv_ism_tall').then(v => { if (v === '1') setIsmTall(true); }).catch(() => {}); }, []);
+  const onIsmTall = useCallback((v: boolean) => { setIsmTall(v); AsyncStorage.setItem('lsv_ism_tall', v ? '1' : '0').catch(() => {}); }, []);
+  useEffect(() => { ismOnRef.current = ismOn; }, [ismOn]);
+  /** ★ Everything ISM leaves behind, in one place — EXIT, the key, a mode pick, the server's ism_off. */
+  const ismUiOff = useCallback((keepBox = false) => {
+    ismOnRef.current = false;
+    setIsmOn(false); setIsmReport(null);
+    if (!keepBox) { setIsmBoxOpen(false); setIsmError(undefined); }
+  }, []);
+  /* ★★ V12 QUIET — ADS-B lets go of the audio output while it runs (the AirPods followed silence; the web's syncAudioQuiet,
+   *  1f0b204a). One rule for every mode with nothing to hear — see audioQuiet. Released when the screen goes. */
+  const quietSaid = useRef(false);
+  const audioQuiet = adsbOn || ismOn;
+  useEffect(() => {
+    if (audioQuiet === quietSaid.current) return;
+    quietSaid.current = audioQuiet;
+    setNativeQuiet(audioQuiet, audioQuiet ? (adsbOn ? 'ADS-B' : 'ISM') : 'left ADS-B / ISM');
+  }, [audioQuiet]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { if (quietSaid.current) setNativeQuiet(false, 'receiver closed'); }, []);
   useEffect(() => { adsbViewOpenRef.current = adsbViewOpen; }, [adsbViewOpen]);
   /** ★ Everything ADS-B leaves behind, in one place — every door out (EXIT, the key, a mode pick, the server's
    *  adsb_off, a lapsed hold) ends here, so none can leave a stale table on the wrist. */
@@ -2446,7 +2481,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  `status.mode` on the demod it came from exactly as DAB does — so the mode string alone cannot say. Every
    *  VFO path that asked isWholeProfileMode asks this instead (one rule, one reader); the client refuses too. */
   const noTuneNow = (c: { getStatus(): { mode: unknown } }): boolean =>
-    adsbOnRef.current || isWholeProfileMode(String(c.getStatus().mode));
+    adsbOnRef.current || ismOnRef.current || isWholeProfileMode(String(c.getStatus().mode));
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   // ★ `name` is the STABILISED name (see psStab); `psRaw` is the PS exactly as it arrived, for the
@@ -2635,6 +2670,48 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (leave) c?.adsb?.(false);
     adsbUiOff();
   }, [adsbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** ★★ ENTER OR LEAVE ISM — the key in the demodulator sheet (toggleAdsb's rules). Entering opens the box AT ONCE; the
+   *  SERVER tunes (where ISM last was, else the band nearest its location) and leaves DAB / ADS-B itself. */
+  const toggleIsm = useCallback(() => {
+    const c = client.current;
+    if (!c?.ism) return;
+    if (ismOnRef.current) {
+      if (!ismBoxOpen) { setIsmBoxOpen(true); return; }
+      if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
+      c.ism(false);
+      ismUiOff();
+      return;
+    }
+    if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to the band
+    setIsmError(undefined); setIsmReport(null); setIsmBoxOpen(true);
+    c.ism(true);
+    ismOnRef.current = true;
+    setIsmOn(true);
+  }, [ismUiOff, ismBoxOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** EXIT ISM (the box's key): out of the mode; on a locked dial only the box is put away (exitAdsb's rule). */
+  const exitIsm = useCallback(() => {
+    const c = client.current;
+    const leave = ismOnRef.current;
+    if (leave && askLocked(dialStateRef.current)) { setIsmBoxOpen(false); askGate(); return; }
+    if (leave) c?.ism?.(false);
+    ismUiOff();
+  }, [ismUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★ One band up or down — the box's arrows and every tune gesture while in ISM. Clamped here as the server clamps, so
+   *  a press at an end sends nothing (no dead send). */
+  const ismReportRef = useRef<IsmReport | null>(null);
+  ismReportRef.current = ismReport;
+  const ismCapRef = useRef<IsmCap | undefined>(undefined);
+  ismCapRef.current = ismCap;
+  const ismStep = useCallback((d: number) => {
+    const c = client.current;
+    if (!c?.ism || !ismOnRef.current || !d) return;
+    const n = ismNeighbours(ismCapRef.current, ismReportRef.current);
+    if ((d < 0 && !n.prev) || (d > 0 && !n.next)) return;
+    if (askGate()) return;
+    markInteract();
+    c.ism(true, { step: d > 0 ? 1 : -1 });
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ★ A DAB bookmark: the multiplex AND the service, in one go — the web client's dabGoTo.
    *  Enters DAB if needed, retunes if the block differs, otherwise just switches service. */
@@ -4094,6 +4171,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       stepDabBlock(dir === 'right' ? 1 : -1);   // ★ coalesced — see dabStepper
       return;
     }
+    if (ismOnRef.current) { ismStep(dir === 'right' ? 1 : -1); return; }   // ★ V12 ISM: a band
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (noTuneNow(c)) return;
@@ -5348,6 +5426,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     closeDecoder();
     setSelDecoder(null);
   }, [closeDecoder, stopSpots]);
+  /* ★ V12 ISM: a band has no audio to decode and its box sits where the decoder box does — entering ISM (ours, or a report
+   *  saying somebody else put the radio there) puts a running decoder or the spots away. */
+  useEffect(() => {
+    if (ismOn && (activeDecRef.current || spotsKindRef.current)) dismissDecoderPanel();
+  }, [ismOn, dismissDecoderPanel]);
 
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
@@ -5926,6 +6009,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (!adsbOnRef.current) { adsbOnRef.current = true; setAdsbViewOpen(true); setAdsbError(undefined); }
         setAdsbOn(true);
         setAdsbReport(r);
+      },
+      /* ★ V12 ISM: a report (on — whoever put the receiver there: arriving MEANS ISM is on), the server's ism_off (null), or a
+       *  refusal (the reason in the box, CLOSE puts it away). */
+      onIsm: (r, why) => {
+        if (destroyed.current) return;
+        if (why) { ismUiOff(true); setIsmError(why); setIsmBoxOpen(true); return; }
+        if (!r) { ismUiOff(); return; }
+        if (!ismOnRef.current) { ismOnRef.current = true; setIsmBoxOpen(true); setIsmError(undefined); }
+        setIsmOn(true);
+        setIsmReport(r);
       },
       // ★★★ THE RADIO IS THE AUTHORITY ON ITS OWN GAIN, and until the server sent this the app had
       //     no way to know it — so the slider showed a value of its own and the owner's resting
@@ -8092,6 +8185,13 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★★ Returns true when it consumed the gesture. */
   const dabPendingPx = useRef(0);
   const dabDrumStep = useCallback((pxDelta: number): boolean => {
+    // ★ V12 ISM: one band per 48 px, through ismStep (clamped there).
+    if (ismOnRef.current && !dabOnRef.current) {
+      dabPendingPx.current += pxDelta;
+      const n = Math.trunc(dabPendingPx.current / 48);
+      if (n) { dabPendingPx.current -= n * 48; ismStep(n > 0 ? 1 : -1); }
+      return true;
+    }
     if (!dabOnRef.current) return false;
     dabPendingPx.current += pxDelta;
     const PX_PER_BLOCK = 48;
@@ -8287,6 +8387,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       stepDabBlock(dir);
       return;
     }
+    // ★ V12 ISM: the same rule — the band IS the tuning, so "next" is the next band (docs/v12/ISM-DECODER.md).
+    if (ismOnRef.current) { ismStep(dir); return; }
     const c = client.current; if (!c) return;
     if (noTuneNow(c)) return;   // DAB/ADS-B: nothing to tune
     const s = stepRef.current; if (!(s > 0)) return;
@@ -8453,7 +8555,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  the multiplex out — the web client's own fault on 2026-09-07 ("the spectrum can be clicked
      *  which knocks the multiplex tuning off"). The client refuses it; this stops the UI acting as
      *  though it worked, which is the difference between a locked control and a broken one. */
-    if (dabOnRef.current || adsbOnRef.current) return;   // ★ ADS-B: the server owns the view as well
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current) return;   // ★ ADS-B: the server owns the view as well
     markInteract();
     const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     const a = wfZoomAcc.current;
@@ -8476,7 +8578,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
     if (askGate()) return;                 // ★★ ask before tuning — see askGate
-    if (dabOnRef.current || adsbOnRef.current) return;   // ★ see wfZoomBy — a tap is a view move too
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current) return;   // ★ see wfZoomBy — a tap is a view move too
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (noTuneNow(c)) return;
@@ -8499,7 +8601,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onMode = useCallback((m: SDRMode) => {
     const c = client.current; if (!c) return;
     // ★★ ask before tuning; re-picking changes nothing — except in ADS-B, where any pick gives the radio back
-    if ((m !== c.getStatus().mode || adsbOnRef.current) && askGate()) return;
+    if ((m !== c.getStatus().mode || adsbOnRef.current || ismOnRef.current) && askGate()) return;
     /* ★★★ CHOOSING ANOTHER DEMODULATOR IS HOW YOU LEAVE DAB. DAB is a MODE the phone enters, not
      *  a demodulator the server switches to — so while it is on, the server refuses an ordinary
      *  mode change and this sent one anyway. The only exit was the Exit button ON the DAB screen,
@@ -8525,6 +8627,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (adsbOnRef.current) {
       c.adsb?.(false);
       adsbUiOff();
+    }
+    // ★ …and of ISM, by the same door (the server ignores a mode change while it holds the band).
+    if (ismOnRef.current) {
+      c.ism?.(false);
+      ismUiOff();
     }
     userTuneSeq.current++;   // ★ a PERSON asked (mode) — see the note on userTuneSeq
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
@@ -8616,7 +8723,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const key = `${userTuneSeq.current}|${airStepSeq.current}`;
     if (key === airPbSeen.current) return;
     airPbSeen.current = key;
-    if (dabOnRef.current || adsbOnRef.current) return;
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current) return;
     const pb = airbandPassband(status.frequency, String(status.mode), airChannelNow,
                                status.bandwidthLow, status.bandwidthHigh);
     if (pb) onFilterBoth(pb[0], pb[1]);
@@ -8875,6 +8982,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onTuneHz = useCallback((hz: number, mode?: SDRMode) => {
     const c = client.current; if (!c) return;
     if (askGate()) return;   // ★★ ask before tuning — see askGate
+    /* ★ V12 ISM: a frequency typed (or a bookmark) puts the CAPTURE on it for an odd device — {"type":"ism","on":1,"hz":N};
+     *  the server keeps the list. A mode with it means a different demodulator: that leaves ISM (onMode's door) first. */
+    if (ismOnRef.current && !mode) { markInteract(); c.ism?.(true, { hz }); return; }
+    if (ismOnRef.current && mode) { c.ism?.(false); ismUiOff(); }
     markInteract();
     const [loHz, hiHz] = tuneBoundsOf(c);
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
@@ -11076,7 +11187,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB and ADS-B, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB, ADS-B and ISM, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz) where the server has it.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
@@ -11128,7 +11239,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
     { id: 'schemes', title: 'Pick your control scheme',
-      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named above them.',
+      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named above them. In ISM every step of the tuning moves one band.',
       target: tourRef('menuBtn'), illustration: schemeMock },
     { id: 'keys', title: 'A keyboard or controller drives it all',
       body: 'Pair a keyboard — to an iPhone, iPad or Mac — and the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom. A game controller does the same, on Android too: the D-pad moves the highlight, SELECT shows a guide to every button, holding START switches between face buttons and the two sticks, and Enter on a text box opens an on-screen keyboard it can type with. More in the settings cog, under KEYBOARD and CONTROLLER GUIDE.',
@@ -12069,7 +12180,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           frequency={status.frequency}
           /* ★ In ADS-B the mode box reads ADSB, not the demod the receiver will come back to (status.mode stays on it,
            *  as in DAB) — the OWRX ADS-B profile already reads this way (constants/modeBox composeModeLabel). */
-          mode={adsbOn ? ('adsb' as SDRMode) : status.mode}
+          mode={adsbOn ? ('adsb' as SDRMode) : ismOn ? ('ism' as SDRMode) : status.mode}
           step={step}
           connected={connected}
           bottomInset={0}
@@ -12422,6 +12533,25 @@ export default function SDRScreen({ route, navigation }: Props) {
           on={adsbOn}
           onExit={exitAdsb}
           tall={adsbTall} onTall={onAdsbTall}
+          topLimit={boxTopLimit} topSafe={boxTopSafe}
+          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+        />
+        </PanelBoundary>
+      )}
+      </RotateFade>
+      {/* ★★ V12 THE ISM BOX — over the lower waterfall, the waterfall live above it (IsmPanel). */}
+      <RotateFade>
+      {ismBoxOpen && (
+        <PanelBoundary name="ISM" onClose={() => setIsmBoxOpen(false)}>
+        <IsmPanel
+          report={ismReport}
+          error={ismError}
+          on={ismOn}
+          onExit={exitIsm}
+          onStep={ismStep}
+          canDown={!!ismNeighbours(ismCap, ismReport).prev}
+          canUp={!!ismNeighbours(ismCap, ismReport).next}
+          tall={ismTall} onTall={onIsmTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
         />
@@ -12850,6 +12980,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★★ V12 CW — the server's own decoder and skimmer, only where its vibeserver.json says `"cw": true` (an older
            *  server, or the owner's switch off, draws no key: AGENTS.md, no dead control). */
           cwAvail: cwCapable && !!(client.current as any)?.isVibe,
+          /* ★★ V12 ISM, beside ADS-B — the same three states (absent / greyed with the server's reason / live). */
+          ismAvail: ismCap !== undefined || ismOn,
+          ismWhy: !ismOn && ismCap && !ismCap.ok ? ismCap.why : undefined,
+          ismOn,
+          onIsm: () => {
+            markInteract();
+            if (!ismOnRef.current && ismCap && !ismCap.ok) { appAlert('ISM unavailable', ismCap.why || 'ISM is not available on this receiver'); return; }
+            setModeSelOpen(false);
+            toggleIsm();
+          },
           cwSkim, cwWidth, onCwView, onCwWidth,
         } : null}
         transcribeControls={txCaps?.available ? {

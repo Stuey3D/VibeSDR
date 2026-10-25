@@ -8,7 +8,7 @@ Branch `v12-cw` (worktree `~/VibeSDR-cw`). Engine: `android/app/src/main/cpp/dec
 `vibe_cw_run.h` (one CW run inside a decoder host), `vibe_decoder_host.h` (ext `cw` and `cwskim`), `vibe_wide_tap.h`
 (a skimmer's slice on a one-pipeline radio), `local_sdr_shim.cpp`, background decoding + gallery in `vibe_bgdecode*.h`.
 Web: `web/client/src/decoders.ts`, `main.ts`, `index.html` (the CW button, ONE SIGNAL / SKIMMER, the list and spots),
-`adminBg.ts` (the admin line), the gallery's CW chip. App: the gallery's CW chip (`src/components/GalleryOverlay.tsx`).
+`adminBg.ts` (the admin line), the gallery's CW chip. App: the gallery's CW chip (`src/components/GalleryOverlay.tsx`), and since 2026-10-25 the whole CW panel — Mode → CLIENT DECODERS → CW (`src/services/cwList.ts`, `src/components/CwView.tsx`, `DecoderClient` 'cw', `scripts/test_cw_list.ts`).
 
 Built from ITU-R M.1677 (the code and its timing) and textbook DSP. No other decoder's source was read.
 

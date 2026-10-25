@@ -5,6 +5,7 @@ import { cleanText } from '../utils/safeText';
 import { cleanLines } from '../utils/cleanLines';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { parseAdsbCapability, type AdsbCap } from './adsbTypes';
+import { parseIsmCapability, type IsmCap } from './ism';
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 export type Mode = SDRMode; // alias
@@ -435,6 +436,9 @@ export interface ServerOccupancy {
   /** ★ V12 CW (docs/v12/CW-SKIMMER.md): this server runs its own CW decoder and skimmer ('cw' / 'cwskim'). False or
    *  absent (an older server, or the owner switched CW off) = no CW key — a decoder the server lacks is a dead control. */
   cw?: boolean;
+  /** ★ V12 ISM (docs/v12/ISM-DECODER.md): undefined = no control (an HF+ reaches no ISM band, an older server);
+   *  `ok: false` = greyed with the reason; `bands` = the bands THIS radio reaches. */
+  ism?: IsmCap;
   /** ★ Raw IQ out: the owner's policy and the slots. Absent on an older server. */
   rawIq?: 'off' | 'local' | 'public';
   rawIqMax?: number;
@@ -484,6 +488,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       dab:       j.dab === true,
       adsb:      parseAdsbCapability(j),
       cw:        j.cw === true,
+      ism:       parseIsmCapability(j),
     };
   } catch { return null; }
   finally { clearTimeout(t); }

@@ -288,6 +288,9 @@ interface ModeSelectorProps {
     galleryAvail?: boolean; onGallery?: () => void;
     /** ★★ V12 CW — a VibeServer's own decoder: ONE SIGNAL (the passband) or SKIMMER (a 24/48/96 kHz segment centred on
      *  the dial). Only where the server's vibeserver.json says `"cw": true`; its settings drop in under the row. */
+    /** ★★ V12 ISM — the same kind of key as ADS-B (a whole-radio mode) and the same three states: absent (`ismAvail`
+     *  false — an HF+ reaches no band), dimmed with the server's reason under the row (`ismWhy`), live. */
+    ismAvail?: boolean; ismWhy?: string; ismOn?: boolean; onIsm?: () => void;
     cwAvail?: boolean; cwSkim?: boolean; cwWidth?: number;
     onCwView?: (skim: boolean) => void; onCwWidth?: (w: number) => void;
     /** ★★★ THE SLUGS THIS RECEIVER PUBLISHES (`/api/extensions`), or null for "never asked".
@@ -374,7 +377,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /* ★ ADS-B is the same kind of key as DAB, so it goes wherever DAB goes — together in the grid, or together in
    *  the decoders row. */
   const adsbShown = !!decoderControls?.adsbAvail;
-  const wholeAvail = !!decoderControls?.dabAvail || adsbShown;
+  const ismShown = !!decoderControls?.ismAvail && !isBlocked('ism');
+  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown;
   const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !cwShown;
   const decSectionShown = !!decoderControls && !dabInGrid
     && (clientDecs.length > 0 || advRdsShown || wholeAvail || cwShown);
@@ -450,6 +454,36 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       )}</NavItem>
     );
   };
+  /* ★★ V12 THE ISM KEY — ADS-B's key, for ISM (one definition for the grid and the decoders row). */
+  const ismOff = !!decoderControls?.ismWhy;
+  const ismLit = !!decoderControls?.ismOn;
+  const ismKey = (inGrid: boolean) => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="ism" onPress={() => dc.onIsm?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="ISM" active={ismLit} pip
+          onPress={() => dc.onIsm?.()} fontSize={inGrid ? 13 : 12} style={ismOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={ismOff ? `ISM, unavailable: ${dc.ismWhy}` : 'ISM sensors'}
+        style={[st.btn, { borderColor: ismLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+                ismLit && { backgroundColor: decBg },
+                ismOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onIsm?.()} activeOpacity={0.8}>
+        <Text numberOfLines={1}
+              style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: ismLit ? dec : t.btnText }]}>
+          ISM
+        </Text>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
+  const ismWhyLine = ismOff ? (
+    <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+      {`ISM unavailable — ${decoderControls!.ismWhy}`}
+    </Text>
+  ) : null;
   // ★ The reason, in the server's own words, where it can be read without pressing anything.
   const adsbWhyLine = adsbOff ? (
     <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
@@ -799,8 +833,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             )}</NavItem>
           )}
           {dabInGrid && adsbShown && adsbKey(true)}
+          {dabInGrid && ismShown && ismKey(true)}
         </View></NavRow>
         {dabInGrid && adsbShown && adsbWhyLine}
+        {dabInGrid && ismShown && ismWhyLine}
 
         {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
             LEFT to widen the lower sideband, the RIGHT one RIGHT to widen the
@@ -1009,6 +1045,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 )}</NavItem>
               )}
               {adsbShown && adsbKey(false)}
+              {ismShown && ismKey(false)}
               {decoderControls.galleryAvail && (
                 <NavItem key="gallery" onPress={() => decoderControls.onGallery?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label="GALLERY" active={false}
@@ -1044,6 +1081,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               {txShown && transcribeKey}
             </View></NavRow>
             {adsbShown && adsbWhyLine}
+            {ismShown && ismWhyLine}
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                                        : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>

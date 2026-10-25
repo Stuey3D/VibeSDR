@@ -385,6 +385,8 @@ if node --no-warnings scripts/test_transcribeOrder.ts; then pass=$((pass+1)); el
 if node --no-warnings scripts/test_recordBuffer.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 CW (cwList.ts): the app's CW box against the web's — order, confidence colours, spots, the scroll pin, the segment drawn.
 if node --no-warnings scripts/test_cw_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 ISM (src/services/ism.ts): the app's ISM against the web's — sanitiser, lines in every unit, status, filter, capability.
+if npx tsx scripts/test_ism_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the iOS/Mac ring + the prefix-then-live writer order (macOS only: needs xcrun swiftc).
 if command -v xcrun >/dev/null 2>&1; then if bash scripts/test_recordBuffer_swift.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi; fi
 # ★★★ V12 ICOM, CLIENT SIDE (icomRadio.ts): hwinfo.radio + the status line as the server builds them, the hide list against the

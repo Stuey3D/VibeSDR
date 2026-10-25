@@ -10,6 +10,7 @@
  */
 import type { DabState } from './dabTypes';
 import type { AdsbReport } from './adsbTypes';
+import type { IsmReport } from './ism';
 import type { AskState } from './dialChat';
 
 /** The one sentence a refused-as-too-old client shows; SDRScreen matches on it to add the button. */
@@ -391,6 +392,9 @@ export interface SDRCallbacks {
   /** ★ V12 ADS-B, VIBESERVER-ONLY like onDab: a report about once a second while the receiver is in
    *  the mode (its arrival MEANS it is on — open the box); null = it ended; `err` = the refusal. */
   onAdsb?:      (r: AdsbReport | null, err?: string) => void;
+  /** ★ V12 ISM, VIBESERVER-ONLY: a report about once a second while the receiver is in ISM (its arrival MEANS ISM is on,
+   *  on the band it names); null = it ended (`ism_off`); `err` = the refusal (`ism_error`). */
+  onIsm?:       (r: IsmReport | null, err?: string) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?:     (m: IqOutState) => void;
   onHwGains?:   (gains: number[]) => void;
