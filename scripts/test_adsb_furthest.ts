@@ -48,18 +48,29 @@ if (fn) {
   const lg = adsbLongestTracked(rep([{ hex: 'aaaaaa', tracked_nm: 12 }, { hex: 'bbbbbb', flight: 'BAW12 ', tracked_nm: 140.6 }, { hex: 'cccccc', tracked_nm: 0.4 }]));
   ok(!!lg && lg.hex === 'bbbbbb' && lg.name === 'BAW12' && Math.round(lg.nm) === 141, `tracked: the longest (${JSON.stringify(lg)})`);
   ok(adsbLongestTracked(rep([{ hex: 'aaaaaa', tracked_nm: 0.5 }])) === null, 'tracked: under 1 NM is not a track');
-  ok(adsbChipHtml('TRACKED', '141 NM', 'BAW12') === '<span class="k">TRACKED</span> 141 NM<span class="n"> · BAW12</span>', 'tracked: the chip text');
+  ok(adsbChipHtml('LONGEST TRACKED', '141 NM', 'BAW12') === '<span class="k">LONGEST TRACKED</span> 141 NM<span class="n"> · BAW12</span>', 'tracked: the chip text');
   ok(adsbChipHtml('NEWEST', '', '<b>') === '<span class="k">NEWEST</span><span class="n"> · &#60;b&#62;</span>', 'newest: the chip text, escaped');
   const seen = new Map<string, number>();
   ok(adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'bbbbbb' }]), seen, 1000) === null, 'newest: the first report is "already there", not new');
   const n1 = adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'bbbbbb' }, { hex: 'cccccc', flight: 'EZY1' }]), seen, 5000);
   ok(!!n1 && n1.hex === 'cccccc' && n1.name === 'EZY1' && n1.ageS === 0, `newest: one arrives (${JSON.stringify(n1)})`);
-  const n2 = adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'cccccc' }, { hex: 'dddddd' }]), seen, 9000);
+  const n2 = adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'cccccc', flight: 'EZY1' }, { hex: 'dddddd', flight: 'RYR2' }]), seen, 9000);
   ok(!!n2 && n2.hex === 'dddddd', 'newest: a later arrival takes over');
   ok(!seen.has('bbbbbb'), 'newest: one that left is forgotten');
-  const n3 = adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'cccccc' }]), seen, 12000);
+  const n3 = adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'cccccc', flight: 'EZY1' }]), seen, 12000);
   ok(!!n3 && n3.hex === 'cccccc' && n3.ageS === 7, `newest: the newest leaves → the one before it, with its age (${JSON.stringify(n3)})`);
   ok(adsbNewest(null, seen, 13000) === null && seen.size === 0, 'newest: leaving ADS-B forgets them all');
+  // ★ nameless arrivals (address only) are skipped until they have a callsign or a registration
+  const s2 = new Map<string, number>();
+  adsbNewest(rep([{ hex: 'aaaaaa', flight: 'BAW1' }]), s2, 1000);
+  const q1 = adsbNewest(rep([{ hex: 'aaaaaa', flight: 'BAW1' }, { hex: '408000' }]), s2, 2000);
+  ok(q1 === null, `newest: an address-only arrival is not shown (${JSON.stringify(q1)})`);
+  const q2 = adsbNewest(rep([{ hex: 'aaaaaa', flight: 'BAW1' }, { hex: '408000' }, { hex: 'bbbbbb', r: 'G-ZXIH' }]), s2, 3000);
+  ok(!!q2 && q2.hex === 'bbbbbb' && q2.name === 'G-ZXIH', `newest: a registration is a name (${JSON.stringify(q2)})`);
+  const q3 = adsbNewest(rep([{ hex: 'aaaaaa', flight: 'BAW1' }, { hex: '408000', flight: 'EZY62ZF' }, { hex: 'bbbbbb', r: 'G-ZXIH' }]), s2, 4000);
+  ok(!!q3 && q3.hex === 'bbbbbb', 'newest: the nameless one, now named, keeps its earlier arrival (not newer than G-ZXIH)');
+  const t2 = adsbLongestTracked(rep([{ hex: 'cccccc', r: 'G-ABCD', tracked_nm: 9 }]));
+  ok(!!t2 && t2.name === 'G-ABCD', 'tracked: no callsign → its registration');
 }
 console.log(fails ? `\n${fails} FAILED, ${passes} passed` : `adsb furthest: all ${passes} passed`);
 process.exit(fails ? 1 : 0);

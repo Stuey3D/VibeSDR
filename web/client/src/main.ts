@@ -8049,7 +8049,7 @@ function adsbRender() {
     put('adsbFar', adsbFurthestHtml(far));
     const lg = adsbLongestTracked(adsbReport);
     adsbLongHex = lg ? lg.hex : '';
-    put('adsbLong', lg ? adsbChipHtml('TRACKED', `${Math.round(lg.nm)} NM`, lg.name) : '');
+    put('adsbLong', lg ? adsbChipHtml('LONGEST TRACKED', `${Math.round(lg.nm)} NM`, lg.name) : '');
   }
   adsbGainRender();
   {

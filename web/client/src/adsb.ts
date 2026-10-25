@@ -124,7 +124,9 @@ export function adsbChipHtml(key: string, figure: string, name: string): string 
 export function adsbFurthestHtml(f: { nm: number; name: string } | null): string {
   return f ? adsbChipHtml('FURTHEST', `${Math.round(f.nm)} NM`, f.name) : '';
 }
-const flightName = (a: { flight?: unknown }, hex: string) => String(a.flight || '').trim() || hex.toUpperCase();
+/** ★ A chip names an aircraft as the list does: its callsign, else its registration (adsb_info), else its address. */
+const flightName = (a: { flight?: unknown; r?: unknown }, hex: string) => String(a.flight || '').trim() || String(a.r || '').trim() || hex.toUpperCase();
+const hasName = (a: { flight?: unknown; r?: unknown }) => !!(String(a.flight || '').trim() || String(a.r || '').trim());
 
 /** ★★ THE LIST HEADER'S THREE CHIPS (Stuart, 2026-10-25, the top bar crowded on a portrait iPhone 17 Pro Max: "move the
  *  furthest flight chip to just the header of the aircraft list, and with that we can add a newest flight detected,
@@ -158,11 +160,17 @@ export function adsbNewest(r: AdsbReport | null, firstSeen: Map<string, number>,
     if (!firstSeen.has(hex)) firstSeen.set(hex, fresh ? 0 : nowMs);
   }
   for (const h of [...firstSeen.keys()]) if (!here.has(h)) firstSeen.delete(h);
+  /* ★★ ONLY ONE WITH A NAME (Stuart, 2026-10-25: "what is 408000 on the newest … the newest aircraft seem to just be codes
+   *  and not flights"). A new aircraft is heard by its ICAO address first; its callsign comes in a separate message every
+   *  ~5 s, so the very newest is almost always nameless. NEWEST = the newest arrival that has a callsign or a
+   *  registration; a nameless one waits until it has one (its arrival time is kept, so it takes its rightful place). */
+  const byHex = new Map<string, (typeof r.aircraft)[number]>();
+  for (const a of r.aircraft) { const h = cleanHex(a.hex); if (h) byHex.set(h, a); }
   let best = '', at = 0;
-  for (const [h, t] of firstSeen) if (t > at) { at = t; best = h; }
+  for (const [h, t] of firstSeen) { const a = byHex.get(h); if (t > at && a && hasName(a)) { at = t; best = h; } }
   if (!best) return null;
-  const a = r.aircraft.find((x) => cleanHex(x.hex) === best);
-  return a ? { hex: best, name: flightName(a, best), ageS: Math.max(0, Math.round((nowMs - at) / 1000)) } : null;
+  const a = byHex.get(best)!;
+  return { hex: best, name: flightName(a, best), ageS: Math.max(0, Math.round((nowMs - at) / 1000)) };
 }
 /** ★★★ THE CAPTURE WARNING (Stuart, 2026-10-24) — the server counts the samples its ADS-B decoder RECEIVES against
  *  what the rate promises (vibe_adsb_capture.h CaptureMeter: the dongle/USB and the server's own IQ queue, not the
