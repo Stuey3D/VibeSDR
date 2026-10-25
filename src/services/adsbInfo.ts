@@ -27,7 +27,11 @@ function txt(v: unknown, max: number): string {
   // eslint-disable-next-line no-control-regex
   return v.replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, max);
 }
-function code(v: unknown, re: RegExp): string { const s = txt(v, 12); return re.test(s) ? s : ''; }
+/* ★★ `max` IS THE PATTERN'S OWN LENGTH, never a blanket 12 (2026-10-25). The image keys were cut to 12 BEFORE their
+ *  1-40 pattern was tested, so a registration-specific logo — `EXS-B738G-JZBP`, VRS naming, thousands of them in an
+ *  owner's OperatorFlags — became `EXS-B738G-JZ`: a 404, Safari's "?" in the card and a blank in the list, flashing
+ *  every second as the list redrew it (Stuart, Jet2 G-JZBP). A cut string must fail the pattern, not pass it shortened. */
+function code(v: unknown, re: RegExp, max = 12): string { const s = txt(v, max + 1); return s.length <= max && re.test(s) ? s : ''; }
 
 /** One aircraft's details, cleaned. Unknown or malformed fields are dropped, never passed on. */
 export function cleanAdsbInfo(v: unknown): AdsbInfo {
@@ -46,8 +50,8 @@ export function cleanAdsbInfo(v: unknown): AdsbInfo {
   if (a.mil === 1 || a.mil === true) o.mil = 1;
   put('op', code(a.op, /^[A-Z0-9]{2,4}$/));
   put('opName', txt(a.opName, 60));
-  put('logo', code(a.logo, /^[A-Za-z0-9_-]{1,40}$/));
-  put('sil', code(a.sil, /^[A-Za-z0-9_-]{1,40}$/));
+  put('logo', code(a.logo, /^[A-Za-z0-9_-]{1,40}$/, 40));
+  put('sil', code(a.sil, /^[A-Za-z0-9_-]{1,40}$/, 40));
   const r = a.route as Record<string, unknown> | undefined;
   if (r && typeof r === 'object') {
     const ap = /^[A-Z0-9]{3,4}$/, ia = /^[A-Z0-9]{3}$/;

@@ -25,6 +25,10 @@ const bad = cleanAdsbInfo({ r: '<img src=x onerror=alert(1)>', t: 'B7378X', wtc:
   op: 'R-R', logo: '../../etc/passwd', sil: 'a/b', opName: 42, route: { from: 'EGLL' }, desc: 'x'.repeat(200) });
 eq('markup stripped, bad shapes dropped', bad, { r: 'img src=x on', desc: 'x'.repeat(60) });
 eq('not an object', cleanAdsbInfo('nope'), {});
+// ★ a registration-specific logo (VRS: operator-type+registration) is longer than 12 — it must arrive WHOLE (Jet2 G-JZBP)
+eq('a 14-character logo key survives whole', cleanAdsbInfo({ logo: 'EXS-B738G-JZBP' }).logo, 'EXS-B738G-JZBP');
+eq('a 40-character key survives', cleanAdsbInfo({ sil: 'A'.repeat(40) }).sil, 'A'.repeat(40));
+eq('a 41-character key is refused, not cut to 40', cleanAdsbInfo({ logo: 'A'.repeat(41) }).logo, undefined);
 
 // ── the store ──
 const st = new AdsbInfoStore();
