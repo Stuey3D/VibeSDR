@@ -150,6 +150,7 @@ add_library(vibelocalsdr SHARED
     decoders/audio_nr.cpp
     decoders/auto_notch.cpp
     decoders/time_decoder.cpp
+    decoders/cw_skimmer.cpp
     ${FT8_LIB_SRC})
 set_target_properties(vibelocalsdr PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 # ★ -std=c++17 on the C++ sources ONLY: the target also carries vendored C (libairspyhf, libhackrf)

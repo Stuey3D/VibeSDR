@@ -26,6 +26,9 @@
 //   --ism FILE  while the dongle is tuned within 2 MHz of 434 MHz, replay FILE (unsigned 8-bit IQ at the rate the server
 //               asked for, centred where ISM mode puts the radio) on a loop: sensors for ISM mode on the bench (V12,
 //               2026-10-25 — `test-ism --write-clip` makes one, scripts/test-server-ism.mjs uses it).
+//   --hf FILE --hf-centre HZ   while the dongle is tuned within a quarter of the rate of HZ, replay FILE (unsigned 8-bit IQ
+//               at the rate the server asked for, centred on HZ) on a loop, mixed to wherever the dongle really is — CW
+//               stations for the CW skimmer on the bench (V12, 2026-10-25: `cw_bench clip`, scripts/test-server-cw.mjs).
 //   --stall-at HZ  a dongle that FALLS OVER at a rate: while the server has asked for HZ or more, send nothing at all
 //               (the socket stays open, the samples just stop) — the boosted-rate guard's bench (vibe_rate_guard.h,
 //               scripts/test-rate-guard.mjs). Below HZ the stream resumes.
@@ -52,6 +55,10 @@ const ADSB_IQ = adsbArg ? fs.readFileSync(adsbArg) : null;
 if (ADSB_IQ) console.log(`[fake-rtl-tcp] ADS-B clip ${adsbArg}: ${ADSB_IQ.length / 2} samples`);
 const ismArg = (() => { const i = process.argv.indexOf('--ism'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const ISM_IQ = ismArg ? fs.readFileSync(ismArg) : null;
+const hfArg = (() => { const i = process.argv.indexOf('--hf'); return i >= 0 ? process.argv[i + 1] : ''; })();
+const HF_IQ = hfArg ? fs.readFileSync(hfArg) : null;
+const HF_CENTRE = (() => { const i = process.argv.indexOf('--hf-centre'); return i >= 0 ? Number(process.argv[i + 1]) : 7.03e6; })();
+if (HF_IQ) console.log(`[fake-rtl-tcp] HF clip ${hfArg}: ${HF_IQ.length / 2} samples centred on ${HF_CENTRE} Hz`);
 if (ISM_IQ) console.log(`[fake-rtl-tcp] ISM clip ${ismArg}: ${ISM_IQ.length / 2} samples`);
 if (DAB_IQ) console.log(`[fake-rtl-tcp] DAB clip ${dabArg}: ${(DAB_IQ.length / 2 / 2.048e6).toFixed(2)} s at 2.048 MS/s`);
 
@@ -79,6 +86,7 @@ const srv = net.createServer((sock) => {
   let dabPos = 0;         // replay position in DAB_IQ (bytes)
   let adsbPos = 0;        // replay position in ADSB_IQ (bytes)
   let ismPos = 0;         // replay position in ISM_IQ (bytes)
+  let hfPos = 0, hfRe = 1, hfIm = 0;   // replay position in HF_IQ, and the mixer's phase (--hf)
   // WFM stereo generator state (see --wfm)
   let fmPhase = 0, pilotPh = 0, lPh = 0, rPh = 0;
 
@@ -129,7 +137,18 @@ const srv = net.createServer((sock) => {
     if (rate !== RATE) retune();
     const n = Math.max(1024, Math.round(rate * CHUNK_MS / 1000));
     const buf = Buffer.allocUnsafe(n * 2);
-    if (ISM_IQ && Math.abs(centreHz - 434e6) <= 2e6) {
+    if (HF_IQ && Math.abs(centreHz - HF_CENTRE) <= rate / 4) {
+      // ★ The clip is centred on HF_CENTRE; the dongle may sit off it (the server's own offset tuning) — mix it there.
+      const w = (2 * Math.PI * (HF_CENTRE - centreHz)) / rate, cw = Math.cos(w), sw = Math.sin(w);
+      for (let i = 0; i < n; i++) {
+        const x = (HF_IQ[hfPos] - 127.5), y = (HF_IQ[hfPos + 1] - 127.5);
+        hfPos = (hfPos + 2) % HF_IQ.length;
+        buf[2 * i] = Math.max(0, Math.min(255, Math.round(127.5 + x * hfRe - y * hfIm)));
+        buf[2 * i + 1] = Math.max(0, Math.min(255, Math.round(127.5 + x * hfIm + y * hfRe)));
+        const r = hfRe * cw - hfIm * sw; hfIm = hfRe * sw + hfIm * cw; hfRe = r;
+      }
+      const m = 1.5 - 0.5 * (hfRe * hfRe + hfIm * hfIm); hfRe *= m; hfIm *= m;
+    } else if (ISM_IQ && Math.abs(centreHz - 434e6) <= 2e6) {
       for (let k = 0; k < n * 2; ) {
         const take = Math.min(n * 2 - k, ISM_IQ.length - ismPos);
         ISM_IQ.copy(buf, k, ismPos, ismPos + take);

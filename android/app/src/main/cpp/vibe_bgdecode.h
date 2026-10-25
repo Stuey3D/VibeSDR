@@ -173,8 +173,10 @@ private:
             if (!run_.empty()) store_.close(run_);
             gallery::Meta mm = meta_;
             mm.utc = now;
-            mm.title = "RTTY \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " " + upper(meta_.mode);
-            const std::string head = "RTTY \xc2\xb7 " + where() + "\nStarted " + gallery::utcStamp(now, "%Y-%m-%d %H:%M UTC") + "\n\n";
+            // ★ A CW run is written exactly as an RTTY run is (V12 2026-10-25) — only its name differs.
+            const std::string what = meta_.kind == "cw" ? "CW" : "RTTY";
+            mm.title = what + " \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " " + upper(meta_.mode);
+            const std::string head = what + " \xc2\xb7 " + where() + "\nStarted " + gallery::utcStamp(now, "%Y-%m-%d %H:%M UTC") + "\n\n";
             run_ = store_.create(mm, "txt", head + buf_);
             runDay_ = day;
             if (!run_.empty()) { ++saved_; lastName_ = run_; }
@@ -203,6 +205,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "navtex") return "navtex";
     if (ext == "fsk") return msg.find("CCIR476") != std::string::npos ? "navtex" : "rtty";
     if (ext == "wefax" || ext == "sstv") return ext;
+    if (ext == "cw") return "cw";          // ★ a listener's CW decoder: its text, as an RTTY run (a skimmer keeps a summary)
     return "";
 }
 
@@ -377,13 +380,25 @@ inline double greatCircleKm(double la1, double lo1, double la2, double lo2) {
 struct Ft8Tally {
     static constexpr size_t kMaxCalls = 20000;
     unsigned long spots = 0, ft8 = 0, ft4 = 0;
+    /** ★ V12 2026-10-25: the same tally serves the CW summary — no FT8/FT4 split, no grids, and two lines of its own
+     *  (the most-heard call, the busiest 1 kHz of the band). */
+    bool cw = false;
+    std::map<std::string, unsigned long> callSpots;
+    std::map<long, unsigned long> khzSpots;
+    double wpmSum = 0;
     std::map<std::string, std::string> calls;
     std::map<std::string, unsigned long> countrySpots, countryCalls;
     double farKm = 0;
     std::string farCall, farGrid, farCountry;
     /** `km`: from this server to the call's own grid, NaN when either is unknown. */
-    void add(bool isFt4, const std::string& call, const std::string& grid, const std::string& ctry, double km) {
+    void add(bool isFt4, const std::string& call, const std::string& grid, const std::string& ctry, double km,
+             double rfHz = NAN, double wpm = 0) {
         ++spots; (isFt4 ? ft4 : ft8)++;
+        if (cw) {
+            if (callSpots.size() < kMaxCalls || callSpots.count(call)) callSpots[call]++;
+            if (std::isfinite(rfHz) && rfHz > 0) khzSpots[(long)std::floor(rfHz / 1000.0)]++;
+            wpmSum += wpm;
+        }
         if (calls.size() < kMaxCalls && !calls.count(call)) {
             calls[call] = ctry;
             if (!ctry.empty()) countryCalls[ctry]++;
@@ -392,9 +407,28 @@ struct Ft8Tally {
         // ★ The furthest is a station with a valid call, ITS valid grid, and a country we can name — never "country unknown".
         if (!ctry.empty() && !grid.empty() && std::isfinite(km) && km > farKm) { farKm = km; farCall = call; farGrid = grid; farCountry = ctry; }
     }
-    /** "9 spots · 3 countries · furthest Australia" */
+    std::string mostHeard(unsigned long* n = nullptr) const {
+        std::string best; unsigned long bn = 0;
+        for (const auto& kv : callSpots) if (kv.second > bn) { bn = kv.second; best = kv.first; }
+        if (n) *n = bn;
+        return bn > 1 ? best : std::string();     // ★ only when one call stands out — not a tie of ones
+    }
+    long busiestKhz(unsigned long* n = nullptr) const {
+        long best = 0; unsigned long bn = 0;
+        for (const auto& kv : khzSpots) if (kv.second > bn) { bn = kv.second; best = kv.first; }
+        if (n) *n = bn;
+        return best;
+    }
+    /** "9 spots · 3 countries · furthest Australia" — CW: "312 spots · 148 calls · 23 countries · most heard DL1ABC" */
     std::string headline() const {
-        char t[160];
+        char t[200];
+        if (cw) {
+            const std::string mh = mostHeard();
+            std::snprintf(t, sizeof t, "%lu spot%s \xc2\xb7 %zu call%s \xc2\xb7 %zu countr%s%s%s", spots, spots == 1 ? "" : "s",
+                          calls.size(), calls.size() == 1 ? "" : "s", countrySpots.size(), countrySpots.size() == 1 ? "y" : "ies",
+                          mh.empty() ? "" : " \xc2\xb7 most heard ", mh.c_str());
+            return t;
+        }
         std::snprintf(t, sizeof t, "%lu spot%s \xc2\xb7 %zu countr%s%s%s", spots, spots == 1 ? "" : "s", countrySpots.size(),
                       countrySpots.size() == 1 ? "y" : "ies", farKm > 0 ? " \xc2\xb7 furthest " : "", farKm > 0 ? farCountry.c_str() : "");
         return t;
@@ -402,8 +436,19 @@ struct Ft8Tally {
     /** The figures, one per line (the beta 4 card's lines, unchanged). */
     std::string figures(bool havePosition) const {
         std::string o; char b[256];
+        if (cw) {
+            std::snprintf(b, sizeof b, "Spots heard:       %lu from %zu stations (calls heard identifying themselves twice)\n", spots, calls.size());
+            o += b;
+            if (spots) { std::snprintf(b, sizeof b, "Average speed:     %.0f WPM\n", wpmSum / (double)spots); o += b; }
+            unsigned long n = 0;
+            const std::string mh = mostHeard(&n);
+            if (!mh.empty()) { std::snprintf(b, sizeof b, "Most heard:        %s (%lu spots)\n", mh.c_str(), n); o += b; }
+            const long k = busiestKhz(&n);
+            if (n) { std::snprintf(b, sizeof b, "Busiest:           %ld\xe2\x80\x93%ld kHz (%lu spots)\n", k, k + 1, n); o += b; }
+        } else {
         std::snprintf(b, sizeof b, "Spots heard:       %lu (FT8 %lu, FT4 %lu) from %zu stations\n", spots, ft8, ft4, calls.size());
         o += b;
+        }
         std::snprintf(b, sizeof b, "Countries:         %zu\n", countrySpots.size());
         o += b;
         if (farKm > 0) {
@@ -450,6 +495,11 @@ public:
     static constexpr size_t kMaxRecent = 20000;   // ★ spots held for the window (a busy band: ~1500 in 10 min)
     Ft8SummaryTap(gallery::Store& store, gallery::Meta meta, double lat, double lon, std::function<int64_t()> clock = nullptr)
         : store_(store), meta_(std::move(meta)), lat_(lat), lon_(lon), clock_(std::move(clock)) {
+        // ★★ V12 2026-10-25: the SAME summary for CW (meta.kind "cw") — the listener's CW decoder and the skimmer: spots,
+        //    calls, countries, the most-heard call and the busiest kHz, per hour and for the last 10 minutes.
+        cw_ = meta_.kind == "cw";
+        label_ = cw_ ? "CW" : "FT8";
+        hour_.cw = cw_;
         const int64_t now = this->now();
         start_ = hourFrom_ = rollWrite_ = now;
         if (meta_.liveSpots) meta_.liveSpots->store(0, std::memory_order_relaxed);
@@ -457,10 +507,19 @@ public:
     }
     ~Ft8SummaryTap() override { finish(true); }
     void spot(bool ft4, const std::string& call, const std::string& gridIn, int snr, double rfHz) override {
-        (void)snr; (void)rfHz;
+        (void)snr;
+        if (cw_) return;
         // ★★ beta 4: only a real CALLSIGN is a spot, and only a real grid is its position (ft8IsCallsign / ft8IsGrid).
         if (!ft8IsCallsign(call)) return;
-        const std::string grid = ft8IsGrid(gridIn) ? gridIn : std::string();
+        add(ft4, call, ft8IsGrid(gridIn) ? gridIn : std::string(), rfHz, 0);
+    }
+    /** ★ A CW spot — the call was already checked by the skimmer (cw::isCallsign); CW carries no grid. */
+    void cwSpot(const std::string& call, double rfHz, float wpm, float snrDb, const std::string& how) override {
+        (void)snrDb; (void)how;
+        if (!cw_ || !ft8IsCallsign(call)) return;
+        add(false, call, std::string(), rfHz, wpm);
+    }
+    void add(bool ft4, const std::string& call, const std::string& grid, double rfHz, double wpm) {
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;
         const int64_t t = now();
@@ -468,8 +527,8 @@ public:
         const std::string ctry = callsign::country(call);
         double la, lo, km = NAN;
         if (!grid.empty() && std::isfinite(lat_) && std::isfinite(lon_) && gridToLatLon(grid, la, lo)) km = greatCircleKm(lat_, lon_, la, lo);
-        hour_.add(ft4, call, grid, ctry, km);
-        recent_.push_back({ t, ft4, call, grid, ctry, km });
+        hour_.add(ft4, call, grid, ctry, km, rfHz, wpm);
+        recent_.push_back({ t, ft4, call, grid, ctry, km, rfHz, wpm });
         if (recent_.size() > kMaxRecent) recent_.pop_front();
         lastSpot_ = t; rollDirty_ = true;
         ++runSpots_;
@@ -508,9 +567,16 @@ public:
     std::string text(int64_t to) const { std::lock_guard<std::mutex> lk(m_); return hourText(to); }
 
 private:
-    struct Recent { int64_t t; bool ft4; std::string call, grid, ctry; double km; };
+    struct Recent { int64_t t; bool ft4; std::string call, grid, ctry; double km, rf, wpm; };
     int64_t now() const { return clock_ ? clock_() : gallery::nowUtc(); }
     std::string where() const {
+        if (cw_) {
+            std::string m = meta_.mode; for (auto& c : m) c = (char)std::toupper((unsigned char)c);
+            return std::string("CW spots summary \xc2\xb7 ") + gallery::freqText(meta_.freqHz)
+                 + (meta_.decoder == "cwskim" ? " (the skimmer's centre)" : " " + m) + " \xc2\xb7 "
+                 + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
+                 + (meta_.profile.empty() ? std::string() : " (" + meta_.profile + ")") + "\n";
+        }
         return "FT8 / FT4 summary \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " USB \xc2\xb7 "
              + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
              + (meta_.profile.empty() ? std::string() : " (" + meta_.profile + ")") + "\n";
@@ -527,7 +593,7 @@ private:
     void closeHourIfDue(int64_t t) {
         if (t / kHourSec == hourFrom_ / kHourSec) return;
         writeHour((hourFrom_ / kHourSec + 1) * kHourSec);
-        hour_ = Ft8Tally();
+        hour_ = Ft8Tally(); hour_.cw = cw_;
         hourFrom_ = t / kHourSec * kHourSec;
     }
     void writeHour(int64_t to) {
@@ -535,7 +601,7 @@ private:
         gallery::Meta m = meta_;
         m.utc = hourFrom_;
         m.partial = !(hourFrom_ % kHourSec == 0 && to - hourFrom_ >= kHourSec);
-        m.title = "FT8 " + gallery::utcStamp(hourFrom_, "%H:%M") + "\xe2\x80\x93" + gallery::utcStamp(to, "%H:%M UTC") + " \xc2\xb7 " + hour_.headline();
+        m.title = label_ + " " + gallery::utcStamp(hourFrom_, "%H:%M") + "\xe2\x80\x93" + gallery::utcStamp(to, "%H:%M UTC") + " \xc2\xb7 " + hour_.headline();
         store_.add(m, "txt", hourText(to));
     }
     void trim(int64_t t) {
@@ -545,8 +611,8 @@ private:
     void writeRolling(int64_t t, bool last) {
         rollWrite_ = t; rollDirty_ = false;
         if (recent_.empty() && rollName_.empty() && lastSpot_ == 0) return;   // ★ never heard anything: no card
-        Ft8Tally w;
-        for (const auto& r : recent_) w.add(r.ft4, r.call, r.grid, r.ctry, r.km);
+        Ft8Tally w; w.cw = cw_;
+        for (const auto& r : recent_) w.add(r.ft4, r.call, r.grid, r.ctry, r.km, r.rf, r.wpm);
         const int64_t from = std::max(start_, t - kWindowSec);
         gallery::Meta m = meta_;
         m.utc = from;
@@ -557,11 +623,11 @@ private:
         else body += "The last 10 minutes: " + gallery::utcStamp(from, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + to + " (refreshed every minute; the hourly cards are the record)\n\n";
         if (w.spots) {
             body += w.figures(havePos());
-            m.title = std::string("FT8 last 10 min") + (last ? " to " + to : std::string()) + " \xc2\xb7 " + w.headline();
+            m.title = label_ + " last 10 min" + (last ? " to " + to : std::string()) + " \xc2\xb7 " + w.headline();
         } else {
             const std::string ls = lastSpot_ ? gallery::utcStamp(lastSpot_, "%H:%M UTC") : std::string();
             body += "Nothing heard in the last 10 minutes" + (ls.empty() ? std::string() : " (the last spot was at " + ls + ")") + ".\n";
-            m.title = std::string("FT8 last 10 min") + (last ? " to " + to : std::string()) + " \xc2\xb7 nothing heard"
+            m.title = label_ + " last 10 min" + (last ? " to " + to : std::string()) + " \xc2\xb7 nothing heard"
                     + (ls.empty() ? std::string() : " since " + gallery::utcStamp(lastSpot_, "%H:%M"));
         }
         if (rollName_.empty()) rollName_ = store_.adoptSlot(m);
@@ -572,6 +638,8 @@ private:
     }
     gallery::Store& store_;
     gallery::Meta meta_;
+    bool cw_ = false;
+    std::string label_ = "FT8";
     double lat_, lon_;
     std::function<int64_t()> clock_;
     mutable std::mutex m_;
@@ -589,7 +657,7 @@ private:
 inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr,
                                     std::function<void(const std::string&)> log = nullptr, const std::string& tag = "") {
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
-    if (meta.kind == "navtex" || meta.kind == "rtty") {
+    if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
         if (log) t->setLog(std::move(log), tag);
         return t;
@@ -764,18 +832,23 @@ public:
         for (size_t i = 0; i < p_.profile.vfos.size(); i++) {
             auto c = std::make_unique<Chan>();
             c->owner = this; c->vfo = p_.profile.vfos[i]; c->index = (int)i;
-            const double need = std::max(passbandHz(c->vfo) * 2.5, 24000.0);
+            // ★ A CW SKIMMER takes the channel's IQ itself — its slice just wide enough for the segment (the outer 3 % is
+            //   the channel filter's), and no demodulator at all.
+            c->skim = isSkimmer(c->vfo);
+            const double need = c->skim ? passbandHz(c->vfo) / 0.92 : std::max(passbandHz(c->vfo) * 2.5, 24000.0);
             int b = 64;
             while (b < p_.fftSize && p_.sampleRate * (double)b / (double)p_.fftSize < need) b <<= 1;
             c->bins = std::min(b, p_.fftSize);
             c->rate = p_.sampleRate * (double)c->bins / (double)p_.fftSize;
             c->slice.assign((size_t)c->bins, cf32{0.0f, 0.0f});
-            c->rx.reset(new vibedsp::RxPipeline());
-            vibedsp::RxPipeline::Callbacks cb{};
-            cb.ctx = c.get();
-            cb.audio = &BgRunner::audioCb;
-            c->rx->start(c->rate, 1024, 10.0, 48000, cb);
-            c->rx->setRdsEnabled(false);
+            if (!c->skim) {
+                c->rx.reset(new vibedsp::RxPipeline());
+                vibedsp::RxPipeline::Callbacks cb{};
+                cb.ctx = c.get();
+                cb.audio = &BgRunner::audioCb;
+                c->rx->start(c->rate, 1024, 10.0, 48000, cb);
+                c->rx->setRdsEnabled(false);
+            }
             place(*c);
             DecoderHost::Env env;
             env.log = p_.log;
@@ -804,6 +877,15 @@ public:
                 const double la = p_.lat, lo = p_.lon;
                 auto lo2 = listenerOnFlag_;
                 auto last2 = c->lastItem; auto ls = c->liveSpots, lc = c->liveCountries;
+                // ★ …and a CW skimmer's: the same summary, labelled CW (Ft8SummaryTap with kind "cw").
+                env.cwSpotTap = [st, v, pi, la, lo, lo2, last2, ls, lc](bool) -> DecoderTapPtr {
+                    gallery::Meta m;
+                    m.kind = "cw"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "cwskim";
+                    m.profile = "Profile " + std::to_string(pi + 1);
+                    m.listenerOn = lo2;
+                    m.lastItemAt = last2; m.liveSpots = ls; m.liveCountries = lc;
+                    return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
+                };
                 env.spotTap = [st, v, pi, la, lo, lo2, last2, ls, lc]() -> DecoderTapPtr {
                     gallery::Meta m;
                     m.kind = "ft8"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "ft8";
@@ -948,7 +1030,7 @@ public:
                + "\",\"lock\":\"" + lock + "\",\"last\":" + std::to_string((long long)c.lastItem->load(std::memory_order_relaxed))
                + ",\"cpuPct\":" + pct(cur.vfo[i], base ? base->vfo[i] : 0)
                // ★ FT8/FT4: the summary's running count, so a quiet card is not read as "no decodes"
-               + (d && !*d->ext ? ",\"spots\":" + std::to_string((unsigned long long)c.liveSpots->load(std::memory_order_relaxed))
+               + (d && (!*d->ext || d->widthHz > 0) ? ",\"spots\":" + std::to_string((unsigned long long)c.liveSpots->load(std::memory_order_relaxed))
                                 + ",\"countries\":" + std::to_string((unsigned long long)c.liveCountries->load(std::memory_order_relaxed)) : std::string())
                + "}";
         }
@@ -964,8 +1046,10 @@ private:
         int bins = 0, centreBin = 0; double rate = 0;
         std::vector<cf32> slice;
         vibedsp::Channelizer::ExtractCtx ectx;
-        std::unique_ptr<vibedsp::RxPipeline> rx;
+        std::unique_ptr<vibedsp::RxPipeline> rx;     // ★ null for a CW skimmer (fed IQ)
         std::shared_ptr<DecoderHost> host;
+        bool skim = false;
+        double sliceRf = 0;                          // ★ the RF frequency at the centre of this VFO's slice
         bool decoding = false;
         bool inWindow = true;    // ★ inside what the radio captures now (a listener's dial may have moved it away)
         uint64_t lastDrop = 0;
@@ -984,6 +1068,9 @@ private:
         c.inWindow = std::fabs(c.vfo.hz - p_.centreHz) <= halfWindowHz(p_.sampleRate);
         c.centreBin = (int)std::lround(off / binHz);
         const double resid = off - c.centreBin * binHz;
+        // ★ A skimmer's slice is centred where its centre bin is: the VFO less the residual (its spots are RF anyway).
+        c.sliceRf = p_.centreHz + p_.hwOffsetHz + c.centreBin * binHz;
+        if (!c.rx) return;
         c.rx->setTune(resid, c.vfo.mode == "lsb" ? vibedsp::RxPipeline::Mode::SSB_LSB
                            : c.vfo.mode == "nfm" ? vibedsp::RxPipeline::Mode::NFM : vibedsp::RxPipeline::Mode::SSB_USB,
                       passbandHz(c.vfo));
@@ -1064,7 +1151,7 @@ private:
                 if (!p_.slots || p_.slots->inUse() >= p_.slots->max() || runningCount() >= budget()) break;
                 const int best = p_.registry ? BgRegistry::bestPaused(p_.registry->dir()) : 0;
                 if (best && c->index + 1 > best) break;             // ★ a higher-ranked VFO on another radio is waiting
-                c->rx->noteInputGap();                              // ★ its channel was not fed while paused
+                if (c->rx) c->rx->noteInputGap();                   // ★ its channel was not fed while paused
                 startOne(*c);
                 if (!c->decoding) break;
                 say("background decoding: VFO " + name(*c) + " resumed");
@@ -1111,7 +1198,7 @@ private:
             }
             if (now - lastYieldCheck > std::chrono::milliseconds(500)) { lastYieldCheck = now; slotTick(); }
             if (buf.empty()) continue;
-            if (gap) for (auto& c : chans_) c->rx->noteInputGap();
+            if (gap) for (auto& c : chans_) if (c->rx) c->rx->noteInputGap();
             std::lock_guard<std::mutex> cl(chanMtx_);
             // ★ V12 beta 4: what this thread costs, on its OWN clock — the shared FFT, and each VFO's cut + demodulator.
             const uint64_t t0 = vibeThreadCpuNs();
@@ -1122,7 +1209,10 @@ private:
                     if (!c->decoding) continue;          // ★ a paused or out-of-window channel costs nothing
                     const uint64_t a = vibeThreadCpuNs();
                     const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
-                    if (got > 0) c->rx->feed(c->slice.data(), got);
+                    if (got > 0) {
+                        if (c->rx) c->rx->feed(c->slice.data(), got);
+                        else if (c->host) c->host->feedIq(c->slice.data(), got, c->rate, c->sliceRf);
+                    }
                     const uint64_t d = vibeThreadCpuNs() - a;
                     c->demodNs.fetch_add(d, std::memory_order_relaxed); perVfo += d;
                 }

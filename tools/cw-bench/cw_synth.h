@@ -1,0 +1,153 @@
+// cw_synth.h — synthetic Morse for the CW skimmer's bench (cw_bench.cpp) and tests (vibeserver/test-cw.cpp): keying per
+// ITU-R M.1677 timing (PARIS: a dot is 1.2/WPM s), shaped or hard edges, a fist's jitter, weighting, Farnsworth; tones
+// in noise at an SNR quoted in 2.5 kHz; QSB and drift; and the character error rate of a decode.
+#pragma once
+#include "decoders/cw_skimmer.h"
+
+#include <algorithm>
+#include <cmath>
+#include <complex>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace cwsynth {
+using cf = std::complex<float>;
+using vibe::cw::morseCode;
+
+// ── deterministic noise ──
+struct Rng {
+    uint64_t s;
+    explicit Rng(uint64_t seed) : s(seed * 0x9E3779B97F4A7C15ull + 1) {}
+    uint64_t next() { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s; }
+    double uni() { return (next() >> 11) * (1.0 / 9007199254740992.0); }
+    double gauss() { double u = uni(), v = uni(); if (u < 1e-300) u = 1e-300; return std::sqrt(-2 * std::log(u)) * std::cos(2 * M_PI * v); }
+};
+
+// ── Morse keying ──
+struct Keying {
+    double wpm = 20, farnsworth = 0;   // farnsworth: the character speed stays wpm, the gaps are stretched to this overall speed
+    double riseMs = 4;                 // raised-cosine edges; 0 = hard keying (key clicks)
+    double jitter = 0;                 // a human fist: each element's length varies by this fraction (σ)
+    double weight = 1.0;               // mark/space weighting: 1.1 = marks 10 % long
+};
+/** The key's envelope (0..1), sampled at `rate`, for `text` — then `tailSec` of silence. */
+inline std::vector<float> keyEnvelope(const std::string& text, const Keying& k, double rate, Rng& rng, double tailSec = 0.5) {
+    const double unit = 1.2 / k.wpm;
+    double gapUnit = unit;
+    if (k.farnsworth > 0 && k.farnsworth < k.wpm) {
+        // ARRL-style: the extra time is spread over the character and word gaps (19 of 50 units of PARIS)
+        const double ta = (60.0 * k.wpm - 37.2 * k.farnsworth) / (k.farnsworth * k.wpm);
+        gapUnit = ta / 19.0 * 1.0 / 1.0;   // seconds per gap unit
+    }
+    std::vector<std::pair<double, bool>> seg;   // (seconds, keyed)
+    auto add = [&](double sec, bool on) { if (sec > 0) seg.push_back({ sec, on }); };
+    auto jit = [&](double x) { return k.jitter > 0 ? std::max(0.3 * x, x * (1.0 + k.jitter * rng.gauss())) : x; };
+    add(0.3, false);
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == ' ') { add(jit((k.farnsworth > 0 ? gapUnit : unit) * 4), false); continue; }   // 3 already after the char → 7
+        std::string code;
+        if (c == '<') { const size_t e = text.find('>', i); code = morseCode(text.substr(i, e - i + 1)); i = e; }
+        else code = morseCode(std::string(1, c));
+        if (code.empty()) continue;
+        for (size_t e = 0; e < code.size(); ++e) {
+            const double m = (code[e] == '-' ? 3 : 1) * unit;
+            add(jit(m * k.weight), true);
+            if (e + 1 < code.size()) add(jit(unit * (2.0 - k.weight)), false);
+        }
+        add(jit((k.farnsworth > 0 ? gapUnit : unit) * 3), false);
+    }
+    add(tailSec, false);
+    double total = 0; for (auto& s : seg) total += s.first;
+    std::vector<float> env((size_t)(total * rate) + 1, 0.0f);
+    double t = 0;
+    for (auto& s : seg) {
+        if (s.second) {
+            const size_t a = (size_t)(t * rate), b = std::min(env.size(), (size_t)((t + s.first) * rate));
+            const size_t r = (size_t)(k.riseMs * 1e-3 * rate);
+            for (size_t i = a; i < b; ++i) {
+                double g = 1.0;
+                if (r > 0) {
+                    if (i - a < r) g = 0.5 - 0.5 * std::cos(M_PI * (double)(i - a) / r);
+                    if (b - i < r) g = std::min(g, 0.5 - 0.5 * std::cos(M_PI * (double)(b - i) / r));
+                }
+                env[i] = (float)g;
+            }
+        }
+        t += s.first;
+    }
+    return env;
+}
+
+struct Tone {
+    double hz = 700;          // offset (IQ) or audio frequency
+    double snrDb = 10;        // carrier over noise in 2.5 kHz
+    double driftHzPerSec = 0;
+    double qsbDb = 0, qsbHz = 0.2;   // a fade: depth (dB, peak-to-trough) and rate
+    double startSec = 0;
+    std::vector<float> env;
+};
+/** Mix tones + noise. Noise power is 1 in the full band (IQ: complex, rate Hz wide; real: rate/2 wide). */
+inline void synth(std::vector<Tone>& tones, double rate, bool complexOut, double seconds, Rng& rng,
+           std::vector<cf>& iq, std::vector<float>& re, double noiseOn = 1.0) {
+    const size_t n = (size_t)(seconds * rate);
+    if (complexOut) iq.assign(n, cf(0, 0)); else re.assign(n, 0.0f);
+    const double bw = complexOut ? rate : rate / 2;
+    for (auto& t : tones) {
+        // carrier power so that P / (noise in 2500 Hz) = snr; noise density = 1/bw
+        const double pc = std::pow(10.0, t.snrDb / 10.0) * 2500.0 / bw;
+        const double amp = complexOut ? std::sqrt(pc) : std::sqrt(2 * pc);
+        double ph = rng.uni() * 2 * M_PI;
+        const size_t s0 = (size_t)(t.startSec * rate);
+        for (size_t i = 0; i < t.env.size() && s0 + i < n; ++i) {
+            const double tt = (double)i / rate;
+            const double f = t.hz + t.driftHzPerSec * tt;
+            ph += 2 * M_PI * f / rate;
+            if (ph > 2 * M_PI) ph -= 2 * M_PI;
+            double a = amp * t.env[i];
+            if (t.qsbDb > 0) a *= std::pow(10.0, -t.qsbDb / 20.0 * (0.5 - 0.5 * std::cos(2 * M_PI * t.qsbHz * tt)));
+            if (a == 0) continue;
+            if (complexOut) iq[s0 + i] += cf((float)(a * std::cos(ph)), (float)(a * std::sin(ph)));
+            else re[s0 + i] += (float)(a * std::cos(ph));
+        }
+    }
+    const double sg = complexOut ? std::sqrt(0.5) : 1.0;
+    if (noiseOn > 0)
+        for (size_t i = 0; i < n; ++i) {
+            if (complexOut) iq[i] += cf((float)(sg * rng.gauss() * noiseOn), (float)(sg * rng.gauss() * noiseOn));
+            else re[i] += (float)(rng.gauss() * noiseOn);
+        }
+}
+
+// ── scoring: semi-global edit distance (the decoder may join late and stop early) ──
+inline std::string squash(const std::string& s) {
+    std::string o; bool sp = true;
+    for (char c : s) { if (c == ' ' || c == '\n') { if (!sp) o += ' '; sp = true; } else { o += c; sp = false; } }
+    while (!o.empty() && o.back() == ' ') o.pop_back();
+    return o;
+}
+/** Character errors of `got` against the best-matching span of `ref`, and that span's length. Spaces count. */
+inline void cer(const std::string& refIn, const std::string& gotIn, int& errs, int& refLen) {
+    const std::string ref = squash(refIn), got = squash(gotIn);
+    const size_t R = ref.size(), G = got.size();
+    if (G == 0) { errs = (int)R; refLen = (int)R; return; }
+    // D[i][j]: got[0..i) against ref ending at j, free start in ref
+    std::vector<int> prev(R + 1, 0), cur(R + 1);
+    std::vector<int> startPrev(R + 1), startCur(R + 1);
+    for (size_t j = 0; j <= R; ++j) startPrev[j] = (int)j;
+    for (size_t i = 1; i <= G; ++i) {
+        cur[0] = (int)i; startCur[0] = 0;
+        for (size_t j = 1; j <= R; ++j) {
+            int best = prev[j - 1] + (got[i - 1] == ref[j - 1] ? 0 : 1); int st = startPrev[j - 1];
+            if (prev[j] + 1 < best) { best = prev[j] + 1; st = startPrev[j]; }
+            if (cur[j - 1] + 1 < best) { best = cur[j - 1] + 1; st = startCur[j - 1]; }
+            cur[j] = best; startCur[j] = st;
+        }
+        std::swap(prev, cur); std::swap(startPrev, startCur);
+    }
+    int bj = 0; for (size_t j = 1; j <= R; ++j) if (prev[j] < prev[bj]) bj = (int)j;
+    errs = prev[bj]; refLen = std::max(1, bj - startPrev[bj]);
+}
+
+} // namespace cwsynth
