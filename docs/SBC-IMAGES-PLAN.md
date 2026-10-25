@@ -371,11 +371,17 @@ Every card passed its **emulated** boot test (systemd-nspawn under QEMU; no real
 | Orange Pi Zero 2W | vibeserver-portable-orangepizero2w-20261025.img.xz | 1223363792 | 497582c8b3faba24adfa3d73421fc3c766a2f9e02efecd004b38c855f4bf95b2 |
 | Le Potato | vibeserver-portable-lepotato-20261025.img.xz | 1178912252 | e0cafa2ed432f59e2af1429580f10eca1ec1ff5cf6a79aa5bbc73c24872255f3 |
 
-**Left to do: three cards, all Rockchip with GPT partition tables (Orange Pi 5, ROCK 5B, Radxa ZERO 3).**
+**The three Rockchip cards, built 2026-10-25 15:25–15:54 on the M5 Pro Mac** (colima; `build-all.sh 11.0.11-1 …`), in
+`~/vibe-sbc-out/11.0.11/` on the Mac — the other eight stay on the Lenovo. **Not uploaded.** Same emulated boot test, passed:
 
-- Orange Pi 5, even after the GPT fixes (7d5132a2), still stops at "Failed to add #2 partition: Invalid argument".
-- **Next step:** look at the base image's GPT header (`sfdisk -d`), in particular its table-length and its first/last
-  LBA. Armbian may make the table with too few entries for a second partition. If so, rewrite it with 128 entries
-  before appending.
-- ROCK 5B was stopped mid-build at the pause, cleanly: its chroot was stopped, then `build.sh`'s own cleanup ran.
-- Radxa ZERO 3 has not been tried since the fix.
+| Card | File | Bytes | sha256 |
+|---|---|---|---|
+| Orange Pi 5 | vibeserver-portable-orangepi5-20261025.img.xz | 1144316764 | 0c6a761d4811f10f4a3de39d40884b516c38686f240edee36785bb70981788fd |
+| Radxa ROCK 5B | vibeserver-portable-rock-5b-20261025.img.xz | 1160933200 | fbbd461f59e9c92414f005b2f9bad7a80940f1017df66a54849a6d88dd72b513 |
+| Radxa ZERO 3 | vibeserver-portable-radxa-zero3-20261025.img.xz | 1222087540 | f79b425d3107299e0550b78f5d471f5e7a815fc6f1eb3be6f9138cdb3e050ee3 |
+
+The GPT blocker was not a short table: once the file is cut below the old backup header, libfdisk discards the GPT
+and reads the protective MBR as DOS, so `sfdisk --relocate` did nothing. `sgdisk -e` repairs it, and the backup area
+is first-lba (2048 on Armbian's Rockchip images), not 33 (96a9b01d). **All eleven 11.0.11 cards are now built.**
+★ The pause itself: the ROCK 5B build stopped at the pause emptied the Lenovo's /dev through build.sh's cleanup
+(fixed 12e201b3; the Lenovo was rebooted).
