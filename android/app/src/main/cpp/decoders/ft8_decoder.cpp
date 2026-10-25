@@ -132,33 +132,42 @@ const Bits174* generatorRows() {               // row k = the codeword of messag
     return g;
 }
 /** OSD-1 on `llr` (log p(1)/p(0), codeword order). On success fills `a91` (packed message + CRC) and returns the
- *  number of hard-decision disagreements; -1 when no codeword passes the CRC within `maxErrors`. */
-int osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
+ *  number of hard-decision disagreements; -1 when no codeword passes the CRC within `maxErrors`.
+ *  ★★ IN CODEWORD ORDER (2026-10-25, the FT8 CPU work). The first version copied the generator into a matrix with its
+ *  columns permuted into reliability order, bit by bit (91 × 174 bit moves per call), then eliminated it. The rows
+ *  that elimination ends with are unique — each is the codeword that is 1 at one pivot and 0 at the others — so it
+ *  makes no difference whether the columns are moved first: this eliminates the generator's own rows, visiting the
+ *  columns in reliability order. Each flip is judged by a popcount first (most are far over maxErrors and stop
+ *  there); only a survivor's distance is summed, in the same reliability order as before, so it rounds the same.
+ *  The result is the same codeword, the same error count, for every input (test-ft8-fast). */
+} // namespace
+int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
     const Bits174* g = generatorRows();
+    float wAbs[FTX_LDPC_N];
+    for (int i = 0; i < FTX_LDPC_N; ++i) wAbs[i] = std::fabs(llr[i]);
     int perm[FTX_LDPC_N];
     for (int i = 0; i < FTX_LDPC_N; ++i) perm[i] = i;
-    std::sort(perm, perm + FTX_LDPC_N, [&](int a, int b) { return std::fabs(llr[a]) > std::fabs(llr[b]); });
+    std::sort(perm, perm + FTX_LDPC_N, [&](int a, int b) { return wAbs[a] > wAbs[b]; });
     int pos[FTX_LDPC_N];
     for (int p = 0; p < FTX_LDPC_N; ++p) pos[perm[p]] = p;
     Bits174 M[FTX_LDPC_K];
-    for (int k = 0; k < FTX_LDPC_K; ++k) {
-        M[k] = Bits174{{0, 0, 0}};
-        for (int j = 0; j < FTX_LDPC_N; ++j) if (getBit(g[k], j)) setBit(M[k], pos[j]);
-    }
-    int pivot[FTX_LDPC_K]; int r = 0;
+    std::memcpy(M, g, sizeof M);
+    int pivot[FTX_LDPC_K]; int r = 0;          // pivot[q] = the CODEWORD position of row q's pivot
     for (int p = 0; p < FTX_LDPC_N && r < FTX_LDPC_K; ++p) {
+        const int col = perm[p];
+        const int wi = col >> 6; const uint64_t bit = 1ull << (col & 63);
         int i = r;
-        while (i < FTX_LDPC_K && !getBit(M[i], p)) ++i;
+        while (i < FTX_LDPC_K && !(M[i].w[wi] & bit)) ++i;
         if (i == FTX_LDPC_K) continue;
         std::swap(M[i], M[r]);
+        const Bits174 R = M[r];
         for (int q = 0; q < FTX_LDPC_K; ++q)
-            if (q != r && getBit(M[q], p)) { M[q].w[0] ^= M[r].w[0]; M[q].w[1] ^= M[r].w[1]; M[q].w[2] ^= M[r].w[2]; }
-        pivot[r++] = p;
+            if (q != r && (M[q].w[wi] & bit)) { M[q].w[0] ^= R.w[0]; M[q].w[1] ^= R.w[1]; M[q].w[2] ^= R.w[2]; }
+        pivot[r++] = col;
     }
     if (r < FTX_LDPC_K) return -1;
     Bits174 hard{{0, 0, 0}};
-    float w[FTX_LDPC_N];
-    for (int p = 0; p < FTX_LDPC_N; ++p) { if (llr[perm[p]] > 0) setBit(hard, p); w[p] = std::fabs(llr[perm[p]]); }
+    for (int i = 0; i < FTX_LDPC_N; ++i) if (llr[i] > 0) setBit(hard, i);
     Bits174 c0{{0, 0, 0}};
     for (int q = 0; q < FTX_LDPC_K; ++q)
         if (getBit(hard, pivot[q])) { c0.w[0] ^= M[q].w[0]; c0.w[1] ^= M[q].w[1]; c0.w[2] ^= M[q].w[2]; }
@@ -166,14 +175,21 @@ int osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
     for (int f = -1; f < FTX_LDPC_K; ++f) {
         Bits174 c = c0;
         if (f >= 0) { c.w[0] ^= M[f].w[0]; c.w[1] ^= M[f].w[1]; c.w[2] ^= M[f].w[2]; }
-        float d = 0; int err = 0;
+        const uint64_t d0 = c.w[0] ^ hard.w[0], d1 = c.w[1] ^ hard.w[1], d2 = c.w[2] ^ hard.w[2];
+        const int err = __builtin_popcountll(d0) + __builtin_popcountll(d1) + __builtin_popcountll(d2);
+        if (err > maxErrors) continue;
+        // ★ the distance summed in reliability order (ascending pos), as the permuted version summed it
+        int ps[FTX_LDPC_N]; int m = 0;
         for (int x = 0; x < 3; ++x) {
-            uint64_t diff = c.w[x] ^ hard.w[x];
-            while (diff) { const int b = __builtin_ctzll(diff); d += w[x * 64 + b]; ++err; diff &= diff - 1; }
+            uint64_t diff = x == 0 ? d0 : x == 1 ? d1 : d2;
+            while (diff) { ps[m++] = pos[x * 64 + __builtin_ctzll(diff)]; diff &= diff - 1; }
         }
-        if (err > maxErrors || d >= bestD) continue;
+        std::sort(ps, ps + m);
+        float d = 0;
+        for (int j = 0; j < m; ++j) d += wAbs[perm[ps[j]]];
+        if (d >= bestD) continue;
         uint8_t m91[FTX_LDPC_K_BYTES] = {};
-        for (int k = 0; k < FTX_LDPC_K; ++k) if (getBit(c, pos[k])) m91[k / 8] |= (uint8_t)(0x80u >> (k % 8));
+        for (int k = 0; k < FTX_LDPC_K; ++k) if (getBit(c, k)) m91[k / 8] |= (uint8_t)(0x80u >> (k % 8));
         const uint16_t crcRx = ftx_extract_crc(m91);
         uint8_t t[FTX_LDPC_K_BYTES]; std::memcpy(t, m91, sizeof t);
         t[9] &= 0xF8; t[10] = 0; t[11] = 0;
@@ -182,7 +198,6 @@ int osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
     }
     return bestErr;
 }
-} // namespace
 
 // ── One slot ────────────────────────────────────────────────────────────────────────────────────
 
@@ -507,7 +522,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
                 ++st.osdTried[pass - 1];
                 float llr[FTX_LDPC_N]; uint8_t a91[FTX_LDPC_K_BYTES];
                 ftx_candidate_log174(wf, &c, llr);
-                const int osdErr = osd1(llr, o.osdMaxErrors, a91);
+                const int osdErr = ft8Osd1(llr, o.osdMaxErrors, a91);
                 sm[Ft8SlotStats::kOsd] += lap();
                 if (osdErr < 0) continue;
                 ftx_message_init(&msg);

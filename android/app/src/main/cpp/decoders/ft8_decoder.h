@@ -52,6 +52,11 @@ private:
 /** The one table every FT8/FT4 decoder shares (call hashes are global — a call heard on FT8 resolves on FT4). */
 Ft8CallHashTable& ft8CallHashes();
 
+/** OSD order 1 on the 174 bit log-likelihoods (log p(1)/p(0), codeword order): fills `a91` (message + CRC, packed)
+ *  and returns the hard-decision disagreements of the closest CRC-valid codeword, or -1 when none is within
+ *  `maxErrors`. Exposed for test-ft8-fast. */
+int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[12]);
+
 /** One message decoded from a slot. */
 struct Ft8Result {
     ftx_message_t msg;
