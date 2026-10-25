@@ -1221,7 +1221,12 @@ def main():
         run_for(nm, box, 200)
         ok(nm.active == "vibe-net-1" and box.mode == "client",
            "idle setup hotspot closes; network 1 (Home) wins over a STRONGER network 3")
-        ok(box.captive_port is not None, ":80 redirect KEPT as a client — http://vibepocket.local/ works on the home network")
+        # ★★★ REVERSED 2026-10-25 (Stuart: "release the port the less open ports the better"): the hotspot's :80 goes
+        #     with the hotspot. (The box is not set up here — on a box being set up, setup_door() keeps :80 instead.)
+        ok(box.captive_port is None and "delete table ip6 " + vp.NFT_TABLE in nm.nft[-1] and "redirect" not in nm.nft[-1],
+           "★ :80 RELEASED as a client — the Wi-Fi redirect is removed (both families) once the hotspot is down")
+        n80 = len(nm.nft); run_for(nm, box, 60)
+        ok(len(nm.nft) == n80, "…removed once, not every turn")
 
         # ── strict order on a later boot ──
         nm2, box2 = make(tmp)
@@ -1552,25 +1557,82 @@ def main():
                 return 0, ""
             return real_run(args, timeout, secret)
         box.sh.run = spy
+        # ★★★ ONE .local NAME (Stuart, 2026-10-25: "realistically the only .local address open after setup should be the
+        #     one the user sets"): the setup name while setting up; the owner's chosen name after; nothing if none.
+        vp.AVAHI_SERVICE = os.path.join(tmp, "avahi-vibeserver.service"); vp.AVAHI_HOSTS = os.path.join(tmp, "avahi-hosts")
+        with open(vp.AVAHI_HOSTS, "w") as f: f.write("# See avahi.hosts(5) for more information on this configuration file!\n")
+        box.mdns_file = os.path.join(tmp, "pocket-mdns"); box.mdns_plan_path = os.path.join(tmp, "mdns-plan.json")
+        restarts = lambda: [c for c in calls if c[:2] == ["systemctl", "restart"] and c[2] == "avahi-daemon.service"]
         box.sync_hostname(False)
         ok(["hostnamectl", "set-hostname", "vibeserversetup"] in calls, "unconfigured → hostname vibeserversetup")
-        ok(["systemctl", "try-restart", "avahi-daemon.service"] in calls, "…and avahi republishes it at once")
+        ok(restarts(), "…and avahi republishes it at once")
         ok("127.0.1.1\tvibeserversetup" in open(vp.HOSTS_FILE).read(), "…/etc/hosts follows (no 'unable to resolve host')")
+        ok(not os.path.exists(vp.AVAHI_SERVICE), "…and no service published while setting up (only the setup name)")
         calls.clear(); box.sync_hostname(False)
         ok(not calls, "nothing to do → nothing run (it is called every few seconds)")
+        # ── Save: the server says the owner's name ──
+        with open(box.mdns_file, "w") as f: json.dump({"label": "nicks-sdr", "port": 0, "pin": False}, f)
+        box.wired_ip = "192.168.1.77"
         box.sync_hostname(True)
-        ok(["hostnamectl", "set-hostname", "vibepocket"] not in calls,
+        ok(["hostnamectl", "set-hostname", "vibepocket"] not in calls and ["hostnamectl", "set-hostname", "nicks-sdr"] not in calls,
            "set up JUST NOW: the setup name stays (the page that pressed Save is still talking to it)")
+        ok("192.168.1.77 nicks-sdr.local  " + vp.AVAHI_ALIAS_TAG in open(vp.AVAHI_HOSTS).read() and restarts(),
+           "…and the NEW name answers at once too (an avahi alias — the page sends the owner there)")
+        ok("See avahi.hosts" in open(vp.AVAHI_HOSTS).read(), "…the file's own lines kept")
         nm.t += 200
-        box.sync_hostname(True)
-        ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "…retired 3 minutes later (vibepocket)")
-        ok(calls[-1] == ["systemctl", "try-restart", "avahi-daemon.service"],
-           "…and avahi is restarted so vibepocket.local answers and vibeserversetup.local goes")
+        calls.clear(); box.sync_hostname(True)
+        ok(["hostnamectl", "set-hostname", "nicks-sdr"] in calls, "★ …retired 3 minutes later: the hostname IS the chosen name")
+        ok(["hostnamectl", "set-hostname", "vibepocket"] not in calls, "★ vibepocket.local is never published beside it")
+        ok(vp.AVAHI_ALIAS_TAG not in open(vp.AVAHI_HOSTS).read(), "…the alias is gone (one name)")
+        svc = open(vp.AVAHI_SERVICE).read()
+        ok("<name>nicks-sdr</name>" in svc and "<type>_vibesdr._tcp</type>" in svc and "<port>48000</port>" in svc
+           and "proto=vibeserver" in svc and "pin=0" in svc,
+           "…and avahi publishes the _vibesdr._tcp service under it (what the server's own responder published)")
+        ok(restarts(), "…avahi restarted to publish it (IPv4 and IPv6 — the server's responder is not run on a Portable)")
+        plan = json.load(open(box.mdns_plan_path))
+        ok(plan["host"] == "nicks-sdr" and plan["publish"] is True, "…and the plan is left for avahi's gate (every start)")
+        # ── the owner switches mDNS off: NOTHING answers ──
+        with open(box.mdns_file, "w") as f: json.dump({"label": "", "port": 0, "pin": False}, f)
+        calls.clear(); box.sync_hostname(True)
+        ok(["systemctl", "stop", "avahi-daemon.socket", "avahi-daemon.service"] in calls and not restarts()
+           and not os.path.exists(vp.AVAHI_SERVICE),
+           "★ set up with no chosen name (mDNS off): avahi is STOPPED — no .local name at all")
+        ok(json.load(open(box.mdns_plan_path))["publish"] is False, "…and its gate will skip it at the next boot")
+        # ── a box that BOOTS set up, with a name: the name at once, no grace ──
         nm2, box2 = make(tmp)
         calls.clear(); box2.sh.run = spy
+        box2.mdns_file = box.mdns_file; box2.mdns_plan_path = os.path.join(tmp, "mdns-plan-2.json")
+        with open(box.mdns_file, "w") as f: json.dump({"label": "nicks-sdr", "port": 48010, "pin": True}, f)
         with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibeserversetup\n")
         box2.sync_hostname(True)
-        ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "a box that BOOTS already set up switches at once")
+        ok(["hostnamectl", "set-hostname", "nicks-sdr"] in calls, "a box that BOOTS already set up switches at once")
+        ok("<port>48010</port>" in open(vp.AVAHI_SERVICE).read() and "pin=1" in open(vp.AVAHI_SERVICE).read(),
+           "…the service carries the server's own port and PIN flag")
+        # ── the gate, as avahi runs it at boot (no plan yet in /run) ──
+        keep = (vp.MDNS_PLAN, vp.MDNS_FILE, vp.MARKER, vp.SERVER_CONF, vp.PORT_FILE, vp.Shell)
+        try:
+            vp.MDNS_PLAN = os.path.join(tmp, "no-plan.json"); vp.MDNS_FILE = box.mdns_file
+            vp.MARKER = os.path.join(tmp, "marker"); open(vp.MARKER, "w").write("1\n")
+            vp.SERVER_CONF = os.path.join(tmp, "config.json"); vp.PORT_FILE = os.path.join(tmp, "no-port")
+            vp.Shell = lambda: type("S", (), {"run": staticmethod(spy)})()
+            with open(vp.SERVER_CONF, "w") as f: json.dump({"configured": True}, f)
+            with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibeserversetup\n")
+            calls.clear()
+            ok(vp.avahi_gate() == 0 and ["hostnamectl", "set-hostname", "nicks-sdr"] in calls,
+               "★ avahi's gate at boot: the chosen name is set BEFORE avahi publishes anything (exit 0 = start)")
+            with open(vp.MDNS_FILE, "w") as f: json.dump({"label": "", "port": 0, "pin": False}, f)
+            ok(vp.avahi_gate() == 1, "★ …set up with no name: exit 1 — avahi's start is SKIPPED (nothing published)")
+            with open(vp.SERVER_CONF, "w") as f: json.dump({"configured": False}, f)
+            calls.clear()
+            ok(vp.avahi_gate() == 0 and ["hostnamectl", "set-hostname", "vibeserversetup"] in calls,
+               "…not set up: vibeserversetup, published")
+            with open(vp.MDNS_PLAN, "w") as f: f.write("{not json")
+            vp.SERVER_CONF = os.path.join(tmp, "missing", "config.json")
+            ok(vp.avahi_gate() == 0, "a broken plan / missing config: the gate says PUBLISH (never lose the setup name to a bug)")
+            vp.MARKER = os.path.join(tmp, "no-marker")
+            ok(vp.avahi_gate() == 0, "not a Portable (no marker): the gate does nothing and lets avahi start")
+        finally:
+            vp.MDNS_PLAN, vp.MDNS_FILE, vp.MARKER, vp.SERVER_CONF, vp.PORT_FILE, vp.Shell = keep
 
     # ── REORDER WHILE CONNECTED (Stuart's Pi 3 A+, 2026-10-10): phone hotspot moved to 1 while on Home, phone in range ──
     with tempfile.TemporaryDirectory() as tmp:

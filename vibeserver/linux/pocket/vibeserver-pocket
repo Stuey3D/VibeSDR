@@ -106,11 +106,25 @@ SERVER_CONF  = "/etc/vibeserver/config.json"                # the server's setti
 #     VibeServerSetup.local (mDNS is case-blind) on EVERY network — the setup hotspot, the owner's
 #     Wi-Fi, their own hotspot — so "reconnect to your network and open VibeServerSetup.local:48000"
 #     works with no router page and no IP address. Once "Save and start" has configured it, the name
-#     is RETIRED: the hostname becomes RUN_HOST and the server publishes the name chosen in setup.
+#     is RETIRED: the hostname becomes the name chosen in setup — the ONLY name the box then answers to (below).
 #     ★ The HOSTNAME, published by avahi, not a record the server publishes: avahi follows the box
 #       from 10.42.0.1 to the home network's address by itself; a record would go stale on the switch.
 SETUP_HOST   = "vibeserversetup"
-RUN_HOST     = "vibepocket"
+RUN_HOST     = "vibepocket"         # ★ the hostname of a set-up box with NO chosen name — never published (mdns_plan)
+# ★★★ ONE .local NAME AFTER SETUP — THE OWNER'S (Stuart, 2026-10-25: "realistically the only .local address open after
+#     setup should be the one the user sets"). Until then vibepocket.local (avahi, the hostname) answered beside the
+#     server's own <chosen>.local (its responder) — two names, two responders, the server's IPv4 only. Now the server
+#     writes the name it would advertise into MDNS_FILE and runs no responder on a Portable; this service makes it the
+#     HOSTNAME, which avahi publishes on IPv4 and IPv6, with the _vibesdr._tcp service in AVAHI_SERVICE. avahi asks
+#     before every start (`vibeserver-pocket avahi-gate`, the converge's drop-in) and is skipped when there is nothing to
+#     publish. While setting up: vibeserversetup.local only; for RETIRE_SEC after a Save, the new name too (an
+#     /etc/avahi/hosts alias), because the page sends the owner there at once.
+MDNS_FILE     = "/var/lib/vibeserver/pocket-mdns"            # the server writes {"label","port","pin"}; root reads
+MDNS_PLAN     = "/run/vibeserver-pocket/mdns-plan.json"      # what avahi should publish now — the gate applies it
+AVAHI_SERVICE = "/etc/avahi/services/vibeserver-pocket.service"
+AVAHI_HOSTS   = "/etc/avahi/hosts"
+AVAHI_ALIAS_TAG = "# vibeserver-pocket: the new name, while the setup name retires"
+LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 RETIRE_SEC   = 180           # ★ how long the setup name outlives a setup finished in this run (see sync_hostname)
 HOSTNAME_FILE = "/etc/hostname"
 HOSTS_FILE    = "/etc/hosts"
@@ -751,8 +765,12 @@ class Box:
         self.last_client = sh.now()
         self.clients = 0
         self.captive_port = None
+        self.captive_dropped = False  # ★ the Wi-Fi :80 table removed (captive_off) — asked once, not every turn
         self.setup_door_port = None   # ★ the :80 → front door redirect on every link, while setting up (setup_door)
         self.host_synced = False
+        self.mdns_file = MDNS_FILE
+        self.mdns_plan_path = MDNS_PLAN
+        self.mdns_plan_now = None     # ★ the publishing plan applied this run (sync_hostname)
         self.saw_unconfigured = False
         self.configured_at = None
         self.since = int(time.time())
@@ -1601,7 +1619,7 @@ class Box:
         # ★★ IPv6 TOO (2026-10-25): the server listens dual-stack now, and a name that resolves to IPv6 first (Nick's
         #    network) must reach :80 the same way. nft_redirect falls back to IPv4 alone on a kernel without IPv6 NAT.
         if nft_redirect(self.sh, NFT_TABLE, port, 'iifname "%s" ' % self.dev):
-            self.captive_port = port
+            self.captive_port, self.captive_dropped = port, False
         else:
             log("could not load the :80 redirect (is nftables installed?) — the phone's captive "
                 "sheet will not open by itself; http://%s:%d/ still works" % (AP_ADDR, port))
@@ -1623,36 +1641,38 @@ class Box:
         # ★★★ http://vibeserversetup.local/ ON ETHERNET TOO, and only while setting up (2026-10-25). It goes with the
         #     setup NAME, at the same moment — the page that pressed Save is still talking to :80 for RETIRE_SEC.
         self.setup_door(not retire)
-        want = RUN_HOST if retire else SETUP_HOST
+        # ★★★ THE PLAN: which ONE name avahi publishes (see MDNS_FILE). Cheap when nothing changes — the plan is compared,
+        #     and avahi restarted only when it differs.
+        ips = [ip for ip in (self.wired_ip, self.ip4() if self.dev and self.cur else "") if ip] if configured and not retire else []
+        plan = mdns_plan(retire, bool(configured), read_mdns_name(self.mdns_file), ips, self.front_door_port())
+        if plan == self.mdns_plan_now:
+            return
+        first = self.mdns_plan_now is None
+        self.mdns_plan_now = plan
+        if first and load_mdns_plan(self.mdns_plan_path) == plan and self.hostname_is(plan["host"]):
+            return                  # ★ the gate already applied this plan when avahi started this boot
+        changed = apply_mdns_plan(self.sh, plan)
+        save_mdns_plan(self.mdns_plan_path, plan)
+        if not changed and not first:
+            return
+        if plan["publish"]:
+            # ★ restart, not try-restart: it also starts an avahi the plan had stopped. The gate re-reads the plan.
+            self.sh.run(["systemctl", "restart", "avahi-daemon.service"], timeout=20)
+            names = [plan["host"]] + [a[1].split(".")[0] for a in plan["alias"]]
+            log("answering as %s%s" % (" and ".join(n + ".local" for n in names),
+                                       "" if retire else (" while the setup name retires" if plan["alias"] else
+                                                          " until setup is finished")))
+        else:
+            # ★★ Belt and braces: the gate (after the next reboot of a box that just updated) would skip the start anyway.
+            self.sh.run(["systemctl", "stop", "avahi-daemon.socket", "avahi-daemon.service"], timeout=20)
+            log("no .local name: this box is set up and its owner chose none (mDNS off) — avahi stopped")
+
+    def hostname_is(self, want):
         try:
             with open(HOSTNAME_FILE) as f:
-                have = f.read().strip()
+                return f.read().strip() == want
         except OSError:
-            have = ""
-        if have == want and self.host_synced:
-            return
-        self.host_synced = True
-        if have == want:
-            return
-        # ★★ sh.run returns (rc, out). This compared the PAIR with 0 — never equal — so hostnamectl renamed the
-        #    box and then everything after it (/etc/hosts, the avahi restart) was skipped as a "failure": avahi
-        #    went on announcing vibeserversetup.local and vibepocket.local never answered (v8, 2026-10-10).
-        rc, _ = self.sh.run(["hostnamectl", "set-hostname", want], timeout=15)
-        if rc != 0:
-            log("could not set the hostname to %s" % want)
-            return
-        try:
-            with open(HOSTS_FILE) as f:
-                hosts = f.read()
-            hosts = re.sub(r"(?m)^127\.0\.1\.1\s.*$", "127.0.1.1\t" + want, hosts)
-            if "127.0.1.1" not in hosts:
-                hosts += "127.0.1.1\t%s\n" % want
-            write_atomic(HOSTS_FILE, hosts)
-        except OSError:
-            pass
-        # ★ avahi does not follow a hostname change by itself — a restart republishes at once.
-        self.sh.run(["systemctl", "try-restart", "avahi-daemon.service"], timeout=20)
-        log("answering as %s.local%s" % (want, "" if configured else " until setup is finished"))
+            return False
 
     def setup_door(self, on):
         """★★★ PORT 80 ON EVERY LINK WHILE THE BOX IS BEING SET UP — Ethernet included (Nick, G4IRX, a real Orange Pi One
@@ -1662,7 +1682,8 @@ class Box:
         setup is finished: :80 → the front door on EVERY interface, IPv4 and IPv6, in a table of its own.
         ★★ STOPS WHEN SETUP IS FINISHED — a set-up server does not take over port 80 on someone's LAN. Exactly when the
            setup name retires (sync_hostname: at once on a box that boots set up; RETIRE_SEC after a Save in this run).
-        ★ The Wi-Fi-interface redirect (captive_on / captive_off) is not this, and is unchanged."""
+        ★ The Wi-Fi-interface redirect (captive_on / captive_off) is not this: it exists only while the box's own
+          hotspot is on the air (a joining phone's captive check), and is released with it."""
         port = self.front_door_port() if on else None
         if self.setup_door_port == port:
             return
@@ -1678,13 +1699,15 @@ class Box:
             log("setup is finished — port 80 is left alone on the wired network")
 
     def captive_off(self):
-        # ★★★ THE :80 REDIRECT STAYS, ON EVERY NETWORK (Stuart, 2026-10-10: the owner must reach the
-        #     box straight away by its .local name "without having to work out the IP address"). It
-        #     was removed on leaving the hotspot, which made the address http://vibepocket.local:48000/
-        #     on the home network — a port nobody remembers. Kept, it is http://vibepocket.local/
-        #     everywhere. Harmless as a client: nothing else on this box listens on :80, and the
-        #     captive DNS answers (the part that hijacks lookups) belong to NM's hotspot only.
-        self.captive_on()
+        """★★★ PORT 80 IS RELEASED when the box's own hotspot is down (Stuart, 2026-10-25: "release the port the less
+        open ports the better" — REVERSING 2026-10-10, when the redirect was kept on every network so the home network
+        had http://vibepocket.local/). The Wi-Fi redirect now exists only while this box's own hotspot is on the air,
+        where a joining phone's captive check needs it; on the owner's network the address is
+        http://<chosen name>.local:48000/. While the box is being set up, setup_door() keeps :80 on every link."""
+        if self.captive_port is None and self.captive_dropped:
+            return
+        if self.sh.run_input(["nft", "-f", "-"], nft_drop(NFT_TABLE)) == 0:
+            self.captive_port, self.captive_dropped = None, True
 
     # ── transitions ──
     def raise_hotspot(self, why):
@@ -2124,7 +2147,7 @@ class Box:
                 return
             if self.mode != "client":
                 self.mode, self.since = "client", int(time.time())
-                self.captive_off()          # ★ keeps (or, on a boot straight into a network, loads) :80
+                self.captive_off()          # ★ releases :80 — the hotspot's redirect goes with the hotspot
             rank = next((r for r, n, s, h in saved if n == cur), 10)
             if self.hold_net and self.hold_net != cur:
                 self.hold_net = ""                  # the chosen network went (out of range): the usual order again
@@ -2391,6 +2414,146 @@ def save_history(path, history):
         write_atomic(path, json.dumps(history[-JOIN_KEEP:], ensure_ascii=False), mode=0o600)   # ★ SSIDs: root only
     except OSError:
         pass                                              # ★ no settings partition: it lasts until the restart
+
+
+def read_mdns_name(path=MDNS_FILE):
+    """The name the server would advertise, as it wrote it: {"label", "port", "pin"}; label "" = none. None = no (valid)
+    file — the server has not said."""
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    label = d.get("label") if isinstance(d.get("label"), str) else ""
+    if label and not LABEL_RE.match(label):
+        return None
+    port = d.get("port") if isinstance(d.get("port"), int) and 0 < d.get("port") < 65536 else 0
+    return {"label": label, "port": port, "pin": d.get("pin") is True}
+
+
+def mdns_plan(retire, configured, chosen, ips, port):
+    """★★★ What avahi publishes — ONE name (see MDNS_FILE):
+      · being set up (or the setup name not retired yet): vibeserversetup; during the RETIRE_SEC after a Save the new
+        name as well, by IPv4 alias (the page sends the owner there at once);
+      · set up, with a chosen name: that name is the hostname, with the _vibesdr._tcp service;
+      · set up, no name (mDNS off, or the server never said): NOTHING — avahi is not run."""
+    if not retire:
+        label = chosen["label"] if configured and chosen else ""
+        alias = [[ip, label + ".local"] for ip in ips] if label and label != SETUP_HOST else []
+        return {"host": SETUP_HOST, "publish": True, "service": None, "alias": alias}
+    if not chosen or not chosen["label"]:
+        return {"host": RUN_HOST, "publish": False, "service": None, "alias": []}
+    return {"host": chosen["label"], "publish": True, "alias": [],
+            "service": {"name": chosen["label"], "port": chosen["port"] or port, "pin": chosen["pin"]}}
+
+
+def load_mdns_plan(path=MDNS_PLAN):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) and "host" in d else None
+    except (OSError, ValueError):
+        return None
+
+
+def save_mdns_plan(path, plan):
+    try:
+        write_atomic(path, json.dumps(plan, sort_keys=True))
+    except OSError:
+        pass
+
+
+def avahi_service_xml(svc):
+    esc = lambda s: s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return ("<?xml version=\"1.0\" standalone=\"no\"?>\n"
+            "<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n"
+            "<!-- Written by vibeserver-pocket: this box's VibeServer, under the name its owner chose. -->\n"
+            "<service-group>\n  <name>%s</name>\n  <service>\n    <type>_vibesdr._tcp</type>\n    <port>%d</port>\n"
+            "    <txt-record>proto=vibeserver</txt-record>\n    <txt-record>pin=%d</txt-record>\n  </service>\n"
+            "</service-group>\n") % (esc(svc["name"]), svc["port"], 1 if svc["pin"] else 0)
+
+
+def apply_mdns_plan(sh, plan):
+    """The hostname (+ /etc/hosts), the avahi service file and the alias lines, as the plan says. Returns True when
+    anything changed (avahi must then be restarted to publish it)."""
+    changed = False
+    want = plan["host"]
+    try:
+        with open(HOSTNAME_FILE) as f:
+            have = f.read().strip()
+    except OSError:
+        have = ""
+    if have != want:
+        # ★★ sh.run returns (rc, out) — compared with 0 as a PAIR once, which skipped everything after it (v8, 2026-10-10).
+        rc, _ = sh.run(["hostnamectl", "set-hostname", want], timeout=15)
+        if rc != 0:
+            # ★ Before D-Bus (the gate runs as avahi starts): the kernel's name and the file, by hand.
+            sh.run(["hostname", want], timeout=10)
+            try:
+                write_atomic(HOSTNAME_FILE, want + "\n")
+            except OSError:
+                log("could not set the hostname to %s" % want)
+        try:
+            with open(HOSTS_FILE) as f:
+                hosts = f.read()
+            hosts = re.sub(r"(?m)^127\.0\.1\.1\s.*$", "127.0.1.1\t" + want, hosts)
+            if "127.0.1.1" not in hosts:
+                hosts += "127.0.1.1\t%s\n" % want
+            write_atomic(HOSTS_FILE, hosts)
+        except OSError:
+            pass
+        changed = True
+    svc = avahi_service_xml(plan["service"]) if plan.get("service") else None
+    cur = read_plain(AVAHI_SERVICE, 8192)
+    if svc != cur:
+        try:
+            if svc is None:
+                os.unlink(AVAHI_SERVICE)
+            else:
+                write_atomic(AVAHI_SERVICE, svc)
+            changed = True
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log("could not write %s (%s)" % (AVAHI_SERVICE, e.strerror))
+    try:
+        with open(AVAHI_HOSTS) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = None
+    if lines is not None or plan["alias"]:
+        keep = [l for l in (lines or []) if not l.endswith(AVAHI_ALIAS_TAG)]
+        new = keep + ["%s %s  %s" % (ip, name, AVAHI_ALIAS_TAG) for ip, name in plan["alias"]]
+        if new != (lines or []):
+            try:
+                write_atomic(AVAHI_HOSTS, "\n".join(new) + "\n")
+                changed = True
+            except OSError:
+                pass
+    return changed
+
+
+def avahi_gate():
+    """★★★ `vibeserver-pocket avahi-gate` — avahi's ExecCondition (the converge's drop-in). Applies the plan this
+    service wrote (or, at boot before it runs, the plan for a box as configured: no grace — a box that boots set up
+    switches at once) and exits 1 when nothing is to be published, which skips avahi's start cleanly. Any failure
+    says "publish" (exit 0): the setup name must never be lost to a bug here."""
+    try:
+        if not os.path.exists(MARKER):
+            return 0
+        plan = load_mdns_plan(MDNS_PLAN)
+        if plan is None:
+            configured = server_configured(SERVER_CONF)
+            digits = re.sub(r"[^0-9]", "", read_plain(PORT_FILE, 16) or "")[:5]
+            port = int(digits) if digits and 0 < int(digits) < 65536 else 48000
+            plan = mdns_plan(configured, configured, read_mdns_name(MDNS_FILE), [], port)
+        apply_mdns_plan(Shell(), plan)
+        return 0 if plan.get("publish", True) else 1
+    except Exception as e:                    # ★ never lose the name to a bug
+        print("vibeserver-pocket avahi-gate: %s — publishing anyway" % type(e).__name__, file=sys.stderr)
+        return 0
 
 
 def nft_drop(table):
@@ -3064,10 +3227,12 @@ if __name__ == "__main__":
         except OSError:
             print("no state yet")
         sys.exit(0)
+    if cmd == "avahi-gate":
+        sys.exit(avahi_gate())
     if cmd == "reset-wifi":
         b = Box(Shell(), load_conf())
         b.dev = b.wifi_device()
         b.reset_wifi()
         sys.exit(0)
-    print("usage: vibeserver-pocket [run|status|reset-wifi]", file=sys.stderr)
+    print("usage: vibeserver-pocket [run|status|reset-wifi|avahi-gate]", file=sys.stderr)
     sys.exit(2)

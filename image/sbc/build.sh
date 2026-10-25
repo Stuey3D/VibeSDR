@@ -322,6 +322,12 @@ check "sshd: no host keys on the card (each box makes its own)" '[ -z "$(ls "$R"
 check "sshd: systemd's ssh generator masked"     '[ "$(readlink "$R/etc/systemd/system-generators/systemd-ssh-generator")" = /dev/null ]'
 check "sshd: PermitRootLogin no, read first"     \
       '[ "$(ls "$R/etc/ssh/sshd_config.d/" | head -1)" = 00-vibeserver-portable.conf ] && grep -q "^PermitRootLogin no" "$R/etc/ssh/sshd_config.d/00-vibeserver-portable.conf" && grep -q "^Include /etc/ssh/sshd_config.d/" "$R/etc/ssh/sshd_config"'
+check "avahi asks vibeserver-pocket which name to publish (ExecCondition gate)" \
+      'grep -q "^ExecCondition=/usr/lib/vibeserver/vibeserver-pocket avahi-gate" "$R/etc/systemd/system/avahi-daemon.service.d/50-vibeserver-pocket.conf"'
+check "systemd-resolved answers no name (LLMNR off, mDNS off)" \
+      'grep -q "^LLMNR=no" "$R/etc/systemd/resolved.conf.d/60-vibeserver-pocket.conf" && grep -q "^MulticastDNS=no" "$R/etc/systemd/resolved.conf.d/60-vibeserver-pocket.conf"'
+check "avahi publishes both address families" \
+      'grep -q "^publish-a-on-ipv6=yes" "$R/etc/avahi/avahi-daemon.conf"'
 check "sshd: no SysV rc start link"              '[ -z "$(ls "$R"/etc/rc[2-5].d/S*ssh 2>/dev/null)" ]'
 check "netplan hands Ethernet to NetworkManager" 'grep -q "renderer: NetworkManager" "$R/etc/netplan/10-vibeserver-networkmanager.yaml"'
 check "Armbian root resize off"                 '[ -f "$R/root/.no_rootfs_resize" ]'

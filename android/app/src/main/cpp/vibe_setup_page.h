@@ -6393,14 +6393,14 @@ function wifiAddresses() {
   const port = POCKET && POCKET.port ? POCKET.port : (location.port || 80);
   const suffix = String(port) === "80" ? "" : ":" + port;
   const out = [];
-  // ★★★ ONE NAME FIRST, NO PORT (Stuart, 2026-10-10). The box's own hostname is published by avahi
-  //     from the moment it boots — configured or not — and the root service keeps :80 pointed at the
-  //     front door on every network, so http://vibepocket.local/ is the address to remember.
-  // ★ Once configured, the name chosen in setup comes first (Stuart: it "then applies").
+  // ★★★ ONE NAME, WITH ITS PORT (Stuart, 2026-10-25: "realistically the only .local address open after setup should be
+  //     the one the user sets", and "release the port the less open ports the better"). Once set up, the box answers
+  //     ONLY to the name chosen here (its hostname, published by avahi) and port 80 is released — so the address is
+  //     http://<chosen>.local:<port>/. vibepocket.local no longer exists. While setting up it is VibeServerSetup.local.
   const label = mdnsLabel(($("name") && $("name").value) || (cfg && cfg.name) || "");
   const host = POCKET && POCKET.hostname ? String(POCKET.hostname).split(".")[0] : "";
   if ($("mdns").checked && cfg && cfg.configured && label && label !== host) out.push("http://" + label + ".local" + suffix + "/");
-  if (host) out.push("http://" + host + ".local/");
+  if (host && host !== "vibepocket") out.push("http://" + host + ".local" + suffix + "/");
   return {out, suffix};
 }
 
@@ -6720,9 +6720,12 @@ function backUp() {
 function pocketNewHome() {
   if (!POCKET || !/^vibeserversetup\.local$/i.test(location.hostname)) return "";
   const {out, suffix} = wifiAddresses();
-  // The name chosen in setup if there is one; never the setup name itself; else the box's own permanent name.
+  // The name chosen in setup if there is one; never the setup name itself. ★ No chosen name (mDNS switched off): the box
+  //   answers to NO .local name once set up, so its address on this network is its IP.
   const chosen = out.find(x => !/\/\/vibeserversetup\./i.test(x) && !/\/\/vibepocket\./i.test(x));
-  return chosen || ("http://vibepocket.local" + suffix + "/");
+  const w = WIFI || {};
+  const ip = w.wiredIp || w.ip || "";
+  return chosen || (ip ? "http://" + ip + suffix + "/" : "");
 }
 </script>
 )HTML";

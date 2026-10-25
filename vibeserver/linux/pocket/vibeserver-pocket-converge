@@ -87,7 +87,25 @@ ZRAM = ("/etc/rpi/swap.conf.d/60-vibeserver-pocket.conf",
         "# VibeServer pocket image: no swap file on the SD card — zram only.\n"
         "[Main]\n"
         "Mechanism=zram\n")
-OUR_FILES = (NM_CONNECTIVITY, JOURNALD, ZRAM)
+# ★★★ ONE .local NAME, AND NONE THAT NOBODY CHOSE (Stuart, 2026-10-25: "realistically the only .local address open after
+#     setup should be the one the user sets"). avahi asks vibeserver-pocket before EVERY start (ExecCondition): the
+#     gate sets the hostname it should publish — vibeserversetup while setting up, the owner's chosen name once set up —
+#     writes the _vibesdr._tcp service beside it, and SKIPS the start (exit 1) when there is nothing to publish (set up,
+#     mDNS switched off). So avahi never starts publishing a name the box should not have, not even for the seconds
+#     between boot and the Wi-Fi service. A gate that fails says "publish" (exit 0): never lose the setup name to a bug.
+AVAHI_GATE = ("/etc/systemd/system/avahi-daemon.service.d/50-vibeserver-pocket.conf",
+              "# Written by the VibeServer pocket image: avahi publishes only the name this box should answer to.\n"
+              "[Service]\n"
+              "ExecCondition=/usr/lib/vibeserver/vibeserver-pocket avahi-gate\n")
+# ★★ The less listening the better (Stuart, 2026-10-25): systemd-resolved (Armbian runs it; Raspberry Pi OS does not)
+#    answers the hostname over LLMNR on 5355 — a second responder for a name, on another port. Off, and its mDNS off so
+#    it can never compete with avahi for .local.
+RESOLVED = ("/etc/systemd/resolved.conf.d/60-vibeserver-pocket.conf",
+            "# VibeServer pocket image: only avahi answers for this box's name (no LLMNR, no second mDNS responder).\n"
+            "[Resolve]\n"
+            "LLMNR=no\n"
+            "MulticastDNS=no\n")
+OUR_FILES = (NM_CONNECTIVITY, JOURNALD, ZRAM, AVAHI_GATE, RESOLVED)
 
 # ★ The VibeSDR apt repository — REPAIRED if missing, never rewritten if present (an owner or a tester may point it
 #   elsewhere). The KEY is image-only: fetching it needs the network, and a box this package reached already has one.

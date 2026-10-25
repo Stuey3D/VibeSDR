@@ -42,6 +42,7 @@ int main() {
     paths().kick     = dir + "/pocket-kick.request";
     paths().sshInbox = dir + "/pocket-ssh.request";
     paths().portFile = dir + "/pocket-port";
+    paths().mdnsFile = dir + "/pocket-mdns";
 
     // ── host rules ──
     ok(isOurHost("10.42.0.1:48000", "vibepocket"), "an IP literal with a port is ours");
@@ -369,6 +370,16 @@ int main() {
            "NOT wired: Wi-Fi off is refused (409, says to plug in Ethernet) and no kick is written — a box must not strand itself");
         ok(radio("{\"off\":false}").code == 200, "…switching it ON is always allowed");
 
+        // ★★★ ONE .local NAME (2026-10-25): the name handed to the root service — a DNS label or nothing.
+        {
+            std::string e;
+            ok(writeMdnsName("nick-s-sdr", 0, true, e) && slurp(paths().mdnsFile) == "{\"label\":\"nick-s-sdr\",\"port\":0,\"pin\":true}\n",
+               "the mDNS name goes to the root service as {label, port, pin}");
+            ok(writeMdnsName("", 48001, false, e) && slurp(paths().mdnsFile) == "{\"label\":\"\",\"port\":48001,\"pin\":false}\n",
+               "…an empty label = nothing to publish");
+            ok(!writeMdnsName("bad\",\"label", 0, false, e) && !writeMdnsName(std::string(64, 'a'), 0, false, e),
+               "…anything that is not a DNS label is refused (it is root's input)");
+        }
         // ★★★ NEW WI-FI HARDWARE (2026-10-25): Configure / Not now, admin-gated, a kick word each.
         {
             put(paths().state, "{\"mode\":\"wired\",\"ap\":{\"set\":false},\"hasWifi\":false,\"wired\":true,"

@@ -7,6 +7,9 @@ This builds a **VibeServer Portable** card for a board that is not a Raspberry P
 - the same open "VibeServer" setup hotspot on a board with Wi-Fi;
 - the same `http://VibeServerSetup.local/` on Ethernet from the first boot (port 80 until setup is finished, and `:48000`
   always), answered on IPv4 and IPv6;
+- once set up, the box answers to **one** `.local` name — the one chosen in setup, at `http://<name>.local:48000/` —
+  published by avahi alone (IPv4 + IPv6, with the `_vibesdr._tcp` service); port 80 is released; nothing answers by
+  name if the owner switched mDNS off;
 - the same setup page, the same Install updates and the same baked High Detail Maps;
 - **SSH off** until the owner switches it on in the admin page (login `vibe`, the owner's password; never root);
 - a USB Wi-Fi adapter added **after** setup is left switched off, and the setup page asks "New Wi-Fi hardware detected —

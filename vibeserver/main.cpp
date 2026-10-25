@@ -2020,7 +2020,27 @@ int main(int argc, char** argv) {
     //     port an owner cannot forward. A directory listing pointed at the wrong port would be the
     //     same bug with a public audience. So the listing is deferred to where the port is real.
 
-    if (g_runtimeConfig.configured && g_runtimeConfig.mdnsAdvertise && !wantName.empty()) {
+    /* ★★★ A PORTABLE PUBLISHES ONE NAME, THROUGH AVAHI (Stuart, 2026-10-25: "realistically the only .local address open
+     *  after setup should be the one the user sets"). avahi already answers for the box's hostname, on IPv4 and IPv6 and
+     *  every interface; our responder answers IPv4 only and would be a second responder (the same label from two is a
+     *  conflict avahi "solves" by renaming). So on a Portable the advertising process — the front door, or the only
+     *  process in Simple mode — hands the name to the root service (vibepocket::writeMdnsName) and runs NO responder;
+     *  the root service makes it the hostname and publishes the _vibesdr._tcp service beside it. "" = nothing to publish. */
+    const bool pocketBox = vibepocket::enabled();
+    if (pocketBox && !(vsconfig::needsFrontDoor(g_serverConfig) && o.radioGiven)) {
+        // ★ The MACHINE's "set up" too: the name is the owner's only once the owner has finished setup.
+        const bool adv = g_serverConfig.configured && g_runtimeConfig.configured && g_runtimeConfig.mdnsAdvertise
+                         && !wantName.empty();
+        const std::string label = adv ? vsconfig::mdnsLabel(wantName) : std::string();
+        std::string perr;
+        // ★ The front door's port is not known yet (it binds later and writes pocket-port): 0 = "the door's". Simple mode: ours.
+        const int mport = vsconfig::needsFrontDoor(g_serverConfig) ? 0 : o.port;
+        if (!vibepocket::writeMdnsName(label, mport, !o.pin.empty(), perr))
+            std::fprintf(stderr, "VibeServer: pocket — could not hand the mDNS name to the root service (%s)\n", perr.c_str());
+        else if (!label.empty())
+            std::printf("VibeServer: pocket — %s.local is published by the box (avahi), with _vibesdr._tcp\n", label.c_str());
+    }
+    if (!pocketBox && g_runtimeConfig.configured && g_runtimeConfig.mdnsAdvertise && !wantName.empty()) {
         const std::string label = vsconfig::mdnsLabel(wantName);
         const std::string ip = primaryIpv4();
         // ★★ NO ADDRESS YET IS STARTED ANYWAY (the pocket box boots before its Wi-Fi joins): the responder waits for

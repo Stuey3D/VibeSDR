@@ -653,6 +653,12 @@ printf '\n\033[1m── raw IQ: a vanished client does not wedge the radio (end 
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-iq-close-deadlock.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ ONE .local NAME ON A PORTABLE (2026-10-25): the server hands its name to the root service (avahi publishes it) and
+#     runs no responder of its own there; anywhere else its responder runs as before.
+printf '\n\033[1m── pocket: one .local name, through avahi (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-pocket-mdns.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ DUAL-STACK (2026-10-25, Nick's Orange Pi One was reachable by name on IPv6 only): an IPv4 and an IPv6 client on
 #     one listener, each classified (local / lan) and logged exactly as an IPv4 client always was.
 printf '\n\033[1m── dual-stack: IPv4 and IPv6 clients, classified and logged (end to end) ──\033[0m\n'

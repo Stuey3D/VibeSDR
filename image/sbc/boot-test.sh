@@ -150,6 +150,12 @@ done
     printf 'sshunit %-14s enabled=%s active=%s\n' "$u" "$(run systemctl is-enabled "$u" | head -1)" "$(run systemctl is-active "$u" | head -1)"
   done
   run ss -ltnp
+  # ★★★ WHAT IS PUBLISHED ON mDNS (2026-10-25: one .local name — the setup name now, the owner's after setup).
+  echo "--- mDNS: what this box publishes"
+  run journalctl -b -u avahi-daemon --no-pager -o cat | grep -E "Host name is|Service .* successfully established|Registering new address" | sed 's/^/avahi: /' | tail -8
+  printf 'avahiservices %s\n' "$(run sh -c 'ls /etc/avahi/services/*.service 2>/dev/null | wc -l' | tr -d ' ')"
+  printf 'avahialias %s\n' "$(run sh -c 'grep -c "vibeserver-pocket:" /etc/avahi/hosts 2>/dev/null || true' | tr -d ' ')"
+  run ss -lunp | grep -E ':5353 |:5355 ' | sed 's/^/udp: /'
   echo "--- vibeserver (journal)"; run journalctl -b -u vibeserver --no-pager -n 15
   echo "--- failed units"; run systemctl --failed --no-legend
   echo "--- memory"; run free -m
@@ -172,6 +178,18 @@ fi
 if [ -f "$R/usr/lib/armbian/armbian-firstrun" ] && [ "$FIRSTRUN_ENABLED" = enabled ]; then
   echo "!! armbian-firstrun is still enabled on the second boot — the seal rebooted under it"; exit 1
 fi
+# ★★★ A NEW CARD ANSWERS TO ONE NAME: vibeserversetup.local, from avahi alone (no service, no alias, nobody else on 5353,
+#     nothing on LLMNR 5355). The name after setup is the owner's — proved by the pocket tests (test_vibeserver_pocket.py).
+grep -q '^avahi: .*Host name is vibeserversetup\.local' "$WD/boot-test-result.txt" \
+  || { echo "!! avahi did not publish vibeserversetup.local"; exit 1; }
+if grep -E '^avahi: .*Host name is ' "$WD/boot-test-result.txt" | grep -qv 'vibeserversetup\.local'; then
+  echo "!! avahi published another host name"; exit 1; fi
+grep -q '^avahiservices 0$' "$WD/boot-test-result.txt" || { echo "!! avahi publishes a service before setup"; exit 1; }
+grep -q '^avahialias 0$' "$WD/boot-test-result.txt" || { echo "!! an extra name is published (avahi hosts alias)"; exit 1; }
+if grep -E '^udp: .*:5353 ' "$WD/boot-test-result.txt" | grep -qv 'avahi-daemon'; then
+  echo "!! something besides avahi answers mDNS (UDP 5353)"; exit 1; fi
+if grep -qE '^udp: .*:5355 ' "$WD/boot-test-result.txt"; then echo "!! LLMNR (UDP 5355) answers the box's name"; exit 1; fi
+say "mDNS: vibeserversetup.local only, from avahi alone; no LLMNR"
 say "ssh: nothing listening on :22; ssh.service, sshd.service, ssh.socket, sshd@.service neither enabled nor active"
 case "$SEAL" in FAILED*) echo "!! the read-only seal did not write its switch"; exit 1 ;; esac
 say "boot test passed (emulation only)"

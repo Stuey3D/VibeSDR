@@ -28,10 +28,21 @@ Paths& paths() {
             const std::string b = d;
             q.marker = b + "/enabled"; q.state = b + "/state.json"; q.inbox = b + "/pocket-wifi.request";
             q.kick = b + "/pocket-kick.request"; q.portFile = b + "/pocket-port"; q.sshInbox = b + "/pocket-ssh.request";
+            q.mdnsFile = b + "/pocket-mdns";
         }
         return q;
     }();
     return p;
+}
+
+bool writeMdnsName(const std::string& label, int port, bool pin, std::string& err) {
+    // ★ The label is a DNS label already; anything else is refused here rather than handed to root.
+    for (unsigned char c : label)
+        if (!(std::isalnum(c) || c == '-')) { err = "not a DNS label"; return false; }
+    if (label.size() > 63) { err = "label too long"; return false; }
+    if (port < 0 || port > 65535) port = 0;
+    return writePrivate(paths().mdnsFile, std::string("{\"label\":\"") + label + "\",\"port\":" + std::to_string(port)
+                        + ",\"pin\":" + (pin ? "true" : "false") + "}\n", err);
 }
 
 bool enabled() {

@@ -401,6 +401,19 @@ withdrawal notice); the two Raspberry Pi cards stayed. The fixes are on branch `
 | 4 | "Wi-Fi not saved — Give this box's own hotspot a name" | The page counted an untouched Wi-Fi card as unsaved. | Already fixed: d2464c1c ("Disable Wi-Fi / no Wi-Fi present"). | d2464c1c |
 | — | (Stuart) USB Wi-Fi dongles added later | A radio appearing on a set-up box with nothing saved raised the OPEN setup hotspot on a live server. | A Wi-Fi hardware record; a new radio on a set-up box is left alone, the setup page asks "New Wi-Fi hardware detected — configure it now?" (Configure / Not now). No open hotspot on a set-up box unless the owner reset its Wi-Fi. | 18a5a37b, f5a3c5c1 |
 
+**Stuart's answers, 2026-10-25 late evening** (both done on `sbc-fixes`):
+- *"release the port the less open ports the better"* — once set up, port 80 is released on every interface; the
+  2026-10-10 rule that kept the Wi-Fi redirect on the home network (http://vibepocket.local/) is reversed. The Wi-Fi
+  redirect exists only while the box's OWN hotspot is on the air (a joining phone's captive check needs it).
+- *"realistically the only .local address open after setup should be the one the user sets"* — on a Portable the server
+  runs no mDNS responder; it hands its name to vibeserver-pocket, which makes it the HOSTNAME that avahi publishes (IPv4
+  + IPv6, every interface) with the `_vibesdr._tcp` service. avahi asks `vibeserver-pocket avahi-gate` before every
+  start (an ExecCondition drop-in, converge-enforced): the right hostname is set before avahi publishes anything, and the
+  start is skipped when there is nothing to publish (mDNS off). `vibepocket.local` is never published. For the 3 minutes
+  after a Save the new name answers by an avahi alias beside the setup name (the page sends the owner there at once).
+  systemd-resolved's LLMNR (5355, Armbian) is switched off too. The boot test asserts: vibeserversetup.local only,
+  from avahi alone, no service, no alias, nothing else on 5353, nothing on 5355.
+
 Nick also saw **DAB struggling**; he suspects his power supply. Not investigated — note only.
 
 **Proved here:** each fix by tests (pocket Python suites, test-ipclass, test-pocket, test-dualstack-clients against the
@@ -432,6 +445,8 @@ NetworkManager's `managed no` on it; IPv6 NAT on Armbian's sunxi kernel (the red
 >   (`http://vibeserversetup.local:48000/` still works).
 > - **A box with no Wi-Fi can finish setup** (there is a "Disable Wi-Fi / no Wi-Fi present" tick if the box gets it
 >   wrong).
+> - **Once set up, the box answers to one name — the one you chose** (`http://<name>.local:48000/`); the setup name
+>   goes, and port 80 is released.
 > - **A USB Wi-Fi adapter plugged in after setup** is left switched off until you choose: the setup page asks "New Wi-Fi
 >   hardware detected — configure it now?".
 >

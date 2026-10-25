@@ -189,7 +189,8 @@ The `.img` is cut after partition 3, at **4.4 GB raw (arm64) / 4.2 GB (armhf)**.
 
 Raspberry Pi Imager → **Choose OS → Use custom** → the `.img.xz` → the card. For the first-boot
 hotspot test, answer **No** to OS customisation. If Imager sets a Wi-Fi network, the box joins it
-directly and setup is at `http://vibepocket.local:48000/` on that network.
+directly and setup is at `http://VibeServerSetup.local/` (or `:48000`) on that network. Once set up, the box answers
+only to the name chosen in setup, at `http://<that name>.local:48000/` (port 80 is released; 2026-10-25).
 
 ## Status (2026-10-10)
 
