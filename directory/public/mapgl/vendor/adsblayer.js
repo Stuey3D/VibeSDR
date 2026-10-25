@@ -698,7 +698,9 @@
       + 'transform:translate(-50%,-50%);animation:vsadsbRing ' + RING_MS + 'ms ease-out ' + RING_REPEATS + ';opacity:0}'
       + '@keyframes vsadsbRing{0%{transform:translate(-50%,-50%) scale(1);opacity:0.8}100%{transform:translate(-50%,-50%) scale(3);opacity:0}}'
       + '.vsadsb-rl{font:10px ui-monospace,Menlo,monospace;color:' + T.ringLbl + ';white-space:nowrap;transform:translate(-50%,-120%);'
-      + 'text-shadow:0 0 3px ' + T.halo + ';pointer-events:none}';
+      + 'text-shadow:0 0 3px ' + T.halo + ';pointer-events:none}'
+      // ★ the four sides (see the ring labels): above the top, below the bottom, outside right and left
+      + '.vsadsb-rl-top{transform:translate(-50%,20%)}.vsadsb-rl-left{transform:translate(6px,-50%)}.vsadsb-rl-right{transform:translate(calc(-100% - 6px),-50%)}';
   }
   const cssDone = {};
   function injectCss(th, doc) {
@@ -949,7 +951,10 @@
       for (let i = 1; i <= n; i++) {
         const nm = i * step, pts = [];
         for (let k = 0; k <= 128; k++) { const d = destination(rx.lat, rx.lon, k * 360 / 128, nm); pts.push([d.lon, d.lat]); }
-        rings.push({ nm, pts, lbl: destination(rx.lat, rx.lon, 0, nm) });
+        /* ★ FOUR LABELS PER RING — top, right, bottom, left (Stuart, 2026-10-25: "so that no matter where the map is panned
+         *  you can see the label"). One at the top went off screen with the receiver panned or zoomed past it. Each sits just
+         *  outside its ring on its own side (a: the text's anchor), so the number never sits on the line. */
+        rings.push({ nm, pts, lbls: [[0, 'bottom'], [90, 'left'], [180, 'top'], [270, 'right']].map(([b, a]) => ({ ...destination(rx.lat, rx.lon, b, nm), a })) });
       }
       return rings;
     }
@@ -960,14 +965,14 @@
         const s1 = gl.getSource('vsadsb-rings'), s2 = gl.getSource('vsadsb-ringlbl');
         if (!s1 || !s2) return;
         s1.setData({ type: 'FeatureCollection', features: (rings || []).map((r) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: r.pts } })) });
-        s2.setData({ type: 'FeatureCollection', features: (rings || []).map((r) => ({ type: 'Feature', properties: { t: r.nm + ' NM' }, geometry: { type: 'Point', coordinates: [r.lbl.lon, r.lbl.lat] } })) });
+        s2.setData({ type: 'FeatureCollection', features: (rings || []).flatMap((r) => r.lbls.map((l) => ({ type: 'Feature', properties: { t: r.nm + ' NM', a: l.a }, geometry: { type: 'Point', coordinates: [l.lon, l.lat] } }))) });
       } else {
         if (llRings) { lm.removeLayer(llRings); llRings = null; }
         if (!rings) return;
         llRings = LL.layerGroup();
         for (const r of rings) {
           LL.circle([rx.lat, rx.lon], { radius: r.nm * NM_M, color: T.ring, weight: 1, fill: false, dashArray: '4 6', interactive: false }).addTo(llRings);
-          LL.marker([r.lbl.lat, r.lbl.lon], { interactive: false, icon: LL.divIcon({ className: '', html: '<div class="vsadsb-rl">' + r.nm + ' NM</div>', iconSize: [0, 0] }) }).addTo(llRings);
+          for (const l of r.lbls) LL.marker([l.lat, l.lon], { interactive: false, icon: LL.divIcon({ className: '', html: '<div class="vsadsb-rl vsadsb-rl-' + l.a + '">' + r.nm + ' NM</div>', iconSize: [0, 0] }) }).addTo(llRings);
         }
         llRings.addTo(lm);
       }
@@ -1001,8 +1006,10 @@
       gl.addLayer({ id: 'vsadsb-rings', type: 'line', source: 'vsadsb-rings',
                     paint: { 'line-color': T.ring, 'line-width': 1, 'line-dasharray': [4, 6] } });
       gl.addLayer({ id: 'vsadsb-ringlbl', type: 'symbol', source: 'vsadsb-ringlbl',
-                    layout: { 'text-field': ['get', 't'], 'text-font': ['JetBrains Mono Regular'], 'text-size': 10, 'text-anchor': 'bottom',
-                              'text-offset': [0, -0.3], 'text-allow-overlap': true, 'text-ignore-placement': true },
+                    layout: { 'text-field': ['get', 't'], 'text-font': ['JetBrains Mono Regular'], 'text-size': 10, 'text-anchor': ['get', 'a'],
+                              'text-offset': ['match', ['get', 'a'], 'bottom', ['literal', [0, -0.3]], 'top', ['literal', [0, 0.3]],
+                                              'left', ['literal', [0.4, 0]], ['literal', [-0.4, 0]]],
+                              'text-allow-overlap': true, 'text-ignore-placement': true },
                     paint: { 'text-color': T.ringLbl, 'text-halo-color': T.halo, 'text-halo-width': 1.2 } });
       gl.addLayer({ id: 'vsadsb-rx', type: 'symbol', source: 'vsadsb-rx',
                     layout: { 'icon-image': 'vsadsb-rx', 'icon-anchor': 'bottom', 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
