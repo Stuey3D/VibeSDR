@@ -16,8 +16,19 @@
 //    dial — FT2 and JS8 share 3.578 MHz) and an engine. When the slice moves (the next band, a retune), the plan is redone
 //    on the next block: tuners and engines for dials still inside are KEPT (a fine retune within the band does not lose a
 //    slot), the rest are dropped and new ones made.
+// ★★★ BAND'S CPU GOVERNOR (V12, 2026-10-27 — Stuart: "pull everything it can down, but … be mindful of CPU running that
+//     many decoders at once"). Every Band engine sits behind a GATE: each gate period (the mode's slot; 4 s for the
+//     free-running JTTY and PSK) its window's energy is read from the slice's own FFT bins (digi_activity.h — no transform
+//     of its own). Undecided, the period's audio is HELD; the moment the window lights up it is flushed to the engine and
+//     the rest goes straight in; a period that never lights up is DROPPED — its decode never happens (IDLE). Before a
+//     window goes live the governor (digi_governor.h) is asked: within budget → decode (LIGHT first — one pass — then
+//     FULL depth back while it fits); over → SHED, lowest priority first, counted for the health pill. The owner's
+//     Always (no gate, never shed) and Off come first. status() is what the spots box header and the admin page show.
+//     ★ No bins with the IQ (a test, the benchmark): every window counts as occupied — the budget still applies.
 // ★ Spots go out through `emit` with their RF frequency (dial + audio offset) and the mode's name.
 #pragma once
+#include "digi_activity.h"
+#include "digi_governor.h"
 #include "digi_mode.h"
 #include "digi_tuner.h"
 
@@ -50,8 +61,32 @@ public:
 
     /** Single: `n` frames of the listener's 48 kHz audio, `captureUtc` = the last frame's. */
     void feedAudio48k(const float* x, int n, double captureUtc);
-    /** Band: one block of the slice — `n` samples at `rate`, centred on RF `centreHz`, the last captured at `captureUtc`. */
-    void feedIq(const cf32* x, int n, double rate, double centreHz, double captureUtc);
+    /** Band: one block of the slice — `n` samples at `rate`, centred on RF `centreHz`, the last captured at `captureUtc`.
+     *  ★ `binPow`/`nb`/`binHz`: the slice's FFT bins' power for this block (digi_activity.h slicePower — lowest frequency
+     *  first, bin nb/2 at `centreHz`), for the activity gate. Null = no gate (every window counts as occupied). */
+    void feedIq(const cf32* x, int n, double rate, double centreHz, double captureUtc,
+                const float* binPow = nullptr, int nb = 0, double binHz = 0);
+
+    /** ★ The owner's word per mode (Always / Off / Auto), asked at each gate period's start. Null = Auto for all. */
+    void setOverrides(std::function<Override(const std::string& mode)> f) { std::lock_guard<std::mutex> lk(statMtx_); override_ = std::move(f); }
+    /** ★ The benchmark's budget for this machine, in FT8 units (∞ = none). */
+    void setBudgetCap(double units) { std::lock_guard<std::mutex> lk(statMtx_); budget_.setCap(units); }
+    double budgetUnits() const { std::lock_guard<std::mutex> lk(statMtx_); return budget_.units(); }
+
+    /** ★ One mode's state in Band, for the spots box header ("FT8 active · WSPR idle · JTTY shed") and the admin page. */
+    struct ModeStatus {
+        std::string mode;
+        RunState state = RunState::Idle;
+        int dials = 0;
+        uint64_t idle = 0, shed = 0, live = 0;   ///< gate periods: dropped empty · dropped over budget · decoded
+    };
+    std::vector<ModeStatus> status() const;
+    /** Bumped whenever a mode's state changes (the host sends the header's chips again). */
+    uint64_t statusSeq() const { return statusSeq_.load(std::memory_order_relaxed); }
+    /** Periods SHED (something there, over budget) — monotonic: the health pill's BehindWatch reads it. */
+    uint64_t periodsShed() const;
+    /** Periods dropped EMPTY — the gate's saving (admin, tests). */
+    uint64_t periodsIdle() const;
 
     /** Slots skipped by every engine so far (monotonic — the health pill's BehindWatch reads it). */
     uint64_t slotsSkipped() const;
@@ -72,10 +107,26 @@ public:
     double planCentre() const { return planCentre_; }
 
 private:
+    /** ★ A Band run's gate (see the file note). */
+    struct Gate {
+        WindowMeter meter;
+        int64_t per = INT64_MIN;             // the gate period now (floor(utc / period))
+        enum St : uint8_t { Pending, Live, Shed, Off } st = Pending;
+        RunState rs = RunState::Idle;        // the governor's last word, for status()
+        bool saw = false;                    // the window lit up this period
+        int  hang = 0;                       // periods still to start live (the window was busy lately)
+        std::vector<int16_t> buf;            // held audio (×kHoldScale), oldest first …
+        std::vector<std::pair<size_t, double>> marks;   // … and each block's end offset in it with its capture UTC
+        double fedUtc = -1e300;              // the capture UTC of the last sample the engine got
+        uint64_t idleN = 0, shedN = 0, liveN = 0;
+        double loHz = 0, hiHz = 0;           // the window in RF
+    };
     struct Run {
         const ModeDef* def = nullptr;
         double dial = 0;
         std::unique_ptr<Engine> eng;
+        std::shared_ptr<std::atomic<bool>> light;   // ★ the governor's depth: true = told it is loaded (one pass)
+        std::unique_ptr<Gate> gate;                 // Band only
     };
     struct Chan {                     // ★ one tuner, and every engine on its dial
         std::unique_ptr<DigiTuner> tuner;
@@ -84,6 +135,17 @@ private:
     void plan(double rate, double centreHz);
     void planSingle(double dialHz);
     void wire(Run& r);
+    // ── the gate and the governor (Band) ──
+    static double gatePeriod(const ModeDef& m);
+    void placeWindows(int nb, double binHz, double centreHz);
+    void route(Run& r, const float* a, int k, double utc, int gated);
+    void newPeriod(Run& r, int64_t per, int gated);
+    RunState ask(Run& who, bool wants);          // statMtx_ held
+    void goLive(Run& r);
+    void hold(Gate& g, const float* a, int k, double utc, double keepSec);
+    void setState(Gate& g, RunState s);
+    double unitsInUse() const;                   // statMtx_ held
+    uint64_t skippedLocked() const;              // statMtx_ held
 
     Scope scope_;
     std::vector<ModeDef> modes_;
@@ -101,7 +163,15 @@ private:
     // Band
     std::map<long long, Chan> chans_;    // ★ keyed by the dial in Hz
     double planRate_ = 0, planCentre_ = 0;
-    std::vector<float> audio_;
+    std::vector<float> audio_, scratch_;
+    SliceFloor floor_;
+    uint64_t gateBlocks_ = 0;            // ★ blocks with bins (the gate looks every 8th)
+    int gNb_ = 0; double gBinHz_ = 0, gCentre_ = 0;
+    std::function<Override(const std::string&)> override_;
+    BandBudget budget_;
+    bool loadedNow_ = false;
+    std::atomic<uint64_t> statusSeq_{0};
+    uint64_t retiredIdle_ = 0, retiredShed_ = 0;
 
     mutable std::mutex statMtx_;          // ★ the stats readers are on other threads; the engine set changes here
     uint64_t retiredSkips_ = 0, retiredDecodes_ = 0;

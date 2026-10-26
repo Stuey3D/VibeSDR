@@ -6,7 +6,7 @@
 //   • every fill stands off BOTH map themes (≥ 1.5:1 against the dark and the light basemap — the rim does the rest),
 //   • under simulated protanopia, deuteranopia and tritanopia, every pair of modes that shares no letter-free cue is
 //     still ≥ ΔE 10 apart, or differs by its letter (FST4/FST4W share a colour on purpose and differ by letter).
-import { DIGI_MODE_STYLE, digiModeStyle, readSpotBands, stepSpotBand, spotBandAt, landingSpotBand, bandPassband, type SpotBand } from '../src/utils/digiModes';
+import { DIGI_MODE_STYLE, digiModeStyle, digiModeFamily, readSpotBands, stepSpotBand, spotBandAt, landingSpotBand, bandPassband, type SpotBand } from '../src/utils/digiModes';
 
 let fail = 0;
 const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fail++; };
@@ -86,19 +86,26 @@ for (const [name, M] of [['normal vision', null], ...Object.entries(SIM)] as [st
     const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
     if (d < worst) { worst = d; pair = `${modes[i]}/${modes[j]}`; }
   }
-  // ★ The FT family the radio actually hears together (FT8, FT4, FT2, JS8, WSPR) must stay apart by colour alone too.
+  // ★ The modes Band hears together on one band (FT8, FT4, FT2, JS8, WSPR — and since 2026-10-27 JTTY and PSK) must stay
+  //   apart by colour alone too.
   ok(worst >= 10 || ['protanopia', 'deuteranopia', 'tritanopia'].includes(name),
      `${name}: the closest two fills are ${pair}, ΔE ${worst.toFixed(1)}` + (worst < 10 ? ' — told apart by their letters' : ''));
-  const core = ['FT8', 'FT4', 'FT2', 'JS8', 'WSPR'];
+  const core = ['FT8', 'FT4', 'FT2', 'JS8', 'WSPR', 'JTTY', 'PSK'];
   let cw = 1e9, cp = '';
   for (let i = 0; i < core.length; i++) for (let j = i + 1; j < core.length; j++) {
     const p = sim(DIGI_MODE_STYLE[core[i]].colour, M), q = sim(DIGI_MODE_STYLE[core[j]].colour, M);
     const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
     if (d < cw) { cw = d; cp = `${core[i]}/${core[j]}`; }
   }
-  ok(cw >= 10, `${name}: FT8/FT4/FT2/JS8/WSPR stay ≥ ΔE 10 apart by colour alone (closest ${cp}, ${cw.toFixed(1)})`);
+  ok(cw >= 10, `${name}: FT8/FT4/FT2/JS8/WSPR/JTTY/PSK stay ≥ ΔE 10 apart by colour alone (closest ${cp}, ${cw.toFixed(1)})`);
 }
 ok(digiModeStyle('ft8').letter === '8' && digiModeStyle('Q65-60A').letter === 'Q' && digiModeStyle('ZZ9').colour === '#9E9E9E',
    'lookup is case-insensitive, a submode takes its mode\'s style, an unknown mode draws grey with its first letter');
+// ── V12 (2026-10-27): JTTY and PSK, and spot modes to their family ──
+ok(DIGI_MODE_STYLE.JTTY?.letter === 'T' && DIGI_MODE_STYLE.PSK?.letter === 'P', 'JTTY draws "T", PSK "P"');
+ok(digiModeStyle('PSK31') === DIGI_MODE_STYLE.PSK && digiModeStyle('psk63') === DIGI_MODE_STYLE.PSK, 'PSK31 and PSK63 spots take PSK\'s style');
+ok(digiModeFamily('PSK63', ['FT8', 'PSK']) === 'PSK' && digiModeFamily('Q65-60A', ['Q65']) === 'Q65' && digiModeFamily('FT8', ['FT8', 'FT4']) === 'FT8'
+   && digiModeFamily('FST4W', ['FST4', 'FST4W']) === 'FST4W' && digiModeFamily('FT4', ['FT8']) === 'FT4',
+   'a spot\'s family for the mode filter: PSK63 → PSK, Q65-60A → Q65, FST4W stays FST4W (not FST4), an unknown stays itself');
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

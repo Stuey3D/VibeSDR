@@ -36,6 +36,8 @@ inline ModeDef vibeDigiMode_ft8() {
     m.name = "FT8"; m.slotSec = 15.0; m.sampleRate = 12000;
     m.audioLoHz = 100; m.audioHiHz = 3500;          // ★ what Ft8SlotDecoder's monitor searches (f_min / f_max)
     m.costVsFt8 = 1.0;
+    m.lightCostVsFt8 = 0.6;                          // ★ one pass, no OSD (measured, docs/v12/DIGITAL-SPOTS.md)
+    m.priority = 10;                                 // ★ the governor's first: most of the traffic on every band
     m.singleFallback = true;                         // ★ Single, off every dial: FT8 + FT4, as it always was
     m.make = [] { return std::unique_ptr<Engine>(new Ft8Engine(false)); };
     return m;
@@ -45,6 +47,8 @@ inline ModeDef vibeDigiMode_ft4() {
     m.name = "FT4"; m.slotSec = 7.5; m.sampleRate = 12000;
     m.audioLoHz = 100; m.audioHiHz = 3500;
     m.costVsFt8 = 1.0;   // ★ half the window, twice the slots: about FT8's average (the benchmark's FT8+FT4 row)
+    m.lightCostVsFt8 = 0.6;
+    m.priority = 20;
     m.singleFallback = true;
     m.make = [] { return std::unique_ptr<Engine>(new Ft8Engine(true)); };
     return m;

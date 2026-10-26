@@ -3,7 +3,8 @@
 // ★★ ADDING A MODE: drop decoders/digimodes/<name>.h defining `inline ModeDef vibeDigiMode_<name>()` (and its engine's
 //    .cpp files in decoders/digimodes/ — globbed by all three builds: vibeserver/CMakeLists.txt, the Android
 //    CMakeLists.txt and modules/vibe-local-sdr/build_ios.sh). The seven below that are being built now are picked up by
-//    __has_include, so for them the header IS the change. Any other mode adds one ADD() line here.
+//    __has_include, so for them the header IS the change. Any other mode adds one ADD() line here (JTTY and PSK did,
+//    2026-10-27).
 // ★ Order matters only for display (the list's mode filter, the map legend): the order modes register is the order shown.
 #include "digi_mode.h"
 #include "digimodes/ft8.h"
@@ -19,6 +20,14 @@
 #if __has_include("digimodes/ft2.h")
 #include "digimodes/ft2.h"
 #define VIBE_DIGI_HAVE_FT2 1
+#endif
+#if __has_include("digimodes/jtty.h")
+#include "digimodes/jtty.h"
+#define VIBE_DIGI_HAVE_JTTY 1
+#endif
+#if __has_include("digimodes/psk.h")
+#include "digimodes/psk.h"
+#define VIBE_DIGI_HAVE_PSK 1
 #endif
 #if __has_include("digimodes/q65.h")
 #include "digimodes/q65.h"
@@ -56,6 +65,12 @@ const std::vector<ModeDef>& modes() {
 #endif
 #ifdef VIBE_DIGI_HAVE_WSPR
         ADD(vibeDigiMode_wspr());
+#endif
+#ifdef VIBE_DIGI_HAVE_JTTY
+        ADD(vibeDigiMode_jtty());       // ★ V12 2026-10-27: slot-less, every JTTY signal on its dial at once
+#endif
+#ifdef VIBE_DIGI_HAVE_PSK
+        ADD(vibeDigiMode_psk());        // ★ V12 2026-10-27: PSK31/63 spots (callsigns heard identifying)
 #endif
 #ifdef VIBE_DIGI_HAVE_FST4W
         ADD(vibeDigiMode_fst4w());

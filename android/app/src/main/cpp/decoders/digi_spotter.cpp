@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <exception>
+#include <algorithm>
 
 namespace vibe {
 namespace digi {
@@ -69,7 +70,11 @@ void Spotter::wire(Run& r) {
         const double base = single ? (dialHz_ ? dialHz_() : 0.0) : dial;
         emit_(o, base + o.audioHz);
     };
-    r.eng->loaded = loaded_;
+    if (!r.light) r.light = std::make_shared<std::atomic<bool>>(false);
+    if (single) { r.eng->loaded = loaded_; return; }
+    // ★ Band: the governor's depth OR the server's load — either says "one pass".
+    auto light = r.light; auto ld = loaded_;
+    r.eng->loaded = [light, ld] { return light->load(std::memory_order_relaxed) || (ld && ld()); };
 }
 
 void Spotter::feedAudio48k(const float* x, int n, double captureUtc) {
@@ -120,7 +125,10 @@ void Spotter::plan(double rate, double centreHz) {
     // Drop channels whose dial left the slice (their engines' counts are kept).
     for (auto it = chans_.begin(); it != chans_.end();) {
         if (want.count(it->first)) { ++it; continue; }
-        for (Run& r : it->second.runs) { retiredSkips_ += r.eng->slotsSkipped(); retiredDecodes_ += r.eng->slotsDecoded(); }
+        for (Run& r : it->second.runs) {
+            retiredSkips_ += r.eng->slotsSkipped(); retiredDecodes_ += r.eng->slotsDecoded();
+            if (r.gate) { retiredIdle_ += r.gate->idleN; retiredShed_ += r.gate->shedN; }
+        }
         it = chans_.erase(it);
     }
     // Make what is new.
@@ -138,21 +146,277 @@ void Spotter::plan(double rate, double centreHz) {
             try { r.eng = md.first->make(); } catch (const std::exception&) { continue; }
             if (!r.eng) continue;
             wire(r);
+            r.gate.reset(new Gate());
+            r.gate->loHz = md.second + md.first->audioLoHz; r.gate->hiHz = md.second + md.first->audioHiHz;
             c.runs.push_back(std::move(r));
+        }
+    }
+    gNb_ = 0;                                // ★ the windows are placed again on the next block with bins
+    statusSeq_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double captureUtc,
+                     const float* binPow, int nb, double binHz) {
+    if (scope_ != Scope::Band || n <= 0 || !(rate > 0)) return;
+    if (std::fabs(rate - planRate_) > 0.5 || std::fabs(centreHz - planCentre_) > 0.5) plan(rate, centreHz);
+    // ── the activity gate's measure: the slice's own bins (no transform here) ──
+    /* ★ 0 = no bins (no gate: every window counts as occupied) · 1 = bins, the floor still warming up (hold, open only
+     *  what must run) · 2 = gated. */
+    int gated = 0;
+    if (binPow && nb > 8 && binHz > 0) {
+        if (nb != gNb_ || std::fabs(binHz - gBinHz_) > 1e-6 || std::fabs(centreHz - gCentre_) > 0.5) placeWindows(nb, binHz, centreHz);
+        floor_.block(binPow, nb, std::max(1, (int)std::lround(0.5 * rate / n)));   // ★ the median every half second
+        for (auto& kv : chans_) for (Run& r : kv.second.runs) if (r.gate) r.gate->meter.block(binPow, nb);
+        gated = floor_.ready() ? 2 : 1;
+        ++gateBlocks_;
+    }
+    {
+        std::lock_guard<std::mutex> lk(statMtx_);
+        loadedNow_ = loaded_ ? loaded_() : false;
+        budget_.tick(captureUtc, skippedLocked(), unitsInUse());
+    }
+    for (auto& kv : chans_) {
+        Chan& c = kv.second;
+        /* ★ A dial whose every engine is OFF or SHED needs no audio at all: its tuner is skipped too (measured on the Pi 2
+         *  build, the tuners are ≈ a fifth of Band's work — docs/v12/DIGITAL-SPOTS.md). The period clock still turns. */
+        bool anyWants = false;
+        for (Run& r : c.runs) if (!r.gate || (r.gate->st != Gate::Off && r.gate->st != Gate::Shed)) anyWants = true;
+        if (!anyWants) {
+            for (Run& r : c.runs) {
+                const double P = gatePeriod(*r.def);
+                const int64_t per = (int64_t)std::floor((captureUtc - n / rate) / P + 1e-9);
+                if (per != r.gate->per) newPeriod(r, per, gated);
+            }
+            continue;
+        }
+        audio_.clear();
+        c.tuner->feed(x, n, rate, centreHz, audio_);
+        if (audio_.empty()) continue;
+        for (Run& r : c.runs) route(r, audio_.data(), (int)audio_.size(), captureUtc, gated);
+    }
+}
+
+/* ── THE GATE (see the header) ──────────────────────────────────────────────────────────────────────────────────────── */
+namespace {
+constexpr float kHoldScale = 4096.0f;   // ★ held audio as int16 ×4096: ±8 full scale (the tuner levels to RMS 0.05 —
+                                        //   44 dB of headroom), a step 46 dB under that RMS. Half the RAM of float.
+double marginOf(const ModeDef& m) { return m.slotSec > 0 ? 1.0 : 2.0; }   // ★ lead-in kept from before a period
+int hangOf(const ModeDef& m) { return m.slotSec > 0 ? 1 : 3; }            // ★ periods a busy window starts live
+}
+
+double Spotter::gatePeriod(const ModeDef& m) {
+    if (m.gateSec > 0) return m.gateSec;
+    return m.slotSec > 0 ? m.slotSec : 4.0;
+}
+
+void Spotter::placeWindows(int nb, double binHz, double centreHz) {
+    gNb_ = nb; gBinHz_ = binHz; gCentre_ = centreHz;
+    for (auto& kv : chans_)
+        for (Run& r : kv.second.runs) {
+            if (!r.gate) continue;
+            // ★ every bin whose centre lies within half a bin of the window
+            const double klo = (r.gate->loHz - centreHz) / binHz + nb / 2, khi = (r.gate->hiHz - centreHz) / binHz + nb / 2;
+            const int k0 = std::max(0, (int)std::ceil(klo - 0.5)), k1 = std::min(nb, (int)std::floor(khi + 0.5) + 1);
+            r.gate->meter.place(k0, k1);
+        }
+}
+
+void Spotter::setState(Gate& g, RunState s) {
+    if (g.rs != s) { g.rs = s; statusSeq_.fetch_add(1, std::memory_order_relaxed); }
+}
+
+double Spotter::unitsInUse() const {
+    double u = 0;
+    for (auto& kv : chans_)
+        for (const Run& r : kv.second.runs)
+            if (r.gate && r.gate->st == Gate::Live) u += r.gate->rs == RunState::Full ? r.def->costVsFt8 : r.def->lightCost();
+    return u;
+}
+
+uint64_t Spotter::skippedLocked() const {
+    uint64_t n = retiredSkips_;
+    for (auto& kv : chans_) for (const Run& r : kv.second.runs) n += r.eng->slotsSkipped();
+    return n;
+}
+
+/* ★★ ASK THE GOVERNOR (statMtx_ held): may `who` decode now? Every Band run is in the question — what is live is
+ *  committed, `who` wants or not — and every LIVE run's depth is set from the answer on the way out. */
+RunState Spotter::ask(Run& who, bool wants) {
+    std::vector<GovIn> in; std::vector<Run*> rs;
+    for (auto& kv : chans_)
+        for (Run& r : kv.second.runs) {
+            if (!r.gate) continue;
+            GovIn g; g.priority = r.def->priority; g.cost = r.def->costVsFt8; g.light = r.def->lightCost();
+            g.ov = override_ ? override_(r.def->name) : Override::Auto;
+            g.committed = r.gate->st == Gate::Live;
+            g.wants = &r == &who ? wants : (g.committed || g.ov == Override::Always);
+            in.push_back(g); rs.push_back(&r);
+        }
+    const std::vector<RunState> out = govern(in, budget_.units(), loadedNow_);
+    RunState mine = RunState::Idle;
+    for (size_t i = 0; i < rs.size(); ++i) {
+        Run& r = *rs[i];
+        if (&r == &who) { mine = out[i]; continue; }
+        if (r.gate->st != Gate::Live) continue;
+        if (out[i] == RunState::Light || out[i] == RunState::Full) {
+            r.light->store(out[i] == RunState::Light, std::memory_order_relaxed);
+            setState(*r.gate, out[i]);
+        } else if (out[i] == RunState::Shed) {
+            // ★ a higher-priority mode needs the room: a free-running mode stops now (nothing is lost but its next
+            //   seconds); a slotted one finishes the slot whose audio it already has, light, and is shed at its next.
+            if (r.def->slotSec <= 0) { r.gate->st = Gate::Shed; ++r.gate->shedN; setState(*r.gate, RunState::Shed); }
+            else r.light->store(true, std::memory_order_relaxed);
+        }
+    }
+    return mine;
+}
+
+/** Hold a block (int16), keeping no more than `keepSec` of the newest audio. */
+void Spotter::hold(Gate& g, const float* a, int k, double utc, double keepSec) {
+    const size_t cap = (size_t)(keepSec * 12000.0);
+    if (g.buf.size() + (size_t)k > cap + 12000) {      // ★ trimmed a second at a time, not every block
+        const size_t want = cap > (size_t)k ? cap - (size_t)k : 0;
+        const size_t cut = g.buf.size() > want ? g.buf.size() - want : 0;
+        g.buf.erase(g.buf.begin(), g.buf.begin() + (std::ptrdiff_t)cut);
+        size_t j = 0;
+        for (auto& m : g.marks) if (m.first > cut) g.marks[j++] = { m.first - cut, m.second };
+        g.marks.resize(j);
+    }
+    for (int i = 0; i < k; ++i) {
+        const float v = std::max(-32767.0f, std::min(32767.0f, a[i] * kHoldScale));
+        g.buf.push_back((int16_t)std::lrint(v));
+    }
+    g.marks.push_back({ g.buf.size(), utc });
+}
+
+/** ★ Into the engine with everything held that it has not had (each block with its own capture time), then live. */
+void Spotter::goLive(Run& r) {
+    Gate& g = *r.gate;
+    size_t from = 0;
+    for (auto& m : g.marks) {
+        const size_t to = m.first;
+        if (m.second > g.fedUtc + 1e-6 && to > from) {
+            scratch_.resize(to - from);
+            for (size_t i = from; i < to; ++i) scratch_[i - from] = g.buf[i] * (1.0f / kHoldScale);
+            r.eng->process(scratch_.data(), (int)(to - from), m.second);
+            g.fedUtc = m.second;
+        }
+        from = to;
+    }
+    g.buf.clear(); g.marks.clear();
+    g.st = Gate::Live;
+}
+
+void Spotter::newPeriod(Run& r, int64_t per, int gated) {
+    Gate& g = *r.gate;
+    std::lock_guard<std::mutex> lk(statMtx_);
+    if (g.per != INT64_MIN) {
+        if (g.st == Gate::Pending) ++g.idleN;              // ★ nothing all period: its decode never happened
+        else if (g.st == Gate::Live) ++g.liveN;
+        g.hang = g.saw ? hangOf(*r.def) : std::max(0, g.hang - 1);
+    }
+    g.per = per; g.saw = false;
+    g.meter.restart();
+    // ★ Held audio from before this period's lead-in belongs to a period already judged: never flushed into this one.
+    {
+        const double from = per * gatePeriod(*r.def) - marginOf(*r.def);
+        size_t cut = 0;
+        for (auto& m : g.marks) { if (m.second > from) break; cut = m.first; }
+        if (cut > 0) {
+            g.buf.erase(g.buf.begin(), g.buf.begin() + (std::ptrdiff_t)cut);
+            size_t j = 0;
+            for (auto& m : g.marks) if (m.first > cut) g.marks[j++] = { m.first - cut, m.second };
+            g.marks.resize(j);
+        }
+    }
+    const Override ov = override_ ? override_(r.def->name) : Override::Auto;
+    if (ov == Override::Off) {
+        g.st = Gate::Off; g.buf.clear(); g.marks.clear(); setState(g, RunState::Off);
+        return;
+    }
+    const bool wants = gated == 0 || ov == Override::Always || g.hang > 0;
+    const bool wasLive = g.st == Gate::Live;
+    g.st = Gate::Pending;                                   // ★ not committed while the governor is asked
+    const RunState d = ask(r, wants);
+    if (d == RunState::Light || d == RunState::Full) {
+        r.light->store(d == RunState::Light, std::memory_order_relaxed);
+        if (wasLive) { g.st = Gate::Live; g.buf.clear(); g.marks.clear(); }
+        else goLive(r);
+        setState(g, d);
+    } else if (d == RunState::Shed) {
+        g.st = Gate::Shed; ++g.shedN; setState(g, RunState::Shed);
+    } else {
+        setState(g, RunState::Idle);                        // ★ Pending: held until the window lights up
+    }
+}
+
+void Spotter::route(Run& r, const float* a, int k, double utc, int gated) {
+    if (!r.gate) { r.eng->process(a, k, utc); return; }
+    Gate& g = *r.gate;
+    const double P = gatePeriod(*r.def);
+    const int64_t per = (int64_t)std::floor((utc - k / 12000.0) / P + 1e-9);
+    if (per != g.per) newPeriod(r, per, gated);
+    const double keep = P + marginOf(*r.def) + 1.0;
+    switch (g.st) {
+        case Gate::Live:
+            r.eng->process(a, k, utc); g.fedUtc = utc;
+            // ★ looked at every 8th block: fewer looks, fewer chances for noise to open a window (digi_activity.h)
+            if (!g.saw && gated == 2 && (gateBlocks_ & 7) == 0 && g.meter.occupied(floor_.floor())) g.saw = true;
+            if (gated == 0) g.saw = true;
+            return;
+        case Gate::Off:
+            return;
+        case Gate::Shed:
+            hold(g, a, k, utc, marginOf(*r.def));           // ★ only the lead-in for the next period
+            return;
+        case Gate::Pending: {
+            hold(g, a, k, utc, keep);
+            const bool lit = gated == 0 || (gated == 2 && (gateBlocks_ & 7) == 0 && g.meter.occupied(floor_.floor()));
+            if (!lit) return;
+            g.saw = true;
+            std::lock_guard<std::mutex> lk(statMtx_);
+            const RunState d = ask(r, true);
+            if (d == RunState::Light || d == RunState::Full) {
+                r.light->store(d == RunState::Light, std::memory_order_relaxed);
+                goLive(r); setState(g, d);
+            } else if (d == RunState::Shed) {
+                g.st = Gate::Shed; ++g.shedN; setState(g, RunState::Shed);
+                g.buf.clear(); g.marks.clear();
+            }
+            return;
         }
     }
 }
 
-void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double captureUtc) {
-    if (scope_ != Scope::Band || n <= 0 || !(rate > 0)) return;
-    if (std::fabs(rate - planRate_) > 0.5 || std::fabs(centreHz - planCentre_) > 0.5) plan(rate, centreHz);
-    for (auto& kv : chans_) {
-        Chan& c = kv.second;
-        audio_.clear();
-        c.tuner->feed(x, n, rate, centreHz, audio_);
-        if (audio_.empty()) continue;
-        for (Run& r : c.runs) r.eng->process(audio_.data(), (int)audio_.size(), captureUtc);
+uint64_t Spotter::periodsShed() const {
+    std::lock_guard<std::mutex> lk(statMtx_);
+    uint64_t n = retiredShed_;
+    for (auto& kv : chans_) for (const Run& r : kv.second.runs) if (r.gate) n += r.gate->shedN;
+    return n;
+}
+uint64_t Spotter::periodsIdle() const {
+    std::lock_guard<std::mutex> lk(statMtx_);
+    uint64_t n = retiredIdle_;
+    for (auto& kv : chans_) for (const Run& r : kv.second.runs) if (r.gate) n += r.gate->idleN;
+    return n;
+}
+std::vector<Spotter::ModeStatus> Spotter::status() const {
+    std::lock_guard<std::mutex> lk(statMtx_);
+    std::vector<ModeStatus> out;
+    auto rank = [](RunState s) { switch (s) { case RunState::Full: return 4; case RunState::Light: return 3; case RunState::Shed: return 2;
+                                              case RunState::Idle: return 1; default: return 0; } };
+    for (const ModeDef& m : modes_) {
+        ModeStatus st; st.mode = m.name; bool any = false;
+        for (auto& kv : chans_)
+            for (const Run& r : kv.second.runs) {
+                if (r.def != &m || !r.gate) continue;
+                if (!any || rank(r.gate->rs) > rank(st.state)) st.state = r.gate->rs;
+                any = true; ++st.dials;
+                st.idle += r.gate->idleN; st.shed += r.gate->shedN; st.live += r.gate->liveN;
+            }
+        if (any) out.push_back(st);
     }
+    return out;
 }
 
 uint64_t Spotter::slotsSkipped() const {
@@ -182,7 +446,9 @@ std::string Spotter::describe() const {
     for (auto& kv : chans_)
         for (const Run& r : kv.second.runs) {
             char b[64];
-            std::snprintf(b, sizeof b, "%s%s %.4f", o.empty() ? "" : ", ", r.def->name.c_str(), r.dial / 1e6);
+            // ★ Band: each run's state too ("FT8 14.0740 active, WSPR 14.0956 idle") — the admin page's line
+            std::snprintf(b, sizeof b, "%s%s %.4f%s%s", o.empty() ? "" : ", ", r.def->name.c_str(), r.dial / 1e6,
+                          r.gate ? " " : "", r.gate ? stateWord(r.gate->rs) : "");
             o += b;
         }
     return o;

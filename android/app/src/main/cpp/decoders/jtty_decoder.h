@@ -139,6 +139,10 @@ struct Spot {
     double audioHz = 0;
     float  snrDb = 0;
     std::string how;      ///< "CQ" (calling CQ, or TU … CQ) or "QSO" (in an exchange)
+    /** ★ V12 (2026-10-27): the caller's OWN locator, when a GRID4 frame followed its CQ in the same message on the same
+     *  signal ("CQ DK7OG JO62" — one transmitter, one transmission). "" otherwise: a grid in a QSO may be either
+     *  station's, so it is never guessed at. A CQ spot is sent again (once) when its grid arrives. */
+    std::string grid;
     int64_t utcMs = 0;
     int    signalId = 0;
 };

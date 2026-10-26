@@ -39,6 +39,8 @@ inline ModeDef vibeDigiMode_ft2() {
     m.sampleRate = 12000;
     m.audioLoHz = 100; m.audioHiHz = 3500;   // ★ the FT8/FT4 monitor's search (f_min / f_max)
     m.costVsFt8 = 0.9;
+    m.lightCostVsFt8 = 0.6;
+    m.priority = 50;
     m.make = [] { return std::unique_ptr<Engine>(new Ft2Engine()); };
     return m;                          // dials: digi_bands.h's FT2 rows
 }

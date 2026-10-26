@@ -1650,6 +1650,8 @@ static bool vsNdbReach(double& lo, double& hi);   // the part of the NDB band th
 static std::string vsNdbWhyNot();    // "" = NDB can run here now
 static std::vector<vibe::digi::Span> vsSpotSpans();   // ★ V12: the bands Band spots can sit on (empty = no Band button)
 static std::string vsSpotsBandWhyNot();
+static int vsBandOverride(const std::string& mode);   // ★ V12 Band governor: the owner's +1 Always / −1 Off / 0 Auto
+static double vsBandBudgetUnits();                    // ★ …and the benchmark's budget in FT8 units (∞ = none)
 static bool vsDabCapableHw();   // ★ the same, ignoring the owner's block — see its definition
 // ★ Forward-declared alongside vsDabCapable for the same reason: the DAB entry path refuses
 //   thousands of lines above the definition, and it needs to name WHICH restriction bit.
@@ -24929,6 +24931,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         e.slots = decoderOnly ? nullptr : &vsDecoderSlots();
         // ★★ FT8/FT4 earn a 2nd/3rd pass only on spare CPU — the same rungs that pace a tune (2026-10-05).
         e.loaded = [this] { return vibetune::paceMs(serverLoad()) > 0; };
+        // ★★ V12 Band governor: the owner's word per mode, and the benchmark's budget (both read when Band starts / per period).
+        e.bandOverride = [](const std::string& m) { return vsBandOverride(m); };
+        e.bandBudgetUnits = [] { return vsBandBudgetUnits(); };
         /* ★★ CW (V12 2026-10-25): a listener's AUDIO frequency → RF, by their mode — USB dial + a, LSB dial − a, and this
          *  server's CW (a USB demodulator tuned so a carrier ON the dial is a 600 Hz tone: buildAudio's -bw/2) dial + a − 600. */
         e.rfOfAudio = [this, session](double a) {
@@ -26202,8 +26207,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const int cb = clientCentreBin(c.get());
                 const int gs = chan_->extract(bins, cb, b, c->skimSlice.data(), c->sctx, blockIndex);
                 const double binHz = sampleRate / (double)fftSize;
+                /* ★★ V12 BAND SPOTS' ACTIVITY GATE (decoders/digi_activity.h): the slice's bins' power, read off this SAME
+                 *  forward FFT — one multiply-add per bin, no transform — so Band can leave an empty mode window undecoded. */
+                const float* pw = nullptr;
+                if (gs > 0 && h->wantsBins()) {
+                    thread_local std::vector<float> pwBuf;
+                    pwBuf.resize((size_t)b);
+                    vibe::digi::slicePower(bins, fftSize, cb, b, pwBuf.data());
+                    pw = pwBuf.data();
+                }
                 if (gs > 0) h->feedIq(c->skimSlice.data(), gs, sampleRate * (double)b / (double)fftSize,
-                                      rtlCenter.load() + hwOffsetHz() + cb * binHz);
+                                      rtlCenter.load() + hwOffsetHz() + cb * binHz, pw, pw ? b : 0, binHz);
             }
         }
     }
@@ -27291,14 +27305,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!want) { if (skimTap_.running()) skimTap_.stop(); return; }
         if (!skimTap_.running()) {
             std::weak_ptr<DecoderHost> wh = decoders_.shared();
-            skimTap_.start([wh](const cf32* x, int k, double rate, double centre) {
-                if (auto h = wh.lock()) h->feedIq(x, k, rate, centre);
-            });
+            skimTap_.start(vibe::WideTap::BinSink([wh](const cf32* x, int k, double rate, double centre, const float* pw, int nb, double binHz) {
+                if (auto h = wh.lock()) h->feedIq(x, k, rate, centre, pw, nb, binHz);
+            }));
         }
         std::shared_ptr<DecoderHost> h = decoders_.shared();
         vibe::WideTap::Geometry g;
         g.sampleRate = sampleRate; g.hwCentreHz = rtlCenter.load() + hwOffsetHz(); g.wantCentreHz = audioFreq.load();
         g.widthHz = h ? std::min(h->iqWidthHz(), sampleRate * 0.8) : 0; g.fftSize = fftSize;
+        g.bins = h && h->wantsBins();   // ★ Band spots' activity gate: the slice's bins' power with each block
         skimTap_.aim(g);
         skimTap_.feed(iq, n);
     }
@@ -32270,6 +32285,45 @@ static std::string vsSpotsBandWhyNot() {
     return {};
 }
 
+/* ★★ V12 BAND GOVERNOR (decoders/digi_governor.h, 2026-10-27): THE OWNER'S WORD PER MODE, in the blocked-modes list the
+ *  setup page already edits per radio — "spotsband-psk" = PSK OFF in Band, "spotsband+wspr" = WSPR ALWAYS (no activity
+ *  gate, never shed). Absent = Auto. One list, so it is saved, per radio, exactly as every other switch is. */
+static int vsBandOverride(const std::string& mode) {
+    std::string m;
+    for (char c : mode) m += char(std::tolower((unsigned char)c));
+    if (vsModeBlocked("spotsband-" + m)) return -1;
+    if (vsModeBlocked("spotsband+" + m)) return 1;
+    return 0;
+}
+/** ★ The benchmark's Band row (dec_ft8band: the busiest band, every mode, ONE pass, through the real tuners and engines)
+ *  → this machine's budget in FT8 units (digi::budgetUnitsFromBench). No benchmark run, or no Band row: ∞ — the live
+ *  skips alone then govern. Parsed from the stored result (GET /vibeserver/benchmark's JSON). */
+static double vsBandBudgetUnits() {
+    LocalSdrShim::BenchGetFn getFn;
+    { std::lock_guard<std::mutex> lk(g_vsBenchMtx); getFn = g_vsBenchGet; }
+    if (!getFn) return INFINITY;
+    const std::string j = getFn();
+    const size_t at = j.find("\"id\":\"dec_ft8band\"");
+    if (at == std::string::npos) return INFINITY;
+    const size_t end = j.find('}', at);
+    const std::string row = j.substr(at, end == std::string::npos ? std::string::npos : end - at);
+    const size_t pp = row.find("\"pct\":");
+    if (pp == std::string::npos) return INFINITY;
+    const double pct = std::atof(row.c_str() + pp + 6);
+    // ★ the band it measured is in its label: "Decoder: digital spots, Band (80 m)"
+    double units = 0;
+    const size_t lb = row.find("Band ("), le = lb == std::string::npos ? lb : row.find(')', lb);
+    if (lb != std::string::npos && le != std::string::npos) {
+        const std::string name = row.substr(lb + 6, le - lb - 6);
+        for (const auto& b : vibe::digi::bands())
+            if (name == b.name) {
+                const vibe::digi::Span sp = vibe::digi::spanOf(b, vibe::digi::modes());
+                for (const auto& mn : sp.modes) if (const auto* md = vibe::digi::modeByName(mn)) units += md->lightCost();
+            }
+    }
+    return vibe::digi::budgetUnitsFromBench(pct, units);
+}
+
 static bool vsDabCapableHw();
 static bool vsDabCapable() {
     // ★ The owner may switch it off outright, whatever the hardware can do.
@@ -32701,6 +32755,11 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
             if (hst->spotsOn())
                 watch.note("spots:" + kv.first, hst->spotsScope() == "band" ? "Digital spots: Band" : "Digital spots",
                            hst->spotSlotsSkipped(), nowMs);
+            /* ★★ V12 Band governor: a mode SHED over budget (something in its window, not decoded) is this box being too
+             *  light for everything on the band — named as such, once a minute, beside the slots skipped. Windows left
+             *  idle because they were EMPTY are the gate working, not a fault, and are not counted here. */
+            if (hst->spotsOn() && hst->spotsScope() == "band")
+                watch.note("spotshed:" + kv.first, "Digital spots: Band (modes shed)", hst->spotPeriodsShed(), nowMs);
         }
         if (p->bgRun_.running()) watch.note("bg", "Background decoding", p->bgRun_.droppedSamples(), nowMs);
     }

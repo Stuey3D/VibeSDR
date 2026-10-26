@@ -406,7 +406,130 @@ A7 for float work:
 With WSPR, JS8 and FT2 registered, a 40 m Band run would have five engines and five tuners, roughly 10–15 % of a core
 spread over five worker threads. The `dec_ft8band` row measures this on the machine itself and sets the default.
 
+
+## JTTY, PSK and the Band governor (2026-10-27, branch `v12-band-all`)
+
+Stuart, 2026-10-27: *"we want to make the band digital spots mode pull everything it can down, but we also have to be
+mindful of CPU running that many decoders at once."*
+
+### Two more modes in the registry
+| mode | file | dials (USB) | spots |
+|---|---|---|---|
+| JTTY | `decoders/digimodes/jtty.h` (our `jtty::Decoder`, slot-less) | 7.090 · 14.090 · 21.090 (PSKReporter: all 128 JTTY reports in the day to 2026-10-26 17:35 were on these, 88 on 20 m) · 28.090 · 50.160 · 144.160 (announced, clear of other modes) | mode `JTTY`, `how` CQ / QSO, the caller's grid when a GRID4 frame follows its CQ in the same message |
+| PSK | `decoders/digimodes/psk.h` (our `psk::Skimmer`, spots only) | 3.580 · 7.040 · 10.142 · 14.070 (PSKReporter: every PSK31 report 14.0700–14.0718) · 18.100 · 21.070 · 24.920 · 28.120 | mode `PSK31` / `PSK63`, `how` CQ / DE / TEST, SNR converted from Es/N0 to 2500 Hz |
+
+JTTY's announced 1.838, 3.575, 10.140, 18.100 and 24.920 are LEFT OUT: each sits in an FT8 or FT4 window (3.575 and 10.140
+are FT4's dials, 18.100 FT8's), nobody was heard there, and the costliest engine would be held open by FT8 energy all
+day. 21.070 not 21.080 for PSK (the PSK31 segment's own). Only 14.070 (PSK) and 7/14/21 MHz (JTTY) are confirmed on air;
+the rest are the published lists. Every spot frame now also carries `country` (our prefix table) and `how`.
+
+Map: JTTY white with a black **T**, PSK Paul Tol's purple `#AA3377` with a white **P** — the eight Okabe–Ito fills were
+taken; both stay ≥ ΔE 10 from every mode heard on the same band under protan/deutan/tritan simulation
+(`test_digi_modes.ts`, the "core" set is now FT8 FT4 FT2 JS8 WSPR JTTY PSK). PSK31/PSK63 are drawn and filtered as their
+family PSK (`digiModeFamily`). PSK spots carry no locator (PSK has none), so they are in the list, not on the map; a JTTY
+caller lands on the map when it sends its grid.
+
+### Spans (spans now grow in PRIORITY order, so a new mode never pushes an established one out)
+| band | span | width | in | outside |
+|---|---|---|---|---|
+| 80 m | 3.5697–3.5839 | 14.2 kHz | FT8 FT4 FT2 JS8 WSPR PSK | |
+| 40 m | 7.0396–7.0816 | 41.9 kHz | FT8 FT4 FT2 JS8 WSPR PSK | JTTY (7.090 would make 53 kHz) |
+| 30 m | 10.1298–10.1478 | 17.9 kHz | FT8 FT4 FT2 JS8 WSPR PSK | |
+| 20 m | 14.0699–14.0975 | 27.6 kHz (centre 14.0837) | all seven | |
+| 17 m | 18.0998–18.1118 | 11.9 kHz | FT8 FT4 FT2 JS8 WSPR PSK | |
+| 15 m | 21.0699–21.0965 | 26.6 kHz | FT8 JS8 WSPR JTTY PSK | FT4 FT2 |
+| 12 m | 24.9149–24.9267 | 11.9 kHz | FT8 FT4 FT2 JS8 WSPR PSK | |
+| 10 m | 28.0739–28.0938 | 19.9 kHz | FT8 JS8 JTTY | FT4 FT2 WSPR PSK |
+| 6 m | 50.3128–50.3218 | 8.9 kHz | FT8 FT4 JS8 | JTTY |
+| 2 m | 144.1599–144.1778 | 17.9 kHz | FT8 FT4 JTTY | WSPR |
+(160 m, 60 m, 4 m, 70 cm, 2200 m, 630 m unchanged.) "Outside" is outside the span; a mode outside it still decodes when
+the radio's slice happens to reach it (a 2.4 MS/s radio cuts 75 kHz for 40 m, which holds 7.090).
+
+### The governor (`decoders/digi_activity.h`, `digi_governor.h`, `digi_spotter.cpp`)
+1. **Activity gate — free.** Each IQ block of the slice arrives with its bins' power, read off the forward FFT it was cut
+   from (`slicePower`: Hann in frequency, one multiply-add a bin; the shim's channeliser path and `vibe_wide_tap.h` both
+   send it). The slice's floor is the median of half-second bin means. Per gate period (the mode's slot; JS8 30 s;
+   JTTY/PSK 4 s) each window's strongest bin mean is tested against the floor with a Wilson–Hilferty threshold for an
+   N-block mean, z = 5, looked at every 8th block. Undecided, the period's audio is HELD (int16 ×4096); the moment the
+   window lights it is flushed to the engine and the rest goes live; a period that never lights is DROPPED — its decode
+   never happens. A busy window starts its next period live (free-running: the next three).
+2. **Depth before mode.** Before a window goes live the governor is asked. Every decoding mode runs LIGHT first (engine
+   told `loaded`: one pass, no OSD/AP/coherent stage — `ModeDef::lightCostVsFt8`), then full depth is given back in
+   priority order, greedily, while it fits.
+3. **Shedding.** When even light does not fit, the lowest priority is shed — greedily, so a cheap mode below a shed
+   expensive one still runs (PSK 0.6 after JTTY 12). A free-running mode is stopped at once when a higher one needs the
+   room; a slotted one finishes the slot it has and is shed at its next. A dial whose engines are all off/shed skips its
+   tuner too.
+4. **Priority** FT8 10 · FT4 20 · WSPR 30 · JS8 40 · FT2 50 · JTTY 60 · PSK 70 · anything new 100 (Q65/FST4/FST4W/MSK144
+   take 100 until measured). FT8 and FT4 are most of the traffic (PSKReporter's active receivers 2026-10-26: FT8 6666,
+   FT4 597, JS8 198, JTTY 180); WSPR is costly but is the propagation reference and idle when empty; JTTY is the costliest
+   engine (≈ 12 FT8s on the Mac, ≈ 20 on the Pi 2 build) and heard on few dials; PSK is spots only.
+5. **Budget** in FT8 units: the benchmark's Band row (`dec_ft8band`, now 20 m with all seven modes, one pass) →
+   `70 % ÷ (row % ÷ its light units)`; then live — a 15 s check in which any engine skipped a slot cuts it to 75 % of
+   what was decoding, calm checks give 10 % back up to the benchmark's figure; no benchmark = unlimited until a skip.
+   The server's `loaded` makes everything light.
+6. **The owner** (Setup → Modes and decoders, under "Digital spots: Band"): per mode **Auto / Always / Off**, stored in
+   the radio's blocked-modes list as `spotsband+<mode>` (Always: no gate, never shed — it takes its turn in priority
+   order, so forcing JTTY on never starves FT8) and `spotsband-<mode>` (Off). The benchmark only sets the budget.
+7. **Visible.** `{"type":"digital_spots_status","data":{"scope":"band","modes":[{mode,state,dials,idle,shed,live}],"budget"}}`
+   when a state changes (≤ 1/s) and every 15 s → the spots box header's chips (ACTIVE · LIGHT · IDLE · SHED · OFF, each
+   in its map colour and letter). Shed periods go to the health pill as "Digital spots: Band (modes shed)" (BehindWatch);
+   idle periods are the gate working and are not a fault. The admin line reads "FT8 14.0740 active, WSPR 14.0956 idle …".
+
+**Blind spot, stated:** a station too weak to lift a ~150 Hz bin over a whole period ALONE in an otherwise empty window
+is not decoded. Measured (`test-digi-spots`, one FT8 station alone, 20 trials): −14 and −17 dB open 20/20, −19 dB 16/20,
+−21 dB 2/20. Pure noise: 0 of 1800 windows opened in 10 minutes. On a live band FT8/FT4 windows are never empty; for a
+dead band where the last −22 dB station matters the owner sets Always.
+
+**RAM:** held audio per engine at most one gate period + 1 s lead-in, int16: FT8 ≈ 0.4 MB, FT4 0.2, FT2 0.1, JS8 0.75,
+WSPR 2.9, JTTY/PSK 0.15 each — ≈ 4.6 MB for a band with all seven, only while windows are undecided.
+
+### Measured
+Real recordings off Stuart's UberSDR (`~/VibeSDR-test-audio/bandall/`, 96 kHz IQ, 5 min each, 2026-10-26 17:38 and
+18:15 UTC), through every registered mode, fed in real time (`test-digi-spots real … live [gate]`); Mac = M5 Pro, process
+CPU; Pi 2 = the armhf build (-O3 -marm -mfpu=neon-vfpv4) under qemu-arm with the instruction counter
+(`tools/band-bench/qemu.sh`, 230 s, every engine light, every slot decoded), test harness excluded.
+
+| recording | Mac, no gate | Mac, gated | spots (both) | Pi 2 instr/s, no gate → gated | Pi 2 % of a core (est.) |
+|---|---|---|---|---|---|
+| 20 m busy (17:38) | 1.58 % | 1.58 % | FT8 199 (52 calls), FT4 82, FT2 3, WSPR 3 — identical | 309 M → 302 M | ≈ 42–56 % |
+| 40 m busy (17:38) | 3.75 % | 3.90 % | FT8 681 (161), FT4 165, JS8 13, WSPR 8 — identical | — | — |
+| 10 m dead (18:15) | 2.58 % | 1.37 % | none | 244 M → 105 M | 34–45 % → 15–19 % |
+
+Busy bands: every window really is occupied (on 20 m and 40 m at this hour even JTTY's and PSK's windows hold other
+signals), so the gate saves ~nothing and loses nothing. Dead band: half the CPU on the Mac, 57 % of the instructions on
+the Pi 2 build — JTTY alone 32.7 G → 2.0 G. What keeps the dead 10 m's JS8 and PSK windows open is steady carriers in
+them (a gate refinement owed: ignore a bin that is steady for many periods).
+
+**Where a Pi 2's Band CPU goes (20 m, 230 s, 71 G instructions):** JTTY 51 % (list Viterbi 27 %, its candidate decode
+21 %), the seven tuners 25 %, FT8+FT4+FT2 ≈ 15 %, JS8 5 %, WSPR 1 %, PSK < 1 %, the gate < 1 %. Instructions → % of a
+core assumes 0.6–0.8 instructions per cycle at 900 MHz (ESTIMATED; an A7 dual-issues simple ops but takes two cycles per
+128-bit NEON op): **a Pi 2 can run all seven modes on 20 m at light depth (≈ 42–56 % of one of its four cores — inside
+the 70 % green budget)**, with some full depth given back where the benchmark's budget allows; on a quiet band ≈ 15–20 %.
+The next saving is the tuners (one per dial; a shared channeliser for neighbouring dials) and JTTY's list Viterbi.
+
+**The channeliser's taper (found here):** `Channelizer::extract` rolls off the outer quarter of the slice on each side
+(raised cosine), while the shim sizes the slice assuming only 4 % roll-off (`w / 0.92`). At 2.4 MS/s the 20 m slice is
+75 kHz (flat ≈ 37 kHz, span 27.6 — fine), but 40 m's 41.9 kHz span has its ends (WSPR, JS8) in the taper, and on a
+960 kS/s radio the 20 m slice is only 30 kHz. Signal and noise are attenuated alike, but the PSK skimmer's floor is
+band-relative, so a PSK signal deep in the taper can be missed (the server test's PSK station was moved 1.2 kHz inward).
+Owed: size Band's slice for the flat half.
+
+### Tests
+`test-digi-spots` (139 checks): JTTY/PSK registry and dials, no JTTY dial in another mode's window, priority order,
+Single at 14.090/14.070, spans; the governor (no budget, loaded, 20/8/3 units, idle, Always/Off, no priority inversion);
+the live budget; the gate (an empty window is never fed, a lit one is fed whole from its slot start, no bins = no gate);
+noise and threshold; the owner's word and shedding + depth through the Spotter; JTTY and PSK31 end to end through Band
+with real engines. `test-server-spots` (46): JTTY and PSK in the clip, both radio layouts, the chips, how + country, the
+owner's `spotsband-psk,spotsband+wspr`. `test-web-spots` (31): six modes in the list, chips in colour and letter, WSPR
+idle, legend with T and P, 390 px, chips gone in Single. `test_digi_modes.ts`: styles, CVD distances, families.
+
 ## Not done / owed
+- **Band governor (2026-10-27):** the app (React Native) has no Band button, so no chips and no per-mode owner setting in
+  its server screen (the setup page has it); a steady carrier holds a window open; Band's slice is not sized for the
+  channeliser's flat half (above); the costVsFt8 figures are the Mac's (JTTY is relatively heavier on the Pi 2 build);
+  the benchmark's Band row now includes JTTY (0.77 % on the Mac vs 0.12 % before) — a Pi 2 measuring it amber would
+  start with Band off by the existing rule, although the governor keeps it in budget (rule left as it was; owner can tick).
 - **The app's own Band mode.** The app (React Native) has the map coloured by mode and the Mode column, but no Band
   button and no band stepping yet. On a VibeServer it still subscribes to Single spots, as before. The web client is first,
   as the brief says.
