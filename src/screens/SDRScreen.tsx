@@ -122,6 +122,8 @@ import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_
 import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
 import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, type DscCall } from '../services/dsc';
 import { hzReachable } from '../utils/tuneWindow';
+import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
+import { landingSpotBand, spotBandAt, stepSpotBand, bandPassband } from '../utils/digiModes';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { registerIqCode } from '../services/iqPairing';
 import AntennaBandNotice from '../components/AntennaBandNotice';
@@ -769,6 +771,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabCapable(false);
     setCwCapable(false);
     setPskCapable(false); setJttyCapable(false); setDscCapable(false); setRadioTunable([]);
+    setSpotModesSrv(undefined); setSpotsBandCap(undefined);
     setAdsbCap(undefined);
     setIsmCap(undefined);
     setAntBands(null);
@@ -781,6 +784,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ V12 PSK31/63, JTTY, DSC — the same per-radio answer; and where it can be tuned (which channel keys draw)
         setPskCapable(o?.psk === true); setJttyCapable(o?.jtty === true); setDscCapable(o?.dsc === true);
         setRadioTunable(o?.tunable ?? []);
+        // ★ V12 digital spots: the modes this server decodes, and Band mode (absent / greyed with why / offered)
+        setSpotModesSrv(o?.spotModes); setSpotsBandCap(o?.spotsBand);
         setIsmCap(o?.ism);              // ★ V12 ISM — and the bands THIS radio reaches
         /* ★ V12 ADS-B, from the SAME per-radio answer and for the same reason (the door owns no radio). Unlike DAB a
          *  refusal is KEPT — the control is drawn disabled with the server's words (adsbTypes parseAdsbCapability). */
@@ -2418,6 +2423,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dscCapable, setDscCapable] = useState(false);
   /** ★ V12: vibeserver.json `tunable` — the windows this radio can be tuned in (DSC / JTTY keys outside them are not drawn). */
   const [radioTunable, setRadioTunable] = useState<Array<[number, number]>>([]);
+  /** ★ V12 DIGITAL SPOTS (docs/v12/DIGITAL-SPOTS.md): vibeserver.json spotModes / spotsBand + spotBands. */
+  const [spotModesSrv, setSpotModesSrv] = useState<string[] | undefined>(undefined);
+  const [spotsBandCap, setSpotsBandCap] = useState<SpotsBandCap | undefined>(undefined);
+  const spotsBandCapRef = useRef<SpotsBandCap | undefined>(undefined);
+  spotsBandCapRef.current = spotsBandCap;
+  /** Band running (the subscription's scope is 'band'), and the governor's per-mode chips. */
+  const [spotsBandOn, setSpotsBandOn] = useState(false);
+  const spotsBandOnRef = useRef(false);
+  const [spotModeStates, setSpotModeStates] = useState<SpotModeState[]>([]);
+  /** Band's step, set where tuning lives (below) — true when it took the gesture. A ref: the gestures are built earlier. */
+  const bandSpotsStepRef = useRef<(dir: number) => boolean>(() => false);
   /* ★ Refs beside the state because the two callbacks below are created ONCE (empty dep list, so
    *  they are stable for the ModeSelector's memo) and would otherwise close over the first render's
    *  values for ever — the stale-closure fault this file has been bitten by repeatedly. */
@@ -4308,6 +4324,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       return;
     }
     if (ismOnRef.current) { ismStep(dir === 'right' ? 1 : -1); return; }   // ★ V12 ISM: a band
+    if (spotsBandOnRef.current && bandSpotsStepRef.current(dir === 'right' ? 1 : -1)) return;   // ★ V12 Band spots: a band
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (noTuneNow(c)) return;
@@ -5037,6 +5054,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setDecoding(true);
         markDecodeOutput();
       },
+      onSpotsStatus: (st) => { if (spotsBandOnRef.current) setSpotModeStates(st); },
       onSpot: (s) => {
         if (s.kind !== spotsKindRef.current) return;
         spotBufRef.current.push(s); // flushed by the 400ms tick — no setState here
@@ -5600,6 +5618,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     decoderClient.current?.stopSpots();
     spotsKindRef.current = null;
     setSpotsKind(null);
+    spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]);
     stopSpotFlush();
   }, [stopSpotFlush]);
 
@@ -5637,6 +5656,12 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Spots toggle (menu Server Extensions DIGITAL/CW — skin lsvSpots)
   const onSpotsToggle = useCallback((k: SpotsKind) => {
+    // ★ V12: from Band, DIGITAL SPOTS switches to Single — one subscribe, the server keeps the slot (the web's spotsBtn)
+    if (k === 'digi' && spotsKindRef.current === 'digi' && spotsBandOnRef.current) {
+      spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]);
+      decoderClient.current?.startSpots('digi', 'single');
+      return;
+    }
     if (spotsKindRef.current === k) {
       stopSpots();
     } else {
@@ -5732,6 +5757,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ THE SKIMMER'S VFO IS ITS SEGMENT (CW's rule, and PSK's — the web's kbSkimOn): drawn only, never sent. */
   const skimDrawn = (activeDecoder === 'cw' && cwSkim) || (activeDecoder === 'psk' && pskSkim);
   const skimDrawnW = activeDecoder === 'psk' ? pskWidth : cwWidth;
+  /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (the web's renderFrame) — drawn where it is, never sent. */
+  const bandDrawn = spotsBandOn && spotsBandCap ? bandPassband(spotsBandCap.bands, status.frequency) : null;
   /* ★ V12 PSK: the same two settings, remembered apart from CW's (6/12/24 kHz, not 24/48/96). */
   const pskSkimRef = useRef(false);
   const pskWidthRef = useRef<number>(PSK_DEFAULT_WIDTH);
@@ -8459,6 +8486,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (n) { dabPendingPx.current -= n * 48; ismStep(n > 0 ? 1 : -1); }
       return true;
     }
+    // ★ V12 Band spots: the same — one band per 48 px of drum.
+    if (spotsBandOnRef.current && !dabOnRef.current) {
+      dabPendingPx.current += pxDelta;
+      const n = Math.trunc(dabPendingPx.current / 48);
+      if (n) { dabPendingPx.current -= n * 48; bandSpotsStepRef.current(n > 0 ? 1 : -1); }
+      return true;
+    }
     if (!dabOnRef.current) return false;
     dabPendingPx.current += pxDelta;
     const PX_PER_BLOCK = 48;
@@ -8656,6 +8690,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     // ★ V12 ISM: the same rule — the band IS the tuning, so "next" is the next band (docs/v12/ISM-DECODER.md).
     if (ismOnRef.current) { ismStep(dir); return; }
+    if (spotsBandOnRef.current && bandSpotsStepRef.current(dir)) return;   // ★ V12 Band spots: the next band
     const c = client.current; if (!c) return;
     if (noTuneNow(c)) return;   // DAB/ADS-B: nothing to tune
     const s = stepRef.current; if (!(s > 0)) return;
@@ -9278,6 +9313,51 @@ export default function SDRScreen({ route, navigation }: Props) {
       decoderClient.current.start('dsc');
     }
   }, [onTuneHz]);
+  /* ★★★ V12 DIGITAL SPOTS: BAND (docs/v12/DIGITAL-SPOTS.md; the web's spotsBandBtn / bandSpotsGo / bandSpotsStep). A whole
+   *  band's digital frequencies at once — the server cuts one extra-wide slice and every mode's decoder reads its own dial.
+   *  In Band the tuning controls step BANDS (every gesture through bandSpotsStepRef), the title names the band and the
+   *  drawn VFO is the band's span. Greyed with the server's reason (the owner's switch, the benchmark's default) — a press
+   *  says why and starts nothing. */
+  const bandSpotsGo = useCallback((hz: number, id: string) => {
+    onTuneHz(hz, 'usb' as SDRMode);   // ★ a listener's own tune (a user action: the shared-dial contract holds)
+    AsyncStorage.setItem('lsv_spot_band' + radioKeySuffix, id).catch(() => {});
+  }, [onTuneHz, radioKeySuffix]);
+  const onSpotsBand = useCallback(() => {
+    const cap = spotsBandCapRef.current;
+    if (!cap) return;
+    markInteract();
+    if (!cap.ok) { appAlert('Band spots unavailable', cap.why); return; }
+    if (spotsBandOnRef.current) { stopSpots(); return; }
+    void AsyncStorage.getItem('lsv_spot_band' + radioKeySuffix).catch(() => null).then((last) => {
+      const dial = client.current?.getStatus().frequency ?? 0;
+      const b = landingSpotBand(cap.bands, dial, last ?? null);
+      if (!b) return;
+      closeDecoder();
+      if (spotsKindRef.current !== 'digi') { setSpots([]); startSpotFlush(); }
+      spotsKindRef.current = 'digi'; setSpotsKind('digi');
+      spotsBandOnRef.current = true; setSpotsBandOn(true); setSpotModeStates([]);
+      decoderClient.current?.startSpots('digi', 'band');
+      if (!spotBandAt(cap.bands, dial)) bandSpotsGo(b.hz, b.id);   // ★ on a band already: stay where you are
+    });
+  }, [stopSpots, closeDecoder, startSpotFlush, bandSpotsGo, radioKeySuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** One band up or down — clamped at the ends, never wrapped (DAB's and ISM's rule); at an end it says so. */
+  bandSpotsStepRef.current = (dir: number) => {
+    const cap = spotsBandCapRef.current;
+    if (!cap || !spotsBandOnRef.current) return false;
+    const dial = client.current?.getStatus().frequency ?? 0;
+    const i = stepSpotBand(cap.bands, dial, dir);
+    if (i < 0) return true;
+    const b = cap.bands[i];
+    const cur = spotBandAt(cap.bands, dial);
+    if (cur && cur.id === b.id) {
+      setDecoderStatus(dir < 0 ? `${b.name} is the lowest band this radio reaches` : `${b.name} is the highest band this radio reaches`);
+      return true;
+    }
+    if (askGate()) return true;
+    markInteract();
+    bandSpotsGo(b.hz, b.id);
+    return true;
+  };
   /** ★ V12 DSC MAP — set where the map is built (below); undefined = no MAP key (never a dead control). */
   const onDscMap: ((c: DscCall) => void) | undefined = undefined;
   /** ★ V12: can this radio be tuned to `hz` (the DSC / JTTY keys drawn) — the clamp range and the server's tunable windows. */
@@ -12013,8 +12093,8 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  tuning moves it as ever, and the server's skimmer follows the dial. */
         /* ★ V12 ISM: no LISTEN needle on a band capture (the web's wf.vfoHidden) — every renderer path reads it. */
         needleHidden={ismOn}
-        filterLow={cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).low}
-        filterHigh={cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).high}
+        filterLow={bandDrawn ? bandDrawn[0] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).low}
+        filterHigh={bandDrawn ? bandDrawn[1] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).high}
         /* ★★★ THE VISUAL TRIM ON THE SPECTRUM — applied by shifting the RANGE, never by editing
          *  the bins. The adapters hand us a reused buffer (see the note on visualGain), so an
          *  in-place offset would accumulate every frame. Mapping through a range shifted by -vg is
@@ -12258,6 +12338,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           jtty={activeDecoder === 'jtty' ? { list: jttyList, spots: jttySpots, onTune: (rf: number) => { if (rf > 0) onTuneHz(jttyTuneFor(rf), 'usb' as SDRMode); } } : null}
           /* ★ V12 DSC: the calls; MAP for a position (dscMapOpen — the server's own map). */
           dsc={activeDecoder === 'dsc' ? { calls: dscCalls, onMap: onDscMap } : null}
+          /* ★ V12 digital spots: this server's modes (the MODE filter), Band's title and the governor's chips. */
+          spotModes={spotModesSrv}
+          spotsTitle={spotsKind === 'digi' && (spotModesSrv || spotsBandOn) ? spotsTitleText(spotsBandOn, spotsBandCap, status.frequency, spotModesSrv) : undefined}
+          spotModeStates={spotsBandOn ? spotModeStates : undefined}
           /* ★★ V12 THE SCANNER — the decoder box's body while SCANNER is the decoder (ScannerPanel). */
           scanner={activeDecoder === 'scanner' ? {
             ctl: scanner.ctl, rev: scanner.rev, meterMode: signalMode, onSource: onScanSource,
@@ -13598,6 +13682,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         spotsControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' ? {
           label: (isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS',
           spotsKind, onSpotsToggle,
+          /* ★★ V12 BAND — only where this radio's vibeserver.json lists spotBands (absent = no key); greyed with its why. */
+          band: spotsBandCap ? { ok: spotsBandCap.ok, on: spotsBandOn, hint: spotsBandHint(spotsBandCap), onPress: onSpotsBand } : undefined,
+          singleOn: spotsKind === 'digi' && !spotsBandOn,
           onSpotsMap: () => { setModeSelOpen(false); if (spotsKindRef.current !== 'digi') onSpotsToggle('digi'); setLocalMapOpen(true); },
           showCwStt: !isLocal && !isKiwi, showMap: isLocal || isKiwi,
           sttActive: selDecoder === 'whisper' && activeDecoder === 'whisper',

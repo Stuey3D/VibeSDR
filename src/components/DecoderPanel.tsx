@@ -45,6 +45,7 @@ import DscView, { dscHasPos } from './DscView';
 import type { CwList, CwSpot } from '../services/cwList';
 import type { JttySignal, JttySpot } from '../services/jtty';
 import type { DscCall } from '../services/dsc';
+import { spotFilterModes, spotModeMatches, spotChipText, type SpotModeState } from '../services/spotsBand';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel, DecoderBody,
          DECODER_FONT, decoderBodyInset, engraveStyle, useDecoderTokens, useDecoderStyles,
          type DecoderTokens } from './DecoderShell';
@@ -117,6 +118,12 @@ export interface DecoderPanelProps {
   jtty?:           { list: JttySignal[]; spots: JttySpot[]; onTune: (rfHz: number) => void } | null;
   /** ★ V12 DSC (VibeServer): the calls newest first (DscView) and MAP for a position — set while DSC runs. */
   dsc?:            { calls: DscCall[]; onMap?: (c: DscCall) => void } | null;
+  /** ★ V12 digital spots: the modes THIS server decodes (vibeserver.json spotModes — the MODE filter's choices, matched by
+   *  family: PSK31/PSK63 → PSK). Undefined = not a VibeServer that says (UberSDR's four). */
+  spotModes?:      string[];
+  /** ★ V12 BAND: the title while Band runs ("DIGITAL SPOTS · 20 M BAND") and the governor's per-mode chips. */
+  spotsTitle?:     string;
+  spotModeStates?: SpotModeState[];
   /** OWRX DAB (§5.2): when an ensemble is tuned the panel shows the service list with logos;
    *  the speed-correction control (§4.5) rides in the header. NOT a decoder. */
   dabProgrammes?:  { id: number; name: string }[];
@@ -143,7 +150,8 @@ const MORSE_QUALITY_LABELS: Record<MorseQuality, string> = {
 };
 
 // Spots filters (skin lsv-dec-sf-mode / sf-band / sf-age)
-const SF_MODES = ['ALL', 'FT8', 'FT4', 'WSPR', 'JS8'];
+/* ★ UberSDR's four (its digital spots feed); a VibeServer's come from its vibeserver.json (spotModes prop). */
+const SF_MODES_UBERSDR = ['FT8', 'FT4', 'WSPR', 'JS8'];
 const SF_BANDS = ['ALL', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m'];
 const SF_AGES: Array<{ label: string; minutes: number }> = [
   { label: 'AGE', minutes: 0 }, { label: '15m', minutes: 15 },
@@ -267,7 +275,9 @@ export default function DecoderPanel({
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
   onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw: cwProp = null, psk = null, jtty = null, dsc = null, scanner = null,
+  spotModes, spotsTitle, spotModeStates,
 }: DecoderPanelProps) {
+  const sfModes = React.useMemo(() => spotFilterModes(spotModes ?? SF_MODES_UBERSDR), [spotModes]);
   /* ★ V12: CW and PSK share one list view (the web's #cwList) — whichever is the decoder fills it. */
   const cw = activeDecoder === 'psk' ? psk : cwProp;
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
@@ -358,10 +368,12 @@ export default function DecoderPanel({
     if (!isSpotsMode) return [];
     const cutoff = sfAge > 0 ? Date.now() - sfAge * 60_000 : 0;
     return spots.filter(s =>
-      (spotsKind === 'cw' || sfMode === 'ALL' || s.mode === sfMode) &&
+      (spotsKind === 'cw' || spotModeMatches(s.mode, sfMode, spotModes ?? SF_MODES_UBERSDR)) &&
       (sfBand === 'ALL' || s.band === sfBand) &&
       (cutoff === 0 || s.time >= cutoff));
-  }, [isSpotsMode, spots, spotsKind, sfMode, sfBand, sfAge]);
+  }, [isSpotsMode, spots, spotsKind, sfMode, sfBand, sfAge, spotModes]);
+  // ★ a filter for a mode this server no longer lists falls back to ALL (never a filter that hides everything)
+  useEffect(() => { if (!sfModes.includes(sfMode)) setSfMode('ALL'); }, [sfModes, sfMode]);
 
   const renderSpot = useCallback(({ item }: { item: SpotRow }) => (
     <SpotRowView s={item} isCW={spotsKind === 'cw'} font={FONT}
@@ -948,7 +960,7 @@ export default function DecoderPanel({
     }
     : sfOpen === 'mode' ? {
       title: 'MODE', wrap: true,
-      opts: SF_MODES.map(m => ({ key: m, label: m, on: sfMode === m, apply: () => setSfMode(m) })),
+      opts: sfModes.map(m => ({ key: m, label: m, on: sfMode === m, apply: () => setSfMode(m) })),
       close: () => setSfOpen(null),
     }
     : sfOpen === 'band' ? {
@@ -1038,7 +1050,7 @@ export default function DecoderPanel({
   const title = isDabMode
     ? 'DAB'
     : isSpotsMode
-    ? (spotsKind === 'cw' ? 'CW SPOTS' : 'DIGITAL SPOTS')
+    ? (spotsKind === 'cw' ? 'CW SPOTS' : (spotsTitle || 'DIGITAL SPOTS'))
     : isCw && cw!.skim ? (activeDecoder === 'psk' ? 'PSK SKIMMER' : 'CW SKIMMER')
     : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
@@ -1539,6 +1551,28 @@ export default function DecoderPanel({
           </ScrollView>
         )}
 
+        {/* ★★ V12 BAND GOVERNOR: which modes are live — a chip per mode in its map colour and letter (digiModes), its state
+            in words for VoiceOver (spotsBand spotChipText). Only in Band (the server sends no status in Single). */}
+        {!minimised && isSpotsMode && spotsKind === 'digi' && !!spotModeStates?.length && (
+          <View style={dp.chipRow} accessibilityRole="summary">
+            {spotModeStates.map((m) => {
+              const st = digiModeStyle(m.mode);
+              const live = m.state === 'active' || m.state === 'light';
+              return (
+                <View key={m.mode} accessible accessibilityLabel={spotChipText(m)}
+                      style={[dp.chip, { borderColor: m.state === 'shed' ? '#E8A23A' : tk.divider },
+                              (m.state === 'idle' || m.state === 'off') && { opacity: m.state === 'off' ? 0.45 : 0.55 }]}>
+                  <Text style={[dp.chipDot, { backgroundColor: st.colour, color: st.ink, fontFamily: FONT }]}>{st.letter}</Text>
+                  <Text style={[dp.chipTxt, { color: tk.value, fontFamily: FONT },
+                                m.state === 'off' && { textDecorationLine: 'line-through' }]}>{m.mode}</Text>
+                  <Text style={[dp.chipState, { fontFamily: FONT, color: live ? '#5BE36B' : m.state === 'shed' ? '#E8A23A' : tk.muted }]}>
+                    {m.state.toUpperCase()}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
         {/* Spots table — virtualized; newest first; tap frequency to tune */}
         {!minimised && isSpotsMode && (
           <FlatList
@@ -1614,6 +1648,14 @@ function useHoldRepeat() {
 
 /** ★ Built once per setting (useDecoderStyles) — never per render, never at load. */
 const makeDp = (T: DecoderTokens) => StyleSheet.create({
+  /* ★ V12 Band governor chips — wrap on a narrow box (an SE in Display Zoom), never clip. */
+  chipRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 4, paddingHorizontal: 8, paddingTop: 4, paddingBottom: 2 },
+  chip:     { flexDirection: 'row', alignItems: 'center', gap: 3, borderWidth: 1, borderRadius: 9, paddingLeft: 2, paddingRight: 6,
+              paddingVertical: 1 },
+  chipDot:  { width: 14, height: 14, borderRadius: 7, overflow: 'hidden', textAlign: 'center', fontSize: 9, fontWeight: '700',
+              lineHeight: 14 },
+  chipTxt:  { fontSize: 10, letterSpacing: 0.3 },
+  chipState:{ fontSize: 8.5, fontWeight: '700', letterSpacing: 0.4 },
   /* ★ The WEFAX SHIFT / SLANT strip under the header (ADJ). Wraps on a narrow box rather than clipping. */
   adjRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, paddingHorizontal: 8, paddingVertical: 6 },
   adjLabel: { minWidth: 70, flexShrink: 1 },

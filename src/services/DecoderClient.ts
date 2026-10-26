@@ -52,6 +52,7 @@ import { cleanText, cleanMode } from '../utils/safeText';
 import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, type CwList, type CwSpot } from './cwList';
 import { parseJttySignals, parseJttySpot, jttyStateText, type JttySignal, type JttySpot } from './jtty';
 import { parseDscCall, dscStateText, type DscCall } from './dsc';
+import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -205,6 +206,8 @@ export interface DecoderCallbacks {
   onJttySpot?:    (spot: JttySpot) => void;
   /** ★ V12 DSC (VibeServer): one call (a repeat comes again with the same id and a higher count). */
   onDscCall?:     (call: DscCall) => void;
+  /** ★ V12 BAND GOVERNOR: Band's per-mode state (active / light / idle / shed / off), when it changes and every 15 s. */
+  onSpotsStatus?: (modes: SpotModeState[]) => void;
   /** Chat (rides this WS — chat_websocket.go via the dxcluster handler).
    *  isHistory=true for the server's buffer replay after subscribe_chat —
    *  render silently, no unread pulse. Already-seen messages are deduped
@@ -349,8 +352,15 @@ export class DecoderClient {
   // ── Spots feed (shares this WS — brief follow-up #3) ───────────────────────
   private spotsKind: SpotsKind | null = null;
 
-  startSpots(kind: SpotsKind) {
+  /** ★ V12 digital spots: 'single' (the listener's audio — the button there always was) or 'band' (the band's IQ slice,
+   *  every mode on its dial — docs/v12/DIGITAL-SPOTS.md). Switching scope while subscribed is one subscribe: the server
+   *  keeps the slot (the web's setSpots). */
+  private spotsScope: 'single' | 'band' = 'single';
+  get spotsBandScope(): boolean { return !!this.spotsKind && this.spotsScope === 'band'; }
+
+  startSpots(kind: SpotsKind, scope: 'single' | 'band' = 'single') {
     this.spotsKind = kind;
+    this.spotsScope = kind === 'digi' ? scope : 'single';
     this._idleCheck();
     if (this.ws?.readyState === WebSocket.OPEN) this._subscribeSpots();
     else this._open();
@@ -371,9 +381,9 @@ export class DecoderClient {
 
   private _subscribeSpots() {
     if (!this.ws || !this.spotsKind) return;
-    this.ws.send(JSON.stringify({
-      type: this.spotsKind === 'digi' ? 'subscribe_digital_spots' : 'subscribe_cw_spots',
-    }));
+    this.ws.send(JSON.stringify(this.spotsKind === 'digi'
+      ? (this.spotsScope === 'band' ? { type: 'subscribe_digital_spots', scope: 'band' } : { type: 'subscribe_digital_spots' })
+      : { type: 'subscribe_cw_spots' }));
   }
 
   // ── Chat ────────────────────────────────────────────────────────────────────
@@ -578,6 +588,11 @@ export class DecoderClient {
             if (this.active !== 'cw') return;
             const l = parseCwSignals(m.data);
             if (l) this.cb.onCwSignals?.(l);
+          } else if (m.type === 'digital_spots_status' && m.data) {
+            // ★ V12 Band governor — only while OUR Band subscription runs (a Single listener has no chips)
+            if (!this.spotsBandScope) return;
+            const st = parseSpotsStatus(m.data);
+            if (st) this.cb.onSpotsStatus?.(st);
           } else if (m.type === 'psk_signals' && m.data) {
             // ★ V12 PSK: CW's list exactly, with the mode and IMD — the one list view draws both (the web's rule).
             if (this.active !== 'psk') return;

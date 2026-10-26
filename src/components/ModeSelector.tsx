@@ -366,6 +366,10 @@ interface ModeSelectorProps {
   spotsControls?: {
     label: string; spotsKind: string | null;
     onSpotsToggle: (k: 'digi' | 'cw') => void; onSpotsMap?: () => void;
+    /** ★★ V12 BAND (docs/v12/DIGITAL-SPOTS.md): absent = no key (no band reachable, or an older server); `ok` false =
+     *  drawn dimmed with the server's reason under the row (a press explains). `singleOn`: DIGITAL SPOTS is Single now. */
+    band?: { ok: boolean; on: boolean; hint: string; onPress: () => void };
+    singleOn?: boolean;
     showCwStt: boolean; showMap: boolean;
     sttActive: boolean; sttSelected: boolean; onSttToggle: () => void;
   } | null;
@@ -1259,16 +1263,43 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               {spotsControls.label}
             </Text>
             <NavRow><View style={st.grid}>
+              {(() => {
+                // ★ V12: where Band exists the key says which it is — SINGLE (the modes at your dial) beside BAND
+                const lit = spotsControls.band ? !!spotsControls.singleOn : spotsControls.spotsKind === 'digi';
+                const label = spotsControls.band ? 'SPOTS: SINGLE' : 'DIGITAL SPOTS';
+                return (
               <NavItem onPress={() => spotsControls.onSpotsToggle('digi')}>{(nf, nr) => pt.metal ? (
-                <MetalKey navRef={nr} focused={nf} label="DIGITAL SPOTS" active={spotsControls.spotsKind === 'digi'} pip
+                <MetalKey navRef={nr} focused={nf} label={label} active={lit} pip
                   onPress={() => spotsControls.onSpotsToggle('digi')} />
               ) : (
-              <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: spotsControls.spotsKind === 'digi' ? dec : t.btnBorder, paddingVertical: 10 },
-                                        spotsControls.spotsKind === 'digi' && { backgroundColor: decBg },
+              <TouchableOpacity ref={nr as any} accessibilityLabel={spotsControls.band ? 'Digital spots, single mode: the modes at your dial' : 'Digital spots'}
+                                style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: 10 },
+                                        lit && { backgroundColor: decBg },
                                         nf && { borderColor: focusC.ring, borderWidth: 2 }]}
                 onPress={() => spotsControls.onSpotsToggle('digi')} activeOpacity={0.8}>
-                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'digi' ? dec : t.btnText }]}>DIGITAL SPOTS</Text>
+                <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>{label}</Text>
               </TouchableOpacity>)}</NavItem>
+                );
+              })()}
+              {/* ★★ V12 BAND — a whole band's digital frequencies at once. Dimmed with its reason (never hidden). */}
+              {!!spotsControls.band && (() => {
+                const b = spotsControls.band!;
+                return (
+                <NavItem onPress={b.onPress}>{(nf, nr) => pt.metal ? (
+                  <MetalKey navRef={nr} focused={nf} label="SPOTS: BAND" active={b.on} pip onPress={b.onPress}
+                    style={!b.ok ? { opacity: 0.45 } : undefined} />
+                ) : (
+                <TouchableOpacity ref={nr as any} accessibilityLabel={b.ok ? `Digital spots, band mode. ${b.hint}` : `Band spots, unavailable: ${b.hint}`}
+                  accessibilityState={{ selected: b.on }}
+                  style={[st.btn, { borderColor: b.on ? dec : t.btnBorder, paddingVertical: 10 },
+                          b.on && { backgroundColor: decBg },
+                          !b.ok && { opacity: 0.45, borderStyle: 'dashed' as const },
+                          nf && { borderColor: focusC.ring, borderWidth: 2 }]}
+                  onPress={b.onPress} activeOpacity={0.8}>
+                  <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: b.on ? dec : t.btnText }]}>SPOTS: BAND</Text>
+                </TouchableOpacity>)}</NavItem>
+                );
+              })()}
               {spotsControls.showCwStt && (
                 <NavItem onPress={() => spotsControls.onSpotsToggle('cw')}>{(nf, nr) => pt.metal ? (
                   <MetalKey navRef={nr} focused={nf} label="CW SPOTS" active={spotsControls.spotsKind === 'cw'} pip
@@ -1304,6 +1335,12 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </TouchableOpacity>)}</NavItem>
               )}
             </View></NavRow>
+            {/* ★ Band's reason when it cannot run (the web's #spotsBandWhy), or what it covers. */}
+            {!!spotsControls.band && (
+              <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+                {spotsControls.band.ok ? spotsControls.band.hint : `Band spots unavailable — ${spotsControls.band.hint}`}
+              </Text>
+            )}
           </View>
         )}
 

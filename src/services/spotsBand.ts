@@ -53,7 +53,7 @@ export function spotsTitleText(band: boolean, cap: SpotsBandCap | undefined, dia
 
 /** The Band key's line when it cannot run, and its tooltip-equivalent when it can (the web's spotsBandRender). */
 export function spotsBandHint(cap: SpotsBandCap): string {
-  return cap.ok ? 'A whole band’s digital frequencies at once — every mode on its own dial ('
+  return cap.ok ? 'A whole band\'s digital frequencies at once — every mode on its own dial ('
     + cap.bands.map((x) => x.name).join(', ') + ')' : cap.why;
 }
 
