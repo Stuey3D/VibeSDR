@@ -203,8 +203,8 @@ static digi::ModeDef dummyMode(const char* name, float lo, float hi) {
 
 /** ★ `clip <out.cu8> <rate> <centreHz>`: 15 s of 20 m as an RTL delivers it (unsigned 8-bit IQ), UTC-ANCHORED — clip time
  *  t plays at UTC ≡ t (mod 15) under fake-rtl-tcp --hf-utc — for scripts/test-server-spots.mjs. FT8 at +0.5 s, FT4 at
- *  +0.5 and +8.0 s, one FT8 station on the lower sideband of the FT8 dial, a JS8 Normal heartbeat on the JS8 dial and
- *  an FT2 CQ on the FT2 dial. */
+ *  +0.5 and +8.0 s, one FT8 station on the lower sideband of the FT8 dial, a JS8 Normal heartbeat on the JS8 dial,
+ *  an FT2 CQ on the FT2 dial, a JTTY CQ on 14.090 and a PSK31 CQ on 14.070. */
 static int writeClip(const char* path, double rate, double centre) {
     std::vector<cf32> x((size_t)(rate * 15.0), cf32(0, 0));
     struct Tx { const char* msg; bool ft4; double rf, start; };
@@ -215,6 +215,9 @@ static int writeClip(const char* path, double rate, double centre) {
     // ★ JS8 Normal on its 14.078 dial (+0.5 s) and FT2 on its 14.084 dial (+0.1 s of the 3.75 s slot at 3.75)
     addFsk(x, rate, 14079000 - centre, 0.5, js8Heartbeat("G4JSN", "IO91", Js8Submode::Normal), 0.16, 4.0);
     addFsk(x, rate, 14084900 - centre, 3.85, tonesFor("CQ IU8AAA JN70", true), 0.024, 4.0);
+    // ★ V12 2026-10-27: a JTTY CQ on the 14.090 dial (tone 0 at +1500 Hz, from +2 s) and a PSK31 CQ on 14.070 (+1200 Hz)
+    addJtty(x, rate, 14091500 - centre, 2.0, "CQ G4JTY CQ", 4.0);
+    addPsk31(x, rate, 14071200 - centre, 0.5, "CQ CQ DE G4PSK G4PSK K\n", 4.0);
     addNoise(x, 5.0, 21);
     std::vector<uint8_t> u(x.size() * 2);
     for (size_t i = 0; i < x.size(); ++i) {
@@ -261,18 +264,23 @@ static int runReal(const char* path, double startUtc, double centre, bool swap, 
     /* ★ `live`: fed in REAL TIME, its clock shifted by whole minutes so the slots still line up — the FT8 pass gate
      *  judges its time budget against the wall clock, so a recording fed minutes after it was made, or faster than real
      *  time, gets ONE pass (what a loaded server pays); fed live it gets what a live listener's would. */
-    const double shift = live ? std::ceil((vibeUtcNow() - startUtc) / 60.0) * 60.0 : 0.0;
+    // ★ whole TWO-minute steps: WSPR's slots are the even minutes
+    const double shift = live ? std::ceil((vibeUtcNow() - startUtc + 60.0) / 120.0) * 120.0 : 0.0;   // (+60: time to make the bins)
+    /* ★ `gate`: the slice's bins with each block, as the server sends them (an FFT whose hop is 3/4 of it, ≈ 190 Hz bins).
+     *  Made BEFORE the clock starts — the server reads them off the FFT it already has, so they are not Band's cost —
+     *  and the blocks are the same 384 samples gated or not, so the two runs differ only by the gate. */
+    BinMaker bm(512);
+    const int hop = bm.hop();
+    std::vector<float> bins;
+    if (gate) { bins.reserve((n / hop + 1) * (size_t)bm.N); for (size_t o = 0; o + (size_t)hop <= n; o += (size_t)hop) { const float* p = bm.make(&x[o]); bins.insert(bins.end(), p, p + bm.N); } }
     const auto w0 = std::chrono::steady_clock::now();
     const double c0 = cpuSecs();
-    // ★ `gate`: the slice's bins with each block, as the server sends them (an FFT whose hop is 3/4 of it, ≈ 190 Hz bins)
-    BinMaker bm(512);
-    const int hop = gate ? bm.hop() : 2048;
-    for (size_t o = 0; o + (size_t)hop <= n; o += (size_t)hop) {
+    for (size_t o = 0, b = 0; o + (size_t)hop <= n; o += (size_t)hop, ++b) {
         const int k = hop;
         if (live) std::this_thread::sleep_until(w0 + std::chrono::microseconds((int64_t)(1e6 * (double)(o + k) / rate)));
-        const float* pw = gate ? bm.make(&x[o]) : nullptr;
+        const float* pw = gate ? &bins[b * (size_t)bm.N] : nullptr;
         sp.feedIq(&x[o], k, rate, centre, startUtc + shift + (double)(o + k) / rate, pw, gate ? bm.N : 0, rate / bm.N);
-        if (!live && (o / hop) % (16 * 2048 / hop) == 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (!live && b % 64 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     std::this_thread::sleep_for(std::chrono::seconds(4));
     std::printf("%s: %.0f s, engines %s, slots decoded %llu, skipped %llu, CPU %.2f s (%.3f %% of the recording's length)\n", path, n / (double)rate,
@@ -696,13 +704,13 @@ int main(int argc, char** argv) {
         const digi::Span s = digi::spanOf(*digi::bandById("20m"), digi::modes());
         const double rate = 96000, sigma = 0.02, t0 = std::floor(vibeUtcNow() / 60.0) * 60.0 + 60.0;
         std::vector<cf32> x((size_t)(rate * 40), cf32(0, 0));
-        addJtty(x, rate, 14091500 - s.centreHz, 3.0, "CQ G4JTY CQ", ampFor(-8, sigma, rate));
+        addJtty(x, rate, 14091500 - s.centreHz, 3.0, "CQ G4JTY CQ IO91", ampFor(-8, sigma, rate));
         addJtty(x, rate, 14092300 - s.centreHz, 9.0, "DL1ABC", ampFor(-8, sigma, rate));
         addPsk31(x, rate, 14071200 - s.centreHz, 1.0, "CQ CQ CQ DE G4PSK G4PSK G4PSK PSE K\nCQ CQ DE G4PSK G4PSK K\n", ampFor(-3, sigma, rate));
         addNoise(x, sigma, 11);
         std::vector<std::string> got; std::mutex gm;
         digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(), [&](const digi::Spot& z, double rf) {
-            char b[200]; std::snprintf(b, sizeof b, "%s %s %.0f %s", z.mode.c_str(), z.call.c_str(), rf, z.how.c_str());
+            char b[200]; std::snprintf(b, sizeof b, "%s %s %.0f %s %s", z.mode.c_str(), z.call.c_str(), rf, z.how.c_str(), z.grid.c_str());
             std::lock_guard<std::mutex> lk(gm); got.push_back(b); }, nullptr, nullptr);
         feedBand(sp, x, rate, s.centreHz, t0, true, true);
         std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -715,6 +723,8 @@ int main(int argc, char** argv) {
         { std::lock_guard<std::mutex> lk(gm); for (auto& g : got) std::printf("      %s\n", g.c_str()); }
         ok(has("JTTY", "G4JTY", 14091500, 3, "CQ"), "JTTY G4JTY spotted calling CQ, mode JTTY, at its RF (tone 0) from 14.090's tuner");
         ok(has("JTTY", "DL1ABC", 14092300, 3, "QSO"), "JTTY DL1ABC (a call atom, not CQ) spotted as QSO");
+        { bool g = false; std::lock_guard<std::mutex> lk(gm); for (auto& l : got) if (l.find("G4JTY") != std::string::npos && l.find(" IO91") != std::string::npos) g = true;
+          ok(g, "…and G4JTY's spot comes again with its own grid (the GRID4 frame after its CQ) — a JTTY caller lands on the map"); }
         ok(has("PSK31", "G4PSK", 14071200, 4, "CQ"), "PSK31 G4PSK spotted calling CQ, mode PSK31, at its RF from 14.070's tuner");
         std::string st; for (auto& m : sp.status()) st += m.mode + "=" + digi::stateWord(m.state) + " ";
         bool otherIdle = true; for (auto& m : sp.status()) if (m.mode == "WSPR" && m.live > 0) otherIdle = false;

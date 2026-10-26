@@ -14130,6 +14130,7 @@ function spotsMapPoints() {
       callsign: ok(s.callsign, /[^A-Za-z0-9/\-]/g, 16),
       grid:     ok(s.grid,     /[^A-Za-z0-9]/g,     8),
       mode:     ok(s.mode,     /[^A-Za-z0-9+-]/g,   12),
+      fam:      ok(digiModeFamily(s.mode, spotModes), /[^A-Za-z0-9+-]/g, 12),   // ★ PSK31/PSK63 → PSK: the legend's row
       band:     ok(s.band,     /[^A-Za-z0-9]/g,     8),
       snr: Number(s.snr) || 0,
       frequency: Number(s.frequency) || 0, timestamp: Number(s.timestamp) || 0,
@@ -14357,6 +14358,7 @@ function cleanSpots(list) {
       callsign: okStr(s.callsign, /[^A-Za-z0-9/\\-]/g, 16),
       grid: okStr(s.grid, /[^A-Za-z0-9]/g, 8),
       mode: okStr(s.mode, /[^A-Za-z0-9+-]/g, 12),
+      fam: okStr(s.fam || s.mode, /[^A-Za-z0-9+-]/g, 12),
       band: okStr(s.band, /[^A-Za-z0-9]/g, 8),
       snr: okNum(s.snr), frequency: okNum(s.frequency), timestamp: okNum(s.timestamp),
       lat: Math.max(-90, Math.min(90, lat)), lon: Math.max(-540, Math.min(540, lon)),
@@ -14606,7 +14608,7 @@ if (withKm.length) {
 }
 
 html += '<div class="sect">TOP COUNTRIES</div>' + barList(tally(s => s.country), null, 10);
-html += '<div class="sect">BY MODE</div>' + barList(tally(s => s.mode), (m) => modeColour(m), 10);
+html += '<div class="sect">BY MODE</div>' + barList(tally(s => s.fam || s.mode), (m) => modeColour(m), 10);
 html += '<div class="sect">BY BAND</div>' + barList(tally(s => s.band), null, 12);
 html += '<div class="sect">TOTALS</div>' +
   '<div class="row"><span>Spots</span><b>' + spots.length + '</b></div>' +
@@ -14632,7 +14634,7 @@ if (me && withKm.length) {
 }
 
 // Legend — ★ V12: by MODE (every mode this server decodes, with its count), each swatch carrying the marker's letter.
-const modeN = tally(s => s.mode);
+const modeN = tally(s => s.fam || s.mode);   // ★ by family: PSK31 and PSK63 are PSK's row
 const modeRows = MODES.slice();
 for (const m of Object.keys(modeN)) if (!modeRows.some(x => x.m === m)) modeRows.push({ m: m, colour: '#9E9E9E', ink: '#000000', letter: m.charAt(0) });
 document.getElementById('legend').innerHTML =

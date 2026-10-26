@@ -7,8 +7,9 @@
 // ★★ A SPOT IS A CALL ATOM. Only a frame that carries a call action (the FT8-family 28-bit standard call, which passed
 //    the CRC-12, the reserved bit, the whole grammar and the coherence gate) becomes a spot: "CQ K1ABC CQ" and
 //    "TU K1ABC CQ" are a station CALLING (how "CQ"), any other call atom is a station in a QSO (how "QSO"). A TEXT5
-//    frame is free text and is never read for callsigns. JTTY carries no grid in its call atoms; a GRID4 atom is its
-//    own frame and is not tied to a call here, so spots carry no grid (the country comes from the call — the host).
+//    frame is free text and is never read for callsigns. A call atom carries no grid; a GRID4 frame that FOLLOWS a CQ in
+//    the same message on the same signal is the caller's own ("CQ DK7OG JO62"), and its spot is sent again with it — so
+//    a calling JTTY station lands on the map. Every spot's country comes from the call (the host).
 // ★ The dials are digi_bands.h's "JTTY" rows (the announced calling frequencies, checked against PSKReporter).
 // ★ COST: the decoder runs a 768-point FFT every eighth of a symbol whatever is on air — measured ≈ 0.5–0.75 % of an M5
 //   core (noise / a busy passband), about 10–16 FT8 engines' worth averaged over a slot. That is why Band's governor
@@ -33,7 +34,7 @@ public:
         d_->onSpot = [this](const jtty::Spot& j) {
             if (!onSpot || j.call.empty()) return;
             Spot s;
-            s.mode = "JTTY"; s.call = j.call; s.how = j.how;
+            s.mode = "JTTY"; s.call = j.call; s.how = j.how; s.grid = j.grid;   // ★ the caller's own, after its CQ (or "")
             s.text = j.how == "CQ" ? "CQ " + j.call : j.call;
             s.snr = (int)std::lround(j.snrDb);
             s.audioHz = (float)j.audioHz;     // ★ tone 0, as WSJT-X reports a JTTY station (RN4AQ: 1088 Hz ↔ PSKReporter 14091088)

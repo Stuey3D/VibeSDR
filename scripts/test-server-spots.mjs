@@ -24,11 +24,13 @@ if (!BIN || !fs.existsSync(BIN) || !DIGI || !fs.existsSync(DIGI)) {
   console.log('   not run — set VIBESERVER_BIN and VIBE_DIGI_BIN (the built test-digi-spots, which writes the clip)');
   process.exit(3);
 }
-const RATE = 960000, CENTRE = 14085700;   // ★ 20 m's Band centre with FT8 + FT4 + FT2 + JS8 + WSPR registered (digi_bands.h spanOf)
+const RATE = 960000, CENTRE = 14083700;   // ★ 20 m's Band centre with FT8 FT4 FT2 JS8 WSPR JTTY PSK registered (digi_bands.h spanOf)
 const STATIONS = [['FT8', 'G4ABC', 14074600], ['FT8', 'DL1XYZ', 14075450], ['FT8', 'K1ABC', 14076300],
                   ['FT4', 'JA1QRS', 14080800], ['FT4', 'EA4TUV', 14081700],
-                  ['JS8', 'G4JSN', 14079000], ['FT2', 'IU8AAA', 14084900]];
-const TOL = { FT2: 21 };                  // ★ RF to a quarter of the tone step: FT2's tones are 41.7 Hz apart
+                  ['JS8', 'G4JSN', 14079000], ['FT2', 'IU8AAA', 14084900],
+                  ['JTTY', 'G4JTY', 14091500], ['PSK31', 'G4PSK', 14071200]];   // ★ V12 2026-10-27
+const TOL = { FT2: 21, JTTY: 5, PSK31: 6 };   // ★ RF to a quarter of the tone step: FT2's tones are 41.7 Hz apart
+const MODES = '["FT8","FT4","FT2","JS8","WSPR","JTTY","PSK"]';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-spots-'));
 const CLIP = path.join(tmp, '20m.cu8');
 execFileSync(DIGI, ['clip', CLIP, String(RATE), String(CENTRE)], { stdio: 'ignore' });
@@ -111,6 +113,7 @@ function checkSpots(spots, label) {
        `${label}: ${call} spotted as ${mode} at ${rf}${s ? ` (got ${s.data.mode} ${s.data.frequency} ${s.data.band})` : ' — not spotted'}`);
   }
   ok(!spots.some((x) => x.data.callsign === 'ZL3LSB'), `${label}: the lower-sideband station is never spotted`);
+  // (JTTY and PSK have no slots: their spots carry the moment the frame / the call began)
   // ★ M7EIW: a spot's timestamp is its slot's START (WSJT-X's time) — on FT8/JS8's 15 s, FT4's 7.5 s, FT2's 3.75 s grid
   const P = { FT8: 15000, JS8: 15000, FT4: 7500, FT2: 3750 };
   const off = spots.filter((x) => P[x.data.mode] && x.data.timestamp % P[x.data.mode] !== 0);
@@ -126,11 +129,11 @@ try {
     const S = await server(['--freq', String(CENTRE), '--mode', 'usb', '--users', '1'], 'one');
     try {
       const st = await S.status();
-      ok(st && JSON.stringify(st.spotModes) === '["FT8","FT4","FT2","JS8","WSPR"]', `vibeserver.json spotModes ${JSON.stringify(st && st.spotModes)}`);
+      ok(st && JSON.stringify(st.spotModes) === MODES, `vibeserver.json spotModes ${JSON.stringify(st && st.spotModes)}`);
       ok(st && st.spotsBand === true && !st.spotsBandWhy, `Band offered (spotsBand ${JSON.stringify(st && st.spotsBand)})`);
       const b20 = st && (st.spotBands || []).find((b) => b.id === '20m');
-      ok(!!b20 && Math.abs(b20.hz - CENTRE) < 1 && b20.hi - b20.lo > 23000 && b20.hi - b20.lo < 24500
-         && JSON.stringify(b20.modes) === '["FT8","FT4","FT2","JS8","WSPR"]',
+      ok(!!b20 && Math.abs(b20.hz - CENTRE) < 1 && b20.hi - b20.lo > 27000 && b20.hi - b20.lo < 28500
+         && JSON.stringify(b20.modes) === MODES,
          `20 m listed: centre ${b20 && b20.hz}, span ${b20 && b20.lo}–${b20 && b20.hi}, modes ${b20 && JSON.stringify(b20.modes)}`);
       ok(st && (st.spotBands || []).map((b) => b.id).join(' ').startsWith('160m 80m') /* ★ WSPR's 2200 m / 630 m lie below this radio */, `bands in step order: ${st && (st.spotBands || []).map((b) => b.id).join(' ')}`);
       const L = await listener(S.port, 'spone001', CENTRE, 'usb');
@@ -138,6 +141,15 @@ try {
       ok(await until(allSpotted(L), 50000), `every station spotted within 50 s (${jsons(L.dx, 'digital_spot').map((x) => x.data.mode + ' ' + x.data.callsign).join(', ')})`);
       await sleep(1500);
       checkSpots(jsons(L.dx, 'digital_spot'), 'one-pipeline Band');
+      // ★★ V12 governor: the mode chips, and JTTY/PSK saying what the station was doing (+ every spot's country)
+      const sts = jsons(L.dx, 'digital_spots_status');
+      const last = sts.length ? sts[sts.length - 1].data : null;
+      ok(!!last && last.scope === 'band' && last.modes.length === 7 && last.modes.every((m) => ['active', 'light', 'idle', 'shed', 'off'].includes(m.state)),
+         `the spots box's mode chips arrive (${last ? last.modes.map((m) => m.mode + ' ' + m.state).join(', ') : 'none'})`);
+      ok(!!last && last.modes.some((m) => m.mode === 'WSPR' && m.live === 0), 'WSPR\'s empty window was never decoded (the activity gate, from the slice\'s own bins)');
+      const j = jsons(L.dx, 'digital_spot').find((x) => x.data.callsign === 'G4JTY'), p = jsons(L.dx, 'digital_spot').find((x) => x.data.callsign === 'G4PSK');
+      ok(j && j.data.how === 'CQ' && /England/.test(j.data.country), `JTTY's spot says CQ and the country (${j && j.data.how} ${j && j.data.country})`);
+      ok(p && p.data.how === 'CQ' && p.data.mode === 'PSK31', `PSK's spot is PSK31, how ${p && p.data.how}`);
       ok(/digital spots: Band started/.test(S.log()), 'the server logged "digital spots: Band started"');
       // ★ Single on the same radio: back to the button there always was — the listener's own audio (FT8 dial in USB).
       L.dx.txt.length = 0;
@@ -160,6 +172,24 @@ try {
       await sleep(1500);
       checkSpots(jsons(A.dx, 'digital_spot'), 'per-listener Band');
       for (const k of ['spec', 'aud', 'dx']) A[k].close();
+    } finally { S.stop(); }
+  }
+  {
+    // ★★ V12 governor: the owner's word per mode — PSK OFF in Band, WSPR ALWAYS (decoded though its window is empty)
+    console.log('── the owner\'s word per mode (spotsband-psk, spotsband+wspr) ──');
+    const S = await server(['--freq', String(CENTRE), '--mode', 'usb', '--users', '1'], 'own', { blockedModes: 'spotsband-psk,spotsband+wspr' });
+    try {
+      const L = await listener(S.port, 'spown001', CENTRE, 'usb');
+      L.dx.send({ type: 'subscribe_digital_spots', scope: 'band' });
+      ok(await until(() => jsons(L.dx, 'digital_spot').some((x) => x.data.callsign === 'G4JTY'), 50000), 'Band runs (JTTY spotted)');
+      await sleep(16000);   // ★ PSK's call would long have been heard twice
+      const sp = jsons(L.dx, 'digital_spot');
+      ok(!sp.some((x) => x.data.callsign === 'G4PSK'), 'PSK switched off for Band: G4PSK never spotted');
+      const sts = jsons(L.dx, 'digital_spots_status'); const last = sts.length ? sts[sts.length - 1].data : null;
+      const m = (n) => last && last.modes.find((x) => x.mode === n);
+      ok(m('PSK') && m('PSK').state === 'off', `PSK's chip says off (${m('PSK') && m('PSK').state})`);
+      ok(m('WSPR') && (m('WSPR').state === 'active' || m('WSPR').state === 'light'), `WSPR ALWAYS: decoding though its window is empty (${m('WSPR') && m('WSPR').state})`);
+      for (const k of ['spec', 'aud', 'dx']) L[k].close();
     } finally { S.stop(); }
   }
   {

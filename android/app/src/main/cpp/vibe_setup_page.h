@@ -1617,6 +1617,16 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           FM may be quite wrong for a DAB transmitter two miles away.
           <br><b>The server enforces this as well as the page</b>, so it holds for every client.</div>
         <div id="modeBlockList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:10px"></div>
+        <!-- ★★ V12 BAND GOVERNOR (decoders/digi_governor.h): the owner's word per mode in "Digital spots: Band". -->
+        <div id="bandModeWrap" class="hide" style="margin-top:12px">
+          <div class="hint"><b>Digital spots: Band, mode by mode.</b> Band reads every mode on a band at once. To keep that
+            affordable it decodes a mode only while its window has something in it, drops depth (extra passes) before it
+            drops a mode, and when the CPU is short it drops the least-used modes first (FT8, FT4, WSPR, JS8, FT2, JTTY,
+            PSK, newer modes last). <b>Auto</b> lets it decide. <b>Always</b> decodes the mode every period, even when its
+            window looks empty and even over budget. <b>Off</b> never runs it in Band. Listeners see each mode's state in
+            the spots box.</div>
+          <div id="bandModeList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px"></div>
+        </div>
         <div class="note" id="modeBlockNote"></div>
       </div>
 
@@ -2622,9 +2632,12 @@ let DAB_DECODER = true;
 /** ★ Is this VibeServer Lite? Lite MEASURES ITSELF at first setup — it is the class of box that needs it —
  *  while the full versions only offer the button (Stuart, 2026-09-19). */
 let IS_LITE = false;
+/** ★ V12: the modes this server's Band spots runs (vibeserver.json spotModes) — the per-mode Auto / Always / Off list. */
+let SPOT_MODES = [];
 async function readDabDecoder() {
   try {
     const j = await (await fetch("/vibeserver.json", {cache:"no-store"})).json();
+    if (Array.isArray(j.spotModes)) SPOT_MODES = j.spotModes.filter(m => typeof m === "string").map(m => m.replace(/[^0-9A-Za-z+-]/g, "").slice(0, 12)).filter(Boolean).slice(0, 16);
     if (typeof j.dabDecoder === "boolean") DAB_DECODER = j.dabDecoder;
     // ★ Lite-only choices appear only on a Lite server (a 32-bit ARM build) — see "lite" in the shim.
     $("dabScanRow").classList.toggle("hide", j.lite !== true);
@@ -2938,14 +2951,48 @@ function dabLandInit() {
 }
 
 /** One line saying what this receiver will and will not offer. */
+/* ★★ V12 BAND GOVERNOR — THE OWNER'S WORD PER MODE (2026-10-27). Stored in the SAME blocked-modes list as every other
+ *  switch (so it is per radio and saved the same way): "spotsband-psk" = PSK off in Band, "spotsband+wspr" = WSPR always.
+ *  Auto = neither. The server reads them at each gate period (vsBandOverride). Shown only where Band exists and is on. */
+function bandModeRender() {
+  const wrap = $("bandModeWrap"), host = $("bandModeList");
+  if (!wrap || !host) return;
+  const set = modeBlockSet();
+  const show = SPOT_MODES.length > 0 && !set.has("spots") && !set.has("spotsband");
+  wrap.classList.toggle("hide", !show);
+  if (!show) { host.innerHTML = ""; return; }
+  host.innerHTML = SPOT_MODES.map(m => {
+    const id = m.toLowerCase();
+    const v = set.has("spotsband-" + id) ? "off" : set.has("spotsband+" + id) ? "always" : "auto";
+    return `<label class="row" style="gap:6px;flex:0 0 auto;align-items:center"><span class="lbl">${esc(m)}</span>`
+      + `<select data-bandmode="${esc(id)}">`
+      + ["auto", "always", "off"].map(o => `<option value="${o}"${o === v ? " selected" : ""}>${o === "auto" ? "Auto" : o === "always" ? "Always" : "Off"}</option>`).join("")
+      + `</select></label>`;
+  }).join("");
+  host.querySelectorAll("select[data-bandmode]").forEach(el => {
+    el.addEventListener("change", () => {
+      const s = modeBlockSet(), id = el.dataset.bandmode;
+      s.delete("spotsband-" + id); s.delete("spotsband+" + id);
+      if (el.value === "off") s.add("spotsband-" + id);
+      if (el.value === "always") s.add("spotsband+" + id);
+      radio().blockedModes = [...s].join(",");
+      modeBlockSummary();
+    });
+  });
+}
 function modeBlockSummary() {
   const el = $("modeBlockNote");
   if (!el) return;
-  const off = [...modeBlockSet()];
+  const all = [...modeBlockSet()];
+  const off = all.filter(id => !/^spotsband[+-]/.test(id));
   const name = (id) => (BLOCKABLE.find(m => m.id === id) || { label: id }).label;
-  el.textContent = off.length
+  const band = all.filter(id => /^spotsband[+-]/.test(id))
+    .map(id => id.slice(10).toUpperCase() + (id[9] === "-" ? " off" : " always"));
+  el.textContent = (off.length
     ? `Switched off: ${off.map(name).join(", ")}.`
-    : "Everything this radio can do is offered.";
+    : "Everything this radio can do is offered.")
+    + (band.length ? ` Band spots: ${band.join(", ")}.` : "");
+  bandModeRender();
 }
 
 function bandChips(which) {
