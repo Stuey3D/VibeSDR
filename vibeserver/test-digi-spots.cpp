@@ -164,7 +164,45 @@ static int runReal(const char* path, double startUtc, double centre, bool swap, 
     return 0;
 }
 
+/** ★ `realusb <usb.wav> <start_utc> <dialHz> [live]`: the SAME minutes as USB audio (ubersdr-rec … usb, 12 kHz mono) through
+ *  SINGLE mode — the A/B for Band's tuner: identical engines, only the way the audio was made differs. */
+static int runRealUsb(const char* path, double startUtc, double dial, bool live) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::printf("cannot open %s\n", path); return 3; }
+    std::vector<uint8_t> raw; { uint8_t b[65536]; size_t k; while ((k = std::fread(b, 1, sizeof b, f)) > 0) raw.insert(raw.end(), b, b + k); }
+    std::fclose(f);
+    size_t data = 0, dlen = 0; uint32_t rate = 0; uint16_t chans = 0;
+    for (size_t p = 12; p + 8 <= raw.size();) {
+        const uint32_t len = raw[p + 4] | raw[p + 5] << 8 | raw[p + 6] << 16 | (uint32_t)raw[p + 7] << 24;
+        if (!std::memcmp(&raw[p], "fmt ", 4)) { chans = raw[p + 10] | raw[p + 11] << 8; rate = raw[p + 12] | raw[p + 13] << 8 | raw[p + 14] << 16 | (uint32_t)raw[p + 15] << 24; }
+        if (!std::memcmp(&raw[p], "data", 4)) { data = p + 8; dlen = std::min<size_t>(len, raw.size() - data); break; }
+        p += 8 + len + (len & 1);
+    }
+    if (chans != 1 || rate != 12000 || !data) { std::printf("need 12 kHz mono\n"); return 1; }
+    const size_t n = dlen / 2;
+    std::vector<float> a48(n * 4);
+    for (size_t i = 0; i < n; ++i) { const float v = (int16_t)(raw[data + 2 * i] | raw[data + 2 * i + 1] << 8) / 32768.0f; for (int k = 0; k < 4; ++k) a48[4 * i + k] = v; }
+    std::map<std::string, int> per; std::mutex gm; std::vector<std::string> lines;
+    digi::Spotter sp(digi::Spotter::Scope::Single, digi::modes(), [&](const digi::Spot& s, double rf) {
+        char b[160]; std::snprintf(b, sizeof b, "%s %-10s %6s %+4d %.0f", s.mode.c_str(), s.call.c_str(), s.grid.c_str(), s.snr, rf);
+        std::lock_guard<std::mutex> lk(gm); per[s.mode]++; lines.push_back(b); }, [dial] { return dial; }, nullptr);
+    const double shift = live ? std::ceil((vibeUtcNow() - startUtc) / 60.0) * 60.0 : 0.0;
+    const auto w0 = std::chrono::steady_clock::now();
+    for (size_t o = 0; o < a48.size(); o += 3840) {
+        const int k = (int)std::min<size_t>(3840, a48.size() - o);
+        if (live) std::this_thread::sleep_until(w0 + std::chrono::microseconds((int64_t)(1e6 * (double)(o + k) / 48000.0)));
+        sp.feedAudio48k(&a48[o], k, startUtc + shift + (double)(o + k) / 48000.0);
+        if (!live && (o / 3840) % 16 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+    std::printf("%s: Single, slots decoded %llu\n", path, (unsigned long long)sp.slotsDecoded());
+    for (auto& l : lines) std::printf("  %s\n", l.c_str());
+    for (auto& kv : per) std::printf("%s: %d spots\n", kv.first.c_str(), kv.second);
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 4 && std::strcmp(argv[1], "realusb") == 0) return runRealUsb(argv[2], std::atof(argv[3]), std::atof(argv[4]), argc > 5 && !std::strcmp(argv[5], "live"));
     if (argc > 4 && std::strcmp(argv[1], "clip") == 0) return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     if (argc > 4 && std::strcmp(argv[1], "real") == 0) {
         bool swap = false, live = false;

@@ -202,6 +202,22 @@ Where the letters are drawn:
 
 ## THE MODE INTERFACE: how WSPR, JS8, FT2, Q65, FST4, FST4W and MSK144 plug in
 
+**Status, 2026-10-26.** The WSPR engine (branch `v12-wspr`, `decoders/wspr_decoder.*`) and the JS8 and FT2 engines
+(`v12-js8-ft2`) are finished as standalone engines. Plugging one in means writing a thin adapter header
+`decoders/digimodes/<name>.h` that wraps the engine in `digi::Engine`, as `digimodes/ft8.h` wraps `Ft8Decoder`. That
+header is the whole change: the registry, the bands, Band mode, the clients and the gallery need nothing else.
+
+To check an integration, these must all hold:
+1. `ModeDef::name` is exactly `"WSPR"` / `"JS8"` / `"FT2"`. The published dials in `digi_bands.h` and the client
+   styles in `digiModes.ts` are keyed on that name.
+2. `audioLoHz` / `audioHiHz` cover what the engine searches (WSPR 1400–1600). Band mode cuts exactly this, plus a guard.
+3. `process()` takes **float** audio at `sampleRate`, which is 12 kHz in Band mode today. It is stamped with the capture
+   UTC of the last sample, and slots are cut by that stamp.
+4. `onSpot` carries the call and the sender's own grid, with `audioHz` above the dial.
+5. `slotsSkipped()` counts the slots dropped while the previous one was still decoding.
+6. Run `test-digi-spots` and `test-server-spots`. With a new mode registered, spans grow by themselves:
+   20 m becomes 23.7 kHz and 40 m 42.1 kHz (the table above).
+
 A mode is a header `decoders/digimodes/<name>.h` that defines `inline vibe::digi::ModeDef vibeDigiMode_<name>()`. The
 engine's `.cpp` files go beside it in `decoders/digimodes/`. All three builds glob that folder: `vibeserver/CMakeLists.txt`,
 the Android `CMakeLists.txt` and `modules/vibe-local-sdr/build_ios.sh`.
@@ -322,6 +338,18 @@ refuses a subscribe in words.
 - map markers and legend by mode, with letters on the Leaflet fallback (headless Edge has no WebGL 2 here);
 - nothing scrolls sideways at 390 px;
 - back to Single, where the arrows tune by the step again.
+
+**Real off-air 20 m** (Stuart's UberSDR, `~/VibeSDR-test-audio/spots/`, 2026-10-26; `test-digi-spots real … live`, fed in
+real time so the FT8 pass gate behaves as it would live):
+- **A/B: Band's tuner against a real USB receiver.** Two recordings made at the same moment, 150 s each:
+  `ab_20m_14078800_iq48.wav` (48 kHz I/Q) went through **Band**, and `ab_ft8_20m_14074000_usb.wav` (the receiver's own
+  USB demodulator at 14.074, 12 kHz) went through **Single**. Both runs use the same engines. FT8 found **75 unique calls
+  either way**, 72 of them in common; the three found by only one path were weak ones each way. The tuner costs no
+  sensitivity. Band also decoded **14 FT4 stations** on 14.080, which Single cannot hear from the FT8 dial.
+- **200 s at 08:20 UTC** (`uber_20m_14078800_iq48.wav`): 269 FT8 and 65 FT4 spots, 83 + 11 unique calls, 37 slots
+  decoded, 0 skipped, 0.34 % of an M5 core. UberSDR's own decoder (jt9-class, with AP decoding) logged 39 calls with
+  grids on 20 m FT8 in the same window. Band decoded 22 of them; the 17 missed were mostly −13 to −25 dB. That gap is
+  the FT8 engine's sensitivity, not Band's: the A/B above shows Band equals Single.
 
 **CPU, Apple M5 Pro, measured** (process CPU, every thread). The input is a busy 20 m: 20 FT8 stations in two slots and
 10 FT4.
