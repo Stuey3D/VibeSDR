@@ -28,7 +28,7 @@
  */
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
-import { DIGI_MODE_STYLE, DIGI_MARKER_RIM } from '../utils/digiModes';
+import { DIGI_MODE_STYLE, DIGI_MARKER_RIM, digiModeStyle } from '../utils/digiModes';
 import { DSC_PIN_COLOURS } from '../services/dsc';   // ★ V12 DSC's map legend
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useOverlay } from './PanelNav';
@@ -159,13 +159,19 @@ function buildHtml(
   kind: MapKind, baseUrl: string, uuid: string,
   opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean; glBase?: string;
           /** kind 'adsb': the in-map toggles as this device last left them. */
-          adsbPrefs?: AdsbMapPrefs; radioUrl?: string; ndbPrefs?: NdbMapPrefs },
+          adsbPrefs?: AdsbMapPrefs; radioUrl?: string; ndbPrefs?: NdbMapPrefs;
+          /** ★ V12 kind 'digi': the modes THIS server decodes (vibeserver.json spotModes) — the filter and the legend. */
+          spotModes?: string[] },
   /** ★★ The user's colours as rgb TRIPLETS (2026-10-12): `x` text (lifted for contrast), `k` controls, `kt` controls as
    *  a legend. The page is rebuilt when they change — and they can only change from the menus, after leaving this
    *  screen (Stuart: "to change the colour of the map means youd have to exit its screen anyway"). */
   ink: { x: string; k: string; kt: string } = { x: '255,180,60', k: '255,160,0', kt: '255,200,80' },
 ): string {
   const local = !!opts?.local;
+  /* ★ V12: the spots map's filter and legend list the modes THIS server decodes (vibeserver.json spotModes) — never a mode
+   *  it cannot spot (a dead filter choice). Not said (UberSDR, on-device FT8): the style table's. */
+  const esc = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+  const legendModes: string[] = opts?.spotModes && opts.spotModes.length ? opts.spotModes : Object.keys(DIGI_MODE_STYLE);
   /* ★★★ THE GPU MAP (vibemapgl.js, route B): MapLibre GL JS in this same WebView, drawing our own
    *  tiles from <documents>/mapgl/. The page's HFDL / spots code is unchanged — vibemapgl-compat.js
    *  answers its Leaflet calls with the GPU map underneath. Off (gl false) = today's Leaflet page. */
@@ -462,7 +468,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
 ${isSpots ? `
 <div id="filters">
   <span class="flabel">FILTER</span>
-  ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option>${Object.keys(DIGI_MODE_STYLE).map((m) => `<option>${m}</option>`).join('')}</select>` : ''}
+  ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option>${legendModes.map((m) => `<option>${esc(m)}</option>`).join('')}</select>` : ''}
   <select id="fBand"><option value="ALL">All</option>${['2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm'].map((b) => `<option>${b}</option>`).join('')}</select>
   <select id="fAge">${kind === 'digi'
     ? `<option value="ALL">All</option><option value="2m" selected>2 min</option><option value="5m">5 min</option><option value="15m">15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option>`
@@ -524,7 +530,7 @@ ${isSpots ? `
       <div class="lg-row"><span class="lg-dot" style="background:rgba(120,120,140,0.60);"></span><span>no sig</span></div>
       ` : kind === 'digi' ? `
       <div class="lg-sec">MODE</div>
-      ${Object.entries(DIGI_MODE_STYLE).map(([m, st]) => `<div class="lg-row"><span class="lg-dot lg-mk" style="background:${st.colour};color:${st.ink};">${st.letter}</span><span>${m}</span></div>`).join('')}
+      ${legendModes.map((m) => { const st = digiModeStyle(m); return `<div class="lg-row"><span class="lg-dot lg-mk" style="background:${st.colour};color:${st.ink};">${esc(st.letter)}</span><span>${esc(m)}</span></div>`; }).join('')}
       <div class="lg-row"><span>Colour + letter = mode</span></div>
       <div class="lg-sec">SNR / SIZE</div>
       <div class="lg-row"><span class="lg-dot" style="width:14px;height:14px;background:rgba(255,255,255,0.5);box-shadow:0 0 6px 3px rgba(255,255,255,0.4);"></span><span>Strong (&ge;0 dB)</span></div>
@@ -1530,7 +1536,7 @@ if(KIND==='digi'||KIND==='cw'){
     return      {r:4,op:0.55,glow:false};
   }
   function passes(s){
-    if(!isCW&&fMode&&fMode.value!=='ALL'&&s.mode!==fMode.value)return false;
+    if(!isCW&&fMode&&fMode.value!=='ALL'&&famOf(s.mode,FAMS)!==String(fMode.value).toUpperCase())return false;
     if(fBand&&fBand.value!=='ALL'&&spotBand(s)!==fBand.value)return false;
     var fa=fAge?fAge.value:'ALL';
     if(fa!=='ALL'){
@@ -1544,8 +1550,14 @@ if(KIND==='digi'||KIND==='cw'){
    *  A dark rim keeps the pale fills readable, and on the GPU map each circle carries its mode's LETTER (colour is never
    *  the only cue). Bigger circles than the band dots were, so the letter fits. CW's map keeps its band colours. */
   var MODE_STYLE=${JSON.stringify(DIGI_MODE_STYLE).replace(/</g, '\\u003c')}, RIM=${JSON.stringify(DIGI_MARKER_RIM)};
+  /* ★ A mode's FAMILY (src/utils/digiModes.ts digiModeFamily — PSK31 / PSK63 → PSK, Q65-60A → Q65): the colour and the
+   *  filter both go by it, so PSK63 spots are PSK's purple and a PSK filter shows them. */
+  var FAMS=${JSON.stringify(legendModes.map((m) => m.toUpperCase())).replace(/</g, '\\u003c')};
+  function famOf(m,list){m=String(m||'').toUpperCase();if(list.indexOf(m)>=0)return m;
+    for(var i=0;i<list.length;i++){var k=list[i];if(m.indexOf(k+'-')===0||(m.indexOf(k)===0&&/^[0-9]+$/.test(m.slice(k.length))))return k;}return m;}
   function modeStyle(m){m=String(m||'').toUpperCase();if(MODE_STYLE[m])return MODE_STYLE[m];
-    for(var k in MODE_STYLE)if(m.indexOf(k+'-')===0)return MODE_STYLE[k];return{colour:'#9E9E9E',ink:'#000000',letter:(m.match(/[A-Z0-9]/)||['?'])[0]};}
+    var f=famOf(m,Object.keys(MODE_STYLE));if(MODE_STYLE[f])return MODE_STYLE[f];
+    return{colour:'#9E9E9E',ink:'#000000',letter:(m.match(/[A-Z0-9]/)||['?'])[0]};}
   function style(s){
     var ss=snrStyle(s.snr);
     if(!isCW){
@@ -1746,8 +1758,8 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbGain, ndb, trk, safeInsets }:
-    MapOverlayProps & { spots?: SpotRow[] },
+    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbGain, ndb, trk, safeInsets, spotModes }:
+    MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
   const { width: winW, height: winH } = useWindowDimensions();
@@ -1828,10 +1840,10 @@ export default function MapOverlay(
   const html = useMemo(
     () => (kind && glOk !== null && (kind !== 'adsb' || adsbPrefsReady) && (kind !== 'ndb' || ndbPrefsReady) ? buildHtml(kind, baseUrl, sessionUuid,
       { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase,
-        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined }, ink) : ''),
+        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes }, ink) : ''),
     // ★ adsbPrefsRef / ndbPrefsAtBuild are read at build time only (see above) — deliberately not dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady, ndbPrefsReady],
+    [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady, ndbPrefsReady, spotModes?.join(',')],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
    *

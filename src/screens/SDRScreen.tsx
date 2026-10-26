@@ -14324,6 +14324,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         } : undefined}
         /* ★★ V12 AIS / APRS: the items (icon, label, card made here), the live list, its status and the AIS safety strip. */
         trk={shownMap === 'ais' ? aisTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : null}
+        /* ★ V12 the spots map's MODE filter and legend: this server's modes (vibeserver.json spotModes), by family */
+        spotModes={shownMap === 'digi' ? spotModesSrv : undefined}
         adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}
         adsbCapture={shownMap === 'adsb' ? adsbCaptureWarning(adsbReport) : undefined}
         /* ★★ V12 the ADS-B GAIN key — only where the radio has a gain list the owner has not fixed (adsbGainView says null
