@@ -108,6 +108,11 @@ flags_for() {
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
+    # ★★ V12 WIRELESS M-BUS METERS (vibe_wmbus.h, 2026-10-26): CRC, fields, 3-out-of-6, formats A/B, headers, records,
+    #    the line, the interval; T1 / C1-A / C1-B / S1 through the real ISM front end at 1-2.4 MS/s with drift, a
+    #    sensitivity sweep, noise and carriers = nothing, the privacy rule (serial yes, ciphertext never), the day-log
+    #    throttle, a busy street. VIBE_WMBUS_REC=<868.6 MHz u8 at 2.4 MS/s> also replays a real capture (0 meters).
+    test-wmbus)            echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }
