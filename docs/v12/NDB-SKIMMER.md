@@ -162,6 +162,8 @@ x86-64 SSE2 syntax-checks clean.
   every reading, Find, stats, the receiver given back exactly.
 - `scripts/test-web-ndb.mjs`: 27 checks in headless Edge (`--mute-audio`): the map view, the list (order, NM, bars,
   coloured readings, tiles), the map (markers, NM rings), the card, RINGS, HEARD LOG, Find, stats, the fold, 390 px.
+- `scripts/test-setup-bg-ndb.mjs`: the setup page's real profile editor — NDB offered on an HF+, an RSP, an RTL in direct
+  sampling (HW.ndbHw first), never a HackRF / R2 / Icom / locked / blocked radio; saved as `{"ndb":true}` and read back.
 - `scripts/test_ndb_layer.mjs`: the layer's generated copy, the bars rule, and the rings shared with ADS-B (ladder, NM,
   four labels). `scripts/test_adsb_layer.mjs` (ADS-B's own, 151 checks) still passes on the shared ring code.
 - test-ndb also: the background-decoding NDB profile (parse, write back, valid / refused on a locked radio or one with no

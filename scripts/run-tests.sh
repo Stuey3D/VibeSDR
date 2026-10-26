@@ -350,6 +350,9 @@ if node scripts/test-setup-bgdecode.mjs; then pass=$((pass+1)); else fail=$((fai
 # ★★ …and an ISM PROFILE (2026-10-25): offered only where ISM can run (not an HF+, an Icom, a locked radio, ISM blocked),
 #    only the bands the radio reaches; a band instead of a centre and VFOs; saved as {"ism":"433"} and read back.
 if node scripts/test-setup-bg-ism.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and an NDB PROFILE (2026-10-27): offered only where the radio reaches LF (HF+, RSP, an RTL in direct sampling; the
+#    running radio's ndbHw first), never locked or blocked; no centre or VFOs; saved as {"ndb":true} and read back.
+if node scripts/test-setup-bg-ndb.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A TUNNEL A PREVIOUS PROCESS LEFT ON OUR PORT IS RETIRED (2026-10-19, Kiko's four tunnels). Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
