@@ -26,7 +26,7 @@ case "$A" in arm64|armhf) ;; *) echo "usage: $0 arm64|armhf [--pigen]"; exit 2 ;
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$HERE/out"; mkdir -p "$OUT/cache" "$OUT/work"
 STAMP="$(date +%Y%m%d)"
-NAME="vibeserver-pocket-$A-$STAMP"
+NAME="vibeserver-pocket-$A${CARD_VERSION:+-$CARD_VERSION}-$STAMP"   # ★ version in the name — see image/sbc/build.sh
 COUNTRY="${POCKET_COUNTRY:-GB}"
 # ★★ THE HIGH DETAIL MAPS, BAKED IN (Stuart, 2026-10-10) — their URL and exact size are read from the
 #    server's own source, so the image and the server's installer can never disagree about them.

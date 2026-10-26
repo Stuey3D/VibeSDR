@@ -5,7 +5,7 @@
 # Lenovo (192.168.86.13) still works, with qemu for both.
 #
 #   image/sbc/run-in-docker.sh boot-test <finished.img.xz> <output-dir>   boot a finished card under emulation
-#   image/sbc/run-in-docker.sh <board> <base.img.xz> <output-dir>     (env passes through: VIBESERVER_DEB COUNTRY NO_MAPS KEEP_WORK)
+#   image/sbc/run-in-docker.sh <board> <base.img.xz> <output-dir>     (env passes through: VIBESERVER_DEB COUNTRY NO_MAPS KEEP_WORK CARD_VERSION)
 #
 # ★★ CPU: --cpus 2 and nice -n 19 inside (build.sh), xz -T2. ONE build at a time — the script refuses to start while
 #    another container from this script is running on the host.
@@ -31,7 +31,7 @@ if [ -n "${VIBESERVER_DEB:-}" ]; then
 fi
 exec docker run --rm --privileged --cpus 2 --label vibesdr-sbc-build -v /dev:/dev \
   -v "$REPO":/repo:ro -v "$(dirname "$BASE")":/base:ro -v "$OUT":/out ${DEBMNT[@]+"${DEBMNT[@]}"} ${DEBENV[@]+"${DEBENV[@]}"} \
-  -e COUNTRY="${COUNTRY:-GB}" -e NO_MAPS="${NO_MAPS:-0}" -e KEEP_WORK="${KEEP_WORK:-0}" -e IMAGE_VERSION="${IMAGE_VERSION:-1}" \
+  -e COUNTRY="${COUNTRY:-GB}" -e NO_MAPS="${NO_MAPS:-0}" -e KEEP_WORK="${KEEP_WORK:-0}" -e IMAGE_VERSION="${IMAGE_VERSION:-1}" -e CARD_VERSION="${CARD_VERSION:-}" \
   debian:trixie-slim /bin/bash -euo pipefail -c '
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk gdisk e2fsprogs dosfstools util-linux gnupg \

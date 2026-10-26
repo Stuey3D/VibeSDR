@@ -21,6 +21,8 @@ CARDS=("$@")
 if [ ${#CARDS[@]} = 0 ]; then
   CARDS=(pi-arm64 pi-armhf $(awk '!/^#/ && NF && ($8 == "planned" || $8 == "built") { print $1 }' "$HERE/boards.txt"))
 fi
+# ★ Every card is named with the VibeServer version it carries (11.0.13-1 → "11.0.13").
+export CARD_VERSION="${VER%%-*}"
 SUMMARY="$OUT/summary.txt"
 : > "$SUMMARY"
 say() { printf '\n==== %s  %s\n' "$(date -u +%H:%M:%S)" "$*"; }

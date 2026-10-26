@@ -68,7 +68,9 @@ if [ "$RAM_MB" -lt 512 ] || [ "$STATUS" = dietpi ]; then
 fi
 ONBOARDING="Ethernet first: http://VibeServerSetup.local/ (or :48000; no onboard Wi-Fi; a USB Wi-Fi adapter present at first boot gets the setup hotspot, one added after setup is offered on the setup page)"
 [ "$WIFI" = none ] || ONBOARDING="open \"VibeServer\" setup hotspot on the onboard $WIFI, and http://VibeServerSetup.local/ (or :48000) on Ethernet"
-OUT_NAME="vibeserver-portable-$BOARD-$(date -u +%Y%m%d)"
+# ★★ The VibeServer version is IN THE NAME (2026-10-26): the 11.0.12 and 11.0.13 cards were built on the same day, and
+#    two cards with one filename — one with a vulnerable cloudflared — cannot be told apart by anyone downloading them.
+OUT_NAME="vibeserver-portable-$BOARD${CARD_VERSION:+-$CARD_VERSION}-$(date -u +%Y%m%d)"
 
 if [ "${DRY_RUN:-0}" = 1 ]; then
   cat <<EOF
