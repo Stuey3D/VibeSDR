@@ -749,6 +749,20 @@ html[data-frontdoor] #splashListeners { display: none !important; }
   display: flex; align-items: center; justify-content: center;
   min-width: 2.6em; opacity: 0.6; color: var(--ctl-glyph, var(--btn-text));
 }
+/* ★★ V12 VFO A/B — the A/B KEY in the glyph's place (index: #mAbKey). Lit in the SELECTED VFO's own needle colour
+   (--abcol, set by main.ts abPaint) so the key and the bright needle say the same thing; the letter cross-fades with
+   the needles (~200 ms). Same width as the glyph it replaces, so the dial does not move when A/B is switched on. */
+.mAbKey {
+  align-self: center; min-width: 2.6em; height: max(2em, 34px); padding: 0 0.3em;
+  background: var(--btn-bg); color: var(--abcol, #ff2020);
+  border: 1px solid var(--abcol, var(--btn-border)); border-radius: 7px;
+  font: inherit; font-weight: 700; font-size: 1.05em; line-height: 1; cursor: pointer;
+  text-shadow: 0 0 6px var(--abcol, transparent);
+  transition: color 0.2s, border-color 0.2s, text-shadow 0.2s;
+  -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation;
+}
+.mAbKey:active { background: rgba(255, 160, 0, 0.18); }
+.mAbKey[hidden], .mDialGlyph[hidden] { display: none; }
 /* ★★ THE STEP, ON THE ARROW THAT TAKES IT (Stuart, 2026-09-19). A tooltip answers "how far does this tune me?"
    only on a desktop, with a mouse, after a wait — and that is the one question a first-time visitor has. Dim and
    small, above the chevron, so the arrow still reads as an arrow; the step BUTTON is still how you change it. */
@@ -3872,7 +3886,12 @@ select.btn { padding: 6px 8px; }
            needs a text label and both stay wide enough for a thumb. -->
       <div class="mDial" id="mVfoDial">
         <button class="mBtn mVfoBtn" id="mVfoDown" aria-label="Tune down"><span class="mStepCap" id="mStepCapD" aria-hidden="true"></span>&lsaquo;</button>
-        <span class="mDialGlyph" title="Tune"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span>
+        <!-- ★★ V12 VFO A/B — THE A/B KEY, between the tune buttons where the radio glyph sits (Stuart's spec: "a small A/B
+             key appears BETWEEN the tune buttons, labelled with the current VFO"). Shown only while VFO A/B is on (the
+             TUNING menu's toggle — the step menu here); the glyph comes back when it is off. Display font, like the
+             other main controls. -->
+        <button class="mAbKey" id="mAbKey" hidden title="VFO A/B — which VFO the controls tune. Press to switch." aria-label="Switch VFO">A</button>
+        <span class="mDialGlyph" id="mTuneGlyph" title="Tune"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span>
         <button class="mBtn mVfoBtn" id="mVfoUp" aria-label="Tune up"><span class="mStepCap" id="mStepCapU" aria-hidden="true"></span>&rsaquo;</button>
       </div>
 
@@ -4533,6 +4552,15 @@ select.btn { padding: 6px 8px; }
   <!-- ★ The listener's own impulse blanker for every mode BUT broadcast FM — the FM one is the
        TEF6686-style NB in the Broadcast FM processing row and stays there. Shown once the server
        reports its state, which only a VibeServer does. -->
+  <!-- ★★ V12 VFO A/B — STEREO: the lower-frequency VFO in the LEFT ear and the higher in the RIGHT (Stuart: "like
+       binaural it can be disabled at any time but the default is the stereo mode"). Off = both VFOs in both ears.
+       Switchable while listening — the server cross-fades. Remembered on this device. Shown only where the server
+       offers VFO A/B at all (hwinfo watch), so it is never a control that does nothing anywhere. -->
+  <div class="mrow" id="abStereoRow" hidden>
+    <label>VFO A/B STEREO<span class="sub" id="abStereoSub">Lower VFO left, higher right</span></label>
+    <div class="seg"><button class="btn on" id="abStereoBtn" title="With VFO A/B on: the lower-frequency VFO plays in your LEFT ear and the higher in your RIGHT, so the waterfall and your ears agree. Off: both VFOs in both ears.">ON</button></div>
+  </div>
+  <div class="lbl wrap" id="abMonoHint" hidden>Mono output — both VFOs are mixed.</div>
   <div class="mrow" id="nbxRow" hidden>
     <label>NOISE BLANKER</label>
     <div class="seg"><button class="btn" id="nbxBtn" title="Impulse noise blanker on your own channel — the crackle of distant lightning, power-line hash, ignition, thermostats, switch-mode supplies. Removes the moments an impulse occupies rather than filtering continuously; on a clean signal it blanks nothing. Not for broadcast FM, which has its own NB below. The owner may also run a wider one on the whole receiver.">OFF</button></div>

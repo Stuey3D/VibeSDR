@@ -229,6 +229,13 @@ export class Waterfall {
   vfoIntensity = 5;
   /** 0–10 smoked-glass backing under the passband (0 = off). */
   vfoFrost = 0;
+  /** ★★ V12 VFO A/B. `vfoLive*` restyle the needle above (which is always the SELECTED VFO — A or B): its colour (B
+   *  has its own), its label ("A · L 7.030M"), its brightness. `vfo2` is the OTHER one, drawn underneath in its own
+   *  colour; null while VFO B is off. Brightness cross-fades are worked out by main.ts each frame (vfoAB.needleAlpha). */
+  vfoLiveColor = '';
+  vfoLiveLabel = '';
+  vfoLiveAlpha = 1;
+  vfo2: { hz: number; lo: number; hi: number; col: string; label: string; alpha: number; parked: boolean } | null = null;
   /** Latest normalised spectrum trace + peak hold, and the previous pair — the
    *  trace is blended between them so it GLIDES between server frames instead of
    *  stepping. This matters more than the waterfall: slow waterfall rows just
@@ -855,24 +862,36 @@ export class Waterfall {
    */
   private _drawVfo(ctx: CanvasRenderingContext2D, W: number, H: number) {
     if (!this.spanHz || !this.vfoHz || this.vfoHidden) return;
+    // ★★ V12: the other VFO first, so the selected one is drawn over it where they meet.
+    const v2 = this.vfo2;
+    if (v2 && v2.hz) this._drawNeedle(ctx, W, H, v2.hz, v2.lo, v2.hi, v2.col, v2.label, v2.alpha, false, v2.parked, 2);
+    this._drawNeedle(ctx, W, H, this.vfoHz, this.filterLow, this.filterHigh, this.vfoLiveColor || this.vfoColor,
+                     this.vfoLiveLabel || `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`, this.vfoLiveAlpha, true, false, 0);
+  }
 
-    const nX = this.hzToX(this.vfoHz, W);
-    let loX = this.hzToX(this.vfoHz + this.filterLow, W);
-    let hiX = this.hzToX(this.vfoHz + this.filterHigh, W);
+  /** One needle with its acrylic passband. `primary` also draws the capture bracket, the walls and the RF centre (once
+   *  per frame); `parked` draws it hatched and grey (a VFO B outside the window — silent until it is back). */
+  private _drawNeedle(ctx: CanvasRenderingContext2D, W: number, H: number, vfoHz: number, filterLow: number,
+                      filterHigh: number, colIn: string, label: string, alpha: number, primary: boolean,
+                      parked: boolean, gslot: 0 | 2) {
+    const nX = this.hzToX(vfoHz, W);
+    let loX = this.hzToX(vfoHz + filterLow, W);
+    let hiX = this.hzToX(vfoHz + filterHigh, W);
 
     // Keep the sidebands visible when zoomed out — a passband narrower than a few
     // pixels would otherwise vanish entirely.
-    const minSb = (this.filterLow === 0 && this.filterHigh === 0) ? 20 : 4;
+    const minSb = (filterLow === 0 && filterHigh === 0) ? 20 : 4;
     if (nX - loX < minSb) loX = nX - minSb;
     if (hiX - nX < minSb) hiX = nX + minSb;
     const loXc = Math.max(0, loX);
     const hiXc = Math.min(W, hiX);
 
-    const col = this.vfoColor;
+    const col = parked ? '#8a8a8a' : colIn;
     const k = this.vfoIntensity / 5;          // 5 = the app's original look
     const wk = Math.max(1, k);
 
     ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
 
     // Frosted backing: dims the waterfall across the passband so the needle keeps
     // contrast on bright palettes, whatever colour it is.
@@ -886,12 +905,20 @@ export class Waterfall {
     //   (i.e. whenever the dial is still — nearly every frame). A CanvasGradient is immutable once
     //   its stops are added, so reusing one with identical endpoints/stops paints identically.
     if (nX > loXc) {
-      ctx.fillStyle = this.sbGradient(ctx, 0, loXc, nX, col);
+      ctx.fillStyle = this.sbGradient(ctx, gslot as 0 | 2, loXc, nX, col);
       ctx.fillRect(loXc, 0, nX - loXc, H);
     }
     if (hiXc > nX) {
-      ctx.fillStyle = this.sbGradient(ctx, 1, nX, hiXc, col);
+      ctx.fillStyle = this.sbGradient(ctx, (gslot + 1) as 1 | 3, nX, hiXc, col);
       ctx.fillRect(nX, 0, hiXc - nX, H);
+    }
+    // ★ Parked (outside the window): diagonal hatching across the passband — a stopped channel, not a weak one.
+    if (parked && hiXc > loXc) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(loXc, 0, hiXc - loXc, H); ctx.clip();
+      ctx.strokeStyle = 'rgba(160,160,160,0.35)'; ctx.lineWidth = 1;
+      for (let x = loXc - H; x < hiXc; x += 8) { ctx.beginPath(); ctx.moveTo(x, H); ctx.lineTo(x + H, 0); ctx.stroke(); }
+      ctx.restore();
     }
 
     // Sideband edges: soft glow + crisp acrylic line (both at 0.35).
@@ -911,9 +938,13 @@ export class Waterfall {
     edge(loX);
     edge(hiX);
 
-    this._drawCapture(ctx, W, H);
-    this._drawWalls(ctx, W, H);
-    this._drawRfCentre(ctx, W, H);
+    if (primary) {
+      ctx.save(); ctx.globalAlpha = 1;
+      this._drawCapture(ctx, W, H);
+      this._drawWalls(ctx, W, H);
+      this._drawRfCentre(ctx, W, H);
+      ctx.restore();
+    }
 
     // LED needle: three glow layers (28/16/6) + a crisp core filament.
     if (nX >= 0 && nX <= W) {
@@ -943,25 +974,24 @@ export class Waterfall {
       // needle is ambiguous — which line is the one you're listening to?
       const dpr2 = renderDpr();
       void dpr2;
-      this.markerLabel(ctx, nX, W, this.markerLabelY(H, 0),
-        `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`, col);
+      this.markerLabel(ctx, nX, W, this.markerLabelY(H, primary ? 0 : 2), label, col);
     }
 
     ctx.restore();
   }
 
   /** Sideband gradient cache — [0] lower (rises toward the needle), [1] upper (falls away). */
-  private sbGrad: (CanvasGradient | null)[] = [null, null];
-  private sbGradX0 = [NaN, NaN];
-  private sbGradX1 = [NaN, NaN];
-  private sbGradCol = ['', ''];
-  private sbGradient(ctx: CanvasRenderingContext2D, side: 0 | 1, x0: number, x1: number,
+  private sbGrad: (CanvasGradient | null)[] = [null, null, null, null];   // ★ [2],[3]: VFO A/B's other needle
+  private sbGradX0 = [NaN, NaN, NaN, NaN];
+  private sbGradX1 = [NaN, NaN, NaN, NaN];
+  private sbGradCol = ['', '', '', ''];
+  private sbGradient(ctx: CanvasRenderingContext2D, side: 0 | 1 | 2 | 3, x0: number, x1: number,
                      col: string): CanvasGradient {
     const hit = this.sbGrad[side];
     if (hit && this.sbGradX0[side] === x0 && this.sbGradX1[side] === x1
         && this.sbGradCol[side] === col) return hit;
     const g = ctx.createLinearGradient(x0, 0, x1, 0);
-    if (side === 0) {
+    if (side % 2 === 0) {
       g.addColorStop(0,    rgba(col, 0.03));
       g.addColorStop(0.15, rgba(col, 0.06));
       g.addColorStop(0.55, rgba(col, 0.14));
