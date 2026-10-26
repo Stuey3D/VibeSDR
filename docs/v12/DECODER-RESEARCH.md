@@ -454,6 +454,8 @@ the header), never from a user's claim.
 
 ### 4.4 DRM and its codecs ⚖
 
+> **Built 2026-10-26 (branch v12-drm): see [DRM.md](DRM.md).** Found on air: RRI's DRM uses DRM's own ER-AAC, which no platform decoder plays — the xHE-AAC path is built but unverified on a real station.
+
 - The OFDM layer (ETSI ES 201 980) is free and we can build it ourselves.
 - **Audio:** DRM30 uses AAC (HE-AAC v2) on older services and **xHE-AAC (USAC)** on newer ones; CELP and HVXC are rare.
   The SDC declares the codec before any audio is needed.

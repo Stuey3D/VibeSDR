@@ -368,7 +368,8 @@ void Receiver::runTrack() {
                 acc += v;
             }
             const double ferr = double(std::arg(acc)) * kFs / (2.0 * M_PI * ts_);
-            freq_ += 0.05 * ferr;
+            static const bool noFt = getenv("VIBE_DRM_NOFT") != nullptr;
+            if (!noFt) freq_ += 0.05 * ferr;
             st_.freqOffsetHz = freq_;
         }
         prevSym_ = car; havePrev_ = true; prevStep_ = 0;
@@ -661,7 +662,8 @@ void Receiver::equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W
     const double tau = tauC;
     tauAvg_ = tau; ++tauN_;
     const double target = windowMargin();
-    if (tauN_ > 8 && pendingStep_ == 0) {
+    static const bool noTt = getenv("VIBE_DRM_NOTT") != nullptr;
+    if (tauN_ > 8 && pendingStep_ == 0 && !noTt) {
         if (tauAvg_ > target + 1.0) { pendingStep_ = +1; tauAvg_ -= 1.0; applyStepToRing(+1); }
         else if (tauAvg_ < target - 1.0) { pendingStep_ = -1; tauAvg_ += 1.0; applyStepToRing(-1); }
     }

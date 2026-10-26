@@ -121,7 +121,8 @@ static void endToEnd() {
     }
     // ★ SNR sweeps — the decode rate is the fraction of logical frames correct after lock (40 s each)
     struct Sw { Mode m; int lv; int prot; int ch; };
-    const Sw sweeps[] = { {Mode::B, 3, 1, 1}, {Mode::B, 2, 1, 1}, {Mode::A, 3, 1, 2}, {Mode::B, 3, 1, 3}, {Mode::B, 3, 1, 4}, {Mode::B, 3, 1, 5}, {Mode::D, 2, 0, 5} };
+    const Sw sweeps[] = { {Mode::B, 3, 1, 1}, {Mode::B, 2, 1, 1}, {Mode::A, 3, 1, 2}, {Mode::B, 3, 1, 3}, {Mode::B, 3, 1, 4}, {Mode::B, 3, 1, 5},
+                        {Mode::B, 2, 1, 3}, {Mode::B, 2, 1, 4}, {Mode::B, 2, 1, 5}, {Mode::D, 2, 0, 5} };   // ★ 16-QAM: what HF broadcasters use
     for (const Sw& s : sweeps) {
         std::printf("   mode %c %d-QAM prot %d, channel %d:", modeLetter(s.m), 1 << (2 * s.lv), s.prot, s.ch);
         for (double snr : {10.0, 14.0, 18.0, 22.0, 26.0, 30.0}) {
