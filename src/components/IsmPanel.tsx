@@ -84,6 +84,8 @@ export default function IsmPanel(p: IsmPanelProps) {
   useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
   const r = p.report && arrived ? ismAged(p.report, Math.floor((Date.now() - arrived) / 1000)) : p.report;
   const rows = ismRows(r, filter);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const band = p.error ? 'not available' : r ? ismBandText(r) : 'finding the band…';
 
   /* ── BY PAD AND KEYBOARD (the DAB box's rule): the box TAKES the keys once on arrival when they are in use (the band is
@@ -115,6 +117,11 @@ export default function IsmPanel(p: IsmPanelProps) {
     else if (k === 'u:speed') pickUnits({ ...u, mph: !u.mph });
     else if (k === 'u:pressure') pickUnits({ ...u, pressure: nextPressure(u.pressure) });
     else if (k.startsWith('k:')) pickFilter(k.slice(2));
+    else if (k.startsWith('r:')) {
+      // ★ Enter on a METER row opens / closes its detail (the touch press's twin); other rows are read, not pressed
+      const d = rowsRef.current[Number(k.slice(2))];
+      if (d && d.kind === 'meter') setOpenKey((o) => (o === d.key ? '' : d.key));
+    }
   };
   const chipsRef = useRef<ScrollView | null>(null);
   const chipX = useRef<Record<string, number>>({});

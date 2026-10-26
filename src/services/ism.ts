@@ -229,7 +229,7 @@ export function nextPressure(p: IsmUnits['pressure']): IsmUnits['pressure'] { re
 
 /** ★★ THE ISM BOX BY PAD AND KEYBOARD (the DAB box's pattern — controller audit group B): the stops the arrows walk, in
  *  the order drawn — the header's keys (◀ ▶ only while ISM runs, BIG where it is offered, EXIT/CLOSE), then the chips
- *  (every kind, then the two unit keys), then each device row (reveal-only: a row is read, not pressed). `row` is the
+ *  (every kind, then the two unit keys), then each device row (reveal-only: a row is read, not pressed — except a METER row, whose Enter opens its detail). `row` is the
  *  visual row the up/down arrows move between: 0 the header, 1 the chips, 2… the list. ◀ / ▶ are stops even at an end
  *  (pressing one there does nothing, as the touch key does), so the order never shifts under the highlight. */
 export type IsmNavKey = 'down' | 'up' | 'big' | 'exit' | `k:${string}` | 'u:speed' | 'u:pressure' | `r:${number}`;
