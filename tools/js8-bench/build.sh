@@ -10,5 +10,5 @@ for f in $CPP/ft8_lib/ft8/*.c $CPP/ft8_lib/fft/kiss_fft.c $CPP/ft8_lib/fft/kiss_
   cc -O2 -c -I "$CPP/ft8_lib" -o "$o" "$f"
 done
 c++ -std=c++17 -O2 -I "$CPP" -I "$CPP/ft8_lib" -o "$OUT/js8_wav" tools/js8-bench/js8_wav.cpp \
-    "$CPP/decoders/digimodes/js8_decoder.cpp" "$CPP/decoders/digimodes/js8_ldpc.cpp" "$CPP/decoders/digimodes/js8_message.cpp" "$OUT"/obj/*.o -lpthread
+    "$CPP/decoders/digimodes/js8_decoder.cpp" "$CPP/decoders/ftx_fine.cpp" "$CPP/decoders/digimodes/js8_ldpc.cpp" "$CPP/decoders/digimodes/js8_message.cpp" "$OUT"/obj/*.o -lpthread
 echo "$OUT/js8_wav"

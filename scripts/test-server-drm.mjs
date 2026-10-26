@@ -116,6 +116,15 @@ async function scenario(label, args, tag) {
     ok(r.playable === false && /cannot be played/.test(r.why || ''), `an AAC station says why it is silent: "${r.why}"`);
     ok(r.snr > 10, `SNR ${r.snr} dB`);
     ok(r.sync && r.freq && r.frame && r.fac && r.sdc && r.msc, 'all six lights');
+    // ★ VFO A/B: no VFO B in DRM (its audio is the decoded programme) — the toggle's allowance is 0 and a request is refused
+    const lastWatch = () => { const w = jsons(L.spec, 'watch'); return w[w.length - 1]; };
+    const hwWatch = () => { const h = jsons(L.spec, 'hwinfo'); return h.length ? h[h.length - 1].watch : undefined; };
+    // ★ a listener who SWITCHED to DRM is told by a watch state (max 0); one who joined a dial already in DRM by hwinfo
+    const told0 = () => (lastWatch() ? lastWatch().max === 0 : hwWatch() === 0);
+    ok(await until(told0, 5000), `in DRM the server says VFO B is unavailable (watch max ${lastWatch() && lastWatch().max}, hwinfo watch ${hwWatch()})`);
+    L.spec.send({ type: 'watch', id: 1, frequency: STATION + 5000, mode: 'am' });
+    ok(await until(() => lastWatch() && lastWatch().refused && !(lastWatch().chans || []).length, 3000),
+       `a VFO B request in DRM is refused ("${lastWatch() && lastWatch().note}")`);
     const a0 = L.aud.n || 0; await sleep(3000);
     ok((L.aud.n || 0) > a0 + 20, `audio keeps flowing (${(L.aud.n || 0) - a0} frames in 3 s)`);
     // back to AM: the reports stop
@@ -123,6 +132,7 @@ async function scenario(label, args, tag) {
     await sleep(1500);
     const n1 = jsons(L.spec, 'drm').length; await sleep(3000);
     ok(jsons(L.spec, 'drm').length === n1, 'AM again: no more DRM reports');
+    ok(lastWatch() && lastWatch().max >= 1, `AM again: VFO B is offered again (watch max ${lastWatch() && lastWatch().max})`);
     for (const k of ['spec', 'aud']) L[k].close();
   } finally { S.stop(); }
 }

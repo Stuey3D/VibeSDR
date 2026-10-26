@@ -2239,11 +2239,11 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
       await post(`clear?what=${kind}`, {});
       msg('actMsg', kind === 'logos' ? 'Logo cache cleared — the next lookup starts fresh.'
                   : kind === 'manual' ? 'Manual bookmarks cleared.'
-                  : 'Learned RDS stations cleared.');
+                  : 'Learned stations cleared (RDS, DAB and scanned).');
     } catch (e) { msg('actMsg', (e as Error).message); }
   };
   $('actClearLearned')?.addEventListener('click', () => void clear('learned',
-    'Clear every station this receiver has learned from RDS?\n\n'
+    'Clear every station this receiver has learned \u2014 from RDS, from DAB, and found by a DAB band scan?\n\n'
     + 'Bookmarks you typed or imported are kept.'));
   $('actClearLogos')?.addEventListener('click', () => void clear('logos',
     'Clear the station logo cache?\n\n'

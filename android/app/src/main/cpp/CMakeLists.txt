@@ -147,6 +147,7 @@ add_library(vibelocalsdr SHARED
     decoders/rtty_auto.cpp
     decoders/wefax_decoder.cpp
     decoders/ft8_decoder.cpp
+    decoders/ftx_fine.cpp
     decoders/sstv_decoder.cpp
     decoders/audio_nr.cpp
     decoders/auto_notch.cpp
@@ -156,6 +157,7 @@ add_library(vibelocalsdr SHARED
     decoders/drm/drm_receiver.cpp   # ★ V12 DRM (decoders/drm/, vibe_drm_listener.h)
     decoders/psk_skimmer.cpp
     decoders/dsc_decoder.cpp
+    decoders/jtty_decoder.cpp
     # ★ V12: digital spots (decoders/digi_mode.h) + every mode engine in decoders/digimodes/ (globbed)
     decoders/digi_modes.cpp
     decoders/digi_tuner.cpp

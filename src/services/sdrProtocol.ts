@@ -389,6 +389,10 @@ export interface SDRCallbacks {
    *  multiplex (see DabState — every field is MEASURED, nothing inferred); null means DAB has
    *  ended, and `err` carries the server's refusal when it could not start. */
   onDab?:       (s: DabState | null, err?: string) => void;
+  /** ★★ V12 DAB BAND SCAN, VIBESERVER-ONLY: the scan's state as the server publishes it (`dab_scan`, parsed by
+   *  dabBandScan.ts), and hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
+  onDabScan?:   (s: import('./dabBandScan').DabScanState) => void;
+  onDabScanOk?: (ok: boolean) => void;
   /** ★ V12 ADS-B, VIBESERVER-ONLY like onDab: a report about once a second while the receiver is in
    *  the mode (its arrival MEANS it is on — open the box); null = it ended; `err` = the refusal. */
   onAdsb?:      (r: AdsbReport | null, err?: string) => void;
@@ -397,6 +401,10 @@ export interface SDRCallbacks {
   onIsm?:       (r: IsmReport | null, err?: string) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?:     (m: IqOutState) => void;
+  /** ★★ V12 VFO A/B, VIBESERVER-ONLY: hwinfo's `watch` — how many VFO Bs this server offers (0 = none: no toggle). */
+  onWatchOffered?: (n: number) => void;
+  /** ★★ V12 VFO A/B: the A/B state changed — on/off, which VFO is tuned, the other VFO, the server's watch state. */
+  onWatch?:     (info: import('./vfoAB').VfoABInfo) => void;
   onHwGains?:   (gains: number[]) => void;
   /** ★★★ WHERE THE GAIN ACTUALLY IS on the serving radio, in its own units; -1 = auto/AGC. The
    *  slider FOLLOWS this. A client cannot query a remote dongle, so before the server sent it the

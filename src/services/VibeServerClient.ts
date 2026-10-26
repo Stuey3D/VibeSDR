@@ -23,6 +23,7 @@ import { DabAssembler } from './dabAssemble';
 import { parseAdsbMessage } from './adsbTypes';
 import { AdsbInfoStore } from './adsbInfo';
 import { ismSanitise } from './ism';
+import { parseDabScan } from './dabBandScan';
 
 export {
   MODE_BANDWIDTHS,
@@ -122,6 +123,10 @@ export class VibeServerClient extends VibeServerWsClient {
     holdNativeHealing(VibeServerClient.DAB_SERVICE_HOLD_MS, `DAB service ${sid}`);
     this.sendSpectrum({ type: 'dab_service', sid });
   }
+
+  /** ★★ V12: start / stop a DAB band scan. The server decides who may (a single-user radio, or the admin) and answers in
+   *  words; a tune while it runs ends it there (the server leaves the dial to the person tuning). */
+  dabScan(on: boolean) { this.sendSpectrum({ type: 'dab_scan', on: on ? 1 : 0 }); }
 
   // ─── ADS-B (V12, docs/v12/ADSB.md) ───────────────────────────────────────────────────────────
   //
@@ -311,6 +316,11 @@ export class VibeServerClient extends VibeServerWsClient {
           why: typeof msg.why === 'string' ? dabSafeText(msg.why, 160) : undefined,
         });
         return true;
+      case 'dab_scan': {
+        const st = parseDabScan(msg);
+        if (st) this.callbacks.onDabScan?.(st);
+        return true;
+      }
       case 'dab_error':
         this.dabHeld = false;
         this.callbacks.onDab?.(null,

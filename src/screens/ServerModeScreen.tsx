@@ -210,6 +210,7 @@ const K = {
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block', blockedModes: 'vs_blockedmodes',
   dabRateBoost: 'vs_dabboost', adsb256: 'vs_adsb256',
+  vfoB: 'vs_vfob',   // ★★ V12 VFO A/B — the owner's switch; absent = on
   dabScanLabels: 'vs_dabscan',
   /** ★ RETIRED 2026-09-28 (the start-on-boot switch) — kept only so the stored value can be removed. */
   startOnBootRetired: 'vs_startonboot',
@@ -398,6 +399,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /** ★ THE RATE SWITCH — "change the sample rate when a mode needs it" (DAB 2.048 MS/s, ADS-B 2.4), the base rate
    *  back when the mode ends. Still stored as dabRateBoost / vs_dabboost, so a saved choice carries over. */
   const [dabRateBoost, setDabRateBoost] = useState(false);
+  /** ★★ V12 VFO A/B — may listeners add a second VFO (B)? On unless the owner says no (the server's default too). */
+  const [vfoB, setVfoB] = useState(true);
   /* ★★★ A stall or crash at a rate a mode boosted to (vibe_rate_guard.h), read from the engine's record on mount. While
    *  one is recorded the switch is drawn off and disabled, and the saved choice is turned off too — the engine turned
    *  it off, and this screen's copy would otherwise send it back at the next Start. */
@@ -1121,6 +1124,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const blk = g(K.blockRanges); if (blk != null) setBlockRanges(blk); }
           { const bmd = g(K.blockedModes); if (bmd != null) setBlockedModes(bmd); }
           { const dbb = g(K.dabRateBoost); if (dbb != null) setDabRateBoost(dbb === '1'); }
+          { const vb = g(K.vfoB); if (vb != null) setVfoB(vb !== '0'); }
           // ★★ The engine's record of a fall-over at a boosted rate — it switches the saved choice off here too.
           rateGuardState().then((st) => {
             setRateGuard(st);
@@ -1733,6 +1737,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
     //   like the resting gain, not of sharing — see the note in VibeServerBoot.
     blockedModes, dabRateBoost,
+    vfoB: vfoB ? 1 : 0,   // ★★ V12 VFO A/B — VibeServerBoot reads cfg "vfoB" (1 on, 0 off)
     // ★ Only an RTL's — sent false on any other radio, so a value saved while a dongle was plugged in cannot ride along.
     adsb256: isRtl && adsb256,
     // ★★★ THE DAB LANDING STATION — never sent beside a DAB block (the engine refuses it too).
@@ -1855,7 +1860,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon], [K.antSwitch, JSON.stringify(live.current.antSwitch)], [K.antRanges, live.current.antRanges], [K.antFilters, live.current.antFilters],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
-      [K.blockedModes, blockedModes], [K.dabRateBoost, dabRateBoost ? '1' : '0'],
+      [K.blockedModes, blockedModes], [K.dabRateBoost, dabRateBoost ? '1' : '0'], [K.vfoB, vfoB ? '1' : '0'],
       [K.adsb256, adsb256 ? '1' : '0'],
       [K.gainLimits, gainLimits], [K.gainLocks, gainLocks], [K.gainSplits, gainSplits],
       [K.gainCurves, gainCurves], [K.ifBwLimits, ifBwLimits],
@@ -1923,7 +1928,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      blockedModes, dabRateBoost, adsb256, dabScanLabels, isLite,
+      blockedModes, dabRateBoost, vfoB, adsb256, dabScanLabels, isLite,
       gainLimits, gainLocks, gainSplits, gainCurves, ifBwLimits, isRtl, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
       oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown,
       keepAlive]);
@@ -3777,6 +3782,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       + 'to moderate.\n\nOne VFO means the DSP cost barely moves with the number of '
                       + 'listeners. What runs out is UPLINK.'}
                 </Text>
+                {/* ★★ V12 VFO A/B — the owner's switch, beside the count because a VFO B takes a listener's place. */}
+                <OptRow C={C} F={F} active={vfoB}
+                  label="Let listeners use VFO A/B"
+                  hint={'A second frequency on the radio, heard at the same time (lower in the left ear, higher in the right). '
+                    + 'Each VFO B costs about one more listener\u2019s processing, and with a listener limit it takes a listener\u2019s '
+                    + 'place — it gives way when somebody new arrives.'}
+                  onPress={() => { const v = !vfoB; setVfoB(v); AsyncStorage.setItem(K.vfoB, v ? '1' : '0'); }} />
                 {/* ★★★ ASK BEFORE TUNING (Stuart, 2026-10-21) — directly after the count, as on the browser's setup page,
                     and only on a shared dial: locked = everybody has their own VFO, one listener = nobody to ask, so
                     the switch would do nothing there (AGENTS.md). Off by default. */}

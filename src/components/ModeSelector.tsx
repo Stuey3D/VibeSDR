@@ -291,6 +291,10 @@ interface ModeSelectorProps {
     /** ★★ V12 ISM — the same kind of key as ADS-B (a whole-radio mode) and the same three states: absent (`ismAvail`
      *  false — an HF+ reaches no band), dimmed with the server's reason under the row (`ismWhy`), live. */
     ismAvail?: boolean; ismWhy?: string; ismOn?: boolean; onIsm?: () => void;
+    /** ★★ V12 THE SCANNER — a decoder-box item (docs/v12/SCANNER.md). Absent (not greyed) where scanPolicy says no: FM-DX,
+     *  a VibeServer with one shared dial. `onlyScanner`: a backend with no client decoders of ours (OpenWebRX — its own
+     *  decoders are demodulators in this sheet) draws the row with the scanner alone. */
+    scanAvail?: boolean; scanOn?: boolean; onScan?: () => void; onlyScanner?: boolean;
     cwAvail?: boolean; cwSkim?: boolean; cwWidth?: number;
     onCwView?: (skim: boolean) => void; onCwWidth?: (w: number) => void;
     /** ★★★ THE SLUGS THIS RECEIVER PUBLISHES (`/api/extensions`), or null for "never asked".
@@ -363,7 +367,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const isBlocked = (id: string) => !!blocked && blocked.has(id);
   /* The client decoders this receiver both runs and allows — the same filter the row applies. */
   const clientDecs = (['rtty', 'navtex', 'wefax', 'sstv', 'time'] as DecId[]).filter(k => {
-    if (isBlocked(k)) return false;
+    if (isBlocked(k) || decoderControls?.onlyScanner) return false;
     const ext = decoderControls?.serverExtensions;
     if (!ext || !ext.length) return true;
     const slug = k === 'rtty' ? 'fsk' : k === 'time' ? 'clock' : k;
@@ -378,10 +382,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  the decoders row. */
   const adsbShown = !!decoderControls?.adsbAvail;
   const ismShown = !!decoderControls?.ismAvail && !isBlocked('ism');
+  const scanShown = !!decoderControls?.scanAvail && !isBlocked('scanner');
   const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown;
-  const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !cwShown;
+  const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !cwShown && !scanShown;
   const decSectionShown = !!decoderControls && !dabInGrid
-    && (clientDecs.length > 0 || advRdsShown || wholeAvail || cwShown);
+    && (clientDecs.length > 0 || advRdsShown || wholeAvail || cwShown || scanShown);
   const { theme: theme0 } = useTheme();
   const surf = usePopupSurface();
   const pt = usePopupTheme();
@@ -1027,6 +1032,25 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   )}</NavItem>
                 );
               })()}
+              {/* ★★ V12 THE SCANNER — opens in the decoder box like the others; replaces a running decoder, as switching
+                  decoders always has (one box at a time). */}
+              {scanShown && (
+                <NavItem key="scanner" onPress={() => decoderControls.onScan?.()}>{(navFocused, navRef) => pt.metal ? (
+                  <MetalKey navRef={navRef} focused={navFocused} label="SCANNER" active={!!decoderControls.scanOn} pip
+                    onPress={() => decoderControls.onScan?.()} />
+                ) : (
+                <TouchableOpacity ref={navRef as any} accessibilityLabel="Scanner" accessibilityHint="Band, bookmark and manual scanning, in the decoder box"
+                  accessibilityState={{ selected: !!decoderControls.scanOn }}
+                  style={[st.btn, { borderColor: decoderControls.scanOn ? dec : t.btnBorder, paddingVertical: 10 },
+                          decoderControls.scanOn && { backgroundColor: decBg },
+                          navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+                  onPress={() => decoderControls.onScan?.()} activeOpacity={0.8}>
+                  <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: decoderControls.scanOn ? dec : t.btnText }]}>
+                    SCANNER
+                  </Text>
+                </TouchableOpacity>
+                )}</NavItem>
+              )}
               {decoderControls.dabAvail && (
                 <NavItem key="dab" onPress={() => decoderControls.onDab?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label="DAB" active={!!decoderControls.dabOn} pip

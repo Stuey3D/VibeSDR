@@ -54,6 +54,9 @@ export interface GamepadHooks {
   zoom(dir: 1 | -1): void;           // one zoom step in (+1) or out (−1)
   back(): boolean;                   // close the top panel/menu; false if there was nothing to close
   guide(): void;                     // SELECT: open the controller guide on activePadLayout(), or close it
+  /** ★★ V12 VFO A/B: swap which VFO the controls tune (does nothing while A/B is off). V on a keyboard; on a pad △ in
+   *  the two-stick layout, and a TAP of START in either (a hold still switches the layout). */
+  swapVfo?(): void;
 }
 
 // Standard-layout button indices.
@@ -286,6 +289,11 @@ function typingIn(t: EventTarget | null): t is HTMLElement {
 }
 
 function onKey(e: KeyboardEvent) {
+  // ★★ V12 VFO A/B — the one extra key: V swaps A↔B. Never while typing, never with a modifier, never repeated.
+  if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !typingIn(e.target) && !padKbOpen()) {
+    hooks?.swapVfo?.();
+    return;
+  }
   const a = keyAction(e.key, { ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey });
   if (!a) return;
   const t = e.target;
@@ -388,7 +396,12 @@ function poll() {
       else if (since > 0 && performance.now() - since >= SWITCH_HOLD_MS) {
         toggleProfile(gp.axes.length); held.set(id + 'start', -1);   // -1: done until released
       }
-    } else held.delete(id + 'start');
+    } else {
+      // ★★ V12: a TAP of START (released before the hold switched anything) swaps VFO A/B.
+      const since = held.get(id + 'start');
+      if (since !== undefined && since > 0 && performance.now() - since < SWITCH_HOLD_MS) hooks?.swapVfo?.();
+      held.delete(id + 'start');
+    }
     press(id + 'select', btn(B_SELECT), () => hooks?.guide(), false);
     press(id + 'up', btn(B_UP), () => move('up'));
     press(id + 'down', btn(B_DOWN), () => move('down'));
@@ -404,6 +417,7 @@ function poll() {
     } else {
       press(id + 'enter', btn(B_SOUTH), () => act('enter'), false);
       press(id + 'back', btn(B_EAST), () => act('back'), false);
+      press(id + 'swapab', btn(B_NORTH), () => hooks?.swapVfo?.(), false);   // ★★ V12 VFO A/B — △
       // ★ With the time, so the jog's rate follows the stick's speed — slow to land, fast to cross (gamepadNav Jog).
       const now = performance.now();
       const t = tuneJog.feed(gp.axes[0] ?? 0, gp.axes[1] ?? 0, now);

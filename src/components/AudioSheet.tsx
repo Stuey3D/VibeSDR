@@ -568,6 +568,12 @@ export interface AudioSheetProps {
    *  there doing nothing. */
   binaural?: boolean;
   onBinaural?: (on: boolean) => void;
+  /** ★★ V12 VFO A/B's STEREO switch — the lower-frequency VFO in the left ear, the higher in the right (on, the
+   *  default); off = both VFOs in both ears. Beside binaural, remembered per device like it. Passed only where the
+   *  server offers VFO A/B. `vfoABOn` = VFO B is on now (binaural stands aside while it is — the note says so). */
+  vfoStereo?: boolean;
+  onVfoStereo?: (on: boolean) => void;
+  vfoABOn?: boolean;
 
   /** ★★ FM DE-EMPHASIS AND WFM STEREO LIVE HERE, NOT IN THE HARDWARE PANEL. They are not
    *  properties of the radio — they act on OUR demodulator, which is why they applied to a
@@ -644,7 +650,7 @@ export default function AudioSheet({
   kiwiSquelch = 0, onKiwiSquelch, onSquelchDrag, onSquelchDragEnd,
   sqlAuto = false, onSqlAuto, sqlAutoMargin = 12, onSqlAutoMargin, sqlAutoOk = false,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
-  notchOn = false, onNotch, binaural = false, onBinaural,
+  notchOn = false, onNotch, binaural = false, onBinaural, vfoStereo = true, onVfoStereo, vfoABOn = false,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
   fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
@@ -938,6 +944,22 @@ export default function AudioSheet({
               </View>
               <Text style={st.iqNote}>
                 For headphones. On a signal the sound is left just as it is. Tune off it and the sound leans towards the side the signal is on — right means tune up, left means tune down — and on SSB and CW what is in the passband also spreads across your ears, lower on the dial to the left, higher to the right. Between two signals, the lower stays left and the higher right.
+              </Text>
+            </View>
+          )}
+
+          {/* ★★ VFO A/B STEREO (V12) — where the two VFOs sit in your head. Beside binaural, because it is the same
+              question (which ear), and binaural stands aside while VFO B is on (it would re-pan the two). */}
+          {onVfoStereo && (
+            <View style={{ marginTop: 2 }}>
+              <View style={st.bwRow}>
+                <Text style={[st.bwLabel, { width: 78 }]}>VFO STEREO</Text>
+                <View style={{ flex: 1 }} />
+                <Toggle label={vfoStereo ? 'ON' : 'OFF'} on={vfoStereo} onPress={() => onVfoStereo(!vfoStereo)}
+                  a11y={vfoStereo ? 'VFO stereo on. Tap to put both VFOs in both ears.' : 'VFO stereo off. Tap to put each VFO in its own ear.'} />
+              </View>
+              <Text style={st.iqNote}>
+                With VFO A/B on (tuning menu): the lower frequency in your left ear, the higher in your right, crossing over smoothly if you tune one past the other. Off: both VFOs in both ears. A phone speaker or a mono headset plays both together either way.{vfoABOn && onBinaural ? ' Binaural tuning rests while VFO B is on.' : ''}
               </Text>
             </View>
           )}

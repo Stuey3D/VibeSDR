@@ -10,7 +10,9 @@ for f in $CPP/ft8_lib/ft8/*.c $CPP/ft8_lib/fft/kiss_fft.c $CPP/ft8_lib/fft/kiss_
   o="$OUT/obj/$(basename "$f" .c).o"
   cc -O2 -c -I "$CPP/ft8_lib" -o "$o" "$f"
 done
-c++ -std=c++17 -O2 -I "$CPP" -I "$CPP/ft8_lib" -o "$OUT/ft8_wav" tools/ft8-bench/ft8_wav.cpp "$CPP/decoders/ft8_decoder.cpp" "$OUT"/obj/*.o -lpthread
+c++ -std=c++17 -O2 -I "$CPP" -I "$CPP/ft8_lib" -o "$OUT/ft8_wav" tools/ft8-bench/ft8_wav.cpp "$CPP/decoders/ft8_decoder.cpp" "$CPP/decoders/ftx_fine.cpp" "$OUT"/obj/*.o -lpthread
 echo "$OUT/ft8_wav"
 c++ -std=c++17 -O2 -I "$CPP/ft8_lib" -o "$OUT/ft8_synth" tools/ft8-bench/ft8_synth.cpp "$OUT"/obj/*.o
 echo "$OUT/ft8_synth"
+c++ -std=c++17 -O2 -I "$CPP" -I "$CPP/ft8_lib" -o "$OUT/ftx_sweep" tools/ft8-bench/ftx_sweep.cpp "$CPP/decoders/ft8_decoder.cpp" "$CPP/decoders/ftx_fine.cpp" "$OUT"/obj/*.o -lpthread
+echo "$OUT/ftx_sweep"

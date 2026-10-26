@@ -68,6 +68,8 @@ int main(int argc, char** argv) {
     std::vector<int16_t> pcm; int rate = 0;
     if (!readWav(argv[1], pcm, rate)) { std::fprintf(stderr, "cannot read %s (mono s16 WAV)\n", argv[1]); return 2; }
     const double fileStart = std::atof(argv[2]);
+    bool useAp = false;  // ★ a-priori decoding with a book that persists across the recording, as the live decoder's
+    int repeat = 1;      // ★ decode the recording this many times (a profiler's sample needs a longer run)
     bool ft4 = false, ft2 = false; double lead = NAN, len = 0, from = 0, to = 1e18;
     Ft8SlotOptions o;
     for (int i = 3; i < argc; ++i) {
@@ -81,12 +83,28 @@ int main(int argc, char** argv) {
         else if (a == "--minscore") o.minScore = (int)nxt();
         else if (a == "--osd") o.osdMaxErrors = (int)nxt();
         else if (a == "--osdscore") o.osdMinScore = (int)nxt();
+        else if (a == "--fine") o.fine = (int)nxt();
+        else if (a == "--stall") o.bpStall = (int)nxt();
+        else if (a == "--repeat") repeat = (int)nxt();
+        else if (a == "--submin") o.subtractMinSnr = (int)nxt();
+        else if (a == "--osd2") o.osdPairSpan = (int)nxt();
+        else if (a == "--ap") useAp = (int)nxt() != 0;
+        else if (a == "--changed") o.onlyChanged = (int)nxt() != 0;
+        else if (a == "--aposd2") o.apOsdPairSpan = (int)nxt();
+        else if (a == "--apk") o.apMaxCands = (int)nxt();
+        else if (a == "--fineonly") o.fineOnly = (int)nxt() != 0;
+        else if (a == "--subneed") o.subtractNeeded = (int)nxt() != 0;
+        else if (a == "--osdnear") o.fineOsdMaxBpErr = (int)nxt();
+        else if (a == "--apnear") o.apMaxBpErr = (int)nxt();
+        else if (a == "--finesync") o.fineMinSync = (int)nxt();
         else if (a == "--lead") lead = nxt();
         else if (a == "--len") len = nxt();
         else if (a == "--from") from = nxt();
         else if (a == "--to") to = nxt();
     }
     Ft8SlotDecoder dec(rate, ft2 ? FtxMode::FT2 : ft4 ? FtxMode::FT4 : FtxMode::FT8);
+    FtxApBook book(ft4, ft2 ? 160 : ft4 ? 80 : 40);    // ten minutes of slots
+    if (useAp) o.ap = &book;
     if (std::isnan(lead)) lead = Ft8SlotDecoder::leadSec(ft4);
     const double period = ft2 ? kFt2SlotTime : ft4 ? 7.5 : 15.0;
     const int win = dec.windowSamples();
@@ -94,7 +112,8 @@ int main(int argc, char** argv) {
     std::vector<float> w((size_t)win);
     const double fileEnd = fileStart + (double)pcm.size() / rate;
     double totMs = 0; int slots = 0;
-    double stage[3][Ft8SlotStats::kStages] = {}; int passRuns[3] = {}; long cands[3] = {}, osdN[3] = {};
+    double stage[3][Ft8SlotStats::kStages] = {}; int passRuns[3] = {}; long cands[3] = {}, osdN[3] = {}, fT[3] = {}, fP[3] = {}, fD[3] = {}, aT[3] = {}, aD[3] = {};
+    for (int rep = 0; rep < repeat; ++rep)
     for (double S = std::ceil((fileStart - lead) / period) * period; S + lead + (double)use / rate <= fileEnd; S += period) {
         if (S < from || S >= to) continue;
         const long i0 = std::lround((S + lead - fileStart) * rate);
@@ -107,25 +126,27 @@ int main(int argc, char** argv) {
             ftx_message_t m = r.msg;
             ftx_message_offsets_t offs;
             if (ftx_message_decode(&m, &g_if, text, &offs) != FTX_MESSAGE_RC_OK) std::snprintf(text, sizeof text, "?");
-            std::printf("D %.1f %d%s %d %.2f %.1f %s\n", S, r.pass, r.osd ? "o" : "", r.snr, r.dt + (lead - Ft8SlotDecoder::leadSec(ft4)), r.hz, text);
+            std::printf("D %.1f %d%s%s %d %.2f %.1f %s\n", S, r.pass, r.fine ? "f" : "", r.osd ? "o" : r.ap ? (r.ap == 1 ? "a1" : r.ap == 2 ? "a2" : r.ap == 3 ? "a3" : r.ap == 4 ? "a4" : "a5") : "", r.snr, r.dt + (lead - Ft8SlotDecoder::leadSec(ft4)), r.hz, text);
         }
         std::printf("S %.1f %d %.2f %.2f %.2f %d %d %d\n", S, st.passes, st.passMs[0], st.passMs[1], st.passMs[2],
                     st.passDecodes[0], st.passDecodes[1], st.passDecodes[2]);
         totMs += st.passMs[0] + st.passMs[1] + st.passMs[2]; ++slots;
         for (int p = 0; p < st.passes; ++p) {
             ++passRuns[p]; cands[p] += st.candidates[p]; osdN[p] += st.osdTried[p];
+            fT[p] += st.fineTried[p]; fP[p] += st.finePassed[p]; fD[p] += st.fineDecodes[p];
+            aT[p] += st.apTried[p]; aD[p] += st.apDecodes[p];
             for (int k = 0; k < Ft8SlotStats::kStages; ++k) stage[p][k] += st.stageMs[p][k];
         }
     }
     std::fprintf(stderr, "%d slots, %.1f ms/slot mean\n", slots, slots ? totMs / slots : 0.0);
     // ★ The profile (2026-10-25): mean ms per slot that ran the pass, by stage.
-    std::fprintf(stderr, "pass  runs  subtract waterfall   search     ldpc      osd     post   | cands  osd-tried\n");
+    std::fprintf(stderr, "pass  runs  subtract waterfall   search     ldpc      osd     post     fine   | cands  osd-tried  fine-tried passed decoded | ap-tried decoded\n");
     for (int p = 0; p < 3; ++p) {
         if (!passRuns[p]) continue;
         const double r = passRuns[p];
-        std::fprintf(stderr, "  %d  %5d  %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f   | %5.1f  %5.1f\n", p + 1, passRuns[p],
-                     stage[p][0] / r, stage[p][1] / r, stage[p][2] / r, stage[p][3] / r, stage[p][4] / r, stage[p][5] / r,
-                     cands[p] / r, osdN[p] / r);
+        std::fprintf(stderr, "  %d  %5d  %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f   | %5.1f  %5.1f  %6.1f %6.1f %6.2f | %6.1f %6.2f\n", p + 1, passRuns[p],
+                     stage[p][0] / r, stage[p][1] / r, stage[p][2] / r, stage[p][3] / r, stage[p][4] / r, stage[p][5] / r, stage[p][6] / r,
+                     cands[p] / r, osdN[p] / r, fT[p] / r, fP[p] / r, fD[p] / r, aT[p] / r, aD[p] / r);
     }
     return 0;
 }

@@ -265,6 +265,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/rtty_auto.cpp"
     "${CPP_DIR}/decoders/wefax_decoder.cpp"
     "${CPP_DIR}/decoders/ft8_decoder.cpp"
+    "${CPP_DIR}/decoders/ftx_fine.cpp"
     "${CPP_DIR}/decoders/sstv_decoder.cpp"
     "${CPP_DIR}/decoders/audio_nr.cpp"
     "${CPP_DIR}/decoders/auto_notch.cpp"
@@ -279,6 +280,8 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/psk_skimmer.cpp"
     # ★ V12: DSC — maritime Digital Selective Calling, MF/HF and VHF ch 70 (ITU-R M.493; decoders/dsc_decoder.h)
     "${CPP_DIR}/decoders/dsc_decoder.cpp"
+    # ★ V12: JTTY — the WSJT-X 3.2 keyboard mode, every signal in the passband, no slots (decoders/jtty_decoder.h)
+    "${CPP_DIR}/decoders/jtty_decoder.cpp"
     # ★ V12: digital spots — the mode registry, Band mode's tuners and the spotter (decoders/digi_mode.h), and every
     #   mode engine dropped into decoders/digimodes/ (globbed: adding a mode is one file — docs/v12/DIGITAL-SPOTS.md)
     "${CPP_DIR}/decoders/digi_modes.cpp"

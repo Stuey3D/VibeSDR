@@ -48,6 +48,8 @@ type Step = {
 };
 /** ★ The server is serving an Icom transceiver (main.ts sets body.icom from hwinfo.radio.driver). */
 const onIcom = () => document.body.classList.contains('icom');
+/** ★★ V12 VFO A/B is offered here (main.ts abPaint shows the audio panel's STEREO row only where hwinfo says watch). */
+const abOffered = () => document.getElementById('abStereoRow')?.hidden === false;
 
 // ★ Ids are the card's (#mcard) — the only control surface. (A retired desktop bar once carried
 //   look-alike ids; pointing at one lit up a bar nobody could see. It has since been deleted.)
@@ -62,7 +64,14 @@ const STEPS: Step[] = [
         + (onIcom()
           ? 'Use [[−]] and [[+]] to step the Icom\u2019s own scope span, one setting at a time — the waterfall is the '
             + 'radio\u2019s scope, so it cannot zoom finer than the radio shows.'
-          : 'Use [[−]] and [[+]] to zoom the spectrum and waterfall.'),
+          : 'Use [[−]] and [[+]] to zoom the spectrum and waterfall.')
+        // ★★ V12 VFO A/B — WHERE IT IS (AGENTS.md copy rule): switched on in the step button's menu, switched between with
+        //    the A/B key that then sits between ‹ and ›, the ears by frequency.
+        + (abOffered()
+          ? ' The step button\u2019s menu also turns on VFO A/B: a second VFO inside the radio\u2019s window, heard at the same '
+            + 'time — the lower frequency in your left ear, the higher in your right. While it is on, the A/B key between '
+            + '[[‹]] and [[›]] picks which VFO these controls tune (or tap the other needle; V on a keyboard).'
+          : ''),
   },
   {
     // ★ The demodulator "button" is the MODE readout inside the pill — mobile.ts binds
@@ -90,7 +99,9 @@ const STEPS: Step[] = [
     body: () => onIcom()
       ? 'The speaker button [[@mAudio]] holds the audio tools: noise reduction and notch filters, working on the radio\u2019s own audio.'
       : 'The speaker button [[@mAudio]] holds the audio tools: noise reduction, notch filters and '
-        + 'squelch — and raw IQ output where the receiver offers it.',
+        + 'squelch — and raw IQ output where the receiver offers it.'
+        + (abOffered() ? ' Its VFO A/B STEREO switch puts the lower VFO in your left ear and the higher in your right; off, '
+          + 'both VFOs play in both ears.' : ''),
   },
   {
     ids: ['mChat'],
