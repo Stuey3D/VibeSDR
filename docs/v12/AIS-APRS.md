@@ -204,9 +204,10 @@ gateway beacon, compressed position, and a Mic-E jeep, "Off Duty") — **a singl
 
 ## Not done / owed
 
-- **The app** (React Native): no AIS mode or APRS decoder yet. `src/generated/trackLayerSource.ts` is written for it.
-  The AboutOverlay V12 note and the app's tour are unchanged because the app has neither yet (AGENTS.md: the copy
-  describes what the app does).
+- **The app** (React Native) — BUILT 2026-10-26 (APP-PARITY-2026-10-26.md): the AIS key beside ISM (absent / dimmed
+  with why / live, never on Apple TV), the ship map on the shared track layer with TrackLiveList, EXIT AIS, the audio
+  released; APRS in CLIENT DECODERS (PACKET + TUNE, AprsView, the station map). `src/services/tracks.ts` mirrors the
+  web's rules (scripts/test_ais_aprs_app.ts). Owed: a device run; an AIS box for Apple TV.
 - **Background decoding:** APRS works as a background VFO's decoder through the host (its gallery tap is wired), but the
   setup page's decoder list for a VFO does not offer APRS yet, and an **AIS background profile** (as ISM's `"ism"`
   profile) is not built — `bgAis_` is in place and always false.

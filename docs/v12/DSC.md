@@ -115,7 +115,9 @@ offers MAP. Repeats are not written twice. Listeners' DSC decodes are kept like 
 
 ## Not done
 
-- **The app's DSC box** (Mode → CLIENT DECODERS): owed — the app has the gallery filter only.
+- **The app's DSC box** (Mode → CLIENT DECODERS) — BUILT 2026-10-26 (APP-PARITY-2026-10-26.md): the channel keys the
+  radio reaches, the calls newest first coloured as the web's CSS, ×n, corrected / unconfirmed, MAP on the shared track
+  layer (MapOverlay 'dsc'). `src/services/dsc.ts`, held to the web's dsc.ts by scripts/test_psk_jtty_dsc_app.ts.
 - No AFC: a station off by more than ~30 Hz loses sensitivity (the dial is the user's or the profile's).
 - VHF was never heard off air here; its sense (1300 Hz = 1) is the standard's, and both senses are searched anyway.
 - Expansion specifiers 101, 104, 105 are recognised but not read.

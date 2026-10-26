@@ -483,6 +483,20 @@ if node --no-warnings scripts/test_recordBuffer.ts; then pass=$((pass+1)); else 
 if node --no-warnings scripts/test_cw_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 ISM (src/services/ism.ts): the app's ISM against the web's — sanitiser, lines in every unit, status, filter, capability.
 if npx tsx scripts/test_ism_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 APP PARITY 2 (2026-10-26): the app's PSK / JTTY / DSC boxes against the web's own modules — dials, channels, parsers,
+#    order, merges, where a tap tunes, the attach parameters, hints and colours, which keys a radio can reach.
+if npx tsx scripts/test_psk_jtty_dsc_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 APP PARITY 2: the app's digital spots — the server's mode list, Band mode's capability and title, the governor's chips —
+#    against the web's own code cut out of main.ts / decoders.ts.
+if npx tsx scripts/test_spots_band_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 APP PARITY 2: the app's DRM box against the web's drmRender (the same words in the same order), the sanitiser,
+#    the capability (vibeserver.json modes lists "drm").
+if npx tsx scripts/test_drm_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),
+#    NM, rows, tiles, the map feed, Find / stats, the readings' memory, the capability, the wiring (V12 NDB).
+if npx tsx scripts/test_ndb_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 AIS + APRS in the app (src/services/tracks.ts) against the web's tracks.ts — one rule, two readers
+if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

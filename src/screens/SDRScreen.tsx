@@ -61,6 +61,11 @@ import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import { ismNeighbours, type IsmCap, type IsmReport } from '../services/ism';
+import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
+// ★ V12 AIS + APRS (docs/v12/AIS-APRS.md) — the web's tracks.ts rules for the app
+import { aisItems, aisListRows, aisSafetyLines, aisStatus, AIS_EMPTY, aprsApplyPacket, aprsBoxRows, aprsItems, aprsListRows,
+         aprsLogPush, aprsMessageLines, aprsPacketSanitise, aprsSanitise, aprsStatus, aprsTuneFor, aprsBaudOf, APRS_EMPTY,
+         type AisCap, type AisReport, type AprsBaud, type AprsList } from '../services/tracks';
 import AdsbPanel from '../components/AdsbPanel';
 import DoorSpectrogram from '../components/DoorSpectrogram';
 import { RecElapsed } from '../components/RecElapsed';
@@ -117,7 +122,15 @@ import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
          type ChatUserRow }                            from '../services/DecoderClient';
-import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, type CwList, type CwSpot } from '../services/cwList';
+import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, pskWidthOf, passbandCentreHz, pskTuneFor,
+         type CwList, type CwSpot } from '../services/cwList';
+import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
+import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, dscItems, dscListRows, dscKey, DSC_MAP_EMPTY, type DscCall } from '../services/dsc';
+import { hzReachable } from '../utils/tuneWindow';
+import DrmPanel from '../components/DrmPanel';
+import { drmOffered, type DrmState } from '../services/drm';
+import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
+import { landingSpotBand, spotBandAt, stepSpotBand, bandPassband } from '../utils/digiModes';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { registerIqCode } from '../services/iqPairing';
 import AntennaBandNotice from '../components/AntennaBandNotice';
@@ -529,6 +542,11 @@ function chatTs(rfc: string): string {
 // V4 local hardware (RTL-SDR) demodulator list — includes WFM (broadcast FM),
 // which HF UberSDR servers don't offer.
 // SAM omitted — the on-device DSP (VibeDSP) has no synchronous-AM demodulator yet.
+/** ★ V12 DRM after AM (the web's offeredModes appends it to the demodulators). */
+function withDrm(list: { id: string; label: string }[]): { id: string; label: string }[] {
+  const i = list.findIndex((m) => m.id === 'am');
+  return [...list.slice(0, i + 1), { id: 'drm', label: 'DRM' }, ...list.slice(i + 1)];
+}
 const LOCAL_MODES: { id: string; label: string }[] = [
   { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
   // ★ BOTH CW SIDEBANDS — the server has always had cwu AND cwl (the web client offers both);
@@ -764,8 +782,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     let dead = false;
     setDabCapable(false);
     setCwCapable(false);
+    setPskCapable(false); setJttyCapable(false); setDscCapable(false); setRadioTunable([]);
+    setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false);
     setAdsbCap(undefined);
     setIsmCap(undefined);
+    setNdbCap(undefined);   // ★ V12 NDB
+    setAisCap(undefined);           // ★ V12 AIS / APRS — cleared first, as every per-radio answer
+    setAprsCap({ on: false, hz: 144.8e6 });
     setAntBands(null);
     if ((route.params.serverType ?? 'ubersdr') !== 'vibeserver') return;
     fetchOccupancy(connectBase.replace(/\/+$/, ''))
@@ -773,10 +796,19 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (dead) return;
         setDabCapable(o?.dab === true);
         setCwCapable(o?.cw === true);   // ★ V12 CW — the same per-radio answer
+        // ★ V12 PSK31/63, JTTY, DSC — the same per-radio answer; and where it can be tuned (which channel keys draw)
+        setPskCapable(o?.psk === true); setJttyCapable(o?.jtty === true); setDscCapable(o?.dsc === true);
+        setRadioTunable(o?.tunable ?? []);
+        // ★ V12 digital spots: the modes this server decodes, and Band mode (absent / greyed with why / offered)
+        setSpotModesSrv(o?.spotModes); setSpotsBandCap(o?.spotsBand);
+        setDrmCapable(drmOffered(o?.modes));   // ★ V12 DRM — a demodulator, where this server lists it
         setIsmCap(o?.ism);              // ★ V12 ISM — and the bands THIS radio reaches
+        setNdbCap(o?.ndb);              // ★ V12 NDB — absent where this radio reaches no LF (no key at all)
         /* ★ V12 ADS-B, from the SAME per-radio answer and for the same reason (the door owns no radio). Unlike DAB a
          *  refusal is KEPT — the control is drawn disabled with the server's words (adsbTypes parseAdsbCapability). */
         setAdsbCap(o?.adsb);
+        setAisCap(o?.ais);              // ★ V12 AIS — absent where the radio cannot reach 162 MHz (no key at all)
+        if (o?.aprs) setAprsCap(o.aprs);   // ★ V12 APRS — the listener's decoder, and the region's channel
         const b = parseAntennaBands(o?.antennaRanges, o?.antennaFilters);
         setAntBands(hasAntennaBands(b) ? b : null);
       })
@@ -2405,6 +2437,27 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dabCapable, setDabCapable] = useState(false);  // the SERVER decides — /vibeserver.json
   /** ★ V12 CW: this radio's server runs its own CW decoder + skimmer (`"cw": true`, per radio). No word = no CW key. */
   const [cwCapable, setCwCapable] = useState(false);
+  const [pskCapable, setPskCapable] = useState(false);
+  const [jttyCapable, setJttyCapable] = useState(false);
+  const [dscCapable, setDscCapable] = useState(false);
+  /** ★ V12: vibeserver.json `tunable` — the windows this radio can be tuned in (DSC / JTTY keys outside them are not drawn). */
+  const [radioTunable, setRadioTunable] = useState<Array<[number, number]>>([]);
+  /** ★ V12 DIGITAL SPOTS (docs/v12/DIGITAL-SPOTS.md): vibeserver.json spotModes / spotsBand + spotBands. */
+  const [spotModesSrv, setSpotModesSrv] = useState<string[] | undefined>(undefined);
+  const [spotsBandCap, setSpotsBandCap] = useState<SpotsBandCap | undefined>(undefined);
+  /* ★★ V12 DRM (docs/v12/DRM.md): a DEMODULATOR like AM, offered only where the radio's vibeserver.json `modes` lists
+   *  "drm" (an older server has no such mode — a dead key). The server receives it per listener and reports about once per
+   *  super frame; the DRM box (DrmPanel) shows the report while the mode is DRM. */
+  const [drmCapable, setDrmCapable] = useState(false);
+  const [drmState, setDrmState] = useState<DrmState | null>(null);
+  const spotsBandCapRef = useRef<SpotsBandCap | undefined>(undefined);
+  spotsBandCapRef.current = spotsBandCap;
+  /** Band running (the subscription's scope is 'band'), and the governor's per-mode chips. */
+  const [spotsBandOn, setSpotsBandOn] = useState(false);
+  const spotsBandOnRef = useRef(false);
+  const [spotModeStates, setSpotModeStates] = useState<SpotModeState[]>([]);
+  /** Band's step, set where tuning lives (below) — true when it took the gesture. A ref: the gestures are built earlier. */
+  const bandSpotsStepRef = useRef<(dir: number) => boolean>(() => false);
   /* ★ Refs beside the state because the two callbacks below are created ONCE (empty dep list, so
    *  they are stable for the ModeSelector's memo) and would otherwise close over the first render's
    *  values for ever — the stale-closure fault this file has been bitten by repeatedly. */
@@ -2490,14 +2543,67 @@ export default function SDRScreen({ route, navigation }: Props) {
     setIsmOn(false); setIsmReport(null);
     if (!keepBox) { setIsmBoxOpen(false); setIsmError(undefined); }
   }, []);
+  /* ── V12 NDB on a VibeServer (docs/v12/NDB-SKIMMER.md) — ADS-B's pattern exactly: a whole-radio mode entered and left by
+   *  name, its screen the full-screen MAP (MapOverlay kind 'ndb' — the beacons at their published places with a 3-bar meter,
+   *  ADS-B's NM rings, the live list bottom-left; EXIT NDB leaves the mode). No audio (spectrum-only; the waterfall slows
+   *  to 1 fps behind the map). ★ Offered only where the radio's vibeserver.json says so (ndbCap: absent = no LF on this
+   *  radio, no key; ok false = greyed with why) and never on Apple TV (no WebView: the map is the mode's only screen). */
+  const [ndbCap, setNdbCap] = useState<NdbCap | undefined>(undefined);
+  const [ndbOn, setNdbOn] = useState(false);
+  const ndbOnRef = useRef(false);
+  const [ndbViewOpen, setNdbViewOpen] = useState(false);
+  const ndbViewOpenRef = useRef(false);
+  const [ndbReport, setNdbReport] = useState<NdbReport | null>(null);
+  const ndbTracks = useRef(new NdbTracks());
+  const [ndbSeq, setNdbSeq] = useState(0);
+  const [ndbFound, setNdbFound] = useState<NdbFound[]>([]);
+  const [ndbFindResult, setNdbFindResult] = useState<{ q: string; pos?: boolean; list: NdbFound[] } | null>(null);
+  const [ndbStats, setNdbStats] = useState<NdbStats | null>(null);
+  const ndbLastAt = useRef(0);
+  useEffect(() => { ndbOnRef.current = ndbOn; }, [ndbOn]);
+  useEffect(() => { ndbViewOpenRef.current = ndbViewOpen; }, [ndbViewOpen]);
+  /** ★ Everything NDB leaves behind, in one place — EXIT NDB, the key, a mode pick, another whole-radio mode, ndb_off. */
+  const ndbUiOff = useCallback(() => {
+    ndbOnRef.current = false;
+    setNdbOn(false); setNdbViewOpen(false); setNdbReport(null);
+    ndbTracks.current.clear(); setNdbFindResult(null); setNdbStats(null);
+  }, []);
+  /* ── V12 AIS on a VibeServer (docs/v12/AIS-APRS.md) — ADS-B's shape: the whole radio on 162.000 MHz, both channels
+   *  decoded on the server, NO audio, and THE SHIP MAP IS THE MODE'S SCREEN (MapOverlay 'ais', EXIT AIS leaves the mode).
+   *  ★ Offered only where the radio's vibeserver.json says so (aisCap: absent = no key — an HF+, an Icom; ok false =
+   *  greyed with why) and never on Apple TV (no WebView, so no map — a key that opens nothing is a dead control). ── */
+  const [aisCap, setAisCap] = useState<AisCap | undefined>(undefined);
+  const [aisOn, setAisOn] = useState(false);
+  const aisOnRef = useRef(false);
+  useEffect(() => { aisOnRef.current = aisOn; }, [aisOn]);
+  const [aisReport, setAisReport] = useState<AisReport | null>(null);
+  const [aisViewOpen, setAisViewOpen] = useState(false);
+  /** ★ A ship's track asked for by the map's card, waiting for the server's ais_trail (mmsi → resolve). */
+  const aisTrailWait = useRef(new Map<number, (pts: [number, number][]) => void>());
+  /** ★ Everything AIS leaves behind, in one place — EXIT, the key, a mode pick, the server's ais_off, entering another
+   *  whole-radio mode. */
+  const aisUiOff = useCallback(() => {
+    aisOnRef.current = false;
+    setAisOn(false); setAisReport(null); setAisViewOpen(false);
+    for (const done of aisTrailWait.current.values()) done([]);
+    aisTrailWait.current.clear();
+  }, []);
+  /* ★★ V12 APRS's map (the decoder box's MAP): the stations heard, on the same track layer. The decoder carries on
+   *  whether it is open or not; `aprsFocus` = the station a box row asked for. */
+  const [aprsCap, setAprsCap] = useState<{ on: boolean; hz: number }>({ on: false, hz: 144.8e6 });
+  const [aprsMapOpen, setAprsMapOpen] = useState(false);
+  const [aprsFocus, setAprsFocus] = useState('');
+  /** ★ V12 DSC: the box's MAP — the positions sent, on the track layer (MapOverlay 'dsc'), opened on the call pressed. */
+  const [dscMapOpen, setDscMapOpen] = useState(false);
+  const [dscFocus, setDscFocus] = useState('');
   /* ★★ V12 QUIET — ADS-B lets go of the audio output while it runs (the AirPods followed silence; the web's syncAudioQuiet,
    *  1f0b204a). One rule for every mode with nothing to hear — see audioQuiet. Released when the screen goes. */
   const quietSaid = useRef(false);
-  const audioQuiet = adsbOn || ismOn;
+  const audioQuiet = adsbOn || ismOn || ndbOn || aisOn;   // ★ V12 NDB and AIS too: the server sends no audio there
   useEffect(() => {
     if (audioQuiet === quietSaid.current) return;
     quietSaid.current = audioQuiet;
-    setNativeQuiet(audioQuiet, audioQuiet ? (adsbOn ? 'ADS-B' : 'ISM') : 'left ADS-B / ISM');
+    setNativeQuiet(audioQuiet, audioQuiet ? (adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? 'NDB' : 'AIS') : 'left ADS-B / ISM / NDB / AIS');
   }, [audioQuiet]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (quietSaid.current) setNativeQuiet(false, 'receiver closed'); }, []);
   useEffect(() => { adsbViewOpenRef.current = adsbViewOpen; }, [adsbViewOpen]);
@@ -2512,7 +2618,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  `status.mode` on the demod it came from exactly as DAB does — so the mode string alone cannot say. Every
    *  VFO path that asked isWholeProfileMode asks this instead (one rule, one reader); the client refuses too. */
   const noTuneNow = (c: { getStatus(): { mode: unknown } }): boolean =>
-    adsbOnRef.current || ismOnRef.current || isWholeProfileMode(String(c.getStatus().mode));
+    adsbOnRef.current || ismOnRef.current || ndbOnRef.current || aisOnRef.current || isWholeProfileMode(String(c.getStatus().mode));
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   // ★ `name` is the STABILISED name (see psStab); `psRaw` is the PS exactly as it arrived, for the
@@ -2642,6 +2748,8 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  last block is the answer every time; ours is only the drum's resting position until the
      *  first report replaces it. */
     if (askGate()) return;   // ★★ ask before tuning — entering DAB moves everybody's radio
+    if (ndbOnRef.current) ndbUiOff();   // ★ V12 NDB: one whole-radio mode at a time (the server leaves it itself)
+    if (aisOnRef.current) aisUiOff();   // ★ V12 AIS: the server leaves AIS through its own door when DAB is entered
     const i = dabBlockRef.current;
     if (i >= 0) setDabBlock(i);
     setDabBoxOpen(true);
@@ -2680,13 +2788,15 @@ export default function SDRScreen({ route, navigation }: Props) {
       return;
     }
     if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to 1090
+    if (ndbOnRef.current) ndbUiOff();   // ★ V12 NDB: one whole-radio mode at a time (the server leaves it itself)
+    if (aisOnRef.current) aisUiOff();   // ★ V12 AIS: the server leaves AIS when ADS-B is entered
     setAdsbError(undefined);
     setAdsbReport(null);
     setAdsbViewOpen(true);
     c.adsb(true);
     adsbOnRef.current = true;
     setAdsbOn(true);
-  }, [adsbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [adsbUiOff, ndbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ★ EXIT ADS-B — the map's top-bar key, Android back and a pad's / keyboard's Back on the map (and the Apple TV box's
    *  key). Never toggleAdsb (the DAB lesson, dabExitAction): out of the mode it only puts the view away; it can never
@@ -2715,11 +2825,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       return;
     }
     if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to the band
+    if (ndbOnRef.current) ndbUiOff();   // ★ V12 NDB: one whole-radio mode at a time (the server leaves it itself)
+    if (aisOnRef.current) aisUiOff();   // ★ V12 AIS: the server leaves AIS when ISM is entered
     setIsmError(undefined); setIsmReport(null); setIsmBoxOpen(true);
     c.ism(true);
     ismOnRef.current = true;
     setIsmOn(true);
-  }, [ismUiOff, ismBoxOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ismUiOff, ismBoxOpen, ndbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** EXIT ISM (the box's key): out of the mode; on a locked dial only the box is put away (exitAdsb's rule). */
   const exitIsm = useCallback(() => {
     const c = client.current;
@@ -2743,6 +2855,77 @@ export default function SDRScreen({ route, navigation }: Props) {
     markInteract();
     c.ism(true, { step: d > 0 ? 1 : -1 });
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** ★★ ENTER OR LEAVE NDB — the key in the demodulator sheet (toggleAdsb's rules): pressed while the mode runs with its
+   *  map put away (a refused exit on a locked dial) it brings the map back, otherwise it leaves. Entering opens the map AT
+   *  ONCE; the SERVER puts the capture on the beacon band. Another whole-radio mode in this app is let go here, as the
+   *  web's toggleNdb does (the server leaves it itself). */
+  const toggleNdb = useCallback(() => {
+    const c = client.current;
+    if (!c?.ndb) return;
+    if (ndbOnRef.current) {
+      if (!ndbViewOpenRef.current) { setNdbViewOpen(true); return; }
+      if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
+      c.ndb(false);
+      ndbUiOff();
+      return;
+    }
+    if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to the beacon band
+    if (adsbOnRef.current) adsbUiOff();
+    if (ismOnRef.current) ismUiOff();
+    if (aisOnRef.current) aisUiOff();   // ★ V12 AIS: one whole-radio mode at a time
+    setNdbReport(null); ndbTracks.current.clear();
+    setNdbViewOpen(true);
+    ndbLastAt.current = Date.now();
+    c.ndb(true);
+    c.ndbFind?.('', 300);      // ★ the published beacons for the map's faint "unheard" markers (the web's show())
+    ndbOnRef.current = true;
+    setNdbOn(true);
+  }, [ndbUiOff, adsbUiOff, ismUiOff, aisUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★ EXIT NDB — the map's top-bar key, Android back, a pad's / keyboard's Back on the map. Never toggleNdb (the DAB
+   *  lesson): out of the mode it only puts the map away. On a LOCKED dial leaving is refused and the map put away, as
+   *  exitAdsb does. */
+  const exitNdb = useCallback(() => {
+    const c = client.current;
+    const leave = ndbOnRef.current;
+    if (leave && askLocked(dialStateRef.current)) { setNdbViewOpen(false); askGate(); return; }
+    if (leave) c?.ndb?.(false);
+    ndbUiOff();
+  }, [ndbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★★ V12 ENTER OR LEAVE AIS — the key in the Mode sheet (toggleAdsb's rules): pressed while AIS runs with its map put
+   *  away (a refused exit on a locked dial) it brings the map back; otherwise it leaves. Entering opens the map AT ONCE.
+   *  The SERVER tunes (162.000 MHz) and leaves DAB / ADS-B / ISM itself — their screens are put away here as the web's
+   *  toggleAis does, so two whole-radio screens never stand at once. */
+  const toggleAis = useCallback(() => {
+    const c = client.current;
+    if (!c?.ais) return;
+    if (aisOnRef.current) {
+      if (!aisViewOpen) { setAisViewOpen(true); return; }
+      if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
+      c.ais(false);
+      aisUiOff();
+      return;
+    }
+    if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to 162 MHz
+    if (adsbOnRef.current) adsbUiOff();
+    if (ismOnRef.current) ismUiOff();
+    if (dabOnRef.current) { dabOnRef.current = false; setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined); }
+    if (ndbOnRef.current) ndbUiOff();   // ★ V12 NDB: one whole-radio mode at a time
+    setAprsMapOpen(false);
+    setAisReport(null); setAisViewOpen(true);
+    c.ais(true);
+    aisOnRef.current = true;
+    setAisOn(true);
+  }, [aisUiOff, adsbUiOff, ismUiOff, ndbUiOff, aisViewOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** EXIT AIS (the map's key, Android back, a pad's / keyboard's Back): out of the mode; on a locked dial only the map is
+   *  put away (exitAdsb's rule — the AIS key brings it back). Never toggleAis (the DAB lesson). */
+  const exitAis = useCallback(() => {
+    const c = client.current;
+    const leave = aisOnRef.current;
+    if (leave && askLocked(dialStateRef.current)) { setAisViewOpen(false); askGate(); return; }
+    if (leave) c?.ais?.(false);
+    aisUiOff();
+  }, [aisUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ★ A DAB bookmark: the multiplex AND the service, in one go — the web client's dabGoTo.
    *  Enters DAB if needed, retunes if the block differs, otherwise just switches service. */
@@ -3487,7 +3670,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
   /** ★ What the server-map overlay shows: ADS-B's map while its view is up (it is the mode's screen), else the server
    *  map somebody opened from the Mode sheet. Not on Apple TV (no WebView — the ADS-B box stands in there). */
-  const shownMap: MapKind | null = adsbViewOpen && !IS_APPLE_TV ? 'adsb' : mapKind;
+  const shownMap: MapKind | null = adsbViewOpen && !IS_APPLE_TV ? 'adsb' : ndbViewOpen && !IS_APPLE_TV ? 'ndb'   // ★ V12 NDB: its map, as ADS-B's
+    // ★ V12 AIS's ship map is the mode's screen; APRS's station map is the decoder box's MAP (neither on Apple TV)
+    : aisViewOpen && !IS_APPLE_TV ? 'ais' : aprsMapOpen && !IS_APPLE_TV ? 'aprs'
+    // ★ V12 DSC's positions — the box's MAP (the decoder carries on)
+    : dscMapOpen && !IS_APPLE_TV ? 'dsc' : mapKind;
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -4295,6 +4482,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       return;
     }
     if (ismOnRef.current) { ismStep(dir === 'right' ? 1 : -1); return; }   // ★ V12 ISM: a band
+    if (spotsBandOnRef.current && bandSpotsStepRef.current(dir === 'right' ? 1 : -1)) return;   // ★ V12 Band spots: a band
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (noTuneNow(c)) return;
@@ -4887,7 +5075,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   force a redetect") — a cleared box is a fresh start, not the old station's language.
     if (activeDecRef.current === 'transcribe') { setDecoderText(''); txRedetectRef.current(); return; }
     // ★ CW's CLR empties the text, the list and the spots (the web's decClr) — the next list arrives within a second.
-    if (activeDecRef.current === 'cw') { setDecoderText(''); setCwList(null); setCwSpots([]); return; }
+    if (activeDecRef.current === 'cw' || activeDecRef.current === 'psk') { setDecoderText(''); setCwList(null); setCwSpots([]); return; }
+    // ★ V12 JTTY / DSC: CLR empties the rows and the spots (the web's decClr)
+    if (activeDecRef.current === 'jtty') { setJttyList([]); setJttySpots([]); return; }
+    if (activeDecRef.current === 'dsc') { setDscCalls([]); return; }
+    // ★ V12 APRS's CLR empties the packets (the web's decClr: aprsLog) — the stations are the server's list
+    if (activeDecRef.current === 'aprs') { setAprsLog([]); return; }
     if (activeDecRef.current !== 'navtex') { setDecoderText(''); return; }
     decTextPending.current = ''; decTextReplace.current = null;
     navtexAsmRef.current?.clearLive();
@@ -4926,6 +5119,29 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [cwWidth, setCwWidth] = useState<number>(CW_DEFAULT_WIDTH);
   const [cwList, setCwList] = useState<CwList | null>(null);
   const [cwSpots, setCwSpots] = useState<CwSpot[]>([]);
+  /* ★★ V12 PSK31/63 (docs/v12/PSK.md) — CW's two views on the same list (cwList / cwSpots carry PSK's while it runs): ONE
+   *  SIGNAL ('psk', the signal nearest the passband's middle) or SKIMMER ('pskskim' over `pskWidth` Hz). Remembered. */
+  const [pskSkim, setPskSkim] = useState(false);
+  const [pskWidth, setPskWidth] = useState<number>(PSK_DEFAULT_WIDTH);
+  /* ★★ V12 JTTY (docs/v12/JTTY.md) — one row per station and the spots (JttyView). */
+  const [jttyList, setJttyList] = useState<JttySignal[]>([]);
+  const [jttySpots, setJttySpots] = useState<JttySpot[]>([]);
+  /* ★★ V12 DSC (docs/v12/DSC.md) — the calls, newest first (DscView). */
+  const [dscCalls, setDscCalls] = useState<DscCall[]>([]);
+  /* ★★ V12 APRS (docs/v12/AIS-APRS.md) — the web's APRS box (main.ts renderAprs): the server's own packet decoder on THIS
+   *  listener's audio, VHF 1200 Bd (NFM on the region's channel) or HF 300 Bd (USB). The station list (every 2 s), the
+   *  packets as they come (the track grown from each), MAP = the stations on the track layer. The baud is remembered. */
+  const [aprsBaud, setAprsBaud] = useState<AprsBaud>(1200);
+  const aprsBaudRef = useRef<AprsBaud>(1200);
+  useEffect(() => { AsyncStorage.getItem('lsv_aprs_baud').then((v) => { const b = aprsBaudOf(v); aprsBaudRef.current = b; setAprsBaud(b); }).catch(() => {}); }, []);
+  const [aprsList, setAprsList] = useState<AprsList | null>(null);
+  const aprsListRef = useRef<AprsList | null>(null);
+  const [aprsLog, setAprsLog] = useState<{ t: number; line: string }[]>([]);
+  const aprsTrails = useRef(new Map<string, [number, number][]>());
+  const aprsReset = useCallback(() => {
+    aprsListRef.current = null; setAprsList(null); setAprsLog([]); aprsTrails.current.clear();
+    setAprsMapOpen(false); setAprsFocus('');
+  }, []);
 
   // Decoder transport base. Local/UberSDR serve /ws/dxcluster themselves; Kiwi
   // (no dxcluster) gets a native decoder sidecar fed its audio, so we point the
@@ -4992,12 +5208,47 @@ export default function SDRScreen({ route, navigation }: Props) {
       onImageDone: ()            => decoderImageRef.current?.imageDone(),
       onError:     (msg: string) => setDecoderStatus('error: ' + msg),
       onCwSignals: (l) => {
-        if (activeDecRef.current !== 'cw') return;
+        // ★ V12 PSK's list arrives here too (DecoderClient parses psk_signals into the same shape, with its mode)
+        if (activeDecRef.current !== 'cw' && activeDecRef.current !== 'psk') return;
         setCwList(l);
         setDecoding(l.signals.some((x) => x.active));
         if (l.signals.length) markDecodeOutput();
       },
-      onCwSpot: (sp) => { if (activeDecRef.current === 'cw') setCwSpots((prev) => mergeCwSpot(prev, sp)); },
+      onCwSpot: (sp) => { if (activeDecRef.current === 'cw' || activeDecRef.current === 'psk') setCwSpots((prev) => mergeCwSpot(prev, sp)); },
+      onJttySignals: (l) => {
+        if (activeDecRef.current !== 'jtty') return;
+        setJttyList(l);
+        setDecoding(l.some((x) => x.active));
+        if (l.length) markDecodeOutput();
+      },
+      onJttySpot: (sp) => { if (activeDecRef.current === 'jtty') setJttySpots((prev) => mergeJttySpot(prev, sp)); },
+      onDscCall: (c) => {
+        if (activeDecRef.current !== 'dsc') return;
+        setDscCalls((prev) => mergeDscCall(prev, c));
+        setDecoding(true);
+        markDecodeOutput();
+      },
+      onSpotsStatus: (st) => { if (spotsBandOnRef.current) setSpotModeStates(st); },
+      // ★ V12 APRS: the list (its tracks kept for the map's cards) and each new packet (the web's onAprsList / onAprsPacket)
+      onAprsList: (d) => {
+        if (activeDecRef.current !== 'aprs') return;
+        const l = aprsSanitise(d);
+        if (!l) return;
+        for (const st of l.stations) if (st.trail && st.trail.length) aprsTrails.current.set(st.key, st.trail);
+        aprsListRef.current = l; setAprsList(l);
+        setDecoding(l.stations.some((x) => x.seen < 60));
+        if (l.stations.length) markDecodeOutput();
+      },
+      onAprsPacket: (d) => {
+        if (activeDecRef.current !== 'aprs') return;
+        const p = aprsPacketSanitise(d);
+        if (!p) return;
+        setAprsLog((prev) => aprsLogPush(prev, p, Date.now()));
+        const l = aprsListRef.current;
+        if (aprsApplyPacket(l, aprsTrails.current, p) && l) { const n = { ...l, stations: [...l.stations] }; aprsListRef.current = n; setAprsList(n); }
+        setDecoding(true);
+        markDecodeOutput();
+      },
       onSpot: (s) => {
         if (s.kind !== spotsKindRef.current) return;
         spotBufRef.current.push(s); // flushed by the 400ms tick — no setState here
@@ -5073,7 +5324,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'aprs'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -5461,6 +5712,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoding(false);
     decoderImageRef.current?.reset();
     setCwList(null); setCwSpots([]);
+    setJttyList([]); setJttySpots([]); setDscCalls([]); setDscMapOpen(false); setDscFocus('');
+    aprsReset();   // ★ V12 APRS: a fresh attach (or another decoder) starts with no stations
     if (!type) return;
     if (type === 'scanner') { setDecoderStatus(''); return; }   // ★ the scanner's status is its own body's first line
     if (type === 'transcribe') {
@@ -5497,14 +5750,32 @@ export default function SDRScreen({ route, navigation }: Props) {
       timeStationRef.current = st;
       setDecoderStatus(`${st.toUpperCase()}${forced ? '' : ' (auto)'} — waiting for the minute`);
     }
+    if (type === 'aprs' && decoderClient.current) {
+      decoderClient.current.aprsBaud = aprsBaudRef.current;
+      setDecoderStatus(aprsBaudRef.current === 300 ? 'listening — HF packet, 300 Bd' : 'listening — APRS, 1200 Bd');
+    }
     if (type === 'cw' && decoderClient.current) {
       decoderClient.current.cwSkim = cwSkimRef.current;
       decoderClient.current.cwWidth = cwWidthRef.current;
       setDecoderStatus(cwSkimRef.current ? 'listening across the segment…' : 'listening…');
     }
+    // ★ V12 PSK: the skimmer's segment, or ONE SIGNAL's cursor — the middle of the listener's passband now (the web's
+    //   decParams; changing the filter afterwards does not move it, PSK.md "Not done").
+    if (type === 'psk' && decoderClient.current) {
+      const st = client.current?.getStatus();
+      decoderClient.current.pskSkim = pskSkimRef.current;
+      decoderClient.current.pskWidth = pskWidthRef.current;
+      decoderClient.current.pskCentre = passbandCentreHz(st?.bandwidthLow ?? 300, st?.bandwidthHigh ?? 2700);
+      setDecoderStatus(pskSkimRef.current ? 'listening across the segment…' : 'listening…');
+    }
+    // ★ V12 DSC: the tones' audio centre from the NEAREST DSC frequency to the dial (or channel 70 on NFM) — dscParams.
+    if (type === 'dsc' && decoderClient.current) {
+      const st = client.current?.getStatus();
+      decoderClient.current.dscParams = dscParams(st?.frequency ?? 0, String(st?.mode ?? ''));
+    }
     tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
     decoderClient.current?.start(type);
-  }, [status.frequency, timeStationPref, onVfoAB]);
+  }, [status.frequency, timeStationPref, onVfoAB, aprsReset]);
 
   /**
    * ★★★ THE STATION FOLLOWS THE DIAL WHILE THE DECODER IS RUNNING. It was chosen ONCE, at attach —
@@ -5539,12 +5810,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoderText('');
     setDecoderStatus('listening…');
     setCwList(null); setCwSpots([]);
-  }, []);
+    setJttyList([]); setJttySpots([]); setDscCalls([]); setDscMapOpen(false); setDscFocus('');
+    aprsReset();   // ★ V12 APRS: closing the box closes its map too (the web's stopDecoder)
+  }, [aprsReset]);
 
   const stopSpots = useCallback(() => {
     decoderClient.current?.stopSpots();
     spotsKindRef.current = null;
     setSpotsKind(null);
+    spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]);
     stopSpotFlush();
   }, [stopSpotFlush]);
 
@@ -5565,11 +5839,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (ismOn && (activeDecRef.current || spotsKindRef.current)) dismissDecoderPanel();
   }, [ismOn, dismissDecoderPanel]);
+  /* ★ V12 NDB: the same — no audio to decode (spectrum-only); a running decoder or the spots are put away, as the web's ndbUiOn. */
+  useEffect(() => {
+    if (ndbOn && (activeDecRef.current || spotsKindRef.current)) dismissDecoderPanel();
+  }, [ndbOn, dismissDecoderPanel]);
+  // ★ V12 AIS likewise: no audio to decode, and the ship map covers the box.
+  useEffect(() => {
+    if (aisOn && (activeDecRef.current || spotsKindRef.current)) dismissDecoderPanel();
+  }, [aisOn, dismissDecoderPanel]);
 
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'aprs') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -5582,6 +5864,12 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Spots toggle (menu Server Extensions DIGITAL/CW — skin lsvSpots)
   const onSpotsToggle = useCallback((k: SpotsKind) => {
+    // ★ V12: from Band, DIGITAL SPOTS switches to Single — one subscribe, the server keeps the slot (the web's spotsBtn)
+    if (k === 'digi' && spotsKindRef.current === 'digi' && spotsBandOnRef.current) {
+      spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]);
+      decoderClient.current?.startSpots('digi', 'single');
+      return;
+    }
     if (spotsKindRef.current === k) {
       stopSpots();
     } else {
@@ -5673,6 +5961,40 @@ export default function SDRScreen({ route, navigation }: Props) {
     cwWidthRef.current = v; setCwWidth(v);
     AsyncStorage.setItem('lsv_cw_width', String(v)).catch(() => {});
     if (activeDecRef.current === 'cw' && cwSkimRef.current) openDecoder('cw');
+  }, [openDecoder]);
+  /* ★★ THE SKIMMER'S VFO IS ITS SEGMENT (CW's rule, and PSK's — the web's kbSkimOn): drawn only, never sent. */
+  // ★ V12 DRM: a new mode forgets the old station (the web's setMode)
+  useEffect(() => { if (status.mode !== 'drm') setDrmState(null); }, [status.mode]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const skimDrawn = (activeDecoder === 'cw' && cwSkim) || (activeDecoder === 'psk' && pskSkim);
+  const skimDrawnW = activeDecoder === 'psk' ? pskWidth : cwWidth;
+  /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (the web's renderFrame) — drawn where it is, never sent. */
+  const bandDrawn = spotsBandOn && spotsBandCap ? bandPassband(spotsBandCap.bands, status.frequency) : null;
+  /* ★ V12 PSK: the same two settings, remembered apart from CW's (6/12/24 kHz, not 24/48/96). */
+  const pskSkimRef = useRef(false);
+  const pskWidthRef = useRef<number>(PSK_DEFAULT_WIDTH);
+  useEffect(() => {
+    AsyncStorage.multiGet(['lsv_psk_view', 'lsv_psk_width']).then((kv) => {
+      const v = kv[0]?.[1], w = kv[1]?.[1];
+      if (v === 'skim') { pskSkimRef.current = true; setPskSkim(true); }
+      if (w) { pskWidthRef.current = pskWidthOf(w); setPskWidth(pskWidthRef.current); }
+    }).catch(() => {});
+  }, []);
+  const onPskView = useCallback((skim: boolean) => {
+    pskSkimRef.current = skim; setPskSkim(skim);
+    AsyncStorage.setItem('lsv_psk_view', skim ? 'skim' : 'one').catch(() => {});
+    if (activeDecRef.current === 'psk') openDecoder('psk');
+  }, [openDecoder]);
+  const onPskWidth = useCallback((w: number) => {
+    const v = pskWidthOf(w);
+    pskWidthRef.current = v; setPskWidth(v);
+    AsyncStorage.setItem('lsv_psk_width', String(v)).catch(() => {});
+    if (activeDecRef.current === 'psk' && pskSkimRef.current) openDecoder('psk');
+  }, [openDecoder]);
+  /** ★ V12 APRS: VHF 1200 / HF 300 — remembered; a different decoder on the server, so a re-attach while it runs. */
+  const onAprsBaud = useCallback((b: AprsBaud) => {
+    aprsBaudRef.current = b; setAprsBaud(b);
+    AsyncStorage.setItem('lsv_aprs_baud', String(b)).catch(() => {});
+    if (activeDecRef.current === 'aprs') openDecoder('aprs');
   }, [openDecoder]);
 
   // WEFAX LPM — same re-attach rule
@@ -6186,6 +6508,55 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (!ismOnRef.current) { ismOnRef.current = true; setIsmBoxOpen(true); setIsmError(undefined); }
         setIsmOn(true);
         setIsmReport(r);
+      },
+      /* ★ V12 NDB: a report (its arrival MEANS NDB is on — the map opens on the transition, as ADS-B's), ndb_off (null), or
+       *  a refusal (the map that opened on the press closes; the reason as an alert, after the modal has gone). */
+      onNdb: (r, why) => {
+        if (destroyed.current) return;
+        if (why) {
+          ndbUiOff();
+          setTimeout(() => { if (!destroyed.current) appAlert('NDB unavailable', why); }, 450);
+          return;
+        }
+        if (!r) { ndbUiOff(); return; }
+        ndbLastAt.current = Date.now();
+        if (!ndbOnRef.current) {
+          ndbOnRef.current = true; setNdbViewOpen(!IS_APPLE_TV);
+          client.current?.ndbFind?.('', 300);
+        }
+        setNdbOn(true);
+        ndbTracks.current.update(r);
+        setNdbSeq((n) => (n + 1) % 1e9);
+        setNdbReport(r);
+      },
+      onNdbFound: (f) => {
+        if (destroyed.current) return;
+        if (!f.q) setNdbFound(f.list);   // ★ an empty query also feeds the map's unheard markers
+        setNdbFindResult(f);
+      },
+      onNdbStats: (st) => { if (!destroyed.current) setNdbStats(st); },
+      // ★ V12 DRM: a report after leaving DRM is a ghost (the web's onDrm)
+      onDrm: (d) => { if (!destroyed.current && client.current?.getStatus().mode === 'drm') setDrmState(d); },
+      /* ★ V12 AIS: a report (on — arriving MEANS AIS is on, whoever put the receiver there: the map opens on the transition),
+       *  the server's ais_off (null), or a refusal (the map that opened on the press closes; the reason as an alert, after
+       *  the modal has gone — onAdsb's note). */
+      onAis: (r, why) => {
+        if (destroyed.current) return;
+        if (why) {
+          aisUiOff();
+          setTimeout(() => { if (!destroyed.current) appAlert('AIS unavailable', why); }, 450);
+          return;
+        }
+        if (!r) { aisUiOff(); return; }
+        if (!aisOnRef.current) { aisOnRef.current = true; if (!IS_APPLE_TV) setAisViewOpen(true); }
+        setAisOn(true);
+        setAisReport(r);
+      },
+      onAisTrail: (mmsi, pts) => {
+        const done = aisTrailWait.current.get(mmsi);
+        if (!done) return;
+        aisTrailWait.current.delete(mmsi);
+        done(pts);
       },
       // ★★★ THE RADIO IS THE AUTHORITY ON ITS OWN GAIN, and until the server sent this the app had
       //     no way to know it — so the slider showed a value of its own and the owner's resting
@@ -8380,6 +8751,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (n) { dabPendingPx.current -= n * 48; ismStep(n > 0 ? 1 : -1); }
       return true;
     }
+    // ★ V12 Band spots: the same — one band per 48 px of drum.
+    if (spotsBandOnRef.current && !dabOnRef.current) {
+      dabPendingPx.current += pxDelta;
+      const n = Math.trunc(dabPendingPx.current / 48);
+      if (n) { dabPendingPx.current -= n * 48; bandSpotsStepRef.current(n > 0 ? 1 : -1); }
+      return true;
+    }
     if (!dabOnRef.current) return false;
     dabPendingPx.current += pxDelta;
     const PX_PER_BLOCK = 48;
@@ -8577,6 +8955,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     // ★ V12 ISM: the same rule — the band IS the tuning, so "next" is the next band (docs/v12/ISM-DECODER.md).
     if (ismOnRef.current) { ismStep(dir); return; }
+    if (spotsBandOnRef.current && bandSpotsStepRef.current(dir)) return;   // ★ V12 Band spots: the next band
     const c = client.current; if (!c) return;
     if (noTuneNow(c)) return;   // DAB/ADS-B: nothing to tune
     const s = stepRef.current; if (!(s > 0)) return;
@@ -8743,7 +9122,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  the multiplex out — the web client's own fault on 2026-09-07 ("the spectrum can be clicked
      *  which knocks the multiplex tuning off"). The client refuses it; this stops the UI acting as
      *  though it worked, which is the difference between a locked control and a broken one. */
-    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current) return;   // ★ ADS-B: the server owns the view as well
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current) return;   // ★ ADS-B (and NDB): the server owns the view as well
     markInteract();
     const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     const a = wfZoomAcc.current;
@@ -8766,7 +9145,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
     if (askGate()) return;                 // ★★ ask before tuning — see askGate
-    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current) return;   // ★ see wfZoomBy — a tap is a view move too
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current) return;   // ★ see wfZoomBy — a tap is a view move too
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (noTuneNow(c)) return;
@@ -8789,7 +9168,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onMode = useCallback((m: SDRMode) => {
     const c = client.current; if (!c) return;
     // ★★ ask before tuning; re-picking changes nothing — except in ADS-B, where any pick gives the radio back
-    if ((m !== c.getStatus().mode || adsbOnRef.current || ismOnRef.current) && askGate()) return;
+    if ((m !== c.getStatus().mode || adsbOnRef.current || ismOnRef.current || ndbOnRef.current || aisOnRef.current) && askGate()) return;
     /* ★★★ CHOOSING ANOTHER DEMODULATOR IS HOW YOU LEAVE DAB. DAB is a MODE the phone enters, not
      *  a demodulator the server switches to — so while it is on, the server refuses an ordinary
      *  mode change and this sent one anyway. The only exit was the Exit button ON the DAB screen,
@@ -8820,6 +9199,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (ismOnRef.current) {
       c.ism?.(false);
       ismUiOff();
+    }
+    // ★ …and of NDB (V12), by the same door.
+    if (ndbOnRef.current) {
+      c.ndb?.(false);
+      ndbUiOff();
+    }
+    // ★ V12 …and of AIS (the web's adsbPendingMode door: leave, and the pick lands on the restored radio).
+    if (aisOnRef.current) {
+      c.ais?.(false);
+      aisUiOff();
     }
     userTuneSeq.current++;   // ★ a PERSON asked (mode) — see the note on userTuneSeq
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
@@ -8911,7 +9300,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const key = `${userTuneSeq.current}|${airStepSeq.current}`;
     if (key === airPbSeen.current) return;
     airPbSeen.current = key;
-    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current) return;
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current) return;
     const pb = airbandPassband(status.frequency, String(status.mode), airChannelNow,
                                status.bandwidthLow, status.bandwidthHigh);
     if (pb) onFilterBoth(pb[0], pb[1]);
@@ -9188,6 +9577,68 @@ export default function SDRScreen({ route, navigation }: Props) {
       setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
     }
   }, []);
+  /* ★ V12 DSC: a channel key tunes it as a DSC receiver does (USB 1.7 kHz below, or channel 70 in NFM) and, while DSC runs,
+   *  re-attaches so the decoder's tones follow — from the TARGET, not the status (the tune has not landed yet). The web's
+   *  dscTune. */
+  const onDscTune = useCallback((ch: { hz: number; vhf: boolean }) => {
+    const t = dscTuneFor(ch);
+    onTuneHz(t.hz, t.mode as SDRMode);
+    if (activeDecRef.current === 'dsc' && decoderClient.current) {
+      decoderClient.current.dscParams = dscParams(t.hz, t.mode);
+      decoderClient.current.start('dsc');
+    }
+  }, [onTuneHz]);
+  /* ★★★ V12 DIGITAL SPOTS: BAND (docs/v12/DIGITAL-SPOTS.md; the web's spotsBandBtn / bandSpotsGo / bandSpotsStep). A whole
+   *  band's digital frequencies at once — the server cuts one extra-wide slice and every mode's decoder reads its own dial.
+   *  In Band the tuning controls step BANDS (every gesture through bandSpotsStepRef), the title names the band and the
+   *  drawn VFO is the band's span. Greyed with the server's reason (the owner's switch, the benchmark's default) — a press
+   *  says why and starts nothing. */
+  const bandSpotsGo = useCallback((hz: number, id: string) => {
+    onTuneHz(hz, 'usb' as SDRMode);   // ★ a listener's own tune (a user action: the shared-dial contract holds)
+    AsyncStorage.setItem('lsv_spot_band' + radioKeySuffix, id).catch(() => {});
+  }, [onTuneHz, radioKeySuffix]);
+  const onSpotsBand = useCallback(() => {
+    const cap = spotsBandCapRef.current;
+    if (!cap) return;
+    markInteract();
+    if (!cap.ok) { appAlert('Band spots unavailable', cap.why); return; }
+    if (spotsBandOnRef.current) { stopSpots(); return; }
+    void AsyncStorage.getItem('lsv_spot_band' + radioKeySuffix).catch(() => null).then((last) => {
+      const dial = client.current?.getStatus().frequency ?? 0;
+      const b = landingSpotBand(cap.bands, dial, last ?? null);
+      if (!b) return;
+      closeDecoder();
+      if (spotsKindRef.current !== 'digi') { setSpots([]); startSpotFlush(); }
+      spotsKindRef.current = 'digi'; setSpotsKind('digi');
+      spotsBandOnRef.current = true; setSpotsBandOn(true); setSpotModeStates([]);
+      decoderClient.current?.startSpots('digi', 'band');
+      if (!spotBandAt(cap.bands, dial)) bandSpotsGo(b.hz, b.id);   // ★ on a band already: stay where you are
+    });
+  }, [stopSpots, closeDecoder, startSpotFlush, bandSpotsGo, radioKeySuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** One band up or down — clamped at the ends, never wrapped (DAB's and ISM's rule); at an end it says so. */
+  bandSpotsStepRef.current = (dir: number) => {
+    const cap = spotsBandCapRef.current;
+    if (!cap || !spotsBandOnRef.current) return false;
+    const dial = client.current?.getStatus().frequency ?? 0;
+    const i = stepSpotBand(cap.bands, dial, dir);
+    if (i < 0) return true;
+    const b = cap.bands[i];
+    const cur = spotBandAt(cap.bands, dial);
+    if (cur && cur.id === b.id) {
+      setDecoderStatus(dir < 0 ? `${b.name} is the lowest band this radio reaches` : `${b.name} is the highest band this radio reaches`);
+      return true;
+    }
+    if (askGate()) return true;
+    markInteract();
+    bandSpotsGo(b.hz, b.id);
+    return true;
+  };
+  /** ★ V12 DSC MAP — the positions on this server's map (the track layer), found on the call pressed. Not on Apple TV (no
+   *  WebView there, so no MAP key at all — never a dead control). */
+  const onDscMap: ((c: DscCall) => void) | undefined = IS_APPLE_TV ? undefined
+    : (c: DscCall) => { markInteract(); setDscFocus(dscKey(c)); setDscMapOpen(true); };
+  /** ★ V12: can this radio be tuned to `hz` (the DSC / JTTY keys drawn) — the clamp range and the server's tunable windows. */
+  const canReach = (hz: number) => !!client.current && hzReachable(hz, tuneBoundsOf(client.current), radioTunable);
 
   /** ★★ TYPED ENTRY, THE WAY A PILOT TYPES IT. In the COM band a value on a 5 kHz boundary is a
    *  channel NAME (118.010 → 118.0083 MHz; 121.5 → 121.500) and the name typed is the one the readout
@@ -9656,6 +10107,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [recvLon, setRecvLon] = useState<number | null>(null);
   /** ★ V12: a VibeServer's own position from /location (lat/lon or its locator) — names NAVTEX stations. */
   const [serverPos, setServerPos] = useState<{ lat: number; lon: number } | null>(null);
+  /* ★★ V12 AIS / APRS: what the map is handed — remade only when a report or the position changes (each push is an
+   *  injection into the page). The receiver is the server's own /location (the ADS-B map's rule). */
+  const trkRx = (serverPos ?? recvLoc) ?? null;
+  const aisTrk = useMemo(() => ({
+    items: aisItems(aisReport, trkRx), rows: aisListRows(aisReport, trkRx), status: aisStatus(aisReport),
+    empty: aisReport ? AIS_EMPTY : 'Taking the receiver to 162 MHz…', safety: aisSafetyLines(aisReport),
+    trail: (key: string) => new Promise<[number, number][]>((resolve) => {
+      const m = Number(key);
+      const c = client.current;
+      if (!(m > 0) || !c?.aisTrail) { resolve([]); return; }
+      const prev = aisTrailWait.current.get(m);
+      if (prev) prev([]);
+      aisTrailWait.current.set(m, resolve);
+      c.aisTrail(m);
+      setTimeout(() => { if (aisTrailWait.current.get(m) === resolve) { aisTrailWait.current.delete(m); resolve([]); } }, 6000);
+    }),
+  }), [aisReport, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const dscTrk = useMemo(() => ({
+    items: dscItems(dscCalls), rows: dscListRows(dscCalls, trkRx, Date.now()),
+    status: `${dscCalls.filter((c) => c.lat !== null).length} of ${dscCalls.length} calls sent a position`,
+    empty: DSC_MAP_EMPTY, focus: dscFocus, trail: () => Promise.resolve([] as [number, number][]),
+  }), [dscCalls, trkRx?.lat, trkRx?.lon, dscFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const aprsTrk = useMemo(() => ({
+    items: aprsItems(aprsList, trkRx), rows: aprsListRows(aprsList, trkRx), status: aprsStatus(aprsList, aprsCap.hz),
+    empty: APRS_EMPTY, focus: aprsFocus,
+    trail: (key: string) => Promise.resolve(aprsTrails.current.get(key) ?? []),
+  }), [aprsList, trkRx?.lat, trkRx?.lon, aprsCap.hz, aprsFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★ V12 ADS-B: THE REPORT INTO THE APP'S AIRCRAFT, ranged from THIS receiver (the server's own /location — the
    *  NAVTEX naming's position), nearest first. Into `aircraft`, so the table and the WATCH (sendAircraft above,
    *  unchanged from OWRX) read one list. Re-ranged if the position lands after the first report. */
@@ -9676,6 +10154,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     }, 2000);
     return () => clearInterval(t);
   }, [adsbOn, adsbUiOff]);
+  /* ★ V12 NDB: the same lapsed hold — a report a second; ten seconds of none while we believe the radio is in NDB (its
+   *  last listener left and it was given back, telling nobody) lets the map go. The next report puts it straight back. */
+  useEffect(() => {
+    if (!ndbOn) return;
+    const t = setInterval(() => { if (Date.now() - ndbLastAt.current > 10_000) ndbUiOff(); }, 2000);
+    return () => clearInterval(t);
+  }, [ndbOn, ndbUiOff]);
   const ituRegion = useMemo(
     () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
@@ -11528,7 +12013,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB, ADS-B and ISM, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz) where the server has it, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls, with the channels to tune) and APRS (packet stations, with MAP in its box) where the server has them, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Where the server offers it, SPOTS: BAND beside DIGITAL SPOTS reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
@@ -11919,8 +12404,8 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  tuning moves it as ever, and the server's skimmer follows the dial. */
         /* ★ V12 ISM: no LISTEN needle on a band capture (the web's wf.vfoHidden) — every renderer path reads it. */
         needleHidden={ismOn}
-        filterLow={cwDrawnPassband(activeDecoder === 'cw' && cwSkim, cwWidth, status.bandwidthLow, status.bandwidthHigh).low}
-        filterHigh={cwDrawnPassband(activeDecoder === 'cw' && cwSkim, cwWidth, status.bandwidthLow, status.bandwidthHigh).high}
+        filterLow={bandDrawn ? bandDrawn[0] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).low}
+        filterHigh={bandDrawn ? bandDrawn[1] : cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).high}
         /* ★★★ THE VISUAL TRIM ON THE SPECTRUM — applied by shifting the RANGE, never by editing
          *  the bins. The adapters hand us a reused buffer (see the note on visualGain), so an
          *  in-place offset would accumulate every frame. Mapping through a range shifted by -vg is
@@ -12153,7 +12638,28 @@ export default function SDRScreen({ route, navigation }: Props) {
           spots={spots}
           onTuneHz={onTuneHz}
           /* ★ V12 CW: the list + spots, and a tap tunes to that signal in CW (the web's cwTune: recentred). */
+          /* ★ V12 APRS: the stations, messages and packets; MAP opens the station map (on a station, for a row). No map on
+           *  Apple TV: the rows are read there. */
+          aprs={activeDecoder === 'aprs' ? {
+            rows: aprsBoxRows(aprsList, (serverPos ?? recvLoc) ?? null), messages: aprsMessageLines(aprsList), log: aprsLog,
+            baud: aprsBaud,
+            onMap: IS_APPLE_TV ? null : (key?: string) => { markInteract(); setAprsFocus(key ?? ''); setAprsMapOpen(true); },
+          } : null}
           cw={activeDecoder === 'cw' ? { skim: cwSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => { if (hz > 0) onTuneHz(hz, 'cwu' as SDRMode); } } : null}
+          /* ★ V12 PSK: the same list; a tap = USB with the signal in the middle of the passband (LSB if in LSB — pskTuneFor). */
+          psk={activeDecoder === 'psk' ? { skim: pskSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => {
+            if (!(hz > 0)) return;
+            const t = pskTuneFor(hz, String(status.mode), status.bandwidthLow, status.bandwidthHigh);
+            onTuneHz(t.hz, t.mode as SDRMode);
+          } } : null}
+          /* ★ V12 JTTY: a tap = USB, the dial 1500 Hz below the station (jttyTuneFor). */
+          jtty={activeDecoder === 'jtty' ? { list: jttyList, spots: jttySpots, onTune: (rf: number) => { if (rf > 0) onTuneHz(jttyTuneFor(rf), 'usb' as SDRMode); } } : null}
+          /* ★ V12 DSC: the calls; MAP for a position (dscMapOpen — the server's own map). */
+          dsc={activeDecoder === 'dsc' ? { calls: dscCalls, onMap: onDscMap } : null}
+          /* ★ V12 digital spots: this server's modes (the MODE filter), Band's title and the governor's chips. */
+          spotModes={spotModesSrv}
+          spotsTitle={spotsKind === 'digi' && (spotModesSrv || spotsBandOn) ? spotsTitleText(spotsBandOn, spotsBandCap, status.frequency, spotModesSrv) : undefined}
+          spotModeStates={spotsBandOn ? spotModeStates : undefined}
           /* ★★ V12 THE SCANNER — the decoder box's body while SCANNER is the decoder (ScannerPanel). */
           scanner={activeDecoder === 'scanner' ? {
             ctl: scanner.ctl, rev: scanner.rev, meterMode: signalMode, onSource: onScanSource,
@@ -12551,7 +13057,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           frequency={status.frequency}
           /* ★ In ADS-B the mode box reads ADSB, not the demod the receiver will come back to (status.mode stays on it,
            *  as in DAB) — the OWRX ADS-B profile already reads this way (constants/modeBox composeModeLabel). */
-          mode={adsbOn ? ('adsb' as SDRMode) : ismOn ? ('ism' as SDRMode) : status.mode}
+          mode={adsbOn ? ('adsb' as SDRMode) : ismOn ? ('ism' as SDRMode) : aisOn ? ('ais' as SDRMode) : status.mode}
           step={step}
           connected={connected}
           bottomInset={0}
@@ -12921,6 +13427,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       )}
       </RotateFade>
+      {/* ★★ V12 THE DRM BOX — while the mode is DRM, where the decoder box sits (it stands down while a decoder or the
+          spots are open, and for the whole-radio modes, which leave DRM anyway). */}
+      <RotateFade>
+      {status.mode === 'drm' && !activeDecoder && !spotsKind && !ismBoxOpen && !dabOn && (
+        <PanelBoundary name="DRM" onClose={() => setDrmState(null)}>
+        <DrmPanel state={drmState}
+                  bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH} />
+        </PanelBoundary>
+      )}
+      </RotateFade>
       {/* ★★ V12 THE ISM BOX — over the lower waterfall, the waterfall live above it (IsmPanel). */}
       <RotateFade>
       {ismBoxOpen && (
@@ -13042,7 +13558,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDbMax={setDbMax}
         onFilterLow={onFilterLow}
         onFilterHigh={onFilterHigh}
-        onFilterBoth={onFilterBoth}
+        onFilterBoth={status.mode === 'drm' ? undefined : onFilterBoth}   // ★ V12 DRM cuts its own channel: no width
         onNr={onNrMode}
         onZoomIn={onZoomIn}
         onZoomOut={onZoomOut}
@@ -13289,7 +13805,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★★★ AN ICOM: only the client modes its radio modes map to (usb/lsb/am/cwu/cwl/nfm) — never WFM, which
            *  an HF transceiver does not have. The radio's own names (USB-D, RTTY …) are in the radio panel. */
           const icomModes = icom ? new Set(icom.modes.map(icomClientMode)) : null;
-          const base0 = isLocal ? LOCAL_MODES
+          // ★ V12 DRM beside AM where this server offers it (the web's offeredModes)
+          const vibeModes = drmCapable ? withDrm(LOCAL_MODES) : LOCAL_MODES;
+          const base0 = isLocal ? vibeModes
                     : route.params.serverType === 'owrx' ? serverModes
                     : LOCAL_MODES;
           const base = icomModes && base0 ? base0.filter((m) => icomModes.has(String(m.id).toLowerCase())) : base0;
@@ -13306,7 +13824,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         filterHigh={status.bandwidthHigh}
         bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
         bwEdgeMin={client.current ? filterEdgeMin(client.current.caps, status.mode) : 0}
-        onFilterBoth={onFilterBoth}
+        onFilterBoth={status.mode === 'drm' ? undefined : onFilterBoth}   // ★ V12 DRM: the width row is not offered
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
         showServerMaps={(route.params.serverType ?? 'ubersdr') !== 'owrx' && !isLocal && !isKiwi}
@@ -13386,7 +13904,45 @@ export default function SDRScreen({ route, navigation }: Props) {
             setModeSelOpen(false);
             toggleIsm();
           },
+          /* ★★ V12 NDB, beside ISM — the same three states (absent / greyed with the server's reason / live); never on Apple
+           *  TV, which has no WebView for the map that IS the mode (a key that opened nothing would be a dead control). */
+          ndbAvail: !IS_APPLE_TV && (ndbCap !== undefined || ndbOn),
+          ndbWhy: !ndbOn && ndbCap && !ndbCap.ok ? ndbCap.why : undefined,
+          ndbOn,
+          onNdb: () => {
+            markInteract();
+            if (!ndbOnRef.current && ndbCap && !ndbCap.ok) { appAlert('NDB unavailable', ndbCap.why || 'NDB is not available on this receiver'); return; }
+            setModeSelOpen(false);
+            toggleNdb();
+          },
           cwSkim, cwWidth, onCwView, onCwWidth,
+          /* ★★ V12 PSK31/63, JTTY, DSC — the server's own decoders, each only where its vibeserver.json says so. The JTTY
+           *  bands and DSC channels drawn are only those this radio can be tuned to (the web's initJttyDials /
+           *  initDscChannels: no dead keys). */
+          pskAvail: pskCapable && !!(client.current as any)?.isVibe,
+          pskSkim, pskWidth, onPskView, onPskWidth,
+          jttyAvail: jttyCapable && !!(client.current as any)?.isVibe,
+          jttyDials: jttyDialsReachable(canReach),
+          onJttyDial: (hz: number) => { markInteract(); onTuneHz(hz, 'usb' as SDRMode); },
+          dscAvail: dscCapable && !!(client.current as any)?.isVibe,
+          dscChans: dscChannelsReachable(canReach),
+          onDscChan: (ch: { hz: number; vhf: boolean }) => { markInteract(); onDscTune(ch); },
+          tunedHz: status.frequency,
+          /* ★★ V12 AIS, beside ISM — the same three states; never on Apple TV (no map there: the mode's screen is the map). */
+          aisAvail: !IS_APPLE_TV && (aisCap !== undefined || aisOn),
+          aisWhy: !aisOn && aisCap && !aisCap.ok ? aisCap.why : undefined,
+          aisOn,
+          onAis: () => {
+            markInteract();
+            if (!aisOnRef.current && aisCap && !aisCap.ok) { appAlert('AIS unavailable', aisCap.why || 'AIS is not available on this receiver'); return; }
+            setModeSelOpen(false);
+            toggleAis();
+          },
+          /* ★★ V12 APRS — only where the radio's vibeserver.json says "aprs": true (an older server: no key). TUNE puts the
+           *  dial on the region's channel in NFM, or 10.1476 MHz USB — a listener's own tune. */
+          aprsAvail: aprsCap.on && !!(client.current as any)?.isVibe,
+          aprsBaud, aprsHz: aprsCap.hz, onAprsBaud,
+          onAprsTune: () => { const t = aprsTuneFor(aprsBaudRef.current, aprsCap.hz); markInteract(); onTuneHz(t.hz, t.mode as SDRMode); },
         } : null}
         transcribeControls={txCaps?.available ? {
           active: activeDecoder === 'transcribe',
@@ -13482,6 +14038,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         spotsControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' ? {
           label: (isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS',
           spotsKind, onSpotsToggle,
+          /* ★★ V12 BAND — only where this radio's vibeserver.json lists spotBands (absent = no key); greyed with its why. */
+          band: spotsBandCap ? { ok: spotsBandCap.ok, on: spotsBandOn, hint: spotsBandHint(spotsBandCap), onPress: onSpotsBand } : undefined,
+          singleOn: spotsKind === 'digi' && !spotsBandOn,
           onSpotsMap: () => { setModeSelOpen(false); if (spotsKindRef.current !== 'digi') onSpotsToggle('digi'); setLocalMapOpen(true); },
           showCwStt: !isLocal && !isKiwi, showMap: isLocal || isKiwi,
           sttActive: selDecoder === 'whisper' && activeDecoder === 'whisper',
@@ -13744,18 +14303,29 @@ export default function SDRScreen({ route, navigation }: Props) {
           adsb_off is what finally takes the map down. A crash in it only puts it away (the mode key brings it back). */}
       {/* ★ IS_TV is true on ANDROID TV as well, which has a WebView: ADS-B's map is drawn there (it is the mode's only
           screen off Apple TV); the other server maps keep their old gate (tv.ts IS_APPLE_TV). */}
-      {(!IS_TV || (shownMap === 'adsb' && !IS_APPLE_TV)) && <PanelBoundary name="Map" onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : setMapKind(null))}
+      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
+                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : setMapKind(null))}
                                 resetKey={shownMap !== null}><MapOverlay
         visible={shownMap !== null}
         kind={shownMap}
         baseUrl={baseUrl}
         radioUrl={connectBase}
         sessionUuid={sessionUuid}
-        onClose={() => (shownMap === 'adsb' ? exitAdsb() : setMapKind(null))}
+        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
          *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
-        rxLat={shownMap === 'adsb' ? (serverPos ?? recvLoc)?.lat ?? null : undefined}
-        rxLon={shownMap === 'adsb' ? (serverPos ?? recvLoc)?.lon ?? null : undefined}
+        rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' ? (serverPos ?? recvLoc)?.lat ?? null : undefined}
+        rxLon={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' ? (serverPos ?? recvLoc)?.lon ?? null : undefined}
+        /* ★★ V12 NDB: the report, the readings kept, Find and the stats (NdbLiveList) — the page opens no socket of its own. */
+        ndb={shownMap === 'ndb' ? {
+          report: ndbReport, tracks: ndbTracks.current, seq: ndbSeq, found: ndbFound, findResult: ndbFindResult, stats: ndbStats,
+          onFind: (q: string) => { client.current?.ndbFind?.(q, q ? 120 : 300); },
+          onStats: () => { setNdbStats(null); client.current?.ndbStats?.(); },
+        } : undefined}
+        /* ★★ V12 AIS / APRS: the items (icon, label, card made here), the live list, its status and the AIS safety strip. */
+        trk={shownMap === 'ais' ? aisTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : null}
+        /* ★ V12 the spots map's MODE filter and legend: this server's modes (vibeserver.json spotModes), by family */
+        spotModes={shownMap === 'digi' ? spotModesSrv : undefined}
         adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}
         adsbCapture={shownMap === 'adsb' ? adsbCaptureWarning(adsbReport) : undefined}
         /* ★★ V12 the ADS-B GAIN key — only where the radio has a gain list the owner has not fixed (adsbGainView says null

@@ -6,14 +6,20 @@ import { cleanLines } from '../utils/cleanLines';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { parseAdsbCapability, type AdsbCap } from './adsbTypes';
 import { parseIsmCapability, type IsmCap } from './ism';
+import { parseTunable } from '../utils/tuneWindow';
+import { parseSpotModes, parseSpotsBandCap, type SpotsBandCap } from './spotsBand';
+import { parseNdbCapability } from './ndb';
+import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';   // ★ V12 AIS / APRS
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
+// ★ V12 'drm' = Digital Radio Mondiale, a VibeServer demodulator offered only where its vibeserver.json `modes` lists it
+//   (docs/v12/DRM.md); not in MODES. The server receives it whole per listener; the client draws the DRM box.
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm';
 export type Mode = SDRMode; // alias
 
 export const MODES: SDRMode[] = ['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl'];
 export const MODE_LABELS: Record<SDRMode, string> = {
   usb: 'USB', lsb: 'LSB', am: 'AM', sam: 'SAM',
-  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM',
+  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM', drm: 'DRM',
 };
 
 // ★ 5 kHz is the shortwave BROADCAST raster (the 49 m to 16 m bands channel on it) — a DL8LDN
@@ -436,9 +442,26 @@ export interface ServerOccupancy {
   /** ★ V12 CW (docs/v12/CW-SKIMMER.md): this server runs its own CW decoder and skimmer ('cw' / 'cwskim'). False or
    *  absent (an older server, or the owner switched CW off) = no CW key — a decoder the server lacks is a dead control. */
   cw?: boolean;
+  /** ★ V12 PSK31/63, JTTY, DSC (docs/v12/PSK.md, JTTY.md, DSC.md): this server's own decoders. False or absent = no key. */
+  psk?: boolean;
+  jtty?: boolean;
+  dsc?: boolean;
+  /** ★ V12: where this radio can be tuned (Hz windows after the owner's lists) — decides which channel / band keys draw. */
+  tunable?: Array<[number, number]>;
+  /** ★ V12 digital spots (docs/v12/DIGITAL-SPOTS.md): the modes this server decodes, Band mode's capability and bands. */
+  spotModes?: string[];
+  spotsBand?: SpotsBandCap;
+  /** ★ V12: the demodulators this server offers (`modes`) — DRM is offered only where it lists "drm". */
+  modes?: string[];
   /** ★ V12 ISM (docs/v12/ISM-DECODER.md): undefined = no control (an HF+ reaches no ISM band, an older server);
    *  `ok: false` = greyed with the reason; `bands` = the bands THIS radio reaches. */
   ism?: IsmCap;
+  /** ★ V12 NDB: absent = the radio reaches no LF (no control); `ok: false` = greyed with the reason; lo/hi = the slice. */
+  ndb?: import('./ndb').NdbCap;
+  /** ★ V12 AIS: `ok: true` live, `ok: false` greyed with the reason; absent = the radio cannot reach 162 MHz (no key). */
+  ais?: AisCap;
+  /** ★ V12 APRS: the server's own packet decoder (`on`), and the region's VHF channel. */
+  aprs?: { on: boolean; hz: number };
   /** ★ Raw IQ out: the owner's policy and the slots. Absent on an older server. */
   rawIq?: 'off' | 'local' | 'public';
   rawIqMax?: number;
@@ -488,7 +511,17 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       dab:       j.dab === true,
       adsb:      parseAdsbCapability(j),
       cw:        j.cw === true,
+      psk:       j.psk === true,
+      jtty:      j.jtty === true,
+      dsc:       j.dsc === true,
+      tunable:   parseTunable(j.tunable),
+      spotModes: parseSpotModes(j.spotModes),
+      spotsBand: parseSpotsBandCap(j),
+      modes:     Array.isArray(j.modes) ? j.modes.filter((m: unknown) => typeof m === 'string').map((m: string) => m.slice(0, 12)).slice(0, 40) : undefined,
       ism:       parseIsmCapability(j),
+      ndb:       parseNdbCapability(j),   // ★ V12 NDB — absent where this radio reaches no LF
+      ais:       parseAisCapability(j),
+      aprs:      parseAprsCapability(j),
     };
   } catch { return null; }
   finally { clearTimeout(t); }

@@ -26,9 +26,12 @@ const SHEET_BG = 'rgba(8,6,1,0.97)';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
-import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText } from '../services/cwList';
+import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText } from '../services/cwList';
+import { JTTY_HINT } from '../services/jtty';
+import { DSC_HINT } from '../services/dsc';
+import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -135,7 +138,8 @@ function fmtHz(hz: number) {
 
 // Common analog/voice demodulators shown as buttons; everything else the server
 // offers (digital, decoders, sondes…) goes into the in-popup dropdown.
-const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'sam', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
+// ★ V12 'drm' is a demodulator beside AM (a VibeServer's DRM receiver; OpenWebRX's own DRM too) — a main key, not a decoder
+const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'drm', 'sam', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
 const DEC_COL = '#52dc64';   // active-decoder accent (matches VTS live-data green)
 
 // ── Decoder-settings helpers (moved with the decoders from MenuSheet §4.3) ──────
@@ -291,12 +295,32 @@ interface ModeSelectorProps {
     /** ★★ V12 ISM — the same kind of key as ADS-B (a whole-radio mode) and the same three states: absent (`ismAvail`
      *  false — an HF+ reaches no band), dimmed with the server's reason under the row (`ismWhy`), live. */
     ismAvail?: boolean; ismWhy?: string; ismOn?: boolean; onIsm?: () => void;
+    /** ★★ V12 NDB — the same kind of key again (a whole-radio mode whose screen is a map): absent where the radio reaches
+     *  no LF (an RTL without direct sampling, a HackRF, an R2, an Icom), dimmed with the server's reason, live. */
+    ndbAvail?: boolean; ndbWhy?: string; ndbOn?: boolean; onNdb?: () => void;
+    /** ★★ V12 AIS — ISM's kind of key, beside it, and the same three states: absent (`aisAvail` false — the radio cannot
+     *  reach 162 MHz, an HF+, an Icom; or Apple TV, which has no map), dimmed with the server's reason (`aisWhy`), live. */
+    aisAvail?: boolean; aisWhy?: string; aisOn?: boolean; onAis?: () => void;
+    /** ★★ V12 APRS — a VibeServer's own packet decoder, only where vibeserver.json says `"aprs": true`. Its settings:
+     *  PACKET VHF 1200 / HF 300, a TUNE key (the region's channel `aprsHz` in NFM, or 10.1476 USB) and the hint. */
+    aprsAvail?: boolean; aprsBaud?: AprsBaud; aprsHz?: number;
+    onAprsBaud?: (b: AprsBaud) => void; onAprsTune?: () => void;
     /** ★★ V12 THE SCANNER — a decoder-box item (docs/v12/SCANNER.md). Absent (not greyed) where scanPolicy says no: FM-DX,
      *  a VibeServer with one shared dial. `onlyScanner`: a backend with no client decoders of ours (OpenWebRX — its own
      *  decoders are demodulators in this sheet) draws the row with the scanner alone. */
     scanAvail?: boolean; scanOn?: boolean; onScan?: () => void; onlyScanner?: boolean;
     cwAvail?: boolean; cwSkim?: boolean; cwWidth?: number;
     onCwView?: (skim: boolean) => void; onCwWidth?: (w: number) => void;
+    /** ★★ V12 PSK31/63 — CW's two views (ONE SIGNAL / SKIMMER over 6/12/24 kHz), only where `"psk": true`. */
+    pskAvail?: boolean; pskSkim?: boolean; pskWidth?: number;
+    onPskView?: (skim: boolean) => void; onPskWidth?: (w: number) => void;
+    /** ★★ V12 JTTY — only where `"jtty": true`; its settings are the announced calling frequencies THIS radio reaches. */
+    jttyAvail?: boolean; jttyDials?: Array<{ hz: number; label: string }>; onJttyDial?: (hz: number) => void;
+    /** ★★ V12 DSC — only where `"dsc": true`; its settings are the DSC channels THIS radio reaches. */
+    dscAvail?: boolean; dscChans?: Array<{ hz: number; label: string; vhf: boolean }>;
+    onDscChan?: (ch: { hz: number; label: string; vhf: boolean }) => void;
+    /** The dial now — lights the JTTY band / DSC channel key the radio is on. */
+    tunedHz?: number;
     /** ★★★ THE SLUGS THIS RECEIVER PUBLISHES (`/api/extensions`), or null for "never asked".
      *  A decoder the server does not run is a DEAD CONTROL — it presses, and nothing happens. So
      *  the row is filtered to what is actually there. null offers everything, because a failed
@@ -354,6 +378,10 @@ interface ModeSelectorProps {
   spotsControls?: {
     label: string; spotsKind: string | null;
     onSpotsToggle: (k: 'digi' | 'cw') => void; onSpotsMap?: () => void;
+    /** ★★ V12 BAND (docs/v12/DIGITAL-SPOTS.md): absent = no key (no band reachable, or an older server); `ok` false =
+     *  drawn dimmed with the server's reason under the row (a press explains). `singleOn`: DIGITAL SPOTS is Single now. */
+    band?: { ok: boolean; on: boolean; hint: string; onPress: () => void };
+    singleOn?: boolean;
     showCwStt: boolean; showMap: boolean;
     sttActive: boolean; sttSelected: boolean; onSttToggle: () => void;
   } | null;
@@ -375,6 +403,12 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   });
   const advRdsShown = !!decoderControls?.advRdsAvail && !isBlocked('rds');
   const cwShown = !!decoderControls?.cwAvail && !isBlocked('cw');
+  // ★ V12 the server's own PSK / JTTY / DSC — each only where this radio's vibeserver.json names it, and not blocked
+  const pskShown = !!decoderControls?.pskAvail && !isBlocked('psk');
+  const jttyShown = !!decoderControls?.jttyAvail && !isBlocked('jtty');
+  const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
+  const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
+  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || aprsShown;
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
    *  decoders section is dropped and DAB is drawn with the demodulators. */
@@ -382,11 +416,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  the decoders row. */
   const adsbShown = !!decoderControls?.adsbAvail;
   const ismShown = !!decoderControls?.ismAvail && !isBlocked('ism');
+  const ndbShown = !!decoderControls?.ndbAvail && !isBlocked('ndb');   // ★ V12 NDB
+  const aisShown = !!decoderControls?.aisAvail && !isBlocked('ais');   // ★ V12 AIS
   const scanShown = !!decoderControls?.scanAvail && !isBlocked('scanner');
-  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown;
-  const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !cwShown && !scanShown;
+  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown || ndbShown || aisShown;
+  const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !srvDecShown && !scanShown;
   const decSectionShown = !!decoderControls && !dabInGrid
-    && (clientDecs.length > 0 || advRdsShown || wholeAvail || cwShown || scanShown);
+    && (clientDecs.length > 0 || advRdsShown || wholeAvail || srvDecShown || scanShown);
   const { theme: theme0 } = useTheme();
   const surf = usePopupSurface();
   const pt = usePopupTheme();
@@ -435,6 +471,25 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  REFUSED ≠ ABSENT (memory: disabled_control_reads_as_absent): a refused key is dimmed AND its reason is printed
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
+  /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'aprs', label: string, a11y: string) => {
+    const dc = decoderControls!;
+    const active = dc.decMode === id && dc.decOn;
+    const lit = dc.decMode === id;
+    return (
+      <NavItem key={id} onPress={() => dc.onDecToggle(id)}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label={label} active={lit} pip onPress={() => dc.onDecToggle(id)} />
+      ) : (
+      <TouchableOpacity ref={navRef as any} accessibilityLabel={a11y} accessibilityState={{ selected: lit }}
+        style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: 10 },
+                active && { backgroundColor: decBg },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onDecToggle(id)} activeOpacity={0.8}>
+        <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>{label}</Text>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
   const adsbOff = !!decoderControls?.adsbWhy;
   const adsbLit = !!decoderControls?.adsbOn;
   const adsbKey = (inGrid: boolean) => {
@@ -484,6 +539,66 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       )}</NavItem>
     );
   };
+  /* ★★ V12 THE NDB KEY — ISM's key, for NDB (one definition for the grid and the decoders row). */
+  const ndbOff = !!decoderControls?.ndbWhy;
+  const ndbLit = !!decoderControls?.ndbOn;
+  const ndbKey = (inGrid: boolean) => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="ndb" onPress={() => dc.onNdb?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="NDB" active={ndbLit} pip
+          onPress={() => dc.onNdb?.()} fontSize={inGrid ? 13 : 12} style={ndbOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={ndbOff ? `NDB, unavailable: ${dc.ndbWhy}` : 'NDB beacons — every aeronautical beacon on the LF band, with a map'}
+        style={[st.btn, { borderColor: ndbLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+                ndbLit && { backgroundColor: decBg },
+                ndbOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onNdb?.()} activeOpacity={0.8}>
+        <Text numberOfLines={1}
+              style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: ndbLit ? dec : t.btnText }]}>
+          NDB
+        </Text>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
+  /* ★★ V12 THE AIS KEY — ISM's key, for AIS (one definition for the grid and the decoders row). */
+  const aisOff = !!decoderControls?.aisWhy;
+  const aisLit = !!decoderControls?.aisOn;
+  const aisKey = (inGrid: boolean) => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="ais" onPress={() => dc.onAis?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="AIS" active={aisLit} pip
+          onPress={() => dc.onAis?.()} fontSize={inGrid ? 13 : 12} style={aisOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={aisOff ? `AIS, unavailable: ${dc.aisWhy}` : 'AIS ships'}
+        style={[st.btn, { borderColor: aisLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+                aisLit && { backgroundColor: decBg },
+                aisOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onAis?.()} activeOpacity={0.8}>
+        <Text numberOfLines={1}
+              style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: aisLit ? dec : t.btnText }]}>
+          AIS
+        </Text>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
+  const ndbWhyLine = ndbOff ? (
+    <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+      {`NDB unavailable — ${decoderControls!.ndbWhy}`}
+    </Text>
+  ) : null;
+  const aisWhyLine = aisOff ? (
+    <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+      {`AIS unavailable — ${decoderControls!.aisWhy}`}
+    </Text>
+  ) : null;
   const ismWhyLine = ismOff ? (
     <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
       {`ISM unavailable — ${decoderControls!.ismWhy}`}
@@ -839,9 +954,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           )}
           {dabInGrid && adsbShown && adsbKey(true)}
           {dabInGrid && ismShown && ismKey(true)}
+          {dabInGrid && ndbShown && ndbKey(true)}
+          {dabInGrid && aisShown && aisKey(true)}
         </View></NavRow>
         {dabInGrid && adsbShown && adsbWhyLine}
         {dabInGrid && ismShown && ismWhyLine}
+        {dabInGrid && ndbShown && ndbWhyLine}
+        {dabInGrid && aisShown && aisWhyLine}
 
         {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
             LEFT to widen the lower sideband, the RIGHT one RIGHT to widen the
@@ -1014,24 +1133,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   )}</NavItem>
                 );
               })}
-              {cwShown && (() => {
-                const active = decoderControls.decMode === 'cw' && decoderControls.decOn;
-                const lit = decoderControls.decMode === 'cw';
-                return (
-                  <NavItem key="cw" onPress={() => decoderControls.onDecToggle('cw')}>{(navFocused, navRef) => pt.metal ? (
-                    <MetalKey navRef={navRef} focused={navFocused} label="CW" active={lit} pip
-                      onPress={() => decoderControls.onDecToggle('cw')} />
-                  ) : (
-                  <TouchableOpacity ref={navRef as any} accessibilityLabel="CW decoder"
-                    style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: 10 },
-                            active && { backgroundColor: decBg },
-                            navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
-                    onPress={() => decoderControls.onDecToggle('cw')} activeOpacity={0.8}>
-                    <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>CW</Text>
-                  </TouchableOpacity>
-                  )}</NavItem>
-                );
-              })()}
+              {cwShown && srvKey('cw', 'CW', 'CW decoder')}
+              {/* ★★ V12 PSK31/63, JTTY, DSC — the server's own decoders, beside CW (the web's DECODERS row). */}
+              {pskShown && srvKey('psk', 'PSK', 'PSK31 and PSK63 decoder')}
+              {jttyShown && srvKey('jtty', 'JTTY', 'JTTY keyboard-mode decoder')}
+              {dscShown && srvKey('dsc', 'DSC', 'Maritime DSC decoder')}
+              {/* ★★ V12 APRS — the server's own packet decoder (only where it says "aprs": true). */}
+              {aprsShown && srvKey('aprs', 'APRS', 'APRS packet decoder')}
               {/* ★★ V12 THE SCANNER — opens in the decoder box like the others; replaces a running decoder, as switching
                   decoders always has (one box at a time). */}
               {scanShown && (
@@ -1070,6 +1178,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               )}
               {adsbShown && adsbKey(false)}
               {ismShown && ismKey(false)}
+              {ndbShown && ndbKey(false)}
+              {aisShown && aisKey(false)}
               {decoderControls.galleryAvail && (
                 <NavItem key="gallery" onPress={() => decoderControls.onGallery?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label="GALLERY" active={false}
@@ -1106,6 +1216,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             </View></NavRow>
             {adsbShown && adsbWhyLine}
             {ismShown && ismWhyLine}
+            {ndbShown && ndbWhyLine}
+            {aisShown && aisWhyLine}
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                                        : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
@@ -1153,6 +1265,75 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </Text>
               </View>
             )}
+            {/* ★ V12 PSK: the web's VIEW and SEGMENT rows and its hint (cwList pskHintText). SEGMENT only for the skimmer. */}
+            {pskShown && decoderControls.decMode === 'psk' && (
+              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
+                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
+                <SubLabel label="VIEW" />
+                <OptRow>
+                  <SegBtn label="ONE SIGNAL" active={!decoderControls.pskSkim} onPress={() => decoderControls.onPskView?.(false)} />
+                  <SegBtn label="SKIMMER" active={!!decoderControls.pskSkim} onPress={() => decoderControls.onPskView?.(true)} />
+                </OptRow>
+                {!!decoderControls.pskSkim && (<>
+                  <SubLabel label="SEGMENT" />
+                  <OptRow>{PSK_WIDTHS.map((w) => (
+                    <SegBtn key={w} label={`${w / 1000} kHz`} active={(decoderControls.pskWidth ?? PSK_DEFAULT_WIDTH) === w}
+                            onPress={() => decoderControls.onPskWidth?.(w)} />
+                  ))}</OptRow>
+                </>)}
+                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+                  {pskHintText(!!decoderControls.pskSkim, decoderControls.pskWidth ?? PSK_DEFAULT_WIDTH)}
+                </Text>
+              </View>
+            )}
+            {/* ★ V12 JTTY: the announced calling frequencies this radio reaches (preliminary — WSJT-X 3.2 RCs) and the hint. */}
+            {jttyShown && decoderControls.decMode === 'jtty' && (
+              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
+                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
+                {!!decoderControls.jttyDials?.length && (<>
+                  <SubLabel label="BAND" />
+                  <OptRow>{decoderControls.jttyDials.map((d) => (
+                    <SegBtn key={d.hz} label={d.label} active={Math.abs((decoderControls.tunedHz ?? 0) - d.hz) < 3000} onPress={() => decoderControls.onJttyDial?.(d.hz)} />
+                  ))}</OptRow>
+                </>)}
+                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+                  {JTTY_HINT}
+                </Text>
+              </View>
+            )}
+            {/* ★ V12 DSC: the distress and safety channels this radio reaches (USB 1.7 kHz below, or Ch 70 NFM) and the hint. */}
+            {dscShown && decoderControls.decMode === 'dsc' && (
+              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
+                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
+                {!!decoderControls.dscChans?.length && (<>
+                  <SubLabel label="CHANNEL" />
+                  <OptRow>{decoderControls.dscChans.map((c) => (
+                    <SegBtn key={c.hz} label={c.label} active={Math.abs((decoderControls.tunedHz ?? 0) - (c.vhf ? c.hz : c.hz - 1700)) < 1000} onPress={() => decoderControls.onDscChan?.(c)} />
+                  ))}</OptRow>
+                </>)}
+                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+                  {DSC_HINT}
+                </Text>
+              </View>
+            )}
+            {/* ★ V12 APRS: the web's PACKET row, its TUNE key and hint (tracks.ts aprsTuneFor / aprsHintText). */}
+            {aprsShown && decoderControls.decMode === 'aprs' && (
+              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
+                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
+                <SubLabel label="PACKET" />
+                <OptRow>
+                  <SegBtn label="VHF 1200" active={(decoderControls.aprsBaud ?? 1200) === 1200} onPress={() => decoderControls.onAprsBaud?.(1200)} />
+                  <SegBtn label="HF 300" active={decoderControls.aprsBaud === 300} onPress={() => decoderControls.onAprsBaud?.(300)} />
+                </OptRow>
+                <OptRow>
+                  <SegBtn label={aprsTuneFor(decoderControls.aprsBaud ?? 1200, decoderControls.aprsHz ?? 144.8e6).label} active={false}
+                          onPress={() => decoderControls.onAprsTune?.()} />
+                </OptRow>
+                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+                  {aprsHintText(decoderControls.aprsBaud ?? 1200, decoderControls.aprsHz ?? 144.8e6)}
+                </Text>
+              </View>
+            )}
             {decoderControls.decMode === 'wefax' && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                                        : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
@@ -1185,16 +1366,43 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               {spotsControls.label}
             </Text>
             <NavRow><View style={st.grid}>
+              {(() => {
+                // ★ V12: where Band exists the key says which it is — SINGLE (the modes at your dial) beside BAND
+                const lit = spotsControls.band ? !!spotsControls.singleOn : spotsControls.spotsKind === 'digi';
+                const label = spotsControls.band ? 'SPOTS: SINGLE' : 'DIGITAL SPOTS';
+                return (
               <NavItem onPress={() => spotsControls.onSpotsToggle('digi')}>{(nf, nr) => pt.metal ? (
-                <MetalKey navRef={nr} focused={nf} label="DIGITAL SPOTS" active={spotsControls.spotsKind === 'digi'} pip
+                <MetalKey navRef={nr} focused={nf} label={label} active={lit} pip
                   onPress={() => spotsControls.onSpotsToggle('digi')} />
               ) : (
-              <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: spotsControls.spotsKind === 'digi' ? dec : t.btnBorder, paddingVertical: 10 },
-                                        spotsControls.spotsKind === 'digi' && { backgroundColor: decBg },
+              <TouchableOpacity ref={nr as any} accessibilityLabel={spotsControls.band ? 'Digital spots, single mode: the modes at your dial' : 'Digital spots'}
+                                style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: 10 },
+                                        lit && { backgroundColor: decBg },
                                         nf && { borderColor: focusC.ring, borderWidth: 2 }]}
                 onPress={() => spotsControls.onSpotsToggle('digi')} activeOpacity={0.8}>
-                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'digi' ? dec : t.btnText }]}>DIGITAL SPOTS</Text>
+                <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>{label}</Text>
               </TouchableOpacity>)}</NavItem>
+                );
+              })()}
+              {/* ★★ V12 BAND — a whole band's digital frequencies at once. Dimmed with its reason (never hidden). */}
+              {!!spotsControls.band && (() => {
+                const b = spotsControls.band!;
+                return (
+                <NavItem onPress={b.onPress}>{(nf, nr) => pt.metal ? (
+                  <MetalKey navRef={nr} focused={nf} label="SPOTS: BAND" active={b.on} pip onPress={b.onPress}
+                    style={!b.ok ? { opacity: 0.45 } : undefined} />
+                ) : (
+                <TouchableOpacity ref={nr as any} accessibilityLabel={b.ok ? `Digital spots, band mode. ${b.hint}` : `Band spots, unavailable: ${b.hint}`}
+                  accessibilityState={{ selected: b.on }}
+                  style={[st.btn, { borderColor: b.on ? dec : t.btnBorder, paddingVertical: 10 },
+                          b.on && { backgroundColor: decBg },
+                          !b.ok && { opacity: 0.45, borderStyle: 'dashed' as const },
+                          nf && { borderColor: focusC.ring, borderWidth: 2 }]}
+                  onPress={b.onPress} activeOpacity={0.8}>
+                  <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: b.on ? dec : t.btnText }]}>SPOTS: BAND</Text>
+                </TouchableOpacity>)}</NavItem>
+                );
+              })()}
               {spotsControls.showCwStt && (
                 <NavItem onPress={() => spotsControls.onSpotsToggle('cw')}>{(nf, nr) => pt.metal ? (
                   <MetalKey navRef={nr} focused={nf} label="CW SPOTS" active={spotsControls.spotsKind === 'cw'} pip
@@ -1230,6 +1438,12 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </TouchableOpacity>)}</NavItem>
               )}
             </View></NavRow>
+            {/* ★ Band's reason when it cannot run (the web's #spotsBandWhy), or what it covers. */}
+            {!!spotsControls.band && (
+              <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+                {spotsControls.band.ok ? spotsControls.band.hint : `Band spots unavailable — ${spotsControls.band.hint}`}
+              </Text>
+            )}
           </View>
         )}
 

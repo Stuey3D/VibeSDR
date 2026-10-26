@@ -40,7 +40,14 @@ import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/Dec
 import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
 import CwView, { cwItems } from './CwView';
+import JttyView, { jttyItems } from './JttyView';
+import DscView, { dscHasPos } from './DscView';
+import AprsView from './AprsView';   // ★ V12 APRS
+import type { AprsBoxRow } from '../services/tracks';
 import type { CwList, CwSpot } from '../services/cwList';
+import type { JttySignal, JttySpot } from '../services/jtty';
+import type { DscCall } from '../services/dsc';
+import { spotFilterModes, spotModeMatches, spotChipText, type SpotModeState } from '../services/spotsBand';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel, DecoderBody,
          DECODER_FONT, decoderBodyInset, engraveStyle, useDecoderTokens, useDecoderStyles,
          type DecoderTokens } from './DecoderShell';
@@ -58,7 +65,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'scanner' | null;
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'scanner' | 'aprs' | null;
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
@@ -107,6 +114,22 @@ export interface DecoderPanelProps {
   /** ★ V12 CW (VibeServer): the signals list and spots for the CW view (CwView), and its tune (in CW). Set only while CW
    *  is the decoder; `skim` = the skimmer is what is attached. */
   cw?:             { skim: boolean; list: CwList | null; spots: CwSpot[]; onTune: (hz: number) => void } | null;
+  /** ★ V12 PSK31/63 (VibeServer): CW's list exactly (CwView with its mode where CW has its speed) — set while PSK runs. */
+  psk?:            { skim: boolean; list: CwList | null; spots: CwSpot[]; onTune: (hz: number) => void } | null;
+  /** ★ V12 JTTY (VibeServer): the stations and spots (JttyView) and its tune (USB, 1500 Hz below) — set while JTTY runs. */
+  jtty?:           { list: JttySignal[]; spots: JttySpot[]; onTune: (rfHz: number) => void } | null;
+  /** ★ V12 DSC (VibeServer): the calls newest first (DscView) and MAP for a position — set while DSC runs. */
+  dsc?:            { calls: DscCall[]; onMap?: (c: DscCall) => void } | null;
+  /** ★ V12 digital spots: the modes THIS server decodes (vibeserver.json spotModes — the MODE filter's choices, matched by
+   *  family: PSK31/PSK63 → PSK). Undefined = not a VibeServer that says (UberSDR's four). */
+  spotModes?:      string[];
+  /** ★ V12 BAND: the title while Band runs ("DIGITAL SPOTS · 20 M BAND") and the governor's per-mode chips. */
+  spotsTitle?:     string;
+  spotModeStates?: SpotModeState[];
+  /** ★ V12 APRS (VibeServer): the station rows, messages and packets for the APRS view (AprsView), and MAP — the station
+   *  map, on a station when a key is given (null where there is no map: Apple TV). Set only while APRS is the decoder. */
+  aprs?:           { rows: AprsBoxRow[]; messages: string[]; log: { t: number; line: string }[]; baud: 1200 | 300;
+                     onMap: ((key?: string) => void) | null } | null;
   /** OWRX DAB (§5.2): when an ensemble is tuned the panel shows the service list with logos;
    *  the speed-correction control (§4.5) rides in the header. NOT a decoder. */
   dabProgrammes?:  { id: number; name: string }[];
@@ -133,7 +156,8 @@ const MORSE_QUALITY_LABELS: Record<MorseQuality, string> = {
 };
 
 // Spots filters (skin lsv-dec-sf-mode / sf-band / sf-age)
-const SF_MODES = ['ALL', 'FT8', 'FT4', 'WSPR', 'JS8'];
+/* ★ UberSDR's four (its digital spots feed); a VibeServer's come from its vibeserver.json (spotModes prop). */
+const SF_MODES_UBERSDR = ['FT8', 'FT4', 'WSPR', 'JS8'];
 const SF_BANDS = ['ALL', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m'];
 const SF_AGES: Array<{ label: string; minutes: number }> = [
   { label: 'AGE', minutes: 0 }, { label: '15m', minutes: 15 },
@@ -229,6 +253,12 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   time:    'TIME',
   // ★ V12: a VibeServer's own CW decoder (the title says CW SKIMMER while the skimmer runs).
   cw:      'CW',
+  // ★ V12: PSK31/63, JTTY and DSC — a VibeServer's own decoders (PSK SKIMMER while the skimmer runs).
+  psk:     'PSK',
+  jtty:    'JTTY',
+  dsc:     'DSC',
+  // ★ V12: a VibeServer's own APRS packet decoder (VHF 1200 / HF 300; the title says which).
+  aprs:    'APRS',
   // ★ V12: ON-DEVICE speech-to-text (+ translation) of the audio we play — any backend. Not UberSDR's STT (`whisper`).
   transcribe: 'TRANSCRIBE',
   // ★★ V12: the scanner (Band · Bookmarks · Manual) — not a decoder, but it lives in the decoder box (Stuart).
@@ -252,8 +282,12 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw = null, scanner = null,
+  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw: cwProp = null, psk = null, jtty = null, dsc = null, aprs = null, scanner = null,
+  spotModes, spotsTitle, spotModeStates,
 }: DecoderPanelProps) {
+  const sfModes = React.useMemo(() => spotFilterModes(spotModes ?? SF_MODES_UBERSDR), [spotModes]);
+  /* ★ V12: CW and PSK share one list view (the web's #cwList) — whichever is the decoder fills it. */
+  const cw = activeDecoder === 'psk' ? psk : cwProp;
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
   //
@@ -342,10 +376,12 @@ export default function DecoderPanel({
     if (!isSpotsMode) return [];
     const cutoff = sfAge > 0 ? Date.now() - sfAge * 60_000 : 0;
     return spots.filter(s =>
-      (spotsKind === 'cw' || sfMode === 'ALL' || s.mode === sfMode) &&
+      (spotsKind === 'cw' || spotModeMatches(s.mode, sfMode, spotModes ?? SF_MODES_UBERSDR)) &&
       (sfBand === 'ALL' || s.band === sfBand) &&
       (cutoff === 0 || s.time >= cutoff));
-  }, [isSpotsMode, spots, spotsKind, sfMode, sfBand, sfAge]);
+  }, [isSpotsMode, spots, spotsKind, sfMode, sfBand, sfAge, spotModes]);
+  // ★ a filter for a mode this server no longer lists falls back to ALL (never a filter that hides everything)
+  useEffect(() => { if (!sfModes.includes(sfMode)) setSfMode('ALL'); }, [sfModes, sfMode]);
 
   const renderSpot = useCallback(({ item }: { item: SpotRow }) => (
     <SpotRowView s={item} isCW={spotsKind === 'cw'} font={FONT}
@@ -370,11 +406,19 @@ export default function DecoderPanel({
    *  ★ Between messages it says STANDING BY, as WEFAX does between charts. */
   const isNavtex = activeDecoder === 'navtex' && !!navtex && !isSpotsMode && !isDabMode && !isImageMode && !isAircraftMode;
   /** ★ V12 CW: the list + spots view (CwView) in place of the plain text body. */
-  const isCw = activeDecoder === 'cw' && !!cw && !isSpotsMode && !isDabMode && !isAircraftMode;
+  const isCw = (activeDecoder === 'cw' || activeDecoder === 'psk') && !!cw && !isSpotsMode && !isDabMode && !isAircraftMode;
+  /** ★ V12 JTTY / DSC: their own list views in place of the text body. */
+  const isJtty = activeDecoder === 'jtty' && !!jtty && !isSpotsMode && !isDabMode && !isAircraftMode;
+  const isDsc = activeDecoder === 'dsc' && !!dsc && !isSpotsMode && !isDabMode && !isAircraftMode;
+  /** Any of the list decoders (their rows are the keyboard's list; the text body is not drawn). */
+  /** ★ V12 APRS: the stations / messages / packets view (AprsView) in place of the plain text body. */
+  const isAprs = activeDecoder === 'aprs' && !!aprs && !isSpotsMode && !isDabMode && !isAircraftMode;
+  const isListDec = isCw || isJtty || isDsc || isAprs;
   /** ★★ V12 the scanner's body in place of the text. Its controls register themselves in `scanNav` as they draw. */
   const isScanner = activeDecoder === 'scanner' && !!scanner && !isSpotsMode && !isDabMode;
   const scanNav = useRef<ScannerNav>({ len: 0, press: () => {} });
-  const cwRows = React.useMemo(() => (isCw ? cwItems(cw!.list, cw!.spots) : []), [isCw, cw]);
+  const cwRows = React.useMemo(() => (isCw ? cwItems(cw!.list, cw!.spots) : isJtty ? jttyItems(jtty!.list, jtty!.spots) : []),
+                                [isCw, cw, isJtty, jtty]);
   const [nvViewPrev, setNvViewPrev] = useState(false);
   const [, setNvTick] = useState(0);
   // ★ A lost NNNN ends the message after 75 s of silence (NAVTEX_END_LOST_MS) — nothing else would redraw the box
@@ -645,12 +689,12 @@ export default function DecoderPanel({
   useEffect(() => {
     // ★ NAVTEX's PREV is a finished message being READ — new text belongs to LIVE and must not move it.
     // ★ CW's text sits ABOVE its list: the view stays where the listener put it (CwView's pin), never the end.
-    if (minimised || !followTail.current || nvViewingPrev || isCw) return;
+    if (minimised || !followTail.current || nvViewingPrev || isListDec) return;
     const t = setTimeout(() => {
       try { outputRef.current?.scrollToEnd({ animated: false }); } catch {}
     }, 40);
     return () => clearTimeout(t);
-  }, [decoderText, minimised, nvViewingPrev, isCw]);
+  }, [decoderText, minimised, nvViewingPrev, isListDec]);
 
   // ── Keyboard: the decoder box takes the keyboard on ENTER (the screen's highlight on it) ──
   //
@@ -718,7 +762,9 @@ export default function DecoderPanel({
   // "same kinda thing with ADSB except nothing to select just scroll" — so they navigate but
   // Enter does nothing rather than pretending to.
   // ★ CW's rows (signals, then spots) are selectable too: Enter tunes to the one highlighted.
-  const listLen = isDabMode ? dabProgrammes.length : isCw ? cwRows.length : isScanner ? Math.max(1, scanNav.current.len) : 0;
+  const listLen = isDabMode ? dabProgrammes.length : (isCw || isJtty) ? cwRows.length : isDsc ? dsc!.calls.length
+                : isAprs ? aprs!.rows.length
+                : isScanner ? Math.max(1, scanNav.current.len) : 0;
 
   // ★ The flash. Entering the box is otherwise invisible, and invisible focus has looked like a broken
   // keyboard three times over in this work. It announces itself once and then gets out of the
@@ -853,7 +899,13 @@ export default function DecoderPanel({
   const hdrIdxRef = useRef(hdrIdx);   hdrIdxRef.current = hdrIdx;
   const listIdxRef = useRef(listIdx); listIdxRef.current = listIdx;
   const cwSelectRef = useRef<((i: number) => void) | null>(null);
-  cwSelectRef.current = isCw ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) cw!.onTune(r.hz); } : null;
+  cwSelectRef.current = isCw ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) cw!.onTune(r.hz); }
+    : isJtty ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) jtty!.onTune(r.hz); }
+    // ★ DSC: Enter on a call with a position is its MAP (rows are otherwise read, not pressed)
+    : isDsc ? (i: number) => { const c = dsc!.calls[i]; if (c && dscHasPos(c)) dsc!.onMap?.(c); }
+    // ★ V12 APRS: Enter on a station = the map, on it (the row's press)
+    : isAprs ? (i: number) => { const r = aprs!.rows[i]; if (r && aprs!.onMap) aprs!.onMap(r.key); }
+    : null;
   const listLenRef = useRef(listLen); listLenRef.current = listLen;
   const isScannerRef = useRef(isScanner); isScannerRef.current = isScanner;
   const isDabModeRef = useRef(isDabMode); isDabModeRef.current = isDabMode;
@@ -921,7 +973,7 @@ export default function DecoderPanel({
     }
     : sfOpen === 'mode' ? {
       title: 'MODE', wrap: true,
-      opts: SF_MODES.map(m => ({ key: m, label: m, on: sfMode === m, apply: () => setSfMode(m) })),
+      opts: sfModes.map(m => ({ key: m, label: m, on: sfMode === m, apply: () => setSfMode(m) })),
       close: () => setSfOpen(null),
     }
     : sfOpen === 'band' ? {
@@ -1011,8 +1063,9 @@ export default function DecoderPanel({
   const title = isDabMode
     ? 'DAB'
     : isSpotsMode
-    ? (spotsKind === 'cw' ? 'CW SPOTS' : 'DIGITAL SPOTS')
-    : isCw && cw!.skim ? 'CW SKIMMER'
+    ? (spotsKind === 'cw' ? 'CW SPOTS' : (spotsTitle || 'DIGITAL SPOTS'))
+    : isCw && cw!.skim ? (activeDecoder === 'psk' ? 'PSK SKIMMER' : 'CW SKIMMER')
+    : isAprs && aprs!.baud === 300 ? 'APRS · HF 300'
     : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
   return (
@@ -1126,6 +1179,13 @@ export default function DecoderPanel({
             </HBtn>
           )}
 
+          {/* ★ V12 APRS: MAP — the stations on the map (the web box's MAP key). Not where there is no map. */}
+          {isAprs && !!aprs!.onMap && (
+            <HBtn run hitSlop={6} accessibilityLabel="Show the stations on the map"
+              onPress={(e: any) => { e?.stopPropagation(); aprs!.onMap?.(); }}>
+              <DecoderKeyLabel>MAP</DecoderKeyLabel>
+            </HBtn>
+          )}
           {/* ★★ V12 THE SCANNER'S SOURCE KEYS — they swap the candidate section only; the settings are shared. */}
           {isScanner && (['band', 'bookmarks', 'list'] as ScanSource[]).map((src) => (
             <HBtn key={src} active={scanner!.ctl.source === src} run hitSlop={6}
@@ -1420,14 +1480,28 @@ export default function DecoderPanel({
           </ScrollView>
         )}
         {!minimised && isCw && (
-          <CwView skim={cw!.skim} list={cw!.list} spots={cw!.spots} text={decoderText} bodySize={bodySize}
+          <CwView skim={cw!.skim} psk={activeDecoder === 'psk'} list={cw!.list} spots={cw!.spots} text={decoderText} bodySize={bodySize}
                   focusIdx={kbZone === 'list' ? listIdx : -1} onTune={cw!.onTune}
                   scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
+        )}
+        {!minimised && isJtty && (
+          <JttyView list={jtty!.list} spots={jtty!.spots} bodySize={bodySize}
+                    focusIdx={kbZone === 'list' ? listIdx : -1} onTune={jtty!.onTune}
+                    scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
+        )}
+        {!minimised && isDsc && (
+          <DscView calls={dsc!.calls} bodySize={bodySize} focusIdx={kbZone === 'list' ? listIdx : -1} onMap={dsc!.onMap}
+                   scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
+        )}
+        {!minimised && isAprs && (
+          <AprsView rows={aprs!.rows} messages={aprs!.messages} log={aprs!.log} baud={aprs!.baud} bodySize={bodySize}
+                    focusIdx={kbZone === 'list' ? listIdx : -1} onMap={aprs!.onMap ? (k: string) => aprs!.onMap?.(k) : null}
+                    scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}
         {!minimised && isScanner && (
           <ScannerPanel {...scanner!} focusIdx={kbZone === 'list' ? listIdx : -1} navRef={scanNav} bodyStyle={bodySize} />
         )}
-        {!minimised && !isNavtex && !isCw && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && !!notice && (
+        {!minimised && !isNavtex && !isListDec && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && !!notice && (
           <View style={dp.adjRow}>
             <Text style={[dp.output, { flex: 1, minWidth: 160, color: dc.output, fontFamily: FONT }]}>{notice.text}</Text>
             {!!notice.action && !!notice.onAction && (
@@ -1437,7 +1511,7 @@ export default function DecoderPanel({
             )}
           </View>
         )}
-        {!minimised && !isNavtex && !isCw && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
+        {!minimised && !isNavtex && !isListDec && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
           <ScrollView
             ref={outputRef}
             // ★★★ minHeight AS WELL AS maxHeight. As a cap alone, BIG did NOTHING on a text
@@ -1503,6 +1577,28 @@ export default function DecoderPanel({
           </ScrollView>
         )}
 
+        {/* ★★ V12 BAND GOVERNOR: which modes are live — a chip per mode in its map colour and letter (digiModes), its state
+            in words for VoiceOver (spotsBand spotChipText). Only in Band (the server sends no status in Single). */}
+        {!minimised && isSpotsMode && spotsKind === 'digi' && !!spotModeStates?.length && (
+          <View style={dp.chipRow} accessibilityRole="summary">
+            {spotModeStates.map((m) => {
+              const st = digiModeStyle(m.mode);
+              const live = m.state === 'active' || m.state === 'light';
+              return (
+                <View key={m.mode} accessible accessibilityLabel={spotChipText(m)}
+                      style={[dp.chip, { borderColor: m.state === 'shed' ? '#E8A23A' : tk.divider },
+                              (m.state === 'idle' || m.state === 'off') && { opacity: m.state === 'off' ? 0.45 : 0.55 }]}>
+                  <Text style={[dp.chipDot, { backgroundColor: st.colour, color: st.ink, fontFamily: FONT }]}>{st.letter}</Text>
+                  <Text style={[dp.chipTxt, { color: tk.value, fontFamily: FONT },
+                                m.state === 'off' && { textDecorationLine: 'line-through' }]}>{m.mode}</Text>
+                  <Text style={[dp.chipState, { fontFamily: FONT, color: live ? '#5BE36B' : m.state === 'shed' ? '#E8A23A' : tk.muted }]}>
+                    {m.state.toUpperCase()}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
         {/* Spots table — virtualized; newest first; tap frequency to tune */}
         {!minimised && isSpotsMode && (
           <FlatList
@@ -1578,6 +1674,14 @@ function useHoldRepeat() {
 
 /** ★ Built once per setting (useDecoderStyles) — never per render, never at load. */
 const makeDp = (T: DecoderTokens) => StyleSheet.create({
+  /* ★ V12 Band governor chips — wrap on a narrow box (an SE in Display Zoom), never clip. */
+  chipRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 4, paddingHorizontal: 8, paddingTop: 4, paddingBottom: 2 },
+  chip:     { flexDirection: 'row', alignItems: 'center', gap: 3, borderWidth: 1, borderRadius: 9, paddingLeft: 2, paddingRight: 6,
+              paddingVertical: 1 },
+  chipDot:  { width: 14, height: 14, borderRadius: 7, overflow: 'hidden', textAlign: 'center', fontSize: 9, fontWeight: '700',
+              lineHeight: 14 },
+  chipTxt:  { fontSize: 10, letterSpacing: 0.3 },
+  chipState:{ fontSize: 8.5, fontWeight: '700', letterSpacing: 0.4 },
   /* ★ The WEFAX SHIFT / SLANT strip under the header (ADJ). Wraps on a narrow box rather than clipping. */
   adjRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, paddingHorizontal: 8, paddingVertical: 6 },
   adjLabel: { minWidth: 70, flexShrink: 1 },

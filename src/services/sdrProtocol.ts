@@ -11,6 +11,7 @@
 import type { DabState } from './dabTypes';
 import type { AdsbReport } from './adsbTypes';
 import type { IsmReport } from './ism';
+import type { AisReport } from './tracks';   // ★ V12 AIS
 import type { AskState } from './dialChat';
 
 /** The one sentence a refused-as-too-old client shows; SDRScreen matches on it to add the button. */
@@ -19,7 +20,7 @@ export const UPDATE_APP_MESSAGE = 'This server needs a newer VibeSDR. Update the
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 // 'wfm' = broadcast FM (stereo); local-hardware (RTL-SDR) only — UberSDR is HF.
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm';   // ★ V12 'drm' — sdrTypes.ts
 
 /** ★★★ VibeServer's narrowest WFM passband (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz,
  *  which the server clamps to anyway. A broadcast carrier swings ±75 kHz and the narrowest real
@@ -35,6 +36,7 @@ export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
   am:  48_000, sam: 48_000,
   fm:  64_000, nfm: 64_000,
   wfm: 500_000,
+  drm: 10_000,   // ★ V12 DRM: fixed — the server's DRM receiver cuts its own channel; no width control in DRM
 };
 
 /** The passband VibeServer will actually run — WFM's floor (widened about its own centre) and
@@ -59,6 +61,7 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   cwu: [-200, 200],    cwl: [-200, 200],
   fm:  [-6000, 6000],  nfm: [-5000, 5000],
   wfm: [-100000, 100000],
+  drm: [-5000, 5000],   // ★ V12 DRM: the web's MODE_BANDWIDTHS (spectrum.ts) — drawn only; the server takes its own channel
 };
 
 export interface SDRStatus {
@@ -399,6 +402,19 @@ export interface SDRCallbacks {
   /** ★ V12 ISM, VIBESERVER-ONLY: a report about once a second while the receiver is in ISM (its arrival MEANS ISM is on,
    *  on the band it names); null = it ended (`ism_off`); `err` = the refusal (`ism_error`). */
   onIsm?:       (r: IsmReport | null, err?: string) => void;
+  /** ★ V12 NDB, VIBESERVER-ONLY: a report about once a second while the receiver is in NDB (its arrival MEANS NDB is on);
+   *  null = it ended (`ndb_off`); `err` = the refusal (`ndb_error`). Find NDB and the stats answer the asker only. */
+  onNdb?:       (r: import('./ndb').NdbReport | null, err?: string) => void;
+  onNdbFound?:  (f: ReturnType<typeof import('./ndb').parseNdbFound>) => void;
+  onNdbStats?:  (s: import('./ndb').NdbStats) => void;
+  /** ★ V12 DRM, VIBESERVER-ONLY: this listener's DRM receiver's report (about once per 1.2 s super frame) while their mode
+   *  is DRM (vibe_drm_listener.h; src/services/drm.ts checks it). */
+  onDrm?:       (s: import('./drm').DrmState) => void;
+  /** ★ V12 AIS, VIBESERVER-ONLY: a report about once a second while the receiver is in AIS (its arrival MEANS AIS is on);
+   *  null = it ended (`ais_off`); `err` = the refusal (`ais_error`). */
+  onAis?:       (r: AisReport | null, err?: string) => void;
+  /** ★ V12 AIS: one ship's track, asked for by aisTrail (the map's card) — [lat, lon] oldest first. */
+  onAisTrail?:  (mmsi: number, pts: [number, number][]) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?:     (m: IqOutState) => void;
   /** ★★ V12 VFO A/B, VIBESERVER-ONLY: hwinfo's `watch` — how many VFO Bs this server offers (0 = none: no toggle). */
