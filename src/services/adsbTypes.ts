@@ -61,6 +61,9 @@ export interface AdsbReport {
   rate?: number; noise?: number; msgRate?: number; dropped?: number;
   /** ★ % of the promised samples the server's decoder RECEIVED over ~10 s; -1 until known (vibe_adsb_capture.h). */
   capture?: number;
+  /** ★ V12 (19f2d603): the gain ADS-B is at (dB), whether the server is choosing it (gainAuto 1) and still measuring
+   *  (gainBusy 1 — the ramp or the ten-minute look trying steps). Absent on an older server: no GAIN key. */
+  gain?: number; gainAuto?: number; gainBusy?: number;
 }
 
 /** ★★★ THE CAPTURE WARNING for the map's top bar (Stuart, 2026-10-24): under 97 % the receiver is dropping samples
@@ -125,6 +128,7 @@ export function parseAdsbMessage(msg: Record<string, unknown>): AdsbReport {
     aircraft,
     rate: num(msg.rate), noise: num(msg.noise), msgRate: num(msg.msgRate), dropped: num(msg.dropped),
     capture: num(msg.capture),
+    gain: num(msg.gain), gainAuto: num(msg.gainAuto), gainBusy: num(msg.gainBusy),
   };
 }
 
@@ -223,4 +227,55 @@ export function parseAdsbMapPrefs(s: string | null | undefined): AdsbMapPrefs {
              rings: b(j.rings, ADSB_MAP_PREFS_DEFAULT.rings),
              labels: b(j.labels, ADSB_MAP_PREFS_DEFAULT.labels) };
   } catch { return { ...ADSB_MAP_PREFS_DEFAULT }; }
+}
+
+/* ── ★★ THE ADS-B GAIN KEY AND ITS CARD (V12, 19f2d603 — the web's adsbGainRender) ────────────────────────────────────
+ * The radio's own steps, shown ONLY where a gain can be set: not on a radio with no gain list (an Airspy HF+ has none —
+ * AGENTS.md: a control that only works on one radio must not be there), not where the owner fixed the gain (hwGainLocked
+ * hides every gain control), not on a server that does not report one. AUTO is the SERVER's ramp (messages decoded), not
+ * VibeAGC; a step chosen here is the listener's until AUTO is pressed again. The owner's per-band ceiling holds here too. */
+
+export interface AdsbGainView {
+  /** "GAIN 33.8 · AUTO" / "GAIN 33.8 dB" — the key's text (TRAINING is drawn beside it when `training`). */
+  key: string; auto: boolean; training: boolean;
+  /** The gain now, dB, one place. */
+  now: string;
+  /** Index in the radio's list nearest the report's gain, and the highest index the owner allows. */
+  idx: number; maxIdx: number;
+  note: string;
+}
+/** The highest step index the owner's ceiling allows (tenths of a dB, -1 = none) — the web's applyGainCap. */
+export function gainCapIdx(gains: readonly number[], capTenthDb: number): number {
+  if (capTenthDb < 0) return gains.length - 1;
+  let m = -1;
+  for (let i = 0; i < gains.length; i++) if (gains[i] <= capTenthDb) m = i;
+  return m < 0 ? 0 : m;
+}
+/** The step nearest a gain in tenths of a dB (the web's nearestGainIdx). */
+export function nearestGainIdx(gains: readonly number[], tenthDb: number): number {
+  let best = -1, bd = Infinity;
+  for (let i = 0; i < gains.length; i++) { const d = Math.abs(gains[i] - tenthDb); if (d < bd) { bd = d; best = i; } }
+  return best;
+}
+export function adsbGainView(r: Pick<AdsbReport, 'gain' | 'gainAuto' | 'gainBusy'> | null | undefined,
+                             gains: readonly number[], locked: boolean, capTenthDb = -1): AdsbGainView | null {
+  if (!r || typeof r.gain !== 'number' || !Number.isFinite(r.gain) || gains.length <= 1 || locked) return null;
+  const auto = r.gainAuto === 1, busy = r.gainBusy === 1;
+  const maxIdx = gainCapIdx(gains, capTenthDb);
+  return {
+    key: `GAIN ${r.gain.toFixed(1)}${auto ? ' · AUTO' : ' dB'}`,
+    auto, training: auto && busy, now: `${r.gain.toFixed(1)} dB`,
+    idx: Math.min(maxIdx, Math.max(0, nearestGainIdx(gains, Math.round(r.gain * 10)))), maxIdx,
+    note: auto
+      ? (busy ? 'Finding the gain that decodes the most — trying each step for a few seconds.'
+              : 'Automatic: chosen by messages decoded, and checked again every ten minutes.')
+      : 'Set by hand. AUTO hands it back.',
+  };
+}
+/** ★ A − / + press: one step from where the LISTENER last put it (for 2.5 s after a press — the report lags about a second,
+ *  so stepping from the report would repeat a step), else from the report's gain; clamped to 0…maxIdx. */
+export const ADSB_GAIN_TOUCH_MS = 2500;
+export function adsbGainStep(view: AdsbGainView, last: { idx: number; at: number } | null, now: number, dir: -1 | 1): number {
+  const from = last && now - last.at < ADSB_GAIN_TOUCH_MS ? last.idx : view.idx;
+  return Math.max(0, Math.min(view.maxIdx, from + dir));
 }

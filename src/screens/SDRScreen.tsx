@@ -69,7 +69,7 @@ import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
-import { adsbToAircraft, adsbCaptureWarning, type AdsbCap, type AdsbReport } from '../services/adsbTypes';
+import { adsbToAircraft, adsbCaptureWarning, adsbGainView, type AdsbCap, type AdsbReport } from '../services/adsbTypes';
 import { DabBlockStepper, DabAskGuard, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../utils/dabQuality';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
@@ -13358,6 +13358,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         rxLon={shownMap === 'adsb' ? (serverPos ?? recvLoc)?.lon ?? null : undefined}
         adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}
         adsbCapture={shownMap === 'adsb' ? adsbCaptureWarning(adsbReport) : undefined}
+        /* ★★ V12 the ADS-B GAIN key — only where the radio has a gain list the owner has not fixed (adsbGainView says null
+         *  otherwise: an HF+, a fixed gain, an older server). AUTO hands it back to the server's ramp (19f2d603). */
+        adsbGain={shownMap === 'adsb' ? {
+          view: adsbGainView(adsbReport, hwGains, hwGainLocked, hwGainCap),
+          steps: hwGains,
+          onAuto: () => { markInteract(); setHwAutoGain(true); hwClient()?.setHwGain?.(0, true); },
+          onSet: (tenthDb: number) => { markInteract(); onHwGain(tenthDb); },
+        } : undefined}
         adsbList={shownMap === 'adsb' ? aircraft : undefined}
         adsbStarted={!!adsbReport}
         safeInsets={insets}

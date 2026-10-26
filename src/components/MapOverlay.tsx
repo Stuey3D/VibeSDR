@@ -62,7 +62,7 @@ import { MAPDATA_FILES } from '../generated/mapdataBundle';
  *     it too). */
 import { ADSB_LAYER_JS } from '../generated/adsbLayerSource';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { parseAdsbMapPrefs, type AdsbAircraftRaw, type AdsbMapPrefs } from '../services/adsbTypes';
+import { parseAdsbMapPrefs, type AdsbAircraftRaw, type AdsbMapPrefs, type AdsbGainView } from '../services/adsbTypes';
 import { noteFault } from '../services/faultLog';
 import type { Aircraft } from '../services/SDRBackend';
 import AdsbLiveList from './AdsbLiveList';
@@ -115,6 +115,8 @@ interface MapOverlayProps {
   adsbList?: Aircraft[];
   /** kind 'adsb': a report has arrived (the list then says "no aircraft yet", not "taking the receiver to 1090"). */
   adsbStarted?: boolean;
+  /** ★★ kind 'adsb': the GAIN key (adsbTypes adsbGainView) — null/absent = no key (no gain list, owner-fixed, or unknown). */
+  adsbGain?: { view: AdsbGainView | null; steps: readonly number[]; onAuto: () => void; onSet: (tenthDb: number) => void } | null;
   /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
   safeInsets?: { top: number; bottom: number; left: number; right: number };
 }
@@ -1561,7 +1563,7 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, safeInsets }:
+    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbGain, safeInsets }:
     MapOverlayProps & { spots?: SpotRow[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -1917,6 +1919,8 @@ export default function MapOverlay(
         {kind === 'adsb' && !!pageUri && !packError && (
           <AdsbLiveList aircraft={adsbList ?? []} started={!!adsbStarted} onFocus={adsbFocus} selected={adsbSel} onFootprint={adsbFootprint} onLegend={adsbLegend}
                         raw={adsbAircraft ?? null}
+                        gain={adsbGain?.view ?? null} gainSteps={adsbGain?.steps}
+                        onGainAuto={adsbGain?.onAuto} onGainSet={adsbGain?.onSet}
                         receiver={Number.isFinite(rxLat as number) && Number.isFinite(rxLon as number) && (rxLat || rxLon)
                           ? { lat: rxLat as number, lon: rxLon as number } : null}
                         logoBase={local ? null : baseUrl.replace(/\/+$/, '') + '/adsb/'}
