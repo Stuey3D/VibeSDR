@@ -78,6 +78,9 @@
 #include "solar.h"
 #include "geoip.h"
 #include "asndb.h"
+#ifdef _WIN32
+#include "win_usb.h"      // ★ which driver Windows has on each radio, and WinUSB vs the UsbDk borrow
+#endif
 #include "proc.h"         // vibeproc::run — the High Detail Maps download (curl, no shell)
 #include "pocket.h"        // ★ the pocket image's hotspot + captive portal — inert without its marker
 #include "moveloc.h"       // ★ the nearest town as the server moves (owner's tick) — inert when off
@@ -1552,6 +1555,14 @@ int main(int argc, char** argv) {
     vibe_win_startup();
     ::SetConsoleOutputCP(CP_UTF8);
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // ★ a log, not a report: each line out as it is written
+    /* ★★★ THE USB PATH, BEFORE ANY RADIO LIBRARY MAKES A libusb CONTEXT (windows/win_usb.h): a dongle already
+     *     on WinUSB/libusbK/libusb0 is used as it is; otherwise, with UsbDk installed, it is BORROWED for this
+     *     process's life and handed back on exit. One line per radio says which, in the owner's words. */
+    {
+        bool help = false;
+        for (int i = 1; i < argc; ++i) if (!std::strcmp(argv[i], "-h") || !std::strcmp(argv[i], "--help")) help = true;
+        if (!help) vibewin::applyUsbBackend();
+    }
 #endif
     /* ★★ FIRST, so nothing can die unrecorded (2026-10-06): the Pi 2 segfaulted four times in DAB in
      *  one day and left only "status=11/SEGV" — no core could be written. See crash_report.h. */

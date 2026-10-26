@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- ★★ VibeServer's application manifest (Windows). Embedded by windows/vibeserver.rc.
+     activeCodePage UTF-8 (Windows 10 1903+): the process's "ANSI" code page IS UTF-8, so the core's UTF-8
+     strings reach fopen(), CreateFileA, getenv and argv unchanged — an owner whose user folder has an
+     accented name is not a special case. longPathAware lifts the 260-character path limit where the
+     machine allows it. asInvoker: the probe asks for admin ONLY for bind/giveback, by relaunching itself (runas),
+     so list/stream/cycle never prompt. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="net.vibesdr.vibe-usbprobe" version="11.0.12.0"/>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security><requestedPrivileges><requestedExecutionLevel level="asInvoker" uiAccess="false"/></requestedPrivileges></security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/> <!-- Windows 10 / 11 -->
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

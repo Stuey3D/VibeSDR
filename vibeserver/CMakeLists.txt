@@ -754,6 +754,20 @@ target_link_libraries(vibeserver_core PUBLIC "${OPUS_LIB}")
 target_link_libraries(vibeserver PRIVATE vibeserver_core)
 if(WIN32)
   vibe_win_resources(vibeserver "VibeServer — SDR server" "${CMAKE_CURRENT_SOURCE_DIR}/windows/vibeserver.manifest")
+  # ★★ Which driver Windows has on each radio, and the USB path (WinUSB / UsbDk borrow) — windows/win_usb.h.
+  target_sources(vibeserver_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_usb.cpp")
+  target_include_directories(vibeserver_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/windows"
+                             "${VIBE_DEPS_PREFIX}/include/libusb-1.0")
+  target_link_libraries(vibeserver_core PUBLIC version)
+  # ★★★ vibe-usbprobe.exe — Milestone 1's driver test (docs/WINDOWS-M1-TEST.md). Its own small program,
+  #     not a mode of the server: it needs administrator rights for one step and the server never does.
+  add_executable(vibe-usbprobe "${CMAKE_CURRENT_SOURCE_DIR}/windows/usbprobe.cpp"
+                               "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_usb.cpp")
+  target_include_directories(vibe-usbprobe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/windows" "${RTLSDR_INC}"
+                             "${VIBE_DEPS_PREFIX}/include/libusb-1.0")
+  target_compile_definitions(vibe-usbprobe PRIVATE VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}")
+  target_link_libraries(vibe-usbprobe PRIVATE "${RTLSDR_LIB}" "${USB_LIB}" newdev version Threads::Threads)
+  vibe_win_resources(vibe-usbprobe "VibeServer USB driver probe" "${CMAKE_CURRENT_SOURCE_DIR}/windows/usbprobe.manifest")
 endif()
 
 # ★★ THE RADIO-LIST API, UNDER TEST. Unlike the tests in scripts/run-tests.sh — which compile a
