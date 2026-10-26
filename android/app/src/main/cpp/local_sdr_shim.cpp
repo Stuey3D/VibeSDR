@@ -5978,7 +5978,7 @@ std::string queryParam(const std::string& reqLine, const char* key) {
  *  write path (steps, settle, pending write, notify) without a decision. Returns false when the
  *  radio has no gain list to map through (an RSP, a HF+). See g_dabGainMem. */
 template <class ImplT>   // ★ Impl is LocalSdrShim's private type; deduced, never named
-static bool dabSeedGain(ImplT* p, int wantSteps, double now, const char* what = nullptr) {
+static bool dabSeedGain(ImplT* p, int wantSteps, double now, const char* what = nullptr, const char* scanWhy = nullptr) {
     if (!p) return false;
     std::lock_guard<std::recursive_mutex> hw(p->modeMtx);
     if (p->radioReleased.load()) return false;
@@ -6007,7 +6007,10 @@ static bool dabSeedGain(ImplT* p, int wantSteps, double now, const char* what = 
                      p->lastGainTenthDb, applied, what ? what : "dab block");
     p->lastGainTenthDb = applied;
     p->queueHwGain(applied);
-    if (what)   // ★ the same seed for an ordinary band (vibe_agc_rules.h §3)
+    if (scanWhy)   // ★ V12 DAB band scan: a block nobody has decoded here yet, or the gain handed back at the end
+        LOGI("[DAB] band scan: %s %s — %.1f dB (%d steps below the ceiling)",
+             vibedab::kBandIII[g_dabChannel.load() < 0 ? 0 : g_dabChannel.load()].name, scanWhy, applied / 10.0, want);
+    else if (what)   // ★ the same seed for an ordinary band (vibe_agc_rules.h §3)
         LOGI("AGC: entering %s at the gain it last settled at: %.1f dB (%d steps below the ceiling)",
              what, applied / 10.0, want);
     else
@@ -14631,12 +14634,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    whole-multiplex label scan (the `dab_scan` benchmark row, dabScanLabelsOn) is NOT switched on for it: a scan
      *    needs names from the FIC, not every station's radio text, so a box the benchmark judged too weak for the label
      *    scan is not asked to do it here either. */
-    static constexpr double kNoLockS = 3.0, kWeakLockS = 8.0, kFalseLockS = 3.0, kUnconfirmedS = 6.0, kMaxBlockS = 16.0;
+    /* ★★★ THE GAIN A SCAN ENTERS EACH BLOCK AT (V12, 2026-10-27 — Stuart: "the AGC can work quick enough to allow the
+     *  multiplex to be found but without taking forever to do a full scan either"). Measured on the RTL model
+     *  (fake-rtl-tcp --dab-mux; scripts/probe-dab-scan-agc.mjs): a block INHERITED the gain the last one left, so the
+     *  block after a strong local multiplex started at 0-3 dB — an ensemble 4 dB above the noise there sat under the
+     *  converter's own noise, needed 2.7-3.1 s just to lock, and the 3 s window passed it by (11C after an 11B at +45 dB:
+     *  missed). Now, on a radio with a gain table and VibeAGC in charge (an RTL, local or rtl_tcp):
+     *    - a block that has decoded here before enters at its remembered gain (the ordinary entry, g_dabGainMem);
+     *    - any other block enters at the SCAN'S NOISE GAIN — where the AGC settled on the last empty block, 2 rungs
+     *      under the ceiling to begin with. High is the fast side to start from: a cut is immediate and sized from the
+     *      clip figure, while a climb is judged rung by rung — so a strong block costs one cut (~0.3 s) and a weak one
+     *      costs nothing at all;
+     *    - an empty block is left after kNoLockS (2 s, from 3: every ensemble in the model locked inside 1 s at a
+     *      sensible gain); kWeakLockS (8 s) only where something is there — a null symbol out of the noise, or the AGC
+     *      had to CUT for this block (noise at the noise gain is never cut);
+     *    - the radio gets back the gain it had before the scan, not the last block's (dabBandScanRun's end).
+     *  ★ An RSP (the API's own IF AGC + Stuart's DAB LNA rule), an Airspy R2/Mini or a HackRF (the owner's preset)
+     *    have no gain table here — dabSeedGain declines and they run exactly as before. */
+    static constexpr double kNoLockS = 2.0, kWeakLockS = 8.0, kFalseLockS = 3.0, kUnconfirmedS = 6.0, kMaxBlockS = 16.0;
     static constexpr float  kWeakNullDb = 5.0f;
+    static constexpr int    kScanSeedStepsDefault = 2;   // rungs under the ceiling before any empty block has been seen
     void dabBandScanRun(bool fromSetup, int prevCh, uint32_t prevSid) {
         struct Done { ~Done() { g_dabScanActive.store(false); } } done;
         const double t0 = nowSecs();
         const std::set<long long> bmBefore = bmDabKeys();
+        // ★ What the gain was before the scan — the listener's block gets it back at the end (see the class note).
+        const int gainStepsBefore = g_ovlSteps.load(std::memory_order_relaxed);
+        int scanSeedSteps = kScanSeedStepsDefault;
         bool cancelled = false, entered = !fromSetup;
         std::string stopWhy;
         if (fromSetup) {
@@ -14654,6 +14678,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             dabBandBroadcast();
             if (g_dabChannel.load() != int(idx))
                 handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(idx) + "}");
+            // ★ A block with no gain memory enters at the scan's noise gain — the class note says why.
+            bool remembered;
+            { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabGainLoadLocked(); remembered = g_dabGainMem.count(int(idx)) > 0; }
+            if (!remembered && g_vibeAgcRtlOn.load(std::memory_order_relaxed))
+                dabSeedGain(this, scanSeedSteps, nowSecs(), nullptr, "not heard here before: entering at the scan's noise gain");
+            const int gainAtStart = lastGainTenthDb;
+            bool cutSeen = false;
             const double tb = nowSecs();
             bool everLocked = false, complete = false, confirmed = false;
             double lockAt = -1.0, fibAt = -1.0, completeAt = -1.0, lastChange = 0.0, lastConfirm = -1.0;
@@ -14677,7 +14708,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★ A NULL SYMBOL STANDING OUT OF THE NOISE without a lock yet is a weak ensemble still being climbed to
                  *  (the AGC needs 3-6 s on a weak block — see g_dabGainMem): give it up to kWeakLockS. Noise reads
                  *  2.7-3.4 dB here on the bench; the bench ensemble 11-13 dB. Unmeasured on a weak real block. */
-                if (!everLocked && t > kNoLockS && !(q.nullDepthDb >= kWeakNullDb && t <= kWeakLockS)) break;
+                // ★ …and so does a block the AGC had to CUT for: noise at the scan's noise gain is never cut, so a cut means
+                //   power on this block — a strong ensemble still being brought into range, or a neighbour's.
+                if (lastGainTenthDb < gainAtStart - 5 || g_adcClipRun.load(std::memory_order_relaxed) > 0) cutSeen = true;
+                if (!everLocked && t > kNoLockS && !((q.nullDepthDb >= kWeakNullDb || cutSeen) && t <= kWeakLockS)) break;
                 if (everLocked && fibAt < 0 && t - lockAt > kFalseLockS) { everLocked = false; break; }
                 rows = g_dab.playableAudio(&complete);
                 bool labelled = !rows.empty();
@@ -14696,7 +14730,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 if (complete && labelled && confirmed) break;
                 if (completeAt >= 0 && t - completeAt > kUnconfirmedS) break;
-                if (labelled && t > 6.0 && t - lastChange > 3.0 && completeAt < 0) break;
+                // ★ A weak ensemble (FIB rate under the 0.9 bar) names its stations in a trickle: give it 4 s of quiet, not 3
+                //   (the model at +3 dB: 10 of 12 named by 6.5 s, the rest later).
+                if (labelled && t > 6.0 && t - lastChange > (q.fibRate < 0.9f ? 4.0 : 3.0) && completeAt < 0) break;
                 if (t > kMaxBlockS) break;
             }
             if (cancelled) break;
@@ -14714,6 +14750,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 bm.push_back({ r.sid, l, r.eid, r.ecc });
             }
             const bool found = everLocked && (!hit.services.empty() || !ens.empty());
+            // ★ An empty block the AGC did not have to cut for is noise alone: where it settled is the noise gain.
+            if (!found && !cutSeen && lastGainTenthDb >= gainAtStart) scanSeedSteps = g_ovlSteps.load(std::memory_order_relaxed);
             int added = 0, removed = 0;
             if (found) {
                 const double hz = double(vibedab::kBandIII[idx].centreHz);
@@ -14759,6 +14797,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         } else if (!userTuned && prevCh >= 0 && g_dabMode.load(std::memory_order_relaxed)) {
             handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(prevCh)
                                    + (prevSid ? ",\"sid\":" + std::to_string(prevSid) : std::string()) + "}");
+            /* ★★ AND THE GAIN IT HAD, NOT THE LAST BLOCK'S. A block with a memory got it from the entry above (which is
+             *  where a listener's AGC would have taken it anyway); one without gets back the gain it had before the scan. */
+            bool remembered;
+            { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabGainLoadLocked(); remembered = g_dabGainMem.count(prevCh) > 0; }
+            if (!remembered && g_vibeAgcRtlOn.load(std::memory_order_relaxed))
+                dabSeedGain(this, gainStepsBefore, nowSecs(), nullptr, "back from the scan: the gain it had before");
         }
         {
             std::lock_guard<std::mutex> lk(g_dabBandMtx);
@@ -36109,7 +36153,15 @@ void LocalSdrShim::overloadTick() {
     if (climbToFit && want < steps) {
         const int from = tgtIdx - steps;
         const double peak = climbPeak;
-        const double room = agcTargetDbfs() - peak - g_ovlMargin.load(std::memory_order_relaxed);
+        /* ★★★ SIZED AGAINST THE CEILING THE GATE BELOW JUDGES IT BY (V12 DAB scan AGC, 2026-10-27). This was
+         *  `target − peak − margin` alone, and in DAB the target (−9) and the climb ceiling (−15) are two different
+         *  numbers: from a strong block's 0–1.4 dB onto a weaker one the jump was sized to land at −14.9 dBFS, the
+         *  prediction gate refused it for landing 0.1 dB over −15 — and the same jump was proposed and refused
+         *  every tick, logging "recovering … taking 15.2 dB in one move" fifty times while the gain did not move,
+         *  until the hold ran out 17–20 s later (measured, fake-rtl-tcp --dab-mux: 12B at +45 dB, then 11D at +10
+         *  — lock 20.2 s). ONE RULE, TWO READERS: the size now honours both limits, so the move it proposes is one
+         *  the gate accepts. Outside DAB the two numbers are the same and nothing changes. */
+        const double room = std::min(agcTargetDbfs() - g_ovlMargin.load(std::memory_order_relaxed), climbCeil) - peak;
         /* ★★★ AND THE ADC IS NOT THE BINDING CONSTRAINT WHERE HARM SHOWS OUTSIDE THE CHANNEL.
          *
          *  `room` is pure converter headroom, and this file already says what that is worth on an
