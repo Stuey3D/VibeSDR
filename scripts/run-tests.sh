@@ -119,6 +119,10 @@ flags_for() {
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
+    # ★★ V12 NDB skimmer (decoders/ndb_skimmer.h, vibe_ndb_*.h): the vote, one beacon at +10/-5 dB on both tones and A1A,
+    #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
+    #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
+    test-ndb)              echo "-O2 -lpthread -I tools/ndb-bench -I $VDSP -I $KISS" ;;
     # ★★ V12 WSPR (decoders/digimodes/wspr_decoder.h): protocol, synthetic slots −20…−28 dB with drift and DT, hashed calls, pure
     #    noise, subtraction, the live decoder — optimised, it decodes ~50 two-minute slots. VIBE_TEST_AUDIO adds 40 m + 20 m
     #    off air, with the WSPRnet-scale SNR held to ±1 dB (mean) / ±3 dB (each) of Stuart's UberSDR's own reports.
@@ -241,6 +245,8 @@ deps_for() {
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
     test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
+    test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
+                              $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C)
     *)                  echo "" ;;
   esac
 }
@@ -257,6 +263,13 @@ cobjs_for() {
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c $VDSP/third_party/pffft/pffft.c; do
         local o="$d/$(basename "$f" .c).o"
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
+        printf '%s ' "$o"
+      done ;;
+    test-ndb)
+      local d="$OUT/cobj-ndb"; mkdir -p "$d"
+      for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
+        local o="$d/$(basename "$f" .c).o"
+        [ "$o" -nt "$f" ] || cc -O2 -c -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
     *) ;;
@@ -337,6 +350,9 @@ if node scripts/test-setup-bgdecode.mjs; then pass=$((pass+1)); else fail=$((fai
 # ★★ …and an ISM PROFILE (2026-10-25): offered only where ISM can run (not an HF+, an Icom, a locked radio, ISM blocked),
 #    only the bands the radio reaches; a band instead of a centre and VFOs; saved as {"ism":"433"} and read back.
 if node scripts/test-setup-bg-ism.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and an NDB PROFILE (2026-10-27): offered only where the radio reaches LF (HF+, RSP, an RTL in direct sampling; the
+#    running radio's ndbHw first), never locked or blocked; no centre or VFOs; saved as {"ndb":true} and read back.
+if node scripts/test-setup-bg-ndb.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A TUNNEL A PREVIOUS PROCESS LEFT ON OUR PORT IS RETIRED (2026-10-19, Kiko's four tunnels). Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -511,6 +527,10 @@ if node --no-warnings scripts/test_adsb_report.ts; then pass=$((pass+1)); else f
 if node --no-warnings scripts/test_capture_and_rate_guard.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and the map's live list (adsbList.ts): row text, nearest first without shuffling, clear of the zoom stack.
 if node --no-warnings scripts/test_adsb_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 NDB's map layer (web/mapkit/ndblayer.js): its generated copy, the bars rule, and the rings it SHARES with the ADS-B
+#     map (Stuart: "same rings, for nm range") — the ladder, NM, four labels a ring. ADS-B's own layer test runs beside it.
+if node --no-warnings scripts/test_ndb_layer.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_adsb_layer.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADS-B FURTHEST key: the web map and the app map page name the same aircraft (one rule, two readers).
 if npx tsx scripts/test_adsb_furthest.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and V12 aircraft data on the clients (adsbInfo.ts): the adsb_info sanitiser + store, and the web list's rows with it.
@@ -1017,6 +1037,21 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     test-ism --write-clip — the capability, the device list and its readable lines, the privacy rule ON THE WIRE, band
 #     steps (clamped), an exact frequency, EXIT giving the dial back; then the web client in headless Edge (--mute-audio).
 #     Needs VIBESERVER_BIN (exit 3 = not run); the web half also needs Edge.
+# ★★ V12 NDB mode end to end (2026-10-26): an RTL without direct sampling offers no NDB; with automatic direct sampling
+#     the capability, entering, the radio on the beacon band, WOD and CAM identified and named, a tap moving only the VFO,
+#     a tune outside refused, Find NDB, the stats, and the receiver given back exactly (test-server-ndb). ~1 min.
+printf '\n\033[1m── NDB mode (end to end: server, then the web client) ──\033[0m\n'
+if [ -x "$OUT/test-ndb" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-ndb" --write-clip "$OUT/ndb-clip.u8" 362750 2400000 10 >/dev/null
+  VIBE_NDB_CLIP="$OUT/ndb-clip.u8" node scripts/test-server-ndb.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★ …then the web client in headless Edge (--mute-audio): the box, ✓ WOD Woodley, a tap, the tabs, Find, the stats, 390 px
+  VIBE_NDB_CLIP="$OUT/ndb-clip.u8" node scripts/test-web-ndb.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/ndb-clip.u8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-ndb build'; notrun=$((notrun+1))
+fi
 printf '\n\033[1m── ISM mode (end to end: server, then the web client) ──\033[0m\n'
 if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   "$OUT/test-ism" --write-clip "$OUT/ism-clip.u8" 434130000 2400000 >/dev/null
