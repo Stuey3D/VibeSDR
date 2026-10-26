@@ -7,8 +7,8 @@
  * Run: npx tsx scripts/test_drm_app.ts   (run-tests.sh does)
  */
 import { readFileSync } from 'node:fs';
-import { drmSanitise, drmView, drmViewText, drmOffered, DRM_LIGHTS, type DrmState } from '../src/services/drm';
-import { drmRender } from '../web/client/src/drm';
+import { drmSanitise, drmView, drmViewText, drmOffered, drmSignalRows, DRM_LIGHTS, type DrmState } from '../src/services/drm';
+import { drmRender, drmSignalRows as webSignalRows, drmSignalRender } from '../web/client/src/drm';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -69,6 +69,61 @@ const scr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url
 ok('the app offers DRM only through the capability', /const vibeModes = drmCapable \? withDrm\(LOCAL_MODES\) : LOCAL_MODES;/.test(scr));
 ok('the width row goes in DRM', /onFilterBoth=\{status\.mode === 'drm' \? undefined : onFilterBoth\}/.test(scr));
 ok('the shim lists drm in its modes', readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8').includes('"jtty", "drm" }'));
+
+// ── ★★ V12 THE SIGNAL PANE (2026-10-26): the app's rows ARE the web's — same headings, labels, values, tones, tooltips ──
+const NEW: DrmState = {
+  ...RRI, so: 3, sdcQam: 16, codeRateA: 0.5, sdcRate: 0.5, mscMer: 13.1, sdcMer: 14.2, clockPpm: -1.5, delayMs: 0.46, dopplerHz: 0.29,
+  sbr: false, ps: false, audioUnits: 1500, audioBad: 12, concealed: 3, underruns: 1, sdcOk: 40, sdcBad: 1, superFrames: 41,
+  lockS: [0.9, 0.9, 0.9, 1.6, 2.8, 4.0], reacq: 1, lostWhy: 'fac', lostAtS: 31.2, blankedPct: 0.4, iqGaps: 2, dropped: 0,
+};
+const sigCases: Array<[string, DrmState | null]> = [
+  ['nothing yet', null],
+  ['searching, new server', { type: 'drm', reacq: 0, dropped: 0 }],
+  ['re-acquiring after a loss', { type: 'drm', sync: true, freq: true, lockS: [0.8, 1.2, -1, -1, -1, -1], reacq: 2, lostWhy: 'fac', dropped: 3 }],
+  ['RRI on an OLDER server (none of the new fields)', RRI],
+  ['RRI, every field', NEW],
+  ['xHE-AAC not playable', { ...NEW, codec: 'xHE-AAC', sbr: undefined, ps: undefined, playable: false, decoder: undefined, why: 'FFmpeg 7.1 or newer is needed.' }],
+  ['bad channel', { ...NEW, snr: 7, mscMer: 6, sdcMer: 3, delayMs: 5.1, dopplerHz: 2.4, facBad: 30, blankedPct: 12, mscQam: 64, robustness: 'B' }],
+  ['mode D, not measured yet', { ...NEW, robustness: 'D', delayMs: undefined, dopplerHz: undefined }],
+];
+for (const [what, st] of sigCases) eq(`signal rows: ${what}`, drmSignalRows(st), webSignalRows(st));
+const rowsOf = (st: DrmState | null) => drmSignalRows(st).filter((r): r is { k: string; v: string; tone?: 'ok' | 'warn' | 'bad'; tip: string } => !('h' in r));
+const get = (st: DrmState | null, k: string) => rowsOf(st).find((r) => r.k === k);
+eq('the groups, in order', drmSignalRows(NEW).filter((r) => 'h' in r).map((r) => (r as { h: string }).h), ['LOCK', 'SIGNAL', 'QUALITY', 'ERRORS', 'AUDIO', 'STATION']);
+ok('every row has a plain-English tooltip', rowsOf(NEW).every((r) => r.tip.length > 20 && !/undefined/.test(r.tip + r.v)));
+eq('the six lock times, as the lights', rowsOf(NEW).filter((r) => / after$/.test(r.k)).map((r) => `${r.k}=${r.v}`),
+   ['Time after=0.9 s', 'Freq after=0.9 s', 'Frame after=0.9 s', 'FAC after=1.6 s', 'SDC after=2.8 s', 'MSC after=4.0 s']);
+eq('re-acquisitions say why', get(NEW, 'Re-acquisitions')?.v, '1 · last: the FAC failed 16 frames running');
+eq('delay spread against the guard', [get(NEW, 'Delay spread')?.v, get(NEW, 'Delay spread')?.tone], ['0.46 ms of 5.33 ms guard', 'ok']);
+eq('Doppler', [get(NEW, 'Doppler spread')?.v, get(NEW, 'Doppler spread')?.tone], ['0.29 Hz', 'ok']);
+eq('a bad channel is coloured bad', ['SNR', 'MSC MER', 'Delay spread', 'Doppler spread', 'FAC', 'Pulse blanker'].map((k) => get(sigCases[6][1], k)?.tone),
+   ['bad', 'bad', 'bad', 'bad', 'bad', 'bad']);
+eq('errors, not passes', get(NEW, 'FAC')?.v, '2 bad of 42 (4.8 %)');
+eq('MSC MER judged by its QAM (16-QAM needs ~12 dB)', get(NEW, 'MSC MER')?.tone, 'ok');
+eq('not measured yet says so', get(sigCases[7][1], 'Delay spread')?.v, 'measuring…');
+ok('an OLDER server: no row it cannot fill (no lock times, delay, Doppler, SDC MER, gaps)',
+   !rowsOf(RRI).some((r) => / after$|Re-acq|Delay|Doppler|SDC MER|IQ gaps|Audio gaps/.test(r.k)));
+ok('no codec yet: no Decoder row', !get({ type: 'drm', sync: true, locked: true, reacq: 0 }, 'Decoder'));
+// the web renderer: rows patched in place on the same skeleton (DOM-free check of the built HTML)
+{
+  const host = { innerHTML: '', dataset: {} as Record<string, string>, querySelectorAll: () => [] } as unknown as HTMLElement;
+  drmSignalRender(host, NEW);
+  const h = host.innerHTML;
+  ok('web pane: headings, rows with tooltips, traffic lights', /<h4>LOCK<\/h4>/.test(h) && /class="row" title="[^"]{20,}"/.test(h) && /class="tl ok"/.test(h));
+  ok('web pane: values escaped', !/<live>/.test(h) && /&lt;live&gt;/.test(h));
+}
+// sanitiser: the new fields kept when well formed, dropped when not
+eq('sanitised new fields', drmSanitise({ type: 'drm', reacq: 2, lockS: [1, 2, 3, 4, 5, 6], lostWhy: 'fac\u0007', delayMs: 0.5, sbr: true, ps: 'no', iqGaps: 1 }),
+   { type: 'drm', delayMs: 0.5, sbr: true, lockS: [1, 2, 3, 4, 5, 6], reacq: 2, lostWhy: 'fac ', iqGaps: 1 });
+eq('a malformed lockS is dropped', drmSanitise({ type: 'drm', lockS: [1, 'x', 3, 4, 5, 6] })?.lockS, undefined);
+// the panels: the pane key in the header, reachable by pad and keyboard
+const panel = readFileSync(new URL('../src/components/DrmPanel.tsx', import.meta.url), 'utf8');
+ok('app: SIGNAL / STATION key in the header', /label=\{pane === 'signal' \? 'STATION' : 'SIGNAL'\}/.test(panel));
+ok('app: the screen highlight can land on the box, Enter takes the keys', /screenNavRef\('drmBox', \(\) => setGrab\(true\)\)/.test(panel) && /useListNav\(/.test(panel));
+ok('app: the pane draws drmSignalRows', /drmSignalRows\(state\)/.test(panel));
+const main = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+ok('web: the box is one pad stop (data-navbox) with its pane key', /box\.setAttribute\('data-navbox', ''\)/.test(main) && /id="drmPane"/.test(main));
+ok('the app passes the box its height limit', /<DrmPanel state=\{drmState\} topLimit=\{boxTopLimit\}/.test(scr));
 
 console.log(`test_drm_app: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

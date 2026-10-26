@@ -9,7 +9,7 @@
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
-import { drmRender, type DrmState } from './drm';
+import { drmRender, drmSignalRender, type DrmState } from './drm';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
@@ -6598,6 +6598,16 @@ let drmState: DrmState | null = null;
 function offeredModes(): SDRMode[] {
   return [...MODES, ...(drmCap ? ['drm' as SDRMode] : [])].filter((m) => !isModeBlocked(m));
 }
+/** ★★ V12 THE DRM SIGNAL PANE (2026-10-26): the compact box ('station', the default) or DAB's kind of advanced pane
+ *  ('signal', drm.ts drmSignalRows). Kept across reports and retunes, like DAB's; the key in the box's header says where
+ *  it GOES and so which pane is up (DAB's rule for its STATIONS/SIGNAL key). */
+let drmPane: 'station' | 'signal' = 'station';
+function drmSetPane(p: 'station' | 'signal') {
+  drmPane = p;
+  drmBoxSync();
+  const box = document.getElementById('drmBox');
+  if (box) box.scrollTop = 0;   // ★ a pane opens at its top, not wherever the other one was scrolled to
+}
 /** The DRM box: shown while the mode is DRM, filled from the last report (drm.ts). */
 function drmBoxSync() {
   const on = !!spec && spec.mode === 'drm';
@@ -6606,11 +6616,27 @@ function drmBoxSync() {
   if (!box) {
     box = document.createElement('div');
     box.id = 'drmBox';
-    box.innerHTML = '<div id="drmBoxHead"><span class="drmTitle">DRM</span><span class="drmSub">Digital Radio Mondiale</span></div><div id="drmBody"></div>';
+    /* ★★ A [data-navbox], like the decoder box and the ADS-B list (gamepad.ts): the pad stops on the box as ONE place,
+     *  Enter hands it the D-pad (its SIGNAL key first; a pane with nothing to press scrolls), Back gives it back. As a
+     *  plain .open panel it was a pad scope of its own — with nothing in it to land on, so in DRM the pad could reach
+     *  nothing at all. */
+    box.setAttribute('data-navbox', '');
+    box.innerHTML = '<div id="drmBoxHead"><span class="drmTitle">DRM</span><span class="drmSub">Digital Radio Mondiale</span>'
+      + '<button class="btn" id="drmPane" type="button"></button></div>'
+      + '<div id="drmBody"></div><div id="drmSignal" hidden></div>';
     (document.getElementById('wfWrap') ?? document.body).appendChild(box);
+    (box.querySelector('#drmPane') as HTMLElement).onclick = () => drmSetPane(drmPane === 'signal' ? 'station' : 'signal');
   }
   box.classList.add('open');
-  drmRender(document.getElementById('drmBody') as HTMLElement, drmState);
+  const sig = drmPane === 'signal';
+  const bt = box.querySelector('#drmPane') as HTMLElement;
+  const label = sig ? '&#9666; STATION' : 'SIGNAL &#9656;';
+  if (bt.innerHTML !== label) bt.innerHTML = label;
+  bt.title = sig ? 'Back to the station box' : 'Advanced signal information: lock, channel, errors, audio';
+  const body = box.querySelector('#drmBody') as HTMLElement, sg = box.querySelector('#drmSignal') as HTMLElement;
+  body.hidden = sig; sg.hidden = !sig;
+  // ★ Only the pane on screen is drawn (DAB's rule): the hidden one is rebuilt when it is shown
+  if (sig) drmSignalRender(sg, drmState); else drmRender(body, drmState);
 }
 /** The owner has allowed DAB to borrow the capture rate it needs (2.048 MS/s natively since
  *  2026-09-08; 2.4 + resample only if a radio refuses 2.048), and whether that

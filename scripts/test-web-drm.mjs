@@ -6,7 +6,9 @@
 //     and, for this AAC station, the server's sentence saying why there is no audio;
 //   • the station bar (VTS) carries the label; the bandwidth row is hidden (it does nothing in DRM);
 //   • back to AM: the box goes;
-//   • at PHONE WIDTH (390 px) nothing scrolls sideways; no exception on the page. Screenshots to VIBE_SHOT_DIR.
+//   • the SIGNAL key swaps the box for the Signal pane (V12 2026-10-26): its six groups, delay spread against the guard,
+//     Doppler, lock times, MERs, errors; a tooltip on every row; DAB's colours; one pad stop; STATION brings the box back;
+//   • at PHONE WIDTH (390 px) nothing scrolls sideways, box or pane; no exception on the page. Screenshots to VIBE_SHOT_DIR.
 // ★ SILENT: headless Edge with --mute-audio and --disable-audio-output.
 //   VIBESERVER_BIN=…/vibeserver VIBE_DRM_CLIP=…/rri9570_288k.cu8 node scripts/test-web-drm.mjs
 import net from 'node:net';
@@ -113,12 +115,55 @@ try {
   ok(await ev(`(() => { const r = document.querySelector('.bwRow'); return !r || r.style.display === 'none'; })()`), 'the bandwidth row is hidden in DRM');
   const s1 = await shot('drm-desktop.png');
 
+  // ── ★★ V12 THE SIGNAL PANE (2026-10-26): DAB's kind of advanced pane, behind the SIGNAL key in the box's header ──
+  console.log('── the Signal pane ──');
+  ok(await ev(`document.getElementById('drmBox').hasAttribute('data-navbox')`), 'the box is ONE pad stop ([data-navbox]) — Enter hands it the D-pad');
+  ok(await ev(`/SIGNAL/.test(document.getElementById('drmPane')?.textContent || '')`), `the header's key reads "${await ev(`document.getElementById('drmPane')?.textContent`)}"`);
+  await trustedClick('#drmPane');
+  ok(await until(`!document.getElementById('drmSignal').hidden && document.getElementById('drmBody').hidden`, 3000), 'SIGNAL swaps the box for the pane');
+  ok(await ev(`/STATION/.test(document.getElementById('drmPane').textContent)`), 'the key now names where it goes back to: STATION');
+  const heads = await ev(`[...document.querySelectorAll('#drmSignal h4')].map(h => h.textContent).join(' ')`);
+  ok(heads === 'LOCK SIGNAL QUALITY ERRORS AUDIO STATION', `the groups: ${heads}`);
+  const row = (k) => `([...document.querySelectorAll('#drmSignal .row')].find(r => r.firstElementChild.textContent === ${JSON.stringify(k)})?.lastElementChild.textContent || '')`;
+  ok(await until(`/ms of 5\\.33 ms guard/.test(${row('Delay spread')})`, 15000), `delay spread, against the guard: "${await ev(row('Delay spread'))}"`);
+  ok(await until(`/Hz/.test(${row('Doppler spread')})`, 8000), `Doppler spread: "${await ev(row('Doppler spread'))}"`);
+  ok(/\d+\.\d s/.test(await ev(row('MSC after'))), `time to the MSC: "${await ev(row('MSC after'))}"`);
+  ok(/^16-QAM · rate 0\.\d+/.test(await ev(row('Main channel'))), `the main channel: "${await ev(row('Main channel'))}"`);
+  ok(/dB/.test(await ev(row('SDC MER'))) && /dB/.test(await ev(row('MSC MER'))), `MSC / SDC MER: ${await ev(row('MSC MER'))} / ${await ev(row('SDC MER'))}`);
+  ok(/bad of/.test(await ev(row('FAC'))), `FAC errors, not passes: "${await ev(row('FAC'))}"`);
+  ok(await ev(row('Label')) === 'SNR Tiganesti E1', 'the station group carries the label');
+  ok(await ev(`[...document.querySelectorAll('#drmSignal .row')].every(r => (r.title || '').length > 20)`), 'every row has its plain-English tooltip');
+  ok(await ev(`document.querySelectorAll('#drmSignal .tl.ok, #drmSignal .tl.warn, #drmSignal .tl.bad').length >= 8`), 'traffic lights on the values with a nominal range');
+  // the pane's colours are DAB's (one rule, two readers)
+  const colours = JSON.parse(await ev(`JSON.stringify((() => { const d = document.createElement('div'); d.id = 'dabSignal'; d.style.display = 'block';
+      d.innerHTML = '<div class="row"><span>x</span><span><span class="tl ok">1</span></span></div>'; document.body.appendChild(d);
+      const a = getComputedStyle(d.querySelector('.row > span:first-child')).color, b = getComputedStyle(d.querySelector('.tl.ok')).color; d.remove();
+      const r = document.querySelector('#drmSignal .row'); const ok1 = document.querySelector('#drmSignal .tl.ok');
+      return { dabLbl: a, dabOk: b, drmLbl: getComputedStyle(r.firstElementChild).color, drmOk: ok1 ? getComputedStyle(ok1).color : '' }; })())`));
+  ok(colours.dabLbl === colours.drmLbl && colours.dabOk === colours.drmOk, `labels and lights in DAB's colours (${colours.drmLbl}, ${colours.drmOk})`);
+  const clear = async () => JSON.parse(await ev(`JSON.stringify((() => { const h = document.getElementById('srvHealth'), b = document.getElementById('drmPane').getBoundingClientRect();
+      const r = h && getComputedStyle(h).display !== 'none' && h.getBoundingClientRect().height > 0 ? h.getBoundingClientRect() : null;
+      return { key: Math.round(b.top), pill: r ? Math.round(r.bottom) : null, hit: !!r && b.top < r.bottom && b.right > r.left }; })())`));
+  const c1 = await clear();
+  ok(!c1.hit, `the pane's header key is clear of the health pill (key at ${c1.key} px, pill to ${c1.pill ?? '—'} px)`);
+  const s3 = await shot('drm-signal-desktop.png');
+
   console.log('── phone width, 390 px ──');
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1500);
   const fit = JSON.parse(await ev(`JSON.stringify({ doc: document.documentElement.scrollWidth, box: document.getElementById('drmBox').getBoundingClientRect().right,
+                                                    left: document.getElementById('drmBox').getBoundingClientRect().left,
+                                                    rows: Math.max(...[...document.querySelectorAll('#drmSignal .row')].map(r => r.getBoundingClientRect().right)) })`));
+  ok(fit.doc <= 391 && fit.box <= 391 && fit.left >= 0 && fit.rows <= fit.box + 0.5,
+     `the Signal pane: nothing scrolls sideways (page ${fit.doc}, box ${Math.round(fit.left)}–${Math.round(fit.box)}, rows to ${Math.round(fit.rows)} px)`);
+  const c2 = await clear();
+  ok(!c2.hit, `390 px: the header key is clear of the health pill (key at ${c2.key} px, pill to ${c2.pill ?? '—'} px)`);
+  const s4 = await shot('drm-signal-phone.png');
+  await trustedClick('#drmPane');
+  ok(await until(`document.getElementById('drmSignal').hidden && !document.getElementById('drmBody').hidden`, 3000), 'STATION brings the compact box back');
+  const fit2 = JSON.parse(await ev(`JSON.stringify({ doc: document.documentElement.scrollWidth, box: document.getElementById('drmBox').getBoundingClientRect().right,
                                                     left: document.getElementById('drmBox').getBoundingClientRect().left })`));
-  ok(fit.doc <= 391 && fit.box <= 391 && fit.left >= 0, `nothing scrolls sideways (page ${fit.doc}, box ${Math.round(fit.left)}–${Math.round(fit.box)} px)`);
+  ok(fit2.doc <= 391 && fit2.box <= 391 && fit2.left >= 0, `the box: nothing scrolls sideways (page ${fit2.doc}, box ${Math.round(fit2.left)}–${Math.round(fit2.box)} px)`);
   const s2 = await shot('drm-phone.png');
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
 
@@ -129,7 +174,7 @@ try {
   ok(await until(`!document.getElementById('drmBox')?.classList.contains('open')`, 3000), 'AM: the DRM box is gone');
   ok(await ev(`(() => { const r = document.querySelector('.bwRow'); return !r || r.style.display !== 'none'; })()`), 'AM: the bandwidth row is back');
   ok(errs.length === 0, `no exception on the page${errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''}`);
-  console.log(`   screenshots: ${s1}  ${s2}`);
+  console.log(`   screenshots: ${s1}  ${s3}  ${s4}  ${s2}`);
 } finally {
   try { edge?.kill('SIGTERM'); } catch {}
   srv.kill('SIGTERM'); rtl.kill('SIGTERM');

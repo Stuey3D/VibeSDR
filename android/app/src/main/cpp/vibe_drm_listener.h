@@ -15,11 +15,13 @@
 #include "decoders/drm/drm_audio.h"
 #include "decoders/drm/drm_receiver.h"
 #include "vibe_drm_audiodec.h"
+#include "vibe_drm_report.h"
 #include "vibe_thread.h"
 
 #include <atomic>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -28,17 +30,6 @@
 
 namespace vibe {
 
-/** JSON string escape for labels and text that came off the air. */
-inline std::string drmJsonStr(const std::string& s) {
-    std::string o = "\"";
-    for (unsigned char c : s) {
-        if (c == '"' || c == '\\') { o += '\\'; o += char(c); }
-        else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", c); o += b; }
-        else o += char(c);
-    }
-    return o + "\"";
-}
-
 class DrmListener {
 public:
     DrmListener() { th_ = std::thread([this] { loop(); }); }
@@ -46,6 +37,7 @@ public:
         { std::lock_guard<std::mutex> lk(m_); stop_ = true; }
         cv_.notify_all();
         if (th_.joinable()) th_.join();
+        if (dumpF_) std::fclose(dumpF_);
     }
     DrmListener(const DrmListener&) = delete;
     DrmListener& operator=(const DrmListener&) = delete;
@@ -54,9 +46,42 @@ public:
     void feedIq(const std::complex<float>* x, int n, double rateHz) {
         if (n <= 0) return;
         std::lock_guard<std::mutex> lk(m_);
+        /* ★ DIAGNOSTIC (test benches only): VIBE_DRM_DUMP=<dir> writes every block this listener is fed — [f64 rate][i32 n]
+         *  [n × cf32] — so a run that lost sync can be replayed offline through the same receiver (the flaky
+         *  test-server-drm, 2026-10-26). Off unless the variable is set; never in a release's environment. */
+        if (dumpF_ == nullptr && !dumpTried_) {
+            dumpTried_ = true;
+            if (const char* d = std::getenv("VIBE_DRM_DUMP")) {
+                char path[512]; std::snprintf(path, sizeof path, "%s/drm-iq-%p.bin", d, static_cast<void*>(this));
+                dumpF_ = std::fopen(path, "wb");
+            }
+        }
+        if (dumpF_) { const int32_t nn = n; std::fwrite(&rateHz, 8, 1, dumpF_); std::fwrite(&nn, 4, 1, dumpF_); std::fwrite(x, 8, size_t(n), dumpF_); }
+        lastN_ = n; lastRate_ = rateHz;
         q_.push_back(Block{std::vector<vibedrm::cf>(x, x + n), rateHz});
         queued_ += size_t(n);
         while (queued_ > size_t(rateHz * 2.0) && q_.size() > 1) { queued_ -= q_.front().iq.size(); q_.pop_front(); ++dropped_; }
+        cv_.notify_one();
+    }
+
+    /** ★★★ BLOCKS THAT NEVER CAME (2026-10-26 — the flaky test-server-drm). A range-locked listener's DSP thread is fed
+     *  through a queue with ~40 ms of slack (handBlockToListeners); when that thread is descheduled the oldest blocks
+     *  are DROPPED, and the thread sees it as a jump in the channelizer's block numbering. Audio shrugs a 10 ms hole off.
+     *  OFDM does not: the samples after the hole arrive a fraction of a symbol early, the frame alignment is gone, 16
+     *  FACs fail and the lock is lost — 5 to 10 s of silence for one scheduling hiccup. So the hole is FILLED with as
+     *  many zeros as the blocks carried (every block of a channel is the same length — the last one is the measure):
+     *  the timeline keeps its alignment, the missing cells equalise to zero weight — erasures, which the interleaver
+     *  and the Viterbi absorb — and the lock holds. Counted for the Signal pane ("IQ gaps"). */
+    void noteGap(int blocks) {
+        if (blocks <= 0) return;
+        std::lock_guard<std::mutex> lk(m_);
+        ++gaps_;
+        if (lastN_ <= 0 || !(lastRate_ > 0) || blocks > 64) return;   // nothing to measure by, or far too long to bridge
+        const size_t n = size_t(blocks) * size_t(lastN_);
+        q_.push_back(Block{std::vector<vibedrm::cf>(n, vibedrm::cf(0, 0)), lastRate_});
+        queued_ += n;
+        if (dumpF_) { const int32_t nn = int32_t(n); std::fwrite(&lastRate_, 8, 1, dumpF_); std::fwrite(&nn, 4, 1, dumpF_);
+                      std::fwrite(q_.back().iq.data(), 8, n, dumpF_); }
         cv_.notify_one();
     }
 
@@ -81,6 +106,7 @@ public:
         return status_;
     }
     uint64_t droppedBlocks() const { std::lock_guard<std::mutex> lk(m_); return dropped_; }
+    uint64_t gaps() const { std::lock_guard<std::mutex> lk(m_); return gaps_; }
 
 private:
     static constexpr int kPrimeFrames = 48000 * 8 / 10;   // 0.8 s
@@ -130,48 +156,25 @@ private:
         pcmFrames_ += pcm.size() / 2;
     }
 
-    /** ★ Words where the standard has words; the numbers a DXer reads (MER, mode, QAM, rate) as numbers. */
+    /** ★ The report (vibe_drm_report.h — its own header so the wire format is tested on its own). */
     void publish() {
         const vibedrm::RxStatus& s = rx_.status();
-        std::string j = "{\"type\":\"drm\"";
-        auto b = [&](const char* k, bool v) { j += std::string(",\"") + k + "\":" + (v ? "true" : "false"); };
-        b("sync", s.timeSync); b("freq", s.freqSync); b("frame", s.frameSync); b("fac", s.facOk); b("sdc", s.sdcOk); b("msc", s.mscOk);
-        b("locked", s.locked);
-        char buf[512];
-        if (s.mode != vibedrm::Mode::None) { j += ",\"robustness\":\""; j += vibedrm::modeLetter(s.mode); j += "\""; }
-        if (s.locked) {
-            static const double bwKhz[6] = { 4.5, 5, 9, 10, 18, 20 };
-            std::snprintf(buf, sizeof buf, ",\"bwKhz\":%g,\"mscQam\":%d,\"sdcQam\":%d,\"interleave\":\"%s\",\"codeRate\":%.2f,"
-                          "\"snr\":%.1f,\"mscMer\":%.1f,\"offsetHz\":%.1f,\"clockPpm\":%.1f",
-                          s.so >= 0 && s.so < 6 ? bwKhz[s.so] : 0.0, 1 << (2 * s.mscLevels), 1 << (2 * s.sdcLevels),
-                          s.longInterleave ? "long" : "short", s.codeRateB, s.facMerDb, s.mscMerDb, s.freqOffsetHz, s.sroPpm);
-            j += buf;
-            if (s.fac.serviceId) { std::snprintf(buf, sizeof buf, ",\"serviceId\":\"%06X\"", unsigned(s.fac.serviceId)); j += buf; }
-            const vibedrm::ServiceSdc& sv = s.sdc.svc[size_t(s.fac.shortId & 3)];
-            if (!sv.label.empty()) j += ",\"label\":" + drmJsonStr(sv.label);
-            const char* lang = vibedrm::languageName(s.fac.language);
-            if (*lang) j += ",\"language\":" + drmJsonStr(lang);
-            if (!sv.lang3.empty()) j += ",\"lang3\":" + drmJsonStr(sv.lang3);
-            if (!sv.country2.empty()) j += ",\"country\":" + drmJsonStr(sv.country2);
-            if (!s.fac.isData) { const char* pty = vibedrm::programmeTypeName(s.fac.descriptor); if (*pty) j += ",\"programme\":" + drmJsonStr(pty); }
-            if (!s.text.empty()) j += ",\"text\":" + drmJsonStr(s.text);
-            if (s.sdc.haveTime) { std::snprintf(buf, sizeof buf, ",\"utc\":\"%02d:%02d\"", s.sdc.hour, s.sdc.minute); j += buf; }
-            if (sv.audio.present) {
-                j += ",\"codec\":" + drmJsonStr(sv.audio.codecName()) + ",\"audioMode\":" + drmJsonStr(sv.audio.modeName());
-                std::snprintf(buf, sizeof buf, ",\"audioRate\":%d,\"bitrate\":%d", sv.audio.sampleRateHz(), s.bitrateBps); j += buf;
-                std::string why, backend;
-                const bool can = DrmAudioDecoder::canDecode(sv.audio, why, backend);
-                b("playable", can && dec_.isOpen());
-                if (!can) j += ",\"why\":" + drmJsonStr(why);
-                else if (!dec_.isOpen() && decTried_) j += ",\"why\":" + drmJsonStr(dec_.why());
-                if (dec_.isOpen()) j += ",\"decoder\":" + drmJsonStr(dec_.backend());
-                std::snprintf(buf, sizeof buf, ",\"audioUnits\":%lld,\"audioBad\":%lld,\"concealed\":%lld", (long long)decodedUnits_, (long long)badUnits_,
-                              (long long)dec_.unitsConcealed()); j += buf;
-            }
+        DrmReportExtras x;
+        const vibedrm::ServiceSdc& sv = s.sdc.svc[size_t(s.fac.shortId & 3)];
+        if (s.locked && sv.audio.present) {
+            std::string why, backend;
+            x.canDecode = DrmAudioDecoder::canDecode(sv.audio, why, backend);
+            x.decoderOpen = dec_.isOpen(); x.decoderTried = decTried_;
+            x.why = x.canDecode ? (x.decoderOpen ? std::string() : dec_.why()) : why;
+            if (x.decoderOpen) x.backend = dec_.backend();
+            x.concealed = dec_.unitsConcealed();
         }
-        std::snprintf(buf, sizeof buf, ",\"facOk\":%lld,\"facBad\":%lld,\"dropped\":%llu}", (long long)s.facGood, (long long)s.facBad,
-                      (unsigned long long)droppedBlocks());
-        j += buf;
+        x.audioUnits = decodedUnits_; x.audioBad = badUnits_;
+        { std::lock_guard<std::mutex> lk(pm_); x.underruns = underruns_; }
+        x.dropped = droppedBlocks();
+        x.gaps = gaps();
+        x.blanked = rx_.recentBlankedFraction();
+        std::string j = drmReportJson(s, x);
         std::lock_guard<std::mutex> lk(sm_);
         if (j != status_) { status_ = j; ++statusVer_; }
     }
@@ -185,6 +188,8 @@ private:
     mutable std::mutex m_;
     std::condition_variable cv_;
     std::deque<Block> q_; size_t queued_ = 0; uint64_t dropped_ = 0; bool stop_ = false;
+    std::FILE* dumpF_ = nullptr; bool dumpTried_ = false;   // VIBE_DRM_DUMP (diagnostic)
+    int lastN_ = 0; double lastRate_ = 0; uint64_t gaps_ = 0;   // noteGap: the block length to fill a hole with
 
     std::mutex pm_;
     std::vector<float> pcm_; bool primed_ = false; int64_t underruns_ = 0; uint64_t pcmFrames_ = 0;
