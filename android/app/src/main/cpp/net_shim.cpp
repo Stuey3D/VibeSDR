@@ -262,6 +262,44 @@ std::shared_ptr<Socket> Listener::accept(Address*, int timeout) {
 
 // ── Factories ───────────────────────────────────────────────────────────────
 std::shared_ptr<Listener> listen(const std::string& host, int port) {
+    /* ★★★ DUAL-STACK (2026-10-25). Nick (G4IRX), a real Orange Pi One: "vibeserversetup.local resolves to a link local
+     *  ipv6, then a public ipv6, but no ipv4 … 'site not found'" — while http://<its IPv4>:48000/ worked. The server
+     *  listened on AF_INET only, so a browser that was handed only IPv6 addresses (an mDNS answer without an A record,
+     *  an IPv6-first network) had nowhere to connect. "Any address" (0.0.0.0, "" or "::") is now ONE AF_INET6 socket
+     *  with IPV6_V6ONLY=0 on in6addr_any: IPv6 clients directly, IPv4 clients as ::ffff:a.b.c.d — which
+     *  socketPeerAddress() has always unwrapped to a.b.c.d, so every ban, log line, LAN test and lockout sees exactly
+     *  the text it saw before for an IPv4 client.
+     *  ★ FALLBACK: a host with IPv6 switched off (ipv6.disable=1 → no AF_INET6 socket; or a bind that cannot be made)
+     *    gets the old IPv4 listener. EADDRINUSE is NOT a reason to fall back: the port is taken for both families, and
+     *    the callers' port scans (48000-48049, 50001-50100) need to hear exactly that.
+     *  ★ A named address is bound as named: "127.0.0.1" stays IPv4 loopback (local-only mode), "::1" IPv6 loopback. */
+    const bool anyHost = host.empty() || host == "0.0.0.0" || host == "::";
+    struct in6_addr a6named {};
+    const bool named6 = !anyHost && ::inet_pton(AF_INET6, host.c_str(), &a6named) == 1;
+    if (anyHost || named6) {
+        int fd6 = ::socket(AF_INET6, SOCK_STREAM, 0);
+        if (fd6 >= 0) {
+            { const int fl = ::fcntl(fd6, F_GETFD, 0); if (fl >= 0) ::fcntl(fd6, F_SETFD, fl | FD_CLOEXEC); }
+            int one = 1, v6only = named6 ? 1 : 0;
+            ::setsockopt(fd6, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+            const bool dual = ::setsockopt(fd6, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) == 0;
+            struct sockaddr_in6 a {};
+            a.sin6_family = AF_INET6;
+            a.sin6_port   = htons((uint16_t)port);
+            a.sin6_addr   = named6 ? a6named : in6addr_any;
+            if ((dual || named6) && ::bind(fd6, (struct sockaddr*)&a, sizeof(a)) == 0) {
+                if (::listen(fd6, 8) < 0) { ::close(fd6); throw std::runtime_error("listen() failed"); }
+                return std::make_shared<Listener>(fd6);
+            }
+            const int e = errno;
+            ::close(fd6);
+            if (named6 || (dual && e == EADDRINUSE))
+                throw std::runtime_error("bind() failed on " + host + ":" + std::to_string(port));
+        } else if (named6) {
+            throw std::runtime_error("socket() failed");
+        }
+        // ★ No IPv6 here: the IPv4 listener below, exactly as before.
+    }
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) throw std::runtime_error("socket() failed");
     /* ★★★ NO CHILD MAY INHERIT THE LISTENING SOCKET, AND ONE DID — WITH THE PORT.

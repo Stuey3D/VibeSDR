@@ -66,8 +66,8 @@ esac
 if [ "$RAM_MB" -lt 512 ] || [ "$STATUS" = dietpi ]; then
   die "$NAME has $RAM_MB MB — a Portable card needs 512 MB or more; use the DietPi ordinary-server image (image/soft66ip-dietpi) for this board"
 fi
-ONBOARDING="Ethernet first: VibeServerSetup.local:48000 (no onboard Wi-Fi; a USB Wi-Fi adapter gets the setup hotspot)"
-[ "$WIFI" = none ] || ONBOARDING="open \"VibeServer\" setup hotspot on the onboard $WIFI, and VibeServerSetup.local:48000 on Ethernet"
+ONBOARDING="Ethernet first: http://VibeServerSetup.local/ (or :48000; no onboard Wi-Fi; a USB Wi-Fi adapter present at first boot gets the setup hotspot, one added after setup is offered on the setup page)"
+[ "$WIFI" = none ] || ONBOARDING="open \"VibeServer\" setup hotspot on the onboard $WIFI, and http://VibeServerSetup.local/ (or :48000) on Ethernet"
 OUT_NAME="vibeserver-portable-$BOARD-$(date -u +%Y%m%d)"
 
 if [ "${DRY_RUN:-0}" = 1 ]; then
@@ -279,7 +279,8 @@ rm -rf "$R/tmp/pocket-files" "$R/tmp/pocket-debs" "$R/tmp/sbc-files"
 rm -f "$R/etc/resolv.conf"
 if [ -n "$RESOLV_LINK" ]; then ln -s "$RESOLV_LINK" "$R/etc/resolv.conf"; rm -f "$R/etc/resolv.conf.vibe-keep"
 else mv -f "$R/etc/resolv.conf.vibe-keep" "$R/etc/resolv.conf" 2>/dev/null || true; fi
-# ★ Made on the box, not shared by every card (Armbian's first run makes new SSH host keys itself).
+# ★ Made on the box, not shared by every card. (SSH host keys: none on the card — customise-armbian.sh deletes the
+#   base's, and the owner's "Enable SSH" makes the box's own.)
 : > "$R/etc/machine-id"
 rm -f "$R/var/lib/dbus/machine-id"
 
@@ -301,7 +302,33 @@ check "vibeserver enabled"                      'wants vibeserver.service multi-
 check "NetworkManager enabled"                  'wants NetworkManager.service multi-user.target'
 check "avahi-daemon enabled"                    'wants avahi-daemon.service multi-user.target'
 check "systemd-networkd off"                    '! wants systemd-networkd.service multi-user.target'
-check "sshd off"                                '! wants ssh.service multi-user.target'
+# ★★★ EVERY WAY sshd CAN START (2026-10-25: "sshd off" checked one link, and Armbian's first run started sshd anyway).
+#     ssh_wanted: any ssh/sshd service or socket linked into ANY .wants/.requires directory (multi-user, sockets.target…).
+ssh_wanted() { find "$R/etc/systemd/system" "$R/usr/lib/systemd/system" \( -path '*.wants/*' -o -path '*.requires/*' \) 2>/dev/null \
+                 | sed 's|.*/||' | grep -c -E '^(ssh|sshd)(@.*)?\.(service|socket)$' || true; }
+masked() { [ -L "$R/etc/systemd/system/$1" ] && [ "$(readlink "$R/etc/systemd/system/$1")" = /dev/null ]; }
+ssh_preset() { cat "$R"/usr/lib/systemd/system-preset/* "$R"/etc/systemd/system-preset/* 2>/dev/null \
+                 | grep -c -E '^[[:space:]]*enable[[:space:]]+(ssh|sshd)' || true; }
+ssh_cond() { cat "$R"/usr/lib/systemd/system/ssh.service "$R"/usr/lib/systemd/system/ssh.socket 2>/dev/null | grep -c 'ConditionPathExists=!/etc/ssh/sshd_not_to_be_run' || true; }
+check "sshd: no ssh/sshd unit wanted by any target" '[ "$(ssh_wanted)" = 0 ]'
+check "sshd: no sshd.service alias link"         '[ ! -e "$R/etc/systemd/system/sshd.service" ] && [ ! -L "$R/etc/systemd/system/sshd.service" ]'
+check "sshd: ssh.socket and sshd@.service masked" 'masked ssh.socket && masked sshd@.service'
+check "sshd: Debian's sshd_not_to_be_run present" '[ -f "$R/etc/ssh/sshd_not_to_be_run" ]'
+check "sshd: ssh.service and ssh.socket honour it" '[ "$(ssh_cond)" = 2 ]'
+check "sshd: no preset enables it"               '[ "$(ssh_preset)" = 0 ]'
+check "sshd: Armbian's first run neither restarts sshd nor makes keys" \
+      'grep -q "^OPENSSHD_REGENERATE_HOST_KEYS=false" "$R/etc/default/armbian-firstrun"'
+check "sshd: no host keys on the card (each box makes its own)" '[ -z "$(ls "$R"/etc/ssh/ssh_host_* 2>/dev/null)" ]'
+check "sshd: systemd's ssh generator masked"     '[ "$(readlink "$R/etc/systemd/system-generators/systemd-ssh-generator")" = /dev/null ]'
+check "sshd: PermitRootLogin no, read first"     \
+      '[ "$(ls "$R/etc/ssh/sshd_config.d/" | head -1)" = 00-vibeserver-portable.conf ] && grep -q "^PermitRootLogin no" "$R/etc/ssh/sshd_config.d/00-vibeserver-portable.conf" && grep -q "^Include /etc/ssh/sshd_config.d/" "$R/etc/ssh/sshd_config"'
+check "avahi asks vibeserver-pocket which name to publish (ExecCondition gate)" \
+      'grep -q "^ExecCondition=/usr/lib/vibeserver/vibeserver-pocket avahi-gate" "$R/etc/systemd/system/avahi-daemon.service.d/50-vibeserver-pocket.conf"'
+check "systemd-resolved answers no name (LLMNR off, mDNS off)" \
+      'grep -q "^LLMNR=no" "$R/etc/systemd/resolved.conf.d/60-vibeserver-pocket.conf" && grep -q "^MulticastDNS=no" "$R/etc/systemd/resolved.conf.d/60-vibeserver-pocket.conf"'
+check "avahi publishes both address families" \
+      'grep -q "^publish-a-on-ipv6=yes" "$R/etc/avahi/avahi-daemon.conf"'
+check "sshd: no SysV rc start link"              '[ -z "$(ls "$R"/etc/rc[2-5].d/S*ssh 2>/dev/null)" ]'
 check "netplan hands Ethernet to NetworkManager" 'grep -q "renderer: NetworkManager" "$R/etc/netplan/10-vibeserver-networkmanager.yaml"'
 check "Armbian root resize off"                 '[ -f "$R/root/.no_rootfs_resize" ]'
 check "nmcli, iw, dnsmasq, nft, avahi present"  '[ -x "$R/usr/bin/nmcli" ] && [ -x "$R/usr/sbin/iw" -o -x "$R/usr/bin/iw" ] && [ -x "$R/usr/sbin/dnsmasq" ] && [ -x "$R/usr/sbin/nft" ] && [ -x "$R/usr/sbin/avahi-daemon" ]'
@@ -359,7 +386,11 @@ printf '%s\r\n' \
   "  3. The box raises its open \"VibeServer\" setup hotspot again; it deletes the file itself." \
   "Your radios, admin password and other settings are kept." \
   "" \
-  "On Ethernet the box is always at  http://vibeserversetup.local:48000  until it is set up." \
+  "On Ethernet the box is always at  http://vibeserversetup.local/  until it is set up" \
+  "(http://vibeserversetup.local:48000 works too)." \
+  "" \
+  "A USB Wi-Fi adapter plugged in AFTER setup is left switched off until you choose:" \
+  "the setup page asks \"New Wi-Fi hardware detected - configure it now?\"." \
   > "$WORK/fat/README-VibeServer.txt"
 umount "$WORK/fat"
 losetup -d "$LOOP"; LOOP=""

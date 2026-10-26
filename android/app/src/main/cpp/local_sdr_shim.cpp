@@ -147,6 +147,7 @@ struct VibeRtlTunerOps {
 #include <poll.h>
 #include <sys/socket.h>   // MSG_PEEK, recv — for the hand-off peek        // hand-written: the setup page, GET / when unconfigured
 #include "vibe_admin.h"
+#include "vibe_ipclass.h"     // ★ IPv6 clients: LAN prefixes, the /64 lockout key (2026-10-25)
 #include "vibe_health.h"
 #include "vibe_mapdata.h"   // the bundled vector map, served from DISK — see the header
 #include "vibe_mapgl.h"     // the GPU map's files (renderer, style, glyphs, PMTiles) — see the header
@@ -5210,7 +5211,11 @@ struct VsAuth {
         issued[hex] = now;
         return hex;
     }
-    bool blocked(const std::string& ip) {
+    /* ★★ IPv6 (2026-10-25, the listener is dual-stack): a remote client owns a whole /64 and can take a new address
+     *  per guess, so the lockout counts a remote IPv6 client under its /64 (vibeip::lockKey). IPv4 and LAN addresses
+     *  count exactly as before. Every entry point below goes through it. */
+    bool blocked(const std::string& ipIn) {
+        const std::string ip = vibeip::lockKey(ipIn);
         std::lock_guard<std::mutex> lk(mtx);
         auto it = fails.find(ip);
         return it != fails.end() && nowMs() < it->second.until;
@@ -5218,14 +5223,16 @@ struct VsAuth {
     /** Seconds left on this IP's lockout, 0 if none. The CLIENT needs this: a WebSocket
      *  error carries no status code, so without being told, a locked-out browser reports
      *  "wrong PIN" and the user retypes a perfectly correct one forever. */
-    int blockedFor(const std::string& ip) {
+    int blockedFor(const std::string& ipIn) {
+        const std::string ip = vibeip::lockKey(ipIn);
         std::lock_guard<std::mutex> lk(mtx);
         auto it = fails.find(ip);
         if (it == fails.end()) return 0;
         int64_t left = it->second.until - nowMs();
         return left > 0 ? (int)((left + 999) / 1000) : 0;
     }
-    void recordFail(const std::string& ip) {
+    void recordFail(const std::string& ipIn) {
+        const std::string ip = vibeip::lockKey(ipIn);
         std::lock_guard<std::mutex> lk(mtx);
         const int64_t now = nowMs();
         /* ★★ BOUNDED (audit 2026-10-03). An entry was only ever removed by a SUCCESS from the same
@@ -5254,7 +5261,7 @@ struct VsAuth {
         }
     }
     void recordOk(const std::string& ip) {
-        std::lock_guard<std::mutex> lk(mtx); fails.erase(ip);
+        std::lock_guard<std::mutex> lk(mtx); fails.erase(vibeip::lockKey(ip));
     }
     /** Is this a nonce we issued and still hold? An unknown one cannot be a PIN guess — a guess
      *  has to be made against a nonce the server handed out — so callers may refuse it without
@@ -5480,7 +5487,10 @@ static bool isPrivateIp(const std::string& ip) {
     std::string v = ip.rfind("::ffff:", 0) == 0 ? ip.substr(7) : ip;
     if (v.rfind("10.", 0) == 0 || v.rfind("192.168.", 0) == 0) return true;
     if (v.rfind("172.", 0) == 0) { const int o = atoi(v.c_str() + 4); if (o >= 16 && o <= 31) return true; }
-    if (v.rfind("fd", 0) == 0 || v.rfind("fe80", 0) == 0) return true;   // ULA / link-local v6
+    /* ★★ IPv6 (2026-10-25, the listener is dual-stack): fc00::/7 ULA and fe80::/10 link-local (the old text test
+     *  caught only fd… and fe80…), and a GLOBAL address inside one of this box's own on-link prefixes — IPv6 has no
+     *  NAT, so the laptop beside the box has a public address in the box's /64. See vibe_ipclass.h. */
+    if (v.find(':') != std::string::npos) return vibeip::isLinkLocalOrUla(v) || vibeip::onLinkV6(v);
     return false;
 }
 /** The machine's own LAN address, for the "connect your app to …" line. First non-loopback IPv4. */

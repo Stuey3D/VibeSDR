@@ -36,8 +36,18 @@ struct Paths {
     std::string kick     = "/var/lib/vibeserver/pocket-kick.request"; // one word: switch | scan | scan-force | wifi-off | wifi-on …
     std::string portFile = "/var/lib/vibeserver/pocket-port";         // our front door's port, for the :80 redirect
     std::string sshInbox = "/var/lib/vibeserver/pocket-ssh.request";  // the owner's SSH switch (0600) — root reads + deletes
+    // ★★★ THE ONE .local NAME AFTER SETUP (Stuart, 2026-10-25: "realistically the only .local address open after setup
+    //     should be the one the user sets"). On a Portable the server does NOT run its own mDNS responder: it writes the
+    //     name it would advertise here, and the root service makes it the box's hostname, which avahi publishes (IPv4
+    //     and IPv6, every interface) with the _vibesdr._tcp service. One responder, one name. {"label":"…","port":N,"pin":bool}
+    std::string mdnsFile = "/var/lib/vibeserver/pocket-mdns";
 };
 Paths& paths();
+
+/** ★★★ The name this server would advertise on mDNS ("" = none: not set up, mDNS off, no name), written for the root
+ *  service (see Paths::mdnsFile). The label is already a DNS label (vsconfig::mdnsLabel). port 0 = the front door's
+ *  (pocket-port, written once it has bound). Returns false + err on failure. */
+bool writeMdnsName(const std::string& label, int port, bool pin, std::string& err);
 
 /** The pocket image's marker is present. Checked on each call (a stat): cheap, and honest. */
 bool enabled();

@@ -89,6 +89,7 @@ SETUP_NAME   = "vibe-setup-ap"      # the OPEN first-boot hotspot
 PRIORITY     = {1: 30, 2: 20, 3: 10}
 AP_ADDR      = "10.42.0.1"          # ★ pinned: vibeserver/pocket.h's kApAddress says the same
 NFT_TABLE    = "vibeserver_captive"
+SETUP_TABLE  = "vibeserver_setup"   # ★ :80 on EVERY link while the box is being set up (see setup_door)
 # ★★ "The radio is in use" — every vibeserver process on the box touches this (RAM, /run) every 30 s while anyone is
 #    listening. The Own Wi-Fi hold ends once it has been quiet for RELEASE_SEC. Written by the server, read here.
 ACTIVE_FILE  = "/run/vibeserver/pocket-active"
@@ -105,11 +106,25 @@ SERVER_CONF  = "/etc/vibeserver/config.json"                # the server's setti
 #     VibeServerSetup.local (mDNS is case-blind) on EVERY network — the setup hotspot, the owner's
 #     Wi-Fi, their own hotspot — so "reconnect to your network and open VibeServerSetup.local:48000"
 #     works with no router page and no IP address. Once "Save and start" has configured it, the name
-#     is RETIRED: the hostname becomes RUN_HOST and the server publishes the name chosen in setup.
+#     is RETIRED: the hostname becomes the name chosen in setup — the ONLY name the box then answers to (below).
 #     ★ The HOSTNAME, published by avahi, not a record the server publishes: avahi follows the box
 #       from 10.42.0.1 to the home network's address by itself; a record would go stale on the switch.
 SETUP_HOST   = "vibeserversetup"
-RUN_HOST     = "vibepocket"
+RUN_HOST     = "vibepocket"         # ★ the hostname of a set-up box with NO chosen name — never published (mdns_plan)
+# ★★★ ONE .local NAME AFTER SETUP — THE OWNER'S (Stuart, 2026-10-25: "realistically the only .local address open after
+#     setup should be the one the user sets"). Until then vibepocket.local (avahi, the hostname) answered beside the
+#     server's own <chosen>.local (its responder) — two names, two responders, the server's IPv4 only. Now the server
+#     writes the name it would advertise into MDNS_FILE and runs no responder on a Portable; this service makes it the
+#     HOSTNAME, which avahi publishes on IPv4 and IPv6, with the _vibesdr._tcp service in AVAHI_SERVICE. avahi asks
+#     before every start (`vibeserver-pocket avahi-gate`, the converge's drop-in) and is skipped when there is nothing to
+#     publish. While setting up: vibeserversetup.local only; for RETIRE_SEC after a Save, the new name too (an
+#     /etc/avahi/hosts alias), because the page sends the owner there at once.
+MDNS_FILE     = "/var/lib/vibeserver/pocket-mdns"            # the server writes {"label","port","pin"}; root reads
+MDNS_PLAN     = "/run/vibeserver-pocket/mdns-plan.json"      # what avahi should publish now — the gate applies it
+AVAHI_SERVICE = "/etc/avahi/services/vibeserver-pocket.service"
+AVAHI_HOSTS   = "/etc/avahi/hosts"
+AVAHI_ALIAS_TAG = "# vibeserver-pocket: the new name, while the setup name retires"
+LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 RETIRE_SEC   = 180           # ★ how long the setup name outlives a setup finished in this run (see sync_hostname)
 HOSTNAME_FILE = "/etc/hostname"
 HOSTS_FILE    = "/etc/hosts"
@@ -175,6 +190,27 @@ JOIN_KEEP = 20
 #       · 0600 (SSIDs are private) and in Download diagnostics (vibeserver-diagnostics), secrets scrubbed there as
 #         everything else is. The journal is never made persistent: this is the part worth keeping, nothing else.
 WIFI_LOG = "/var/lib/vibeserver-pocket/wifi-log.txt"
+# ★★★ THE WI-FI HARDWARE THIS BOX KNOWS (Stuart, 2026-10-25: "we need to detect USB wifi dongles that are added after
+#     initial install, so each boot do a quick hardware poll, dont force a resetup if a wifi dongle is detected but when
+#     a user goes into setup show an option for new wifi hardware detected, configure it now?"). Before this, a radio
+#     that appeared on a set-up box with nothing saved for it went straight to raise_hotspot("no Wi-Fi network saved
+#     yet") — the OPEN "VibeServer" setup hotspot, on a live server. Now:
+#       · every radio seen while the box is being set up is recorded as KNOWN (it is the one being set up);
+#       · on a SET-UP box a radio not in the record is NEW: left alone — NetworkManager told not to manage it (so it
+#         joins nothing on its own), no hotspot, no network, no re-setup — and state.json says so (newWifi);
+#       · the setup page asks "New Wi-Fi hardware detected — configure it now?": Configure makes it THE box's Wi-Fi
+#         (known; the box's saved profiles move to it) and opens the Wi-Fi form; Not now records it as IGNORED
+#         (known-but-off: never managed, never asked again — the page can still use it later);
+#       · unplugging any radio changes nothing in the record; a known radio that comes back is managed again.
+#     ★ A box set up before this release has no record: the radios present in its first minute are adopted as known
+#       (WIFI_HW_ADOPT_SEC — an onboard chip is listed a few seconds into boot), so an update never idles its Wi-Fi.
+#     On the settings partition (survives the read-only root); root 0600 (it holds hardware ids, no secrets).
+WIFI_HW_FILE = "/var/lib/vibeserver-pocket/wifi-hardware.json"
+WIFI_HW_ADOPT_SEC = 60
+# ★★ THE OWNER ASKED FOR THE OPEN SETUP HOTSPOT (a reset file, vibeserver-reset-wifi): on a set-up box that is the only
+#    way it ever comes up again — until the owner saves Wi-Fi. A file, so a power cut mid-way keeps the way in.
+WIFI_RESET_PENDING = "/var/lib/vibeserver-pocket/wifi-reset-pending"
+SYS_NET = "/sys/class/net"
 WIFI_LOG_CAP = 128 * 1024
 WIFI_LOG_FLUSH_SEC = 900
 WIFI_LOG_AFTER_JOIN_SEC = 20
@@ -729,7 +765,12 @@ class Box:
         self.last_client = sh.now()
         self.clients = 0
         self.captive_port = None
+        self.captive_dropped = False  # ★ the Wi-Fi :80 table removed (captive_off) — asked once, not every turn
+        self.setup_door_port = None   # ★ the :80 → front door redirect on every link, while setting up (setup_door)
         self.host_synced = False
+        self.mdns_file = MDNS_FILE
+        self.mdns_plan_path = MDNS_PLAN
+        self.mdns_plan_now = None     # ★ the publishing plan applied this run (sync_hostname)
         self.saw_unconfigured = False
         self.configured_at = None
         self.since = int(time.time())
@@ -763,6 +804,21 @@ class Box:
         self.wifi_off = str(conf.get("WIFI_OFF", "0")).strip() == "1"
         self.radio_off_done = False   # `nmcli radio wifi off` already sent this run
         self._was_wired_off = True    # (for one log line when the cable goes while Wi-Fi is off)
+        # ★★★ THE WI-FI HARDWARE RECORD (WIFI_HW_FILE). configured: set by sync_hostname each turn (None = not told yet,
+        #     treated as "being set up" — exactly the behaviour before 2026-10-25).
+        self.configured = None
+        self.hw_path = WIFI_HW_FILE
+        self.hw = None                # {"v":1, "known": {id: info}, "ignored": {id: info}} — None until loaded
+        self.hw_loaded = False
+        self.hw_adopt_until = None    # ★ a box set up before the record existed: adopt what appears in its first minute
+        self.hw_save_failed = False
+        self.new_wifi = []            # [{iface, id, driver, usb}] — NEW radios on a set-up box, left alone
+        self.ignored_wifi = []        # [{iface, id, driver, usb}] — present radios the owner said Not now to
+        self.left_alone = set()       # ifaces already told to NetworkManager as unmanaged this run
+        self.prefer_dev = None        # the radio the owner chose (Configure) — managed before any other known one
+        self.adopting = False         # ★ Configure pressed, nothing saved yet: no hotspot until the owner saves
+        self.reset_path = WIFI_RESET_PENDING
+        self._unset_logged = False
 
     def ci(self, k):
         try:
@@ -816,7 +872,10 @@ class Box:
         devs = self.devices()
         if devs is None:
             return
-        wifi = next((d for d, t, _ in devs if t == "wifi"), None)
+        wifi = self.pick_radio([d for d, t, _ in devs if t == "wifi"])
+        if wifi and self.dev and wifi != self.dev:
+            log("Wi-Fi moves from %s to %s" % (self.dev, wifi))
+            self.dev, self.cur, self.st, self.link, self.want = None, "", 0, None, None
         if wifi and not self.dev:
             self.dev = wifi
             # ★ NM's own autoconnect gets its BOOT_GRACE_SEC from the moment the radio exists, not from our start.
@@ -847,6 +906,156 @@ class Box:
         if not wired:
             self.wired_ip = ""
         self.wired = bool(wired)
+
+    # ── ★★★ the Wi-Fi hardware record (WIFI_HW_FILE) ──
+    def radio_info(self, dev):
+        """What a radio IS, from sysfs: a USB dongle by vendor:product and serial (or its USB port when it has none),
+        anything else by its driver and bus address. Stable across reboots and names (a USB dongle is wlx<mac> on one
+        boot and wlan1 on another, depending on the image's naming rules)."""
+        base = os.path.join(SYS_NET, dev, "device")
+        try:
+            real = os.path.realpath(base) if os.path.exists(base) else ""
+        except OSError:
+            real = ""
+        try:
+            driver = os.path.basename(os.path.realpath(os.path.join(base, "driver")))
+        except OSError:
+            driver = ""
+        info = {"iface": dev, "driver": driver if driver and driver != "driver" else "", "usb": ""}
+        # ★ The USB device is the interface's parent: …/1-1/1-1:1.0 → …/1-1 holds idVendor / idProduct / serial.
+        usbdir = os.path.dirname(real) if real else ""
+        vid = read_plain(os.path.join(usbdir, "idVendor"), 8) if usbdir else None
+        pid = read_plain(os.path.join(usbdir, "idProduct"), 8) if usbdir else None
+        if vid and pid:
+            vid, pid = vid.strip(), pid.strip()
+            serial = (read_plain(os.path.join(usbdir, "serial"), 128) or "").strip()
+            info["usb"] = "%s:%s" % (vid, pid)
+            info["id"] = "usb:%s:%s:%s" % (vid, pid, serial or ("port-" + os.path.basename(usbdir)))
+        elif real:
+            info["id"] = "dev:%s:%s" % (info["driver"] or "?", os.path.basename(real))
+        else:
+            info["id"] = "if:" + dev          # ★ no sysfs (tests, an odd driver): the interface name is all there is
+        return info
+
+    def hw_load(self):
+        if self.hw_loaded:
+            return
+        self.hw_loaded = True
+        try:
+            with open(self.hw_path) as f:
+                d = json.load(f)
+            if isinstance(d, dict) and isinstance(d.get("known"), dict) and isinstance(d.get("ignored", {}), dict):
+                self.hw = {"v": 1, "known": d["known"], "ignored": d.get("ignored", {})}
+        except (OSError, ValueError):
+            self.hw = None
+
+    def hw_save(self):
+        try:
+            write_atomic(self.hw_path, json.dumps(self.hw, sort_keys=True), mode=0o600)
+            self.hw_save_failed = False
+        except OSError:
+            if not self.hw_save_failed:
+                log("could not save the Wi-Fi hardware record — it lasts until the next restart")
+            self.hw_save_failed = True
+
+    def leave_alone(self, dev, why):
+        """A radio this service does not manage: NetworkManager is told not to manage it either, so it joins nothing on
+        its own (the box's saved networks autoconnect) and hosts nothing. Runtime only — asked again every boot."""
+        if dev in self.left_alone:
+            return
+        self.left_alone.add(dev)
+        self.sh.run(["nmcli", "device", "set", dev, "managed", "no"], timeout=15)
+        log("%s is left alone — %s" % (dev, why))
+
+    def pick_radio(self, wifis):
+        """The radio this service manages, from the ones NetworkManager lists — and the NEW / IGNORED lists the page shows.
+        Being set up (or not told yet): every radio is known, the first one managed — exactly as before 2026-10-25."""
+        self.hw_load()
+        infos = [self.radio_info(d) for d in wifis]
+        now = self.sh.now()
+        changed = False
+        if self.hw is None:
+            self.hw = {"v": 1, "known": {}, "ignored": {}}
+            if self.configured:
+                self.hw_adopt_until = now + WIFI_HW_ADOPT_SEC
+                log("no Wi-Fi hardware record on this set-up box (an update from an older release) — adopting the radios "
+                    "it has now as known")
+            changed = True
+        adopt = not self.configured or (self.hw_adopt_until is not None and now < self.hw_adopt_until)
+        for i in infos:
+            if adopt and i["id"] not in self.hw["known"] and i["id"] not in self.hw["ignored"]:
+                self.hw["known"][i["id"]] = {k: i[k] for k in ("driver", "usb")}
+                changed = True
+        if changed:
+            self.hw_save()
+        self.left_alone &= set(wifis)              # ★ unplugged: forgotten, so a re-plug is told again
+        known = [i for i in infos if i["id"] in self.hw["known"]]
+        self.new_wifi = [i for i in infos if i["id"] not in self.hw["known"] and i["id"] not in self.hw["ignored"]]
+        self.ignored_wifi = [i for i in infos if i["id"] in self.hw["ignored"]]
+        for i in self.new_wifi:
+            self.leave_alone(i["iface"], "NEW Wi-Fi hardware on a set-up box (%s); the setup page offers to configure it"
+                             % (("USB " + i["usb"]) if i["usb"] else (i["driver"] or "unknown driver")))
+        for i in self.ignored_wifi:
+            self.leave_alone(i["iface"], "the owner chose not to use this Wi-Fi hardware")
+        names = [i["iface"] for i in known]
+        if self.prefer_dev in names:
+            return self.prefer_dev
+        if self.dev in names:
+            return self.dev
+        return names[0] if names else None
+
+    def adopt_new_radio(self):
+        """★★★ CONFIGURE (the setup page): the first new (else ignored) radio becomes THE box's Wi-Fi. A radio managed
+        until now is recorded as ignored and left alone; the box's own profiles move to the new radio (they are bound to
+        an interface). With nothing saved yet the radio waits for the owner's Wi-Fi settings — never an open hotspot."""
+        self.refresh_links()
+        cand = (self.new_wifi or self.ignored_wifi or [None])[0]
+        if not cand:
+            self.last_error = "no new Wi-Fi hardware to configure"
+            return False
+        old = self.dev
+        self.hw["ignored"].pop(cand["id"], None)
+        self.hw["known"][cand["id"]] = {k: cand[k] for k in ("driver", "usb")}
+        if old:
+            for i in [self.radio_info(old)]:
+                self.hw["known"].pop(i["id"], None)
+                self.hw["ignored"][i["id"]] = {k: i[k] for k in ("driver", "usb")}
+            self.read_active()
+            if self.cur:
+                self.down(self.cur)
+        self.hw_save()
+        self.left_alone.discard(cand["iface"])
+        self.sh.run(["nmcli", "device", "set", cand["iface"], "managed", "yes"], timeout=15)
+        for n, t in self.connection_names():
+            if n.startswith(NET_PREFIX) or n in (AP_NAME, SETUP_NAME):
+                self.nm_change(["nmcli", "connection", "modify", n, "connection.interface-name", cand["iface"]])
+        self.dev, self.prefer_dev = None, cand["iface"]
+        self.refresh_links()                       # ★ picks the new radio (and leaves the old one alone)
+        self.adopting = not self.saved()
+        if self.wifi_off:
+            self.wifi_switch(False, "the owner chose to configure new Wi-Fi hardware")
+        self.mode, self.since, self.last_error = ("wifi-unset" if self.adopting else "connecting"), int(time.time()), ""
+        log("the owner chose to use %s (%s) for this box's Wi-Fi%s" % (
+            cand["iface"], ("USB " + cand["usb"]) if cand["usb"] else (cand["driver"] or "?"),
+            (" in place of %s" % old) if old else ""))
+        return True
+
+    def ignore_new_radio(self):
+        """★★ NOT NOW (the setup page): every NEW radio recorded as known-but-off — never managed, never asked again."""
+        self.refresh_links()
+        if not self.new_wifi:
+            self.last_error = "no new Wi-Fi hardware to ignore"
+            return False
+        for i in self.new_wifi:
+            self.hw["ignored"][i["id"]] = {k: i[k] for k in ("driver", "usb")}
+            log("the owner chose not to use %s (%s) — not asked again" % (i["iface"], ("USB " + i["usb"]) if i["usb"] else i["driver"]))
+        self.hw_save()
+        self.ignored_wifi += self.new_wifi
+        self.new_wifi = []
+        return True
+
+    def reset_asked(self):
+        return os.path.exists(self.reset_path)
 
     def connection_names(self):
         if self.sh.now() - self._names_at > 60:
@@ -1407,12 +1616,10 @@ class Box:
             return
         # ★★ OUR OWN TABLE — NM's shared mode has its own NAT rules and this never touches them.
         #    The "add, delete, add" opening makes the load idempotent on any nft version.
-        rules = ("table ip %s\ndelete table ip %s\ntable ip %s {\n"
-                 "  chain pre {\n    type nat hook prerouting priority dstnat; policy accept;\n"
-                 "    iifname \"%s\" tcp dport 80 redirect to :%d\n  }\n}\n") % (
-                     NFT_TABLE, NFT_TABLE, NFT_TABLE, self.dev, port)
-        if self.sh.run_input(["nft", "-f", "-"], rules) == 0:
-            self.captive_port = port
+        # ★★ IPv6 TOO (2026-10-25): the server listens dual-stack now, and a name that resolves to IPv6 first (Nick's
+        #    network) must reach :80 the same way. nft_redirect falls back to IPv4 alone on a kernel without IPv6 NAT.
+        if nft_redirect(self.sh, NFT_TABLE, port, 'iifname "%s" ' % self.dev):
+            self.captive_port, self.captive_dropped = port, False
         else:
             log("could not load the :80 redirect (is nftables installed?) — the phone's captive "
                 "sheet will not open by itself; http://%s:%d/ still works" % (AP_ADDR, port))
@@ -1425,50 +1632,82 @@ class Box:
         keeps the setup name for RETIRE_SEC (the page shows the new address meanwhile); one that boots already set up
         switches at once."""
         now = self.sh.now()
+        self.configured = bool(configured)
         if not configured:
             self.saw_unconfigured, self.configured_at = True, None
         elif self.configured_at is None:
             self.configured_at = now
         retire = configured and (not self.saw_unconfigured or now - self.configured_at >= RETIRE_SEC)
-        want = RUN_HOST if retire else SETUP_HOST
+        # ★★★ http://vibeserversetup.local/ ON ETHERNET TOO, and only while setting up (2026-10-25). It goes with the
+        #     setup NAME, at the same moment — the page that pressed Save is still talking to :80 for RETIRE_SEC.
+        self.setup_door(not retire)
+        # ★★★ THE PLAN: which ONE name avahi publishes (see MDNS_FILE). Cheap when nothing changes — the plan is compared,
+        #     and avahi restarted only when it differs.
+        ips = [ip for ip in (self.wired_ip, self.ip4() if self.dev and self.cur else "") if ip] if configured and not retire else []
+        plan = mdns_plan(retire, bool(configured), read_mdns_name(self.mdns_file), ips, self.front_door_port())
+        if plan == self.mdns_plan_now:
+            return
+        first = self.mdns_plan_now is None
+        self.mdns_plan_now = plan
+        if first and load_mdns_plan(self.mdns_plan_path) == plan and self.hostname_is(plan["host"]):
+            return                  # ★ the gate already applied this plan when avahi started this boot
+        changed = apply_mdns_plan(self.sh, plan)
+        save_mdns_plan(self.mdns_plan_path, plan)
+        if not changed and not first:
+            return
+        if plan["publish"]:
+            # ★ restart, not try-restart: it also starts an avahi the plan had stopped. The gate re-reads the plan.
+            self.sh.run(["systemctl", "restart", "avahi-daemon.service"], timeout=20)
+            names = [plan["host"]] + [a[1].split(".")[0] for a in plan["alias"]]
+            log("answering as %s%s" % (" and ".join(n + ".local" for n in names),
+                                       "" if retire else (" while the setup name retires" if plan["alias"] else
+                                                          " until setup is finished")))
+        else:
+            # ★★ Belt and braces: the gate (after the next reboot of a box that just updated) would skip the start anyway.
+            self.sh.run(["systemctl", "stop", "avahi-daemon.socket", "avahi-daemon.service"], timeout=20)
+            log("no .local name: this box is set up and its owner chose none (mDNS off) — avahi stopped")
+
+    def hostname_is(self, want):
         try:
             with open(HOSTNAME_FILE) as f:
-                have = f.read().strip()
+                return f.read().strip() == want
         except OSError:
-            have = ""
-        if have == want and self.host_synced:
+            return False
+
+    def setup_door(self, on):
+        """★★★ PORT 80 ON EVERY LINK WHILE THE BOX IS BEING SET UP — Ethernet included (Nick, G4IRX, a real Orange Pi One
+        on Ethernet, 2026-10-25: "entering http://vibeserversetup.local/ in the browser results in 'site not found'"). The
+        :80 redirect was loaded for the Wi-Fi radio only (captive_on: `iifname <wlan>`), so a box set up over a cable —
+        every board card without Wi-Fi, a Pi 2 — needed :48000 typed, which the card's instructions never say. So, until
+        setup is finished: :80 → the front door on EVERY interface, IPv4 and IPv6, in a table of its own.
+        ★★ STOPS WHEN SETUP IS FINISHED — a set-up server does not take over port 80 on someone's LAN. Exactly when the
+           setup name retires (sync_hostname: at once on a box that boots set up; RETIRE_SEC after a Save in this run).
+        ★ The Wi-Fi-interface redirect (captive_on / captive_off) is not this: it exists only while the box's own
+          hotspot is on the air (a joining phone's captive check), and is released with it."""
+        port = self.front_door_port() if on else None
+        if self.setup_door_port == port:
             return
-        self.host_synced = True
-        if have == want:
+        if on:
+            if nft_redirect(self.sh, SETUP_TABLE, port, ""):
+                self.setup_door_port = port
+                log("http://%s.local/ (port 80) leads to the setup page on every link until setup is finished" % SETUP_HOST)
+            else:
+                log("could not load the setup :80 redirect (is nftables installed?) — use http://%s.local:%d/" % (SETUP_HOST, port))
             return
-        # ★★ sh.run returns (rc, out). This compared the PAIR with 0 — never equal — so hostnamectl renamed the
-        #    box and then everything after it (/etc/hosts, the avahi restart) was skipped as a "failure": avahi
-        #    went on announcing vibeserversetup.local and vibepocket.local never answered (v8, 2026-10-10).
-        rc, _ = self.sh.run(["hostnamectl", "set-hostname", want], timeout=15)
-        if rc != 0:
-            log("could not set the hostname to %s" % want)
-            return
-        try:
-            with open(HOSTS_FILE) as f:
-                hosts = f.read()
-            hosts = re.sub(r"(?m)^127\.0\.1\.1\s.*$", "127.0.1.1\t" + want, hosts)
-            if "127.0.1.1" not in hosts:
-                hosts += "127.0.1.1\t%s\n" % want
-            write_atomic(HOSTS_FILE, hosts)
-        except OSError:
-            pass
-        # ★ avahi does not follow a hostname change by itself — a restart republishes at once.
-        self.sh.run(["systemctl", "try-restart", "avahi-daemon.service"], timeout=20)
-        log("answering as %s.local%s" % (want, "" if configured else " until setup is finished"))
+        if self.sh.run_input(["nft", "-f", "-"], nft_drop(SETUP_TABLE)) == 0:
+            self.setup_door_port = None
+            log("setup is finished — port 80 is left alone on the wired network")
 
     def captive_off(self):
-        # ★★★ THE :80 REDIRECT STAYS, ON EVERY NETWORK (Stuart, 2026-10-10: the owner must reach the
-        #     box straight away by its .local name "without having to work out the IP address"). It
-        #     was removed on leaving the hotspot, which made the address http://vibepocket.local:48000/
-        #     on the home network — a port nobody remembers. Kept, it is http://vibepocket.local/
-        #     everywhere. Harmless as a client: nothing else on this box listens on :80, and the
-        #     captive DNS answers (the part that hijacks lookups) belong to NM's hotspot only.
-        self.captive_on()
+        """★★★ PORT 80 IS RELEASED when the box's own hotspot is down (Stuart, 2026-10-25: "release the port the less
+        open ports the better" — REVERSING 2026-10-10, when the redirect was kept on every network so the home network
+        had http://vibepocket.local/). The Wi-Fi redirect now exists only while this box's own hotspot is on the air,
+        where a joining phone's captive check needs it; on the owner's network the address is
+        http://<chosen name>.local:48000/. While the box is being set up, setup_door() keeps :80 on every link."""
+        if self.captive_port is None and self.captive_dropped:
+            return
+        if self.sh.run_input(["nft", "-f", "-"], nft_drop(NFT_TABLE)) == 0:
+            self.captive_port, self.captive_dropped = None, True
 
     # ── transitions ──
     def raise_hotspot(self, why):
@@ -1765,6 +2004,12 @@ class Box:
         if req["country"] and req["country"] != self.conf.get("COUNTRY"):
             self.set_country(req["country"])
         log("saved %d network(s) and the hotspot \"%s\"" % (len(req["networks"]), ap["ssid"]))
+        # ★ The owner's Wi-Fi is saved: an adopted radio is managed as normal, a reset is over.
+        self.adopting = False
+        try:
+            os.unlink(self.reset_path)
+        except OSError:
+            pass
         # ★★★ REJOIN IN THE NEW ORDER (Stuart's Pi 3 A+, 2026-10-10: the phone hotspot moved to 1 while on Home, the box
         #     stayed on Home). A slot's profile is rewritten IN PLACE, and NetworkManager keeps the live link on what it
         #     joined — so after a reorder the box sat physically on Home under the slot that now says "phone", and only
@@ -1795,6 +2040,11 @@ class Box:
             if n.startswith(NET_PREFIX) or n == AP_NAME:
                 self.delete(n)
         log("Wi-Fi reset: every saved network and the fallback hotspot forgotten")
+        # ★★ The owner ASKED for the way back in: the open setup hotspot may come up on this set-up box (see tick).
+        try:
+            write_atomic(self.reset_path, "1\n", mode=0o600)
+        except OSError:
+            pass
 
     # ── one turn of the wheel ──
     def tick(self):
@@ -1861,6 +2111,20 @@ class Box:
         if now < self.next_try:
             return
         if not saved:
+            # ★★★ NEVER THE OPEN SETUP HOTSPOT ON A SET-UP SERVER (2026-10-25). A box that is set up and has no network
+            #     saved for this radio — a USB dongle the owner just chose to Configure, or a box finished over its cable —
+            #     waits for the owner's Wi-Fi settings (the setup page, over the wired network). Its OWN secured hotspot,
+            #     if one is saved, is fine; the open one only after the owner reset the Wi-Fi on purpose.
+            if self.configured and (self.adopting or (not self.reset_asked() and not self.have(AP_NAME))):
+                if self.mode != "wifi-unset":
+                    self.mode, self.since = "wifi-unset", int(time.time())
+                if not self._unset_logged:
+                    self._unset_logged = True
+                    log("%s has no Wi-Fi saved and this box is set up — waiting for the owner's Wi-Fi settings "
+                        "(no open hotspot)" % self.dev)
+                if not self.scan_cache and time.time() - self.scan_at > 60:
+                    self.scan()                      # ★ the page's network list (at most once a minute)
+                return
             # First boot (or after a reset): scan while the radio is still a station, then open the door.
             if not self.scan_cache:
                 self.scan()
@@ -1883,7 +2147,7 @@ class Box:
                 return
             if self.mode != "client":
                 self.mode, self.since = "client", int(time.time())
-                self.captive_off()          # ★ keeps (or, on a boot straight into a network, loads) :80
+                self.captive_off()          # ★ releases :80 — the hotspot's redirect goes with the hotspot
             rank = next((r for r, n, s, h in saved if n == cur), 10)
             if self.hold_net and self.hold_net != cur:
                 self.hold_net = ""                  # the chosen network went (out of range): the usual order again
@@ -1958,6 +2222,11 @@ class Box:
             "wifiOff": self.wifi_off,              # the owner switched it off (the radio is down, no hotspot)
             "wired": self.wired,                   # an Ethernet link with an address — the box is reachable there
             "wiredIp": self.wired_ip,
+            # ★★★ NEW WI-FI HARDWARE on a set-up box (left alone until the owner chooses), and the ones the owner said
+            #     Not now to — the setup page asks about the first and offers the second.
+            "newWifi": [{k: i[k] for k in ("iface", "driver", "usb")} for i in self.new_wifi],
+            "ignoredWifi": [{k: i[k] for k in ("iface", "driver", "usb")} for i in self.ignored_wifi],
+            "wifiUnset": self.mode == "wifi-unset",
             # ★★★ False when the settings partition is not in use (vibeserver-pocket-data could neither find
             #     nor make it): setup would be held in RAM and lost at the next restart. The page says so.
             "settingsSaved": not os.path.exists(VOLATILE_FILE),
@@ -2147,6 +2416,169 @@ def save_history(path, history):
         pass                                              # ★ no settings partition: it lasts until the restart
 
 
+def read_mdns_name(path=MDNS_FILE):
+    """The name the server would advertise, as it wrote it: {"label", "port", "pin"}; label "" = none. None = no (valid)
+    file — the server has not said."""
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    label = d.get("label") if isinstance(d.get("label"), str) else ""
+    if label and not LABEL_RE.match(label):
+        return None
+    port = d.get("port") if isinstance(d.get("port"), int) and 0 < d.get("port") < 65536 else 0
+    return {"label": label, "port": port, "pin": d.get("pin") is True}
+
+
+def mdns_plan(retire, configured, chosen, ips, port):
+    """★★★ What avahi publishes — ONE name (see MDNS_FILE):
+      · being set up (or the setup name not retired yet): vibeserversetup; during the RETIRE_SEC after a Save the new
+        name as well, by IPv4 alias (the page sends the owner there at once);
+      · set up, with a chosen name: that name is the hostname, with the _vibesdr._tcp service;
+      · set up, no name (mDNS off, or the server never said): NOTHING — avahi is not run."""
+    if not retire:
+        label = chosen["label"] if configured and chosen else ""
+        alias = [[ip, label + ".local"] for ip in ips] if label and label != SETUP_HOST else []
+        return {"host": SETUP_HOST, "publish": True, "service": None, "alias": alias}
+    if not chosen or not chosen["label"]:
+        return {"host": RUN_HOST, "publish": False, "service": None, "alias": []}
+    return {"host": chosen["label"], "publish": True, "alias": [],
+            "service": {"name": chosen["label"], "port": chosen["port"] or port, "pin": chosen["pin"]}}
+
+
+def load_mdns_plan(path=MDNS_PLAN):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) and "host" in d else None
+    except (OSError, ValueError):
+        return None
+
+
+def save_mdns_plan(path, plan):
+    try:
+        write_atomic(path, json.dumps(plan, sort_keys=True))
+    except OSError:
+        pass
+
+
+def avahi_service_xml(svc):
+    esc = lambda s: s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return ("<?xml version=\"1.0\" standalone=\"no\"?>\n"
+            "<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n"
+            "<!-- Written by vibeserver-pocket: this box's VibeServer, under the name its owner chose. -->\n"
+            "<service-group>\n  <name>%s</name>\n  <service>\n    <type>_vibesdr._tcp</type>\n    <port>%d</port>\n"
+            "    <txt-record>proto=vibeserver</txt-record>\n    <txt-record>pin=%d</txt-record>\n  </service>\n"
+            "</service-group>\n") % (esc(svc["name"]), svc["port"], 1 if svc["pin"] else 0)
+
+
+def apply_mdns_plan(sh, plan):
+    """The hostname (+ /etc/hosts), the avahi service file and the alias lines, as the plan says. Returns True when
+    anything changed (avahi must then be restarted to publish it)."""
+    changed = False
+    want = plan["host"]
+    try:
+        with open(HOSTNAME_FILE) as f:
+            have = f.read().strip()
+    except OSError:
+        have = ""
+    if have != want:
+        # ★★ sh.run returns (rc, out) — compared with 0 as a PAIR once, which skipped everything after it (v8, 2026-10-10).
+        rc, _ = sh.run(["hostnamectl", "set-hostname", want], timeout=15)
+        if rc != 0:
+            # ★ Before D-Bus (the gate runs as avahi starts): the kernel's name and the file, by hand.
+            sh.run(["hostname", want], timeout=10)
+            try:
+                write_atomic(HOSTNAME_FILE, want + "\n")
+            except OSError:
+                log("could not set the hostname to %s" % want)
+        try:
+            with open(HOSTS_FILE) as f:
+                hosts = f.read()
+            hosts = re.sub(r"(?m)^127\.0\.1\.1\s.*$", "127.0.1.1\t" + want, hosts)
+            if "127.0.1.1" not in hosts:
+                hosts += "127.0.1.1\t%s\n" % want
+            write_atomic(HOSTS_FILE, hosts)
+        except OSError:
+            pass
+        changed = True
+    svc = avahi_service_xml(plan["service"]) if plan.get("service") else None
+    cur = read_plain(AVAHI_SERVICE, 8192)
+    if svc != cur:
+        try:
+            if svc is None:
+                os.unlink(AVAHI_SERVICE)
+            else:
+                write_atomic(AVAHI_SERVICE, svc)
+            changed = True
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log("could not write %s (%s)" % (AVAHI_SERVICE, e.strerror))
+    try:
+        with open(AVAHI_HOSTS) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = None
+    if lines is not None or plan["alias"]:
+        keep = [l for l in (lines or []) if not l.endswith(AVAHI_ALIAS_TAG)]
+        new = keep + ["%s %s  %s" % (ip, name, AVAHI_ALIAS_TAG) for ip, name in plan["alias"]]
+        if new != (lines or []):
+            try:
+                write_atomic(AVAHI_HOSTS, "\n".join(new) + "\n")
+                changed = True
+            except OSError:
+                pass
+    return changed
+
+
+def avahi_gate():
+    """★★★ `vibeserver-pocket avahi-gate` — avahi's ExecCondition (the converge's drop-in). Applies the plan this
+    service wrote (or, at boot before it runs, the plan for a box as configured: no grace — a box that boots set up
+    switches at once) and exits 1 when nothing is to be published, which skips avahi's start cleanly. Any failure
+    says "publish" (exit 0): the setup name must never be lost to a bug here."""
+    try:
+        if not os.path.exists(MARKER):
+            return 0
+        plan = load_mdns_plan(MDNS_PLAN)
+        if plan is None:
+            configured = server_configured(SERVER_CONF)
+            digits = re.sub(r"[^0-9]", "", read_plain(PORT_FILE, 16) or "")[:5]
+            port = int(digits) if digits and 0 < int(digits) < 65536 else 48000
+            plan = mdns_plan(configured, configured, read_mdns_name(MDNS_FILE), [], port)
+        apply_mdns_plan(Shell(), plan)
+        return 0 if plan.get("publish", True) else 1
+    except Exception as e:                    # ★ never lose the name to a bug
+        print("vibeserver-pocket avahi-gate: %s — publishing anyway" % type(e).__name__, file=sys.stderr)
+        return 0
+
+
+def nft_drop(table):
+    """An nft script that removes `table` in both families — "add, delete" so it is a no-op when it is not there."""
+    return "table ip %s\ndelete table ip %s\ntable ip6 %s\ndelete table ip6 %s\n" % (table, table, table, table)
+
+
+def nft_redirect(sh, table, port, match):
+    """★★ :80 → :port in our own `table`, IPv4 AND IPv6 (`match` narrows it, e.g. 'iifname "wlan0" '). One nft script,
+    loaded atomically — the "add, delete, add" opening makes it idempotent on any nft version. A kernel without IPv6 NAT
+    refuses the whole script: then IPv4 alone, as before 2026-10-25. NM's shared mode has its own NAT rules; these
+    never touch them. Returns True when loaded."""
+    def chain(fam):
+        return ("table %s %s {\n  chain pre {\n    type nat hook prerouting priority dstnat; policy accept;\n"
+                "    %stcp dport 80 redirect to :%d\n  }\n}\n") % (fam, table, match, port)
+    both = nft_drop(table) + chain("ip") + chain("ip6")
+    if sh.run_input(["nft", "-f", "-"], both) == 0:
+        return True
+    v4 = "table ip %s\ndelete table ip %s\n" % (table, table) + chain("ip")
+    if sh.run_input(["nft", "-f", "-"], v4) == 0:
+        log("IPv6 NAT is not available here — the :80 redirect (%s) is IPv4 only" % table)
+        return True
+    return False
+
+
 def write_atomic(path, text, mode=0o644):
     """★★★ A POWER CUT LEAVES THE OLD FILE OR THE NEW ONE, NEVER HALF OF EITHER: temp file, fsync,
     rename, fsync the directory (the rename itself is only durable once its directory is)."""
@@ -2232,7 +2664,8 @@ def avahi_limits(path=None):
 #     at all. This lets the owner switch SSH on from the admin page, with a password THEY type there.
 #  ★★ THE ACCOUNT: `vibe` (uid 1000) — the image's own login (customise.sh makes it, LOCKED), a member of sudo, and the
 #     account Raspberry Pi OS users expect. root is never given a password here: Debian's sshd refuses root password
-#     logins (PermitRootLogin prohibit-password) and that stays as it is. The owner logs in as vibe and uses sudo.
+#     logins (PermitRootLogin prohibit-password) and that stays as it is. ★★ Armbian's sshd_config says
+#     PermitRootLogin yes (root's password is the documented 1234), so a board card adds a drop-in that says no. The owner logs in as vibe and uses sudo.
 #  ★★ THE PASSWORD: handed to chpasswd on STDIN ("vibe:<password>"), never in an argument list, never logged. chpasswd
 #     hashes it as the system does (yescrypt on Trixie). What is KEPT is only that HASH, read back from /etc/shadow.
 #  ★★★ IT SURVIVES THE READ-ONLY ROOT. On a sealed Portable /etc/shadow and the running sshd live in the RAM overlay and
@@ -2242,6 +2675,13 @@ def avahi_limits(path=None):
 #     The host keys are kept there too, so the box does not present a new key — and a warning — after each power cycle.
 #  ★ Off = sshd stopped, vibe locked again (usermod -L), the hash forgotten. The host keys stay (they are not secret to
 #    anyone but the box, and keeping them means the next "on" is the same box to the owner's ssh client).
+#  ★★★ DEBIAN'S OWN "NEVER RUN sshd" FILE (2026-10-25, Nick's Orange Pi One: sshd was listening with root/1234). An
+#     Armbian card ships /etc/ssh/sshd_not_to_be_run (image/sbc/customise-armbian.sh): ssh.service and ssh.socket
+#     carry ConditionPathExists=!/etc/ssh/sshd_not_to_be_run (sshd@.service is masked there), so NOTHING that starts sshd through
+#     systemd — Armbian's first run (`service ssh restart`), its first console login (`systemctl restart ssh`), a
+#     package upgrade — can start it while the file is there. So ON removes it before the start (every boot too: on a
+#     sealed root the removal is in RAM) and OFF puts it back. A Raspberry Pi card has no such file and gains one only
+#     when the owner switches SSH OFF here — which is what "off" means.
 SSH_INBOX = "/var/lib/vibeserver/pocket-ssh.request"         # the daemon writes (0600), we read + delete
 SSH_STATE = "/var/lib/vibeserver-pocket/ssh.json"            # ★ on the settings partition; root 0600
 SSH_KEEP_KEYS = "/var/lib/vibeserver-pocket/ssh-host-keys"   # the box's own host keys, kept across boots
@@ -2367,6 +2807,19 @@ class SshAccess:
         write_atomic(self.state, json.dumps(doc), mode=0o600)
         os.chmod(self.state, 0o600)
 
+    def _no_run_file(self):
+        return os.path.join(self.etc, "sshd_not_to_be_run")
+
+    def _allow_sshd(self):
+        """Remove Debian's "never run sshd" file so the start below is not skipped by its condition."""
+        try:
+            os.unlink(self._no_run_file())
+        except FileNotFoundError:
+            pass
+
+    def _forbid_sshd(self):
+        write_atomic(self._no_run_file(), "VibeServer Portable: SSH is off (the owner's switch on the admin page)\n")
+
     def apply(self, req):
         """The owner's request (already validated). Returns True when it took."""
         self.last_error = ""
@@ -2375,6 +2828,7 @@ class SshAccess:
             log(self.last_error)
             return False
         if not req["on"]:
+            self._forbid_sshd()
             self.sh.run(["systemctl", "stop", SSH_UNIT], timeout=30)
             self.sh.run(["usermod", "-L", self.user], timeout=30)
             self._save({"v": 1, "on": False, "user": self.user})
@@ -2393,6 +2847,7 @@ class SshAccess:
             return False
         self._host_keys()
         self._save({"v": 1, "on": True, "user": self.user, "hash": h})
+        self._allow_sshd()
         self.sh.run(["systemctl", "start", SSH_UNIT], timeout=60)
         log("SSH switched ON by the owner — log in as %s" % self.user)
         return True
@@ -2411,6 +2866,7 @@ class SshAccess:
                 log(self.last_error)
                 return False
         self._host_keys()
+        self._allow_sshd()
         self.sh.run(["systemctl", "start", SSH_UNIT], timeout=60)
         log("SSH is on (the owner's switch, kept on the settings partition)")
         return True
@@ -2708,6 +3164,10 @@ def run_loop(sh, box, net, gov, kept, uid):
             cur, _ = box.read_active()
             if word in radio_words and (not box.dev or box.wifi_off):
                 box.last_error = "Wi-Fi is off" if box.dev else "this box has no Wi-Fi"
+            elif word == "wifi-new-configure":
+                box.adopt_new_radio()
+            elif word == "wifi-new-ignore":
+                box.ignore_new_radio()
             elif word == "wifi-off":
                 box.wifi_switch(True)
             elif word == "wifi-on":
@@ -2767,10 +3227,12 @@ if __name__ == "__main__":
         except OSError:
             print("no state yet")
         sys.exit(0)
+    if cmd == "avahi-gate":
+        sys.exit(avahi_gate())
     if cmd == "reset-wifi":
         b = Box(Shell(), load_conf())
         b.dev = b.wifi_device()
         b.reset_wifi()
         sys.exit(0)
-    print("usage: vibeserver-pocket [run|status|reset-wifi]", file=sys.stderr)
+    print("usage: vibeserver-pocket [run|status|reset-wifi|avahi-gate]", file=sys.stderr)
     sys.exit(2)

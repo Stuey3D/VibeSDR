@@ -20,7 +20,7 @@ python3           # vibeserver-pocket and vibeserver-pocket-converge
 ca-certificates   # https to apt.vibesdr.net
 curl              # the apt key fetch at image time; the server's own downloads
 gnupg             # dearmoring the apt key
-avahi-daemon      # VibeServerSetup.local / vibepocket.local on every network
+avahi-daemon      # VibeServerSetup.local while setting up, then ONLY the owner's chosen name, on every network
 ffmpeg            # ★★★ DAB+ audio on Linux — the package only RECOMMENDS it and the image installs without recommends
 overlayroot       # the read-only root (power-cut hardening)
 initramfs-tools   # overlayroot lives in the initramfs

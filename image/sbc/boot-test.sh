@@ -122,6 +122,14 @@ done
 [ -n "$LEADER" ] || { tail -40 "$LOG"; echo "!! the container never started"; exit 1; }
 CODE="$(nsenter -t "$LEADER" -n curl -s -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1:48000/ || true)"
 run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
+# ★★★ A SNAPSHOT IS NOT ENOUGH (2026-10-25): re-booting the WITHDRAWN orangepione card with the ssh checks below PASSED —
+#     sshd simply had not been started yet. Its journal shows armbian-firstrun running AGAIN on this second boot: the seal
+#     had rebooted under it on the first, so its self-disable never landed, and it reaches `service ssh restart` when it
+#     reaches it. So: wait for any first run to finish (bounded) before reading ssh's state, and record whether it ran.
+FIRSTRUN_ENABLED="$(run systemctl is-enabled armbian-firstrun.service | head -1)"
+for _ in $(seq 1 60); do
+  case "$(run systemctl show -p SubState --value armbian-firstrun.service | head -1)" in running|start*) sleep 5 ;; *) break ;; esac
+done
 {
   echo "front door http://127.0.0.1:48000/ → HTTP $CODE"
   echo "hostname: $(run cat /etc/hostname)"
@@ -134,9 +142,20 @@ run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
   echo "--- vibeserver-pocket-seal"; run journalctl -b -u vibeserver-pocket-seal --no-pager -n 5
   echo "--- vibeserver-pocket-data"; run journalctl -b -u vibeserver-pocket-data --no-pager -n 8
   echo "--- vibeserver-pocket-cpu"; run journalctl -b -u vibeserver-pocket-cpu --no-pager -n 5
+  echo "armbian-firstrun on the second boot: enabled=$FIRSTRUN_ENABLED (must not be enabled: it disables itself on the first)"
   echo "--- ssh: units and TCP listeners (port 22 must NOT be listening)"
   run systemctl list-units --all --no-legend 'ssh*' 'sshd*'
+  # ★★★ The state of every unit that can start sshd — read by the checks at the end (enabled / active / socket).
+  for u in ssh.service sshd.service ssh.socket sshd@.service; do
+    printf 'sshunit %-14s enabled=%s active=%s\n' "$u" "$(run systemctl is-enabled "$u" | head -1)" "$(run systemctl is-active "$u" | head -1)"
+  done
   run ss -ltnp
+  # ★★★ WHAT IS PUBLISHED ON mDNS (2026-10-25: one .local name — the setup name now, the owner's after setup).
+  echo "--- mDNS: what this box publishes"
+  run journalctl -b -u avahi-daemon --no-pager -o cat | grep -E "Host name is|Service .* successfully established|Registering new address" | sed 's/^/avahi: /' | tail -8
+  printf 'avahiservices %s\n' "$(run sh -c 'ls /etc/avahi/services/*.service 2>/dev/null | wc -l' | tr -d ' ')"
+  printf 'avahialias %s\n' "$(run sh -c 'grep -c "vibeserver-pocket:" /etc/avahi/hosts 2>/dev/null || true' | tr -d ' ')"
+  run ss -lunp | grep -E ':5353 |:5355 ' | sed 's/^/udp: /'
   echo "--- vibeserver (journal)"; run journalctl -b -u vibeserver --no-pager -n 15
   echo "--- failed units"; run systemctl --failed --no-legend
   echo "--- memory"; run free -m
@@ -144,5 +163,33 @@ run() { nsenter -t "$LEADER" -a "$@" 2>&1 || true; }
 run systemctl poweroff >/dev/null
 wait "$NS" 2>/dev/null || true
 [ "$CODE" = 200 ] || [ "$CODE" = 302 ] || { echo "!! the front door did not answer"; exit 1; }
+# ★★★ SSH MUST BE OFF — a FAILURE, not a line in the report (2026-10-25: every 11.0.11 board card's report said
+#     `ssh active` and 0.0.0.0:22, and the test passed; Nick then logged in as root/1234 on a real Orange Pi One).
+#     This is the SECOND boot, so a first-run script that starts sshd on every boot shows here too.
+if grep -qE '^ssh +active' "$WD/boot-test-result.txt"; then echo "!! sshd is RUNNING and nobody switched SSH on"; exit 1; fi
+if grep -qE '^LISTEN .*:22 ' "$WD/boot-test-result.txt"; then echo "!! something is LISTENING on port 22"; exit 1; fi
+# ★★ …and no unit that could start it is enabled, active or listening as a socket (Stuart, 2026-10-25: "no ssh unit is
+#    active/enabled/socket-activated"). Masked, disabled, not-found and static-but-inactive are all fine.
+if grep -E '^sshunit ' "$WD/boot-test-result.txt" | grep -qE 'enabled=(enabled|enabled-runtime|linked|linked-runtime|alias)|active=(active|activating|reloading)'; then
+  grep -E '^sshunit ' "$WD/boot-test-result.txt"; echo "!! an ssh unit is enabled or active"; exit 1
+fi
+# ★★★ The first run must have finished — and disabled itself — on the FIRST boot (the seal waits for it). Enabled here
+#     means the seal rebooted under it and it runs again on every boot (and starts sshd when it gets there).
+if [ -f "$R/usr/lib/armbian/armbian-firstrun" ] && [ "$FIRSTRUN_ENABLED" = enabled ]; then
+  echo "!! armbian-firstrun is still enabled on the second boot — the seal rebooted under it"; exit 1
+fi
+# ★★★ A NEW CARD ANSWERS TO ONE NAME: vibeserversetup.local, from avahi alone (no service, no alias, nobody else on 5353,
+#     nothing on LLMNR 5355). The name after setup is the owner's — proved by the pocket tests (test_vibeserver_pocket.py).
+grep -q '^avahi: .*Host name is vibeserversetup\.local' "$WD/boot-test-result.txt" \
+  || { echo "!! avahi did not publish vibeserversetup.local"; exit 1; }
+if grep -E '^avahi: .*Host name is ' "$WD/boot-test-result.txt" | grep -qv 'vibeserversetup\.local'; then
+  echo "!! avahi published another host name"; exit 1; fi
+grep -q '^avahiservices 0$' "$WD/boot-test-result.txt" || { echo "!! avahi publishes a service before setup"; exit 1; }
+grep -q '^avahialias 0$' "$WD/boot-test-result.txt" || { echo "!! an extra name is published (avahi hosts alias)"; exit 1; }
+if grep -E '^udp: .*:5353 ' "$WD/boot-test-result.txt" | grep -qv 'avahi-daemon'; then
+  echo "!! something besides avahi answers mDNS (UDP 5353)"; exit 1; fi
+if grep -qE '^udp: .*:5355 ' "$WD/boot-test-result.txt"; then echo "!! LLMNR (UDP 5355) answers the box's name"; exit 1; fi
+say "mDNS: vibeserversetup.local only, from avahi alone; no LLMNR"
+say "ssh: nothing listening on :22; ssh.service, sshd.service, ssh.socket, sshd@.service neither enabled nor active"
 case "$SEAL" in FAILED*) echo "!! the read-only seal did not write its switch"; exit 1 ;; esac
 say "boot test passed (emulation only)"

@@ -7,6 +7,7 @@ systemctl faked. Proves:
   · a reboot of a sealed box (shadow and /etc/ssh back to the image's) puts it all back: chpasswd -e with the hash, the
     SAME host keys, sshd started;
   · off: sshd stopped, vibe locked, the hash forgotten — and the next boot starts nothing;
+  · Debian's /etc/ssh/sshd_not_to_be_run (an Armbian card's lock, 2026-10-25) removed before each start, put back on off;
   · the request is validated: on must be a boolean, the password 8–128 printable ASCII;
   · the admin page's state never carries the hash.
 Run: python3 vibeserver/linux/pocket/test_pocket_ssh.py
@@ -106,6 +107,9 @@ with tempfile.TemporaryDirectory() as t:
     make_root(t)
     sh = FakeShell(t)
     a = access(t, sh)
+    # ★ An Armbian card's image: Debian's "never run sshd" file is there (customise-armbian.sh).
+    NORUN = os.path.join(t, "etc/ssh/sshd_not_to_be_run")
+    open(NORUN, "w").write("image\n")
     ok(a.doc() == {"available": True, "on": False, "user": "vibe", "lastError": ""}, "off by default, and offered (sshd + vibe present)")
     ok(a.restore() is False and sh.started == 0, "a first boot with no switch starts nothing")
 
@@ -123,6 +127,7 @@ with tempfile.TemporaryDirectory() as t:
     ok(not open(a.shadow).read().split("vibe:")[1].startswith("!"), "vibe unlocked")
     ok(["systemctl", "start", "ssh.service"] in sh.calls and not any(c[:2] == ["systemctl", "enable"] for c in sh.calls),
        "sshd STARTED, never enabled (the image's off stays the default)")
+    ok(not os.path.exists(NORUN), "on: Debian's sshd_not_to_be_run removed BEFORE the start (else the start is skipped)")
     keys = sorted(os.listdir(a.keep))
     ok("ssh_host_ed25519_key" in keys, "host keys made and kept on the settings partition")
     first_key = open(os.path.join(a.keep, "ssh_host_ed25519_key")).read()
@@ -133,6 +138,7 @@ with tempfile.TemporaryDirectory() as t:
     open(a.shadow, "w").write(IMAGE_SHADOW)
     for n in os.listdir(a.etc):
         os.unlink(os.path.join(a.etc, n))
+    open(NORUN, "w").write("image\n")       # ★ the sealed root's lower layer still has it
     sh2 = FakeShell(t)
     a2 = access(t, sh2)
     ok(a2.restore() is True, "after a reboot: restored")
@@ -141,12 +147,14 @@ with tempfile.TemporaryDirectory() as t:
     ok(open(os.path.join(a.etc, "ssh_host_ed25519_key")).read() == first_key, "the SAME host key is back (no new-key warning)")
     ok(not any(c[:2] == ["ssh-keygen", "-A"] for c in sh2.calls), "no new host keys made")
     ok(sh2.started == 1, "sshd started")
+    ok(not os.path.exists(NORUN), "after a reboot: sshd_not_to_be_run removed again before the start")
 
     # ── off ──
     a2.apply({"on": False})
     ok(["systemctl", "stop", "ssh.service"] in sh2.calls, "off: sshd stopped")
     ok(open(a.shadow).read().split("vibe:")[1].startswith("!"), "off: vibe locked")
     ok("hash" not in json.loads(open(a.state).read()), "off: the hash forgotten")
+    ok(os.path.exists(NORUN), "off: sshd_not_to_be_run put back (nothing can start sshd through systemd)")
     sh3 = FakeShell(t)
     ok(access(t, sh3).restore() is False and sh3.started == 0, "off survives a reboot: nothing started")
 

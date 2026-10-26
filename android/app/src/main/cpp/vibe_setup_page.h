@@ -294,6 +294,16 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <button type="button" class="ghost" id="wifiOffNo" style="margin-left:8px">Keep Wi-Fi on</button>
         </div>
       </div>
+      <!-- ★★★ NEW WI-FI HARDWARE (Stuart, 2026-10-25: "dont force a resetup if a wifi dongle is detected but when a user
+           goes into setup show an option for new wifi hardware detected, configure it now?"). A radio that appears on a
+           set-up box is left alone by the box (no hotspot, no network) and listed here: Configure makes it this box's
+           Wi-Fi and opens the form; Not now records it so it is not asked again (it can still be used later, below). -->
+      <div class="note hide" id="wifiNew" style="margin-bottom:12px">
+        <p style="margin:0 0 10px;white-space:pre-line" id="wifiNewText"></p>
+        <button type="button" id="wifiNewYes">Configure</button>
+        <button type="button" class="ghost" id="wifiNewNo" style="margin-left:8px">Not now</button>
+        <span class="note" id="wifiNewMsg" style="margin-left:10px"></span>
+      </div>
       <!-- ★★ ONCE SET UP, ONE LINE (Stuart, 2026-10-10: "collapses into the button so its not a large block
            that has to be scrolled every time"). Open in full only on the first-boot setup hotspot, while
            nothing is saved yet, or when the owner asks to change it. -->
@@ -6122,7 +6132,56 @@ function wifiRadioRender() {
         + (w.lastError ? "\nLast problem: " + w.lastError + "." : "")
       : "This box is also wired (Ethernet" + at + "). If you do not use its Wi-Fi, you can switch it off.";
   $("wifiRadioBtn").textContent = off ? "Turn on" : "Turn Wi-Fi off (this box is wired)";
+  wifiNewRender();
 }
+/** ★★★ NEW WI-FI HARDWARE (2026-10-25) — from the root service's newWifi (asked) and ignoredWifi (offered quietly). */
+function wifiNewRender() {
+  const w = WIFI || {};
+  const fresh = Array.isArray(w.newWifi) ? w.newWifi : [], off = Array.isArray(w.ignoredWifi) ? w.ignoredWifi : [];
+  const r = fresh[0] || off[0];
+  const what = i => i.iface + (i.usb ? " (USB " + i.usb + (i.driver ? ", " + i.driver : "") + ")" : i.driver ? " (" + i.driver + ")" : "");
+  $("wifiNew").classList.toggle("hide", !r);
+  if (!r) return;
+  const instead = w.hasWifi === true ? "\nConfigure uses it for this box's Wi-Fi in place of the radio it uses now." : "";
+  $("wifiNewText").textContent = fresh.length
+    ? "New Wi-Fi hardware detected \u2014 configure it now?\n" + fresh.map(what).join(", ")
+      + "\nUntil you choose, this box leaves it switched off: no hotspot, no network." + instead
+    : "Wi-Fi hardware not in use: " + off.map(what).join(", ") + instead;
+  $("wifiNewYes").textContent = fresh.length ? "Configure" : "Use it";
+  $("wifiNewNo").classList.toggle("hide", !fresh.length);
+}
+async function wifiNewChoose(action) {
+  $("wifiNewYes").disabled = $("wifiNewNo").disabled = true;
+  $("wifiNewMsg").textContent = action === "configure" ? "Setting up the new Wi-Fi hardware\u2026" : "Saving\u2026";
+  try {
+    await wifiPost("/vibeserver/pocket/newwifi", {action});
+    // ★ The root service acts on its next turn: read its state back until it says so.
+    for (let i = 0; i < 12; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      await wifiLoad();
+      const w = WIFI || {};
+      if (!(w.newWifi || []).length && (action !== "configure" || w.hasWifi === true)) break;
+    }
+    const w = WIFI || {};
+    if (action === "configure" && w.hasWifi === true) {
+      // ★ The owner chose Wi-Fi: the "no Wi-Fi present" tick no longer applies, and the form opens.
+      WIFI_IGNORE = false;
+      try { localStorage.setItem("vibeWifiIgnore", "0"); } catch (e) { /* this page only */ }
+      $("wifiNewMsg").textContent = "";
+      wifiRender();
+      if (!$("wifiSummary").classList.contains("hide")) $("wifiChange").click();
+      $("wifiCard").scrollIntoView({behavior: "smooth", block: "start"});
+    } else {
+      $("wifiNewMsg").textContent = (w.newWifi || []).length
+        ? (w.lastError ? w.lastError + "." : "The box has not confirmed it yet \u2014 reload in a moment.") : "";
+      wifiRender();
+    }
+  } catch (e) { $("wifiNewMsg").textContent = String(e); }
+  $("wifiNewYes").disabled = $("wifiNewNo").disabled = false;
+}
+$("wifiNewYes").onclick = () => { void wifiNewChoose("configure"); };
+$("wifiNewNo").onclick = () => { void wifiNewChoose("ignore"); };
+
 /** ★ Off is asked twice (the warning first); on is one press. */
 $("wifiRadioBtn").onclick = () => {
   if (WIFI && WIFI.wifiOff) { void wifiRadioSet(false); return; }
@@ -6334,14 +6393,14 @@ function wifiAddresses() {
   const port = POCKET && POCKET.port ? POCKET.port : (location.port || 80);
   const suffix = String(port) === "80" ? "" : ":" + port;
   const out = [];
-  // ★★★ ONE NAME FIRST, NO PORT (Stuart, 2026-10-10). The box's own hostname is published by avahi
-  //     from the moment it boots — configured or not — and the root service keeps :80 pointed at the
-  //     front door on every network, so http://vibepocket.local/ is the address to remember.
-  // ★ Once configured, the name chosen in setup comes first (Stuart: it "then applies").
+  // ★★★ ONE NAME, WITH ITS PORT (Stuart, 2026-10-25: "realistically the only .local address open after setup should be
+  //     the one the user sets", and "release the port the less open ports the better"). Once set up, the box answers
+  //     ONLY to the name chosen here (its hostname, published by avahi) and port 80 is released — so the address is
+  //     http://<chosen>.local:<port>/. vibepocket.local no longer exists. While setting up it is VibeServerSetup.local.
   const label = mdnsLabel(($("name") && $("name").value) || (cfg && cfg.name) || "");
   const host = POCKET && POCKET.hostname ? String(POCKET.hostname).split(".")[0] : "";
   if ($("mdns").checked && cfg && cfg.configured && label && label !== host) out.push("http://" + label + ".local" + suffix + "/");
-  if (host) out.push("http://" + host + ".local/");
+  if (host && host !== "vibepocket") out.push("http://" + host + ".local" + suffix + "/");
   return {out, suffix};
 }
 
@@ -6661,9 +6720,12 @@ function backUp() {
 function pocketNewHome() {
   if (!POCKET || !/^vibeserversetup\.local$/i.test(location.hostname)) return "";
   const {out, suffix} = wifiAddresses();
-  // The name chosen in setup if there is one; never the setup name itself; else the box's own permanent name.
+  // The name chosen in setup if there is one; never the setup name itself. ★ No chosen name (mDNS switched off): the box
+  //   answers to NO .local name once set up, so its address on this network is its IP.
   const chosen = out.find(x => !/\/\/vibeserversetup\./i.test(x) && !/\/\/vibepocket\./i.test(x));
-  return chosen || ("http://vibepocket.local" + suffix + "/");
+  const w = WIFI || {};
+  const ip = w.wiredIp || w.ip || "";
+  return chosen || (ip ? "http://" + ip + suffix + "/" : "");
 }
 </script>
 )HTML";
