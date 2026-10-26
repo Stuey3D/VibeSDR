@@ -140,6 +140,24 @@ static int multi(bool verbose) {
 
 /** ★ Pure noise. `stress`: the carrier finder's bar dropped to 0.4 dB, so channels open on noise all the time and only
  *  the text gate stands between them and the list. */
+/** IMD: a strong PSK31 signal whose idles are measured, transmitters driven harder and harder. */
+static int imd() {
+    std::printf("IMD (+10 dB in 2.5 kHz, audio; PSK63 +13), the transmitter driven harder: engine / reference\n");
+    for (double k : { 0.0, 0.05, 0.1, 0.2, 0.35 }) for (double baud : { 31.25, 62.5 }) {
+        Rng rng(5);
+        Sig s; s.hz = 1200; s.baud = baud; s.snrDb = 10 + (baud > 40 ? 3 : 0); s.cubic = k; s.startSec = 2.5; s.idleBefore = 160; s.idleAfter = 64;
+        s.text = kQso[0];   // ★ the 5 s idle before it is what is measured
+        std::vector<Sig> v{ s };
+        std::vector<cf> x; std::vector<float> r;
+        synth(v, 12000, false, duration(s) + 3, rng, x, r);
+        Skimmer sk(cfgFor(false, 12000)); Run run; run.attach(sk);
+        feed(sk, false, x, r);
+        float got = 0; for (auto& sg : sk.signals(true)) got = sg.imdDb;
+        std::printf("  %s cubic %.2f: %6.1f dB / %6.1f dB\n", baud > 40 ? "PSK63" : "PSK31", k, got, cubicImdDb(k));
+    }
+    return 0;
+}
+
 static int noise(double minutes, bool stress) {
     for (int iq = 0; iq < 2; ++iq) {
         const double rate = iq ? 48000 : 12000;
@@ -232,27 +250,75 @@ static int wav(const char* path, double centre, double width) {
     return 0;
 }
 
-/** ★ A synthetic HF clip for the server/web tests: 48 kHz IQ, int16 interleaved, a handful of PSK31/63 QSOs. */
+/** ★ A synthetic HF clip for the server/web tests (scripts/test-server-psk.mjs, test-web-psk.mjs): what a fake rtl_tcp
+ *  replays — unsigned 8-bit IQ at `rate` (960 kHz), centred on 14.0710 MHz — five PSK stations calling CQ, at the
+ *  offsets below (one PSK63). Written as it is made (no whole-clip buffers: 40 s at 960 kHz is 38 M samples). */
+static const struct ClipSt { double off; const char* call; double baud, snr; } kClip[] = {
+    { -3000, "g4abc", 31.25, 4 }, { -1100, "dl1xyz", 31.25, 6 }, { 700, "ea7xx", 31.25, 8 }, { 2300, "ok1rr", 62.5, 9 }, { 4100, "sp9zz", 31.25, 5 } };
 static int clip(const char* out, double rate, double seconds) {
-    Rng rng(7);
-    std::vector<Sig> v;
-    const char* calls[] = { "g4abc", "dl1xyz", "ea7xx", "ok1rr", "sp9zz" };
-    for (int i = 0; i < 5; ++i) {
-        Sig s; s.baud = i == 3 ? 62.5 : 31.25; s.hz = -4000 + 1700.0 * i + 13; s.snrDb = 0 + 2 * i;
-        s.text = std::string("cq cq cq de ") + calls[i] + " " + calls[i] + " " + calls[i] + " pse k\n";
-        while (duration(s) < seconds) s.text += std::string("cq cq de ") + calls[i] + " " + calls[i] + " k\n";
-        s.startSec = 0.3 + 0.4 * i; v.push_back(s);
+    Rng rng(2026);
+    struct Live { std::vector<int8_t> d; double T, amp, t0; std::complex<double> ph, step; };
+    std::vector<Live> L;
+    for (const ClipSt& c : kClip) {
+        std::string t; while (t.size() < seconds * c.baud / 6) t += std::string("cq cq cq de ") + c.call + " " + c.call + " " + c.call + " pse k\n";
+        const std::vector<int> b = bits(t, 40, 0);
+        Live l; l.T = 1.0 / c.baud;
+        l.d.assign(b.size() + 2, 0);               // d[0] = 0: the ramp up; a zero bit flips the sign
+        int8_t cur = 1; for (size_t k = 0; k < b.size(); ++k) { if (!b[k]) cur = (int8_t)-cur; l.d[k + 1] = cur; }
+        // mean power so that P / (noise in 2500 Hz) = snr (noise power 1 over `rate`); the envelope's mean square ≈ 0.75
+        l.amp = std::sqrt(std::pow(10.0, c.snr / 10.0) * 2500.0 / rate / 0.75);
+        l.t0 = 0.3 + rng.uni();
+        l.ph = std::polar(1.0, rng.uni() * 2 * M_PI); l.step = std::polar(1.0, 2 * M_PI * c.off / rate);
+        L.push_back(l);
     }
-    std::vector<cf> x; std::vector<float> r;
-    synth(v, rate, true, seconds, rng, x, r, 0.25);
-    FILE* f = std::fopen(out, "wb"); if (!f) return 1;
-    std::vector<int16_t> b(x.size() * 2);
-    for (size_t i = 0; i < x.size(); ++i) {
-        b[2 * i] = (int16_t)std::max(-32767.0f, std::min(32767.0f, x[i].real() * 3000.0f));
-        b[2 * i + 1] = (int16_t)std::max(-32767.0f, std::min(32767.0f, x[i].imag() * 3000.0f));
+    FILE* f = std::fopen(out, "wb"); if (!f) { std::perror(out); return 1; }
+    const size_t n = (size_t)(seconds * rate), blk = 65536;
+    std::vector<uint8_t> buf(blk * 2);
+    const double sg = std::sqrt(0.5);
+    auto q = [](double v) { const int x = (int)std::lround(127.5 + v * 18.0); return (uint8_t)std::max(0, std::min(255, x)); };
+    for (size_t i0 = 0; i0 < n; i0 += blk) {
+        const size_t k = std::min(blk, n - i0);
+        for (size_t j = 0; j < k; ++j) {
+            const double t = (double)(i0 + j) / rate;
+            double re = sg * rng.gauss(), im = sg * rng.gauss();
+            for (auto& l : L) {
+                l.ph *= l.step;
+                const double u = (t - l.t0) / l.T;      // symbols since the start: centre k at u = k
+                if (u < 0) continue;
+                const size_t kk = (size_t)u;
+                if (kk + 1 >= l.d.size()) continue;
+                const double w = 0.5 * (1 + std::cos(M_PI * (u - (double)kk)));
+                const double a = l.amp * (l.d[kk] * w + l.d[kk + 1] * (1 - w));
+                re += a * l.ph.real(); im += a * l.ph.imag();
+            }
+            buf[2 * j] = q(re); buf[2 * j + 1] = q(im);
+        }
+        for (auto& l : L) l.ph /= std::abs(l.ph);
+        std::fwrite(buf.data(), 1, 2 * k, f);
     }
-    std::fwrite(b.data(), 2, b.size(), f); std::fclose(f);
-    std::printf("%s: %.0f s of %.0f Hz IQ, %zu signals\n", out, seconds, rate, v.size());
+    std::fclose(f);
+    std::printf("%s: %.0f s at %.0f Hz, %zu stations\n", out, seconds, rate, L.size());
+    return 0;
+}
+
+/** ★ Decode a clip made by `clip` (as the server's skimmer would see it: a 12 kHz slice) — the clip's own check. */
+static int clipCheck(const char* path, double rate) {
+    FILE* f = std::fopen(path, "rb"); if (!f) return 1;
+    // a 48 kHz slice by a plain 20:1 boxcar (the bench only: the server cuts its slice from its own FFT)
+    const int D = (int)std::lround(rate / 48000);
+    Skimmer sk(cfgFor(true, rate / D)); Run run; run.attach(sk);
+    std::vector<uint8_t> b(2 * 48000 * D); std::vector<cf> x;
+    size_t got;
+    while ((got = std::fread(b.data(), 1, b.size(), f)) > 0) {
+        x.clear();
+        for (size_t i = 0; i + 2 * D <= got; i += 2 * D) {
+            cf a(0, 0); for (int k = 0; k < D; ++k) a += cf((b[i + 2 * k] - 127.5f) / 18.0f, (b[i + 2 * k + 1] - 127.5f) / 18.0f);
+            x.push_back(a / (float)D);
+        }
+        sk.feedIq(x.data(), (int)x.size());
+    }
+    std::fclose(f);
+    for (auto& s : sk.signals(true)) std::printf("  %+7.1f Hz BPSK%d %s: %s\n", s.offsetHz, s.baud, s.call.c_str(), squash(s.text).substr(0, 60).c_str());
     return 0;
 }
 
@@ -273,11 +339,13 @@ int main(int argc, char** argv) {
     if (m == "one" && argc > 4) return one(std::atof(argv[2]), std::atof(argv[3]), std::string(argv[4]) == "iq", argc > 5 ? std::atof(argv[5]) : 1000);
     if (m == "multi") return multi(argc > 2);
     if (m == "drift") return drift();
+    if (m == "imd") return imd();
     if (m == "drift1" && argc > 2) { std::string t; const double c = oneCer(31.25, -5, true, 1200, 7, &t, std::atof(argv[2])); std::printf("CER %.1f%%\n%s\n", c * 100, t.c_str()); return 0; }
     if (m == "noise") return noise(argc > 2 ? std::atof(argv[2]) : 5, argc > 3);
     if (m == "cpu") return cpu(argc > 2 ? std::atof(argv[2]) : 30);
     if (m == "wav" && argc > 2) return wav(argv[2], argc > 3 ? std::atof(argv[3]) : 0, argc > 4 ? std::atof(argv[4]) : 0);
     if (m == "clip" && argc > 4) return clip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
+    if (m == "clipcheck" && argc > 3) return clipCheck(argv[2], std::atof(argv[3]));
     std::fprintf(stderr, "usage: psk_bench accuracy|offsets|one <baud> <snr> <iq|audio> [hz]|multi [v]|drift|noise <min>|cpu <s>|wav <f> [centre] [width]|clip <out> <rate> <s>\n");
     return 2;
 }

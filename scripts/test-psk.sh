@@ -26,7 +26,7 @@ build() {
 
 case "${1:-all}" in
   build) build; echo "$OUT/psk_bench"; echo "$OUT/psk_bench_scalar" ;;
-  clip)  build; "$OUT/psk_bench" clip "${2:?clip file}" 48000 40 ;;
+  clip)  build; "$OUT/psk_bench" clip "${2:?clip file}" 960000 40 ;;
   wav)   build; "$OUT/psk_bench" wav "${2:?file.wav}" "${3:-0}" "${4:-0}" ;;
   all)
     build

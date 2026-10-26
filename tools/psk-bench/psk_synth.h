@@ -46,7 +46,11 @@ struct Sig {
     std::string text;
     int idleBefore = 32, idleAfter = 32;
     double clockPpm = 0;         // the transmitter's symbol clock error
+    double cubic = 0;            // ★ an overdriven transmitter: the envelope becomes a − cubic·a³ (third-order IMD)
 };
+/** ★ The IMD a cubic of `k` gives on the idle (two tones at ±baud/2), from the envelope itself — the bench's reference:
+ *  cos(πt/T) − k·cos³ = (1 − ¾k)·cos − ¼k·cos(3πt/T), so the products sit at ¼k ÷ (1 − ¾k) of the tones. */
+inline double cubicImdDb(double k) { return k <= 0 ? -200.0 : 20.0 * std::log10(0.25 * k / (1.0 - 0.75 * k)); }
 
 /** Baseband envelope (real, ±1 at symbol centres) for a bit stream at `rate`. */
 inline std::vector<float> envelope(const std::vector<int>& b, double baud, double rate, double clockPpm = 0) {
@@ -74,7 +78,8 @@ inline void synth(std::vector<Sig>& sigs, double rate, bool complexOut, double s
     if (complexOut) iq.assign(n, cf(0, 0)); else re.assign(n, 0.0f);
     const double bw = complexOut ? rate : rate / 2;
     for (auto& s : sigs) {
-        const auto env = envelope(bits(s.text, s.idleBefore, s.idleAfter), s.baud, rate, s.clockPpm);
+        auto env = envelope(bits(s.text, s.idleBefore, s.idleAfter), s.baud, rate, s.clockPpm);
+        if (s.cubic > 0) for (auto& v : env) v = (float)(v - s.cubic * v * v * v);
         double ms = 0; for (float v : env) ms += v * v; ms /= std::max<size_t>(1, env.size());
         // mean power so that P / (noise in 2500 Hz) = snr
         const double p = std::pow(10.0, s.snrDb / 10.0) * 2500.0 / bw;

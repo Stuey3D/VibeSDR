@@ -23482,6 +23482,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (ext == "fsk") key = "rtty";
         else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") key = "time";
         else if (ext == "cwskim") key = "cw";        // ★ the skimmer is CW's too — one owner switch
+        else if (ext == "pskskim") key = "psk";      // ★ …and PSK's skimmer is PSK's
         return !key.empty() && vsModeBlocked(key);
     }
 
@@ -23971,6 +23972,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
                 vibe::gallery::Meta m;
                 m.kind = "cw"; m.origin = "live"; m.decoder = skimmer ? "cwskim" : "cw";
+                m.mode = sessionMode(session);
+                m.freqHz = dial ? dial() : 0.0;
+                return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
+            };
+            // ★★ …and a listener's PSK (V12 2026-10-26): the same summary, labelled PSK.
+            e.pskSpotTap = [this, session, dial](bool skimmer) -> vibe::DecoderTapPtr {
+                if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
+                vibe::gallery::Meta m;
+                m.kind = "psk"; m.origin = "live"; m.decoder = skimmer ? "pskskim" : "psk";
                 m.mode = sessionMode(session);
                 m.freqHz = dial ? dial() : 0.0;
                 return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
@@ -30683,6 +30693,8 @@ static std::string vsTunableJson() {
     /* ★★ CW (V12, 2026-10-25): this server's own CW decoder and skimmer (decoders/cw_skimmer.h). Absent on an older server,
      *  so its clients draw no CW button there; false where the owner has blocked CW on this receiver. */
     j += std::string(",\"cw\":") + (vsModeBlocked("cw") ? "false" : "true");
+    /* ★★ PSK31/63 (V12, 2026-10-26): this server's own PSK decoder and skimmer (decoders/psk_skimmer.h) — as "cw". */
+    j += std::string(",\"psk\":") + (vsModeBlocked("psk") ? "false" : "true");
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {
@@ -30967,7 +30979,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

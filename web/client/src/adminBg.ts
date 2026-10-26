@@ -46,7 +46,8 @@ function hhmm(utcSec: number): string {
 export function bgVfoLine(v: BgVfo): string {
   // ★ An FT8/FT4 summary VFO is "FT8" on this line (its menu label "FT8 / FT4 (summary)" is the setup page's); a CW
   //   skimmer sends spots too, and is "CW skimmer" (V12 2026-10-25) — it read "FT8" until then.
-  const name = v.dec === 'cwskim' ? 'CW skimmer' : typeof v.spots === 'number' ? 'FT8' : v.label || v.dec.toUpperCase();
+  //   And a PSK skimmer (2026-10-26) is "PSK skimmer".
+  const name = v.dec === 'cwskim' ? 'CW skimmer' : v.dec === 'pskskim' ? 'PSK skimmer' : typeof v.spots === 'number' ? 'FT8' : v.label || v.dec.toUpperCase();
   const parts = [`${khz(v.hz)} ${name}`];
   if (v.state === 'out') parts.push("out of range (outside the listener's window)");
   else if (v.state === 'paused') parts.push(`paused (${v.why || 'a listener needed the decoder slot'})`);

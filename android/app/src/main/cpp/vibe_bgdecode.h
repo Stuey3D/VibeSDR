@@ -174,7 +174,7 @@ private:
             gallery::Meta mm = meta_;
             mm.utc = now;
             // ★ A CW run is written exactly as an RTTY run is (V12 2026-10-25) — only its name differs.
-            const std::string what = meta_.kind == "cw" ? "CW" : "RTTY";
+            const std::string what = meta_.kind == "cw" ? "CW" : meta_.kind == "psk" ? "PSK" : "RTTY";
             mm.title = what + " \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " " + upper(meta_.mode);
             const std::string head = what + " \xc2\xb7 " + where() + "\nStarted " + gallery::utcStamp(now, "%Y-%m-%d %H:%M UTC") + "\n\n";
             run_ = store_.create(mm, "txt", head + buf_);
@@ -206,6 +206,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "fsk") return msg.find("CCIR476") != std::string::npos ? "navtex" : "rtty";
     if (ext == "wefax" || ext == "sstv") return ext;
     if (ext == "cw") return "cw";          // ★ a listener's CW decoder: its text, as an RTTY run (a skimmer keeps a summary)
+    if (ext == "psk") return "psk";        // ★ …and a listener's PSK decoder (V12 2026-10-26)
     return "";
 }
 
@@ -383,6 +384,7 @@ struct Ft8Tally {
     /** ★ V12 2026-10-25: the same tally serves the CW summary — no FT8/FT4 split, no grids, and two lines of its own
      *  (the most-heard call, the busiest 1 kHz of the band). */
     bool cw = false;
+    bool speed = true;      // ★ …with an average speed line (CW's WPM); PSK's speed is its mode, so none
     std::map<std::string, unsigned long> callSpots;
     std::map<long, unsigned long> khzSpots;
     double wpmSum = 0;
@@ -439,7 +441,7 @@ struct Ft8Tally {
         if (cw) {
             std::snprintf(b, sizeof b, "Spots heard:       %lu from %zu stations (calls heard identifying themselves twice)\n", spots, calls.size());
             o += b;
-            if (spots) { std::snprintf(b, sizeof b, "Average speed:     %.0f WPM\n", wpmSum / (double)spots); o += b; }
+            if (spots && speed) { std::snprintf(b, sizeof b, "Average speed:     %.0f WPM\n", wpmSum / (double)spots); o += b; }
             unsigned long n = 0;
             const std::string mh = mostHeard(&n);
             if (!mh.empty()) { std::snprintf(b, sizeof b, "Most heard:        %s (%lu spots)\n", mh.c_str(), n); o += b; }
@@ -497,9 +499,11 @@ public:
         : store_(store), meta_(std::move(meta)), lat_(lat), lon_(lon), clock_(std::move(clock)) {
         // ★★ V12 2026-10-25: the SAME summary for CW (meta.kind "cw") — the listener's CW decoder and the skimmer: spots,
         //    calls, countries, the most-heard call and the busiest kHz, per hour and for the last 10 minutes.
-        cw_ = meta_.kind == "cw";
-        label_ = cw_ ? "CW" : "FT8";
-        hour_.cw = cw_;
+        //    And PSK's (V12 2026-10-26): the same keyboard-mode summary, without a speed.
+        cw_ = meta_.kind == "cw" || meta_.kind == "psk";
+        psk_ = meta_.kind == "psk";
+        label_ = psk_ ? "PSK" : cw_ ? "CW" : "FT8";
+        hour_.cw = cw_; hour_.speed = !psk_;
         const int64_t now = this->now();
         start_ = hourFrom_ = rollWrite_ = now;
         if (meta_.liveSpots) meta_.liveSpots->store(0, std::memory_order_relaxed);
@@ -572,8 +576,9 @@ private:
     std::string where() const {
         if (cw_) {
             std::string m = meta_.mode; for (auto& c : m) c = (char)std::toupper((unsigned char)c);
-            return std::string("CW spots summary \xc2\xb7 ") + gallery::freqText(meta_.freqHz)
-                 + (meta_.decoder == "cwskim" ? " (the skimmer's centre)" : " " + m) + " \xc2\xb7 "
+            const bool skim = meta_.decoder == "cwskim" || meta_.decoder == "pskskim";
+            return label_ + " spots summary \xc2\xb7 " + gallery::freqText(meta_.freqHz)
+                 + (skim ? " (the skimmer's centre)" : " " + m) + " \xc2\xb7 "
                  + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
                  + (meta_.profile.empty() ? std::string() : " (" + meta_.profile + ")") + "\n";
         }
@@ -593,7 +598,7 @@ private:
     void closeHourIfDue(int64_t t) {
         if (t / kHourSec == hourFrom_ / kHourSec) return;
         writeHour((hourFrom_ / kHourSec + 1) * kHourSec);
-        hour_ = Ft8Tally(); hour_.cw = cw_;
+        hour_ = Ft8Tally(); hour_.cw = cw_; hour_.speed = !psk_;
         hourFrom_ = t / kHourSec * kHourSec;
     }
     void writeHour(int64_t to) {
@@ -611,7 +616,7 @@ private:
     void writeRolling(int64_t t, bool last) {
         rollWrite_ = t; rollDirty_ = false;
         if (recent_.empty() && rollName_.empty() && lastSpot_ == 0) return;   // ★ never heard anything: no card
-        Ft8Tally w; w.cw = cw_;
+        Ft8Tally w; w.cw = cw_; w.speed = !psk_;
         for (const auto& r : recent_) w.add(r.ft4, r.call, r.grid, r.ctry, r.km, r.rf, r.wpm);
         const int64_t from = std::max(start_, t - kWindowSec);
         gallery::Meta m = meta_;
@@ -640,6 +645,7 @@ private:
     gallery::Meta meta_;
     bool cw_ = false;
     std::string label_ = "FT8";
+    bool psk_ = false;
     double lat_, lon_;
     std::function<int64_t()> clock_;
     mutable std::mutex m_;
@@ -657,7 +663,7 @@ private:
 inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr,
                                     std::function<void(const std::string&)> log = nullptr, const std::string& tag = "") {
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
-    if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw") {
+    if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
         if (log) t->setLog(std::move(log), tag);
         return t;
@@ -881,6 +887,15 @@ public:
                 env.cwSpotTap = [st, v, pi, la, lo, lo2, last2, ls, lc](bool) -> DecoderTapPtr {
                     gallery::Meta m;
                     m.kind = "cw"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "cwskim";
+                    m.profile = "Profile " + std::to_string(pi + 1);
+                    m.listenerOn = lo2;
+                    m.lastItemAt = last2; m.liveSpots = ls; m.liveCountries = lc;
+                    return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
+                };
+                // ★ …and a PSK skimmer's (V12 2026-10-26), labelled PSK.
+                env.pskSpotTap = [st, v, pi, la, lo, lo2, last2, ls, lc](bool) -> DecoderTapPtr {
+                    gallery::Meta m;
+                    m.kind = "psk"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "pskskim";
                     m.profile = "Profile " + std::to_string(pi + 1);
                     m.listenerOn = lo2;
                     m.lastItemAt = last2; m.liveSpots = ls; m.liveCountries = lc;

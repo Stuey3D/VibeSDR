@@ -76,6 +76,10 @@ inline const std::vector<DecoderDef>& decoders() {
         { "cw-skim-24",   "CW skimmer, 24 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 24000 },
         { "cw-skim-48",   "CW skimmer, 48 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 48000 },
         { "cw-skim-96",   "CW skimmer, 96 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 96000 },
+        // ★★ PSK SKIMMERS (V12 2026-10-26) — the same shape: the VFO is the segment's centre (e.g. 14.0715 MHz for
+        //    14.0655–14.0775 at 12 kHz — the PSK segment and its neighbours), a summary of the spots.
+        { "psk-skim-6",   "PSK skimmer, 6 kHz (summary)",  "pskskim", "psk", "usb",     0,    0,   0,     false, false, 6000 },
+        { "psk-skim-12",  "PSK skimmer, 12 kHz (summary)", "pskskim", "psk", "usb",     0,    0,   0,     false, false, 12000 },
     };
     return d;
 }

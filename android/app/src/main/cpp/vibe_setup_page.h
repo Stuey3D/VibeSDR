@@ -2582,6 +2582,8 @@ const BLOCKABLE = [
   /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
    *  presses near their house listed at all, however anonymous the list is: this is the switch. */
   { id: "ism",    label: "ISM sensors" },
+  /* ★ V12 PSK31/63 — the listener's decoder and the skimmer (docs/v12/PSK.md), one switch. */
+  { id: "psk",    label: "PSK31/63" },
 ];
 
 /** The blocked list as a Set of ids, from this radio's CSV. */

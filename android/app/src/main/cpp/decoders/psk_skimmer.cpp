@@ -275,7 +275,7 @@ struct Lane {
     unsigned decoded = 0, good = 0;     // characters decoded (gate or not) and plausible ones, over the lane's life
     std::deque<uint8_t> recentGood;     // plausibility of the last 16 decoded
     // IMD — the idle's two tones (±baud/2) and their third-order products (±3·baud/2), measured on a clean idle
-    float imdDb = 0; int imdN = 0;
+    float imdDb = 0; int imdN = 0; double imdLin = 0, imdDue = -1;
 
     void init(double b, double fs) {
         baud = b; T = 1.0 / b; sps = fs / b;
@@ -324,6 +324,8 @@ struct Sig {
     double bornSec = 0, lastGoodSec = 0, confirmedSec = 0, bornHz = 0;
     double t0 = -1;           // ★ input time (s) of this channel's first output sample
     bool ghost = false;
+    bool catchup = true;      // ★ run over the kept transforms before its first live hop
+    float snrShown = 0, qShown = 0;   // ★ as last heard well (a gone signal is listed as it was, not as its noise)
     int64_t firstMs = 0, lastMs = 0;
     std::string text;         // committed text (bounded)
     std::vector<std::pair<char, float>> heldQ;   // ★ characters decoded while tentative, each with its quality
@@ -366,6 +368,8 @@ struct Skimmer::Impl {
     uint64_t dropped = 0, suppressed = 0, ghosts = 0;
     std::vector<float> scratch, blk2, blkRe, blkIm;
     std::vector<double> pendingAdd;   // carriers a line search found, added after the channel loop
+    static constexpr int kHist = 6;   // ★ transforms kept (≈ 1 s): a new channel is run over them first
+    std::vector<std::vector<float>> hist;
 
     explicit Impl(const Config& c) : cfg(c) {
         // ★ N = 128·m with m 5-smooth and nearest rate/375: every channel then runs at rate/m ≈ 375 Hz, and the bins are
@@ -395,6 +399,7 @@ struct Skimmer::Impl {
         cout = (float*)pffft_aligned_malloc(2 * kM * sizeof(float));
         cwork = (float*)pffft_aligned_malloc(2 * kM * sizeof(float));
         tail.assign((size_t)2 * N, 0.0f);
+        hist.assign(kHist, std::vector<float>((size_t)2 * N, 0.0f));
         double lo = cfg.loHz, hi = cfg.hiHz;
         if (!cfg.complexIn) { lo = std::max(lo, 150.0); hi = std::min(hi, cfg.rate / 2 - 200); }
         else { lo = std::max(lo, -cfg.rate / 2 + 200); hi = std::min(hi, cfg.rate / 2 - 200); }
@@ -447,7 +452,18 @@ struct Skimmer::Impl {
         binPass(xs.data(), Fa.data(), Sa.data(), nS, aF, aS);
         updateFloor();
         if (hopsDone >= 10) findCarriers();
-        for (auto& g : sigs) runChannel(*g);
+        // ★★ A NEW CHANNEL STARTS IN THE PAST: the last kHist transforms are kept, and a channel opened this hop is run
+        //    over them first — ≈ 1 s of the signal that the carrier finder's own average took to notice (a PSK63 CQ
+        //    is over in that second). Cost: kHist copies of the transform (≈ 1.5 MB at 96 kHz), a few inverses once.
+        std::memcpy(hist[(size_t)(hopsDone % kHist)].data(), fout, sizeof(float) * 2 * (size_t)N);
+        for (auto& g : sigs) {
+            if (g->catchup) {
+                g->catchup = false;
+                const uint64_t from = hopsDone > (uint64_t)kHist - 1 ? hopsDone - (uint64_t)kHist + 1 : 1;
+                for (uint64_t k = from; k < hopsDone; ++k) runChannel(*g, hist[(size_t)(k % kHist)].data(), k);
+            }
+            runChannel(*g, fout, hopsDone);
+        }
         for (double hz : pendingAdd) if ((int)sigs.size() < cfg.maxSignals) addSig(hz);
         pendingAdd.clear();
         housekeeping();
@@ -547,9 +563,9 @@ struct Skimmer::Impl {
     }
 
     // ── a channel: 128 bins → inverse → the middle half, de-rotated and mixed to the carrier, then each lane ──
-    void runChannel(Sig& g) {
+    void runChannel(Sig& g, const float* X, uint64_t hopIdx) {
         // ★ block b's first valid output is input sample b·H − 3N/4 (the tail holds the last N; outputs are its middle half)
-        if (g.t0 < 0) g.t0 = ((double)hopsDone * H - 0.75 * N) / cfg.rate;
+        if (g.t0 < 0) g.t0 = ((double)hopIdx * H - 0.75 * N) / cfg.rate;
         const int kc = (int)std::lround(g.fc / binHz);
         if (std::fabs(g.fc - g.k0 * binHz) > 0.75 * binHz) g.k0 = kc;
         // ★ Bins k0−64 … k0+63 into the inverse's order (offset o at index (o + 128) mod 128), masked. Two runs, each
@@ -559,7 +575,7 @@ struct Skimmer::Impl {
             while (count > 0) {
                 const int b = binIndex(g.k0 + o);
                 const int run = std::min(count, N - b);
-                mulMask(fout + 2 * (size_t)b, mask.data() + (o + kM / 2), cin + 2 * (size_t)dst, run);
+                mulMask(X + 2 * (size_t)b, mask.data() + (o + kM / 2), cin + 2 * (size_t)dst, run);
                 o += run; dst += run; count -= run;
             }
         };
@@ -586,8 +602,9 @@ struct Skimmer::Impl {
             firBlock(g.xi.data() + off, kOut, l.h, l.L, l.yi.data());
             runLane(g, li);
         }
-        // ★ keep the block for the line search
+        // ★ keep the block for the line search and IMD
         for (int j = 0; j < kOut; ++j) { g.zr[g.zn % kLine] = cf(xr[j], xi[j]); ++g.zn; }
+        for (int li = 0; li < g.nLanes; ++li) if (g.lane[li].imdDue >= 0) { measureImd(g, g.lane[li], g.lane[li].imdDue); g.lane[li].imdDue = -1; }
         ++g.hops;
         std::memmove(g.xr.data(), g.xr.data() + kOut, sizeof(float) * (kMaxTaps - 1));
         std::memmove(g.xi.data(), g.xi.data() + kOut, sizeof(float) * (kMaxTaps - 1));
@@ -796,9 +813,13 @@ struct Skimmer::Impl {
         Lane& l = g.lane[li];
         l.zeroFrac += (1.0f / 128.0f) * ((bit == 0 ? 1.0f : 0.0f) - l.zeroFrac);
         l.ones7 *= (1.0f - 1.0f / 256.0f);
-        if (bit == 0) { if (l.onesRun >= 7) l.ones7 += std::min(64, l.onesRun) / 256.0f; ++l.zeroRun; l.onesRun = 0; }
+        if (bit == 0) {
+            if (l.onesRun >= 7) l.ones7 += std::min(64, l.onesRun) / 256.0f;
+            ++l.zeroRun; l.onesRun = 0;
+            // ★ an idle long enough to measure IMD on: done after the block is in the ring (runChannel)
+            if (l.zeroRun >= 20 && l.zeroRun % 8 == 4) l.imdDue = l.tNext - l.sps - (l.L - 1) / 2.0;
+        }
         else {
-            if (l.zeroRun >= 24) measureIdle(g, li);
             l.zeroRun = 0;
             if (++l.onesRun == 12) l.longOnes[(l.longOnesN++) % 8] = l.sym;
         }
@@ -824,8 +845,34 @@ struct Skimmer::Impl {
         } else if (l.len > 14) { l.cur &= 3u; l.len = 2; }   // ★ too long to be a code: wait for the next "00"
     }
 
-    void measureIdle(Sig& /*g*/, int /*li*/) {
-        // ★ IMD is measured in runIdleImd (needs the raw channel); placeholder kept small.
+    /** ★★ IMD, as G3PLX defines it: on a clean idle (continuous reversals = two tones at ±baud/2), the third-order
+     *  products at ±3·baud/2 over the tones. Measured on the channel BEFORE the matched filter, over 16 symbols of the
+     *  idle, Hann-windowed. Shown only where the signal is strong enough for the products to stand above the noise
+     *  (Es/N0 ≥ 15 dB); else 0 (unknown). Averaged over idles in power. */
+    void measureImd(Sig& g, Lane& l, double centre) {
+        const int W = std::min(kLine - 8, (int)std::lround(16 * l.sps));
+        const double endIdx = centre - l.sps;
+        const double startIdx = endIdx - W;
+        if (startIdx < 0 || (double)g.zn - startIdx > kLine - 2 || endIdx > (double)g.zn - 1) return;
+        const uint64_t s0 = (uint64_t)startIdx;
+        cf acc[4] = {};
+        const double f[4] = { -1.5 * l.baud, -0.5 * l.baud, 0.5 * l.baud, 1.5 * l.baud };
+        cf rot[4], step[4];
+        for (int k = 0; k < 4; ++k) { rot[k] = cf(1, 0); step[k] = std::polar(1.0f, (float)(-kTwoPi * f[k] / fsCh)); }
+        for (int i = 0; i < W; ++i) {
+            const float w = (float)(0.5 - 0.5 * std::cos(kTwoPi * (i + 0.5) / W));
+            const cf x = g.zr[(s0 + (uint64_t)i) % kLine] * w;
+            for (int k = 0; k < 4; ++k) { acc[k] += x * rot[k]; rot[k] *= step[k]; }
+        }
+        const double p1 = std::norm(acc[1]) + std::norm(acc[2]), p3 = std::norm(acc[0]) + std::norm(acc[3]);
+        if (!(p1 > 0) || l.snrL < 15.0f) return;
+        // ★ what noise alone puts in the product bins (the bin is ≈ fs/W wide; Es/N0 is over the baud rate)
+        const double noiseRel = 2.0 * std::pow(10.0, -l.snrL / 10.0) * (fsCh / W) / l.baud * 1.5;
+        const double r = p3 / p1;
+        if (r < 2.0 * noiseRel) return;              // ★ the products are under the noise: better than we can measure
+        l.imdLin = l.imdN ? 0.7 * l.imdLin + 0.3 * r : r;
+        ++l.imdN;
+        l.imdDb = (float)(10.0 * std::log10(l.imdLin));
     }
 
     /** The mean of the quality measure over a lane's last `n` symbols. */
@@ -845,7 +892,9 @@ struct Skimmer::Impl {
         return sc;
     }
     void decideLead(Sig& g) {
-        if (g.nLanes < 2) return;
+        // ★ fixed once the signal is confirmed: its mode is known, and a signal that has stopped must not turn into
+        //   "PSK63" because the other lane reads its noise a shade better
+        if (g.nLanes < 2 || g.confirmed) return;
         const int other = 1 - g.lead;
         // ★ a clear margin to switch, so two near-equal lanes do not swap every hop
         if (g.lane[other].sym > 48 && laneScore(g.lane[other]) > laneScore(g.lane[g.lead]) + 2.5f) {
@@ -882,7 +931,7 @@ struct Skimmer::Impl {
             }
         }
         const Lane& L = g.lane[g.lead];
-        if (L.snrL >= kKeepDb) g.lastGoodSec = now;
+        if (L.snrL >= kKeepDb) { g.lastGoodSec = now; g.snrShown = L.snrL; g.qShown = L.qual(); }
         if (!g.confirmed) {
             int gsum = 0; for (uint8_t v : L.recentGood) gsum += v;
             int strict = 0, letters = 0;
@@ -1034,7 +1083,7 @@ struct Skimmer::Impl {
         SignalView v;
         v.id = g.id; v.offsetHz = g.fc; v.active = g.active;
         const Lane& l = g.lane[g.lead];
-        v.baud = l.baud > 40 ? 63 : 31; v.snrDb = l.snrL; v.quality = l.qual(); v.imdDb = l.imdDb;
+        v.baud = l.baud > 40 ? 63 : 31; v.snrDb = g.snrShown; v.quality = g.qShown; v.imdDb = l.imdDb;
         v.firstMs = g.firstMs; v.lastMs = g.lastMs; v.call = g.call; v.text = g.text; v.chars = g.chars;
         if (v.text.size() > 300) v.text.erase(0, v.text.size() - 300);
         return v;

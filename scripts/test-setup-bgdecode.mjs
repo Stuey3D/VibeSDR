@@ -49,10 +49,10 @@ ok(api.bgCollect() === JSON.stringify(NICK), `saved back unchanged: ${api.bgColl
 // the decoders offered follow the demodulator
 const row2 = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
 const [md, dc] = row2.children.filter((e) => e.tag === 'select');
-ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96',
-   'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8 and the CW skimmers (24/48/96 kHz)');
+ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96,psk-skim-6,psk-skim-12',
+   'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8, the CW skimmers (24/48/96 kHz) and the PSK skimmers (6/12 kHz)');
 md.value = 'lsb'; md.onchange();
-ok(!dc.children.some((o) => o.value === 'wefax' || o.value === 'sstv' || o.value === 'ft8' || o.value.startsWith('cw-skim')) && dc.value === 'navtex',
+ok(!dc.children.some((o) => o.value === 'wefax' || o.value === 'sstv' || o.value === 'ft8' || o.value.startsWith('cw-skim') || o.value.startsWith('psk-skim')) && dc.value === 'navtex',
    'LSB offers only NAVTEX and RTTY (no negative charts), and keeps NAVTEX');
 ok(api.model().profiles[0].vfos[1].mode === 'lsb' && !row2.text().includes('Listening for'), '...the VFO is LSB now, and still no hint line');
 md.value = 'nfm'; md.onchange();

@@ -41,6 +41,7 @@
 #include "decoders/time_decoder.h"
 #include "decoders/ft8_decoder.h"
 #include "vibe_cw_run.h"
+#include "vibe_psk_run.h"
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -253,6 +254,8 @@ public:
         /** ★★ …and CW's (V12, 2026-10-25): asked when a CW decoder or skimmer starts, finished when it stops — a SUMMARY
          *  of the run's spots, as FT8's. `skimmer` says which. */
         std::function<DecoderTapPtr(bool skimmer)> cwSpotTap;
+        /** ★★ …and PSK's (V12, 2026-10-26): the same summary of a PSK decoder's or skimmer's spots. */
+        std::function<DecoderTapPtr(bool skimmer)> pskSpotTap;
         /** ★ A listener's AUDIO frequency → RF (their dial and mode: USB dial + a, LSB dial − a, this server's CW
          *  dial + a − 600). Empty = dial + audio. A skimmer's IQ carries its own centre. */
         std::function<double(double)> rfOfAudio;
@@ -384,7 +387,7 @@ public:
     /** ★ How many CW skimmers run in this process — the one atomic every listener's channel block reads before it looks
      *  for its host (so a radio with none pays nothing). */
     static std::atomic<int>& skimmersRunning() { static std::atomic<int> n{0}; return n; }
-    /** ★ A CW SKIMMER is running — it wants complex IQ (feedIq), not audio. Cheap: read on every channel block. */
+    /** ★ A SKIMMER (CW or PSK) is running — it wants complex IQ (feedIq), not audio. Cheap: read on every channel block. */
     bool wantsIq() const { return cwIq_.load(std::memory_order_relaxed); }
     /** ★ The skimmer's segment width asked for (Hz) — what the caller cuts its slice to. 0 = none running. */
     double iqWidthHz() const { return cwIq_.load(std::memory_order_relaxed) ? cwWidth_.load(std::memory_order_relaxed) : 0.0; }
@@ -459,7 +462,8 @@ public:
      *  on decoderKind: "attached" was once true while nothing had been constructed). */
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
-        return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw") : "none";
+        return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -518,7 +522,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "psk" || e == "pskskim";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -526,7 +530,7 @@ private:
     static std::string paramsOf(const std::string& msg) {
         std::string k;
         for (const char* f : { "center_frequency", "shift", "baud_rate", "lpm", "image_width", "carrier",
-                               "deviation", "bandwidth", "width" }) {
+                               "deviation", "bandwidth", "width", "centre" }) {
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
         for (const char* f : { "encoding", "framing", "station" }) { k += str(msg, f); k += ','; }
@@ -557,7 +561,7 @@ private:
         return j.substr(p + 1, e - p - 1);
     }
 
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -570,6 +574,7 @@ private:
         delete time_;  time_ = nullptr;
         if (cwIq_.exchange(false)) skimmersRunning().fetch_sub(1);
         cw_.reset();
+        psk_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }
         active_.store(false, std::memory_order_relaxed);
@@ -696,6 +701,9 @@ private:
         } else if (ext == "cw" || ext == "cwskim") {
             buildCwLocked_(ext == "cwskim", msg);
             return;
+        } else if (ext == "psk" || ext == "pskskim") {
+            buildPskLocked_(ext == "pskskim", msg);
+            return;
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
             /* ★★ RTTY, ONE CLICK (Stuart, 2026-10-04: "auto config the baud and shift etc so again its a one click use"). The
              *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
@@ -774,6 +782,35 @@ private:
         if (skimmer) { if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1); }
         else active_.store(true, std::memory_order_relaxed);
         log(skimmer ? "decoder attached: CW skimmer, " + std::to_string((int)std::lround(w / 1000)) + " kHz" : std::string("decoder attached: CW"));
+    }
+    /** ★★ PSK31/63 (V12, 2026-10-26): the listener's decoder ("psk", on their audio — the signal nearest "centre", the
+     *  middle of their passband, is ONE SIGNAL's) or a SKIMMER ("pskskim", on IQ the caller cuts — "width" Hz, 4–48 kHz).
+     *  It shares the CW skimmer's IQ path (wantsIq / iqWidthHz / skimmersRunning): one host runs one decoder at a time.
+     *  One engine, decoders/psk_skimmer.h; vibe_psk_run.h shapes what is sent. */
+    void buildPskLocked_(bool skimmer, const std::string& msg) {
+        double w = 12000, centre = 1500;
+        if (skimmer) { double v; if (num(msg, "width", v)) w = v; w = std::max(4000.0, std::min(48000.0, w)); }
+        { double v; if (num(msg, "centre", v) && v > 100 && v < 4000) centre = v; }
+        PskRun::Out o;
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
+        o.json = [this](const std::string& j) { broadcastText(j); };
+        o.spot = [this](const psk::Spot& sp, double rfHz) {
+            DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
+            if (t) t->cwSpot(sp.call, rfHz, 0.0f, sp.snrDb, sp.how);
+        };
+        std::function<double(double)> rf;
+        if (!skimmer) {
+            auto rfOf = env_.rfOfAudio; auto dial = env_.dialHz;
+            rf = [rfOf, dial](double a) { return rfOf ? rfOf(a) : (dial ? dial() : 0.0) + a; };
+        }
+        psk_.reset(new PskRun(skimmer, w, centre, std::move(rf), std::move(o)));
+        cwWidth_.store(w, std::memory_order_relaxed);
+        // ★ the gallery's summary: the same tap CW's runs use (cwTap_ — one decoder runs at a time), labelled PSK
+        if (env_.pskSpotTap) { DecoderTapPtr t = env_.pskSpotTap(skimmer); std::lock_guard<std::mutex> tl(tapMtx_); cwTap_ = std::move(t); }
+        if (skimmer) { if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1); }
+        else active_.store(true, std::memory_order_relaxed);
+        log(skimmer ? "decoder attached: PSK skimmer, " + std::to_string((int)std::lround(w / 1000)) + " kHz" : std::string("decoder attached: PSK"));
     }
     void sendSstv(const std::vector<uint8_t>& m) {
         std::lock_guard<std::mutex> sl(sstvSendMtx_);   // ★ SSTV has a video-decode thread of its own
@@ -915,6 +952,7 @@ private:
                 {
                     std::lock_guard<std::mutex> dl(decMtx_);
                     if (cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                 }
                 { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; } if (t) t->tick(); }
                 cpuNs_.fetch_add(vibeThreadCpuNs() - c0, std::memory_order_relaxed);
@@ -966,6 +1004,11 @@ private:
             if (cw_) {
                 // ★ CW: the engine takes the float audio itself (no int16 round trip); its frames are sent from inside.
                 cw_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
+            if (psk_) {
+                psk_->feedAudio(data, count);
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
@@ -1031,7 +1074,8 @@ private:
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
     std::atomic<double> cwWidth_{0.0};
-    DecoderTapPtr cwTap_;                     // ★ the gallery's CW summary (Env::cwSpotTap), under tapMtx_
+    DecoderTapPtr cwTap_;                     // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
+    std::unique_ptr<PskRun> psk_;             // ★ PSK31/63: a listener's decoder or a skimmer (buildPskLocked_) — shares cwIq_/cwWidth_
     int   sstvDecim_ = 0; float sstvAcc_ = 0.0f;
     int   textSlot_ = -1;
     std::atomic<bool> active_{false};
