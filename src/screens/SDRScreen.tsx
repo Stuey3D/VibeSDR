@@ -5449,6 +5449,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    socket decoder, exactly as switching between decoders always has.
     if (activeDecRef.current === 'scanner' && type !== 'scanner') scannerCtlRef.current?.stop();
     if (type === 'scanner' && activeDecRef.current && activeDecRef.current !== 'scanner') decoderClient.current?.stop();
+    // ★★ SCANNER OPEN = VFO B OFF (Stuart, 2026-10-27: "when the scanner is open we disable VFO B simple as that"). The
+    //    scanner tunes the one VFO; B is switched off as the box opens and its toggle is absent until the box closes.
+    if (type === 'scanner') onVfoAB(false);
     if (type === 'transcribe') setTxHeard('');
     if (type === 'transcribe' && activeDecRef.current && activeDecRef.current !== 'transcribe') decoderClient.current?.stop();
     setActiveDecoder(type);
@@ -5501,7 +5504,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
     decoderClient.current?.start(type);
-  }, [status.frequency, timeStationPref]);
+  }, [status.frequency, timeStationPref, onVfoAB]);
 
   /**
    * ★★★ THE STATION FOLLOWS THE DIAL WHILE THE DECODER IS RUNNING. It was chosen ONCE, at attach —
@@ -13269,7 +13272,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onClose={() => setStepOpen(false)}
         /* ★★ V12 VFO A/B — turned on and off HERE only, and only where the server offers it (hwinfo `watch`). */
         vfoAB={abOn}
-        onVfoAB={abOffered > 0 && !dabOn && !icom ? onVfoAB : undefined}
+        onVfoAB={abOffered > 0 && !dabOn && !icom && activeDecoder !== 'scanner' ? onVfoAB : undefined}
       />
       </PanelBoundary>
 
