@@ -600,6 +600,11 @@ public:
     struct LearnRow { uint32_t sid; std::string label; int ecc; int eid; };
     /** ★ TEST HOOK (test-dab-faad): every DAB+ access unit, as the ADTS the decoder is fed. Unset in the server. */
     std::function<void(const uint8_t*, size_t)> onAdtsForTest;
+    /** ★ test-dab-faad's UNIT LOG: every access-unit SLOT of every super frame whose header passed its firecode, on the
+     *  programme clock — `sf` is the super frame's place in time (120 ms each, from pcmOwed_), `slot` of `slots`, and the
+     *  ADTS bytes, or n == 0 for a unit that failed its CRC. A super frame that never decoded is a missing `sf`. Null in
+     *  the server. */
+    std::function<void(uint64_t sf, int slot, int slots, bool ps, const uint8_t*, size_t)> onAuSlotForTest;
     std::vector<LearnRow> learnable() {
         std::lock_guard<std::mutex> lk(m_);
         return learnableLocked_();
@@ -2128,6 +2133,16 @@ private:
         // ★★★ Per ACCESS UNIT, not per super frame — see SuperFrame::auBad. A header that passed its
         //     firecode is a real super frame, so its AU count is the audio that was due.
         if (s.firecodeOk) { auIn_ += uint32_t(s.auTotal); auBad_ += uint32_t(s.auBad); }
+        if (onAuSlotForTest && s.firecodeOk) {   // ★ before the `valid` test: a frame whose every unit failed is a real hole
+            const uint64_t sfAt = pcmOwed_ / (uint64_t(kAudioRateHz) * 120 / 1000);
+            size_t k = 0;
+            for (int slot = 0; slot < s.auTotal; ++slot) {
+                if (k < s.aus.size() && s.auSlot[k] == slot) {
+                    std::vector<uint8_t> pkt = toAdts(s.aus[k].data(), s.aus[k].size(), s.fmt, (s.stereo ? 2 : 1));
+                    onAuSlotForTest(sfAt, slot, s.auTotal, s.ps, pkt.data(), pkt.size()); ++k;
+                } else onAuSlotForTest(sfAt, slot, s.auTotal, s.ps, nullptr, 0);
+            }
+        }
         if (!s.valid || !s.firecodeOk) { sf_.pop_front(); return; }
         sf_.clear();
         ++sfOk_;

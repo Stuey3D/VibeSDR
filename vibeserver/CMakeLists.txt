@@ -945,6 +945,13 @@ target_include_directories(test-dab-faad PRIVATE "${CPP_DIR}")
 target_compile_options(test-dab-faad PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(test-dab-faad PRIVATE vibeserver_core)
 
+# ★ dab-unitlog: one DAB+ service's access units, CRC failures and lost super frames off a captured multiplex — the
+#   input test-dab-faad replays through each decoder (dev tool; real recordings stay in ~/VibeSDR-test-audio/dab).
+add_executable(dab-unitlog "${CMAKE_CURRENT_SOURCE_DIR}/dab-unitlog.cpp")
+target_include_directories(dab-unitlog PRIVATE "${CPP_DIR}")
+target_compile_options(dab-unitlog PRIVATE -O3 -ffp-contract=fast)
+target_link_libraries(dab-unitlog PRIVATE vibeserver_core)
+
 add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
 target_compile_options(dab-offline PRIVATE -O3 -ffp-contract=fast)   # ★ the SERVER's flags, so a replay measures what ships (was -O2, 2026-09-16)
