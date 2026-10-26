@@ -78,6 +78,8 @@ for (const [src, name] of [['web/mapkit/vendor/maplibre-gl.js', 'maplibre-gl.js'
                            ['web/mapkit/vibemapgl-compat.js', 'vibemapgl-compat.js'],
                            // ★ The ADS-B layer (V12) — gen-adsblayer-source.mjs writes it here too; this wipe must not lose it.
                            ['web/mapkit/adsblayer.js', 'adsblayer.js'],
+                           // ★ …and the ship/station layer (V12 AIS + APRS) — gen-tracklayer-source.mjs writes it here too.
+                           ['web/mapkit/tracklayer.js', 'tracklayer.js'],
                            ['web/mapkit/vendor/LICENSE-maplibre-gl.txt', 'LICENSE-maplibre-gl.txt'], ['web/mapkit/vendor/LICENSE-pmtiles.txt', 'LICENSE-pmtiles.txt']])
   if (existsSync(path.join(root, src))) cpSync(path.join(root, src), path.join(DIR_OUT, 'vendor', name));
 writeFileSync(path.join(DIR_OUT, 'vibemap-style.js'),

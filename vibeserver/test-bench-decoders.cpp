@@ -24,6 +24,10 @@ int main() {
         ok(r && r->pct > 0.0 && r->pct < 400.0, std::string(id) + (r ? ": " + std::to_string(r->pct).substr(0, 5) + " % of a core — " + r->label : ": missing"));
     }
     for (auto& x : rows) if (x.id == "dec_ft8") ok(x.decoded >= 15, "the FT8 row DECODES its busy band (" + std::to_string(x.decoded) + " of 20), so it times the LDPC work, not just the search");
+    // ★★ V12: Band spots' own row — it sets Band's default (off where not green), so it must measure a REAL busy band.
+    { const Row* b = nullptr; for (auto& x : rows) if (x.id == "dec_ft8band") b = &x;
+      ok(b && b->pct > 0.0 && b->pct < 400.0 && b->decoded >= 20, std::string("dec_ft8band: ") + (b ? std::to_string(b->pct).substr(0, 5) + " % of a core, "
+         + std::to_string(b->decoded) + " spots decoded — " + b->label : "missing")); }
     for (auto& x : rows) if (x.id == "dec_sstv") ok(x.label.find("listening") == std::string::npos, "SSTV committed to a picture (its VIS decoded), so the row is the decoding cost");
     ok(vibe::clockOffsetUs().load() == clk, "the FT8 row puts the UTC correction back exactly as it found it");
 

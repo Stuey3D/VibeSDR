@@ -369,6 +369,8 @@ each satellite decoder needs from them.
   a day at fixed times, at known sites. RS41 first.
 - **FT8 multi-pass and JS8.** The audit's FT8 items (subtraction, 2–3 passes, capture-timestamped slots) come first.
   JS8 then reuses the same core.
+  ★ Built 2026-10-26 (branch v12-js8-ft2), with FT2 (IU8LMC's fast mode = FT4 at 288 samples a symbol):
+  docs/v12/JS8-FT2.md.
 - **FST4/FST4W, Q65, MSK144.** The algorithms are in the WSJT-X team's published papers. Implement from those, test
   against WSJT-X as a black box. Low audience; do them once FT8's core is shared.
 - **MFSK family + Hell.** One MFSK core (FFT tone detector, Gray code, interleaver, convolutional/Walsh codes) serves

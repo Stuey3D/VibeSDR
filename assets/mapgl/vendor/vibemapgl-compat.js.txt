@@ -107,6 +107,13 @@
         'circle-stroke-color': ['coalesce', ['get', 'color'], '#3388ff'],
         'circle-stroke-width': ['case', ['==', ['get', 'stroke'], false], 0, ['coalesce', ['get', 'weight'], 3]],
         'circle-stroke-opacity': ['coalesce', ['get', 'opacity'], 1] } });
+      /* ★★ A LETTER INSIDE A CIRCLE (V12, 2026-10-26): a circleMarker styled { label, labelColor } carries it — the spots
+       *  map's MODE letter ("8" FT8, "4" FT4, "W" WSPR …), so a mode is never told by colour alone (colour-blind
+       *  listeners). One symbol layer over the same source: free for circles without a label. */
+      gl.addLayer({ id: 'lc-circle-labels', type: 'symbol', source: 'lc-circles', filter: ['has', 'label'],
+        layout: { 'text-field': ['get', 'label'], 'text-font': ['JetBrains Mono Regular'],
+                  'text-size': ['coalesce', ['get', 'labelSize'], 10], 'text-allow-overlap': true, 'text-ignore-placement': true },
+        paint: { 'text-color': ['coalesce', ['get', 'labelColor'], '#000000'] } });
       gl.on('click', 'lc-circles', (e) => {
         const f = e.features && e.features[0]; const c = f && circles.get(f.properties._id);
         if (c && c.html) new ml.Popup({ maxWidth: (c.maxWidth || 200) + 'px' }).setLngLat([c.ll.lng, c.ll.lat]).setHTML(c.html).addTo(gl);
@@ -307,7 +314,7 @@
       for (const q of polys.values()) if (q.st.dashArray) dashLayer(q.st);
       src.setData({ type: 'FeatureCollection', features: [...polys.values()].map((q) => ({
         type: 'Feature', id: q.id, properties: Object.assign({}, q.st, q.st.dashArray ? { _dash: String(q.st.dashArray) } : {}),
-        geometry: { type: 'MultiPolygon', coordinates: q.rings.map((r) => [r]) } })) });
+        geometry: q.line ? { type: 'LineString', coordinates: q.line } : { type: 'MultiPolygon', coordinates: q.rings.map((r) => [r]) } })) });
     }
     /* ★ DASHED OUTLINES (Leaflet's dashArray — the spots map's range rings). MapLibre cannot drive
      *  line-dasharray from a feature, so each distinct pattern gets its own line layer, made on first
@@ -357,6 +364,20 @@
         remove: () => { polys.delete(q.id); queuePolys(); return h; },
         setStyle: (s2) => { Object.assign(q.st, s2); queuePolys(); return h; },
         setLatLngs: (a) => { q.rings = (isRing(a) ? [a] : a).map(toRing); queuePolys(); return h; },
+      };
+      return h;
+    }
+    /** ★ V12 (tracklayer.js — a ship's or an APRS station's track): Leaflet polyline, an OPEN line through the same
+     *  source as the polygons (a LineString: the line layers draw it, the fill layer ignores it). */
+    function Polyline(latlngs, st) {
+      const toLine = (a) => (a || []).map((p) => { const q = ll(p); return [q.lng, q.lat]; });
+      const q = { id: ++polySeq, rings: [], line: toLine(latlngs), st: Object.assign({}, st) };
+      const h = {
+        addTo: (t) => { if (t && t._isGroup) t.addLayer(h); else h._show(); return h; },
+        _show: () => { polys.set(q.id, q); queuePolys(); },
+        remove: () => { polys.delete(q.id); queuePolys(); return h; },
+        setStyle: (s2) => { Object.assign(q.st, s2); queuePolys(); return h; },
+        setLatLngs: (a) => { q.line = toLine(a); queuePolys(); return h; },
       };
       return h;
     }
@@ -454,6 +475,7 @@
       map(id, o) { if (o && o.scrollWheelZoom === false) gl.scrollZoom.disable(); return map; },
       layerGroup: LayerGroup,
       polygon: Polygon,
+      polyline: Polyline,
       circle: Circle,
       marker: Marker,
       gpuMarker: GpuMarker,

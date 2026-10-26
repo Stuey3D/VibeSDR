@@ -28,6 +28,7 @@
  */
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
+import { DIGI_MODE_STYLE, DIGI_MARKER_RIM } from '../utils/digiModes';
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useOverlay } from './PanelNav';
 import { NavCard, CardKey } from './NavCard';
@@ -353,6 +354,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   #legbody::-webkit-scrollbar-thumb{background:rgba(${T.k},0.40);border-radius:2px;}
   .lg-row{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px;}
   .lg-dot{display:inline-block;width:12px;height:12px;border-radius:50%;flex-shrink:0;}
+  .lg-mk{width:15px;height:15px;font:bold 9px/15px monospace;text-align:center;box-shadow:0 0 0 1.2px ${DIGI_MARKER_RIM};}
   .lg-sec{font-size:11px;letter-spacing:1.5px;color:rgba(${T.x},0.40);margin:6px 0 3px;}
   .scroll-arrow{display:none;position:sticky;left:0;right:0;text-align:center;font-size:13px;line-height:1;padding:2px 0;pointer-events:none;color:rgba(${T.x},0.90);}
   .scroll-arrow-up{top:0;}
@@ -414,8 +416,8 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
 ${isSpots ? `
 <div id="filters">
   <span class="flabel">FILTER</span>
-  ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option><option>FT8</option><option>FT4</option><option>FT2</option><option>WSPR</option><option>JS8</option></select>` : ''}
-  <select id="fBand"><option value="ALL">All</option><option>160m</option><option>80m</option><option>60m</option><option>40m</option><option>30m</option><option>20m</option><option>17m</option><option>15m</option><option>12m</option><option>10m</option></select>
+  ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option>${Object.keys(DIGI_MODE_STYLE).map((m) => `<option>${m}</option>`).join('')}</select>` : ''}
+  <select id="fBand"><option value="ALL">All</option>${['2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm'].map((b) => `<option>${b}</option>`).join('')}</select>
   <select id="fAge">${kind === 'digi'
     ? `<option value="ALL">All</option><option value="2m" selected>2 min</option><option value="5m">5 min</option><option value="15m">15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option>`
     : `<option value="ALL">All</option><option value="15m" selected>15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option><option value="3h">3 hours</option>`}</select>
@@ -444,6 +446,14 @@ ${isSpots ? `
       <div class="lg-row"><span class="lg-dot" style="background:rgba(220,200,40,0.92);"></span><span>medium</span></div>
       <div class="lg-row"><span class="lg-dot" style="background:rgba(255,100,60,0.85);"></span><span>weak</span></div>
       <div class="lg-row"><span class="lg-dot" style="background:rgba(120,120,140,0.60);"></span><span>no sig</span></div>
+      ` : kind === 'digi' ? `
+      <div class="lg-sec">MODE</div>
+      ${Object.entries(DIGI_MODE_STYLE).map(([m, st]) => `<div class="lg-row"><span class="lg-dot lg-mk" style="background:${st.colour};color:${st.ink};">${st.letter}</span><span>${m}</span></div>`).join('')}
+      <div class="lg-row"><span>Colour + letter = mode</span></div>
+      <div class="lg-sec">SNR / SIZE</div>
+      <div class="lg-row"><span class="lg-dot" style="width:14px;height:14px;background:rgba(255,255,255,0.5);box-shadow:0 0 6px 3px rgba(255,255,255,0.4);"></span><span>Strong (&ge;0 dB)</span></div>
+      <div class="lg-row"><span class="lg-dot" style="width:9px;height:9px;background:rgba(255,255,255,0.5);"></span><span>Medium (-20 to 0)</span></div>
+      <div class="lg-row"><span class="lg-dot" style="width:6px;height:6px;background:rgba(255,255,255,0.3);"></span><span>Weak (&lt; -20 dB)</span></div>
       ` : `
       <div class="lg-sec">BAND COLOUR</div>
       <div class="lg-row"><span class="lg-dot" style="background:#9b30d9;"></span><span>2200m</span></div>
@@ -1346,8 +1356,9 @@ if(KIND==='digi'||KIND==='cw'){
     '40m':'#ffd700','30m':'#aacc00','20m':'#00cc44','17m':'#00ccaa','15m':'#00aaff','12m':'#0055ff','11m':'#6600ff','10m':'#cc00cc'};
   var BAND_RANGES={'2200m':[135700,137800],'630m':[472000,479000],'160m':[1800000,2000000],'80m':[3500000,4000000],
     '60m':[5250000,5450000],'40m':[7000000,7300000],'30m':[10100000,10150000],'20m':[14000000,14350000],
-    '17m':[18068000,18168000],'15m':[21000000,21450000],'12m':[24890000,24990000],'11m':[26965000,27405000],'10m':[28000000,29700000]};
-  var BAND_ORDER=['2200m','630m','160m','80m','60m','40m','30m','20m','17m','15m','12m','11m','10m'];
+    '17m':[18068000,18168000],'15m':[21000000,21450000],'12m':[24890000,24990000],'11m':[26965000,27405000],'10m':[28000000,29700000],
+    '6m':[50000000,54000000],'4m':[70000000,70500000],'2m':[144000000,148000000],'70cm':[420000000,450000000]};
+  var BAND_ORDER=['2200m','630m','160m','80m','60m','40m','30m','20m','17m','15m','12m','11m','10m','6m','4m','2m','70cm'];
 
   function spotHz(f){f=numOr(f,0);if(!f)return 0;return f<1000?Math.round(f*1e6):Math.round(f);}
   function bandFromHz(hz){for(var b in BAND_RANGES){var r=BAND_RANGES[b];if(hz>=r[0]&&hz<=r[1])return b;}return null;}
@@ -1370,9 +1381,21 @@ if(KIND==='digi'||KIND==='cw'){
     }
     return true;
   }
+  /* ★★ V12 (2026-10-26): DIGITAL SPOTS ARE COLOURED BY MODE, NOT BAND (Stuart: "most of our users will be using one SDR at
+   *  a time so only able to cover one band at a time") — the table in src/utils/digiModes.ts, shared with the web client.
+   *  A dark rim keeps the pale fills readable, and on the GPU map each circle carries its mode's LETTER (colour is never
+   *  the only cue). Bigger circles than the band dots were, so the letter fits. CW's map keeps its band colours. */
+  var MODE_STYLE=${JSON.stringify(DIGI_MODE_STYLE).replace(/</g, '\\u003c')}, RIM=${JSON.stringify(DIGI_MARKER_RIM)};
+  function modeStyle(m){m=String(m||'').toUpperCase();if(MODE_STYLE[m])return MODE_STYLE[m];
+    for(var k in MODE_STYLE)if(m.indexOf(k+'-')===0)return MODE_STYLE[k];return{colour:'#9E9E9E',ink:'#000000',letter:(m.match(/[A-Z0-9]/)||['?'])[0]};}
   function style(s){
-    var col=BAND_COLOUR[spotBand(s)]||'#aaaaaa';
     var ss=snrStyle(s.snr);
+    if(!isCW){
+      var ms=modeStyle(s.mode);
+      return{radius:ss.r+2,fillColor:ms.colour,color:ss.glow?ms.colour:RIM,weight:ss.glow?2:1.2,opacity:0.9,fillOpacity:Math.max(0.8,ss.op),
+             label:ms.letter,labelColor:ms.ink,labelSize:ss.r>=8?11:9};
+    }
+    var col=BAND_COLOUR[spotBand(s)]||'#aaaaaa';
     return{radius:ss.r,fillColor:col,color:ss.glow?col:'rgba(0,0,0,0.4)',weight:ss.glow?2:1,opacity:ss.glow?0.9:0.5,fillOpacity:ss.op};
   }
   // skin spot popup: call / mode·band·freq / SNR·country / age (+distance)

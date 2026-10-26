@@ -21,6 +21,7 @@ import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services
 import { DabAssembler } from '../../../src/services/dabAssemble';
 import { AdsbInfoStore, type AdsbInfo } from '../../../src/services/adsbInfo';
 import { ismSanitise, type IsmReport } from './ism';
+import { aisSanitise, type AisReport } from './tracks';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg } from '../../../src/services/vibeSquelch';
 import { roomMode, roomPassband } from '../../../src/services/roomPassband';
@@ -631,6 +632,12 @@ export interface SpectrumCallbacks {
    *  joining — its arrival MEANS ISM is on, on the band it names. null = the server left ISM (`ism_off`). */
   onIsm?: (r: IsmReport | null) => void;
   onIsmError?: (why: string) => void;
+  /** ★ AIS (V12, docs/v12/AIS-APRS.md): the ship list once a second while the receiver is in AIS and at once on joining
+   *  — its arrival MEANS AIS is on. null = the server left AIS (`ais_off`). */
+  onAis?: (r: AisReport | null) => void;
+  onAisError?: (why: string) => void;
+  /** ★ AIS: one ship's track, asked for when the map's card opens (aisTrail). */
+  onAisTrail?: (mmsi: number, pts: [number, number][]) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?: (m: { on: boolean; rate?: number; host?: string; port?: number; code?: string; token?: string; public?: boolean; full?: boolean; why?: string }) => void;
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
@@ -976,6 +983,31 @@ export class SpectrumClient {
       case 'ism_error':
         this.cb.onIsmError?.(String(msg.why ?? 'ISM is not available on this receiver'));
         return;
+      /* ★★ AIS (V12) — the same three messages and the same ghost guard as ISM, and a ship's track on request. */
+      case 'ais': {
+        if (Date.now() < this.aisQuietUntil) return;
+        const r = aisSanitise(msg);
+        if (!r) return;
+        this.aisHeld = true;            // ★ arrival = the receiver is in AIS, whoever put it there
+        this.cb.onAis?.(r);
+        return;
+      }
+      case 'ais_off': {
+        this.aisHeld = false;
+        const now = Date.now();
+        if (this.aisQuietUntil > now) this.aisQuietUntil = Math.min(this.aisQuietUntil, now + 1500);
+        this.cb.onAis?.(null);
+        return;
+      }
+      case 'ais_error':
+        this.cb.onAisError?.(String(msg.why ?? 'AIS is not available on this receiver'));
+        return;
+      case 'ais_trail': {
+        const m = Number(msg.mmsi);
+        const pts: [number, number][] = Array.isArray(msg.pts) ? msg.pts.slice(-400).filter((p: any) => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1])).map((p: any) => [Number(p[0]), Number(p[1])] as [number, number]) : [];
+        if (m > 0) this.cb.onAisTrail?.(m, pts);
+        return;
+      }
       case 'config': {
         const cfg: Config = {
           centerFreq:     msg.centerFreq ?? this.cfg.centerFreq,
@@ -1632,7 +1664,7 @@ export class SpectrumClient {
     //    re-arm it, turning a smooth tune into stuttering silence. Below one bandwidth the
     //    buffered audio is still substantially the signal you are listening to, so it is kept.
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld — the multiplex (the band) is the tuning
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see dabHeld — the multiplex (the band) is the tuning
     const prev = this.frequency;
     this.lastLocalTuneAt = performance.now();   // ★ so a config echo is not mistaken for somebody else
     if (frequency) this.frequency = Math.round(frequency);
@@ -1668,7 +1700,7 @@ export class SpectrumClient {
   }
 
   setMode(mode: SDRMode) {
-    if (this.adsbHeld || this.ismHeld) return;   // ★ see adsbHeld — the page leaves ADS-B / ISM before picking a mode
+    if (this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see adsbHeld — the page leaves ADS-B / ISM / AIS before picking a mode
     if (mode !== this.mode && this.askBlocked()) return;   // ★★ ask before tuning; re-picking changes nothing
     // ★ The mode's own tune carries the current frequency, so a frequency still held is already in it.
     this.tunePacer.cancel();
@@ -1685,7 +1717,7 @@ export class SpectrumClient {
   setBandwidth(low: number, high: number) {
     // ★ The one door every passband goes through (slider, bookmark, shared link), so the WFM floor
     //   is applied once, here — see WFM_MIN_BW_HZ.
-    if (this.adsbHeld || this.ismHeld) return;   // ★ see adsbHeld — the server ignores a passband in ADS-B and ISM
+    if (this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see adsbHeld — the server ignores a passband in ADS-B, ISM and AIS
     [low, high] = clampPassband(this.mode, low, high);
     // ★★ Ask before tuning — the passband is everybody's on a shared dial. Only a CHANGE asks.
     if ((low !== this.bandwidthLow || high !== this.bandwidthHigh) && this.askBlocked()) return;
@@ -1753,7 +1785,7 @@ export class SpectrumClient {
 
   /** Set view centre + span. binBandwidth is clamped to sane zoom limits. */
   zoom(frequency: number, binBandwidth: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
     const n = this.cfg.binCount || 4096;
     if (this.icomSpans) {
       if (this.icomFollowLocked) { this.cb.onIcomFollowLocked?.(); return; }
@@ -1787,7 +1819,7 @@ export class SpectrumClient {
    * the thing you're listening to stays put and the span closes in around it.
    */
   zoomBy(factor: number, anchorHz?: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see dabHeld
     const bb = this.view.binBandwidth || this.cfg.binBandwidth;
     if (!bb) return;
     const n = this.cfg.binCount || 4096;
@@ -1879,6 +1911,19 @@ export class SpectrumClient {
     this._send(m);
   }
 
+  /** ★★ AIS HOLDS THE DIAL AND THE VIEW as ISM does — two fixed channels, nothing to step. */
+  aisHeld = false;
+  private aisQuietUntil = 0;
+  ais(on: boolean) {
+    if (this.askBlocked()) return;     // ★★ ask before tuning — AIS takes the whole shared radio
+    if (on) this.tunePacer.cancel();
+    this.aisQuietUntil = on ? 0 : Date.now() + 5000;
+    this.aisHeld = on;
+    this._send({ type: 'ais', on: on ? 1 : 0 });
+  }
+  /** One ship's track (the map's card) — a read; the answer arrives as onAisTrail. */
+  aisTrail(mmsi: number) { if (mmsi > 0) this._send({ type: 'ais_trail', mmsi }); }
+
   /* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server said this listener may not move the shared dial yet
    *  (dial.tuneLocked, read by dialChat.parseAsk — the app's reader, one file). THE ONE GATE for every way this page
    *  tunes — drum, keys, spectrum click, entry, bookmarks, search, a pad, the keyboard: tune(), setMode(),
@@ -1928,7 +1973,7 @@ export class SpectrumClient {
     this.zoom(frequency, this.view.binBandwidth || this.cfg.binBandwidth);
   }
 
-  resetView() { if (this.dabHeld || this.adsbHeld || this.ismHeld) return; this._send({ type: 'reset' }); }
+  resetView() { if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld) return; this._send({ type: 'reset' }); }
 
   /** Frame decimation: server emits only every Nth frame. NB this saves BANDWIDTH
    *  ONLY — the server still computes every FFT. Use setFftRate() to save power. */
@@ -1973,11 +2018,11 @@ export class SpectrumClient {
   setHwBiasT(on: boolean)  { this._send({ type: 'biasT', on }); }
   setHwAgc(on: boolean)    { this._send({ type: 'agc', on }); }
   setHwPpm(ppm: number)    { this._send({ type: 'ppm', value: Math.round(ppm) }); }
-  setHwSampleRate(r: number) { if (this.adsbHeld || this.ismHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
+  setHwSampleRate(r: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
   /** ★ The tuner's IF filter in Hz; 0 = librtlsdr's automatic choice. RTL only. */
   /** ★ TEF6686-style automatic demodulator bandwidth. FM broadcast only; server-wide. */
   setAutoBw(on: boolean) { this._send({ type: 'autobw', on }); }
-  setTunerBandwidth(hz: number) { if (this.adsbHeld || this.ismHeld) return; this._send({ type: 'tunerbw', value: Math.round(hz) }); }
+  setTunerBandwidth(hz: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld) return; this._send({ type: 'tunerbw', value: Math.round(hz) }); }
   setHwDirectSampling(v: 0 | 1 | 2) { this._send({ type: 'directSampling', value: v }); }
   /** ★ The owner's AUTOMATIC crossover — admin-gated server side, because unlike direct sampling
    *  itself this PERSISTS and outlives whoever set it. Turning it off leaves the tuner wherever it
