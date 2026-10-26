@@ -2863,6 +2863,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const abOn = !!abInfo?.on;
   const abActive: VfoId = abInfo?.active ?? 'A';
   const abActiveRef = useRef<VfoId>('A');
+  /* ★★ THE SCANNER TUNES VFO A. Its tunes go to whichever VFO the controls act on, so while it is engaged the
+   *  selection is held on A (selected when it starts — useScanner effect below) and the A/B swap is ignored. */
+  const scanEngagedRef = useRef(false);
   const earOrder = useRef(new EarOrder());
   const [vfoStereo, setVfoStereoState] = useState(true);
   const vfoStereoRef = useRef(true);
@@ -2891,6 +2894,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = abClient();
     const info = c?.abInfo?.();
     if (!info?.on) return;
+    if (scanEngagedRef.current) return;   // ★ see scanEngagedRef — the scanner holds A
     c?.abSelect?.(otherVfo(info.active));
   }, [abClient]);
   // ★★ The pad's swap — a START tap, or △ on a stick pad (padActions); does nothing while A/B is off.
@@ -10242,7 +10246,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   scannerCtlRef.current = scanner.ctl;
   scannerFeedRef.current = scanner.feed;
   scannerRecIdleRef.current = scanner.recIdle;
-  useEffect(() => { setScanEngaged(scanner.engaged); }, [scanner.engaged]);
+  useEffect(() => {
+    setScanEngaged(scanner.engaged);
+    scanEngagedRef.current = scanner.engaged;
+    // ★ Starting a scan with VFO B selected: back to A first (scanEngagedRef), so the scanner never retunes B.
+    if (scanner.engaged) {
+      const c = abClient();
+      const info = c?.abInfo?.();
+      if (info?.on && info.active === 'B') c?.abSelect?.('A');
+    }
+  }, [scanner.engaged, abClient]);
   // ★ The radio stopped allowing a scan (it became a shared dial, or this is FM-DX): the box closes rather than sit dead.
   useEffect(() => {
     if (!scanPol.offered && activeDecRef.current === 'scanner') dismissDecoderPanel();
