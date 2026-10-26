@@ -80,12 +80,10 @@ inline std::vector<RunState> govern(const std::vector<GovIn>& in, double units, 
         if (!in[i].wants && in[i].ov != Override::Always) { out[i] = RunState::Idle; continue; }
         order.push_back(i);
     }
-    // ★ What must run comes first (the owner's Always), then by priority; stable.
+    /* ★ By priority, stable. The owner's Always is never shed but takes its turn in the order: forcing JTTY on must not
+     *  starve FT8 above it — what it costs comes out of the modes BELOW it. */
     auto must = [&](size_t i) { return in[i].ov == Override::Always; };
-    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        if (must(a) != must(b)) return must(a);
-        return in[a].priority < in[b].priority;
-    });
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return in[a].priority < in[b].priority; });
     double left = std::isfinite(units) ? units : std::numeric_limits<double>::infinity();
     // 1. LIGHT for everything that fits, greedily in that order; the rest shed.
     for (size_t i : order) {
@@ -93,11 +91,9 @@ inline std::vector<RunState> govern(const std::vector<GovIn>& in, double units, 
         if (must(i) || c <= left + 1e-9) { out[i] = RunState::Light; left -= c; }
         else out[i] = RunState::Shed;
     }
-    // 2. FULL depth back, in priority order, while it fits (never while loaded).
+    // 2. FULL depth back, in priority order, while it fits — greedily, as step 1 (never while loaded).
     if (!loaded) {
-        std::vector<size_t> up(order);
-        std::stable_sort(up.begin(), up.end(), [&](size_t a, size_t b) { return in[a].priority < in[b].priority; });
-        for (size_t i : up) {
+        for (size_t i : order) {
             if (out[i] != RunState::Light) continue;
             const double extra = std::max(0.0, in[i].cost - in[i].light);
             if (extra <= left + 1e-9) { out[i] = RunState::Full; left -= extra; }

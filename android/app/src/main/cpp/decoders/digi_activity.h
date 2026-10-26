@@ -86,10 +86,15 @@ private:
 /** ★ One mode window's energy over a gate period: per-bin sums since the period began. */
 class WindowMeter {
 public:
-    /** ★ The z of the test (see the file note). Measured on noise (test-digi-spots): at z = 4.5 a window of ~25 bins tested
-     *  every block over a whole FT8 slot is judged occupied in ~1 % of empty slots — which only costs the decode Band
-     *  always paid; lower lets a weaker lone station open its window. */
-    static constexpr double kZ = 4.5;
+    /** ★ The z of the test (see the file note), and how it is applied. Each bin's power is exponential on noise, so its
+     *  N-block mean is Gamma(N)/N: the threshold is Wilson–Hilferty's for that (→ 1 + z/√N for large N, and right for
+     *  small N, where the plain normal one opens on noise). z = 5 per bin per look: a window of ~20 bins looked at every
+     *  8 blocks through a 4 s period opens on pure noise in well under 1 % of periods (measured, test-digi-spots). */
+    static constexpr double kZ = 5.0;
+    static double threshold(int n) {
+        const double a = 1.0 / (9.0 * n), t = 1.0 - a + kZ * std::sqrt(a);
+        return t * t * t;
+    }
     /** Where the window sits in the slice's bins: [k0, k1). */
     void place(int k0, int k1) { if (k0 != k0_ || k1 != k1_) { k0_ = k0; k1_ = k1; restart(); } }
     void restart() { acc_.assign((size_t)std::max(0, k1_ - k0_), 0.0); n_ = 0; }
@@ -105,9 +110,9 @@ public:
         return *std::max_element(acc_.begin(), acc_.end()) / (n_ * floor);
     }
     /** ★ Anything there? Needs at least `minBlocks` averaged (the first block or two say nothing). */
-    bool occupied(double floor, int minBlocks = 16) const {
+    bool occupied(double floor, int minBlocks = 24) const {
         if (n_ < minBlocks || !(floor > 0)) return false;
-        return peakRatio(floor) > 1.0 + kZ / std::sqrt((double)n_);
+        return peakRatio(floor) > threshold(n_);
     }
     int blocks() const { return n_; }
 private:

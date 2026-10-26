@@ -138,8 +138,8 @@ private:
     // ── the gate and the governor (Band) ──
     static double gatePeriod(const ModeDef& m);
     void placeWindows(int nb, double binHz, double centreHz);
-    void route(Run& r, const float* a, int k, double utc, bool gated);
-    void newPeriod(Run& r, int64_t per, bool gated);
+    void route(Run& r, const float* a, int k, double utc, int gated);
+    void newPeriod(Run& r, int64_t per, int gated);
     RunState ask(Run& who, bool wants);          // statMtx_ held
     void goLive(Run& r);
     void hold(Gate& g, const float* a, int k, double utc, double keepSec);
@@ -165,6 +165,7 @@ private:
     double planRate_ = 0, planCentre_ = 0;
     std::vector<float> audio_, scratch_;
     SliceFloor floor_;
+    uint64_t gateBlocks_ = 0;            // ★ blocks with bins (the gate looks every 8th)
     int gNb_ = 0; double gBinHz_ = 0, gCentre_ = 0;
     std::function<Override(const std::string&)> override_;
     BandBudget budget_;

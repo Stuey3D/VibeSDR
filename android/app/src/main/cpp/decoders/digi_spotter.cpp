@@ -160,12 +160,15 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
     if (scope_ != Scope::Band || n <= 0 || !(rate > 0)) return;
     if (std::fabs(rate - planRate_) > 0.5 || std::fabs(centreHz - planCentre_) > 0.5) plan(rate, centreHz);
     // ── the activity gate's measure: the slice's own bins (no transform here) ──
-    bool gated = false;
+    /* ★ 0 = no bins (no gate: every window counts as occupied) · 1 = bins, the floor still warming up (hold, open only
+     *  what must run) · 2 = gated. */
+    int gated = 0;
     if (binPow && nb > 8 && binHz > 0) {
         if (nb != gNb_ || std::fabs(binHz - gBinHz_) > 1e-6 || std::fabs(centreHz - gCentre_) > 0.5) placeWindows(nb, binHz, centreHz);
         floor_.block(binPow, nb, std::max(1, (int)std::lround(0.5 * rate / n)));   // ★ the median every half second
         for (auto& kv : chans_) for (Run& r : kv.second.runs) if (r.gate) r.gate->meter.block(binPow, nb);
-        gated = floor_.ready();
+        gated = floor_.ready() ? 2 : 1;
+        ++gateBlocks_;
     }
     {
         std::lock_guard<std::mutex> lk(statMtx_);
@@ -292,7 +295,7 @@ void Spotter::goLive(Run& r) {
     g.st = Gate::Live;
 }
 
-void Spotter::newPeriod(Run& r, int64_t per, bool gated) {
+void Spotter::newPeriod(Run& r, int64_t per, int gated) {
     Gate& g = *r.gate;
     std::lock_guard<std::mutex> lk(statMtx_);
     if (g.per != INT64_MIN) {
@@ -319,7 +322,7 @@ void Spotter::newPeriod(Run& r, int64_t per, bool gated) {
         g.st = Gate::Off; g.buf.clear(); g.marks.clear(); setState(g, RunState::Off);
         return;
     }
-    const bool wants = !gated || ov == Override::Always || g.hang > 0;
+    const bool wants = gated == 0 || ov == Override::Always || g.hang > 0;
     const bool wasLive = g.st == Gate::Live;
     g.st = Gate::Pending;                                   // ★ not committed while the governor is asked
     const RunState d = ask(r, wants);
@@ -335,7 +338,7 @@ void Spotter::newPeriod(Run& r, int64_t per, bool gated) {
     }
 }
 
-void Spotter::route(Run& r, const float* a, int k, double utc, bool gated) {
+void Spotter::route(Run& r, const float* a, int k, double utc, int gated) {
     if (!r.gate) { r.eng->process(a, k, utc); return; }
     Gate& g = *r.gate;
     const double P = gatePeriod(*r.def);
@@ -345,8 +348,9 @@ void Spotter::route(Run& r, const float* a, int k, double utc, bool gated) {
     switch (g.st) {
         case Gate::Live:
             r.eng->process(a, k, utc); g.fedUtc = utc;
-            if (!g.saw && gated && g.meter.occupied(floor_.floor())) g.saw = true;
-            if (!gated) g.saw = true;
+            // ★ looked at every 8th block: fewer looks, fewer chances for noise to open a window (digi_activity.h)
+            if (!g.saw && gated == 2 && (gateBlocks_ & 7) == 0 && g.meter.occupied(floor_.floor())) g.saw = true;
+            if (gated == 0) g.saw = true;
             return;
         case Gate::Off:
             return;
@@ -355,7 +359,7 @@ void Spotter::route(Run& r, const float* a, int k, double utc, bool gated) {
             return;
         case Gate::Pending: {
             hold(g, a, k, utc, keep);
-            const bool lit = !gated || g.meter.occupied(floor_.floor());
+            const bool lit = gated == 0 || (gated == 2 && (gateBlocks_ & 7) == 0 && g.meter.occupied(floor_.floor()));
             if (!lit) return;
             g.saw = true;
             std::lock_guard<std::mutex> lk(statMtx_);
