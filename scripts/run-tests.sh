@@ -134,6 +134,8 @@ flags_for() {
     # ★★ V12 aircraft data: builder/reader/enrichment/logo zip installer on vibeserver/testdata-adsb (VIBE_ADSB_RAW
     #    = a folder with the real downloads also checks known aircraft and routes — scripts/build-adsb-data.sh)
     test-adsb-data)        echo "-O2 -lpthread" ;;
+    # ★★★ the updater's detached thread while exit() tears the statics down (the Pi 2's settings-save SIGSEGV, 10-26)
+    test-adsb-data-exit)   echo "-O2 -lpthread" ;;
     # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
