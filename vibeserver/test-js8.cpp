@@ -14,6 +14,9 @@
 #include "decoders/js8_ldpc.h"
 #include "decoders/js8_message.h"
 #include <algorithm>
+#include <cstdlib>
+#include <map>
+#include <set>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -50,6 +53,29 @@ static void js8Add(std::vector<double>& out, const uint8_t* tones, Js8Submode s,
 static void noise(std::vector<double>& v, std::mt19937& rng) {
     std::normal_distribution<double> g(0, kSigma);
     for (double& x : v) x += g(rng);
+}
+
+
+// a mono s16 WAV (the ubersdr-rec recordings), or false
+static bool readWav(const std::string& path, std::vector<int16_t>& out, int& rate) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    char hdr[12];
+    if (std::fread(hdr, 1, 12, f) != 12 || std::memcmp(hdr, "RIFF", 4)) { std::fclose(f); return false; }
+    rate = 0;
+    for (;;) {
+        char id[4]; uint32_t sz;
+        if (std::fread(id, 1, 4, f) != 4 || std::fread(&sz, 4, 1, f) != 1) break;
+        if (!std::memcmp(id, "fmt ", 4)) {
+            std::vector<uint8_t> b(sz); if (std::fread(b.data(), 1, sz, f) != sz) break;
+            rate = (int)(b[4] | b[5] << 8 | b[6] << 16 | (uint32_t)b[7] << 24);
+        } else if (!std::memcmp(id, "data", 4)) {
+            std::vector<int16_t> buf(1 << 16); size_t got;
+            while ((got = std::fread(buf.data(), 2, buf.size(), f)) > 0) out.insert(out.end(), buf.begin(), buf.begin() + (long)got);
+            std::fclose(f); return rate > 0;
+        } else std::fseek(f, sz + (sz & 1), SEEK_CUR);
+    }
+    std::fclose(f); return false;
 }
 
 struct Tx { uint8_t bits72[72]; int flags; std::string text; };
@@ -153,7 +179,7 @@ int main() {
     for (Js8Submode s : kJs8Submodes) {
         const Js8SubmodeInfo& in = js8Info(s);
         Js8SlotDecoder dec(kFs, s);
-        Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26;
+        Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26; o.coherentMax = 40;   // the live decoder's full depth
         const int win = dec.windowSamples();
         std::string line;
         /* ★ "Decodes everything above": a little above where each submode's threshold falls on this band — they differ
@@ -199,7 +225,7 @@ int main() {
             char b[32]; std::snprintf(b, sizeof b, " %+.0f:%d/%d", snr, got, n); line += b;
             if (snr >= sure) { strongOk += got; strongN += n; }
         }
-        std::printf("    %-6s decoded by SNR —%s   (%.1f ms/slot, 2 passes + OSD, this machine)\n", in.name, line.c_str(), ms / slots);
+        std::printf("    %-6s decoded by SNR —%s   (%.1f ms/slot, 2 passes + coherent + OSD, this machine)\n", in.name, line.c_str(), ms / slots);
         ok(strongOk == strongN, std::string(in.name) + ": every signal at " + std::to_string((int)sure) + " dB and above decoded");
         ok(falseN == 0, std::string(in.name) + ": no message that was not sent");
         ok(meas > 0 && dtErr < 0.6 * in.nsps12k / kFs + 0.01, std::string(in.name) + ": DT within half a symbol (worst " + std::to_string(dtErr) + " s)");
@@ -211,6 +237,7 @@ int main() {
     for (Js8Submode s : kJs8Submodes) {
         Js8SlotDecoder dec(kFs, s);
         Js8SlotOptions o; o.maxPasses = 1; o.osdMaxErrors = 26; o.osdMinScore = 0; o.maxCandidates = 300; o.minScore = 4;
+        o.coherentMax = 300; o.coherentMinScore = 0;
         int falseN = 0, cands = 0;
         const int slots = s == Js8Submode::Slow ? 10 : 25;
         for (int i = 0; i < slots; ++i) {
@@ -222,7 +249,7 @@ int main() {
             for (const Js8Result& r : res) { ++falseN; std::printf("    false: \"%s\" (%d errors)\n", r.frame.text.c_str(), r.hardErrors); }
         }
         ok(falseN == 0, std::string(js8Info(s).name) + ": " + std::to_string(slots) + " noise slots, " + std::to_string(cands)
-           + " candidates (BP + OSD on every one): 0 decodes");
+           + " candidates (BP, the coherent stage and OSD on every one): 0 decodes");
     }
 
     std::printf("5. the live decoder: four submodes from one stream, cut by the capture clock\n");
@@ -245,11 +272,12 @@ int main() {
         noise(band, rng);
         std::vector<int16_t> pcm(band.size());
         for (size_t i = 0; i < band.size(); ++i) pcm[i] = (int16_t)std::max(-32768.0, std::min(32767.0, band[i] * 32768.0));
-        // in 20 ms blocks, stamped 40 ms late (the audio's path), as the host does
+        // in 20 ms blocks, stamped 40 ms late (the audio's path), as the host does — at 50× real time (a second of
+        // audio every 20 ms), so the worker has the slot's time a real stream would give it, scaled down
         const int blk = 240;
         for (size_t i = 0; i + blk <= pcm.size(); i += blk) {
             live.process(pcm.data() + i, blk, utc0 + (double)(i + blk) / kFs + 0.040);
-            if ((i / blk) % 50 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            if ((i / blk) % 50 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         for (int w = 0; w < 400 && live.slotsDecoded.load() < 10 + 6 + 4 + 2; ++w) std::this_thread::sleep_for(std::chrono::milliseconds(25));
         std::lock_guard<std::mutex> lk(mx);
@@ -266,6 +294,59 @@ int main() {
         ok(times, "each spot on its own submode's slot boundary");
         ok(live.slotsSkipped.load() == 0, "nothing skipped on this machine");
     }
+
+
+    std::printf("6. real JS8 off the air (Stuart's UberSDR, 2026-10-26 07:30 UTC) against STUEY3D's PSKReporter reports\n");
+    if (const char* dir = std::getenv("VIBE_TEST_AUDIO")) {
+        const double start = 1792999817.080;              // ubersdr-rec's start_utc for all three
+        auto run = [&](const std::string& file, std::map<std::string, std::vector<int>>& from, int& frames, int& bad) {
+            std::vector<int16_t> pcm; int rate = 0;
+            if (!readWav(std::string(dir) + "/js8/" + file, pcm, rate)) return false;
+            const double end = start + (double)pcm.size() / rate;
+            for (Js8Submode s : kJs8Submodes) {
+                const Js8SubmodeInfo& in = js8Info(s);
+                Js8SlotDecoder dec(rate, s);
+                Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26; o.coherentMax = 40;
+                std::vector<float> w((size_t)dec.windowSamples());
+                for (double S = std::ceil(start / in.period) * in.period; S + (double)w.size() / rate <= end; S += in.period) {
+                    const long i0 = std::lround((S - start) * rate);
+                    for (size_t i = 0; i < w.size(); ++i) w[i] = pcm[(size_t)i0 + i] / 32768.0f;
+                    std::vector<Js8Result> res; Js8SlotStats st;
+                    dec.decode(w.data(), (int)w.size(), o, res, st);
+                    for (const Js8Result& r : res) {
+                        ++frames;
+                        if (!r.frame.from.empty()) { if (js8::isSpotCall(r.frame.from)) from[r.frame.from].push_back(r.snr); else ++bad; }
+                    }
+                }
+            }
+            return true;
+        };
+        std::map<std::string, std::vector<int>> from; int frames = 0, bad = 0;
+        if (run("js8_40m_7078000_20261026T0730.wav", from, frames, bad)) {
+            // STUEY3D's JS8 reports from 07:29 to 07:45 (~/VibeSDR-test-audio/js8/pskreporter/), sender → SNR
+            const std::map<std::string, int> ref = { {"DL1JBE", -12}, {"EA3IHV", -20}, {"9A3SWO", -15}, {"LA7HKA", -12},
+                {"IU2SKJ", -5}, {"KE2DMC", -25}, {"I2GPG", -11}, {"OZ9JEP", -15}, {"DL1AAA", -2} };
+            int have = 0; double dsum = 0; int dn = 0; std::string missing;
+            for (const auto& kv : ref) {
+                auto it = from.find(kv.first);
+                if (it == from.end()) { missing += " " + kv.first; continue; }
+                ++have;
+                double m = 0; for (int v : it->second) m += v; m /= (double)it->second.size();
+                dsum += m - kv.second; ++dn;
+            }
+            std::string extra;
+            for (const auto& kv : from) if (!ref.count(kv.first)) extra += " " + kv.first;
+            std::printf("    40 m: %d frames, %zu senders; of STUEY3D's 9: %d%s%s; also:%s\n", frames, from.size(), have,
+                        missing.empty() ? "" : ", missing", missing.c_str(), extra.c_str());
+            ok(have == 9, "every sender STUEY3D reported decoded");
+            ok(bad == 0, "every sender a real callsign");
+            ok(dn > 0 && std::fabs(dsum / dn) <= 3.0, "SNR on the JS8 network's scale: ours - STUEY3D's, mean " + std::to_string(dsum / std::max(1, dn)) + " dB");
+        } else std::printf("    (40 m recording not found — not run)\n");
+        for (const char* quiet : { "js8_20m_14078000_20261026T0730.wav", "js8_80m_3578000_20261026T0730.wav" }) {
+            std::map<std::string, std::vector<int>> f2; int fr = 0, b2 = 0;
+            if (run(quiet, f2, fr, b2)) ok(fr == 0, std::string(quiet) + ": 5 min of a band with no JS8 heard by STUEY3D: 0 frames");
+        }
+    } else std::printf("    NOT RUN — set VIBE_TEST_AUDIO to the folder holding js8/ (~/VibeSDR-test-audio)\n");
 
     std::printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "all passed", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;

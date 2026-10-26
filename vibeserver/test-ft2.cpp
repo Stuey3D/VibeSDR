@@ -8,6 +8,8 @@
 //      parameters (their window and slot are what they were).
 #include "decoders/ft2_decoder.h"
 #include <chrono>
+#include <cstdlib>
+#include <set>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -50,6 +52,29 @@ static void ft2Add(std::vector<double>& out, const uint8_t* tones, double f0, do
         phi += dphi[(size_t)(n + nsps)];
     }
 }
+
+// a mono s16 WAV (the ubersdr-rec recordings), or false
+static bool readWav(const std::string& path, std::vector<int16_t>& out, int& rate) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    char hdr[12];
+    if (std::fread(hdr, 1, 12, f) != 12 || std::memcmp(hdr, "RIFF", 4)) { std::fclose(f); return false; }
+    rate = 0;
+    for (;;) {
+        char id[4]; uint32_t sz;
+        if (std::fread(id, 1, 4, f) != 4 || std::fread(&sz, 4, 1, f) != 1) break;
+        if (!std::memcmp(id, "fmt ", 4)) {
+            std::vector<uint8_t> b(sz); if (std::fread(b.data(), 1, sz, f) != sz) break;
+            rate = (int)(b[4] | b[5] << 8 | b[6] << 16 | (uint32_t)b[7] << 24);
+        } else if (!std::memcmp(id, "data", 4)) {
+            std::vector<int16_t> buf(1 << 16); size_t got;
+            while ((got = std::fread(buf.data(), 2, buf.size(), f)) > 0) out.insert(out.end(), buf.begin(), buf.begin() + (long)got);
+            std::fclose(f); return rate > 0;
+        } else std::fseek(f, sz + (sz & 1), SEEK_CUR);
+    }
+    std::fclose(f); return false;
+}
+
 static std::string text(const ftx_message_t& m0) {
     ftx_message_t m = m0; char t[64] = {}; ftx_message_offsets_t o;
     ftx_message_decode(&m, nullptr, t, &o);
@@ -149,6 +174,40 @@ int main() {
         ok(n >= 7, "a spot in (nearly) every 3.75 s slot, fed as float audio");
         ok(live.slotsSkipped.load() == 0, "nothing skipped");
     }
+
+    std::printf("4. real FT2 off the air (Stuart's UberSDR, 2026-10-26 07:34 UTC) against STUEY3D's PSKReporter reports\n");
+    if (const char* dir = std::getenv("VIBE_TEST_AUDIO")) {
+        const double start = 1793000045.300;
+        auto run = [&](const std::string& file, std::set<std::string>& calls, int& n) {
+            std::vector<int16_t> pcm; int rate = 0;
+            if (!readWav(std::string(dir) + "/ft2/" + file, pcm, rate)) return false;
+            Ft8SlotDecoder d(rate, FtxMode::FT2);
+            Ft8SlotOptions oo; oo.maxPasses = 3; oo.osdMaxErrors = 24;
+            std::vector<float> w((size_t)d.windowSamples());
+            const double end = start + (double)pcm.size() / rate;
+            for (double S = std::ceil(start / kFt2SlotTime) * kFt2SlotTime; S + (double)w.size() / rate <= end; S += kFt2SlotTime) {
+                const long i0 = std::lround((S - start) * rate);
+                for (size_t i = 0; i < w.size(); ++i) w[i] = pcm[(size_t)i0 + i] / 32768.0f;
+                std::vector<Ft8Result> res; Ft8SlotStats st;
+                d.decode(w.data(), (int)w.size(), oo, res, st);
+                for (const Ft8Result& r : res) {
+                    ++n;
+                    char to[24] = {}, de[24] = {}, grid[24] = {}; ftx_field_t fl[FTX_MAX_MESSAGE_FIELDS];
+                    if (ftx_message_decode_std(&r.msg, nullptr, to, de, grid, fl) == FTX_MESSAGE_RC_OK) calls.insert(de);
+                }
+            }
+            return true;
+        };
+        std::set<std::string> calls; int n = 0;
+        if (run("ft2_20m_14084000_20261026T0734.wav", calls, n)) {
+            std::string all; for (const auto& c : calls) all += " " + c;
+            std::printf("    20 m: %d decodes, senders:%s\n", n, all.c_str());
+            ok(calls.count("YO8BJK") && calls.count("SP6FXY"), "both senders STUEY3D reported in the window (YO8BJK, SP6FXY)");
+        } else std::printf("    (20 m recording not found — not run)\n");
+        std::set<std::string> c2; int n2 = 0;
+        if (run("ft2_40m_7052000_20261026T0734.wav", c2, n2)) ok(n2 == 0, "40 m, 5 min with no FT2 heard by STUEY3D: 0 decodes");
+    } else std::printf("    NOT RUN — set VIBE_TEST_AUDIO to the folder holding ft2/ (~/VibeSDR-test-audio)\n");
+
     std::printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "all passed", fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;
 }

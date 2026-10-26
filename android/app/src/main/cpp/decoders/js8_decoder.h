@@ -85,6 +85,10 @@ struct Js8SlotOptions {
     int minScore = 8;
     int osdMaxErrors = 0;        ///< 0 = no OSD
     int osdMinScore = 12;
+    /** The coherent stage (see Js8SlotDecoder::coherentLlr): up to this many candidates a pass that the waterfall's
+     *  likelihoods could not decode get their symbols measured again from the audio itself. 0 = off. */
+    int coherentMax = 0;
+    int coherentMinScore = 6;
     std::function<bool(int nextPass, double elapsedMs, double lastPassMs)> mayRunPass;
     const std::atomic<bool>* abort = nullptr;
 };
@@ -94,6 +98,9 @@ struct Js8SlotStats {
     int passDecodes[2] = {0, 0};
     int candidates[2] = {0, 0};
     int osdTried[2] = {0, 0};
+    int coherentTried[2] = {0, 0};
+    int coherentDecodes[2] = {0, 0};
+    double coherentMs = 0;
     double waterfallMs = 0, searchMs = 0, ldpcMs = 0, osdMs = 0, subtractMs = 0;
 };
 
@@ -122,6 +129,7 @@ private:
     void buildWaterfall(const float* a, int n);
     int  search(int maxCands, int minScore);
     void likelihoods(const Cand& c, float* llr);
+    bool coherentLlr(const float* a, int n, const Cand& c, float* llr, double* start, double* f0);
     int  snrDb(const Cand& c, const uint8_t* tones);
     void subtract(float* a, int n, const uint8_t* tones, double start, double f0);
 
@@ -133,6 +141,10 @@ private:
     monitor_t mon_;
     std::vector<Cand> cands_;
     std::vector<float> colMean_;    // lazily: mean power per waterfall column (-1 unknown)
+    int spsd_ = 32, D_ = 60;        // the coherent stage's decimation: spsd_ samples a symbol, D_ audio samples each
+    std::vector<float> wr_, wi_;    // the in-block mixer phases (D_ of them, re-made per frequency)
+    std::vector<float> toneC_, toneS_;   // [df 0..4][tone 0..7][spsd_]: tone + df/8 over one decimated symbol
+    std::vector<float> zr_, zi_;    // scratch: the decimated baseband
     float colMean(size_t c);
 };
 

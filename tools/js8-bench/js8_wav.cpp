@@ -1,6 +1,6 @@
 // js8_wav — run VibeSDR's JS8 slot decoder (decoders/js8_decoder.cpp) over a recording, slot by slot, every submode.
 //
-//   js8_wav FILE.wav START_UTC [--sub ABCE] [--passes N] [--osd N] [--cands N] [--minscore N] [--iters N]
+//   js8_wav FILE.wav START_UTC [--sub ABCE] [--passes N] [--osd N] [--cands N] [--minscore N] [--iters N] [--coherent N]
 //     START_UTC  UTC (unix seconds, fractional) of the file's first sample (ubersdr-rec prints it as start_utc=)
 //     --sub      the submodes to run, by JS8Call's letters (A Normal, B Fast, C Turbo, E Slow); default all four
 //   Output: one line per decode "D <slot> <letter> <pass> <snr> <dt> <hz> <kind> <message>", and on stderr each
@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
     if (!readWav(argv[1], pcm, rate)) { std::fprintf(stderr, "cannot read %s (mono s16 WAV)\n", argv[1]); return 2; }
     const double fileStart = std::atof(argv[2]);
     std::string subs = "ABCE";
-    Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26;
+    Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26; o.coherentMax = 40;   // the live decoder's full depth
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
         auto nxt = [&] { return i + 1 < argc ? std::atof(argv[++i]) : 0.0; };
@@ -60,6 +60,7 @@ int main(int argc, char** argv) {
         else if (a == "--cands") o.maxCandidates = (int)nxt();
         else if (a == "--minscore") o.minScore = (int)nxt();
         else if (a == "--iters") o.ldpcIters = (int)nxt();
+        else if (a == "--coherent") o.coherentMax = (int)nxt();
     }
     const double fileEnd = fileStart + (double)pcm.size() / rate;
     for (Js8Submode s : kJs8Submodes) {
@@ -69,7 +70,7 @@ int main(int argc, char** argv) {
         const int win = dec.windowSamples();
         std::vector<float> w((size_t)win);
         double tot = 0, worst = 0; int slots = 0, decodes = 0;
-        double stg[5] = {0, 0, 0, 0, 0}; long cands = 0, osdN = 0;
+        double stg[5] = {0, 0, 0, 0, 0}, coh = 0; long cands = 0, osdN = 0, cohN = 0, cohD = 0;
         for (double S = std::ceil(fileStart / in.period) * in.period; S + (double)win / rate <= fileEnd; S += in.period) {
             const long i0 = std::lround((S - fileStart) * rate);
             for (int i = 0; i < win; ++i) w[(size_t)i] = pcm[(size_t)(i0 + i)] / 32768.0f;
@@ -78,6 +79,7 @@ int main(int argc, char** argv) {
             dec.decode(w.data(), win, o, res, st);
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
             tot += ms; worst = std::max(worst, ms); ++slots;
+            coh += st.coherentMs; cohN += st.coherentTried[0] + st.coherentTried[1]; cohD += st.coherentDecodes[0] + st.coherentDecodes[1];
             stg[0] += st.waterfallMs; stg[1] += st.searchMs; stg[2] += st.ldpcMs; stg[3] += st.osdMs; stg[4] += st.subtractMs;
             cands += st.candidates[0] + st.candidates[1]; osdN += st.osdTried[0] + st.osdTried[1];
             for (const Js8Result& r : res) {
@@ -89,8 +91,9 @@ int main(int argc, char** argv) {
         }
         const double k = slots ? 1.0 / slots : 0.0;
         std::fprintf(stderr, "%-6s %4d slots, %4d decodes, %.1f ms/slot mean, %.1f worst | waterfall %.2f search %.2f "
-                     "bp %.2f osd %.2f subtract %.2f | cands %.0f osd-tried %.0f\n", in.name, slots, decodes, tot * k, worst,
-                     stg[0] * k, stg[1] * k, stg[2] * k, stg[3] * k, stg[4] * k, cands * k, osdN * k);
+                     "bp %.2f coherent %.2f osd %.2f subtract %.2f | cands %.0f coherent-tried %.0f osd-tried %.0f | coherent decodes %ld\n",
+                     in.name, slots, decodes, tot * k, worst, stg[0] * k, stg[1] * k, stg[2] * k, coh * k, stg[3] * k, stg[4] * k,
+                     cands * k, cohN * k, osdN * k, cohD);
     }
     return 0;
 }

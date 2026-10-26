@@ -131,6 +131,16 @@ Js8SlotDecoder::Js8SlotDecoder(int sampleRate, Js8Submode s) : sub_(s), rate_(sa
     const int t0 = (int)std::lround(in.startDelay / T_);
     tMin_ = std::max(-7, t0 - (int)std::ceil(1.5 / T_));
     tMax_ = std::min(mon_.wf.max_blocks - 72 + 1, t0 + (int)std::ceil(2.0 / T_) + 1);
+    spsd_ = (nsps_ % 32 == 0) ? 32 : 24;
+    D_ = nsps_ / spsd_;
+    toneC_.resize((size_t)5 * 8 * spsd_); toneS_.resize(toneC_.size());
+    for (int d = 0; d < 5; ++d)
+        for (int t = 0; t < 8; ++t)
+            for (int j = 0; j < spsd_; ++j) {
+                const double ph = kTwoPi * (t + (d - 2) * 0.125) * j / spsd_;
+                toneC_[(size_t)((d * 8 + t) * spsd_ + j)] = (float)std::cos(ph);
+                toneS_[(size_t)((d * 8 + t) * spsd_ + j)] = (float)std::sin(ph);
+            }
 }
 Js8SlotDecoder::~Js8SlotDecoder() { monitor_free(&mon_); }
 
@@ -226,6 +236,116 @@ void Js8SlotDecoder::likelihoods(const Cand& c, float* llr) {
     const double mean = s1 / cnt, var = s2 / cnt - mean * mean;
     const float scale = (float)std::sqrt(24.0 / (var > 1e-6 ? var : 1e-6));
     for (int i = 0; i < js8::kN; ++i) llr[i] *= scale;
+}
+
+
+/* ★★★ THE COHERENT STAGE (2026-10-26). The waterfall measures each symbol through a Hann window two symbols long, a
+ *  quarter-symbol and a quarter-tone off at worst — enough to find a signal, but it smears its neighbours in and
+ *  spreads its noise wider than one symbol's tone. So a candidate the waterfall's likelihoods could not decode is
+ *  measured again from the AUDIO: mixed to baseband at its frequency and boxcar-decimated to 24-32 samples a symbol
+ *  (D audio samples summed per decimated sample, four lanes at a time), slid over ±½ symbol and ±¼ tone against
+ *  its three Costas arrays for the best start and frequency, and each data symbol then correlated with its eight
+ *  tones over exactly one symbol — the matched filter — and its bits' likelihoods taken from the noncoherent FSK
+ *  likelihood itself (below). Measured on the synthetic band: NORMAL at -20 dB 11/40 against 3/40, TURBO at -15 dB
+ *  16/40 against 13/40 — about +0.7 dB at the threshold
+ *  (docs/v12/JS8-FT2.md). Cost: one pass over the signal's samples per candidate — only for candidates BP failed
+ *  on, only up to Js8SlotOptions::coherentMax a pass, and only on spare CPU. */
+bool Js8SlotDecoder::coherentLlr(const float* a, int n, const Cand& c, float* llr, double* startOut, double* f0Out) {
+    const SinTable& tab = sinTable();
+    const int spsd = spsd_, D = D_, half = spsd / 2;
+    const double fs = rate_;
+    const double f0 = (mon_.min_bin + c.f + (float)c.fs / kFreqOsr) / T_;
+    const double coarse = (double)(c.t - 1) * mon_.block_size + (double)c.ts * mon_.subblock_size;
+    const int i0 = (int)std::floor(coarse) - half * D;
+    const int nd = kNN * spsd + 2 * half + 1;
+    zr_.assign((size_t)nd, 0.0f); zi_.assign((size_t)nd, 0.0f);
+    const uint32_t step = (uint32_t)(int64_t)std::llround(f0 / fs * 4294967296.0);
+    wr_.resize((size_t)D); wi_.resize((size_t)D);
+    for (int q = 0; q < D; ++q) { const int t = (int)(((uint32_t)q * step) >> 20); wr_[(size_t)q] = tab.c[t]; wi_[(size_t)q] = -tab.s[t]; }
+    const int D4 = D & ~3;
+    for (int j = 0; j < nd; ++j) {
+        const int b = i0 + j * D;
+        float ur = 0, ui = 0;
+        if (b >= 0 && b + D <= n) {
+            v4f accR = v4_set1(0.0f), accI = v4_set1(0.0f);
+            for (int q = 0; q < D4; q += 4) {
+                const v4f x = v4_load(a + b + q);
+                accR = v4_madd(x, v4_load(&wr_[(size_t)q]), accR);
+                accI = v4_madd(x, v4_load(&wi_[(size_t)q]), accI);
+            }
+            float tr[4], ti[4]; v4_store(tr, accR); v4_store(ti, accI);
+            ur = (tr[0] + tr[1]) + (tr[2] + tr[3]); ui = (ti[0] + ti[1]) + (ti[2] + ti[3]);
+            for (int q = D4; q < D; ++q) { ur += a[b + q] * wr_[(size_t)q]; ui += a[b + q] * wi_[(size_t)q]; }
+        } else {
+            for (int q = 0; q < D; ++q) { const int x = b + q; if (x < 0 || x >= n) continue; ur += a[x] * wr_[(size_t)q]; ui += a[x] * wi_[(size_t)q]; }
+        }
+        const uint32_t ph = (uint32_t)((int64_t)b * (int64_t)step);
+        const int t = (int)(ph >> 20);
+        const float cb = tab.c[t], sb = tab.s[t];             // × e^{-jθ(b)}
+        zr_[(size_t)j] = cb * ur + sb * ui;
+        zi_[(size_t)j] = cb * ui - sb * ur;
+    }
+    // |correlation|² of decimated symbol starting at index `at` with tone row `row`
+    auto pw = [&](int at, const float* rc, const float* rs) {
+        if (at < 0 || at + spsd > nd) return 0.0f;
+        const float* x = &zr_[(size_t)at]; const float* y = &zi_[(size_t)at];
+        float cr = 0, ci = 0;
+        for (int j = 0; j < spsd; ++j) { cr += x[j] * rc[j] + y[j] * rs[j]; ci += y[j] * rc[j] - x[j] * rs[j]; }
+        return cr * cr + ci * ci;
+    };
+    // fine start and frequency on the 21 Costas symbols
+    int bestM = half, bestD = 2; float bestE = -1;
+    for (int d = 0; d < 5; ++d)
+        for (int m = 0; m <= 2 * half; ++m) {
+            float e = 0;
+            for (int g = 0; g < 3; ++g)
+                for (int k = 0; k < 7; ++k) {
+                    const int sym = kSyncAt[g] + k, tone = costas_[g][k];
+                    if (c.t + sym < 0 || (coarse + (double)sym * nsps_) >= n) continue;
+                    const size_t r = (size_t)((d * 8 + tone) * spsd);
+                    e += pw(m + sym * spsd, &toneC_[r], &toneS_[r]);
+                }
+            if (e > bestE) { bestE = e; bestM = m; bestD = d; }
+        }
+    if (bestE <= 0) return false;
+    // the data symbols' eight tone energies
+    float E[58][8]; bool have[58];
+    double eMax = 0, eRest = 0; int nE = 0;
+    for (int dd = 0; dd < 58; ++dd) {
+        const int sym = dd < 29 ? 7 + dd : 43 + (dd - 29);
+        const int at = bestM + sym * spsd;
+        const double ss = (double)i0 + (double)at * D;
+        have[dd] = !(ss < 0 || ss + nsps_ > n);
+        if (!have[dd]) continue;
+        float mx = 0, sum = 0;
+        for (int t = 0; t < 8; ++t) { const size_t r = (size_t)((bestD * 8 + t) * spsd); E[dd][t] = pw(at, &toneC_[r], &toneS_[r]); mx = std::max(mx, E[dd][t]); sum += E[dd][t]; }
+        eMax += mx; eRest += (sum - mx) / 7.0; ++nE;
+    }
+    if (!nE) return false;
+    {
+        /* ★ The noncoherent FSK likelihood: a tone with energy E (noise σ² per correlation, signal amplitude A)
+         *  has log-likelihood ln I0(2·A·√E / σ²); a bit's LLR is the log-sum-exp over the four tones with it set
+         *  minus the four without. σ² from the seven weaker tones' mean, A² from the strongest's excess. */
+        const double sig2 = std::max(1e-30, eRest / nE), A2 = std::max(0.25 * sig2, eMax / nE - sig2);
+        const double k = 2.0 * std::sqrt(A2) / sig2;
+        auto lnI0 = [](double x) { return x < 2.0 ? x * x / 4.0 - x * x * x * x / 64.0 : x - 0.5 * std::log(6.283185307179586 * x) + 0.125 / x; };
+        auto lse4 = [](double a, double b, double c, double d) {
+            const double m = std::max(std::max(a, b), std::max(c, d));
+            return m + std::log(std::exp(a - m) + std::exp(b - m) + std::exp(c - m) + std::exp(d - m));
+        };
+        for (int dd = 0; dd < 58; ++dd) {
+            float* L = llr + 3 * dd;
+            if (!have[dd]) { L[0] = L[1] = L[2] = 0; continue; }
+            double m[8];
+            for (int t = 0; t < 8; ++t) m[t] = lnI0(k * std::sqrt((double)E[dd][t]));
+            L[0] = (float)(lse4(m[4], m[5], m[6], m[7]) - lse4(m[0], m[1], m[2], m[3]));
+            L[1] = (float)(lse4(m[2], m[3], m[6], m[7]) - lse4(m[0], m[1], m[4], m[5]));
+            L[2] = (float)(lse4(m[1], m[3], m[5], m[7]) - lse4(m[0], m[2], m[4], m[6]));
+        }
+    }
+    *startOut = (double)i0 + (double)bestM * D;
+    *f0Out = f0 + (bestD - 2) * 0.125 / T_;
+    return true;
 }
 
 int Js8SlotDecoder::snrDb(const Cand& c, const uint8_t* tones) {
@@ -403,6 +523,18 @@ void Js8SlotDecoder::decode(float* audio, int n, const Js8SlotOptions& o, std::v
                 return js8::crc12(info) == rx;
             };
             bool ok = err >= 0 && crcOk();
+            double cohStart = NAN, cohF0 = NAN;
+            if (!ok && st.coherentTried[pass - 1] < o.coherentMax && c.score >= o.coherentMinScore) {
+                ++st.coherentTried[pass - 1];
+                float llr2[js8::kN];
+                if (coherentLlr(audio, n, c, llr2, &cohStart, &cohF0)) {
+                    std::memcpy(llr, llr2, sizeof llr);       // ★ the better likelihoods, for OSD too
+                    err = js8::bpDecode(llr, o.ldpcIters, cw);
+                    ok = err >= 0 && crcOk();
+                    if (ok) ++st.coherentDecodes[pass - 1];
+                } else cohStart = NAN;
+                st.coherentMs += lap();
+            }
             if (!ok && o.osdMaxErrors > 0 && c.score >= o.osdMinScore) {
                 ++st.osdTried[pass - 1];
                 err = js8::osd1(llr, o.osdMaxErrors, cw);
@@ -428,7 +560,8 @@ void Js8SlotDecoder::decode(float* audio, int n, const Js8SlotOptions& o, std::v
             js8Tones(info, sub_, s.tones);
             const ftx_waterfall_t& wf = mon_.wf;
             r.hz = (mon_.min_bin + c.f + (float)c.fs / wf.freq_osr) / T_;
-            const double startSample = (double)(c.t - 1) * mon_.block_size + (double)c.ts * mon_.subblock_size;
+            double startSample = (double)(c.t - 1) * mon_.block_size + (double)c.ts * mon_.subblock_size;
+            if (std::isfinite(cohStart)) { startSample = cohStart; r.hz = (float)cohF0; }   // the finer estimates
             r.dt = (float)(startSample / rate_ - in.startDelay);
             r.snr = snrDb(c, s.tones);
             r.pass = pass; r.osd = viaOsd; r.hardErrors = err;
@@ -548,6 +681,7 @@ void Js8Decoder::runLane(Lane& l) {
     Js8SlotOptions o;
     o.maxPasses = loaded ? 1 : std::max(1, std::min(2, maxPasses.load()));
     o.osdMaxErrors = (loaded || o.maxPasses < 2) ? 0 : 26;
+    o.coherentMax = loaded ? 0 : 40;          // ★ spare CPU only, like OSD and pass 2
     o.abort = &abort_;
     /* ★ A second pass only when it would still end inside 40 % of what is left of this period, the box is not loaded,
      *  and no other submode's window is waiting behind this one (they share the worker). */
