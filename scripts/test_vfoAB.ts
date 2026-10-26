@@ -137,11 +137,11 @@ console.log('── the ears ──');
 }
 ok(vfoB(parseWatch({ type: 'watch', chans: [{ id: 1, freq: 1e6 }] }))?.freq === 1e6, 'vfoB() finds channel 1');
 
-// ★★ The scanner holds VFO A: engaging it selects A, and the A/B swap is ignored while it runs (source checks).
+// ★★ Scanner open = VFO B off (Stuart): opening the scanner turns B off and the tuning menu offers no A/B toggle (source checks).
 {
   const scr = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/screens/SDRScreen.tsx'), 'utf8');
-  ok(/if \(scanEngagedRef\.current\) return;/.test(scr), 'scanner: the A/B swap is ignored while scanning');
-  ok(/scanner\.engaged\)[\s\S]{0,240}info\.active === 'B'\) c\?\.abSelect\?\.\('A'\)/.test(scr), 'scanner: starting with B selected goes back to A');
+  ok(/if \(type === 'scanner'\) onVfoAB\(false\);/.test(scr), 'scanner: opening it switches VFO B off');
+  ok(/activeDecoder !== 'scanner' \? onVfoAB : undefined/.test(scr), 'scanner: no A/B toggle in the tuning menu while it is open');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

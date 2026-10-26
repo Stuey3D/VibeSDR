@@ -2863,9 +2863,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const abOn = !!abInfo?.on;
   const abActive: VfoId = abInfo?.active ?? 'A';
   const abActiveRef = useRef<VfoId>('A');
-  /* ★★ THE SCANNER TUNES VFO A. Its tunes go to whichever VFO the controls act on, so while it is engaged the
-   *  selection is held on A (selected when it starts — useScanner effect below) and the A/B swap is ignored. */
-  const scanEngagedRef = useRef(false);
   const earOrder = useRef(new EarOrder());
   const [vfoStereo, setVfoStereoState] = useState(true);
   const vfoStereoRef = useRef(true);
@@ -2894,7 +2891,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = abClient();
     const info = c?.abInfo?.();
     if (!info?.on) return;
-    if (scanEngagedRef.current) return;   // ★ see scanEngagedRef — the scanner holds A
     c?.abSelect?.(otherVfo(info.active));
   }, [abClient]);
   // ★★ The pad's swap — a START tap, or △ on a stick pad (padActions); does nothing while A/B is off.
@@ -5448,6 +5444,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    socket decoder, exactly as switching between decoders always has.
     if (activeDecRef.current === 'scanner' && type !== 'scanner') scannerCtlRef.current?.stop();
     if (type === 'scanner' && activeDecRef.current && activeDecRef.current !== 'scanner') decoderClient.current?.stop();
+    // ★★ SCANNER OPEN = VFO B OFF (Stuart, 2026-10-27: "when the scanner is open we disable VFO B simple as that"). The
+    //    scanner tunes the one VFO; B is switched off as the box opens and its toggle is absent until the box closes.
+    if (type === 'scanner') onVfoAB(false);
     if (type === 'transcribe') setTxHeard('');
     if (type === 'transcribe' && activeDecRef.current && activeDecRef.current !== 'transcribe') decoderClient.current?.stop();
     setActiveDecoder(type);
@@ -5500,7 +5499,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
     decoderClient.current?.start(type);
-  }, [status.frequency, timeStationPref]);
+  }, [status.frequency, timeStationPref, onVfoAB]);
 
   /**
    * ★★★ THE STATION FOLLOWS THE DIAL WHILE THE DECODER IS RUNNING. It was chosen ONCE, at attach —
@@ -10246,16 +10245,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   scannerCtlRef.current = scanner.ctl;
   scannerFeedRef.current = scanner.feed;
   scannerRecIdleRef.current = scanner.recIdle;
-  useEffect(() => {
-    setScanEngaged(scanner.engaged);
-    scanEngagedRef.current = scanner.engaged;
-    // ★ Starting a scan with VFO B selected: back to A first (scanEngagedRef), so the scanner never retunes B.
-    if (scanner.engaged) {
-      const c = abClient();
-      const info = c?.abInfo?.();
-      if (info?.on && info.active === 'B') c?.abSelect?.('A');
-    }
-  }, [scanner.engaged, abClient]);
+  useEffect(() => { setScanEngaged(scanner.engaged); }, [scanner.engaged]);
   // ★ The radio stopped allowing a scan (it became a shared dial, or this is FM-DX): the box closes rather than sit dead.
   useEffect(() => {
     if (!scanPol.offered && activeDecRef.current === 'scanner') dismissDecoderPanel();
@@ -13263,7 +13253,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onClose={() => setStepOpen(false)}
         /* ★★ V12 VFO A/B — turned on and off HERE only, and only where the server offers it (hwinfo `watch`). */
         vfoAB={abOn}
-        onVfoAB={abOffered > 0 && !dabOn && !icom ? onVfoAB : undefined}
+        onVfoAB={abOffered > 0 && !dabOn && !icom && activeDecoder !== 'scanner' ? onVfoAB : undefined}
       />
       </PanelBoundary>
 
