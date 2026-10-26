@@ -239,6 +239,12 @@ import { translateRows } from '../services/translateTargets';
 import { appAlert } from '../components/AppAlert';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
+// ★★ V12 THE SCANNER (docs/v12/SCANNER.md) — a decoder-box item; the engine is pure (services/scanner.ts).
+import { useScanner } from '../hooks/useScanner';
+import { ImpulseDetector, scanPolicy, scanTiming, bandChoices, bookmarkTag, defaultTagLabel, presetFrom, clonePreset,
+         normaliseConfig, nameAt, BUNDLED_PRESETS, type ScannerController, type ScanSample, type ScanBackendKind,
+         type ScanPreset, type ScanSource, type NamedFreq, type FoundSignal } from '../services/scanner';
+import { loadScanPresets, saveScanPresets } from '../services/scanPresets';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -3411,13 +3417,28 @@ export default function SDRScreen({ route, navigation }: Props) {
   const kiwiSqDbmRef  = useRef(-130);
   const kiwiSqOpenRef = useRef(true);
   const kiwiSqAboveAt = useRef(0);
+  /* ★★ V12 THE SCANNER SHARES THE NATIVE GATE (brief §7.4): shut while it hops, open on a stop. One flag, two owners —
+   *  the Kiwi's client squelch and the scanner — so the gate is OPEN only when NEITHER wants it shut, and whichever lets
+   *  go cannot open it under the other. Refs, because the scanner and the S-meter both call from outside a render. */
+  const scanGateShutRef = useRef(false);
+  const applyNativeGate = useCallback(() => {
+    (NativeModules.VibePowerModule as { setSquelchOpen?: (o: boolean) => void })?.setSquelchOpen?.(
+      kiwiSqOpenRef.current && !scanGateShutRef.current);
+  }, []);
+  /** ★★ V12 scanner, reachable from the frame callback and the media-key listeners declared long before it is built. */
+  const scannerCtlRef  = useRef<ScannerController | null>(null);
+  const scannerFeedRef = useRef<((s: ScanSample) => void) | null>(null);
+  const scanImpulse    = useRef(new ImpulseDetector());
+  /** The floor (in the meter's level units) the last frame measured — what a TAG captures as its noise reference. */
+  const scanFloorRef   = useRef(NaN);
+  const [scanEngaged, setScanEngaged] = useState(false);
   const onKiwiSquelch = useCallback((db: number) => {
     setKiwiSquelch(db); kiwiSqDbmRef.current = db;
     if (db <= -130) {  // Off → force the gate open immediately
       kiwiSqOpenRef.current = true;
-      (NativeModules.VibePowerModule as { setSquelchOpen?: (o: boolean) => void })?.setSquelchOpen?.(true);
+      applyNativeGate();
     }
-  }, []);
+  }, [applyNativeGate]);
   // Evaluate the Kiwi squelch gate against a fresh S-meter reading (dBm).
   const evalKiwiSquelch = useCallback((dbm: number) => {
     const thr = kiwiSqDbmRef.current;
@@ -3427,9 +3448,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     const open = (now - kiwiSqAboveAt.current) < 350;  // 350 ms release tail
     if (open !== kiwiSqOpenRef.current) {
       kiwiSqOpenRef.current = open;
-      (NativeModules.VibePowerModule as { setSquelchOpen?: (o: boolean) => void })?.setSquelchOpen?.(open);
+      applyNativeGate();
     }
-  }, []);
+  }, [applyNativeGate]);
   const [dspError,         setDspError]         = useState<string | null>(null);
 
   // ── UI overlay state ──────────────────────────────────────────────────────
@@ -3885,6 +3906,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Recording ─────────────────────────────────────────────────────────────
 
   const [isRecording, setIsRecording] = useState(false);
+  const isRecordingRef = useRef(false); isRecordingRef.current = isRecording;
+  /** ★ V12 scanner: resolves once its recorder work has finished (useScanner recIdle). */
+  const scannerRecIdleRef = useRef<(() => Promise<unknown>) | null>(null);
   /** ★★ WHEN the recording started (ms since epoch), or null. Not a seconds counter: a 1 Hz setState here
    *  rendered this whole screen every second of a recording, screen locked included, and counting
    *  interval firings drifted low. The displays derive the seconds themselves — RecElapsed.tsx. */
@@ -3919,7 +3943,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       noteAudioEvent('REC press → start requested');
       // Pass the LIVE freq/mode for the filename — native currentFreq is only
       // tracked on UberSDR's audio WS, so OWRX would otherwise show a stale freq.
-      (VibePowerModule as any)?.startRecording(Math.round(status.frequency || 0), String(status.mode || ''))
+      // ★★ V12: a scanner record-on-stop file in progress ends first — one recorder, never two at once.
+      scannerCtlRef.current?.releaseRecorder();
+      (scannerRecIdleRef.current?.() ?? Promise.resolve()).then(() =>
+        (VibePowerModule as any)?.startRecording(Math.round(status.frequency || 0), String(status.mode || '')))
         .then((r: unknown) => {
           recBusy.current = false;
           // ★ V12 record buffer: the file already holds this many seconds from before the tap — the timer says so.
@@ -4290,8 +4317,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   // Push to native; re-push on reconnect (the Android service can be recreated)
   useEffect(() => {
-    VibePowerModule?.setMediaSkipMode(mediaSkip);
-  }, [mediaSkip, connected]);
+    // ★★ V12 scanner (brief §11): while it is engaged, ⏭ must reach JS on every backend (it is Skip), so the native side
+    //    is told to delegate — 'bookmark' is the mode that hands VibeSkip to JS. No native change; idle restores yours.
+    VibePowerModule?.setMediaSkipMode(scanEngaged ? 'bookmark' : mediaSkip);
+  }, [mediaSkip, connected, scanEngaged]);
 
   // ── Pause = disconnect / Play = reconnect ─────────────────────────────────
   // Pause drops the SDR (the server lets it go on suspend anyway) and Play does
@@ -5411,6 +5440,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const openDecoder = useCallback((type: DecoderType) => {
     // ★ Leaving TRANSCRIBE for another decoder stops the native recogniser; entering it stops the socket decoder.
     if (activeDecRef.current === 'transcribe' && type !== 'transcribe') stopTranscribe();
+    // ★★ V12: one box at a time — leaving the SCANNER for a decoder stops the scan (gate opened); entering it stops the
+    //    socket decoder, exactly as switching between decoders always has.
+    if (activeDecRef.current === 'scanner' && type !== 'scanner') scannerCtlRef.current?.stop();
+    if (type === 'scanner' && activeDecRef.current && activeDecRef.current !== 'scanner') decoderClient.current?.stop();
     if (type === 'transcribe') setTxHeard('');
     if (type === 'transcribe' && activeDecRef.current && activeDecRef.current !== 'transcribe') decoderClient.current?.stop();
     setActiveDecoder(type);
@@ -5421,6 +5454,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     decoderImageRef.current?.reset();
     setCwList(null); setCwSpots([]);
     if (!type) return;
+    if (type === 'scanner') { setDecoderStatus(''); return; }   // ★ the scanner's status is its own body's first line
     if (type === 'transcribe') {
       setDecoderStatus('Starting on-device speech…');
       startTxHinted();
@@ -5488,6 +5522,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const closeDecoder = useCallback(() => {
     if (activeDecRef.current === 'transcribe') stopTranscribe();
+    if (activeDecRef.current === 'scanner') scannerCtlRef.current?.stop();   // ★ closing the box stops the scan
     decoderClient.current?.stop();
     decoderImageRef.current?.reset();
     setActiveDecoder(null);
@@ -5693,6 +5728,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       c?.pan(e.frequency);
     });
     const subMute = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
+      /* ★★ V12 scanner (brief §11): play/pause is HOLD while scanning. The native side has already muted, so it is
+       *    unmuted again here — Hold means LISTEN here — and an OWRX pause must not drop the socket mid-scan. */
+      const sc = scannerCtlRef.current;
+      if (sc && sc.running()) {
+        if (e.muted) {
+          sc.hold();
+          (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(false);
+        }
+        setIsMuted(false);
+        return;
+      }
       setIsMuted(!!e.muted);
       // OWRX: pause releases the lock-screen controls (native) and disconnects —
       // there's no play-to-reconnect because an OWRX reconnect resets the server
@@ -5716,6 +5762,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Native ⏮⏭ defer to JS. Bookmark mode jumps the station list; step mode
     // (used by OWRX/Kiwi, whose tuning lives in JS) snaps by the tune step.
     const subSkip = emitter.addListener('VibeSkip', (e: { direction: string }) => {
+      // ★★ V12 scanner (brief §11): ⏭ = Skip (and resumes from HOLD / PAUSED); ⏮ does nothing while it is engaged.
+      const sc = scannerCtlRef.current;
+      if (sc && sc.running()) {
+        if (e.direction !== 'prev') { if (sc.state === 'HOLD') sc.hold(); else sc.skip(); }
+        return;
+      }
       const dir = e.direction === 'prev' ? 'left' : 'right';
       // ★★ Refused on a shared dial with others listening — see blindGate (native greys it too).
       if (!blindTuneOk(e.direction === 'prev' ? 'prev' : 'next')) return;
@@ -7234,6 +7286,27 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  whatever unit the phone's own meter is set to — in SNR mode that would be a figure derived from the
            *  scope, whose bins are relative to REF and mean nothing (contract: "use the icom status line"). No
            *  squelch line either: an Icom has none of ours. */
+          /* ★★ V12 THE SCANNER'S EYES — the SAME numbers this meter shows (brief §5.1), in its own units: SNR, and the
+           *  level with the trim on it. The floor is the auto squelch's reference the signal cannot be in (the empty
+           *  neighbours, squelchNeighbours.ts), else the tracked floor; a broadband crash is flagged so a static burst is
+           *  never taken for a signal. Nothing at all runs while the scanner is idle. */
+          if (scannerFeedRef.current && scannerCtlRef.current?.running()) {
+            const cHz = s.trueCenterHz ?? s.centerHz;
+            const ex = channelExcessDb(newBins, cHz, s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
+            const floorLvl = Number.isFinite(ex) ? levelDbm - ex
+              : (owrxDbm == null && !isKiwi && !isLocal && floorEmaRef.current > -900) ? floorEmaRef.current + vg : NaN;
+            scanFloorRef.current = floorLvl;
+            scannerFeedRef.current({
+              snr: owrxDbm != null ? NaN : snrDb, level: levelDbm, floor: floorLvl,
+              impulse: scanImpulse.current.feed(newBins, `${Math.round(cHz)}|${Math.round(s.bwHz)}|${len}`, Date.now()),
+              tunedHz: s.frequency,
+            });
+          } else if (activeDecRef.current === 'scanner') {
+            // ★ Tagging while idle still wants a floor: the same reference, cheap (one pass over the channel's neighbours).
+            const ex = channelExcessDb(newBins, s.trueCenterHz ?? s.centerHz, s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
+            scanFloorRef.current = Number.isFinite(ex) ? levelDbm - ex
+              : (owrxDbm == null && !isKiwi && !isLocal && floorEmaRef.current > -900) ? floorEmaRef.current + vg : NaN;
+          }
           const icomNow = icomRef.current;
           const icomMeter = icomNow
             ? (icomNow.tx ? 'TX' : (icomDbmRef.current == null ? '' : (sMeter(icomDbmRef.current + 73)?.text ?? '')))
@@ -10123,6 +10196,140 @@ export default function SDRScreen({ route, navigation }: Props) {
     ));
   }, [userBookmarks, persistUserBookmarks]);
 
+  // ══ ★★ V12 THE SCANNER (docs/v12/SCANNER.md; engine services/scanner.ts, host hooks/useScanner.ts) ══════════════════
+  /* ★★★ WHERE IT MAY RUN — scanPolicy, the one rule: never FM-DX; never a VibeServer with ONE SHARED DIAL (a hop would
+   *     retune every listener — Stuart's "antisocial" rule); OWRX inside its profile; a range-locked VibeServer inside
+   *     the window; single-user radios and local hardware anywhere. Absent where it cannot run — never greyed. */
+  const scanKind: ScanBackendKind = isVibeServer ? 'vibeserver'
+    : isLocal ? 'ubersdr' : ((route.params.serverType ?? 'ubersdr') as ScanBackendKind);
+  const scanPol = scanPolicy({ kind: scanKind, isLocal: isLocal && !isVibeServer, sharedDial,
+                               lockedCentreHz: hwLockedCentre, icom: !!icom });
+  const scanPolRef = useRef(scanPol); scanPolRef.current = scanPol;
+  /** Names beside frequencies, best source first (Stuart): the user's own bookmarks, then the server's (incl. learned /
+   *  scanned), then EiBi's schedule. The merged list the VTS already reads (vtsBookmarks). */
+  const scanNames = useMemo<NamedFreq[]>(() => searchBookmarks.map((b: ServerBookmark) => ({
+    name: b.name, frequency: b.frequency, rank: b.source === 'user' ? 0 : b.source === 'eibi' ? 2 : 1,
+  })), [searchBookmarks]);
+  const scanNamesRef = useRef(scanNames); scanNamesRef.current = scanNames;
+  const scanNameFor = useCallback((hz: number, tol: number) => nameAt(hz, tol, scanNamesRef.current), []);
+  const scanner = useScanner({
+    client: () => client.current,
+    /* ★★★ THE REACH, read afresh on every tick and before every tune — one clamp for OWRX's profile and VibeServer's
+     *     window: tuneBoundsOf (the backend's range, narrowed to the owner's locked window) ∩ panSpan() (OWRX's
+     *     profile). The key carries the profile id, so another listener's profile switch is seen at once. */
+    reach: () => {
+      const c = client.current;
+      const pol = scanPolRef.current;
+      const none = { loHz: 0, hiHz: 0, key: 'none' };
+      if (!c) return { allowed: false, why: 'Scan paused — not connected', ...none };
+      if (!pol.offered) return { allowed: false, why: `Scan paused — ${pol.why ?? 'not available here'}`, ...none };
+      if (dabOnRef.current || noTuneNow(c)) return { allowed: false, why: 'Scan paused while the radio is in a whole-band mode', ...none };
+      const [tlo, thi] = tuneBoundsOf(c);
+      const ps = c.panSpan();
+      if (ps.movable) return { allowed: true, loHz: tlo, hiHz: thi, key: `m|${tlo}|${thi}` };
+      const lo = Math.max(tlo, ps.loHz), hi = Math.min(thi, ps.hiHz);
+      return { allowed: hi >= lo, why: 'Scan paused — nothing reachable', loHz: lo, hiHz: hi,
+               key: `${lo}|${hi}|${c.activeProfileId?.() ?? ''}` };
+    },
+    meterMode: () => signalModeRef.current,
+    timing: () => scanTiming(scanKind, isLocal && !isVibeServer),
+    setGate: (open: boolean) => { scanGateShutRef.current = !open; applyNativeGate(); },
+    onTuned: () => { const c = client.current; if (c) setStatus({ ...c.getStatus() }); },
+    manualRecording: () => isRecordingRef.current,
+    serverName: () => recServerName,
+    nameFor: scanNameFor,
+  });
+  scannerCtlRef.current = scanner.ctl;
+  scannerFeedRef.current = scanner.feed;
+  scannerRecIdleRef.current = scanner.recIdle;
+  useEffect(() => { setScanEngaged(scanner.engaged); }, [scanner.engaged]);
+  // ★ The radio stopped allowing a scan (it became a shared dial, or this is FM-DX): the box closes rather than sit dead.
+  useEffect(() => {
+    if (!scanPol.offered && activeDecRef.current === 'scanner') dismissDecoderPanel();
+  }, [scanPol.offered, dismissDecoderPanel]);
+
+  /* Presets: saved (global, AsyncStorage) + the bundled starters. */
+  const [scanPresets, setScanPresets] = useState<ScanPreset[]>([]);
+  useEffect(() => { loadScanPresets().then(setScanPresets).catch(() => {}); }, []);
+  const persistScanPresets = useCallback((next: ScanPreset[]) => { setScanPresets(next); void saveScanPresets(next); }, []);
+  /* Bookmark scan: the groups of THIS receiver's bookmarks (bookmarksForInstance scope rules). */
+  const [scanGroup, setScanGroup] = useState<string>('');
+  const scanGroups = useMemo(() => {
+    const g = new Set<string>();
+    for (const b of visibleBookmarks) g.add(b.group ?? '');
+    return [...g].sort();
+  }, [visibleBookmarks]);
+  const pickScanGroup = useCallback((g: string) => {
+    setScanGroup(g);
+    const list = visibleBookmarks.filter((b: UserBookmark) => (b.group ?? '') === g);
+    scanner.ctl.setTags(list.map((b: UserBookmark, i: number) => bookmarkTag(b, `bm-${g}-${i}-${b.frequency}`)));
+  }, [visibleBookmarks, scanner.ctl]);
+  const scanBands = useMemo(() => {
+    const c = client.current;
+    if (!c) return [];
+    const [lo, hi] = tuneBoundsOf(c);
+    const ps = c.panSpan();
+    return bandChoices(ituRegion, ps.movable ? { loHz: lo, hiHz: hi } : { loHz: Math.max(lo, ps.loHz), hiHz: Math.min(hi, ps.hiHz) });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ituRegion, connected, activeProfileId, hwLockedCentre, activeDecoder]);
+  /** ★ Band mode's first open: a BOUNDED span (an OWRX profile, a locked window) seeds Lo / Hi from it — zero-config
+   *  airband (acceptance 1). On a wideband receiver they stay empty and required: nobody sweeps all of HF by accident. */
+  const seedScanBand = useCallback(() => {
+    const c = client.current; const ctl = scanner.ctl;
+    if (!c || ctl.band) return;
+    const [tlo, thi] = tuneBoundsOf(c);
+    const ps = c.panSpan();
+    const lo = Math.max(tlo, ps.loHz), hi = Math.min(thi, ps.hiHz);
+    if (ps.movable || hi - lo > 5e6 || !(hi > lo)) return;
+    const mid = (lo + hi) / 2;
+    const choice = bandChoices(ituRegion, { loHz: lo, hiHz: hi }).find((b) => b.spec.loHz <= mid && b.spec.hiHz >= mid);
+    const stepHz = choice?.spec.stepHz ?? 25000;
+    const mode = choice?.spec.mode ?? (mid >= 30e6 ? 'nfm' : 'usb');
+    ctl.setBand({ loHz: Math.ceil(lo / stepHz) * stepHz, hiHz: hi, stepHz, mode });
+  }, [scanner.ctl, ituRegion, tuneBoundsOf]);
+  const onScanSource = useCallback((src: ScanSource) => {
+    scanner.ctl.setSource(src);
+    if (src === 'band') seedScanBand();
+    if (src === 'bookmarks') pickScanGroup(scanGroup || scanGroups[0] || '');
+  }, [scanner.ctl, seedScanBand, pickScanGroup, scanGroup, scanGroups]);
+  const onScanTagHere = useCallback(() => {
+    const c = client.current; if (!c) return;
+    const st = c.getStatus();
+    const f = Math.round(st.frequency);
+    scanner.ctl.addTag({
+      id: `tag-${Date.now()}-${f}`, frequency: f, mode: st.mode, bwLow: st.bandwidthLow, bwHigh: st.bandwidthHigh,
+      label: defaultTagLabel({ frequency: f, mode: st.mode }),
+      noiseRefDb: Number.isFinite(scanFloorRef.current) ? scanFloorRef.current : undefined,
+    });
+  }, [scanner.ctl]);
+  const onScanTagFound = useCallback((fs: FoundSignal) => {
+    const b = scanner.ctl.band;
+    const [bwLow, bwHigh] = b ? [scanner.ctl.current?.bwLow ?? -5000, scanner.ctl.current?.bwHigh ?? 5000] : [-5000, 5000];
+    scanner.ctl.addTag({ id: `tag-${Date.now()}-${fs.frequency}`, frequency: fs.frequency, mode: fs.mode, bwLow, bwHigh,
+                         label: defaultTagLabel(fs) });
+  }, [scanner.ctl]);
+  const onScanBookmark = useCallback((hz: number, mode: SDRMode, name?: string) => {
+    const bm: UserBookmark = { name: name || defaultTagLabel({ frequency: hz, mode }), frequency: Math.round(hz), mode,
+      bandwidth_low: null, bandwidth_high: null, group: null, comment: null, extension: null, scope: bookmarkScope };
+    persistUserBookmarks(mergeBookmarks(userBookmarks, [bm]));
+  }, [bookmarkScope, userBookmarks, persistUserBookmarks]);
+  /** A tap on a row TUNES there — a person's action, so the scan holds first (it must not hop away under them). */
+  const onScanTune = useCallback((hz: number, mode: SDRMode) => {
+    const ctl = scanner.ctl;
+    if (ctl.running() && ctl.state !== 'HOLD' && ctl.state !== 'PAUSED') ctl.hold();
+    onTuneHz(hz, mode);
+  }, [scanner.ctl, onTuneHz]);
+  const onScanLoad = useCallback((pr: ScanPreset) => {
+    const ctl = scanner.ctl;
+    ctl.setSource(pr.source);
+    ctl.setConfig(normaliseConfig(pr.config));
+    if (pr.source === 'band') ctl.setBand(pr.band ?? null);
+    if (pr.source === 'list') ctl.setTags((pr.channels ?? []).map((t) => ({ ...t })));
+    if (pr.source === 'bookmarks') pickScanGroup(pr.bookmarkGroup ?? '');
+    // ★ Validated against THIS receiver now (§4.3) — a refusal shows on the panel before anything is pressed.
+    ctl.checkReachable();
+  }, [scanner.ctl, pickScanGroup]);
+
   // Hide the cloud button entirely where iCloud cannot work (Android, or a
   // device signed out of iCloud). A control that silently does nothing reads as
   // "sync is broken", which is worse than not offering it.
@@ -11307,7 +11514,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB, ADS-B and ISM, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz) where the server has it.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB, ADS-B and ISM, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz) where the server has it, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
@@ -11902,7 +12109,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  client decoder's box into a second copy of the table. OWRX's ADS-B (adsbOn never set) is unchanged. */
           aircraft={adsbOn || adsbViewOpen ? undefined : aircraft}
           decoderStatus={decoderStatus}
-          decoding={decoding}
+          decoding={activeDecoder === 'scanner' ? (scanner.ctl.state === 'STOPPED' || scanner.ctl.state === 'HOLD') : decoding}
           // Sit ABOVE the VTS bar (which shows the live station) rather than covering it —
           // both visible, VTS between the box and the controls. Lift by the measured VTS height.
           // ★★★ STACK ABOVE EVERYTHING BELOW IT, NOT JUST THE VTS BAR. The panel already lifted by
@@ -11933,6 +12140,20 @@ export default function SDRScreen({ route, navigation }: Props) {
           onTuneHz={onTuneHz}
           /* ★ V12 CW: the list + spots, and a tap tunes to that signal in CW (the web's cwTune: recentred). */
           cw={activeDecoder === 'cw' ? { skim: cwSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => { if (hz > 0) onTuneHz(hz, 'cwu' as SDRMode); } } : null}
+          /* ★★ V12 THE SCANNER — the decoder box's body while SCANNER is the decoder (ScannerPanel). */
+          scanner={activeDecoder === 'scanner' ? {
+            ctl: scanner.ctl, rev: scanner.rev, meterMode: signalMode, onSource: onScanSource,
+            bands: scanBands, bookmarkGroups: scanGroups, bookmarkGroup: scanGroup, onBookmarkGroup: pickScanGroup,
+            presets: [...scanPresets, ...BUNDLED_PRESETS],
+            onLoadPreset: onScanLoad,
+            onSavePreset: (name: string) => persistScanPresets([...scanPresets.filter((x) => x.name !== name),
+              presetFrom(scanner.ctl, `scan-${Date.now()}`, name, scanGroup)]),
+            onDeletePreset: (id: string) => persistScanPresets(scanPresets.filter((x) => x.id !== id)),
+            onClonePreset: (pr: ScanPreset) => persistScanPresets([...scanPresets, clonePreset(pr, `scan-${Date.now()}`)]),
+            onTagHere: onScanTagHere, onTune: onScanTune, onBookmark: onScanBookmark, onTagFound: onScanTagFound,
+            nameFor: scanNameFor,
+            canRecord: !!(VibePowerModule as { startRecording?: unknown } | undefined)?.startRecording,
+          } : null}
           onOpenFreq={() => kbActions.current.onFreqOpen()}
           imageRef={decoderImageRef}
           onImageStatus={setDecoderStatus}
@@ -13072,7 +13293,18 @@ export default function SDRScreen({ route, navigation }: Props) {
           onMap:   () => { setModeSelOpen(false); onAdminLink('/map', 'Map'); },
           onFiles: () => { setModeSelOpen(false); onAdminLink('/files', 'Files'); },
         } : null}
-        decoderControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' && (!isLandscape || isTablet) ? {
+        decoderControls={((route.params.serverType ?? 'ubersdr') !== 'owrx' || scanPol.offered) && (!isLandscape || isTablet) ? {
+          /* ★★ V12 THE SCANNER — a decoder-box item on every backend scanPolicy allows (absent where it does not). On
+           *  OpenWebRX it is the row's only key: its own decoders are demodulators in this sheet. */
+          scanAvail: scanPol.offered,
+          scanOn: activeDecoder === 'scanner',
+          onlyScanner: (route.params.serverType ?? 'ubersdr') === 'owrx',
+          onScan: () => {
+            markInteract(); setModeSelOpen(false);
+            if (activeDecRef.current === 'scanner') { dismissDecoderPanel(); return; }
+            stopSpots(); setSelDecoder(null); openDecoder('scanner');
+            if (scanner.ctl.source === 'band') seedScanBand();
+          },
           decMode: selDecoder, decOn: activeDecoder !== null && activeDecoder === selDecoder, isLocal,
           onDecToggle, rttySettings, onRttySettings, wefaxLpm, onWefaxLpm,
           /* ★ What this receiver actually runs. null = we could not ask, and the row then offers
@@ -13603,7 +13835,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         activeProfileId={activeProfileId}
         sdrUsage={sdrUsage}
         clientCount={clientCount}
-        onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
+        onSelectProfile={(id) => { scannerCtlRef.current?.noteLocalSwitch(); client.current?.selectProfile?.(id); setActiveProfileId(id); }}
         magicKey={owrxMagicKey}
         // ★ Handed over ONLY where the adapter can use it: OWRX is the only backend with a magic
         //   key, so elsewhere the entry is absent rather than present and inert (AGENTS.md —

@@ -68,7 +68,7 @@ import {
  *   its inner does not actually implement — the presence test keeps meaning what it meant. */
 const OPTIONAL_MEMBERS = [
   'disconnectSocket', 'watchSpectrumUrl', 'forceResubscribe',
-  'getProfiles', 'selectProfile', 'getSecondaryDecoder', 'sendChat',
+  'getProfiles', 'selectProfile', 'getSecondaryDecoder', 'sendChat', 'activeProfileId',
 ] as const;
 
 /* ★★★ THE PUSH SIDE, WHICH THIS FILE CLAIMED TO COVER AND DID NOT.
@@ -332,6 +332,7 @@ class ConverterBackend implements SDRBackend {
   // ── Everything below carries no frequency: passed straight through. ──
   getProfiles?() { return this.inner.getProfiles!(); }
   selectProfile?(id: string) { this.inner.selectProfile?.(id); }
+  activeProfileId?() { return this.inner.activeProfileId!(); }
   getSecondaryDecoder?() { return this.inner.getSecondaryDecoder!(); }
   sendChat?(text: string, name: string) { this.inner.sendChat?.(text, name); }
 }

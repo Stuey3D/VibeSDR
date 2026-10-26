@@ -5,7 +5,7 @@
  * reference/openwebrx-master (htdocs/openwebrx.js, lib/Demodulator.js).
  *
  * PHASE 2 MILESTONE 1 (this file): connect + handshake + config + waterfall, with
- * client-side view slicing, tune (offset within profile + auto profile-switch),
+ * client-side view slicing, tune (offset within the profile, CLAMPED at its edge — never an automatic profile switch),
  * mode/bandwidth, profiles, and S-meter. AUDIO is intentionally NOT handled here —
  * per the brief the audio socket must move into the native engine so background
  * audio survives JS suspend (next phase). Type-2/4 frames are counted and ignored
@@ -1424,6 +1424,9 @@ export class OwrxAdapter implements SDRBackend {
    *    and never anywhere global. */
   private magicKey = '';
   setMagicKey(k: string): void { this.magicKey = (k ?? '').trim(); }
+
+  /** ★ V12 scanner: the profile the server is on now (set from every `config`, whoever switched it). */
+  activeProfileId(): string { return `${this.sdrId}|${this.profileId}`; }
 
   selectProfile(id: string): void {
     const params: Record<string, unknown> = { profile: id };
