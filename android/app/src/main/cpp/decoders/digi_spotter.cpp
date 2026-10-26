@@ -22,24 +22,12 @@ bool singleCapable(const ModeDef& m) { return m.single && m.sampleRate == 12000;
 
 std::vector<std::string> Spotter::singleModesAt(const std::vector<ModeDef>& ms, double dialHz) {
     std::vector<std::string> out;
-    if (std::isfinite(dialHz)) {
-        const double lo = dialHz + kSingleLoHz, hi = dialHz + kSingleHiHz, need = 0.5 * (kSingleHiHz - kSingleLoHz);
-        for (const ModeDef& m : ms) {
-            if (!singleCapable(m)) continue;
-            bool at = false;
-            for (const Band& b : bands()) {
-                for (double d : dialsOf(m, b.id)) {
-                    const double ov = std::min(hi, d + m.audioHiHz) - std::max(lo, d + m.audioLoHz);
-                    if (ov >= need) { at = true; break; }
-                }
-                if (at) break;
-            }
-            if (at) out.push_back(m.name);
-        }
-    }
-    if (out.empty())          // ★ off the table: what Single always ran
+    if (std::isfinite(dialHz))
         for (const ModeDef& m : ms)
-            if (singleCapable(m) && (m.name == "FT8" || m.name == "FT4")) out.push_back(m.name);
+            if (singleCapable(m) && atOwnDial(m, dialHz)) out.push_back(m.name);
+    if (out.empty())          // ★ off the table: the modes marked singleFallback (FT8 + FT4 — what Single always ran)
+        for (const ModeDef& m : ms)
+            if (singleCapable(m) && m.singleFallback) out.push_back(m.name);
     return out;
 }
 
@@ -98,7 +86,23 @@ void Spotter::feedAudio48k(const float* x, int n, double captureUtc) {
         if (++decim_ >= 4) { buf_.push_back(acc_ * 0.25f); acc_ = 0; decim_ = 0; }
     }
     if (buf_.empty()) return;
-    for (Run& r : single_) r.eng->process(buf_.data(), (int)buf_.size(), captureUtc);
+    for (Run& r : single_) r.eng->process(buf_.data(), (int)buf_.size(), captureUtc);   // ★ planSingle chose them
+}
+
+/* ★★ IS THE LISTENER AT THIS MODE'S DIAL? One rule for every mode, two ways of reading "at":
+ *   • singleDialTolHz > 0 (a narrow mode on a dial of its own — WSPR, ±150 Hz): the dial within that of one of its dials;
+ *   • otherwise: at least half the listener's USB window (dial + kSingleLoHz … kSingleHiHz) lies inside the mode's own
+ *     audio window above one of its dials (dial + audioLoHz … audioHiHz) — 14.074 FT8, 14.078 JS8, 14.080 FT4,
+ *     14.084 FT2, 3.578 FT2 and JS8. */
+bool Spotter::atOwnDial(const ModeDef& m, double dialHz) {
+    if (!std::isfinite(dialHz)) return false;
+    const double lo = dialHz + kSingleLoHz, hi = dialHz + kSingleHiHz, need = 0.5 * (kSingleHiHz - kSingleLoHz);
+    for (const Band& b : bands())
+        for (double d : dialsOf(m, b.id)) {
+            if (m.singleDialTolHz > 0) { if (std::fabs(d - dialHz) <= m.singleDialTolHz) return true; continue; }
+            if (std::min(hi, d + m.audioHiHz) - std::max(lo, d + m.audioLoHz) >= need) return true;
+        }
+    return false;
 }
 
 void Spotter::plan(double rate, double centreHz) {

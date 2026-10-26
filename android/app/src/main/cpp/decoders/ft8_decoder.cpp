@@ -750,6 +750,7 @@ void Ft8Decoder::advance(int count, double captureUtc) {
             if (!busy && !pending) {
                 for (int i = 0; i < window_; ++i) work_[(size_t)i] = ring_[(size_t)((i0 + i) % R)];
                 workSlotEnd_ = captureUtc;     // ★ when the window was complete, on the capture clock
+                workSlotUtc_ = nextSlot_;      // ★ and the slot it is — the spots' time (WSJT-X's)
                 pending = true;
                 wcv.notify_one();
             } else {

@@ -4,12 +4,13 @@
 //
 // ★★ SINGLE ("Digital spots: Single mode") is the button there was before, and the CHEAP one: the listener's 48 kHz audio,
 //    box-averaged by four to 12 kHz (the same decimation as ever), into only the modes whose published dial is WHERE THE
-//    LISTENER IS TUNED (Stuart's design: Band is the button that runs every mode). A mode runs when at least half of
+//    LISTENER IS TUNED (Stuart's design: Band is the button that runs every mode). One rule, atOwnDial: a WSPR-like
+//    narrow mode (ModeDef::singleDialTolHz) within its tolerance of a dial; any other when at least half of
 //    the listener's USB window (dial + 100 … dial + 3000 Hz, kSingleLoHz/kSingleHiHz) falls inside its own audio
 //    window above one of its dials (dial + audioLoHz … audioHiHz): 14.074 → FT8, 14.078 → JS8, 14.080 → FT4,
 //    14.084 → FT2, 3.578 → JS8 and FT2 (one dial). Re-chosen on every retune; an engine whose mode is still wanted is
-//    KEPT (its slot in progress is not lost). Tuned to no table entry, it falls back to FT8 + FT4 — what Single always
-//    ran — so it never goes silent off the table.
+//    KEPT (its slot in progress is not lost). Tuned to no table entry, it runs the ModeDef::singleFallback modes —
+//    FT8 + FT4, what Single always ran — so it never goes silent off the table.
 // ★★ BAND ("Digital spots: Band"): the host is fed the band's IQ slice (centred on the listener's dial, as the CW
 //    skimmer's is). For every registered mode, every dial of it that FITS in the slice gets a DigiTuner (one per distinct
 //    dial — FT2 and JS8 share 3.578 MHz) and an engine. When the slice moves (the next band, a retune), the plan is redone
@@ -65,6 +66,8 @@ public:
      *  (pure, for the tests): the names of the `ms` modes Single runs with the listener's dial at `dialHz`. */
     static constexpr double kSingleLoHz = 100, kSingleHiHz = 3000;
     static std::vector<std::string> singleModesAt(const std::vector<ModeDef>& ms, double dialHz);
+    /** Is a listener at `dialHz` on one of `m`'s dials (see the .cpp)? */
+    static bool atOwnDial(const ModeDef& m, double dialHz);
     /** The slice's centre and rate at the last re-plan (tests). */
     double planCentre() const { return planCentre_; }
 

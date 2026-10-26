@@ -11,6 +11,8 @@
 #include "decoders/digi_spotter.h"
 #include "decoders/digi_tuner.h"
 #include "decoders/digimodes/js8_decoder.h"
+#include "decoders/digimodes/wspr_decoder.h"
+#include "../tools/wspr-bench/wspr_synth.h"
 extern "C" {
 #include "ft8/message.h"
 #include "ft8/encode.h"
@@ -244,6 +246,9 @@ int main(int argc, char** argv) {
            "JS8 (15 s; its engine cuts all four submodes) and FT2 (3.75 s) registered — Single and Band, dials from the table");
         ok(digi::modeByName("ft4") == &ms[1] && digi::modeByName("nope") == nullptr, "modeByName is case-insensitive and null for unknown");
         ok(ms[0].slotSec == 15.0 && ms[1].slotSec == 7.5 && ms[0].sampleRate == 12000, "FT8 15 s / FT4 7.5 s slots, 12 kHz audio");
+        const digi::ModeDef* w = digi::modeByName("WSPR");
+        ok(w && w->slotSec == 120.0 && w->sampleRate == 12000 && w->audioLoHz <= 1380 && w->audioHiHz >= 1620 && w->singleDialTolHz > 0,
+           "WSPR is registered (digimodes/wspr.h): 120 s slots, 12 kHz, its 200 Hz sub-band, Single only at its dials");
         bool made = true;
         for (const auto& m : ms) { auto e = m.make(); made = made && e != nullptr; }
         ok(made, "every registered mode makes an engine");
@@ -259,6 +264,8 @@ int main(int argc, char** argv) {
         ok(at(14084000) == "FT2", "14.084 → FT2 only (" + at(14084000) + ")");
         ok(at(3578000) == "FT2 JS8", "3.578 (FT2's and JS8's shared dial) → both (" + at(3578000) + ")");
         ok(at(7074300) == "FT8", "7.0743, a little off FT8's dial → still FT8 (" + at(7074300) + ")");
+        ok(at(14095600) == "WSPR" && at(14095700) == "WSPR", "14.0956 (and 100 Hz off it) → WSPR only, its ±150 Hz (" + at(14095600) + ")");
+        ok(at(14096000) == "FT8 FT4", "14.0960, 400 Hz off WSPR's dial and on no other → the fallback (" + at(14096000) + ")");
         ok(at(12345000) == "FT8 FT4", "12.345, on no table entry → FT8 + FT4, what Single always ran (" + at(12345000) + ")");
         ok(at(NAN) == "FT8 FT4", "no dial known → FT8 + FT4");
         // ★ retunes: the set follows the dial; a fine retune keeps the engine it has
@@ -293,17 +300,18 @@ int main(int argc, char** argv) {
         ok(bs.size() == 16 && std::string(bs.front().id) == "2200m" && std::string(bs[11].id) == "10m" && std::string(bs[12].id) == "6m"
            && std::string(bs.back().id) == "70cm", "step order 2200 m … 10 m, then 6 m, 4 m, 2 m, 70 cm");
         ok(std::string(digi::bandAt(14074000)->id) == "20m" && digi::bandAt(14500000) == nullptr, "bandAt names the band a frequency is in");
-        // ★ The spans with today's registry: FT8 + FT4 + FT2 + JS8 (FT2 at 14.084 is the top of 20 m's cluster).
+        // ★ The spans with today's registry: FT8 + FT4 + FT2 + JS8 + WSPR (WSPR at 14.0956 is the top of 20 m's cluster).
         const auto& ms = digi::modes();
         const digi::Span s20 = digi::spanOf(*digi::bandById("20m"), ms);
-        ok(s20.ok && near(s20.loHz, 14074000 + 100 - 250, 60) && near(s20.hiHz, 14084000 + 3500 + 250, 60) && s20.modes.size() == 4,
-           "20 m with FT8+FT4+FT2+JS8: " + std::to_string(s20.loHz) + "–" + std::to_string(s20.hiHz) + " (" + std::to_string((int)s20.widthHz()) + " Hz)");
-        ok(!digi::spanOf(*digi::bandById("2200m"), ms).ok, "2200 m has no FT8/FT4 dial — no span (until WSPR registers)");
+        ok(s20.ok && near(s20.loHz, 14074000 + 100 - 250, 60) && near(s20.hiHz, 14095600 + 1650 + 250, 60) && s20.modes.size() == 5,
+           "20 m with FT8+FT4+FT2+JS8+WSPR: " + std::to_string(s20.loHz) + "–" + std::to_string(s20.hiHz) + " (" + std::to_string((int)s20.widthHz()) + " Hz)");
+        const digi::Span s2200 = digi::spanOf(*digi::bandById("2200m"), ms);
+        ok(s2200.ok && s2200.modes.size() == 1 && s2200.modes[0] == "WSPR", "2200 m: WSPR alone now it is registered");
         // ★ The spans the brief worked out, with the modes being built now registered (dummies standing in).
         std::vector<digi::ModeDef> all = ms;
-        all.push_back(dummyMode("WSPR", 1400, 1600));
-        if (!digi::modeByName("JS8")) all.push_back(dummyMode("JS8", 100, 3500));
-        if (!digi::modeByName("FT2")) all.push_back(dummyMode("FT2", 100, 3500));
+        // (a mode already registered is not doubled — WSPR, JS8 and FT2 are real now)
+        for (auto d : { dummyMode("WSPR", 1400, 1600), dummyMode("JS8", 100, 3500), dummyMode("FT2", 100, 3500) })
+            if (!digi::modeByName(d.name)) all.push_back(d);
         std::printf("    passband per band, FT8+FT4+FT2+JS8+WSPR registered:\n");
         std::map<std::string, double> w;
         for (const auto& b : digi::bands()) {
@@ -336,13 +344,14 @@ int main(int argc, char** argv) {
         auto everywhere = [](double, double) { return true; };
         const auto spans = digi::reachableSpans(ms, everywhere);
         std::string ids; for (auto& s : spans) ids += std::string(s.band->id) + " ";
-        ok(ids == "160m 80m 60m 40m 30m 20m 17m 15m 12m 10m 6m 4m 2m 70cm ", "FT8/FT4 bands in step order: " + ids);
+        ok(ids == "2200m 630m 160m 80m 60m 40m 30m 20m 17m 15m 12m 10m 6m 4m 2m 70cm ", "FT8/FT4/WSPR bands in step order: " + ids);
         auto at = [&](int i) { return i < 0 ? std::string("-") : std::string(spans[(size_t)i].band->id); };
         ok(at(digi::stepSpan(spans, 14074000, +1)) == "17m" && at(digi::stepSpan(spans, 14074000, -1)) == "30m", "20 m: up → 17 m, down → 30 m");
         ok(at(digi::stepSpan(spans, 28074000, +1)) == "6m", "10 m → 6 m (HF, then VHF)");
-        ok(at(digi::stepSpan(spans, 432174000, +1)) == "70cm" && at(digi::stepSpan(spans, 1840000, -1)) == "160m", "clamped at both ends, never wrapped");
+        ok(at(digi::stepSpan(spans, 432174000, +1)) == "70cm" && at(digi::stepSpan(spans, 136000, -1)) == "2200m", "clamped at both ends, never wrapped");
+        ok(at(digi::stepSpan(spans, 1840000, -1)) == "630m", "160 m down → 630 m (WSPR's LF bands)");
         ok(at(digi::stepSpan(spans, 12000000, +1)) == "20m" && at(digi::stepSpan(spans, 12000000, -1)) == "30m", "between bands: the nearest one that way");
-        ok(at(digi::stepSpan(spans, 0, +1)) == "160m" && at(digi::stepSpan(spans, 9e9, -1)) == "70cm", "from nowhere: the first / the last");
+        ok(at(digi::stepSpan(spans, 0, +1)) == "2200m" && at(digi::stepSpan(spans, 9e9, -1)) == "70cm", "from nowhere: the first / the last");
         auto hfPlus = [](double lo, double hi) { return lo >= 0 && hi <= 260e6; };
         const auto hp = digi::reachableSpans(ms, hfPlus);
         ok(!hp.empty() && std::string(hp.back().band->id) == "2m", "an HF+ (≤ 260 MHz) reaches up to 2 m, never 70 cm");
@@ -450,11 +459,12 @@ int main(int argc, char** argv) {
         // ★ The host's own feedIq stamps vibeUtcNow(); to run faster than real time the Spotter is driven directly with
         //   the capture times, exactly as the host's decode thread does (spotter_->feedIq(…, b.utc)).
         std::vector<std::string> got;
+        std::map<std::string, double> slotOf;   // ★ each call's slot start, seconds after slot0
         std::mutex gm;
         digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(),
             [&](const digi::Spot& s, double rf) {
                 char b[160]; std::snprintf(b, sizeof b, "%s %s %.0f %s", s.mode.c_str(), s.call.c_str(), rf, s.grid.c_str());
-                std::lock_guard<std::mutex> lk(gm); got.push_back(b);
+                std::lock_guard<std::mutex> lk(gm); got.push_back(b); slotOf[s.call] = s.slotUtc - slot0;
             }, [&] { return dialNow; }, nullptr);
         for (size_t o = 0; o < x.size(); o += blk) {
             const int n = (int)std::min<size_t>(blk, x.size() - o);
@@ -485,6 +495,16 @@ int main(int argc, char** argv) {
             char call[16]; std::sscanf(t.msg, "CQ %15s", call);
             ok(has(t.ft4 ? "FT4" : "FT8", call, t.rf), std::string(t.ft4 ? "FT4 " : "FT8 ") + call + " spotted with its mode, at its RF");
         }
+        {
+            // ★ THE SPOT'S TIME IS ITS SLOT'S START (M7EIW): FT8 0 and 15 s, FT4 0 / 7.5 / 15, JS8 Normal 0 and Turbo 6,
+            //   FT2 3.75 and 7.5 — what WSJT-X's time column shows, and what the host stamps the spot with.
+            std::lock_guard<std::mutex> lk(gm);
+            const std::pair<const char*, double> want[] = { {"G4ABC", 0}, {"DL1XYZ", 0}, {"K1ABC", 15}, {"VK2DEF", 15}, {"JA1QRS", 0},
+                {"EA4TUV", 7.5}, {"OH2WXY", 15}, {"G4JSN", 0}, {"W1JST", 6}, {"IU8AAA", 3.75}, {"SP6BBB", 7.5} };
+            std::string bad;
+            for (auto& w : want) { auto it = slotOf.find(w.first); if (it == slotOf.end() || std::fabs(it->second - w.second) > 1e-6) bad += std::string(" ") + w.first + "@" + (it == slotOf.end() ? std::string("?") : std::to_string(it->second)); }
+            ok(bad.empty(), "every spot carries its slot's START (FT8 :00/:15, FT4 :07.5, JS8 Turbo :06, FT2 :03.75 …)" + bad);
+        }
         bool lsb = false;
         { std::lock_guard<std::mutex> lk(gm); for (auto& g : got) if (g.find("ZL3LSB") != std::string::npos) lsb = true; }
         ok(!lsb, "a station 1200 Hz BELOW the FT8 dial (the lower sideband) is not decoded");
@@ -493,6 +513,104 @@ int main(int argc, char** argv) {
         // ★ The host's spot frame (emitSpot: mode, call, RF) is checked through its Single path below.
         h.stopSpots();
         ok(!h.wantsIq() && DecoderHost::skimmersRunning().load() == 0, "stopping Band spots releases the IQ slice and the gate");
+    }
+
+    /* ★★ WSPR THROUGH BAND MODE (2026-10-27): one two-minute slot of 20 m in a 75 kHz slice — a WSPR station on the WSPR
+     *  dial's sub-band beside FT8 traffic — through the Spotter and the real WSPR engine (digimodes/wspr.h): spotted as
+     *  "WSPR" at its RF, with an SNR on the WSPRnet scale (white noise: the definition) within 2 dB. Generated a block at a
+     *  time (two minutes at 75 kHz would be 74 MB). */
+    std::printf("── WSPR in Band mode (one two-minute slot of 20 m) ──\n");
+    {
+        const double secs = 124.0, slot = std::ceil(vibeUtcNow() / 120.0) * 120.0 + 120.0, t0 = slot - 3.0;
+        const double wDial = 14095600, wRf = wDial + 1523.0, ft8Rf = 14074000 + 1200;
+        const double sigma = 0.02, snr = -20.0;
+        // complex noise σ per rail → N0 = 2σ²/rate; a complex tone of amplitude A has power A²
+        const double A = std::sqrt(std::pow(10.0, snr / 10.0) * 2 * sigma * sigma / rate * 2500.0);
+        uint8_t tones[wspr::kSymbols];
+        wspr::Message m; m.type = 1; m.call = "G4ABC"; m.grid = "IO92"; m.dbm = 37;
+        wspr::encode(m, tones);
+        const std::vector<uint8_t> ft8 = tonesFor("CQ M0FTE IO91", false);
+        ok(ft8.size() == FT8_NN, "the FT8 neighbour encodes");
+        std::mt19937 g(4242); std::normal_distribution<float> nd(0.0f, (float)sigma);
+        std::vector<std::string> got; std::mutex gm;
+        digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(),
+            [&](const digi::Spot& s, double rf) {
+                char b[200]; std::snprintf(b, sizeof b, "%s %s %.1f %s %d", s.mode.c_str(), s.call.c_str(), rf, s.grid.c_str(), s.snr);
+                std::lock_guard<std::mutex> lk(gm); got.push_back(b);
+            }, nullptr, nullptr);
+        const double wStart = (slot + wspr::kStartSec - t0) * rate, sps = rate * 8192.0 / 12000.0;
+        double wph = 0, fph = 0;
+        const int blk = 4096;
+        std::vector<cf32> x((size_t)blk);
+        for (size_t o = 0; o < (size_t)(secs * rate); o += blk) {
+            for (int i = 0; i < blk; ++i) {
+                const double n = (double)(o + (size_t)i);
+                cf32 v(nd(g), nd(g));
+                const double k = (n - wStart) / sps;
+                if (k >= 0 && k < wspr::kSymbols) {
+                    const double f = wRf - 1.5 * wspr::kBaud + tones[(int)k] * wspr::kBaud - s20.centreHz;
+                    wph += 2 * M_PI * f / rate;
+                    v += cf32((float)(A * std::cos(wph)), (float)(A * std::sin(wph)));
+                }
+                const double ft = std::fmod(t0 + n / rate - 0.5, 15.0);   // FT8: every 15 s slot, from +0.5 s
+                if (ft < 79 * FT8_SYMBOL_PERIOD) {
+                    const int s = (int)(ft / FT8_SYMBOL_PERIOD);
+                    fph += 2 * M_PI * (ft8Rf + ft8[(size_t)s] / FT8_SYMBOL_PERIOD - s20.centreHz) / rate;
+                    v += cf32((float)(0.02 * std::cos(fph)), (float)(0.02 * std::sin(fph)));
+                }
+                x[(size_t)i] = v;
+            }
+            sp.feedIq(x.data(), blk, rate, s20.centreHz, t0 + (double)(o + blk) / rate);
+            if ((o / blk) % 8 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const double w0 = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        auto wsprSpot = [&] { std::lock_guard<std::mutex> lk(gm); for (auto& s : got) if (s.rfind("WSPR ", 0) == 0) return s; return std::string(); };
+        while (wsprSpot().empty() && std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() - w0 < 30)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        const std::string ws = wsprSpot();
+        char md[16] = {}, call[16] = {}, grid[16] = {}; double rf = 0; int sn = -99;
+        std::sscanf(ws.c_str(), "%15s %15s %lf %15s %d", md, call, &rf, grid, &sn);
+        std::printf("    engines %zu (%s); slots %llu; %s\n", sp.engines(), sp.describe().c_str(), (unsigned long long)sp.slotsDecoded(), ws.empty() ? "no WSPR spot" : ws.c_str());
+        ok(std::string(call) == "G4ABC" && std::string(grid) == "IO92" && near(rf, wRf, 1.0),
+           "WSPR G4ABC IO92 spotted as \"WSPR\" at its RF (dial 14.0956 + 1523 Hz): " + ws);
+        ok(std::abs(sn - snr) <= 2, "…its SNR (WSPRnet scale) within 2 dB of the " + std::to_string((int)snr) + " dB it was sent at: " + std::to_string(sn));
+        bool ft8ok = false; { std::lock_guard<std::mutex> lk(gm); for (auto& s : got) if (s.rfind("FT8 M0FTE", 0) == 0) ft8ok = true; }
+        ok(ft8ok, "…while FT8 on its own dial in the same slice still decodes");
+        ok(sp.slotsSkipped() == 0, "no slot skipped");
+    }
+
+    /* ★ WSPR IN SINGLE MODE: fed only while the listener sits on a WSPR dial — on the FT8 dial its 1400–1600 Hz is FT8
+     *  traffic, and the engine is not even fed. The same 48 kHz audio both ways. */
+    std::printf("── WSPR in Single mode: only at a WSPR dial ──\n");
+    {
+        const double slot = std::ceil(vibeUtcNow() / 120.0) * 120.0 + 120.0;
+        std::vector<float> a((size_t)(48000 * 124), 0.f);
+        wsprsynth::addNoise(a, 77, 0.05);
+        wsprsynth::Sig s; s.msg = wsprsynth::msg1("DL1XYZ", "JO62", 30); s.snr = -22; s.centreHz = 1477;
+        // wspr_synth's buffer starts kLeadSec before the minute; ours 3 s before: place it 1 s in
+        std::vector<float> sig((size_t)(48000 * 122), 0.f);
+        wsprsynth::addSignal(sig, 48000, s, 0.05, 5);
+        for (size_t i = 0; i < sig.size(); ++i) a[i + 48000] += sig[i];
+        auto run = [&](double dial) {
+            std::vector<std::string> got; std::mutex gm;
+            digi::Spotter sp(digi::Spotter::Scope::Single, digi::modes(),
+                [&](const digi::Spot& o, double rf) { char b[120]; std::snprintf(b, sizeof b, "%s %s %.0f", o.mode.c_str(), o.call.c_str(), rf);
+                    std::lock_guard<std::mutex> lk(gm); got.push_back(b); }, [dial] { return dial; }, nullptr);
+            for (size_t o = 0; o < a.size(); o += 4800) {
+                sp.feedAudio48k(&a[o], (int)std::min<size_t>(4800, a.size() - o), slot - 3.0 + (double)(o + 4800) / 48000);
+                if ((o / 4800) % 16 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            const double w0 = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            for (;;) {
+                { std::lock_guard<std::mutex> lk(gm); for (auto& g : got) if (g.rfind("WSPR", 0) == 0) return g; }
+                if (std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() - w0 > (dial == 14095600 ? 30 : 4)) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            return std::string();
+        };
+        const std::string at = run(14095600), off = run(14074000);
+        ok(at.rfind("WSPR DL1XYZ 14097077", 0) == 0, "on the 20 m WSPR dial: WSPR DL1XYZ at dial + 1477 Hz: " + at);
+        ok(off.empty(), "on the FT8 dial: no WSPR decode (the engine is not fed there)");
     }
 
     std::printf("── pure noise: no spot ──\n");

@@ -33,6 +33,7 @@ public:
             for (size_t i = 1; i < sub.size(); ++i) sub[i] = (char)(sub[i] - 'A' + 'a');
             s.text = j.frame.text + " (" + sub + ")";
             s.snr = j.snr; s.audioHz = j.audioHz; s.dt = j.dt;
+            s.slotUtc = j.slotUtc;              // ★ its submode's slot start
             onSpot(s);
         };
         d_.loadProbe = [this] { return loaded ? loaded() : false; };
