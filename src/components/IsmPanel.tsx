@@ -25,7 +25,7 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DEC
 import { scrollLane } from '../constants/popupTokens';
 import { captureRegion, capturedRegion, useKeyboardMode, useListNav, useNavFocus } from './PanelNav';
 import { screenNavRef } from './ScreenNav';
-import { ISM_KINDS, ismAgo, ismBandText, ismEmptyText, ismLine, ismMeterDetail, ismRows, ismStatus, nextPressure, parseIsmPrefs,
+import { ISM_KINDS, ismAged, ismAgo, ismBandText, ismEmptyText, ismLine, ismMeterDetail, ismRows, ismStatus, nextPressure, parseIsmPrefs,
          ismNavKeys, type IsmNavKey, type IsmReport, type IsmUnits } from '../services/ism';
 
 const ISM_MAX_W = 760;
@@ -77,7 +77,12 @@ export default function IsmPanel(p: IsmPanelProps) {
   const tall = p.tall && bigUseful;
   const bodyH = Math.round(tall ? bigBody : smallBody);
 
-  const r = p.report;
+  /* ★ V12: between reports — 5 s apart on a busy meter band (local_sdr_shim.cpp ismTick) — the ages tick on here */
+  const [arrived, setArrived] = useState(0);
+  const [, setTick] = useState(0);
+  useEffect(() => { setArrived(Date.now()); }, [p.report]);
+  useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  const r = p.report && arrived ? ismAged(p.report, Math.floor((Date.now() - arrived) / 1000)) : p.report;
   const rows = ismRows(r, filter);
   const band = p.error ? 'not available' : r ? ismBandText(r) : 'finding the band…';
 

@@ -65,6 +65,9 @@ eq('status: meters and the 0.9 MS/s gap', app.ismStatus(app.ismSanitise(r868)!),
 eq('status words', app.ismStatus(app.ismSanitise(r868)!).includes('2 meters · 868.95 not covered at 0.9 MS/s'), true);
 eq('the meter filter', app.ismRows(a, 'meter').map((d) => d.key), ['d6', 'd7']);
 eq('the empty meter line', app.ismEmptyText('meter'), web.ismEmptyText('meter'));
+eq('ages tick on between reports', app.ismAged(a!, 4).devices.map((d) => d.seen), web.ismAged(w!, 4).devices.map((d) => d.seen));
+eq('…by the seconds since the report', app.ismAged(a!, 4).devices[0].seen, a!.devices[0].seen + 4);
+eq('…and not at all at 0', app.ismAged(a!, 0), a);
 const custom = app.ismSanitise({ ...report, custom: 1, centre: 433_420_000 })!;
 eq('status on an exact frequency', app.ismStatus(custom), web.ismStatus(web.ismSanitise({ ...report, custom: 1, centre: 433_420_000 })!));
 eq('band text on an exact frequency', app.ismBandText(custom), '433.420 MHz');

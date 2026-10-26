@@ -142,6 +142,13 @@ export function ismLine(d: IsmDevice, u: IsmUnits): string {
   return p.join(' · ');
 }
 
+/** ★ V12: the report as it stands `sec` seconds after it arrived — every "last heard" aged by that much. A busy 868 band
+ *  (many meters) is sent every 5 s rather than every second (local_sdr_shim.cpp ismTick), so the list ages itself. */
+export function ismAged(r: IsmReport, sec: number): IsmReport {
+  if (!(sec > 0)) return r;
+  return { ...r, devices: r.devices.map((d) => ({ ...d, seen: d.seen + sec })) };
+}
+
 /** "now", "12 s", "3 min", "1 h 5 min" — how long since the device was last heard. */
 export function ismAgo(sec: number): string {
   if (!(sec >= 0) || sec < 2) return 'now';
@@ -293,7 +300,14 @@ export class IsmBox {
   }
   private bandsCan: { down: boolean; up: boolean } = { down: true, up: true };
 
-  show() { this.mount().hidden = false; this.place(); if (!this.onResize) { this.onResize = () => this.place(); window.addEventListener('resize', this.onResize); } }
+  private at = 0;                                  // ★ when the last report arrived (ms)
+  private ager: ReturnType<typeof setInterval> | null = null;
+  show() {
+    this.mount().hidden = false; this.place();
+    if (!this.onResize) { this.onResize = () => this.place(); window.addEventListener('resize', this.onResize); }
+    // ★ between reports (5 s apart on a busy meter band) the ages tick on here
+    if (!this.ager) this.ager = setInterval(() => { if (this.last && Date.now() - this.at > 1500) this.drawList(); }, 1000);
+  }
   private onResize: (() => void) | null = null;
   /** ★ Just above the control deck, whatever its height (a phone's deck is ~4× a desktop's): the box must never sit over
    *  the controls, and on a short screen it shrinks rather than covering the waterfall entirely. */
@@ -311,6 +325,7 @@ export class IsmBox {
   }
   hide() {
     if (this.el) this.el.hidden = true; this.last = null; this.lastHtml = '';
+    if (this.ager) { clearInterval(this.ager); this.ager = null; }
     if (this.onResize) { window.removeEventListener('resize', this.onResize); this.onResize = null; }
   }
   get visible() { return !!this.el && !this.el.hidden; }
@@ -318,13 +333,19 @@ export class IsmBox {
   /** A report. `can`: whether a band exists below / above (the arrows grey at the ends — the server clamps). */
   update(r: IsmReport, can: { down: boolean; up: boolean }) {
     const el = this.mount();
+    if (r !== this.last) this.at = Date.now();
     this.last = r; this.bandsCan = can;
     (el.querySelector('#ismBandName') as HTMLElement).textContent = r.custom ? `${(r.centre / 1e6).toFixed(3)} MHz` : (r.bandName || 'ISM');
     (el.querySelector('#ismStat') as HTMLElement).textContent = ismStatus(r);
     (el.querySelector('#ismDown') as HTMLButtonElement).disabled = !can.down;
     (el.querySelector('#ismUp') as HTMLButtonElement).disabled = !can.up;
     this.place();
+    this.drawList();
+  }
+  private drawList() {
+    if (!this.el || !this.last) return;
+    const r = ismAged(this.last, Math.floor((Date.now() - this.at) / 1000));
     const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey);
-    if (html !== this.lastHtml) { (el.querySelector('#ismList') as HTMLElement).innerHTML = html; this.lastHtml = html; }
+    if (html !== this.lastHtml) { (this.el.querySelector('#ismList') as HTMLElement).innerHTML = html; this.lastHtml = html; }
   }
 }

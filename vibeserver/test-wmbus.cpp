@@ -574,7 +574,7 @@ int main(int argc, char** argv) {
     printf(" sensitivity (T1 / C1-A / S1, Kamstrup frame, 2.4 MS/s; SNR in the 480 kHz channel)\n");
     {
         const double amp = 0.1;
-        const double sigmas[] = {0.02, 0.03, 0.04, 0.05, 0.06, 0.07};
+        const double sigmas[] = {0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.085, 0.1};
         for (int mi = 0; mi < 3; ++mi) {
             printf("   %-5s", mi == 0 ? "T1" : mi == 1 ? "C1-A" : "S1");
             for (double sg : sigmas) {
@@ -612,6 +612,46 @@ int main(int argc, char** argv) {
         size_t m2 = 0; for (auto& r : got) m2 += r.kind == "meter";
         CHECK(m2 == 0, "carriers and a sync-less preamble: %zu meters", m2);
         printf("   %zu bursts from noise and carriers, %llu reached the meter decoder, 0 meters\n", nb, (unsigned long long)st.tried);
+        /* ★★ THE DECODER ITSELF, HAMMERED: the front end rarely opens a channel on noise, so the bursts are made here — at
+         *  480 kS/s, at 868.95 and 868.30: pure noise, and FSK with a real preamble and sync followed by RANDOM chips (the
+         *  worst case: everything up to the frame looks right, and only the CRCs stand in the way). Zero meters allowed. */
+        {
+            std::mt19937 rng(77); std::normal_distribution<float> g(0, 0.05f); std::uniform_int_distribution<int> bit(0, 1);
+            const double R = 480e3;
+            size_t fakes = 0, tried = 0;
+            auto burstOf = [&](const Chips& c, double chipHz, double offInChan, double amp) {
+                const size_t n = size_t(0.008 * R) + size_t(double(c.size()) / chipHz * R) + size_t(0.006 * R);
+                auto v = std::make_shared<std::vector<cf>>(n);
+                double ph = 0;
+                for (size_t i = 0; i < n; ++i) {
+                    (*v)[i] = cf(g(rng), g(rng));
+                    const double tt = double(i) / R - 0.008;
+                    if (tt >= 0 && tt * chipHz < double(c.size())) {
+                        ph += 2 * M_PI * (offInChan + (c[size_t(tt * chipHz)] ? 50e3 : -50e3)) / R;
+                        (*v)[i] += cf(float(amp * std::cos(ph)), float(amp * std::sin(ph)));
+                    }
+                }
+                return std::shared_ptr<const std::vector<cf>>(v);
+            };
+            for (int k = 0; k < 3000; ++k) {
+                Burst b; b.bbRate = R; b.levelDb = -20; b.noiseDb = -40;
+                const int kind = k % 6;
+                Chips c;
+                if (kind == 0 || kind == 1) c.assign(size_t(1000 + k % 500), 0);                    // noise only (amp 0)
+                else if (kind == 2) { for (int i = 0; i < 24; ++i) put(c, "01"); put(c, "0000111101"); for (int i = 0; i < 1200; ++i) c.push_back(uint8_t(bit(rng))); }
+                else if (kind == 3) { for (int i = 0; i < 16; ++i) put(c, "01"); put(c, "01010100001111010101010011001101"); for (int i = 0; i < 800; ++i) c.push_back(uint8_t(bit(rng))); }
+                else if (kind == 4) { for (int i = 0; i < 16; ++i) put(c, "01"); put(c, "01010100001111010101010000111101"); for (int i = 0; i < 800; ++i) c.push_back(uint8_t(bit(rng))); }
+                else { for (int i = 0; i < 40; ++i) put(c, "01"); put(c, "000111011010010110"); for (int i = 0; i < 600; ++i) c.push_back(uint8_t(bit(rng))); }
+                const bool s = kind == 5;
+                b.offHz = s ? -300e3 : 350e3;
+                b.bb = burstOf(c, s ? 32768 : 100e3, 0, kind <= 1 ? 0.0 : 0.3);
+                wmbus::Meter m; wmbus::Stats ws;
+                if (wmbus::decodeBurst(b, 868.6e6, m, &ws) == 1) ++fakes;
+                tried += ws.tried;
+            }
+            CHECK(fakes == 0, "3000 noise / random-data bursts at the meter decoder: %zu meters", fakes);
+            printf("   3000 made bursts (1000 noise, 2000 FSK with a true preamble and sync, then random chips): %zu tried, %zu meters\n", tried, fakes);
+        }
         // ★ the real 868.6 MHz capture (the Pi 500's RTL, MW antenna — no meters expected; a no-false-decodes check)
         const char* rec = std::getenv("VIBE_WMBUS_REC");
         if (rec && *rec) {

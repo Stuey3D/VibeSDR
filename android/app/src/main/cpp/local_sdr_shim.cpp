@@ -13367,7 +13367,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::vector<int> ismGains_;
     int ismGainIdx_ = -1, ismGainSet_ = -999, ismGainStart_ = -1;
     bool ismManual_ = false;
-    double ismLastReport_ = 0, ismLastGain_ = 0, ismQuietSince_ = 0;
+    double ismLastReport_ = 0, ismLastGain_ = 0, ismQuietSince_ = 0; size_t ismLastSize_ = 0;
     /* ★★ V12 2026-10-25 — ISM IN THE GALLERY (Stuart: "ISM needs to be in the gallery too … same as OWRX does it but in
      *  our readable format"; vibe_ism_gallery.h). Every run of the decoder service on a band hands its counted readings to
      *  a DayLog: the day's .txt for that band and its summary card. WHO is listening is said, not hidden: "live" for a
@@ -13396,7 +13396,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return b.centreHz + std::max(40e3, std::min(b.dcOffsetHz, fit));
     }
 
-    void sendIsmAll() {
+    size_t sendIsmAll() {
         std::string r = g_ism.report();
         const int curG = g_gainTarget.load(std::memory_order_relaxed);
         const int shownG = curG >= 0 && curG != ismGainSet_ ? curG : ismGainSet_;
@@ -13408,6 +13408,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<std::shared_ptr<net::Socket>> socks;
         { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
         for (auto& sk : socks) sendText(sk, r);
+        return r.size();
     }
 
     /** Put the capture on `b` (or on `customHz` when > 0). Entering the mode first saves the listener's state. */
@@ -13480,7 +13481,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_vsLockedRate.store(0.0);
         g_ismMode.store(true);
         if (ismGainIdx_ >= 0) LocalSdrShim::instance().setGain(ismGainSet_);
-        ismLastReport_ = ismLastGain_ = ismQuietSince_ = nowSecs();
+        ismLastReport_ = ismLastGain_ = ismQuietSince_ = nowSecs(); ismLastSize_ = 0;
         applyAutoIf();
         ismTune(b, customHz, true);
     }
@@ -13538,7 +13539,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** From the DSP loop: the report once a second, the gain rule every 2 s. */
     void ismTick() {
         const double t = nowSecs();
-        if (t - ismLastReport_ >= 1.0) { ismLastReport_ = t; sendIsmAll(); }
+        /* ★★ V12 wM-Bus (WMBUS-DECODER.md §5.5, measured by test-wmbus): a meter's row is ~480 bytes, so a street of 300
+         *  meters made the once-a-second report 141 KB/s for EVERY listener. Past 16 KB the full list goes every 5 s
+         *  instead (a joiner still gets it at once); the clients age "last heard" between reports themselves. */
+        if (t - ismLastReport_ >= (ismLastSize_ > 16384 ? 5.0 : 1.0)) { ismLastReport_ = t; ismLastSize_ = sendIsmAll(); }
         if (t - ismLastGain_ < 2.0) return;
         ismLastGain_ = t;
         if (ismGains_.empty() || ismGainIdx_ < 0) return;

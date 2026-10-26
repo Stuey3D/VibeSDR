@@ -168,6 +168,13 @@ export function ismLine(d: IsmDevice, u: IsmUnits): string {
   return p.join(' · ');
 }
 
+/** ★ V12: the report as it stands `sec` seconds after it arrived — every "last heard" aged by that much. A busy 868 band
+ *  (many meters) is sent every 5 s rather than every second (local_sdr_shim.cpp ismTick), so the list ages itself. */
+export function ismAged(r: IsmReport, sec: number): IsmReport {
+  if (!(sec > 0)) return r;
+  return { ...r, devices: r.devices.map((d) => ({ ...d, seen: d.seen + sec })) };
+}
+
 /** "now", "12 s", "3 min", "1 h 5 min" — how long since the device was last heard. */
 export function ismAgo(sec: number): string {
   if (!(sec >= 0) || sec < 2) return 'now';

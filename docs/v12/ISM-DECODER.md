@@ -196,6 +196,12 @@ path through `utils/needleGeometry`). What the brief asked for, kept for referen
   DAB behaviour either (checked `web/client/src/tutorial.ts` — nothing there misdescribes ISM).
 - The watch: nothing (no ISM there).
 
+## Wireless M-Bus meters (V12, 2026-10-26)
+
+Water, heat and gas meters on the 868 band — T1, C1 (frame A and B) and S1, decoded from the channel's samples, kind
+`meter`, the METER chip, serials shown (Stuart), never decrypted. On the 868 band the burst channel is ~500 kS/s and the
+slicer's smoothing is in µs, so every family above slices as before. Everything about it: `WMBUS-DECODER.md`.
+
 ## Protocol coverage (phase 1)
 
 | Family | Band / mod | Status | Source (non-GPL) | Assumed / open |

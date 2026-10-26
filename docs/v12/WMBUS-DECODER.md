@@ -1,7 +1,7 @@
 # Wireless M-Bus meters (V12): water, heat, gas and electricity meters in ISM mode
 
-**Status:** design only (2026-10-25), branch `v12-wmbus` from `v12-experimental`. Nothing built yet. Written so the build
-agent can implement it without re-researching; every fact below is cited to a published source at the end.
+**Status:** BUILT 2026-10-26 on branch `v12-wmbus` (phases 1-2 and most of 3 — see "As built" just below). Designed
+2026-10-25; the design text after "As built" is kept as written, with its errata marked there.
 **Why:** Stuart wants to see the meters around him, mainly **Sensus** water meters (UK; the iPERL). He expects the
 payload to be encrypted and wants the **serial numbers**.
 **Related:** `ISM-DECODER.md` (the mode this lives in — read it first), `BACKGROUND-DECODING.md` (ISM profiles),
@@ -12,6 +12,63 @@ Water meter · Sensus · 12345678 · v0x68 · encrypted (AES) · every 16 s · s
 Cold water meter · Kamstrup · 87654321 · v0x1B · 123.456 m³ · flow 0.012 m³/h · 30 Sep 120.111 m³ · no alarms · every 16 s · signal 18 dB
 Heat meter · Diehl · 00451223 · v0x20 · encrypted (AES, KDF) · every 2 min · signal 9 dB
 ```
+
+---
+
+## As built (2026-10-26)
+
+**Code:** `vibe_wmbus.h` (the decoder), `vibe_ism.h` (`setChanRate`, `setKeepBaseband`, `Burst::bb`, µs smoothing),
+`vibe_ism_service.h` (meters in the Tracker, the report, `dedupeMeters`), `vibe_ism_gallery.h` (the throttle, the card's
+meter counts), `vibe_ism_bands.h` (868 `needHz` 450 kHz), `local_sdr_shim.cpp` (the 16 KB / 5 s report rule),
+`web/client/src/ism.ts` + `src/services/ism.ts` + `IsmPanel.tsx` (METER chip, line, detail), `ism-offline`.
+**Tests:** `vibeserver/test-wmbus.cpp` (312 checks with the real recording), `test-ism` (all families also through the
+480 kS/s channel), `scripts/test-server-ism.mjs` and `test-web-ism.mjs` (meters on the wire and in headless Edge at
+desktop and 390 px — `VIBE_WMBUS_CLIP`, made by `test-wmbus --write-clip`), `scripts/test_ism_app.ts`.
+
+**The ASSUMED items, checked:**
+- **3-out-of-6 table — CONFIRMED** against TI's own reference tables for AN067 (SWRA234's encode and decode tables; TI
+  licence, not GPL) — all 16 words match §2.1, high nibble first, MSB first.
+- **Preambles and syncs — CONFIRMED**: S `n×01 + 000111011010010110`, T `n×01 + 0000111101` (TI AN067 Table 9); C
+  `16×01 + 0101010000111101` then `0101010011001101` (frame A) / `0101010000111101` (frame B) (Infineon TDA5340 wM-Bus
+  note, Table 2-1). C1 deviation 43-47 kHz, T1 rate 90-110 kchip/s, S ±1.5 % TX / ±2 % RX (same notes).
+- **CRC — CONFIRMED** (AN067 §5.4: the polynomial, init 0, final complement; check value 0xC2B7).
+- **Frame format B with L > 127** — still ASSUMED (built and tested both ways; no real capture).
+- **Maker names** — still ASSUMED: the DLMS FLAG directory is a script-driven form that could not be read; the table holds
+  only 16 well-known codes, everything else shows its three letters.
+- **ELL 0x8D encryption bits (SN bits 29-31), AFL length byte, the CW extension byte for modes 7/13, the 0xFD VIFE codes**
+  — still ASSUMED, marked in the code. 0x8E/0x8F say "extended link layer" and parse no further.
+- **The radio ID is the printed serial; ACC steps once per frame; T1 or C1 for the iPERL** — need Stuart's capture.
+
+**Changes from the design, and why:**
+- **Errata in §2.3:** the Kamstrup frame's date bytes `40 39` are day 0 (type G: day = bits 0-4); 30 Sep 2026 is
+  `5E 39`. The CRCs printed are right for the bytes printed. The decoder refuses a day-0 date and shows the stored value
+  as "stored 120.111 m³"; the tests use the corrected frame for the "30 Sep" line.
+- **The interval (§4.3) is time over steps, not a median of gaps:** every gap carries two jitters, and the median of 8
+  read "every 17 s" for a 16 s meter with ±1 s jitter. Now Σ time ÷ Σ steps over the last 16 samples, strays (> 25 % off
+  the median step) left out. Frozen ACC still falls back to the median raw gap.
+- **A frame out of two channels:** a T1/C1 burst is ~200 kHz wide and the detector can open a second channel on its
+  skirt. The decoder gives up when its carrier is > 90 kHz off the channel centre, and the service keeps the
+  better-centred copy of a frame heard twice within 0.2 s.
+- **Preambles are searched earliest-first and judged in pairs of spacings** (a data stretch of 0101… — Manchester 0x00,
+  NRZ 0x55 — can be longer than a short preamble; unbalanced NRZ data biases the first carrier estimate so single
+  spacings alternate short/long).
+- **The report-size rule was built** (§5.5 said: only if the number says so): a meter's row is ~480 bytes, 300 meters
+  made the once-a-second report 141 KB/s per listener. Past 16 KB the full list goes every 5 s; web and app age "last
+  heard" themselves between reports. **The meter cap of 500** is built too.
+- **Example §4.2's "Meter · ZRI · …"**: ZRI is in the maker table (Zenner), so the letters example uses an unknown code.
+- **The detail** is the row's hover on the web and a TAP (web and app) — touch has no hover.
+
+**Measured (Mac, M-series; Pi 2 not touched):** the meter decoder 0.1 ms a burst (NEON and scalar alike — the SIMD
+discriminator is a few % of it; the per-burst cost is the crossings and the chip integrals); 10.2 s of 868 capture at
+2.4 MS/s with 50 T1 frames: 2.0 % of one core for the whole ISM front end + decoders. **Pi 2 estimated** at ~10-15× the
+Mac per core: ~1-1.5 ms a burst, so a street of 50 meters at 16 s (~3 bursts/s) is ≤ 0.5 % of one Pi 2 core on top of
+ISM's own front end (10-20 % estimated, ISM-DECODER.md). RAM: a burst's baseband 8 bytes a sample + the decoder's 16
+(a 30 ms T1 frame ≈ 350 KB transient, freed at once; the decoder skips bursts > 250 ms); ~1 KB per listed meter.
+**Sensitivity** (Kamstrup frame, 10 tries each, SNR in the 480 kHz channel): T1 100 % to 10 dB, 90 % at 7.1, 80 % at
+5.4; C1-A 100 % to 8.4 dB, 70 % at 5.4; S1 100 % to 8.4 dB, 40 % at 5.4. **False meters: 0** — 20 s of noise, two
+carriers, a sync-less preamble, 3000 hand-made bursts (noise, and FSK with a true preamble and sync then random chips),
+and the Pi 500's real 30 s 868.6 MHz capture (no bursts at all in it — its MW antenna; a no-false-decodes check only).
+**No real meter recording exists yet** — the validation waits for a 60 s capture near Stuart's iPERL (§7).
 
 ---
 
