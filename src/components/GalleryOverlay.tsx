@@ -41,6 +41,8 @@ const KINDS: { id: string; label: string }[] = [
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' }, { id: 'ft8', label: 'FT8' },
   // ★★ V12 2026-10-25: CW — a listener's decoded text (a run) and the skimmer's spots summary cards (vibe_bgdecode.h)
   { id: 'cw', label: 'CW' },
+  // ★★ V12 2026-10-26: PSK31/63 — the same, from the server's PSK decoder and skimmer
+  { id: 'psk', label: 'PSK' },
   // ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card (vibe_ism_gallery.h)
   { id: 'ism', label: 'ISM' },
   // ★★ V12 2026-10-26: DSC — each frequency's day of calls as a .txt, every distress/urgency call on its own (vibe_dsc_gallery.h)
