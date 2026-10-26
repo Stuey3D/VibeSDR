@@ -1,0 +1,4 @@
+# VibeSDR's patch series for FAAD2 2.11.3 — the PLAIN (DAB+) build only (libfaad_dab.a; the DRM build stays stock).
+# Applied in this order by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh (patch -p1, in the FAAD2
+# source tree). FAAD2 is GPL-2.0-or-later; these patches are too, and are published with it. Each patch's header says
+# what it changes, why, and what it was measured against (output vs stock FAAD2 on real DAB+ unit logs).

@@ -20,6 +20,7 @@ RUN dpkg --add-architecture armhf && apt-get update && apt-get install -y --no-i
 COPY armhf-toolchain.cmake /opt/armhf-toolchain.cmake
 # ★ The ARMv7+NEON prefix the armhf package links (see build-deps.sh; same pins as the Mac).
 COPY build-deps.sh librtlsdr-cancel-wait.patch /opt/
+COPY faad2-patches /opt/faad2-patches
 # ★ Two compile jobs, niced: the Mac overheats and the Lenovo is a live receiver.
 ARG DEPS_JOBS=2
 # ★ build-debs-remote.sh passes DEPS_NICE=19 on the Lenovo (a live receiver); 10 and DEPS_JOBS=8 on the Mac.

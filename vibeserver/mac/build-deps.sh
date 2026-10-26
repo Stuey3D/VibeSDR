@@ -220,11 +220,22 @@ fi
 # ★★★ The DRM build above refuses DAB+, and the plain build exports the same names — see linux/build-deps.sh, which does
 #     the same thing the same way: a forced include #defines every global (read off a first plain build) to vibedab_<name>,
 #     and the archive is CHECKED to define nothing unprefixed. vibe_dab_faad.h calls it under the prefixed names.
-FAADD_STAMP="faad2-dab $FAAD_VER $FAAD_SHA min=$MIN arch=$ARCH $CCVER"
+# ★★ V12: optimised, with VibeSDR's patch series — see linux/build-deps.sh (the same flag, the same series, in order).
+FAAD_DAB_OPT="-funsafe-math-optimizations"
+FAAD_PATCHES="$MAC/../linux/faad2-patches"
+FAAD_SERIES_SUM="$( { [ -f "$FAAD_PATCHES/series" ] && cat "$FAAD_PATCHES/series" && grep -v '^#' "$FAAD_PATCHES/series" | while IFS= read -r p; do [ -n "$p" ] && cat "$FAAD_PATCHES/$p"; done; } 2>/dev/null | shasum -a 256 | cut -c1-16)"
+FAADD_STAMP="faad2-dab $FAAD_VER $FAAD_SHA min=$MIN arch=$ARCH $CCVER opt=$FAAD_DAB_OPT patches=$FAAD_SERIES_SUM"
 if stamp_ok faad2-dab "$FAADD_STAMP" "$PREFIX/lib/libfaad_dab.a"; then echo "==> FAAD2 $FAAD_VER (DAB+ build): up to date"; else
   echo "==> FAAD2 $FAAD_VER (plain build, prefixed, for DAB+): building for macOS $MIN"
   rm -rf "$WORK/faadd"; mkdir -p "$WORK/faadd"
   tar -xzf "$SRC/faad2-$FAAD_VER.tar.gz" -C "$WORK/faadd" --strip-components 1
+  if [ -f "$FAAD_PATCHES/series" ]; then
+    while IFS= read -r p; do
+      case "$p" in ""|\#*) continue ;; esac
+      patch -d "$WORK/faadd" -p1 -s < "$FAAD_PATCHES/$p" || { echo "!! FAAD2 patch $p did not apply"; exit 1; }
+      echo "    FAAD2 patch: $p"
+    done < "$FAAD_PATCHES/series"
+  fi
   # ★ TWO PASSES: the plain build defines globals the DRM one does not (LTP, MAIN prediction — measured), so the list is
   #   read off a first, unprefixed plain build, and the second build is the one kept.
   cmake -S "$WORK/faadd" -B "$WORK/faadd/b0" "${CMAKE_COMMON[@]}" -DCMAKE_C_FLAGS="$CFLAGS" \
@@ -235,7 +246,7 @@ if stamp_ok faad2-dab "$FAADD_STAMP" "$PREFIX/lib/libfaad_dab.a"; then echo "==>
     nm -gU "$WORK/faadd/b0/libfaad.a" 2>/dev/null | awk 'NF >= 3 && $2 ~ /^[TDBSRC]$/ {print $3}' | sed 's/^_//' | sort -u \
       | awk '{printf "#define %s vibedab_%s\n", $1, $1}'; } > "$WORK/faadd/faad_dab_prefix.h"
   [ "$(grep -c '^#define' "$WORK/faadd/faad_dab_prefix.h" || true)" -gt 50 ] || { echo "!! FAAD2 symbol list is short — refusing"; exit 1; }
-  cmake -S "$WORK/faadd" -B "$WORK/faadd/b" "${CMAKE_COMMON[@]}" -DCMAKE_C_FLAGS="$CFLAGS -include $WORK/faadd/faad_dab_prefix.h" \
+  cmake -S "$WORK/faadd" -B "$WORK/faadd/b" "${CMAKE_COMMON[@]}" -DCMAKE_C_FLAGS="$CFLAGS $FAAD_DAB_OPT -include $WORK/faadd/faad_dab_prefix.h" \
         -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF >>"$WORK/faadd.log" 2>&1 \
     && cmake --build "$WORK/faadd/b" --target faad -j"$JOBS" >>"$WORK/faadd.log" 2>&1 \
     || { tail -30 "$WORK/faadd.log"; echo "!! FAAD2 (DAB+ build) failed"; exit 1; }
