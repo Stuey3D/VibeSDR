@@ -76,14 +76,17 @@ fi
 
 # ── Official Raspberry Pi OS Lite, customised ───────────────────────────────────────────────────
 URL="https://downloads.raspberrypi.com/raspios_lite_${A}_latest"
-docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
+# ★★ THE BUILD HOST (2026-10-25): the Mac (arm64, colima) as before, or an x86-64 Linux box (the Lenovo). On x86 the
+#    container is native amd64 and BOTH image architectures run under QEMU in the chroot (only apt/dpkg run there).
+case "$(uname -m)" in x86_64|amd64) PLAT=linux/amd64 ;; *) PLAT=linux/arm64 ;; esac
+docker run --rm --privileged --cpus 2 --platform "$PLAT" -v /dev:/dev \
   -v "$OUT":/out -v "$HERE/stage-pocket/00-pocket/files":/pocket-files:ro \
   -e A="$A" -e URL="$URL" -e NAME="$NAME" -e COUNTRY="$COUNTRY" \
-  -e MAPGL_URL="$MAPGL_URL" -e MAPGL_BYTES="$MAPGL_BYTES" \
+  -e MAPGL_URL="$MAPGL_URL" -e MAPGL_BYTES="$MAPGL_BYTES" -e POCKET_ALLOW_NO_ARMV6="${POCKET_ALLOW_NO_ARMV6:-0}" \
   debian:trixie-slim /bin/bash -euo pipefail -c '
   apt-get update -qq
   apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk e2fsprogs dosfstools \
-      util-linux qemu-user-static >/dev/null
+      util-linux qemu-user-static binutils >/dev/null
   cd /out/work
   # ── 1. The base image, verified ──
   REAL=$(curl -fsSLI -o /dev/null -w "%{url_effective}" "$URL")
@@ -112,9 +115,11 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   BOOTDEV=$(losetup -f --show -o "$S1" --sizelimit "$Z1" "$IMG")
   cleanup() {
     set +e
-    for m in /mnt/r/dev/pts /mnt/r/dev /mnt/r/proc /mnt/r/sys /mnt/r/boot/firmware /mnt/r; do mountpoint -q $m && umount $m; done
+    for m in /mnt/r/proc/cpuinfo /mnt/r/dev/pts /mnt/r/dev /mnt/r/proc /mnt/r/sys /mnt/r/boot/firmware /mnt/r; do mountpoint -q $m && umount $m; done
     losetup -d "$BOOTDEV" "$ROOTDEV" 2>/dev/null
-    [ -n "${BINFMT:-}" ] && [ -e /proc/sys/fs/binfmt_misc/qemu-arm-pocket ] && echo -1 > /proc/sys/fs/binfmt_misc/qemu-arm-pocket
+    for b in qemu-arm-pocket qemu-aarch64-pocket; do
+      [ -n "${BINFMT:-}" ] && [ -e /proc/sys/fs/binfmt_misc/$b ] && echo -1 > /proc/sys/fs/binfmt_misc/$b
+    done
   }
   trap cleanup EXIT
   e2fsck -fy "$ROOTDEV" >/dev/null || true
@@ -122,14 +127,30 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   mkdir -p /mnt/r && mount "$ROOTDEV" /mnt/r
   mkdir -p /mnt/r/boot/firmware && mount "$BOOTDEV" /mnt/r/boot/firmware
   for d in dev dev/pts proc sys; do mount --bind /$d /mnt/r/$d; done
-  # ── 3. armhf runs under qemu-arm (no AArch32 on Apple Silicon) — registered for this run only ──
-  if [ "$A" = armhf ]; then
+  # ── 3. armhf runs under qemu-arm (no AArch32 on Apple Silicon); on an x86 host arm64 does too — registered for
+  #       this run only, and only when the chroot cannot already run the programs of the image ──
+  if ! chroot /mnt/r /bin/true 2>/dev/null; then
     mountpoint -q /proc/sys/fs/binfmt_misc || mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc
-    if [ ! -e /proc/sys/fs/binfmt_misc/qemu-arm ] && [ ! -e /proc/sys/fs/binfmt_misc/qemu-arm-pocket ]; then
+    if [ "$A" = armhf ] && [ ! -e /proc/sys/fs/binfmt_misc/qemu-arm ] && [ ! -e /proc/sys/fs/binfmt_misc/qemu-arm-pocket ]; then
       printf "%s" ":qemu-arm-pocket:M::\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-arm-static:F" \
         > /proc/sys/fs/binfmt_misc/register
       BINFMT=1
     fi
+    if [ "$A" = arm64 ] && [ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ] && [ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64-pocket ]; then
+      printf "%s" ":qemu-aarch64-pocket:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-aarch64-static:F" \
+        > /proc/sys/fs/binfmt_misc/register
+      BINFMT=1
+    fi
+    chroot /mnt/r /bin/true || { echo "!! cannot run $A programs in the chroot"; exit 1; }
+  fi
+  # ★★★ THE PROCESSOR THE PACKAGE SEES (2026-10-25). The armhf package picks its build in postinst from /proc/cpuinfo —
+  #     here the BUILD HOST cpuinfo: a Mac VM says asimd (NEON build kept, by luck), an x86 host says neither (the SCALAR
+  #     build would go on the card, and a Pi 2 would run at ARMv6 speed for ever). So the install sees an ARMv7+NEON
+  #     cpuinfo, the card always carries the NEON build, and vibeserver-pocket-cpu swaps in the ARMv6 one at boot on a
+  #     Pi 0 / Pi 1 — the 0/1/2 card. Checked with readelf after the customisation.
+  if [ "$A" = armhf ]; then
+    printf "processor\t: 0\nmodel name\t: ARMv7 Processor rev 5 (v7l)\nFeatures\t: half thumb fastmult vfp edsp neon vfpv3 tls vfpv4 idiva idivt\nCPU architecture: 7\n\nHardware\t: BCM2835 (image build: image/pocket/build-image.sh)\n" > /tmp/cpuinfo.neon
+    mount --bind /tmp/cpuinfo.neon /mnt/r/proc/cpuinfo
   fi
   # ── 4. Customise, inside the image ──
   cp /mnt/r/etc/resolv.conf /tmp/resolv.keep 2>/dev/null || true
@@ -143,6 +164,21 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   echo "==> High Detail Maps baked in: $(du -h /mnt/r/usr/lib/vibeserver/mapgl-detail/vibemap-detail.pmtiles | cut -f1) (verified: $MAPGL_BYTES bytes, PMTiles)"
   nice -n 15 chroot /mnt/r /usr/bin/env POCKET_COUNTRY="$COUNTRY" POCKET_HOSTNAME=vibeserversetup \
       bash /tmp/pocket-files/customise.sh
+  if [ "$A" = armhf ]; then
+    umount /mnt/r/proc/cpuinfo
+    [ "$(readelf -A /mnt/r/usr/bin/vibeserver | grep -c -e "Tag_CPU_arch: v7" -e "Tag_Advanced_SIMD_arch: NEON" || true)" = 2 ] \
+      || { echo "!! /usr/bin/vibeserver on the card is not the ARMv7+NEON build"; exit 1; }
+    echo "==> /usr/bin/vibeserver: ARMv7 + NEON (the Pi 2 build)"
+    if [ -x /mnt/r/usr/lib/vibeserver/armv6/vibeserver ] && [ -f /mnt/r/lib/systemd/system/vibeserver-pocket-cpu.service ]; then
+      echo "==> ARMv6 build + vibeserver-pocket-cpu present: a Pi 0 / Pi 1 picks the scalar build at boot"
+    elif [ "$POCKET_ALLOW_NO_ARMV6" = 1 ]; then
+      echo "!! NO ARMv6 build or no vibeserver-pocket-cpu in this package — this card will NOT run on a Pi 0 / Pi 1 (allowed by POCKET_ALLOW_NO_ARMV6=1)"
+    else
+      echo "!! this package lacks the ARMv6 build or vibeserver-pocket-cpu (11.0.11+) — the card would not run on a Pi 0 / Pi 1."
+      echo "   Use the published package (image/pocket/fetch-release-deb.sh armhf), or POCKET_ALLOW_NO_ARMV6=1 for a test card."
+      exit 1
+    fi
+  fi
   rm -f /mnt/r/etc/resolv.conf
   [ -f /tmp/resolv.keep ] && cp /tmp/resolv.keep /mnt/r/etc/resolv.conf || true
   # ★ The SSH host keys and machine-id must be made on the box, not shared by every card.

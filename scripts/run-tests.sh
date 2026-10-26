@@ -169,6 +169,9 @@ deps_for() {
     test-parent-watch)  echo "$SRC/parent_watch.cpp" ;;
     # ★★ The pocket image's daemon side: captive answers, the first-run claim, the Wi-Fi request.
     test-pocket)        echo "$SRC/pocket.cpp" ;;
+    # ★★★ The dual-stack listener and IPv6 client classes (2026-10-25): both families on one socket, an IPv4 client
+    #     reading exactly as before, the LAN prefixes and the /64 lockout key.
+    test-ipclass)       echo "android/app/src/main/cpp/net_shim.cpp" ;;
     # ★★ The config survives a pulled plug: atomic save, last-good .bak, refusal of a truncated file.
     test-config-durable) echo "$SRC/vibeserver_config.cpp" ;;
     # ★★★ Going back from a V12 beta keeps V12's settings: unknown config keys survive a load + save (11.0.10-4).
@@ -275,6 +278,9 @@ printf '\n\033[1m── gain write path ──\033[0m\n'
 if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).
 if node scripts/test-setup-wifi-name.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node scripts/test-setup-wifi-wired.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ New Wi-Fi hardware on a set-up box (a USB dongle added later, 2026-10-25): "configure it now?" — Configure / Not now.
+if node scripts/test-setup-wifi-new.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ Fork labelling (directory forkOf): a fork's name is shown, checked; official names refused as fork names.
 if node --no-warnings directory/scripts/test-fork.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ "In use by another app" through the directory (2026-10-18): the listing carries it, a held radio is never FREE,
@@ -336,6 +342,14 @@ if python3 vibeserver/linux/test_vibeserver_diagnostics.py; then pass=$((pass+1)
 #     without the marker, idempotent, config.txt lines once, an owner's own change kept, the package list drives what
 #     Update installs — and vibeserver-maintenance's `update` with apt + overlayroot-chroot stubbed.
 if python3 vibeserver/linux/pocket/test_pocket_converge.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE READ-ONLY SEAL ON BOTH BOOT CHAINS (2026-10-25, image/sbc): cmdline.txt on a Raspberry Pi, extraargs= in
+#    armbianEnv.txt / dietpiEnv.txt on a U-Boot board — once, the owner's own arguments kept, nothing without the marker.
+#    And the build the card's processor can run (vibeserver-pocket-cpu): ARMv6 on a Pi Zero / Pi 1, nothing elsewhere.
+#    The owner's SSH switch (11.0.11): password on stdin only, only the hash kept, restored after a sealed reboot, off = locked.
+if python3 vibeserver/linux/pocket/test_pocket_reset.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if python3 vibeserver/linux/pocket/test_pocket_ssh.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if python3 vibeserver/linux/pocket/test_pocket_cpu.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if python3 vibeserver/linux/pocket/test_pocket_seal.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ RECEIVE BETA UPDATES (2026-10-22). The root helper's beta-on / beta-off / update-stable with apt stubbed, and the
 #     choice of what Update VibeServer installs (beta on/off × installed × listed, the downgrade back to stable included).
 if python3 vibeserver/linux/test_vibeserver_maintenance.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -843,6 +857,18 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     stopped the full-rate stream under clientMtx, and its applyAutoIf() took clientMtx again). Same VIBESERVER_BIN rule.
 printf '\n\033[1m── raw IQ: a vanished client does not wedge the radio (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-iq-close-deadlock.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ ONE .local NAME ON A PORTABLE (2026-10-25): the server hands its name to the root service (avahi publishes it) and
+#     runs no responder of its own there; anywhere else its responder runs as before.
+printf '\n\033[1m── pocket: one .local name, through avahi (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-pocket-mdns.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ DUAL-STACK (2026-10-25, Nick's Orange Pi One was reachable by name on IPv6 only): an IPv4 and an IPv6 client on
+#     one listener, each classified (local / lan) and logged exactly as an IPv4 client always was.
+printf '\n\033[1m── dual-stack: IPv4 and IPv6 clients, classified and logged (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dualstack-clients.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ PORTABLE WI-FI (2026-10-10): on a pocket box, on its own network, the menu offers Network | Own Wi-Fi with the

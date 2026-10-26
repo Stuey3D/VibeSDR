@@ -1,4 +1,5 @@
 # ★★★ arm64 by CROSS-COMPILE on an amd64 bookworm host — the Lenovo (2026-10-18). See arm64-toolchain.cmake.
+# ★ Since 2026-10-25 only the BACKUP route (VIBE_ARM_ON_LENOVO=1): arm64 is built natively on the Mac from Dockerfile.build.
 #     The arm64 package used to come from Dockerfile.build run natively on the Mac (Apple Silicon); the
 #     Mac's Docker VM was deleted to free disk and every package is now built on the Lenovo
 #     (scripts/build-debs-remote.sh). An arm64 container there would be qemu, so this cross-builds instead.

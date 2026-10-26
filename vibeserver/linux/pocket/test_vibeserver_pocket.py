@@ -65,6 +65,8 @@ class FakeNM:
         self.ap_up_seen = []                        # (redirect loaded, state mode, door open) at each hotspot up
         self.state_path = None
         self.wifi_dev = "wlan0"                     # None = no Wi-Fi chip (a Pi 2)
+        self.more_wifi = []                         # ★ further radios (USB dongles), listed after wifi_dev
+        self.unmanaged = set()                      # radios told `nmcli device set … managed no`
         self.eth = None                             # None = no Ethernet port; else NM's state, e.g. "connected"
         self.radio = True                           # nmcli radio wifi on/off
         self.last_stderr = ""                       # ★ as Shell: the last failed command's stderr line
@@ -126,7 +128,12 @@ class FakeNM:
                 out += "eth0:ethernet:%s\n" % self.eth
             if self.wifi_dev:
                 out += "%s:wifi:%s\n" % (self.wifi_dev, ("connected" if self.active else "disconnected") if self.radio else "unavailable")
+            for d in self.more_wifi:
+                out += "%s:wifi:%s\n" % (d, "unmanaged" if d in self.unmanaged else "disconnected")
             return 0, out + "lo:loopback:unmanaged\n"
+        if a[:3] == ["nmcli", "device", "set"] and a[4] == "managed":
+            (self.unmanaged.add if a[5] == "no" else self.unmanaged.discard)(a[3])
+            return 0, ""
         if a[:3] == ["nmcli", "radio", "wifi"]:
             self.radio = a[3] == "on"
             if not self.radio:
@@ -1214,7 +1221,12 @@ def main():
         run_for(nm, box, 200)
         ok(nm.active == "vibe-net-1" and box.mode == "client",
            "idle setup hotspot closes; network 1 (Home) wins over a STRONGER network 3")
-        ok(box.captive_port is not None, ":80 redirect KEPT as a client — http://vibepocket.local/ works on the home network")
+        # ★★★ REVERSED 2026-10-25 (Stuart: "release the port the less open ports the better"): the hotspot's :80 goes
+        #     with the hotspot. (The box is not set up here — on a box being set up, setup_door() keeps :80 instead.)
+        ok(box.captive_port is None and "delete table ip6 " + vp.NFT_TABLE in nm.nft[-1] and "redirect" not in nm.nft[-1],
+           "★ :80 RELEASED as a client — the Wi-Fi redirect is removed (both families) once the hotspot is down")
+        n80 = len(nm.nft); run_for(nm, box, 60)
+        ok(len(nm.nft) == n80, "…removed once, not every turn")
 
         # ── strict order on a later boot ──
         nm2, box2 = make(tmp)
@@ -1545,25 +1557,82 @@ def main():
                 return 0, ""
             return real_run(args, timeout, secret)
         box.sh.run = spy
+        # ★★★ ONE .local NAME (Stuart, 2026-10-25: "realistically the only .local address open after setup should be the
+        #     one the user sets"): the setup name while setting up; the owner's chosen name after; nothing if none.
+        vp.AVAHI_SERVICE = os.path.join(tmp, "avahi-vibeserver.service"); vp.AVAHI_HOSTS = os.path.join(tmp, "avahi-hosts")
+        with open(vp.AVAHI_HOSTS, "w") as f: f.write("# See avahi.hosts(5) for more information on this configuration file!\n")
+        box.mdns_file = os.path.join(tmp, "pocket-mdns"); box.mdns_plan_path = os.path.join(tmp, "mdns-plan.json")
+        restarts = lambda: [c for c in calls if c[:2] == ["systemctl", "restart"] and c[2] == "avahi-daemon.service"]
         box.sync_hostname(False)
         ok(["hostnamectl", "set-hostname", "vibeserversetup"] in calls, "unconfigured → hostname vibeserversetup")
-        ok(["systemctl", "try-restart", "avahi-daemon.service"] in calls, "…and avahi republishes it at once")
+        ok(restarts(), "…and avahi republishes it at once")
         ok("127.0.1.1\tvibeserversetup" in open(vp.HOSTS_FILE).read(), "…/etc/hosts follows (no 'unable to resolve host')")
+        ok(not os.path.exists(vp.AVAHI_SERVICE), "…and no service published while setting up (only the setup name)")
         calls.clear(); box.sync_hostname(False)
         ok(not calls, "nothing to do → nothing run (it is called every few seconds)")
+        # ── Save: the server says the owner's name ──
+        with open(box.mdns_file, "w") as f: json.dump({"label": "nicks-sdr", "port": 0, "pin": False}, f)
+        box.wired_ip = "192.168.1.77"
         box.sync_hostname(True)
-        ok(["hostnamectl", "set-hostname", "vibepocket"] not in calls,
+        ok(["hostnamectl", "set-hostname", "vibepocket"] not in calls and ["hostnamectl", "set-hostname", "nicks-sdr"] not in calls,
            "set up JUST NOW: the setup name stays (the page that pressed Save is still talking to it)")
+        ok("192.168.1.77 nicks-sdr.local  " + vp.AVAHI_ALIAS_TAG in open(vp.AVAHI_HOSTS).read() and restarts(),
+           "…and the NEW name answers at once too (an avahi alias — the page sends the owner there)")
+        ok("See avahi.hosts" in open(vp.AVAHI_HOSTS).read(), "…the file's own lines kept")
         nm.t += 200
-        box.sync_hostname(True)
-        ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "…retired 3 minutes later (vibepocket)")
-        ok(calls[-1] == ["systemctl", "try-restart", "avahi-daemon.service"],
-           "…and avahi is restarted so vibepocket.local answers and vibeserversetup.local goes")
+        calls.clear(); box.sync_hostname(True)
+        ok(["hostnamectl", "set-hostname", "nicks-sdr"] in calls, "★ …retired 3 minutes later: the hostname IS the chosen name")
+        ok(["hostnamectl", "set-hostname", "vibepocket"] not in calls, "★ vibepocket.local is never published beside it")
+        ok(vp.AVAHI_ALIAS_TAG not in open(vp.AVAHI_HOSTS).read(), "…the alias is gone (one name)")
+        svc = open(vp.AVAHI_SERVICE).read()
+        ok("<name>nicks-sdr</name>" in svc and "<type>_vibesdr._tcp</type>" in svc and "<port>48000</port>" in svc
+           and "proto=vibeserver" in svc and "pin=0" in svc,
+           "…and avahi publishes the _vibesdr._tcp service under it (what the server's own responder published)")
+        ok(restarts(), "…avahi restarted to publish it (IPv4 and IPv6 — the server's responder is not run on a Portable)")
+        plan = json.load(open(box.mdns_plan_path))
+        ok(plan["host"] == "nicks-sdr" and plan["publish"] is True, "…and the plan is left for avahi's gate (every start)")
+        # ── the owner switches mDNS off: NOTHING answers ──
+        with open(box.mdns_file, "w") as f: json.dump({"label": "", "port": 0, "pin": False}, f)
+        calls.clear(); box.sync_hostname(True)
+        ok(["systemctl", "stop", "avahi-daemon.socket", "avahi-daemon.service"] in calls and not restarts()
+           and not os.path.exists(vp.AVAHI_SERVICE),
+           "★ set up with no chosen name (mDNS off): avahi is STOPPED — no .local name at all")
+        ok(json.load(open(box.mdns_plan_path))["publish"] is False, "…and its gate will skip it at the next boot")
+        # ── a box that BOOTS set up, with a name: the name at once, no grace ──
         nm2, box2 = make(tmp)
         calls.clear(); box2.sh.run = spy
+        box2.mdns_file = box.mdns_file; box2.mdns_plan_path = os.path.join(tmp, "mdns-plan-2.json")
+        with open(box.mdns_file, "w") as f: json.dump({"label": "nicks-sdr", "port": 48010, "pin": True}, f)
         with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibeserversetup\n")
         box2.sync_hostname(True)
-        ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "a box that BOOTS already set up switches at once")
+        ok(["hostnamectl", "set-hostname", "nicks-sdr"] in calls, "a box that BOOTS already set up switches at once")
+        ok("<port>48010</port>" in open(vp.AVAHI_SERVICE).read() and "pin=1" in open(vp.AVAHI_SERVICE).read(),
+           "…the service carries the server's own port and PIN flag")
+        # ── the gate, as avahi runs it at boot (no plan yet in /run) ──
+        keep = (vp.MDNS_PLAN, vp.MDNS_FILE, vp.MARKER, vp.SERVER_CONF, vp.PORT_FILE, vp.Shell)
+        try:
+            vp.MDNS_PLAN = os.path.join(tmp, "no-plan.json"); vp.MDNS_FILE = box.mdns_file
+            vp.MARKER = os.path.join(tmp, "marker"); open(vp.MARKER, "w").write("1\n")
+            vp.SERVER_CONF = os.path.join(tmp, "config.json"); vp.PORT_FILE = os.path.join(tmp, "no-port")
+            vp.Shell = lambda: type("S", (), {"run": staticmethod(spy)})()
+            with open(vp.SERVER_CONF, "w") as f: json.dump({"configured": True}, f)
+            with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibeserversetup\n")
+            calls.clear()
+            ok(vp.avahi_gate() == 0 and ["hostnamectl", "set-hostname", "nicks-sdr"] in calls,
+               "★ avahi's gate at boot: the chosen name is set BEFORE avahi publishes anything (exit 0 = start)")
+            with open(vp.MDNS_FILE, "w") as f: json.dump({"label": "", "port": 0, "pin": False}, f)
+            ok(vp.avahi_gate() == 1, "★ …set up with no name: exit 1 — avahi's start is SKIPPED (nothing published)")
+            with open(vp.SERVER_CONF, "w") as f: json.dump({"configured": False}, f)
+            calls.clear()
+            ok(vp.avahi_gate() == 0 and ["hostnamectl", "set-hostname", "vibeserversetup"] in calls,
+               "…not set up: vibeserversetup, published")
+            with open(vp.MDNS_PLAN, "w") as f: f.write("{not json")
+            vp.SERVER_CONF = os.path.join(tmp, "missing", "config.json")
+            ok(vp.avahi_gate() == 0, "a broken plan / missing config: the gate says PUBLISH (never lose the setup name to a bug)")
+            vp.MARKER = os.path.join(tmp, "no-marker")
+            ok(vp.avahi_gate() == 0, "not a Portable (no marker): the gate does nothing and lets avahi start")
+        finally:
+            vp.MDNS_PLAN, vp.MDNS_FILE, vp.MARKER, vp.SERVER_CONF, vp.PORT_FILE, vp.Shell = keep
 
     # ── REORDER WHILE CONNECTED (Stuart's Pi 3 A+, 2026-10-10): phone hotspot moved to 1 while on Home, phone in range ──
     with tempfile.TemporaryDirectory() as tmp:
@@ -1930,6 +1999,204 @@ def main():
     ok(vp.ssid_key("Stuart’s  iPhone ") == vp.ssid_key("stuart's iphone") and
        vp.ssid_key("A–B") == vp.ssid_key("a-b") and vp.ssid_key("Café") == vp.ssid_key("Café"),
        "the name key: apostrophes, dashes, spaces, capitals and Unicode composition all fold")
+
+    # ── ★★★ USB WI-FI DONGLES ADDED LATER (Stuart, 2026-10-25: "dont force a resetup if a wifi dongle is detected but when
+    #    a user goes into setup show an option for new wifi hardware detected, configure it now?") ──
+    with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as hwlog:
+        vp.HOSTNAME_FILE = os.path.join(tmp, "hostname"); vp.HOSTS_FILE = os.path.join(tmp, "hosts")
+        with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibepocket\n")
+        with open(vp.HOSTS_FILE, "w") as f: f.write("127.0.1.1\tvibepocket\n")
+        IDS = {"wlan0": "dev:brcmfmac:mmc1:0001:1", "wlx00c0ca123456": "usb:0bda:8179:00e04c000001",
+               "wlan1": "usb:148f:7601:port-1-1.2"}
+
+        def hwbox(name, wifi="wlan0", more=(), eth="connected", record=None, configured=True):
+            nm = FakeNM()
+            nm.wifi_dev, nm.more_wifi, nm.eth = wifi, list(more), eth
+            box = vp.Box(nm, dict(vp.DEFAULTS), state_path=os.path.join(tmp, name + "-state.json"))
+            nm.state_path = box.state_path
+            box.hw_path = os.path.join(tmp, name + "-hw.json")
+            box.reset_path = os.path.join(tmp, name + "-reset")
+            box.history_path = os.path.join(tmp, name + "-hist.json"); box.history = []
+            box.sec_path = os.path.join(tmp, name + "-sec.json"); box.sec_memory = {}
+            box.radio_info = lambda d: {"iface": d, "id": IDS[d], "driver": "rtl8xxxu" if d != "wlan0" else "brcmfmac",
+                                        "usb": IDS[d].split(":")[1] + ":" + IDS[d].split(":")[2] if IDS[d].startswith("usb") else ""}
+            if record is not None:
+                with open(box.hw_path, "w") as f: json.dump(record, f)
+            box.sync_hostname(configured)
+            return nm, box
+
+        def hotspots(nm):
+            return [c for c in nm.calls if c[3:5] == ["connection", "up"] and c[5] in (vp.SETUP_NAME, vp.AP_NAME)]
+
+        # 1 ── a set-up WIRED box with no Wi-Fi (Nick's Orange Pi One) — a dongle appears at boot ──
+        nm, box = hwbox("wired", wifi=None, more=["wlx00c0ca123456"], record={"v": 1, "known": {}, "ignored": {}})
+        vp.boot(box, configured=True)
+        run_for(nm, box, 300)
+        st = state_of(box)
+        ok(not hotspots(nm) and vp.SETUP_NAME not in nm.conns and nm.active == "",
+           "★★★ a NEW dongle on a set-up wired box: NO hotspot, no join, no re-setup")
+        ok(st["newWifi"] == [{"iface": "wlx00c0ca123456", "driver": "rtl8xxxu", "usb": "0bda:8179"}] and st["hasWifi"] is False,
+           "…state.json says newWifi (iface, driver, USB id); hasWifi stays false (nothing is managed)")
+        ok("wlx00c0ca123456" in nm.unmanaged, "…and NetworkManager is told not to manage it (it joins nothing on its own)")
+        # 2 ── Configure ──
+        box.adopt_new_radio()
+        run_for(nm, box, 300)
+        st = state_of(box)
+        ok(box.dev == "wlx00c0ca123456" and st["hasWifi"] is True and st["newWifi"] == [] and "wlx00c0ca123456" not in nm.unmanaged,
+           "Configure: the dongle becomes this box's Wi-Fi (managed by NM again), no longer 'new'")
+        ok(not hotspots(nm) and st["mode"] == "wifi-unset" and st["wifiUnset"] is True,
+           "★ …and with nothing saved yet it WAITS for the owner's settings — still no open hotspot on a live server")
+        ok("usb:0bda:8179:00e04c000001" in json.load(open(box.hw_path))["known"], "…recorded as known on the settings partition")
+        nm.air = {"Home": (60, "homepass1")}
+        box.apply(req([("Home", "homepass1", dict(hidden=False, keep=False))]))
+        run_for(nm, box, 120)
+        ok(nm.active == "vibe-net-1" and box.mode == "client" and not box.adopting,
+           "…the owner saves networks + its own hotspot: managed as normal (joins Home)")
+        # 3 ── the next boot: the same dongle is KNOWN ──
+        nm2, box2 = hwbox("wired", wifi=None, more=["wlx00c0ca123456"])
+        nm2.conns, nm2.air = nm.conns, nm.air
+        vp.boot(box2, configured=True)
+        run_for(nm2, box2, 120)
+        ok(box2.dev == "wlx00c0ca123456" and state_of(box2)["newWifi"] == [] and "wlx00c0ca123456" not in nm2.unmanaged
+           and nm2.active == "vibe-net-1", "a KNOWN dongle at boot: managed at once, not asked about again")
+        # 4 ── unplug it ──
+        nm2.more_wifi = []
+        run_for(nm2, box2, 60)
+        st = state_of(box2)
+        ok(box2.dev is None and st["mode"] == "wired" and st["hasWifi"] is False and st["newWifi"] == [],
+           "unplugged: wired only, nothing new, nothing broken")
+        ok("usb:0bda:8179:00e04c000001" in json.load(open(box2.hw_path))["known"], "…and it is still known (plug it back: managed)")
+        nm2.more_wifi = ["wlx00c0ca123456"]
+        run_for(nm2, box2, 60)
+        ok(box2.dev == "wlx00c0ca123456" and nm2.active == "vibe-net-1", "plugged back in: managed again, joins its network")
+        # 5 ── Not now / Ignore ──
+        nm, box = hwbox("ign", wifi=None, more=["wlan1"], record={"v": 1, "known": {}, "ignored": {}})
+        vp.boot(box, configured=True)
+        run_for(nm, box, 30)
+        box.ignore_new_radio()
+        run_for(nm, box, 30)
+        st = state_of(box)
+        ok(st["newWifi"] == [] and [i["iface"] for i in st["ignoredWifi"]] == ["wlan1"] and box.dev is None and not hotspots(nm),
+           "Not now: recorded known-but-off — not new, not managed, no hotspot")
+        nm3, box3 = hwbox("ign", wifi=None, more=["wlan1"])
+        vp.boot(box3, configured=True)
+        run_for(nm3, box3, 60)
+        ok(state_of(box3)["newWifi"] == [] and "wlan1" in nm3.unmanaged and box3.dev is None,
+           "…the next boot does not ask again, and NM still leaves it alone")
+        ok(box3.adopt_new_radio() and box3.dev == "wlan1", "…and Configure can still use it later (the page offers it)")
+        # 6 ── a box WITH onboard Wi-Fi on a network gains a dongle ──
+        nm, box = hwbox("onboard", wifi="wlan0", record={"v": 1, "known": {IDS["wlan0"]: {}}, "ignored": {}})
+        nm.air = {"Home": (60, "homepass1")}
+        box.apply(req([("Home", "homepass1", dict(hidden=False, keep=False))]))
+        run_for(nm, box, 120)
+        nm.more_wifi = ["wlan1"]
+        run_for(nm, box, 120)
+        ok(box.dev == "wlan0" and nm.active == "vibe-net-1" and [i["iface"] for i in state_of(box)["newWifi"]] == ["wlan1"]
+           and "wlan1" in nm.unmanaged, "onboard on Home + a new dongle: Home untouched, the dongle new and left alone")
+        box.adopt_new_radio()
+        ok(box.dev == "wlan1" and "wlan0" in nm.unmanaged and box.prefer_dev == "wlan1"
+           and ["nmcli", "connection", "modify", "vibe-net-1", "connection.interface-name", "wlan1"] in nm.calls,
+           "Configure it: the dongle takes over, the box's profiles move to it, the onboard radio is left alone")
+        # 7 ── migration: a box set up before this release (no record) keeps its onboard Wi-Fi ──
+        nm, box = hwbox("old", wifi="wlan0")
+        nm.air = {"Home": (60, "homepass1")}
+        box.apply(req([("Home", "homepass1", dict(hidden=False, keep=False))]))
+        run_for(nm, box, 120)
+        ok(box.dev == "wlan0" and nm.active == "vibe-net-1" and state_of(box)["newWifi"] == []
+           and IDS["wlan0"] in json.load(open(box.hw_path))["known"],
+           "★ an update on a box set up before the record existed: its radio is adopted, Wi-Fi carries on")
+        # 8 ── first boot (never set up) behaves exactly as before ──
+        nm, box = hwbox("first", wifi=None, more=["wlx00c0ca123456"], configured=False)
+        vp.boot(box, configured=False)
+        run_for(nm, box, int(vp.DEFAULTS["BOOT_GRACE_SEC"]) + 90)
+        ok(box.dev == "wlx00c0ca123456" and nm.active == vp.SETUP_NAME and box.mode == "setup-ap"
+           and "wlx00c0ca123456" not in nm.unmanaged, "a box NEVER set up: a dongle gets the open setup hotspot, as ever")
+        ok("usb:0bda:8179:00e04c000001" in json.load(open(box.hw_path))["known"], "…and is recorded as known (it is the one being set up)")
+        # 9 ── the owner's reset file still opens the door on a set-up box ──
+        nm, box = hwbox("reset", wifi="wlan0", record={"v": 1, "known": {IDS["wlan0"]: {}}, "ignored": {}})
+        box.reset_wifi()
+        run_for(nm, box, 60)
+        ok(nm.active == vp.SETUP_NAME, "a set-up box whose owner RESET the Wi-Fi: the open setup hotspot comes up (the way back in)")
+        nm.air = {"Home": (60, "homepass1")}
+        box.apply(req([("Home", "homepass1", dict(hidden=False, keep=False))]))
+        ok(not os.path.exists(box.reset_path), "…and the reset is over once Wi-Fi is saved")
+    ok("NEW Wi-Fi hardware" in hwlog.getvalue(), "the journal says why a radio is left alone")
+    # ── what a radio IS, from a sysfs laid out as Linux lays it out (USB dongle; SDIO chip; none) ──
+    with tempfile.TemporaryDirectory() as tmp:
+        def mk(path, text=None):
+            os.makedirs(os.path.dirname(path) if text is not None else path, exist_ok=True)
+            if text is not None:
+                open(path, "w").write(text)
+        usb = os.path.join(tmp, "devices/platform/soc/1c1b000.usb/usb3/3-1")
+        mk(os.path.join(usb, "3-1:1.0")); mk(os.path.join(usb, "idVendor"), "0bda\n"); mk(os.path.join(usb, "idProduct"), "8179\n")
+        mk(os.path.join(usb, "serial"), "00e04c000001\n")
+        mk(os.path.join(tmp, "bus/usb/drivers/rtl8xxxu"))
+        os.symlink(os.path.join(tmp, "bus/usb/drivers/rtl8xxxu"), os.path.join(usb, "3-1:1.0", "driver"))
+        sdio = os.path.join(tmp, "devices/platform/soc/1c10000.mmc/mmc_host/mmc1/mmc1:0001/mmc1:0001:1")
+        mk(sdio); mk(os.path.join(tmp, "bus/sdio/drivers/brcmfmac"))
+        os.symlink(os.path.join(tmp, "bus/sdio/drivers/brcmfmac"), os.path.join(sdio, "driver"))
+        net = os.path.join(tmp, "class/net")
+        for dev, target in (("wlx00e04c000001", os.path.join(usb, "3-1:1.0")), ("wlan0", sdio)):
+            mk(os.path.join(net, dev)); os.symlink(target, os.path.join(net, dev, "device"))
+        keep = vp.SYS_NET; vp.SYS_NET = net
+        try:
+            nm, box = make(tmp)
+            u, d, n = box.radio_info("wlx00e04c000001"), box.radio_info("wlan0"), box.radio_info("wlan9")
+        finally:
+            vp.SYS_NET = keep
+        ok(u == {"iface": "wlx00e04c000001", "driver": "rtl8xxxu", "usb": "0bda:8179", "id": "usb:0bda:8179:00e04c000001"},
+           "sysfs: a USB dongle is its vendor:product + serial, with its driver (%r)" % (u,))
+        ok(d["id"] == "dev:brcmfmac:mmc1:0001:1" and d["usb"] == "" and d["driver"] == "brcmfmac",
+           "sysfs: an SDIO chip (a Pi's brcmfmac) is its driver + bus address, not USB (%r)" % (d,))
+        ok(n["id"] == "if:wlan9", "no sysfs entry: the interface name is all there is")
+
+    # ── ★★★ http://vibeserversetup.local/ ON ETHERNET, ONLY WHILE SETTING UP (Nick, G4IRX, a real Orange Pi One on a cable,
+    #    2026-10-25: "entering http://vibeserversetup.local/ in the browser results in 'site not found'") ──
+    with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
+        vp.HOSTNAME_FILE = os.path.join(tmp, "hostname"); vp.HOSTS_FILE = os.path.join(tmp, "hosts")
+        with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibeserversetup\n")
+        with open(vp.HOSTS_FILE, "w") as f: f.write("127.0.1.1\tvibeserversetup\n")
+        nm, box = make(tmp)
+        nm.wifi_dev, nm.eth, box.dev = None, "connected", None     # a board card with no Wi-Fi, on Ethernet
+        box.sync_hostname(False)
+        door = [d for d in nm.nft if vp.SETUP_TABLE in d]
+        ok(door and "tcp dport 80 redirect to :48000" in door[-1] and "iifname" not in door[-1],
+           "unconfigured, wired, no Wi-Fi: :80 → the front door on EVERY link (no interface named)")
+        ok(door and "table ip " in door[-1] and "table ip6 " in door[-1], "…for IPv4 AND IPv6 (the name may resolve to IPv6 first)")
+        n = len(nm.nft); box.sync_hostname(False); box.tick()
+        ok(len(nm.nft) == n, "…loaded once, not every few seconds")
+        box.sync_hostname(True)
+        ok(len(nm.nft) == n, "setup saved JUST NOW: the door stays (the page that pressed Save is still talking to :80)")
+        nm.t += vp.RETIRE_SEC + 5
+        box.sync_hostname(True)
+        ok(len(nm.nft) == n + 1 and "delete table ip " + vp.SETUP_TABLE in nm.nft[-1] and "redirect" not in nm.nft[-1]
+           and "delete table ip6 " + vp.SETUP_TABLE in nm.nft[-1],
+           "★ setup finished: the door is REMOVED, both families — a set-up server does not take over port 80")
+        box.sync_hostname(True)
+        ok(len(nm.nft) == n + 1, "…and stays removed (nothing re-run)")
+        # a box that BOOTS set up never opens it (only clears any left over)
+        nm2, box2 = make(tmp)
+        nm2.wifi_dev, nm2.eth, box2.dev = None, "connected", None
+        with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibepocket\n")
+        box2.sync_hostname(True)
+        ok(not any("redirect" in d for d in nm2.nft if vp.SETUP_TABLE in d),
+           "a box that boots already set up never redirects :80 on the wired network")
+        # ★ a kernel without IPv6 NAT: the whole script is refused → IPv4 alone
+        nm3, box3 = make(tmp)
+        nm3.wifi_dev, nm3.eth, box3.dev = None, "connected", None
+        tried = []
+        def no_ip6(args, data, timeout=20):
+            tried.append(data)
+            return 1 if "table ip6" in data and "redirect" in data else 0
+        box3.sh.run_input = no_ip6
+        box3.setup_door(True)
+        ok(len(tried) == 2 and "table ip6" not in tried[1] and "redirect to :48000" in tried[1] and box3.setup_door_port == 48000,
+           "no IPv6 NAT in the kernel: falls back to the IPv4 redirect, as before")
+        # the Wi-Fi hotspot's own redirect is IPv6-capable now too, and still names the radio
+        nm4, box4 = make(tmp)
+        box4.captive_on()
+        ok(nm4.nft and 'iifname "wlan0"' in nm4.nft[-1] and "table ip6 " + vp.NFT_TABLE in nm4.nft[-1],
+           "the Wi-Fi :80 redirect (unchanged rule: the radio's interface) now covers IPv6 too")
 
     ok(vp.terse_split(r"My\:Net\\x:70:WPA2") == ["My:Net\\x", "70", "WPA2"], "nmcli terse escapes are undone")
     ok(vp.iw_unescape(r"Caf\xc3\xa9") == "Café", "iw's \\x escapes are decoded")

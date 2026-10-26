@@ -142,7 +142,9 @@ for CMDF in /boot/firmware/cmdline.txt /boot/cmdline.txt; do
 done
 # ★ The boot partition read-only in fstab, the journal in RAM, zram-only swap, dphys-swapfile + fake-hwclock off, and the
 #   settings partition's mount points: all the converge's (step 6). The settings partition itself is made by build-image.sh.
-grep -E '/boot/firmware' /etc/fstab | sed 's/^/pocket-image: fstab: /'
+# ★ `|| true`: under pipefail a root with no /boot/firmware line (an Armbian board — image/sbc, where /boot is a directory
+#   of root) would stop the build here on a line that only reports.
+grep -E '/boot/firmware' /etc/fstab | sed 's/^/pocket-image: fstab: /' || true
 
 # ── 8. A login nobody needs, so first boot never stops to ask for one ───────────────────────────
 # ★ Raspberry Pi OS asks for a user on the first boot unless Raspberry Pi Imager's settings set

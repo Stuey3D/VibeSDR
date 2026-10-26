@@ -87,7 +87,25 @@ ZRAM = ("/etc/rpi/swap.conf.d/60-vibeserver-pocket.conf",
         "# VibeServer pocket image: no swap file on the SD card — zram only.\n"
         "[Main]\n"
         "Mechanism=zram\n")
-OUR_FILES = (NM_CONNECTIVITY, JOURNALD, ZRAM)
+# ★★★ ONE .local NAME, AND NONE THAT NOBODY CHOSE (Stuart, 2026-10-25: "realistically the only .local address open after
+#     setup should be the one the user sets"). avahi asks vibeserver-pocket before EVERY start (ExecCondition): the
+#     gate sets the hostname it should publish — vibeserversetup while setting up, the owner's chosen name once set up —
+#     writes the _vibesdr._tcp service beside it, and SKIPS the start (exit 1) when there is nothing to publish (set up,
+#     mDNS switched off). So avahi never starts publishing a name the box should not have, not even for the seconds
+#     between boot and the Wi-Fi service. A gate that fails says "publish" (exit 0): never lose the setup name to a bug.
+AVAHI_GATE = ("/etc/systemd/system/avahi-daemon.service.d/50-vibeserver-pocket.conf",
+              "# Written by the VibeServer pocket image: avahi publishes only the name this box should answer to.\n"
+              "[Service]\n"
+              "ExecCondition=/usr/lib/vibeserver/vibeserver-pocket avahi-gate\n")
+# ★★ The less listening the better (Stuart, 2026-10-25): systemd-resolved (Armbian runs it; Raspberry Pi OS does not)
+#    answers the hostname over LLMNR on 5355 — a second responder for a name, on another port. Off, and its mDNS off so
+#    it can never compete with avahi for .local.
+RESOLVED = ("/etc/systemd/resolved.conf.d/60-vibeserver-pocket.conf",
+            "# VibeServer pocket image: only avahi answers for this box's name (no LLMNR, no second mDNS responder).\n"
+            "[Resolve]\n"
+            "LLMNR=no\n"
+            "MulticastDNS=no\n")
+OUR_FILES = (NM_CONNECTIVITY, JOURNALD, ZRAM, AVAHI_GATE, RESOLVED)
 
 # ★ The VibeSDR apt repository — REPAIRED if missing, never rewritten if present (an owner or a tester may point it
 #   elsewhere). The KEY is image-only: fetching it needs the network, and a box this package reached already has one.
@@ -102,11 +120,57 @@ AVAHI_CONF = "/etc/avahi/avahi-daemon.conf"
 AVAHI_RE = re.compile(r"^[ \t]*((allow|deny)-interfaces[ \t]*=.*)$")
 AVAHI_SUFFIX = "  # off: VibeServer pocket answers on every interface"
 
+# ★★ BOTH ADDRESSES IN EVERY ANSWER (2026-10-25). Nick (G4IRX), a real Orange Pi One on Ethernet: "vibeserversetup.local
+#    resolves to a link local ipv6, then a public ipv6, but no ipv4". avahi's default publish-a-on-ipv6=no leaves the A
+#    record out of every answer it sends over IPv6 — a client that asks over IPv6 (or takes the first answer, and that was
+#    the IPv6 one) sees only IPv6 addresses. The server listens on IPv6 too since then, so those work — but the IPv4
+#    address belongs in the answer as well, and the AAAA in an IPv4 answer (publish-aaaa-on-ipv4, avahi's default yes)
+#    is pinned while at it. ENFORCED, in [publish].
+AVAHI_PUBLISH = (("publish-a-on-ipv6", "yes"), ("publish-aaaa-on-ipv4", "yes"))
+# ★★ The note is a line of its OWN: avahi's ini parser takes only whole-line comments, so "yes  # …" would be the value.
+AVAHI_PUBLISH_NOTE = "# VibeServer pocket: both addresses in every answer (IPv4 and IPv6)"
+
+
+def avahi_both_families(lines):
+    """The avahi config lines with AVAHI_PUBLISH set in [publish] (an existing line, commented or not, is rewritten in
+    place; a missing one goes straight after the [publish] header; no [publish] section → one is added at the end)."""
+    out = list(lines)
+    for key, val in AVAHI_PUBLISH:
+        want = "%s=%s" % (key, val)
+        section, hit, head = "", None, None
+        for i, l in enumerate(out):
+            t = l.strip()
+            if t.startswith("["):
+                section = t.lower()
+                if section == "[publish]":
+                    head = i
+                continue
+            if section == "[publish]" and re.match(r"#?\s*%s\s*=" % re.escape(key), t):
+                hit = i
+                break
+        if hit is not None:
+            if re.match(r"\s*%s\s*=\s*%s\b" % (re.escape(key), val), out[hit]):
+                continue           # ★ already says so — the owner's own spelling is left alone
+            out[hit] = want
+            if hit == 0 or out[hit - 1] != AVAHI_PUBLISH_NOTE:
+                out.insert(hit, AVAHI_PUBLISH_NOTE)
+        elif head is not None:
+            out[head + 1:head + 1] = [AVAHI_PUBLISH_NOTE, want]
+        else:
+            while out and out[-1] == "":
+                out.pop()
+            out += ["", "[publish]", AVAHI_PUBLISH_NOTE, want, ""]
+    return out
+
+
 # ★★ postinst enables units only when systemd is RUNNING, which in a chroot it is not — so they are enabled here.
 #    vibeserver-pocket-data (the settings partition) and -seal (the one-time read-only seal; a no-op once sealed).
 ENABLE = ("NetworkManager.service", "vibeserver.service", "vibeserver-radios.service",
           "vibeserver-maintenance.path", "vibeserver-pocket.service", "avahi-daemon.service",
-          "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service")
+          "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service",
+          # ★★ (2026-10-25) the build this processor can run — ARMv6 on a Pi Zero / Pi 1; a no-op on any CPU with NEON and
+          #    on every package without the ARMv6 build (its unit's ConditionPathExists). See vibeserver-pocket-cpu.
+          "vibeserver-pocket-cpu.service")
 DIRS = ("/data", "/var/lib/vibeserver-pocket")
 
 # ── ONCE (ledger): the operating system's things a pocket radio never uses ─────────────────────────────────────────
@@ -335,6 +399,11 @@ class Run:
         if new != lines:
             self.change("avahi: answer on every interface (allow/deny-interfaces switched off)",
                         lambda: write_atomic(AVAHI_CONF, "\n".join(new)))
+            lines = new
+        both = avahi_both_families(lines)
+        if both != lines:
+            self.change("avahi: the IPv4 and the IPv6 address in every answer (publish-a-on-ipv6, publish-aaaa-on-ipv4)",
+                        lambda: write_atomic(AVAHI_CONF, "\n".join(both)))
 
     def packages(self):
         if "network-manager" not in installed_packages() and os.path.exists(P(DPKG_STATUS)):

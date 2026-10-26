@@ -40,7 +40,9 @@ int main() {
     paths().state    = dir + "/state.json";
     paths().inbox    = dir + "/pocket-wifi.request";
     paths().kick     = dir + "/pocket-kick.request";
+    paths().sshInbox = dir + "/pocket-ssh.request";
     paths().portFile = dir + "/pocket-port";
+    paths().mdnsFile = dir + "/pocket-mdns";
 
     // ── host rules ──
     ok(isOurHost("10.42.0.1:48000", "vibepocket"), "an IP literal with a port is ours");
@@ -63,6 +65,11 @@ int main() {
     ok(!isPrivatePeer("127.0.0.1") && !isPrivatePeer("::1"), "loopback is NOT private — the tunnel arrives as loopback");
     ok(!isPrivatePeer("81.2.69.160") && !isPrivatePeer("172.32.0.1"), "public addresses are not private");
     ok(!isPrivatePeer("10.0.0.1x") && !isPrivatePeer("999.1.1.1"), "malformed addresses are not private");
+    // ★★ IPv6 (2026-10-25, the listener is dual-stack)
+    ok(isPrivatePeer("fe80::1c2b:3cff:fe4d:5e6f") && isPrivatePeer("febf::1"), "IPv6 link-local fe80::/10 is private");
+    ok(isPrivatePeer("fd12:3456:789a::5") && isPrivatePeer("fc00::1"), "IPv6 ULA fc00::/7 is private");
+    ok(!isPrivatePeer("fec0::1"), "fec0:: (outside fe80::/10) is not");
+    ok(!isPrivatePeer("2001:db8:ffff::77"), "a global IPv6 address on nobody's link here is NOT private");
 
     // ── validation ──
     ok(validPsk("12345678") && !validPsk("1234567"), "WPA2: eight characters is the minimum");
@@ -362,6 +369,62 @@ int main() {
         ok(nowire.code == 409 && nowire.body.find("Ethernet") != std::string::npos && slurp(paths().kick).empty(),
            "NOT wired: Wi-Fi off is refused (409, says to plug in Ethernet) and no kick is written — a box must not strand itself");
         ok(radio("{\"off\":false}").code == 200, "…switching it ON is always allowed");
+
+        // ★★★ ONE .local NAME (2026-10-25): the name handed to the root service — a DNS label or nothing.
+        {
+            std::string e;
+            ok(writeMdnsName("nick-s-sdr", 0, true, e) && slurp(paths().mdnsFile) == "{\"label\":\"nick-s-sdr\",\"port\":0,\"pin\":true}\n",
+               "the mDNS name goes to the root service as {label, port, pin}");
+            ok(writeMdnsName("", 48001, false, e) && slurp(paths().mdnsFile) == "{\"label\":\"\",\"port\":48001,\"pin\":false}\n",
+               "…an empty label = nothing to publish");
+            ok(!writeMdnsName("bad\",\"label", 0, false, e) && !writeMdnsName(std::string(64, 'a'), 0, false, e),
+               "…anything that is not a DNS label is refused (it is root's input)");
+        }
+        // ★★★ NEW WI-FI HARDWARE (2026-10-25): Configure / Not now, admin-gated, a kick word each.
+        {
+            put(paths().state, "{\"mode\":\"wired\",\"ap\":{\"set\":false},\"hasWifi\":false,\"wired\":true,"
+                               "\"newWifi\":[{\"iface\":\"wlx00c0ca123456\",\"driver\":\"rtl8xxxu\",\"usb\":\"0bda:8179\"}]}\n");
+            Req n; n.method = "POST"; n.path = "/vibeserver/pocket/newwifi"; n.peer = "192.168.1.20"; n.body = "{\"action\":\"configure\"}";
+            Reply n0;
+            ok(handle(n, n0, h) && n0.code == 401, "new Wi-Fi hardware: needs the admin proof");
+            n.adminOk = true;
+            auto nw = [&](const std::string& body) { Req x = n; x.body = body; Reply y; handle(x, y, h); return y; };
+            ::unlink(paths().kick.c_str());
+            ok(nw("{\"action\":\"configure\"}").code == 200 && slurp(paths().kick) == "wifi-new-configure\n", "Configure writes wifi-new-configure");
+            ok(nw("{\"action\":\"ignore\"}").code == 200 && slurp(paths().kick) == "wifi-new-ignore\n", "Not now writes wifi-new-ignore");
+            ::unlink(paths().kick.c_str());
+            for (const char* b : {"{}", "{\"action\":\"wifi-off\"}", "{\"action\":1}", "nonsense"})
+                ok(nw(b).code == 400, (std::string("…refused: ") + b).c_str());
+            ok(slurp(paths().kick).empty(), "…and nothing refused reaches the root service");
+        }
+
+        // ★★★ ENABLE SSH (11.0.11): admin-gated, the box's own network only, the password only in the private request.
+        {
+            Req s; s.method = "POST"; s.path = "/vibeserver/pocket/ssh"; s.peer = "192.168.1.20";
+            auto ssh = [&](const std::string& body, bool admin = true, bool tunnel = false, const char* peer = "192.168.1.20") {
+                Req x = s; x.body = body; x.adminOk = admin; x.viaTunnel = tunnel; x.peer = peer; Reply y; handle(x, y, h); return y; };
+            ::unlink(paths().sshInbox.c_str());
+            ok(ssh("{\"on\":true,\"pass\":\"Owner pass 1\"}", false).code == 401 && slurp(paths().sshInbox).empty(),
+               "SSH: needs the admin proof, and writes nothing without it");
+            ok(ssh("{\"on\":true,\"pass\":\"Owner pass 1\"}", true, true).code == 403, "SSH: refused through the tunnel");
+            ok(ssh("{\"on\":true,\"pass\":\"Owner pass 1\"}", true, false, "81.2.69.160").code == 403, "SSH: refused from a public address");
+            Reply on = ssh("{\"on\":true,\"pass\":\"Owner \\\"pass\\\" 1\"}");
+            const std::string doc = slurp(paths().sshInbox);
+            ok(on.code == 200 && doc == "{\"on\":true,\"pass\":\"Owner \\\"pass\\\" 1\"}\n",
+               "SSH on: the request carries the password, JSON-escaped, for root to read");
+            ok(on.body.find("pass") == std::string::npos, "…and the reply does not echo it");
+            struct stat sb{};
+            ok(::stat(paths().sshInbox.c_str(), &sb) == 0 && (sb.st_mode & 0777) == 0600, "…the request file is 0600");
+            ok(ssh("{\"on\":false}").code == 200 && slurp(paths().sshInbox) == "{\"on\":false}\n", "SSH off: no password in the request");
+            for (const char* b : {"{\"on\":true,\"pass\":\"short\"}", "{\"on\":true}", "{\"on\":\"yes\"}", "{}", "nonsense",
+                                  "{\"on\":true,\"pass\":\"has a\\nnewline in it\"}"}) {
+                ::unlink(paths().sshInbox.c_str());
+                ok(ssh(b).code == 400 && slurp(paths().sshInbox).empty(), (std::string("SSH refused: ") + b).c_str());
+            }
+            ok(validSshPassword("12345678") && !validSshPassword("1234567") && !validSshPassword(std::string(129, 'x'))
+               && !validSshPassword("p\xc3\xa4sswort1"), "validSshPassword: 8-128 printable ASCII");
+            ::unlink(paths().sshInbox.c_str());
+        }
 
         // Wi-Fi off: the listener's network chooser is hidden, and refused if asked anyway.
         put(paths().state, "{\"mode\":\"wifi-off\",\"ap\":{\"set\":true,\"ssid\":\"Pocket\"},\"saved\":[{\"ssid\":\"Home\"}],"

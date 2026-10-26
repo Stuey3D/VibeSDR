@@ -1,0 +1,16 @@
+[Unit]
+# ★★ THE POCKET IMAGE ONLY: run the VibeServer build this processor can execute — the ARMv6 (scalar) one on a Pi Zero /
+# Zero W / Pi 1, which have no NEON. A card image is installed on the BUILD machine, so the package's own choice
+# (postinst) was made for the wrong CPU. See /usr/lib/vibeserver/vibeserver-pocket-cpu.
+Description=VibeServer — pocket box: the server build this processor can run
+ConditionPathExists=/etc/vibeserver-pocket/enabled
+ConditionPathExists=/usr/lib/vibeserver/armv6/vibeserver
+After=local-fs.target
+Before=vibeserver.service vibeserver-radios.service vibeserver-rsp.service vibeserver-pocket-seal.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/vibeserver/vibeserver-pocket-cpu
+
+[Install]
+WantedBy=multi-user.target
