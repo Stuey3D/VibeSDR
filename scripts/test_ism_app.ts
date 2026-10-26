@@ -7,6 +7,8 @@
  */
 import * as web from '../web/client/src/ism.ts';
 import * as app from '../src/services/ism.ts';
+import { needleGeometry } from '../src/utils/needleGeometry.ts';
+import { readFileSync } from 'node:fs';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -74,6 +76,37 @@ eq('prefs default', app.parseIsmPrefs(null), { filter: 'all', units: { mph: fals
 eq('prefs kept', app.parseIsmPrefs('{"filter":"tpms","mph":true,"pressure":"bar"}'), { filter: 'tpms', units: { mph: true, pressure: 'bar' } });
 eq('prefs junk', app.parseIsmPrefs('{"filter":"evil","pressure":"atm"}'), { filter: 'all', units: { mph: false, pressure: 'psi' } });
 eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.nextPressure('kpa'), app.nextPressure('bar')], ['kpa', 'bar', 'psi']);
+
+// ── The box by pad and keyboard: every key and chip is a stop, in the order drawn, on its visual row ──
+{
+  const k = app.ismNavKeys({ on: true, big: true, chips: true, rows: 3 });
+  eq('the stops, in order', k.map((x) => x.key), ['down', 'up', 'big', 'exit', ...app.ISM_KINDS.map((c) => `k:${c.id}`), 'u:speed', 'u:pressure', 'r:0', 'r:1', 'r:2']);
+  eq('rows: header 0, chips 1, the list 2…', k.map((x) => x.row), [0, 0, 0, 0, ...app.ISM_KINDS.map(() => 1), 1, 1, 2, 3, 4]);
+  eq('after a refusal: CLOSE only (no arrows, no chips)', app.ismNavKeys({ on: false, big: false, chips: false, rows: 0 }).map((x) => x.key), ['exit']);
+  eq('every chip drawn is a stop', app.ismNavKeys({ on: true, big: false, chips: true, rows: 0 }).filter((x) => x.row === 1).length, app.ISM_KINDS.length + 2);
+  const panel = readFileSync(new URL('../src/components/IsmPanel.tsx', import.meta.url), 'utf8');
+  eq('the panel walks ismNavKeys with useListNav', /ismNavKeys\(/.test(panel) && /useListNav\(/.test(panel), true);
+  eq('the screen highlight can land on the box', panel.includes("screenNavRef('ismBox'"), true);
+  for (const c of ['k:${k.id}', 'u:speed', 'u:pressure', 'down', 'up', 'exit', 'big'])
+    eq(`the ${c} key draws the highlight`, panel.includes(`hl(${c.startsWith('k:') ? '`' + c + '`' : "'" + c + "'"})`), true);
+}
+
+// ── No LISTEN needle in ISM (the web's wf.vfoHidden) ──
+{
+  const base = { bwHz: 2_400_000, tuneHz: 433_920_000, filterLow: -5000, filterHigh: 5000, width: 400, pxPerHz: 400 / 2.4e6,
+                 hzToX: (hz: number) => ((hz - 432_720_000) / 2.4e6) * 400 };
+  const n = needleGeometry(base);
+  eq('the needle at the dial', n && Math.round(n.nX), 200);
+  eq('hidden: no needle, no passband, no label', needleGeometry({ ...base, hidden: true }), null);
+  const wv = readFileSync(new URL('../src/components/WaterfallView.tsx', import.meta.url), 'utf8');
+  eq('WaterfallView takes its needle from needleGeometry with needleHidden', /needleGeometry\(\{ hidden: needleHidden/.test(wv), true);
+  // ★ every renderer path reads `needle` — the needle canvas (iOS), the in-waterfall group (Android), the LISTEN label
+  eq('no renderer places the needle from tuneHz itself', (wv.match(/hzToX\(tuneHz\)/g) ?? []).length, 0);
+  eq('the LISTEN label is behind `needle &&`', /\{needle && showCenterMarker && \(/.test(wv), true);
+  const scr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+  eq('the receiver screen hides it while ISM is on', /needleHidden=\{ismOn\}/.test(scr), true);
+  eq('one waterfall (phone, iPad and Mac share it)', (scr.match(/<WaterfallView\b/g) ?? []).length, 1);
+}
 
 console.log(`ism app: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

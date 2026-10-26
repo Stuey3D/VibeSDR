@@ -81,6 +81,7 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
+import { needleGeometry } from '../utils/needleGeometry';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -220,6 +221,8 @@ export interface WaterfallViewProps {
    *  constant uN is the only thing that stops the waterfall rescaling (Stuart, 2026-08-03). */
   feedFloorFps?:   number;
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
+  /** ★ V12 ISM: no LISTEN needle, passband or label (the web's wf.vfoHidden) — a band capture has nothing to listen to. */
+  needleHidden?:   boolean;
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
   needleIntensity?: number;
@@ -394,6 +397,7 @@ function WaterfallView({
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
+  needleHidden = false,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
@@ -2099,20 +2103,9 @@ function WaterfallView({
   }, [specShow, specH, wfTop, liveRange, dbOffset]);
 
   // ── Needle + sideband geometry (v1.5) ───────────────────────────────────────
-  const needle = useMemo(() => {
-    if (!(bwHz > 0) || !(tuneHz > 0)) return null;
-    const nX = hzToX(tuneHz);
-    let loX = hzToX(tuneHz + filterLow);
-    let hiX = hzToX(tuneHz + filterHigh);
-    const minSbPx = filterLow === 0 && filterHigh === 0 ? 20 : 4;
-    if (nX - loX < minSbPx) loX = nX - minSbPx;
-    if (hiX - nX < minSbPx) hiX = nX + minSbPx;
-    const scale = Math.max(0.25, Math.min(1.0, pxPerHz * 4000));
-    // Quantised scale (0.05 steps) so the pre-rendered glow strips are not
-    // re-blurred on every zoom tick — only on meaningful scale changes.
-    const scaleQ = Math.round(scale * 20) / 20;
-    return { nX, loXc: Math.max(0, loX), hiXc: Math.min(width, hiX), loX, hiX, scale, scaleQ };
-  }, [bwHz, tuneHz, filterLow, filterHigh, hzToX, pxPerHz, width]);
+  // ★ utils/needleGeometry — every renderer path below reads this one result, so `needleHidden` (V12 ISM) removes them all.
+  const needle = useMemo(() => needleGeometry({ hidden: needleHidden, bwHz, tuneHz, filterLow, filterHigh, width, pxPerHz, hzToX }),
+    [needleHidden, bwHz, tuneHz, filterLow, filterHigh, hzToX, pxPerHz, width]);
 
   // ── VFO-lock boundary walls + RF-centre marker (BRIEF §5.6) ─────────────────
   // Geometry only; rendered on the spectrum/needle canvas via hzToX so it tracks

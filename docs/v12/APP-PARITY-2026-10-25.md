@@ -12,7 +12,7 @@ new stuff we have added"*. Branch `v12-app-parity` (from `v12-experimental` at f
 |---|---|---|---|
 | **CW decoder — ONE SIGNAL** (`cw`, the listener's audio) | CW key in DECODERS (only where `vibeserver.json` says `"cw": true`); primary signal's text + the signals list + SPOTS | **missing** (the gallery's CW chip only; the old UberSDR `morse` decoder path exists but is not offered) | built (91bcc2ff): Mode → CLIENT DECODERS → CW, VIEW ONE SIGNAL, the primary text + list + SPOTS |
 | **CW SKIMMER** (`cwskim`, 24/48/96 kHz segment centred on the dial) | ONE SIGNAL / SKIMMER + WIDTH; list lowest frequency first; each row freq · call · wpm · SNR · confidence · age · recent text; text coloured by confidence (poor #FF4B4B, low #FF8A3D, medium #E8C547, high #5BE36B); SPOTS accumulated under the list; tap a row/spot = tune (CW); the view stays where the listener scrolled; VFO DRAWN as the whole segment (±width/2, drawn only), tuning moves it | **missing** | built (91bcc2ff): SKIMMER + WIDTH 24/48/96, lowest first, the four colours, SPOTS, tap/Enter = tune in CW, the view pinned to SPOTS, the segment drawn as the VFO (drawn only); test_cw_list.ts |
-| **ISM live mode** (433/868/315/915, device list) | ISM beside DAB/ADS-B; box over the lower waterfall: EXIT · ◀ band ▶ · status · kind filter · units · list newest first | **missing** ("App (not built)" in ISM-DECODER.md) | built (55bd7110): ISM key beside ADS-B (absent / dimmed with why / live), IsmPanel (EXIT · ◀ band ▶ · status · kind chips · units · list), tune gestures step bands, typed frequency = {hz}; test_ism_app.ts. Owed: chips touch-only; LISTEN needle not hidden |
+| **ISM live mode** (433/868/315/915, device list) | ISM beside DAB/ADS-B; box over the lower waterfall: EXIT · ◀ band ▶ · status · kind filter · units · list newest first | **missing** ("App (not built)" in ISM-DECODER.md) | built (55bd7110): ISM key beside ADS-B (absent / dimmed with why / live), IsmPanel (EXIT · ◀ band ▶ · status · kind chips · units · list), tune gestures step bands, typed frequency = {hz}; test_ism_app.ts. Then (follow-up): every key, chip and row reachable by pad / keyboard (the box takes the keys on arrival, as DAB's), no LISTEN needle in ISM (WaterfallView needleHidden through utils/needleGeometry — every renderer path) |
 | ISM in the gallery | ISM chip | done (79b39e94) | — |
 | CW in the gallery | CW chip | done (5dd74407) | — |
 | **Audio lets go in ADS-B / ISM** (AirPods followed silence) | `AudioPlayer.setQuiet` while ADS-B or ISM is on (1f0b204a) | **missing** — the native engine keeps the output running in ADS-B | built (d1e7b4d0 + 55bd7110): iOS/Mac VibePowerModule.setQuiet — engine paused, session released, Now Playing paused, watchdog/heal stand down. Android: none needed (no automatic device switching). Swift not compile-checked here (environment) — see below |
@@ -21,7 +21,7 @@ new stuff we have added"*. Branch `v12-app-parity` (from `v12-experimental` at f
 | ADS-B FURTHEST chip | list header | top bar (MapOverlay) | moved to the live list's header, as on the web (79612a8c) |
 | **ADS-B NEWEST / LONGEST TRACKED chips** (only aircraft with a position; tap = show it on the map) | list header (14416d1c, 398cc920) | **missing** | built (79612a8c): adsbChips in AdsbLiveList, pad-reachable; test_adsb_furthest.ts holds them to the web |
 | ADS-B capture warning (< 97 %) | done | done (adsbTypes `adsbCaptureWarning`) | — |
-| ADS-B GAIN key + card (AUTO = the server's ramp, TRAINING) | done (19f2d603) | **missing** — no gain control while the map covers the screen | **still owed** — the report's gain fields are not parsed in the app yet, and the key must appear only where the radio has a gain list (AGENTS.md) |
+| ADS-B GAIN key + card (AUTO = the server's ramp, TRAINING) | done (19f2d603) | **missing** — no gain control while the map covers the screen | built (follow-up): gain / gainAuto / gainBusy parsed; GAIN chip + card on the live list (AUTO · − · +, TRAINING), only where the radio has a gain list the owner has not fixed, honouring the per-band ceiling (adsbGainView); test_adsb_report.ts |
 | ADS-B landing / keep running (owner) | setup page | done (002fc6d6) | — |
 | ADS-B 2.56 MS/s owner switch (RTL) | setup page | done (57520a29) | — |
 | Health pill "<decoder>: TOO HEAVY" | done (9b67fc96) | done (same commit, HealthPill.tsx) — verified | — |
@@ -58,4 +58,6 @@ from ~/VibeSDR-v12) stops on the known environment fault — "only classes that 
 '@objc'" at VibeWatchModule / VibePowerModule's class lines — identically with the change stashed. Compile-check in a
 checkout with its own Pods before the cloud build.
 
-Still owed: the ADS-B GAIN key/card; the ISM chips by pad; the LISTEN needle hidden in ISM.
+Follow-up (2026-10-26, the coordinator: ship everything ready): the three owed items are built — the ADS-B GAIN key and
+card, the ISM box by pad / keyboard, no LISTEN needle in ISM. test_adsb_report.ts 58 (24 new), test_ism_app.ts 78 (20 new).
+Nothing is owed from the audit. The Swift is compile-checked by the main session in ~/VibeSDR-v12 after the merge.

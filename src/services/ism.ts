@@ -160,3 +160,22 @@ export function parseIsmPrefs(s: string | null | undefined): { filter: string; u
   } catch { return { filter: 'all', units: { ...ISM_UNITS_DEFAULT } }; }
 }
 export function nextPressure(p: IsmUnits['pressure']): IsmUnits['pressure'] { return p === 'psi' ? 'kpa' : p === 'kpa' ? 'bar' : 'psi'; }
+
+/** ★★ THE ISM BOX BY PAD AND KEYBOARD (the DAB box's pattern — controller audit group B): the stops the arrows walk, in
+ *  the order drawn — the header's keys (◀ ▶ only while ISM runs, BIG where it is offered, EXIT/CLOSE), then the chips
+ *  (every kind, then the two unit keys), then each device row (reveal-only: a row is read, not pressed). `row` is the
+ *  visual row the up/down arrows move between: 0 the header, 1 the chips, 2… the list. ◀ / ▶ are stops even at an end
+ *  (pressing one there does nothing, as the touch key does), so the order never shifts under the highlight. */
+export type IsmNavKey = 'down' | 'up' | 'big' | 'exit' | `k:${string}` | 'u:speed' | 'u:pressure' | `r:${number}`;
+export function ismNavKeys(o: { on: boolean; big: boolean; chips: boolean; rows: number }): Array<{ key: IsmNavKey; row: number }> {
+  const out: Array<{ key: IsmNavKey; row: number }> = [];
+  if (o.on) { out.push({ key: 'down', row: 0 }, { key: 'up', row: 0 }); }
+  if (o.big) out.push({ key: 'big', row: 0 });
+  out.push({ key: 'exit', row: 0 });
+  if (o.chips) {
+    for (const k of ISM_KINDS) out.push({ key: `k:${k.id}`, row: 1 });
+    out.push({ key: 'u:speed', row: 1 }, { key: 'u:pressure', row: 1 });
+  }
+  for (let i = 0; i < o.rows; i++) out.push({ key: `r:${i}`, row: 2 + i });
+  return out;
+}

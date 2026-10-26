@@ -11570,6 +11570,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         tuneHz={status.frequency}
         /* ★★ THE CW SKIMMER'S VFO IS ITS SEGMENT (Stuart, 2026-10-25) — drawn only, never sent (cwList cwDrawnPassband);
          *  tuning moves it as ever, and the server's skimmer follows the dial. */
+        /* ★ V12 ISM: no LISTEN needle on a band capture (the web's wf.vfoHidden) — every renderer path reads it. */
+        needleHidden={ismOn}
         filterLow={cwDrawnPassband(activeDecoder === 'cw' && cwSkim, cwWidth, status.bandwidthLow, status.bandwidthHigh).low}
         filterHigh={cwDrawnPassband(activeDecoder === 'cw' && cwSkim, cwWidth, status.bandwidthLow, status.bandwidthHigh).high}
         /* ★★★ THE VISUAL TRIM ON THE SPECTRUM — applied by shifting the RANGE, never by editing
