@@ -76,6 +76,10 @@ inline const std::vector<DecoderDef>& decoders() {
         { "cw-skim-24",   "CW skimmer, 24 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 24000 },
         { "cw-skim-48",   "CW skimmer, 48 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 48000 },
         { "cw-skim-96",   "CW skimmer, 96 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 96000 },
+        // ★★ V12 APRS (docs/v12/AIS-APRS.md): 1200 Bd on an NFM VFO (the region's channel), or HF 300 Bd on USB/LSB —
+        //    kept as the day's packets + a station card. NRZI does not care which way round the tones are, so LSB is fine.
+        { "aprs",         "APRS (1200 Bd, VHF)",          "aprs",   "aprs",  "nfm",     0,    0,   1200,  false, false, 0 },
+        { "aprs-hf",      "APRS HF (300 Bd)",             "aprs",   "aprs",  "usb,lsb", 0,    0,   300,   false, false, 0 },
     };
     return d;
 }
@@ -125,6 +129,7 @@ inline std::string attachMsg(const Vfo& v) {
         std::snprintf(b, sizeof b, "{\"lpm\":120,\"image_width\":1809,\"carrier\":%.0f,\"deviation\":400,"
                       "\"auto_start\":true,\"auto_stop\":true}", d->toneHz);
     else if (id == "sstv" || id == "ft8") std::snprintf(b, sizeof b, "{}");
+    else if (id == "aprs" || id == "aprs-hf") std::snprintf(b, sizeof b, "{\"baud_rate\":%.0f}", d->baud);
     else if (d->widthHz > 0) std::snprintf(b, sizeof b, "{\"width\":%.0f}", d->widthHz);
     else
         std::snprintf(b, sizeof b, "{\"center_frequency\":%.0f,\"shift\":%.0f,\"baud_rate\":%.2f,\"encoding\":\"ITA2\","

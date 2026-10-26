@@ -205,10 +205,13 @@ private:
     static void stationJson(const Station& s, double t, bool trails, std::string& o) {
         o += "{\"key\":\"" + jsonEsc(utf8Clean(s.key)) + "\",\"from\":\"" + jsonEsc(utf8Clean(s.from)) + "\",\"kind\":\"" + s.kind + "\"";
         if (!s.name.empty()) o += ",\"name\":\"" + jsonEsc(utf8Clean(s.name)) + "\"";
-        const char st[3] = { s.symTable, s.symCode, 0 };
-        o += ",\"sym\":\"" + jsonEsc(st) + "\"";
-        const std::string sn = symbolName(s.symTable, s.symCode);
-        if (!sn.empty()) o += ",\"symName\":\"" + jsonEsc(sn) + "\"";
+        // ★ a symbol only once the station has sent one (a position): a station heard only by its messages has none
+        if (s.posAt >= 0) {
+            const char st[3] = { s.symTable, s.symCode, 0 };
+            o += ",\"sym\":\"" + jsonEsc(utf8Clean(st)) + "\"";
+            const std::string sn = symbolName(s.symTable, s.symCode);
+            if (!sn.empty()) o += ",\"symName\":\"" + jsonEsc(sn) + "\"";
+        }
         auto num = [&](const char* k, double x, int dp) { if (x == x) { o += ",\""; o += k; o += "\":" + fmt(x, dp); } };
         num("lat", s.lat, 5); num("lon", s.lon, 5); num("course", s.course, 0); num("speed", s.speedKn == s.speedKn ? s.speedKn * 1.852 : NAN, 1);
         num("alt", s.altFt == s.altFt ? s.altFt * 0.3048 : NAN, 0);

@@ -108,6 +108,8 @@ export function ago(s: number): string {
   const v = Math.max(0, Math.round(s));
   return v < 5 ? 'now' : v < 60 ? `${v} s` : v < 3600 ? `${Math.round(v / 60)} min` : `${Math.floor(v / 3600)} h ${Math.round((v % 3600) / 60)} min`;
 }
+/** "just now" / "12 s ago" — the card's wording (ago() alone is the list's short form). */
+export function heardAgo(s: number): string { const a = ago(s); return a === 'now' ? 'just now' : `${a} ago`; }
 function flagHtml(iso: string | undefined): string {
   if (!iso || !/^[A-Z]{2}$/.test(iso)) return '';
   const win = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent || '');
@@ -182,7 +184,7 @@ export function aisCard(v: AisVessel, rx: LatLon | null): string {
     add('Position', esc(fmtPos(v.lat, v.lon)));
     if (rx) { const rb = rangeBearing(rx, v.lat, v.lon); add('From here', `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM ${compass8(rb.brg)}`); }
   }
-  add('Heard', `${ago(v.seen)} ago · ${v.count} message${v.count === 1 ? '' : 's'} · AIS ${v.ch === 'B' ? '2' : '1'}${v.snr != null ? ` · ${Math.round(v.snr)} dB` : ''}`);
+  add('Heard', `${heardAgo(v.seen)} · ${v.count} message${v.count === 1 ? '' : 's'} · AIS ${v.ch === 'B' ? '2' : '1'}${v.snr != null ? ` · ${Math.round(v.snr)} dB` : ''}`);
   return `<div class="trkCard"><div class="t">${flagHtml(v.flag)}<b>${esc(aisName(v))}</b></div>${rows.join('')}</div>`;
 }
 export function aisStatus(r: AisReport | null): string {
@@ -292,7 +294,7 @@ export function aprsCard(s: AprsStation, rx: LatLon | null): string {
     if (rx) { const rb = rangeBearing(rx, s.lat, s.lon); add('From here', `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km ${compass8(rb.brg)}`); }
   }
   add('Path', esc(s.path || 'direct') + (s.via ? ` · via <b>${esc(s.via)}</b>` : ''));
-  add('Heard', `${ago(s.seen)} ago · ${s.count} packet${s.count === 1 ? '' : 's'}`);
+  add('Heard', `${heardAgo(s.seen)} · ${s.count} packet${s.count === 1 ? '' : 's'}`);
   if (s.raw) rows.push(`<div class="raw" title="The packet as received (TNC2)">${esc(s.raw)}</div>`);
   return `<div class="trkCard"><div class="t"><b>${esc(aprsName(s))}</b></div>${rows.join('')}</div>`;
 }
@@ -361,10 +363,10 @@ const CSS = `
 .trkView .flag{font-size:14px}
 .trkView .cc{font:700 10px/1 ui-monospace,monospace;background:#2a3a4a;border-radius:3px;padding:1px 3px}
 @media (max-width:520px){
-  .trkList{left:6px;right:6px;width:auto;max-height:42%}
+  .trkList{left:6px;right:6px;width:auto;max-height:34%}
   .trkRow{grid-template-columns:minmax(0,1fr) auto auto}
   .trkRow .ag{display:none}
-  .vtl-card{top:auto !important;bottom:calc(46% + 8px);right:6px !important;left:6px;max-width:none !important;max-height:38% !important}
+  .vtl-card{top:6px !important;right:6px !important;left:52px;max-width:none !important;max-height:30% !important;font-size:11px !important}
 }
 `;
 function addCss() {
@@ -487,6 +489,7 @@ export class TrackView {
   hide() {
     if (!this.open) return;
     this.root.hidden = true;
+    this.attribObs?.disconnect(); this.attribObs = null; this.list.style.bottom = '';
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];
     this.gen++;
@@ -550,7 +553,26 @@ export class TrackView {
       onSelect: (k: string | null) => this.markSel(k || ''),
     });
     if (this.pending) { this.layer.update(this.pending); this.pending = null; }
+    this.watchAttrib();
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
+  }
+
+  /** ★ The map's attribution (a licence line we may not hide) sits at the bottom; on a phone it wraps to three lines and
+   *  the list's last row went under it. The list stands just above it, however tall it grows. */
+  private attribObs: ResizeObserver | null = null;
+  private watchAttrib() {
+    this.attribObs?.disconnect(); this.attribObs = null;
+    const at = this.mapHost.querySelector('.leaflet-control-attribution, .maplibregl-ctrl-attrib') as HTMLElement | null;
+    if (!at || typeof ResizeObserver === 'undefined') return;
+    const sync = () => {
+      const h = at.getBoundingClientRect().height;
+      const wide = this.mapHost.clientWidth > 520;
+      // ★ on a wide map the attribution is to the right of the list; only where they share the width does it push up
+      this.list.style.bottom = !wide && h > 0 ? `calc(${Math.round(h) + 6}px + env(safe-area-inset-bottom))` : '';
+    };
+    this.attribObs = new ResizeObserver(sync);
+    this.attribObs.observe(at); this.attribObs.observe(this.mapHost);
+    sync();
   }
 
   /** Every report: the whole list (items with key/lat/lon), the rows' HTML, the status line, the count. */

@@ -310,8 +310,45 @@ static int writeClip(const char* path, double rate) {
     return 0;
 }
 
+/** `test-aprs --wav <file.wav> [300|1200]`: decode a recording (16-bit PCM WAV, any rate — resampled to 48 kHz) and print
+ *  every packet in TNC2 form with its readable line; the count, and how many a single slicer alone would have found. */
+static int decodeWav(const char* path, int baud) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::fprintf(stderr, "cannot open %s\n", path); return 2; }
+    std::vector<uint8_t> b; uint8_t tmp[65536]; size_t n;
+    while ((n = std::fread(tmp, 1, sizeof tmp, f)) > 0) b.insert(b.end(), tmp, tmp + n);
+    std::fclose(f);
+    if (b.size() < 44 || std::memcmp(b.data(), "RIFF", 4) != 0) { std::fprintf(stderr, "not a WAV\n"); return 2; }
+    size_t p = 12; uint32_t rate = 0; uint16_t ch = 1, bits = 16; size_t dataAt = 0, dataLen = 0;
+    while (p + 8 <= b.size()) {
+        const uint32_t len = b[p + 4] | b[p + 5] << 8 | b[p + 6] << 16 | uint32_t(b[p + 7]) << 24;
+        if (!std::memcmp(&b[p], "fmt ", 4)) { ch = uint16_t(b[p + 10] | b[p + 11] << 8); rate = b[p + 12] | b[p + 13] << 8 | b[p + 14] << 16 | uint32_t(b[p + 15]) << 24; bits = uint16_t(b[p + 22] | b[p + 23] << 8); }
+        if (!std::memcmp(&b[p], "data", 4)) { dataAt = p + 8; dataLen = std::min<size_t>(len, b.size() - dataAt); break; }
+        p += 8 + len + (len & 1);
+    }
+    if (!rate || bits != 16 || !dataAt) { std::fprintf(stderr, "need 16-bit PCM\n"); return 2; }
+    const size_t frames = dataLen / (2 * ch);
+    std::vector<float> in(frames);
+    for (size_t i = 0; i < frames; ++i) in[i] = int16_t(b[dataAt + i * 2 * ch] | b[dataAt + i * 2 * ch + 1] << 8) / 32768.f;
+    std::vector<float> a(size_t(frames * 48000.0 / rate));
+    for (size_t i = 0; i < a.size(); ++i) { const double x = i * double(rate) / 48000.0; const size_t k = size_t(x); const double fr = x - k;
+        a[i] = k + 1 < frames ? float(in[k] * (1 - fr) + in[k + 1] * fr) : 0.f; }
+    int all = 0, one = 0;
+    for (int pass = 0; pass < 2; ++pass) {
+        vibeaprs::AfskDemod d(48000, baud, pass == 1);
+        for (size_t o = 0; o < a.size(); o += 4800) d.feed(a.data() + o, int(std::min<size_t>(4800, a.size() - o)), [&](const vibeaprs::Frame& fr) {
+            vibeaprs::Ax25 ax; if (!vibeaprs::parseAx25(fr.bytes, ax)) return;
+            if (pass == 0) { ++all; vibeaprs::Packet pk = vibeaprs::parsePacket(ax);
+                std::printf("%7.1f s  %s%s\n           %s\n", double(o) / 48000, pk.raw.c_str(), fr.repaired ? "  [one bit repaired]" : "", vibeaprs::readable(pk).c_str()); }
+            else ++one; });
+    }
+    std::printf("%s: %.0f s at %u Hz, %d Bd — %d packets (one balanced slicer alone: %d)\n", path, frames / double(rate), rate, baud, all, one);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc >= 4 && std::strcmp(argv[1], "--write-clip") == 0) return writeClip(argv[2], std::atof(argv[3]));
+    if (argc >= 3 && std::strcmp(argv[1], "--wav") == 0) return decodeWav(argv[2], argc >= 4 ? std::atoi(argv[3]) : 1200);
     testAx25();
     testFormats();
     testModem();

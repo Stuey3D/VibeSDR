@@ -121,9 +121,14 @@ async function server(clip, centre, args, tag) {
     ok(back && before && Math.abs(back.vfo - before.vfo) < 1 && back.mode === before.mode, `the receiver given back (vfo ${back && back.vfo} ${back && back.mode} vs ${before && before.vfo} ${before && before.mode})`);
     const g = await S.gallery();
     const items = (g && (g.items || g)) || [];
-    const ais = Array.isArray(items) ? items.filter((i) => i.kind === 'ais') : [];
+    const ais = Array.isArray(items) ? items.filter((i) => (i.k || i.kind) === 'ais') : [];
     ok(ais.length >= 2, `the gallery: the day's AIS log and its card (${ais.map((i) => i.title).join(' | ')})`);
     ok(ais.some((i) => /ships and stations/.test(i.title)), 'the card names the count');
+    const card = ais.find((i) => /ships and stations/.test(i.title));
+    if (card) {
+      const body = await (await fetch(`http://127.0.0.1:${S.port}/vibeserver/gallery/file/${card.f || card.name}`)).text();
+      ok(/TEST SHIP \d/.test(body), `the card names the ships: ${body.split('\n').slice(0, 5).join(' / ')}`);
+    }
     sp.close();
   } finally { S.stop(); }
 }
@@ -158,7 +163,7 @@ async function server(clip, centre, args, tag) {
     await sleep(1500);
     const g = await S.gallery();
     const items = (g && (g.items || g)) || [];
-    const ap = Array.isArray(items) ? items.filter((i) => i.kind === 'aprs') : [];
+    const ap = Array.isArray(items) ? items.filter((i) => (i.k || i.kind) === 'aprs') : [];
     ok(ap.length >= 1, `the gallery: APRS items (${ap.map((i) => i.title).join(' | ')})`);
     sp.close(); au.close(); dx.close();
   } finally { S.stop(); }

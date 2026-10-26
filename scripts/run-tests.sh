@@ -1007,6 +1007,25 @@ else
   echo '   not run — needs VIBESERVER_BIN and the test-ism build'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by
+#     test-ais / test-aprs --write-clip — AIS mode (both channels, the ship list, a track, the dial given back, the gallery)
+#     and the APRS decoder on a listener's NFM (stations, weather, an object, a message, the gallery); then the web client
+#     in headless Edge (--mute-audio) at desktop and 390 px. Needs VIBESERVER_BIN (exit 3 = not run); the web half Edge.
+printf '\n\033[1m── AIS mode + the APRS decoder (end to end: server, then the web client) ──\033[0m\n'
+if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-ais" --write-clip "$OUT/ais-clip.cu8" 2400000 2>/dev/null
+  "$OUT/test-aprs" --write-clip "$OUT/aprs-clip.cu8" 2400000 2>/dev/null
+  VIBE_AIS_CLIP="$OUT/ais-clip.cu8" VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-ais-aprs.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_AIS_CLIP="$OUT/ais-clip.cu8" VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-web-ais-aprs.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/ais-clip.cu8" "$OUT/aprs-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-ais / test-aprs builds'; notrun=$((notrun+1))
+fi
+# ★ The ship/station layer's generated copies (web client, app, /mapgl/vendor) match web/mapkit/tracklayer.js.
+if node scripts/gen-tracklayer-source.mjs --check; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ V12 CW (2026-10-25): the real server on a fake rtl_tcp replaying the bench's synthetic HF clip (five stations around
 #     7.030 MHz): the skimmer on a one-pipeline radio and a range-locked one, a second listener's own segment, ONE SIGNAL's
 #     text and its spot's RF (test-server-cw); then the web client in headless Edge (--mute-audio) — the CW button, the

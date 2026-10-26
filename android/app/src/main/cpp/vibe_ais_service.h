@@ -60,7 +60,7 @@ struct Vessel {
     double sogRef = NAN, sogRefAt = -1; int trend = 0;
     struct Pt { double t, lat, lon; };
     std::deque<Pt> trail;
-    std::string logLine; double loggedAt = -1e9;
+    std::string logLine, loggedName; double loggedAt = -1e9;
 };
 
 inline std::string displayName(const Vessel& v) {
@@ -306,11 +306,13 @@ private:
         // ★ the gallery: a line only when what it says changed, and a moving ship at most once a minute
         if (heard) {
             const std::string line = readable(v);
-            if (line != v.logLine && t - v.loggedAt >= (v.sog == v.sog && v.sog >= 0.5 ? 60 : 0)) {
+            // ★ …but a new NAME (a type 5 / 24 after the first positions) is logged at once: the log should say who
+            const bool named = displayName(v) != v.loggedName;
+            if (line != v.logLine && (named || t - v.loggedAt >= (v.sog == v.sog && v.sog >= 0.5 ? 60 : 0))) {
                 std::string full = line + " \xc2\xb7 MMSI " + std::to_string(v.mmsi);
                 if (v.lat == v.lat) full += " \xc2\xb7 " + fmtNum(v.lat, 4) + " " + fmtNum(v.lon, 4);
                 heard->push_back({ std::to_string(v.mmsi), v.kind, displayName(v), full, kChanHz[ch & 1] });
-                v.logLine = line; v.loggedAt = t;
+                v.logLine = line; v.loggedAt = t; v.loggedName = displayName(v);
             }
         }
     }
