@@ -13736,6 +13736,8 @@ ${glHead}
   #legend{top:10px;right:10px;padding:8px 10px;min-width:110px}
   .lrow{display:flex;align-items:center;gap:7px;padding:2px 0;white-space:nowrap;font-size:11px}
   .sw{width:11px;height:11px;border-radius:50%;flex:0 0 11px}
+  .mkl{pointer-events:none}
+  .mkl b{display:block;width:12px;height:12px;font:bold 9px/12px ui-monospace,Menlo,monospace;text-align:center}
   .sw.mk{width:14px;height:14px;flex:0 0 14px;box-shadow:0 0 0 1.2px #1a1a1a;font:bold 9px/14px ui-monospace,Menlo,monospace;text-align:center}
   /* Summary strip — bottom, like UberSDR's latest/rarest row. */
   #summary{bottom:10px;left:50%;transform:translateX(-50%);padding:8px 14px;
@@ -13975,6 +13977,18 @@ function drawMarkers() {
       (s.km != null ? ' · ' + esc(s.km) + ' km' : '') + '<br>' +
       esc(s.mode) + ' · ' + esc(s.band) + ' · ' + (s.snr > 0 ? '+' : '') + esc(s.snr) + ' dB<br>' +
       esc((s.frequency / 1e6).toFixed(3)) + ' MHz</div>');
+  }
+  // ★★ THE LETTER ON THE LEAFLET FALLBACK (no WebGL 2): its canvas circles cannot carry text, so the newest 200 markers get
+  //    a small non-interactive letter above them — a mode is never told by colour alone. Capped, because each is a DOM
+  //    node and this window shares the radio's main thread (the preferCanvas note above): past 200 the legend and the
+  //    colours carry it, as the GPU map's letter layer does for any number.
+  if (!vm) {
+    const recent = spots.slice().sort((a, b) => b.timestamp - a.timestamp).slice(0, 200);
+    for (const s of recent) {
+      if (!s.letter) continue;
+      L.marker([s.lat, s.lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: 'mkl', iconSize: [12, 12],
+        html: '<b style="color:' + okColour(s.ink) + '">' + esc(s.letter) + '</b>' }) }).addTo(spotLayer);
+    }
   }
 }
 // ★★★ FIT ONCE, ON THE FIRST DRAW ONLY. Re-fitting on every update would yank the map away
