@@ -5527,6 +5527,10 @@ const BG_DECODERS = [
   { id: "cw-skim-24",   label: "CW skimmer, 24 kHz (summary)", tone: 0,    modes: ["usb"] },
   { id: "cw-skim-48",   label: "CW skimmer, 48 kHz (summary)", tone: 0,    modes: ["usb"] },
   { id: "cw-skim-96",   label: "CW skimmer, 96 kHz (summary)", tone: 0,    modes: ["usb"] },
+  // ★★ V12 2026-10-26: PSK SKIMMERS — the same: every PSK31/63 signal in a segment centred on the VFO (14.0715 MHz
+  //    covers the 20 m PSK segment), a summary of the spots.
+  { id: "psk-skim-6",   label: "PSK skimmer, 6 kHz (summary)",  tone: 0,    modes: ["usb"] },
+  { id: "psk-skim-12",  label: "PSK skimmer, 12 kHz (summary)", tone: 0,    modes: ["usb"] },
 ];
 const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodulators some background decoder works on
 /* ★★ V12 2026-10-25 — AN ISM PROFILE (Stuart: ISM "selectable as a decoder in a background-decoding profile"). ISM is a

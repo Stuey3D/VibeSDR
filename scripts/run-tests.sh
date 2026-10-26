@@ -1019,6 +1019,22 @@ else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 PSK31/63 (2026-10-26): the same shape — the real server on a fake rtl_tcp replaying the bench's synthetic clip
+#     (five PSK stations around 14.071 MHz, one PSK63): the skimmer on a one-pipeline radio and a range-locked one, a
+#     second listener's own segment, ONE SIGNAL's text and its spot's RF (test-server-psk); then the web client in
+#     headless Edge (--mute-audio) — the PSK button, the list and spots, a tap to tune, ONE SIGNAL, 390 px (test-web-psk).
+#     The engine's numbers are vibeserver/test-psk.cpp above; the measuring bench is scripts/test-psk.sh.
+printf '\n\033[1m── PSK (end to end: server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-psk.sh clip "$OUT/psk-clip.cu8" >/dev/null; then
+  VIBE_PSK_CLIP="$OUT/psk-clip.cu8" node scripts/test-server-psk.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_PSK_CLIP="$OUT/psk-clip.cu8" node scripts/test-web-psk.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/psk-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-psk.sh)'; notrun=$((notrun+1))
+fi
+
 # ★★ THE RATE PIN AND THE SHARED-DIAL RATE RULE BIND LISTENERS, NOT THE SIGNED-IN ADMIN (Stuart, 2026-10-24: "sample rate
 #    change isnt working … I am in admin mode"). Same VIBESERVER_BIN rule.
 printf '\n\033[1m── rate pin: listener refused, admin allowed (end to end) ──\033[0m\n'
