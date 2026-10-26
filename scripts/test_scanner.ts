@@ -569,7 +569,7 @@ const tag = (hz: number, mode: SDRMode, extra: Partial<ScanTag> = {}): ScanTag =
   f.names = [{ name: 'Shannon VOLMET', frequency: 5_505_000, rank: 0 }];
   f.ctl.setTags([tag(5_505_000, 'usb')]); f.sigs.push(always(5_505_000, 20));
   f.ctl.start(); f.run(1500);
-  ok('VoiceOver: "Stopped on 5.505 megahertz USB, Shannon VOLMET"', f.said.includes('Stopped on 5.505 megahertz USB, Shannon VOLMET'), JSON.stringify(f.said));
+  ok('VoiceOver: "Stopped on 5.505 megahertz, Shannon VOLMET"', f.said.includes('Stopped on 5.505 megahertz, Shannon VOLMET'), JSON.stringify(f.said));
 }
 
 // ═══ Presets ═════════════════════════════════════════════════════════════════════════════════════════════════════

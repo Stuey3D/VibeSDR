@@ -1166,7 +1166,9 @@ export class ScannerController {
 
   private spoken(t: ScanTarget): string {
     const nm = this.host.nameFor?.(t.frequency, nameTolerance(t, this.source === 'band' ? this.runBand?.stepHz : undefined));
-    return `${freqSpoken(t.frequency)} ${modeText(t.mode)}${nm ? `, ${nm}` : ''}`;
+    // ★ Stuart's sentence: "Stopped on 128.590 megahertz, London South Information Broadcast" — the name when there
+    //   is one, else the mode (which is what tells two unnamed SSB tags apart).
+    return nm ? `${freqSpoken(t.frequency)}, ${nm}` : `${freqSpoken(t.frequency)} ${modeText(t.mode)}`;
   }
 
   /** ★ "Ignore?" — a frequency that keeps trapping the scan (many stops, long dwell, or repeated time-limit escapes).
