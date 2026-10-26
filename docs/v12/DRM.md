@@ -71,6 +71,9 @@ section: `DECODER-RESEARCH.md` §4.4.
 
 ## Codecs — the honest position
 
+> **Update, 2026-10-26:** Stuart chose to build **FAAD2's DRM build into the server** (VIBE_DRM_FAAD2), so DRM's AAC now plays — RRI end to end. It is never in the App Store app. See [DRM-AUDIO-ROUTES.md](DRM-AUDIO-ROUTES.md). The table below is the position before that.
+
+
 | Station codec | Who can decode it | Status |
 |---|---|---|
 | **xHE-AAC (USAC)** | FFmpeg ≥ 7.1 (Debian 13 yes; Ubuntu 24.04 = 6.1 no; Pi OS bookworm = 5.1 no), macOS AudioToolbox, Android 10+ where listed | **Built, NOT verified on air.** No xHE-AAC station was receivable during this work, and building a USAC encoder for test content was not permitted. The config rebuild is unit-tested against the standard's syntax. |
