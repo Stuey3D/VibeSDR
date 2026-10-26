@@ -42,6 +42,7 @@
 #include "decoders/ft8_decoder.h"
 #include "decoders/digi_spotter.h"   // ★ V12: digital spots — Single (the listener's audio) or Band (a band's IQ slice)
 #include "decoders/digi_bands.h"
+#include "vibe_band_slice.h"   // ★ V12: Band's slice sizing and its extra slices
 #include "vibe_cw_run.h"
 #include "vibe_psk_run.h"
 #include "vibe_aprs_run.h"    // ★ V12 APRS (1200 Bd VHF, 300 Bd HF) on the listener's audio — docs/v12/AIS-APRS.md
@@ -395,6 +396,7 @@ public:
         spotsOn_ = true;
         if (scope == SpotScope::Band) {
             bandWidth_.store(bandWidthFor(dial ? dial() : 0.0), std::memory_order_relaxed);   // ★ a socket thread: no channel lock held
+            setExtras_(dial ? dial() : 0.0);
             if (!bandIq_.exchange(true)) skimmersRunning().fetch_add(1);
         } else {
             spotsActive_.store(true, std::memory_order_relaxed);
@@ -436,12 +438,15 @@ public:
     }
     /** ★ The IQ width Band mode wants for a dial: the registered modes' span of the band it is on, wide enough either side
      *  of the dial to hold it all (a dial typed off-centre still decodes the whole band). Off any band: 24 kHz. */
-    static double bandWidthFor(double dialHz) {
-        const digi::Band* b = digi::bandAt(dialHz);
-        if (!b) return 24000.0;
-        const digi::Span sp = digi::spanOf(*b, digi::modes());
-        if (!sp.ok) return 24000.0;
-        return std::max(4000.0, 2.0 * std::max(std::fabs(sp.hiHz - dialHz), std::fabs(dialHz - sp.loHz)));
+    static double bandWidthFor(double dialHz) { return DecoderHostBandWidth(dialHz); }   // ★ vibe_band_slice.h (one rule)
+    /** ★★ V12 (2026-10-27): Band's EXTRA slices for the band the main slice is on — its clusters beyond the main one (40 m's
+     *  JTTY, 6 m's JTTY, 15/10 m's FT4 …: digi_bands.h Span::extras). Atomic reads only (the DSP thread asks, with the
+     *  listener's channel lock held, as for iqWidthHz). Returns how many were written to `out` (≤ kMaxExtraSlices). */
+    int iqExtraSlices(ExtraSlice* out) const {
+        if (!bandIq_.load(std::memory_order_relaxed)) return 0;
+        const int n = std::min(kMaxExtraSlices, nExtras_.load(std::memory_order_acquire));
+        for (int k = 0; k < n; ++k) { out[k].centreHz = exC_[k].load(std::memory_order_relaxed); out[k].widthHz = exW_[k].load(std::memory_order_relaxed); }
+        return n;
     }
     /** Everything off, the queue drained and its thread joined. Idempotent. */
     void shutdown() {
@@ -473,27 +478,38 @@ public:
     bool wantsBins() const { return bandIq_.load(std::memory_order_relaxed); }
     /** Hand the skimmer `n` IQ samples at `rate` Hz centred on `centreRfHz`. Copies and returns at once, as feed().
      *  ★ `binPow`/`nb`/`binHz`: the slice's bins' power for this block (digi::slicePower), for Band's gate; null = none. */
+    /** ★ `captureUtc`: the capture time of the block's LAST sample (the one-pipeline tap works it out from the DSP thread's
+     *  stamp — vibe_wide_tap.h); NaN = now (the per-listener extract runs on the DSP thread itself). `slice`: 0 = Band's
+     *  main slice (and the CW/PSK skimmers'), 1… = an extra slice (iqExtraSlices), for Band only. */
     void feedIq(const std::complex<float>* iq, int n, double rate, double centreRfHz,
-                const float* binPow = nullptr, int nb = 0, double binHz = 0) {
-        if (n <= 0 || !wantsIq()) return;
-        IqBlock b; b.v.assign(iq, iq + n); b.rate = rate; b.centre = centreRfHz;
+                const float* binPow = nullptr, int nb = 0, double binHz = 0, double captureUtc = NAN, int slice = 0) {
+        if (n <= 0 || !wantsIq() || !(rate > 0)) return;
+        if (slice > 0 && !bandIq_.load(std::memory_order_relaxed)) return;
+        IqBlock b; b.v.assign(iq, iq + n); b.rate = rate; b.centre = centreRfHz; b.slice = slice;
         if (binPow && nb > 0 && binHz > 0 && wantsBins()) { b.pw.assign(binPow, binPow + nb); b.binHz = binHz; }
-        b.utc = vibeUtcNow();   // ★ Band spots cut UTC slots by it — stamped here, on the DSP/tap thread, not when decoded
+        // ★ Band spots cut UTC slots by it — the CAPTURE time, never when the block reached here or was decoded
+        b.utc = std::isfinite(captureUtc) ? captureUtc : vibeUtcNow();
         fed_.fetch_add((uint64_t)n, std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lk(qM_);
             if (!qThread_.joinable()) { qStop_ = false; replayStop_.store(false); qThread_ = std::thread([this] { loop_(); }); }
             qiFrames_ += b.v.size();
+            if (slice == 0) qiMainSec_ += (double)n / rate;
             qi_.push_back(std::move(b));
-            // ★ DROP, NEVER WAIT — two seconds of IQ behind and the oldest goes.
-            while (qi_.size() > 1 && rate > 0 && (double)qiFrames_ > rate * 2.0) {
-                qiFrames_ -= qi_.front().v.size();
-                dropped_.fetch_add(qi_.front().v.size(), std::memory_order_relaxed);
+            // ★ DROP, NEVER WAIT — two seconds of the main slice behind and the oldest goes (extra slices with it).
+            while (qi_.size() > 1 && qiMainSec_ > 2.0) {
+                const IqBlock& f = qi_.front();
+                qiFrames_ -= f.v.size();
+                if (f.slice == 0) qiMainSec_ -= (double)f.v.size() / f.rate;
+                dropped_.fetch_add(f.v.size(), std::memory_order_relaxed);
+                iqDropped_.fetch_add(1, std::memory_order_relaxed);
                 qi_.pop_front();
             }
         }
         qCv_.notify_one();
     }
+    /** ★ Band's IQ blocks dropped behind the decode thread (monotonic) — the health pill's TOO HEAVY line reads it. */
+    uint64_t iqBlocksDropped() const { return iqDropped_.load(std::memory_order_relaxed); }
     /** Hand the decoders `count` frames of 48 kHz audio, `stride` floats apart (1 = mono, 2 = take the
      *  left of interleaved stereo). Copies and returns at once — NEVER decodes on the caller's thread.
      *  ★ `captureUtc`: the corrected UTC of the block's LAST frame, stamped HERE, on the audio thread — the
@@ -1072,12 +1088,28 @@ private:
     std::string statusJsonLocked_() {
         std::string j = "{\"type\":\"digital_spots_status\",\"data\":{\"scope\":\"band\",\"modes\":[";
         bool first = true;
-        for (const auto& m : spotter_->status()) {
+        const std::vector<digi::Spotter::ModeStatus> sts = spotter_->status();
+        for (const auto& m : sts) {
             char b[200];
             std::snprintf(b, sizeof b, "%s{\"mode\":\"%s\",\"state\":\"%s\",\"dials\":%d,\"idle\":%llu,\"shed\":%llu,\"live\":%llu}",
                           first ? "" : ",", m.mode.c_str(), digi::stateWord(m.state), m.dials, (unsigned long long)m.idle,
                           (unsigned long long)m.shed, (unsigned long long)m.live);
             j += b; first = false;
+        }
+        /* ★★ A mode this band carries that is not running at all — its slice lies beyond what this radio's capture holds
+         *  (a narrow capture: an extra slice 153 kHz off on 6 m) — is a chip too, "out", never silently missing. */
+        {
+            const digi::Band* bd = digi::bandAt(bandWidthDial_.load(std::memory_order_relaxed));
+            const digi::Span sp = bd ? digi::spanOf(*bd, digi::modes()) : digi::Span();
+            if (sp.ok)
+                for (const std::string& name : sp.allModes()) {
+                    bool have = false;
+                    for (const auto& m : sts) if (m.mode == name) have = true;
+                    if (have) continue;
+                    char b[160];
+                    std::snprintf(b, sizeof b, "%s{\"mode\":\"%s\",\"state\":\"out\",\"dials\":0,\"idle\":0,\"shed\":0,\"live\":0}", first ? "" : ",", name.c_str());
+                    j += b; first = false;
+                }
         }
         const double u = spotter_->budgetUnits();
         char t[64];
@@ -1132,12 +1164,13 @@ private:
                 IqBlock b = std::move(qi_.front());
                 qi_.pop_front();
                 qiFrames_ -= b.v.size();
+                if (b.slice == 0) qiMainSec_ = std::max(0.0, qiMainSec_ - (double)b.v.size() / b.rate);
                 lk.unlock();
                 const uint64_t c0 = vibeThreadCpuNs();
                 {
                     std::lock_guard<std::mutex> dl(decMtx_);
-                    if (cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
-                    if (psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.slice == 0 && cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.slice == 0 && psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                 }
                 {
                     std::lock_guard<std::mutex> sl(spotsMtx_);
@@ -1147,9 +1180,10 @@ private:
                         maybeSendStatusLocked_(b.utc);
                         // ★ The slice is centred on the dial: the next blocks are cut to the span of the band it is on now
                         //   (a band step is followed within a block or two). Cached per centre — the table walk is cheap but not free.
-                        if (std::fabs(b.centre - bandWidthDial_.load(std::memory_order_relaxed)) > 0.5) {
+                        if (b.slice == 0 && std::fabs(b.centre - bandWidthDial_.load(std::memory_order_relaxed)) > 0.5) {
                             bandWidth_.store(bandWidthFor(b.centre), std::memory_order_relaxed);
                             bandWidthDial_.store(b.centre, std::memory_order_relaxed);
+                            setExtras_(b.centre);   // ★ and the band's extra slices follow it
                         }
                     }
                 }
@@ -1311,6 +1345,14 @@ private:
     std::atomic<bool> spotsActive_{false};      // ★ Single: wants the listener's audio
     std::atomic<bool> bandIq_{false};           // ★ Band: wants the band's IQ slice (wantsIq)
     std::atomic<double> bandWidth_{24000.0}, bandWidthDial_{-1.0};   // ★ the slice width (set at start and by the decode thread)
+    std::atomic<int> nExtras_{0};                // ★ Band's extra slices (iqExtraSlices) — set with bandWidth_
+    std::atomic<double> exC_[kMaxExtraSlices], exW_[kMaxExtraSlices];
+    void setExtras_(double dialHz) {
+        const std::vector<ExtraSlice> e = bandExtraSlices(dialHz);
+        nExtras_.store(0, std::memory_order_release);
+        for (size_t k = 0; k < e.size() && (int)k < kMaxExtraSlices; ++k) { exC_[k].store(e[k].centreHz); exW_[k].store(e[k].widthHz); }
+        nExtras_.store((int)std::min<size_t>(e.size(), kMaxExtraSlices), std::memory_order_release);
+    }
     uint64_t spotSkipBase_ = 0;
     uint64_t spotShedBase_ = 0;                  // ★ Band periods shed by runs already stopped (spotPeriodsShed is monotonic)
     uint64_t statusSent_ = ~0ull;                // ★ the spotter's statusSeq last sent (spotsMtx_)
@@ -1328,7 +1370,9 @@ private:
     std::condition_variable qCv_;
     std::deque<std::vector<float>> q_;
     std::deque<double> qUtc_;            // ★ each block's capture time (feed), in step with q_
-    struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0, utc = 0; std::vector<float> pw; double binHz = 0; };
+    struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0, utc = 0; std::vector<float> pw; double binHz = 0; int slice = 0; };
+    double qiMainSec_ = 0;               // ★ seconds of the MAIN slice queued (qM_)
+    std::atomic<uint64_t> iqDropped_{0};
     std::deque<IqBlock> qi_;             // ★ a CW skimmer's IQ (feedIq), served before audio by the same thread
     size_t qiFrames_ = 0;
     size_t qFrames_ = 0;

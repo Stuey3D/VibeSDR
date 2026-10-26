@@ -103,7 +103,7 @@ public:
     static std::vector<std::string> singleModesAt(const std::vector<ModeDef>& ms, double dialHz);
     /** Is a listener at `dialHz` on one of `m`'s dials (see the .cpp)? */
     static bool atOwnDial(const ModeDef& m, double dialHz);
-    /** The slice's centre and rate at the last re-plan (tests). */
+    /** The widest slice's centre at the last re-plan (tests). */
     double planCentre() const { return planCentre_; }
 
 private:
@@ -131,14 +131,25 @@ private:
     struct Chan {                     // ★ one tuner, and every engine on its dial
         std::unique_ptr<DigiTuner> tuner;
         std::vector<Run> runs;
+        long long slice = 0;          // ★ the slice it is fed from (Slice key: its centre in Hz)
     };
-    void plan(double rate, double centreHz);
+    /** ★★ ONE SLICE OF THE CAPTURE (V12, 2026-10-27): a band's main cluster, or one of its extra slices (digi_bands.h
+     *  Span::extras — 40 m's JTTY, 6 m's JTTY, 15/10 m's FT4 …). Keyed by its RF centre; each has its own gate floor. A
+     *  slice not fed for kSliceGoneSec has gone (the band moved, an extra fell outside the radio's capture). */
+    struct Slice {
+        double rate = 0, centre = 0, lastUtc = -1e300;
+        SliceFloor floor;
+        uint64_t blocks = 0;          // ★ blocks with bins (the gate looks every 8th)
+        int gNb = 0; double gBinHz = 0, gCentre = 0;   // the windows' placement
+    };
+    static constexpr double kSliceGoneSec = 3.0;
+    void plan();
     void planSingle(double dialHz);
     void wire(Run& r);
     // ── the gate and the governor (Band) ──
     static double gatePeriod(const ModeDef& m);
-    void placeWindows(int nb, double binHz, double centreHz);
-    void route(Run& r, const float* a, int k, double utc, int gated);
+    void placeWindows(long long key, Slice& s, int nb, double binHz, double centreHz);
+    void route(Run& r, const float* a, int k, double utc, int gated, Slice& s);
     void newPeriod(Run& r, int64_t per, int gated);
     RunState ask(Run& who, bool wants);          // statMtx_ held
     void goLive(Run& r);
@@ -162,11 +173,9 @@ private:
 
     // Band
     std::map<long long, Chan> chans_;    // ★ keyed by the dial in Hz
-    double planRate_ = 0, planCentre_ = 0;
+    std::map<long long, Slice> slices_;  // ★ keyed by the slice's centre in Hz
+    double planRate_ = 0, planCentre_ = 0;   // ★ the widest slice's (tests)
     std::vector<float> audio_, scratch_;
-    SliceFloor floor_;
-    uint64_t gateBlocks_ = 0;            // ★ blocks with bins (the gate looks every 8th)
-    int gNb_ = 0; double gBinHz_ = 0, gCentre_ = 0;
     std::function<Override(const std::string&)> override_;
     BandBudget budget_;
     bool loadedNow_ = false;

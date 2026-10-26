@@ -153,12 +153,34 @@ constexpr double kMaxSpanHz = 48000.0;
 /** One band as Band mode uses it: the RF span the registered modes cover there (guard included), its centre — where
  *  the dial goes, and so where the IQ slice is cut — and which modes are on it (and which are on the band but too far
  *  from its cluster to share the slice). `ok` false = no registered mode has a dial on this band. */
+/** ★★ V12 (2026-10-27, Stuart: "we need to get JTTY to the full band decoder mode"): a band's dials further from its
+ *  cluster than kMaxSpanHz get a SLICE OF THEIR OWN — one more extract of the same forward FFT (no extra USB, no extra
+ *  transform), its own tuner — instead of being left out. 40 m's JTTY (7.090), 6 m's JTTY (50.160, 153 kHz from FT8),
+ *  15 m's and 10 m's FT4, 10/4/2 m's WSPR. Each extra slice is at least kMinSliceHz wide (the tuner's 12 kHz output wants
+ *  a slice rate above it). */
+constexpr double kMinSliceHz = 24000.0;
+struct SubSpan {
+    double loHz = 0, hiHz = 0, centreHz = 0;
+    std::vector<std::string> modes;
+    double widthHz() const { return hiHz - loHz; }
+};
 struct Span {
     bool ok = false;
     const Band* band = nullptr;
     double loHz = 0, hiHz = 0, centreHz = 0;
-    std::vector<std::string> modes, outside;
+    std::vector<std::string> modes;        ///< on the MAIN slice (the cluster round FT8, where the dial goes)
+    std::vector<std::string> outside;      ///< ★ on the band but on an extra slice (see `extras`) — never undecoded now
+    std::vector<SubSpan> extras;           ///< the band's other clusters, each a slice of its own
     double widthHz() const { return hiHz - loHz; }
+    /** Every mode decoded on this band: the main slice's, then the extras'. */
+    std::vector<std::string> allModes() const {
+        std::vector<std::string> o = modes;
+        for (const SubSpan& e : extras) for (const std::string& m : e.modes) {
+            bool have = false; for (const std::string& x : o) if (x == m) have = true;
+            if (!have) o.push_back(m);
+        }
+        return o;
+    }
 };
 inline Span spanOf(const Band& b, const std::vector<ModeDef>& ms) {
     Span s; s.band = &b;
@@ -184,16 +206,39 @@ inline Span spanOf(const Band& b, const std::vector<ModeDef>& ms) {
         return std::fabs(0.5 * (iv[x].lo + iv[x].hi) - ac) < std::fabs(0.5 * (iv[y].lo + iv[y].hi) - ac);
     });
     double lo = iv[a].lo, hi = iv[a].hi;
-    std::vector<bool> in(ms.size(), false), on(ms.size(), false);
+    std::vector<bool> in(ms.size(), false), on(ms.size(), false), used(iv.size(), false);
     for (size_t i : order) {
         on[iv[i].mode] = true;
         const double nlo = std::min(lo, iv[i].lo), nhi = std::max(hi, iv[i].hi);
-        if (nhi - nlo + 2 * kSpanGuardHz > kMaxSpanHz) continue;   // ★ too far from the cluster: outside
-        lo = nlo; hi = nhi; in[iv[i].mode] = true;
+        if (nhi - nlo + 2 * kSpanGuardHz > kMaxSpanHz) continue;   // ★ too far from the cluster: an extra slice
+        lo = nlo; hi = nhi; in[iv[i].mode] = true; used[i] = true;
     }
     for (size_t k = 0; k < ms.size(); ++k) {
         if (in[k]) s.modes.push_back(ms[k].name);
         else if (on[k]) s.outside.push_back(ms[k].name);
+    }
+    /* ★★ THE EXTRA SLICES: what the cluster left, grouped the same way (in `order` — priority, then nearest FT8 — each
+     *  group anchored on the first dial still unplaced, growing while it stays within kMaxSpanHz). */
+    for (size_t g = 0; g < order.size(); ++g) {
+        const size_t a2 = order[g];
+        if (used[a2]) continue;
+        double elo = iv[a2].lo, ehi = iv[a2].hi;
+        used[a2] = true;
+        std::vector<size_t> members{ a2 };
+        for (size_t h = g + 1; h < order.size(); ++h) {
+            const size_t i = order[h];
+            if (used[i]) continue;
+            const double nlo = std::min(elo, iv[i].lo), nhi = std::max(ehi, iv[i].hi);
+            if (nhi - nlo + 2 * kSpanGuardHz > kMaxSpanHz) continue;
+            elo = nlo; ehi = nhi; used[i] = true; members.push_back(i);
+        }
+        SubSpan e;
+        e.centreHz = std::round((elo + ehi) / 2.0 / 100.0) * 100.0;
+        const double half = std::max(kMinSliceHz / 2.0, std::max(e.centreHz - elo, ehi - e.centreHz) + kSpanGuardHz);
+        e.loHz = e.centreHz - half; e.hiHz = e.centreHz + half;
+        for (size_t k = 0; k < ms.size(); ++k)
+            for (size_t i : members) if (iv[i].mode == k) { e.modes.push_back(ms[k].name); break; }
+        s.extras.push_back(e);
     }
     s.ok = true;
     s.loHz = lo - kSpanGuardHz; s.hiHz = hi + kSpanGuardHz;

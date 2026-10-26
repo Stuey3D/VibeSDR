@@ -60,8 +60,7 @@ DigiTuner::DigiTuner(double dialHz, float loHz, float hiHz, int outRate)
 }
 
 bool DigiTuner::fits(double dialHz, float loHz, float hiHz, double rate, double centreHz) {
-    const double usable = 0.46 * rate;   // ★ the channeliser slice's outer few % are its own roll-off
-    return dialHz + loHz >= centreHz - usable && dialHz + hiHz <= centreHz + usable;
+    return margin(dialHz, loHz, hiHz, rate, centreHz) >= 0.0;   // ★ inside the slice's FLAT part (vibe_band_slice.h)
 }
 
 void DigiTuner::design1(double rate) {

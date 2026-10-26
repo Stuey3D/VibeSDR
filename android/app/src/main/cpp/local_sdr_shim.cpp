@@ -8148,6 +8148,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /** ★ V12: a CW skimmer's slice of the same FFT (its own scratch, as above). */
         vibedsp::Channelizer::ExtractCtx sctx;
         std::vector<cf32> skimSlice;
+        /** ★ V12 Band spots' EXTRA slices (vibe_band_slice.h): one buffer and extract context each. This thread only. */
+        std::vector<cf32> bandX[vibe::kMaxExtraSlices];
+        vibedsp::Channelizer::ExtractCtx bandXctx[vibe::kMaxExtraSlices];
+        std::vector<float> bandXpw;
         /** ★★ V12 VFO A/B: this listener's watch channels, cached from the registry by generation (watchGen_) so the
          *  per-block cost with VFO B off is one relaxed atomic read. Read and written on THIS listener's thread only. */
         std::shared_ptr<WatchSet> watch;
@@ -26383,12 +26387,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::shared_ptr<DecoderHost> h = decoders_.find(c->session);
             if (h && h->wantsIq()) {
                 const double w = std::min(h->iqWidthHz(), sampleRate * 0.8);
-                int b = 64;
-                while (b < fftSize && sampleRate * (double)b / (double)fftSize < w / 0.92) b <<= 1;
-                b = std::min(b, fftSize);
+                // ★★ V12 (2026-10-27): sized for the slice's FLAT part, cut with a sixteenth's roll-off (vibe_band_slice.h —
+                //    it was sized for 4 % and cut with a quarter: 40 m's ends sat 2–3 dB down at 960 kS/s, JTTY 17 dB).
+                const int b = vibe::bandSliceBins(sampleRate, fftSize, w);
                 if ((int)c->skimSlice.size() != b) c->skimSlice.assign((size_t)b, cf32{0.0f, 0.0f});
                 const int cb = clientCentreBin(c.get());
-                const int gs = chan_->extract(bins, cb, b, c->skimSlice.data(), c->sctx, blockIndex);
+                const int gs = chan_->extract(bins, cb, b, c->skimSlice.data(), c->sctx, blockIndex, vibe::kBandTaperDiv);
                 const double binHz = sampleRate / (double)fftSize;
                 /* ★★ V12 BAND SPOTS' ACTIVITY GATE (decoders/digi_activity.h): the slice's bins' power, read off this SAME
                  *  forward FFT — one multiply-add per bin, no transform — so Band can leave an empty mode window undecoded. */
@@ -26399,8 +26403,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     vibe::digi::slicePower(bins, fftSize, cb, b, pwBuf.data());
                     pw = pwBuf.data();
                 }
+                const double hwC = rtlCenter.load() + hwOffsetHz();
                 if (gs > 0) h->feedIq(c->skimSlice.data(), gs, sampleRate * (double)b / (double)fftSize,
-                                      rtlCenter.load() + hwOffsetHz() + cb * binHz, pw, pw ? b : 0, binHz);
+                                      hwC + cb * binHz, pw, pw ? b : 0, binHz);
+                // ★★ Band's EXTRA slices (40 m's JTTY, 6 m's JTTY, 15/10 m's FT4 …): one more small inverse FFT each, off
+                //    this SAME forward FFT — only those this capture holds; the rest show as "out" chips (vibe_decoder_host.h).
+                vibe::ExtraSlice xs[vibe::kMaxExtraSlices];
+                const int nx = gs > 0 ? h->iqExtraSlices(xs) : 0;
+                for (int k = 0; k < nx; ++k) {
+                    const int eb = vibe::bandSliceBins(sampleRate, fftSize, xs[k].widthHz);
+                    const int ecb = (int)std::lround((xs[k].centreHz - hwC) / binHz);
+                    const double erate = sampleRate * (double)eb / (double)fftSize, ecentre = hwC + ecb * binHz;
+                    if (!vibe::captureHolds(sampleRate, hwC, ecentre, erate)) continue;
+                    if ((int)c->bandX[k].size() != eb) c->bandX[k].assign((size_t)eb, cf32{0.0f, 0.0f});
+                    const int eg = chan_->extract(bins, ecb, eb, c->bandX[k].data(), c->bandXctx[k], blockIndex, vibe::kBandTaperDiv);
+                    if (eg <= 0) continue;
+                    const float* epw = nullptr;
+                    if (pw) { c->bandXpw.resize((size_t)eb); vibe::digi::slicePower(bins, fftSize, ecb, eb, c->bandXpw.data()); epw = c->bandXpw.data(); }
+                    h->feedIq(c->bandX[k].data(), eg, erate, ecentre, epw, epw ? eb : 0, binHz, NAN, k + 1);
+                }
             }
         }
     }
@@ -27488,8 +27509,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!want) { if (skimTap_.running()) skimTap_.stop(); return; }
         if (!skimTap_.running()) {
             std::weak_ptr<DecoderHost> wh = decoders_.shared();
-            skimTap_.start(vibe::WideTap::BinSink([wh](const cf32* x, int k, double rate, double centre, const float* pw, int nb, double binHz) {
-                if (auto h = wh.lock()) h->feedIq(x, k, rate, centre, pw, nb, binHz);
+            // ★★ V12 (2026-10-27): each block with its CAPTURE time and its slice (vibe_wide_tap.h's file note — Stuart's Pi 2)
+            skimTap_.start(vibe::WideTap::BandSink([wh](const cf32* x, int k, double rate, double centre, const float* pw, int nb, double binHz,
+                                                        double utc, int slice) {
+                if (auto h = wh.lock()) h->feedIq(x, k, rate, centre, pw, nb, binHz, utc, slice);
             }));
         }
         std::shared_ptr<DecoderHost> h = decoders_.shared();
@@ -27497,8 +27520,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g.sampleRate = sampleRate; g.hwCentreHz = rtlCenter.load() + hwOffsetHz(); g.wantCentreHz = audioFreq.load();
         g.widthHz = h ? std::min(h->iqWidthHz(), sampleRate * 0.8) : 0; g.fftSize = fftSize;
         g.bins = h && h->wantsBins();   // ★ Band spots' activity gate: the slice's bins' power with each block
+        g.band = true;                  // ★ the flat-part sizing (vibe_band_slice.h) — the CW/PSK skimmers share it
+        if (h) {
+            vibe::ExtraSlice xs[vibe::kMaxExtraSlices];
+            g.nExtras = h->iqExtraSlices(xs);
+            for (int k = 0; k < g.nExtras; ++k) g.extras[k] = xs[k];
+        }
         skimTap_.aim(g);
-        skimTap_.feed(iq, n);
+        skimTap_.feed(iq, n, vibeUtcNow());   // ★ stamped HERE, on the DSP thread: the capture time of the chunk's last sample
     }
     vibe::bg::BgRegistry bgReg_;                // ★ this radio's background VFOs, as the box sees them (pause / resume)
     std::mutex         bgOpMtx_;                // ★ one start/stop at a time — the tick, an arrival

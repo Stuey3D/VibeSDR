@@ -155,6 +155,7 @@ public:
     struct ExtractCtx {
         std::vector<cf32> slice;
         std::map<int, std::unique_ptr<ComplexFFT>> inv;
+        std::vector<cf32> lin;   ///< ★ the causal shift's per-bin phases (narrow roll-off only — see extract)
     };
 
     /** One channel taken from a transformed block.
@@ -166,6 +167,12 @@ public:
     /** @param blockIndex WHICH block these bins came from — see below. */
     int extract(const cf32* bins, int centreBin, int chanBins, cf32* out, ExtractCtx& ctx,
                 long long blockIndex) const;
+    /** ★ V12 (2026-10-27): the same, with the roll-off over chanBins/`taperDiv` bins at each edge instead of a quarter
+     *  (taperDiv 4 = the listeners' channels, unchanged). Band spots' slice uses 16 — flat over 7/8 of its rate, so every
+     *  mode's passband sits in the flat part; its impulse response is still far inside the overlap (test-band-slice
+     *  measures the block-rate spurs). */
+    int extract(const cf32* bins, int centreBin, int chanBins, cf32* out, ExtractCtx& ctx,
+                long long blockIndex, int taperDiv) const;
     int extract(const cf32* bins, int centreBin, int chanBins, cf32* out, ExtractCtx& ctx) const;
     /** ★★★ THE INDEX OF THE BLOCK CURRENTLY IN THE feed() CALLBACK.
      *  A channel's phase reference restarts every block, and extract() puts it back using this

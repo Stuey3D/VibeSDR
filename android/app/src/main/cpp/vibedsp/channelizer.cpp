@@ -57,6 +57,12 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
 
 int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* out,
                          ExtractCtx& ctx, long long blockIndex) const {
+    return extract(bins, centreBin, chanBins, out, ctx, blockIndex, 4);
+}
+
+int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* out,
+                         ExtractCtx& ctx, long long blockIndex, int taperDiv) const {
+    if (taperDiv < 2) taperDiv = 2;
     if (chanBins <= 0 || chanBins > n_ || (n_ % chanBins) != 0) return 0;
 
     auto it = ctx.inv.find(chanBins);
@@ -93,7 +99,7 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
     //       response into the overlap. The caller asks for a WIDER channel than it needs and crops
     //       the tapered edges away, so nothing the user sees is attenuated.
     {
-        const int edge = chanBins / 4;                 // bins of roll-off at each band edge
+        const int edge = chanBins / taperDiv;          // bins of roll-off at each band edge (4: a quarter)
         for (int e = 0; e < edge; ++e) {
             const float w = 0.5f * (1.0f - std::cos((float)M_PI * (float)(e + 1) / (float)(edge + 1)));
             // The slice is laid out DC-first, so the band edges are the two sides of its middle.
@@ -102,6 +108,27 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
             if (hi >= 0)        ctx.slice[hi] *= w;
             if (lo < chanBins)  ctx.slice[lo] *= w;
         }
+    }
+
+    /* ★★ A NARROW ROLL-OFF IS MADE CAUSAL (V12, 2026-10-27). The filter above is ZERO-PHASE: its impulse response runs
+     *  BOTH ways from t = 0, and the anti-causal half wraps onto the LAST samples of the block, which overlap-save never
+     *  discards (only the first chanBins/OVERLAP_DIV). A quarter's roll-off keeps that half short enough not to matter
+     *  much; a sixteenth's (Band spots' slice, flat over 7/8 of its rate) left block-rate spurs and images at −56…−63 dB
+     *  (test-band-slice). So for any narrower roll-off the response is DELAYED by half the overlap — a linear phase,
+     *  e^(−j2π·k·d/chanBins), d = chanBins/(2·OVERLAP_DIV) — and both halves land inside the discarded head. Cost: one
+     *  complex multiply a bin (cached per size), and d output samples of constant latency (1.7 ms at 75 kHz). The
+     *  listeners' channels (a quarter) are left exactly as they were. */
+    if (taperDiv != 4) {
+        if ((int)ctx.lin.size() != chanBins) {
+            ctx.lin.resize((size_t)chanBins);
+            const int d = chanBins / (2 * OVERLAP_DIV);
+            for (int k = 0; k < chanBins; ++k) {
+                const int off = (k < half) ? k : k - chanBins;
+                const double a = -2.0 * M_PI * (double)off * (double)d / (double)chanBins;
+                ctx.lin[(size_t)k] = cf32((float)std::cos(a), (float)std::sin(a));
+            }
+        }
+        for (int k = 0; k < chanBins; ++k) ctx.slice[k] *= ctx.lin[(size_t)k];
     }
 
     // ★ SCALE. KissFFT normalises neither direction, so a forward of n_ followed by an inverse of

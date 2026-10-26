@@ -26,6 +26,7 @@
 // Cost at R = 75 kHz, per tuner: ≈ 75 k complex mixes + 12 k × (40 + 2 × 145) MACs ≈ 4.4 M MAC/s — under 0.4 % of an
 // M-class core, a few % of one Cortex-A7 core (the FT8 decode it feeds costs more). Measured: docs/v12/DIGITAL-SPOTS.md.
 #pragma once
+#include <algorithm>
 #include <complex>
 #include <cstdint>
 #include <vector>
@@ -50,6 +51,15 @@ public:
     int    outRate() const { return fo_; }
     /** Is the whole passband inside a slice of `rate` centred on `centreHz` (its outer 4 % each side is roll-off)? */
     static bool fits(double dialHz, float loHz, float hiHz, double rate, double centreHz);
+    /** ★ The flat part of a Band slice either side of its centre, as a fraction of its rate (vibe_band_slice.h: the slice is
+     *  cut with a roll-off of a sixteenth of its bins a side — 1 − 2/16 flat, less a cushion — and sized for exactly this). */
+    static constexpr double kFlatHalfFrac = 0.5 * (1.0 - 2.0 / 16.0 - 0.01);
+    /** How far inside the flat part a dial's passband sits in `rate` (Hz; negative = it does not fit). The plan gives a dial
+     *  to the slice where this is largest. */
+    static double margin(double dialHz, float loHz, float hiHz, double rate, double centreHz) {
+        const double u = kFlatHalfFrac * rate;
+        return std::min(dialHz + loHz - (centreHz - u), centreHz + u - (dialHz + hiHz));
+    }
     /** Taps in the two filters (tests, the docs' cost figures). */
     int stage1Taps() const { return n1_; }
     int stage2Taps() const { return (int)h2_.size(); }

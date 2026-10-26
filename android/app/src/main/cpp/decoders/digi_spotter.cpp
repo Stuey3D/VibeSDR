@@ -110,19 +110,40 @@ bool Spotter::atOwnDial(const ModeDef& m, double dialHz) {
     return false;
 }
 
-void Spotter::plan(double rate, double centreHz) {
-    planRate_ = rate; planCentre_ = centreHz;
-    // What should run: every (mode, dial) of a band whose passband fits this slice.
-    std::map<long long, std::vector<std::pair<const ModeDef*, double>>> want;
+void Spotter::plan() {
+    planRate_ = 0; planCentre_ = 0;
+    for (auto& kv : slices_) if (kv.second.rate > planRate_) { planRate_ = kv.second.rate; planCentre_ = kv.second.centre; }
+    /* What should run: every (mode, dial) of a band whose passband fits one of the slices' flat parts — each DIAL on ONE
+     *  slice (its tuner's): the one holding most of its modes, then the one it sits deepest in. */
+    struct Want { long long slice = 0; std::vector<std::pair<const ModeDef*, double>> modes; };
+    std::map<long long, std::vector<std::pair<const ModeDef*, double>>> cand;
     for (const ModeDef& m : modes_) {
         if (m.sampleRate != 12000) continue;     // ★ the tuners make 12 kHz; another rate needs its own tuner group
         for (const Band& b : bands())
             for (double d : dialsOf(m, b.id))
-                if (DigiTuner::fits(d, m.audioLoHz, m.audioHiHz, rate, centreHz))
-                    want[std::llround(d)].push_back({ &m, d });
+                for (auto& sk : slices_)
+                    if (DigiTuner::fits(d, m.audioLoHz, m.audioHiHz, sk.second.rate, sk.second.centre)) { cand[std::llround(d)].push_back({ &m, d }); break; }
+    }
+    std::map<long long, Want> want;
+    for (auto& kv : cand) {
+        long long best = 0; int bestN = -1; double bestM = -1e300;
+        for (auto& sk : slices_) {
+            int n = 0; double mm = 1e300;
+            for (auto& md : kv.second) {
+                const double g = DigiTuner::margin(md.second, md.first->audioLoHz, md.first->audioHiHz, sk.second.rate, sk.second.centre);
+                if (g >= 0) { ++n; mm = std::min(mm, g); }
+            }
+            if (n > bestN || (n == bestN && mm > bestM)) { best = sk.first; bestN = n; bestM = mm; }
+        }
+        if (bestN <= 0) continue;
+        Want& w = want[kv.first];
+        w.slice = best;
+        const Slice& S = slices_[best];
+        for (auto& md : kv.second)
+            if (DigiTuner::fits(md.second, md.first->audioLoHz, md.first->audioHiHz, S.rate, S.centre)) w.modes.push_back(md);
     }
     std::lock_guard<std::mutex> lk(statMtx_);
-    // Drop channels whose dial left the slice (their engines' counts are kept).
+    // Drop channels whose dial left every slice (their engines' counts are kept).
     for (auto it = chans_.begin(); it != chans_.end();) {
         if (want.count(it->first)) { ++it; continue; }
         for (Run& r : it->second.runs) {
@@ -135,10 +156,11 @@ void Spotter::plan(double rate, double centreHz) {
     for (auto& kv : want) {
         Chan& c = chans_[kv.first];
         float lo = 1e9f, hi = -1e9f;
-        for (auto& md : kv.second) { lo = std::min(lo, md.first->audioLoHz); hi = std::max(hi, md.first->audioHiHz); }
-        if (!c.tuner || c.tuner->loHz() != lo || c.tuner->hiHz() != hi)
-            c.tuner.reset(new DigiTuner((double)kv.first, lo, hi, 12000));
-        for (auto& md : kv.second) {
+        for (auto& md : kv.second.modes) { lo = std::min(lo, md.first->audioLoHz); hi = std::max(hi, md.first->audioHiHz); }
+        if (!c.tuner || c.tuner->loHz() != lo || c.tuner->hiHz() != hi || c.slice != kv.second.slice)
+            c.tuner.reset(new DigiTuner((double)kv.first, lo, hi, 12000));   // ★ a dial moved to another slice: a fresh tuner
+        c.slice = kv.second.slice;
+        for (auto& md : kv.second.modes) {
             bool have = false;
             for (Run& r : c.runs) if (r.def == md.first) have = true;
             if (have) continue;
@@ -151,24 +173,42 @@ void Spotter::plan(double rate, double centreHz) {
             c.runs.push_back(std::move(r));
         }
     }
-    gNb_ = 0;                                // ★ the windows are placed again on the next block with bins
+    for (auto& sk : slices_) sk.second.gNb = 0;   // ★ the windows are placed again on each slice's next block with bins
     statusSeq_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double captureUtc,
                      const float* binPow, int nb, double binHz) {
     if (scope_ != Scope::Band || n <= 0 || !(rate > 0)) return;
-    if (std::fabs(rate - planRate_) > 0.5 || std::fabs(centreHz - planCentre_) > 0.5) plan(rate, centreHz);
+    const long long key = std::llround(centreHz);
+    bool replan = false;
+    auto it = slices_.find(key);
+    if (it == slices_.end()) {
+        it = slices_.emplace(key, Slice()).first;
+        it->second.rate = rate; it->second.centre = centreHz; replan = true;
+    } else if (std::fabs(it->second.rate - rate) > 0.5) {
+        it->second.rate = rate; replan = true;
+    }
+    Slice& S = it->second;
+    S.lastUtc = captureUtc;
+    for (auto j = slices_.begin(); j != slices_.end();) {
+        /* ★ A slice no longer fed has gone; and a NEW slice at the same rate within a quarter of it of an old one is that
+         *  slice MOVED (a fine retune) — the old one goes at once, so its dials keep their engines and lose no audio. */
+        const bool moved = replan && j != it && std::fabs(j->second.rate - rate) < 0.5 && std::fabs(j->second.centre - centreHz) < 0.25 * rate;
+        if (j != it && (moved || captureUtc - j->second.lastUtc > kSliceGoneSec)) { j = slices_.erase(j); replan = true; }
+        else ++j;
+    }
+    if (replan) plan();
     // ── the activity gate's measure: the slice's own bins (no transform here) ──
     /* ★ 0 = no bins (no gate: every window counts as occupied) · 1 = bins, the floor still warming up (hold, open only
      *  what must run) · 2 = gated. */
     int gated = 0;
     if (binPow && nb > 8 && binHz > 0) {
-        if (nb != gNb_ || std::fabs(binHz - gBinHz_) > 1e-6 || std::fabs(centreHz - gCentre_) > 0.5) placeWindows(nb, binHz, centreHz);
-        floor_.block(binPow, nb, std::max(1, (int)std::lround(0.5 * rate / n)));   // ★ the median every half second
-        for (auto& kv : chans_) for (Run& r : kv.second.runs) if (r.gate) r.gate->meter.block(binPow, nb);
-        gated = floor_.ready() ? 2 : 1;
-        ++gateBlocks_;
+        if (nb != S.gNb || std::fabs(binHz - S.gBinHz) > 1e-6 || std::fabs(centreHz - S.gCentre) > 0.5) placeWindows(key, S, nb, binHz, centreHz);
+        S.floor.block(binPow, nb, std::max(1, (int)std::lround(0.5 * rate / n)));   // ★ the median every half second
+        for (auto& kv : chans_) if (kv.second.slice == key) for (Run& r : kv.second.runs) if (r.gate) r.gate->meter.block(binPow, nb);
+        gated = S.floor.ready() ? 2 : 1;
+        ++S.blocks;
     }
     {
         std::lock_guard<std::mutex> lk(statMtx_);
@@ -177,6 +217,7 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
     }
     for (auto& kv : chans_) {
         Chan& c = kv.second;
+        if (c.slice != key) continue;
         /* ★ A dial whose every engine is OFF or SHED needs no audio at all: its tuner is skipped too (measured on the Pi 2
          *  build, the tuners are ≈ a fifth of Band's work — docs/v12/DIGITAL-SPOTS.md). The period clock still turns. */
         bool anyWants = false;
@@ -192,7 +233,7 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
         audio_.clear();
         c.tuner->feed(x, n, rate, centreHz, audio_);
         if (audio_.empty()) continue;
-        for (Run& r : c.runs) route(r, audio_.data(), (int)audio_.size(), captureUtc, gated);
+        for (Run& r : c.runs) route(r, audio_.data(), (int)audio_.size(), captureUtc, gated, S);
     }
 }
 
@@ -209,10 +250,11 @@ double Spotter::gatePeriod(const ModeDef& m) {
     return m.slotSec > 0 ? m.slotSec : 4.0;
 }
 
-void Spotter::placeWindows(int nb, double binHz, double centreHz) {
-    gNb_ = nb; gBinHz_ = binHz; gCentre_ = centreHz;
+void Spotter::placeWindows(long long key, Slice& sl, int nb, double binHz, double centreHz) {
+    sl.gNb = nb; sl.gBinHz = binHz; sl.gCentre = centreHz;
     for (auto& kv : chans_)
         for (Run& r : kv.second.runs) {
+            if (kv.second.slice != key) continue;
             if (!r.gate) continue;
             // ★ every bin whose centre lies within half a bin of the window
             const double klo = (r.gate->loHz - centreHz) / binHz + nb / 2, khi = (r.gate->hiHz - centreHz) / binHz + nb / 2;
@@ -350,7 +392,7 @@ void Spotter::newPeriod(Run& r, int64_t per, int gated) {
     }
 }
 
-void Spotter::route(Run& r, const float* a, int k, double utc, int gated) {
+void Spotter::route(Run& r, const float* a, int k, double utc, int gated, Slice& sl) {
     if (!r.gate) { r.eng->process(a, k, utc); return; }
     Gate& g = *r.gate;
     const double P = gatePeriod(*r.def);
@@ -361,7 +403,7 @@ void Spotter::route(Run& r, const float* a, int k, double utc, int gated) {
         case Gate::Live:
             r.eng->process(a, k, utc); g.fedUtc = utc;
             // ★ looked at every 8th block: fewer looks, fewer chances for noise to open a window (digi_activity.h)
-            if (!g.saw && gated == 2 && (gateBlocks_ & 7) == 0 && g.meter.occupied(floor_.floor())) g.saw = true;
+            if (!g.saw && gated == 2 && (sl.blocks & 7) == 0 && g.meter.occupied(sl.floor.floor())) g.saw = true;
             if (gated == 0) g.saw = true;
             return;
         case Gate::Off:
@@ -371,7 +413,7 @@ void Spotter::route(Run& r, const float* a, int k, double utc, int gated) {
             return;
         case Gate::Pending: {
             hold(g, a, k, utc, keep);
-            const bool lit = gated == 0 || (gated == 2 && (gateBlocks_ & 7) == 0 && g.meter.occupied(floor_.floor()));
+            const bool lit = gated == 0 || (gated == 2 && (sl.blocks & 7) == 0 && g.meter.occupied(sl.floor.floor()));
             if (!lit) return;
             g.saw = true;
             std::lock_guard<std::mutex> lk(statMtx_);
