@@ -94,6 +94,8 @@ int main(int argc, char** argv) {
         else if (a == "--apk") o.apMaxCands = (int)nxt();
         else if (a == "--fineonly") o.fineOnly = (int)nxt() != 0;
         else if (a == "--subneed") o.subtractNeeded = (int)nxt() != 0;
+        else if (a == "--osdnear") o.fineOsdMaxBpErr = (int)nxt();
+        else if (a == "--apnear") o.apMaxBpErr = (int)nxt();
         else if (a == "--finesync") o.fineMinSync = (int)nxt();
         else if (a == "--lead") lead = nxt();
         else if (a == "--len") len = nxt();

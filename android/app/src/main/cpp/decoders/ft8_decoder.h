@@ -199,7 +199,8 @@ struct Ft8SlotOptions {
     bool apTry = true;               ///< false = the book still learns, but no AP decoding (a loaded server)
     int apMaxCands = 0;              ///< hypotheses decoded per candidate after screening (0 = the default, 3)
     int apOsdPairSpan = -1;          ///< OSD pair span for AP trials (-1 = osdPairSpan)
-    int apMaxBpErr = 0;              ///< a near miss for AP: BP within this many checks (0 = the default; tests raise it)
+    int apMaxBpErr = 0;
+    int fineOsdMaxBpErr = 0;         ///< the second look's OSD only after BP came this close (0 = the default)              ///< a near miss for AP: BP within this many checks (0 = the default; tests raise it)
 };
 struct Ft8SlotStats {
     int    passes = 0;
@@ -243,7 +244,7 @@ private:
     void buildWaterfall(const float* audio, int n);
     float colMean(size_t column);
     int  snrDb(const ftx_candidate_t& c, const uint8_t* tones);
-    void subtract(float* audio, int n, const uint8_t* tones, double startSample, double f0);
+    void subtract(float* audio, int n, const uint8_t* tones, double startSample, double f0, int snr);
     bool fineDecode(const float* audio, int n, double start, double f0, const Ft8SlotOptions& o, ftx_message_t& msg,
                     bool& viaOsd, int& apKind, double& startOut, double& f0Out, Ft8SlotStats& st, int pass);
     bool apDecode(const float* llr, const Ft8SlotOptions& o, ftx_message_t& msg, int& kind);
@@ -269,6 +270,7 @@ private:
     float fineLlr_[FtxFine::kMaxSets][174];         // scratch: the second look's likelihood sets
     std::vector<float> rA_, rB_;                    // scratch: each call's AP agreement as first / second call
     static constexpr int kFineBpStall = 5;
+    static constexpr int kSubShortBoxSnr = -5;      // subtraction's amplitude box is ±½ symbol from this SNR up
     static constexpr int kFineOsdMaxBpErr = 12;     // OSD only after BP came this close (unsatisfied checks)
     static constexpr int kApMaxBpErr = 19;          // a-priori decoding only for candidates BP took this close (real
                                                     // 40 m, two hours: every AP decode came from BP within 19)

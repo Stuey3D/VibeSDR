@@ -530,7 +530,7 @@ int Ft8SlotDecoder::snrDb(const ftx_candidate_t& c, const uint8_t* tones) {
  *  4. The amplitude is that product averaged over two symbols (a normalised boxcar — it follows HF fading), and
  *     2·Re(amplitude × reference) is subtracted.
  *  ★ Cost: a few passes over one signal's samples, no FFT. The bench measures it per pass. */
-void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double start, double f0) {
+void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double start, double f0, int snr) {
     const int N = nn_ * nsps_;
     const double fs = rate_;
     const SinTable& tab = sinTable();
@@ -666,7 +666,11 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
     if (kHi <= kLo) return;
     int B = 16;
     while (B > 1 && nsps_ % B) B /= 2;                                 // a block divides a symbol (FT8 1920, FT4 576)
-    const int len = kHi - kLo, nb = (len + B - 1) / B, H = nsps_ / B;  // H blocks either side = ±1 symbol
+    const int len = kHi - kLo, nb = (len + B - 1) / B, H = std::max(1, (snr >= kSubShortBoxSnr ? nsps_ / 2 : nsps_) / B);  // H blocks either side
+    /* ★ ±½ SYMBOL FOR A STRONG SIGNAL (2026-10-26). The amplitude box was ±1 symbol for every signal. A strong station's
+     *  residue is what hides the most under it, and its amplitude is measured well over half the span, so it can
+     *  follow faster fading: on the busy 40 m hour ±½ symbol for decodes at -5 dB or more gave +52 decodes (2,403 ->
+     *  2,455), +29 on the busy 20 m, the rest unchanged; ±½ for every signal lost a few weak ones, ±¼ lost many. */
     uint32_t ph = 0;
     for (int k = 0; k < kLo; ++k) ph += base + (uint32_t)(int32_t)(dp[k] * toneStep);
     float* rc = refC_.data();
@@ -808,7 +812,7 @@ bool Ft8SlotDecoder::fineDecode(const float* audio, int n, double start, double 
     /* ★ OSD only for a near miss: on the real 80 m hour every candidate OSD rescued had come within 10 unsatisfied
      *  checks in BP, while most of those it could not rescue were further out (Stuart: spend cycles only where they
      *  find decodes). */
-    if (o.osdMaxErrors > 0 && bestErr <= kFineOsdMaxBpErr) {
+    if (o.osdMaxErrors > 0 && bestErr <= (o.fineOsdMaxBpErr > 0 ? o.fineOsdMaxBpErr : kFineOsdMaxBpErr)) {
         for (int k : { 2, 1 }) {
             const int e = ft8Osd(L[k], o.osdMaxErrors, o.osdPairSpan, a91);
             if (e >= 0) { a91ToMessage(a91, msg); viaOsd = true; ++st.fineDecodes[pass - 1]; return true; }
@@ -1004,7 +1008,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
     decodedStart_.clear();
     prevKeys_.clear(); curKeys_.clear();
     if (o.ap) o.ap->beginSlot();
-    struct Sub { uint8_t tones[FT4_NN > FT8_NN ? FT4_NN : FT8_NN]; double start; double f0; };
+    struct Sub { uint8_t tones[FT4_NN > FT8_NN ? FT4_NN : FT8_NN]; double start; double f0; int snr; };
     std::vector<Sub> subs;
     if ((int)cands_.size() < o.maxCandidates) cands_.resize((size_t)o.maxCandidates);
     const auto t0 = std::chrono::steady_clock::now();
@@ -1026,7 +1030,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
         changed_.clear();
         const float baud = 1.0f / mon_.symbol_period, ntones = ft4_ ? 4.0f : 8.0f;
         for (const Sub& s : subs) changed_.push_back({ (float)s.f0 - 2.0f * baud, (float)s.f0 + (ntones + 1.0f) * baud });
-        for (const Sub& s : subs) subtract(audio, n, s.tones, s.start, s.f0);
+        for (const Sub& s : subs) subtract(audio, n, s.tones, s.start, s.f0, s.snr);
         subs.clear();
         prevKeys_.swap(curKeys_);
         std::sort(prevKeys_.begin(), prevKeys_.end());
@@ -1120,7 +1124,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             out.push_back(r);
             if (o.ap && !apKind) o.ap->heard(msg);     // ★ only what was heard without assumptions teaches the book
             decodedStart_.push_back(startSample);
-            s.start = startSample; s.f0 = hz;
+            s.start = startSample; s.f0 = hz; s.snr = r.snr;
             if (r.snr >= o.subtractMinSnr) subs.push_back(s);
             ++found;
             sm[Ft8SlotStats::kPost] += lap();
