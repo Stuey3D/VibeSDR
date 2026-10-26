@@ -107,6 +107,13 @@
         'circle-stroke-color': ['coalesce', ['get', 'color'], '#3388ff'],
         'circle-stroke-width': ['case', ['==', ['get', 'stroke'], false], 0, ['coalesce', ['get', 'weight'], 3]],
         'circle-stroke-opacity': ['coalesce', ['get', 'opacity'], 1] } });
+      /* ★★ A LETTER INSIDE A CIRCLE (V12, 2026-10-26): a circleMarker styled { label, labelColor } carries it — the spots
+       *  map's MODE letter ("8" FT8, "4" FT4, "W" WSPR …), so a mode is never told by colour alone (colour-blind
+       *  listeners). One symbol layer over the same source: free for circles without a label. */
+      gl.addLayer({ id: 'lc-circle-labels', type: 'symbol', source: 'lc-circles', filter: ['has', 'label'],
+        layout: { 'text-field': ['get', 'label'], 'text-font': ['JetBrains Mono Regular'],
+                  'text-size': ['coalesce', ['get', 'labelSize'], 10], 'text-allow-overlap': true, 'text-ignore-placement': true },
+        paint: { 'text-color': ['coalesce', ['get', 'labelColor'], '#000000'] } });
       gl.on('click', 'lc-circles', (e) => {
         const f = e.features && e.features[0]; const c = f && circles.get(f.properties._id);
         if (c && c.html) new ml.Popup({ maxWidth: (c.maxWidth || 200) + 'px' }).setLngLat([c.ll.lng, c.ll.lat]).setHTML(c.html).addTo(gl);

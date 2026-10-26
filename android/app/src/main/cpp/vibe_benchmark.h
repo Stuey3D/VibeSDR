@@ -462,7 +462,8 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
              benchStep(l); if (progress) progress(N, N, l); })) {
         Result r; r.id = d.id; r.label = d.label; r.rate = 48000; r.pct = d.pct; r.hottest = "decoder";
         res.push_back(r);
-        if (d.pct > heaviestDec) { heaviestDec = d.pct; heaviestId = d.id; }
+        // ★ Band spots is its own default, not the decoder limit's yardstick — see its row in vibe_benchmark_decoders.h.
+        if (d.pct > heaviestDec && d.id != "dec_ft8band") { heaviestDec = d.pct; heaviestId = d.id; }
     }
     if (moreRows) { if (progress) progress(N, N, "DAB+"); for (auto& r : moreRows()) res.push_back(r); }
     if (progress) progress(N, N, "done");

@@ -39,6 +39,9 @@
  *   vibe_psk_run.h): CW's frames exactly, the list and spot named psk_ and carrying the mode instead of a speed
  *     {"type":"psk_signals","data":{skimmer,centre?,width?,primary,signals:[{id,hz,audio,baud,snr,imd,q,active,last,first,call,country,text}]}}
  *     {"type":"psk_spot","data":{callsign,frequency,audio,mode,snr,how,country,timestamp}}
+ *   DSC ('dsc' — V12, maritime Digital Selective Calling, vibe_dsc_run.h)
+ *     0x01 text (one readable line per call) · 0x03 | u8 state (0 listening, 1 a call coming in)
+ *     {"type":"dsc_call","data":{id,utc,rf,repeat,format,category,level,self,…,lat?,lon?,line}} — see dsc.ts
  *
  * NB WEFAX and SSTV BOTH use 0x01 for a line, with different payloads — so
  * frames can only be parsed against the decoder currently attached. Never sniff.
@@ -48,7 +51,7 @@ import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'dsc' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -62,7 +65,8 @@ export interface CwList { skimmer: boolean; centre: number; width: number; prima
 export interface CwSpot { callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number; mode?: string }
 
 export interface Spot {
-  mode: 'FT8' | 'FT4';
+  /** ★ V12: any mode the server decodes ("FT8", "FT4", "WSPR", "JS8", "FT2" …) — vibeserver.json `spotModes`. */
+  mode: string;
   callsign: string;
   snr: number;
   frequency: number;   // RF Hz (dial + audio offset, computed server-side)
@@ -98,6 +102,8 @@ export interface DecoderCallbacks {
   onCwSignals?: (list: CwList) => void;
   /** ★ CW: a callsign heard identifying itself. */
   onCwSpot?: (spot: CwSpot) => void;
+  /** ★ DSC: one call (its data as the server sent it — dsc.ts dscFromJson checks it). */
+  onDscCall?: (data: unknown) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
    *  `message` is the server's own words, shown as they are (one definition, every client). */
   onRefused?: (message: string, what: 'decoder' | 'spots') => void;
@@ -123,6 +129,8 @@ export interface DecoderParams {
   auto_stop?: boolean;
   // CW skimmer: the segment around the dial, Hz
   width?: number;
+  // DSC: 'hf' (with center_frequency, the tones' audio centre) or 'vhf' (channel 70 on NFM)
+  band?: string;
 }
 
 /** The shim's extension names. */
@@ -144,6 +152,8 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   // ★ V12 PSK31/63: the same two views (decoders/psk_skimmer.h on the server).
   psk: 'psk',
   pskskim: 'pskskim',
+  // ★ V12 DSC: MF/HF on SSB or VHF channel 70 on NFM — which is a parameter ("band"), as the time station is.
+  dsc: 'dsc',
 };
 
 export class DecoderClient {
@@ -156,6 +166,8 @@ export class DecoderClient {
   /** What's attached — REQUIRED to parse frames (0x01 is ambiguous). */
   private mode: DecoderMode = null;
   private spotsOn = false;
+  /** ★ V12: 'single' (the listener's audio, FT8 + FT4 as ever) or 'band' (the band's IQ slice, every mode on its dial). */
+  private spotScope: 'single' | 'band' = 'single';
   /** connect() has been called (the page is live) — the socket itself opens only when wanted, see _sync. */
   private enabled = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -223,7 +235,7 @@ export class DecoderClient {
       //        inversion, and WEFAX's LPM, were dropped the same way and silently reverted. The
       //        time decoder only made it VISIBLE, because it prints the station's name.
       if (this.mode) this._sendAttach(this.mode, this.params);
-      if (this.spotsOn) this._send({ type: 'subscribe_digital_spots' });
+      if (this.spotsOn) this._send(this._spotsMsg());
     };
     // ★ Guarded per message — dropped, counted and logged (faultLog), never silent.
     ws.onmessage = (e) => {
@@ -280,15 +292,25 @@ export class DecoderClient {
   }
 
   /** FT8/FT4 spots run independently of the text/image decoders. */
-  setSpots(on: boolean) {
-    if (this.spotsOn === on) return;
+  /** ★ The subscribe message. Single sends no scope at all — exactly what every older server understands. */
+  private _spotsMsg() {
+    return this.spotScope === 'band' ? { type: 'subscribe_digital_spots', scope: 'band' } : { type: 'subscribe_digital_spots' };
+  }
+  setSpots(on: boolean, scope: 'single' | 'band' = 'single') {
+    if (this.spotsOn === on && (!on || this.spotScope === scope)) return;
+    const was = this.spotsOn;
     this.spotsOn = on;
-    if (this.ws?.readyState === WebSocket.OPEN) this._send({ type: on ? 'subscribe_digital_spots' : 'unsubscribe_digital_spots' });
+    if (on) this.spotScope = scope;
+    // ★ Single ↔ Band: one subscribe with the new scope — the server replaces the run and keeps the slot.
+    if (this.ws?.readyState === WebSocket.OPEN) this._send(on ? this._spotsMsg() : { type: 'unsubscribe_digital_spots' });
+    void was;
     this._sync();                          // opening: onopen subscribes
   }
 
   get attached(): DecoderMode { return this.mode; }
   get spotsEnabled(): boolean { return this.spotsOn; }
+  /** 'single' / 'band' while spots run, null otherwise. */
+  get spotsScope(): 'single' | 'band' | null { return this.spotsOn ? this.spotScope : null; }
 
   // ── Inbound ────────────────────────────────────────────────────────────────
 
@@ -325,6 +347,11 @@ export class DecoderClient {
       });
       return;
     }
+    if (msg.type === 'dsc_call' && msg.data) {
+      if (this.mode !== 'dsc') return;
+      this.cb.onDscCall?.(msg.data);
+      return;
+    }
     if ((msg.type === 'cw_spot' || msg.type === 'psk_spot') && msg.data) {
       const d = msg.data;
       if (typeof d.callsign !== 'string' || !d.callsign) return;
@@ -341,7 +368,8 @@ export class DecoderClient {
     if (msg.type === 'digital_spot' && msg.data) {
       const d = msg.data;
       this.cb.onSpot?.({
-        mode: d.mode === 'FT4' ? 'FT4' : 'FT8',
+        // ★ Any mode the server names, kept to a mode's alphabet (it is printed into the list and the map).
+        mode: (typeof d.mode === 'string' ? d.mode.replace(/[^0-9A-Za-z+-]/g, '').slice(0, 12) : '') || 'FT8',
         callsign: d.callsign ?? '',
         snr: d.snr ?? 0,
         frequency: d.frequency ?? 0,
@@ -371,6 +399,8 @@ export class DecoderClient {
       // ★ PSK: the same — the primary signal's text, the state, and JSON lists.
       case 'psk':
       case 'pskskim':
+      // ★ DSC: a call's line (the box draws from the JSON instead) and the state.
+      case 'dsc':
         if (op === 0x01 && buf.byteLength >= 13) {
           const len = dv.getUint32(9, false);           // big-endian
           const text = new TextDecoder().decode(new Uint8Array(buf, 13, Math.min(len, buf.byteLength - 13)));

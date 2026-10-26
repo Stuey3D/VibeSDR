@@ -57,6 +57,7 @@ inline const std::vector<KindWord>& kindWords() {
         { "doorbell",   "doorbell / remote", "doorbells / remotes" },
         { "sensor",     "sensor",            "sensors" },
         { "energy",     "energy meter",      "energy meters" },
+        { "meter",      "meter",             "meters" },           // ★ V12 wM-Bus: water, heat, gas … (vibe_wmbus.h)
     };
     return k;
 }
@@ -79,6 +80,24 @@ inline std::string deviceKey(const std::string& line) {
     if (last != std::string::npos && line.compare(last + 4, 3, "ch ") == 0) return name + "|" + line.substr(last + 4);
     return name;
 }
+/** ★ V12 meters: "Water meter · Sensus · 12345678 · …" → its first three fields — the type, the maker and the serial
+ *  ARE the meter (the plain deviceKey would take "Water meter" alone, and every water meter would be one row). */
+inline std::string meterKey(const std::string& line) {
+    size_t p = 0;
+    for (int i = 0; i < 3; ++i) { const size_t d = line.find(kDot, p); if (d == std::string::npos) return line; p = d + 4; }
+    return line.substr(0, p - 4);
+}
+inline std::string keyOf(const std::string& kind, const std::string& line) { return kind == "meter" ? meterKey(line) : deviceKey(line); }
+/** "Water meter" → "water", "Cold water meter" → "cold water", "Heat cost allocator" → "heat cost allocator". */
+inline std::string meterSort(const std::string& name) {
+    std::string t = name.substr(0, name.find(kDot));
+    const std::string suf = " meter";
+    if (t.size() > suf.size() && t.compare(t.size() - suf.size(), suf.size(), suf) == 0) t.resize(t.size() - suf.size());
+    else if (t == "Meter" || t.compare(0, 6, "Meter ") == 0) t = "other";
+    if (!t.empty() && t[0] >= 'A' && t[0] <= 'Z') t[0] = char(t[0] - 'A' + 'a');
+    return t;
+}
+
 /** "TPMS #12" → 12; anything else → 0. */
 inline int nickOf(const std::string& name) {
     const size_t h = name.rfind(" #");
@@ -96,6 +115,10 @@ public:
     static constexpr uint64_t kPartMaxBytes = 4ull << 20;      // ★ a day's log splits into parts past this
     static constexpr size_t   kMaxRows      = 2000;            // ★ the card's device table (the least recently heard go)
     static constexpr double   kFoldSec      = 3.0;             // ★ Tracker's own fold, repeated here
+    /** ★★ V12 METERS ARE THROTTLED: a meter sends every 16 s, so a street of 50 would write 270 000 lines a day. Its line
+     *  reaches the log the first time it is heard in the day, when its reading or status changes (the line without
+     *  signal and interval — Heard::core), or once per this many seconds otherwise. */
+    static constexpr int64_t  kMeterEverySec = 15 * 60;
 
     struct Options {
         std::string bandId;        ///< "433"
@@ -118,8 +141,25 @@ public:
         if (done_) return;
         const int64_t t = now();
         rollIfNewDay(t);
-        const std::string key = deviceKey(h.line);
+        const std::string key = keyOf(h.kind, h.line);
         Dev& d = devs_[key];
+        if (h.kind == "meter") {
+            const bool first = d.count == 0;
+            if (first) { d.first = t; d.kind = h.kind; d.name = h.name.empty() ? key : h.name; }
+            d.count++; d.last = t; d.line = h.line;
+            const bool news = first || d.written == 0 || h.core != d.core || t - d.written >= kMeterEverySec;
+            d.core = h.core;
+            cardDirty_ = true;
+            if (!news) return;
+            d.written = t;
+            readings_++;
+            char lead[48];
+            std::snprintf(lead, sizeof lead, "%s  %.3f  ", gallery::utcStamp(t, "%H:%M:%S").c_str(), h.freqHz / 1e6);
+            buf_ += lead + gallery::printable(h.line, 400) + "\n";
+            trimRows();
+            if (buf_.size() >= kFlushBytes) flushLog(t);
+            return;
+        }
         // ★ the fold: the same line from the same device inside 3 s is the same reading
         if (d.count > 0 && d.line == h.line && double(t) - double(d.last) < kFoldSec) { d.last = t; return; }
         if (d.count == 0) { d.first = t; d.kind = h.kind; d.name = h.name.empty() ? key : h.name; }
@@ -173,7 +213,7 @@ public:
     }
 
 private:
-    struct Dev { std::string kind, name, line; int64_t first = 0, last = 0; uint64_t count = 0; };
+    struct Dev { std::string kind, name, line, core; int64_t first = 0, last = 0, written = 0; uint64_t count = 0; };
     int64_t now() const { return o_.clock ? o_.clock() : gallery::nowUtc(); }
     std::string date(int64_t day) const { return gallery::utcStamp(day * 86400, "%Y-%m-%d"); }
     /** "433.92" from "433.92 MHz ISM", "868" from "868 MHz SRD". */
@@ -245,7 +285,8 @@ private:
             const std::string head = "ISM " + bandMhz() + kDot + "every reading heard on " + date(day_) + " (UTC)"
                 + (part_ > 1 ? kDot + std::string("part ") + std::to_string(part_) : std::string()) + "\n"
                 + "Each line: the time (UTC), the frequency (MHz) and the reading exactly as the ISM list shows it. "
-                  "Tyre sensors, key fobs and remotes are only ever their nicknames here.\n\n";
+                  "Tyre sensors, key fobs and remotes are only ever their nicknames here. A meter is written when its reading "
+                  "or status changes, and otherwise once every 15 minutes.\n\n";
             logName_ = store_.create(logMeta(), "txt", head + buf_);
         }
         buf_.clear();
@@ -273,7 +314,21 @@ private:
         auto rank = [](const std::string& k) { const auto& w = kindWords(); for (size_t i = 0; i < w.size(); i++) if (k == w[i].kind) return (int)i; return 99; };
         std::sort(v.begin(), v.end(), [&](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : rank(a.second) < rank(b.second); });
         std::string o;
-        for (const auto& e : v) { if (!o.empty()) o += ", "; o += std::to_string(e.first) + " " + kindMany(e.second, e.first); }
+        for (const auto& e : v) {
+            if (!o.empty()) o += ", ";
+            o += std::to_string(e.first) + " " + kindMany(e.second, e.first);
+            if (e.second == "meter") o += " (" + meterMix() + ")";   // ★ "58 meters (51 water, 4 heat, 3 gas)"
+        }
+        return o;
+    }
+    std::string meterMix() const {
+        std::map<std::string, int> n;
+        for (const auto& kv : devs_) if (kv.second.kind == "meter") n[meterSort(kv.second.name)]++;
+        std::vector<std::pair<int, std::string>> v;
+        for (const auto& kv : n) v.push_back({ kv.second, kv.first });
+        std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
+        std::string o;
+        for (const auto& e : v) { if (!o.empty()) o += ", "; o += std::to_string(e.first) + " " + e.second; }
         return o;
     }
     std::string devicesWord() const { return std::to_string(devs_.size() + dropped_) + (devs_.size() + dropped_ == 1 ? " device" : " devices"); }
@@ -349,8 +404,8 @@ private:
             d.line = row.substr(q);
             if (d.line.empty()) continue;
             const size_t n = d.line.find(dot);
-            d.name = n == std::string::npos ? d.line : d.line.substr(0, n);
-            devs_[deviceKey(d.line)] = d;
+            d.name = d.kind == "meter" ? meterKey(d.line) : n == std::string::npos ? d.line : d.line.substr(0, n);
+            devs_[keyOf(d.kind, d.line)] = d;
         }
         // ★ the totals: the readings line, else the rows' own counts
         unsigned long long r = 0;

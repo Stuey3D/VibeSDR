@@ -40,8 +40,11 @@
 #include "decoders/sstv_decoder.h"
 #include "decoders/time_decoder.h"
 #include "decoders/ft8_decoder.h"
+#include "decoders/digi_spotter.h"   // ★ V12: digital spots — Single (the listener's audio) or Band (a band's IQ slice)
+#include "decoders/digi_bands.h"
 #include "vibe_cw_run.h"
 #include "vibe_psk_run.h"
+#include "vibe_dsc_run.h"
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -224,12 +227,14 @@ struct DecoderTap {
     virtual void tick() {}
     /** The decoder stopped. Write what is held; `interrupted` = it was cut off, not finished. */
     virtual void finish(bool /*interrupted*/) {}
-    /** One FT8/FT4 spot (the spots tap only — see Env::spotTap): the sender's call and grid as received, its SNR, and
-     *  the RF frequency it was heard on. */
-    virtual void spot(bool /*ft4*/, const std::string& /*call*/, const std::string& /*grid*/, int /*snr*/, double /*rfHz*/) {}
+    /** One digital spot (the spots tap only — see Env::spotTap): the MODE's name ("FT8", "FT4", "WSPR" … — V12
+     *  2026-10-26, it was a bool for FT4), the sender's call and grid as received, its SNR, and the RF it was heard on. */
+    virtual void spot(const std::string& /*mode*/, const std::string& /*call*/, const std::string& /*grid*/, int /*snr*/, double /*rfHz*/) {}
     /** ★ One CW spot (the CW summary tap only — see Env::cwSpotTap): the call, where, how fast, how strong, and what it
      *  was doing ("CQ", "TEST", "DE"). */
     virtual void cwSpot(const std::string& /*call*/, double /*rfHz*/, float /*wpm*/, float /*snrDb*/, const std::string& /*how*/) {}
+    /** ★ One DSC call (V12, 2026-10-26): the call, its readable line and JSON, and whether it repeats one just given. */
+    virtual void dscCall(const dsc::Call& /*call*/, const std::string& /*line*/, const std::string& /*json*/, bool /*repeat*/) {}
 };
 using DecoderTapPtr = std::shared_ptr<DecoderTap>;
 
@@ -250,7 +255,7 @@ public:
         std::function<DecoderTapPtr(const std::string& ext, const std::string& msg)> tap;
         /** ★★ …and FT8/FT4's: asked once when the spotter starts, finished when it stops (the gallery keeps a SUMMARY of
          *  a run, not the spots — Stuart, 2026-10-22). */
-        std::function<DecoderTapPtr()> spotTap;
+        std::function<DecoderTapPtr(bool band)> spotTap;   // ★ V12: `band` = Band mode (one card for the whole band)
         /** ★★ …and CW's (V12, 2026-10-25): asked when a CW decoder or skimmer starts, finished when it stops — a SUMMARY
          *  of the run's spots, as FT8's. `skimmer` says which. */
         std::function<DecoderTapPtr(bool skimmer)> cwSpotTap;
@@ -339,40 +344,68 @@ public:
         if (textSlot_ >= 0) { if (env_.slots) env_.slots->release(textSlot_); textSlot_ = -1; }
         { std::lock_guard<std::mutex> bl(textMtx_); textBuf_.clear(); morse_.clear(); nvCounts_.clear(); }
     }
-    /** FT8 + FT4 spots — a second, independent slot. Idempotent. */
-    Start startSpots() {
+    /** ★★ DIGITAL SPOTS — a second, independent slot. SINGLE: every registered mode on the listener's own audio (FT8 +
+     *  FT4, the button there always was). BAND (V12, 2026-10-26): the band's IQ slice, every mode on its own dial — see
+     *  decoders/digi_spotter.h. Idempotent for the same scope; the other scope replaces the run and keeps the slot. */
+    using SpotScope = digi::Spotter::Scope;
+    Start startSpots(SpotScope scope = SpotScope::Single) {
         std::lock_guard<std::mutex> lk(spotsMtx_);
-        if (spotsOn_) return Start::Joined;
+        if (spotsOn_ && spotter_ && spotter_->scope() == scope) return Start::Joined;
         if (spotsSlot_ < 0) {
             spotsSlot_ = env_.slots ? env_.slots->claim() : 0;
             if (spotsSlot_ < 0) return Start::Refused;
         }
-        delete ft8_; delete ft4_;
-        ft8_ = new Ft8Decoder(12000, false);
-        ft4_ = new Ft8Decoder(12000, true);
-        ft8_->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(false, to, de, g, s, f); };
-        ft4_->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(true,  to, de, g, s, f); };
+        stopSpotterLocked_(false);
         /* ★★ EXTRA FT8 PASSES ONLY ON SPARE CPU (2026-10-05): the server says it is loaded, or this host's own
          *  queue is a second behind (the decode thread is not keeping up) — either way, one pass. */
-        ft8_->loadProbe = ft4_->loadProbe = [this] {
+        auto loaded = [this] {
             if (env_.loaded && env_.loaded()) return true;
-            return queued() > 48000;
+            return queued() > 48000 || queuedIqSec() > 1.0;
         };
-        spotDecim_ = 0; spotAcc_ = 0.0f;
-        if (env_.spotTap) { DecoderTapPtr t = env_.spotTap(); std::lock_guard<std::mutex> tl(tapMtx_); spotTap_ = std::move(t); }
+        auto dial = env_.dialHz;
+        spotter_.reset(new digi::Spotter(scope, digi::modes(),
+            [this](const digi::Spot& sp, double rfHz) { emitSpot(sp, rfHz); },
+            [dial] { return dial ? dial() : 0.0; }, loaded));
+        if (env_.spotTap) { DecoderTapPtr t = env_.spotTap(scope == SpotScope::Band); std::lock_guard<std::mutex> tl(tapMtx_); spotTap_ = std::move(t); }
         spotsOn_ = true;
-        spotsActive_.store(true, std::memory_order_relaxed);
-        log("digital spots (FT8/FT4) started");
+        if (scope == SpotScope::Band) {
+            bandWidth_.store(bandWidthFor(dial ? dial() : 0.0), std::memory_order_relaxed);   // ★ a socket thread: no channel lock held
+            if (!bandIq_.exchange(true)) skimmersRunning().fetch_add(1);
+        } else {
+            spotsActive_.store(true, std::memory_order_relaxed);
+        }
+        log(scope == SpotScope::Band ? "digital spots: Band started" : "digital spots: Single mode started");
         return Start::Ok;
     }
     void stopSpots() {
         std::lock_guard<std::mutex> lk(spotsMtx_);
-        spotsOn_ = false;
-        spotsActive_.store(false, std::memory_order_relaxed);
-        delete ft8_; ft8_ = nullptr;
-        delete ft4_; ft4_ = nullptr;
-        { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(spotTap_); } if (t) t->finish(true); }
+        stopSpotterLocked_(true);
         if (spotsSlot_ >= 0) { if (env_.slots) env_.slots->release(spotsSlot_); spotsSlot_ = -1; }
+    }
+    /** "single" / "band" / "" — what the admin page and the clients are told. */
+    std::string spotsScope() {
+        std::lock_guard<std::mutex> lk(spotsMtx_);
+        if (!spotsOn_ || !spotter_) return "";
+        return spotter_->scope() == SpotScope::Band ? "band" : "single";
+    }
+    /** Slots every spots engine has skipped (monotonic, survives a band change) — the health pill's "TOO HEAVY". */
+    uint64_t spotSlotsSkipped() {
+        std::lock_guard<std::mutex> lk(spotsMtx_);
+        return spotSkipBase_ + (spotter_ ? spotter_->slotsSkipped() : 0);
+    }
+    /** What the spotter runs now ("FT8 14.0740, FT4 14.0800"), for the admin page. */
+    std::string spotsDescribe() {
+        std::lock_guard<std::mutex> lk(spotsMtx_);
+        return spotter_ ? spotter_->describe() : std::string();
+    }
+    /** ★ The IQ width Band mode wants for a dial: the registered modes' span of the band it is on, wide enough either side
+     *  of the dial to hold it all (a dial typed off-centre still decodes the whole band). Off any band: 24 kHz. */
+    static double bandWidthFor(double dialHz) {
+        const digi::Band* b = digi::bandAt(dialHz);
+        if (!b) return 24000.0;
+        const digi::Span sp = digi::spanOf(*b, digi::modes());
+        if (!sp.ok) return 24000.0;
+        return std::max(4000.0, 2.0 * std::max(std::fabs(sp.hiHz - dialHz), std::fabs(dialHz - sp.loHz)));
     }
     /** Everything off, the queue drained and its thread joined. Idempotent. */
     void shutdown() {
@@ -388,13 +421,23 @@ public:
      *  for its host (so a radio with none pays nothing). */
     static std::atomic<int>& skimmersRunning() { static std::atomic<int> n{0}; return n; }
     /** ★ A SKIMMER (CW or PSK) is running — it wants complex IQ (feedIq), not audio. Cheap: read on every channel block. */
-    bool wantsIq() const { return cwIq_.load(std::memory_order_relaxed); }
+    bool wantsIq() const { return cwIq_.load(std::memory_order_relaxed) || bandIq_.load(std::memory_order_relaxed); }
     /** ★ The skimmer's segment width asked for (Hz) — what the caller cuts its slice to. 0 = none running. */
-    double iqWidthHz() const { return cwIq_.load(std::memory_order_relaxed) ? cwWidth_.load(std::memory_order_relaxed) : 0.0; }
+    double iqWidthHz() const {
+        // ★★ The CW skimmer and Band spots share ONE slice (both centred on the dial): the wider of the two. The skimmer
+        //    decodes only its own width of a wider slice (CwRun clamps), and Band mode's tuners take only their dials.
+        // ★★★ AN ATOMIC READ ONLY: this is asked on the DSP thread with the listener's channel lock held
+        //     (feedOneClient), where asking for the dial (env_.dialHz takes clientMtx) would be a lock-order inversion.
+        //     The width follows the dial from the decode thread instead (loop_: bandWidthFor(the slice's own centre)).
+        double w = cwIq_.load(std::memory_order_relaxed) ? cwWidth_.load(std::memory_order_relaxed) : 0.0;
+        if (bandIq_.load(std::memory_order_relaxed)) w = std::max(w, bandWidth_.load(std::memory_order_relaxed));
+        return w;
+    }
     /** Hand the skimmer `n` IQ samples at `rate` Hz centred on `centreRfHz`. Copies and returns at once, as feed(). */
     void feedIq(const std::complex<float>* iq, int n, double rate, double centreRfHz) {
         if (n <= 0 || !wantsIq()) return;
         IqBlock b; b.v.assign(iq, iq + n); b.rate = rate; b.centre = centreRfHz;
+        b.utc = vibeUtcNow();   // ★ Band spots cut UTC slots by it — stamped here, on the DSP/tap thread, not when decoded
         fed_.fetch_add((uint64_t)n, std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lk(qM_);
@@ -463,7 +506,7 @@ public:
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -522,7 +565,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "psk" || e == "pskskim";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "dsc" || e == "psk" || e == "pskskim";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -533,7 +576,7 @@ private:
                                "deviation", "bandwidth", "width", "centre" }) {
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
-        for (const char* f : { "encoding", "framing", "station" }) { k += str(msg, f); k += ','; }
+        for (const char* f : { "encoding", "framing", "station", "band" }) { k += str(msg, f); k += ','; }
         for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true",
                                "\"auto\":true", "\"usos\":true" })
             k += msg.find(f) != std::string::npos ? '1' : '0';
@@ -561,7 +604,7 @@ private:
         return j.substr(p + 1, e - p - 1);
     }
 
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -575,8 +618,9 @@ private:
         if (cwIq_.exchange(false)) skimmersRunning().fetch_sub(1);
         cw_.reset();
         psk_.reset();
+        dsc_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
-        { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }
+        if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
         active_.store(false, std::memory_order_relaxed);
         imageKind_.store(0, std::memory_order_relaxed);
         { std::lock_guard<std::mutex> rl(replayMtx_); replay_.clear(); replayBytes_ = 0; }
@@ -704,6 +748,8 @@ private:
         } else if (ext == "psk" || ext == "pskskim") {
             buildPskLocked_(ext == "pskskim", msg);
             return;
+        } else if (ext == "dsc") {
+            buildDscLocked_(msg);
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
             /* ★★ RTTY, ONE CLICK (Stuart, 2026-10-04: "auto config the baud and shift etc so again its a one click use"). The
              *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
@@ -812,6 +858,26 @@ private:
         else active_.store(true, std::memory_order_relaxed);
         log(skimmer ? "decoder attached: PSK skimmer, " + std::to_string((int)std::lround(w / 1000)) + " kHz" : std::string("decoder attached: PSK"));
     }
+    /** ★★ DSC (V12, 2026-10-26): "band":"vhf" = channel 70 on an FM demodulator's audio; anything else MF/HF, its tones
+     *  centred on "center_frequency" (1700 Hz: the dial 1.7 kHz below the DSC frequency on USB, above it on LSB). */
+    void buildDscLocked_(const std::string& msg) {
+        const bool vhf = str(msg, "band") == "vhf";
+        double cf = 1700;
+        if (!vhf) { double v; if (num(msg, "center_frequency", v)) cf = std::max(400.0, std::min(3000.0, v)); }
+        DscRun::Out o;
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
+        o.json = [this](const std::string& j) { broadcastText(j); };
+        o.call = [this](const dsc::Call& c, const std::string& line, const std::string& j, bool rep) {
+            if (DecoderTapPtr t = tap()) t->dscCall(c, line, j, rep);
+        };
+        auto rfOf = env_.rfOfAudio; auto dial = env_.dialHz;
+        std::function<double()> rf;
+        if (vhf) rf = [dial] { return dial ? dial() : 0.0; };
+        else rf = [rfOf, dial, cf] { return rfOf ? rfOf(cf) : (dial ? dial() : 0.0) + cf; };
+        dsc_.reset(new DscRun(vhf, cf, std::move(rf), std::move(o)));
+        log(vhf ? std::string("decoder attached: DSC (VHF channel 70)") : "decoder attached: DSC (MF/HF), tones around " + std::to_string((int)cf) + " Hz");
+    }
     void sendSstv(const std::vector<uint8_t>& m) {
         std::lock_guard<std::mutex> sl(sstvSendMtx_);   // ★ SSTV has a video-decode thread of its own
         broadcast(m.data(), m.size());
@@ -890,16 +956,15 @@ private:
         log("time decoder: " + name + " (tune it in CW)");
     }
 
-    void emitSpot(bool isFt4, const std::string& callTo, const std::string& callDe,
-                  const std::string& grid, int snr, float audioHz) {
-        (void)callTo;
-        const double rfHz = (env_.dialHz ? env_.dialHz() : 0.0) + audioHz;   // dial (USB) + audio offset
+    /** ★ One spot out: to the gallery's summary and, as {"type":"digital_spot"}, to every decoder socket. `mode` is the
+     *  engine's name (V12: any registered mode, not FT8-or-FT4). */
+    void emitSpot(const digi::Spot& sp, double rfHz) {
         const uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
-        /* ★★★ THESE TWO FIELDS COME OFF THE AIR, AND ANYONE MAY TRANSMIT ANYTHING — a whitelist, so
-         *  neither can carry a quote, a backslash or a byte that is not UTF-8 (the RDS fault on a
+        /* ★★★ THESE FIELDS COME OFF THE AIR, AND ANYONE MAY TRANSMIT ANYTHING — a whitelist, so
+         *  none can carry a quote, a backslash or a byte that is not UTF-8 (the RDS fault on a
          *  different decoder; Stuart, 2026-09-27: "sandbox everything"). And snprintf returns the
-         *  length it WANTED: clamped below to what was written. */
+         *  length it WANTED: clamped below to what was written. The mode name is ours, but cleaned the same way. */
         auto safe = [](const std::string& in, size_t cap) {
             std::string o;
             for (char ch : in) {
@@ -909,17 +974,29 @@ private:
             }
             return o;
         };
-        const std::string c = safe(callDe, 32), g = safe(grid, 8);
-        { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->spot(isFt4, c, g, snr, rfHz); }
+        const std::string c = safe(sp.call, 32), g = safe(sp.grid, 8), m = safe(sp.mode, 12);
+        if (c.empty() || m.empty()) return;
+        { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->spot(m, c, g, sp.snr, rfHz); }
         char buf[384];
         const int n = std::snprintf(buf, sizeof(buf),
             "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
             "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"timestamp\":%llu}}",
-            isFt4 ? "FT4" : "FT8", c.c_str(), snr, rfHz, bandFor(rfHz), g.c_str(), (unsigned long long)ts);
+            m.c_str(), c.c_str(), sp.snr, rfHz, bandFor(rfHz), g.c_str(), (unsigned long long)ts);
         if (n > 0) broadcastText(std::string(buf, (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1));
+    }
+    /** Stop the run (spotsMtx_ held). `finishTap`: a real stop, not a scope change — the gallery's summary is written. */
+    void stopSpotterLocked_(bool finishTap) {
+        spotsOn_ = false;
+        spotsActive_.store(false, std::memory_order_relaxed);
+        if (bandIq_.exchange(false)) skimmersRunning().fetch_sub(1);
+        if (spotter_) spotSkipBase_ += spotter_->slotsSkipped();
+        spotter_.reset();            // ★ joins the engines' workers (an FT8 decode in progress is aborted, not waited for)
+        if (finishTap) { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(spotTap_); } if (t) t->finish(true); }
     }
 public:
     static const char* bandFor(double hz) {
+        // ★ The digital-spots band table first (2200 m … 70 cm), then the older HF names it never had.
+        if (const digi::Band* b = digi::bandAt(hz)) return b->id;
         const double m = hz / 1e6;
         if (m >= 1.8  && m < 2.0)   return "160m";
         if (m >= 3.5  && m < 4.0)   return "80m";
@@ -954,6 +1031,19 @@ private:
                     if (cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                 }
+                {
+                    std::lock_guard<std::mutex> sl(spotsMtx_);
+                    if (spotter_ && spotter_->scope() == SpotScope::Band) {
+                        spotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc);
+                        // ★ The slice is centred on the dial: the next blocks are cut to the span of the band it is on now
+                        //   (a band step is followed within a block or two). Cached per centre — the table walk is cheap but not free.
+                        if (std::fabs(b.centre - bandWidthDial_.load(std::memory_order_relaxed)) > 0.5) {
+                            bandWidth_.store(bandWidthFor(b.centre), std::memory_order_relaxed);
+                            bandWidthDial_.store(b.centre, std::memory_order_relaxed);
+                        }
+                    }
+                }
+                { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t && bandIq_.load()) t->tick(); }
                 { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; } if (t) t->tick(); }
                 cpuNs_.fetch_add(vibeThreadCpuNs() - c0, std::memory_order_relaxed);
                 lk.lock();
@@ -1001,6 +1091,12 @@ private:
                 if (!dec.empty()) sstv_->process(dec.data(), (int)dec.size());
                 return;
             }
+            if (dsc_) {
+                // ★ DSC: float audio straight in; its lines, JSON and state are sent from inside (DscRun).
+                dsc_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (cw_) {
                 // ★ CW: the engine takes the float audio itself (no int16 round trip); its frames are sent from inside.
                 cw_->feedAudio(data, count);
@@ -1041,21 +1137,16 @@ private:
     }
     void spots_(const float* data, int count, double captureUtc) {
         std::lock_guard<std::mutex> lk(spotsMtx_);
-        if (!spotsOn_) return;
-        std::vector<int16_t> dec; dec.reserve((size_t)count / 4 + 1);
-        for (int i = 0; i < count; i++) {
-            spotAcc_ += data[i];
-            if (++spotDecim_ >= 4) {
-                const int s = (int)std::lround(spotAcc_ / 4.0f * 32767.0f);
-                dec.push_back((int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s)));
-                spotDecim_ = 0; spotAcc_ = 0.0f;
-            }
-        }
-        if (dec.empty()) return;
-        if (ft8_) ft8_->process(dec.data(), (int)dec.size(), captureUtc);
-        if (ft4_) ft4_->process(dec.data(), (int)dec.size(), captureUtc);
+        if (!spotsOn_ || !spotter_ || spotter_->scope() != SpotScope::Single) return;
+        spotter_->feedAudio48k(data, count, captureUtc);
         // ★ The spots tap's clock too — the FT8 summary's last-10-minutes card rolls and its hourly card closes on it.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->tick(); }
+    }
+    double queuedIqSec() {
+        std::lock_guard<std::mutex> lk(qM_);
+        double s = 0;
+        for (auto& b : qi_) if (b.rate > 0) s += (double)b.v.size() / b.rate;
+        return s;
     }
 
     Env env_;
@@ -1072,6 +1163,7 @@ private:
     SstvDecoder*  sstv_  = nullptr;
     TimeDecoder*  time_  = nullptr;
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
+    std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
     std::atomic<double> cwWidth_{0.0};
     DecoderTapPtr cwTap_;                     // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
@@ -1090,11 +1182,12 @@ private:
     DecoderTapPtr tap() { std::lock_guard<std::mutex> tl(tapMtx_); return tap_; }
 
     std::mutex spotsMtx_;
-    Ft8Decoder* ft8_ = nullptr;
-    Ft8Decoder* ft4_ = nullptr;
+    std::unique_ptr<digi::Spotter> spotter_;   // ★ the digital-spots run (Single or Band) — see startSpots
     bool  spotsOn_ = false;
-    std::atomic<bool> spotsActive_{false};
-    int   spotDecim_ = 0; float spotAcc_ = 0.0f;
+    std::atomic<bool> spotsActive_{false};      // ★ Single: wants the listener's audio
+    std::atomic<bool> bandIq_{false};           // ★ Band: wants the band's IQ slice (wantsIq)
+    std::atomic<double> bandWidth_{24000.0}, bandWidthDial_{-1.0};   // ★ the slice width (set at start and by the decode thread)
+    uint64_t spotSkipBase_ = 0;                 // ★ skipped slots of runs already stopped (spotSlotsSkipped is monotonic)
     int   spotsSlot_ = -1;
 
     std::mutex replayMtx_;
@@ -1108,7 +1201,7 @@ private:
     std::condition_variable qCv_;
     std::deque<std::vector<float>> q_;
     std::deque<double> qUtc_;            // ★ each block's capture time (feed), in step with q_
-    struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0; };
+    struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0, utc = 0; };
     std::deque<IqBlock> qi_;             // ★ a CW skimmer's IQ (feedIq), served before audio by the same thread
     size_t qiFrames_ = 0;
     size_t qFrames_ = 0;

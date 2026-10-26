@@ -45,6 +45,11 @@ int main(int argc, char** argv) {
     if (!f) { std::perror(argv[1]); return 1; }
     FrontEnd fe(rate);
     fe.setDcGuardHz(15e3);
+    // ★ V12 wM-Bus: a capture inside 863-870 MHz is searched for meters as the server's 868 band is (vibe_wmbus.h)
+    const bool meters = centre >= 863e6 && centre <= 870e6;
+    if (meters) { fe.setChanRate(500e3); fe.setKeepBaseband(true); }
+    wmbus::Stats wst;
+    std::string lastMeterId; double lastMeterT = -1;
     Tracker tr;
     FobWatch fobs;   // ★ undecoded presses → "Suspected key fob", as the server does
     double t = 0;
@@ -56,7 +61,13 @@ int main(int argc, char** argv) {
     auto onBurst = [&](const Burst& b) {
         ++nb;
         std::vector<Reading> got;
-        Service::decodeBurst(b, centre, got);
+        Service::decodeBurst(b, centre, got, &wst);
+        // ★ the same frame out of a second channel on its skirt (the service drops it across a block — dedupeMeters)
+        if (!got.empty() && got[0].kind == "meter") {
+            const auto& m = *got[0].meter;
+            if (lastMeterId == m.id && b.tSec - lastMeterT < 0.2) got.clear();
+            else { lastMeterId = m.id; lastMeterT = b.tSec; }
+        }
         if (listBursts) {
             // ★ The burst's shape for working on an unknown device (2026-10-25, Stuart's car key): its length, how much
             //   of it the carrier was up (OOK mark share), and the FSK deviation when the discriminator ran.
@@ -94,6 +105,10 @@ int main(int argc, char** argv) {
     const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     std::printf("\n%.1f s of capture: %llu bursts, %llu decodes, %zu devices; noise floor %.1f dBFS/bin; %.2f s CPU (%.1f %% of real time)\n",
                 t, (unsigned long long)nb, (unsigned long long)nd, tr.size(), fe.noiseDb(), sec, 100.0 * sec / std::max(t, 1e-9));
+    if (meters)
+        std::printf("meters: %llu bursts at 868.30 / 868.95 tried, %llu frames (%llu damaged), %llu from collectors; "
+                    "★ encrypted payloads are never printed — only their length\n", (unsigned long long)wst.tried,
+                    (unsigned long long)wst.frames, (unsigned long long)wst.damaged, (unsigned long long)wst.collector);
     std::printf("\nthe device list (as the clients get it):\n%s\n", tr.json(t).c_str());
     if (galLog) {
         galLog->finish();

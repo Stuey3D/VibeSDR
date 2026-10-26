@@ -51,6 +51,10 @@ static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl);
 static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl);
 static void ft8_decode_multi_symbols(const WF_ELEM_T* wf, int num_bins, int n_syms, int bit_idx, float* log174);
 
+// VibeSDR (2026-10-26, FT2): the search's time range — ft8_lib's -10 .. 20 unless the waterfall sets its own.
+static int wf_time_min(const ftx_waterfall_t* wf) { return (wf->time_min || wf->time_max) ? wf->time_min : -10; }
+static int wf_time_max(const ftx_waterfall_t* wf) { return (wf->time_min || wf->time_max) ? wf->time_max : 20; }
+
 static const WF_ELEM_T* get_cand_mag(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
 {
     int offset = candidate->time_offset;
@@ -316,7 +320,7 @@ int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candi
     {
         for (candidate.freq_sub = 0; candidate.freq_sub < wf->freq_osr; ++candidate.freq_sub)
         {
-            for (candidate.time_offset = -10; candidate.time_offset < 20; ++candidate.time_offset)
+            for (candidate.time_offset = wf_time_min(wf); candidate.time_offset < wf_time_max(wf); ++candidate.time_offset)
             {
                 const int nt = sync_terms(wf, candidate.time_offset, terms);
                 candidate.freq_offset = 0;
@@ -382,7 +386,7 @@ int ftx_find_candidates_ref(const ftx_waterfall_t* wf, int num_candidates, ftx_c
     ftx_candidate_t candidate;
     for (candidate.time_sub = 0; candidate.time_sub < wf->time_osr; ++candidate.time_sub)
         for (candidate.freq_sub = 0; candidate.freq_sub < wf->freq_osr; ++candidate.freq_sub)
-            for (candidate.time_offset = -10; candidate.time_offset < 20; ++candidate.time_offset)
+            for (candidate.time_offset = wf_time_min(wf); candidate.time_offset < wf_time_max(wf); ++candidate.time_offset)
                 for (candidate.freq_offset = 0; (candidate.freq_offset + num_tones - 1) < wf->num_bins; ++candidate.freq_offset)
                 {
                     candidate.score = sync_fun(wf, &candidate);

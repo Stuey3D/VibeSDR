@@ -1075,7 +1075,7 @@ function renderSessions(s: any) {
           another app, and it costs a channel of DSP plus the stream — an owner watching costs
           wants to see it (Stuart, 2026-09-09: "we need to show if the user is using RAW IQ").
           `iq` is the stream's rate in Hz while a consumer is attached, 0 or absent otherwise. */''}
-    <td>${c.decoder ? esc(String(c.decoder).toUpperCase()) : ''}${
+    <td>${c.decoder ? esc(String(c.decoder).split('+').map((d) => (d === 'ft8band' ? 'BAND SPOTS' : d.toUpperCase())).join('+')) : ''}${
       typeof c.iq === 'number' && c.iq > 0
         ? `${c.decoder ? ' · ' : ''}<span title="Raw IQ out: an rtl_tcp app is taking this listener's channel at ${esc(String(c.iq / 1000))} kHz.">RAW IQ <span class="dim">${esc(String(c.iq / 1000))}k</span></span>`
         : ''}${!c.decoder && !(typeof c.iq === 'number' && c.iq > 0) ? '<span class="dim">—</span>' : ''}</td>
@@ -1709,7 +1709,8 @@ async function refresh() {
       if (note) note.hidden = !d;
       if (d && note) {
         const running = Array.isArray(d.running) ? d.running : [];
-        const what = running.map((r: any) => [r.decoder, r.spots ? 'FT8' : ''].filter(Boolean).join(' + ')).filter(Boolean);
+        // ★ V12: Band spots named as such (spotsScope "band"), Single as the FT8 it always was.
+        const what = running.map((r: any) => [r.decoder, r.spots ? (r.spotsScope === 'band' ? 'Band spots' : 'FT8') : ''].filter(Boolean).join(' + ')).filter(Boolean);
         note.textContent = `${d.inUse ?? 0} of ${d.max} in use on this machine`
           + (what.length ? ` (${what.join(', ')})` : '')
           + ` — ${d.set > 0 ? 'your limit' : `automatic for this hardware (${d.default})`}. `

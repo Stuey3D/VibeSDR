@@ -33,6 +33,8 @@ export interface GalleryItem {
   title: string; partial?: boolean; wl?: boolean; bytes: number;
   /** ★ V12 2026-10-25: a standing card's slot ("ismsum-433-…"), and an item's own download name ("ISM 433.92 2026-10-25.txt"). */
   s?: string; dn?: string;
+  /** ★ V12 2026-10-26 (DSC): 3 distress · 2 urgency · 1 safety, and the position a call sent ("plat"/"plon"). */
+  lv?: number; plat?: number; plon?: number;
 }
 const KINDS: { id: string; label: string }[] = [
   { id: '', label: 'ALL' }, { id: 'navtex', label: 'NAVTEX' }, { id: 'rtty', label: 'RTTY' },
@@ -43,6 +45,8 @@ const KINDS: { id: string; label: string }[] = [
   { id: 'psk', label: 'PSK' },
   // ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card (vibe_ism_gallery.h)
   { id: 'ism', label: 'ISM' },
+  // ★★ V12 2026-10-26: DSC — each frequency's day of calls as a .txt, every distress/urgency call on its own (vibe_dsc_gallery.h)
+  { id: 'dsc', label: 'DSC' },
 ];
 const p2 = (n: number) => String(n).padStart(2, '0');
 export function galleryWhen(t: number): string {
@@ -227,7 +231,8 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                   ) : null}
                   ListEmptyComponent={<Text style={s.dim}>{kind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.'}</Text>}
                   renderItem={({ item: it }) => (
-                    <TouchableOpacity onPress={() => { void show(it); }} style={s.row} accessibilityRole="button">
+                    <TouchableOpacity onPress={() => { void show(it); }} accessibilityRole="button"
+                                      style={[s.row, (it.lv ?? 0) >= 2 && { borderLeftWidth: 3, borderLeftColor: (it.lv ?? 0) >= 3 ? '#FF4B4B' : '#FF8A3D', paddingLeft: 6 }]}>
                       <Text style={s.freq}>{galleryFreq(it.hz)}</Text>
                       <View style={{ flex: 1 }}>
                         <Text style={s.name}>{it.title || it.k.toUpperCase()}

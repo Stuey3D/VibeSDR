@@ -12,6 +12,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { digiModeStyle } from '../utils/digiModes';
 import {
   Animated,
   FlatList,
@@ -176,7 +177,8 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
           {s.call}
         </Text>
         <Text style={[dp.spotCell, dp.spotBand, { fontFamily: font }]}>{s.band}</Text>
-        <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }]}>
+        {/* ★ V12: the mode in ITS colour — the same as its map marker (src/utils/digiModes.ts). */}
+        <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }, !isCW && { color: digiModeStyle(s.mode).colour }]}>
           {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : 'CW') : s.mode}
         </Text>
         <Text style={[dp.spotCell, dp.spotSnr,
