@@ -187,6 +187,8 @@ struct Ft8SlotOptions {
     bool onlyChanged  = false;
     /** With the second look on: no BP on the waterfall's likelihoods at all — every candidate goes straight to it. */
     bool fineOnly     = false;
+    /** Subtract a decode before the next pass only if an undecoded candidate overlaps it (see decode()). */
+    bool subtractNeeded = false;
     /** Asked before pass 2 and 3 with the ms this decode has taken so far and the ms the last pass took.
      *  Empty = always yes (the bench). */
     std::function<bool(int nextPass, double elapsedMs, double lastPassMs)> mayRunPass;
@@ -211,6 +213,7 @@ struct Ft8SlotStats {
     int    fineTried[3] = {0, 0, 0};    ///< of them, how many had the second look
     int    finePassed[3] = {0, 0, 0};   ///< … and passed its sync test
     int    fineDecodes[3] = {0, 0, 0};  ///< … and decoded
+    int    subtractSkipped[3] = {0, 0, 0};  ///< decodes not subtracted: nothing undecoded overlapped them
     int    skipped[3] = {0, 0, 0};      ///< candidates passed over: tried last pass, nothing changed near them
     int    apTried[3] = {0, 0, 0};      ///< near misses that went to a-priori decoding
     int    apDecodes[3] = {0, 0, 0};    ///< … and decoded
@@ -280,6 +283,7 @@ private:
     std::vector<double> decodedStart_;     // this slot's decodes' start samples, by result index (the near test)
     std::vector<uint32_t> prevKeys_, curKeys_;           // candidates tried last pass / this pass (onlyChanged)
     std::vector<std::pair<float, float>> changed_;       // Hz bands subtracted before this pass
+    std::vector<std::pair<float, double>> failed_;       // this pass's undecoded candidates (Hz, start sample)
     static constexpr int kFineMinSyncFt8 = 10;    // of 21 Costas symbols (noise: 21/8 ≈ 2.6)
     static constexpr int kFineMinSyncFt4 = 10;   // of 16 (noise: 4)        // the second look, made on first use (its window FFT: 1.5 MB FT8)
 };

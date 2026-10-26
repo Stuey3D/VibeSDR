@@ -1063,6 +1063,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
         sm[Ft8SlotStats::kSearch] += lap();
         st.candidates[pass - 1] = nc;
         int found = 0;
+        failed_.clear();
         for (int i = 0; i < nc; ++i) {
             if (o.abort && o.abort->load(std::memory_order_relaxed)) { st.passes = pass; return; }
             const ftx_candidate_t& c = cands_[(size_t)i];
@@ -1098,15 +1099,15 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
                 viaFine = fineDecode(audio, n, cStart, cHz, o, msg, viaOsd, apKind, fineStart, fineF0, st, pass);
                 sm[Ft8SlotStats::kFine] += lap();
                 if (std::getenv("FTX_CDBG")) std::printf("C %d %.1f %.0f %d %d %d %d\n", pass, cHz, cStart, c.score, dbgHits_, dbgErr_, viaFine ? 1 : 0);
-                if (!viaFine) continue;
+                if (!viaFine) { failed_.push_back({ cHz, cStart }); continue; }
             } else if (!bpOk) {
-                if (o.osdMaxErrors <= 0 || c.score < o.osdMinScore) continue;
+                if (o.osdMaxErrors <= 0 || c.score < o.osdMinScore) { failed_.push_back({ cHz, cStart }); continue; }
                 ++st.osdTried[pass - 1];
                 float llr[FTX_LDPC_N]; uint8_t a91[FTX_LDPC_K_BYTES];
                 ftx_candidate_log174(wf, &c, llr);
                 const int osdErr = ft8Osd1(llr, o.osdMaxErrors, a91);
                 sm[Ft8SlotStats::kOsd] += lap();
-                if (osdErr < 0) continue;
+                if (osdErr < 0) { failed_.push_back({ cHz, cStart }); continue; }
                 a91ToMessage(a91, msg);
                 viaOsd = true;
             }
@@ -1147,6 +1148,23 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             if (r.snr >= o.subtractMinSnr) subs.push_back(s);
             ++found;
             sm[Ft8SlotStats::kPost] += lap();
+        }
+        /* ★★ SUBTRACT ONLY WHAT HIDES SOMETHING (2026-10-26). Taking a signal out costs a pass over its 12.6 s of
+         *  samples (~7 M instructions each on the Pi 2 build — most of a busy band's later passes), and it only helps a
+         *  weaker signal that overlaps it in frequency. So a decode is subtracted only if this pass left a candidate
+         *  undecoded within its band that is not one of its own cluster. */
+        if (o.subtractNeeded && pass < passes) {
+            const float tone = 1.0f / mon_.symbol_period, nt = ft4_ ? 4.0f : 8.0f;
+            subs.erase(std::remove_if(subs.begin(), subs.end(), [&](const Sub& sb) {
+                for (const auto& fc : failed_) {
+                    const float df = fc.first - (float)sb.f0;
+                    if (df < -(nt + 1.5f) * tone || df > (nt + 1.5f) * tone) continue;
+                    if (std::fabs(df) < 1.5f * tone && std::fabs(fc.second - sb.start) < nsps_) continue;   // its own cluster
+                    return false;
+                }
+                ++st.subtractSkipped[pass - 1];
+                return true;
+            }), subs.end());
         }
         st.passes = pass;
         st.passMs[pass - 1] = msSince(tp);
