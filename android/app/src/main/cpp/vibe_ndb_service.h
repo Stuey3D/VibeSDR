@@ -208,6 +208,7 @@ private:
         if (!sk_ || std::fabs(rate - sliceRate_) > 0.5 || std::fabs(centre - sliceCentre_) > 0.5) {
             vibe::ndb::Skimmer::Config c;
             c.rate = rate; c.loHz = lo_ - centre; c.hiHz = hi_ - centre;
+            c.avoidHz = hw_ - centre; c.avoidWidthHz = 120;   // ★ the hardware centre's DC remnant is not a beacon
             auto s = std::make_unique<vibe::ndb::Skimmer>(c);
             s->setStartUtcMs(clock_ ? clock_() * 1000 : wallMs());
             s->onCopy = [this](const vibe::ndb::Copy& cp) { onCopy(cp); };

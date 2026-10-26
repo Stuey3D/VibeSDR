@@ -138,7 +138,10 @@ public:
         /** ★ ICAO Annex 10 (3.4.5): the ident tone is 1020 ± 50 Hz or 400 ± 25 Hz. On (the default), only those two
          *  windows (a little wider, for old keyers) are searched — far fewer places for noise to pass for a weak tone. */
         bool toneIcaoOnly = true;
-        bool coherent = true;        ///< the sidebands combined coherently on the carrier's phase (else their powers summed)
+        bool coherent = true;
+        /** ★ An offset no carrier is taken at (± avoidWidthHz): the radio's own DC remnant, which the service places
+         *  here (it sits at the hardware centre, between the 0.5 kHz raster's beacons). */
+        double avoidHz = 1e12, avoidWidthHz = 0;        ///< the sidebands combined coherently on the carrier's phase (else their powers summed)
         double carrierDb = 3.0;      ///< a carrier's long average over the floor, in one bin
         IdentVote::Rules vote;
     };

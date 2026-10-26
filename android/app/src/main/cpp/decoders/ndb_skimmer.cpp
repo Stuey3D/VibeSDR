@@ -518,6 +518,17 @@ struct Skimmer::Impl {
         }
         return false;
     }
+    /** ★ An IQ IMAGE: the mirror about the radio's DC of a carrier ≥ 15 dB stronger (an RTL's I/Q imbalance puts one
+     *  there, 25–40 dB down) — a beacon exactly mirrored by a far stronger one is not a beacon. */
+    bool isImage(int b) const {
+        if (cfg.avoidWidthHz <= 0) return false;
+        const double mirror = 2.0 * cfg.avoidHz - offsetOf(w0 + b);
+        const int m = (int)std::lround(mirror / binHz) + N / 2 - w0;
+        if (m < 1 || m + 1 >= nw) return false;
+        const float lm = std::max(L[(size_t)m], std::max(L[(size_t)(m - 1)], L[(size_t)(m + 1)]));
+        return lm > 31.6f * L[(size_t)b];
+    }
+
     /** ★★ A CARRIER IS A LINE. Its excess over the floor must be four times that of the bins around it (3–8 bins out,
      *  beyond its main lobe): a data signal's hump — the maritime DGPS beacons' MSK at 283.5–325 kHz, a broadcaster's
      *  sidebands — has local peaks too, a few dB over its own shoulders, and they key like noise. */
@@ -562,6 +573,8 @@ struct Skimmer::Impl {
         for (int j = 0; j < nc; ++j) {
             const int b = cand[(size_t)j] + lo;
             if (!isLocalPeak(b)) continue;
+            if (std::fabs(offsetOf(w0 + b) - cfg.avoidHz) <= cfg.avoidWidthHz) continue;   // ★ the radio's DC
+            if (isImage(b)) continue;
             Car* near = carNear(b, 2);
             if (near) {
                 if (near->seen <= 0) near->seen = -near->seen + 1;
