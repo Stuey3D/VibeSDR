@@ -1,0 +1,40 @@
+# Values build.sh writes into the image's /boot/dietpi.txt. Every key must already exist in the
+# dietpi.txt that DietPi's installer put there, exactly once — build.sh refuses to build otherwise,
+# so a key DietPi renames can never be silently ignored.
+#
+# ★ NOT HERE ON PURPOSE: AUTO_SETUP_GLOBAL_PASSWORD stays DietPi's default ("dietpi"). With
+#   AUTO_SETUP_AUTOMATED=1 DietPi flags /var/lib/dietpi/.check_user_passwords, and its login script
+#   then makes the owner choose new root and dietpi passwords at the first login. No password is
+#   generated or baked into this image.
+
+# First boot runs without anyone at a keyboard: updates, setup, then Automation_Custom_Script.sh.
+AUTO_SETUP_AUTOMATED=1
+# Our custom script is /boot/Automation_Custom_Script.sh (0 = use the file on the card).
+AUTO_SETUP_CUSTOM_SCRIPT_EXEC=0
+
+# Name on the network. (VibeServer advertises its own name over mDNS once it is set up.)
+AUTO_SETUP_NET_HOSTNAME=vibeserver
+# Ethernet first. The XR819 Wi-Fi is left to the owner: set AUTO_SETUP_NET_WIFI_ENABLED=1 and fill in
+# dietpi-wifi.txt before the first boot if they want it.
+AUTO_SETUP_NET_ETHERNET_ENABLED=1
+AUTO_SETUP_NET_WIFI_ENABLED=0
+
+# Neutral region settings.
+AUTO_SETUP_LOCALE=C.UTF-8
+AUTO_SETUP_TIMEZONE=UTC
+
+# SSH on: DietPi's default server, Dropbear (lighter than OpenSSH on 256 MB).
+AUTO_SETUP_SSH_SERVER_INDEX=-1
+
+# Swap in RAM (zram, auto = 50 % of RAM), never on the SD card.
+AUTO_SETUP_SWAPFILE_SIZE=1
+AUTO_SETUP_SWAPFILE_LOCATION=zram
+
+# Nothing extra installed by DietPi: VibeServer comes from our installer in the custom script.
+AUTO_SETUP_DESKTOP=none
+
+# 256 MB, a hot SoC in a closed box: cap the CPU at 1.008 GHz rather than let it throttle under load.
+CONFIG_CPU_MAX_FREQ=1008
+
+# Do not send DietPi's survey from a box we prepared on the owner's behalf.
+SURVEY_OPTED_IN=0
