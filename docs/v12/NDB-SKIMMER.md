@@ -171,11 +171,17 @@ x86-64 SSE2 syntax-checks clean.
 
 ## Not done / owed
 
-- **The app** (React Native): no NDB yet — web only. It needs: the capability (`ndb`, `ndbWhy`, `ndbLo/Hi`), the Mode
-  sheet entry beside ISM, the map-first view (AdsbLive's pattern) with the NDB layer injected into its map WebView (add
-  `src/generated/ndbLayerSource.ts` to `gen-ndblayer-source.mjs`, after the ADS-B layer whose rings it uses), the list
-  (`src/services/` rules shared with ndb.ts: `ndbIdentCell`, `ndbBars`, `nmText`, `ndbRows`), the card, Find/stats, the
-  audio released (iOS `setQuiet`), pad/keyboard reach, the gallery chip, and the About V12 note + tour copy.
+- **The app** (React Native) — BUILT 2026-10-26 (branch `v12-app-parity-2-ndb`): the capability from the radio's own
+  vibeserver.json (`src/services/ndb.ts` parseNdbCapability), the NDB key beside ISM (absent / dimmed with why / live; none
+  on Apple TV, which has no WebView), `{"type":"ndb"}` + Find + stats in `VibeServerClient` (ghost guard, heal held, every
+  tune/zoom/pan gate holds), the map-first view (`MapOverlay` kind `'ndb'`: `src/generated/ndbLayerSource.ts` from
+  `gen-ndblayer-source.mjs`, injected after the ADS-B layer; the layer is given the VibeMapGL instance or Leaflet, never
+  the compat adapter), `NdbLiveList.tsx` (tiles, RINGS · UNHEARD · FIT · HEARD LOG · FIND NDB · STATS with SHARE CSV,
+  rows lowest first with the readings coloured by confidence, the card with its sparkline), audio released (setQuiet),
+  every row/key/dialog by pad and keyboard (a dialog takes Back first), one whole-radio mode at a time, the gallery chip,
+  the About note and the Mode tour card. `scripts/test_ndb_app.ts` (174) holds the app's rules to the web's.
+  ★ Owed: not yet run on a device against a real NDB server (the page's layer start, the card's placement on an SE and a
+  foldable); the stats' per-hour CSVs (the web's other two downloads) — the app shares the beacons' CSV only.
 - Weak beacons below −13 dB (2.5 kHz); a strong neighbour's keyed sideband sitting on a weak carrier.
 - Stats are in memory only (reset on restart; the gallery keeps the days).
 - Real Pi 2 timing; real RTL direct-sampling and RSP captures (only an UberSDR RX888 recording was available).

@@ -5632,6 +5632,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (ismOn && (activeDecRef.current || spotsKindRef.current)) dismissDecoderPanel();
   }, [ismOn, dismissDecoderPanel]);
+  /* ★ V12 NDB: the same — no audio to decode (spectrum-only); a running decoder or the spots are put away, as the web's ndbUiOn. */
+  useEffect(() => {
+    if (ndbOn && (activeDecRef.current || spotsKindRef.current)) dismissDecoderPanel();
+  }, [ndbOn, dismissDecoderPanel]);
 
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
