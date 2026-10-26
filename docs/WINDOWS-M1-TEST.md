@@ -1,19 +1,22 @@
-# VibeServer for Windows — Milestone 1 test sheet
+# VibeServer for Windows — Milestone 1 test sheet (test build 2)
 
-*For Stuart's Windows 11 PC, with the RTL-SDR Blog V3 and V4. Written 2026-10-26 with test build 1
-(`vibeserver-windows-x64-test1.zip`). The plan is `docs/WINDOWS-PORT-PLAN.md`; section numbers below refer to it.*
+*For Stuart's Windows 11 PC, with the RTL-SDR Blog **V3**, **V4** and **V4L** (the V4L has the R828S tuner; our
+librtlsdr, osmocom 797f814, already drives it on Linux). Written 2026-10-26 with test build 2
+(`vibeserver-windows-x64-test2.zip`). The plan is `docs/WINDOWS-PORT-PLAN.md`; section numbers refer to it.*
 
-**What this test decides.** UsbDk "borrow" becomes the **default** for Windows if, on this PC:
+**What this test decides.** Stuart, 2026-10-26: *"no manual Zadig messing around, ONE admin prompt to cleanly replace
+the driver, and ONLY show a stick that is showing as a TV stick"* — and *"If VibeServer doesn't work without
+workarounds and messing then Windows is not happening."* So the one question is:
 
-1. UsbDk installs and the PC **reboots normally** (the Windows 11 24H2 report in §2.3).
-2. It borrows a **V3 and a V4** from the stock DVB-T driver (or from no driver).
-3. 2.4 MS/s streams **clean** (no lost data).
-4. Hand-back and re-borrow are **reliable** (the close/reopen race in §2.3).
+> Plug in a stick Windows uses as a TV tuner (or has no driver for). Does VibeServer offer it, does **SWITCH** need
+> **exactly one** Windows permission prompt, and does the dongle then work — for the V3, the V4 and the V4L — and does
+> **Give back** return it to the TV driver?
 
-If any of these fails, binding Windows' own WinUSB to the dongle becomes the default instead (part D). Part D is
-also tested on its own, because it is the fallback either way. Nothing in this sheet needs Zadig.
+What SWITCH does: Windows' own **WinUSB** driver (`C:\Windows\INF\winusb.inf`, Microsoft's, already on every Windows
+PC) is installed on **that one dongle**. No driver of ours, no certificate (Zadig makes and trusts one — we do not),
+and nothing about Windows' security is changed. The dongle's TV driver stays installed, which is how Give back works.
 
-**Time:** about 1½ hours for everything. Parts A, B and E are the important ones. If time is short, do A, B1–B4 and E1.
+**Time:** about 1½ hours. Parts **B** and **C** are the important ones. If time is short: A, B1–B7, C1–C4.
 
 ---
 
@@ -21,265 +24,249 @@ also tested on its own, because it is the fallback either way. Nothing in this s
 
 | # | Do this | Why |
 |---|---|---|
-| 0.1 | **Create a restore point.** Start → type *Create a restore point* → **Create…** → name it `before VibeServer M1`. | UsbDk is a USB filter on every hub. If the PC misbehaves after installing it, this restore point is the way back (§2.3). |
-| 0.2 | Unzip `vibeserver-windows-x64-test1.zip` to a folder, e.g. `C:\VibeServer-test`. | Everything runs from that folder. Nothing is installed. |
-| 0.3 | Right-click each `.exe` → **Properties** → if there is an **Unblock** tick-box at the bottom, tick it → OK. | Downloaded files are marked. Unblocking avoids a SmartScreen prompt on every run. |
-| 0.4 | Open **Terminal** (or Command Prompt) **as a normal user** (not administrator) and `cd C:\VibeServer-test`. | Every command below is typed here. The two driver commands ask for admin themselves. |
-| 0.5 | Check the dongles' current state: run `vibe-usbprobe report` with **both dongles unplugged** and keep the output. | A baseline. |
-| 0.6 | Note **Memory Integrity**: Windows Security → Device security → Core isolation. `report` prints it too. | Leave it exactly as it is (normally **on**). Every test runs with Windows' security as users have it. |
+| 0.1 | *(Optional)* **Create a restore point**: Start → *Create a restore point* → **Create…** → `before VibeServer M1`. | A belt-and-braces way back. Nothing in the main test should need it. |
+| 0.2 | Unzip `vibeserver-windows-x64-test2.zip` to **`C:\VibeServer-test`** — not Downloads or the Desktop. | Part C runs VibeServer at boot as Windows' background account, which cannot read your personal folders. (The page says so if you try.) |
+| 0.3 | Right-click each `.exe` → **Properties** → if there is an **Unblock** tick-box, tick it → OK. | Downloaded files are marked; unblocking avoids a SmartScreen prompt each run. |
+| 0.4 | Open **Terminal** **as a normal user** (not administrator) and `cd C:\VibeServer-test`. | VibeServer never runs as administrator. It asks Windows for permission itself, once, when a driver changes. |
+| 0.5 | If an earlier test left settings, delete `C:\ProgramData\VibeServer` so this is a **first run**. | Part B starts from a new server. |
+| 0.6 | Note **Memory Integrity** (Windows Security → Device security → Core isolation). Leave it as it is. | Every test runs with Windows' security as users have it. |
 
-> **If Windows shows "Windows protected your PC"**: click **More info → Run anyway**. The test build is unsigned
-> (signing comes later, through SignPath — §4.7). If there is **no** *Run anyway* button, Smart App Control is on:
-> note it in the results and stop; that is itself an answer the plan needs. **Never switch Smart App Control off.**
+> **If Windows shows "Windows protected your PC"**: **More info → Run anyway**. The test build is unsigned (user
+> builds are signed, §4.7). If there is **no** *Run anyway*, Smart App Control is on: note it and stop — that is
+> itself an answer. **Never switch Smart App Control off.**
 >
-> ★★★ **No step for USERS may ever ask them to lower their security** (Stuart, 2026-10-26: "Anything that requires a
-> user to lower their security is a big no go") — no Memory Integrity / Smart App Control / Secure Boot / signature
-> enforcement off, no test-signing, no antivirus exclusions, no firewall off. "Run anyway" here is only because this
-> TEST build is unsigned; every build a user gets is signed, so they never see it.
+> ★★★ **No step may ever ask a user to lower their security** (Stuart, 2026-10-26) — no Memory Integrity / Smart App
+> Control / Secure Boot / signature enforcement off, no test-signing, no certificates, no antivirus exclusions, no
+> firewall off. If anything below seems to need one, **stop and report it**: that is the no-go.
 
-**Everything the probe prints is also appended to `vibe-usbprobe.log`** in the same folder. At the end, send that
-file back — it holds the whole session.
-
----
-
-## 1. How to read the probe's output
-
-`vibe-usbprobe report` prints, for each radio node:
-
-```
-[1] Generic RTL2832U OEM 0bda:2838  (interface 0)  ← the radio's node
-    instance:  USB\VID_0BDA&PID_2838&MI_00\7&...
-    driver:    TV tuner (DVB-T/BDA)  [service "RTL2832UBDA", class "MEDIA"]
-    VibeServer: RTL-SDR found — Windows is using it as a TV tuner (...)
-```
-
-- **"← the radio's node"** marks the one that matters (interface 0 of the dongle). A V3/V4 normally shows a
-  *composite parent* and two interfaces; interface 1 (the IR receiver) is left alone.
-- **driver** is what Windows has bound right now: `no driver`, `TV tuner (DVB-T/BDA)`, `WinUSB`, `libusbK`,
-  `libusb0`, or `UsbDk (borrowed)`. Please copy the **service name in quotes** exactly — the plan does not know the
-  Realtek driver's real service name yet.
-- **libusb (WinUSB) / libusb (UsbDk)** lines say whether the radio library could open the dongle each way:
-  `open OK` is a pass for that route.
-- **VibeServer would use** is the route the server will pick on its own.
-
-`stream` and `cycle` put the RTL2832 into its **counter test mode**: instead of radio samples it sends a running
-count, so every lost byte shows as a **jump**. `jumps 0` is the only clean result. `% of 2.40 MS/s` should be
-99–100 %.
+**Logs to send back at the end** (all in `C:\ProgramData\VibeServer\` unless said):
+`vibeserver-helper.log` (every step the permission helper took), `vibeserver.log` (part C), and
+`C:\VibeServer-test\vibe-usbprobe.log` (part A). Also copy the terminal window's text from part B.
 
 ---
 
-## A. The states a dongle can be in (5 minutes per dongle)
+## A. What each dongle is now (5 minutes per dongle — diagnostic)
 
-Plug in **the V3 only**, wait 10 seconds, run `vibe-usbprobe report`. Then unplug it, plug in **the V4 only**, repeat.
+Plug in **one** dongle at a time, wait 10 seconds, run `vibe-usbprobe report`. Record:
 
-Record for each:
-
-| Dongle | State seen (driver line, service name in quotes) | Problem code (if any) | What "VibeServer would use" says |
+| Dongle | `driver:` line (copy the **service name in quotes**) | Problem code | `VibeServer:` line |
 |---|---|---|---|
 | V3 | | | |
 | V4 | | | |
+| V4L | | | |
 
-The possible states (§2, "what stock Windows means"):
-
-- **(a1) no driver** — `driver: no driver`, usually `problem: code 28`. Windows found no TV driver.
-- **(a2) TV tuner** — a Realtek BDA driver from Windows Update or the dongle's CD.
-- **(b) Zadig** — `WinUSB` (or `libusbK` / `libusb0`) because Zadig or SDR# set it up earlier.
-
-If a dongle is already in state (b) from an earlier Zadig, that is fine — part C covers it — but for parts B and D
-we need a dongle in (a1) or (a2). To put a Zadig'd dongle back to stock: Device Manager → *Universal Serial Bus
-devices* → the dongle (*Bulk-In, Interface*) → right-click → **Uninstall device** → tick **Attempt to remove the
-driver for this device** → Uninstall → unplug and replug. Then run `report` again.
-
-**Pass:** each dongle is listed, its interface 0 is marked, and the service name is shown.
+- **TV tuner (DVB-T/BDA)** — Windows (or a CD) installed a Realtek TV driver: state **a2**. This is the main case.
+- **no driver**, usually `problem: code 28` — state **a1**. Offered the same way.
+- **WinUSB / libusbK / libusb0** — Zadig or SDR# set it up before. VibeServer uses it silently (part D). To test
+  the main flow on such a dongle, return it to stock first: Device Manager → *Universal Serial Bus devices* → the
+  dongle (*Bulk-In, Interface*) → **Uninstall device** → tick **Attempt to remove the driver** → Uninstall →
+  unplug and replug → `report` again.
 
 ---
 
-## B. UsbDk "borrow" — the intended default (40 minutes)
+## B. THE MAIN TEST — switch a TV stick to SDR from VibeServer (40 minutes)
 
-### B1. Install UsbDk and REBOOT (the #1 risk)
+Do B1–B9 with the **V3**, then repeat B1–B7 with the **V4** and the **V4L** (from B3; B1 only once). Each dongle on its
+own the first time.
 
-1. Download **UsbDk 1.0.22 x64**: <https://www.spice-space.org/download/windows/usbdk/UsbDk_1.0.22_x64.msi>
-   (it is the newest installer; Red Hat's, Apache-2.0).
-2. Run it. Accept the UAC prompt. Note whether it asks for a reboot.
-3. **Reboot the PC now, whether asked or not.**
+### B1. First start
 
-| Check | Result |
-|---|---|
-| Installer finished without error | |
-| Asked for a reboot? | |
-| **PC booted normally to the desktop** | |
-| Keyboard and mouse work after the reboot | |
-| Windows version (`report` prints it, e.g. 24H2 26100.x) | |
-| Memory Integrity during this install | |
-
-**Fail → stop part B here.** If the PC does not boot, or the keyboard/mouse are dead: boot into recovery
-(hold **Shift** while clicking Restart → Troubleshoot → Advanced options → **System Restore**) and restore
-`before VibeServer M1`. Then go to part D. That outcome alone answers the question: UsbDk cannot be the default.
-
-### B2. Is UsbDk usable by libusb?
-
-Run `vibe-usbprobe usbdk`.
-
-**Pass:** `service installed`, `hub filter registered`, and **`UsbDkHelper.dll C:\Windows\system32\UsbDkHelper.dll`**.
-If it says *not in System32* but *also at C:\Program Files\UsbDk Runtime Library\…*, record that — libusb only
-looks in System32, so the server would need to load it from there itself (a small change for M2).
-
-### B3. Borrow the V3 from its stock driver and stream 60 s at 2.4 MS/s
-
-Plug in the V3 (state a1 or a2 — see part A). Then:
+With the dongle (state a2 or a1) plugged in:
 
 ```
-vibe-usbprobe report
-vibe-usbprobe stream --usbdk --seconds 60
+vibeserver --serve --admin-pass <a password you choose>
 ```
-
-`report` should now end with `VibeServer would use: UsbDk (borrow)` and show `libusb (UsbDk): 0bda:2838 … open OK`.
-
-`stream` prints one line a second and ends with `RESULT:`.
 
 | Check | Pass when | Result |
 |---|---|---|
-| Opens | `opened in … ms` | |
-| Counter run | `jumps 0`, `99–100 %`, `CLEAN` | |
-| Tuned check (100 MHz) | `samples arriving` | |
-| During the stream, Device Manager (View → Devices by connection) shows the dongle under **UsbDk** | yes/no | |
-| **After** it finishes: run `vibe-usbprobe list` | the dongle is back on its **original** driver (a1 or a2) | |
+| It starts — no `no SDR found` | `starting as a new server; set it up at http://localhost:48000/setup` | |
+| The offer, in the terminal | `Windows is using this dongle as a TV tuner (Generic RTL2832U OEM, serial …). Switch it to SDR so VibeServer can use it? You can switch it back any time.` (or *has no driver* for a1) | |
+| No mention of Zadig anywhere | | |
+| Windows Firewall asks about network access | tick **Private networks** → **Allow** (once; part C relies on this rule) | |
 
-### B4. Same with the V4, plus HF and the bias-T
+### B2. The offer in the setup page
 
-Unplug the V3, plug in the V4:
+On **this PC**, open `http://localhost:48000/setup` and sign in with that password.
+
+| Check | Pass when | Result |
+|---|---|---|
+| Above the tabs: the same sentence, with **Switch** and **Not now** | | |
+| Nothing is shown for a dongle that already works (if you have one plugged in too) | | |
+
+### B3. SWITCH — exactly one prompt
+
+Press **Switch**. The page says *waiting for Windows — look for the permission prompt on this PC's own screen*.
+
+| Check | Pass when | Result |
+|---|---|---|
+| **How many** Windows permission (UAC) prompts appeared | **exactly 1**, for *VibeServer* (publisher *Unknown* — this test build is unsigned; user builds are signed) | |
+| You pressed **Yes**; time until the page answered | | |
+| The page's answer | `… is now an SDR. Added as a radio — set it up in its tab below.` and a **tab** for it appears | |
+| Did Windows ask for a **restart**? (the page would say *Restart Windows to finish*) | ideally **no** — record either way | |
+| `vibeserver-helper.log`: which way worked — copy the lines starting `A:` / `B:` / `C:` and `DiInstallDevice` | **A** expected for a1, **B** for a2 | |
+| The terminal shows the dongle being found | | |
+
+★★ **If it fails** with *Windows offered no way to pick its own WinUsb Device for this dongle*, or `DiInstallDevice`
+returns an error: copy `vibeserver-helper.log`, then do part **M** (the manual check) for that dongle. Do **not** try
+Zadig or anything that changes a security setting. That result is the finding.
+
+### B4. Use it
+
+In the dongle's tab: set it up (an FM frequency is enough), leave **Start VibeServer when Windows starts** ticked on
+the Server tab, press **Save and start**.
+
+| Check | Pass when | Result |
+|---|---|---|
+| Save asks Windows for permission **once more** (to start at boot) — the page said it would | 1 prompt → Yes | |
+| It restarts and the radio plays: from a phone or another computer, `http://<this PC's IP>:48000/` (`ipconfig` → IPv4) | clean FM, no stutter for 5 minutes | |
+| Retune, change the sample rate once in the client | | |
+| Task Manager: CPU of `vibeserver.exe` (the radio's process) | | |
+| **V4 only**: tune HF (7.100 MHz) with an antenna (a bit of wire) | signals | |
+
+### B5. Clean data (stop the server first: Ctrl+C)
 
 ```
-vibe-usbprobe stream --usbdk --seconds 60 --hf --bias-t
+vibe-usbprobe stream --seconds 60                 (V4 and V4L: add  --hf --bias-t)
+vibe-usbprobe cycle --cycles 20
 ```
 
-Pass as B3, plus: `tuner type 6 (R828D — a V4)`, the **HF 7.100 MHz** line says `samples arriving` (an antenna helps;
-even a bit of wire), and `bias-T on=0 off=0`. If you have an LNA or a meter, the bias-T is on for 3 seconds — check
-it powers.
+**Pass:** `jumps 0`, `99–100 %`, `CLEAN`; `cycle RESULT: 20/20 clean` with retries 0 (WinUSB has no hand-back race).
+V4: `tuner type 6 (R828D)`; **V4L: record the tuner type line** — R828S is new, the V4L may report as an R828D.
 
-### B5. Hand-back and re-borrow — 50 cycles (the race)
+### B6. Replug — Windows remembers, VibeServer does not ask again
 
-With the V4 still plugged in:
+Start `vibeserver --serve` again (no password needed now). Unplug the dongle, plug it into the **same** port.
 
-```
-vibe-usbprobe cycle --usbdk --cycles 50
-```
+| Check | Pass when | Result |
+|---|---|---|
+| No offer appears for it (it already works) | | |
+| The radio plays again (it may need **Check again** on the setup page, or a restart of VibeServer) | | |
+| A **different** USB port: is it still WinUSB? (`vibe-usbprobe list`) — Windows remembers per port on some dongles | record | |
 
-Each cycle opens (borrows), streams 5 s in counter mode, closes (hands back), waits ½ s, and goes again. It takes
-about 5 minutes.
+### B7. Give back — one prompt
 
-**Pass:** `cycle RESULT: 50/50 clean, 0 failed to open`. `needed a retry` above zero is not a failure, but **record
-the number** — it is the re-bind race, and it tells M2 whether the server must hold the borrow for its whole life.
-Then run `vibe-usbprobe list`: the dongle must be back on its original driver.
+In the setup page, under the offers: *… switched to SDR by VibeServer.* → **Give it back to Windows (TV tuner)**.
 
-Repeat with the V3: `vibe-usbprobe cycle --usbdk --cycles 50`.
+| Check | Pass when | Result |
+|---|---|---|
+| Exactly **1** permission prompt | | |
+| The page: `… is back on Windows' own driver. Its settings are kept, paused…` | | |
+| The radio stopped first (its tab shows paused) | | |
+| `vibe-usbprobe list` | back on **TV tuner** (a2) or **no driver** (a1) — whatever part A recorded | |
+| Within a few seconds the **offer** appears again (terminal, and on the page after **Check again**) | | |
+| Restart asked for? | ideally no | |
 
-### B6. The real server, borrowing
+To carry on, **Switch** it again (one prompt): its settings come back and it goes on the air without a new setup.
 
-```
-vibeserver --device 0 --mode wfm --freq 98800000
-```
+### B8. Plugging in while it runs
 
-(any strong local FM station). The first lines say which USB route it took — expect
-`VibeServer: USB path = UsbDk (borrow)`. Windows Firewall will ask about network access the first time: tick
-**Private networks**, click **Allow**.
+With VibeServer running, plug in another dongle that is still a TV stick.
 
-Then, from a browser **on another computer or phone on the same network**, open `http://<this PC's IP>:48000/`
-(the IP: `ipconfig` → IPv4 Address). Also try `http://localhost:48000/` on the PC itself.
+**Pass:** within ~5 seconds the terminal prints the offer for it; the setup page shows it after **Check again**.
 
-| Check | Result |
-|---|---|
-| Web client loads; waterfall moves | |
-| FM audio plays, clean, no stutter for 5 minutes | |
-| Retune to another station and back; change the sample rate in the client once | |
-| Task Manager: CPU of `vibeserver.exe` | |
-| **Ctrl+C** in the terminal stops it within a few seconds | |
-| After stopping, `vibe-usbprobe list`: the dongle is back on its original driver | |
+### B9. Saying no
 
-### B7. Leave UsbDk installed for part C if you are continuing, otherwise uninstall it (G2).
+- Press **Switch** and answer **No** to the permission prompt. **Pass:** *Windows' permission prompt was declined —
+  nothing was changed*; the dongle is unchanged.
+- Press **Not now**. **Pass:** the offer goes; it comes back after the dongle is replugged or VibeServer restarts
+  (nothing is remembered).
+
+| Dongle | from a2 (TV driver) | from a1 (no driver) | prompts per switch | restart needed? | stream CLEAN | give back OK |
+|---|---|---|---|---|---|---|
+| V3 | | | | | | |
+| V4 | | | | | | |
+| V4L | | | | | | |
 
 ---
 
-## C. A dongle Zadig already set up (10 minutes)
+## C. Start VibeServer when Windows starts — the BOOT CHECK (25 minutes)
 
-Use Zadig only if a dongle is not already in state (b) — it is the state many users arrive in, not a step we
-ask anyone to take. If you would rather not, skip C: it is the best-understood route.
+After B4 the Server tab says **On: starts at boot — before anyone signs in, as Windows' restricted background account
+(LOCAL SERVICE).**
 
-1. Zadig: Options → List All Devices → **Bulk-In, Interface (Interface 0)** → **WinUSB** → Replace Driver.
-2. `vibe-usbprobe report` → the dongle shows `WinUSB`, `VibeServer would use: WinUSB — every RTL-SDR is already on a
-   libusb driver`.
-3. `vibe-usbprobe stream --seconds 30` (no `--usbdk`) → `CLEAN`.
-4. `vibeserver --device 0 --mode wfm --freq 98800000` → first line says `USB path = WinUSB`; listen briefly.
-
-To undo: the Device Manager *Uninstall device* steps at the end of part A.
-
----
-
-## D. The fallback: Windows' own WinUSB on one dongle (20 minutes)
-
-This is the "Give this dongle to VibeServer" button of §3, done by the probe. It uses Microsoft's own
-`winusb.inf` — no driver of ours, no certificate — on **that one dongle only**. Run it with UsbDk **uninstalled**
-(G2) so the result is not mixed up with the borrow.
-
-1. Dongle in state (a1) or (a2) (part A). `vibe-usbprobe list` → note its driver.
-2. `vibe-usbprobe bind` → **one UAC prompt** → Yes. Its output is shown in the same window when it finishes.
-
-   It tries three ways to find "WinUsb Device" and says what each one found, e.g.
-   `winusb.inf as a class list ("Have Disk"): found "WinUsb Device" by … in C:\Windows\INF\winusb.inf`.
-   **Please copy all of those lines** — which way works from (a1) and from (a2) is exactly what §2.4 marks unverified.
-
-| Check | Pass when | Result (a1) | Result (a2) |
+| # | Check | Pass when | Result |
 |---|---|---|---|
-| A way to "WinUsb Device" was found | one of the three lines says `found` | | |
-| `DiInstallDevice: OK` | no error; note if it asks for a REBOOT | | |
-| `now: WinUSB [service "WinUSB" …]` | | | |
-| `libusb (WinUSB): … open OK` | | | |
+| C1 | Task Scheduler (Start → *Task Scheduler*) → Task Scheduler Library → **VibeServer** | trigger *At system startup*; *When running the task, use the following user account:* **LOCAL SERVICE**; *Run whether user is logged on or not* | |
+| C2 | Stop the terminal copy (Ctrl+C). **Restart the PC. Do NOT sign in.** Wait 2 minutes. From a phone: `http://<PC IP>:48000/` | the radio list loads and the radio **plays** — with nobody signed in | |
+| C3 | Sign in. Task Manager → Details → `vibeserver.exe` | **User name: LOCAL SERVICE** (never SYSTEM, never you); 3 processes for 1 radio (keeper, front door, radio) | |
+| C4 | `C:\ProgramData\VibeServer\vibeserver.log` | the server's log, starting `keeper (boot): starting VibeServer` | |
+| C5 | Task Manager → end the `vibeserver.exe` that is the **front door** (the one using port 48000; *Resource Monitor → Network → Listening Ports* shows its PID) | within ~20 s it is back (log: `keeper: VibeServer stopped … starting it again`), and the phone can listen again | |
+| C6 | In the setup page (from the phone or this PC), change a setting and **Apply and Restart** | it comes back by itself (the log shows the restart) | |
+| C7 | The setup page of this boot-started copy, Server tab | says it was started at boot and **cannot ask for permission**; the switch cannot be changed from here; a TV stick plugged in now is offered with the same explanation | |
+| C8 | **Turn it off.** Task Scheduler → VibeServer → **End**. In the terminal: `vibeserver --serve`. Setup page → untick *Start VibeServer when Windows starts* | **1** permission prompt; the task is gone from Task Scheduler; the page says *Off* | |
+| C9 | **Sign-in mode.** Tick it again and answer **No** to the prompt, then press **Start when I sign in instead** | no prompt; the page says *On: starts when you sign in to Windows (not at boot…)* | |
+| C10 | Restart the PC: before signing in, the phone gets **nothing** (expected). Sign in | within ~1 minute the phone can listen. Task Manager: `vibeserver.exe` runs as **you**. Did a black window flash at sign-in? (record) | |
+| C11 | Untick it | no prompt; *Off*; Start → *Startup apps* no longer lists VibeServer | |
 
-3. `vibe-usbprobe stream --seconds 60` → `CLEAN`. With the V4 add `--hf --bias-t`.
-4. `vibe-usbprobe cycle --cycles 50` → `50/50 clean`. (With WinUSB there is no hand-back, so retries should be 0.)
-5. `vibeserver --device 0 --mode wfm --freq 98800000` → `USB path = WinUSB`; listen from another computer as in B6.
-6. **Give it back:** `vibe-usbprobe giveback` → UAC → Yes. **Pass:** the dongle returns to what it had before step 2
-   (the TV driver, or no driver), and `DiUninstallDevice: OK`.
-7. Replug the dongle and `vibe-usbprobe list` once more: it must still be on its original driver (Windows must not
-   have remembered WinUSB).
-
-**If `bind` reports `FAIL — Windows offered no way to pick WinUsb Device`**, try it by hand, and record whether the
-choice exists: Device Manager → the dongle's **Bulk-In, Interface** (or the TV-tuner entry) → Update driver →
-*Browse my computer* → *Let me pick from a list* → is **Universal Serial Bus devices** in the list, and inside it
-**WinUsb Device** (manufacturer *WinUsb Device*)? Pick it, accept the warning, then run `vibe-usbprobe report` and
-`stream`. Undo with `vibe-usbprobe giveback`.
+> ★ If C2 fails because the phone cannot connect but C3 shows it running: the firewall. The rule Windows asked for in
+> B1 is for the program, for any account — record whether it covered the background run. **Do not turn the firewall
+> off**; that would be a no-go answer, not a fix.
 
 ---
 
-## E. Front door with two radios (15 minutes, after B or D)
+## D. A dongle Zadig or SDR# already set up (5 minutes, optional)
 
-Both dongles must be usable by the route being tested (both borrowed via UsbDk, or both bound in part D).
+If you have one on WinUSB already (part A said WinUSB / libusbK / libusb0): plug it in and start `vibeserver --serve`.
+**Pass:** no offer at all — not in the terminal, not on the page — and it can be added as a radio from the *new radio*
+banner and plays. There is **no** Give back for it (VibeServer did not switch it, so it will not undo it).
 
-1. With both dongles plugged in: `vibeserver --serve --admin-pass <a password you choose>` (type your own; it is
-   the admin password of this test server). With no settings file yet it runs the first dongle directly and
-   serves the **setup page** on port 48000. Open `http://localhost:48000/`, sign in with that password, enable both
-   dongles and save. (Settings live in `C:\ProgramData\VibeServer\config.json`.)
-   ★ Test build 1 has no first-run screen of its own: started with no dongle and no settings it stops with
-   `no SDR found`. The first-run flow (tray app, choose-a-password page) is Milestone 3.
-2. After saving, it restarts itself. The terminal should show `front door on port 48000` and `started radio <serial>`
-   twice (each radio is its own process — Task Manager shows three `vibeserver.exe`).
-3. From another computer: `http://<PC IP>:48000/` lists both radios; open each and listen.
+---
+
+## E. Two radios on one port (15 minutes, after B)
+
+Both dongles switched (B3). With both plugged in, `vibeserver --serve`, set both radios up and save.
 
 | Check | Result |
 |---|---|
-| Both radios listed and playing at the same time | |
-| A connection to each radio works through port 48000 (the hand-off, §4.2) | |
-| **Ctrl+C** in the terminal: all three `vibeserver.exe` gone within ~5 s (Task Manager) | |
-| Close the terminal window instead (start again first): all three gone | |
-| After that, `vibe-usbprobe list`: dongles back on their original drivers (UsbDk route) | |
+| The terminal shows `front door on port 48000` and `started radio <serial>` twice | |
+| From another computer, `http://<PC IP>:48000/` lists both; both play at the same time | |
+| Two stock dongles share serial `00000001`: the page asks you to give one a new serial — note how that went | |
+| **Ctrl+C**: every `vibeserver.exe` gone within ~5 s (Task Manager) | |
+| Close the terminal window instead (start again first): all gone | |
 
 ---
 
 ## F. (removed)
 
 ★★★ **Nothing we ship may ever need Memory Integrity — or any other Windows security feature — switched off** (Stuart,
-2026-10-26: "I will never ask a user to do this"). So there is no test with it off: if UsbDk does not work with Memory
-Integrity on, UsbDk is out and the WinUSB route (part D) is the answer.
+2026-10-26). So there is no such test.
+
+---
+
+## M. DIAGNOSTIC ONLY — does Windows itself offer "WinUsb Device" for this dongle?
+
+★★ **This is not a user flow and never will be.** It is only for when B3 fails, to tell "VibeServer's code missed a
+way" from "Windows offers no way at all". Record the answers; undo with `vibe-usbprobe giveback` afterwards.
+
+Device Manager → the dongle's entry (the TV-tuner entry, or *Bulk-In, Interface*) → **Update driver** → *Browse my
+computer* → *Let me pick from a list* → untick *Show compatible hardware* if it is ticked →
+
+| Question | Answer |
+|---|---|
+| Is **Universal Serial Bus devices** in the list of device types? | |
+| Inside it, manufacturer **WinUsb Device** → model **WinUsb Device**? | |
+| If you pick it (accept the warning): does `vibe-usbprobe stream --seconds 30` say CLEAN? | |
+| Did Windows ask for a restart? | |
+
+`vibe-usbprobe bind` runs the same code as SWITCH and prints each way it tries — run it too if B3 failed, and send its
+output (`vibe-usbprobe.log`).
+
+---
+
+## U. UsbDk "borrow" — OPTIONAL, no longer the default (30 minutes)
+
+WinUSB is the route (Stuart, 2026-10-26). UsbDk is kept in the code, **off** unless `VIBE_USB_BACKEND=usbdk` is set.
+Only test it if there is time, with the V3, and only with Memory Integrity as it is.
+
+1. Install **UsbDk 1.0.22 x64** (<https://www.spice-space.org/download/windows/usbdk/UsbDk_1.0.22_x64.msi>), accept
+   the UAC prompt, **reboot**. **Pass:** the PC boots normally, keyboard and mouse work. (If not: Shift+Restart →
+   Troubleshoot → System Restore → the restore point from 0.1, and stop here.)
+2. `vibe-usbprobe usbdk` → `service installed`, `UsbDkHelper.dll C:\Windows\system32\UsbDkHelper.dll`.
+3. A dongle on its **TV driver** (give it back first, B7): `vibe-usbprobe stream --usbdk --seconds 60` → `CLEAN`;
+   `vibe-usbprobe cycle --usbdk --cycles 50` → record clean / failed / retries.
+4. `set VIBE_USB_BACKEND=usbdk` then `vibeserver --device 0 --mode wfm --freq 98800000` → first lines say
+   `USB path = UsbDk (borrow)`; listen; Ctrl+C; `vibe-usbprobe list` → back on the TV driver.
+5. Uninstall UsbDk (G3) and **reboot**; check keyboard and mouse.
 
 ---
 
@@ -287,29 +274,31 @@ Integrity on, UsbDk is out and the WinUSB route (part D) is the answer.
 
 | # | Undo | How |
 |---|---|---|
-| G1 | A `bind` | `vibe-usbprobe giveback` (UAC). Or Device Manager → *Universal Serial Bus devices* → the dongle → Uninstall device (tick *Attempt to remove the driver* is **not** needed — winusb.inf is Windows' own) → Action → Scan for hardware changes. |
-| G2 | UsbDk | Settings → Apps → Installed apps → **UsbDk Runtime Libraries** → Uninstall. Then **reboot**, and check the keyboard and mouse work (the #120 report in §2.3). If they do not: Shift+Restart → System Restore → `before VibeServer M1`. |
-| G3 | VibeServer's settings | Delete `C:\ProgramData\VibeServer` (config, `usbprobe-bound.txt`, and `run\`). |
-| G4 | The firewall rule | Windows Security → Firewall & network protection → Allow an app through firewall → remove `vibeserver.exe`. |
-| G5 | The test folder | Delete `C:\VibeServer-test`. |
-| G6 | Zadig (if part C was done) | Device Manager uninstall, as at the end of part A. |
+| G1 | A switched dongle | **Give it back** in the setup page (B7), or `vibe-usbprobe giveback`. By hand: Device Manager → *Universal Serial Bus devices* → the dongle → Uninstall device (do **not** tick *Attempt to remove the driver* — winusb.inf is Windows' own) → Action → Scan for hardware changes. |
+| G2 | Start with Windows | Untick it in the setup page (C8/C11). By hand: Task Scheduler → **VibeServer** → Delete; and Start → *Startup apps* → VibeServer off (or `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v VibeServer`). |
+| G3 | UsbDk (part U) | Settings → Apps → **UsbDk Runtime Libraries** → Uninstall → **reboot** → check keyboard and mouse. |
+| G4 | VibeServer's settings and logs | Delete `C:\ProgramData\VibeServer`. |
+| G5 | The firewall rule | Windows Security → Firewall & network protection → Allow an app through firewall → remove `vibeserver.exe`. |
+| G6 | The test folder | Delete `C:\VibeServer-test`. |
 | G7 | Last resort | System Restore → `before VibeServer M1`. |
 
-Nothing else is changed by these programs: no service is installed, nothing is added to start-up, nothing runs
-after the terminal is closed.
+Nothing else is changed: no service is installed, no certificate, no driver of ours, no security setting.
 
 ---
 
 ## Results to send back
 
-1. `vibe-usbprobe.log` from the test folder (all the probe's output, in order).
-2. The tables above, filled in (a photo of a printed copy is fine).
-3. Anything odd: a stutter, a beep from Windows when a dongle is borrowed, a Device Manager entry that looked
-   wrong, any message that did not make sense.
+1. `C:\ProgramData\VibeServer\vibeserver-helper.log`, `C:\ProgramData\VibeServer\vibeserver.log`,
+   `C:\VibeServer-test\vibe-usbprobe.log`, and the terminal text from part B.
+2. The tables, filled in (a photo of a printed copy is fine) — above all the B matrix and C2/C3.
+3. Anything odd: a second prompt you did not expect, a restart Windows asked for, a message that did not make sense.
 
-### The go / no-go these results decide (from §5)
+### The go / no-go these results decide
 
-- **UsbDk becomes the default** if: B1 boots normally with Memory Integrity on (it must never need it off), B3/B4 are clean for both dongles,
-  B5 is 50/50 for both, B6 plays, and G2 leaves keyboard and mouse working.
-- **Windows' WinUSB bind becomes the default instead** if UsbDk fails any of those but D passes from (a1) and (a2).
-- **Neither** → the plan's §2.5/§2.6 questions come back (a signed INF), and we talk before M2.
+- **GO** — B3 switches the V3, V4 and V4L from the TV driver (a2) with **one** prompt each, they stream clean (B5),
+  Give back works (B7), and C2 plays with nobody signed in. Windows proceeds to M2 on the WinUSB route.
+- **GO, with a note** — it works but Windows asks for a restart after the switch: acceptable if said plainly; record
+  which dongles and states.
+- **NO-GO** — Windows offers no way to put its own WinUsb Device on a stick on the TV driver without a driver or
+  certificate of ours (B3 fails with way A, B and C, and part M shows Windows itself does not offer it). By Stuart's
+  rule that ends the Windows port: no workaround, no Zadig, nothing that lowers security.

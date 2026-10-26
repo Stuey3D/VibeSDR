@@ -5804,17 +5804,20 @@ function winRender() {
   const box = $("winDongles");
   const notNow = new Set(WIN.notNow || []);
   const job = WIN.job || {};
+  const bg = !!(WIN.autostart && WIN.autostart.background);
   let html = "";
   for (const d of (WIN.dongles || [])) {
     if (d.offer && !notNow.has(d.id)) {
       html += `<div class="note" style="margin:0 0 10px"><p style="margin:0 0 10px">${esc(d.offerText)}</p>`
-        + `<button type="button" data-win-switch="${esc(d.id)}" ${job.running ? "disabled" : ""}>Switch</button> `
+        + `<button type="button" data-win-switch="${esc(d.id)}" ${job.running || bg ? "disabled" : ""}>Switch</button> `
         + `<button type="button" class="ghost" data-win-notnow="${esc(d.id)}" style="margin-left:8px" ${job.running ? "disabled" : ""}>Not now</button>`
-        + `<div class="hint" style="margin-top:8px">Windows will ask once for permission on this PC’s screen. Only this dongle `
-        + `changes: it gets Windows’ own WinUSB driver, and its TV driver stays installed for when you switch it back.</div></div>`;
+        + `<div class="hint" style="margin-top:8px">${bg ? "This copy of VibeServer was started at boot, in the background, where "
+        + "Windows cannot show its permission prompt. Sign in on the PC, stop the background copy, and run VibeServer from its "
+        + "folder to switch it." : "Windows will ask once for permission on this PC’s screen. Only this dongle "
+        + "changes: it gets Windows’ own WinUSB driver, and its TV driver stays installed for when you switch it back."}</div></div>`;
     } else if (d.switchedByUs) {
       html += `<div class="hint" style="margin:0 0 8px">${esc(d.name)}${d.serial ? ", serial " + esc(d.serial) : ""} — switched to SDR by VibeServer. `
-        + `<button type="button" class="ghost" data-win-giveback="${esc(d.id)}" style="padding:4px 10px;font-size:12px" ${job.running ? "disabled" : ""}>Give it back to Windows (TV tuner)</button></div>`;
+        + `<button type="button" class="ghost" data-win-giveback="${esc(d.id)}" style="padding:4px 10px;font-size:12px" ${job.running || bg ? "disabled" : ""}>Give it back to Windows (TV tuner)</button></div>`;
     } else if (d.state === "other") {
       html += `<div class="hint" style="margin:0 0 8px">${esc(d.name)}${d.serial ? ", serial " + esc(d.serial) : ""}: ${esc(d.why)}.</div>`;
     }
@@ -5846,6 +5849,7 @@ function winRender() {
     : !a.exeOk ? a.exeWhy
     : first ? "Windows will ask once for permission on this PC’s screen. If you say No, VibeServer starts when you sign in instead."
     : a.boot ? "Turning it off asks Windows for permission once, on this PC’s screen."
+    : a.signin ? "“Start at boot instead” asks Windows for permission once, on this PC’s screen. Turning it off needs no permission."
     : "Turning it on asks Windows for permission once, on this PC’s screen, so it can start at boot.";
   $("winAutoAlt").classList.toggle("hide", !(a.boot || a.signin) || !!a.background);
   $("winAutoSignin").classList.toggle("hide", !a.boot);

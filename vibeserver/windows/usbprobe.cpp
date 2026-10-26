@@ -1,10 +1,10 @@
 // vibe-usbprobe.exe — Milestone 1 of the Windows port: ANSWER THE DRIVER QUESTION ON A REAL PC.
 //
-// ★★★ WHAT IT IS FOR (docs/WINDOWS-PORT-PLAN.md §5, docs/WINDOWS-M1-TEST.md). Stuart's decision: UsbDk
-//     "borrow" is the DEFAULT — no Zadig step, nothing to understand — PROVIDED this tool shows on his own
-//     Windows 11 PC that UsbDk installs and the PC reboots normally, that it borrows a V3 and a V4 from the
-//     DVB-T driver, that 2.4 MS/s streams clean, and that hand-back and re-borrow are reliable. Binding
-//     Windows' own in-box WinUSB to that one dongle is the FALLBACK, and is tested here too.
+// ★★★ WHAT IT IS FOR (docs/WINDOWS-PORT-PLAN.md §5, docs/WINDOWS-M1-TEST.md). Since test build 2 the USER flow is
+//     in vibeserver.exe itself — the setup page offers a TV stick a switch to SDR, one UAC prompt (Stuart,
+//     2026-10-26). This probe is the DIAGNOSTIC beside it: it reports what Windows has on each dongle, streams in
+//     counter mode to prove a route is clean, and its `bind` / `giveback` run the very same code as the server's
+//     SWITCH / Give back (win_bind.cpp) with every step printed. UsbDk is tested only with --usbdk (optional).
 // ★★ Every command prints a plain-text report and APPENDS it to vibe-usbprobe.log beside the .exe, so the
 //    whole session can be pasted back in one go.
 // ★ Commands: list · usbdk · report · stream · cycle · bind · giveback   (help: no arguments)

@@ -4,6 +4,14 @@
 *Labels used throughout: **[verified]** means checked against a source or our own code. **[unverified]**
 means believed true but not yet tested. **[decide]** means Stuart has to choose.*
 
+> ★★★ **DECIDED 2026-10-26 (Stuart), supersedes the UsbDk-default below:** *"rebuild vibeserver that way, no manual Zadig
+> messing around, ONE admin prompt to cleanly replace the driver, and ONLY show a stick that is showing as a TV stick."*
+> WinUSB (Microsoft's in-box `winusb.inf` on that one dongle) is THE route, built into `vibeserver.exe` (setup page:
+> SWITCH / NOT NOW / Give back — `vibeserver/windows/win_dongles.h`); UsbDk stays in the code, off unless
+> `VIBE_USB_BACKEND=usbdk`. Nothing may lower Windows' security; if Windows offers no programmatic way to put its own
+> WinUsb Device on a stick on the TV driver, Windows is a no-go. Plus "Start VibeServer when Windows starts" (a LOCAL
+> SERVICE boot task, one prompt; or the sign-in list). Test: `docs/WINDOWS-M1-TEST.md` (test build 2).
+
 ---
 
 ## 0. Summary
