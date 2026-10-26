@@ -20,6 +20,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <vector>
 #if defined(VIBE_DAB_PFFFT)
 #include "vibe_dab_fft.h"
@@ -47,6 +48,12 @@ struct Burst {
     float  carrierHz = 0;     ///< the carrier (OOK) or the tones' midpoint (FSK), relative to the channel centre
     float  fskDevHz = 0;      ///< half the distance between the two tones (0 = not FSK)
     float  sampleUs = 0;      ///< the slicer's time resolution
+    /** ★ V12 wM-Bus (2026-10-26): the channel's complex baseband, kept only where the service asked for it
+     *  (FrontEnd::setKeepBaseband — the 868 band) for a decoder that works on SAMPLES, not run lengths: a T1/C1 meter's
+     *  chip is 10 µs, finer than any run-length slice (vibe_wmbus.h). Shared, so copying a Burst never copies it; freed
+     *  when the last copy goes (as soon as the decoders return). Empty everywhere else. */
+    std::shared_ptr<const std::vector<cf>> bb;
+    double bbRate = 0;        ///< its sample rate
 };
 
 /** A radix-2 FFT, forward, natural order (the DAB one's shape, kept local so this header links nothing). */
@@ -132,6 +139,12 @@ public:
 
     double workRate() const { return w_; }
     double chanRate() const { return w_ / chanM_; }
+    /** ★ V12 wM-Bus: a wider burst channel — the work rate over the integer nearest `hz` (2.4 MS/s → 480 kS/s, 2.048 →
+     *  512 k). The 868 band asks for ~500 kS/s: a T1/C1 chip is 10 µs, 2.5 samples at 250 kS/s. The slicer's smoothing is
+     *  in µs (slice()), so every other family slices as it did at 250 k. Call before feeding. */
+    void setChanRate(double hz) { chanM_ = std::max(1, int(std::lround(w_ / std::max(1.0, hz)))); }
+    /** ★ V12 wM-Bus: hand each burst's complex baseband on in Burst::bb (the 868 band only — see Burst::bb). */
+    void setKeepBaseband(bool on) { keepBb_ = on; }
     uint64_t bursts() const { return bursts_; }
     /** The detector's median bin floor, dBFS per bin (for the status line and the gain rule). */
     double noiseDb() const { return noiseDb_; }
@@ -366,7 +379,12 @@ private:
         b.offHz = c.offHz;
         b.clipped = c.peakAbs > 0.85f;
         // ★ fewer than 3 detector frames = a noise spike (1 frame in ~0.3 ms; the shortest real burst spans dozens)
-        if (c.hits >= 3 && slice(c.bb, chanRate(), b)) { ++bursts_; onBurst(static_cast<const Burst&>(b)); }
+        if (c.hits >= 3 && slice(c.bb, chanRate(), b)) {
+            ++bursts_;
+            // ★ moved, not copied: the channel's buffer becomes the burst's (a new one is reserved at the next open)
+            if (keepBb_) { b.bb = std::make_shared<const std::vector<cf>>(std::move(c.bb)); b.bbRate = chanRate(); }
+            onBurst(static_cast<const Burst&>(b));
+        }
         c.bb.clear();
         c.bb.shrink_to_fit();
     }
@@ -408,10 +426,16 @@ public:
         std::vector<float> sm;
         std::vector<uint8_t> on(n), on0;
         b.ookAll.clear(); b.fskAll.clear();
-        static const size_t kWins[4] = {3, 9, 25, 61};    // ×4 µs at 250 kS/s: 12, 36, 100, 244 µs
+        /* ★★ THE SMOOTHINGS ARE TIMES (V12 wM-Bus, 2026-10-26): 12, 36, 100, 244 µs — what {3, 9, 25, 61} taps were at
+         *  250 kS/s. The 868 band's channel is ~500 kS/s now (setChanRate), and a La Crosse or a Fine Offset there must
+         *  slice exactly as before: the window is the odd tap count nearest the time at THIS rate. */
+        static const double kWinUs[4] = {12, 36, 100, 244};
+        auto taps = [&](double wus) { const size_t t = size_t(std::max(1L, std::lround(wus / us))); return t | 1; };
+        const size_t kWins[4] = {taps(kWinUs[0]), taps(kWinUs[1]), taps(kWinUs[2]), taps(kWinUs[3])};
+        const size_t env9 = taps(36);
         // the level before the burst (the pre-roll's first ~2 ms) and the burst's own level, from the 9-tap envelope
         {
-            boxcar(env, 9, sm);
+            boxcar(env, env9, sm);
             const size_t preN = std::min(n / 4, size_t(rate * 0.002));
             std::vector<float> t(sm.begin(), sm.begin() + std::max<size_t>(preN, 8));
             std::sort(t.begin(), t.end());
@@ -447,7 +471,7 @@ public:
             const float hi = thr * 1.1f, lo = thr / 1.1f;
             bool st = false;
             for (size_t i = 0; i < n; ++i) { if (!st && sm[i] > hi) st = true; else if (st && sm[i] < lo) st = false; on[i] = st; }
-            Runs r = runsOf(on, us, false, int(win / 2) + 2);
+            Runs r = runsOf(on, us, false, int(win / 2) + int(std::lround(8.0 / us)));
             if (r.empty()) continue;
             if (r.size() > kMaxRuns) { if (wi == 0) return false; continue; }
             if (on0.empty()) on0 = on;                      // the finest usable slice marks where the carrier is
@@ -475,7 +499,7 @@ public:
                 fq[i] = j ? std::arg(bb[j] * std::conj(bb[j - 1])) * k : 0.0f;
             }
             std::vector<float> fs;
-            static const size_t kFw[3] = {3, 9, 25};
+            const size_t kFw[3] = {kWins[0], kWins[1], kWins[2]};   // ★ 12, 36, 100 µs, as kWins
             for (size_t wi = 0; wi < 3; ++wi) {
                 boxcar(fq, kFw[wi], fs);
                 std::vector<float> s2(fs);
@@ -493,7 +517,7 @@ public:
                     if (!sv && fs[i] > mid + hy) sv = true; else if (sv && fs[i] < mid - hy) sv = false;
                     hiTone[i] = sv;
                 }
-                b.fskAll.push_back(runsOf(hiTone, us, /*leadingSpaceOk=*/true, int(kFw[wi] / 2) + 2));
+                b.fskAll.push_back(runsOf(hiTone, us, /*leadingSpaceOk=*/true, int(kFw[wi] / 2) + int(std::lround(8.0 / us))));
             }
             if (!b.fskAll.empty()) b.fsk = b.fskAll.front();
         }
@@ -541,7 +565,7 @@ private:
     std::vector<float> win_, floor_, pw_, freq_;
     std::vector<int> order_;
     std::vector<uint8_t> usable_;
-    bool tablesOk_ = false;
+    bool tablesOk_ = false, keepBb_ = false;
     float thr_ = 10.0f, thrDbCached_ = -1.0f;
     std::vector<cf> fbuf_;
     Chan ch_[kMaxChans];

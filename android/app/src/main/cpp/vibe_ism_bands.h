@@ -22,7 +22,9 @@ inline const std::vector<Band>& bands() {
     static const std::vector<Band> b = {
         {"315", "315 MHz ISM",    315.00e6, 250e3, 200e3},   // US/Japan TPMS, fobs, remotes
         {"433", "433.92 MHz ISM", 433.92e6, 250e3, 870e3},   // 433.05–434.79: EU/UK sensors, weather, doorbells, TPMS
-        {"868", "868 MHz SRD",    868.60e6, 0,     350e3},   // 868.3 + 868.95 (EU): LaCrosse IT+, Bresser, Fine Offset
+        {"868", "868 MHz SRD",    868.60e6, 0,     450e3},   // 868.3 + 868.95 (EU): LaCrosse IT+, Bresser, Fine Offset, wM-Bus meters
+        // ★ 450 kHz, not 350 (V12 wM-Bus, 2026-10-26): a T1/C1 meter's upper tone sits at 868.95 + 50 kHz + up to 52 kHz of
+        //   crystal error = 869.05 MHz; the detector searches centre ± (needHz + 40 kHz) = 868.11-869.09
         {"915", "915 MHz ISM",    915.00e6, 250e3, 200e3},   // US: LaCrosse, Ambient, Fine Offset 915 versions
     };
     return b;

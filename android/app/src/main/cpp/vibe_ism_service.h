@@ -11,6 +11,7 @@
 #pragma once
 
 #include "vibe_ism_protocols.h"
+#include "vibe_wmbus.h"        // ★ V12 2026-10-26: Wireless M-Bus meters on the 868 band (docs/v12/WMBUS-DECODER.md)
 #include "vibe_ism_bands.h"    // the four bands, reachability, the landing band
 #include "vibe_ism_sink.h"     // ★ V12 2026-10-25: the gallery's copy of every new reading (vibe_ism_gallery.h)
 #include "vibe_adsb_capture.h"     // vibeadsb::CaptureMeter — the same live "capture N %" as ADS-B
@@ -74,6 +75,7 @@ inline const char* kindLabel(const std::string& k) {
 }
 /** The device's name: "Oregon Scientific THGR810", or for a secret kind "TPMS #2" / "Key fob #1". */
 inline std::string deviceName(const Reading& r, int nick) {
+    if (r.kind == "meter" && r.meter) return wmbus::nameOf(*r.meter);     // "Water meter · Sensus · 12345678"
     if (r.secret) {
         std::string n = kindLabel(r.kind);
         return n + " #" + std::to_string(nick);
@@ -81,6 +83,8 @@ inline std::string deviceName(const Reading& r, int nick) {
     return r.model.empty() ? r.make : r.make + " " + r.model;
 }
 inline std::string readable(const Reading& r, int nick, const Units& u = Units()) {
+    // ★ a meter's CORE line (no signal, no interval — the Tracker adds those): nothing in it has a unit choice
+    if (r.kind == "meter" && r.meter) return wmbus::coreLine(*r.meter);
     std::vector<std::string> p;
     p.push_back(deviceName(r, nick));
     if (r.secret && r.kind == "tpms" && !r.model.empty()) p.push_back(r.model);   // "TPMS #2 · type B · …"
@@ -219,9 +223,60 @@ private:
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  THE DEVICE LIST — newest first, one line per device, repeats folded, last-heard time.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** ★ V12 meters: the interval and the reception rate, from the access number (WMBUS-DECODER.md §4.3). A delta d =
+ *  (acc − last) mod 256 of 1-16 is one sample: (t − lastT) over d steps. Reception = frames heard ÷ frames sent over the
+ *  last hour.
+ *  ★★ THE INTERVAL IS TIME OVER STEPS, NOT A MEDIAN OF GAPS (2026-10-26, test-wmbus): OMS asks meters to jitter their
+ *     send time, and every single gap carries TWO jitters (this frame's and the last's) — the median of 8 such gaps read
+ *     "every 17 s" for a 16 s meter with ±1 s jitter. The sum of the last 16 samples' time over the sum of their steps
+ *     carries only the two end jitters; a sample more than a quarter off the median step is left out (a stray). ★ ASSUMED:
+ *     ACC steps once per transmission; a meter whose ACC does not move (some only step it on a readout) falls back to
+ *     the median raw gap and shows no reception figure. */
+struct MeterTrack {
+    int lastAcc = -1; double lastT = -1;
+    std::deque<std::pair<double, int>> gaps;     ///< (seconds, steps) — steps 0 = a raw gap (ACC frozen)
+    std::deque<std::pair<double, int>> rx;       ///< (time, steps) over the last hour
+    bool frozen = false;
+    void note(int acc, double t) {
+        if (acc < 0) return;
+        if (lastAcc < 0) { lastAcc = acc; lastT = t; return; }
+        const int d = (acc - lastAcc) & 255;
+        if (d == 0) {
+            if (t - lastT < 3.0) return;                       // the same frame sent twice
+            if (!frozen) gaps.clear();
+            gaps.push_back({t - lastT, 0}); frozen = true; rx.clear();
+        } else if (d <= 16) {
+            if (frozen) gaps.clear();
+            gaps.push_back({t - lastT, d}); rx.push_back({t, d}); frozen = false;
+        } else { gaps.clear(); rx.clear(); }
+        while (gaps.size() > 16) gaps.pop_front();
+        while (!rx.empty() && t - rx.front().first > 3600) rx.pop_front();
+        lastAcc = acc; lastT = t;
+    }
+    double every() const {
+        if (gaps.empty()) return 0;
+        std::vector<double> g;
+        for (const auto& e : gaps) g.push_back(e.first / std::max(1, e.second));
+        std::sort(g.begin(), g.end());
+        const double med = g.size() & 1 ? g[g.size() / 2] : 0.5 * (g[g.size() / 2 - 1] + g[g.size() / 2]);
+        if (frozen) return med;
+        double sec = 0; int steps = 0;
+        for (const auto& e : gaps) if (std::fabs(e.first / e.second - med) <= 0.25 * med) { sec += e.first; steps += e.second; }
+        return steps ? sec / steps : med;
+    }
+    int rxPct() const {
+        if (frozen || rx.size() < 2) return -1;
+        int sent = 0; for (const auto& e : rx) sent += e.second;
+        return sent > 0 ? int(std::lround(100.0 * double(rx.size()) / sent)) : -1;
+    }
+};
+
 class Tracker {
 public:
     static constexpr size_t kMaxDevices = 300;
+    /** ★ Meters have their own cap: a town street can hold more meters than that within range of a good 868 antenna, and
+     *  they must never push the weather station off the list (WMBUS-DECODER.md §5.5). */
+    static constexpr size_t kMaxMeters = 500;
     Tracker() {
         std::random_device rd;
         k0_ = (uint64_t(rd()) << 32) ^ rd();
@@ -245,9 +300,12 @@ public:
             nick = it->second;
             char kb[40]; std::snprintf(kb, sizeof kb, "s%016llx", (unsigned long long)h);
             key = kb;                                                 // ★ internal map key; never sent (devices get "d<n>")
+        } else if (r.kind == "meter" && r.meter) {
+            key = "meter:" + r.meter->mfr + ":" + r.meter->id + ":" + std::to_string(r.meter->type);
         } else {
             key = r.make + "|" + r.model + "|" + std::to_string(r.channel) + "|" + r.pubId;
         }
+        if (r.kind == "meter" && r.meter) return acceptMeter(key, std::move(r), t, out);
         if (r.confirm) {
             // ★ a weak check: the same values from the same device twice within 90 s, or nothing
             const std::string sig = key + "|" + readable(r, nick);
@@ -274,16 +332,26 @@ public:
         return !repeat;
     }
     void prune(double t) {
+        size_t meters = 0;
         for (auto it = devs_.begin(); it != devs_.end();) {
             const bool brief = it->second.r.secret;                       // cars and fobs pass by: 15 min; sensors 2 h
-            if (t - it->second.last > (brief ? 900 : 7200)) it = devs_.erase(it); else ++it;
+            if (t - it->second.last > (brief ? 900 : 7200)) it = devs_.erase(it); else { meters += it->second.r.kind == "meter"; ++it; }
         }
-        while (devs_.size() > kMaxDevices) {
-            auto old = devs_.begin();
-            for (auto it = devs_.begin(); it != devs_.end(); ++it) if (it->second.last < old->second.last) old = it;
-            devs_.erase(old);
+        // ★ two caps: meters among themselves, everything else among itself — the least recently heard of its own sort goes
+        for (int pass = 0; pass < 2; ++pass) {
+            const bool m = pass == 1;
+            size_t have = m ? meters : devs_.size() - meters;
+            const size_t cap = m ? kMaxMeters : kMaxDevices;
+            while (have > cap) {
+                auto old = devs_.end();
+                for (auto it = devs_.begin(); it != devs_.end(); ++it)
+                    if ((it->second.r.kind == "meter") == m && (old == devs_.end() || it->second.last < old->second.last)) old = it;
+                if (old == devs_.end()) break;
+                devs_.erase(old); --have;
+            }
         }
     }
+    size_t meterCount() const { size_t n = 0; for (const auto& kv : devs_) n += kv.second.r.kind == "meter"; return n; }
     void clear() { devs_.clear(); pending_.clear(); }
     /** Remove the rows of `kind` within `hz` of `freq` (a suspected fob found to be a sensor on a timer). */
     void forget(const std::string& kind, double freq, double hz) {
@@ -326,7 +394,8 @@ public:
             if (r.battOk >= 0) o += ",\"batt\":" + std::to_string(r.battOk);
             if (!r.button.empty()) o += ",\"button\":\"" + jsonEsc(r.button) + "\"";
             if (!r.note.empty()) o += ",\"note\":\"" + jsonEsc(r.note) + "\"";
-            if (!r.extra.empty()) o += ",\"extra\":\"" + jsonEsc(r.extra) + "\"";
+            if (!r.extra.empty() && r.kind != "meter") o += ",\"extra\":\"" + jsonEsc(r.extra) + "\"";
+            if (r.kind == "meter" && r.meter) meterJson(o, *d);
             std::snprintf(b, sizeof b, ",\"freq\":%.0f,\"level\":%.1f,\"snr\":%.1f,\"seen\":%.0f,\"age\":%.0f,\"count\":%d}",
                           r.freqHz, r.levelDb, r.snrDb, std::max(0.0, t - d->last), std::max(0.0, t - d->first), d->count);
             o += b;
@@ -335,7 +404,97 @@ public:
     }
 
 private:
-    struct Dev { uint64_t id = 0; Reading r; int nick = 0; std::string line; double first = 0, last = 0; int count = 0; };
+    struct Dev { uint64_t id = 0; Reading r; int nick = 0; std::string line; double first = 0, last = 0; int count = 0;
+                 std::string core; MeterTrack mt; };   // ★ core / mt: meters only
+
+    /** ★ A METER (WMBUS-DECODER.md §4): one row per meter; a frame repeats only when its CORE line is the same inside 3 s
+     *  (signal and access number change every frame and are not news). A DAMAGED frame (block 1 good, a later block bad)
+     *  says the meter was heard — its row's time, signal and count move — but its readings are not touched. */
+    bool acceptMeter(const std::string& key, Reading r, double t, Heard* out) {
+        Dev& d = devs_[key];
+        const bool fresh = d.count == 0;
+        if (fresh) { d.id = ++nextId_; d.first = t; }
+        if (r.meter->accOk) d.mt.note(r.meter->acc, t);
+        if (r.meter->damaged && d.r.meter) {
+            const float lv = r.levelDb, sn = r.snrDb; const double fq = r.freqHz;
+            r = d.r; r.levelDb = lv; r.snrDb = sn; r.freqHz = fq;
+        }
+        const std::string core = wmbus::coreLine(*r.meter);
+        const bool repeat = !fresh && core == d.core && t - d.last < 3.0;
+        if (!repeat) ++d.count;
+        d.r = std::move(r); d.core = core; d.last = t;
+        d.line = meterLine(d);
+        ++decoded_;
+        prune(t);
+        if (!repeat && out) { out->kind = "meter"; out->name = deviceName(d.r, 0); out->line = d.line; out->core = core; out->freqHz = d.r.freqHz; out->secret = false; }
+        return !repeat;
+    }
+    /** The line as listed: the core, then "every 16 s" (once two frames have been heard), then "signal 24 dB". */
+    static std::string meterLine(const Dev& d) {
+        std::string s = d.core;
+        const std::string ev = wmbus::everyText(d.mt.every());
+        if (!ev.empty()) s += std::string(wmbus::kDot) + ev;
+        s += std::string(wmbus::kDot) + "signal " + std::to_string(int(std::lround(std::max(0.0f, d.r.snrDb)))) + " dB";
+        return s;
+    }
+    /** The meter's own JSON fields (§4.5). ★★ Nothing of an encrypted payload — its length in blocks, nothing else. */
+    static void meterJson(std::string& o, const Dev& d) {
+        const wmbus::Meter& m = *d.r.meter;
+        auto str = [&](const char* k, const std::string& v) { o += ",\""; o += k; o += "\":\"" + jsonEsc(v) + "\""; };
+        auto num = [&](const char* k, double v, int dp) { o += ",\""; o += k; o += "\":" + fmt1(v, dp); };
+        // ★ old clients print `name · extra` when they rebuild a line (a listener on mph or kPa): the rest of the line,
+        //   less "battery low" (they add it from `batt`) and the signal (they have `snr`)
+        std::string extra;
+        {
+            char v[16]; std::snprintf(v, sizeof v, "v0x%02X", m.ver & 0xFF); extra = v;
+            for (const auto& w : wmbus::payloadWords(m)) extra += std::string(wmbus::kDot) + w;
+            const int sts = m.sts >= 0 ? m.sts & ~0x04 : -1;
+            const std::string stx = wmbus::statusText(sts);
+            if (!stx.empty()) extra += std::string(wmbus::kDot) + stx;
+            if (!m.via.empty()) extra += std::string(wmbus::kDot) + "via " + m.via;
+            const std::string ev = wmbus::everyText(d.mt.every());
+            if (!ev.empty()) extra += std::string(wmbus::kDot) + ev;
+        }
+        str("extra", extra);
+        str("mfr", m.mfr); str("wm", m.wm);
+        num("ver", m.ver, 0); num("devType", m.type, 0);
+        if (m.ellEnc) { num("sec", 99, 0); str("secText", "encrypted (AES, link layer)"); }
+        else if (m.sec >= 0) { num("sec", m.sec, 0); str("secText", wmbus::secText(m.sec)); }
+        if (m.encBlocks > 0) num("encBlocks", m.encBlocks, 0);
+        if (m.acc >= 0) num("acc", m.acc, 0);
+        if (m.sts >= 0) num("sts", m.sts, 0);
+        if (m.sts >= 0 && (m.sts & 0x04)) num("batt", 0, 0);
+        if (const double ev = d.mt.every(); ev > 0) num("every", ev, 0);
+        if (const int rx = d.mt.rxPct(); rx >= 0) num("rx", rx, 0);
+        if (!m.via.empty()) str("via", m.via);
+        if (!m.note.empty()) str("note", m.note);
+        if (m.authenticated) num("auth", 1, 0);
+        if (m.damaged) num("damaged", 1, 0);
+        if (m.sec != 0 && m.payloadLen > 0) num("encLen", m.payloadLen, 0);
+        const char* lead = m.type == 0x08 ? "HCA units" : wmbus::energyType(m.type) ? "energy" : "volume";
+        if (const auto* r0 = wmbus::findRec(m, lead, 0)) {
+            if (r0->q == "volume") num("vol", r0->v, 3);
+            else if (r0->q == "energy") num("energy", r0->u == "GJ" ? r0->v / 0.0036 : r0->v, 3);   // ★ always kWh in the JSON
+        }
+        if (const auto* fl = wmbus::findRec(m, "flow", 0, "m\xc2\xb3/h")) num("flow", fl->v, 3);
+        if (!m.recs.empty()) {
+            o += ",\"records\":[";
+            for (size_t i = 0; i < m.recs.size() && i < 16; ++i) {
+                const auto& r = m.recs[i];
+                if (i) o += ',';
+                o += "{\"q\":\"" + jsonEsc(r.q) + "\"";
+                if (r.v == r.v) o += ",\"v\":" + fmt1(r.v, std::min(9, std::max(0, r.dec)));
+                if (!r.u.empty()) o += ",\"u\":\"" + jsonEsc(r.u) + "\"";
+                if (!r.t.empty()) o += ",\"t\":\"" + jsonEsc(r.t) + "\"";
+                static const char* fn[4] = {"inst", "max", "min", "err"};
+                o += ",\"st\":" + std::to_string(r.st) + ",\"fn\":\"" + fn[r.fn & 3] + "\"";
+                if (r.tariff) o += ",\"tariff\":" + std::to_string(r.tariff);
+                if (r.qualified) o += ",\"qual\":1";
+                o += "}";
+            }
+            o += "]";
+        }
+    }
     uint64_t k0_, k1_;
     std::map<std::string, Dev> devs_;
     std::unordered_map<uint64_t, int> nickOf_;
@@ -367,13 +526,17 @@ public:
         band_ = &band; hwCentre_ = hwCentreHz; rate_ = rateHz; customHz_ = customHz;
         fe_.reset(new FrontEnd(rateHz));
         fe_->setDcGuardHz(15e3);
+        // ★ V12 wM-Bus: on the 868 band (or a frequency typed inside it) the burst channel is ~500 kS/s and keeps its
+        //   baseband — a T1/C1 meter's chip is 10 µs (vibe_wmbus.h). Everything else there slices as before (µs smoothing).
+        meters_ = wantsMeters(band, customHz);
+        if (meters_) { fe_->setChanRate(500e3); fe_->setKeepBaseband(true); }
         // ★ detect inside the band's own span (+ a margin for drifting sensors), not on the tuner's skirts
         if (customHz <= 0) {
             const double mid = band.centreHz - hwCentreHz, half = band.needHz + 40e3;
             fe_->setUsableHz(mid - half, mid + half);
         }
         queue_.clear(); queued_ = 0; dropped_ = 0;
-        if (!keepList) { t0_ = std::chrono::steady_clock::now(); tracker_.clear(); bursts_ = 0; unknown_ = 0; }
+        if (!keepList) { t0_ = std::chrono::steady_clock::now(); tracker_.clear(); bursts_ = 0; unknown_ = 0; wm_ = wmbus::Stats{}; }
         fobs_.clear();   // ★ a new FrontEnd restarts burst time at 0
         cap_.reset(rateHz, now());
         health_ = Health{};
@@ -424,14 +587,69 @@ public:
                       health_.noiseDb, (unsigned long long)dropped_, cap_.percent(t));
         o += b;
         o += tracker_.json(t);
+        // ★ V12 wM-Bus: frames whose later block failed its CRC (the meter is still listed), and the capture too narrow
+        //   to hold 868.95's upper tone (0.9 MS/s): the clients say "868.95 not covered at 0.9 MS/s"
+        if (meters_) {
+            std::snprintf(b, sizeof b, ",\"meters\":%zu,\"damaged\":%llu,\"collector\":%llu%s", tracker_.meterCount(),
+                          (unsigned long long)wm_.damaged, (unsigned long long)wm_.collector, wmGap() ? ",\"wmGap\":1" : "");
+            o += b;
+        }
         return o + "}";
     }
+    /** ★ The 868 band, or a typed frequency inside 863-870 MHz: meters are looked for there. */
+    static bool wantsMeters(const Band& band, double customHz) {
+        if (customHz > 0) return customHz >= 863e6 && customHz <= 870e6;
+        return std::string(band.id) == "868";
+    }
+    /** True when the capture cannot hold a T1/C1 meter's upper tone (868.95 + 50 kHz + 60 ppm ≈ 869.05 MHz): usable
+     *  ±45 % of the rate around where the radio is tuned. At 0.9 MS/s around 868.6 it reaches 869.005. */
+    bool wmGap() const { return meters_ && hwCentre_ + 0.45 * rate_ < 869.05e6; }
     Health health() { std::lock_guard<std::mutex> lk(mtx_); return health_; }
     size_t deviceCount() { std::lock_guard<std::mutex> lk(mtx_); return tracker_.size(); }
 
+    /** ★★ ONE FRAME, TWO CHANNELS. A T1/C1 burst is ~200 kHz wide, and the detector can open a second channel on its
+     *  skirt; both may decode the same frame. Of the copies of one meter's frame heard within 0.2 s, keep the one best
+     *  centred in its channel (its frequency is the true one — off-centre, the channel filter pulls the estimate). */
+    static void dedupeMeters(std::vector<Reading>& v, const std::vector<double>& tOf) {
+        std::vector<bool> drop(v.size(), false);
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (drop[i] || v[i].kind != "meter" || !v[i].meter) continue;
+            for (size_t j = i + 1; j < v.size(); ++j) {
+                if (drop[j] || v[j].kind != "meter" || !v[j].meter) continue;
+                const wmbus::Meter &a = *v[i].meter, &b = *v[j].meter;
+                if (a.id != b.id || a.mfr != b.mfr || a.type != b.type || std::fabs(tOf[i] - tOf[j]) > 0.2) continue;
+                if (std::fabs(b.carrierHz) < std::fabs(a.carrierHz)) { drop[i] = true; break; } else drop[j] = true;
+            }
+        }
+        size_t k = 0;
+        for (size_t i = 0; i < v.size(); ++i) if (!drop[i]) { if (k != i) v[k] = std::move(v[i]); ++k; }
+        v.resize(k);
+    }
+
     /** ★ For tests: run the decoder chain on one burst exactly as the worker does (no thread, no queue). */
-    static void decodeBurst(const Burst& b, double hwCentreHz, std::vector<Reading>& out) {
+    static void decodeBurst(const Burst& b, double hwCentreHz, std::vector<Reading>& out, wmbus::Stats* wm = nullptr) {
         const size_t first = out.size();
+        /* ★★ V12 wM-Bus FIRST on a burst that carries its baseband (the 868 band): a 16-bit CRC per block is a far
+         *  stronger check than most families', and it only looks at bursts at 868.30 / 868.95. A meter ends the search;
+         *  a collector's frame (a command to a meter) is counted and listed as nothing. */
+        if (b.bb) {
+            wmbus::Meter m;
+            const int k = wmbus::decodeBurst(b, hwCentreHz, m, wm);
+            if (k == 2) return;
+            if (k == 1) {
+                Reading r;
+                r.kind = "meter";
+                const char* mk = wmbus::mfrName(m.mfr);
+                r.make = mk ? mk : m.mfr;
+                r.model = wmbus::typeText(m.type);
+                r.pubId = m.id;                          // ★ the serial is shown (Stuart, 2026-10-25)
+                if (m.sts >= 0 && (m.sts & 0x04)) r.battOk = 0;
+                r.freqHz = hwCentreHz + b.offHz + m.carrierHz; r.levelDb = b.levelDb; r.snrDb = b.levelDb - b.noiseDb;
+                r.meter = std::make_shared<const wmbus::Meter>(std::move(m));
+                if (bandPlausible(r, r.freqHz)) out.push_back(std::move(r));
+                return;
+            }
+        }
         decodeAll(b, out);
         for (size_t i = first; i < out.size(); ++i) {
             Reading& r = out[i];
@@ -458,17 +676,23 @@ private:
                 lk.unlock();
                 std::vector<Reading> got;
                 std::vector<Burst> bs;
+                wmbus::Stats wmLocal;
                 fe->feed(blk.data(), blk.size(), [&](const Burst& b) { bs.push_back(b); });
+                std::vector<double> tOf;
                 for (const Burst& b : bs) {
-                    size_t before = got.size(); decodeBurst(b, hc, got);
+                    size_t before = got.size(); decodeBurst(b, hc, got, &wmLocal);
+                    tOf.resize(got.size(), b.tSec);
                     if (got.size() != before) continue;
                     ++unknownLocal_;
                     Reading sf;
-                    if (fobs_.offer(b, hc, sf)) got.push_back(sf);       // ★ an undecoded press: "Suspected key fob"
+                    if (fobs_.offer(b, hc, sf)) { got.push_back(sf); tOf.push_back(b.tSec); }   // ★ an undecoded press: "Suspected key fob"
                 }
+                dedupeMeters(got, tOf);
                 lk.lock();
                 for (double hz : fobs_.takePeriodic()) tracker_.forget("suspectfob", hz, 50e3);
                 bursts_ += bs.size();
+                wm_.tried += wmLocal.tried; wm_.frames += wmLocal.frames; wm_.damaged += wmLocal.damaged; wm_.collector += wmLocal.collector;
+                unknownLocal_ -= std::min<uint64_t>(unknownLocal_, wmLocal.collector);   // ★ a collector's frame was identified
                 unknown_ += unknownLocal_; unknownLocal_ = 0;
                 const double t = now();
                 std::vector<Heard> heard;
@@ -505,6 +729,8 @@ private:
     Tracker tracker_;
     FobWatch fobs_;
     Health health_;
+    bool meters_ = false;
+    wmbus::Stats wm_;
     std::shared_ptr<Sink> sink_;   // ★ only the worker reads it while running; start()/stop() swap it with the worker stopped
 };
 

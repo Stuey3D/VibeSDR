@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = process.env.VIBESERVER_BIN || '';
 const CLIP = process.env.VIBE_ISM_CLIP || '';
+// ★ V12 wM-Bus: a meter clip for the 868 band (`test-wmbus --write-clip clip868.u8 868600000 2400000`) — optional
+const CLIP868 = process.env.VIBE_WMBUS_CLIP || '';
 if (!BIN || !fs.existsSync(BIN) || !CLIP || !fs.existsSync(CLIP)) {
   console.log('   not run — set VIBESERVER_BIN and VIBE_ISM_CLIP (make one: test-ism --write-clip clip.u8 434130000 2400000)');
   process.exit(3);
@@ -31,7 +33,8 @@ fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
   radios: [{ serial: 'ism-test', label: 'Test radio', enabled: true, configured: true, users: 1 }],
 }));
 const rtlPort = await freePort(), port = await freePort();
-const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--ism', CLIP], { stdio: 'ignore' });
+const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--ism', CLIP,
+                                     ...(CLIP868 && fs.existsSync(CLIP868) ? ['--ism868', CLIP868] : [])], { stdio: 'ignore' });
 await sleep(400);
 const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const log = fs.openSync(path.join(dir, 'server.log'), 'w');
@@ -84,6 +87,25 @@ try {
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: 1 }));
   ok(await until(() => last.band === '868', 5000), `step +1 → ${last.band}`);
   ok(last.devices.length >= 4, `the list is kept across a band step (${last.devices.length})`);
+  if (CLIP868 && fs.existsSync(CLIP868)) {
+    // ★★ V12 wM-Bus METERS on the wire: the Sensus (encrypted) and the Kamstrup (readings), their serials, never a payload byte
+    const meter = (id) => last.devices.find((d) => d.kind === 'meter' && d.id === id);
+    ok(await until(() => !!meter('12345678') && !!meter('87654321'), 15000), `two meters listed: ${last.devices.filter((d) => d.kind === 'meter').map((d) => d.line).join(' | ')}`);
+    const sen = meter('12345678'), kam = meter('87654321');
+    ok(sen && sen.line.startsWith('Water meter · Sensus · 12345678 · v0x68 · encrypted (AES)') && / · signal \d+ dB$/.test(sen.line), `the Sensus line: ${sen && sen.line}`);
+    ok(sen && sen.name === 'Water meter · Sensus · 12345678' && sen.wm === 'T1' && sen.sec === 5 && sen.encBlocks === 2, 'the Sensus fields');
+    ok(kam && kam.line.startsWith('Cold water meter · Kamstrup · 87654321 · v0x1B · 123.456 m³ · flow 0.012 m³/h · 30 Sep 120.111 m³ · no alarms'), `the Kamstrup line: ${kam && kam.line}`);
+    ok(kam && kam.wm === 'C1-A' && kam.vol === 123.456, 'the Kamstrup fields');
+    ok(last.meters >= 2 && !last.wmGap, `the report counts meters (${last.meters}) and no 868.95 gap at 2.4 MS/s`);
+    const w868 = msgs.join('\n');
+    // ★★★ the encrypted payload (A0 A1 A2 …) in no form on the wire
+    let leak = 0;
+    for (let i = 0; i + 4 <= 32; i++) {
+      const b = [0, 1, 2, 3].map((k) => 0xA0 + i + k);
+      for (const f of [b.map((x) => x.toString(16).toUpperCase().padStart(2, '0')).join(''), b.map((x) => x.toString(16)).join(''), b.join(',')]) if (w868.includes(f)) leak++;
+    }
+    ok(leak === 0, `the encrypted payload never on the wire (${leak})`);
+  } else console.log('   (meters not run — set VIBE_WMBUS_CLIP: test-wmbus --write-clip clip868.u8 868600000 2400000)');
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: 1 }));
   ok(await until(() => last.band === '915', 5000), `step +1 → ${last.band}`);
   ws.send(JSON.stringify({ type: 'ism', on: 1, step: 1 }));

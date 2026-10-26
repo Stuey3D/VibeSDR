@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = process.env.VIBESERVER_BIN || '', CLIP = process.env.VIBE_ISM_CLIP || '';
+const CLIP868 = process.env.VIBE_WMBUS_CLIP || '';   // ★ V12 wM-Bus meters on the 868 band (test-wmbus --write-clip)
 const EDGE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 if (!BIN || !fs.existsSync(BIN) || !CLIP || !fs.existsSync(CLIP) || !fs.existsSync(EDGE)) { console.log('   not run — VIBESERVER_BIN, VIBE_ISM_CLIP and Edge needed'); process.exit(3); }
 let pass = 0, fail = 0;
@@ -24,7 +25,8 @@ for (const d of ['data', 'run', 'edge']) fs.mkdirSync(path.join(dir, d));
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'ISM web test', locator: 'IO92nh', adminPass: 'ism-web-admin',
   radios: [{ serial: 'ism-web', label: 'Test radio', enabled: true, configured: true, users: 1 }] }));
 const rtlPort = await freePort(), port = await freePort(), dbg = await freePort();
-const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--ism', CLIP], { stdio: 'ignore' });
+const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--ism', CLIP,
+                                     ...(CLIP868 && fs.existsSync(CLIP868) ? ['--ism868', CLIP868] : [])], { stdio: 'ignore' });
 await sleep(400);
 const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2400000', '--freq', '96100000', '--mode', 'wfm', '--users', '1'],
@@ -84,6 +86,34 @@ try {
   await ev(`document.getElementById('ismUp').click()`);
   ok(await until(`document.getElementById('ismBandName')?.textContent === '868 MHz SRD'`, 6000), `▶ steps one band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
   ok(await ev(`document.querySelectorAll('#ismList .ismRow').length >= 4`), 'the list is kept across the step');
+  if (CLIP868 && fs.existsSync(CLIP868)) {
+    // ★★ V12 wM-Bus: the METER chip, the meter rows (serial shown), a tap opens the detail; desktop and 390 px
+    ok(await until(`[...document.querySelectorAll('#ismList .ismRow.k-meter')].length >= 2`, 15000),
+       `meters listed: ${await ev(`[...document.querySelectorAll('#ismList .ismRow.k-meter .ismTxt')].map(x => x.textContent).join(' | ')`)}`);
+    ok(await ev(`!!document.querySelector('#ismChips [data-k="meter"]') && document.querySelector('#ismChips [data-k="meter"]').textContent === 'METER'`), 'the METER chip');
+    await ev(`document.querySelector('#ismChips [data-k="meter"]').click()`);
+    await sleep(300);
+    const rowsM = await ev(`[...document.querySelectorAll('#ismList .ismRow')].map(r => r.className.includes('k-meter') ? 'm' : 'x').join('')`);
+    ok(/^m+$/.test(rowsM || ''), `the METER filter shows meters only: ${rowsM}`);
+    const sen = await ev(`[...document.querySelectorAll('#ismList .ismTxt')].map(x => x.textContent).find(t => t.includes('12345678')) || ''`);
+    ok(sen.startsWith('Water meter · Sensus · 12345678 · v0x68 · encrypted (AES)'), `the Sensus row: ${sen}`);
+    ok(/868\.95 not covered/.test(await ev(`document.getElementById('ismStat').textContent`)) === false && /\d+ meters?/.test(await ev(`document.getElementById('ismStat').textContent`)),
+       `the status counts meters: ${await ev(`document.getElementById('ismStat').textContent`)}`);
+    await ev(`[...document.querySelectorAll('#ismList .ismRow.k-meter')].find(r => r.textContent.includes('87654321'))?.click()`);
+    ok(await until(`!!document.querySelector('#ismList .ismDetail') && /C1-A · 868\\.9\\d\\d MHz/.test(document.querySelector('#ismList .ismDetail').textContent)
+                    && /volume: 123\\.456 m³/.test(document.querySelector('#ismList .ismDetail').textContent)`, 4000),
+       `a tap opens the meter's detail: ${await ev(`document.querySelector('#ismList .ismDetail')?.innerText`)}`);
+    console.log('   screenshot', await shot('meters'));
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await sleep(1200);
+    const fitM = JSON.parse(await ev(`JSON.stringify(document.getElementById('ismBox').getBoundingClientRect())`));
+    const wide = await ev(`Math.max(...[...document.querySelectorAll('#ismList .ismRow')].map(r => r.scrollWidth - r.clientWidth))`);
+    ok(fitM.left >= 15 && fitM.right <= 390 - 15 && wide <= 1, `meters at 390 px: box ${Math.round(fitM.left)}–${Math.round(fitM.right)}, rows wrap (overflow ${wide})`);
+    console.log('   screenshot', await shot('meters-phone'));
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    await sleep(600);
+    await ev(`document.querySelector('#ismChips [data-k="all"]').click()`);
+  } else console.log('   (meters not run — set VIBE_WMBUS_CLIP)');
   // the arrows on the card step bands too (nudge)
   await ev(`(() => { const b = document.getElementById('mVfoUp'); if (!b) return 0; b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); return 1; })()`);
   ok(await until(`document.getElementById('ismBandName')?.textContent === '915 MHz ISM'`, 6000), `the card's ▶ steps a band: ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);

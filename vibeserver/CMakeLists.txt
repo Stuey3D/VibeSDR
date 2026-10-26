@@ -211,6 +211,7 @@ target_compile_options(vibedsp PRIVATE -O3 -ffp-contract=fast)
 # ── decoders + ft8_lib ────────────────────────────────────────────────────────
 # The shim references the decoder suite directly, so a server build needs them even though a
 # headless server is not the place anyone decodes FT8 from. Mirrors the Android target's list.
+file(GLOB DIGIMODE_SRC CONFIGURE_DEPENDS "${CPP_DIR}/decoders/digimodes/*.cpp")
 file(GLOB FT8_SRC
     "${CPP_DIR}/ft8_lib/ft8/*.c"
     "${CPP_DIR}/ft8_lib/fft/kiss_fft.c"
@@ -272,6 +273,14 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/cw_skimmer.cpp"
     # ★ V12: NDB — every beacon in the LF band, idents by consensus (decoders/ndb_skimmer.h)
     "${CPP_DIR}/decoders/ndb_skimmer.cpp"
+    # ★ V12: DSC — maritime Digital Selective Calling, MF/HF and VHF ch 70 (ITU-R M.493; decoders/dsc_decoder.h)
+    "${CPP_DIR}/decoders/dsc_decoder.cpp"
+    # ★ V12: digital spots — the mode registry, Band mode's tuners and the spotter (decoders/digi_mode.h), and every
+    #   mode engine dropped into decoders/digimodes/ (globbed: adding a mode is one file — docs/v12/DIGITAL-SPOTS.md)
+    "${CPP_DIR}/decoders/digi_modes.cpp"
+    "${CPP_DIR}/decoders/digi_tuner.cpp"
+    "${CPP_DIR}/decoders/digi_spotter.cpp"
+    ${DIGIMODE_SRC}
     ${FT8_SRC})
 target_include_directories(vibeserver_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}" "${CPP_DIR}" "${CPP_DIR}/vibedsp" "${CPP_DIR}/ft8_lib")

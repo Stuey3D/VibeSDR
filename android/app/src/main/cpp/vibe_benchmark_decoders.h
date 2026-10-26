@@ -22,6 +22,8 @@
 #include "decoders/sstv_decoder.h"
 #include "decoders/time_decoder.h"
 #include "decoders/ft8_decoder.h"
+#include "decoders/digi_spotter.h"   // ★ V12: the Band spots row
+#include "decoders/digi_bands.h"
 extern "C" {
 #include "ft8/message.h"
 #include "ft8/encode.h"
@@ -33,8 +35,10 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <complex>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -139,6 +143,46 @@ inline std::vector<int16_t> ft8Band(int n, double seconds) {
     return out;
 }
 
+/** ★★ V12: a busy BAND as Band spots receives it — the IQ slice of `span` at `rate`, every registered mode's dial in it
+ *  carrying `perDial` real transmissions of its own (FT8-family modes are encoded by ft8_lib: FT8 at 6.25 Hz / 0.16 s,
+ *  FT4 at 20.833 Hz / 0.048 s), plus noise. Modes ft8_lib cannot encode are left quiet: their engine still searches. */
+inline std::vector<std::complex<float>> busyBandSlice(const digi::Span& span, double rate, double seconds, int perDial) {
+    std::vector<std::complex<float>> x((size_t)(rate * seconds), std::complex<float>(0, 0));
+    auto put = [&](double offHz, double startSec, const uint8_t* tones, int nn, double sym) {
+        double ph = 0; const size_t s0 = (size_t)(startSec * rate), ns = (size_t)std::llround(sym * rate);
+        for (int k = 0; k < nn; ++k) for (size_t j = 0; j < ns; ++j) {
+            const size_t i = s0 + (size_t)k * ns + j; if (i >= x.size()) return;
+            ph += 2 * M_PI * (offHz + tones[k] / sym) / rate;
+            x[i] += std::complex<float>((float)(0.01 * std::cos(ph)), (float)(0.01 * std::sin(ph)));
+        }
+    };
+    int seq = 0;
+    for (const auto& m : digi::modes()) {
+        const bool ft4 = m.name == "FT4";
+        if (m.name != "FT8" && !ft4) continue;
+        for (double d : digi::dialsOf(m, span.band->id)) {
+            if (d + m.audioLoHz < span.loHz || d + m.audioHiHz > span.hiHz) continue;
+            for (int k = 0; k < perDial; ++k, ++seq) {
+                char msg[32];
+                std::snprintf(msg, sizeof msg, "CQ G4%c%c%c IO9%d", 'A' + (seq / 676) % 26, 'A' + (seq / 26) % 26, 'A' + seq % 26, seq % 10);
+                ftx_message_t mm; ftx_message_init(&mm);
+                if (ftx_message_encode(&mm, nullptr, msg) != FTX_MESSAGE_RC_OK) continue;
+                uint8_t tones[FT4_NN > FT8_NN ? FT4_NN : FT8_NN];
+                if (ft4) ft4_encode(mm.payload, tones); else ft8_encode(mm.payload, tones);
+                const double f = d + 300.0 + k * (3000.0 / std::max(1, perDial)) - span.centreHz;
+                put(f, 0.5, tones, ft4 ? FT4_NN : FT8_NN, ft4 ? 0.048 : 0.16);
+            }
+        }
+    }
+    uint32_t r = 777;
+    for (auto& v : x) {
+        r = r * 1664525u + 1013904223u; const float a = ((float)(r >> 8) / 16777216.0f - 0.5f) * 0.03f;
+        r = r * 1664525u + 1013904223u; const float b = ((float)(r >> 8) / 16777216.0f - 0.5f) * 0.03f;
+        v += std::complex<float>(a, b);
+    }
+    return x;
+}
+
 struct Row { std::string id, label; double pct = -1; int decoded = -1; };
 
 /** Time one decoder: `seconds` of its signal, fed as fast as it will take it; `settle` waits for
@@ -231,6 +275,39 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
                          [] { settleCpu(20.0); });
         }
         rows.push_back({ "dec_ft8", "Decoder: FT8 + FT4 spots", pct, got.load() });
+    }
+    {
+        /* ★★ V12 DIGITAL SPOTS: BAND — its own row, because it is its own DEFAULT (vibe_setup_page.h benchApplyDefaults,
+         *  ServerModeScreen.tsx applyBench: Band starts OFF where this row is not green; the owner can always switch it
+         *  on). The busiest band the registry has — the one with the most dials in its passband — every dial carrying 15
+         *  stations, one pass (what a loaded box pays), from a 96 kHz slice through the real tuners and engines.
+         *  ★ Not counted as the HEAVIEST decoder for the decoder limit (vibe_benchmark.h): Band is one slot, and where it
+         *    is too heavy it is off by default — letting it lower every other decoder's limit would punish the boxes it
+         *    is not running on. */
+        if (step) step("Decoder: digital spots, Band");
+        const digi::Span* best = nullptr; digi::Span keep; size_t most = 0;
+        for (const auto& b : digi::bands()) {
+            digi::Span sp = digi::spanOf(b, digi::modes());
+            if (sp.ok && sp.modes.size() > most) { most = sp.modes.size(); keep = sp; best = &keep; }
+        }
+        double pct = -1; std::atomic<int> got{0};
+        if (best) {
+            const double rate = 96000.0, slot0 = std::floor(vibeUtcNow() / 15.0) * 15.0;
+            const auto x = busyBandSlice(*best, rate, 15.5, 15);
+            {
+                digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(),
+                                 [&](const digi::Spot&, double) { got.fetch_add(1); }, nullptr, [] { return true; });
+                size_t fed = 0;
+                pct = timeIt(15.0, [&] {
+                    for (size_t o = 0; o < x.size(); o += 2048) {
+                        const int n = (int)std::min<size_t>(2048, x.size() - o);
+                        fed += (size_t)n;
+                        sp.feedIq(&x[o], n, rate, best->centreHz, slot0 + (double)fed / rate);
+                    }
+                }, [] { settleCpu(20.0); });
+            }
+            rows.push_back({ "dec_ft8band", std::string("Decoder: digital spots, Band (") + best->band->name + ")", pct, got.load() });
+        }
     }
     return rows;
 }

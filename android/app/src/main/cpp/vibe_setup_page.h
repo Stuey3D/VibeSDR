@@ -1897,8 +1897,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
             <option value="60">1 hour</option></select>
           the SDR will move to your selected RF Centre. Set an RF centre here and choose 1 or multiple VFO's and
           decoders for background decoding.
-          <span id="bgIsmLine">Or let a profile decode ISM sensors (weather stations, tyre sensors, doorbells) on a whole
-          band instead.</span>
+          <span id="bgIsmLine">Or let a profile decode ISM sensors (weather stations, tyre sensors, doorbells, and on 868 MHz
+          water, heat and gas meters) on a whole band instead.</span>
           <br>The moment anybody connects, background decoding stops and the radio goes back to exactly where it was
           left. What it decodes is kept in the gallery (Server tab).</p>
         <!-- ★★ Stuart, 2026-10-22: background VFOs still inside the radio's window keep decoding while listeners are on;
@@ -2045,6 +2045,15 @@ function benchApplyDefaults() {
     rdsBox.checked = false;
     rdsBox.dispatchEvent(new Event("change"));
     benchNote(rdsBox, "Advanced RDS is off: it measured " + Math.round(rdsx.pct) + "% of a core here, and it only runs where it can measure to reference standard.");
+  }
+  // ★★ V12 BAND SPOTS: the same rule as Advanced RDS — only a GREEN box keeps it on by default. The owner can always
+  //    switch it back on (Stuart: "never hide any controls"); listeners then see it greyed with the reason until they do.
+  const band = row("dec_ft8band");
+  const bandBox = document.querySelector('input[data-mode="spotsband"]');
+  if (band && band.grade !== "green" && band.grade !== "none" && bandBox && bandBox.checked) {
+    bandBox.checked = false;
+    bandBox.dispatchEvent(new Event("change"));
+    benchNote(bandBox, "Digital spots: Band is off: a busy band measured " + Math.round(band.pct) + "% of a core here. Tick it to offer it anyway.");
   }
   if (scan && scan.grade === "red" && $("dabScanLabels")) {
     $("dabScanLabels").value = "0";
@@ -2579,9 +2588,18 @@ const BLOCKABLE = [
    *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
    *  buttons were dead weight in its clients (Stuart, 2026-09-17). */
   { id: "spots",  label: "Digital spots / map" },
+  /* ★★ V12 (2026-10-26): Band spots — a whole band's digital frequencies at once, every mode on its own dial. Off here, a
+   *  listener sees the Band button greyed with the reason (never hidden). The benchmark unticks it on a box that measured
+   *  it below green (benchApplyDefaults) — the owner can always tick it back. */
+  { id: "spotsband", label: "Digital spots: Band" },
   /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
    *  presses near their house listed at all, however anonymous the list is: this is the switch. */
-  { id: "ism",    label: "ISM sensors" },
+  { id: "ism",    label: "ISM sensors and meters" },
+  /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
+  { id: "dsc",    label: "DSC" },
+  /* ★ V12 NDB skimmer (docs/v12/NDB-SKIMMER.md) — every aeronautical beacon on 190–535 kHz. Offered only where the radio
+   *  reaches LF; this switch takes it off a radio that could. */
+  { id: "ndb",    label: "NDB beacons" },
 ];
 
 /** The blocked list as a Set of ids, from this radio's CSV. */
@@ -5525,7 +5543,56 @@ const BG_DECODERS = [
   { id: "cw-skim-24",   label: "CW skimmer, 24 kHz (summary)", tone: 0,    modes: ["usb"] },
   { id: "cw-skim-48",   label: "CW skimmer, 48 kHz (summary)", tone: 0,    modes: ["usb"] },
   { id: "cw-skim-96",   label: "CW skimmer, 96 kHz (summary)", tone: 0,    modes: ["usb"] },
+  // ★★ V12 2026-10-26: DSC — MF/HF with the dial 1.7 kHz below the DSC frequency on USB (2185.8 for 2187.5; either sense
+  //    is found), VHF channel 70 (156.525 MHz) on NFM. The "+ DSC watch" key below fills these in.
+  { id: "dsc",          label: "DSC (MF/HF)",                  tone: 1700, modes: ["usb", "lsb"] },
+  { id: "dsc-vhf",      label: "DSC (VHF channel 70)",         tone: 0,    modes: ["nfm"] },
 ];
+/* ★★ DSC WATCH (V12, 2026-10-26): the GMDSS DSC distress and safety frequencies (ITU RR Appendix 15) — as many as this
+ *  radio's window can hear around the profile's RF centre become VFOs at once (the dial 1.7 kHz below on USB). A radio
+ *  that cannot hold several in one window (an RTL at 2.4 MS/s sees ±0.8 MHz; the HF+ less) gets the one nearest its
+ *  centre, and is told which others need a profile of their own. */
+const DSC_HF = [2187500, 4207500, 6312000, 8414500, 12577000, 16804500];
+const DSC_VHF = 156525000;
+function bgDscWatch(p, r0, locked, cap) {
+  const rate = r0.lockRate > 0 ? r0.lockRate : (r0.rate || 0);
+  const half = rate > 0 ? rate / 2 - Math.min(50000, rate * 0.15) - 3000 : 0;
+  const all = DSC_HF.concat([DSC_VHF]);
+  let centre = locked ? r0.lockFreq : p.centre;
+  if (!(centre > 0) && half > 0) {
+    // ★ No centre yet: the one that hears the most DSC frequencies (the lowest first on a tie)
+    let best = 0, bestN = -1;
+    all.forEach(function (a) {
+      all.forEach(function (b) {
+        if (b < a || b - a > 2 * half) return;
+        const c = (a + b) / 2, n = all.filter(function (f) { return Math.abs(f - c) <= half; }).length;
+        if (n > bestN) { bestN = n; best = c; }
+      });
+    });
+    centre = Math.round(best / 1000) * 1000;
+    if (!locked) p.centre = centre;
+  }
+  const inWin = function (f) { return half > 0 && centre > 0 && Math.abs(f - centre) <= half; };
+  const added = [], skipped = [];
+  all.forEach(function (f) {
+    const hz = f === DSC_VHF ? f : f - 1700;
+    if (p.vfos.some(function (v) { return Math.abs(v.hz - hz) < 50 && (v.dec === "dsc" || v.dec === "dsc-vhf"); })) return;
+    if (!inWin(f)) { skipped.push(f); return; }
+    if (p.vfos.length >= cap) { skipped.push(f); return; }
+    // a blank first row is used rather than left behind
+    const blank = p.vfos.findIndex(function (v) { return !(v.hz > 0); });
+    const v = f === DSC_VHF ? { hz: hz, mode: "nfm", dec: "dsc-vhf" } : { hz: hz, mode: "usb", dec: "dsc" };
+    if (blank >= 0) p.vfos[blank] = v; else p.vfos.push(v);
+    added.push(f);
+  });
+  const name = function (f) { return f === DSC_VHF ? "Ch 70" : (f / 1e3).toFixed(1); };
+  let msg = added.length ? "Added DSC on " + added.map(name).join(", ") + (added.some(function (f) { return f !== DSC_VHF; }) ? " kHz" : "") + "." : "";
+  const out = skipped.filter(function (f) { return f !== DSC_VHF || (r0.driver !== "airspyhf" && !(r0.maxFreq > 0 && r0.maxFreq < DSC_VHF)); });
+  if (out.length) msg += (msg ? " " : "") + name(out[0]) + (out.length > 1 ? " and " + (out.length - 1) + " more" : "")
+    + (half > 0 ? " fall outside this radio’s ±" + (half / 1e6).toFixed(2) + " MHz window — give them a profile of their own (another time of day)." : " need the radio’s sample rate to place.");
+  if (!added.length && !out.length) msg = "Every DSC frequency this window can hear is already here.";
+  return msg;
+}
 const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodulators some background decoder works on
 /* ★★ V12 2026-10-25 — AN ISM PROFILE (Stuart: ISM "selectable as a decoder in a background-decoding profile"). ISM is a
  *  WHOLE-CAPTURE decoder — every sensor in a sub-band at once, the radio centred for the band — so a profile that decodes
@@ -5536,7 +5603,7 @@ const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodula
 const BG_ISM_BANDS = [
   { id: "315", label: "315 MHz (US / Japan: tyre sensors, key fobs, remotes)" },
   { id: "433", label: "433.92 MHz (weather stations, sensors, doorbells, tyre sensors)" },
-  { id: "868", label: "868 MHz SRD (EU: LaCrosse, Bresser, Fine Offset)" },
+  { id: "868", label: "868 MHz SRD \u2014 sensors and meters (EU: LaCrosse, Bresser, Fine Offset; water, heat and gas meters)" },
   { id: "915", label: "915 MHz (US: LaCrosse, Ambient, Fine Offset)" },
 ];
 function bgIsmBands() {
@@ -5602,7 +5669,7 @@ function bgCollect() {
   bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
   const out = { on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles };
   if (!bgModel.keepInRange) out.keepInRange = false;    // ★ absent = on, as the server reads it
-  return JSON.stringify(out);
+  return JSON.stringify(out, function (k, v) { return k.indexOf("__") === 0 ? undefined : v; });   // ★ the page's own notes stay here
 }
 /** "13:00" from "12:00" and the server's offset — the server's local time, which is not the browser's. */
 function bgLocal(hhmm) {
@@ -5819,6 +5886,13 @@ function bgRender() {
       add.onclick = function () { p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); bgRender(); };
       card.appendChild(add);
     }
+    // ★ DSC: every distress and safety frequency this window hears, in one press (only where DSC is not switched off)
+    if (p.vfos.length < cap && !(typeof modeBlockSet === "function" && modeBlockSet().has("dsc"))) {
+      const dw = el("button", { type: "button", class: "linkish bgDscWatch", title: "Add VFOs for the DSC distress and safety frequencies this radio can hear" }, "+ DSC watch");
+      dw.onclick = function () { p.__dscMsg = bgDscWatch(p, r0, locked, cap); bgRender(); };
+      card.appendChild(dw);
+    }
+    if (p.__dscMsg) card.appendChild(el("div", { class: "hint bgDscMsg" }, p.__dscMsg));
     }   // ★ end of the VFO profile
     // times (UTC) with the server's local time beside
     const tr = el("div", { class: "bgTimes" });

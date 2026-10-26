@@ -26,6 +26,8 @@
 //   --ism FILE  while the dongle is tuned within 2 MHz of 434 MHz, replay FILE (unsigned 8-bit IQ at the rate the server
 //               asked for, centred where ISM mode puts the radio) on a loop: sensors for ISM mode on the bench (V12,
 //               2026-10-25 — `test-ism --write-clip` makes one, scripts/test-server-ism.mjs uses it).
+//   --ism868 FILE  the same while the dongle is tuned within 2 MHz of 868.6 MHz — wM-Bus meters for ISM's 868 band (V12,
+//               2026-10-26 — `test-wmbus --write-clip` makes one).
 //   --hf FILE --hf-centre HZ   while the dongle is tuned within a quarter of the rate of HZ, replay FILE (unsigned 8-bit IQ
 //               at the rate the server asked for, centred on HZ) on a loop, mixed to wherever the dongle really is — CW
 //               stations for the CW skimmer on the bench (V12, 2026-10-25: `cw_bench clip`, scripts/test-server-cw.mjs).
@@ -55,8 +57,13 @@ const ADSB_IQ = adsbArg ? fs.readFileSync(adsbArg) : null;
 if (ADSB_IQ) console.log(`[fake-rtl-tcp] ADS-B clip ${adsbArg}: ${ADSB_IQ.length / 2} samples`);
 const ismArg = (() => { const i = process.argv.indexOf('--ism'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const ISM_IQ = ismArg ? fs.readFileSync(ismArg) : null;
+const ism868Arg = (() => { const i = process.argv.indexOf('--ism868'); return i >= 0 ? process.argv[i + 1] : ''; })();
+const ISM868_IQ = ism868Arg ? fs.readFileSync(ism868Arg) : null;
 const hfArg = (() => { const i = process.argv.indexOf('--hf'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const HF_IQ = hfArg ? fs.readFileSync(hfArg) : null;
+// ★ --hf-utc: the HF clip is UTC-ANCHORED — clip time t plays at UTC ≡ t (mod the clip's length), so a slotted digital
+//   mode in it (FT8 at +0.5 s of a 15 s slot) lands in the server's UTC slots as it would off air (test-server-spots.mjs).
+const HF_UTC = process.argv.includes('--hf-utc');
 const HF_CENTRE = (() => { const i = process.argv.indexOf('--hf-centre'); return i >= 0 ? Number(process.argv[i + 1]) : 7.03e6; })();
 if (HF_IQ) console.log(`[fake-rtl-tcp] HF clip ${hfArg}: ${HF_IQ.length / 2} samples centred on ${HF_CENTRE} Hz`);
 if (ISM_IQ) console.log(`[fake-rtl-tcp] ISM clip ${ismArg}: ${ISM_IQ.length / 2} samples`);
@@ -86,7 +93,9 @@ const srv = net.createServer((sock) => {
   let dabPos = 0;         // replay position in DAB_IQ (bytes)
   let adsbPos = 0;        // replay position in ADSB_IQ (bytes)
   let ismPos = 0;         // replay position in ISM_IQ (bytes)
+  let ism868Pos = 0;      // … and in ISM868_IQ
   let hfPos = 0, hfRe = 1, hfIm = 0;   // replay position in HF_IQ, and the mixer's phase (--hf)
+  let hfAnchored = false;               // ★ --hf-utc: the position set from UTC on the first chunk
   // WFM stereo generator state (see --wfm)
   let fmPhase = 0, pilotPh = 0, lPh = 0, rPh = 0;
 
@@ -137,6 +146,12 @@ const srv = net.createServer((sock) => {
     if (rate !== RATE) retune();
     const n = Math.max(1024, Math.round(rate * CHUNK_MS / 1000));
     const buf = Buffer.allocUnsafe(n * 2);
+    if (HF_IQ && HF_UTC && !hfAnchored) {
+      hfAnchored = true;
+      const secs = HF_IQ.length / 2 / rate;
+      hfPos = 2 * Math.floor(((nextDue / 1000) % secs) * rate);
+    }
+    if (HF_IQ && HF_UTC && Math.abs(centreHz - HF_CENTRE) > rate / 4) hfPos = (hfPos + 2 * n) % HF_IQ.length;   // ★ keep the clock
     if (HF_IQ && Math.abs(centreHz - HF_CENTRE) <= rate / 4) {
       // ★ The clip is centred on HF_CENTRE; the dongle may sit off it (the server's own offset tuning) — mix it there.
       const w = (2 * Math.PI * (HF_CENTRE - centreHz)) / rate, cw = Math.cos(w), sw = Math.sin(w);
@@ -153,6 +168,12 @@ const srv = net.createServer((sock) => {
         const take = Math.min(n * 2 - k, ISM_IQ.length - ismPos);
         ISM_IQ.copy(buf, k, ismPos, ismPos + take);
         k += take; ismPos = (ismPos + take) % ISM_IQ.length;
+      }
+    } else if (ISM868_IQ && Math.abs(centreHz - 868.6e6) <= 2e6) {
+      for (let k = 0; k < n * 2; ) {
+        const take = Math.min(n * 2 - k, ISM868_IQ.length - ism868Pos);
+        ISM868_IQ.copy(buf, k, ism868Pos, ism868Pos + take);
+        k += take; ism868Pos = (ism868Pos + take) % ISM868_IQ.length;
       }
     } else if (ADSB_IQ && Math.abs(centreHz - 1090e6) <= 2e6) {
       for (let k = 0; k < n * 2; ) {
