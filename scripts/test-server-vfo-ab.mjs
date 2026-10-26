@@ -124,7 +124,10 @@ async function server(args, tag, radioExtra = {}) {
                     { env, stdio: ['ignore', log, log] });
   const status = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
   await until(async () => !!(await status()), 15000);
-  return { port, dir, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); }, log: () => fs.readFileSync(path.join(dir, 'server.log'), 'utf8') };
+  // ★ The scratch directory goes with the server unless something failed (then its server.log is the evidence).
+  const failAtStart = fail;
+  return { port, dir, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM');
+                                    if (fail === failAtStart) setTimeout(() => fs.rmSync(dir, { recursive: true, force: true }), 300); }, log: () => fs.readFileSync(path.join(dir, 'server.log'), 'utf8') };
 }
 async function listener(port, sid, f, opus = false) {
   const L = {};
