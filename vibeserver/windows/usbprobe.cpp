@@ -13,7 +13,7 @@
 
 #include <setupapi.h>
 #include <cfgmgr32.h>
-#include <newdev.h>
+#include <newdev.h>   // ★ for the types; the two functions are loaded from newdev.dll (see diFns)
 #include <shellapi.h>
 #include <shlobj.h>
 #include <atomic>
@@ -372,6 +372,15 @@ void restartDevice(HDEVINFO set, SP_DEVINFO_DATA& d) {
         SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, set, &d);
 }
 
+/** ★ DiInstallDevice / DiUninstallDevice, from newdev.dll at run time: llvm-mingw ships no import library for it
+ *  on ARM64, and loading it by name keeps both builds the same. Both take the WIDE driver record. */
+typedef BOOL (WINAPI *DiInstall_t)(HWND, HDEVINFO, PSP_DEVINFO_DATA, void*, DWORD, PBOOL);
+typedef BOOL (WINAPI *DiUninstall_t)(HWND, HDEVINFO, PSP_DEVINFO_DATA, DWORD, PBOOL);
+template <class F> F diFn(const char* name) {
+    static HMODULE m = LoadLibraryExW(L"newdev.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    return m ? (F)(void*)GetProcAddress(m, name) : nullptr;
+}
+
 int cmdBind(const Opts& o) {
     say("== bind: Windows' own WinUSB onto RTL-SDR #%d\n", o.index);
     const auto nodes = scan();
@@ -432,9 +441,9 @@ int cmdBind(const Opts& o) {
     // 3. Install it on this one node.
     if (!SetupDiSetSelectedDriverW(set, &d, &drv)) say("  SetupDiSetSelectedDriver: error %lu\n", GetLastError());
     BOOL reboot = FALSE;
-    // ★ newdev.dll has ONE DiInstallDevice and it reads the WIDE driver record; MinGW's header types the
-    //   parameter by the UNICODE macro (unset here), so the W record is passed as what the DLL expects.
-    const BOOL ok = DiInstallDevice(nullptr, set, &d, reinterpret_cast<PSP_DRVINFO_DATA>(&drv), DIIDFLAG_NOFINISHINSTALLUI, &reboot);
+    // ★ newdev.dll has ONE DiInstallDevice and it reads the WIDE driver record.
+    auto diInstall = diFn<DiInstall_t>("DiInstallDevice");
+    const BOOL ok = diInstall && diInstall(nullptr, set, &d, &drv, DIIDFLAG_NOFINISHINSTALLUI, &reboot);
     const DWORD err = ok ? 0 : GetLastError();
     say("  DiInstallDevice: %s%s\n", ok ? "OK" : ("error " + std::to_string(err)).c_str(), reboot ? " — Windows asks for a REBOOT" : "");
     if (ok) restartDevice(set, d);
@@ -469,7 +478,8 @@ int cmdGiveback(const Opts& o) {
     //   which is the TV driver if its package is installed, or none. winusb.inf matches no RTL hardware id,
     //   so it is never chosen again by itself.
     BOOL reboot = FALSE;
-    const BOOL ok = DiUninstallDevice(nullptr, set, &d, 0, &reboot);
+    auto diUninstall = diFn<DiUninstall_t>("DiUninstallDevice");
+    const BOOL ok = diUninstall && diUninstall(nullptr, set, &d, 0, &reboot);
     say("  DiUninstallDevice: %s%s\n", ok ? "OK" : ("error " + std::to_string(GetLastError())).c_str(), reboot ? " — Windows asks for a REBOOT" : "");
     SetupDiDestroyDeviceInfoList(set);
     DEVINST root = 0;

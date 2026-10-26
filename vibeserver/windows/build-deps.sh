@@ -121,8 +121,11 @@ if stamp_ok libopus "$OPUS_STAMP" "$PREFIX/lib/libopus.a"; then echo "==> libopu
   fetch "https://downloads.xiph.org/releases/opus/opus-$OPUS_VER.tar.gz" "opus-$OPUS_VER.tar.gz" "$OPUS_SHA"
   rm -rf "$WORK/opus"; mkdir -p "$WORK/opus"
   tar -xzf "$SRC/opus-$OPUS_VER.tar.gz" -C "$WORK/opus" --strip-components 1
+  # ★ Windows on ARM: libopus has no CPU-detection method there, and needs none — NEON is mandatory on
+  #   ARM64 Windows, so the NEON kernels are compiled in unconditionally (--disable-rtcd).
+  OPUS_EXTRA=""; case "$TRIPLE" in aarch64-*) OPUS_EXTRA="--disable-rtcd";; esac
   ( cd "$WORK/opus" && ./configure --host="$TRIPLE" --prefix="$WORK/opus/inst" --disable-shared \
-        --enable-static --disable-doc --disable-extra-programs --disable-dependency-tracking \
+        --enable-static --disable-doc --disable-extra-programs --disable-dependency-tracking $OPUS_EXTRA \
         >"$WORK/opus.log" 2>&1 \
     && make -j"$JOBS" install >>"$WORK/opus.log" 2>&1 ) \
     || { tail -30 "$WORK/opus.log"; echo "!! libopus build failed"; exit 1; }

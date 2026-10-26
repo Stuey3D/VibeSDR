@@ -48,7 +48,7 @@ echo "==> what the .exe files need from Windows"
 run "for e in vibeserver.exe vibe-usbprobe.exe; do
        dlls=\$(llvm-readobj --coff-imports $(rel "$OUT")/\$e | sed -n 's/^ *Name: //p' | sort -u)
        echo \"   \$e: \$(echo \$dlls | tr '\n' ' ')\"
-       bad=\$(echo \"\$dlls\" | grep -viE '^(kernel32|ws2_32|iphlpapi|setupapi|cfgmgr32|advapi32|shell32|ole32|bcrypt|psapi|version|newdev|user32|api-ms-win-crt-[a-z0-9-]+)\.dll\$' || true)
+       bad=\$(echo \"\$dlls\" | grep -viE '^(kernel32|ws2_32|iphlpapi|setupapi|cfgmgr32|advapi32|shell32|ole32|bcrypt|psapi|version|user32|api-ms-win-crt-[a-z0-9-]+)\.dll\$' || true)
        [ -z \"\$bad\" ] || { echo \"!! \$e imports a DLL that is not part of Windows: \$bad\"; exit 1; }
      done"
 
