@@ -108,6 +108,10 @@ flags_for() {
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
+    # ★★ V12 NDB skimmer (decoders/ndb_skimmer.h, vibe_ndb_*.h): the vote, one beacon at +10/-5 dB on both tones and A1A,
+    #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
+    #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
+    test-ndb)              echo "-O2 -lpthread -I tools/ndb-bench -I $VDSP -I $KISS" ;;
     *)               echo "" ;;
   esac
 }
@@ -215,6 +219,8 @@ deps_for() {
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
+    test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
+                              $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C)
     *)                  echo "" ;;
   esac
 }
@@ -231,6 +237,13 @@ cobjs_for() {
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c $VDSP/third_party/pffft/pffft.c; do
         local o="$d/$(basename "$f" .c).o"
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
+        printf '%s ' "$o"
+      done ;;
+    test-ndb)
+      local d="$OUT/cobj-ndb"; mkdir -p "$d"
+      for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
+        local o="$d/$(basename "$f" .c).o"
+        [ "$o" -nt "$f" ] || cc -O2 -c -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
     *) ;;

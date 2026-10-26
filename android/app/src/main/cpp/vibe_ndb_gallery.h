@@ -108,12 +108,13 @@ inline std::vector<std::vector<std::pair<float, float>>> outlines(const std::str
     int depth = 0; std::vector<std::pair<float, float>> ring; double num[2]; int nn = 0;
     for (size_t i = 0; i < s.size(); ++i) {
         const char c = s[i];
-        if (c == '[') { ++depth; if (depth == 4) nn = 0; }
+        // ★ depth 1 = a country's polygons, 2 = one polygon's ring, 3 = a [lon,lat] point
+        if (c == '[') { ++depth; if (depth == 3) nn = 0; }
         else if (c == ']') {
-            if (depth == 4 && nn == 2) ring.push_back({ (float)num[0], (float)num[1] });
-            if (depth == 3) { if (ring.size() > 1) rings.push_back(std::move(ring)); ring.clear(); }
+            if (depth == 3 && nn == 2) ring.push_back({ (float)num[0], (float)num[1] });
+            if (depth == 2) { if (ring.size() > 1) rings.push_back(std::move(ring)); ring.clear(); }
             --depth;
-        } else if (depth == 4 && (c == '-' || (c >= '0' && c <= '9'))) {
+        } else if (depth == 3 && (c == '-' || (c >= '0' && c <= '9'))) {
             char* end = nullptr; const double v = std::strtod(s.c_str() + i, &end);
             if (nn < 2) num[nn++] = v;
             i = (size_t)(end - s.c_str()) - 1;
