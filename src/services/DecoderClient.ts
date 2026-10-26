@@ -55,7 +55,8 @@ import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, type CwList, type CwSpot
 
 /** ★ V12 'cw' — a VibeServer's own CW decoder: ONE SIGNAL ('cw', on this listener's audio) or the SKIMMER ('cwskim',
  *  a segment of IQ centred on the dial). One name here; which extension is attached is `cwSkim`. Not UberSDR's `morse`. */
-export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw';
+export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw'
+  | 'aprs';   // ★ V12 APRS — a VibeServer's own packet decoder (vibe_aprs_run.h): JSON lists and packets, no text frame
 
 /** The time signal stations the server can decode. Each is a separate extension name on the
  *  wire — the shim builds a TimeDecoder for the one asked for. */
@@ -197,6 +198,10 @@ export interface DecoderCallbacks {
   onCwSignals?: (list: CwList) => void;
   /** ★ V12 CW (VibeServer): a callsign heard identifying itself (CQ, DE, TEST — twice). */
   onCwSpot?:    (spot: CwSpot) => void;
+  /** ★ V12 APRS (VibeServer): the station list (every 2 s when it changed; at once, with tracks, to a joiner) and each new
+   *  packet — as the server sent them; src/services/tracks.ts aprsSanitise / aprsPacketSanitise check them. */
+  onAprsList?:   (data: unknown) => void;
+  onAprsPacket?: (data: unknown) => void;
   /** Chat (rides this WS — chat_websocket.go via the dxcluster handler).
    *  isHistory=true for the server's buffer replay after subscribe_chat —
    *  render silently, no unread pulse. Already-seen messages are deduped
@@ -273,6 +278,8 @@ export class DecoderClient {
    *  either is a re-attach — a different decoder on the server (the caller calls start('cw') again). */
   cwSkim = false;
   cwWidth: number = CW_DEFAULT_WIDTH;
+  /** ★ V12 APRS: 1200 Bd (VHF, NFM) or 300 Bd (HF packet, USB) — a change is a re-attach (start('aprs') again). */
+  aprsBaud: 1200 | 300 = 1200;
 
   constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string, authSuffix = '') {
     this.baseUrl  = baseUrl.replace(/\/+$/, '');
@@ -558,6 +565,10 @@ export class DecoderClient {
               msg: spotStr(d.message ?? d.msg ?? d.text),
               bearing: spotNum(d.bearing ?? d.bearing_deg ?? d.azimuth),
             });
+          } else if ((m.type === 'aprs_list' || m.type === 'aprs_packet') && m.data) {
+            // ★ V12 APRS: only while OUR APRS decoder is attached (a shared dial mirrors a running decoder).
+            if (this.active !== 'aprs') return;
+            if (m.type === 'aprs_list') this.cb.onAprsList?.(m.data); else this.cb.onAprsPacket?.(m.data);
           } else if (m.type === 'cw_signals' && m.data) {
             // ★ V12: only while OUR CW decoder is attached — on a shared dial the server mirrors a running decoder.
             if (this.active !== 'cw') return;
@@ -700,6 +711,8 @@ export class DecoderClient {
       //    switch all of that at runtime for no gain.
       case 'time':    return { extension_name: this.timeStation, params: {} };
       // ★ V12 CW: the skimmer's segment rides as `width` (the server reads 12–192 kHz; the box offers 24/48/96).
+      // ★ V12 APRS: the baud rides as `baud_rate` (the server reads < 600 as HF 300 Bd), always sent, as the web does.
+      case 'aprs':    return { extension_name: 'aprs', params: { baud_rate: this.aprsBaud } };
       case 'cw':      return this.cwSkim
         ? { extension_name: 'cwskim', params: { width: this.cwWidth } }
         : { extension_name: 'cw', params: {} };
