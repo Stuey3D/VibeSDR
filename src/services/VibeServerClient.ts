@@ -23,6 +23,7 @@ import { DabAssembler } from './dabAssemble';
 import { parseAdsbMessage } from './adsbTypes';
 import { AdsbInfoStore } from './adsbInfo';
 import { ismSanitise } from './ism';
+import { ndbSanitise, parseNdbFound, parseNdbStats } from './ndb';
 import { parseDabScan } from './dabBandScan';
 
 export {
@@ -192,6 +193,26 @@ export class VibeServerClient extends VibeServerWsClient {
     this.sendSpectrum(m);
   }
 
+  /* ── NDB (V12, docs/v12/NDB-SKIMMER.md) — ADS-B's pattern: a whole-radio mode entered and left by name; the server puts
+   *  the capture on the LF beacon band, skims every carrier and sends a report a second. No audio (spectrum-only). ── */
+  /** ★ Reports after our own `ndb off` are ghosts (DabExitGuard, as for DAB, ADS-B and ISM). */
+  private ndbExit = new DabExitGuard();
+  private ndbHealHeldAt = 0;
+  static readonly NDB_HOLD_MS = 8_000;
+
+  ndb(on: boolean) {
+    if (this.askBlocked()) return;   // ★★ ask before tuning — it takes everybody's radio to the beacon band
+    holdNativeHealing(VibeServerClient.NDB_HOLD_MS, on ? 'NDB on' : 'NDB off');
+    if (on) { this.ndbExit.entered(); this.cancelPacedTune(); }
+    else this.ndbExit.left(Date.now());
+    this.ndbHeld = on;
+    this.sendSpectrum({ type: 'ndb', on: on ? 1 : 0 });
+  }
+  /** Find NDB — published beacons nearest the receiver first (in or out of the mode); answered by `ndb_found`. */
+  ndbFind(q: string, limit = 60) { this.sendSpectrum({ type: 'ndb_find', q: String(q).slice(0, 40), limit }); }
+  /** The reception stats (in memory on the server, 7 days); answered by `ndb_stats`. */
+  ndbStats() { this.sendSpectrum({ type: 'ndb_stats' }); }
+
   /** ★ Raw IQ out for THIS session — the audio sheet's row. The server answers with `iqout`. */
   iqOut(on: boolean, rate = 48000) { this.sendSpectrum({ type: 'iqout', on: on ? 1 : 0, rate }); }
 
@@ -305,6 +326,32 @@ export class VibeServerClient extends VibeServerWsClient {
         this.ismHeld = false;
         this.callbacks.onIsm?.(null, dabSafeText(msg.why, 200) || 'ISM is not available on this receiver');
         return true;
+      /* ★★ V12 NDB — the same three messages and the ghost guard; Find NDB and the stats answer the asker only. */
+      case 'ndb': {
+        const now = Date.now();
+        if (!this.ndbExit.accept(now)) return true;   // ★ a ghost after our own off
+        const r = ndbSanitise(msg);
+        if (!r) return true;
+        if (!this.ndbHeld || now - this.ndbHealHeldAt > 3000) {
+          this.ndbHealHeldAt = now;
+          holdNativeHealing(VibeServerClient.NDB_HOLD_MS, this.ndbHeld ? 'NDB running' : 'server reports NDB', this.ndbHeld);
+        }
+        this.ndbHeld = true;            // ★ arrival = the receiver is in NDB, whoever put it there
+        this.callbacks.onNdb?.(r);
+        return true;
+      }
+      case 'ndb_off':
+        this.ndbExit.offConfirmed(Date.now());
+        if (this.ndbHeld) holdNativeHealing(VibeServerClient.NDB_HOLD_MS, 'server reports NDB off');
+        this.ndbHeld = false;
+        this.callbacks.onNdb?.(null);
+        return true;
+      case 'ndb_error':
+        this.ndbHeld = false;
+        this.callbacks.onNdb?.(null, dabSafeText(msg.why, 200) || 'NDB is not available on this receiver');
+        return true;
+      case 'ndb_found': this.callbacks.onNdbFound?.(parseNdbFound(msg)); return true;
+      case 'ndb_stats': this.callbacks.onNdbStats?.(parseNdbStats(msg)); return true;
       case 'iqout':
         this.callbacks.onIqOut?.({
           on: Number(msg.on) === 1, rate: Number(msg.rate) || undefined,

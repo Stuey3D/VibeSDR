@@ -498,6 +498,9 @@ export abstract class VibeServerWsClient {
   /** ★ V12 ISM: the same lock again — the server owns the radio on an ISM band (docs/v12/ISM-DECODER.md: tune, zoom,
    *  reset are ignored while it runs; a band or an exact frequency goes through `ism`). Set only by VibeServerClient. */
   protected ismHeld = false;
+  /** ★ V12 NDB: the same lock again — the server holds the radio on the LF beacon band (docs/v12/NDB-SKIMMER.md: tune,
+   *  mode, passband, zoom, rate ignored while it runs). Set only by VibeServerClient. */
+  protected ndbHeld = false;
 
   /** True while a DAB multiplex is being decoded — the UI locks zoom and the VFO out. */
   get inDab(): boolean { return this.dabHeld; }
@@ -505,6 +508,8 @@ export abstract class VibeServerWsClient {
   get inAdsb(): boolean { return this.adsbHeld; }
   /** True while the receiver is in ISM — the same lock again. */
   get inIsm(): boolean { return this.ismHeld; }
+  /** True while the receiver is in NDB — the same lock again. */
+  get inNdb(): boolean { return this.ndbHeld; }
 
   /** ★ A message only ONE server speaks. Return true if handled; the base speaks neither DAB nor
    *  anything else UberSDR lacks, so it returns false and the unhandled-type log still fires for
@@ -529,7 +534,7 @@ export abstract class VibeServerWsClient {
      *  the window comes back REFUSED with the window in the note (handleWatch). See vfoAB.ts. */
     if (this.ab.bTuned) { this.ab.tuneB(frequency, mode); return; }
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld — the multiplex IS the tuning
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld) return;   // ★ see dabHeld — the multiplex IS the tuning
     const prevFreq = this.status.frequency;   // ★ read BEFORE it is overwritten — see sameSpot below
     this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
     this._armTuneSettleAsk();
@@ -734,7 +739,7 @@ export abstract class VibeServerWsClient {
   // the server ladder passes large values through unchecked and a runaway
   // zoom-out wedges the session.
   zoom(frequency: number, binBandwidth: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
     /* ★★★ THE VIEW CENTRE IS NOT A TUNE REQUEST — DO NOT CLAMP IT TO THE TUNER'S RANGE.
      *
      *  This was `Math.max(this.minHz, …)`, and for every VibeServer connection minHz is
@@ -784,7 +789,7 @@ export abstract class VibeServerWsClient {
   }
 
   pan(frequency: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld) return;   // ★ see dabHeld
     // ★ Same rule as zoom(): panning the VIEW is not tuning, so the tuner's range does not bound
     //   it. Clamping here hid the low end of every radio that reaches below the RTL-SDR's floor.
     const f = Math.round(frequency);
@@ -1244,7 +1249,7 @@ export abstract class VibeServerWsClient {
   }
 
   resetView() {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld) return;   // ★ see dabHeld
     if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
     this.spectrumWs.send(JSON.stringify({ type: 'reset' }));
   }
@@ -1593,7 +1598,7 @@ export abstract class VibeServerWsClient {
      *  VFOs): "when I went back to it the frequency reset to 4778 every time". The decision, and
      *  why it cannot touch a SHARED dial, is in reopenTune.ts. */
     this.wantTune = reopenRestoreTune({
-      hadConfig: this.hadConfig, sharedDial: this.sharedDial, inDab: this.dabHeld || this.adsbHeld || this.ismHeld,   // ★ ADS-B too: 1090 is not ours to restore over
+      hadConfig: this.hadConfig, sharedDial: this.sharedDial, inDab: this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld,   // ★ ADS-B too: 1090 is not ours to restore over
       pending: this.wantTune, frequency: Number(this.status.frequency), mode: this.status.mode,
     });
 

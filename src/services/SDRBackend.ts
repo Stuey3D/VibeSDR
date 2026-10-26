@@ -299,6 +299,13 @@ export interface SDRBackend {
   ism?(on: boolean, o?: { band?: string; step?: number; hz?: number }): void;
   /** True while the receiver is in ISM. */
   readonly inIsm?: boolean;
+  /** ★ V12 NDB on a VibeServer (docs/v12/NDB-SKIMMER.md): the whole radio to the LF beacon band, every beacon skimmed on
+   *  the server; tune/mode/zoom are ignored while it runs, as in ADS-B. Find / stats ask the server's published list. */
+  ndb?(on: boolean): void;
+  ndbFind?(q: string, limit?: number): void;
+  ndbStats?(): void;
+  /** True while the receiver is in NDB. */
+  readonly inNdb?: boolean;
 
   /**
    * ★★ Carry an admin credential on every socket this backend opens.

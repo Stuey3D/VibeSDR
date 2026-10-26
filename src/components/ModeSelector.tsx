@@ -291,6 +291,9 @@ interface ModeSelectorProps {
     /** ★★ V12 ISM — the same kind of key as ADS-B (a whole-radio mode) and the same three states: absent (`ismAvail`
      *  false — an HF+ reaches no band), dimmed with the server's reason under the row (`ismWhy`), live. */
     ismAvail?: boolean; ismWhy?: string; ismOn?: boolean; onIsm?: () => void;
+    /** ★★ V12 NDB — the same kind of key again (a whole-radio mode whose screen is a map): absent where the radio reaches
+     *  no LF (an RTL without direct sampling, a HackRF, an R2, an Icom), dimmed with the server's reason, live. */
+    ndbAvail?: boolean; ndbWhy?: string; ndbOn?: boolean; onNdb?: () => void;
     /** ★★ V12 THE SCANNER — a decoder-box item (docs/v12/SCANNER.md). Absent (not greyed) where scanPolicy says no: FM-DX,
      *  a VibeServer with one shared dial. `onlyScanner`: a backend with no client decoders of ours (OpenWebRX — its own
      *  decoders are demodulators in this sheet) draws the row with the scanner alone. */
@@ -382,8 +385,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  the decoders row. */
   const adsbShown = !!decoderControls?.adsbAvail;
   const ismShown = !!decoderControls?.ismAvail && !isBlocked('ism');
+  const ndbShown = !!decoderControls?.ndbAvail && !isBlocked('ndb');   // ★ V12 NDB
   const scanShown = !!decoderControls?.scanAvail && !isBlocked('scanner');
-  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown;
+  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown || ndbShown;
   const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !cwShown && !scanShown;
   const decSectionShown = !!decoderControls && !dabInGrid
     && (clientDecs.length > 0 || advRdsShown || wholeAvail || cwShown || scanShown);
@@ -484,6 +488,36 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       )}</NavItem>
     );
   };
+  /* ★★ V12 THE NDB KEY — ISM's key, for NDB (one definition for the grid and the decoders row). */
+  const ndbOff = !!decoderControls?.ndbWhy;
+  const ndbLit = !!decoderControls?.ndbOn;
+  const ndbKey = (inGrid: boolean) => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="ndb" onPress={() => dc.onNdb?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="NDB" active={ndbLit} pip
+          onPress={() => dc.onNdb?.()} fontSize={inGrid ? 13 : 12} style={ndbOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={ndbOff ? `NDB, unavailable: ${dc.ndbWhy}` : 'NDB beacons — every aeronautical beacon on the LF band, with a map'}
+        style={[st.btn, { borderColor: ndbLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+                ndbLit && { backgroundColor: decBg },
+                ndbOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onNdb?.()} activeOpacity={0.8}>
+        <Text numberOfLines={1}
+              style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: ndbLit ? dec : t.btnText }]}>
+          NDB
+        </Text>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
+  const ndbWhyLine = ndbOff ? (
+    <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+      {`NDB unavailable — ${decoderControls!.ndbWhy}`}
+    </Text>
+  ) : null;
   const ismWhyLine = ismOff ? (
     <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
       {`ISM unavailable — ${decoderControls!.ismWhy}`}
@@ -839,9 +873,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           )}
           {dabInGrid && adsbShown && adsbKey(true)}
           {dabInGrid && ismShown && ismKey(true)}
+          {dabInGrid && ndbShown && ndbKey(true)}
         </View></NavRow>
         {dabInGrid && adsbShown && adsbWhyLine}
         {dabInGrid && ismShown && ismWhyLine}
+        {dabInGrid && ndbShown && ndbWhyLine}
 
         {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
             LEFT to widen the lower sideband, the RIGHT one RIGHT to widen the
@@ -1070,6 +1106,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               )}
               {adsbShown && adsbKey(false)}
               {ismShown && ismKey(false)}
+              {ndbShown && ndbKey(false)}
               {decoderControls.galleryAvail && (
                 <NavItem key="gallery" onPress={() => decoderControls.onGallery?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label="GALLERY" active={false}
@@ -1106,6 +1143,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             </View></NavRow>
             {adsbShown && adsbWhyLine}
             {ismShown && ismWhyLine}
+            {ndbShown && ndbWhyLine}
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                                        : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>

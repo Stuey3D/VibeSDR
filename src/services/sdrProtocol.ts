@@ -399,6 +399,11 @@ export interface SDRCallbacks {
   /** ★ V12 ISM, VIBESERVER-ONLY: a report about once a second while the receiver is in ISM (its arrival MEANS ISM is on,
    *  on the band it names); null = it ended (`ism_off`); `err` = the refusal (`ism_error`). */
   onIsm?:       (r: IsmReport | null, err?: string) => void;
+  /** ★ V12 NDB, VIBESERVER-ONLY: a report about once a second while the receiver is in NDB (its arrival MEANS NDB is on);
+   *  null = it ended (`ndb_off`); `err` = the refusal (`ndb_error`). Find NDB and the stats answer the asker only. */
+  onNdb?:       (r: import('./ndb').NdbReport | null, err?: string) => void;
+  onNdbFound?:  (f: ReturnType<typeof import('./ndb').parseNdbFound>) => void;
+  onNdbStats?:  (s: import('./ndb').NdbStats) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?:     (m: IqOutState) => void;
   /** ★★ V12 VFO A/B, VIBESERVER-ONLY: hwinfo's `watch` — how many VFO Bs this server offers (0 = none: no toggle). */
