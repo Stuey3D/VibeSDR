@@ -28,7 +28,8 @@
  *     0x08                                       redraw start
  *
  *   FT8 / FT4 (text frame)
- *     {"type":"digital_spot","data":{mode,callsign,snr,frequency,band,grid,timestamp}}
+ *     {"type":"digital_spot","data":{mode,callsign,snr,frequency,band,grid,how,country,timestamp}}
+ *     {"type":"digital_spots_status","data":{scope:"band",modes:[{mode,state,dials,idle,shed,live}],budget}}   (V12 Band governor)
  *
  *   CW ('cw' on the listener's audio, 'cwskim' on a segment of IQ around the dial — V12, vibe_cw_run.h)
  *     0x01 text (as RTTY — the primary signal, 'cw' only) · 0x03 | u8 state (0 nothing, 1 carriers, 3 decoding)
@@ -84,7 +85,15 @@ export interface Spot {
   band: string;        // e.g. "20m" — the shim works this out
   grid: string;        // Maidenhead, may be empty
   timestamp: number;   // ms
+  /** ★ V12 (2026-10-27): JTTY and PSK say what the station was doing — "CQ", "QSO", "DE", "TEST" ("" otherwise). */
+  how?: string;
+  /** ★ …and every spot carries the call's country (the server's prefix table), "" when unknown. */
+  country?: string;
 }
+
+/** ★ V12 BAND GOVERNOR: one mode's state in Band (the spots box header's chips — {"type":"digital_spots_status"}). */
+export interface SpotModeState { mode: string; state: 'active' | 'light' | 'idle' | 'shed' | 'off'; dials: number; idle: number; shed: number; live: number }
+export interface SpotsStatus { scope: 'band'; modes: SpotModeState[]; budget: number | null }
 
 export interface DecoderCallbacks {
   /** Decoded characters (RTTY/NAVTEX), appended as they arrive. */
@@ -109,6 +118,8 @@ export interface DecoderCallbacks {
   onWefaxPhase?: (phase: number) => void;
   /** An FT8/FT4 decode. */
   onSpot?: (spot: Spot) => void;
+  /** ★ V12: Band's per-mode state (active / light / idle / shed / off), when it changes and every 15 s. */
+  onSpotsStatus?: (st: SpotsStatus) => void;
   /** ★ CW: the signals being decoded (at most once a second, only when changed). */
   onCwSignals?: (list: CwList) => void;
   /** ★ CW: a callsign heard identifying itself. */
@@ -417,7 +428,18 @@ export class DecoderClient {
         band: d.band ?? '',
         grid: d.grid ?? '',
         timestamp: d.timestamp ?? Date.now(),
+        how: typeof d.how === 'string' ? d.how.replace(/[^A-Z]/g, '').slice(0, 8) : '',
+        country: typeof d.country === 'string' ? d.country.replace(/[^ -~]/g, '').slice(0, 40) : '',
       });
+    }
+    if (msg.type === 'digital_spots_status' && msg.data && Array.isArray(msg.data.modes)) {
+      // ★ Off the server, so bounded and checked: a state not in the five is dropped, names kept to a mode's alphabet.
+      const ok = ['active', 'light', 'idle', 'shed', 'off'];
+      const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+      const modes = msg.data.modes.slice(0, 16).filter((m: any) => m && typeof m.mode === 'string' && ok.includes(m.state))
+        .map((m: any) => ({ mode: m.mode.replace(/[^0-9A-Za-z+-]/g, '').slice(0, 12), state: m.state, dials: n(m.dials), idle: n(m.idle), shed: n(m.shed), live: n(m.live) }));
+      const b = msg.data.budget;
+      this.cb.onSpotsStatus?.({ scope: 'band', modes, budget: typeof b === 'number' && Number.isFinite(b) ? b : null });
     }
   }
 

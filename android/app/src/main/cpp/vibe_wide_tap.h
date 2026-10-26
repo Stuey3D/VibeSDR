@@ -13,6 +13,7 @@
 #pragma once
 #include "vibedsp/vibedsp.h"
 #include "vibe_thread.h"
+#include "decoders/digi_activity.h"
 
 #include <atomic>
 #include <cmath>
@@ -31,15 +32,24 @@ public:
     using cf32 = vibedsp::cf32;
     /** n samples of the slice at `rate`, centred on `centreRfHz`. Called on the tap's thread. */
     using Sink = std::function<void(const cf32* x, int n, double rate, double centreRfHz)>;
+    /** ★ V12 (2026-10-27): the same, with the slice's FFT bins' power (digi::slicePower) when Geometry::bins asks — Band
+     *  spots' activity gate reads it, so it needs no transform of its own. */
+    using BinSink = std::function<void(const cf32* x, int n, double rate, double centreRfHz, const float* pw, int nb, double binHz)>;
     ~WideTap() { stop(); }
 
     /** Where to cut: the capture's rate, its hardware centre (RF at baseband 0), the slice's wanted centre and width. */
-    struct Geometry { double sampleRate = 0, hwCentreHz = 0, wantCentreHz = 0, widthHz = 0; int fftSize = 16384; };
+    struct Geometry { double sampleRate = 0, hwCentreHz = 0, wantCentreHz = 0, widthHz = 0; int fftSize = 16384; bool bins = false; };
     bool running() const { return run_.load(std::memory_order_relaxed); }
 
     void start(Sink sink) {
         if (run_.load()) return;
-        sink_ = std::move(sink);
+        sink_ = std::move(sink); binSink_ = nullptr;
+        run_.store(true);
+        th_ = std::thread([this] { loop(); });
+    }
+    void start(BinSink sink) {
+        if (run_.load()) return;
+        binSink_ = std::move(sink); sink_ = nullptr;
         run_.store(true);
         th_ = std::thread([this] { loop(); });
     }
@@ -70,6 +80,7 @@ private:
     void loop() {
         vibeDecoderThread("vibe-widetap");
         std::vector<cf32> slice;
+        std::vector<float> pw;
         vibedsp::Channelizer::ExtractCtx ctx;
         for (;;) {
             std::vector<cf32> buf;
@@ -92,11 +103,18 @@ private:
             if ((int)slice.size() != bins) slice.assign((size_t)bins, cf32{0, 0});
             chan_->feed(buf.data(), (int)buf.size(), [&](const cf32* b, int) {
                 const int got = chan_->extract(b, centreBin, bins, slice.data(), ctx, chan_->blockIndex());
-                if (got > 0 && sink_) sink_(slice.data(), got, rate, centre);
+                if (got <= 0) return;
+                if (sink_) sink_(slice.data(), got, rate, centre);
+                if (binSink_) {
+                    const bool wantPw = g.bins;
+                    if (wantPw) { pw.resize((size_t)bins); digi::slicePower(b, g.fftSize, centreBin, bins, pw.data()); }
+                    binSink_(slice.data(), got, rate, centre, wantPw ? pw.data() : nullptr, wantPw ? bins : 0, binHz);
+                }
             });
         }
     }
     Sink sink_;
+    BinSink binSink_;
     std::unique_ptr<vibedsp::Channelizer> chan_;
     std::thread th_;
     std::atomic<bool> run_{false};

@@ -268,6 +268,13 @@ public:
         /** ★ A listener's AUDIO frequency → RF (their dial and mode: USB dial + a, LSB dial − a, this server's CW
          *  dial + a − 600). Empty = dial + audio. A skimmer's IQ carries its own centre. */
         std::function<double(double)> rfOfAudio;
+        /** ★★ V12 BAND GOVERNOR (decoders/digi_governor.h, 2026-10-27): the OWNER's word per mode in Band — +1 Always (no
+         *  activity gate, never shed), −1 Off, 0 Auto (blocked-modes tokens "spotsband+<mode>" / "spotsband-<mode>").
+         *  Empty = Auto for every mode. Asked at each gate period's start (cheap: a CSV lookup). */
+        std::function<int(const std::string& mode)> bandOverride;
+        /** ★ What the benchmark says this machine affords for Band, in FT8 units (∞ / NaN = no benchmark). Asked once per
+         *  Band start. */
+        std::function<double()> bandBudgetUnits;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -372,6 +379,18 @@ public:
         spotter_.reset(new digi::Spotter(scope, digi::modes(),
             [this](const digi::Spot& sp, double rfHz) { emitSpot(sp, rfHz); },
             [dial] { return dial ? dial() : 0.0; }, loaded));
+        if (scope == SpotScope::Band) {
+            if (env_.bandOverride) {
+                auto ov = env_.bandOverride;
+                spotter_->setOverrides([ov](const std::string& m) {
+                    const int v = ov(m);
+                    return v > 0 ? digi::Override::Always : v < 0 ? digi::Override::Off : digi::Override::Auto;
+                });
+            }
+            const double u = env_.bandBudgetUnits ? env_.bandBudgetUnits() : NAN;
+            spotter_->setBudgetCap(std::isfinite(u) && u > 0 ? u : INFINITY);
+            statusSent_ = ~0ull; statusAt_ = 0;
+        }
         if (env_.spotTap) { DecoderTapPtr t = env_.spotTap(scope == SpotScope::Band); std::lock_guard<std::mutex> tl(tapMtx_); spotTap_ = std::move(t); }
         spotsOn_ = true;
         if (scope == SpotScope::Band) {
@@ -398,6 +417,17 @@ public:
     uint64_t spotSlotsSkipped() {
         std::lock_guard<std::mutex> lk(spotsMtx_);
         return spotSkipBase_ + (spotter_ ? spotter_->slotsSkipped() : 0);
+    }
+    /** ★ Band's gate periods SHED over budget (monotonic, survives a band change) — the health pill's line for it. */
+    uint64_t spotPeriodsShed() {
+        std::lock_guard<std::mutex> lk(spotsMtx_);
+        return spotShedBase_ + (spotter_ ? spotter_->periodsShed() : 0);
+    }
+    /** ★ Band's per-mode state as JSON (the {"type":"digital_spots_status"} frame's data) — "" when Band is not running. */
+    std::string spotsStatusJson() {
+        std::lock_guard<std::mutex> lk(spotsMtx_);
+        if (!spotter_ || spotter_->scope() != SpotScope::Band) return "";
+        return statusJsonLocked_();
     }
     /** What the spotter runs now ("FT8 14.0740, FT4 14.0800"), for the admin page. */
     std::string spotsDescribe() {
@@ -439,10 +469,15 @@ public:
         if (bandIq_.load(std::memory_order_relaxed)) w = std::max(w, bandWidth_.load(std::memory_order_relaxed));
         return w;
     }
-    /** Hand the skimmer `n` IQ samples at `rate` Hz centred on `centreRfHz`. Copies and returns at once, as feed(). */
-    void feedIq(const std::complex<float>* iq, int n, double rate, double centreRfHz) {
+    /** ★ Band spots wants the slice's FFT bins' power with each block (its activity gate — digi_activity.h). Cheap. */
+    bool wantsBins() const { return bandIq_.load(std::memory_order_relaxed); }
+    /** Hand the skimmer `n` IQ samples at `rate` Hz centred on `centreRfHz`. Copies and returns at once, as feed().
+     *  ★ `binPow`/`nb`/`binHz`: the slice's bins' power for this block (digi::slicePower), for Band's gate; null = none. */
+    void feedIq(const std::complex<float>* iq, int n, double rate, double centreRfHz,
+                const float* binPow = nullptr, int nb = 0, double binHz = 0) {
         if (n <= 0 || !wantsIq()) return;
         IqBlock b; b.v.assign(iq, iq + n); b.rate = rate; b.centre = centreRfHz;
+        if (binPow && nb > 0 && binHz > 0 && wantsBins()) { b.pw.assign(binPow, binPow + nb); b.binHz = binHz; }
         b.utc = vibeUtcNow();   // ★ Band spots cut UTC slots by it — stamped here, on the DSP/tap thread, not when decoded
         fed_.fetch_add((uint64_t)n, std::memory_order_relaxed);
         {
@@ -1018,19 +1053,51 @@ private:
         const std::string c = safe(sp.call, 32), g = safe(sp.grid, 8), m = safe(sp.mode, 12);
         if (c.empty() || m.empty()) return;
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->spot(m, c, g, sp.snr, rfHz); }
-        char buf[384];
+        /* ★ V12 (2026-10-27): JTTY and PSK say what the station was doing ("CQ", "QSO", "DE", "TEST"), and every spot
+         *  carries the call's country (our own prefix table — vibe_callsign_country.h), printable ASCII only. */
+        const std::string how = safe(sp.how, 8);
+        std::string ctry;
+        for (char ch : callsign::country(c)) {
+            const unsigned char u = (unsigned char)ch;
+            if (u >= 0x20 && u < 0x7f && u != '"' && u != '\\' && ctry.size() < 40) ctry.push_back(ch);
+        }
+        char buf[512];
         const int n = std::snprintf(buf, sizeof(buf),
             "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
-            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"timestamp\":%llu}}",
-            m.c_str(), c.c_str(), sp.snr, rfHz, bandFor(rfHz), g.c_str(), (unsigned long long)ts);
+            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"timestamp\":%llu}}",
+            m.c_str(), c.c_str(), sp.snr, rfHz, bandFor(rfHz), g.c_str(), how.c_str(), ctry.c_str(), (unsigned long long)ts);
         if (n > 0) broadcastText(std::string(buf, (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1));
+    }
+    /** ★ Band's mode chips as JSON (spotsMtx_ held). */
+    std::string statusJsonLocked_() {
+        std::string j = "{\"type\":\"digital_spots_status\",\"data\":{\"scope\":\"band\",\"modes\":[";
+        bool first = true;
+        for (const auto& m : spotter_->status()) {
+            char b[200];
+            std::snprintf(b, sizeof b, "%s{\"mode\":\"%s\",\"state\":\"%s\",\"dials\":%d,\"idle\":%llu,\"shed\":%llu,\"live\":%llu}",
+                          first ? "" : ",", m.mode.c_str(), digi::stateWord(m.state), m.dials, (unsigned long long)m.idle,
+                          (unsigned long long)m.shed, (unsigned long long)m.live);
+            j += b; first = false;
+        }
+        const double u = spotter_->budgetUnits();
+        char t[64];
+        if (std::isfinite(u)) std::snprintf(t, sizeof t, "],\"budget\":%.1f}}", u); else std::snprintf(t, sizeof t, "],\"budget\":null}}");
+        return j + t;
+    }
+    /** ★ Send the chips when a mode's state changed (at most once a second) and every 15 s regardless (a window opened
+     *  late sees them). spotsMtx_ held, on the decode thread. */
+    void maybeSendStatusLocked_(double utc) {
+        const uint64_t seq = spotter_->statusSeq();
+        if (seq == statusSent_ ? utc - statusAt_ < 15.0 : utc - statusAt_ < 1.0) return;
+        statusSent_ = seq; statusAt_ = utc;
+        broadcastText(statusJsonLocked_());
     }
     /** Stop the run (spotsMtx_ held). `finishTap`: a real stop, not a scope change — the gallery's summary is written. */
     void stopSpotterLocked_(bool finishTap) {
         spotsOn_ = false;
         spotsActive_.store(false, std::memory_order_relaxed);
         if (bandIq_.exchange(false)) skimmersRunning().fetch_sub(1);
-        if (spotter_) spotSkipBase_ += spotter_->slotsSkipped();
+        if (spotter_) { spotSkipBase_ += spotter_->slotsSkipped(); spotShedBase_ += spotter_->periodsShed(); }
         spotter_.reset();            // ★ joins the engines' workers (an FT8 decode in progress is aborted, not waited for)
         if (finishTap) { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(spotTap_); } if (t) t->finish(true); }
     }
@@ -1075,7 +1142,9 @@ private:
                 {
                     std::lock_guard<std::mutex> sl(spotsMtx_);
                     if (spotter_ && spotter_->scope() == SpotScope::Band) {
-                        spotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc);
+                        spotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc,
+                                         b.pw.empty() ? nullptr : b.pw.data(), (int)b.pw.size(), b.binHz);
+                        maybeSendStatusLocked_(b.utc);
                         // ★ The slice is centred on the dial: the next blocks are cut to the span of the band it is on now
                         //   (a band step is followed within a block or two). Cached per centre — the table walk is cheap but not free.
                         if (std::fabs(b.centre - bandWidthDial_.load(std::memory_order_relaxed)) > 0.5) {
@@ -1242,7 +1311,10 @@ private:
     std::atomic<bool> spotsActive_{false};      // ★ Single: wants the listener's audio
     std::atomic<bool> bandIq_{false};           // ★ Band: wants the band's IQ slice (wantsIq)
     std::atomic<double> bandWidth_{24000.0}, bandWidthDial_{-1.0};   // ★ the slice width (set at start and by the decode thread)
-    uint64_t spotSkipBase_ = 0;                 // ★ skipped slots of runs already stopped (spotSlotsSkipped is monotonic)
+    uint64_t spotSkipBase_ = 0;
+    uint64_t spotShedBase_ = 0;                  // ★ Band periods shed by runs already stopped (spotPeriodsShed is monotonic)
+    uint64_t statusSent_ = ~0ull;                // ★ the spotter's statusSeq last sent (spotsMtx_)
+    double   statusAt_ = 0;                      //   and when (capture UTC)                 // ★ skipped slots of runs already stopped (spotSlotsSkipped is monotonic)
     int   spotsSlot_ = -1;
 
     std::mutex replayMtx_;
@@ -1256,7 +1328,7 @@ private:
     std::condition_variable qCv_;
     std::deque<std::vector<float>> q_;
     std::deque<double> qUtc_;            // ★ each block's capture time (feed), in step with q_
-    struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0, utc = 0; };
+    struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0, utc = 0; std::vector<float> pw; double binHz = 0; };
     std::deque<IqBlock> qi_;             // ★ a CW skimmer's IQ (feedIq), served before audio by the same thread
     size_t qiFrames_ = 0;
     size_t qFrames_ = 0;

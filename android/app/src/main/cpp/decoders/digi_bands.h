@@ -15,6 +15,19 @@
 //   • FT2: no published band plan. Its dials are the ones FT2's own software (IU8LMC's Decodium) uses and Stuart's
 //     UberSDR decodes on: 160 1.843 · 80 3.578 · 60 5.357 · 40 7.052 · 30 10.144 · 20 14.084 · 17 18.108 · 15 21.144 ·
 //     12 24.923 · 10 28.184 MHz (20 m and 17 m read in Decodium's source; checked 2026-10-26, docs/v12/JS8-FT2.md).
+//   • JTTY (V12, 2026-10-27): the calling frequencies announced with WSJT-X 3.2 ("may change"), kept only where PSKReporter
+//     shows JTTY being used or the dial is clear of every other mode's window. CONFIRMED by PSKReporter's JTTY reports
+//     (2026-10-26/27, ~/VibeSDR-test-audio/jtty and bandall): 7.090, 14.090 (the busiest — 88 of 128 reports in a day),
+//     21.090 — every report 1.0–1.9 kHz above those dials. Announced, clear, not yet seen: 28.090, 50.160, 144.160.
+//     LEFT OUT: 1.838, 3.575, 10.140, 18.100 and 24.920 — each sits inside an FT8 or FT4 window (3.575 and 10.140 ARE
+//     FT4's dials, 18.100 is FT8's), nobody was heard on them, and a JTTY engine there would be gated open by FT8/FT4
+//     energy all day: the costliest engine we have, decoding nothing.
+//   • PSK31/63 (V12, 2026-10-27): the long-standing PSK31 calling frequencies (USB dial, PSK traffic 0.5–3 kHz above):
+//     3.580 · 7.040 · 10.142 · 14.070 · 18.100 · 21.070 · 24.920 · 28.120. 14.070 CONFIRMED (PSKReporter's PSK31 reports
+//     on 2026-10-26: every one 14.0700–14.0718 MHz; Stuart's UberSDR at 16:05 UTC: EA5JTI, OE5BAY, IW2NWK at 14.071).
+//     The others are published plan, not seen on air this week (Monday's 07:30 sweep of every PSK segment on the
+//     UberSDR heard no PSK at all). 21.070, not 21.080: the PSK31 segment's own frequency. 18.100 is shared with FT8 —
+//     both run on one tuner there (the PSK skimmer reads nothing from FT8: docs/v12/PSK.md).
 //   • 60 m WSPR is 5.3647 (inside the WRC-15 allocation 5351.5–5366.5 kHz that every region shares), not the older
 //     national 5.2872, which would stretch the 60 m passband to 73 kHz for one beacon frequency.
 //
@@ -93,6 +106,12 @@ inline const std::vector<Dial>& publishedDials() {
         {"FT2", "160m",  1843000}, {"FT2", "80m",  3578000}, {"FT2", "60m",  5357000}, {"FT2", "40m",  7052000},
         {"FT2", "30m",  10144000}, {"FT2", "20m", 14084000}, {"FT2", "17m", 18108000}, {"FT2", "15m", 21144000},
         {"FT2", "12m",  24923000}, {"FT2", "10m", 28184000},
+        // JTTY (V12 — see the file note: confirmed 40/20/15 m; announced and clear 10/6/2 m)
+        {"JTTY", "40m",  7090000}, {"JTTY", "20m", 14090000}, {"JTTY", "15m", 21090000}, {"JTTY", "10m", 28090000},
+        {"JTTY", "6m",  50160000}, {"JTTY", "2m", 144160000},
+        // PSK31/63 (V12 — the PSK31 calling frequencies; 14.070 confirmed)
+        {"PSK", "80m",   3580000}, {"PSK", "40m",  7040000}, {"PSK", "30m", 10142000}, {"PSK", "20m", 14070000},
+        {"PSK", "17m",  18100000}, {"PSK", "15m", 21070000}, {"PSK", "12m", 24920000}, {"PSK", "10m", 28120000},
     };
     return d;
 }
@@ -154,8 +173,14 @@ inline Span spanOf(const Band& b, const std::vector<ModeDef>& ms) {
     const double ac = 0.5 * (iv[a].lo + iv[a].hi);
     std::vector<size_t> order(iv.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    /* ★★ V12 (2026-10-27): grown in PRIORITY order (ModeDef::priority — the governor's), nearest first within one
+     *  priority. Before, nearest first: a new mode nearer FT8 could push an established one out of the 48 kHz cluster
+     *  (JTTY at 7.090 would have pushed 40 m's WSPR out). Now a mode joins the span only where it still fits beside
+     *  every mode ranked above it. */
     std::stable_sort(order.begin(), order.end(), [&](size_t x, size_t y) {
         if (x == a || y == a) return x == a && y != a;
+        const int px = ms[iv[x].mode].priority, py = ms[iv[y].mode].priority;
+        if (px != py) return px < py;
         return std::fabs(0.5 * (iv[x].lo + iv[x].hi) - ac) < std::fabs(0.5 * (iv[y].lo + iv[y].hi) - ac);
     });
     double lo = iv[a].lo, hi = iv[a].hi;

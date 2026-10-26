@@ -3220,6 +3220,20 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #spotFilters { display: none; gap: 3px; }
 #spotFilters.show { display: inline-flex; }
 #spotFilters .btn { padding: 2px 6px; font-size: 10px; }
+/* ★★ V12 BAND GOVERNOR: a chip per mode — its map letter in its colour, its name, and what it is doing. Live modes
+ * bright; idle dimmed (nothing to hear — not a fault); shed amber (signals there, over budget); off struck through. */
+#spotModeChips { display: inline-flex; gap: 3px; flex: 0 0 auto; align-items: center; }
+#spotModeChips[hidden] { display: none; }
+#spotModeChips .smc { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px 1px 2px; border-radius: 9px;
+  font-size: 9.5px; line-height: 14px; white-space: nowrap; border: 1px solid var(--line, #3a3f47); color: var(--fg, #e8e8e8); }
+#spotModeChips .smc i { font-style: normal; font-weight: 700; width: 13px; height: 13px; border-radius: 50%; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 8.5px; border: 1px solid #1A1A1A; }
+#spotModeChips .smc b { font-weight: 600; font-size: 8.5px; letter-spacing: .3px; }
+#spotModeChips .smc.active b, #spotModeChips .smc.light b { color: #5BE36B; }
+#spotModeChips .smc.idle { opacity: .55; }
+#spotModeChips .smc.shed { border-color: #E8A23A; }
+#spotModeChips .smc.shed b { color: #E8A23A; }
+#spotModeChips .smc.off { opacity: .45; text-decoration: line-through; }
 /* ★ The expanded second line — dimmer than line 1 on purpose: context to READ, not to scan.
    Spans the full row width beneath the columns. */
 #spotList .sdetail { grid-column: 1 / -1; color: var(--text-dim); font-size: 11px;
@@ -3895,6 +3909,8 @@ select.btn { padding: 6px 8px; }
       <!-- ★ EXPAND / COLLAPSE, as the app has: one line to scan, two to read. -->
       <button class="btn" id="sfExpand" title="Show grid, bearing and exact time">EXPAND</button>
     </span>
+    <!-- ★ V12 Band: which modes are decoding (active / light), idle, shed over budget, or off (main.ts renderSpotModeChips). -->
+    <span id="spotModeChips" hidden></span>
     <!-- Image decoders (WEFAX/SSTV): PREV switches to the last completed image while live decode
          continues; SAVE downloads the shown image. Hidden for text/spot decoders. -->
     <button class="btn" id="decPrev" title="View previous image" style="display:none">PREV</button>

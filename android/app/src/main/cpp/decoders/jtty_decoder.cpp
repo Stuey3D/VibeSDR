@@ -669,6 +669,7 @@ struct Decoder::Impl {
         int id = 0; double f = 0; float snr = 0, q = 0;
         int64_t firstMs = 0, lastMs = 0; unsigned frames = 0;
         std::string call, cqCall;
+        std::string msgCq;                // ★ the call that CQ'd in the message now open ("" none) — its grid follows
         std::deque<std::string> msgs;     // finished messages
         bool open = false; std::string cur; int64_t nextSample = 0;
         std::map<std::string, int64_t> spotted;
@@ -1150,13 +1151,13 @@ struct Decoder::Impl {
                 s->cur += "… ";                                 // ★ frames missed in between
             } else closeMessage(*s, false);
         }
-        if (!s->open) { s->open = true; s->cur.clear(); }
+        if (!s->open) { s->open = true; s->cur.clear(); s->msgCq.clear(); }
         s->cur += f.atom.kind == Kind::Text5 ? f.atom.text : render(f.atom) + " ";
         s->nextSample = f.sample + kFrameSamples;
         // the spot
         if (f.atom.kind == Kind::Call) {
             const bool cq = f.atom.sub == kCq || f.atom.sub == kTuCq;
-            if (cq) s->cqCall = f.atom.text;
+            if (cq) { s->cqCall = f.atom.text; s->msgCq = f.atom.text; }
             s->call = !s->cqCall.empty() ? s->cqCall : f.atom.text;
             const std::string how = cq ? "CQ" : "QSO";
             const std::string key = f.atom.text + "|" + how;
@@ -1164,6 +1165,17 @@ struct Decoder::Impl {
             if (it == s->spotted.end() || f.utcMs - it->second > 600000) {
                 s->spotted[key] = f.utcMs;
                 Spot sp; sp.call = f.atom.text; sp.audioHz = f.audioHz; sp.snrDb = f.snrDb; sp.how = how;
+                sp.utcMs = f.utcMs; sp.signalId = s->id;
+                if (onSpot && *onSpot) (*onSpot)(sp);
+            }
+        }
+        // ★ the CQ caller's own grid: a GRID4 frame (no "599" role) after its CQ, in the same message on this signal
+        if (f.atom.kind == Kind::Grid4 && f.atom.role == 0 && !s->msgCq.empty()) {
+            const std::string key = s->msgCq + "|grid|" + f.atom.text;
+            auto it = s->spotted.find(key);
+            if (it == s->spotted.end() || f.utcMs - it->second > 600000) {
+                s->spotted[key] = f.utcMs;
+                Spot sp; sp.call = s->msgCq; sp.grid = f.atom.text; sp.audioHz = f.audioHz; sp.snrDb = f.snrDb; sp.how = "CQ";
                 sp.utcMs = f.utcMs; sp.signalId = s->id;
                 if (onSpot && *onSpot) (*onSpot)(sp);
             }
