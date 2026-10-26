@@ -147,6 +147,8 @@ public:
      *  which the LAST sample of this block was captured — DecoderHost stamps it when the audio is handed over, so
      *  a decoder thread running behind does not move the slot. NaN = "now" (a caller with no timestamp). */
     void process(const int16_t* mono, int count, double captureUtc = NAN);
+    /** ★ The same, float audio (±1.0) — Band mode's tuners make float, and a round trip through int16 would only cost. */
+    void process(const float* mono, int count, double captureUtc = NAN);
 
     bool isFt4() const { return ft4; }
 
@@ -187,6 +189,7 @@ private:
      *    is still running when the next window completes (it had a whole slot's time), that slot is
      *    SKIPPED and counted — never waited for. */
     void runDecode();
+    void advance(int count, double captureUtc);   // ★ the slot cutter, after a block is in the ring (both process())
     void workerLoop();
 
     bool   ft4;

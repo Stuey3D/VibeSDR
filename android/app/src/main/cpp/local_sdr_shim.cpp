@@ -1546,6 +1546,8 @@ static std::string vsAdsbHwWhyNot(); // "" = this radio could run ADS-B with the
 static std::string vsIsmWhyNot();    // "" = ISM can run here now — see its definition (by vsAdsbWhyNot)
 static bool vsIsmReach(const vibeism::Band& b);   // this radio can tune the whole of the band
 static bool vsIsmAnyBand();          // ★ false = ISM is not offered AT ALL (the HF+): no control, no reason
+static std::vector<vibe::digi::Span> vsSpotSpans();   // ★ V12: the bands Band spots can sit on (empty = no Band button)
+static std::string vsSpotsBandWhyNot();
 static bool vsDabCapableHw();   // ★ the same, ignoring the owner's block — see its definition
 // ★ Forward-declared alongside vsDabCapable for the same reason: the DAB entry path refuses
 //   thousands of lines above the definition, and it needs to name WHICH restriction bit.
@@ -23976,10 +23978,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
             };
             // ★★ …and a listener's FT8/FT4: the same SUMMARY background decoding keeps, one per spotting session.
-            e.spotTap = [dial]() -> vibe::DecoderTapPtr {
+            e.spotTap = [dial](bool band) -> vibe::DecoderTapPtr {
                 if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
                 vibe::gallery::Meta m;
-                m.kind = "ft8"; m.origin = "live"; m.decoder = "ft8"; m.mode = "usb";
+                // ★★ V12: Band mode is ONE card for the band, every mode on it (decoder "ft8band" — the card's first line).
+                m.kind = "ft8"; m.origin = "live"; m.decoder = band ? "ft8band" : "ft8"; m.mode = "usb";
                 m.freqHz = dial ? dial() : 0.0;
                 return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
             };
@@ -24088,14 +24091,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
             } else if (type == "subscribe_digital_spots") {
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
-                 *  the button, but an old client or a hand-rolled tool must meet the same wall. */
+                 *  the button, but an old client or a hand-rolled tool must meet the same wall.
+                 * ★★ V12: "scope":"band" = Band mode (the band's IQ slice, every mode on its dial); absent = Single, the
+                 *  button there always was — so an older client gets exactly what it got before. */
+                const bool band = jsonStr(payload, "scope") == "band";
+                const auto scope = band ? DecoderHost::SpotScope::Band : DecoderHost::SpotScope::Single;
                 if (vsModeBlocked("spots")) {
                     LOGI("digital spots refused — the server owner has switched them off on this receiver");
+                } else if (band && (vsSpotSpans().empty() || !vsSpotsBandWhyNot().empty())) {
+                    const std::string why = vsSpotSpans().empty() ? std::string("this radio cannot tune to a band the digital modes use")
+                                                                  : vsSpotsBandWhyNot();
+                    LOGI("digital spots (band) refused — %s", why.c_str());
+                    sendDecoderRefusal(sock, "spots", "ft8band", "blocked", "Band spots are not available: " + why + ".");
                 } else if (!host) {
                     sendDecoderRefusal(sock, "spots", "ft8", "no_session",
                         "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
-                } else if (host->startSpots() == DecoderHost::Start::Refused
-                           && (decoderOnly || !bgYieldForListener() || host->startSpots() == DecoderHost::Start::Refused)) {
+                } else if (host->startSpots(scope) == DecoderHost::Start::Refused
+                           && (decoderOnly || !bgYieldForListener() || host->startSpots(scope) == DecoderHost::Start::Refused)) {
                     LOGI("digital spots refused — all %d decoder slots on this server are in use", vsDecoderSlots().max());
                     sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
                 } else if (!perVfo) {
@@ -29714,6 +29726,8 @@ std::string LocalSdrShim::adminStatusJson() {
             running += "{\"session\":\"" + vibeadmin::esc(kv.first.empty() ? sharedBy : kv.first) + "\""
                      + ",\"shared\":" + (kv.first.empty() ? "true" : "false")
                      + ",\"decoder\":\"" + vibeadmin::esc(nm) + "\",\"spots\":" + (sp ? "true" : "false")
+                     // ★ V12: which digital spots ("single" / "band") and what they read ("FT8 14.0740, FT4 14.0800")
+                     + ",\"spotsScope\":\"" + h->spotsScope() + "\",\"spotsRun\":\"" + vibeadmin::esc(h->spotsDescribe()) + "\""
                      + ",\"slots\":" + std::to_string(h->slotsHeld()) + "}";
         }
         j += std::string(",\"decoderAttached\":") + (attached ? "true" : "false")
@@ -29816,7 +29830,7 @@ std::string LocalSdrShim::adminSessionsJson() {
         { std::lock_guard<std::mutex> lk(p->clientMtx); sharedBy = p->sharedDecoderBy_; }
         for (auto& kv : p->decoders_.all()) {
             std::string nm = kv.second->name();
-            if (kv.second->spotsOn()) nm += nm.empty() ? "ft8" : "+ft8";
+            if (kv.second->spotsOn()) { const std::string f = kv.second->spotsScope() == "band" ? "ft8band" : "ft8"; nm += nm.empty() ? f : "+" + f; }
             if (nm.empty()) continue;
             const std::string who = kv.first.empty() ? sharedBy : kv.first;
             if (!who.empty()) decBySession[who] = nm;
@@ -30621,6 +30635,27 @@ static std::string vsIsmWhyNot() {
     return {};
 }
 
+/* ★★ V12 DIGITAL SPOTS: BAND (2026-10-26) — decoders/digi_bands.h. The bands this radio can sit on in Band mode: every
+ *  band a registered mode has a dial on, kept only where the radio tunes the WHOLE span (an HF+ never lists 70 cm, an RTL
+ *  without direct sampling lists no HF). An Icom's audio is not IQ: no band at all, and so no Band button (AGENTS.md: a
+ *  control that cannot work on this radio is not drawn). */
+static std::vector<vibe::digi::Span> vsSpotSpans() {
+    if (g_icomOn.load()) return {};
+    const vibebands::Ranges t = vsTunableRanges();
+    return vibe::digi::reachableSpans(vibe::digi::modes(), [&](double lo, double hi) {
+        for (const auto& x : t) if (double(x.lo) <= lo && double(x.hi) >= hi) return true;
+        return false;
+    });
+}
+/** Why Band mode cannot start here, in words — or "" when it can. ★ Never hides the button: the owner's switch and the
+ *  benchmark's default (vibe_setup_page.h benchApplyDefaults: "spotsband" off on a box that measured it red) show it
+ *  DISABLED WITH ITS REASON, as ADS-B and ISM are. */
+static std::string vsSpotsBandWhyNot() {
+    if (vsModeBlocked("spots")) return "the server owner has switched digital spots off on this receiver";
+    if (vsModeBlocked("spotsband")) return "the server owner has switched Band spots off on this receiver (Setup \xe2\x86\x92 Modes and decoders)";
+    return {};
+}
+
 static bool vsDabCapableHw();
 static bool vsDabCapable() {
     // ★ The owner may switch it off outright, whatever the hardware can do.
@@ -30708,6 +30743,33 @@ static std::string vsTunableJson() {
         j += "]";
         const vibeism::Band* land = vibeism::landingBand(g_bgLat.load(), g_bgLon.load(), [](const vibeism::Band& b) { return vsIsmReach(b); });
         if (land) j += std::string(",\"ismLanding\":\"") + land->id + "\"";
+    }
+    /* ★★ V12 DIGITAL SPOTS (2026-10-26): the modes this server decodes (the clients' list filter, Mode column and map
+     *  legend come from here, never a list of their own), and BAND mode — `spotsBand` offered or false with `spotsBandWhy`,
+     *  and `spotBands`: what Band mode steps through, in order, each with the span its registered modes cover (the drawn
+     *  VFO), the dial it sits on (`hz`, the span's centre) and the modes on it. Absent where no band is reachable. */
+    {
+        j += ",\"spotModes\":[";
+        bool first = true;
+        for (const auto& m : vibe::digi::modes()) { j += std::string(first ? "" : ",") + "\"" + m.name + "\""; first = false; }
+        j += "]";
+        const auto spans = vsSpotSpans();
+        if (!spans.empty()) {
+            const std::string why = vsSpotsBandWhyNot();
+            j += std::string(",\"spotsBand\":") + (why.empty() ? "true" : "false");
+            if (!why.empty()) j += ",\"spotsBandWhy\":\"" + dabEscape(why) + "\"";
+            j += ",\"spotBands\":[";
+            first = true;
+            for (const auto& sp : spans) {
+                char e[200];
+                std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"hz\":%.0f,\"lo\":%.0f,\"hi\":%.0f,\"bandLo\":%.0f,\"bandHi\":%.0f,\"modes\":[",
+                              first ? "" : ",", sp.band->id, sp.band->name, sp.centreHz, sp.loHz, sp.hiHz, sp.band->loHz, sp.band->hiHz);
+                j += e; first = false;
+                for (size_t k = 0; k < sp.modes.size(); ++k) j += std::string(k ? "," : "") + "\"" + sp.modes[k] + "\"";
+                j += "]}";
+            }
+            j += "]";
+        }
     }
     /* ★ SEPARATE FROM `dab`, because the two answer different questions and the setup page needs
      *  both: `dab` is "will this receiver do it", `dabDecoder` is "could any receiver on this
@@ -30984,6 +31046,11 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
             auto& hst = kv.second;
             const std::string lb = decoderLabel(hst->name(), hst->spotsOn());
             if (!lb.empty()) watch.note("dec:" + kv.first, lb, hst->droppedSamples(), nowMs);
+            /* ★★ V12: the digital-spots engines skip a SLOT when the last one is still decoding (never wait) — that is
+             *  them being too heavy for this box, even with no audio dropped. Band mode runs several at once. */
+            if (hst->spotsOn())
+                watch.note("spots:" + kv.first, hst->spotsScope() == "band" ? "Digital spots: Band" : "Digital spots",
+                           hst->spotSlotsSkipped(), nowMs);
         }
         if (p->bgRun_.running()) watch.note("bg", "Background decoding", p->bgRun_.droppedSamples(), nowMs);
     }
