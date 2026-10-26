@@ -933,6 +933,7 @@ struct Decoder::Impl {
          *    powers summed without. Noise — and any codeword that is not really there — gives ≈ 1 whatever the decoder
          *    chose, its phases being random. A JTTY frame gives ≈ (1 + 8·Es/N0)/(1 + Es/N0): five or more at −16 dB. The
          *    CRC cannot tell a lucky path through noise from a frame; this can, because h = 1 makes the sender coherent. */
+        int cd = bd, cf = bf;                                   // where the phase is followed from (followPhase moves it)
         auto coherenceAt = [&](int d, int dfi, const uint8_t* tones) {
             const double step = -2 * M_PI * (dfi - mid) * kDfStep / kBaud + M_PI;
             const float sr1 = (float)std::cos(step), si1 = (float)std::sin(step);

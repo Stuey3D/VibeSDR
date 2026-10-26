@@ -1081,6 +1081,20 @@ else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-dsc.sh)'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 JTTY end to end (2026-10-26): the real server on a fake rtl_tcp replaying the bench's 20 m clip (two JTTY
+#     stations, a CQ and an exchange, overlapping) — vibeserver.json "jtty", the JTTY button and band keys, both stations
+#     as rows lowest frequency first with their calls and confidence colours, the SPOTS, a tap and a band key tuning,
+#     390 px (test-web-jtty, headless Edge, --mute-audio). The engine's own numbers are vibeserver/test-jtty.cpp above;
+#     the measuring bench is scripts/test-jtty.sh. Needs VIBESERVER_BIN.
+printf '\n\033[1m── JTTY (end to end: server and web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-jtty.sh clip "$OUT/jtty-clip.cu8" >/dev/null; then
+  VIBE_JTTY_CLIP="$OUT/jtty-clip.cu8" node scripts/test-web-jtty.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/jtty-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-jtty.sh)'; notrun=$((notrun+1))
+fi
+
 # ★★★ V12 DIGITAL SPOTS end to end (2026-10-26): a UTC-anchored 20 m clip (test-digi-spots clip) through the real server —
 #     Band on a one-pipeline and a range-locked radio (every FT8 / FT4 station with its mode at its RF, the lower sideband
 #     never), Single on the listener's audio, the owner's "spotsband" switch (test-server-spots); then the web client in

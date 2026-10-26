@@ -125,6 +125,7 @@ import { RecordBufferAnchor, parseRecordBufferSeconds } from '../../../src/servi
 import { probeMapGL, type MapGLKit } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
+import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
 import { DSC_CHANNELS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, type DscCall, type DscPin } from './dsc';
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
@@ -769,6 +770,7 @@ async function loadAudioPolicy(httpBase: string) {
   aprsCap = false;             // ★ …nor an APRS decoder
   cwCap = false;               // ★ …nor a CW decoder
   dscCap = false;              // ★ …nor DSC
+  jttyCap = false;             // ★ …nor JTTY
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
   firstConfigDone = false;
@@ -815,6 +817,9 @@ async function loadAudioPolicy(httpBase: string) {
     dscCap = j.dsc === true;     // ★ DSC (V12): maritime Digital Selective Calling, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="dsc"]') as HTMLElement | null;
       if (b) b.hidden = !dscCap || blockedModes.has('dsc'); }
+    jttyCap = j.jtty === true;   // ★ JTTY (V12): the WSJT-X 3.2 keyboard mode, decoded by this server
+    { const b = document.querySelector('#decodersPanel [data-dec="jtty"]') as HTMLElement | null;
+      if (b) b.hidden = !jttyCap || blockedModes.has('jtty'); }
     dabBoost = j.dabBoost === true;
     dabBoostUseful = j.dabBoostUseful === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
@@ -1879,7 +1884,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'jtty' && !jttyCap);
       }
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
        *  DAB never produces a spot, so both buttons were dead weight there (Stuart, 2026-09-17).
@@ -10701,7 +10706,59 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'aprs' | 'dsc' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'aprs' | 'dsc' | 'jtty' | null = null;
+/* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
+ *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
+ *  first, coloured by confidence) over the SPOTS; the settings hold the announced calling frequencies. Offered only where
+ *  vibeserver.json says "jtty": true. See jtty.ts. */
+let jttyCap = false;
+let jttyLast: JttySignal[] = [];
+const jttySpots = new JttySpots();
+function renderJtty() {
+  const body = document.getElementById('decBody');
+  const head = $('jttySpotsHead');
+  jttyPinWatch(body);
+  renderJttyRows($('jttyRows'), jttyLast, jttyTune);
+  renderJttySpots($('jttySpots'), jttySpots.list, fmtSpotTime, jttyTune);
+  // ★ THE VIEW STAYS WHERE THE LISTENER PUT IT (CW's rule): scrolled down at all = pinned to the SPOTS heading
+  if (body && jttyPinAt !== null) {
+    const want = Math.max(0, head.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - jttyPinAt);
+    if (Math.abs(want - body.scrollTop) >= 1) { jttyPinSetting = true; body.scrollTop = want; }
+  }
+}
+let jttyPinAt: number | null = null;
+let jttyPinSetting = false;
+let jttyPinBody: HTMLElement | null = null;
+function jttyPinWatch(body: HTMLElement | null) {
+  if (!body || jttyPinBody === body) return;
+  jttyPinBody = body;
+  body.addEventListener('scroll', () => {
+    if (jttyPinSetting) { jttyPinSetting = false; return; }   // ★ our own restore, not the listener
+    if (activeDec !== 'jtty') { jttyPinAt = null; return; }
+    const head = $('jttySpotsHead');
+    jttyPinAt = body.scrollTop > 0 ? head.getBoundingClientRect().top - body.getBoundingClientRect().top : null;
+  }, { passive: true });
+}
+/** ★ Tap a row or a spot: USB, the dial 1500 Hz below the station's tone 0 (its tones then sit mid-passband). */
+function jttyTune(rfHz: number) {
+  if (!spec || !(rfHz > 0)) return;
+  spec.tune(clampTune(jttyTuneFor(rfHz)), 'usb' as SDRMode, { recenter: true, retarget: true });
+  renderFreq();
+}
+/** ★ The announced JTTY calling frequencies this radio can reach — the rest are not drawn (AGENTS.md: no dead controls). */
+function initJttyDials() {
+  const host = document.getElementById('jttyDials');
+  if (!host) return;
+  host.textContent = '';
+  for (const d of JTTY_DIALS) {
+    if (clampTune(d.hz) !== d.hz) continue;
+    const b = document.createElement('button');
+    b.className = 'btn'; b.textContent = d.label;
+    b.title = `${(d.hz / 1e6).toFixed(3)} MHz USB — announced for JTTY in the WSJT-X 3.2 release candidates (preliminary)`;
+    b.onclick = () => { if (!spec) return; spec.tune(d.hz, 'usb' as SDRMode, { recenter: true, retarget: true }); renderFreq(); };
+    host.appendChild(b);
+  }
+}
 /* ★★ DSC (V12, 2026-10-26) — maritime Digital Selective Calling, decoded on the server (decoders/dsc_decoder.h). The box
  *  lists the calls, newest first, coloured by what they are, a position's MAP beside it; the settings hold the DSC
  *  channels to tune. Offered only where vibeserver.json says "dsc": true. See dsc.ts. */
@@ -11017,6 +11074,7 @@ function initDecoders(host: string, auth: AuthState) {
       // ★ NAVTEX: into the message assembler, drawn by renderNavtex — #decText is hidden while it has the box.
       if (activeDec === 'navtex') { clearNavtexIfRetuned(); navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
       if (activeDec === 'dsc') return;   // ★ DSC's rows are drawn from its JSON (onDscCall); the line is the same text
+      if (activeDec === 'jtty') return;  // ★ JTTY's rows are drawn from its JSON (onJttySignals); the line is the same text
       const el = $('decText');
       // ★★ A LEADING \r MEANS "REPLACE THE LAST LINE", as a terminal would. The time decoders send
       //    a progress line once a SECOND — the fields filling in as they arrive — and appending
@@ -11091,6 +11149,7 @@ function initDecoders(host: string, auth: AuthState) {
       // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
       decStateText = activeDec === 'dsc' ? (st ? 'receiving a call…' : 'listening…')
+                   : activeDec === 'jtty' ? (st ? 'decoding…' : 'listening…')
                    : activeDec === 'cw' ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
                    : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
       if (!decTuneHint) $('decStatus').textContent = decStateText;   // ★ the tuning guide, while up, IS the status
@@ -11170,6 +11229,19 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(true);
     },
     // ★★ DSC: a call (a repeat updates its row).
+    // ★★ JTTY: the stations list (once a second, when it changed) and each call heard.
+    onJttySignals: (d) => {
+      if (activeDec !== 'jtty') return;
+      const l = jttySignalsFromJson(d);
+      if (!l) return;
+      jttyLast = l; renderJtty(); setDecLive(l.some((x) => x.active));
+    },
+    onJttySpot: (d) => {
+      if (activeDec !== 'jtty') return;
+      const sp = jttySpotFromJson(d);
+      if (!sp) return;
+      jttySpots.push(sp); renderJtty();
+    },
     onDscCall: (d) => {
       if (activeDec !== 'dsc') return;
       const c = dscFromJson(d);
@@ -11271,7 +11343,7 @@ function initDecoders(host: string, auth: AuthState) {
   //    semantics, same as the app). Selecting one opens the output box.
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'aprs' | 'dsc';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'aprs' | 'dsc' | 'jtty';
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
       decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
@@ -11340,6 +11412,7 @@ function initDecoders(host: string, auth: AuthState) {
   segButtons('cwWidth', 'cwwidth', (v) => { cwWidth = Number(v) || 48000; cwHint(); if (cwSkim) { cwLast = null; renderCw(); reattachIf('cw'); } });
   cwHint();
   initDscChannels();
+  initJttyDials();
 
   // Spots + map.
   const spotsBtn = $<HTMLButtonElement>('spotsBtn');
@@ -11384,6 +11457,7 @@ function initDecoders(host: string, auth: AuthState) {
     if (activeDec === 'cw') { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
     if (activeDec === 'aprs') { aprsLog.length = 0; renderAprs(); }
     if (activeDec === 'dsc') { dscCalls.clear(); renderDsc(); }
+    if (activeDec === 'jtty') { jttyLast = []; jttySpots.clear(); renderJtty(); }
   };
   // ★ APRS: the map, the packet speed (a re-attach — a different modem on the server), and the region's channel
   $('aprsMapBtn').onclick = () => aprsMapOpen();
@@ -11786,7 +11860,8 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, 
 function anyDecoderLeft(): boolean {
   // ★ V12: CW and APRS count only where this server has them (vibeserver.json "cw", "aprs") — hidden otherwise.
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
-    || (cwCap && !blockedModes.has('cw')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc'));
+    || (cwCap && !blockedModes.has('cw')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc'))
+    || (jttyCap && !blockedModes.has('jtty'));
 }
 
 function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
@@ -11809,6 +11884,8 @@ function syncDecButtons() {
   $('aprsSettings').hidden = activeDec !== 'aprs';
   $('dscSettings').hidden = activeDec !== 'dsc';
   if (activeDec === 'dsc') initDscChannels();   // ★ the radio's range may have changed since the page loaded
+  $('jttySettings').hidden = activeDec !== 'jtty';
+  if (activeDec === 'jtty') initJttyDials();
 }
 
 function showDecBox(what: string) {
@@ -11852,6 +11929,9 @@ function showDecBox(what: string) {
   const isDsc = what === 'dsc';
   $('dscList').classList.toggle('on', isDsc);
   if (isDsc) { dscCalls.clear(); renderDsc(); }
+  const isJtty = what === 'jtty';
+  $('jttyList').classList.toggle('on', isJtty);
+  if (isJtty) { jttyLast = []; jttySpots.clear(); jttyPinAt = null; renderJtty(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
   // bar is a compressed version of the same data; showing both would be saying everything
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
@@ -11859,7 +11939,7 @@ function showDecBox(what: string) {
   $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
   // ★ Which decoders BIG should widen: the ones whose content is drawn at the box's width (SSTV,
   //   WEFAX) or written in long lines (the spot list). Text decoders get height instead.
-  $('decBox').classList.toggle('wide', image || isSpots || (isCw && cwSkim) || what === 'dsc');
+  $('decBox').classList.toggle('wide', image || isSpots || (isCw && cwSkim) || what === 'dsc' || isJtty);
   // ★★ THE SIZE TOGGLE IS FOR EVERY DECODER, not just Advanced RDS. It was gated on `isRds`, so
   //    the one panel whose whole point is a PICTURE — SSTV — had no way to be made bigger, and
   //    WEFAX and the spot list were stuck at one size too (Stuart). RDS keeps its own pair of
@@ -11867,7 +11947,7 @@ function showDecBox(what: string) {
   $('rdsSize').classList.toggle('show', true);
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
   applyRdsSize();
-  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || (isCw && cwSkim) || isDsc);
+  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || (isCw && cwSkim) || isDsc || isJtty);
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the

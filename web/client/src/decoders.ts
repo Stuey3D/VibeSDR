@@ -42,6 +42,11 @@
  *     0x01 text (one readable line per call) · 0x03 | u8 state (0 listening, 1 a call coming in)
  *     {"type":"dsc_call","data":{id,utc,rf,repeat,format,category,level,self,…,lat?,lon?,line}} — see dsc.ts
  *
+ *   JTTY ('jtty' — V12, the WSJT-X 3.2 keyboard mode, vibe_jtty_run.h)
+ *     0x01 text (one line per finished message) · 0x03 | u8 state (0 listening, 3 signals being decoded)
+ *     {"type":"jtty_signals","data":{signals:[{id,hz,audio,snr,q,active,last,first,frames,call,country,text}]}}
+ *     {"type":"jtty_spot","data":{callsign,frequency,audio,snr,how,country,timestamp}} — see jtty.ts
+ *
  * NB WEFAX and SSTV BOTH use 0x01 for a line, with different payloads — so
  * frames can only be parsed against the decoder currently attached. Never sniff.
  */
@@ -50,7 +55,7 @@ import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'aprs' | 'dsc' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'aprs' | 'dsc' | 'jtty' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -105,6 +110,9 @@ export interface DecoderCallbacks {
   /** ★ APRS (V12): the station list (raw data — tracks.ts aprsSanitise), and each new packet. */
   onAprsList?: (data: any) => void;
   onAprsPacket?: (p: AprsPacket) => void;
+  /** ★ JTTY: the stations list and a spot (as the server sent them — jtty.ts checks them). */
+  onJttySignals?: (data: unknown) => void;
+  onJttySpot?: (data: unknown) => void;
   /** ★ DSC: one call (its data as the server sent it — dsc.ts dscFromJson checks it). */
   onDscCall?: (data: unknown) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
@@ -156,6 +164,8 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   aprs: 'aprs',
   // ★ V12 DSC: MF/HF on SSB or VHF channel 70 on NFM — which is a parameter ("band"), as the time station is.
   dsc: 'dsc',
+  // ★ V12 JTTY: every JTTY signal in the listener's passband — nothing to set.
+  jtty: 'jtty',
 };
 
 export class DecoderClient {
@@ -362,6 +372,11 @@ export class DecoderClient {
                                lat: n(d.lat), lon: n(d.lon), to: s(d.to, 12) || undefined, text: s(d.text, 200) || undefined });
       return;
     }
+    if ((msg.type === 'jtty_signals' || msg.type === 'jtty_spot') && msg.data) {
+      if (this.mode !== 'jtty') return;
+      if (msg.type === 'jtty_signals') this.cb.onJttySignals?.(msg.data); else this.cb.onJttySpot?.(msg.data);
+      return;
+    }
     if (msg.type === 'dsc_call' && msg.data) {
       if (this.mode !== 'dsc') return;
       this.cb.onDscCall?.(msg.data);
@@ -410,6 +425,8 @@ export class DecoderClient {
       case 'cwskim':
       // ★ DSC: a call's line (the box draws from the JSON instead) and the state.
       case 'dsc':
+      // ★ JTTY: a finished message's line (the box draws its rows from the JSON) and the state.
+      case 'jtty':
         if (op === 0x01 && buf.byteLength >= 13) {
           const len = dv.getUint32(9, false);           // big-endian
           const text = new TextDecoder().decode(new Uint8Array(buf, 13, Math.min(len, buf.byteLength - 13)));
