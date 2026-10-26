@@ -25276,7 +25276,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★★ THE MIX. `mainPcm` = `frames` mono samples of VFO A, already through the listener's own squelch. Fills `out`
      *  with interleaved L/R and returns true while the set is mixing; false = use the ordinary path (VFO B is off and the
      *  pan has come home, so the ordinary path is EXACTLY what the mixer would have produced — no step at the hand-back). */
-    bool watchMix(WatchSet* w, const float* mainPcm, int frames, double mainHz, bool monoOut, std::vector<float>& out) {
+    bool watchMix(WatchSet* w, const float* mainPcm, int frames, double mainHz, bool monoOut, std::vector<float>& out,
+                  bool sharedTrim = false) {
         if (!w || frames <= 0) return false;
         std::lock_guard<std::mutex> lk(w->m);
         if (!w->activeLocked() && !w->mixing) return false;
@@ -25293,6 +25294,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             auto& buf = w->chanPcm[k++];
             buf.resize((size_t)frames);
             ch->fifo().pop(buf.data(), (size_t)frames);
+            // ★ The SHARED path trims AM by 6 dB (audioGain, "AM is hotter"); a watch channel mixed beside it takes the
+            //   same trim, or VFO B would sit 6 dB above VFO A. A listener's own channel has no trim, so neither does B there.
+            if (sharedTrim && ch->wanted().rxMode == vibewatch::Mode::AM) for (auto& v : buf) v *= 0.5f;
             vibewatch::PanMixer::Src s;
             s.key = ch->id(); s.hz = ch->wanted().hz; s.present = present;
             s.gateOpen = ch->open() && !ch->parked(); s.pcm = buf.data();
@@ -25343,7 +25347,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (int i = 0; i < count; i++)
                 main[i] = shut ? 0.0f : (ch == 2 ? 0.5f * ((float)pcm[2 * i] + (float)pcm[2 * i + 1]) : (float)pcm[i]) / 32767.0f;
             std::vector<float> lr;
-            if (!watchMix(w.get(), main.data(), count, audioFreq.load(), mono, lr)) { rest.insert(rest.end(), list.begin(), list.end()); continue; }
+            if (!watchMix(w.get(), main.data(), count, audioFreq.load(), mono, lr, true)) { rest.insert(rest.end(), list.begin(), list.end()); continue; }
             std::vector<int16_t> out;
             int outCh = 2;
             if (mono) { std::vector<float> m((size_t)count); for (int i = 0; i < count; i++) m[i] = 0.5f * (lr[2 * i] + lr[2 * i + 1]); floatToPcm16(m.data(), m.size(), out); outCh = 1; }
