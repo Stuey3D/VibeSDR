@@ -3290,38 +3290,47 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "VibeServer: could not apply setting (%s)\n", err.c_str());
             return;
         }
-        // ★ Fold the result back into OUR radio's entry and nobody else's. `next` began as this
-        //   radio's effective settings, so copying the per-radio fields across is exactly right.
+        // ★ Fold the patch into OUR radio's entry and nobody else's.
+        /* ★★★ FROM THE FILE, NOT FROM THIS PROCESS'S COPY (Stuart's Pi 2, 2026-10-26: "Decode DAB+ audio with FAAD2"
+         *  unticked, saved, and back on FAAD2 after the restart). The setup page saves through the FRONT DOOR; this
+         *  radio's process still held the old value in g_runtimeConfig, and the next thing it persisted on its own — the
+         *  DAB block it was left on, written as the last listener left — copied EVERY per-radio field from that stale
+         *  copy back into the file. A writer touches only what its patch names (the rule the machine fields below
+         *  already follow): the radio's entry as it is on disk now, with the patch applied, is what gets folded.
+         *  g_runtimeConfig (this process's live view) still takes the patch too — see the end of this handler.
+         *  test: scripts/test-setup-dab-faad2.mjs */
         for (auto& r : srv.radios) {
             if (g_myRadioSerial.empty() || r.serial != g_myRadioSerial) continue;
-            r.mode = next.mode; r.freq = next.freq; r.rate = next.rate;
-            r.lockFreq = next.lockFreq; r.lockRate = next.lockRate;
-            r.gain = next.gain; r.lnaState = next.lnaState; r.ifGr = next.ifGr; r.ifAgc = next.ifAgc;
-            r.demodMode = next.demodMode; r.landingFreq = next.landingFreq;
-            r.dabChannel = next.dabChannel;   // the mux this radio was left on, so DAB survives a restart
-            r.dabSid = next.dabSid;           // ...and the station on it, so the resume plays it
-            r.landingDabChannel = next.landingDabChannel; r.landingDabSid = next.landingDabSid;
-            r.landingDabService = next.landingDabService;
-            r.landingAdsb = next.landingAdsb; r.adsbKeepRunning = next.adsbKeepRunning;
-            r.users = next.users; r.maxBw = next.maxBw; r.maxFps = next.maxFps;
-            r.fftRate = next.fftRate; r.uncompressed = next.uncompressed;
-            r.releaseWhenIdle = next.releaseWhenIdle;
-            r.idleGrace = next.idleGrace;
-            r.rfNotch = next.rfNotch; r.dabNotch = next.dabNotch; r.zoomSpectrum = next.zoomSpectrum;
-            r.biasT = next.biasT; r.ppm = next.ppm; r.ppb = next.ppb;
-            r.directSampling = next.directSampling; r.dabRateBoost = next.dabRateBoost; r.adsb256 = next.adsb256; r.dabFaad2 = next.dabFaad2;
-            r.rawIq = next.rawIq; r.rawIqMax = next.rawIqMax; r.rawIqLanMaxHz = next.rawIqLanMaxHz; r.nbWide = next.nbWide; r.vfoB = next.vfoB;
-            r.blockedModes = next.blockedModes;
-            r.antennaPort = next.antennaPort;   // ★ a listener's/admin's socket choice — was never folded (found 2026-10-09)
+            vsconfig::Config disk = vsconfig::effectiveFor(srv, r);
+            { std::string ignored; vsconfig::fromJson(patch, disk, ignored, /*validate=*/false); }
+            r.mode = disk.mode; r.freq = disk.freq; r.rate = disk.rate;
+            r.lockFreq = disk.lockFreq; r.lockRate = disk.lockRate;
+            r.gain = disk.gain; r.lnaState = disk.lnaState; r.ifGr = disk.ifGr; r.ifAgc = disk.ifAgc;
+            r.demodMode = disk.demodMode; r.landingFreq = disk.landingFreq;
+            r.dabChannel = disk.dabChannel;   // the mux this radio was left on, so DAB survives a restart
+            r.dabSid = disk.dabSid;           // ...and the station on it, so the resume plays it
+            r.landingDabChannel = disk.landingDabChannel; r.landingDabSid = disk.landingDabSid;
+            r.landingDabService = disk.landingDabService;
+            r.landingAdsb = disk.landingAdsb; r.adsbKeepRunning = disk.adsbKeepRunning;
+            r.users = disk.users; r.maxBw = disk.maxBw; r.maxFps = disk.maxFps;
+            r.fftRate = disk.fftRate; r.uncompressed = disk.uncompressed;
+            r.releaseWhenIdle = disk.releaseWhenIdle;
+            r.idleGrace = disk.idleGrace;
+            r.rfNotch = disk.rfNotch; r.dabNotch = disk.dabNotch; r.zoomSpectrum = disk.zoomSpectrum;
+            r.biasT = disk.biasT; r.ppm = disk.ppm; r.ppb = disk.ppb;
+            r.directSampling = disk.directSampling; r.dabRateBoost = disk.dabRateBoost; r.adsb256 = disk.adsb256; r.dabFaad2 = disk.dabFaad2;
+            r.rawIq = disk.rawIq; r.rawIqMax = disk.rawIqMax; r.rawIqLanMaxHz = disk.rawIqLanMaxHz; r.nbWide = disk.nbWide; r.vfoB = disk.vfoB;
+            r.blockedModes = disk.blockedModes;
+            r.antennaPort = disk.antennaPort;   // ★ a listener's/admin's socket choice — was never folded (found 2026-10-09)
             // ★★ AND THE REST OF THE RSP SWEEP (2026-10-22, the RSP setup audit): rsp_control persisted these three,
             //    and they were never folded into this radio's entry, so a toggle survived only until the next restart.
-            r.rspHdr = next.rspHdr; r.rspAmNotch = next.rspAmNotch; r.rspExtRef = next.rspExtRef;
+            r.rspHdr = disk.rspHdr; r.rspAmNotch = disk.rspAmNotch; r.rspExtRef = disk.rspExtRef;
             // ★ The converter travels with the rest of the per-radio set — it describes what is
             //   bolted to THIS radio's aerial, so it is saved exactly where the gain and the ppm
             //   are. Left out, the setup page would appear to accept it and lose it on save.
-            r.converterOffsetHz  = next.converterOffsetHz;
-            r.converterInputLoHz = next.converterInputLoHz;
-            r.converterInputHiHz = next.converterInputHiHz;
+            r.converterOffsetHz  = disk.converterOffsetHz;
+            r.converterInputLoHz = disk.converterInputLoHz;
+            r.converterInputHiHz = disk.converterInputHiHz;
             break;
         }
         // ★★★ AND THE MACHINE'S OWN SETTINGS BELONG TO THE MACHINE. The loop above folds this
