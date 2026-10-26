@@ -135,7 +135,7 @@ data signal at 7.0495 — nothing shown. Before the last two gates (below) both 
 
 ## Not done
 
-- **The app's PSK panel.** The gallery chip is there; the panel is not. It should be CW's (`CwView`, `cwList.ts`) with the
+- **The app's PSK panel** — BUILT 2026-10-26 (APP-PARITY-2026-10-26.md): as described here. The gallery chip was already there. It should be CW's (`CwView`, `cwList.ts`) with the
   mode where the WPM is, `psk`/`pskskim` in `DecoderClient`, `"psk"` from vibeserver.json, a 'centre' sent with the
   attach, and a tap that tunes USB with the signal in the middle of the passband — the web's `cwTune`/`decParams`.
 - **QPSK31** (G3PLX's QPSK with the rate-½ K=5 convolutional code and a Viterbi decoder): not built. It is rare on the air and

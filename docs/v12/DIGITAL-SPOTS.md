@@ -525,14 +525,16 @@ owner's `spotsband-psk,spotsband+wspr`. `test-web-spots` (31): six modes in the 
 idle, legend with T and P, 390 px, chips gone in Single. `test_digi_modes.ts`: styles, CVD distances, families.
 
 ## Not done / owed
-- **Band governor (2026-10-27):** the app (React Native) has no Band button, so no chips and no per-mode owner setting in
+- **Band governor (2026-10-27):** the app (React Native) now has the Band key and the chips (2026-10-26 parity pass) but no per-mode owner setting in
   its server screen (the setup page has it); a steady carrier holds a window open; Band's slice is not sized for the
   channeliser's flat half (above); the costVsFt8 figures are the Mac's (JTTY is relatively heavier on the Pi 2 build);
   the benchmark's Band row now includes JTTY (0.77 % on the Mac vs 0.12 % before) — a Pi 2 measuring it amber would
   start with Band off by the existing rule, although the governor keeps it in budget (rule left as it was; owner can tick).
-- **The app's own Band mode.** The app (React Native) has the map coloured by mode and the Mode column, but no Band
-  button and no band stepping yet. On a VibeServer it still subscribes to Single spots, as before. The web client is first,
-  as the brief says.
+- **The app's own Band mode** — BUILT 2026-10-26 (APP-PARITY-2026-10-26.md): SPOTS: BAND beside SPOTS: SINGLE in the
+  Mode sheet (absent / dimmed with why), band stepping on every tune gesture, the band's span drawn, the title naming the
+  band, the governor's chips, the MODE filter and the map legend from `spotModes` (`src/services/spotsBand.ts`,
+  scripts/test_spots_band_app.ts). Still owed in the app: the frequency readout naming the band (the web's cardFreqText),
+  and the owner's per-mode Band setting in the app's own server screen.
 - **Long press.** "Long press = exact frequency": the frequency box tunes exactly in Band. Holding an arrow repeats the
   band step (holdSweep). There is no separate long-press gesture.
 - **Map themes.** Light and dark are checked by contrast arithmetic. The spots window always renders the GPU map at night

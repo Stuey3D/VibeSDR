@@ -172,8 +172,8 @@ shows JTTY without knowing it.
 
 ## 5. Owed
 
-- **The app** (React Native): no JTTY view yet. The CW view's row/spot components fit almost as they are (the same JSON
-  shape minus WPM); the server side needs nothing more.
+- **The app** (React Native) — BUILT 2026-10-26 (APP-PARITY-2026-10-26.md): JttyView in the decoder box, the band keys
+  the radio reaches, tap = USB 1500 Hz below; `src/services/jtty.ts` held to the web's by scripts/test_psk_jtty_dsc_app.ts.
 - **Background decoding and the gallery**: not wired (a JTTY row in `vibe_bgdecode_config.h` and a summary tap like CW's).
 - **A JTTY skimmer** on IQ (a whole 24–96 kHz segment, as CW's): the engine takes any rate change of one line — its
   frequency search is already passband-wide; the host's IQ path would need a 12 kHz real-or-complex front end.

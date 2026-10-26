@@ -163,7 +163,9 @@ interleaver):
    `usacSamplingFrequency` (assumed). The xHE frames-per-super-frame count will settle it.
 3. **Multipath under fast fading** (channels 4/5) — see above.
 4. **Pulse interference** — subtraction instead of blanking (9720 kHz).
-5. **The app** (React Native) has no DRM mode or box yet. The status JSON and the decoders are ready for it:
+5. **The app** (React Native) — the mode and the box BUILT 2026-10-26 (APP-PARITY-2026-10-26.md: DrmPanel, drm.ts held
+   to drmRender by scripts/test_drm_app.ts); the audio is the server's, so it plays as any mode's. Still owed: the station
+   bar (VTS) showing the DRM label. The original note:
    AudioToolbox USAC on iOS, MediaCodec on Android. `vibe_drm_audiodec.h` compiles for Android (NDK armv7/arm64) but has
    not run on a device.
 6. **Not built:** spectrum occupancies 4/5 (18/20 kHz, unused on HF); multiple services (the first audio service is
