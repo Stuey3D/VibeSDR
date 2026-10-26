@@ -225,6 +225,7 @@ struct Opts {
     int         rawIq = 0, rawIqMax = 0; // raw IQ out — see RadioConfig::rawIq
     int         rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling — see RadioConfig::rawIqLanMaxHz
     int         nbWide = 1;              // wide impulse blanker — see RadioConfig::nbWide
+    int         vfoB = 1;                // ★★ V12 VFO A/B — see RadioConfig::vfoB
     std::string blockedModes;            // modes/decoders switched off — see Config::blockedModes
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
     int         decoderMax = -1;        // ★ --decoder-max: overrides ServerConfig::decoderMax (-1 = the config's)
@@ -620,7 +621,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.ifBwLimits = c.ifBwLimits;
     o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
     o.ifGrLimits = c.ifGrLimits; o.gainSplits = c.gainSplits; o.gainCurves = c.gainCurves;
-    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.adsb256 = c.adsb256; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanMaxHz = c.rawIqLanMaxHz; o.nbWide = c.nbWide;
+    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.adsb256 = c.adsb256; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanMaxHz = c.rawIqLanMaxHz; o.nbWide = c.nbWide; o.vfoB = c.vfoB;
     o.blockedModes = c.blockedModes;
     o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
     o.adminIdleMin    = c.adminIdleMin;
@@ -668,7 +669,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.ifBwLimits = o.ifBwLimits;
     c.gainLock = o.gainLock; c.gainLocks = o.gainLocks;
     c.ifGrLimits = o.ifGrLimits; c.gainSplits = o.gainSplits; c.gainCurves = o.gainCurves;
-    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.adsb256 = o.adsb256; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanMaxHz = o.rawIqLanMaxHz; c.nbWide = o.nbWide;
+    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.adsb256 = o.adsb256; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanMaxHz = o.rawIqLanMaxHz; c.nbWide = o.nbWide; c.vfoB = o.vfoB;
     c.blockedModes = o.blockedModes;
     c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
     c.adminIdleMin    = o.adminIdleMin;
@@ -1921,6 +1922,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerAdsb256(o.adsb256);
     LocalSdrShim::setVibeServerRawIq(o.rawIq, o.rawIqMax, o.rawIqLanMaxHz);
     LocalSdrShim::setVibeServerNbWide(o.nbWide);
+    LocalSdrShim::setVibeServerVfoB(o.vfoB != 0);
     LocalSdrShim::setVibeServerBlockedModes(o.blockedModes);
 
     // ── Channel method: decided ONCE, here, and never again while the process runs ──────────
@@ -3301,7 +3303,7 @@ int main(int argc, char** argv) {
             r.rfNotch = next.rfNotch; r.dabNotch = next.dabNotch; r.zoomSpectrum = next.zoomSpectrum;
             r.biasT = next.biasT; r.ppm = next.ppm; r.ppb = next.ppb;
             r.directSampling = next.directSampling; r.dabRateBoost = next.dabRateBoost; r.adsb256 = next.adsb256;
-            r.rawIq = next.rawIq; r.rawIqMax = next.rawIqMax; r.rawIqLanMaxHz = next.rawIqLanMaxHz; r.nbWide = next.nbWide;
+            r.rawIq = next.rawIq; r.rawIqMax = next.rawIqMax; r.rawIqLanMaxHz = next.rawIqLanMaxHz; r.nbWide = next.nbWide; r.vfoB = next.vfoB;
             r.blockedModes = next.blockedModes;
             r.antennaPort = next.antennaPort;   // ★ a listener's/admin's socket choice — was never folded (found 2026-10-09)
             // ★★ AND THE REST OF THE RSP SWEEP (2026-10-22, the RSP setup audit): rsp_control persisted these three,
