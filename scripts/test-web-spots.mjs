@@ -1,12 +1,13 @@
 // test-web-spots.mjs — V12 DIGITAL SPOTS IN THE WEB CLIENT, through a real vibeserver and the REAL built web page
 // (2026-10-26). A fake rtl_tcp replays the UTC-anchored 20 m clip (`test-digi-spots clip`: FT8, FT4, FT2 and JS8 stations
-// on their own dials); the server's dial is 20 m's Band centre. Headless Edge then:
+// on their own dials, and since 2026-10-27 a JTTY CQ and a PSK31 CQ); the server's dial is 20 m's Band centre. Headless Edge then:
 //   • both buttons are offered — DIGITAL SPOTS: SINGLE MODE and DIGITAL SPOTS: BAND (vibeserver.json lists 20 m);
 //   • BAND: the readout names the band ("20 m BAND"), the box title says so, and spots arrive in the list with a MODE
 //     column in each mode's colour and letter — FT8, FT4, FT2 and JS8 from their own dials;
 //   • the tuning arrow steps BANDS (20 m → 17 m: the dial moves to 17 m's centre, the readout follows) and back;
 //   • the MAP is coloured by MODE: every marker's fill and letter is its mode's (src/utils/digiModes.ts), and the legend
 //     lists the modes this server decodes;
+//   • the box header carries a chip per mode (V12 Band governor: active / light / idle / shed / off);
 //   • at PHONE WIDTH (390 px) nothing scrolls sideways; no exception on the page.
 //   Screenshots go to VIBE_SHOT_DIR (default: the OS temp folder).
 // ★ SILENT: headless Edge with --mute-audio and --disable-audio-output.
@@ -28,10 +29,12 @@ const EDGE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 const SHOTS = process.env.VIBE_SHOT_DIR || os.tmpdir();
 if (!BIN || !fs.existsSync(BIN) || !DIGI || !fs.existsSync(DIGI)) { console.log('   (not run — set VIBESERVER_BIN and VIBE_DIGI_BIN)'); process.exit(3); }
 if (!fs.existsSync(EDGE)) { console.log('   (not run — no Edge for the headless page)'); process.exit(3); }
-const RATE = 960000, CENTRE = 14085700;   // ★ 20 m's Band centre with FT8 + FT4 + FT2 + JS8 + WSPR registered
+const RATE = 960000, CENTRE = 14083700;   // ★ 20 m's Band centre with FT8 FT4 FT2 JS8 WSPR JTTY PSK registered
 // ★ The modes' styles, from the one table both clients draw with.
 const STYLE = { FT8: { colour: '#E69F00', letter: '8' }, FT4: { colour: '#56B4E9', letter: '4' },
-                FT2: { colour: '#F0E442', letter: '2' }, JS8: { colour: '#009E73', letter: 'J' }, WSPR: { colour: '#CC79A7', letter: 'W' } };
+                FT2: { colour: '#F0E442', letter: '2' }, JS8: { colour: '#009E73', letter: 'J' }, WSPR: { colour: '#CC79A7', letter: 'W' },
+                JTTY: { colour: '#FFFFFF', letter: 'T' }, PSK: { colour: '#AA3377', letter: 'P' } };   // ★ V12 2026-10-27
+const styleOf = (m) => STYLE[m] || STYLE[String(m).replace(/[0-9]+$/, '')];   // ★ PSK31 / PSK63 → PSK
 const styleSrc = fs.readFileSync(path.join(root, 'src/utils/digiModes.ts'), 'utf8');
 for (const [m, s] of Object.entries(STYLE)) if (!styleSrc.includes(`${m}: `) || !styleSrc.includes(`colour: '${s.colour}'`)) { console.log(`   FAIL the test's ${m} style is not digiModes.ts's`); process.exit(1); }
 
@@ -112,12 +115,12 @@ try {
   ok(await until(`document.getElementById('spotsBandBtn').classList.contains('on') && !document.getElementById('spotsBtn').classList.contains('on')`, 3000), 'BAND lit, SINGLE MODE not');
   ok(await until(`/20 M BAND/.test(document.getElementById('decTitle').textContent)`, 3000), `the box title: "${await ev(`document.getElementById('decTitle').textContent`)}"`);
   ok(await until(`/20 m BAND/.test((document.getElementById('mChan')||{}).textContent||'')`, 5000), `the readout names the band: "${await chan()}"`);
-  ok(await until(`['FT8', 'FT4', 'FT2', 'JS8'].every(md => [...document.querySelectorAll('#spotList .sres.spot .mode')].some(m => m.textContent.includes(md)))`, 60000),
-     `spots of all FOUR modes listed (${await ev(`[...document.querySelectorAll('#spotList .sres.spot')].map(r => r.querySelector('.mode').textContent + ' ' + r.querySelector('.call').textContent).join(', ')`)})`);
+  ok(await until(`['FT8', 'FT4', 'FT2', 'JS8', 'JTTY', 'PSK31'].every(md => [...document.querySelectorAll('#spotList .sres.spot .mode')].some(m => m.textContent.includes(md)))`, 60000),
+     `spots of all SIX modes on the air listed (JTTY and PSK31 among them) (${await ev(`[...document.querySelectorAll('#spotList .sres.spot')].map(r => r.querySelector('.mode').textContent + ' ' + r.querySelector('.call').textContent).join(', ')`)})`);
   const rows = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#spotList .sres.spot')].map(r => ({ mode: r.querySelector('.mode').textContent.replace(/^./, ''), letter: r.querySelector('.mode i').textContent,
       bg: getComputedStyle(r.querySelector('.mode i')).backgroundColor, call: r.querySelector('.call').textContent, band: r.querySelector('.band').textContent })))`));
   const hex = (c) => '#' + (c.match(/\d+/g) || []).slice(0, 3).map((x) => Number(x).toString(16).padStart(2, '0')).join('').toUpperCase();
-  ok(rows.length >= 6 && rows.every((r) => STYLE[r.mode] && r.letter === STYLE[r.mode].letter && hex(r.bg) === STYLE[r.mode].colour && r.band === '20m'),
+  ok(rows.length >= 8 && rows.every((r) => styleOf(r.mode) && r.letter === styleOf(r.mode).letter && hex(r.bg) === styleOf(r.mode).colour && r.band === '20m'),
      `every row's MODE column in its mode's colour and letter: ${rows.map((r) => `${r.mode}/${r.letter}/${hex(r.bg)} ${r.call}`).join(', ')}`);
   ok(!rows.some((r) => r.call === 'ZL3LSB'), 'the lower-sideband station is never listed');
   // ★ M7EIW: the time is HH:MM:SS UTC — the slot's start (FT8/JS8 :00/:15/:30/:45; FT4 7.5 s → :00/:07/:15/:22 …;
@@ -126,6 +129,15 @@ try {
   const onGrid = (m, t) => { const sec = Number(t.slice(6)) % 15; return m === 'FT8' || m === 'JS8' ? sec === 0 : m === 'FT4' ? sec === 0 || sec === 7 : m === 'FT2' ? [0, 3, 7, 11].includes(sec) : true; };
   ok(times.length >= 6 && times.every(([m, t]) => /^\d\d:\d\d:\d\d$/.test(t) && onGrid(m, t)),
      `every row's time is HH:MM:SS on its mode's slot grid: ${times.map(([m, t]) => m + ' ' + t).join(', ')}`);
+  // ★★ V12 BAND GOVERNOR: a chip per mode in the box header — its letter in its colour, and what it is doing
+  ok(await until(`document.querySelectorAll('#spotModeChips .smc').length === 7 && !document.getElementById('spotModeChips').hidden`, 20000),
+     `the mode chips: ${await ev(`[...document.querySelectorAll('#spotModeChips .smc')].map(c => c.textContent).join(' · ')`)}`);
+  const chips = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#spotModeChips .smc')].map(c => ({ m: c.dataset.mode, st: c.className.replace('smc ', ''),
+      l: c.querySelector('i').textContent, bg: getComputedStyle(c.querySelector('i')).backgroundColor, t: c.title })))`));
+  ok(chips.every((c) => styleOf(c.m) && c.l === styleOf(c.m).letter && hex(c.bg) === styleOf(c.m).colour && ['active', 'light', 'idle', 'shed', 'off'].includes(c.st) && c.t.length > 8),
+     `every chip in its mode's colour and letter, with a state and its words (${chips.map((c) => c.m + ':' + c.st).join(' ')})`);
+  ok(chips.some((c) => c.m === 'FT8' && (c.st === 'active' || c.st === 'light')) && chips.some((c) => c.m === 'WSPR' && c.st === 'idle'),
+     'FT8 (stations on air) decoding, WSPR (nothing in its window) idle');
   const shotBand = await shot('spots-band-desktop.png');
 
   console.log('── the arrows step bands ──');
@@ -151,12 +163,12 @@ try {
     await new Promise((r) => { mws.onopen = r; });
     const msend = (method, params = {}) => new Promise((res) => { const i = ++mid; mp.set(i, res); mws.send(JSON.stringify({ id: i, method, params })); });
     const mev = async (x) => (await msend('Runtime.evaluate', { expression: x, returnByValue: true })).result?.result?.value;
-    for (let i = 0; i < 40; i++) { if (await mev(`typeof spots !== 'undefined' && document.querySelectorAll('#legend .lrow[data-mode]').length >= 5`)) break; await sleep(250); }
+    for (let i = 0; i < 40; i++) { if (await mev(`typeof spots !== 'undefined' && document.querySelectorAll('#legend .lrow[data-mode]').length >= 7`)) break; await sleep(250); }
     const pts = JSON.parse(await mev(`JSON.stringify(spots.map(s => ({ m: s.mode, c: s.colour, l: s.letter })))`) || '[]');
-    ok(pts.length >= 3 && pts.every((p) => STYLE[p.m] && p.c.toUpperCase() === STYLE[p.m].colour && p.l === STYLE[p.m].letter),
+    ok(pts.length >= 3 && pts.every((p) => styleOf(p.m) && p.c.toUpperCase() === styleOf(p.m).colour && p.l === styleOf(p.m).letter),
        `every marker is its MODE's colour and letter (${pts.map((p) => `${p.m}:${p.c}:${p.l}`).join(' ')})`);
     const legend = JSON.parse(await mev(`JSON.stringify([...document.querySelectorAll('#legend .lrow[data-mode]')].map(r => ({ m: r.dataset.mode, l: r.querySelector('.mk').textContent, bg: getComputedStyle(r.querySelector('.mk')).backgroundColor })))`) || '[]');
-    ok(legend.map((x) => x.m).join(' ') === 'FT8 FT4 FT2 JS8 WSPR' && legend.every((x) => x.l === STYLE[x.m].letter && hex(x.bg) === STYLE[x.m].colour),
+    ok(legend.map((x) => x.m).join(' ') === 'FT8 FT4 FT2 JS8 WSPR JTTY PSK' && legend.every((x) => x.l === STYLE[x.m].letter && hex(x.bg) === STYLE[x.m].colour),
        `the legend lists the server's modes with their colours and letters (${legend.map((x) => `${x.m}/${x.l}/${hex(x.bg)}`).join(' ')})`);
     ok(/BY MODE/.test(await mev(`document.getElementById('stats').textContent`)), 'the stats panel counts BY MODE');
     // ★ On the GPU map the letter rides the circle layer (vibemapgl-compat 'lc-circle-labels'); on the Leaflet fallback (no
@@ -194,6 +206,7 @@ try {
   console.log('── back to SINGLE MODE ──');
   await ev(`document.getElementById('spotsBtn').click()`);
   ok(await until(`document.getElementById('spotsBtn').classList.contains('on') && !document.getElementById('spotsBandBtn').classList.contains('on')`, 3000), 'SINGLE MODE lit, BAND not');
+  ok(await ev(`document.getElementById('spotModeChips').hidden`), 'Single: the mode chips are gone (they are Band\'s)');
   ok(await until(`!/BAND/.test((document.getElementById('mChan')||{}).textContent||'') && document.getElementById('decTitle').textContent.includes('DIGITAL SPOTS') && !/BAND/.test(document.getElementById('decTitle').textContent)`, 8000),
      `the readout no longer names a band ("${await chan()}"); the box is "${await ev(`document.getElementById('decTitle').textContent`)}"`);
   await trustedClick('#mVfoUp');
