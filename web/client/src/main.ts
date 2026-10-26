@@ -763,6 +763,7 @@ async function loadAudioPolicy(httpBase: string) {
   adsbCap = null;              // ★ an older server (or no answer) draws no ADS-B control
   ismCap = null;               // ★ …nor an ISM one
   cwCap = false;               // ★ …nor a CW decoder
+  pskCap = false;              // ★ …nor a PSK one
   landingStepDone = false;
   firstConfigDone = false;
   try {
@@ -800,6 +801,9 @@ async function loadAudioPolicy(httpBase: string) {
     cwCap = j.cw === true;       // ★ CW (V12): this server's own decoder and skimmer
     { const b = document.querySelector('#decodersPanel [data-dec="cw"]') as HTMLElement | null;
       if (b) b.hidden = !cwCap || blockedModes.has('cw'); }
+    pskCap = j.psk === true;     // ★ PSK31/63 (V12): this server's own decoder and skimmer
+    { const b = document.querySelector('#decodersPanel [data-dec="psk"]') as HTMLElement | null;
+      if (b) b.hidden = !pskCap || blockedModes.has('psk'); }
     dabBoost = j.dabBoost === true;
     dabBoostUseful = j.dabBoostUseful === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
@@ -1861,7 +1865,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap);
       }
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
        *  DAB never produces a spot, so both buttons were dead weight there (Stuart, 2026-09-17).
@@ -3278,9 +3282,11 @@ function renderFrame(frameTs: number) {
    *  VFO should grow to 96KHz and be tunable"). The skimmer decodes cwWidth Hz centred on the dial, so that is the box
    *  drawn — drawn only, never sent: the listener's own CW passband is untouched and comes back when the skimmer closes.
    *  Tuning moves the dial as ever, and the server's skimmer follows it. */
-  const skim = activeDec === 'cw' && cwSkim;
-  wf.filterLow = skim ? -cwWidth / 2 : spec.bandwidthLow;
-  wf.filterHigh = skim ? cwWidth / 2 : spec.bandwidthHigh;
+  //   ★ The PSK skimmer's the same (V12 2026-10-26).
+  const skim = kbSkimOn();
+  const segW = activeDec === 'psk' ? pskWidth : cwWidth;
+  wf.filterLow = skim ? -segW / 2 : spec.bandwidthLow;
+  wf.filterHigh = skim ? segW / 2 : spec.bandwidthHigh;
   const measuring = isPerf();
   const t0 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL HOLD IS OFF. It froze the display while tuning (Stuart, 2026-08-10: "when I
@@ -10515,7 +10521,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | null = null;
 /* ★★ CW (V12, 2026-10-25) — the server's own decoder (decoders/cw_skimmer.h). ONE SIGNAL decodes this listener's
  *  passband ('cw', on their audio); SKIMMER every CW signal across a segment centred on the dial ('cwskim', on IQ). The
  *  box shows the primary signal's text (#decText, one-signal only) over the list of signals and the spots. Offered only
@@ -10525,9 +10531,28 @@ let cwSkim = false;
 let cwWidth = 48000;
 let cwLast: CwList | null = null;
 const cwSpotsSeen: CwSpot[] = [];
-/** The extension a decoder button attaches — CW's depends on its view. */
+/* ★★ PSK31/63 (V12, 2026-10-26) — the server's own (decoders/psk_skimmer.h), CW's two views exactly: ONE SIGNAL decodes
+ *  the passband ('psk' — the signal nearest the middle of it is the box's, a PSK program's cursor) and lists every PSK
+ *  signal in it; SKIMMER every one across a segment centred on the dial ('pskskim'). ONE list box serves both decoders
+ *  (#cwList — only one runs at a time): the same order, colours, spots and pinned view; PSK shows its mode where CW
+ *  shows its speed. Offered only where vibeserver.json says "psk": true. */
+let pskCap = false;
+let pskSkim = false;
+let pskWidth = 12000;
+/** A keyboard-mode list decoder (CW or PSK) is open. */
+function kbOn(): boolean { return activeDec === 'cw' || activeDec === 'psk'; }
+/** …and it is the SKIMMER view (its VFO is drawn as its segment). */
+function kbSkimOn(): boolean { return (activeDec === 'cw' && cwSkim) || (activeDec === 'psk' && pskSkim); }
+/** The middle of the listener's passband, audio Hz — ONE SIGNAL's cursor for PSK (USB 200–2800 → 1500). */
+function passbandCentreHz(): number {
+  if (!spec) return 1500;
+  const c = Math.abs((spec.bandwidthLow + spec.bandwidthHigh) / 2);
+  return c >= 300 && c <= 3500 ? Math.round(c) : 1500;
+}
+/** The extension a decoder button attaches — CW's and PSK's depend on their view. */
 function decExt(mode: string): Exclude<DecoderMode, null> {
   if (mode === 'cw') return cwSkim ? 'cwskim' : 'cw';
+  if (mode === 'psk') return pskSkim ? 'pskskim' : 'psk';
   return mode as Exclude<DecoderMode, null>;
 }
 function cwAge(ms: number): string {
@@ -10537,10 +10562,14 @@ function cwAge(ms: number): string {
 function cwFreq(sg: { hz: number; audio: number }): string {
   return sg.hz > 0 ? (sg.hz / 1e3).toFixed(2) : `${Math.round(sg.audio)} Hz`;
 }
-/** ★ Tap a row: tune to that signal in CW (a carrier on the dial is this server's CW tone). */
+/** ★ Tap a row: tune to that signal — CW in CW (a carrier on the dial is this server's CW tone); PSK in USB with the
+ *  signal in the middle of the passband (LSB if the listener is in LSB), so it is the one ONE SIGNAL decodes. */
 function cwTune(hz: number) {
   if (!spec || !(hz > 0)) return;
-  spec.tune(clampTune(Math.round(hz)), 'cwu', { recenter: true, retarget: true });
+  if (activeDec === 'psk') {
+    const lsb = spec.mode === 'lsb', c = lsb || spec.mode === 'usb' ? passbandCentreHz() : 1500;
+    spec.tune(clampTune(Math.round(lsb ? hz + c : hz - c)), lsb ? 'lsb' : 'usb', { recenter: true, retarget: true });
+  } else spec.tune(clampTune(Math.round(hz)), 'cwu', { recenter: true, retarget: true });
   renderFreq();
 }
 function renderCw() {
@@ -10556,8 +10585,10 @@ function renderCw() {
   rows.textContent = '';
   if (!l || !l.signals.length) {
     const d = document.createElement('div'); d.className = 'idle';
-    d.textContent = cwSkim ? 'listening across the segment — each CW signal appears here as it is decoded'
-                           : 'listening — tune a CW signal into the passband';
+    const psk = activeDec === 'psk', what = psk ? 'PSK' : 'CW';
+    d.textContent = (psk ? pskSkim : cwSkim) ? `listening across the segment — each ${what} signal appears here as it is decoded`
+                  : psk ? 'listening — every PSK signal in your passband appears here; the one in the middle is decoded above'
+                        : 'listening — tune a CW signal into the passband';
     rows.appendChild(d);
   }
   /* ★★ LOWEST FREQUENCY FIRST, ALWAYS (Stuart, 2026-10-25: "the CW Skimmer list likes to reorder itself a lot so I think
@@ -10568,16 +10599,20 @@ function renderCw() {
     const r = document.createElement('div');
     // ★ q-<confidence> colours the message (#cwList .cwr.q-low .tx …): red poor, orange low, amber medium, green high (Stuart).
     r.className = 'cwr q-' + sg.q + (sg.active ? '' : ' gone') + (!l!.skimmer && sg.id === l!.primary ? ' primary' : '');
+    // ★ PSK: its mode where CW has its speed, and its IMD (where measured) in the title
+    const psk = sg.baud !== undefined;
     r.innerHTML =
       `<span class="f">${escapeHtml(cwFreq(sg))}</span>` +
       `<span class="c${sg.call ? '' : ' none'}">${escapeHtml(sg.call || '—')}</span>` +
-      `<span class="w">${Math.round(sg.wpm)} wpm</span>` +
+      `<span class="w">${psk ? `PSK${sg.baud}` : `${Math.round(sg.wpm)} wpm`}</span>` +
       `<span class="s">${sg.snr >= 0 ? '+' : ''}${Math.round(sg.snr)} dB</span>` +
       `<span class="q ${sg.q}">${sg.q}</span>` +
       `<span class="a">${sg.active ? cwAge(sg.last) : cwAge(sg.last)}</span>` +
       `<span class="tx"><bdi>${escapeHtml(sg.text.trim())}</bdi></span>`;
     r.title = `${sg.call ? sg.call + (sg.country ? ' · ' + sg.country : '') + ' · ' : ''}${cwFreq(sg)}${sg.hz > 0 ? ' kHz' : ''} · `
-            + `${Math.round(sg.wpm)} WPM · SNR ${Math.round(sg.snr)} dB in the decoder's 47 Hz bin · ${sg.q} · `
+            + (psk ? `BPSK${sg.baud} · Es/N0 ${Math.round(sg.snr)} dB (in the baud rate's bandwidth) · `
+                     + (sg.imd ? `IMD ${Math.round(sg.imd)} dB · ` : '')
+                   : `${Math.round(sg.wpm)} WPM · SNR ${Math.round(sg.snr)} dB in the decoder's 47 Hz bin · `) + `${sg.q} · `
             + `${sg.active ? 'heard' : 'last heard'} ${cwAge(sg.last)} ago — tap to tune`;
     r.onclick = () => cwTune(sg.hz);
     rows.appendChild(r);
@@ -10596,8 +10631,8 @@ function renderCw() {
       `<span class="f">${escapeHtml(s.frequency > 0 ? (s.frequency / 1e3).toFixed(2) : `${Math.round(s.audio)} Hz`)}</span>` +
       `<span class="c">${escapeHtml(s.callsign)}</span>` +
       `<span class="ct">${escapeHtml(s.country)}</span>` +
-      `<span class="w">${Math.round(s.wpm)} wpm</span>`;
-    r.title = `${s.callsign} · ${s.how} · ${Math.round(s.snr)} dB — tap to tune`;
+      `<span class="w">${s.mode ? escapeHtml(s.mode.replace('BPSK', 'PSK')) : `${Math.round(s.wpm)} wpm`}</span>`;
+    r.title = `${s.callsign} · ${s.how}${s.mode ? ' · ' + s.mode : ''} · ${Math.round(s.snr)} dB — tap to tune`;
     r.onclick = () => cwTune(s.frequency);
     sp.appendChild(r);
   }
@@ -10622,7 +10657,7 @@ function cwPinWatch(body: HTMLElement | null) {
   cwPinBody = body;
   body.addEventListener('scroll', () => {
     if (cwPinSetting) { cwPinSetting = false; return; }   // ★ our own restore, not the listener
-    if (activeDec !== 'cw') { cwPinAt = null; return; }
+    if (!kbOn()) { cwPinAt = null; return; }
     cwPinAt = body.scrollTop > 0 ? cwHeadInBox(body, $('cwSpotsHead')) - body.scrollTop : null;
   }, { passive: true });
 }
@@ -10767,6 +10802,7 @@ function decParams(mode: string): Record<string, unknown> {
   }
   if (mode === 'time') return { station: timeStation };
   if (mode === 'cw') return cwSkim ? { width: cwWidth } : {};
+  if (mode === 'psk') return pskSkim ? { width: pskWidth } : { centre: passbandCentreHz() };
   return {};
 }
 
@@ -10848,7 +10884,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === 'navtex') { navtexAsm.lockState(st, Date.now()); renderNavtex(); return; }
       // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
-      decStateText = activeDec === 'cw' ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
+      decStateText = kbOn() ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
                    : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
       if (!decTuneHint) $('decStatus').textContent = decStateText;   // ★ the tuning guide, while up, IS the status
       setDecLive(!!st);
@@ -10901,9 +10937,10 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(true);
     },
     // ★★ CW: the list of signals, and the callsigns spotted (newest first; one row per call, the latest).
-    onCwSignals: (list) => { if (activeDec !== 'cw') return; cwLast = list; renderCw(); setDecLive(list.signals.some((x) => x.active)); },
+    //   (PSK's arrive here too, with its mode — decoders.ts; one list box serves both)
+    onCwSignals: (list) => { if (!kbOn()) return; cwLast = list; renderCw(); setDecLive(list.signals.some((x) => x.active)); },
     onCwSpot: (sp) => {
-      if (activeDec !== 'cw') return;
+      if (!kbOn()) return;
       const i = cwSpotsSeen.findIndex((o) => o.callsign === sp.callsign);
       if (i >= 0) cwSpotsSeen.splice(i, 1);
       cwSpotsSeen.unshift(sp);
@@ -10996,7 +11033,7 @@ function initDecoders(host: string, auth: AuthState) {
   //    semantics, same as the app). Selecting one opens the output box.
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk';
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
       decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
@@ -11064,6 +11101,21 @@ function initDecoders(host: string, auth: AuthState) {
   });
   segButtons('cwWidth', 'cwwidth', (v) => { cwWidth = Number(v) || 48000; cwHint(); if (cwSkim) { cwLast = null; renderCw(); reattachIf('cw'); } });
   cwHint();
+  // ★ PSK: the same two views and the skimmer's segment.
+  const pskHint = () => {
+    $('pskWidthRow').hidden = !pskSkim;
+    $('pskHint').innerHTML = pskSkim
+      ? `Every PSK31 and PSK63 signal ${pskWidth / 2000} kHz either side of your dial, decoded at once — tune the dial to `
+        + 'the middle of the PSK segment (e.g. <b>14.0715</b>). A call heard calling twice is spotted. Tap a row to tune to it.'
+      : 'Tune <b>USB</b> with the PSK segment in your passband (e.g. <b>14.070</b>): every PSK31/63 signal in it is listed, '
+        + 'and the one in the middle of the passband is decoded above. Tap a row to put it there.';
+  };
+  segButtons('pskView', 'pskview', (v) => {
+    pskSkim = v === 'skim'; pskHint();
+    if (activeDec === 'psk') { cwLast = null; showDecBox('psk'); reattachIf('psk'); }
+  });
+  segButtons('pskWidth', 'pskwidth', (v) => { pskWidth = Number(v) || 12000; pskHint(); if (pskSkim) { cwLast = null; renderCw(); reattachIf('psk'); } });
+  pskHint();
 
   // Spots + map.
   const spotsBtn = $<HTMLButtonElement>('spotsBtn');
@@ -11083,7 +11135,7 @@ function initDecoders(host: string, auth: AuthState) {
     $('decText').textContent = '';
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
-    if (activeDec === 'cw') { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
+    if (kbOn()) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
   };
   $('decPrev').onclick = () => (activeDec === 'navtex' ? toggleNavtexPrev() : toggleDecPrev());
   $('decSave').onclick = () => (activeDec === 'navtex' ? saveNavtex() : saveDecImage());
@@ -11427,7 +11479,7 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, 
 function anyDecoderLeft(): boolean {
   // ★ V12: CW counts only where this server has it (vibeserver.json "cw") — the button is hidden otherwise.
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
-    || (cwCap && !blockedModes.has('cw'));
+    || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk'));
 }
 
 function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
@@ -11447,6 +11499,7 @@ function syncDecButtons() {
   $('wefaxSettings').hidden = activeDec !== 'wefax';
   $('timeSettings').hidden = activeDec !== 'time';
   $('cwSettings').hidden = activeDec !== 'cw';
+  $('pskSettings').hidden = activeDec !== 'psk';
 }
 
 function showDecBox(what: string) {
@@ -11461,6 +11514,7 @@ function showDecBox(what: string) {
   $('decTitle').textContent = what === 'spots' ? 'FT8 / FT4 SPOTS'
                             : what === 'rds'   ? 'ADV RDS'
                             : what === 'cw'    ? (cwSkim ? 'CW SKIMMER' : 'CW')
+                            : what === 'psk'   ? (pskSkim ? 'PSK SKIMMER' : 'PSK')
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
@@ -11477,7 +11531,8 @@ function showDecBox(what: string) {
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
   // ★ CW: the list under the primary signal's text (ONE SIGNAL), or the list alone (SKIMMER — it is all list).
-  const isCw = what === 'cw';
+  const isCw = what === 'cw' || what === 'psk';   // ★ PSK's list is the same box
+  const listSkim = (what === 'cw' && cwSkim) || (what === 'psk' && pskSkim);
   $('cwList').classList.toggle('on', isCw);
   if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
@@ -11487,7 +11542,7 @@ function showDecBox(what: string) {
   $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
   // ★ Which decoders BIG should widen: the ones whose content is drawn at the box's width (SSTV,
   //   WEFAX) or written in long lines (the spot list). Text decoders get height instead.
-  $('decBox').classList.toggle('wide', image || isSpots || (isCw && cwSkim));
+  $('decBox').classList.toggle('wide', image || isSpots || listSkim);
   // ★★ THE SIZE TOGGLE IS FOR EVERY DECODER, not just Advanced RDS. It was gated on `isRds`, so
   //    the one panel whose whole point is a PICTURE — SSTV — had no way to be made bigger, and
   //    WEFAX and the spot list were stuck at one size too (Stuart). RDS keeps its own pair of
@@ -11495,7 +11550,7 @@ function showDecBox(what: string) {
   $('rdsSize').classList.toggle('show', true);
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
   applyRdsSize();
-  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || (isCw && cwSkim));
+  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || listSkim);
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the

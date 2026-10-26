@@ -4561,6 +4561,8 @@ select.btn { padding: 6px 8px; }
   <div class="btnRow">
     <button class="btn" data-dec="rtty">RTTY</button>
     <button class="btn" data-dec="cw" hidden title="Morse — the signal in your passband decoded, every other one in it listed; or SKIMMER: every CW signal across a segment around your dial">CW</button>
+    <!-- ★★ V12 2026-10-26: PSK31/63 — this server's own (decoders/psk_skimmer.h); drawn only where vibeserver.json says "psk": true. -->
+    <button class="btn" data-dec="psk" hidden title="PSK31 and PSK63 — every PSK signal in your passband listed, the one in the middle decoded; or SKIMMER: every PSK signal across a segment around your dial">PSK</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
     <button class="btn" data-dec="sstv">SSTV</button>
@@ -4616,6 +4618,27 @@ select.btn { padding: 6px 8px; }
     </div>
     <div class="hint" id="cwHint">Tune the signal in <b>CW</b> — the decoder finds the speed itself (5–60 WPM). A wider
       USB filter lists every CW signal inside it. Tap a row to tune to it.</div>
+  </div>
+
+  <!-- ★★ PSK31/63 (V12, 2026-10-26): ONE SIGNAL lists every PSK signal in your USB passband and decodes the one in the
+       middle of it; SKIMMER every PSK signal across a segment centred on your dial. One list box with CW's. -->
+  <div class="subPanel" id="pskSettings" hidden>
+    <div class="mrow">
+      <label>VIEW</label>
+      <div class="seg" id="pskView">
+        <button class="btn on" data-pskview="one" title="Your passband: every PSK signal in it listed, the one in the middle decoded">ONE SIGNAL</button>
+        <button class="btn" data-pskview="skim" title="Every PSK signal across a segment centred on your dial">SKIMMER</button>
+      </div>
+    </div>
+    <div class="mrow" id="pskWidthRow" hidden>
+      <label>SEGMENT</label>
+      <div class="seg" id="pskWidth">
+        <button class="btn" data-pskwidth="6000" title="3 kHz either side of the dial">6 kHz</button>
+        <button class="btn on" data-pskwidth="12000" title="6 kHz either side of the dial">12 kHz</button>
+        <button class="btn" data-pskwidth="24000" title="12 kHz either side of the dial">24 kHz</button>
+      </div>
+    </div>
+    <div class="hint" id="pskHint">Tune <b>USB</b> with the PSK segment in your passband (e.g. <b>14.070</b>).</div>
   </div>
 
   <div class="subPanel" id="rttySettings" hidden>
@@ -4748,6 +4771,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-kind="ft8">FT8</button>
     <!-- ★★ V12 2026-10-25: CW — a listener's decoded text (a run, as RTTY's) and the skimmer's spots summary cards. -->
     <button class="btn" data-kind="cw">CW</button>
+    <!-- ★★ V12 2026-10-26: PSK — a listener's decoded text and the skimmer's spots summary cards. -->
+    <button class="btn" data-kind="psk">PSK</button>
     <!-- ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card. -->
     <button class="btn" data-kind="ism">ISM</button>
   </div>
