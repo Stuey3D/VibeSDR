@@ -18,6 +18,8 @@ section: `DECODER-RESEARCH.md` §4.4.
   - one plain line for the signal: `Robustness B · 10 kHz · 16-QAM · rate 0.62 · long interleave`;
   - the codec;
   - when the server cannot play the codec, the server's own sentence saying why.
+- **The Signal pane** (2026-10-26) — the box's second view, behind **SIGNAL ▸** in its header (◂ STATION goes back),
+  on the web page and in the app. See [The Signal pane](#the-signal-pane-2026-10-26) below.
 - **The station bar (VTS)** carries the label and the text, with the service ID as the id, as for DAB.
 - **The bandwidth row is hidden in DRM.** The receiver cuts its own channel, so the slider would do nothing.
 - **Audio** replaces the AM detector's output, at the detector's own pace. It is buffered 0.8 s deep, because DRM
@@ -68,6 +70,146 @@ section: `DECODER-RESEARCH.md` §4.4.
    - SDC every super frame (CRC-16).
    - MSC through the cell deinterleaver and the multistage MLC decoder → logical frames → text message → audio
      framer.
+
+## The Signal pane (2026-10-26)
+
+DAB+'s advanced pane, for DRM (Stuart: "yes that is what we want"). The compact box stays the default; SIGNAL swaps it
+for the pane, and the key names where it goes (DAB's rule).
+
+**Where:**
+- Web: `web/client/src/drm.ts` `drmSignalRows` (the rows, as data) and `drmSignalRender`, with `main.ts` `drmSetPane`.
+  It uses `#dabSignal`'s CSS rules, so the amber label, white value, headings and traffic lights are DAB's. Rows are
+  patched in place, so a tooltip being read survives a report.
+- App: `src/services/drm.ts` `drmSignalRows` (the web's rows, held equal by `scripts/test_drm_app.ts`), drawn by
+  `DrmPanel` in DabPanel's row style.
+- Pad and keyboard:
+  - web: the box is a `[data-navbox]`. Before this it was a plain `.open` panel, which `gamepad.ts` treated as a scope of
+    its own with nothing in it, so the pad could reach nothing in DRM;
+  - app: the screen highlight lands on the box (`drmBox`); Enter takes the keys and walks SIGNAL · MIN and every row;
+    Back hands back. Unlike DAB's box it does not take the keys by itself, because in DRM the dial is still the radio's.
+- An older server sends none of the new fields, and rows it cannot fill are not drawn.
+
+**What it shows** (each row has a plain-English tooltip; in the app it is the accessibility hint):
+
+| Group | Rows |
+|---|---|
+| LOCK | lock state · seconds of signal to each of the six lights (time, frequency, frame, FAC, SDC, MSC) since this lock began · re-acquisitions, and which test lost the last one |
+| SIGNAL | robustness mode (with what it is for) · bandwidth and occupancy · guard interval · main channel QAM, code rate (and part A's) · service channel QAM, rate · interleaving |
+| QUALITY | SNR (FAC MER) · MSC MER and SDC MER, each judged by its QAM (about 8 dB decodes 16-QAM cleanly, 14 dB 64-QAM — RRI played without a bad frame at 7–9 dB) · frequency offset · sample clock · **delay spread** against the guard · **Doppler spread** · pulse blanker (last 5–10 s) |
+| ERRORS | FAC, SDC and audio frames as *errors*, not passes · concealed frames · audio gaps (buffer ran dry) · IQ gaps bridged · IQ dropped |
+| AUDIO | codec · SBR · parametric stereo · audio mode · sample rate · bit rate · decoder |
+| STATION | label · service id · programme type · language · country · station clock · text |
+
+**New report fields** (`vibe_drm_report.h`, new and optional; every old field is unchanged): `so`, `codeRateA`,
+`sdcRate`, `sdcMer`, `delayMs`, `dopplerHz`, `sbr`, `ps`, `underruns`, `sdcOk`, `sdcBad`, `superFrames`, `lockS[6]`,
+`reacq`, `lostWhy`, `lostAtS`, `blankedPct`, `iqGaps`. A value not measured yet is absent, never a placeholder.
+
+### Delay spread and Doppler — the method
+
+Both come from the channel estimate the equaliser already has (`drm_receiver.cpp`, `delayAccumulate` and
+`dopplerAccumulate`), on the `vibe-drm` thread.
+
+**Delay spread** — the RSCI's measure (TS 102 349 `rdel`): the shortest window holding 95 % of the power-delay
+profile's energy.
+- Every y-th symbol, the time-interpolated gain-reference columns (one every x carriers) are Hann-weighted and put
+  through one P-point FFT, P = Tu/x samples. That is the columns' alias-free span, ≥ 2·Tg in every mode.
+- |·|² is averaged over ~25 profiles (~2 s in mode B).
+- The noise floor (the profile's median) is subtracted, and bins under −30 dB of the peak count as nothing.
+- **The receiver's own resolution is removed:** the same chain fed an ideal one-path channel gives its 95 % width
+  (~1/bandwidth, widened by the window), and that width is subtracted. A clean channel reads 0, not 0.2 ms.
+- The window is not circular. It is unwrapped half a span either side of the timing loop's own centre, so the number
+  describes the paths where the receiver has put them.
+- **Limit:** the profile repeats every Tu/x samples. A spread over half of that (4.67 ms in mode D, 3.67 ms in C) reads
+  the other way round: in mode D, 5 ms apart is 4.33 ms the other way. To the pilots that is the same channel, and both
+  readings fit the guard.
+
+**Doppler spread** — 2σ of a Gaussian Doppler spectrum, annex B's definition.
+- A carrier's gain reference recurs every y symbols, so the ring holds its raw estimate at lags τ = y·Ts and 2τ.
+- Per symbol, R(τ) = Σ H(t)·H\*(t−τ) and R(2τ) over that symbol's references are normalised by their power and
+  averaged over ~3 s.
+- For a Gaussian spectrum, |R(τ)| ∝ exp(−2π²σ²τ²). White noise adds only to R(0), so the ratio
+  |R(2τ)|/|R(τ)| = exp(−6π²σ²τ²) is unbiased by noise. σ follows from it.
+- Ratios under 0.02 (fading too fast for these lags) read as the most the lags can tell: ~5.6 Hz in mode B.
+
+**Accuracy** (`vibeserver/test-drm-signal.cpp`):
+
+| Channel | Reads |
+|---|---|
+| One path, every mode, 12–30 dB | 0.00 ms |
+| Two fixed paths 0.5 / 1 / 2 / 3 / 4 ms apart (B), 1 / 2 ms (A), 2 / 4.5 ms (D), 12–30 dB | 0.46 / 0.96 / 1.96 / 2.96 / 3.96, 0.96 / 1.96, 1.96 / 4.46 ms (−0.04 ms bias, SNR-independent) |
+| Annex B channel 4 (2 ms, 1 Hz), channel 5 (4 ms, 2 Hz) | 1.96 ms, 3.96 ms |
+| Doppler 0.1 / 0.25 / 0.5 / 1 / 2 Hz (two Rayleigh paths, 3 seeds, 15 and 25 dB) | 0.14 / 0.20 / 0.48 / 0.95–0.96 / 2.10–2.15 Hz |
+| A static channel | 0.02 Hz |
+| **Real:** RRI 9570 kHz (150 s, Stuart's UberSDR) | delay 0.28–0.54 ms, Doppler 0.13–0.35 Hz, every 10 s |
+
+Below ~0.25 Hz the frequency-tracking loop (bandwidth ~0.3 Hz) takes some of the common phase, so 0.25 Hz reads 0.20
+and 0.1 reads 0.14. The pane shows "under 0.1 Hz" below that.
+
+**CPU:** not a hot loop, so no SIMD.
+- Per symbol: ~35 complex products in mode B. Every y-th symbol: one FFT of ≤ 256 points.
+- A/B with `VIBE_DRM_NOSTATS` on the Mac: the difference is under 0.01 % of a core (below the measurement's noise).
+
+### Two timing faults, found by the delay-spread test (2026-10-26)
+
+1. **A timing step moved the FFT window, but not the averaged delay profile that steers it.**
+   - The profile kept reporting the old position, so the loop stepped again on every symbol.
+   - The result was ~30 samples of overshoot on a static two-path channel, then a walk back.
+   - The wandering window smeared the profile it steered from. Both profiles now move with each step
+     (`applyStepToRing`).
+2. **In mode D the guard is most of the profile's span** (176 of 224), so two paths read either way round with equal
+   block energy.
+   - A noise-decided flip threw the window 108 samples.
+   - Fix: among blocks within 5 % of the strongest, the one nearest the window's centre wins.
+   - The block energies are now a sliding sum, O(P), and the extent centres come from next/previous-tap arrays.
+   - That made the receiver **cheaper** than before: mode B 0.46 → 0.38 %, mode D 0.40 → 0.30 % of a core.
+
+Effect on decoding (annex B channels, 8 seeds × 32 super frames at 22 dB, frames correct):
+
+| Channel | Before | After |
+|---|---|---|
+| D 16-QAM ch5 | 410 | 419 |
+| B 16-QAM ch5 | 117 | 124 |
+| B 16-QAM ch4 | 472 | 467 |
+| B 16-QAM ch3 | 675 | 673 |
+| A 64-QAM ch2 | 681 | 682 |
+
+RRI 9570 kHz reaches the MSC 1.2 s sooner (4.0 s).
+
+Also fixed:
+- `loseSync` now clears the timing profile. A re-acquisition used to be steered by the old window's profile.
+- The pulse blanker's mean now warms up over 10 ms. It began from one sample's power and blanked the first 100 ms of
+  every lock (10 % of the first second); the first lights now come 0.4 s sooner.
+
+### The flaky `test-server-drm` — found and fixed
+
+**Symptom:** ~3 runs in 10 heard silence in the 8 s audio window. FAC failures climbed; no queue drops were logged.
+
+**How it was found:**
+- `VIBE_DRM_DUMP=<dir>` (a diagnostic; off unless set) writes the IQ blocks a DRM listener is fed.
+- Replayed offline, a failing run failed the same way, deterministically. So the fault was in the IQ, not the thread.
+- Aligning a failing range-locked dump against a shared-dial one showed the lag jumping by exactly **384 samples**
+  (one whole block, 10.7 ms at 36 kHz) four or five times a run.
+
+**Cause:**
+- A range-locked listener's DSP thread is fed through ~40 ms of slack (`handBlockToListeners`). When it is
+  descheduled, its oldest blocks are dropped. On this Mac several agents' builds were running beside the test.
+- Audio shrugs a 10 ms hole off. OFDM loses its frame alignment: 16 FACs fail and the lock goes.
+- **Every** range-locked run lost the lock at ~11–13 s. A run *failed* only when the audio window fell on the
+  re-acquisition. The shared dial has no such queue, which is why only that scenario failed.
+
+**Fix:**
+- The listener thread already knew (a jump in the channelizer's block index). It now calls `DrmListener::noteGap`,
+  which fills the hole with as many zero samples.
+- The timeline keeps its alignment, and the missing cells equalise to zero weight: erasures, which the interleaver and
+  the Viterbi absorb.
+- Synthetic, 10 holes: un-bridged, 4 re-acquisitions and 17/120 frames; bridged, 0 and 110/120.
+- Server: 0 losses of sync in 12 runs since (it was every range-locked run). The test now asserts the lock held.
+- The Signal pane counts the holes ("IQ gaps bridged").
+- **Not bridged:** holes the radio itself reports (`blk->gap`, from the USB side). Their length is unknown, so the
+  receiver re-acquires as before.
+
+The harness had a second, unrelated race: a free port taken before the server bound it ("port already in use"). It now
+starts again on fresh ports.
 
 ## Codecs — the honest position
 
@@ -133,12 +275,12 @@ interleaver):
       which caps MER at ~4 dB.
     - The pulses are 0.93-coherent shot to shot, so per-pulse template subtraction is the next step.
   - **RRI 5910 and 13750 kHz:** nothing receivable at the time (noise).
-- **Through the real server** (`scripts/test-server-drm.mjs`, 22 checks): a fake rtl_tcp replays RRI 9570 kHz, made
+- **Through the real server** (`scripts/test-server-drm.mjs`, 46 checks since the Signal pane): a fake rtl_tcp replays RRI 9570 kHz, made
   by `scripts/drm-clip.py`.
   - Tested on a one-pipeline radio and on a range-locked one.
   - Checked: the offer, the lock, the label, mode/QAM, the codec, the sentence for AAC, all six lights, audio never
     stalling, and the reports stopping on leaving DRM.
-- **Web** (`scripts/test-web-drm.mjs`, headless Edge `--mute-audio`, 16 checks):
+- **Web** (`scripts/test-web-drm.mjs`, headless Edge `--mute-audio`, 35 checks since the Signal pane):
   - the picker offers DRM, and the box fills with the label, lights, signal line, SNR, codec and why;
   - the VTS label appears, and the width row hides and returns;
   - at 390 px nothing scrolls sideways;
@@ -146,7 +288,10 @@ interleaver):
 
 ## CPU per DRM listener
 
-- **Mac (measured):** 0.4 % of one core, synthetic 64-QAM, every mode, full decode. 0.53 % for the real RRI file at
+- **Since 2026-10-26** (the Signal pane's statistics included, the timing loop's block scan made O(P)): mode A 0.37 %,
+  B 0.38 %, D 0.30 % of one Mac core, synthetic 64-QAM. The statistics add < 0.01 %. Pi 2 estimate by the same
+  25–40× ratio as below: ~8–15 % of one core.
+- **Mac (measured, before):** 0.4 % of one core, synthetic 64-QAM, every mode, full decode. 0.53 % for the real RRI file at
   48 kHz input, including the 48 → 24 kHz resampler. The scalar build costs the same; the SIMD kernels are a small
   share.
 - **Pi 2 (estimated, not measured):** Cortex-A7 at 900 MHz is ~25–40× slower per core, so **~10–20 % of one of its four
@@ -163,7 +308,7 @@ interleaver):
    `usacSamplingFrequency` (assumed). The xHE frames-per-super-frame count will settle it.
 3. **Multipath under fast fading** (channels 4/5) — see above.
 4. **Pulse interference** — subtraction instead of blanking (9720 kHz).
-5. **The app** (React Native) — the mode and the box BUILT 2026-10-26 (APP-PARITY-2026-10-26.md: DrmPanel, drm.ts held
+5. **The app** (React Native) — the mode, the box and (2026-10-26) the Signal pane BUILT (APP-PARITY-2026-10-26.md: DrmPanel, drm.ts held
    to drmRender by scripts/test_drm_app.ts); the audio is the server's, so it plays as any mode's. Still owed: the station
    bar (VTS) showing the DRM label. The original note:
    AudioToolbox USAC on iOS, MediaCodec on Android. `vibe_drm_audiodec.h` compiles for Android (NDK armv7/arm64) but has

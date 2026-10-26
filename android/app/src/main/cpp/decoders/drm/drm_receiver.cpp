@@ -664,13 +664,19 @@ void Receiver::equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W
         for (int st = 0; st < P; ++st) { blockE[size_t(st)] = e; e += pdp_[size_t((st + tg_) % P)] - pdp_[size_t(st)]; }
     }
     const double bestE = *std::max_element(blockE.begin(), blockE.end());
-    // ★ the centre of a block's EXTENT (first to last tap within 15 dB of its strongest), not its power centroid: a power
-    //   centroid swings toward whichever path is up, and the window would chase the fading out of the guard
+    // ★ the centre of a block's EXTENT (first to last tap within 15 dB of the strongest), not its power centroid: a power
+    //   centroid swings toward whichever path is up, and the window would chase the fading out of the guard.
+    //   O(P) for every block at once: for each position, the nearest tap above the threshold at or after it (nxt) and at or
+    //   before it (prv), over the profile laid out twice so a block may wrap. (The threshold is the strongest tap's — the
+    //   blocks that compete below all hold it.)
+    const double pkAll = *std::max_element(pdp_.begin(), pdp_.end());
+    std::vector<int> nxt(static_cast<size_t>(2 * P + 1)), prv(static_cast<size_t>(2 * P));
+    nxt[size_t(2 * P)] = 1 << 29;
+    for (int i = 2 * P - 1; i >= 0; --i) nxt[size_t(i)] = pdp_[size_t(i % P)] > 0.03 * pkAll ? i : nxt[size_t(i + 1)];
+    for (int i = 0, last = -(1 << 29); i < 2 * P; ++i) { if (pdp_[size_t(i % P)] > 0.03 * pkAll) last = i; prv[size_t(i)] = last; }
     auto centreOf = [&](int st) {
-        double pk = 0; for (int i = 0; i < tg_; ++i) pk = std::max(pk, double(pdp_[size_t((st + i) % P)]));
-        int first = -1, last = -1;
-        for (int i = 0; i < tg_; ++i) if (pdp_[size_t((st + i) % P)] > 0.03 * pk) { if (first < 0) first = i; last = i; }
-        double c = st + (first >= 0 ? 0.5 * (first + last) : tg_ / 2.0);
+        const int f = nxt[size_t(st)], l = prv[size_t(st + tg_ - 1)];
+        double c = f <= st + tg_ - 1 && l >= st ? 0.5 * (f + l) : st + tg_ / 2.0;
         // wrap into (−P/2, P/2] about the target
         while (c - windowMargin() > P / 2.0) c -= P;
         while (c - windowMargin() <= -P / 2.0) c += P;
