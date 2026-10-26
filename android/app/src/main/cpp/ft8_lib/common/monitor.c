@@ -106,6 +106,8 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 {
     float slot_time = (cfg->protocol == FTX_PROTOCOL_FT4) ? FT4_SLOT_TIME : FT8_SLOT_TIME;
     float symbol_period = (cfg->protocol == FTX_PROTOCOL_FT4) ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
+    if (cfg->symbol_period > 0) symbol_period = cfg->symbol_period;   // VibeSDR (2026-10-26): FT2, JS8
+    if (cfg->slot_time > 0) slot_time = cfg->slot_time;
     // Compute DSP parameters that depend on the sample rate
     me->block_size = (int)(cfg->sample_rate * symbol_period); // samples corresponding to one FSK symbol
     me->subblock_size = me->block_size / cfg->time_osr;
@@ -180,6 +182,8 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 
     waterfall_init(&me->wf, max_blocks, num_bins, cfg->time_osr, cfg->freq_osr);
     me->wf.protocol = cfg->protocol;
+    me->wf.time_min = cfg->time_min;
+    me->wf.time_max = cfg->time_max;
 
     me->symbol_period = symbol_period;
 

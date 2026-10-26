@@ -253,7 +253,6 @@ private:
         Vessel& v = ships_[m.mmsi];
         if (v.count == 0) { v.mmsi = m.mmsi; v.first = t; }
         ++v.count; v.last = t; v.ch = ch; v.level = f.levelDb; v.snr = f.snrDb;
-        const char* what = nullptr; midOf(m.mmsi, &what);
         switch (m.type) {
             case 1: case 2: case 3: case 5: v.kind = "A"; break;
             case 18: case 19: case 24: v.kind = "B"; break;
@@ -262,7 +261,7 @@ private:
             case 9: v.kind = "sar"; break;
             default: break;
         }
-        if (what && (std::strcmp(what, "AIS-SART") == 0 || std::strcmp(what, "man overboard") == 0 || std::strcmp(what, "EPIRB-AIS") == 0)) v.kind = "sart";
+        if (isBeacon(m.mmsi)) v.kind = "sart";
         if (m.type == 12 || m.type == 14) {
             Safety s{t, m.mmsi, displayName(v), m.text, m.type == 12 ? m.destMmsi : 0};
             safety_.push_back(s);

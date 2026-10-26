@@ -52,9 +52,10 @@ static std::vector<cf> synth(const std::vector<Sig>& sigs, double rate, double l
     }
     return x;
 }
-static std::vector<Reading> runFront(const std::vector<cf>& x, double rate, std::vector<Burst>* bursts = nullptr) {
+static std::vector<Reading> runFront(const std::vector<cf>& x, double rate, std::vector<Burst>* bursts = nullptr, double chanRate = 0) {
     FrontEnd fe(rate);
     fe.setDcGuardHz(15e3);
+    if (chanRate > 0) { fe.setChanRate(chanRate); fe.setKeepBaseband(true); }   // ★ the 868 band's wider channel (V12 wM-Bus)
     std::vector<Reading> out;
     auto on = [&](const Burst& b) { if (bursts) bursts->push_back(b); Service::decodeBurst(b, 433.92e6, out); };
     for (size_t i = 0; i < x.size(); i += 16384) fe.feed(x.data() + i, std::min<size_t>(16384, x.size() - i), on);
@@ -316,6 +317,17 @@ int main(int argc, char** argv) {
             CHECK(approx(r->freqHz, 433.92e6 + 120e3, 12e3), "%s: frequency %.0f", c.name, r->freqHz);
             printf("   %-22s → %s\n", c.name, readable(*r, 1).c_str());
         }
+    }
+    /* ★★ V12 wM-Bus (2026-10-26): the 868 band's burst channel is ~500 kS/s now (FrontEnd::setChanRate) and the slicer's
+     *  smoothing is in µs — every family must slice through it exactly as it does at 250 k. All of them, not only the
+     *  868 ones: the slicer is the same code. */
+    printf(" end to end through the 868 band's ~500 kS/s channel\n");
+    for (auto& c : cases) {
+        const auto x = synth({c.s}, 2.4e6, 0.95, 0.02, 1);
+        const auto got = runFront(x, 2.4e6, nullptr, 500e3);
+        const Reading* r = findModel(got, c.model);
+        CHECK(r != nullptr, "%s: not decoded through the 480 kS/s channel (%zu readings)", c.name, got.size());
+        if (r && c.temp == c.temp) CHECK(approx(r->tempC, c.temp, 0.051), "%s (480 k): %.2f °C, want %.2f", c.name, r->tempC, c.temp);
     }
     // the TPMS B values exactly
     {

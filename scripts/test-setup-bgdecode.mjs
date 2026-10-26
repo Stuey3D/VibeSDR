@@ -49,14 +49,14 @@ ok(api.bgCollect() === JSON.stringify(NICK), `saved back unchanged: ${api.bgColl
 // the decoders offered follow the demodulator
 const row2 = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
 const [md, dc] = row2.children.filter((e) => e.tag === 'select');
-ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96',
-   'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8 and the CW skimmers (24/48/96 kHz)');
+ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96,aprs-hf,dsc',
+   'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8, the CW skimmers (24/48/96 kHz), HF APRS and DSC');
 md.value = 'lsb'; md.onchange();
 ok(!dc.children.some((o) => o.value === 'wefax' || o.value === 'sstv' || o.value === 'ft8' || o.value.startsWith('cw-skim')) && dc.value === 'navtex',
    'LSB offers only NAVTEX and RTTY (no negative charts), and keeps NAVTEX');
 ok(api.model().profiles[0].vfos[1].mode === 'lsb' && !row2.text().includes('Listening for'), '...the VFO is LSB now, and still no hint line');
 md.value = 'nfm'; md.onchange();
-ok(dc.children.map((o) => o.value).join() === 'sstv' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers only SSTV, and the VFO becomes SSTV');
+ok(dc.children.map((o) => o.value).join() === 'sstv,aprs,dsc-vhf' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers SSTV, APRS and DSC (VHF channel 70), and the VFO becomes SSTV');
 
 // ★ V12 CW: the page's decoder list mirrors the server's (vibe_bgdecode_config.h decoders()) — id, label, demodulators
 {
@@ -80,6 +80,35 @@ buttons().filter((e) => e.textContent === 'Remove')[2].onclick();
 ok(api.model().profiles[0].vfos.length === 2, 'Remove takes it away');
 buttons().filter((e) => e.textContent === 'Delete profile')[1].onclick();
 ok(api.model().profiles.length === 1 && api.model().profiles[0].from === '18:00', 'Delete profile removes that profile only');
+
+// ★★ V12 DSC WATCH: the DSC frequencies this radio's window hears around the profile's centre, as VFOs, in one press
+{
+  const watch = (radio) => {
+    api.bgLoad({ ...radio, bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 0, from: '00:00', to: '00:00', vfos: [{ hz: 0, mode: 'usb', dec: 'navtex' }] }] }) });
+    const b = box.all().find((e) => e.tag === 'button' && e.textContent === '+ DSC watch');
+    if (!b) return null;
+    b.onclick();
+    return api.model().profiles[0];
+  };
+  // an RTL at 2.4 MS/s (±1.15 MHz, the server's own window rule): two neighbouring HF frequencies — 2187.5 and 4207.5
+  let p = watch({ driver: 'rtlsdr', rate: 2400000 });
+  ok(p && p.vfos.length === 2 && p.vfos.every((v) => v.dec === 'dsc' && v.mode === 'usb') && p.vfos[0].hz === 2185800 && p.vfos[1].hz === 4205800
+     && Math.abs(p.centre - 3197500) <= 1000, `2.4 MS/s: 2185.8 and 4205.8 kHz USB around a 3.198 MHz centre (${p && JSON.stringify(p.vfos)} @ ${p && p.centre})`);
+  ok(/fall outside this radio’s ±1\.15 MHz window/.test(box.text()), 'and it says the others need a profile of their own');
+  // an Airspy HF+ at 768 kS/s (±0.33 MHz): one frequency, and no channel 70 promised
+  p = watch({ driver: 'airspyhf', rate: 768000 });
+  ok(p && p.vfos.length === 1, `768 kS/s: one DSC VFO (${p && JSON.stringify(p.vfos)})`);
+  // an RSP at 10 MS/s (±4.95 MHz): 2187.5 / 4207.5 / 6312 kHz in one window
+  p = watch({ driver: 'sdrplay', rate: 10000000 });
+  ok(p && p.vfos.length >= 3 && p.vfos.every((v) => v.dec === 'dsc') && p.vfos.some((v) => v.hz === 4205800) && p.vfos.some((v) => v.hz === 6310300),
+     `10 MS/s: several DSC VFOs in one window (${p && p.vfos.map((v) => v.hz / 1e3).join(', ')} kHz)`);
+  ok(!JSON.parse(api.bgCollect()).profiles[0].__dscMsg, 'the page\'s note on what was added is not saved');
+  // a VHF-capable radio centred on channel 70
+  api.bgLoad({ driver: 'rtlsdr', rate: 2400000, bgDecode: JSON.stringify({ on: true, waitMin: 5, profiles: [{ centre: 156800000, from: '00:00', to: '00:00', vfos: [{ hz: 0, mode: 'usb', dec: 'navtex' }] }] }) });
+  box.all().find((e) => e.tag === 'button' && e.textContent === '+ DSC watch').onclick();
+  p = api.model().profiles[0];
+  ok(p.vfos.length === 1 && p.vfos[0].hz === 156525000 && p.vfos[0].mode === 'nfm' && p.vfos[0].dec === 'dsc-vhf', `centred on 156.8 MHz: channel 70 in NFM (${JSON.stringify(p.vfos)})`);
+}
 
 // off with nothing set stores nothing; an Icom does not get the control
 api.bgLoad({ driver: 'rtlsdr', bgDecode: '' });

@@ -26,7 +26,7 @@ Branch `v12-ais-aprs` (from `v12-experimental`). Two VHF data decoders that shar
 Built from the published documents, written fresh: **ITU-R M.1371-5** (Annex 2: GMSK BT 0.4, 9600 bit/s, NRZI, HDLC,
 training sequence; Annex 8: the message table), **ISO/IEC 13239** (HDLC framing, the FCS-16), **AX.25 v2.2** (TAPR) and
 the **APRS Protocol Reference 1.0.1** (TAPR) with the 1.1 addenda (`!DAO!`, base-91 Mic-E altitude). The MID table is
-ITU's (MARS / RR Appendix 43), facts only. GPL decoders were read for behaviour only; no code, table or structure was
+ITU's (M.585 / MARS) — `vibe_maritime_mid.h`, the ONE table DSC and AIS share. GPL decoders were read for behaviour only; no code, table or structure was
 copied. The APRS **symbols are our own drawings** (`tracks.ts APRS_GLYPH`): no third-party symbol artwork is used, so
 there is no licence to carry.
 
@@ -197,7 +197,10 @@ can draw an hour of a ship's path the moment it is tapped; cutting `kTrailMax` h
 
 **Real signals:** Stuart's UberSDR covers HF only, so **no real VHF AIS or 1200 Bd APRS could be tested here** — the
 engines are proven on the published worked examples (gpsd AIVDM, APRS 1.0.1) and synthetic signals built from the
-standards. HF APRS (300 Bd, 30 m) was recorded from the UberSDR: see `~/VibeSDR-test-audio/aprs/` and the result below.
+standards. **HF APRS (300 Bd) is real:** ten minutes of 30 m (10.1476 MHz USB) recorded from the UberSDR on 2026-10-26
+(`~/VibeSDR-test-audio/aprs/hf-aprs-30m-10147.6-usb.wav`, 14 MB) decode to **2 packets, both from F5NVY** (an HF
+gateway beacon, compressed position, and a Mic-E jeep, "Off Duty") — **a single balanced slicer on the same audio finds
+0**: the extra tunings and balances are what caught them. Replay: `test-aprs --wav <file> 300`.
 
 ## Not done / owed
 

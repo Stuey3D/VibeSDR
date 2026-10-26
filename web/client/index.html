@@ -2617,6 +2617,27 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #aprsMsgs .m, #aprsLog .p { font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; padding: 1px 6px; color: rgba(255,255,255,0.82);
                             white-space: pre-wrap; word-break: break-word; }
 #aprsLog .p .t { color: rgba(255,255,255,0.45); }
+/* ★★ V12 DSC (dsc.ts): one row per call — time, frequency, ×repeats, then the line; coloured by what the call is. */
+#dscList { display: none; margin-top: 6px; }
+#dscList.on { display: block; }
+#dscList .idle { color: var(--text-dim); padding: 6px 2px; }
+#dscList .dscr { padding: 5px 6px; border-left: 3px solid transparent; border-radius: 3px; margin-bottom: 3px; }
+#dscList .dscr .h { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; font-size: 11px; }
+#dscList .dscr .t, #dscList .dscr .f { color: var(--unit); font-variant-numeric: tabular-nums; }
+#dscList .dscr .f { color: var(--freq); }
+#dscList .dscr .x { color: var(--text); font-weight: bold; }
+#dscList .dscr .ck { color: var(--text-dim); font-style: italic; }
+#dscList .dscr .l { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+#dscList .dscr .dscMap { margin-left: auto; padding: 1px 8px; font-size: 11px; }
+#dscList .dscr.distress { border-left-color: #FF4B4B; background: rgba(255,75,75,0.12); }
+#dscList .dscr.distress .l { color: #FF6B6B; font-weight: bold; }
+#dscList .dscr.urgency { border-left-color: #FF8A3D; background: rgba(255,138,61,0.08); }
+#dscList .dscr.urgency .l { color: #FF9D5C; }
+#dscList .dscr.safety { border-left-color: #E8C547; }
+#dscList .dscr.unconf { opacity: 0.7; }
+#galList .sres.galDistress { border-left: 3px solid #FF4B4B; background: rgba(255,75,75,0.10); }
+#galList .sres.galUrgency { border-left: 3px solid #FF8A3D; }
+#galList .sres .galMap { margin-left: auto; align-self: center; padding: 1px 8px; font-size: 11px; }
 #cwList { display: none; margin-top: 6px; }
 #cwList.on { display: block; }
 #cwList .cwr { display: grid; grid-template-columns: 6.2em minmax(4.5em, 1fr) 4.8em 4.2em 4.4em 3.4em; gap: 2px 8px;
@@ -2892,9 +2913,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    COUNTRY sat at a fixed 2.6em and collided with the distance. Country is the
    variable-length field, so that's the one that should flex — and it ellipsises
    rather than overrunning its neighbour. */
+/* ★ V12: a MODE column after the time — the mode's own colour and letter, as on the map (src/utils/digiModes.ts). */
 #spotList .sres.spot {
   display: grid;
-  grid-template-columns: 3.2em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;
+  grid-template-columns: 3.2em 3.9em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;
   gap: 8px; align-items: baseline; font-size: 11px; padding: 4px 6px;
 }
 #spotList .cty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2913,6 +2935,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 #spotList .t { color: var(--unit); font-variant-numeric: tabular-nums; }
 #spotList .band { color: var(--text-dim); }
+#spotList .mode { white-space: nowrap; font-weight: bold; }
+/* ★ Band spots greyed with the server's reason (the owner's switch, the benchmark's default) — never hidden. */
+#spotsBandBtn.dis { opacity: 0.45; }
+#spotList .mode i { display: inline-block; width: 1.25em; height: 1.25em; line-height: 1.25em; border-radius: 50%;
+                    text-align: center; font-style: normal; font-size: 9px; margin-right: 3px; vertical-align: 1px;
+                    box-shadow: 0 0 0 1px #1a1a1a; }
 #spotList .snr { text-align: right; font-variant-numeric: tabular-nums; }
 #spotList .snr.pos { color: #55d98d; }
 #spotList .snr.neg { color: rgba(255,160,0,0.65); }
@@ -3634,6 +3662,8 @@ select.btn { padding: 6px 8px; }
     <div id="cwList"><div id="cwRows"></div><div id="cwSpotsHead">SPOTS</div><div id="cwSpots"></div></div>
     <!-- ★★ V12 APRS: the stations heard, the messages, and the packets as they arrive. -->
     <div id="aprsList"><div id="aprsRows"></div><div class="aprsHead" id="aprsMsgHead" hidden>MESSAGES</div><div id="aprsMsgs"></div><div class="aprsHead">PACKETS</div><div id="aprsLog"></div></div>
+    <!-- ★★ DSC: the calls, newest first — the server's line, coloured by distress / urgency / safety / routine (dsc.ts). -->
+    <div id="dscList"><div id="dscRows"></div></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
          health. The VTS bar hides while this is open — no point showing the same data
          twice, and this is the surface the user deliberately chose. -->
@@ -4583,6 +4613,8 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 APRS — this server's own decoder on your audio: 1200 Bd packet on NFM (VHF), or 300 Bd HF packet on USB. -->
     <button class="btn" data-dec="aprs" hidden title="APRS — stations, positions, weather and messages: 1200 Bd packet in NFM (VHF), or 300 Bd HF packet in USB/LSB">APRS</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
+    <!-- ★★ V12 DSC: maritime Digital Selective Calling (ITU-R M.493) — decoded on the server; hidden unless it says "dsc". -->
+    <button class="btn" data-dec="dsc" hidden title="Maritime Digital Selective Calling — distress, urgency, safety and routine calls between ships and coast stations (MF/HF and VHF channel 70)">DSC</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
     <button class="btn" data-dec="sstv">SSTV</button>
     <!-- ★ The LF time signals. The title says CW because that is the mode that works: the carrier
@@ -4651,6 +4683,16 @@ select.btn { padding: 6px 8px; }
     <div class="mrow"><button class="btn" id="aprsTune" title="Tune this region's APRS channel">TUNE 144.800 NFM</button></div>
     <div class="hint" id="aprsHint">Every station heard is listed, with its position, weather, messages and the digipeater
       that carried it. <b>MAP</b> in the box shows them on the map.</div>
+  <!-- ★★ DSC (V12, 2026-10-26): the DSC distress and safety frequencies, tuned as a DSC receiver does (USB 1.7 kHz below,
+       or channel 70 in NFM) — only those this radio reaches are drawn (main.ts initDscChannels). -->
+  <div class="subPanel" id="dscSettings" hidden>
+    <div class="mrow">
+      <label>CHANNEL</label>
+      <div class="seg" id="dscChans"></div>
+    </div>
+    <div class="hint" id="dscHint">Tune a DSC frequency in <b>USB</b> with the dial 1.7 kHz below it (2185.8 for
+      2187.5 kHz) — or press a channel. Channel 70 (156.525 MHz) is <b>NFM</b>. 8414.5 kHz is the busiest by day,
+      2187.5 kHz at night. Each call is shown as it is decoded; a position sent gets <b>MAP</b>.</div>
   </div>
 
   <div class="subPanel" id="rttySettings" hidden>
@@ -4756,12 +4798,18 @@ select.btn { padding: 6px 8px; }
   <!-- ★ One section, one switch: the owner's "Digital spots / map" entry hides the whole of it. -->
   <div id="spotsSection">
   <h2>DECODED SPOTS</h2>
+  <!-- ★★ V12 (2026-10-26): TWO WAYS TO SPOT. SINGLE MODE is the button there always was — the mode(s) at your dial,
+       cheap, any server. BAND reads a whole band's digital frequencies at once, every mode on its own dial; the arrows then
+       step BANDS (2200 m … 10 m, 6 m, 4 m, 2 m, 70 cm), the readout names the band and the drawn VFO is the band's span.
+       Band is shown only where this radio reaches a band; greyed with the server's reason where the owner has it off. -->
   <div class="btnRow">
-    <button class="btn" id="spotsBtn">DIGITAL SPOTS</button>
+    <button class="btn" id="spotsBtn" title="The digital modes at your dial (FT8 and FT4 on your passband)">DIGITAL SPOTS: SINGLE MODE</button>
+    <button class="btn" id="spotsBandBtn" title="A whole band's digital frequencies at once — every mode on its own dial" hidden>DIGITAL SPOTS: BAND</button>
     <button class="btn" id="mapBtn" title="Opens in a new tab">&#128506; MAP</button>
   </div>
+  <div class="lbl wrap" id="spotsBandWhy" style="margin-top:6px" hidden></div>
   <div class="lbl wrap" style="margin-top:6px">
-    Decoding runs on the server. Tap a spot to tune.
+    Decoding runs on the server. Tap a spot to tune. In BAND the tuning arrows step bands; type a frequency for an exact one.
   </div>
   </div>
 </div>
@@ -4788,6 +4836,8 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12: AIS (ships) and APRS (stations) — each a day's log of messages and a summary card of who was heard. -->
     <button class="btn" data-kind="ais">AIS</button>
     <button class="btn" data-kind="aprs">APRS</button>
+    <!-- ★★ V12 2026-10-26: DSC — each frequency's day of calls as a .txt, and every distress/urgency call on its own (MAP). -->
+    <button class="btn" data-kind="dsc">DSC</button>
   </div>
   <div id="galList"></div>
   <!-- ★ V12 beta 4: pages (main.ts renderGalleryPager) — "‹ Newer · 1 … 6 7 8 … 14 · Older ›", "Page 7 of 14". -->

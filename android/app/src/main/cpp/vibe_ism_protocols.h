@@ -14,10 +14,13 @@
 #include "vibe_ism.h"
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace vibeism {
+
+namespace wmbus { struct Meter; }   // vibe_wmbus.h
 
 /** What a decoder heard, in the units it reads in. NAN / -1 = not carried. */
 struct Reading {
@@ -37,6 +40,8 @@ struct Reading {
     std::string extra;       ///< a reading in words, shown in the line ("13 bucket tips", "pairing", "new battery")
     double freqHz = 0;       ///< filled by the service: the burst's frequency
     float levelDb = -99, snrDb = 0;
+    /** ★ V12 kind "meter" only (vibe_wmbus.h): what the meter's frame said — never its encrypted bytes. */
+    std::shared_ptr<const wmbus::Meter> meter;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

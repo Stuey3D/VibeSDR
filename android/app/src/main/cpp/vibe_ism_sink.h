@@ -14,11 +14,14 @@ namespace vibeism {
 /** One reading the device list counted as NEW (Tracker::accept returned true — a repeat of the same line inside 3 s is
  *  not one). */
 struct Heard {
-    std::string kind;     ///< weather | tpms | keyfob | suspectfob | doorbell | sensor | energy
+    std::string kind;     ///< weather | tpms | keyfob | suspectfob | doorbell | sensor | energy | meter
     std::string name;     ///< "Oregon Scientific THGR810" / "TPMS #2"
     std::string line;     ///< the list's readable line, the server's units (metric, PSI) — what every client shows by default
     double freqHz = 0;    ///< the burst's frequency
     bool secret = false;  ///< a kind whose identity never leaves the Tracker (its name is the nickname)
+    /** ★ V12 meters (kind "meter"): the line WITHOUT its signal and interval — the meter's own news. The day's log writes a
+     *  meter only when this changes, or once per 15 minutes (vibe_ism_gallery.h). Empty for every other kind. */
+    std::string core;
 };
 
 /** ★ Called on the ISM decoder's OWN thread (never the DSP thread): heard() for each new reading, tick() about once a

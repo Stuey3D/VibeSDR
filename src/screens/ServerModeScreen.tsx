@@ -26,9 +26,12 @@ const BLOCKABLE: { id: string; label: string }[] = [
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },
   { id: 'ft8', label: 'FT8 / FT4' }, { id: 'time', label: 'Time signals' },
   { id: 'spots', label: 'Digital spots / map' },
+  // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
+  { id: 'spotsband', label: 'Digital spots: Band' },
 ];
-/** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). */
-const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds'];
+/** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). Band spots
+ *  need IQ, which an Icom's audio is not. */
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds', 'spotsband'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
@@ -446,10 +449,20 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
      *  make it more accurate and reference grade"). Advanced RDS now runs a dedicated measurement path (MpxMeasure);
      *  on a box near its limit it skips blocks to protect audio, so the figures update unevenly. Only GREEN keeps it;
      *  amber is off as well as red. The same rule is in vibe_setup_page.h benchApplyDefaults — keep them in step. */
-    if (rdsx && rdsx.grade !== 'green' && rdsx.grade !== 'none' && !/(^|,)rds(,|$)/.test(blockedModes)) {
-      const next = blockedModes ? blockedModes + ',rds' : 'rds';
-      setBlockedModes(next); AsyncStorage.setItem(K.blockedModes, next);
+    // ★ One running list: two switches turned off by the same measurement must not overwrite each other.
+    let bm = blockedModes;
+    if (rdsx && rdsx.grade !== 'green' && rdsx.grade !== 'none' && !/(^|,)rds(,|$)/.test(bm)) {
+      bm = bm ? bm + ',rds' : 'rds';
+      setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm);
       notes.push(`Advanced RDS is off — it measured ${Math.round(rdsx.pct)}% of a core here, and it only runs where it can measure to reference standard.`);
+    }
+    /* ★★ V12 BAND SPOTS — the same rule as vibe_setup_page.h benchApplyDefaults (ONE RULE, TWO READERS): only a GREEN box
+     *  offers "Digital spots: Band" by default. The owner can always switch it back on. */
+    const band = row('dec_ft8band');
+    if (band && band.grade !== 'green' && band.grade !== 'none' && !/(^|,)spotsband(,|$)/.test(bm)) {
+      bm = bm ? bm + ',spotsband' : 'spotsband';
+      setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm);
+      notes.push(`Digital spots: Band is off — a busy band measured ${Math.round(band.pct)}% of a core here. Switch it on to offer it anyway.`);
     }
     if (scan && scan.grade === 'red' && dabScanLabels === 1) {
       setDabScanLabels(0); AsyncStorage.setItem(K.dabScanLabels, '0');

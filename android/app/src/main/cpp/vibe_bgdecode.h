@@ -32,6 +32,7 @@
 #include "vibe_decoder_host.h"
 #include "vibe_gallery.h"
 #include "vibe_station_log.h"      // ★ V12 APRS: the day's packets + the station card (StationTap)
+#include "vibe_dsc_gallery.h"
 #include "vibe_png.h"
 #include "vibe_callsign_country.h"
 #include "vibedsp/vibedsp.h"
@@ -208,6 +209,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "wefax" || ext == "sstv") return ext;
     if (ext == "cw") return "cw";          // ★ a listener's CW decoder: its text, as an RTTY run (a skimmer keeps a summary)
     if (ext == "aprs") return "aprs";      // ★ V12: the day's packets + a summary card of stations (vibe_station_log.h)
+    if (ext == "dsc") return "dsc";        // ★ DSC: the day's log per frequency + an item per distress/urgency call
     return "";
 }
 
@@ -382,6 +384,9 @@ inline double greatCircleKm(double la1, double lo1, double la2, double lo2) {
 struct Ft8Tally {
     static constexpr size_t kMaxCalls = 20000;
     unsigned long spots = 0, ft8 = 0, ft4 = 0;
+    /** ★★ V12 2026-10-26: spots per MODE ("FT8", "FT4", "WSPR", "JS8", "FT2" …) — Band mode reads several at once, and the
+     *  cards name them (Stuart: the summary cards carry the mode). ft8/ft4 above are kept as the two always shown. */
+    std::map<std::string, unsigned long> byMode;
     /** ★ V12 2026-10-25: the same tally serves the CW summary — no FT8/FT4 split, no grids, and two lines of its own
      *  (the most-heard call, the busiest 1 kHz of the band). */
     bool cw = false;
@@ -393,9 +398,11 @@ struct Ft8Tally {
     double farKm = 0;
     std::string farCall, farGrid, farCountry;
     /** `km`: from this server to the call's own grid, NaN when either is unknown. */
-    void add(bool isFt4, const std::string& call, const std::string& grid, const std::string& ctry, double km,
+    void add(const std::string& mode, const std::string& call, const std::string& grid, const std::string& ctry, double km,
              double rfHz = NAN, double wpm = 0) {
-        ++spots; (isFt4 ? ft4 : ft8)++;
+        ++spots;
+        if (mode == "FT4") ++ft4; else if (mode == "FT8") ++ft8;
+        if (!cw && byMode.size() < 32) byMode[mode]++;
         if (cw) {
             if (callSpots.size() < kMaxCalls || callSpots.count(call)) callSpots[call]++;
             if (std::isfinite(rfHz) && rfHz > 0) khzSpots[(long)std::floor(rfHz / 1000.0)]++;
@@ -408,6 +415,19 @@ struct Ft8Tally {
         if (!ctry.empty()) countrySpots[ctry]++;
         // ★ The furthest is a station with a valid call, ITS valid grid, and a country we can name — never "country unknown".
         if (!ctry.empty() && !grid.empty() && std::isfinite(km) && km > farKm) { farKm = km; farCall = call; farGrid = grid; farCountry = ctry; }
+    }
+    /** The modes heard, most spots first (ties by name). */
+    std::vector<std::pair<unsigned long, std::string>> modesByCount() const {
+        std::vector<std::pair<unsigned long, std::string>> v;
+        for (const auto& kv : byMode) v.push_back({ kv.second, kv.first });
+        std::sort(v.begin(), v.end(), [](const auto& a, const auto& c) { return a.first != c.first ? a.first > c.first : a.second < c.second; });
+        return v;
+    }
+    /** "FT8+FT4" — the card's title names the modes it counts. "" when none. */
+    std::string modesLabel() const {
+        std::string o;
+        for (const auto& e : modesByCount()) { if (!o.empty()) o += "+"; o += e.second; }
+        return o;
     }
     std::string mostHeard(unsigned long* n = nullptr) const {
         std::string best; unsigned long bn = 0;
@@ -448,7 +468,10 @@ struct Ft8Tally {
             const long k = busiestKhz(&n);
             if (n) { std::snprintf(b, sizeof b, "Busiest:           %ld\xe2\x80\x93%ld kHz (%lu spots)\n", k, k + 1, n); o += b; }
         } else {
-        std::snprintf(b, sizeof b, "Spots heard:       %lu (FT8 %lu, FT4 %lu) from %zu stations\n", spots, ft8, ft4, calls.size());
+        // ★ FT8 and FT4 always (the Single-mode pair, as the card always read); any other mode heard after them.
+        std::string per = "FT8 " + std::to_string(ft8) + ", FT4 " + std::to_string(ft4);
+        for (const auto& kv : modesByCount()) if (kv.second != "FT8" && kv.second != "FT4") per += ", " + kv.second + " " + std::to_string(kv.first);
+        std::snprintf(b, sizeof b, "Spots heard:       %lu (%s) from %zu stations\n", spots, per.c_str(), calls.size());
         o += b;
         }
         std::snprintf(b, sizeof b, "Countries:         %zu\n", countrySpots.size());
@@ -508,20 +531,24 @@ public:
         if (meta_.liveCountries) meta_.liveCountries->store(0, std::memory_order_relaxed);
     }
     ~Ft8SummaryTap() override { finish(true); }
-    void spot(bool ft4, const std::string& call, const std::string& gridIn, int snr, double rfHz) override {
+    void spot(const std::string& mode, const std::string& call, const std::string& gridIn, int snr, double rfHz) override {
         (void)snr;
         if (cw_) return;
         // ★★ beta 4: only a real CALLSIGN is a spot, and only a real grid is its position (ft8IsCallsign / ft8IsGrid).
         if (!ft8IsCallsign(call)) return;
-        add(ft4, call, ft8IsGrid(gridIn) ? gridIn : std::string(), rfHz, 0);
+        add(mode.empty() ? std::string("FT8") : mode, call, ft8IsGrid(gridIn) ? gridIn : std::string(), rfHz, 0);
+    }
+    /** The pre-V12 form (FT8 or FT4) — the tests and spotText. */
+    void spot(bool ft4, const std::string& call, const std::string& gridIn, int snr, double rfHz) {
+        spot(std::string(ft4 ? "FT4" : "FT8"), call, gridIn, snr, rfHz);
     }
     /** ★ A CW spot — the call was already checked by the skimmer (cw::isCallsign); CW carries no grid. */
     void cwSpot(const std::string& call, double rfHz, float wpm, float snrDb, const std::string& how) override {
         (void)snrDb; (void)how;
         if (!cw_ || !ft8IsCallsign(call)) return;
-        add(false, call, std::string(), rfHz, wpm);
+        add("CW", call, std::string(), rfHz, wpm);
     }
-    void add(bool ft4, const std::string& call, const std::string& grid, double rfHz, double wpm) {
+    void add(const std::string& mode, const std::string& call, const std::string& grid, double rfHz, double wpm) {
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;
         const int64_t t = now();
@@ -529,8 +556,9 @@ public:
         const std::string ctry = callsign::country(call);
         double la, lo, km = NAN;
         if (!grid.empty() && std::isfinite(lat_) && std::isfinite(lon_) && gridToLatLon(grid, la, lo)) km = greatCircleKm(lat_, lon_, la, lo);
-        hour_.add(ft4, call, grid, ctry, km, rfHz, wpm);
-        recent_.push_back({ t, ft4, call, grid, ctry, km, rfHz, wpm });
+        hour_.add(mode, call, grid, ctry, km, rfHz, wpm);
+        recent_.push_back({ t, mode, call, grid, ctry, km, rfHz, wpm });
+        if (!cw_ && runModes_.size() < 32) runModes_[mode]++;
         if (recent_.size() > kMaxRecent) recent_.pop_front();
         lastSpot_ = t; rollDirty_ = true;
         ++runSpots_;
@@ -569,7 +597,7 @@ public:
     std::string text(int64_t to) const { std::lock_guard<std::mutex> lk(m_); return hourText(to); }
 
 private:
-    struct Recent { int64_t t; bool ft4; std::string call, grid, ctry; double km, rf, wpm; };
+    struct Recent { int64_t t; std::string mode, call, grid, ctry; double km, rf, wpm; };
     int64_t now() const { return clock_ ? clock_() : gallery::nowUtc(); }
     std::string where() const {
         if (cw_) {
@@ -579,11 +607,31 @@ private:
                  + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
                  + (meta_.profile.empty() ? std::string() : " (" + meta_.profile + ")") + "\n";
         }
+        // ★★ V12: Band mode's card says so — one card for the whole band, every mode on it.
+        if (meta_.decoder == "ft8band") {
+            const digi::Band* b = digi::bandAt(meta_.freqHz);
+            return std::string("Digital spots summary \xc2\xb7 Band ") + (b ? b->name : gallery::freqText(meta_.freqHz).c_str()) + " \xc2\xb7 "
+                 + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
+                 + (meta_.profile.empty() ? std::string() : " (" + meta_.profile + ")") + "\n";
+        }
         return "FT8 / FT4 summary \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " USB \xc2\xb7 "
              + (meta_.origin == "background" ? "background decoding" : "a listener's decoder")
              + (meta_.profile.empty() ? std::string() : " (" + meta_.profile + ")") + "\n";
     }
     bool havePos() const { return std::isfinite(lat_) && std::isfinite(lon_); }
+    /** ★★ THE CARD'S TITLE NAMES ITS MODES (V12, 2026-10-26): "FT8", "FT8+FT4", "WSPR+FT8" — what this stretch heard, most
+     *  first. A stretch that heard nothing is named by the run's modes so far, else "FT8" (what it always said). CW: "CW". */
+    std::string labelFor(const Ft8Tally& t) const {
+        if (cw_) return label_;
+        std::string l = t.modesLabel();
+        if (l.empty()) {
+            std::vector<std::pair<unsigned long, std::string>> v;
+            for (const auto& kv : runModes_) v.push_back({ kv.second, kv.first });
+            std::sort(v.begin(), v.end(), [](const auto& a, const auto& c) { return a.first != c.first ? a.first > c.first : a.second < c.second; });
+            for (const auto& e : v) { if (!l.empty()) l += "+"; l += e.second; }
+        }
+        return l.empty() ? label_ : l;
+    }
     std::string hourText(int64_t to) const {
         const int64_t mins = (to - hourFrom_ + 30) / 60;
         const bool whole = hourFrom_ % kHourSec == 0 && to - hourFrom_ >= kHourSec;
@@ -603,7 +651,7 @@ private:
         gallery::Meta m = meta_;
         m.utc = hourFrom_;
         m.partial = !(hourFrom_ % kHourSec == 0 && to - hourFrom_ >= kHourSec);
-        m.title = label_ + " " + gallery::utcStamp(hourFrom_, "%H:%M") + "\xe2\x80\x93" + gallery::utcStamp(to, "%H:%M UTC") + " \xc2\xb7 " + hour_.headline();
+        m.title = labelFor(hour_) + " " + gallery::utcStamp(hourFrom_, "%H:%M") + "\xe2\x80\x93" + gallery::utcStamp(to, "%H:%M UTC") + " \xc2\xb7 " + hour_.headline();
         store_.add(m, "txt", hourText(to));
     }
     void trim(int64_t t) {
@@ -614,7 +662,7 @@ private:
         rollWrite_ = t; rollDirty_ = false;
         if (recent_.empty() && rollName_.empty() && lastSpot_ == 0) return;   // ★ never heard anything: no card
         Ft8Tally w; w.cw = cw_;
-        for (const auto& r : recent_) w.add(r.ft4, r.call, r.grid, r.ctry, r.km, r.rf, r.wpm);
+        for (const auto& r : recent_) w.add(r.mode, r.call, r.grid, r.ctry, r.km, r.rf, r.wpm);
         const int64_t from = std::max(start_, t - kWindowSec);
         gallery::Meta m = meta_;
         m.utc = from;
@@ -625,11 +673,11 @@ private:
         else body += "The last 10 minutes: " + gallery::utcStamp(from, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + to + " (refreshed every minute; the hourly cards are the record)\n\n";
         if (w.spots) {
             body += w.figures(havePos());
-            m.title = label_ + " last 10 min" + (last ? " to " + to : std::string()) + " \xc2\xb7 " + w.headline();
+            m.title = labelFor(w) + " last 10 min" + (last ? " to " + to : std::string()) + " \xc2\xb7 " + w.headline();
         } else {
             const std::string ls = lastSpot_ ? gallery::utcStamp(lastSpot_, "%H:%M UTC") : std::string();
             body += "Nothing heard in the last 10 minutes" + (ls.empty() ? std::string() : " (the last spot was at " + ls + ")") + ".\n";
-            m.title = label_ + " last 10 min" + (last ? " to " + to : std::string()) + " \xc2\xb7 nothing heard"
+            m.title = labelFor(w) + " last 10 min" + (last ? " to " + to : std::string()) + " \xc2\xb7 nothing heard"
                     + (ls.empty() ? std::string() : " since " + gallery::utcStamp(lastSpot_, "%H:%M"));
         }
         if (rollName_.empty()) rollName_ = store_.adoptSlot(m);
@@ -653,6 +701,7 @@ private:
     std::string rollName_;
     uint64_t runSpots_ = 0;
     std::set<std::string> runCountries_;
+    std::map<std::string, unsigned long> runModes_;   // ★ spots per mode this run (the title of a quiet stretch)
 };
 
 /** ★★ V12 APRS in the gallery: the decoder host's station lines into a day log + summary card (vibe_station_log.h). One
@@ -689,6 +738,7 @@ inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& met
                                     std::function<void(const std::string&)> log = nullptr, const std::string& tag = "") {
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
     if (meta.kind == "aprs") return std::make_shared<StationTap>(st, meta);
+    if (meta.kind == "dsc") return std::make_shared<DscGalleryTap>(st, meta, std::move(dial));
     if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
         if (log) t->setLog(std::move(log), tag);
@@ -887,6 +937,9 @@ public:
             env.slots = p_.slots;
             const double dialHz = c->vfo.hz;
             env.dialHz = [dialHz] { return dialHz; };
+            // ★ An audio tone → RF by the VFO's sideband (DSC names the frequency it heard: 2185.8 USB + 1700 = 2187.5).
+            const bool lsbV = c->vfo.mode == "lsb";
+            env.rfOfAudio = [dialHz, lsbV](double a) { return lsbV ? dialHz - a : dialHz + a; };
             if (p_.store) {
                 gallery::Store* st = p_.store;
                 const Vfo v = c->vfo; const int pi = p_.profileIdx;
@@ -918,7 +971,7 @@ public:
                     m.lastItemAt = last2; m.liveSpots = ls; m.liveCountries = lc;
                     return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
                 };
-                env.spotTap = [st, v, pi, la, lo, lo2, last2, ls, lc]() -> DecoderTapPtr {
+                env.spotTap = [st, v, pi, la, lo, lo2, last2, ls, lc](bool) -> DecoderTapPtr {
                     gallery::Meta m;
                     m.kind = "ft8"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "ft8";
                     m.profile = "Profile " + std::to_string(pi + 1);
