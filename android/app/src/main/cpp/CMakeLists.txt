@@ -58,6 +58,7 @@ target_compile_definitions(vibedsp PRIVATE
 # Opens an RTL-SDR from a USB fd via librtlsdr (rtlsdr_open_sys_dev), runs the
 # vibedsp engine, and serves the UberSDR protocol over net_shim. ft8_lib (kgoba,
 # MIT) provides the FT8/FT4 core with its own self-contained KISS FFT.
+file(GLOB DIGIMODE_SRC CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/decoders/digimodes/*.cpp")
 file(GLOB FT8_LIB_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/ft8/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/fft/kiss_fft.c"
@@ -152,6 +153,11 @@ add_library(vibelocalsdr SHARED
     decoders/time_decoder.cpp
     decoders/cw_skimmer.cpp
     decoders/dsc_decoder.cpp
+    # ★ V12: digital spots (decoders/digi_mode.h) + every mode engine in decoders/digimodes/ (globbed)
+    decoders/digi_modes.cpp
+    decoders/digi_tuner.cpp
+    decoders/digi_spotter.cpp
+    ${DIGIMODE_SRC}
     ${FT8_LIB_SRC})
 set_target_properties(vibelocalsdr PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 # ★ -std=c++17 on the C++ sources ONLY: the target also carries vendored C (libairspyhf, libhackrf)

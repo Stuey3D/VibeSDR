@@ -59,7 +59,8 @@ export interface CwList { skimmer: boolean; centre: number; width: number; prima
 export interface CwSpot { callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number }
 
 export interface Spot {
-  mode: 'FT8' | 'FT4';
+  /** ★ V12: any mode the server decodes ("FT8", "FT4", "WSPR", "JS8", "FT2" …) — vibeserver.json `spotModes`. */
+  mode: string;
   callsign: string;
   snr: number;
   frequency: number;   // RF Hz (dial + audio offset, computed server-side)
@@ -156,6 +157,8 @@ export class DecoderClient {
   /** What's attached — REQUIRED to parse frames (0x01 is ambiguous). */
   private mode: DecoderMode = null;
   private spotsOn = false;
+  /** ★ V12: 'single' (the listener's audio, FT8 + FT4 as ever) or 'band' (the band's IQ slice, every mode on its dial). */
+  private spotScope: 'single' | 'band' = 'single';
   /** connect() has been called (the page is live) — the socket itself opens only when wanted, see _sync. */
   private enabled = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -223,7 +226,7 @@ export class DecoderClient {
       //        inversion, and WEFAX's LPM, were dropped the same way and silently reverted. The
       //        time decoder only made it VISIBLE, because it prints the station's name.
       if (this.mode) this._sendAttach(this.mode, this.params);
-      if (this.spotsOn) this._send({ type: 'subscribe_digital_spots' });
+      if (this.spotsOn) this._send(this._spotsMsg());
     };
     // ★ Guarded per message — dropped, counted and logged (faultLog), never silent.
     ws.onmessage = (e) => {
@@ -280,15 +283,25 @@ export class DecoderClient {
   }
 
   /** FT8/FT4 spots run independently of the text/image decoders. */
-  setSpots(on: boolean) {
-    if (this.spotsOn === on) return;
+  /** ★ The subscribe message. Single sends no scope at all — exactly what every older server understands. */
+  private _spotsMsg() {
+    return this.spotScope === 'band' ? { type: 'subscribe_digital_spots', scope: 'band' } : { type: 'subscribe_digital_spots' };
+  }
+  setSpots(on: boolean, scope: 'single' | 'band' = 'single') {
+    if (this.spotsOn === on && (!on || this.spotScope === scope)) return;
+    const was = this.spotsOn;
     this.spotsOn = on;
-    if (this.ws?.readyState === WebSocket.OPEN) this._send({ type: on ? 'subscribe_digital_spots' : 'unsubscribe_digital_spots' });
+    if (on) this.spotScope = scope;
+    // ★ Single ↔ Band: one subscribe with the new scope — the server replaces the run and keeps the slot.
+    if (this.ws?.readyState === WebSocket.OPEN) this._send(on ? this._spotsMsg() : { type: 'unsubscribe_digital_spots' });
+    void was;
     this._sync();                          // opening: onopen subscribes
   }
 
   get attached(): DecoderMode { return this.mode; }
   get spotsEnabled(): boolean { return this.spotsOn; }
+  /** 'single' / 'band' while spots run, null otherwise. */
+  get spotsScope(): 'single' | 'band' | null { return this.spotsOn ? this.spotScope : null; }
 
   // ── Inbound ────────────────────────────────────────────────────────────────
 
@@ -341,7 +354,8 @@ export class DecoderClient {
     if (msg.type === 'digital_spot' && msg.data) {
       const d = msg.data;
       this.cb.onSpot?.({
-        mode: d.mode === 'FT4' ? 'FT4' : 'FT8',
+        // ★ Any mode the server names, kept to a mode's alphabet (it is printed into the list and the map).
+        mode: (typeof d.mode === 'string' ? d.mode.replace(/[^0-9A-Za-z+-]/g, '').slice(0, 12) : '') || 'FT8',
         callsign: d.callsign ?? '',
         snr: d.snr ?? 0,
         frequency: d.frequency ?? 0,

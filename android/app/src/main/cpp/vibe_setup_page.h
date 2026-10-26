@@ -1897,8 +1897,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
             <option value="60">1 hour</option></select>
           the SDR will move to your selected RF Centre. Set an RF centre here and choose 1 or multiple VFO's and
           decoders for background decoding.
-          <span id="bgIsmLine">Or let a profile decode ISM sensors (weather stations, tyre sensors, doorbells) on a whole
-          band instead.</span>
+          <span id="bgIsmLine">Or let a profile decode ISM sensors (weather stations, tyre sensors, doorbells, and on 868 MHz
+          water, heat and gas meters) on a whole band instead.</span>
           <br>The moment anybody connects, background decoding stops and the radio goes back to exactly where it was
           left. What it decodes is kept in the gallery (Server tab).</p>
         <!-- ★★ Stuart, 2026-10-22: background VFOs still inside the radio's window keep decoding while listeners are on;
@@ -2045,6 +2045,15 @@ function benchApplyDefaults() {
     rdsBox.checked = false;
     rdsBox.dispatchEvent(new Event("change"));
     benchNote(rdsBox, "Advanced RDS is off: it measured " + Math.round(rdsx.pct) + "% of a core here, and it only runs where it can measure to reference standard.");
+  }
+  // ★★ V12 BAND SPOTS: the same rule as Advanced RDS — only a GREEN box keeps it on by default. The owner can always
+  //    switch it back on (Stuart: "never hide any controls"); listeners then see it greyed with the reason until they do.
+  const band = row("dec_ft8band");
+  const bandBox = document.querySelector('input[data-mode="spotsband"]');
+  if (band && band.grade !== "green" && band.grade !== "none" && bandBox && bandBox.checked) {
+    bandBox.checked = false;
+    bandBox.dispatchEvent(new Event("change"));
+    benchNote(bandBox, "Digital spots: Band is off: a busy band measured " + Math.round(band.pct) + "% of a core here. Tick it to offer it anyway.");
   }
   if (scan && scan.grade === "red" && $("dabScanLabels")) {
     $("dabScanLabels").value = "0";
@@ -2579,9 +2588,13 @@ const BLOCKABLE = [
    *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
    *  buttons were dead weight in its clients (Stuart, 2026-09-17). */
   { id: "spots",  label: "Digital spots / map" },
+  /* ★★ V12 (2026-10-26): Band spots — a whole band's digital frequencies at once, every mode on its own dial. Off here, a
+   *  listener sees the Band button greyed with the reason (never hidden). The benchmark unticks it on a box that measured
+   *  it below green (benchApplyDefaults) — the owner can always tick it back. */
+  { id: "spotsband", label: "Digital spots: Band" },
   /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
    *  presses near their house listed at all, however anonymous the list is: this is the switch. */
-  { id: "ism",    label: "ISM sensors" },
+  { id: "ism",    label: "ISM sensors and meters" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
   { id: "dsc",    label: "DSC" },
 ];
@@ -5587,7 +5600,7 @@ const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodula
 const BG_ISM_BANDS = [
   { id: "315", label: "315 MHz (US / Japan: tyre sensors, key fobs, remotes)" },
   { id: "433", label: "433.92 MHz (weather stations, sensors, doorbells, tyre sensors)" },
-  { id: "868", label: "868 MHz SRD (EU: LaCrosse, Bresser, Fine Offset)" },
+  { id: "868", label: "868 MHz SRD \u2014 sensors and meters (EU: LaCrosse, Bresser, Fine Offset; water, heat and gas meters)" },
   { id: "915", label: "915 MHz (US: LaCrosse, Ambient, Fine Offset)" },
 ];
 function bgIsmBands() {
