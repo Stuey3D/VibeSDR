@@ -1,12 +1,14 @@
 # JS8 and FT2 on the FT8 core (V12, 2026-10-26)
 
-Two digital-spot modes built on the FT8/FT4 decoder (`decoders/ft8_decoder.*`, ft8_lib, MIT, NEON/SSE2), as
-**standalone engines**. They are not wired into the decoder host or the UI; the Digital spots framework
-(branch `v12-spots`, `decoders/digi_mode.h`) plugs them in. See "Plugging in" below.
+Two digital-spot modes built on the FT8/FT4 decoder (`decoders/ft8_decoder.*`, ft8_lib, MIT, NEON/SSE2). **Wired into
+Digital spots** (`decoders/digi_mode.h`, docs/v12/DIGITAL-SPOTS.md) by `decoders/digimodes/js8.h` and `ft2.h`: they
+run in Single mode on the listener's audio and in Band mode on their own dials, as "JS8" (map letter J, bluish green)
+and "FT2" (2, yellow), and the gallery's summary cards count them. See "Wired in" below.
 
 | | JS8 | FT2 |
 |---|---|---|
-| Files | `decoders/js8_decoder.*`, `js8_ldpc.*`, `js8_message.*` | `decoders/ft2_decoder.h`, plus `FtxMode::FT2` in `ft8_decoder.*` |
+| Files | `decoders/digimodes/js8_decoder.*`, `js8_ldpc.*`, `js8_message.*` (in `digimodes/` so every build globs them) | `decoders/ft2_decoder.h`, plus `FtxMode::FT2` in `ft8_decoder.*` |
+| Mode (registry) | `decoders/digimodes/js8.h` | `decoders/digimodes/ft2.h` |
 | Live engine | `Js8Decoder(rate, submodeMask)`: all four submodes at once | `Ft2Decoder(rate)`, which is `Ft8Decoder` in FT2 mode |
 | One-slot engine | `Js8SlotDecoder(rate, submode)` | `Ft8SlotDecoder(rate, FtxMode::FT2)` |
 | Tests | `vibeserver/test-js8.cpp` | `vibeserver/test-ft2.cpp` |
@@ -214,29 +216,45 @@ Running fewer submodes (the `submodeMask`) drops that submode's window and water
 - The 5 s window (0.24 MB) and an 8 s ring (0.38 MB).
 - The waterfall (0.07 MB) and the subtraction scratch (0.24 MB).
 
-## Plugging in (for the spots framework)
+## Wired in (2026-10-26)
 
-`digi_mode.h`'s `Engine::process(const float*, n, captureUtc)` is matched by both engines:
-`Js8Decoder::process(const float*, …)` and the new `Ft8Decoder::process(const float*, …)`. An adapter in
-`decoders/digimodes/js8.h` would:
+| | JS8 | FT2 |
+|---|---|---|
+| ModeDef | slot 15 s (its engine cuts Fast 10 s, Turbo 6 s and Slow 30 s itself), 12 kHz, audio 100-3300 Hz, costVsFt8 1.8 | slot 3.75 s, 12 kHz, audio 100-3500 Hz, costVsFt8 0.9 |
+| Dials (digi_bands.h) | JS8Call's: 1.842 · 3.578 · 7.078 · 10.130 · 14.078 · 18.104 · 21.078 · 24.922 · 28.078 · 50.318 MHz | Decodium's, as Stuart's UberSDR decodes them: 1.843 · 3.578 · **5.357** · 7.052 · 10.144 · 14.084 · 18.108 · 21.144 · **24.923** · 28.184 MHz (60 m and 12 m added) |
+| Spot | only when `Js8Spot::isSpot()`: a real sender's call (heartbeat, CQ, compound, directed — never a group, never a text fragment). Grid only from a heartbeat/CQ/compound frame (the sender's own). Text = the frame + its submode ("G4ABC: @HB HEARTBEAT IO91 (Turbo)") | as FT8's engine (`onSpot(to, de, grid, snr, hz)`, real calls and real grids only) |
+| Server loaded | one pass, no coherent stage, no OSD | one pass |
 
-- **Mode definition.** `ModeDef{ name "JS8", slotSec 15 (the engine cuts all four submodes itself), sampleRate
-  12000, audio 100-3300 Hz, costVsFt8 ≈ 1.8, dials 3.578 / 7.078 / 10.130 / 14.078 / 18.104 / 21.078 /
-  28.078 MHz }`.
-- **Spots.** Map `Js8Decoder::onDecode` to `Spot`, only when `Js8Spot::isSpot()` is true (a real sender's call):
-  - mode "JS8", with the submode name in the text or a submode field;
-  - call = `frame.from`, grid = `frame.grid`, text = `frame.text`;
-  - snr, audioHz and dt from the decode.
-- **Counters and load.** `slotsSkipped` / `slotsDecoded` are the engine's counters; `loaded` maps to `loadProbe`.
+**Single mode** is the cheap button: it runs only the modes whose dial the listener is on (docs/v12/DIGITAL-SPOTS.md,
+"How the modes are chosen"). So JS8 decodes at 7.078, 14.078 and so on, and FT2 at its dials; tuned off the table,
+Single runs FT8 + FT4 as it always did.
 
-For FT2, `ft2.h` would be `ModeDef{ "FT2", slotSec 3.75, sampleRate 12000, audio 200-3000 Hz, costVsFt8 ≈ 0.9, the
-dials above }` around `Ft2Decoder`, mapped exactly as FT8's engine is (`onSpot(callTo, callDe, grid, snr, hz)`).
+Before that rule existed, every mode ran everywhere, and the engines were checked against each other's traffic. JS8
+on 21 minutes of busy real FT8 audio (40 m and 20 m) decoded 0 frames. FT2 needed one change: it runs **without OSD**
+in the live decoder. With OSD on, it took real FT8 audio for about 120 CRC-14-valid codewords in 15 minutes, none of
+them a message that unpacks. OSD added nothing to FT2's real decodes (15/15 either way) or to its synthetic threshold
+(−10 dB 12/12, −12 dB 2/12 either way). That rule stays: a shared dial (3.578) or a wide passband still puts FT2
+beside other traffic.
 
-## Found along the way (not changed)
+The web client's Single title is now "DIGITAL SPOTS" on a server with more than two modes; the About V12 note names
+FT2 and JS8.
 
-**FT4's SNR reads about 8.6 dB high** against STUEY3D's reports. That is the mean over four stations on the
-2026-10-25 20 m hour. The estimator was calibrated for FT8 (`kSnrCal = 3`). FT2 has been brought onto FT4's
-reference scale (−9 dB). FT4 itself is left as it was, for the owner to decide.
+**FT4's SNR** was also moved onto the reference scale. FT4 and FT2 now share it: −9 dB, one line in `snrDb`. Against
+STUEY3D's PSKReporter reports, FT4 on 20 m (four stations, 2026-10-25) read +8.6 dB before and **−0.4 dB** after. On
+40 m (three stations, two recordings) it reads −1.1 dB after; individual stations scatter by ±4-8 dB, as single
+reports do.
+
+**End to end.**
+- **`test-digi-spots`** (synthetic 20 m slice, 75 kHz). There are four engines: FT8 14.074, JS8 14.078, FT4 14.080
+  and FT2 14.084. A JS8 Normal and a JS8 Turbo heartbeat and two FT2 CQs were each spotted with their mode at their RF,
+  next to the FT8/FT4 stations. Noise gave 0 spots. Single mode was also tested at a JS8 dial (7.078) and at an FT2
+  dial (14.084): the spot frame says "JS8"/"FT2", with the right band, grid and RF.
+- **`test-server-spots`** (the real server, a fake rtl_tcp clip that now carries a JS8 heartbeat and an FT2 CQ):
+  `spotModes` is ["FT8","FT4","FT2","JS8"]. 20 m's span is 14.0739-14.0878 MHz (13.9 kHz). Every station was spotted,
+  including the JS8 and FT2 ones, on a one-pipeline radio and on a range-locked one: 32/32.
+- **`test-web-spots`** (headless Edge, `--mute-audio`, desktop and 390 px): all four modes are listed in their own
+  colour and letter, and the map legend shows "FT8 FT4 FT2 JS8": 26/26.
+- **`test-bgdecode`**: a card from JS8 + FT2 spots is titled "JS8+FT2 last 10 min · 3 spots" and counts "JS8 2, FT2 1".
 
 ## What remains
 
@@ -246,5 +264,6 @@ reference scale (−9 dB). FT4 itself is left as it was, for the owner to decide
   2-3 symbols could be detected jointly.
 - **Engine scope.** One JS8 engine per dial runs all four submodes. Several dials in Band mode means several
   engines, at the cost per dial shown above.
-- **Not wired.** Neither engine is in the host, the UI, the gallery or background decoding (by the brief). There is
-  no app or web code.
+- **Background decoding** does not offer JS8 or FT2 as a VFO decoder yet (its FT8/FT4 VFO is its own engine).
+- **The app** shows them through the shared tables (`src/utils/digiModes.ts` already had J and 2); its own Band mode
+  is still owed (docs/v12/DIGITAL-SPOTS.md).

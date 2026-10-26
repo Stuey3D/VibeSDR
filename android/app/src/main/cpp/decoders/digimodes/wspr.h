@@ -22,6 +22,7 @@ public:
             s.mode = "WSPR"; s.call = w.call; s.grid = w.grid; s.text = w.message;
             s.snr = w.snr;                 // ★ the WSPRnet scale — what other receivers' reports of the station read
             s.audioHz = (float)w.audioHz; s.dt = w.dt;
+            s.slotUtc = w.slotUtc;          // ★ the even minute it began (the spot's time)
             onSpot(s);
         };
         d_.loadProbe = [this] { return loaded ? loaded() : false; };

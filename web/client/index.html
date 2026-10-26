@@ -2873,7 +2873,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #cwList .tx bdi { direction: ltr; unicode-bidi: isolate; }
 #cwRows .idle, #cwSpots .idle { color: var(--text-dim); font-size: 11px; padding: 6px; }
 #cwSpotsHead { color: var(--text-dim); font-size: 10px; letter-spacing: 1px; margin: 8px 6px 2px; }
-#cwSpots .cws { display: grid; grid-template-columns: 3.2em 6.2em minmax(4.5em, 1fr) minmax(0, 1.2fr) 4.8em; gap: 8px;
+#cwSpots .cws { display: grid; grid-template-columns: 4.8em 6.2em minmax(4.5em, 1fr) minmax(0, 1.2fr) 4.8em; gap: 8px;
                 font-size: 11px; padding: 3px 6px; cursor: pointer; align-items: baseline; }
 #cwSpots .cws .t { color: var(--unit); font-variant-numeric: tabular-nums; }
 #cwSpots .cws .w { color: var(--unit); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -3126,7 +3126,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* ★ V12: a MODE column after the time — the mode's own colour and letter, as on the map (src/utils/digiModes.ts). */
 #spotList .sres.spot {
   display: grid;
-  grid-template-columns: 3.2em 3.9em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;
+  grid-template-columns: 4.8em 3.9em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;   /* ★ time HH:MM:SS (was 3.2em) */
   gap: 8px; align-items: baseline; font-size: 11px; padding: 4px 6px;
 }
 #spotList .cty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -76,6 +76,7 @@ import { PsStabiliser } from '../../../src/services/psStabiliser';
 import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
+import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { DIGI_MARKER_RIM, digiModeStyle, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
@@ -10520,13 +10521,14 @@ function bandSpotsUi(on: boolean) {
   if ($('decBox').classList.contains('open') && decoders?.spotsEnabled) $('decTitle').textContent = spotsTitle();
   renderFreq();
 }
-/** "FT8 / FT4 SPOTS" (Single) · "DIGITAL SPOTS · 20 m BAND" (Band). */
+/** "FT8 / FT4 SPOTS" (Single, a server with those two) · "DIGITAL SPOTS" (Single, a server with more: FT2, JS8 …
+ *  decode on whichever of their dials the listener is on) · "DIGITAL SPOTS · 20 m BAND" (Band). */
 function spotsTitle(): string {
   if (bandSpots && spotBandCap && spec) {
     const b = spotBandAt(spotBandCap.bands, spec.frequency);
     return b ? `DIGITAL SPOTS \u00b7 ${b.name.toUpperCase()} BAND` : 'DIGITAL SPOTS \u00b7 BAND';
   }
-  return spotModes.slice(0, 2).join(' / ') + ' SPOTS';
+  return spotModes.length > 0 && spotModes.length <= 2 ? spotModes.join(' / ') + ' SPOTS' : 'DIGITAL SPOTS';
 }
 /** Put the dial on band `b`'s centre, in USB — a listener's own tune (a user action: the shared-dial contract holds). */
 function bandSpotsGo(b: SpotBand) {
@@ -10557,11 +10559,6 @@ const SF_AGES: Array<{ label: string; minutes: number }> = [
 ];
 let sfMode = 0, sfBand = 0, sfAge = 0;
 
-/** UTC hh:mm, as the app shows it. */
-function fmtSpotTime(t: number): string {
-  const d = new Date(t);
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
-}
 
 /** Spots after the header filters. */
 function filteredSpots(): Spot[] {
@@ -14200,6 +14197,7 @@ ${ST}
 // ★★ MUTABLE, and everything that reads it lives in render(). The page used to be top-level
 //    procedural code over a const, which is exactly why it could never update.
 let spots = ${safe(pts)};
+${FMT_SPOT_TIME_JS}   // ★ the popups' time: HH:MM:SS UTC, the slot's start (src/utils/spotTime.ts)
 const me = ${safe(me)};
 // ★ V12: the MODES' colours and letters (src/utils/digiModes.ts), for the legend and the BY MODE bars — the markers carry
 //   their own (spotsMapPoints). The rim keeps pale fills readable on a light map.
@@ -14402,7 +14400,7 @@ function drawMarkers() {
       (s.country ? esc(s.country) + '<br>' : '') + esc(s.grid) +
       (s.km != null ? ' · ' + esc(s.km) + ' km' : '') + '<br>' +
       esc(s.mode) + ' · ' + esc(s.band) + ' · ' + (s.snr > 0 ? '+' : '') + esc(s.snr) + ' dB<br>' +
-      esc((s.frequency / 1e6).toFixed(3)) + ' MHz</div>');
+      esc((s.frequency / 1e6).toFixed(3)) + ' MHz<br>' + esc(fmtSpotTime(s.timestamp)) + ' UTC</div>');
   }
   // ★★ THE LETTER ON THE LEAFLET FALLBACK (no WebGL 2): its canvas circles cannot carry text, so the newest 200 markers get
   //    a small non-interactive letter above them — a mode is never told by colour alone. Capped, because each is a DOM

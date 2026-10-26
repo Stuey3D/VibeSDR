@@ -12,8 +12,9 @@
 //     for personal weak-signal MGM beacons, so the dial is 144.4905 (WSPR audio 1400–1600 Hz → 144.4919–144.4921 MHz,
 //     the RSGB's 144.492). WSPR on 6 m and 70 cm is LEFT OUT: the usual WSJT-X dials (50.293, 432.300) sit outside the
 //     Region 1 plan's MGM/beacon segments, and a region-aware table is a later job.
-//   • FT2: no published band plan was found. Its dials are what UberSDR's FT2 decoder was observed on (2026-10-25), on
-//     the bands where it was heard often enough to tell — the FT2 engine's author should confirm them.
+//   • FT2: no published band plan. Its dials are the ones FT2's own software (IU8LMC's Decodium) uses and Stuart's
+//     UberSDR decodes on: 160 1.843 · 80 3.578 · 60 5.357 · 40 7.052 · 30 10.144 · 20 14.084 · 17 18.108 · 15 21.144 ·
+//     12 24.923 · 10 28.184 MHz (20 m and 17 m read in Decodium's source; checked 2026-10-26, docs/v12/JS8-FT2.md).
 //   • 60 m WSPR is 5.3647 (inside the WRC-15 allocation 5351.5–5366.5 kHz that every region shares), not the older
 //     national 5.2872, which would stretch the 60 m passband to 73 kHz for one beacon frequency.
 //
@@ -88,9 +89,10 @@ inline const std::vector<Dial>& publishedDials() {
         {"JS8", "160m",  1842000}, {"JS8", "80m",  3578000}, {"JS8", "40m",  7078000}, {"JS8", "30m", 10130000},
         {"JS8", "20m",  14078000}, {"JS8", "17m", 18104000}, {"JS8", "15m", 21078000}, {"JS8", "12m", 24922000},
         {"JS8", "10m",  28078000}, {"JS8", "6m",  50318000},
-        // FT2 (observed on STUEY3D's UberSDR, 2026-10-25 — no published plan found; see the file note)
-        {"FT2", "160m",  1843000}, {"FT2", "80m",  3578000}, {"FT2", "40m",  7052000}, {"FT2", "30m", 10144000},
-        {"FT2", "20m",  14084000}, {"FT2", "17m", 18108000}, {"FT2", "15m", 21144000}, {"FT2", "10m", 28184000},
+        // FT2 (Decodium's dials, as Stuart's UberSDR decodes them — see the file note)
+        {"FT2", "160m",  1843000}, {"FT2", "80m",  3578000}, {"FT2", "60m",  5357000}, {"FT2", "40m",  7052000},
+        {"FT2", "30m",  10144000}, {"FT2", "20m", 14084000}, {"FT2", "17m", 18108000}, {"FT2", "15m", 21144000},
+        {"FT2", "12m",  24923000}, {"FT2", "10m", 28184000},
     };
     return d;
 }

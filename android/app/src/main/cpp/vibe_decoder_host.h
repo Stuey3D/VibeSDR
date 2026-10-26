@@ -979,8 +979,12 @@ private:
     /** ★ One spot out: to the gallery's summary and, as {"type":"digital_spot"}, to every decoder socket. `mode` is the
      *  engine's name (V12: any registered mode, not FT8-or-FT4). */
     void emitSpot(const digi::Spot& sp, double rfHz) {
-        const uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
+        /* ★★ STAMPED WITH ITS SLOT'S START (2026-10-26, M7EIW via Stuart): the time WSJT-X shows, so the clients' HH:MM:SS
+         *  names the transmission block it was heard in (UberSDR stamps its spots the same way). An engine that does not
+         *  know its slot (NaN): the moment it was decoded, as before. */
+        const uint64_t ts = std::isfinite(sp.slotUtc) && sp.slotUtc > 0
+            ? (uint64_t)std::llround(sp.slotUtc * 1000.0)
+            : (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         /* ★★★ THESE FIELDS COME OFF THE AIR, AND ANYONE MAY TRANSMIT ANYTHING — a whitelist, so
          *  none can carry a quote, a backslash or a byte that is not UTF-8 (the RDS fault on a
          *  different decoder; Stuart, 2026-09-27: "sandbox everything"). And snprintf returns the
