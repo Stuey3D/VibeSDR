@@ -13,12 +13,21 @@ export interface IsmDevice {
   temp?: number; hum?: number; wind?: number; gust?: number; dir?: number; rain?: number; rainRate?: number;
   kpa?: number; uv?: number; watts?: number; baro?: number; batt?: number; button?: string; note?: string; extra?: string;
   freq: number; level: number; snr: number; seen: number; age: number; count: number;
+  /** ★ V12 Wireless M-Bus meters (kind 'meter', docs/v12/WMBUS-DECODER.md §4.5). The serial is `id`. Never a byte of an
+   *  encrypted payload — only how long it was. */
+  mfr?: string; wm?: string; ver?: number; devType?: number; sec?: number; secText?: string; encBlocks?: number; encLen?: number;
+  acc?: number; every?: number; rx?: number; sts?: number; via?: string; vol?: number; energy?: number; flow?: number;
+  damaged?: number; auth?: number; records?: IsmRecord[];
 }
+export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
 export interface IsmBand { id: string; name: string; hz: number }
 export interface IsmReport {
   type: 'ism'; band?: string; bandName?: string; centre: number; custom?: number; rate?: number; now?: number;
   bursts?: number; decoded?: number; unknown?: number; noise?: number; dropped?: number; capture?: number;
   gain?: number; gainAuto?: number;
+  /** ★ V12 meters (868 band only): how many are listed, frames whose later block failed, collectors' frames, and
+   *  wmGap = 1 when the capture cannot hold 868.95 MHz's meters (0.9 MS/s). */
+  meters?: number; damaged?: number; collector?: number; wmGap?: number;
   devices: IsmDevice[];
 }
 export interface IsmUnits { mph: boolean; pressure: 'psi' | 'kpa' | 'bar' }
@@ -27,7 +36,7 @@ export interface IsmUnits { mph: boolean; pressure: 'psi' | 'kpa' | 'bar' }
 export const ISM_KINDS: Array<{ id: string; label: string }> = [
   { id: 'all', label: 'ALL' }, { id: 'weather', label: 'WEATHER' }, { id: 'tpms', label: 'TPMS' },
   { id: 'sensor', label: 'SENSOR' }, { id: 'doorbell', label: 'DOORBELL' }, { id: 'energy', label: 'ENERGY' },
-  { id: 'keyfob', label: 'KEY FOB' },
+  { id: 'keyfob', label: 'KEY FOB' }, { id: 'meter', label: 'METER' },
 ];
 
 /** A report from the wire, sanitised: only plain fields of the types we read, at most 300 devices. */
@@ -36,24 +45,70 @@ export function ismSanitise(msg: any): IsmReport | null {
   const num = (v: any) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
   const str = (v: any, n = 120) => (typeof v === 'string' ? v.slice(0, n) : undefined);
   const devices: IsmDevice[] = [];
-  for (const d of Array.isArray(msg.devices) ? msg.devices.slice(0, 300) : []) {
+  // ★ 800: the server keeps 300 sensors AND its own 500 meters (vibe_ism_service.h Tracker::kMaxMeters)
+  for (const d of Array.isArray(msg.devices) ? msg.devices.slice(0, 800) : []) {
     if (!d || typeof d !== 'object' || typeof d.line !== 'string') continue;
     devices.push({
       key: str(d.key, 24) ?? '', kind: str(d.kind, 16) ?? 'sensor', make: str(d.make, 40) ?? '', model: str(d.model, 60) ?? '',
-      name: str(d.name, 80) ?? '', line: str(d.line, 300) ?? '', nick: num(d.nick), id: str(d.id, 16), ch: num(d.ch),
+      name: str(d.name, 80) ?? '', line: str(d.line, 400) ?? '', nick: num(d.nick), id: str(d.id, 16), ch: num(d.ch),
       temp: num(d.temp), hum: num(d.hum), wind: num(d.wind), gust: num(d.gust), dir: num(d.dir), rain: num(d.rain),
       rainRate: num(d.rainRate), kpa: num(d.kpa), uv: num(d.uv), watts: num(d.watts), baro: num(d.baro), batt: num(d.batt),
-      button: str(d.button, 16), note: str(d.note, 40), extra: str(d.extra, 60),
+      button: str(d.button, 16), note: str(d.note, 40), extra: str(d.extra, d.kind === 'meter' ? 200 : 60),
       freq: num(d.freq) ?? 0, level: num(d.level) ?? -99, snr: num(d.snr) ?? 0, seen: num(d.seen) ?? 0, age: num(d.age) ?? 0,
       count: num(d.count) ?? 1,
+      ...(d.kind === 'meter' ? meterFields(d, num, str) : {}),
     });
   }
   return {
     type: 'ism', band: str(msg.band, 8), bandName: str(msg.bandName, 40), centre: num(msg.centre) ?? 0, custom: num(msg.custom),
     rate: num(msg.rate), now: num(msg.now), bursts: num(msg.bursts), decoded: num(msg.decoded), unknown: num(msg.unknown),
     noise: num(msg.noise), dropped: num(msg.dropped), capture: num(msg.capture), gain: num(msg.gain), gainAuto: num(msg.gainAuto),
+    meters: num(msg.meters), damaged: num(msg.damaged), collector: num(msg.collector), wmGap: num(msg.wmGap),
     devices,
   };
+}
+/** A meter's own fields, sanitised. */
+function meterFields(d: any, num: (v: any) => number | undefined, str: (v: any, n?: number) => string | undefined): Partial<IsmDevice> {
+  const records: IsmRecord[] = [];
+  for (const r of Array.isArray(d.records) ? d.records.slice(0, 16) : []) {
+    if (!r || typeof r !== 'object' || typeof r.q !== 'string') continue;
+    records.push({ q: r.q.slice(0, 40), v: num(r.v), u: str(r.u, 12), t: str(r.t, 24), st: num(r.st) ?? 0, fn: str(r.fn, 8) ?? 'inst',
+                   tariff: num(r.tariff), qual: num(r.qual) });
+  }
+  return {
+    mfr: str(d.mfr, 4), wm: str(d.wm, 6), ver: num(d.ver), devType: num(d.devType), sec: num(d.sec), secText: str(d.secText, 40),
+    encBlocks: num(d.encBlocks), encLen: num(d.encLen), acc: num(d.acc), every: num(d.every), rx: num(d.rx), sts: num(d.sts),
+    via: str(d.via, 24), vol: num(d.vol), energy: num(d.energy), flow: num(d.flow), damaged: num(d.damaged), auth: num(d.auth),
+    records: records.length ? records : undefined,
+  };
+}
+
+/** ★ A meter's detail (the hover / tap): the mode heard, the frequency, the signal, the reception, the access number, how
+ *  long the encrypted part was, the route, and its readings. One string per line. */
+export function ismMeterDetail(d: IsmDevice): string[] {
+  const out: string[] = [];
+  const head: string[] = [];
+  if (d.wm) head.push(d.wm);
+  head.push(`${(d.freq / 1e6).toFixed(3)} MHz`);
+  head.push(`${Math.round(d.snr)} dB over the noise`);
+  if (d.rx !== undefined) head.push(`heard ${Math.round(d.rx)} %`);
+  if (d.acc !== undefined) head.push(`access number ${d.acc}`);
+  out.push(head.join(' · '));
+  const sec: string[] = [];
+  if (d.secText) sec.push(d.secText);
+  if (d.encBlocks) sec.push(`${d.encBlocks} ${d.encBlocks === 1 ? 'block' : 'blocks'}`);
+  if (d.encLen && d.sec !== 0) sec.push(`${d.encLen} bytes`);
+  if (d.auth) sec.push('authenticated');
+  if (d.via) sec.push(`via ${d.via}`);
+  if (d.damaged) sec.push('last frame damaged');
+  if (sec.length) out.push(sec.join(' · '));
+  for (const r of d.records ?? []) {
+    const val = r.t ?? (r.v !== undefined ? `${r.v}${r.u ? ' ' + r.u : ''}` : '—');
+    const when = r.st ? ` (stored ${r.st})` : '';
+    const fn = r.fn && r.fn !== 'inst' ? ` ${r.fn}` : '';
+    out.push(`${r.q}${fn}: ${val}${when}${r.qual ? ' (qualified)' : ''}`);
+  }
+  return out;
 }
 
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
@@ -63,6 +118,7 @@ export function compass(deg: number): string { return COMPASS[Math.floor((((deg 
  *  is the server's own line, which is used as sent. */
 export function ismLine(d: IsmDevice, u: IsmUnits): string {
   if (!u.mph && u.pressure === 'psi') return d.line;
+  if (d.kind === 'meter') return d.line;   // ★ a meter's line has no unit choice (m³, kWh)
   const secret = d.kind === 'tpms' || d.kind === 'keyfob' || d.kind === 'doorbell' || d.kind === 'suspectfob';
   const p: string[] = [d.name];
   if (secret && d.kind === 'tpms' && d.model) p.push(d.model);
@@ -100,6 +156,8 @@ export function ismStatus(r: IsmReport): string {
   const parts: string[] = [];
   parts.push(r.custom ? `${(r.centre / 1e6).toFixed(3)} MHz` : (r.bandName || 'ISM'));
   parts.push(`${r.devices.length} ${r.devices.length === 1 ? 'device' : 'devices'}`);
+  if (r.meters) parts.push(`${r.meters} ${r.meters === 1 ? 'meter' : 'meters'}`);
+  if (r.wmGap === 1 && r.rate) parts.push(`868.95 not covered at ${(r.rate / 1e6).toFixed(r.rate % 1e6 ? 1 : 0)} MS/s`);
   if (r.bursts !== undefined) parts.push(`${r.bursts} bursts${r.unknown ? ` (${r.unknown} unidentified)` : ''}`);
   /* ★ THE GAIN ISM IS ACTUALLY USING (Stuart, 2026-10-25: "the gain is indicating 0dB but I know that not to be the case").
    *  ISM sets the radio's gain itself (vibe_ism_service.h GainRule: 60 % up the radio's own list, down only on clipping)
@@ -112,19 +170,26 @@ export function ismStatus(r: IsmReport): string {
 function esc(s: string): string { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
 
 /** The list's HTML: newest first (the server's order), filtered by kind. */
-export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits): string {
+export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey = ''): string {
   // ★ KEY FOB shows the suspected ones too (vibe_ism_service.h FobWatch): a car key we cannot name is still a key fob
   const rows = r.devices.filter((d) => filter === 'all' || d.kind === filter || (filter === 'keyfob' && d.kind === 'suspectfob'));
-  if (!rows.length) {
-    const what = filter === 'all' ? 'No sensors heard yet' : `Nothing of that kind heard yet`;
-    return `<div class="ismEmpty">${what} — most send every 30–60 s; tyres only while the car moves.</div>`;
-  }
+  if (!rows.length) return `<div class="ismEmpty">${esc(ismEmptyText(filter))}</div>`;
   return rows.map((d) => {
     const mhz = (d.freq / 1e6).toFixed(3);
-    const tip = `${mhz} MHz · ${d.snr.toFixed(0)} dB over the noise · heard ${d.count} ${d.count === 1 ? 'time' : 'times'}`;
-    return `<div class="ismRow k-${esc(d.kind)}" data-key="${esc(d.key)}" title="${esc(tip)}">`
-         + `<span class="ismAgo">${esc(ismAgo(d.seen))}</span><span class="ismTxt">${esc(ismLine(d, u))}</span></div>`;
+    const heard = `heard ${d.count} ${d.count === 1 ? 'time' : 'times'}`;
+    // ★ a meter's detail is its hover AND, on a tap (touch has no hover), a block under its row
+    const detail = d.kind === 'meter' ? ismMeterDetail(d) : [];
+    const tip = detail.length ? [...detail, heard].join('\n') : `${mhz} MHz · ${d.snr.toFixed(0)} dB over the noise · ${heard}`;
+    const open = detail.length && openKey === d.key;
+    return `<div class="ismRow k-${esc(d.kind)}${detail.length ? ' ismTap' : ''}" data-key="${esc(d.key)}" title="${esc(tip)}">`
+         + `<span class="ismAgo">${esc(ismAgo(d.seen))}</span><span class="ismTxt">${esc(ismLine(d, u))}`
+         + (open ? `<span class="ismDetail">${detail.map(esc).join('<br>')}</span>` : '') + `</span></div>`;
   }).join('');
+}
+/** What an empty list says (the app's ismEmptyText — the same words). */
+export function ismEmptyText(filter: string): string {
+  if (filter === 'meter') return 'No meters heard yet — they send every 16 s to a few minutes, on the 868 MHz band only.';
+  return `${filter === 'all' ? 'No sensors heard yet' : 'Nothing of that kind heard yet'} — most send every 30–60 s; tyres only while the car moves.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -154,6 +219,8 @@ const CSS = `
 .ismAgo { flex: 0 0 4.6em; text-align: right; color: rgba(255, 190, 40, 0.6); font-variant-numeric: tabular-nums; }
 .ismTxt { flex: 1 1 auto; min-width: 0; }
 .ismEmpty { padding: 12px; color: rgba(255, 190, 40, 0.6); }
+.ismTap { cursor: pointer; }
+.ismDetail { display: block; margin: 3px 0 2px; font-size: 11px; color: rgba(255, 190, 40, 0.72); }
 @media (max-width: 600px) { #ismBox { font-size: 12px; } #ismHead button, #ismChips button { font-size: 11px; padding: 4px 7px; min-height: 30px; }
   #ismStat { flex-basis: 100%; text-align: left; } .ismAgo { flex-basis: 3.8em; } }
 `;
@@ -173,6 +240,7 @@ export class IsmBox {
   private last: IsmReport | null = null;
   private prefs = loadPrefs();
   private lastHtml = '';
+  private openKey = '';   // ★ the meter row whose detail is open (a tap toggles it)
   /** EXIT ISM, and the band steps (±1). The page decides what they send. */
   constructor(private onExit: () => void, private onStep: (d: number) => void) {}
 
@@ -193,6 +261,12 @@ export class IsmBox {
     (el.querySelector('#ismExit') as HTMLButtonElement).onclick = () => this.onExit();
     (el.querySelector('#ismDown') as HTMLButtonElement).onclick = () => this.onStep(-1);
     (el.querySelector('#ismUp') as HTMLButtonElement).onclick = () => this.onStep(1);
+    (el.querySelector('#ismList') as HTMLElement).onclick = (e) => {
+      const row = (e.target as HTMLElement).closest('.ismTap') as HTMLElement | null;
+      if (!row) return;
+      this.openKey = this.openKey === row.dataset.key ? '' : (row.dataset.key || '');
+      this.lastHtml = ''; if (this.last) this.update(this.last, this.bandsCan);
+    };
     this.el = el;
     this.drawChips();
     return el;
@@ -250,7 +324,7 @@ export class IsmBox {
     (el.querySelector('#ismDown') as HTMLButtonElement).disabled = !can.down;
     (el.querySelector('#ismUp') as HTMLButtonElement).disabled = !can.up;
     this.place();
-    const html = ismListHtml(r, this.prefs.filter, this.prefs.units);
+    const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey);
     if (html !== this.lastHtml) { (el.querySelector('#ismList') as HTMLElement).innerHTML = html; this.lastHtml = html; }
   }
 }

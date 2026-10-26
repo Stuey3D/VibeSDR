@@ -992,9 +992,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── ISM mode (end to end: server, then the web client) ──\033[0m\n'
 if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   "$OUT/test-ism" --write-clip "$OUT/ism-clip.u8" 434130000 2400000 >/dev/null
-  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-server-ism.mjs; rc=$?
+  # ★ V12 wM-Bus: a meter clip on the 868 band (a Sensus T1, encrypted; a Kamstrup C1-A with readings)
+  [ -x "$OUT/test-wmbus" ] && "$OUT/test-wmbus" --write-clip "$OUT/wmbus-clip.u8" 868600000 2400000 >/dev/null
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" VIBE_WMBUS_CLIP="$OUT/wmbus-clip.u8" node scripts/test-server-ism.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-web-ism.mjs; rc=$?
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" VIBE_WMBUS_CLIP="$OUT/wmbus-clip.u8" node scripts/test-web-ism.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   # ★★ V12 ISM IN THE GALLERY (2026-10-25): a listener's session writes the day's log + card (nothing while it ran, the
   #    list's own lines, no ID anywhere), then an ISM background profile runs with nobody here and gives way to a listener;
@@ -1003,7 +1005,7 @@ if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-web-ism-gallery.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  rm -f "$OUT/ism-clip.u8"
+  rm -f "$OUT/ism-clip.u8" "$OUT/wmbus-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-ism build'; notrun=$((notrun+1))
 fi

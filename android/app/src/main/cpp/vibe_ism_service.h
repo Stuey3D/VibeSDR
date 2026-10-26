@@ -607,6 +607,25 @@ public:
     Health health() { std::lock_guard<std::mutex> lk(mtx_); return health_; }
     size_t deviceCount() { std::lock_guard<std::mutex> lk(mtx_); return tracker_.size(); }
 
+    /** ★★ ONE FRAME, TWO CHANNELS. A T1/C1 burst is ~200 kHz wide, and the detector can open a second channel on its
+     *  skirt; both may decode the same frame. Of the copies of one meter's frame heard within 0.2 s, keep the one best
+     *  centred in its channel (its frequency is the true one — off-centre, the channel filter pulls the estimate). */
+    static void dedupeMeters(std::vector<Reading>& v, const std::vector<double>& tOf) {
+        std::vector<bool> drop(v.size(), false);
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (drop[i] || v[i].kind != "meter" || !v[i].meter) continue;
+            for (size_t j = i + 1; j < v.size(); ++j) {
+                if (drop[j] || v[j].kind != "meter" || !v[j].meter) continue;
+                const wmbus::Meter &a = *v[i].meter, &b = *v[j].meter;
+                if (a.id != b.id || a.mfr != b.mfr || a.type != b.type || std::fabs(tOf[i] - tOf[j]) > 0.2) continue;
+                if (std::fabs(b.carrierHz) < std::fabs(a.carrierHz)) { drop[i] = true; break; } else drop[j] = true;
+            }
+        }
+        size_t k = 0;
+        for (size_t i = 0; i < v.size(); ++i) if (!drop[i]) { if (k != i) v[k] = std::move(v[i]); ++k; }
+        v.resize(k);
+    }
+
     /** ★ For tests: run the decoder chain on one burst exactly as the worker does (no thread, no queue). */
     static void decodeBurst(const Burst& b, double hwCentreHz, std::vector<Reading>& out, wmbus::Stats* wm = nullptr) {
         const size_t first = out.size();
@@ -659,13 +678,16 @@ private:
                 std::vector<Burst> bs;
                 wmbus::Stats wmLocal;
                 fe->feed(blk.data(), blk.size(), [&](const Burst& b) { bs.push_back(b); });
+                std::vector<double> tOf;
                 for (const Burst& b : bs) {
                     size_t before = got.size(); decodeBurst(b, hc, got, &wmLocal);
+                    tOf.resize(got.size(), b.tSec);
                     if (got.size() != before) continue;
                     ++unknownLocal_;
                     Reading sf;
-                    if (fobs_.offer(b, hc, sf)) got.push_back(sf);       // ★ an undecoded press: "Suspected key fob"
+                    if (fobs_.offer(b, hc, sf)) { got.push_back(sf); tOf.push_back(b.tSec); }   // ★ an undecoded press: "Suspected key fob"
                 }
+                dedupeMeters(got, tOf);
                 lk.lock();
                 for (double hz : fobs_.takePeriodic()) tracker_.forget("suspectfob", hz, 50e3);
                 bursts_ += bs.size();

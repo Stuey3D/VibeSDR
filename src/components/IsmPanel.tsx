@@ -3,7 +3,8 @@
  *
  *   header: EXIT ISM · ◀ band ▶ · BIG/SMALL
  *   the status: "433.92 MHz ISM · 6 devices · 41 bursts (3 unidentified) · gain 33.8 dB auto · capture 100 %"
- *   chips:  ALL WEATHER TPMS SENSOR DOORBELL ENERGY KEY FOB · KM/H|MPH · PSI|KPA|BAR
+ *   chips:  ALL WEATHER TPMS SENSOR DOORBELL ENERGY KEY FOB METER · KM/H|MPH · PSI|KPA|BAR
+ *   ★ V12 meters (wM-Bus, 868 band): a tap on a meter's row opens its detail (mode, signal, reception, readings)
  *   list:   newest first (the server's order), "now / 12 s / 3 min" last heard, the readable line in the listener's units
  *
  * ★★ THE WATERFALL STAYS LIVE above it — the bursts on it are half of what the mode is for (Stuart). So this is a box, not
@@ -24,7 +25,7 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DEC
 import { scrollLane } from '../constants/popupTokens';
 import { captureRegion, capturedRegion, useKeyboardMode, useListNav, useNavFocus } from './PanelNav';
 import { screenNavRef } from './ScreenNav';
-import { ISM_KINDS, ismAgo, ismBandText, ismEmptyText, ismLine, ismRows, ismStatus, nextPressure, parseIsmPrefs,
+import { ISM_KINDS, ismAgo, ismBandText, ismEmptyText, ismLine, ismMeterDetail, ismRows, ismStatus, nextPressure, parseIsmPrefs,
          ismNavKeys, type IsmNavKey, type IsmReport, type IsmUnits } from '../services/ism';
 
 const ISM_MAX_W = 760;
@@ -53,6 +54,7 @@ export default function IsmPanel(p: IsmPanelProps) {
   const tk = useDecoderTokens();
   const { height: winH } = useWindowDimensions();
   const [filter, setFilter] = useState('all');
+  const [openKey, setOpenKey] = useState('');   // ★ the meter row whose detail is open
   const [units, setUnits] = useState<IsmUnits>({ mph: false, pressure: 'psi' });
   useEffect(() => {
     AsyncStorage.getItem(PREF_KEY).then((v) => { const pr = parseIsmPrefs(v); setFilter(pr.filter); setUnits(pr.units); }).catch(() => {});
@@ -171,15 +173,36 @@ export default function IsmPanel(p: IsmPanelProps) {
             <Text style={s.note}>{p.error}</Text>
           ) : !r ? (
             <Text style={s.note}>Taking the receiver to the ISM band…</Text>
-          ) : rows.length ? rows.map((d, i) => (
-            <View key={d.key || String(i)} style={[s.row, i % 2 === 0 && s.rowAlt, hl(`r:${i}`)]}
-                  onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }}
-                  accessibilityLabel={`${ismLine(d, units)}, heard ${ismAgo(d.seen)}${d.seen >= 2 ? ' ago' : ''}, `
-                    + `${(d.freq / 1e6).toFixed(3)} megahertz, ${Math.round(d.snr)} dB over the noise, ${d.count} ${d.count === 1 ? 'time' : 'times'}`}>
-              <Text style={s.ago} numberOfLines={1}>{ismAgo(d.seen)}</Text>
-              <Text style={s.txt}>{ismLine(d, units)}</Text>
-            </View>
-          )) : (
+          ) : rows.length ? rows.map((d, i) => {
+            const meter = d.kind === 'meter';
+            const open = meter && openKey === d.key;
+            const label = `${ismLine(d, units)}, heard ${ismAgo(d.seen)}${d.seen >= 2 ? ' ago' : ''}, `
+              + `${(d.freq / 1e6).toFixed(3)} megahertz, ${Math.round(d.snr)} dB over the noise, ${d.count} ${d.count === 1 ? 'time' : 'times'}`;
+            const body = (
+              <>
+                <Text style={s.ago} numberOfLines={1}>{ismAgo(d.seen)}</Text>
+                <View style={s.txtCol}>
+                  <Text style={s.txt}>{ismLine(d, units)}</Text>
+                  {open && ismMeterDetail(d).map((t, k) => <Text key={k} style={s.detail}>{t}</Text>)}
+                </View>
+              </>
+            );
+            // ★ a meter row opens its detail on a press; every other row is read, not pressed
+            return meter ? (
+              <TouchableOpacity key={d.key || String(i)} style={[s.row, i % 2 === 0 && s.rowAlt, hl(`r:${i}`)]} activeOpacity={0.7}
+                                onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }}
+                                onPress={() => setOpenKey(open ? '' : d.key)} accessibilityRole="button"
+                                accessibilityLabel={open ? `${label}. ${ismMeterDetail(d).join('. ')}` : label}
+                                accessibilityHint="Shows the meter's detail">
+                {body}
+              </TouchableOpacity>
+            ) : (
+              <View key={d.key || String(i)} style={[s.row, i % 2 === 0 && s.rowAlt, hl(`r:${i}`)]}
+                    onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }} accessibilityLabel={label}>
+                {body}
+              </View>
+            );
+          }) : (
             <Text style={s.note}>{ismEmptyText(filter)}</Text>
           )}
         </ScrollView>
@@ -219,6 +242,8 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   row:     { flexDirection: 'row', gap: 10, paddingHorizontal: 10, paddingVertical: 4 },
   rowAlt:  { backgroundColor: T.rowActive },
   ago:     { width: 54, textAlign: 'right', fontFamily: F, fontSize: 12, color: T.muted, fontVariant: ['tabular-nums'] },
-  txt:     { flex: 1, minWidth: 0, fontFamily: F, fontSize: 12, lineHeight: 17, color: T.value },
+  txt:     { fontFamily: F, fontSize: 12, lineHeight: 17, color: T.value },
+  txtCol:  { flex: 1, minWidth: 0 },
+  detail:  { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted, marginTop: 2 },
   note:    { fontFamily: F, fontSize: 13, color: T.muted, padding: 12, lineHeight: 18 },
 });

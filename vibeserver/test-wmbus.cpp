@@ -515,6 +515,15 @@ int main(int argc, char** argv) {
             const Reading* r = findMeter(got, "12345678");
             CHECK(r && r->meter->sec == 5, "Sensus %s through the front end", m.name);
         }
+        // ★ one frame out of two channels: the better-centred copy is kept
+        {
+            std::vector<Reading> v; std::vector<double> ts;
+            Reading a; readingOf(frameA(kamBody()), false, a); wmbus::Meter ma = *a.meter; ma.carrierHz = 40e3; a.meter = std::make_shared<const wmbus::Meter>(ma); a.freqHz = 868.99e6;
+            Reading b2 = a; wmbus::Meter mb = ma; mb.carrierHz = 2e3; b2.meter = std::make_shared<const wmbus::Meter>(mb); b2.freqHz = 868.951e6;
+            v = {a, b2}; ts = {1.0, 1.001};
+            Service::dedupeMeters(v, ts);
+            CHECK(v.size() == 1 && v[0].freqHz == 868.951e6, "a frame from two channels: one kept, the centred one");
+        }
         // carrier ±60 ppm, chip rate ±10 % (T) / ±2 % (S), deviation 40 / 80 kHz, both tone polarities
         int ok = 0, tot = 0;
         for (double ppm : {-60.0, 0.0, 60.0}) for (double rf : {0.9, 1.0, 1.1}) for (double dev : {40e3, 80e3}) for (bool inv : {false, true}) {

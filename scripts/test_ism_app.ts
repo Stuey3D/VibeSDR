@@ -29,6 +29,15 @@ const report = {
     { key: 'd4', kind: 'keyfob', make: 'KeeLoq', model: '', name: 'Key fob #3', line: 'Key fob #3 · KeeLoq · button 2', button: '2',
       freq: 433_920_000, snr: 20, seen: 1, count: 4 },
     { key: 'd5', kind: 'energy', name: 'Owl CM180', line: 'Owl CM180 · 1.23 kW', watts: 1234, freq: 433_900_000, seen: 30 },
+    { key: 'd6', kind: 'meter', make: 'Kamstrup', model: 'Cold water meter', name: 'Cold water meter · Kamstrup · 87654321', id: '87654321',
+      line: 'Cold water meter · Kamstrup · 87654321 · v0x1B · 123.456 m³ · flow 0.012 m³/h · 30 Sep 120.111 m³ · no alarms · every 16 s · signal 18 dB',
+      extra: 'v0x1B · 123.456 m³ · flow 0.012 m³/h · 30 Sep 120.111 m³ · no alarms · every 16 s', mfr: 'KAM', wm: 'C1-A', ver: 27, devType: 22,
+      sec: 0, secText: 'not encrypted', acc: 12, sts: 0, every: 16, rx: 92, vol: 123.456, flow: 0.012,
+      records: [{ q: 'volume', v: 123.456, u: 'm³', st: 0, fn: 'inst' }, { q: 'date', t: '2026-09-30', st: 1, fn: 'inst' }, { q: 'nonsense' , st: 'x' }, 7],
+      freq: 868_950_000, snr: 18, seen: 2, count: 3 },
+    { key: 'd7', kind: 'meter', make: 'Sensus', model: 'Water meter', name: 'Water meter · Sensus · 12345678', id: '12345678',
+      line: 'Water meter · Sensus · 12345678 · v0x68 · encrypted (AES) · every 16 s · signal 24 dB', mfr: 'SEN', wm: 'T1', ver: 104, devType: 7,
+      sec: 5, secText: 'encrypted (AES)', encBlocks: 2, encLen: 32, acc: 42, sts: 4, batt: 0, freq: 868_951_000, snr: 24, seen: 9, count: 12 },
     { kind: 'sensor', name: 'no line — dropped' },
     'not an object',
   ],
@@ -36,7 +45,7 @@ const report = {
 
 const w = web.ismSanitise(report), a = app.ismSanitise(report);
 eq('the same report through both sanitisers', a, w);
-eq('a non-device is dropped', a?.devices.length, 5);
+eq('a non-device is dropped', a?.devices.length, 7);
 eq('not a report', app.ismSanitise({ type: 'adsb' }), null);
 
 for (const u of [{ mph: false, pressure: 'psi' }, { mph: true, pressure: 'kpa' }, { mph: true, pressure: 'bar' }, { mph: false, pressure: 'bar' }] as const) {
@@ -44,6 +53,18 @@ for (const u of [{ mph: false, pressure: 'psi' }, { mph: true, pressure: 'kpa' }
 }
 for (const s of [-1, 0, 1.9, 2, 59, 61, 3599, 3600, 3900, 7200]) eq(`ago ${s}`, app.ismAgo(s), web.ismAgo(s));
 eq('status', app.ismStatus(a!), web.ismStatus(w!));
+// ★ V12 meters: the detail, the line in every unit (none applies), the status's meter count and the 0.9 MS/s gap
+for (const d of a!.devices.filter((x) => x.kind === 'meter')) eq(`meter detail ${d.key}`, app.ismMeterDetail(d), web.ismMeterDetail(d as any));
+eq('a meter line ignores units', app.ismLine(a!.devices[5], { mph: true, pressure: 'bar' }), a!.devices[5].line);
+eq('meter detail', app.ismMeterDetail(a!.devices[6]), ['T1 · 868.951 MHz · 24 dB over the noise · access number 42', 'encrypted (AES) · 2 blocks · 32 bytes']);
+eq('meter detail with readings', app.ismMeterDetail(a!.devices[5]),
+   ['C1-A · 868.950 MHz · 18 dB over the noise · heard 92 % · access number 12', 'not encrypted', 'volume: 123.456 m³', 'date: 2026-09-30 (stored 1)', 'nonsense: — ']
+     .map((x) => x.trimEnd()));
+const r868 = { ...report, band: '868', bandName: '868 MHz SRD', rate: 900_000, meters: 2, wmGap: 1 };
+eq('status: meters and the 0.9 MS/s gap', app.ismStatus(app.ismSanitise(r868)!), web.ismStatus(web.ismSanitise(r868)!));
+eq('status words', app.ismStatus(app.ismSanitise(r868)!).includes('2 meters · 868.95 not covered at 0.9 MS/s'), true);
+eq('the meter filter', app.ismRows(a, 'meter').map((d) => d.key), ['d6', 'd7']);
+eq('the empty meter line', app.ismEmptyText('meter'), web.ismEmptyText('meter'));
 const custom = app.ismSanitise({ ...report, custom: 1, centre: 433_420_000 })!;
 eq('status on an exact frequency', app.ismStatus(custom), web.ismStatus(web.ismSanitise({ ...report, custom: 1, centre: 433_420_000 })!));
 eq('band text on an exact frequency', app.ismBandText(custom), '433.420 MHz');
