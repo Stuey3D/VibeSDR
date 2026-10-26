@@ -50,10 +50,10 @@ if [ "$ARCH" = "arm" ]; then
   NDK="${ANDROID_NDK:-$HOME/Library/Android/sdk/ndk/27.1.12297006}"
   CC="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi21-clang"
   [ -x "$CC" ] || { echo "NDK clang not found at $CC — set ANDROID_NDK"; exit 1; }
-  ( cd "$WORK/src" && GOOS=android GOARCH=arm GOARM=7 CGO_ENABLED=1 CC="$CC" \
+  ( cd "$WORK/src" && GOTOOLCHAIN=local GOOS=android GOARCH=arm GOARM=7 CGO_ENABLED=1 CC="$CC" \
       go build -trimpath -ldflags "-s -w" -o "$OUT" ./cmd/cloudflared )
 else
-  ( cd "$WORK/src" && GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
+  ( cd "$WORK/src" && GOTOOLCHAIN=local GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
       go build -trimpath -ldflags "-s -w" -o "$OUT" ./cmd/cloudflared )
 fi
 
