@@ -8,6 +8,7 @@ import { parseAdsbCapability, type AdsbCap } from './adsbTypes';
 import { parseIsmCapability, type IsmCap } from './ism';
 import { parseTunable } from '../utils/tuneWindow';
 import { parseSpotModes, parseSpotsBandCap, type SpotsBandCap } from './spotsBand';
+import { parseNdbCapability } from './ndb';
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 export type Mode = SDRMode; // alias
@@ -452,6 +453,8 @@ export interface ServerOccupancy {
   /** ★ V12 ISM (docs/v12/ISM-DECODER.md): undefined = no control (an HF+ reaches no ISM band, an older server);
    *  `ok: false` = greyed with the reason; `bands` = the bands THIS radio reaches. */
   ism?: IsmCap;
+  /** ★ V12 NDB: absent = the radio reaches no LF (no control); `ok: false` = greyed with the reason; lo/hi = the slice. */
+  ndb?: import('./ndb').NdbCap;
   /** ★ Raw IQ out: the owner's policy and the slots. Absent on an older server. */
   rawIq?: 'off' | 'local' | 'public';
   rawIqMax?: number;
@@ -509,6 +512,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       spotsBand: parseSpotsBandCap(j),
       modes:     Array.isArray(j.modes) ? j.modes.filter((m: unknown) => typeof m === 'string').map((m: string) => m.slice(0, 12)).slice(0, 40) : undefined,
       ism:       parseIsmCapability(j),
+      ndb:       parseNdbCapability(j),   // ★ V12 NDB — absent where this radio reaches no LF
     };
   } catch { return null; }
   finally { clearTimeout(t); }

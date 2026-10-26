@@ -61,6 +61,7 @@ import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import { ismNeighbours, type IsmCap, type IsmReport } from '../services/ism';
+import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
 import AdsbPanel from '../components/AdsbPanel';
 import DoorSpectrogram from '../components/DoorSpectrogram';
 import { RecElapsed } from '../components/RecElapsed';
@@ -774,6 +775,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSpotModesSrv(undefined); setSpotsBandCap(undefined);
     setAdsbCap(undefined);
     setIsmCap(undefined);
+    setNdbCap(undefined);   // ★ V12 NDB
     setAntBands(null);
     if ((route.params.serverType ?? 'ubersdr') !== 'vibeserver') return;
     fetchOccupancy(connectBase.replace(/\/+$/, ''))
@@ -787,6 +789,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ V12 digital spots: the modes this server decodes, and Band mode (absent / greyed with why / offered)
         setSpotModesSrv(o?.spotModes); setSpotsBandCap(o?.spotsBand);
         setIsmCap(o?.ism);              // ★ V12 ISM — and the bands THIS radio reaches
+        setNdbCap(o?.ndb);              // ★ V12 NDB — absent where this radio reaches no LF (no key at all)
         /* ★ V12 ADS-B, from the SAME per-radio answer and for the same reason (the door owns no radio). Unlike DAB a
          *  refusal is KEPT — the control is drawn disabled with the server's words (adsbTypes parseAdsbCapability). */
         setAdsbCap(o?.adsb);
@@ -2519,14 +2522,39 @@ export default function SDRScreen({ route, navigation }: Props) {
     setIsmOn(false); setIsmReport(null);
     if (!keepBox) { setIsmBoxOpen(false); setIsmError(undefined); }
   }, []);
+  /* ── V12 NDB on a VibeServer (docs/v12/NDB-SKIMMER.md) — ADS-B's pattern exactly: a whole-radio mode entered and left by
+   *  name, its screen the full-screen MAP (MapOverlay kind 'ndb' — the beacons at their published places with a 3-bar meter,
+   *  ADS-B's NM rings, the live list bottom-left; EXIT NDB leaves the mode). No audio (spectrum-only; the waterfall slows
+   *  to 1 fps behind the map). ★ Offered only where the radio's vibeserver.json says so (ndbCap: absent = no LF on this
+   *  radio, no key; ok false = greyed with why) and never on Apple TV (no WebView: the map is the mode's only screen). */
+  const [ndbCap, setNdbCap] = useState<NdbCap | undefined>(undefined);
+  const [ndbOn, setNdbOn] = useState(false);
+  const ndbOnRef = useRef(false);
+  const [ndbViewOpen, setNdbViewOpen] = useState(false);
+  const ndbViewOpenRef = useRef(false);
+  const [ndbReport, setNdbReport] = useState<NdbReport | null>(null);
+  const ndbTracks = useRef(new NdbTracks());
+  const [ndbSeq, setNdbSeq] = useState(0);
+  const [ndbFound, setNdbFound] = useState<NdbFound[]>([]);
+  const [ndbFindResult, setNdbFindResult] = useState<{ q: string; pos?: boolean; list: NdbFound[] } | null>(null);
+  const [ndbStats, setNdbStats] = useState<NdbStats | null>(null);
+  const ndbLastAt = useRef(0);
+  useEffect(() => { ndbOnRef.current = ndbOn; }, [ndbOn]);
+  useEffect(() => { ndbViewOpenRef.current = ndbViewOpen; }, [ndbViewOpen]);
+  /** ★ Everything NDB leaves behind, in one place — EXIT NDB, the key, a mode pick, another whole-radio mode, ndb_off. */
+  const ndbUiOff = useCallback(() => {
+    ndbOnRef.current = false;
+    setNdbOn(false); setNdbViewOpen(false); setNdbReport(null);
+    ndbTracks.current.clear(); setNdbFindResult(null); setNdbStats(null);
+  }, []);
   /* ★★ V12 QUIET — ADS-B lets go of the audio output while it runs (the AirPods followed silence; the web's syncAudioQuiet,
    *  1f0b204a). One rule for every mode with nothing to hear — see audioQuiet. Released when the screen goes. */
   const quietSaid = useRef(false);
-  const audioQuiet = adsbOn || ismOn;
+  const audioQuiet = adsbOn || ismOn || ndbOn;
   useEffect(() => {
     if (audioQuiet === quietSaid.current) return;
     quietSaid.current = audioQuiet;
-    setNativeQuiet(audioQuiet, audioQuiet ? (adsbOn ? 'ADS-B' : 'ISM') : 'left ADS-B / ISM');
+    setNativeQuiet(audioQuiet, audioQuiet ? (adsbOn ? 'ADS-B' : ismOn ? 'ISM' : 'NDB') : 'left ADS-B / ISM / NDB');
   }, [audioQuiet]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (quietSaid.current) setNativeQuiet(false, 'receiver closed'); }, []);
   useEffect(() => { adsbViewOpenRef.current = adsbViewOpen; }, [adsbViewOpen]);
@@ -2541,7 +2569,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  `status.mode` on the demod it came from exactly as DAB does — so the mode string alone cannot say. Every
    *  VFO path that asked isWholeProfileMode asks this instead (one rule, one reader); the client refuses too. */
   const noTuneNow = (c: { getStatus(): { mode: unknown } }): boolean =>
-    adsbOnRef.current || ismOnRef.current || isWholeProfileMode(String(c.getStatus().mode));
+    adsbOnRef.current || ismOnRef.current || ndbOnRef.current || isWholeProfileMode(String(c.getStatus().mode));
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   // ★ `name` is the STABILISED name (see psStab); `psRaw` is the PS exactly as it arrived, for the
@@ -2671,6 +2699,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  last block is the answer every time; ours is only the drum's resting position until the
      *  first report replaces it. */
     if (askGate()) return;   // ★★ ask before tuning — entering DAB moves everybody's radio
+    if (ndbOnRef.current) ndbUiOff();   // ★ V12 NDB: one whole-radio mode at a time (the server leaves it itself)
     const i = dabBlockRef.current;
     if (i >= 0) setDabBlock(i);
     setDabBoxOpen(true);
@@ -2709,13 +2738,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       return;
     }
     if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to 1090
+    if (ndbOnRef.current) ndbUiOff();   // ★ V12 NDB: one whole-radio mode at a time (the server leaves it itself)
     setAdsbError(undefined);
     setAdsbReport(null);
     setAdsbViewOpen(true);
     c.adsb(true);
     adsbOnRef.current = true;
     setAdsbOn(true);
-  }, [adsbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [adsbUiOff, ndbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ★ EXIT ADS-B — the map's top-bar key, Android back and a pad's / keyboard's Back on the map (and the Apple TV box's
    *  key). Never toggleAdsb (the DAB lesson, dabExitAction): out of the mode it only puts the view away; it can never
@@ -2744,11 +2774,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       return;
     }
     if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to the band
+    if (ndbOnRef.current) ndbUiOff();   // ★ V12 NDB: one whole-radio mode at a time (the server leaves it itself)
     setIsmError(undefined); setIsmReport(null); setIsmBoxOpen(true);
     c.ism(true);
     ismOnRef.current = true;
     setIsmOn(true);
-  }, [ismUiOff, ismBoxOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ismUiOff, ismBoxOpen, ndbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** EXIT ISM (the box's key): out of the mode; on a locked dial only the box is put away (exitAdsb's rule). */
   const exitIsm = useCallback(() => {
     const c = client.current;
@@ -2772,6 +2803,42 @@ export default function SDRScreen({ route, navigation }: Props) {
     markInteract();
     c.ism(true, { step: d > 0 ? 1 : -1 });
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** ★★ ENTER OR LEAVE NDB — the key in the demodulator sheet (toggleAdsb's rules): pressed while the mode runs with its
+   *  map put away (a refused exit on a locked dial) it brings the map back, otherwise it leaves. Entering opens the map AT
+   *  ONCE; the SERVER puts the capture on the beacon band. Another whole-radio mode in this app is let go here, as the
+   *  web's toggleNdb does (the server leaves it itself). */
+  const toggleNdb = useCallback(() => {
+    const c = client.current;
+    if (!c?.ndb) return;
+    if (ndbOnRef.current) {
+      if (!ndbViewOpenRef.current) { setNdbViewOpen(true); return; }
+      if (askGate()) return;   // ★★ ask before tuning — leaving gives everybody's radio back
+      c.ndb(false);
+      ndbUiOff();
+      return;
+    }
+    if (askGate()) return;     // ★★ ask before tuning — entering takes everybody's radio to the beacon band
+    if (adsbOnRef.current) adsbUiOff();
+    if (ismOnRef.current) ismUiOff();
+    setNdbReport(null); ndbTracks.current.clear();
+    setNdbViewOpen(true);
+    ndbLastAt.current = Date.now();
+    c.ndb(true);
+    c.ndbFind?.('', 300);      // ★ the published beacons for the map's faint "unheard" markers (the web's show())
+    ndbOnRef.current = true;
+    setNdbOn(true);
+  }, [ndbUiOff, adsbUiOff, ismUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★ EXIT NDB — the map's top-bar key, Android back, a pad's / keyboard's Back on the map. Never toggleNdb (the DAB
+   *  lesson): out of the mode it only puts the map away. On a LOCKED dial leaving is refused and the map put away, as
+   *  exitAdsb does. */
+  const exitNdb = useCallback(() => {
+    const c = client.current;
+    const leave = ndbOnRef.current;
+    if (leave && askLocked(dialStateRef.current)) { setNdbViewOpen(false); askGate(); return; }
+    if (leave) c?.ndb?.(false);
+    ndbUiOff();
+  }, [ndbUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ★ A DAB bookmark: the multiplex AND the service, in one go — the web client's dabGoTo.
    *  Enters DAB if needed, retunes if the block differs, otherwise just switches service. */
@@ -3516,7 +3583,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
   /** ★ What the server-map overlay shows: ADS-B's map while its view is up (it is the mode's screen), else the server
    *  map somebody opened from the Mode sheet. Not on Apple TV (no WebView — the ADS-B box stands in there). */
-  const shownMap: MapKind | null = adsbViewOpen && !IS_APPLE_TV ? 'adsb' : mapKind;
+  const shownMap: MapKind | null = adsbViewOpen && !IS_APPLE_TV ? 'adsb' : ndbViewOpen && !IS_APPLE_TV ? 'ndb' : mapKind;   // ★ V12 NDB: its map, as ADS-B's
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -5639,6 +5706,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (ismOn && (activeDecRef.current || spotsKindRef.current)) dismissDecoderPanel();
   }, [ismOn, dismissDecoderPanel]);
+  /* ★ V12 NDB: the same — no audio to decode (spectrum-only); a running decoder or the spots are put away, as the web's ndbUiOn. */
+  useEffect(() => {
+    if (ndbOn && (activeDecRef.current || spotsKindRef.current)) dismissDecoderPanel();
+  }, [ndbOn, dismissDecoderPanel]);
 
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
@@ -6293,6 +6364,32 @@ export default function SDRScreen({ route, navigation }: Props) {
         setIsmOn(true);
         setIsmReport(r);
       },
+      /* ★ V12 NDB: a report (its arrival MEANS NDB is on — the map opens on the transition, as ADS-B's), ndb_off (null), or
+       *  a refusal (the map that opened on the press closes; the reason as an alert, after the modal has gone). */
+      onNdb: (r, why) => {
+        if (destroyed.current) return;
+        if (why) {
+          ndbUiOff();
+          setTimeout(() => { if (!destroyed.current) appAlert('NDB unavailable', why); }, 450);
+          return;
+        }
+        if (!r) { ndbUiOff(); return; }
+        ndbLastAt.current = Date.now();
+        if (!ndbOnRef.current) {
+          ndbOnRef.current = true; setNdbViewOpen(!IS_APPLE_TV);
+          client.current?.ndbFind?.('', 300);
+        }
+        setNdbOn(true);
+        ndbTracks.current.update(r);
+        setNdbSeq((n) => (n + 1) % 1e9);
+        setNdbReport(r);
+      },
+      onNdbFound: (f) => {
+        if (destroyed.current) return;
+        if (!f.q) setNdbFound(f.list);   // ★ an empty query also feeds the map's unheard markers
+        setNdbFindResult(f);
+      },
+      onNdbStats: (st) => { if (!destroyed.current) setNdbStats(st); },
       // ★★★ THE RADIO IS THE AUTHORITY ON ITS OWN GAIN, and until the server sent this the app had
       //     no way to know it — so the slider showed a value of its own and the owner's resting
       //     gain looked as though it had been ignored: "I set the RTL-SDR on the server to return
@@ -8857,7 +8954,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  the multiplex out — the web client's own fault on 2026-09-07 ("the spectrum can be clicked
      *  which knocks the multiplex tuning off"). The client refuses it; this stops the UI acting as
      *  though it worked, which is the difference between a locked control and a broken one. */
-    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current) return;   // ★ ADS-B: the server owns the view as well
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current) return;   // ★ ADS-B (and NDB): the server owns the view as well
     markInteract();
     const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     const a = wfZoomAcc.current;
@@ -8880,7 +8977,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
     if (askGate()) return;                 // ★★ ask before tuning — see askGate
-    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current) return;   // ★ see wfZoomBy — a tap is a view move too
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current) return;   // ★ see wfZoomBy — a tap is a view move too
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (noTuneNow(c)) return;
@@ -8903,7 +9000,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onMode = useCallback((m: SDRMode) => {
     const c = client.current; if (!c) return;
     // ★★ ask before tuning; re-picking changes nothing — except in ADS-B, where any pick gives the radio back
-    if ((m !== c.getStatus().mode || adsbOnRef.current || ismOnRef.current) && askGate()) return;
+    if ((m !== c.getStatus().mode || adsbOnRef.current || ismOnRef.current || ndbOnRef.current) && askGate()) return;
     /* ★★★ CHOOSING ANOTHER DEMODULATOR IS HOW YOU LEAVE DAB. DAB is a MODE the phone enters, not
      *  a demodulator the server switches to — so while it is on, the server refuses an ordinary
      *  mode change and this sent one anyway. The only exit was the Exit button ON the DAB screen,
@@ -8934,6 +9031,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (ismOnRef.current) {
       c.ism?.(false);
       ismUiOff();
+    }
+    // ★ …and of NDB (V12), by the same door.
+    if (ndbOnRef.current) {
+      c.ndb?.(false);
+      ndbUiOff();
     }
     userTuneSeq.current++;   // ★ a PERSON asked (mode) — see the note on userTuneSeq
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
@@ -9025,7 +9127,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const key = `${userTuneSeq.current}|${airStepSeq.current}`;
     if (key === airPbSeen.current) return;
     airPbSeen.current = key;
-    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current) return;
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current) return;
     const pb = airbandPassband(status.frequency, String(status.mode), airChannelNow,
                                status.bandwidthLow, status.bandwidthHigh);
     if (pb) onFilterBoth(pb[0], pb[1]);
@@ -9850,6 +9952,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     }, 2000);
     return () => clearInterval(t);
   }, [adsbOn, adsbUiOff]);
+  /* ★ V12 NDB: the same lapsed hold — a report a second; ten seconds of none while we believe the radio is in NDB (its
+   *  last listener left and it was given back, telling nobody) lets the map go. The next report puts it straight back. */
+  useEffect(() => {
+    if (!ndbOn) return;
+    const t = setInterval(() => { if (Date.now() - ndbLastAt.current > 10_000) ndbUiOff(); }, 2000);
+    return () => clearInterval(t);
+  }, [ndbOn, ndbUiOff]);
   const ituRegion = useMemo(
     () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
@@ -11702,7 +11811,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB, ADS-B and ISM, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz) where the server has it, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB, ADS-B, ISM and NDB, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz) where the server has it, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
@@ -13574,6 +13683,17 @@ export default function SDRScreen({ route, navigation }: Props) {
             setModeSelOpen(false);
             toggleIsm();
           },
+          /* ★★ V12 NDB, beside ISM — the same three states (absent / greyed with the server's reason / live); never on Apple
+           *  TV, which has no WebView for the map that IS the mode (a key that opened nothing would be a dead control). */
+          ndbAvail: !IS_APPLE_TV && (ndbCap !== undefined || ndbOn),
+          ndbWhy: !ndbOn && ndbCap && !ndbCap.ok ? ndbCap.why : undefined,
+          ndbOn,
+          onNdb: () => {
+            markInteract();
+            if (!ndbOnRef.current && ndbCap && !ndbCap.ok) { appAlert('NDB unavailable', ndbCap.why || 'NDB is not available on this receiver'); return; }
+            setModeSelOpen(false);
+            toggleNdb();
+          },
           cwSkim, cwWidth, onCwView, onCwWidth,
           /* ★★ V12 PSK31/63, JTTY, DSC — the server's own decoders, each only where its vibeserver.json says so. The JTTY
            *  bands and DSC channels drawn are only those this radio can be tuned to (the web's initJttyDials /
@@ -13947,18 +14067,25 @@ export default function SDRScreen({ route, navigation }: Props) {
           adsb_off is what finally takes the map down. A crash in it only puts it away (the mode key brings it back). */}
       {/* ★ IS_TV is true on ANDROID TV as well, which has a WebView: ADS-B's map is drawn there (it is the mode's only
           screen off Apple TV); the other server maps keep their old gate (tv.ts IS_APPLE_TV). */}
-      {(!IS_TV || (shownMap === 'adsb' && !IS_APPLE_TV)) && <PanelBoundary name="Map" onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : setMapKind(null))}
+      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
+                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : setMapKind(null))}
                                 resetKey={shownMap !== null}><MapOverlay
         visible={shownMap !== null}
         kind={shownMap}
         baseUrl={baseUrl}
         radioUrl={connectBase}
         sessionUuid={sessionUuid}
-        onClose={() => (shownMap === 'adsb' ? exitAdsb() : setMapKind(null))}
+        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
          *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
-        rxLat={shownMap === 'adsb' ? (serverPos ?? recvLoc)?.lat ?? null : undefined}
-        rxLon={shownMap === 'adsb' ? (serverPos ?? recvLoc)?.lon ?? null : undefined}
+        rxLat={shownMap === 'adsb' || shownMap === 'ndb' ? (serverPos ?? recvLoc)?.lat ?? null : undefined}
+        rxLon={shownMap === 'adsb' || shownMap === 'ndb' ? (serverPos ?? recvLoc)?.lon ?? null : undefined}
+        /* ★★ V12 NDB: the report, the readings kept, Find and the stats (NdbLiveList) — the page opens no socket of its own. */
+        ndb={shownMap === 'ndb' ? {
+          report: ndbReport, tracks: ndbTracks.current, seq: ndbSeq, found: ndbFound, findResult: ndbFindResult, stats: ndbStats,
+          onFind: (q: string) => { client.current?.ndbFind?.(q, q ? 120 : 300); },
+          onStats: () => { setNdbStats(null); client.current?.ndbStats?.(); },
+        } : undefined}
         adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}
         adsbCapture={shownMap === 'adsb' ? adsbCaptureWarning(adsbReport) : undefined}
         /* ★★ V12 the ADS-B GAIN key — only where the radio has a gain list the owner has not fixed (adsbGainView says null

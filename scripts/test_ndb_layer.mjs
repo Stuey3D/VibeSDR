@@ -11,6 +11,9 @@ const ok = (c, w) => { c ? pass++ : fail++; console.log(`${c ? 'ok  ' : 'FAIL'} 
 const src = readFileSync(join(root, 'web/mapkit/ndblayer.js'), 'utf8');
 const gen = readFileSync(join(root, 'web/client/src/generated/ndbLayerSource.ts'), 'utf8');
 ok(gen.includes(JSON.stringify(src).replace(/<\/script/gi, '<\\/script')), 'web/client/src/generated/ndbLayerSource.ts matches web/mapkit/ndblayer.js (else run node scripts/gen-ndblayer-source.mjs)');
+// ★ V12 NDB in the app: the same string, injected into its map WebView (MapOverlay kind 'ndb')
+const genApp = readFileSync(join(root, 'src/generated/ndbLayerSource.ts'), 'utf8');
+ok(genApp.includes(JSON.stringify(src).replace(/<\/script/gi, '<\\/script')), 'src/generated/ndbLayerSource.ts (the app) matches web/mapkit/ndblayer.js (else run node scripts/gen-ndblayer-source.mjs)');
 ok(!src.includes('`'), 'no backticks in ndblayer.js');
 const ctx = { window: {}, console };
 ctx.globalThis = ctx.window;
