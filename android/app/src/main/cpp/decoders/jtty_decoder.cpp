@@ -1190,7 +1190,9 @@ struct Decoder::Impl {
     }
     void expireMessages() {
         for (auto& s : sigs)
-            if (s.open && nAbs > s.nextSample + 2 * kFrameSamples) closeMessage(s, false);
+            // ★ an unfinished message waits for frames that may still come: up to two missed (the "… " a gap leaves)
+            //   plus one frame's decoding delay — closing sooner split a message at its first lost frame (real 40 m audio)
+            if (s.open && nAbs > s.nextSample + 4 * kFrameSamples) closeMessage(s, false);
         const int64_t now = msAt(nAbs);
         sigs.erase(std::remove_if(sigs.begin(), sigs.end(), [&](const Sig& s) {
             return !s.open && now - s.lastMs > (int64_t)cfg.keepGoneSec * 1000; }), sigs.end());

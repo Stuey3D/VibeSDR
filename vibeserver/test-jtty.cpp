@@ -357,6 +357,33 @@ int main() {
         else ok(nf == 0, "no frame from " + std::to_string((int)(sec / 60)) + " min of real FT8/FT4 band audio (" + std::to_string(cands) + " candidates tried)");
     }
 
+    // ── 7b. REAL JTTY: the WSJT-X sample, and real transmissions off Stuart's UberSDR ────────────────────────────
+    std::printf("\n── real JTTY (~/VibeSDR-test-audio/jtty, NOT RUN when absent) ──\n");
+    {
+        const char* home = std::getenv("HOME");
+        const std::string dir = std::string(home ? home : "") + "/VibeSDR-test-audio/jtty/";
+        struct Real { const char* file; std::vector<std::string> expect; const char* what; };
+        const Real reals[] = {
+            { "wsjtx_sample_260807_134110.wav", { "RAN ALL NIGHT ON BAND NOISE - NO FALSE DECODES!" }, "the WSJT-X 3.2 user guide's sample recording, whole" },
+            { "jtty_7090000_20261026T1653.wav", { "CQ F4ELU/QRP CQ", "CQ DK7OG JO62" },
+              "40 m off air: F4ELU/QRP (PSKReporter: JTTY at 7.091370) and DK7OG calling CQ" },
+        };
+        for (auto& r : reals) {
+            std::vector<float> x;
+            if (!readWav(dir + r.file, x)) { std::printf("    NOT RUN: %s%s\n", dir.c_str(), r.file); continue; }
+            Decoder::Config c; Decoder d(c); d.setStartUtcMs(0);
+            Heard h; run(d, x, h);
+            bool all = true;
+            for (auto& e : r.expect) {
+                bool hit = false;
+                for (auto& m : h.messages) if (m.second.find(e) != std::string::npos) hit = true;
+                all = all && hit;
+            }
+            std::string got; for (auto& m : h.messages) got += " \"" + m.second.substr(0, 60) + "\"";
+            ok(all, std::string(r.what) + " —" + got);
+        }
+    }
+
     // ── 8. Through a DecoderHost (what the server runs) ─────────────────────────────────────────────────────────
     std::printf("\n── \"jtty\" through a DecoderHost ──\n");
     {
