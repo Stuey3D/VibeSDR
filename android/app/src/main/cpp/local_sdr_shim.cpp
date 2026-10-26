@@ -7747,6 +7747,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  clientRetune; read by the pipeline callbacks, which run under mtx too). */
         std::unique_ptr<vibe::DrmListener> drm;
         uint64_t drmSentVer = 0;
+        std::atomic<bool> drmOn{false};             // ★ for the health watch, which must not take mtx (see there)
+        std::atomic<uint64_t> drmDropped{0};
         double bwHz = 0;
         int    chanBins = 0;                    // power of two dividing fftSize
         double chanRate = 0;
@@ -8682,6 +8684,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ V12 DRM: the receiver needs ≥ 24 kHz of channel; a new one for a new tune (it re-acquires anyway)
         if (c->mode == "drm") { c->drm.reset(new vibe::DrmListener()); c->drmSentVer = 0; c->rx->setIqMinRate(24000.0); }
         else if (c->drm) { c->drm.reset(); c->rx->setIqMinRate(0.0); }
+        c->drmOn.store(c->mode == "drm");
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
         // ★ After the pipeline exists, so setRdsEnabled has something to act on. A FULL resweep,
         //   because this listener moving can free a frequency somebody else is sitting on — see
@@ -8802,6 +8805,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             c->drm->takePcm(drmPcm.data(), frames);
             pcm = drmPcm.data(); ch = 2;
             drmSendStatus(c);
+            c->drmDropped.store(c->drm->droppedBlocks(), std::memory_order_relaxed);
         }
         // ★★★ THE DECODERS RUN FIRST, AND WITHOUT AN AUDIO SOCKET.
         //     This used to sit BELOW the `if (!sock || !sock->isOpen()) return;` guard, so in
@@ -31713,6 +31717,20 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
                            hst->spotSlotsSkipped(), nowMs);
         }
         if (p->bgRun_.running()) watch.note("bg", "Background decoding", p->bgRun_.droppedSamples(), nowMs);
+        // ★ V12 DRM: each DRM receiver's queue drops its oldest IQ rather than make the pipeline wait — counted here
+        {
+            std::shared_ptr<vibe::DrmListener> d;
+            { std::lock_guard<std::mutex> lk(p->drmSharedMtx); d = p->drmShared; }
+            if (d) watch.note("drm:shared", "DRM", d->droppedBlocks(), nowMs);
+            std::lock_guard<std::mutex> lk(p->clientMtx);
+            for (auto& kv : p->clientDsp) {
+                auto& c = kv.second;
+                if (!c) continue;
+                // ★ the copy, NOT c->drm under c->mtx: the client thread takes clientMtx inside c->mtx, so taking c->mtx
+                //   inside clientMtx here would be the other half of a deadlock
+                if (c->drmOn.load()) watch.note("drm:" + c->session, "DRM", c->drmDropped.load(), nowMs);
+            }
+        }
     }
     if (g_adsb.running()) watch.note("adsb", "ADS-B", g_adsb.health().dropped, nowMs);
     if (g_ism.running()) watch.note("ism", "ISM", g_ism.droppedBlocks(), nowMs);
