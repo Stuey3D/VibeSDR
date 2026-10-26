@@ -101,8 +101,21 @@ export function addPadKbListener(f: (o: { kbButton: PadButton; profile: PadProfi
   return { remove: () => { padKbListeners.delete(f); } };
 }
 
+const swapVfoListeners = new Set<() => void>();
+/** ★★ V12 VFO A/B: the pad's swap (START tap, △ on a stick pad — padActions). The receiver screen listens. */
+export function addSwapVfoListener(f: () => void): { remove(): void } {
+  ensureNative();
+  swapVfoListeners.add(f);
+  return { remove: () => { swapVfoListeners.delete(f); } };
+}
+
 function runPad(outs: PadOut[]) {
   for (const o of outs) {
+    if ('swapVfo' in o) {
+      inputSource.set('pad');
+      swapVfoListeners.forEach((f) => { try { f(); } catch { /* a listener's fault */ } });
+      continue;
+    }
     if ('kbButton' in o || 'kbSubmit' in o) {
       inputSource.set('pad');
       padKbListeners.forEach((f) => { try { f(o); } catch { /* a listener's fault */ } });

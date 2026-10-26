@@ -60,6 +60,7 @@ flags_for() {
     # ★ Every mode's DSP cost vs passband, both directions and past the ceiling — the audit that
     #   followed the WFM cliff (2026-09-29). Optimised for the same reason.
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
+    test-watch|test-watch-cost) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;   # ★ V12 VFO A/B (vibe_watch.h)
     # ★★★ Every chain delivers exactly 48 000 audio samples per second of capture (2026-10-07: the RSPs
     #     ran 32-34 ppm short through a rounded, approximated resampler ratio). Optimised: 21 s of input per chain.
     test-resampler-rate)   echo "-O2 -I $VDSP -I $KISS" ;;
@@ -159,6 +160,9 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-passband-cost)   echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-watch|test-watch-cost) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-resampler-rate)  echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
@@ -356,6 +360,14 @@ if node scripts/test-setup-bg-ndb.mjs; then pass=$((pass+1)); else fail=$((fail+
 # ★★★ A TUNNEL A PREVIOUS PROCESS LEFT ON OUR PORT IS RETIRED (2026-10-19, Kiko's four tunnels). Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 VFO A/B through the real server: lower VFO left / higher right in ONE stream, B's own squelch, the window refusal,
+#    the listener-slot yield, an old client untouched, a shared dial's private stream. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-vfo-ab.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 VFO A/B in the WEB client (headless Edge, --mute-audio): the tuning-menu toggle, the A/B key, B's needle, the
+#    audio panel's STEREO switch, no toggle where the owner switched it off. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-vfo-ab.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
@@ -433,6 +445,8 @@ if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); el
 if node --no-warnings scripts/test_server_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 BINAURAL TUNING (binauralOffset.ts): the offset source per mode, AM/CW/FM readings with known offsets, the tracker.
 if node --no-warnings scripts/test_binauralOffset.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 VFO A/B, the app's half (src/services/vfoAB.ts): the wire, the A/B slots, the L/R tags (the server's rule).
+if node --no-warnings scripts/test_vfoAB.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 BINAURAL — THE WATERFALL CUE ON A SWEEP (2026-10-18, Stuart on 482: "it's not panning as I tune through the
 #     band"): the real tracker over spectra from real voices, the dial clicking 100/500 Hz. NOT RUN (exit 3) without
 #     VIBE_TEST_AUDIO (the I/Q is not in the repo). ~2 minutes (it builds a composite band from the recordings).

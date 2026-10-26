@@ -856,6 +856,9 @@ export class AudioPlayer {
   private _squelchDb = VS_SQL_OFF;
   set squelchDb(db: number) { this._squelchDb = db; }
   get squelchActive() { return vsSqlOn(this._squelchDb); }
+  /** ★★ V12 VFO A/B: the output device's channel count (1 = a mono device, where both VFOs must be mixed). 2 until the
+   *  context exists — the common case, and the server mixes centred either way the moment we say otherwise. */
+  get outputChannels(): number { try { return this.ctx ? this.ctx.destination.maxChannelCount || 2 : 2; } catch { return 2; } }
 
   constructor(url: string, cb: AudioCallbacks = {}) {
     this.url = url;

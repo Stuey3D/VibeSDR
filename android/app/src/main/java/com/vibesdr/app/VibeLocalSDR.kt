@@ -347,6 +347,9 @@ object VibeLocalSDR {
     private external fun nativeSetDecoderMax(max: Int)
     fun setNbWide(mode: Int) { ensureLoaded(); nativeSetNbWide(mode) }
     private external fun nativeSetNbWide(mode: Int)
+    /** ★★ V12 VFO A/B — may listeners add a VFO B (default on)? */
+    fun setVfoB(on: Boolean) { ensureLoaded(); nativeSetVfoB(on) }
+    private external fun nativeSetVfoB(on: Boolean)
 
     /** Per-band gain ceilings, the gain to return to when everyone leaves (-1 = leave alone), and
      *  an AGC lock. ★ Ceilings are enforced on SET, on RETUNE INTO a capped band, at START and at

@@ -572,7 +572,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits); S("gainCurves", r.gainCurves);
     B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost); B("adsb256", r.adsb256);
-    I("rawIq", r.rawIq); I("rawIqMax", r.rawIqMax); I("nbWide", r.nbWide);
+    I("rawIq", r.rawIq); I("rawIqMax", r.rawIqMax); I("nbWide", r.nbWide); I("vfoB", r.vfoB);
     I("rawIqLanMaxHz", r.rawIqLanMaxHz);
     S("blockedModes", r.blockedModes);
     // ★ Absent keeps the safe defaults (AGC off, protection on) — B() only assigns when present.
@@ -650,7 +650,7 @@ std::string radioToJson(const RadioConfig& r) {
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits); S("gainCurves", r.gainCurves);
     B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost); B("adsb256", r.adsb256);
-    N("rawIq", r.rawIq); N("rawIqMax", r.rawIqMax); N("nbWide", r.nbWide);
+    N("rawIq", r.rawIq); N("rawIqMax", r.rawIqMax); N("nbWide", r.nbWide); N("vfoB", r.vfoB);
     N("rawIqLanMaxHz", r.rawIqLanMaxHz);
     S("blockedModes", r.blockedModes);
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
@@ -761,7 +761,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.dabRateBoost = one.dabRateBoost;   // ★ and the other direction — see the note in the flatten
     r.adsb256 = one.adsb256;
     r.rtlAgc = one.rtlAgc; r.tunerBwAuto = one.tunerBwAuto;   // ★ the same holes on migration
-    r.rawIq = one.rawIq; r.rawIqMax = one.rawIqMax; r.nbWide = one.nbWide;
+    r.rawIq = one.rawIq; r.rawIqMax = one.rawIqMax; r.nbWide = one.nbWide; r.vfoB = one.vfoB;
     r.rawIqLanMaxHz = one.rawIqLanMaxHz;
     r.blockedModes = one.blockedModes;
     r.sessionLimitMin = one.sessionLimitMin;
@@ -1256,6 +1256,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.rawIq = r.rawIq; c.rawIqMax = r.rawIqMax;   // ★ raw IQ out — the last link, as the note below says
     c.rawIqLanMaxHz = r.rawIqLanMaxHz;
     c.nbWide = r.nbWide;
+    c.vfoB = r.vfoB;
     /* ★★★ THE MODES LIST WAS THE tunerBwAuto FAULT AGAIN — saved, parsed, stored against the right
      *     radio, and never copied here, so the worker offered everything however the owner had
      *     set it (Stuart, 2026-09-15: "I went in, disabled WFM/ADV RDS/DAB … and they've been

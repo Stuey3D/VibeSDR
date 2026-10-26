@@ -1283,6 +1283,14 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           them. On a clean signal it blanks nothing. <b>Auto</b> engages it only when the radio is
           below 30 MHz: on a strong VHF broadcast band a blanker trades clicks for damage. Each
           listener also has their own blanker on their own channel, in the audio menu.</div></label>
+      <!-- ★★ V12 VFO A/B — the owner's switch. On by default: one VFO B costs about one more listener. -->
+      <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
+        <input type="checkbox" id="vfoB" checked style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Let listeners use VFO A/B (two frequencies at once)</span></label>
+      <div class="hint">A listener can turn on a second VFO in the tuning menu and hear both at once &mdash; the lower
+        frequency in the left ear, the higher in the right &mdash; each with its own mode and squelch, anywhere
+        inside this radio&rsquo;s window (it never moves the radio). Each VFO&nbsp;B costs about as much as one more
+        listener, and on a radio with a listener limit it takes a listener&rsquo;s place until a new listener arrives.</div>
       <!-- (the separate "streams at once" cap moved INTO the raw IQ row above; it only ever
            meant something on a locked window) -->
     </div>
@@ -5317,6 +5325,7 @@ function fill() {
   if ($("askFirst")) $("askFirst").checked = !!r.askBeforeTuning;   // ★ absent = off, as on every older config
   $("idleKick").value = r.idleKickMin || 0;
   if ($("nbWide"))   $("nbWide").value = String(r.nbWide === undefined || r.nbWide === null ? 1 : r.nbWide);
+  if ($("vfoB"))     $("vfoB").checked = r.vfoB === undefined || r.vfoB === null ? true : !!r.vfoB;   // ★ absent = on (the default)
   if ($("rawIqOn")) {
     // ★ One stored shape (rawIq 0/1/2 + rawIqMax + rawIqLanMaxHz), two faces: see rawIqAvail.
     $("rawIqOn").checked = (r.rawIq || 0) > 0;
@@ -6138,6 +6147,7 @@ function collectRadio() {
     })(),
     // ★ Wide impulse blanker: 0 off, 1 auto (HF only), 2 on.
     nbWide: parseInt($("nbWide").value || "1", 10),
+    vfoB: $("vfoB") && !$("vfoB").checked ? 0 : 1,   // ★★ V12 VFO A/B — the owner's switch
     // ★ Never claim the spectrogram for a radio that cannot honestly draw one — the checkbox is
     //   hidden in that case, and a hidden control must not still be sending a value.
     spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked

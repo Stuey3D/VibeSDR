@@ -351,6 +351,8 @@ object VibeServerBoot {
                                   cfg.s("rawIqLanMaxHz").toIntOrNull() ?: 0)
             // ★ Wide impulse blanker — off / auto (HF only) / on; auto when unset.
             VibeLocalSDR.setNbWide(cfg.s("nbWide").toIntOrNull() ?: 1)
+            // ★★ V12 VFO A/B — the owner's switch; on when unset.
+            VibeLocalSDR.setVfoB((cfg.s("vfoB").toIntOrNull() ?: 1) != 0)
             // ★★★ THE RESTING GAIN IS NOT AN ADVANCED SETTING, AND GATING IT ON `adv` THREW IT AWAY.
             //     The server screen offers STARTING GAIN in BOTH modes — deliberately, and its own
             //     comment says so ("One control, one value — it was not duplicated into Advanced")

@@ -44,6 +44,7 @@ import { getControlHaptics } from './controlHaptics';
 import { buildGlyphPath } from './DrumWheel';
 import { DomeKey, DomeIcon, type IconStroke } from './DomeKey';
 import { WellFace } from './DrumWell';
+import DisplayFontText from './DisplayFontText';
 import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { useUiScale } from '../hooks/useUiScale';
@@ -234,6 +235,10 @@ interface Props {
    *  them has no lamp behind it. The CHAT key's treatment on a server with no chat. ★ Not `disabled`: a
    *  dimmed key reads as an absent one (memory: disabled_control_reads_as_absent). */
   lampOff?: boolean;
+  /** ★★ V12 VFO A/B (tune pair only): while A/B is on, a small A/B KEY takes the etched glyph's place between the
+   *  keys, labelled with the VFO they tune; a press switches. Null/absent = the glyph, exactly as ever. */
+  abLetter?: 'A' | 'B' | null;
+  onAbPress?: () => void;
 }
 
 /** The key legends, drawn in the mockup's 24-unit SVG space: ‹ › for tune, − + for zoom. */
@@ -251,7 +256,7 @@ function legendStrokes(type: TunerKeyType, dir: -1 | 1): IconStroke[] {
 
 export default function TunerKeys({
   type, height, onStep, sweepRate, onSweepStep, width: widthProp = 0, style, disabled = false,
-  landscape = false, centreLabel, lampOff = false,
+  landscape = false, centreLabel, lampOff = false, abLetter = null, onAbPress,
 }: Props) {
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
@@ -293,6 +298,7 @@ export default function TunerKeys({
   }
 
   const dim = disabled ? 0.35 : 1;
+  const abKey = type === 'vfo' && !!abLetter && !!onAbPress;
   // ★ The keys are LIT (constants/keyLight.ts) while Transparency effects are on. With the ring gone, a
   //   key's nearest neighbour outside the well is the padding away plus at least the deck's tightest gap
   //   (DECK_MIN_GAP — test_faceplate_wells checks every layout), so the light takes its share of that.
@@ -316,15 +322,41 @@ export default function TunerKeys({
             light bleeding out of the etching come from one sprite (useEtchGlow); unlit, today's
             drawing exactly. */}
         {/* ★ lampOff (2026-10-07): no lamp behind the etching — no glow, and the cut reads as unlit engraving. */}
-        {lampOff ? null : lit
+        {abKey ? null : lampOff ? null : lit
           ? <EtchGlow path={glyphPath} W={W} H={H} led={fp.controls} dim={dim} />
           : <Path path={glyphPath} color={G(0.55 * dim)} strokeWidth={2.6} style="stroke"
                   strokeCap="round" strokeJoin="round">
               <BlurMask blur={3} style="normal" respectCTM />
             </Path>}
-        <Path path={glyphPath} color={lampOff ? LAMP_OFF_INK : G(0.95 * dim)} strokeWidth={1.4} style="stroke"
-              strokeCap="round" strokeJoin="round" />
+        {!abKey && <Path path={glyphPath} color={lampOff ? LAMP_OFF_INK : G(0.95 * dim)} strokeWidth={1.4} style="stroke"
+              strokeCap="round" strokeJoin="round" />}
       </Canvas>
+
+      {/* ── ★★ V12 VFO A/B: the A/B key between the tune keys — the VFO they tune, lit; a press switches ── */}
+      {abKey && (() => {
+        const gapX = L.leftX + L.keyW, gapW = L.rightX - gapX;
+        const kw = Math.max(22, Math.min(gapW - 6, s.r(40)));
+        const kh = Math.max(20, Math.min(L.keyH, kw * 1.1));
+        return (
+          <View style={{ position: 'absolute', left: gapX + (gapW - kw) / 2, top: L.keyY + (L.keyH - kh) / 2,
+                         width: kw, height: kh, opacity: dim }}>
+            <DomeKey height={kh} radius={Math.min(TK_SLOT_R, kh / 4)} style={{ width: kw }} disabled={disabled}
+              onPress={onAbPress} hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }}
+              lightReach={lampOff ? 0 : keyLightReach(4)}
+              accessibilityLabel={`VFO ${abLetter}`} accessibilityHint="Switches which VFO the tune keys move">
+              {() => (
+                <DisplayFontText keepColor
+                  style={{ color: fp.controls.core, fontSize: Math.max(11, Math.min(kh * 0.55, s.r(18))), fontWeight: '700',
+                           includeFontPadding: false,
+                           ...(lit ? { textShadowColor: fp.controls.glow, textShadowRadius: 4,
+                                       textShadowOffset: { width: 0, height: 0 } } : null) }}>
+                  {abLetter as string}
+                </DisplayFontText>
+              )}
+            </DomeKey>
+          </View>
+        );
+      })()}
 
       {hasLabel && (() => {
         // ★ One line over the whole pair, inside the padding: the MUX legend dim, the block lit. The type

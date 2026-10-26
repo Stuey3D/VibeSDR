@@ -329,6 +329,7 @@ struct Config {
      *  it — no resampling, no cut-out. 0 = no ceiling. Chosen from the radio's own rates. */
     int  rawIqLanMaxHz = 0;
     int  nbWide = 1;              // ★ wide impulse blanker on the raw capture: 0 off, 1 auto (HF only), 2 on
+    int  vfoB = 1;                // ★★ V12 VFO A/B: may listeners add a VFO B? 1 (default) yes, 0 no
     /** Modes and decoders switched off on this receiver, comma separated (e.g. "dab").
      *  ★ Bands say WHERE this aerial is useful; this says WHAT it is useful for. An amplified
      *   attic aerial can be right for FM and wrong for a DAB transmitter two miles away. */
@@ -640,6 +641,7 @@ struct RadioConfig {
     int    rawIqMax = 0;           // ★ total raw IQ listeners at once; 0 = the host's default
     int  rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling in Hz, 0 = none (one-listener radio only)
     int    nbWide = 1;             // ★ wide impulse blanker: 0 off, 1 auto (below 30 MHz), 2 on
+    int    vfoB = 1;               // ★★ V12 VFO A/B — see Config::vfoB
     std::string blockedModes;      // per radio — see Config::blockedModes
     int    directSampling = -1; // RTL: 0 off, 1 I, 2 Q; -1 = leave alone (not needed on a V4)
     /** ★★★ AUTOMATIC DIRECT SAMPLING FOR HF — switch the Q branch in below a crossover and back

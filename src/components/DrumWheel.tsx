@@ -65,6 +65,7 @@ import { ledA, LAMP_OFF_INK } from '../constants/faceplate';
 import { notchOrder } from '../constants/drumWell';
 import { WellFace, WellEdge, DrumPool } from './DrumWell';
 import { getControlHaptics } from './controlHaptics';
+import DisplayFontText from './DisplayFontText';
 
 // ── Drum haptics (menu ✦ HAPTICS toggle) ──────────────────────────────────────
 // ★ The switch lives in controlHaptics.ts now (DomeKey needs it, and DrumWheel draws with DomeKey's
@@ -116,6 +117,11 @@ interface Props {
    *  on a server with no chat. ★ Unlit, never hidden or greyed: a dark control still reads as a control
    *  (memory: disabled_control_reads_as_absent). The gesture, haptics and onDelta are untouched. */
   lampOff?: boolean;
+  /** ★★ V12 VFO A/B (tune drum only): the VFO the drum tunes while A/B is on. The radio glyph SHIFTS OVER and this
+   *  letter sits beside it in the window; off (null) = the glyph exactly where it always was. */
+  vfoLetter?: 'A' | 'B' | null;
+  /** A BRIEF press-and-hold on the window switches VFO (short haptic). Only while `vfoLetter` is set. */
+  onTrapHold?: () => void;
 }
 
 // ── Remembered across mounts (the diet, Moto G35, 2026-10-11) ──────────────────
@@ -141,7 +147,7 @@ function keepRaster(key: string, r: { below: SkImage; above: SkImage }) {
 
 export default function DrumWheel({
   type, width: widthProp = 0, height, onDelta, style,
-  fontFamily = 'Atkinson Hyperlegible', noInertia = false, lampOff = false,
+  fontFamily = 'Atkinson Hyperlegible', noInertia = false, lampOff = false, vfoLetter = null, onTrapHold,
 }: Props) {
   const [measuredW, setMeasuredWState] = useState(() => widthProp || drumWidths.get(widthKey(type, height)) || 0);
   const setMeasuredW = (w: number) => { drumWidths.set(widthKey(type, height), w); setMeasuredWState(w); };
@@ -414,9 +420,12 @@ export default function DrumWheel({
   }, [drumTop, drumH]);
 
   const iconSz   = Math.max(7, Math.round(drumTop * 0.52));
+  // ★★ V12 VFO A/B: the glyph moves left by half its width so glyph + letter sit centred in the window together.
+  const abOn   = type === 'vfo' && !!vfoLetter;
+  const iconCx = abOn ? cx - iconSz * 0.45 : cx;
   const iconPath = useMemo(
-    () => buildIconPath(type === 'vfo', cx, drumTop * 0.48, iconSz),
-    [type, cx, drumTop, iconSz]);
+    () => buildIconPath(type === 'vfo', iconCx, drumTop * 0.48, iconSz),
+    [type, iconCx, drumTop, iconSz]);
 
   const pmFontSz = Math.max(10, Math.round(drumTop * 0.51));
 
@@ -600,10 +609,29 @@ export default function DrumWheel({
   const imgs = drumImgs?.key === rasterKey ? drumImgs : kept;
   const androidOne = !!rasterKey && !!imgs;
 
+  /* ★★ V12 VFO A/B — PRESS AND HOLD THE WINDOW to switch VFO. Inside the trapezoid only (the panel face above the
+   *  wheel), held still ~0.35 s: a drag still turns the drum (a move cancels the hold), a tap does nothing new. */
+  const hold = Gesture.LongPress()
+    .runOnJS(true)
+    .enabled(abOn && !!onTrapHold)
+    .minDuration(350)
+    .maxDistance(10)
+    .onStart(e => {
+      if (e.y > drumTop || e.y < 0) return;
+      const half = (trapWT - (trapWT - trapWB) * (e.y / Math.max(1, drumTop))) / 2;
+      if (Math.abs(e.x - cx) > half) return;
+      if (getControlHaptics()) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      onTrapHold?.();
+    });
+  const gestures = Gesture.Simultaneous(gesture, hold);
+  const letterSz = Math.max(8, Math.round(iconSz * 0.95));
+
   return (
-    <GestureDetector gesture={gesture}>
+    <GestureDetector gesture={gestures}>
       <View style={[{ height }, style]}
-            onLayout={widthProp <= 0 ? e => setMeasuredW(e.nativeEvent.layout.width) : undefined}>
+            onLayout={widthProp <= 0 ? e => setMeasuredW(e.nativeEvent.layout.width) : undefined}
+            accessibilityActions={abOn ? [{ name: 'activate', label: 'Switch VFO' }] : undefined}
+            onAccessibilityAction={abOn ? () => onTrapHold?.() : undefined}>
         {androidOne ? (
           /* ★ Android: ONE surface per drum — see the header. */
           <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -621,6 +649,21 @@ export default function DrumWheel({
         {/* ════ 3. ABOVE THE NOTCHES — static ════ */}
         <Canvas pointerEvents="none" style={StyleSheet.absoluteFill}>{aboveEl}</Canvas>
         </>)}
+
+        {/* ── ★★ V12 VFO A/B: the tuned VFO's letter beside the glyph, lit like it (display font) ── */}
+        {abOn && (
+          <View pointerEvents="none"
+                style={{ position: 'absolute', left: cx + iconSz * 0.1, top: drumTop * 0.48 - letterSz * 0.62,
+                         height: letterSz * 1.24, justifyContent: 'center' }}>
+            {/* ★ The display font (memory: main controls use it), lit in the drum's own LED colour (keepColor). */}
+            <DisplayFontText keepColor accessibilityLabel={`Tuning VFO ${vfoLetter}. Press and hold the window to switch.`}
+              style={{ color: ink(0.95), fontSize: letterSz, lineHeight: letterSz * 1.2, includeFontPadding: false,
+                       ...(lampOff ? null : { textShadowColor: light(0.6), textShadowRadius: 4,
+                                              textShadowOffset: { width: 0, height: 0 } }) }}>
+              {vfoLetter as string}
+            </DisplayFontText>
+          </View>
+        )}
 
         {/* ── +/− in the dead corner triangles flanking the V ── */}
         <View pointerEvents="none"

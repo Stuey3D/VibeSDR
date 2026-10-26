@@ -156,6 +156,8 @@ public:
     void sayVts(const std::string& text);
     /** ★ Wide impulse blanker on the raw capture: 0 off, 1 auto (only below 30 MHz), 2 on. */
     static void setVibeServerNbWide(int mode);
+    /** ★★ V12 VFO A/B — the owner's switch (default on): may listeners add a VFO B? */
+    static void setVibeServerVfoB(bool on);
     /** Modes and decoders the owner has switched off, comma separated (e.g. "dab,cwl"). */
     static void setVibeServerBlockedModes(const std::string& csv);
     static void setGainLock(bool on);
