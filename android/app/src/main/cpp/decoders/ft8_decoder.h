@@ -24,6 +24,22 @@ extern "C" {
 
 namespace vibe {
 
+/* ★★ THE THREE FRAMES ON ONE CORE (2026-10-26). FT2 (IU8LMC's fast mode, Decodium, Feb 2026) is FT4's frame exactly —
+ *  4-GFSK BT 1.0, 105 symbols (ramp, four 4-symbol Costas groups, 87 data symbols), LDPC(174,91) + CRC-14, the 77-bit
+ *  message XORed with FT4's sequence, FT4's Gray map — at HALF the symbol length: 288 samples at 12 kHz (24 ms,
+ *  41.67 Hz tones, ~167 Hz wide), a 3.75 s T/R period. So it is a parameterisation here, not another decoder:
+ *  the monitor's symbol period and slot, and a wider time search (see kFt2*). docs/v12/JS8-FT2.md has the sources. */
+enum class FtxMode { FT8, FT4, FT2 };
+constexpr float kFt2SymbolPeriod = 0.024f;   ///< 288 samples at 12 kHz
+constexpr float kFt2SlotTime     = 3.75f;    ///< the T/R period
+/* ★ FT2's window and search. Decodium starts its transmissions 0, 100 or 300 ms into the slot depending on the
+ *  version and platform, and its decoder looks -0.52 .. +1.52 s; a 24 ms block makes ft8_lib's -10 .. 20 blocks only
+ *  -0.24 .. +0.48 s. So the window holds 5 s from the boundary (overlapping the next slot by 1.25 s — a signal of the
+ *  next slot sits beyond the search) and the search runs -22 .. +64 blocks (-0.53 .. +1.54 s). */
+constexpr float kFt2WindowTime   = 5.0f;
+constexpr int   kFt2TimeMin      = -22;
+constexpr int   kFt2TimeMax      = 65;
+
 /* ★★★ THE HASHED-CALLSIGN TABLE (audit 2026-10-04, row 10). A non-standard call ("PJ4/K1ABC") goes over the air as a
  *  10-, 12- or 22-bit hash, and only a table of calls already heard in full can turn it back into a call. The old one
  *  held 512 calls, never forgot one, and stopped SAVING when full — every decoded call is saved, so on a busy band it
@@ -103,8 +119,10 @@ struct Ft8SlotStats {
  *  Owns its spectrogram and scratch, so one instance must not decode two slots at once. */
 class Ft8SlotDecoder {
 public:
-    Ft8SlotDecoder(int sampleRate, bool ft4);
+    Ft8SlotDecoder(int sampleRate, bool ft4) : Ft8SlotDecoder(sampleRate, ft4 ? FtxMode::FT4 : FtxMode::FT8) {}
+    Ft8SlotDecoder(int sampleRate, FtxMode mode);
     ~Ft8SlotDecoder();
+    FtxMode mode() const { return mode_; }
     Ft8SlotDecoder(const Ft8SlotDecoder&) = delete;
     Ft8SlotDecoder& operator=(const Ft8SlotDecoder&) = delete;
 
@@ -122,7 +140,8 @@ private:
     int  snrDb(const ftx_candidate_t& c, const uint8_t* tones);
     void subtract(float* audio, int n, const uint8_t* tones, double startSample, double f0);
 
-    bool  ft4_;
+    FtxMode mode_;
+    bool  ft4_;                    // FT4's frame: FT4 and FT2
     int   rate_;
     int   nn_, nsps_;              // channel symbols, samples per symbol
     int   windowSamples_;
@@ -140,13 +159,16 @@ private:
 
 class Ft8Decoder {
 public:
-    Ft8Decoder(int sampleRate, bool ft4);
+    Ft8Decoder(int sampleRate, bool ft4) : Ft8Decoder(sampleRate, ft4 ? FtxMode::FT4 : FtxMode::FT8) {}
+    Ft8Decoder(int sampleRate, FtxMode mode);
     ~Ft8Decoder();
+    FtxMode mode() const { return mode_; }
 
     /** Feed mono int16 audio at the construction sample rate. `captureUtc` is the corrected UTC (vibeUtcNow) at
      *  which the LAST sample of this block was captured — DecoderHost stamps it when the audio is handed over, so
      *  a decoder thread running behind does not move the slot. NaN = "now" (a caller with no timestamp). */
     void process(const int16_t* mono, int count, double captureUtc = NAN);
+    void process(const float* mono, int count, double captureUtc = NAN);   ///< ±1.0 full scale
 
     bool isFt4() const { return ft4; }
 
@@ -189,7 +211,8 @@ private:
     void runDecode();
     void workerLoop();
 
-    bool   ft4;
+    FtxMode mode_;
+    bool   ft4;                    // FT4's frame: FT4 and FT2
     int    rate;
     double slotPeriod;
     bool   ok = false;

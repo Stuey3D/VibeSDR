@@ -4,7 +4,7 @@
 //   (UberSDR's jt9 on the same receiver, same hour), not on a synthetic band — and on its CPU per slot, because the
 //   decoder shares a Pi 2 with the radio. This drives the same Ft8SlotDecoder the server runs, with the same options.
 //
-//   ft8_wav FILE.wav START_UTC [--ft4] [--passes N] [--iters N] [--cands N] [--minscore N] [--lead S] [--len S]
+//   ft8_wav FILE.wav START_UTC [--ft4|--ft2] [--passes N] [--iters N] [--cands N] [--minscore N] [--lead S] [--len S]
 //                              [--from UTC] [--to UTC]
 //     START_UTC  UTC (unix seconds, fractional) of the file's first sample.
 //     --lead     window start relative to the slot boundary (default: the decoder's own leadSec)
@@ -68,12 +68,13 @@ int main(int argc, char** argv) {
     std::vector<int16_t> pcm; int rate = 0;
     if (!readWav(argv[1], pcm, rate)) { std::fprintf(stderr, "cannot read %s (mono s16 WAV)\n", argv[1]); return 2; }
     const double fileStart = std::atof(argv[2]);
-    bool ft4 = false; double lead = NAN, len = 0, from = 0, to = 1e18;
+    bool ft4 = false, ft2 = false; double lead = NAN, len = 0, from = 0, to = 1e18;
     Ft8SlotOptions o;
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
         auto nxt = [&] { return i + 1 < argc ? std::atof(argv[++i]) : 0.0; };
         if (a == "--ft4") ft4 = true;
+        else if (a == "--ft2") ft2 = ft4 = true;
         else if (a == "--passes") o.maxPasses = (int)nxt();
         else if (a == "--iters") o.ldpcIters = (int)nxt();
         else if (a == "--cands") o.maxCandidates = (int)nxt();
@@ -85,9 +86,9 @@ int main(int argc, char** argv) {
         else if (a == "--from") from = nxt();
         else if (a == "--to") to = nxt();
     }
-    Ft8SlotDecoder dec(rate, ft4);
+    Ft8SlotDecoder dec(rate, ft2 ? FtxMode::FT2 : ft4 ? FtxMode::FT4 : FtxMode::FT8);
     if (std::isnan(lead)) lead = Ft8SlotDecoder::leadSec(ft4);
-    const double period = ft4 ? 7.5 : 15.0;
+    const double period = ft2 ? kFt2SlotTime : ft4 ? 7.5 : 15.0;
     const int win = dec.windowSamples();
     const int use = len > 0 ? std::min(win, (int)std::lround(len * rate)) : win;
     std::vector<float> w((size_t)win);
