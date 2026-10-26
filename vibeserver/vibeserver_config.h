@@ -322,6 +322,9 @@ struct Config {
     bool dabRateBoost = false;
     /** ★ ADS-B at 2.56 MS/s on an RTL: the owner's own switch (Stuart's OWRX ADS-B rate); never the default. */
     bool adsb256 = false;
+    /** ★ V12: DAB+ decoded by FAAD2 in process instead of the FFmpeg child (vibe_dab_faad.h). Off = FFmpeg, the default
+     *  until Stuart has listened to both; offered only where the server has both (hwinfo dabFaad2Avail). Live. */
+    bool dabFaad2 = false;
     int  rawIq = 0;               // ★ raw IQ out: 0 off, 1 local only, 2 local + public
     int  rawIqMax = 0;            // ★ total raw IQ listeners at once; 0 = host default
     /** ★ The highest raw IQ rate offered on the local network, in Hz (a one-listener radio only;
@@ -637,6 +640,7 @@ struct RadioConfig {
     int    ppb = 0;             // Airspy HF+ calibration, parts per billion
     bool   dabRateBoost = false;   // per radio — see Config::dabRateBoost
     bool   adsb256 = false;    // per radio — see Config::adsb256
+    bool   dabFaad2 = false;   // per radio — see Config::dabFaad2
     int    rawIq = 0;              // ★ raw IQ out: 0 off, 1 local network only, 2 local + public
     int    rawIqMax = 0;           // ★ total raw IQ listeners at once; 0 = the host's default
     int  rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling in Hz, 0 = none (one-listener radio only)

@@ -7212,6 +7212,11 @@ function dabRender() {
     + (d.sfTried ? row('DAB+ super frames', tl(`${d.sfOk ?? 0} of ${d.sfTried}`, (d.sfOk ?? 0) / d.sfTried > 0.98 ? 'ok' : (d.sfOk ?? 0) / d.sfTried > 0.9 ? 'warn' : 'bad')) : '')
     // ★★★ The audio itself (2026-10-06): super frames read ~100 % "OK" on bubbling mud — one surviving AU is enough.
     + (d.auIn ? row('Audio units', tl(`${d.auBad ?? 0} of ${d.auIn} lost`, (d.auBad ?? 0) / d.auIn < 0.01 ? 'ok' : (d.auBad ?? 0) / d.auIn < 0.08 ? 'warn' : 'bad')) : '')
+    /* ★ Which decoder turns the units into sound, and what it costs (V12: FFmpeg's child process, or FAAD2 in the server —
+     *  the owner's choice in setup). Concealed = units FAAD2 filled in for ones that never arrived. */
+    + (d.auIn && d.aacDec ? row('AAC decoder', escapeHtml(d.aacDec === 'ffmpeg' ? 'FFmpeg' : d.aacDec)
+        + (d.aacCpu !== undefined ? ` · ${d.aacCpu.toFixed(2)} % of a core` : '')
+        + (d.aacConcealed ? ` · ${d.aacConcealed} units concealed` : '')) : '')
     + (d.sfTried ? row('Reed-Solomon', tl(`${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`, !(d.rsLost ?? 0) ? 'ok' : (d.rsLost ?? 0) / Math.max(1, d.sfTried) < 0.05 ? 'warn' : 'bad')) : '')
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
     + (d.spi && d.spi.sid ? row('Service information', tl(`${d.spi.logoSvcs} services with logos · ${d.spi.complete} of ${d.spi.named} files · ${d.spi.groups} groups, ${d.spi.crcFail} bad, ${d.spi.lost} lost`, !d.spi.crcFail && !d.spi.lost ? 'ok' : (d.spi.crcFail + d.spi.lost) < Math.max(1, d.spi.groups) / 10 ? 'warn' : 'bad')) : '')

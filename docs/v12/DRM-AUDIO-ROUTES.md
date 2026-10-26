@@ -134,7 +134,10 @@ additions are syntax-checked but have not run.
 - **`test-server-drm`** (40/40): RRI plays through the real server as PCM and as Opus (200 packets in 4 s, up to 369 bytes), on both radio kinds.
 - **`test-web-drm`** (16/16): the box shows "Audio … via FAAD2 2.11.3".
 
-# DAB+ through FAAD2 — measured; NOT switched (the gate fails on two counts)
+# DAB+ through FAAD2 — the owner's choice since 2026-10-26 (FFmpeg stays the default)
+
+**First version below (bench multiplex, synthetic damage). Superseded by the off-air measurements in the next section.**
+
 
 `test-dab-faad` (a CMake target) runs the benchmark multiplex through the real `DabService` and takes the very ADTS
 units the decoder gets. It compares them with today's FFmpeg path (the server's own arguments) after the server's
@@ -177,3 +180,51 @@ The deb's FFmpeg `Depends` is therefore unchanged.
 
 The test harness lost about 9 % of units this way when it wrote faster than real time. The live service writes at
 programme pace, which is why it has not shown up.
+
+## Off air, 2026-10-26 — the second round
+
+**Inputs.** Raw IQ (2.4 MS/s) from Stuart's Pi 500 RTL: 12B BBC National (strong, MER 22 dB class), 11D Digital One
+(strong), 10D Herts Beds Bucks (weak: undecodable for 37 s, then clean), and the 12B recording damaged in software
+(threshold noise; 1 Hz and 2 Hz Rayleigh fading) so the receiver's own Reed-Solomon and unit CRC decide what is lost.
+9D was not receivable on that aerial. `dab-unitlog` runs the real `DabService` over each and logs every unit slot:
+good, failed its CRC, or in a lost super frame. The recordings and logs live only in `~/VibeSDR-test-audio/dab/`.
+All services found were HE-AAC v2 (16 kHz core, SBR + parametric stereo).
+
+**The reference.** FFmpeg's own decoder, fed LOAS/LATM whose StreamMuxConfig carries the AudioSpecificConfig with
+frameLengthFlag = 1, decodes DAB+'s true 960-sample frames (2880 samples at 48 kHz per unit, exactly). It is used
+ONLY as a yardstick (`test-dab-faad`), never as a server path.
+
+| Measure | FAAD2 | FFmpeg today | Reading |
+|---|---|---|---|
+| Level vs the 960 reference | within 0.02 dB | −0.56 dB | Today's path loses 0.56 dB (the 1024 mis-framing). FAAD2 is the correct level; matching today would mean making it wrong. |
+| Long-term spectrum vs reference (worst third octave, 63 Hz–16 kHz) | 0.2–1.1 dB | 2.0–3.8 dB | FAAD2 closer |
+| Short-time spectral distance vs reference (median) | 0.25–0.85 dB | 1.1–1.3 dB | FAAD2 closer (waveforms differ by design: SBR noise, PS synthesis) |
+| Stereo image (side/mid vs reference) | within 0.1–0.6 dB | within 0.1–0.3 dB | Same image |
+| Hard edges into/out of silence (service output, 38 s, 3 % / 20 % / 40 % units lost) | 0 / 0 / 0 | 16 / 351 / 204, largest step 0.33 FS | FAAD2 conceals; FFmpeg splices, then cuts to silence once 240 ms behind |
+| Silence in the same runs | 0.12 / 4.5 / 10.2 s | 2.8 / 9.7 / 16.9 s | — |
+| CPU (Mac M-series, in the service) | 0.10–0.11 % of a core | 0.16–0.19 % (child) | FAAD2 now includes the 32→48 kHz polyphase resampler |
+| Memory | ≈0.5 MB in process | ≈17 MB child RSS | — |
+| First audio | at once | 1.2 s live pipe (≈3 s in the harness incl. priming) | — |
+
+**Concealment** (`AacDecoderFaad::conceal`, driven by `DabService`'s unit clock): each missing unit becomes exactly one
+unit of audio — the last good unit decoded again, fading out over ~120 ms (raised cosine, so a one-unit hole is a
+−6 dB dip), then silence; the next good unit fades in. A CRC hole is concealed in place, an all-bad super frame at once,
+a lost stretch by `holdTimeline` (concealed units instead of zeros). On air the unit CRC removes corrupted units, so
+FAAD2 is never asked to decode one; a unit that passes the CRC and still fails in FAAD2 (or comes out above +12 dBFS)
+is concealed, never played.
+
+**Packaging.** `build-deps.sh` (Linux and Mac) build FAAD2 2.11.3's plain library twice: once unprefixed to read its
+global symbols, once with a forced include renaming every one to `vibedab_` — `libfaad_dab.a`, checked to define
+nothing unprefixed. Measured in the build images: armhf, ARMv6 (Tag_CPU_arch v6) and arm64; an armhf binary links
+`libfaad_drm.a` and `libfaad_dab.a` together. CMake `VIBE_DAB_FAAD2` (on) requires it in a release deps prefix.
+
+**The switch.** Setup page, per radio: "Decode DAB+ audio with FAAD2, inside VibeServer" (`dabFaad2`), drawn only where
+`hwinfo.dabFaad2Avail` (FAAD2 built and FFmpeg working). Live: the next super frame restarts the decoder as a service
+change would. `VIBE_DAB_AAC=faad2|ffmpeg` overrides it. The DAB panel's "AAC decoder" line shows the decoder, its CPU
+(`aacCpu`, % of a core: FFmpeg's child or FAAD2's time) and units concealed.
+
+**Gate (Stuart's).** No regression found on these recordings: level is the correct one (+0.56 dB vs today), the
+spectrum is closer to a true 960 decode than today's, the stereo image matches, damage is concealed without a hard
+edge where today cuts, latency and CPU and memory are lower. Not sample-identical to today — today is not a 960 decode.
+Not covered: AAC-LC or HE-AAC v1 stereo services (none on the muxes received), and a real "slowly fading" weak mux
+(10D was a cliff). **Stuart listens (Desktop/DAB-FAAD2-vs-FFmpeg) and decides; FFmpeg stays the default until then.**

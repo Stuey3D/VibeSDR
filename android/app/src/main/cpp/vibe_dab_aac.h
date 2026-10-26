@@ -18,6 +18,9 @@ namespace vibedab {
 struct SuperFrame {
     AudioFormat fmt{};
     std::vector<std::vector<uint8_t>> aus;   ///< access units, in order
+    /** ★ Where each of `aus` sat in the super frame (0 … auTotal-1). A unit that failed its CRC leaves a hole here, and an
+     *  in-process decoder conceals exactly that hole rather than splicing its neighbours together (V12, vibe_dab_faad.h). */
+    std::vector<int> auSlot;
     int  rsCorrected   = 0;                  ///< bytes fixed by Reed-Solomon this super frame
     int  rsUncorrected = 0;                  ///< codewords beyond the code's power
     bool firecodeOk    = false;
@@ -164,6 +167,7 @@ inline SuperFrame decodeSuperFrame(const uint8_t* wire, size_t n, int index) {
         const uint16_t want = uint16_t((data[b - 2] << 8) | data[b - 1]);
         if (want != uint16_t(~dabCrc16(&data[a], len))) continue;
         sf.aus.emplace_back(data.begin() + long(a), data.begin() + long(a + len));
+        sf.auSlot.push_back(i);
     }
     sf.auTotal = nau;
     sf.auBad   = nau - int(sf.aus.size());

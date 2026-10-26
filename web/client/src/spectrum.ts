@@ -376,6 +376,8 @@ export interface DabState {
   /** Signal analysis: MER (dB), raw MSC bit error rate, PRS impulse response (128 x uint8 dB
    *  bins, 4 samples each, 255 = peak), constellation (192 int8 x,y pairs, ideal radius 60). */
   mer?: number; mscBer?: number; irPeak?: number; ir?: number[]; iq?: number[];
+  /** V12: the DAB+ decoder in use, its CPU (% of a core) and the units it concealed (FAAD2). */
+  aacDec?: string; aacCpu?: number; aacConcealed?: number; aacChoice?: string | null;
   /* ★ The diagnostics the server has sent all along and the client never typed. `rfCentreHz` is
    *  what the RADIO is on, beside `centreHz` which is what was asked for — the one pair that told
    *  the 2026-09-04 bring-up apart from a dead decoder (see vibe_dab_service.h). */

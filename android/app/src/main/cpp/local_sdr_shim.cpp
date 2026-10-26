@@ -18015,6 +18015,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return;
         }
+        if (type == "dabFaad2") {
+            /* ★★ V12: the DAB+ decoder, FFmpeg or FAAD2 — an owner's decision like the rate switch beside it, through the
+             *  same admin gate, persisted, and LIVE: DabService sees the change at its next super frame and restarts the
+             *  decoder as a new service would (switchPending). */
+            double v = 0;
+            if (jsonNum(msg, "on", v) && adminGate("the DAB+ decoder")) {
+                vibedab::dabAacChoice().store(v != 0 ? 1 : 0, std::memory_order_relaxed);
+                vsPersist(std::string("{\"dabFaad2\":") + (v != 0 ? "true" : "false") + "}");
+                LOGI("DAB+ decoder: %s", v != 0 ? "FAAD2 (in process)" : "FFmpeg");
+                sendHwInfo(sock);
+            }
+            return;
+        }
         if (type == "dabBoost") {
             /* ★ An owner-level decision about the machine, so it goes through the same admin gate
              *  as the other radio settings and is persisted. See g_dabRateBoost. */
@@ -20975,6 +20988,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!noRadio) {
                 j += std::string(",\"dabHw\":") + (vsDabCapableHw() ? "true" : "false")
                    + ",\"dab\":" + (vsDabCapable() ? "true" : "false");
+                /* ★★ V12: WHICH DAB+ DECODER. `dabFaad2Avail` — this server has BOTH (FAAD2 built in AND a working FFmpeg),
+                 *  so there is a choice to offer; the setup page draws the switch only then (a choice with one option is a
+                 *  dead control). `dabFaad2` — the owner's choice in force (VIBE_DAB_AAC may override it for tests). */
+                { const bool both = vibedab::dabFaad2Built() && vibedab::AacDecoderFfmpegAvailable();
+                  const int env = vibedab::dabAacEnvChoice();
+                  j += std::string(",\"dabFaad2Avail\":") + (both ? "true" : "false")
+                     + ",\"dabFaad2\":" + ((env >= 0 ? env : vibedab::dabAacChoice().load(std::memory_order_relaxed)) == 1 ? "true" : "false"); }
                 // ★★ V12: the ADS-B landing's two facts, the same shape — `adsbHw` hides the toggle, `adsbHwWhy` says why
                 { const std::string aw = vsAdsbHwWhyNot();
                   j += std::string(",\"adsbHw\":") + (aw.empty() ? "true" : "false");
@@ -32147,6 +32167,10 @@ void LocalSdrShim::setRateGuardBase(const std::string& base) {
 std::string LocalSdrShim::rateGuardJson() { return g_rateGuard.json(); }
 void LocalSdrShim::rateGuardClear() { g_rateGuard.clear(); }
 void LocalSdrShim::setVibeServerAdsb256(bool on) { g_adsb256.store(on, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerDabFaad2(bool on) {
+    vibedab::dabAacChoice().store(on ? 1 : 0, std::memory_order_relaxed);
+    LOGI("DAB+ decoder: %s%s", on ? "FAAD2 (in process)" : "FFmpeg", vibedab::dabFaad2Built() ? "" : " — FAAD2 is not in this build, so FFmpeg");
+}
 void LocalSdrShim::setVibeServerVfoB(bool on) { g_vsVfoB.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerNbWide(int mode) {
     g_vsNbWide.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);

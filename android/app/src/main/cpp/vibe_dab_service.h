@@ -127,7 +127,7 @@ private:
          *  can no longer be answered here. The first decoded unit sets it from that service's own
          *  ratio (see aacStartedKnown_ below), one access unit later — tens of milliseconds, and
          *  far better than claiming a ratio we may not have for the configuration about to play. */
-        aacStartedKnown_ = AacDecoder::kExactFrames;
+        aacStartedKnown_ = aac_.exactFrames(); unitsOut_ = -1; unitsCfg_ = 0;
         { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); }
         pad_.reset();      // ★ the label belongs to the old programme
         slide_ = Slide{}; // ★ and so does the picture
@@ -196,7 +196,7 @@ public:
          *  stuck until you select it again"). Start the window from the new service's frames. */
         sf_.clear();
         aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;   // ★ a restarted pipe primes again — see the count
-        aacStartedKnown_ = AacDecoder::kExactFrames;   // ★ as in setChannel — the first unit answers it
+        aacStartedKnown_ = aac_.exactFrames(); unitsOut_ = -1; unitsCfg_ = 0;   // ★ as in setChannel — the first unit answers it
         { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); }
         pad_.reset();
         slide_ = Slide{}; cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();
@@ -600,6 +600,11 @@ public:
     struct LearnRow { uint32_t sid; std::string label; int ecc; int eid; };
     /** ★ TEST HOOK (test-dab-faad): every DAB+ access unit, as the ADTS the decoder is fed. Unset in the server. */
     std::function<void(const uint8_t*, size_t)> onAdtsForTest;
+    /** ★ test-dab-faad's UNIT LOG: every access-unit SLOT of every super frame whose header passed its firecode, on the
+     *  programme clock — `sf` is the super frame's place in time (120 ms each, from pcmOwed_), `slot` of `slots`, and the
+     *  ADTS bytes, or n == 0 for a unit that failed its CRC. A super frame that never decoded is a missing `sf`. Null in
+     *  the server. */
+    std::function<void(uint64_t sf, int slot, int slots, bool ps, const uint8_t*, size_t)> onAuSlotForTest;
     std::vector<LearnRow> learnable() {
         std::lock_guard<std::mutex> lk(m_);
         return learnableLocked_();
@@ -655,7 +660,7 @@ public:
     void setRatioFile(const std::string& path) {
         std::lock_guard<std::mutex> lk(m_);
         ratioFile_ = path;
-        if (AacDecoder::kExactFrames || path.empty()) return;
+        if (AacDecoder::kExactFrames || path.empty()) return;   // ★ ALWAYS exact (Android): nothing to learn; a switchable build keeps it for FFmpeg
         if (FILE* f = fopen(path.c_str(), "rb")) {
             /* ★★ TWO FORMATS, because the file on an upgraded box is the old one. A line with two
              *  fields is "<access units> <ratio>"; a bare number is a pre-5.4 ratio.
@@ -1176,6 +1181,22 @@ public:
             snprintf(ab, sizeof ab, ",\"mer\":%.1f,\"mscBer\":%.5f,\"irPeak\":%d,\"aacDec\":\"%s\"",
                      s.merDb, s.mscBer, s.irPeakSamples, aac_.backend());   // ★ which decoder DAB+ goes through — never guessed from the sound
             j += ab;
+            /* ★★ AND WHAT IT COSTS (V12 — the FFmpeg/FAAD2 A/B on a Pi 2): the decoder's CPU over the time since the last
+             *  report, as % of one core — FFmpeg's child process, or FAAD2's time on this thread — and the units concealed
+             *  (FAAD2 only). aacCpu is absent when the platform cannot say (AMediaCodec, AudioToolbox). */
+            {
+                const double cpu = aac_.cpuSeconds();
+                const auto now = std::chrono::steady_clock::now();
+                const double wall = std::chrono::duration<double>(now - aacCpuAt_).count();
+                if (cpu >= 0 && aacCpuPrev_ >= 0 && cpu >= aacCpuPrev_ && wall > 0.5) aacCpuPct_ = 100.0 * (cpu - aacCpuPrev_) / wall;
+                else if (cpu < 0) aacCpuPct_ = -1;
+                if (wall > 0.5 || cpu < aacCpuPrev_) { aacCpuPrev_ = cpu; aacCpuAt_ = now; }
+                char cb[96];
+                if (aacCpuPct_ >= 0) { snprintf(cb, sizeof cb, ",\"aacCpu\":%.2f", aacCpuPct_); j += cb; }
+                snprintf(cb, sizeof cb, ",\"aacConcealed\":%lld,\"aacChoice\":%s", (long long)aac_.concealed(),
+                         dabFaad2Built() ? (aac_.exactFrames() && aac_.canConceal() ? "\"faad2\"" : "\"platform\"") : "null");
+                j += cb;
+            }
             const auto& ir = rx_.impulseResponse();
             scA = j.size();
             if (!ir.empty()) {
@@ -2076,9 +2097,25 @@ private:
      *  ★ Bounded per call: a long outage should come back as a gap, not as a wall of silence
      *    delivered in one go and then played out for seconds after the signal returned. */
     void holdTimeline() {
-        std::lock_guard<std::mutex> plk(pm_);        // ★ see takePcm
         static constexpr uint64_t kLagFrames  = uint64_t(kAudioRateHz) * 240 / 1000;  // 240 ms
         static constexpr uint64_t kMaxFillPer = uint64_t(kAudioRateHz) / 2;           // 0.5 s
+        /* ★★ A DECODER THAT CAN CONCEAL KEEPS THE CLOCK ITSELF (V12, FAAD2 — vibe_dab_faad.h). The same deficit, filled
+         *  with whole CONCEALED units instead of zeros: the last unit fades out where a lost stretch begins rather than
+         *  stopping dead, and — because the decoder now knows there was a hole — the next good unit fades back in.
+         *  unitsOut_ advances with them, so pumpDabPlus does not conceal the same stretch twice when audio returns.
+         *  Called with m_ held (pumpDabPlus's Hold), which is what guards aac_. */
+        if (aac_.canConceal() && aac_.unitFrames() > 0 && unitsOut_ >= 0) {
+            uint64_t pushed; { std::lock_guard<std::mutex> plk(pm_); pushed = pcmPushed_; }
+            if (pcmOwed_ <= pushed + kLagFrames) return;
+            const uint64_t need = std::min<uint64_t>(pcmOwed_ - pushed - kLagFrames, kMaxFillPer);
+            const int uf = aac_.unitFrames(), units = int((need + uint64_t(uf) - 1) / uint64_t(uf));
+            AacPcm c; aac_.conceal(units, c);
+            unitsOut_ += units;
+            pcmFilled_ += uint32_t(c.interleaved.size() / 2);
+            pushPcm48Stereo(c.interleaved.data(), c.interleaved.size(), 2, int(kAudioRateHz));
+            return;
+        }
+        std::lock_guard<std::mutex> plk(pm_);        // ★ see takePcm
         if (pcmOwed_ <= pcmPushed_ + kLagFrames) return;
         uint64_t need = pcmOwed_ - pcmPushed_ - kLagFrames;
         if (need > kMaxFillPer) need = kMaxFillPer;
@@ -2128,6 +2165,29 @@ private:
         // ★★★ Per ACCESS UNIT, not per super frame — see SuperFrame::auBad. A header that passed its
         //     firecode is a real super frame, so its AU count is the audio that was due.
         if (s.firecodeOk) { auIn_ += uint32_t(s.auTotal); auBad_ += uint32_t(s.auBad); }
+        if (onAuSlotForTest && s.firecodeOk) {   // ★ before the `valid` test: a frame whose every unit failed is a real hole
+            const uint64_t sfAt = pcmOwed_ / (uint64_t(kAudioRateHz) * 120 / 1000);
+            size_t k = 0;
+            for (int slot = 0; slot < s.auTotal; ++slot) {
+                if (k < s.aus.size() && s.auSlot[k] == slot) {
+                    std::vector<uint8_t> pkt = toAdts(s.aus[k].data(), s.aus[k].size(), s.fmt, (s.stereo ? 2 : 1));
+                    onAuSlotForTest(sfAt, slot, s.auTotal, s.ps, pkt.data(), pkt.size()); ++k;
+                } else onAuSlotForTest(sfAt, slot, s.auTotal, s.ps, nullptr, 0);
+            }
+        }
+        /* ★★ THE OWNER SWITCHED DECODER (setup: dabFaad2) — restart it exactly as a new service would: the other decoder,
+         *  fresh, its rate learning from scratch, the timeline re-anchored. Within a super frame of the click; nothing else
+         *  in the receiver notices. */
+        if (aac_.switchPending()) {
+            aac_.reset(); aacDry_ = 0; aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;
+            aacStartedKnown_ = aac_.exactFrames(); unitsOut_ = -1; unitsCfg_ = 0;
+            { std::lock_guard<std::mutex> plk(pm_); resampleReset(); }
+            std::fprintf(stderr, "[DAB] DAB+ decoder switched to %s\n", aac_.backend());
+        }
+        /* ★★ A super frame whose header is real (firecode) but whose every unit failed its CRC is a KNOWN hole of a known
+         *  size — conceal it now, in place, rather than waiting for the clock to notice it 240 ms later. Only for the
+         *  geometry already playing: a header that passed its firecode by chance must not invent units. */
+        if (s.firecodeOk && !s.valid && aac_.canConceal() && s.auTotal == unitsCfg_) concealTo_(unitIndex_(s.auTotal) + s.auTotal);
         if (!s.valid || !s.firecodeOk) { sf_.pop_front(); return; }
         sf_.clear();
         ++sfOk_;
@@ -2154,7 +2214,15 @@ private:
          *    which is the same posture as relying on the browser's.
          *  ★ The ADTS reframing is unchanged and still the single description of a DAB+ access
          *    unit; the decoder is fed the very same bytes the wire used to carry. */
-        for (const auto& au : s.aus) {
+        /* ★★ ON THE UNIT CLOCK (a concealing decoder only): every slot of this super frame has an index; a unit that
+         *  failed its CRC, or a stretch of lost super frames before this one, is concealed in place, one unit for one
+         *  unit, so the decoder's output is exactly as long as the programme — no splice, no silence fill. */
+        const bool conceal = aac_.available() && aac_.canConceal();
+        if (conceal && s.auTotal != unitsCfg_) { unitsCfg_ = s.auTotal; unitsOut_ = -1; }
+        const int64_t unit0 = conceal ? unitIndex_(s.auTotal) : 0;
+        for (size_t auK = 0; auK < s.aus.size(); ++auK) {
+            const auto& au = s.aus[auK];
+            if (conceal) concealTo_(unit0 + (auK < s.auSlot.size() ? s.auSlot[auK] : int(auK)));
             /* ★★★ THE PAD COMES OUT OF THE ACCESS UNIT HERE, before the decoder (which discards
              *  it) sees the bytes. Until 2026-09-07 this call did not exist and DAB+ services had
              *  no "now playing" at all, while the header of vibe_dab_pad.h said they did. */
@@ -2189,6 +2257,7 @@ private:
                  *  (Stuart, from tgcfabian's box, 2026-09-07). From the first output onwards each
                  *  write yields one unit's worth, so the count starts there. */
                 if (s.fmt.accessUnits > 0 && aacPrimed_) aacAuAcc_ += 1;
+                if (conceal) { const int64_t at = unit0 + (auK < s.auSlot.size() ? s.auSlot[auK] : int(auK)); unitsOut_ = std::max(unitsOut_, at) + 1; }
                 const bool aacGot = aac_.decode(pkt.data(), pkt.size(), dec);
                 /* ★★★ A DECODER THAT STOPS ANSWERING IS REBUILT, NOT WAITED ON (Sony TV, 2026-09-19). After a
                  *  multiplex change Android's AAC decoder (OMX SoftAAC2) took units for a few seconds and then
@@ -2260,7 +2329,7 @@ private:
                         if (aacCfg != aacCfgSeen_) { aacCfgSeen_ = aacCfg; aacCfgUnits_ = 0; }
                         ++aacCfgUnits_;
                         const bool converged = aacCfgUnits_ >= 160;
-                        if (!AacDecoder::kExactFrames && aacAuAcc_ >= 8) {
+                        if (!aac_.exactFrames() && aacAuAcc_ >= 8) {
                             const double auSec = 0.120 / double(s.fmt.accessUnits);
                             const double eff   = aacPcmAcc_ / (double(aacAuAcc_) * auSec);
                             const bool plausible = eff > 8000.0 && eff < 200000.0;
@@ -2304,6 +2373,7 @@ private:
             }
             { std::lock_guard<std::mutex> ak(adtsM_); adts_.push_back(std::move(pkt)); }
         }
+        if (conceal) concealTo_(unit0 + s.auTotal);   // ★ units after the last good one in this super frame
         // ★ Bounded like the PCM: audio minutes late is worse than a gap.
         { std::lock_guard<std::mutex> ak(adtsM_); while (adts_.size() > 250) adts_.pop_front(); }
     }
@@ -2335,6 +2405,27 @@ private:
     std::mutex adtsM_;                         ///< adts_ only; a leaf, never held with anything else taken after it
     AacDecoder aac_;                           ///< the PLATFORM's decoder — we ship none
     uint32_t   aacDecoded_ = 0;
+    /* ★★ THE UNIT CLOCK for a concealing decoder (FAAD2). unitsOut_ = the index of the next unit the decoder owes, on a
+     *  clock of auTotal units per 120 ms super frame read off pcmOwed_; -1 until a unit has been decoded (nothing to
+     *  conceal with, and no clock to keep). unitsCfg_ = the geometry it counts in. Guarded by m_ like aac_. */
+    double     aacCpuPrev_ = -1, aacCpuPct_ = -1;   ///< the decoder's CPU at the last report, and its rate since
+    std::chrono::steady_clock::time_point aacCpuAt_ = std::chrono::steady_clock::now();
+    int64_t    unitsOut_ = -1;
+    int        unitsCfg_ = 0;
+    int64_t unitIndex_(int auTotal) const {   // slot 0 of the super frame just completed
+        const uint64_t per = uint64_t(kAudioRateHz) * 120 / 1000;
+        return (int64_t(pcmOwed_ / per) - 1) * int64_t(auTotal);
+    }
+    /** Conceal every unit before `idx` that the decoder still owes. A jump of more than ~3 s is a break (a long outage the
+     *  clock has already filled, or a re-anchored timeline) — the clock simply restarts there. */
+    void concealTo_(int64_t idx) {
+        if (unitsOut_ < 0 || idx <= unitsOut_) return;
+        const int64_t n = idx - unitsOut_;
+        if (n > int64_t(unitsCfg_) * 25) { unitsOut_ = idx; return; }
+        AacPcm c; aac_.conceal(int(n), c);
+        unitsOut_ = idx;
+        if (!c.interleaved.empty()) pushPcm48Stereo(c.interleaved.data(), c.interleaved.size(), 2, int(kAudioRateHz));
+    }
     uint32_t   aacPcmPerAu_ = 0;
     uint64_t   pcmPushed_ = 0;
     uint64_t   pcmOwed_   = 0;     ///< 48 kHz frames the programme clock says we should have sent
@@ -2521,7 +2612,7 @@ private:
     /** ★ The ratio for this configuration, or 0 if it has not been learnt yet. An exact-frame
      *  decoder (Android) needs no measurement at all and answers 1.0 for every geometry. */
     double ratioFor(int aus) const {   // caller holds m_
-        if (AacDecoder::kExactFrames) return 1.0;
+        if (aac_.exactFrames()) return 1.0;
         const auto it = knownRatios_.find(aus);
         if (it != knownRatios_.end()) return it->second;
         return legacyRatio_;            // ★ 0.0 when there is none — "not learnt yet"

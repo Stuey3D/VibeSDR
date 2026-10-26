@@ -749,6 +749,32 @@ if(VIBE_DRM_FAAD2)
   endif()
 endif()
 
+# ── FAAD2 (PLAIN build, globals prefixed vibedab_): DAB+ audio IN PROCESS (V12 — vibe_dab_faad.h) ─────────────────────
+# ★★ The owner's alternative to the FFmpeg child for DAB+ (setup: "DAB+ audio decoder", config dabFaad2; FFmpeg stays the
+#    default). The DRM build above refuses DAB+, and the plain build exports the same names, so build-deps compiles the
+#    plain one with every global renamed (libfaad_dab.a) and checks it defines nothing unprefixed. Same licence as above:
+#    server builds only, never the App Store archive (build_ios.sh fails on any FAAD2 symbol, prefixed ones included).
+# ★ Release builds: from the deps prefix, and its absence is a configure error (re-run build-deps.sh) unless
+#   -DVIBE_DAB_FAAD2=OFF. Dev builds: FAAD2_DAB_LIB, or a deps prefix's copy if there is one; without it, FFmpeg only.
+option(VIBE_DAB_FAAD2 "DAB+ AAC via FAAD2's plain build, prefixed (GPL-2.0+; server builds only)" ON)
+if(VIBE_DAB_FAAD2 AND FAAD2_INC)
+  if(VIBE_DEPS_PREFIX)
+    set(FAAD2_DAB_LIB "${VIBE_DEPS_PREFIX}/lib/libfaad_dab.a" CACHE FILEPATH "" FORCE)
+    if(NOT EXISTS "${FAAD2_DAB_LIB}")
+      message(FATAL_ERROR "${VIBE_DEPS_PREFIX} has no lib/libfaad_dab.a (FAAD2 for DAB+) — ${_deps_hint}, or configure with -DVIBE_DAB_FAAD2=OFF")
+    endif()
+  else()
+    find_library(FAAD2_DAB_LIB NAMES libfaad_dab.a HINTS "${CMAKE_CURRENT_SOURCE_DIR}/mac/deps/prefix/lib")
+  endif()
+  if(FAAD2_DAB_LIB)
+    message(STATUS "FAAD2 (DAB+, prefixed): ${FAAD2_DAB_LIB}")
+    target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_FAAD2_DAB)
+    target_link_libraries(vibeserver_core PUBLIC "${FAAD2_DAB_LIB}")
+  else()
+    message(STATUS "FAAD2's prefixed DAB+ library not found — DAB+ through FFmpeg only (dev build)")
+  endif()
+endif()
+
 # ── libopus: compressed VibeServer audio (replaces IMA-ADPCM) ──────────────────
 # STATIC like the others, so the .app ships self-contained. VIBE_HAVE_OPUS gates every Opus code
 # path in the shim; where it is undefined (the Android build has no libopus yet — UberSDR decode
@@ -939,11 +965,18 @@ target_include_directories(dab-switch PRIVATE "${CPP_DIR}")
 target_compile_options(dab-switch PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(dab-switch PRIVATE vibeserver_core)
 
-# ★ test-dab-faad: DAB+ through FAAD2 vs today's FFmpeg child, on the benchmark multiplex — the gate before any switch.
+# ★ test-dab-faad: DAB+ through FAAD2 vs today's FFmpeg child on REAL unit logs (dab-unitlog) — the evidence for the switch.
 add_executable(test-dab-faad "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-faad.cpp")
 target_include_directories(test-dab-faad PRIVATE "${CPP_DIR}")
 target_compile_options(test-dab-faad PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(test-dab-faad PRIVATE vibeserver_core)
+
+# ★ dab-unitlog: one DAB+ service's access units, CRC failures and lost super frames off a captured multiplex — the
+#   input test-dab-faad replays through each decoder (dev tool; real recordings stay in ~/VibeSDR-test-audio/dab).
+add_executable(dab-unitlog "${CMAKE_CURRENT_SOURCE_DIR}/dab-unitlog.cpp")
+target_include_directories(dab-unitlog PRIVATE "${CPP_DIR}")
+target_compile_options(dab-unitlog PRIVATE -O3 -ffp-contract=fast)
+target_link_libraries(dab-unitlog PRIVATE vibeserver_core)
 
 add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
