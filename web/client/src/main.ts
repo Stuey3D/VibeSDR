@@ -10312,13 +10312,14 @@ function bandSpotsUi(on: boolean) {
   if ($('decBox').classList.contains('open') && decoders?.spotsEnabled) $('decTitle').textContent = spotsTitle();
   renderFreq();
 }
-/** "FT8 / FT4 SPOTS" (Single) · "DIGITAL SPOTS · 20 m BAND" (Band). */
+/** "FT8 / FT4 SPOTS" (Single, a server with those two) · "DIGITAL SPOTS" (Single, a server with more: FT2, JS8 …
+ *  decode on whichever of their dials the listener is on) · "DIGITAL SPOTS · 20 m BAND" (Band). */
 function spotsTitle(): string {
   if (bandSpots && spotBandCap && spec) {
     const b = spotBandAt(spotBandCap.bands, spec.frequency);
     return b ? `DIGITAL SPOTS \u00b7 ${b.name.toUpperCase()} BAND` : 'DIGITAL SPOTS \u00b7 BAND';
   }
-  return spotModes.slice(0, 2).join(' / ') + ' SPOTS';
+  return spotModes.length > 0 && spotModes.length <= 2 ? spotModes.join(' / ') + ' SPOTS' : 'DIGITAL SPOTS';
 }
 /** Put the dial on band `b`'s centre, in USB — a listener's own tune (a user action: the shared-dial contract holds). */
 function bandSpotsGo(b: SpotBand) {

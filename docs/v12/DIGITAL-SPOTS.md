@@ -27,7 +27,7 @@ Branch `v12-spots` (worktree `~/VibeSDR-spots`).
 
 ### Single mode
 This is the button there always was. The listener's 48 kHz audio is box-averaged by four to 12 kHz, the same decimation
-as before, and goes into every registered mode with `single: true`. Today that is FT8 and FT4 on one passband. Spot RF is
+as before, and goes into every registered mode with `single: true`. Today that is FT8, FT4, FT2 and JS8 on one passband (FT2 and JS8 since 2026-10-26: docs/v12/JS8-FT2.md). Spot RF is
 the listener's dial plus the audio offset.
 
 ### Band mode

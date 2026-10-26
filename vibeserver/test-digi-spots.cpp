@@ -1,6 +1,6 @@
 // test-digi-spots.cpp — DIGITAL SPOTS, V12 (2026-10-26): the mode registry, the band table, band stepping, the passband
 // per band, Band mode's tuner, and a whole synthetic BAND decoded end to end through a DecoderHost — FT8 and FT4 on their
-// own dials in one IQ slice, each spot out with its mode and its RF. Plus the lower sideband (an FT8 signal BELOW the FT8
+// own dials in one IQ slice, each spot out with its mode and its RF — and JS8 (Normal + Turbo) and FT2 on theirs. Plus the lower sideband (an FT8 signal BELOW the FT8
 // dial must not decode as one above it), and pure noise (no spot at all).
 //
 //   test-digi-spots          the tests
@@ -10,6 +10,7 @@
 #include "decoders/digi_bands.h"
 #include "decoders/digi_spotter.h"
 #include "decoders/digi_tuner.h"
+#include "decoders/digimodes/js8_decoder.h"
 extern "C" {
 #include "ft8/message.h"
 #include "ft8/encode.h"
@@ -63,6 +64,26 @@ static void addTx(std::vector<cf32>& x, double rate, double offHz, double startS
             x[i] += cf32((float)(amp * std::cos(ph)), (float)(amp * std::sin(ph)));
         }
 }
+/** Any FSK frame: `sym` seconds a symbol, tones `1/sym` apart (JS8's submodes, FT2's 24 ms). */
+static void addFsk(std::vector<cf32>& x, double rate, double offHz, double startSec, const std::vector<uint8_t>& tones,
+                   double sym, double amp) {
+    const double spacing = 1.0 / sym;
+    const size_t s0 = (size_t)(startSec * rate), ns = (size_t)std::llround(sym * rate);
+    double ph = 0;
+    for (size_t k = 0; k < tones.size(); ++k)
+        for (size_t j = 0; j < ns; ++j) {
+            const size_t i = s0 + k * ns + j;
+            if (i >= x.size()) return;
+            ph += 2 * M_PI * (offHz + tones[k] * spacing) / rate;
+            x[i] += cf32((float)(amp * std::cos(ph)), (float)(amp * std::sin(ph)));
+        }
+}
+/** A JS8 heartbeat's 79 tones in `sub`. */
+static std::vector<uint8_t> js8Heartbeat(const char* call, const char* grid, Js8Submode sub) {
+    uint8_t b72[72], info[87]; std::vector<uint8_t> t(79);
+    js8::packHeartbeat(call, grid, -1, b72); js8Info87(b72, js8::kFlagFirst | js8::kFlagLast, info); js8Tones(info, sub, t.data());
+    return t;
+}
 static void addNoise(std::vector<cf32>& x, double sigma, unsigned seed) {
     std::mt19937 g(seed); std::normal_distribution<float> n(0.0f, (float)sigma);
     for (auto& v : x) v += cf32(n(g), n(g));
@@ -95,7 +116,8 @@ static digi::ModeDef dummyMode(const char* name, float lo, float hi) {
 
 /** ★ `clip <out.cu8> <rate> <centreHz>`: 15 s of 20 m as an RTL delivers it (unsigned 8-bit IQ), UTC-ANCHORED — clip time
  *  t plays at UTC ≡ t (mod 15) under fake-rtl-tcp --hf-utc — for scripts/test-server-spots.mjs. FT8 at +0.5 s, FT4 at
- *  +0.5 and +8.0 s, and one FT8 station on the lower sideband of the FT8 dial. */
+ *  +0.5 and +8.0 s, one FT8 station on the lower sideband of the FT8 dial, a JS8 Normal heartbeat on the JS8 dial and
+ *  an FT2 CQ on the FT2 dial. */
 static int writeClip(const char* path, double rate, double centre) {
     std::vector<cf32> x((size_t)(rate * 15.0), cf32(0, 0));
     struct Tx { const char* msg; bool ft4; double rf, start; };
@@ -103,6 +125,9 @@ static int writeClip(const char* path, double rate, double centre) {
                        { "CQ JA1QRS PM95", true, 14080800, 0.5 }, { "CQ EA4TUV IN80", true, 14081700, 8.0 },
                        { "CQ ZL3LSB RE66", false, 14072800, 0.5 } };
     for (const Tx& t : txs) addTx(x, rate, t.rf - centre, t.start, tonesFor(t.msg, t.ft4), t.ft4, 4.0);
+    // ★ JS8 Normal on its 14.078 dial (+0.5 s) and FT2 on its 14.084 dial (+0.1 s of the 3.75 s slot at 3.75)
+    addFsk(x, rate, 14079000 - centre, 0.5, js8Heartbeat("G4JSN", "IO91", Js8Submode::Normal), 0.16, 4.0);
+    addFsk(x, rate, 14084900 - centre, 3.85, tonesFor("CQ IU8AAA JN70", true), 0.024, 4.0);
     addNoise(x, 5.0, 21);
     std::vector<uint8_t> u(x.size() * 2);
     for (size_t i = 0; i < x.size(); ++i) {
@@ -213,7 +238,10 @@ int main(int argc, char** argv) {
     std::printf("── the registry ──\n");
     {
         const auto& ms = digi::modes();
-        ok(ms.size() >= 2 && ms[0].name == "FT8" && ms[1].name == "FT4", "FT8 and FT4 are registered, FT8 first");
+        ok(ms.size() >= 4 && ms[0].name == "FT8" && ms[1].name == "FT4", "FT8 and FT4 are registered, FT8 first");
+        const digi::ModeDef* js8 = digi::modeByName("JS8"); const digi::ModeDef* ft2 = digi::modeByName("FT2");
+        ok(js8 && ft2 && js8->slotSec == 15.0 && ft2->slotSec == 3.75 && js8->single && ft2->single && js8->dials.empty() && ft2->dials.empty(),
+           "JS8 (15 s; its engine cuts all four submodes) and FT2 (3.75 s) registered — Single and Band, dials from the table");
         ok(digi::modeByName("ft4") == &ms[1] && digi::modeByName("nope") == nullptr, "modeByName is case-insensitive and null for unknown");
         ok(ms[0].slotSec == 15.0 && ms[1].slotSec == 7.5 && ms[0].sampleRate == 12000, "FT8 15 s / FT4 7.5 s slots, 12 kHz audio");
         bool made = true;
@@ -234,17 +262,17 @@ int main(int argc, char** argv) {
         ok(bs.size() == 16 && std::string(bs.front().id) == "2200m" && std::string(bs[11].id) == "10m" && std::string(bs[12].id) == "6m"
            && std::string(bs.back().id) == "70cm", "step order 2200 m … 10 m, then 6 m, 4 m, 2 m, 70 cm");
         ok(std::string(digi::bandAt(14074000)->id) == "20m" && digi::bandAt(14500000) == nullptr, "bandAt names the band a frequency is in");
-        // ★ The spans with today's registry: FT8 + FT4.
+        // ★ The spans with today's registry: FT8 + FT4 + FT2 + JS8 (FT2 at 14.084 is the top of 20 m's cluster).
         const auto& ms = digi::modes();
         const digi::Span s20 = digi::spanOf(*digi::bandById("20m"), ms);
-        ok(s20.ok && near(s20.loHz, 14074000 + 100 - 250, 60) && near(s20.hiHz, 14080000 + 3500 + 250, 60) && s20.modes.size() == 2,
-           "20 m with FT8+FT4: " + std::to_string(s20.loHz) + "–" + std::to_string(s20.hiHz) + " (" + std::to_string((int)s20.widthHz()) + " Hz)");
+        ok(s20.ok && near(s20.loHz, 14074000 + 100 - 250, 60) && near(s20.hiHz, 14084000 + 3500 + 250, 60) && s20.modes.size() == 4,
+           "20 m with FT8+FT4+FT2+JS8: " + std::to_string(s20.loHz) + "–" + std::to_string(s20.hiHz) + " (" + std::to_string((int)s20.widthHz()) + " Hz)");
         ok(!digi::spanOf(*digi::bandById("2200m"), ms).ok, "2200 m has no FT8/FT4 dial — no span (until WSPR registers)");
         // ★ The spans the brief worked out, with the modes being built now registered (dummies standing in).
         std::vector<digi::ModeDef> all = ms;
         all.push_back(dummyMode("WSPR", 1400, 1600));
-        all.push_back(dummyMode("JS8", 100, 3500));
-        all.push_back(dummyMode("FT2", 100, 3500));
+        if (!digi::modeByName("JS8")) all.push_back(dummyMode("JS8", 100, 3500));
+        if (!digi::modeByName("FT2")) all.push_back(dummyMode("FT2", 100, 3500));
         std::printf("    passband per band, FT8+FT4+FT2+JS8+WSPR registered:\n");
         std::map<std::string, double> w;
         for (const auto& b : digi::bands()) {
@@ -374,6 +402,17 @@ int main(int argc, char** argv) {
             { "CQ ZL3LSB RE66", false, ft8Dial - 1200, 0.5 },
         };
         for (const Tx& t : txs) addTx(x, rate, t.rf - s20.centreHz, t.start, tonesFor(t.msg, t.ft4), t.ft4, 0.02);
+        // ★ JS8 on 14.078: a Normal heartbeat (15 s slot, starts +0.5 s) and a Turbo one (6 s slot 1, starts +0.1 s);
+        //   FT2 on 14.084: two stations in two 3.75 s slots (start +0.1 s).
+        const double js8Dial = 14078000, ft2Dial = 14084000;
+        struct Fx { const char* call; const char* mode; double rf; std::vector<uint8_t> tones; double start, sym; };
+        const std::vector<Fx> fx = {
+            { "G4JSN", "JS8", js8Dial + 1000, js8Heartbeat("G4JSN", "IO91", Js8Submode::Normal), 0.5, 0.16 },
+            { "W1JST", "JS8", js8Dial + 2200, js8Heartbeat("W1JST", "FN31", Js8Submode::Turbo), 6.1, 0.05 },
+            { "IU8AAA", "FT2", ft2Dial + 900, tonesFor("CQ IU8AAA JN70", true), 3.85, 0.024 },
+            { "SP6BBB", "FT2", ft2Dial + 2100, tonesFor("CQ SP6BBB JO70", true), 7.6, 0.024 },
+        };
+        for (const Fx& f : fx) addFsk(x, rate, f.rf - s20.centreHz, f.start, f.tones, f.sym, 0.02);
         addNoise(x, 0.02, 7);
         const int blk = 4096;
         const double c0 = cpuSecs();
@@ -392,20 +431,24 @@ int main(int argc, char** argv) {
             if ((o / blk) % 8 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));   // ★ let the slot workers run
         }
         const double t0 = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-        while (sp.slotsDecoded() < 6 && std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() - t0 < 20)
+        // ★ FT8 2 + FT4 4 + FT2 8 + JS8 (Turbo 5, Fast 3, Normal 2, Slow 1) slots in the 31 s
+        while (sp.slotsDecoded() < 25 && std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() - t0 < 30)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         (void)c0;
         std::printf("    engines %zu (%s), slots decoded %llu, skipped %llu\n", sp.engines(), sp.describe().c_str(),
                     (unsigned long long)sp.slotsDecoded(), (unsigned long long)sp.slotsSkipped());
-        auto has = [&](const std::string& mode, const std::string& call, double rf) {
+        auto has = [&](const std::string& mode, const std::string& call, double rf, double tol = 8) {
             std::lock_guard<std::mutex> lk(gm);
             for (auto& g : got) {
                 char m[16], c[16]; double f = 0;
-                if (std::sscanf(g.c_str(), "%15s %15s %lf", m, c, &f) == 3 && mode == m && call == c && near(f, rf, 8)) return true;
+                if (std::sscanf(g.c_str(), "%15s %15s %lf", m, c, &f) == 3 && mode == m && call == c && near(f, rf, tol)) return true;
             }
             return false;
         };
+        // ★ RF to within a quarter of the mode's tone step: JS8 Turbo 20 Hz tones, FT2 41.7 Hz
+        for (const Fx& f : fx)
+            ok(has(f.mode, f.call, f.rf, 0.26 / f.sym), std::string(f.mode) + " " + f.call + " spotted with its mode, at its RF (its own dial in the slice)");
         for (const Tx& t : txs) {
             if (std::string(t.msg).find("LSB") != std::string::npos) continue;
             char call[16]; std::sscanf(t.msg, "CQ %15s", call);
@@ -438,7 +481,7 @@ int main(int argc, char** argv) {
         const double t0 = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
         while (sp.slotsDecoded() < 6 && std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() - t0 < 20)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        ok(n == 0 && sp.slotsDecoded() >= 6, "31 s of noise on 20 m: " + std::to_string(sp.slotsDecoded()) + " slots decoded, " + std::to_string(n) + " spots");
+        ok(n == 0 && sp.slotsDecoded() >= 6, "31 s of noise on 20 m (FT8, FT4, FT2, JS8 engines): " + std::to_string(sp.slotsDecoded()) + " slots decoded, " + std::to_string(n) + " spots");
     }
 
     std::printf("── the host: Single still FT8+FT4 on the listener's audio, and the spot frame names its mode ──\n");
@@ -477,6 +520,44 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 200 && spot.empty(); ++i) { auto v = peer->spots(); if (!v.empty()) spot = v[0]; else std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
         ok(field(spot, "mode") == "FT8" && field(spot, "callsign") == "M0SGL" && field(spot, "band") == "20m"
            && near(std::atof(field(spot, "frequency").c_str()), 14075200, 8), "Single: the spot frame names FT8, the call, 20m, dial + audio: " + spot);
+        h.stopSpots();
+    }
+
+    std::printf("── Single mode at a JS8 dial and at an FT2 dial: the listener's audio, the spot frame names the mode ──\n");
+    for (int which = 0; which < 2; ++which) {
+        const bool isJs8 = which == 0;
+        const double dial = isJs8 ? 7078000.0 : 14084000.0;
+        DecoderHost::Env env;
+        env.dialHz = [dial] { return dial; };
+        DecoderHost h(env, isJs8 ? "single-js8" : "single-ft2");
+        auto peer = std::make_shared<Peer>();
+        h.addPeer(peer);
+        h.startSpots();
+        const double slot0 = std::floor(vibeUtcNow() / 15.0) * 15.0 + 15.0;
+        std::vector<float> a((size_t)(48000 * 15.5), 0.0f);
+        std::mt19937 g(5); std::normal_distribution<float> nz(0.0f, 0.02f);
+        const std::vector<uint8_t> t = isJs8 ? js8Heartbeat("M0JSS", "IO92", Js8Submode::Normal) : tonesFor("CQ IU8SGL JN70", true);
+        const double sym = isJs8 ? 0.16 : 0.024, f0 = 1300, start = isJs8 ? 0.5 : 0.1;
+        const int ns = (int)std::lround(sym * 48000);
+        double ph = 0;
+        for (size_t k = 0; k < t.size(); ++k) for (int j = 0; j < ns; ++j) {
+            const size_t i = (size_t)(start * 48000) + k * (size_t)ns + (size_t)j; if (i >= a.size()) break;
+            ph += 2 * M_PI * (f0 + t[k] / sym) / 48000.0; a[i] += 0.1f * (float)std::sin(ph);
+        }
+        for (auto& v : a) v += nz(g);
+        for (size_t o = 0; o < a.size(); o += 960) {
+            const int k = (int)std::min<size_t>(960, a.size() - o);
+            h.feed(&a[o], k, 1, slot0 + (double)(o + k) / 48000.0);
+            while (h.queued() > 96000) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        std::string spot;
+        for (int i = 0; i < 300 && spot.empty(); ++i) {
+            for (auto& v : peer->spots()) if (field(v, "mode") == (isJs8 ? "JS8" : "FT2")) { spot = v; break; }
+            if (spot.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        ok(field(spot, "callsign") == (isJs8 ? "M0JSS" : "IU8SGL") && field(spot, "band") == (isJs8 ? "40m" : "20m")
+           && field(spot, "grid") == (isJs8 ? "IO92" : "JN70") && near(std::atof(field(spot, "frequency").c_str()), dial + f0, isJs8 ? 4 : 12),
+           std::string("Single at ") + (isJs8 ? "JS8 7.078" : "FT2 14.084") + ": " + spot);
         h.stopSpots();
     }
 

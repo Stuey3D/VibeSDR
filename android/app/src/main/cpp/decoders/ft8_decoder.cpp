@@ -336,9 +336,9 @@ int Ft8SlotDecoder::snrDb(const ftx_candidate_t& c, const uint8_t* tones) {
     const double binHz = 1.0 / mon_.symbol_period;
     /* ★ FT2 (2026-10-26): its reference decoders report on FT4's scale, and against STUEY3D's PSKReporter reports
      *  this estimator reads FT4 8.6 dB high (four stations, the 2026-10-25 20 m hour) and FT2 7-11 dB high (two
-     *  stations, 2026-10-26) — so FT2 is brought onto that scale. FT4 itself is left as it was (reported, not changed
-     *  here: docs/v12/JS8-FT2.md). */
-    const double modeCal = mode_ == FtxMode::FT2 ? -9.0 : 0.0;
+     *  stations, 2026-10-26) — so FT4 and FT2 (FT4's frame) are both brought onto that scale (2026-10-26, Stuart's go:
+     *  docs/v12/JS8-FT2.md). */
+    const double modeCal = mode_ != FtxMode::FT8 ? -9.0 : 0.0;
     double snr = 10.0 * std::log10(std::max(ratio, 1e-3)) + 10.0 * std::log10(binHz / 2500.0) + kSnrCal + modeCal;
     snr = std::max(-30.0, std::min(40.0, snr));
     return (int)std::lround(snr);
@@ -771,7 +771,7 @@ void Ft8Decoder::runDecode() {
      *  errors: on the real hour 30 let one garbage message through ("7Z1OSX ZF7IZT R QM53") and 36 two; 24
      *  none, for +1.7 % of jt9's decodes at +2 ms a slot on a Mac. */
     const bool loadedAtStart = loadProbe ? loadProbe() : false;
-    o.osdMaxErrors = loadedAtStart || o.maxPasses < 2 ? 0 : kOsdMaxErrors;
+    o.osdMaxErrors = loadedAtStart || o.maxPasses < 2 || mode_ == FtxMode::FT2 ? 0 : kOsdMaxErrors;   // ★ FT2: none (docs/v12/JS8-FT2.md)
     o.mayRunPass = [&](int, double elapsedMs, double lastMs) {
         const bool loaded = loadProbe ? loadProbe() : false;
         return passAllowed(slotPeriod * 1000.0, lagMs, elapsedMs, lastMs, loaded);

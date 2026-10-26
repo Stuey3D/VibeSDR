@@ -1,4 +1,4 @@
-// js8_wav — run VibeSDR's JS8 slot decoder (decoders/js8_decoder.cpp) over a recording, slot by slot, every submode.
+// js8_wav — run VibeSDR's JS8 slot decoder (decoders/digimodes/js8_decoder.cpp) over a recording, slot by slot, every submode.
 //
 //   js8_wav FILE.wav START_UTC [--sub ABCE] [--passes N] [--osd N] [--cands N] [--minscore N] [--iters N] [--coherent N]
 //     START_UTC  UTC (unix seconds, fractional) of the file's first sample (ubersdr-rec prints it as start_utc=)
@@ -6,7 +6,7 @@
 //   Output: one line per decode "D <slot> <letter> <pass> <snr> <dt> <hz> <kind> <message>", and on stderr each
 //   submode's slots and mean / worst ms per slot.
 //   Build: tools/js8-bench/build.sh (-O2, like the server).
-#include "decoders/js8_decoder.h"
+#include "decoders/digimodes/js8_decoder.h"
 #include <chrono>
 #include <cmath>
 #include <cstdio>
