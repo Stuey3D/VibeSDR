@@ -325,7 +325,8 @@ struct Sig {
     double t0 = -1;           // ★ input time (s) of this channel's first output sample
     bool ghost = false;
     bool catchup = true;      // ★ run over the kept transforms before its first live hop
-    float snrShown = 0, qShown = 0;   // ★ as last heard well (a gone signal is listed as it was, not as its noise)
+    float snrShown = 0, qShown = 0;
+    bool lastCr = false;   // ★ as last heard well (a gone signal is listed as it was, not as its noise)
     int64_t firstMs = 0, lastMs = 0;
     std::string text;         // committed text (bounded)
     std::vector<std::pair<char, float>> heldQ;   // ★ characters decoded while tentative, each with its quality
@@ -931,7 +932,13 @@ struct Skimmer::Impl {
             }
         }
         const Lane& L = g.lane[g.lead];
-        if (L.snrL >= kKeepDb) { g.lastGoodSec = now; g.snrShown = L.snrL; g.qShown = L.qual(); }
+        // ★ shown as heard WHILE TRANSMITTING: a slowly falling peak (0.1 dB a hop), so the fade at the end of an over — the
+        //   last values above kKeepDb — is not what the list says (real 20 m: copy perfect, the row said "poor 3 dB")
+        if (L.snrL >= kKeepDb) {
+            g.lastGoodSec = now;
+            g.snrShown = std::max(L.snrL, g.snrShown - 0.1f);
+            g.qShown = std::max(0.0f, std::min(1.0f, (g.snrShown - 4.0f) / 12.0f));
+        }
         if (!g.confirmed) {
             int gsum = 0; for (uint8_t v : L.recentGood) gsum += v;
             int strict = 0, letters = 0;
@@ -1001,9 +1008,13 @@ struct Skimmer::Impl {
         for (size_t i = 0; i < g.heldQ.size(); ++i) { low = g.heldQ[i].second < -1.0f ? low + 1 : 0; if (low >= 3) from = i + 1; }
         std::string h;
         for (size_t i = from; i < g.heldQ.size(); ++i) {
-            const int c = (unsigned char)g.heldQ[i].first;
+            int c = (unsigned char)g.heldQ[i].first;
             if (g.heldQ[i].second < kCharDbHeld) { ++suppressed; continue; }
-            if (c == '\r' || (c < 32 && c != '\n') || c == 127) continue;
+            const bool lfAfterCr = c == '\n' && g.lastCr;   // ★ the same newline rule as emit()
+            g.lastCr = c == '\r';
+            if (lfAfterCr) continue;
+            if (c == '\r') c = '\n';
+            if ((c < 32 && c != '\n') || c == 127) continue;
             h.push_back((char)c);
         }
         g.heldQ.clear();
@@ -1012,7 +1023,11 @@ struct Skimmer::Impl {
     }
 
     void emit(Sig& g, int c) {
-        if (c == '\r') return;                       // ★ CR LF → one newline; a bare CR is nothing
+        // ★ CR, LF and CR LF are each ONE newline: senders differ (some send a bare CR — words ran together before)
+        const bool lfAfterCr = c == '\n' && g.lastCr;
+        g.lastCr = c == '\r';
+        if (lfAfterCr) return;
+        if (c == '\r') c = '\n';
         if (c < 32 && c != '\n') return;            // control codes are never text
         if (c == 127) return;
         appendText(g, (char)c);
