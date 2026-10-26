@@ -24,6 +24,7 @@ import { parseAdsbMessage } from './adsbTypes';
 import { AdsbInfoStore } from './adsbInfo';
 import { ismSanitise } from './ism';
 import { ndbSanitise, parseNdbFound, parseNdbStats } from './ndb';
+import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseDabScan } from './dabBandScan';
 
 export {
@@ -212,6 +213,25 @@ export class VibeServerClient extends VibeServerWsClient {
   ndbFind(q: string, limit = 60) { this.sendSpectrum({ type: 'ndb_find', q: String(q).slice(0, 40), limit }); }
   /** The reception stats (in memory on the server, 7 days); answered by `ndb_stats`. */
   ndbStats() { this.sendSpectrum({ type: 'ndb_stats' }); }
+  /* ── V12 AIS (docs/v12/AIS-APRS.md) — ADS-B's pattern: a whole-radio mode entered and left by name; the server puts the
+   *  radio on 162.000 MHz, decodes both channels and ignores tune / zoom / mode while it runs. No audio is sent. ── */
+  /** ★ Reports after our own `ais off` are ghosts (DabExitGuard, as for DAB, ADS-B and ISM). */
+  private aisExit = new DabExitGuard();
+  private aisHealHeldAt = 0;
+  static readonly AIS_HOLD_MS = 8_000;
+
+  ais(on: boolean) {
+    if (this.askBlocked()) return;   // ★★ ask before tuning — it takes everybody's radio to 162 MHz
+    holdNativeHealing(VibeServerClient.AIS_HOLD_MS, on ? 'AIS on' : 'AIS off');
+    if (on) { this.aisExit.entered(); this.cancelPacedTune(); }
+    else this.aisExit.left(Date.now());
+    this.aisHeld = on;
+    this.sendSpectrum({ type: 'ais', on: on ? 1 : 0 });
+  }
+  /** One ship's track (the map's card) — a read, answered to the asker only (`ais_trail`). */
+  aisTrail(mmsi: number) {
+    if (Number.isInteger(mmsi) && mmsi > 0) this.sendSpectrum({ type: 'ais_trail', mmsi });
+  }
 
   /** ★ Raw IQ out for THIS session — the audio sheet's row. The server answers with `iqout`. */
   iqOut(on: boolean, rate = 48000) { this.sendSpectrum({ type: 'iqout', on: on ? 1 : 0, rate }); }
@@ -352,6 +372,36 @@ export class VibeServerClient extends VibeServerWsClient {
         return true;
       case 'ndb_found': this.callbacks.onNdbFound?.(parseNdbFound(msg)); return true;
       case 'ndb_stats': this.callbacks.onNdbStats?.(parseNdbStats(msg)); return true;
+      /* ★ V12 AIS: a report about once a second — ITS ARRIVAL MEANS AIS IS ON (a second listener joining a radio somebody
+       *  else put there); `ais_off` ended it (the restored config follows); `ais_error` is the refusal, with its reason. */
+      case 'ais': {
+        const now = Date.now();
+        if (!this.aisExit.accept(now)) return true;   // ★ a ghost after our own off
+        const r = aisSanitise(msg);
+        if (!r) return true;
+        if (!this.aisHeld || now - this.aisHealHeldAt > 3000) {
+          this.aisHealHeldAt = now;
+          holdNativeHealing(VibeServerClient.AIS_HOLD_MS, this.aisHeld ? 'AIS running' : 'server reports AIS', this.aisHeld);
+        }
+        this.aisHeld = true;
+        this.callbacks.onAis?.(r);
+        return true;
+      }
+      case 'ais_off':
+        this.aisExit.offConfirmed(Date.now());
+        if (this.aisHeld) holdNativeHealing(VibeServerClient.AIS_HOLD_MS, 'server reports AIS off');
+        this.aisHeld = false;
+        this.callbacks.onAis?.(null);
+        return true;
+      case 'ais_error':
+        this.aisHeld = false;
+        this.callbacks.onAis?.(null, dabSafeText(msg.why, 200) || 'AIS is not available on this receiver');
+        return true;
+      case 'ais_trail': {
+        const t = aisTrailSanitise(msg);
+        if (t) this.callbacks.onAisTrail?.(t.mmsi, t.pts);
+        return true;
+      }
       case 'iqout':
         this.callbacks.onIqOut?.({
           on: Number(msg.on) === 1, rate: Number(msg.rate) || undefined,

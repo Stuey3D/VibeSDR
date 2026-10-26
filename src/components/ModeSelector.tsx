@@ -29,8 +29,9 @@ import { sameLanguage, translateTargetLabel } from '../services/transcriber';
 import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText } from '../services/cwList';
 import { JTTY_HINT } from '../services/jtty';
 import { DSC_HINT } from '../services/dsc';
+import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -296,6 +297,13 @@ interface ModeSelectorProps {
     /** ★★ V12 NDB — the same kind of key again (a whole-radio mode whose screen is a map): absent where the radio reaches
      *  no LF (an RTL without direct sampling, a HackRF, an R2, an Icom), dimmed with the server's reason, live. */
     ndbAvail?: boolean; ndbWhy?: string; ndbOn?: boolean; onNdb?: () => void;
+    /** ★★ V12 AIS — ISM's kind of key, beside it, and the same three states: absent (`aisAvail` false — the radio cannot
+     *  reach 162 MHz, an HF+, an Icom; or Apple TV, which has no map), dimmed with the server's reason (`aisWhy`), live. */
+    aisAvail?: boolean; aisWhy?: string; aisOn?: boolean; onAis?: () => void;
+    /** ★★ V12 APRS — a VibeServer's own packet decoder, only where vibeserver.json says `"aprs": true`. Its settings:
+     *  PACKET VHF 1200 / HF 300, a TUNE key (the region's channel `aprsHz` in NFM, or 10.1476 USB) and the hint. */
+    aprsAvail?: boolean; aprsBaud?: AprsBaud; aprsHz?: number;
+    onAprsBaud?: (b: AprsBaud) => void; onAprsTune?: () => void;
     /** ★★ V12 THE SCANNER — a decoder-box item (docs/v12/SCANNER.md). Absent (not greyed) where scanPolicy says no: FM-DX,
      *  a VibeServer with one shared dial. `onlyScanner`: a backend with no client decoders of ours (OpenWebRX — its own
      *  decoders are demodulators in this sheet) draws the row with the scanner alone. */
@@ -398,7 +406,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const pskShown = !!decoderControls?.pskAvail && !isBlocked('psk');
   const jttyShown = !!decoderControls?.jttyAvail && !isBlocked('jtty');
   const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
-  const srvDecShown = cwShown || pskShown || jttyShown || dscShown;
+  const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
+  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || aprsShown;
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
    *  decoders section is dropped and DAB is drawn with the demodulators. */
@@ -407,8 +416,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const adsbShown = !!decoderControls?.adsbAvail;
   const ismShown = !!decoderControls?.ismAvail && !isBlocked('ism');
   const ndbShown = !!decoderControls?.ndbAvail && !isBlocked('ndb');   // ★ V12 NDB
+  const aisShown = !!decoderControls?.aisAvail && !isBlocked('ais');   // ★ V12 AIS
   const scanShown = !!decoderControls?.scanAvail && !isBlocked('scanner');
-  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown || ndbShown;
+  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown || ndbShown || aisShown;
   const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !srvDecShown && !scanShown;
   const decSectionShown = !!decoderControls && !dabInGrid
     && (clientDecs.length > 0 || advRdsShown || wholeAvail || srvDecShown || scanShown);
@@ -461,7 +471,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     const active = dc.decMode === id && dc.decOn;
     const lit = dc.decMode === id;
@@ -553,9 +563,39 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       )}</NavItem>
     );
   };
+  /* ★★ V12 THE AIS KEY — ISM's key, for AIS (one definition for the grid and the decoders row). */
+  const aisOff = !!decoderControls?.aisWhy;
+  const aisLit = !!decoderControls?.aisOn;
+  const aisKey = (inGrid: boolean) => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="ais" onPress={() => dc.onAis?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="AIS" active={aisLit} pip
+          onPress={() => dc.onAis?.()} fontSize={inGrid ? 13 : 12} style={aisOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={aisOff ? `AIS, unavailable: ${dc.aisWhy}` : 'AIS ships'}
+        style={[st.btn, { borderColor: aisLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+                aisLit && { backgroundColor: decBg },
+                aisOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onAis?.()} activeOpacity={0.8}>
+        <Text numberOfLines={1}
+              style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: aisLit ? dec : t.btnText }]}>
+          AIS
+        </Text>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
   const ndbWhyLine = ndbOff ? (
     <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
       {`NDB unavailable — ${decoderControls!.ndbWhy}`}
+    </Text>
+  ) : null;
+  const aisWhyLine = aisOff ? (
+    <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+      {`AIS unavailable — ${decoderControls!.aisWhy}`}
     </Text>
   ) : null;
   const ismWhyLine = ismOff ? (
@@ -914,10 +954,12 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           {dabInGrid && adsbShown && adsbKey(true)}
           {dabInGrid && ismShown && ismKey(true)}
           {dabInGrid && ndbShown && ndbKey(true)}
+          {dabInGrid && aisShown && aisKey(true)}
         </View></NavRow>
         {dabInGrid && adsbShown && adsbWhyLine}
         {dabInGrid && ismShown && ismWhyLine}
         {dabInGrid && ndbShown && ndbWhyLine}
+        {dabInGrid && aisShown && aisWhyLine}
 
         {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
             LEFT to widen the lower sideband, the RIGHT one RIGHT to widen the
@@ -1095,6 +1137,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               {pskShown && srvKey('psk', 'PSK', 'PSK31 and PSK63 decoder')}
               {jttyShown && srvKey('jtty', 'JTTY', 'JTTY keyboard-mode decoder')}
               {dscShown && srvKey('dsc', 'DSC', 'Maritime DSC decoder')}
+              {/* ★★ V12 APRS — the server's own packet decoder (only where it says "aprs": true). */}
+              {aprsShown && srvKey('aprs', 'APRS', 'APRS packet decoder')}
               {/* ★★ V12 THE SCANNER — opens in the decoder box like the others; replaces a running decoder, as switching
                   decoders always has (one box at a time). */}
               {scanShown && (
@@ -1134,6 +1178,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               {adsbShown && adsbKey(false)}
               {ismShown && ismKey(false)}
               {ndbShown && ndbKey(false)}
+              {aisShown && aisKey(false)}
               {decoderControls.galleryAvail && (
                 <NavItem key="gallery" onPress={() => decoderControls.onGallery?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label="GALLERY" active={false}
@@ -1171,6 +1216,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             {adsbShown && adsbWhyLine}
             {ismShown && ismWhyLine}
             {ndbShown && ndbWhyLine}
+            {aisShown && aisWhyLine}
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                                        : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
@@ -1266,6 +1312,24 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </>)}
                 <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
                   {DSC_HINT}
+                </Text>
+              </View>
+            )}
+            {/* ★ V12 APRS: the web's PACKET row, its TUNE key and hint (tracks.ts aprsTuneFor / aprsHintText). */}
+            {aprsShown && decoderControls.decMode === 'aprs' && (
+              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
+                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
+                <SubLabel label="PACKET" />
+                <OptRow>
+                  <SegBtn label="VHF 1200" active={(decoderControls.aprsBaud ?? 1200) === 1200} onPress={() => decoderControls.onAprsBaud?.(1200)} />
+                  <SegBtn label="HF 300" active={decoderControls.aprsBaud === 300} onPress={() => decoderControls.onAprsBaud?.(300)} />
+                </OptRow>
+                <OptRow>
+                  <SegBtn label={aprsTuneFor(decoderControls.aprsBaud ?? 1200, decoderControls.aprsHz ?? 144.8e6).label} active={false}
+                          onPress={() => decoderControls.onAprsTune?.()} />
+                </OptRow>
+                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+                  {aprsHintText(decoderControls.aprsBaud ?? 1200, decoderControls.aprsHz ?? 144.8e6)}
                 </Text>
               </View>
             )}

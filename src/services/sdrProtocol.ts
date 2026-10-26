@@ -11,6 +11,7 @@
 import type { DabState } from './dabTypes';
 import type { AdsbReport } from './adsbTypes';
 import type { IsmReport } from './ism';
+import type { AisReport } from './tracks';   // ★ V12 AIS
 import type { AskState } from './dialChat';
 
 /** The one sentence a refused-as-too-old client shows; SDRScreen matches on it to add the button. */
@@ -404,6 +405,11 @@ export interface SDRCallbacks {
   onNdb?:       (r: import('./ndb').NdbReport | null, err?: string) => void;
   onNdbFound?:  (f: ReturnType<typeof import('./ndb').parseNdbFound>) => void;
   onNdbStats?:  (s: import('./ndb').NdbStats) => void;
+  /** ★ V12 AIS, VIBESERVER-ONLY: a report about once a second while the receiver is in AIS (its arrival MEANS AIS is on);
+   *  null = it ended (`ais_off`); `err` = the refusal (`ais_error`). */
+  onAis?:       (r: AisReport | null, err?: string) => void;
+  /** ★ V12 AIS: one ship's track, asked for by aisTrail (the map's card) — [lat, lon] oldest first. */
+  onAisTrail?:  (mmsi: number, pts: [number, number][]) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?:     (m: IqOutState) => void;
   /** ★★ V12 VFO A/B, VIBESERVER-ONLY: hwinfo's `watch` — how many VFO Bs this server offers (0 = none: no toggle). */

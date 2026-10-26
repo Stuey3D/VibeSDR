@@ -9,6 +9,7 @@ import { parseIsmCapability, type IsmCap } from './ism';
 import { parseTunable } from '../utils/tuneWindow';
 import { parseSpotModes, parseSpotsBandCap, type SpotsBandCap } from './spotsBand';
 import { parseNdbCapability } from './ndb';
+import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';   // ★ V12 AIS / APRS
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 export type Mode = SDRMode; // alias
@@ -455,6 +456,10 @@ export interface ServerOccupancy {
   ism?: IsmCap;
   /** ★ V12 NDB: absent = the radio reaches no LF (no control); `ok: false` = greyed with the reason; lo/hi = the slice. */
   ndb?: import('./ndb').NdbCap;
+  /** ★ V12 AIS: `ok: true` live, `ok: false` greyed with the reason; absent = the radio cannot reach 162 MHz (no key). */
+  ais?: AisCap;
+  /** ★ V12 APRS: the server's own packet decoder (`on`), and the region's VHF channel. */
+  aprs?: { on: boolean; hz: number };
   /** ★ Raw IQ out: the owner's policy and the slots. Absent on an older server. */
   rawIq?: 'off' | 'local' | 'public';
   rawIqMax?: number;
@@ -513,6 +518,8 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       modes:     Array.isArray(j.modes) ? j.modes.filter((m: unknown) => typeof m === 'string').map((m: string) => m.slice(0, 12)).slice(0, 40) : undefined,
       ism:       parseIsmCapability(j),
       ndb:       parseNdbCapability(j),   // ★ V12 NDB — absent where this radio reaches no LF
+      ais:       parseAisCapability(j),
+      aprs:      parseAprsCapability(j),
     };
   } catch { return null; }
   finally { clearTimeout(t); }

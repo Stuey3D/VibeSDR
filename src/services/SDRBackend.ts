@@ -306,6 +306,12 @@ export interface SDRBackend {
   ndbStats?(): void;
   /** True while the receiver is in NDB. */
   readonly inNdb?: boolean;
+  /** ★ V12 AIS on a VibeServer (docs/v12/AIS-APRS.md): the whole radio to 162.000 MHz, both AIS channels decoded on the
+   *  server; tune/zoom/mode are refused while it runs. `aisTrail` asks for one ship's track (answered by onAisTrail). */
+  ais?(on: boolean): void;
+  aisTrail?(mmsi: number): void;
+  /** True while the receiver is in AIS. */
+  readonly inAis?: boolean;
 
   /**
    * ★★ Carry an admin credential on every socket this backend opens.

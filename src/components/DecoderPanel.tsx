@@ -42,6 +42,8 @@ import AircraftPanel from './AircraftPanel';
 import CwView, { cwItems } from './CwView';
 import JttyView, { jttyItems } from './JttyView';
 import DscView, { dscHasPos } from './DscView';
+import AprsView from './AprsView';   // ★ V12 APRS
+import type { AprsBoxRow } from '../services/tracks';
 import type { CwList, CwSpot } from '../services/cwList';
 import type { JttySignal, JttySpot } from '../services/jtty';
 import type { DscCall } from '../services/dsc';
@@ -63,7 +65,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'scanner' | null;
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'scanner' | 'aprs' | null;
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
@@ -124,6 +126,10 @@ export interface DecoderPanelProps {
   /** ★ V12 BAND: the title while Band runs ("DIGITAL SPOTS · 20 M BAND") and the governor's per-mode chips. */
   spotsTitle?:     string;
   spotModeStates?: SpotModeState[];
+  /** ★ V12 APRS (VibeServer): the station rows, messages and packets for the APRS view (AprsView), and MAP — the station
+   *  map, on a station when a key is given (null where there is no map: Apple TV). Set only while APRS is the decoder. */
+  aprs?:           { rows: AprsBoxRow[]; messages: string[]; log: { t: number; line: string }[]; baud: 1200 | 300;
+                     onMap: ((key?: string) => void) | null } | null;
   /** OWRX DAB (§5.2): when an ensemble is tuned the panel shows the service list with logos;
    *  the speed-correction control (§4.5) rides in the header. NOT a decoder. */
   dabProgrammes?:  { id: number; name: string }[];
@@ -251,6 +257,8 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   psk:     'PSK',
   jtty:    'JTTY',
   dsc:     'DSC',
+  // ★ V12: a VibeServer's own APRS packet decoder (VHF 1200 / HF 300; the title says which).
+  aprs:    'APRS',
   // ★ V12: ON-DEVICE speech-to-text (+ translation) of the audio we play — any backend. Not UberSDR's STT (`whisper`).
   transcribe: 'TRANSCRIBE',
   // ★★ V12: the scanner (Band · Bookmarks · Manual) — not a decoder, but it lives in the decoder box (Stuart).
@@ -274,7 +282,7 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw: cwProp = null, psk = null, jtty = null, dsc = null, scanner = null,
+  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw: cwProp = null, psk = null, jtty = null, dsc = null, aprs = null, scanner = null,
   spotModes, spotsTitle, spotModeStates,
 }: DecoderPanelProps) {
   const sfModes = React.useMemo(() => spotFilterModes(spotModes ?? SF_MODES_UBERSDR), [spotModes]);
@@ -403,7 +411,9 @@ export default function DecoderPanel({
   const isJtty = activeDecoder === 'jtty' && !!jtty && !isSpotsMode && !isDabMode && !isAircraftMode;
   const isDsc = activeDecoder === 'dsc' && !!dsc && !isSpotsMode && !isDabMode && !isAircraftMode;
   /** Any of the list decoders (their rows are the keyboard's list; the text body is not drawn). */
-  const isListDec = isCw || isJtty || isDsc;
+  /** ★ V12 APRS: the stations / messages / packets view (AprsView) in place of the plain text body. */
+  const isAprs = activeDecoder === 'aprs' && !!aprs && !isSpotsMode && !isDabMode && !isAircraftMode;
+  const isListDec = isCw || isJtty || isDsc || isAprs;
   /** ★★ V12 the scanner's body in place of the text. Its controls register themselves in `scanNav` as they draw. */
   const isScanner = activeDecoder === 'scanner' && !!scanner && !isSpotsMode && !isDabMode;
   const scanNav = useRef<ScannerNav>({ len: 0, press: () => {} });
@@ -753,6 +763,7 @@ export default function DecoderPanel({
   // Enter does nothing rather than pretending to.
   // ★ CW's rows (signals, then spots) are selectable too: Enter tunes to the one highlighted.
   const listLen = isDabMode ? dabProgrammes.length : (isCw || isJtty) ? cwRows.length : isDsc ? dsc!.calls.length
+                : isAprs ? aprs!.rows.length
                 : isScanner ? Math.max(1, scanNav.current.len) : 0;
 
   // ★ The flash. Entering the box is otherwise invisible, and invisible focus has looked like a broken
@@ -892,6 +903,8 @@ export default function DecoderPanel({
     : isJtty ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) jtty!.onTune(r.hz); }
     // ★ DSC: Enter on a call with a position is its MAP (rows are otherwise read, not pressed)
     : isDsc ? (i: number) => { const c = dsc!.calls[i]; if (c && dscHasPos(c)) dsc!.onMap?.(c); }
+    // ★ V12 APRS: Enter on a station = the map, on it (the row's press)
+    : isAprs ? (i: number) => { const r = aprs!.rows[i]; if (r && aprs!.onMap) aprs!.onMap(r.key); }
     : null;
   const listLenRef = useRef(listLen); listLenRef.current = listLen;
   const isScannerRef = useRef(isScanner); isScannerRef.current = isScanner;
@@ -1052,6 +1065,7 @@ export default function DecoderPanel({
     : isSpotsMode
     ? (spotsKind === 'cw' ? 'CW SPOTS' : (spotsTitle || 'DIGITAL SPOTS'))
     : isCw && cw!.skim ? (activeDecoder === 'psk' ? 'PSK SKIMMER' : 'CW SKIMMER')
+    : isAprs && aprs!.baud === 300 ? 'APRS · HF 300'
     : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
   return (
@@ -1165,6 +1179,13 @@ export default function DecoderPanel({
             </HBtn>
           )}
 
+          {/* ★ V12 APRS: MAP — the stations on the map (the web box's MAP key). Not where there is no map. */}
+          {isAprs && !!aprs!.onMap && (
+            <HBtn run hitSlop={6} accessibilityLabel="Show the stations on the map"
+              onPress={(e: any) => { e?.stopPropagation(); aprs!.onMap?.(); }}>
+              <DecoderKeyLabel>MAP</DecoderKeyLabel>
+            </HBtn>
+          )}
           {/* ★★ V12 THE SCANNER'S SOURCE KEYS — they swap the candidate section only; the settings are shared. */}
           {isScanner && (['band', 'bookmarks', 'list'] as ScanSource[]).map((src) => (
             <HBtn key={src} active={scanner!.ctl.source === src} run hitSlop={6}
@@ -1471,6 +1492,11 @@ export default function DecoderPanel({
         {!minimised && isDsc && (
           <DscView calls={dsc!.calls} bodySize={bodySize} focusIdx={kbZone === 'list' ? listIdx : -1} onMap={dsc!.onMap}
                    scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
+        )}
+        {!minimised && isAprs && (
+          <AprsView rows={aprs!.rows} messages={aprs!.messages} log={aprs!.log} baud={aprs!.baud} bodySize={bodySize}
+                    focusIdx={kbZone === 'list' ? listIdx : -1} onMap={aprs!.onMap ? (k: string) => aprs!.onMap?.(k) : null}
+                    scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}
         {!minimised && isScanner && (
           <ScannerPanel {...scanner!} focusIdx={kbZone === 'list' ? listIdx : -1} navRef={scanNav} bodyStyle={bodySize} />
