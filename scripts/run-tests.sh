@@ -309,7 +309,9 @@ for t in "$SRC"/test-*.cpp; do
   #     test-radio-api — links vibeserver_core; built by `cmake --build … --target test-radio-api`.
   #     test-icom-source — links vibe_icom (libusb, ALSA/CoreAudio, the source's threads); ctest `icom-source`.
   case "$name" in
-    test-radio-api|test-icom-source) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
+    #     test-dab-faad — DAB+ FAAD2 vs FFmpeg on the bench multiplex; a CMake target (the whole DAB core); it REPORTS (see
+    #                      docs/v12/DRM-AUDIO-ROUTES.md "DAB+") — `cmake --build … --target test-dab-faad`.
+    test-radio-api|test-icom-source|test-dab-faad) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
   esac
   printf '\n\033[1m── %s ──\033[0m\n' "$name"
   # shellcheck disable=SC2046

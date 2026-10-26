@@ -9,6 +9,7 @@
 //    must put the radio there before feeding this; resampling 2.4 MSPS down would cost CPU on a Pi
 //    for nothing, since the dongle can simply run at 2.048.
 #pragma once
+#include <functional>
 
 #include <algorithm>
 #include <cstdint>
@@ -597,6 +598,8 @@ public:
      *  lives by — not when a narrow carrier stands further above its neighbours. */
     /** ★ The services worth remembering: complete MCI (TS 103 176 6.3.3), audio, labelled. */
     struct LearnRow { uint32_t sid; std::string label; int ecc; int eid; };
+    /** ★ TEST HOOK (test-dab-faad): every DAB+ access unit, as the ADTS the decoder is fed. Unset in the server. */
+    std::function<void(const uint8_t*, size_t)> onAdtsForTest;
     std::vector<LearnRow> learnable() {
         std::lock_guard<std::mutex> lk(m_);
         return learnableLocked_();
@@ -2159,6 +2162,7 @@ private:
             std::vector<uint8_t> pkt = toAdts(au.data(), au.size(), s.fmt, aacCoreCh_);
             if (pkt.empty()) continue;
             ++ausOut_;
+            if (onAdtsForTest) onAdtsForTest(pkt.data(), pkt.size());   // ★ test-dab-faad: the very bytes the decoder gets
             /* ★ VIBE_DAB_ADTS_DUMP=<path>: the first 500 access units as an ADTS file, so the
              *  platform decoder can be run on the SAME bytes by hand (ffprobe / ffmpeg) when its
              *  output rate is in doubt — the 2026-09-07 "slow on the Pi" measurement. */

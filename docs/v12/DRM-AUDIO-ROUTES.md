@@ -101,3 +101,79 @@ re-orders the side information:
    - (c) FDK linked in: copyright-fine, no patent licence.
 3. **iOS / Apple TV / Mac app:** AudioToolbox cannot decode it. The only route is bundling FDK or libxaac, which means a shipped codec with no patent grant, so not recommended without Stuart's explicit decision.
 4. **Do not start the re-wrap** while the scale-factor table has no clean source.
+
+---
+
+# Stuart's decision (2026-10-26): FAAD2's DRM build INSIDE the server — built
+
+**Where it goes:**
+- `vibe_drm_audiodec.h`: `DrmFaad` decodes DRM's AAC. It is fed the CRC byte, and is told about SBR and PS by the SDC.
+- Concealment: the last good frame plays again, fading out, and the next good frame fades in.
+- Output is upsampled to 48 kHz stereo.
+
+**The licensing boundary:**
+
+| Build | FAAD2? | How |
+|---|---|---|
+| VibeServer: Linux deb (x86_64, i386, arm64, armhf, ARMv6) | Yes | `linux/build-deps.sh`: FAAD2 2.11.3 from the pinned GitHub tag (sha256 `860ab620…`), static `libfaad_drm.a`, float. The NeAACDecInitDRM check is in it. `COPYING.faad2` goes to `/usr/share/doc/vibeserver` and `build-deb.sh` checks it is there. |
+| VibeServer Mac app | Yes | `mac/build-deps.sh` (the same pin and checks). `COPYING.faad2` goes into `Resources/`. |
+| VibeServer Windows | — | For the windows-m1 agent: add the same pinned build to `vibeserver/windows/build-deps.sh`. That branch was not edited. |
+| Android app (Play + GitHub APK) and VibeServer Lite: the on-device server | Yes, once its prebuilt is made | `sdr-kit/build-faad2.sh` (the same pin, both ABIs); the CMake links it when it is there. **This puts GPL-2.0+ code in the Android app's APK on Play and GitHub, which is GPL itself — Stuart to confirm.** Lite has its own `sdr-kit` root (`lite/native`), so it needs the prebuilt copied there too. |
+| iOS / iPadOS / Mac Catalyst app (App Store) | **Never** | `build_ios.sh` never defines `VIBE_HAVE_FAAD2`, and **fails if any FAAD2 symbol is in the archive.** |
+
+**Building it was not possible here:** the auto-mode permission check blocks building external code. Everything was
+measured against Homebrew's FAAD2 2.11.3 (the same version as the pin), linked as a dev library. The `build-deps`
+additions are syntax-checked but have not run.
+
+**Results:**
+- **`test-drm-faad`** (real RRI, 150 s):
+  - 1526 frames decoded;
+  - the output is programme (envelope p10/p50/p90 −60/−33/−25 dBFS);
+  - with one frame in seven corrupted, 420 frames are concealed, with no larger step (0.0514 against 0.0525 clean) and no gap;
+  - **0.63 % of one Mac core per DRM listener with audio.** Pi 2 estimated at about 15–25 % of one of its four cores.
+- **`test-server-drm`** (40/40): RRI plays through the real server as PCM and as Opus (200 packets in 4 s, up to 369 bytes), on both radio kinds.
+- **`test-web-drm`** (16/16): the box shows "Audio … via FAAD2 2.11.3".
+
+# DAB+ through FAAD2 — measured; NOT switched (the gate fails on two counts)
+
+`test-dab-faad` (a CMake target) runs the benchmark multiplex through the real `DabService` and takes the very ADTS
+units the decoder gets. It compares them with today's FFmpeg path (the server's own arguments) after the server's
+pacing (FFmpeg decodes each 960-sample unit as 1024; the service plays it at the measured rate).
+
+**First finding:** the server's FAAD2 is the DRM build, and **that build refuses DAB+**: "No standard extension payload
+allowed in DRM" on 254 of 264 units. DAB+ would need the **plain** FAAD2 build beside it. The two export the same
+symbols, so one would have to be built with prefixed symbols. The figures below are from the plain build (Homebrew's).
+
+| Measure (bench multiplex; 48 kHz AAC-LC stereo; 24 kHz HE-AAC mono) | FAAD2 (plain) | FFmpeg (today) | Verdict |
+|---|---|---|---|
+| Tones, true 220 / 275 / 330 Hz | **219.98 / 274.95 / 330.03** | 220.44 / 275.47 / 330.60 | FAAD2 is exact (a real 960 transform). FFmpeg is +0.2 % (its 1024 decode, re-paced). |
+| Tones, true 257 / 321 / 385 Hz | **257.01 / 320.96 / 385.03** | 257.93 / 322.24 / 386.49 | Same |
+| PCM against each other (gate 1: "within float rounding") | — | — | **FAILS by construction.** SNR between them is 0 dB gain-matched and max diff about 0.1. They are different transforms, so the waveforms decorrelate. |
+| Level | −36.16 dB | −36.73 dB | **+0.57 dB louder with FAAD2** (gate 5: a change) |
+| Stereo image (L/R correlation; side/mid) | 1.000; −326 dB | 1.000; −326 dB | Tie. **The bench has no real stereo or PS content** — gate 2 is not covered. |
+| 1 unit in 10 CORRUPTED (largest step; 10 ms dips) | 0.047–0.109; 0–29 dips | 0.013–0.021; 0 dips | **FFmpeg better.** FFmpeg drops the bad unit (a 1 s gap that the service's pacing fills); FAAD2 decodes the garbage before its concealment can act. In the live path DAB+'s per-unit CRC removes such units first, so this case is harsher than reality. |
+| Start-up (first PCM after the first unit) | **0.1–0.4 ms** | about 1.2 s (live pipe) | FAAD2 |
+| CPU for 10.5 s | **0.07–0.13 %** | 0.33–0.37 % (child process) | FAAD2 |
+| Memory | about 0.2 MB in process | about 16 MB child RSS | FAAD2 |
+
+**Not done:** a real off-air DAB+ recording was not available. `weak-5/6.vbu8` and `dab-bench.vbu8` (the impaired clip)
+were not run, because the clip-mode test links the DRM build, which refuses DAB+.
+
+**Per the gate, FFmpeg stays the DAB+ default, and nothing in the DAB path changed** (one null test hook in
+`DabService`). FAAD2 is more accurate, faster, smaller and quicker to start. But it is not sample-identical, it is
+0.57 dB louder, and its handling of corrupted units is worse unless it is fed only CRC-good units, as the live path
+does. **Stuart decides.** If he wants it, the next steps are:
+1. build the plain FAAD2 with prefixed symbols;
+2. feed it only CRC-checked units, with gaps concealed rather than decoded;
+3. level-match it;
+4. re-run on real stereo/PS DAB+ and on the weak clips.
+
+The deb's FFmpeg `Depends` is therefore unchanged.
+
+**Side findings in today's FFmpeg path** (`vibe_dab_aacdec.h`, `AacDecoderFfmpeg`) — reported, not changed:
+- `drain()` keeps `r / 4` floats from each `read()` and drops the remainder, so a read that splits a float would
+  misalign everything after it;
+- `decode()` treats `EAGAIN` on the non-blocking pipe as success and loses that unit.
+
+The test harness lost about 9 % of units this way when it wrote faster than real time. The live service writes at
+programme pace, which is why it has not shown up.
