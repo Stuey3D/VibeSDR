@@ -271,6 +271,10 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/time_decoder.cpp"
     # ★ V12: CW — the listener's decoder and the skimmer (one FFT filterbank; decoders/cw_skimmer.h)
     "${CPP_DIR}/decoders/cw_skimmer.cpp"
+    # ★ V12: NDB — every beacon in the LF band, idents by consensus (decoders/ndb_skimmer.h)
+    "${CPP_DIR}/decoders/ndb_skimmer.cpp"
+    # ★ V12: PSK31/63 — the listener's decoder and the skimmer (one FFT is finder and channeliser; decoders/psk_skimmer.h)
+    "${CPP_DIR}/decoders/psk_skimmer.cpp"
     # ★ V12: DSC — maritime Digital Selective Calling, MF/HF and VHF ch 70 (ITU-R M.493; decoders/dsc_decoder.h)
     "${CPP_DIR}/decoders/dsc_decoder.cpp"
     # ★ V12: JTTY — the WSJT-X 3.2 keyboard mode, every signal in the passband, no slots (decoders/jtty_decoder.h)

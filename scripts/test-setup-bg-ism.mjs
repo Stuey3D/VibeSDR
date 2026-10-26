@@ -68,7 +68,7 @@ ok(sel('bgIsmBand').children.map((o) => o.value).join() === '433,868', 'a runnin
 // where ISM cannot run: not offered
 api = mk(null);
 api.bgLoad({ driver: 'airspyhf', bgDecode: JSON.stringify(NICK) });
-ok(!sel('bgKind'), 'an Airspy HF+: no "Decodes" choice at all (it reaches no ISM band)');
+ok(!sel('bgKind') || !sel('bgKind').children.some((o) => o.value === 'ism'), 'an Airspy HF+: no ISM in "Decodes" (it reaches no ISM band — NDB, which it does reach, may be offered)');
 ok(api.bgCollect() === JSON.stringify(NICK), '...and Nick\'s HF+ profile saves exactly as before');
 api.bgLoad({ driver: 'rtlsdr', mode: 'locked', lockFreq: 7100000, lockRate: 2000000, users: 4, bgDecode: JSON.stringify(NICK) });
 ok(!sel('bgKind'), 'a locked radio: not offered (background decoding never moves one)');

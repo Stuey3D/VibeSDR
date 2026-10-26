@@ -12,22 +12,52 @@ namespace digi {
 Spotter::Spotter(Scope scope, const std::vector<ModeDef>& ms, Emit emit, std::function<double()> dialHz,
                  std::function<bool()> loaded)
     : scope_(scope), modes_(ms), emit_(std::move(emit)), dialHz_(std::move(dialHz)), loaded_(std::move(loaded)) {
-    if (scope_ == Scope::Single) {
-        for (const ModeDef& m : modes_) {
-            // ★ Single mode decimates 48 kHz by an integer; a mode at another rate is Band-only until it says otherwise.
-            if (!m.single || m.sampleRate <= 0 || 48000 % m.sampleRate != 0 || m.sampleRate != 12000) continue;
-            Run r; r.def = &m; r.dial = 0;
-            try { r.eng = m.make(); } catch (const std::exception&) { continue; }
-            if (!r.eng) continue;
-            wire(r);
-            single_.push_back(std::move(r));
-        }
+    if (scope_ == Scope::Single) planSingle(dialHz_ ? dialHz_() : NAN);
+}
+
+namespace {
+// ★ Single mode decimates 48 kHz by four; a mode at another rate is Band-only until it says otherwise.
+bool singleCapable(const ModeDef& m) { return m.single && m.sampleRate == 12000; }
+}
+
+std::vector<std::string> Spotter::singleModesAt(const std::vector<ModeDef>& ms, double dialHz) {
+    std::vector<std::string> out;
+    if (std::isfinite(dialHz))
+        for (const ModeDef& m : ms)
+            if (singleCapable(m) && atOwnDial(m, dialHz)) out.push_back(m.name);
+    if (out.empty())          // ★ off the table: the modes marked singleFallback (FT8 + FT4 — what Single always ran)
+        for (const ModeDef& m : ms)
+            if (singleCapable(m) && m.singleFallback) out.push_back(m.name);
+    return out;
+}
+
+void Spotter::planSingle(double dialHz) {
+    singleDial_ = dialHz;
+    const std::vector<std::string> want = singleModesAt(modes_, dialHz);
+    auto wanted = [&](const std::string& n) { for (const auto& w : want) if (w == n) return true; return false; };
+    std::lock_guard<std::mutex> lk(statMtx_);
+    for (auto it = single_.begin(); it != single_.end();) {
+        if (wanted(it->def->name)) { ++it; continue; }
+        retiredSkips_ += it->eng->slotsSkipped(); retiredDecodes_ += it->eng->slotsDecoded();
+        it = single_.erase(it);
+    }
+    for (const ModeDef& m : modes_) {
+        if (!wanted(m.name)) continue;
+        bool have = false;
+        for (const Run& r : single_) if (r.def == &m) have = true;
+        if (have) continue;
+        Run r; r.def = &m; r.dial = 0;
+        try { r.eng = m.make(); } catch (const std::exception&) { continue; }
+        if (!r.eng) continue;
+        wire(r);
+        single_.push_back(std::move(r));
     }
 }
 
 Spotter::~Spotter() = default;
 
 void Spotter::wire(Run& r) {
+    ++made_;
     const std::string name = r.def->name;
     const double dial = r.dial;
     const bool single = scope_ == Scope::Single;
@@ -43,14 +73,36 @@ void Spotter::wire(Run& r) {
 }
 
 void Spotter::feedAudio48k(const float* x, int n, double captureUtc) {
-    if (scope_ != Scope::Single || single_.empty() || n <= 0) return;
+    if (scope_ != Scope::Single || n <= 0) return;
+    // ★ A retune re-chooses the modes (a dial unchanged to the hertz costs one compare)
+    if (dialHz_) {
+        const double d = dialHz_();
+        if (std::isfinite(d) && !(std::fabs(d - singleDial_) < 1.0)) planSingle(d);
+    }
+    if (single_.empty()) return;
     buf_.clear(); buf_.reserve((size_t)n / 4 + 1);
     for (int i = 0; i < n; ++i) {
         acc_ += x[i];
         if (++decim_ >= 4) { buf_.push_back(acc_ * 0.25f); acc_ = 0; decim_ = 0; }
     }
     if (buf_.empty()) return;
-    for (Run& r : single_) r.eng->process(buf_.data(), (int)buf_.size(), captureUtc);
+    for (Run& r : single_) r.eng->process(buf_.data(), (int)buf_.size(), captureUtc);   // ★ planSingle chose them
+}
+
+/* ★★ IS THE LISTENER AT THIS MODE'S DIAL? One rule for every mode, two ways of reading "at":
+ *   • singleDialTolHz > 0 (a narrow mode on a dial of its own — WSPR, ±150 Hz): the dial within that of one of its dials;
+ *   • otherwise: at least half the listener's USB window (dial + kSingleLoHz … kSingleHiHz) lies inside the mode's own
+ *     audio window above one of its dials (dial + audioLoHz … audioHiHz) — 14.074 FT8, 14.078 JS8, 14.080 FT4,
+ *     14.084 FT2, 3.578 FT2 and JS8. */
+bool Spotter::atOwnDial(const ModeDef& m, double dialHz) {
+    if (!std::isfinite(dialHz)) return false;
+    const double lo = dialHz + kSingleLoHz, hi = dialHz + kSingleHiHz, need = 0.5 * (kSingleHiHz - kSingleLoHz);
+    for (const Band& b : bands())
+        for (double d : dialsOf(m, b.id)) {
+            if (m.singleDialTolHz > 0) { if (std::fabs(d - dialHz) <= m.singleDialTolHz) return true; continue; }
+            if (std::min(hi, d + m.audioHiHz) - std::max(lo, d + m.audioLoHz) >= need) return true;
+        }
+    return false;
 }
 
 void Spotter::plan(double rate, double centreHz) {
