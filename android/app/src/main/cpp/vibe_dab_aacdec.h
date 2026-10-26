@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>      // ★ ::time (the FFmpeg retry cooldown) — the Mac got it indirectly, Linux did not
 #include <vector>
 #include <string>
 
