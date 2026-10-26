@@ -58,8 +58,14 @@ export function chooserRowOf(items: readonly ChooserItem[], i: number): number {
   return Math.max(0, row);
 }
 
-/** Where the highlight starts: the first radio that can be chosen, else the first radio, else ‹ SERVERS. */
-export function chooserStart(items: readonly ChooserItem[], radios: readonly ChooserRadio[]): number {
+/** Where the highlight starts: the first radio that can be chosen, else the first radio, else ‹ SERVERS.
+ *  ★ `returnTo`: the radio a Back from it has just come back from (src/utils/doorReturn.ts) — the highlight is on it,
+ *    whatever it is now, because that is where the listener was. Gone from the list: the usual rule. */
+export function chooserStart(items: readonly ChooserItem[], radios: readonly ChooserRadio[], returnTo?: string): number {
+  if (returnTo !== undefined) {
+    const at = items.findIndex((it) => it.k === 'radio' && it.id === returnTo);
+    if (at >= 0) return at;
+  }
   const byId = new Map(radios.map((r) => [r.id, r]));
   let firstRadio = -1;
   for (let i = 0; i < items.length; i++) {
