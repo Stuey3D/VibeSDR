@@ -204,6 +204,37 @@ bool goodChar(int c) {
     return std::strchr(".,?!/-=:;'\"()+@#&*%$<>_[]", c) != nullptr && c != 0;
 }
 bool isLetter(int c) { return (c | 0x20) >= 'a' && (c | 0x20) <= 'z'; }
+/** ★★ WORDS A READER WOULD KNOW — the last test before a signal is shown. Noise and non-PSK signals read as PSK make
+ *  Varicode's short codes (e t o a i n and space) into "words" of their own — "ere en e g o ee a -etye thae tl" off a
+ *  wide data signal at 7.0495 MHz passed every other gate. Real PSK text is QSO English and its abbreviations, numbers
+ *  and callsigns: of the words held while tentative, at least three and 30 % must be one of those. */
+bool knownWord(const std::string& w) {
+    static const char* const kWords[] = {
+        "cq","de","k","kn","sk","pse","tnx","tks","thx","fb","om","yl","op","name","qth","rst","ur","hw","cpy","copy","es","73","88",
+        "gm","ga","ge","gn","dx","qso","qsl","qrz","qrl","qrm","qrn","qsb","rig","ant","pwr","wx","temp","hr","here","btu","bk",
+        "the","and","to","of","a","in","is","it","you","for","on","my","me","i","am","at","be","are","this","that","with","as",
+        "was","so","all","good","nice","thanks","thank","very","many","best","fine","hope","see","again","from","your","not","no",
+        "yes","have","has","will","now","today","here","there","info","station","report","call","contact","psk","psk31","psk63",
+        "bpsk","rtty","ft8","qrp","dipole","yagi","vertical","watts","w","hi","mni","tu","agn","sri","bye","ciao","care","band",
+        "and","or","but","we","he","she","they","our","his","her","one","two","new","last","next","time","day","weather",
+        "loc","locator","grid","age","years","since","licensed","radio","amateur","club","73s","cul","gl","gd","vy","wl" };
+    for (const char* k : kWords) if (w == k) return true;
+    bool digit = false, alpha = false;
+    for (char c : w) { digit |= c >= '0' && c <= '9'; alpha |= isLetter((unsigned char)c); }
+    if (digit && !alpha) return true;                                   // a number: a report, a time, a power
+    if (digit && alpha) { std::string u = w; for (auto& c : u) c = (char)std::toupper((unsigned char)c); return cw::isCallsign(u); }
+    return false;
+}
+bool readsAsText(const std::string& t) {
+    int words = 0, known = 0; std::string w;
+    // ★ a one-letter word proves nothing (noise makes e, t, a, i all day) — except K, the over's end
+    auto flush = [&] { if (!w.empty()) { ++words; known += (w.size() > 1 || w == "k") && knownWord(w); w.clear(); } };
+    for (char c : t) {
+        if (std::isalnum((unsigned char)c)) w.push_back((char)std::tolower((unsigned char)c)); else flush();
+    }
+    flush();
+    return words >= 4 && known >= 3 && known * 10 >= words * 3;
+}
 } // namespace
 
 // ── The engine ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -270,10 +301,39 @@ struct Lane {
         return false;
     }
     std::deque<PendingChar> pend;
+    std::vector<std::pair<char, float>> heldQ;   // ★ characters decoded while tentative, each with its quality
     // ★ the last 128 decisions and when they were made (the ghost test)
     uint8_t bitRing[128] = {}; double tRing[128] = {};
     unsigned decoded = 0, good = 0;     // characters decoded (gate or not) and plausible ones, over the lane's life
     std::deque<uint8_t> recentGood;     // plausibility of the last 16 decoded
+    // ★★ THE TEXT'S TEXTURE: the last 48 characters decoded (gate or not). RTTY or a wide data signal read as PSK can
+    //    hold a clean-enough constellation and make only "good" characters — and still be garbage: "t  t  t  t" (a space
+    //    every other character), "rr==rrrr==rr" (three different characters), "ro su f elt notet t" (words of one or two
+    //    letters). Real text has spaces about one character in six, a dozen or more different characters in 48, and
+    //    words a few letters long. All three are asked, before a signal is shown and before each character is.
+    std::string recentText;
+    bool textureOk() const { return textTexture(recentText); }
+    /** ★ The live bar, once a signal is shown: only text gone grossly wrong (a CQ — "cq cq cq de" — is words of two
+     *  letters, and must pass): spaces over 45 %, or fewer than six different characters in the last 48. */
+    bool textureGross() const {
+        if (recentText.size() < 32) return false;
+        int spaces = 0; bool seen[128] = {}; int distinct = 0;
+        for (char c : recentText) { const unsigned char u = (unsigned char)c & 0x7f; if (!seen[u]) { seen[u] = true; ++distinct; } spaces += c == ' '; }
+        return spaces > 0.45 * (double)recentText.size() || distinct < 6;
+    }
+    static bool textTexture(const std::string& t) {
+        const size_t n = t.size();
+        if (n < 16) return false;
+        int spaces = 0; bool seen[128] = {}; int distinct = 0, words = 0, letters = 0; bool inWord = false;
+        for (char c : t) {
+            const unsigned char u = (unsigned char)c & 0x7f;
+            if (!seen[u]) { seen[u] = true; ++distinct; }
+            const bool sep = c == ' ' || c == '\n' || c == '\r';
+            if (sep) { ++spaces; inWord = false; } else { ++letters; if (!inWord) { ++words; inWord = true; } }
+        }
+        const double sp = (double)spaces / n, meanWord = words ? (double)letters / words : 0;
+        return sp >= 0.04 && sp <= 0.32 && distinct >= (n >= 40 ? 11 : n >= 24 ? 8 : 7) && meanWord >= 2.0 && meanWord <= 12;
+    }
     // IMD — the idle's two tones (±baud/2) and their third-order products (±3·baud/2), measured on a clean idle
     float imdDb = 0; int imdN = 0; double imdLin = 0, imdDue = -1;
 
@@ -329,7 +389,6 @@ struct Sig {
     bool lastCr = false;   // ★ as last heard well (a gone signal is listed as it was, not as its noise)
     int64_t firstMs = 0, lastMs = 0;
     std::string text;         // committed text (bounded)
-    std::vector<std::pair<char, float>> heldQ;   // ★ characters decoded while tentative, each with its quality
     std::string call;
     unsigned chars = 0;
     // spotting
@@ -836,6 +895,8 @@ struct Skimmer::Impl {
                     const bool gc = goodChar(c);
                     if (gc) ++l.good;
                     l.recentGood.push_back(gc ? 1 : 0);
+                    l.recentText.push_back((char)c);
+                    if (l.recentText.size() > 48) l.recentText.erase(0, l.recentText.size() - 48);
                     if (l.recentGood.size() > 16) l.recentGood.pop_front();
                 } else {
                     l.recentGood.push_back(0);
@@ -914,7 +975,6 @@ struct Skimmer::Impl {
 #ifdef PSK_DEBUG
                 if (std::getenv("PSK_CHARS")) std::fprintf(stderr, "    [%.2f] %.1f L%d%s '%c' snrS %.1f snrL %.1f\n", nowSec(), g.fc, li, li == g.lead ? "*" : " ", pc.c >= 32 ? pc.c : '~', l.snrS, l.snrL);
 #endif
-                if (li != g.lead) continue;
                 double qs = 0; int qn = 0;
                 const uint64_t a = pc.sym0 > 1 ? pc.sym0 - 1 : 0, e = pc.sym1 + kCommitSyms;
                 if (e - a < (uint64_t)kRing) for (uint64_t k = a; k <= e; ++k) { qs += l.eRing[k % kRing]; ++qn; }
@@ -922,12 +982,14 @@ struct Skimmer::Impl {
                 // ★ a character beside a carrier-like run of ones is not text, however clean the phase
                 if (l.longOnesNear(pc.sym0 > 32 ? pc.sym0 - 32 : 0, pc.sym1 + kCommitSyms)) cq = -10.0f;
                 if (!g.confirmed) {
-                    // ★ tentative: every character is held with its quality; confirm() decides what was real
-                    g.heldQ.push_back({ (char)pc.c, cq });
-                    if (g.heldQ.size() > 400) g.heldQ.erase(g.heldQ.begin(), g.heldQ.begin() + 100);
+                    // ★ tentative: every lane holds its OWN characters with their quality (a lead that changes lane must
+                    //   not leave its text interleaved — a 20 m QSO went unconfirmed that way); confirm() decides
+                    l.heldQ.push_back({ (char)pc.c, cq });
+                    if (l.heldQ.size() > 400) l.heldQ.erase(l.heldQ.begin(), l.heldQ.begin() + 100);
                     continue;
                 }
-                if (cq < kCharDbLive || l.snrL < kKeepDb) { ++suppressed; continue; }
+                if (li != g.lead) continue;
+                if (cq < kCharDbLive || l.snrL < kKeepDb || l.textureGross()) { ++suppressed; continue; }
                 emit(g, pc.c);
             }
         }
@@ -942,11 +1004,18 @@ struct Skimmer::Impl {
         if (!g.confirmed) {
             int gsum = 0; for (uint8_t v : L.recentGood) gsum += v;
             int strict = 0, letters = 0;
-            for (auto& h : g.heldQ) if (h.second >= kCharDb) { ++strict; letters += isLetter((unsigned char)h.first); }
+            for (auto& h : L.heldQ) if (h.second >= kCharDb) { ++strict; letters += isLetter((unsigned char)h.first); }
             const bool carrier = L.longOnesN > 0 && L.sym < L.longOnes[(L.longOnesN - 1) % 8] + 256;
             const bool texture = L.zeroFrac > 0.25f && L.zeroFrac < 0.75f && L.snrL >= kConfirmDb - 2.0f && L.ones7 < 0.06f;
-            const bool plausible = !carrier && texture && L.recentGood.size() >= 8 && gsum * 100 >= 85 * (int)L.recentGood.size();
-            if (recentQ(L, 64) >= kConfirmDb && plausible && strict >= 6 && letters >= 3) {
+            const bool plausible = !carrier && texture && L.textureOk() && L.recentGood.size() >= 8 && gsum * 100 >= 85 * (int)L.recentGood.size();
+            // ★ …and what WOULD be shown must have text's texture too (the held characters at the strict bar)
+            std::string shown; for (auto& hq : L.heldQ) if (hq.second >= kCharDb) shown.push_back(hq.first);
+            if (shown.size() > 48) shown.erase(0, shown.size() - 48);
+            if (recentQ(L, 64) >= kConfirmDb && plausible && strict >= 6 && letters >= 3
+                && Lane::textTexture(shown) && readsAsText(shown)) {
+#ifdef PSK_DEBUG
+                std::fprintf(stderr, "[%.2f] confirming %.2f on shown '%s'\n", nowSec(), g.fc, shown.c_str());
+#endif
                 if (ghostOf(g)) { g.ghost = true; ++ghosts; } else confirm(g);
             }
         }
@@ -987,7 +1056,7 @@ struct Skimmer::Impl {
         for (auto& o : sigs) if (o.get() != &g && o->confirmed && std::fabs(o->fc - g.fc) < 6.0) return;
         g.confirmed = true; g.confirmedSec = nowSec();
 #ifdef PSK_DEBUG
-        std::fprintf(stderr, "[%.2f] confirmed %.2f Hz lane %d snr %.1f held %zu dipx %.2f z %.2f\n", nowSec(), g.fc, g.lead, g.lane[g.lead].snrL, g.heldQ.size(), g.lane[g.lead].ones7, g.lane[g.lead].zeroFrac);
+        std::fprintf(stderr, "[%.2f] confirmed %.2f Hz lane %d snr %.1f held %zu dipx %.2f z %.2f\n", nowSec(), g.fc, g.lead, g.lane[g.lead].snrL, g.lane[g.lead].heldQ.size(), g.lane[g.lead].ones7, g.lane[g.lead].zeroFrac);
 #endif
         // ★ the same station back on (nearly) the same frequency keeps its id and its history
         for (size_t i = 0; i < gone.size(); ++i) {
@@ -1004,12 +1073,13 @@ struct Skimmer::Impl {
         // ★★ What was held: from after the last stretch that read like noise (three characters in a row under −1 dB —
         //    the seconds before the station keyed up, or before the loops locked), every character at the confirmed
         //    signal's own bar (kCharDbLive). The signal is real now; its first CQ is worth keeping.
+        std::vector<std::pair<char, float>>& hq = g.lane[g.lead].heldQ;
         size_t from = 0; int low = 0;
-        for (size_t i = 0; i < g.heldQ.size(); ++i) { low = g.heldQ[i].second < -1.0f ? low + 1 : 0; if (low >= 3) from = i + 1; }
+        for (size_t i = 0; i < hq.size(); ++i) { low = hq[i].second < -1.0f ? low + 1 : 0; if (low >= 3) from = i + 1; }
         std::string h;
-        for (size_t i = from; i < g.heldQ.size(); ++i) {
-            int c = (unsigned char)g.heldQ[i].first;
-            if (g.heldQ[i].second < kCharDbHeld) { ++suppressed; continue; }
+        for (size_t i = from; i < hq.size(); ++i) {
+            int c = (unsigned char)hq[i].first;
+            if (hq[i].second < kCharDbHeld) { ++suppressed; continue; }
             const bool lfAfterCr = c == '\n' && g.lastCr;   // ★ the same newline rule as emit()
             g.lastCr = c == '\r';
             if (lfAfterCr) continue;
@@ -1017,7 +1087,8 @@ struct Skimmer::Impl {
             if ((c < 32 && c != '\n') || c == 127) continue;
             h.push_back((char)c);
         }
-        g.heldQ.clear();
+        hq.clear();
+        for (int k = 0; k < g.nLanes; ++k) g.lane[k].heldQ.clear();
         for (char c : h) appendText(g, c);
         if (owner->onText && !h.empty()) owner->onText(g.id, g.fc, h);
     }

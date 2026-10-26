@@ -106,7 +106,22 @@ busy 20 m segment (≈ 15 signals) ≈ 0.5–1 % of one core, a listener's decod
 Recorded from Stuart's UberSDR (`~/VibeSDR-test-audio/psk/`). Monday morning (07:30–07:55 UTC) the PSK segments of 80, 40,
 30, 20, 17, 15, 12 and 10 m held no PSK at all — RTTY at 7.040, CW, FT8 next door, carriers — and the engine decoded
 nothing from any of it (no false text, after the run-of-ones and EVM gates went in; before them it read FT8 and carriers as
-garbage, which is how those gates were found). Afternoon results: see the report / commit that added them.
+garbage, which is how those gates were found).
+
+**Monday 16:05 UTC, 20 m** (`uber_20m_14071500_iq48_afternoon.wav`, 5 min): four PSK31 transmissions, all read and readable —
+EA5JTI calling CQ and working PD8GB, OE5BAY, IW2NWK and DC6GU ("Report : 599 599 / Name : Michael John … qth Aguilas.
+Murcia,Spain loc IM97el", "END OF QSO 26/10/2026 16:05:00 SK SK 73 73 … EA5JTI 73 Giancarlo and thanks for PSK31 QSO",
+"DM7MA de EA3CFV, Gert thanks for this BPSK-31 QSO on 20m, good DX. I wish you and your family all the best, 73");
+EA5JTI, OE5BAY and IW2NWK spotted, nothing false. Es/N0 9–14 dB as listed. **Same time, 40 m**: RTTY at 7.040 and a wide
+data signal at 7.0495 — nothing shown. Before the last two gates (below) both made garbage rows ("t  t  t", "rr==rr",
+"ere en e g o ee a -etye"):
+
+- **texture** of the text that would be shown (spaces 4–32 %, ≥ 7–11 different characters, words 2–12 letters on average;
+  live, only gross failure — over 45 % spaces or under six characters — so a CQ's two-letter words pass);
+- **words a reader would know**: of the words held while tentative, ≥ 3 and ≥ 30 % must be QSO English, its abbreviations,
+  numbers or callsigns (one-letter words other than K do not count);
+- and each lane holds its own characters while tentative (a lead that changed lane left the text interleaved, and the
+  EA3CFV over never confirmed).
 
 ## Tests
 
