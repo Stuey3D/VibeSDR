@@ -35,6 +35,10 @@
  *     {"type":"cw_signals","data":{skimmer,centre?,width?,primary,signals:[{id,hz,audio,wpm,snr,q,active,last,first,call,country,text}]}}
  *     {"type":"cw_spot","data":{callsign,frequency,audio,wpm,snr,how,country,timestamp}}
  *
+ *   DSC ('dsc' — V12, maritime Digital Selective Calling, vibe_dsc_run.h)
+ *     0x01 text (one readable line per call) · 0x03 | u8 state (0 listening, 1 a call coming in)
+ *     {"type":"dsc_call","data":{id,utc,rf,repeat,format,category,level,self,…,lat?,lon?,line}} — see dsc.ts
+ *
  * NB WEFAX and SSTV BOTH use 0x01 for a line, with different payloads — so
  * frames can only be parsed against the decoder currently attached. Never sniff.
  */
@@ -43,7 +47,7 @@ import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'dsc' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -91,6 +95,8 @@ export interface DecoderCallbacks {
   onCwSignals?: (list: CwList) => void;
   /** ★ CW: a callsign heard identifying itself. */
   onCwSpot?: (spot: CwSpot) => void;
+  /** ★ DSC: one call (its data as the server sent it — dsc.ts dscFromJson checks it). */
+  onDscCall?: (data: unknown) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
    *  `message` is the server's own words, shown as they are (one definition, every client). */
   onRefused?: (message: string, what: 'decoder' | 'spots') => void;
@@ -116,6 +122,8 @@ export interface DecoderParams {
   auto_stop?: boolean;
   // CW skimmer: the segment around the dial, Hz
   width?: number;
+  // DSC: 'hf' (with center_frequency, the tones' audio centre) or 'vhf' (channel 70 on NFM)
+  band?: string;
 }
 
 /** The shim's extension names. */
@@ -134,6 +142,8 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   // ★ V12 CW: the listener's passband, or a skimmer over a segment around the dial (one engine on the server).
   cw: 'cw',
   cwskim: 'cwskim',
+  // ★ V12 DSC: MF/HF on SSB or VHF channel 70 on NFM — which is a parameter ("band"), as the time station is.
+  dsc: 'dsc',
 };
 
 export class DecoderClient {
@@ -313,6 +323,11 @@ export class DecoderClient {
       });
       return;
     }
+    if (msg.type === 'dsc_call' && msg.data) {
+      if (this.mode !== 'dsc') return;
+      this.cb.onDscCall?.(msg.data);
+      return;
+    }
     if (msg.type === 'cw_spot' && msg.data) {
       const d = msg.data;
       if (typeof d.callsign !== 'string' || !d.callsign) return;
@@ -353,6 +368,8 @@ export class DecoderClient {
       // ★ CW: the primary signal's text, as RTTY's; the skimmer sends no text frame, only its state (and JSON lists).
       case 'cw':
       case 'cwskim':
+      // ★ DSC: a call's line (the box draws from the JSON instead) and the state.
+      case 'dsc':
         if (op === 0x01 && buf.byteLength >= 13) {
           const len = dv.getUint32(9, false);           // big-endian
           const text = new TextDecoder().decode(new Uint8Array(buf, 13, Math.min(len, buf.byteLength - 13)));

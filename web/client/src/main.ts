@@ -123,6 +123,7 @@ import { RecordBufferAnchor, parseRecordBufferSeconds } from '../../../src/servi
 import { probeMapGL, type MapGLKit } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
+import { DSC_CHANNELS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, type DscCall, type DscPin } from './dsc';
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
@@ -763,6 +764,7 @@ async function loadAudioPolicy(httpBase: string) {
   adsbCap = null;              // ★ an older server (or no answer) draws no ADS-B control
   ismCap = null;               // ★ …nor an ISM one
   cwCap = false;               // ★ …nor a CW decoder
+  dscCap = false;              // ★ …nor DSC
   landingStepDone = false;
   firstConfigDone = false;
   try {
@@ -800,6 +802,9 @@ async function loadAudioPolicy(httpBase: string) {
     cwCap = j.cw === true;       // ★ CW (V12): this server's own decoder and skimmer
     { const b = document.querySelector('#decodersPanel [data-dec="cw"]') as HTMLElement | null;
       if (b) b.hidden = !cwCap || blockedModes.has('cw'); }
+    dscCap = j.dsc === true;     // ★ DSC (V12): maritime Digital Selective Calling, decoded by this server
+    { const b = document.querySelector('#decodersPanel [data-dec="dsc"]') as HTMLElement | null;
+      if (b) b.hidden = !dscCap || blockedModes.has('dsc'); }
     dabBoost = j.dabBoost === true;
     dabBoostUseful = j.dabBoostUseful === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
@@ -1861,7 +1866,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'dsc' && !dscCap);
       }
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
        *  DAB never produces a spot, so both buttons were dead weight there (Stuart, 2026-09-17).
@@ -10515,7 +10520,60 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'dsc' | null = null;
+/* ★★ DSC (V12, 2026-10-26) — maritime Digital Selective Calling, decoded on the server (decoders/dsc_decoder.h). The box
+ *  lists the calls, newest first, coloured by what they are, a position's MAP beside it; the settings hold the DSC
+ *  channels to tune. Offered only where vibeserver.json says "dsc": true. See dsc.ts. */
+let dscCap = false;
+const dscCalls = new DscCalls();
+function renderDsc() {
+  renderDscRows($('dscRows'), dscCalls.list,
+    'listening — each DSC call appears here as it is decoded. A few an hour on each frequency; most are test calls '
+    + 'to coast stations and their acknowledgements.', (c) => openDscMap([c]));
+}
+/** ★ A channel key: tune it as a DSC receiver does, and re-attach so the decoder's tones follow. */
+function dscTune(ch: { hz: number; vhf: boolean }) {
+  if (!spec) return;
+  const t = dscTuneFor(ch);
+  spec.tune(clampTune(t.hz), t.mode as SDRMode, { recenter: true, retarget: true });
+  renderFreq();
+  reattachIf('dsc');
+}
+/** ★ The DSC channels this radio can actually reach — the rest are not drawn (AGENTS.md: no dead controls). */
+function initDscChannels() {
+  const host = document.getElementById('dscChans');
+  if (!host) return;
+  host.textContent = '';
+  for (const ch of DSC_CHANNELS) {
+    const t = dscTuneFor(ch);
+    if (clampTune(t.hz) !== t.hz) continue;
+    const b = document.createElement('button');
+    b.className = 'btn'; b.textContent = ch.label;
+    b.title = ch.vhf ? 'VHF channel 70, 156.525 MHz — tuned in NFM' : `${ch.label} kHz — tuned ${((ch.hz - 1700) / 1e3).toFixed(1)} kHz USB`;
+    b.onclick = () => dscTune(ch);
+    host.appendChild(b);
+  }
+}
+function openDscMap(calls: DscCall[]) {
+  const pins: DscPin[] = calls.filter((c) => c.lat !== null && c.lon !== null)
+    .map((c) => ({ lat: c.lat as number, lon: c.lon as number, label: c.line, level: c.level }));
+  openPinsMap(pins);
+}
+function openPinsMap(pins: DscPin[]) {
+  if (!pins.length) return;
+  const w = window.open('', '_blank');
+  if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
+  const origin = /^https?:$/.test(location.protocol) ? location.origin : '';
+  const leaflet = LEAFLET_ASSET ? { js: origin + LEAFLET_ASSET.js, css: origin + LEAFLET_ASSET.css, jsSri: LEAFLET_ASSET.jsSri, cssSri: LEAFLET_ASSET.cssSri } : null;
+  void Promise.all([probeMapGL(), loadVibemapSource()]).then(([kit, m]) => {
+    if (w.closed) return;
+    w.document.write(dscMapHtml(kit, m.VIBEMAP_JS, pins, myPos(), leaflet, origin ? origin + '/mapdata/v1/' : '/mapdata/v1/'));
+    w.document.close();
+  }).catch((e) => {
+    console.error('[map] the map could not load', e);
+    if (!w.closed) { w.document.write('<!doctype html><meta charset="utf-8"><body style="background:#080601;color:#ffb833;font:14px monospace;padding:2em">The map did not finish loading. Close this window and try again.'); w.document.close(); }
+  });
+}
 /* ★★ CW (V12, 2026-10-25) — the server's own decoder (decoders/cw_skimmer.h). ONE SIGNAL decodes this listener's
  *  passband ('cw', on their audio); SKIMMER every CW signal across a segment centred on the dial ('cwskim', on IQ). The
  *  box shows the primary signal's text (#decText, one-signal only) over the list of signals and the spots. Offered only
@@ -10767,6 +10825,7 @@ function decParams(mode: string): Record<string, unknown> {
   }
   if (mode === 'time') return { station: timeStation };
   if (mode === 'cw') return cwSkim ? { width: cwWidth } : {};
+  if (mode === 'dsc') return dscParams(spec?.frequency ?? 0, String(spec?.mode ?? ''));
   return {};
 }
 
@@ -10775,6 +10834,7 @@ function initDecoders(host: string, auth: AuthState) {
     onText: (t: string) => {
       // ★ NAVTEX: into the message assembler, drawn by renderNavtex — #decText is hidden while it has the box.
       if (activeDec === 'navtex') { clearNavtexIfRetuned(); navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
+      if (activeDec === 'dsc') return;   // ★ DSC's rows are drawn from its JSON (onDscCall); the line is the same text
       const el = $('decText');
       // ★★ A LEADING \r MEANS "REPLACE THE LAST LINE", as a terminal would. The time decoders send
       //    a progress line once a SECOND — the fields filling in as they arrive — and appending
@@ -10848,7 +10908,8 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === 'navtex') { navtexAsm.lockState(st, Date.now()); renderNavtex(); return; }
       // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
-      decStateText = activeDec === 'cw' ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
+      decStateText = activeDec === 'dsc' ? (st ? 'receiving a call…' : 'listening…')
+                   : activeDec === 'cw' ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
                    : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
       if (!decTuneHint) $('decStatus').textContent = decStateText;   // ★ the tuning guide, while up, IS the status
       setDecLive(!!st);
@@ -10901,6 +10962,13 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(true);
     },
     // ★★ CW: the list of signals, and the callsigns spotted (newest first; one row per call, the latest).
+    // ★★ DSC: a call (a repeat updates its row).
+    onDscCall: (d) => {
+      if (activeDec !== 'dsc') return;
+      const c = dscFromJson(d);
+      if (!c) return;
+      dscCalls.push(c); renderDsc(); setDecLive(true);
+    },
     onCwSignals: (list) => { if (activeDec !== 'cw') return; cwLast = list; renderCw(); setDecLive(list.signals.some((x) => x.active)); },
     onCwSpot: (sp) => {
       if (activeDec !== 'cw') return;
@@ -10996,7 +11064,7 @@ function initDecoders(host: string, auth: AuthState) {
   //    semantics, same as the app). Selecting one opens the output box.
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'dsc';
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
       decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
@@ -11064,6 +11132,7 @@ function initDecoders(host: string, auth: AuthState) {
   });
   segButtons('cwWidth', 'cwwidth', (v) => { cwWidth = Number(v) || 48000; cwHint(); if (cwSkim) { cwLast = null; renderCw(); reattachIf('cw'); } });
   cwHint();
+  initDscChannels();
 
   // Spots + map.
   const spotsBtn = $<HTMLButtonElement>('spotsBtn');
@@ -11084,6 +11153,7 @@ function initDecoders(host: string, auth: AuthState) {
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
     if (activeDec === 'cw') { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
+    if (activeDec === 'dsc') { dscCalls.clear(); renderDsc(); }
   };
   $('decPrev').onclick = () => (activeDec === 'navtex' ? toggleNavtexPrev() : toggleDecPrev());
   $('decSave').onclick = () => (activeDec === 'navtex' ? saveNavtex() : saveDecImage());
@@ -11427,7 +11497,7 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, 
 function anyDecoderLeft(): boolean {
   // ★ V12: CW counts only where this server has it (vibeserver.json "cw") — the button is hidden otherwise.
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
-    || (cwCap && !blockedModes.has('cw'));
+    || (cwCap && !blockedModes.has('cw')) || (dscCap && !blockedModes.has('dsc'));
 }
 
 function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
@@ -11447,6 +11517,8 @@ function syncDecButtons() {
   $('wefaxSettings').hidden = activeDec !== 'wefax';
   $('timeSettings').hidden = activeDec !== 'time';
   $('cwSettings').hidden = activeDec !== 'cw';
+  $('dscSettings').hidden = activeDec !== 'dsc';
+  if (activeDec === 'dsc') initDscChannels();   // ★ the radio's range may have changed since the page loaded
 }
 
 function showDecBox(what: string) {
@@ -11480,6 +11552,9 @@ function showDecBox(what: string) {
   const isCw = what === 'cw';
   $('cwList').classList.toggle('on', isCw);
   if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
+  const isDsc = what === 'dsc';
+  $('dscList').classList.toggle('on', isDsc);
+  if (isDsc) { dscCalls.clear(); renderDsc(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
   // bar is a compressed version of the same data; showing both would be saying everything
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
@@ -11487,7 +11562,7 @@ function showDecBox(what: string) {
   $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
   // ★ Which decoders BIG should widen: the ones whose content is drawn at the box's width (SSTV,
   //   WEFAX) or written in long lines (the spot list). Text decoders get height instead.
-  $('decBox').classList.toggle('wide', image || isSpots || (isCw && cwSkim));
+  $('decBox').classList.toggle('wide', image || isSpots || (isCw && cwSkim) || what === 'dsc');
   // ★★ THE SIZE TOGGLE IS FOR EVERY DECODER, not just Advanced RDS. It was gated on `isRds`, so
   //    the one panel whose whole point is a PICTURE — SSTV — had no way to be made bigger, and
   //    WEFAX and the spot list were stuck at one size too (Stuart). RDS keeps its own pair of
@@ -11495,7 +11570,7 @@ function showDecBox(what: string) {
   $('rdsSize').classList.toggle('show', true);
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
   applyRdsSize();
-  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || (isCw && cwSkim));
+  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || (isCw && cwSkim) || isDsc);
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
@@ -14167,7 +14242,9 @@ function initRecorder() {
 // this lists it newest first, filters by decoder, opens a text item inline and downloads any item.
 // ★ Text from the air is shown with textContent, never as HTML.
 interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
-                        title: string; partial?: boolean; wl?: boolean; bytes: number; s?: string; dn?: string }
+                        title: string; partial?: boolean; wl?: boolean; bytes: number; s?: string; dn?: string;
+                        /** ★ V12 DSC: 3 distress · 2 urgency · 1 safety; and the position the item is about, for MAP. */
+                        lv?: number; plat?: number; plon?: number }
 let galKind = '';
 function galUrl(path: string): string { return readAuthUrl(P(path)); }
 function galWhen(t: number): string {
@@ -14217,6 +14294,8 @@ async function renderGallery(page = galPage) {
     }
     items.forEach((it, idx) => {
       const row = document.createElement('div'); row.className = 'sres';
+      // ★ V12 DSC: a distress or urgency item is coloured as the DSC box colours it.
+      if (typeof it.lv === 'number' && it.lv >= 2) row.classList.add(it.lv >= 3 ? 'galDistress' : 'galUrgency');
       // ★ A focusable row: Tab / arrows / D-pad reach it, Enter or the controller's A opens it.
       row.tabIndex = 0; row.setAttribute('role', 'button');
       const f = document.createElement('span'); f.className = 'f'; f.textContent = galFreq(it.hz);
@@ -14232,6 +14311,14 @@ async function renderGallery(page = galPage) {
         .filter((x) => !!x).join(' · ');
       n.appendChild(src);
       row.appendChild(f); row.appendChild(n);
+      // ★ A position the item is about (a DSC distress call): MAP, on this server's own map.
+      if (typeof it.plat === 'number' && typeof it.plon === 'number' && Math.abs(it.plat) <= 90 && Math.abs(it.plon) <= 180) {
+        const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
+        mb.title = 'Show the position this call sent';
+        const pin: DscPin = { lat: it.plat, lon: it.plon, label: it.title, level: it.lv ?? 0 };
+        mb.onclick = (e) => { e.stopPropagation(); openPinsMap([pin]); };
+        row.appendChild(mb);
+      }
       const open = () => { galScroll = $('galleryPanel').scrollTop; galOpenedRow = idx; void openGalleryItem(it); };
       row.onclick = open;
       row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };

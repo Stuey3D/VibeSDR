@@ -193,6 +193,46 @@ int wav(const char* path, double centre) {
 }
 } // namespace
 
+/** ★ The server tests' clip (scripts/test-server-dsc.mjs): unsigned 8-bit IQ at `rate`, centred on `centre`, looped by
+ *  vibeserver/fake-rtl-tcp.mjs. MF/HF: the distress alert, then the all-ships safety call, both on `dscHz` (the tones
+ *  ±85 Hz about it, 1 = the lower). VHF (`vhf`): the same two calls as an FM subcarrier on `dscHz` (±3 kHz deviation). */
+int clip(const char* out, double rate, double seconds, double centre, double dscHz, bool vhf) {
+    const auto cs = calls();
+    std::vector<std::vector<uint8_t>> tx = { build::transmission(cs[0].syms, {}, vhf ? 20 : 200), build::transmission(cs[6].syms, {}, vhf ? 20 : 200) };
+    const size_t n = (size_t)(seconds * rate);
+    std::vector<uint8_t> b(n * 2);
+    Rng rng(2026);
+    const double baud = vhf ? 1200.0 : 100.0, spb = rate / baud;
+    const double off = dscHz - centre;
+    double ph = 0, sub = 0;
+    size_t call = 0, bit = 0; double t = 0;
+    double gap = 1.0 * rate;                 // a second of noise before each call
+    for (size_t i = 0; i < n; ++i) {
+        double re = 0.707 * rng.gauss(), im = 0.707 * rng.gauss();
+        if (gap > 0) { gap -= 1; ph += 2 * M_PI * off / rate; }
+        else if (call < tx.size()) {
+            const bool one = tx[call][bit] != 0;
+            if (vhf) {
+                sub += 2 * M_PI * (one ? 1300.0 : 2100.0) / rate;
+                ph += 2 * M_PI * (off + 3000.0 * std::sin(sub)) / rate;
+                re += 0.6 * std::cos(ph); im += 0.6 * std::sin(ph);
+            } else {
+                ph += 2 * M_PI * (off + (one ? -85.0 : 85.0)) / rate;
+                re += 0.15 * std::cos(ph); im += 0.15 * std::sin(ph);
+            }
+            t += 1;
+            if (t >= spb * (double)(bit + 1)) { if (++bit >= tx[call].size()) { ++call; bit = 0; t = 0; gap = 1.0 * rate; } }
+        }
+        if (ph > 1e6) ph = std::fmod(ph, 2 * M_PI);
+        auto q = [](double v) { const int x = (int)std::lround(127.5 + v * 18.0); return (uint8_t)std::max(0, std::min(255, x)); };
+        b[2 * i] = q(re); b[2 * i + 1] = q(im);
+    }
+    FILE* f = std::fopen(out, "wb"); if (!f) { std::perror(out); return 1; }
+    std::fwrite(b.data(), 1, b.size(), f); std::fclose(f);
+    std::printf("%s: %.0f s at %.0f Hz centred on %.0f, %s calls on %.0f Hz (%zu sent)\n", out, seconds, rate, centre, vhf ? "VHF" : "MF/HF", dscHz, call);
+    return call == tx.size() ? 0 : 1;
+}
+
 int miss(bool vhf, double sn, int trials, double fade) {
     const auto cs = calls();
     int m = 0, noFmt = 0, fmtNoCall = 0;
@@ -218,6 +258,7 @@ int main(int argc, char** argv) {
     if (m == "snr") return snr(argc > 2 ? std::atoi(argv[2]) : 10);
     if (m == "noise") return noise(argc > 2 ? std::atof(argv[2]) : 10);
     if (m == "miss" && argc > 3) return miss(std::atoi(argv[2]) != 0, std::atof(argv[3]), argc > 4 ? std::atoi(argv[4]) : 20, argc > 5 ? std::atof(argv[5]) : 0);
+    if (m == "clip" && argc > 6) return clip(argv[2], std::atof(argv[3]), std::atof(argv[4]), std::atof(argv[5]), std::atof(argv[6]), argc > 7 && std::string(argv[7]) == "vhf");
     if (m == "cpu") return cpu(argc > 2 ? std::atof(argv[2]) : 120);
     if (m == "wav" && argc > 2) return wav(argv[2], argc > 3 ? std::atof(argv[3]) : 1700);
     std::fprintf(stderr, "usage: dsc_bench formats|snr [trials]|noise <min>|cpu [s]|wav <file> [centre]\n");

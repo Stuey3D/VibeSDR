@@ -1019,6 +1019,23 @@ else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 DSC (2026-10-26): the real server on a fake rtl_tcp replaying the bench's synthetic clips — a distress alert and an
+#     all-ships safety call on 2187.5 kHz, and the same two as an FM subcarrier on channel 70: a listener's MF/HF and VHF
+#     decoder, the gallery's day log and pinned distress item, and background decoding on a DSC VFO (test-server-dsc); then
+#     the web client in headless Edge (--mute-audio) — the DSC button, its channel keys, the coloured rows, MAP, a channel
+#     key's tune, the gallery's DSC chip, 390 px (test-web-dsc). The engine's numbers are vibeserver/test-dsc.cpp above;
+#     the measuring bench is scripts/test-dsc.sh. Needs VIBESERVER_BIN.
+printf '\n\033[1m── DSC (end to end: server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-dsc.sh clip "$OUT/dsc-hf.cu8" >/dev/null && scripts/test-dsc.sh clip "$OUT/dsc-vhf.cu8" vhf >/dev/null; then
+  VIBE_DSC_CLIP="$OUT/dsc-hf.cu8" VIBE_DSC_CLIP_VHF="$OUT/dsc-vhf.cu8" node scripts/test-server-dsc.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_DSC_CLIP="$OUT/dsc-hf.cu8" node scripts/test-web-dsc.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/dsc-hf.cu8" "$OUT/dsc-vhf.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-dsc.sh)'; notrun=$((notrun+1))
+fi
+
 # ★★ THE RATE PIN AND THE SHARED-DIAL RATE RULE BIND LISTENERS, NOT THE SIGNED-IN ADMIN (Stuart, 2026-10-24: "sample rate
 #    change isnt working … I am in admin mode"). Same VIBESERVER_BIN rule.
 printf '\n\033[1m── rate pin: listener refused, admin allowed (end to end) ──\033[0m\n'

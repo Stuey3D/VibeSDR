@@ -21,6 +21,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <functional>
 #include <mutex>
@@ -37,10 +38,15 @@ public:
     }
     ~DscGalleryTap() override { finish(true); }
 
-    void dscCall(const dsc::Call& c, const std::string& line, const std::string& /*json*/, bool repeat) override {
+    void dscCall(const dsc::Call& c, const std::string& line, const std::string& json, bool repeat) override {
         std::lock_guard<std::mutex> lk(m_);
         if (done_ || repeat) return;
         followDial();
+        // ★ The log is named for the DSC FREQUENCY the call was heard on (2187.5), not the dial (2185.8 USB).
+        const size_t rp = json.find("\"rf\":");
+        if (rp != std::string::npos) { const double rf = std::strtod(json.c_str() + rp + 5, nullptr); if (rf > 0 && std::fabs(rf - rfHz_) > 50) {
+            if (rfHz_ > 0 && !log_.empty()) { flush(gallery::nowUtc()); store_.close(log_); log_.clear(); calls_ = distress_ = urgency_ = 0; }
+            rfHz_ = rf; } }
         const int64_t now = gallery::nowUtc();
         rollDay(now);
         pending_ += gallery::utcStamp(now, "%H:%M:%S") + "  " + freqText() + "  " + line + "\n";
@@ -71,14 +77,14 @@ public:
 private:
     std::string freqText() const {
         char b[32];
-        const double hz = meta_.freqHz;
+        const double hz = rfHz_ > 0 ? rfHz_ : meta_.freqHz;
         if (hz >= 30e6) std::snprintf(b, sizeof b, "%.3f MHz", hz / 1e6);
         else std::snprintf(b, sizeof b, "%.1f kHz", hz / 1e3);
         return b;
     }
     std::string freqShort() const {
         char b[32];
-        const double hz = meta_.freqHz;
+        const double hz = rfHz_ > 0 ? rfHz_ : meta_.freqHz;
         if (hz >= 30e6) std::snprintf(b, sizeof b, "%.3f", hz / 1e6); else std::snprintf(b, sizeof b, "%.1f", hz / 1e3);
         return b;
     }
@@ -90,7 +96,7 @@ private:
         flush(gallery::nowUtc());
         if (!log_.empty()) store_.close(log_);
         log_.clear(); calls_ = distress_ = urgency_ = 0;
-        meta_.freqHz = d;
+        meta_.freqHz = d; rfHz_ = 0;
     }
     void rollDay(int64_t now) {
         const int64_t day = now / 86400;
@@ -100,7 +106,9 @@ private:
     }
     gallery::Meta logMeta(int64_t now) const {
         gallery::Meta m = meta_;
-        m.slot = "day-" + gallery::utcStamp(now, "%Y%m%d");
+        // ★ One log per DSC frequency per day: the frequency is part of what finds it again (with the dial, in "hz").
+        char fs[24]; std::snprintf(fs, sizeof fs, "%.0f", rfHz_ > 0 ? rfHz_ : meta_.freqHz);
+        m.slot = "day-" + gallery::utcStamp(now, "%Y%m%d") + "-" + fs;
         m.utc = (now / 86400) * 86400;
         std::string t = "DSC " + freqText() + " \xc2\xb7 " + gallery::utcStamp(now, "%d %b");
         t += " \xc2\xb7 " + std::to_string(calls_) + (calls_ == 1 ? " call" : " calls");
@@ -181,6 +189,7 @@ private:
     int64_t lastFlush_ = 0, day_ = -1;
     unsigned long calls_ = 0, distress_ = 0, urgency_ = 0;
     size_t items_ = 0;
+    double rfHz_ = 0;     // the DSC frequency the calls come from (from the call's JSON); 0 = the dial
 };
 
 } // namespace bg
