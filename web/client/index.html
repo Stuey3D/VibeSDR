@@ -2876,9 +2876,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    COUNTRY sat at a fixed 2.6em and collided with the distance. Country is the
    variable-length field, so that's the one that should flex — and it ellipsises
    rather than overrunning its neighbour. */
+/* ★ V12: a MODE column after the time — the mode's own colour and letter, as on the map (src/utils/digiModes.ts). */
 #spotList .sres.spot {
   display: grid;
-  grid-template-columns: 3.2em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;
+  grid-template-columns: 3.2em 3.9em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;
   gap: 8px; align-items: baseline; font-size: 11px; padding: 4px 6px;
 }
 #spotList .cty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2897,6 +2898,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 #spotList .t { color: var(--unit); font-variant-numeric: tabular-nums; }
 #spotList .band { color: var(--text-dim); }
+#spotList .mode { white-space: nowrap; font-weight: bold; }
+/* ★ Band spots greyed with the server's reason (the owner's switch, the benchmark's default) — never hidden. */
+#spotsBandBtn.dis { opacity: 0.45; }
+#spotList .mode i { display: inline-block; width: 1.25em; height: 1.25em; line-height: 1.25em; border-radius: 50%;
+                    text-align: center; font-style: normal; font-size: 9px; margin-right: 3px; vertical-align: 1px;
+                    box-shadow: 0 0 0 1px #1a1a1a; }
 #spotList .snr { text-align: right; font-variant-numeric: tabular-nums; }
 #spotList .snr.pos { color: #55d98d; }
 #spotList .snr.neg { color: rgba(255,160,0,0.65); }
@@ -4721,12 +4728,18 @@ select.btn { padding: 6px 8px; }
   <!-- ★ One section, one switch: the owner's "Digital spots / map" entry hides the whole of it. -->
   <div id="spotsSection">
   <h2>DECODED SPOTS</h2>
+  <!-- ★★ V12 (2026-10-26): TWO WAYS TO SPOT. SINGLE MODE is the button there always was — the mode(s) at your dial,
+       cheap, any server. BAND reads a whole band's digital frequencies at once, every mode on its own dial; the arrows then
+       step BANDS (2200 m … 10 m, 6 m, 4 m, 2 m, 70 cm), the readout names the band and the drawn VFO is the band's span.
+       Band is shown only where this radio reaches a band; greyed with the server's reason where the owner has it off. -->
   <div class="btnRow">
-    <button class="btn" id="spotsBtn">DIGITAL SPOTS</button>
+    <button class="btn" id="spotsBtn" title="The digital modes at your dial (FT8 and FT4 on your passband)">DIGITAL SPOTS: SINGLE MODE</button>
+    <button class="btn" id="spotsBandBtn" title="A whole band's digital frequencies at once — every mode on its own dial" hidden>DIGITAL SPOTS: BAND</button>
     <button class="btn" id="mapBtn" title="Opens in a new tab">&#128506; MAP</button>
   </div>
+  <div class="lbl wrap" id="spotsBandWhy" style="margin-top:6px" hidden></div>
   <div class="lbl wrap" style="margin-top:6px">
-    Decoding runs on the server. Tap a spot to tune.
+    Decoding runs on the server. Tap a spot to tune. In BAND the tuning arrows step bands; type a frequency for an exact one.
   </div>
   </div>
 </div>

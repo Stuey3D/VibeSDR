@@ -687,9 +687,21 @@ void Ft8Decoder::workerLoop() {
 
 void Ft8Decoder::process(const int16_t* in, int count, double captureUtc) {
     if (!ok || count <= 0) return;
-    if (!std::isfinite(captureUtc)) captureUtc = vibe::vibeUtcNow();
     const int64_t R = (int64_t)ring_.size();
     for (int i = 0; i < count; i++) ring_[(size_t)((total_ + i) % R)] = (float)in[i] / 32768.0f;
+    advance(count, captureUtc);
+}
+
+void Ft8Decoder::process(const float* in, int count, double captureUtc) {
+    if (!ok || count <= 0) return;
+    const int64_t R = (int64_t)ring_.size();
+    for (int i = 0; i < count; i++) ring_[(size_t)((total_ + i) % R)] = in[i];
+    advance(count, captureUtc);
+}
+
+void Ft8Decoder::advance(int count, double captureUtc) {
+    if (!std::isfinite(captureUtc)) captureUtc = vibe::vibeUtcNow();
+    const int64_t R = (int64_t)ring_.size();
     total_ += count;
 
     /* ★★ THE ANCHOR: the capture UTC of sample 0, from this block's stamp. A stamp is late by however long the
