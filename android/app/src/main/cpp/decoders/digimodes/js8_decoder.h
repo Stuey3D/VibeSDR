@@ -21,6 +21,8 @@
 //  propagation, OSD-1 on spare CPU; the CRC-12; the frame unpacked (js8_message.h). On spare CPU a second pass
 //  subtracts every decoded signal and searches again.
 #pragma once
+#include "../ftx_fine.h"
+#include <memory>
 #include "js8_message.h"
 #include <atomic>
 #include <cmath>
@@ -89,6 +91,10 @@ struct Js8SlotOptions {
      *  likelihoods could not decode get their symbols measured again from the audio itself. 0 = off. */
     int coherentMax = 0;
     int coherentMinScore = 6;
+    /** ★★ The FT8 decoder's second look (ftx_fine.h) in place of the coherent stage above, on the same candidates:
+     *  fine sync from the window's spectrum, the matched filter, and likelihoods over one, two and three symbols
+     *  (JS8 is plain CPFSK with the tone spacing equal to the symbol rate, so symbols add in phase). 2026-10-26. */
+    int fine = 0;
     std::function<bool(int nextPass, double elapsedMs, double lastPassMs)> mayRunPass;
     const std::atomic<bool>* abort = nullptr;
 };
@@ -145,6 +151,7 @@ private:
     std::vector<float> wr_, wi_;    // the in-block mixer phases (D_ of them, re-made per frequency)
     std::vector<float> toneC_, toneS_;   // [df 0..4][tone 0..7][spsd_]: tone + df/8 over one decimated symbol
     std::vector<float> zr_, zi_;    // scratch: the decimated baseband
+    std::unique_ptr<FtxFine> fine_; // the second look (Js8SlotOptions::fine), made on first use
     float colMean(size_t c);
 };
 

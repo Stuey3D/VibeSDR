@@ -40,6 +40,7 @@ static inline float v4s_madd(float a, float b, float c)
 #if VIBE_FT8_NEON
 typedef float32x4_t v4f;
 static inline v4f v4_load(const float* p) { return vld1q_f32(p); }
+static inline v4f v4_max(v4f a, v4f b) { return vmaxq_f32(a, b); }
 static inline void v4_store(float* p, v4f v) { vst1q_f32(p, v); }
 static inline v4f v4_set1(float x) { return vdupq_n_f32(x); }
 static inline v4f v4_add(v4f a, v4f b) { return vaddq_f32(a, b); }
@@ -109,6 +110,7 @@ static inline void v4_scatter(float* base, const uint16_t* idx, v4f v)
 #elif VIBE_FT8_SSE2
 typedef __m128 v4f;
 static inline v4f v4_load(const float* p) { return _mm_loadu_ps(p); }
+static inline v4f v4_max(v4f a, v4f b) { return _mm_max_ps(a, b); }
 static inline void v4_store(float* p, v4f v) { _mm_storeu_ps(p, v); }
 static inline v4f v4_set1(float x) { return _mm_set1_ps(x); }
 static inline v4f v4_add(v4f a, v4f b) { return _mm_add_ps(a, b); }
@@ -145,6 +147,7 @@ static inline void v4_scatter(float* base, const uint16_t* idx, v4f v)
 #else
 typedef struct { float v[4]; } v4f;
 static inline v4f v4_load(const float* p) { v4f r; for (int i = 0; i < 4; ++i) r.v[i] = p[i]; return r; }
+static inline v4f v4_max(v4f a, v4f b) { for (int i = 0; i < 4; ++i) a.v[i] = a.v[i] > b.v[i] ? a.v[i] : b.v[i]; return a; }
 static inline void v4_store(float* p, v4f a) { for (int i = 0; i < 4; ++i) p[i] = a.v[i]; }
 static inline v4f v4_set1(float x) { v4f r; for (int i = 0; i < 4; ++i) r.v[i] = x; return r; }
 static inline v4f v4_add(v4f a, v4f b) { for (int i = 0; i < 4; ++i) a.v[i] += b.v[i]; return a; }

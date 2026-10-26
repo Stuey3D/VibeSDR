@@ -48,6 +48,8 @@ import StationLogo from './StationLogo';
 import { scrollLane } from '../constants/popupTokens';
 import type { Aircraft } from '../services/SDRBackend';
 import { useRenderBank } from '../utils/renderBank';
+import ScannerPanel, { type ScannerPanelProps, type ScannerNav } from './ScannerPanel';
+import type { ScanSource } from '../services/scanner';
 /** ★ A tuning move this large (Hz) while WEFAX or NAVTEX is open is a different transmission — see the retune effects.
  *  It is wider than a USB passband, so the tones have left it; fine-tuning a station onto its tones stays under it. */
 const RETUNE_NEW_CHART_HZ = 3000;
@@ -56,7 +58,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | null;
+                        | 'time' | 'transcribe' | 'cw' | 'scanner' | null;
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
@@ -115,6 +117,9 @@ export interface DecoderPanelProps {
   onSelectDab?:    (id: number) => void;
   dabSpeed?:       number;
   onDabSpeed?:     (v: number) => void;
+  /** ★★ V12 THE SCANNER (docs/v12/SCANNER.md) — "another decoder box item" (Stuart). Set while SCANNER is the decoder: the
+   *  body is ScannerPanel, the header carries BAND · BOOKMARKS · MANUAL, and the box's list zone walks its controls. */
+  scanner?:        (Omit<ScannerPanelProps, 'focusIdx' | 'navRef' | 'bodyStyle'> & { onSource: (s: ScanSource) => void }) | null;
 }
 
 const DAB_SPEEDS = [
@@ -226,6 +231,8 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   cw:      'CW',
   // ★ V12: ON-DEVICE speech-to-text (+ translation) of the audio we play — any backend. Not UberSDR's STT (`whisper`).
   transcribe: 'TRANSCRIBE',
+  // ★★ V12: the scanner (Band · Bookmarks · Manual) — not a decoder, but it lives in the decoder box (Stuart).
+  scanner: 'SCANNER',
 };
 
 /* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE — `dp` below is built
@@ -245,7 +252,7 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw = null,
+  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0, receiverPos = null, cw = null, scanner = null,
 }: DecoderPanelProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
@@ -364,6 +371,9 @@ export default function DecoderPanel({
   const isNavtex = activeDecoder === 'navtex' && !!navtex && !isSpotsMode && !isDabMode && !isImageMode && !isAircraftMode;
   /** ★ V12 CW: the list + spots view (CwView) in place of the plain text body. */
   const isCw = activeDecoder === 'cw' && !!cw && !isSpotsMode && !isDabMode && !isAircraftMode;
+  /** ★★ V12 the scanner's body in place of the text. Its controls register themselves in `scanNav` as they draw. */
+  const isScanner = activeDecoder === 'scanner' && !!scanner && !isSpotsMode && !isDabMode;
+  const scanNav = useRef<ScannerNav>({ len: 0, press: () => {} });
   const cwRows = React.useMemo(() => (isCw ? cwItems(cw!.list, cw!.spots) : []), [isCw, cw]);
   const [nvViewPrev, setNvViewPrev] = useState(false);
   const [, setNvTick] = useState(0);
@@ -708,7 +718,7 @@ export default function DecoderPanel({
   // "same kinda thing with ADSB except nothing to select just scroll" — so they navigate but
   // Enter does nothing rather than pretending to.
   // ★ CW's rows (signals, then spots) are selectable too: Enter tunes to the one highlighted.
-  const listLen = isDabMode ? dabProgrammes.length : isCw ? cwRows.length : 0;
+  const listLen = isDabMode ? dabProgrammes.length : isCw ? cwRows.length : isScanner ? Math.max(1, scanNav.current.len) : 0;
 
   // ★ The flash. Entering the box is otherwise invisible, and invisible focus has looked like a broken
   // keyboard three times over in this work. It announces itself once and then gets out of the
@@ -816,11 +826,14 @@ export default function DecoderPanel({
         return true;
       }
       setKbZone('list');
-      setListIdx(i => Math.max(0, Math.min(listLenRef.current - 1, i + (k === 'ArrowDown' ? 1 : -1))));
+      // ★ The scanner's item count changes as its sections open — read it now, not from the last render.
+      const len = isScannerRef.current ? scanNav.current.len : listLenRef.current;
+      setListIdx(i => Math.max(0, Math.min(len - 1, i + (k === 'ArrowDown' ? 1 : -1))));
       return true;
     }
     if (k === 'Enter') {
       if (kbZoneRef.current === 'header') hdrDone.current[hdrIdxRef.current]?.();
+      else if (isScannerRef.current) scanNav.current.press(listIdxRef.current);
       else if (listLenRef.current > 0 && cwSelectRef.current) cwSelectRef.current(listIdxRef.current);
       else if (listLenRef.current > 0) onSelectDabRef.current?.(listIdxRef.current);
       return true;
@@ -842,6 +855,7 @@ export default function DecoderPanel({
   const cwSelectRef = useRef<((i: number) => void) | null>(null);
   cwSelectRef.current = isCw ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) cw!.onTune(r.hz); } : null;
   const listLenRef = useRef(listLen); listLenRef.current = listLen;
+  const isScannerRef = useRef(isScanner); isScannerRef.current = isScanner;
   const isDabModeRef = useRef(isDabMode); isDabModeRef.current = isDabMode;
   const autoOwnRef = useRef(autoOwn); autoOwnRef.current = autoOwn;
   const onOpenFreqRef = useRef(onOpenFreq); onOpenFreqRef.current = onOpenFreq;
@@ -1112,8 +1126,20 @@ export default function DecoderPanel({
             </HBtn>
           )}
 
+          {/* ★★ V12 THE SCANNER'S SOURCE KEYS — they swap the candidate section only; the settings are shared. */}
+          {isScanner && (['band', 'bookmarks', 'list'] as ScanSource[]).map((src) => (
+            <HBtn key={src} active={scanner!.ctl.source === src} run hitSlop={6}
+              accessibilityLabel={src === 'band' ? 'Band scan' : src === 'bookmarks' ? 'Bookmark scan' : 'Manual scan, the QSO hopper'}
+              accessibilityState={{ selected: scanner!.ctl.source === src }}
+              onPress={(e: any) => { e?.stopPropagation(); scanner!.onSource(src); }}>
+              <DecoderKeyLabel active={scanner!.ctl.source === src}>
+                {src === 'band' ? 'BAND' : src === 'bookmarks' ? 'BOOKMARKS' : 'MANUAL'}
+              </DecoderKeyLabel>
+            </HBtn>
+          ))}
+
           {/* CLR — text decoders (skin _clearB) */}
-          {!isImageMode && !isSpotsMode && !isDabMode && (
+          {!isImageMode && !isSpotsMode && !isDabMode && !isScanner && (
             <HBtn run hitSlop={6}
               onPress={(e: any) => { e?.stopPropagation(); onClear?.(); }}>
               <DecoderKeyLabel>CLR</DecoderKeyLabel>
@@ -1398,7 +1424,10 @@ export default function DecoderPanel({
                   focusIdx={kbZone === 'list' ? listIdx : -1} onTune={cw!.onTune}
                   scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}
-        {!minimised && !isNavtex && !isCw && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && !!notice && (
+        {!minimised && isScanner && (
+          <ScannerPanel {...scanner!} focusIdx={kbZone === 'list' ? listIdx : -1} navRef={scanNav} bodyStyle={bodySize} />
+        )}
+        {!minimised && !isNavtex && !isCw && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && !!notice && (
           <View style={dp.adjRow}>
             <Text style={[dp.output, { flex: 1, minWidth: 160, color: dc.output, fontFamily: FONT }]}>{notice.text}</Text>
             {!!notice.action && !!notice.onAction && (
@@ -1408,7 +1437,7 @@ export default function DecoderPanel({
             )}
           </View>
         )}
-        {!minimised && !isNavtex && !isCw && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
+        {!minimised && !isNavtex && !isCw && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
           <ScrollView
             ref={outputRef}
             // ★★★ minHeight AS WELL AS maxHeight. As a cap alone, BIG did NOTHING on a text

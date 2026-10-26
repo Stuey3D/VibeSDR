@@ -482,6 +482,12 @@ static void ftx_normalize_logl(float* log174)
 
 bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, int max_iterations, ftx_message_t* message, ftx_decode_status_t* status)
 {
+    return ftx_decode_candidate_ex(wf, cand, max_iterations, 0, message, status);
+}
+
+// VibeSDR (2026-10-26): ftx_decode_candidate with BP's stall exit (bp_decode_ex); stall 0 = exactly the original.
+bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, int max_iterations, int stall, ftx_message_t* message, ftx_decode_status_t* status)
+{
     float log174[FTX_LDPC_N]; // message bits encoded as likelihood
     if (wf->protocol == FTX_PROTOCOL_FT4)
     {
@@ -495,7 +501,7 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     ftx_normalize_logl(log174);
 
     uint8_t plain174[FTX_LDPC_N]; // message bits (0/1)
-    bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
+    bp_decode_ex(log174, max_iterations, stall, plain174, &status->ldpc_errors);
     // ldpc_decode(log174, max_iterations, plain174, &status->ldpc_errors);
 
     if (status->ldpc_errors > 0)

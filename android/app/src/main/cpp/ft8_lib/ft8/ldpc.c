@@ -171,6 +171,16 @@ static inline unsigned parity64(uint64_t x)
 
 void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
 {
+    bp_decode_ex(codeword, max_iters, 0, plain, ok);
+}
+
+/* ★ VibeSDR (2026-10-26, the sensitivity work): bp_decode with an optional STALL exit. `stall` > 0 stops once the
+ *  count of unsatisfied checks has not reached a new low for `stall` iterations — belief propagation that has stopped
+ *  improving very rarely converges later, and the second look runs BP three times on every candidate it measures.
+ *  stall = 0 is bp_decode exactly (the waterfall path stays bit-identical; test-ft8-fast). */
+void bp_decode_ex(float codeword[], int max_iters, int stall, uint8_t plain[], int* ok)
+{
+    int since_best = 0;
     float cw[LDPC_NP];
     float tov[3][LDPC_NP];          // variable n's message from its k-th check
     float toc[LDPC_TOC_SIZE];       // check m's message from its j-th variable, at j * LDPC_MP + m
@@ -202,9 +212,12 @@ void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
         if (errors < min_errors)
         {
             min_errors = errors;
+            since_best = 0;
             if (errors == 0)
                 break;
         }
+        else if (stall > 0 && ++since_best >= stall)
+            break;
         if (iter + 1 == max_iters)
             break;                  // ★ the original's last update is never read
 

@@ -33,6 +33,7 @@ import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
+import { earTags, needleAlpha } from './vfoAB';
 import { FrameClock, renderEvery } from './wfPacing';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
@@ -41,6 +42,8 @@ import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindow';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
+import { parseDabScan, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle,
+         type DabScanState } from '../../../src/services/dabBandScan';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
 import { lrDisplay } from '../../../src/services/lrMeter';
 /** ★ Set once an L/R reading has arrived — see lrDisplay (no flashing on a weak station). */
@@ -1592,6 +1595,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *  the room's passband change and his sliders stayed put. SpectrumClient has already written the
      *  room's values; this redraws them and sends NOTHING — setMode(…, false, true) and syncBw() only
      *  draw. The waterfall's sidebands read spec.bandwidthLow/High on the next frame by themselves. */
+    onWatch: (note) => abOnWatch(note),   // ★★ V12 VFO A/B
     onRoomPassband: (mode) => {
       if (mode) { setMode(mode, false, true); renderFreq(); }
       else syncBw();
@@ -1671,6 +1675,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAisError: (why: string) => { showPill(why, 7000); if (aisOn && !aisReport) aisUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
+    onDabScan: (m: unknown) => dabScanOnMessage(m),
+    onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); },
     onDab: (d: DabState) => {
       if (!d) {
         /* ★★★ THE SERVER LEFT DAB WITHOUT US — the last listener went, or the owner took the
@@ -2406,7 +2412,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onSigStat: (chan, floor) => {
       if (!Number.isFinite(chan) || !Number.isFinite(floor)) return;
-      srvChanDb = chan; srvFloorDb = floor; srvSigValid = true;
+      // ★★ V12: with VFO B selected, the meter and the squelch bar read B's own channel level (its watch state).
+      const bLvl = spec?.abOn && spec.abSel === 'B' ? spec.watchState?.chans.find((c) => c.id === 1)?.lvl : undefined;
+      srvChanDb = typeof bLvl === 'number' && bLvl > -150 ? bLvl : chan; srvFloorDb = floor; srvSigValid = true;
       // ★ Auto squelch steers from THIS figure and nothing else, so recompute exactly when it
       //   changes — a timer would either lag it or spin between messages.
       autoSquelchTick();
@@ -3324,6 +3332,7 @@ function renderFrame(frameTs: number) {
   const bp = bandSpots && spotBandCap ? bandPassband(spotBandCap.bands, spec.frequency) : null;
   wf.filterLow = bp ? bp[0] : skim ? -segW / 2 : spec.bandwidthLow;
   wf.filterHigh = bp ? bp[1] : skim ? segW / 2 : spec.bandwidthHigh;
+  abDraw();   // ★★ V12 VFO A/B — the other needle, the labels, the brightness
   const measuring = isPerf();
   const t0 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL HOLD IS OFF. It froze the display while tuning (Stuart, 2026-08-10: "when I
@@ -6600,7 +6609,15 @@ let hwGainChangedAt = 0;
  *  of rises began — "the digital flow counters, like the advanced analysis" (Stuart). A gap of
  *  more than 1.5 s between rises starts a new run. */
 let dabPcmLast = -1, dabPcmRoseAt = 0, dabPcmRunStart = 0;
-let dabPane: 'stations' | 'signal' = 'stations';
+let dabPane: 'stations' | 'signal' | 'scan' = 'stations';
+/* ★★ V12: THE DAB BAND SCAN (M7EIW, 2026-10-26). dabScanOk = hwinfo `dabScan` (the server's answer for this socket —
+ *  a single-user radio, or the admin); dabScanState = the last `dab_scan`; dabScanMine = this page pressed SCAN (so its
+ *  results pane is shown; anybody else is only told a scan is running). The words live in src/services/dabBandScan.ts. */
+let dabScanOk = false;
+let dabScanState: DabScanState | null = null;
+let dabScanMine = false;
+let dabScanOpen = new Set<string>();
+let dabScanToldOthers = false;
 let dabChannel = -1;
 let dabLastEid = -1;
 /* ★★★ THE VFO DAB BORROWED, so it can be given back. dabRender points the readout at the
@@ -6691,22 +6708,100 @@ function annLamp(d: DabState): string {
 
 /** True when dabRender skipped the (hidden) signal pane — see the note in dabRender. */
 let dabSigStale = false;
-function dabSetPane(p: 'stations' | 'signal') {
+function dabSetPane(p: 'stations' | 'signal' | 'scan') {
   dabPane = p;
   spec?.dabScopes(dabOn && p === 'signal');   // ★ the scopes travel only while they are on screen (dab=2)
   const st = document.getElementById('dabStations');
   const sg = document.getElementById('dabSignal');
+  const sc = document.getElementById('dabScanPane');
   const bt = document.getElementById('dabPane');
   if (st) st.style.display = dabOn && p === 'stations' ? 'block' : 'none';
   if (sg) sg.style.display = dabOn && p === 'signal' ? 'block' : 'none';
+  if (sc) sc.style.display = dabOn && p === 'scan' ? 'block' : 'none';
   // ★ The label names where the button GOES, and the state is readable without pressing it.
-  if (bt) bt.innerHTML = p === 'stations' ? 'SIGNAL &#9656;' : '&#9666; STATIONS';
+  if (bt) bt.innerHTML = p === 'signal' ? '&#9666; STATIONS' : 'SIGNAL &#9656;';
+  dabScanSyncBtn();
   // ★ The pane just shown was built hidden — its labels have not been measured yet.
-  const shown = p === 'stations' ? st : sg;
+  const shown = p === 'stations' ? st : p === 'scan' ? sc : sg;
   // ★ Fill the signal pane NOW if renders skipped it while hidden, rather than showing it stale
   //   until the next stats block (~0.5 s).
   if (p === 'signal' && dabSigStale && dabOn && dabState) dabRender();
   if (shown) requestAnimationFrame(() => dabArmMarquee(shown));
+}
+
+/** ★★ V12: the SCAN key is drawn only in DAB, only where the server offers it, and not while a scan runs (its pane has
+ *  CANCEL). Never greyed: a control the listener may not use is not there (AGENTS.md). */
+function dabScanSyncBtn() {
+  const b = document.getElementById('dabScanBtn');
+  if (b) b.style.display = dabOn && dabScanOk && !(dabScanState?.running) ? '' : 'none';
+}
+function dabScanOnMessage(m: unknown) {
+  const s = parseDabScan(m);
+  if (!s) return;
+  if (s.error && !s.running) {   // ★ a refusal (a shared radio, a scan already running) — in the server's own words
+    if (dabScanMine) { dabScanState = { ...(dabScanState ?? s), running: false, finished: true, error: s.error }; dabScanRender(); }
+    else showOwnerNotice(s.error);
+    dabScanSyncBtn();
+    return;
+  }
+  dabScanState = s;
+  // ★ Somebody else's scan (the admin, on a shared radio): say so once, so nobody thinks the radio has gone mad.
+  const others = dabScanOthersLine(s);
+  if (!dabScanMine && others && !dabScanToldOthers) { dabScanToldOthers = true; showOwnerNotice(others); }
+  if (!s.running) dabScanToldOthers = false;
+  if (dabScanMine && dabOn && dabPane !== 'scan' && s.running) dabSetPane('scan');
+  dabScanSyncBtn();
+  dabScanRender();
+}
+function dabScanRender() {
+  const pane = document.getElementById('dabScanPane');
+  if (!pane) return;
+  const s = dabScanState;
+  const line = document.getElementById('dabScanLine');
+  if (line) line.textContent = dabScanLine(s);
+  const stop = document.getElementById('dabScanStop'), back = document.getElementById('dabScanBack');
+  if (stop) stop.style.display = s?.running ? '' : 'none';
+  if (back) back.style.display = s?.running ? 'none' : '';
+  const bar = pane.querySelector('#dabScanBar b') as HTMLElement | null;
+  if (bar) bar.style.width = s && s.total > 0 ? `${Math.round((100 * s.done) / s.total)}%` : '0';
+  const list = document.getElementById('dabScanList');
+  if (!list) return;
+  const rows = dabScanRows(s);
+  if (!rows.length) {
+    list.innerHTML = s?.running ? '<div class="none">Nothing found yet \u2014 each empty block takes about three seconds.</div>' : '';
+    return;
+  }
+  list.innerHTML = rows.map((h) => {
+    const q = dabScanQuality(h), open = dabScanOpen.has(h.block);
+    const svcs = open ? `<div class="dabScanSvcs">`
+      + `<div class="dabScanSvc" tabindex="0" role="button" data-ch="${h.channel}" data-sid="0">&#9654; Tune to ${escapeHtml(h.block)}</div>`
+      + h.services.map((sv) => `<div class="dabScanSvc" tabindex="0" role="button" data-ch="${h.channel}" data-sid="${sv.sid}">${escapeHtml(sv.label)}</div>`).join('')
+      + `</div>` : '';
+    return `<div class="dabScanEns"><div class="dabScanHd" tabindex="0" role="button" aria-expanded="${open}" data-blk="${escapeHtml(h.block)}">`
+      + `<span class="blk">${escapeHtml(h.block)}</span>`
+      // ★ The count sits under the name with the frequency, so a phone gives the NAME the width (390 px: "VibeSDR Ben…").
+      + `<span class="ens">${escapeHtml(h.ensemble || 'Unnamed ensemble')}<small>${dabScanMHz(h.hz)} \u00b7 <span class="cnt">${dabScanCount(h)}</span></small></span>`
+      + `<span class="q ${q.word}" title="FIC quality ${q.pct}%">${q.word.toUpperCase()}</span>`
+      + `<span class="tw">${open ? '&#9662;' : '&#9656;'}</span></div>${svcs}</div>`;
+  }).join('');
+  list.querySelectorAll<HTMLElement>('.dabScanHd').forEach((el) => {
+    el.onclick = () => { dabScanOpen = dabScanToggle(dabScanOpen, el.dataset.blk || ''); dabScanRender(); };
+  });
+  list.querySelectorAll<HTMLElement>('.dabScanSvc').forEach((el) => {
+    // ★ A tap TUNES — that ends a running scan on the server, which leaves the dial where we put it.
+    el.onclick = () => {
+      const ch = Number(el.dataset.ch), sid = Number(el.dataset.sid);
+      if (!(ch >= 0)) return;
+      dabChannel = ch; savePref('dabChannel', DAB_BLOCKS[ch]?.name ?? '');
+      dabAsk.sent(ch, dabServerBlock, Date.now());
+      dabPickedAt = sid > 0 ? performance.now() : 0; dabPcmRunStart = 0; dabPcmRoseAt = 0;
+      audio?.holdHealing(6000);
+      spec?.dab(true, ch, sid > 0 ? sid : undefined);
+      dabScanMine = false;
+      dabState = null;
+      dabSetPane('stations'); dabRender();
+    };
+  });
 }
 
 function dabRender() {
@@ -7668,6 +7763,7 @@ function dabSetMode(on: boolean) {
   dabRender();
 }
 function dabUiOff() {
+  dabScanMine = false;   // ★ V12: out of DAB the scan pane has nowhere to be (a running scan ends with the mode)
   dabStepper.cancel(); dabAsk.clear();   // ★ leaving DAB: a burst still settling dies, nothing is awaited
   spec?.dabScopes(false);
   dabQualityMeter.reset(); dabQuality = null;
@@ -8656,7 +8752,21 @@ function buildControls() {
    *  arrows step the multiplex in DAB now, and two controls for one job is the two-readers fault
    *  in UI form. The bar keeps the frequency and ensemble name as the sub-heading. */
   { const pb = document.getElementById('dabPane');
-    if (pb) (pb as HTMLElement).onclick = () => dabSetPane(dabPane === 'stations' ? 'signal' : 'stations'); }
+    if (pb) (pb as HTMLElement).onclick = () => dabSetPane(dabPane === 'signal' ? 'stations' : 'signal'); }
+  /* ★★ V12: the DAB band scan's keys — SCAN in the header (only where hwinfo `dabScan` says this listener may), and in
+   *  its pane CANCEL while it runs (the server puts the radio back on the block it was on) and STATIONS once it ends. */
+  { const sb = document.getElementById('dabScanBtn');
+    if (sb) sb.onclick = () => {
+      dabScanMine = true; dabScanOpen = new Set();
+      dabScanState = { running: true, by: '', done: 0, total: DAB_BLOCKS.length, current: '', added: 0, cancelled: false,
+                       finished: false, secs: 0, seq: 0, found: [] };
+      spec?.dabScan(true);
+      dabSetPane('scan'); dabScanRender();
+    };
+    const stop = document.getElementById('dabScanStop');
+    if (stop) stop.onclick = () => spec?.dabScan(false);
+    const back = document.getElementById('dabScanBack');
+    if (back) back.onclick = () => { dabScanMine = false; dabSetPane('stations'); dabRender(); }; }
   /* ★★★ EXIT DAB — the same unwinding the demodulator menu does, reached from the box you are
    *  actually looking at. dabSetMode(false) is the whole path: it arms the restore, tells the
    *  server, and gives back the zoom, the arrows, the IF filter and the frequency entry. */
@@ -8730,6 +8840,7 @@ function buildControls() {
   kbField($('search'), { title: 'SEARCH', onOpen: () => refreshServerBookmarks() });
   initWaterfallInput();
   initKeyboard();
+  initVfoAB();
 }
 
 /**
@@ -16366,6 +16477,8 @@ function openStepMenu(anchor?: HTMLElement) {
     b.onclick = () => { setStep(v); close(); };
     m.appendChild(b);
   }
+  // ★★ V12 VFO A/B — THE ON/OFF, here in the tuning menu and nowhere else (Stuart's spec).
+  { const ab = abMenuRow(() => close()); if (ab) m.appendChild(ab); }
   document.body.appendChild(m);
 
   // Anchor ABOVE the button when there is no room below — the VFO sits at the
@@ -16459,6 +16572,15 @@ function hardwareCanReach(hz: number): boolean {
 
 function clampTune(hz: number): number {
   const want = Math.round(hz);
+  // ★★ V12 VFO B lives INSIDE the radio's window and never moves the radio — the edge is a wall, and it says so.
+  if (spec?.abOn && spec.abSel === 'B' && spec.watchState && spec.watchState.hi > spec.watchState.lo) {
+    const { lo, hi } = spec.watchState;
+    if (want < lo || want > hi) {
+      if (Date.now() - abNoteAt > 3000) { abNoteAt = Date.now(); showPill(`VFO B must stay inside the radio's window, ${(lo / 1e6).toFixed(3)} to ${(hi / 1e6).toFixed(3)} MHz`, 5000); }
+      return Math.max(lo, Math.min(hi, want));
+    }
+    return want;
+  }
   // ★★★ THE LOCKED WINDOW WINS, AND IS CHECKED FIRST. The server clamps a request outside it
   //     ("retune … is outside the LOCKED window — clamped") but said nothing back, so the client
   //     went on displaying the frequency it had ASKED for: typing 99700 on a receiver locked to
@@ -18087,6 +18209,11 @@ function initWaterfallInput() {
       const rect = c.getBoundingClientRect();
       // Snap the click to the step grid, so the arrows carry on from a round number.
       // (snapToStep: exact 25000/3 on the airband's 8.33 kHz step — src/utils/airband.ts.)
+      // ★★ V12 VFO A/B: a tap ON the other needle selects it rather than tuning onto it.
+      if (spec.abOn) {
+        const x = e.clientX - rect.left, ox = wf.hzToX(spec.abOther.frequency, c.clientWidth);
+        if (Math.abs(x - ox) <= 10) { spec.swapVfo(); return; }
+      }
       const hz = snapToStep(wf.xToHz(e.clientX - rect.left), step);
       airDesig = null;
       spec.tune(clampTune(hz));
@@ -18225,6 +18352,144 @@ function initPointerFreq(c: HTMLCanvasElement) {
   document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
 }
 
+// ══ ★★ V12 VFO A/B (GitHub discussion #57; docs/v12/VFO-AB.md; the state lives in SpectrumClient, the pure rules in
+//    vfoAB.ts) ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Stuart's spec, 2026-10-27: on and off ONLY from the tuning menu (the step menu here); while on, a small A/B key between
+// the tune buttons says which VFO the controls tune and switches it; the lower VFO is heard in the LEFT ear and the
+// higher in the RIGHT (STEREO, in the audio menu, default on); the active needle full brightness, the other ~75 %.
+// ★ PER SESSION: the toggle is not saved — a reload starts with one VFO (see SpectrumClient.abOn).
+// ★ The web page has no drum (the card's tune control is two buttons with the radio glyph between them — mobile.ts
+//   "BUTTONS, NOT A DRAGGABLE DRUM"), so the key takes the glyph's place while A/B is on.
+const AB_B_COLOUR = '#29c7ff';
+const AB_STEREO_PREF = 'abStereo';
+let abSwitchAt = -Infinity;
+let abLastSel: 'A' | 'B' = 'A';
+let abEarOrder: boolean | null = null;
+let abNoteAt = 0;
+
+/** B's colour: cyan, unless the listener's own needle is already near cyan — then amber, so the two never look alike. */
+function abBColour(): string {
+  const c = (wf?.vfoColor || '#ff2020').replace('#', '');
+  const r = parseInt(c.slice(0, 2), 16) / 255, g = parseInt(c.slice(2, 4), 16) / 255, b = parseInt(c.slice(4, 6), 16) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  let h = 0;
+  if (mx > mn) {
+    if (mx === r) h = ((g - b) / (mx - mn)) % 6; else if (mx === g) h = (b - r) / (mx - mn) + 2; else h = (r - g) / (mx - mn) + 4;
+    h = (h * 60 + 360) % 360;
+  }
+  return mx - mn > 0.2 && h > 150 && h < 230 ? '#ffb020' : AB_B_COLOUR;
+}
+function abColourOf(v: 'A' | 'B'): string { return v === 'A' ? (wf?.vfoColor || '#ff2020') : abBColour(); }
+
+/** Every frame: the second needle, the labels, the brightness cross-fade. */
+function abDraw() {
+  if (!wf || !spec) return;
+  if (!spec.abOn) { wf.vfo2 = null; wf.vfoLiveColor = ''; wf.vfoLiveLabel = ''; wf.vfoLiveAlpha = 1; return; }
+  const sel = spec.abSel, oth: 'A' | 'B' = sel === 'A' ? 'B' : 'A';
+  const a = spec.vfoA(), b = spec.vfoB();
+  const stereoTags = spec.abStereo && !spec.abMonoOut;
+  const ears = earTags(a.frequency, b.frequency, stereoTags, abEarOrder);
+  abEarOrder = ears.aFirst;
+  const tag = (v: 'A' | 'B') => { const t = v === 'A' ? ears.a : ears.b; return t ? ` · ${t}` : ''; };
+  const al = needleAlpha(performance.now() - abSwitchAt);
+  const o = spec.abOther;
+  const parked = !!spec.watchState?.chans.find((c) => c.id === 1)?.parked;
+  wf.vfoLiveColor = abColourOf(sel);
+  wf.vfoLiveLabel = `${sel}${tag(sel)} ${(spec.frequency / 1e6).toFixed(3)}M`;
+  wf.vfoLiveAlpha = al.active;
+  wf.vfo2 = { hz: o.frequency, lo: o.bandwidthLow, hi: o.bandwidthHigh, col: abColourOf(oth), alpha: al.other,
+              label: `${oth}${tag(oth)} ${(o.frequency / 1e6).toFixed(3)}M`, parked: oth === 'B' && parked };
+}
+
+// ★ A handle for drivers (scripts/test-web-vfo-ab.mjs) and bug reports, like window.__vibeAudio: what the page believes
+//   about VFO A/B right now, and where the other needle is on screen.
+Object.defineProperty(window, '__vibeAB', { configurable: true, get: () => () => spec && wf ? {
+  max: spec.watchMax, on: spec.abOn, sel: spec.abSel, a: spec.vfoA(), b: spec.vfoB(), stereo: spec.abStereo,
+  monoOut: spec.abMonoOut, state: spec.watchState, liveColor: wf.vfoLiveColor, liveAlpha: wf.vfoLiveAlpha,
+  liveLabel: wf.vfoLiveLabel, other: wf.vfo2,
+  otherX: wf.vfo2 ? wf.hzToX(wf.vfo2.hz, ($("wf") as HTMLCanvasElement).clientWidth) : null,
+} : null });
+
+/** The key's label and light, the stereo row, the mono hint — on every watch change and selection. */
+function abPaint() {
+  if (!spec) return;
+  const key = document.getElementById('mAbKey') as HTMLButtonElement | null;
+  const glyph = document.getElementById('mTuneGlyph');
+  const on = spec.abOn;
+  if (key) {
+    key.hidden = !on;
+    key.textContent = spec.abSel;
+    key.style.setProperty('--abcol', abColourOf(spec.abSel));
+    key.title = `VFO ${spec.abSel} — the controls tune VFO ${spec.abSel}. Press to switch to VFO ${spec.abSel === 'A' ? 'B' : 'A'}.`;
+  }
+  if (glyph) glyph.hidden = on;
+  const row = document.getElementById('abStereoRow');
+  if (row) row.hidden = spec.watchMax < 1;
+  const sb = document.getElementById('abStereoBtn');
+  if (sb) { sb.textContent = spec.abStereo ? 'ON' : 'OFF'; sb.classList.toggle('on', spec.abStereo); }
+  const hint = document.getElementById('abMonoHint');
+  if (hint) hint.hidden = !(spec.watchMax >= 1 && spec.abMonoOut);
+}
+
+/** SpectrumClient.onWatch — the state changed, or the selection did. */
+let abPrefFor: SpectrumClient | null = null;   // ★ applied once per connection (a new SpectrumClient starts at the default)
+function abStereoPref(): boolean {
+  try { return prefs()[AB_STEREO_PREF] !== false; } catch { return true; }   // storage blocked: the default (on)
+}
+function abOnWatch(note?: string) {
+  if (!spec) return;
+  // ★ The remembered STEREO choice, applied to this connection the first time it hears about VFO A/B (hwinfo) — before
+  //   any toggle can send it. (initVfoAB may run before the SpectrumClient exists.)
+  if (abPrefFor !== spec) { abPrefFor = spec; spec.abStereo = abStereoPref(); }
+  if (spec.abSel !== abLastSel) {
+    abLastSel = spec.abSel;
+    abSwitchAt = performance.now();
+    // ★ Everything the controls show follows the selected VFO: the readout, the mode, the passband, the squelch.
+    setMode(spec.mode, false, true);
+    syncBw();
+    applySquelchUi(spec.sqlDb);
+  }
+  renderFreq();
+  abPaint();
+  if (note && Date.now() - abNoteAt > 1500) { abNoteAt = Date.now(); showPill(note, 6000); }
+}
+/** The squelch bar shows the SELECTED VFO's threshold — drawn, and sent once for that VFO (harmless if unchanged). */
+function applySquelchUi(db: number) { applySquelch(db, false); }
+
+/** The step menu's VFO A/B row (the web's tuning menu). Only where the server offers it — no dead control. */
+function abMenuRow(close: () => void): HTMLElement | null {
+  if (!spec || spec.watchMax < 1) return null;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px 4px;'
+    + 'margin-top:4px;border-top:1px solid rgba(255,160,0,.35);color:#ddd';
+  const lbl = document.createElement('span');
+  lbl.textContent = 'VFO A/B';
+  const b = document.createElement('button');
+  b.id = 'abToggle';
+  b.textContent = spec.abOn ? 'ON' : 'OFF';
+  b.style.cssText = 'background:none;border:1px solid ' + (spec.abOn ? '#ffe566' : '#666') + ';color:'
+    + (spec.abOn ? '#ffe566' : '#ddd') + ';padding:5px 12px;border-radius:5px;cursor:pointer;font:inherit';
+  b.title = 'VFO A/B: a second VFO inside the radio\'s window, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune.';
+  b.onclick = () => { spec?.setAB(!spec.abOn); close(); };
+  row.append(lbl, b);
+  return row;
+}
+
+/** Wired once: the A/B key, the stereo switch, the remembered stereo choice, the mono-output watch. */
+function initVfoAB() {
+  const key = document.getElementById('mAbKey');
+  key?.addEventListener('click', () => spec?.swapVfo());
+  document.getElementById('abStereoBtn')?.addEventListener('click', () => {
+    if (!spec) return;
+    spec.setAbStereo(!spec.abStereo);
+    try { savePref(AB_STEREO_PREF, spec.abStereo); } catch { /* storage blocked: this session only */ }
+    abPaint();
+  });
+  // ★ A mono output device (a single speaker) is invisible to the server — say so, and both VFOs go to both ears.
+  setInterval(() => { if (spec && audio) { spec.setAbMonoOut(audio.outputChannels < 2); abPaint(); } }, 2000);
+  abPaint();
+}
+
 function initKeyboard() {
   /* ★★★ ONE SCHEME FOR THE KEYBOARD AND THE GAME CONTROLLER (Stuart, 2026-10-18 — gamepad.ts, src/utils/keyActions.ts):
    *  arrows / W A S D move the highlight, Enter selects, Backspace and Escape go back, < > tune, - + zoom. Both feed
@@ -18234,6 +18499,7 @@ function initKeyboard() {
   initPadKeyboard();
   initGamepad({
     tune: (d) => { if (spec) nudge(d * step); },
+    swapVfo: () => spec?.swapVfo(),   // ★★ V12 VFO A/B — V on a keyboard, △ / START tap on a pad (gamepad.ts)
     zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
     back: () => {
       // ★ The admin panel is not a .open panel (it is shown by `hidden`), so it is asked for by name; it sits above all.
