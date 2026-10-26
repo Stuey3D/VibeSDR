@@ -13,6 +13,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { digiModeStyle } from '../utils/digiModes';
+import { fmtSpotTime } from '../utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import {
   Animated,
   FlatList,
@@ -134,11 +135,6 @@ const SF_AGES: Array<{ label: string; minutes: number }> = [
   { label: '30m', minutes: 30 }, { label: '1h', minutes: 60 },
 ];
 
-function fmtSpotTime(t: number): string {
-  const d = new Date(t);
-  return String(d.getUTCHours()).padStart(2, '0') + ':' +
-         String(d.getUTCMinutes()).padStart(2, '0');
-}
 
 // Expanded line 2 wants the exact instant — FT8 lives on 15-second slots, so minutes alone
 // cannot tell two transmissions in the same minute apart.
@@ -1630,7 +1626,7 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   snrLow:      { color: T.snrLow },
   // Widened with the font step from 10pt to 11pt — the old widths were cut for 10pt and clip
   // "20:14"/"FT8" at the larger size. Check on the SE in Display Zoom before trimming these.
-  spotTime:    { width: 42 },
+  spotTime:    { width: 56 },   // ★ HH:MM:SS (was HH:MM, 42)
   spotBand:    { width: 38 },
   spotMode:    { width: 40 },
   spotSnr:     { width: 30, textAlign: 'right' },

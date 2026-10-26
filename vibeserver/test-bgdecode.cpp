@@ -771,6 +771,23 @@ static void ft8Periodic() {
         ok(txt.find("Spots heard:       3 (FT8 2, FT4 0, WSPR 1) from 3 stations") != std::string::npos, "★ Band: the figures count every mode: " + txt.substr(txt.find("Spots heard"), 70));
         tb.finish(true);
     }
+    // ★ JS8 and FT2 (V12 2026-10-26, digimodes/js8.h, ft2.h): counted and named like any mode
+    {
+        gallery::Store bs; bs.setDir(tmpDir("ft8bandjs8"));
+        gallery::Meta bm; bm.kind = "ft8"; bm.origin = "live"; bm.freqHz = 14080800; bm.mode = "usb"; bm.decoder = "ft8band";
+        int64_t T3 = H18;
+        bg::Ft8SummaryTap tb(bs, bm, 52.3125, -0.875, [&] { return T3; });
+        tb.spot(std::string("JS8"), "G4JSN", "IO91", -14, 14079000); tb.spot(std::string("JS8"), "W1JST", "FN31", -18, 14080200);
+        tb.spot(std::string("FT2"), "IU8AAA", "JN70", -6, 14084900);
+        T3 += 61; tb.tick();
+        const std::string l = bs.listJson("ft8", 10);
+        ok(l.find("JS8+FT2 last 10 min \xc2\xb7 3 spots") != std::string::npos, "★ JS8 and FT2 spots: the card is \"JS8+FT2 last 10 min · 3 spots\"");
+        const std::string txt = tb.text(T3);
+        const size_t at = txt.find("Spots heard");
+        ok(at != std::string::npos && txt.find("JS8 2", at) != std::string::npos && txt.find("FT2 1", at) != std::string::npos,
+           "★ …and its figures count them: " + (at != std::string::npos ? txt.substr(at, 70) : std::string("?")));
+        tb.finish(true);
+    }
 }
 
 // ── 7c. ★ beta 4: the FT8 summary counts only real callsigns and their own grids (the Lenovo's "Furthest: DE … AA00") ──

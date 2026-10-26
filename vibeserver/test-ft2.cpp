@@ -88,7 +88,7 @@ int main() {
     Ft2Decoder* none = nullptr; (void)none;
     Ft8SlotDecoder dec(kFs, FtxMode::FT2);
     ok(dec.windowSamples() == 208 * kNsps, "the window: 208 symbols of 24 ms (4.99 s) from the slot boundary");
-    Ft8SlotOptions o; o.maxPasses = 3; o.osdMaxErrors = 24; o.osdMinScore = 0;
+    Ft8SlotOptions o; o.maxPasses = 3;   // ★ as the live decoder runs FT2: no OSD (docs/v12/JS8-FT2.md)
     const double snrs[] = { -4, -8, -10, -12, -14, -16, -18 };
     std::string line; int strongHit = 0, strongN = 0, fake = 0; double dtW = 0, hzW = 0, snrW = 0; double ms = 0; int slots = 0;
     for (double snr : snrs) {
@@ -128,7 +128,7 @@ int main() {
         char b[32]; std::snprintf(b, sizeof b, " %+.0f:%d/%d", snr, hit, n); line += b;
         if (snr >= -10) { strongHit += hit; strongN += n; }
     }
-    std::printf("    FT2 decoded by SNR —%s   (%.1f ms/slot, 3 passes + OSD, this machine)\n", line.c_str(), ms / slots);
+    std::printf("    FT2 decoded by SNR —%s   (%.1f ms/slot, 3 passes, no OSD — as live — this machine)\n", line.c_str(), ms / slots);
     ok(strongHit == strongN, "every signal at -10 dB and above decoded, DT -0.4 … +1.3 s");
     ok(fake == 0, "no message that was not sent");
     ok(dtW < 0.02, "DT within 20 ms (worst " + std::to_string(dtW) + " s)");
@@ -146,7 +146,7 @@ int main() {
             cands += st.candidates[0];
             for (const Ft8Result& r : res) { ++fakeN; std::printf("    noise decoded: \"%s\"\n", text(r.msg).c_str()); }
         }
-        ok(fakeN == 0, "60 noise slots, " + std::to_string(cands) + " candidates (BP + OSD on every one): 0 decodes");
+        ok(fakeN == 0, "60 noise slots, " + std::to_string(cands) + " candidates: 0 decodes");
     }
 
     std::printf("3. the live decoder, and FT8/FT4 unchanged\n");
