@@ -303,7 +303,7 @@ export function initMobileControls(deps: MobileDeps) {
     //    here, which keeps every listener bound to it; close() puts it back.
     const bw = document.querySelector('#bwHome .bwRow') as HTMLElement | null;
     const bwHome = bw?.parentElement ?? null;
-    if (bw) {
+    if (bw && bw.style.display !== 'none') {   // ★ hidden in DRM (main.ts syncBw) — no heading over nothing
       const sep = document.createElement('div');
       sep.className = 'mBwSep';
       sep.textContent = 'BANDWIDTH';

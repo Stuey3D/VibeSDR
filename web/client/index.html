@@ -2177,6 +2177,38 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   padding: 0 10px; max-width: 260px; line-height: 1.4;
   font-family: var(--mono, monospace);
 }
+/* ★★ V12 DRM — the box a listener reads while their mode is DRM (src/drm.ts). Beside the decoder box (right, not left),
+   same anchor (#wfWrap, above the VTS and the control card), same panel look; never taller than the room above it. */
+#drmBox {
+  position: absolute; right: 14px; bottom: var(--decBoxBottom, 14px); z-index: 44;
+  width: min(calc(100vw - 32px), 380px); display: none;
+  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid var(--btn-border);
+  border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  max-height: calc(100dvh - var(--decBoxBottom, 14px) - 24px); overflow-y: auto;
+  color: var(--text, #e8dcc0); font-size: 12px;
+}
+#drmBox.open { display: block; }
+#drmBoxHead { display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--bar-border); }
+#drmBoxHead .drmTitle { color: var(--amber); font-weight: 700; letter-spacing: 1px; }
+#drmBoxHead .drmSub { color: var(--text-dim); font-size: 11px; }
+#drmBody { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+#drmBody .drmHead { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+#drmBody .drmLabel { font-size: 17px; font-weight: 700; color: var(--freq); overflow-wrap: anywhere; }
+#drmBody .drmSid { color: var(--text-dim); font-family: var(--mono, monospace); font-size: 11px; }
+#drmBody .drmMeta, #drmBody .drmSmall { color: var(--text-dim); font-size: 11px; }
+#drmBody .drmText { line-height: 1.35; overflow-wrap: anywhere; }
+#drmBody .drmLights { display: flex; flex-wrap: wrap; gap: 4px; }
+#drmBody .drmLight { padding: 1px 6px; border-radius: 4px; border: 1px solid var(--btn-border); color: var(--text-dim);
+                     font-size: 10px; letter-spacing: 0.5px; }
+#drmBody .drmLight.on { background: var(--green); border-color: var(--green); color: #fff; }
+#drmBody .drmLight.off { background: var(--red); border-color: var(--red); color: #fff; }
+#drmBody .drmSig { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+#drmBody .drmSnr { font-weight: 700; font-family: var(--mono, monospace); }
+#drmBody .drmSnr.good { color: var(--green); } #drmBody .drmSnr.fair { color: var(--amber); } #drmBody .drmSnr.poor { color: var(--red); }
+#drmBody .drmSigTxt { color: var(--text-dim); }
+#drmBody .drmCodec .drmDec { color: var(--text-dim); font-size: 11px; }
+#drmBody .drmWhy { border-left: 3px solid var(--amber); padding: 4px 8px; background: rgba(255,184,51,0.08); line-height: 1.35; }
+#drmBody .drmWait { color: var(--text-dim); font-style: italic; }
 #decBox {
   /* Absolute inside #wfWrap, NOT fixed to the viewport — fixed + bottom:0 put it
      underneath the control bar. This way it always floats above the bar, whatever

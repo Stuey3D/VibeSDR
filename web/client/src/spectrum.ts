@@ -31,7 +31,8 @@ import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs, type AskSt
 import { parseIcomStatus, icomControlMsg, nearestSpanIndex, spanStep,
          type IcomStatus, type IcomRadio, type IcomControlFields } from '../../../src/services/icomRadio';
 
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
+import type { DrmState } from './drm';
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm';
 
 /** The server applies these on every mode change and never reports bandwidth
  *  back, so the client mirrors the table to stay in sync. */
@@ -41,6 +42,8 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   cwu: [-200, 200],    cwl: [-200, 200],
   fm:  [-6000, 6000],  nfm: [-5000, 5000],
   wfm: [-100000, 100000],
+  // ★ V12 DRM: the server cuts its own 10 kHz channel (spectrum occupancy 3, ±5 kHz about the dial); shown as such
+  drm: [-5000, 5000],
 };
 
 /** ★★★ THE NARROWEST WFM PASSBAND (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz, which the
@@ -58,6 +61,7 @@ export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
   am:  48_000, sam: 48_000,
   fm:  64_000, nfm: 64_000,
   wfm: 500_000,
+  drm: 10_000,   // ★ V12 DRM: fixed — the receiver cuts its own channel; the width row is hidden in DRM
 };
 
 /** A passband the server will honour as given: WFM narrower than WFM_MIN_BW_HZ is widened about its
@@ -624,6 +628,8 @@ export interface SpectrumCallbacks {
    *  Sent whole every time — the list changes rarely, and sending it entire means a client that
    *  joins mid-stream is never missing rows. */
   onDab?: (d: DabState) => void;
+  /** ★ V12 DRM: the listener's DRM receiver reports (vibe_drm_listener.h) — see drm.ts. */
+  onDrm?: (d: DrmState) => void;
   /** ★ ADS-B (V12, docs/v12/ADSB.md): the aircraft report, once a second while the receiver is in ADS-B
    *  and at once on joining — its arrival MEANS ADS-B is on. null = the server left ADS-B (`adsb_off`). */
   onAdsb?: (r: AdsbReport | null) => void;
@@ -916,6 +922,9 @@ export class SpectrumClient {
       /* ★★★ THE REPORT IN PIECES (dab=2 — src/services/dabAssemble.ts, shared with the app). `dab_list` / `dab_dls`
        *  are only stored; a `dab` comes back whole, in the legacy shape — and an older server's full report passes
        *  straight through. */
+      case 'drm':
+        this.cb.onDrm?.(msg as DrmState);
+        return;
       case 'dab_list':
       case 'dab_dls':
         this.dabAsm.ingest(msg, Date.now());
