@@ -532,6 +532,8 @@ if node --no-warnings scripts/test_dab_share_services.ts; then pass=$((pass+1));
 # ★★ DAB tuning keys: a burst of presses is ONE block change on the server (the one stopped on), and
 #    leaving DAB drops the DAB station from the VTS (Stuart, 2026-10-05 — both).
 if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12: the DAB band scan's result list (app + web share src/services/dabBandScan.ts).
+if node --no-warnings scripts/test_dab_band_scan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09): none on the everyday pad, only the dial's band while a
 #     question is open, every link a Signal Identification Wiki page, every DECODE a decoder we run, the watches agree.
 if node --no-warnings scripts/test_dial_answers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -919,6 +921,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    D-pad, the list walks and scrolls, ✕ picks, ○ gives it back. The bench multiplex through the fake radio.
 printf '\n\033[1m── a game controller in DAB on the served page (simulated pad, bench multiplex) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-gamepad-dab.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12: the DAB band scan on the served page — SCAN only on a single-user radio, progress, the result list (11D, 12
+#    stations, quality, "added to bookmarks"), expand, 390 px fit, a tap tunes; a shared radio has no key. Edge, muted. ~3 min.
+printf '\n\033[1m── the DAB band scan on the web page (Edge, end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-dab-bandscan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ HAMMERING THE MULTIPLEX BUTTON TUNES ONCE (Stuart, 2026-10-21: "rapidly tune down to 7D … dont tune the SDR just
 #     hold it and tune on final move"; "I tried to rapid tune the Pi2 earlier and it kept snapping back"): the server

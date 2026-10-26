@@ -40,6 +40,8 @@ import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindow';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
+import { parseDabScan, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle,
+         type DabScanState } from '../../../src/services/dabBandScan';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
 import { lrDisplay } from '../../../src/services/lrMeter';
 /** ★ Set once an L/R reading has arrived — see lrDisplay (no flashing on a weak station). */
@@ -1658,6 +1660,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAisError: (why: string) => { showPill(why, 7000); if (aisOn && !aisReport) aisUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
+    onDabScan: (m: unknown) => dabScanOnMessage(m),
+    onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); },
     onDab: (d: DabState) => {
       if (!d) {
         /* ★★★ THE SERVER LEFT DAB WITHOUT US — the last listener went, or the owner took the
@@ -6587,7 +6591,15 @@ let hwGainChangedAt = 0;
  *  of rises began — "the digital flow counters, like the advanced analysis" (Stuart). A gap of
  *  more than 1.5 s between rises starts a new run. */
 let dabPcmLast = -1, dabPcmRoseAt = 0, dabPcmRunStart = 0;
-let dabPane: 'stations' | 'signal' = 'stations';
+let dabPane: 'stations' | 'signal' | 'scan' = 'stations';
+/* ★★ V12: THE DAB BAND SCAN (M7EIW, 2026-10-26). dabScanOk = hwinfo `dabScan` (the server's answer for this socket —
+ *  a single-user radio, or the admin); dabScanState = the last `dab_scan`; dabScanMine = this page pressed SCAN (so its
+ *  results pane is shown; anybody else is only told a scan is running). The words live in src/services/dabBandScan.ts. */
+let dabScanOk = false;
+let dabScanState: DabScanState | null = null;
+let dabScanMine = false;
+let dabScanOpen = new Set<string>();
+let dabScanToldOthers = false;
 let dabChannel = -1;
 let dabLastEid = -1;
 /* ★★★ THE VFO DAB BORROWED, so it can be given back. dabRender points the readout at the
@@ -6678,22 +6690,100 @@ function annLamp(d: DabState): string {
 
 /** True when dabRender skipped the (hidden) signal pane — see the note in dabRender. */
 let dabSigStale = false;
-function dabSetPane(p: 'stations' | 'signal') {
+function dabSetPane(p: 'stations' | 'signal' | 'scan') {
   dabPane = p;
   spec?.dabScopes(dabOn && p === 'signal');   // ★ the scopes travel only while they are on screen (dab=2)
   const st = document.getElementById('dabStations');
   const sg = document.getElementById('dabSignal');
+  const sc = document.getElementById('dabScanPane');
   const bt = document.getElementById('dabPane');
   if (st) st.style.display = dabOn && p === 'stations' ? 'block' : 'none';
   if (sg) sg.style.display = dabOn && p === 'signal' ? 'block' : 'none';
+  if (sc) sc.style.display = dabOn && p === 'scan' ? 'block' : 'none';
   // ★ The label names where the button GOES, and the state is readable without pressing it.
-  if (bt) bt.innerHTML = p === 'stations' ? 'SIGNAL &#9656;' : '&#9666; STATIONS';
+  if (bt) bt.innerHTML = p === 'signal' ? '&#9666; STATIONS' : 'SIGNAL &#9656;';
+  dabScanSyncBtn();
   // ★ The pane just shown was built hidden — its labels have not been measured yet.
-  const shown = p === 'stations' ? st : sg;
+  const shown = p === 'stations' ? st : p === 'scan' ? sc : sg;
   // ★ Fill the signal pane NOW if renders skipped it while hidden, rather than showing it stale
   //   until the next stats block (~0.5 s).
   if (p === 'signal' && dabSigStale && dabOn && dabState) dabRender();
   if (shown) requestAnimationFrame(() => dabArmMarquee(shown));
+}
+
+/** ★★ V12: the SCAN key is drawn only in DAB, only where the server offers it, and not while a scan runs (its pane has
+ *  CANCEL). Never greyed: a control the listener may not use is not there (AGENTS.md). */
+function dabScanSyncBtn() {
+  const b = document.getElementById('dabScanBtn');
+  if (b) b.style.display = dabOn && dabScanOk && !(dabScanState?.running) ? '' : 'none';
+}
+function dabScanOnMessage(m: unknown) {
+  const s = parseDabScan(m);
+  if (!s) return;
+  if (s.error && !s.running) {   // ★ a refusal (a shared radio, a scan already running) — in the server's own words
+    if (dabScanMine) { dabScanState = { ...(dabScanState ?? s), running: false, finished: true, error: s.error }; dabScanRender(); }
+    else showOwnerNotice(s.error);
+    dabScanSyncBtn();
+    return;
+  }
+  dabScanState = s;
+  // ★ Somebody else's scan (the admin, on a shared radio): say so once, so nobody thinks the radio has gone mad.
+  const others = dabScanOthersLine(s);
+  if (!dabScanMine && others && !dabScanToldOthers) { dabScanToldOthers = true; showOwnerNotice(others); }
+  if (!s.running) dabScanToldOthers = false;
+  if (dabScanMine && dabOn && dabPane !== 'scan' && s.running) dabSetPane('scan');
+  dabScanSyncBtn();
+  dabScanRender();
+}
+function dabScanRender() {
+  const pane = document.getElementById('dabScanPane');
+  if (!pane) return;
+  const s = dabScanState;
+  const line = document.getElementById('dabScanLine');
+  if (line) line.textContent = dabScanLine(s);
+  const stop = document.getElementById('dabScanStop'), back = document.getElementById('dabScanBack');
+  if (stop) stop.style.display = s?.running ? '' : 'none';
+  if (back) back.style.display = s?.running ? 'none' : '';
+  const bar = pane.querySelector('#dabScanBar b') as HTMLElement | null;
+  if (bar) bar.style.width = s && s.total > 0 ? `${Math.round((100 * s.done) / s.total)}%` : '0';
+  const list = document.getElementById('dabScanList');
+  if (!list) return;
+  const rows = dabScanRows(s);
+  if (!rows.length) {
+    list.innerHTML = s?.running ? '<div class="none">Nothing found yet \u2014 each empty block takes about three seconds.</div>' : '';
+    return;
+  }
+  list.innerHTML = rows.map((h) => {
+    const q = dabScanQuality(h), open = dabScanOpen.has(h.block);
+    const svcs = open ? `<div class="dabScanSvcs">`
+      + `<div class="dabScanSvc" tabindex="0" role="button" data-ch="${h.channel}" data-sid="0">&#9654; Tune to ${escapeHtml(h.block)}</div>`
+      + h.services.map((sv) => `<div class="dabScanSvc" tabindex="0" role="button" data-ch="${h.channel}" data-sid="${sv.sid}">${escapeHtml(sv.label)}</div>`).join('')
+      + `</div>` : '';
+    return `<div class="dabScanEns"><div class="dabScanHd" tabindex="0" role="button" aria-expanded="${open}" data-blk="${escapeHtml(h.block)}">`
+      + `<span class="blk">${escapeHtml(h.block)}</span>`
+      // ★ The count sits under the name with the frequency, so a phone gives the NAME the width (390 px: "VibeSDR Ben…").
+      + `<span class="ens">${escapeHtml(h.ensemble || 'Unnamed ensemble')}<small>${dabScanMHz(h.hz)} \u00b7 <span class="cnt">${dabScanCount(h)}</span></small></span>`
+      + `<span class="q ${q.word}" title="FIC quality ${q.pct}%">${q.word.toUpperCase()}</span>`
+      + `<span class="tw">${open ? '&#9662;' : '&#9656;'}</span></div>${svcs}</div>`;
+  }).join('');
+  list.querySelectorAll<HTMLElement>('.dabScanHd').forEach((el) => {
+    el.onclick = () => { dabScanOpen = dabScanToggle(dabScanOpen, el.dataset.blk || ''); dabScanRender(); };
+  });
+  list.querySelectorAll<HTMLElement>('.dabScanSvc').forEach((el) => {
+    // ★ A tap TUNES — that ends a running scan on the server, which leaves the dial where we put it.
+    el.onclick = () => {
+      const ch = Number(el.dataset.ch), sid = Number(el.dataset.sid);
+      if (!(ch >= 0)) return;
+      dabChannel = ch; savePref('dabChannel', DAB_BLOCKS[ch]?.name ?? '');
+      dabAsk.sent(ch, dabServerBlock, Date.now());
+      dabPickedAt = sid > 0 ? performance.now() : 0; dabPcmRunStart = 0; dabPcmRoseAt = 0;
+      audio?.holdHealing(6000);
+      spec?.dab(true, ch, sid > 0 ? sid : undefined);
+      dabScanMine = false;
+      dabState = null;
+      dabSetPane('stations'); dabRender();
+    };
+  });
 }
 
 function dabRender() {
@@ -7655,6 +7745,7 @@ function dabSetMode(on: boolean) {
   dabRender();
 }
 function dabUiOff() {
+  dabScanMine = false;   // ★ V12: out of DAB the scan pane has nowhere to be (a running scan ends with the mode)
   dabStepper.cancel(); dabAsk.clear();   // ★ leaving DAB: a burst still settling dies, nothing is awaited
   spec?.dabScopes(false);
   dabQualityMeter.reset(); dabQuality = null;
@@ -8555,7 +8646,21 @@ function buildControls() {
    *  arrows step the multiplex in DAB now, and two controls for one job is the two-readers fault
    *  in UI form. The bar keeps the frequency and ensemble name as the sub-heading. */
   { const pb = document.getElementById('dabPane');
-    if (pb) (pb as HTMLElement).onclick = () => dabSetPane(dabPane === 'stations' ? 'signal' : 'stations'); }
+    if (pb) (pb as HTMLElement).onclick = () => dabSetPane(dabPane === 'signal' ? 'stations' : 'signal'); }
+  /* ★★ V12: the DAB band scan's keys — SCAN in the header (only where hwinfo `dabScan` says this listener may), and in
+   *  its pane CANCEL while it runs (the server puts the radio back on the block it was on) and STATIONS once it ends. */
+  { const sb = document.getElementById('dabScanBtn');
+    if (sb) sb.onclick = () => {
+      dabScanMine = true; dabScanOpen = new Set();
+      dabScanState = { running: true, by: '', done: 0, total: DAB_BLOCKS.length, current: '', added: 0, cancelled: false,
+                       finished: false, secs: 0, seq: 0, found: [] };
+      spec?.dabScan(true);
+      dabSetPane('scan'); dabScanRender();
+    };
+    const stop = document.getElementById('dabScanStop');
+    if (stop) stop.onclick = () => spec?.dabScan(false);
+    const back = document.getElementById('dabScanBack');
+    if (back) back.onclick = () => { dabScanMine = false; dabSetPane('stations'); dabRender(); }; }
   /* ★★★ EXIT DAB — the same unwinding the demodulator menu does, reached from the box you are
    *  actually looking at. dabSetMode(false) is the whole path: it arms the restore, tells the
    *  server, and gives back the zoom, the arrows, the IF filter and the frequency entry. */
