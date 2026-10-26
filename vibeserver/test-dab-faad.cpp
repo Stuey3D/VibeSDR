@@ -221,6 +221,19 @@ static void stereo(const std::vector<float>& st, double& corr, double& sideDb) {
     corr = lr / std::sqrt(ll * rr + 1e-30); sideDb = 10 * std::log10((ss + 1e-30) / (mm + 1e-30));
 }
 
+/** ★ VIBE_DAB_FAAD_WAV=<prefix>: write what each decoder produced (48 kHz stereo, 16-bit) so the comparison can be
+ *  HEARD, not only measured — <prefix>-<service>-{faad,ffmpeg}-{clean,damaged}.wav (Stuart, 2026-10-26: "what do those
+ *  corrupted frames sound like?"). */
+static void writeWav(const std::string& path, const std::vector<float>& lr) {
+    FILE* f = std::fopen(path.c_str(), "wb"); if (!f) return;
+    const uint32_t n = uint32_t(lr.size()), data = n * 2, rate = 48000, byteRate = rate * 4;
+    auto u32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, f); }; auto u16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, f); };
+    std::fwrite("RIFF", 1, 4, f); u32(36 + data); std::fwrite("WAVEfmt ", 1, 8, f); u32(16); u16(1); u16(2); u32(rate);
+    u32(byteRate); u16(4); u16(16); std::fwrite("data", 1, 4, f); u32(data);
+    for (float x : lr) { const float c = x > 1.f ? 1.f : (x < -1.f ? -1.f : x); u16(uint16_t(int16_t(std::lrint(c * 32767.f)))); }
+    std::fclose(f);
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) { std::printf("usage: test-dab-faad <clip.vbu8> [impaired.vbu8]\n"); return 3; }
     if (!vibedab::AacDecoderFfmpeg().available()) { std::printf("   NOT RUN — no FFmpeg to compare against\n"); return 3; }
@@ -264,6 +277,11 @@ int main(int argc, char** argv) {
         Dec fad = runFaad(u, 10), ffd = runFfmpeg(u, 10);
         std::vector<float> ffdp = resample(ffd.pcm, 48000.0 / ffPerSec);
         std::vector<float> fadp = fad.rate == 48000 ? fad.pcm : resample(fad.pcm, 48000.0 / fad.rate);
+        if (const char* wp = getenv("VIBE_DAB_FAAD_WAV")) {
+            const std::string b = std::string(wp) + "-" + std::to_string(pick) + "-";
+            writeWav(b + "faad-clean.wav", fap); writeWav(b + "ffmpeg-clean.wav", ffp);
+            writeWav(b + "faad-damaged.wav", fadp); writeWav(b + "ffmpeg-damaged.wav", ffdp);
+        }
         std::printf("   damaged (1 unit in 10): largest step FAAD2 %.4f (clean %.4f) | FFmpeg %.4f (clean %.4f)\n", maxStep(fadp), maxStep(fap), maxStep(ffdp), maxStep(ffp));
         std::printf("                           10 ms dips > 20 dB: FAAD2 %d | FFmpeg %d;  length vs clean: FAAD2 %+.2f s | FFmpeg %+.2f s\n",
                     dips(fap, fadp), dips(ffp, ffdp), (double(fadp.size()) - double(fap.size())) / 96000.0, (double(ffdp.size()) - double(ffp.size())) / 96000.0);
