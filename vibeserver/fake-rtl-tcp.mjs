@@ -62,6 +62,45 @@ const DAB_IQ = dabArg ? fs.readFileSync(dabArg) : null;
  *  Without it the clip plays across the whole of Band III, as it always has. */
 const DAB_AT = (() => { const i = process.argv.indexOf('--dab-at'); return i >= 0 ? process.argv[i + 1].split(',').map(Number).filter((v) => v > 0) : []; })();
 const dabHere = (hz) => hz >= 174e6 && hz <= 240e6 && (!DAB_AT.length || DAB_AT.some((c) => Math.abs(c - hz) <= 50e3));
+/* ★★★ --dab-mux FILE.cf32 — AN RTL FRONT END THAT OBEYS ITS GAIN (V12 DAB scan AGC, 2026-10-27). Stuart: "the AGC can work
+ *  quick enough to allow the multiplex to be found but without taking forever to do a full scan". Every other source here
+ *  replays fixed bytes, so the server's gain writes changed nothing and no gain loop could be measured. This one models
+ *  the chain the gain acts on, in ADC counts:
+ *      out = g·(ensemble + aerial noise) + neighbour·IF-filter + second-stage noise, rounded to u8 and CLIPPED at the rails
+ *  with g = 10^((G − 49.6)/20) for the gain G the server last wrote (0x04; auto mode = 35 dB). At the top gain the aerial
+ *  noise is NOISE_MAX counts RMS per component; the tuner's own second-stage noise (0.8 counts) does not scale. So a weak
+ *  ensemble at a LOW gain sinks under the ADC's own noise and quantisation — the real reason a scan can miss it — and a
+ *  strong neighbour drives the rails at a HIGH gain — the reason the AGC cannot simply sit at the top.
+ *    --dab-mux FILE      ODR-DabMod's clean IQ (bench-clip/mux.cf32); 60 frames from frame 30 are looped, as impair.py does
+ *    --dab-ens HZ:SNR[,…]  an ensemble on that block centre, SNR dB in its 1.536 MHz against the aerial noise
+ *    --dab-adj HZ:DB[,…]   a strong neighbour (a block nobody is scanning for — 8 carriers across 100 kHz), DB above the
+ *                          aerial noise RMS; it reaches the ADC through the tuner's IF filter while within 3 MHz of the
+ *                          dongle (0 dB within 1.5 MHz, −10 dB to 3 MHz), folded to the capture's edge (+0.93 MHz)
+ *    --noise-max COUNTS  aerial noise RMS per component at 49.6 dB (default 6)
+ *    --dab-mux-from N    the first of the 60 looped frames (default 30)
+ *  Everything else in Band III is aerial noise alone. Off Band III the ordinary sources apply. */
+const muxArg = (() => { const i = process.argv.indexOf('--dab-mux'); return i >= 0 ? process.argv[i + 1] : ''; })();
+const pairs = (name) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1].split(',').map((t) => t.split(':').map(Number)).filter((v) => v[0] > 0) : []; };
+const MUX_ENS = pairs('--dab-ens'), MUX_ADJ = pairs('--dab-adj');
+const NOISE_MAX = arg('noise-max', 6);
+let MUX = null;
+if (muxArg) {
+  // ★ --dab-mux-from FRAMES: where the 60 looped frames start (30 = clear of ODR's start-up, as impair.py takes them; 0 for a
+  //   clip that is already those 60 frames, e.g. bench-clip/weak-6.vbu8 converted — with ITS multipath, fades and offset).
+  const FRAME = 196608, N = 60 * FRAME, start = arg('dab-mux-from', 30) * FRAME;
+  const fd = fs.openSync(muxArg, 'r');
+  const b = Buffer.alloc(N * 8);
+  fs.readSync(fd, b, 0, b.length, start * 8);
+  fs.closeSync(fd);
+  MUX = new Float32Array(b.buffer, b.byteOffset, N * 2);
+  let p = 0; for (let i = 0; i < MUX.length; i++) p += MUX[i] * MUX[i];
+  const k = 1 / Math.sqrt(p / N);                              // ★ unit complex power
+  for (let i = 0; i < MUX.length; i++) MUX[i] *= k;
+  console.log(`[fake-rtl-tcp] DAB front end: ${(N / 2.048e6).toFixed(2)} s of multiplex; ensembles ${MUX_ENS.map((e) => `${(e[0] / 1e6).toFixed(3)}@${e[1]}dB`).join(' ') || 'none'}; neighbours ${MUX_ADJ.map((e) => `${(e[0] / 1e6).toFixed(3)}@+${e[1]}dB`).join(' ') || 'none'}`);
+}
+// ★ A table of unit Gaussians, walked from a random start each chunk — Box-Muller per sample is too slow at 2 MS/s.
+const GAUSS = (() => { const n = 1 << 20, g = new Float32Array(n); for (let i = 0; i < n; i += 2) { const u = Math.random() || 1e-12, v = Math.random();
+  const r = Math.sqrt(-2 * Math.log(u)); g[i] = r * Math.cos(2 * Math.PI * v); g[i + 1] = r * Math.sin(2 * Math.PI * v); } return g; })();
 const adsbArg = (() => { const i = process.argv.indexOf('--adsb'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const ADSB_IQ = adsbArg ? fs.readFileSync(adsbArg) : null;
 if (ADSB_IQ) console.log(`[fake-rtl-tcp] ADS-B clip ${adsbArg}: ${ADSB_IQ.length / 2} samples`);
@@ -108,6 +147,10 @@ const srv = net.createServer((sock) => {
   let hfAnchored = false;               // ★ --hf-utc: the position set from UTC on the first chunk
   // WFM stereo generator state (see --wfm)
   let fmPhase = 0, pilotPh = 0, lPh = 0, rPh = 0;
+  let gainTenths = 350, muxPos = 0;   // ★ --dab-mux: the gain the server last wrote, the replay position
+  // ★ The neighbour: 8 carriers 12.5 kHz apart from +0.93 MHz, each a rotating unit phasor (no trig per sample).
+  const adjOsc = Array.from({ length: 8 }, (_, t) => { const w = 2 * Math.PI * (0.93e6 + t * 12.5e3) / 2.048e6;
+    return { re: Math.cos(t * 1.7), im: Math.sin(t * 1.7), cw: Math.cos(w), sw: Math.sin(w) }; });
 
   // ── Pacing ────────────────────────────────────────────────────────────────
   // ★ DEADLINE-BASED, not sleep-based. The original did `generate 50ms of IQ`
@@ -195,6 +238,31 @@ const srv = net.createServer((sock) => {
         ADSB_IQ.copy(buf, k, adsbPos, adsbPos + take);
         k += take; adsbPos = (adsbPos + take) % ADSB_IQ.length;
       }
+    } else if (MUX && centreHz >= 170e6 && centreHz <= 245e6) {
+      // ★ The front end (--dab-mux): see the note at the top.
+      const g = Math.pow(10, (gainTenths / 10 - 49.6) / 20);
+      const nA = NOISE_MAX * g;                                        // aerial noise RMS per component at this gain
+      const ens = MUX_ENS.find((e) => Math.abs(e[0] - centreHz) <= 50e3);
+      // signal power = SNR × noise power in 1.536 of 2.048 MHz; complex noise power = 2·nA²
+      const sA = ens ? Math.sqrt(Math.pow(10, ens[1] / 10) * 2 * nA * nA * 0.75) : 0;
+      let adjA = 0;
+      for (const a of MUX_ADJ) { const d = Math.abs(a[0] - centreHz); if (d < 3e6) adjA += NOISE_MAX * Math.SQRT2 * Math.pow(10, a[1] / 20) * g * (d < 1.5e6 ? 1 : 0.316); }
+      const tones = adjOsc.length;
+      let gi = Math.floor(Math.random() * (GAUSS.length - 4 * n - 8)) & ~1;
+      for (let i = 0; i < n; i++) {
+        let re = nA * GAUSS[gi] + 0.8 * GAUSS[gi + 2 * n + 1], im = nA * GAUSS[gi + 1] + 0.8 * GAUSS[gi + 2 * n];
+        gi += 2;
+        if (sA) { re += sA * MUX[muxPos]; im += sA * MUX[muxPos + 1]; }
+        if (adjA) {
+          let ar = 0, ai = 0;
+          for (let t = 0; t < tones; t++) { const o = adjOsc[t]; ar += o.re; ai += o.im; advance(o); }
+          re += adjA / Math.sqrt(tones) * ar; im += adjA / Math.sqrt(tones) * ai;
+        }
+        muxPos += 2; if (muxPos >= MUX.length) muxPos = 0;
+        buf[2 * i] = Math.max(0, Math.min(255, Math.round(127.5 + re)));
+        buf[2 * i + 1] = Math.max(0, Math.min(255, Math.round(127.5 + im)));
+      }
+      for (const o of adjOsc) renorm(o);
     } else if (DAB_IQ && dabHere(centreHz)) {
       for (let k = 0; k < n * 2; ) {
         const take = Math.min(n * 2 - k, DAB_IQ.length - dabPos);
@@ -255,8 +323,8 @@ const srv = net.createServer((sock) => {
       // ★ The front-end settings are only ACKNOWLEDGED (nothing here can hear them), but logged, so a
       //   bench run can show what the server actually asserted on the radio — bias-T, ppm, direct
       //   sampling, gain mode and gain (the DAB quick scan's "full hardware set", 2026-09-29).
-      else if (cmd === 0x03) console.log(`[fake-rtl-tcp] gain mode ${val ? 'manual' : 'auto'}`);
-      else if (cmd === 0x04) console.log(`[fake-rtl-tcp] gain ${(val / 10).toFixed(1)} dB`);
+      else if (cmd === 0x03) { if (!val) gainTenths = 350; console.log(`[fake-rtl-tcp] gain mode ${val ? 'manual' : 'auto'}`); }
+      else if (cmd === 0x04) { gainTenths = val; console.log(`[fake-rtl-tcp] gain ${(val / 10).toFixed(1)} dB`); }
       else if (cmd === 0x05) console.log(`[fake-rtl-tcp] ppm ${val | 0}`);
       else if (cmd === 0x08) console.log(`[fake-rtl-tcp] RTL digital AGC ${val ? 'on' : 'off'}`);
       else if (cmd === 0x09) console.log(`[fake-rtl-tcp] direct sampling ${val}`);

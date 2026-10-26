@@ -920,6 +920,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── the DAB band scan (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-bandscan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12: THE DAB SCAN AND THE GAIN (2026-10-27, Stuart: "the AGC can work quick enough to allow the multiplex to be found
+#     but without taking forever"). An RTL front end that OBEYS the gain (fake-rtl-tcp --dab-mux): strong→weak locks in ~3 s
+#     (was 20 s, the recovering jump refused by its own gate), a typical aerial's five ensembles all found in < 2.5 min, a +3 dB
+#     ensemble found, the gain handed back, each level locks < 2 s; the impaired clip too. Needs bench-clip/mux.cf32. ~11 min.
+printf '\n\033[1m── the DAB scan and the gain (end to end, RTL front-end model) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-scan-agc.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ AN IDLE DECODER SOCKET IS PINGED (2026-10-10): behind Cloudflare's ~100 s idle cut-off the /ws/dxcluster socket
 #    reconnected for ever ("an error log as long as my arm"). ~30 s. Same VIBESERVER_BIN rule.
