@@ -67,6 +67,12 @@ import { parseAdsbMapPrefs, type AdsbAircraftRaw, type AdsbMapPrefs, type AdsbGa
 import { noteFault } from '../services/faultLog';
 import type { Aircraft } from '../services/SDRBackend';
 import AdsbLiveList from './AdsbLiveList';
+/* ★★★ V12 AIS / APRS: THE SHARED SHIP AND STATION LAYER, AS A STRING (web/mapkit/tracklayer.js — the web client's same
+ *     file), interpolated only, for VIBEMAP_JS's reason. Regenerate with: node scripts/gen-tracklayer-source.mjs. What
+ *     each item LOOKS like is worked out in React Native (src/services/tracks.ts) and handed in with it. */
+import { TRACK_LAYER_JS } from '../generated/trackLayerSource';
+import { TRACK_CARD_CSS, AIS_COLOURS, type TrackItem, type TrackRow } from '../services/tracks';
+import TrackLiveList from './TrackLiveList';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';   // ★ the spot card's HH:MM:SS UTC (the slot's start)
@@ -80,7 +86,11 @@ import { FMT_SPOT_TIME_JS } from '../utils/spotTime';   // ★ the spot card's H
  *  So where HFDL's key reads "← SDR" and only puts the map away, this one reads EXIT ADS-B and its onClose LEAVES THE
  *  MODE (SDRScreen exitAdsb) — the key, Android back, and a pad's or keyboard's Back alike. The live list in the
  *  bottom-left (AdsbLiveList) is React Native's, over the page. */
-export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb';
+/* ★★ 'ais' (V12) = VibeServer's AIS MODE — ADS-B's shape exactly: the map IS the mode's screen, its key reads EXIT AIS and
+ *  leaves the mode (SDRScreen exitAis). 'aprs' = the APRS decoder's station map (the box's MAP key); CLOSE MAP goes back to
+ *  the box and the decoder carries on. Both draw with the shared track layer, fed by React Native (no socket of the
+ *  page's own), with React Native's live list bottom-left (TrackLiveList). */
+export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb' | 'ais' | 'aprs';
 
 interface MapOverlayProps {
   visible: boolean;
@@ -119,6 +129,13 @@ interface MapOverlayProps {
   adsbStarted?: boolean;
   /** ★★ kind 'adsb': the GAIN key (adsbTypes adsbGainView) — null/absent = no key (no gain list, owner-fixed, or unknown). */
   adsbGain?: { view: AdsbGainView | null; steps: readonly number[]; onAuto: () => void; onSet: (tenthDb: number) => void } | null;
+  /** ★ kinds 'ais' / 'aprs': the items on the map (each with its icon, label and card — tracks.ts aisItems / aprsItems),
+   *  the live list's rows, its status line and empty text, and the AIS safety strip. */
+  trk?: { items: TrackItem[]; rows: TrackRow[]; status: string; empty: string; safety?: string[];
+          /** One item's track for its card: [lat, lon] oldest first ([] = none). */
+          trail: (key: string) => Promise<[number, number][]>;
+          /** Find this item when the map opens (a row tapped in the APRS box); '' = none. */
+          focus?: string } | null;
   /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
   safeInsets?: { top: number; bottom: number; left: number; right: number };
 }
@@ -167,6 +184,7 @@ function buildHtml(
   ].join('; ');
   const isHfdl = kind === 'hfdl';
   const isAdsb = kind === 'adsb';
+  const isTrk = kind === 'ais' || kind === 'aprs';   // ★ V12 AIS / APRS — the shared track layer
   /* ★★ THE AIRCRAFT MAPS SHARE ONE LOOK: ADS-B wears HFDL's amber-black page, its 'aero' basemap and its chrome.
    *  `aero` is the look; `isHfdl` stays for what is HFDL's alone (SNAP, the ground stations, the flight toast). */
   const aero = isHfdl || isAdsb;
@@ -178,8 +196,9 @@ function buildHtml(
    *  signal-strength dots, the band colours, the aircraft's yellow selection ring and its signal meter. The
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
-  const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
-  const CNT_ICON = aero
+  const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : kind === 'ais' ? 'AIS SHIP MAP'
+    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+  const CNT_ICON = kind === 'ais' ? '&#9875;' : kind === 'aprs' ? '&#128225;' : aero
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
     : kind === 'cw'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.x},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
@@ -194,6 +213,7 @@ function buildHtml(
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>${VIBEMAP_JS}</script>
 ${isAdsb ? `<script>${ADSB_LAYER_JS}</script>` : ''}
+${isTrk ? `<script>${TRACK_LAYER_JS}</script>` : ''}
 ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script src="${glBase}vendor/maplibre-gl.js"></script><script src="${glBase}vendor/pmtiles.js"></script><script src="${glBase}vendor/vibemapgl.js"></script><script src="${glBase}vendor/vibemapgl-compat.js"></script>` : ''}
 <style>
   html,body{margin:0;padding:0;height:100%;background:${T.bg};overflow:hidden;}
@@ -393,8 +413,9 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   .st-sub{font-size:11px;color:rgba(${T.x},0.45);letter-spacing:0.5px;margin:-2px 0 6px;}
   .st-bar{height:3px;background:rgba(${T.x},0.12);border-radius:2px;margin:2px 0 6px;}
   .st-bf{height:3px;background:rgba(${T.x},0.65);border-radius:2px;transition:width 0.4s;}
-  ${isAdsb ? `
-  /* ★★ ADS-B: THE BOTTOM-LEFT CORNER IS THE LIVE LIST'S (React Native draws it over this page — AdsbLiveList), so the
+  ${isTrk ? TRACK_CARD_CSS : ''}
+  ${isAdsb || isTrk ? `
+  /* ★★ ADS-B (and V12 AIS / APRS): THE BOTTOM-LEFT CORNER IS THE LIVE LIST'S (React Native draws it over this page — AdsbLiveList), so the
      legend's key moves to the top-left, the one corner nothing else uses (the layer's toggles are top-right), and opens
      downwards from there. */
   #legend{top:10px;bottom:auto;}
@@ -408,9 +429,12 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
 <div id="topbar">
   ${isAdsb
     ? '<button id="back" aria-label="Exit ADS-B and give the receiver back">EXIT ADS-B</button>'
+    : kind === 'ais' ? '<button id="back" aria-label="Exit AIS and give the receiver back">EXIT AIS</button>'
+    : kind === 'aprs' ? '<button id="back" aria-label="Close the map — the APRS decoder carries on">CLOSE MAP</button>'
     : '<button id="back">&#8592; SDR</button>'}
   <div id="title">${TITLE}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
+  ${isTrk ? `<button id="snap" class="trkfit" title="Fit every ${kind === 'ais' ? 'ship' : 'station'} on the map">FIT</button>` : ''}
   ${isAdsb ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
@@ -429,7 +453,21 @@ ${isSpots ? `
     <div id="legbtn" title="Legend">&#9432;</div>
     <div id="legbody">
       <div class="scroll-arrow scroll-arrow-up" id="arr-up">&#9650;</div>
-      ${isAdsb ? `
+      ${kind === 'ais' ? `
+      <div class="lg-sec">AIS SHIPS</div>
+      ${Object.entries(AIS_COLOURS).map(([f, c]) => `<div class="lg-row"><span class="lg-dot" style="background:${c};"></span><span>${f === 'hsc' ? 'high-speed craft' : f}</span></div>`).join('')}
+      <div class="lg-row"><span class="lg-dot" style="background:#ff3b3b;"></span><span>distress beacon</span></div>
+      <div class="lg-row"><span>&#9670;</span><span>Aid to navigation (dashed = virtual)</span></div>
+      <div class="lg-row"><span>&#9679;</span><span>A dot = still; a hull points along its heading</span></div>
+      ` : kind === 'aprs' ? `
+      <div class="lg-sec">APRS STATIONS</div>
+      <div class="lg-row"><span class="lg-dot" style="background:#59c26b;"></span><span>station</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#4fa3ff;"></span><span>moving</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#39d0d8;"></span><span>weather</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#ffad42;"></span><span>object / item</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#c58cff;"></span><span>digipeater / gateway</span></div>
+      <div class="lg-row"><span>&#9711;</span><span>Dashed ring = alternate symbol table</span></div>
+      ` : isAdsb ? `
       <div class="lg-sec">ADS-B 1090</div>
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
       <div class="lg-row"><span>&#9992;</span><span>Icon = aircraft type, turned to its track</span></div>
@@ -859,6 +897,9 @@ if(LOCAL){
   /* ★ ADS-B: the receiver is the SERVER's own /location, which React Native already holds and injects (a VibeServer
    *  has no UberSDR /api/description). Unknown = no marker; the aircraft still draw, without range. */
   if(RX_LAT||RX_LON)addRx();
+}else if(KIND==='ais'||KIND==='aprs'){
+  /* ★ V12 AIS / APRS: the server's /location, injected; the track layer draws the receiver's house itself (setReceiver). */
+  if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],8);
 }else{
   hostFetch('/api/description').then(function(d){ if(!d) throw 0; return d; }).then(function(d){
     var gps=d&&d.receiver&&d.receiver.gps;
@@ -1342,6 +1383,48 @@ if(KIND==='adsb'){
   if(window.__pendingAdsb){window.__adsbPush(window.__pendingAdsb);window.__pendingAdsb=null;}
 }
 
+// ════════ V12 AIS / APRS — the shared track layer, fed by React Native ════════
+/* ★★★ THE LAYER DRAWS THE SHIPS AND STATIONS (web/mapkit/tracklayer.js, the web client's same file): the glide, the fade,
+ *  a tapped one's track and its card. Each item arrives with its icon, label and card already made (src/services/tracks.ts
+ *  — one rule, two readers with the web), so this page holds no copy of what a ship looks like. A track is asked of React
+ *  Native (AIS: the server's ais_trail; APRS: the list's own), answered through __trkTrail. */
+if(KIND==='ais'||KIND==='aprs'){
+  var trkLayer=null,trkWait={},trkWantFocus=null;
+  function trkPost(o){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(o));}
+  function trkMake(){
+    if(trkLayer||!window.VibeTrackLayer)return trkLayer;
+    try{
+      trkLayer=VibeTrackLayer.create(map,L,{
+        receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,
+        icon:function(it){return it&&it._ic?it._ic:{html:'',w:20,h:20};},
+        label:function(it){return it&&it._lb?String(it._lb):'';},
+        card:function(it){return it&&it._cd?String(it._cd):'';},
+        trail:function(key,done){
+          trkWait[key]=done;trkPost({t:'trkTrail',key:String(key)});
+          setTimeout(function(){if(trkWait[key]===done){delete trkWait[key];done([]);}},8000);
+        },
+        onSelect:function(k){trkPost({t:'trkSel',key:k==null?null:String(k)});}
+      });
+    }catch(e){console.error('track layer could not start',e);trkLayer=null;}
+    return trkLayer;
+  }
+  window.__trkPush=function(json){
+    try{
+      var a=JSON.parse(json);if(!Array.isArray(a))return;
+      cnt.textContent=String(a.length);
+      var l=trkMake();if(!l)return;l.update(a);
+      if(trkWantFocus){var k=trkWantFocus;trkWantFocus=null;setTimeout(function(){try{l.focus(k);}catch(e){}},80);}
+    }catch(e){console.error('tracks: bad report',e);}
+  };
+  window.__trkTrail=function(key,pts){var d=trkWait[key];if(!d)return;delete trkWait[key];d(Array.isArray(pts)?pts:[]);};
+  /* ★ A row chosen (the live list, or the APRS box before the map was up): before the first items, when they come. */
+  window.__trkFocus=function(k){try{var l=trkMake();if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
+  window.__trkListW=function(w,h){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');};
+  var fitBtn=document.getElementById('snap');
+  if(fitBtn)fitBtn.addEventListener('click',function(){try{var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}});
+  if(window.__pendingTrk){window.__trkPush(window.__pendingTrk);window.__pendingTrk=null;}
+}
+
 // ════════ DIGI / CW spots (skin lsv-digmap / lsv-cwmap parity) ════════
 if(KIND==='digi'||KIND==='cw'){
   var isCW=(KIND==='cw');
@@ -1588,7 +1671,7 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbGain, safeInsets }:
+    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbGain, trk, safeInsets }:
     MapOverlayProps & { spots?: SpotRow[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -1749,6 +1832,32 @@ export default function MapOverlay(
     webRef.current?.injectJavaScript(`window.__adsbListW&&window.__adsbListW(${Math.round(w) || 0},${Math.round(h) || 0});true;`);
   };
 
+  /* ★ V12 AIS / APRS: the items each report (they REPLACE — the server's list is the truth), double-encoded as ADS-B's are
+   *  (a ship's name can never become source). Parked in __pendingTrk until the page's handler exists. */
+  const isTrkKind = kind === 'ais' || kind === 'aprs';
+  const trkRef = useRef(trk); trkRef.current = trk;
+  const pushTrk = (items?: TrackItem[]) => {
+    if (!isTrkKind || !items) return;
+    const lit = JSON.stringify(JSON.stringify(items))
+      .replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
+      .replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
+    webRef.current?.injectJavaScript(`(window.__trkPush?window.__trkPush(${lit}):(window.__pendingTrk=${lit}));true;`);
+  };
+  useEffect(() => { if (visible) pushTrk(trk?.items); }, [kind, visible, trk?.items]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [trkSel, setTrkSel] = useState<string | null>(null);
+  const trkFocus = (key: string) => {
+    setTrkSel(key);
+    webRef.current?.injectJavaScript(`window.__trkFocus&&window.__trkFocus(${JSON.stringify(String(key))});true;`);
+  };
+  const trkListW = useRef(0), trkListH = useRef(0);
+  const trkFootprint = (w: number, h: number) => {
+    trkListW.current = w; trkListH.current = h;
+    webRef.current?.injectJavaScript(`window.__trkListW&&window.__trkListW(${Math.round(w) || 0},${Math.round(h) || 0});true;`);
+  };
+  // ★ the APRS box's row: found once the page has its items (onLoadEnd), and again if it changes while open
+  useEffect(() => { if (visible && isTrkKind && trk?.focus) trkFocus(trk.focus); }, [visible, kind, trk?.focus]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!visible) setTrkSel(null); }, [visible, kind]);
+
   if (!visible || !kind) return null;
 
   return (
@@ -1835,7 +1944,9 @@ export default function MapOverlay(
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
           onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft); pushCap();
-                             if (kind === 'adsb') adsbFootprint(adsbListW.current, adsbListH.current); }}
+                             if (kind === 'adsb') adsbFootprint(adsbListW.current, adsbListH.current);
+                             if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
+                                              if (trkRef.current?.focus) trkFocus(trkRef.current.focus); } }}
           onMessage={(e) => {
             const d = e.nativeEvent.data;
             if (d === 'close') return onClose();
@@ -1851,6 +1962,25 @@ export default function MapOverlay(
             if (m && (m as any).t === 'adsbSel') {
               const h = (m as any).hex;
               setAdsbSel(typeof h === 'string' && /^~?[0-9a-f]{6}$/.test(h) ? h : null);
+              return;
+            }
+            /* ★ V12 AIS / APRS: the map's selection (the list's row follows), and a track asked for — answered with
+             *  [lat, lon] numbers only, whatever the asker returns. The key is checked against the items we sent. */
+            if (m && (m as any).t === 'trkSel') {
+              const k = (m as any).key;
+              setTrkSel(typeof k === 'string' && k.length <= 40 ? k : null);
+              return;
+            }
+            if (m && (m as any).t === 'trkTrail') {
+              const k = String((m as any).key ?? '').slice(0, 40);
+              const answer = (pts: [number, number][]) => {
+                const clean = (Array.isArray(pts) ? pts : []).filter((q) => Array.isArray(q) && Number.isFinite(q[0]) && Number.isFinite(q[1]))
+                  .slice(-400).map((q) => [Number(q[0]), Number(q[1])]);
+                webRef.current?.injectJavaScript(`window.__trkTrail&&window.__trkTrail(${JSON.stringify(k)},${JSON.stringify(clean)});true;`);
+              };
+              const t = trkRef.current;
+              if (!t || !t.items.some((i) => i.key === k)) { answer([]); return; }
+              t.trail(k).then(answer, () => answer([]));
               return;
             }
             if (m && (m as any).t === 'adsbPrefs') {
@@ -1951,6 +2081,13 @@ export default function MapOverlay(
                         logoBase={local ? null : baseUrl.replace(/\/+$/, '') + '/adsb/'}
                         ink={ink} areaW={winW} areaH={winH}
                         insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
+        )}
+        {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
+        {isTrkKind && !!trk && !!pageUri && !packError && (
+          <TrackLiveList title={kind === 'ais' ? 'SHIPS' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
+                         safety={trk.safety} onFocus={trkFocus} selected={trkSel} onFootprint={trkFootprint}
+                         ink={ink} areaW={winW} areaH={winH}
+                         insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}
         {disconnected && !ignored && (
           <View style={mo.discWrap} pointerEvents="box-none">
