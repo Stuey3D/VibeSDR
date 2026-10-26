@@ -41,6 +41,7 @@
 #include "decoders/time_decoder.h"
 #include "decoders/ft8_decoder.h"
 #include "vibe_cw_run.h"
+#include "vibe_dsc_run.h"
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -229,6 +230,8 @@ struct DecoderTap {
     /** ★ One CW spot (the CW summary tap only — see Env::cwSpotTap): the call, where, how fast, how strong, and what it
      *  was doing ("CQ", "TEST", "DE"). */
     virtual void cwSpot(const std::string& /*call*/, double /*rfHz*/, float /*wpm*/, float /*snrDb*/, const std::string& /*how*/) {}
+    /** ★ One DSC call (V12, 2026-10-26): the call, its readable line and JSON, and whether it repeats one just given. */
+    virtual void dscCall(const dsc::Call& /*call*/, const std::string& /*line*/, const std::string& /*json*/, bool /*repeat*/) {}
 };
 using DecoderTapPtr = std::shared_ptr<DecoderTap>;
 
@@ -459,7 +462,8 @@ public:
      *  on decoderKind: "attached" was once true while nothing had been constructed). */
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
-        return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw") : "none";
+        return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
+             : dsc_ ? "dsc" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -518,7 +522,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "dsc";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -529,7 +533,7 @@ private:
                                "deviation", "bandwidth", "width" }) {
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
-        for (const char* f : { "encoding", "framing", "station" }) { k += str(msg, f); k += ','; }
+        for (const char* f : { "encoding", "framing", "station", "band" }) { k += str(msg, f); k += ','; }
         for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true",
                                "\"auto\":true", "\"usos\":true" })
             k += msg.find(f) != std::string::npos ? '1' : '0';
@@ -557,7 +561,7 @@ private:
         return j.substr(p + 1, e - p - 1);
     }
 
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || dsc_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -570,6 +574,7 @@ private:
         delete time_;  time_ = nullptr;
         if (cwIq_.exchange(false)) skimmersRunning().fetch_sub(1);
         cw_.reset();
+        dsc_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }
         active_.store(false, std::memory_order_relaxed);
@@ -696,6 +701,8 @@ private:
         } else if (ext == "cw" || ext == "cwskim") {
             buildCwLocked_(ext == "cwskim", msg);
             return;
+        } else if (ext == "dsc") {
+            buildDscLocked_(msg);
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
             /* ★★ RTTY, ONE CLICK (Stuart, 2026-10-04: "auto config the baud and shift etc so again its a one click use"). The
              *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
@@ -774,6 +781,26 @@ private:
         if (skimmer) { if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1); }
         else active_.store(true, std::memory_order_relaxed);
         log(skimmer ? "decoder attached: CW skimmer, " + std::to_string((int)std::lround(w / 1000)) + " kHz" : std::string("decoder attached: CW"));
+    }
+    /** ★★ DSC (V12, 2026-10-26): "band":"vhf" = channel 70 on an FM demodulator's audio; anything else MF/HF, its tones
+     *  centred on "center_frequency" (1700 Hz: the dial 1.7 kHz below the DSC frequency on USB, above it on LSB). */
+    void buildDscLocked_(const std::string& msg) {
+        const bool vhf = str(msg, "band") == "vhf";
+        double cf = 1700;
+        if (!vhf) { double v; if (num(msg, "center_frequency", v)) cf = std::max(400.0, std::min(3000.0, v)); }
+        DscRun::Out o;
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
+        o.json = [this](const std::string& j) { broadcastText(j); };
+        o.call = [this](const dsc::Call& c, const std::string& line, const std::string& j, bool rep) {
+            if (DecoderTapPtr t = tap()) t->dscCall(c, line, j, rep);
+        };
+        auto rfOf = env_.rfOfAudio; auto dial = env_.dialHz;
+        std::function<double()> rf;
+        if (vhf) rf = [dial] { return dial ? dial() : 0.0; };
+        else rf = [rfOf, dial, cf] { return rfOf ? rfOf(cf) : (dial ? dial() : 0.0) + cf; };
+        dsc_.reset(new DscRun(vhf, cf, std::move(rf), std::move(o)));
+        log(vhf ? std::string("decoder attached: DSC (VHF channel 70)") : "decoder attached: DSC (MF/HF), tones around " + std::to_string((int)cf) + " Hz");
     }
     void sendSstv(const std::vector<uint8_t>& m) {
         std::lock_guard<std::mutex> sl(sstvSendMtx_);   // ★ SSTV has a video-decode thread of its own
@@ -963,6 +990,12 @@ private:
                 if (!dec.empty()) sstv_->process(dec.data(), (int)dec.size());
                 return;
             }
+            if (dsc_) {
+                // ★ DSC: float audio straight in; its lines, JSON and state are sent from inside (DscRun).
+                dsc_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (cw_) {
                 // ★ CW: the engine takes the float audio itself (no int16 round trip); its frames are sent from inside.
                 cw_->feedAudio(data, count);
@@ -1029,6 +1062,7 @@ private:
     SstvDecoder*  sstv_  = nullptr;
     TimeDecoder*  time_  = nullptr;
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
+    std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
     std::atomic<double> cwWidth_{0.0};
     DecoderTapPtr cwTap_;                     // ★ the gallery's CW summary (Env::cwSpotTap), under tapMtx_

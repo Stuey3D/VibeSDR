@@ -31,6 +31,7 @@
 #include "vibe_bgdecode_config.h"   // ★ the profiles, validate(), attachMsg()
 #include "vibe_decoder_host.h"
 #include "vibe_gallery.h"
+#include "vibe_dsc_gallery.h"
 #include "vibe_png.h"
 #include "vibe_callsign_country.h"
 #include "vibedsp/vibedsp.h"
@@ -206,6 +207,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "fsk") return msg.find("CCIR476") != std::string::npos ? "navtex" : "rtty";
     if (ext == "wefax" || ext == "sstv") return ext;
     if (ext == "cw") return "cw";          // ★ a listener's CW decoder: its text, as an RTTY run (a skimmer keeps a summary)
+    if (ext == "dsc") return "dsc";        // ★ DSC: the day's log per frequency + an item per distress/urgency call
     return "";
 }
 
@@ -657,6 +659,7 @@ private:
 inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr,
                                     std::function<void(const std::string&)> log = nullptr, const std::string& tag = "") {
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
+    if (meta.kind == "dsc") return std::make_shared<DscGalleryTap>(st, meta, std::move(dial));
     if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
         if (log) t->setLog(std::move(log), tag);
@@ -855,6 +858,9 @@ public:
             env.slots = p_.slots;
             const double dialHz = c->vfo.hz;
             env.dialHz = [dialHz] { return dialHz; };
+            // ★ An audio tone → RF by the VFO's sideband (DSC names the frequency it heard: 2185.8 USB + 1700 = 2187.5).
+            const bool lsbV = c->vfo.mode == "lsb";
+            env.rfOfAudio = [dialHz, lsbV](double a) { return lsbV ? dialHz - a : dialHz + a; };
             if (p_.store) {
                 gallery::Store* st = p_.store;
                 const Vfo v = c->vfo; const int pi = p_.profileIdx;

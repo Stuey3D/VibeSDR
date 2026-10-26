@@ -5,7 +5,8 @@
 //
 // ── The signal (M.493 Annex 1 §2) ─────────────────────────────────────────────────────────────────────────────────
 //  • MF/HF: F1B/J2B, 100 Bd, 170 Hz shift; through an SSB transmitter the audio centre is 1700 Hz (tones 1615/1785 Hz,
-//    so a USB dial 1.7 kHz below the assigned frequency: 2187.5 kHz → 2185.8 kHz USB).
+//    so a USB dial 1.7 kHz below the assigned frequency: 2187.5 kHz → 2185.8 kHz USB). Binary 1 (the B state) is the
+//    LOWER tone, 1615 Hz — what every real call on 8414.5 kHz showed (2026-10-26).
 //  • VHF (channel 70, 156.525 MHz): an FM subcarrier keyed 1300/2100 Hz at 1200 Bd.
 //  • Which tone is binary 1 (the "B" state) is NOT left to a setting: the phasing search tries both senses, so the
 //    decoder works on USB or LSB, and through a receiver that mirrors the audio, without anyone choosing.
@@ -144,7 +145,7 @@ void noFreq(std::vector<int>& s);                             ///< 126 126 126
 std::vector<uint8_t> transmission(const std::vector<int>& primary, const std::vector<std::vector<int>>& expansions,
                                   int dotBits);
 /** That transmission as audio: continuous-phase FSK at `rate`, MF/HF (centre `centreHz`, 170 Hz shift, 100 Bd, 1 = the
- *  higher tone unless `invert`) or VHF (1300 = 1, 2100 = 0, 1200 Bd). Amplitude 1. */
+ *  lower tone unless `invert`) or VHF (1300 = 1, 2100 = 0, 1200 Bd). Amplitude 1. */
 std::vector<float> modulate(const std::vector<uint8_t>& bits, bool vhf, double rate, double centreHz = 1700,
                             bool invert = false, double baudPpm = 0, double startPhase = 0);
 } // namespace build

@@ -603,7 +603,7 @@ std::vector<uint8_t> transmission(const std::vector<int>& primary, const std::ve
 std::vector<float> modulate(const std::vector<uint8_t>& bits, bool vhf, double rate, double centreHz, bool invert,
                             double baudPpm, double startPhase) {
     const double baud = (vhf ? 1200.0 : 100.0) * (1.0 + baudPpm * 1e-6);
-    const double f1 = vhf ? 1300.0 : centreHz + 85.0, f0 = vhf ? 2100.0 : centreHz - 85.0;
+    const double f1 = vhf ? 1300.0 : centreHz - 85.0, f0 = vhf ? 2100.0 : centreHz + 85.0;   // ★ 1 (B) = the lower tone
     const double spb = rate / baud;
     std::vector<float> out;
     out.reserve((size_t)(bits.size() * spb) + 2);
@@ -667,6 +667,19 @@ inline void dot2(const float* h, const float* re, const float* im, int n, float&
     yr = sr; yi = si;
 }
 
+/** ★ The DX and RX copies of one symbol, summed. DSC_INVALID_W < 1 would count a copy that is not itself a valid word
+ *  (while the other is) for less — meant for a burst that wrecks one copy with strong, meaningless bits. MEASURED
+ *  (dsc_bench snr 10): in noise it COSTS — 0.5 took MF/HF −8 dB from 95.0 to 91.9 % and −10 dB from 31 to 26 %; 0.25
+ *  worse again — because a copy with one bit wrong is "invalid" too and its nine good bits are worth keeping. So: 1. */
+#ifndef DSC_INVALID_W
+#define DSC_INVALID_W 1.0f
+#endif
+inline uint16_t hardOf(const float* w) { uint16_t h = 0; for (int k = 0; k < 10; ++k) if (w[k] > 0) h |= (uint16_t)(1 << k); return h; }
+inline void combine(const float* a, const float* b, float* out) {
+    const bool va = decodeWord(hardOf(a)) >= 0, vb = decodeWord(hardOf(b)) >= 0;
+    const float ga = (va || !vb) ? 1.0f : DSC_INVALID_W, gb = (vb || !va) ? 1.0f : DSC_INVALID_W;
+    for (int k = 0; k < 10; ++k) out[k] = ga * a[k] + gb * b[k];
+}
 constexpr int kRing = 8192;          // soft samples kept (HF: 68 bits of look-back is all the search needs; ample)
 constexpr int kMaxCands = 4;
 constexpr float kSyncC = 0.55f;      // the phasing correlation a sync must reach (calibrated on noise: test-dsc)
@@ -808,8 +821,9 @@ void Receiver::pushSoft(float hm, float lm) {
         const float m = 0.5f * (hiOn_ + loOn_);
         gh = std::max(0.5f, std::min(2.0f, m / hiOn_)); gl = std::max(0.5f, std::min(2.0f, m / loOn_));
     }
-    float s = (hm * gh - lm * gl) / (noise_ + 1e-12f);
-    if (cfg_.vhf) s = -s;                          // ★ VHF: 1300 Hz (the lower tone) is the B state, 1
+    // ★★ The B state (binary 1) is the LOWER tone on both: 1615 Hz of the MF/HF pair through a USB receiver (measured on
+    //    Stuart's UberSDR, 8414.5 kHz, 2026-10-26: every call came in on the lower-tone-is-1 sense) and 1300 Hz on VHF.
+    float s = (lm * gl - hm * gh) / (noise_ + 1e-12f);
     s = std::max(-30.0f, std::min(30.0f, s));
     const int64_t t = n_;
     ring_[(size_t)(t & ringMask_)] = s;
@@ -958,7 +972,7 @@ bool Receiver::readSlot(Cand& c, int j) {
         }
         if (m == 0) return true;
         float sum[10];
-        for (int k = 0; k < 10; ++k) sum[k] = c.dx[m][(size_t)k] + c.rx[m][(size_t)k];
+        combine(c.dx[m].data(), c.rx[m].data(), sum);
         const Ml r = ml(sum);
         c.sym.push_back(r.best);
         c.margin.push_back(r.energy > 0 ? (r.sBest - r.sSecond) / r.energy : 0);
@@ -1038,7 +1052,7 @@ bool Receiver::finishPrimary(Cand& c, int mEos) {
     for (int k = 0; k < 10; ++k) w[0][(size_t)k] = c.dx[0][(size_t)k] + c.dx[1][(size_t)k] + c.rx[0][(size_t)k] + c.rx[1][(size_t)k];
     for (int p = 1; p < nPos; ++p) {
         const size_t m = (size_t)p + 1;
-        for (int k = 0; k < 10; ++k) w[(size_t)p][(size_t)k] = c.dx[m][(size_t)k] + c.rx[m][(size_t)k];
+        combine(c.dx[m].data(), c.rx[m].data(), w[(size_t)p].data());
     }
     // ★ The EOS: its DX and RX copies, and the two the DX stream repeats after the ECC when they read as the same EOS.
     int endEvidence = 0;

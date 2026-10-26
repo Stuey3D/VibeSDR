@@ -270,6 +270,8 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/time_decoder.cpp"
     # ★ V12: CW — the listener's decoder and the skimmer (one FFT filterbank; decoders/cw_skimmer.h)
     "${CPP_DIR}/decoders/cw_skimmer.cpp"
+    # ★ V12: DSC — maritime Digital Selective Calling, MF/HF and VHF ch 70 (ITU-R M.493; decoders/dsc_decoder.h)
+    "${CPP_DIR}/decoders/dsc_decoder.cpp"
     ${FT8_SRC})
 target_include_directories(vibeserver_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}" "${CPP_DIR}" "${CPP_DIR}/vibedsp" "${CPP_DIR}/ft8_lib")

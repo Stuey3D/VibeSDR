@@ -30683,6 +30683,9 @@ static std::string vsTunableJson() {
     /* ★★ CW (V12, 2026-10-25): this server's own CW decoder and skimmer (decoders/cw_skimmer.h). Absent on an older server,
      *  so its clients draw no CW button there; false where the owner has blocked CW on this receiver. */
     j += std::string(",\"cw\":") + (vsModeBlocked("cw") ? "false" : "true");
+    /* ★★ DSC (V12, 2026-10-26): maritime Digital Selective Calling (decoders/dsc_decoder.h). Absent on an older server, so
+     *  its clients draw no DSC button there; false where the owner has blocked it on this receiver. */
+    j += std::string(",\"dsc\":") + (vsModeBlocked("dsc") ? "false" : "true");
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {
@@ -30817,7 +30820,7 @@ static std::string vsTunableJson() {
      *    off to save CPU still serves basic RDS, so the card must not read "no RDS". */
     {
         static const char* kOffer[] = { "wfm", "nfm", "am", "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism",
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc" };
         std::string m = "[";
         bool first = true;
         for (const char* id : kOffer) {
@@ -30967,7 +30970,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"dsc", "DSC"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";
