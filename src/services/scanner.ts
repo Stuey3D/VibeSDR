@@ -482,6 +482,11 @@ export function freqText(hz: number): string {
   const dp = Math.round(hz) % 1000 === 0 ? 3 : Math.round(hz) % 100 === 0 ? 4 : 5;
   return `${mhz.toFixed(dp)} MHz`;
 }
+/** ★ "128.590 MHz – London South Information Broadcast" — the row text exactly as Stuart wrote it (2026-10-27); the
+ *  frequency alone when nothing matches. */
+export function scanRowText(hz: number, name?: string): string {
+  return name ? `${freqText(hz)} – ${name}` : freqText(hz);
+}
 /** The same, as VoiceOver should say it. */
 export function freqSpoken(hz: number): string {
   return `${(hz / 1e6).toFixed(Math.round(hz) % 1000 === 0 ? 3 : 4)} megahertz`;
@@ -605,6 +610,9 @@ export class ScannerController {
 
   running(): boolean { return this.state !== 'IDLE'; }
   isRecording(): boolean { return this.recording; }
+  /** ★ The user pressed REC by hand: the scanner's own recording (if any) ends first, so the two never fight over the
+   *  one recorder; record-on-stop then stands aside while the manual one runs (host.manualRecording). */
+  releaseRecorder(): void { this.stopRecordingIfAny(); }
 
   /** ★ The user picked a profile IN THE APP: the next reach change is theirs — re-latch, and if the list no longer
    *  fits, behave like start-time validation (refuse) rather than an external hijack (pause and wait). */
@@ -681,6 +689,25 @@ export class ScannerController {
    */
   start(opts: { reachableOnly?: boolean } = {}): boolean {
     if (this.running()) this.stop();
+    if (!this.prepare(opts)) return false;
+    const r = this.host.reach();
+    this.latchedKey = r.key;
+    this.localSwitchPending = false;
+    this.index = -1;
+    this.unreachable = [];
+    this.pauseWhy = '';
+    this.lastPriorityAt = this.host.now();
+    this.host.announce?.('Scanning');
+    return this.hop();
+  }
+
+  /** ★ §4.3's third call site — a preset just loaded: validate against this receiver NOW, so a refusal is on the panel
+   *  before anything is pressed. Nothing starts. */
+  checkReachable(): boolean { return this.running() || this.prepare({}); }
+
+  /** Validate the scan against the reach and fix the run's candidates; sets `refusal` and returns false when it may not
+   *  start as asked. */
+  private prepare(opts: { reachableOnly?: boolean }): boolean {
     const r = this.host.reach();
     this.refusal = null;
     if (!r.allowed) { this.refusal = { out: [], okCount: 0, why: r.why || 'Scanning is not available here' }; this.host.changed?.(); return false; }
@@ -718,14 +745,8 @@ export class ScannerController {
       } else this.runTagIds = null;
       this.runBand = null;
     }
-    this.latchedKey = r.key;
-    this.localSwitchPending = false;
-    this.index = -1;
-    this.unreachable = [];
-    this.pauseWhy = '';
-    this.lastPriorityAt = this.host.now();
-    this.host.announce?.('Scanning');
-    return this.hop();
+    this.host.changed?.();
+    return true;
   }
 
   /** ★ Stop: the gate is ALWAYS left open (brief §7.4 / acceptance 11) — a scanner must never leave the audio shut. */

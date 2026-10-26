@@ -228,6 +228,10 @@ export interface SDRBackend {
   // Profiles — present only when caps.profiles (OWRX)
   getProfiles?(): ProfileInfo[];
   selectProfile?(id: string): void;
+  /** ★★ V12 SCANNER: the ACTIVE profile as the server last stated it (OWRX `sdr_id|profile_id` from every config) — whoever
+   *  switched it. The scanner's reach key carries it, so another listener's profile switch pauses a scan on the next tick
+   *  even when the new profile's span happens to cover the same Hz (docs/v12/SCANNER.md §4.4). */
+  activeProfileId?(): string;
 
   /** OWRX: the active secondary decoder id (SSTV/Fax/…) running on top of the
    *  analog carrier, or null. Lets the UI highlight the carrier AND the decoder. */

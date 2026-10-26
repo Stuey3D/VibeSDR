@@ -13,6 +13,8 @@ import {
   type ScanHost, type ScanReach, type ScanTarget, type MeterMode, type ScanTag, type ScanTiming, type ScanSample,
 } from '../src/services/scanner.ts';
 import type { SDRMode } from '../src/services/sdrProtocol.ts';
+import { scanRowText } from '../src/services/scanner.ts';
+import { readFileSync } from 'node:fs';
 
 let fails = 0, passes = 0;
 function ok(what: string, cond: boolean, detail = '') {
@@ -604,6 +606,27 @@ const tag = (hz: number, mode: SDRMode, extra: Partial<ScanTag> = {}): ScanTag =
   k.ctl.start(); k.run(80000);
   ok('Kiwi, no floor from the view: Auto still finds the signal', k.ctl.found.some((x) => x.frequency === 7_050_000), JSON.stringify(k.ctl.found));
   eq('Kiwi, no floor: nothing false', k.ctl.found.length, 1);
+}
+
+// ═══ The found row at 390 pt: the name truncates, IGNORE never leaves the screen ════════════════════════════════
+{
+  eq('row text as Stuart wrote it', scanRowText(128_590_000, 'London South Information Broadcast'), '128.590 MHz – London South Information Broadcast');
+  eq('no match → the frequency alone', scanRowText(128_590_000), '128.590 MHz');
+  // ★ There is no RN layout engine in node, so the rule is pinned in the SOURCE: the text sits in a flex:1 / minWidth:0
+  //   column on one line with a tail ellipsis, and the keys beside it never shrink — which is exactly what keeps Ignore
+  //   on a 390 pt screen however long the name. (Device check owed: a phone at 390 pt with a 60-character bookmark.)
+  const src = readFileSync(new URL('../src/components/ScannerPanel.tsx', import.meta.url), 'utf8');
+  const found = src.slice(src.indexOf('function foundRow'));
+  ok('found row: one line, tail ellipsis', /<Text style=\{s\.rowTxt\} numberOfLines=\{1\} ellipsizeMode="tail">\{text\}<\/Text>/.test(found));
+  ok('found row: the text column is flex 1, minWidth 0', /rowMain:\s*\{ flex: 1, minWidth: 0/.test(src));
+  ok('found row: the keys never shrink', /chip:\s*\{[^}]*flexShrink: 0/.test(src));
+  ok('found row: IGNORE is the row key, the rest are secondary', /'IGNORE\?' : 'IGNORE'/.test(found) && found.indexOf("'→ TAG'") > found.indexOf("'IGNORE?'"));
+}
+// ═══ §4.3 third call site: a preset load is validated at once ══════════════════════════════════════════════════
+{
+  const f = OWRX();
+  f.ctl.setTags([tag(118_100_000, 'am'), tag(145_000_000, 'nfm')]);
+  eq('loading a preset that does not fit → refusal shown, nothing started', [f.ctl.checkReachable(), !!f.ctl.refusal, f.ctl.state, f.tunes.length], [false, true, 'IDLE', 0]);
 }
 
 console.log(`test_scanner: ${passes} passed, ${fails} failed`);
