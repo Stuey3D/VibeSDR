@@ -1,11 +1,11 @@
 /**
- * ndb.ts — the web client's NDB mode (V12, docs/v12/NDB-SKIMMER.md): the box over the waterfall that shows every
- * aeronautical beacon the server's skimmer is decoding at once.
+ * ndb.ts — the web client's NDB mode (V12, docs/v12/NDB-SKIMMER.md): the map view of every aeronautical beacon the
+ * server's skimmer is decoding at once.
  *
  * ★★ THE PAGE'S HALF ONLY. The server decodes (vibe_ndb_service.h): it finds every carrier, reads each ident, confirms it
  *    only when several repeats agree, matches it against the published list (OurAirports, public domain) and sends a
- *    report a second. This file draws it: the tiles (CARRIERS · IDENTIFIED · FURTHEST · COVERAGE), a spectrum strip with
- *    the idents over their carriers, the beacon table, a map, the live copy, the heard log, Find NDB and the stats.
+ *    report a second. This file draws it: the map (NdbMap + web/mapkit/ndblayer.js), the live list with its tiles
+ *    (CARRIERS · IDENTIFIED · FURTHEST · COVERAGE), the beacon card, the heard log, Find NDB and the stats (NdbView).
  * ★★ THE IDENT COLUMN TELLS THE TRUTH ABOUT ITSELF: ✓ = the ident read by consensus matches the published beacon;
  *    ≈ = read by consensus, one letter off the published one; plain = read by consensus, not in the list; italic + "?"
  *    = NOT READ YET — the published beacon nearest the receiver on that frequency, a guess and labelled as one.
