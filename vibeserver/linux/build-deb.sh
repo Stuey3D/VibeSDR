@@ -166,6 +166,7 @@ if [ "$ARCH" != i386 ]; then
   done
   NAPI="$(echo "$EXPORTS" | count '^sdrplay_api_')"
   [ -f "$X/usr/share/doc/vibeserver/COPYING.openrsp" ] || fail "OpenRSP's licence is not in the package"
+  [ -f "$X/usr/share/doc/vibeserver/COPYING.faad2" ] || fail "FAAD2's licence is not in the package (V12 DRM links it)"
   ORSP_LINE="library ($NAPI sdrplay_api_ exports), service, firmware $(cut -c1-12 "$ORSP/firmware/own/manifest.sha256" | tr '\n' ' ')"
 fi
 {

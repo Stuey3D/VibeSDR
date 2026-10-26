@@ -9,6 +9,7 @@
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
+import { drmRender, type DrmState } from './drm';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
@@ -811,6 +812,7 @@ async function loadAudioPolicy(httpBase: string) {
      *  tunable set after allow/block lists and the rate the receiver will actually run at — so a
      *  V4 locked to FM or held below 2.048 MS/s never draws the button at all. */
     dabCapable = j.dab === true;
+    drmCap = Array.isArray(j.modes) && j.modes.includes('drm');   // ★ V12 DRM — see offeredModes
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
@@ -2431,6 +2433,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       } else grpPrev = { tot: x.gtot, at: now };
       rdsExt = x;
       if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
+    },
+    onDrm: (d) => {
+      if (!spec || spec.mode !== 'drm') return;   // ★ a report after leaving DRM is a ghost
+      drmState = d; drmBoxSync(); updateVts();
     },
     onRds: (m) => {
       rdsStereo = m.stereo; syncStereoLight();   // ★ the pilot's — DAB's own light wins in DAB
@@ -4186,11 +4192,20 @@ function updateVts() {
     }
   }
 
+  /* ★ V12 DRM: the station names itself in its SDC (label) and sends a text message — the bar shows them like a DAB
+   *  service's label and DLS, with the service identifier as the id. */
+  if (spec.mode === 'drm' && drmState && drmState.locked && drmState.label) {
+    name = drmState.label; flag = '';
+    if (drmState.country && /^[a-z]{2}$/i.test(drmState.country)) flag = isoToFlag(drmState.country.toUpperCase());
+    dabRt = drmState.text || ''; dabSvcSid = drmState.serviceId ? parseInt(drmState.serviceId, 16) || 0 : 0;
+    logo = '';
+  }
+
   // RDS is always genuine — the station is naming itself. A bookmark only counts
   // when we're actually sitting on it.
   // ★ Tracks whether what we are about to show is LIVE (the station naming itself) or STATIC (our
   //   guess from a list). Only the live kind may stay up — see vtsHoldFor().
-  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid);
+  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid) || (spec.mode === 'drm' && !!drmState?.label);
   if (!name) {
     const near = nearestStation(hz);
     if (near && Math.abs(near.frequency - hz) <= VTS_ON_HZ) {
@@ -6575,6 +6590,28 @@ async function drawSplashSpectrogram(): Promise<void> {
  *    edges reports them instead of concluding the receiver is broken.
  */
 let dabCapable = false;
+/* ★★ V12 DRM — a DEMODULATOR choice like AM (the server receives it per listener: vibe_drm_listener.h), offered only
+ *  where the server lists 'drm' in vibeserver.json's modes (an older server has no such mode — a dead button). */
+let drmCap = false;
+let drmState: DrmState | null = null;
+/** The demodulators to offer: the fixed set, plus DRM where this server has it — minus what the owner switched off. */
+function offeredModes(): SDRMode[] {
+  return [...MODES, ...(drmCap ? ['drm' as SDRMode] : [])].filter((m) => !isModeBlocked(m));
+}
+/** The DRM box: shown while the mode is DRM, filled from the last report (drm.ts). */
+function drmBoxSync() {
+  const on = !!spec && spec.mode === 'drm';
+  let box = document.getElementById('drmBox');
+  if (!on) { if (box) box.classList.remove('open'); return; }
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'drmBox';
+    box.innerHTML = '<div id="drmBoxHead"><span class="drmTitle">DRM</span><span class="drmSub">Digital Radio Mondiale</span></div><div id="drmBody"></div>';
+    (document.getElementById('wfWrap') ?? document.body).appendChild(box);
+  }
+  box.classList.add('open');
+  drmRender(document.getElementById('drmBody') as HTMLElement, drmState);
+}
 /** The owner has allowed DAB to borrow the capture rate it needs (2.048 MS/s natively since
  *  2026-09-08; 2.4 + resample only if a radio refuses 2.048), and whether that
  *  offer is worth drawing. */
@@ -8702,7 +8739,7 @@ function buildControls() {
      *  the only picker anybody uses, and picking it was a no-op. AGENTS.md: never draw a control whose every use is a
      *  no-op. The list is read fresh on every open, so a mid-session change takes effect. */
     // ★★ AN ICOM'S MODES ARE THE RADIO'S, labelled as its panel writes them (no WFM, no DAB, no SAM).
-    modes:      () => icomR ? icomR.modes.map(icomModeLabel) : MODES.filter(m => !isModeBlocked(m)) as unknown as string[],
+    modes:      () => icomR ? icomR.modes.map(icomModeLabel) : offeredModes() as unknown as string[],
     /* ★★★ CHOOSING A DEMODULATOR LEAVES DAB. DAB is not an SDRMode — it replaces the whole
      *  chain — so it sat alongside the others as a toggle and picking WFM did nothing but change
      *  a mode the server was not running. Stuart: "I used to be able to click WFM and it change
@@ -11598,7 +11635,7 @@ function initDecoders(host: string, auth: AuthState) {
     // ★ Only what this receiver actually offers — see capsOf on the directory, same idea: never suggest a mode
     //   the owner has switched off, or a decoder this build cannot run.
     // ★ The same list the mode picker offers — anything the owner switched off is already gone from it.
-    modes: () => MODES.filter((m) => !isModeBlocked(m)) as unknown as string[],
+    modes: () => offeredModes() as unknown as string[],
     freqHz: () => spec?.frequency ?? 0,
     onUnread: (n) => {
       {
@@ -16179,6 +16216,9 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   rdsLogoProvisional = false;
   logoFromIdentity = false;
   }
+  // ★ V12 DRM: the box follows the mode; a new mode forgets the old station
+  if (m !== 'drm') drmState = null;
+  drmBoxSync();
   updateVts();
   syncBw();
 }
@@ -16197,6 +16237,7 @@ const BW_EDGE_MAX: Record<SDRMode, number> = {
   cwu: 2000,    cwl: 2000,
   fm: 30000,    nfm: 30000,
   wfm: 250000,
+  drm: 5000,   // ★ V12 DRM: unused — the bandwidth row is hidden in DRM (see syncBw)
 };
 
 let bwSync = false;
@@ -16226,6 +16267,9 @@ function applyBw(low: number, high: number) {
 /** Re-range the sliders for the current mode and load its current passband. */
 function syncBw() {
   if (!spec) return;
+  /* ★★ V12 DRM: the width means nothing there — the server's DRM receiver takes its channel before the AM filter — so the
+   *  row is hidden rather than left as a slider that does nothing (AGENTS.md: no dead controls). */
+  { const row = document.querySelector('.bwRow') as HTMLElement | null; if (row) row.style.display = spec.mode === 'drm' ? 'none' : ''; }
   const max = BW_EDGE_MAX[spec.mode] ?? 6000;
   const step = max > 50_000 ? 1000 : max > 10_000 ? 100 : 10;
   const lo = $<HTMLInputElement>('bwLo');
