@@ -142,9 +142,39 @@ void restartSelf() {
     wchar_t self[32768];
     if (!GetModuleFileNameW(nullptr, self, 32768)) return;
     std::wstring cmd = GetCommandLineW();
-    STARTUPINFOW si{}; si.cb = sizeof si;
+    STARTUPINFOEXW si{}; si.StartupInfo.cb = sizeof si.StartupInfo;
     PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(self, &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) return;
+    /* ★★ STARTED BY THE KEEPER (start at boot / at sign-in) our output goes to a LOG FILE, not a console — and a
+     *    fresh copy started with nothing would write into the void from then on. So pass the same stdout/stderr on,
+     *    and ONLY those (an explicit handle list): an inherited copy of our listening socket would keep the port busy
+     *    and the new copy could not bind it. With a console (a terminal run) nothing changes. */
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE), err = GetStdHandle(STD_ERROR_HANDLE);
+    std::vector<HANDLE> pass;
+    DWORD hf = 0;
+    if (out && out != INVALID_HANDLE_VALUE && GetFileType(out) == FILE_TYPE_DISK && GetHandleInformation(out, &hf) && (hf & HANDLE_FLAG_INHERIT)) {
+        pass.push_back(out);
+        if (err && err != out && err != INVALID_HANDLE_VALUE && GetHandleInformation(err, &hf) && (hf & HANDLE_FLAG_INHERIT)) pass.push_back(err);
+    }
+    std::vector<char> attrBuf;
+    BOOL inherit = FALSE; DWORD flags = 0;
+    if (!pass.empty()) {
+        SIZE_T sz = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &sz);
+        attrBuf.resize(sz);
+        auto* al = (LPPROC_THREAD_ATTRIBUTE_LIST)attrBuf.data();
+        if (InitializeProcThreadAttributeList(al, 1, 0, &sz) &&
+            UpdateProcThreadAttribute(al, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, pass.data(), pass.size() * sizeof(HANDLE), nullptr, nullptr)) {
+            si.lpAttributeList = al;
+            si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            si.StartupInfo.hStdOutput = out; si.StartupInfo.hStdError = pass.size() > 1 ? err : out;
+            si.StartupInfo.hStdInput = nullptr;
+            inherit = TRUE; flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW;
+        }
+    }
+    const BOOL started = CreateProcessW(self, &cmd[0], nullptr, nullptr, inherit, flags, nullptr, nullptr,
+                                        &si.StartupInfo, &pi);
+    if (si.lpAttributeList) DeleteProcThreadAttributeList(si.lpAttributeList);
+    if (!started) return;
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     fflush(nullptr);

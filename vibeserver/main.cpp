@@ -80,6 +80,9 @@
 #include "asndb.h"
 #ifdef _WIN32
 #include "win_usb.h"      // ★ which driver Windows has on each radio, and WinUSB vs the UsbDk borrow
+#include "win_switch.h"   // ★ which TV sticks are OFFERED a switch to SDR (Stuart, 2026-10-26)
+#include "win_dongles.h"  // ★ the offer, the one-prompt helper, the setup page's /vibeserver/windows/ routes
+#include "win_autostart.h"// ★ "Start VibeServer when Windows starts" — the boot task, the sign-in entry, the keeper
 #endif
 #include "proc.h"         // vibeproc::run — the High Detail Maps download (curl, no shell)
 #include "pocket.h"        // ★ the pocket image's hotspot + captive portal — inert without its marker
@@ -808,6 +811,12 @@ static bool haveServiceManager() {
  *   and worth fixing later, but it is not what was broken.
  */
 static std::vector<pid_t> g_radioKids;
+#ifdef _WIN32
+/* ★ Windows: which serial each of g_radioKids serves (same index), so ONE radio can be started after a TV stick is
+ *  switched to SDR, or stopped before it is given back — without restarting the others. */
+static std::vector<std::string> g_radioKidSerials;
+static std::mutex g_radioKidsMtx;
+#endif
 
 /** ★★★ ASK NICELY, THEN INSIST. A radio process that will not go leaves the SDR claimed and the
  *      terminal full of its DSP log — precisely what tgcfabian hit: Ctrl-C returned his shell while
@@ -927,7 +936,9 @@ static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv)
                                                        "--radio-serial", serial, "--serve" });
             if (pid < 0) { std::fprintf(stderr, "VibeServer: could not start the process for %s\n", serial.c_str()); continue; }
             std::printf("  started radio %s (pid %d)\n", serial.c_str(), (int)pid);
+            std::lock_guard<std::mutex> lk(g_radioKidsMtx);
             g_radioKids.push_back(pid);
+            g_radioKidSerials.push_back(serial);
         }
     }
 #else
@@ -982,6 +993,40 @@ static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv)
 #endif
 }
 
+
+#ifdef _WIN32
+/** ★ Windows: start (or stop) the process for ONE radio — after a TV stick is switched to SDR, or before it is given
+ *  back. The same command line superviseRadios uses, inside the same Job Object. */
+static bool startRadioProcess(const std::string& serial) {
+    {
+        std::lock_guard<std::mutex> lk(g_radioKidsMtx);
+        for (size_t i = 0; i < g_radioKidSerials.size(); i++)
+            if (g_radioKidSerials[i] == serial && g_radioKids[i] > 0 && vibeproc::waitChild(g_radioKids[i], 0) == -2) return true;
+    }
+    static std::once_flag reapOnce;
+    std::call_once(reapOnce, [] { std::atexit(reapRadios); });
+    const std::string me = selfExePath();
+    const pid_t pid = vibeproc::spawnInherit({ me, "--radio-serial", serial, "--serve" });
+    if (pid < 0) { std::fprintf(stderr, "VibeServer: could not start the process for %s\n", serial.c_str()); return false; }
+    std::printf("  started radio %s (pid %d)\n", serial.c_str(), (int)pid);
+    std::lock_guard<std::mutex> lk(g_radioKidsMtx);
+    g_radioKids.push_back(pid);
+    g_radioKidSerials.push_back(serial);
+    return true;
+}
+static void stopRadioProcess(const std::string& serial) {
+    std::vector<pid_t> stop;
+    {
+        std::lock_guard<std::mutex> lk(g_radioKidsMtx);
+        for (size_t i = 0; i < g_radioKidSerials.size(); i++)
+            if (g_radioKidSerials[i] == serial && g_radioKids[i] > 0) { stop.push_back(g_radioKids[i]); g_radioKids[i] = -1; }
+    }
+    // ★ Its normal stop (CTRL_BREAK = its SIGTERM) closes the dongle; then the same two seconds as reapRadios.
+    for (pid_t p : stop) vibeproc::askToStop(p);
+    for (pid_t p : stop) if (vibeproc::waitChild(p, 2000) == -2) { vibeproc::killChild(p); vibeproc::waitChild(p, -1); }
+    if (!stop.empty()) std::printf("  stopped radio %s\n", serial.c_str());
+}
+#endif
 
 /** ★ Small and local on purpose: the shim has one, but it is a private member of an internal
  *  class, and reaching into that to save nine lines would couple the daemon to its internals. */
@@ -1555,6 +1600,13 @@ int main(int argc, char** argv) {
     vibe_win_startup();
     ::SetConsoleOutputCP(CP_UTF8);
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // ★ a log, not a report: each line out as it is written
+    /* ★★★ THE ELEVATED HELPER AND THE KEEPER ARE THIS SAME .EXE, AND THEY ARE NOT A SERVER (2026-10-26).
+     *  --winusb-bind / --winusb-giveback / --autostart-set: the copy Windows started after its ONE permission prompt —
+     *  it does that one job (win_dongles.cpp: helperMain), reports over the asking server's pipe, and exits. Nothing
+     *  else on its command line is accepted. --autostart boot|signin: the keeper the boot task or the sign-in entry
+     *  runs, which keeps `vibeserver --serve` running (win_autostart.cpp). */
+    if (vibewin::isHelperInvocation(argc, argv)) return vibewin::helperMain(argc, argv);
+    if (argc >= 2 && !std::strcmp(argv[1], "--autostart")) return vibewin::keeperMain(argc, argv);
     /* ★★★ THE USB PATH, BEFORE ANY RADIO LIBRARY MAKES A libusb CONTEXT (windows/win_usb.h): a dongle already
      *     on WinUSB/libusbK/libusb0 is used as it is; otherwise, with UsbDk installed, it is BORROWED for this
      *     process's life and handed back on exit. One line per radio says which, in the owner's words. */
@@ -1719,7 +1771,24 @@ int main(int argc, char** argv) {
             std::string werr;
             vsconfig::saveServer(g_configPath, srv, werr);
         }
-        if (!haveCfg && vibepocket::enabled() && wantSerial.empty()) {
+        /* ★★★ WINDOWS STARTS AS A NEW SERVER TOO (2026-10-26) — `vibeserver --serve` (or no arguments) with no
+         *  settings yet: Full mode, a front door, the setup page. Without this a PC whose only dongle is still a TV
+         *  stick stopped with "no SDR found" — and the setup page is exactly where the stick is offered a switch. A run
+         *  that names a radio (`--device 0 …`) keeps its old meaning: that radio, directly. */
+        bool winFresh = false;
+#ifdef _WIN32
+        {
+            bool serveOnly = true;
+            for (int k = 1; k < argc; k++) {
+                const std::string a = argv[k];
+                if (a == "--serve") continue;
+                if (a == "--admin-pass" && k + 1 < argc) { k++; continue; }
+                serveOnly = false;
+            }
+            winFresh = serveOnly;
+        }
+#endif
+        if (!haveCfg && (vibepocket::enabled() || winFresh) && wantSerial.empty()) {
             struct stat cst{};
             const bool existed = ::stat(g_configPath.c_str(), &cst) == 0;
             srv = vsconfig::ServerConfig{};
@@ -1729,6 +1798,10 @@ int main(int argc, char** argv) {
             std::string werr;
             if (vsconfig::saveServer(g_configPath, srv, werr)) {
                 haveCfg = true; err.clear();
+                if (winFresh && !vibepocket::enabled())
+                    std::fprintf(stderr, "VibeServer: no settings yet (%s) — starting as a new server; set it up at "
+                                         "http://localhost:%d/setup\n", g_configPath.c_str(), srv.port ? srv.port : 48000);
+                else
                 std::fprintf(stderr, "VibeServer: pocket — %s; starting as a NEW box so it can be set up "
                                      "again from a phone\n",
                              existed ? "the settings could not be read (nor their backup)" : "no settings yet");
@@ -1882,6 +1955,23 @@ int main(int argc, char** argv) {
         }
     }
     if (!parse(argc, argv, o)) return 0;
+#ifdef _WIN32
+    /* ★★ WINDOWS: THE ADMIN PASSWORD GIVEN AT THE FIRST RUN BELONGS IN THE SETTINGS. `vibeserver --serve --admin-pass …`
+     *  is how a Windows server is set up today (no TUI), and "Start when Windows starts" runs `--serve` with NO
+     *  arguments — so a password that lived only on that first command line would leave the boot-started server with
+     *  none. Written once, only when the file has none; a password already set is never replaced from here. */
+    if (!o.radioGiven && hadConfigFile && !o.adminPass.empty() && g_serverConfig.adminPass.empty()) {
+        vsconfig::ServerConfig next; std::string werr;
+        if (!vsconfig::loadServer(g_configPath, next, werr)) next = g_serverConfig;
+        if (next.adminPass.empty()) {
+            next.adminPass = o.adminPass;
+            if (vsconfig::saveServer(g_configPath, next, werr)) {
+                g_serverConfig = next;
+                std::printf("VibeServer: admin password stored in %s (it was given on the command line)\n", g_configPath.c_str());
+            }
+        }
+    }
+#endif
     // What the server is ACTUALLY running, flags included — this is what the setup page reads.
     g_runtimeConfig = cfg;
     configFromOpts(o, g_runtimeConfig);
@@ -2712,6 +2802,72 @@ int main(int argc, char** argv) {
     // the FRONT DOOR of a box carrying the image's marker; on every other install this is skipped and
     // the shim has no handler, so none of /vibeserver/pocket/* or the captive portal exists.
     // See pocket.h and docs/POCKET-VIBESERVER-PI3A.md.
+#ifdef _WIN32
+    // ── ★★★ WINDOWS: THE TV-STICK SWITCH AND START-AT-BOOT (Stuart, 2026-10-26) ──────────────────────────────────
+    // The front door only (a radio process never offers anything). The routes ride the daemon HTTP hook the pocket
+    // image uses — the two never meet on one machine. See windows/win_dongles.h for the whole flow.
+    if (!o.radioGiven) {
+        LocalSdrShim::setPocketHttpHandler([](const LocalSdrShim::PocketHttpRequest& in,
+                                              LocalSdrShim::PocketHttpReply& out) -> bool {
+            int code = 200; std::string status, body;
+            if (!vibewin::handleWindowsHttp(in.method, in.path, in.body, in.adminOk, code, status, body)) return false;
+            out.code = code; out.status = status; out.contentType = "application/json"; out.body = body;
+            return true;
+        });
+        vibewin::DongleHooks hooks;
+        hooks.port = g_serverConfig.port > 0 ? g_serverConfig.port : 48000;
+        // ★ Counted per serial, because stock dongles all say "00000001": a second one appearing is still news.
+        hooks.rtlSerials = [] {
+            std::vector<std::string> out;
+            for (const auto& d : vibe::detectRadios()) if (d.driver == "rtlsdr") out.push_back(d.serial);
+            return out;
+        };
+        hooks.afterSwitch = [](const std::vector<std::string>& fresh) -> std::string {
+            vsconfig::ServerConfig next; std::string err;
+            if (!vsconfig::loadServer(g_configPath, next, err)) next = g_serverConfig;
+            const auto detected = vibe::detectRadios();
+            std::string said;
+            bool changed = false;
+            for (const auto& serial : fresh) {
+                if (!vsconfig::validSerial(serial)) { said += "It reports no usable serial — give it one in the setup page. "; continue; }
+                vsconfig::RadioConfig* r = nullptr;
+                for (auto& x : next.radios) if (x.serial == serial) { r = &x; break; }
+                if (r) {
+                    // ★ Switched back after a Give back: its settings were kept, paused. Serve it again at once.
+                    if (!r->enabled) { r->enabled = true; changed = true; }
+                    if (r->configured) { said += "Its settings were kept and it is on the air again. "; startRadioProcess(serial); }
+                    else said += "Set it up in its tab below. ";
+                    continue;
+                }
+                int same = 0; std::string drv, name;
+                for (const auto& d : detected) if (d.serial == serial) { same++; drv = d.driver; name = d.name; }
+                if (same > 1) { said += "Another dongle answers to serial " + serial + " — give one a new serial (Change this dongle's serial). "; continue; }
+                if (vsconfig::applySdrChange(next, "add", serial, "", drv.empty() ? "rtlsdr" : drv, name, err)) {
+                    changed = true; said += "Added as a radio — set it up in its tab below. ";
+                } else said += err + ". ";
+            }
+            if (changed) {
+                if (vsconfig::saveServer(g_configPath, next, err)) g_serverConfig = next;
+                else said += "(The settings could not be saved: " + err + ") ";
+            }
+            return said;
+        };
+        hooks.releaseForGiveBack = [](const std::string& serial) {
+            if (serial.empty()) return;
+            vsconfig::ServerConfig next; std::string err;
+            if (!vsconfig::loadServer(g_configPath, next, err)) next = g_serverConfig;
+            for (auto& r : next.radios)
+                if (r.serial == serial && r.enabled) {
+                    // ★ Paused, not removed: its settings wait in case it is switched back.
+                    r.enabled = false;
+                    if (vsconfig::saveServer(g_configPath, next, err)) g_serverConfig = next;
+                    break;
+                }
+            stopRadioProcess(serial);
+        };
+        vibewin::startDongleWatch(hooks);
+    }
+#endif
     if (!o.radioGiven && vibepocket::enabled()) {
         LocalSdrShim::setPocketHttpHandler([](const LocalSdrShim::PocketHttpRequest& in,
                                               LocalSdrShim::PocketHttpReply& out) -> bool {

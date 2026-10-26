@@ -755,14 +755,20 @@ target_link_libraries(vibeserver PRIVATE vibeserver_core)
 if(WIN32)
   vibe_win_resources(vibeserver "VibeServer — SDR server" "${CMAKE_CURRENT_SOURCE_DIR}/windows/vibeserver.manifest")
   # ★★ Which driver Windows has on each radio, and the USB path (WinUSB / UsbDk borrow) — windows/win_usb.h.
-  target_sources(vibeserver_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_usb.cpp")
+  target_sources(vibeserver_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_usb.cpp"
+    # ★★★ The TV-stick switch (one UAC prompt, Microsoft's in-box winusb.inf) and start-at-boot — Stuart, 2026-10-26.
+    "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_switch.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_bind.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_autostart.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_dongles.cpp")
   target_include_directories(vibeserver_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/windows"
                              "${VIBE_DEPS_PREFIX}/include/libusb-1.0")
   target_link_libraries(vibeserver_core PUBLIC version)
   # ★★★ vibe-usbprobe.exe — Milestone 1's driver test (docs/WINDOWS-M1-TEST.md). Its own small program,
   #     not a mode of the server: it needs administrator rights for one step and the server never does.
   add_executable(vibe-usbprobe "${CMAKE_CURRENT_SOURCE_DIR}/windows/usbprobe.cpp"
-                               "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_usb.cpp")
+                               "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_usb.cpp"
+                               "${CMAKE_CURRENT_SOURCE_DIR}/windows/win_bind.cpp")
   target_include_directories(vibe-usbprobe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/windows" "${RTLSDR_INC}"
                              "${VIBE_DEPS_PREFIX}/include/libusb-1.0")
   target_compile_definitions(vibe-usbprobe PRIVATE VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}")
@@ -773,6 +779,10 @@ if(WIN32)
   add_executable(test-fd-passing-win "${CMAKE_CURRENT_SOURCE_DIR}/windows/test/test-fd-passing-win.cpp"
                                      "${CPP_DIR}/fd_passing.cpp")
   target_include_directories(test-fd-passing-win PRIVATE "${CPP_DIR}")
+  # ★★ The switch's rules (which sticks are offered, what the elevated helper refuses) and start-at-boot's pure parts,
+  #    with made-up devices — no USB, no admin, runs under Wine.
+  add_executable(test-win-switch "${CMAKE_CURRENT_SOURCE_DIR}/windows/test/test-win-switch.cpp")
+  target_link_libraries(test-win-switch PRIVATE vibeserver_core)
 endif()
 
 # ★★ THE RADIO-LIST API, UNDER TEST. Unlike the tests in scripts/run-tests.sh — which compile a

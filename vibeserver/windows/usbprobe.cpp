@@ -10,6 +10,7 @@
 // ★ Commands: list · usbdk · report · stream · cycle · bind · giveback   (help: no arguments)
 #ifdef _WIN32
 #include "win_usb.h"
+#include "win_bind.h"
 
 #include <setupapi.h>
 #include <cfgmgr32.h>
@@ -313,8 +314,6 @@ int cmdCycle(const Opts& o) {
 // ★★ What M1 has to find out is whether Windows lets code pick that driver for a node in another class
 //    (state a2, the TV driver) or with no driver (a1). So every attempt is reported as it is made.
 
-static const wchar_t* kVibeIfaceGuid = L"{4E0D5B8A-6A43-4C2B-9E61-56A1D3C0B7F2}";  // ★ VibeServer's WinUSB interface
-
 std::wstring stateFile() {
     wchar_t pd[MAX_PATH] = L"C:\\ProgramData";
     GetEnvironmentVariableW(L"ProgramData", pd, MAX_PATH);
@@ -329,58 +328,7 @@ const UsbNode* pickRtl(const std::vector<UsbNode>& nodes, int index) {
     return nullptr;
 }
 
-bool openDev(const std::string& inst, HDEVINFO& set, SP_DEVINFO_DATA& d) {
-    set = SetupDiCreateDeviceInfoList(nullptr, nullptr);
-    d = SP_DEVINFO_DATA{}; d.cbSize = sizeof d;
-    if (set == INVALID_HANDLE_VALUE) return false;
-    if (!SetupDiOpenDeviceInfoW(set, widen(inst).c_str(), nullptr, 0, &d)) {
-        say("!! SetupDiOpenDeviceInfo failed: error %lu\n", GetLastError());
-        SetupDiDestroyDeviceInfoList(set); return false;
-    }
-    return true;
-}
-
-/** Look through a driver list for Windows' "WinUsb Device" (winusb.inf). */
-bool findWinUsb(HDEVINFO set, SP_DEVINFO_DATA& d, DWORD type, SP_DRVINFO_DATA_W& out, const char* how) {
-    int listed = 0;
-    for (DWORD i = 0; ; ++i) {
-        SP_DRVINFO_DATA_W drv{}; drv.cbSize = sizeof drv;
-        if (!SetupDiEnumDriverInfoW(set, &d, type, i, &drv)) break;
-        ++listed;
-        std::vector<char> det(8192);
-        auto* dd = (SP_DRVINFO_DETAIL_DATA_W*)det.data(); dd->cbSize = sizeof(SP_DRVINFO_DETAIL_DATA_W);
-        std::string inf;
-        if (SetupDiGetDriverInfoDetailW(set, &d, &drv, dd, (DWORD)det.size(), nullptr)) inf = narrow(dd->InfFileName);
-        std::string lower = inf; for (char& c : lower) c = (char)tolower((unsigned char)c);
-        const std::string desc = narrow(drv.Description);
-        if (lower.find("winusb.inf") != std::string::npos || desc == "WinUsb Device") {
-            say("  %s: found \"%s\" by %s in %s\n", how, desc.c_str(), narrow(drv.MfgName).c_str(), inf.c_str());
-            out = drv;
-            return true;
-        }
-    }
-    say("  %s: %d driver(s) listed, none of them WinUsb Device\n", how, listed);
-    return false;
-}
-
-void restartDevice(HDEVINFO set, SP_DEVINFO_DATA& d) {
-    SP_PROPCHANGE_PARAMS pc{};
-    pc.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
-    pc.ClassInstallHeader.InstallFunction = DIF_PROPERTYCHANGE;
-    pc.StateChange = DICS_PROPCHANGE; pc.Scope = DICS_FLAG_GLOBAL;
-    if (SetupDiSetClassInstallParamsW(set, &d, &pc.ClassInstallHeader, sizeof pc))
-        SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, set, &d);
-}
-
-/** ★ DiInstallDevice / DiUninstallDevice, from newdev.dll at run time: llvm-mingw ships no import library for it
- *  on ARM64, and loading it by name keeps both builds the same. Both take the WIDE driver record. */
-typedef BOOL (WINAPI *DiInstall_t)(HWND, HDEVINFO, PSP_DEVINFO_DATA, void*, DWORD, PBOOL);
-typedef BOOL (WINAPI *DiUninstall_t)(HWND, HDEVINFO, PSP_DEVINFO_DATA, DWORD, PBOOL);
-template <class F> F diFn(const char* name) {
-    static HMODULE m = LoadLibraryExW(L"newdev.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    return m ? (F)(void*)GetProcAddress(m, name) : nullptr;
-}
-
+// ★★ The SAME code vibeserver.exe's SWITCH runs (win_bind.cpp) — the probe only adds the report around it.
 int cmdBind(const Opts& o) {
     say("== bind: Windows' own WinUSB onto RTL-SDR #%d\n", o.index);
     const auto nodes = scan();
@@ -395,66 +343,13 @@ int cmdBind(const Opts& o) {
         std::fprintf(f, "%s\n%s\n%s\n%s\n", n->instanceId.c_str(), n->service.c_str(), n->infPath.c_str(), n->driverDesc.c_str());
         std::fclose(f);
     }
-    HDEVINFO set; SP_DEVINFO_DATA d;
-    if (!openDev(n->instanceId, set, d)) return 1;
-    // 1. ★★ The interface GUID FIRST: winusb.sys registers a device interface only if DeviceInterfaceGUIDs is
-    //       there when it starts, and libusb finds a WinUSB device only through that interface.
-    if (HKEY k = SetupDiCreateDevRegKeyW(set, &d, DICS_FLAG_GLOBAL, 0, DIREG_DEV, nullptr, nullptr); k != INVALID_HANDLE_VALUE) {
-        std::wstring v = std::wstring(kVibeIfaceGuid) + L'\0' + L'\0';
-        const LONG e = RegSetValueExW(k, L"DeviceInterfaceGUIDs", 0, REG_MULTI_SZ, (const BYTE*)v.data(), (DWORD)(v.size() * sizeof(wchar_t)));
-        RegCloseKey(k);
-        say("  DeviceInterfaceGUIDs %s\n", e == ERROR_SUCCESS ? "written" : ("NOT written, error " + std::to_string(e)).c_str());
-    } else say("  !! could not open the device's registry key (error %lu)\n", GetLastError());
-    // 2. Find "WinUsb Device" — three ways, reported in turn.
-    wchar_t win[MAX_PATH]; GetWindowsDirectoryW(win, MAX_PATH);
-    const std::wstring inf = std::wstring(win) + L"\\INF\\winusb.inf";
-    SP_DRVINFO_DATA_W drv{}; drv.cbSize = sizeof drv;
-    bool found = false;
-    const DWORD types[2] = { SPDIT_CLASSDRIVER, SPDIT_COMPATDRIVER };
-    const char* names[2] = { "winusb.inf as a class list (\"Have Disk\")", "winusb.inf as a compatible list" };
-    for (int t = 0; t < 2 && !found; ++t) {
-        SP_DEVINSTALL_PARAMS_W ip{}; ip.cbSize = sizeof ip;
-        SetupDiGetDeviceInstallParamsW(set, &d, &ip);
-        ip.Flags |= DI_ENUMSINGLEINF;
-        ip.FlagsEx |= DI_FLAGSEX_ALLOWEXCLUDEDDRVS;
-        wcsncpy(ip.DriverPath, inf.c_str(), MAX_PATH - 1);
-        SetupDiSetDeviceInstallParamsW(set, &d, &ip);
-        if (!SetupDiBuildDriverInfoList(set, &d, types[t])) { say("  %s: list failed, error %lu\n", names[t], GetLastError()); continue; }
-        found = findWinUsb(set, d, types[t], drv, names[t]);
-        if (!found) SetupDiDestroyDriverInfoList(set, &d, types[t]);
-    }
-    if (!found) {
-        SP_DEVINSTALL_PARAMS_W ip{}; ip.cbSize = sizeof ip;
-        SetupDiGetDeviceInstallParamsW(set, &d, &ip);
-        ip.Flags &= ~DI_ENUMSINGLEINF; ip.DriverPath[0] = 0;
-        ip.FlagsEx |= DI_FLAGSEX_ALLOWEXCLUDEDDRVS;
-        SetupDiSetDeviceInstallParamsW(set, &d, &ip);
-        if (SetupDiBuildDriverInfoList(set, &d, SPDIT_CLASSDRIVER))
-            found = findWinUsb(set, d, SPDIT_CLASSDRIVER, drv, "every INF of the device's own class");
-    }
-    if (!found) {
-        say("RESULT: FAIL — Windows offered no way to pick WinUsb Device for this node from code.\n"
-            "        Record this, then try the manual Device Manager path on the test sheet.\n");
-        SetupDiDestroyDeviceInfoList(set);
-        return 1;
-    }
-    // 3. Install it on this one node.
-    if (!SetupDiSetSelectedDriverW(set, &d, &drv)) say("  SetupDiSetSelectedDriver: error %lu\n", GetLastError());
-    BOOL reboot = FALSE;
-    // ★ newdev.dll has ONE DiInstallDevice and it reads the WIDE driver record.
-    auto diInstall = diFn<DiInstall_t>("DiInstallDevice");
-    const BOOL ok = diInstall && diInstall(nullptr, set, &d, &drv, DIIDFLAG_NOFINISHINSTALLUI, &reboot);
-    const DWORD err = ok ? 0 : GetLastError();
-    say("  DiInstallDevice: %s%s\n", ok ? "OK" : ("error " + std::to_string(err)).c_str(), reboot ? " — Windows asks for a REBOOT" : "");
-    if (ok) restartDevice(set, d);
-    SetupDiDestroyDeviceInfoList(set);
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    const auto after = scan();
-    if (const UsbNode* m = pickRtl(after, o.index))
-        say("now: %s [service \"%s\", %s]\n", driverName(m->driver), m->service.c_str(), m->infPath.c_str());
+    const BindResult r = bindWinUsb(n->instanceId, [](const std::string& l) { say("%s\n", l.c_str()); });
     sayLibusbView(false);
-    say("RESULT: %s\n", ok ? "bound (check the libusb line above says open OK, then run `stream`)" : "FAIL — see the error above");
-    return ok ? 0 : 1;
+    say("RESULT: %s%s\n", r.ok ? ("bound by way " + r.method + " (check the libusb line above says open OK, then run `stream`)").c_str()
+                              : ("FAIL — " + r.error).c_str(), r.reboot ? " — RESTART WINDOWS to finish" : "");
+    if (!r.ok) say("        Record this. Device Manager's manual path (test sheet, DIAGNOSTIC only) tells us whether\n"
+                   "        Windows offers WinUsb Device for this dongle at all.\n");
+    return r.ok ? 0 : 1;
 }
 
 int cmdGiveback(const Opts& o) {
@@ -472,26 +367,11 @@ int cmdGiveback(const Opts& o) {
     }
     if (inst.empty()) { say("!! nothing recorded and no RTL-SDR #%d plugged in\n", o.index); return 1; }
     say("device: %s\n  before bind it had: service \"%s\" %s %s\n", inst.c_str(), origSvc.c_str(), origInf.c_str(), origDesc.c_str());
-    HDEVINFO set; SP_DEVINFO_DATA d;
-    if (!openDev(inst, set, d)) return 1;
-    // ★ Uninstall THIS node (its driver choice and registry with it), then a rescan: Windows chooses afresh,
-    //   which is the TV driver if its package is installed, or none. winusb.inf matches no RTL hardware id,
-    //   so it is never chosen again by itself.
-    BOOL reboot = FALSE;
-    auto diUninstall = diFn<DiUninstall_t>("DiUninstallDevice");
-    const BOOL ok = diUninstall && diUninstall(nullptr, set, &d, 0, &reboot);
-    say("  DiUninstallDevice: %s%s\n", ok ? "OK" : ("error " + std::to_string(GetLastError())).c_str(), reboot ? " — Windows asks for a REBOOT" : "");
-    SetupDiDestroyDeviceInfoList(set);
-    DEVINST root = 0;
-    if (CM_Locate_DevNodeW(&root, nullptr, CM_LOCATE_DEVNODE_NORMAL) == CR_SUCCESS)
-        say("  rescan: %s\n", CM_Reenumerate_DevNode(root, CM_REENUMERATE_SYNCHRONOUS) == CR_SUCCESS ? "done" : "failed");
-    std::this_thread::sleep_for(std::chrono::seconds(3));
-    const auto after = scan();
-    const UsbDkState dk = usbdk();
-    sayNodes(after, dk);
-    if (ok) DeleteFileW(stateFile().c_str());
-    say("RESULT: %s\n", ok ? "given back (compare the driver above with what it had before the bind)" : "FAIL");
-    return ok ? 0 : 1;
+    const BindResult r = giveBack(inst, [](const std::string& l) { say("%s\n", l.c_str()); });
+    sayNodes(scan(), usbdk());
+    if (r.ok) DeleteFileW(stateFile().c_str());
+    say("RESULT: %s\n", r.ok ? "given back (compare the driver above with what it had before the bind)" : ("FAIL — " + r.error).c_str());
+    return r.ok ? 0 : 1;
 }
 
 /** bind/giveback need administrator rights: ask for them ONCE (the UAC prompt), run the same command

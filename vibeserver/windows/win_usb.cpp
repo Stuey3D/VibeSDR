@@ -15,6 +15,15 @@
 
 namespace vibewin {
 
+const wchar_t* const kVibeIfaceGuid = L"{4E0D5B8A-6A43-4C2B-9E61-56A1D3C0B7F2}";
+
+std::string serialFromInstanceId(const std::string& id) {
+    const size_t cut = id.find_last_of('\\');
+    if (cut == std::string::npos || cut + 1 >= id.size()) return {};
+    const std::string last = id.substr(cut + 1);
+    return last.find('&') == std::string::npos ? last : std::string();
+}
+
 std::string narrow(const std::wstring& w) {
     if (w.empty()) return {};
     const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
@@ -76,8 +85,6 @@ bool identifyRadio(unsigned vid, unsigned pid, Kind& kind, std::string& model) {
     return false;
 }
 
-namespace {
-
 Driver classifyDriver(const std::string& service, const std::string& cls) {
     const std::string s = upper(service);
     if (s.empty())         return Driver::None;
@@ -92,6 +99,8 @@ Driver classifyDriver(const std::string& service, const std::string& cls) {
         return Driver::TvTuner;
     return Driver::Other;
 }
+
+namespace {
 
 bool fileExists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
 
@@ -157,6 +166,21 @@ std::vector<UsbNode> scan() {
         }
         n.driver = classifyDriver(n.service, n.className);
         n.compositeParent = n.mi < 0 && n.driver == Driver::Composite;
+        // ★ The parent (for an interface) and the serial Windows keeps in the id — what the offer names it by.
+        DEVINST par = 0;
+        if (n.mi >= 0 && CM_Get_Parent(&par, d.DevInst, 0) == CR_SUCCESS) {
+            wchar_t pid[MAX_DEVICE_ID_LEN + 1] = {0};
+            if (CM_Get_Device_IDW(par, pid, MAX_DEVICE_ID_LEN, 0) == CR_SUCCESS) n.parentId = narrow(pid);
+        }
+        n.serial = serialFromInstanceId(n.mi >= 0 ? n.parentId : n.instanceId);
+        // ★★ OURS = WinUSB with VibeServer's interface GUID. Read-only (KEY_READ): the scan never needs admin.
+        HKEY k = SetupDiOpenDevRegKey(set, &d, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
+        if (k != INVALID_HANDLE_VALUE) {
+            wchar_t g[1024] = {0}; DWORD sz = sizeof g - 2 * sizeof(wchar_t), ty = 0;
+            if (RegQueryValueExW(k, L"DeviceInterfaceGUIDs", nullptr, &ty, (LPBYTE)g, &sz) == ERROR_SUCCESS)
+                for (const wchar_t* p = g; *p; p += wcslen(p) + 1) if (!_wcsicmp(p, kVibeIfaceGuid)) n.ourInterface = true;
+            RegCloseKey(k);
+        }
         out.push_back(n);
     }
     SetupDiDestroyDeviceInfoList(set);
@@ -175,17 +199,16 @@ std::string verdict(const UsbNode& n, bool usbdkUsable) {
         case Driver::Libusb0: return what + " — using libusb-win32 (libusb0). Ready.";
         case Driver::UsbDk:   return what + " — borrowed via UsbDk right now. Ready.";
         case Driver::None:
-            return what + (usbdkUsable ? " — no driver; VibeServer will BORROW it via UsbDk. Ready."
-                                       : " — no driver yet: needs one-time permission (vibe-usbprobe bind), or UsbDk");
+            return what + (usbdkUsable ? " — no driver; VibeServer will BORROW it via UsbDk (VIBE_USB_BACKEND=usbdk). Ready."
+                                       : " — Windows has no driver for it: the setup page offers to switch it to SDR (one permission prompt)");
         case Driver::TvTuner:
             return what + " — Windows is using it as a TV tuner (" + n.service + ")" +
-                   (usbdkUsable ? "; VibeServer will BORROW it via UsbDk and give it back. Ready."
-                                : "; needs UsbDk (borrow) or vibe-usbprobe bind (switch to WinUSB)");
+                   (usbdkUsable ? "; VibeServer will BORROW it via UsbDk (VIBE_USB_BACKEND=usbdk) and give it back. Ready."
+                                : "; the setup page offers to switch it to SDR (one permission prompt)");
         default:
             if (n.kind != Kind::Rtl && n.driver == Driver::Other)
                 return what + " — on " + n.service + " (" + n.driverDesc + ")";
-            return what + " — on another driver (" + n.service + ")" +
-                   (usbdkUsable ? "; UsbDk can borrow it" : "; needs UsbDk or vibe-usbprobe bind");
+            return what + " — on another driver (" + n.service + "); VibeServer leaves it alone";
     }
 }
 
@@ -225,29 +248,28 @@ Backend chooseBackend(const std::vector<UsbNode>& nodes, const UsbDkState& dk, s
         if (!_stricmp(e, "usbdk")) { why = "VIBE_USB_BACKEND=usbdk"; return Backend::UsbDk; }
         if (!_stricmp(e, "winusb")) { why = "VIBE_USB_BACKEND=winusb"; return Backend::WinUsb; }
     }
+    // ★★★ WinUSB IS THE ROUTE (Stuart, 2026-10-26). UsbDk is no longer chosen by itself, installed or not:
+    //     only VIBE_USB_BACKEND=usbdk (above) turns the borrow on. A TV stick is OFFERED a switch instead.
+    (void)dk;
     bool anyRtl = false, allReady = true;
     for (const auto& n : nodes) {
         if (n.kind != Kind::Rtl || !n.sdrNode) continue;
         anyRtl = true;
         if (n.driver != Driver::WinUsb && n.driver != Driver::LibusbK && n.driver != Driver::Libusb0) allReady = false;
     }
-    if (anyRtl && allReady) { why = "every RTL-SDR is already on a libusb driver — using it as it is"; return Backend::WinUsb; }
-    if (dk.usable()) {
-        why = anyRtl ? "UsbDk is installed — borrowing the RTL-SDR(s) while VibeServer runs"
-                     : "UsbDk is installed (no RTL-SDR plugged in yet)";
-        return Backend::UsbDk;
-    }
-    why = anyRtl ? "UsbDk is not installed — an RTL-SDR on the TV driver needs vibe-usbprobe bind first"
-                 : "no RTL-SDR plugged in; UsbDk not installed";
+    why = !anyRtl ? "no RTL-SDR plugged in yet"
+        : allReady ? "every RTL-SDR is on a libusb driver — using it as it is"
+                   : "an RTL-SDR on the TV driver (or none) is offered a switch in the setup page";
     return Backend::WinUsb;
 }
 
 void applyUsbBackend() {
     const auto nodes = scan();
     const auto dk = usbdk();
+    const bool dkOn = dk.usable() && std::getenv("VIBE_USB_BACKEND") && !_stricmp(std::getenv("VIBE_USB_BACKEND"), "usbdk");
     for (const auto& n : nodes)
         if (n.sdrNode) std::printf("VibeServer: USB  %s (%04x:%04x) — %s\n", n.model.c_str(), n.vid, n.pid,
-                                   verdict(n, dk.usable()).c_str());
+                                   verdict(n, dkOn).c_str());
     std::string why;
     const Backend b = chooseBackend(nodes, dk, why);
     if (b == Backend::UsbDk) {

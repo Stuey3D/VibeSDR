@@ -3,11 +3,12 @@
 // ★★★ STUART'S RULE FOR WINDOWS (2026-10-05): NO ZADIG STEP. An RTL-SDR on the stock DVB-T driver, on no
 //     driver at all, or on a Zadig-replaced driver must all simply work. Three ways in, in this order
 //     (docs/WINDOWS-PORT-PLAN.md §3):
-//       1. already on WinUSB / libusbK / libusb0 (Zadig, SDR#, SDR++ users) → use it as it is;
-//       2. otherwise, UsbDk installed → BORROW the dongle while VibeServer runs, hand it back on exit
-//          (the intended default, if Milestone 1 proves it on Stuart's PC);
-//       3. otherwise → Windows' own in-box WinUSB bound to that one dongle (vibe-usbprobe bind), the
-//          fallback for Windows on ARM or a failed UsbDk test.
+//       1. already on WinUSB / libusbK / libusb0 (Zadig, SDR#, SDR++ users) → use it as it is, silently;
+//       2. ★★★ THE DEFAULT (Stuart, 2026-10-26): a stick Windows is using as a TV tuner (or has no driver
+//          for) is OFFERED in the setup page — "Switch it to SDR?" — and SWITCH puts Microsoft's own in-box
+//          winusb.inf on that ONE device after ONE UAC prompt (win_switch.h, win_bind.h). No Zadig, no
+//          driver or certificate of ours, nothing of Windows' security lowered;
+//       3. UsbDk "borrow" — kept, but OFF unless VIBE_USB_BACKEND=usbdk (no longer the default).
 // ★★ The scan is SetupAPI only: no admin, and it never opens a device — so it sees a dongle that another
 //    program holds, and never says "unplugged" for one that is merely in use (sdr_presence.h's rule).
 // ★ Shared by vibeserver.exe (the choice it logs at start-up) and vibe-usbprobe.exe (the report).
@@ -37,7 +38,14 @@ struct UsbNode {
     Kind        kind = Kind::Other;
     std::string model;               // "Generic RTL2832U OEM" (librtlsdr's own name for it)
     Driver      driver = Driver::None;
+    std::string parentId;            // the composite parent's instance id (for an MI_xx child), else ""
+    std::string serial;              // the USB serial Windows put in the instance id, or "" if it made one up
+    bool        ourInterface = false;// DeviceInterfaceGUIDs carries VibeServer's GUID: WE put WinUSB here
 };
+
+/** ★ VibeServer's WinUSB device-interface GUID — written by the switch, and how a dongle WE switched is told
+ *  apart from one Zadig or SDR# set up (only ours are offered a Give back). */
+extern const wchar_t* const kVibeIfaceGuid;
 
 /** Is this VID:PID a radio we know (RTL-SDR from librtlsdr's own table, Airspy, HackRF, SDRplay)? */
 bool identifyRadio(unsigned vid, unsigned pid, Kind& kind, std::string& model);
@@ -45,10 +53,15 @@ bool identifyRadio(unsigned vid, unsigned pid, Kind& kind, std::string& model);
 /** Every present USB node that belongs to a radio we know, parents and interfaces alike. */
 std::vector<UsbNode> scan();
 
+/** What a bound service (and its setup class) means for us. */
+Driver classifyDriver(const std::string& service, const std::string& className);
+
 const char* kindName(Kind k);
 const char* driverName(Driver d);
 /** The one line VibeServer would show for this radio (plan §3.1). */
 std::string verdict(const UsbNode& n, bool usbdkUsable);
+/** The serial from an instance id's last part, or "" when Windows generated it (it then contains '&'). */
+std::string serialFromInstanceId(const std::string& id);
 
 struct UsbDkState {
     bool        serviceInstalled = false;

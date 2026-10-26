@@ -17705,6 +17705,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/sdr-change", 0) == 0
                 // ★ The pocket image's Wi-Fi + first-run routes — the MACHINE's network, not a radio's.
                 || path0.rfind("/vibeserver/pocket/", 0) == 0
+                // ★ Windows: the TV-stick switch and start-at-boot — the MACHINE's drivers, not a radio's.
+                || path0.rfind("/vibeserver/windows/", 0) == 0
                 || path0.rfind("/vibeserver/benchmark", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
                 || path0.rfind("/vibeserver/conditions", 0) == 0
@@ -18046,7 +18048,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★★★ THE POCKET VIBESERVER'S ROUTES AND ITS CAPTIVE PORTAL — before anything else answers.
          *  Only when the daemon registered a handler (the pocket image's front door), and only for its
          *  own namespace or while its hotspot is up. Everywhere else this is one atomic load. */
-        if (g_vsCaptiveActive.load() || reqPath.rfind("/vibeserver/pocket/", 0) == 0) {
+        /* ★★ AND WINDOWS' /vibeserver/windows/ (2026-10-26) — the same hook, registered by the Windows front door for
+         *  the TV-stick switch and start-at-boot (vibeserver/windows/win_dongles.cpp); never both on one machine. */
+        const bool daemonRoute = reqPath.rfind("/vibeserver/pocket/", 0) == 0 || reqPath.rfind("/vibeserver/windows/", 0) == 0;
+        if (g_vsCaptiveActive.load() || daemonRoute) {
             LocalSdrShim::PocketHttpFn fn;
             { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsPocketHttp; }
             if (fn) {
@@ -18054,7 +18059,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 prq.method = reqLine.substr(0, reqLine.find(' '));
                 prq.path = reqPath; prq.host = hostHeader; prq.peer = sock->peerAddress();
                 prq.viaTunnel = viaTunnel(*sock);
-                if (reqPath.rfind("/vibeserver/pocket/", 0) == 0) {
+                if (daemonRoute) {
                     // ★ The admin proof, exactly as /vibeserver/config does it — lockout and all.
                     std::string secret;
                     { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
