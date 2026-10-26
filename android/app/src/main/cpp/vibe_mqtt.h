@@ -9,6 +9,7 @@
 //   TLS and QoS 1/2 would bring a dependency (the daemon has no TLS stack of its own) for no gain on a LAN.
 // ★ The CODEC is free functions so test-mqtt.cpp can check the bytes against the spec without a broker; the Client wraps
 //   a socket and a reader thread, and reconnects on its own with backoff.
+#include "vibe_sock.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -150,10 +151,10 @@ inline int tcpConnect(const std::string& host, int port, int timeoutMs) {
     freeaddrinfo(res);
     if (rc != 0) {
         pollfd p{fd, POLLOUT, 0};
-        if (::poll(&p, 1, timeoutMs) != 1) { ::close(fd); return -1; }
+        if (::poll(&p, 1, timeoutMs) != 1) { vibesock::close(fd); return -1; }
         int err = 0; socklen_t el = sizeof err;
         getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el);
-        if (err) { ::close(fd); return -1; }
+        if (err) { vibesock::close(fd); return -1; }
     }
     fcntl(fd, F_SETFL, fl);
     int one = 1; setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
@@ -206,7 +207,7 @@ public:
         { std::lock_guard<std::mutex> lk(m_); if (fd_ >= 0) { sendAll(fd_, disconnectPacket()); ::shutdown(fd_, SHUT_RDWR); } }
         if (thread_.joinable()) thread_.join();
         std::lock_guard<std::mutex> lk(m_);
-        if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
+        if (fd_ >= 0) { vibesock::close(fd_); fd_ = -1; }
         connected_ = false;
     }
     bool connected() const { return connected_.load(); }
@@ -282,7 +283,7 @@ private:
             }
         }
         std::lock_guard<std::mutex> lk(m_);
-        ::close(fd); fd_ = -1;
+        vibesock::close(fd); fd_ = -1;
         return acked;
     }
 

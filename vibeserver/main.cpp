@@ -1544,6 +1544,15 @@ static void publishLocation(const Opts& o, const vsmoveloc::Place* mv) {
 
 int main(int argc, char** argv) {
     g_argv = argv;
+#ifdef _WIN32
+    /* ★★ WINDOWS, BEFORE ANYTHING ELSE: Winsock up (no socket works without it), and the console told the
+     *    log is UTF-8 — every line carries an em dash or a ★, which the default OEM code page prints as
+     *    mojibake. The executable's manifest (windows/vibeserver.manifest) makes the process's own code page
+     *    UTF-8 too, so argv, getenv and every fopen() path are UTF-8 exactly as on Linux and macOS. */
+    vibe_win_startup();
+    ::SetConsoleOutputCP(CP_UTF8);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);   // ★ a log, not a report: each line out as it is written
+#endif
     /* ★★ FIRST, so nothing can die unrecorded (2026-10-06): the Pi 2 segfaulted four times in DAB in
      *  one day and left only "status=11/SEGV" — no core could be written. See crash_report.h. */
 #ifdef VIBESERVER_VERSION_STR

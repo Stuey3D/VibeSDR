@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include "vibe_sock.h"   // ★ close / errno / EINPROGRESS / SO_REUSEADDR — the four that differ on Windows
 #include <chrono>
 #include <cstring>
 #include <stdexcept>
@@ -41,7 +42,7 @@ void Socket::closeAfterFlush() {
         if (n <= 0) break;               // EOF or would-block: nothing left worth draining
         drained += (int)n;
     }
-    ::close(fd_); fd_ = -1;
+    vibesock::close(fd_); fd_ = -1;
 }
 
 void Socket::shutdownBoth() {
@@ -51,7 +52,7 @@ void Socket::shutdownBoth() {
 void Socket::close() {
     if (!open_) return;
     open_ = false;
-    if (fd_ >= 0) { ::shutdown(fd_, SHUT_RDWR); ::close(fd_); fd_ = -1; }
+    if (fd_ >= 0) { ::shutdown(fd_, SHUT_RDWR); vibesock::close(fd_); fd_ = -1; }
 }
 
 std::string Socket::peerAddress() {
@@ -113,7 +114,7 @@ int Socket::send(const uint8_t* data, size_t len, const Address*) {
     while (off < len) {
         ssize_t w = ::send(fd_, data + off, len - off, MSG_NOSIGNAL);
         if (w < 0) {
-            if (errno == EINTR) continue;
+            if (vibesock::lastError() == EINTR) continue;
             open_ = false;
             return -1;
         }
@@ -143,12 +144,13 @@ int Socket::recvRaw(uint8_t* data, size_t maxLen, int timeout) {
         struct pollfd pfd { fd_, POLLIN, 0 };
         int pr = ::poll(&pfd, 1, timeout);
         if (pr == 0) return 0;                      // timed out, nothing ready
-        if (pr < 0) { if (errno == EINTR) return 0; open_ = false; return -1; }
+        if (pr < 0) { if (vibesock::lastError() == EINTR) return 0; open_ = false; return -1; }
         if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) { open_ = false; return -1; }
     }
     ssize_t r = ::recv(fd_, data, maxLen, 0);
     if (r < 0) {
-        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+        const int e = vibesock::lastError();
+        if (e == EINTR || e == EAGAIN || e == EWOULDBLOCK) return 0;
         open_ = false;
         return -1;
     }
@@ -208,7 +210,7 @@ Listener::~Listener() { stop(); }
 void Listener::stop() {
     if (!open_) return;
     open_ = false;
-    if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
+    if (fd_ >= 0) { vibesock::close(fd_); fd_ = -1; }
 }
 
 std::shared_ptr<Socket> Listener::accept(Address*, int timeout) {
@@ -256,6 +258,9 @@ std::shared_ptr<Socket> Listener::accept(Address*, int timeout) {
 #elif defined(TCP_RXT_CONNDROPTIME) // macOS/BSD: seconds of retransmit before dropping
     int rxt = 10;
     ::setsockopt(cfd, IPPROTO_TCP, TCP_RXT_CONNDROPTIME, &rxt, sizeof(rxt));
+#elif defined(TCP_MAXRT)           // ★ Windows: seconds of retransmission before the connection is dropped
+    int maxrt = 10;
+    ::setsockopt(cfd, IPPROTO_TCP, TCP_MAXRT, &maxrt, sizeof(maxrt));
 #endif
     return std::make_shared<Socket>(cfd);
 }
@@ -280,19 +285,19 @@ std::shared_ptr<Listener> listen(const std::string& host, int port) {
         int fd6 = ::socket(AF_INET6, SOCK_STREAM, 0);
         if (fd6 >= 0) {
             { const int fl = ::fcntl(fd6, F_GETFD, 0); if (fl >= 0) ::fcntl(fd6, F_SETFD, fl | FD_CLOEXEC); }
-            int one = 1, v6only = named6 ? 1 : 0;
-            ::setsockopt(fd6, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+            int v6only = named6 ? 1 : 0;
+            vibesock::reuseListenAddr(fd6);
             const bool dual = ::setsockopt(fd6, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) == 0;
             struct sockaddr_in6 a {};
             a.sin6_family = AF_INET6;
             a.sin6_port   = htons((uint16_t)port);
             a.sin6_addr   = named6 ? a6named : in6addr_any;
             if ((dual || named6) && ::bind(fd6, (struct sockaddr*)&a, sizeof(a)) == 0) {
-                if (::listen(fd6, 8) < 0) { ::close(fd6); throw std::runtime_error("listen() failed"); }
+                if (::listen(fd6, 8) < 0) { vibesock::close(fd6); throw std::runtime_error("listen() failed"); }
                 return std::make_shared<Listener>(fd6);
             }
-            const int e = errno;
-            ::close(fd6);
+            const int e = vibesock::lastError();
+            vibesock::close(fd6);
             if (named6 || (dual && e == EADDRINUSE))
                 throw std::runtime_error("bind() failed on " + host + ":" + std::to_string(port));
         } else if (named6) {
@@ -325,19 +330,18 @@ std::shared_ptr<Listener> listen(const std::string& host, int port) {
      *    where the socket-type flag is not. It is set before bind/listen, so there is no window
      *    in which a fork could inherit it. */
     { const int fl = ::fcntl(fd, F_GETFD, 0); if (fl >= 0) ::fcntl(fd, F_SETFD, fl | FD_CLOEXEC); }
-    int one = 1;
-    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    vibesock::reuseListenAddr(fd);
     struct sockaddr_in addr {};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons((uint16_t)port);
     if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1)
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (::bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        ::close(fd);
+        vibesock::close(fd);
         throw std::runtime_error("bind() failed on " + host + ":" + std::to_string(port));
     }
     if (::listen(fd, 8) < 0) {
-        ::close(fd);
+        vibesock::close(fd);
         throw std::runtime_error("listen() failed");
     }
     return std::make_shared<Listener>(fd);
@@ -359,26 +363,26 @@ std::shared_ptr<Socket> connect(const std::string& host, int port, int timeoutMs
         const int flags = ::fcntl(fd, F_GETFL, 0);
         ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
         int r = ::connect(fd, res->ai_addr, res->ai_addrlen);
-        if (r < 0 && errno == EINPROGRESS) {
+        if (r < 0 && vibesock::connectPending(vibesock::lastError())) {
             struct pollfd pfd { fd, POLLOUT, 0 };
             const int pr = ::poll(&pfd, 1, timeoutMs);
             if (pr <= 0) {
-                ::close(fd); ::freeaddrinfo(res);
+                vibesock::close(fd); ::freeaddrinfo(res);
                 throw std::runtime_error("connect() timed out to " + host + ":" + std::to_string(port));
             }
             int soErr = 0; socklen_t len = sizeof(soErr);
             ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &len);
             if (soErr != 0) {
-                ::close(fd); ::freeaddrinfo(res);
+                vibesock::close(fd); ::freeaddrinfo(res);
                 throw std::runtime_error("connect() failed to " + host + ":" + std::to_string(port));
             }
         } else if (r < 0) {
-            ::close(fd); ::freeaddrinfo(res);
+            vibesock::close(fd); ::freeaddrinfo(res);
             throw std::runtime_error("connect() failed to " + host + ":" + std::to_string(port));
         }
         ::fcntl(fd, F_SETFL, flags);
     } else if (::connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-        ::close(fd); ::freeaddrinfo(res);
+        vibesock::close(fd); ::freeaddrinfo(res);
         throw std::runtime_error("connect() failed to " + host + ":" + std::to_string(port));
     }
     ::freeaddrinfo(res);

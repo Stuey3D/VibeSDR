@@ -38,6 +38,7 @@
 // probe again. This is the standard mechanism and it is why the second phone on the
 // network names itself without being told to.
 
+#include "vibe_sock.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -524,6 +525,9 @@ int openSocket() {
     if (fd < 0) return -1;
 
     int on = 1;
+    // ★ Windows: SO_REUSEADDR is exactly the SHARING this needs — Windows' own mDNS (Dnscache) holds
+    //   5353 already, and on Windows this flag is what lets a second socket bind it. Whether Dnscache
+    //   leaves us the queries is for the Windows test sheet (docs/WINDOWS-M1-TEST.md) to say.
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
 #ifdef SO_REUSEPORT
     // Essential: the system's own mDNS daemon is already bound to 5353. Without this we
@@ -536,8 +540,8 @@ int openSocket() {
     a.sin_addr.s_addr = htonl(INADDR_ANY);
     a.sin_port = htons(kPort);
     if (bind(fd, (sockaddr*)&a, sizeof a) < 0) {
-        LOGI("mDNS bind failed: %s", strerror(errno));
-        close(fd);
+        LOGI("mDNS bind failed: %s", strerror(vibesock::lastError()));
+        vibesock::close(fd);
         return -1;
     }
 
@@ -732,7 +736,7 @@ void loop(std::string base, uint32_t addr) {
         host = base + "-" + std::to_string(attempt + 1);
         LOGI("mDNS name taken, trying %s.local", host.c_str());
     }
-    if (!g_run.load()) { close(fd); return; }
+    if (!g_run.load()) { vibesock::close(fd); return; }
 
     g_host = host;
     LOGI("mDNS responder up: %s.local -> %s", host.c_str(),
@@ -955,7 +959,7 @@ void loop(std::string base, uint32_t addr) {
     }
     // ★ Going: say so for the service, so the Discovered lists drop this server now rather than in two minutes.
     toGroup([&](uint32_t a) { return buildGoodbye(selfAt(a)); });
-    close(fd);
+    vibesock::close(fd);
 }
 
 }  // namespace

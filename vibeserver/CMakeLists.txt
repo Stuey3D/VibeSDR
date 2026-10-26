@@ -219,6 +219,17 @@ if(WIN32)
   add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX NOGDI
                           _POSIX_THREAD_SAFE_FUNCTIONS _USE_MATH_DEFINES rtlsdr_STATIC)
   add_link_options(-static)
+  enable_language(RC)
+  # ★ Each .exe carries the manifest (UTF-8 code page, asInvoker) and a version block. Configured, not
+  #   -D'd: windres and quoted strings with spaces do not mix.
+  function(vibe_win_resources tgt desc manifest)
+    set(VIBE_RC_DESC "${desc}")
+    set(VIBE_RC_FILE "${tgt}.exe")
+    set(VIBE_RC_MANIFEST "${manifest}")
+    set(VIBE_RC_VERCOMMA "${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/windows/exe.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/${tgt}.rc" @ONLY)
+    target_sources(${tgt} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/${tgt}.rc")
+  endfunction()
   link_libraries(ws2_32 iphlpapi setupapi cfgmgr32 advapi32 shell32 ole32 bcrypt psapi)
 endif()
 
@@ -741,6 +752,9 @@ target_include_directories(vibeserver_core PUBLIC "${OPUS_INC}")
 target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_OPUS)
 target_link_libraries(vibeserver_core PUBLIC "${OPUS_LIB}")
 target_link_libraries(vibeserver PRIVATE vibeserver_core)
+if(WIN32)
+  vibe_win_resources(vibeserver "VibeServer — SDR server" "${CMAKE_CURRENT_SOURCE_DIR}/windows/vibeserver.manifest")
+endif()
 
 # ★★ THE RADIO-LIST API, UNDER TEST. Unlike the tests in scripts/run-tests.sh — which compile a
 #    single .cpp with a named handful of deps — this one needs the WHOLE core linked (it probes

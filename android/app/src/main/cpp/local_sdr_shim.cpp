@@ -30162,7 +30162,7 @@ void LocalSdrShim::stopLocked() {
     //   can be handed straight to the next socket opened — so the fd is closed once nobody waits on it.
     STOP_STAGE("the hand-off thread");
     joinSafely(impl->handoffThread, "hand-off thread");
-    if (impl->handoffFd >= 0) { ::close(impl->handoffFd); impl->handoffFd = -1; }
+    if (impl->handoffFd >= 0) { vibesock::close(impl->handoffFd); impl->handoffFd = -1; }
     // ★ Leave no stale socket behind: the next process to start would bind() onto a file nothing
     //   is listening on, and every hand-off to it would fail with "connection refused".
     if (!impl->handoffPath.empty()) ::unlink(impl->handoffPath.c_str());
@@ -34363,7 +34363,7 @@ std::string LocalSdrShim::antSwitchSearch(const std::string& host, int port, int
     std::vector<std::string> brokers;
     if (!host.empty()) {
         const int fd = mqtt::tcpConnect(host, port, 1500);
-        if (fd >= 0) { ::close(fd); brokers.push_back(host); }
+        if (fd >= 0) { vibesock::close(fd); brokers.push_back(host); }
     } else {
         std::vector<std::string> cands = { "127.0.0.1" };
         const std::string me = primaryIpv4();
@@ -34377,10 +34377,10 @@ std::string LocalSdrShim::antSwitchSearch(const std::string& host, int port, int
             if (fd < 0) continue;
             fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
             sockaddr_in sa{}; sa.sin_family = AF_INET; sa.sin_port = htons(uint16_t(port));
-            if (inet_pton(AF_INET, a.c_str(), &sa.sin_addr) != 1) { ::close(fd); continue; }
+            if (inet_pton(AF_INET, a.c_str(), &sa.sin_addr) != 1) { vibesock::close(fd); continue; }
             const int rc = ::connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof sa);
-            if (rc == 0) { brokers.push_back(a); ::close(fd); continue; }
-            if (errno != EINPROGRESS) { ::close(fd); continue; }
+            if (rc == 0) { brokers.push_back(a); vibesock::close(fd); continue; }
+            if (!vibesock::connectPending(vibesock::lastError())) { vibesock::close(fd); continue; }
             pend.push_back({fd, a});
         }
         const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
@@ -34392,11 +34392,11 @@ std::string LocalSdrShim::antSwitchSearch(const std::string& host, int port, int
                 if (!(pf[i].revents & (POLLOUT | POLLERR | POLLHUP))) { still.push_back(pend[i]); continue; }
                 int err = 0; socklen_t el = sizeof err; getsockopt(pend[i].first, SOL_SOCKET, SO_ERROR, &err, &el);
                 if (!err) brokers.push_back(pend[i].second);
-                ::close(pend[i].first);
+                vibesock::close(pend[i].first);
             }
             pend.swap(still);
         }
-        for (auto& p2 : pend) ::close(p2.first);
+        for (auto& p2 : pend) vibesock::close(p2.first);
     }
     if (brokers.size() > 4) brokers.resize(4);
     std::string j = "{\"brokers\":[";
