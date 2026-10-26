@@ -49,14 +49,14 @@ ok(api.bgCollect() === JSON.stringify(NICK), `saved back unchanged: ${api.bgColl
 // the decoders offered follow the demodulator
 const row2 = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
 const [md, dc] = row2.children.filter((e) => e.tag === 'select');
-ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96,dsc',
-   'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8, the CW skimmers (24/48/96 kHz) and DSC');
+ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96,aprs-hf,dsc',
+   'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8, the CW skimmers (24/48/96 kHz), HF APRS and DSC');
 md.value = 'lsb'; md.onchange();
 ok(!dc.children.some((o) => o.value === 'wefax' || o.value === 'sstv' || o.value === 'ft8' || o.value.startsWith('cw-skim')) && dc.value === 'navtex',
    'LSB offers only NAVTEX and RTTY (no negative charts), and keeps NAVTEX');
 ok(api.model().profiles[0].vfos[1].mode === 'lsb' && !row2.text().includes('Listening for'), '...the VFO is LSB now, and still no hint line');
 md.value = 'nfm'; md.onchange();
-ok(dc.children.map((o) => o.value).join() === 'sstv,dsc-vhf' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers SSTV and DSC (VHF channel 70), and the VFO becomes SSTV');
+ok(dc.children.map((o) => o.value).join() === 'sstv,aprs,dsc-vhf' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers SSTV, APRS and DSC (VHF channel 70), and the VFO becomes SSTV');
 
 // ★ V12 CW: the page's decoder list mirrors the server's (vibe_bgdecode_config.h decoders()) — id, label, demodulators
 {

@@ -31,7 +31,7 @@ export function galleryLineTranslatable(line: string): boolean {
 export function galleryTranslateLines(text: string, kind: string): GalleryTrLine[] {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   // ★ FT8's summary and ISM's day (2026-10-25: sensor readings and the card) are English we wrote, every line
-  if (kind === 'ft8' || kind === 'ism') return lines.map((l) => ({ text: l, translate: false }));
+  if (kind === 'ft8' || kind === 'ism' || kind === 'ais' || kind === 'aprs') return lines.map((l) => ({ text: l, translate: false }));   // ★ V12: AIS/APRS logs and cards — station lines we composed
   // ★ Our own header ("NAVTEX · B · Oostende … / Received … / 489.5 kHz USB · background decoding") is English we wrote.
   let body = 0;
   if (/^(NAVTEX|RTTY) · /.test(lines[0] ?? '')) {

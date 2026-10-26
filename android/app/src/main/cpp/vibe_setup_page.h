@@ -2597,6 +2597,9 @@ const BLOCKABLE = [
   { id: "ism",    label: "ISM sensors and meters" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
   { id: "dsc",    label: "DSC" },
+  /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
+  { id: "ais",    label: "AIS ships" },
+  { id: "aprs",   label: "APRS" },
 ];
 
 /** The blocked list as a Set of ids, from this radio's CSV. */
@@ -5540,6 +5543,9 @@ const BG_DECODERS = [
   { id: "cw-skim-24",   label: "CW skimmer, 24 kHz (summary)", tone: 0,    modes: ["usb"] },
   { id: "cw-skim-48",   label: "CW skimmer, 48 kHz (summary)", tone: 0,    modes: ["usb"] },
   { id: "cw-skim-96",   label: "CW skimmer, 96 kHz (summary)", tone: 0,    modes: ["usb"] },
+  // ★★ V12 APRS — VHF on an NFM VFO (144.800 / 144.390 …), HF 300 Bd on USB (10.1476 MHz)
+  { id: "aprs",         label: "APRS (1200 Bd, VHF)",          tone: 0,    modes: ["nfm"] },
+  { id: "aprs-hf",      label: "APRS HF (300 Bd)",             tone: 0,    modes: ["usb", "lsb"] },
   // ★★ V12 2026-10-26: DSC — MF/HF with the dial 1.7 kHz below the DSC frequency on USB (2185.8 for 2187.5; either sense
   //    is found), VHF channel 70 (156.525 MHz) on NFM. The "+ DSC watch" key below fills these in.
   { id: "dsc",          label: "DSC (MF/HF)",                  tone: 1700, modes: ["usb", "lsb"] },
