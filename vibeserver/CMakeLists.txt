@@ -28,7 +28,7 @@ project(vibeserver VERSION 12.0.0 LANGUAGES CXX C)
 #     reader of the line above (android CMake, lite gradle, mac/build-app.sh): the package becomes
 #     11.0.0~b1, which dpkg sorts ABOVE 5.6.x and BELOW 11.0.0, so both upgrades are clean.
 #     ★ Empty it for the release. Never publish a ~ version AFTER its release — it would sort below it.
-set(VIBESERVER_PRERELEASE "beta19")
+set(VIBESERVER_PRERELEASE "beta21")
 
 # ── ★★★ SANITISER BUILDS FOR THE TESTS AND THE OFFLINE REPLAY ────────────────────────────────
 #
@@ -268,6 +268,8 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/audio_nr.cpp"
     "${CPP_DIR}/decoders/auto_notch.cpp"
     "${CPP_DIR}/decoders/time_decoder.cpp"
+    # ★ V12: CW — the listener's decoder and the skimmer (one FFT filterbank; decoders/cw_skimmer.h)
+    "${CPP_DIR}/decoders/cw_skimmer.cpp"
     ${FT8_SRC})
 target_include_directories(vibeserver_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}" "${CPP_DIR}" "${CPP_DIR}/vibedsp" "${CPP_DIR}/ft8_lib")
@@ -999,13 +1001,17 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #     Depends/Recommends — an ordinary install must not pull a hotspot stack or an initramfs builder.
   install(PROGRAMS linux/pocket/vibeserver-pocket linux/pocket/vibeserver-pocket-data
                    linux/pocket/vibeserver-pocket-seal linux/pocket/vibeserver-pocket-converge
+                   linux/pocket/vibeserver-pocket-cpu
           DESTINATION lib/vibeserver)
   install(FILES linux/pocket/pocket-packages.txt DESTINATION lib/vibeserver)
+  # ★★ vibeserver-pocket-cpu (2026-10-25): a Portable card picks the ARMv6 build on a CPU without NEON at boot —
+  #    the card was installed on the BUILD machine, so postinst's own pick was for the wrong processor.
   # ★★ An Update's initramfs rebuild inside overlayroot-chroot (MODULES=dep cannot find / there) — see the file.
   install(FILES linux/pocket/vibeserver-pocket-initramfs.conf
           DESTINATION share/initramfs-tools/conf.d RENAME vibeserver-pocket)
   install(FILES linux/pocket/vibeserver-pocket.service linux/pocket/vibeserver-pocket-data.service
-                linux/pocket/vibeserver-pocket-seal.service DESTINATION lib/systemd/system)
+                linux/pocket/vibeserver-pocket-seal.service linux/pocket/vibeserver-pocket-cpu.service
+          DESTINATION lib/systemd/system)
 
   # ★★★ SHIP cloudflared, DO NOT ASK FOR IT. The public listing offers to make an address for an
   #     owner who has no port forward — the only route that works behind CGNAT — and that offer is

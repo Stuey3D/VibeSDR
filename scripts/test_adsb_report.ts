@@ -10,7 +10,9 @@
  * Run: node --no-warnings scripts/test_adsb_report.ts   (run-tests.sh does)
  */
 import { parseAdsbCapability, parseAdsbMessage, adsbToAircraft, adsbStatusText,
-         parseAdsbMapPrefs, ADSB_MAP_PREFS_DEFAULT, ADSB_MAX_AIRCRAFT } from '../src/services/adsbTypes.ts';
+         parseAdsbMapPrefs, ADSB_MAP_PREFS_DEFAULT, ADSB_MAX_AIRCRAFT,
+         adsbGainView, adsbGainStep, gainCapIdx, nearestGainIdx } from '../src/services/adsbTypes.ts';
+import { readFileSync } from 'node:fs';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -89,6 +91,42 @@ eq('prefs kept', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false,"
 eq('an old save without labels keeps them on', parseAdsbMapPrefs('{"autoZoom":false,"fit":true,"rings":false}'), { autoZoom: false, fit: true, rings: false, labels: true });
 eq('prefs junk → defaults per key', parseAdsbMapPrefs('{"autoZoom":"no","fit":true}'), { autoZoom: true, fit: true, rings: true, labels: true });
 eq('prefs unparseable', parseAdsbMapPrefs('{'), ADSB_MAP_PREFS_DEFAULT);
+
+// ── ★★ V12 THE GAIN KEY (19f2d603) — shown only where the radio has a gain list and the owner has not fixed it ──
+{
+  const rtl = [0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254, 280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496];
+  const rep = parseAdsbMessage({ type: 'adsb', aircraft: [], gain: 49.6, gainAuto: 1, gainBusy: 1 });
+  eq('the report carries the gain fields', [rep.gain, rep.gainAuto, rep.gainBusy], [49.6, 1, 1]);
+  eq('junk gain fields are absent', parseAdsbMessage({ gain: 'high', gainAuto: null }).gain, undefined);
+  const v = adsbGainView(rep, rtl, false)!;
+  eq('auto + busy: the key, TRAINING', [v.key, v.training, v.now], ['GAIN 49.6 · AUTO', true, '49.6 dB']);
+  eq('nearest step to 49.6 dB', v.idx, rtl.indexOf(496));
+  eq('auto, settled', adsbGainView({ gain: 33.8, gainAuto: 1, gainBusy: 0 }, rtl, false)!.training, false);
+  eq('by hand', adsbGainView({ gain: 33.8, gainAuto: 0 }, rtl, false)!.key, 'GAIN 33.8 dB');
+  // AGENTS.md: a control that only works on one radio must not be there
+  eq('no gain list (Airspy HF+): no key', adsbGainView(rep, [], false), null);
+  eq('a one-step list: no key', adsbGainView(rep, [0], false), null);
+  eq('the owner fixed the gain: no key', adsbGainView(rep, rtl, true), null);
+  eq('an older server (no gain in the report): no key', adsbGainView(parseAdsbMessage({ aircraft: [] }), rtl, false), null);
+  eq('no report: no key', adsbGainView(null, rtl, false), null);
+  // the owner's per-band ceiling (the web's applyGainCap)
+  eq('ceiling 30.0 dB → highest step ≤ 300', gainCapIdx(rtl, 300), rtl.indexOf(297));
+  eq('no ceiling → the top', gainCapIdx(rtl, -1), rtl.length - 1);
+  eq('every step above it → the lowest', gainCapIdx([100, 200], 50), 0);
+  eq('the view clamps to the ceiling', adsbGainView(rep, rtl, false, 300)!.idx, rtl.indexOf(297));
+  eq('nearest', nearestGainIdx(rtl, 300), rtl.indexOf(297));
+  // − / + from the listener's own last step for 2.5 s, else the report's
+  const hv = adsbGainView({ gain: 33.8, gainAuto: 0 }, rtl, false)!;
+  eq('+ from the report', adsbGainStep(hv, null, 0, 1), hv.idx + 1);
+  eq('+ again within 2.5 s: from the last press', adsbGainStep(hv, { idx: hv.idx + 1, at: 1000 }, 2000, 1), hv.idx + 2);
+  eq('+ after 2.5 s: from the report', adsbGainStep(hv, { idx: hv.idx + 5, at: 0 }, 3000, 1), hv.idx + 1);
+  eq('− clamps at 0', adsbGainStep(adsbGainView({ gain: 0, gainAuto: 0 }, rtl, false)!, null, 0, -1), 0);
+  eq('+ clamps at the ceiling', adsbGainStep(adsbGainView({ gain: 30, gainAuto: 0 }, rtl, false, 300)!, null, 0, 1), rtl.indexOf(297));
+  // ★ ONE RULE, TWO READERS: the notes are the web's words
+  const main = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+  for (const n of [v.note, adsbGainView({ gain: 1, gainAuto: 1, gainBusy: 0 }, rtl, false)!.note, hv.note])
+    eq(`note is the web's: ${n.slice(0, 30)}…`, main.includes(`'${n}'`), true);
+}
 
 console.log(`test_adsb_report: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

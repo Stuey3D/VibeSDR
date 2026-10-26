@@ -22,6 +22,7 @@ import { DabExitGuard } from './dabStepper';
 import { DabAssembler } from './dabAssemble';
 import { parseAdsbMessage } from './adsbTypes';
 import { AdsbInfoStore } from './adsbInfo';
+import { ismSanitise } from './ism';
 
 export {
   MODE_BANDWIDTHS,
@@ -164,6 +165,28 @@ export class VibeServerClient extends VibeServerWsClient {
   /** Drop the hold WITHOUT telling the server — it is not in ADS-B; we were merely told nothing. */
   adsbForget() { this.adsbHeld = false; }
 
+  /* ── ISM (V12, docs/v12/ISM-DECODER.md) — ADS-B's pattern: a mode entered and left by name, the server owns the band
+   *  (the shared-dial contract: a press sends a step, the next report says where the radio is). ── */
+  /** ★ Reports after our own `ism off` are ghosts (DabExitGuard, as for DAB and ADS-B). */
+  private ismExit = new DabExitGuard();
+  private ismHealHeldAt = 0;
+  static readonly ISM_HOLD_MS = 8_000;
+
+  ism(on: boolean, o: { band?: string; step?: number; hz?: number } = {}) {
+    if (this.askBlocked()) return;   // ★★ ask before tuning — it takes everybody's radio to the band
+    /* ★★ No audio on a band (the server sends none in ISM, as in ADS-B): the native self-heal would read the silence as a
+     *  stall. Held for the entry and a step, and by the reports while the mode runs. */
+    holdNativeHealing(VibeServerClient.ISM_HOLD_MS, on ? 'ISM on' : 'ISM off');
+    if (on) { this.ismExit.entered(); this.cancelPacedTune(); }
+    else this.ismExit.left(Date.now());
+    this.ismHeld = on;
+    const m: Record<string, unknown> = { type: 'ism', on: on ? 1 : 0 };
+    if (on && o.band) m.band = o.band;
+    if (on && o.step) m.step = o.step > 0 ? 1 : -1;
+    if (on && o.hz && o.hz > 0) m.hz = Math.round(o.hz);
+    this.sendSpectrum(m);
+  }
+
   /** ★ Raw IQ out for THIS session — the audio sheet's row. The server answers with `iqout`. */
   iqOut(on: boolean, rate = 48000) { this.sendSpectrum({ type: 'iqout', on: on ? 1 : 0, rate }); }
 
@@ -253,6 +276,29 @@ export class VibeServerClient extends VibeServerWsClient {
       case 'adsb_error':
         this.adsbHeld = false;
         this.callbacks.onAdsb?.(null, dabSafeText(msg.why, 200) || 'ADS-B is not available on this receiver');
+        return true;
+      case 'ism': {
+        const now = Date.now();
+        if (!this.ismExit.accept(now)) return true;   // ★ a ghost after our own off
+        const r = ismSanitise(msg);
+        if (!r) return true;
+        if (!this.ismHeld || now - this.ismHealHeldAt > 3000) {
+          this.ismHealHeldAt = now;
+          holdNativeHealing(VibeServerClient.ISM_HOLD_MS, this.ismHeld ? 'ISM running' : 'server reports ISM', this.ismHeld);
+        }
+        this.ismHeld = true;            // ★ arrival = the receiver is in ISM, whoever put it there
+        this.callbacks.onIsm?.(r);
+        return true;
+      }
+      case 'ism_off':
+        this.ismExit.offConfirmed(Date.now());
+        if (this.ismHeld) holdNativeHealing(VibeServerClient.ISM_HOLD_MS, 'server reports ISM off');
+        this.ismHeld = false;
+        this.callbacks.onIsm?.(null);
+        return true;
+      case 'ism_error':
+        this.ismHeld = false;
+        this.callbacks.onIsm?.(null, dabSafeText(msg.why, 200) || 'ISM is not available on this receiver');
         return true;
       case 'iqout':
         this.callbacks.onIqOut?.({

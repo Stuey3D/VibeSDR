@@ -35,48 +35,48 @@ say() { echo "vibeserver-pocket-data: $*"; }
 
 DEV=$(blkid -L "$LABEL" 2>/dev/null || true)
 if [ -z "$DEV" ]; then
-  # ★★ A damaged superblock loses its label too. The pocket image's layout is ours: partition 3 of
-  #    the disk the root came from. It is made afresh ONLY if it holds no recognisable filesystem at
-  #    all — never a partition with something else on it.
+  # ★★ A damaged superblock loses its label too. The pocket image's layout is ours: the settings partition is the one
+  #    STRAIGHT AFTER ROOT on the disk the root came from — partition 3 on a Raspberry Pi card (boot, root, settings),
+  #    partition 2 on an Armbian board card (root with /boot inside it, settings) — image/sbc, 2026-10-25; it used to be
+  #    "partition 3" everywhere, so on a board card the repair silently did nothing. It is made afresh ONLY if it holds
+  #    no recognisable filesystem at all — never a partition with something else on it.
   ROOTSRC=$(findmnt -no SOURCE /media/root-ro 2>/dev/null || findmnt -no SOURCE / 2>/dev/null)
   RDISK=$(lsblk -no PKNAME "$ROOTSRC" 2>/dev/null | head -1)
-  for P3 in "/dev/${RDISK}p3" "/dev/${RDISK}3"; do
-    if [ -n "$RDISK" ] && [ -b "$P3" ] && [ -z "$(blkid -p -o value -s TYPE "$P3" 2>/dev/null)" ]; then
-      say "!! partition 3 ($P3) has no filesystem left — making the settings partition afresh (setup mode)"
-      mkfs.ext4 -q -F -L "$LABEL" "$P3" >/dev/null 2>&1 && DEV="$P3"
-      break
-    fi
-  done
-  # ★★★ NO PARTITION 3 AT ALL (Stuart's v6 card, 2026-10-10): the card's table held boot + root only,
+  ROOTNUM=$(cat "/sys/class/block/$(basename "$ROOTSRC")/partition" 2>/dev/null || echo 0)
+  case "$ROOTNUM" in ''|*[!0-9]*) ROOTNUM=0 ;; esac
+  DNUM=$((ROOTNUM + 1))
+  PFX=""; case "$RDISK" in *[0-9]) PFX=p ;; esac
+  PD="/dev/${RDISK}${PFX}${DNUM}"
+  if [ -n "$RDISK" ] && [ "$ROOTNUM" -ge 1 ] && [ -b "$PD" ] && [ -z "$(blkid -p -o value -s TYPE "$PD" 2>/dev/null)" ]; then
+    say "!! partition $DNUM ($PD), the one after root, has no filesystem left — making the settings partition afresh (setup mode)"
+    mkfs.ext4 -q -F -L "$LABEL" "$PD" >/dev/null 2>&1 && DEV="$PD"
+  fi
+  # ★★★ NO SETTINGS PARTITION AT ALL (Stuart's v6 card, 2026-10-10): the card's table held boot + root only,
   #     so every setting lived in the RAM overlay — setup looked perfect, and the first reboot (an
   #     'Update all packages') brought the box back as new. A box that cannot save must never look
   #     as if it can. So the box makes the partition itself, in the FREE space straight after root:
-  #     partition 3, 256 MB, 4 MiB-aligned, LABEL=vibedata — exactly the image's layout. Only ever
-  #     an APPEND into unallocated space: root and boot are never touched, and a card with any third
-  #     partition (or a different shape) is left alone. It stays the LAST partition with the rest of
-  #     the card free after it, so it can be grown in place for the future gallery (Stuart 10-10).
-  #     The marker on it records that the box made it, so the next card that does this is known.
-  if [ -z "$DEV" ] && [ -n "$RDISK" ] && [ -b "/dev/$RDISK" ] && command -v sfdisk >/dev/null; then
-    PFX=""; case "$RDISK" in *[0-9]) PFX=p ;; esac
-    P3="/dev/${RDISK}${PFX}3"
+  #     the next partition number, 256 MB, 4 MiB-aligned, LABEL=vibedata — exactly the image's layout. Only
+  #     ever an APPEND into unallocated space, and only when ROOT IS THE LAST PARTITION: root and boot are never
+  #     touched, and a card with anything after root (or a different shape) is left alone. The marker on it records
+  #     that the box made it, so the next card that does this is known.
+  if [ -z "$DEV" ] && [ -n "$RDISK" ] && [ "$ROOTNUM" -ge 1 ] && [ -b "/dev/$RDISK" ] && command -v sfdisk >/dev/null; then
     NPARTS=$(sfdisk -d "/dev/$RDISK" 2>/dev/null | grep -c "^/dev/" || true)
-    ROOTNUM=$(cat "/sys/class/block/$(basename "$ROOTSRC")/partition" 2>/dev/null || echo 0)
-    if [ ! -b "$P3" ] && [ "$NPARTS" = 2 ] && [ "$ROOTNUM" = 2 ]; then
-      read -r S2S N2S <<< "$(sfdisk -d "/dev/$RDISK" | sed -n "s#^/dev/${RDISK}${PFX}2 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*#\1 \2#p")"
+    if [ ! -b "$PD" ] && [ "$NPARTS" = "$ROOTNUM" ]; then
+      read -r SRS NRS <<< "$(sfdisk -d "/dev/$RDISK" | sed -n "s#^/dev/${RDISK}${PFX}${ROOTNUM} *: *start= *\([0-9]*\), *size= *\([0-9]*\).*#\1 \2#p")"
       DISKS=$(cat "/sys/block/$RDISK/size" 2>/dev/null || echo 0)
-      S3S=$(( (S2S + N2S + 8191) / 8192 * 8192 )); Z3S=$((256*1024*1024/512))
-      if [ -n "$S2S" ] && [ "$((S3S + Z3S))" -le "$DISKS" ]; then
-        say "!! the card has no settings partition (boot + root only) — making partition 3 at sector $S3S, 256 MB, in the free space after root"
+      SDS=$(( (SRS + NRS + 8191) / 8192 * 8192 )); ZDS=$((256*1024*1024/512))
+      if [ -n "$SRS" ] && [ "$((SDS + ZDS))" -le "$DISKS" ]; then
+        say "!! the card has no settings partition — making partition $DNUM at sector $SDS, 256 MB, in the free space after root"
         # ★ --no-tell-kernel: root is in use, so the kernel is told about the ONE new partition by
         #   partx (BLKPG add), which works on a busy disk where a whole-table re-read would not.
-        echo "$S3S,$Z3S,83" | sfdisk -q --no-reread --no-tell-kernel --append "/dev/$RDISK" >/dev/null 2>&1 \
-          || say "!! sfdisk could not append partition 3"
-        partx -a -n 3 "/dev/$RDISK" 2>/dev/null || partprobe "/dev/$RDISK" 2>/dev/null || true
+        echo "$SDS,$ZDS,83" | sfdisk -q --no-reread --no-tell-kernel --append "/dev/$RDISK" >/dev/null 2>&1 \
+          || say "!! sfdisk could not append partition $DNUM"
+        partx -a -n "$DNUM" "/dev/$RDISK" 2>/dev/null || partprobe "/dev/$RDISK" 2>/dev/null || true
         udevadm settle --timeout=10 2>/dev/null || sleep 2
-        if [ -b "$P3" ] && mkfs.ext4 -q -F -L "$LABEL" "$P3" >/dev/null 2>&1; then
-          DEV="$P3"; MADE_BY_BOX=1
+        if [ -b "$PD" ] && mkfs.ext4 -q -F -L "$LABEL" "$PD" >/dev/null 2>&1; then
+          DEV="$PD"; MADE_BY_BOX=1
         else
-          say "!! could not make partition 3 — settings will NOT survive a restart"
+          say "!! could not make partition $DNUM — settings will NOT survive a restart"
         fi
       fi
     fi
@@ -152,6 +152,19 @@ if [ -s "$BAKED" ]; then
     ln -sfn "$BAKED" "$L"
   fi
 fi
-[ "${MADE_BY_BOX:-0}" = 1 ] && date -u +"made by the box at boot %Y-%m-%dT%H:%M:%SZ: the card had no partition 3" > "$DATA/.made-by-box"
+# ── 5. The card's small FAT partition (LABEL=VIBESETUP), for files an owner drops in from any computer ─────────────
+# ★★ (Stuart, 2026-10-25) A board card's /boot is ext4, which Windows and macOS cannot write — so the forget-the-Wi-Fi
+#    file (vibeserver-reset-wifi) had nowhere a card reader could put it. image/sbc gives every board card a 16 MB FAT
+#    partition labelled VIBESETUP; a Raspberry Pi card's own FAT boot partition already serves (and still works).
+#    Mounted here so vibeserver-pocket can find the file and DELETE it once acted on (so it acts once): sync, so that
+#    one delete is on the card at once; no exec, no devices, root only.
+SETUPDEV=$(blkid -L VIBESETUP 2>/dev/null || true)
+if [ -n "$SETUPDEV" ] && ! mountpoint -q /run/vibeserver-setup; then
+  mkdir -p /run/vibeserver-setup
+  fsck.vfat -a "$SETUPDEV" >/dev/null 2>&1 || true
+  mount -t vfat -o rw,noatime,sync,umask=077,nosuid,nodev,noexec "$SETUPDEV" /run/vibeserver-setup 2>/dev/null \
+    || say "!! the VIBESETUP partition ($SETUPDEV) would not mount — a reset file there will not be seen"
+fi
+[ "${MADE_BY_BOX:-0}" = 1 ] && date -u +"made by the box at boot %Y-%m-%dT%H:%M:%SZ: the card had no settings partition after root" > "$DATA/.made-by-box"
 say "settings partition ready ($(df -h "$DATA" | awk 'NR==2{print $3" used of "$2}'))"
 exit 0

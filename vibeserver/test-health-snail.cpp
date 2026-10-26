@@ -263,6 +263,31 @@ int main() {
         ok(!a.slowNow, "bursty 70-80 % cores at the old 85 % gate: nothing judged, no snail (the blind spot)");
         ok(b.slowNow, "same cores with the run-queue gate (60 %): SNAIL");
     }
+    // ★★ "<decoder>: TOO HEAVY" (BehindWatch, 2026-10-25): named for a minute after it DROPS input, never for being busy.
+    {
+        vibehealth::BehindWatch w;
+        w.note("dec:a", "RTTY", 0, 0); w.note("bg", "Background decoding", 500, 0);
+        ok(w.behind(0).empty(), "first sight is a baseline, not a drop (even a count already above zero)");
+        w.note("dec:a", "RTTY", 0, 2000); w.note("bg", "Background decoding", 500, 2000);
+        ok(w.behind(2000).empty(), "no new drops: nothing named");
+        w.note("dec:a", "RTTY", 4800, 4000); w.note("bg", "Background decoding", 500, 4000);
+        auto b = w.behind(4000);
+        ok(b.size() == 1 && b[0] == "RTTY", "a decoder that dropped is named");
+        w.note("dec:a", "RTTY", 4800, 60000);
+        ok(w.behind(60000).size() == 1, "still named within the minute");
+        w.note("dec:a", "RTTY", 4800, 64001);
+        ok(w.behind(64001).empty(), "forgotten a minute after its last drop");
+        w.note("dec:a", "RTTY", 10, 66000);
+        ok(w.behind(66000).empty(), "a count that goes down is a restart, not a drop");
+        w.note("dec:a", "RTTY", 20, 68000); w.note("dec:b", "RTTY", 0, 68000); w.note("dec:b", "RTTY", 5, 70000);
+        ok(w.behind(70000).size() == 1, "two listeners on the same decoder: named once");
+        vibehealth::Health h; h.behind = {"ADS-B", "RTTY"};
+        const std::string j = vibehealth::json(h);
+        ok(j.find("\"behind\":[\"ADS-B\",\"RTTY\"]") != std::string::npos, "the health message carries the names");
+        ok(vibehealth::json(vibehealth::Health{}).find("behind") == std::string::npos, "and omits the field when none");
+        vibehealth::Health h2 = h; h2.behind.clear();
+        ok(vibehealth::differs(h, h2), "a change in the list is news (sent on change)");
+    }
     fs::remove_all(g_root);
     std::printf("%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;

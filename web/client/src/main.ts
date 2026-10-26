@@ -86,7 +86,7 @@ import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { shareFromBookmark, type ShareOut } from '../../../src/services/chatShare';
 import { mpxPowerParts } from '../../../src/services/mpxPower';
 import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
-import { DecoderClient, type Spot } from './decoders';
+import { DecoderClient, type Spot, type DecoderMode, type CwList, type CwSpot } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
 import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, type AskState } from '../../../src/services/dialChat';
@@ -762,6 +762,7 @@ async function loadAudioPolicy(httpBase: string) {
   dialModeNow = 'exclusive';   // ★ a new receiver's dial is unknown until it says
   adsbCap = null;              // ★ an older server (or no answer) draws no ADS-B control
   ismCap = null;               // ★ …nor an ISM one
+  cwCap = false;               // ★ …nor a CW decoder
   landingStepDone = false;
   firstConfigDone = false;
   try {
@@ -796,6 +797,9 @@ async function loadAudioPolicy(httpBase: string) {
     dabCapable = j.dab === true;
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
+    cwCap = j.cw === true;       // ★ CW (V12): this server's own decoder and skimmer
+    { const b = document.querySelector('#decodersPanel [data-dec="cw"]') as HTMLElement | null;
+      if (b) b.hidden = !cwCap || blockedModes.has('cw'); }
     dabBoost = j.dabBoost === true;
     dabBoostUseful = j.dabBoostUseful === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
@@ -1857,7 +1861,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap);
       }
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
        *  DAB never produces a spot, so both buttons were dead weight there (Stuart, 2026-09-17).
@@ -3270,8 +3274,13 @@ function renderFrame(frameTs: number) {
   guard('web-render', 'overlays', updateViewOverlays);
   // Passband drives the acrylic sidebands — so bandwidth is something you SEE
   // sitting on the signal, not a number you read.
-  wf.filterLow = spec.bandwidthLow;
-  wf.filterHigh = spec.bandwidthHigh;
+  /* ★★ THE CW SKIMMER'S VFO IS ITS SEGMENT (Stuart, 2026-10-25: "the VFO doesnt actually show me where i am tuning … the
+   *  VFO should grow to 96KHz and be tunable"). The skimmer decodes cwWidth Hz centred on the dial, so that is the box
+   *  drawn — drawn only, never sent: the listener's own CW passband is untouched and comes back when the skimmer closes.
+   *  Tuning moves the dial as ever, and the server's skimmer follows it. */
+  const skim = activeDec === 'cw' && cwSkim;
+  wf.filterLow = skim ? -cwWidth / 2 : spec.bandwidthLow;
+  wf.filterHigh = skim ? cwWidth / 2 : spec.bandwidthHigh;
   const measuring = isPerf();
   const t0 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL HOLD IS OFF. It froze the display while tuning (Stuart, 2026-08-10: "when I
@@ -10506,7 +10515,117 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | null = null;
+/* ★★ CW (V12, 2026-10-25) — the server's own decoder (decoders/cw_skimmer.h). ONE SIGNAL decodes this listener's
+ *  passband ('cw', on their audio); SKIMMER every CW signal across a segment centred on the dial ('cwskim', on IQ). The
+ *  box shows the primary signal's text (#decText, one-signal only) over the list of signals and the spots. Offered only
+ *  where vibeserver.json says "cw": true (an older server has no such decoder — AGENTS.md: no dead control). */
+let cwCap = false;
+let cwSkim = false;
+let cwWidth = 48000;
+let cwLast: CwList | null = null;
+const cwSpotsSeen: CwSpot[] = [];
+/** The extension a decoder button attaches — CW's depends on its view. */
+function decExt(mode: string): Exclude<DecoderMode, null> {
+  if (mode === 'cw') return cwSkim ? 'cwskim' : 'cw';
+  return mode as Exclude<DecoderMode, null>;
+}
+function cwAge(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
+}
+function cwFreq(sg: { hz: number; audio: number }): string {
+  return sg.hz > 0 ? (sg.hz / 1e3).toFixed(2) : `${Math.round(sg.audio)} Hz`;
+}
+/** ★ Tap a row: tune to that signal in CW (a carrier on the dial is this server's CW tone). */
+function cwTune(hz: number) {
+  if (!spec || !(hz > 0)) return;
+  spec.tune(clampTune(Math.round(hz)), 'cwu', { recenter: true, retarget: true });
+  renderFreq();
+}
+function renderCw() {
+  const rows = $('cwRows');
+  const l = cwLast;
+  /* ★★ THE VIEW STAYS WHERE THE LISTENER PUT IT (Stuart, 2026-10-25: "trying to look at the spots at the bottom … the new
+   *  text above kept pulling the view up again"). The rows are rebuilt about once a second and new signals add rows ABOVE
+   *  the spots, so a plain scrollTop jumped. Scrolled down at all = pinned to the SPOTS heading: it keeps its place on
+   *  screen whatever happens above it. At the top = stays at the top (new rows arrive where the eye already is). */
+  const body = document.getElementById('decBody');
+  const head = $('cwSpotsHead');
+  cwPinWatch(body);
+  rows.textContent = '';
+  if (!l || !l.signals.length) {
+    const d = document.createElement('div'); d.className = 'idle';
+    d.textContent = cwSkim ? 'listening across the segment — each CW signal appears here as it is decoded'
+                           : 'listening — tune a CW signal into the passband';
+    rows.appendChild(d);
+  }
+  /* ★★ LOWEST FREQUENCY FIRST, ALWAYS (Stuart, 2026-10-25: "the CW Skimmer list likes to reorder itself a lot so I think
+   *  we list it from frequency lowest to highest regardless of confidence"). A row keeps its place while its signal lives;
+   *  the order is the band's, as on the spectrum above. A signal with no RF frequency (ONE SIGNAL's audio) by its tone. */
+  const sigs = [...(l?.signals ?? [])].sort((a, b) => (a.hz > 0 && b.hz > 0 ? a.hz - b.hz : a.audio - b.audio) || a.id - b.id);
+  for (const sg of sigs) {
+    const r = document.createElement('div');
+    // ★ q-<confidence> colours the message (#cwList .cwr.q-low .tx …): red poor, orange low, amber medium, green high (Stuart).
+    r.className = 'cwr q-' + sg.q + (sg.active ? '' : ' gone') + (!l!.skimmer && sg.id === l!.primary ? ' primary' : '');
+    r.innerHTML =
+      `<span class="f">${escapeHtml(cwFreq(sg))}</span>` +
+      `<span class="c${sg.call ? '' : ' none'}">${escapeHtml(sg.call || '—')}</span>` +
+      `<span class="w">${Math.round(sg.wpm)} wpm</span>` +
+      `<span class="s">${sg.snr >= 0 ? '+' : ''}${Math.round(sg.snr)} dB</span>` +
+      `<span class="q ${sg.q}">${sg.q}</span>` +
+      `<span class="a">${sg.active ? cwAge(sg.last) : cwAge(sg.last)}</span>` +
+      `<span class="tx"><bdi>${escapeHtml(sg.text.trim())}</bdi></span>`;
+    r.title = `${sg.call ? sg.call + (sg.country ? ' · ' + sg.country : '') + ' · ' : ''}${cwFreq(sg)}${sg.hz > 0 ? ' kHz' : ''} · `
+            + `${Math.round(sg.wpm)} WPM · SNR ${Math.round(sg.snr)} dB in the decoder's 47 Hz bin · ${sg.q} · `
+            + `${sg.active ? 'heard' : 'last heard'} ${cwAge(sg.last)} ago — tap to tune`;
+    r.onclick = () => cwTune(sg.hz);
+    rows.appendChild(r);
+  }
+  const sp = $('cwSpots');
+  sp.textContent = '';
+  if (!cwSpotsSeen.length) {
+    const d = document.createElement('div'); d.className = 'idle';
+    d.textContent = 'a callsign heard calling (CQ, DE, TEST) twice is spotted here';
+    sp.appendChild(d);
+  }
+  for (const s of cwSpotsSeen.slice(0, 60)) {
+    const r = document.createElement('div');
+    r.className = 'cws';
+    r.innerHTML = `<span class="t">${fmtSpotTime(s.timestamp)}</span>` +
+      `<span class="f">${escapeHtml(s.frequency > 0 ? (s.frequency / 1e3).toFixed(2) : `${Math.round(s.audio)} Hz`)}</span>` +
+      `<span class="c">${escapeHtml(s.callsign)}</span>` +
+      `<span class="ct">${escapeHtml(s.country)}</span>` +
+      `<span class="w">${Math.round(s.wpm)} wpm</span>`;
+    r.title = `${s.callsign} · ${s.how} · ${Math.round(s.snr)} dB — tap to tune`;
+    r.onclick = () => cwTune(s.frequency);
+    sp.appendChild(r);
+  }
+  // ★ Where the LISTENER left the heading — taken from their own scrolling (cwPinWatch), so growth that happened between two
+  //   updates is undone too, not just growth made by this one.
+  if (body && cwPinAt !== null) {
+    const want = Math.max(0, cwHeadInBox(body, head) - cwPinAt);
+    if (Math.abs(want - body.scrollTop) >= 1) { cwPinSetting = true; body.scrollTop = want; }
+  }
+}
+/** Where the heading sits in the box's CONTENT (not offsetTop: that is measured from the nearest positioned ancestor,
+ *  which growth above the list does not move). */
+function cwHeadInBox(body: HTMLElement, head: HTMLElement): number {
+  return head.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+}
+/** The SPOTS heading's distance from the top of the box's view as the listener last scrolled it; null = at the top. */
+let cwPinAt: number | null = null;
+let cwPinSetting = false;
+let cwPinBody: HTMLElement | null = null;
+function cwPinWatch(body: HTMLElement | null) {
+  if (!body || cwPinBody === body) return;
+  cwPinBody = body;
+  body.addEventListener('scroll', () => {
+    if (cwPinSetting) { cwPinSetting = false; return; }   // ★ our own restore, not the listener
+    if (activeDec !== 'cw') { cwPinAt = null; return; }
+    cwPinAt = body.scrollTop > 0 ? cwHeadInBox(body, $('cwSpotsHead')) - body.scrollTop : null;
+  }, { passive: true });
+}
 /* ★★★ NAVTEX — A MESSAGE AT A TIME (Stuart, 2026-10-05): "a hybrid of RTTY & WEFAX … message arrives and is displayed
  *  with the option to save it … next message arrives previous message gets moved in the background and user can
  *  alternate between live receive or previous message like WEFAX." The text arrives as RTTY's does; the blocks
@@ -10647,6 +10766,7 @@ function decParams(mode: string): Record<string, unknown> {
     return { lpm: wefaxLpm, carrier: 1900, deviation: 400, image_width: 1809 };
   }
   if (mode === 'time') return { station: timeStation };
+  if (mode === 'cw') return cwSkim ? { width: cwWidth } : {};
   return {};
 }
 
@@ -10728,7 +10848,8 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === 'navtex') { navtexAsm.lockState(st, Date.now()); renderNavtex(); return; }
       // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
-      decStateText = st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
+      decStateText = activeDec === 'cw' ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
+                   : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
       if (!decTuneHint) $('decStatus').textContent = decStateText;   // ★ the tuning guide, while up, IS the status
       setDecLive(!!st);
     },
@@ -10778,6 +10899,16 @@ function initDecoders(host: string, auth: AuthState) {
       renderSpots();
       pushSpotsToMap();      // ★ keep an open map current — see pushSpotsToMap()
       setDecLive(true);
+    },
+    // ★★ CW: the list of signals, and the callsigns spotted (newest first; one row per call, the latest).
+    onCwSignals: (list) => { if (activeDec !== 'cw') return; cwLast = list; renderCw(); setDecLive(list.signals.some((x) => x.active)); },
+    onCwSpot: (sp) => {
+      if (activeDec !== 'cw') return;
+      const i = cwSpotsSeen.findIndex((o) => o.callsign === sp.callsign);
+      if (i >= 0) cwSpotsSeen.splice(i, 1);
+      cwSpotsSeen.unshift(sp);
+      if (cwSpotsSeen.length > 200) cwSpotsSeen.length = 200;
+      renderCw();
     },
     // ★★ THE SERVER SAID NO — say so, in its words, where the decoder's output would have been.
     //    Most often every decoder slot on the server is in use ("All 4 decoder slots on this
@@ -10865,11 +10996,11 @@ function initDecoders(host: string, auth: AuthState) {
   //    semantics, same as the app). Selecting one opens the output box.
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw';
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
       decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
-      decoders!.attach(mode, decParams(mode));
+      decoders!.attach(decExt(mode), decParams(mode));
       if (mode === 'rds') spec?.rdsxLight(true);   // ★ the lighter eye stream — see SpectrumClient.rdsxLight
       showDecBox(mode);
       syncDecButtons();
@@ -10918,6 +11049,21 @@ function initDecoders(host: string, auth: AuthState) {
   const usosBtn = $<HTMLButtonElement>('rttyUsos');
   usosBtn.onclick = () => { rtty.usos = !rtty.usos; rtty.auto = false; syncRttyControls(); reattachIf('rtty'); };
   segButtons('wefaxLpm', 'lpm', (v) => { wefaxLpm = Number(v); reattachIf('wefax'); });
+  // ★ CW: one signal ↔ skimmer, and the skimmer's segment — each a re-attach (a different decoder on the server).
+  const cwHint = () => {
+    $('cwWidthRow').hidden = !cwSkim;
+    $('cwHint').innerHTML = cwSkim
+      ? `Every CW signal ${cwWidth / 2000} kHz either side of your dial, decoded at once — the speed found for each. `
+        + 'A call heard calling twice is spotted. Tap a row to tune to it.'
+      : 'Tune the signal in <b>CW</b> — the decoder finds the speed itself (5–60 WPM). A wider USB filter lists every '
+        + 'CW signal inside it. Tap a row to tune to it.';
+  };
+  segButtons('cwView', 'cwview', (v) => {
+    cwSkim = v === 'skim'; cwHint();
+    if (activeDec === 'cw') { cwLast = null; showDecBox('cw'); reattachIf('cw'); }
+  });
+  segButtons('cwWidth', 'cwwidth', (v) => { cwWidth = Number(v) || 48000; cwHint(); if (cwSkim) { cwLast = null; renderCw(); reattachIf('cw'); } });
+  cwHint();
 
   // Spots + map.
   const spotsBtn = $<HTMLButtonElement>('spotsBtn');
@@ -10937,6 +11083,7 @@ function initDecoders(host: string, auth: AuthState) {
     $('decText').textContent = '';
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
+    if (activeDec === 'cw') { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
   };
   $('decPrev').onclick = () => (activeDec === 'navtex' ? toggleNavtexPrev() : toggleDecPrev());
   $('decSave').onclick = () => (activeDec === 'navtex' ? saveNavtex() : saveDecImage());
@@ -11072,7 +11219,7 @@ function syncRttyControls() {
 /** A settings change while running must re-attach — the shim builds the decoder
  *  from the attach params, so it can't be tweaked in place. */
 function reattachIf(mode: string) {
-  if (activeDec === mode) { decTuneHint = ''; decoders?.attach(mode as 'rtty' | 'wefax', decParams(mode)); }
+  if (activeDec === mode) { decTuneHint = ''; decoders?.attach(decExt(mode), decParams(mode)); }
 }
 
 function stopDecoder() {
@@ -11164,6 +11311,7 @@ function renderHealthPill(h: {
   temp: { kind: string; level: number; pos?: number };
   cpuPos?: number; ramPos?: number;
   bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
+  behind?: string[];
 }): void {
   /* ★★★ A LATCH, NOT A ONE-OFF REMOVAL. Removing #srvBattery here only worked until the next
    *  `battery` message, which recreates it — so the old pill reappeared ON TOP of the new one
@@ -11240,12 +11388,20 @@ function renderHealthPill(h: {
     h.bat.level ?? 0);
   const ringAlpha = Math.round(0x73 + (0xbf - 0x73) * Math.min(1, Math.max(0, worstPos)));
   el.style.borderColor = `${healthColour(worst, worstPos)}${ringAlpha.toString(16).padStart(2, '0')}`;
-  el.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>`;
+  /* ★★ A DECODER TOO HEAVY FOR THIS MACHINE (Stuart, 2026-10-25: "a little addition to the health card that says
+   *  something like Decoder too heavy"). The server names a decoder only when it threw input away in the last minute
+   *  (vibe_health.h BehindWatch) — busy is not named, falling behind is. One short amber line each, under the icons;
+   *  the audio is unaffected by design, and the screen-reader sentence says so. */
+  const behind = Array.isArray(h.behind) ? h.behind.filter((b) => typeof b === 'string' && b).slice(0, 3) : [];
+  const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+  const warn = behind.map((b) => `<div class="hWarn">${esc(b)}: TOO HEAVY</div>`).join('');
+  el.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>${warn}`;
   /* ★ One sentence for a screen reader, since the icons carry no text. */
   el.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`
     + (h.temp.kind === 'sensor' ? `, temperature ${HEALTH_WORDS[h.temp.level]}`
        : h.temp.kind === 'none' ? '' : ', throttling')
-    + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : ''));
+    + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : '')
+    + (behind.length ? `. Too heavy for this server, skipping some input: ${behind.join(', ')}. Audio is unaffected` : ''));
 }
 
 function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, h = 20): string {
@@ -11269,7 +11425,9 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, 
  *  no-op (AGENTS.md). This rule used to hide the retired desktop bar's DECODERS button and nothing
  *  else, so the card kept offering the empty panel. */
 function anyDecoderLeft(): boolean {
-  return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d));
+  // ★ V12: CW counts only where this server has it (vibeserver.json "cw") — the button is hidden otherwise.
+  return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
+    || (cwCap && !blockedModes.has('cw'));
 }
 
 function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
@@ -11288,6 +11446,7 @@ function syncDecButtons() {
   $('rttySettings').hidden = activeDec !== 'rtty';
   $('wefaxSettings').hidden = activeDec !== 'wefax';
   $('timeSettings').hidden = activeDec !== 'time';
+  $('cwSettings').hidden = activeDec !== 'cw';
 }
 
 function showDecBox(what: string) {
@@ -11301,6 +11460,7 @@ function showDecBox(what: string) {
   // and imply the app had none until you did (Stuart, 2026-07-26).
   $('decTitle').textContent = what === 'spots' ? 'FT8 / FT4 SPOTS'
                             : what === 'rds'   ? 'ADV RDS'
+                            : what === 'cw'    ? (cwSkim ? 'CW SKIMMER' : 'CW')
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
@@ -11316,6 +11476,10 @@ function showDecBox(what: string) {
   resetNavtex();   // ★ a fresh box: no message, no PREV — standing by
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
+  // ★ CW: the list under the primary signal's text (ONE SIGNAL), or the list alone (SKIMMER — it is all list).
+  const isCw = what === 'cw';
+  $('cwList').classList.toggle('on', isCw);
+  if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
   // bar is a compressed version of the same data; showing both would be saying everything
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
@@ -11323,7 +11487,7 @@ function showDecBox(what: string) {
   $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
   // ★ Which decoders BIG should widen: the ones whose content is drawn at the box's width (SSTV,
   //   WEFAX) or written in long lines (the spot list). Text decoders get height instead.
-  $('decBox').classList.toggle('wide', image || isSpots);
+  $('decBox').classList.toggle('wide', image || isSpots || (isCw && cwSkim));
   // ★★ THE SIZE TOGGLE IS FOR EVERY DECODER, not just Advanced RDS. It was gated on `isRds`, so
   //    the one panel whose whole point is a PICTURE — SSTV — had no way to be made bigger, and
   //    WEFAX and the spot list were stuck at one size too (Stuart). RDS keeps its own pair of
@@ -11331,7 +11495,7 @@ function showDecBox(what: string) {
   $('rdsSize').classList.toggle('show', true);
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
   applyRdsSize();
-  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex);
+  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || (isCw && cwSkim));
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the

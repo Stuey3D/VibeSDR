@@ -57,16 +57,25 @@ constexpr size_t kMaxVfos = 16;   // ★ a sensible ceiling; a SINGLE-radio serv
  *    scrambled picture, and neither decoder can be told otherwise — and SSTV on NFM is the ISS on 145.800.
  *  ★ `ext` "" = the FT8/FT4 spotter (DecoderHost::startSpots), kept as a run's SUMMARY, not as spots. */
 struct DecoderDef { const char* id; const char* label; const char* ext; const char* kind; const char* modes;
-                    double toneHz; double shift; double baud; bool inverted; bool autoRtty; };
+                    double toneHz; double shift; double baud; bool inverted; bool autoRtty;
+                    /** ★ V12 2026-10-25: a CW SKIMMER's segment, Hz (0 = an ordinary audio decoder). Its VFO frequency is
+                     *  the segment's CENTRE, and it is fed the channel's IQ, not a demodulator's audio. */
+                    double widthHz; };
 inline const std::vector<DecoderDef>& decoders() {
     static const std::vector<DecoderDef> d = {
-        { "navtex",       "NAVTEX",                      "navtex", "navtex", "usb,lsb", 500,  170, 100,   false, false },
-        { "rtty",         "RTTY (auto)",                 "fsk",    "rtty",   "usb,lsb", 1000, 170, 45.45, false, true  },
-        { "rtty-ham",     "RTTY 45.45 Bd 170 Hz",        "fsk",    "rtty",   "usb,lsb", 1000, 170, 45.45, false, false },
-        { "rtty-weather", "RTTY 50 Bd 450 Hz (weather)", "fsk",    "rtty",   "usb,lsb", 1000, 450, 50,    true,  false },
-        { "wefax",        "WEFAX (120 LPM)",             "wefax",  "wefax",  "usb",     1900, 0,   0,     false, false },
-        { "sstv",         "SSTV",                        "sstv",   "sstv",   "usb,nfm", 0,    0,   0,     false, false },
-        { "ft8",          "FT8 / FT4 (summary)",         "",       "ft8",    "usb",     0,    0,   0,     false, false },
+        { "navtex",       "NAVTEX",                      "navtex", "navtex", "usb,lsb", 500,  170, 100,   false, false, 0 },
+        { "rtty",         "RTTY (auto)",                 "fsk",    "rtty",   "usb,lsb", 1000, 170, 45.45, false, true,  0 },
+        { "rtty-ham",     "RTTY 45.45 Bd 170 Hz",        "fsk",    "rtty",   "usb,lsb", 1000, 170, 45.45, false, false, 0 },
+        { "rtty-weather", "RTTY 50 Bd 450 Hz (weather)", "fsk",    "rtty",   "usb,lsb", 1000, 450, 50,    true,  false, 0 },
+        { "wefax",        "WEFAX (120 LPM)",             "wefax",  "wefax",  "usb",     1900, 0,   0,     false, false, 0 },
+        { "sstv",         "SSTV",                        "sstv",   "sstv",   "usb,nfm", 0,    0,   0,     false, false, 0 },
+        { "ft8",          "FT8 / FT4 (summary)",         "",       "ft8",    "usb",     0,    0,   0,     false, false, 0 },
+        // ★★ CW SKIMMERS (Stuart, 2026-10-25: "CW skimming … lightweight") — one FFT over the segment, a decoder per signal
+        //    found; kept as a SUMMARY of the spots, as FT8 is. The VFO is the segment's centre (e.g. 7.020 MHz for
+        //    7.008–7.032 at 24 kHz). "usb" only because a VFO row has a demodulator — none runs for a skimmer.
+        { "cw-skim-24",   "CW skimmer, 24 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 24000 },
+        { "cw-skim-48",   "CW skimmer, 48 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 48000 },
+        { "cw-skim-96",   "CW skimmer, 96 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 96000 },
     };
     return d;
 }
@@ -85,7 +94,13 @@ inline bool decoderFitsDemod(const std::string& dec, const std::string& mode) {
 }
 /** The demodulator's passband for a background channel: SSB 2.7 kHz (FT8 3 kHz — its sub-band is 200-3000 Hz),
  *  NFM 12.5 kHz. */
-inline double passbandHz(const Vfo& v) { return v.mode == "nfm" ? 12500.0 : v.dec == "ft8" ? 3000.0 : 2700.0; }
+inline double passbandHz(const Vfo& v) {
+    const DecoderDef* d = decoderDef(v.dec);
+    if (d && d->widthHz > 0) return d->widthHz;     // ★ a skimmer's whole segment
+    return v.mode == "nfm" ? 12500.0 : v.dec == "ft8" ? 3000.0 : 2700.0;
+}
+/** ★ A CW skimmer VFO (fed IQ, no demodulator). */
+inline bool isSkimmer(const Vfo& v) { const DecoderDef* d = decoderDef(v.dec); return d && d->widthHz > 0; }
 
 /** The signal frequency a VFO is listening for (NAVTEX at 517.5 USB → 518.0). */
 inline double signalHz(const Vfo& v) {
@@ -110,6 +125,7 @@ inline std::string attachMsg(const Vfo& v) {
         std::snprintf(b, sizeof b, "{\"lpm\":120,\"image_width\":1809,\"carrier\":%.0f,\"deviation\":400,"
                       "\"auto_start\":true,\"auto_stop\":true}", d->toneHz);
     else if (id == "sstv" || id == "ft8") std::snprintf(b, sizeof b, "{}");
+    else if (d->widthHz > 0) std::snprintf(b, sizeof b, "{\"width\":%.0f}", d->widthHz);
     else
         std::snprintf(b, sizeof b, "{\"center_frequency\":%.0f,\"shift\":%.0f,\"baud_rate\":%.2f,\"encoding\":\"ITA2\","
                       "\"framing\":\"5N1.5\",\"inverted\":%s%s}",
@@ -259,7 +275,8 @@ inline bool validate(const Config& c, double rate, std::string& err, int slotCap
                 return false;
             }
             if (rate > 0) {
-                const double half = halfWindowHz(rate);
+                // ★ A skimmer needs its whole segment inside the window, not a 3 kHz passband.
+                const double half = halfWindowHz(rate) + 3000.0 - (isSkimmer(v) ? passbandHz(v) / 2.0 : 3000.0);
                 const double off = std::fabs(v.hz - centre);
                 if (off > half && lockCentre > 0) {
                     char b[300];

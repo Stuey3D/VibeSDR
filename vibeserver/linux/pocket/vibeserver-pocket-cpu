@@ -1,0 +1,46 @@
+#!/bin/bash
+# vibeserver-pocket-cpu — on a PORTABLE card, run the VibeServer build THIS processor can execute (2026-10-25).
+#
+# ★★★ WHY. The armhf package carries two builds: /usr/bin/vibeserver (ARMv7 + NEON — the Pi 2's speed) and
+#     /usr/lib/vibeserver/armv6/vibeserver (scalar, for a Pi Zero / Zero W / Pi 1, which have no NEON). The package's
+#     postinst picks one by reading /proc/cpuinfo — right on a box that installs it, WRONG on a card image: there the
+#     install happens on the BUILD machine (a Mac's arm64 VM says "asimd", an x86 host says neither), so the card
+#     carries whichever build suited the builder. A Portable 32-bit card flashed into a Pi Zero W then died
+#     "Illegal instruction" on the first DSP call — no setup page, so no Update to put it right.
+#     This is the same choice, made on the board itself, at every boot, before the server starts:
+#       · no NEON, root WRITABLE (the first boot, before the seal; or a box that never seals): install the ARMv6 build
+#         over /usr/bin/vibeserver — exactly what postinst does — so the sealed root carries it from then on;
+#       · no NEON, root is the READ-ONLY overlay (a sealed card moved into a Pi Zero later): bind-mount the ARMv6 build
+#         over /usr/bin/vibeserver for this boot. No write, no RAM spent on a copy; an Update (which installs into the
+#         real root through overlayroot-chroot, where postinst reads THIS cpuinfo) then makes it permanent;
+#       · and in both, the bundled SDRplay service stays down — it is an ARMv7 build (postinst removes it there).
+#       · NEON present: nothing. (A NEON board left on the ARMv6 build — a card moved the other way — still works,
+#         at scalar speed, until the next Update reinstalls the NEON build.)
+# ★ A no-op without the Portable marker, without the ARMv6 build (arm64, amd64, a NEON-only package), or with NEON.
+# ★ CPU_ROOT / CPUINFO (tests only): a directory standing in for /, and the cpuinfo to read. The unit sets neither.
+set -u
+CR="${CPU_ROOT:-}"
+[ -f "$CR/etc/vibeserver-pocket/enabled" ] || exit 0
+V6="$CR/usr/lib/vibeserver/armv6/vibeserver"
+BIN="$CR/usr/bin/vibeserver"
+[ -x "$V6" ] || exit 0
+grep -qwE 'neon|asimd' "${CPUINFO:-/proc/cpuinfo}" 2>/dev/null && exit 0
+cmp -s "$V6" "$BIN" && { echo "vibeserver-pocket-cpu: no NEON — the ARMv6 build is already in place"; exit 0; }
+
+rsp_off() {
+  if [ -n "$CR" ]; then rm -f "$CR/usr/lib/vibeserver/openrsp/sdrplay_apiService"; return; fi
+  if [ "$1" = runtime ]; then systemctl mask --runtime --now vibeserver-rsp.service >/dev/null 2>&1 || true
+  else rm -f /usr/lib/vibeserver/openrsp/sdrplay_apiService; fi
+}
+ROOTFS="${CPU_ROOTFS:-$(findmnt -no FSTYPE / 2>/dev/null)}"
+if [ "$ROOTFS" = overlay ]; then
+  if [ -n "$CR" ]; then echo "bind $V6 -> $BIN" > "$CR/bind-mounted"; else mount --bind "$V6" "$BIN" || exit 1; fi
+  rsp_off runtime
+  echo "vibeserver-pocket-cpu: no NEON on this processor — running the ARMv6 (scalar) build this boot (read-only root)"
+else
+  install -m 0755 "$V6" "$BIN" || exit 1
+  sync
+  rsp_off file
+  echo "vibeserver-pocket-cpu: no NEON on this processor — installed the ARMv6 (scalar) build"
+fi
+exit 0

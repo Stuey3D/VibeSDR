@@ -5,7 +5,7 @@
 Description=VibeServer — pocket box: make the root filesystem read-only (first boot only)
 ConditionPathExists=/etc/vibeserver-pocket/enabled
 ConditionKernelCommandLine=!overlayroot=tmpfs
-After=systemd-machine-id-commit.service regenerate_ssh_host_keys.service local-fs.target
+After=systemd-machine-id-commit.service regenerate_ssh_host_keys.service armbian-firstrun.service local-fs.target
 Before=NetworkManager.service vibeserver-pocket.service vibeserver.service
 
 [Service]

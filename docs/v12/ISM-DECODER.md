@@ -173,7 +173,14 @@ The waterfall stays live — the bursts on it are half the point — with no LIS
 newest first, "now / 12 s / 3 min" last heard, the frequency and SNR on hover. The readout shows `433.920 MHz · ISM 433`.
 Zoom, FIT, step and the IF filter are greyed with the reason; the arrows step bands and name the next one.
 
-**App (not built — what it needs):**
+**App** (built 2026-10-25, branch `v12-app-parity` — docs/v12/APP-PARITY-2026-10-25.md): `src/services/ism.ts` (the web's
+pure rules, held to `web/client/src/ism.ts` by `scripts/test_ism_app.ts`), `VibeServerClient.ism()` + the `ism` / `ism_off` /
+`ism_error` messages, `ismHeld` on the tune / zoom / pan / reset gates, the ISM key in the Mode sheet beside ADS-B (absent /
+greyed with `ismWhy` / live), `IsmPanel` (EXIT ISM · ◀ band ▶ · status · kind chips · units · the list), every tune gesture
+stepping one band (keys, drum, lock-screen skip; clamped), the frequency box sending `{hz}`, the native audio output
+released while it runs (iOS `setQuiet`), the box by pad / keyboard (it takes the keys on arrival as the DAB box does;
+every key, chip and row a stop — `ismNavKeys`), and no LISTEN needle in ISM (`WaterfallView needleHidden`, every renderer
+path through `utils/needleGeometry`). What the brief asked for, kept for reference:
 - Read `ism` / `ismWhy` / `ismBands` / `ismLanding` per radio; an ISM entry in the mode selector beside DAB/ADS-B, absent
   when `ism` is missing (HF+), greyed with the reason when false.
 - On an `ism` report: a bottom sheet / panel like the DAB box (`AdsbLiveList`'s patterns: PanelNav reachable, D-pad

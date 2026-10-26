@@ -2,6 +2,7 @@
 #include "ft8_decoder.h"
 #include "../vibe_clock.h"
 #include "../vibedsp/vibe_denormals.h"
+#include "ft8/vibe_simd4.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -132,33 +133,70 @@ const Bits174* generatorRows() {               // row k = the codeword of messag
     return g;
 }
 /** OSD-1 on `llr` (log p(1)/p(0), codeword order). On success fills `a91` (packed message + CRC) and returns the
- *  number of hard-decision disagreements; -1 when no codeword passes the CRC within `maxErrors`. */
-int osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
+ *  number of hard-decision disagreements; -1 when no codeword passes the CRC within `maxErrors`.
+ *  ★★ IN CODEWORD ORDER (2026-10-25, the FT8 CPU work). The first version copied the generator into a matrix with its
+ *  columns permuted into reliability order, bit by bit (91 × 174 bit moves per call), then eliminated it. The rows
+ *  that elimination ends with are unique — each is the codeword that is 1 at one pivot and 0 at the others — so it
+ *  makes no difference whether the columns are moved first: this eliminates the generator's own rows, visiting the
+ *  columns in reliability order. Each flip is judged by a popcount first (most are far over maxErrors and stop
+ *  there); only a survivor's distance is summed, in the same reliability order as before, so it rounds the same.
+ *  The result is the same codeword, the same error count, for every input (test-ft8-fast). */
+} // namespace
+int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
     const Bits174* g = generatorRows();
+    float wAbs[FTX_LDPC_N];
+    for (int i = 0; i < FTX_LDPC_N; ++i) wAbs[i] = std::fabs(llr[i]);
     int perm[FTX_LDPC_N];
     for (int i = 0; i < FTX_LDPC_N; ++i) perm[i] = i;
-    std::sort(perm, perm + FTX_LDPC_N, [&](int a, int b) { return std::fabs(llr[a]) > std::fabs(llr[b]); });
+    std::sort(perm, perm + FTX_LDPC_N, [&](int a, int b) { return wAbs[a] > wAbs[b]; });
     int pos[FTX_LDPC_N];
     for (int p = 0; p < FTX_LDPC_N; ++p) pos[perm[p]] = p;
-    Bits174 M[FTX_LDPC_K];
+    /* ★ ELIMINATED IN 32-BIT WORDS (2026-10-25). This loop is most of OSD: 91 pivots × 91 rows, a bit test each and
+     *  a row XOR for about half. On a 32-bit ARM each 64-bit test or XOR is two of everything, so the rows are held
+     *  here as six 32-bit words (padded to eight, so a row is two 128-bit vectors) — a one-word test, and the XOR as
+     *  one 128-bit and one 64-bit operation. The same bits, the same pivots, the same rows. */
+    struct Row32 { uint32_t w[8]; };
+    alignas(16) Row32 M32[FTX_LDPC_K];
     for (int k = 0; k < FTX_LDPC_K; ++k) {
-        M[k] = Bits174{{0, 0, 0}};
-        for (int j = 0; j < FTX_LDPC_N; ++j) if (getBit(g[k], j)) setBit(M[k], pos[j]);
+        for (int x = 0; x < 3; ++x) { M32[k].w[2 * x] = (uint32_t)g[k].w[x]; M32[k].w[2 * x + 1] = (uint32_t)(g[k].w[x] >> 32); }
+        M32[k].w[6] = M32[k].w[7] = 0;
     }
-    int pivot[FTX_LDPC_K]; int r = 0;
+    int pivot[FTX_LDPC_K]; int r = 0;          // pivot[q] = the CODEWORD position of row q's pivot
     for (int p = 0; p < FTX_LDPC_N && r < FTX_LDPC_K; ++p) {
+        const int col = perm[p];
+        const int wi = col >> 5; const uint32_t bit = 1u << (col & 31);
         int i = r;
-        while (i < FTX_LDPC_K && !getBit(M[i], p)) ++i;
+        while (i < FTX_LDPC_K && !(M32[i].w[wi] & bit)) ++i;
         if (i == FTX_LDPC_K) continue;
-        std::swap(M[i], M[r]);
+        std::swap(M32[i], M32[r]);
+        const Row32 R = M32[r];
+#if VIBE_FT8_NEON
+        const uint32x4_t R0 = vld1q_u32(R.w), R1 = vld1q_u32(R.w + 4);
         for (int q = 0; q < FTX_LDPC_K; ++q)
-            if (q != r && getBit(M[q], p)) { M[q].w[0] ^= M[r].w[0]; M[q].w[1] ^= M[r].w[1]; M[q].w[2] ^= M[r].w[2]; }
-        pivot[r++] = p;
+            if (q != r && (M32[q].w[wi] & bit)) {
+                vst1q_u32(M32[q].w, veorq_u32(vld1q_u32(M32[q].w), R0));
+                vst1q_u32(M32[q].w + 4, veorq_u32(vld1q_u32(M32[q].w + 4), R1));
+            }
+#elif VIBE_FT8_SSE2
+        const __m128i R0 = _mm_load_si128((const __m128i*)R.w), R1 = _mm_load_si128((const __m128i*)(R.w + 4));
+        for (int q = 0; q < FTX_LDPC_K; ++q)
+            if (q != r && (M32[q].w[wi] & bit)) {
+                _mm_store_si128((__m128i*)M32[q].w, _mm_xor_si128(_mm_load_si128((const __m128i*)M32[q].w), R0));
+                _mm_store_si128((__m128i*)(M32[q].w + 4), _mm_xor_si128(_mm_load_si128((const __m128i*)(M32[q].w + 4)), R1));
+            }
+#else
+        for (int q = 0; q < FTX_LDPC_K; ++q)
+            if (q != r && (M32[q].w[wi] & bit))
+                for (int x = 0; x < 6; ++x) M32[q].w[x] ^= R.w[x];
+#endif
+        pivot[r++] = col;
     }
     if (r < FTX_LDPC_K) return -1;
+    Bits174 M[FTX_LDPC_K];
+    for (int k = 0; k < FTX_LDPC_K; ++k)
+        for (int x = 0; x < 3; ++x) M[k].w[x] = (uint64_t)M32[k].w[2 * x] | ((uint64_t)M32[k].w[2 * x + 1] << 32);
     Bits174 hard{{0, 0, 0}};
-    float w[FTX_LDPC_N];
-    for (int p = 0; p < FTX_LDPC_N; ++p) { if (llr[perm[p]] > 0) setBit(hard, p); w[p] = std::fabs(llr[perm[p]]); }
+    for (int i = 0; i < FTX_LDPC_N; ++i) if (llr[i] > 0) setBit(hard, i);
     Bits174 c0{{0, 0, 0}};
     for (int q = 0; q < FTX_LDPC_K; ++q)
         if (getBit(hard, pivot[q])) { c0.w[0] ^= M[q].w[0]; c0.w[1] ^= M[q].w[1]; c0.w[2] ^= M[q].w[2]; }
@@ -166,14 +204,21 @@ int osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
     for (int f = -1; f < FTX_LDPC_K; ++f) {
         Bits174 c = c0;
         if (f >= 0) { c.w[0] ^= M[f].w[0]; c.w[1] ^= M[f].w[1]; c.w[2] ^= M[f].w[2]; }
-        float d = 0; int err = 0;
+        const uint64_t d0 = c.w[0] ^ hard.w[0], d1 = c.w[1] ^ hard.w[1], d2 = c.w[2] ^ hard.w[2];
+        const int err = __builtin_popcountll(d0) + __builtin_popcountll(d1) + __builtin_popcountll(d2);
+        if (err > maxErrors) continue;
+        // ★ the distance summed in reliability order (ascending pos), as the permuted version summed it
+        int ps[FTX_LDPC_N]; int m = 0;
         for (int x = 0; x < 3; ++x) {
-            uint64_t diff = c.w[x] ^ hard.w[x];
-            while (diff) { const int b = __builtin_ctzll(diff); d += w[x * 64 + b]; ++err; diff &= diff - 1; }
+            uint64_t diff = x == 0 ? d0 : x == 1 ? d1 : d2;
+            while (diff) { ps[m++] = pos[x * 64 + __builtin_ctzll(diff)]; diff &= diff - 1; }
         }
-        if (err > maxErrors || d >= bestD) continue;
+        std::sort(ps, ps + m);
+        float d = 0;
+        for (int j = 0; j < m; ++j) d += wAbs[perm[ps[j]]];
+        if (d >= bestD) continue;
         uint8_t m91[FTX_LDPC_K_BYTES] = {};
-        for (int k = 0; k < FTX_LDPC_K; ++k) if (getBit(c, pos[k])) m91[k / 8] |= (uint8_t)(0x80u >> (k % 8));
+        for (int k = 0; k < FTX_LDPC_K; ++k) if (getBit(c, k)) m91[k / 8] |= (uint8_t)(0x80u >> (k % 8));
         const uint16_t crcRx = ftx_extract_crc(m91);
         uint8_t t[FTX_LDPC_K_BYTES]; std::memcpy(t, m91, sizeof t);
         t[9] &= 0xF8; t[10] = 0; t[11] = 0;
@@ -182,7 +227,6 @@ int osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
     }
     return bestErr;
 }
-} // namespace
 
 // ── One slot ────────────────────────────────────────────────────────────────────────────────────
 
@@ -218,8 +262,8 @@ Ft8SlotDecoder::Ft8SlotDecoder(int sampleRate, bool ft4) : ft4_(ft4), rate_(samp
     while (pulseHi_ > pulseLo_ && pulse_[(size_t)(pulseHi_ - 1)] < 1e-6f) --pulseHi_;
     const size_t span = (size_t)(nn_ + 2) * nsps_;
     dphi_.resize(span);
-    prodRe_.resize((size_t)nn_ * nsps_);
-    prodIm_.resize((size_t)nn_ * nsps_);
+    refC_.resize((size_t)nn_ * nsps_);
+    refS_.resize((size_t)nn_ * nsps_);
 }
 Ft8SlotDecoder::~Ft8SlotDecoder() { monitor_free(&mon_); }
 
@@ -313,25 +357,35 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
         zr_.assign((size_t)nd, 0.0f); zi_.assign((size_t)nd, 0.0f);
         // mixer e^{-j 2π f0 idx/fs}, as a uint32 phase so it is exact across the slot
         const uint32_t step = (uint32_t)(int64_t)std::llround(f0 / fs * 4294967296.0);
-        uint32_t ph = (uint32_t)((int64_t)i0 * (int64_t)step);
+        /* ★★ A BLOCK ROTATOR, NOT A LOOKUP PER SAMPLE (2026-10-25). e^{-jθ(b+q)} = e^{-jθ(b)} · e^{-jθ(q)}: the 32
+         *  in-block phases are the same for every block, so they are looked up once, each block is a 32-tap complex
+         *  dot product (four lanes at a time), and one rotation by the block's own phase. Both factors come from the
+         *  same 4096-entry table as before, so the accuracy is the table's (-62 dB), as it was. */
+        alignas(16) float wr[D], wi[D];
+        for (int q = 0; q < D; ++q) { const int t = (int)(((uint32_t)q * step) >> 20); wr[q] = tab.c[t]; wi[q] = -tab.s[t]; }
         for (int j = 0; j < nd; ++j) {
-            float sr = 0, si = 0;
             const int b = i0 + j * D;
+            const uint32_t ph = (uint32_t)((int64_t)b * (int64_t)step);
+            float ur = 0, ui = 0;
             if (b >= 0 && b + D <= n) {
-                for (int q = 0; q < D; ++q, ph += step) {
-                    const int t = (int)(ph >> 20);
-                    sr += a[b + q] * tab.c[t];
-                    si -= a[b + q] * tab.s[t];
+                v4f accR = v4_set1(0.0f), accI = v4_set1(0.0f);
+                for (int q = 0; q < D; q += 4) {
+                    const v4f x = v4_load(a + b + q);
+                    accR = v4_madd(x, v4_load(wr + q), accR);
+                    accI = v4_madd(x, v4_load(wi + q), accI);
                 }
+                float tr[4], ti[4]; v4_store(tr, accR); v4_store(ti, accI);
+                ur = (tr[0] + tr[1]) + (tr[2] + tr[3]); ui = (ti[0] + ti[1]) + (ti[2] + ti[3]);
             } else {
-                for (int q = 0; q < D; ++q, ph += step) {
+                for (int q = 0; q < D; ++q) {
                     if (b + q < 0 || b + q >= n) continue;
-                    const int t = (int)(ph >> 20);
-                    sr += a[b + q] * tab.c[t];
-                    si -= a[b + q] * tab.s[t];
+                    ur += a[b + q] * wr[q]; ui += a[b + q] * wi[q];
                 }
             }
-            zr_[(size_t)j] = sr; zi_[(size_t)j] = si;
+            const int t = (int)(ph >> 20);
+            const float cb = tab.c[t], sb = tab.s[t];                    // × e^{-jθ(b)} = cb - j·sb
+            zr_[(size_t)j] = cb * ur + sb * ui;
+            zi_[(size_t)j] = cb * ui - sb * ur;
         }
         const int ntones = ft4_ ? 4 : 8;
         if ((int)toneR_.size() != ntones * spsd) {                      // tone t: t cycles per symbol
@@ -343,6 +397,8 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
                 }
         }
         // per-symbol correlation with the known tone; `pairs` also returns Σ c[k+1]·conj(c[k])
+        // ★ four lanes at a time (2026-10-25): 60 taps for FT8, 18 for FT4 (the last 2 scalar)
+        const int sp4 = spsd & ~3;
         auto corr = [&](int m, double* pr, double* pi) {
             double e = 0, prevR = 0, prevI = 0, sR = 0, sI = 0; bool have = false;
             for (int k = 0; k < nn_; ++k) {
@@ -350,8 +406,15 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
                 if (b < 0 || b + spsd > nd) { have = false; continue; }
                 const float* r = &toneR_[(size_t)tones[k] * spsd]; const float* s = &toneI_[(size_t)tones[k] * spsd];
                 const float* x = &zr_[(size_t)b]; const float* y = &zi_[(size_t)b];
-                float cr = 0, ci = 0;
-                for (int j = 0; j < spsd; ++j) { cr += x[j] * r[j] + y[j] * s[j]; ci += y[j] * r[j] - x[j] * s[j]; }
+                v4f aR = v4_set1(0.0f), aI = v4_set1(0.0f);
+                for (int j = 0; j < sp4; j += 4) {
+                    const v4f X = v4_load(x + j), Y = v4_load(y + j), R = v4_load(r + j), S = v4_load(s + j);
+                    aR = v4_madd(X, R, v4_madd(Y, S, aR));
+                    aI = v4_madd(Y, R, v4_madd(v4_mul(X, v4_set1(-1.0f)), S, aI));
+                }
+                float tr[4], ti[4]; v4_store(tr, aR); v4_store(ti, aI);
+                float cr = (tr[0] + tr[1]) + (tr[2] + tr[3]), ci = (ti[0] + ti[1]) + (ti[2] + ti[3]);
+                for (int j = sp4; j < spsd; ++j) { cr += x[j] * r[j] + y[j] * s[j]; ci += y[j] * r[j] - x[j] * s[j]; }
                 e += (double)cr * cr + (double)ci * ci;
                 if (pr) {
                     if (have) { sR += cr * prevR + ci * prevI; sI += ci * prevR - cr * prevI; }
@@ -379,11 +442,16 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
     // ── 2. the reference: GFSK phase steps (ft8_lib's synth_gfsk), only where the pulse is not ~0 ──
     const int s0 = (int)std::lround(start);
     std::fill(dphi_.begin(), dphi_.end(), 0.0f);
-    for (int i = 0; i < nn_; ++i) {
-        if (!tones[i]) continue;
-        float* d = &dphi_[(size_t)i * nsps_];
-        const float tv = (float)tones[i];
-        for (int j = pulseLo_; j < pulseHi_; ++j) d[j] += tv * pulse_[(size_t)j];
+    {
+        const int lo4 = pulseLo_ & ~3;                                  // the pulse is ~0 below pulseLo_: harmless
+        for (int i = 0; i < nn_; ++i) {
+            if (!tones[i]) continue;
+            float* d = &dphi_[(size_t)i * nsps_];
+            const v4f tv = v4_set1((float)tones[i]);
+            int j = lo4;
+            for (; j + 4 <= pulseHi_; j += 4) v4_store(d + j, v4_madd(tv, v4_load(&pulse_[(size_t)j]), v4_load(d + j)));
+            for (; j < pulseHi_; ++j) d[j] += (float)tones[i] * pulse_[(size_t)j];
+        }
     }
     for (int j = 0; j < 2 * nsps_; ++j) {                      // the dummy symbols either side
         dphi_[(size_t)j] += pulse_[(size_t)(j + nsps_)] * tones[0];
@@ -393,33 +461,110 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
     const float toneStep = (float)(1.0 / T / fs * 4294967296.0);
     const float* dp = &dphi_[(size_t)nsps_];                   // sample k of the waveform is dphi[k + nsps]
 
-    // ── 3. audio × conj(reference) over the part of the signal inside the window ──
+    // ── 3. audio × conj(reference) over the part of the signal inside the window, summed per block ──
+    /* ★★★ THE AMPLITUDE PER 16-SAMPLE BLOCK, NOT PER SAMPLE (2026-10-25). The amplitude is a two-symbol boxcar of
+     *  audio × conj(reference) — it follows HF fading, over 3,840 samples. Computing that boxcar afresh at every
+     *  sample was 48 % of the subtraction on the Pi 2 build (53 instructions a sample, by the qemu counter); a box
+     *  that moves in 16-sample steps differs from it by at most 16 of its 3,840 samples, and the amplitude between
+     *  block centres is interpolated linearly, so it is continuous. Not bit-identical to the per-sample box;
+     *  measured on the real recordings (commit message).
+     *  ★ The reference itself is generated ONCE (refC_/refS_, the same table values the per-sample loops looked up)
+     *    and both the block sums and the subtraction then run four samples at a time. The phase is the same uint32
+     *    accumulator as before, its increments computed four at a time (a float→int convert truncates as the cast
+     *    does), so the reference is the same sample for sample. RAM: 2 × 152 K floats (1.2 MB) for FT8 — what the
+     *    stored products (prodRe_/prodIm_) took before, which are gone. */
     const int kLo = std::max(0, -s0), kHi = std::min(N, n - s0);
     if (kHi <= kLo) return;
+    int B = 16;
+    while (B > 1 && nsps_ % B) B /= 2;                                 // a block divides a symbol (FT8 1920, FT4 576)
+    const int len = kHi - kLo, nb = (len + B - 1) / B, H = nsps_ / B;  // H blocks either side = ±1 symbol
     uint32_t ph = 0;
     for (int k = 0; k < kLo; ++k) ph += base + (uint32_t)(int32_t)(dp[k] * toneStep);
-    const uint32_t phLo = ph;
-    for (int k = kLo; k < kHi; ++k) {
-        const int t = (int)(ph >> 20);
-        const float x = a[s0 + k];
-        prodRe_[(size_t)k] = x * tab.c[t];
-        prodIm_[(size_t)k] = -x * tab.s[t];
-        ph += base + (uint32_t)(int32_t)(dp[k] * toneStep);
+    float* rc = refC_.data();
+    float* rs = refS_.data();
+    {
+        // the phase increments, four at a time; then the accumulator and the table, one sample at a time
+        int32_t inc[16];
+        const v4f ts = v4_set1(toneStep);
+        for (int k0 = kLo; k0 < kHi; k0 += 16) {
+            const int m = std::min(16, kHi - k0);
+            int j = 0;
+            for (; j + 4 <= m; j += 4) {
+                const v4f x = v4_mul(v4_load(dp + k0 + j), ts);
+#if VIBE_FT8_NEON
+                vst1q_s32(inc + j, vcvtq_s32_f32(x));
+#elif VIBE_FT8_SSE2
+                _mm_storeu_si128((__m128i*)(inc + j), _mm_cvttps_epi32(x));
+#else
+                for (int l = 0; l < 4; ++l) inc[j + l] = (int32_t)x.v[l];
+#endif
+            }
+            for (; j < m; ++j) inc[j] = (int32_t)(dp[k0 + j] * toneStep);
+            for (j = 0; j < m; ++j) {
+                const int t = (int)(ph >> 20);
+                rc[k0 + j] = tab.c[t]; rs[k0 + j] = tab.s[t];
+                ph += base + (uint32_t)inc[j];
+            }
+        }
+    }
+    blkR_.resize((size_t)nb); blkI_.resize((size_t)nb);
+    const float* xa = a + s0;
+    for (int bk = 0; bk < nb; ++bk) {
+        const int k0 = kLo + bk * B, k1 = std::min(kHi, k0 + B);
+        int k = k0;
+        v4f accR = v4_set1(0.0f), accI = v4_set1(0.0f);
+        for (; k + 4 <= k1; k += 4) {
+            const v4f x = v4_load(xa + k);
+            accR = v4_madd(x, v4_load(rc + k), accR);
+            accI = v4_madd(x, v4_load(rs + k), accI);
+        }
+        float tr[4], ti[4]; v4_store(tr, accR); v4_store(ti, accI);
+        float sr = (tr[0] + tr[1]) + (tr[2] + tr[3]), si = (ti[0] + ti[1]) + (ti[2] + ti[3]);
+        for (; k < k1; ++k) { sr += xa[k] * rc[k]; si += xa[k] * rs[k]; }
+        blkR_[(size_t)bk] = sr; blkI_[(size_t)bk] = -si;
     }
 
-    // ── 4. the amplitude (two-symbol normalised boxcar), and the subtraction ──
-    const int half = nsps_;
-    double sr = 0, si = 0; int cnt = 0;
-    int lo = kLo, hi = kLo;
-    ph = phLo;
-    for (int k = kLo; k < kHi; ++k) {
-        const int wantHi = std::min(kHi, k + half), wantLo = std::max(kLo, k - half);
-        while (hi < wantHi) { sr += prodRe_[(size_t)hi]; si += prodIm_[(size_t)hi]; ++hi; ++cnt; }
-        while (lo < wantLo) { sr -= prodRe_[(size_t)lo]; si -= prodIm_[(size_t)lo]; ++lo; --cnt; }
-        const float ar = (float)(sr / cnt), ai = (float)(si / cnt);
-        const int t = (int)(ph >> 20);
-        a[s0 + k] -= 2.0f * (ar * tab.c[t] - ai * tab.s[t]);
-        ph += base + (uint32_t)(int32_t)(dp[k] * toneStep);
+    // ── 4. the amplitude at each block centre (the box of ±H blocks, normalised), and the subtraction ──
+    ampR_.resize((size_t)nb); ampI_.resize((size_t)nb);
+    {
+        double sr = 0, si = 0; int lo = 0, hi = 0;
+        auto blkLen = [&](int bk) { return std::min(B, len - bk * B); };
+        int cnt = 0;
+        for (int bk = 0; bk < nb; ++bk) {
+            const int wantHi = std::min(nb, bk + H), wantLo = std::max(0, bk - H);
+            while (hi < wantHi) { sr += blkR_[(size_t)hi]; si += blkI_[(size_t)hi]; cnt += blkLen(hi); ++hi; }
+            while (lo < wantLo) { sr -= blkR_[(size_t)lo]; si -= blkI_[(size_t)lo]; cnt -= blkLen(lo); ++lo; }
+            const double inv = 1.0 / cnt;
+            ampR_[(size_t)bk] = (float)(sr * inv); ampI_[(size_t)bk] = (float)(si * inv);
+        }
+    }
+    // each block's samples: the amplitude runs linearly from the midpoint with the previous block's to the midpoint
+    // with the next's (the ends hold their own), so it is continuous across blocks
+    const float invB = 1.0f / (float)B;
+    float* xo = a + s0;
+    static const float kHalfSteps[4] = { 0.5f, 1.5f, 2.5f, 3.5f };
+    const v4f halfSteps = v4_load(kHalfSteps);
+    for (int bk = 0; bk < nb; ++bk) {
+        const float cR = ampR_[(size_t)bk], cI = ampI_[(size_t)bk];
+        const float pR = bk > 0 ? ampR_[(size_t)bk - 1] : cR, pI = bk > 0 ? ampI_[(size_t)bk - 1] : cI;
+        const float nR = bk + 1 < nb ? ampR_[(size_t)bk + 1] : cR, nI = bk + 1 < nb ? ampI_[(size_t)bk + 1] : cI;
+        const float aR0 = 0.5f * (pR + cR), aI0 = 0.5f * (pI + cI);
+        const float dR = (0.5f * (cR + nR) - aR0) * invB, dI = (0.5f * (cI + nI) - aI0) * invB;
+        const int k0 = kLo + bk * B, k1 = std::min(kHi, k0 + B);
+        int k = k0;
+        // a -= 2·(ar·c − ai·s), with ar, ai the interpolated amplitude: four samples at a time
+        const v4f m2dR = v4_set1(-2.0f * dR), m2dI = v4_set1(2.0f * dI);
+        const v4f m2aR = v4_set1(-2.0f * aR0), m2aI = v4_set1(2.0f * aI0);
+        for (; k + 4 <= k1; k += 4) {
+            const v4f f = v4_add(halfSteps, v4_set1((float)(k - k0)));
+            const v4f gr = v4_madd(m2dR, f, m2aR), gi = v4_madd(m2dI, f, m2aI);    // −2·ar, +2·ai
+            v4_store(xo + k, v4_madd(gi, v4_load(rs + k), v4_madd(gr, v4_load(rc + k), v4_load(xo + k))));
+        }
+        for (; k < k1; ++k) {
+            const float f = (float)(k - k0) + 0.5f;
+            const float ar = aR0 + dR * f, ai = aI0 + dI * f;
+            xo[k] -= 2.0f * (ar * rc[k] - ai * rs[k]);
+        }
     }
 }
 
@@ -437,23 +582,35 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             if (o.mayRunPass && !o.mayRunPass(pass, msSince(t0), st.passMs[pass - 2])) break;
         }
         const auto tp = std::chrono::steady_clock::now();
+        double* sm = st.stageMs[pass - 1];
+        auto lap = [&, t = tp]() mutable { const auto now = std::chrono::steady_clock::now();
+                                          const double d = std::chrono::duration<double, std::milli>(now - t).count(); t = now; return d; };
         for (const Sub& s : subs) subtract(audio, n, s.tones, s.start, s.f0);
         subs.clear();
+        sm[Ft8SlotStats::kSubtract] += lap();
         buildWaterfall(audio, n);
         noise_.assign((size_t)mon_.wf.block_stride, -1.0f);     // ★ unknown until a decode asks (colMean)
+        sm[Ft8SlotStats::kWaterfall] += lap();
         const ftx_waterfall_t* wf = &mon_.wf;
         const int nc = ftx_find_candidates(wf, o.maxCandidates, cands_.data(), o.minScore);
+        sm[Ft8SlotStats::kSearch] += lap();
+        st.candidates[pass - 1] = nc;
         int found = 0;
         for (int i = 0; i < nc; ++i) {
             if (o.abort && o.abort->load(std::memory_order_relaxed)) { st.passes = pass; return; }
             const ftx_candidate_t& c = cands_[(size_t)i];
             ftx_message_t msg; ftx_decode_status_t ds;
             bool viaOsd = false;
-            if (!ftx_decode_candidate(wf, &c, o.ldpcIters, &msg, &ds)) {
+            const bool bpOk = ftx_decode_candidate(wf, &c, o.ldpcIters, &msg, &ds);
+            sm[Ft8SlotStats::kLdpc] += lap();
+            if (!bpOk) {
                 if (o.osdMaxErrors <= 0 || c.score < o.osdMinScore) continue;
+                ++st.osdTried[pass - 1];
                 float llr[FTX_LDPC_N]; uint8_t a91[FTX_LDPC_K_BYTES];
                 ftx_candidate_log174(wf, &c, llr);
-                if (osd1(llr, o.osdMaxErrors, a91) < 0) continue;
+                const int osdErr = ft8Osd1(llr, o.osdMaxErrors, a91);
+                sm[Ft8SlotStats::kOsd] += lap();
+                if (osdErr < 0) continue;
                 ftx_message_init(&msg);
                 for (int b = 0; b < 10; ++b) msg.payload[b] = ft4_ ? (uint8_t)(a91[b] ^ kFT4_XOR_sequence[b]) : a91[b];
                 msg.payload[9] &= 0xF8;
@@ -464,7 +621,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             bool dup = false;   // ★ one message per slot, whichever pass and candidate found it first
             for (size_t r = first; r < out.size() && !dup; ++r)
                 dup = out[r].msg.hash == msg.hash && std::memcmp(out[r].msg.payload, msg.payload, sizeof msg.payload) == 0;
-            if (dup) continue;
+            if (dup) { sm[Ft8SlotStats::kPost] += lap(); continue; }
             Sub s;
             // ★ The tones as transmitted (ft4_encode applies FT4's XOR itself, as ftx_decode_candidate removed it).
             if (ft4_) ft4_encode(msg.payload, s.tones); else ft8_encode(msg.payload, s.tones);
@@ -483,6 +640,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             s.start = startSample; s.f0 = hz;
             subs.push_back(s);
             ++found;
+            sm[Ft8SlotStats::kPost] += lap();
         }
         st.passes = pass;
         st.passMs[pass - 1] = msSince(tp);

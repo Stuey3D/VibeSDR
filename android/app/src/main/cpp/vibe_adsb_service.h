@@ -87,9 +87,9 @@ public:
             //    of capture whatever the block size; past that the OLDEST goes.
             cap_.add(n, now());                             // ★ counted on ARRIVAL, before any drop — see CaptureMeter
             queued_ += n;
-            queue_.push_back(std::move(b));
+            queue_.push_back({std::move(b), now()});
             while (queued_ > size_t(rate_ * kMaxQueuedSec) && queue_.size() > 1) {
-                queued_ -= queue_.front().size(); queue_.pop_front(); ++dropped_;
+                queued_ -= queue_.front().iq.size(); queue_.pop_front(); ++dropped_;
             }
         }
         cv_.notify_one();
@@ -165,14 +165,18 @@ private:
         while (run_) {
             cv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !queue_.empty(); });
             while (run_ && !queue_.empty()) {
-                std::vector<std::complex<float>> b = std::move(queue_.front());
+                std::vector<std::complex<float>> b = std::move(queue_.front().iq);
+                const double t = queue_.front().arrived;
                 queue_.pop_front();
                 queued_ -= b.size();
                 Demod* d = demod_.get();
                 lk.unlock();
                 // ★ The tracker is touched only on this thread and under mtx_ for report(); the demodulator
                 //   only here. A frame is judged as soon as it is cut, so `known` sees the latest aircraft.
-                const double t = now();
+                // ★★★ STAMPED WITH THE BLOCK'S ARRIVAL, NOT WITH NOW. A busy server works through up to half a second
+                //     of queued blocks in a burst; stamped as processed, positions really 0.5 s apart came out
+                //     milliseconds apart, an airliner "flew" thousands of knots, and setPos wiped its trail — the
+                //     longest-tracked aircraft showed no track at all (Stuart, 2026-10-25).
                 d->feed(b.data(), b.size(),
                         [&](const Frame& f) {
                             std::lock_guard<std::mutex> g(mtx_);
@@ -264,7 +268,8 @@ private:
     double rate_ = 0;
     std::unique_ptr<Demod> demod_;
     Tracker tracker_;
-    std::deque<std::vector<std::complex<float>>> queue_;
+    struct Block { std::vector<std::complex<float>> iq; double arrived; };   // arrived = now() in feed()
+    std::deque<Block> queue_;
     size_t queued_ = 0;                                     // samples in queue_
     uint64_t dropped_ = 0;
     CaptureMeter cap_;                                      // under mtx_

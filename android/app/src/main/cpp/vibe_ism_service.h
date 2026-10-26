@@ -392,6 +392,8 @@ public:
     /** ★ See Tracker::reserveNicks. Before start(), from the day's summary card. */
     void reserveNicks(const std::string& kind, int floor) { std::lock_guard<std::mutex> lk(mtx_); tracker_.reserveNicks(kind, floor); }
     bool running() const { return run_.load(std::memory_order_relaxed); }
+    /** Capture blocks dropped because the decoder was behind, since start — the health pill's "too heavy" (vibe_health.h BehindWatch). */
+    uint64_t droppedBlocks() { std::lock_guard<std::mutex> lk(mtx_); return dropped_; }
     const Band* band() const { return band_; }
 
     /** From the DSP thread: copy and return. Never blocks on the decoder. */

@@ -442,6 +442,8 @@ export interface SpectrumCallbacks {
     cpuPos?: number; ramPos?: number;
     temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: number; pos?: number };
     bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
+    /** ★ Decoders that dropped input in the last minute (vibe_health.h BehindWatch). Absent = none, or an older server. */
+    behind?: string[];
   }) => void;
   /** ★ The server REFUSED something this listener asked for, in its own words — a different
    *  message from the owner's standing notice, and it must not displace it. See case 'notice'. */
@@ -1210,6 +1212,7 @@ export class SpectrumClient {
             ? { present: true, pct: Number(msg.bat.pct), charging: msg.bat.charging === true,
                 level: Number(msg.bat.level) || 0 }
             : { present: false },
+          behind: Array.isArray(msg.behind) ? msg.behind.filter((b: unknown) => typeof b === 'string') : undefined,
         });
         break;
       /* ★★★ AN ICOM'S STATUS LINE — mode, FIL, the S-meter (≤4/s), TX, link, scope rate/span/mode. Sent on join,

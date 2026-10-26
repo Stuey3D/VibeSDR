@@ -4,6 +4,7 @@ Only slots fully inside the reference capture window are scored."""
 import json, sys, re, calendar, time, statistics as st
 import os
 REF = os.environ.get('FT8_REF', 'uber_sse.txt')   # curl -sN http://<ubersdr>/api/decoder/stream > uber_sse.txt while recording
+BAND = os.environ.get('FT8_BAND', '40m-ft8')      # ★ 2026-10-25: any FT8 band in the stream (80m-ft8, 20m-ft8 …)
 def utc(s): return calendar.timegm(time.strptime(s, '%Y-%m-%dT%H:%M:%SZ'))
 ref = {}
 first = last = None
@@ -14,12 +15,15 @@ for line in open(REF):
     if 'timestamp' not in j: continue
     t = utc(j['timestamp'])
     first = t if first is None else min(first, t); last = t if last is None else max(last, t)
-    if j.get('band') != '40m-ft8': continue
+    if j.get('band') != BAND: continue
     slot = (t - 1) // 15 * 15 - 15 + 15 * (1 if (t % 15) not in (0,) and (t % 15) < 12 else 0)
     # emitted at the slot END (:00/:15/...), occasionally a few s early; the slot is the one that ended last
     slot = ((t + 3) // 15) * 15 - 15
     ref.setdefault(slot, {})[j['message'].strip()] = j
 lo = (first // 15 + 2) * 15; hi = (last // 15 - 1) * 15
+# ★ FT8_FROM / FT8_TO (UTC seconds): score only slots inside the RECORDING too, when the stream ran longer
+if os.environ.get('FT8_FROM'): lo = max(lo, int(float(os.environ['FT8_FROM'])))
+if os.environ.get('FT8_TO'): hi = min(hi, int(float(os.environ['FT8_TO'])))
 CALL = re.compile(r'^(?:[A-Z0-9]{1,3}/)?[A-Z0-9]{0,3}[0-9][A-Z0-9]{0,3}[A-Z](?:/[A-Z0-9]{1,4})?$|^<[^>]+>$')
 def plausible(msg):
     p = msg.split()

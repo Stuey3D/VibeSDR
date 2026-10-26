@@ -2599,6 +2599,45 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decImgWrap.zoomed #decImage { max-height: none; object-fit: fill; height: auto; width: calc(var(--decZoom, 1) * 100%); }
 #spotList { display: none; }
 #spotList.on { display: block; }
+/* ★★ CW (V12): the signals list. Line 1 to scan — frequency · call · WPM · SNR · quality · age; line 2 to read — the
+   signal's recent text, newest at the right. Dim rows have gone quiet (kept 10 minutes). */
+#cwList { display: none; margin-top: 6px; }
+#cwList.on { display: block; }
+#cwList .cwr { display: grid; grid-template-columns: 6.2em minmax(4.5em, 1fr) 4.8em 4.2em 4.4em 3.4em; gap: 2px 8px;
+               align-items: baseline; font-size: 11px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+#cwList .cwr:hover { background: rgba(255,255,255,0.05); }
+#cwList .cwr.primary { background: rgba(85,217,141,0.10); }
+#cwList .cwr.gone { opacity: 0.5; }
+#cwList .f { color: var(--freq); font-variant-numeric: tabular-nums; }
+#cwList .c { color: var(--freq); letter-spacing: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#cwList .c.none { color: var(--text-dim); letter-spacing: 0; }
+/* ★ nowrap: "18 wpm" and "+23 dB" broke onto two lines in a column a character too narrow (2026-10-25 screenshot) */
+#cwList .w, #cwList .s, #cwList .a { text-align: right; font-variant-numeric: tabular-nums; color: var(--unit); white-space: nowrap; }
+#cwList .q { text-align: right; white-space: nowrap; }
+/* ★ Confidence, marker AND message (Stuart, 2026-10-25: "poor can be red low can be orange then medium a yellowish amber
+ *  and green for high") — the health pill's own four (HEALTH_COLOURS), so a colour means the same thing everywhere. */
+#cwList .q.high, #cwList .cwr.q-high .tx { color: #5BE36B; }
+#cwList .q.medium, #cwList .cwr.q-medium .tx { color: #E8C547; }
+#cwList .q.low, #cwList .cwr.q-low .tx { color: #FF8A3D; }
+#cwList .q.poor, #cwList .cwr.q-poor .tx { color: #FF4B4B; }
+#cwList .q.poor { color: var(--text-dim); }
+#cwList .tx { grid-column: 1 / -1; font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); font-size: 12px;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+#cwList .tx bdi { direction: ltr; unicode-bidi: isolate; }
+#cwRows .idle, #cwSpots .idle { color: var(--text-dim); font-size: 11px; padding: 6px; }
+#cwSpotsHead { color: var(--text-dim); font-size: 10px; letter-spacing: 1px; margin: 8px 6px 2px; }
+#cwSpots .cws { display: grid; grid-template-columns: 3.2em 6.2em minmax(4.5em, 1fr) minmax(0, 1.2fr) 4.8em; gap: 8px;
+                font-size: 11px; padding: 3px 6px; cursor: pointer; align-items: baseline; }
+#cwSpots .cws .t { color: var(--unit); font-variant-numeric: tabular-nums; }
+#cwSpots .cws .w { color: var(--unit); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#cwSpots .cws .ct { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ★ Narrow box (a phone): the same fields, wrapping onto two lines — nothing dropped (the spot list's rule). */
+@container decbox (max-width: 400px) {
+  #cwList .cwr, #cwSpots .cws { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+  #cwList .cwr .c { flex: 1 1 auto; min-width: 0; }
+  #cwList .cwr .tx { flex: 1 1 100%; }
+  #cwSpots .cws .ct { flex: 1 1 auto; min-width: 0; }
+}
 
 /* Menu button rows + settings sub-panels (mirrors the app's menu). */
 .btnRow { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
@@ -3163,6 +3202,9 @@ select.btn { padding: 6px 8px; }
 #srvHealth .hCap { font: 700 9px/1 system-ui, sans-serif; letter-spacing: 0.16em;
                    color: #B9C0B4; text-align: center; margin-bottom: 3px; }
 #srvHealth .hRow { display: flex; align-items: center; justify-content: center; gap: 8px; }
+/* ★ "<decoder>: TOO HEAVY" — the caption's own size and spacing, in the readout amber, under the icons (renderHealthPill). */
+#srvHealth .hWarn { font: 700 9px/1.2 system-ui, sans-serif; letter-spacing: 0.08em; color: #ffb833;
+                    text-align: center; margin-top: 3px; white-space: nowrap; }
 #srvHealth .hSlot { display: inline-flex; position: relative; }
 #srvHealth .hDiv { width: 1px; align-self: stretch; background: rgba(255,255,255,0.16); }
 /* ★ The percentage and the bolt are drawn INSIDE the outline now (see renderHealthPill), so this
@@ -3570,6 +3612,9 @@ select.btn { padding: 6px 8px; }
     <div id="decImgWrap"><canvas id="decImage"></canvas><div id="decAlignCover" style="display:none"
       title="Drag sideways to align the chart"><span id="decAlignHint">◀ ─── drag ───▶</span></div></div>
     <div id="spotList"></div>
+    <!-- ★★ CW: every signal the server is decoding — frequency, call (once spotted), speed, SNR, quality, last heard,
+         and its recent text — then the callsigns spotted. The primary signal's text is #decText above it. -->
+    <div id="cwList"><div id="cwRows"></div><div id="cwSpotsHead">SPOTS</div><div id="cwSpots"></div></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
          health. The VTS bar hides while this is open — no point showing the same data
          twice, and this is the surface the user deliberately chose. -->
@@ -4499,8 +4544,8 @@ select.btn { padding: 6px 8px; }
 
 <!-- DECODERS menu — a copy of the app's CLIENT DECODERS + DECODED SPOTS section.
      No viewer in here: selecting a decoder opens the persistent output box
-     (bottom-left), the way OpenWebRX does it. Morse is absent on purpose — the
-     shim has no morse decoder (the app hides it for local hardware too). -->
+     (bottom-left), the way OpenWebRX does it. ★ V12: CW is this server's own (one FFT filterbank over the passband or
+     a segment, decoders/cw_skimmer.h) — drawn only where vibeserver.json says "cw": true. -->
 <div id="decodersPanel">
   <div id="menuHead">
     <span>DECODERS</span>
@@ -4515,6 +4560,7 @@ select.btn { padding: 6px 8px; }
   <h2>CLIENT DECODERS</h2>
   <div class="btnRow">
     <button class="btn" data-dec="rtty">RTTY</button>
+    <button class="btn" data-dec="cw" hidden title="Morse — the signal in your passband decoded, every other one in it listed; or SKIMMER: every CW signal across a segment around your dial">CW</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
     <button class="btn" data-dec="sstv">SSTV</button>
@@ -4548,6 +4594,28 @@ select.btn { padding: 6px 8px; }
     </div>
     <div class="hint" id="timeHint">MSF, Anthorn — tune <b>60.000 kHz</b> in <b>CW</b>. The fields
       fill in as they arrive; a reading is only shown once a second minute confirms it.</div>
+  </div>
+
+  <!-- ★★ CW (V12, 2026-10-25): ONE SIGNAL decodes your passband (tune it in CW; a wide USB filter lists every carrier in
+       it) — SKIMMER decodes every CW signal across a segment centred on your dial, from the same engine. -->
+  <div class="subPanel" id="cwSettings" hidden>
+    <div class="mrow">
+      <label>VIEW</label>
+      <div class="seg" id="cwView">
+        <button class="btn on" data-cwview="one" title="Your passband: the signal you are tuned to, and any others in it">ONE SIGNAL</button>
+        <button class="btn" data-cwview="skim" title="Every CW signal across a segment centred on your dial">SKIMMER</button>
+      </div>
+    </div>
+    <div class="mrow" id="cwWidthRow" hidden>
+      <label>SEGMENT</label>
+      <div class="seg" id="cwWidth">
+        <button class="btn" data-cwwidth="24000" title="12 kHz either side of the dial">24 kHz</button>
+        <button class="btn on" data-cwwidth="48000" title="24 kHz either side of the dial">48 kHz</button>
+        <button class="btn" data-cwwidth="96000" title="48 kHz either side of the dial (where the radio's capture is that wide)">96 kHz</button>
+      </div>
+    </div>
+    <div class="hint" id="cwHint">Tune the signal in <b>CW</b> — the decoder finds the speed itself (5–60 WPM). A wider
+      USB filter lists every CW signal inside it. Tap a row to tune to it.</div>
   </div>
 
   <div class="subPanel" id="rttySettings" hidden>
@@ -4678,6 +4746,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-kind="wefax">WEFAX</button>
     <button class="btn" data-kind="sstv">SSTV</button>
     <button class="btn" data-kind="ft8">FT8</button>
+    <!-- ★★ V12 2026-10-25: CW — a listener's decoded text (a run, as RTTY's) and the skimmer's spots summary cards. -->
+    <button class="btn" data-kind="cw">CW</button>
     <!-- ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card. -->
     <button class="btn" data-kind="ism">ISM</button>
   </div>

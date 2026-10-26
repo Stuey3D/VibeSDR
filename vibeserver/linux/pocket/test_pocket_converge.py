@@ -107,7 +107,8 @@ LITE_UNITS = ["NetworkManager.service", "avahi-daemon.service", "bluetooth.servi
               "getty@.service", "serial-getty@.service", "udisks2.service", "nftables.service",
               "dphys-swapfile.service", "fake-hwclock.service", "rpi-display-backlight.service",
               "vibeserver.service", "vibeserver-radios.service", "vibeserver-maintenance.path",
-              "vibeserver-pocket.service", "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service"]
+              "vibeserver-pocket.service", "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service",
+              "vibeserver-pocket-cpu.service"]
 LITE_ENABLED = ["NetworkManager.service", "avahi-daemon.service", "bluetooth.service", "hciuart.service",
                 "ModemManager.service", "triggerhappy.service", "apt-daily.timer", "man-db.timer",
                 "keyboard-setup.service", "dphys-swapfile.service"]
@@ -118,7 +119,7 @@ def dpkg_status(pkgs):
 
 
 ALL_PKGS = ["network-manager", "dnsmasq-base", "nftables", "iw", "rfkill", "python3", "ca-certificates", "curl",
-            "gnupg", "avahi-daemon", "ffmpeg", "overlayroot", "initramfs-tools", "vibeserver"]
+            "gnupg", "avahi-daemon", "ffmpeg", "overlayroot", "initramfs-tools", "dosfstools", "vibeserver"]
 
 
 def make_root(tmp, marker=True, pkgs=ALL_PKGS):
@@ -220,9 +221,21 @@ def main():
         av = F(r, "etc/avahi/avahi-daemon.conf")
         ok("\n#allow-interfaces=wlan0  # off" in av and "\nallow-interfaces" not in av, "avahi: allow-interfaces switched off")
         ok("#deny-interfaces=eth1\n" in av, "avahi: an already-commented line is left as it was")
+        # ★★ 2026-10-25 (Nick's Orange Pi One: the name resolved to IPv6 addresses only)
+        ok(re.search(r"^publish-a-on-ipv6=yes", av, re.M) and re.search(r"^publish-aaaa-on-ipv4=yes", av, re.M),
+           "avahi: the A record in IPv6 answers and the AAAA in IPv4 answers (both families, both transports)")
+        pub = av.split("[publish]", 1)[1].split("\n[", 1)[0] if "[publish]" in av else ""
+        ok("publish-a-on-ipv6=yes" in pub, "…set in [publish], not elsewhere")
+        # ★★★ 2026-10-25 (Stuart: "the only .local address open after setup should be the one the user sets")
+        gate = F(r, "etc/systemd/system/avahi-daemon.service.d/50-vibeserver-pocket.conf") or ""
+        ok("[Service]" in gate and "ExecCondition=/usr/lib/vibeserver/vibeserver-pocket avahi-gate" in gate,
+           "avahi asks vibeserver-pocket before every start (ExecCondition) which name, if any, to publish")
+        rs = F(r, "etc/systemd/resolved.conf.d/60-vibeserver-pocket.conf") or ""
+        ok("LLMNR=no" in rs and "MulticastDNS=no" in rs, "systemd-resolved answers no name (no LLMNR on 5355, no second mDNS)")
         wants = os.path.join(r, "etc/systemd/system/multi-user.target.wants")
         for u in ("vibeserver.service", "vibeserver-pocket.service", "vibeserver-maintenance.path",
-                  "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service", "vibeserver-radios.service"):
+                  "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service", "vibeserver-radios.service",
+                  "vibeserver-pocket-cpu.service"):
             ok(os.path.lexists(os.path.join(wants, u)), "enabled: " + u)
         for u in ("bluetooth.service", "ModemManager.service", "apt-daily.timer", "dphys-swapfile.service"):
             ok(not os.path.lexists(os.path.join(wants, u)), "disabled: " + u)

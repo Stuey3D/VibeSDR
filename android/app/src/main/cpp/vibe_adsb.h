@@ -694,8 +694,20 @@ public:
 
     /** Forget aircraft not heard for `age` seconds. */
     void expire(double now, double age = 60.0) {
-        for (auto it = ac_.begin(); it != ac_.end();) it = (now - it->second.seen > age) ? ac_.erase(it) : std::next(it);
+        for (auto it = ac_.begin(); it != ac_.end();) {
+            if (now - it->second.seen <= age) { ++it; continue; }
+            Aircraft& a = it->second;
+            if (a.trail.size() >= 2) gone_[it->first] = {std::move(a.trail), a.trackedNm, now};
+            it = ac_.erase(it);
+        }
+        for (auto it = gone_.begin(); it != gone_.end();) it = (now - it->second.at > kGoneKeepSec) ? gone_.erase(it) : std::next(it);
+        while (gone_.size() > kGoneMax) {
+            auto oldest = gone_.begin();
+            for (auto it = gone_.begin(); it != gone_.end(); ++it) if (it->second.at < oldest->second.at) oldest = it;
+            gone_.erase(oldest);
+        }
     }
+    size_t goneTrails() const { return gone_.size(); }
 
     const std::unordered_map<uint32_t, Aircraft>& aircraft() const { return ac_; }
     /** {"type":"adsb_trail","hex":"…","pts":[[lat,lon,alt|null],…]} (alt 0 on the ground) — empty pts when unknown. `hex` as the
@@ -779,7 +791,12 @@ private:
 
     Aircraft& touch(uint32_t addr, const Frame& f, double now) {
         Aircraft& a = ac_[addr];
-        if (a.messages == 0) { a.icao = addr; a.level = f.level; }
+        if (a.messages == 0) {
+            a.icao = addr; a.level = f.level;
+            // ★ back within kGoneKeepSec: it carries on with the trail it had (see Gone)
+            auto g = gone_.find(addr);
+            if (g != gone_.end()) { a.trail = std::move(g->second.trail); a.trackedNm = g->second.trackedNm; gone_.erase(g); }
+        }
         a.seen = now;
         ++a.messages;
         a.level += (f.level - a.level) * 0.25f;
@@ -897,8 +914,11 @@ private:
      *  than 1 200 kt is a bad fix that slipped through, not flight, and is not added (the position still moves). */
     static void setPos(Aircraft& a, double lat, double lon, double now) {
         if (a.hasPos) {
-            const double d = distanceNm(a.lat, a.lon, lat, lon), dt = now - a.seenPos;
-            if (dt > 0 && d / dt * 3600.0 <= 1200.0) a.trackedNm += d;
+            // ★★ dt is never under a second for this test: two fixes in one block share a time (dt 0 — that wiped the
+            //    trail even for the SAME fix twice), and a block's stamp is only as fine as the block. A bad fix is
+            //    miles out, far past 1 200 kt × 1 s = 0.33 NM, so the floor lets nothing real through.
+            const double d = distanceNm(a.lat, a.lon, lat, lon), dt = std::max(1.0, now - a.seenPos);
+            if (d / dt * 3600.0 <= 1200.0) a.trackedNm += d;
             else a.trail.clear();          // ★ a jump that is not flight: the old trail would draw a line across the map
         }
         a.hasPos = true; a.lat = lat; a.lon = lon; a.seenPos = now;
@@ -920,6 +940,14 @@ private:
     }
 
     std::unordered_map<uint32_t, Aircraft> ac_;
+    /* ★★ TRAILS OUTLIVE A SHORT SILENCE (Stuart, 2026-10-25: "save the tracks so that I can come on and click a 157nm
+     *  tracked aircraft and see its track drawn in"). An aircraft unheard for 60 s leaves the table; its trail waits
+     *  here 20 min and is handed back if it is heard again — fading at range, or behind a hill, is not a new flight.
+     *  At most 200 kept: ≤ 12 KB each, ~2.4 MB worst case. */
+    struct Gone { std::vector<TrailPt> trail; double trackedNm; double at; };
+    static constexpr double kGoneKeepSec = 20 * 60;
+    static constexpr size_t kGoneMax = 200;
+    std::unordered_map<uint32_t, Gone> gone_;
     bool haveRx_ = false; double rxLat_ = 0, rxLon_ = 0;
     double maxRangeNm_ = 400;
     uint64_t good_ = 0, rejected_ = 0, repaired_ = 0;

@@ -108,6 +108,7 @@
 #include "vibedsp/vibedsp.h"        // V5 clean-room GPL-free DSP engine (RxPipeline)
 #include "vibedsp/simd_internal.h"  // convI16ToF32 — the 16-bit radios' IQ conversion, vectorised
 #include "vibedsp/gainstep.h"       // GainStepSmoother — our own gain steps made level-continuous
+#include "vibe_wide_tap.h"          // ★ V12: a CW skimmer's slice on a one-pipeline radio
 #include "net_shim.h"
 #include "spyserver/spyserver_client.h"               // V5 clean-room GPL-free TCP socket wrapper
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
@@ -154,6 +155,7 @@ struct VibeRtlTunerOps {
 #include <poll.h>
 #include <sys/socket.h>   // MSG_PEEK, recv — for the hand-off peek        // hand-written: the setup page, GET / when unconfigured
 #include "vibe_admin.h"
+#include "vibe_ipclass.h"     // ★ IPv6 clients: LAN prefixes, the /64 lockout key (2026-10-25)
 #include "vibe_health.h"
 #include "vibe_mapdata.h"   // the bundled vector map, served from DISK — see the header
 #include "vibe_mapgl.h"     // the GPU map's files (renderer, style, glyphs, PMTiles) — see the header
@@ -5260,7 +5262,11 @@ struct VsAuth {
         issued[hex] = now;
         return hex;
     }
-    bool blocked(const std::string& ip) {
+    /* ★★ IPv6 (2026-10-25, the listener is dual-stack): a remote client owns a whole /64 and can take a new address
+     *  per guess, so the lockout counts a remote IPv6 client under its /64 (vibeip::lockKey). IPv4 and LAN addresses
+     *  count exactly as before. Every entry point below goes through it. */
+    bool blocked(const std::string& ipIn) {
+        const std::string ip = vibeip::lockKey(ipIn);
         std::lock_guard<std::mutex> lk(mtx);
         auto it = fails.find(ip);
         return it != fails.end() && nowMs() < it->second.until;
@@ -5268,14 +5274,16 @@ struct VsAuth {
     /** Seconds left on this IP's lockout, 0 if none. The CLIENT needs this: a WebSocket
      *  error carries no status code, so without being told, a locked-out browser reports
      *  "wrong PIN" and the user retypes a perfectly correct one forever. */
-    int blockedFor(const std::string& ip) {
+    int blockedFor(const std::string& ipIn) {
+        const std::string ip = vibeip::lockKey(ipIn);
         std::lock_guard<std::mutex> lk(mtx);
         auto it = fails.find(ip);
         if (it == fails.end()) return 0;
         int64_t left = it->second.until - nowMs();
         return left > 0 ? (int)((left + 999) / 1000) : 0;
     }
-    void recordFail(const std::string& ip) {
+    void recordFail(const std::string& ipIn) {
+        const std::string ip = vibeip::lockKey(ipIn);
         std::lock_guard<std::mutex> lk(mtx);
         const int64_t now = nowMs();
         /* ★★ BOUNDED (audit 2026-10-03). An entry was only ever removed by a SUCCESS from the same
@@ -5304,7 +5312,7 @@ struct VsAuth {
         }
     }
     void recordOk(const std::string& ip) {
-        std::lock_guard<std::mutex> lk(mtx); fails.erase(ip);
+        std::lock_guard<std::mutex> lk(mtx); fails.erase(vibeip::lockKey(ip));
     }
     /** Is this a nonce we issued and still hold? An unknown one cannot be a PIN guess — a guess
      *  has to be made against a nonce the server handed out — so callers may refuse it without
@@ -5559,7 +5567,10 @@ static bool isPrivateIp(const std::string& ip) {
     std::string v = ip.rfind("::ffff:", 0) == 0 ? ip.substr(7) : ip;
     if (v.rfind("10.", 0) == 0 || v.rfind("192.168.", 0) == 0) return true;
     if (v.rfind("172.", 0) == 0) { const int o = atoi(v.c_str() + 4); if (o >= 16 && o <= 31) return true; }
-    if (v.rfind("fd", 0) == 0 || v.rfind("fe80", 0) == 0) return true;   // ULA / link-local v6
+    /* ★★ IPv6 (2026-10-25, the listener is dual-stack): fc00::/7 ULA and fe80::/10 link-local (the old text test
+     *  caught only fd… and fe80…), and a GLOBAL address inside one of this box's own on-link prefixes — IPv6 has no
+     *  NAT, so the laptop beside the box has a public address in the box's /64. See vibe_ipclass.h. */
+    if (v.find(':') != std::string::npos) return vibeip::isLinkLocalOrUla(v) || vibeip::onLinkV6(v);
     return false;
 }
 /** The machine's own LAN address, for the "connect your app to …" line. First non-loopback IPv4. */
@@ -7827,6 +7838,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /** ★ This listener's own extract scratch — see Channelizer::ExtractCtx. Sharing one made
          *  every listener's channel land somewhere other than it asked for. */
         vibedsp::Channelizer::ExtractCtx ectx, vectx;
+        /** ★ V12: a CW skimmer's slice of the same FFT (its own scratch, as above). */
+        vibedsp::Channelizer::ExtractCtx sctx;
+        std::vector<cf32> skimSlice;
     };
     std::map<net::Socket*, std::shared_ptr<ClientDsp>> clientDsp;
     /** ★★★ THE VISIT VERDICT FOR A LISTENER WITH NO ClientDsp — see VisitTally. Keyed on the
@@ -23467,6 +23481,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string key = ext;
         if (ext == "fsk") key = "rtty";
         else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") key = "time";
+        else if (ext == "cwskim") key = "cw";        // ★ the skimmer is CW's too — one owner switch
         return !key.empty() && vsModeBlocked(key);
     }
 
@@ -23889,6 +23904,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("raw IQ out: tunnel consumer left");
     }
 
+    /** ★ The mode a listener's decoder hears through — theirs on a per-VFO radio, the radio's otherwise. */
+    std::string sessionMode(const std::string& session) {
+        std::string md;
+        if (!session.empty()) {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) if (kv.second && kv.second->session == session) { md = kv.second->mode; break; }
+        }
+        if (md.empty()) { std::lock_guard<std::recursive_mutex> ml(modeMtx); md = mode; }
+        return md;
+    }
     /** A host's view of this server: where its dial is, where it logs, whose slots it takes. */
     DecoderHost::Env decoderEnv(const std::string& session) {
         DecoderHost::Env e;
@@ -23898,6 +23923,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         e.slots = decoderOnly ? nullptr : &vsDecoderSlots();
         // ★★ FT8/FT4 earn a 2nd/3rd pass only on spare CPU — the same rungs that pace a tune (2026-10-05).
         e.loaded = [this] { return vibetune::paceMs(serverLoad()) > 0; };
+        /* ★★ CW (V12 2026-10-25): a listener's AUDIO frequency → RF, by their mode — USB dial + a, LSB dial − a, and this
+         *  server's CW (a USB demodulator tuned so a carrier ON the dial is a 600 Hz tone: buildAudio's -bw/2) dial + a − 600. */
+        e.rfOfAudio = [this, session](double a) {
+            double dial = audioFreq.load();
+            if (!session.empty()) {
+                std::lock_guard<std::mutex> lk(clientMtx);
+                for (auto& kv : clientDsp) if (kv.second && kv.second->session == session) { dial = kv.second->vfoHz; break; }
+            }
+            const std::string md = sessionMode(session);
+            if (md == "lsb") return dial - a;
+            if (md == "cw" || md == "cwu" || md == "cwl" || md == "cwr") return dial + a - paramsFor(md).bandwidth * 0.5;
+            return dial + a;
+        };
         if (session.empty()) e.dialHz = [this] { return audioFreq.load(); };
         else e.dialHz = [this, session] {
             // ★ THIS listener's dial. A spot's RF frequency is dial + audio offset, and on a per-VFO
@@ -23927,6 +23965,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 m.mode = md;
                 m.lat = g_bgLat.load(); m.lon = g_bgLon.load();   // ★ names a NAVTEX station (vibe_navtex_stations.h)
                 return vibe::bg::makeGalleryTap(vibe::gallery::shared(), m, dial);
+            };
+            // ★★ …and a listener's CW (V12 2026-10-25): the same summary of its spots, labelled CW.
+            e.cwSpotTap = [this, session, dial](bool skimmer) -> vibe::DecoderTapPtr {
+                if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
+                vibe::gallery::Meta m;
+                m.kind = "cw"; m.origin = "live"; m.decoder = skimmer ? "cwskim" : "cw";
+                m.mode = sessionMode(session);
+                m.freqHz = dial ? dial() : 0.0;
+                return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
             };
             // ★★ …and a listener's FT8/FT4: the same SUMMARY background decoding keeps, one per spotting session.
             e.spotTap = [dial]() -> vibe::DecoderTapPtr {
@@ -24656,6 +24703,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                           c->viewChanBins, c->viewSlice.data(), c->vectx, blockIndex);
             if (gv > 0) c->viewRx->feed(c->viewSlice.data(), gv);
         }
+        // ★★ A CW SKIMMER on this listener's dial (V12, 2026-10-25): one more slice of the SAME forward FFT, as wide as
+        //    its segment — the whole of "make it lightweight": no transform of its own, one small inverse a block. The
+        //    atomic first, so a radio with no skimmer never looks for a host.
+        if (DecoderHost::skimmersRunning().load(std::memory_order_relaxed) > 0) {
+            std::shared_ptr<DecoderHost> h = decoders_.find(c->session);
+            if (h && h->wantsIq()) {
+                const double w = std::min(h->iqWidthHz(), sampleRate * 0.8);
+                int b = 64;
+                while (b < fftSize && sampleRate * (double)b / (double)fftSize < w / 0.92) b <<= 1;
+                b = std::min(b, fftSize);
+                if ((int)c->skimSlice.size() != b) c->skimSlice.assign((size_t)b, cf32{0.0f, 0.0f});
+                const int cb = clientCentreBin(c.get());
+                const int gs = chan_->extract(bins, cb, b, c->skimSlice.data(), c->sctx, blockIndex);
+                const double binHz = sampleRate / (double)fftSize;
+                if (gs > 0) h->feedIq(c->skimSlice.data(), gs, sampleRate * (double)b / (double)fftSize,
+                                      rtlCenter.load() + hwOffsetHz() + cb * binHz);
+            }
+        }
     }
 
     void feedClientChannels(const cf32* iq, int n) {
@@ -25135,6 +25200,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             feedClientChannels(buf.data(), (int)buf.size());
             // ★★ V12 background decoding: a COPY into its own bounded queue, nothing more on this thread.
             if (bgActive_.load(std::memory_order_relaxed)) bgRun_.feedIq(buf.data(), (int)buf.size());
+            // ★★ V12: a CW skimmer on a ONE-PIPELINE radio — its own slice, cut off this thread (vibe_wide_tap.h).
+            if (!perClientDsp()) skimTapFeed(buf.data(), (int)buf.size());
             {
                 const auto t1 = std::chrono::steady_clock::now();
                 const double wideMs = std::chrono::duration<double,std::milli>(tMid - t0).count();
@@ -25699,6 +25766,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     as a listener is (2026-10-07, see sharedDecoderNeedsAudio). This is the question every
         //     park, release and keepalive site asks, so it is answered once, here.
         if (sharedDecoderNeedsAudio()) return false;
+        // ★ …or a CW skimmer, which takes the capture's IQ rather than its audio (V12).
+        if (!perClientDsp() && decoders_.sharedWantsIq()) return false;
         return true;
     }
 
@@ -25714,6 +25783,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // ★ While a profile is due (bgWanted_), the idle park is held off: parking and waking a radio is the most dangerous
     //   thing this server does to it (see g_vsIdleGraceSec), and doing it five minutes before taking it back is waste.
     vibe::bg::BgRunner bgRun_;
+    /** ★★ V12 2026-10-25: a CW skimmer on a one-pipeline radio (no ClientDsp, no channeliser) — see vibe_wide_tap.h. Fed
+     *  on the DSP thread only while the shared host's skimmer runs; started and stopped there too (a rare event). */
+    vibe::WideTap skimTap_;
+    void skimTapFeed(const cf32* iq, int n) {
+        const bool want = DecoderHost::skimmersRunning().load(std::memory_order_relaxed) > 0 && decoders_.sharedWantsIq();
+        if (!want) { if (skimTap_.running()) skimTap_.stop(); return; }
+        if (!skimTap_.running()) {
+            std::weak_ptr<DecoderHost> wh = decoders_.shared();
+            skimTap_.start([wh](const cf32* x, int k, double rate, double centre) {
+                if (auto h = wh.lock()) h->feedIq(x, k, rate, centre);
+            });
+        }
+        std::shared_ptr<DecoderHost> h = decoders_.shared();
+        vibe::WideTap::Geometry g;
+        g.sampleRate = sampleRate; g.hwCentreHz = rtlCenter.load() + hwOffsetHz(); g.wantCentreHz = audioFreq.load();
+        g.widthHz = h ? std::min(h->iqWidthHz(), sampleRate * 0.8) : 0; g.fftSize = fftSize;
+        skimTap_.aim(g);
+        skimTap_.feed(iq, n);
+    }
     vibe::bg::BgRegistry bgReg_;                // ★ this radio's background VFOs, as the box sees them (pause / resume)
     std::mutex         bgOpMtx_;                // ★ one start/stop at a time — the tick, an arrival
     std::atomic<bool>  bgActive_{false};        // the runner is running (read by the DSP thread on every block)
@@ -30592,6 +30680,9 @@ static std::string vsTunableJson() {
     // ★ Whether to OFFER DAB at all. The client must not draw a control whose every use is a
     //   no-op (AGENTS.md), and only the server knows the effective limits.
     j += std::string(",\"dab\":") + (vsDabCapable() ? "true" : "false");
+    /* ★★ CW (V12, 2026-10-25): this server's own CW decoder and skimmer (decoders/cw_skimmer.h). Absent on an older server,
+     *  so its clients draw no CW button there; false where the owner has blocked CW on this receiver. */
+    j += std::string(",\"cw\":") + (vsModeBlocked("cw") ? "false" : "true");
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {
@@ -30872,6 +30963,35 @@ static vibehealth::Sampler g_health;
 static vibehealth::Health  g_healthLast;
 static std::atomic<bool>   g_healthValid{false};
 
+/** ★★ The readable name of a listener's decoder host (vibe_decoder_host.h name() is the decoder's ext). */
+static std::string decoderLabel(const std::string& ext, bool spots) {
+    static const std::map<std::string, std::string> names = {
+        {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
+        {"cw", "CW"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+    std::string n;
+    if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
+    if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";
+    return n;
+}
+
+/** ★★ Who lost input in the last minute — see vibehealth::BehindWatch. Listeners' decoders, background decoding,
+ *  ADS-B and ISM: every decoder that runs behind a drop-never-wait queue. (Advanced RDS runs inside the DSP's own
+ *  pass, with no queue of its own to fall behind on, so it is not judged here.) */
+std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
+    static vibehealth::BehindWatch watch;
+    if (p) {
+        for (auto& kv : p->decoders_.all()) {
+            auto& hst = kv.second;
+            const std::string lb = decoderLabel(hst->name(), hst->spotsOn());
+            if (!lb.empty()) watch.note("dec:" + kv.first, lb, hst->droppedSamples(), nowMs);
+        }
+        if (p->bgRun_.running()) watch.note("bg", "Background decoding", p->bgRun_.droppedSamples(), nowMs);
+    }
+    if (g_adsb.running()) watch.note("adsb", "ADS-B", g_adsb.health().dropped, nowMs);
+    if (g_ism.running()) watch.note("ism", "ISM", g_ism.droppedBlocks(), nowMs);
+    return watch.behind(nowMs);
+}
+
 std::string LocalSdrShim::healthJson() {
     return g_healthValid.load() ? vibehealth::json(g_healthLast) : std::string();
 }
@@ -30887,7 +31007,8 @@ void LocalSdrShim::healthTick() {
      *  visible and hands the time back to the audio. */
     if (now - lastAt < 2000) return;
     lastAt = now;
-    const vibehealth::Health h = g_health.sample(g_vsBatteryLevel.load(), g_vsBatteryCharging.load());
+    vibehealth::Health h = g_health.sample(g_vsBatteryLevel.load(), g_vsBatteryCharging.load());
+    h.behind = decodersBehind(now);
     // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,
     //   so they follow every sample, not only the ones that changed a level.
     g_healthCpuLevel.store((int)h.cpu, std::memory_order_relaxed);

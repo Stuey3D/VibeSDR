@@ -48,6 +48,10 @@ if (bwl !== undefined && bwh !== undefined) q += `&bandwidthLow=${bwl}&bandwidth
 const ws = new WebSocket(`${tls ? 'wss' : 'ws'}://${hp}/ws?${q}`, { headers: { 'User-Agent': UA } });
 ws.binaryType = 'arraybuffer';
 const chunks = []; let rate = 0, ch = 1, samples = 0, bad = 0;
+/* ★ THE FIRST SAMPLE'S UTC (2026-10-25, the FT8 CPU work): a slot decoder needs to know where the slot boundaries are
+ *  in the file. Every packet's arrival minus the samples so far is a LATE estimate of it (a packet is never early), so
+ *  the lowest is the best — the same lowest-latency anchor the server's FT8 decoder uses. Printed as start_utc=. */
+let startUtc = Infinity;
 const t0 = Date.now();
 ws.onmessage = (ev) => {
   if (typeof ev.data === 'string') return;                    // status / signal JSON
@@ -63,6 +67,7 @@ ws.onmessage = (ev) => {
   const le = Buffer.alloc(n * 2);
   for (let i = 0; i < n; i++) le.writeInt16LE(BE ? p.readInt16BE(off + i * 2) : p.readInt16LE(off + i * 2), i * 2);
   chunks.push(le); samples += n;
+  startUtc = Math.min(startUtc, Date.now() / 1000 - samples / ch / rate);
 };
 ws.onerror = (e) => console.error('ws error', e.message ?? e);
 // ★ Presence ping only while recording, at a third of the idle window (≥ their 10 s throttle); none if no idle check.
@@ -83,7 +88,7 @@ const finish = () => {
   h.writeUInt32LE(rate * ch * 2, 28); h.writeUInt16LE(ch * 2, 32); h.writeUInt16LE(16, 34);
   h.write('data', 36); h.writeUInt32LE(data.length, 40);
   writeFileSync(out, Buffer.concat([h, data]));
-  console.log(`${out}: ${(samples / ch / (rate || 1)).toFixed(1)} s at ${rate} Hz x${ch}, wall ${((Date.now() - t0) / 1000).toFixed(1)} s, bad packets ${bad}`);
+  console.log(`${out}: ${(samples / ch / (rate || 1)).toFixed(1)} s at ${rate} Hz x${ch}, wall ${((Date.now() - t0) / 1000).toFixed(1)} s, bad packets ${bad}, start_utc=${startUtc.toFixed(3)}`);
   process.exit(0);
 };
 ws.onclose = () => finish();

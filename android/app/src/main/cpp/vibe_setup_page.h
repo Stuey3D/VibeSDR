@@ -307,6 +307,16 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <button type="button" class="ghost" id="wifiOffNo" style="margin-left:8px">Keep Wi-Fi on</button>
         </div>
       </div>
+      <!-- ★★★ NEW WI-FI HARDWARE (Stuart, 2026-10-25: "dont force a resetup if a wifi dongle is detected but when a user
+           goes into setup show an option for new wifi hardware detected, configure it now?"). A radio that appears on a
+           set-up box is left alone by the box (no hotspot, no network) and listed here: Configure makes it this box's
+           Wi-Fi and opens the form; Not now records it so it is not asked again (it can still be used later, below). -->
+      <div class="note hide" id="wifiNew" style="margin-bottom:12px">
+        <p style="margin:0 0 10px;white-space:pre-line" id="wifiNewText"></p>
+        <button type="button" id="wifiNewYes">Configure</button>
+        <button type="button" class="ghost" id="wifiNewNo" style="margin-left:8px">Not now</button>
+        <span class="note" id="wifiNewMsg" style="margin-left:10px"></span>
+      </div>
       <!-- ★★ ONCE SET UP, ONE LINE (Stuart, 2026-10-10: "collapses into the button so its not a large block
            that has to be scrolled every time"). Open in full only on the first-boot setup hotspot, while
            nothing is saved yet, or when the owner asks to change it. -->
@@ -333,6 +343,12 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         This box cannot save its settings &mdash; its settings partition is missing or unreadable.
         Anything set up now will be lost at the next restart. Re-flash the card with the latest image.
       </div>
+      <!-- ★★★ THE MANUAL OVERRIDE (Stuart, 2026-10-25, Nick's Orange Pi One: "autodetect wifi and hide the options, if that
+           fails then a manual toggle to ignore it"). Drawn only while the Wi-Fi form IS showing — i.e. when the box did not
+           say "no Wi-Fi" or "Wi-Fi off". Ticked on a box that reports a Wi-Fi radio and a cable, it is the real switch-off
+           (the warning above, then the root service); otherwise the page simply stops asking for, and saving, Wi-Fi. -->
+      <label id="wifiIgnoreRow" class="hide" style="display:flex;gap:8px;align-items:center;margin:4px 0 12px">
+        <input type="checkbox" id="wifiIgnore" style="width:auto;margin:0"> <span>Disable Wi-Fi / no Wi-Fi present</span></label>
       <div id="wifiEdit">
       <!-- ★★ UNSAVED, SAID AT THE TOP (Stuart, 2026-10-10: "I never noticed that button as I had to scroll to get it").
            Appears the moment anything in the card differs from what the box holds. -->
@@ -390,6 +406,26 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <button type="button" id="wifiGo">Show me what happens next</button>
         <div class="wifiDone hide" id="wifiDone"></div>
       </div>
+      </div>
+
+      <!-- ★★★ ENABLE SSH (Stuart, 2026-10-25, 11.0.11) — a Portable only, OFF by default. The card ships with sshd off
+           because its first network is an OPEN hotspot. The owner switches it on here with a password THEY type; the box
+           sets it for its "vibe" login and keeps only the system's hash on the settings partition, so it survives a
+           restart. Not offered while the open setup hotspot is up (anyone on it could try the password). -->
+      <div class="card hide" id="sshCard">
+      <h2>SSH</h2>
+      <p class="why" id="sshText" style="white-space:pre-line"></p>
+      <div id="sshOnForm" class="hide">
+        <label>SSH password for the <b>vibe</b> login
+          <input type="password" id="sshPass" autocomplete="new-password" maxlength="128"></label>
+        <label>The same again
+          <input type="password" id="sshPass2" autocomplete="new-password" maxlength="128"></label>
+        <p class="note" style="margin:6px 0 10px">At least 8 characters. Choose one you do not use anywhere else — it also
+           unlocks <code>sudo</code> on this box. It is not kept anywhere you could read it back, so remember it.</p>
+        <button type="button" id="sshOnBtn">Turn SSH on</button>
+      </div>
+      <button type="button" class="ghost hide" id="sshOffBtn">Turn SSH off</button>
+      <span class="note" id="sshMsg" style="margin-left:10px"></span>
       </div>
 
       <!-- ★★ ONE SHARING SWITCH (Stuart, 2026-10-16). The Portable had its own "Share with the world" card here —
@@ -5484,6 +5520,11 @@ const BG_DECODERS = [
   { id: "wefax",        label: "WEFAX (120 LPM)",              tone: 1900, modes: ["usb"] },
   { id: "sstv",         label: "SSTV",                         tone: 0,    modes: ["usb", "nfm"] },
   { id: "ft8",          label: "FT8 / FT4 (summary)",          tone: 0,    modes: ["usb"] },
+  // ★★ V12 2026-10-25: CW SKIMMERS — every CW signal in a segment CENTRED on the VFO's frequency, kept as a summary of
+  //    the spots (as FT8 is). "usb" because a VFO row has a demodulator; none runs for a skimmer (it is fed IQ).
+  { id: "cw-skim-24",   label: "CW skimmer, 24 kHz (summary)", tone: 0,    modes: ["usb"] },
+  { id: "cw-skim-48",   label: "CW skimmer, 48 kHz (summary)", tone: 0,    modes: ["usb"] },
+  { id: "cw-skim-96",   label: "CW skimmer, 96 kHz (summary)", tone: 0,    modes: ["usb"] },
 ];
 const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodulators some background decoder works on
 /* ★★ V12 2026-10-25 — AN ISM PROFILE (Stuart: ISM "selectable as a decoder in a background-decoding profile"). ISM is a
@@ -6586,6 +6627,52 @@ async function wifiLoad() {
   renderDirStatus(cfg && cfg.dirStatus);
   try { WIFI_BASELINE = JSON.stringify(wifiCollect()); } catch (e) { WIFI_BASELINE = ""; }
   wifiDirtyRender();
+  sshRender();
+}
+
+/** ★★★ ENABLE SSH (11.0.11). From the root service's state (WIFI.ssh): drawn only on a box that has sshd, and never while
+ *  the OPEN setup hotspot is up. The password goes to POST /vibeserver/pocket/ssh and nowhere else; this page never
+ *  gets it back. */
+function sshRender() {
+  const s = WIFI && WIFI.ssh;
+  const show = !!(POCKET && s && s.available === true && WIFI.mode !== "setup-ap");
+  $("sshCard").classList.toggle("hide", !show);
+  if (!show) return;
+  const host = (POCKET && POCKET.hostname) ? POCKET.hostname + ".local" : "this box";
+  $("sshText").textContent = s.on
+    ? "SSH is on. Log in from a computer on this network with:\nssh vibe@" + host
+      + "\nIt stays on after a restart until you turn it off here."
+    : "SSH is off. Turn it on to log in to this box from a computer (advanced — you do not need it to use VibeServer)."
+      + (s.lastError ? "\nLast problem: " + s.lastError + "." : "");
+  $("sshOnForm").classList.toggle("hide", !!s.on);
+  $("sshOffBtn").classList.toggle("hide", !s.on);
+}
+$("sshOnBtn").onclick = async () => {
+  const a = $("sshPass").value, b = $("sshPass2").value;
+  $("sshMsg").textContent = "";
+  if (a.length < 8 || a.length > 128 || !/^[\x20-\x7e]*$/.test(a)) {
+    $("sshMsg").textContent = "8 to 128 ordinary characters (letters, digits, punctuation, spaces)."; return;
+  }
+  if (a !== b) { $("sshMsg").textContent = "Those did not match. Try again."; return; }
+  await sshSet({on: true, pass: a});
+};
+$("sshOffBtn").onclick = () => sshSet({on: false});
+async function sshSet(body) {
+  $("sshOnBtn").disabled = $("sshOffBtn").disabled = true;
+  $("sshMsg").textContent = body.on ? "Turning SSH on…" : "Turning SSH off…";
+  try {
+    await wifiPost("/vibeserver/pocket/ssh", body);
+    $("sshPass").value = ""; $("sshPass2").value = "";
+    // ★ The root service acts on its next turn (a second or two): read its state back until it says so.
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      await wifiLoad();
+      if (WIFI && WIFI.ssh && !!WIFI.ssh.on === body.on) break;
+    }
+    const s = WIFI && WIFI.ssh;
+    $("sshMsg").textContent = s && !!s.on === body.on ? "" : (s && s.lastError ? s.lastError + "." : "The box has not confirmed it yet — reload in a moment.");
+  } catch (e) { $("sshMsg").textContent = String(e); }
+  $("sshOnBtn").disabled = $("sshOffBtn").disabled = false;
 }
 
 /** Show or hide the "Unsaved Wi-Fi changes" line (top of the card) and say so in the bottom bar too. */
@@ -6601,6 +6688,10 @@ $("wifiDirtySave").onclick = () => $("wifiSave").click();
 /** ★ Has the owner changed the Wi-Fi card since it was loaded (order, a password, the hotspot, the country)? */
 function wifiDirty() {
   if (!POCKET || !WIFI || $("wifiCard").classList.contains("hide")) return false;
+  /* ★★★ A BOX WITH NO WI-FI HAS NO WI-FI CHANGES (Nick's Orange Pi One, 2026-10-25). The card is not hidden there — only
+   *  its form is — so the empty hotspot name made every collect throw, which counted as "unsaved", and the MAIN Save then
+   *  failed with "Wi-Fi not saved — Give this box's own hotspot a name": a wired box could never finish setup. */
+  if (wifiIgnored()) return false;
   try { return JSON.stringify(wifiCollect()) !== WIFI_BASELINE; } catch (e) { return true; }
 }
 
@@ -6779,10 +6870,39 @@ function wifiRender() {
   wifiRadioRender();
 }
 
+/** ★ Is the Wi-Fi form out of play — no radio, switched off, or the owner's "no Wi-Fi present" tick (a per-browser choice). */
+let WIFI_IGNORE = false;
+try { WIFI_IGNORE = localStorage.getItem("vibeWifiIgnore") === "1"; } catch (e) { /* private window: ask again */ }
+function wifiIgnored() {
+  const w = WIFI || {};
+  return w.hasWifi === false || w.wifiOff === true || WIFI_IGNORE;
+}
+$("wifiIgnore").onchange = () => {
+  const w = WIFI || {};
+  if ($("wifiIgnore").checked && w.hasWifi === true && w.wired === true && !(POCKET && POCKET.viaHotspot)) {
+    // ★ A real radio and a cable: switching off is the box's job, and it is asked twice (the warning above).
+    $("wifiIgnore").checked = false;
+    $("wifiRadio").classList.remove("hide");
+    $("wifiRadioBtn").click();
+    $("wifiRadio").scrollIntoView({behavior: "smooth", block: "center"});
+    return;
+  }
+  WIFI_IGNORE = $("wifiIgnore").checked;
+  try { localStorage.setItem("vibeWifiIgnore", WIFI_IGNORE ? "1" : "0"); } catch (e) { /* this page only */ }
+  wifiRender();
+  wifiDirtyRender();
+};
+
 /** ★★★ THE WIRED BOX (2026-10-13) — drawn LAST, because with no Wi-Fi or Wi-Fi off it hides what the others drew. */
 function wifiRadioRender() {
   const w = WIFI || {};
   const none = w.hasWifi === false, off = !none && w.wifiOff === true;
+  $("wifiIgnoreRow").classList.toggle("hide", none || off);
+  $("wifiIgnore").checked = WIFI_IGNORE && !none && !off;
+  if (WIFI_IGNORE && !none && !off) {
+    ["wifiSummary", "wifiEdit", "wifiFinish"].forEach(id => $(id).classList.add("hide"));
+    document.body.classList.remove("wifiFirst");
+  }
   const at = w.wired && w.wiredIp ? " at " + w.wiredIp : "";
   const canOff = !none && !off && w.wired === true && !(POCKET && POCKET.viaHotspot);
   $("wifiRadio").classList.toggle("hide", !(none || off || canOff));
@@ -6802,7 +6922,56 @@ function wifiRadioRender() {
         + (w.lastError ? "\nLast problem: " + w.lastError + "." : "")
       : "This box is also wired (Ethernet" + at + "). If you do not use its Wi-Fi, you can switch it off.";
   $("wifiRadioBtn").textContent = off ? "Turn on" : "Turn Wi-Fi off (this box is wired)";
+  wifiNewRender();
 }
+/** ★★★ NEW WI-FI HARDWARE (2026-10-25) — from the root service's newWifi (asked) and ignoredWifi (offered quietly). */
+function wifiNewRender() {
+  const w = WIFI || {};
+  const fresh = Array.isArray(w.newWifi) ? w.newWifi : [], off = Array.isArray(w.ignoredWifi) ? w.ignoredWifi : [];
+  const r = fresh[0] || off[0];
+  const what = i => i.iface + (i.usb ? " (USB " + i.usb + (i.driver ? ", " + i.driver : "") + ")" : i.driver ? " (" + i.driver + ")" : "");
+  $("wifiNew").classList.toggle("hide", !r);
+  if (!r) return;
+  const instead = w.hasWifi === true ? "\nConfigure uses it for this box's Wi-Fi in place of the radio it uses now." : "";
+  $("wifiNewText").textContent = fresh.length
+    ? "New Wi-Fi hardware detected \u2014 configure it now?\n" + fresh.map(what).join(", ")
+      + "\nUntil you choose, this box leaves it switched off: no hotspot, no network." + instead
+    : "Wi-Fi hardware not in use: " + off.map(what).join(", ") + instead;
+  $("wifiNewYes").textContent = fresh.length ? "Configure" : "Use it";
+  $("wifiNewNo").classList.toggle("hide", !fresh.length);
+}
+async function wifiNewChoose(action) {
+  $("wifiNewYes").disabled = $("wifiNewNo").disabled = true;
+  $("wifiNewMsg").textContent = action === "configure" ? "Setting up the new Wi-Fi hardware\u2026" : "Saving\u2026";
+  try {
+    await wifiPost("/vibeserver/pocket/newwifi", {action});
+    // ★ The root service acts on its next turn: read its state back until it says so.
+    for (let i = 0; i < 12; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      await wifiLoad();
+      const w = WIFI || {};
+      if (!(w.newWifi || []).length && (action !== "configure" || w.hasWifi === true)) break;
+    }
+    const w = WIFI || {};
+    if (action === "configure" && w.hasWifi === true) {
+      // ★ The owner chose Wi-Fi: the "no Wi-Fi present" tick no longer applies, and the form opens.
+      WIFI_IGNORE = false;
+      try { localStorage.setItem("vibeWifiIgnore", "0"); } catch (e) { /* this page only */ }
+      $("wifiNewMsg").textContent = "";
+      wifiRender();
+      if (!$("wifiSummary").classList.contains("hide")) $("wifiChange").click();
+      $("wifiCard").scrollIntoView({behavior: "smooth", block: "start"});
+    } else {
+      $("wifiNewMsg").textContent = (w.newWifi || []).length
+        ? (w.lastError ? w.lastError + "." : "The box has not confirmed it yet \u2014 reload in a moment.") : "";
+      wifiRender();
+    }
+  } catch (e) { $("wifiNewMsg").textContent = String(e); }
+  $("wifiNewYes").disabled = $("wifiNewNo").disabled = false;
+}
+$("wifiNewYes").onclick = () => { void wifiNewChoose("configure"); };
+$("wifiNewNo").onclick = () => { void wifiNewChoose("ignore"); };
+
 /** ★ Off is asked twice (the warning first); on is one press. */
 $("wifiRadioBtn").onclick = () => {
   if (WIFI && WIFI.wifiOff) { void wifiRadioSet(false); return; }
@@ -7014,14 +7183,14 @@ function wifiAddresses() {
   const port = POCKET && POCKET.port ? POCKET.port : (location.port || 80);
   const suffix = String(port) === "80" ? "" : ":" + port;
   const out = [];
-  // ★★★ ONE NAME FIRST, NO PORT (Stuart, 2026-10-10). The box's own hostname is published by avahi
-  //     from the moment it boots — configured or not — and the root service keeps :80 pointed at the
-  //     front door on every network, so http://vibepocket.local/ is the address to remember.
-  // ★ Once configured, the name chosen in setup comes first (Stuart: it "then applies").
+  // ★★★ ONE NAME, WITH ITS PORT (Stuart, 2026-10-25: "realistically the only .local address open after setup should be
+  //     the one the user sets", and "release the port the less open ports the better"). Once set up, the box answers
+  //     ONLY to the name chosen here (its hostname, published by avahi) and port 80 is released — so the address is
+  //     http://<chosen>.local:<port>/. vibepocket.local no longer exists. While setting up it is VibeServerSetup.local.
   const label = mdnsLabel(($("name") && $("name").value) || (cfg && cfg.name) || "");
   const host = POCKET && POCKET.hostname ? String(POCKET.hostname).split(".")[0] : "";
   if ($("mdns").checked && cfg && cfg.configured && label && label !== host) out.push("http://" + label + ".local" + suffix + "/");
-  if (host) out.push("http://" + host + ".local/");
+  if (host && host !== "vibepocket") out.push("http://" + host + ".local" + suffix + "/");
   return {out, suffix};
 }
 
@@ -7341,9 +7510,12 @@ function backUp() {
 function pocketNewHome() {
   if (!POCKET || !/^vibeserversetup\.local$/i.test(location.hostname)) return "";
   const {out, suffix} = wifiAddresses();
-  // The name chosen in setup if there is one; never the setup name itself; else the box's own permanent name.
+  // The name chosen in setup if there is one; never the setup name itself. ★ No chosen name (mDNS switched off): the box
+  //   answers to NO .local name once set up, so its address on this network is its IP.
   const chosen = out.find(x => !/\/\/vibeserversetup\./i.test(x) && !/\/\/vibepocket\./i.test(x));
-  return chosen || ("http://vibepocket.local" + suffix + "/");
+  const w = WIFI || {};
+  const ip = w.wiredIp || w.ip || "";
+  return chosen || (ip ? "http://" + ip + suffix + "/" : "");
 }
 </script>
 )HTML";

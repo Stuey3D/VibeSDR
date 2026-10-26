@@ -32,6 +32,8 @@ RCT_EXTERN_METHOD(stopFmdxAudio)
 RCT_EXTERN_METHOD(revive)
 // ★★ The DAB hold on the native self-heal. Exported here or JS cannot see it (see noteServerFreq).
 RCT_EXTERN_METHOD(holdHealing:(nonnull NSNumber *)ms)
+// ★★ V12: ADS-B / ISM release the audio output (AirPods followed silence) — VibePowerModule.setQuiet.
+RCT_EXTERN_METHOD(setQuiet:(BOOL)on)
 RCT_EXTERN_METHOD(audioStaleness:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 // ★ B19 perf overlay (src/constants/perfOverlay.ts)
 RCT_EXTERN_METHOD(perfStats:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)

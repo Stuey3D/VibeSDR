@@ -52,6 +52,11 @@ private:
 /** The one table every FT8/FT4 decoder shares (call hashes are global — a call heard on FT8 resolves on FT4). */
 Ft8CallHashTable& ft8CallHashes();
 
+/** OSD order 1 on the 174 bit log-likelihoods (log p(1)/p(0), codeword order): fills `a91` (message + CRC, packed)
+ *  and returns the hard-decision disagreements of the closest CRC-valid codeword, or -1 when none is within
+ *  `maxErrors`. Exposed for test-ft8-fast. */
+int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[12]);
+
 /** One message decoded from a slot. */
 struct Ft8Result {
     ftx_message_t msg;
@@ -86,6 +91,12 @@ struct Ft8SlotStats {
     int    passes = 0;
     double passMs[3] = {0, 0, 0};
     int    passDecodes[3] = {0, 0, 0};
+    /* ★ Where each pass's time went (2026-10-25, the CPU work): the profile the optimisations are judged by. A dozen
+     *  clock reads per candidate at most — under 0.1 % of a pass. */
+    enum Stage { kSubtract, kWaterfall, kSearch, kLdpc, kOsd, kPost, kStages };
+    double stageMs[3][kStages] = {};
+    int    candidates[3] = {0, 0, 0};   ///< candidates the search returned
+    int    osdTried[3] = {0, 0, 0};     ///< of them, how many failed BP and went to OSD
 };
 
 /** One slot, decoded synchronously: what the worker thread runs, and what the bench and the tests drive directly.
@@ -121,7 +132,9 @@ private:
     std::vector<float> pulse_;     // GFSK frequency pulse, 3 symbols long
     int pulseLo_ = 0, pulseHi_ = 0;        // where it is not ~0
     std::vector<float> dphi_;      // scratch: the reference's phase step per sample
-    std::vector<float> prodRe_, prodIm_;   // scratch: audio × conj(reference)
+    std::vector<float> refC_, refS_;       // scratch: the reference, cos and sin per sample (1.2 MB FT8)
+    std::vector<float> blkR_, blkI_;       // scratch: audio × conj(reference), summed per 16-sample block
+    std::vector<float> ampR_, ampI_;       // scratch: the amplitude at each block centre
     std::vector<float> zr_, zi_, toneR_, toneI_;   // scratch: the decimated baseband and its tone tables
 };
 

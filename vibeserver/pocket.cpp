@@ -1,5 +1,6 @@
 // pocket.cpp — see pocket.h. The pocket image's Wi-Fi, from the unprivileged daemon's side.
 #include "pocket.h"
+#include "vibe_ipclass.h"
 #include <cmath>
 
 #include <atomic>
@@ -26,11 +27,22 @@ Paths& paths() {
         if (const char* d = std::getenv("VIBESERVER_POCKET_DIR"); d && *d) {
             const std::string b = d;
             q.marker = b + "/enabled"; q.state = b + "/state.json"; q.inbox = b + "/pocket-wifi.request";
-            q.kick = b + "/pocket-kick.request"; q.portFile = b + "/pocket-port";
+            q.kick = b + "/pocket-kick.request"; q.portFile = b + "/pocket-port"; q.sshInbox = b + "/pocket-ssh.request";
+            q.mdnsFile = b + "/pocket-mdns";
         }
         return q;
     }();
     return p;
+}
+
+bool writeMdnsName(const std::string& label, int port, bool pin, std::string& err) {
+    // ★ The label is a DNS label already; anything else is refused here rather than handed to root.
+    for (unsigned char c : label)
+        if (!(std::isalnum(c) || c == '-')) { err = "not a DNS label"; return false; }
+    if (label.size() > 63) { err = "label too long"; return false; }
+    if (port < 0 || port > 65535) port = 0;
+    return writePrivate(paths().mdnsFile, std::string("{\"label\":\"") + label + "\",\"port\":" + std::to_string(port)
+                        + ",\"pin\":" + (pin ? "true" : "false") + "}\n", err);
 }
 
 bool enabled() {
@@ -224,7 +236,11 @@ bool isPrivatePeer(const std::string& ipIn) {
         // IPv6: ULA fc00::/7, link-local fe80::/10. Loopback ::1 is not private here, on purpose.
         if (ip.rfind("fc", 0) == 0 || ip.rfind("fd", 0) == 0) return true;
         if (ip.rfind("fe8", 0) == 0 || ip.rfind("fe9", 0) == 0 || ip.rfind("fea", 0) == 0 || ip.rfind("feb", 0) == 0) return true;
-        return false;
+        // ★★ A GLOBAL address on one of this box's own on-link prefixes (2026-10-25, the listener is dual-stack):
+        //    IPv6 has no NAT, so the owner's laptop beside a box on Nick's network has a public 2a0x:… address in the
+        //    box's /64 — without this, "the first password can only be set from the box's own network" refused the
+        //    person standing next to it. Loopback is never on-link here (vibe_ipclass.h skips lo).
+        return vibeip::onLinkV6(ip);
     }
     unsigned a = 0, b = 0, c = 0, d = 0; char tail = 0;
     if (std::sscanf(ip.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4) return false;
@@ -265,6 +281,12 @@ bool validPsk(const std::string& p) {
 }
 bool validCountry(const std::string& c) {
     return c.size() == 2 && c[0] >= 'A' && c[0] <= 'Z' && c[1] >= 'A' && c[1] <= 'Z';
+}
+
+bool validSshPassword(const std::string& p) {
+    if (p.size() < 8 || p.size() > 128) return false;
+    for (unsigned char c : p) if (c < 0x20 || c >= 0x7F) return false;
+    return true;
 }
 
 bool parseWifiRequest(const std::string& body, const std::vector<std::string>& saved,
@@ -617,6 +639,46 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
             if (!writePrivate(paths().kick, std::string(v->b ? "wifi-off" : "wifi-on") + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
             std::printf("VibeServer: pocket — the owner switched Wi-Fi %s\n", v->b ? "off" : "on");
             json(rp, 200, "OK", std::string("{\"ok\":true,\"off\":") + (v->b ? "true" : "false") + "}");
+            return true;
+        }
+        /* ★★★ ENABLE SSH (Stuart, 2026-10-25, 11.0.11). Body {"on":true,"pass":"…"} or {"on":false}. Default OFF: the image
+         *  ships sshd off because a Portable's first network is an OPEN hotspot. The owner types the password here; it is
+         *  written ONLY into the private request (0600, deleted by root the moment it is read), never logged, never kept by
+         *  us. The root service (vibeserver-pocket, SshAccess) sets it for the image's `vibe` login with chpasswd on stdin,
+         *  keeps only the system's hash on the settings partition, and starts sshd — every boot, so it survives the seal.
+         *  ★ The box's own network only, as the Wi-Fi off switch: never through the tunnel, never from a public address. */
+        if (what == "ssh" && isPost) {
+            if (rq.viaTunnel || !isPrivatePeer(rq.peer)) { fail(rp, 403, "Forbidden", "SSH can only be switched from the box's own network"); return true; }
+            JV j;
+            const bool parsed = parseJson(rq.body, j) && j.t == JV::Obj;
+            const JV* v = parsed ? j.get("on") : nullptr;
+            if (!v || v->t != JV::Bool) { fail(rp, 400, "Bad Request", "on must be true or false"); return true; }
+            std::string doc = "{\"on\":false}";
+            if (v->b) {
+                const std::string pass = j.str("pass");
+                if (!validSshPassword(pass)) { fail(rp, 400, "Bad Request", "the SSH password must be 8 to 128 ordinary characters (letters, digits, punctuation, spaces)"); return true; }
+                doc = "{\"on\":true,\"pass\":\"" + jesc(pass) + "\"}";
+            }
+            std::string err;
+            if (!writePrivate(paths().sshInbox, doc + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
+            // ★★★ NEVER THE PASSWORD.
+            std::printf("VibeServer: pocket — the owner switched SSH %s\n", v->b ? "on" : "off");
+            json(rp, 200, "OK", std::string("{\"ok\":true,\"on\":") + (v->b ? "true" : "false") + "}");
+            return true;
+        }
+        /* ★★★ NEW WI-FI HARDWARE (Stuart, 2026-10-25: "when a user goes into setup show an option for new wifi hardware
+         *  detected, configure it now?"). A radio that appears on a set-up box is left alone by the root service and
+         *  listed in its state as newWifi. Body {"action":"configure"|"ignore"}: Configure makes it this box's Wi-Fi (the
+         *  page then opens the Wi-Fi form), Not now records it as known-but-off. The root service re-checks everything. */
+        if (what == "newwifi" && isPost) {
+            JV j;
+            const std::string action = parseJson(rq.body, j) && j.t == JV::Obj ? j.str("action") : std::string();
+            if (action != "configure" && action != "ignore") { fail(rp, 400, "Bad Request", "action must be \"configure\" or \"ignore\""); return true; }
+            if (!st.present) { fail(rp, 409, "Conflict", "the Wi-Fi service has not reported yet"); return true; }
+            std::string err;
+            if (!writePrivate(paths().kick, "wifi-new-" + action + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
+            std::printf("VibeServer: pocket — the owner chose to %s the new Wi-Fi hardware\n", action == "configure" ? "configure" : "ignore");
+            json(rp, 200, "OK", std::string("{\"ok\":true,\"action\":\"") + action + "\"}");
             return true;
         }
         if ((what == "switch" || what == "scan") && isPost) {
