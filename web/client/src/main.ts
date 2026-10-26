@@ -77,7 +77,7 @@ import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
-import { DIGI_MARKER_RIM, digiModeStyle, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
+import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
 import {
@@ -90,7 +90,7 @@ import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { shareFromBookmark, type ShareOut } from '../../../src/services/chatShare';
 import { mpxPowerParts } from '../../../src/services/mpxPower';
 import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
-import { DecoderClient, type Spot, type DecoderMode, type CwList, type CwSpot } from './decoders';
+import { DecoderClient, type Spot, type DecoderMode, type CwList, type CwSpot, type SpotModeState } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
 import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, type AskState } from '../../../src/services/dialChat';
@@ -10522,10 +10522,42 @@ function spotsBandRender() {
 }
 function bandSpotsUi(on: boolean) {
   bandSpots = on && !!spotBandCap;
+  if (!bandSpots) spotModeStates = [];
+  renderSpotModeChips();
   spotsBandRender();
   if ($('decBox').classList.contains('open') && decoders?.spotsEnabled) $('decTitle').textContent = spotsTitle();
   renderFreq();
 }
+/* ★★ V12 BAND GOVERNOR (2026-10-27): WHICH MODES ARE LIVE. In Band the server decodes a mode only while its window has
+ *  something in it and the box has the CPU (decoders/digi_governor.h) — so the header says, per mode, what it is doing:
+ *  ACTIVE (decoding), LIGHT (decoding, one pass — the server is busy), IDLE (nothing in its window, not decoded), SHED
+ *  (signals there, over this server's CPU budget — not decoded) and OFF (the owner switched it off for Band). A chip per
+ *  mode in its map colour and letter. Sent by the server when a state changes and every 15 s. */
+let spotModeStates: SpotModeState[] = [];
+const SPOT_STATE_WORDS: Record<string, string> = {
+  active: 'decoding', light: 'decoding, one pass — the server is busy', idle: 'nothing in its window just now — not decoded',
+  shed: 'signals there, but over this server\'s CPU budget — not decoded', off: 'switched off for Band by the server owner',
+};
+function renderSpotModeChips() {
+  const host = document.getElementById('spotModeChips');
+  if (!host) return;
+  const show = bandSpots && spotModeStates.length > 0;
+  host.hidden = !show;
+  if (!show) { host.textContent = ''; return; }
+  host.textContent = '';
+  for (const m of spotModeStates) {
+    const st = digiModeStyle(m.mode);
+    const chip = document.createElement('span');
+    chip.className = 'smc ' + m.state;
+    chip.dataset.mode = m.mode;
+    chip.title = `${m.mode}: ${SPOT_STATE_WORDS[m.state] ?? m.state}` + (m.shed ? ` (${m.shed} period${m.shed === 1 ? '' : 's'} shed)` : '');
+    const dot = document.createElement('i');
+    dot.style.background = st.colour; dot.style.color = st.ink; dot.textContent = st.letter;
+    chip.append(dot, document.createTextNode(m.mode + ' '), Object.assign(document.createElement('b'), { textContent: m.state.toUpperCase() }));
+    host.append(chip);
+  }
+}
+
 /** "FT8 / FT4 SPOTS" (Single, a server with those two) · "DIGITAL SPOTS" (Single, a server with more: FT2, JS8 …
  *  decode on whichever of their dials the listener is on) · "DIGITAL SPOTS · 20 m BAND" (Band). */
 function spotsTitle(): string {
@@ -10569,7 +10601,7 @@ let sfMode = 0, sfBand = 0, sfAge = 0;
 function filteredSpots(): Spot[] {
   const cutoff = SF_AGES[sfAge].minutes ? Date.now() - SF_AGES[sfAge].minutes * 60_000 : 0;
   return spots.filter(s =>
-    (SF_MODES[sfMode] === 'ALL' || s.mode === SF_MODES[sfMode]) &&
+    (SF_MODES[sfMode] === 'ALL' || digiModeFamily(s.mode, spotModes) === SF_MODES[sfMode].toUpperCase()) &&   // ★ PSK31/PSK63 → PSK
     (SF_BANDS[sfBand] === 'ALL' || s.band === SF_BANDS[sfBand]) &&
     (!cutoff || s.timestamp >= cutoff));
 }
@@ -11318,6 +11350,7 @@ function initDecoders(host: string, auth: AuthState) {
     onImageRedraw: () => { decLiveComplete = false; },
     onSstvMode: (name) => { $('decStatus').textContent = name; },
     onStatus: (t) => { $('decStatus').textContent = t; },
+    onSpotsStatus: (st) => { if (!bandSpots) return; spotModeStates = st.modes; renderSpotModeChips(); },
     onSpot: (sp) => {
       // ★★★ No count cap (it held 500 reports, so an all-filters map dropped older stations — Stuart,
       //   2026-09-28). The newest report per call|band|mode replaces its older one: the list already

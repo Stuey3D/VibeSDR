@@ -27,18 +27,34 @@ export const DIGI_MODE_STYLE: Record<string, DigiModeStyle> = {
   FST4:   { colour: '#D55E00', ink: '#000000', letter: 'F' },   // vermillion
   FST4W:  { colour: '#D55E00', ink: '#000000', letter: 'w' },   // vermillion, its own letter (FST4's beacon form)
   MSK144: { colour: '#BBBBBB', ink: '#000000', letter: 'M' },   // grey
+  /* ★ V12 (2026-10-27): JTTY and PSK join Band. The eight Okabe–Ito fills are all taken, so these two come from outside
+   *  it, picked for distance from EVERY fill under protan, deutan and tritan simulation (scripts/test_digi_modes.ts):
+   *  JTTY white (achromatic — no deficiency moves it; ΔE ≥ 18 from all, the nearest FT2's yellow under tritanopia)
+   *  and PSK Paul Tol's purple #AA3377 (ΔE ≥ 16 from all, nearest FST4's vermillion; it reads 3:1 on the dark map). */
+  JTTY:   { colour: '#FFFFFF', ink: '#000000', letter: 'T' },   // white
+  PSK:    { colour: '#AA3377', ink: '#FFFFFF', letter: 'P' },   // purple (Tol) — PSK31 and PSK63 alike
 };
 
 /** The marker rim: dark, so a pale fill reads on a light map and every fill stands off a dark one. */
 export const DIGI_MARKER_RIM = '#1A1A1A';
 
-/** How to draw `mode` ("FT8", "ft4", "Q65-60A" → Q65's). Unknown → grey and its first letter. */
+/** ★ The FAMILY a spot's mode belongs to, among `families` (the server's spotModes, or the style table): "PSK31" and
+ *  "PSK63" → "PSK", "Q65-60A" → "Q65", "FT8" → "FT8". Unknown → the mode itself (upper case). */
+export function digiModeFamily(mode: string, families: readonly string[] = Object.keys(DIGI_MODE_STYLE)): string {
+  const m = String(mode || '').toUpperCase();
+  const fam = families.map((f) => String(f).toUpperCase());
+  if (fam.includes(m)) return m;
+  const hit = fam.find((k) => m.startsWith(k + '-') || (m.startsWith(k) && /^[0-9]+$/.test(m.slice(k.length))));
+  return hit ?? m;
+}
+
+/** How to draw `mode` ("FT8", "ft4", "Q65-60A" → Q65's, "PSK63" → PSK's). Unknown → grey and its first letter. */
 export function digiModeStyle(mode: string): DigiModeStyle {
   const m = String(mode || '').toUpperCase();
   const exact = DIGI_MODE_STYLE[m];
   if (exact) return exact;
-  const base = Object.keys(DIGI_MODE_STYLE).find((k) => m.startsWith(k + '-'));
-  if (base) return DIGI_MODE_STYLE[base];
+  const base = digiModeFamily(m);
+  if (DIGI_MODE_STYLE[base]) return DIGI_MODE_STYLE[base];
   const letter = (m.match(/[A-Z0-9]/) || ['?'])[0];
   return { colour: '#9E9E9E', ink: '#000000', letter };
 }

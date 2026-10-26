@@ -31,6 +31,7 @@ extern "C" {
 #include <map>
 #include <mutex>
 #include <random>
+#include <set>
 #include <string>
 #include <sys/resource.h>
 #include <thread>
@@ -231,7 +232,8 @@ static int writeClip(const char* path, double rate, double centre) {
 /** ★ `real <iq.wav> <start_utc> <centreHz> [swap]`: a REAL recording — a stereo int16 I/Q WAV (ubersdr-rec … iq48), its first
  *  sample's UTC — through Band mode, faster than real time, stamped by the recording's own clock. Prints every spot, then
  *  the per-mode counts (compared by hand against the receiver's own decodes for the same minutes). */
-static int runReal(const char* path, double startUtc, double centre, bool swap, bool live) {
+static int runReal(const char* path, double startUtc, double centre, bool swap, bool live, bool gate = false, double budget = INFINITY,
+                   double maxSec = 1e9) {
     FILE* f = std::fopen(path, "rb");
     if (!f) { std::printf("cannot open %s\n", path); return 3; }
     std::vector<uint8_t> raw; { uint8_t b[65536]; size_t k; while ((k = std::fread(b, 1, sizeof b, f)) > 0) raw.insert(raw.end(), b, b + k); }
@@ -245,33 +247,45 @@ static int runReal(const char* path, double startUtc, double centre, bool swap, 
         p += 8 + len + (len & 1);
     }
     if (chans != 2 || !rate || !data) { std::printf("need stereo I/Q (got %u ch, %u Hz)\n", chans, rate); return 1; }
-    const size_t n = dlen / 4;
+    const size_t n = std::min(dlen / 4, (size_t)(maxSec * rate));
     std::vector<cf32> x(n);
     for (size_t i = 0; i < n; ++i) {
         const int16_t a = (int16_t)(raw[data + 4 * i] | raw[data + 4 * i + 1] << 8), b = (int16_t)(raw[data + 4 * i + 2] | raw[data + 4 * i + 3] << 8);
         x[i] = swap ? cf32(b / 32768.0f, a / 32768.0f) : cf32(a / 32768.0f, b / 32768.0f);
     }
-    std::map<std::string, int> per; std::mutex gm; std::vector<std::string> lines;
+    std::map<std::string, int> per; std::mutex gm; std::vector<std::string> lines; std::map<std::string, std::set<std::string>> uniq;
     digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(), [&](const digi::Spot& s, double rf) {
         char b[160]; std::snprintf(b, sizeof b, "%s %-10s %6s %+4d %.0f", s.mode.c_str(), s.call.c_str(), s.grid.c_str(), s.snr, rf);
-        std::lock_guard<std::mutex> lk(gm); per[s.mode]++; lines.push_back(b); }, nullptr, nullptr);
+        std::lock_guard<std::mutex> lk(gm); per[s.mode]++; lines.push_back(b); uniq[s.mode].insert(s.call); }, nullptr, nullptr);
+    sp.setBudgetCap(budget);
     /* ★ `live`: fed in REAL TIME, its clock shifted by whole minutes so the slots still line up — the FT8 pass gate
      *  judges its time budget against the wall clock, so a recording fed minutes after it was made, or faster than real
      *  time, gets ONE pass (what a loaded server pays); fed live it gets what a live listener's would. */
     const double shift = live ? std::ceil((vibeUtcNow() - startUtc) / 60.0) * 60.0 : 0.0;
     const auto w0 = std::chrono::steady_clock::now();
     const double c0 = cpuSecs();
-    for (size_t o = 0; o < n; o += 2048) {
-        const int k = (int)std::min<size_t>(2048, n - o);
+    // ★ `gate`: the slice's bins with each block, as the server sends them (an FFT whose hop is 3/4 of it, ≈ 190 Hz bins)
+    BinMaker bm(512);
+    const int hop = gate ? bm.hop() : 2048;
+    for (size_t o = 0; o + (size_t)hop <= n; o += (size_t)hop) {
+        const int k = hop;
         if (live) std::this_thread::sleep_until(w0 + std::chrono::microseconds((int64_t)(1e6 * (double)(o + k) / rate)));
-        sp.feedIq(&x[o], k, rate, centre, startUtc + shift + (double)(o + k) / rate);
-        if (!live && (o / 2048) % 16 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        const float* pw = gate ? bm.make(&x[o]) : nullptr;
+        sp.feedIq(&x[o], k, rate, centre, startUtc + shift + (double)(o + k) / rate, pw, gate ? bm.N : 0, rate / bm.N);
+        if (!live && (o / hop) % (16 * 2048 / hop) == 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     std::this_thread::sleep_for(std::chrono::seconds(4));
     std::printf("%s: %.0f s, engines %s, slots decoded %llu, skipped %llu, CPU %.2f s (%.3f %% of the recording's length)\n", path, n / (double)rate,
                 sp.describe().c_str(), (unsigned long long)sp.slotsDecoded(), (unsigned long long)sp.slotsSkipped(), cpuSecs() - c0, 100.0 * (cpuSecs() - c0) / (n / (double)rate));
-    for (auto& l : lines) std::printf("  %s\n", l.c_str());
-    for (auto& kv : per) std::printf("%s: %d spots\n", kv.first.c_str(), kv.second);
+    if (!getenv("VIBE_QUIET")) for (auto& l : lines) std::printf("  %s\n", l.c_str());
+    for (auto& kv : per) std::printf("%s: %d spots, %zu calls\n", kv.first.c_str(), kv.second, uniq[kv.first].size());
+    for (auto& m : sp.status())
+        std::printf("  status %-5s %-6s dials %d  periods: live %llu idle %llu shed %llu\n", m.mode.c_str(), digi::stateWord(m.state), m.dials,
+                    (unsigned long long)m.live, (unsigned long long)m.idle, (unsigned long long)m.shed);
+    if (const char* f = getenv("VIBE_CALLS_OUT")) {   // ★ every mode's calls, for comparing two runs
+        FILE* o = std::fopen(f, "w");
+        if (o) { for (auto& kv : uniq) for (auto& c : kv.second) std::fprintf(o, "%s %s\n", kv.first.c_str(), c.c_str()); std::fclose(o); }
+    }
     return 0;
 }
 
@@ -316,9 +330,15 @@ int main(int argc, char** argv) {
     if (argc > 4 && std::strcmp(argv[1], "realusb") == 0) return runRealUsb(argv[2], std::atof(argv[3]), std::atof(argv[4]), argc > 5 && !std::strcmp(argv[5], "live"));
     if (argc > 4 && std::strcmp(argv[1], "clip") == 0) return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     if (argc > 4 && std::strcmp(argv[1], "real") == 0) {
-        bool swap = false, live = false;
-        for (int i = 5; i < argc; ++i) { if (!std::strcmp(argv[i], "swap")) swap = true; if (!std::strcmp(argv[i], "live")) live = true; }
-        return runReal(argv[2], std::atof(argv[3]), std::atof(argv[4]), swap, live);
+        bool swap = false, live = false, gate = false; double budget = INFINITY, maxSec = 1e9;
+        for (int i = 5; i < argc; ++i) {
+            if (!std::strcmp(argv[i], "swap")) swap = true;
+            if (!std::strcmp(argv[i], "live")) live = true;
+            if (!std::strcmp(argv[i], "gate")) gate = true;                       // ★ V12: the activity gate (bins with the IQ)
+            if (!std::strncmp(argv[i], "budget=", 7)) budget = std::atof(argv[i] + 7);   // ★ a budget in FT8 units
+            if (!std::strncmp(argv[i], "secs=", 5)) maxSec = std::atof(argv[i] + 5);
+        }
+        return runReal(argv[2], std::atof(argv[3]), std::atof(argv[4]), swap, live, gate, budget, maxSec);
     }
     const bool cpu = argc > 1 && std::strcmp(argv[1], "cpu") == 0;
     std::printf("── the registry ──\n");
