@@ -159,6 +159,10 @@ export type RootStackParamList = {
      *  mounts, which would drag the user straight back off the server the watch just
      *  chose. This says "be here, but don't take over". */
     noAutoConnect?: boolean;
+    /** ★★★ Built by connectVibeServer's reset: adopt the place the picker it replaced was in — directory, search,
+     *  groups, scroll, the receiver just left (src/utils/pickerReturn.ts). Nothing else sets it, so a link, the
+     *  watch or the crash guard still lands at the top. */
+    restorePlace?: boolean;
     /** ★ Land on the picker with a DIRECTORY already open. Used by Server mode's "stop and back to
      *  the directory": somebody who has just stopped serving is usually going to go and listen to
      *  somebody else's receiver, and making them tap through the chooser to the same list every
@@ -215,6 +219,9 @@ export type RootStackParamList = {
     initialFreq?:    number;
     initialMode?:    SDRMode;
     initialZoom?:    number;
+    /** ★★ Back from a radio chosen at this server's front door: show the door's radio list again, starting on the
+     *  radio just left, with this visit's PINs and admin credential (src/utils/doorReturn.ts — never in params). */
+    doorReturn?:     boolean;
   };
   // Server mode (Android): pick a sharing protocol (VibeServer / RTL-TCP) for
   // this device's USB dongle, with shared PIN + auto-discovery options.

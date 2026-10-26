@@ -73,7 +73,7 @@ flags_for() {
     #    20 m slice (FT8 + FT4 on their own dials) decoded end to end, the lower sideband rejected, noise → no spot.
     test-digi-spots)       echo "-O2 -I $VDSP -I android/app/src/main/cpp/ft8_lib" ;;
     # ★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22): the real DSP chain AND the real decoders, end to end.
-    test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
+    test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
     test-bm-names) echo "-O2 -I android/app/src/main/cpp" ;;
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
@@ -177,13 +177,13 @@ deps_for() {
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
     # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link — nor pffft,
     #   which they carry too since monitor.c's STFT runs through it (2026-10-25).
-    test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp \
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
                               android/app/src/main/cpp/decoders/wefax_decoder.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp \
                               android/app/src/main/cpp/decoders/time_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp \
-                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;
+                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
     test-fd-passing)    echo "android/app/src/main/cpp/fd_passing.cpp" ;;
@@ -227,7 +227,7 @@ deps_for() {
     test-power-dips)    echo "" ;;
     test-decoder-hardening) echo "$VDSP/ddc.cpp android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     # ★ NAVTEX's CCIR 476 coder, word by word (audit 2026-10-04, rows 11-13); the audio half is scripts/test-navtex.sh.
     test-navtex-fec)    echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;
     # ★★ RTTY's letters/figures shift across a lost signal: a lost LTRS → letters, a synop line → figures (2026-10-13).
@@ -239,7 +239,7 @@ deps_for() {
     test-ft2)           echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
     test-decoder-hosts|test-bench-decoders|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
     # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
@@ -256,7 +256,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk)
+    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
@@ -761,6 +761,9 @@ if npx tsx scripts/test_app_alert.ts; then pass=$((pass+1)); else fail=$((fail+1
 if npx tsx scripts/test_nav_coverage.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE SERVER LIST'S FOCUS RULES (controller audit group H): Back from the list position, Enter = tap on directory rows.
 if npx tsx scripts/test_picker_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ BACK FROM A RADIO LANDS WHERE YOU LEFT (Stuart, 2026-10-27): the server list's place carried across a VibeServer's
+#     reset, the missing-receiver fallback (this list's top, never the app's), and a front door's radio list.
+if npx tsx scripts/test_picker_return.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 489: the picker's focus order under a REAL React renderer — a bailed-out render emptied the render-time bank
 #     (src/utils/renderBank.ts), so the ring, reveal and Enter disagreed. Real key bus, real pad mapper, both enters.
 if npx tsx scripts/test_render_bank.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1142,6 +1145,20 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-dsc.sh clip "$OUT/dsc-hf.cu8" >/
   rm -f "$OUT/dsc-hf.cu8" "$OUT/dsc-vhf.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-dsc.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 JTTY end to end (2026-10-26): the real server on a fake rtl_tcp replaying the bench's 20 m clip (two JTTY
+#     stations, a CQ and an exchange, overlapping) — vibeserver.json "jtty", the JTTY button and band keys, both stations
+#     as rows lowest frequency first with their calls and confidence colours, the SPOTS, a tap and a band key tuning,
+#     390 px (test-web-jtty, headless Edge, --mute-audio). The engine's own numbers are vibeserver/test-jtty.cpp above;
+#     the measuring bench is scripts/test-jtty.sh. Needs VIBESERVER_BIN.
+printf '\n\033[1m── JTTY (end to end: server and web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-jtty.sh clip "$OUT/jtty-clip.cu8" >/dev/null; then
+  VIBE_JTTY_CLIP="$OUT/jtty-clip.cu8" node scripts/test-web-jtty.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/jtty-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-jtty.sh)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 DIGITAL SPOTS end to end (2026-10-26): a UTC-anchored 20 m clip (test-digi-spots clip) through the real server —

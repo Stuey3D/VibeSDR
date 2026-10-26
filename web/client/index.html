@@ -2886,6 +2886,43 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   #cwSpots .cws .ct { flex: 1 1 auto; min-width: 0; }
 }
 
+/* ★★ V12 JTTY (jtty.ts): one row per station, lowest frequency first — frequency · call · SNR · confidence · age, then
+   its recent messages coloured by confidence (the CW list's four colours); the spots under them. */
+#jttyList { display: none; margin-top: 6px; }
+#jttyList.on { display: block; }
+#jttyList .jtr { display: grid; grid-template-columns: 6.2em minmax(4.5em, 1fr) 4.2em 4.4em 3.4em; gap: 2px 8px;
+                 align-items: baseline; font-size: 11px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+#jttyList .jtr:hover { background: rgba(255,255,255,0.05); }
+#jttyList .jtr.gone { opacity: 0.5; }
+#jttyList .f { color: var(--freq); font-variant-numeric: tabular-nums; }
+#jttyList .c { color: var(--freq); letter-spacing: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#jttyList .c.none { color: var(--text-dim); letter-spacing: 0; }
+#jttyList .s, #jttyList .a { text-align: right; font-variant-numeric: tabular-nums; color: var(--unit); white-space: nowrap; }
+#jttyList .q { text-align: right; white-space: nowrap; }
+#jttyList .q.high, #jttyList .jtr.q-high .tx { color: #5BE36B; }
+#jttyList .q.medium, #jttyList .jtr.q-medium .tx { color: #E8C547; }
+#jttyList .q.low, #jttyList .jtr.q-low .tx { color: #FF8A3D; }
+#jttyList .q.poor, #jttyList .jtr.q-poor .tx { color: #FF4B4B; }
+#jttyList .q.poor { color: var(--text-dim); }
+/* ★ messages WRAP (unlike CW's one-line tail): a JTTY message is a sentence, read whole */
+#jttyList .tx { grid-column: 1 / -1; font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); font-size: 12px;
+                overflow-wrap: anywhere; }
+#jttyRows .idle, #jttySpots .idle { color: var(--text-dim); font-size: 11px; padding: 6px; }
+#jttySpotsHead { color: var(--text-dim); font-size: 10px; letter-spacing: 1px; margin: 8px 6px 2px; }
+#jttySpots .jts { display: grid; grid-template-columns: 3.2em 6.2em minmax(4.5em, 1fr) 2.6em minmax(0, 1.2fr); gap: 8px;
+                  font-size: 11px; padding: 3px 6px; cursor: pointer; align-items: baseline; }
+#jttySpots .jts .t { color: var(--unit); font-variant-numeric: tabular-nums; }
+#jttySpots .jts .f, #jttySpots .jts .c { color: var(--freq); }
+#jttySpots .jts .h { color: var(--unit); }
+#jttySpots .jts.cq .h { color: #5BE36B; }
+#jttySpots .jts .ct { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container decbox (max-width: 400px) {
+  #jttyList .jtr, #jttySpots .jts { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+  #jttyList .jtr .c { flex: 1 1 auto; min-width: 0; }
+  #jttyList .jtr .tx { flex: 1 1 100%; }
+  #jttySpots .jts .ct { flex: 1 1 auto; min-width: 0; }
+}
+
 /* Menu button rows + settings sub-panels (mirrors the app's menu). */
 .btnRow { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
 .subPanel {
@@ -3874,6 +3911,8 @@ select.btn { padding: 6px 8px; }
     <div id="aprsList"><div id="aprsRows"></div><div class="aprsHead" id="aprsMsgHead" hidden>MESSAGES</div><div id="aprsMsgs"></div><div class="aprsHead">PACKETS</div><div id="aprsLog"></div></div>
     <!-- ★★ DSC: the calls, newest first — the server's line, coloured by distress / urgency / safety / routine (dsc.ts). -->
     <div id="dscList"><div id="dscRows"></div></div>
+    <!-- ★★ JTTY: every JTTY station in the passband (lowest frequency first, coloured by confidence), then the spots (jtty.ts). -->
+    <div id="jttyList"><div id="jttyRows"></div><div id="jttySpotsHead">SPOTS</div><div id="jttySpots"></div></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
          health. The VTS bar hides while this is open — no point showing the same data
          twice, and this is the surface the user deliberately chose. -->
@@ -4859,6 +4898,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-dec="aprs" hidden title="APRS — stations, positions, weather and messages: 1200 Bd packet in NFM (VHF), or 300 Bd HF packet in USB/LSB">APRS</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <!-- ★★ V12 DSC: maritime Digital Selective Calling (ITU-R M.493) — decoded on the server; hidden unless it says "dsc". -->
+    <!-- ★★ V12 JTTY: the WSJT-X 3.2 keyboard mode — decoded on the server; hidden unless it says "jtty". -->
+    <button class="btn" data-dec="jtty" hidden title="JTTY — the new WSJT-X keyboard mode: RTTY-style contest exchanges and free text with weak-signal FEC; every JTTY signal in your passband decoded at once">JTTY</button>
     <button class="btn" data-dec="dsc" hidden title="Maritime Digital Selective Calling — distress, urgency, safety and routine calls between ships and coast stations (MF/HF and VHF channel 70)">DSC</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
     <button class="btn" data-dec="sstv">SSTV</button>
@@ -4957,6 +4998,19 @@ select.btn { padding: 6px 8px; }
     <div class="hint" id="dscHint">Tune a DSC frequency in <b>USB</b> with the dial 1.7 kHz below it (2185.8 for
       2187.5 kHz) — or press a channel. Channel 70 (156.525 MHz) is <b>NFM</b>. 8414.5 kHz is the busiest by day,
       2187.5 kHz at night. Each call is shown as it is decoded; a position sent gets <b>MAP</b>.</div>
+  </div>
+
+  <!-- ★★ JTTY (V12, 2026-10-26): the announced calling frequencies (USB dial) — only those this radio reaches are drawn
+       (main.ts initJttyDials). Preliminary: the WSJT-X 3.2 release candidates' list, not band-plan allocations. -->
+  <div class="subPanel" id="jttySettings" hidden>
+    <div class="mrow">
+      <label>BAND</label>
+      <div class="seg" id="jttyDials"></div>
+    </div>
+    <div class="hint" id="jttyHint">Tune <b>USB</b> — 14.090 MHz is the main meeting point — or press a band. Every JTTY
+      signal in your passband is decoded at once, whenever it starts: one row per station, lowest frequency first,
+      coloured by confidence (green high · amber medium · orange low · red poor). Calls heard are <b>SPOTS</b>. Tap a row
+      or a spot to tune to it.</div>
   </div>
 
   <div class="subPanel" id="rttySettings" hidden>
