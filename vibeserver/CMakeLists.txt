@@ -970,6 +970,11 @@ add_executable(test-dab-faad "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-faad.cpp")
 target_include_directories(test-dab-faad PRIVATE "${CPP_DIR}")
 target_compile_options(test-dab-faad PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(test-dab-faad PRIVATE vibeserver_core)
+# ★ dab-faad-bench: what each DAB+/FAAD2 stage costs (decode / resample) and output comparisons (dev tool).
+add_executable(dab-faad-bench "${CMAKE_CURRENT_SOURCE_DIR}/dab-faad-bench.cpp")
+target_include_directories(dab-faad-bench PRIVATE "${CPP_DIR}")
+target_compile_options(dab-faad-bench PRIVATE -O3 -ffp-contract=fast)
+target_link_libraries(dab-faad-bench PRIVATE vibeserver_core)
 # ★ test-dab-faad-queue: FAAD2 on its own thread (vibe-dabaac) — the ring, drops, resets, the live switch.
 add_executable(test-dab-faad-queue "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-faad-queue.cpp")
 target_include_directories(test-dab-faad-queue PRIVATE "${CPP_DIR}")

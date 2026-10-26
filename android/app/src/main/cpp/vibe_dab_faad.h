@@ -49,25 +49,34 @@ namespace vibedab {
 
 /** ★ 32 kHz → 48 kHz (and any other small L/M), stereo, polyphase windowed-sinc. HE-AAC on a 16 kHz core decodes to
  *  32 kHz and its SBR band reaches ~15 kHz, so the filter must pass that — a generic audio resampler cut at 0.9 × ¼ of
- *  the up-sampled rate would dull the top octave. Kaiser β 8.6 (≈ −85 dB), 64 taps a branch: passband to ~14.5 kHz,
- *  images of the top 1 kHz below the input's Nyquist land above 16 kHz at < −80 dB by 17 kHz. 64 MACs per output per
- *  channel through vibedsp's NEON/SSE2 dot product: ~6 M MAC/s for a 32 kHz service — under 1 % of a Pi 2 core. */
+ *  the up-sampled rate would dull the top octave.
+ *  ★★ 32 TAPS A BRANCH, NOT 64 (2026-10-26 — the Pi 2's "FAAD2 · 11.87 % of a core"; on the Mac this resampler was a
+ *     THIRD of FAAD2's whole cost). Kaiser β 7.0, cut-off 0.975 of the input's Nyquist (15.6 kHz at 32 kHz in), designed
+ *     and checked numerically (docs/v12/DRM-AUDIO-ROUTES.md "DAB+ on its own thread"):
+ *       passband flat within ±0.1 dB to 13.8 kHz, −2.4 dB at 15 kHz, ≥ 70 dB down from 17.85 kHz (the image of 14.15 kHz).
+ *     FFmpeg's own resampler — what today's default path puts this audio through (swr: 32 taps, Kaiser β 9, cut-off
+ *     0.97) — is flat only to 13.5 kHz and reaches −60 dB only at 18.1 kHz, so this is never worse than that path; the
+ *     64-tap one it replaces kept more rejection between 16 and 17.8 kHz (images of 14.2–16 kHz SBR, ≤ −25 dB here).
+ *  ★★ BOTH CHANNELS PER TAP LOAD. The two histories sit in one buffer, R a fixed distance after L, so vibedsp::dotReal2
+ *     (NEON / SSE2 / scalar) runs L and R off each tap vector loaded once. A mono stream (no PS, one channel) is filtered
+ *     once and copied. No allocation per call: the histories are flat arrays compacted only when they fill. */
 class DabUpsampler {
 public:
+    static constexpr int kP = 32;                         ///< taps per polyphase branch
     void configure(int inRate, int outRate) {
         if (inRate == in_ && outRate == out_) return;
         in_ = inRate; out_ = outRate;
         int a = inRate, b = outRate; while (b) { const int t = a % b; a = b; b = t; }
         L_ = outRate / a; M_ = inRate / a;
         const int N = L_ * kP;
-        const double fc = 0.5 * std::min(inRate, outRate) * 0.93 / (double(inRate) * L_);   // cycles per up-sample
+        const double fc = 0.5 * std::min(inRate, outRate) * kCut / (double(inRate) * L_);   // cycles per up-sample
         std::vector<double> h(static_cast<size_t>(N));
         double sum = 0;
         for (int n = 0; n < N; ++n) {
             const double x = n - (N - 1) / 2.0;
             const double s = x == 0 ? 2 * fc : std::sin(2 * M_PI * fc * x) / (M_PI * x);
             const double r = 2.0 * n / (N - 1) - 1.0;
-            h[size_t(n)] = s * bessel0(8.6 * std::sqrt(std::max(0.0, 1 - r * r))) / bessel0(8.6);
+            h[size_t(n)] = s * bessel0(kBeta * std::sqrt(std::max(0.0, 1 - r * r))) / bessel0(kBeta);
             sum += h[size_t(n)];
         }
         rb_.assign(size_t(N), 0.0f);
@@ -75,32 +84,56 @@ public:
             for (int m = 0; m < kP; ++m) rb_[size_t(b2) * kP + size_t(m)] = float(h[size_t(b2 + (kP - 1 - m) * L_)] * L_ / sum);
         reset();
     }
-    void reset() { for (auto& c : hist_) c.assign(kP - 1, 0.0f); ph_ = 0; }
-    /** Interleaved stereo in (n frames) → interleaved stereo appended to out. Passes straight through when in == out. */
-    void process(const float* in, size_t n, std::vector<float>& out) {
+    void reset() { std::fill(buf_, buf_ + 2 * kCap, 0.0f); s_ = 0; w_ = kP - 1; ph_ = 0; }
+    /** Interleaved stereo in (n frames) → interleaved stereo appended to out. Passes straight through when in == out.
+     *  `mono`: L and R are the same signal (filter once). */
+    void process(const float* in, size_t n, std::vector<float>& out, bool mono = false) {
         if (L_ == M_) { out.insert(out.end(), in, in + 2 * n); return; }
-        for (int c = 0; c < 2; ++c) { auto& h = hist_[c]; const size_t k = h.size(); h.resize(k + n); for (size_t i = 0; i < n; ++i) h[k + i] = in[2 * i + size_t(c)]; }
-        const size_t have = hist_[0].size();               // window = [kP-1 history][n new]
-        // output j uses input index base = (ph_ / L) + kP-1 (relative to hist start) and branch ph_ % L
-        while (true) {
-            const long long base = ph_ / L_;
-            if (size_t(base) + kP > have) break;
-            const float* t = &rb_[size_t(ph_ % L_) * kP];
-            out.push_back(vibedsp::dotReal(t, &hist_[0][size_t(base)], kP));
-            out.push_back(vibedsp::dotReal(t, &hist_[1][size_t(base)], kP));
-            ph_ += M_;
+        while (n) {
+            if (w_ == kCap) compact_();
+            const size_t take = std::min(n, kCap - w_);
+            float* l = buf_ + w_; float* r = buf_ + kCap + w_;
+            for (size_t i = 0; i < take; ++i) { l[i] = in[2 * i]; r[i] = in[2 * i + 1]; }
+            w_ += take; in += 2 * take; n -= take;
+            run_(out, mono);
         }
-        const long long used = ph_ / L_;                   // inputs no output will need again
-        for (auto& h : hist_) h.erase(h.begin(), h.begin() + long(used));
-        ph_ -= used * L_;
     }
     int outRate() const { return out_; }
 private:
-    static constexpr int kP = 64;
+    static constexpr size_t kCap = 8192;                  ///< history per channel; a unit is ≤ 2048 frames
+    static constexpr double kBeta = 7.0, kCut = 0.975;
     static double bessel0(double x) { double s = 1, t = 1; for (int k = 1; k < 30; ++k) { t *= (x / (2 * k)) * (x / (2 * k)); s += t; } return s; }
+    /** Every output whose window [base, base + kP) is filled. ph_ counts up-sampled positions from s_. */
+    void run_(std::vector<float>& out, bool mono) {
+        const size_t have = w_ - s_;
+        const size_t o0 = out.size();
+        // outputs available: base = ph_/L, need base + kP <= have
+        size_t nOut = 0;
+        { long long p = ph_; while (size_t(p / L_) + kP <= have) { ++nOut; p += M_; } }
+        out.resize(o0 + 2 * nOut);
+        float* o = out.data() + o0;
+        for (size_t j = 0; j < nOut; ++j) {
+            const size_t base = size_t(ph_ / L_);
+            const float* t = &rb_[size_t(ph_ % L_) * kP];
+            const float* x = buf_ + s_ + base;
+            if (mono) { const float y = vibedsp::dotReal(t, x, kP); o[2 * j] = y; o[2 * j + 1] = y; }
+            else vibedsp::dotReal2(t, x, kP, int(kCap), o[2 * j], o[2 * j + 1]);   // ★ R is kCap after L
+            ph_ += M_;
+        }
+        const long long used = ph_ / L_;                   // inputs no output will need again
+        s_ += size_t(used); ph_ -= used * L_;
+    }
+    void compact_() {
+        const size_t keep = w_ - s_;
+        std::memmove(buf_, buf_ + s_, keep * sizeof(float));
+        std::memmove(buf_ + kCap, buf_ + kCap + s_, keep * sizeof(float));
+        s_ = 0; w_ = keep;
+    }
     int in_ = 0, out_ = 0, L_ = 1, M_ = 1;
     long long ph_ = 0;
-    std::vector<float> rb_, hist_[2];
+    size_t s_ = 0, w_ = kP - 1;
+    std::vector<float> rb_;
+    float buf_[2 * kCap] = {};
 };
 
 /** ★ The same face as AacDecoderFfmpeg (vibe_dab_aacdec.h) — DabService drives either — plus conceal(). PCM comes back
@@ -207,7 +240,7 @@ private:
         /* ★ The guard behind the CRC: real programme never comes out of a DAB+ decoder at +12 dBFS. A unit that does is
          *  damage that slipped through, and it is concealed rather than played. */
         if (peak > 4.0f) return false;
-        rate_ = int(fi.samplerate);
+        rate_ = int(fi.samplerate); mono_ = fi.channels == 1;
         up_.configure(rate_, 48000);
         return true;
     }
@@ -215,7 +248,7 @@ private:
     void emit(const std::vector<float>& st, AacPcm& out, bool concealing) {
         std::vector<float>& o = emitBuf_; o.clear();
         const double r0 = cpuNow();
-        up_.process(st.data(), st.size() / 2, o);
+        up_.process(st.data(), st.size() / 2, o, mono_);
         cpuResample_ += cpuNow() - r0;
         const size_t frames = o.size() / 2;
         if (!concealing) {
@@ -279,6 +312,7 @@ private:
     NeAACDecHandle h_ = nullptr;
     int prof_ = -1, sfi_ = -1, ch_ = -1, rate_ = 0, unitFrames_ = 0, run_ = 0, mode_ = 0, reopened_ = 0, fadeMs_ = 120;
     float gain_ = 1.0f;
+    bool mono_ = false;
     std::vector<uint8_t> last_;
     DabUpsampler up_;
     double cpu_ = 0, cpuDecode_ = 0, cpuResample_ = 0;
