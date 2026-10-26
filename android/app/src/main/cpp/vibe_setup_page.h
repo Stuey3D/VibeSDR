@@ -89,6 +89,14 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
          padding:11px 20px;font:600 15px/1 inherit;cursor:pointer}
   button:disabled{opacity:.5;cursor:default}
   button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  /* ★★ V12 DAB band scan results */
+  #dabBandList details{border-bottom:1px solid var(--line);padding:6px 2px}
+  #dabBandList summary{display:flex;gap:8px;align-items:baseline;cursor:pointer;min-width:0}
+  #dabBandList summary .b{flex:0 0 3.2em;color:var(--amber)}
+  #dabBandList summary .e{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #dabBandList summary .q{flex:0 0 auto;font-size:.8em;opacity:.8}
+  #dabBandList .svcs{padding:4px 0 0 3.7em;font-size:.9em;opacity:.85;line-height:1.6}
+  #dabBandList .use{margin:6px 0 0 3.7em}
   /* ★ V12 background decoding: a profile is a box of its own; a VFO is one row, in the order a listener picks */
   .bgProf{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0}
   .bgProf h3{font-size:13px;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center;color:var(--amber)}
@@ -1176,6 +1184,19 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           </div>
         </div>
         <div class="hint" id="dabLandNote"></div>
+        <!-- ★★ V12: THE DAB BAND SCAN, FOR THE OWNER (Stuart, 2026-10-26: "DAB scan I will add for initial setup"). Every
+             Band III block on the idle radio, results as they come — and every station found goes into this server's
+             bookmarks (kept a year unheard), so listeners find them in the bookmark list without anyone scanning. -->
+        <div id="dabBandWrap" class="hide" style="margin-top:12px">
+          <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="flex:1 1 14em">Find the DAB multiplexes this aerial hears</span>
+            <button type="button" class="ghost" id="dabBandScan" style="flex:0 0 auto">Scan all DAB blocks</button>
+            <button type="button" class="ghost hide" id="dabBandStop" style="flex:0 0 auto">Cancel</button>
+          </div>
+          <div class="hint" id="dabBandMsg">Steps through all 41 Band III blocks (about two minutes, longer for each
+            multiplex found) while nobody is listening, and adds every station found to this server&rsquo;s bookmarks.</div>
+          <div id="dabBandList"></div>
+        </div>
         <div class="hint" id="plainLandHead" style="display:none;margin-top:10px">If the DAB station
           cannot be opened &mdash; the radio busy on something that stops it reaching DAB &mdash;
           listeners start here instead:</div>
@@ -2797,6 +2818,7 @@ function adsbLandShow(r, o) {
   return on;
 }
 function dabLandRender() {
+  dabBandRender();
   const wrap = $("dabLandWrap"); if (!wrap) return;
   const r = radio();
   const hwCan = dabLandHwCan();
@@ -2897,7 +2919,75 @@ async function dabLandScanRun() {
     dabLandRender();
   }
 }
+/* ── ★★ V12: THE OWNER'S DAB BAND SCAN (GET /vibeserver/dab-bandscan — local_sdr_shim.cpp dabBandScanRun) ───────────
+ *  ?start=1 starts it on the idle radio (refused, in words, while anybody listens), ?cancel=1 stops it, neither = the
+ *  state; the page polls once a second while it runs. Each result opens to its stations; "Use as the landing block"
+ *  appears when the DAB landing is on. */
+let dabBand = null, dabBandTimer = 0;
+function dabBandRender() {
+  const wrap = $("dabBandWrap"); if (!wrap) return;
+  const offer = dabLandHwCan() && !modeBlockSet().has("dab");
+  wrap.classList.toggle("hide", !offer);
+  if (!offer) return;
+  const s = dabBand, running = !!(s && s.running);
+  const offline = !HW || HW.offline;
+  $("dabBandScan").disabled = running || offline;
+  $("dabBandStop").classList.toggle("hide", !running);
+  const msg = $("dabBandMsg");
+  if (offline && !running) msg.textContent = "This radio is not running, so it cannot scan just now.";
+  else if (s) {
+    const ens = (s.found || []).length, st = (s.found || []).reduce((a, h) => a + (h.services || []).length, 0);
+    const pl = (n, w) => n + " " + (n === 1 ? w : w === "multiplex" ? "multiplexes" : w + "s");
+    msg.textContent = s.error ? "Scan not started: " + s.error
+      : running ? `Scanning ${s.done} / ${s.total} blocks${s.current ? " \u00b7 " + s.current : ""}` + (ens ? ` \u2014 ${pl(ens, "multiplex")} so far` : "")
+      : s.finished ? (s.cancelled ? `Scan stopped at ${s.done} / ${s.total}${s.why ? " (" + s.why.replace(/^stopped \u2014 /, "") + ")" : ""} \u2014 ` : "")
+        + (ens ? `${pl(ens, "multiplex")}, ${pl(st, "station")} \u2014 ${pl(s.added || 0, "station")} added to bookmarks.`
+               : (s.cancelled ? "nothing found yet." : `No DAB found on any of the ${s.total} blocks. Check the aerial is up and connected.`))
+      : msg.textContent;
+  }
+  const list = $("dabBandList");
+  const rows = (s && s.found ? s.found.slice() : []).sort((a, b) => a.channel - b.channel);
+  const landingOn = Number(radio().landingDabChannel) >= 0;
+  list.innerHTML = rows.map(h => {
+    const q = Math.round((h.fib || 0) * 100), word = h.fib > 0.9 ? "strong" : h.fib > 0.6 ? "good" : "weak";
+    return `<details data-ch="${Number(h.channel)}"><summary><span class="b">${esc(h.block)}</span>`
+      + `<span class="e">${esc(h.ensemble || "Unnamed multiplex")} <span class="hint">${(h.hz / 1e6).toFixed(3)} MHz \u00b7 ${(h.services || []).length} stations</span></span>`
+      + `<span class="q" title="FIC quality ${q}%">${word.toUpperCase()}</span></summary>`
+      + `<div class="svcs">${(h.services || []).map(v => esc(v.label)).join("<br>")}</div>`
+      + (landingOn ? `<button type="button" class="ghost use" data-ch="${Number(h.channel)}">Use ${esc(h.block)} as the landing block</button>` : "")
+      + `</details>`;
+  }).join("");
+  list.querySelectorAll("button.use").forEach(b => b.addEventListener("click", () => {
+    const ch = Number(b.dataset.ch), hit = rows.find(h => h.channel === ch);
+    const r = radio();
+    r.landingDabChannel = ch; r.landingDabSid = 0; r.landingDabService = "";
+    if (hit) { dabLandStations[ch] = (hit.services || []).slice(); if (dabLandBlocks()[ch] && hit.ensemble) dabLandBlocks()[ch].ensemble = hit.ensemble; }
+    dabLandRender();
+  }));
+}
+async function dabBandCall(q) {
+  const a = await authQueryFor(HW_PREFIX);
+  const res = await fetch(`${HW_PREFIX}/vibeserver/dab-bandscan?${q}${q ? "&" : ""}${a}`, {cache:"no-store"});
+  if (res.status === 401) throw new Error("the server did not accept the admin password");
+  return res.json();
+}
+async function dabBandPoll() {
+  clearTimeout(dabBandTimer);
+  try { dabBand = await dabBandCall(""); } catch (e) { $("dabBandMsg").textContent = "Scan status unavailable: " + e.message; return; }
+  dabBandRender();
+  if (dabBand && dabBand.running) dabBandTimer = setTimeout(dabBandPoll, 1000);
+  else if (dabBand && dabBand.finished) dabLandLoadKnown(Number(radio().landingDabChannel));   // ★ the landing's station list, refreshed
+}
+function dabBandInit() {
+  $("dabBandScan").addEventListener("click", async () => {
+    try { dabBand = await dabBandCall("start=1"); } catch (e) { $("dabBandMsg").textContent = "Scan failed: " + e.message; return; }
+    dabBandRender();
+    if (dabBand && dabBand.running) dabBandTimer = setTimeout(dabBandPoll, 1000);
+  });
+  $("dabBandStop").addEventListener("click", async () => { try { await dabBandCall("cancel=1"); } catch (e) {} dabBandPoll(); });
+}
 function dabLandInit() {
+  dabBandInit();
   $("dabLandOn").addEventListener("change", () => {
     const r = radio();
     if ($("dabLandOn").checked) {

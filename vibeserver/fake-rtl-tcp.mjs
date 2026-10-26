@@ -57,6 +57,11 @@ const TONES_AT = arg('tones-at', 0);
 const KEY_S = arg('key', 0);
 const dabArg = (() => { const i = process.argv.indexOf('--dab'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const DAB_IQ = dabArg ? fs.readFileSync(dabArg) : null;
+/* ★ --dab-at HZ[,HZ…] (V12 DAB band scan, 2026-10-26): play the multiplex ONLY on these block centres (±50 kHz — 10A and 10N
+ *  are 160 kHz apart) and noise on every other Band III block, so a scan has something to find and something to pass over.
+ *  Without it the clip plays across the whole of Band III, as it always has. */
+const DAB_AT = (() => { const i = process.argv.indexOf('--dab-at'); return i >= 0 ? process.argv[i + 1].split(',').map(Number).filter((v) => v > 0) : []; })();
+const dabHere = (hz) => hz >= 174e6 && hz <= 240e6 && (!DAB_AT.length || DAB_AT.some((c) => Math.abs(c - hz) <= 50e3));
 const adsbArg = (() => { const i = process.argv.indexOf('--adsb'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const ADSB_IQ = adsbArg ? fs.readFileSync(adsbArg) : null;
 if (ADSB_IQ) console.log(`[fake-rtl-tcp] ADS-B clip ${adsbArg}: ${ADSB_IQ.length / 2} samples`);
@@ -190,7 +195,7 @@ const srv = net.createServer((sock) => {
         ADSB_IQ.copy(buf, k, adsbPos, adsbPos + take);
         k += take; adsbPos = (adsbPos + take) % ADSB_IQ.length;
       }
-    } else if (DAB_IQ && centreHz >= 174e6 && centreHz <= 240e6) {
+    } else if (DAB_IQ && dabHere(centreHz)) {
       for (let k = 0; k < n * 2; ) {
         const take = Math.min(n * 2 - k, DAB_IQ.length - dabPos);
         DAB_IQ.copy(buf, k, dabPos, dabPos + take);

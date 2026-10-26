@@ -625,6 +625,10 @@ export interface SpectrumCallbacks {
    *  Sent whole every time — the list changes rarely, and sending it entire means a client that
    *  joins mid-stream is never missing rows. */
   onDab?: (d: DabState) => void;
+  /** ★★ V12: the DAB band scan's state as the server publishes it (`dab_scan`) — see src/services/dabBandScan.ts. */
+  onDabScan?: (m: unknown) => void;
+  /** ★★ V12: hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
+  onDabScanOk?: (ok: boolean) => void;
   /** ★ ADS-B (V12, docs/v12/ADSB.md): the aircraft report, once a second while the receiver is in ADS-B
    *  and at once on joining — its arrival MEANS ADS-B is on. null = the server left ADS-B (`adsb_off`). */
   onAdsb?: (r: AdsbReport | null) => void;
@@ -1074,6 +1078,9 @@ export class SpectrumClient {
         this.cb.onDab?.(null as unknown as DabState);
         return;
       }
+      case 'dab_scan':
+        this.cb.onDabScan?.(msg);
+        return;
       case 'dab_error':
         this.cb.onNotice?.(String(msg.why ?? 'DAB is not available on this receiver'));
         return;
@@ -1474,6 +1481,7 @@ export class SpectrumClient {
                             why: typeof msg.why === 'string' ? msg.why : undefined });
         break;
       case 'hwinfo':
+        this.cb.onDabScanOk?.(msg.dabScan === true);   // ★ absent (an older server, a shared radio) = no SCAN key
         // ★★ V12 VFO A/B: how many watch channels a listener may add here. Absent (an older server) = 0 = no toggle.
         { const wm = Number(msg.watch) || 0;
           if (wm !== this.watchMax) { this.watchMax = wm; if (wm < 1 && this.abOn) { if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; } this.abOn = false; } this.cb.onWatch?.(); } }
@@ -2063,6 +2071,8 @@ export class SpectrumClient {
     this._send(m);
   }
   dabService(sid: number) { if (this.askBlocked()) return; this._send({ type: 'dab_service', sid }); }
+  /** ★★ V12: start / stop a DAB band scan. The server decides who may (dabBandScanWhyNot) and answers in words. */
+  dabScan(on: boolean) { this._send({ type: 'dab_scan', on: on ? 1 : 0 }); }
 
   /** ★★ ADS-B HOLDS THE DIAL AND THE VIEW, as DAB does (see dabHeld): the server ignores tune, mode,
    *  bandwidth, zoom, reset, tunerbw and sampleRate while in it, so they are stopped here — the page

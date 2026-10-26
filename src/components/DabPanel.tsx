@@ -35,6 +35,7 @@ import { withReadAuth } from '../services/vibeAuth';
 import { dabSlideQuery } from '../services/dabSlide';
 import { limiter } from '../utils/limit';
 import { cuPct, dabCuSegments } from '../utils/dabCapacity';
+import { dabScanRows, dabScanLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle, type DabScanState } from '../services/dabBandScan';
 
 /** ★ Three RadioDNS lookups at a time — under the server's cap of four (src/utils/limit.ts). */
 const dabLogoQueue = limiter(3);
@@ -451,11 +452,19 @@ export interface DabPanelProps {
   /** ★ The PIN proof for /vibeserver/dabslide, which a PIN-locked server now requires (the
    *  socket's auth suffix; withReadAuth lifts the PIN pair out of it). '' on an open server. */
   readAuth?: string;
+  /** ★★ V12: THE DAB BAND SCAN (M7EIW, 2026-10-26). `scanOk` = the server's hwinfo `dabScan` for this socket (a single-
+   *  user radio, or the admin) — the SCAN key is not drawn without it (Stuart: "on shared user servers I won't enable
+   *  scanning"). `scan` = the last `dab_scan`; onScan starts/stops; onScanTune tunes a found block (and service). */
+  scanOk?: boolean;
+  scan?: DabScanState | null;
+  onScan?: (on: boolean) => void;
+  onScanTune?: (channel: number, sid?: number) => void;
 }
 
 export default function DabPanel(p: DabPanelProps) {
   const { s, C } = useDecoderStyles(makeStyles);
-  const [pane, setPane] = React.useState<'stations' | 'signal'>('stations');
+  const [pane, setPane] = React.useState<'stations' | 'signal' | 'scan'>('stations');
+  const [scanOpen, setScanOpen] = React.useState<Set<string>>(() => new Set());
   const { height: winH, width: winW } = useWindowDimensions();
   const dtk = useDecoderTokens();
   /* ★★★ THE PANEL MUST NOT GROW UP INTO THE TOP CHIPS, AND THE REASON IS TOUCH, NOT LOOKS.
@@ -571,7 +580,11 @@ export default function DabPanel(p: DabPanelProps) {
    *  multiplex means a new list, and leaving the reader on a signal pane full of the last one's
    *  numbers is how a stale reading gets believed. */
   const eid = d?.eid ?? -1;
-  React.useEffect(() => { setPane('stations'); }, [eid]);
+  // ★ …except the SCAN pane: a scan walks every block, so the ensemble changes under it on purpose.
+  React.useEffect(() => { setPane((pp) => (pp === 'scan' ? pp : 'stations')); }, [eid]);
+  // ★ A scan this listener did not start in this panel (a reconnect mid-scan) still gets its pane while it runs.
+  const scanRunning = !!p.scan?.running;
+  React.useEffect(() => { if (scanRunning && p.scanOk) setPane('scan'); }, [scanRunning, p.scanOk]);
   // ★ Tell the host when the scopes are on screen, and that they are not once this panel goes.
   const onSignalPane = p.onSignalPane;
   React.useEffect(() => { onSignalPane?.(pane === 'signal'); }, [pane, onSignalPane]);
@@ -607,25 +620,46 @@ export default function DabPanel(p: DabPanelProps) {
   type DabKey = 'pane' | 'big' | 'bm' | 'exit';
   const hdrKeys: DabKey[] = ['pane', ...(bigUseful ? ['big' as const] : []), ...(p.onBookmarks ? ['bm' as const] : []), 'exit'];
   const navSvcs = d && pane === 'stations' ? d.services : [];
-  const dabNav = useRef({ hdrKeys, navSvcs }); dabNav.current = { hdrKeys, navSvcs };
+  /* ★★ V12 band scan by pad/keyboard: the stations pane ends with the SCAN key; the scan pane is its CANCEL/STATIONS key,
+   *  each ensemble row, and each station of an expanded row — one flat list after the header keys. */
+  const canScan = !!p.scanOk && !!p.onScan;
+  const scanRows = dabScanRows(p.scan ?? null);
+  type ScanItem = { k: 'ctl' } | { k: 'ens'; block: string } | { k: 'svc'; ch: number; sid?: number };
+  const scanItems: ScanItem[] = pane !== 'scan' ? [] : [{ k: 'ctl' }, ...scanRows.flatMap((h) => [
+    { k: 'ens' as const, block: h.block },
+    ...(scanOpen.has(h.block) ? [{ k: 'svc' as const, ch: h.channel }, ...h.services.map((sv) => ({ k: 'svc' as const, ch: h.channel, sid: sv.sid }))] : []),
+  ])];
+  const tailKeys = pane === 'stations' && canScan ? 1 : 0;   // the SCAN key after the stations
+  const startScan = () => { setScanOpen(new Set()); setPane('scan'); p.onScan?.(true); };
+  const scanTune = (ch: number, sid?: number) => { setPane('stations'); p.onScanTune?.(ch, sid); };
+  const runScanItem = (it: ScanItem) => {
+    if (it.k === 'ctl') { if (p.scan?.running) p.onScan?.(false); else setPane('stations'); }
+    else if (it.k === 'ens') setScanOpen((o) => dabScanToggle(o, it.block));
+    else scanTune(it.ch, it.sid);
+  };
+  const dabNav = useRef({ hdrKeys, navSvcs, scanItems, tailKeys }); dabNav.current = { hdrKeys, navSvcs, scanItems, tailKeys };
   const listRef = useRef<ScrollView | null>(null);
   const rowY = useRef<Record<number, number>>({});
   const onRowY = React.useCallback((sid: number, y: number) => { rowY.current[sid] = y; }, []);
   const activeAt = navSvcs.findIndex((x) => x.sid === d?.sid);
   const dabFocus = useListNav(
-    grab, hdrKeys.length + navSvcs.length,
+    grab, hdrKeys.length + navSvcs.length + scanItems.length + tailKeys,
     (i) => {
       const { hdrKeys: hk, navSvcs: sv } = dabNav.current;
       if (i < hk.length) {
         const k = hk[i];
-        if (k === 'pane') setPane(pane === 'stations' ? 'signal' : 'stations');
+        if (k === 'pane') setPane(pane === 'signal' ? 'stations' : 'signal');
         else if (k === 'big') p.onTall(!tall);
         else if (k === 'bm') { setGrab(false); p.onBookmarks?.(); }
         else { setGrab(false); p.onExit(); }
         return;
       }
       const x = sv[i - hk.length];
-      if (x) pick(x.sid);
+      if (x) { pick(x.sid); return; }
+      const { scanItems: si, tailKeys: tk } = dabNav.current;
+      const j = i - hk.length - sv.length;
+      if (j >= 0 && j < si.length) { runScanItem(si[j]); return; }
+      if (tk && j === si.length) startScan();
     },
     (i) => {
       const { hdrKeys: hk, navSvcs: sv } = dabNav.current;
@@ -641,6 +675,53 @@ export default function DabPanel(p: DabPanelProps) {
     },
   );
   const keyHl = (k: DabKey) => grab && dabFocus === hdrKeys.indexOf(k) ? { borderColor: navRing, borderWidth: 2 } : null;
+  const navHl = (i: number) => grab && dabFocus === i ? { borderColor: navRing, borderWidth: 2 } : null;
+  const scanBase = hdrKeys.length + navSvcs.length;   // index of the first scan item (or of the SCAN key)
+
+  /* ★★ V12: THE SCAN PANE — progress, CANCEL / STATIONS, then one row per ensemble (block, name, frequency · count, FIC
+   *  quality), each opening to its stations. Words from src/services/dabBandScan.ts, the web's own. */
+  const scanPane = (() => {
+    if (pane !== 'scan') return null;
+    const st = p.scan ?? null;
+    let n = 0;
+    const idx = () => scanBase + n++;
+    const ctlAt = idx();
+    return (
+      <>
+        <View style={s.scanTop}>
+          <Text style={[s.scanLine, { flex: 1 }]}>{dabScanLine(st) || 'Starting the scan\u2026'}</Text>
+          <DecoderKey active onPress={() => runScanItem({ k: 'ctl' })} style={navHl(ctlAt)} label={st?.running ? 'CANCEL' : 'STATIONS'} />
+        </View>
+        <View style={s.scanBar}><View style={[s.scanBarFill, { width: `${st && st.total ? Math.round((100 * st.done) / st.total) : 0}%` }]} /></View>
+        {!scanRows.length && !!st?.running && <Text style={[s.notice, { color: C.muted }]}>Nothing found yet {'\u2014'} each empty block takes about three seconds.</Text>}
+        {scanRows.map((h) => {
+          const q = dabScanQuality(h), open = scanOpen.has(h.block), at = idx();
+          return (
+            <View key={h.block}>
+              <TouchableOpacity onPress={() => setScanOpen((o) => dabScanToggle(o, h.block))} style={[s.scanHd, navHl(at)]}
+                                accessibilityRole="button" accessibilityState={{ expanded: open }}>
+                <Text style={s.scanBlk}>{h.block}</Text>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={s.svcName} numberOfLines={1}>{h.ensemble || 'Unnamed ensemble'}</Text>
+                  <Text style={s.svcCodec} numberOfLines={1}>{dabScanMHz(h.hz)} {'\u00b7'} {dabScanCount(h)}</Text>
+                </View>
+                <Text style={[s.scanQ, { color: q.word === 'strong' ? C.sel : q.word === 'weak' ? C.warn : C.muted }]}>{q.word.toUpperCase()}</Text>
+                <Text style={s.svcCodec}>{open ? '\u25be' : '\u25b8'}</Text>
+              </TouchableOpacity>
+              {open && [{ sid: 0, label: `\u25b6 Tune to ${h.block}` }, ...h.services].map((sv) => {
+                const si = idx();
+                return (
+                  <TouchableOpacity key={sv.sid} onPress={() => scanTune(h.channel, sv.sid || undefined)} style={[s.scanSvc, navHl(si)]} accessibilityRole="button">
+                    <Text style={s.svcDls} numberOfLines={1}>{sv.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          );
+        })}
+      </>
+    );
+  })();
 
   const body = (
     <ScrollView ref={listRef} style={{ maxHeight: maxBody }} contentContainerStyle={s.body}
@@ -659,7 +740,7 @@ export default function DabPanel(p: DabPanelProps) {
           No sound: this server has no DAB+ decoder. MP2 services still play.
         </Text>
       )}
-      {!d && !p.error && <Text style={s.notice}>Tuning the multiplex…</Text>}
+      {!d && !p.error && pane !== 'scan' && <Text style={s.notice}>Tuning the multiplex…</Text>}
 
       {!!d && pane === 'stations' && (
         <>
@@ -679,6 +760,12 @@ export default function DabPanel(p: DabPanelProps) {
           {d.held && <Text style={[s.notice, { color: C.muted, fontSize: 10 }]}>list held — the multiplex is not reading at the moment</Text>}
         </>
       )}
+      {/* ★★ V12: SCAN at the foot of the station list, not in the header — the header's keys already fill an SE in
+          Display Zoom, and EXIT DAB must never be pushed off it. Drawn only where the server offers it. */}
+      {pane === 'stations' && canScan && (
+        <DecoderKey onPress={startScan} style={[{ alignSelf: 'flex-start', marginTop: 8 }, navHl(scanBase)]} label="SCAN ALL DAB BLOCKS" />
+      )}
+      {scanPane}
 
       {!!d && pane === 'signal' && (
         <>
@@ -946,8 +1033,8 @@ export default function DabPanel(p: DabPanelProps) {
           <Text style={[s.mux, { flex: 1, flexShrink: 1, minWidth: 0 }]} numberOfLines={1}>{muxTitle}</Text>
           {/* ★ The label names where the button GOES, and the state is readable without pressing
               it — the browser's rule for this same control. */}
-          <DecoderKey active onPress={() => setPane(pane === 'stations' ? 'signal' : 'stations')}
-                      style={keyHl('pane')} label={pane === 'stations' ? 'SIGNAL' : 'STATIONS'} />
+          <DecoderKey active onPress={() => setPane(pane === 'signal' ? 'stations' : 'signal')}
+                      style={keyHl('pane')} label={pane === 'signal' ? 'STATIONS' : 'SIGNAL'} />
           {bigUseful && <DecoderKey active={tall} style={keyHl('big')} onPress={() => p.onTall(!tall)} label={tall ? 'SMALL' : 'BIG'} />}
           {!!p.onBookmarks && (
             <DecoderKey onPress={p.onBookmarks} style={keyHl('bm')} accessibilityLabel="DAB bookmarks" label="★" />
@@ -1032,6 +1119,15 @@ const makeStyles = (T: DecoderTokens) => {
   svcCodec: { fontFamily: FONT, fontSize: 11, color: C.muted },
   plots:    { flexDirection: 'row', gap: 10, marginTop: 8, alignItems: 'flex-end' },
   plotLbl:  { fontFamily: FONT, fontSize: 9, letterSpacing: 1, color: C.muted, marginBottom: 2 },
+  // ★★ V12 band scan
+  scanTop:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
+  scanLine: { fontFamily: FONT, fontSize: 13, color: C.value },
+  scanBar:  { height: 3, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.08)', overflow: 'hidden', marginBottom: 6 },
+  scanBarFill: { height: 3, backgroundColor: C.sel },
+  scanHd:   { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 7, paddingHorizontal: 6, borderRadius: 6 },
+  scanBlk:  { fontFamily: FONT, fontSize: 14, letterSpacing: 1, color: T.hdrAccent, minWidth: 40 },
+  scanQ:    { fontFamily: FONT, fontSize: 10, letterSpacing: 1 },
+  scanSvc:  { paddingVertical: 7, paddingLeft: 54, paddingRight: 6, borderRadius: 6 },
   });
   return { s, C };
 };

@@ -116,6 +116,7 @@
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
 #include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
 #include "vibe_dab_service.h"   // DAB (experimental) — see briefs/BRIEF-dab.md
+#include "vibe_dab_confirm.h"   // ★ V12: when a service list is true enough to reconcile bookmarks by
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
 #include "vibe_ism_service.h"   // ISM sensors (V12) — our own clean-room decoders, docs/v12/ISM-DECODER.md
 #include "vibe_ism_gallery.h"   // ★★ V12 2026-10-25: ISM in the gallery — the day's log + summary card per band
@@ -1106,6 +1107,37 @@ static std::string           g_vsRadioLabel;
  *  scan borrows an idle radio for a few seconds; the moment somebody wants it, it is theirs. */
 static std::atomic<bool>     g_dabScanActive{false};
 static std::atomic<bool>     g_dabScanCancel{false};
+/* ★★★ THE DAB BAND SCAN (V12, 2026-10-26 — M7EIW on Discord: "a scan function for DAB which also shows the results").
+ *  Every Band III block in turn, dwelling only as long as each needs, its findings published as they come in. ONE scan
+ *  machine: it holds g_dabScanActive like the quick scan, so the two can never run together, and a listener arriving
+ *  cancels it the same way (dabScanYield). Who may start one is Stuart's rule (2026-10-26): "on shared user servers I
+ *  won't enable scanning as that would be antisocial to the others on the server at the time … On single user radios
+ *  then scanning can be left as a user option too" — see dabBandScanWhyNot.
+ *  ★ g_dabScanNoRestore: the scan was ended by somebody TUNING (a tap on a result, a block step, a mode change). The
+ *    shared dial obeys the person tuning it, so the scan does not put the old block back over their choice. */
+static std::atomic<bool>     g_dabScanNoRestore{false};
+struct DabBandScanHit {
+    int idx = -1;
+    std::string ensemble;
+    std::vector<std::pair<uint32_t, std::string>> services;   // playable audio, labelled — what the station list offers
+    float fibRate = 0.0f, merDb = 0.0f;
+    bool complete = false;
+};
+struct DabBandScanState {
+    bool running = false;
+    std::string by;                 // "setup" (the owner, idle radio), "listener" (a single-user radio), "admin"
+    int done = 0, total = 0, current = -1;
+    std::vector<DabBandScanHit> hits;   // in block order (the scan walks the band upward)
+    int added = 0;                  // NEW bookmarks this scan made (bmScanDab)
+    bool cancelled = false, finished = false;
+    std::string why;                // a refusal or the reason it stopped early, in words
+    double startedAt = 0.0, secs = 0.0;
+    uint32_t seq = 0;               // bumps on every change — the setup page polls on it
+};
+static std::mutex       g_dabBandMtx;
+static DabBandScanState g_dabBand;
+/** ★ The scan's state as JSON — the `dab_scan` socket message and GET /vibeserver/dab-bandscan share it (ONE writer). */
+static std::string dabBandJsonLocked();
 /* ★★★ THE GAIN EACH BLOCK LAST DECODED AT, in AGC steps below the ceiling. DAB enters at the
  *  AGC's resting gain (12.5 dB on the V4) and a weak block then waits the entry settle plus one
  *  climb per 0.4 s before the first FIB — 3 to 6 s on 10D, which wants ~36 dB. A block that has
@@ -1229,6 +1261,22 @@ static void dabEnsSaveLocked() {
         std::rename(tmp.c_str(), g_dabEnsFile.c_str());     // ★ atomic, as the gain file is
     }
 }
+/** ★ Write one block's ensemble name into the memory — the caller has already applied the bar (FIB rate over 0.9).
+ *  Shared by the AGC tick (a listener on the block) and the DAB band scan, so both learn by the same rule. Written only
+ *  when it CHANGES, so the file is not rewritten every second on a stable multiplex. */
+static void dabEnsRemember(int blk, std::string label) {
+    while (!label.empty() && label.back() == ' ') label.pop_back();   // DAB pads to 16 chars
+    if (label.empty() || blk < 0 || (size_t)blk >= vibedab::kBandIIICount) return;
+    if (label.size() > 64) label.resize(64);
+    std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);
+    dabEnsLoadLocked();
+    auto e = g_dabEnsMem.find(blk);
+    if (e == g_dabEnsMem.end() || e->second != label) {
+        g_dabEnsMem[blk] = label;
+        dabEnsSaveLocked();
+        LOGI("[DAB] %s remembered as \"%s\"", vibedab::kBandIII[blk].name, label.c_str());
+    }
+}
 /* ★★★ AN OFF-AIR PICTURE, SENT ONCE (2026-10-19). Album art, slides, carousel objects and SPI logos were sent whole
  *  on every request: the live slide `no-cache` with nothing to revalidate against, `?sid=` re-sent in full every
  *  60 s, the carousel `no-cache`. Now each carries a STRONG ETag — FNV-1a of the bytes, so the tag IS the picture and
@@ -1274,6 +1322,40 @@ static std::string dabEscape(const std::string& s_raw) {
         else if (c >= 0x20)        { o += char(c); }
     }
     return o;
+}
+static std::string dabBandJsonLocked() {
+    const DabBandScanState& st = g_dabBand;
+    std::string j = std::string("{\"type\":\"dab_scan\",\"running\":") + (st.running ? "true" : "false")
+                  + ",\"by\":\"" + dabEscape(st.by) + "\""
+                  + ",\"done\":" + std::to_string(st.done) + ",\"total\":" + std::to_string(st.total)
+                  + ",\"current\":\"" + (st.current >= 0 && (size_t)st.current < vibedab::kBandIIICount ? vibedab::kBandIII[st.current].name : "") + "\""
+                  + ",\"added\":" + std::to_string(st.added)
+                  + ",\"cancelled\":" + (st.cancelled ? "true" : "false")
+                  + ",\"finished\":" + (st.finished ? "true" : "false")
+                  + ",\"secs\":" + std::to_string(int(st.secs + 0.5))
+                  + ",\"seq\":" + std::to_string(st.seq);
+    if (!st.why.empty()) j += ",\"why\":\"" + dabEscape(st.why) + "\"";
+    j += ",\"found\":[";
+    bool first = true;
+    for (const auto& h : st.hits) {
+        if (h.idx < 0 || (size_t)h.idx >= vibedab::kBandIIICount) continue;
+        if (!first) j += ",";
+        first = false;
+        char q[96];
+        snprintf(q, sizeof q, ",\"fib\":%.2f,\"mer\":%.1f", h.fibRate, h.merDb);
+        j += std::string("{\"block\":\"") + vibedab::kBandIII[h.idx].name + "\",\"channel\":" + std::to_string(h.idx)
+           + ",\"hz\":" + std::to_string(vibedab::kBandIII[h.idx].centreHz)
+           + ",\"ensemble\":\"" + dabEscape(h.ensemble) + "\"" + q
+           + ",\"complete\":" + (h.complete ? "true" : "false") + ",\"services\":[";
+        bool f2 = true;
+        for (const auto& sv : h.services) {
+            if (!f2) j += ",";
+            f2 = false;
+            j += "{\"sid\":" + std::to_string(sv.first) + ",\"label\":\"" + dabEscape(sv.second) + "\"}";
+        }
+        j += "]}";
+    }
+    return j + "]}";
 }
 /** `,"blocks":{"7D":"NNDAB",…}` for the DAB status message — "" when nothing is remembered yet.
  *  ★ Built here rather than in DabService::json() because the memory belongs to the RADIO (it
@@ -1699,6 +1781,16 @@ struct LearnedBm {
      *  ★ Absent in records written before this existed; 2 is the honest reading for those, since
      *    the only way a bookmark could previously EXIST was by settling. Handled at load. */
     int         nameSrc = 2;
+    /** ★★★ FOUND BY A DAB BAND SCAN (V12, 2026-10-26) — the third origin, between learned and manual. Stuart: "scanned
+     *  stations have a much longer timeout before they drop off the bookmarks". Not hand-made (so "Clear learned" takes
+     *  it and the scan may refresh its label in place), but kept for kScannedExpirySecs rather than kExpirySecs, and in
+     *  the kLearnedMax eviction it goes only after every plain learned row. Hearing it again on air refreshes lastHeard
+     *  as for any learned row; a rescan re-confirms it. Persisted as `"scanned":true`, written only when set — so an
+     *  older file loads as before, and an older server reading a new file ignores the key (bmScanRows takes any key). */
+    bool        scanned = false;
+    /** ★★ V12: when a CONFIRMED list of this service's ensemble first lacked it (unix s; 0 = never, or heard since).
+     *  The first half of the two-visit removal — see vibedab::reconcilePlan. Persisted as `"missedAt"` only when set. */
+    long long   missedAt = 0;
 };
 enum { kNameProvisional = 0, kNameGuess = 1, kNameHeard = 2, kNameRadioDns = 3 };
 /**
@@ -1817,6 +1909,10 @@ static const int       kMinSamples  = 10;                 // PS repetitions befo
 static const long long kPiLockSecs  = 5;                  // PI must be steady this long
 static const long long kStableSecs  = 15;                 // reconstruction must hold
 static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days unheard
+/** ★★ A STATION A DAB BAND SCAN FOUND lasts a year unheard, not a month (Stuart, 2026-10-26: "scanned stations have a
+ *  much longer timeout before they drop off the bookmarks"). A scan is somebody asking for the list on purpose; the
+ *  30-day rule is for what the dial happened to rest on. See LearnedBm::scanned. */
+static const long long kScannedExpirySecs = 365LL * 24 * 3600;
 /** ★★★ THE LIST HAS A SIZE IT CANNOT PASS (Stuart, 2026-10-19: "make sure that the auto saving rds/dab bookmarks
  *  cannot balloon the bookmarks file as this will bring down every server especially the weaker ones").
  *  The Sony's grew to 134 MB through the escape bug (bmLoadJson); with that fixed, NUMBERS are the other way up, and
@@ -1829,6 +1925,12 @@ static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days unheard
  *  Worst case: 21,000 rows of at most ~400 bytes = ~8 MB, under the 16 MB the loader sets aside (setBookmarksPath).
  *  Kiko's Atom and a 1 GB box can always read their own list. */
 static const size_t    kLearnedMax  = 1000;
+/** ★ Has this row gone unheard for longer than its origin allows? Hand-saved rows never expire; a scanned one lasts
+ *  kScannedExpirySecs, a learned one kExpirySecs. ONE RULE, every reader (bmPrune, the chat's share lookup). */
+static bool bmExpired(const LearnedBm& b, long long now) {
+    if (b.manual) return false;
+    return b.lastHeard < now - (b.scanned ? kScannedExpirySecs : kExpirySecs);
+}
 static const size_t    kBmMax       = 21000;
 /** ★★★ HOW LONG YOU MUST HAVE STAYED before a station is written with a PROVISIONAL label.
  *
@@ -2123,7 +2225,8 @@ static void bmLearnDab(double hz, int eid, int ecc, uint32_t sid, const std::str
     auto it = g_bookmarks.find(key);
     if (it != g_bookmarks.end()) {
         if (it->second.manual) return;
-        const bool same = it->second.name == n && it->second.eid == eid && it->second.ecc == ecc;
+        const bool same = it->second.name == n && it->second.eid == eid && it->second.ecc == ecc && !it->second.missedAt;
+        it->second.missedAt = 0;   // ★ heard: any pending removal is off (vibedab::reconcilePlan)
         const bool stale = now - it->second.lastHeard > 3600;   // persist the heartbeat hourly, not every pass
         it->second.name = n; it->second.eid = eid; it->second.ecc = ecc; it->second.lastHeard = now;
         if (!same || stale) bmSaveLocked();
@@ -2134,6 +2237,122 @@ static void bmLearnDab(double hz, int eid, int ecc, uint32_t sid, const std::str
     b.lastHeard = now; b.manual = false; b.sid = int(sid); b.eid = eid; b.ecc = ecc;
     g_bookmarks[key] = b;
     bmSaveLocked();
+}
+
+/** ★★★ A DAB BAND SCAN'S STATIONS INTO THE SERVER'S BOOKMARKS (V12, 2026-10-26 — Stuart: "All stations added to
+ *  bookmarks"). The same key as bmLearnDab (block centre + SId), so a service is never there twice, whatever its name:
+ *    - not there            → added, origin SCANNED (LearnedBm::scanned), counted in `added`;
+ *    - learned or scanned   → re-confirmed: marked scanned, lastHeard now, a changed label updated IN PLACE;
+ *    - saved by hand        → left exactly as the owner made it (it is already a bookmark).
+ *  Services a scan no longer hears are NOT deleted here — only the year-long expiry ever drops a scanned row.
+ *  ★ One save for the whole block, and only if something changed: a rescan of a known block writes nothing.
+ *  @return how many were NEW — not in the list when the scan began (`before`, from bmDabKeys), or not there at all. */
+static std::set<long long> bmDabKeys() {
+    std::set<long long> k;
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    for (const auto& kv : g_bookmarks) if (kv.second.mode == "dab") k.insert(kv.first);
+    return k;
+}
+struct DabScanBmRow { uint32_t sid; std::string label; int eid; int ecc; };
+static int bmScanDab(double hz, const std::vector<DabScanBmRow>& rows, const std::set<long long>* before) {
+    if (hz <= 0) return 0;
+    const long long now = (long long)time(nullptr);
+    int added = 0;
+    bool changed = false;
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    for (const auto& r : rows) {
+        const std::string n = bmClean(r.label, 64);
+        if (n.empty() || r.sid == 0) continue;
+        const long long key = bmKeyFor(hz, int(r.sid));
+        auto it = g_bookmarks.find(key);
+        if (it != g_bookmarks.end()) {
+            LearnedBm& b = it->second;
+            if (b.manual) continue;
+            if (b.name != n || b.eid != r.eid || b.ecc != r.ecc || !b.scanned || b.missedAt) changed = true;
+            b.missedAt = 0;   // ★ heard: any pending removal is off (vibedab::reconcilePlan)
+            // ★ The heartbeat alone is persisted at most daily: a rescan of an unchanged list must not rewrite the file.
+            if (now - b.lastHeard > 24 * 3600) changed = true;
+            b.name = n; b.eid = r.eid; b.ecc = r.ecc; b.scanned = true; b.lastHeard = now; b.nameSrc = kNameHeard;
+            // ★ "added" means new SINCE THE SCAN BEGAN: the ordinary learn path (every 5 s on the DSP thread) may have
+            //   written it a moment ago while the scan dwelt here — that is still this scan's find.
+            if (before && !before->count(key)) ++added;
+            continue;
+        }
+        if (g_bookmarks.size() >= kBmMax) continue;   // ★ the hard ceiling holds for a scan too
+        LearnedBm b;
+        b.name = n; b.pi = -1; b.hz = (long long)llround(hz); b.mode = "dab";
+        b.lastHeard = now; b.manual = false; b.sid = int(r.sid); b.eid = r.eid; b.ecc = r.ecc; b.scanned = true;
+        g_bookmarks[key] = b;
+        ++added; changed = true;
+    }
+    if (changed) bmSaveLocked();
+    return added;
+}
+
+/** ★★★ RECONCILE ONE BLOCK'S BOOKMARKS AGAINST ITS CONFIRMED SERVICE LIST (V12, 2026-10-26 — "so that a stale Radio X
+ *  90's cannot linger"). The caller has a list vibedab::ServiceListConfirm has confirmed. Removed: a LEARNED or SCANNED
+ *  DAB row on this block, of THIS ensemble (same EId), whose SId is not in the list — and only on the SECOND confirmed
+ *  visit at least 6 h after the first that lacked it, never on a visit missing more than half the saved list at once
+ *  (vibedab::reconcilePlan holds the rule). Never touched:
+ *    - a row saved BY HAND (the owner's word outranks the air; it stays even when its service has gone);
+ *    - a row of a DIFFERENT ensemble on the same block. ★★ That is the re-planned (or co-channel) case, and the cautious
+ *      reading wins: an aerial between two regions can hear one ensemble on a block one evening and another the next,
+ *      so the other ensemble's stations are left to age out on their own clock (30 days learned, a year scanned)
+ *      rather than be deleted by a neighbour's list.
+ *  Each mark and removal is logged (block, SId, label). One save, only if something changed. @return how many removed. */
+static int bmReconcileDab(double hz, int eid, const std::set<uint32_t>& sids, const char* why) {
+    if (hz <= 0 || eid <= 0 || sids.empty()) return 0;
+    const long long lo = bmKey(hz) + 1, hi = bmKey(hz) + 0xFFFF;
+    const char* blk = "?";
+    for (size_t i = 0; i < vibedab::kBandIIICount; ++i)
+        if (std::llabs((long long)vibedab::kBandIII[i].centreHz - (long long)llround(hz)) < 1000) { blk = vibedab::kBandIII[i].name; break; }
+    const long long now = (long long)time(nullptr);
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    // ★ This ensemble's DAB rows on this block — hand-saved ones included, so they count toward "the saved list".
+    std::vector<long long> keys;
+    std::vector<vibedab::ReconRow> rows;
+    for (auto it = g_bookmarks.lower_bound(lo); it != g_bookmarks.end() && it->first <= hi; ++it) {
+        const LearnedBm& b = it->second;
+        if (b.mode != "dab" || b.sid <= 0 || b.eid != eid) continue;
+        keys.push_back(it->first);
+        rows.push_back({ uint32_t(b.sid), b.manual, b.missedAt });
+    }
+    const vibedab::ReconPlan plan = vibedab::reconcilePlan(rows, sids, now);
+    if (plan.suspect) {
+        // ★ Logged once per change of the picture, not every 5 s while it holds.
+        static std::string lastSuspect;
+        const std::string tag = std::string(blk) + "/" + std::to_string(plan.missing) + "/" + std::to_string(rows.size());
+        if (tag != lastSuspect) {
+            lastSuspect = tag;
+            LOGI("[DAB] bookmarks: %s ensemble 0x%X lists %zu service(s) but %d of the %zu saved are missing at once (%s) "
+                 "\xe2\x80\x94 a suspect visit (a weak day?): nothing marked or removed", blk, eid, sids.size(), plan.missing, rows.size(), why);
+        }
+    }
+    int removed = 0;
+    bool changed = false;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        auto it = g_bookmarks.find(keys[i]);
+        if (it == g_bookmarks.end()) continue;
+        switch (plan.acts[i]) {
+        case vibedab::ReconAct::Keep: break;
+        case vibedab::ReconAct::ClearMissed: it->second.missedAt = 0; changed = true; break;
+        case vibedab::ReconAct::MarkMissed:
+            it->second.missedAt = now; changed = true;
+            LOGI("[DAB] bookmarks: %s service 0x%X \"%s\" is not in ensemble 0x%X's confirmed list (%s) \xe2\x80\x94 marked; "
+                 "removed only if a confirmed list %lld h from now still lacks it", blk, it->second.sid, it->second.name.c_str(), eid, why,
+                 vibedab::kRemoveAfterS / 3600);
+            break;
+        case vibedab::ReconAct::Remove:
+            LOGI("[DAB] bookmarks: %s service 0x%X \"%s\" is still not in ensemble 0x%X's confirmed list, %.1f h after it was first "
+                 "missed (%s) \xe2\x80\x94 removed", blk, it->second.sid, it->second.name.c_str(), eid,
+                 double(now - it->second.missedAt) / 3600.0, why);
+            g_bookmarks.erase(it);
+            ++removed; changed = true;
+            break;
+        }
+    }
+    if (changed) bmSaveLocked();
+    return removed;
 }
 
 /** One manual row into the map. The caller holds g_bmMtx and saves. False when the row is unusable. */
@@ -2229,20 +2448,21 @@ static void bmRemove(double hz, int sid = -1) {
 
 /** Drop anything unheard for kExpirySecs. Manual entries are exempt. */
 static void bmPrune() {
-    const long long cutoff = (long long)time(nullptr) - kExpirySecs;
+    const long long now = (long long)time(nullptr);
     size_t learned = 0;
     for (auto it = g_bookmarks.begin(); it != g_bookmarks.end(); ) {
-        if (!it->second.manual && it->second.lastHeard < cutoff) it = g_bookmarks.erase(it);
+        if (bmExpired(it->second, now)) it = g_bookmarks.erase(it);
         else { if (!it->second.manual) ++learned; ++it; }
     }
     // ★ kLearnedMax: the longest-unheard learned rows go first; hand-saved rows are never touched.
+    // ★★ V12: and SCANNED rows only after every plain learned row has gone — (scanned, lastHeard) sorts them last.
     if (learned > kLearnedMax) {
-        std::vector<std::pair<long long, long long>> byAge;   // (lastHeard, key)
+        std::vector<std::tuple<int, long long, long long>> byAge;   // (scanned, lastHeard, key)
         byAge.reserve(learned);
-        for (const auto& kv : g_bookmarks) if (!kv.second.manual) byAge.emplace_back(kv.second.lastHeard, kv.first);
+        for (const auto& kv : g_bookmarks) if (!kv.second.manual) byAge.emplace_back(kv.second.scanned ? 1 : 0, kv.second.lastHeard, kv.first);
         const size_t drop = learned - kLearnedMax;
         std::nth_element(byAge.begin(), byAge.begin() + (long)drop, byAge.end());
-        for (size_t k = 0; k < drop; ++k) g_bookmarks.erase(byAge[k].second);
+        for (size_t k = 0; k < drop; ++k) g_bookmarks.erase(std::get<2>(byAge[k]));
         LOGI("bookmarks: %zu learned stations is over the %zu limit — the %zu longest unheard dropped",
              learned, kLearnedMax, drop);
     }
@@ -2258,11 +2478,11 @@ static void bmPrune() {
 static std::vector<vibechat::Known> chatShareKnownNear(double hz) {
     std::vector<vibechat::Known> out;
     const long long lo = bmKey(hz - 25000.0), hi = bmKey(hz + 25000.0) + 0x10000;
-    const long long cutoff = (long long)time(nullptr) - kExpirySecs;
+    const long long now = (long long)time(nullptr);
     std::lock_guard<std::mutex> lk(g_bmMtx);
     for (auto it = g_bookmarks.lower_bound(lo); it != g_bookmarks.end() && it->first <= hi; ++it) {
         const LearnedBm& b = it->second;
-        if (!b.manual && b.lastHeard < cutoff) continue;
+        if (bmExpired(b, now)) continue;
         vibechat::Known k;
         k.name = b.name; k.hz = b.hz; k.mode = b.mode; k.sid = b.sid; k.eid = b.eid;
         k.quality = b.manual ? 2 : b.nameSrc == kNameProvisional ? 0 : b.nameSrc == kNameGuess ? 1 : 2;
@@ -2439,6 +2659,8 @@ static bool bmLoadJson(const std::string& json) {
         b.lastHeard = (long long)num(r, "lastHeard", 0.0);
         const auto m = r.b.find("manual");
         b.manual = m != r.b.end() && m->second;
+        { const auto sc = r.b.find("scanned"); b.scanned = !b.manual && sc != r.b.end() && sc->second; }   // ★ absent = not scanned
+        { const double ma = num(r, "missedAt", 0.0); b.missedAt = ma > 0.0 && ma < 1e11 ? (long long)ma : 0; }
         const std::string md = bmClean(text(r, "mode"), 16);
         if (!md.empty()) b.mode = md;
         /* ★ Absent in every record written before provenance existed — and for those, "heard and
@@ -2494,6 +2716,8 @@ static std::string bmJsonLocked() {
             *  does not grow and an older client reading no field assumes exactly that. */
            + (kv.second.nameSrc != kNameHeard
                 ? ",\"nameSrc\":" + std::to_string(kv.second.nameSrc) : std::string())
+           + (kv.second.scanned && !kv.second.manual ? ",\"scanned\":true" : "")   // ★ only when set — see LearnedBm::scanned
+           + (kv.second.missedAt > 0 ? ",\"missedAt\":" + std::to_string(kv.second.missedAt) : std::string())
            + ",\"source\":\"server\"}";
     }
     return j + "]";
@@ -14312,6 +14536,247 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+
+    /* ── ★★★ THE DAB BAND SCAN (V12, 2026-10-26) — see DabBandScanState for who asked and Stuart's rule. ────────────── */
+
+    /** ★ Why THIS socket may not start a band scan — "" when it may. sock == nullptr is the owner at the setup page
+     *  (admin-gated HTTP), which may scan any radio — but only an idle one, checked in dabBandScanStart.
+     *  ★★★ A SHARED RADIO OFFERS NO SCAN TO A LISTENER, EVEN ONE WHO IS ALONE ON IT NOW (Stuart, 2026-10-26: "on shared
+     *      user servers I won't enable scanning as that would be antisocial to the others on the server at the time").
+     *      The configured listener count decides, not the momentary one, so the button never appears and vanishes as
+     *      people come and go. The admin keeps it: the owner may already move a shared dial (every receiver setting is
+     *      theirs), and the other listeners are told a scan is running. hwinfo's `dabScan` is this answer, per socket. */
+    std::string dabBandScanWhyNot(const std::shared_ptr<net::Socket>& sock) {
+        if (vsModeBlocked("dab")) return "DAB is switched off on this receiver";
+        if (!vsDabCapable()) return !vsDabDecoderAvailable()
+            ? "this server has no AAC decoder (ffmpeg), so it cannot do DAB"
+            : "this radio cannot reach a DAB multiplex at 2.048 MS/s with its current settings";
+        if (sock && g_vsMaxUsers.load() > 1 && !adminNow(sock))
+            return "Scanning is only offered on a single-listener radio. This one is shared, and a scan would move the "
+                   "dial for everybody on it \xe2\x80\x94 its owner can scan from the setup page.";
+        return "";
+    }
+
+    /** Publish the scan's state to every listener (the scanner's list; everybody else's "a scan is running" line). */
+    void dabBandBroadcast() {
+        std::string j;
+        { std::lock_guard<std::mutex> lk(g_dabBandMtx); ++g_dabBand.seq; j = dabBandJsonLocked(); }
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        for (auto& sk : socks) sendText(sk, j);
+    }
+
+    /** Start a band scan. @return "" when started, else why not (in words). */
+    std::string dabBandScanStart(const std::shared_ptr<net::Socket>& sock) {
+        const std::string why = dabBandScanWhyNot(sock);
+        if (!why.empty()) return why;
+        const bool fromSetup = !sock;
+        if (g_dabScanActive.load()) return "a station scan is already running on this radio";
+        if (!fromSetup && !g_dabMode.load(std::memory_order_relaxed)) return "the radio is not in DAB";
+        if (fromSetup) {
+            int listening = 0;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              if (!nobodyWatchingLocked()) listening = std::max(1, specListenerCountLocked()); }
+            if (listening > 0)
+                return std::string("not while somebody is listening \xe2\x80\x94 ")
+                     + (listening == 1 ? "1 listener is" : std::to_string(listening) + " listeners are")
+                     + " on this radio, and a scan would move their dial. Try again when it is free.";
+            if (g_dabMode.load(std::memory_order_relaxed)) return "the radio is already on a multiplex";
+        }
+        if (g_dabScanActive.exchange(true)) return "a station scan is already running on this radio";
+        g_dabScanCancel.store(false);
+        g_dabScanNoRestore.store(false);
+        const int prevCh = fromSetup ? -1 : g_dabChannel.load();
+        const uint32_t prevSid = fromSetup ? 0u : (g_dab.service() ? g_dab.service() : g_dab.wantedService());
+        {
+            std::lock_guard<std::mutex> lk(g_dabBandMtx);
+            g_dabBand = DabBandScanState{};
+            g_dabBand.running = true;
+            g_dabBand.by = fromSetup ? "setup" : (g_vsMaxUsers.load() > 1 ? "admin" : "listener");
+            g_dabBand.total = int(vibedab::kBandIIICount);
+            g_dabBand.startedAt = nowSecs();
+        }
+        LOGI("[DAB] band scan: started by the %s (%zu blocks)%s", fromSetup ? "owner at the setup page" : "listener",
+             vibedab::kBandIIICount, prevCh >= 0 ? (std::string(", will return to ") + vibedab::kBandIII[prevCh].name).c_str() : "");
+        dabBandBroadcast();
+        std::thread([this, fromSetup, prevCh, prevSid] { dabBandScanRun(fromSetup, prevCh, prevSid); }).detach();
+        return "";
+    }
+
+    /** ★ A CLIENT's frame that moves the dial, while a band scan runs: the person tuning wins (shared-dial contract) —
+     *  the scan stops where it is, does NOT put the old block back over their choice, and their frame then applies.
+     *  Called from the WebSocket reader only, after askRefuses; bounded like dabScanYield. */
+    void dabScanUserTune(const std::string& msg) {
+        if (!g_dabScanActive.load()) return;
+        const std::string type = jsonStr(msg, "type");
+        static const std::set<std::string> kMoves = { "tune", "mode", "dab", "dab_service", "adsb", "ism", "ais", "iqtune" };
+        if (!kMoves.count(type)) return;
+        LOGI("[DAB] a listener tuned (%s) during a station scan — the scan stops there and leaves the dial to them", type.c_str());
+        g_dabScanNoRestore.store(true);
+        g_dabScanCancel.store(true);
+        for (int i = 0; i < 40 && g_dabScanActive.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    /** ★★★ THE SCAN ITSELF, on its own thread. Every block of Band III, upward. A block is left as soon as it has said
+     *  what it is:
+     *    - no lock in kNoLockS → nothing there (the commonest answer: an aerial hears a handful of 41 blocks) — up to
+     *      kWeakLockS while a null symbol stands out of the noise (a weak ensemble the AGC is still climbing to);
+     *    - locked but no FIB in kFalseLockS → a false lock, nothing there;
+     *    - the whole service list, every row named, CONFIRMED (vibe_dab_confirm.h) → done, and the block's bookmarks are
+     *      reconciled by it;
+     *    - the whole list named but not confirmable (a marginal block) → done after kUnconfirmedS, nothing deleted;
+     *    - named rows stable for 3 s, or kMaxBlockS → what it has.
+     *  ★ CPU: one block decoded at a time through the ordinary DAB pipeline — exactly a listener's load, no more. The
+     *    whole-multiplex label scan (the `dab_scan` benchmark row, dabScanLabelsOn) is NOT switched on for it: a scan
+     *    needs names from the FIC, not every station's radio text, so a box the benchmark judged too weak for the label
+     *    scan is not asked to do it here either. */
+    static constexpr double kNoLockS = 3.0, kWeakLockS = 8.0, kFalseLockS = 3.0, kUnconfirmedS = 6.0, kMaxBlockS = 16.0;
+    static constexpr float  kWeakNullDb = 5.0f;
+    void dabBandScanRun(bool fromSetup, int prevCh, uint32_t prevSid) {
+        struct Done { ~Done() { g_dabScanActive.store(false); } } done;
+        const double t0 = nowSecs();
+        const std::set<long long> bmBefore = bmDabKeys();
+        bool cancelled = false, entered = !fromSetup;
+        std::string stopWhy;
+        if (fromSetup) {
+            resumeCaptureIdle();
+            if (radioReleased.load()) stopWhy = "another program on this server has the radio just now";
+            else {
+                handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":0}");
+                entered = g_dabMode.load(std::memory_order_relaxed);
+                if (!entered) stopWhy = "the radio would not open Band III";
+            }
+        }
+        for (size_t idx = 0; entered && idx < vibedab::kBandIIICount; ++idx) {
+            if (g_dabScanCancel.load() || stopping.load() || !g_dabMode.load(std::memory_order_relaxed)) { cancelled = true; break; }
+            { std::lock_guard<std::mutex> lk(g_dabBandMtx); g_dabBand.current = int(idx); }
+            dabBandBroadcast();
+            if (g_dabChannel.load() != int(idx))
+                handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(idx) + "}");
+            const double tb = nowSecs();
+            bool everLocked = false, complete = false, confirmed = false;
+            double lockAt = -1.0, fibAt = -1.0, completeAt = -1.0, lastChange = 0.0, lastConfirm = -1.0;
+            size_t lastN = 0;
+            std::vector<vibedab::DabService::LearnRow> rows;
+            vibedab::ServiceListConfirm confirm;
+            float nullAt1 = -999.0f;
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (g_dabScanCancel.load() || stopping.load() || !g_dabMode.load(std::memory_order_relaxed)) { cancelled = true; break; }
+                if (!fromSetup) {   // ★ the scanner went away: hand the radio back now, not after the leave grace
+                    std::lock_guard<std::mutex> lk(clientMtx);
+                    if (nobodyWatchingLocked()) { cancelled = true; stopWhy = "the listener left"; break; }
+                }
+                const double t = nowSecs() - tb;
+                const auto q = g_dab.quality();
+                if (t >= 1.0 && nullAt1 < -900.0f) nullAt1 = q.nullDepthDb;
+                if (q.locked && lockAt < 0) lockAt = t;
+                if (q.fibRate > 0.0f && fibAt < 0) fibAt = t;
+                everLocked = everLocked || q.locked;
+                /* ★ A NULL SYMBOL STANDING OUT OF THE NOISE without a lock yet is a weak ensemble still being climbed to
+                 *  (the AGC needs 3-6 s on a weak block — see g_dabGainMem): give it up to kWeakLockS. Noise reads
+                 *  2.7-3.4 dB here on the bench; the bench ensemble 11-13 dB. Unmeasured on a weak real block. */
+                if (!everLocked && t > kNoLockS && !(q.nullDepthDb >= kWeakNullDb && t <= kWeakLockS)) break;
+                if (everLocked && fibAt < 0 && t - lockAt > kFalseLockS) { everLocked = false; break; }
+                rows = g_dab.playableAudio(&complete);
+                bool labelled = !rows.empty();
+                for (const auto& r : rows) if (r.label.find_first_not_of(' ') == std::string::npos) { labelled = false; break; }
+                if (rows.size() != lastN) { lastN = rows.size(); lastChange = t; }
+                if (complete && labelled && completeAt < 0) completeAt = t;
+                // ★ The confirmation is sampled twice a second over the LEARNABLE list (every complete service, the
+                //   set the bookmarks are reconciled by), not every 100 ms — samples must span FIC cycles to mean anything.
+                if (t - lastConfirm >= 0.5) {
+                    lastConfirm = t;
+                    const auto learn = g_dab.learnable();
+                    std::set<uint32_t> sids;
+                    for (const auto& r : learn) sids.insert(r.sid);
+                    confirmed = confirm.feed(int(idx), learn.empty() ? 0u : uint32_t(std::max(0, learn.front().eid)),
+                                             !learn.empty(), q.fibRate, sids, t);
+                }
+                if (complete && labelled && confirmed) break;
+                if (completeAt >= 0 && t - completeAt > kUnconfirmedS) break;
+                if (labelled && t > 6.0 && t - lastChange > 3.0 && completeAt < 0) break;
+                if (t > kMaxBlockS) break;
+            }
+            if (cancelled) break;
+            std::string ens = g_dab.ensembleLabel();
+            while (!ens.empty() && ens.back() == ' ') ens.pop_back();
+            const auto q = g_dab.quality();
+            DabBandScanHit hit;
+            hit.idx = int(idx); hit.ensemble = ens; hit.fibRate = q.fibRate; hit.merDb = q.merDb; hit.complete = complete;
+            std::vector<DabScanBmRow> bm;
+            for (const auto& r : rows) {
+                std::string l = r.label;
+                while (!l.empty() && l.back() == ' ') l.pop_back();
+                if (l.empty()) continue;
+                hit.services.emplace_back(r.sid, l);
+                bm.push_back({ r.sid, l, r.eid, r.ecc });
+            }
+            const bool found = everLocked && (!hit.services.empty() || !ens.empty());
+            int added = 0, removed = 0;
+            if (found) {
+                const double hz = double(vibedab::kBandIII[idx].centreHz);
+                if (q.fibRate > 0.9f) dabEnsRemember(int(idx), ens);   // ★ the ensemble memory's own bar
+                added = bmScanDab(hz, bm, &bmBefore);
+                if (confirmed) removed = bmReconcileDab(hz, int(confirm.eid()), confirm.sids(), "band scan");
+            }
+            LOGI("[DAB] band scan: %s %s in %.1f s (lock %.1f, FIB %.1f, list %.1f; -1 = never; null depth %.1f dB at 1 s)%s%s",
+                 vibedab::kBandIII[idx].name,
+                 found ? ("\"" + ens + "\", " + std::to_string(hit.services.size()) + " station(s)"
+                          + (confirmed ? ", confirmed" : complete ? ", complete" : "")).c_str() : "nothing",
+                 nowSecs() - tb, lockAt, fibAt, completeAt, nullAt1,
+                 added ? (", " + std::to_string(added) + " new bookmark(s)").c_str() : "",
+                 removed ? (", " + std::to_string(removed) + " gone").c_str() : "");
+            {
+                std::lock_guard<std::mutex> lk(g_dabBandMtx);
+                g_dabBand.done = int(idx) + 1;
+                g_dabBand.added += added;
+                if (found) g_dabBand.hits.push_back(std::move(hit));
+            }
+            dabBandBroadcast();
+        }
+        if (stopping.load()) {   // ★ the server is going: touch nothing, the teardown owns the radio now
+            std::lock_guard<std::mutex> lk(g_dabBandMtx);
+            g_dabBand.running = false; g_dabBand.cancelled = true; g_dabBand.finished = true;
+            return;
+        }
+        // ★★ PUT THE RADIO BACK. The setup page's scan borrowed an idle radio — hand it back as a departing listener
+        //    would (the quick scan's own sequence). A listener's scan returns to the ensemble AND the station it was on,
+        //    unless somebody tuned (g_dabScanNoRestore) — their choice stands.
+        const bool userTuned = g_dabScanNoRestore.load();
+        if (fromSetup) {
+            if (g_dabMode.load(std::memory_order_relaxed)) {
+                dabModeEnd();
+                dabPrimed_ = false;
+                stopDabClock();
+                dabRestore();
+                applyAutoIf();
+            }
+            bool empty;
+            { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+            if (empty && !stopping.load()) armIdlePark();
+        } else if (!userTuned && prevCh >= 0 && g_dabMode.load(std::memory_order_relaxed)) {
+            handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(prevCh)
+                                   + (prevSid ? ",\"sid\":" + std::to_string(prevSid) : std::string()) + "}");
+        }
+        {
+            std::lock_guard<std::mutex> lk(g_dabBandMtx);
+            g_dabBand.running = false;
+            g_dabBand.current = -1;
+            g_dabBand.cancelled = cancelled;
+            g_dabBand.finished = true;
+            g_dabBand.secs = nowSecs() - t0;
+            if (!stopWhy.empty()) g_dabBand.why = stopWhy;
+            else if (cancelled && userTuned) g_dabBand.why = "stopped \xe2\x80\x94 the dial was tuned";
+            else if (cancelled) g_dabBand.why = fromSetup ? "stopped \xe2\x80\x94 a listener arrived and has the radio" : "stopped";
+            LOGI("[DAB] band scan: %s after %.0f s \xe2\x80\x94 %zu ensemble(s), %d new bookmark(s)%s",
+                 cancelled ? "CANCELLED" : "finished", g_dabBand.secs, g_dabBand.hits.size(), g_dabBand.added,
+                 fromSetup ? ", radio handed back" : userTuned ? ", left where the listener tuned" : prevCh >= 0 ? ", back on the block it was on" : "");
+        }
+        dabBandBroadcast();
+    }
+
     /** ★ Has the DAB audio buffer reached its working depth? See the pre-buffer note below. */
     bool dabPrimed_ = false;
     /** ★ Frames of silence emitted to keep the cadence unbroken — published, so a lost super
@@ -14521,6 +14986,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 lastDabLearn_ = tnow;
                 const double hz = double(g_dab.centreHz());
                 for (const auto& r : learnRows) bmLearnDab(hz, r.eid, r.ecc, r.sid, r.label);
+                /* ★★★ AND RECONCILE THE BLOCK ONCE ITS LIST IS CONFIRMED (Stuart, 2026-10-26: "DAB multiplexes learn every
+                 *  time you tune to them so that a stale Radio X 90's cannot linger"). Learned/scanned services of THIS
+                 *  ensemble no longer in it are removed — only after vibedab::ServiceListConfirm says the whole list has
+                 *  held, identical, at the quality bar, for several samples (here 5 s apart, so ~15 s). See bmReconcileDab. */
+                std::set<uint32_t> sids;
+                for (const auto& r : learnRows) sids.insert(r.sid);
+                const int eid = learnRows.empty() ? 0 : learnRows.front().eid;
+                if (dabListConfirm_.feed(g_dabChannel.load(std::memory_order_relaxed), uint32_t(eid > 0 ? eid : 0), !learnRows.empty(),
+                                         g_dab.quality().fibRate, sids, tnow))
+                    bmReconcileDab(hz, eid, sids, "on air");
             }
             DabParts dp;
             // ★ Never WAIT for the decoder here: this is vibe-dsp. A busy decoder means "next block".
@@ -14699,6 +15174,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     double lastDabJson_ = 0;
     double lastDabLearn_ = 0.0;   // ★ DAB station learning cadence (5 s)
+    vibedab::ServiceListConfirm dabListConfirm_;   // ★ V12: the learn path's confirmation (vibe_dab_confirm.h)
     bool   dabLogged_ = false;
     /** Whether the shared pipeline is currently idled to spectrum-only — see the gate in dspLoop. */
     bool   rxIdleSpectrumOnly_ = false;
@@ -17479,6 +17955,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return;
         }
+        /* ★★★ V12: THE DAB BAND SCAN from a listener — {"type":"dab_scan","on":1} starts, "on":0 stops (and puts the
+         *  radio back on the block it was on). Who may: dabBandScanWhyNot — refused IN WORDS, so an old or hand-written
+         *  client on a shared radio is told why rather than ignored. */
+        if (type == "dab_scan") {
+            double onV = 0; jsonNum(msg, "on", onV);
+            if (onV == 0) {
+                if (g_dabScanActive.load() && dabBandScanWhyNot(sock).empty()) {
+                    LOGI("[DAB] band scan: cancel asked by the listener");
+                    g_dabScanCancel.store(true);
+                }
+                return;
+            }
+            const std::string why = dabBandScanStart(sock);
+            if (!why.empty()) {
+                LOGI("[DAB] band scan refused: %s", why.c_str());
+                sendText(sock, "{\"type\":\"dab_scan\",\"running\":false,\"error\":\"" + dabEscape(why) + "\"}");
+            }
+            return;
+        }
         if (type == "dab_resync") {
             std::lock_guard<std::mutex> lk(dabPeerMtx);
             auto it = dabPeers.find(sock.get());
@@ -18969,6 +19464,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           aset = aset && g_serveOnLan.load();   // ★ not serving: nothing is protected — see gainLockedAt
           j += std::string(",\"adminSet\":") + (aset ? "true" : "false");
           j += std::string(",\"adminOk\":")  + (adminNow(sock) ? "true" : "false"); }
+        // ★★ V12: may THIS listener scan Band III for DAB (dabBandScanWhyNot)? Absent = no, so an older server draws nothing.
+        if (dabBandScanWhyNot(sock).empty()) j += ",\"dabScan\":true";
         // ★★ THE COUNTDOWN NEEDS A DEADLINE AT CONNECT, not just the two warnings. The first
         // cut drove the client's timer ENTIRELY from session_warning at T-120 and T-30 — so on
         // a 30-minute limit the listener saw nothing at all for 28 minutes and concluded the
@@ -20406,6 +20903,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 g_rateGuard.clear();
             }
             const std::string j = g_rateGuard.json();
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(j.size()) + "\r\n\r\n" + j);
+            sock->close();
+            return;
+
+        } else if (reqLine.rfind("GET /vibeserver/dab-bandscan", 0) == 0) {
+            /* ★★★ V12: THE OWNER'S DAB BAND SCAN (setup page) — dabBandScanRun. Admin-gated like the quick scan below.
+             *  `?start=1` starts it on the idle radio, `?cancel=1` stops it, neither = the state (the page polls).
+             *  Answers at once: the scan runs on its own thread and its findings accumulate in the state. */
+            if (!vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }
+            std::string err;
+            if (queryParam(reqLine, "start") == "1") err = dabBandScanStart(nullptr);
+            else if (queryParam(reqLine, "cancel") == "1" && g_dabScanActive.load()) g_dabScanCancel.store(true);
+            std::string j;
+            { std::lock_guard<std::mutex> lk(g_dabBandMtx); j = dabBandJsonLocked(); }
+            if (!err.empty()) j.insert(j.size() - 1, ",\"error\":\"" + dabEscape(err) + "\"");
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(j.size()) + "\r\n\r\n" + j);
@@ -23452,7 +23966,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (m.empty()) return;
             // ★★ ASK BEFORE TUNING gates what a CLIENT sent, here at the reader — never inside handleControl, which
             //    the server's own landing and resume paths also call (askRefuses).
-            if (!askRefuses(sock, m)) handleControl(sock, m);
+            if (!askRefuses(sock, m)) { dabScanUserTune(m); handleControl(sock, m); }
             tuneHold.applied(monoMs());
         };
         while (serverRunning.load() && sock->isOpen()) {
@@ -23498,8 +24012,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const uint64_t mergedBefore = tuneHold.merged;
                 const std::string first = tuneHold.offer(payload, monoMs(), [&] { return tunePaceMs(); }, passThrough);
                 if (tuneHold.merged != mergedBefore) g_tunesMerged.fetch_add(1, std::memory_order_relaxed);
-                if (!first.empty()) { if (!askRefuses(sock, first)) handleControl(sock, first); tuneHold.applied(monoMs()); }
-                if (passThrough && !askRefuses(sock, payload)) handleControl(sock, payload);
+                if (!first.empty()) { if (!askRefuses(sock, first)) { dabScanUserTune(first); handleControl(sock, first); } tuneHold.applied(monoMs()); }
+                if (passThrough && !askRefuses(sock, payload)) { dabScanUserTune(payload); handleControl(sock, payload); }
             }
         }
         // ★ The last tune is never lost: one still held when the socket goes is applied, exactly as it
@@ -33652,6 +34166,8 @@ void LocalSdrShim::stopLocked() {
      *     running) 1.3 s after that — status=6/ABRT on every settings save. The flag was set
      *     AFTER the clients were stopped, which is exactly too late. */
     impl->stopping.store(true);
+    // ★ V12: a DAB band scan sees `stopping` within 100 ms and leaves the radio alone — wait for it (bounded).
+    for (int i = 0; i < 30 && g_dabScanActive.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // ★ TEST KNOB: wedge this stop for good, so a test can watch the standalone server's shutdown
     //   watchdog fire (scripts/test-server-stop-during-dab.mjs). Nothing else reads it.
     if (const char* e = std::getenv("VIBE_TEST_STOP_WEDGE"); e && *e == '1') {
@@ -34677,19 +35193,7 @@ void LocalSdrShim::overloadTick() {
          *  label: the picker would offer it as a reason to stop there. Written only when it
          *  CHANGES, so the file is not rewritten every second on a stable multiplex. */
         if (!dabAcquiring && g_dab.quality().fibRate > 0.9f && blk >= 0) {
-            std::string label = g_dab.ensembleLabel();
-            while (!label.empty() && label.back() == ' ') label.pop_back();   // DAB pads to 16 chars
-            if (!label.empty()) {
-                if (label.size() > 64) label.resize(64);
-                std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);
-                dabEnsLoadLocked();
-                auto e = g_dabEnsMem.find(blk);
-                if (e == g_dabEnsMem.end() || e->second != label) {
-                    g_dabEnsMem[blk] = label;
-                    dabEnsSaveLocked();
-                    LOGI("[DAB] %s remembered as \"%s\"", vibedab::kBandIII[blk].name, label.c_str());
-                }
-            }
+            dabEnsRemember(blk, g_dab.ensembleLabel());
         }
     }
     const bool hurry = now < g_agcHurryUntil.load(std::memory_order_relaxed) || dabAcquiring;
