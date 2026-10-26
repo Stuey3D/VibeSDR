@@ -126,7 +126,10 @@ OSD, and subtraction (three passes).
 3. **Likelihoods.** Max-log over the eight tone *amplitudes*, MSB first, with no Gray map.
 4. **Belief propagation.** Sum-product with Padé approximations for tanh and atanh, plus early exit on
    no-progress.
-5. **Coherent stage (spare CPU only).** Applies to a candidate that BP failed on. The candidate's audio is mixed to
+5. **Coherent stage (spare CPU only).** ★ 2026-10-26: replaced by the FT8 decoder's second look (`FtxFine` on JS8's
+   frame, `Js8SlotOptions::fine`, docs/v12/FTX-SENSITIVITY.md) — fine sync from the window's spectrum, the matched
+   filter, likelihoods over one, two and three symbols; more decodes at every submode's threshold, ~35 % less CPU.
+   The description below is the stage it replaced (still there with `fine = 0`). Applies to a candidate that BP failed on. The candidate's audio is mixed to
    baseband and boxcar-decimated four lanes at a time. It is then slid ±½ symbol and ±¼ tone against the Costas
    arrays, and each data symbol is correlated with its eight tones over exactly one symbol (a matched filter). Bit
    likelihoods come from the noncoherent FSK likelihood, ln I0 with log-sum-exp. BP then runs again.
@@ -241,8 +244,8 @@ reference scale (−9 dB). FT4 itself is left as it was, for the owner to decide
 ## What remains
 
 - **JSC-compressed text** is not decodable without JS8Call's dictionary; such frames are counted, with no text.
-- **Sensitivity.** Normal sits about −19/−20 dB in true 2500 Hz SNR. That is about ft8_lib's level and below the
-  best WSJT-style decoders. The next step would be multi-symbol coherent detection: JS8 is phase-continuous, so
+- **Sensitivity.** Normal sat about −19/−20 dB in true 2500 Hz SNR; with the second look (2026-10-26) it decodes 8/8
+  at −20 dB on the test band (FTX-SENSITIVITY.md). The next step would be multi-symbol coherent detection: JS8 is phase-continuous, so
   2-3 symbols could be detected jointly.
 - **Engine scope.** One JS8 engine per dial runs all four submodes. Several dials in Band mode means several
   engines, at the cost per dial shown above.
