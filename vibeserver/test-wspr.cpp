@@ -1,4 +1,4 @@
-// test-wspr.cpp — the WSPR-2 decoder (decoders/wspr_decoder.h), measured.
+// test-wspr.cpp — the WSPR-2 decoder (decoders/digimodes/wspr_decoder.h), measured.
 //
 // ★★★ WHAT IS PINNED.
 //   • the protocol: type 1 / 2 / 3 messages packed and unpacked (calls with the digit second or third, prefixes,
@@ -17,7 +17,7 @@
 //   • two SNRs: `snrTrue` (the definition) is exact on synthetic slots; `snr` (the WSPRnet scale) equals it there too —
 //     on clean white noise the two conventions agree; they part only on a real, busy band.
 // ★ Silent: nothing is played. Deterministic: fixed seeds.
-#include "decoders/wspr_decoder.h"
+#include "decoders/digimodes/wspr_decoder.h"
 #include "../tools/wspr-bench/wspr_synth.h"
 
 #include <algorithm>

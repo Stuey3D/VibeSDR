@@ -1,10 +1,10 @@
-// wspr_synth.h — WSPR-2 test signals generated from the protocol (decoders/wspr_decoder.h's encoder), for test-wspr
+// wspr_synth.h — WSPR-2 test signals generated from the protocol (decoders/digimodes/wspr_decoder.h's encoder), for test-wspr
 // and the bench. Real audio as a USB receiver would hand it over: a phase-continuous 4-FSK tone at its audio
 // frequency, optionally drifting and fading, in white Gaussian noise whose level sets the SNR in 2500 Hz — the WSPR
 // convention (signal power over the noise power in a 2500 Hz bandwidth).
 // ★ Its own random generator (xorshift + Box–Muller), so a seed gives the same noise on every compiler and machine.
 #pragma once
-#include "decoders/wspr_decoder.h"
+#include "decoders/digimodes/wspr_decoder.h"
 #include <cmath>
 #include <cstdint>
 #include <vector>

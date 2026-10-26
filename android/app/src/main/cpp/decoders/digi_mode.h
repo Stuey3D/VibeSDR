@@ -73,6 +73,9 @@ struct ModeDef {
     float  audioLoHz = 200;     ///< the audio passband the engine searches, above the dial (USB)…
     float  audioHiHz = 3000;    ///< …and its top. Band mode cuts exactly this (plus a guard) out of the slice.
     bool   single = true;       ///< also run in Single mode on the listener's own audio (false: Band mode only)
+    /** ★ > 0: in Single mode this mode is fed only while the listener's dial is within this many Hz of one of its dials
+     *  (a narrow mode on a dial of its own — WSPR's 200 Hz at 1500 Hz above 7.0386, 14.0956 …). 0: always, as FT8. */
+    double singleDialTolHz = 0;
     /** Relative CPU of one engine, FT8 = 1.0 (one decode per slot, averaged over the slot). The benchmark's Band row and
      *  the docs use it to cost a band; it never gates anything by itself. */
     double costVsFt8 = 1.0;

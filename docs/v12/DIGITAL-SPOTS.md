@@ -202,10 +202,14 @@ Where the letters are drawn:
 
 ## THE MODE INTERFACE: how WSPR, JS8, FT2, Q65, FST4, FST4W and MSK144 plug in
 
-**Status, 2026-10-26.** The WSPR engine (branch `v12-wspr`, `decoders/wspr_decoder.*`) and the JS8 and FT2 engines
-(`v12-js8-ft2`) are finished as standalone engines. Plugging one in means writing a thin adapter header
-`decoders/digimodes/<name>.h` that wraps the engine in `digi::Engine`, as `digimodes/ft8.h` wraps `Ft8Decoder`. That
-header is the whole change: the registry, the bands, Band mode, the clients and the gallery need nothing else.
+**Status, 2026-10-27.** WSPR is wired in: `decoders/digimodes/wspr.h` wraps our own engine
+(`decoders/digimodes/wspr_decoder.*`, branch `v12-wspr`) — 120 s slots, 12 kHz, audio 1350–1650 Hz (it searches
+1380–1620 and measures its WSPRnet-scale SNR across ±150 Hz of 1500, so Band's tuner is asked for all of that flat),
+`costVsFt8` 5 (busy 40 m: ≈ 480 ms per two minutes on a Mac against FT8's ≈ 84 ms). In Single mode it is fed only while
+the listener's dial is within 150 Hz of a WSPR dial (`ModeDef::singleDialTolHz`, new): on the FT8 dial its 1400–1600 Hz
+is FT8 traffic. Spots carry `snr` on the WSPRnet scale. With it registered, 20 m's Band centre is 14.0857 MHz and
+2200 m / 630 m appear as WSPR-only bands. The JS8 and FT2 engines (`v12-js8-ft2`) are standalone engines still to be
+wrapped the same way.
 
 To check an integration, these must all hold:
 1. `ModeDef::name` is exactly `"WSPR"` / `"JS8"` / `"FT2"`. The published dials in `digi_bands.h` and the client
@@ -257,6 +261,7 @@ struct ModeDef {
     int    sampleRate = 12000;   // the audio rate process() gets (Band's tuners make 12 kHz today)
     float  audioLoHz = 200, audioHiHz = 3000;   // the audio passband you search, above the dial — Band cuts exactly this
     bool   single = true;        // also run in Single mode on the listener's audio (false = Band only)
+    double singleDialTolHz = 0;  // > 0: in Single, fed only within this many Hz of one of its dials (WSPR: 150)
     double costVsFt8 = 1.0;      // relative CPU of one engine (docs, benchmark)
     std::vector<std::pair<std::string, double>> dials;   // {"20m", 14095600} … EMPTY = digi_bands.h's published table
     std::function<std::unique_ptr<Engine>()> make;

@@ -9,5 +9,5 @@ mkdir -p "$OUT"
 DEF=""; NAME=wspr_bench
 if [ "${SCALAR:-0}" = 1 ]; then DEF="-DVIBE_FORCE_SCALAR"; NAME=wspr_bench_scalar; fi
 cc -O2 $DEF -c -o "$OUT/pffft$DEF.o" $CPP/vibedsp/third_party/pffft/pffft.c
-c++ -std=c++17 -O2 $DEF -I "$CPP" -o "$OUT/$NAME" tools/wspr-bench/wspr_bench.cpp "$CPP/decoders/wspr_decoder.cpp" "$OUT/pffft$DEF.o" -lpthread
+c++ -std=c++17 -O2 $DEF -I "$CPP" -o "$OUT/$NAME" tools/wspr-bench/wspr_bench.cpp "$CPP/decoders/digimodes/wspr_decoder.cpp" "$OUT/pffft$DEF.o" -lpthread
 echo "$OUT/$NAME"

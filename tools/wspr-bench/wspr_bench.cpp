@@ -1,4 +1,4 @@
-// wspr_bench — VibeSDR's WSPR decoder (decoders/wspr_decoder.cpp) measured: on a recording, slot by slot, against a
+// wspr_bench — VibeSDR's WSPR decoder (decoders/digimodes/wspr_decoder.cpp) measured: on a recording, slot by slot, against a
 // reference decoder's spots for the same receiver and slots; on synthetic slots across SNR; on pure noise.
 //
 //   wspr_bench wav FILE.wav START_UTC DIAL_HZ [--ref SPOTS.jsonl] [--passes N] [--cycles N] [--cands N]
@@ -11,7 +11,7 @@
 //
 //   Output lines: "D slot pass snr dt freqHz drift message", "S slot ms candidates decodes", "R ..." for the
 //   reference comparison. Build: tools/wspr-bench/build.sh (-O2, like the server).
-#include "decoders/wspr_decoder.h"
+#include "decoders/digimodes/wspr_decoder.h"
 #include "wspr_synth.h"
 #include <algorithm>
 #include <chrono>

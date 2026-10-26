@@ -1,10 +1,10 @@
 // VibeSDR V12 — WSPR-2 decoder, our own engine (see wspr_decoder.h for the method).
 // Written from the published protocol description; no other implementation's code, tables or structure.
 #include "wspr_decoder.h"
-#include "../vibe_clock.h"
-#include "../vibedsp/vibe_denormals.h"
+#include "../../vibe_clock.h"
+#include "../../vibedsp/vibe_denormals.h"
 extern "C" {
-#include "../vibedsp/third_party/pffft/pffft.h"
+#include "../../vibedsp/third_party/pffft/pffft.h"
 }
 #include <algorithm>
 #include <chrono>

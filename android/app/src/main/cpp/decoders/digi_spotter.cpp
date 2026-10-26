@@ -50,7 +50,18 @@ void Spotter::feedAudio48k(const float* x, int n, double captureUtc) {
         if (++decim_ >= 4) { buf_.push_back(acc_ * 0.25f); acc_ = 0; decim_ = 0; }
     }
     if (buf_.empty()) return;
-    for (Run& r : single_) r.eng->process(buf_.data(), (int)buf_.size(), captureUtc);
+    const double dial = dialHz_ ? dialHz_() : 0.0;
+    for (Run& r : single_) {
+        if (r.def->singleDialTolHz > 0 && !atOwnDial(*r.def, dial)) continue;   // ★ off its dial: the engine is not fed
+        r.eng->process(buf_.data(), (int)buf_.size(), captureUtc);
+    }
+}
+
+bool Spotter::atOwnDial(const ModeDef& m, double dialHz) {
+    for (const Band& b : bands())
+        for (double d : dialsOf(m, b.id))
+            if (std::fabs(d - dialHz) <= m.singleDialTolHz) return true;
+    return false;
 }
 
 void Spotter::plan(double rate, double centreHz) {
