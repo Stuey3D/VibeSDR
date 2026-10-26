@@ -80,6 +80,68 @@ int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[12]);
 /** OSD-1, then every pair of flips among the `pairSpan` least reliable independent bits (0 = ft8Osd1 exactly). */
 int ft8Osd(const float* llr, int maxErrors, int pairSpan, uint8_t a91[12]);
 
+
+/* ★★★ A-PRIORI DECODING FOR A RECEIVER (2026-10-26, the sensitivity work). The FT4/FT8 protocol paper (K1JT, K9AN,
+ *  G4WJS, QEX 2020) describes a-priori (AP) decoding: message bits the decoder can EXPECT are given to the LDPC
+ *  decoder as near-certain, and a codeword of which 29-77 of the 77 message bits are already known is found several
+ *  dB below where blind decoding gives up. A transceiver expects its own call, its QSO partner's and "CQ"; a RECEIVER
+ *  has no call of its own, so here the expectations come from what this decoder has HEARD on this dial lately:
+ *   · "CQ ? ?"            — any CQ (29 bits: the CQ token, then i3).
+ *   · "X ? ?" / "? X ?"   — a call heard in the last 10 minutes, as the station called (a reply to its CQ) or as the
+ *                            caller (its next transmission).
+ *   · "X Y ?"             — a pair heard working each other, either way round (58 bits: the report or grid unknown).
+ *   · "X Y RR73/73/RRR"   — the pair's sign-off, every bit known.
+ *  Hundreds of hypotheses on a busy band, so each is SCREENED first — the agreement of its known bits with the
+ *  candidate's own likelihoods (one multiply-add a bit) — and only the best few are decoded, with BP then OSD.
+ *  ★★ Guards (every AP decode): the CRC-14 over all 77 bits; the known bits as hypothesised; the message unpacks as a
+ *  standard message whose other call is a standard callsign and whose last field is a real grid or report; and the
+ *  received hard decisions on the bits NOT assumed disagree with the codeword no more than a near miss does
+ *  (ftx_sweep --noise with a full book: 0 false). A decode made with AP never feeds the book.
+ *  One book per decoder: a dial and a mode. */
+class FtxApBook {
+public:
+    /** `ft4` = the frame is scrambled (FT4/FT2); `maxAgeSlots` = how long a call is remembered. */
+    FtxApBook(bool ft4, int maxAgeSlots) : ft4_(ft4), maxAge_(maxAgeSlots) {}
+    /** A new slot is being decoded (ages the book). */
+    void beginSlot();
+    /** A message decoded WITHOUT a-priori help. */
+    void heard(const ftx_message_t& msg);
+    struct Hyp {
+        uint64_t mask[2] = {0, 0}, val[2] = {0, 0};   // over codeword bits 0..76 (bit i: word i/64, bit i%64)
+        int nbits = 0;
+        uint8_t kind = 0;                              // 1 CQ, 2 call1, 3 call2, 4 pair, 5 sign-off
+    };
+    /** What the hypotheses are made of, rebuilt when the book changed: the CQ field's bits, i3's, the three sign-off
+     *  tails' (bits 58..73: "RR73", "73", "RRR" — the same whatever the calls), and per call its bits as the first
+     *  and as the second call; pairs as indices into those. The decoder scores every hypothesis from these by
+     *  region sums, never building most of them. */
+    struct Index {
+        uint64_t cq[2] = {0, 0}, i3[2] = {0, 0}, tail[3][2] = {};
+        std::vector<uint64_t> c1, c2;                  // 2 words per call
+        std::vector<std::pair<int, int>> pairs;        // (first, second) as heard; both ways are hypothesised
+        bool ok = false;
+    };
+    const Index& index();
+    /** The hypothesis `kind` (1-5) for calls a, b (indices into index(); -1 = unused) and tail t (kind 5). */
+    static Hyp make(const Index& x, int kind, int a, int b, int t);
+    int calls() const { return (int)calls_.size(); }
+    /** For the tests and the bench: put a call (and optionally its partner) in as if heard. */
+    void seed(const std::string& call, const std::string& partner = std::string());
+    static bool bitsOf(const char* text, bool ft4, uint64_t out[2]);   // a message's 77 codeword bits
+private:
+    struct Call { std::string call; uint64_t c1[2], c2[2]; int64_t last; };
+    struct Pair { std::string a, b; int64_t last; };          // by name: calls_ is erased from
+    void touchCall(const std::string& c);
+    int  findCall(const std::string& c) const;
+    bool ft4_;
+    int  maxAge_;
+    int64_t slot_ = 0;
+    std::vector<Call> calls_;
+    std::vector<Pair> pairs_;
+    Index idx_;
+    bool dirty_ = true;
+};
+
 /** One message decoded from a slot. */
 struct Ft8Result {
     ftx_message_t msg;
@@ -89,6 +151,7 @@ struct Ft8Result {
     int   pass = 1;      ///< which pass found it (2+ = only after the stronger ones were subtracted)
     bool  osd  = false;  ///< recovered by OSD after belief propagation failed
     bool  fine = false;  ///< decoded only on the second look (ftx_fine.h)
+    int   ap   = 0;      ///< decoded with a-priori bits: FtxApBook::Hyp::kind (0 = none)
 };
 
 /* ★★★ THE PASSES ARE BOUGHT, NOT GIVEN (2026-10-05). Stuart: "FT8 we have to approach with caution, that can end
@@ -124,6 +187,11 @@ struct Ft8SlotOptions {
      *  Empty = always yes (the bench). */
     std::function<bool(int nextPass, double elapsedMs, double lastPassMs)> mayRunPass;
     const std::atomic<bool>* abort = nullptr;
+    /** ★ A-priori decoding (FtxApBook): the book of what this dial heard lately, or null = off. The second look must
+     *  be on; AP is tried only on its near misses. */
+    FtxApBook* ap = nullptr;
+    int apMaxCands = 0;              ///< hypotheses decoded per candidate after screening (0 = the default, 3)
+    int apMaxBpErr = 0;              ///< a near miss for AP: BP within this many checks (0 = the default; tests raise it)
 };
 struct Ft8SlotStats {
     int    passes = 0;
@@ -138,6 +206,8 @@ struct Ft8SlotStats {
     int    fineTried[3] = {0, 0, 0};    ///< of them, how many had the second look
     int    finePassed[3] = {0, 0, 0};   ///< … and passed its sync test
     int    fineDecodes[3] = {0, 0, 0};  ///< … and decoded
+    int    apTried[3] = {0, 0, 0};      ///< near misses that went to a-priori decoding
+    int    apDecodes[3] = {0, 0, 0};    ///< … and decoded
 };
 
 /** One slot, decoded synchronously: what the worker thread runs, and what the bench and the tests drive directly.
@@ -165,7 +235,8 @@ private:
     int  snrDb(const ftx_candidate_t& c, const uint8_t* tones);
     void subtract(float* audio, int n, const uint8_t* tones, double startSample, double f0);
     bool fineDecode(const float* audio, int n, double start, double f0, const Ft8SlotOptions& o, ftx_message_t& msg,
-                    bool& viaOsd, double& startOut, double& f0Out, Ft8SlotStats& st, int pass);
+                    bool& viaOsd, int& apKind, double& startOut, double& f0Out, Ft8SlotStats& st, int pass);
+    bool apDecode(const float* llr, const Ft8SlotOptions& o, ftx_message_t& msg, int& kind);
     bool a91ToMessage(const uint8_t* a91, ftx_message_t& msg) const;
 
     FtxMode mode_;
@@ -186,9 +257,16 @@ private:
     std::unique_ptr<FtxFine> fine_;
     FtxFine::Meas fineMeas_;
     float fineLlr_[FtxFine::kMaxSets][174];         // scratch: the second look's likelihood sets
-    int dbgHits_ = -1, dbgErr_ = -1;                // diagnostics (FTX_CDBG)
+    std::vector<float> rA_, rB_;                    // scratch: each call's AP agreement as first / second call
+    int dbgHits_ = -1, dbgErr_ = -1, dbgSet_ = -1;                // diagnostics (FTX_CDBG)
     static constexpr int kFineBpStall = 5;
-    static constexpr int kFineOsdMaxBpErr = 12;     // OSD only after BP came this close (unsatisfied checks)          // BP stops after this many iterations without a new best
+    static constexpr int kFineOsdMaxBpErr = 12;     // OSD only after BP came this close (unsatisfied checks)
+    static constexpr int kApMaxBpErr = 19;          // a-priori decoding only for candidates BP took this close (real
+                                                    // 40 m, two hours: every AP decode came from BP within 19)
+    static constexpr int kApMaxCands = 3;           // hypotheses decoded per near miss, after screening
+    static constexpr float kApMinZ = 2.0f;          // a hypothesis's screening z-score must reach this
+    static constexpr int kApBpIters = 25;
+    static constexpr double kApMaxFreeErrFrac = 0.30;   // hard disagreements allowed on the bits not assumed          // BP stops after this many iterations without a new best
     std::vector<double> decodedStart_;     // this slot's decodes' start samples, by result index (the near test)
     static constexpr int kFineMinSyncFt8 = 10;    // of 21 Costas symbols (noise: 21/8 ≈ 2.6)
     static constexpr int kFineMinSyncFt4 = 10;   // of 16 (noise: 4)        // the second look, made on first use (its window FFT: 1.5 MB FT8)

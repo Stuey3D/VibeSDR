@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstring>
 #include <ctime>
 #include <cstdio>
@@ -249,6 +250,151 @@ int ft8Osd(const float* llr, int maxErrors, int pairSpan, uint8_t a91[FTX_LDPC_K
         bestD = d; bestErr = err; std::memcpy(a91, m91, FTX_LDPC_K_BYTES);
     }
     return bestErr;
+}
+
+
+// ── The a-priori book (see FtxApBook in the header) ─────────────────────────────────────────────
+namespace {
+inline void setBit77(uint64_t w[2], int i) { w[i >> 6] |= 1ull << (i & 63); }
+inline bool bit77(const uint64_t w[2], int i) { return (w[i >> 6] >> (i & 63)) & 1; }
+void maskRange(uint64_t m[2], int lo, int hi) { for (int i = lo; i <= hi; ++i) setBit77(m, i); }
+bool isGrid4(const char* g) {
+    return std::strlen(g) == 4 && g[0] >= 'A' && g[0] <= 'R' && g[1] >= 'A' && g[1] <= 'R'
+        && g[2] >= '0' && g[2] <= '9' && g[3] >= '0' && g[3] <= '9' && std::strcmp(g, "RR73") != 0;
+}
+/** The last field of a standard message as a person would send it: a grid, a report (R optional), RRR, RR73, 73. */
+bool plausibleExtra(const char* e) {
+    if (!e[0]) return true;
+    if (isGrid4(e) || !std::strcmp(e, "RRR") || !std::strcmp(e, "RR73") || !std::strcmp(e, "73")) return true;
+    const char* r = e[0] == 'R' ? e + 1 : e;
+    if ((r[0] == '+' || r[0] == '-') && std::isdigit((unsigned char)r[1]) && std::isdigit((unsigned char)r[2]) && !r[3]) {
+        const int v = std::atoi(r);
+        return v >= -30 && v <= 30;
+    }
+    return false;
+}
+/** A standard callsign as the 28-bit field carries one: 3-6 characters, letters and digits, a digit among the
+ *  first three, ending in a letter — and no hash, no portable suffix. */
+bool plausibleCall(const char* c) {
+    const int n = (int)std::strlen(c);
+    if (n < 3 || n > 6) return false;
+    bool digit3 = false;
+    for (int i = 0; i < n; ++i) {
+        if (!std::isalnum((unsigned char)c[i])) return false;
+        if (i < 3 && std::isdigit((unsigned char)c[i])) digit3 = true;
+    }
+    return digit3 && std::isalpha((unsigned char)c[n - 1]);
+}
+}
+
+bool FtxApBook::bitsOf(const char* text, bool ft4, uint64_t out[2]) {
+    out[0] = out[1] = 0;
+    ftx_message_t m; ftx_message_init(&m);
+    if (ftx_message_encode(&m, nullptr, text) != FTX_MESSAGE_RC_OK) return false;
+    if (ftx_message_get_i3(&m) != 1) return false;           // ★ standard messages only
+    uint8_t p[10];
+    for (int b = 0; b < 10; ++b) p[b] = ft4 ? (uint8_t)(m.payload[b] ^ kFT4_XOR_sequence[b]) : m.payload[b];
+    for (int i = 0; i < 77; ++i) if ((p[i / 8] >> (7 - i % 8)) & 1) setBit77(out, i);
+    return true;
+}
+
+int FtxApBook::findCall(const std::string& c) const {
+    for (size_t i = 0; i < calls_.size(); ++i) if (calls_[i].call == c) return (int)i;
+    return -1;
+}
+
+void FtxApBook::touchCall(const std::string& c) {
+    const int i = findCall(c);
+    if (i >= 0) { calls_[(size_t)i].last = slot_; return; }
+    Call x; x.call = c; x.last = slot_;
+    if (!bitsOf((c + " K1ABC FN42").c_str(), ft4_, x.c1) || !bitsOf(("K1ABC " + c + " FN42").c_str(), ft4_, x.c2)) return;
+    if (calls_.size() >= 400) {                                // ★ full: the least recently heard makes way
+        size_t o = 0;
+        for (size_t k = 1; k < calls_.size(); ++k) if (calls_[k].last < calls_[o].last) o = k;
+        calls_.erase(calls_.begin() + (long)o);
+    }
+    calls_.push_back(x);
+    dirty_ = true;
+}
+
+void FtxApBook::beginSlot() {
+    ++slot_;
+    const size_t n0 = calls_.size(), p0 = pairs_.size();
+    calls_.erase(std::remove_if(calls_.begin(), calls_.end(), [&](const Call& c) { return slot_ - c.last > maxAge_; }), calls_.end());
+    pairs_.erase(std::remove_if(pairs_.begin(), pairs_.end(), [&](const Pair& p) { return slot_ - p.last > maxAge_; }), pairs_.end());
+    if (calls_.size() != n0 || pairs_.size() != p0) dirty_ = true;
+}
+
+void FtxApBook::seed(const std::string& call, const std::string& partner) {
+    touchCall(call);
+    if (partner.empty()) return;
+    touchCall(partner);
+    if (findCall(call) < 0 || findCall(partner) < 0) return;
+    Pair p; p.a = call; p.b = partner; p.last = slot_;
+    pairs_.push_back(p); dirty_ = true;
+}
+
+void FtxApBook::heard(const ftx_message_t& msg) {
+    if (ftx_message_get_i3(&msg) != 1) return;
+    char to[16] = {}, de[16] = {}, ex[16] = {};
+    ftx_field_t ft[FTX_MAX_MESSAGE_FIELDS];
+    if (ftx_message_decode_std(&msg, nullptr, to, de, ex, ft) != FTX_MESSAGE_RC_OK) return;
+    const bool deOk = plausibleCall(de), toOk = plausibleCall(to);
+    if (deOk) touchCall(de);
+    if (toOk) touchCall(to);
+    if (deOk && toOk) {                                         // ★ two stations working each other
+        const std::string a = to, b = de;
+        if (findCall(a) < 0 || findCall(b) < 0) return;
+        for (Pair& p : pairs_)
+            if ((p.a == a && p.b == b) || (p.a == b && p.b == a)) { p.last = slot_; return; }
+        if (pairs_.size() >= 200) {
+            size_t o = 0;
+            for (size_t k = 1; k < pairs_.size(); ++k) if (pairs_[k].last < pairs_[o].last) o = k;
+            pairs_.erase(pairs_.begin() + (long)o);
+        }
+        Pair p; p.a = a; p.b = b; p.last = slot_;
+        pairs_.push_back(p);
+        dirty_ = true;
+    }
+}
+
+const FtxApBook::Index& FtxApBook::index() {
+    if (!dirty_) return idx_;
+    Index& x = idx_;
+    x = Index{};
+    uint64_t t[2];
+    x.ok = bitsOf("CQ K1ABC FN42", ft4_, x.cq);
+    for (int i = 74; i <= 76; ++i) if (bit77(x.cq, i)) setBit77(x.i3, i);
+    const char* tails[3] = { "K1ABC W9XYZ RR73", "K1ABC W9XYZ 73", "K1ABC W9XYZ RRR" };
+    for (int k = 0; k < 3; ++k) {
+        x.ok = x.ok && bitsOf(tails[k], ft4_, t);
+        for (int i = 58; i <= 73; ++i) if (bit77(t, i)) setBit77(x.tail[k], i);
+    }
+    x.c1.reserve(calls_.size() * 2); x.c2.reserve(calls_.size() * 2);
+    for (const Call& c : calls_) { x.c1.push_back(c.c1[0]); x.c1.push_back(c.c1[1]); x.c2.push_back(c.c2[0]); x.c2.push_back(c.c2[1]); }
+    for (const Pair& p : pairs_) {
+        const int ia = findCall(p.a), ib = findCall(p.b);
+        if (ia >= 0 && ib >= 0) x.pairs.push_back({ ia, ib });
+    }
+    dirty_ = false;
+    return idx_;
+}
+
+FtxApBook::Hyp FtxApBook::make(const Index& x, int kind, int a, int b, int t) {
+    Hyp h; h.kind = (uint8_t)kind;
+    uint64_t m1[2] = {0, 0}, m2[2] = {0, 0}, m3[2] = {0, 0}, mt[2] = {0, 0};
+    maskRange(m1, 0, 28); maskRange(m2, 29, 57); maskRange(m3, 74, 76); maskRange(mt, 58, 73);
+    for (int w = 0; w < 2; ++w) {
+        uint64_t mask = m3[w], val = x.i3[w];
+        if (kind == 1) { mask |= m1[w]; val |= x.cq[w] & m1[w]; }
+        if (kind == 2 || kind >= 4) { mask |= m1[w]; val |= x.c1[2 * (size_t)a + w] & m1[w]; }
+        if (kind == 3) { mask |= m2[w]; val |= x.c2[2 * (size_t)a + w] & m2[w]; }
+        if (kind >= 4) { mask |= m2[w]; val |= x.c2[2 * (size_t)b + w] & m2[w]; }
+        if (kind == 5) { mask |= mt[w]; val |= x.tail[t][w]; }
+        h.mask[w] = mask; h.val[w] = val & mask;
+    }
+    h.nbits = __builtin_popcountll(h.mask[0]) + __builtin_popcountll(h.mask[1]);
+    return h;
 }
 
 // ── One slot ────────────────────────────────────────────────────────────────────────────────────
@@ -642,7 +788,7 @@ bool plainCrcOk(const uint8_t* plain174, uint8_t a91[FTX_LDPC_K_BYTES]) {
 /* ★★ THE SECOND LOOK (ftx_fine.h). BP on the one-, two- and three-symbol likelihoods in turn, then OSD on them —
  *  only for a candidate whose fine sync says it is a signal at all. */
 bool Ft8SlotDecoder::fineDecode(const float* audio, int n, double start, double f0, const Ft8SlotOptions& o,
-                                ftx_message_t& msg, bool& viaOsd, double& startOut, double& f0Out, Ft8SlotStats& st, int pass) {
+                                ftx_message_t& msg, bool& viaOsd, int& apKind, double& startOut, double& f0Out, Ft8SlotStats& st, int pass) {
     (void)audio; (void)n;
     ++st.fineTried[pass - 1];
     const int minSync = o.fineMinSync > 0 ? o.fineMinSync : (ft4_ ? kFineMinSyncFt4 : kFineMinSyncFt8);
@@ -678,6 +824,171 @@ bool Ft8SlotDecoder::fineDecode(const float* audio, int n, double start, double 
             if (e >= 0) { a91ToMessage(a91, msg); viaOsd = true; ++st.fineDecodes[pass - 1]; return true; }
         }
     }
+    /* ★ A-priori decoding: near misses only (BP came within kApMaxBpErr checks), on the two-symbol set (the one that
+     *  decodes most often), then the three-symbol. */
+    if (o.ap && bestErr <= (o.apMaxBpErr > 0 ? o.apMaxBpErr : kApMaxBpErr)) {
+        ++st.apTried[pass - 1];
+        for (int k : { 1, 2 }) {
+            dbgSet_ = k;
+            if (apDecode(L[k], o, msg, apKind)) { viaOsd = false; ++st.apDecodes[pass - 1]; ++st.fineDecodes[pass - 1]; return true; }
+        }
+    }
+    return false;
+}
+
+
+/* ★★★ A-PRIORI DECODING of a near miss (FtxApBook). Screen every hypothesis on the candidate's own likelihoods — the
+ *  z-score of its known bits' agreement, Σ ±L / √Σ L² (≈ N(0,1) for a wrong hypothesis) — then decode the best few
+ *  with their bits clamped to near-certain (1.01 × the largest |L|, as the paper's decoder does): BP, then OSD. A
+ *  codeword is believed only through every guard in apCheck. */
+namespace {
+bool apCheck(const float* L, const FtxApBook::Hyp& h0, const Bits174& cw, const ftx_message_t& msg, int maxFreeErr, int* freeErrOut, int* kindOut) {
+    FtxApBook::Hyp h = h0;
+    bool held = true;
+    for (int w = 0; w < 2 && held; ++w)
+        for (uint64_t m = h.mask[w]; m; m &= m - 1) {
+            const int b = __builtin_ctzll(m), j = w * 64 + b;
+            if (getBit(cw, j) != (((h.val[w] >> b) & 1) != 0)) { held = false; break; }   // the assumption must survive
+        }
+    if (!held) {
+        /* ★ A sign-off hypothesis ("X Y RR73") can bring out the pair's OTHER message ("X Y -12"): the pair's 58 bits
+         *  held and the last field did not. That is a pair (kind 4) decode, judged as one. */
+        if (h.kind != 5) return false;
+        h.kind = 4;
+        h.mask[0] &= (1ull << 58) - 1; h.mask[1] &= 0x7ull << 10;   // bits 0..57 and 74..76
+        h.val[0] &= h.mask[0]; h.val[1] &= h.mask[1];
+        h.nbits = __builtin_popcountll(h.mask[0]) + __builtin_popcountll(h.mask[1]);
+        for (int w = 0; w < 2; ++w)
+            for (uint64_t m = h.mask[w]; m; m &= m - 1) {
+                const int b = __builtin_ctzll(m), j = w * 64 + b;
+                if (getBit(cw, j) != (((h.val[w] >> b) & 1) != 0)) return false;
+            }
+        maxFreeErr = (int)(maxFreeErr * (double)(FTX_LDPC_N - h.nbits) / (FTX_LDPC_N - h0.nbits));
+    }
+    *kindOut = h.kind;
+    int err = 0;
+    for (int j = 0; j < FTX_LDPC_N; ++j) {
+        if (j < 77 && ((h.mask[j >> 6] >> (j & 63)) & 1)) continue;
+        err += (L[j] > 0) != getBit(cw, j);
+    }
+    *freeErrOut = err;
+    if (err > maxFreeErr) return false;
+    if (ftx_message_get_i3(&msg) != 1) return false;
+    char to[16] = {}, de[16] = {}, ex[16] = {};
+    ftx_field_t ft[FTX_MAX_MESSAGE_FIELDS];
+    if (ftx_message_decode_std(&msg, nullptr, to, de, ex, ft) != FTX_MESSAGE_RC_OK) return false;
+    if (!plausibleExtra(ex)) return false;
+    switch (h.kind) {   // (h may have become a pair hypothesis above)
+    case 1: return !std::strcmp(to, "CQ") && plausibleCall(de) && (!ex[0] || isGrid4(ex));
+    case 2: return plausibleCall(de);
+    case 3: {                                   // its next over, or its CQ ("CQ", "CQ DX", "CQ POTA", "CQ 123")
+        if (plausibleCall(to)) return true;
+        if (std::strncmp(to, "CQ", 2) || (ex[0] && !isGrid4(ex))) return false;
+        if (!to[2]) return true;
+        if (to[2] != ' ') return false;
+        const size_t n = std::strlen(to + 3);
+        if (n < 1 || n > 4) return false;
+        for (const char* q = to + 3; *q; ++q) if (!std::isalnum((unsigned char)*q)) return false;
+        return true;
+    }
+    default: return true;
+    }
+}
+}
+
+bool Ft8SlotDecoder::apDecode(const float* L, const Ft8SlotOptions& o, ftx_message_t& msg, int& kind) {
+    const FtxApBook::Index& X = o.ap->index();
+    if (!X.ok) return false;
+    const int K = std::min(8, o.apMaxCands > 0 ? o.apMaxCands : kApMaxCands);
+    /* ★ Scored by REGION, not hypothesis by hypothesis (2026-10-26): a hypothesis's agreement Σ ±L over its known
+     *  bits is a sum over at most four regions — the first call (bits 0..28), the second (29..57), the last field
+     *  (58..73) and i3 (74..76) — and a region's sum is 2·Σ L over its set bits − Σ L over the region. So each call is
+     *  scored once as a first and once as a second call, and every pair and sign-off is three additions. The
+     *  normaliser √Σ L² depends only on WHICH regions are known. */
+    auto sumSet = [&](const uint64_t* v, int lo, int hi) {
+        float sacc = 0;
+        for (int w = lo >> 6; w <= hi >> 6; ++w) {
+            uint64_t m = v[w];
+            const int b0 = w * 64;
+            if (lo > b0) m &= ~0ull << (lo - b0);
+            if (hi < b0 + 63) m &= (2ull << (hi - b0)) - 1;
+            for (; m; m &= m - 1) sacc += L[b0 + __builtin_ctzll(m)];
+        }
+        return sacc;
+    };
+    float S[4] = {0, 0, 0, 0}, Q[4] = {0, 0, 0, 0};     // regions: 0 = 0..28, 1 = 29..57, 2 = 58..73, 3 = 74..76
+    for (int i = 0; i < 77; ++i) { const int r = i < 29 ? 0 : i < 58 ? 1 : i < 74 ? 2 : 3; S[r] += L[i]; Q[r] += L[i] * L[i]; }
+    const float Ri3 = 2 * sumSet(X.i3, 74, 76) - S[3];
+    const float iq13 = 1.0f / std::sqrt(Q[0] + Q[3]), iq23 = 1.0f / std::sqrt(Q[1] + Q[3]);
+    const float iq123 = 1.0f / std::sqrt(Q[0] + Q[1] + Q[3]), iqAll = 1.0f / std::sqrt(Q[0] + Q[1] + Q[2] + Q[3]);
+    float Rt[3];
+    for (int t = 0; t < 3; ++t) Rt[t] = 2 * sumSet(X.tail[t], 58, 73) - S[2];
+    const int nc = (int)X.c1.size() / 2;
+    rA_.resize((size_t)nc); rB_.resize((size_t)nc);
+    for (int c = 0; c < nc; ++c) {
+        rA_[(size_t)c] = 2 * sumSet(&X.c1[2 * (size_t)c], 0, 28) - S[0];
+        rB_[(size_t)c] = 2 * sumSet(&X.c2[2 * (size_t)c], 29, 57) - S[1];
+    }
+    struct Pick { float z; int kind, a, b, t; } best[8]; int nb = 0;
+    auto offer = [&](float z, int kd, int a, int b, int t) {
+        if (z < kApMinZ) return;
+        if (nb < K) best[nb++] = { z, kd, a, b, t };
+        else if (z > best[K - 1].z) best[K - 1] = { z, kd, a, b, t };
+        else return;
+        for (int q = nb - 1; q > 0 && best[q].z > best[q - 1].z; --q) std::swap(best[q], best[q - 1]);
+    };
+    offer((2 * sumSet(X.cq, 0, 28) - S[0] + Ri3) * iq13, 1, -1, -1, 0);
+    for (int c = 0; c < nc; ++c) {
+        offer((rA_[(size_t)c] + Ri3) * iq13, 2, c, -1, 0);
+        offer((rB_[(size_t)c] + Ri3) * iq23, 3, c, -1, 0);
+    }
+    for (const auto& pr : X.pairs)
+        for (int dir = 0; dir < 2; ++dir) {
+            const int a = dir ? pr.second : pr.first, b = dir ? pr.first : pr.second;
+            const float r4 = rA_[(size_t)a] + rB_[(size_t)b] + Ri3;
+            offer(r4 * iq123, 4, a, b, 0);
+            for (int t = 0; t < 3; ++t) offer((r4 + Rt[t]) * iqAll, 5, a, b, t);
+        }
+    float amax = 0;
+    for (int j = 0; j < FTX_LDPC_N; ++j) amax = std::max(amax, std::fabs(L[j]));
+    const float A = 1.01f * amax;
+    static const bool dbg = std::getenv("FTX_APDBG") != nullptr;
+    for (int k = 0; k < nb; ++k) {
+        const FtxApBook::Hyp h = FtxApBook::make(X, best[k].kind, best[k].a, best[k].b, best[k].t);
+        float Lc[FTX_LDPC_N];
+        std::memcpy(Lc, L, sizeof Lc);
+        for (int w = 0; w < 2; ++w)
+            for (uint64_t m = h.mask[w]; m; m &= m - 1) { const int b = __builtin_ctzll(m); Lc[w * 64 + b] = ((h.val[w] >> b) & 1) ? A : -A; }
+        uint8_t plain[FTX_LDPC_N], a91[FTX_LDPC_K_BYTES];
+        int err = 0;
+        bp_decode_ex(Lc, kApBpIters, kFineBpStall, plain, &err);
+        Bits174 cw{{0, 0, 0}};
+        bool got = false, viaO = false;
+        if (err == 0 && plainCrcOk(plain, a91)) {
+            got = true;
+            for (int j = 0; j < FTX_LDPC_N; ++j) if (plain[j]) setBit(cw, j);
+        } else if (o.osdMaxErrors > 0 && ft8Osd(Lc, o.osdMaxErrors, o.osdPairSpan, a91) >= 0) {
+            got = viaO = true;
+            const Bits174* g = generatorRows();
+            for (int b = 0; b < FTX_LDPC_K; ++b)
+                if ((a91[b / 8] >> (7 - b % 8)) & 1) { cw.w[0] ^= g[b].w[0]; cw.w[1] ^= g[b].w[1]; cw.w[2] ^= g[b].w[2]; }
+        }
+        if (!got) continue;
+        ftx_message_t m;
+        a91ToMessage(a91, m);
+        const int nfree = FTX_LDPC_N - h.nbits;
+        const int maxFree = (int)(kApMaxFreeErrFrac * nfree);
+        int fe = -1, kk = h.kind;
+        const bool okc = apCheck(L, h, cw, m, maxFree, &fe, &kk);
+        if (dbg) {
+            char t[64] = {}; ftx_message_offsets_t of; ftx_message_t mm = m;
+            if (ftx_message_decode(&mm, nullptr, t, &of) != FTX_MESSAGE_RC_OK) std::strcpy(t, "?");
+            std::printf("AP kind %d z %.2f %s freeErr %d/%d %s : %s | bpErr %d set %d rank %d\n", h.kind, best[k].z, viaO ? "osd" : "bp", fe, nfree, okc ? "ACCEPT" : "reject", t, dbgErr_, dbgSet_, k);
+        }
+        if (!okc) continue;
+        msg = m; kind = kk;
+        return true;
+    }
     return false;
 }
 
@@ -685,6 +996,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
     st = Ft8SlotStats{};
     const size_t first = out.size();
     decodedStart_.clear();
+    if (o.ap) o.ap->beginSlot();
     struct Sub { uint8_t tones[FT4_NN > FT8_NN ? FT4_NN : FT8_NN]; double start; double f0; };
     std::vector<Sub> subs;
     if ((int)cands_.size() < o.maxCandidates) cands_.resize((size_t)o.maxCandidates);
@@ -722,6 +1034,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             const double cStart = (double)(c.time_offset - 1) * mon_.block_size + (double)c.time_sub * mon_.subblock_size;
             double fineStart = cStart, fineF0 = cHz;
             bool viaFine = false;
+            int apKind = 0;
             if (!bpOk && o.fine) {
                 /* ★ Not a second look at a signal this pass already decoded: a strong station leaves a cluster of
                  *  candidates a sub-bin or a sub-symbol apart, and each would cost a measurement to find it again. */
@@ -734,7 +1047,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
                 if (!fine_) fine_.reset(new FtxFine((int)mode_, rate_, nsps_, windowSamples_));
                 if (!fine_->ready()) fine_->ensure(audio, n);
                 dbgHits_ = -1; dbgErr_ = -1;
-                viaFine = fineDecode(audio, n, cStart, cHz, o, msg, viaOsd, fineStart, fineF0, st, pass);
+                viaFine = fineDecode(audio, n, cStart, cHz, o, msg, viaOsd, apKind, fineStart, fineF0, st, pass);
                 sm[Ft8SlotStats::kFine] += lap();
                 if (std::getenv("FTX_CDBG")) std::printf("C %d %.1f %.0f %d %d %d %d\n", pass, cHz, cStart, c.score, dbgHits_, dbgErr_, viaFine ? 1 : 0);
                 if (!viaFine) continue;
@@ -778,7 +1091,9 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             r.pass = pass;
             r.osd = viaOsd;
             r.fine = viaFine;
+            r.ap = apKind;
             out.push_back(r);
+            if (o.ap && !apKind) o.ap->heard(msg);     // ★ only what was heard without assumptions teaches the book
             decodedStart_.push_back(startSample);
             s.start = startSample; s.f0 = hz;
             if (r.snr >= o.subtractMinSnr) subs.push_back(s);

@@ -100,6 +100,7 @@ static std::string text(const ftx_message_t& m0) {
 
 int main(int argc, char** argv) {
     FtxMode mode = FtxMode::FT8;
+    bool useAp = false, apSeed = false; int apTable = 0;
     double snrA = -24, snrB = -14, snrStep = 1; int slots = 20, sigs = 10, noiseSlots = 0; unsigned seed = 1; bool verbose = false;
     Ft8SlotOptions o; o.maxPasses = 1; o.osdMaxErrors = 0;
     for (int i = 1; i < argc; ++i) {
@@ -119,6 +120,10 @@ int main(int argc, char** argv) {
         else if (a == "--fine") o.fine = std::atoi(nxt().c_str());
         else if (a == "--stall") o.bpStall = std::atoi(nxt().c_str());
         else if (a == "--osd2") o.osdPairSpan = std::atoi(nxt().c_str());
+        else if (a == "--ap") useAp = std::atoi(nxt().c_str()) != 0;
+        else if (a == "--apseed") apSeed = std::atoi(nxt().c_str()) != 0;
+        else if (a == "--aptable") apTable = std::atoi(nxt().c_str());
+        else if (a == "--apnear") o.apMaxBpErr = std::atoi(nxt().c_str());
         else if (a == "--finesync") o.fineMinSync = std::atoi(nxt().c_str());
         else if (a == "-v") verbose = true;
         else { std::fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
@@ -132,14 +137,18 @@ int main(int argc, char** argv) {
     const double dtNom = mode == FtxMode::FT2 ? 0.0 : 0.5;     // nominal start in the window
     const double dtLo = mode == FtxMode::FT2 ? -0.3 : -0.5, dtHi = mode == FtxMode::FT2 ? 1.2 : 1.0;
     Ft8SlotDecoder dec(kFs, mode);
+    FtxApBook book(mode != FtxMode::FT8, 1 << 30);     // ★ never ages here: what is seeded stays
+    if (useAp) o.ap = &book;
     const int W = dec.windowSamples();
     std::mt19937 rng(seed);
     std::normal_distribution<double> N(0, kSigma);
     std::uniform_real_distribution<double> U(0, 1);
     const double n2500 = kSigma * kSigma * 2500.0 / (kFs / 2.0);
     const char* name = mode == FtxMode::FT2 ? "FT2" : ft4 ? "FT4" : "FT8";
+    // ★ a book as a busy band fills one: apTable random calls, half of them in pairs (the noise test's worst case)
+    for (int i = 0; i < apTable; ++i) { const std::string a = randCall(rng); if (i % 2) book.seed(a, randCall(rng)); else book.seed(a); }
 
-    int fineHits = 0;
+    int fineHits = 0, apHits = 0;
     auto runSlot = [&](std::vector<float>& x, const std::set<std::string>& truth, int& hit, int& fals, double& ms) {
         std::vector<Ft8Result> res; Ft8SlotStats st;
         const auto t0 = std::chrono::steady_clock::now();
@@ -149,8 +158,8 @@ int main(int argc, char** argv) {
         for (const Ft8Result& r : res) {
             const std::string t = text(r.msg);
             if (!seen.insert(t).second) continue;
-            if (truth.count(t)) { ++hit; if (r.fine) ++fineHits; }
-            else { ++fals; if (verbose || truth.empty()) std::printf("   FALSE %s (snr %d dt %.2f hz %.1f pass %d%s)\n", t.c_str(), r.snr, r.dt, r.hz, r.pass, r.osd ? " osd" : ""); }
+            if (truth.count(t)) { ++hit; if (r.fine) ++fineHits; if (r.ap) ++apHits; }
+            else { ++fals; if (verbose || truth.empty()) std::printf("   FALSE %s (snr %d dt %.2f hz %.1f pass %d%s ap %d)\n", t.c_str(), r.snr, r.dt, r.hz, r.pass, r.osd ? " osd" : "", r.ap); }
         }
     };
 
@@ -167,7 +176,7 @@ int main(int argc, char** argv) {
     }
     std::printf("%s: %d signals per SNR (%d slots x %d)\n", name, slots * sigs, slots, sigs);
     for (double snr = snrA; snr <= snrB + 1e-9; snr += snrStep) {
-        int hit = 0, fals = 0, sent = 0; double ms = 0; fineHits = 0;
+        int hit = 0, fals = 0, sent = 0; double ms = 0; fineHits = 0; apHits = 0;
         rng.seed(seed * 1000u + (unsigned)std::lround((snr + 100) * 10));   // ★ the same signals at an SNR, whatever the range
         for (int s = 0; s < slots; ++s) {
             std::vector<float> x((size_t)W);
@@ -186,10 +195,16 @@ int main(int argc, char** argv) {
                 gfskAdd(x, tones, nn, nsps, bt, hz, dtNom + dt, amp, 2 * M_PI * U(rng));
                 truth.insert(text(m));
                 ++sent;
+                if (apSeed) {   // ★ the calls as if heard earlier (their CQ, their last over): what AP can assume
+                    char c1[16] = {}, c2[16] = {}, ex[16] = {}; ftx_field_t ft[FTX_MAX_MESSAGE_FIELDS];
+                    if (ftx_message_decode_std(&m, nullptr, c1, c2, ex, ft) == FTX_MESSAGE_RC_OK) {
+                        if (!std::strcmp(c1, "CQ")) book.seed(c2); else book.seed(c1, c2);
+                    }
+                }
             }
             runSlot(x, truth, hit, fals, ms);
         }
-        std::printf("%s SNR %+5.1f: %4d/%4d  %5.1f %%  false %d  (second look %d)  %.1f ms/slot\n", name, snr, hit, sent, 100.0 * hit / std::max(1, sent), fals, fineHits, ms / slots);
+        std::printf("%s SNR %+5.1f: %4d/%4d  %5.1f %%  false %d  (second look %d, AP %d)  %.1f ms/slot\n", name, snr, hit, sent, 100.0 * hit / std::max(1, sent), fals, fineHits, apHits, ms / slots);
         std::fflush(stdout);
     }
     return 0;
