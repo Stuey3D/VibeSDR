@@ -81,7 +81,7 @@ std::string taskXml(const std::string& exe) {
 //   first: "not there" is success).
 std::vector<std::string> schtasksCreateArgs(const std::string& xmlPath) { return { "/Create", "/TN", kTaskName, "/XML", xmlPath, "/F" }; }
 std::vector<std::string> schtasksDeleteArgs() { return { "/Delete", "/TN", kTaskName, "/F" }; }
-std::vector<std::string> schtasksQueryArgs()  { return { "/Query", "/TN", kTaskName }; }
+std::vector<std::string> schtasksQueryArgs()  { return { "/Query", "/TN", kTaskName, "/FO", "LIST" }; }
 
 std::string runValue(const std::string& exe) { return "\"" + exe + "\" --autostart signin"; }
 
@@ -111,6 +111,10 @@ std::string selfExe() {
 
 namespace {
 
+/** ★ The task is there only if schtasks says so AND names it: an exit code alone is not enough (Wine's schtasks, the
+ *  test rig, answers 0 for a task that does not exist). Windows prints "TaskName: \VibeServer" in the LIST form. */
+bool taskPresent();
+
 std::string sysDir() { wchar_t s[MAX_PATH] = L"C:\\Windows\\System32"; GetSystemDirectoryW(s, MAX_PATH); return narrow(s); }
 std::string schtasksExe() { return sysDir() + "\\schtasks.exe"; }
 
@@ -123,6 +127,12 @@ std::string dataDir() {
 int schtasks(std::vector<std::string> args, std::string* out = nullptr) {
     args.insert(args.begin(), schtasksExe());
     return vibeproc::run(args, out);
+}
+
+bool taskPresent() {
+    std::string out;
+    if (schtasks(schtasksQueryArgs(), &out) != 0) return false;
+    return out.find(std::string("\\") + kTaskName) != std::string::npos;
 }
 
 const wchar_t* kRunKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -173,7 +183,7 @@ std::string currentUserSid() {
 
 AutostartState queryAutostart() {
     AutostartState st;
-    st.boot = schtasks(schtasksQueryArgs()) == 0;
+    st.boot = taskPresent();
     wchar_t v[4096] = {0}; DWORD sz = sizeof v - sizeof(wchar_t);
     st.signin = RegGetValueW(HKEY_CURRENT_USER, kRunKey, widen(kRunValue).c_str(), RRF_RT_REG_SZ, nullptr, v, &sz) == ERROR_SUCCESS;
     DWORD session = 1;
@@ -230,7 +240,7 @@ bool helperSetBoot(bool on, const std::string& grantSid, const AutoLogFn& log, s
         log("  Scheduled Task \"" + std::string(kTaskName) + "\": at system startup, as LOCAL SERVICE, restarted if it stops");
         return true;
     }
-    if (schtasks(schtasksQueryArgs()) == 0) {
+    if (taskPresent()) {
         const int rc = schtasks(schtasksDeleteArgs());
         if (rc != 0) { err = "Windows' Task Scheduler would not remove the task (schtasks " + std::to_string(rc) + ")"; return false; }
         log("  Scheduled Task \"" + std::string(kTaskName) + "\" removed");

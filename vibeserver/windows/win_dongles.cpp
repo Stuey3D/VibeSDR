@@ -278,7 +278,13 @@ void startDongleWatch(const DongleHooks& hooks) {
     f.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
     f.u.DeviceInterface.ClassGuid = kUsbDeviceIface;
     HCMNOTIFICATION h = nullptr;
-    const bool notified = CM_Register_Notification(&f, nullptr, onDeviceChange, &h) == CR_SUCCESS;
+    // ★ Looked up, not imported: Wine (the test rig) exports it as a stub that ABORTS the process when called, so
+    //   under Wine the watch falls back to re-reading the list every few seconds. On Windows 8+ it is always there.
+    typedef CONFIGRET (WINAPI *Reg_t)(PCM_NOTIFY_FILTER, PVOID, PCM_NOTIFY_CALLBACK, PHCMNOTIFICATION);
+    const bool wine = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != nullptr;
+    auto reg = wine ? nullptr : (Reg_t)(void*)GetProcAddress(LoadLibraryExW(L"cfgmgr32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32),
+                                                             "CM_Register_Notification");
+    const bool notified = reg && reg(&f, nullptr, onDeviceChange, &h) == CR_SUCCESS;
     const bool fake = std::getenv("VIBE_WIN_FAKE_USB") && *std::getenv("VIBE_WIN_FAKE_USB");
     std::thread([notified, fake] {
         for (;;) {

@@ -3,7 +3,8 @@
 #
 #   scripts/build-windows.sh            deps (pinned, cached) + vibeserver.exe + vibe-usbprobe.exe + every test
 #   scripts/build-windows.sh --test     … then run the unit tests and a server smoke test under Wine
-#   scripts/build-windows.sh --zip      … then make vibeserver/windows/out/vibeserver-windows-x64-test1.zip
+#   scripts/build-windows.sh --zip      … then make vibeserver/windows/out/vibeserver-windows-x64-test$TEST_BUILD.zip
+#                                       (TEST_BUILD defaults to 2: the WinUSB switch + start-with-Windows build)
 #   scripts/build-windows.sh --clean    remove the build tree first (the deps cache is kept)
 #   ARCH=aarch64 scripts/build-windows.sh   Windows on ARM (same image, NEON path) — builds; untested
 #
@@ -21,7 +22,7 @@ WINE_IMAGE="vibe-wine-test:m1"
 ARCH="${ARCH:-x86_64}"
 TRIPLE="$ARCH-w64-mingw32"
 OUT="$WIN/out/build-$TRIPLE"
-ZIPNAME="vibeserver-windows-${ARCH/x86_64/x64}-test1"
+ZIPNAME="vibeserver-windows-${ARCH/x86_64/x64}-test${TEST_BUILD:-2}"
 DO_TEST=0; DO_ZIP=0; CLEAN=0
 for a in "$@"; do
   case "$a" in --test) DO_TEST=1;; --zip) DO_ZIP=1;; --clean) CLEAN=1;;
@@ -65,6 +66,8 @@ if [ $DO_TEST = 1 ]; then
   wrun /t/smoke.sh | grep -E '^(==|HTTP|<title>|Upgrade|Sec-WebSocket|\[VibeLocalSDR\] (RTL-TCP started|audio WS|capture clean|clock)|VibeServer: (USB|failed))'
   echo "==> front-door smoke test under Wine (Full mode: a radio process behind :48000)"
   wrun /t/smoke-full.sh
+  echo "==> TV-stick switch + start-with-Windows under Wine (a faked device list; the helper refuses it)"
+  wrun /t/smoke-switch.sh || TESTS_FAILED=1
   [ "${TESTS_FAILED:-0}" = 0 ] || { echo "!! a unit test failed under Wine (see above)"; exit 1; }
 fi
 

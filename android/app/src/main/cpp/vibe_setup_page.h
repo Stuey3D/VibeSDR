@@ -240,6 +240,11 @@ body.wifiFirst .wifiFirstOnly { display: block; }
          owner needs to know about this machine, and until now only the journal knew. Filled by
          sdrChangesLoad() on sign-in and on "Check again" — never on a timer. -->
     <div id="sdrChangesWrap" style="margin:6px 0 14px">
+      <!-- ★★★ WINDOWS: A DONGLE WINDOWS IS USING AS A TV TUNER (Stuart, 2026-10-26: "ONLY show a stick that is showing as
+           a TV stick"). Drawn only when the server answers /vibeserver/windows/hello, and only for a TV stick or a
+           stick with no driver: SWITCH (one Windows permission prompt, Microsoft's own WinUSB on that one dongle) or
+           NOT NOW. A dongle that already works is never mentioned here; one VibeServer switched has Give back. -->
+      <div id="winDongles" class="hide"></div>
       <div id="sdrChanges"></div>
       <div style="display:flex;gap:10px;align-items:center">
         <button type="button" class="ghost" id="sdrCheckAgain" style="padding:6px 12px;font-size:13px">Check again</button>
@@ -266,6 +271,24 @@ body.wifiFirst .wifiFirstOnly { display: block; }
          which does all things server related ... anything not specifically radio hardware related").
          ★ The shortwave schedule lives here too: it is ONE download shared by every radio. -->
     <div id="serverPane">
+      <!-- ★★★ WINDOWS: START WHEN WINDOWS STARTS (Stuart, 2026-10-26: "we need a button to start on boot"). Only on a
+           Windows server. "Starts at boot" = a Scheduled Task as Windows' restricted LOCAL SERVICE account, nobody
+           signed in (one permission prompt to turn on, one to turn off); "starts when you sign in" = the owner's own
+           sign-in list, no prompt. ON by default at the first "Save and start". -->
+      <div class="card hide" id="winAutoCard">
+        <h2>Start with Windows</h2>
+        <label style="display:flex;align-items:center;gap:10px;margin:0">
+          <input type="checkbox" id="winAutoOn" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Start VibeServer when Windows starts</span>
+        </label>
+        <p class="why" id="winAutoWhat" style="margin:10px 0 0"></p>
+        <div class="hint" id="winAutoHint"></div>
+        <p style="margin:8px 0 0" id="winAutoAlt" class="hide">
+          <button type="button" class="ghost" id="winAutoSignin" style="padding:6px 12px;font-size:13px">Start when I sign in instead</button>
+          <button type="button" class="ghost" id="winAutoBoot" style="padding:6px 12px;font-size:13px">Start at boot instead</button>
+        </p>
+        <div class="hint" id="winAutoMsg"></div>
+      </div>
       <!-- ★★★ THE POCKET BOX'S WI-FI (2026-10-10) — drawn ONLY on the pocket image (the server says so
            at /vibeserver/pocket/hello); every other install never sees it. FIRST on the Server tab,
            because on a pocket box it is the one question that decides whether the owner can find the
@@ -5412,6 +5435,8 @@ async function signIn(fromTicket) {
     sdrChangesLoad();
     // ★ The pocket box's Wi-Fi card (only on the pocket image — see POCKET).
     wifiLoad();
+    // ★ Windows: TV sticks offered a switch, and start-with-Windows (only on a Windows server — see WIN).
+    winLoad();
     // ★ Also picks up a change written BEFORE a reboot that has since happened — the page can
     //   then confirm it took, which is the whole point of keeping the marker on disk.
     serialStatus();
@@ -5739,6 +5764,144 @@ async function orderSave() {
   msg.textContent = "Saved — listeners see the new order straight away.";
   renderTabs();
 }
+
+// ── ★★★ WINDOWS: TV STICKS AND START-WITH-WINDOWS (Stuart, 2026-10-26) ─────────────────────────────────────────
+// Everything here is drawn only when the server answers /vibeserver/windows/hello; on every other server the request
+// fails and this page is the page it has always been.
+// ★★ The words are the brief's: "Windows is using this dongle as a TV tuner (…). Switch it to SDR so VibeServer can use
+//    it? You can switch it back any time." — SWITCH / NOT NOW. Never anything about Zadig, never an offer for a dongle
+//    that already works. The permission prompt appears on the PC itself, so the page says so while it waits.
+// ★ The page polls ONLY while Windows is being asked (a job is running) — the state is read from memory on the server
+//   and never opens a device.
+let WIN = null;          // the last /vibeserver/windows/state answer
+let WIN_POLL = null;
+
+async function winGet() {
+  const r = await fetch("/vibeserver/windows/state?" + await authQuery(), {cache: "no-store"});
+  if (!r.ok) return null;
+  return await r.json();
+}
+async function winPost(what, body) {
+  const r = await fetch("/vibeserver/windows/" + what + "?" + await authQuery(),
+                        {method: "POST", cache: "no-store", body: JSON.stringify(body || {})});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw (j.error || ("Refused (" + r.status + ")."));
+  return j;
+}
+async function winLoad() {
+  try {
+    const h = await fetch("/vibeserver/windows/hello", {cache: "no-store"});
+    const hj = h.ok ? await h.json().catch(() => null) : null;
+    if (!hj || hj.windows !== true) return;
+    WIN = await winGet();
+    if (!WIN) return;
+    winRender();
+    if (WIN.job && WIN.job.running) winWatch();
+  } catch (e) { /* not a Windows server */ }
+}
+function winRender() {
+  if (!WIN) return;
+  const box = $("winDongles");
+  const notNow = new Set(WIN.notNow || []);
+  const job = WIN.job || {};
+  let html = "";
+  for (const d of (WIN.dongles || [])) {
+    if (d.offer && !notNow.has(d.id)) {
+      html += `<div class="note" style="margin:0 0 10px"><p style="margin:0 0 10px">${esc(d.offerText)}</p>`
+        + `<button type="button" data-win-switch="${esc(d.id)}" ${job.running ? "disabled" : ""}>Switch</button> `
+        + `<button type="button" class="ghost" data-win-notnow="${esc(d.id)}" style="margin-left:8px" ${job.running ? "disabled" : ""}>Not now</button>`
+        + `<div class="hint" style="margin-top:8px">Windows will ask once for permission on this PC’s screen. Only this dongle `
+        + `changes: it gets Windows’ own WinUSB driver, and its TV driver stays installed for when you switch it back.</div></div>`;
+    } else if (d.switchedByUs) {
+      html += `<div class="hint" style="margin:0 0 8px">${esc(d.name)}${d.serial ? ", serial " + esc(d.serial) : ""} — switched to SDR by VibeServer. `
+        + `<button type="button" class="ghost" data-win-giveback="${esc(d.id)}" style="padding:4px 10px;font-size:12px" ${job.running ? "disabled" : ""}>Give it back to Windows (TV tuner)</button></div>`;
+    } else if (d.state === "other") {
+      html += `<div class="hint" style="margin:0 0 8px">${esc(d.name)}${d.serial ? ", serial " + esc(d.serial) : ""}: ${esc(d.why)}.</div>`;
+    }
+  }
+  if (job.running) html += `<div class="note" style="margin:0 0 10px"><b>${esc(job.name)}</b> — waiting for Windows. `
+      + `Look for the permission prompt on this PC’s own screen (it may be behind other windows).</div>`;
+  else if (job.done && job.seq && job.seq !== WIN_SEEN) html += `<div class="note" style="margin:0 0 10px;border-color:${job.ok ? "var(--good)" : "var(--bad)"}">`
+      + `${esc(job.message)}${job.reboot ? " <b>Restart Windows to finish.</b>" : ""}</div>`;
+  box.innerHTML = html;
+  box.classList.toggle("hide", !html);
+  box.querySelectorAll("[data-win-switch]").forEach(b => b.onclick = () => winStart("switch", b.dataset.winSwitch));
+  box.querySelectorAll("[data-win-giveback]").forEach(b => b.onclick = () => winStart("giveback", b.dataset.winGiveback));
+  box.querySelectorAll("[data-win-notnow]").forEach(b => b.onclick = async () => {
+    try { await winPost("notnow", {id: b.dataset.winNotnow}); WIN = await winGet(); winRender(); } catch (e) { /* stays */ }
+  });
+  // ── start with Windows ──
+  const a = WIN.autostart || {};
+  $("winAutoCard").classList.remove("hide");
+  const first = cfg && !cfg.configured;
+  const on = a.boot || a.signin;
+  if (!WIN_AUTO_TOUCHED) $("winAutoOn").checked = first ? (on || true) : on;
+  $("winAutoOn").disabled = !!job.running || (a.background && a.boot);
+  $("winAutoWhat").textContent = a.boot ? "On: starts at boot — before anyone signs in, as Windows’ restricted background account (LOCAL SERVICE)."
+    : a.signin ? "On: starts when you sign in to Windows (not at boot — the PC has to be signed in)."
+    : first ? "Turned on when you press Save and start."
+    : "Off: VibeServer runs only when you start it.";
+  $("winAutoHint").textContent = a.background
+    ? "This copy of VibeServer was started at boot, in the background, where Windows cannot show its permission prompt. To change this, sign in on the PC and run VibeServer from its folder."
+    : !a.exeOk ? a.exeWhy
+    : first ? "Windows will ask once for permission on this PC’s screen. If you say No, VibeServer starts when you sign in instead."
+    : a.boot ? "Turning it off asks Windows for permission once, on this PC’s screen."
+    : "Turning it on asks Windows for permission once, on this PC’s screen, so it can start at boot.";
+  $("winAutoAlt").classList.toggle("hide", !(a.boot || a.signin) || !!a.background);
+  $("winAutoSignin").classList.toggle("hide", !a.boot);
+  $("winAutoBoot").classList.toggle("hide", !(a.signin && a.exeOk));
+}
+let WIN_SEEN = 0;
+let WIN_AUTO_TOUCHED = false;
+function winWatch() {
+  if (WIN_POLL) return;
+  WIN_POLL = setInterval(async () => {
+    try { WIN = await winGet(); } catch (e) { return; }
+    if (!WIN) return;
+    winRender();
+    if (!WIN.job || !WIN.job.running) {
+      clearInterval(WIN_POLL); WIN_POLL = null;
+      if (WIN.job && WIN.job.ok && WIN.job.op === "switch") {
+        // ★ The dongle is a radio now: show its tab without a sign-in, and let the radio banner catch up.
+        try {
+          const r = await fetch("/vibeserver/config?" + await authQuery(), {cache: "no-store"});
+          if (r.ok) { cfg = await r.json(); renderTabs(); fill(); }
+        } catch (e) { /* the banner below still says what happened */ }
+        sdrChangesLoad();
+      }
+      if (WIN_WAITER) { const w = WIN_WAITER; WIN_WAITER = null; w(WIN.job); }
+    }
+  }, 1000);
+}
+let WIN_WAITER = null;
+async function winStart(what, id) {
+  try { await winPost(what, {id}); }
+  catch (e) { WIN.job = {done: true, ok: false, message: String(e), seq: -1}; winRender(); return; }
+  WIN = await winGet(); winRender(); winWatch();
+}
+/** Turn start-with-Windows to a mode and WAIT for the answer (the save button waits on it). */
+async function winAutostart(mode) {
+  try {
+    const j = await winPost("autostart", {mode});
+    if (!j.started) { WIN = await winGet(); winRender(); return {ok: true}; }
+  } catch (e) { $("winAutoMsg").textContent = String(e); return {ok: false}; }
+  const job = await new Promise(res => { WIN_WAITER = res; winWatch(); });
+  $("winAutoMsg").textContent = job.message || "";
+  return job;
+}
+$("winAutoOn").addEventListener("change", async () => {
+  WIN_AUTO_TOUCHED = true;
+  if (!WIN || (cfg && !cfg.configured)) return;   // ★ first setup: applied by Save and start
+  const a = WIN.autostart || {};
+  const res = await winAutostart($("winAutoOn").checked ? (a.exeOk ? "boot" : "signin") : "off");
+  WIN_AUTO_TOUCHED = false;
+  WIN = await winGet(); winRender();
+  if (!res.ok && res.declined && $("winAutoOn").checked !== (WIN.autostart.boot || WIN.autostart.signin))
+    $("winAutoMsg").textContent += " You can choose “Start when I sign in instead” — that needs no permission.";
+  if (!res.ok && res.declined) { $("winAutoAlt").classList.remove("hide"); $("winAutoSignin").classList.remove("hide"); }
+});
+$("winAutoSignin").onclick = async () => { await winAutostart("signin"); WIN = await winGet(); winRender(); };
+$("winAutoBoot").onclick = async () => { await winAutostart("boot"); WIN = await winGet(); winRender(); };
 
 // ── ★★★ THE POCKET VIBESERVER (2026-10-10) ─────────────────────────────────────────────────────
 // A Pi with its own Wi-Fi hotspot, set up from a phone. Everything here is drawn only when the box
@@ -6560,6 +6723,18 @@ $("saveBtn").onclick = async () => {
   //     silently discard an edit made in that window. Saving a tab you have only just opened is
   //     exactly what an owner setting up two radios does, so the save waits instead.
   await hwPending;
+  /* ★★★ WINDOWS, FIRST SETUP: "START WITH WINDOWS" IS ON BY DEFAULT (Stuart, 2026-10-26). Applied here, before the
+   *  restart, because turning it on asks Windows for permission ON THE PC'S OWN SCREEN — the owner must know why a
+   *  prompt appeared. Declined (or the program sits in a personal folder) → it starts when they sign in instead, which
+   *  needs no prompt. Either way the save goes ahead. */
+  if (WIN && cfg && !cfg.configured && $("winAutoOn").checked && WIN.autostart && !WIN.autostart.boot) {
+    $("barMsg").textContent = WIN.autostart.exeOk
+      ? "Windows is asking for permission on this PC’s screen, so VibeServer can start when Windows starts…"
+      : "Setting VibeServer to start when you sign in…";
+    const how = await winAutostart(WIN.autostart.exeOk ? "boot" : "signin");
+    if (!how.ok && WIN.autostart.exeOk) await winAutostart("signin");
+    $("barMsg").textContent = "Saving…";
+  }
   /* ★★★ THE WI-FI CARD IS SAVED BY "APPLY AND RESTART" TOO (Stuart's Pi 3 A+, 2026-10-10: the phone hotspot moved to 1,
    *  then "Apply Changes and Restart VibeServer" — the order was never sent: the Wi-Fi card had its own Save button and
    *  this one silently left it behind). An unsaved Wi-Fi change goes first; if it cannot be saved, nothing restarts

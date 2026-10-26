@@ -179,7 +179,7 @@ int main() {
         CHECK(c.size() == 6 && c[0] == "/Create" && c[2] == "VibeServer" && c[3] == "/XML" && c[5] == "/F");
         const auto d = schtasksDeleteArgs();
         CHECK(d.size() == 4 && d[0] == "/Delete" && d[2] == "VibeServer" && d[3] == "/F");
-        CHECK(schtasksQueryArgs().size() == 3 && schtasksQueryArgs()[0] == "/Query");
+        CHECK(schtasksQueryArgs().size() == 5 && schtasksQueryArgs()[0] == "/Query" && schtasksQueryArgs()[2] == "VibeServer");
         CHECK(runValue("C:\\VibeServer\\vibeserver.exe") == "\"C:\\VibeServer\\vibeserver.exe\" --autostart signin");
         std::string why;
         CHECK(exePathServiceReadable("C:\\VibeServer\\vibeserver.exe", "C:\\Users", why));
