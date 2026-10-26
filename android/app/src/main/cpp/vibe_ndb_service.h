@@ -221,8 +221,8 @@ private:
     }
     void onCopy(const vibe::ndb::Copy& c) {
         std::lock_guard<std::mutex> lk(m_);
-        copy_.push_back({ ++copySeq_, c.utcMs, sliceCentre_ + c.offsetHz, c.id, cleanText(c.text, 8) });
-        while (copy_.size() > 40) copy_.pop_front();
+        copy_.push_back({ ++copySeq_, c.utcMs, sliceCentre_ + c.offsetHz, c.id, cleanText(c.text, 8), c.q });
+        while (copy_.size() > 160) copy_.pop_front();   // ★ the list's live readings: every beacon's last few words
     }
 
     struct Row {
@@ -373,8 +373,8 @@ private:
         {
             bool first = true;
             for (const auto& c : copy_) {
-                std::snprintf(b, sizeof b, "%s{\"s\":%llu,\"t\":%lld,\"hz\":%.0f,\"id\":%d,\"text\":\"%s\"}", first ? "" : ",",
-                              (unsigned long long)c.seq, (long long)c.t, c.hz, c.id, c.text.c_str());
+                std::snprintf(b, sizeof b, "%s{\"s\":%llu,\"t\":%lld,\"hz\":%.0f,\"id\":%d,\"text\":\"%s\",\"q\":\"%s\"}", first ? "" : ",",
+                              (unsigned long long)c.seq, (long long)c.t, c.hz, c.id, c.text.c_str(), c.q);
                 o += b; first = false;
             }
         }
@@ -399,7 +399,7 @@ private:
     double sliceRate_ = 0, sliceCentre_ = 0;
     int64_t lastReportMs_ = 0, started_ = 0;
     std::string report_, brief_;
-    struct CopyLine { unsigned long long seq; int64_t t; double hz; int id; std::string text; };
+    struct CopyLine { unsigned long long seq; int64_t t; double hz; int id; std::string text; const char* q; };
     std::deque<CopyLine> copy_;
     unsigned long long copySeq_ = 0;
     std::map<std::string, LogEntry> log_;

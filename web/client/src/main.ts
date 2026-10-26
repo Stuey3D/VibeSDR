@@ -14,7 +14,7 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand } from './ism';
-import { NdbBox, type NdbReport } from './ndb';
+import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -1648,8 +1648,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onIsmError: (why: string) => { showPill(why, 7000); if (ismOn && !ismReport) ismUiOff(); },
     onNdb: (r) => onNdbReport(r),
     onNdbError: (why: string) => { showPill(why, 7000); if (ndbOn && !ndbReport) ndbUiOff(); },
-    onNdbFound: (m) => ndbBox?.found_(m),
-    onNdbStats: (m) => ndbBox?.stats_(m),
+    onNdbFound: (m) => ndbView?.found_(m),
+    onNdbStats: (m) => ndbView?.stats_(m),
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     onDab: (d: DabState) => {
       if (!d) {
@@ -2509,7 +2509,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onStatus: (s) => { if (s === 'error') setStatus('error', 'audio'); },
   });
   applyRecBuf();
-  if (adsbOn || ismOn) audio.setQuiet(true);   // ★ a reconnect inside ADS-B / ISM stays quiet (syncAudioQuiet)
+  if (adsbOn || ismOn || ndbOn) audio.setQuiet(true);   // ★ a reconnect inside ADS-B / ISM / NDB stays quiet (syncAudioQuiet)
   // ★★★ TELL IT WHETHER THERE IS ANYWHERE TO FALL BACK TO. With the owner's policy OFF the
   //     server REFUSES a socket opened without `codec=opus`, so 'falling back' swapped a
   //     struggling Opus stream for no stream at all — silently. The player keeps rebuilding
@@ -2532,7 +2532,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         onStatus: (st) => { if (st === 'error') setStatus('error', 'audio'); },
       });
       applyRecBuf();
-      if (adsbOn || ismOn) audio.setQuiet(true);
+      if (adsbOn || ismOn || ndbOn) audio.setQuiet(true);
       audio.start().catch((e) => console.error('audio restart failed', e));
     };
   }
@@ -3327,7 +3327,7 @@ function renderFrame(frameTs: number) {
   if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
   /* ★ ADS-B's map covers the page as the START screen does (opaque, full-screen): nothing behind it is
    *  drawn, and rows still arrive (1 fps in ADS-B) so the picture is current the moment the map goes. */
-  const drawWf = !NO_WF && !startScreenUp && !adsbViewUp;
+  const drawWf = !NO_WF && !startScreenUp && !adsbViewUp && !ndbViewUp;
   if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick(frameTs));   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen and ADS-B's full-screen map
@@ -3351,7 +3351,7 @@ function renderFrame(frameTs: number) {
   // stale span while the waterfall drew the new one (Stuart 2026-07-24 — "wrong but back"). Keep the
   // VFO/rf-centre terms so tuning still forces a redraw.
   const key = `${spec.frequency}|${spec.rfCenterHz()}|${wf.spanHz}|${wf.displayCenterHz()}|${window.innerWidth}`;
-  if (key !== lastViewKey && !startScreenUp && !adsbViewUp) {
+  if (key !== lastViewKey && !startScreenUp && !adsbViewUp && !ndbViewUp) {
     lastViewKey = key;
     guard('web-render', 'scale', drawScale);
     guard('web-render', 'bands', drawBands);
@@ -7738,7 +7738,7 @@ function adsbReadCap(j: any) {
 /** ★ ADS-B and ISM have nothing to hear: the page lets go of the audio output while either is on (audio.ts setQuiet —
  *  the AirPods followed a page "playing" silence). One rule for both, so a hand-over between them never plays a gap. */
 function syncAudioQuiet() {
-  const q = adsbOn || ismOn;
+  const q = adsbOn || ismOn || ndbOn;
   if (!audio || audio.quiet === q) return;
   audio.setQuiet(q);
   updateMediaSession();
@@ -8038,66 +8038,81 @@ function ismSetMode(on: boolean) {
 let ndbCap: { ok: boolean; why: string } | null = null;
 let ndbOn = false;
 let ndbReport: NdbReport | null = null;
-let ndbBox: NdbBox | null = null;
+let ndbView: NdbView | null = null;
 function ndbReadCap(j: any) {
   if (j?.ndb === true || j?.ndb === false) {
     const why = typeof j.ndbWhy === 'string' ? j.ndbWhy.trim().slice(0, 200) : '';
     ndbCap = { ok: j.ndb === true, why: j.ndb === true ? '' : (why || 'NDB is not available on this receiver') };
   } else ndbCap = null;
 }
-function ndbLockControls(on: boolean) {
-  const why = 'Held in NDB — the view is the whole beacon band';
-  for (const id of ['mZoomIn', 'mZoomOut', 'mPanelFit']) {
-    const el = document.getElementById(id) as HTMLButtonElement | null;
-    if (!el) continue;
-    el.disabled = on;
-    if (on) { if (el.dataset.lockTitle === undefined) el.dataset.lockTitle = el.title; el.title = why; }
-    else if (el.dataset.lockTitle !== undefined) { el.title = el.dataset.lockTitle; delete el.dataset.lockTitle; }
-  }
-  const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
-  if (bw) {
-    bw.disabled = on;
-    if (on) { if (bw.dataset.lockTitle === undefined) bw.dataset.lockTitle = bw.title; bw.title = 'Set by NDB — the filter is the whole capture while beacons are decoded'; }
-    else if (bw.dataset.lockTitle !== undefined) { bw.title = bw.dataset.lockTitle; delete bw.dataset.lockTitle; }
-  }
-}
+/** ★ The UI half of entering NDB — ADS-B's (adsbUiOn): a running decoder stopped, the box closed, the controls held,
+ *  the audio let go (nothing to hear), the map view up over the (throttled) waterfall. */
 function ndbUiOn() {
   ndbOn = true;
+  syncAudioQuiet();
   if (spec) spec.ndbHeld = true;
-  if (!ndbBox) ndbBox = new NdbBox({
+  setTimeout(syncDialTips, 0);
+  if (activeDec === 'rds') { spec?.rdsxLight(false); $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); }
+  if (activeDec) { decoders?.detach(); activeDec = null; syncDecButtons(); }
+  $('spotList').classList.remove('on');
+  $('spotFilters').classList.remove('show');
+  $('decImage').classList.remove('on');
+  if (!dabOn) $('decBox').classList.remove('open');
+  wholeRadioLock(true, 'NDB');
+  applyRateOptions();
+  populateHw();
+  if (!document.getElementById('ndbDlgCss')) { const st = document.createElement('style'); st.id = 'ndbDlgCss'; st.textContent = NDB_DLG_CSS; document.head.appendChild(st); }
+  if (!ndbView) ndbView = new NdbView({
     onExit: () => ndbSetMode(false),
-    onTune: (hz) => { if (spec && hz > 0) spec.tune(hz); },
     find: (q) => spec?.ndbFind(q, q ? 120 : 300),
     stats: () => spec?.ndbStats(),
     myPos: () => myPos(),
   });
-  ndbBox.show();
-  ndbLockControls(true);
+  ndbInerted = [];
+  for (const id of ['app', 'vts']) { const el = document.getElementById(id); if (el && !el.inert) { el.inert = true; ndbInerted.push(el); } }
+  ndbView.show();
+  ndbViewUp = true;
+  updateVts();
 }
+let ndbInerted: HTMLElement[] = [];
+/** ★ The map is covering the page: renderFrame skips the waterfall (ADS-B's adsbViewUp). */
+let ndbViewUp = false;
 function ndbUiOff() {
   ndbOn = false;
   ndbReport = null;
   if (spec) spec.ndbHeld = false;
-  ndbBox?.hide();
-  ndbLockControls(false);
+  setTimeout(syncDialTips, 0);
+  wholeRadioLock(false, 'NDB');
+  syncAudioQuiet();
+  ndbView?.hide();
+  ndbViewUp = false;
+  for (const el of ndbInerted) el.inert = false;
+  ndbInerted = [];
+  lastViewKey = '';
+  applyRateOptions();
+  populateHw();
+  updateVts();
+  if (!dabOn && decoders?.spotsEnabled) showDecBox('spots');
 }
 function ndbSetMode(on: boolean) {
   if (on) {
     if (ndbCap && !ndbCap.ok) { showPill(ndbCap.why, 7000); return; }
     if (spec?.isTuneLocked()) { spec.ndb(true); return; }   // ★ ask before tuning: spec says why
+    audio?.holdHealing(6000);
     ndbUiOn();
     spec?.ndb(true);
   } else {
+    audio?.holdHealing(6000);
     spec?.ndb(false);
     ndbUiOff();
   }
 }
 /** ★ A report (on) or the server's `ndb_off` (null). */
 function onNdbReport(r: NdbReport | null) {
-  if (!r) { if (ndbOn) ndbUiOff(); return; }
+  if (!r) { if (ndbOn) { audio?.holdHealing(6000); ndbUiOff(); } return; }
   ndbReport = r;
   if (!ndbOn) ndbUiOn();   // ★ somebody else put the receiver in NDB (or we joined it)
-  ndbBox?.update(r);
+  ndbView?.update(r);
 }
 /** ★ A report (on) or the server's `ism_off` (null). */
 function onIsmReport(r: IsmReport | null) {
@@ -8228,8 +8243,9 @@ function adsbMarkSel(hex: string, reveal: boolean) {
  *  the two can never disagree about which controls a whole-radio mode holds. The holds themselves are in
  *  SpectrumClient (dabHeld / adsbHeld); this is the visible half.
  *  ★ DAB keeps the arrows (they step the multiplex — see nudge); ADS-B has nothing to step, so they go too. */
-function wholeRadioLock(on: boolean, who: 'DAB' | 'ADS-B') {
+function wholeRadioLock(on: boolean, who: 'DAB' | 'ADS-B' | 'NDB') {
   const why = who === 'DAB' ? 'Zoom is locked in DAB — the span is the multiplex'
+            : who === 'NDB' ? 'Locked in NDB — the receiver is skimming the whole beacon band'
                             : 'Locked in ADS-B — the receiver is held on 1090 MHz';
   /* ★ FIT too: resetting the view is a zoom like any other, and it was greyed only on the retired
    *  desktop bar's FIT button — the card's (#mPanelFit, in the menu) stayed live and did nothing. */
@@ -8264,11 +8280,12 @@ function wholeRadioLock(on: boolean, who: 'DAB' | 'ADS-B') {
     bw.disabled = on;
     if (on) { if (bw.dataset.lockTitle === undefined) bw.dataset.lockTitle = bw.title;
               bw.title = who === 'DAB' ? 'Set by DAB — the filter is pinned to the multiplex while it is being received'
+                       : who === 'NDB' ? 'Set by NDB — the filter is the whole capture while beacons are decoded'
                                        : 'Set by ADS-B — the filter is the whole capture while aircraft are decoded'; }
     else if (bw.dataset.lockTitle !== undefined) { bw.title = bw.dataset.lockTitle; delete bw.dataset.lockTitle; }
   }
   /* ★ ADS-B: the passband sliders too — the server ignores a passband while it decodes 1090. */
-  if (who === 'ADS-B') {
+  if (who === 'ADS-B' || who === 'NDB') {
     for (const el of Array.from(document.querySelectorAll('.bwRow input, .bwRow button, .bwRow select')) as HTMLInputElement[]) {
       el.disabled = on;
     }
@@ -8452,7 +8469,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? `NDB · ${(spec?.mode ?? '').toUpperCase()}` : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? 'NDB' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -17857,6 +17874,7 @@ function initKeyboard() {
       /* ★★ ADS-B: back with nothing else open LEAVES IT — the map is the mode, and its back closes it, as the
        *  HFDL map's does in the app. One layer at a time: a panel over the map closes first. */
       if (!anyOpen && adsbOn && adsbViewUp) { adsbSetMode(false); return true; }
+      if (!anyOpen && ndbOn && ndbViewUp) { ndbSetMode(false); return true; }
       return anyOpen;
     },
     guide: () => togglePadGuide(),

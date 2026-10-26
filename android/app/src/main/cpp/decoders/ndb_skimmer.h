@@ -102,6 +102,10 @@ struct Copy {
     double offsetHz = 0;
     std::string text;
     int64_t utcMs = 0;
+    /** ★ How sure the reading is — the health pill's four words, the CW list's colours: "high" = it reads the confirmed
+     *  ident; "medium" = clean machine timing, not (yet) the ident; "low" = timing off somewhere; "poor" = a character
+     *  that is not Morse ('?'). */
+    const char* q = "low";
 };
 
 /** One carrier, as a list row. */

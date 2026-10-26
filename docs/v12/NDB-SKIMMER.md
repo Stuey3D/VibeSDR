@@ -52,32 +52,68 @@ transform as one.
 ## The mode (server contract)
 
 `{"type":"ndb","on":1|0}` (gated by ask-before-tuning). The server saves the listener's place, puts the hardware centre
-on the band (`vibendb::plan`: as much of 190–535 kHz as the radio reaches and its rate holds, centred on Europe's
-255–526.5 when it cannot hold it all; x.25/x.75 kHz, between raster beacons) and gives the radio back exactly as found.
-**A listening mode**: unlike ISM and ADS-B the VFO, mode and audio stay the listener's inside the capture (a `tune` there
-moves only the VFO — tap a beacon, hear it; outside it is refused with the reason). Zoom, reset, the IF filter and the
-rate are the mode's. One whole-radio mode at a time. No rate change, ever.
+on the band (`vibendb::plan`: as much of 190–535 kHz as the radio reaches and its rate holds, **in one slice**, centred on
+Europe's 255–526.5 when it cannot hold it all; x.25/x.75 kHz, between raster beacons; its DC and IQ image are never
+carriers) and gives the radio back exactly as found.
 
-- `vibeserver.json`: `ndb` true / false + `ndbWhy` / **absent** where the radio reaches no LF — an RTL only with direct
-  sampling on or automatic (then 0–14.4 MHz); HF+ and RSPs by their ranges; HackRF, Airspy R2, Icom: no control at all.
-  `ndbLo`/`ndbHi`; `"ndb"` in `modes`; the owner's block list (Setup → Modes and decoders: "NDB beacons").
+**A whole-radio, map-first mode in ADS-B's pattern** (Stuart, 2026-10-27: "NDB should be a map and list view like ADS-B
+… that way we can throttle back the waterfall to save server CPU and skim the entire NDB band at once"): no audio (the
+chain runs spectrum-only), the waterfall at **1 fps** behind the clients' map (`recomputeEngineRate`, as ADS-B), tune /
+mode / passband / zoom / rate / IF filter ignored with a log line. One whole-radio mode at a time. No rate change, ever.
+
+**What one slice covers, per radio** (`ndbLo`/`ndbHi` in `vibeserver.json` say it for the rate running now):
+
+| radio | capture | NDB band in the slice |
+|---|---|---|
+| Airspy HF+ | 384 / 456 / 768 / 912 kS/s | all of 190–535 kHz (384 kS/s holds 345.6 kHz — just) |
+| Airspy HF+ | 192 / 256 kS/s | 172.8 / 230 kHz centred on 255–526.5 (≈ 304–477 / 275–505 kHz) |
+| SDRplay RSP | ≥ 2 MS/s | all of it |
+| RTL-SDR, direct sampling on or automatic | 2.4 MS/s (any ≥ 384 kS/s) | all of it |
+| RTL-SDR without direct sampling, HackRF, Airspy R2/Mini, Icom | — | none: no NDB control at all |
+
+- `vibeserver.json`: `ndb` true / false + `ndbWhy` / **absent** where the radio reaches no LF; `ndbLo`/`ndbHi`; `"ndb"`
+  in `modes`; the owner's block list (Setup → Modes and decoders: "NDB beacons").
 - `{"type":"ndb",…}` once a second and at once to a joiner: centre, lo/hi, carriers, identified, published/heardIn
   (coverage), far, beacons (hz, snr, tone, a1a, wpm, ident, votes, read, db {k,ident,name,cc,lat,lon,km,brg}, alt, also,
-  harm, copy), log (the heard log), copy (live copy, sequence-numbered). `ndb_off`, `ndb_error {why}`.
+  harm, copy), log (the heard log), copy (the live readings, sequence-numbered, each with its confidence `q`: high = it
+  reads the confirmed ident, medium = clean timing, low = timing off, poor = a non-Morse character). `ndb_off`,
+  `ndb_error {why}`.
 - `{"type":"ndb_find","q","limit"}` → `ndb_found` (published beacons nearest first; in or out of the mode).
   `{"type":"ndb_stats"}` → per hour (heard, furthest), each beacon's SNR every 5 min (in memory, 7 days).
-- Health pill: "NDB skimmer" drops (WideTap's drop-oldest queue). Clean shutdown writes the gallery's day.
+- Health pill: "NDB skimmer" drops. Clean shutdown writes the gallery's day.
 
 **Gallery**: per UTC day, the heard log (a card rewritten at most once a minute, read back after a restart) and a MAP
 (PNG, azimuthal equidistant about the receiver, range rings, the map pack's country outlines when installed, the idents).
-Gallery chip NDB. The `DayLog` takes `origin` "background"; **a background-decoding NDB profile is not wired yet**.
+Gallery chip NDB.
 
-**Web** (`ndb.ts`): NDB in the Mode sheet beside ISM; the box: EXIT NDB · FIND NDB · STATS · IDENTIFIED ONLY; tiles
-CARRIERS / IDENTIFIED / FURTHEST / COVERAGE; a spectrum strip with idents over carriers; tabs BEACONS (kHz · ident ✓/≈/
-italic? · flag + station · distance + bearing · SNR · tone · WPM · copy; a row tunes to it), MAP (MapLibre: rings, links,
-heard in the last 10 min…7 days/all, unheard published beacons, autofit; without WebGL 2 a note), LIVE COPY, HEARD LOG;
-Find NDB (nearest first, ident/name/kHz); stats (per hour, furthest per hour, by hour of day, per-beacon SNR over time,
-CSV each). 390 px: fits with a 16 px gutter, nothing sideways.
+**Background decoding** (2026-10-27): an **NDB profile** ("Decodes: NDB beacons — the whole LF beacon band" in the setup
+page's profile editor, stored `"ndb":true`) runs the listener's NDB mode with nobody here — every beacon skimmed, each
+day's log and map to the gallery as background's; it ends the moment anybody connects, the radio back exactly as left.
+Offered only where the radio reaches LF (hwinfo `ndbHw`; at the save, by driver — an RTL only with direct sampling), never
+on a locked radio (refused in words at the save), and on the admin page as "NDB beacons · 12 beacons identified of 41
+carriers".
+
+## The web view (map-first, ADS-B's pattern)
+
+`#ndbView` (index.html, styled by #adsbView's own rules extended to it) — `web/client/src/ndb.ts` `NdbView` / `NdbMap`:
+
+- **The top bar**: EXIT NDB (never scrolls away), the title, the identified count, the band and carriers, RINGS, UNHEARD,
+  FIT. The page beneath is inert and its waterfall not drawn (as `adsbViewUp`).
+- **The map**: our MapLibre map ('aero' profile — the airports and runways the beacons stand at; Leaflet without WebGL 2),
+  the NDB layer `web/mapkit/ndblayer.js` (generated copy `web/client/src/generated/ndbLayerSource.ts` by
+  `scripts/gen-ndblayer-source.mjs`; never edit the copy): every beacon **at its published position** with a **3-bar
+  signal meter** (< 10 dB one red, < 20 dB two amber, else three green — ADS-B's list bars; dimmed when not heard in the
+  last minute or not yet identified, the candidate's ident with "?"), the published beacons not heard faint (UNHEARD),
+  the receiver's house, a selected beacon's line to the receiver, and autofit to the beacons heard until the map is moved.
+  **The range rings are ADS-B's own** — `adsblayer.js` now shares `ringsFor` / `addRingLayers` / `setRingData` /
+  `leafletRings` (VibeAdsbLayer.shared), so the ladder, the NM labels on all four sides and the look are one code.
+- **The live list** (bottom-left, folds to a pill): its header holds the tiles (CARRIERS · IDENTIFIED · FURTHEST ·
+  COVERAGE) and HEARD LOG · FIND NDB · STATS. Rows **lowest frequency first** (the CW skimmer's order), updated in place
+  so the list stays where it was scrolled: kHz · ident (✓ match / ≈ one letter off / plain unlisted / italic? candidate)
+  · flag + station · **NM + bearing** · the 3-bar meter, and the readings streaming in beneath, each word coloured by its
+  confidence in the health pill's four colours. A row tapped selects the beacon on the map and opens its card.
+- **The card** (top left, beside the zoom): ident, station, kHz, tone, WPM, NM and bearing, SNR now and its sparkline
+  (kept by the page from the reports), the last readings, the other beacons published on the frequency, a harmonic.
 
 ## Measured (Apple M5 Pro)
 
@@ -98,8 +134,9 @@ wrong, mean time to confirm:
 wrong — LBA read correctly but ALSO on its own sideband, where the test places another beacon's keyed sideband on
 LBA's carrier (1 kHz raster + 1035 Hz tone); a known limit.
 
-**Real**: Stuart's UberSDR, 256–448 kHz I/Q at 192 kHz, 10 min, 2026-10-26 07:29 UTC (daylight),
-`~/VibeSDR-test-audio/ndb/`. **11 idents, the first six in 17–36 s**: HEN 433.5 (17 s), EME 353.5 (24 s), EMW 393.0
+**Real**: Stuart's UberSDR, 256–448 kHz I/Q at 192 kHz, 10 min, 2026-10-26 07:29 UTC (daylight). Kept in
+`~/VibeSDR-test-audio/ndb/` as its **first 330 s** (253 MB — every one of the eleven idents lands by 303 s), which
+test-ndb replays when `VIBE_TEST_AUDIO` is set: the same eleven, nothing else, the first at 17 s. **11 idents, the first six in 17–36 s**: HEN 433.5 (17 s), EME 353.5 (24 s), EMW 393.0
 (26 s), WOD 352.0 (28 s), BHX 406.0 (33 s), OX 367.5 (36 s), CHT 277.0 (45 s), EPM 316.0 (130 s), CAM 332.5 (150 s),
 SND 362.5 (281 s), MRV 404.0 (303 s). The UberSDR NDB addon's list for the same window held four (WOD, EME, EMW, BHX),
 re-identifying WOD at 29 s, EMW at 519 s, EME at 601 s and BHX not at all. Our eleven: nine are published UK beacons at
@@ -120,19 +157,23 @@ x86-64 SSE2 syntax-checks clean.
   −10 dB by the fold, 5/12 WPM, 5 min of noise, the floor's calibration, the published list (Woodley 93 km 181°, ≈,
   candidates, EME never mismatched, Find NDB), the service (report, both named, stats, Find marks heard, a harmonic), the
   gallery (card, map PNG, restart). `--write-clip` makes the e2e clip.
-- `scripts/test-server-ndb.mjs`: 20 checks on the real server — an RTL without direct sampling offers no NDB; with it,
-  the capability, the band, WOD and CAM identified and named (38 s), a tap moving only the VFO, a tune outside refused,
-  Find, stats, the receiver given back exactly.
-- `scripts/test-web-ndb.mjs`: 21 checks in headless Edge (`--mute-audio`), desktop and 390 px.
+- `scripts/test-server-ndb.mjs`: 22 checks on the real server — an RTL without direct sampling offers no NDB; with it,
+  the capability, the band, WOD and CAM identified and named (38 s), a tune ignored, the 1 fps waterfall, confidence on
+  every reading, Find, stats, the receiver given back exactly.
+- `scripts/test-web-ndb.mjs`: 27 checks in headless Edge (`--mute-audio`): the map view, the list (order, NM, bars,
+  coloured readings, tiles), the map (markers, NM rings), the card, RINGS, HEARD LOG, Find, stats, the fold, 390 px.
+- `scripts/test_ndb_layer.mjs`: the layer's generated copy, the bars rule, and the rings shared with ADS-B (ladder, NM,
+  four labels). `scripts/test_adsb_layer.mjs` (ADS-B's own, 151 checks) still passes on the shared ring code.
+- test-ndb also: the background-decoding NDB profile (parse, write back, valid / refused on a locked radio or one with no
+  LF), and the real recording's eleven idents.
 
 ## Not done / owed
 
-- **The app** (React Native): no NDB yet — web only. When it lands: the Mode sheet entry, the box, and the About V12 note
-  + tour copy (not changed now: the app has no NDB, and nothing in either tour misdescribes it).
-- **Background decoding profile** for NDB (the gallery's `DayLog` takes origin "background"; the setup page and
-  `vibe_bgdecode` have no NDB profile).
-- The waterfall in NDB shows the whole capture (on an RTL at 2.4 MS/s the band is a sixth of it); a view narrowed to
-  the band would read better.
+- **The app** (React Native): no NDB yet — web only. It needs: the capability (`ndb`, `ndbWhy`, `ndbLo/Hi`), the Mode
+  sheet entry beside ISM, the map-first view (AdsbLive's pattern) with the NDB layer injected into its map WebView (add
+  `src/generated/ndbLayerSource.ts` to `gen-ndblayer-source.mjs`, after the ADS-B layer whose rings it uses), the list
+  (`src/services/` rules shared with ndb.ts: `ndbIdentCell`, `ndbBars`, `nmText`, `ndbRows`), the card, Find/stats, the
+  audio released (iOS `setQuiet`), pad/keyboard reach, the gallery chip, and the About V12 note + tour copy.
 - Weak beacons below −13 dB (2.5 kHz); a strong neighbour's keyed sideband sitting on a weak carrier.
 - Stats are in memory only (reset on restart; the gallery keeps the days).
 - Real Pi 2 timing; real RTL direct-sampling and RSP captures (only an UberSDR RX888 recording was available).

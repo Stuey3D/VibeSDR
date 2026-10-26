@@ -6,11 +6,13 @@
 #include "vibe_ndb_db.h"
 #include "vibe_ndb_gallery.h"
 #include "vibe_ndb_service.h"
+#include "vibe_bgdecode_config.h"
 #include "ndb_synth.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <dirent.h>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -220,6 +222,49 @@ int main(int argc, char** argv) {
         }
         std::string cmd = "rm -rf '" + dir + "'"; if (std::system(cmd.c_str()) != 0) std::printf("  (could not remove %s)\n", dir.c_str());
     }
+
+    std::printf("\n── the background-decoding NDB profile ──\n");
+    {
+        vibe::bg::Config c; std::string err;
+        ok(vibe::bg::parse(R"({"on":true,"waitMin":5,"profiles":[{"centre":0,"from":"00:00","to":"00:00","vfos":[],"ndb":true}]})", c, err)
+           && c.profiles.size() == 1 && c.profiles[0].isNdb() && c.profiles[0].isWhole(), "an NDB profile parses (" + err + ")");
+        ok(vibe::bg::toJson(c).find("\"ndb\":true") != std::string::npos, "…and is written back");
+        std::string e1, e2, e3;
+        ok(vibe::bg::validate(c, 768000, e1, 0, 0, true, true), "valid on a radio that reaches LF (" + e1 + ")");
+        ok(!vibe::bg::validate(c, 768000, e2, 0, 0, true, false) && e2.find("NDB") != std::string::npos, "refused, in words, where it reaches none: " + e2);
+        ok(!vibe::bg::validate(c, 768000, e3, 0, 7100000, true, true) && e3.find("locked") != std::string::npos, "refused on a locked radio: " + e3);
+        vibe::bg::Config o; std::string e4;
+        ok(vibe::bg::parse(R"({"on":true,"profiles":[{"centre":500000,"vfos":[{"hz":518000,"mode":"usb","dec":"navtex"}]}]})", o, e4)
+           && !o.profiles[0].isNdb() && vibe::bg::toJson(o).find("ndb") == std::string::npos, "an ordinary profile carries no ndb");
+    }
+
+    /* ★★ THE REAL RECORDING (Stuart's UberSDR, 256–448 kHz I/Q at 192 kHz, the first 330 s of 2026-10-26 07:29 UTC) —
+     *  the eleven idents, and nothing else. Run when VIBE_TEST_AUDIO points at the folder holding ndb/ (not in the repo). */
+    std::printf("\n── the real recording ──\n");
+    if (const char* ta = std::getenv("VIBE_TEST_AUDIO")) {
+        const std::string path = std::string(ta) + "/ndb/uber_ndb_352500_iq192_20261026T0729_330s.wav";
+        FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) std::printf("  (not found: %s)\n", path.c_str());
+        else {
+            std::fseek(f, 44, SEEK_SET);
+            ndb::Skimmer::Config c; c.rate = 192000;
+            ndb::Skimmer sk(c); sk.setStartUtcMs(0);
+            std::set<std::string> got; double first = 0;
+            sk.onIdent = [&](const ndb::BeaconView& v) { if (got.empty()) first = sk.nowMs() / 1000.0; got.insert(v.ident); };
+            std::vector<int16_t> raw(2 * 8192); std::vector<cf> iq(8192);
+            for (;;) {
+                const size_t n = std::fread(raw.data(), 4, 8192, f);
+                if (!n) break;
+                for (size_t i = 0; i < n; ++i) iq[i] = cf(raw[2 * i] / 32768.0f, raw[2 * i + 1] / 32768.0f);
+                sk.feedIq(iq.data(), (int)n);
+            }
+            std::fclose(f);
+            const std::set<std::string> want = { "HEN", "EME", "EMW", "WOD", "BHX", "OX", "CHT", "EPM", "CAM", "SND", "MRV" };
+            std::string all; for (auto& g : got) all += g + " ";
+            ok(got == want, "the eleven idents and nothing else: " + all);
+            ok(first > 0 && first < 25, "the first in " + std::to_string((int)first) + " s");
+        }
+    } else std::printf("  (not run — set VIBE_TEST_AUDIO to the folder holding ndb/)\n");
 
     std::printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;

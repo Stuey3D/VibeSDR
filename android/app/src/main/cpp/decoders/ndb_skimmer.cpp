@@ -1125,9 +1125,14 @@ struct Skimmer::Impl {
         const int64_t t = now();
         car.copy += (car.copy.empty() ? "" : " ") + w;
         if (car.copy.size() > 80) car.copy.erase(0, car.copy.size() - 80);
-        if (owner->onCopy) { Copy c; c.id = car.id; c.offsetHz = offsetOf(w0 + car.bin + car.frac); c.text = w; c.utcMs = t; owner->onCopy(c); }
-        // ★ Only a clean, whole reading is a ballot; the rest is the live copy only.
-        if (clean && w.find('?') == std::string::npos && car.vote.add(w, t) && owner->onIdent) owner->onIdent(view(car, true));
+        // ★ Ballot first, so a reading that CONFIRMS the ident is already "high"
+        const bool confirmedNow = clean && w.find('?') == std::string::npos && car.vote.add(w, t);
+        if (owner->onCopy) {
+            Copy c; c.id = car.id; c.offsetHz = offsetOf(w0 + car.bin + car.frac); c.text = w; c.utcMs = t;
+            c.q = w.find('?') != std::string::npos ? "poor" : (!car.vote.ident().empty() && w == car.vote.ident()) ? "high" : clean ? "medium" : "low";
+            owner->onCopy(c);
+        }
+        if (confirmedNow && owner->onIdent) owner->onIdent(view(car, true));
     }
 
     BeaconView view(const Car& c, bool active) const {

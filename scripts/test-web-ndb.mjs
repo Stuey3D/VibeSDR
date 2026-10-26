@@ -1,8 +1,8 @@
 // test-web-ndb.mjs — the web client's NDB mode against the REAL server (fake rtl_tcp with automatic direct sampling
 // replaying `test-ndb --write-clip`: WOD 352.0 and CAM 333.0 kHz), in headless Edge with --mute-audio (tests are silent):
-// START, the Mode sheet's NDB entry, the box, the tiles, the beacon table with ✓ WOD Woodley and its distance, the
-// spectrum strip's idents, a row tapped tuning the VFO, the zoom held, the map / live copy / heard log tabs, Find NDB,
-// the stats, 390 px with nothing sideways, EXIT NDB giving the dial back. Screenshots to $TMPDIR/vibesdr-ndb-*.png.
+// START, the Mode sheet's NDB entry, the MAP-FIRST view (ADS-B's pattern), the live list lowest frequency first with ✓ WOD
+// Woodley in NM, its 3-bar meter and the readings streaming in by confidence, the tiles, the beacons on the map with NM
+// rings, a row opening its card, RINGS, HEARD LOG, Find NDB, the stats, the fold, 390 px, EXIT NDB giving the dial back. Screenshots to $TMPDIR/vibesdr-ndb-*.png.
 //   VIBESERVER_BIN=…/vibeserver VIBE_NDB_CLIP=…/clip.u8 node scripts/test-web-ndb.mjs
 import net from 'node:net';
 import fs from 'node:fs';
@@ -25,7 +25,7 @@ for (const d of ['data', 'run', 'edge']) fs.mkdirSync(path.join(dir, d));
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'NDB web test', locator: 'IO92nh', adminPass: 'ndb-web-admin',
   radios: [{ serial: 'ndb-web', label: 'Test radio', enabled: true, configured: true, users: 1, autoDirectSampling: true }] }));
 const rtlPort = await freePort(), port = await freePort(), dbg = await freePort();
-const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--hf', CLIP, '--hf-centre', '362750'], { stdio: 'ignore' });
+const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--hf', CLIP, '--hf-centre', '362750', '--tones', '0'], { stdio: 'ignore' });
 await sleep(400);
 const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2400000', '--freq', '7074000', '--mode', 'usb', '--users', '1'],
@@ -64,51 +64,56 @@ try {
   const opts = await ev(`[...document.querySelectorAll('.mModeOpt')].map(b => b.textContent.trim()).join(',')`);
   ok(/\bNDB\b/.test(opts || ''), `the Mode sheet offers NDB: ${opts}`);
   await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'NDB'); b && b.click(); return !!b; })()`);
-  ok(await until(`!!document.getElementById('ndbBox') && !document.getElementById('ndbBox').hidden`, 6000), 'the NDB box opens');
-  ok(await until(`[...document.querySelectorAll('#ndbPane td.conf')].some(td => td.textContent.includes('WOD')) && [...document.querySelectorAll('#ndbPane td.conf')].some(td => td.textContent.includes('CAM'))`, 120000),
-     `✓ WOD and ✓ CAM in the table: ${await ev(`[...document.querySelectorAll('#ndbPane tr')].map(r => r.textContent).slice(0, 4).join(' | ')`)}`);
-  const row = await ev(`[...document.querySelectorAll('#ndbPane tr')].map(r => r.textContent).find(t => t.includes('WOD')) || ''`);
-  ok(/Woodley/.test(row) && /\d+ km S/.test(row) && /400 Hz/.test(row), `WOD's row: ${row}`);
-  const tiles = await ev(`[...document.querySelectorAll('.ndbTile')].map(t => t.textContent).join(' | ')`);
-  ok(/2IDENTIFIED/.test(tiles || '') && /WOD \d+ kmFURTHEST/.test(tiles || ''), `the tiles: ${tiles}`);
-  ok(await ev(`[...document.querySelectorAll('#ndbSpec text')].some(t => t.textContent === 'WOD')`), 'the spectrum strip names WOD over its carrier');
+  ok(await until(`!!document.getElementById('ndbView') && !document.getElementById('ndbView').hidden`, 6000), 'the NDB map view opens (map-first, over the waterfall)');
+  ok(await ev(`document.body.classList.contains('ndbMap') && document.getElementById('app').inert === true`), 'the page under the map is inert');
+  ok(await until(`[...document.querySelectorAll('#ndbList .ndbRow .c.conf')].map(x => x.textContent).join() === '✓ CAM,✓ WOD'`, 120000),
+     `✓ CAM and ✓ WOD in the list, lowest frequency first: ${await ev(`[...document.querySelectorAll('#ndbList .ndbRow')].map(r => r.innerText.replace(/\\n/g, ' ')).join(' | ')`)}`);
+  const row = await ev(`[...document.querySelectorAll('#ndbList .ndbRow')].find(r => r.textContent.includes('WOD'))?.innerText.replace(/\\n/g, ' ') || ''`);
+  ok(/Woodley/.test(row) && /\d+ NM S/.test(row), `WOD's row (NM, bearing): ${row}`);
+  ok(await ev(`!![...document.querySelectorAll('#ndbList .ndbRow')].find(r => r.textContent.includes('WOD'))?.querySelector('.sig.l3')`), 'its 3-bar meter shows three bars');
+  ok(await until(`!!document.querySelector('#ndbList .ndbRow .tx .q-high')`, 15000), `the live readings stream in, coloured by confidence: ${await ev(`[...document.querySelectorAll('#ndbList .ndbRow .tx')].map(x => x.innerHTML).join(' | ').slice(0, 200)`)}`);
+  const tiles = await ev(`[...document.querySelectorAll('#ndbTiles .ndbTile')].map(t => t.textContent).join(' | ')`);
+  ok(/IDENTIFIED 2/.test(tiles || '') && /FURTHEST WOD \d+ NM/.test(tiles || ''), `the tiles in the list's header: ${tiles}`);
+  ok(await until(`[...document.querySelectorAll('#ndbMapHost .leaflet-marker-icon, #ndbMapHost canvas')].length > 0`, 20000), 'the map draws (GPU, or Leaflet without WebGL 2)');
+  ok(await until(`/WOD/.test(document.getElementById('ndbMapHost').textContent) || !!document.querySelector('#ndbMapHost canvas')`, 10000), 'WOD is on the map at its published position');
+  ok(await until(`/\\d+ NM/.test(document.getElementById('ndbMapHost').textContent) || !!document.querySelector('#ndbMapHost canvas')`, 5000), `the range rings are labelled in NM: ${await ev(`[...document.querySelectorAll('#ndbMapHost .vsadsb-rl')].slice(0, 4).map(x => x.textContent).join(', ')`)}`);
   ok(await ev(`document.getElementById('mZoomIn')?.disabled === true`), 'zoom is held');
-  console.log('   screenshot', await shot('table'));
-  await ev(`[...document.querySelectorAll('#ndbPane tr[data-hz]')].find(r => r.textContent.includes('WOD')).click()`);
-  ok(await until(`/0[.,]352|352[.,]0/.test(document.getElementById('mFreq')?.textContent || '')`, 5000), `a tap tunes the VFO to WOD: ${await ev(`document.getElementById('mFreq')?.textContent`)}`);
-  for (const [t, sel] of [['copy', '#ndbPane tr'], ['log', '#ndbPane td.unl']]) {
-    await ev(`document.querySelector('#ndbTabs [data-t="${t}"]').click()`);
-    ok(await until(`document.querySelectorAll('${sel}').length >= 1`, 4000), `the ${t} tab draws: ${await ev(`document.querySelector('#ndbPane')?.innerText.slice(0, 80)`)}`);
-  }
-  await ev(`document.querySelector('#ndbTabs [data-t="map"]').click()`);
-  ok(await until(`!!document.getElementById('ndbMapHost') && (!!document.querySelector('#ndbMapHost canvas') || /WebGL|map/.test(document.getElementById('ndbMapHost').textContent))`, 15000),
-     `the map tab: ${await ev(`document.querySelector('#ndbMapHost canvas') ? 'a GL canvas' : document.getElementById('ndbMapHost')?.textContent`)}`);
-  await sleep(3000);
   console.log('   screenshot', await shot('map'));
-  await ev(`document.querySelector('#ndbTabs [data-t="beacons"]').click()`);
-  await ev(`document.getElementById('ndbFind').click()`);
+  await ev(`[...document.querySelectorAll('#ndbList .ndbRow')].find(r => r.textContent.includes('WOD')).click()`);
+  ok(await until(`!document.getElementById('ndbCard').hidden && /WOD/.test(document.getElementById('ndbCard').textContent) && /Woodley/.test(document.getElementById('ndbCard').textContent) && /NM/.test(document.getElementById('ndbCard').textContent)`, 4000),
+     `a tapped row opens its card: ${await ev(`document.getElementById('ndbCard').innerText.replace(/\\n/g, ' / ')`)}`);
+  ok(await ev(`[...document.querySelectorAll('#ndbList .ndbRow.sel')].length === 1`), 'and is selected in the list');
+  console.log('   screenshot', await shot('card'));
+  await ev(`document.getElementById('ndbRings').click()`);
+  ok(await until(`!document.getElementById('ndbRings').classList.contains('on')`, 2000), 'RINGS toggles');
+  await ev(`document.getElementById('ndbRings').click()`);
+  await ev(`document.getElementById('ndbLogBtn').click()`);
+  ok(await until(`/HEARD LOG/.test(document.getElementById('ndbDlgBox')?.textContent || '') && /WOD/.test(document.getElementById('ndbDlgBox')?.textContent || '')`, 3000), 'HEARD LOG opens with WOD');
+  await ev(`document.getElementById('ndbDlgX').click()`);
+  await ev(`document.getElementById('ndbFindBtn').click()`);
   ok(await until(`[...document.querySelectorAll('#ndbFoundList tr')].length > 5`, 5000), `Find NDB lists the nearest: ${await ev(`[...document.querySelectorAll('#ndbFoundList tr')].slice(1, 4).map(r => r.textContent).join(' | ')`)}`);
   await ev(`(() => { const i = document.getElementById('ndbQ'); i.value = 'woodley'; i.dispatchEvent(new Event('input')); })()`);
   ok(await until(`[...document.querySelectorAll('#ndbFoundList tr')].some(r => /✓ WOD/.test(r.textContent))`, 5000), 'searching "woodley" finds ✓ WOD (heard)');
-  console.log('   screenshot', await shot('find'));
   await ev(`document.getElementById('ndbDlgX').click()`);
-  await ev(`document.getElementById('ndbStats').click()`);
+  await ev(`document.getElementById('ndbStatsBtn').click()`);
   ok(await until(`/BEACONS HEARD PER HOUR/.test(document.getElementById('ndbDlgBox')?.textContent || '') && /WOD/.test(document.getElementById('ndbDlgBox')?.textContent || '')`, 5000), 'the stats open with WOD');
   await ev(`document.getElementById('ndbDlgX').click()`);
+  await ev(`document.getElementById('ndbLiveHead').click()`);
+  ok(await until(`document.getElementById('ndbLive').classList.contains('min')`, 2000), 'the list folds to a pill');
+  await ev(`document.getElementById('ndbLiveHead').click()`);
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1500);
-  const fit = JSON.parse(await ev(`JSON.stringify(document.getElementById('ndbBox').getBoundingClientRect())`));
-  ok(fit.left >= 15 && fit.right <= 390 - 15, `the box fits a phone: ${Math.round(fit.left)}–${Math.round(fit.right)} of 390`);
-  const deckTop = await ev(`Math.min(...['mFreqBox','mVfoDown','mVfoUp','mZoomIn'].map(i => document.getElementById(i)?.getBoundingClientRect().top ?? 1e9))`);
-  ok(fit.bottom <= deckTop, `…and clears the control deck: box bottom ${Math.round(fit.bottom)}, deck top ${Math.round(deckTop)}`);
+  const fit = JSON.parse(await ev(`JSON.stringify(document.getElementById('ndbLive').getBoundingClientRect())`));
+  ok(fit.left >= 9 && fit.right <= 390 - 9, `the list fits a phone: ${Math.round(fit.left)}–${Math.round(fit.right)} of 390`);
   ok(await ev(`document.documentElement.scrollWidth <= 390`), `nothing scrolls sideways (${await ev('document.documentElement.scrollWidth')})`);
+  ok(await ev(`(() => { const t = document.getElementById('ndbTop').getBoundingClientRect(), e = document.getElementById('ndbExit').getBoundingClientRect(); return e.left >= 0 && e.right <= 390; })()`), 'EXIT NDB stays on screen');
   console.log('   screenshot', await shot('phone'));
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   await sleep(800);
   await ev(`document.getElementById('ndbExit').click()`);
-  ok(await until(`document.getElementById('ndbBox')?.hidden === true`, 6000), 'EXIT NDB closes the box');
+  ok(await until(`document.getElementById('ndbView')?.hidden === true`, 6000), 'EXIT NDB closes the map');
   ok(await until(`/7[.,]074/.test(document.getElementById('mFreq')?.textContent || '')`, 6000), `the dial is back: ${await ev(`document.getElementById('mFreq')?.textContent`)}`);
-  ok(await ev(`document.getElementById('mZoomIn')?.disabled === false`), 'zoom is given back');
+  ok(await ev(`document.getElementById('mZoomIn')?.disabled === false && document.getElementById('app').inert === false`), 'zoom and the page are given back');
 } catch (e) { ok(false, `driver: ${e}`); }
 finally {
   try { wsC?.close(); } catch {}

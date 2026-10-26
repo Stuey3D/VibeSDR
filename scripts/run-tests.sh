@@ -511,6 +511,10 @@ if node --no-warnings scripts/test_adsb_report.ts; then pass=$((pass+1)); else f
 if node --no-warnings scripts/test_capture_and_rate_guard.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and the map's live list (adsbList.ts): row text, nearest first without shuffling, clear of the zoom stack.
 if node --no-warnings scripts/test_adsb_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 NDB's map layer (web/mapkit/ndblayer.js): its generated copy, the bars rule, and the rings it SHARES with the ADS-B
+#     map (Stuart: "same rings, for nm range") — the ladder, NM, four labels a ring. ADS-B's own layer test runs beside it.
+if node --no-warnings scripts/test_ndb_layer.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_adsb_layer.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADS-B FURTHEST key: the web map and the app map page name the same aircraft (one rule, two readers).
 if npx tsx scripts/test_adsb_furthest.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and V12 aircraft data on the clients (adsbInfo.ts): the adsb_info sanitiser + store, and the web list's rows with it.

@@ -1,8 +1,9 @@
 // test-server-ndb.mjs — V12 NDB mode through the REAL server: a fake rtl_tcp (auto direct sampling, so the RTL reaches LF)
 // replaying a synthetic 2.4 MS/s clip of the beacon band (`test-ndb --write-clip`: WOD on 352.0 kHz, CAM on 333.0 kHz), a
 // spectrum socket, and the contract of docs/v12/NDB-SKIMMER.md: the capability (ndb, ndbLo/ndbHi, modes), entering, the
-// radio on the band, both beacons identified and named from the published list, a tap inside the band moving only the
-// VFO, a tune outside refused, Find NDB, the stats, and leaving with the receiver given back exactly as found. Also: an
+// radio on the band, both beacons identified and named from the published list, the
+// radio held there (a tune ignored — ADS-B's shape), the waterfall at 1 fps, confidence on every reading, Find NDB, the
+// stats, and leaving with the receiver given back exactly as found. Also: an
 // RTL WITHOUT direct sampling offers no NDB at all (no dead control). Silent: no audio socket is opened.
 //   VIBESERVER_BIN=…/vibeserver VIBE_NDB_CLIP=…/clip.u8 node scripts/test-server-ndb.mjs
 import net from 'node:net';
@@ -34,7 +35,7 @@ async function server(autoDs) {
   }));
   const rtlPort = await freePort(), port = await freePort();
   const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000',
-                                       '--hf', CLIP, '--hf-centre', '362750'], { stdio: 'ignore' });
+                                       '--hf', CLIP, '--hf-centre', '362750', '--tones', '0'], { stdio: 'ignore' });
   await sleep(400);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
   const log = fs.openSync(path.join(dir, 'server.log'), 'w');
@@ -91,12 +92,14 @@ try {
   ok(last && last.identified === 2 && last.beacons.filter((b) => b.ident).length === 2, `nothing else identified (${last && last.identified})`);
   ok(last && Array.isArray(last.log) && last.log.some((e) => e.ident === 'WOD'), 'the heard log has WOD');
 
-  ws.send(JSON.stringify({ type: 'tune', frequency: 352000 }));
-  ok(await until(() => lastCfg && Math.abs(lastCfg.vfo - 352000) < 1 && Math.abs(lastCfg.centerFreq - 362750) < 1, 4000),
-     `a tap on WOD moves only the VFO: vfo ${lastCfg && lastCfg.vfo}, radio ${lastCfg && lastCfg.centerFreq}`);
+  // ★ ADS-B's shape (2026-10-27): the receiver is the mode's — a tune is ignored, the radio stays on the band
   ws.send(JSON.stringify({ type: 'tune', frequency: 7074000 }));
-  ok(await until(() => !!err, 3000), `a tune outside the band is refused: ${err}`);
-
+  await sleep(1500);
+  ok(lastCfg && Math.abs(lastCfg.centerFreq - 362750) < 1, `a tune is ignored: radio still ${lastCfg && lastCfg.centerFreq}`);
+  const logTxt = fs.readFileSync(path.join(s.dir, 'server.log'), 'utf8');
+  ok(/engine fft rate: 1\.0 fps/.test(logTxt) || /fft rate [\d.]+ -> 1\.0 fps/.test(logTxt), 'the waterfall is throttled to 1 fps behind the map');
+  ok(/tune ignored — NDB owns the receiver/.test(logTxt), 'the server says why the tune was ignored');
+  ok(last && last.copy.length > 0 && last.copy.every((c) => ['high', 'medium', 'low', 'poor'].includes(c.q)), `every live reading carries its confidence: ${last && last.copy.slice(-3).map((c) => c.text + '/' + c.q).join(' ')}`);
   ws.send(JSON.stringify({ type: 'ndb_find', q: 'woodley', limit: 10 }));
   ok(await until(() => !!found, 3000) && found.list.some((f) => f.ident === 'WOD' && f.heard === true), 'Find NDB finds Woodley, marked heard');
   ws.send(JSON.stringify({ type: 'ndb_stats' }));
