@@ -11,7 +11,8 @@ us a significant boost"*.
 
 **Status: working on real signals.** Ten minutes of 40 m off Stuart's UberSDR at 16:54 UTC on a Monday held two JTTY
 stations, both decoded: **F4ELU/QRP** ("CQ F4ELU/QRP CQ", twice, at 7.0913735 MHz — PSKReporter has F4ELU/QRP in JTTY at
-7091370 in the same hour) and **DK7OG** (a 30-frame free-text CQ, "CQ DK7OG JO62 … PSE K"). The sample recording the
+7091370 in the same hour) and **DK7OG** (a 30-frame free-text CQ, "CQ DK7OG JO62 … PSE K"). On 20 m, **N4YSA** calling DL5AXI and a frame
+of **RN4AQ**, each within a few hertz of its PSKReporter report (§3). The sample recording the
 WSJT-X 3.2 user guide ships decodes whole. No false frame in ten hours of noise, an hour of real FT8/FT4 or ten minutes of
 strong RTTY.
 
@@ -136,8 +137,21 @@ False frames: **0** in 10 h of white noise (855 250 candidates), 0 in 60 min (th
 (20 559 candidates), 0 in 52 min of real FT8/FT4 from the UberSDR (90 803 candidates).
 
 Real: the WSJT-X sample (`samples/JTTY/260807_134110.wav`) → "RAN ALL NIGHT ON BAND NOISE - NO FALSE DECODES!" (10/10
-frames). 40 m off air (above). 20 m, the same ten minutes: one low-confidence TEXT5 frame ("4AQ L", 1088 Hz) we cannot
-verify; PSKReporter's 20 m JTTY reports in that window were US stations heard by US receivers. 15 m: nothing.
+frames). Off air, 2 × 10 minutes on 40 m and 20 m (16:54 and 17:06 UTC, Monday), every decode checked against
+PSKReporter's JTTY reports for the same window (`~/VibeSDR-test-audio/jtty/pskreporter_*.xml`):
+
+| Window | Decoded here | PSKReporter senders in the window | Not decoded — why |
+| --- | --- | --- | --- |
+| 40 m 16:54 | DK7OG (30-frame CQ, 20 frames, 7 by continuation), F4ELU/QRP ×2 | DK7OG, F4ELU/QRP, M3KXZ | M3KXZ: no JTTY energy in our audio |
+| 20 m 16:54 | RN4AQ — one TEXT5 frame "4AQ L" at 1088 Hz (RN4AQ reported at 14091088) | RN4AQ, S59V, M3KXZ, K8DLD | S59V: nothing at 2151 Hz here; M3KXZ, K8DLD: only heard in the US |
+| 20 m 17:06 | N4YSA: "YSA FM08", "DL5AXI DE N4 …" (N4YSA reported at 14091014) | N4YSA, DL5AXI, F1ABL, G1DLC, K8DLD | DL5AXI −18 dB even in Scotland; F1ABL −10 dB in Ireland; the others not to the UK |
+| 40 m 17:06 | — | HB9DBK (−12/−14 dB in Ireland/Scotland) | too weak here |
+| 15 m 16:54 | — | — | — |
+
+Every frame we showed was a real JTTY transmission (frequency within a few hertz of the sender's report) — no false
+frame on the air either. N4YSA's frames were −12 to −16 dB here, so a frame or two of each over was lost; the "…" marks
+where. One thing seen: a single loud impulse on one sync symbol gives a sync score of 11 — harmless (the CRC and the
+gates throw it out) but it costs a candidate; a per-symbol cap on the score is an easy saving for impulsive sites.
 
 **CPU** (12 kHz audio, M5 Pro, one core): a busy passband (six stations, −10 dB) **0.74 %** NEON / 1.22 % scalar; white
 noise 0.47 % / 0.76 % (NEON 1.6× the scalar). Pi 2 (900 MHz Cortex-A7) **estimated, not measured**: ~15–25× slower per

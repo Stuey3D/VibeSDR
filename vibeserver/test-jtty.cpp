@@ -367,6 +367,8 @@ int main() {
             { "wsjtx_sample_260807_134110.wav", { "RAN ALL NIGHT ON BAND NOISE - NO FALSE DECODES!" }, "the WSJT-X 3.2 user guide's sample recording, whole" },
             { "jtty_7090000_20261026T1653.wav", { "CQ F4ELU/QRP CQ", "CQ DK7OG JO62" },
               "40 m off air: F4ELU/QRP (PSKReporter: JTTY at 7.091370) and DK7OG calling CQ" },
+            { "jtty_14090000_20261026T1706.wav", { "DL5AXI DE N4", "YSA FM08" },
+              "20 m off air: N4YSA (FM08) calling DL5AXI (PSKReporter: N4YSA JTTY at 14.091014)" },
         };
         for (auto& r : reals) {
             std::vector<float> x;
