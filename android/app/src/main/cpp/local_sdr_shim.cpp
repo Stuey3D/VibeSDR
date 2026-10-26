@@ -221,9 +221,7 @@ namespace {
  *  for all servers"). The rule and its reasons live in vibe_thread_layout.h; it is applied HERE, in the code every
  *  server shares, at library load — before any RxPipeline or DabService starts, and in the same process as the
  *  setup page's benchmark, which therefore measures the layout that runs. The owner's own environment wins. */
-#if !defined(_WIN32)
 [[maybe_unused]] const bool g_vsSplitDefault = vibe::vibeApplyDefaultThreadLayout();
-#endif
 
 // V5: the on-device DSP is now the clean-room GPL-free engine. These local
 // aliases replace the old SDR++ dsp:: sample types so the decoder/audio feed
@@ -30162,7 +30160,7 @@ void LocalSdrShim::stopLocked() {
     //   can be handed straight to the next socket opened — so the fd is closed once nobody waits on it.
     STOP_STAGE("the hand-off thread");
     joinSafely(impl->handoffThread, "hand-off thread");
-    if (impl->handoffFd >= 0) { vibesock::close(impl->handoffFd); impl->handoffFd = -1; }
+    if (impl->handoffFd >= 0) { vibe::fdListenClose(impl->handoffFd); impl->handoffFd = -1; }
     // ★ Leave no stale socket behind: the next process to start would bind() onto a file nothing
     //   is listening on, and every hand-off to it would fail with "connection refused".
     if (!impl->handoffPath.empty()) ::unlink(impl->handoffPath.c_str());

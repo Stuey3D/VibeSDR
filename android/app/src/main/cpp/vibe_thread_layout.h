@@ -17,7 +17,8 @@
 //   and by the standalone tools (vibeserver-bench, dab-switch), which may not link the shim's object at all, so
 //   that a bench measures the layout that is served.
 #pragma once
-#if !defined(_WIN32)
+// ★ Windows too since the port (2026-10-26): setenv and sysconf(_SC_NPROCESSORS_CONF) are answered by
+//   vibeserver/windows/compat, so "every server" now includes vibeserver.exe.
 #include <cstdlib>
 #include <thread>
 #include <unistd.h>
@@ -40,4 +41,3 @@ inline bool vibeApplyDefaultThreadLayout() {
     return true;
 }
 } // namespace vibe
-#endif

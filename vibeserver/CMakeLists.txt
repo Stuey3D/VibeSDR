@@ -768,6 +768,11 @@ if(WIN32)
   target_compile_definitions(vibe-usbprobe PRIVATE VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}")
   target_link_libraries(vibe-usbprobe PRIVATE "${RTLSDR_LIB}" "${USB_LIB}" newdev version Threads::Threads)
   vibe_win_resources(vibe-usbprobe "VibeServer USB driver probe" "${CMAKE_CURRENT_SOURCE_DIR}/windows/usbprobe.manifest")
+  # ★★ The front door's hand-off on Windows (WSADuplicateSocketW over AF_UNIX), tested as the POSIX one is:
+  #    by the CONNECTION surviving, not by a handle arriving.
+  add_executable(test-fd-passing-win "${CMAKE_CURRENT_SOURCE_DIR}/windows/test/test-fd-passing-win.cpp"
+                                     "${CPP_DIR}/fd_passing.cpp")
+  target_include_directories(test-fd-passing-win PRIVATE "${CPP_DIR}")
 endif()
 
 # ★★ THE RADIO-LIST API, UNDER TEST. Unlike the tests in scripts/run-tests.sh — which compile a

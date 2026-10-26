@@ -5,120 +5,167 @@
 
 #ifdef _WIN32
 /* ★★★ WINDOWS: THE SAME HAND-OFF WITHOUT SCM_RIGHTS (docs/WINDOWS-PORT-PLAN.md §4.2).
- *  Windows has AF_UNIX (10 1803+) but cannot carry a descriptor over it. What it has instead is
- *  WSADuplicateSocketW: the OWNER of a socket fills a WSAPROTOCOL_INFOW for one named target process,
- *  and that process — and only it — turns the blob back into a live socket with WSASocketW. The TCP
- *  connection, its unread bytes (the request the front door MSG_PEEK'd) and its state carry over, as
- *  with SCM_RIGHTS.
- *  ★★ So the conversation gains one step: the RECEIVER speaks first, with its process id, because the
- *     sender cannot duplicate for a process it cannot name.
- *        receiver → sender   4 bytes  its pid (little-endian DWORD)
+ *  Windows cannot carry a descriptor between processes. What it has instead is WSADuplicateSocketW: the
+ *  OWNER of a socket fills a WSAPROTOCOL_INFOW for one named target process, and that process — and only
+ *  it — turns the blob back into a live socket with WSASocketW. The TCP connection, its unread bytes (the
+ *  request the front door MSG_PEEK'd) and its state carry over, exactly as with SCM_RIGHTS.
+ *  ★★ The channel is a NAMED PIPE, not AF_UNIX: pipes exist on every Windows the server runs on (AF_UNIX
+ *     only from 10 1803), are what Windows' own services use for this, and can be tested under Wine,
+ *     which has no AF_UNIX. `path` (the POSIX socket path) names the pipe, so callers are unchanged.
+ *  ★★ The conversation gains one step — the RECEIVER speaks first, because the sender cannot duplicate
+ *     for a process it cannot name:
+ *        receiver → sender   4 bytes  its pid (little-endian)
  *        sender   → receiver sizeof(WSAPROTOCOL_INFOW) bytes
  *        receiver → sender   'K' once the socket exists — only then may the sender drop its copy
- *  ★ The same three functions and the same meaning, so the front door and the radios call them
- *    unchanged. The socket file lives where the POSIX one does; a stale one is removed before bind. */
-#include <afunix.h>
+ *  ★★ LOCAL ONLY AND NOT SQUATTABLE: PIPE_REJECT_REMOTE_CLIENTS (a pipe is otherwise reachable over SMB),
+ *     and FILE_FLAG_FIRST_PIPE_INSTANCE, so a process that created the name first makes fdListen FAIL
+ *     rather than receive our listeners' connections.
+ *  ★ Every wait is bounded (2 s), as on POSIX: a dead peer must never hang the front door. */
+#include <map>
+#include <mutex>
 
 namespace vibe {
 namespace {
 
-bool fillAddr(sockaddr_un& a, const std::string& path, std::string& err) {
-    if (path.size() >= sizeof(a.sun_path)) { err = "socket path too long: " + path; return false; }
-    memset(&a, 0, sizeof a);
-    a.sun_family = AF_UNIX;
-    memcpy(a.sun_path, path.c_str(), path.size());
-    return true;
+std::wstring pipeName(const std::string& path) {
+    std::wstring n = L"\\\\.\\pipe\\vibeserver-";
+    for (unsigned char c : path) n += (wchar_t)(isalnum(c) || c == '.' || c == '-' ? c : '_');
+    return n;
 }
-std::string wsaErr(const char* what) {
-    return std::string(what) + ": Winsock error " + std::to_string(WSAGetLastError());
+std::string winErr(const char* what) {
+    return std::string(what) + ": Windows error " + std::to_string(GetLastError());
 }
-/** Exactly n bytes, or false — bounded by `ms` per wait so a dead peer cannot hang the front door. */
-bool readAll(SOCKET s, char* p, int n, int ms) {
+
+/** One overlapped read or write of exactly n bytes, or false after `ms`. */
+bool pipeIo(HANDLE h, bool write, void* p, DWORD n, DWORD ms) {
+    char* b = (char*)p;
     while (n > 0) {
-        WSAPOLLFD pf{}; pf.fd = s; pf.events = POLLRDNORM;
-        if (WSAPoll(&pf, 1, ms) <= 0) return false;
-        const int r = ::recv(s, p, n, 0);
-        if (r <= 0) return false;
-        p += r; n -= r;
+        OVERLAPPED ov{}; ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        DWORD got = 0;
+        BOOL ok = write ? WriteFile(h, b, n, &got, &ov) : ReadFile(h, b, n, &got, &ov);
+        if (!ok && GetLastError() == ERROR_IO_PENDING) {
+            if (WaitForSingleObject(ov.hEvent, ms) != WAIT_OBJECT_0) { CancelIoEx(h, &ov); GetOverlappedResult(h, &ov, &got, TRUE); CloseHandle(ov.hEvent); return false; }
+            ok = GetOverlappedResult(h, &ov, &got, FALSE);
+        }
+        CloseHandle(ov.hEvent);
+        if (!ok || got == 0) return false;
+        b += got; n -= got;
     }
     return true;
 }
-bool writeAll(SOCKET s, const char* p, int n) {
-    while (n > 0) {
-        const int r = ::send(s, p, n, 0);
-        if (r <= 0) return false;
-        p += r; n -= r;
-    }
-    return true;
+
+/** A listening pipe: the instance waiting for the next sender. */
+struct PipeListener {
+    std::wstring name;
+    HANDLE       inst = INVALID_HANDLE_VALUE;
+    OVERLAPPED   ov{};
+    bool         pending = false;   // ConnectNamedPipe is in flight on `inst`
+};
+std::mutex g_mtx;
+std::map<int, PipeListener*> g_listeners;
+int g_nextId = 0x7F000000;          // ★ far from any socket handle value, so the two can never be confused
+
+HANDLE newInstance(const std::wstring& name, bool first) {
+    return CreateNamedPipeW(name.c_str(),
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | (first ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+        PIPE_UNLIMITED_INSTANCES, 4096, 4096, 0, nullptr);
+}
+bool arm(PipeListener* L) {
+    if (L->ov.hEvent == nullptr) L->ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    ResetEvent(L->ov.hEvent);
+    if (ConnectNamedPipe(L->inst, &L->ov)) { SetEvent(L->ov.hEvent); L->pending = false; return true; }
+    const DWORD e = GetLastError();
+    if (e == ERROR_IO_PENDING) { L->pending = true; return true; }
+    if (e == ERROR_PIPE_CONNECTED) { SetEvent(L->ov.hEvent); L->pending = false; return true; }
+    return false;
 }
 
 }  // namespace
 
 bool sendFdTo(const std::string& path, int fd, std::string& err) {
-    sockaddr_un addr;
-    if (!fillAddr(addr, path, err)) return false;
-    SOCKET s = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (s == INVALID_SOCKET) { err = wsaErr("socket(AF_UNIX)"); return false; }
-    if (::connect(s, (sockaddr*)&addr, sizeof addr) != 0) {
-        err = wsaErr(("connect " + path).c_str()); closesocket(s); return false;
+    const std::wstring name = pipeName(path);
+    HANDLE h = INVALID_HANDLE_VALUE;
+    for (int i = 0; i < 2 && h == INVALID_HANDLE_VALUE; ++i) {
+        h = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        if (h == INVALID_HANDLE_VALUE) {
+            if (GetLastError() != ERROR_PIPE_BUSY || !WaitNamedPipeW(name.c_str(), 2000)) break;
+        }
     }
+    if (h == INVALID_HANDLE_VALUE) { err = winErr(("connect " + path).c_str()); return false; }
     bool ok = false;
     unsigned char pidb[4];
-    if (!readAll(s, (char*)pidb, 4, 2000)) {
-        err = "the radio did not say who it is (no pid from " + path + ")";
+    if (!pipeIo(h, false, pidb, 4, 2000)) {
+        err = "the radio did not say who it is (no pid on " + path + ")";
     } else {
         const DWORD pid = (DWORD)pidb[0] | ((DWORD)pidb[1] << 8) | ((DWORD)pidb[2] << 16) | ((DWORD)pidb[3] << 24);
         WSAPROTOCOL_INFOW info;
         if (WSADuplicateSocketW((SOCKET)(intptr_t)fd, pid, &info) != 0) {
-            err = wsaErr("WSADuplicateSocketW");
-        } else if (!writeAll(s, (const char*)&info, (int)sizeof info)) {
-            err = wsaErr("send(protocol info)");
+            err = "WSADuplicateSocketW: Winsock error " + std::to_string(WSAGetLastError());
+        } else if (!pipeIo(h, true, &info, (DWORD)sizeof info, 2000)) {
+            err = winErr("send(protocol info)");
         } else {
-            // ★★★ WAIT FOR THE FAR SIDE TO TAKE IT BEFORE CLOSING — as on POSIX, and more so here: the
-            //     duplicate exists only once the receiver has called WSASocketW.
+            // ★★★ WAIT FOR THE FAR SIDE TO TAKE IT BEFORE CLOSING — the duplicate exists only once the
+            //     receiver has called WSASocketW; dropping our copy sooner would end the connection.
             char ack = 0;
-            ok = readAll(s, &ack, 1, 2000) && ack == 'K';
+            ok = pipeIo(h, false, &ack, 1, 2000) && ack == 'K';
             if (!ok) err = "the radio did not confirm it took the connection";
         }
     }
-    closesocket(s);
+    CloseHandle(h);
     return ok;
 }
 
 int fdListen(const std::string& path, std::string& err) {
-    sockaddr_un addr;
-    if (!fillAddr(addr, path, err)) return -1;
-    ::DeleteFileA(path.c_str());   // ★ a killed process leaves its socket file behind
-    SOCKET s = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (s == INVALID_SOCKET) { err = wsaErr("socket(AF_UNIX)"); return -1; }
-    if (::bind(s, (sockaddr*)&addr, sizeof addr) != 0) {
-        err = wsaErr(("bind " + path).c_str()); closesocket(s); return -1;
+    auto* L = new PipeListener();
+    L->name = pipeName(path);
+    L->inst = newInstance(L->name, true);
+    if (L->inst == INVALID_HANDLE_VALUE) {
+        err = winErr(("CreateNamedPipe " + path + " (is another copy of this radio running?)").c_str());
+        delete L; return -1;
     }
-    if (::listen(s, 16) != 0) { err = wsaErr("listen"); closesocket(s); return -1; }
-    return (int)s;
+    if (!arm(L)) { err = winErr("ConnectNamedPipe"); CloseHandle(L->inst); delete L; return -1; }
+    std::lock_guard<std::mutex> lk(g_mtx);
+    const int id = ++g_nextId;
+    g_listeners[id] = L;
+    return id;
 }
 
 int fdAccept(int listenFd, int timeoutMs) {
-    WSAPOLLFD p{}; p.fd = (SOCKET)(intptr_t)listenFd; p.events = POLLRDNORM;
-    if (WSAPoll(&p, 1, timeoutMs) <= 0) return -1;
-    SOCKET c = ::accept((SOCKET)(intptr_t)listenFd, nullptr, nullptr);
-    if (c == INVALID_SOCKET) return -1;
+    PipeListener* L = nullptr;
+    { std::lock_guard<std::mutex> lk(g_mtx); auto it = g_listeners.find(listenFd); if (it != g_listeners.end()) L = it->second; }
+    if (!L) return -1;
+    if (WaitForSingleObject(L->ov.hEvent, timeoutMs < 0 ? INFINITE : (DWORD)timeoutMs) != WAIT_OBJECT_0) return -1;
+    if (L->pending) { DWORD x = 0; if (!GetOverlappedResult(L->inst, &L->ov, &x, FALSE)) { /* a sender that gave up */ } }
+    HANDLE c = L->inst;
+    // ★ The next sender gets a fresh instance at once, before this one's conversation even starts.
+    L->inst = newInstance(L->name, false);
+    if (L->inst != INVALID_HANDLE_VALUE) arm(L); else ResetEvent(L->ov.hEvent);
     int got = -1;
     const DWORD pid = GetCurrentProcessId();
-    const unsigned char pidb[4] = { (unsigned char)pid, (unsigned char)(pid >> 8),
-                                    (unsigned char)(pid >> 16), (unsigned char)(pid >> 24) };
+    unsigned char pidb[4] = { (unsigned char)pid, (unsigned char)(pid >> 8), (unsigned char)(pid >> 16), (unsigned char)(pid >> 24) };
     WSAPROTOCOL_INFOW info;
-    if (writeAll(c, (const char*)pidb, 4) && readAll(c, (char*)&info, (int)sizeof info, 2000)) {
-        SOCKET ns = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0,
-                               WSA_FLAG_OVERLAPPED);
+    if (pipeIo(c, true, pidb, 4, 2000) && pipeIo(c, false, &info, (DWORD)sizeof info, 2000)) {
+        SOCKET ns = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, WSA_FLAG_OVERLAPPED);
         if (ns != INVALID_SOCKET) {
             got = (int)ns;
-            const char ack = 'K';
-            (void)writeAll(c, &ack, 1);
+            char ack = 'K';
+            (void)pipeIo(c, true, &ack, 1, 2000);
+            FlushFileBuffers(c);
         }
     }
-    closesocket(c);
+    DisconnectNamedPipe(c);
+    CloseHandle(c);
     return got;
+}
+
+void fdListenClose(int listenFd) {
+    PipeListener* L = nullptr;
+    { std::lock_guard<std::mutex> lk(g_mtx); auto it = g_listeners.find(listenFd); if (it != g_listeners.end()) { L = it->second; g_listeners.erase(it); } }
+    if (!L) return;
+    if (L->inst != INVALID_HANDLE_VALUE) { CancelIoEx(L->inst, &L->ov); CloseHandle(L->inst); }
+    if (L->ov.hEvent) CloseHandle(L->ov.hEvent);
+    delete L;
 }
 
 }  // namespace vibe
@@ -267,6 +314,8 @@ int fdAccept(int listenFd, int timeoutMs) {
     ::close(c);
     return got;
 }
+
+void fdListenClose(int listenFd) { if (listenFd >= 0) ::close(listenFd); }
 
 }  // namespace vibe
 

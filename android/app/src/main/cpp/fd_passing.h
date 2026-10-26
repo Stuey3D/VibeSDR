@@ -1,4 +1,4 @@
-// fd_passing.h — hand a live TCP connection to another process, over a unix socket.
+// fd_passing.h — hand a live TCP connection to another process, over a unix socket (a named pipe on Windows).
 //
 // ★★★ WHY, AND WHY NOT A PROXY. Several radios on one machine means several processes, and an
 //     owner should have to forward ONE port from their router, not one per radio. The obvious
@@ -35,5 +35,9 @@ int fdListen(const std::string& path, std::string& err);
 
 /** Wait for one descriptor on `listenFd`. Returns the received fd, or -1 on error/timeout. */
 int fdAccept(int listenFd, int timeoutMs);
+
+/** Stop listening. ★ Its own call because on Windows the listener is a named pipe, not a socket
+ *  (fd_passing.cpp), so neither close() nor closesocket() is the right way to let it go. */
+void fdListenClose(int listenFd);
 
 }  // namespace vibe

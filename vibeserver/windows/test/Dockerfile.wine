@@ -1,0 +1,8 @@
+# ★ The Wine test rig for the Windows build (scripts/build-windows.sh --test): amd64 Debian 12 + wine 8.0, run
+#   through qemu on an arm64 Mac (Colima binfmt) — slow, but it RUNS the real .exe files: the unit tests and a
+#   smoke test of vibeserver.exe serving the web client. Python is for the rtl_tcp stand-in; binutils for strings.
+# ★ It is a test rig, not Windows: no USB, so nothing here says anything about drivers (docs/WINDOWS-M1-TEST.md).
+FROM debian:bookworm-slim
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends wine64 wine curl ca-certificates procps python3-minimal binutils && rm -rf /var/lib/apt/lists/*
+ENV WINEDEBUG=-all WINEPREFIX=/root/.wine
+RUN wine64 wineboot --init 2>/dev/null; true

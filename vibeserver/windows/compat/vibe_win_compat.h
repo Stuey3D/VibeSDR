@@ -195,6 +195,12 @@ static inline char* realpath(const char* path, char* resolved) {
     return r;
 }
 static inline int fsync(int fd) { return _commit(fd); }
+/* ★★ access(): the UCRT accepts only 0/2/4/6 and REJECTS X_OK (1) as an invalid argument — so the POSIX
+ *    `access(dir, W_OK | X_OK)` ("can I create files in this folder?") was false for every folder, and the
+ *    front door decided it had nowhere to put its hand-off endpoints. On Windows, being able to enter a
+ *    folder is not a separate permission an owner sets; X_OK is dropped and the rest asked as written. */
+static inline int vibe_access(const char* p, int mode) { return _access(p, mode & 06); }
+#define access(p, m) vibe_access((p), (m))
 #ifndef S_ISLNK
 #define S_ISLNK(m) 0
 #endif
@@ -244,6 +250,12 @@ static inline int vibe_rename(const char* from, const char* to) {
           : (e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION) ? EACCES : EIO;
     return -1;
 }
+#ifdef __cplusplus
+/* ★ <filesystem> declares std::filesystem::rename(path, path): it must be parsed BEFORE the macro, or the
+ *   macro rewrites its declaration. Included here first; its own guard keeps every later include a no-op. */
+#include <cstdio>
+#include <filesystem>
+#endif
 #define rename(a, b) vibe_rename((a), (b))
 #ifdef __cplusplus
 namespace std { using ::vibe_rename; }   /* ★ std::rename(a, b) becomes std::vibe_rename(a, b) */
