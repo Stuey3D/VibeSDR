@@ -9,7 +9,7 @@
 //    heard. Kept 60 min after last heard (an anchored class A reports every 3 min, its name every 6), at most 1000 rows.
 #pragma once
 #include "vibe_ais.h"
-#include "vibe_station_log.h"
+#include "vibe_station_sink.h"
 #include "vibe_adsb_capture.h"     // vibeadsb::CaptureMeter — the same live "capture N %" as ADS-B and ISM
 
 #include <atomic>

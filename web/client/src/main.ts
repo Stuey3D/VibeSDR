@@ -14,6 +14,7 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand } from './ism';
+import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -762,6 +763,8 @@ async function loadAudioPolicy(httpBase: string) {
   dialModeNow = 'exclusive';   // ★ a new receiver's dial is unknown until it says
   adsbCap = null;              // ★ an older server (or no answer) draws no ADS-B control
   ismCap = null;               // ★ …nor an ISM one
+  aisCap = null;               // ★ …nor an AIS one
+  aprsCap = false;             // ★ …nor an APRS decoder
   cwCap = false;               // ★ …nor a CW decoder
   landingStepDone = false;
   firstConfigDone = false;
@@ -797,6 +800,10 @@ async function loadAudioPolicy(httpBase: string) {
     dabCapable = j.dab === true;
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
+    aisReadCap(j);               // ★ AIS (V12): the same three states — absent where the radio cannot reach 162 MHz
+    aprsCap = j.aprs === true;   // ★ APRS (V12): this server's own decoder on the listener's NFM / SSB audio
+    if (typeof j.aprsHz === 'number' && j.aprsHz > 0) aprsHz = j.aprsHz;
+    { const b = document.querySelector('#decodersPanel [data-dec="aprs"]') as HTMLElement | null; if (b) b.hidden = !aprsCap || blockedModes.has('aprs'); }
     cwCap = j.cw === true;       // ★ CW (V12): this server's own decoder and skimmer
     { const b = document.querySelector('#decodersPanel [data-dec="cw"]') as HTMLElement | null;
       if (b) b.hidden = !cwCap || blockedModes.has('cw'); }
@@ -1635,6 +1642,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAdsb: (r) => onAdsbReport(r),
     onIsm: (r) => onIsmReport(r),
     onIsmError: (why: string) => { showPill(why, 7000); if (ismOn && !ismReport) ismUiOff(); },
+    onAis: (r) => onAisReport(r),
+    onAisError: (why: string) => { showPill(why, 7000); if (aisOn && !aisReport) aisUiOff(); },
+    onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     onDab: (d: DabState) => {
       if (!d) {
@@ -1861,7 +1871,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'aprs' && !aprsCap);
       }
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
        *  DAB never produces a spot, so both buttons were dead weight there (Stuart, 2026-09-17).
@@ -2492,7 +2502,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onStatus: (s) => { if (s === 'error') setStatus('error', 'audio'); },
   });
   applyRecBuf();
-  if (adsbOn || ismOn) audio.setQuiet(true);   // ★ a reconnect inside ADS-B / ISM stays quiet (syncAudioQuiet)
+  if (adsbOn || ismOn || aisOn) audio.setQuiet(true);   // ★ a reconnect inside ADS-B / ISM / AIS stays quiet (syncAudioQuiet)
   // ★★★ TELL IT WHETHER THERE IS ANYWHERE TO FALL BACK TO. With the owner's policy OFF the
   //     server REFUSES a socket opened without `codec=opus`, so 'falling back' swapped a
   //     struggling Opus stream for no stream at all — silently. The player keeps rebuilding
@@ -2515,7 +2525,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         onStatus: (st) => { if (st === 'error') setStatus('error', 'audio'); },
       });
       applyRecBuf();
-      if (adsbOn || ismOn) audio.setQuiet(true);
+      if (adsbOn || ismOn || aisOn) audio.setQuiet(true);
       audio.start().catch((e) => console.error('audio restart failed', e));
     };
   }
@@ -3306,7 +3316,7 @@ function renderFrame(frameTs: number) {
   if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
   /* ★ ADS-B's map covers the page as the START screen does (opaque, full-screen): nothing behind it is
    *  drawn, and rows still arrive (1 fps in ADS-B) so the picture is current the moment the map goes. */
-  const drawWf = !NO_WF && !startScreenUp && !adsbViewUp;
+  const drawWf = !NO_WF && !startScreenUp && !adsbViewUp && !trackViewUp();
   if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick(frameTs));   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen and ADS-B's full-screen map
@@ -3330,7 +3340,7 @@ function renderFrame(frameTs: number) {
   // stale span while the waterfall drew the new one (Stuart 2026-07-24 — "wrong but back"). Keep the
   // VFO/rf-centre terms so tuning still forces a redraw.
   const key = `${spec.frequency}|${spec.rfCenterHz()}|${wf.spanHz}|${wf.displayCenterHz()}|${window.innerWidth}`;
-  if (key !== lastViewKey && !startScreenUp && !adsbViewUp) {
+  if (key !== lastViewKey && !startScreenUp && !adsbViewUp && !trackViewUp()) {
     lastViewKey = key;
     guard('web-render', 'scale', drawScale);
     guard('web-render', 'bands', drawBands);
@@ -7717,7 +7727,7 @@ function adsbReadCap(j: any) {
 /** ★ ADS-B and ISM have nothing to hear: the page lets go of the audio output while either is on (audio.ts setQuiet —
  *  the AirPods followed a page "playing" silence). One rule for both, so a hand-over between them never plays a gap. */
 function syncAudioQuiet() {
-  const q = adsbOn || ismOn;
+  const q = adsbOn || ismOn || aisOn;
   if (!audio || audio.quiet === q) return;
   audio.setQuiet(q);
   updateMediaSession();
@@ -8020,6 +8030,98 @@ function onIsmReport(r: IsmReport | null) {
   const n = ismNeighbours();
   ismBox?.update(r, { down: !!n.prev, up: !!n.next });
   if (bandChanged) { syncDialTips(); renderFreq(); }
+}
+
+/* ★★★ AIS MODE (V12, docs/v12/AIS-APRS.md) — ADS-B's shape on the page: the map IS the mode. The server puts the whole radio
+ *  on 162.000 MHz and decodes both AIS channels; the page covers itself with the ship map and its live list (tracks.ts
+ *  TrackView — the markers, glide, a tapped ship's track and its card are web/mapkit/tracklayer.js). Nothing to tune: the
+ *  arrows, zoom and filter are held, and the server ignores them. ★ Offered only where vibeserver.json says so: `ais` true
+ *  (live) / false (greyed, `aisWhy` on a tap) / absent (a radio that cannot reach 162 MHz, the HF+ — no control at all). */
+let aisCap: { ok: boolean; why: string } | null = null;
+let aisOn = false;
+let aisReport: AisReport | null = null;
+let aisView: TrackView | null = null;
+const aisTrailWait = new Map<number, (pts: [number, number][]) => void>();
+function trackViewUp(): boolean { return !!(aisView?.open || aprsView?.open); }
+function aisReadCap(j: any) {
+  if (j?.ais === true) aisCap = { ok: true, why: '' };
+  else if (j?.ais === false) {
+    const why = typeof j.aisWhy === 'string' ? j.aisWhy.trim().slice(0, 200) : '';
+    aisCap = { ok: false, why: why || 'AIS is not available on this receiver' };
+  } else aisCap = null;
+}
+function aisUiOn() {
+  aisOn = true;
+  syncAudioQuiet();
+  if (spec) spec.aisHeld = true;
+  closePanels();
+  if (!aisView) aisView = new TrackView({
+    title: 'AIS · 161.975 + 162.025 MHz', exitLabel: 'EXIT AIS', listTitle: 'SHIPS', onExit: () => aisSetMode(false),
+    icon: aisIcon, label: aisName, card: (v) => aisCard(v, myPos()),
+    trail: (key, done) => { const m = Number(key); if (!(m > 0) || !spec) { done([]); return; } aisTrailWait.set(m, done); spec.aisTrail(m); },
+  });
+  aisView.show(myPos());
+  aisRender();
+}
+function aisUiOff() {
+  aisOn = false;
+  syncAudioQuiet();
+  aisReport = null;
+  if (spec) spec.aisHeld = false;
+  aisView?.hide();
+  aisTrailWait.clear();
+  renderFreq();
+}
+function aisSetMode(on: boolean) {
+  if (on) {
+    if (aisCap && !aisCap.ok) { showPill(aisCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.ais(true); return; }   // ★ ask before tuning: spec says why
+    if (dabOn) { dabRestore = null; dabOn = false; dabState = null; syncStereoLight(); wf?.applySettings({ minRangeDb: 30 }); dabUiOff(); dabSetPane(dabPane); }
+    audio?.holdHealing(6000);
+    aisUiOn();
+    spec?.ais(true);
+  } else {
+    audio?.holdHealing(6000);
+    spec?.ais(false);
+    aisUiOff();
+  }
+}
+function aisRender() {
+  if (!aisView) return;
+  const r = aisReport;
+  const items = r ? r.vessels.filter((v) => v.lat != null && v.lon != null).map((v) => ({ ...v, key: String(v.mmsi) })) : [];
+  aisView.update(items, r ? aisRows(r, myPos()) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>',
+                 aisStatus(r), r ? r.vessels.length : 0, myPos(), r ? aisSafetyHtml(r) : '');
+}
+/** ★ A report (on) or the server's `ais_off` (null). */
+function onAisReport(r: AisReport | null) {
+  if (!r) { if (aisOn) { audio?.holdHealing(6000); aisUiOff(); } return; }
+  aisReport = r;
+  if (!aisOn) aisUiOn();   // ★ somebody else put the receiver in AIS (or we joined it)
+  audio?.holdHealing(8000);   // ★ nothing to hear: the server sends no audio (as in ADS-B)
+  aisRender();
+}
+
+/* ★★ APRS'S MAP (V12) — the APRS decoder box's MAP button opens the same full-screen map with the stations heard (their
+ *  symbols, a tapped one's track and its card). Closing it goes back to the box; the decoder carries on either way. */
+let aprsView: TrackView | null = null;
+let aprsLast: AprsList | null = null;
+let aprsHz = 144.8e6;
+const aprsTrails = new Map<string, [number, number][]>();
+function aprsMapOpen() {
+  if (!aprsView) aprsView = new TrackView({
+    title: 'APRS', exitLabel: 'CLOSE MAP', listTitle: 'STATIONS', onExit: () => aprsView?.hide(),
+    icon: aprsIcon, label: aprsName, card: (st) => aprsCard(st, myPos()),
+    trail: (key, done) => done(aprsTrails.get(key) ?? []),
+  });
+  aprsView.show(myPos());
+  aprsMapRender();
+}
+function aprsMapRender() {
+  if (!aprsView?.open) return;
+  const l = aprsLast;
+  const items = l ? l.stations.filter((st) => st.lat != null && st.lon != null && !st.killed) : [];
+  aprsView.update(items, l ? aprsRows(l, myPos()) : '', aprsStatus(l, aprsHz), l ? l.stations.length : 0, myPos());
 }
 
 /** Spend a demodulator picked during ADS-B on the first config out of it (see adsbPendingMode). */
@@ -8363,7 +8465,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -8399,6 +8501,8 @@ function buildControls() {
                          if (adsbOn) { adsbPendingMode = m as SDRMode; adsbSetMode(false); return; }
                          // ★ ISM likewise: the pick waits for the dial the server gives back (adsbApplyPending runs off any config)
                          if (ismOn) { adsbPendingMode = m as SDRMode; ismSetMode(false); return; }
+                         // ★ AIS likewise
+                         if (aisOn) { adsbPendingMode = m as SDRMode; aisSetMode(false); return; }
                          if (dabOn) dabSetMode(false); setMode(m as SDRMode, true); airbandFollowPassband(); renderFreq(); },
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
@@ -8410,13 +8514,16 @@ function buildControls() {
     // ★ Null between multiplexes (a retune sets dabState = null): the card then says it is searching.
     dabQuality:    () => (dabOn && dabState ? dabQuality : null),
     /* ★ DAB from ADS-B: the server leaves ADS-B itself (it sends adsb_off first), so only our UI unwinds here. */
-    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); dabSetMode(!dabOn); },
+    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); dabSetMode(!dabOn); },
     adsbCap:       () => adsbCap,
     adsbOn:        () => adsbOn,
-    toggleAdsb:    () => { if (ismOn && !adsbOn) ismUiOff(); adsbSetMode(!adsbOn); },
+    toggleAdsb:    () => { if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); adsbSetMode(!adsbOn); },
     ismCap:        () => ismCap,
     ismOn:         () => ismOn,
-    toggleIsm:     () => { if (adsbOn && !ismOn) adsbUiOff(); ismSetMode(!ismOn); },
+    toggleIsm:     () => { if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); ismSetMode(!ismOn); },
+    aisCap:        () => aisCap,
+    aisOn:         () => aisOn,
+    toggleAis:     () => { if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); aisSetMode(!aisOn); },
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();
@@ -10515,7 +10622,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'aprs' | null = null;
 /* ★★ CW (V12, 2026-10-25) — the server's own decoder (decoders/cw_skimmer.h). ONE SIGNAL decodes this listener's
  *  passband ('cw', on their audio); SKIMMER every CW signal across a segment centred on the dial ('cwskim', on IQ). The
  *  box shows the primary signal's text (#decText, one-signal only) over the list of signals and the spots. Offered only
@@ -10767,6 +10874,7 @@ function decParams(mode: string): Record<string, unknown> {
   }
   if (mode === 'time') return { station: timeStation };
   if (mode === 'cw') return cwSkim ? { width: cwWidth } : {};
+  if (mode === 'aprs') return { baud_rate: aprsBaud };
   return {};
 }
 
@@ -10901,6 +11009,31 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(true);
     },
     // ★★ CW: the list of signals, and the callsigns spotted (newest first; one row per call, the latest).
+    // ★★ APRS (V12): the station list (2 s, and at once on joining) and each new packet.
+    onAprsList: (d) => {
+      if (activeDec !== 'aprs') return;
+      const l = aprsSanitise(d);
+      if (!l) return;
+      aprsLast = l;
+      for (const st of l.stations) if (st.trail && st.trail.length) aprsTrails.set(st.key, st.trail);
+      renderAprs(); aprsMapRender();
+      setDecLive(l.stations.some((x) => x.seen < 60));
+    },
+    onAprsPacket: (p) => {
+      if (activeDec !== 'aprs') return;
+      aprsLog.unshift({ t: Date.now(), line: p.line || p.raw });
+      if (aprsLog.length > 60) aprsLog.length = 60;
+      // ★ the track grows from the packets between lists (the list carries the whole track only to a joiner)
+      if (p.lat != null && p.lon != null) {
+        const tr = aprsTrails.get(p.key) ?? [];
+        const last = tr[tr.length - 1];
+        if (!last || last[0] !== p.lat || last[1] !== p.lon) { tr.push([p.lat, p.lon]); if (tr.length > 200) tr.shift(); aprsTrails.set(p.key, tr); }
+        const st = aprsLast?.stations.find((x) => x.key === p.key);
+        if (st) { st.lat = p.lat; st.lon = p.lon; st.seen = 0; }
+      }
+      renderAprs(); aprsMapRender();
+      setDecLive(true);
+    },
     onCwSignals: (list) => { if (activeDec !== 'cw') return; cwLast = list; renderCw(); setDecLive(list.signals.some((x) => x.active)); },
     onCwSpot: (sp) => {
       if (activeDec !== 'cw') return;
@@ -10996,7 +11129,7 @@ function initDecoders(host: string, auth: AuthState) {
   //    semantics, same as the app). Selecting one opens the output box.
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'aprs';
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
       decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
@@ -11084,7 +11217,18 @@ function initDecoders(host: string, auth: AuthState) {
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
     if (activeDec === 'cw') { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
+    if (activeDec === 'aprs') { aprsLog.length = 0; renderAprs(); }
   };
+  // ★ APRS: the map, the packet speed (a re-attach — a different modem on the server), and the region's channel
+  $('aprsMapBtn').onclick = () => aprsMapOpen();
+  segButtons('aprsBaud', 'aprsbaud', (v) => { aprsBaud = Number(v) === 300 ? 300 : 1200; aprsHintSync(); if (activeDec === 'aprs') { aprsLast = null; aprsLog.length = 0; renderAprs(); reattachIf('aprs'); } });
+  $('aprsTune').onclick = () => {
+    if (!spec) return;
+    if (aprsBaud === 300) spec.tune(clampTune(10147600), 'usb', { recenter: true, retarget: true });
+    else spec.tune(clampTune(Math.round(aprsHz)), 'nfm', { recenter: true, retarget: true });
+    renderFreq();
+  };
+  aprsHintSync();
   $('decPrev').onclick = () => (activeDec === 'navtex' ? toggleNavtexPrev() : toggleDecPrev());
   $('decSave').onclick = () => (activeDec === 'navtex' ? saveNavtex() : saveDecImage());
   // ★ A lost NNNN ends its message after 75 s of silence (NAVTEX_END_LOST_MS); nothing else would redraw then.
@@ -11222,8 +11366,57 @@ function reattachIf(mode: string) {
   if (activeDec === mode) { decTuneHint = ''; decoders?.attach(decExt(mode), decParams(mode)); }
 }
 
+/* ★★ APRS (V12, docs/v12/AIS-APRS.md) — the server's own decoder (vibe_aprs_run.h) on THIS listener's audio: 1200 Bd Bell 202
+ *  in NFM on the region's APRS channel (vibeserver.json "aprsHz" — 144.800 in Europe, 144.390 in North America …), or
+ *  300 Bd HF packet in USB. The box lists the stations (tap = on the map), the messages and the packets as they come. */
+let aprsCap = false;
+let aprsBaud = 1200;
+const aprsLog: { t: number; line: string }[] = [];
+function aprsHintSync() {
+  const b = document.getElementById('aprsTune');
+  if (b) b.textContent = aprsBaud === 300 ? 'TUNE 10.1476 USB' : `TUNE ${(aprsHz / 1e6).toFixed(3)} NFM`;
+  const h = document.getElementById('aprsHint');
+  if (h) h.innerHTML = aprsBaud === 300
+    ? 'HF packet: <b>300 Bd</b> on <b>10.1476 MHz USB</b> (30 m; 14.105 on 20 m). The decoder tries a few tunings either side, so close is close enough.'
+    : `VHF APRS: <b>${(aprsHz / 1e6).toFixed(3)} MHz NFM</b> here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. <b>MAP</b> in the box shows them on the map.`;
+}
+function renderAprs() {
+  const rows = document.getElementById('aprsRows');
+  if (!rows) return;
+  const l = aprsLast;
+  const rx = myPos();
+  if (!l || !l.stations.length) rows.innerHTML = `<div class="idle">listening — ${aprsBaud === 300 ? 'HF packet, 300 Bd' : 'APRS, 1200 Bd'}; stations appear with their first packet</div>`;
+  else rows.innerHTML = l.stations.slice(0, 80).map((st) => {
+    const rb = rx && st.lat != null && st.lon != null ? (() => { const d = Math.hypot((st.lat! - rx.lat) * 111.2, (st.lon! - rx.lon) * 111.2 * Math.cos(rx.lat * Math.PI / 180)); return d < 10 ? d.toFixed(1) : String(Math.round(d)); })() : '';
+    const line = (st.line || '').replace(/^[^·]*·\s*/, '');
+    return `<div class="ar${st.lat == null ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(st.key)}" title="${escapeHtml(st.raw || '')}">`
+      + `<span class="c"><i style="background:${aprsColourOf(st)}"></i>${escapeHtml(st.name || st.from)}</span><span class="l">${escapeHtml(line || st.kind)}</span>`
+      + `<span class="a">${rb ? rb + ' km · ' : ''}${escapeHtml(aprsAgo(st.seen))}</span></div>`;
+  }).join('');
+  for (const el of Array.from(rows.querySelectorAll('.ar')) as HTMLElement[]) {
+    el.onclick = () => { aprsMapOpen(); aprsView?.focus(el.dataset.key || ''); };
+    el.onkeydown = (e) => { if (e.key === 'Enter') el.click(); };
+  }
+  const msgs = l?.messages ?? [];
+  $('aprsMsgHead').hidden = !msgs.length;
+  $('aprsMsgs').innerHTML = msgs.slice(-20).reverse().map((m) => `<div class="m">${escapeHtml(m.from)} → ${escapeHtml(m.to)}: ${escapeHtml(m.kind === 'ack' ? m.text + ' ' + (m.id || '') : m.text)}</div>`).join('');
+  $('aprsLog').innerHTML = aprsLog.slice(0, 40).map((p) => {
+    const d = new Date(p.t);
+    return `<div class="p"><span class="t">${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}</span> ${escapeHtml(p.line)}</div>`;
+  }).join('') || '<div class="idle">no packets yet</div>';
+}
+function aprsAgo(s: number): string { return s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`; }
+function aprsColourOf(st: { kind: string; sym: string; speed?: number }): string {
+  if (st.kind === 'weather' || st.sym[1] === '_') return '#39d0d8';
+  if (st.kind === 'object' || st.kind === 'item') return '#ffad42';
+  if (st.sym[1] === '#' || st.sym[1] === '&' || st.sym[1] === 'r') return '#c58cff';
+  if (st.speed != null && st.speed >= 2) return '#4fa3ff';
+  return '#59c26b';
+}
+
 function stopDecoder() {
   if (activeDec === 'rds') spec?.rdsxLight(false);
+  if (activeDec === 'aprs') aprsView?.hide();
   decoders?.detach();
   activeDec = null;
   syncDecButtons();
@@ -11425,9 +11618,9 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, 
  *  no-op (AGENTS.md). This rule used to hide the retired desktop bar's DECODERS button and nothing
  *  else, so the card kept offering the empty panel. */
 function anyDecoderLeft(): boolean {
-  // ★ V12: CW counts only where this server has it (vibeserver.json "cw") — the button is hidden otherwise.
+  // ★ V12: CW and APRS count only where this server has them (vibeserver.json "cw", "aprs") — hidden otherwise.
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
-    || (cwCap && !blockedModes.has('cw'));
+    || (cwCap && !blockedModes.has('cw')) || (aprsCap && !blockedModes.has('aprs'));
 }
 
 function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
@@ -11447,6 +11640,7 @@ function syncDecButtons() {
   $('wefaxSettings').hidden = activeDec !== 'wefax';
   $('timeSettings').hidden = activeDec !== 'time';
   $('cwSettings').hidden = activeDec !== 'cw';
+  $('aprsSettings').hidden = activeDec !== 'aprs';
 }
 
 function showDecBox(what: string) {
@@ -11461,6 +11655,7 @@ function showDecBox(what: string) {
   $('decTitle').textContent = what === 'spots' ? 'FT8 / FT4 SPOTS'
                             : what === 'rds'   ? 'ADV RDS'
                             : what === 'cw'    ? (cwSkim ? 'CW SKIMMER' : 'CW')
+                            : what === 'aprs'  ? (aprsBaud === 300 ? 'APRS · HF 300' : 'APRS')
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
@@ -11479,6 +11674,12 @@ function showDecBox(what: string) {
   // ★ CW: the list under the primary signal's text (ONE SIGNAL), or the list alone (SKIMMER — it is all list).
   const isCw = what === 'cw';
   $('cwList').classList.toggle('on', isCw);
+  // ★ APRS: the station list and the packets are the whole box (no text pane); MAP opens the map
+  const isAprs = what === 'aprs';
+  $('aprsList').classList.toggle('on', isAprs);
+  $('aprsMapBtn').style.display = isAprs ? '' : 'none';
+  if (isAprs) { $('decText').classList.add('off'); aprsLast = null; aprsLog.length = 0; aprsTrails.clear(); renderAprs(); }
+  else aprsView?.hide();
   if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
   // bar is a compressed version of the same data; showing both would be saying everything
@@ -15952,7 +16153,7 @@ function nudge(hz: number) {
   /* ★★★ IN ISM THE ARROWS STEP BANDS (Stuart, 2026-10-25: "I always found it quite hard to tune the ISM on OWRX") — every
    *  arrow, key, wheel and pad press ends here, as DAB's blocks do. The server clamps at the ends and owns the band. */
   if (ismOn) { ismStep(hz < 0 ? -1 : 1); return; }
-  if (adsbOn) return;   // ★ held on 1090 MHz — the arrows are greyed (wholeRadioLock); keys and the wheel end here
+  if (adsbOn || aisOn) return;   // ★ AIS: two fixed channels, nothing to step   // ★ held on 1090 MHz — the arrows are greyed (wholeRadioLock); keys and the wheel end here
   // Snap to the step grid so repeated nudges stay on round frequencies.
   // ★★ Through airbandStepFrom: the 8.33 kHz step is 25000/3 exactly (no drift), and in the airband
   //    in AM it walks channel NAMES the way an 8.33 set's knob does — see src/utils/airband.ts.
@@ -16158,6 +16359,7 @@ function initFreqEntry() {
     /* ★★ IN ISM A TYPED FREQUENCY IS AN EXACT CAPTURE CENTRE (an odd device off the usual channels): it goes through the ISM
      *  door, the device list is kept, and the arrows still step bands from wherever the server says it now is. */
     if (ismOn) { spec!.ism(true, { hz: got }); closePanels(); return; }
+    if (aisOn) { showPill('AIS listens on its two channels — leave AIS to tune elsewhere', 5000); closePanels(); return; }
     const jumpMode = bandJumpDefaults(spec!.frequency, got, String(spec!.mode ?? ''), ituRegion()).mode;
     spec!.tune(got, jumpMode, { recenter: true, retarget: true });
     if (jumpMode) setMode(jumpMode, false);

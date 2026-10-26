@@ -17,8 +17,8 @@
 //      soft-decision repair of ONE channel bit (vibe_hdlc.h) accepted only if the message's length fits its type.
 #pragma once
 #include "vibe_hdlc.h"
-#include "vibedsp.h"
-#include "simd_internal.h"
+#include "vibedsp/vibedsp.h"
+#include "vibedsp/simd_internal.h"
 
 #include <algorithm>
 #include <cmath>

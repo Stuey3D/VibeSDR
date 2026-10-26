@@ -2601,6 +2601,22 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #spotList.on { display: block; }
 /* ★★ CW (V12): the signals list. Line 1 to scan — frequency · call · WPM · SNR · quality · age; line 2 to read — the
    signal's recent text, newest at the right. Dim rows have gone quiet (kept 10 minutes). */
+/* ★★ V12 APRS — the stations (one row each, newest first), the messages, the packets. */
+#aprsList { display: none; margin-top: 4px; }
+#aprsList.on { display: block; }
+#aprsList .ar { display: grid; grid-template-columns: minmax(6.5em, 9em) minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline;
+                font-size: 11px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+#aprsList .ar:hover, #aprsList .ar:focus-visible { background: rgba(255,255,255,0.06); outline: none; }
+#aprsList .ar .c { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#aprsList .ar .c i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+#aprsList .ar .l { color: rgba(255,255,255,0.78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#aprsList .ar .a { color: rgba(255,255,255,0.5); font-variant-numeric: tabular-nums; }
+#aprsList .ar.nopos .c { opacity: 0.75; }
+#aprsList .aprsHead { margin: 8px 6px 2px; font-size: 10px; letter-spacing: 0.08em; color: rgba(255,255,255,0.55); }
+#aprsList .idle { padding: 6px; color: rgba(255,255,255,0.6); font-size: 11px; }
+#aprsMsgs .m, #aprsLog .p { font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; padding: 1px 6px; color: rgba(255,255,255,0.82);
+                            white-space: pre-wrap; word-break: break-word; }
+#aprsLog .p .t { color: rgba(255,255,255,0.45); }
 #cwList { display: none; margin-top: 6px; }
 #cwList.on { display: block; }
 #cwList .cwr { display: grid; grid-template-columns: 6.2em minmax(4.5em, 1fr) 4.8em 4.2em 4.4em 3.4em; gap: 2px 8px;
@@ -3541,6 +3557,7 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="decZoomOut" title="Zoom out" aria-label="Zoom out" style="display:none">−</button>
     <button class="btn" id="decZoomIn" title="Zoom in" aria-label="Zoom in" style="display:none">+</button>
     <button class="btn" id="decAdj" title="Align the chart and set its slant" style="display:none">ADJ</button>
+    <button class="btn" id="aprsMapBtn" title="The stations heard, on the map" style="display:none">MAP</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
     <!-- ★ DAB: CLR clears a text pane DAB does not have, so in DAB this stands in its place
          (Stuart, 2026-09-07): the stations this receiver has learnt, bookmarks filtered to DAB. -->
@@ -3615,6 +3632,8 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ CW: every signal the server is decoding — frequency, call (once spotted), speed, SNR, quality, last heard,
          and its recent text — then the callsigns spotted. The primary signal's text is #decText above it. -->
     <div id="cwList"><div id="cwRows"></div><div id="cwSpotsHead">SPOTS</div><div id="cwSpots"></div></div>
+    <!-- ★★ V12 APRS: the stations heard, the messages, and the packets as they arrive. -->
+    <div id="aprsList"><div id="aprsRows"></div><div class="aprsHead" id="aprsMsgHead" hidden>MESSAGES</div><div id="aprsMsgs"></div><div class="aprsHead">PACKETS</div><div id="aprsLog"></div></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
          health. The VTS bar hides while this is open — no point showing the same data
          twice, and this is the surface the user deliberately chose. -->
@@ -4561,6 +4580,8 @@ select.btn { padding: 6px 8px; }
   <div class="btnRow">
     <button class="btn" data-dec="rtty">RTTY</button>
     <button class="btn" data-dec="cw" hidden title="Morse — the signal in your passband decoded, every other one in it listed; or SKIMMER: every CW signal across a segment around your dial">CW</button>
+    <!-- ★★ V12 APRS — this server's own decoder on your audio: 1200 Bd packet on NFM (VHF), or 300 Bd HF packet on USB. -->
+    <button class="btn" data-dec="aprs" hidden title="APRS — stations, positions, weather and messages: 1200 Bd packet in NFM (VHF), or 300 Bd HF packet in USB/LSB">APRS</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
     <button class="btn" data-dec="sstv">SSTV</button>
@@ -4616,6 +4637,20 @@ select.btn { padding: 6px 8px; }
     </div>
     <div class="hint" id="cwHint">Tune the signal in <b>CW</b> — the decoder finds the speed itself (5–60 WPM). A wider
       USB filter lists every CW signal inside it. Tap a row to tune to it.</div>
+  </div>
+
+  <!-- ★★ APRS (V12): VHF 1200 Bd on NFM (the region's frequency is one tap away), or HF 300 Bd on USB/LSB. -->
+  <div class="subPanel" id="aprsSettings" hidden>
+    <div class="mrow">
+      <label>PACKET</label>
+      <div class="seg" id="aprsBaud">
+        <button class="btn on" data-aprsbaud="1200" title="VHF APRS: Bell 202, 1200 Bd — tune the APRS channel in NFM">VHF 1200</button>
+        <button class="btn" data-aprsbaud="300" title="HF APRS: 300 Bd, 1600/1800 Hz tones — tune 10.1476 MHz (30 m) or 14.105 MHz (20 m) in USB">HF 300</button>
+      </div>
+    </div>
+    <div class="mrow"><button class="btn" id="aprsTune" title="Tune this region's APRS channel">TUNE 144.800 NFM</button></div>
+    <div class="hint" id="aprsHint">Every station heard is listed, with its position, weather, messages and the digipeater
+      that carried it. <b>MAP</b> in the box shows them on the map.</div>
   </div>
 
   <div class="subPanel" id="rttySettings" hidden>

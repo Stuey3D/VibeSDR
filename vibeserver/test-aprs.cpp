@@ -13,6 +13,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -272,7 +273,45 @@ static void testCpu() {
     CHECK(a.cpu < a.secs / 10, "under a tenth of real time");
 }
 
-int main() {
+/** `test-aprs --write-clip <file.cu8> <rate>`: APRS packets, Bell 202 AFSK FM-modulated (±3 kHz, NFM) onto complex IQ at
+ *  `rate`, CENTRED on the channel (fake-rtl-tcp --hf --hf-centre 144800000 mixes it to wherever the dongle sits). */
+static int writeClip(const char* path, double rate) {
+    std::vector<float> a;
+    const char* pk[][2] = {
+        { "G4ABC", "!5130.00N/00010.00W>car on the A1 /A=000120" },
+        { "MB7UH", "@261200z5128.00N/00012.00W_090/005g010t050h80b10120" },
+        { "M0XYZ", ":G4ABC-9  :See you at the club{7" },
+        { "G8DEF", ";REPEATER *261200z5132.00N/00005.00W#GB3XX 145.725" },
+    };
+    for (int rep = 0; rep < 2; ++rep)
+        for (auto& p : pk) {
+            for (int k = 0; k < 24000; ++k) a.push_back(0);
+            modulate(a, ui(p[0], p[0][1] == '4' ? 9 : 0, "APRS", {{"WIDE1-1", false}}, p[1]), 1200, 1200, 2200, 0, 0.5, 30);
+        }
+    for (int k = 0; k < 24000; ++k) a.push_back(0);
+    // 48 kHz audio → FM at `rate`: linear interpolation of the audio, phase += 2π·3000·x/rate
+    const double up = rate / 48000.0, dev = 3000.0 / 0.5;
+    Rng rng(4242);
+    std::vector<uint8_t> u;
+    u.reserve(size_t(a.size() * up * 2) + 16);
+    double ph = 0;
+    for (size_t i = 0; i + 1 < a.size(); ++i)
+        for (int j = 0; j < int(up); ++j) {
+            const double x = a[i] + (a[i + 1] - a[i]) * (j / up);
+            ph += 2 * M_PI * dev * x / rate;
+            const double I = 0.4 * std::cos(ph) + 0.01 * rng.g(), Q = 0.4 * std::sin(ph) + 0.01 * rng.g();
+            u.push_back(uint8_t(std::max(0.0, std::min(255.0, 127.5 + I * 127))));
+            u.push_back(uint8_t(std::max(0.0, std::min(255.0, 127.5 + Q * 127))));
+        }
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 1;
+    std::fwrite(u.data(), 1, u.size(), f); std::fclose(f);
+    std::fprintf(stderr, "wrote %s: %.1f s at %.0f S/s, 8 APRS packets (4 stations, twice)\n", path, u.size() / 2 / rate, rate);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc >= 4 && std::strcmp(argv[1], "--write-clip") == 0) return writeClip(argv[2], std::atof(argv[3]));
     testAx25();
     testFormats();
     testModem();

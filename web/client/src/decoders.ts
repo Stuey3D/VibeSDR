@@ -35,6 +35,10 @@
  *     {"type":"cw_signals","data":{skimmer,centre?,width?,primary,signals:[{id,hz,audio,wpm,snr,q,active,last,first,call,country,text}]}}
  *     {"type":"cw_spot","data":{callsign,frequency,audio,wpm,snr,how,country,timestamp}}
  *
+ *   APRS ('aprs' on the listener's audio — V12, vibe_aprs_run.h; "baud_rate": 300 for HF)
+ *     {"type":"aprs_packet","data":{key,from,kind,line,raw,lat?,lon?,to?,text?}}       each new packet
+ *     {"type":"aprs_list","data":{baud,frames,repaired,dupes,stations:[…],messages:[…]}} every 2 s when changed, and to a joiner
+ *
  * NB WEFAX and SSTV BOTH use 0x01 for a line, with different payloads — so
  * frames can only be parsed against the decoder currently attached. Never sniff.
  */
@@ -43,7 +47,7 @@ import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'aprs' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -53,6 +57,9 @@ export interface CwSignal {
 }
 export interface CwList { skimmer: boolean; centre: number; width: number; primary: number; signals: CwSignal[] }
 export interface CwSpot { callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number }
+
+/** ★ V12 APRS: one new packet, as the server describes it. */
+export interface AprsPacket { key: string; from: string; kind: string; line: string; raw: string; lat?: number; lon?: number; to?: string; text?: string }
 
 export interface Spot {
   mode: 'FT8' | 'FT4';
@@ -91,6 +98,9 @@ export interface DecoderCallbacks {
   onCwSignals?: (list: CwList) => void;
   /** ★ CW: a callsign heard identifying itself. */
   onCwSpot?: (spot: CwSpot) => void;
+  /** ★ APRS (V12): the station list (raw data — tracks.ts aprsSanitise), and each new packet. */
+  onAprsList?: (data: any) => void;
+  onAprsPacket?: (p: AprsPacket) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
    *  `message` is the server's own words, shown as they are (one definition, every client). */
   onRefused?: (message: string, what: 'decoder' | 'spots') => void;
@@ -134,6 +144,8 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   // ★ V12 CW: the listener's passband, or a skimmer over a segment around the dial (one engine on the server).
   cw: 'cw',
   cwskim: 'cwskim',
+  // ★ V12 APRS — 1200 Bd VHF / 300 Bd HF ("baud_rate")
+  aprs: 'aprs',
 };
 
 export class DecoderClient {
@@ -311,6 +323,21 @@ export class DecoderClient {
           call: str(x?.call, 16), country: str(x?.country, 40), text: str(x?.text, 160),
         })),
       });
+      return;
+    }
+    if (msg.type === 'aprs_list' && msg.data) {
+      if (this.mode !== 'aprs') return;
+      this.cb.onAprsList?.(msg.data);
+      return;
+    }
+    if (msg.type === 'aprs_packet' && msg.data) {
+      if (this.mode !== 'aprs') return;
+      const d = msg.data;
+      const s = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '');
+      const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+      if (!s(d.key, 40)) return;
+      this.cb.onAprsPacket?.({ key: s(d.key, 40), from: s(d.from, 16), kind: s(d.kind, 14), line: s(d.line, 300), raw: s(d.raw, 400),
+                               lat: n(d.lat), lon: n(d.lon), to: s(d.to, 12) || undefined, text: s(d.text, 200) || undefined });
       return;
     }
     if (msg.type === 'cw_spot' && msg.data) {

@@ -20,8 +20,8 @@
 //   control and the APRS PID — about one garbage frame in three million could pass that.
 #pragma once
 #include "vibe_hdlc.h"
-#include "vibedsp.h"
-#include "simd_internal.h"
+#include "vibedsp/vibedsp.h"
+#include "vibedsp/simd_internal.h"
 
 #include <algorithm>
 #include <cmath>

@@ -41,6 +41,7 @@
 #include "decoders/time_decoder.h"
 #include "decoders/ft8_decoder.h"
 #include "vibe_cw_run.h"
+#include "vibe_aprs_run.h"    // ★ V12 APRS (1200 Bd VHF, 300 Bd HF) on the listener's audio — docs/v12/AIS-APRS.md
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -229,6 +230,8 @@ struct DecoderTap {
     /** ★ One CW spot (the CW summary tap only — see Env::cwSpotTap): the call, where, how fast, how strong, and what it
      *  was doing ("CQ", "TEST", "DE"). */
     virtual void cwSpot(const std::string& /*call*/, double /*rfHz*/, float /*wpm*/, float /*snrDb*/, const std::string& /*how*/) {}
+    /** ★ V12 APRS: one new station line (vibe_station_log.h — the day's log and summary card). */
+    virtual void station(const vibestation::Heard&) {}
 };
 using DecoderTapPtr = std::shared_ptr<DecoderTap>;
 
@@ -326,6 +329,8 @@ public:
             }
         }
         if (joiner) replayTo(joiner);
+        // ★ APRS: a second window (a mirror, a reconnect) gets the whole station list with its tracks at once
+        if (joiner) { std::string l; { std::lock_guard<std::mutex> lk(decMtx_); if (aprs_) l = aprs_->listJson(true); } if (!l.empty()) joiner->text(l); }
         return Start::Joined;
     }
     /** Stop the audio-extension decoder and give its slot back. */
@@ -459,7 +464,7 @@ public:
      *  on decoderKind: "attached" was once true while nothing had been constructed). */
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
-        return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw") : "none";
+        return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw") : aprs_ ? "aprs" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -518,7 +523,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "aprs";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -557,7 +562,7 @@ private:
         return j.substr(p + 1, e - p - 1);
     }
 
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || aprs_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -570,6 +575,7 @@ private:
         delete time_;  time_ = nullptr;
         if (cwIq_.exchange(false)) skimmersRunning().fetch_sub(1);
         cw_.reset();
+        aprs_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }
         active_.store(false, std::memory_order_relaxed);
@@ -695,6 +701,20 @@ private:
             buildTimeLocked_(which);
         } else if (ext == "cw" || ext == "cwskim") {
             buildCwLocked_(ext == "cwskim", msg);
+            return;
+        } else if (ext == "aprs") {
+            /* ★★ APRS (V12): 1200 Bd Bell 202 on an NFM channel (VHF), or "baud_rate":300 — HF packet on USB/LSB. Its frames
+             *  are JSON (aprs_packet / aprs_list), sent from inside the run on the decode thread; each new station line goes
+             *  to the gallery's tap (DecoderTap::station). */
+            double b = 1200;
+            num(msg, "baud_rate", b);
+            vibeaprs::Run::Opts o;
+            o.json = [this](const std::string& j) { broadcastText(j); };
+            o.heard = [this](const vibestation::Heard& h) { if (DecoderTapPtr t = tap()) t->station(h); };
+            o.rfHz = env_.dialHz;
+            aprs_.reset(new vibeaprs::Run(b < 600 ? 300 : 1200, std::move(o)));
+            active_.store(true, std::memory_order_relaxed);
+            log(std::string("decoder attached: aprs ") + (b < 600 ? "300" : "1200") + " Bd");
             return;
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
             /* ★★ RTTY, ONE CLICK (Stuart, 2026-10-04: "auto config the baud and shift etc so again its a one click use"). The
@@ -969,6 +989,12 @@ private:
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
+            if (aprs_) {
+                // ★ APRS likewise: float audio in, JSON out from inside the run
+                aprs_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             std::vector<int16_t> mono((size_t)count);
             for (int i = 0; i < count; i++) {
                 const int s = (int)std::lround(data[i] * 32767.0f);
@@ -1029,6 +1055,7 @@ private:
     SstvDecoder*  sstv_  = nullptr;
     TimeDecoder*  time_  = nullptr;
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
+    std::unique_ptr<vibeaprs::Run> aprs_;     // ★ APRS (V12): the modem + the station list (vibe_aprs_run.h)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
     std::atomic<double> cwWidth_{0.0};
     DecoderTapPtr cwTap_;                     // ★ the gallery's CW summary (Env::cwSpotTap), under tapMtx_

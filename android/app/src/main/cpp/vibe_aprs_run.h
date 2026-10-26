@@ -11,7 +11,7 @@
 //       and at once to a joiner (with each station's track; the clients add points from the packets after that).
 #pragma once
 #include "vibe_aprs.h"
-#include "vibe_station_log.h"
+#include "vibe_station_sink.h"
 
 #include <algorithm>
 #include <chrono>

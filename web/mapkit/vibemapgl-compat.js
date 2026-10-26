@@ -307,7 +307,7 @@
       for (const q of polys.values()) if (q.st.dashArray) dashLayer(q.st);
       src.setData({ type: 'FeatureCollection', features: [...polys.values()].map((q) => ({
         type: 'Feature', id: q.id, properties: Object.assign({}, q.st, q.st.dashArray ? { _dash: String(q.st.dashArray) } : {}),
-        geometry: { type: 'MultiPolygon', coordinates: q.rings.map((r) => [r]) } })) });
+        geometry: q.line ? { type: 'LineString', coordinates: q.line } : { type: 'MultiPolygon', coordinates: q.rings.map((r) => [r]) } })) });
     }
     /* ★ DASHED OUTLINES (Leaflet's dashArray — the spots map's range rings). MapLibre cannot drive
      *  line-dasharray from a feature, so each distinct pattern gets its own line layer, made on first
@@ -357,6 +357,20 @@
         remove: () => { polys.delete(q.id); queuePolys(); return h; },
         setStyle: (s2) => { Object.assign(q.st, s2); queuePolys(); return h; },
         setLatLngs: (a) => { q.rings = (isRing(a) ? [a] : a).map(toRing); queuePolys(); return h; },
+      };
+      return h;
+    }
+    /** ★ V12 (tracklayer.js — a ship's or an APRS station's track): Leaflet polyline, an OPEN line through the same
+     *  source as the polygons (a LineString: the line layers draw it, the fill layer ignores it). */
+    function Polyline(latlngs, st) {
+      const toLine = (a) => (a || []).map((p) => { const q = ll(p); return [q.lng, q.lat]; });
+      const q = { id: ++polySeq, rings: [], line: toLine(latlngs), st: Object.assign({}, st) };
+      const h = {
+        addTo: (t) => { if (t && t._isGroup) t.addLayer(h); else h._show(); return h; },
+        _show: () => { polys.set(q.id, q); queuePolys(); },
+        remove: () => { polys.delete(q.id); queuePolys(); return h; },
+        setStyle: (s2) => { Object.assign(q.st, s2); queuePolys(); return h; },
+        setLatLngs: (a) => { q.line = toLine(a); queuePolys(); return h; },
       };
       return h;
     }
@@ -454,6 +468,7 @@
       map(id, o) { if (o && o.scrollWheelZoom === false) gl.scrollZoom.disable(); return map; },
       layerGroup: LayerGroup,
       polygon: Polygon,
+      polyline: Polyline,
       circle: Circle,
       marker: Marker,
       gpuMarker: GpuMarker,
