@@ -1,0 +1,3 @@
+# The reference decoder as a black box: Debian bookworm's packaged WSJT-X (jt9), run on the same WAVs, never read.
+FROM debian:bookworm-slim
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends wsjtx time python3 && rm -rf /var/lib/apt/lists/*
