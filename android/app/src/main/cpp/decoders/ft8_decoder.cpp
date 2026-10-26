@@ -236,6 +236,10 @@ int ft8Osd(const float* llr, int maxErrors, int pairSpan, uint8_t a91[FTX_LDPC_K
         float d = 0;
         for (int j = 0; j < m; ++j) d += wAbs[perm[ps[j]]];
         if (d >= bestD) continue;
+        /* ★ Never the all-zero codeword (2026-10-26): its CRC is zero, so it always "passes", and a carrier or a
+         *  strong station's residue makes a run of zero hard decisions — on the real FT4 hour OSD-1 returned it 27
+         *  times (FT4's scrambling turns it into an empty message). Belief propagation refuses it the same way. */
+        if (!(c.w[0] | c.w[1] | c.w[2])) continue;
         uint8_t m91[FTX_LDPC_K_BYTES] = {};
         for (int k = 0; k < FTX_LDPC_K; ++k) if (getBit(c, k)) m91[k / 8] |= (uint8_t)(0x80u >> (k % 8));
         const uint16_t crcRx = ftx_extract_crc(m91);
@@ -266,6 +270,13 @@ Ft8SlotDecoder::Ft8SlotDecoder(int sampleRate, FtxMode mode)
     cfg.time_osr = kTimeOsr;
     cfg.freq_osr = kFreqOsr;
     cfg.protocol = ft4 ? FTX_PROTOCOL_FT4 : FTX_PROTOCOL_FT8;
+    /* ★★ FT4's TIME SEARCH WIDENED (2026-10-26). ft8_lib searches -10 .. +20 blocks, which for FT4's 48 ms blocks is
+     *  a start of -0.48 .. +0.96 s — DT -0.98 .. +0.46 against FT4's nominal 0.5 s. A station whose clock or audio
+     *  path is half a second late was never even a candidate (the synthetic band at DT -0.5 .. +1.0: decodes
+     *  levelled off near 60 % however strong), and on the real 40 m FT4 hour our decodes piled up at the -0.98 edge.
+     *  -24 .. +36 is DT -1.65 .. +1.23 s; the window (7.49 s) still holds the whole 5.04 s frame at the late end.
+     *  The search is the cheap part of a pass (16 frequencies per vector). */
+    if (mode == FtxMode::FT4) { cfg.time_min = kFt4TimeMin; cfg.time_max = kFt4TimeMax; }
     if (mode == FtxMode::FT2) {                 // ★ FT4's frame at 24 ms a symbol (see FtxMode)
         cfg.symbol_period = kFt2SymbolPeriod;
         cfg.slot_time = kFt2WindowTime;
@@ -737,6 +748,13 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
                 if (osdErr < 0) continue;
                 a91ToMessage(a91, msg);
                 viaOsd = true;
+            }
+            {   /* ★ A codeword is not yet a message (2026-10-26): one that does not unpack (a type the 77-bit format
+                 *  does not define, a field out of range) is noise that happened to satisfy the CRC — OSD, which
+                 *  searches for such codewords, found them on real audio. Checked without the hash table, which
+                 *  unpacking would otherwise feed. */
+                ftx_message_t t = msg; char txt[FTX_MAX_MESSAGE_LENGTH]; ftx_message_offsets_t offs;
+                if (ftx_message_decode(&t, nullptr, txt, &offs) != FTX_MESSAGE_RC_OK) { sm[Ft8SlotStats::kPost] += lap(); continue; }
             }
             bool dup = false;   // ★ one message per slot, whichever pass and candidate found it first
             for (size_t r = first; r < out.size() && !dup; ++r)

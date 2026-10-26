@@ -42,6 +42,8 @@ constexpr float kFt2SlotTime     = 3.75f;    ///< the T/R period
 constexpr float kFt2WindowTime   = 5.0f;
 constexpr int   kFt2TimeMin      = -22;
 constexpr int   kFt2TimeMax      = 65;
+constexpr int   kFt4TimeMin      = -24;  ///< FT4's search, in 48 ms blocks (see the constructor)
+constexpr int   kFt4TimeMax      = 36;
 
 /* ★★★ THE HASHED-CALLSIGN TABLE (audit 2026-10-04, row 10). A non-standard call ("PJ4/K1ABC") goes over the air as a
  *  10-, 12- or 22-bit hash, and only a table of calls already heard in full can turn it back into a call. The old one
@@ -189,7 +191,7 @@ private:
     static constexpr int kFineOsdMaxBpErr = 12;     // OSD only after BP came this close (unsatisfied checks)          // BP stops after this many iterations without a new best
     std::vector<double> decodedStart_;     // this slot's decodes' start samples, by result index (the near test)
     static constexpr int kFineMinSyncFt8 = 10;    // of 21 Costas symbols (noise: 21/8 ≈ 2.6)
-    static constexpr int kFineMinSyncFt4 = 7;    // of 16 (noise: 4)        // the second look, made on first use (its window FFT: 1.5 MB FT8)
+    static constexpr int kFineMinSyncFt4 = 10;   // of 16 (noise: 4)        // the second look, made on first use (its window FFT: 1.5 MB FT8)
 };
 
 class Ft8Decoder {
