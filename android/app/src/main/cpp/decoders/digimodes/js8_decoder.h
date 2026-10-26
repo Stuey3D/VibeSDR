@@ -21,7 +21,7 @@
 //  propagation, OSD-1 on spare CPU; the CRC-12; the frame unpacked (js8_message.h). On spare CPU a second pass
 //  subtracts every decoded signal and searches again.
 #pragma once
-#include "ftx_fine.h"
+#include "../ftx_fine.h"
 #include <memory>
 #include "js8_message.h"
 #include <atomic>

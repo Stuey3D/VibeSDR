@@ -373,6 +373,7 @@ private:
     FtxApBook apBook_;             // ★ what this dial heard lately (a-priori decoding); the worker's alone
     std::vector<float> work_;      // the window being decoded (the worker's, subtracted in place)
     double  workSlotEnd_ = 0;      // capture UTC at which that window's last sample arrived
+    double  workSlotUtc_ = NAN;    // ★ that window's slot boundary (UTC) — the spots' time
     std::thread worker;
     std::mutex  wm;
     std::condition_variable wcv;
@@ -381,6 +382,8 @@ private:
 public:
     std::atomic<unsigned> slotsSkipped{0};
     std::atomic<unsigned> slotsDecoded{0};
+    /** ★ UTC of the slot boundary the decode now running (and its onSpot calls) belongs to — read inside onSpot. */
+    double decodingSlotUtc() const { return workSlotUtc_; }
     std::atomic<unsigned> reanchors{0};
     /** Passes the last decode ran (1-3) and how long it took — for the admin page and the tests. */
     std::atomic<int>    lastPasses{0};

@@ -1,4 +1,4 @@
-// test-js8 — the JS8 decoder (decoders/js8_*.cpp): its code, its frames, every submode on a synthetic band, and the
+// test-js8 — the JS8 decoder (decoders/digimodes/js8_*.cpp): its code, its frames, every submode on a synthetic band, and the
 // live decoder's slots (2026-10-26).
 //
 // ★★★ WHAT MUST HOLD.
@@ -10,9 +10,9 @@
 //      down to its threshold, and NOTHING is decoded from pure noise (thousands of candidates a slot).
 //   4. The live decoder cuts every submode's slot from one stream by the capture clock, decodes the four at once.
 // Synthetic: JS8's waveform (continuous-phase FSK, tone spacing = symbol rate), known SNR/DT/frequency, white noise.
-#include "decoders/js8_decoder.h"
-#include "decoders/js8_ldpc.h"
-#include "decoders/js8_message.h"
+#include "decoders/digimodes/js8_decoder.h"
+#include "decoders/digimodes/js8_ldpc.h"
+#include "decoders/digimodes/js8_message.h"
 #include <algorithm>
 #include <cstdlib>
 #include <map>

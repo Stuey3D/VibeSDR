@@ -86,6 +86,14 @@ export type MobileDeps = {
   ismCap: () => { ok: boolean; why: string } | null;
   ismOn: () => boolean;
   toggleIsm: () => void;
+  /** ★ NDB (V12): null = this radio reaches no LF (no control at all); ok false = greyed with the reason. */
+  ndbCap: () => { ok: boolean; why: string } | null;
+  ndbOn: () => boolean;
+  toggleNdb: () => void;
+  /** ★ AIS (V12): null = not offered on this radio (it cannot reach 162 MHz); ok false = greyed with the reason. */
+  aisCap: () => { ok: boolean; why: string } | null;
+  aisOn: () => boolean;
+  toggleAis: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
   openChat: () => void;
@@ -346,6 +354,29 @@ export function initMobileControls(deps: MobileDeps) {
       if (!ic.ok) ismRow.setAttribute('aria-disabled', 'true');
       ismRow.onclick = () => { deps.toggleIsm(); close(); refresh(); };
       grid.appendChild(ismRow);
+    }
+    /* ★★ NDB beside them — the LF beacon skimmer. Absent where the radio reaches no LF (an RTL without direct sampling,
+     *  a HackRF, an Airspy R2): a control that cannot work on this radio is not drawn (AGENTS.md). */
+    const nc = deps.ndbCap();
+    if (nc) {
+      const ndbRow = document.createElement('button');
+      ndbRow.className = 'mModeOpt' + (deps.ndbOn() ? ' on' : '') + (nc.ok ? '' : ' dis');
+      ndbRow.textContent = 'NDB';
+      ndbRow.title = nc.ok ? 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map' : `NDB is not available: ${nc.why}`;
+      if (!nc.ok) ndbRow.setAttribute('aria-disabled', 'true');
+      ndbRow.onclick = () => { deps.toggleNdb(); close(); refresh(); };
+      grid.appendChild(ndbRow);
+    }
+    /* ★★ AIS beside ISM — the fourth whole-radio mode, the same three states; absent where the radio cannot reach 162 MHz. */
+    const aic = deps.aisCap();
+    if (aic) {
+      const aisRow = document.createElement('button');
+      aisRow.className = 'mModeOpt' + (deps.aisOn() ? ' on' : '') + (aic.ok ? '' : ' dis');
+      aisRow.textContent = 'AIS';
+      aisRow.title = aic.ok ? 'AIS — ships on 161.975 and 162.025 MHz, with a map' : `AIS is not available: ${aic.why}`;
+      if (!aic.ok) aisRow.setAttribute('aria-disabled', 'true');
+      aisRow.onclick = () => { deps.toggleAis(); close(); refresh(); };
+      grid.appendChild(aisRow);
     }
 
     const sole = deps.soleDecoder();

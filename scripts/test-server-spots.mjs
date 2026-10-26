@@ -1,7 +1,9 @@
 // test-server-spots.mjs — V12 DIGITAL SPOTS through the REAL server (2026-10-26): a fake rtl_tcp replays a synthetic,
 // UTC-ANCHORED 20 m clip (`test-digi-spots clip`: three FT8 stations on the FT8 dial, two FT4 on the FT4 dial, one FT8
-// station on the FT8 dial's LOWER sideband), and the contract on the decoder socket:
-//   • vibeserver.json lists the modes (spotModes FT8, FT4), offers Band (spotsBand true) and names 20 m with its span;
+// station on the FT8 dial's LOWER sideband, a JS8 heartbeat on the JS8 dial, an FT2 CQ on the FT2 dial), and the contract
+// on the decoder socket:
+//   • vibeserver.json lists the modes (spotModes FT8, FT4, FT2, JS8, WSPR), offers Band (spotsBand true) and names 20 m
+//     with its span;
 //   • "Digital spots: Band" ({type:'subscribe_digital_spots', scope:'band'}) on a ONE-PIPELINE radio (vibe_wide_tap.h)
 //     spots every station with its MODE at its RF, and never the lower-sideband one;
 //   • the same on a RANGE-LOCKED radio (per-listener channels: one more slice of the shared FFT);
@@ -22,9 +24,11 @@ if (!BIN || !fs.existsSync(BIN) || !DIGI || !fs.existsSync(DIGI)) {
   console.log('   not run — set VIBESERVER_BIN and VIBE_DIGI_BIN (the built test-digi-spots, which writes the clip)');
   process.exit(3);
 }
-const RATE = 960000, CENTRE = 14078800;   // ★ 20 m's Band centre with FT8 + FT4 registered (digi_bands.h spanOf)
+const RATE = 960000, CENTRE = 14085700;   // ★ 20 m's Band centre with FT8 + FT4 + FT2 + JS8 + WSPR registered (digi_bands.h spanOf)
 const STATIONS = [['FT8', 'G4ABC', 14074600], ['FT8', 'DL1XYZ', 14075450], ['FT8', 'K1ABC', 14076300],
-                  ['FT4', 'JA1QRS', 14080800], ['FT4', 'EA4TUV', 14081700]];
+                  ['FT4', 'JA1QRS', 14080800], ['FT4', 'EA4TUV', 14081700],
+                  ['JS8', 'G4JSN', 14079000], ['FT2', 'IU8AAA', 14084900]];
+const TOL = { FT2: 21 };                  // ★ RF to a quarter of the tone step: FT2's tones are 41.7 Hz apart
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-spots-'));
 const CLIP = path.join(tmp, '20m.cu8');
 execFileSync(DIGI, ['clip', CLIP, String(RATE), String(CENTRE)], { stdio: 'ignore' });
@@ -103,10 +107,14 @@ async function listener(port, sid, f, mode) {
 function checkSpots(spots, label) {
   for (const [mode, call, rf] of STATIONS) {
     const s = spots.find((x) => x.data.callsign === call);
-    ok(!!s && s.data.mode === mode && Math.abs(s.data.frequency - rf) <= 10 && s.data.band === '20m',
+    ok(!!s && s.data.mode === mode && Math.abs(s.data.frequency - rf) <= (TOL[mode] || 10) && s.data.band === '20m',
        `${label}: ${call} spotted as ${mode} at ${rf}${s ? ` (got ${s.data.mode} ${s.data.frequency} ${s.data.band})` : ' — not spotted'}`);
   }
   ok(!spots.some((x) => x.data.callsign === 'ZL3LSB'), `${label}: the lower-sideband station is never spotted`);
+  // ★ M7EIW: a spot's timestamp is its slot's START (WSJT-X's time) — on FT8/JS8's 15 s, FT4's 7.5 s, FT2's 3.75 s grid
+  const P = { FT8: 15000, JS8: 15000, FT4: 7500, FT2: 3750 };
+  const off = spots.filter((x) => P[x.data.mode] && x.data.timestamp % P[x.data.mode] !== 0);
+  ok(off.length === 0, `${label}: every spot is stamped with its slot's start${off.length ? ' — not: ' + off.map((x) => x.data.mode + ' ' + x.data.timestamp).join(', ') : ''}`);
   const bad = spots.filter((x) => !STATIONS.some(([, c]) => c === x.data.callsign));
   ok(bad.length === 0, `${label}: no false spots ${bad.map((x) => x.data.callsign).join(' ')}`);
 }
@@ -118,12 +126,13 @@ try {
     const S = await server(['--freq', String(CENTRE), '--mode', 'usb', '--users', '1'], 'one');
     try {
       const st = await S.status();
-      ok(st && JSON.stringify(st.spotModes) === '["FT8","FT4"]', `vibeserver.json spotModes ${JSON.stringify(st && st.spotModes)}`);
+      ok(st && JSON.stringify(st.spotModes) === '["FT8","FT4","FT2","JS8","WSPR"]', `vibeserver.json spotModes ${JSON.stringify(st && st.spotModes)}`);
       ok(st && st.spotsBand === true && !st.spotsBandWhy, `Band offered (spotsBand ${JSON.stringify(st && st.spotsBand)})`);
       const b20 = st && (st.spotBands || []).find((b) => b.id === '20m');
-      ok(!!b20 && Math.abs(b20.hz - CENTRE) < 1 && b20.hi - b20.lo > 9000 && b20.hi - b20.lo < 11000 && JSON.stringify(b20.modes) === '["FT8","FT4"]',
+      ok(!!b20 && Math.abs(b20.hz - CENTRE) < 1 && b20.hi - b20.lo > 23000 && b20.hi - b20.lo < 24500
+         && JSON.stringify(b20.modes) === '["FT8","FT4","FT2","JS8","WSPR"]',
          `20 m listed: centre ${b20 && b20.hz}, span ${b20 && b20.lo}–${b20 && b20.hi}, modes ${b20 && JSON.stringify(b20.modes)}`);
-      ok(st && (st.spotBands || []).map((b) => b.id).join(' ').startsWith('160m 80m'), `bands in step order: ${st && (st.spotBands || []).map((b) => b.id).join(' ')}`);
+      ok(st && (st.spotBands || []).map((b) => b.id).join(' ').startsWith('160m 80m') /* ★ WSPR's 2200 m / 630 m lie below this radio */, `bands in step order: ${st && (st.spotBands || []).map((b) => b.id).join(' ')}`);
       const L = await listener(S.port, 'spone001', CENTRE, 'usb');
       L.dx.send({ type: 'subscribe_digital_spots', scope: 'band' });
       ok(await until(allSpotted(L), 50000), `every station spotted within 50 s (${jsons(L.dx, 'digital_spot').map((x) => x.data.mode + ' ' + x.data.callsign).join(', ')})`);

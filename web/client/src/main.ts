@@ -14,6 +14,8 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand } from './ism';
+import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
+import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -31,6 +33,7 @@ import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
+import { earTags, needleAlpha } from './vfoAB';
 import { FrameClock, renderEvery } from './wfPacing';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
@@ -74,6 +77,7 @@ import { PsStabiliser } from '../../../src/services/psStabiliser';
 import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
+import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { DIGI_MARKER_RIM, digiModeStyle, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
@@ -124,6 +128,8 @@ import { RecordBufferAnchor, parseRecordBufferSeconds } from '../../../src/servi
 import { probeMapGL, type MapGLKit } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
+import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
+import { DSC_CHANNELS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, type DscCall, type DscPin } from './dsc';
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
@@ -763,7 +769,13 @@ async function loadAudioPolicy(httpBase: string) {
   dialModeNow = 'exclusive';   // ★ a new receiver's dial is unknown until it says
   adsbCap = null;              // ★ an older server (or no answer) draws no ADS-B control
   ismCap = null;               // ★ …nor an ISM one
+  ndbCap = null;               // ★ …nor an NDB one
+  aisCap = null;               // ★ …nor an AIS one
+  aprsCap = false;             // ★ …nor an APRS decoder
   cwCap = false;               // ★ …nor a CW decoder
+  pskCap = false;              // ★ …nor a PSK one
+  dscCap = false;              // ★ …nor DSC
+  jttyCap = false;             // ★ …nor JTTY
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
   firstConfigDone = false;
@@ -799,10 +811,24 @@ async function loadAudioPolicy(httpBase: string) {
     dabCapable = j.dab === true;
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
+    ndbReadCap(j);               // ★ NDB (V12): the same three states
+    aisReadCap(j);               // ★ AIS (V12): the same three states — absent where the radio cannot reach 162 MHz
+    aprsCap = j.aprs === true;   // ★ APRS (V12): this server's own decoder on the listener's NFM / SSB audio
+    if (typeof j.aprsHz === 'number' && j.aprsHz > 0) aprsHz = j.aprsHz;
+    { const b = document.querySelector('#decodersPanel [data-dec="aprs"]') as HTMLElement | null; if (b) b.hidden = !aprsCap || blockedModes.has('aprs'); }
     cwCap = j.cw === true;       // ★ CW (V12): this server's own decoder and skimmer
     spotsReadCap(j);             // ★ DIGITAL SPOTS (V12): the modes this server decodes, and Band mode's bands — see spotsReadCap
     { const b = document.querySelector('#decodersPanel [data-dec="cw"]') as HTMLElement | null;
       if (b) b.hidden = !cwCap || blockedModes.has('cw'); }
+    pskCap = j.psk === true;     // ★ PSK31/63 (V12): this server's own decoder and skimmer
+    { const b = document.querySelector('#decodersPanel [data-dec="psk"]') as HTMLElement | null;
+      if (b) b.hidden = !pskCap || blockedModes.has('psk'); }
+    dscCap = j.dsc === true;     // ★ DSC (V12): maritime Digital Selective Calling, decoded by this server
+    { const b = document.querySelector('#decodersPanel [data-dec="dsc"]') as HTMLElement | null;
+      if (b) b.hidden = !dscCap || blockedModes.has('dsc'); }
+    jttyCap = j.jtty === true;   // ★ JTTY (V12): the WSJT-X 3.2 keyboard mode, decoded by this server
+    { const b = document.querySelector('#decodersPanel [data-dec="jtty"]') as HTMLElement | null;
+      if (b) b.hidden = !jttyCap || blockedModes.has('jtty'); }
     dabBoost = j.dabBoost === true;
     dabBoostUseful = j.dabBoostUseful === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
@@ -1567,6 +1593,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *  the room's passband change and his sliders stayed put. SpectrumClient has already written the
      *  room's values; this redraws them and sends NOTHING — setMode(…, false, true) and syncBw() only
      *  draw. The waterfall's sidebands read spec.bandwidthLow/High on the next frame by themselves. */
+    onWatch: (note) => abOnWatch(note),   // ★★ V12 VFO A/B
     onRoomPassband: (mode) => {
       if (mode) { setMode(mode, false, true); renderFreq(); }
       else syncBw();
@@ -1638,6 +1665,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAdsb: (r) => onAdsbReport(r),
     onIsm: (r) => onIsmReport(r),
     onIsmError: (why: string) => { showPill(why, 7000); if (ismOn && !ismReport) ismUiOff(); },
+    onNdb: (r) => onNdbReport(r),
+    onNdbError: (why: string) => { showPill(why, 7000); if (ndbOn && !ndbReport) ndbUiOff(); },
+    onNdbFound: (m) => ndbView?.found_(m),
+    onNdbStats: (m) => ndbView?.stats_(m),
+    onAis: (r) => onAisReport(r),
+    onAisError: (why: string) => { showPill(why, 7000); if (aisOn && !aisReport) aisUiOff(); },
+    onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     onDab: (d: DabState) => {
       if (!d) {
@@ -1864,7 +1898,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'jtty' && !jttyCap);
       }
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
        *  DAB never produces a spot, so both buttons were dead weight there (Stuart, 2026-09-17).
@@ -2374,7 +2408,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onSigStat: (chan, floor) => {
       if (!Number.isFinite(chan) || !Number.isFinite(floor)) return;
-      srvChanDb = chan; srvFloorDb = floor; srvSigValid = true;
+      // ★★ V12: with VFO B selected, the meter and the squelch bar read B's own channel level (its watch state).
+      const bLvl = spec?.abOn && spec.abSel === 'B' ? spec.watchState?.chans.find((c) => c.id === 1)?.lvl : undefined;
+      srvChanDb = typeof bLvl === 'number' && bLvl > -150 ? bLvl : chan; srvFloorDb = floor; srvSigValid = true;
       // ★ Auto squelch steers from THIS figure and nothing else, so recompute exactly when it
       //   changes — a timer would either lag it or spin between messages.
       autoSquelchTick();
@@ -2497,7 +2533,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onStatus: (s) => { if (s === 'error') setStatus('error', 'audio'); },
   });
   applyRecBuf();
-  if (adsbOn || ismOn) audio.setQuiet(true);   // ★ a reconnect inside ADS-B / ISM stays quiet (syncAudioQuiet)
+  if (adsbOn || ismOn || aisOn || ndbOn) audio.setQuiet(true);   // ★ a reconnect inside ADS-B / ISM / AIS / NDB stays quiet (syncAudioQuiet)
   // ★★★ TELL IT WHETHER THERE IS ANYWHERE TO FALL BACK TO. With the owner's policy OFF the
   //     server REFUSES a socket opened without `codec=opus`, so 'falling back' swapped a
   //     struggling Opus stream for no stream at all — silently. The player keeps rebuilding
@@ -2520,7 +2556,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         onStatus: (st) => { if (st === 'error') setStatus('error', 'audio'); },
       });
       applyRecBuf();
-      if (adsbOn || ismOn) audio.setQuiet(true);
+      if (adsbOn || ismOn || aisOn || ndbOn) audio.setQuiet(true);
       audio.start().catch((e) => console.error('audio restart failed', e));
     };
   }
@@ -3283,13 +3319,16 @@ function renderFrame(frameTs: number) {
    *  VFO should grow to 96KHz and be tunable"). The skimmer decodes cwWidth Hz centred on the dial, so that is the box
    *  drawn — drawn only, never sent: the listener's own CW passband is untouched and comes back when the skimmer closes.
    *  Tuning moves the dial as ever, and the server's skimmer follows it. */
-  const skim = activeDec === 'cw' && cwSkim;
+  //   ★ The PSK skimmer's the same (V12 2026-10-26).
+  const skim = kbSkimOn();
+  const segW = activeDec === 'psk' ? pskWidth : cwWidth;
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (V12, 2026-10-26) — the extra-wide passband the server cuts and every
    *  mode's decoder reads its own dial from, drawn where it is (it need not be centred: an exact frequency typed inside
    *  the band moves the dial, the span stays on the modes). Drawn only, never sent, as the skimmer's. */
   const bp = bandSpots && spotBandCap ? bandPassband(spotBandCap.bands, spec.frequency) : null;
-  wf.filterLow = bp ? bp[0] : skim ? -cwWidth / 2 : spec.bandwidthLow;
-  wf.filterHigh = bp ? bp[1] : skim ? cwWidth / 2 : spec.bandwidthHigh;
+  wf.filterLow = bp ? bp[0] : skim ? -segW / 2 : spec.bandwidthLow;
+  wf.filterHigh = bp ? bp[1] : skim ? segW / 2 : spec.bandwidthHigh;
+  abDraw();   // ★★ V12 VFO A/B — the other needle, the labels, the brightness
   const measuring = isPerf();
   const t0 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL HOLD IS OFF. It froze the display while tuning (Stuart, 2026-08-10: "when I
@@ -3315,7 +3354,7 @@ function renderFrame(frameTs: number) {
   if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
   /* ★ ADS-B's map covers the page as the START screen does (opaque, full-screen): nothing behind it is
    *  drawn, and rows still arrive (1 fps in ADS-B) so the picture is current the moment the map goes. */
-  const drawWf = !NO_WF && !startScreenUp && !adsbViewUp;
+  const drawWf = !NO_WF && !startScreenUp && !adsbViewUp && !trackViewUp() && !ndbViewUp;
   if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick(frameTs));   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen and ADS-B's full-screen map
@@ -3339,7 +3378,7 @@ function renderFrame(frameTs: number) {
   // stale span while the waterfall drew the new one (Stuart 2026-07-24 — "wrong but back"). Keep the
   // VFO/rf-centre terms so tuning still forces a redraw.
   const key = `${spec.frequency}|${spec.rfCenterHz()}|${wf.spanHz}|${wf.displayCenterHz()}|${window.innerWidth}`;
-  if (key !== lastViewKey && !startScreenUp && !adsbViewUp) {
+  if (key !== lastViewKey && !startScreenUp && !adsbViewUp && !trackViewUp() && !ndbViewUp) {
     lastViewKey = key;
     guard('web-render', 'scale', drawScale);
     guard('web-render', 'bands', drawBands);
@@ -7726,7 +7765,7 @@ function adsbReadCap(j: any) {
 /** ★ ADS-B and ISM have nothing to hear: the page lets go of the audio output while either is on (audio.ts setQuiet —
  *  the AirPods followed a page "playing" silence). One rule for both, so a hand-over between them never plays a gap. */
 function syncAudioQuiet() {
-  const q = adsbOn || ismOn;
+  const q = adsbOn || ismOn || aisOn || ndbOn;
   if (!audio || audio.quiet === q) return;
   audio.setQuiet(q);
   updateMediaSession();
@@ -8019,6 +8058,89 @@ function ismSetMode(on: boolean) {
     ismUiOff();
   }
 }
+/* ★★★ NDB (V12, docs/v12/NDB-SKIMMER.md) — the LF beacon skimmer. A LISTENING whole-radio mode: the server puts the
+ *  capture on the beacon band and decodes every beacon in it; the listener keeps the VFO, mode and audio inside it (a row
+ *  tapped tunes to that beacon). The view, the zoom and the IF filter are the mode's (greyed, saying why). Offered only
+ *  where vibeserver.json says so: `ndb` true / false (greyed, `ndbWhy` on a tap) / absent (no LF on this radio). */
+let ndbCap: { ok: boolean; why: string } | null = null;
+let ndbOn = false;
+let ndbReport: NdbReport | null = null;
+let ndbView: NdbView | null = null;
+function ndbReadCap(j: any) {
+  if (j?.ndb === true || j?.ndb === false) {
+    const why = typeof j.ndbWhy === 'string' ? j.ndbWhy.trim().slice(0, 200) : '';
+    ndbCap = { ok: j.ndb === true, why: j.ndb === true ? '' : (why || 'NDB is not available on this receiver') };
+  } else ndbCap = null;
+}
+/** ★ The UI half of entering NDB — ADS-B's (adsbUiOn): a running decoder stopped, the box closed, the controls held,
+ *  the audio let go (nothing to hear), the map view up over the (throttled) waterfall. */
+function ndbUiOn() {
+  ndbOn = true;
+  syncAudioQuiet();
+  if (spec) spec.ndbHeld = true;
+  setTimeout(syncDialTips, 0);
+  if (activeDec === 'rds') { spec?.rdsxLight(false); $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); }
+  if (activeDec) { decoders?.detach(); activeDec = null; syncDecButtons(); }
+  $('spotList').classList.remove('on');
+  $('spotFilters').classList.remove('show');
+  $('decImage').classList.remove('on');
+  if (!dabOn) $('decBox').classList.remove('open');
+  wholeRadioLock(true, 'NDB');
+  applyRateOptions();
+  populateHw();
+  if (!document.getElementById('ndbDlgCss')) { const st = document.createElement('style'); st.id = 'ndbDlgCss'; st.textContent = NDB_DLG_CSS; document.head.appendChild(st); }
+  if (!ndbView) ndbView = new NdbView({
+    onExit: () => ndbSetMode(false),
+    find: (q) => spec?.ndbFind(q, q ? 120 : 300),
+    stats: () => spec?.ndbStats(),
+    myPos: () => myPos(),
+  });
+  ndbInerted = [];
+  for (const id of ['app', 'vts']) { const el = document.getElementById(id); if (el && !el.inert) { el.inert = true; ndbInerted.push(el); } }
+  ndbView.show();
+  ndbViewUp = true;
+  updateVts();
+}
+let ndbInerted: HTMLElement[] = [];
+/** ★ The map is covering the page: renderFrame skips the waterfall (ADS-B's adsbViewUp). */
+let ndbViewUp = false;
+function ndbUiOff() {
+  ndbOn = false;
+  ndbReport = null;
+  if (spec) spec.ndbHeld = false;
+  setTimeout(syncDialTips, 0);
+  wholeRadioLock(false, 'NDB');
+  syncAudioQuiet();
+  ndbView?.hide();
+  ndbViewUp = false;
+  for (const el of ndbInerted) el.inert = false;
+  ndbInerted = [];
+  lastViewKey = '';
+  applyRateOptions();
+  populateHw();
+  updateVts();
+  if (!dabOn && decoders?.spotsEnabled) showDecBox('spots');
+}
+function ndbSetMode(on: boolean) {
+  if (on) {
+    if (ndbCap && !ndbCap.ok) { showPill(ndbCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.ndb(true); return; }   // ★ ask before tuning: spec says why
+    audio?.holdHealing(6000);
+    ndbUiOn();
+    spec?.ndb(true);
+  } else {
+    audio?.holdHealing(6000);
+    spec?.ndb(false);
+    ndbUiOff();
+  }
+}
+/** ★ A report (on) or the server's `ndb_off` (null). */
+function onNdbReport(r: NdbReport | null) {
+  if (!r) { if (ndbOn) { audio?.holdHealing(6000); ndbUiOff(); } return; }
+  ndbReport = r;
+  if (!ndbOn) ndbUiOn();   // ★ somebody else put the receiver in NDB (or we joined it)
+  ndbView?.update(r);
+}
 /** ★ A report (on) or the server's `ism_off` (null). */
 function onIsmReport(r: IsmReport | null) {
   if (!r) { if (ismOn) { audio?.holdHealing(6000); ismUiOff(); } return; }
@@ -8029,6 +8151,98 @@ function onIsmReport(r: IsmReport | null) {
   const n = ismNeighbours();
   ismBox?.update(r, { down: !!n.prev, up: !!n.next });
   if (bandChanged) { syncDialTips(); renderFreq(); }
+}
+
+/* ★★★ AIS MODE (V12, docs/v12/AIS-APRS.md) — ADS-B's shape on the page: the map IS the mode. The server puts the whole radio
+ *  on 162.000 MHz and decodes both AIS channels; the page covers itself with the ship map and its live list (tracks.ts
+ *  TrackView — the markers, glide, a tapped ship's track and its card are web/mapkit/tracklayer.js). Nothing to tune: the
+ *  arrows, zoom and filter are held, and the server ignores them. ★ Offered only where vibeserver.json says so: `ais` true
+ *  (live) / false (greyed, `aisWhy` on a tap) / absent (a radio that cannot reach 162 MHz, the HF+ — no control at all). */
+let aisCap: { ok: boolean; why: string } | null = null;
+let aisOn = false;
+let aisReport: AisReport | null = null;
+let aisView: TrackView | null = null;
+const aisTrailWait = new Map<number, (pts: [number, number][]) => void>();
+function trackViewUp(): boolean { return !!(aisView?.open || aprsView?.open); }
+function aisReadCap(j: any) {
+  if (j?.ais === true) aisCap = { ok: true, why: '' };
+  else if (j?.ais === false) {
+    const why = typeof j.aisWhy === 'string' ? j.aisWhy.trim().slice(0, 200) : '';
+    aisCap = { ok: false, why: why || 'AIS is not available on this receiver' };
+  } else aisCap = null;
+}
+function aisUiOn() {
+  aisOn = true;
+  syncAudioQuiet();
+  if (spec) spec.aisHeld = true;
+  closePanels();
+  if (!aisView) aisView = new TrackView({
+    title: 'AIS · 161.975 + 162.025 MHz', exitLabel: 'EXIT AIS', listTitle: 'SHIPS', onExit: () => aisSetMode(false),
+    icon: aisIcon, label: aisName, card: (v) => aisCard(v, myPos()),
+    trail: (key, done) => { const m = Number(key); if (!(m > 0) || !spec) { done([]); return; } aisTrailWait.set(m, done); spec.aisTrail(m); },
+  });
+  aisView.show(myPos());
+  aisRender();
+}
+function aisUiOff() {
+  aisOn = false;
+  syncAudioQuiet();
+  aisReport = null;
+  if (spec) spec.aisHeld = false;
+  aisView?.hide();
+  aisTrailWait.clear();
+  renderFreq();
+}
+function aisSetMode(on: boolean) {
+  if (on) {
+    if (aisCap && !aisCap.ok) { showPill(aisCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.ais(true); return; }   // ★ ask before tuning: spec says why
+    if (dabOn) { dabRestore = null; dabOn = false; dabState = null; syncStereoLight(); wf?.applySettings({ minRangeDb: 30 }); dabUiOff(); dabSetPane(dabPane); }
+    audio?.holdHealing(6000);
+    aisUiOn();
+    spec?.ais(true);
+  } else {
+    audio?.holdHealing(6000);
+    spec?.ais(false);
+    aisUiOff();
+  }
+}
+function aisRender() {
+  if (!aisView) return;
+  const r = aisReport;
+  const items = r ? r.vessels.filter((v) => v.lat != null && v.lon != null).map((v) => ({ ...v, key: String(v.mmsi) })) : [];
+  aisView.update(items, r ? aisRows(r, myPos()) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>',
+                 aisStatus(r), r ? r.vessels.length : 0, myPos(), r ? aisSafetyHtml(r) : '');
+}
+/** ★ A report (on) or the server's `ais_off` (null). */
+function onAisReport(r: AisReport | null) {
+  if (!r) { if (aisOn) { audio?.holdHealing(6000); aisUiOff(); } return; }
+  aisReport = r;
+  if (!aisOn) aisUiOn();   // ★ somebody else put the receiver in AIS (or we joined it)
+  audio?.holdHealing(8000);   // ★ nothing to hear: the server sends no audio (as in ADS-B)
+  aisRender();
+}
+
+/* ★★ APRS'S MAP (V12) — the APRS decoder box's MAP button opens the same full-screen map with the stations heard (their
+ *  symbols, a tapped one's track and its card). Closing it goes back to the box; the decoder carries on either way. */
+let aprsView: TrackView | null = null;
+let aprsLast: AprsList | null = null;
+let aprsHz = 144.8e6;
+const aprsTrails = new Map<string, [number, number][]>();
+function aprsMapOpen() {
+  if (!aprsView) aprsView = new TrackView({
+    title: 'APRS', exitLabel: 'CLOSE MAP', listTitle: 'STATIONS', onExit: () => aprsView?.hide(),
+    icon: aprsIcon, label: aprsName, card: (st) => aprsCard(st, myPos()),
+    trail: (key, done) => done(aprsTrails.get(key) ?? []),
+  });
+  aprsView.show(myPos());
+  aprsMapRender();
+}
+function aprsMapRender() {
+  if (!aprsView?.open) return;
+  const l = aprsLast;
+  const items = l ? l.stations.filter((st) => st.lat != null && st.lon != null && !st.killed) : [];
+  aprsView.update(items, l ? aprsRows(l, myPos()) : '', aprsStatus(l, aprsHz), l ? l.stations.length : 0, myPos());
 }
 
 /** Spend a demodulator picked during ADS-B on the first config out of it (see adsbPendingMode). */
@@ -8148,8 +8362,9 @@ function adsbMarkSel(hex: string, reveal: boolean) {
  *  the two can never disagree about which controls a whole-radio mode holds. The holds themselves are in
  *  SpectrumClient (dabHeld / adsbHeld); this is the visible half.
  *  ★ DAB keeps the arrows (they step the multiplex — see nudge); ADS-B has nothing to step, so they go too. */
-function wholeRadioLock(on: boolean, who: 'DAB' | 'ADS-B') {
+function wholeRadioLock(on: boolean, who: 'DAB' | 'ADS-B' | 'NDB') {
   const why = who === 'DAB' ? 'Zoom is locked in DAB — the span is the multiplex'
+            : who === 'NDB' ? 'Locked in NDB — the receiver is skimming the whole beacon band'
                             : 'Locked in ADS-B — the receiver is held on 1090 MHz';
   /* ★ FIT too: resetting the view is a zoom like any other, and it was greyed only on the retired
    *  desktop bar's FIT button — the card's (#mPanelFit, in the menu) stayed live and did nothing. */
@@ -8184,11 +8399,12 @@ function wholeRadioLock(on: boolean, who: 'DAB' | 'ADS-B') {
     bw.disabled = on;
     if (on) { if (bw.dataset.lockTitle === undefined) bw.dataset.lockTitle = bw.title;
               bw.title = who === 'DAB' ? 'Set by DAB — the filter is pinned to the multiplex while it is being received'
+                       : who === 'NDB' ? 'Set by NDB — the filter is the whole capture while beacons are decoded'
                                        : 'Set by ADS-B — the filter is the whole capture while aircraft are decoded'; }
     else if (bw.dataset.lockTitle !== undefined) { bw.title = bw.dataset.lockTitle; delete bw.dataset.lockTitle; }
   }
   /* ★ ADS-B: the passband sliders too — the server ignores a passband while it decodes 1090. */
-  if (who === 'ADS-B') {
+  if (who === 'ADS-B' || who === 'NDB') {
     for (const el of Array.from(document.querySelectorAll('.bwRow input, .bwRow button, .bwRow select')) as HTMLInputElement[]) {
       el.disabled = on;
     }
@@ -8372,7 +8588,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -8408,6 +8624,8 @@ function buildControls() {
                          if (adsbOn) { adsbPendingMode = m as SDRMode; adsbSetMode(false); return; }
                          // ★ ISM likewise: the pick waits for the dial the server gives back (adsbApplyPending runs off any config)
                          if (ismOn) { adsbPendingMode = m as SDRMode; ismSetMode(false); return; }
+                         // ★ AIS likewise
+                         if (aisOn) { adsbPendingMode = m as SDRMode; aisSetMode(false); return; }
                          if (dabOn) dabSetMode(false); setMode(m as SDRMode, true); airbandFollowPassband(); renderFreq(); },
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
@@ -8419,13 +8637,19 @@ function buildControls() {
     // ★ Null between multiplexes (a retune sets dabState = null): the card then says it is searching.
     dabQuality:    () => (dabOn && dabState ? dabQuality : null),
     /* ★ DAB from ADS-B: the server leaves ADS-B itself (it sends adsb_off first), so only our UI unwinds here. */
-    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); dabSetMode(!dabOn); },
+    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); },
     adsbCap:       () => adsbCap,
     adsbOn:        () => adsbOn,
-    toggleAdsb:    () => { if (ismOn && !adsbOn) ismUiOff(); adsbSetMode(!adsbOn); },
+    toggleAdsb:    () => { if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); },
     ismCap:        () => ismCap,
     ismOn:         () => ismOn,
-    toggleIsm:     () => { if (adsbOn && !ismOn) adsbUiOff(); ismSetMode(!ismOn); },
+    toggleIsm:     () => { if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); },
+    aisCap:        () => aisCap,
+    aisOn:         () => aisOn,
+    toggleAis:     () => { if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); },
+    ndbCap:        () => ndbCap,
+    ndbOn:         () => ndbOn,
+    toggleNdb:     () => { if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); ndbSetMode(!ndbOn); },
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();
@@ -8511,6 +8735,7 @@ function buildControls() {
   kbField($('search'), { title: 'SEARCH', onOpen: () => refreshServerBookmarks() });
   initWaterfallInput();
   initKeyboard();
+  initVfoAB();
 }
 
 /**
@@ -10307,13 +10532,14 @@ function bandSpotsUi(on: boolean) {
   if ($('decBox').classList.contains('open') && decoders?.spotsEnabled) $('decTitle').textContent = spotsTitle();
   renderFreq();
 }
-/** "FT8 / FT4 SPOTS" (Single) · "DIGITAL SPOTS · 20 m BAND" (Band). */
+/** "FT8 / FT4 SPOTS" (Single, a server with those two) · "DIGITAL SPOTS" (Single, a server with more: FT2, JS8 …
+ *  decode on whichever of their dials the listener is on) · "DIGITAL SPOTS · 20 m BAND" (Band). */
 function spotsTitle(): string {
   if (bandSpots && spotBandCap && spec) {
     const b = spotBandAt(spotBandCap.bands, spec.frequency);
     return b ? `DIGITAL SPOTS \u00b7 ${b.name.toUpperCase()} BAND` : 'DIGITAL SPOTS \u00b7 BAND';
   }
-  return spotModes.slice(0, 2).join(' / ') + ' SPOTS';
+  return spotModes.length > 0 && spotModes.length <= 2 ? spotModes.join(' / ') + ' SPOTS' : 'DIGITAL SPOTS';
 }
 /** Put the dial on band `b`'s centre, in USB — a listener's own tune (a user action: the shared-dial contract holds). */
 function bandSpotsGo(b: SpotBand) {
@@ -10344,11 +10570,6 @@ const SF_AGES: Array<{ label: string; minutes: number }> = [
 ];
 let sfMode = 0, sfBand = 0, sfAge = 0;
 
-/** UTC hh:mm, as the app shows it. */
-function fmtSpotTime(t: number): string {
-  const d = new Date(t);
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
-}
 
 /** Spots after the header filters. */
 function filteredSpots(): Spot[] {
@@ -10589,7 +10810,112 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'jtty' | null = null;
+/* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
+ *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
+ *  first, coloured by confidence) over the SPOTS; the settings hold the announced calling frequencies. Offered only where
+ *  vibeserver.json says "jtty": true. See jtty.ts. */
+let jttyCap = false;
+let jttyLast: JttySignal[] = [];
+const jttySpots = new JttySpots();
+function renderJtty() {
+  const body = document.getElementById('decBody');
+  const head = $('jttySpotsHead');
+  jttyPinWatch(body);
+  renderJttyRows($('jttyRows'), jttyLast, jttyTune);
+  renderJttySpots($('jttySpots'), jttySpots.list, fmtSpotTime, jttyTune);
+  // ★ THE VIEW STAYS WHERE THE LISTENER PUT IT (CW's rule): scrolled down at all = pinned to the SPOTS heading
+  if (body && jttyPinAt !== null) {
+    const want = Math.max(0, head.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - jttyPinAt);
+    if (Math.abs(want - body.scrollTop) >= 1) { jttyPinSetting = true; body.scrollTop = want; }
+  }
+}
+let jttyPinAt: number | null = null;
+let jttyPinSetting = false;
+let jttyPinBody: HTMLElement | null = null;
+function jttyPinWatch(body: HTMLElement | null) {
+  if (!body || jttyPinBody === body) return;
+  jttyPinBody = body;
+  body.addEventListener('scroll', () => {
+    if (jttyPinSetting) { jttyPinSetting = false; return; }   // ★ our own restore, not the listener
+    if (activeDec !== 'jtty') { jttyPinAt = null; return; }
+    const head = $('jttySpotsHead');
+    jttyPinAt = body.scrollTop > 0 ? head.getBoundingClientRect().top - body.getBoundingClientRect().top : null;
+  }, { passive: true });
+}
+/** ★ Tap a row or a spot: USB, the dial 1500 Hz below the station's tone 0 (its tones then sit mid-passband). */
+function jttyTune(rfHz: number) {
+  if (!spec || !(rfHz > 0)) return;
+  spec.tune(clampTune(jttyTuneFor(rfHz)), 'usb' as SDRMode, { recenter: true, retarget: true });
+  renderFreq();
+}
+/** ★ The announced JTTY calling frequencies this radio can reach — the rest are not drawn (AGENTS.md: no dead controls). */
+function initJttyDials() {
+  const host = document.getElementById('jttyDials');
+  if (!host) return;
+  host.textContent = '';
+  for (const d of JTTY_DIALS) {
+    if (clampTune(d.hz) !== d.hz) continue;
+    const b = document.createElement('button');
+    b.className = 'btn'; b.textContent = d.label;
+    b.title = `${(d.hz / 1e6).toFixed(3)} MHz USB — announced for JTTY in the WSJT-X 3.2 release candidates (preliminary)`;
+    b.onclick = () => { if (!spec) return; spec.tune(d.hz, 'usb' as SDRMode, { recenter: true, retarget: true }); renderFreq(); };
+    host.appendChild(b);
+  }
+}
+/* ★★ DSC (V12, 2026-10-26) — maritime Digital Selective Calling, decoded on the server (decoders/dsc_decoder.h). The box
+ *  lists the calls, newest first, coloured by what they are, a position's MAP beside it; the settings hold the DSC
+ *  channels to tune. Offered only where vibeserver.json says "dsc": true. See dsc.ts. */
+let dscCap = false;
+const dscCalls = new DscCalls();
+function renderDsc() {
+  renderDscRows($('dscRows'), dscCalls.list,
+    'listening — each DSC call appears here as it is decoded. A few an hour on each frequency; most are test calls '
+    + 'to coast stations and their acknowledgements.', (c) => openDscMap([c]));
+}
+/** ★ A channel key: tune it as a DSC receiver does, and re-attach so the decoder's tones follow. */
+function dscTune(ch: { hz: number; vhf: boolean }) {
+  if (!spec) return;
+  const t = dscTuneFor(ch);
+  spec.tune(clampTune(t.hz), t.mode as SDRMode, { recenter: true, retarget: true });
+  renderFreq();
+  reattachIf('dsc');
+}
+/** ★ The DSC channels this radio can actually reach — the rest are not drawn (AGENTS.md: no dead controls). */
+function initDscChannels() {
+  const host = document.getElementById('dscChans');
+  if (!host) return;
+  host.textContent = '';
+  for (const ch of DSC_CHANNELS) {
+    const t = dscTuneFor(ch);
+    if (clampTune(t.hz) !== t.hz) continue;
+    const b = document.createElement('button');
+    b.className = 'btn'; b.textContent = ch.label;
+    b.title = ch.vhf ? 'VHF channel 70, 156.525 MHz — tuned in NFM' : `${ch.label} kHz — tuned ${((ch.hz - 1700) / 1e3).toFixed(1)} kHz USB`;
+    b.onclick = () => dscTune(ch);
+    host.appendChild(b);
+  }
+}
+function openDscMap(calls: DscCall[]) {
+  const pins: DscPin[] = calls.filter((c) => c.lat !== null && c.lon !== null)
+    .map((c) => ({ lat: c.lat as number, lon: c.lon as number, label: c.line, level: c.level }));
+  openPinsMap(pins);
+}
+function openPinsMap(pins: DscPin[]) {
+  if (!pins.length) return;
+  const w = window.open('', '_blank');
+  if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
+  const origin = /^https?:$/.test(location.protocol) ? location.origin : '';
+  const leaflet = LEAFLET_ASSET ? { js: origin + LEAFLET_ASSET.js, css: origin + LEAFLET_ASSET.css, jsSri: LEAFLET_ASSET.jsSri, cssSri: LEAFLET_ASSET.cssSri } : null;
+  void Promise.all([probeMapGL(), loadVibemapSource()]).then(([kit, m]) => {
+    if (w.closed) return;
+    w.document.write(dscMapHtml(kit, m.VIBEMAP_JS, pins, myPos(), leaflet, origin ? origin + '/mapdata/v1/' : '/mapdata/v1/'));
+    w.document.close();
+  }).catch((e) => {
+    console.error('[map] the map could not load', e);
+    if (!w.closed) { w.document.write('<!doctype html><meta charset="utf-8"><body style="background:#080601;color:#ffb833;font:14px monospace;padding:2em">The map did not finish loading. Close this window and try again.'); w.document.close(); }
+  });
+}
 /* ★★ CW (V12, 2026-10-25) — the server's own decoder (decoders/cw_skimmer.h). ONE SIGNAL decodes this listener's
  *  passband ('cw', on their audio); SKIMMER every CW signal across a segment centred on the dial ('cwskim', on IQ). The
  *  box shows the primary signal's text (#decText, one-signal only) over the list of signals and the spots. Offered only
@@ -10599,9 +10925,28 @@ let cwSkim = false;
 let cwWidth = 48000;
 let cwLast: CwList | null = null;
 const cwSpotsSeen: CwSpot[] = [];
-/** The extension a decoder button attaches — CW's depends on its view. */
+/* ★★ PSK31/63 (V12, 2026-10-26) — the server's own (decoders/psk_skimmer.h), CW's two views exactly: ONE SIGNAL decodes
+ *  the passband ('psk' — the signal nearest the middle of it is the box's, a PSK program's cursor) and lists every PSK
+ *  signal in it; SKIMMER every one across a segment centred on the dial ('pskskim'). ONE list box serves both decoders
+ *  (#cwList — only one runs at a time): the same order, colours, spots and pinned view; PSK shows its mode where CW
+ *  shows its speed. Offered only where vibeserver.json says "psk": true. */
+let pskCap = false;
+let pskSkim = false;
+let pskWidth = 12000;
+/** A keyboard-mode list decoder (CW or PSK) is open. */
+function kbOn(): boolean { return activeDec === 'cw' || activeDec === 'psk'; }
+/** …and it is the SKIMMER view (its VFO is drawn as its segment). */
+function kbSkimOn(): boolean { return (activeDec === 'cw' && cwSkim) || (activeDec === 'psk' && pskSkim); }
+/** The middle of the listener's passband, audio Hz — ONE SIGNAL's cursor for PSK (USB 200–2800 → 1500). */
+function passbandCentreHz(): number {
+  if (!spec) return 1500;
+  const c = Math.abs((spec.bandwidthLow + spec.bandwidthHigh) / 2);
+  return c >= 300 && c <= 3500 ? Math.round(c) : 1500;
+}
+/** The extension a decoder button attaches — CW's and PSK's depend on their view. */
 function decExt(mode: string): Exclude<DecoderMode, null> {
   if (mode === 'cw') return cwSkim ? 'cwskim' : 'cw';
+  if (mode === 'psk') return pskSkim ? 'pskskim' : 'psk';
   return mode as Exclude<DecoderMode, null>;
 }
 function cwAge(ms: number): string {
@@ -10611,10 +10956,14 @@ function cwAge(ms: number): string {
 function cwFreq(sg: { hz: number; audio: number }): string {
   return sg.hz > 0 ? (sg.hz / 1e3).toFixed(2) : `${Math.round(sg.audio)} Hz`;
 }
-/** ★ Tap a row: tune to that signal in CW (a carrier on the dial is this server's CW tone). */
+/** ★ Tap a row: tune to that signal — CW in CW (a carrier on the dial is this server's CW tone); PSK in USB with the
+ *  signal in the middle of the passband (LSB if the listener is in LSB), so it is the one ONE SIGNAL decodes. */
 function cwTune(hz: number) {
   if (!spec || !(hz > 0)) return;
-  spec.tune(clampTune(Math.round(hz)), 'cwu', { recenter: true, retarget: true });
+  if (activeDec === 'psk') {
+    const lsb = spec.mode === 'lsb', c = lsb || spec.mode === 'usb' ? passbandCentreHz() : 1500;
+    spec.tune(clampTune(Math.round(lsb ? hz + c : hz - c)), lsb ? 'lsb' : 'usb', { recenter: true, retarget: true });
+  } else spec.tune(clampTune(Math.round(hz)), 'cwu', { recenter: true, retarget: true });
   renderFreq();
 }
 function renderCw() {
@@ -10630,8 +10979,10 @@ function renderCw() {
   rows.textContent = '';
   if (!l || !l.signals.length) {
     const d = document.createElement('div'); d.className = 'idle';
-    d.textContent = cwSkim ? 'listening across the segment — each CW signal appears here as it is decoded'
-                           : 'listening — tune a CW signal into the passband';
+    const psk = activeDec === 'psk', what = psk ? 'PSK' : 'CW';
+    d.textContent = (psk ? pskSkim : cwSkim) ? `listening across the segment — each ${what} signal appears here as it is decoded`
+                  : psk ? 'listening — every PSK signal in your passband appears here; the one in the middle is decoded above'
+                        : 'listening — tune a CW signal into the passband';
     rows.appendChild(d);
   }
   /* ★★ LOWEST FREQUENCY FIRST, ALWAYS (Stuart, 2026-10-25: "the CW Skimmer list likes to reorder itself a lot so I think
@@ -10642,16 +10993,20 @@ function renderCw() {
     const r = document.createElement('div');
     // ★ q-<confidence> colours the message (#cwList .cwr.q-low .tx …): red poor, orange low, amber medium, green high (Stuart).
     r.className = 'cwr q-' + sg.q + (sg.active ? '' : ' gone') + (!l!.skimmer && sg.id === l!.primary ? ' primary' : '');
+    // ★ PSK: its mode where CW has its speed, and its IMD (where measured) in the title
+    const psk = sg.baud !== undefined;
     r.innerHTML =
       `<span class="f">${escapeHtml(cwFreq(sg))}</span>` +
       `<span class="c${sg.call ? '' : ' none'}">${escapeHtml(sg.call || '—')}</span>` +
-      `<span class="w">${Math.round(sg.wpm)} wpm</span>` +
+      `<span class="w">${psk ? `PSK${sg.baud}` : `${Math.round(sg.wpm)} wpm`}</span>` +
       `<span class="s">${sg.snr >= 0 ? '+' : ''}${Math.round(sg.snr)} dB</span>` +
       `<span class="q ${sg.q}">${sg.q}</span>` +
       `<span class="a">${sg.active ? cwAge(sg.last) : cwAge(sg.last)}</span>` +
       `<span class="tx"><bdi>${escapeHtml(sg.text.trim())}</bdi></span>`;
     r.title = `${sg.call ? sg.call + (sg.country ? ' · ' + sg.country : '') + ' · ' : ''}${cwFreq(sg)}${sg.hz > 0 ? ' kHz' : ''} · `
-            + `${Math.round(sg.wpm)} WPM · SNR ${Math.round(sg.snr)} dB in the decoder's 47 Hz bin · ${sg.q} · `
+            + (psk ? `BPSK${sg.baud} · Es/N0 ${Math.round(sg.snr)} dB (in the baud rate's bandwidth) · `
+                     + (sg.imd ? `IMD ${Math.round(sg.imd)} dB · ` : '')
+                   : `${Math.round(sg.wpm)} WPM · SNR ${Math.round(sg.snr)} dB in the decoder's 47 Hz bin · `) + `${sg.q} · `
             + `${sg.active ? 'heard' : 'last heard'} ${cwAge(sg.last)} ago — tap to tune`;
     r.onclick = () => cwTune(sg.hz);
     rows.appendChild(r);
@@ -10670,8 +11025,8 @@ function renderCw() {
       `<span class="f">${escapeHtml(s.frequency > 0 ? (s.frequency / 1e3).toFixed(2) : `${Math.round(s.audio)} Hz`)}</span>` +
       `<span class="c">${escapeHtml(s.callsign)}</span>` +
       `<span class="ct">${escapeHtml(s.country)}</span>` +
-      `<span class="w">${Math.round(s.wpm)} wpm</span>`;
-    r.title = `${s.callsign} · ${s.how} · ${Math.round(s.snr)} dB — tap to tune`;
+      `<span class="w">${s.mode ? escapeHtml(s.mode.replace('BPSK', 'PSK')) : `${Math.round(s.wpm)} wpm`}</span>`;
+    r.title = `${s.callsign} · ${s.how}${s.mode ? ' · ' + s.mode : ''} · ${Math.round(s.snr)} dB — tap to tune`;
     r.onclick = () => cwTune(s.frequency);
     sp.appendChild(r);
   }
@@ -10696,7 +11051,7 @@ function cwPinWatch(body: HTMLElement | null) {
   cwPinBody = body;
   body.addEventListener('scroll', () => {
     if (cwPinSetting) { cwPinSetting = false; return; }   // ★ our own restore, not the listener
-    if (activeDec !== 'cw') { cwPinAt = null; return; }
+    if (!kbOn()) { cwPinAt = null; return; }
     cwPinAt = body.scrollTop > 0 ? cwHeadInBox(body, $('cwSpotsHead')) - body.scrollTop : null;
   }, { passive: true });
 }
@@ -10841,6 +11196,9 @@ function decParams(mode: string): Record<string, unknown> {
   }
   if (mode === 'time') return { station: timeStation };
   if (mode === 'cw') return cwSkim ? { width: cwWidth } : {};
+  if (mode === 'psk') return pskSkim ? { width: pskWidth } : { centre: passbandCentreHz() };
+  if (mode === 'aprs') return { baud_rate: aprsBaud };
+  if (mode === 'dsc') return dscParams(spec?.frequency ?? 0, String(spec?.mode ?? ''));
   return {};
 }
 
@@ -10849,6 +11207,8 @@ function initDecoders(host: string, auth: AuthState) {
     onText: (t: string) => {
       // ★ NAVTEX: into the message assembler, drawn by renderNavtex — #decText is hidden while it has the box.
       if (activeDec === 'navtex') { clearNavtexIfRetuned(); navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
+      if (activeDec === 'dsc') return;   // ★ DSC's rows are drawn from its JSON (onDscCall); the line is the same text
+      if (activeDec === 'jtty') return;  // ★ JTTY's rows are drawn from its JSON (onJttySignals); the line is the same text
       const el = $('decText');
       // ★★ A LEADING \r MEANS "REPLACE THE LAST LINE", as a terminal would. The time decoders send
       //    a progress line once a SECOND — the fields filling in as they arrive — and appending
@@ -10922,7 +11282,9 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === 'navtex') { navtexAsm.lockState(st, Date.now()); renderNavtex(); return; }
       // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
-      decStateText = activeDec === 'cw' ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
+      decStateText = activeDec === 'dsc' ? (st ? 'receiving a call…' : 'listening…')
+                   : activeDec === 'jtty' ? (st ? 'decoding…' : 'listening…')
+                   : kbOn() ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
                    : st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
       if (!decTuneHint) $('decStatus').textContent = decStateText;   // ★ the tuning guide, while up, IS the status
       setDecLive(!!st);
@@ -10975,9 +11337,55 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(true);
     },
     // ★★ CW: the list of signals, and the callsigns spotted (newest first; one row per call, the latest).
-    onCwSignals: (list) => { if (activeDec !== 'cw') return; cwLast = list; renderCw(); setDecLive(list.signals.some((x) => x.active)); },
+    // ★★ APRS (V12): the station list (2 s, and at once on joining) and each new packet.
+    onAprsList: (d) => {
+      if (activeDec !== 'aprs') return;
+      const l = aprsSanitise(d);
+      if (!l) return;
+      aprsLast = l;
+      for (const st of l.stations) if (st.trail && st.trail.length) aprsTrails.set(st.key, st.trail);
+      renderAprs(); aprsMapRender();
+      setDecLive(l.stations.some((x) => x.seen < 60));
+    },
+    onAprsPacket: (p) => {
+      if (activeDec !== 'aprs') return;
+      aprsLog.unshift({ t: Date.now(), line: p.line || p.raw });
+      if (aprsLog.length > 60) aprsLog.length = 60;
+      // ★ the track grows from the packets between lists (the list carries the whole track only to a joiner)
+      if (p.lat != null && p.lon != null) {
+        const tr = aprsTrails.get(p.key) ?? [];
+        const last = tr[tr.length - 1];
+        if (!last || last[0] !== p.lat || last[1] !== p.lon) { tr.push([p.lat, p.lon]); if (tr.length > 200) tr.shift(); aprsTrails.set(p.key, tr); }
+        const st = aprsLast?.stations.find((x) => x.key === p.key);
+        if (st) { st.lat = p.lat; st.lon = p.lon; st.seen = 0; }
+      }
+      renderAprs(); aprsMapRender();
+      setDecLive(true);
+    },
+    // ★★ DSC: a call (a repeat updates its row).
+    // ★★ JTTY: the stations list (once a second, when it changed) and each call heard.
+    onJttySignals: (d) => {
+      if (activeDec !== 'jtty') return;
+      const l = jttySignalsFromJson(d);
+      if (!l) return;
+      jttyLast = l; renderJtty(); setDecLive(l.some((x) => x.active));
+    },
+    onJttySpot: (d) => {
+      if (activeDec !== 'jtty') return;
+      const sp = jttySpotFromJson(d);
+      if (!sp) return;
+      jttySpots.push(sp); renderJtty();
+    },
+    onDscCall: (d) => {
+      if (activeDec !== 'dsc') return;
+      const c = dscFromJson(d);
+      if (!c) return;
+      dscCalls.push(c); renderDsc(); setDecLive(true);
+    },
+    //   (PSK's arrive here too, with its mode — decoders.ts; one list box serves both)
+    onCwSignals: (list) => { if (!kbOn()) return; cwLast = list; renderCw(); setDecLive(list.signals.some((x) => x.active)); },
     onCwSpot: (sp) => {
-      if (activeDec !== 'cw') return;
+      if (!kbOn()) return;
       const i = cwSpotsSeen.findIndex((o) => o.callsign === sp.callsign);
       if (i >= 0) cwSpotsSeen.splice(i, 1);
       cwSpotsSeen.unshift(sp);
@@ -11070,7 +11478,7 @@ function initDecoders(host: string, auth: AuthState) {
   //    semantics, same as the app). Selecting one opens the output box.
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'jtty';
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
       decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
@@ -11138,6 +11546,23 @@ function initDecoders(host: string, auth: AuthState) {
   });
   segButtons('cwWidth', 'cwwidth', (v) => { cwWidth = Number(v) || 48000; cwHint(); if (cwSkim) { cwLast = null; renderCw(); reattachIf('cw'); } });
   cwHint();
+  // ★ PSK: the same two views and the skimmer's segment.
+  const pskHint = () => {
+    $('pskWidthRow').hidden = !pskSkim;
+    $('pskHint').innerHTML = pskSkim
+      ? `Every PSK31 and PSK63 signal ${pskWidth / 2000} kHz either side of your dial, decoded at once — tune the dial to `
+        + 'the middle of the PSK segment (e.g. <b>14.0715</b>). A call heard calling twice is spotted. Tap a row to tune to it.'
+      : 'Tune <b>USB</b> with the PSK segment in your passband (e.g. <b>14.070</b>): every PSK31/63 signal in it is listed, '
+        + 'and the one in the middle of the passband is decoded above. Tap a row to put it there.';
+  };
+  segButtons('pskView', 'pskview', (v) => {
+    pskSkim = v === 'skim'; pskHint();
+    if (activeDec === 'psk') { cwLast = null; showDecBox('psk'); reattachIf('psk'); }
+  });
+  segButtons('pskWidth', 'pskwidth', (v) => { pskWidth = Number(v) || 12000; pskHint(); if (pskSkim) { cwLast = null; renderCw(); reattachIf('psk'); } });
+  pskHint();
+  initDscChannels();
+  initJttyDials();
 
   // Spots + map.
   const spotsBtn = $<HTMLButtonElement>('spotsBtn');
@@ -11179,8 +11604,21 @@ function initDecoders(host: string, auth: AuthState) {
     $('decText').textContent = '';
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
-    if (activeDec === 'cw') { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
+    if (kbOn()) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
+    if (activeDec === 'aprs') { aprsLog.length = 0; renderAprs(); }
+    if (activeDec === 'dsc') { dscCalls.clear(); renderDsc(); }
+    if (activeDec === 'jtty') { jttyLast = []; jttySpots.clear(); renderJtty(); }
   };
+  // ★ APRS: the map, the packet speed (a re-attach — a different modem on the server), and the region's channel
+  $('aprsMapBtn').onclick = () => aprsMapOpen();
+  segButtons('aprsBaud', 'aprsbaud', (v) => { aprsBaud = Number(v) === 300 ? 300 : 1200; aprsHintSync(); if (activeDec === 'aprs') { aprsLast = null; aprsLog.length = 0; renderAprs(); reattachIf('aprs'); } });
+  $('aprsTune').onclick = () => {
+    if (!spec) return;
+    if (aprsBaud === 300) spec.tune(clampTune(10147600), 'usb', { recenter: true, retarget: true });
+    else spec.tune(clampTune(Math.round(aprsHz)), 'nfm', { recenter: true, retarget: true });
+    renderFreq();
+  };
+  aprsHintSync();
   $('decPrev').onclick = () => (activeDec === 'navtex' ? toggleNavtexPrev() : toggleDecPrev());
   $('decSave').onclick = () => (activeDec === 'navtex' ? saveNavtex() : saveDecImage());
   // ★ A lost NNNN ends its message after 75 s of silence (NAVTEX_END_LOST_MS); nothing else would redraw then.
@@ -11318,8 +11756,57 @@ function reattachIf(mode: string) {
   if (activeDec === mode) { decTuneHint = ''; decoders?.attach(decExt(mode), decParams(mode)); }
 }
 
+/* ★★ APRS (V12, docs/v12/AIS-APRS.md) — the server's own decoder (vibe_aprs_run.h) on THIS listener's audio: 1200 Bd Bell 202
+ *  in NFM on the region's APRS channel (vibeserver.json "aprsHz" — 144.800 in Europe, 144.390 in North America …), or
+ *  300 Bd HF packet in USB. The box lists the stations (tap = on the map), the messages and the packets as they come. */
+let aprsCap = false;
+let aprsBaud = 1200;
+const aprsLog: { t: number; line: string }[] = [];
+function aprsHintSync() {
+  const b = document.getElementById('aprsTune');
+  if (b) b.textContent = aprsBaud === 300 ? 'TUNE 10.1476 USB' : `TUNE ${(aprsHz / 1e6).toFixed(3)} NFM`;
+  const h = document.getElementById('aprsHint');
+  if (h) h.innerHTML = aprsBaud === 300
+    ? 'HF packet: <b>300 Bd</b> on <b>10.1476 MHz USB</b> (30 m; 14.105 on 20 m). The decoder tries a few tunings either side, so close is close enough.'
+    : `VHF APRS: <b>${(aprsHz / 1e6).toFixed(3)} MHz NFM</b> here. Every station heard is listed, with its position, weather, messages and the digipeater that carried it. <b>MAP</b> in the box shows them on the map.`;
+}
+function renderAprs() {
+  const rows = document.getElementById('aprsRows');
+  if (!rows) return;
+  const l = aprsLast;
+  const rx = myPos();
+  if (!l || !l.stations.length) rows.innerHTML = `<div class="idle">listening — ${aprsBaud === 300 ? 'HF packet, 300 Bd' : 'APRS, 1200 Bd'}; stations appear with their first packet</div>`;
+  else rows.innerHTML = l.stations.slice(0, 80).map((st) => {
+    const rb = rx && st.lat != null && st.lon != null ? (() => { const d = Math.hypot((st.lat! - rx.lat) * 111.2, (st.lon! - rx.lon) * 111.2 * Math.cos(rx.lat * Math.PI / 180)); return d < 10 ? d.toFixed(1) : String(Math.round(d)); })() : '';
+    const line = (st.line || '').replace(/^[^·]*·\s*/, '');
+    return `<div class="ar${st.lat == null ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(st.key)}" title="${escapeHtml(st.raw || '')}">`
+      + `<span class="c"><i style="background:${aprsColourOf(st)}"></i>${escapeHtml(st.name || st.from)}</span><span class="l">${escapeHtml(line || st.kind)}</span>`
+      + `<span class="a">${rb ? rb + ' km · ' : ''}${escapeHtml(aprsAgo(st.seen))}</span></div>`;
+  }).join('');
+  for (const el of Array.from(rows.querySelectorAll('.ar')) as HTMLElement[]) {
+    el.onclick = () => { aprsMapOpen(); aprsView?.focus(el.dataset.key || ''); };
+    el.onkeydown = (e) => { if (e.key === 'Enter') el.click(); };
+  }
+  const msgs = l?.messages ?? [];
+  $('aprsMsgHead').hidden = !msgs.length;
+  $('aprsMsgs').innerHTML = msgs.slice(-20).reverse().map((m) => `<div class="m">${escapeHtml(m.from)} → ${escapeHtml(m.to)}: ${escapeHtml(m.kind === 'ack' ? m.text + ' ' + (m.id || '') : m.text)}</div>`).join('');
+  $('aprsLog').innerHTML = aprsLog.slice(0, 40).map((p) => {
+    const d = new Date(p.t);
+    return `<div class="p"><span class="t">${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}</span> ${escapeHtml(p.line)}</div>`;
+  }).join('') || '<div class="idle">no packets yet</div>';
+}
+function aprsAgo(s: number): string { return s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`; }
+function aprsColourOf(st: { kind: string; sym: string; speed?: number }): string {
+  if (st.kind === 'weather' || st.sym[1] === '_') return '#39d0d8';
+  if (st.kind === 'object' || st.kind === 'item') return '#ffad42';
+  if (st.sym[1] === '#' || st.sym[1] === '&' || st.sym[1] === 'r') return '#c58cff';
+  if (st.speed != null && st.speed >= 2) return '#4fa3ff';
+  return '#59c26b';
+}
+
 function stopDecoder() {
   if (activeDec === 'rds') spec?.rdsxLight(false);
+  if (activeDec === 'aprs') aprsView?.hide();
   decoders?.detach();
   activeDec = null;
   syncDecButtons();
@@ -11521,9 +12008,10 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, 
  *  no-op (AGENTS.md). This rule used to hide the retired desktop bar's DECODERS button and nothing
  *  else, so the card kept offering the empty panel. */
 function anyDecoderLeft(): boolean {
-  // ★ V12: CW counts only where this server has it (vibeserver.json "cw") — the button is hidden otherwise.
+  // ★ V12: CW and APRS count only where this server has them (vibeserver.json "cw", "aprs") — hidden otherwise.
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
-    || (cwCap && !blockedModes.has('cw'));
+    || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc'))
+    || (jttyCap && !blockedModes.has('jtty'));
 }
 
 function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
@@ -11543,6 +12031,12 @@ function syncDecButtons() {
   $('wefaxSettings').hidden = activeDec !== 'wefax';
   $('timeSettings').hidden = activeDec !== 'time';
   $('cwSettings').hidden = activeDec !== 'cw';
+  $('pskSettings').hidden = activeDec !== 'psk';
+  $('aprsSettings').hidden = activeDec !== 'aprs';
+  $('dscSettings').hidden = activeDec !== 'dsc';
+  if (activeDec === 'dsc') initDscChannels();   // ★ the radio's range may have changed since the page loaded
+  $('jttySettings').hidden = activeDec !== 'jtty';
+  if (activeDec === 'jtty') initJttyDials();
 }
 
 function showDecBox(what: string) {
@@ -11557,6 +12051,8 @@ function showDecBox(what: string) {
   $('decTitle').textContent = what === 'spots' ? spotsTitle()
                             : what === 'rds'   ? 'ADV RDS'
                             : what === 'cw'    ? (cwSkim ? 'CW SKIMMER' : 'CW')
+                            : what === 'psk'   ? (pskSkim ? 'PSK SKIMMER' : 'PSK')
+                            : what === 'aprs'  ? (aprsBaud === 300 ? 'APRS · HF 300' : 'APRS')
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
@@ -11573,9 +12069,22 @@ function showDecBox(what: string) {
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
   // ★ CW: the list under the primary signal's text (ONE SIGNAL), or the list alone (SKIMMER — it is all list).
-  const isCw = what === 'cw';
+  const isCw = what === 'cw' || what === 'psk';   // ★ PSK's list is the same box
+  const listSkim = (what === 'cw' && cwSkim) || (what === 'psk' && pskSkim);
   $('cwList').classList.toggle('on', isCw);
+  // ★ APRS: the station list and the packets are the whole box (no text pane); MAP opens the map
+  const isAprs = what === 'aprs';
+  $('aprsList').classList.toggle('on', isAprs);
+  $('aprsMapBtn').style.display = isAprs ? '' : 'none';
+  if (isAprs) { $('decText').classList.add('off'); aprsLast = null; aprsLog.length = 0; aprsTrails.clear(); renderAprs(); }
+  else aprsView?.hide();
   if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
+  const isDsc = what === 'dsc';
+  $('dscList').classList.toggle('on', isDsc);
+  if (isDsc) { dscCalls.clear(); renderDsc(); }
+  const isJtty = what === 'jtty';
+  $('jttyList').classList.toggle('on', isJtty);
+  if (isJtty) { jttyLast = []; jttySpots.clear(); jttyPinAt = null; renderJtty(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
   // bar is a compressed version of the same data; showing both would be saying everything
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).
@@ -11583,7 +12092,7 @@ function showDecBox(what: string) {
   $('decBox').classList.toggle('rds', isRds);   // lets the panel own its own height
   // ★ Which decoders BIG should widen: the ones whose content is drawn at the box's width (SSTV,
   //   WEFAX) or written in long lines (the spot list). Text decoders get height instead.
-  $('decBox').classList.toggle('wide', image || isSpots || (isCw && cwSkim));
+  $('decBox').classList.toggle('wide', image || isSpots || listSkim || what === 'dsc' || isJtty);
   // ★★ THE SIZE TOGGLE IS FOR EVERY DECODER, not just Advanced RDS. It was gated on `isRds`, so
   //    the one panel whose whole point is a PICTURE — SSTV — had no way to be made bigger, and
   //    WEFAX and the spot list were stuck at one size too (Stuart). RDS keeps its own pair of
@@ -11591,7 +12100,7 @@ function showDecBox(what: string) {
   $('rdsSize').classList.toggle('show', true);
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
   applyRdsSize();
-  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || (isCw && cwSkim));
+  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex || listSkim || isDsc || isJtty);
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
@@ -13774,6 +14283,7 @@ ${ST}
 // ★★ MUTABLE, and everything that reads it lives in render(). The page used to be top-level
 //    procedural code over a const, which is exactly why it could never update.
 let spots = ${safe(pts)};
+${FMT_SPOT_TIME_JS}   // ★ the popups' time: HH:MM:SS UTC, the slot's start (src/utils/spotTime.ts)
 const me = ${safe(me)};
 // ★ V12: the MODES' colours and letters (src/utils/digiModes.ts), for the legend and the BY MODE bars — the markers carry
 //   their own (spotsMapPoints). The rim keeps pale fills readable on a light map.
@@ -13976,7 +14486,7 @@ function drawMarkers() {
       (s.country ? esc(s.country) + '<br>' : '') + esc(s.grid) +
       (s.km != null ? ' · ' + esc(s.km) + ' km' : '') + '<br>' +
       esc(s.mode) + ' · ' + esc(s.band) + ' · ' + (s.snr > 0 ? '+' : '') + esc(s.snr) + ' dB<br>' +
-      esc((s.frequency / 1e6).toFixed(3)) + ' MHz</div>');
+      esc((s.frequency / 1e6).toFixed(3)) + ' MHz<br>' + esc(fmtSpotTime(s.timestamp)) + ' UTC</div>');
   }
   // ★★ THE LETTER ON THE LEAFLET FALLBACK (no WebGL 2): its canvas circles cannot carry text, so the newest 200 markers get
   //    a small non-interactive letter above them — a mode is never told by colour alone. Capped, because each is a DOM
@@ -14293,7 +14803,9 @@ function initRecorder() {
 // this lists it newest first, filters by decoder, opens a text item inline and downloads any item.
 // ★ Text from the air is shown with textContent, never as HTML.
 interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
-                        title: string; partial?: boolean; wl?: boolean; bytes: number; s?: string; dn?: string }
+                        title: string; partial?: boolean; wl?: boolean; bytes: number; s?: string; dn?: string;
+                        /** ★ V12 DSC: 3 distress · 2 urgency · 1 safety; and the position the item is about, for MAP. */
+                        lv?: number; plat?: number; plon?: number }
 let galKind = '';
 function galUrl(path: string): string { return readAuthUrl(P(path)); }
 function galWhen(t: number): string {
@@ -14343,6 +14855,8 @@ async function renderGallery(page = galPage) {
     }
     items.forEach((it, idx) => {
       const row = document.createElement('div'); row.className = 'sres';
+      // ★ V12 DSC: a distress or urgency item is coloured as the DSC box colours it.
+      if (typeof it.lv === 'number' && it.lv >= 2) row.classList.add(it.lv >= 3 ? 'galDistress' : 'galUrgency');
       // ★ A focusable row: Tab / arrows / D-pad reach it, Enter or the controller's A opens it.
       row.tabIndex = 0; row.setAttribute('role', 'button');
       const f = document.createElement('span'); f.className = 'f'; f.textContent = galFreq(it.hz);
@@ -14358,6 +14872,14 @@ async function renderGallery(page = galPage) {
         .filter((x) => !!x).join(' · ');
       n.appendChild(src);
       row.appendChild(f); row.appendChild(n);
+      // ★ A position the item is about (a DSC distress call): MAP, on this server's own map.
+      if (typeof it.plat === 'number' && typeof it.plon === 'number' && Math.abs(it.plat) <= 90 && Math.abs(it.plon) <= 180) {
+        const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
+        mb.title = 'Show the position this call sent';
+        const pin: DscPin = { lat: it.plat, lon: it.plon, label: it.title, level: it.lv ?? 0 };
+        mb.onclick = (e) => { e.stopPropagation(); openPinsMap([pin]); };
+        row.appendChild(mb);
+      }
       const open = () => { galScroll = $('galleryPanel').scrollTop; galOpenedRow = idx; void openGalleryItem(it); };
       row.onclick = open;
       row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
@@ -15815,6 +16337,8 @@ function openStepMenu(anchor?: HTMLElement) {
     b.onclick = () => { setStep(v); close(); };
     m.appendChild(b);
   }
+  // ★★ V12 VFO A/B — THE ON/OFF, here in the tuning menu and nowhere else (Stuart's spec).
+  { const ab = abMenuRow(() => close()); if (ab) m.appendChild(ab); }
   document.body.appendChild(m);
 
   // Anchor ABOVE the button when there is no room below — the VFO sits at the
@@ -15908,6 +16432,15 @@ function hardwareCanReach(hz: number): boolean {
 
 function clampTune(hz: number): number {
   const want = Math.round(hz);
+  // ★★ V12 VFO B lives INSIDE the radio's window and never moves the radio — the edge is a wall, and it says so.
+  if (spec?.abOn && spec.abSel === 'B' && spec.watchState && spec.watchState.hi > spec.watchState.lo) {
+    const { lo, hi } = spec.watchState;
+    if (want < lo || want > hi) {
+      if (Date.now() - abNoteAt > 3000) { abNoteAt = Date.now(); showPill(`VFO B must stay inside the radio's window, ${(lo / 1e6).toFixed(3)} to ${(hi / 1e6).toFixed(3)} MHz`, 5000); }
+      return Math.max(lo, Math.min(hi, want));
+    }
+    return want;
+  }
   // ★★★ THE LOCKED WINDOW WINS, AND IS CHECKED FIRST. The server clamps a request outside it
   //     ("retune … is outside the LOCKED window — clamped") but said nothing back, so the client
   //     went on displaying the frequency it had ASKED for: typing 99700 on a receiver locked to
@@ -16081,7 +16614,7 @@ function nudge(hz: number) {
   /* ★★★ IN BAND SPOTS THE ARROWS STEP BANDS (V12, 2026-10-26) — every arrow, key, wheel, knob, pad and game-controller
    *  press ends here, as DAB's blocks and ISM's bands do. A typed or long-pressed frequency is still exact. */
   if (bandSpots) { bandSpotsStep(hz < 0 ? -1 : 1); return; }
-  if (adsbOn) return;   // ★ held on 1090 MHz — the arrows are greyed (wholeRadioLock); keys and the wheel end here
+  if (adsbOn || aisOn) return;   // ★ held on 1090 MHz (ADS-B) or AIS's two fixed channels — the arrows are greyed (wholeRadioLock); keys and the wheel end here
   // Snap to the step grid so repeated nudges stay on round frequencies.
   // ★★ Through airbandStepFrom: the 8.33 kHz step is 25000/3 exactly (no drift), and in the airband
   //    in AM it walks channel NAMES the way an 8.33 set's knob does — see src/utils/airband.ts.
@@ -16293,6 +16826,7 @@ function initFreqEntry() {
     /* ★★ IN ISM A TYPED FREQUENCY IS AN EXACT CAPTURE CENTRE (an odd device off the usual channels): it goes through the ISM
      *  door, the device list is kept, and the arrows still step bands from wherever the server says it now is. */
     if (ismOn) { spec!.ism(true, { hz: got }); closePanels(); return; }
+    if (aisOn) { showPill('AIS listens on its two channels — leave AIS to tune elsewhere', 5000); closePanels(); return; }
     const jumpMode = bandJumpDefaults(spec!.frequency, got, String(spec!.mode ?? ''), ituRegion()).mode;
     spec!.tune(got, jumpMode, { recenter: true, retarget: true });
     if (jumpMode) setMode(jumpMode, false);
@@ -17535,6 +18069,11 @@ function initWaterfallInput() {
       const rect = c.getBoundingClientRect();
       // Snap the click to the step grid, so the arrows carry on from a round number.
       // (snapToStep: exact 25000/3 on the airband's 8.33 kHz step — src/utils/airband.ts.)
+      // ★★ V12 VFO A/B: a tap ON the other needle selects it rather than tuning onto it.
+      if (spec.abOn) {
+        const x = e.clientX - rect.left, ox = wf.hzToX(spec.abOther.frequency, c.clientWidth);
+        if (Math.abs(x - ox) <= 10) { spec.swapVfo(); return; }
+      }
       const hz = snapToStep(wf.xToHz(e.clientX - rect.left), step);
       airDesig = null;
       spec.tune(clampTune(hz));
@@ -17673,6 +18212,144 @@ function initPointerFreq(c: HTMLCanvasElement) {
   document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
 }
 
+// ══ ★★ V12 VFO A/B (GitHub discussion #57; docs/v12/VFO-AB.md; the state lives in SpectrumClient, the pure rules in
+//    vfoAB.ts) ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Stuart's spec, 2026-10-27: on and off ONLY from the tuning menu (the step menu here); while on, a small A/B key between
+// the tune buttons says which VFO the controls tune and switches it; the lower VFO is heard in the LEFT ear and the
+// higher in the RIGHT (STEREO, in the audio menu, default on); the active needle full brightness, the other ~75 %.
+// ★ PER SESSION: the toggle is not saved — a reload starts with one VFO (see SpectrumClient.abOn).
+// ★ The web page has no drum (the card's tune control is two buttons with the radio glyph between them — mobile.ts
+//   "BUTTONS, NOT A DRAGGABLE DRUM"), so the key takes the glyph's place while A/B is on.
+const AB_B_COLOUR = '#29c7ff';
+const AB_STEREO_PREF = 'abStereo';
+let abSwitchAt = -Infinity;
+let abLastSel: 'A' | 'B' = 'A';
+let abEarOrder: boolean | null = null;
+let abNoteAt = 0;
+
+/** B's colour: cyan, unless the listener's own needle is already near cyan — then amber, so the two never look alike. */
+function abBColour(): string {
+  const c = (wf?.vfoColor || '#ff2020').replace('#', '');
+  const r = parseInt(c.slice(0, 2), 16) / 255, g = parseInt(c.slice(2, 4), 16) / 255, b = parseInt(c.slice(4, 6), 16) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  let h = 0;
+  if (mx > mn) {
+    if (mx === r) h = ((g - b) / (mx - mn)) % 6; else if (mx === g) h = (b - r) / (mx - mn) + 2; else h = (r - g) / (mx - mn) + 4;
+    h = (h * 60 + 360) % 360;
+  }
+  return mx - mn > 0.2 && h > 150 && h < 230 ? '#ffb020' : AB_B_COLOUR;
+}
+function abColourOf(v: 'A' | 'B'): string { return v === 'A' ? (wf?.vfoColor || '#ff2020') : abBColour(); }
+
+/** Every frame: the second needle, the labels, the brightness cross-fade. */
+function abDraw() {
+  if (!wf || !spec) return;
+  if (!spec.abOn) { wf.vfo2 = null; wf.vfoLiveColor = ''; wf.vfoLiveLabel = ''; wf.vfoLiveAlpha = 1; return; }
+  const sel = spec.abSel, oth: 'A' | 'B' = sel === 'A' ? 'B' : 'A';
+  const a = spec.vfoA(), b = spec.vfoB();
+  const stereoTags = spec.abStereo && !spec.abMonoOut;
+  const ears = earTags(a.frequency, b.frequency, stereoTags, abEarOrder);
+  abEarOrder = ears.aFirst;
+  const tag = (v: 'A' | 'B') => { const t = v === 'A' ? ears.a : ears.b; return t ? ` · ${t}` : ''; };
+  const al = needleAlpha(performance.now() - abSwitchAt);
+  const o = spec.abOther;
+  const parked = !!spec.watchState?.chans.find((c) => c.id === 1)?.parked;
+  wf.vfoLiveColor = abColourOf(sel);
+  wf.vfoLiveLabel = `${sel}${tag(sel)} ${(spec.frequency / 1e6).toFixed(3)}M`;
+  wf.vfoLiveAlpha = al.active;
+  wf.vfo2 = { hz: o.frequency, lo: o.bandwidthLow, hi: o.bandwidthHigh, col: abColourOf(oth), alpha: al.other,
+              label: `${oth}${tag(oth)} ${(o.frequency / 1e6).toFixed(3)}M`, parked: oth === 'B' && parked };
+}
+
+// ★ A handle for drivers (scripts/test-web-vfo-ab.mjs) and bug reports, like window.__vibeAudio: what the page believes
+//   about VFO A/B right now, and where the other needle is on screen.
+Object.defineProperty(window, '__vibeAB', { configurable: true, get: () => () => spec && wf ? {
+  max: spec.watchMax, on: spec.abOn, sel: spec.abSel, a: spec.vfoA(), b: spec.vfoB(), stereo: spec.abStereo,
+  monoOut: spec.abMonoOut, state: spec.watchState, liveColor: wf.vfoLiveColor, liveAlpha: wf.vfoLiveAlpha,
+  liveLabel: wf.vfoLiveLabel, other: wf.vfo2,
+  otherX: wf.vfo2 ? wf.hzToX(wf.vfo2.hz, ($("wf") as HTMLCanvasElement).clientWidth) : null,
+} : null });
+
+/** The key's label and light, the stereo row, the mono hint — on every watch change and selection. */
+function abPaint() {
+  if (!spec) return;
+  const key = document.getElementById('mAbKey') as HTMLButtonElement | null;
+  const glyph = document.getElementById('mTuneGlyph');
+  const on = spec.abOn;
+  if (key) {
+    key.hidden = !on;
+    key.textContent = spec.abSel;
+    key.style.setProperty('--abcol', abColourOf(spec.abSel));
+    key.title = `VFO ${spec.abSel} — the controls tune VFO ${spec.abSel}. Press to switch to VFO ${spec.abSel === 'A' ? 'B' : 'A'}.`;
+  }
+  if (glyph) glyph.hidden = on;
+  const row = document.getElementById('abStereoRow');
+  if (row) row.hidden = spec.watchMax < 1;
+  const sb = document.getElementById('abStereoBtn');
+  if (sb) { sb.textContent = spec.abStereo ? 'ON' : 'OFF'; sb.classList.toggle('on', spec.abStereo); }
+  const hint = document.getElementById('abMonoHint');
+  if (hint) hint.hidden = !(spec.watchMax >= 1 && spec.abMonoOut);
+}
+
+/** SpectrumClient.onWatch — the state changed, or the selection did. */
+let abPrefFor: SpectrumClient | null = null;   // ★ applied once per connection (a new SpectrumClient starts at the default)
+function abStereoPref(): boolean {
+  try { return prefs()[AB_STEREO_PREF] !== false; } catch { return true; }   // storage blocked: the default (on)
+}
+function abOnWatch(note?: string) {
+  if (!spec) return;
+  // ★ The remembered STEREO choice, applied to this connection the first time it hears about VFO A/B (hwinfo) — before
+  //   any toggle can send it. (initVfoAB may run before the SpectrumClient exists.)
+  if (abPrefFor !== spec) { abPrefFor = spec; spec.abStereo = abStereoPref(); }
+  if (spec.abSel !== abLastSel) {
+    abLastSel = spec.abSel;
+    abSwitchAt = performance.now();
+    // ★ Everything the controls show follows the selected VFO: the readout, the mode, the passband, the squelch.
+    setMode(spec.mode, false, true);
+    syncBw();
+    applySquelchUi(spec.sqlDb);
+  }
+  renderFreq();
+  abPaint();
+  if (note && Date.now() - abNoteAt > 1500) { abNoteAt = Date.now(); showPill(note, 6000); }
+}
+/** The squelch bar shows the SELECTED VFO's threshold — drawn, and sent once for that VFO (harmless if unchanged). */
+function applySquelchUi(db: number) { applySquelch(db, false); }
+
+/** The step menu's VFO A/B row (the web's tuning menu). Only where the server offers it — no dead control. */
+function abMenuRow(close: () => void): HTMLElement | null {
+  if (!spec || spec.watchMax < 1) return null;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px 4px;'
+    + 'margin-top:4px;border-top:1px solid rgba(255,160,0,.35);color:#ddd';
+  const lbl = document.createElement('span');
+  lbl.textContent = 'VFO A/B';
+  const b = document.createElement('button');
+  b.id = 'abToggle';
+  b.textContent = spec.abOn ? 'ON' : 'OFF';
+  b.style.cssText = 'background:none;border:1px solid ' + (spec.abOn ? '#ffe566' : '#666') + ';color:'
+    + (spec.abOn ? '#ffe566' : '#ddd') + ';padding:5px 12px;border-radius:5px;cursor:pointer;font:inherit';
+  b.title = 'VFO A/B: a second VFO inside the radio\'s window, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune.';
+  b.onclick = () => { spec?.setAB(!spec.abOn); close(); };
+  row.append(lbl, b);
+  return row;
+}
+
+/** Wired once: the A/B key, the stereo switch, the remembered stereo choice, the mono-output watch. */
+function initVfoAB() {
+  const key = document.getElementById('mAbKey');
+  key?.addEventListener('click', () => spec?.swapVfo());
+  document.getElementById('abStereoBtn')?.addEventListener('click', () => {
+    if (!spec) return;
+    spec.setAbStereo(!spec.abStereo);
+    try { savePref(AB_STEREO_PREF, spec.abStereo); } catch { /* storage blocked: this session only */ }
+    abPaint();
+  });
+  // ★ A mono output device (a single speaker) is invisible to the server — say so, and both VFOs go to both ears.
+  setInterval(() => { if (spec && audio) { spec.setAbMonoOut(audio.outputChannels < 2); abPaint(); } }, 2000);
+  abPaint();
+}
+
 function initKeyboard() {
   /* ★★★ ONE SCHEME FOR THE KEYBOARD AND THE GAME CONTROLLER (Stuart, 2026-10-18 — gamepad.ts, src/utils/keyActions.ts):
    *  arrows / W A S D move the highlight, Enter selects, Backspace and Escape go back, < > tune, - + zoom. Both feed
@@ -17682,6 +18359,7 @@ function initKeyboard() {
   initPadKeyboard();
   initGamepad({
     tune: (d) => { if (spec) nudge(d * step); },
+    swapVfo: () => spec?.swapVfo(),   // ★★ V12 VFO A/B — V on a keyboard, △ / START tap on a pad (gamepad.ts)
     zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
     back: () => {
       // ★ The admin panel is not a .open panel (it is shown by `hidden`), so it is asked for by name; it sits above all.
@@ -17692,6 +18370,7 @@ function initKeyboard() {
       /* ★★ ADS-B: back with nothing else open LEAVES IT — the map is the mode, and its back closes it, as the
        *  HFDL map's does in the app. One layer at a time: a panel over the map closes first. */
       if (!anyOpen && adsbOn && adsbViewUp) { adsbSetMode(false); return true; }
+      if (!anyOpen && ndbOn && ndbViewUp) { ndbSetMode(false); return true; }
       return anyOpen;
     },
     guide: () => togglePadGuide(),

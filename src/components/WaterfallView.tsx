@@ -68,7 +68,9 @@ import {
   useFrameCallback,
   runOnJS,
   runOnUI,
+  withTiming,
 } from 'react-native-reanimated';
+import { INACTIVE_INTENSITY, SWITCH_FADE_MS } from '../services/vfoAB';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
 import type { SDRStatus } from '../services/UberSDRClient';
@@ -221,6 +223,12 @@ export interface WaterfallViewProps {
    *  constant uN is the only thing that stops the waterfall rescaling (Stuart, 2026-08-03). */
   feedFloorFps?:   number;
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
+  /** ★★ V12 VFO A/B: the INACTIVE VFO — a second needle + passband in its own colour, slightly dimmer (the active one
+   *  is the ordinary needle above), labelled with its letter and the ear it is heard in (null = both / stereo off). */
+  secondVfo?: { hz: number; filterLow: number; filterHigh: number; letter: string; ear: string | null;
+                color: string; parked?: boolean } | null;
+  /** ★★ V12 VFO A/B: the ACTIVE VFO's letter and ear while A/B is on — labelled beside the main needle. */
+  activeVfo?: { letter: string; ear: string | null } | null;
   /** ★ V12 ISM: no LISTEN needle, passband or label (the web's wf.vfoHidden) — a band capture has nothing to listen to. */
   needleHidden?:   boolean;
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
@@ -397,7 +405,7 @@ function WaterfallView({
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
-  needleHidden = false,
+  needleHidden = false, secondVfo = null, activeVfo = null,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
@@ -2340,7 +2348,42 @@ function WaterfallView({
   //    over: the spectrum canvas (0 … wfTop) and the waterfall canvas (shifted up by wfTop); each clips to its own
   //    band, so together they draw exactly what the one canvas did. Only while the first rows load does the
   //    INITIALIZING label now sit over the needle rather than under it. iOS keeps its own canvas (cheap Metal layers).
+  // ★★ V12 VFO A/B — the brightness cross-fade: on a switch the newly tuned needle rises to full and the other falls to
+  //    INACTIVE_INTENSITY over SWITCH_FADE_MS (not a snap). Off: the needle is exactly as it always was (opacity 1).
+  const abFade = useSharedValue(1);
+  const abLetter = activeVfo?.letter ?? '';
+  useEffect(() => {
+    if (!abLetter) { abFade.value = 1; return; }
+    abFade.value = 0;
+    abFade.value = withTiming(1, { duration: SWITCH_FADE_MS });
+  }, [abLetter]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const abOn = !!activeVfo;
+  const mainOpacity = useDerivedValue(() => (abOn ? INACTIVE_INTENSITY + (1 - INACTIVE_INTENSITY) * abFade.value : 1), [abOn]);
+  const secondOpacity = useDerivedValue(() => 1 - (1 - INACTIVE_INTENSITY) * abFade.value);
+  const second = useMemo(() => (secondVfo && !needleHidden
+    ? needleGeometry({ bwHz, tuneHz: secondVfo.hz, filterLow: secondVfo.filterLow, filterHigh: secondVfo.filterHigh, width, pxPerHz, hzToX })
+    : null), [secondVfo, needleHidden, bwHz, width, pxPerHz, hzToX]);
+  const secondCol = secondVfo ? (secondVfo.parked ? '#8a8a8a' : secondVfo.color) : '#000';
   const needleEls = useMemo(() => (<>
+      {/* ── ★★ V12 VFO A/B: the other VFO, UNDER the tuned one — passband, edges, a crisp needle ── */}
+      {second && (
+        <Group opacity={secondOpacity}>
+          {second.hiXc > second.loXc && (
+            <Rect x={second.loXc} y={BAND_H} width={second.hiXc - second.loXc} height={height - BAND_H}
+                  color={hexRgba(secondCol, 0.16)} />
+          )}
+          {second.loX >= 0 && second.loX <= width && (
+            <Rect x={second.loX - 0.5} y={BAND_H} width={1} height={height - BAND_H} color={hexRgba(secondCol, 0.55)} />
+          )}
+          {second.hiX >= 0 && second.hiX <= width && (
+            <Rect x={second.hiX - 0.5} y={BAND_H} width={1} height={height - BAND_H} color={hexRgba(secondCol, 0.55)} />
+          )}
+          {second.nX >= 0 && second.nX <= width && (
+            <Rect x={second.nX - 1} y={0} width={2} height={height} color={secondCol} />
+          )}
+        </Group>
+      )}
+      <Group opacity={mainOpacity}>
 
       {/* ── Frosted backing (under the acrylics): smoked-glass band dims the
              waterfall across the passband so the needle keeps contrast on
@@ -2407,8 +2450,9 @@ function WaterfallView({
         <SkiaImage image={needleStrip.img} x={needle.nX - needleStrip.halfW} y={0}
                    width={needleStrip.w} height={height} fit="fill" />
       )}
+      </Group>
   </>), [width, height, needle, needleStrip, edgeStrip, needleColor, needleFrost,
-      wallOverlay, centerMarker, centerMarkerColor]);
+      wallOverlay, centerMarker, centerMarkerColor, second, secondCol, secondOpacity, mainOpacity]);
   const needleCanvas = useMemo(() => (Platform.OS === 'android' ? null : (
     <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>{needleEls}</Canvas>
   )), [width, height, needleEls]);
@@ -2619,6 +2663,22 @@ function WaterfallView({
           </Text>
         )}
 
+        {/* ── ★★ V12 VFO A/B: each needle's letter and the ear it is heard in, at the top of the spectrum ── */}
+        {activeVfo && needle && needle.nX >= 0 && needle.nX <= width && (
+          <Text pointerEvents="none" numberOfLines={1}
+                style={[styles.tickLabel, styles.vfoTag, { fontFamily, color: needleColor,
+                  left: Math.max(0, Math.min(width - 34, needle.nX + 3)), top: specTop + 2 }]}>
+            {activeVfo.letter + (activeVfo.ear ? ' ' + activeVfo.ear : '')}
+          </Text>
+        )}
+        {secondVfo && second && second.nX >= 0 && second.nX <= width && (
+          <Text pointerEvents="none" numberOfLines={1}
+                style={[styles.tickLabel, styles.vfoTag, { fontFamily, color: secondCol, opacity: INACTIVE_INTENSITY,
+                  left: Math.max(0, Math.min(width - 34, second.nX + 3)), top: specTop + 2 }]}>
+            {secondVfo.letter + (secondVfo.ear ? ' ' + secondVfo.ear : '')}
+          </Text>
+        )}
+
         {/* dB axis — amber, left edge of spectrum */}
         {dbLabels.map((d, i) => (
           <Text key={'db' + i} pointerEvents="none"
@@ -2686,6 +2746,8 @@ const styles = StyleSheet.create({
     textShadowColor: '#00cc44', textShadowRadius: 5,
     textShadowOffset: { width: 0, height: 0 },
   },
+  // ★★ V12 VFO A/B — a needle's letter and ear ("A L", "B R"); a dark halo so it reads over any palette.
+  vfoTag: { width: 34, textAlign: 'left', fontSize: 10, textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
   dbLabel: {
     position: 'absolute', left: 4,
     fontSize: 11, fontWeight: 'bold', color: 'rgba(255,180,60,0.90)',

@@ -69,6 +69,7 @@ import type { Aircraft } from '../services/SDRBackend';
 import AdsbLiveList from './AdsbLiveList';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
+import { FMT_SPOT_TIME_JS } from '../utils/spotTime';   // ★ the spot card's HH:MM:SS UTC (the slot's start)
 
 /* ★ 'adsb' (V12) = VibeServer's own ADS-B 1090. HOSTED EXACTLY AS 'hfdl' IS — the same GPU path, the 'aero'
  *  profile (airports, runways), the same receiver marker, chrome and transitions — so opening it feels like
@@ -835,6 +836,7 @@ map.on('zoomend',function(){setTimeout(function(){document.body.classList.remove
 // Orientation change → relayout
 window.addEventListener('resize',function(){setTimeout(function(){try{map.invalidateSize();}catch(e){}},120);});
 
+${FMT_SPOT_TIME_JS}
 function age(ms){var s=Math.floor((Date.now()-ms)/1000);if(s<5)return'just now';if(s<60)return s+'s ago';var m=Math.floor(s/60);return m<60?m+'m ago':Math.floor(m/60)+'h ago';}
 function distKm(lat,lon){if(!RX_LAT&&!RX_LON)return null;var R=6371,r=Math.PI/180;var dLat=(lat-RX_LAT)*r,dLon=(lon-RX_LON)*r;var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(RX_LAT*r)*Math.cos(lat*r)*Math.sin(dLon/2)*Math.sin(dLon/2);return Math.round(R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)));}
 
@@ -1410,7 +1412,7 @@ if(KIND==='digi'||KIND==='cw'){
     +'<div style="margin-top:3px;font-size:12px;color:rgba(80,200,80,0.55);">'
     +(s.snr!==undefined?'SNR: '+s.snr+' dB':'')+(s.wpm?' &bull; '+Math.round(s.wpm)+' wpm':'')
     +(s.country?' &bull; '+esc(abbr(s.country)):'')+'</div>'
-    +'<div style="margin-top:2px;font-size:11px;color:rgba(80,200,80,0.35);">'+age(s.t)
+    +'<div style="margin-top:2px;font-size:11px;color:rgba(80,200,80,0.35);">'+fmtSpotTime(s.t)+' UTC &bull; '+age(s.t)
     +(s.distKm?' &bull; '+Math.round(s.distKm)+' km':'')+'</div>';
   }
   function upsert(s){

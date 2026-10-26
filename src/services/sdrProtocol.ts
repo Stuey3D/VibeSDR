@@ -397,6 +397,10 @@ export interface SDRCallbacks {
   onIsm?:       (r: IsmReport | null, err?: string) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?:     (m: IqOutState) => void;
+  /** ★★ V12 VFO A/B, VIBESERVER-ONLY: hwinfo's `watch` — how many VFO Bs this server offers (0 = none: no toggle). */
+  onWatchOffered?: (n: number) => void;
+  /** ★★ V12 VFO A/B: the A/B state changed — on/off, which VFO is tuned, the other VFO, the server's watch state. */
+  onWatch?:     (info: import('./vfoAB').VfoABInfo) => void;
   onHwGains?:   (gains: number[]) => void;
   /** ★★★ WHERE THE GAIN ACTUALLY IS on the serving radio, in its own units; -1 = auto/AGC. The
    *  slider FOLLOWS this. A client cannot query a remote dongle, so before the server sent it the

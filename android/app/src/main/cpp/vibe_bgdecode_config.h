@@ -32,8 +32,14 @@ struct Profile {
      *  vibe_ism_bands.h) instead of an RF centre and VFOs, and runs the listener's own ISM mode with nobody here.
      *  Empty = an ordinary profile. Stored as "ism":"433"; its "centre" and "vfos" are ignored. */
     std::string ism;
+    /** ★★ V12 2026-10-27 — AN NDB PROFILE (Stuart: "a radio can skim NDBs unattended into the gallery"). Like ISM, a
+     *  WHOLE-CAPTURE decoder: the listener's own NDB mode run with nobody here — every beacon on the LF band at once, each
+     *  day's heard log and map to the gallery. Stored as "ndb":true; its "centre" and "vfos" are ignored. */
+    bool ndb = false;
     bool allDay() const { return fromMin == toMin; }
     bool isIsm() const { return !ism.empty(); }
+    bool isNdb() const { return ndb && ism.empty(); }
+    bool isWhole() const { return isIsm() || isNdb(); }   ///< a whole-radio mode, not VFOs
 };
 struct Config {
     bool on = false;
@@ -76,6 +82,18 @@ inline const std::vector<DecoderDef>& decoders() {
         { "cw-skim-24",   "CW skimmer, 24 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 24000 },
         { "cw-skim-48",   "CW skimmer, 48 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 48000 },
         { "cw-skim-96",   "CW skimmer, 96 kHz (summary)", "cwskim", "cw",    "usb",     0,    0,   0,     false, false, 96000 },
+        // ★★ PSK SKIMMERS (V12 2026-10-26) — the same shape: the VFO is the segment's centre (e.g. 14.0715 MHz for
+        //    14.0655–14.0775 at 12 kHz — the PSK segment and its neighbours), a summary of the spots.
+        { "psk-skim-6",   "PSK skimmer, 6 kHz (summary)",  "pskskim", "psk", "usb",     0,    0,   0,     false, false, 6000 },
+        { "psk-skim-12",  "PSK skimmer, 12 kHz (summary)", "pskskim", "psk", "usb",     0,    0,   0,     false, false, 12000 },
+        // ★★ V12 APRS (docs/v12/AIS-APRS.md): 1200 Bd on an NFM VFO (the region's channel), or HF 300 Bd on USB/LSB —
+        //    kept as the day's packets + a station card. NRZI does not care which way round the tones are, so LSB is fine.
+        { "aprs",         "APRS (1200 Bd, VHF)",          "aprs",   "aprs",  "nfm",     0,    0,   1200,  false, false, 0 },
+        { "aprs-hf",      "APRS HF (300 Bd)",             "aprs",   "aprs",  "usb,lsb", 0,    0,   300,   false, false, 0 },
+        // ★★ DSC (V12, 2026-10-26): MF/HF on SSB, the tones 1.7 kHz from the dial (2185.8 USB for 2187.5), either sense
+        //    found by the decoder; VHF channel 70 on NFM. Kept as the day's log + an item per distress/urgency call.
+        { "dsc",          "DSC (MF/HF)",                  "dsc",    "dsc",   "usb,lsb", 1700, 170, 100,   false, false, 0 },
+        { "dsc-vhf",      "DSC (VHF channel 70)",         "dsc",    "dsc",   "nfm",     0,    0,   1200,  false, false, 0 },
     };
     return d;
 }
@@ -125,6 +143,9 @@ inline std::string attachMsg(const Vfo& v) {
         std::snprintf(b, sizeof b, "{\"lpm\":120,\"image_width\":1809,\"carrier\":%.0f,\"deviation\":400,"
                       "\"auto_start\":true,\"auto_stop\":true}", d->toneHz);
     else if (id == "sstv" || id == "ft8") std::snprintf(b, sizeof b, "{}");
+    else if (id == "aprs" || id == "aprs-hf") std::snprintf(b, sizeof b, "{\"baud_rate\":%.0f}", d->baud);
+    else if (id == "dsc") std::snprintf(b, sizeof b, "{\"band\":\"hf\",\"center_frequency\":%.0f}", d->toneHz);
+    else if (id == "dsc-vhf") std::snprintf(b, sizeof b, "{\"band\":\"vhf\"}");
     else if (d->widthHz > 0) std::snprintf(b, sizeof b, "{\"width\":%.0f}", d->widthHz);
     else
         std::snprintf(b, sizeof b, "{\"center_frequency\":%.0f,\"shift\":%.0f,\"baud_rate\":%.2f,\"encoding\":\"ITA2\","
@@ -162,6 +183,7 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
             if (f < 0 || t < 0) { err = "background decoding: a profile time is not HH:MM"; return false; }
             p.fromMin = f; p.toMin = t;
             p.ism = pj.str("ism", "");
+            if (const auto* nd = pj.get("ndb")) p.ndb = nd->kind == antswitch::Json::Bool ? nd->b : false;
             if (const auto* vs = pj.get("vfos"); vs && vs->kind == antswitch::Json::Arr)
                 for (const auto& vj : vs->a) {
                     if (vj.kind != antswitch::Json::Obj) continue;
@@ -196,6 +218,7 @@ inline std::string toJson(const Config& c) {
         o += "]";
         // ★ V12 2026-10-25: absent on an ordinary profile, so older settings read back unchanged (the page's own order)
         if (p.isIsm()) o += ",\"ism\":\"" + gallery::jsonEsc(p.ism) + "\"";
+        if (p.isNdb()) o += ",\"ndb\":true";
         o += "}";
     }
     return o + "]}";
@@ -227,7 +250,7 @@ static inline std::string khz(double hz) { char b[32]; std::snprintf(b, sizeof b
 /** `ismOk` false: this radio reaches no ISM band at all (an Airspy HF+ tops out near 260 MHz; an Icom is a transceiver's
  *  audio) — an ISM profile is refused there, in words (AGENTS.md: no control that cannot work on this radio). Whether it
  *  reaches the CHOSEN band through the owner's own allow/block ranges is the radio's to say when the profile runs. */
-inline bool validate(const Config& c, double rate, std::string& err, int slotCap = 0, double lockCentre = 0, bool ismOk = true) {
+inline bool validate(const Config& c, double rate, std::string& err, int slotCap = 0, double lockCentre = 0, bool ismOk = true, bool ndbOk = true) {
     if (c.profiles.size() > kMaxProfiles) { err = "background decoding: at most " + std::to_string(kMaxProfiles) + " profiles"; return false; }
     if (c.on && c.profiles.empty()) { err = "background decoding is on but has no profile — add one, or switch it off"; return false; }
     for (size_t i = 0; i < c.profiles.size(); i++) {
@@ -248,6 +271,16 @@ inline bool validate(const Config& c, double rate, std::string& err, int slotCap
                 char t[200];
                 std::snprintf(t, sizeof t, "%s: ISM needs a capture of 0.9 MS/s or more \xe2\x80\x94 this radio runs at %.3f MS/s", name.c_str(), rate / 1e6);
                 err = t; return false;
+            }
+            continue;
+        }
+        // ★★ AN NDB PROFILE: the radio onto the LF beacon band — never on a locked radio, never where it reaches no LF.
+        if (p.isNdb()) {
+            if (!ndbOk) { err = name + ": this radio cannot tune to the NDB band (an RTL needs direct sampling)"; return false; }
+            if (lockCentre > 0) {
+                err = name + ": NDB puts the radio on the beacon band, and this radio's range is locked \xe2\x80\x94 "
+                      "background decoding never moves a locked radio. Unlock it, or choose VFOs inside its range.";
+                return false;
             }
             continue;
         }

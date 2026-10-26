@@ -17,6 +17,8 @@ mkdir -p "$OUT"
 
 VDSP=android/app/src/main/cpp/vibedsp
 KISS="$VDSP/third_party/kissfft"
+# ★ V12 digital spots: every mode engine in decoders/digimodes/ (the builds glob it) goes wherever digi_modes.cpp goes.
+DIGIMODES="$(ls android/app/src/main/cpp/decoders/digimodes/*.cpp 2>/dev/null | tr '\n' ' ')"
 
 # test name -> extra compiler flags it needs
 flags_for() {
@@ -58,6 +60,7 @@ flags_for() {
     # ★ Every mode's DSP cost vs passband, both directions and past the ceiling — the audit that
     #   followed the WFM cliff (2026-09-29). Optimised for the same reason.
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
+    test-watch|test-watch-cost) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;   # ★ V12 VFO A/B (vibe_watch.h)
     # ★★★ Every chain delivers exactly 48 000 audio samples per second of capture (2026-10-07: the RSPs
     #     ran 32-34 ppm short through a rounded, approximated resampler ratio). Optimised: 21 s of input per chain.
     test-resampler-rate)   echo "-O2 -I $VDSP -I $KISS" ;;
@@ -71,7 +74,7 @@ flags_for() {
     #    20 m slice (FT8 + FT4 on their own dials) decoded end to end, the lower sideband rejected, noise → no spot.
     test-digi-spots)       echo "-O2 -I $VDSP -I android/app/src/main/cpp/ft8_lib" ;;
     # ★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22): the real DSP chain AND the real decoders, end to end.
-    test-bgdecode|test-bg-priority|test-cw) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
+    test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
     test-bm-names) echo "-O2 -I android/app/src/main/cpp" ;;
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
@@ -116,9 +119,18 @@ flags_for() {
     # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
+    test-ais|test-aprs)    echo "-O2 -lpthread" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
+    # ★★ V12 NDB skimmer (decoders/ndb_skimmer.h, vibe_ndb_*.h): the vote, one beacon at +10/-5 dB on both tones and A1A,
+    #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
+    #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
+    test-ndb)              echo "-O2 -lpthread -I tools/ndb-bench -I $VDSP -I $KISS" ;;
+    # ★★ V12 WSPR (decoders/digimodes/wspr_decoder.h): protocol, synthetic slots −20…−28 dB with drift and DT, hashed calls, pure
+    #    noise, subtraction, the live decoder — optimised, it decodes ~50 two-minute slots. VIBE_TEST_AUDIO adds 40 m + 20 m
+    #    off air, with the WSPRnet-scale SNR held to ±1 dB (mean) / ±3 dB (each) of Stuart's UberSDR's own reports.
+    test-wspr)             echo "-O2 -lpthread" ;;
     # ★★ V12 WIRELESS M-BUS METERS (vibe_wmbus.h, 2026-10-26): CRC, fields, 3-out-of-6, formats A/B, headers, records,
     #    the line, the interval; T1 / C1-A / C1-B / S1 through the real ISM front end at 1-2.4 MS/s with drift, a
     #    sensitivity sweep, noise and carriers = nothing, the privacy rule (serial yes, ciphertext never), the day-log
@@ -131,6 +143,7 @@ flags_for() {
 # test name -> the sources it needs besides itself
 deps_for() {
   case "$1" in
+    test-wspr)          echo "android/app/src/main/cpp/decoders/digimodes/wspr_decoder.cpp $VDSP/third_party/pffft/pffft.c" ;;
     test-wfm-stereo)    echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
@@ -152,6 +165,9 @@ deps_for() {
     test-passband-cost)   echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-watch|test-watch-cost) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-resampler-rate)  echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
@@ -168,13 +184,13 @@ deps_for() {
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
     # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link — nor pffft,
     #   which they carry too since monitor.c's STFT runs through it (2026-10-25).
-    test-bgdecode|test-bg-priority|test-cw) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp \
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
                               android/app/src/main/cpp/decoders/wefax_decoder.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp \
                               android/app/src/main/cpp/decoders/time_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp \
-                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp" ;;
+                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
     test-fd-passing)    echo "android/app/src/main/cpp/fd_passing.cpp" ;;
@@ -216,9 +232,9 @@ deps_for() {
     #    held ≥ 10 s, near-continuous dips, USB over-current, or a USB device lost in a dip. Header-only,
     #    with a fake /sys and /dev for the rpi_volt alarm and the USB scans.
     test-power-dips)    echo "" ;;
-    test-decoder-hardening) echo "android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+    test-decoder-hardening) echo "$VDSP/ddc.cpp android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     # ★ NAVTEX's CCIR 476 coder, word by word (audit 2026-10-04, rows 11-13); the audio half is scripts/test-navtex.sh.
     test-navtex-fec)    echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;
     # ★★ RTTY's letters/figures shift across a lost signal: a lost LTRS → letters, a synop line → figures (2026-10-13).
@@ -227,13 +243,18 @@ deps_for() {
     test-ft8-passes)    echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-ft8-fast)      echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-ftx-sensitivity) echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
-    test-js8)           echo "android/app/src/main/cpp/decoders/js8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/js8_ldpc.cpp android/app/src/main/cpp/decoders/js8_message.cpp" ;;
+    test-js8)           echo "android/app/src/main/cpp/decoders/digimodes/js8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/digimodes/js8_ldpc.cpp android/app/src/main/cpp/decoders/digimodes/js8_message.cpp" ;;
     test-ft2)           echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
-    test-decoder-hosts|test-bench-decoders|test-digi-spots) echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+    test-decoder-hosts|test-bench-decoders|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
-    test-sstv-quality)  echo "android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+    test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
+    # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
+    #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
+    test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
+    test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
+                              $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C)
     *)                  echo "" ;;
   esac
 }
@@ -243,13 +264,20 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ftx-sensitivity|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-cw)
+    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ftx-sensitivity|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c $VDSP/third_party/pffft/pffft.c; do
         local o="$d/$(basename "$f" .c).o"
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
+        printf '%s ' "$o"
+      done ;;
+    test-ndb)
+      local d="$OUT/cobj-ndb"; mkdir -p "$d"
+      for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
+        local o="$d/$(basename "$f" .c).o"
+        [ "$o" -nt "$f" ] || cc -O2 -c -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
     *) ;;
@@ -330,8 +358,19 @@ if node scripts/test-setup-bgdecode.mjs; then pass=$((pass+1)); else fail=$((fai
 # ★★ …and an ISM PROFILE (2026-10-25): offered only where ISM can run (not an HF+, an Icom, a locked radio, ISM blocked),
 #    only the bands the radio reaches; a band instead of a centre and VFOs; saved as {"ism":"433"} and read back.
 if node scripts/test-setup-bg-ism.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and an NDB PROFILE (2026-10-27): offered only where the radio reaches LF (HF+, RSP, an RTL in direct sampling; the
+#    running radio's ndbHw first), never locked or blocked; no centre or VFOs; saved as {"ndb":true} and read back.
+if node scripts/test-setup-bg-ndb.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A TUNNEL A PREVIOUS PROCESS LEFT ON OUR PORT IS RETIRED (2026-10-19, Kiko's four tunnels). Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 VFO A/B through the real server: lower VFO left / higher right in ONE stream, B's own squelch, the window refusal,
+#    the listener-slot yield, an old client untouched, a shared dial's private stream. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-vfo-ab.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 VFO A/B in the WEB client (headless Edge, --mute-audio): the tuning-menu toggle, the A/B key, B's needle, the
+#    audio panel's STEREO switch, no toggle where the owner switched it off. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-vfo-ab.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
@@ -401,12 +440,17 @@ if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fai
 if node --no-warnings scripts/test_mpx_power.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ LOCKED VFO CENTRE (tuneWindow.ts): every app tune clamps into the owner's window, the server's own rule (Stuart 2026-10-18: the app tuned into the black).
 if node --no-warnings scripts/test_tune_window.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 THE SCANNER ENGINE (scanner.ts, docs/v12/SCANNER.md): fake backends of every family — hang cancel on an over-change,
+#     noiseRef thresholds, ignores, priority, OWRX hijack PAUSED/resume, no tune ever outside the span (fuzzed), spikes never stop it.
+if node --no-warnings scripts/test_scanner.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ proxy.kiwisdr.com IS 8073 ONLY (2026-10-07): 47 % of public Kiwis are listed portless (= port 80, refused).
 if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ SERVER ADDRESSES (serverUrl.ts): scheme and port are a PAIR — https://host:8073 stays TLS (GitHub #52, OWRX+ native TLS).
 if node --no-warnings scripts/test_server_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 BINAURAL TUNING (binauralOffset.ts): the offset source per mode, AM/CW/FM readings with known offsets, the tracker.
 if node --no-warnings scripts/test_binauralOffset.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 VFO A/B, the app's half (src/services/vfoAB.ts): the wire, the A/B slots, the L/R tags (the server's rule).
+if node --no-warnings scripts/test_vfoAB.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 BINAURAL — THE WATERFALL CUE ON A SWEEP (2026-10-18, Stuart on 482: "it's not panning as I tune through the
 #     band"): the real tracker over spectra from real voices, the dial clicking 100/500 Hz. NOT RUN (exit 3) without
 #     VIBE_TEST_AUDIO (the I/Q is not in the repo). ~2 minutes (it builds a composite band from the recordings).
@@ -423,6 +467,8 @@ if npx tsx scripts/test_ism_app.ts; then pass=$((pass+1)); else fail=$((fail+1))
 # ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 (2026-10-26, M7EIW): every spot's time is HH:MM:SS UTC, its slot's START — one helper for web, app and maps.
+if npx tsx scripts/test_spot_time.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and Band's DEFAULT from the benchmark (the setup page's benchApplyDefaults + the app's applyBench), owner override kept.
 if node scripts/test-spots-band-default.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the iOS/Mac ring + the prefix-then-live writer order (macOS only: needs xcrun swiftc).
@@ -502,6 +548,10 @@ if node --no-warnings scripts/test_adsb_report.ts; then pass=$((pass+1)); else f
 if node --no-warnings scripts/test_capture_and_rate_guard.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and the map's live list (adsbList.ts): row text, nearest first without shuffling, clear of the zoom stack.
 if node --no-warnings scripts/test_adsb_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 NDB's map layer (web/mapkit/ndblayer.js): its generated copy, the bars rule, and the rings it SHARES with the ADS-B
+#     map (Stuart: "same rings, for nm range") — the ladder, NM, four labels a ring. ADS-B's own layer test runs beside it.
+if node --no-warnings scripts/test_ndb_layer.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_adsb_layer.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADS-B FURTHEST key: the web map and the app map page name the same aircraft (one rule, two readers).
 if npx tsx scripts/test_adsb_furthest.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and V12 aircraft data on the clients (adsbInfo.ts): the adsb_info sanitiser + store, and the web list's rows with it.
@@ -729,6 +779,9 @@ if npx tsx scripts/test_app_alert.ts; then pass=$((pass+1)); else fail=$((fail+1
 if npx tsx scripts/test_nav_coverage.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE SERVER LIST'S FOCUS RULES (controller audit group H): Back from the list position, Enter = tap on directory rows.
 if npx tsx scripts/test_picker_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ BACK FROM A RADIO LANDS WHERE YOU LEFT (Stuart, 2026-10-27): the server list's place carried across a VibeServer's
+#     reset, the missing-receiver fallback (this list's top, never the app's), and a front door's radio list.
+if npx tsx scripts/test_picker_return.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 489: the picker's focus order under a REAL React renderer — a bailed-out render emptied the render-time bank
 #     (src/utils/renderBank.ts), so the ring, reveal and Enter disagreed. Real key bus, real pad mapper, both enters.
 if npx tsx scripts/test_render_bank.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1008,6 +1061,21 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     test-ism --write-clip — the capability, the device list and its readable lines, the privacy rule ON THE WIRE, band
 #     steps (clamped), an exact frequency, EXIT giving the dial back; then the web client in headless Edge (--mute-audio).
 #     Needs VIBESERVER_BIN (exit 3 = not run); the web half also needs Edge.
+# ★★ V12 NDB mode end to end (2026-10-26): an RTL without direct sampling offers no NDB; with automatic direct sampling
+#     the capability, entering, the radio on the beacon band, WOD and CAM identified and named, a tap moving only the VFO,
+#     a tune outside refused, Find NDB, the stats, and the receiver given back exactly (test-server-ndb). ~1 min.
+printf '\n\033[1m── NDB mode (end to end: server, then the web client) ──\033[0m\n'
+if [ -x "$OUT/test-ndb" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-ndb" --write-clip "$OUT/ndb-clip.u8" 362750 2400000 10 >/dev/null
+  VIBE_NDB_CLIP="$OUT/ndb-clip.u8" node scripts/test-server-ndb.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★ …then the web client in headless Edge (--mute-audio): the box, ✓ WOD Woodley, a tap, the tabs, Find, the stats, 390 px
+  VIBE_NDB_CLIP="$OUT/ndb-clip.u8" node scripts/test-web-ndb.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/ndb-clip.u8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-ndb build'; notrun=$((notrun+1))
+fi
 printf '\n\033[1m── ISM mode (end to end: server, then the web client) ──\033[0m\n'
 if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   "$OUT/test-ism" --write-clip "$OUT/ism-clip.u8" 434130000 2400000 >/dev/null
@@ -1029,6 +1097,25 @@ else
   echo '   not run — needs VIBESERVER_BIN and the test-ism build'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by
+#     test-ais / test-aprs --write-clip — AIS mode (both channels, the ship list, a track, the dial given back, the gallery)
+#     and the APRS decoder on a listener's NFM (stations, weather, an object, a message, the gallery); then the web client
+#     in headless Edge (--mute-audio) at desktop and 390 px. Needs VIBESERVER_BIN (exit 3 = not run); the web half Edge.
+printf '\n\033[1m── AIS mode + the APRS decoder (end to end: server, then the web client) ──\033[0m\n'
+if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-ais" --write-clip "$OUT/ais-clip.cu8" 2400000 2>/dev/null
+  "$OUT/test-aprs" --write-clip "$OUT/aprs-clip.cu8" 2400000 2>/dev/null
+  VIBE_AIS_CLIP="$OUT/ais-clip.cu8" VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-server-ais-aprs.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_AIS_CLIP="$OUT/ais-clip.cu8" VIBE_APRS_CLIP="$OUT/aprs-clip.cu8" node scripts/test-web-ais-aprs.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/ais-clip.cu8" "$OUT/aprs-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-ais / test-aprs builds'; notrun=$((notrun+1))
+fi
+# ★ The ship/station layer's generated copies (web client, app, /mapgl/vendor) match web/mapkit/tracklayer.js.
+if node scripts/gen-tracklayer-source.mjs --check; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ V12 CW (2026-10-25): the real server on a fake rtl_tcp replaying the bench's synthetic HF clip (five stations around
 #     7.030 MHz): the skimmer on a one-pipeline radio and a range-locked one, a second listener's own segment, ONE SIGNAL's
 #     text and its spot's RF (test-server-cw); then the web client in headless Edge (--mute-audio) — the CW button, the
@@ -1043,6 +1130,53 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-cw.sh clip "$OUT/cw-clip.cu8" >/
   rm -f "$OUT/cw-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 PSK31/63 (2026-10-26): the same shape — the real server on a fake rtl_tcp replaying the bench's synthetic clip
+#     (five PSK stations around 14.071 MHz, one PSK63): the skimmer on a one-pipeline radio and a range-locked one, a
+#     second listener's own segment, ONE SIGNAL's text and its spot's RF (test-server-psk); then the web client in
+#     headless Edge (--mute-audio) — the PSK button, the list and spots, a tap to tune, ONE SIGNAL, 390 px (test-web-psk).
+#     The engine's numbers are vibeserver/test-psk.cpp above; the measuring bench is scripts/test-psk.sh.
+printf '\n\033[1m── PSK (end to end: server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-psk.sh clip "$OUT/psk-clip.cu8" >/dev/null; then
+  VIBE_PSK_CLIP="$OUT/psk-clip.cu8" node scripts/test-server-psk.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_PSK_CLIP="$OUT/psk-clip.cu8" node scripts/test-web-psk.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/psk-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-psk.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 DSC (2026-10-26): the real server on a fake rtl_tcp replaying the bench's synthetic clips — a distress alert and an
+#     all-ships safety call on 2187.5 kHz, and the same two as an FM subcarrier on channel 70: a listener's MF/HF and VHF
+#     decoder, the gallery's day log and pinned distress item, and background decoding on a DSC VFO (test-server-dsc); then
+#     the web client in headless Edge (--mute-audio) — the DSC button, its channel keys, the coloured rows, MAP, a channel
+#     key's tune, the gallery's DSC chip, 390 px (test-web-dsc). The engine's numbers are vibeserver/test-dsc.cpp above;
+#     the measuring bench is scripts/test-dsc.sh. Needs VIBESERVER_BIN.
+printf '\n\033[1m── DSC (end to end: server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-dsc.sh clip "$OUT/dsc-hf.cu8" >/dev/null && scripts/test-dsc.sh clip "$OUT/dsc-vhf.cu8" vhf >/dev/null; then
+  VIBE_DSC_CLIP="$OUT/dsc-hf.cu8" VIBE_DSC_CLIP_VHF="$OUT/dsc-vhf.cu8" node scripts/test-server-dsc.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_DSC_CLIP="$OUT/dsc-hf.cu8" node scripts/test-web-dsc.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/dsc-hf.cu8" "$OUT/dsc-vhf.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-dsc.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 JTTY end to end (2026-10-26): the real server on a fake rtl_tcp replaying the bench's 20 m clip (two JTTY
+#     stations, a CQ and an exchange, overlapping) — vibeserver.json "jtty", the JTTY button and band keys, both stations
+#     as rows lowest frequency first with their calls and confidence colours, the SPOTS, a tap and a band key tuning,
+#     390 px (test-web-jtty, headless Edge, --mute-audio). The engine's own numbers are vibeserver/test-jtty.cpp above;
+#     the measuring bench is scripts/test-jtty.sh. Needs VIBESERVER_BIN.
+printf '\n\033[1m── JTTY (end to end: server and web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-jtty.sh clip "$OUT/jtty-clip.cu8" >/dev/null; then
+  VIBE_JTTY_CLIP="$OUT/jtty-clip.cu8" node scripts/test-web-jtty.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/jtty-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-jtty.sh)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 DIGITAL SPOTS end to end (2026-10-26): a UTC-anchored 20 m clip (test-digi-spots clip) through the real server —

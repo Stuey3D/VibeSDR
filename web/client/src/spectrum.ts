@@ -21,8 +21,11 @@ import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services
 import { DabAssembler } from '../../../src/services/dabAssemble';
 import { AdsbInfoStore, type AdsbInfo } from '../../../src/services/adsbInfo';
 import { ismSanitise, type IsmReport } from './ism';
+import { ndbSanitise, type NdbReport } from './ndb';
+import { aisSanitise, type AisReport } from './tracks';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
-import { vsSquelchMsg } from '../../../src/services/vibeSquelch';
+import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
+import { type WatchState, watchSanitise } from './vfoAB';
 import { roomMode, roomPassband } from '../../../src/services/roomPassband';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs, type AskState } from '../../../src/services/dialChat';
 // ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the shared contract module the app reads too (ONE RULE, TWO READERS).
@@ -631,6 +634,17 @@ export interface SpectrumCallbacks {
    *  joining — its arrival MEANS ISM is on, on the band it names. null = the server left ISM (`ism_off`). */
   onIsm?: (r: IsmReport | null) => void;
   onIsmError?: (why: string) => void;
+  /** ★★ NDB (V12): a report (on) or null (`ndb_off`); refusals; Find NDB / stats answers. */
+  onNdb?: (r: NdbReport | null) => void;
+  onNdbError?: (why: string) => void;
+  onNdbFound?: (msg: any) => void;
+  onNdbStats?: (msg: any) => void;
+  /** ★ AIS (V12, docs/v12/AIS-APRS.md): the ship list once a second while the receiver is in AIS and at once on joining
+   *  — its arrival MEANS AIS is on. null = the server left AIS (`ais_off`). */
+  onAis?: (r: AisReport | null) => void;
+  onAisError?: (why: string) => void;
+  /** ★ AIS: one ship's track, asked for when the map's card opens (aisTrail). */
+  onAisTrail?: (mmsi: number, pts: [number, number][]) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?: (m: { on: boolean; rate?: number; host?: string; port?: number; code?: string; token?: string; public?: boolean; full?: boolean; why?: string }) => void;
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
@@ -678,6 +692,9 @@ export interface SpectrumCallbacks {
   onAdminSuperseded?: () => void;
   onAdminRelocked?: (idleMin: number) => void;
   onRtt?:    (ms: number) => void;
+  /** ★★ V12 VFO A/B: the watch state changed (or the selection did) — the page redraws its needles, its key and its
+   *  readout. `note` is the server's sentence when it refused something or closed VFO B (outside the window, full…). */
+  onWatch?:  (note?: string) => void;
   /** Bytes received on the spectrum socket — the BIGGER half of the link. */
   onBytes?:  (n: number) => void;
 }
@@ -702,6 +719,121 @@ export class SpectrumClient {
 
   /** Locked = the view follows the VFO. Unlocked = pan freely. */
   followVfo = true;
+
+  // ── ★★ V12 VFO A/B (docs/v12/VFO-AB.md; the server's watch channels, vibe_watch.h) ─────────────────────────────────
+  /* ★★★ THE LIVE FIELDS ABOVE ARE ALWAYS THE *SELECTED* VFO. Selecting B swaps B's frequency/mode/passband/squelch into
+   *  them and parks A's in `abOther`, so every reader on the page — the readout, the needle, the mode picker, the
+   *  passband sliders, the squelch bar, the step keys, the spectrum click, the pad — acts on whichever VFO is selected
+   *  without knowing there are two. Only the WIRE differs: A's changes are the ordinary tune/mode/bandwidth/squelch
+   *  messages, B's are `watch` messages (tune(), setMode(), setBandwidth(), setSquelch()). Inbound config/dial
+   *  messages are always A's, so they are handled with A swapped back in (_handleMessage).
+   *  ★ PER SESSION: nothing here is saved. A reload starts with one VFO; a socket that reconnects inside the same
+   *    session finds VFO B still running on the server and adopts it from the server's watch state. */
+  /** How many watch channels this server offers a listener (hwinfo.watch). 0 = no VFO A/B here — no toggle. */
+  watchMax = 0;
+  /** VFO B exists. */
+  abOn = false;
+  abSel: 'A' | 'B' = 'A';
+  /** The VFO that is NOT selected — A's state while B is selected, B's while A is. */
+  abOther = { frequency: 0, mode: 'nfm' as SDRMode, bandwidthLow: -5000, bandwidthHigh: 5000, sqlDb: -150 };
+  /** This listener's squelch threshold for the SELECTED VFO (swapped with abOther.sqlDb). */
+  sqlDb = -150;
+  /** The server's last watch state (levels, open/shut, parked, the window). */
+  watchState: WatchState | null = null;
+  /** The listener's STEREO choice (audio menu, remembered per device by main.ts). */
+  abStereo = true;
+  /** The output is mono (main.ts decides — a mono stream asked for, or a mono device). */
+  abMonoOut = false;
+  private lastLocalWatchAt = -Infinity;
+  private watchTimer: number | null = null;
+  private swapLive() {
+    const o = this.abOther;
+    [this.frequency, o.frequency] = [o.frequency, this.frequency];
+    [this.mode, o.mode] = [o.mode, this.mode];
+    [this.bandwidthLow, o.bandwidthLow] = [o.bandwidthLow, this.bandwidthLow];
+    [this.bandwidthHigh, o.bandwidthHigh] = [o.bandwidthHigh, this.bandwidthHigh];
+    [this.sqlDb, o.sqlDb] = [o.sqlDb, this.sqlDb];
+  }
+  /** VFO B's state, wherever it is held right now. */
+  vfoB(): { frequency: number; mode: SDRMode; bandwidthLow: number; bandwidthHigh: number } {
+    return this.abSel === 'B' ? { frequency: this.frequency, mode: this.mode, bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh }
+                              : { ...this.abOther };
+  }
+  /** VFO A's state, wherever it is held right now. */
+  vfoA(): { frequency: number; mode: SDRMode; bandwidthLow: number; bandwidthHigh: number } {
+    return this.abSel === 'A' ? { frequency: this.frequency, mode: this.mode, bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh }
+                              : { ...this.abOther };
+  }
+  /** The TUNING menu's toggle — the ONLY way VFO B is made or removed (Stuart's spec). B starts on A's frequency. */
+  setAB(on: boolean) {
+    if (on === this.abOn || (on && this.watchMax < 1)) return;
+    if (on) {
+      this.abOn = true;
+      this.abOther = { frequency: this.frequency, mode: this.mode, bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh, sqlDb: -150 };
+      this.lastLocalWatchAt = performance.now();
+      this._send({ type: 'watch', id: 1, on: true, stereo: this.abStereo, monoOut: this.abMonoOut });
+    } else {
+      if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; }
+      this.abOn = false;
+      this._send({ type: 'watch', id: 1, off: true });
+    }
+    this.cb.onWatch?.();
+  }
+  /** Which VFO the controls tune — the A/B key, a needle tap, the pad's swap key. */
+  selectVfo(v: 'A' | 'B') {
+    if (!this.abOn || v === this.abSel) return;
+    this.swapLive();
+    this.abSel = v;
+    this.tunePacer.cancel();
+    if (this.followVfo && this.frequency) this.zoom(this.frequency, this.view.binBandwidth || this.cfg.binBandwidth);
+    this.cb.onWatch?.();
+  }
+  swapVfo() { this.selectVfo(this.abSel === 'A' ? 'B' : 'A'); }
+  setAbStereo(on: boolean) { this.abStereo = on; if (this.abOn) this._send({ type: 'watch', stereo: on }); }
+  setAbMonoOut(on: boolean) { if (on === this.abMonoOut) return; this.abMonoOut = on; if (this.abOn) this._send({ type: 'watch', monoOut: on }); }
+  /** B's frequency/mode/passband out — latest wins, at most every 40 ms (a held step key is dozens a second). */
+  private sendWatchAim(withMode: boolean) {
+    this.lastLocalWatchAt = performance.now();
+    const go = () => {
+      this.watchTimer = null;
+      const b = this.vfoB();
+      this._send({ type: 'watch', id: 1, frequency: Math.round(b.frequency), ...(withMode ? { mode: b.mode } : {}),
+                   bandwidthLow: b.bandwidthLow, bandwidthHigh: b.bandwidthHigh });
+    };
+    if (withMode) { if (this.watchTimer) { clearTimeout(this.watchTimer); this.watchTimer = null; } go(); return; }
+    if (this.watchTimer == null) this.watchTimer = window.setTimeout(go, 40);
+  }
+  /** The server's watch state — VFO B as it really is. */
+  private onWatchMsg(msg: any) {
+    const w = watchSanitise(msg);
+    if (!w) return;
+    this.watchState = w;
+    if (w.max >= 0) this.watchMax = w.max;
+    if (typeof msg.stereo === 'boolean') this.abStereo = msg.stereo;
+    const ch = w.chans.find((c) => c.id === 1);
+    const recent = performance.now() - this.lastLocalWatchAt < 900;
+    if (ch && !this.abOn && !recent) {
+      // ★ The server still has VFO B for this session (the socket reconnected) — adopt it rather than orphan it.
+      this.abOn = true;
+      this.abOther = { frequency: ch.freq, mode: (ch.mode as SDRMode) || this.mode, bandwidthLow: -ch.bw / 2, bandwidthHigh: ch.bw / 2, sqlDb: ch.sqlOn ? ch.sql : -150 };
+      const d = MODE_BANDWIDTHS[ch.mode as SDRMode];
+      if (d && Math.abs((d[1] - d[0]) - ch.bw) < 1) { this.abOther.bandwidthLow = d[0]; this.abOther.bandwidthHigh = d[1]; }
+    } else if (!ch && this.abOn && (!recent || w.refused)) {
+      // ★ The server closed it (a listener needed the place, a mode with no room for it) — say so, go back to A.
+      if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; }
+      this.abOn = false;
+    } else if (ch && this.abOn && (w.refused || !recent)) {
+      // ★ The server's B is the truth. After a refusal it snaps back at once; otherwise not while we are moving it.
+      const b: { frequency: number; mode: SDRMode; bandwidthLow: number; bandwidthHigh: number } = this.abSel === 'B' ? this : this.abOther;
+      b.frequency = ch.freq;
+      if (ch.mode && ch.mode !== b.mode) {
+        b.mode = ch.mode as SDRMode;
+        const d = MODE_BANDWIDTHS[b.mode];
+        if (d) { b.bandwidthLow = d[0]; b.bandwidthHigh = d[1]; }
+      }
+    }
+    this.cb.onWatch?.(w.note);
+  }
 
   // Predicted view (what we've asked for), vs cfg (what the server acked).
   /** What we last believed about being admin, so the LOSS of it can be noticed. See the hwinfo
@@ -899,6 +1031,20 @@ export class SpectrumClient {
   }
 
   private _handleMessage(msg: any) {
+    if (msg.type === 'watch') { this.onWatchMsg(msg); return; }
+    // ★★ V12 VFO A/B: every other inbound message speaks of VFO A (the server's config, the room's dial) — so while B
+    //    is selected, A is swapped back into the live fields to receive it, and B returns after. The page is told to
+    //    redraw once B is back (the callbacks inside ran with A's figures).
+    if (this.abSel === 'B' && (msg.type === 'config' || msg.type === 'dial')) {
+      this.swapLive();
+      try { this._handleMessageA(msg); } finally { this.swapLive(); }
+      this.cb.onWatch?.();
+      return;
+    }
+    this._handleMessageA(msg);
+  }
+
+  private _handleMessageA(msg: any) {
     switch (msg.type) {
       /* ★★★ THE REPORT IN PIECES (dab=2 — src/services/dabAssemble.ts, shared with the app). `dab_list` / `dab_dls`
        *  are only stored; a `dab` comes back whole, in the legacy shape — and an older server's full report passes
@@ -976,6 +1122,52 @@ export class SpectrumClient {
       case 'ism_error':
         this.cb.onIsmError?.(String(msg.why ?? 'ISM is not available on this receiver'));
         return;
+      /* ★★ NDB (V12): the same three messages and ghost guard; Find NDB and the stats answer the asker only. */
+      case 'ndb': {
+        if (Date.now() < this.ndbQuietUntil) return;
+        const r = ndbSanitise(msg);
+        if (!r) return;
+        this.ndbHeld = true;
+        this.cb.onNdb?.(r);
+        return;
+      }
+      case 'ndb_off': {
+        this.ndbHeld = false;
+        const now = Date.now();
+        if (this.ndbQuietUntil > now) this.ndbQuietUntil = Math.min(this.ndbQuietUntil, now + 1500);
+        this.cb.onNdb?.(null);
+        return;
+      }
+      case 'ndb_error':
+        this.cb.onNdbError?.(String(msg.why ?? 'NDB is not available on this receiver').slice(0, 200));
+        return;
+      case 'ndb_found': this.cb.onNdbFound?.(msg); return;
+      case 'ndb_stats': this.cb.onNdbStats?.(msg); return;
+      /* ★★ AIS (V12) — the same three messages and the same ghost guard as ISM, and a ship's track on request. */
+      case 'ais': {
+        if (Date.now() < this.aisQuietUntil) return;
+        const r = aisSanitise(msg);
+        if (!r) return;
+        this.aisHeld = true;            // ★ arrival = the receiver is in AIS, whoever put it there
+        this.cb.onAis?.(r);
+        return;
+      }
+      case 'ais_off': {
+        this.aisHeld = false;
+        const now = Date.now();
+        if (this.aisQuietUntil > now) this.aisQuietUntil = Math.min(this.aisQuietUntil, now + 1500);
+        this.cb.onAis?.(null);
+        return;
+      }
+      case 'ais_error':
+        this.cb.onAisError?.(String(msg.why ?? 'AIS is not available on this receiver'));
+        return;
+      case 'ais_trail': {
+        const m = Number(msg.mmsi);
+        const pts: [number, number][] = Array.isArray(msg.pts) ? msg.pts.slice(-400).filter((p: any) => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1])).map((p: any) => [Number(p[0]), Number(p[1])] as [number, number]) : [];
+        if (m > 0) this.cb.onAisTrail?.(m, pts);
+        return;
+      }
       case 'config': {
         const cfg: Config = {
           centerFreq:     msg.centerFreq ?? this.cfg.centerFreq,
@@ -1282,6 +1474,9 @@ export class SpectrumClient {
                             why: typeof msg.why === 'string' ? msg.why : undefined });
         break;
       case 'hwinfo':
+        // ★★ V12 VFO A/B: how many watch channels a listener may add here. Absent (an older server) = 0 = no toggle.
+        { const wm = Number(msg.watch) || 0;
+          if (wm !== this.watchMax) { this.watchMax = wm; if (wm < 1 && this.abOn) { if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; } this.abOn = false; } this.cb.onWatch?.(); } }
         if (msg.tunerBw !== undefined)
           this.cb.onTunerBw?.(Number(msg.tunerBw) || 0, Number(msg.rfCentre) || 0,
                               msg.tunerBwAuto === true,
@@ -1631,8 +1826,19 @@ export class SpectrumClient {
     //    call would ruin holding the step button down: each 100 Hz nudge would drop the buffer and
     //    re-arm it, turning a smooth tune into stuttering silence. Below one bandwidth the
     //    buffered audio is still substantially the signal you are listening to, so it is kept.
+    // ★★ V12 VFO B: a watch channel moves inside the window and moves NOTHING shared — no ask, no dial, no buffer flush.
+    if (this.abOn && this.abSel === 'B') {
+      if (frequency) this.frequency = Math.round(frequency);
+      if (mode && mode !== this.mode) { this.setMode(mode); }
+      else this.sendWatchAim(false);
+      if ((this.followVfo || opts?.recenter) && !this.icomSpans) {
+        const bb = this.view.binBandwidth || this.cfg.binBandwidth;
+        if (bb) this.zoom(this.frequency, bb);
+      }
+      return;
+    }
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld — the multiplex (the band) is the tuning
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see dabHeld — the multiplex (the band) is the tuning
     const prev = this.frequency;
     this.lastLocalTuneAt = performance.now();   // ★ so a config echo is not mistaken for somebody else
     if (frequency) this.frequency = Math.round(frequency);
@@ -1668,7 +1874,14 @@ export class SpectrumClient {
   }
 
   setMode(mode: SDRMode) {
-    if (this.adsbHeld || this.ismHeld) return;   // ★ see adsbHeld — the page leaves ADS-B / ISM before picking a mode
+    if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see adsbHeld — the page leaves ADS-B / ISM / AIS / NDB before picking a mode
+    if (this.abOn && this.abSel === 'B') {   // ★★ V12 VFO B — its own mode, never the room's
+      this.mode = mode;
+      const bw = MODE_BANDWIDTHS[mode];
+      if (bw) { this.bandwidthLow = bw[0]; this.bandwidthHigh = bw[1]; }
+      this.sendWatchAim(true);
+      return;
+    }
     if (mode !== this.mode && this.askBlocked()) return;   // ★★ ask before tuning; re-picking changes nothing
     // ★ The mode's own tune carries the current frequency, so a frequency still held is already in it.
     this.tunePacer.cancel();
@@ -1685,8 +1898,13 @@ export class SpectrumClient {
   setBandwidth(low: number, high: number) {
     // ★ The one door every passband goes through (slider, bookmark, shared link), so the WFM floor
     //   is applied once, here — see WFM_MIN_BW_HZ.
-    if (this.adsbHeld || this.ismHeld) return;   // ★ see adsbHeld — the server ignores a passband in ADS-B and ISM
+    if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see adsbHeld — the server ignores a passband in ADS-B, ISM, AIS and NDB
     [low, high] = clampPassband(this.mode, low, high);
+    if (this.abOn && this.abSel === 'B') {   // ★★ V12 VFO B — its own passband
+      this.bandwidthLow = low; this.bandwidthHigh = high;
+      this.sendWatchAim(false);
+      return;
+    }
     // ★★ Ask before tuning — the passband is everybody's on a shared dial. Only a CHANGE asks.
     if ((low !== this.bandwidthLow || high !== this.bandwidthHigh) && this.askBlocked()) return;
     this.bandwidthLow = low;
@@ -1753,7 +1971,7 @@ export class SpectrumClient {
 
   /** Set view centre + span. binBandwidth is clamped to sane zoom limits. */
   zoom(frequency: number, binBandwidth: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
     const n = this.cfg.binCount || 4096;
     if (this.icomSpans) {
       if (this.icomFollowLocked) { this.cb.onIcomFollowLocked?.(); return; }
@@ -1787,7 +2005,7 @@ export class SpectrumClient {
    * the thing you're listening to stays put and the span closes in around it.
    */
   zoomBy(factor: number, anchorHz?: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see dabHeld
     const bb = this.view.binBandwidth || this.cfg.binBandwidth;
     if (!bb) return;
     const n = this.cfg.binCount || 4096;
@@ -1866,6 +2084,19 @@ export class SpectrumClient {
    *  frequency goes through ism({hz}) (the frequency box). Set by our own entry and by any `ism` report. */
   ismHeld = false;
   private ismQuietUntil = 0;
+  /** ★★ NDB (V12): the receiver is on the LF beacon band. Tuning, mode and passband stay the listener's (inside the
+   *  capture); the view, the rate and the IF filter are the mode's. */
+  ndbHeld = false;
+  private ndbQuietUntil = 0;
+  ndb(on: boolean) {
+    if (this.askBlocked()) return;     // ★★ ask before tuning — NDB moves the whole shared radio
+    if (on) this.tunePacer.cancel();
+    this.ndbQuietUntil = on ? 0 : Date.now() + 5000;
+    this.ndbHeld = on;
+    this._send({ type: 'ndb', on: on ? 1 : 0 });
+  }
+  ndbFind(q: string, limit = 60) { this._send({ type: 'ndb_find', q: String(q).slice(0, 40), limit }); }
+  ndbStats() { this._send({ type: 'ndb_stats' }); }
   /** Enter / change band / step / exact frequency / leave. ★ The server owns the band: what it reports is the truth. */
   ism(on: boolean, o: { band?: string; step?: number; hz?: number } = {}) {
     if (this.askBlocked()) return;     // ★★ ask before tuning — ISM takes the whole shared radio
@@ -1878,6 +2109,19 @@ export class SpectrumClient {
     if (on && o.hz && o.hz > 0) m.hz = Math.round(o.hz);
     this._send(m);
   }
+
+  /** ★★ AIS HOLDS THE DIAL AND THE VIEW as ISM does — two fixed channels, nothing to step. */
+  aisHeld = false;
+  private aisQuietUntil = 0;
+  ais(on: boolean) {
+    if (this.askBlocked()) return;     // ★★ ask before tuning — AIS takes the whole shared radio
+    if (on) this.tunePacer.cancel();
+    this.aisQuietUntil = on ? 0 : Date.now() + 5000;
+    this.aisHeld = on;
+    this._send({ type: 'ais', on: on ? 1 : 0 });
+  }
+  /** One ship's track (the map's card) — a read; the answer arrives as onAisTrail. */
+  aisTrail(mmsi: number) { if (mmsi > 0) this._send({ type: 'ais_trail', mmsi }); }
 
   /* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server said this listener may not move the shared dial yet
    *  (dial.tuneLocked, read by dialChat.parseAsk — the app's reader, one file). THE ONE GATE for every way this page
@@ -1928,7 +2172,7 @@ export class SpectrumClient {
     this.zoom(frequency, this.view.binBandwidth || this.cfg.binBandwidth);
   }
 
-  resetView() { if (this.dabHeld || this.adsbHeld || this.ismHeld) return; this._send({ type: 'reset' }); }
+  resetView() { if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'reset' }); }
 
   /** Frame decimation: server emits only every Nth frame. NB this saves BANDWIDTH
    *  ONLY — the server still computes every FFT. Use setFftRate() to save power. */
@@ -1973,11 +2217,11 @@ export class SpectrumClient {
   setHwBiasT(on: boolean)  { this._send({ type: 'biasT', on }); }
   setHwAgc(on: boolean)    { this._send({ type: 'agc', on }); }
   setHwPpm(ppm: number)    { this._send({ type: 'ppm', value: Math.round(ppm) }); }
-  setHwSampleRate(r: number) { if (this.adsbHeld || this.ismHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
+  setHwSampleRate(r: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
   /** ★ The tuner's IF filter in Hz; 0 = librtlsdr's automatic choice. RTL only. */
   /** ★ TEF6686-style automatic demodulator bandwidth. FM broadcast only; server-wide. */
   setAutoBw(on: boolean) { this._send({ type: 'autobw', on }); }
-  setTunerBandwidth(hz: number) { if (this.adsbHeld || this.ismHeld) return; this._send({ type: 'tunerbw', value: Math.round(hz) }); }
+  setTunerBandwidth(hz: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'tunerbw', value: Math.round(hz) }); }
   setHwDirectSampling(v: 0 | 1 | 2) { this._send({ type: 'directSampling', value: v }); }
   /** ★ The owner's AUTOMATIC crossover — admin-gated server side, because unlike direct sampling
    *  itself this PERSISTS and outlives whoever set it. Turning it off leaves the tuner wherever it
@@ -1987,7 +2231,12 @@ export class SpectrumClient {
   // Audio DSP — runs server-side in the shim (the client stays a thin renderer).
   /** ★★★ On/off goes out IN WORDS (vibeSquelch.ts): `db` alone with "<= -100 = off" made every threshold
    *  below -100 dBFS an OFF — where an Airspy HF+'s quiet airband channel sits (Stuart, 2026-10-14). */
-  setSquelch(db: number) { this._send(vsSquelchMsg(db)); }
+  setSquelch(db: number) {
+    this.sqlDb = db;
+    // ★★ V12 VFO B: its own squelch (a quiet calling channel stays silent until it opens), on the watch channel.
+    if (this.abOn && this.abSel === 'B') { this.lastLocalWatchAt = performance.now(); this._send({ type: 'watch', id: 1, sql: db, sqlOn: vsSqlOn(db) }); return; }
+    this._send(vsSquelchMsg(db));
+  }
   setNr(on: boolean, strength: number) { this._send({ type: 'nr', on, strength }); }
   setNotch(on: boolean) { this._send({ type: 'notch', on }); }
   /** tau in seconds: 0 = off, 50e-6 or 75e-6. */

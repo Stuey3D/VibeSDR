@@ -26,9 +26,35 @@ Branch `v12-spots` (worktree `~/VibeSDR-spots`).
 ## Architecture
 
 ### Single mode
-This is the button there always was. The listener's 48 kHz audio is box-averaged by four to 12 kHz, the same decimation
-as before, and goes into every registered mode with `single: true`. Today that is FT8 and FT4 on one passband. Spot RF is
-the listener's dial plus the audio offset.
+This is the button there always was, and the **cheap** one. The listener's 48 kHz audio is box-averaged by four to
+12 kHz, the same decimation as before. It goes only into the registered modes (`single: true`) whose published dial is
+where the listener is tuned; Band is the button that runs every mode. Spot RF is the listener's dial plus the audio
+offset.
+
+**How the modes are chosen** (`Spotter::singleModesAt`, one rule in `Spotter::atOwnDial`, 2026-10-26):
+- A narrow mode on a dial of its own (`ModeDef::singleDialTolHz` > 0, WSPR's 150 Hz) runs when the listener's dial is
+  within that of one of its dials.
+- Any other mode: the listener's window is the USB passband dial + 100 … dial + 3000 Hz. The mode runs when at least
+  half of that window lies inside its own audio window above one of its dials (dial + `audioLoHz` … `audioHiHz`).
+- On 20 m that gives: 14.074 → FT8, 14.078 → JS8, 14.080 → FT4, 14.084 → FT2, 14.0956 → WSPR. A shared dial runs both
+  (3.578 → FT2 and JS8). A few hundred hertz off a dial still counts (7.0743 → FT8).
+- **Off the table** (no dial there, or no dial known) it runs the modes marked `ModeDef::singleFallback`: **FT8 +
+  FT4**, which is what Single always ran, so it never goes silent.
+- **On a retune** the set is chosen again on the next audio block. Engines whose mode is still wanted are kept, so a
+  fine retune does not lose a slot in progress. The others are stopped (their slot counts are kept for the health
+  pill) and new ones made.
+- **Cost:** one engine per listener at a mode's dial, not five. Running FT8, FT4, FT2, JS8 and WSPR on every
+  listener's audio would cost about 9× FT8 per listener.
+
+`test-digi-spots` checks the set chosen per dial, the retune swaps, the kept engine and the off-table fallback.
+
+### Spot times
+Every spot is stamped with the **start of the slot** it was heard in (`digi::Spot::slotUtc` → the frame's `timestamp`):
+WSJT-X's time column, as UberSDR stamps its spots too. Clients show it as **HH:MM:SS UTC** (`src/utils/spotTime.ts`,
+one helper for the web list, the CW/PSK lists, the web map's popups and the app's list, CW view and map card), so the
+seconds name the transmission block: FT8 :00/:15/:30/:45, FT4 every 7.5 s, FT2 every 3.75 s, JS8 by its submode,
+WSPR on the even minute. M7EIW's request via Stuart, 2026-10-26. Checked by `test_spot_time.ts`, `test-digi-spots`
+(each Band spot's slot), `test-server-spots` and `test-web-spots`.
 
 ### Band mode
 The cheapest correct route is **one IQ slice per band, then one tuner per mode dial on the decoder thread**. A wide audio
@@ -202,10 +228,14 @@ Where the letters are drawn:
 
 ## THE MODE INTERFACE: how WSPR, JS8, FT2, Q65, FST4, FST4W and MSK144 plug in
 
-**Status, 2026-10-26.** The WSPR engine (branch `v12-wspr`, `decoders/wspr_decoder.*`) and the JS8 and FT2 engines
-(`v12-js8-ft2`) are finished as standalone engines. Plugging one in means writing a thin adapter header
-`decoders/digimodes/<name>.h` that wraps the engine in `digi::Engine`, as `digimodes/ft8.h` wraps `Ft8Decoder`. That
-header is the whole change: the registry, the bands, Band mode, the clients and the gallery need nothing else.
+**Status, 2026-10-27.** WSPR is wired in: `decoders/digimodes/wspr.h` wraps our own engine
+(`decoders/digimodes/wspr_decoder.*`, branch `v12-wspr`) — 120 s slots, 12 kHz, audio 1350–1650 Hz (it searches
+1380–1620 and measures its WSPRnet-scale SNR across ±150 Hz of 1500, so Band's tuner is asked for all of that flat),
+`costVsFt8` 5 (busy 40 m: ≈ 480 ms per two minutes on a Mac against FT8's ≈ 84 ms). In Single mode it is fed only while
+the listener's dial is within 150 Hz of a WSPR dial (`ModeDef::singleDialTolHz` — now the narrow case of Single's one
+rule, `Spotter::atOwnDial`, above): on the FT8 dial its 1400–1600 Hz is FT8 traffic. Spots carry `snr` on the WSPRnet scale. With it registered, 20 m's Band centre is 14.0857 MHz and
+2200 m / 630 m appear as WSPR-only bands. JS8 and FT2 are wrapped the same way (`digimodes/js8.h`, `ft2.h`;
+docs/v12/JS8-FT2.md).
 
 To check an integration, these must all hold:
 1. `ModeDef::name` is exactly `"WSPR"` / `"JS8"` / `"FT2"`. The published dials in `digi_bands.h` and the client
@@ -257,6 +287,9 @@ struct ModeDef {
     int    sampleRate = 12000;   // the audio rate process() gets (Band's tuners make 12 kHz today)
     float  audioLoHz = 200, audioHiHz = 3000;   // the audio passband you search, above the dial — Band cuts exactly this
     bool   single = true;        // also run in Single mode on the listener's audio (false = Band only)
+    double singleDialTolHz = 0;  // Single runs it only AT its dial: > 0 = within this many Hz of one (WSPR: 150); 0 = half the
+                                 //   listener's 100–3000 Hz window inside this mode's window above a dial (FT8, JS8 …)
+    bool   singleFallback = false;  // Single, tuned to no mode's dial: run anyway (FT8 and FT4 — what Single always ran)
     double costVsFt8 = 1.0;      // relative CPU of one engine (docs, benchmark)
     std::vector<std::pair<std::string, double>> dials;   // {"20m", 14095600} … EMPTY = digi_bands.h's published table
     std::function<std::unique_ptr<Engine>()> make;
