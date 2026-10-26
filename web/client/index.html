@@ -4235,11 +4235,13 @@ select.btn { padding: 6px 8px; }
     <div id="secLearned" hidden>
     <h2>WHAT THIS RECEIVER HAS LEARNED</h2>
     <div class="aActions">
-      <button class="btn" id="actClearLearned">CLEAR LEARNED RDS STATIONS</button>
+      <button class="btn" id="actClearLearned">CLEAR LEARNED STATIONS (RDS, DAB AND SCANNED)</button>
       <button class="btn" id="actClearLogos">CLEAR STATION LOGO CACHE</button>
       <button class="btn" id="actClearManual">CLEAR MANUAL BOOKMARKS</button>
     </div>
-    <p class="dim">Stations are learned from RDS as people listen, and artwork is looked up once
+    <p class="dim">Stations are learned from RDS and DAB as people listen, and from a DAB band scan (kept a year
+       unheard rather than 30 days) — clearing learned stations takes all three, so a multiplex that has swapped a
+       station is re-learned clean. Artwork is looked up once
        and remembered — a day for a hit, an hour for a miss. Clearing the logos makes the next
        listener's lookup fresh, which is the cure for a station showing somebody else's badge.
        Manual bookmarks are the ones you typed or imported; they never expire, and they are kept

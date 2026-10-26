@@ -852,6 +852,17 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── bookmark names across restarts (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bookmark-escape.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12: THE THIRD BOOKMARK ORIGIN, SCANNED (2026-10-26): a year's expiry not 30 days, evicted only after every learned
+#     row, an old file loads as before, the file round-trips byte-identical, "Clear learned" takes scanned too. ~20 s.
+printf '\n\033[1m── scanned bookmarks: expiry, eviction, round trip (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bookmark-scanned.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12: THE DAB BAND SCAN (M7EIW, 2026-10-26) on the real server and the bench multiplex (played on 11D only): finds it,
+#     bookmarks every service, cancel/tune, shared radio refused in words, the owner's setup scan, and the re-learn-on-visit
+#     reconcile (two visits 6 h apart, a weak day deletes nothing). Needs the bench clip. ~12 min — the longest suite.
+printf '\n\033[1m── the DAB band scan (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-dab-bandscan.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ AN IDLE DECODER SOCKET IS PINGED (2026-10-10): behind Cloudflare's ~100 s idle cut-off the /ws/dxcluster socket
 #    reconnected for ever ("an error log as long as my arm"). ~30 s. Same VIBESERVER_BIN rule.
