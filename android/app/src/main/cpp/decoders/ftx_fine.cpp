@@ -25,33 +25,56 @@ int pffftComplexSize(int want) {
 }
 }
 
-FtxFine::FtxFine(int mode, int rate, int nsps, int window) : mode_(mode), rate_(rate), nsps_(nsps), window_(window) {
+FtxFrame FtxFine::frameOf(int mode) {
+    FtxFrame f;
     const bool ft8 = mode == 0;
-    nn_ = ft8 ? FT8_NN : FT4_NN;
-    ntones_ = ft8 ? 8 : 4;
-    bps_ = ft8 ? 3 : 2;
-    gray_ = ft8 ? kFT8_Gray_map : kFT4_Gray_map;
-    T_ = (double)nsps / rate;
-    baud_ = 1.0 / T_;
+    f.nn = ft8 ? FT8_NN : FT4_NN;
+    f.ntones = ft8 ? 8 : 4;
+    f.bps = ft8 ? 3 : 2;
+    f.gray.assign(ft8 ? kFT8_Gray_map : kFT4_Gray_map, (ft8 ? kFT8_Gray_map : kFT4_Gray_map) + f.ntones);
     // ★ 32 baseband samples a symbol for FT8 (200 Hz for a 50 Hz-wide signal), 16 for the 4-tone frames
-    sps_ = ft8 ? 32 : 16;
-    while (sps_ > 4 && nsps_ % sps_) sps_ /= 2;
-    dd_ = nsps_ / sps_;
-    nd_ = pffftComplexSize((window + dd_ - 1) / dd_);
-    nfft_ = nd_ * dd_;
-    df_ = (double)rate / nfft_;
+    f.preferSps = ft8 ? 32 : 16;
     if (ft8) {
         for (int g = 0; g < 3; ++g)
-            for (int k = 0; k < 7; ++k) { syncSym_.push_back(36 * g + k); syncTone_.push_back(kFT8_Costas_pattern[k]); }
-        for (int s = 7; s < 36; ++s) dataSym_.push_back(s);
-        for (int s = 43; s < 72; ++s) dataSym_.push_back(s);
+            for (int k = 0; k < 7; ++k) { f.syncSym.push_back(36 * g + k); f.syncTone.push_back(kFT8_Costas_pattern[k]); }
+        for (int s = 7; s < 36; ++s) f.dataSym.push_back(s);
+        for (int s = 43; s < 72; ++s) f.dataSym.push_back(s);
     } else {
         for (int g = 0; g < 4; ++g)
-            for (int k = 0; k < 4; ++k) { syncSym_.push_back(1 + 33 * g + k); syncTone_.push_back(kFT4_Costas_pattern[g][k]); }
-        for (int s = 5; s < 34; ++s) dataSym_.push_back(s);
-        for (int s = 38; s < 67; ++s) dataSym_.push_back(s);
-        for (int s = 71; s < 100; ++s) dataSym_.push_back(s);
+            for (int k = 0; k < 4; ++k) { f.syncSym.push_back(1 + 33 * g + k); f.syncTone.push_back(kFT4_Costas_pattern[g][k]); }
+        for (int s = 5; s < 34; ++s) f.dataSym.push_back(s);
+        for (int s = 38; s < 67; ++s) f.dataSym.push_back(s);
+        for (int s = 71; s < 100; ++s) f.dataSym.push_back(s);
     }
+    return f;
+}
+
+FtxFine::FtxFine(int mode, int rate, int nsps, int window) : mode_(mode), rate_(rate), nsps_(nsps), window_(window) {
+    init(frameOf(mode));
+}
+
+FtxFine::FtxFine(const FtxFrame& frame, int rate, int nsps, int window) : mode_(-1), rate_(rate), nsps_(nsps), window_(window) {
+    init(frame);
+}
+
+void FtxFine::init(const FtxFrame& fr) {
+    nn_ = fr.nn; ntones_ = fr.ntones; bps_ = fr.bps; gray_ = fr.gray;
+    syncSym_ = fr.syncSym; syncTone_ = fr.syncTone; dataSym_ = fr.dataSym;
+    T_ = (double)nsps_ / rate_;
+    baud_ = 1.0 / T_;
+    /* ★ Baseband samples a symbol: the largest multiple of 4 (the correlation runs four lanes) up to the frame's
+     *  preference that divides a symbol, so every symbol starts on a baseband sample. JS8 Fast (1,200 samples) and
+     *  Turbo (600) get 24; a rate under ntones + 3 tones would fold the band, so never fewer. */
+    sps_ = 4;
+    for (int c = fr.preferSps & ~3; c >= 4; c -= 4)
+        if (nsps_ % c == 0) { sps_ = c; break; }
+    if (sps_ < ntones_ + 3)
+        for (int c = (fr.preferSps & ~3) + 4; c <= 64; c += 4) if (nsps_ % c == 0) { sps_ = c; break; }
+    dd_ = nsps_ / sps_;
+    nd_ = pffftComplexSize((window_ + dd_ - 1) / dd_);
+    while ((nd_ * dd_) % 32) nd_ = pffftComplexSize(nd_ + 1);      // the real FFT wants a multiple of 32 (JS8 Turbo)
+    nfft_ = nd_ * dd_;
+    df_ = (double)rate_ / nfft_;
     // the band: 1.5 tones below tone 0 to 1.5 above the top tone, raised-cosine over the outer tone each side
     tLo_ = (int)std::floor(-1.5 * baud_ / df_);
     tHi_ = (int)std::ceil((ntones_ + 0.5) * baud_ / df_);
@@ -80,7 +103,7 @@ FtxFine::FtxFine(int mode, int rate, int nsps, int window) : mode_(mode), rate_(
     zi_.assign((size_t)nd_, 0.0f);
     csR_.assign((size_t)nn_ * ntones_, 0.0f);
     csI_.assign((size_t)nn_ * ntones_, 0.0f);
-    fwd_ = pffft_new_setup(nfft_, PFFFT_REAL);
+    fwd_ = pffft_new_setup(nfft_, PFFFT_REAL);     // ★ nfft_ = nd_·dd_, a multiple of 32 for every frame here
     inv_ = pffft_new_setup(nd_, PFFFT_COMPLEX);
     spec_ = (float*)pffft_aligned_malloc(sizeof(float) * (size_t)nfft_);
     work_ = (float*)pffft_aligned_malloc(sizeof(float) * (size_t)std::max(nfft_, 2 * nd_));
@@ -256,13 +279,13 @@ void FtxFine::llrGroup(int group, float* llr) const {
                 const float* ci = &csI_[(size_t)sym * nt];
                 for (int v = have - 1; v >= 0; --v) {
                     const float br = accR[v], bi = accI[v];
-                    for (int d = nt - 1; d >= 0; --d) { accR[v * nt + d] = br + cr[gray_[d]]; accI[v * nt + d] = bi + ci[gray_[d]]; }
+                    for (int d = nt - 1; d >= 0; --d) { accR[v * nt + d] = br + cr[gray_[(size_t)d]]; accI[v * nt + d] = bi + ci[gray_[(size_t)d]]; }
                 }
                 have *= nt;
             }
             {                                            // the last symbol, straight into the powers
                 const int sym = dataSym_[(size_t)(s0 + q0 + r - 1)];
-                for (int d = 0; d < nt; ++d) { gr[d] = csR_[(size_t)sym * nt + gray_[d]]; gi[d] = csI_[(size_t)sym * nt + gray_[d]]; }
+                for (int d = 0; d < nt; ++d) { gr[d] = csR_[(size_t)sym * nt + gray_[(size_t)d]]; gi[d] = csI_[(size_t)sym * nt + gray_[(size_t)d]]; }
                 for (int v = 0; v < have; ++v) {
                     const v4f br = v4_set1(accR[v]), bi = v4_set1(accI[v]);
                     for (int d = 0; d < nt; d += 4) {

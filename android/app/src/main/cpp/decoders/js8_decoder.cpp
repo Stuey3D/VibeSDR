@@ -25,6 +25,7 @@ const Js8SubmodeInfo kInfo[4] = {
 const uint8_t kCostasFt8[7] = { 4, 2, 5, 6, 1, 3, 0 };
 const uint8_t kCostasJs8[3][7] = { { 0, 6, 2, 3, 5, 4, 1 }, { 1, 5, 0, 2, 3, 6, 4 }, { 2, 5, 0, 6, 4, 1, 3 } };
 constexpr int kSyncAt[3] = { 0, 36, 72 };
+constexpr int kFineMinSync = 10;        // the second look: Costas symbols of 21 that must be their own strongest tone
 
 double msSince(std::chrono::steady_clock::time_point t0) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -500,6 +501,7 @@ void Js8SlotDecoder::decode(float* audio, int n, const Js8SlotOptions& o, std::v
         subs.clear();
         st.subtractMs += lap();
         buildWaterfall(audio, n);
+        if (fine_) fine_->invalidate();                  // ★ the audio changed (a new slot, or pass 2's subtraction)
         colMean_.assign((size_t)mon_.wf.block_stride, -1.0f);
         st.waterfallMs += lap();
         const int nc = search(o.maxCandidates, o.minScore);
@@ -524,7 +526,35 @@ void Js8SlotDecoder::decode(float* audio, int n, const Js8SlotOptions& o, std::v
             };
             bool ok = err >= 0 && crcOk();
             double cohStart = NAN, cohF0 = NAN;
-            if (!ok && st.coherentTried[pass - 1] < o.coherentMax && c.score >= o.coherentMinScore) {
+            if (!ok && o.fine && st.coherentTried[pass - 1] < o.coherentMax && c.score >= o.coherentMinScore) {
+                ++st.coherentTried[pass - 1];
+                if (!fine_) {
+                    FtxFrame fr;
+                    fr.nn = kNN; fr.ntones = 8; fr.bps = 3; fr.preferSps = 32;
+                    for (int g = 0; g < 3; ++g)
+                        for (int k = 0; k < 7; ++k) { fr.syncSym.push_back(kSyncAt[g] + k); fr.syncTone.push_back(costas_[g][k]); }
+                    for (int d = 0; d < 58; ++d) fr.dataSym.push_back(d < 29 ? 7 + d : 43 + (d - 29));
+                    for (int v = 0; v < 8; ++v) fr.gray.push_back((uint8_t)v);       // ★ no Gray map, MSB first
+                    fine_.reset(new FtxFine(fr, rate_, nsps_, windowSamples_));
+                }
+                if (!fine_->ready()) fine_->ensure(audio, n);
+                const double cs = (double)(c.t - 1) * mon_.block_size + (double)c.ts * mon_.subblock_size;
+                const double cf = (mon_.min_bin + c.f + (float)c.fs / mon_.wf.freq_osr) / T_;
+                FtxFine::Meas M;
+                if (fine_->measure(cs, cf, kFineMinSync, M)) {
+                    float sets[3][js8::kN];
+                    int setOk = -1;
+                    for (int k : { 1, 2, 0 }) {
+                        fine_->llrGroup(fine_->groupOf(k), sets[k]);
+                        err = js8::bpDecode(sets[k], o.ldpcIters, cw);
+                        if (err >= 0 && crcOk()) { setOk = k; break; }
+                    }
+                    if (setOk >= 0) { ok = true; std::memcpy(llr, sets[setOk], sizeof llr); ++st.coherentDecodes[pass - 1]; }
+                    else std::memcpy(llr, sets[2], sizeof llr);                       // ★ OSD below gets the three-symbol set
+                    cohStart = M.start; cohF0 = M.f0;
+                }
+                st.coherentMs += lap();
+            } else if (!ok && st.coherentTried[pass - 1] < o.coherentMax && c.score >= o.coherentMinScore) {
                 ++st.coherentTried[pass - 1];
                 float llr2[js8::kN];
                 if (coherentLlr(audio, n, c, llr2, &cohStart, &cohF0)) {
@@ -682,6 +712,7 @@ void Js8Decoder::runLane(Lane& l) {
     o.maxPasses = loaded ? 1 : std::max(1, std::min(2, maxPasses.load()));
     o.osdMaxErrors = (loaded || o.maxPasses < 2) ? 0 : 26;
     o.coherentMax = loaded ? 0 : 40;          // ★ spare CPU only, like OSD and pass 2
+    o.fine = 1;                               // ★ the second look as the coherent stage (2026-10-26, test-js8)
     o.abort = &abort_;
     /* ★ A second pass only when it would still end inside 40 % of what is left of this period, the box is not loaded,
      *  and no other submode's window is waiting behind this one (they share the worker). */

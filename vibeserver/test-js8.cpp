@@ -179,7 +179,7 @@ int main() {
     for (Js8Submode s : kJs8Submodes) {
         const Js8SubmodeInfo& in = js8Info(s);
         Js8SlotDecoder dec(kFs, s);
-        Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26; o.coherentMax = 40;   // the live decoder's full depth
+        Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26; o.coherentMax = 40; o.fine = 1;   // the live decoder's full depth
         const int win = dec.windowSamples();
         std::string line;
         /* ★ "Decodes everything above": a little above where each submode's threshold falls on this band — they differ
@@ -225,7 +225,7 @@ int main() {
             char b[32]; std::snprintf(b, sizeof b, " %+.0f:%d/%d", snr, got, n); line += b;
             if (snr >= sure) { strongOk += got; strongN += n; }
         }
-        std::printf("    %-6s decoded by SNR —%s   (%.1f ms/slot, 2 passes + coherent + OSD, this machine)\n", in.name, line.c_str(), ms / slots);
+        std::printf("    %-6s decoded by SNR —%s   (%.1f ms/slot, 2 passes + second look + OSD, this machine)\n", in.name, line.c_str(), ms / slots);
         ok(strongOk == strongN, std::string(in.name) + ": every signal at " + std::to_string((int)sure) + " dB and above decoded");
         ok(falseN == 0, std::string(in.name) + ": no message that was not sent");
         ok(meas > 0 && dtErr < 0.6 * in.nsps12k / kFs + 0.01, std::string(in.name) + ": DT within half a symbol (worst " + std::to_string(dtErr) + " s)");
@@ -237,7 +237,7 @@ int main() {
     for (Js8Submode s : kJs8Submodes) {
         Js8SlotDecoder dec(kFs, s);
         Js8SlotOptions o; o.maxPasses = 1; o.osdMaxErrors = 26; o.osdMinScore = 0; o.maxCandidates = 300; o.minScore = 4;
-        o.coherentMax = 300; o.coherentMinScore = 0;
+        o.coherentMax = 300; o.coherentMinScore = 0; o.fine = 1;   // ★ the second look, as live (2026-10-26)
         int falseN = 0, cands = 0;
         const int slots = s == Js8Submode::Slow ? 10 : 25;
         for (int i = 0; i < slots; ++i) {
@@ -249,7 +249,7 @@ int main() {
             for (const Js8Result& r : res) { ++falseN; std::printf("    false: \"%s\" (%d errors)\n", r.frame.text.c_str(), r.hardErrors); }
         }
         ok(falseN == 0, std::string(js8Info(s).name) + ": " + std::to_string(slots) + " noise slots, " + std::to_string(cands)
-           + " candidates (BP, the coherent stage and OSD on every one): 0 decodes");
+           + " candidates (BP, the second look and OSD on every one): 0 decodes");
     }
 
     std::printf("5. the live decoder: four submodes from one stream, cut by the capture clock\n");
@@ -306,7 +306,7 @@ int main() {
             for (Js8Submode s : kJs8Submodes) {
                 const Js8SubmodeInfo& in = js8Info(s);
                 Js8SlotDecoder dec(rate, s);
-                Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26; o.coherentMax = 40;
+                Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26; o.coherentMax = 40; o.fine = 1;
                 std::vector<float> w((size_t)dec.windowSamples());
                 for (double S = std::ceil(start / in.period) * in.period; S + (double)w.size() / rate <= end; S += in.period) {
                     const long i0 = std::lround((S - start) * rate);

@@ -34,10 +34,21 @@ namespace vibe {
  *      normalised as ft8_lib normalises its own.
  *  Cost (measured, docs/v12/FTX-SENSITIVITY.md): one window FFT per pass, then per candidate one inverse FFT of 3,072
  *  (FT8) and ~45 k complex multiply-adds — four lanes at a time (NEON / SSE2 / scalar, ft8_lib's vibe_simd4.h). */
+/** A frame on the FT8 pattern: which symbols are Costas (and their tones), which carry data (in codeword order, in
+ *  segments of 29), how bits map to tones. FT8/FT4/FT2 come from FtxFine's own constructor; JS8 describes its own. */
+struct FtxFrame {
+    int nn = 0, ntones = 8, bps = 3;
+    std::vector<int> syncSym, syncTone, dataSym;
+    std::vector<uint8_t> gray;            // bits value -> tone (identity for JS8)
+    int preferSps = 32;                   // baseband samples a symbol to aim for (a divisor of nsps is chosen)
+};
+
 class FtxFine {
 public:
     /** `mode` 0 FT8, 1 FT4, 2 FT2 (FtxMode's order). `nsps` = audio samples per symbol, `window` = samples a slot holds. */
     FtxFine(int mode, int rate, int nsps, int window);
+    /** Any frame on the FT8 pattern (JS8's submodes). */
+    FtxFine(const FtxFrame& frame, int rate, int nsps, int window);
     ~FtxFine();
     FtxFine(const FtxFine&) = delete;
     FtxFine& operator=(const FtxFine&) = delete;
@@ -75,13 +86,15 @@ public:
 private:
     void extract(double f0);                 // → zr_/zi_ (nd_ samples at rate_/dd_), tone 0 near 0 Hz
     void corr(int at, const float* c, const float* s, float& re, float& im) const;
+    void init(const FtxFrame& fr);
+    static FtxFrame frameOf(int mode);
 
     int mode_, rate_, nsps_, window_;
     int nn_, ntones_, bps_;                  // channel symbols, tones, bits per symbol
     int sps_, dd_, nd_, nfft_;               // baseband samples per symbol, decimation, baseband length, window FFT size
     double T_, baud_, df_;                   // symbol period, tone spacing, window-FFT bin width
     std::vector<int> syncSym_, syncTone_, dataSym_;
-    const uint8_t* gray_;
+    std::vector<uint8_t> gray_;
     void* fwd_ = nullptr;                    // PFFFT_Setup* (real, nfft_)
     void* inv_ = nullptr;                    // PFFFT_Setup* (complex, nd_)
     float* spec_ = nullptr;                  // nfft_ floats: the window's ordered spectrum
