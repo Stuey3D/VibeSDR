@@ -17,6 +17,8 @@ mkdir -p "$OUT"
 
 VDSP=android/app/src/main/cpp/vibedsp
 KISS="$VDSP/third_party/kissfft"
+# ★ V12 digital spots: every mode engine in decoders/digimodes/ (the builds glob it) goes wherever digi_modes.cpp goes.
+DIGIMODES="$(ls android/app/src/main/cpp/decoders/digimodes/*.cpp 2>/dev/null | tr '\n' ' ')"
 
 # test name -> extra compiler flags it needs
 flags_for() {
@@ -117,6 +119,10 @@ flags_for() {
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
+    # ★★ V12 WSPR (decoders/digimodes/wspr_decoder.h): protocol, synthetic slots −20…−28 dB with drift and DT, hashed calls, pure
+    #    noise, subtraction, the live decoder — optimised, it decodes ~50 two-minute slots. VIBE_TEST_AUDIO adds 40 m + 20 m
+    #    off air, with the WSPRnet-scale SNR held to ±1 dB (mean) / ±3 dB (each) of Stuart's UberSDR's own reports.
+    test-wspr)             echo "-O2 -lpthread" ;;
     # ★★ V12 WIRELESS M-BUS METERS (vibe_wmbus.h, 2026-10-26): CRC, fields, 3-out-of-6, formats A/B, headers, records,
     #    the line, the interval; T1 / C1-A / C1-B / S1 through the real ISM front end at 1-2.4 MS/s with drift, a
     #    sensitivity sweep, noise and carriers = nothing, the privacy rule (serial yes, ciphertext never), the day-log
@@ -129,6 +135,7 @@ flags_for() {
 # test name -> the sources it needs besides itself
 deps_for() {
   case "$1" in
+    test-wspr)          echo "android/app/src/main/cpp/decoders/digimodes/wspr_decoder.cpp $VDSP/third_party/pffft/pffft.c" ;;
     test-wfm-stereo)    echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
@@ -172,7 +179,7 @@ deps_for() {
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
                               android/app/src/main/cpp/decoders/wefax_decoder.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp \
                               android/app/src/main/cpp/decoders/time_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp \
-                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;
+                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
     test-fd-passing)    echo "android/app/src/main/cpp/fd_passing.cpp" ;;
@@ -216,7 +223,7 @@ deps_for() {
     test-power-dips)    echo "" ;;
     test-decoder-hardening) echo "$VDSP/ddc.cpp android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     # ★ NAVTEX's CCIR 476 coder, word by word (audit 2026-10-04, rows 11-13); the audio half is scripts/test-navtex.sh.
     test-navtex-fec)    echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;
     # ★★ RTTY's letters/figures shift across a lost signal: a lost LTRS → letters, a synop line → figures (2026-10-13).
@@ -228,7 +235,7 @@ deps_for() {
     test-ft2)           echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
     test-decoder-hosts|test-bench-decoders|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
     # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.

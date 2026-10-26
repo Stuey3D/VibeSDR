@@ -77,6 +77,7 @@ private:
 
     // Single
     std::vector<Run> single_;
+    static bool atOwnDial(const ModeDef& m, double dialHz);
     int   decim_ = 0; float acc_ = 0;
     std::vector<float> buf_;
 
