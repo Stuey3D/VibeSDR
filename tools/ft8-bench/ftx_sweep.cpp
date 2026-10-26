@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <map>
 #include <random>
 #include <set>
@@ -101,6 +102,7 @@ static std::string text(const ftx_message_t& m0) {
 int main(int argc, char** argv) {
     FtxMode mode = FtxMode::FT8;
     bool useAp = false, apSeed = false; int apTable = 0;
+    std::string wavDir;   // ★ also write every slot as a WAV (jt9's name and length) + truth.txt: the SAME audio for a reference decoder
     double snrA = -24, snrB = -14, snrStep = 1; int slots = 20, sigs = 10, noiseSlots = 0; unsigned seed = 1; bool verbose = false;
     Ft8SlotOptions o; o.maxPasses = 1; o.osdMaxErrors = 0;
     for (int i = 1; i < argc; ++i) {
@@ -126,6 +128,7 @@ int main(int argc, char** argv) {
         else if (a == "--apnear") o.apMaxBpErr = std::atoi(nxt().c_str());
         else if (a == "--changed") o.onlyChanged = std::atoi(nxt().c_str()) != 0;
         else if (a == "--finesync") o.fineMinSync = std::atoi(nxt().c_str());
+        else if (a == "--wavdir") wavDir = nxt();
         else if (a == "-v") verbose = true;
         else { std::fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
     }
@@ -204,6 +207,25 @@ int main(int argc, char** argv) {
                 }
             }
             runSlot(x, truth, hit, fals, ms);
+            if (!wavDir.empty()) {
+                const double P = mode == FtxMode::FT2 ? 3.75 : ft4 ? 7.5 : 15.0;
+                const long t = 1767225600L + (long)std::lround(((snr + 100) * 1000 + s) * P);   // 2026-01-01 + a slot per (SNR, slot)
+                char name[64]; const time_t tt = (time_t)t; struct tm g; gmtime_r(&tt, &g);
+                std::strftime(name, sizeof name, "%y%m%d_%H%M%S", &g);
+                const int len = (int)std::lround(P * kFs);
+                std::vector<int16_t> pcm((size_t)len, 0);
+                for (int i = 0; i < len && i < W; ++i) pcm[(size_t)i] = (int16_t)std::max(-32768.0f, std::min(32767.0f, std::round(x[(size_t)i] * 32767.0f)));
+                FILE* f = std::fopen((wavDir + "/" + name + ".wav").c_str(), "wb");
+                if (f) {
+                    const uint32_t nb = (uint32_t)len * 2, r = kFs, br = kFs * 2, riff = 36 + nb, fmt = 16; const uint16_t one = 1, bits = 16, ba = 2;
+                    std::fwrite("RIFF", 1, 4, f); std::fwrite(&riff, 4, 1, f); std::fwrite("WAVEfmt ", 1, 8, f); std::fwrite(&fmt, 4, 1, f);
+                    std::fwrite(&one, 2, 1, f); std::fwrite(&one, 2, 1, f); std::fwrite(&r, 4, 1, f); std::fwrite(&br, 4, 1, f);
+                    std::fwrite(&ba, 2, 1, f); std::fwrite(&bits, 2, 1, f); std::fwrite("data", 1, 4, f); std::fwrite(&nb, 4, 1, f);
+                    std::fwrite(pcm.data(), 2, pcm.size(), f); std::fclose(f);
+                }
+                FILE* tf = std::fopen((wavDir + "/truth.txt").c_str(), "a");
+                if (tf) { for (const std::string& m : truth) std::fprintf(tf, "%s %+.0f %s\n", name, snr, m.c_str()); std::fclose(tf); }
+            }
         }
         std::printf("%s SNR %+5.1f: %4d/%4d  %5.1f %%  false %d  (second look %d, AP %d)  %.1f ms/slot\n", name, snr, hit, sent, 100.0 * hit / std::max(1, sent), fals, fineHits, apHits, ms / slots);
         std::fflush(stdout);

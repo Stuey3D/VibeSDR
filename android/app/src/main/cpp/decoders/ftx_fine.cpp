@@ -225,31 +225,47 @@ bool FtxFine::measure(double start, double f0, int minSyncHits, Meas& M) {
     if (hits < minSyncHits) return false;
     for (int s : dataSym_) filter(s);
 
-    /* ★ The residual frequency from the phase itself: within each Costas group, symbol k+1's correlation leads
-     *  symbol k's by 2π·δf·T (both are on known tones, and every tone ends a symbol on a whole cycle). Taken out
-     *  symbol by symbol, so a group of three adds in phase. Only a correction smaller than the grid step is trusted. */
+    /* ★★ The residual frequency AND timing from the phase itself (2026-10-26). Between consecutive Costas symbols
+     *  (known tones a -> b) the correlation turns by 2π·δf·T — the frequency error — plus ψ·(b − a): a start that is a
+     *  fraction of a baseband sample off (and GFSK's transitions) gives each tone its own phase, ψ per tone. Left in,
+     *  ψ costs exactly what the multi-symbol groups were for: on a clean FT4 signal it measured 3-17° per tone step,
+     *  depending on the start's fraction. So both are found together — ψ on a grid of ±25° in 1.25° steps, the one
+     *  whose pairs agree best; δf from their mean turn — and every symbol and tone is turned back by
+     *  2π·δf·s·T + ψ·t. Only a δf smaller than the grid step is trusted. */
     {
-        double pr = 0, pi = 0;
-        for (int i = 0; i + 1 < nS; ++i) {
-            if (syncSym_[(size_t)i + 1] != syncSym_[(size_t)i] + 1) continue;
-            const size_t a = (size_t)syncSym_[(size_t)i] * ntones_ + syncTone_[(size_t)i];
-            const size_t b = (size_t)syncSym_[(size_t)i + 1] * ntones_ + syncTone_[(size_t)i + 1];
-            pr += (double)csR_[b] * csR_[a] + (double)csI_[b] * csI_[a];
-            pi += (double)csI_[b] * csR_[a] - (double)csR_[b] * csI_[a];
-        }
-        const double dr = std::atan2(pi, pr) / (kTwoPi * T_);
-        if (std::fabs(dr) < baud_ / 16.0) {
-            for (int s = 0; s < nn_; ++s) {
-                const double ph = -kTwoPi * dr * s * T_;
-                const float rc = (float)std::cos(ph), rs = (float)std::sin(ph);
-                for (int t = 0; t < ntones_; ++t) {
-                    const size_t k = (size_t)s * ntones_ + t;
-                    const float re = csR_[k], im = csI_[k];
-                    csR_[k] = re * rc - im * rs; csI_[k] = re * rs + im * rc;
-                }
+        double bestMag = -1, bestPr = 0, bestPi = 0; int bestPsi = 0;
+        for (int g = -20; g <= 20; ++g) {
+            const double psi = g * 1.25 * M_PI / 180.0;
+            double pr = 0, pi = 0;
+            for (int i = 0; i + 1 < nS; ++i) {
+                if (syncSym_[(size_t)i + 1] != syncSym_[(size_t)i] + 1) continue;
+                const int ta = syncTone_[(size_t)i], tb = syncTone_[(size_t)i + 1];
+                const size_t a = (size_t)syncSym_[(size_t)i] * ntones_ + ta;
+                const size_t b = (size_t)syncSym_[(size_t)i + 1] * ntones_ + tb;
+                const double zr = (double)csR_[b] * csR_[a] + (double)csI_[b] * csI_[a];
+                const double zi = (double)csI_[b] * csR_[a] - (double)csR_[b] * csI_[a];
+                const double c = std::cos(psi * (tb - ta)), sn = std::sin(psi * (tb - ta));
+                pr += zr * c + zi * sn; pi += zi * c - zr * sn;
             }
-            M.f0 += dr;
+            const double mag = pr * pr + pi * pi;
+            if (mag > bestMag) { bestMag = mag; bestPr = pr; bestPi = pi; bestPsi = g; }
         }
+        double dr = std::atan2(bestPi, bestPr) / (kTwoPi * T_);
+        if (std::fabs(dr) >= baud_ / 16.0) dr = 0;
+        const double psi = bestPsi * 1.25 * M_PI / 180.0;
+        float tc[8], ts[8];
+        for (int t = 0; t < ntones_; ++t) { tc[t] = (float)std::cos(-psi * t); ts[t] = (float)std::sin(-psi * t); }
+        for (int s = 0; s < nn_; ++s) {
+            const double ph = -kTwoPi * dr * s * T_;
+            const float rc = (float)std::cos(ph), rs = (float)std::sin(ph);
+            for (int t = 0; t < ntones_; ++t) {
+                const float c = rc * tc[t] - rs * ts[t], sn = rc * ts[t] + rs * tc[t];
+                const size_t k = (size_t)s * ntones_ + t;
+                const float re = csR_[k], im = csI_[k];
+                csR_[k] = re * c - im * sn; csI_[k] = re * sn + im * c;
+            }
+        }
+        M.f0 += dr;
     }
     M.nsets = 3;                                         // ★ computed on demand: llrGroup(groupOf(k))
     return true;
