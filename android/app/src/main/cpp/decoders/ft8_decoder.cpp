@@ -237,7 +237,9 @@ int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
  *  the window, 93 symbols long, ends at 14.88 s). Measured on the real hour in the commit message. */
 float Ft8SlotDecoder::leadSec(bool ft4) { (void)ft4; return 0.0f; }
 
-Ft8SlotDecoder::Ft8SlotDecoder(int sampleRate, bool ft4) : ft4_(ft4), rate_(sampleRate) {
+Ft8SlotDecoder::Ft8SlotDecoder(int sampleRate, FtxMode mode)
+    : mode_(mode), ft4_(mode != FtxMode::FT8), rate_(sampleRate) {
+    const bool ft4 = ft4_;
     monitor_config_t cfg = {};
     cfg.f_min = 100.0f;
     cfg.f_max = 3500.0f;
@@ -245,6 +247,12 @@ Ft8SlotDecoder::Ft8SlotDecoder(int sampleRate, bool ft4) : ft4_(ft4), rate_(samp
     cfg.time_osr = kTimeOsr;
     cfg.freq_osr = kFreqOsr;
     cfg.protocol = ft4 ? FTX_PROTOCOL_FT4 : FTX_PROTOCOL_FT8;
+    if (mode == FtxMode::FT2) {                 // ★ FT4's frame at 24 ms a symbol (see FtxMode)
+        cfg.symbol_period = kFt2SymbolPeriod;
+        cfg.slot_time = kFt2WindowTime;
+        cfg.time_min = kFt2TimeMin;
+        cfg.time_max = kFt2TimeMax;
+    }
     monitor_init(&mon_, &cfg);
     nn_ = ft4 ? FT4_NN : FT8_NN;
     nsps_ = mon_.block_size;
@@ -326,7 +334,12 @@ int Ft8SlotDecoder::snrDb(const ftx_candidate_t& c, const uint8_t* tones) {
     if (!cnt || noise <= 0) return -30;
     const double ratio = sig / cnt / noise - 1.0;
     const double binHz = 1.0 / mon_.symbol_period;
-    double snr = 10.0 * std::log10(std::max(ratio, 1e-3)) + 10.0 * std::log10(binHz / 2500.0) + kSnrCal;
+    /* ★ FT2 (2026-10-26): its reference decoders report on FT4's scale, and against STUEY3D's PSKReporter reports
+     *  this estimator reads FT4 8.6 dB high (four stations, the 2026-10-25 20 m hour) and FT2 7-11 dB high (two
+     *  stations, 2026-10-26) — so FT2 is brought onto that scale. FT4 itself is left as it was (reported, not changed
+     *  here: docs/v12/JS8-FT2.md). */
+    const double modeCal = mode_ == FtxMode::FT2 ? -9.0 : 0.0;
+    double snr = 10.0 * std::log10(std::max(ratio, 1e-3)) + 10.0 * std::log10(binHz / 2500.0) + kSnrCal + modeCal;
     snr = std::max(-30.0, std::min(40.0, snr));
     return (int)std::lround(snr);
 }
@@ -632,7 +645,9 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             Ft8Result r;
             r.msg = msg;
             r.hz = hz;
-            r.dt = (float)(leadSec(ft4_) + startSample / rate_ - 0.5);
+            // ★ DT from the nominal start: FT8/FT4 0.5 s into the slot (WSJT-X's); FT2 at the boundary (Decodium's
+            //   transmitters start 0-300 ms in, by version and platform).
+            r.dt = (float)(leadSec(ft4_) + startSample / rate_ - (mode_ == FtxMode::FT2 ? 0.0 : 0.5));
             r.snr = snrDb(c, s.tones);
             r.pass = pass;
             r.osd = viaOsd;
@@ -650,9 +665,9 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
 
 // ── The live decoder ────────────────────────────────────────────────────────────────────────────
 
-Ft8Decoder::Ft8Decoder(int sampleRate, bool ft4_)
-    : ft4(ft4_), rate(sampleRate), slot_(sampleRate, ft4_) {
-    slotPeriod = ft4 ? FT4_SLOT_TIME : FT8_SLOT_TIME;
+Ft8Decoder::Ft8Decoder(int sampleRate, FtxMode mode)
+    : mode_(mode), ft4(mode != FtxMode::FT8), rate(sampleRate), slot_(sampleRate, mode) {
+    slotPeriod = mode == FtxMode::FT2 ? kFt2SlotTime : ft4 ? FT4_SLOT_TIME : FT8_SLOT_TIME;
     window_ = slot_.windowSamples();
     // ★ The ring holds a window plus 3 s: a window is cut the moment its last sample lands, so this is slack
     //   for a late block, not history.
@@ -687,9 +702,21 @@ void Ft8Decoder::workerLoop() {
 
 void Ft8Decoder::process(const int16_t* in, int count, double captureUtc) {
     if (!ok || count <= 0) return;
-    if (!std::isfinite(captureUtc)) captureUtc = vibe::vibeUtcNow();
     const int64_t R = (int64_t)ring_.size();
     for (int i = 0; i < count; i++) ring_[(size_t)((total_ + i) % R)] = (float)in[i] / 32768.0f;
+    advance(count, captureUtc);
+}
+
+void Ft8Decoder::process(const float* in, int count, double captureUtc) {
+    if (!ok || count <= 0) return;
+    const int64_t R = (int64_t)ring_.size();
+    for (int i = 0; i < count; i++) ring_[(size_t)((total_ + i) % R)] = in[i];
+    advance(count, captureUtc);
+}
+
+void Ft8Decoder::advance(int count, double captureUtc) {
+    if (!std::isfinite(captureUtc)) captureUtc = vibe::vibeUtcNow();
+    const int64_t R = (int64_t)ring_.size();
     total_ += count;
 
     /* ★★ THE ANCHOR: the capture UTC of sample 0, from this block's stamp. A stamp is late by however long the

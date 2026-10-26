@@ -157,6 +157,10 @@ struct Meta {
      *  the index as "dn". Letters, digits, spaces, '.', '-', '_' and '(' ')' only (downloadSafe), so it cannot break a
      *  Content-Disposition header or name a path. Empty = the item's own file name. */
     std::string dlName;
+    /** ★ V12 2026-10-26 (DSC): a position the item is ABOUT — a ship's distress position — for the gallery's map pin
+     *  ("plat"/"plon"); NaN = none. And how urgent it is ("lv": 3 distress, 2 urgency, 1 safety; -1 = not said). */
+    double pinLat = NAN, pinLon = NAN;
+    int level = -1;
 };
 /** What a download name may hold (Meta::dlName). Anything else is dropped. */
 inline std::string downloadSafe(const std::string& s) {
@@ -507,6 +511,11 @@ private:
         const std::string l = indexLine(m, name, radio);
         writeFile(dir + "/index.jsonl", l, true) || writeFile(dir + "/index.jsonl", l, false);
     }
+    static std::string pinText(const Meta& m) {
+        if (!std::isfinite(m.pinLat) || !std::isfinite(m.pinLon) || std::fabs(m.pinLat) > 90 || std::fabs(m.pinLon) > 180) return "";
+        char b[64]; std::snprintf(b, sizeof b, ",\"plat\":%.5f,\"plon\":%.5f", m.pinLat, m.pinLon);
+        return b;
+    }
     static std::string indexLine(const Meta& m, const std::string& name, const std::string& radio) {
         char hz[32]; std::snprintf(hz, sizeof hz, "%.0f", m.freqHz);
         std::string l = "{\"f\":\"" + jsonEsc(name) + "\",\"k\":\"" + jsonEsc(m.kind) + "\",\"o\":\"" + jsonEsc(m.origin)
@@ -515,7 +524,8 @@ private:
             + "\",\"r\":\"" + jsonEsc(radio) + "\",\"title\":\"" + jsonEsc(printable(m.title, 120)) + "\""
             + (m.partial ? ",\"partial\":true" : "") + (m.listenerOn && m.listenerOn->load() ? ",\"wl\":true" : "")
             + (m.slot.empty() ? std::string() : ",\"s\":\"" + jsonEsc(m.slot) + "\"")
-            + (m.dlName.empty() ? std::string() : ",\"dn\":\"" + jsonEsc(downloadSafe(m.dlName)) + "\"") + "}\n";
+            + (m.dlName.empty() ? std::string() : ",\"dn\":\"" + jsonEsc(downloadSafe(m.dlName)) + "\"")
+            + pinText(m) + (m.level >= 0 ? ",\"lv\":" + std::to_string(m.level) : std::string()) + "}\n";
         return l;
     }
     /** ★★ OLDEST OUT until the gallery fits — never one of `keep` (the item just written, an RTTY run still open). The

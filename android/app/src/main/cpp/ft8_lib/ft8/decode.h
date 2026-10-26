@@ -46,6 +46,10 @@ typedef struct
     WF_ELEM_T* mag;          ///< FFT magnitudes stored as uint8_t[blocks][time_osr][freq_osr][num_bins]
     int block_stride;        ///< Helper value = time_osr * freq_osr * num_bins
     ftx_protocol_t protocol; ///< Indicate if using FT4 or FT8
+    /// VibeSDR (2026-10-26, FT2): the candidate search's time offsets in blocks, [time_min, time_max). Both 0 =
+    /// ft8_lib's -10 .. 20 (FT8/FT4 exactly as before). FT2's symbols are 24 ms, so its search is set wider.
+    int time_min;
+    int time_max;
 } ftx_waterfall_t;
 
 /// Output structure of ftx_find_sync() and input structure of ftx_decode().

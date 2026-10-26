@@ -320,6 +320,8 @@ inline void decodeAll(const Burst& b, std::vector<Reading>& out) {
  *  SRD band — so a reading of theirs at 868 is refused. Families that do use 868 (La Crosse IT+, Fine Offset FSK,
  *  Current Cost, fixed-code remotes, KeeLoq) are untouched. Applied by Service::decodeBurst, which knows the frequency. */
 inline bool bandPlausible(const Reading& r, double freqHz) {
+    // ★ V12 wM-Bus: a meter only at 868.2-868.4 (S) or 868.85-869.05 (T/C) — anywhere else its CRC passed by chance
+    if (r.kind == "meter") return (freqHz >= 868.2e6 && freqHz <= 868.4e6) || (freqHz >= 868.85e6 && freqHz <= 869.05e6);
     const bool srd868 = freqHz >= 863e6 && freqHz <= 870e6;
     if (!srd868) return true;
     return !(r.make == "AcuRite" || r.make == "Oregon Scientific" || r.kind == "tpms");

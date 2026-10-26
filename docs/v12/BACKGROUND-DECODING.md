@@ -37,6 +37,7 @@ Nick's case: centre 500 kHz; VFO 1 489.5 kHz USB NAVTEX; VFO 2 517.5 kHz USB NAV
 | WEFAX 120 LPM | USB | 1900 Hz (the carrier) | one PNG per chart, start tone to stop tone |
 | SSTV | USB, NFM | dial | one PNG per picture |
 | FT8 / FT4 | USB | dial | a **summary**, not the spots: a standing "last 10 minutes" card + one card per UTC hour |
+| DSC (MF/HF) · DSC (VHF ch 70) | USB, LSB · NFM | 1700 Hz · dial | the day's log per DSC frequency + one item per distress/urgency call, pinned at its position (docs/v12/DSC.md); **+ DSC watch** fills the VFOs |
 
 ★★ **LSB inverts mark and space.** NickB asked for LSB so he could dodge local interference. An FSK decoder on an LSB VFO
 is started with `inverted` flipped, so the same signal decodes identically on either sideband. `test-bgdecode` proves this

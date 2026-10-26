@@ -18,6 +18,11 @@ typedef struct
     int time_osr;            ///< Number of time subdivisions
     int freq_osr;            ///< Number of frequency subdivisions
     ftx_protocol_t protocol; ///< Protocol: FT4 or FT8
+    /// VibeSDR (2026-10-26): 0 = the protocol's own. Set for a mode on the same frame with another symbol length —
+    /// FT2 is FT4's frame at 24 ms a symbol and a 3.75 s slot; JS8's submodes are FT8-like frames at 50-320 ms.
+    float symbol_period;     ///< seconds per symbol
+    float slot_time;         ///< seconds of audio the waterfall holds
+    int time_min, time_max;  ///< the candidate search's time offsets in blocks (both 0 = -10 .. 20)
 } monitor_config_t;
 
 /// FT4/FT8 monitor object that manages DSP processing of incoming audio data
