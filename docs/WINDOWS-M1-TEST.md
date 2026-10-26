@@ -30,7 +30,12 @@ also tested on its own, because it is the fallback either way. Nothing in this s
 
 > **If Windows shows "Windows protected your PC"**: click **More info → Run anyway**. The test build is unsigned
 > (signing comes later, through SignPath — §4.7). If there is **no** *Run anyway* button, Smart App Control is on:
-> note it in the results and stop; that is itself an answer the plan needs.
+> note it in the results and stop; that is itself an answer the plan needs. **Never switch Smart App Control off.**
+>
+> ★★★ **No step for USERS may ever ask them to lower their security** (Stuart, 2026-10-26: "Anything that requires a
+> user to lower their security is a big no go") — no Memory Integrity / Smart App Control / Secure Boot / signature
+> enforcement off, no test-signing, no antivirus exclusions, no firewall off. "Run anyway" here is only because this
+> TEST build is unsigned; every build a user gets is signed, so they never see it.
 
 **Everything the probe prints is also appended to `vibe-usbprobe.log`** in the same folder. At the end, send that
 file back — it holds the whole session.
