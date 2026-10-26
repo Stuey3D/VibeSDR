@@ -26,7 +26,7 @@ also tested on its own, because it is the fallback either way. Nothing in this s
 | 0.3 | Right-click each `.exe` → **Properties** → if there is an **Unblock** tick-box at the bottom, tick it → OK. | Downloaded files are marked. Unblocking avoids a SmartScreen prompt on every run. |
 | 0.4 | Open **Terminal** (or Command Prompt) **as a normal user** (not administrator) and `cd C:\VibeServer-test`. | Every command below is typed here. The two driver commands ask for admin themselves. |
 | 0.5 | Check the dongles' current state: run `vibe-usbprobe report` with **both dongles unplugged** and keep the output. | A baseline. |
-| 0.6 | Note **Memory Integrity**: Windows Security → Device security → Core isolation. `report` prints it too. | Part B is run with Memory Integrity **on** first; part F turns it off and repeats the short version. |
+| 0.6 | Note **Memory Integrity**: Windows Security → Device security → Core isolation. `report` prints it too. | Leave it exactly as it is (normally **on**). Every test runs with Windows' security as users have it. |
 
 > **If Windows shows "Windows protected your PC"**: click **More info → Run anyway**. The test build is unsigned
 > (signing comes later, through SignPath — §4.7). If there is **no** *Run anyway* button, Smart App Control is on:
@@ -270,10 +270,11 @@ Both dongles must be usable by the route being tested (both borrowed via UsbDk, 
 
 ---
 
-## F. Memory Integrity OFF (10 minutes, only if B passed)
+## F. (removed)
 
-Windows Security → Device security → Core isolation → Memory integrity **Off** → reboot. Then repeat **B3** and
-**B5 with 20 cycles** for one dongle. Turn Memory Integrity back **On** afterwards and reboot.
+★★★ **Nothing we ship may ever need Memory Integrity — or any other Windows security feature — switched off** (Stuart,
+2026-10-26: "I will never ask a user to do this"). So there is no test with it off: if UsbDk does not work with Memory
+Integrity on, UsbDk is out and the WinUSB route (part D) is the answer.
 
 ---
 
@@ -303,7 +304,7 @@ after the terminal is closed.
 
 ### The go / no-go these results decide (from §5)
 
-- **UsbDk becomes the default** if: B1 boots normally with Memory Integrity on, B3/B4 are clean for both dongles,
+- **UsbDk becomes the default** if: B1 boots normally with Memory Integrity on (it must never need it off), B3/B4 are clean for both dongles,
   B5 is 50/50 for both, B6 plays, and G2 leaves keyboard and mouse working.
 - **Windows' WinUSB bind becomes the default instead** if UsbDk fails any of those but D passes from (a1) and (a2).
 - **Neither** → the plan's §2.5/§2.6 questions come back (a signed INF), and we talk before M2.
