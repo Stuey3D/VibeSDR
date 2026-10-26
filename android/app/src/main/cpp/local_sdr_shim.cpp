@@ -136,6 +136,7 @@
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
+#include "vibe_drm_listener.h"       // ★ V12 DRM: a per-listener mode — the OFDM receiver + the OS audio decoder
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_squelch_msg.h"       // ★ squelch on/off: explicit `on`, else the legacy db > -100
@@ -872,6 +873,9 @@ ModeParams paramsFor(const std::string& mode) {
     if (mode == "usb")            return {ModeParams::SSB_USB, 24000, 2700, 1};
     if (mode == "lsb")            return {ModeParams::SSB_LSB, 24000, 2700, 1};
     if (mode == "am" || mode == "sam") return {ModeParams::AM, 15000, 10000, 1};
+    /* ★★ V12 DRM (vibe_drm_listener.h): an AM-shaped channel whose COMPLEX baseband goes to the DRM receiver; the AM
+     *  detector's own audio is discarded and the decoded programme takes its place. 10 kHz = spectrum occupancy 3. */
+    if (mode == "drm")            return {ModeParams::AM, 15000, 10000, 1};
     if (mode == "cwu" || mode == "cwl" || mode == "cw") return {ModeParams::CW, 8000, 1200, 1};
     // ★ "fmdx" WAS a mode here and is gone: it widened the channel filter, which measured 10 dB
     // WORSE for RDS SNR (see pipeline.cpp chHalf). Accepted as an alias for wfm so a client with
@@ -1500,7 +1504,7 @@ struct LogoLookupSlot {
  *  to every client. Every path that ACCEPTS a mode asks vsModeRefused (below), which is this plus the owner's list. */
 static bool vsModeKnown(const std::string& m) {
     static const char* const kModes[] = { "usb", "lsb", "am", "sam", "cw", "cwu", "cwl",
-                                          "fm", "nfm", "wfm", "fmdx", "dab" };
+                                          "fm", "nfm", "wfm", "fmdx", "dab", "drm" };
     for (const char* k : kModes) if (m == k) return true;
     return false;
 }
@@ -7739,6 +7743,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     cannot deadlock. */
         double tunedAtCentre = 0;
         std::string mode = "am";
+        /** ★ V12 DRM: this listener's DRM receiver while their mode is "drm" (created/destroyed under mtx in
+         *  clientRetune; read by the pipeline callbacks, which run under mtx too). */
+        std::unique_ptr<vibe::DrmListener> drm;
+        uint64_t drmSentVer = 0;
         double bwHz = 0;
         int    chanBins = 0;                    // power of two dividing fftSize
         double chanRate = 0;
@@ -8385,6 +8393,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (c && c->owner) c->owner->onClientZoom(c, db, bins);
     }
 
+    /** ★ V12 DRM: the listener's channel IQ (post-NCO, the dial at DC) — copied into their DRM receiver's queue. */
+    static void clientIqCb(void* ctx, const cf32* x, int n, double rateHz) {
+        auto* c = (ClientDsp*)ctx;
+        if (c && c->drm) c->drm->feedIq(x, n, rateHz);
+    }
+    /** ★ V12 DRM: the status report on this listener's spectrum socket, when it has changed (≤ once a super frame). */
+    void drmSendStatus(ClientDsp* c) {
+        uint64_t ver = 0;
+        const std::string j = c->drm->statusJson(&ver);
+        if (ver == c->drmSentVer) return;
+        std::shared_ptr<net::Socket> sk;
+        { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
+        if (sk && sk->isOpen()) { sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size()); c->drmSentVer = ver; }
+    }
+
     static void clientAudioCb(void* ctx, const float* pcm, int frames, int ch, int) {
         auto* c = (ClientDsp*)ctx;
         if (!c || !c->owner || frames <= 0) return;
@@ -8618,6 +8641,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             cb.ctx = c;
             cb.audio = &Impl::clientAudioCb;
             cb.zoomSpectrum = &Impl::clientZoomCb;
+            cb.iq = &Impl::clientIqCb;   // ★ V12 DRM: costs one null check per block unless the listener is on DRM
             // ★ Always wired; the forwarders themselves check ownership, so a listener who becomes
             //   the RDS owner later does not need their pipeline rebuilding to start reporting.
             cb.rdsPs = &Impl::cRdsPs;   cb.rdsPi   = &Impl::cRdsPi;
@@ -8655,6 +8679,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double binHz = sampleRate / (double)fftSize;
         const double off   = c->vfoHz - rtlCenter.load() - hwOffsetHz();
         const double resid = off - std::lround(off / binHz) * binHz;
+        // ★ V12 DRM: the receiver needs ≥ 24 kHz of channel; a new one for a new tune (it re-acquires anyway)
+        if (c->mode == "drm") { c->drm.reset(new vibe::DrmListener()); c->drmSentVer = 0; c->rx->setIqMinRate(24000.0); }
+        else if (c->drm) { c->drm.reset(); c->rx->setIqMinRate(0.0); }
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
         // ★ After the pipeline exists, so setRdsEnabled has something to act on. A FULL resweep,
         //   because this listener moving can free a frequency somebody else is sitting on — see
@@ -8767,6 +8794,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     /** Encode and send one block of this listener's audio to ITS OWN socket. */
     void onClientAudio(ClientDsp* c, const float* pcm, int frames, int ch) {
+        /* ★★ V12 DRM: the AM detector's audio is the pacing clock and nothing else — the same number of frames of the
+         *  decoded programme (silence until there is some) goes out in its place, as stereo. */
+        std::vector<float> drmPcm;
+        if (c->drm) {
+            drmPcm.resize(size_t(frames) * 2);
+            c->drm->takePcm(drmPcm.data(), frames);
+            pcm = drmPcm.data(); ch = 2;
+            drmSendStatus(c);
+        }
         // ★★★ THE DECODERS RUN FIRST, AND WITHOUT AN AUDIO SOCKET.
         //     This used to sit BELOW the `if (!sock || !sock->isOpen()) return;` guard, so in
         //     per-client mode the decoders only ran while the owning listener happened to have an
@@ -14837,8 +14873,37 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // ★ AudioAudit is in vibe_log_latch.h, beside the latch it reports through (and its test).
     AudioAudit audit;
 
+    std::mutex drmSharedMtx;
+    std::shared_ptr<vibe::DrmListener> drmShared;
+    uint64_t drmSharedVer = 0;
+    /** The raw-IQ-out consumer's rate on the direct path, or 0 — the channel floor DRM must not lower. */
+    double iqDirectRate() {
+        std::lock_guard<std::mutex> lk(iqDirectMtx);
+        return iqDirect ? double(iqDirect->rate) : 0.0;
+    }
+
     void onAudio(stereo_t* data, int count, int ch) {
         if (count <= 0) return;
+        /* ★★ V12 DRM, shared dial: the demodulator's frames are the clock; the decoded programme replaces them, and the
+         *  status goes to every spectrum socket when it changes. */
+        std::vector<stereo_t> drmBuf;
+        if (!dabInject_) {
+            std::shared_ptr<vibe::DrmListener> d;
+            { std::lock_guard<std::mutex> lk(drmSharedMtx); d = drmShared; }
+            if (d) {
+                drmBuf.resize(size_t(count));
+                d->takePcm(&drmBuf[0].l, count);
+                data = drmBuf.data(); ch = 2;
+                uint64_t ver = 0;
+                const std::string j = d->statusJson(&ver);
+                if (ver != drmSharedVer) {
+                    drmSharedVer = ver;
+                    std::vector<std::shared_ptr<net::Socket>> socks;
+                    { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                    for (auto& sk : socks) if (sk && sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
+                }
+            }
+        }
         // ★ FM demodulated from a DAB block reaches nobody — see dabInject_.
         if (g_dabMode.load(std::memory_order_relaxed) && !dabInject_) return;
         /* ★★ NOR DOES ANYTHING DEMODULATED AT 1090 MHz (Stuart, 2026-10-24: "in ADSB mode the audio needs to be
@@ -15048,6 +15113,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // the engine for a filter wider than its input is meaningless.
         rxBwHz = std::min(mp.bandwidth, sampleRate * 0.8);
         vfoBwHz.store(mp.bandwidth);
+        {   // ★ V12 DRM on the shared dial (perClientDsp() radios build theirs per listener in clientRetune)
+            std::lock_guard<std::mutex> lk(drmSharedMtx);
+            if (mode == "drm") { drmShared = std::make_shared<vibe::DrmListener>(); drmSharedVer = 0; rx.setIqMinRate(std::max(24000.0, iqDirectRate())); }
+            else if (drmShared) { drmShared.reset(); rx.setIqMinRate(iqDirectRate()); }
+        }
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         // ★★ The chain is back at the mode's DEFAULT width, so the edges a listener chose are no longer
         //    what anybody hears — config must stop reporting them (vibe_room_passband.h).
@@ -23989,6 +24059,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Direct mode: the pipeline's own channel, from RxPipeline::feed on the DSP thread. */
     static void iqCb(void* ctx, const cf32* x, int n, double rateHz) {
         auto* p = (Impl*)ctx;
+        {   // ★ V12 DRM on the shared dial: the one receiver everybody hears
+            std::shared_ptr<vibe::DrmListener> d;
+            { std::lock_guard<std::mutex> lk(p->drmSharedMtx); d = p->drmShared; }
+            if (d) d->feedIq(x, n, rateHz);
+        }
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
         if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
@@ -31462,7 +31537,7 @@ static std::string vsTunableJson() {
      *    off to save CPU still serves basic RDS, so the card must not read "no RDS". */
     {
         static const char* kOffer[] = { "wfm", "nfm", "am", "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "drm" };
         std::string m = "[";
         bool first = true;
         for (const char* id : kOffer) {

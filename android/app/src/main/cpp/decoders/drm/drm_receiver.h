@@ -101,6 +101,10 @@ private:
     Mode mode_ = Mode::None;
     int tu_ = 0, tg_ = 0, ts_ = 0, kw_ = 0;   // kw_: the widest carrier index tracked (SO 3's)
     int64_t winPos_ = 0;                       // absolute index of the next FFT window start
+    /** ★ Where the channel's MEAN delay is held inside the guard: the middle. Echoes spread both ways about the mean
+     *  (two equal paths 4 ms apart sit ±2 ms from it), so the middle is the position that tolerates the most spread
+     *  either side — a quarter put the earlier of two such paths before the window (ISI on annex B's channel 5). */
+    int windowMargin() const { return tg_ / 2; }
     double freq_ = 0;                          // Hz, removed from the signal
     double ncoPhase_ = 0; int64_t ncoIdx_ = 0;
     std::unique_ptr<vibedsp::ComplexFFT> fft_;
@@ -112,6 +116,7 @@ private:
     int pendingStep_ = 0;
     // ── frame sync ──
     std::vector<double> tScore_; int symCount_ = 0;
+    CellMap fsMap_; std::deque<std::vector<cf>> fsHist_;
     bool frameSynced_ = false; int sIdx_ = 0;  // s of the NEXT symbol to be processed
     int64_t gIdx_ = 0;                         // global symbol counter (aligned so gIdx_ % ns == s)
     // ── channel estimation ──
@@ -122,6 +127,12 @@ private:
     void pushEstimator(std::vector<cf>& carriers);
     void equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W);
     void applyStepToRing(int delta);
+    static constexpr int kWienerK = 12;
+    struct WienerTap { int col = 0; float w = 0; };
+    std::vector<int> wienerCols_;
+    std::vector<WienerTap> wienerTaps_;           // nk × kWienerK
+    void buildWiener();
+    std::vector<float> pdp_; int pdpN_ = 0; std::vector<cf> twid_;
     // ── frames / super frames ──
     std::vector<cf> frY_; std::vector<float> frW_; int frS_ = 0;   // current frame's equalised cells, s × nk
     void frameDone();

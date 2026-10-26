@@ -87,7 +87,7 @@ void Receiver::loseSync(const char* why) {
     mode_ = Mode::None; fft_.reset();
     freq_ = 0; ncoPhase_ = 0; ncoIdx_ = 0;
     havePrev_ = false; prevStep_ = 0; tauAvg_ = 0; tauN_ = 0; stepSum_ = 0; pendingStep_ = 0;
-    tScore_.clear(); symCount_ = 0; frameSynced_ = false; sIdx_ = 0; gIdx_ = 0;
+    tScore_.clear(); symCount_ = 0; frameSynced_ = false; sIdx_ = 0; gIdx_ = 0; fsHist_.clear();
     ring_.clear(); frS_ = 0; frY_.clear(); frW_.clear();
     for (auto& f : sf_) f.have = false;
     lastFrameIdx_ = -1; facFailRun_ = 0; facGoodRun_ = 0; haveFac_ = false;
@@ -262,7 +262,7 @@ void Receiver::runSearch() {
     tin_.resize(size_t(tu_)); tout_.resize(size_t(tu_));
     // fractional frequency from the correlation's phase: x[n]·x*[n+Tu] = e^{−j2π f Tu/fs}
     freq_ = -double(std::arg(best[bestM].c)) * kFs / (2.0 * M_PI * tu_);
-    const int margin = tg_ / 4;
+    const int margin = windowMargin();
     int64_t w = bufBase_ + best[bestM].r + tg_ - margin;
     while (w - ts_ >= bufBase_) w -= ts_;
     winPos_ = w;
@@ -374,31 +374,63 @@ void Receiver::runTrack() {
         prevSym_ = car; havePrev_ = true; prevStep_ = 0;
 
         if (!frameSynced_) {
-            // time-reference score for this position, after removing the window margin's phase slope
-            const auto& tr = timeRefs(mode_);
-            const int margin = tg_ / 4;
-            cf s(0, 0); double nrm = 0;
-            for (size_t i = 0; i + 1 < tr.size(); ++i) {
-                const int ka = tr[i].k, kb = tr[i + 1].k;
-                const cf xa = car[size_t(ka + kw_)] * std::polar(1.0f, float(2.0 * M_PI * ka * margin / tu_));
-                const cf xb = car[size_t(kb + kw_)] * std::polar(1.0f, float(2.0 * M_PI * kb * margin / tu_));
-                const cf ref = phasor(tr[i + 1].ph, 1.0f) * std::conj(phasor(tr[i].ph, 1.0f));
-                s += xb * std::conj(xa) * std::conj(ref);
-                nrm += std::abs(xa) * std::abs(xb);
+            // ★★ FRAME SYNC FROM THE GAIN REFERENCES, DIFFERENTIALLY IN TIME. Their phases depend on the FULL symbol
+            //    number (Z256[n][m], m = s / y — §8.4.4.3), so the step between a carrier's pilot now and its pilot y
+            //    symbols ago names s. Comparing a carrier with ITSELF 80 ms earlier cancels the channel however
+            //    frequency-selective it is; the time references (compared carrier to neighbour) could not survive annex
+            //    B's channel 5 — two paths 4 ms apart turn adjacent carriers' phases by a different amount each.
+            // ★ …but the step only names s up to the gain pattern's row differences, which in modes C and D repeat (W
+            //   falls by a constant per row), so the time references' carrier-to-neighbour score is ADDED: it pins the
+            //   exact symbol in a mild channel, the differential keeps the alignment right in a harsh one.
+            {
+                const auto& tr = timeRefs(mode_);
+                const int margin = windowMargin();
+                cf s(0, 0); double nrm = 0;
+                for (size_t i = 0; i + 1 < tr.size(); ++i) {
+                    const int ka = tr[i].k, kb = tr[i + 1].k;
+                    const cf xa = car[size_t(ka + kw_)] * std::polar(1.0f, float(2.0 * M_PI * ka * margin / tu_));
+                    const cf xb = car[size_t(kb + kw_)] * std::polar(1.0f, float(2.0 * M_PI * kb * margin / tu_));
+                    const cf ref = phasor(tr[i + 1].ph, 1.0f) * std::conj(phasor(tr[i].ph, 1.0f));
+                    s += xb * std::conj(xa) * std::conj(ref);
+                    nrm += std::abs(xa) * std::abs(xb);
+                }
+                tScore_[size_t(symCount_ % mi.ns)] += nrm > 0 ? 2.0 * std::abs(s) / nrm : 0;
             }
-            tScore_[size_t(symCount_ % mi.ns)] += nrm > 0 ? std::abs(s) / nrm : 0;
+            if (fsMap_.mode != mode_) fsMap_.build(mode_, 3);
+            fsHist_.push_back(car);
+            if (int(fsHist_.size()) > mi.y + 1) fsHist_.pop_front();
+            if (int(fsHist_.size()) == mi.y + 1) {
+                const std::vector<cf>& old = fsHist_.front();
+                for (int h = 0; h < mi.ns; ++h) {
+                    const int sp = ((h - mi.y) % mi.ns + mi.ns) % mi.ns;
+                    cf acc(0, 0); double nrm = 0;
+                    for (int k = fsMap_.kmin; k <= fsMap_.kmax; ++k) {
+                        if (!fsMap_.onGainGrid(h, k)) continue;
+                        const cf p1 = fsMap_.pilot[size_t(fsMap_.idx(1, h, k))], p0 = fsMap_.pilot[size_t(fsMap_.idx(1, sp, k))];
+                        if (std::norm(p1) == 0 || std::norm(p0) == 0) continue;
+                        const cf v = car[size_t(k + kw_)] * std::conj(old[size_t(k + kw_)]);
+                        acc += v * std::conj(p1 * std::conj(p0));
+                        nrm += std::abs(v) * std::abs(p1) * std::abs(p0);
+                    }
+                    const int o = ((symCount_ - h) % mi.ns + mi.ns) % mi.ns;
+                    tScore_[size_t(o)] += nrm > 0 ? std::abs(acc) / nrm : 0;
+                }
+            }
             ++symCount_;
             if (symCount_ >= 2 * mi.ns && symCount_ % mi.ns == 0) {
                 const int b = int(std::max_element(tScore_.begin(), tScore_.end()) - tScore_.begin());
-                double others = 0; for (int i = 0; i < mi.ns; ++i) if (i != b) others += tScore_[size_t(i)];
+                double others = 0, second = 0;
+                for (int i = 0; i < mi.ns; ++i) if (i != b) { others += tScore_[size_t(i)]; second = std::max(second, tScore_[size_t(i)]); }
                 others /= (mi.ns - 1);
-                if (tScore_[size_t(b)] > 3.0 * others) {
+                if (getenv("VIBE_DRM_DEBUG")) { fprintf(stderr, "[drm] frame scores:"); for (double v : tScore_) fprintf(stderr, " %.1f", v); fprintf(stderr, "\n"); }
+                // ★ a wrong choice costs one resync (the FAC's CRC fails and says so); a missed one costs the same
+                if (tScore_[size_t(b)] > 1.5 * others && tScore_[size_t(b)] > 1.12 * second) {
                     frameSynced_ = true;
                     // the NEXT symbol (index symCount_) has local position symCount_ % ns; s = that − b
                     sIdx_ = ((symCount_ - b) % mi.ns + mi.ns) % mi.ns;
                     gIdx_ = int64_t(mi.ns) * 1000 + sIdx_;
                     st_.frameSync = true;
-                    estSo_ = 3; emap_.build(mode_, estSo_);
+                    estSo_ = 3; emap_.build(mode_, estSo_); buildWiener();
                     ring_.clear(); frS_ = 0;
                     frY_.assign(size_t(emap_.ns * emap_.nk), cf(0, 0)); frW_.assign(frY_.size(), 0.0f);
                     for (auto& f : sf_) f.have = false;
@@ -417,6 +449,63 @@ void Receiver::runTrack() {
         const int64_t elapsed = winPos_ - trackStart_;
         if (elapsed > kFs * 10) st_.sroPpm = double(stepSum_) / double(elapsed) * 1e6;
         trimBuffer(winPos_ - ts_);
+    }
+}
+
+/** ★★ THE FREQUENCY INTERPOLATOR IS A WIENER FILTER, NOT A STRAIGHT LINE. Annex B's channel 5 (two equal paths 4 ms
+ *  apart) ripples across the band with a period of 5⅓ carriers in mode B, where the scattered pilots, once interpolated
+ *  in time, sit every 2: a straight line between them is wrong by most of the ripple (FAC MER −5 dB, nothing decoded).
+ *  The standard's design limit is the guard interval, so the channel's power-delay profile is modelled as flat over
+ *  Tg about its mean (which the slope removal has put at zero): correlation sinc(Δk·Tg/Tu) between carriers Δk apart.
+ *  Each carrier's estimate is the MMSE combination of its kWienerK nearest pilot columns (noise assumed 20 dB down),
+ *  solved once per plan — at the band edges the taps are simply one-sided. */
+void Receiver::buildWiener() {
+    const ModeInfo& mi = modeInfo(mode_);
+    wienerCols_.clear();
+    for (int j = 0; j < emap_.nk; ++j) {
+        const int k = emap_.kmin + j;
+        if (carrierUnused(mode_, k)) continue;
+        if (((k - mi.k0) % mi.x + mi.x) % mi.x != 0) continue;
+        wienerCols_.push_back(j);
+    }
+    const int K = kWienerK;
+    wienerTaps_.assign(size_t(emap_.nk) * K, WienerTap{});
+    const double span = double(tg_) / double(tu_);
+    auto corr = [&](double dk) { const double x = M_PI * dk * span; return std::abs(x) < 1e-9 ? 1.0 : std::sin(x) / x; };
+    const int nc = int(wienerCols_.size());
+    for (int j = 0; j < emap_.nk; ++j) {
+        // the K nearest columns
+        std::vector<int> idx(static_cast<size_t>(nc));
+        for (int i = 0; i < nc; ++i) idx[size_t(i)] = i;
+        std::partial_sort(idx.begin(), idx.begin() + std::min(K, nc), idx.end(),
+                          [&](int a, int b) { return std::abs(wienerCols_[size_t(a)] - j) < std::abs(wienerCols_[size_t(b)] - j); });
+        const int kk = std::min(K, nc);
+        std::vector<double> A(size_t(kk * kk)), rhs(static_cast<size_t>(kk));
+        for (int a = 0; a < kk; ++a) {
+            const int ca = wienerCols_[size_t(idx[size_t(a)])];
+            rhs[size_t(a)] = corr(double(j - ca));
+            for (int b = 0; b < kk; ++b) A[size_t(a * kk + b)] = corr(double(ca - wienerCols_[size_t(idx[size_t(b)])])) + (a == b ? 0.01 : 0.0);
+        }
+        // Gaussian elimination with partial pivoting
+        for (int c = 0; c < kk; ++c) {
+            int piv = c; for (int r = c + 1; r < kk; ++r) if (std::abs(A[size_t(r * kk + c)]) > std::abs(A[size_t(piv * kk + c)])) piv = r;
+            if (piv != c) { for (int q = 0; q < kk; ++q) std::swap(A[size_t(c * kk + q)], A[size_t(piv * kk + q)]); std::swap(rhs[size_t(c)], rhs[size_t(piv)]); }
+            for (int r = c + 1; r < kk; ++r) {
+                const double f = A[size_t(r * kk + c)] / A[size_t(c * kk + c)];
+                for (int q = c; q < kk; ++q) A[size_t(r * kk + q)] -= f * A[size_t(c * kk + q)];
+                rhs[size_t(r)] -= f * rhs[size_t(c)];
+            }
+        }
+        std::vector<double> w(static_cast<size_t>(kk));
+        for (int c = kk - 1; c >= 0; --c) {
+            double v = rhs[size_t(c)];
+            for (int q = c + 1; q < kk; ++q) v -= A[size_t(c * kk + q)] * w[size_t(q)];
+            w[size_t(c)] = v / A[size_t(c * kk + c)];
+        }
+        for (int a = 0; a < K; ++a) {
+            WienerTap& t = wienerTaps_[size_t(j * K + a)];
+            if (a < kk) { t.col = wienerCols_[size_t(idx[size_t(a)])]; t.w = float(w[size_t(a)]); } else { t.col = wienerCols_.empty() ? 0 : wienerCols_[0]; t.w = 0; }
+        }
     }
 }
 
@@ -444,9 +533,9 @@ void Receiver::pushEstimator(std::vector<cf>& car) {
     }
     if (!ring_.empty() && ring_.back().g + 1 != sy.g) ring_.clear();
     ring_.push_back(std::move(sy));
-    while (int(ring_.size()) > 2 * mi.y + 2) ring_.pop_front();
+    while (int(ring_.size()) > 3 * mi.y + 2) ring_.pop_front();
     // the symbol y−1 back now has its next pilots
-    const int64_t gOut = gIdx_ - (mi.y - 1);
+    const int64_t gOut = gIdx_ - (2 * mi.y - 1);   // ★ two pilot periods of look-ahead: the cubic needs the pilot after next
     if (ring_.front().g > gOut) return;
     const Sym& out = ring_[size_t(gOut - ring_.front().g)];
     std::vector<cf> Y; std::vector<float> W;
@@ -476,30 +565,86 @@ void Receiver::equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W
         const int64_t gp = sy.g - d, gn = gp + mi.y;
         const bool hp = gp >= g0 && ring_[size_t(gp - g0)].hasP[size_t(j)];
         const bool hn = gn - g0 < int64_t(ring_.size()) && gn >= g0 && ring_[size_t(gn - g0)].hasP[size_t(j)];
-        if (d == 0 && hp) H[size_t(j)] = ring_[size_t(gp - g0)].Hp[size_t(j)];
-        else if (hp && hn) {
+        // ★★ CUBIC IN TIME (Lagrange through the pilots at gp−y, gp, gn, gn+y) where all four are in: a fading HF path
+        //    turns by a radian between pilots 80 ms apart at 2 Hz Doppler spread (annex B channels 4/5), which a straight
+        //    line between two pilots cuts across. Linear at the edges of what is buffered.
+        const int64_t gpp = gp - mi.y, gnn = gn + mi.y;
+        auto has = [&](int64_t g) { return g >= g0 && g - g0 < int64_t(ring_.size()) && ring_[size_t(g - g0)].hasP[size_t(j)]; };
+        auto Hof = [&](int64_t g) { return ring_[size_t(g - g0)].Hp[size_t(j)]; };
+        if (d == 0 && hp) H[size_t(j)] = Hof(gp);
+        else if (hp && hn && has(gpp) && has(gnn)) {
+            const float t = float(d) / mi.y;
+            const float wm = -t * (t - 1) * (t - 2) / 6, w0 = (t + 1) * (t - 1) * (t - 2) / 2, w1 = -(t + 1) * t * (t - 2) / 2, w2 = (t + 1) * t * (t - 1) / 6;
+            H[size_t(j)] = Hof(gpp) * wm + Hof(gp) * w0 + Hof(gn) * w1 + Hof(gnn) * w2;
+        } else if (hp && hn) {
             const float a = float(d) / mi.y;
-            H[size_t(j)] = ring_[size_t(gp - g0)].Hp[size_t(j)] * (1.0f - a) + ring_[size_t(gn - g0)].Hp[size_t(j)] * a;
-        } else if (hp) H[size_t(j)] = ring_[size_t(gp - g0)].Hp[size_t(j)];
-        else if (hn) H[size_t(j)] = ring_[size_t(gn - g0)].Hp[size_t(j)];
+            H[size_t(j)] = Hof(gp) * (1.0f - a) + Hof(gn) * a;
+        } else if (hp) H[size_t(j)] = Hof(gp);
+        else if (hn) H[size_t(j)] = Hof(gn);
         else continue;
         cols.push_back(j);
     }
     if (cols.size() < 2) { Y.assign(size_t(nk), cf(0, 0)); W.assign(size_t(nk), 0.0f); return; }
-    // phase slope across the band (the window offset + mean delay)
-    cf S(0, 0);
-    for (size_t i = 0; i + 1 < cols.size(); ++i)
-        if (cols[i + 1] - cols[i] == mi.x) S += H[size_t(cols[i + 1])] * std::conj(H[size_t(cols[i])]);
-    const float theta = std::arg(S) / float(mi.x);
-    // derotate, interpolate between columns, rotate back
-    std::vector<cf> Hd(static_cast<size_t>(nk));
-    for (int c : cols) Hd[size_t(c)] = H[size_t(c)] * std::polar(1.0f, -theta * float(emap_.kmin + c));
-    for (size_t i = 0; i + 1 < cols.size(); ++i) {
-        const int a = cols[i], b = cols[i + 1];
-        for (int j = a + 1; j < b; ++j) { const float t = float(j - a) / float(b - a); Hd[size_t(j)] = Hd[size_t(a)] * (1.0f - t) + Hd[size_t(b)] * t; }
+    // ★★ THE CHANNEL'S DELAY PROFILE from the pilot columns (a DFT over them: period Tu/x samples, ≥ 2·Tg in every mode),
+    //    averaged over ~10 symbols. Timing holds the centre of the strongest Tg-long block of it at the middle of the guard;
+    //    the frequency interpolator is centred on the same point. A single "mean phase slope" did both jobs until annex B's
+    //    channel 5: two equal paths 4 ms apart, fading, made the slope wrap between them and the timing chase it.
+    const int P = tu_ / mi.x;
+    if (int(pdp_.size()) != P) { pdp_.assign(static_cast<size_t>(P), 0.0f); pdpN_ = 0; }
+    {
+        if (twid_.size() != size_t(tu_)) { twid_.resize(size_t(tu_)); for (int i = 0; i < tu_; ++i) twid_[size_t(i)] = std::polar(1.0f, float(2.0 * M_PI * i / tu_)); }
+        // ★ ~1.5 s memory: the AVERAGE profile. Fading moves power between paths within a second; the paths themselves
+        //   do not move, and it is their extent the window must cover
+        const float a = pdpN_ < 20 ? 1.0f / float(pdpN_ + 1) : 0.025f;
+        for (int t = 0; t < P; ++t) {
+            cf acc(0, 0);
+            for (int c : cols) {
+                const int k = emap_.kmin + c;
+                acc += H[size_t(c)] * twid_[size_t(((int64_t(k) * t) % tu_ + tu_) % tu_)];
+            }
+            pdp_[size_t(t)] = (1.0f - a) * pdp_[size_t(t)] + a * std::norm(acc);
+        }
+        ++pdpN_;
     }
-    for (int j = 0; j < cols.front(); ++j) Hd[size_t(j)] = Hd[size_t(cols.front())];
-    for (int j = cols.back() + 1; j < nk; ++j) Hd[size_t(j)] = Hd[size_t(cols.back())];
+    // the strongest Tg-long block, and its centroid
+    double bestE = -1; int bestS = 0;
+    for (int st = 0; st < P; ++st) {
+        double e = 0;
+        for (int i = 0; i < tg_; ++i) e += pdp_[size_t((st + i) % P)];
+        if (e > bestE) { bestE = e; bestS = st; }
+    }
+    // ★ the centre of its EXTENT (first to last tap within 15 dB of the strongest), not its power centroid: a power
+    //   centroid swings toward whichever path is up, and the window would chase the fading out of the guard
+    double pk = 0; for (int i = 0; i < tg_; ++i) pk = std::max(pk, double(pdp_[size_t((bestS + i) % P)]));
+    int first = -1, last = -1;
+    for (int i = 0; i < tg_; ++i) if (pdp_[size_t((bestS + i) % P)] > 0.03 * pk) { if (first < 0) first = i; last = i; }
+    double tauC = bestS + (first >= 0 ? 0.5 * (first + last) : tg_ / 2.0);
+    // wrap into (−P/2, P/2] about the target
+    while (tauC - windowMargin() > P / 2.0) tauC -= P;
+    while (tauC - windowMargin() <= -P / 2.0) tauC += P;
+    const float theta = float(-2.0 * M_PI * tauC / tu_);
+    // derotate, interpolate between columns, rotate back
+    std::vector<cf> Hd(static_cast<size_t>(nk), cf(0, 0));
+    for (int c : cols) Hd[size_t(c)] = H[size_t(c)] * std::polar(1.0f, -theta * float(emap_.kmin + c));
+    if (int(cols.size()) == int(wienerCols_.size()) && std::equal(cols.begin(), cols.end(), wienerCols_.begin())) {
+        // ★ the Wiener interpolator (built once per plan): every carrier from its nearest columns
+        std::vector<cf> Hi(static_cast<size_t>(nk), cf(0, 0));
+        for (int j = 0; j < nk; ++j) {
+            const WienerTap* t = &wienerTaps_[size_t(j) * kWienerK];
+            cf acc(0, 0);
+            for (int q = 0; q < kWienerK; ++q) acc += Hd[size_t(t[q].col)] * t[q].w;
+            Hi[size_t(j)] = acc;
+        }
+        Hd.swap(Hi);
+    } else {
+        // the first symbols after a (re)plan, before every column has its pilot: linear
+        for (size_t i = 0; i + 1 < cols.size(); ++i) {
+            const int a = cols[i], b = cols[i + 1];
+            for (int j = a + 1; j < b; ++j) { const float t = float(j - a) / float(b - a); Hd[size_t(j)] = Hd[size_t(a)] * (1.0f - t) + Hd[size_t(b)] * t; }
+        }
+        for (int j = 0; j < cols.front(); ++j) Hd[size_t(j)] = Hd[size_t(cols.front())];
+        for (int j = cols.back() + 1; j < nk; ++j) Hd[size_t(j)] = Hd[size_t(cols.back())];
+    }
     for (int j = 0; j < nk; ++j) H[size_t(j)] = Hd[size_t(j)] * std::polar(1.0f, theta * float(emap_.kmin + j));
     Y.resize(size_t(nk)); W.resize(size_t(nk));
     equaliseCells(sy.X.data(), H.data(), Y.data(), W.data(), nk);
@@ -512,10 +657,10 @@ void Receiver::equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W
         static int cnt = 0;
         if (++cnt % 37 == 0) fprintf(stderr, "[drm] g %lld s %d pilotMER %.1f dB tau %.2f theta %.4f step %d\n", (long long)sy.g, sy.s, 10 * std::log10(pp / std::max(pe, 1e-30)), tauAvg_, theta, pendingStep_);
     }
-    // timing: τ = −θ·Tu/2π, held at the window margin
-    const double tau = -double(theta) * tu_ / (2.0 * M_PI);
-    tauAvg_ = tauN_ == 0 ? tau : 0.95 * tauAvg_ + 0.05 * tau; ++tauN_;
-    const double target = tg_ / 4;
+    // timing: the delay profile's centre, held at the window margin (the middle of the guard)
+    const double tau = tauC;
+    tauAvg_ = tau; ++tauN_;
+    const double target = windowMargin();
     if (tauN_ > 8 && pendingStep_ == 0) {
         if (tauAvg_ > target + 1.0) { pendingStep_ = +1; tauAvg_ -= 1.0; applyStepToRing(+1); }
         else if (tauAvg_ < target - 1.0) { pendingStep_ = -1; tauAvg_ += 1.0; applyStepToRing(-1); }
@@ -549,7 +694,8 @@ void Receiver::frameDone() {
                     if (std::norm(y - d) > 0.01) fprintf(stderr, "[drm] FAC cell s%d k%d y=(%.3f,%.3f)\n", s2, k, y.real(), y.imag()); }
         }
         const float mer = pe > 0 ? float(10.0 * std::log10(ps / pe)) : 40.0f;
-        facMerAcc_ = merInit_ ? 0.8f * facMerAcc_ + 0.2f * mer : mer; merInit_ = true;
+        // ★ only frames whose FAC decoded: the frame after a (re)plan is half empty and would read as a terrible MER
+        if (ok) { facMerAcc_ = merInit_ ? 0.8f * facMerAcc_ + 0.2f * mer : mer; merInit_ = true; }
         st_.facMerDb = facMerAcc_; st_.wmerDb = facMerAcc_;
     }
     if (ok && haveFac_ && (fac.so != lastFac_.so || fac.mscMode != lastFac_.mscMode) && facGoodRun_ < 2) {
@@ -573,7 +719,7 @@ void Receiver::frameDone() {
     // ★ the FAC names the occupancy: re-plan the estimator on it (and drop what was gathered on the wrong plan)
     if (ok && fac.so != estSo_) {
         if (!occupancySupported(mode_, fac.so)) { st_.mscOk = false; return; }
-        estSo_ = fac.so; emap_.build(mode_, estSo_);
+        estSo_ = fac.so; emap_.build(mode_, estSo_); buildWiener();
         ring_.clear();
         frY_.assign(size_t(emap_.ns * emap_.nk), cf(0, 0)); frW_.assign(frY_.size(), 0.0f);
         for (auto& sfr : sf_) sfr.have = false;

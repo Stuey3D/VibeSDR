@@ -17,6 +17,7 @@
 
 #if (defined(__ARM_NEON) || defined(__ARM_NEON__)) && !defined(VIBE_FORCE_SCALAR)
   #include <arm_neon.h>
+  #include "../../vibedsp/neon_compat.h"   // ★ ARMv7 lacks vdivq_f32/vaddvq_f32 — the Pi 2 is exactly that machine
   #define VIBE_DRM_NEON 1
 #elif (defined(__x86_64__) || defined(_M_X64) || defined(__SSE2__)) && !defined(VIBE_FORCE_SCALAR)
   #include <emmintrin.h>

@@ -123,6 +123,10 @@ flags_for() {
     #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
     #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
     test-ndb)              echo "-O2 -lpthread -I tools/ndb-bench -I $VDSP -I $KISS" ;;
+    # ★★ V12 DRM (decoders/drm/, docs/v12/DRM.md): the standard's tables, the coding layer, the test transmitter through annex
+    #    B's channels in every robustness mode (every frame byte-checked), ±1.2 kHz / ±30 ppm, 10 min of noise + an AM signal =
+    #    nothing, the audio framing, a CPU row. VIBE_TEST_AUDIO adds RRI off air (drm/). Optimised: ~2 min.
+    test-drm)              echo "-O2 -I $VDSP -I $KISS" ;;
     # ★★ V12 WSPR (decoders/digimodes/wspr_decoder.h): protocol, synthetic slots −20…−28 dB with drift and DT, hashed calls, pure
     #    noise, subtraction, the live decoder — optimised, it decodes ~50 two-minute slots. VIBE_TEST_AUDIO adds 40 m + 20 m
     #    off air, with the WSPRnet-scale SNR held to ±1 dB (mean) / ±3 dB (each) of Stuart's UberSDR's own reports.
@@ -245,6 +249,7 @@ deps_for() {
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
     test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
+    test-drm)           echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
     test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C)
     *)                  echo "" ;;
@@ -265,7 +270,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb)
+    test-ndb|test-drm)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -1106,6 +1111,22 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-cw.sh clip "$OUT/cw-clip.cu8" >/
   rm -f "$OUT/cw-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 DRM (2026-10-26): the real server on a fake rtl_tcp replaying REAL DRM — RRI 9570 kHz off Stuart's UberSDR — on a
+#     one-pipeline radio and a range-locked one: the reports, the label, the codec and the honest "why" for its AAC, the
+#     audio stream never stalling (test-server-drm); then the web client in headless Edge (--mute-audio): the DRM mode, the
+#     DRM box at desktop and 390 px (test-web-drm). Needs VIBESERVER_BIN, VIBE_TEST_AUDIO (drm/) and numpy for the clip.
+printf '\n\033[1m── DRM (end to end: server, then the web client) ──\033[0m\n'
+DRM_WAV="${VIBE_TEST_AUDIO:-}/drm/uber_rri_9570000_iq48.wav"
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -f "$DRM_WAV" ] && python3 scripts/drm-clip.py "$DRM_WAV" "$OUT/drm-clip.cu8" 60 >/dev/null 2>&1; then
+  VIBE_DRM_CLIP="$OUT/drm-clip.cu8" node scripts/test-server-drm.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_DRM_CLIP="$OUT/drm-clip.cu8" node scripts/test-web-drm.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/drm-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN, VIBE_TEST_AUDIO with drm/uber_rri_9570000_iq48.wav, and numpy'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 PSK31/63 (2026-10-26): the same shape — the real server on a fake rtl_tcp replaying the bench's synthetic clip

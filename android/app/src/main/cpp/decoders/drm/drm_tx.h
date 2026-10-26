@@ -171,6 +171,7 @@ inline std::vector<PathSpec> channelProfile(int ch) {
         case 3: return { {0, 1, 0.1, 0.1}, {0.7, 0.7, 0.2, 0.5}, {1.5, 0.5, 0.5, 1.0}, {2.2, 0.25, 1.0, 2.0} };
         case 4: return { {0, 1, 0, 1}, {2.0, 1, 0, 1} };
         case 5: return { {0, 1, 0, 2}, {4.0, 1, 0, 2} };
+        case 50: return { {0, 1, 0, 0}, {4.0, 0.9, 0, 0} };   // ★ not annex B: channel 5's delay without its fading (diagnostics)
         default: return { {0, 1, 0, 0} };
     }
 }
