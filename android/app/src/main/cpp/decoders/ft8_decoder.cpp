@@ -109,16 +109,7 @@ double msSince(std::chrono::steady_clock::time_point t0) {
  *  which on a Pi 2 is the difference between 2 ms and 15 ms per decoded signal. */
 struct SinTable {
     float s[4096], c[4096];
-    /* ★ The same values interleaved (cos, sin) for the per-sample reference (2026-10-26): one cache line per lookup
-     *  instead of two. On a Cortex-A7 (32 KB L1) the split tables and the 1.2 MB reference being written fight for
-     *  the cache; by the qemu counter this loop was a quarter of the subtraction. Bit-identical. */
-    float cs[2 * 4096];
-    SinTable() {
-        for (int i = 0; i < 4096; ++i) {
-            s[i] = (float)std::sin(kTwoPi * i / 4096); c[i] = (float)std::cos(kTwoPi * i / 4096);
-            cs[2 * i] = c[i]; cs[2 * i + 1] = s[i];
-        }
-    }
+    SinTable() { for (int i = 0; i < 4096; ++i) { s[i] = (float)std::sin(kTwoPi * i / 4096); c[i] = (float)std::cos(kTwoPi * i / 4096); } }
 };
 const SinTable& sinTable() { static SinTable t; return t; }
 
@@ -700,7 +691,7 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
             for (; j < m; ++j) inc[j] = (int32_t)(dp[k0 + j] * toneStep);
             for (j = 0; j < m; ++j) {
                 const int t = (int)(ph >> 20);
-                rc[k0 + j] = tab.cs[2 * t]; rs[k0 + j] = tab.cs[2 * t + 1];
+                rc[k0 + j] = tab.c[t]; rs[k0 + j] = tab.s[t];
                 ph += base + (uint32_t)inc[j];
             }
         }
