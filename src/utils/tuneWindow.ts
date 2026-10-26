@@ -60,3 +60,25 @@ export function clampHz(hz: number, bounds: [number, number]): number {
 export function rangeMessage(bounds: [number, number]): string {
   return `This receiver covers ${(bounds[0] / 1e6).toFixed(3)}–${(bounds[1] / 1e6).toFixed(3)} MHz`;
 }
+
+/** ★ V12: can this receiver be TUNED to `hz` — inside the clamp range (`tuneBounds`) and, where the server lists them
+ *  (vibeserver.json `tunable`, after the owner's allow/block lists), inside one of its tunable windows. The web's
+ *  `clampTune(hz) === hz` test for its channel / band keys (DSC, JTTY): a key whose frequency the radio cannot reach is
+ *  not drawn (AGENTS.md: no dead controls). An empty `tunable` = the server did not say: the bounds alone decide. */
+export function hzReachable(hz: number, bounds: [number, number], tunable?: ReadonlyArray<readonly [number, number]> | null): boolean {
+  if (!(hz >= bounds[0] && hz <= bounds[1])) return false;
+  if (!tunable || !tunable.length) return true;
+  return tunable.some(([lo, hi]) => hz >= lo && hz <= hi);
+}
+
+/** vibeserver.json's `tunable` ([[lo, hi], …] Hz), checked: pairs of finite numbers, ordered, at most 32. */
+export function parseTunable(raw: unknown): Array<[number, number]> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<[number, number]> = [];
+  for (const r of raw.slice(0, 32)) {
+    if (!Array.isArray(r) || r.length < 2) continue;
+    const lo = Number(r[0]), hi = Number(r[1]);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && lo >= 0 && hi > lo) out.push([lo, hi]);
+  }
+  return out;
+}

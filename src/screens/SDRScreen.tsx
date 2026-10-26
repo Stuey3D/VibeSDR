@@ -117,7 +117,11 @@ import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
          type ChatUserRow }                            from '../services/DecoderClient';
-import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, type CwList, type CwSpot } from '../services/cwList';
+import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, pskWidthOf, passbandCentreHz, pskTuneFor,
+         type CwList, type CwSpot } from '../services/cwList';
+import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
+import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, type DscCall } from '../services/dsc';
+import { hzReachable } from '../utils/tuneWindow';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { registerIqCode } from '../services/iqPairing';
 import AntennaBandNotice from '../components/AntennaBandNotice';
@@ -764,6 +768,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     let dead = false;
     setDabCapable(false);
     setCwCapable(false);
+    setPskCapable(false); setJttyCapable(false); setDscCapable(false); setRadioTunable([]);
     setAdsbCap(undefined);
     setIsmCap(undefined);
     setAntBands(null);
@@ -773,6 +778,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (dead) return;
         setDabCapable(o?.dab === true);
         setCwCapable(o?.cw === true);   // ★ V12 CW — the same per-radio answer
+        // ★ V12 PSK31/63, JTTY, DSC — the same per-radio answer; and where it can be tuned (which channel keys draw)
+        setPskCapable(o?.psk === true); setJttyCapable(o?.jtty === true); setDscCapable(o?.dsc === true);
+        setRadioTunable(o?.tunable ?? []);
         setIsmCap(o?.ism);              // ★ V12 ISM — and the bands THIS radio reaches
         /* ★ V12 ADS-B, from the SAME per-radio answer and for the same reason (the door owns no radio). Unlike DAB a
          *  refusal is KEPT — the control is drawn disabled with the server's words (adsbTypes parseAdsbCapability). */
@@ -2405,6 +2413,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dabCapable, setDabCapable] = useState(false);  // the SERVER decides — /vibeserver.json
   /** ★ V12 CW: this radio's server runs its own CW decoder + skimmer (`"cw": true`, per radio). No word = no CW key. */
   const [cwCapable, setCwCapable] = useState(false);
+  const [pskCapable, setPskCapable] = useState(false);
+  const [jttyCapable, setJttyCapable] = useState(false);
+  const [dscCapable, setDscCapable] = useState(false);
+  /** ★ V12: vibeserver.json `tunable` — the windows this radio can be tuned in (DSC / JTTY keys outside them are not drawn). */
+  const [radioTunable, setRadioTunable] = useState<Array<[number, number]>>([]);
   /* ★ Refs beside the state because the two callbacks below are created ONCE (empty dep list, so
    *  they are stable for the ModeSelector's memo) and would otherwise close over the first render's
    *  values for ever — the stale-closure fault this file has been bitten by repeatedly. */
@@ -4887,7 +4900,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   force a redetect") — a cleared box is a fresh start, not the old station's language.
     if (activeDecRef.current === 'transcribe') { setDecoderText(''); txRedetectRef.current(); return; }
     // ★ CW's CLR empties the text, the list and the spots (the web's decClr) — the next list arrives within a second.
-    if (activeDecRef.current === 'cw') { setDecoderText(''); setCwList(null); setCwSpots([]); return; }
+    if (activeDecRef.current === 'cw' || activeDecRef.current === 'psk') { setDecoderText(''); setCwList(null); setCwSpots([]); return; }
+    // ★ V12 JTTY / DSC: CLR empties the rows and the spots (the web's decClr)
+    if (activeDecRef.current === 'jtty') { setJttyList([]); setJttySpots([]); return; }
+    if (activeDecRef.current === 'dsc') { setDscCalls([]); return; }
     if (activeDecRef.current !== 'navtex') { setDecoderText(''); return; }
     decTextPending.current = ''; decTextReplace.current = null;
     navtexAsmRef.current?.clearLive();
@@ -4926,6 +4942,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [cwWidth, setCwWidth] = useState<number>(CW_DEFAULT_WIDTH);
   const [cwList, setCwList] = useState<CwList | null>(null);
   const [cwSpots, setCwSpots] = useState<CwSpot[]>([]);
+  /* ★★ V12 PSK31/63 (docs/v12/PSK.md) — CW's two views on the same list (cwList / cwSpots carry PSK's while it runs): ONE
+   *  SIGNAL ('psk', the signal nearest the passband's middle) or SKIMMER ('pskskim' over `pskWidth` Hz). Remembered. */
+  const [pskSkim, setPskSkim] = useState(false);
+  const [pskWidth, setPskWidth] = useState<number>(PSK_DEFAULT_WIDTH);
+  /* ★★ V12 JTTY (docs/v12/JTTY.md) — one row per station and the spots (JttyView). */
+  const [jttyList, setJttyList] = useState<JttySignal[]>([]);
+  const [jttySpots, setJttySpots] = useState<JttySpot[]>([]);
+  /* ★★ V12 DSC (docs/v12/DSC.md) — the calls, newest first (DscView). */
+  const [dscCalls, setDscCalls] = useState<DscCall[]>([]);
 
   // Decoder transport base. Local/UberSDR serve /ws/dxcluster themselves; Kiwi
   // (no dxcluster) gets a native decoder sidecar fed its audio, so we point the
@@ -4992,12 +5017,26 @@ export default function SDRScreen({ route, navigation }: Props) {
       onImageDone: ()            => decoderImageRef.current?.imageDone(),
       onError:     (msg: string) => setDecoderStatus('error: ' + msg),
       onCwSignals: (l) => {
-        if (activeDecRef.current !== 'cw') return;
+        // ★ V12 PSK's list arrives here too (DecoderClient parses psk_signals into the same shape, with its mode)
+        if (activeDecRef.current !== 'cw' && activeDecRef.current !== 'psk') return;
         setCwList(l);
         setDecoding(l.signals.some((x) => x.active));
         if (l.signals.length) markDecodeOutput();
       },
-      onCwSpot: (sp) => { if (activeDecRef.current === 'cw') setCwSpots((prev) => mergeCwSpot(prev, sp)); },
+      onCwSpot: (sp) => { if (activeDecRef.current === 'cw' || activeDecRef.current === 'psk') setCwSpots((prev) => mergeCwSpot(prev, sp)); },
+      onJttySignals: (l) => {
+        if (activeDecRef.current !== 'jtty') return;
+        setJttyList(l);
+        setDecoding(l.some((x) => x.active));
+        if (l.length) markDecodeOutput();
+      },
+      onJttySpot: (sp) => { if (activeDecRef.current === 'jtty') setJttySpots((prev) => mergeJttySpot(prev, sp)); },
+      onDscCall: (c) => {
+        if (activeDecRef.current !== 'dsc') return;
+        setDscCalls((prev) => mergeDscCall(prev, c));
+        setDecoding(true);
+        markDecodeOutput();
+      },
       onSpot: (s) => {
         if (s.kind !== spotsKindRef.current) return;
         spotBufRef.current.push(s); // flushed by the 400ms tick — no setState here
@@ -5073,7 +5112,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -5461,6 +5500,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoding(false);
     decoderImageRef.current?.reset();
     setCwList(null); setCwSpots([]);
+    setJttyList([]); setJttySpots([]); setDscCalls([]);
     if (!type) return;
     if (type === 'scanner') { setDecoderStatus(''); return; }   // ★ the scanner's status is its own body's first line
     if (type === 'transcribe') {
@@ -5502,6 +5542,20 @@ export default function SDRScreen({ route, navigation }: Props) {
       decoderClient.current.cwWidth = cwWidthRef.current;
       setDecoderStatus(cwSkimRef.current ? 'listening across the segment…' : 'listening…');
     }
+    // ★ V12 PSK: the skimmer's segment, or ONE SIGNAL's cursor — the middle of the listener's passband now (the web's
+    //   decParams; changing the filter afterwards does not move it, PSK.md "Not done").
+    if (type === 'psk' && decoderClient.current) {
+      const st = client.current?.getStatus();
+      decoderClient.current.pskSkim = pskSkimRef.current;
+      decoderClient.current.pskWidth = pskWidthRef.current;
+      decoderClient.current.pskCentre = passbandCentreHz(st?.bandwidthLow ?? 300, st?.bandwidthHigh ?? 2700);
+      setDecoderStatus(pskSkimRef.current ? 'listening across the segment…' : 'listening…');
+    }
+    // ★ V12 DSC: the tones' audio centre from the NEAREST DSC frequency to the dial (or channel 70 on NFM) — dscParams.
+    if (type === 'dsc' && decoderClient.current) {
+      const st = client.current?.getStatus();
+      decoderClient.current.dscParams = dscParams(st?.frequency ?? 0, String(st?.mode ?? ''));
+    }
     tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
     decoderClient.current?.start(type);
   }, [status.frequency, timeStationPref, onVfoAB]);
@@ -5539,6 +5593,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoderText('');
     setDecoderStatus('listening…');
     setCwList(null); setCwSpots([]);
+    setJttyList([]); setJttySpots([]); setDscCalls([]);
   }, []);
 
   const stopSpots = useCallback(() => {
@@ -5569,7 +5624,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -5673,6 +5728,30 @@ export default function SDRScreen({ route, navigation }: Props) {
     cwWidthRef.current = v; setCwWidth(v);
     AsyncStorage.setItem('lsv_cw_width', String(v)).catch(() => {});
     if (activeDecRef.current === 'cw' && cwSkimRef.current) openDecoder('cw');
+  }, [openDecoder]);
+  /* ★★ THE SKIMMER'S VFO IS ITS SEGMENT (CW's rule, and PSK's — the web's kbSkimOn): drawn only, never sent. */
+  const skimDrawn = (activeDecoder === 'cw' && cwSkim) || (activeDecoder === 'psk' && pskSkim);
+  const skimDrawnW = activeDecoder === 'psk' ? pskWidth : cwWidth;
+  /* ★ V12 PSK: the same two settings, remembered apart from CW's (6/12/24 kHz, not 24/48/96). */
+  const pskSkimRef = useRef(false);
+  const pskWidthRef = useRef<number>(PSK_DEFAULT_WIDTH);
+  useEffect(() => {
+    AsyncStorage.multiGet(['lsv_psk_view', 'lsv_psk_width']).then((kv) => {
+      const v = kv[0]?.[1], w = kv[1]?.[1];
+      if (v === 'skim') { pskSkimRef.current = true; setPskSkim(true); }
+      if (w) { pskWidthRef.current = pskWidthOf(w); setPskWidth(pskWidthRef.current); }
+    }).catch(() => {});
+  }, []);
+  const onPskView = useCallback((skim: boolean) => {
+    pskSkimRef.current = skim; setPskSkim(skim);
+    AsyncStorage.setItem('lsv_psk_view', skim ? 'skim' : 'one').catch(() => {});
+    if (activeDecRef.current === 'psk') openDecoder('psk');
+  }, [openDecoder]);
+  const onPskWidth = useCallback((w: number) => {
+    const v = pskWidthOf(w);
+    pskWidthRef.current = v; setPskWidth(v);
+    AsyncStorage.setItem('lsv_psk_width', String(v)).catch(() => {});
+    if (activeDecRef.current === 'psk' && pskSkimRef.current) openDecoder('psk');
   }, [openDecoder]);
 
   // WEFAX LPM — same re-attach rule
@@ -9188,6 +9267,21 @@ export default function SDRScreen({ route, navigation }: Props) {
       setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
     }
   }, []);
+  /* ★ V12 DSC: a channel key tunes it as a DSC receiver does (USB 1.7 kHz below, or channel 70 in NFM) and, while DSC runs,
+   *  re-attaches so the decoder's tones follow — from the TARGET, not the status (the tune has not landed yet). The web's
+   *  dscTune. */
+  const onDscTune = useCallback((ch: { hz: number; vhf: boolean }) => {
+    const t = dscTuneFor(ch);
+    onTuneHz(t.hz, t.mode as SDRMode);
+    if (activeDecRef.current === 'dsc' && decoderClient.current) {
+      decoderClient.current.dscParams = dscParams(t.hz, t.mode);
+      decoderClient.current.start('dsc');
+    }
+  }, [onTuneHz]);
+  /** ★ V12 DSC MAP — set where the map is built (below); undefined = no MAP key (never a dead control). */
+  const onDscMap: ((c: DscCall) => void) | undefined = undefined;
+  /** ★ V12: can this radio be tuned to `hz` (the DSC / JTTY keys drawn) — the clamp range and the server's tunable windows. */
+  const canReach = (hz: number) => !!client.current && hzReachable(hz, tuneBoundsOf(client.current), radioTunable);
 
   /** ★★ TYPED ENTRY, THE WAY A PILOT TYPES IT. In the COM band a value on a 5 kHz boundary is a
    *  channel NAME (118.010 → 118.0083 MHz; 121.5 → 121.500) and the name typed is the one the readout
@@ -11919,8 +12013,8 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  tuning moves it as ever, and the server's skimmer follows the dial. */
         /* ★ V12 ISM: no LISTEN needle on a band capture (the web's wf.vfoHidden) — every renderer path reads it. */
         needleHidden={ismOn}
-        filterLow={cwDrawnPassband(activeDecoder === 'cw' && cwSkim, cwWidth, status.bandwidthLow, status.bandwidthHigh).low}
-        filterHigh={cwDrawnPassband(activeDecoder === 'cw' && cwSkim, cwWidth, status.bandwidthLow, status.bandwidthHigh).high}
+        filterLow={cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).low}
+        filterHigh={cwDrawnPassband(skimDrawn, skimDrawnW, status.bandwidthLow, status.bandwidthHigh).high}
         /* ★★★ THE VISUAL TRIM ON THE SPECTRUM — applied by shifting the RANGE, never by editing
          *  the bins. The adapters hand us a reused buffer (see the note on visualGain), so an
          *  in-place offset would accumulate every frame. Mapping through a range shifted by -vg is
@@ -12154,6 +12248,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           onTuneHz={onTuneHz}
           /* ★ V12 CW: the list + spots, and a tap tunes to that signal in CW (the web's cwTune: recentred). */
           cw={activeDecoder === 'cw' ? { skim: cwSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => { if (hz > 0) onTuneHz(hz, 'cwu' as SDRMode); } } : null}
+          /* ★ V12 PSK: the same list; a tap = USB with the signal in the middle of the passband (LSB if in LSB — pskTuneFor). */
+          psk={activeDecoder === 'psk' ? { skim: pskSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => {
+            if (!(hz > 0)) return;
+            const t = pskTuneFor(hz, String(status.mode), status.bandwidthLow, status.bandwidthHigh);
+            onTuneHz(t.hz, t.mode as SDRMode);
+          } } : null}
+          /* ★ V12 JTTY: a tap = USB, the dial 1500 Hz below the station (jttyTuneFor). */
+          jtty={activeDecoder === 'jtty' ? { list: jttyList, spots: jttySpots, onTune: (rf: number) => { if (rf > 0) onTuneHz(jttyTuneFor(rf), 'usb' as SDRMode); } } : null}
+          /* ★ V12 DSC: the calls; MAP for a position (dscMapOpen — the server's own map). */
+          dsc={activeDecoder === 'dsc' ? { calls: dscCalls, onMap: onDscMap } : null}
           /* ★★ V12 THE SCANNER — the decoder box's body while SCANNER is the decoder (ScannerPanel). */
           scanner={activeDecoder === 'scanner' ? {
             ctl: scanner.ctl, rev: scanner.rev, meterMode: signalMode, onSource: onScanSource,
@@ -13387,6 +13491,18 @@ export default function SDRScreen({ route, navigation }: Props) {
             toggleIsm();
           },
           cwSkim, cwWidth, onCwView, onCwWidth,
+          /* ★★ V12 PSK31/63, JTTY, DSC — the server's own decoders, each only where its vibeserver.json says so. The JTTY
+           *  bands and DSC channels drawn are only those this radio can be tuned to (the web's initJttyDials /
+           *  initDscChannels: no dead keys). */
+          pskAvail: pskCapable && !!(client.current as any)?.isVibe,
+          pskSkim, pskWidth, onPskView, onPskWidth,
+          jttyAvail: jttyCapable && !!(client.current as any)?.isVibe,
+          jttyDials: jttyDialsReachable(canReach),
+          onJttyDial: (hz: number) => { markInteract(); onTuneHz(hz, 'usb' as SDRMode); },
+          dscAvail: dscCapable && !!(client.current as any)?.isVibe,
+          dscChans: dscChannelsReachable(canReach),
+          onDscChan: (ch: { hz: number; vhf: boolean }) => { markInteract(); onDscTune(ch); },
+          tunedHz: status.frequency,
         } : null}
         transcribeControls={txCaps?.available ? {
           active: activeDecoder === 'transcribe',

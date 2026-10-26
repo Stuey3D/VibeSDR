@@ -1,5 +1,6 @@
 /**
  * CwView — the V12 CW decoder's body inside the decoder box (DecoderPanel): the web client's CW panel (main.ts renderCw).
+ * ★ V12 PSK31/63 uses it too (`psk`): the web draws both in one list box — PSK shows its mode where CW shows its speed.
  *
  *   ONE SIGNAL: the primary signal's text (as RTTY's) · the signals list · SPOTS
  *   SKIMMER:    the signals list across the segment · SPOTS
@@ -19,8 +20,8 @@ import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } 
 import { scrollLane } from '../constants/popupTokens';
 import { fmtSpotTime } from '../utils/spotTime';   // ★ HH:MM:SS UTC (one helper for every spot list)
 import {
-  CW_Q_COLOURS, cwAge, cwFreqText, cwPinFromScroll, cwPinRestore, cwSnrText, sortCwSignals,
-  type CwList, type CwSignal, type CwSpot,
+  CW_Q_COLOURS, cwAge, cwFreqText, cwPinFromScroll, cwPinRestore, cwSnrText, kbIdleText, kbRateText, kbSpotRateText,
+  sortCwSignals, type CwList, type CwSignal, type CwSpot,
 } from '../services/cwList';
 
 /** The spots drawn (the web keeps 200 and draws 60). */
@@ -33,34 +34,15 @@ export function cwItems(list: CwList | null, spots: readonly CwSpot[]): Array<{ 
 }
 
 /** ★ The confidence marker, short enough for an SE in Display Zoom; the colour carries it as much as the word. */
-const Q_SHORT: Record<CwSignal['q'], string> = { high: 'HIGH', medium: 'MED', low: 'LOW', poor: 'POOR' };
+export const Q_SHORT: Record<CwSignal['q'], string> = { high: 'HIGH', medium: 'MED', low: 'LOW', poor: 'POOR' };
 
-
-export interface CwViewProps {
-  skim: boolean;
-  list: CwList | null;
-  spots: readonly CwSpot[];
-  /** ONE SIGNAL's primary text (the decoder text); not drawn for the skimmer. */
-  text: string;
-  bodySize: StyleProp<ViewStyle>;
-  /** The row the keyboard / pad is on, -1 for none. */
-  focusIdx: number;
-  onTune: (hz: number) => void;
-  /** The panel's scroll hooks (bodyScrollY for the arrows) — merged with the pin's own. */
-  scrollRef?: React.RefObject<ScrollView | null>;
-  onScrollY?: (y: number) => void;
-}
-
-export default function CwView({ skim, list, spots, text, bodySize, focusIdx, onTune, scrollRef, onScrollY }: CwViewProps) {
-  const tk = useDecoderTokens();
-  const cs = useDecoderStyles(makeCs);
+/** ★★ THE VIEW STAYS WHERE THE LISTENER PUT IT (cwList cwPinFromScroll / cwPinRestore) — the CW list's scroll pin as a hook,
+ *  shared by every list-with-SPOTS view (CW, PSK, JTTY): scrolled down at all, the SPOTS heading keeps its place on screen
+ *  while rows come and go above it; at the top, the view stays at the top. A keyboard / pad row is brought into view. */
+export function useSpotsPin(scrollRef: React.RefObject<ScrollView | null> | undefined, onScrollY: ((y: number) => void) | undefined,
+                            focusIdx: number) {
   const own = useRef<ScrollView | null>(null);
   const sv = scrollRef ?? own;
-  const sigs = useMemo(() => sortCwSignals(list?.signals ?? []), [list]);
-  const shownSpots = spots.slice(0, CW_SPOTS_SHOWN);
-  const now = Date.now();
-
-  /* ── The pin ── */
   const scrollY = useRef(0);
   const headY = useRef(0);
   const pinAt = useRef<number | null>(null);
@@ -86,8 +68,6 @@ export default function CwView({ skim, list, spots, text, bodySize, focusIdx, on
     scrollY.current = want;
     try { sv.current?.scrollTo({ y: want, animated: false }); } catch { /* detached */ }
   }, [sv]);
-
-  /* ── The keyboard / pad's row: brought into view ── */
   const rowY = useRef<number[]>([]);
   useEffect(() => {
     if (focusIdx < 0) return;
@@ -98,31 +78,59 @@ export default function CwView({ skim, list, spots, text, bodySize, focusIdx, on
     scrollY.current = Math.max(0, y - 40);
     noteUser(scrollY.current);
   }, [focusIdx]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const scrollProps = {
+    ref: sv as any,
+    scrollEventThrottle: 32,
+    onScroll,
+    onScrollBeginDrag: () => { userScrolling.current = true; },
+    onScrollEndDrag: (e: any) => { settle(e); },
+    onMomentumScrollBegin: () => { userScrolling.current = true; },
+    onMomentumScrollEnd: (e: any) => { userScrolling.current = false; settle(e); },
+    onTouchEnd: () => { setTimeout(() => { userScrolling.current = false; }, 400); },
+  };
+  return { scrollProps, onHeadLayout, rowY };
+}
+
+
+export interface CwViewProps {
+  skim: boolean;
+  /** ★ V12: the PSK decoder's list (its mode where CW has its speed). */
+  psk?: boolean;
+  list: CwList | null;
+  spots: readonly CwSpot[];
+  /** ONE SIGNAL's primary text (the decoder text); not drawn for the skimmer. */
+  text: string;
+  bodySize: StyleProp<ViewStyle>;
+  /** The row the keyboard / pad is on, -1 for none. */
+  focusIdx: number;
+  onTune: (hz: number) => void;
+  /** The panel's scroll hooks (bodyScrollY for the arrows) — merged with the pin's own. */
+  scrollRef?: React.RefObject<ScrollView | null>;
+  onScrollY?: (y: number) => void;
+}
+
+export default function CwView({ skim, psk = false, list, spots, text, bodySize, focusIdx, onTune, scrollRef, onScrollY }: CwViewProps) {
+  const tk = useDecoderTokens();
+  const cs = useDecoderStyles(makeCs);
+  const sigs = useMemo(() => sortCwSignals(list?.signals ?? []), [list]);
+  const shownSpots = spots.slice(0, CW_SPOTS_SHOWN);
+  const now = Date.now();
+  const { scrollProps, onHeadLayout, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
 
   const ring = (i: number) => (i === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
 
   return (
     <ScrollView
-      ref={sv as any}
+      {...scrollProps}
       style={[cs.body, bodySize]}
       contentContainerStyle={[cs.content, scrollLane]}
       showsVerticalScrollIndicator
-      scrollEventThrottle={32}
-      onScroll={onScroll}
-      onScrollBeginDrag={() => { userScrolling.current = true; }}
-      onScrollEndDrag={(e) => { settle(e); }}
-      onMomentumScrollBegin={() => { userScrolling.current = true; }}
-      onMomentumScrollEnd={(e) => { userScrolling.current = false; settle(e); }}
-      onTouchEnd={() => { setTimeout(() => { userScrolling.current = false; }, 400); }}
     >
       {!skim && !!text && (
         <Text style={[cs.primary, { color: tk.value }]} selectable>{text}</Text>
       )}
       {!sigs.length && (
-        <Text style={[cs.idle, { color: tk.muted }]}>
-          {skim ? 'listening across the segment — each CW signal appears here as it is decoded'
-                : 'listening — tune a CW signal into the passband'}
-        </Text>
+        <Text style={[cs.idle, { color: tk.muted }]}>{kbIdleText(psk, skim)}</Text>
       )}
       {sigs.map((sg: CwSignal, i: number) => {
         const primary = !!list && !list.skimmer && sg.id === list.primary;
@@ -131,14 +139,15 @@ export default function CwView({ skim, list, spots, text, bodySize, focusIdx, on
           <TouchableOpacity key={`s${sg.id}`} activeOpacity={0.6}
             onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }}
             accessibilityLabel={`${sg.call || 'unidentified'} ${cwFreqText(sg.hz, sg.audio)}${sg.hz > 0 ? ' kilohertz' : ''}, `
-              + `${Math.round(sg.wpm)} words a minute, ${cwSnrText(sg.snr)}, ${sg.q} confidence — tap to tune`}
+              + `${sg.baud !== undefined ? `PSK${sg.baud}` : `${Math.round(sg.wpm)} words a minute`}, ${cwSnrText(sg.snr)}, `
+              + `${sg.q} confidence — tap to tune`}
             style={[cs.row, { borderBottomColor: tk.divider }, primary && { backgroundColor: tk.selectedBg }, ring(i),
                     !sg.active && cs.gone]}
             onPress={() => onTune(sg.hz)}>
             <View style={cs.line}>
               <Text style={[cs.cell, cs.freq, { color: tk.value }]} numberOfLines={1}>{cwFreqText(sg.hz, sg.audio)}</Text>
               <Text style={[cs.cell, cs.call, { color: sg.call ? tk.accent : tk.muted }]} numberOfLines={1}>{sg.call || '—'}</Text>
-              <Text style={[cs.cell, cs.wpm, { color: tk.value }]} numberOfLines={1}>{`${Math.round(sg.wpm)} wpm`}</Text>
+              <Text style={[cs.cell, cs.wpm, { color: tk.value }]} numberOfLines={1}>{kbRateText(sg)}</Text>
               <Text style={[cs.cell, cs.snr, { color: tk.value }]} numberOfLines={1}>{cwSnrText(sg.snr)}</Text>
               <Text style={[cs.cell, cs.q, { color: qc, borderColor: qc }]} numberOfLines={1}>{Q_SHORT[sg.q]}</Text>
               <Text style={[cs.cell, cs.age, { color: tk.muted }]} numberOfLines={1}>{cwAge(sg.last, now)}</Text>
@@ -168,7 +177,7 @@ export default function CwView({ skim, list, spots, text, bodySize, focusIdx, on
               <Text style={[cs.cell, cs.freq, { color: tk.value }]} numberOfLines={1}>{cwFreqText(s.frequency, s.audio)}</Text>
               <Text style={[cs.cell, cs.call, { color: tk.accent }]} numberOfLines={1}>{s.callsign}</Text>
               <Text style={[cs.cell, cs.country, { color: tk.value }]} numberOfLines={1}>{s.country}</Text>
-              <Text style={[cs.cell, cs.wpm, { color: tk.value }]} numberOfLines={1}>{`${Math.round(s.wpm)} wpm`}</Text>
+              <Text style={[cs.cell, cs.wpm, { color: tk.value }]} numberOfLines={1}>{kbSpotRateText(s)}</Text>
             </View>
           </TouchableOpacity>
         );

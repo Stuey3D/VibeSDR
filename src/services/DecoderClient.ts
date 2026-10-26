@@ -49,13 +49,16 @@ import { USER_AGENT } from '../constants/version';
 import { rttyFraming } from '../utils/rttySpec';
 import { guard, guardJson } from './faultLog';
 import { cleanText, cleanMode } from '../utils/safeText';
-import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, type CwList, type CwSpot } from './cwList';
+import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, type CwList, type CwSpot } from './cwList';
+import { parseJttySignals, parseJttySpot, jttyStateText, type JttySignal, type JttySpot } from './jtty';
+import { parseDscCall, dscStateText, type DscCall } from './dsc';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 /** ★ V12 'cw' — a VibeServer's own CW decoder: ONE SIGNAL ('cw', on this listener's audio) or the SKIMMER ('cwskim',
  *  a segment of IQ centred on the dial). One name here; which extension is attached is `cwSkim`. Not UberSDR's `morse`. */
-export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw';
+/** ★ V12 PSK31/63 ('psk' / 'pskskim' — `pskSkim`), JTTY ('jtty') and DSC ('dsc') — a VibeServer's own decoders. */
+export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw' | 'psk' | 'jtty' | 'dsc';
 
 /** The time signal stations the server can decode. Each is a separate extension name on the
  *  wire — the shim builds a TimeDecoder for the one asked for. */
@@ -197,6 +200,11 @@ export interface DecoderCallbacks {
   onCwSignals?: (list: CwList) => void;
   /** ★ V12 CW (VibeServer): a callsign heard identifying itself (CQ, DE, TEST — twice). */
   onCwSpot?:    (spot: CwSpot) => void;
+  /** ★ V12 JTTY (VibeServer): the stations list (once a second, when it changed) and each call heard. */
+  onJttySignals?: (list: JttySignal[]) => void;
+  onJttySpot?:    (spot: JttySpot) => void;
+  /** ★ V12 DSC (VibeServer): one call (a repeat comes again with the same id and a higher count). */
+  onDscCall?:     (call: DscCall) => void;
   /** Chat (rides this WS — chat_websocket.go via the dxcluster handler).
    *  isHistory=true for the server's buffer replay after subscribe_chat —
    *  render silently, no unread pulse. Already-seen messages are deduped
@@ -273,6 +281,13 @@ export class DecoderClient {
    *  either is a re-attach — a different decoder on the server (the caller calls start('cw') again). */
   cwSkim = false;
   cwWidth: number = CW_DEFAULT_WIDTH;
+  /** ★ V12 PSK: SKIMMER ('pskskim' over `pskWidth` Hz) or ONE SIGNAL ('psk', the signal nearest `pskCentre` — the audio
+   *  Hz of the passband's middle, set by the caller before start). Changing any is a re-attach, as CW's. */
+  pskSkim = false;
+  pskWidth: number = PSK_DEFAULT_WIDTH;
+  pskCentre = 1500;
+  /** ★ V12 DSC: the attach parameters for the dial and mode (dsc.ts dscParams) — set by the caller before start. */
+  dscParams: Record<string, unknown> = { band: 'hf', center_frequency: 1700 };
 
   constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string, authSuffix = '') {
     this.baseUrl  = baseUrl.replace(/\/+$/, '');
@@ -563,6 +578,27 @@ export class DecoderClient {
             if (this.active !== 'cw') return;
             const l = parseCwSignals(m.data);
             if (l) this.cb.onCwSignals?.(l);
+          } else if (m.type === 'psk_signals' && m.data) {
+            // ★ V12 PSK: CW's list exactly, with the mode and IMD — the one list view draws both (the web's rule).
+            if (this.active !== 'psk') return;
+            const l = parseCwSignals(m.data, true);
+            if (l) this.cb.onCwSignals?.(l);
+          } else if (m.type === 'psk_spot' && m.data) {
+            if (this.active !== 'psk') return;
+            const sp = parseCwSpot(m.data, Date.now(), true);
+            if (sp) this.cb.onCwSpot?.(sp);
+          } else if (m.type === 'jtty_signals' && m.data) {
+            if (this.active !== 'jtty') return;
+            const l = parseJttySignals(m.data);
+            if (l) this.cb.onJttySignals?.(l);
+          } else if (m.type === 'jtty_spot' && m.data) {
+            if (this.active !== 'jtty') return;
+            const sp = parseJttySpot(m.data, Date.now());
+            if (sp) this.cb.onJttySpot?.(sp);
+          } else if (m.type === 'dsc_call' && m.data) {
+            if (this.active !== 'dsc') return;
+            const c = parseDscCall(m.data, Date.now());
+            if (c) this.cb.onDscCall?.(c);
           } else if (m.type === 'cw_spot' && m.data && this.active === 'cw' && typeof m.data.callsign === 'string') {
             // ★ V12: a VibeServer's CW decoder names the call `callsign` (UberSDR's skimmer feed, below, `dx_call`).
             const sp = parseCwSpot(m.data, Date.now());
@@ -703,6 +739,14 @@ export class DecoderClient {
       case 'cw':      return this.cwSkim
         ? { extension_name: 'cwskim', params: { width: this.cwWidth } }
         : { extension_name: 'cw', params: {} };
+      // ★ V12 PSK: the skimmer's segment as `width` (6/12/24 kHz); ONE SIGNAL's cursor as `centre` (the web's decParams).
+      case 'psk':     return this.pskSkim
+        ? { extension_name: 'pskskim', params: { width: this.pskWidth } }
+        : { extension_name: 'psk', params: { centre: this.pskCentre } };
+      // ★ V12 JTTY: every JTTY signal in the passband — nothing to set.
+      case 'jtty':    return { extension_name: 'jtty', params: {} };
+      // ★ V12 DSC: 'hf' with the tones' audio centre, or 'vhf' (channel 70 on NFM) — dsc.ts dscParams.
+      case 'dsc':     return { extension_name: 'dsc', params: { ...this.dscParams } };
     }
   }
 
@@ -717,14 +761,21 @@ export class DecoderClient {
     // ★ TIME rides the same 0x01 text frame as RTTY/NAVTEX — the shim writes every station's
     //   output into the one decoded-text buffer, so no new parser is needed here.
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw') {
+    // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
+    //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc') {
       if (t === 0x01) {
         if (u8.length < 13) return;
         const tl = v.getUint32(9, false);
         if (tl <= 0 || u8.length < 13 + tl) return;
-        this.cb.onText(utf8(u8.subarray(13, 13 + tl)));
+        if (name !== 'jtty' && name !== 'dsc') this.cb.onText(utf8(u8.subarray(13, 13 + tl)));
         this.cb.onDot('active');
-      } else if (name === 'cw' && t === 0x03) {
+      } else if ((name === 'jtty' || name === 'dsc') && t === 0x03) {
+        if (u8.length < 2) return;
+        const s = u8[1];
+        this.cb.onStatus(name === 'jtty' ? jttyStateText(s) : dscStateText(s));
+        this.cb.onDot(s ? 'active' : 'idle');
+      } else if ((name === 'cw' || name === 'psk') && t === 0x03) {
         // ★ CW's state: 0 nothing heard, 1 carriers, 3 decoding (vibe_cw_run.h).
         if (u8.length < 2) return;
         const s = u8[1];
