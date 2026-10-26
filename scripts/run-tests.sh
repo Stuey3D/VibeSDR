@@ -758,6 +758,9 @@ if npx tsx scripts/test_app_alert.ts; then pass=$((pass+1)); else fail=$((fail+1
 if npx tsx scripts/test_nav_coverage.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE SERVER LIST'S FOCUS RULES (controller audit group H): Back from the list position, Enter = tap on directory rows.
 if npx tsx scripts/test_picker_nav.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ BACK FROM A RADIO LANDS WHERE YOU LEFT (Stuart, 2026-10-27): the server list's place carried across a VibeServer's
+#     reset, the missing-receiver fallback (this list's top, never the app's), and a front door's radio list.
+if npx tsx scripts/test_picker_return.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 489: the picker's focus order under a REAL React renderer — a bailed-out render emptied the render-time bank
 #     (src/utils/renderBank.ts), so the ring, reveal and Enter disagreed. Real key bus, real pad mapper, both enters.
 if npx tsx scripts/test_render_bank.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
