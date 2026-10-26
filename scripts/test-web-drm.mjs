@@ -128,6 +128,8 @@ try {
 } finally {
   try { edge?.kill('SIGTERM'); } catch {}
   srv.kill('SIGTERM'); rtl.kill('SIGTERM');
+  await sleep(800);
+  for (const d of [dir, prof]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }   // ★ keep the Mac clean
 }
 console.log(`\n${fail ? '✗' : '✓'} test-web-drm: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
