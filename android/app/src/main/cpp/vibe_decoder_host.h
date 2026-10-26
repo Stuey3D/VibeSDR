@@ -363,6 +363,7 @@ public:
         if (env_.spotTap) { DecoderTapPtr t = env_.spotTap(scope == SpotScope::Band); std::lock_guard<std::mutex> tl(tapMtx_); spotTap_ = std::move(t); }
         spotsOn_ = true;
         if (scope == SpotScope::Band) {
+            bandWidth_.store(bandWidthFor(dial ? dial() : 0.0), std::memory_order_relaxed);   // ★ a socket thread: no channel lock held
             if (!bandIq_.exchange(true)) skimmersRunning().fetch_add(1);
         } else {
             spotsActive_.store(true, std::memory_order_relaxed);
@@ -419,15 +420,11 @@ public:
     double iqWidthHz() const {
         // ★★ The CW skimmer and Band spots share ONE slice (both centred on the dial): the wider of the two. The skimmer
         //    decodes only its own width of a wider slice (CwRun clamps), and Band mode's tuners take only their dials.
+        // ★★★ AN ATOMIC READ ONLY: this is asked on the DSP thread with the listener's channel lock held
+        //     (feedOneClient), where asking for the dial (env_.dialHz takes clientMtx) would be a lock-order inversion.
+        //     The width follows the dial from the decode thread instead (loop_: bandWidthFor(the slice's own centre)).
         double w = cwIq_.load(std::memory_order_relaxed) ? cwWidth_.load(std::memory_order_relaxed) : 0.0;
-        if (bandIq_.load(std::memory_order_relaxed)) {
-            const double d = env_.dialHz ? env_.dialHz() : 0.0;
-            if (std::fabs(d - bandWidthDial_.load(std::memory_order_relaxed)) > 0.5) {
-                bandWidth_.store(bandWidthFor(d), std::memory_order_relaxed);
-                bandWidthDial_.store(d, std::memory_order_relaxed);
-            }
-            w = std::max(w, bandWidth_.load(std::memory_order_relaxed));
-        }
+        if (bandIq_.load(std::memory_order_relaxed)) w = std::max(w, bandWidth_.load(std::memory_order_relaxed));
         return w;
     }
     /** Hand the skimmer `n` IQ samples at `rate` Hz centred on `centreRfHz`. Copies and returns at once, as feed(). */
@@ -972,7 +969,15 @@ private:
                 }
                 {
                     std::lock_guard<std::mutex> sl(spotsMtx_);
-                    if (spotter_ && spotter_->scope() == SpotScope::Band) spotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc);
+                    if (spotter_ && spotter_->scope() == SpotScope::Band) {
+                        spotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc);
+                        // ★ The slice is centred on the dial: the next blocks are cut to the span of the band it is on now
+                        //   (a band step is followed within a block or two). Cached per centre — the table walk is cheap but not free.
+                        if (std::fabs(b.centre - bandWidthDial_.load(std::memory_order_relaxed)) > 0.5) {
+                            bandWidth_.store(bandWidthFor(b.centre), std::memory_order_relaxed);
+                            bandWidthDial_.store(b.centre, std::memory_order_relaxed);
+                        }
+                    }
                 }
                 { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t && bandIq_.load()) t->tick(); }
                 { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; } if (t) t->tick(); }
@@ -1104,7 +1109,7 @@ private:
     bool  spotsOn_ = false;
     std::atomic<bool> spotsActive_{false};      // ★ Single: wants the listener's audio
     std::atomic<bool> bandIq_{false};           // ★ Band: wants the band's IQ slice (wantsIq)
-    mutable std::atomic<double> bandWidth_{24000.0}, bandWidthDial_{-1.0};   // ★ the slice width, cached per dial
+    std::atomic<double> bandWidth_{24000.0}, bandWidthDial_{-1.0};   // ★ the slice width (set at start and by the decode thread)
     uint64_t spotSkipBase_ = 0;                 // ★ skipped slots of runs already stopped (spotSlotsSkipped is monotonic)
     int   spotsSlot_ = -1;
 

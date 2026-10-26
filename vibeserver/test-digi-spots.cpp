@@ -117,8 +117,60 @@ static int writeClip(const char* path, double rate, double centre) {
     return 0;
 }
 
+/** ★ `real <iq.wav> <start_utc> <centreHz> [swap]`: a REAL recording — a stereo int16 I/Q WAV (ubersdr-rec … iq48), its first
+ *  sample's UTC — through Band mode, faster than real time, stamped by the recording's own clock. Prints every spot, then
+ *  the per-mode counts (compared by hand against the receiver's own decodes for the same minutes). */
+static int runReal(const char* path, double startUtc, double centre, bool swap, bool live) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::printf("cannot open %s\n", path); return 3; }
+    std::vector<uint8_t> raw; { uint8_t b[65536]; size_t k; while ((k = std::fread(b, 1, sizeof b, f)) > 0) raw.insert(raw.end(), b, b + k); }
+    std::fclose(f);
+    if (raw.size() < 44 || std::memcmp(raw.data(), "RIFF", 4) != 0) { std::printf("not a WAV\n"); return 1; }
+    uint32_t rate = 0; uint16_t chans = 0; size_t data = 0, dlen = 0;
+    for (size_t p = 12; p + 8 <= raw.size();) {
+        const uint32_t len = raw[p + 4] | raw[p + 5] << 8 | raw[p + 6] << 16 | (uint32_t)raw[p + 7] << 24;
+        if (!std::memcmp(&raw[p], "fmt ", 4)) { chans = raw[p + 10] | raw[p + 11] << 8; rate = raw[p + 12] | raw[p + 13] << 8 | raw[p + 14] << 16 | (uint32_t)raw[p + 15] << 24; }
+        if (!std::memcmp(&raw[p], "data", 4)) { data = p + 8; dlen = std::min<size_t>(len, raw.size() - data); break; }
+        p += 8 + len + (len & 1);
+    }
+    if (chans != 2 || !rate || !data) { std::printf("need stereo I/Q (got %u ch, %u Hz)\n", chans, rate); return 1; }
+    const size_t n = dlen / 4;
+    std::vector<cf32> x(n);
+    for (size_t i = 0; i < n; ++i) {
+        const int16_t a = (int16_t)(raw[data + 4 * i] | raw[data + 4 * i + 1] << 8), b = (int16_t)(raw[data + 4 * i + 2] | raw[data + 4 * i + 3] << 8);
+        x[i] = swap ? cf32(b / 32768.0f, a / 32768.0f) : cf32(a / 32768.0f, b / 32768.0f);
+    }
+    std::map<std::string, int> per; std::mutex gm; std::vector<std::string> lines;
+    digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(), [&](const digi::Spot& s, double rf) {
+        char b[160]; std::snprintf(b, sizeof b, "%s %-10s %6s %+4d %.0f", s.mode.c_str(), s.call.c_str(), s.grid.c_str(), s.snr, rf);
+        std::lock_guard<std::mutex> lk(gm); per[s.mode]++; lines.push_back(b); }, nullptr, nullptr);
+    /* ★ `live`: fed in REAL TIME, its clock shifted by whole minutes so the slots still line up — the FT8 pass gate
+     *  judges its time budget against the wall clock, so a recording fed minutes after it was made, or faster than real
+     *  time, gets ONE pass (what a loaded server pays); fed live it gets what a live listener's would. */
+    const double shift = live ? std::ceil((vibeUtcNow() - startUtc) / 60.0) * 60.0 : 0.0;
+    const auto w0 = std::chrono::steady_clock::now();
+    const double c0 = cpuSecs();
+    for (size_t o = 0; o < n; o += 2048) {
+        const int k = (int)std::min<size_t>(2048, n - o);
+        if (live) std::this_thread::sleep_until(w0 + std::chrono::microseconds((int64_t)(1e6 * (double)(o + k) / rate)));
+        sp.feedIq(&x[o], k, rate, centre, startUtc + shift + (double)(o + k) / rate);
+        if (!live && (o / 2048) % 16 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+    std::printf("%s: %.0f s, engines %s, slots decoded %llu, skipped %llu, CPU %.2f s (%.3f %% of the recording's length)\n", path, n / (double)rate,
+                sp.describe().c_str(), (unsigned long long)sp.slotsDecoded(), (unsigned long long)sp.slotsSkipped(), cpuSecs() - c0, 100.0 * (cpuSecs() - c0) / (n / (double)rate));
+    for (auto& l : lines) std::printf("  %s\n", l.c_str());
+    for (auto& kv : per) std::printf("%s: %d spots\n", kv.first.c_str(), kv.second);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc > 4 && std::strcmp(argv[1], "clip") == 0) return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
+    if (argc > 4 && std::strcmp(argv[1], "real") == 0) {
+        bool swap = false, live = false;
+        for (int i = 5; i < argc; ++i) { if (!std::strcmp(argv[i], "swap")) swap = true; if (!std::strcmp(argv[i], "live")) live = true; }
+        return runReal(argv[2], std::atof(argv[3]), std::atof(argv[4]), swap, live);
+    }
     const bool cpu = argc > 1 && std::strcmp(argv[1], "cpu") == 0;
     std::printf("── the registry ──\n");
     {
