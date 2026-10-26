@@ -347,6 +347,7 @@ std::string normalise(const std::string& in) {
     std::string o;
     bool lastSpace = true;
     for (char c : in) {
+        if (((unsigned char)c & 0xC0) == 0x80) continue;      // ★ a UTF-8 character is ONE unsupported character: one '#'
         if (c == 0 || c == '~' || c == '\t' || c == '\n' || c == '\r') c = ' ';
         if (c >= 'a' && c <= 'z') c = (char)(c - 32);
         if (c != ' ' && alphaIndex(c) < 0) c = '#';
@@ -654,7 +655,7 @@ struct Decoder::Impl {
     static constexpr int kNdf = 65; static constexpr double kDfStep = 0.25;   // ±8 Hz; the passes take every 6th, 2nd, 1st
     std::vector<float> refRe, refIm;
 
-    struct Cand { int64_t ws; double f0; int64_t ready; bool cont; int range; double dfRange; };
+    struct Cand { int64_t ws; double f0; int64_t ready; bool cont; int range; double dfRange; bool recentred = false; };
     std::vector<Cand> pending;
     struct Done { int64_t ws; double f0; };
     std::deque<Done> done;
@@ -730,16 +731,19 @@ struct Decoder::Impl {
     int64_t msAt(int64_t sample) const { return startMs + (int64_t)std::llround((double)sample * 1000.0 / cfg.rate); }
     float* row(int64_t t) { return spec.data() + (size_t)(t & (kRows - 1)) * nbStore; }
     float* scoreRow(int64_t t) { return score.data() + (size_t)(t & (kScoreRows - 1)) * nSearch; }
-    float at(int64_t s) const { return ring[(size_t)(s & (kRing - 1))]; }
+    float at(int64_t s) const { return s < 0 ? 0.0f : ring[(size_t)(s & (kRing - 1))]; }   // ★ before the stream: silence
 
     void feed(const float* x, int n) {
         for (int i = 0; i < n; ++i) {
             ring[(size_t)(nAbs & (kRing - 1))] = x[i];
             ++nAbs;
             // a row t covers samples [48t, 48t + 384)
-            if (nAbs >= nextRow * kHop + kNsps) { computeRow(nextRow); ++nextRow; scoreAndPick(); }
+            if (nAbs >= nextRow * kHop + kNsps) {
+                computeRow(nextRow); ++nextRow; scoreAndPick();
+                // ★ candidates are decoded as soon as their frame is in — never after a big feed has pushed it out of the ring
+                if (!pending.empty() && readyAny()) runPending();
+            }
         }
-        runPending();
         expireMessages();
     }
 
@@ -770,13 +774,14 @@ struct Decoder::Impl {
         scoredTo = t + 1;
         // ★ peak-pick row p = t − 4: a local maximum over ±4 rows (half a symbol) and ±2 bins (one tone), above threshold
         const int64_t p = t - 4;
-        if (p < 4) return;
+        if (p < 0) return;
         const float* sp = scoreRow(p);
         for (int b = 0; b < nSearch; ++b) {
             const float v = sp[b];
             if (v <= thr) continue;
             bool peak = true;
             for (int dt = -4; dt <= 4 && peak; ++dt) {
+                if (p + dt < 0) continue;                       // ★ no rows before the stream began
                 const float* o = scoreRow(p + dt);
                 for (int db = -2; db <= 2; ++db) {
                     if (!dt && !db) continue;
@@ -795,6 +800,7 @@ struct Decoder::Impl {
         pickedTo = p + 1;
     }
 
+    bool readyAny() const { for (auto& c : pending) if (c.ready <= nAbs) return true; return false; }
     bool isDone(int64_t ws, double f0) const {
         for (auto& d : done) if (std::llabs(d.ws - ws) < kNsps && std::fabs(d.f0 - f0) < 20.0) return true;
         return false;
@@ -887,6 +893,14 @@ struct Decoder::Impl {
                     if (s > best) { best = s; bd = d; bf = dfi; }
                 }
         }
+        // ★ The best was at the edge of the search: the real frame lies beyond it (a sidelobe of the sync, or a peak of the
+        //   coarse grid that belongs to a neighbouring cell, can win the cell). Search again centred there — once.
+        if (!c.recentred && (bd == -D || bd == D || bf <= mid - dfMax + 1 || bf >= mid + dfMax - 1)) {
+            Cand c2 = c; c2.recentred = true;
+            c2.ws = c.ws + (int64_t)bd * kDec; c2.f0 = c.f0 + (bf - mid) * kDfStep;
+            if (!isDone(c2.ws, c2.f0)) return decodeAt(c2);
+            return false;
+        }
         // every symbol's four tones at (d, df)
         float P[kFrameSyms][4], Zr[kFrameSyms][4], Zi[kFrameSyms][4];
         auto measure = [&](int d, int dfi) {
@@ -915,23 +929,10 @@ struct Decoder::Impl {
         const float snr = (float)(10.0 * std::log10(a2 / noise * (kBaud / 2500.0)));
         const float g = (float)(2.0 * std::sqrt(a2) / noise);
 
-        /* ★★ COHERENCE of a tone sequence: blocks of eight symbols summed WITH their phases, against the same symbols'
+        /* ★★ COHERENCE of a tone sequence (computed without measuring the other three tones — a quarter of the work): blocks of eight symbols summed WITH their phases, against the same symbols'
          *    powers summed without. Noise — and any codeword that is not really there — gives ≈ 1 whatever the decoder
-         *    chose, its phases being random. A JTTY frame gives ≈ 1 + 8·(Es/N0)/(1 + Es/N0): five or more at −16 dB. The
+         *    chose, its phases being random. A JTTY frame gives ≈ (1 + 8·Es/N0)/(1 + Es/N0): five or more at −16 dB. The
          *    CRC cannot tell a lucky path through noise from a frame; this can, because h = 1 makes the sender coherent. */
-        auto coherence = [&](const uint8_t* tones) {
-            double num = 0, den = 0;
-            for (int b0 = 0; b0 < kFrameSyms; b0 += 8) {
-                double sr = 0, si = 0;
-                for (int j = b0; j < std::min(kFrameSyms, b0 + 8); ++j) { const int t = tones[j]; sr += Zr[j][t]; si += Zi[j][t]; den += P[j][t]; }
-                num += sr * sr + si * si;
-            }
-            return den > 0 ? (float)(num / den) : 0.0f;
-        };
-        /* Follow the phase: ±1 Hz in 0.25 Hz and ±2 samples around (d, df), the coherence of `tones` the measure.
-         *  Leaves Zr/Zi/P measured at the best and returns its coherence. */
-        int cd = bd, cf = bf;
-        /* The coherence of `tones` at (d, df) without measuring the other three tones — a quarter of the work. */
         auto coherenceAt = [&](int d, int dfi, const uint8_t* tones) {
             const double step = -2 * M_PI * (dfi - mid) * kDfStep / kBaud + M_PI;
             const float sr1 = (float)std::cos(step), si1 = (float)std::sin(step);
@@ -990,8 +991,19 @@ struct Decoder::Impl {
                 int mx = 0; for (int k = 1; k < 4; ++k) if (p[k] > p[mx]) mx = k;
                 if (mx == tones[kSyncSyms + j]) ++agree;
             }
-            if (std::getenv("JTTY_DBG")) std::fprintf(stderr, "DBGOK sr %.3f agree %d rank %d coh %.2f pass %d\n", syncRatio, agree, rank, coh, (int)coherentPass);
-            // ★ a strong sync cannot be noise; a weak one must ALSO be coherent (docs/v12/JTTY.md §5)
+            /* ★★ THE FRAME MUST BE CONSISTENT WITH ITSELF (docs/v12/JTTY.md §5). Its sync says how strong it is (Es/N0);
+             *    a real frame that strong puts its tones where the decoder says at a rate that follows from it (4-FSK
+             *    noncoherent detection), and lines them up in phase. Noise that slipped a path through the CRC fails the
+             *    first on the weak side, the coherence on all sides; a STRONG coherent interferer (an FT8 signal lights
+             *    a sync very brightly) fails the agreement. A weak frame must also be coherent; a strong one need not
+             *    (fading may scramble its phase), but then its agreement must be what its strength promises. */
+            const double esn0 = a2 / noise;
+            // ★ predicted from HALF the sync's Es/N0: a peak that was picked from noise reads high, and GFSK, residual timing
+            //   and frequency cost a real frame some symbols — the test only has to catch what is grossly inconsistent
+            const double pc = probCorrect4(0.5 * esn0);
+            // ★ capped at 38 of 46: a strong real frame keeps a few symbols for QRM, clicks and a fade
+            const double minAgree = std::min(38.0, kDataSyms * pc - 3.0 * std::sqrt(kDataSyms * pc * (1 - pc)) - 2.0);
+            if (esn0 >= 6.0 && agree < minAgree) return false;   // ★ weaker than that, the coherence gates below decide
             if (syncRatio < kStrongSync) {
                 if (coh < (coherentPass ? kMinCoherenceCoherent : kMinCoherence)) return false;
                 if (coherentPass && agree < kMinAgreeCoherent) return false;
@@ -1058,6 +1070,10 @@ struct Decoder::Impl {
     static constexpr float kMinCoherence = 3.2f;
     static constexpr float kMinCoherenceCoherent = 4.5f;
     static constexpr int kMinAgreeCoherent = 24;
+    /** P(the strongest of 4 noncoherent tones is the sent one) at Es/N0 = e — the classic closed form. */
+    static double probCorrect4(double e) {
+        return 1.0 - 1.5 * std::exp(-e / 2.0) + 1.0 * std::exp(-2.0 * e / 3.0) - 0.25 * std::exp(-3.0 * e / 4.0);
+    }
     static constexpr float kStrongSync = 5.0f;     // a fine sync ratio noise has not been seen to reach
     static constexpr int kPhaseWin = 8;
 

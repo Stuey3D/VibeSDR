@@ -2597,6 +2597,8 @@ const BLOCKABLE = [
   { id: "ism",    label: "ISM sensors and meters" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
   { id: "dsc",    label: "DSC" },
+  /* ★ V12 JTTY (docs/v12/JTTY.md) — the WSJT-X 3.2 keyboard mode, every JTTY signal in a listener's passband. */
+  { id: "jtty",   label: "JTTY" },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   { id: "aprs",   label: "APRS" },

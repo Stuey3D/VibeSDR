@@ -45,6 +45,7 @@
 #include "vibe_cw_run.h"
 #include "vibe_aprs_run.h"    // ★ V12 APRS (1200 Bd VHF, 300 Bd HF) on the listener's audio — docs/v12/AIS-APRS.md
 #include "vibe_dsc_run.h"
+#include "vibe_jtty_run.h"
 #include "vibe_clock.h"
 #include "vibe_thread.h"
 
@@ -508,7 +509,7 @@ public:
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : dsc_ ? "dsc" : aprs_ ? "aprs" : "none";
+             : dsc_ ? "dsc" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -567,7 +568,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "dsc" || e == "aprs";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "dsc" || e == "aprs" || e == "jtty";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -606,7 +607,7 @@ private:
         return j.substr(p + 1, e - p - 1);
     }
 
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || dsc_ || aprs_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || dsc_ || aprs_ || jtty_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -621,6 +622,7 @@ private:
         cw_.reset();
         aprs_.reset();
         dsc_.reset();
+        jtty_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
         active_.store(false, std::memory_order_relaxed);
@@ -763,6 +765,8 @@ private:
             return;
         } else if (ext == "dsc") {
             buildDscLocked_(msg);
+        } else if (ext == "jtty") {
+            buildJttyLocked_();
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
             /* ★★ RTTY, ONE CLICK (Stuart, 2026-10-04: "auto config the baud and shift etc so again its a one click use"). The
              *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
@@ -861,6 +865,19 @@ private:
         else rf = [rfOf, dial, cf] { return rfOf ? rfOf(cf) : (dial ? dial() : 0.0) + cf; };
         dsc_.reset(new DscRun(vhf, cf, std::move(rf), std::move(o)));
         log(vhf ? std::string("decoder attached: DSC (VHF channel 70)") : "decoder attached: DSC (MF/HF), tones around " + std::to_string((int)cf) + " Hz");
+    }
+    /** ★★ JTTY (V12, 2026-10-26): the WSJT-X 3.2 keyboard mode — every JTTY signal in the listener's passband at once
+     *  (decoders/jtty_decoder.h); vibe_jtty_run.h shapes what is sent. No parameters: there is nothing to set. */
+    void buildJttyLocked_() {
+        JttyRun::Out o;
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
+        o.json = [this](const std::string& j) { broadcastText(j); };
+        auto rfOf = env_.rfOfAudio; auto dial = env_.dialHz;
+        std::function<double(double)> rf = [rfOf, dial](double a) { return rfOf ? rfOf(a) : (dial ? dial() : 0.0) + a; };
+        jtty_.reset(new JttyRun(std::move(rf), std::move(o)));
+        active_.store(true, std::memory_order_relaxed);
+        log("decoder attached: JTTY");
     }
     void sendSstv(const std::vector<uint8_t>& m) {
         std::lock_guard<std::mutex> sl(sstvSendMtx_);   // ★ SSTV has a video-decode thread of its own
@@ -1074,6 +1091,12 @@ private:
                 if (!dec.empty()) sstv_->process(dec.data(), (int)dec.size());
                 return;
             }
+            if (jtty_) {
+                // ★ JTTY: float audio straight in; its lines, lists, spots and state are sent from inside (JttyRun).
+                jtty_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (dsc_) {
                 // ★ DSC: float audio straight in; its lines, JSON and state are sent from inside (DscRun).
                 dsc_->feedAudio(data, count);
@@ -1149,6 +1172,7 @@ private:
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
     std::unique_ptr<vibeaprs::Run> aprs_;     // ★ APRS (V12): the modem + the station list (vibe_aprs_run.h)
     std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
+    std::unique_ptr<JttyRun> jtty_;           // ★ JTTY: every JTTY signal in the passband (buildJttyLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
     std::atomic<double> cwWidth_{0.0};
     DecoderTapPtr cwTap_;                     // ★ the gallery's CW summary (Env::cwSpotTap), under tapMtx_

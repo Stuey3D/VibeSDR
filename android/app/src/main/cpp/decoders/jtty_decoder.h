@@ -16,15 +16,20 @@
 //  2. A SYNC SCORE for every (eighth-symbol, half-tone) cell: the 13 sync tones' power against the other three tones'
 //     power at the same instants. Self-normalising (a carrier or RTTY scores ≈ 1, noise ≈ 1, a JTTY frame 1 + Es/N0),
 //     vector loops over frequency (four bins an instruction), scalar twin as the reference.
-//  3. A local peak above the threshold is a candidate. It is mixed down, low-passed and decimated to 750 Hz (a 96-tap
-//     FIR — SIMD dot products), then searched finely in time (1/24 symbol) and frequency (1.5 Hz) on the sync alone.
+//  3. A local peak above the threshold is a candidate. It is mixed down, low-passed and decimated to 750 Hz (a 97-tap
+//     FIR — SIMD dot products), then searched finely: the sync alone every 1/24 symbol and 1.5 Hz, then all 59 symbols
+//     (decision-directed) every 0.5 Hz. A best found at the edge of the search is searched again, centred there.
 //  4. Every symbol's four tone correlations → a soft metric per tone (ln I₀ of the matched-filter output — the exact
 //     noncoherent likelihood, not a hard decision) → a TAIL-BITING LIST VITERBI (two circular passes, every end state
 //     traced back, the best paths that close on themselves) → each path through the CRC-12, the reserved-zero bit and the
-//     WHOLE source grammar. The first that passes is the frame. Nothing else is ever shown.
-//  5. A frame that decoded tells us where the NEXT frame of the same transmission would be (59 symbols later, same
-//     frequency): that position is tried directly even if its sync never crossed the threshold — so a long message keeps
-//     decoding below the level at which a lone frame would be found.
+//     WHOLE source grammar. If none passes, a COHERENT pass: h = 1 makes the transmitter phase-continuous, so the best
+//     path's tones give the carrier phase symbol by symbol, and the coherent likelihood 2·A·Re(z·e^−jψ)/N is decoded again.
+//  5. ★★ The CRC alone lets a path through noise pass now and then (12 bits, many candidates a second). So a frame must
+//     also be CONSISTENT WITH ITSELF: its tones must line up in phase (COHERENCE — noise ≈ 1, a frame ≈ 5–8; measured
+//     gates per pass), and a strongly synced frame must put its tones where its strength says (a strong FT8 signal can
+//     light a sync; it cannot fake 38 of 46 data symbols). Ten hours of noise and an hour of real FT8/FT4: no frame.
+//     A frame that decoded also says where the NEXT frame of its transmission is (59 symbols on, same frequency): that
+//     position is tried directly even if its sync never crossed the threshold.
 //  6. Frames on one frequency in sequence are one MESSAGE; the end-of-message flag closes it. Calls in call atoms are
 //     SPOTS ("CQ K1ABC CQ" and "TU K1ABC CQ" are a station calling; any other call atom is a station in a QSO).
 //
@@ -157,7 +162,7 @@ public:
         double rate = 12000;          ///< ★ must be 12000 (the caller decimates) — the symbol is 384 samples
         double loHz = 150, hiHz = 3300;   ///< where tone 0 may be (+94 Hz for the top tone)
         float  syncThreshold = 0;     ///< 0 = the built-in, measured value
-        int    listSize = 4;          ///< Viterbi paths tried against the CRC, per pass
+        int    listSize = 4;          ///< Viterbi paths tried against the CRC, per pass (noncoherent, coherent)
         int    keepGoneSec = 900;     ///< how long a signal no longer heard stays in signals()
         bool   continuation = true;   ///< try the next frame's position directly (step 5 above)
     };
