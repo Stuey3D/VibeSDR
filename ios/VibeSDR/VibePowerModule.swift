@@ -545,6 +545,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     startPathMonitor()
     configureAVSession()
     startEngine()
+    // ★ V12 quiet holds across a reconnect (the screen is still in ADS-B / ISM): the session goes again at once.
+    if quiet { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
     openAudioWs(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
     DispatchQueue.main.async {
       self.setupRemoteCommands()
@@ -1172,6 +1174,42 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   ///     acquisition — DAB stopped working on the Sony Lite (Stuart, 2026-09-29). The web client
   ///     has always held (audio.holdHealing); the native heal never heard about DAB at all.
   ///     Hops to main: `heal` is only ever touched there (healTick). Extends, never shortens.
+  /// ★★★ V12 QUIET — ADS-B and ISM LET GO OF THE AUDIO OUTPUT (Stuart, 2026-10-25: "I switch to the mac and VibeSDR
+  ///     pulls my Airpods over for silence"). Those modes send no audio (the server sends nothing on the audio socket),
+  ///     but the engine kept running and Now Playing said playing — and route arbitration between Apple devices follows
+  ///     exactly that. The web client's AudioPlayer.setQuiet (1f0b204a), here: the player and engine paused, the session
+  ///     released (others notified), Now Playing paused, and every door that would start the output again — the
+  ///     watchdog's revive, the self-heal, ensureRendering, an interruption's resume, a route change — stands down while
+  ///     it holds. ★ The audio SOCKET stays open: with the spectrum socket it is how the server counts the listener
+  ///     (the landing, the leave grace). Leaving quiet restarts the output and gives the server's audio 8 s before the
+  ///     watchdog judges it. Idempotent; main thread.
+  private var quiet = false
+  @objc func setQuiet(_ on: Bool) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.quiet != on else { return }
+      self.quiet = on
+      self.notePath(on ? "quiet: output released (a mode with nothing to hear)" : "quiet: output back")
+      if on {
+        self.playerNode?.pause()
+        self.audioEngine?.pause()
+        if !self.fmdxAudio && !self.externalAudio {
+          try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+      } else {
+        self.lastPacketAt = Date()
+        try? AVAudioSession.sharedInstance().setActive(true)
+        if let e = self.audioEngine {
+          if !e.isRunning { do { try e.start() } catch { self.healRebuildPipeline() } }
+        } else if self.isRunning {
+          self.startEngine()
+        }
+        // ★ play() only on a RUNNING engine — on a stopped one it is an uncatchable Obj-C exception.
+        if !self.isMuted, self.audioEngine?.isRunning == true { self.playerNode?.play() }
+      }
+      self.updateNowPlaying()
+    }
+  }
+
   @objc func holdHealing(_ ms: NSNumber) {
     let seconds = max(0, ms.doubleValue) / 1000
     DispatchQueue.main.async { [weak self] in
@@ -1184,7 +1222,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   /// Main thread, once a second.
   private func healTick() {
     healLock.lock(); let rx = healRx; let played = healPlayed; healLock.unlock()
-    let expected = isRunning && !externalAudio && !fmdxAudio && !dataSaverDisconnected && !isMuted
+    let expected = isRunning && !externalAudio && !fmdxAudio && !dataSaverDisconnected && !isMuted && !quiet
     let d = heal.tick(now: ProcessInfo.processInfo.systemUptime, rx: rx, played: played, expected: expected)
     guard d.action != .none else { return }
     let route = AVAudioSession.sharedInstance().currentRoute.outputs
@@ -1405,7 +1443,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // live in JS, which drives its own resume. Reviving here would (re)open a
     // UberSDR audio WS to the stale currentBase = UberSDR audio under the OWRX
     // stream. Only the native Opus engine (startAudioEngine) is the watchdog's.
-    guard isRunning, !externalAudio, !fmdxAudio, !dataSaverDisconnected else { return }  // FM-DX / data saver own their own WS
+    guard isRunning, !externalAudio, !fmdxAudio, !dataSaverDisconnected, !quiet else { return }  // FM-DX / data saver own their own WS; quiet = nothing is sent
     let stale  = Date().timeIntervalSince(lastPacketAt)
     // Packet staleness stays the PRIMARY zombie detector — the regression is
     // "state says alive, frames stop", so wsReady/.running is only a secondary cue.
@@ -3112,7 +3150,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
              *  INTERRUPTION muted it: a pause the listener chose stays paused. setMuted(false) also
              *  checks the socket survived (checkLocalAudioAlive). */
             self.setMuted(false)
-          } else if !self.isMuted {
+          } else if !self.isMuted && !self.quiet {
             try? self.audioEngine?.start(); self.playerNode?.play()
           }
         }
@@ -3164,8 +3202,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     //   or a self-heal would put a muted Mac back at full volume. Unity everywhere but a Mac.
     engine.mainMixerNode.outputVolume = pageDucked ? 0 : macOutputGain   // ★ a rebuild mid-clip stays quiet
     do {
-      try engine.start()
-      player.play()
+      // ★ V12 quiet (setQuiet): built, not started — a reconnect in ADS-B / ISM must not take the output back.
+      if !quiet { try engine.start(); player.play() }
       NSLog("[VibePowerModule] engine started %.0fHz %dch", ENGINE_RATE, Int(ENGINE_CH))
       notePath("engine started")
     } catch {
@@ -3181,7 +3219,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     NotificationCenter.default.addObserver(
       forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
     ) { [weak self] _ in
-      guard let self, self.isRunning else { return }
+      guard let self, self.isRunning, !self.quiet else { return }   // ★ quiet: rebuilt when it ends, never started now
       NSLog("[VibePowerModule] config change — restarting")
       DispatchQueue.main.async {
         self.playerNode?.stop(); self.audioEngine?.stop()
@@ -3312,7 +3350,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
    *  only a full session rebuild (a phone call, or Kiwi warming it first) cured it.
    *  This applies that rebuild proactively the moment we have a buffer to play. */
   private func ensureRendering() {
-    guard isRunning else { return }
+    guard isRunning, !quiet else { return }
     let engineDown = !(audioEngine?.isRunning ?? false)
     let playerDown = !(playerNode?.isPlaying ?? false)
     guard engineDown || playerDown else { return }
@@ -3432,7 +3470,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     // RTL-TCP/local "resume" pause = muted in place (engine kept alive) — that's a
     // paused state for the lock screen even though we're not disconnected.
-    let paused = dataSaverDisconnected || reconnectFailed
+    let paused = dataSaverDisconnected || reconnectFailed || quiet
               || (externalAudio && externalPauseMode == "resume" && isMuted)
               || (fmdxAudio && isMuted)
     var info: [String: Any] = [

@@ -169,3 +169,88 @@ export function adsbListWidth(areaW: number): number {
 
 /** ★ The collapse state, as it is kept per device ('1' open, '0' a pill). Open unless somebody shut it. */
 export const parseListOpen = (v: string | null | undefined): boolean => v !== '0';
+
+/* ── ★★ THE LIST HEADER'S CHIPS (V12, Stuart 2026-10-25): NEWEST · FURTHEST · LONGEST TRACKED ─────────────────────────
+ * The web client's list header (web/client/src/adsb.ts adsbNewest / adsbFurthest / adsbLongestTracked) — ONE RULE, TWO
+ * READERS, held to each other by scripts/test_adsb_furthest.ts. Tap = show it on the map, so a chip names only an aircraft
+ * that is ON the map (a position in the report). FURTHEST moved here from the map's top bar, as on the web (d48dfe43: the
+ * top bar crowded on a portrait iPhone). Read from the RAW report (the server's fields — tracked_nm, r), not `Aircraft`. */
+
+export interface AdsbChipSrc { hex?: unknown; flight?: unknown; r?: unknown; lat?: unknown; lon?: unknown; tracked_nm?: unknown }
+export interface AdsbChip { key: 'NEWEST' | 'FURTHEST' | 'LONGEST TRACKED'; figure: string; name: string; hex: string }
+
+const chipNum = (v: unknown): number | null => { const n = Number(v); return v == null || v === '' || !isFinite(n) ? null : n; };
+/** The web's cleanHex: the ~ of a non-ICAO address kept, lower case, 7 at most. */
+export const chipHex = (v: unknown): string => String(v ?? '').replace(/[^~0-9A-Fa-f]/g, '').slice(0, 7).toLowerCase();
+const onMap = (a: AdsbChipSrc) => chipNum(a.lat) != null && chipNum(a.lon) != null;
+/** As the list names it: its callsign, else its registration, else its address. */
+const chipName = (a: AdsbChipSrc, hex: string) => String(a.flight || '').trim() || String(a.r || '').trim() || hex.toUpperCase();
+const hasName = (a: AdsbChipSrc) => !!(String(a.flight || '').trim() || String(a.r || '').trim());
+
+/** Great-circle distance, NM — the web's rangeBearing (R = 6371008.8 m). */
+function chipNm(rx: { lat: number; lon: number }, lat: number, lon: number): number {
+  const D = Math.PI / 180, dp = (lat - rx.lat) * D, dl = (lon - rx.lon) * D;
+  const h = Math.sin(dp / 2) ** 2 + Math.cos(rx.lat * D) * Math.cos(lat * D) * Math.sin(dl / 2) ** 2;
+  return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(h))) / 1852;
+}
+
+/** FURTHEST: the located aircraft farthest from the receiver; null without a receiver position. ★ Named by callsign, else
+ *  its address — the web's adsbFurthest exactly (it does not use the registration). */
+export function adsbFurthestOf(list: readonly AdsbChipSrc[] | null, rx: { lat: number; lon: number } | null):
+    { hex: string; nm: number; name: string } | null {
+  if (!list || !rx) return null;
+  let best: { hex: string; nm: number; name: string } | null = null;
+  for (const a of list) {
+    const lat = chipNum(a.lat), lon = chipNum(a.lon), hex = chipHex(a.hex);
+    if (lat == null || lon == null || !hex) continue;
+    const nm = chipNm(rx, lat, lon);
+    if (!best || nm > best.nm) best = { hex, nm, name: String(a.flight || '').trim() || hex.toUpperCase() };
+  }
+  return best;
+}
+
+/** LONGEST TRACKED: the aircraft the server has followed the furthest (tracked_nm ≥ 1), on the map. */
+export function adsbLongestTrackedOf(list: readonly AdsbChipSrc[] | null): { hex: string; nm: number; name: string } | null {
+  if (!list) return null;
+  let best: { hex: string; nm: number; name: string } | null = null;
+  for (const a of list) {
+    const nm = chipNum(a.tracked_nm), hex = chipHex(a.hex);
+    if (nm == null || nm < 1 || !hex || !onMap(a)) continue;
+    if (!best || nm > best.nm) best = { hex, nm, name: chipName(a, hex) };
+  }
+  return best;
+}
+
+/** NEWEST: the aircraft first heard most recently, with a name and a position. The report carries no "first heard", so
+ *  `firstSeen` notes when each hex FIRST appears (call once per report). The first report's aircraft were there before the
+ *  listener arrived — stamped 0, never chosen. One that leaves is forgotten (it is new again if it comes back). null clears. */
+export function adsbNewestOf(list: readonly AdsbChipSrc[] | null, firstSeen: Map<string, number>, nowMs: number):
+    { hex: string; name: string; ageS: number } | null {
+  if (!list) { firstSeen.clear(); return null; }
+  const fresh = firstSeen.size === 0;
+  const byHex = new Map<string, AdsbChipSrc>();
+  for (const a of list) {
+    const hex = chipHex(a.hex);
+    if (!hex) continue;
+    byHex.set(hex, a);
+    if (!firstSeen.has(hex)) firstSeen.set(hex, fresh ? 0 : nowMs);
+  }
+  for (const h of [...firstSeen.keys()]) if (!byHex.has(h)) firstSeen.delete(h);
+  let best = '', at = 0;
+  for (const [h, t] of firstSeen) { const a = byHex.get(h); if (t > at && a && hasName(a) && onMap(a)) { at = t; best = h; } }
+  if (!best) return null;
+  return { hex: best, name: chipName(byHex.get(best)!, best), ageS: Math.max(0, Math.round((nowMs - at) / 1000)) };
+}
+
+/** The header's chips in the web's order — NEWEST, FURTHEST, LONGEST TRACKED — each only when it has an aircraft. */
+export function adsbChips(list: readonly AdsbChipSrc[] | null, rx: { lat: number; lon: number } | null,
+                          firstSeen: Map<string, number>, nowMs: number): AdsbChip[] {
+  const out: AdsbChip[] = [];
+  const nw = adsbNewestOf(list, firstSeen, nowMs);
+  if (nw) out.push({ key: 'NEWEST', figure: '', name: nw.name, hex: nw.hex });
+  const far = adsbFurthestOf(list, rx);
+  if (far) out.push({ key: 'FURTHEST', figure: `${Math.round(far.nm)} NM`, name: far.name, hex: far.hex });
+  const lg = adsbLongestTrackedOf(list);
+  if (lg) out.push({ key: 'LONGEST TRACKED', figure: `${Math.round(lg.nm)} NM`, name: lg.name, hex: lg.hex });
+  return out;
+}

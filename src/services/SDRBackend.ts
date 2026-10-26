@@ -287,6 +287,12 @@ export interface SDRBackend {
   /** ms since the last ADS-B report while held (0 when not in ADS-B) — and letting a lapsed hold go. */
   adsbSilentMs?(): number;
   adsbForget?(): void;
+  /** ★ V12 ISM on a VibeServer (docs/v12/ISM-DECODER.md): the whole radio to an ISM band, sensors decoded on the server.
+   *  No band = where ISM last was, else the server's landing band; `step` ±1 moves one band (clamped); `hz` puts the
+   *  capture on an exact frequency. Tune/zoom are refused while it runs, as in ADS-B. */
+  ism?(on: boolean, o?: { band?: string; step?: number; hz?: number }): void;
+  /** True while the receiver is in ISM. */
+  readonly inIsm?: boolean;
 
   /**
    * ★★ Carry an admin credential on every socket this backend opens.

@@ -49,10 +49,13 @@ import { USER_AGENT } from '../constants/version';
 import { rttyFraming } from '../utils/rttySpec';
 import { guard, guardJson } from './faultLog';
 import { cleanText, cleanMode } from '../utils/safeText';
+import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, type CwList, type CwSpot } from './cwList';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time';
+/** ★ V12 'cw' — a VibeServer's own CW decoder: ONE SIGNAL ('cw', on this listener's audio) or the SKIMMER ('cwskim',
+ *  a segment of IQ centred on the dial). One name here; which extension is attached is `cwSkim`. Not UberSDR's `morse`. */
+export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw';
 
 /** The time signal stations the server can decode. Each is a separate extension name on the
  *  wire — the shim builds a TimeDecoder for the one asked for. */
@@ -190,6 +193,10 @@ export interface DecoderCallbacks {
   onNavtexState?: (state: number) => void;
   /** Digital/CW spots stream (after startSpots). */
   onSpot?:      (spot: SpotRow) => void;
+  /** ★ V12 CW (VibeServer): the signals being decoded (at most once a second, only when changed — vibe_cw_run.h). */
+  onCwSignals?: (list: CwList) => void;
+  /** ★ V12 CW (VibeServer): a callsign heard identifying itself (CQ, DE, TEST — twice). */
+  onCwSpot?:    (spot: CwSpot) => void;
   /** Chat (rides this WS — chat_websocket.go via the dxcluster handler).
    *  isHistory=true for the server's buffer replay after subscribe_chat —
    *  render silently, no unread pulse. Already-seen messages are deduped
@@ -262,6 +269,10 @@ export class DecoderClient {
   wefaxLpm       = 120;
   whisperLang    = 'auto';
   morseQuality: MorseQuality = 'all';
+  /** ★ V12 CW: SKIMMER (true, 'cwskim' over `cwWidth` Hz centred on the dial) or ONE SIGNAL (false, 'cw'). Changing
+   *  either is a re-attach — a different decoder on the server (the caller calls start('cw') again). */
+  cwSkim = false;
+  cwWidth: number = CW_DEFAULT_WIDTH;
 
   constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string, authSuffix = '') {
     this.baseUrl  = baseUrl.replace(/\/+$/, '');
@@ -547,6 +558,15 @@ export class DecoderClient {
               msg: spotStr(d.message ?? d.msg ?? d.text),
               bearing: spotNum(d.bearing ?? d.bearing_deg ?? d.azimuth),
             });
+          } else if (m.type === 'cw_signals' && m.data) {
+            // ★ V12: only while OUR CW decoder is attached — on a shared dial the server mirrors a running decoder.
+            if (this.active !== 'cw') return;
+            const l = parseCwSignals(m.data);
+            if (l) this.cb.onCwSignals?.(l);
+          } else if (m.type === 'cw_spot' && m.data && this.active === 'cw' && typeof m.data.callsign === 'string') {
+            // ★ V12: a VibeServer's CW decoder names the call `callsign` (UberSDR's skimmer feed, below, `dx_call`).
+            const sp = parseCwSpot(m.data, Date.now());
+            if (sp) this.cb.onCwSpot?.(sp);
           } else if (m.type === 'cw_spot' && m.data) {
             const d = m.data;
             this.cb.onSpot?.({
@@ -679,6 +699,10 @@ export class DecoderClient {
       //    starting at second 10). One shared decoder with a "station" parameter would have to
       //    switch all of that at runtime for no gain.
       case 'time':    return { extension_name: this.timeStation, params: {} };
+      // ★ V12 CW: the skimmer's segment rides as `width` (the server reads 12–192 kHz; the box offers 24/48/96).
+      case 'cw':      return this.cwSkim
+        ? { extension_name: 'cwskim', params: { width: this.cwWidth } }
+        : { extension_name: 'cw', params: {} };
     }
   }
 
@@ -692,13 +716,20 @@ export class DecoderClient {
 
     // ★ TIME rides the same 0x01 text frame as RTTY/NAVTEX — the shim writes every station's
     //   output into the one decoded-text buffer, so no new parser is needed here.
-    if (name === 'rtty' || name === 'navtex' || name === 'time') {
+    // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw') {
       if (t === 0x01) {
         if (u8.length < 13) return;
         const tl = v.getUint32(9, false);
         if (tl <= 0 || u8.length < 13 + tl) return;
         this.cb.onText(utf8(u8.subarray(13, 13 + tl)));
         this.cb.onDot('active');
+      } else if (name === 'cw' && t === 0x03) {
+        // ★ CW's state: 0 nothing heard, 1 carriers, 3 decoding (vibe_cw_run.h).
+        if (u8.length < 2) return;
+        const s = u8[1];
+        this.cb.onStatus(s >= 3 ? 'decoding' : s >= 1 ? 'carriers heard' : 'listening…');
+        this.cb.onDot(s >= 3 ? 'active' : s >= 1 ? 'sync' : 'idle');
       } else if ((name === 'rtty' || name === 'navtex') && t === 0x03) {
         /* ★★ NAVTEX'S STATE IS 0x03 TOO (2026-10-05). The host sends every FSK decoder's state as 0x03
          *  (vibe_decoder_host.h, fsk_->onState); this waited for a 0x02 'sync' frame for NAVTEX that nothing

@@ -57,6 +57,9 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       /** ★★★ Hold the NATIVE self-heal across a legitimate pause (a DAB transition) — see
        *  holdNativeHealing below. Optional: native builds before it lack it. */
       holdHealing?:      (ms: number) => void;
+      /** ★★ V12: a mode with nothing to hear (ADS-B, ISM) lets go of the output — see setNativeQuiet. iOS only; optional
+       *  (older builds and Android lack it). */
+      setQuiet?:         (on: boolean) => void;
       getDebugInfoSync:  () => string;
       addListener:       (name: string) => void;
       removeListeners:   (count: number) => void;
@@ -72,6 +75,23 @@ export const VibePowerModule = NativeModules.VibePowerModule as
  *  was written (audio.holdHealing); the native heal runs below JS and never heard about DAB.
  *  ★ Extends, never shortens. A native build without the method logs ONCE and carries on — the
  *    heal it would hold does not exist in that build either. */
+/** ★★★ V12 QUIET (Stuart, 2026-10-25: "I switch to the mac and VibeSDR pulls my Airpods over for silence"). ADS-B and
+ *  ISM send no audio, but the native engine kept the output running and Now Playing said "playing" — which is what Apple's
+ *  automatic switching follows. The web's AudioPlayer.setQuiet (1f0b204a): while on, the native player and engine are
+ *  paused, the session released and Now Playing paused; the audio SOCKET stays open (the server counts the listener by it).
+ *  ★ Android has no such method: its Bluetooth headsets do not move between devices on their own, so there is nothing
+ *    to release there; a build without it logs once. */
+let setQuietMissingLogged = false;
+export function setNativeQuiet(on: boolean, why: string): void {
+  const fn = VibePowerModule?.setQuiet;
+  if (typeof fn !== 'function') {
+    if (!setQuietMissingLogged) { setQuietMissingLogged = true; noteAudioEvent(`quiet ${on ? 'on' : 'off'} (${why}) — not in this native build`); }
+    return;
+  }
+  noteAudioEvent(`quiet ${on ? 'on' : 'off'} (${why})`);
+  try { fn(on); } catch { /* the engine is gone */ }
+}
+
 let holdHealingMissingLogged = false;
 /* ★ `quiet`: a REPEATED hold (ADS-B keeps one up for as long as the mode runs) is not news each time — the
  *  first is logged, the renewals are not, or the audio log becomes a column of the same line. */
