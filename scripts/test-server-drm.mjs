@@ -76,7 +76,7 @@ async function server(args, tag) {
     const S = await serverOnce(args, tag);
     if (S.ok || attempt >= 2 || !S.portTaken()) return S;
     console.log('   (the port was taken before the server bound it — starting again on fresh ports)');
-    S.stop();
+    await S.stop();
   }
 }
 async function serverOnce(args, tag) {
@@ -97,7 +97,13 @@ async function serverOnce(args, tag) {
   const status = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
   const up = await until(async () => !!(await status()), 15000);
   const portTaken = () => { try { return /already in use/.test(fs.readFileSync(path.join(dir, 'server.log'), 'utf8')); } catch { return false; } };
-  return { ok: up, portTaken, port, dir, status, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); if (!process.env.VIBE_KEEP) setTimeout(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }, 500); else console.log('   kept', dir); } };
+  return { ok: up, portTaken, port, dir, status, stop: async () => {
+    // ★ AWAITED: a timer here outlived the last scenario — the process exited first and left 16 MB behind per run
+    srv.kill('SIGTERM'); rtl.kill('SIGTERM');
+    if (process.env.VIBE_KEEP) { console.log('   kept', dir); return; }
+    await sleep(500);
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  } };
 }
 async function listener(port, sid, f, mode) {
   const L = {};
@@ -183,7 +189,7 @@ async function scenario(label, args, tag) {
     ok(jsons(L.spec, 'drm').length === n1, 'AM again: no more DRM reports');
     ok(lastWatch() && lastWatch().max >= 1, `AM again: VFO B is offered again (watch max ${lastWatch() && lastWatch().max})`);
     for (const k of ['spec', 'aud']) L[k].close();
-  } finally { S.stop(); }
+  } finally { await S.stop(); }
 }
 
 await scenario('one-pipeline radio (the shared receiver)', ['--freq', String(STATION), '--mode', 'drm', '--users', '1'], 'one');
