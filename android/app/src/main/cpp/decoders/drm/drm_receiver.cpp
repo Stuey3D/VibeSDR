@@ -3,7 +3,9 @@
 #include "vibedsp.h"
 #include <algorithm>
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
+#include <string>
 
 namespace vibedrm {
 
@@ -82,7 +84,18 @@ void Receiver::reset() {
 }
 
 void Receiver::loseSync(const char* why) {
-    if (getenv("VIBE_DRM_DEBUG") && state_ != State::Search) fprintf(stderr, "[drm] lose sync: %s\n", why);
+    if (getenv("VIBE_DRM_DEBUG") && state_ != State::Search)
+        fprintf(stderr, "[drm] lose sync: %s at %.2f s (locked %d, FAC %lld/%lld, MER %.1f dB)\n", why, double(samplesIn24_) / kFs,
+                int(st_.locked), (long long)st_.facGood, (long long)(st_.facGood + st_.facBad), double(facMerAcc_));
+    // ★★ THE SIGNAL PANE'S LOCK GROUP: a LOCK that is lost is a re-acquisition, and the clock for the time-to-lock row
+    //    restarts from it. A search that fails before it ever locked (the frequency or frame test) is part of the SAME
+    //    acquisition — the clock runs on, the lights it had lit go out.
+    const bool wasLocked = st_.locked;
+    if (wasLocked) { ++st_.reacquisitions; st_.lastLoss = why; st_.lastLossAtS = double(samplesIn24_) / kFs; }
+    if (wasLocked || std::string(why) == "reset") acqStart_ = samplesIn24_;
+    for (double& t : st_.lockS) t = -1;
+    dsPdp_.clear(); dsN_ = 0; dop1_ = dop2_ = cf(0, 0); dopN_ = 0; sdcMerAcc_ = 0; sdcMerN_ = 0;
+    st_.delayMs = -1; st_.dopplerHz = -1; st_.sdcMerDb = 0; st_.codeRateA = 0; st_.sdcRate = 0;
     state_ = State::Search;
     mode_ = Mode::None; fft_.reset();
     freq_ = 0; ncoPhase_ = 0; ncoIdx_ = 0;
@@ -96,6 +109,10 @@ void Receiver::loseSync(const char* why) {
     st_.timeSync = st_.freqSync = st_.frameSync = st_.facOk = st_.sdcOk = st_.mscOk = st_.locked = false;
     st_.mode = Mode::None; st_.so = -1; st_.sdc = keepSdc; st_.text.clear(); st_.bitrateBps = 0;
     text_ = TextMessageDecoder();
+}
+
+void Receiver::markLock(int stage) {
+    if (stage >= 0 && stage < 6 && st_.lockS[stage] < 0) st_.lockS[stage] = double(samplesIn24_ - acqStart_) / kFs;
 }
 
 // ── 0. Resampler ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -267,7 +284,7 @@ void Receiver::runSearch() {
     while (w - ts_ >= bufBase_) w -= ts_;
     winPos_ = w;
     ncoPhase_ = 0; ncoIdx_ = winPos_;
-    st_.timeSync = true; st_.mode = mode_;
+    st_.timeSync = true; st_.mode = mode_; markLock(0);
     state_ = State::Freq;
 }
 
@@ -340,7 +357,7 @@ void Receiver::runFreq() {
     }
     freq_ += (bi - dmax) * spacing;
     ncoPhase_ = 0; ncoIdx_ = winPos_;
-    st_.freqSync = true;
+    st_.freqSync = true; markLock(1);
     state_ = State::Track;
     trackStart_ = winPos_;
     tScore_.assign(size_t(mi.ns), 0.0); symCount_ = 0; frameSynced_ = false;
@@ -430,8 +447,8 @@ void Receiver::runTrack() {
                     // the NEXT symbol (index symCount_) has local position symCount_ % ns; s = that − b
                     sIdx_ = ((symCount_ - b) % mi.ns + mi.ns) % mi.ns;
                     gIdx_ = int64_t(mi.ns) * 1000 + sIdx_;
-                    st_.frameSync = true;
-                    estSo_ = 3; emap_.build(mode_, estSo_); buildWiener();
+                    st_.frameSync = true; markLock(2);
+                    estSo_ = 3; emap_.build(mode_, estSo_); buildWiener(); delayPlan();
                     ring_.clear(); frS_ = 0;
                     frY_.assign(size_t(emap_.ns * emap_.nk), cf(0, 0)); frW_.assign(frY_.size(), 0.0f);
                     for (auto& f : sf_) f.have = false;
@@ -518,6 +535,18 @@ void Receiver::applyStepToRing(int delta) {
             const cf r = std::polar(1.0f, float(2.0 * M_PI * k * delta / tu_));
             sy.Hp[size_t(j)] *= r; sy.X[size_t(j)] *= r;
         }
+    /* ★★★ …AND THE AVERAGED DELAY PROFILES (2026-10-26, found by the Signal pane's delay-spread test). A window moved
+     *  later by δ sees every path δ samples EARLIER. The ring was brought along, but pdp_ — a ~1.5 s average, which
+     *  steers this very loop — was not: it went on reporting the old position, so the loop stepped again on the next
+     *  symbol, and the next, ~30 times (one sample per symbol, 30 samples overshoot on a static two-path channel), then
+     *  had to walk back. The wandering window smeared the profile it steered from, which made it wander again. Shifting
+     *  both profiles with the window keeps them true to it: one step per sample of real drift. */
+    auto shift = [delta](std::vector<float>& v) {
+        if (v.empty()) return;
+        if (delta > 0) std::rotate(v.begin(), v.begin() + 1, v.end());
+        else if (delta < 0) std::rotate(v.begin(), v.end() - 1, v.end());
+    };
+    shift(pdp_); shift(dsPdp_);
 }
 
 void Receiver::pushEstimator(std::vector<cf>& car) {
@@ -535,6 +564,8 @@ void Receiver::pushEstimator(std::vector<cf>& car) {
     if (!ring_.empty() && ring_.back().g + 1 != sy.g) ring_.clear();
     ring_.push_back(std::move(sy));
     while (int(ring_.size()) > 3 * mi.y + 2) ring_.pop_front();
+    static const bool noStats = getenv("VIBE_DRM_NOSTATS") != nullptr;   // ★ bench knob: the Signal pane's cost, A/B
+    if (!noStats) dopplerAccumulate(ring_.back());
     // the symbol y−1 back now has its next pilots
     const int64_t gOut = gIdx_ - (2 * mi.y - 1);   // ★ two pilot periods of look-ahead: the cubic needs the pilot after next
     if (ring_.front().g > gOut) return;
@@ -586,6 +617,9 @@ void Receiver::equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W
         cols.push_back(j);
     }
     if (cols.size() < 2) { Y.assign(size_t(nk), cf(0, 0)); W.assign(size_t(nk), 0.0f); return; }
+    // ★ the Signal pane's delay spread: every y-th symbol, once every column has its pilot (the full plan)
+    static const bool noStats = getenv("VIBE_DRM_NOSTATS") != nullptr;
+    if (!noStats && sy.g % mi.y == 0 && int(cols.size()) == dsCols_) delayAccumulate(H, cols);
     // ★★ THE CHANNEL'S DELAY PROFILE from the pilot columns (a DFT over them: period Tu/x samples, ≥ 2·Tg in every mode),
     //    averaged over ~10 symbols. Timing holds the centre of the strongest Tg-long block of it at the middle of the guard;
     //    the frequency interpolator is centred on the same point. A single "mean phase slope" did both jobs until annex B's
@@ -607,22 +641,39 @@ void Receiver::equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W
         }
         ++pdpN_;
     }
-    // the strongest Tg-long block, and its centroid
-    double bestE = -1; int bestS = 0;
-    for (int st = 0; st < P; ++st) {
+    // the strongest Tg-long block (a sliding sum: O(P), not O(P·Tg))
+    std::vector<double> blockE(static_cast<size_t>(P));
+    {
         double e = 0;
-        for (int i = 0; i < tg_; ++i) e += pdp_[size_t((st + i) % P)];
-        if (e > bestE) { bestE = e; bestS = st; }
+        for (int i = 0; i < tg_; ++i) e += pdp_[size_t(i % P)];
+        for (int st = 0; st < P; ++st) { blockE[size_t(st)] = e; e += pdp_[size_t((st + tg_) % P)] - pdp_[size_t(st)]; }
     }
-    // ★ the centre of its EXTENT (first to last tap within 15 dB of the strongest), not its power centroid: a power
+    const double bestE = *std::max_element(blockE.begin(), blockE.end());
+    // ★ the centre of a block's EXTENT (first to last tap within 15 dB of its strongest), not its power centroid: a power
     //   centroid swings toward whichever path is up, and the window would chase the fading out of the guard
-    double pk = 0; for (int i = 0; i < tg_; ++i) pk = std::max(pk, double(pdp_[size_t((bestS + i) % P)]));
-    int first = -1, last = -1;
-    for (int i = 0; i < tg_; ++i) if (pdp_[size_t((bestS + i) % P)] > 0.03 * pk) { if (first < 0) first = i; last = i; }
-    double tauC = bestS + (first >= 0 ? 0.5 * (first + last) : tg_ / 2.0);
-    // wrap into (−P/2, P/2] about the target
-    while (tauC - windowMargin() > P / 2.0) tauC -= P;
-    while (tauC - windowMargin() <= -P / 2.0) tauC += P;
+    auto centreOf = [&](int st) {
+        double pk = 0; for (int i = 0; i < tg_; ++i) pk = std::max(pk, double(pdp_[size_t((st + i) % P)]));
+        int first = -1, last = -1;
+        for (int i = 0; i < tg_; ++i) if (pdp_[size_t((st + i) % P)] > 0.03 * pk) { if (first < 0) first = i; last = i; }
+        double c = st + (first >= 0 ? 0.5 * (first + last) : tg_ / 2.0);
+        // wrap into (−P/2, P/2] about the target
+        while (c - windowMargin() > P / 2.0) c -= P;
+        while (c - windowMargin() <= -P / 2.0) c += P;
+        return c;
+    };
+    /* ★★★ AMONG BLOCKS AS STRONG AS THE STRONGEST, THE ONE THE WINDOW ALREADY HOLDS (2026-10-26). The profile wraps every
+     *  Tu/x samples, and where the guard is most of that span (mode D: Tg 176 of 224) two paths can be read EITHER WAY
+     *  ROUND — 4 ms apart, or the other 5.3 ms late — and both readings fit in a Tg-long block with the same energy.
+     *  "Strongest" was then a coin toss decided by noise, and each toss threw the window 108 samples: the true early
+     *  path fell outside the guard (annex B channel 5 in mode D). Within 5 % of the strongest, the reading nearest the
+     *  window's own centre wins; a block that is really stronger still takes over. */
+    double tauC = 0, bestD = 1e30;
+    for (int st = 0; st < P; ++st) {
+        if (blockE[size_t(st)] < 0.95 * bestE) continue;
+        const double c = centreOf(st);
+        const double dd = std::abs(c - windowMargin());
+        if (dd < bestD) { bestD = dd; tauC = c; }
+    }
     const float theta = float(-2.0 * M_PI * tauC / tu_);
     // derotate, interpolate between columns, rotate back
     std::vector<cf> Hd(static_cast<size_t>(nk), cf(0, 0));
@@ -672,6 +723,7 @@ void Receiver::equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W
 // ── FAC per frame ───────────────────────────────────────────────────────────────────────────────────────────────
 
 void Receiver::frameDone() {
+    channelStats();   // ★ the Signal pane's delay spread and Doppler, once per frame (400 ms) — a frame whose FAC fails too
     // the FAC cells in map order
     std::vector<cf> fy; std::vector<float> fw;
     for (int s = 0; s < emap_.ns; ++s)
@@ -709,7 +761,7 @@ void Receiver::frameDone() {
         ++st_.facGood; facFailRun_ = 0; ++facGoodRun_;
         f = fac.frameInSuper();
         lastFac_ = fac; haveFac_ = true;
-        st_.facOk = true; st_.fac = fac;
+        st_.facOk = true; st_.fac = fac; markLock(3);
         if (facGoodRun_ >= 2) st_.locked = true;
         st_.so = fac.so; st_.mscLevels = fac.mscLevels(); st_.sdcLevels = fac.sdcLevels(); st_.longInterleave = fac.longInterleave;
     } else {
@@ -721,7 +773,7 @@ void Receiver::frameDone() {
     // ★ the FAC names the occupancy: re-plan the estimator on it (and drop what was gathered on the wrong plan)
     if (ok && fac.so != estSo_) {
         if (!occupancySupported(mode_, fac.so)) { st_.mscOk = false; return; }
-        estSo_ = fac.so; emap_.build(mode_, estSo_); buildWiener();
+        estSo_ = fac.so; emap_.build(mode_, estSo_); buildWiener(); delayPlan();
         ring_.clear();
         frY_.assign(size_t(emap_.ns * emap_.nk), cf(0, 0)); frW_.assign(frY_.size(), 0.0f);
         for (auto& sfr : sf_) sfr.have = false;
@@ -756,11 +808,19 @@ void Receiver::superFrameDone() {
     cellsOf(kSdc, 0, 0, y, w);
     MlcLayout sdcL;
     if (sdcL.buildSdc(fac.sdcLevels(), m.nSdc) && int(y.size()) == m.nSdc) {
+        st_.sdcRate = double(sdcL.l1 + sdcL.l2) / (2.0 * (sdcL.n1 + sdcL.n2) * sdcL.levels);
+        {   // ★ the SDC's MER, as the MSC's: ~1000 cells once per super frame, cheap
+            double ps = 0, pe = 0;
+            for (const cf& v : y) { const cf d = nearestQam(v, fac.sdcLevels()); ps += std::norm(d); pe += std::norm(v - d); }
+            const float mer = pe > 0 ? float(10.0 * std::log10(ps / pe)) : 40.0f;
+            sdcMerAcc_ = sdcMerN_++ == 0 ? mer : 0.7f * sdcMerAcc_ + 0.3f * mer;
+            st_.sdcMerDb = sdcMerAcc_;
+        }
         std::vector<uint8_t> u = mlc_.decode(y.data(), w.data(), sdcL, 2);
         prbs(u.data(), u.size());
         Sdc next = st_.sdc;
         if (next.parse(u.data(), u.size(), sdcDataBytesTable(mode_, fac.sdcMode, fac.so))) {
-            st_.sdc = next; st_.sdcOk = true; ++st_.sdcGood;
+            st_.sdc = next; st_.sdcOk = true; ++st_.sdcGood; markLock(4);
             st_.protA = next.protA; st_.protB = next.protB;
         } else { st_.sdcOk = false; ++st_.sdcBad; }
     }
@@ -777,6 +837,11 @@ void Receiver::superFrameDone() {
         Rate r[3]; int lcm; mscRates(fac.mscLevels(), st_.sdc.protB, r, lcm);
         double rs = 0; for (int p = 0; p < fac.mscLevels(); ++p) rs += double(r[p].rx) / r[p].ry;
         st_.codeRateB = rs / fac.mscLevels();
+        st_.codeRateA = 0;
+        if (sumA > 0 && mscRates(fac.mscLevels(), st_.sdc.protA, r, lcm)) {
+            double ra = 0; for (int p = 0; p < fac.mscLevels(); ++p) ra += double(r[p].rx) / r[p].ry;
+            st_.codeRateA = ra / fac.mscLevels();
+        }
     }
     if (cdi_.nMux() != m.nMux || cdi_.depth() != fac.interleaveDepth()) cdi_.reset(m.nMux, fac.interleaveDepth());
     cellsOf(kMsc, 0, 2, y, w);
@@ -794,7 +859,7 @@ void Receiver::superFrameDone() {
         std::vector<uint8_t> u = mlc_.decode(z.data(), zw.data(), L, 2);
         prbs(u.data(), u.size());
         const std::vector<uint8_t> bytes = bitsToBytes(u.data(), size_t((sumA + sumB) * 8));
-        st_.mscOk = true;
+        st_.mscOk = true; markLock(5);
         int offA = 0, offB = sumA;
         for (size_t si = 0; si < st_.sdc.streams.size(); ++si) {
             const StreamDesc& sd = st_.sdc.streams[si];
@@ -813,6 +878,139 @@ void Receiver::superFrameDone() {
         }
     }
     if (onSuperFrame) onSuperFrame();
+}
+
+// ── ★★ V12 THE SIGNAL PANE: delay spread and Doppler from the channel estimate the equaliser already has ──────────
+//
+// Neither number costs the receiver anything it was not already computing: the delay profile reads the time-interpolated
+// pilot columns equalise() has just built, the Doppler reads the raw gain-reference estimates already in the ring. Both
+// run on the vibe-drm thread (decoder priority) — never the audio thread. Per symbol the Doppler sum is ~nk/(x·y) complex
+// products (≈ 35 in mode B); every y-th symbol the delay profile is ONE P-point FFT (P ≤ 256). Measured, not a hot loop
+// (docs/v12/DRM.md "CPU"), so plain C++: SIMD here would buy nothing anyone could measure.
+
+/** ★ Per plan (frame sync, or the FAC naming a new occupancy): the Hann window over the pilot columns, the FFT, and the
+ *  receiver's OWN 95 % width — the same chain fed an ideal one-path channel (H = 1). A real channel's width less this one
+ *  is the channel's: the estimator's resolution (~1/bandwidth, widened by the window) is not reported as spread. */
+void Receiver::delayPlan() {
+    const ModeInfo& mi = modeInfo(mode_);
+    const int P = tu_ / mi.x;
+    dsCols_ = int(wienerCols_.size()); dsPdp_.clear(); dsN_ = 0;
+    if (dsCols_ < 8) { dsFft_.reset(); return; }
+    dsK0_ = emap_.kmin + wienerCols_.front();
+    const int span = (emap_.kmin + wienerCols_.back() - dsK0_) / mi.x + 1;   // column positions, the unused carrier's hole included
+    if (span > P) { dsFft_.reset(); return; }
+    if (!dsFft_ || dsFft_->size() != P) dsFft_.reset(new vibedsp::ComplexFFT(P));
+    dsIn_.assign(size_t(P), cf(0, 0)); dsOut_.assign(size_t(P), cf(0, 0));
+    dsWin_.assign(size_t(span), 0.0f);
+    // ★ Hann, not rectangular: a rectangle's −13 dB sidelobes would be read as echoes 3 ms either side of every path
+    for (int m = 0; m < span; ++m) dsWin_[size_t(m)] = float(0.5 - 0.5 * std::cos(2.0 * M_PI * (m + 0.5) / span));
+    for (int c : wienerCols_) { const int m = (emap_.kmin + c - dsK0_) / mi.x; dsIn_[size_t(m)] = cf(dsWin_[size_t(m)], 0); }
+    dsFft_->forward(dsIn_.data(), dsOut_.data());
+    std::vector<float> ideal(static_cast<size_t>(P));
+    for (int t = 0; t < P; ++t) ideal[size_t(t)] = std::norm(dsOut_[size_t(t)]);
+    dsIdeal_ = width95(ideal, 0.0f, double(std::max_element(ideal.begin(), ideal.end()) - ideal.begin()));
+}
+
+/** ★ The power-delay profile: |Σ_m w_m·H(k0 + x·m)·e^{+j2π m t / P}|², t in samples (41.7 µs at 24 kHz), aliasing at
+ *  P = Tu/x samples — ≥ 2·Tg in every mode, so anything the guard can absorb fits. conj in, |·|² out turns the forward FFT
+ *  into the inverse one. Averaged over ~25 profiles (~2 s in mode B): fading moves power between paths within a second,
+ *  and the spread is a property of the paths, not of one moment. */
+void Receiver::delayAccumulate(const std::vector<cf>& H, const std::vector<int>& cols) {
+    if (!dsFft_) return;
+    const ModeInfo& mi = modeInfo(mode_);
+    const int P = dsFft_->size();
+    std::fill(dsIn_.begin(), dsIn_.end(), cf(0, 0));
+    for (int c : cols) {
+        const int m = (emap_.kmin + c - dsK0_) / mi.x;
+        if (m >= 0 && m < int(dsWin_.size())) dsIn_[size_t(m)] = std::conj(H[size_t(c)]) * dsWin_[size_t(m)];
+    }
+    dsFft_->forward(dsIn_.data(), dsOut_.data());
+    if (int(dsPdp_.size()) != P) { dsPdp_.assign(size_t(P), 0.0f); dsN_ = 0; }
+    const float a = dsN_ < 25 ? 1.0f / float(dsN_ + 1) : 0.04f;
+    for (int t = 0; t < P; ++t) dsPdp_[size_t(t)] += (std::norm(dsOut_[size_t(t)]) - dsPdp_[size_t(t)]) * a;
+    ++dsN_;
+}
+
+/** The shortest window (samples, fractional) holding 95 % of the profile's energy above `floor`. Bins under −30 dB of the
+ *  peak count as nothing: the window's far sidelobes and what is left of the noise.
+ *  ★★ NOT CIRCULAR: the profile wraps every P = Tu/x samples, so two paths can be read either way round (in mode D, 5 ms
+ *     apart or 4.3 ms the other way). The timing loop has put the paths' centre at `centre`, so the profile is unwrapped
+ *     half a span either side of it — the reading in which the paths sit where the guard interval holds them. */
+float Receiver::width95(const std::vector<float>& pdp, float floor, double centre) {
+    const int P = int(pdp.size());
+    if (P == 0) return 0;
+    const float pk = *std::max_element(pdp.begin(), pdp.end()) - floor;
+    if (!(pk > 0)) return 0;
+    const int start = ((int(std::lround(centre)) + P / 2) % P + P) % P;
+    std::vector<float> q(static_cast<size_t>(P));
+    double T = 0;
+    for (int i = 0; i < P; ++i) { float v = pdp[size_t((start + i) % P)] - floor; if (v < pk * 1e-3f) v = 0; q[size_t(i)] = v; T += v; }
+    const double need = 0.95 * T;
+    double best = P, sum = 0;
+    int e = 0;
+    for (int s = 0; s < P; ++s) {
+        while (sum < need && e < P) { sum += q[size_t(e)]; ++e; }
+        if (sum < need) break;
+        const double last = q[size_t(e - 1)];
+        best = std::min(best, double(e - s) - (last > 0 ? (sum - need) / last : 0.0));
+        sum -= q[size_t(s)];
+    }
+    return float(best);
+}
+
+/** ★★ DOPPLER from the gain references' decorrelation in time. A carrier's gain reference recurs every y symbols, so the
+ *  ring holds the same carrier's raw estimate at lags τ = y·Ts and 2τ. Summed over the symbol's references (normalised by
+ *  their power) and averaged over ~3 s, R(τ) = Σ H(t)·H*(t−τ). For a Gaussian Doppler spectrum of standard deviation σ
+ *  (annex B's channels; Doppler spread 2σ), |R(τ)| = P·exp(−2π²σ²τ²); white noise adds to R(0) only, so the RATIO of two
+ *  non-zero lags, |R(2τ)| / |R(τ)| = exp(−6π²σ²τ²), is free of the noise that would bias a lag-0 normalisation. */
+void Receiver::dopplerAccumulate(const Sym& now) {
+    const ModeInfo& mi = modeInfo(mode_);
+    const int n = int(ring_.size());
+    if (n < 2 * mi.y + 1) return;
+    const Sym& a = ring_[size_t(n - 1 - mi.y)];
+    const Sym& b = ring_[size_t(n - 1 - 2 * mi.y)];
+    if (a.g != now.g - mi.y || b.g != now.g - 2 * mi.y) return;
+    cf c1(0, 0), c2(0, 0); double e = 0; int cnt = 0;
+    const size_t nk = std::min({ now.Hp.size(), a.Hp.size(), b.Hp.size() });
+    for (size_t j = 0; j < nk; ++j) {
+        if (!now.hasP[j] || !a.hasP[j] || !b.hasP[j]) continue;
+        c1 += now.Hp[j] * std::conj(a.Hp[j]);
+        c2 += now.Hp[j] * std::conj(b.Hp[j]);
+        e += std::norm(now.Hp[j]); ++cnt;
+    }
+    if (cnt < 4 || !(e > 0)) return;
+    const float al = dopN_ < 50 ? 1.0f / float(dopN_ + 1) : float(ts_) / (3.0f * kFs);
+    dop1_ += (c1 / float(e) - dop1_) * al;
+    dop2_ += (c2 / float(e) - dop2_) * al;
+    ++dopN_;
+}
+
+void Receiver::channelStats() {
+    if (mode_ == Mode::None) return;
+    const ModeInfo& mi = modeInfo(mode_);
+    if (dsN_ >= 8 && !dsPdp_.empty()) {
+        // ★ the noise floor is the profile's median: the paths occupy a few ms of a ≥ 6 ms span, noise all of it
+        std::vector<float> tmp = dsPdp_;
+        std::nth_element(tmp.begin(), tmp.begin() + long(tmp.size() / 2), tmp.end());
+        const float w = width95(dsPdp_, tmp[tmp.size() / 2], tauAvg_);
+        if (getenv("VIBE_DRM_DEBUG3")) {
+            const float pk = *std::max_element(dsPdp_.begin(), dsPdp_.end());
+            fprintf(stderr, "[drm] pdp (w %.1f ideal %.1f):", w, dsIdeal_);
+            for (size_t t = 0; t < dsPdp_.size(); ++t) { const float d = 10 * std::log10(std::max(dsPdp_[t], 1e-20f) / pk); if (d > -35) fprintf(stderr, " %zu:%.0f", t, d); }
+            fprintf(stderr, "\n");
+        }
+        st_.delayMs = std::max(0.0f, w - dsIdeal_) * 1000.0f / float(kFs);
+    }
+    if (dopN_ >= 50) {
+        const double r1 = std::abs(dop1_), r2 = std::abs(dop2_);
+        if (r1 > 1e-9) {
+            // ★ a ratio under 0.02 is fading too fast for these lags to measure: it reads as the largest they can tell
+            const double r = std::min(1.0, std::max(0.02, r2 / r1));
+            const double tau = double(mi.y) * ts_ / kFs;
+            const double sig2 = -std::log(r) / (6.0 * M_PI * M_PI * tau * tau);
+            st_.dopplerHz = float(2.0 * std::sqrt(std::max(0.0, sig2)));
+        }
+    }
 }
 
 }  // namespace vibedrm

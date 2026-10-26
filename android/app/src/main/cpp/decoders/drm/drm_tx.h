@@ -184,7 +184,10 @@ inline std::vector<PathSpec> channelProfile(int ch) {
 class Channel {
 public:
     Channel(int profile, double snrDb, double freqOffsetHz, double clockPpm, double bandwidthHz, uint32_t seed)
-        : paths_(channelProfile(profile)), snrDb_(snrDb), fo_(freqOffsetHz), ppm_(clockPpm), bw_(bandwidthHz), rng_(seed) {
+        : Channel(channelProfile(profile), snrDb, freqOffsetHz, clockPpm, bandwidthHz, seed) {}
+    /** ★ Any profile (the Signal pane's delay-spread and Doppler tests set known ones). */
+    Channel(std::vector<PathSpec> paths, double snrDb, double freqOffsetHz, double clockPpm, double bandwidthHz, uint32_t seed)
+        : paths_(std::move(paths)), snrDb_(snrDb), fo_(freqOffsetHz), ppm_(clockPpm), bw_(bandwidthHz), rng_(seed) {
         std::normal_distribution<double> g(0.0, 1.0);
         std::uniform_real_distribution<double> u(0.0, 2.0 * M_PI);
         for (auto& p : paths_) {

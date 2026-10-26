@@ -15,10 +15,14 @@
 //  3. FRAME — symbol 0 carries the time references (tables 53–56); their phase pattern, compared carrier-to-neighbour
 //     (immune to the channel's slow phase), scores each symbol position over two frames.
 //  4. TRACK, per symbol — FFT (PFFFT: NEON/SSE; kiss for 352/224), frequency tracked from the reference tones' phase
-//     step, timing from the channel's phase slope (integer window steps; their rate IS the sample-clock offset).
+//     step, timing from the channel's averaged delay profile (integer window steps; their rate IS the sample-clock
+//     offset). ★ Each step moves the averaged profiles with the window, and of blocks as strong as the strongest the one
+//     the window already holds wins (2026-10-26 — see applyStepToRing and equalise).
 //  5. CHANNEL — the scattered gain references (table 58) interpolated in TIME (linear, y−1 symbols of look-ahead) then in
 //     FREQUENCY (linear, after removing the slope that the window offset puts across the band); equalised cells carry
 //     |H|² as their CSI weight. SIMD equaliser.
+//  ★ V12 THE SIGNAL PANE (2026-10-26): delay spread and Doppler come from the same channel estimate (delayAccumulate,
+//    dopplerAccumulate), the lock group from the state machine (markLock, loseSync) — RxStatus's last block.
 //  6. FAC every frame (CRC-8 AND field validity — the second gate; the third is two agreeing FACs before anything is
 //     announced), SDC every super frame (CRC-16), MSC through the cell deinterleaver (short or the 5-frame long one) and
 //     the multistage MLC decoder (drm_mlc.h).
@@ -54,6 +58,24 @@ struct RxStatus {
     Fac fac; Sdc sdc;
     std::string text;
     int64_t facGood = 0, facBad = 0, sdcGood = 0, sdcBad = 0, superFrames = 0;
+
+    // ── ★★ V12 THE SIGNAL PANE (2026-10-26) — the receiver's own diagnostics, docs/v12/DRM.md "The Signal pane" ──
+    float sdcMerDb = 0;               // MER of the SDC cells (once per super frame; 0 = not yet)
+    double codeRateA = 0;             // part A's MSC code rate where the multiplex has a part A (unequal protection), else 0
+    double sdcRate = 0;               // the SDC's code rate (0.5 at 16-QAM or 4-QAM — tables 36/37 — read off the layout)
+    /** Seconds of SIGNAL (input samples, not wall time) from the start of this acquisition — the last loss of sync, or
+     *  the first sample — to each light: time, frequency, frame, FAC, SDC, MSC. −1 = not reached in this acquisition. */
+    double lockS[6] = { -1, -1, -1, -1, -1, -1 };
+    int64_t reacquisitions = 0;       // LOCKS lost (a search that never locked is not counted) since the receiver began
+    std::string lastLoss;             // which test lost the last lock: "fac" (16 bad FACs in a row), "frame", "freq"
+    double lastLossAtS = -1;          // when, in seconds of signal since the receiver began
+    /** ★ The channel's DELAY SPREAD (ms): the width of the shortest window holding 95 % of the delay profile's energy —
+     *  the RSCI's measure (TS 102 349 `rdel`) — less the same width measured on an ideal one-path channel through the
+     *  same estimator, so a clean channel reads ~0, not the receiver's own resolution. −1 = not measured yet. */
+    float delayMs = -1;
+    /** ★ The channel's DOPPLER SPREAD (Hz), 2σ of a Gaussian Doppler spectrum (annex B's definition): from how fast the
+     *  gain references decorrelate — |R(2τ)| / |R(τ)| at τ = y symbols, a ratio white noise cannot bias. −1 = not yet. */
+    float dopplerHz = -1;
 };
 
 /** One logical frame of an MSC stream (400 ms). */
@@ -148,7 +170,23 @@ private:
     CellDeinterleaver cdi_;
     TextMessageDecoder text_;
     RxStatus st_;
-    float facMerAcc_ = 0, mscMerAcc_ = 0; bool merInit_ = false;
+    float facMerAcc_ = 0, mscMerAcc_ = 0, sdcMerAcc_ = 0; bool merInit_ = false; int sdcMerN_ = 0;
+    // ── ★★ V12 channel diagnostics (the Signal pane): delay spread and Doppler, from what the equaliser already has ──
+    int64_t acqStart_ = 0;                      // samplesIn24_ when this acquisition began
+    void markLock(int stage);                   // the first time light `stage` comes on in this acquisition
+    /** Delay: every y-th symbol the time-interpolated pilot columns, Hann-weighted, go through one P-point FFT (P = Tu/x,
+     *  the columns' alias-free span) into a power profile averaged over ~2 s. */
+    std::unique_ptr<vibedsp::ComplexFFT> dsFft_;
+    std::vector<cf> dsIn_, dsOut_;
+    std::vector<float> dsWin_, dsPdp_; int dsN_ = 0, dsCols_ = 0, dsK0_ = 0;
+    float dsIdeal_ = 0;                         // the 95 % width (samples) of a one-path channel through the same chain
+    void delayPlan();                           // per plan (mode/occupancy): window, FFT, ideal width
+    void delayAccumulate(const std::vector<cf>& H, const std::vector<int>& cols);
+    static float width95(const std::vector<float>& pdp, float floor, double centre);
+    /** Doppler: per symbol, Σ over this symbol's gain references of H(g)·H*(g−y) and H(g)·H*(g−2y), averaged ~3 s. */
+    cf dop1_{0, 0}, dop2_{0, 0}; int dopN_ = 0;
+    void dopplerAccumulate(const Sym& now);
+    void channelStats();                        // once per super frame: the two numbers from their accumulators
 };
 
 }  // namespace vibedrm
