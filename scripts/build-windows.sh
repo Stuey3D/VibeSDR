@@ -63,6 +63,8 @@ if [ $DO_TEST = 1 ]; then
   wrun /t/run-tests-wine.sh || TESTS_FAILED=1
   echo "==> server smoke test under Wine"
   wrun /t/smoke.sh | grep -E '^(==|HTTP|<title>|Upgrade|Sec-WebSocket|\[VibeLocalSDR\] (RTL-TCP started|audio WS|capture clean|clock)|VibeServer: (USB|failed))'
+  echo "==> front-door smoke test under Wine (Full mode: a radio process behind :48000)"
+  wrun /t/smoke-full.sh
   [ "${TESTS_FAILED:-0}" = 0 ] || { echo "!! a unit test failed under Wine (see above)"; exit 1; }
 fi
 
