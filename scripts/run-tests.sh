@@ -96,6 +96,9 @@ flags_for() {
     test-ft8-passes)       echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★★ FT8's fast kernels against ft8_lib's originals, bit for bit (2026-10-25) — the server's -O2.
     test-ft8-fast)         echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★★★ FT8/FT4/FT2 sensitivity (2026-10-26): the second look, OSD pairs, a-priori decoding, their guards, noise
+    #     with every candidate tried — optimised, it decodes ~400 slots.
+    test-ftx-sensitivity)  echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★★ JS8 (Normal/Fast/Turbo/Slow) on the FT8 core: its LDPC(174,87), frames, every submode on a synthetic band,
     #    noise, the live decoder's four slots (2026-10-26) — optimised, it decodes ~60 slots.
     test-js8)              echo "-O2 -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
@@ -186,7 +189,7 @@ deps_for() {
                               $VDSP/zoomspec.cpp \
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
                               android/app/src/main/cpp/decoders/wefax_decoder.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp \
-                              android/app/src/main/cpp/decoders/time_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp \
+                              android/app/src/main/cpp/decoders/time_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp \
                               android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
@@ -231,19 +234,20 @@ deps_for() {
     test-power-dips)    echo "" ;;
     test-decoder-hardening) echo "$VDSP/ddc.cpp android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     # ★ NAVTEX's CCIR 476 coder, word by word (audit 2026-10-04, rows 11-13); the audio half is scripts/test-navtex.sh.
     test-navtex-fec)    echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;
     # ★★ RTTY's letters/figures shift across a lost signal: a lost LTRS → letters, a synop line → figures (2026-10-13).
     test-rtty-shift)    echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;
-    test-ft8-callhash)  echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
-    test-ft8-passes)    echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
-    test-ft8-fast)      echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
-    test-js8)           echo "android/app/src/main/cpp/decoders/digimodes/js8_decoder.cpp android/app/src/main/cpp/decoders/digimodes/js8_ldpc.cpp android/app/src/main/cpp/decoders/digimodes/js8_message.cpp" ;;
-    test-ft2)           echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
+    test-ft8-callhash)  echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
+    test-ft8-passes)    echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
+    test-ft8-fast)      echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
+    test-ftx-sensitivity) echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
+    test-js8)           echo "android/app/src/main/cpp/decoders/digimodes/js8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/digimodes/js8_ldpc.cpp android/app/src/main/cpp/decoders/digimodes/js8_message.cpp" ;;
+    test-ft2)           echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-decoder-hosts|test-bench-decoders|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
     # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
@@ -260,7 +264,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty)
+    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ftx-sensitivity|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.

@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
     if (!readWav(argv[1], pcm, rate)) { std::fprintf(stderr, "cannot read %s (mono s16 WAV)\n", argv[1]); return 2; }
     const double fileStart = std::atof(argv[2]);
     std::string subs = "ABCE";
-    Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26; o.coherentMax = 40;   // the live decoder's full depth
+    Js8SlotOptions o; o.maxPasses = 2; o.osdMaxErrors = 26; o.coherentMax = 40; o.fine = 1;   // the live decoder's full depth
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
         auto nxt = [&] { return i + 1 < argc ? std::atof(argv[++i]) : 0.0; };
@@ -61,6 +61,7 @@ int main(int argc, char** argv) {
         else if (a == "--minscore") o.minScore = (int)nxt();
         else if (a == "--iters") o.ldpcIters = (int)nxt();
         else if (a == "--coherent") o.coherentMax = (int)nxt();
+        else if (a == "--fine") o.fine = (int)nxt();
     }
     const double fileEnd = fileStart + (double)pcm.size() / rate;
     for (Js8Submode s : kJs8Submodes) {

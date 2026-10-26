@@ -20,8 +20,11 @@ cp tools/ft8-bench/qemu/{insncount.c,xbuild.sh,xbuild86.sh,qrun.sh,lines.sh} "$Q
 docker image inspect ft8perf-x86 >/dev/null 2>&1 || nice -n 10 docker build -q -t ft8perf-x86 tools/ft8-bench/qemu
 docker run --rm -v "$Q:/w" -w /w/q ft8perf-x86 gcc -O2 -shared -fPIC -o insncount.so insncount.c
 S="$Q/src-$REV"; rm -rf "$S"; mkdir -p "$S"
-git archive "$REV" android/app/src/main/cpp/ft8_lib android/app/src/main/cpp/decoders android/app/src/main/cpp/vibe_clock.h \
-  android/app/src/main/cpp/vibedsp/vibe_denormals.h android/app/src/main/cpp/vibedsp/third_party/pffft tools/ft8-bench | tar -x -C "$S"
+# ★ only the paths that exist at REV (an old revision has no pffft / vibe_denormals.h — the "before" of a comparison)
+P=""; for p in android/app/src/main/cpp/ft8_lib android/app/src/main/cpp/decoders android/app/src/main/cpp/vibe_clock.h \
+  android/app/src/main/cpp/vibedsp/vibe_denormals.h android/app/src/main/cpp/vibedsp/third_party/pffft tools/ft8-bench; do
+  git cat-file -e "$REV:$p" 2>/dev/null && P="$P $p"; done
+git archive "$REV" $P | tar -x -C "$S"
 docker run --rm -v "$Q:/w" vibeserver-cross:bookworm-armhf nice -n 10 bash /w/xbuild.sh "src-$REV" "arm-$REV"
 [ $# -ge 2 ] || { echo "built $Q/arm-$REV/ft8_wav; give WAV START_UTC [options] to count"; exit 0; }
 WAV="$1"; shift; cp "$WAV" "$Q/audio/"

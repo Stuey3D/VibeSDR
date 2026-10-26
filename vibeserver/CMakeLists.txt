@@ -265,6 +265,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/rtty_auto.cpp"
     "${CPP_DIR}/decoders/wefax_decoder.cpp"
     "${CPP_DIR}/decoders/ft8_decoder.cpp"
+    "${CPP_DIR}/decoders/ftx_fine.cpp"
     "${CPP_DIR}/decoders/sstv_decoder.cpp"
     "${CPP_DIR}/decoders/audio_nr.cpp"
     "${CPP_DIR}/decoders/auto_notch.cpp"

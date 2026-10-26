@@ -18,6 +18,7 @@ void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok);
 /// same arithmetic in the same order as bp_decode_ref (ft8_lib's original), laid out by edge and four checks or four
 /// variables per SIMD vector; bp_decode_ref stays as the reference the test holds it to (test-ft8-fast).
 void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok);
+void bp_decode_ex(float codeword[], int max_iters, int stall, uint8_t plain[], int* ok);
 void bp_decode_ref(float codeword[], int max_iters, uint8_t plain[], int* ok);
 
 #ifdef __cplusplus
