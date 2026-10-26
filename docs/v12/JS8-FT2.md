@@ -225,13 +225,19 @@ Running fewer submodes (the `submodeMask`) drops that submode's window and water
 | Spot | only when `Js8Spot::isSpot()`: a real sender's call (heartbeat, CQ, compound, directed — never a group, never a text fragment). Grid only from a heartbeat/CQ/compound frame (the sender's own). Text = the frame + its submode ("G4ABC: @HB HEARTBEAT IO91 (Turbo)") | as FT8's engine (`onSpot(to, de, grid, snr, hz)`, real calls and real grids only) |
 | Server loaded | one pass, no coherent stage, no OSD | one pass |
 
-**Single mode** runs every registered mode on the listener's audio, so JS8 and FT2 now decode wherever a listener is
-tuned, FT8's dial included. On real FT8/FT4 audio they decode nothing: JS8 on 21 minutes of busy FT8 (40 m and 20 m),
-0 frames; FT2 on FT8 and FT4 audio, 0 spots. That second figure needed one change. FT2 runs **without OSD** in the
-live decoder: with OSD on, it took real FT8 audio for ~120 CRC-14-valid codewords in 15 minutes, none of them a
-message that unpacks, while OSD added nothing to FT2's real decodes (15/15 either way) or its synthetic threshold
-(−10 dB 12/12, −12 dB 2/12 either way). The web client's Single title is now "DIGITAL SPOTS" on a server with more
-than two modes ("FT8 / FT4 SPOTS" was no longer true); the About V12 note names FT2 and JS8.
+**Single mode** is the cheap button: it runs only the modes whose dial the listener is on (docs/v12/DIGITAL-SPOTS.md,
+"How the modes are chosen"). So JS8 decodes at 7.078, 14.078 and so on, and FT2 at its dials; tuned off the table,
+Single runs FT8 + FT4 as it always did.
+
+Before that rule existed, every mode ran everywhere, and the engines were checked against each other's traffic. JS8
+on 21 minutes of busy real FT8 audio (40 m and 20 m) decoded 0 frames. FT2 needed one change: it runs **without OSD**
+in the live decoder. With OSD on, it took real FT8 audio for about 120 CRC-14-valid codewords in 15 minutes, none of
+them a message that unpacks. OSD added nothing to FT2's real decodes (15/15 either way) or to its synthetic threshold
+(−10 dB 12/12, −12 dB 2/12 either way). That rule stays: a shared dial (3.578) or a wide passband still puts FT2
+beside other traffic.
+
+The web client's Single title is now "DIGITAL SPOTS" on a server with more than two modes; the About V12 note names
+FT2 and JS8.
 
 **FT4's SNR** was also moved onto the reference scale. FT4 and FT2 now share it: −9 dB, one line in `snrDb`. Against
 STUEY3D's PSKReporter reports, FT4 on 20 m (four stations, 2026-10-25) read +8.6 dB before and **−0.4 dB** after. On

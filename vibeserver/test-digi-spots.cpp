@@ -249,6 +249,37 @@ int main(int argc, char** argv) {
         ok(made, "every registered mode makes an engine");
     }
 
+    std::printf("── Single mode runs only the modes AT THE DIAL (the cheap button) ──\n");
+    {
+        const auto& ms = digi::modes();
+        auto at = [&](double hz) { std::string o; for (auto& n : digi::Spotter::singleModesAt(ms, hz)) o += (o.empty() ? "" : " ") + n; return o; };
+        ok(at(14074000) == "FT8", "14.074 → FT8 only (" + at(14074000) + ")");
+        ok(at(14078000) == "JS8", "14.078 → JS8 only (" + at(14078000) + ")");
+        ok(at(14080000) == "FT4", "14.080 → FT4 only (" + at(14080000) + ")");
+        ok(at(14084000) == "FT2", "14.084 → FT2 only (" + at(14084000) + ")");
+        ok(at(3578000) == "FT2 JS8", "3.578 (FT2's and JS8's shared dial) → both (" + at(3578000) + ")");
+        ok(at(7074300) == "FT8", "7.0743, a little off FT8's dial → still FT8 (" + at(7074300) + ")");
+        ok(at(12345000) == "FT8 FT4", "12.345, on no table entry → FT8 + FT4, what Single always ran (" + at(12345000) + ")");
+        ok(at(NAN) == "FT8 FT4", "no dial known → FT8 + FT4");
+        // ★ retunes: the set follows the dial; a fine retune keeps the engine it has
+        double dial = 14074000;
+        digi::Spotter sp(digi::Spotter::Scope::Single, ms, nullptr, [&] { return dial; }, nullptr);
+        std::vector<float> blk(960, 0.0f);
+        const double t0 = vibeUtcNow();
+        sp.feedAudio48k(blk.data(), 960, t0);
+        ok(sp.describe() == "FT8" && sp.engines() == 1, "Single at 14.074: one engine, FT8 (" + sp.describe() + ")");
+        const uint64_t m0 = sp.made();
+        dial = 14074250; sp.feedAudio48k(blk.data(), 960, t0 + 0.02);
+        ok(sp.describe() == "FT8" && sp.made() == m0, "a 250 Hz retune keeps the same FT8 engine (no restart)");
+        dial = 14078000; sp.feedAudio48k(blk.data(), 960, t0 + 0.04);
+        ok(sp.describe() == "JS8" && sp.engines() == 1, "retuned to 14.078: FT8 stopped, JS8 started (" + sp.describe() + ")");
+        dial = 3578000; sp.feedAudio48k(blk.data(), 960, t0 + 0.06);
+        ok(sp.describe() == "JS8, FT2" || sp.describe() == "FT2, JS8", "3.578: JS8 kept, FT2 added (" + sp.describe() + ")");
+        dial = 12345000; sp.feedAudio48k(blk.data(), 960, t0 + 0.08);
+        ok(sp.engines() == 2 && sp.describe().find("FT8") != std::string::npos && sp.describe().find("FT4") != std::string::npos,
+           "off the table: FT8 + FT4 (" + sp.describe() + ")");
+    }
+
     std::printf("── the band table ──\n");
     {
         bool inside = true; std::string bad;

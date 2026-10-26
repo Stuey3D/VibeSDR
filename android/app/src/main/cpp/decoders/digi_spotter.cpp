@@ -12,22 +12,64 @@ namespace digi {
 Spotter::Spotter(Scope scope, const std::vector<ModeDef>& ms, Emit emit, std::function<double()> dialHz,
                  std::function<bool()> loaded)
     : scope_(scope), modes_(ms), emit_(std::move(emit)), dialHz_(std::move(dialHz)), loaded_(std::move(loaded)) {
-    if (scope_ == Scope::Single) {
-        for (const ModeDef& m : modes_) {
-            // ★ Single mode decimates 48 kHz by an integer; a mode at another rate is Band-only until it says otherwise.
-            if (!m.single || m.sampleRate <= 0 || 48000 % m.sampleRate != 0 || m.sampleRate != 12000) continue;
-            Run r; r.def = &m; r.dial = 0;
-            try { r.eng = m.make(); } catch (const std::exception&) { continue; }
-            if (!r.eng) continue;
-            wire(r);
-            single_.push_back(std::move(r));
+    if (scope_ == Scope::Single) planSingle(dialHz_ ? dialHz_() : NAN);
+}
+
+namespace {
+// ★ Single mode decimates 48 kHz by four; a mode at another rate is Band-only until it says otherwise.
+bool singleCapable(const ModeDef& m) { return m.single && m.sampleRate == 12000; }
+}
+
+std::vector<std::string> Spotter::singleModesAt(const std::vector<ModeDef>& ms, double dialHz) {
+    std::vector<std::string> out;
+    if (std::isfinite(dialHz)) {
+        const double lo = dialHz + kSingleLoHz, hi = dialHz + kSingleHiHz, need = 0.5 * (kSingleHiHz - kSingleLoHz);
+        for (const ModeDef& m : ms) {
+            if (!singleCapable(m)) continue;
+            bool at = false;
+            for (const Band& b : bands()) {
+                for (double d : dialsOf(m, b.id)) {
+                    const double ov = std::min(hi, d + m.audioHiHz) - std::max(lo, d + m.audioLoHz);
+                    if (ov >= need) { at = true; break; }
+                }
+                if (at) break;
+            }
+            if (at) out.push_back(m.name);
         }
+    }
+    if (out.empty())          // ★ off the table: what Single always ran
+        for (const ModeDef& m : ms)
+            if (singleCapable(m) && (m.name == "FT8" || m.name == "FT4")) out.push_back(m.name);
+    return out;
+}
+
+void Spotter::planSingle(double dialHz) {
+    singleDial_ = dialHz;
+    const std::vector<std::string> want = singleModesAt(modes_, dialHz);
+    auto wanted = [&](const std::string& n) { for (const auto& w : want) if (w == n) return true; return false; };
+    std::lock_guard<std::mutex> lk(statMtx_);
+    for (auto it = single_.begin(); it != single_.end();) {
+        if (wanted(it->def->name)) { ++it; continue; }
+        retiredSkips_ += it->eng->slotsSkipped(); retiredDecodes_ += it->eng->slotsDecoded();
+        it = single_.erase(it);
+    }
+    for (const ModeDef& m : modes_) {
+        if (!wanted(m.name)) continue;
+        bool have = false;
+        for (const Run& r : single_) if (r.def == &m) have = true;
+        if (have) continue;
+        Run r; r.def = &m; r.dial = 0;
+        try { r.eng = m.make(); } catch (const std::exception&) { continue; }
+        if (!r.eng) continue;
+        wire(r);
+        single_.push_back(std::move(r));
     }
 }
 
 Spotter::~Spotter() = default;
 
 void Spotter::wire(Run& r) {
+    ++made_;
     const std::string name = r.def->name;
     const double dial = r.dial;
     const bool single = scope_ == Scope::Single;
@@ -43,7 +85,13 @@ void Spotter::wire(Run& r) {
 }
 
 void Spotter::feedAudio48k(const float* x, int n, double captureUtc) {
-    if (scope_ != Scope::Single || single_.empty() || n <= 0) return;
+    if (scope_ != Scope::Single || n <= 0) return;
+    // ★ A retune re-chooses the modes (a dial unchanged to the hertz costs one compare)
+    if (dialHz_) {
+        const double d = dialHz_();
+        if (std::isfinite(d) && !(std::fabs(d - singleDial_) < 1.0)) planSingle(d);
+    }
+    if (single_.empty()) return;
     buf_.clear(); buf_.reserve((size_t)n / 4 + 1);
     for (int i = 0; i < n; ++i) {
         acc_ += x[i];

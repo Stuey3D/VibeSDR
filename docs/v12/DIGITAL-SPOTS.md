@@ -26,9 +26,26 @@ Branch `v12-spots` (worktree `~/VibeSDR-spots`).
 ## Architecture
 
 ### Single mode
-This is the button there always was. The listener's 48 kHz audio is box-averaged by four to 12 kHz, the same decimation
-as before, and goes into every registered mode with `single: true`. Today that is FT8, FT4, FT2 and JS8 on one passband (FT2 and JS8 since 2026-10-26: docs/v12/JS8-FT2.md). Spot RF is
-the listener's dial plus the audio offset.
+This is the button there always was, and the **cheap** one. The listener's 48 kHz audio is box-averaged by four to
+12 kHz, the same decimation as before. It goes only into the registered modes (`single: true`) whose published dial is
+where the listener is tuned; Band is the button that runs every mode. Spot RF is the listener's dial plus the audio
+offset.
+
+**How the modes are chosen** (`Spotter::singleModesAt`, 2026-10-26):
+- The listener's window is the USB passband dial + 100 … dial + 3000 Hz.
+- A mode runs when at least half of that window lies inside the mode's own audio window above one of its dials (dial +
+  `audioLoHz` … `audioHiHz`).
+- On 20 m that gives: 14.074 → FT8, 14.078 → JS8, 14.080 → FT4, 14.084 → FT2. A shared dial runs both (3.578 → FT2
+  and JS8). A few hundred hertz off a dial still counts (7.0743 → FT8).
+- **Off the table** (no dial there, or no dial known) it runs **FT8 + FT4**, which is what Single always ran, so it
+  never goes silent.
+- **On a retune** the set is chosen again on the next audio block. Engines whose mode is still wanted are kept, so a
+  fine retune does not lose a slot in progress. The others are stopped (their slot counts are kept for the health
+  pill) and new ones made.
+- **Cost:** one engine per listener at a mode's dial, not four. Running FT8, FT4, FT2 and JS8 on every listener's
+  audio would cost about 3.7× FT8 per listener.
+
+`test-digi-spots` checks the set chosen per dial, the retune swaps, the kept engine and the off-table fallback.
 
 ### Band mode
 The cheapest correct route is **one IQ slice per band, then one tuner per mode dial on the decoder thread**. A wide audio
