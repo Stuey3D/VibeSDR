@@ -769,11 +769,6 @@ bool Ft8SlotDecoder::a91ToMessage(const uint8_t* a91, ftx_message_t& msg) const 
 }
 
 namespace {
-// ★ temporary diagnostics (FTX_DEBUG=1): one line per BP/OSD attempt of the second look
-void fineDbg(int pass, const FtxFine::Meas& M, int what, int err) {
-    static const bool on = std::getenv("FTX_DEBUG") != nullptr;
-    if (on) std::fprintf(stderr, "FD p%d hits %d snr %.2f set %d err %d\n", pass, M.syncHits, M.syncSnr, what, err);
-}
 /** BP's hard decisions → the 91 message+CRC bits, packed, if the CRC holds (ftx_decode_candidate's check). */
 bool plainCrcOk(const uint8_t* plain174, uint8_t a91[FTX_LDPC_K_BYTES]) {
     std::memset(a91, 0, FTX_LDPC_K_BYTES);
@@ -793,9 +788,7 @@ bool Ft8SlotDecoder::fineDecode(const float* audio, int n, double start, double 
     ++st.fineTried[pass - 1];
     const int minSync = o.fineMinSync > 0 ? o.fineMinSync : (ft4_ ? kFineMinSyncFt4 : kFineMinSyncFt8);
     FtxFine::Meas& M = fineMeas_;
-    const bool okm = fine_->measure(start, f0, minSync, M);
-    dbgHits_ = M.syncHits;
-    if (!okm) return false;
+    if (!fine_->measure(start, f0, minSync, M)) return false;
     ++st.finePassed[pass - 1];
     startOut = M.start; f0Out = M.f0;
     uint8_t plain[FTX_LDPC_N], a91[FTX_LDPC_K_BYTES];
@@ -810,8 +803,6 @@ bool Ft8SlotDecoder::fineDecode(const float* audio, int n, double start, double 
         int err = 0;
         bp_decode_ex(L[k], o.ldpcIters, kFineBpStall, plain, &err);
         bestErr = std::min(bestErr, err);
-        dbgErr_ = bestErr;
-        fineDbg(pass, M, k, err);
         if (err == 0 && plainCrcOk(plain, a91)) { a91ToMessage(a91, msg); viaOsd = false; ++st.fineDecodes[pass - 1]; return true; }
     }
     /* ★ OSD only for a near miss: on the real 80 m hour every candidate OSD rescued had come within 10 unsatisfied
@@ -820,16 +811,14 @@ bool Ft8SlotDecoder::fineDecode(const float* audio, int n, double start, double 
     if (o.osdMaxErrors > 0 && bestErr <= kFineOsdMaxBpErr) {
         for (int k : { 2, 1 }) {
             const int e = ft8Osd(L[k], o.osdMaxErrors, o.osdPairSpan, a91);
-            fineDbg(pass, M, 10 + k, e);
             if (e >= 0) { a91ToMessage(a91, msg); viaOsd = true; ++st.fineDecodes[pass - 1]; return true; }
         }
     }
     /* ★ A-priori decoding: near misses only (BP came within kApMaxBpErr checks), on the two-symbol set (the one that
      *  decodes most often), then the three-symbol. */
-    if (o.ap && bestErr <= (o.apMaxBpErr > 0 ? o.apMaxBpErr : kApMaxBpErr)) {
+    if (o.ap && o.apTry && bestErr <= (o.apMaxBpErr > 0 ? o.apMaxBpErr : kApMaxBpErr)) {
         ++st.apTried[pass - 1];
         for (int k : { 1, 2 }) {
-            dbgSet_ = k;
             if (apDecode(L[k], o, msg, apKind)) { viaOsd = false; ++st.apDecodes[pass - 1]; ++st.fineDecodes[pass - 1]; return true; }
         }
     }
@@ -952,7 +941,6 @@ bool Ft8SlotDecoder::apDecode(const float* L, const Ft8SlotOptions& o, ftx_messa
     float amax = 0;
     for (int j = 0; j < FTX_LDPC_N; ++j) amax = std::max(amax, std::fabs(L[j]));
     const float A = 1.01f * amax;
-    static const bool dbg = std::getenv("FTX_APDBG") != nullptr;
     for (int k = 0; k < nb; ++k) {
         const FtxApBook::Hyp h = FtxApBook::make(X, best[k].kind, best[k].a, best[k].b, best[k].t);
         if (h.kind == 5) {
@@ -974,11 +962,6 @@ bool Ft8SlotDecoder::apDecode(const float* L, const Ft8SlotOptions& o, ftx_messa
             a91ToMessage(a91, m);
             int fe2 = -1, kk = 5;
             const bool okc = fe <= kApFullMaxFree && zfull >= kApFullMinZ && apCheck(L, h, cw, m, kApFullMaxFree, &fe2, &kk);
-            if (dbg) {
-                char t[64] = {}; ftx_message_offsets_t of; ftx_message_t mm = m;
-                if (ftx_message_decode(&mm, nullptr, t, &of) != FTX_MESSAGE_RC_OK) std::strcpy(t, "?");
-                std::printf("AP kind 5 z %.2f direct freeErr %d/97 %s : %s | zfull %.2f rank %d\n", best[k].z, fe, okc ? "ACCEPT" : "reject", t, zfull, k);
-            }
             if (!okc) continue;
             msg = m; kind = 5;
             return true;
@@ -1008,11 +991,6 @@ bool Ft8SlotDecoder::apDecode(const float* L, const Ft8SlotOptions& o, ftx_messa
         const int maxFree = (int)(kApMaxFreeErrFrac * nfree);
         int fe = -1, kk = h.kind;
         const bool okc = apCheck(L, h, cw, m, maxFree, &fe, &kk);
-        if (dbg) {
-            char t[64] = {}; ftx_message_offsets_t of; ftx_message_t mm = m;
-            if (ftx_message_decode(&mm, nullptr, t, &of) != FTX_MESSAGE_RC_OK) std::strcpy(t, "?");
-            std::printf("AP kind %d z %.2f %s freeErr %d/%d %s : %s | bpErr %d set %d rank %d apBp %d\n", h.kind, best[k].z, viaO ? "osd" : "bp", fe, nfree, okc ? "ACCEPT" : "reject", t, dbgErr_, dbgSet_, k, err);
-        }
         if (!okc) continue;
         msg = m; kind = kk;
         return true;
@@ -1095,10 +1073,8 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
                 sm[Ft8SlotStats::kPost] += lap();
                 if (!fine_) fine_.reset(new FtxFine((int)mode_, rate_, nsps_, windowSamples_));
                 if (!fine_->ready()) fine_->ensure(audio, n);
-                dbgHits_ = -1; dbgErr_ = -1;
                 viaFine = fineDecode(audio, n, cStart, cHz, o, msg, viaOsd, apKind, fineStart, fineF0, st, pass);
                 sm[Ft8SlotStats::kFine] += lap();
-                if (std::getenv("FTX_CDBG")) std::printf("C %d %.1f %.0f %d %d %d %d\n", pass, cHz, cStart, c.score, dbgHits_, dbgErr_, viaFine ? 1 : 0);
                 if (!viaFine) { failed_.push_back({ cHz, cStart }); continue; }
             } else if (!bpOk) {
                 if (o.osdMaxErrors <= 0 || c.score < o.osdMinScore) { failed_.push_back({ cHz, cStart }); continue; }
@@ -1175,7 +1151,8 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
 // ── The live decoder ────────────────────────────────────────────────────────────────────────────
 
 Ft8Decoder::Ft8Decoder(int sampleRate, FtxMode mode)
-    : mode_(mode), ft4(mode != FtxMode::FT8), rate(sampleRate), slot_(sampleRate, mode) {
+    : mode_(mode), ft4(mode != FtxMode::FT8), rate(sampleRate), slot_(sampleRate, mode),
+      apBook_(mode != FtxMode::FT8, mode == FtxMode::FT2 ? 160 : mode == FtxMode::FT4 ? 80 : 40) {   // ★ ten minutes of slots
     slotPeriod = mode == FtxMode::FT2 ? kFt2SlotTime : ft4 ? FT4_SLOT_TIME : FT8_SLOT_TIME;
     window_ = slot_.windowSamples();
     // ★ The ring holds a window plus 3 s: a window is cut the moment its last sample lands, so this is slack
@@ -1278,9 +1255,21 @@ void Ft8Decoder::runDecode() {
     o.abort = &abortDecode;
     /* ★★ OSD only on spare CPU, like the passes: a loaded box decodes exactly as before (2026-10-05). 24 hard
      *  errors: on the real hour 30 let one garbage message through ("7Z1OSX ZF7IZT R QM53") and 36 two; 24
-     *  none, for +1.7 % of jt9's decodes at +2 ms a slot on a Mac. */
+     *  none, for +1.7 % of jt9's decodes at +2 ms a slot on a Mac.
+     *  ★★★ THE SENSITIVITY WORK (2026-10-26, docs/v12/FTX-SENSITIVITY.md). The second look runs on EVERY server: one
+     *  pass of it (BP only) costs less than the old single pass did — 160 M against 334 M instructions a busy slot on
+     *  the Pi 2 build — and decodes more than the old full depth. Spare CPU then buys, as before, the passes and OSD
+     *  (now with pairs), and a-priori decoding. The book learns on every decode, loaded or not, so it is ready when the
+     *  CPU is. */
     const bool loadedAtStart = loadProbe ? loadProbe() : false;
-    o.osdMaxErrors = loadedAtStart || o.maxPasses < 2 ? 0 : kOsdMaxErrors;
+    const bool deep = !loadedAtStart && o.maxPasses >= 2;
+    o.fine = 1;
+    o.bpStall = kBpStall;
+    o.onlyChanged = true;
+    o.osdMaxErrors = deep ? kOsdMaxErrors : 0;
+    o.osdPairSpan = deep ? kOsdPairSpan : 0;
+    o.ap = &apBook_;
+    o.apTry = deep;
     o.mayRunPass = [&](int, double elapsedMs, double lastMs) {
         const bool loaded = loadProbe ? loadProbe() : false;
         return passAllowed(slotPeriod * 1000.0, lagMs, elapsedMs, lastMs, loaded);

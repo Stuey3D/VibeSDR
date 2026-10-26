@@ -196,6 +196,7 @@ struct Ft8SlotOptions {
     /** ★ A-priori decoding (FtxApBook): the book of what this dial heard lately, or null = off. The second look must
      *  be on; AP is tried only on its near misses. */
     FtxApBook* ap = nullptr;
+    bool apTry = true;               ///< false = the book still learns, but no AP decoding (a loaded server)
     int apMaxCands = 0;              ///< hypotheses decoded per candidate after screening (0 = the default, 3)
     int apOsdPairSpan = -1;          ///< OSD pair span for AP trials (-1 = osdPairSpan)
     int apMaxBpErr = 0;              ///< a near miss for AP: BP within this many checks (0 = the default; tests raise it)
@@ -267,7 +268,6 @@ private:
     FtxFine::Meas fineMeas_;
     float fineLlr_[FtxFine::kMaxSets][174];         // scratch: the second look's likelihood sets
     std::vector<float> rA_, rB_;                    // scratch: each call's AP agreement as first / second call
-    int dbgHits_ = -1, dbgErr_ = -1, dbgSet_ = -1;                // diagnostics (FTX_CDBG)
     static constexpr int kFineBpStall = 5;
     static constexpr int kFineOsdMaxBpErr = 12;     // OSD only after BP came this close (unsatisfied checks)
     static constexpr int kApMaxBpErr = 19;          // a-priori decoding only for candidates BP took this close (real
@@ -325,6 +325,8 @@ public:
      *  the subtraction first). Pure, so the thresholds are tested. */
     static constexpr double kPassBudget = 0.40;
     static constexpr int    kOsdMaxErrors = 24;
+    static constexpr int    kOsdPairSpan = 40;    ///< OSD's pairs of flips among the 40 least reliable bits (spare CPU)
+    static constexpr int    kBpStall = 3;         ///< the waterfall's BP gives up after 3 iterations without progress
     static bool passAllowed(double slotMs, double lagMs, double elapsedMs, double lastPassMs, bool loaded) {
         if (loaded) return false;
         const double left = slotMs - lagMs;              // until the next slot's window is complete
@@ -364,6 +366,7 @@ private:
     int     window_ = 0;
 
     Ft8SlotDecoder slot_;
+    FtxApBook apBook_;             // ★ what this dial heard lately (a-priori decoding); the worker's alone
     std::vector<float> work_;      // the window being decoded (the worker's, subtracted in place)
     double  workSlotEnd_ = 0;      // capture UTC at which that window's last sample arrived
     std::thread worker;
