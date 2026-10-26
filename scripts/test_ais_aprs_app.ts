@@ -183,7 +183,8 @@ ok('SDRScreen: no AIS on Apple TV (no map there)', /aisAvail:[^\n]*IS_APPLE_TV/.
 const about = src('src/components/AboutOverlay.tsx');
 ok('About: the V12 note names AIS and APRS', /AIS/.test(about) && /APRS/.test(about));
 const tour = src('src/screens/SDRScreen.tsx');
-ok('Tour: the Mode card names AIS', /sdrTour[\s\S]*AIS/.test(tour));
+ok('Tour: the Mode card names AIS and EXIT AIS', /ISM and AIS, which take the whole receiver[^']*EXIT AIS/.test(tour));
+ok('Tour: the Mode card names APRS and its MAP', /APRS \(packet stations, with MAP in its box\)/.test(tour));
 
 console.log(`${fails ? 'FAIL' : 'ok'}  test_ais_aprs_app — ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

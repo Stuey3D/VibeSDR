@@ -6,6 +6,7 @@ import { cleanLines } from '../utils/cleanLines';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { parseAdsbCapability, type AdsbCap } from './adsbTypes';
 import { parseIsmCapability, type IsmCap } from './ism';
+import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';   // ★ V12 AIS / APRS
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 export type Mode = SDRMode; // alias
@@ -439,6 +440,10 @@ export interface ServerOccupancy {
   /** ★ V12 ISM (docs/v12/ISM-DECODER.md): undefined = no control (an HF+ reaches no ISM band, an older server);
    *  `ok: false` = greyed with the reason; `bands` = the bands THIS radio reaches. */
   ism?: IsmCap;
+  /** ★ V12 AIS: `ok: true` live, `ok: false` greyed with the reason; absent = the radio cannot reach 162 MHz (no key). */
+  ais?: AisCap;
+  /** ★ V12 APRS: the server's own packet decoder (`on`), and the region's VHF channel. */
+  aprs?: { on: boolean; hz: number };
   /** ★ Raw IQ out: the owner's policy and the slots. Absent on an older server. */
   rawIq?: 'off' | 'local' | 'public';
   rawIqMax?: number;
@@ -489,6 +494,8 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       adsb:      parseAdsbCapability(j),
       cw:        j.cw === true,
       ism:       parseIsmCapability(j),
+      ais:       parseAisCapability(j),
+      aprs:      parseAprsCapability(j),
     };
   } catch { return null; }
   finally { clearTimeout(t); }

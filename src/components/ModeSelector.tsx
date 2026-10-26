@@ -27,8 +27,9 @@ import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
 import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText } from '../services/cwList';
+import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -291,6 +292,13 @@ interface ModeSelectorProps {
     /** ★★ V12 ISM — the same kind of key as ADS-B (a whole-radio mode) and the same three states: absent (`ismAvail`
      *  false — an HF+ reaches no band), dimmed with the server's reason under the row (`ismWhy`), live. */
     ismAvail?: boolean; ismWhy?: string; ismOn?: boolean; onIsm?: () => void;
+    /** ★★ V12 AIS — ISM's kind of key, beside it, and the same three states: absent (`aisAvail` false — the radio cannot
+     *  reach 162 MHz, an HF+, an Icom; or Apple TV, which has no map), dimmed with the server's reason (`aisWhy`), live. */
+    aisAvail?: boolean; aisWhy?: string; aisOn?: boolean; onAis?: () => void;
+    /** ★★ V12 APRS — a VibeServer's own packet decoder, only where vibeserver.json says `"aprs": true`. Its settings:
+     *  PACKET VHF 1200 / HF 300, a TUNE key (the region's channel `aprsHz` in NFM, or 10.1476 USB) and the hint. */
+    aprsAvail?: boolean; aprsBaud?: AprsBaud; aprsHz?: number;
+    onAprsBaud?: (b: AprsBaud) => void; onAprsTune?: () => void;
     /** ★★ V12 THE SCANNER — a decoder-box item (docs/v12/SCANNER.md). Absent (not greyed) where scanPolicy says no: FM-DX,
      *  a VibeServer with one shared dial. `onlyScanner`: a backend with no client decoders of ours (OpenWebRX — its own
      *  decoders are demodulators in this sheet) draws the row with the scanner alone. */
@@ -375,6 +383,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   });
   const advRdsShown = !!decoderControls?.advRdsAvail && !isBlocked('rds');
   const cwShown = !!decoderControls?.cwAvail && !isBlocked('cw');
+  const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
    *  decoders section is dropped and DAB is drawn with the demodulators. */
@@ -382,11 +391,12 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  the decoders row. */
   const adsbShown = !!decoderControls?.adsbAvail;
   const ismShown = !!decoderControls?.ismAvail && !isBlocked('ism');
+  const aisShown = !!decoderControls?.aisAvail && !isBlocked('ais');   // ★ V12 AIS
   const scanShown = !!decoderControls?.scanAvail && !isBlocked('scanner');
-  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown;
-  const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !cwShown && !scanShown;
+  const wholeAvail = !!decoderControls?.dabAvail || adsbShown || ismShown || aisShown;
+  const dabInGrid = wholeAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown && !cwShown && !scanShown && !aprsShown;
   const decSectionShown = !!decoderControls && !dabInGrid
-    && (clientDecs.length > 0 || advRdsShown || wholeAvail || cwShown || scanShown);
+    && (clientDecs.length > 0 || advRdsShown || wholeAvail || cwShown || scanShown || aprsShown);
   const { theme: theme0 } = useTheme();
   const surf = usePopupSurface();
   const pt = usePopupTheme();
@@ -484,6 +494,36 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       )}</NavItem>
     );
   };
+  /* ★★ V12 THE AIS KEY — ISM's key, for AIS (one definition for the grid and the decoders row). */
+  const aisOff = !!decoderControls?.aisWhy;
+  const aisLit = !!decoderControls?.aisOn;
+  const aisKey = (inGrid: boolean) => {
+    const dc = decoderControls!;
+    return (
+      <NavItem key="ais" onPress={() => dc.onAis?.()}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label="AIS" active={aisLit} pip
+          onPress={() => dc.onAis?.()} fontSize={inGrid ? 13 : 12} style={aisOff ? { opacity: 0.45 } : undefined} />
+      ) : (
+      <TouchableOpacity ref={navRef as any}
+        accessibilityLabel={aisOff ? `AIS, unavailable: ${dc.aisWhy}` : 'AIS ships'}
+        style={[st.btn, { borderColor: aisLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+                aisLit && { backgroundColor: decBg },
+                aisOff && { opacity: 0.45, borderStyle: 'dashed' as const },
+                navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => dc.onAis?.()} activeOpacity={0.8}>
+        <Text numberOfLines={1}
+              style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: aisLit ? dec : t.btnText }]}>
+          AIS
+        </Text>
+      </TouchableOpacity>
+      )}</NavItem>
+    );
+  };
+  const aisWhyLine = aisOff ? (
+    <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+      {`AIS unavailable — ${decoderControls!.aisWhy}`}
+    </Text>
+  ) : null;
   const ismWhyLine = ismOff ? (
     <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
       {`ISM unavailable — ${decoderControls!.ismWhy}`}
@@ -839,9 +879,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           )}
           {dabInGrid && adsbShown && adsbKey(true)}
           {dabInGrid && ismShown && ismKey(true)}
+          {dabInGrid && aisShown && aisKey(true)}
         </View></NavRow>
         {dabInGrid && adsbShown && adsbWhyLine}
         {dabInGrid && ismShown && ismWhyLine}
+        {dabInGrid && aisShown && aisWhyLine}
 
         {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
             LEFT to widen the lower sideband, the RIGHT one RIGHT to widen the
@@ -1032,6 +1074,25 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   )}</NavItem>
                 );
               })()}
+              {/* ★★ V12 APRS — the server's own packet decoder (only where it says "aprs": true). */}
+              {aprsShown && (() => {
+                const active = decoderControls.decMode === 'aprs' && decoderControls.decOn;
+                const lit = decoderControls.decMode === 'aprs';
+                return (
+                  <NavItem key="aprs" onPress={() => decoderControls.onDecToggle('aprs')}>{(navFocused, navRef) => pt.metal ? (
+                    <MetalKey navRef={navRef} focused={navFocused} label="APRS" active={lit} pip
+                      onPress={() => decoderControls.onDecToggle('aprs')} />
+                  ) : (
+                  <TouchableOpacity ref={navRef as any} accessibilityLabel="APRS packet decoder"
+                    style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: 10 },
+                            active && { backgroundColor: decBg },
+                            navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+                    onPress={() => decoderControls.onDecToggle('aprs')} activeOpacity={0.8}>
+                    <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>APRS</Text>
+                  </TouchableOpacity>
+                  )}</NavItem>
+                );
+              })()}
               {/* ★★ V12 THE SCANNER — opens in the decoder box like the others; replaces a running decoder, as switching
                   decoders always has (one box at a time). */}
               {scanShown && (
@@ -1070,6 +1131,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               )}
               {adsbShown && adsbKey(false)}
               {ismShown && ismKey(false)}
+              {aisShown && aisKey(false)}
               {decoderControls.galleryAvail && (
                 <NavItem key="gallery" onPress={() => decoderControls.onGallery?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label="GALLERY" active={false}
@@ -1106,6 +1168,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             </View></NavRow>
             {adsbShown && adsbWhyLine}
             {ismShown && ismWhyLine}
+            {aisShown && aisWhyLine}
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                                        : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
@@ -1150,6 +1213,24 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </>)}
                 <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
                   {cwHintText(!!decoderControls.cwSkim, decoderControls.cwWidth ?? CW_DEFAULT_WIDTH)}
+                </Text>
+              </View>
+            )}
+            {/* ★ V12 APRS: the web's PACKET row, its TUNE key and hint (tracks.ts aprsTuneFor / aprsHintText). */}
+            {aprsShown && decoderControls.decMode === 'aprs' && (
+              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
+                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
+                <SubLabel label="PACKET" />
+                <OptRow>
+                  <SegBtn label="VHF 1200" active={(decoderControls.aprsBaud ?? 1200) === 1200} onPress={() => decoderControls.onAprsBaud?.(1200)} />
+                  <SegBtn label="HF 300" active={decoderControls.aprsBaud === 300} onPress={() => decoderControls.onAprsBaud?.(300)} />
+                </OptRow>
+                <OptRow>
+                  <SegBtn label={aprsTuneFor(decoderControls.aprsBaud ?? 1200, decoderControls.aprsHz ?? 144.8e6).label} active={false}
+                          onPress={() => decoderControls.onAprsTune?.()} />
+                </OptRow>
+                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
+                  {aprsHintText(decoderControls.aprsBaud ?? 1200, decoderControls.aprsHz ?? 144.8e6)}
                 </Text>
               </View>
             )}
