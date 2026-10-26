@@ -97,7 +97,7 @@ cxx "$CPP/spyserver/spyserver_client.cpp"
 # ★ time_decoder joined 2026-08-11 (MSF/DCF77). iOS links a PREBUILT lib, so a decoder left
 #   off this line compiles on Android and the server and is simply ABSENT on iOS — see
 #   [[ios_prebuilt_dsp_lib_trap]]. Three build lists, one source tree.
-for d in fsk_decoder rtty_auto wefax_decoder ft8_decoder ftx_fine sstv_decoder audio_nr auto_notch time_decoder cw_skimmer psk_skimmer digi_modes digi_tuner digi_spotter dsc_decoder jtty_decoder; do cxx "$CPP/decoders/$d.cpp"; done
+for d in fsk_decoder rtty_auto wefax_decoder ft8_decoder ftx_fine sstv_decoder audio_nr auto_notch time_decoder cw_skimmer psk_skimmer digi_modes digi_tuner digi_spotter dsc_decoder jtty_decoder ndb_skimmer; do cxx "$CPP/decoders/$d.cpp"; done
 # ★ V12: every digital-spots mode engine dropped into decoders/digimodes/ (adding a mode is one file — docs/v12/DIGITAL-SPOTS.md)
 for f in "$CPP"/decoders/digimodes/*.cpp; do [ -e "$f" ] && cxx "$f"; done
 # ★ V12 DRM: the OFDM receiver (local_sdr_shim.cpp includes vibe_drm_listener.h). ★★ NOT FAAD2: it is GPL-2.0+ and
