@@ -7676,10 +7676,15 @@ function dabUiOn() {
    *  old spots (Stuart, 2026-09-19, on the Sony). DAB takes the box whole: a running decoder is stopped
    *  (it would only be decoding the DAB audio), and the spot list, its filters and any SSTV/WEFAX image
    *  are put away. dabUiOff() brings the spot list back if it was on. */
+  if (activeDec === 'aprs') aprsView?.hide();
   if (activeDec) { decoders?.detach(); activeDec = null; syncDecButtons(); }
   $('spotList').classList.remove('on');
   $('spotFilters').classList.remove('show');
   $('decImage').classList.remove('on');
+  // ★★ V12: the server decoders' own lists too (CW/PSK, APRS, DSC, JTTY) — showDecBox() toggles them when a decoder
+  //    opens, but DAB takes the box without it, so APRS's "listening…" and PACKETS sat under the DAB signal view
+  //    (Stuart's Pi 2, 2026-10-26).
+  for (const id of ['cwList', 'aprsList', 'dscList', 'jttyList']) document.getElementById(id)?.classList.remove('on');
   $('decBox').classList.remove('wide');
   $('decBox').classList.remove('navtex');
   $<HTMLButtonElement>('decPrev').style.display = 'none';
