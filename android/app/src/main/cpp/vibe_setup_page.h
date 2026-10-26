@@ -1897,8 +1897,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
             <option value="60">1 hour</option></select>
           the SDR will move to your selected RF Centre. Set an RF centre here and choose 1 or multiple VFO's and
           decoders for background decoding.
-          <span id="bgIsmLine">Or let a profile decode ISM sensors (weather stations, tyre sensors, doorbells) on a whole
-          band instead.</span>
+          <span id="bgIsmLine">Or let a profile decode ISM sensors (weather stations, tyre sensors, doorbells, and on 868 MHz
+          water, heat and gas meters) on a whole band instead.</span>
           <br>The moment anybody connects, background decoding stops and the radio goes back to exactly where it was
           left. What it decodes is kept in the gallery (Server tab).</p>
         <!-- ★★ Stuart, 2026-10-22: background VFOs still inside the radio's window keep decoding while listeners are on;
@@ -2581,7 +2581,7 @@ const BLOCKABLE = [
   { id: "spots",  label: "Digital spots / map" },
   /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
    *  presses near their house listed at all, however anonymous the list is: this is the switch. */
-  { id: "ism",    label: "ISM sensors" },
+  { id: "ism",    label: "ISM sensors and meters" },
 ];
 
 /** The blocked list as a Set of ids, from this radio's CSV. */
@@ -5536,7 +5536,7 @@ const BG_DEMODS = { usb: "USB", lsb: "LSB", nfm: "NFM" };   // ★ only demodula
 const BG_ISM_BANDS = [
   { id: "315", label: "315 MHz (US / Japan: tyre sensors, key fobs, remotes)" },
   { id: "433", label: "433.92 MHz (weather stations, sensors, doorbells, tyre sensors)" },
-  { id: "868", label: "868 MHz SRD (EU: LaCrosse, Bresser, Fine Offset)" },
+  { id: "868", label: "868 MHz SRD \u2014 sensors and meters (EU: LaCrosse, Bresser, Fine Offset; water, heat and gas meters)" },
   { id: "915", label: "915 MHz (US: LaCrosse, Ambient, Fine Offset)" },
 ];
 function bgIsmBands() {

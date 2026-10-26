@@ -108,6 +108,11 @@ flags_for() {
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
+    # ★★ V12 WIRELESS M-BUS METERS (vibe_wmbus.h, 2026-10-26): CRC, fields, 3-out-of-6, formats A/B, headers, records,
+    #    the line, the interval; T1 / C1-A / C1-B / S1 through the real ISM front end at 1-2.4 MS/s with drift, a
+    #    sensitivity sweep, noise and carriers = nothing, the privacy rule (serial yes, ciphertext never), the day-log
+    #    throttle, a busy street. VIBE_WMBUS_REC=<868.6 MHz u8 at 2.4 MS/s> also replays a real capture (0 meters).
+    test-wmbus)            echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }
@@ -987,9 +992,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── ISM mode (end to end: server, then the web client) ──\033[0m\n'
 if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   "$OUT/test-ism" --write-clip "$OUT/ism-clip.u8" 434130000 2400000 >/dev/null
-  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-server-ism.mjs; rc=$?
+  # ★ V12 wM-Bus: a meter clip on the 868 band (a Sensus T1, encrypted; a Kamstrup C1-A with readings)
+  [ -x "$OUT/test-wmbus" ] && "$OUT/test-wmbus" --write-clip "$OUT/wmbus-clip.u8" 868600000 2400000 >/dev/null
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" VIBE_WMBUS_CLIP="$OUT/wmbus-clip.u8" node scripts/test-server-ism.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-web-ism.mjs; rc=$?
+  VIBE_ISM_CLIP="$OUT/ism-clip.u8" VIBE_WMBUS_CLIP="$OUT/wmbus-clip.u8" node scripts/test-web-ism.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   # ★★ V12 ISM IN THE GALLERY (2026-10-25): a listener's session writes the day's log + card (nothing while it ran, the
   #    list's own lines, no ID anywhere), then an ISM background profile runs with nobody here and gives way to a listener;
@@ -998,7 +1005,7 @@ if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_ISM_CLIP="$OUT/ism-clip.u8" node scripts/test-web-ism-gallery.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  rm -f "$OUT/ism-clip.u8"
+  rm -f "$OUT/ism-clip.u8" "$OUT/wmbus-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-ism build'; notrun=$((notrun+1))
 fi
