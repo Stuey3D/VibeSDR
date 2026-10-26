@@ -92,6 +92,7 @@ int main(int argc, char** argv) {
         else if (a == "--changed") o.onlyChanged = (int)nxt() != 0;
         else if (a == "--aposd2") o.apOsdPairSpan = (int)nxt();
         else if (a == "--apk") o.apMaxCands = (int)nxt();
+        else if (a == "--fineonly") o.fineOnly = (int)nxt() != 0;
         else if (a == "--finesync") o.fineMinSync = (int)nxt();
         else if (a == "--lead") lead = nxt();
         else if (a == "--len") len = nxt();

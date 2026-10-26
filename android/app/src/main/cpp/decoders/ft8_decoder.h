@@ -185,6 +185,8 @@ struct Ft8SlotOptions {
     int osdPairSpan   = 0;
     /** Passes 2-3 skip a candidate the previous pass tried whose band no subtraction touched (it would fail the same). */
     bool onlyChanged  = false;
+    /** With the second look on: no BP on the waterfall's likelihoods at all — every candidate goes straight to it. */
+    bool fineOnly     = false;
     /** Asked before pass 2 and 3 with the ms this decode has taken so far and the ms the last pass took.
      *  Empty = always yes (the bench). */
     std::function<bool(int nextPass, double elapsedMs, double lastPassMs)> mayRunPass;

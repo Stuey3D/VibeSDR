@@ -109,7 +109,16 @@ double msSince(std::chrono::steady_clock::time_point t0) {
  *  which on a Pi 2 is the difference between 2 ms and 15 ms per decoded signal. */
 struct SinTable {
     float s[4096], c[4096];
-    SinTable() { for (int i = 0; i < 4096; ++i) { s[i] = (float)std::sin(kTwoPi * i / 4096); c[i] = (float)std::cos(kTwoPi * i / 4096); } }
+    /* ★ The same values interleaved (cos, sin) for the per-sample reference (2026-10-26): one cache line per lookup
+     *  instead of two. On a Cortex-A7 (32 KB L1) the split tables and the 1.2 MB reference being written fight for
+     *  the cache; by the qemu counter this loop was a quarter of the subtraction. Bit-identical. */
+    float cs[2 * 4096];
+    SinTable() {
+        for (int i = 0; i < 4096; ++i) {
+            s[i] = (float)std::sin(kTwoPi * i / 4096); c[i] = (float)std::cos(kTwoPi * i / 4096);
+            cs[2 * i] = c[i]; cs[2 * i + 1] = s[i];
+        }
+    }
 };
 const SinTable& sinTable() { static SinTable t; return t; }
 
@@ -691,7 +700,7 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
             for (; j < m; ++j) inc[j] = (int32_t)(dp[k0 + j] * toneStep);
             for (j = 0; j < m; ++j) {
                 const int t = (int)(ph >> 20);
-                rc[k0 + j] = tab.c[t]; rs[k0 + j] = tab.s[t];
+                rc[k0 + j] = tab.cs[2 * t]; rs[k0 + j] = tab.cs[2 * t + 1];
                 ph += base + (uint32_t)inc[j];
             }
         }
@@ -1076,7 +1085,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             curKeys_.push_back(key);
             ftx_message_t msg; ftx_decode_status_t ds;
             bool viaOsd = false;
-            const bool bpOk = ftx_decode_candidate_ex(wf, &c, o.ldpcIters, o.bpStall, &msg, &ds);
+            const bool bpOk = (o.fine && o.fineOnly) ? false : ftx_decode_candidate_ex(wf, &c, o.ldpcIters, o.bpStall, &msg, &ds);
             sm[Ft8SlotStats::kLdpc] += lap();
             const float cHz = (mon_.min_bin + c.freq_offset + (float)c.freq_sub / wf->freq_osr) / mon_.symbol_period;
             const double cStart = (double)(c.time_offset - 1) * mon_.block_size + (double)c.time_sub * mon_.subblock_size;
