@@ -45,6 +45,8 @@ inline ModeDef vibeDigiMode_wspr() {
      *  its instruction count), FT8 ≈ 84 ms (eight 15 s slots of 10.5 ms, ft8-bench, 3 passes). On a quiet band WSPR is
      *  ~20–170 ms. Most of it is the Fano search on candidates that are not signals. */
     m.costVsFt8 = 5.0;
+    m.lightCostVsFt8 = 2.0;   // ★ loaded: one pass (the engine's loadProbe)
+    m.priority = 30;          // ★ the governor's third: the propagation reference, and free when its window is empty
     /* ★ Single mode feeds it only while the listener sits on a WSPR dial (±150 Hz): on the FT8 dial its 1400–1600 Hz
      *  is FT8 traffic — nothing to decode, all cost. */
     m.singleDialTolHz = 150;

@@ -41,6 +41,9 @@ struct Spot {
     std::string call;     ///< the SENDER's callsign as decoded (no brackets, no hash placeholders)
     std::string grid;     ///< the sender's OWN 4- or 6-character locator, or "" (never a report such as "-12" or "RR73")
     std::string text;     ///< the decoded message, if the engine has it ("" = none)
+    /** ★ V12 (2026-10-27): what the station was doing, for the modes that say — "CQ" (calling), "QSO" (in an exchange),
+     *  "DE" / "TEST" (identifying) — JTTY and PSK. "" for the slotted modes, whose text already says it. */
+    std::string how;
     int    snr = 0;       ///< dB in 2500 Hz (WSJT-X's convention)
     float  audioHz = 0;   ///< audio frequency above the DIAL (USB) — RF = dial + audioHz
     float  dt = 0;        ///< seconds from the slot's nominal start (0 for a free-running mode)
@@ -87,6 +90,19 @@ struct ModeDef {
     /** Relative CPU of one engine, FT8 = 1.0 (one decode per slot, averaged over the slot). The benchmark's Band row and
      *  the docs use it to cost a band; it never gates anything by itself. */
     double costVsFt8 = 1.0;
+    /** ★★ V12 BAND GOVERNOR (decoders/digi_governor.h, 2026-10-27). The same cost when the engine is told it is `loaded`
+     *  (one pass, no OSD / AP / coherent stage) — the depth the governor drops BEFORE it drops a mode. < 0 = the same as
+     *  costVsFt8 (an engine with no lighter setting). */
+    double lightCostVsFt8 = -1.0;
+    /** ★★ The governor's PRIORITY: lower runs first, and when a band is over budget the HIGHEST number is shed first.
+     *  FT8 10 · FT4 20 · WSPR 30 · JS8 40 · FT2 50 · JTTY 60 · PSK 70 · a mode that says nothing (Q65, FST4, FST4W,
+     *  MSK144 as their engines land) 100 — docs/v12/DIGITAL-SPOTS.md "The Band governor" says why. It also orders the
+     *  band's span: a mode never pushes a higher-priority one out of the 48 kHz cluster. */
+    int priority = 100;
+    /** ★ The activity gate's period (s): how long a window's energy is judged over before its audio is decoded or
+     *  dropped. 0 = the slot (FT8 15, FT4 7.5, WSPR 120); a free-running mode (slotSec 0) says its own (JTTY, PSK 4). */
+    double gateSec = 0;
+    double lightCost() const { return lightCostVsFt8 >= 0 ? lightCostVsFt8 : costVsFt8; }
     /** ★ Own dials, { band id ("20m"), dial Hz }. EMPTY = use the published table in digi_bands.h for `name`. */
     std::vector<std::pair<std::string, double>> dials;
     /** A fresh engine. Called on a socket thread when spots start or the band changes; may throw (the host catches). */

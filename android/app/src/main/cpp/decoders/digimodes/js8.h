@@ -53,6 +53,9 @@ inline ModeDef vibeDigiMode_js8() {
     m.sampleRate = 12000;
     m.audioLoHz = 100; m.audioHiHz = 3300;   // ★ what Js8SlotDecoder's monitor searches (f_min / f_max)
     m.costVsFt8 = 1.8;
+    m.lightCostVsFt8 = 0.6;            // ★ loaded: one pass, no coherent stage, no OSD (docs/v12/JS8-FT2.md)
+    m.priority = 40;
+    m.gateSec = 30.0;                  // ★ the activity gate judges Slow's 30 s (every submode's slot divides it)
     m.make = [] { return std::unique_ptr<Engine>(new Js8Engine()); };
     return m;                          // dials: digi_bands.h's JS8 rows (JS8Call's defaults)
 }
