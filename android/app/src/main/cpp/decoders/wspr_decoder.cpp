@@ -33,8 +33,19 @@ const uint8_t kSyncVector[kSymbols] = {
     0,1,0,0,0,1,1,1,0,0,0,0,0,1,0,1,0,0,1,1,0,0,0,0,0,0,0,1,1,0,1,0,1,1,0,0,0,1,1,0,
     0,0 };
 static constexpr uint32_t kPoly1 = 0xF2D05351u, kPoly2 = 0xE4613C47u;   // K = 32, r = ½ generators
+static_assert((kPoly1 & kPoly2 & 1u) != 0, "the Fano branch metrics rely on both generators tapping the newest bit");
 
-static inline int parity32(uint32_t v) { return __builtin_parity(v); }
+/* ★ Parity: one instruction or two on x86 (the parity flag) and AArch64, but a LIBRARY CALL on 32-bit ARM — on the
+ *  Pi 2 build it was 13 % of a busy slot's instructions (qemu count, 2026-10-26). There it is folded to four bits and
+ *  looked up in a 16-bit constant. */
+static inline int parity32(uint32_t v) {
+#if defined(__arm__) && !defined(__aarch64__)
+    v ^= v >> 16; v ^= v >> 8; v ^= v >> 4;
+    return (0x6996u >> (v & 15u)) & 1;
+#else
+    return __builtin_parity(v);
+#endif
+}
 
 // ── The bit-reversal interleaver ────────────────────────────────────────────
 struct Interleave {
@@ -310,15 +321,15 @@ bool fanoDecode(const float llr[kSymbols], long maxCycles, float delta, uint8_t 
     Node nd[kCodedBits + 1];
     auto branches = [&](int i) {
         Node& x = nd[i];
-        for (int b = 0; b < 2; ++b) {
-            const uint32_t r = (x.state << 1) | (uint32_t)b;
-            x.m[b] = bm[2 * i][parity32(r & kPoly1)] + bm[2 * i + 1][parity32(r & kPoly2)];
-        }
+        // both generators are odd, so the 1-branch's two outputs are the 0-branch's inverted: two parities, not four
+        const uint32_t r = x.state << 1;
+        const int o1 = parity32(r & kPoly1), o2 = parity32(r & kPoly2);
+        x.m[0] = bm[2 * i][o1] + bm[2 * i + 1][o2];
+        x.m[1] = bm[2 * i][o1 ^ 1] + bm[2 * i + 1][o2 ^ 1];
         if (i >= kMsgBits) { x.best = 0; x.m[1] = -1e30f; }
         else x.best = x.m[1] > x.m[0] ? 1 : 0;
-        x.tried = 0;
     };
-    nd[0].state = 0; nd[0].gamma = 0;
+    nd[0].state = 0; nd[0].gamma = 0; nd[0].tried = 0;
     branches(0);
     float T = 0;
     int i = 0;
@@ -330,9 +341,11 @@ bool fanoDecode(const float llr[kSymbols], long maxCycles, float delta, uint8_t 
         const int b = x.tried ? 1 - x.best : x.best;
         const float ng = x.gamma + x.m[b];
         if (ng >= T) {
-            if (x.gamma < T + delta) while (ng >= T + delta) T += delta;   // first visit: tighten
-            nd[i + 1].gamma = ng;
-            nd[i + 1].state = (x.state << 1) | (uint32_t)b;
+            if (x.gamma < T + delta && ng >= T + delta)                    // first visit: tighten, in one step
+                T += delta * std::floor((ng - T) / delta);
+            Node& y = nd[i + 1];
+            y.gamma = ng; y.tried = 0;
+            y.state = (x.state << 1) | (uint32_t)b;
             ++i;
             if (i == kCodedBits) { done = true; break; }
             branches(i);
@@ -1022,11 +1035,15 @@ void WsprDecoder::workerLoop() {
 }
 void WsprDecoder::process(const int16_t* in, int count, double captureUtc) {
     if (!dec_.ok() || count <= 0) return;
-    if (!std::isfinite(captureUtc)) captureUtc = vibe::vibeUtcNow();
     fbuf_.resize((size_t)count);
     for (int i = 0; i < count; ++i) fbuf_[(size_t)i] = in[i] * (1.0f / 32768.0f);
+    process(fbuf_.data(), count, captureUtc);
+}
+void WsprDecoder::process(const float* in, int count, double captureUtc) {
+    if (!dec_.ok() || count <= 0) return;
+    if (!std::isfinite(captureUtc)) captureUtc = vibe::vibeUtcNow();
     tmp_.clear();
-    dec_.push(fbuf_.data(), count, tmp_);
+    dec_.push(in, count, tmp_);
     inTotal_ += count;
     const int64_t R = (int64_t)ring_.size();
     for (const auto& v : tmp_) ring_[(size_t)(total_++ % R)] = v;

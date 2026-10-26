@@ -23,7 +23,8 @@
 //   5. a decode is checked (callsign structure, locator, legal power; a type 3 only with a hash we have heard in
 //      full), its SNR measured in 2500 Hz, and — if the CPU gate allows a second pass — the signal is rebuilt and
 //      SUBTRACTED, and the residual searched again for what it hid.
-// ★ No dynamic allocation in the hot loops; everything sized once per instance (about 1.5 MB, below).
+// ★ No allocation in the hot loops. RAM per live decoder ≈ 2.5 MB: the 375 Hz ring (2 slots, 750 KB), the slot being
+//   decoded (360 KB), the search maps (2 × 490 KB) and the per-candidate scratch (400 KB) — not 2 min of raw audio.
 #pragma once
 #include <atomic>
 #include <cmath>
@@ -233,6 +234,8 @@ public:
     /** Mono int16 audio at the construction rate; `captureUtc` = the corrected UTC the LAST sample was captured
      *  (NaN = now). */
     void process(const int16_t* mono, int count, double captureUtc = NAN);
+    /** The same for float audio at ±1.0 full scale — digi::Engine::process's form (decoders/digi_mode.h, v12-spots). */
+    void process(const float* mono, int count, double captureUtc = NAN);
     /** The dial (USB carrier) frequency, for the spots' RF frequency. A retune mid-slot spoils that slot only. */
     std::atomic<double> dialHz{0};
 
