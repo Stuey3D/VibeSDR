@@ -33,6 +33,8 @@ struct DongleHooks {
     std::function<std::string(const std::vector<std::string>& fresh)> afterSwitch;
     /** Before a give-back: stop serving the radio with this serial (may be ""), so Windows can remove it cleanly. */
     std::function<void(const std::string& serial)> releaseForGiveBack;
+    /** The give-back did not happen (declined, refused, failed): serve that radio again as it was. */
+    std::function<void(const std::string& serial)> undoRelease;
 };
 
 /** The front door, once: scan, print the offers, and watch for USB arrivals (CM_Register_Notification). */

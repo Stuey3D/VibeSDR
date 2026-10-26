@@ -2852,7 +2852,10 @@ int main(int argc, char** argv) {
             }
             return said;
         };
+        // ★ Which radio a give-back paused, so a declined prompt can put it straight back (this run only).
+        static std::string s_pausedForGiveBack;
         hooks.releaseForGiveBack = [](const std::string& serial) {
+            s_pausedForGiveBack.clear();
             if (serial.empty()) return;
             vsconfig::ServerConfig next; std::string err;
             if (!vsconfig::loadServer(g_configPath, next, err)) next = g_serverConfig;
@@ -2860,10 +2863,23 @@ int main(int argc, char** argv) {
                 if (r.serial == serial && r.enabled) {
                     // ★ Paused, not removed: its settings wait in case it is switched back.
                     r.enabled = false;
-                    if (vsconfig::saveServer(g_configPath, next, err)) g_serverConfig = next;
+                    if (vsconfig::saveServer(g_configPath, next, err)) { g_serverConfig = next; s_pausedForGiveBack = serial; }
                     break;
                 }
             stopRadioProcess(serial);
+        };
+        hooks.undoRelease = [](const std::string& serial) {
+            if (serial.empty() || serial != s_pausedForGiveBack) return;
+            s_pausedForGiveBack.clear();
+            vsconfig::ServerConfig next; std::string err;
+            if (!vsconfig::loadServer(g_configPath, next, err)) next = g_serverConfig;
+            for (auto& r : next.radios)
+                if (r.serial == serial) {
+                    r.enabled = true;
+                    if (vsconfig::saveServer(g_configPath, next, err)) g_serverConfig = next;
+                    if (r.configured) startRadioProcess(serial);
+                    break;
+                }
         };
         vibewin::startDongleWatch(hooks);
     }

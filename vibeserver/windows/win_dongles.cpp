@@ -217,7 +217,12 @@ void doGiveBack(Dongle d) {
     bool declined = false, reboot = false; std::string msg;
     const int rc = runElevated(a, declined, reboot, msg);
     { std::lock_guard<std::mutex> lk(g_mtx); g_rescan = true; g_cv.notify_all(); }
-    if (rc != 0) { finishJob(false, declined, false, declined ? msg : "Not given back: " + msg); return; }
+    if (rc != 0) {
+        // ★ Nothing changed in Windows, so nothing changes here either: the radio goes back on the air.
+        if (g_hooks.undoRelease) g_hooks.undoRelease(d.serial);
+        finishJob(false, declined, false, declined ? msg : "Not given back: " + msg);
+        return;
+    }
     finishJob(true, false, reboot, describe(d) + " is back on Windows' own driver" +
               (reboot ? " once the PC restarts (Windows asked for a restart)." : ". Its settings are kept, paused, in case you switch it again."));
 }
