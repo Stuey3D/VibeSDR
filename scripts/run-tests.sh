@@ -152,7 +152,9 @@ flags_for() {
     # ★★ DRM's AAC through FAAD2 on the real RRI recording: decodes, programme, concealment without clicks or gaps, CPU.
     test-drm-faad)         echo "-O2 -I $VDSP -I $KISS $FAAD_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★ DAB+ through FAAD2 (vibe_dab_faad.h) against today's FFmpeg child and a 960 reference, on REAL unit logs.
-    test-dab-faad)         echo "-O3 -ffp-contract=fast $FAAD_DAB_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
+    # ★ V12: FAAD2 on its own thread (vibe-dabaac) — same audio as inline, a full ring drops (concealed) never waits,
+    #   resets mid-queue, the live switch both ways. Same deps as test-dab-faad.
+    test-dab-faad|test-dab-faad-queue) echo "-O3 -ffp-contract=fast $FAAD_DAB_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★★ V12 WSPR (decoders/digimodes/wspr_decoder.h): protocol, synthetic slots −20…−28 dB with drift and DT, hashed calls, pure
     #    noise, subtraction, the live decoder — optimised, it decodes ~50 two-minute slots. VIBE_TEST_AUDIO adds 40 m + 20 m
     #    off air, with the WSPRnet-scale SNR held to ±1 dB (mean) / ±3 dB (each) of Stuart's UberSDR's own reports.
@@ -280,7 +282,7 @@ deps_for() {
     test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
     test-drm|test-drm-faad|test-drm-signal) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
-    test-dab-faad)          echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
+    test-dab-faad|test-dab-faad-queue) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
     test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C)
     *)                  echo "" ;;

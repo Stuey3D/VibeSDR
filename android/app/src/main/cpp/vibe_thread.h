@@ -43,6 +43,7 @@
   namespace vibeprio {
       constexpr int kNet       = -20;   // the audio socket's send, and the IQ input
       constexpr int kAudio     = -19;   // the real-time chain (= THREAD_PRIORITY_URGENT_AUDIO)
+      constexpr int kAudioDecode = -17; // an audio codec on its own thread, fed by the chain (vibe-dabaac)
       constexpr int kSendWf    = -10;   // the waterfall/control/decoder socket's send
       constexpr int kSpectrum  = -5;
       constexpr int kDecoder   = 10;
@@ -104,6 +105,17 @@
   }
   inline void vibeSpectrumThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kSpectrum); }
   inline void vibeDecoderThread(const char* name)  { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kDecoder); }
+  /* ★★ AN AUDIO CODEC OFF THE CHAIN'S OWN THREADS (V12, 2026-10-26 — DAB+ through FAAD2, vibe-dabaac). It IS the audio
+   *  path, so it sits far above spectrum and decoders — but one rung BELOW the chain that feeds it (-19: the IQ reader,
+   *  the DAB OFDM/Viterbi, the DSP): a unit that never leaves the demodulator cannot be decoded at all, and a codec a
+   *  few ms late is absorbed by the PCM buffer (~2 s) where a late demodulator loses samples for good. CFS weights:
+   *  -17 weighs 0.64x of -19 and ~15x of spectrum's -5 — on a busy Pi 2 it still gets its time, just after the chain's. */
+  inline void vibeAudioDecodeThread(const char* name) {
+      prctl(PR_SET_NAME, name);
+      vibe::vibeFlushDenormals();
+      errno = 0;
+      if (setpriority(PRIO_PROCESS, 0, vibeprio::kAudioDecode) != 0 && errno != 0) vibeAudioThread(name);   // ★ warns once
+  }
   /* ★★★ BULK HTTP — BELOW THE WHOLE ORDER. Map tiles, the map data, the web client's scripts:
    *  bytes somebody is waiting for, but nobody HEARS late. A zoom-out on the GPU map fires dozens of
    *  PMTiles range reads at once, each on its own connection thread, and those threads sat at nice
@@ -171,6 +183,12 @@
       vibe::vibeFlushDenormals();
       pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
   }
+  // ★ The audio codec's own thread (see the Linux note): the audio class, one step below the chain within it.
+  inline void vibeAudioDecodeThread(const char* name) {
+      pthread_setname_np(name);
+      vibe::vibeFlushDenormals();
+      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, -2);
+  }
   // ★ Bulk HTTP (see the Linux note): the lowest class that still makes steady progress.
   inline void vibeBulkThread(const char* name) {
       pthread_setname_np(name);
@@ -189,6 +207,7 @@
   inline void vibeSendRank(bool) {}
   inline void vibeSpectrumThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeDecoderThread(const char*) { vibe::vibeFlushDenormals(); }
+  inline void vibeAudioDecodeThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeBulkThread(const char*) {}
   inline void vibeIqThread(const char*) { vibe::vibeFlushDenormals(); }
 #endif

@@ -101,6 +101,12 @@ public:
     int unitFrames() const { return 0; }
     double cpuSeconds() const { return -1.0; }  ///< inside the OS's media service — not ours to measure
     bool switchPending() const { return false; }
+    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
+    uint64_t inFlightFrames() const { return 0; }
+    uint64_t dropped() const { return 0; }
+    uint32_t generation() const { return 0; }
+    template <class F> void setSink(F&&) {}
+    void stop() {}
     int64_t concealed() const { return 0; }
     const char* backend() const { return "AMediaCodec"; }
     AacDecoder() = default;
@@ -455,6 +461,12 @@ public:
     void conceal(int, AacPcm&) {}
     int unitFrames() const { return 0; }
     bool switchPending() const { return false; }
+    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
+    uint64_t inFlightFrames() const { return 0; }
+    uint64_t dropped() const { return 0; }
+    uint32_t generation() const { return 0; }
+    template <class F> void setSink(F&&) {}
+    void stop() {}
     int64_t concealed() const { return 0; }
     /** ★ The CHILD's CPU (user + system), so the DAB panel can show what the decoder costs: /proc/<pid>/stat on Linux,
      *  proc_pid_rusage on macOS. Cumulative for the current child; -1 when there is none. */
@@ -663,6 +675,12 @@ public:
     int unitFrames() const { return 0; }
     double cpuSeconds() const { return useFf_ ? ff_.cpuSeconds() : -1.0; }
     bool switchPending() const { return false; }
+    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
+    uint64_t inFlightFrames() const { return 0; }
+    uint64_t dropped() const { return 0; }
+    uint32_t generation() const { return 0; }
+    template <class F> void setSink(F&&) {}
+    void stop() {}
     int64_t concealed() const { return 0; }
     /** ★ VIBE_AAC_APPLE=1 forces AudioToolbox — read once, here, so dab-offline can measure both. */
     AacDecoderPlatform() : useFf_(ff_.available() && !getenv("VIBE_AAC_APPLE")) {}
@@ -695,6 +713,16 @@ class AacDecoder {
 public:
     static constexpr bool kExactFrames = false;    ///< not ALWAYS exact — ask exactFrames()
     AacDecoder() { useFaad_ = want(); }
+    /* ★★★ FAAD2 RUNS ON ITS OWN THREAD (vibe-dabaac — AacDecoderFaadAsync): its decode and conceal calls return at once
+     *  and the PCM arrives through the sink. FFmpeg (a child process) and the others decode in the call, as before. */
+    bool async() const { return useFaad_; }
+    uint64_t inFlightFrames() const { return useFaad_ ? faad_.inFlightFrames() : 0; }
+    uint64_t dropped() const { return faad_.dropped(); }
+    uint32_t generation() const { return faad_.generation(); }
+    void setSink(AacDecoderFaadAsync::Sink s) { faad_.setSink(std::move(s)); }
+    void stop() { faad_.stop(); }
+    double cpuDecodeSeconds() const { return useFaad_ ? faad_.cpuDecodeSeconds() : -1.0; }
+    double cpuResampleSeconds() const { return useFaad_ ? faad_.cpuResampleSeconds() : -1.0; }
     bool exactFrames() const { return useFaad_; }
     bool canConceal() const { return useFaad_; }
     void conceal(int n, AacPcm& out) { if (useFaad_) faad_.conceal(n, out); }
@@ -714,7 +742,7 @@ public:
 private:
     static bool want() { const int e = dabAacEnvChoice(); return (e >= 0 ? e : dabAacChoice().load(std::memory_order_relaxed)) == 1; }
     AacDecoderPlatform plat_;
-    AacDecoderFaad faad_;
+    AacDecoderFaadAsync faad_;
     bool useFaad_ = false;
 };
 #else
@@ -736,6 +764,12 @@ public:
     int unitFrames() const { return 0; }
     double cpuSeconds() const { return -1.0; }
     bool switchPending() const { return false; }
+    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
+    uint64_t inFlightFrames() const { return 0; }
+    uint64_t dropped() const { return 0; }
+    uint32_t generation() const { return 0; }
+    template <class F> void setSink(F&&) {}
+    void stop() {}
     int64_t concealed() const { return 0; }
     bool available() const { return false; }
     const char* backend() const { return "none"; }
