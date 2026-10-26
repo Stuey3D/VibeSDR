@@ -45,6 +45,8 @@ const KINDS: { id: string; label: string }[] = [
   { id: 'psk', label: 'PSK' },
   // ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card (vibe_ism_gallery.h)
   { id: 'ism', label: 'ISM' },
+  // ★★ V12: AIS (ships) and APRS (stations) — each a day's log of messages and a summary card of who was heard (the web's chips)
+  { id: 'ais', label: 'AIS' }, { id: 'aprs', label: 'APRS' },
   // ★★ V12 2026-10-26: DSC — each frequency's day of calls as a .txt, every distress/urgency call on its own (vibe_dsc_gallery.h)
   { id: 'dsc', label: 'DSC' },
 ];

@@ -180,6 +180,8 @@ ok('ModeSelector: the APRS key only where offered', /aprsAvail/.test(ms) && /onD
 const sd = src('src/screens/SDRScreen.tsx');
 ok('SDRScreen: audio let go in AIS', /const audioQuiet = [^;]*aisOn/.test(sd));
 ok('SDRScreen: no AIS on Apple TV (no map there)', /aisAvail:[^\n]*IS_APPLE_TV/.test(sd));
+const gal = src('src/components/GalleryOverlay.tsx');
+ok('Gallery: AIS and APRS chips (the web\'s)', /id: 'ais', label: 'AIS'/.test(gal) && /id: 'aprs', label: 'APRS'/.test(gal));
 const about = src('src/components/AboutOverlay.tsx');
 ok('About: the V12 note names AIS and APRS', /AIS/.test(about) && /APRS/.test(about));
 const tour = src('src/screens/SDRScreen.tsx');
