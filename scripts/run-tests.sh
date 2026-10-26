@@ -489,6 +489,9 @@ if npx tsx scripts/test_psk_jtty_dsc_app.ts; then pass=$((pass+1)); else fail=$(
 # ★★ V12 APP PARITY 2: the app's digital spots — the server's mode list, Band mode's capability and title, the governor's chips —
 #    against the web's own code cut out of main.ts / decoders.ts.
 if npx tsx scripts/test_spots_band_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 APP PARITY 2: the app's DRM box against the web's drmRender (the same words in the same order), the sanitiser,
+#    the capability (vibeserver.json modes lists "drm").
+if npx tsx scripts/test_drm_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),
 #    NM, rows, tiles, the map feed, Find / stats, the readings' memory, the capability, the wiring (V12 NDB).
 if npx tsx scripts/test_ndb_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

@@ -11,13 +11,15 @@ import { parseSpotModes, parseSpotsBandCap, type SpotsBandCap } from './spotsBan
 import { parseNdbCapability } from './ndb';
 import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';   // ★ V12 AIS / APRS
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
+// ★ V12 'drm' = Digital Radio Mondiale, a VibeServer demodulator offered only where its vibeserver.json `modes` lists it
+//   (docs/v12/DRM.md); not in MODES. The server receives it whole per listener; the client draws the DRM box.
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm';
 export type Mode = SDRMode; // alias
 
 export const MODES: SDRMode[] = ['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl'];
 export const MODE_LABELS: Record<SDRMode, string> = {
   usb: 'USB', lsb: 'LSB', am: 'AM', sam: 'SAM',
-  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM',
+  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM', drm: 'DRM',
 };
 
 // ★ 5 kHz is the shortwave BROADCAST raster (the 49 m to 16 m bands channel on it) — a DL8LDN

@@ -29,6 +29,7 @@
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { DIGI_MODE_STYLE, DIGI_MARKER_RIM } from '../utils/digiModes';
+import { DSC_PIN_COLOURS } from '../services/dsc';   // ★ V12 DSC's map legend
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useOverlay } from './PanelNav';
 import { NavCard, CardKey } from './NavCard';
@@ -98,7 +99,9 @@ import { FMT_SPOT_TIME_JS } from '../utils/spotTime';   // ★ the spot card's H
  *  leaves the mode (SDRScreen exitAis). 'aprs' = the APRS decoder's station map (the box's MAP key); CLOSE MAP goes back to
  *  the box and the decoder carries on. Both draw with the shared track layer, fed by React Native (no socket of the
  *  page's own), with React Native's live list bottom-left (TrackLiveList). */
-export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb' | 'ais' | 'aprs' | 'ndb';
+/* ★ 'dsc' (V12) = the DSC box's MAP: the positions sent in DSC calls, on the same track layer (pins coloured by level, the
+ *  call's own line as the card); CLOSE MAP goes back to the box and the decoder carries on. */
+export type MapKind = 'hfdl' | 'digi' | 'cw' | 'adsb' | 'ais' | 'aprs' | 'ndb' | 'dsc';
 
 interface MapOverlayProps {
   visible: boolean;
@@ -195,7 +198,7 @@ function buildHtml(
   const isHfdl = kind === 'hfdl';
   const isAdsb = kind === 'adsb';
   const isNdb = kind === 'ndb';   // ★ V12 NDB — the aero look, its own layer, RN's live list (as ADS-B)
-  const isTrk = kind === 'ais' || kind === 'aprs';   // ★ V12 AIS / APRS — the shared track layer
+  const isTrk = kind === 'ais' || kind === 'aprs' || kind === 'dsc';   // ★ V12 AIS / APRS / DSC — the shared track layer
   /* ★★ THE AIRCRAFT MAPS SHARE ONE LOOK: ADS-B wears HFDL's amber-black page, its 'aero' basemap and its chrome.
    *  `aero` is the look; `isHfdl` stays for what is HFDL's alone (SNAP, the ground stations, the flight toast). */
   const aero = isHfdl || isAdsb || isNdb;
@@ -208,11 +211,11 @@ function buildHtml(
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' ? 'AIS SHIP MAP'
-    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'dsc' ? 'DSC POSITIONS' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
   const CNT_ICON = isNdb
     // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" style="vertical-align:middle;opacity:0.8"><path d="M12 9 L8 22 M12 9 L16 22 M9.5 17 L14.5 17" stroke="rgba(255,190,40,0.9)" stroke-width="1.6" fill="none" stroke-linecap="round"/><circle cx="12" cy="7" r="1.8" fill="rgba(255,190,40,0.9)"/><path d="M7.5 3.5 A6 6 0 0 0 7.5 10.5 M16.5 3.5 A6 6 0 0 1 16.5 10.5" stroke="rgba(255,190,40,0.7)" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>`
-    : kind === 'ais' ? '&#9875;' : kind === 'aprs' ? '&#128225;' : aero
+    : kind === 'ais' || kind === 'dsc' ? '&#9875;' : kind === 'aprs' ? '&#128225;' : aero
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
     : kind === 'cw'
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.x},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
@@ -448,10 +451,11 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     ? '<button id="back" aria-label="Exit NDB and give the receiver back">EXIT NDB</button>'
     : kind === 'ais' ? '<button id="back" aria-label="Exit AIS and give the receiver back">EXIT AIS</button>'
     : kind === 'aprs' ? '<button id="back" aria-label="Close the map — the APRS decoder carries on">CLOSE MAP</button>'
+    : kind === 'dsc' ? '<button id="back" aria-label="Close the map — the DSC decoder carries on">CLOSE MAP</button>'
     : '<button id="back">&#8592; SDR</button>'}
   <div id="title">${TITLE}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
-  ${isTrk ? `<button id="snap" class="trkfit" title="Fit every ${kind === 'ais' ? 'ship' : 'station'} on the map">FIT</button>` : ''}
+  ${isTrk ? `<button id="snap" class="trkfit" title="Fit every ${kind === 'ais' ? 'ship' : kind === 'dsc' ? 'position' : 'station'} on the map">FIT</button>` : ''}
   ${isAdsb ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
@@ -496,6 +500,10 @@ ${isSpots ? `
       <div class="lg-row"><span class="lg-dot" style="background:#ffad42;"></span><span>object / item</span></div>
       <div class="lg-row"><span class="lg-dot" style="background:#c58cff;"></span><span>digipeater / gateway</span></div>
       <div class="lg-row"><span>&#9711;</span><span>Dashed ring = alternate symbol table</span></div>
+      ` : kind === 'dsc' ? `
+      <div class="lg-sec">DSC POSITIONS</div>
+      ${DSC_PIN_COLOURS.map((c, i) => `<div class="lg-row"><span class="lg-dot" style="background:${c};"></span><span>${['routine', 'safety', 'urgency', 'distress'][i]}</span></div>`).reverse().join('')}
+      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
       ` : isAdsb ? `
       <div class="lg-sec">ADS-B 1090</div>
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
@@ -929,7 +937,7 @@ if(LOCAL){
 }else if(KIND==='ndb'){
   /* ★ V12 NDB: the beacon layer draws the receiver's house itself (ndblayer.js) — only the view is set here. */
   if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],7);
-}else if(KIND==='ais'||KIND==='aprs'){
+}else if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'){
   /* ★ V12 AIS / APRS: the server's /location, injected; the track layer draws the receiver's house itself (setReceiver). */
   if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],8);
 }else{
@@ -1453,7 +1461,7 @@ if(KIND==='ndb'){
  *  a tapped one's track and its card. Each item arrives with its icon, label and card already made (src/services/tracks.ts
  *  — one rule, two readers with the web), so this page holds no copy of what a ship looks like. A track is asked of React
  *  Native (AIS: the server's ais_trail; APRS: the list's own), answered through __trkTrail. */
-if(KIND==='ais'||KIND==='aprs'){
+if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'){
   var trkLayer=null,trkWait={},trkWantFocus=null;
   function trkPost(o){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(o));}
   function trkMake(){
@@ -1944,7 +1952,7 @@ export default function MapOverlay(
   };
   /* ★ V12 AIS / APRS: the items each report (they REPLACE — the server's list is the truth), double-encoded as ADS-B's are
    *  (a ship's name can never become source). Parked in __pendingTrk until the page's handler exists. */
-  const isTrkKind = kind === 'ais' || kind === 'aprs';
+  const isTrkKind = kind === 'ais' || kind === 'aprs' || kind === 'dsc';
   const trkRef = useRef(trk); trkRef.current = trk;
   const pushTrk = (items?: TrackItem[]) => {
     if (!isTrkKind || !items) return;
@@ -2210,7 +2218,7 @@ export default function MapOverlay(
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
-          <TrackLiveList title={kind === 'ais' ? 'SHIPS' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
+          <TrackLiveList title={kind === 'ais' ? 'SHIPS' : kind === 'dsc' ? 'CALLS' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
                          safety={trk.safety} onFocus={trkFocus} selected={trkSel} onFootprint={trkFootprint}
                          ink={ink} areaW={winW} areaH={winH}
                          insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />

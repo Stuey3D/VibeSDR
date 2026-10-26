@@ -122,6 +122,7 @@ function resampleRow(src: Float32Array, outN: number): Float32Array {
 const MODE_TO_WIRE: Record<SDRMode, string> = {
   usb: 'usb', lsb: 'lsb', am: 'am', sam: 'sam',
   fm: 'nfm', nfm: 'nfm', cwu: 'cw', cwl: 'cw', wfm: 'wfm',
+  drm: 'drm',   // ★ OpenWebRX's own DRM demodulator (gated on its `modes` list, as every mode here)
 };
 
 const OWRX_CAPS: BackendCapabilities = {

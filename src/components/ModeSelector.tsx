@@ -138,7 +138,8 @@ function fmtHz(hz: number) {
 
 // Common analog/voice demodulators shown as buttons; everything else the server
 // offers (digital, decoders, sondes…) goes into the in-popup dropdown.
-const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'sam', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
+// ★ V12 'drm' is a demodulator beside AM (a VibeServer's DRM receiver; OpenWebRX's own DRM too) — a main key, not a decoder
+const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'drm', 'sam', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
 const DEC_COL = '#52dc64';   // active-decoder accent (matches VTS live-data green)
 
 // ── Decoder-settings helpers (moved with the decoders from MenuSheet §4.3) ──────

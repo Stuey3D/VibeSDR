@@ -12,6 +12,7 @@
  * ★★ READABLE, NEVER A SYMBOL DUMP: each call is the server's own line, coloured by what it is — distress red, urgency
  *    orange, safety amber, routine plain — newest first.
  */
+import { esc, rangeBearing, compass8, ago, type LatLon, type TrackItem, type TrackRow } from './tracks';
 
 export interface DscCall {
   id: number; utc: number; rf: number; repeat: number;
@@ -119,3 +120,35 @@ export function dscChannelsReachable(reach: (hz: number) => boolean): Array<{ hz
 
 /** A call with a position, as a map pin: the call's line, its level's colour (the web's PIN_COLOUR). */
 export const DSC_PIN_COLOURS = ['#9fb3c8', '#E8C547', '#FF8A3D', '#FF4B4B'];
+
+/* ★★ THE MAP (the box's MAP — the web's openDscMap / dscMapHtml): every call that sent a position, pinned on this server's
+ *  own map with this receiver's house beside it, a pin's colour its level, its card the call's own line. In the app it is
+ *  the shared track layer (MapOverlay kind 'dsc', TrackLiveList for the rows), so the pins are TrackItems. */
+
+/** One pin per transmission (id + frequency), newest first, only calls with a position. */
+export const dscKey = (c: DscCall) => `${c.id}:${c.rf}`;
+export function dscItems(calls: readonly DscCall[]): TrackItem[] {
+  return calls.filter((c) => c.lat !== null && c.lon !== null).slice(0, 200).map((c) => {
+    const col = DSC_PIN_COLOURS[Math.max(0, Math.min(3, c.level))];
+    return {
+      key: dscKey(c), lat: c.lat as number, lon: c.lon as number,
+      _ic: { w: 20, h: 20, html: `<svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="${col}" stroke="#000000aa" stroke-width="2"/></svg>` },
+      _lb: esc(c.self ? `MMSI ${c.self}` : c.distressId ? `MMSI ${c.distressId}` : DSC_LEVEL_NAMES[c.level] ?? ''),
+      _cd: `<div class="trkCard"><div style="white-space:normal;max-width:300px">${esc(c.line)}</div></div>`,
+    };
+  });
+}
+/** The live list's rows: the calls with a position, newest first — level, who, the line, range and bearing from here. */
+export function dscListRows(calls: readonly DscCall[], rx: LatLon | null, now: number): TrackRow[] {
+  return calls.filter((c) => c.lat !== null && c.lon !== null).slice(0, 200).map((c) => {
+    const rb = rx ? rangeBearing(rx, c.lat as number, c.lon as number) : null;
+    return {
+      key: dscKey(c), colour: DSC_PIN_COLOURS[Math.max(0, Math.min(3, c.level))], flag: '',
+      name: c.self ? `MMSI ${c.self}` : c.format || 'DSC call',
+      second: [DSC_LEVEL_NAMES[c.level]?.toUpperCase(), c.nature, c.posText].filter(Boolean).join(' · '),
+      sp: '', trend: 0, range: rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM` : '', brg: rb ? compass8(rb.brg) : '',
+      noPos: false, age: ago((now - c.utc) / 1000), em: c.level >= 3,
+    };
+  });
+}
+export const DSC_MAP_EMPTY = 'No DSC call heard yet has sent a position.';

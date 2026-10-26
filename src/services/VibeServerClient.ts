@@ -24,6 +24,7 @@ import { parseAdsbMessage } from './adsbTypes';
 import { AdsbInfoStore } from './adsbInfo';
 import { ismSanitise } from './ism';
 import { ndbSanitise, parseNdbFound, parseNdbStats } from './ndb';
+import { drmSanitise } from './drm';   // ★ V12 DRM
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseDabScan } from './dabBandScan';
 
@@ -372,6 +373,9 @@ export class VibeServerClient extends VibeServerWsClient {
         return true;
       case 'ndb_found': this.callbacks.onNdbFound?.(parseNdbFound(msg)); return true;
       case 'ndb_stats': this.callbacks.onNdbStats?.(parseNdbStats(msg)); return true;
+      /* ★★ V12 DRM — the listener's own DRM receiver's report (only while their mode is DRM; a ghost after leaving is
+       *  dropped by the screen, which checks the mode as the web's onDrm does). */
+      case 'drm': { const d = drmSanitise(msg); if (d) this.callbacks.onDrm?.(d); return true; }
       /* ★ V12 AIS: a report about once a second — ITS ARRIVAL MEANS AIS IS ON (a second listener joining a radio somebody
        *  else put there); `ais_off` ended it (the restored config follows); `ais_error` is the refusal, with its reason. */
       case 'ais': {
