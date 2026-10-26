@@ -645,6 +645,7 @@ int WsprSlotDecoder::search(int pass, std::vector<Cand>& cands, int maxCands) {
             q[b] = den > 0 ? (P[b + 2] + P[b + 6] - P[b] - P[b + 4]) / den : 0.f;
         }
     }
+    avgSpectrum();   // every pass: a pass-2 station is measured on the residual, its strong neighbour gone
     constexpr int W = kBHi - kBLo;                  // 328
     static_assert(W % 4 == 0, "row width");
     float best[W], acc[W];
@@ -695,6 +696,56 @@ double WsprSlotDecoder::bandNoise() {
     std::nth_element(pv.begin(), pv.begin() + (long)qi, pv.end());
     noise375_ = pv[qi] / 0.35667 / wspr::kSps375;
     return noise375_;
+}
+
+/* ★★★ THE WSPRNET SNR SCALE (Stuart, 2026-10-27: "shift to wsprnet"). Spots are compared with other stations' reports,
+ *  and those come from decoders that all read SNR the same way — not as the definition (signal power over the noise in
+ *  2500 Hz, which `snrTrue` keeps) but from the SLOT-AVERAGED SPECTRUM: two-symbol (512-sample) sine-windowed frames
+ *  every half symbol, their powers summed over the slot, smoothed by a 7-bin (5.1 Hz) moving sum that spans the four
+ *  tones, and divided by the 30th percentile of that smoothed spectrum across ±150 Hz; the signal is the smoothed
+ *  peak at its frequency less the noise (1), and 26.3 dB refers that ratio to 2500 Hz. Measured that way it carries
+ *  what the definition does not: a neighbour's skirts inside the 5 Hz, and a busy band's raised percentile — which is
+ *  why the gap to Stuart's UberSDR was 6.6 dB on 40 m but 3.7 dB on 20 m, and no constant could close both.
+ *  Written from that description; computed at each pass on what that pass searches — the audio as received for pass
+ *  1, the residual after subtraction for passes 2 and 3 (a weak station under a strong one otherwise reads the strong
+ *  one's peak: real 40 m, PA5CA read −11 for the reference's −18). */
+void WsprSlotDecoder::avgSpectrum() {
+    const std::vector<std::complex<float>>& x = *x_;
+    const int N = (int)x.size(), L = 2 * wspr::kSps375;   // 512
+    if ((int)win512_.size() != L) {
+        win512_.resize((size_t)L);
+        for (int i = 0; i < L; ++i) win512_[(size_t)i] = (float)std::sin(M_PI * (i + 0.5) / L);
+    }
+    std::vector<double> acc((size_t)kFft, 0.0);
+    for (int s0 = 0; s0 + L <= N; s0 += 128) {
+        for (int i = 0; i < L; ++i) {
+            const float w = win512_[(size_t)i];
+            fftIn_[2 * i] = x[(size_t)(s0 + i)].real() * w; fftIn_[2 * i + 1] = x[(size_t)(s0 + i)].imag() * w;
+        }
+        pffft_transform_ordered((PFFFT_Setup*)fft_, fftIn_, fftOut_, fftWork_, PFFFT_FORWARD);
+        for (int j = 0; j < kFft; ++j) acc[(size_t)j] += (double)fftOut_[2 * j] * fftOut_[2 * j] + (double)fftOut_[2 * j + 1] * fftOut_[2 * j + 1];
+    }
+    std::memset(fftIn_, 0, sizeof(float) * 2 * kFft);      // search() relies on the zero padding
+    // centred at 0 Hz: index c ↔ bin (c − 205); 411 bins = ±150 Hz, each the 7-bin sum around it
+    constexpr int kAvgHalf = 205, kAvgW = 2 * kAvgHalf + 1;
+    avg_.assign((size_t)kAvgW, 0.f);
+    for (int c = 0; c < kAvgW; ++c) {
+        double sum = 0;
+        for (int d = -3; d <= 3; ++d) sum += acc[(size_t)((c - kAvgHalf + d + kFft) % kFft)];
+        avg_[(size_t)c] = (float)sum;
+    }
+    std::vector<float> srt = avg_;
+    std::nth_element(srt.begin(), srt.begin() + kAvgW * 3 / 10, srt.end());
+    const float noise = srt[(size_t)(kAvgW * 3 / 10)];
+    for (float& v : avg_) v = noise > 0 ? v / noise - 1.f : 0.f;
+}
+double WsprSlotDecoder::snrWsprnet(double centreHz) const {
+    if (avg_.empty()) return -99;
+    const int c = (int)avg_.size() / 2 + (int)std::lround(centreHz / kBinHz);
+    float pk = -1e9f;
+    for (int d = -1; d <= 1; ++d) if (c + d >= 0 && c + d < (int)avg_.size()) pk = std::max(pk, avg_[(size_t)(c + d)]);
+    const float floorV = 0.1f * std::pow(10.f, -0.8f);       // below −8 dB in the WSPR bandwidth the scale bottoms out
+    return 10.0 * std::log10(std::max(pk, floorV)) - 26.3;
 }
 
 /** The candidate's centre mixed to 0 Hz and decimated to 46.875 Hz (32 samples a symbol), into zr_/zi_. */
@@ -918,17 +969,16 @@ bool WsprSlotDecoder::refineAndDecode(const Cand& c, const WsprSlotOptions& o, d
     sp.slotUtc = slotUtc;
     sp.audioHz = wspr::kAudioCentre + zMix_ + bf;
     sp.freqHz = dialHz + sp.audioHz;
-    /* SNR in 2500 Hz: the signal's mean power (its amplitude followed through the slot) over the band's noise per
-     *  375 Hz sample, × 375/2500 — a real tone's power over the noise in 2500 Hz, as the convention defines it, and
-     *  exact on test-wspr's synthetic slots (±0.5 dB from −10 to −30). ★ Stuart's UberSDR reads the same stations a
-     *  mean 6.6 dB HIGHER on real 40 m (its decoder takes the peak of a smoothed, slot-averaged spectrum) — compare
-     *  our numbers with each other, not across decoders. */
+    /* Two SNRs. `snrTrue`, the definition: the signal's mean power (its amplitude followed through the slot) over the
+     *  band's noise per 375 Hz sample, × 375/2500 — exact on test-wspr's synthetic slots. `snr`, the WSPRNET scale the
+     *  spots carry (avgSpectrum above) — what other receivers' reports of the same station read. */
     {
         Fit tf; tf.f0 = zMix_ + bf - 1.5 * wspr::kBaud; tf.t0 = bt; tf.drift = bd;
         const double ps = track(tf, tones, false);
         const double nl = bandNoise();
         const double snr = nl > 0 ? 10.0 * std::log10(std::max(ps, 1e-6 * nl) / nl * 375.0 / 2500.0) : -99;
-        sp.snr = (int)std::lround(std::max(-35.0, std::min(30.0, snr)));
+        sp.snrTrue = (float)std::max(-40.0, std::min(30.0, snr));
+        sp.snr = (int)std::lround(std::max(-40.0, std::min(30.0, snrWsprnet(zMix_ + bf))));
     }
     sp.dt = (float)(bt / kZRate - wspr::kLeadSec - wspr::kStartSec);
     sp.drift = bd;

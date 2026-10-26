@@ -11,8 +11,11 @@
 //   • PURE NOISE gives no spot — the decoder runs unattended into the gallery, so a false spot is a lie written down;
 //   • SUBTRACTION PAYS: a weak station two tones beside a strong one is found by pass 2, not by pass 1 alone;
 //   • the LIVE decoder: int16 blocks with capture times → one spot per transmission, the right slot and RF frequency;
-//   • REAL SIGNALS (when VIBE_TEST_AUDIO holds wspr/): three slots of Stuart's UberSDR on 40 m — every decode one a
-//     reference receiver also heard, and a type 3 resolved through a hash learnt two slots earlier.
+//   • REAL SIGNALS (when VIBE_TEST_AUDIO holds wspr/): slots of Stuart's UberSDR on 40 m and 20 m — every decode one a
+//     reference receiver also heard, a type 3 resolved through a hash learnt two slots earlier, and the spots' SNR on
+//     the WSPRNET scale: within ±1 dB on average, ±3 dB each, of what STUEY3D reported for the same stations.
+//   • two SNRs: `snrTrue` (the definition) is exact on synthetic slots; `snr` (the WSPRnet scale) equals it there too —
+//     on clean white noise the two conventions agree; they part only on a real, busy band.
 // ★ Silent: nothing is played. Deterministic: fixed seeds.
 #include "decoders/wspr_decoder.h"
 #include "../tools/wspr-bench/wspr_synth.h"
@@ -23,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <set>
 #include <string>
@@ -117,10 +121,11 @@ static void synthetic() {
         const WsprSpot* hit = nullptr;
         for (auto& x : out) if (x.message == "G4ABC IO92 37") hit = &x;
         char what[200];
-        if (hit) std::snprintf(what, sizeof what, "%+.0f dB at %.0f Hz, DT %+.1f, drift %+.1f → snr %d, %.2f Hz, DT %+.2f, drift %+.2f",
-                               c.snr, c.centre, c.dt, c.drift, hit->snr, hit->audioHz, hit->dt, hit->drift);
+        if (hit) std::snprintf(what, sizeof what, "%+.0f dB at %.0f Hz, DT %+.1f, drift %+.1f → snr %.1f (WSPRnet %d), %.2f Hz, DT %+.2f, drift %+.2f",
+                               c.snr, c.centre, c.dt, c.drift, hit->snrTrue, hit->snr, hit->audioHz, hit->dt, hit->drift);
         else std::snprintf(what, sizeof what, "%+.0f dB at %.0f Hz, DT %+.1f, drift %+.1f → NOT DECODED", c.snr, c.centre, c.dt, c.drift);
-        ok(hit && out.size() == 1 && std::fabs(hit->snr - c.snr) <= 1.5 && std::fabs(hit->audioHz - c.centre) <= 0.3
+        ok(hit && out.size() == 1 && std::fabs(hit->snrTrue - c.snr) <= 1.5 && std::fabs(hit->snr - c.snr) <= 1.5
+               && std::fabs(hit->audioHz - c.centre) <= 0.3
                && std::fabs(hit->dt - c.dt) <= 0.1 && std::fabs(hit->drift - c.drift) <= 0.6, what);
         ++n;
     }
@@ -131,7 +136,7 @@ static void synthetic() {
         wsprsynth::Sig s; s.msg = wsprsynth::msg1("DL1XYZ", "JO62", 30); s.snr = -24; s.centreHz = 1530; s.dt = 0.4;
         wsprsynth::addSignal(a, rate, s, 1.0, 78);
         const auto out = decodeSlot(a, rate);
-        ok(out.size() == 1 && out[0].message == "DL1XYZ JO62 30" && std::fabs(out[0].snr + 24) <= 1.5,
+        ok(out.size() == 1 && out[0].message == "DL1XYZ JO62 30" && std::fabs(out[0].snrTrue + 24) <= 1.5,
            std::string("decodes at ") + std::to_string(rate) + " Hz audio");
     }
 }
@@ -234,42 +239,105 @@ static bool readWav(const std::string& path, std::vector<float>& out, int& rate)
     return true;
 }
 
-static void real() {
-    std::printf("\n— real signals: Stuart's UberSDR, 40 m, 2026-10-26 07:30–07:36 UTC —\n");
+// the reference's spots for one dial: "message" (a type 3 printed "CALL GRID6 dBm", double spaces collapsed) → SNR
+static std::map<std::pair<long, std::string>, int> readRef(const std::string& path, double dial) {
+    std::map<std::pair<long, std::string>, int> m;
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return m;
+    char line[4096];
+    auto field = [](const std::string& l, const char* key) {
+        const std::string k = std::string("\"") + key + "\":";
+        size_t p = l.find(k); if (p == std::string::npos) return std::string();
+        p += k.size();
+        if (l[p] == '"') return l.substr(p + 1, l.find('"', p + 1) - p - 1);
+        size_t e = p; while (e < l.size() && l[e] != ',' && l[e] != '}') ++e;
+        return l.substr(p, e - p);
+    };
+    while (std::fgets(line, sizeof line, f)) {
+        const std::string l = line;
+        if (std::fabs(std::atof(field(l, "frequency").c_str()) - dial) > 1) continue;
+        std::string msg, raw = field(l, "message");
+        for (char c : raw) if (!(c == ' ' && !msg.empty() && msg.back() == ' ')) msg += c;
+        struct tm t = {};
+        const std::string ts = field(l, "timestamp");
+        if (std::sscanf(ts.c_str(), "%d-%d-%dT%d:%d:%d", &t.tm_year, &t.tm_mon, &t.tm_mday, &t.tm_hour, &t.tm_min, &t.tm_sec) != 6) continue;
+        t.tm_year -= 1900; t.tm_mon -= 1;
+        m[{(long)timegm(&t), msg}] = std::atoi(field(l, "snr").c_str());
+    }
+    std::fclose(f);
+    return m;
+}
+
+struct Band {
+    const char* label; const char* wav; const char* ref; double t0, dial; int slots, minDecodes;
+    std::set<std::string> confirmed; const char* typeThree;   // a type 3 that must resolve from an earlier slot, or null
+};
+
+/* ★★ REAL SIGNALS, AND THE WSPRNET SNR SCALE (Stuart, 2026-10-27). Every decode must be a station another receiver
+ *  heard; and the spots' SNR must read what Stuart's UberSDR (a WSPRnet reporter, STUEY3D) read for the same station
+ *  in the same slot: mean within ±1 dB, and each one within ±3 dB (its own SNRs are whole decibels). */
+static void realBand(const Band& b) {
+    std::printf("\n— real signals: %s —\n", b.label);
     const char* dir = std::getenv("VIBE_TEST_AUDIO");
     std::vector<float> a; int rate = 0;
-    if (!dir || !readWav(std::string(dir) + "/wspr/wspr_40m_7038600_20261026T0729.wav", a, rate)) {
-        std::printf("  not run — needs VIBE_TEST_AUDIO holding wspr/wspr_40m_7038600_20261026T0729.wav\n");
+    if (!dir || !readWav(std::string(dir) + "/wspr/" + b.wav, a, rate)) {
+        std::printf("  not run — needs VIBE_TEST_AUDIO holding wspr/%s\n", b.wav);
         return;
     }
-    // every call decoded in these slots by the reference decoder or confirmed on wspr.live by other receivers
-    const std::set<std::string> confirmed = {"F4HHR","DB1IAT","PA2PGU","LA4PGA","EB1A","PE1AHJ","PE0FKO","F1ORV","PA4JAM","EA6LA","PH1RAM",
-        "OK2BVG","PA3CNO","PA3EDR/G","OK1BF","EA6FG","PA2RVP","ON4WS","PH1A","HB9BAX","GM8HHC","PD1RE","SK7BQ","PA0ANH","MM6VTS","PA7PP",
-        "WB1ABO","EA4TK","DK3BI","KC1ATT","PH9K","G4HSB","GM1MSS","DL3EL","PA1JCK","ON4LAO","M8KFH","VK3ARW/2","F6IDT","G0IDE","KK1D",
-        "HB9AR","W1NEJ","PA5CA","SO2O","VE3CWM","EA6URP","OK2JO"};
+    const auto ref = readRef(std::string(dir) + "/wspr/" + b.ref, b.dial);
     wspr::callHashes().clear();
-    const double t0 = 1792999757.582;
     WsprSlotDecoder d;
-    int total = 0, unconfirmed = 0;
-    bool resolved = false;
+    int total = 0, unconfirmed = 0, matched = 0, outside = 0;
+    double sum = 0, sumTrue = 0, worst = 0;
+    bool resolved = !b.typeThree;
     double ms = 0;
-    for (int k = 1; k <= 3; ++k) {
-        const double slot = std::ceil(t0 / 120.0) * 120.0 + 120.0 * (k - 1);
-        const long i0 = std::lround((slot - wspr::kLeadSec - t0) * rate);
+    const double first = std::ceil((b.t0 + wspr::kLeadSec) / 120.0) * 120.0;
+    size_t refN = 0;
+    for (const auto& r : ref) if (r.first.first >= (long)first && r.first.first < (long)(first + 120.0 * b.slots)) ++refN;
+    for (int k = 0; k < b.slots; ++k) {
+        const double slot = first + 120.0 * k;
+        const long i0 = std::lround((slot - wspr::kLeadSec - b.t0) * rate);
         std::vector<WsprSpot> out; WsprSlotStats st;
         const auto c0 = std::chrono::steady_clock::now();
-        d.decodeAudio(a.data() + i0, (int)std::min<long>((long)(120 * rate), (long)a.size() - i0), rate, 7038600, slot, WsprSlotOptions(), out, st);
+        d.decodeAudio(a.data() + i0, (int)std::min<long>((long)(120 * rate), (long)a.size() - i0), rate, b.dial, slot, WsprSlotOptions(), out, st);
         ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
         total += (int)out.size();
         for (auto& x : out) {
-            if (!confirmed.count(x.call)) { ++unconfirmed; std::printf("  unconfirmed: %s\n", x.message.c_str()); }
-            if (x.message == "<EA4TK> IN80EJ 23") resolved = true;
+            if (!b.confirmed.count(x.call)) { ++unconfirmed; std::printf("  unconfirmed: %s\n", x.message.c_str()); }
+            if (b.typeThree && x.message == b.typeThree) resolved = true;
+            std::string m = x.message; m.erase(std::remove(m.begin(), m.end(), '<'), m.end()); m.erase(std::remove(m.begin(), m.end(), '>'), m.end());
+            const auto it = ref.find({(long)slot, m});
+            if (it == ref.end()) continue;
+            const double dd = x.snr - it->second;
+            ++matched; sum += dd; sumTrue += x.snrTrue - it->second;
+            worst = std::max(worst, std::fabs(dd));
+            if (std::fabs(dd) > 3) { ++outside; std::printf("  SNR %s: ours %d, reference %d\n", x.message.c_str(), x.snr, it->second); }
         }
     }
-    std::printf("  %d decodes in 3 slots, %.0f ms per slot\n", total, ms / 3);
-    ok(total >= 45, "at least 45 decodes in the three slots (the reference decoder: 49)");
+    std::printf("  %d decodes in %d slots (reference: %zu), %.0f ms per slot; %d matched: SNR ours−reference %+.2f dB "
+                "(definition %+.2f dB), worst %.0f dB\n", total, b.slots, refN, ms / b.slots, matched,
+                matched ? sum / matched : 0, matched ? sumTrue / matched : 0, worst);
+    ok(total >= b.minDecodes, std::string("at least ") + std::to_string(b.minDecodes) + " decodes");
     ok(unconfirmed == 0, "every decode confirmed by another receiver");
-    ok(resolved, "a type 3 resolved through a hash learnt in an earlier slot: <EA4TK> IN80EJ 23");
+    if (b.typeThree) ok(resolved, std::string("a type 3 resolved through a hash learnt in an earlier slot: ") + b.typeThree);
+    ok(matched >= 15 && std::fabs(sum / matched) <= 1.0, "WSPRnet-scale SNR: mean within ±1 dB of the reference's");
+    ok(matched && outside == 0, "WSPRnet-scale SNR: every matched station within ±3 dB");
+}
+
+static void real() {
+    // every call decoded in these slots by the reference decoder or confirmed on wspr.live by other receivers
+    realBand({"Stuart's UberSDR, 40 m, 2026-10-26 07:30–07:36 UTC", "wspr_40m_7038600_20261026T0729.wav",
+              "ubersdr_wspr_spots_20261026T0729.jsonl", 1792999757.582, 7038600, 3, 45,
+              {"F4HHR","DB1IAT","PA2PGU","LA4PGA","EB1A","PE1AHJ","PE0FKO","F1ORV","PA4JAM","EA6LA","PH1RAM",
+               "OK2BVG","PA3CNO","PA3EDR/G","OK1BF","EA6FG","PA2RVP","ON4WS","PH1A","HB9BAX","GM8HHC","PD1RE","SK7BQ","PA0ANH","MM6VTS","PA7PP",
+               "WB1ABO","EA4TK","DK3BI","KC1ATT","PH9K","G4HSB","GM1MSS","DL3EL","PA1JCK","ON4LAO","M8KFH","VK3ARW/2","F6IDT","G0IDE","KK1D",
+               "HB9AR","W1NEJ","PA5CA","SO2O","VE3CWM","EA6URP","OK2JO"}, "<EA4TK> IN80EJ 23"});
+    // the same receiver ten hours later, five slots on each band (the busy evening 40 m: the definition reads 11 dB
+    // under the reference there, 3.4 dB on 20 m — the case no constant offset could cover)
+    realBand({"Stuart's UberSDR, 40 m, 2026-10-26 16:10–16:20 UTC", "wspr_40m_7038600_20261026T1607.wav",
+              "ubersdr_wspr_spots_20261026T1607.jsonl", 1793030851.951, 7038600, 5, 80, {"2E0IJC","DB0SFA","DB1IAT","DB2OM","DB6OC","DG6RCH","DJ0MDO","DK3BI","DK3TG","DK9ES","DL0PBS","DL6OBU","EA1M","EA4TK","EA6LA","EB1A","F1ORV","F4HHR","G0VCA","G4EFE","G4HSB","G4LRP","G6CKK","G7CXR","G7MNP","G7SYO","G7UJY","G8LDJ","G8WDZ","GI4LGP","GM1MSS","GM4DTH","GM4HAM","GM4ISM","GM7FIE","GM8HHC","HB9AK","I0HCJ","I0LYO","LA4PGA","M0CUV","M0LHP","M0XMP","M1JRH","M5TXJ","OK2BVG","ON4LZ","ON4WS","OZ4JJ","PA0ANH","PA1JCK","PA2PGU","PA2RVP","PA2W","PA5CA","PA7PP","PD1RE","PE1AHJ","PH1RAM","PH9K","SK7BQ"}, nullptr});
+    realBand({"Stuart's UberSDR, 20 m, 2026-10-26 16:10–16:20 UTC", "wspr_20m_14095600_20261026T1607.wav",
+              "ubersdr_wspr_spots_20261026T1607.jsonl", 1793030851.951, 14095600, 5, 24, {"CT1DJG","EA3AGU","EA6ALL","EB1A","F1JSC","F4WCV","G0GCD","G4LEN","HA3MGA","HA4GHR","IU0JJD","IU1FIG","IU3UXD","N3TFX","OE1ELW","OE3KFB","OE6LHG","OH6CR","OH8RO","SV2BXH","VE3XIX","VK6XT"}, nullptr});
 }
 
 int main() {

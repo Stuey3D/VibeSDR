@@ -21,7 +21,8 @@
 //      tones' amplitudes, signal and noise measured from the slot itself), de-interleaved, and the K = 32 code is
 //      decoded sequentially (Fano), with a cycle budget per bit;
 //   5. a decode is checked (callsign structure, locator, legal power; a type 3 only with a hash we have heard in
-//      full), its SNR measured in 2500 Hz, and — if the CPU gate allows a second pass — the signal is rebuilt and
+//      full), its SNR measured twice — on the WSPRNET scale other receivers report (the spot's `snr`) and by the
+//      definition in 2500 Hz (`snrTrue`) — and, if the CPU gate allows a second pass, the signal is rebuilt and
 //      SUBTRACTED, and the residual searched again for what it hid.
 // ★ No allocation in the hot loops. RAM per live decoder ≈ 2.5 MB: the 375 Hz ring (2 slots, 750 KB), the slot being
 //   decoded (360 KB), the search maps (2 × 490 KB) and the per-candidate scratch (400 KB) — not 2 min of raw audio.
@@ -117,7 +118,8 @@ struct WsprSpot {
     double slotUtc = 0;      ///< UTC (s) of the even minute the slot began
     double freqHz  = 0;      ///< RF frequency of the signal's centre (dial + audio)
     double audioHz = 0;      ///< audio frequency of the centre (≈ 1400…1600 Hz)
-    int    snr     = 0;      ///< dB in 2500 Hz (the WSPR convention)
+    int    snr     = 0;      ///< dB on the WSPRNET scale — what other receivers' reports read (see avgSpectrum in the .cpp)
+    float  snrTrue = 0;      ///< dB in 2500 Hz by the definition (signal power / noise in 2500 Hz) — the tests' figure
     float  dt      = 0;      ///< s after the nominal start (even minute + 1 s)
     float  drift   = 0;      ///< Hz the signal moved over the transmission (≈ per two minutes), the WSPR convention
     std::string call, grid;  ///< grid: 4 or 6 chars, "" for a type 2
@@ -205,6 +207,8 @@ private:
      *  (per 375 Hz complex sample, the moving average's own noise taken off). */
     double track(const Fit& f, const uint8_t* tones, bool apply);
     double bandNoise();
+    void   avgSpectrum();
+    double snrWsprnet(double centreHz) const;
 
     std::vector<std::complex<float>>* x_ = nullptr;
     int nFrames_ = 0;
@@ -218,6 +222,8 @@ private:
     double zMix_ = 0;               // the mix frequency of the current z (Hz rel. 1500)
     std::vector<float> p_;          // pass 1's power spectrogram (nFrames × 341, 477 KB), for the noise floor
     double noise375_ = 0;           // the band's noise per 375 Hz complex sample (0 = not yet measured this slot)
+    std::vector<float> avg_;        // pass 1: slot-averaged, smoothed, noise-normalised spectrum (WSPRnet-scale SNR)
+    std::vector<float> win512_;     // its sine window
 };
 
 /* ★★★ THE LIVE DECODER. process() is called with each block of demodulated USB audio and its capture UTC; it only

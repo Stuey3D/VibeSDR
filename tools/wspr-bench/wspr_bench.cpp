@@ -108,7 +108,7 @@ static int cmdWav(int argc, char** argv) {
     const double first = std::ceil((t0 + wspr::kLeadSec) / wspr::kSlotSec) * wspr::kSlotSec;
     int both = 0, oursOnly = 0, refOnly = 0, slots = 0;
     double snrDiff = 0, snrAbs = 0, fDiff = 0, totalMs = 0;
-    std::vector<double> snrDiffs;
+    std::vector<double> snrDiffs, trueDiffs;
     WsprSlotDecoder dec;
     for (double slot = first;; slot += wspr::kSlotSec) {
         const long i0 = std::lround((slot - wspr::kLeadSec - t0) * rate);
@@ -129,9 +129,9 @@ static int cmdWav(int argc, char** argv) {
             // the reference prints a type 3 as "CALL GRID6 dBm"; ours is "<CALL> GRID6 dBm"
             std::string m = s.message; m.erase(std::remove(m.begin(), m.end(), '<'), m.end()); m.erase(std::remove(m.begin(), m.end(), '>'), m.end());
             for (auto& r : rl) if (r.msg == m) { r.seen = true; hit = &r; }
-            std::printf("D %s %d %4d %5.1f %11.1f %5.2f %-22s %s", hm, s.pass, s.snr, s.dt, s.freqHz, s.drift, s.message.c_str(),
+            std::printf("D %s %d %4d (%5.1f) %5.1f %11.1f %5.2f %-22s %s", hm, s.pass, s.snr, s.snrTrue, s.dt, s.freqHz, s.drift, s.message.c_str(),
                         ref ? (hit ? "both" : "OURS ONLY") : "");
-            if (hit) { std::printf("  ref snr %d dt %.1f Δf %+.1f", hit->snr, hit->dt, s.freqHz - hit->freq); snrDiffs.push_back(s.snr - hit->snr);
+            if (hit) { std::printf("  ref snr %d dt %.1f Δf %+.1f", hit->snr, hit->dt, s.freqHz - hit->freq); snrDiffs.push_back(s.snr - hit->snr); trueDiffs.push_back(s.snrTrue - hit->snr);
                        snrDiff += s.snr - hit->snr; snrAbs += std::fabs(s.snr - hit->snr); fDiff += std::fabs(s.freqHz - hit->freq); ++both; }
             else if (ref) ++oursOnly;
             std::printf("\n");
@@ -141,8 +141,15 @@ static int cmdWav(int argc, char** argv) {
                     hm, ms, st.passes, st.candidates[0], st.candidates[1], st.decodes[0], st.decodes[1], st.fanoMs, st.fanoCycles, st.fanoFails,
                     st.searchMs, st.refineMs, st.subtractMs, st.decimateMs);
     }
-    if (ref) std::printf("R slots %d  both %d  ours-only %d  ref-only %d  (ours %d, ref %d)  snr ours−ref mean %+.1f |%.1f| dB  |Δf| %.2f Hz\n",
-                         slots, both, oursOnly, refOnly, both + oursOnly, both + refOnly, both ? snrDiff / both : 0, both ? snrAbs / both : 0, both ? fDiff / both : 0);
+    double sd = 0; for (double d : snrDiffs) sd += (d - snrDiff / std::max(1, both)) * (d - snrDiff / std::max(1, both));
+    sd = both > 1 ? std::sqrt(sd / (both - 1)) : 0;
+    if (ref) std::printf("R slots %d  both %d  ours-only %d  ref-only %d  (ours %d, ref %d)  snr ours−ref mean %+.1f ± %.1f dB (|mean| %.1f)  |Δf| %.2f Hz\n",
+                         slots, both, oursOnly, refOnly, both + oursOnly, both + refOnly, both ? snrDiff / both : 0, sd, both ? snrAbs / both : 0, both ? fDiff / both : 0);
+    if (ref && !trueDiffs.empty()) {
+        double m = 0, v = 0; for (double d : trueDiffs) m += d; m /= trueDiffs.size();
+        for (double d : trueDiffs) v += (d - m) * (d - m);
+        std::printf("T true-SNR (definition) ours−ref mean %+.1f ± %.1f dB\n", m, trueDiffs.size() > 1 ? std::sqrt(v / (trueDiffs.size() - 1)) : 0);
+    }
     std::printf("CPU %.0f ms per slot (mean of %d)\n", slots ? totalMs / slots : 0, slots);
     return 0;
 }
@@ -156,7 +163,7 @@ static int cmdSweep(int argc, char** argv) {
     const WsprSlotOptions o = opts(argc, argv);
     WsprSlotDecoder dec;
     for (double snr = from; snr >= to - 1e-9; snr -= step) {
-        int ok = 0, falses = 0; double ms = 0, snrErr = 0; float minSync = 1;
+        int ok = 0, falses = 0; double ms = 0, snrErr = 0, netErr = 0; float minSync = 1;
         for (int t = 0; t < trials; ++t) {
             std::vector<float> a = slotBuf();
             wsprsynth::addNoise(a, 1000 + (uint64_t)t);
@@ -168,10 +175,10 @@ static int cmdSweep(int argc, char** argv) {
             const auto c0 = std::chrono::steady_clock::now();
             dec.decodeAudio(a.data(), (int)a.size(), 12000, 14095600, 0, o, out, st);
             ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
-            for (auto& x : out) { if (x.message == "G4ABC IO92 37") { ++ok; snrErr += x.snr - snr; minSync = std::min(minSync, x.sync); } else ++falses; }
+            for (auto& x : out) { if (x.message == "G4ABC IO92 37") { ++ok; snrErr += x.snrTrue - snr; netErr += x.snr - snr; minSync = std::min(minSync, x.sync); } else ++falses; }
         }
-        std::printf("SNR %6.1f dB: %3d/%d decoded (%3.0f %%), false %d, reported SNR error %+.1f dB, %.0f ms/slot, weakest sync %.3f\n",
-                    snr, ok, trials, 100.0 * ok / trials, falses, ok ? snrErr / ok : 0, ms / trials, minSync);
+        std::printf("SNR %6.1f dB: %3d/%d decoded (%3.0f %%), false %d, true-SNR error %+.1f dB, WSPRnet-scale %+.1f dB, %.0f ms/slot, weakest sync %.3f\n",
+                    snr, ok, trials, 100.0 * ok / trials, falses, ok ? snrErr / ok : 0, ok ? netErr / ok : 0, ms / trials, minSync);
     }
     return 0;
 }
