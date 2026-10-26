@@ -33,6 +33,9 @@ ok(bgVfoLine({ hz: 1840000, dec: 'ft8', label: 'FT8', state: 'running', spots: 1
 // ★ V12 CW: a skimmer's VFO carries spots too, and is named for what it is (it read "FT8")
 ok(bgVfoLine({ hz: 7025000, dec: 'cwskim', label: 'CW skimmer, 48 kHz (summary)', state: 'running', spots: 37, countries: 12, cpuPct: 0.4 })
    === '7025.0 CW skimmer \u00b7 running \u00b7 37 spots, 12 countries so far \u00b7 0.4 %', 'CW skimmer live count');
+// ★ V12 PSK: the same for a PSK skimmer
+ok(bgVfoLine({ hz: 14071500, dec: 'pskskim', label: 'PSK skimmer, 12 kHz (summary)', state: 'running', spots: 9, countries: 5, cpuPct: 0.1 })
+   === '14071.5 PSK skimmer \u00b7 running \u00b7 9 spots, 5 countries so far \u00b7 0.1 %', 'PSK skimmer live count');
 ok(bgDuration(45) === '45 s' && bgDuration(120) === '2 min', 'durations');
 // ★ V12 2026-10-25: an ISM profile — no VFOs, the band and the day instead
 const ism = bgLines({ state: 'running', profiles: 1, profile: 1, ism: { band: '433', name: '433.92 MHz ISM', devices: 6, today: '14 devices \u00b7 212 readings today' } })!;

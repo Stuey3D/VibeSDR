@@ -43,6 +43,8 @@
 #include "decoders/digi_spotter.h"   // ★ V12: digital spots — Single (the listener's audio) or Band (a band's IQ slice)
 #include "decoders/digi_bands.h"
 #include "vibe_cw_run.h"
+#include "vibe_psk_run.h"
+#include "vibe_aprs_run.h"    // ★ V12 APRS (1200 Bd VHF, 300 Bd HF) on the listener's audio — docs/v12/AIS-APRS.md
 #include "vibe_dsc_run.h"
 #include "vibe_clock.h"
 #include "vibe_thread.h"
@@ -232,6 +234,8 @@ struct DecoderTap {
     /** ★ One CW spot (the CW summary tap only — see Env::cwSpotTap): the call, where, how fast, how strong, and what it
      *  was doing ("CQ", "TEST", "DE"). */
     virtual void cwSpot(const std::string& /*call*/, double /*rfHz*/, float /*wpm*/, float /*snrDb*/, const std::string& /*how*/) {}
+    /** ★ V12 APRS: one new station line (vibe_station_log.h — the day's log and summary card). */
+    virtual void station(const vibestation::Heard&) {}
     /** ★ One DSC call (V12, 2026-10-26): the call, its readable line and JSON, and whether it repeats one just given. */
     virtual void dscCall(const dsc::Call& /*call*/, const std::string& /*line*/, const std::string& /*json*/, bool /*repeat*/) {}
 };
@@ -258,6 +262,8 @@ public:
         /** ★★ …and CW's (V12, 2026-10-25): asked when a CW decoder or skimmer starts, finished when it stops — a SUMMARY
          *  of the run's spots, as FT8's. `skimmer` says which. */
         std::function<DecoderTapPtr(bool skimmer)> cwSpotTap;
+        /** ★★ …and PSK's (V12, 2026-10-26): the same summary of a PSK decoder's or skimmer's spots. */
+        std::function<DecoderTapPtr(bool skimmer)> pskSpotTap;
         /** ★ A listener's AUDIO frequency → RF (their dial and mode: USB dial + a, LSB dial − a, this server's CW
          *  dial + a − 600). Empty = dial + audio. A skimmer's IQ carries its own centre. */
         std::function<double(double)> rfOfAudio;
@@ -331,6 +337,8 @@ public:
             }
         }
         if (joiner) replayTo(joiner);
+        // ★ APRS: a second window (a mirror, a reconnect) gets the whole station list with its tracks at once
+        if (joiner) { std::string l; { std::lock_guard<std::mutex> lk(decMtx_); if (aprs_) l = aprs_->listJson(true); } if (!l.empty()) joiner->text(l); }
         return Start::Joined;
     }
     /** Stop the audio-extension decoder and give its slot back. */
@@ -417,7 +425,7 @@ public:
     /** ★ How many CW skimmers run in this process — the one atomic every listener's channel block reads before it looks
      *  for its host (so a radio with none pays nothing). */
     static std::atomic<int>& skimmersRunning() { static std::atomic<int> n{0}; return n; }
-    /** ★ A CW SKIMMER is running — it wants complex IQ (feedIq), not audio. Cheap: read on every channel block. */
+    /** ★ A SKIMMER (CW or PSK) is running — it wants complex IQ (feedIq), not audio. Cheap: read on every channel block. */
     bool wantsIq() const { return cwIq_.load(std::memory_order_relaxed) || bandIq_.load(std::memory_order_relaxed); }
     /** ★ The skimmer's segment width asked for (Hz) — what the caller cuts its slice to. 0 = none running. */
     double iqWidthHz() const {
@@ -503,7 +511,7 @@ public:
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : dsc_ ? "dsc" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : aprs_ ? "aprs" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -562,7 +570,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "dsc";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "dsc" || e == "aprs" || e == "psk" || e == "pskskim";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -570,7 +578,7 @@ private:
     static std::string paramsOf(const std::string& msg) {
         std::string k;
         for (const char* f : { "center_frequency", "shift", "baud_rate", "lpm", "image_width", "carrier",
-                               "deviation", "bandwidth", "width" }) {
+                               "deviation", "bandwidth", "width", "centre" }) {
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
         for (const char* f : { "encoding", "framing", "station", "band" }) { k += str(msg, f); k += ','; }
@@ -601,7 +609,7 @@ private:
         return j.substr(p + 1, e - p - 1);
     }
 
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || dsc_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_ || aprs_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -614,6 +622,8 @@ private:
         delete time_;  time_ = nullptr;
         if (cwIq_.exchange(false)) skimmersRunning().fetch_sub(1);
         cw_.reset();
+        psk_.reset();
+        aprs_.reset();
         dsc_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
@@ -741,6 +751,23 @@ private:
         } else if (ext == "cw" || ext == "cwskim") {
             buildCwLocked_(ext == "cwskim", msg);
             return;
+        } else if (ext == "psk" || ext == "pskskim") {
+            buildPskLocked_(ext == "pskskim", msg);
+            return;
+        } else if (ext == "aprs") {
+            /* ★★ APRS (V12): 1200 Bd Bell 202 on an NFM channel (VHF), or "baud_rate":300 — HF packet on USB/LSB. Its frames
+             *  are JSON (aprs_packet / aprs_list), sent from inside the run on the decode thread; each new station line goes
+             *  to the gallery's tap (DecoderTap::station). */
+            double b = 1200;
+            num(msg, "baud_rate", b);
+            vibeaprs::Run::Opts o;
+            o.json = [this](const std::string& j) { broadcastText(j); };
+            o.heard = [this](const vibestation::Heard& h) { if (DecoderTapPtr t = tap()) t->station(h); };
+            o.rfHz = env_.dialHz;
+            aprs_.reset(new vibeaprs::Run(b < 600 ? 300 : 1200, std::move(o)));
+            active_.store(true, std::memory_order_relaxed);
+            log(std::string("decoder attached: aprs ") + (b < 600 ? "300" : "1200") + " Bd");
+            return;
         } else if (ext == "dsc") {
             buildDscLocked_(msg);
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
@@ -821,6 +848,35 @@ private:
         if (skimmer) { if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1); }
         else active_.store(true, std::memory_order_relaxed);
         log(skimmer ? "decoder attached: CW skimmer, " + std::to_string((int)std::lround(w / 1000)) + " kHz" : std::string("decoder attached: CW"));
+    }
+    /** ★★ PSK31/63 (V12, 2026-10-26): the listener's decoder ("psk", on their audio — the signal nearest "centre", the
+     *  middle of their passband, is ONE SIGNAL's) or a SKIMMER ("pskskim", on IQ the caller cuts — "width" Hz, 4–48 kHz).
+     *  It shares the CW skimmer's IQ path (wantsIq / iqWidthHz / skimmersRunning): one host runs one decoder at a time.
+     *  One engine, decoders/psk_skimmer.h; vibe_psk_run.h shapes what is sent. */
+    void buildPskLocked_(bool skimmer, const std::string& msg) {
+        double w = 12000, centre = 1500;
+        if (skimmer) { double v; if (num(msg, "width", v)) w = v; w = std::max(4000.0, std::min(48000.0, w)); }
+        { double v; if (num(msg, "centre", v) && v > 100 && v < 4000) centre = v; }
+        PskRun::Out o;
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.state = [this](uint8_t st) { uint8_t m[2] = { 0x03, st }; broadcast(m, 2); };
+        o.json = [this](const std::string& j) { broadcastText(j); };
+        o.spot = [this](const psk::Spot& sp, double rfHz) {
+            DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = cwTap_; }
+            if (t) t->cwSpot(sp.call, rfHz, 0.0f, sp.snrDb, sp.how);
+        };
+        std::function<double(double)> rf;
+        if (!skimmer) {
+            auto rfOf = env_.rfOfAudio; auto dial = env_.dialHz;
+            rf = [rfOf, dial](double a) { return rfOf ? rfOf(a) : (dial ? dial() : 0.0) + a; };
+        }
+        psk_.reset(new PskRun(skimmer, w, centre, std::move(rf), std::move(o)));
+        cwWidth_.store(w, std::memory_order_relaxed);
+        // ★ the gallery's summary: the same tap CW's runs use (cwTap_ — one decoder runs at a time), labelled PSK
+        if (env_.pskSpotTap) { DecoderTapPtr t = env_.pskSpotTap(skimmer); std::lock_guard<std::mutex> tl(tapMtx_); cwTap_ = std::move(t); }
+        if (skimmer) { if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1); }
+        else active_.store(true, std::memory_order_relaxed);
+        log(skimmer ? "decoder attached: PSK skimmer, " + std::to_string((int)std::lround(w / 1000)) + " kHz" : std::string("decoder attached: PSK"));
     }
     /** ★★ DSC (V12, 2026-10-26): "band":"vhf" = channel 70 on an FM demodulator's audio; anything else MF/HF, its tones
      *  centred on "center_frequency" (1700 Hz: the dial 1.7 kHz below the DSC frequency on USB, above it on LSB). */
@@ -993,6 +1049,7 @@ private:
                 {
                     std::lock_guard<std::mutex> dl(decMtx_);
                     if (cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                 }
                 {
                     std::lock_guard<std::mutex> sl(spotsMtx_);
@@ -1066,6 +1123,17 @@ private:
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
+            if (psk_) {
+                psk_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
+            if (aprs_) {
+                // ★ APRS likewise: float audio in, JSON out from inside the run
+                aprs_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             std::vector<int16_t> mono((size_t)count);
             for (int i = 0; i < count; i++) {
                 const int s = (int)std::lround(data[i] * 32767.0f);
@@ -1121,10 +1189,12 @@ private:
     SstvDecoder*  sstv_  = nullptr;
     TimeDecoder*  time_  = nullptr;
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
+    std::unique_ptr<vibeaprs::Run> aprs_;     // ★ APRS (V12): the modem + the station list (vibe_aprs_run.h)
     std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
     std::atomic<double> cwWidth_{0.0};
-    DecoderTapPtr cwTap_;                     // ★ the gallery's CW summary (Env::cwSpotTap), under tapMtx_
+    DecoderTapPtr cwTap_;                     // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
+    std::unique_ptr<PskRun> psk_;             // ★ PSK31/63: a listener's decoder or a skimmer (buildPskLocked_) — shares cwIq_/cwWidth_
     int   sstvDecim_ = 0; float sstvAcc_ = 0.0f;
     int   textSlot_ = -1;
     std::atomic<bool> active_{false};

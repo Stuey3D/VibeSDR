@@ -2595,8 +2595,13 @@ const BLOCKABLE = [
   /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
    *  presses near their house listed at all, however anonymous the list is: this is the switch. */
   { id: "ism",    label: "ISM sensors and meters" },
+  /* ★ V12 PSK31/63 — the listener's decoder and the skimmer (docs/v12/PSK.md), one switch. */
+  { id: "psk",    label: "PSK31/63" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
   { id: "dsc",    label: "DSC" },
+  /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
+  { id: "ais",    label: "AIS ships" },
+  { id: "aprs",   label: "APRS" },
 ];
 
 /** The blocked list as a Set of ids, from this radio's CSV. */
@@ -5540,6 +5545,13 @@ const BG_DECODERS = [
   { id: "cw-skim-24",   label: "CW skimmer, 24 kHz (summary)", tone: 0,    modes: ["usb"] },
   { id: "cw-skim-48",   label: "CW skimmer, 48 kHz (summary)", tone: 0,    modes: ["usb"] },
   { id: "cw-skim-96",   label: "CW skimmer, 96 kHz (summary)", tone: 0,    modes: ["usb"] },
+  // ★★ V12 2026-10-26: PSK SKIMMERS — the same: every PSK31/63 signal in a segment centred on the VFO (14.0715 MHz
+  //    covers the 20 m PSK segment), a summary of the spots.
+  { id: "psk-skim-6",   label: "PSK skimmer, 6 kHz (summary)",  tone: 0,    modes: ["usb"] },
+  { id: "psk-skim-12",  label: "PSK skimmer, 12 kHz (summary)", tone: 0,    modes: ["usb"] },
+  // ★★ V12 APRS — VHF on an NFM VFO (144.800 / 144.390 …), HF 300 Bd on USB (10.1476 MHz)
+  { id: "aprs",         label: "APRS (1200 Bd, VHF)",          tone: 0,    modes: ["nfm"] },
+  { id: "aprs-hf",      label: "APRS HF (300 Bd)",             tone: 0,    modes: ["usb", "lsb"] },
   // ★★ V12 2026-10-26: DSC — MF/HF with the dial 1.7 kHz below the DSC frequency on USB (2185.8 for 2187.5; either sense
   //    is found), VHF channel 70 (156.525 MHz) on NFM. The "+ DSC watch" key below fills these in.
   { id: "dsc",          label: "DSC (MF/HF)",                  tone: 1700, modes: ["usb", "lsb"] },

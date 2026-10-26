@@ -152,6 +152,7 @@ add_library(vibelocalsdr SHARED
     decoders/auto_notch.cpp
     decoders/time_decoder.cpp
     decoders/cw_skimmer.cpp
+    decoders/psk_skimmer.cpp
     decoders/dsc_decoder.cpp
     # ★ V12: digital spots (decoders/digi_mode.h) + every mode engine in decoders/digimodes/ (globbed)
     decoders/digi_modes.cpp
