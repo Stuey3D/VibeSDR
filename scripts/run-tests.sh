@@ -152,7 +152,7 @@ flags_for() {
     # ★★ DRM's AAC through FAAD2 on the real RRI recording: decodes, programme, concealment without clicks or gaps, CPU.
     test-drm-faad)         echo "-O2 -I $VDSP -I $KISS $FAAD_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★ DAB+ through FAAD2 (vibe_dab_faad.h) against today's FFmpeg child and a 960 reference, on REAL unit logs.
-    # ★ V12: FAAD2 on its own thread (vibe-dabaac) — same audio as inline, a full ring drops (concealed) never waits,
+    # ★ V12: FAAD2 on its own thread (vibe-faad2) — same audio as inline, a full ring drops (concealed) never waits,
     #   resets mid-queue, the live switch both ways. Same deps as test-dab-faad.
     test-dab-faad|test-dab-faad-queue) echo "-O3 -ffp-contract=fast $FAAD_DAB_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★★ V12 WSPR (decoders/digimodes/wspr_decoder.h): protocol, synthetic slots −20…−28 dB with drift and DT, hashed calls, pure

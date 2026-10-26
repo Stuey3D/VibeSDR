@@ -1,4 +1,4 @@
-// test-dab-faad-queue.cpp — DAB+ through FAAD2 ON ITS OWN THREAD (vibe-dabaac, AacDecoderFaadAsync in vibe_dab_faad.h).
+// test-dab-faad-queue.cpp — DAB+ through FAAD2 ON ITS OWN THREAD (vibe-faad2, AacDecoderFaadAsync in vibe_dab_faad.h).
 // V12, 2026-10-26 — Stuart's Pi 2 broke up with FAAD2 decoding inline on the DAB worker; this moves it to its own thread
 // behind a bounded drop-never-wait ring. Checked here, on a REAL off-air unit log (~/VibeSDR-test-audio/dab/logs):
 //   1. SAME AUDIO — the threaded decoder, fed with back-pressure so nothing drops, produces exactly the samples the inline
@@ -9,7 +9,7 @@
 //   3. A SERVICE CHANGE — jobs queued before reset() are never run; the sink sees only the new generation; a fresh decoder.
 //   4. THE LIVE SWITCH, BOTH WAYS — the AacDecoder the service drives (dabAacChoice): FAAD2 → FFmpeg → FAAD2, async()
 //      following the switch, audio from each (FFmpeg only where it is installed), the FAAD2 thread reused, not leaked.
-//   5. THE THREAD IS NAMED vibe-dabaac and is not the caller's.
+//   5. THE THREAD IS NAMED vibe-faad2 and is not the caller's.
 // Exit 0 pass, 1 fail, 3 not run (no FAAD2 in the build, or no logs).
 //   run: test-dab-faad-queue [<log.dabu>]
 #include "vibe_dab_aacdec.h"
@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
         std::printf("   inline %zu frames, threaded %zu frames, %zu samples differ; dropped %llu\n", a.interleaved.size() / 2, col.pcm.size() / 2, diff, (unsigned long long)as.dropped());
         check(a.interleaved.size() == col.pcm.size() && diff == 0, "bit-identical to the inline decoder");
         check(as.dropped() == 0, "nothing dropped when the producer keeps pace");
-        check(col.thread == "vibe-dabaac", ("decoded on a thread named vibe-dabaac (\"" + col.thread + "\")").c_str());
+        check(col.thread == "vibe-faad2", ("decoded on a thread named vibe-faad2 (\"" + col.thread + "\")").c_str());
         check(as.concealed() == inl.concealed(), "the same units concealed");
         std::printf("   CPU: decode %.3f s, resample %.3f s, total %.3f s for %.1f s of programme\n", as.cpuDecodeSeconds(), as.cpuResampleSeconds(), as.cpuSeconds(), double(col.pcm.size() / 2) / 48000.0);
     }

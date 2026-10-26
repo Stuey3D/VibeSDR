@@ -43,7 +43,7 @@
   namespace vibeprio {
       constexpr int kNet       = -20;   // the audio socket's send, and the IQ input
       constexpr int kAudio     = -19;   // the real-time chain (= THREAD_PRIORITY_URGENT_AUDIO)
-      constexpr int kAudioDecode = -17; // an audio codec on its own thread, fed by the chain (vibe-dabaac)
+      constexpr int kAudioDecode = -17; // an audio codec on its own thread, fed by the chain (vibe-faad2)
       constexpr int kSendWf    = -10;   // the waterfall/control/decoder socket's send
       constexpr int kSpectrum  = -5;
       constexpr int kDecoder   = 10;
@@ -105,7 +105,7 @@
   }
   inline void vibeSpectrumThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kSpectrum); }
   inline void vibeDecoderThread(const char* name)  { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kDecoder); }
-  /* ★★ AN AUDIO CODEC OFF THE CHAIN'S OWN THREADS (V12, 2026-10-26 — DAB+ through FAAD2, vibe-dabaac). It IS the audio
+  /* ★★ AN AUDIO CODEC OFF THE CHAIN'S OWN THREADS (V12, 2026-10-26 — DAB+ through FAAD2, vibe-faad2). It IS the audio
    *  path, so it sits far above spectrum and decoders — but one rung BELOW the chain that feeds it (-19: the IQ reader,
    *  the DAB OFDM/Viterbi, the DSP): a unit that never leaves the demodulator cannot be decoded at all, and a codec a
    *  few ms late is absorbed by the PCM buffer (~2 s) where a late demodulator loses samples for good. CFS weights:

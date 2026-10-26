@@ -321,7 +321,7 @@ private:
 };
 
 
-/** ★★★ FAAD2 ON ITS OWN THREAD — vibe-dabaac (V12, 2026-10-26, Stuart's Pi 2).
+/** ★★★ FAAD2 ON ITS OWN THREAD — vibe-faad2 (V12, 2026-10-26, Stuart's Pi 2).
  *  Decoded inline, FAAD2 (and its 32 → 48 kHz resampler) ran on the DAB worker that also carries the whole OFDM front
  *  end, FIC and Viterbi — already the busiest thread in the product on a Cortex-A7. One super frame's units arrive at
  *  once and are decoded at once, so every 120 ms the worker took a burst of codec work on top of its own; it missed its
@@ -329,7 +329,7 @@ private:
  *  FFmpeg never showed it because its decoder is another process, on another core. This puts FAAD2 on one too.
  *  ★★ THE SAME FACE AS AacDecoderFaad, AND THE SAME ORDER OF EVENTS. DabService calls decode() / conceal() / reset()
  *     exactly as before; each becomes a JOB on a bounded single-producer single-consumer ring, executed in order on
- *     vibe-dabaac, and the PCM goes to the service through the sink — the same pushPcm48Stereo it went through inline.
+ *     vibe-faad2, and the PCM goes to the service through the sink — the same pushPcm48Stereo it went through inline.
  *     Concealment is unchanged because it is the same AacDecoderFaad doing it, in the same sequence.
  *  ★★★ THE DAB THREAD NEVER WAITS. A full ring (or more than kMaxInFlightMs of programme already queued) means the codec
  *      cannot keep up: the unit is DROPPED, counted (dropped() — the health pill's "TOO HEAVY", vibehealth::BehindWatch),
@@ -358,7 +358,7 @@ public:
     AacDecoderFaadAsync(const AacDecoderFaadAsync&) = delete;
     AacDecoderFaadAsync& operator=(const AacDecoderFaadAsync&) = delete;
 
-    /** The service's PCM entry point. Set once, before the first unit; called on vibe-dabaac. */
+    /** The service's PCM entry point. Set once, before the first unit; called on vibe-faad2. */
     void setSink(Sink s) { sink_ = std::move(s); }
     /** ★ Test knob: hold the worker (it takes no job while paused) — how test-dab-faad-queue fills the ring. */
     void setPausedForTest(bool p) { paused_.store(p); if (!p) wake_(); }
@@ -432,9 +432,9 @@ private:
     }
     void wake_() { { std::lock_guard<std::mutex> lk(wm_); } wcv_.notify_one(); }
 
-    /** Consumer side — vibe-dabaac. */
+    /** Consumer side — vibe-faad2. */
     void loop_() {
-        vibeAudioDecodeThread("vibe-dabaac");
+        vibeAudioDecodeThread("vibe-faad2");   // ★ ≤ 10 characters: top -H shows it whole (vibe-dabclk reads "vibe-dabc+")
         AacPcm out; out.interleaved.reserve(48000);
         uint32_t applied = gen_.load() - 1;   // ★ forces a fresh decoder on the first job
         for (;;) {
@@ -469,7 +469,7 @@ private:
         }
     }
 
-    AacDecoderFaad dec_;                       ///< touched ONLY by vibe-dabaac (and its own reset, there)
+    AacDecoderFaad dec_;                       ///< touched ONLY by vibe-faad2 (and its own reset, there)
     Sink sink_;
     Job ring_[kSlots];
     std::atomic<uint64_t> head_{0}, tail_{0};

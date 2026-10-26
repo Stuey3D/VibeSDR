@@ -67,7 +67,7 @@ inline bool dabScanLabelsOn() {
 
 class DabService {
 public:
-        /* ★★ FAAD2's PCM comes back from its own thread (vibe-dabaac — AacDecoderFaadAsync) into the same entry point the
+        /* ★★ FAAD2's PCM comes back from its own thread (vibe-faad2 — AacDecoderFaadAsync) into the same entry point the
          *  inline decoders use. A block of an older generation (a reset happened since it was queued) is dropped under pm_,
          *  the lock every reset path takes to clear pcm_, so the old service's audio never lands after the new one began. */
         DabService() {
@@ -143,7 +143,7 @@ private:
         cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();   // ★ and the gallery it belonged to
         spiSid_ = 0; packets_.reset(); carousel_.reset(); spiLogoRefs_.clear(); spiSeen_ = 0; cacheLoadedEid_ = 0;   // ★ a new multiplex, a new carousel
         // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
-        pcmOwed_ = 0; { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); pcmPushed_ = 0; }   // ★ under pm_: vibe-dabaac pushes without m_; after aac_.reset(), so a block that slipped in before the new generation goes too
+        pcmOwed_ = 0; { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); pcmPushed_ = 0; }   // ★ under pm_: vibe-faad2 pushes without m_; after aac_.reset(), so a block that slipped in before the new generation goes too
         resampleReset();
     }
 public:
@@ -212,7 +212,7 @@ public:
         { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); }
         pad_.reset();
         slide_ = Slide{}; cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();
-        pcmOwed_ = 0; { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); pcmPushed_ = 0; }   // ★ under pm_: vibe-dabaac pushes without m_; after aac_.reset(), so a block that slipped in before the new generation goes too
+        pcmOwed_ = 0; { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); pcmPushed_ = 0; }   // ★ under pm_: vibe-faad2 pushes without m_; after aac_.reset(), so a block that slipped in before the new generation goes too
         resampleReset();
         /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
          *  frame between calls; a service or multiplex change mid-pair would otherwise join it to
@@ -421,7 +421,7 @@ public:
         inCv_.notify_all();
         if (worker_.joinable()) worker_.join();
         stopMp2_();
-        aac_.stop();   // ★ vibe-dabaac — started again by the next DAB+ unit
+        aac_.stop();   // ★ vibe-faad2 — started again by the next DAB+ unit
         started_ = false;
     }
 
@@ -1209,7 +1209,7 @@ public:
                 snprintf(cb, sizeof cb, ",\"aacConcealed\":%lld,\"aacChoice\":%s", (long long)aac_.concealed(),
                          dabFaad2Built() ? (aac_.exactFrames() && aac_.canConceal() ? "\"faad2\"" : "\"platform\"") : "null");
                 j += cb;
-                // ★ units the codec's own thread could not take in time (concealed, never waited for) — vibe-dabaac
+                // ★ units the codec's own thread could not take in time (concealed, never waited for) — vibe-faad2
                 if (aac_.async()) { snprintf(cb, sizeof cb, ",\"aacDropped\":%llu", (unsigned long long)aac_.dropped()); j += cb; }
             }
             const auto& ir = rx_.impulseResponse();
@@ -2024,7 +2024,7 @@ private:
     void pushPcm48Stereo(const float* data, size_t nSamples, int nch, int srHz, int64_t aacGen = -1) {
         if (!data || nch <= 0 || srHz <= 0) return;
         std::lock_guard<std::mutex> plk(pm_);        // ★ see takePcm — pcm_ has its own lock
-        if (aacGen >= 0 && uint32_t(aacGen) != aac_.generation()) return;   // ★ vibe-dabaac: a block from before a reset
+        if (aacGen >= 0 && uint32_t(aacGen) != aac_.generation()) return;   // ★ vibe-faad2: a block from before a reset
         // ★ The carried state belongs to ONE rate. A service that changes it starts again.
         /* ★★★ A RATE CHANGE IS NOT A RESTART. This reset the interpolator whenever the input rate
          *  moved — and during the DAB+ start-up glide the measured rate moves on every access
@@ -2121,7 +2121,7 @@ private:
          *  stopping dead, and — because the decoder now knows there was a hole — the next good unit fades back in.
          *  unitsOut_ advances with them, so pumpDabPlus does not conceal the same stretch twice when audio returns.
          *  Called with m_ held (pumpDabPlus's Hold), which is what guards aac_. */
-        /* ★★ AND AUDIO IN FLIGHT IS NOT AUDIO MISSING (vibe-dabaac): units queued for the codec's own thread are owed
+        /* ★★ AND AUDIO IN FLIGHT IS NOT AUDIO MISSING (vibe-faad2): units queued for the codec's own thread are owed
          *  but on their way — counted as pushed, or a busy moment over there would be "filled" twice. */
         const uint64_t inFlight = aac_.inFlightFrames();
         if (aac_.canConceal() && aac_.unitFrames() > 0 && unitsOut_ >= 0) {
@@ -2131,7 +2131,7 @@ private:
             const int uf = aac_.unitFrames(), units = int((need + uint64_t(uf) - 1) / uint64_t(uf));
             AacPcm c; aac_.conceal(units, c);
             unitsOut_ += units;
-            pcmFilled_ += aac_.async() ? uint32_t(units * uf) : uint32_t(c.interleaved.size() / 2);   // ★ vibe-dabaac: queued
+            pcmFilled_ += aac_.async() ? uint32_t(units * uf) : uint32_t(c.interleaved.size() / 2);   // ★ vibe-faad2: queued
             pushPcm48Stereo(c.interleaved.data(), c.interleaved.size(), 2, int(kAudioRateHz));
             return;
         }
@@ -2278,7 +2278,7 @@ private:
                  *  write yields one unit's worth, so the count starts there. */
                 if (s.fmt.accessUnits > 0 && aacPrimed_) aacAuAcc_ += 1;
                 if (conceal) { const int64_t at = unit0 + (auK < s.auSlot.size() ? s.auSlot[auK] : int(auK)); unitsOut_ = std::max(unitsOut_, at) + 1; }
-                /* ★★★ FAAD2 DECODES ON vibe-dabaac (AacDecoderFaadAsync): the unit is queued and its PCM reaches pcm_
+                /* ★★★ FAAD2 DECODES ON vibe-faad2 (AacDecoderFaadAsync): the unit is queued and its PCM reaches pcm_
                  *  through the sink. Nothing below applies to it — it is exact (no rate to learn), it conceals what it
                  *  cannot decode (never "dry"), and its errors never fall back to ADTS on the wire. */
                 if (aac_.async()) { aac_.decode(pkt.data(), pkt.size(), dec); ++aacDecoded_; continue; }
