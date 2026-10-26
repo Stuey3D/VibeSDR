@@ -119,6 +119,8 @@
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
 #include "vibe_ism_service.h"   // ISM sensors (V12) — our own clean-room decoders, docs/v12/ISM-DECODER.md
 #include "vibe_ism_gallery.h"   // ★★ V12 2026-10-25: ISM in the gallery — the day's log + summary card per band
+#include "vibe_ndb_service.h"   // ★★ V12 2026-10-26: NDB skimmer — every beacon in the LF band, idents by consensus (docs/v12/NDB-SKIMMER.md)
+#include "vibe_ndb_gallery.h"   //    …and its day in the gallery: the heard log and the map
 #include "vibe_rate_guard.h"    // ★ a radio that falls over at a rate a mode boosted it to — see g_rateGuard
 #include "vibe_adsb_data_update.h"     // V12 aircraft data: the weekly update + its admin status
 #include "vibe_adsb_images_install.h"  // V12: the owner's logo / silhouette zip upload
@@ -983,6 +985,12 @@ static vibeadsb::Service   g_adsb;
  *  it decoded (vibe_ism_service.h), the tuning controls stepping BANDS. No rate change, ever (ADS-B's rule). */
 static std::atomic<bool>   g_ismMode{false};
 static vibeism::Service    g_ism;
+/* ★★★ NDB MODE (V12, 2026-10-26). The fourth whole-radio mode, but a LISTENING one: the capture sits on the LF beacon
+ *  band (190–535 kHz, as much as the radio reaches and its rate holds) and the skimmer decodes every beacon in it
+ *  (vibe_ndb_service.h); the listener's VFO, mode and audio stay theirs INSIDE the capture — tap a beacon, hear it.
+ *  Only the hardware centre, the view and the rate are the mode's. No rate change, ever (ADS-B's rule). */
+static std::atomic<bool>   g_ndbMode{false};
+static vibendb::Service    g_ndb;
 /* ★★★ NO `dab` REPORT MAY FOLLOW `dab_off` (2026-10-05). The twice-a-second report is built and sent
  *  on the DSP thread; DAB is ended on a socket thread. Nothing ordered the two, so a report the DSP
  *  thread had already decided to send could reach the client AFTER `dab_off` — and a client that
@@ -1546,6 +1554,8 @@ static std::string vsAdsbHwWhyNot(); // "" = this radio could run ADS-B with the
 static std::string vsIsmWhyNot();    // "" = ISM can run here now — see its definition (by vsAdsbWhyNot)
 static bool vsIsmReach(const vibeism::Band& b);   // this radio can tune the whole of the band
 static bool vsIsmAnyBand();          // ★ false = ISM is not offered AT ALL (the HF+): no control, no reason
+static bool vsNdbReach(double& lo, double& hi);   // the part of the NDB band this radio reaches ("" = none worth offering)
+static std::string vsNdbWhyNot();    // "" = NDB can run here now
 static bool vsDabCapableHw();   // ★ the same, ignoring the owner's block — see its definition
 // ★ Forward-declared alongside vsDabCapable for the same reason: the DAB entry path refuses
 //   thousands of lines above the definition, and it needs to name WHICH restriction bit.
@@ -6548,8 +6558,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *    its DAB profile is a fixed 2.4 MS/s with no view-driven IF filter to narrow.
          *
          *  ★ 0 means "no filtering", which is what a mode that occupies the whole capture wants. */
-        if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed)) {
-            /* ★★ ADS-B (and ISM — a whole band): as wide as the capture and no wider. A reply is ±1 MHz around 1090; a filter that follows the
+        if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed)) {
+            /* ★★ ADS-B (and ISM, and NDB — a whole band): as wide as the capture and no wider. A reply is ±1 MHz around 1090; a filter that follows the
              *  view would cut it, and one wide open lets whatever sits beyond Nyquist fold back onto it (the same
              *  lesson as DAB's below). */
             const int want = int(std::min(sampleRate, 3.0e6));
@@ -9748,7 +9758,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   rate, RDS subscriptions, raw IQ and everything already behind the admin password.
         //   ★ ONE LIST, TWO READERS: the clients' copy is src/services/dialChat.ts ASK_SHARED_SETTINGS.
         static const std::set<std::string> kGated = {
-            "tune", "mode", "bandwidth", "dab", "dab_service", "adsb", "ism", "iqtune",
+            "tune", "mode", "bandwidth", "dab", "dab_service", "adsb", "ism", "ndb", "iqtune",
             "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control", "hackrf_control", "antenna",
             "tunerbw", "sampleRate", "directSampling",
             "nr", "notch", "deemph", "stereo", "nfmvoice", "wsp", "nb", "nbx", "ceq", "ims", "autobw",
@@ -10070,6 +10080,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             sendText(sock, g_adsb.report());
         }
         if (g_ismMode.load(std::memory_order_relaxed)) sendText(sock, g_ism.report());   // ★ the device list, at once
+        if (g_ndbMode.load(std::memory_order_relaxed)) { const std::string r = g_ndb.report(); sendText(sock, r.empty() ? ndbHello() : r); }   // ★ the beacons, at once
         if (vsSharedDial()) {
             std::lock_guard<std::mutex> lk(clientMtx);
             auto it = sockSession.find(sock.get());
@@ -13600,12 +13611,149 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         // ★ One whole-radio mode at a time: the other leaves through its own door (which tells every listener)
         if (!g_ismMode.load()) {
+            if (g_ndbMode.load(std::memory_order_relaxed)) ndbLeave(true);
             if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
             if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
         }
         LOGI("[ISM] %s asked%s: %s%s", g_ismMode.load() ? "a band change" : "ON", sock ? " by a client" : " internally", want->name,
              hz > 0 ? " (an exact frequency)" : "");
         ismEnter(*want, hz > 0 ? hz : 0);
+    }
+
+    /* ★★★ NDB MODE (V12, 2026-10-26, docs/v12/NDB-SKIMMER.md). Save the listener's place, put the hardware centre on the
+     *  LF beacon band (vibendb::plan: as much of 190–535 kHz as the radio reaches and the rate holds, a little off the
+     *  0.5 kHz raster), run the skimmer on it, give the radio back EXACTLY as found. Unlike ISM and ADS-B the listener
+     *  keeps the VFO, the mode and the audio inside the capture (a `tune` there moves only the VFO): an NDB is something
+     *  you also want to HEAR. The gain is left as the listener had it — steady carriers do not fool VibeAGC as bursts do. */
+    AdsbSaved ndbSaved_;
+    vibendb::Plan ndbPlan_;
+    double ndbLastReport_ = 0;
+    std::string ndbOrigin_ = "live", ndbProfile_;
+    std::shared_ptr<vibe::ndbgal::DayLog> ndbMakeLog() {
+        if (frontDoorOnly || decoderOnly) return nullptr;
+        auto& g = vibe::gallery::shared();
+        if (!g.enabled()) return nullptr;
+        if (ndbOrigin_ != "background" && !g_gallerySaveLive.load()) return nullptr;
+        vibe::ndbgal::DayLog::Options o;
+        o.origin = ndbOrigin_; o.profile = ndbProfile_;
+        o.havePos = std::isfinite(g_bgLat.load()) && std::isfinite(g_bgLon.load());
+        o.lat = o.havePos ? g_bgLat.load() : 0; o.lon = o.havePos ? g_bgLon.load() : 0;
+        return std::make_shared<vibe::ndbgal::DayLog>(g, o);
+    }
+    void sendNdbAll() {
+        const std::string r = g_ndb.report();
+        if (r.empty()) return;
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        for (auto& sk : socks) sendText(sk, r);
+    }
+    /** ★ What a listener sees on entering, before the first report (≈ 2 s): where the capture is. */
+    std::string ndbHello() const {
+        char b[200];
+        std::snprintf(b, sizeof b, "{\"type\":\"ndb\",\"centre\":%.0f,\"lo\":%.0f,\"hi\":%.0f,\"carriers\":0,\"identified\":0,\"beacons\":[],\"log\":[],\"copy\":[],\"starting\":1}",
+                      ndbPlan_.hwCentre, ndbPlan_.lo, ndbPlan_.hi);
+        return b;
+    }
+    void ndbEnter() {
+        double reachLo = 0, reachHi = 0;
+        if (!vsNdbReach(reachLo, reachHi)) return;
+        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
+        vibendb::Plan pl;
+        if (!vibendb::plan(reachLo, reachHi, rate, pl)) return;
+        AdsbSaved& s = ndbSaved_;
+        s.lockedCentre = g_vsLockedCentre.load(); s.lockedRate = g_vsLockedRate.load();
+        s.rtl = rtlCenter.load(); s.audio = audioFreq.load(); s.view = viewCenter.load(); s.rate = sampleRate;
+        iqStopDirect();                      // ★ raw IQ out cannot follow the receiver onto a band it is not on
+        g_vsLockedCentre.store(0.0); g_vsLockedRate.store(0.0);
+        ndbPlan_ = pl;
+        g_ndbMode.store(true);
+        const double logical = pl.hwCentre - hwOffsetHz();
+        rtlCenter.store(logical);
+        // ★ The VFO stays where it was when that is inside the capture; otherwise it starts at the centre (between beacons)
+        const double a = audioFreq.load();
+        if (!(a > pl.lo && a < pl.hi)) audioFreq.store(pl.hwCentre);
+        viewCenter.store(pl.hwCentre);
+        noteHwMoved();
+        agcForget("NDB: the beacon band is not the carrier we came off");
+        tuneHw(logical);
+        zoomFactor.store(1.0);
+        const bool havePos = std::isfinite(g_bgLat.load()) && std::isfinite(g_bgLon.load());
+        g_ndb.start(rate, pl.hwCentre, pl.lo, pl.hi, havePos, havePos ? g_bgLat.load() : 0, havePos ? g_bgLon.load() : 0, ndbMakeLog());
+        std::vector<std::shared_ptr<ClientDsp>> views;
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) if (kv.second) { kv.second->viewSpanHz = 0; kv.second->ownView = false; views.push_back(kv.second); }
+            socks = allSpecClientsLocked();
+        }
+        for (auto& v : views) clientRetune(v.get());
+        updateZoomView();
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        applyAutoIf();
+        ndbLastReport_ = nowSecs();
+        for (auto& sk : socks) { sendConfig(sk); sendHwInfo(sk); sendText(sk, ndbHello()); }
+        LOGI("[NDB] mode ON: radio at %.2f kHz, %.3f MS/s, searching %.1f-%.1f kHz", pl.hwCentre / 1e3, rate / 1e6, pl.lo / 1e3, pl.hi / 1e3);
+    }
+    void ndbLeave(bool tell) {
+        if (!g_ndbMode.exchange(false)) {
+            if (tell) {
+                std::vector<std::shared_ptr<net::Socket>> socks;
+                { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                for (auto& sk : socks) sendText(sk, "{\"type\":\"ndb_off\"}");
+            }
+            return;
+        }
+        g_ndb.stop();                                   // ★ the gallery's card and map are written here
+        ndbOrigin_ = "live"; ndbProfile_.clear();
+        const AdsbSaved& s = ndbSaved_;
+        g_vsLockedCentre.store(s.lockedCentre);
+        g_vsLockedRate.store(s.lockedRate);
+        agcForget("NDB off: back to the listener's carrier");
+        if (s.audio > 0.0) audioFreq.store(s.audio);
+        if (s.view > 0.0) viewCenter.store(s.view);
+        if (s.rtl > 0.0) { rtlCenter.store(s.rtl); tuneHw(s.rtl); }
+        updateZoomView();
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        applyAutoIf();
+        LOGI("[NDB] mode OFF: radio back at %.3f MHz (VFO %.3f MHz)", s.rtl / 1e6, s.audio / 1e6);
+        if (tell) {
+            std::vector<std::shared_ptr<net::Socket>> socks;
+            { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+            for (auto& sk : socks) { sendText(sk, "{\"type\":\"ndb_off\"}"); sendConfig(sk); sendHwInfo(sk); }
+        }
+    }
+    /** From the DSP loop: the report once a second. */
+    void ndbTick() {
+        const double t = nowSecs();
+        if (t - ndbLastReport_ >= 1.0) { ndbLastReport_ = t; sendNdbAll(); }
+    }
+    /** {"type":"ndb", on}. ★ The default is OFF, as every whole-radio mode's. */
+    void ndbControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        double onV = 0; jsonNum(msg, "on", onV);
+        if (!g_ndbMode.load()) { ndbOrigin_ = "live"; ndbProfile_.clear(); }
+        if (onV == 0) { ndbLeave(true); return; }
+        if (g_ndbMode.load()) { if (sock) { const std::string r = g_ndb.report(); sendText(sock, r.empty() ? ndbHello() : r); } return; }
+        const std::string why = vsNdbWhyNot();
+        if (!why.empty()) { if (sock) sendText(sock, "{\"type\":\"ndb_error\",\"why\":\"" + dabEscape(why) + "\"}"); return; }
+        // ★ One whole-radio mode at a time: the other leaves through its own door (which tells every listener)
+        if (g_ismMode.load(std::memory_order_relaxed)) ismLeave(true);
+        if (g_adsbMode.load(std::memory_order_relaxed)) adsbLeave(true);
+        if (g_dabMode.load(std::memory_order_relaxed)) handleControl(nullptr, "{\"type\":\"dab\",\"on\":0}");
+        LOGI("[NDB] ON asked%s", sock ? " by a client" : " internally");
+        ndbEnter();
+    }
+    /** ★ A `tune` in NDB mode: inside the capture it moves the VFO only (the beacon tapped, the frequency typed); outside
+     *  it is refused with the reason — leaving NDB is its own button. */
+    void ndbTune(const std::shared_ptr<net::Socket>& sock, double f) {
+        if (!(f > ndbPlan_.lo - 2000 && f < ndbPlan_.hi + 2000)) {
+            if (sock) sendText(sock, "{\"type\":\"ndb_error\",\"why\":\"That is outside the NDB band being decoded \xe2\x80\x94 leave NDB to tune there.\"}");
+            return;
+        }
+        audioFreq.store(f);
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        for (auto& sk : socks) sendConfig(sk);
     }
 
     void dabRestore() {
@@ -15298,7 +15446,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         static const char* const kNotHere[] = {
             "gain", "agc", "tunerbw", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control",
             "hackrf_control", "antenna", "sampleRate", "directSampling", "autoDirectSampling", "biasT", "ppm",
-            "rawIq", "iqout", "iqtune", "rdsx", "dab", "dab_service", "dab_scopes", "dab_resync", "dab_erase", "adsb", "ism",
+            "rawIq", "iqout", "iqtune", "rdsx", "dab", "dab_service", "dab_scopes", "dab_resync", "dab_erase", "adsb", "ism", "ndb",
             "dabBoost", "autobw", "ims", "ceq", "nb", "nbx", "stereo", "deemph", "nfmvoice", "squelch", "fftRate" };
         for (const char* k : kNotHere)
             if (type == k) { LOGI("icom: '%s' ignored — this radio has no such control", type.c_str()); return true; }
@@ -16438,6 +16586,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  tuning buttons step BLOCKS (11A, 11B, 11C…) — and no zoom, because on an RTL-SDR the
          *  IF bandwidth follows the zoom and narrowing it cuts the ensemble in half. */
         if (type == "ism") { ismControl(sock, msg); return; }
+        /* ★★ NDB (V12): on/off; Find NDB (the published list, nearest first) and the stats are READS — answered to the
+         *  asker only, never gated (they move nothing). */
+        if (type == "ndb") { ndbControl(sock, msg); return; }
+        if (type == "ndb_find") {
+            if (sock) {
+                double lim = 50; jsonNum(msg, "limit", lim);
+                std::string q = jsonStr(msg, "q"); if (q.size() > 40) q.resize(40);
+                const bool have = std::isfinite(g_bgLat.load()) && std::isfinite(g_bgLon.load());
+                // ★ outside the mode too: the published list alone (nothing marked heard)
+                sendText(sock, g_ndb.running() ? g_ndb.find(q, (size_t)std::max(1.0, std::min(400.0, lim)))
+                                               : vibendb::findJson(q, (size_t)std::max(1.0, std::min(400.0, lim)), have,
+                                                                   have ? g_bgLat.load() : 0, have ? g_bgLon.load() : 0, {}));
+            }
+            return;
+        }
+        if (type == "ndb_stats") { if (sock && g_ndb.running()) sendText(sock, g_ndb.stats()); return; }
         if (type == "adsb") {
             // ★ The default is OFF, as DAB's: a malformed message must never seize the receiver
             double onV = 0; jsonNum(msg, "on", onV);
@@ -16451,6 +16615,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             // ★ One whole-radio mode at a time: DAB leaves through its own door, which tells every listener
             if (g_ismMode.load(std::memory_order_relaxed)) ismLeave(true);   // ★ ISM leaves through its own door first
+            if (g_ndbMode.load(std::memory_order_relaxed)) ndbLeave(true);   // ★ …and NDB
             // ★ From DAB: a handover, not leave-then-enter — see adsbHandOff
             if (g_dabMode.load(std::memory_order_relaxed) && g_dabLockHeld.load()) { dabHandOffToAdsb(); adsbEnter(true); }
             else adsbEnter();
@@ -16625,6 +16790,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ From ADS-B: a handover — ADS-B's saved state becomes DAB's, and nothing is restored in between
             bool preSaved = false;
             if (g_ismMode.load(std::memory_order_relaxed)) ismLeave(true);   // ★ ISM leaves through its own door first
+            if (g_ndbMode.load(std::memory_order_relaxed)) ndbLeave(true);   // ★ …and NDB
             if (g_adsbMode.load(std::memory_order_relaxed)) {
                 const AdsbSaved a = adsbHandOff();
                 g_dabSavedCentre.store(a.lockedCentre); g_dabSavedRate.store(a.lockedRate);
@@ -17025,6 +17191,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         // ★ ISM: the view is the whole band — a zoom on an RTL narrows the IF filter under it and parks the dongle
+        if ((type == "zoom" || type == "reset") && g_ndbMode.load(std::memory_order_relaxed)) {
+            LOGI("%s ignored — NDB owns the view (the whole beacon band)", type.c_str());
+            return;
+        }
         if ((type == "zoom" || type == "reset") && g_ismMode.load(std::memory_order_relaxed)) {
             LOGI("%s ignored — ISM owns the view (the whole band)", type.c_str());
             return;
@@ -17264,6 +17434,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *    reaches here. Refusing this is refusing an ACCIDENT, not a decision. */
         /* ★★ ISM: a `tune` is the frequency box (or an old client's arrow) — an exact frequency for an odd device, taken
          *  through the ISM door so the capture follows and the list is kept. mode/bandwidth mean nothing on a band. */
+        /* ★★ NDB: a `tune` inside the capture moves the VFO only (a beacon tapped); outside, it is refused with the reason. */
+        if (type == "tune" && g_ndbMode.load(std::memory_order_relaxed)) {
+            double f = 0;
+            if (jsonNum(msg, "frequency", f) && f > 0) ndbTune(sock, f);
+            return;
+        }
         if (type == "tune" && g_ismMode.load(std::memory_order_relaxed)) {
             double f = 0;
             if (jsonNum(msg, "frequency", f) && f > 0) {
@@ -17417,8 +17593,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  decoder with them. Stuart, 2026-09-08: "lock out the IF filter when in DAB mode,
              *  don't want someone accidentally narrowing it and breaking DAB". The client greys the
              *  control; this is the same rule for anything else that sends the message. */
-            if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed)) {
-                LOGI("tunerbw ignored — %s owns the IF filter", g_ismMode.load() ? "ISM" : "ADS-B");
+            if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed)) {
+                LOGI("tunerbw ignored — %s owns the IF filter", g_ndbMode.load() ? "NDB" : g_ismMode.load() ? "ISM" : "ADS-B");
                 return;
             }
             if (g_dabMode.load(std::memory_order_relaxed)) {
@@ -17763,8 +17939,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LOGI("sampleRate ignored — DAB owns the rate (2.048 MS/s)");
                 return;
             }
-            if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed)) {
-                LOGI("sampleRate ignored — %s runs at the rate it found", g_ismMode.load() ? "ISM" : "ADS-B");
+            if (g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed)) {
+                LOGI("sampleRate ignored — %s runs at the rate it found", g_ndbMode.load() ? "NDB" : g_ismMode.load() ? "ISM" : "ADS-B");
                 return;
             }
             if (jsonNum(msg,"value",v) && v > 0) {
@@ -23433,10 +23609,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  (resumeCaptureIdle, the same early connect step that cancels the idle park), and the park is armed only
              *  once the leave has happened — a 3 s RELEASE under a running DAB pipeline is the one thing it cannot survive. */
             if (stillEmpty && !stopping.load() && (g_dabMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed)
+                                                   || (g_ndbMode.load(std::memory_order_relaxed) && ndbOrigin_ != "background")
                                                    || (g_adsbMode.load(std::memory_order_relaxed) && !adsbKeepHolds()))) {
                 modeLeaveDueAt.store(nowSecs() + kModeLeaveGraceS);
                 LOGI("last listener left — %s stays up for %.0f s in case they are only reconnecting",
-                     g_dabMode.load() ? "DAB" : g_ismMode.load() ? "ISM" : "ADS-B", kModeLeaveGraceS);
+                     g_dabMode.load() ? "DAB" : g_ismMode.load() ? "ISM" : g_ndbMode.load() ? "NDB" : "ADS-B", kModeLeaveGraceS);
             }
             else if (stillEmpty && !stopping.load() && g_adsbMode.load(std::memory_order_relaxed))
                 LOGI("[ADS-B] last listener left — staying in ADS-B (kept running when nobody is connected)");
@@ -25103,6 +25280,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             /* ★★★ ISM TAKES THE WHOLE CHAIN THE SAME WAY — every sample to the decoder's queue (copy and return), and the
              *  spectrum runs at its own rate: the bursts on the waterfall are half of what ISM mode is for. */
+            /* ★★ NDB: every sample to the tap's queue (copy and return); the chain runs as ever — the listener hears their VFO. */
+            if (g_ndbMode.load(std::memory_order_relaxed)) {
+                g_ndb.feed(reinterpret_cast<const vibendb::Service::cf32*>(buf.data()), (int)buf.size());
+                ndbTick();
+            }
             if (g_ismMode.load(std::memory_order_relaxed)) {
                 g_ism.feed(reinterpret_cast<const vibeism::cf*>(buf.data()), buf.size());
                 ismTick();
@@ -30621,6 +30803,47 @@ static std::string vsIsmWhyNot() {
     return {};
 }
 
+/* ★★ NDB (V12, 2026-10-26): the part of the beacon band (190–535 kHz) this radio reaches, from the EFFECTIVE ranges (the
+ *  owner's allow/block lists included). An RTL reaches LF only on its direct-sampling Q branch, so it counts only while
+ *  direct sampling is on or automatic (Stuart's brief: "RTL only in direct sampling — no dead control"); there its
+ *  range is the ADC's Nyquist zone, 0–14.4 MHz. The HF+, the RSPs: their own ranges. An Icom (no IQ), a HackRF or an
+ *  Airspy R2 (nothing below 1 / 24 MHz): none — no control at all. */
+static bool vsNdbReach(double& lo, double& hi) {
+    lo = hi = 0;
+    if (g_icomOn.load()) return false;
+    auto& shim = LocalSdrShim::instance();
+    vibebands::Ranges t;
+    const bool rtl = !shim.isSdrplay() && !shim.isAirspyHf() && !shim.isHackRf() && !shim.isAirspy();
+    if (rtl) {
+        if (!(g_autoDs.load() || g_dsNow.load() > 0)) return false;
+        const vibebands::Ranges hw = { { 0.0, 14.4e6 } };
+        const vibebands::Ranges perm = vsPermittedRanges(hw);
+        t = perm.empty() ? hw : perm;
+    } else t = vsTunableRanges();
+    double best = 0;
+    for (const auto& x : t) {
+        const double a = std::max(double(x.lo), vibendb::kBandLoHz), b = std::min(double(x.hi), vibendb::kBandHiHz);
+        if (b - a > best) { best = b - a; lo = a; hi = b; }
+    }
+    return best >= vibendb::kMinSpanHz;
+}
+static std::string vsNdbWhyNot() {
+    if (vsModeBlocked("ndb")) return "the server owner has switched NDB off on this receiver";
+    double lo, hi;
+    if (!vsNdbReach(lo, hi)) return "this radio cannot tune to the NDB band";
+    if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && g_vsMaxUsers.load(std::memory_order_relaxed) > 1)
+        return "this receiver's centre frequency is locked by its owner";
+    const double running = LocalSdrShim::instance().captureSpanHz();
+    vibendb::Plan p;
+    if (running > 0 && !vibendb::plan(lo, hi, running, p)) {
+        char b[200];
+        std::snprintf(b, sizeof b, "NDB needs a capture of %.0f kHz or more \xe2\x80\x94 this receiver runs at %.0f kHz",
+                      vibendb::kMinSpanHz / 0.9 / 1e3, running / 1e3);
+        return b;
+    }
+    return {};
+}
+
 static bool vsDabCapableHw();
 static bool vsDabCapable() {
     // ★ The owner may switch it off outright, whatever the hardware can do.
@@ -30708,6 +30931,17 @@ static std::string vsTunableJson() {
         j += "]";
         const vibeism::Band* land = vibeism::landingBand(g_bgLat.load(), g_bgLon.load(), [](const vibeism::Band& b) { return vsIsmReach(b); });
         if (land) j += std::string(",\"ismLanding\":\"") + land->id + "\"";
+    }
+    /* ★★ NDB (V12): offered, or shown DISABLED with its reason — and NOT AT ALL where the radio reaches no LF (an RTL
+     *  without direct sampling, a HackRF, an Airspy R2, an Icom). `ndbLo`/`ndbHi`: the part of the band it reaches. */
+    {
+        double lo = 0, hi = 0;
+        if (vsNdbReach(lo, hi)) {
+            const std::string why = vsNdbWhyNot();
+            j += std::string(",\"ndb\":") + (why.empty() ? "true" : "false");
+            if (!why.empty()) j += ",\"ndbWhy\":\"" + dabEscape(why) + "\"";
+            char e[80]; std::snprintf(e, sizeof e, ",\"ndbLo\":%.0f,\"ndbHi\":%.0f", lo, hi); j += e;
+        }
     }
     /* ★ SEPARATE FROM `dab`, because the two answer different questions and the setup page needs
      *  both: `dab` is "will this receiver do it", `dabDecoder` is "could any receiver on this
@@ -30816,7 +31050,7 @@ static std::string vsTunableJson() {
      *  ★ `rdsx` is its own flag because it is its own badge: an owner who switches Advanced RDS
      *    off to save CPU still serves basic RDS, so the card must not read "no RDS". */
     {
-        static const char* kOffer[] = { "wfm", "nfm", "am", "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism",
+        static const char* kOffer[] = { "wfm", "nfm", "am", "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb",
                                         "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time" };
         std::string m = "[";
         bool first = true;
@@ -30825,6 +31059,7 @@ static std::string vsTunableJson() {
             if (k == "dab") { if (!vsDabCapable()) continue; }
             else if (k == "adsb") { if (!vsAdsbWhyNot().empty()) continue; }
             else if (k == "ism") { if (!vsIsmAnyBand() || !vsIsmWhyNot().empty()) continue; }
+            else if (k == "ndb") { if (!vsNdbWhyNot().empty()) continue; }
             else if (vsModeBlocked(k)) continue;
             if (k == "rds" && vsModeBlocked("wfm")) continue;   // no FM, no RDS of any kind
             m += (first ? "\"" : ",\"") + k + "\""; first = false;
@@ -30989,6 +31224,7 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
     }
     if (g_adsb.running()) watch.note("adsb", "ADS-B", g_adsb.health().dropped, nowMs);
     if (g_ism.running()) watch.note("ism", "ISM", g_ism.droppedBlocks(), nowMs);
+    if (g_ndb.running()) watch.note("ndb", "NDB skimmer", g_ndb.droppedBlocks(), nowMs);
     return watch.behind(nowMs);
 }
 
@@ -32724,6 +32960,7 @@ void LocalSdrShim::stopLocked() {
       if (impl->bgActive_.exchange(false)) { impl->bgRun_.stop(false); LOGI("background decoding stopped — the server is stopping"); } }
     // ★★ V12: ISM's decoder too — its day's log is held in RAM, and a clean shutdown (an update, a restart) writes it.
     g_ism.stop();
+    g_ndb.stop();   // ★ …and NDB's day (the card and the map)
     impl->decoders_.shutdownAll();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
     { std::lock_guard<std::mutex> lk(impl->notchMtx); delete impl->notchEng; impl->notchEng = nullptr; }

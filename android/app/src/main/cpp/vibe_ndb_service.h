@@ -85,6 +85,25 @@ inline std::string cleanText(const std::string& s, size_t cap) {
     return o;
 }
 
+/** {"type":"ndb_found",…}: published beacons nearest the receiver first, optionally filtered — the "Find NDB" box and
+ *  the map's unheard beacons. `heard` holds "IDENT@<kHz×2>" keys of beacons identified (marked heard). */
+inline std::string findJson(const std::string& q, size_t limit, bool have, double lat, double lon, const std::set<std::string>& heard) {
+    std::string o = "{\"type\":\"ndb_found\",\"q\":\"" + jsonEsc(q.substr(0, 40)) + "\",\"pos\":" + (have ? "true" : "false") + ",\"list\":[";
+    if (have) {
+        const auto v = nearest(lat, lon, std::min<size_t>(limit, 400), q);
+        bool first = true;
+        for (const auto& f : v) {
+            const std::string key = f.n.ident() + "@" + std::to_string((long long)std::lround(f.n.hz() / 500.0));
+            char b[360];
+            std::snprintf(b, sizeof b, "%s{\"ident\":\"%s\",\"hz\":%.0f,\"name\":\"%s\",\"cc\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"km\":%.0f,\"brg\":%.0f,\"heard\":%s}",
+                          first ? "" : ",", cleanText(f.n.ident(), 6).c_str(), f.n.hz(), jsonEsc(f.n.name()).c_str(), jsonEsc(f.n.cc()).c_str(),
+                          f.n.lat(), f.n.lon(), f.km, f.deg, heard.count(key) ? "true" : "false");
+            o += b; first = false;
+        }
+    }
+    return o + "]}";
+}
+
 class Service {
 public:
     using cf32 = std::complex<float>;
@@ -164,21 +183,8 @@ public:
     std::string find(const std::string& q, size_t limit) const {
         double lat, lon; bool have;
         std::set<std::string> heard;
-        { std::lock_guard<std::mutex> lk(m_); lat = lat_; lon = lon_; have = havePos_; for (const auto& kv : log_) heard.insert(kv.second.ident + "@" + std::to_string((long long)std::lround(kv.second.hz / 500.0))); }
-        std::string o = "{\"type\":\"ndb_found\",\"q\":\"" + jsonEsc(q.substr(0, 40)) + "\",\"pos\":" + (have ? "true" : "false") + ",\"list\":[";
-        if (have) {
-            const auto v = nearest(lat, lon, std::min<size_t>(limit, 400), q);
-            bool first = true;
-            for (const auto& f : v) {
-                const std::string key = f.n.ident() + "@" + std::to_string((long long)std::lround(f.n.hz() / 500.0));
-                char b[360];
-                std::snprintf(b, sizeof b, "%s{\"ident\":\"%s\",\"hz\":%.0f,\"name\":\"%s\",\"cc\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"km\":%.0f,\"brg\":%.0f,\"heard\":%s}",
-                              first ? "" : ",", cleanText(f.n.ident(), 6).c_str(), f.n.hz(), jsonEsc(f.n.name()).c_str(), jsonEsc(f.n.cc()).c_str(),
-                              f.n.lat(), f.n.lon(), f.km, f.deg, heard.count(key) ? "true" : "false");
-                o += b; first = false;
-            }
-        }
-        return o + "]}";
+        { std::lock_guard<std::mutex> lk(m_); lat = lat_; lon = lon_; have = havePos_; for (const auto& kv : log_) heard.insert(kv.first); }
+        return findJson(q, limit, have, lat, lon, heard);
     }
 
     // ── test seams ──
