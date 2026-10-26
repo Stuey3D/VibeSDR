@@ -9,16 +9,28 @@
  *   the Audio light and the codec ("via FAAD2" where the server says which decoder plays it)
  *   the server's own sentence, prominently, when it cannot play the codec
  *
+ * ★★ V12 THE SIGNAL PANE (2026-10-26): DAB's kind of advanced pane as a second view — LOCK, SIGNAL, QUALITY (delay
+ *    spread and Doppler among them), ERRORS, AUDIO, STATION — services/drm.ts drmSignalRows, the web's very rows. The
+ *    compact box stays the default; SIGNAL in the header swaps to the pane and says STATION to come back (it names where
+ *    it GOES — DabPanel's rule for its STATIONS/SIGNAL key).
  * ★ Over the lower waterfall where the decoder box sits (it stands down while a decoder or the spots are open). Tap the
  *   header to fold it to its title line; the waterfall stays live above it. The decoder font throughout (DecoderShell).
- * ★ No dead controls: the box has no keys but MIN — DRM has nothing to set (the server cuts its own channel, so the
- *   width control is not offered in DRM either).
+ * ★ BY PAD AND KEYBOARD (IsmPanel's pattern): the screen's highlight can land on the box ('drmBox'); Enter takes the keys,
+ *   the arrows walk SIGNAL · MIN and then, in the Signal pane, every row (each brought into view, so the whole pane can be
+ *   read without a touch), Back hands the keys back. It does NOT take the keys by itself as DAB's box does: in DRM the
+ *   dial is still the radio's, and the box is something to read.
+ * ★ No dead controls: no key here sets anything on the radio — DRM has nothing to set (the server cuts its own channel,
+ *   so the width control is not offered in DRM either).
  */
-import React, { useMemo, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT,
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, type DecoderTokens } from './DecoderShell';
-import { drmView, drmViewText, DRM_LIGHT_ON, DRM_LIGHT_OFF, DRM_SNR_COLOURS, type DrmState } from '../services/drm';
+import { scrollLane } from '../constants/popupTokens';
+import { captureRegion, capturedRegion, useListNav, useNavFocus } from './PanelNav';
+import { screenNavRef } from './ScreenNav';
+import { drmView, drmViewText, drmSignalRows, DRM_LIGHT_ON, DRM_LIGHT_OFF, DRM_SNR_COLOURS,
+         type DrmState, type DrmTone } from '../services/drm';
 
 /** Wide enough for the signal line on one row on a tablet; a phone's window narrows it (DecoderShell). */
 const DRM_MAX_W = 560;
@@ -26,27 +38,72 @@ const DRM_MAX_W = 560;
 export interface DrmPanelProps {
   state: DrmState | null;
   bottomOffset: number;
+  /** ★ The highest the box may reach (the screen's boxTopLimit, as the DAB and ISM boxes get it) — sizes the Signal pane. */
+  topLimit?: number;
 }
 
-export default function DrmPanel({ state, bottomOffset }: DrmPanelProps) {
+type NavKey = { key: string; row: number };
+
+export default function DrmPanel({ state, bottomOffset, topLimit }: DrmPanelProps) {
   const tk = useDecoderTokens();
   const s = useDecoderStyles(makeStyles);
+  const { height: winH } = useWindowDimensions();
   const [min, setMin] = useState(false);
+  const [pane, setPane] = useState<'station' | 'signal'>('station');
   const v = useMemo(() => drmView(state), [state]);
+  const rows = useMemo(() => (pane === 'signal' ? drmSignalRows(state) : []), [state, pane]);
   const playing = !!state?.msc && !!state?.playable;
+  const sig = pane === 'signal' && !min;
+  const togglePane = () => { setMin(false); setPane((p) => (p === 'signal' ? 'station' : 'signal')); };
+
+  // ★ The Signal pane's height: up to the screen's limit (the DAB/ISM boxes' arithmetic), else a fixed 200 like ISM's
+  const HEADER_H = 46;
+  const bodyH = Math.round(topLimit != null
+    ? Math.max(120, winH - bottomOffset - topLimit - HEADER_H - decoderBodyInset(tk)) : 200);
+
+  // ── pad / keyboard ──
+  const ring = useNavFocus().ring;
+  const [grab, setGrab] = useState(false);
+  useEffect(() => { if (grab) captureRegion('drm'); else if (capturedRegion() === 'drm') captureRegion(null); }, [grab]);
+  useEffect(() => () => { if (capturedRegion() === 'drm') captureRegion(null); }, []);
+  const keys: NavKey[] = [{ key: 'pane', row: 0 }, { key: 'min', row: 0 }];
+  if (sig) rows.forEach((r, i) => { if (!('h' in r)) keys.push({ key: `r:${i}`, row: keys.length }); });
+  const nav = useRef(keys); nav.current = keys;
+  const listRef = useRef<ScrollView | null>(null);
+  const rowY = useRef<Record<number, number>>({});
+  const focus = useListNav(
+    grab, keys.length,
+    (i) => { const k = nav.current[i]?.key; if (k === 'pane') togglePane(); else if (k === 'min') setMin((m) => !m); },
+    (i) => {
+      const k = nav.current[i]?.key;
+      if (!k || !k.startsWith('r:')) return;
+      const y = rowY.current[Number(k.slice(2))];
+      if (y != null) listRef.current?.scrollTo({ y: Math.max(0, y - 40), animated: false });
+    },
+    undefined,
+    () => { setGrab(false); return true; },
+    { rowOf: (i) => nav.current[i]?.row ?? 0, startAt: 0 },
+  );
+  const hl = (k: string) => (grab && keys[focus]?.key === k ? { borderColor: ring, borderWidth: 2 } : null);
+  const tone = (t?: DrmTone) => (t === 'ok' ? tk.good : t === 'warn' ? tk.warn : t === 'bad' ? tk.bad : tk.value);
 
   return (
-    <DecoderShell bottom={bottomOffset} maxWidth={DRM_MAX_W}>
+    <DecoderShell bottom={bottomOffset} maxWidth={DRM_MAX_W} borderColor={grab ? ring : undefined}>
+      {/* ★ A place the screen's highlight can land: Enter takes the keys into the box. */}
+      <View pointerEvents="none" style={StyleSheet.absoluteFill} ref={screenNavRef('drmBox', () => setGrab(true))} />
       <DecoderHeader onPress={() => setMin((m) => !m)}>
         <View style={[s.dot, playing && s.dotOn]} />
         <DecoderTitle minimised={min}>DRM</DecoderTitle>
         <Text style={[s.sub, { color: tk.muted }]} numberOfLines={1}>
           {min && v.label ? v.label : 'Digital Radio Mondiale'}
         </Text>
-        <DecoderKey label={min ? 'SHOW' : 'MIN'} onPress={() => setMin((m) => !m)}
+        <DecoderKey active={pane === 'signal'} onPress={togglePane} style={hl('pane')}
+                    label={pane === 'signal' ? 'STATION' : 'SIGNAL'}
+                    accessibilityLabel={pane === 'signal' ? 'Back to the station box' : 'Advanced signal information'} />
+        <DecoderKey label={min ? 'SHOW' : 'MIN'} onPress={() => setMin((m) => !m)} style={hl('min')}
                     accessibilityLabel={min ? 'Show the DRM box' : 'Fold the DRM box to its title'} />
       </DecoderHeader>
-      {!min && (
+      {!min && pane === 'station' && (
         <DecoderBody>
           <View style={s.body} accessible accessibilityLabel={drmViewText(v).join('. ')}>
             {!!v.label && (
@@ -85,6 +142,23 @@ export default function DrmPanel({ state, bottomOffset }: DrmPanelProps) {
           </View>
         </DecoderBody>
       )}
+      {sig && (
+        <DecoderBody>
+          {/* ★ The web's #drmSignal: a small heading per group, amber label, the value in its traffic-light colour where it
+              has a nominal range. Each row carries its plain-English explanation as its accessibility hint (the web's tooltip). */}
+          <ScrollView ref={listRef} style={{ maxHeight: bodyH }} contentContainerStyle={[scrollLane, s.pane]} showsVerticalScrollIndicator>
+            {rows.map((r, i) => ('h' in r
+              ? <Text key={`h${i}`} style={[s.section, { color: tk.label }]}>{r.h}</Text>
+              : (
+                <View key={`r${i}`} style={[s.row, hl(`r:${i}`)]} onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }}
+                      accessible accessibilityLabel={`${r.k}: ${r.v}`} accessibilityHint={r.tip}>
+                  <Text style={[s.lbl, { color: tk.rowLabel }]} numberOfLines={2}>{r.k}</Text>
+                  <Text style={[s.val, { color: tone(r.tone) }, r.tone === 'bad' && tk.badBold && s.valBad]}>{r.v}</Text>
+                </View>
+              )))}
+          </ScrollView>
+        </DecoderBody>
+      )}
     </DecoderShell>
   );
 }
@@ -111,4 +185,11 @@ const makeStyles = (_T: DecoderTokens) => StyleSheet.create({
             backgroundColor: 'rgba(255,184,51,0.08)', paddingHorizontal: 8, paddingVertical: 4 },
   small:  { fontFamily: DECODER_FONT, fontSize: 10, fontVariant: ['tabular-nums'] },
   wait:   { fontFamily: DECODER_FONT, fontSize: 11, paddingVertical: 4 },
+  // ── the Signal pane: DabPanel's rows (124 pt label, value beside it), its section headings ──
+  pane:    { paddingHorizontal: 12, paddingVertical: 6, gap: 3 },
+  section: { fontFamily: DECODER_FONT, fontSize: 10, letterSpacing: 2, marginTop: 10, marginBottom: 2 },
+  row:     { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 2, borderColor: 'transparent', borderRadius: 4 },
+  lbl:     { fontFamily: DECODER_FONT, fontSize: 12, letterSpacing: 1, width: 124 },
+  val:     { fontFamily: DECODER_FONT, fontSize: 14, flex: 1, fontVariant: ['tabular-nums'] },
+  valBad:  { fontWeight: '700' },
 });

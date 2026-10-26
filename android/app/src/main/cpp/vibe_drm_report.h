@@ -35,6 +35,7 @@ struct DrmReportExtras {
     std::string backend;              // the decoder playing it ("FAAD2", "AudioToolbox", …) while open
     int64_t audioUnits = 0, audioBad = 0, concealed = 0, underruns = 0;
     uint64_t dropped = 0;             // IQ blocks the listener's queue dropped (the decoder thread fell behind)
+    uint64_t gaps = 0;                // holes in the IQ before it reached the listener (DrmListener::noteGap), bridged
     double blanked = 0;               // fraction of samples the pulse blanker zeroed
 };
 
@@ -94,6 +95,7 @@ inline std::string drmReportJson(const vibedrm::RxStatus& s, const DrmReportExtr
     }
     std::snprintf(buf, sizeof buf, ",\"reacq\":%lld", (long long)s.reacquisitions); j += buf;
     if (!s.lastLoss.empty()) { j += ",\"lostWhy\":" + drmJsonStr(s.lastLoss); std::snprintf(buf, sizeof buf, ",\"lostAtS\":%.1f", s.lastLossAtS); j += buf; }
+    if (x.gaps > 0) { std::snprintf(buf, sizeof buf, ",\"iqGaps\":%llu", (unsigned long long)x.gaps); j += buf; }
     if (x.blanked > 0) { std::snprintf(buf, sizeof buf, ",\"blankedPct\":%.2f", x.blanked * 100.0); j += buf; }
     std::snprintf(buf, sizeof buf, ",\"facOk\":%lld,\"facBad\":%lld,\"dropped\":%llu}", (long long)s.facGood, (long long)s.facBad,
                   (unsigned long long)x.dropped);

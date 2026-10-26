@@ -68,7 +68,18 @@ function ws(port, pathq) {
 }
 const jsons = (st, type) => st.txt.filter((t) => t.includes(`"type":"${type}"`)).map((t) => JSON.parse(t));
 
+/** ★ "Port already in use": freePort() hands out a port that something else on this machine can take before the server
+ *  binds it (other benches run beside this one). A server that says so is started again on fresh ports — a harness race,
+ *  not a result. */
 async function server(args, tag) {
+  for (let attempt = 0; ; attempt++) {
+    const S = await serverOnce(args, tag);
+    if (S.ok || attempt >= 2 || !S.portTaken()) return S;
+    console.log('   (the port was taken before the server bound it — starting again on fresh ports)');
+    S.stop();
+  }
+}
+async function serverOnce(args, tag) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-drm-${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
@@ -84,8 +95,9 @@ async function server(args, tag) {
   const log = fs.openSync(path.join(dir, 'server.log'), 'w');
   const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(RATE), ...args], { env, stdio: ['ignore', log, log] });
   const status = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
-  await until(async () => !!(await status()), 15000);
-  return { port, dir, status, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); if (!process.env.VIBE_KEEP) setTimeout(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }, 500); else console.log('   kept', dir); } };
+  const up = await until(async () => !!(await status()), 15000);
+  const portTaken = () => { try { return /already in use/.test(fs.readFileSync(path.join(dir, 'server.log'), 'utf8')); } catch { return false; } };
+  return { ok: up, portTaken, port, dir, status, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); if (!process.env.VIBE_KEEP) setTimeout(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }, 500); else console.log('   kept', dir); } };
 }
 async function listener(port, sid, f, mode) {
   const L = {};
@@ -143,6 +155,16 @@ async function scenario(label, args, tag) {
     }
     ok(r.snr > 10, `SNR ${r.snr} dB`);
     ok(r.sync && r.freq && r.frame && r.fac && r.sdc && r.msc, 'all six lights');
+    // ★★ V12 the Signal pane's fields (vibe_drm_report.h) — and the lock HELD: before 2026-10-26 a range-locked listener's
+    //    dropped blocks cost the OFDM frame alignment and the lock (~3 runs in 10 then heard silence). DrmListener::noteGap
+    //    now bridges them; iqGaps says how many there were.
+    const z = last() || {};
+    ok(Array.isArray(z.lockS) && z.lockS.length === 6 && z.lockS.every((t, i) => t >= 0 && (!i || t >= z.lockS[i - 1])),
+       `the six lock times, in order (${JSON.stringify(z.lockS)} s)`);
+    ok(typeof z.delayMs === 'number' && z.delayMs >= 0 && z.delayMs < 5.33 && typeof z.dopplerHz === 'number' && z.dopplerHz >= 0 && z.dopplerHz < 3,
+       `delay spread ${z.delayMs} ms (inside the 5.33 ms guard), Doppler ${z.dopplerHz} Hz`);
+    ok(typeof z.sdcMer === 'number' && z.sdcRate > 0.4 && z.so === 3 && typeof z.sdcOk === 'number', `SDC MER ${z.sdcMer} dB, rate ${z.sdcRate}, ${z.sdcBad} bad of ${(z.sdcOk || 0) + (z.sdcBad || 0)}`);
+    ok(z.reacq === 0, `the lock held throughout: ${z.reacq} re-acquisitions${z.lostWhy ? ` (last: ${z.lostWhy})` : ''}, ${z.iqGaps || 0} IQ gaps bridged`);
     // ★ VFO A/B: no VFO B in DRM (its audio is the decoded programme) — the toggle's allowance is 0 and a request is refused
     const lastWatch = () => { const w = jsons(L.spec, 'watch'); return w[w.length - 1]; };
     const hwWatch = () => { const h = jsons(L.spec, 'hwinfo'); return h.length ? h[h.length - 1].watch : undefined; };

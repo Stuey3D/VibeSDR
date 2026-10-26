@@ -77,7 +77,8 @@ Receiver::~Receiver() = default;
 void Receiver::reset() {
     rsRate_ = 0; rsH_.clear(); rsHist_.clear(); rsF_.clear(); rsPos_ = 0;
     buf_.clear(); bufBase_ = 0; samplesIn24_ = 0;
-    blankFrom_ = 0; pAvg_ = 0; blankHold_ = 0; blankRun_ = 0; blanked_ = 0;
+    blankFrom_ = 0; pAvg_ = 0; blankHold_ = 0; blankRun_ = 0; blanked_ = 0; blankWarm_ = 0;
+    blankRecent_[0] = blankRecent_[1] = 0; blankRecentN_[0] = blankRecentN_[1] = 0; blankBucket_ = 0;
     loseSync("reset");
     st_ = RxStatus();
     text_ = TextMessageDecoder();
@@ -102,6 +103,10 @@ void Receiver::loseSync(const char* why) {
     havePrev_ = false; prevStep_ = 0; tauAvg_ = 0; tauN_ = 0; stepSum_ = 0; pendingStep_ = 0;
     tScore_.clear(); symCount_ = 0; frameSynced_ = false; sIdx_ = 0; gIdx_ = 0; fsHist_.clear();
     ring_.clear(); frS_ = 0; frY_.clear(); frW_.clear();
+    // ★★ …and the averaged delay profile that steers the timing (2026-10-26). It was kept, so a re-acquisition — whose
+    //    search places the window afresh — was then steered by a profile measured against the OLD window, and walked
+    //    straight back out of alignment: one loss of sync became three in a row (the flaky test-server-drm's replay).
+    pdp_.clear(); pdpN_ = 0;
     for (auto& f : sf_) f.have = false;
     lastFrameIdx_ = -1; facFailRun_ = 0; facGoodRun_ = 0; haveFac_ = false;
     merInit_ = false;
@@ -192,7 +197,17 @@ void Receiver::blankNew() {
     for (int64_t i = std::max(blankFrom_, bufBase_); i < bufEnd(); ++i) {
         cf& v = buf_[size_t(i - bufBase_)];
         const float p = std::norm(v);
-        if (pAvg_ <= 0) pAvg_ = p + 1e-12f;
+        // ★ a recent-fraction pair of 5 s buckets (the Signal pane's row): what the blanker is doing NOW, not since tuning in
+        if (++blankRecentN_[blankBucket_] >= 5 * kFs) { blankBucket_ ^= 1; blankRecentN_[blankBucket_] = 0; blankRecent_[blankBucket_] = 0; }
+        /* ★ WARM-UP: the running mean starts as the mean of the first 10 ms, not as the first sample's power. One sample of
+         *  an OFDM signal can be near zero, and then everything after it stood "13 dB over the mean" — the first 100 ms
+         *  were blanked until the level-rise rule gave up (seen as 10 % blanked in the first second of every lock). */
+        if (blankWarm_ < kFs / 100) {
+            pAvg_ = blankWarm_ == 0 ? p + 1e-12f : pAvg_ + (p - pAvg_) / float(blankWarm_ + 1);
+            ++blankWarm_;
+            blankWin_[blankWi_ & 7] = p; ++blankWi_;
+            continue;
+        }
         // ★ the decision is on an 8-sample average: a pulse is a RUN of high samples, an OFDM peak is one or two
         //   (8 samples ≈ 16 degrees of freedom: 6 dB over the mean by chance is ~1e-6, so the threshold can sit low
         //   enough to catch a pulse's skirts, which a single-sample test at 13 dB let through)
@@ -204,7 +219,7 @@ void Receiver::blankNew() {
             for (int64_t j = std::max(bufBase_, i - 8); j < i; ++j) buf_[size_t(j - bufBase_)] = cf(0, 0);
             blankHold_ = 8;
         }
-        if (blankHold_ > 0) { --blankHold_; v = cf(0, 0); ++blanked_; continue; }
+        if (blankHold_ > 0) { --blankHold_; v = cf(0, 0); ++blanked_; ++blankRecent_[blankBucket_]; continue; }
         blankRun_ = 0;
         pAvg_ += (p - pAvg_) * (1.0f / 2400.0f);
     }

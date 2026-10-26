@@ -13432,7 +13432,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       <RotateFade>
       {status.mode === 'drm' && !activeDecoder && !spotsKind && !ismBoxOpen && !dabOn && (
         <PanelBoundary name="DRM" onClose={() => setDrmState(null)}>
-        <DrmPanel state={drmState}
+        <DrmPanel state={drmState} topLimit={boxTopLimit}
                   bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH} />
         </PanelBoundary>
       )}

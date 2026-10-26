@@ -8768,11 +8768,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  Either way this listener's RDS decoder must re-find its grid rather than count its
              *  own confusion as link errors (RxPipeline::noteInputGap). */
             const bool hole = blk->gap || (lastIndex >= 0 && blk->index != lastIndex + 1);
+            const long long missing = lastIndex >= 0 && blk->index > lastIndex + 1 ? blk->index - lastIndex - 1 : 0;
             lastIndex = blk->index;
             timespec c0{}, c1{};
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c0);
             if (blk->gainGuard) { std::lock_guard<std::mutex> gl(c->mtx); if (c->rx) c->rx->noteGainStep(0.1); }
-            feedOneClient(c, blk->bins.data(), blk->index, hole);
+            feedOneClient(c, blk->bins.data(), blk->index, hole, int(std::min<long long>(missing, 1 << 20)));
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c1);
             c->dspNanos.fetch_add(
                 (unsigned long long)((c1.tv_sec - c0.tv_sec) * 1000000000LL
@@ -26334,10 +26335,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Do one client's channels for this block. Pure per-client work — no shared mutable state,
      *  which is exactly why it parallelises. */
     void feedOneClient(const std::shared_ptr<ClientDsp>& c, const cf32* bins, long long blockIndex,
-                       bool gap = false) {
+                       bool gap = false, int missing = 0) {
         std::lock_guard<std::mutex> lk(c->mtx);
         if (!c->rx || c->chanBins <= 0) return;
         if (gap) c->rx->noteInputGap();     // ★ before the feed that carries the splice
+        // ★★ V12 DRM: blocks this listener's queue dropped are BRIDGED in its DRM receiver (DrmListener::noteGap) — a hole
+        //    a fraction of a symbol long otherwise costs OFDM its frame alignment and the listener 5-10 s of silence
+        if (missing > 0 && c->drm) c->drm->noteGap(missing);
         // ★★ V12 VFO A/B: the watch channels FIRST, so this listener's mix finds their audio waiting (one atomic when off).
         if (watchSetCount_.load(std::memory_order_relaxed) > 0 || c->watch) feedWatchFromBins(c.get(), bins, blockIndex);
         const int got = chan_->extract(bins, clientCentreBin(c.get()), c->chanBins,

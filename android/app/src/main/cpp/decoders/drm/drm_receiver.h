@@ -101,6 +101,11 @@ public:
     int64_t samplesIn() const { return samplesIn24_; }
     /** Fraction of samples the pulse blanker has zeroed. */
     double blankedFraction() const { return samplesIn24_ ? double(blanked_) / double(samplesIn24_) : 0.0; }
+    /** …over the last 5–10 s only (the Signal pane: what the blanker is doing now). */
+    double recentBlankedFraction() const {
+        const int64_t n = blankRecentN_[0] + blankRecentN_[1];
+        return n ? double(blankRecent_[0] + blankRecent_[1]) / double(n) : 0.0;
+    }
 
 private:
     enum class State { Search, Freq, Track };
@@ -112,6 +117,7 @@ private:
     void trimBuffer(int64_t keepFrom);
     void blankNew();
     int64_t blankFrom_ = 0; float pAvg_ = 0; float blankWin_[8] = {0}; uint32_t blankWi_ = 0; int blankHold_ = 0, blankRun_ = 0; int64_t blanked_ = 0;
+    int blankWarm_ = 0; int64_t blankRecent_[2] = {0, 0}, blankRecentN_[2] = {0, 0}; int blankBucket_ = 0;
     cf at(int64_t absIdx) const { return buf_[size_t(absIdx - bufBase_)]; }
     int64_t bufEnd() const { return bufBase_ + int64_t(buf_.size()); }
     // ── state machine ──

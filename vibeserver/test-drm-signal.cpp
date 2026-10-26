@@ -7,6 +7,8 @@
 //      paths at 0.1–2 Hz, at several SNRs, and a static channel (must read ~0).
 //   3. THE LOCK GROUP: time-to-lock of each light in order, no re-acquisition on a clean signal; then an 8 s break in the
 //      signal (longer than the 16 bad FACs a lock survives) must count ONE re-acquisition, say which test lost the lock ("fac"), and lock again with fresh times.
+//   3b. HOLES: a block missing from the IQ (a listener's queue dropped it) loses the lock un-bridged and keeps it when
+//      DrmListener bridges it with zeros (the flaky test-server-drm, 2026-10-26).
 //   4. THE REPORT (vibe_drm_report.h): the new fields are present when measured and ABSENT when not, every field an
 //      older client reads is unchanged, strings off the air are escaped, and the JSON is well formed.
 //   5. Real recordings (VIBE_TEST_AUDIO=<folder holding drm/>): RRI 9570 kHz — the numbers it reads (printed; checked
@@ -162,7 +164,7 @@ static void report() {
     s.sdc.svc[0].audio.present = true; s.sdc.svc[0].audio.coding = 0; s.sdc.svc[0].audio.sbr = 1; s.sdc.svc[0].audio.audioMode = 1; s.sdc.svc[0].audio.srCode = 3;
     s.bitrateBps = 16300;
     DrmReportExtras x; x.canDecode = true; x.decoderOpen = true; x.decoderTried = true; x.backend = "FAAD2";
-    x.audioUnits = 500; x.audioBad = 7; x.concealed = 3; x.underruns = 1; x.dropped = 4; x.blanked = 0.0123;
+    x.audioUnits = 500; x.audioBad = 7; x.concealed = 3; x.underruns = 1; x.dropped = 4; x.gaps = 3; x.blanked = 0.0123;
     j = drmReportJson(s, x);
     std::printf("   %s\n", j.c_str());
     for (const char* k : { "\"locked\":true", "\"robustness\":\"B\"", "\"bwKhz\":10", "\"mscQam\":16", "\"sdcQam\":16", "\"interleave\":\"long\"",
@@ -173,7 +175,7 @@ static void report() {
         CHECK(j.find(k) != std::string::npos, "an older client's field unchanged: %s", k);
     for (const char* k : { "\"so\":3", "\"sdcRate\":0.50", "\"sdcMer\":15.2", "\"delayMs\":1.23", "\"dopplerHz\":0.31", "\"sbr\":true", "\"ps\":true",
                            "\"underruns\":1", "\"sdcOk\":13", "\"sdcBad\":1", "\"superFrames\":14", "\"lockS\":[0.8,1.4,2.0,2.6,3.2,3.8]",
-                           "\"reacq\":2", "\"lostWhy\":\"fac\"", "\"lostAtS\":42.0", "\"blankedPct\":1.23" })
+                           "\"reacq\":2", "\"iqGaps\":3", "\"lostWhy\":\"fac\"", "\"lostAtS\":42.0", "\"blankedPct\":1.23" })
         CHECK(j.find(k) != std::string::npos, "the Signal pane's field: %s", k);
     CHECK(j.find("\"label\":\"SNR \\\"Tiganesti\\\" E1\"") != std::string::npos, "a label off the air is escaped");
     CHECK(j.find("codeRateA") == std::string::npos, "no part A → no part-A rate");
@@ -191,6 +193,43 @@ static void report() {
     j = drmReportJson(q, DrmReportExtras());
     CHECK(j.find("\"lockS\":[0.9,-1.0,-1.0,-1.0,-1.0,-1.0]") != std::string::npos && j.find("\"lostWhy\":\"fac\"") != std::string::npos
           && j.find("delayMs") == std::string::npos, "searching after a loss: %s", j.c_str());
+}
+
+/** ★ A listener's queue dropping blocks (DrmListener::noteGap): 10.7 ms holes — one 384-sample block at 36 kHz, 256
+ *  samples here at 24 kHz — every 4 s. Un-bridged, each hole costs the frame alignment; bridged with zeros, the lock holds
+ *  and only the frames around the holes can suffer. */
+static void holes() {
+    std::printf("── 3b. holes in the IQ (a listener's dropped blocks)\n");
+    for (int bridged = 0; bridged < 2; ++bridged) {
+        TxConfig c; c.mode = Mode::B; c.mscLevels = 2; c.protB = 1;
+        Transmitter tx(c);
+        int kmin, kmax; carrierRange(c.mode, c.so, kmin, kmax);
+        Channel ch(1, 20, 4, 0, (kmax - kmin + 1) * double(kFs) / modeInfo(c.mode).tu, 6);
+        Receiver rx; int64_t good = 0, at = 0, nextHole = 10 * kFs;
+        rx.onLogicalFrame = [&](const LogicalFrame& lf) {
+            if (lf.bytes.size() < 8) return;
+            const int64_t n = (int64_t(lf.bytes[0]) << 24) | (lf.bytes[1] << 16) | (lf.bytes[2] << 8) | lf.bytes[3];
+            const auto ref = testPayload(n, lf.bytes.size() - 4);
+            if (std::equal(ref.begin(), ref.end(), lf.bytes.begin())) ++good;
+        };
+        int nHoles = 0;
+        for (int sf = 0; sf < 40; ++sf) {
+            auto y = ch.run(tx.superFrame());
+            for (size_t i = 0; i < y.size(); i += 384) {
+                const int n = int(std::min<size_t>(384, y.size() - i));
+                if (at >= nextHole) {
+                    nextHole += 4 * kFs; ++nHoles;
+                    if (bridged) { std::vector<cf> z(size_t(n), cf(0, 0)); rx.feed(z.data(), n, 24000); }
+                } else rx.feed(y.data() + i, n, 24000);
+                at += n;
+            }
+        }
+        const RxStatus& st = rx.status();
+        std::printf("   %s: %d holes, re-acquisitions %lld, frames %lld of 120\n", bridged ? "bridged with zeros" : "not bridged", nHoles,
+                    (long long)st.reacquisitions, (long long)good);
+        if (bridged) CHECK(st.reacquisitions == 0 && good >= 100, "bridged holes keep the lock (%lld re-acquisitions, %lld frames)", (long long)st.reacquisitions, (long long)good);
+        else CHECK(st.reacquisitions >= 1, "an un-bridged hole costs the lock — the failure the bridge exists for (%lld)", (long long)st.reacquisitions);
+    }
 }
 
 static int realRecording() {
@@ -240,6 +279,7 @@ int main(int argc, char** argv) {
     delaySpread();
     doppler();
     lockGroup();
+    holes();
     report();
     const int real = realRecording();
     cpu();
