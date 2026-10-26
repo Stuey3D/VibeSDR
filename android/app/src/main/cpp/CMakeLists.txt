@@ -147,6 +147,7 @@ add_library(vibelocalsdr SHARED
     decoders/rtty_auto.cpp
     decoders/wefax_decoder.cpp
     decoders/ft8_decoder.cpp
+    decoders/ftx_fine.cpp
     decoders/sstv_decoder.cpp
     decoders/audio_nr.cpp
     decoders/auto_notch.cpp

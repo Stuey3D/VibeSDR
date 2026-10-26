@@ -10,6 +10,6 @@ for f in $CPP/ft8_lib/ft8/*.c $CPP/ft8_lib/fft/kiss_fft.c $CPP/ft8_lib/fft/kiss_
   [ -f "$f" ] || continue
   $CC $F -c -I $CPP/ft8_lib -o $O/obj/$(basename $f .c).o $f
 done
-$CXX -std=c++17 $F $ST -I $CPP -I $CPP/ft8_lib -o $O/ft8_wav $S/tools/ft8-bench/ft8_wav.cpp $CPP/decoders/ft8_decoder.cpp $O/obj/*.o -lpthread
-[ -f $S/vibeserver/test-ft8-fast.cpp ] && $CXX -std=c++17 $F $ST -I $S/vibeserver -I $CPP -I $CPP/ft8_lib -o $O/test-ft8-fast $S/vibeserver/test-ft8-fast.cpp $CPP/decoders/ft8_decoder.cpp $O/obj/*.o -lpthread
+$CXX -std=c++17 $F $ST -I $CPP -I $CPP/ft8_lib -o $O/ft8_wav $S/tools/ft8-bench/ft8_wav.cpp $CPP/decoders/ft8_decoder.cpp $(ls $CPP/decoders/ftx_fine.cpp 2>/dev/null) $O/obj/*.o -lpthread
+[ -f $S/vibeserver/test-ft8-fast.cpp ] && $CXX -std=c++17 $F $ST -I $S/vibeserver -I $CPP -I $CPP/ft8_lib -o $O/test-ft8-fast $S/vibeserver/test-ft8-fast.cpp $CPP/decoders/ft8_decoder.cpp $(ls $CPP/decoders/ftx_fine.cpp 2>/dev/null) $O/obj/*.o -lpthread
 ls -la $O/ft8_wav

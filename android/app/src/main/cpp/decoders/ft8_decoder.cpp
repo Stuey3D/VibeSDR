@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <cstdio>
+#include <cstdlib>
 
 extern "C" {
 #include "ft8/decode.h"
@@ -15,6 +17,7 @@ extern "C" {
 #include "ft8/message.h"
 #include "ft8/constants.h"
 #include "ft8/crc.h"
+#include "ft8/ldpc.h"
 }
 
 namespace vibe {
@@ -142,7 +145,14 @@ const Bits174* generatorRows() {               // row k = the codeword of messag
  *  there); only a survivor's distance is summed, in the same reliability order as before, so it rounds the same.
  *  The result is the same codeword, the same error count, for every input (test-ft8-fast). */
 } // namespace
-int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
+int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) { return ft8Osd(llr, maxErrors, 0, a91); }
+
+/* ★★ ORDER 2, PARTIALLY (2026-10-26, the sensitivity work). After every single flip, every PAIR of flips among the
+ *  `pairSpan` least reliable of the 91 independent bits (C(span,2) more codewords: 435 at 30). A near miss's errors
+ *  among the most reliable bits are usually one or two of the least reliable of them — so the pairs are where the
+ *  second error hides, and the cost is one XOR and a popcount each. The same guards (CRC-14, at most maxErrors hard
+ *  disagreements) judge every codeword; test-ft8-fast and ftx_sweep --noise count what that lets through. */
+int ft8Osd(const float* llr, int maxErrors, int pairSpan, uint8_t a91[FTX_LDPC_K_BYTES]) {
     const Bits174* g = generatorRows();
     float wAbs[FTX_LDPC_N];
     for (int i = 0; i < FTX_LDPC_N; ++i) wAbs[i] = std::fabs(llr[i]);
@@ -201,9 +211,18 @@ int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[FTX_LDPC_K_BYTES]) {
     for (int q = 0; q < FTX_LDPC_K; ++q)
         if (getBit(hard, pivot[q])) { c0.w[0] ^= M[q].w[0]; c0.w[1] ^= M[q].w[1]; c0.w[2] ^= M[q].w[2]; }
     float bestD = 1e30f; int bestErr = -1;
-    for (int f = -1; f < FTX_LDPC_K; ++f) {
+    const int span = std::max(0, std::min(pairSpan, FTX_LDPC_K));
+    const int nPairs = span * (span - 1) / 2;
+    for (int idx = -1; idx < FTX_LDPC_K + nPairs; ++idx) {
         Bits174 c = c0;
-        if (f >= 0) { c.w[0] ^= M[f].w[0]; c.w[1] ^= M[f].w[1]; c.w[2] ^= M[f].w[2]; }
+        if (idx >= 0 && idx < FTX_LDPC_K) { c.w[0] ^= M[idx].w[0]; c.w[1] ^= M[idx].w[1]; c.w[2] ^= M[idx].w[2]; }
+        else if (idx >= FTX_LDPC_K) {
+            // pair number p among the last `span` rows (the least reliable pivots): (a, b), a < b
+            int p = idx - FTX_LDPC_K, a = 0;
+            while (p >= span - 1 - a) { p -= span - 1 - a; ++a; }
+            const int ra = FTX_LDPC_K - span + a, rb = ra + 1 + p;
+            c.w[0] ^= M[ra].w[0] ^ M[rb].w[0]; c.w[1] ^= M[ra].w[1] ^ M[rb].w[1]; c.w[2] ^= M[ra].w[2] ^ M[rb].w[2];
+        }
         const uint64_t d0 = c.w[0] ^ hard.w[0], d1 = c.w[1] ^ hard.w[1], d2 = c.w[2] ^ hard.w[2];
         const int err = __builtin_popcountll(d0) + __builtin_popcountll(d1) + __builtin_popcountll(d2);
         if (err > maxErrors) continue;
@@ -581,9 +600,80 @@ void Ft8SlotDecoder::subtract(float* a, int n, const uint8_t* tones, double star
     }
 }
 
+/** The 91 bits (77 + CRC-14, packed) of a codeword already checked → the message, as ftx_decode_candidate makes it
+ *  (FT4/FT2: the XOR sequence taken off). */
+bool Ft8SlotDecoder::a91ToMessage(const uint8_t* a91, ftx_message_t& msg) const {
+    ftx_message_init(&msg);
+    for (int b = 0; b < 10; ++b) msg.payload[b] = ft4_ ? (uint8_t)(a91[b] ^ kFT4_XOR_sequence[b]) : a91[b];
+    msg.payload[9] &= 0xF8;
+    uint8_t t[FTX_LDPC_K_BYTES]; std::memcpy(t, a91, sizeof t); t[9] &= 0xF8; t[10] = 0; t[11] = 0;
+    msg.hash = ftx_compute_crc(t, 96 - 14);
+    return true;
+}
+
+namespace {
+// ★ temporary diagnostics (FTX_DEBUG=1): one line per BP/OSD attempt of the second look
+void fineDbg(int pass, const FtxFine::Meas& M, int what, int err) {
+    static const bool on = std::getenv("FTX_DEBUG") != nullptr;
+    if (on) std::fprintf(stderr, "FD p%d hits %d snr %.2f set %d err %d\n", pass, M.syncHits, M.syncSnr, what, err);
+}
+/** BP's hard decisions → the 91 message+CRC bits, packed, if the CRC holds (ftx_decode_candidate's check). */
+bool plainCrcOk(const uint8_t* plain174, uint8_t a91[FTX_LDPC_K_BYTES]) {
+    std::memset(a91, 0, FTX_LDPC_K_BYTES);
+    for (int i = 0; i < FTX_LDPC_K; ++i) if (plain174[i]) a91[i / 8] |= (uint8_t)(0x80u >> (i % 8));
+    const uint16_t rx = ftx_extract_crc(a91);
+    uint8_t t[FTX_LDPC_K_BYTES]; std::memcpy(t, a91, sizeof t);
+    t[9] &= 0xF8; t[10] = 0; t[11] = 0;
+    return ftx_compute_crc(t, 96 - 14) == rx;
+}
+}
+
+/* ★★ THE SECOND LOOK (ftx_fine.h). BP on the one-, two- and three-symbol likelihoods in turn, then OSD on them —
+ *  only for a candidate whose fine sync says it is a signal at all. */
+bool Ft8SlotDecoder::fineDecode(const float* audio, int n, double start, double f0, const Ft8SlotOptions& o,
+                                ftx_message_t& msg, bool& viaOsd, double& startOut, double& f0Out, Ft8SlotStats& st, int pass) {
+    (void)audio; (void)n;
+    ++st.fineTried[pass - 1];
+    const int minSync = o.fineMinSync > 0 ? o.fineMinSync : (ft4_ ? kFineMinSyncFt4 : kFineMinSyncFt8);
+    FtxFine::Meas& M = fineMeas_;
+    const bool okm = fine_->measure(start, f0, minSync, M);
+    dbgHits_ = M.syncHits;
+    if (!okm) return false;
+    ++st.finePassed[pass - 1];
+    startOut = M.start; f0Out = M.f0;
+    uint8_t plain[FTX_LDPC_N], a91[FTX_LDPC_K_BYTES];
+    float (&L)[FtxFine::kMaxSets][FTX_LDPC_N] = fineLlr_;
+    /* ★ The order is what decodes first on the synthetic band at the threshold (-21/-20 dB): the two-symbol set
+     *  most often, then the three-symbol (FT4: four), then the one-symbol; OSD on the longest groups only. */
+    const int order[3] = { 1, 2, 0 };
+    int bestErr = 1 << 20;
+    for (int i = 0; i < M.nsets; ++i) {
+        const int k = order[i];
+        fine_->llrGroup(fine_->groupOf(k), L[k]);
+        int err = 0;
+        bp_decode_ex(L[k], o.ldpcIters, kFineBpStall, plain, &err);
+        bestErr = std::min(bestErr, err);
+        dbgErr_ = bestErr;
+        fineDbg(pass, M, k, err);
+        if (err == 0 && plainCrcOk(plain, a91)) { a91ToMessage(a91, msg); viaOsd = false; ++st.fineDecodes[pass - 1]; return true; }
+    }
+    /* ★ OSD only for a near miss: on the real 80 m hour every candidate OSD rescued had come within 10 unsatisfied
+     *  checks in BP, while most of those it could not rescue were further out (Stuart: spend cycles only where they
+     *  find decodes). */
+    if (o.osdMaxErrors > 0 && bestErr <= kFineOsdMaxBpErr) {
+        for (int k : { 2, 1 }) {
+            const int e = ft8Osd(L[k], o.osdMaxErrors, o.osdPairSpan, a91);
+            fineDbg(pass, M, 10 + k, e);
+            if (e >= 0) { a91ToMessage(a91, msg); viaOsd = true; ++st.fineDecodes[pass - 1]; return true; }
+        }
+    }
+    return false;
+}
+
 void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::vector<Ft8Result>& out, Ft8SlotStats& st) {
     st = Ft8SlotStats{};
     const size_t first = out.size();
+    decodedStart_.clear();
     struct Sub { uint8_t tones[FT4_NN > FT8_NN ? FT4_NN : FT8_NN]; double start; double f0; };
     std::vector<Sub> subs;
     if ((int)cands_.size() < o.maxCandidates) cands_.resize((size_t)o.maxCandidates);
@@ -602,6 +692,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
         subs.clear();
         sm[Ft8SlotStats::kSubtract] += lap();
         buildWaterfall(audio, n);
+        if (fine_) fine_->invalidate();                         // ★ the audio changed (a new slot, or subtracted)
         noise_.assign((size_t)mon_.wf.block_stride, -1.0f);     // ★ unknown until a decode asks (colMean)
         sm[Ft8SlotStats::kWaterfall] += lap();
         const ftx_waterfall_t* wf = &mon_.wf;
@@ -614,9 +705,29 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             const ftx_candidate_t& c = cands_[(size_t)i];
             ftx_message_t msg; ftx_decode_status_t ds;
             bool viaOsd = false;
-            const bool bpOk = ftx_decode_candidate(wf, &c, o.ldpcIters, &msg, &ds);
+            const bool bpOk = ftx_decode_candidate_ex(wf, &c, o.ldpcIters, o.bpStall, &msg, &ds);
             sm[Ft8SlotStats::kLdpc] += lap();
-            if (!bpOk) {
+            const float cHz = (mon_.min_bin + c.freq_offset + (float)c.freq_sub / wf->freq_osr) / mon_.symbol_period;
+            const double cStart = (double)(c.time_offset - 1) * mon_.block_size + (double)c.time_sub * mon_.subblock_size;
+            double fineStart = cStart, fineF0 = cHz;
+            bool viaFine = false;
+            if (!bpOk && o.fine) {
+                /* ★ Not a second look at a signal this pass already decoded: a strong station leaves a cluster of
+                 *  candidates a sub-bin or a sub-symbol apart, and each would cost a measurement to find it again. */
+                bool near = false;
+                for (size_t r = first; r < out.size() && !near; ++r)
+                    near = std::fabs(out[r].hz - cHz) < 1.0f / mon_.symbol_period
+                        && std::fabs(decodedStart_[r - first] - cStart) < 0.75 * nsps_;
+                if (near) continue;
+                sm[Ft8SlotStats::kPost] += lap();
+                if (!fine_) fine_.reset(new FtxFine((int)mode_, rate_, nsps_, windowSamples_));
+                if (!fine_->ready()) fine_->ensure(audio, n);
+                dbgHits_ = -1; dbgErr_ = -1;
+                viaFine = fineDecode(audio, n, cStart, cHz, o, msg, viaOsd, fineStart, fineF0, st, pass);
+                sm[Ft8SlotStats::kFine] += lap();
+                if (std::getenv("FTX_CDBG")) std::printf("C %d %.1f %.0f %d %d %d %d\n", pass, cHz, cStart, c.score, dbgHits_, dbgErr_, viaFine ? 1 : 0);
+                if (!viaFine) continue;
+            } else if (!bpOk) {
                 if (o.osdMaxErrors <= 0 || c.score < o.osdMinScore) continue;
                 ++st.osdTried[pass - 1];
                 float llr[FTX_LDPC_N]; uint8_t a91[FTX_LDPC_K_BYTES];
@@ -624,11 +735,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
                 const int osdErr = ft8Osd1(llr, o.osdMaxErrors, a91);
                 sm[Ft8SlotStats::kOsd] += lap();
                 if (osdErr < 0) continue;
-                ftx_message_init(&msg);
-                for (int b = 0; b < 10; ++b) msg.payload[b] = ft4_ ? (uint8_t)(a91[b] ^ kFT4_XOR_sequence[b]) : a91[b];
-                msg.payload[9] &= 0xF8;
-                uint8_t t[FTX_LDPC_K_BYTES]; std::memcpy(t, a91, sizeof t); t[9] &= 0xF8; t[10] = 0; t[11] = 0;
-                msg.hash = ftx_compute_crc(t, 96 - 14);
+                a91ToMessage(a91, msg);
                 viaOsd = true;
             }
             bool dup = false;   // ★ one message per slot, whichever pass and candidate found it first
@@ -638,10 +745,11 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             Sub s;
             // ★ The tones as transmitted (ft4_encode applies FT4's XOR itself, as ftx_decode_candidate removed it).
             if (ft4_) ft4_encode(msg.payload, s.tones); else ft8_encode(msg.payload, s.tones);
-            const float hz = (mon_.min_bin + c.freq_offset + (float)c.freq_sub / wf->freq_osr) / mon_.symbol_period;
             // ★ Start sample: the STFT frame of block b, sub s ENDS at (b·osr + s + 1)·subblock and is two symbols
-            //   long, so a symbol fills it best when it starts at (b − 1)·block + s·subblock.
-            const double startSample = (double)(c.time_offset - 1) * mon_.block_size + (double)c.time_sub * mon_.subblock_size;
+            //   long, so a symbol fills it best when it starts at (b − 1)·block + s·subblock. The second look
+            //   measured both finer (to 1/32 symbol and 1/16 tone).
+            const float hz = viaFine ? (float)fineF0 : cHz;
+            const double startSample = viaFine ? fineStart : cStart;
             Ft8Result r;
             r.msg = msg;
             r.hz = hz;
@@ -651,9 +759,11 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
             r.snr = snrDb(c, s.tones);
             r.pass = pass;
             r.osd = viaOsd;
+            r.fine = viaFine;
             out.push_back(r);
+            decodedStart_.push_back(startSample);
             s.start = startSample; s.f0 = hz;
-            subs.push_back(s);
+            if (r.snr >= o.subtractMinSnr) subs.push_back(s);
             ++found;
             sm[Ft8SlotStats::kPost] += lap();
         }

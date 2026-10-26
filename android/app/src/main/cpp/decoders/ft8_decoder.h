@@ -14,7 +14,10 @@
 #include <thread>
 #include <functional>
 #include <string>
+#include <memory>
 #include <vector>
+
+#include "ftx_fine.h"
 
 // ft8_lib C core
 extern "C" {
@@ -72,6 +75,8 @@ Ft8CallHashTable& ft8CallHashes();
  *  and returns the hard-decision disagreements of the closest CRC-valid codeword, or -1 when none is within
  *  `maxErrors`. Exposed for test-ft8-fast. */
 int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[12]);
+/** OSD-1, then every pair of flips among the `pairSpan` least reliable independent bits (0 = ft8Osd1 exactly). */
+int ft8Osd(const float* llr, int maxErrors, int pairSpan, uint8_t a91[12]);
 
 /** One message decoded from a slot. */
 struct Ft8Result {
@@ -81,6 +86,7 @@ struct Ft8Result {
     float dt   = 0;      ///< seconds after the slot's nominal start (+0.5 s FT8 / +0.5 s FT4), WSJT-X's DT
     int   pass = 1;      ///< which pass found it (2+ = only after the stronger ones were subtracted)
     bool  osd  = false;  ///< recovered by OSD after belief propagation failed
+    bool  fine = false;  ///< decoded only on the second look (ftx_fine.h)
 };
 
 /* ★★★ THE PASSES ARE BOUGHT, NOT GIVEN (2026-10-05). Stuart: "FT8 we have to approach with caution, that can end
@@ -98,6 +104,20 @@ struct Ft8SlotOptions {
      *  candidates whose sync score is at least osdMinScore. */
     int osdMaxErrors  = 0;
     int osdMinScore   = 0;
+    /** ★★ The second look (ftx_fine.h, 2026-10-26): a candidate the waterfall's likelihoods could not decode is
+     *  measured again from the audio — fine sync, a matched filter per symbol, bit likelihoods over one, two and
+     *  three symbols — and decoded again (BP on each set; OSD when osdMaxErrors > 0). 0 = off (the old decoder). */
+    int fine          = 0;
+    /** Costas symbols that must be their own strongest tone before the second look spends more (noise stops here).
+     *  0 = the mode's default (kFineMinSync*). */
+    int fineMinSync   = 0;
+    /** The waterfall's BP stops after this many iterations without fewer unsatisfied checks (0 = all ldpcIters,
+     *  the old decoder exactly). */
+    int bpStall       = 0;
+    /** Only decodes at least this strong (dB) are subtracted before the next pass. */
+    int subtractMinSnr = -99;
+    /** The second look's OSD also tries pairs of flips among this many least reliable bits (0 = OSD-1). */
+    int osdPairSpan   = 0;
     /** Asked before pass 2 and 3 with the ms this decode has taken so far and the ms the last pass took.
      *  Empty = always yes (the bench). */
     std::function<bool(int nextPass, double elapsedMs, double lastPassMs)> mayRunPass;
@@ -109,10 +129,13 @@ struct Ft8SlotStats {
     int    passDecodes[3] = {0, 0, 0};
     /* ★ Where each pass's time went (2026-10-25, the CPU work): the profile the optimisations are judged by. A dozen
      *  clock reads per candidate at most — under 0.1 % of a pass. */
-    enum Stage { kSubtract, kWaterfall, kSearch, kLdpc, kOsd, kPost, kStages };
+    enum Stage { kSubtract, kWaterfall, kSearch, kLdpc, kOsd, kPost, kFine, kStages };
     double stageMs[3][kStages] = {};
     int    candidates[3] = {0, 0, 0};   ///< candidates the search returned
     int    osdTried[3] = {0, 0, 0};     ///< of them, how many failed BP and went to OSD
+    int    fineTried[3] = {0, 0, 0};    ///< of them, how many had the second look
+    int    finePassed[3] = {0, 0, 0};   ///< … and passed its sync test
+    int    fineDecodes[3] = {0, 0, 0};  ///< … and decoded
 };
 
 /** One slot, decoded synchronously: what the worker thread runs, and what the bench and the tests drive directly.
@@ -139,6 +162,9 @@ private:
     float colMean(size_t column);
     int  snrDb(const ftx_candidate_t& c, const uint8_t* tones);
     void subtract(float* audio, int n, const uint8_t* tones, double startSample, double f0);
+    bool fineDecode(const float* audio, int n, double start, double f0, const Ft8SlotOptions& o, ftx_message_t& msg,
+                    bool& viaOsd, double& startOut, double& f0Out, Ft8SlotStats& st, int pass);
+    bool a91ToMessage(const uint8_t* a91, ftx_message_t& msg) const;
 
     FtxMode mode_;
     bool  ft4_;                    // FT4's frame: FT4 and FT2
@@ -155,6 +181,15 @@ private:
     std::vector<float> blkR_, blkI_;       // scratch: audio × conj(reference), summed per 16-sample block
     std::vector<float> ampR_, ampI_;       // scratch: the amplitude at each block centre
     std::vector<float> zr_, zi_, toneR_, toneI_;   // scratch: the decimated baseband and its tone tables
+    std::unique_ptr<FtxFine> fine_;
+    FtxFine::Meas fineMeas_;
+    float fineLlr_[FtxFine::kMaxSets][174];         // scratch: the second look's likelihood sets
+    int dbgHits_ = -1, dbgErr_ = -1;                // diagnostics (FTX_CDBG)
+    static constexpr int kFineBpStall = 5;
+    static constexpr int kFineOsdMaxBpErr = 12;     // OSD only after BP came this close (unsatisfied checks)          // BP stops after this many iterations without a new best
+    std::vector<double> decodedStart_;     // this slot's decodes' start samples, by result index (the near test)
+    static constexpr int kFineMinSyncFt8 = 10;    // of 21 Costas symbols (noise: 21/8 ≈ 2.6)
+    static constexpr int kFineMinSyncFt4 = 7;    // of 16 (noise: 4)        // the second look, made on first use (its window FFT: 1.5 MB FT8)
 };
 
 class Ft8Decoder {
