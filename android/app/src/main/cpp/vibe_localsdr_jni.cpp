@@ -1424,6 +1424,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetNbWide(JNIEnv*, jobject, jint mode) {
     vibe::LocalSdrShim::setVibeServerNbWide((int)mode);
 }
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVfoB(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setVibeServerVfoB(on == JNI_TRUE);   // ★★ V12 VFO A/B — the owner's switch
+}
 /* ★★★ A RADIO THAT FELL OVER AT A RATE A MODE BOOSTED TO — the same guard as the daemon's (vibe_rate_guard.h), kept in
  *  the app's files dir. setRateGuardBase BEFORE setDabPolicy: a marker left by a run that died at a boosted rate turns
  *  the rate switch off there. */

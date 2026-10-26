@@ -106,12 +106,12 @@ const fmt = (t) => `400:${t[400].toFixed(4)} 620:${t[620].toFixed(4)} 840:${t[84
 /** Tone `f` wholly in ear `e` ('L' or 'R') — at least 30 dB above it in the other ear. */
 const only = (a, f, e) => { const o = e === 'L' ? 'R' : 'L'; return a[e][f] > 0.002 && a[e][f] > 30 * a[o][f]; };
 
-async function server(args, tag) {
+async function server(args, tag, radioExtra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-vfoab-${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     configured: true, name: 'VFO A/B test', locator: 'IO92nh', adminPass: 'vfoab-test-admin',
-    radios: [{ serial: 'vfoab-test', label: 'Test radio', enabled: true, configured: true }],
+    radios: [{ serial: 'vfoab-test', label: 'Test radio', enabled: true, configured: true, ...radioExtra }],
   }));
   const rtlPort = await freePort(), port = await freePort();
   const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
@@ -276,6 +276,21 @@ const hwWatch = (L) => { const h = jsons(L.spec, 'hwinfo'); return h.length ? h[
     await until(() => jsons(L.spec, 'watch').some((m) => m.refused === 'outside'), 2000);
     ok(jsons(L.spec, 'watch').some((m) => m.refused === 'outside'), 'outside the window: refused, the shared dial untouched');
     L.spec.close(); L.aud.close(); M.spec.close(); M.aud.close();
+  } finally { S.stop(); }
+}
+// ── 4. The owner's switch off ─────────────────────────────────────────────────────────────────────────────────────────
+{
+  console.log('── 4. the owner has switched VFO A/B off (config vfoB: 0) ──');
+  const S = await server(['--users', '1'], 'off', { vfoB: 0 });
+  try {
+    const L = await listener(S.port, 'vfoaboff1', A_HZ);
+    await until(() => hwWatch(L) !== undefined, 4000);
+    ok(hwWatch(L) === 0, `hwinfo says watch: 0 — no client offers the toggle (${hwWatch(L)})`);
+    L.spec.send({ type: 'watch', id: 1, on: true });
+    await until(() => jsons(L.spec, 'watch').some((m) => m.refused), 2000);
+    const r = jsons(L.spec, 'watch').find((m) => m.refused);
+    ok(r && r.refused === 'off' && r.chans.length === 0, `a VFO B asked for anyway is refused "off" (${r && r.note})`);
+    L.spec.close(); L.aud.close();
   } finally { S.stop(); }
 }
 console.log(`\n${pass} passed, ${fail} failed`);
