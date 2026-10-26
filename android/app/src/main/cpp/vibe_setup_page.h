@@ -1733,6 +1733,18 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <div class="note" id="adsb256Note" style="margin-left:24px">ADS-B takes the radio to 2.56 MS/s instead of 2.4,
          and back when it ends. Watch the capture figure in ADS-B: below 97 % the dongle is dropping samples.</div>
       </div>
+      <!-- ★★ V12: THE DAB+ DECODER (Stuart, 2026-10-26: "switch the pi 2 between FFMPG and FAAD2"). Drawn only where the
+           server has BOTH (hwinfo dabFaad2Avail) and the radio can do DAB — a choice of one is a dead control. Live: the
+           next DAB+ super frame uses it. FFmpeg stays the default until Stuart has listened to both. -->
+      <div id="dabFaad2Box" class="hide">
+      <label class="row" id="dabFaad2Row" style="gap:8px;margin-top:10px">
+        <input type="checkbox" id="dabFaad2" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Decode DAB+ audio with FAAD2, inside VibeServer</span></label>
+      <div class="note" id="dabFaad2Note">Unticked, DAB+ audio goes through FFmpeg, as before. Ticked, VibeServer decodes it
+         itself with FAAD2: exact pitch, about half the processor time, no separate FFmpeg process, sound at once on a
+         station change, and a lost piece of audio on a weak signal fades out and back in instead of cutting. Takes
+         effect straight away, no restart. The DAB panel's AAC decoder line shows which one is playing and what it costs.</div>
+      </div>
       <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
            the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
            (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
@@ -3573,6 +3585,7 @@ function renderGain() {
   //    "let DAB borrow 2.048 MS/s" is a promise it cannot keep. Same test as the DAB landing choice:
   //    the running radio's own answer, else its driver.
   modeRateShow(r);
+  dabDecoderShow(r);
   fpsShow(r);
   $("dabScanLabels").value = String(r.dabScanLabels === 0 || r.dabScanLabels === 1 ? r.dabScanLabels : -1);
   $("gainRest").value = gainFromRaw(r.restGain);
@@ -3898,6 +3911,14 @@ function modeRateShow(r) {
   $("adsb256Row").style.opacity = live ? "" : "0.45";
   if (typeof rateGuardShow === "function") rateGuardShow();
 }
+/** ★★ V12: the DAB+ decoder switch — only where this server has both decoders and the radio can do DAB. */
+function dabDecoderShow(r) {
+  const box = $("dabFaad2Box"); if (!box) return;
+  const dabOk = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
+  const both = !!(HW && !HW.offline && HW.dabFaad2Avail);
+  box.classList.toggle("hide", !(both && dabOk));
+  $("dabFaad2").checked = !!r.dabFaad2;
+}
 /** ★★★ A STALL OR CRASH AT A RATE A MODE BOOSTED TO (HW.rateGuard, vibe_rate_guard.h): the red line, and the switch
  *  disabled until the owner clears it. ONE RULE, TWO READERS: the app's src/services/rateGuard.ts rateGuardLine draws
  *  the same sentence; the SERVER keeps the switch off itself while the fault stands. */
@@ -4083,6 +4104,7 @@ async function renderHw() {
   //   the stored config, which would wipe a figure the owner was part-way through typing.
   HW = hw;
   modeRateShow(r);   // ★ the rate switch's red line reads HW.rateGuard, which has only now arrived
+  dabDecoderShow(r); // ★ and the DAB+ decoder switch reads HW.dabFaad2Avail
   /* ★★★ THE RSP's SOCKETS, FROM THE RADIO (2026-10-22). The antenna card and the per-band socket pickers read
    *     r.antennas, which nothing ever filled — so neither appeared on any RSP. The radio's own list when it is
    *     running, the model's when it is not (rspCaps). Not saved: it describes the hardware, not a setting. */
@@ -5541,6 +5563,7 @@ function fill() {
   // ★ The switch re-draws the option beneath it.
   $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; modeRateShow(radio()); });
   $("adsb256").addEventListener("change", () => { radio().adsb256 = $("adsb256").checked; });
+  $("dabFaad2").addEventListener("change", () => { radio().dabFaad2 = $("dabFaad2").checked; });
   $("rateGuardClear").addEventListener("click", rateGuardClear);
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {

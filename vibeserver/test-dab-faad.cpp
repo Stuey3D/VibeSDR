@@ -12,8 +12,8 @@
 //   ref960  — an independent check of the 960 transform: FFmpeg reading the units as LOAS/LATM, whose StreamMuxConfig
 //             carries the AudioSpecificConfig with frameLengthFlag = 1. Measurement only — never a server path.
 // Reported per service: level, agreement (SNR) with the 960 reference, stereo image, and on damaged logs the largest
-// step, clicks, dips and gaps; start-up; CPU and memory. It REPORTS; Stuart decides. Exit 0 when it ran, 3 when not.
-//   run: test-dab-faad <log.dabu>…   (VIBE_DAB_FAAD_WAV=<prefix>: also writes <prefix>-<log>-<variant>.wav, 48 kHz 16-bit)
+// step, clicks, dips and gaps; start-up; CPU and memory. Exit 0 when the checks pass, 1 when one fails, 3 when no logs.
+//   run: test-dab-faad [<log.dabu>…]  (none: every log in ~/VibeSDR-test-audio/dab/logs) (VIBE_DAB_FAAD_WAV=<prefix>: also writes <prefix>-<log>-<variant>.wav, 48 kHz 16-bit)
 // ★★★ The logs are other people's broadcasts: they live in ~/VibeSDR-test-audio/dab/logs only, never in the repo. With
 //     none given (or none found) the test says NOT RUN and exits 3.
 #include "vibe_dab_aacdec.h"
@@ -24,6 +24,7 @@
 #include <complex>
 #include <cstdio>
 #include <map>
+#include <dirent.h>
 #include <string>
 #include <sys/resource.h>
 #include <thread>
@@ -301,6 +302,19 @@ static EventStats atHoles(const std::vector<float>& p, const std::vector<size_t>
         st.clickMed = clk[clk.size() / 2]; st.clickWorst = clk.back(); st.dipMed = dip[dip.size() / 2]; st.dipWorst = dip.front(); }
     return st;
 }
+/** ★ Hard edges: a sample step of more than 0.02 into or out of a run of digital silence of 10 ms or more — the
+ *  sound of audio stopping dead or starting from nothing. */
+static int abruptEdges(const std::vector<float>& p) {
+    const size_t n = p.size() / 2; int edges = 0; size_t run = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const bool z = p[2 * i] == 0.0f && p[2 * i + 1] == 0.0f;
+        if (z) { if (run == 0 && i > 0 && std::max(std::fabs(p[2 * i - 2]), std::fabs(p[2 * i - 1])) > 0.02f) {
+                     size_t k = i; while (k < n && p[2 * k] == 0.0f && p[2 * k + 1] == 0.0f) ++k; if (k - i >= 480) ++edges; }
+                 ++run; }
+        else { if (run >= 480 && std::max(std::fabs(p[2 * i]), std::fabs(p[2 * i + 1])) > 0.02f) ++edges; run = 0; }
+    }
+    return edges;
+}
 static void writeWav(const std::string& path, const std::vector<float>& lr) {
     FILE* f = std::fopen(path.c_str(), "wb"); if (!f) return;
     const uint32_t n = uint32_t(lr.size()), data = n * 2, rate = 48000, byteRate = rate * 4;
@@ -311,16 +325,31 @@ static void writeWav(const std::string& path, const std::vector<float>& lr) {
     std::fclose(f);
 }
 
+static int checks = 0, failed = 0;
+static void check(bool ok, const std::string& what) { ++checks; if (!ok) ++failed; std::printf("   %s %s\n", ok ? "ok  " : "FAIL", what.c_str()); }
+
 int main(int argc, char** argv) {
-    if (argc < 2) { std::printf("   NOT RUN — no unit logs given (dab-unitlog makes them from a capture)\n"); return 3; }
+    /* ★ With no arguments (scripts/run-tests.sh): every log in ~/VibeSDR-test-audio/dab/logs — the real recordings live
+     *  only on Stuart's Mac — and NOT RUN (3) where there are none. */
+    std::vector<std::string> paths;
+    for (int i = 1; i < argc; ++i) paths.push_back(argv[i]);
+    if (paths.empty()) {
+        const char* home = getenv("HOME"); const std::string dir = std::string(home ? home : "") + "/VibeSDR-test-audio/dab/logs";
+        if (DIR* d = opendir(dir.c_str())) { while (dirent* e = readdir(d)) { const std::string n = e->d_name; if (n.size() > 5 && n.substr(n.size() - 5) == ".dabu") paths.push_back(dir + "/" + n); } closedir(d); }
+        std::sort(paths.begin(), paths.end());
+    }
+    if (paths.empty()) { std::printf("   NOT RUN — no unit logs (dab-unitlog makes them from a capture; they stay in ~/VibeSDR-test-audio/dab/logs)\n"); return 3; }
     if (!vibedab::AacDecoderFfmpeg().available()) { std::printf("   NOT RUN — no FFmpeg to compare against\n"); return 3; }
     int ran = 0;
-    for (int ai = 1; ai < argc; ++ai) {
-        Log L; if (!loadLog(argv[ai], L)) { std::printf("   %s: not a unit log, skipped\n", argv[ai]); continue; }
+    for (const std::string& path : paths) {
+        Log L; if (!loadLog(path, L)) { std::printf("   %s: not a unit log, skipped\n", path.c_str()); continue; }
         ++ran;
-        size_t bad = 0; for (auto& s : L.s) bad += s.adts.empty();
+        size_t bad = 0;
+        { std::map<std::pair<uint32_t, int>, bool> good; for (auto& s : L.s) { bool& g = good[{s.sf, s.slot}]; g = g || !s.adts.empty(); }
+          for (auto& kv : good) bad += !kv.second; }
         const uint32_t sfs = L.s.back().sf - L.s.front().sf + 1;
-        const size_t due = size_t(sfs) * size_t(L.slots), missing = due - L.s.size() + bad;
+        size_t present = 0; { std::map<std::pair<uint32_t, int>, int> seen; for (auto& s : L.s) seen[{s.sf, s.slot}] = 1; present = seen.size(); }
+        const size_t due = size_t(sfs) * size_t(L.slots), missing = due - present + bad;   // ★ a slot logged twice counts once
         const double secs = sfs * 0.12;
         std::printf("\n══ %s: %d units per super frame%s, %.1f s — %zu units due, %zu missing (%zu CRC, %zu in lost super frames)\n",
                     L.name.c_str(), L.slots, L.ps ? ", parametric stereo" : "", secs, due, missing, bad, missing - bad);
@@ -345,6 +374,19 @@ int main(int argc, char** argv) {
         }
         double c1, sd1, c2, sd2, c3 = 0, sd3 = 0; stereo(fs.pcm, c1, sd1); stereo(ff.pcm, c2, sd2); if (!ref.pcm.empty()) stereo(ref.pcm, c3, sd3);
         std::printf("   stereo: L/R correlation faad2 %.3f / ffmpeg %.3f / ref960 %.3f; side/mid faad2 %.2f dB / ffmpeg %.2f dB / ref960 %.2f dB\n", c1, c2, c3, sd1, sd2, sd3);
+        // ★★ THE GATE, as far as numbers can hold it (Stuart listens to the rest): FAAD2 must be the true 960 decode in
+        //    level, spectrum and stereo image where the log is clean, never stop or start dead where it is not, and cost less.
+        if (!ref.pcm.empty() && missing * 50 <= due) {
+            double w1, m1, p1; spectralAgreement(fs.pcm, ref.pcm, w1, m1, p1);
+            double c3 = 0, sd3 = 0, c1b = 0, sd1b = 0; stereo(ref.pcm, c3, sd3); stereo(fs.pcm, c1b, sd1b);
+            check(std::fabs(rmsDb(fs.pcm) - rmsDb(ref.pcm)) <= 0.15, "level within 0.15 dB of the 960 reference");
+            check(w1 <= 1.5, "long-term spectrum within 1.5 dB of the 960 reference in every third octave to 16 kHz");
+            check(std::fabs(sd1b - sd3) <= 1.0, "stereo image (side/mid) within 1 dB of the 960 reference");
+        }
+        { const int ea = abruptEdges(fa.pcm), ef = abruptEdges(ff.pcm);
+          std::printf("   hard edges into/out of silence: ffmpeg %d | faad2 %d\n", ef, ea);
+          check(ea == 0, "FAAD2 never stops or starts dead (no hard edge into or out of silence)"); }
+        check(fa.cpu < ff.cpu, "FAAD2 costs less CPU than the FFmpeg child");
         const Damage dff = damage(ff.pcm), dfa = damage(fa.pcm), dfs = damage(fs.pcm);
         { const EventStats a = atHoles(ff.pcm, ff.events), b = atHoles(fa.pcm, fa.events), c = atHoles(fs.pcm, fs.events);
           auto pr = [](const char* nm, const EventStats& e) { std::printf("   at holes %-13s %3d holes: click median %+5.1f dB worst %+5.1f dB, %d over 15 dB; dip median %5.1f dB worst %5.1f dB\n", nm, e.n, e.clickMed, e.clickWorst, e.audible, e.dipMed, e.dipWorst); };
@@ -367,6 +409,7 @@ int main(int argc, char** argv) {
         }
     }
     if (!ran) { std::printf("   NOT RUN — no readable unit logs\n"); return 3; }
-    return 0;
+    std::printf("\ntest-dab-faad: %d checks, %d failed\n", checks, failed);
+    return failed ? 1 : 0;
 }
 #endif

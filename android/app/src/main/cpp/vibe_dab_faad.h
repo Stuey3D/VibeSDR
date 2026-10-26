@@ -18,6 +18,7 @@
 //    file declares the six entry points it uses under their prefixed names — never through the macro header, which
 //    would rename the DRM decoder's calls in the same translation unit too.
 // ★ GPL-2.0-or-later, server builds only (VIBE_HAVE_FAAD2_DAB) — never the App Store app (build_ios.sh checks).
+// ★ Include vibe_dab_aacdec.h, not this file: it brings this one in where AacPcm is defined and wraps it in the switch.
 #pragma once
 #if defined(VIBE_HAVE_FAAD2_DAB)
 #include <neaacdec.h>

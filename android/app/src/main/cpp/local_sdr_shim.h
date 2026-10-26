@@ -150,6 +150,8 @@ public:
     static void rateGuardClear();
     /** ADS-B at 2.56 MS/s on an RTL: the owner's own switch (not tied to the rate switch); never the default. */
     static void setVibeServerAdsb256(bool on);
+    /** ★ V12: DAB+ through FAAD2 in process instead of the FFmpeg child (owner's choice; live; FFmpeg the default). */
+    static void setVibeServerDabFaad2(bool on);
     /** ★ Raw IQ out: 0 off, 1 local network only, 2 local + public (tunnel); maxUsers 0 = host default. */
     static void setVibeServerRawIq(int mode, int maxUsers, int lanMaxHz = 0);
     /** ★ A transient line for every listener's VTS bar (the `vts` notice field). */

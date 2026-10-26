@@ -423,6 +423,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
      *  admin's live toggle, the boosted-rate guard switching it off) was dropped and the switch came back at the next
      *  start. Found by scripts/test-rate-guard.mjs. Absent = unchanged (getBool writes only when the key is present). */
     getBool(s, "dabRateBoost", c.dabRateBoost);
+    getBool(s, "dabFaad2", c.dabFaad2);   // ★ the admin's live toggle persists through this reader too
     getStr(s, "cpuGovernor", c.cpuGovernor);
     getStr(s, "trustedProxies", c.trustedProxies);
     // ★ Absent = true (the rule enforced). getBool only writes when the key is present, so an older
@@ -571,7 +572,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     // ★ The three that turn a ceiling into a setting — added to BOTH writers, see the note below.
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits); S("gainCurves", r.gainCurves);
-    B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost); B("adsb256", r.adsb256);
+    B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost); B("adsb256", r.adsb256); B("dabFaad2", r.dabFaad2);
     I("rawIq", r.rawIq); I("rawIqMax", r.rawIqMax); I("nbWide", r.nbWide); I("vfoB", r.vfoB);
     I("rawIqLanMaxHz", r.rawIqLanMaxHz);
     S("blockedModes", r.blockedModes);
@@ -649,7 +650,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("gainLimits", r.gainLimits); S("ifBwLimits", r.ifBwLimits); N("restGain", r.restGain); N("agcLock", r.agcLock);
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits); S("gainCurves", r.gainCurves);
-    B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost); B("adsb256", r.adsb256);
+    B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost); B("adsb256", r.adsb256); B("dabFaad2", r.dabFaad2);
     N("rawIq", r.rawIq); N("rawIqMax", r.rawIqMax); N("nbWide", r.nbWide); N("vfoB", r.vfoB);
     N("rawIqLanMaxHz", r.rawIqLanMaxHz);
     S("blockedModes", r.blockedModes);
@@ -760,6 +761,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.rateLock = one.rateLock;
     r.dabRateBoost = one.dabRateBoost;   // ★ and the other direction — see the note in the flatten
     r.adsb256 = one.adsb256;
+    r.dabFaad2 = one.dabFaad2;
     r.rtlAgc = one.rtlAgc; r.tunerBwAuto = one.tunerBwAuto;   // ★ the same holes on migration
     r.rawIq = one.rawIq; r.rawIqMax = one.rawIqMax; r.nbWide = one.nbWide; r.vfoB = one.vfoB;
     r.rawIqLanMaxHz = one.rawIqLanMaxHz;
@@ -1253,6 +1255,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
      *     "dabBoost":false beside "dabBoostUseful":true. */
     c.dabRateBoost = r.dabRateBoost;
     c.adsb256 = r.adsb256;
+    c.dabFaad2 = r.dabFaad2;
     c.rawIq = r.rawIq; c.rawIqMax = r.rawIqMax;   // ★ raw IQ out — the last link, as the note below says
     c.rawIqLanMaxHz = r.rawIqLanMaxHz;
     c.nbWide = r.nbWide;

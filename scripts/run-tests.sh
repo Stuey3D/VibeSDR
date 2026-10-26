@@ -27,6 +27,16 @@ for d in "${VIBE_DEPS:-/nonexistent}" /opt/homebrew/opt/faad2 /usr/local /usr; d
     FAAD_FLAGS="-DVIBE_HAVE_FAAD2 -I $d/include -L $d/lib -lfaad_drm -Wl,-rpath,$d/lib"; break
   fi
 done
+# ★ V12 DAB+: FAAD2's PLAIN build, prefixed (libfaad_dab.a from build-deps) — from a release's deps prefix or the Mac's;
+#   without it test-dab-faad reports NOT RUN. Its inputs are real off-air unit logs that live only in
+#   ~/VibeSDR-test-audio/dab/logs (other people's broadcasts) — none there, NOT RUN as well.
+FAAD_DAB_FLAGS=""; FAAD_DAB_LIB=""
+for d in "${VIBE_DEPS:-/nonexistent}" vibeserver/mac/deps/prefix; do
+  if [ -f "$d/lib/libfaad_dab.a" ]; then
+    inc="$d/include"; [ -f "$inc/neaacdec.h" ] || inc=/opt/homebrew/opt/faad2/include
+    FAAD_DAB_FLAGS="-DVIBE_HAVE_FAAD2_DAB -I $inc -I android/app/src/main/cpp/vibedsp"; FAAD_DAB_LIB="$d/lib/libfaad_dab.a"; break
+  fi
+done
 
 # test name -> extra compiler flags it needs
 flags_for() {
@@ -141,6 +151,8 @@ flags_for() {
     test-drm)              echo "-O2 -I $VDSP -I $KISS" ;;
     # ★★ DRM's AAC through FAAD2 on the real RRI recording: decodes, programme, concealment without clicks or gaps, CPU.
     test-drm-faad)         echo "-O2 -I $VDSP -I $KISS $FAAD_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
+    # ★ DAB+ through FAAD2 (vibe_dab_faad.h) against today's FFmpeg child and a 960 reference, on REAL unit logs.
+    test-dab-faad)         echo "-O3 -ffp-contract=fast $FAAD_DAB_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★★ V12 WSPR (decoders/digimodes/wspr_decoder.h): protocol, synthetic slots −20…−28 dB with drift and DT, hashed calls, pure
     #    noise, subtraction, the live decoder — optimised, it decodes ~50 two-minute slots. VIBE_TEST_AUDIO adds 40 m + 20 m
     #    off air, with the WSPRnet-scale SNR held to ±1 dB (mean) / ±3 dB (each) of Stuart's UberSDR's own reports.
@@ -267,7 +279,8 @@ deps_for() {
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
     test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
-    test-drm|test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
+    test-drm|test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;
+    test-dab-faad)          echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it   # ★ pffft + kiss from cobjs_for
     test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C)
     *)                  echo "" ;;
@@ -309,9 +322,7 @@ for t in "$SRC"/test-*.cpp; do
   #     test-radio-api — links vibeserver_core; built by `cmake --build … --target test-radio-api`.
   #     test-icom-source — links vibe_icom (libusb, ALSA/CoreAudio, the source's threads); ctest `icom-source`.
   case "$name" in
-    #     test-dab-faad — DAB+ FAAD2 vs FFmpeg on the bench multiplex; a CMake target (the whole DAB core); it REPORTS (see
-    #                      docs/v12/DRM-AUDIO-ROUTES.md "DAB+") — `cmake --build … --target test-dab-faad`.
-    test-radio-api|test-icom-source|test-dab-faad) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
+    test-radio-api|test-icom-source) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
   esac
   printf '\n\033[1m── %s ──\033[0m\n' "$name"
   # shellcheck disable=SC2046
