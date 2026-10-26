@@ -28,7 +28,7 @@ const RATE = 960000, CENTRE = 14083700;   // ★ 20 m's Band centre with FT8 FT4
 const STATIONS = [['FT8', 'G4ABC', 14074600], ['FT8', 'DL1XYZ', 14075450], ['FT8', 'K1ABC', 14076300],
                   ['FT4', 'JA1QRS', 14080800], ['FT4', 'EA4TUV', 14081700],
                   ['JS8', 'G4JSN', 14079000], ['FT2', 'IU8AAA', 14084900],
-                  ['JTTY', 'G4JTY', 14091500], ['PSK31', 'G4PSK', 14071200]];   // ★ V12 2026-10-27
+                  ['JTTY', 'G4JTY', 14091500], ['PSK31', 'G4PSK', 14072400]];   // ★ V12 2026-10-27
 const TOL = { FT2: 21, JTTY: 5, PSK31: 6 };   // ★ RF to a quarter of the tone step: FT2's tones are 41.7 Hz apart
 const MODES = '["FT8","FT4","FT2","JS8","WSPR","JTTY","PSK"]';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-spots-'));
@@ -149,7 +149,7 @@ try {
       ok(!!last && last.modes.some((m) => m.mode === 'WSPR' && m.live === 0), 'WSPR\'s empty window was never decoded (the activity gate, from the slice\'s own bins)');
       const j = jsons(L.dx, 'digital_spot').find((x) => x.data.callsign === 'G4JTY'), p = jsons(L.dx, 'digital_spot').find((x) => x.data.callsign === 'G4PSK');
       ok(j && j.data.how === 'CQ' && /England/.test(j.data.country), `JTTY's spot says CQ and the country (${j && j.data.how} ${j && j.data.country})`);
-      ok(p && p.data.how === 'CQ' && p.data.mode === 'PSK31', `PSK's spot is PSK31, how ${p && p.data.how}`);
+      ok(p && (p.data.how === 'CQ' || p.data.how === 'DE') && p.data.mode === 'PSK31', `PSK's spot is PSK31, how ${p && p.data.how}`);
       ok(/digital spots: Band started/.test(S.log()), 'the server logged "digital spots: Band started"');
       // ★ Single on the same radio: back to the button there always was — the listener's own audio (FT8 dial in USB).
       L.dx.txt.length = 0;

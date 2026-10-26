@@ -217,7 +217,7 @@ static int writeClip(const char* path, double rate, double centre) {
     addFsk(x, rate, 14084900 - centre, 3.85, tonesFor("CQ IU8AAA JN70", true), 0.024, 4.0);
     // ★ V12 2026-10-27: a JTTY CQ on the 14.090 dial (tone 0 at +1500 Hz, from +2 s) and a PSK31 CQ on 14.070 (+1200 Hz)
     addJtty(x, rate, 14091500 - centre, 2.0, "CQ G4JTY CQ", 4.0);
-    addPsk31(x, rate, 14071200 - centre, 0.5, "CQ CQ DE G4PSK G4PSK K\n", 4.0);
+    addPsk31(x, rate, 14072400 - centre, 0.5, "CQ CQ DE G4PSK G4PSK K\n", 4.0);
     addNoise(x, 5.0, 21);
     std::vector<uint8_t> u(x.size() * 2);
     for (size_t i = 0; i < x.size(); ++i) {

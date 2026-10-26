@@ -177,6 +177,18 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
     }
     for (auto& kv : chans_) {
         Chan& c = kv.second;
+        /* ★ A dial whose every engine is OFF or SHED needs no audio at all: its tuner is skipped too (measured on the Pi 2
+         *  build, the tuners are ≈ a fifth of Band's work — docs/v12/DIGITAL-SPOTS.md). The period clock still turns. */
+        bool anyWants = false;
+        for (Run& r : c.runs) if (!r.gate || (r.gate->st != Gate::Off && r.gate->st != Gate::Shed)) anyWants = true;
+        if (!anyWants) {
+            for (Run& r : c.runs) {
+                const double P = gatePeriod(*r.def);
+                const int64_t per = (int64_t)std::floor((captureUtc - n / rate) / P + 1e-9);
+                if (per != r.gate->per) newPeriod(r, per, gated);
+            }
+            continue;
+        }
         audio_.clear();
         c.tuner->feed(x, n, rate, centreHz, audio_);
         if (audio_.empty()) continue;
