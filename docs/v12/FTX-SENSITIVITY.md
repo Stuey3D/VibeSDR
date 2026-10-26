@@ -149,9 +149,10 @@ JS8 (40 m hour): 28 → 31 frames, every one of STUEY3D's 9 senders.
 | new, 2 passes | 5,510 M — 375 | 3,571 M — 202 |
 | new full depth | 7,473 M — 400 | 4,291 M — 205 |
 | jt9 -d 2 (Debian armhf) | 356,883 M — 427 | |
-| jt9 -d 3 | JT9D3 | |
+| jt9 -d 3 | 683,881 M — 452 | |
 
-An instruction count is not a cycle count (an A7 takes two cycles for a 128-bit NEON op); it counts the work.
+On the busy slots the new full depth uses **1/48 of jt9 -d 2's instructions and 1/92 of -d 3's** for 94 % / 88 % of
+their decodes. An instruction count is not a cycle count (an A7 takes two cycles for a 128-bit NEON op); it counts the work.
 **Against the old single pass:** the loaded path is 0.35×; full depth is 1.25× on a moderate band and 2.2× on the
 busiest (the subtraction of ~27 decodes a slot, ~7 M instructions each, is most of the difference). Full depth is
 2.5-3× cheaper than the old full depth everywhere. On a Pi 2 the pass gate grants passes 2-3 only while they fit in
