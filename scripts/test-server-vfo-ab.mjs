@@ -191,12 +191,14 @@ const hwWatch = (L) => { const h = jsons(L.spec, 'hwinfo'); return h.length ? h[
     ok(flips.length >= 2, `B's squelch opens and shuts with the keying (${flips.length} changes in 7 s)`);
     ok(flips.every((c) => c.since > Date.now() - 10000 && c.since <= Date.now() + 1000), 'each change is stamped with when it happened (wall ms)');
     // capture audio across a shut period: find a stretch where B was shut — R must hold no 840 Hz while A plays left
-    await until(() => { const c = lastWatch(L.spec).chans[0]; return c && !c.open && Date.now() - c.since > 300; }, 4000);
-    a = await listen(L.aud, 900);
+    // ★ The fake keys on WALL seconds (off when floor(t/3) is odd), so the middle of an off period is known exactly.
+    const phase = () => (Date.now() / 1000) % 6;
+    await until(() => phase() > 3.7 && phase() < 3.9, 7000);
+    a = await listen(L.aud, 1000);
     const shutNow = !lastWatch(L.spec).chans[0].open;
     ok(shutNow && a.R[840] < 0.0005 && a.L[400] > 0.002, `B shut: its ear silent (R 840 ${a.R[840].toFixed(5)}), A plays on left (${a.L[400].toFixed(4)})`);
-    await until(() => { const c = lastWatch(L.spec).chans[0]; return c && c.open && Date.now() - c.since > 300; }, 4000);
-    a = await listen(L.aud, 900);
+    await until(() => phase() > 0.7 && phase() < 0.9, 7000);
+    a = await listen(L.aud, 1000);
     ok(a.R[840] > 0.002, `B open: heard in its ear (R 840 ${a.R[840].toFixed(4)})`);
     // refusal outside the window — and the radio does not move
     L.spec.txt.length = 0;
