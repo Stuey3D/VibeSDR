@@ -17,6 +17,7 @@ public:
             (void)to;
             if (!onSpot) return;
             Spot s; s.mode = ft4_ ? "FT4" : "FT8"; s.call = de; s.grid = grid; s.snr = snr; s.audioHz = hz;
+            s.slotUtc = d_.decodingSlotUtc();   // ★ the slot's start (onSpot runs inside that slot's decode)
             onSpot(s);
         };
         d_.loadProbe = [this] { return loaded ? loaded() : false; };
@@ -35,6 +36,7 @@ inline ModeDef vibeDigiMode_ft8() {
     m.name = "FT8"; m.slotSec = 15.0; m.sampleRate = 12000;
     m.audioLoHz = 100; m.audioHiHz = 3500;          // ★ what Ft8SlotDecoder's monitor searches (f_min / f_max)
     m.costVsFt8 = 1.0;
+    m.singleFallback = true;                         // ★ Single, off every dial: FT8 + FT4, as it always was
     m.make = [] { return std::unique_ptr<Engine>(new Ft8Engine(false)); };
     return m;
 }
@@ -43,6 +45,7 @@ inline ModeDef vibeDigiMode_ft4() {
     m.name = "FT4"; m.slotSec = 7.5; m.sampleRate = 12000;
     m.audioLoHz = 100; m.audioHiHz = 3500;
     m.costVsFt8 = 1.0;   // ★ half the window, twice the slots: about FT8's average (the benchmark's FT8+FT4 row)
+    m.singleFallback = true;
     m.make = [] { return std::unique_ptr<Engine>(new Ft8Engine(true)); };
     return m;
 }

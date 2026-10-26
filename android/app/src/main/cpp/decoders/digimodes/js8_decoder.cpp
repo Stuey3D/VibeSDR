@@ -1,8 +1,8 @@
 // VibeSDR V12 — JS8 decoder. See js8_decoder.h; the protocol is described there and in docs/v12/JS8-FT2.md.
 #include "js8_decoder.h"
 #include "js8_ldpc.h"
-#include "../vibe_clock.h"
-#include "../vibedsp/vibe_denormals.h"
+#include "../../vibe_clock.h"
+#include "../../vibedsp/vibe_denormals.h"
 #include "ft8/vibe_simd4.h"
 #include <algorithm>
 #include <chrono>

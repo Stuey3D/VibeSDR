@@ -25,6 +25,7 @@
 //   anywhere, but an engine must not hand over a hashed/unresolved call ("<...>") as a callsign — report only calls it
 //   actually decoded.
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -43,6 +44,9 @@ struct Spot {
     int    snr = 0;       ///< dB in 2500 Hz (WSJT-X's convention)
     float  audioHz = 0;   ///< audio frequency above the DIAL (USB) — RF = dial + audioHz
     float  dt = 0;        ///< seconds from the slot's nominal start (0 for a free-running mode)
+    /** ★ UTC (s) of the START of the slot this transmission was heard in — what WSJT-X's time column shows, and what the
+     *  spot is stamped with (M7EIW: HH:MM:SS tells which transmission block it was). NaN = unknown: stamped now. */
+    double slotUtc = NAN;
 };
 
 /** One running decoder of one mode on one dial. Made by ModeDef::make; owned by the host. */
@@ -73,9 +77,13 @@ struct ModeDef {
     float  audioLoHz = 200;     ///< the audio passband the engine searches, above the dial (USB)…
     float  audioHiHz = 3000;    ///< …and its top. Band mode cuts exactly this (plus a guard) out of the slice.
     bool   single = true;       ///< also run in Single mode on the listener's own audio (false: Band mode only)
-    /** ★ > 0: in Single mode this mode is fed only while the listener's dial is within this many Hz of one of its dials
-     *  (a narrow mode on a dial of its own — WSPR's 200 Hz at 1500 Hz above 7.0386, 14.0956 …). 0: always, as FT8. */
+    /** ★ Single mode runs a mode only at its own dial (Spotter::atOwnDial). > 0: "at" = the listener's dial within this
+     *  many Hz of one of its dials (a narrow mode on a dial of its own — WSPR's 200 Hz at 1500 Hz above 7.0386 …).
+     *  0: "at" = half the listener's USB window inside this mode's audio window above one of its dials (FT8, JS8 …). */
     double singleDialTolHz = 0;
+    /** ★ Single mode, tuned to NO mode's dial: the modes that run anyway — FT8 and FT4, what Single always ran, so it
+     *  never goes silent off the table. */
+    bool singleFallback = false;
     /** Relative CPU of one engine, FT8 = 1.0 (one decode per slot, averaged over the slot). The benchmark's Band row and
      *  the docs use it to cost a band; it never gates anything by itself. */
     double costVsFt8 = 1.0;

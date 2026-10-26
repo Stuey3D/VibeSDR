@@ -85,7 +85,8 @@ import { KiwiAdapter } from '../services/KiwiAdapter';
 import { withKiwiProxyPort } from '../utils/kiwiProxy';
 import { lockedWindow as lockedTuneWindow, tuneBounds, rangeMessage } from '../utils/tuneWindow';
 import { toHttpUrl } from '../utils/serverUrl';
-import { localSessionGen } from '../services/localSession';
+import { localSessionGen, newLocalSession } from '../services/localSession';
+import { doorVisit, backToDoor, doorReturnParams, type DoorVisit } from '../utils/doorReturn';
 import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
 import { setReceiverIso, receiverIsoFromGrid } from '../services/rdsCountry';
@@ -577,6 +578,11 @@ function appendDecoderText(prev: string, add: string): string {
 
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
+  /* ★★ BACK TO THIS DOOR'S RADIO LIST (src/utils/doorReturn.ts): the visit the screen before this one handed over —
+   *  the radio it left (the chooser starts on it) and the PINs and admin credential typed at this door. Taken once. */
+  const visitRef = useRef<DoorVisit | null | undefined>(undefined);
+  if (visitRef.current === undefined) visitRef.current = route.params.doorReturn ? doorVisit.take(baseUrl) : null;
+  const visit = visitRef.current;
   /** ★ How a recording made here is filed in Recordings: the server's name, else its host. */
   const recServerName = instanceName || String(baseUrl ?? '').replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
   useKeepAwake();
@@ -792,7 +798,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    * ★ Proved against the DOOR, which owns the machine-wide admin password, and then carried on
    *   every radio's connect URL: one credential, every radio, which is what the ticket is for.
    */
-  const [adminAuthQ, setAdminAuthQ] = useState('');
+  const [adminAuthQ, setAdminAuthQ] = useState(() => visit?.adminAuthQ ?? '');
   /** ★★★ THE CONNECT EFFECT MUST NOT RE-RUN WHEN THIS CHANGES. It is in that effect's deps so a
    *  ticket minted at the PICKER rides the first connect — but minting one MID-SESSION (the menu's
    *  password box) then tore the connection down and rebuilt it, which threw the listener back to
@@ -801,7 +807,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  — so there is nothing to reconnect FOR. The ref carries it into any LATER connect without
    *  making this one restart. */
   const gainArrowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const adminAuthQRef = useRef('');
+  const adminAuthQRef = useRef(visit?.adminAuthQ ?? '');
   /** ★ One retry without the admin credential, per session — see onError. */
   const adminRetryDone = useRef(false);
   /**
@@ -920,8 +926,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    read it as a standing permission. Same reasoning as the admin password beneath it.
   /** PIN per unlocked radio id. The PIN itself, because the CONNECTION needs a fresh nonce of its
    *  own (see resolveRadioAuth) — a verify's nonce is spent and cannot be replayed at the socket. */
-  const radioPins = useRef<Record<string, string>>({});
-  const [unlockedRadios, setUnlockedRadios] = useState<Record<string, true>>({});
+  const radioPins = useRef<Record<string, string>>({ ...(visit?.pins ?? {}) });
+  const [unlockedRadios, setUnlockedRadios] = useState<Record<string, true>>(
+    () => Object.fromEntries(Object.keys(visit?.pins ?? {}).map((id) => [id, true as const])));
   const [radioPin, setRadioPin] = useState('');
   const [radioPinBusy, setRadioPinBusy] = useState(false);
   const [radioPinBad, setRadioPinBad] = useState(false);
@@ -961,6 +968,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     setRadioPin('');
   }, [radioPin, radioPinBusy, door, unlockedRadios, baseUrl]);
+  /** ★ The radio the listener CHOSE on this door's list, or null (adopted silently, named by the address, no door). */
+  const chosenFromListRef = useRef<string | null>(null);
   /**
    * Choose a radio — the one place a radio base is adopted, so the PIN travels with it.
    *
@@ -972,6 +981,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   machine-wide PIN path this screen has always used.
    */
   const chooseRadio = useCallback(async (id: string) => {
+    chosenFromListRef.current = id;   // ★ Back from it comes back to this list (onBackToPicker)
     const pin = radioPins.current[id];
     if (pin) {
       const q = await resolveRadioAuth(radioBaseUrl(baseUrl, id), pin);
@@ -10792,8 +10802,20 @@ export default function SDRScreen({ route, navigation }: Props) {
   // 2026-06-12: it only recycled the spectrum client while the native audio
   // WS kept the old session → frozen waterfall, and the zombie watchdog +
   // revive() already cover real reconnects.
+  /* ★★★ …OR TO THE DOOR'S RADIO LIST, when that is where the radio was chosen (Stuart, 2026-10-27: back out of a
+   *  radio and you landed past the door you came through). A fresh screen at the same door — the session ends as
+   *  leaving always ended it — carrying this visit's PINs and admin credential, starting on the radio just left. Back
+   *  from THAT list is ‹ SERVERS, as before. See src/utils/doorReturn.ts. */
+  const doorBackRef = useRef({ hasDoor: false });
+  doorBackRef.current = { hasDoor: !!door };
   const onBackToPicker = useCallback(() => {
     setMenuOpen(false);
+    const radioId = chosenFromListRef.current;
+    if (backToDoor({ hasDoor: doorBackRef.current.hasDoor, choseFromList: radioId !== null, radioId })) {
+      doorVisit.stash({ base: baseUrl, radioId: radioId!, pins: radioPins.current, adminAuthQ: adminAuthQRef.current });
+      navigation.replace('SDR', doorReturnParams(route.params, newLocalSession));
+      return;
+    }
     navigation.goBack();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -10953,6 +10975,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   };
   const pickShowPin = !!door && !adminAuthQ && door.radios.some((r) => r.pinLocked === true && !unlockedRadios[r.id]);
   const pickOn = awaitingRadio && !!door;
+  /** ★ The radio a Back from it returned to (doorReturn.ts): outlined for a few seconds once the list is up. */
+  const [doorJustLeft, setDoorJustLeft] = useState<string | null>(() => visit?.radioId ?? null);
+  useEffect(() => {
+    if (!pickOn || doorJustLeft === null) return;
+    const t = setTimeout(() => setDoorJustLeft(null), 4000);
+    return () => clearTimeout(t);
+  }, [pickOn, doorJustLeft]);
   const pickRadios = pickOn ? door!.radios.map(pickRadioState) : [];
   const pickItems = chooserItems(pickRadios, pickShowPin);
   const pickScrollRef = useRef<ScrollView | null>(null);
@@ -11015,7 +11044,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ BACK = ‹ SERVERS: the one way out, the same call the button makes. Before this Back reached `closeAll`, which
     //   knew nothing of the chooser — the user was stuck on it.
     () => { navigation.goBack(); return true; },
-    { rowOf: (i) => chooserRowOf(pickNavRef.current.items, i), startAt: chooserStart(pickItems, pickRadios), handle: pickHandle },
+    { rowOf: (i) => chooserRowOf(pickNavRef.current.items, i), startAt: chooserStart(pickItems, pickRadios, visit?.radioId), handle: pickHandle },
   );
   /** A radio row's own press — Enter on it runs exactly this. */
   const pressPickRadio = (r: VibeRadio) => {
@@ -11552,6 +11581,8 @@ export default function SDRScreen({ route, navigation }: Props) {
                 )}
               </Pressable>
               <NavRing on={pickHl} color={navRing.ring} />
+              {/* ★ The radio just left (doorReturn.ts), for a hand — a pad's highlight is the ring above, already on it. */}
+              <NavRing on={!pickHl && doorJustLeft === r.id} color={sdrMs.radioPickJustLeft.borderColor} radius={10} />
               </View>
             ); })}
             {/* ★ Predicted vs actual band conditions and where the receiver is — the web's block. */}
@@ -14074,6 +14105,7 @@ const makeSdrMenuStyles = (pt: PopupTokens) => StyleSheet.create({
   radioPickBackTxt: { color: pt.ink.key, fontSize: 13, letterSpacing: 1.2, fontWeight: '600' },
   radioPickTitle: { color: pt.ink.text, fontSize: 18, fontWeight: '600', textAlign: 'center' },
   radioPickSub:   { color: pt.ink.textDim, fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 16 },
+  radioPickJustLeft: { borderColor: pt.gold.sel as string },
   radioPickRow: {
     borderWidth: 1, borderColor: pt.ink.border, borderRadius: 10,
     paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10,

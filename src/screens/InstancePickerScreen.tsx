@@ -7,6 +7,7 @@ import { useListNav, noteTouchInteraction, useNavFocus, useOverlayOpen, useOverl
 import { useFieldPopupNav, NavWrap } from '../components/FieldPopupNav';
 import { pickerZone, headerAbove, directoryRowAction, revealOffset } from '../utils/pickerNav';
 import { useRenderBank } from '../utils/renderBank';
+import { pickerPlace, newPickerOwner, restorableDir, groupsToRestore, planReturn, type PickerPlace } from '../utils/pickerReturn';
 import { usePadField } from '../components/ControllerKeyboard';
 import { addKeyListener } from '../utils/hardwareKeys';
 import {
@@ -290,7 +291,22 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // the KiwiSDR-warning footer (and the FM-DX directory toggle) clipped under it on both the 17PM and
   // the SE — see the list contentContainerStyles below.
   const insets = useSafeAreaInsets();
-  const [instances,   setInstances]     = useState<SDRInstance[]>([]);
+  /* ★★★ WHERE THE LIST WAS — see src/utils/pickerReturn.ts for why a VibeServer's reset lost it. A picker built by
+   *  that reset (`restorePlace`) adopts the place the old one saved and starts IN it: the same directory, search,
+   *  rows and "show restricted" — before its first render, so nothing flashes past at the top level. Its groups,
+   *  scroll and highlight wait for the moment the listener actually comes back (the return effect below). Any other
+   *  fresh picker (a link, the watch, the crash guard) adopts nothing and starts at the top, as it always has. */
+  const ownerRef = useRef(0);
+  if (!ownerRef.current) ownerRef.current = newPickerOwner();
+  const adoptedRef = useRef<PickerPlace<SDRInstance> | null | undefined>(undefined);
+  if (adoptedRef.current === undefined) {
+    adoptedRef.current = route.params?.restorePlace
+      ? (pickerPlace.adopt(ownerRef.current) as PickerPlace<SDRInstance> | null) : null;
+  }
+  const adopted = adoptedRef.current;
+  /** ★ The directory it adopted, if that directory is still offered — otherwise the chooser, never above it. */
+  const adoptedDir = adopted ? restorableDir(adopted.dir, DIRECTORIES.map((d) => d.id)) as DirectoryId | null : null;
+  const [instances,   setInstances]     = useState<SDRInstance[]>(() => (adoptedDir ? adopted!.instances : []));
   const [loading,     setLoading]       = useState(true);
   const [error,       setError]         = useState<string | null>(null);
   const [customUrl,   setCustomUrl]     = useState('');
@@ -304,7 +320,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const urlStarPress = useRef<() => void>(() => {});
   const sortPress = useRef<() => void>(() => {});
   const [connecting,  setConnecting]    = useState(false);
-  const [filter,      setFilter]        = useState('');
+  const [filter,      setFilter]        = useState(() => (adoptedDir ? adopted!.filter : ''));
   /** ★★★ Show the receivers whose owner does not permit third-party apps (`ext_api === 0`). They
    *  do not refuse at connect — they admit you, stream audio, then close at ~10 s saying nothing,
    *  which is the "connects then kicks us" bug. Shown by default, flagged in red, and hideable.
@@ -316,7 +332,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
    *  nothing on screen to explain it. That is 120 of 847 public Kiwis.
    *  ★ Same conclusion Jr reached for the same reason (no webview on a watch). See
    *    briefs/BRIEF-tvos-app.md §5b and AGENTS.md: never offer a control whose every use is a no-op. */
-  const [showRestricted, setShowRestricted] = useState(!IS_TV);
+  const [showRestricted, setShowRestricted] = useState(() => (adopted && !IS_TV ? adopted.showRestricted : !IS_TV));
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
   // Tell native the default-instance name (or '' = none) so the Siri "open and
   // tune" intent can auto-connect, or prompt the user to set a default.
@@ -393,7 +409,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [tcpProto,    setTcpProto]      = useState<BackendType | 'auto'>('auto');
   // null = directory CHOOSER (favourites + directory cards); set = that
   // directory's instance list.
-  const [selectedDir, setSelectedDir]   = useState<DirectoryId | null>(null);
+  const [selectedDir, setSelectedDir]   = useState<DirectoryId | null>(adoptedDir);
 
   const [recordingsOpen, setRecordingsOpen] = useState(false);   // ★ the Recordings button in the header
 
@@ -433,7 +449,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   }, []);
   const userLocRef = useRef<{ lat: number; lon: number } | null>(null);
 
+  /** ★ The receiver this departure opened (its URL) — set by the row's press, read once by savePlace. */
+  const anchorRef = useRef<string | null>(null);
+  /** ★ Save where the list is (assigned once everything it reads exists, below the list's own refs). */
+  const savePlaceRef = useRef<() => void>(() => {});
+  /** ★ This picker handed its place to the one a reset builds — its own unmount must not save over it. */
+  const handedOffRef = useRef(false);
+
   const openDirectory = useCallback((id: DirectoryId) => {
+    anchorRef.current = null;
     setSelectedDir(id);
     setInstances([]); setFilter(''); setError(null); setLoading(true);
     fetchDirectory(id, userLocRef.current?.lat, userLocRef.current?.lon)
@@ -930,10 +954,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
      *     anyway — so this is not a special case for the watch, it is the ONE way we navigate.
      *  ★ The session is untouched: this replaces the controller list, it does not remount the
      *    React tree, so nothing that is already playing is disturbed. */
+    /* ★★★ …AND THE NEW PICKER COMES BACK TO THE SAME PLACE (Stuart, 2026-10-27). This reset builds a NEW picker, so
+     *  the old one's directory, search and scroll went with it and Back landed at the top level. The place is saved
+     *  now and the new picker adopts it (`restorePlace`) — see src/utils/pickerReturn.ts, including why keeping the
+     *  old picker's key instead would bring back the very push this reset exists to avoid. */
+    savePlaceRef.current();
+    handedOffRef.current = true;
     navigation.reset({
       index: 1,
       routes: [
-        { name: 'InstancePicker', params: { noAutoConnect: true } },
+        { name: 'InstancePicker', params: { noAutoConnect: true, restorePlace: true } },
         { name: 'SDR', params: {
             baseUrl, instanceName: name, viewMode,
             /* ★★★ 'vibeserver', NOT 'ubersdr'. This line is where the type was flattened, and it
@@ -1628,6 +1658,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // Connect a saved favourite: use its stored backend type, or detect it once
   // (and remember it) so an OpenWebRX/Kiwi favourite doesn't reconnect as UberSDR.
   const connectFav = useCallback(async (favIn: Favourite) => {
+    anchorRef.current = favIn.url;   // ★ the row Back comes back to (pickerReturn.ts)
     let fav = favIn;
     // FM-DX isn't sniffable by detectServerType (which only knows ubersdr/kiwi/
     // owrx) and letting it "detect" would mis-open an FM-DX fav as UberSDR
@@ -2014,6 +2045,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const onListScroll = useCallback((e: any) => {
     listScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0;
   }, []);
+  // ★ Two lists share this offset (the chooser and a directory), and a list that has not scrolled reports nothing — so
+  //   a new view starts it at 0, or leaving a directory unscrolled would save the chooser's offset as its place.
+  useEffect(() => { listScrollY.current = 0; }, [selectedDir]);
   // Each footer row's own view, so reveal can measure it rather than guessing.
   const ftrViews = useRef<Array<any>>([]);
   // ★★★ GATED ON SCREEN FOCUS, and this is not optional. A stack navigator keeps this
@@ -2141,6 +2175,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   /** ★ A directory row's press — the tap AND Enter (src/utils/pickerNav.ts directoryRowAction). */
   const pressDirectoryRow = (inst: SDRInstance) => {
+    anchorRef.current = inst.url;   // ★ the row Back comes back to (pickerReturn.ts)
     const a = directoryRowAction(inst, blocksApps(inst));
     // SpyServer isn't a web backend: its "url" is spyserver://host:port and
     // it runs through the on-device shim, not a WebSocket to a page.
@@ -2150,6 +2185,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   };
   const pressDirectoryRowRef = useRef(pressDirectoryRow); pressDirectoryRowRef.current = pressDirectoryRow;
 
+  /** ★ Lets the return from a radio put the pad's highlight on the receiver just left (pickerReturn.ts). */
+  const listNavHandle = useRef<{ setFocus(index: number): void } | null>(null);
   const navFocus = useListNav(
     listNavActive,
     zoneCounts.h + listData.length + zoneCounts.f,
@@ -2215,6 +2252,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       if (h?.kind === 'header' && h.collapsible && !h.collapsed) toggleGroup(h.groupKey);
       return true;
     },
+    { handle: listNavHandle },
   );
 
   // ★★★ ONE SCHEME (Stuart, 2026-10-18): the row letters (F favourite, D default, E edit, S sort) are gone — the row's
@@ -2246,6 +2284,90 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     }, { priority: 1 });
     return () => sub.remove();
   }, [listNavActive]);
+
+  // ── ★★★ BACK FROM A RADIO LANDS WHERE YOU LEFT (Stuart, 2026-10-27) — src/utils/pickerReturn.ts ──────────────────
+  /** A list row's receiver URL, or null for a header — the anchor's currency. */
+  const rowUrl = (it: ListItem): string | null => (it.kind === 'custom' ? it.fav.url : it.kind === 'instance' ? it.data.url : null);
+  /** Everything savePlace reads, current as of the last render. */
+  const placeRef = useRef({ selectedDir, filter, openGroups, showRestricted, instances, listData });
+  placeRef.current = { selectedDir, filter, openGroups, showRestricted, instances, listData };
+  savePlaceRef.current = () => {
+    const s = placeRef.current;
+    const urls = s.listData.map(rowUrl);
+    // ★ Consumed: one press, one departure. An anchor no longer in this list (pressed in a directory since left)
+    //   is no anchor at all — the scroll alone is the place.
+    const a = anchorRef.current; anchorRef.current = null;
+    const at = a ? urls.indexOf(a) : -1;
+    pickerPlace.save({
+      owner: ownerRef.current, dir: s.selectedDir, filter: s.filter, openGroups: [...s.openGroups],
+      showRestricted: s.showRestricted, instances: s.instances, scrollY: listScrollY.current,
+      anchor: at >= 0 ? a : null, anchorIndex: at,
+    });
+  };
+  /** The group a directory row is listed under in the current sort — the same keys listData groups by. */
+  const groupOf = (i: SDRInstance): string => effectiveSort === 'country'
+    ? ((i.countryCode || '').toUpperCase() || 'ZZ')
+    : effectiveSort === 'snr' ? snrTier(i.bestSnr as number | null).key : distanceBand(i.distance).key;
+  const groupOfRef = useRef(groupOf); groupOfRef.current = groupOf;
+  /** ★ A touch user's highlight: the row just left, outlined for a few seconds. (A pad's is its focus ring.) */
+  const [justLeft, setJustLeft] = useState<string | null>(null);
+  useEffect(() => {
+    if (!justLeft) return;
+    const t = setTimeout(() => setJustLeft(null), 4000);
+    return () => clearTimeout(t);
+  }, [justLeft]);
+  const [returning, setReturning] = useState<{ p: PickerPlace; remounted: boolean } | null>(null);
+  /* ★★ ON FOCUS — the moment the listener is actually back, by whatever route: the menu's ← BACK, a lost-connection
+   *  card's BACK TO SERVERS, the tuner's menu, a server-mode exit. Leaving saves; coming back takes it (once).
+   *  ★ The groups are applied HERE, not at mount: a picker built under the radio re-seeds its open group as its
+   *    location and data arrive, and that must be over before the saved groups go back on. */
+  useFocusEffect(useCallback(() => {
+    const p = pickerPlace.take(ownerRef.current);
+    if (p) {
+      const remounted = adoptedRef.current != null;
+      adoptedRef.current = null;   // the adopted place is spent: a later return is an ordinary one
+      const s = placeRef.current;
+      const inst = p.anchor && s.selectedDir !== null ? s.instances.find((i) => i.url === p.anchor) : undefined;
+      const base = remounted && s.selectedDir === p.dir ? p.openGroups : [...s.openGroups];
+      setOpenGroups(new Set(groupsToRestore(base, inst ? groupOfRef.current(inst) : null)));
+      setReturning({ p, remounted });
+    }
+    return () => { if (!handedOffRef.current) savePlaceRef.current(); };
+  }, []));
+  /* ★ Once the list has been rebuilt with those groups: scroll, highlight, focus. If the receiver has gone, the top of
+   *  THIS list — the directory's, never the app's (planReturn). Not while a directory with no rows is still loading. */
+  useEffect(() => {
+    if (!returning || (loading && selectedDir !== null)) return;
+    const { p, remounted } = returning;
+    setReturning(null);
+    const urls = listData.map(rowUrl);
+    const plan = planReturn(p, urls, remounted);
+    const target: any = selectedDir !== null ? listRef.current : dragRef.current;
+    const go = () => {
+      try {
+        const sc = plan.scroll;
+        if (sc.kind === 'offset') target?.scrollToOffset?.({ offset: sc.y, animated: false });
+        else if (sc.kind === 'top') target?.scrollToOffset?.({ offset: 0, animated: false });
+        else if (sc.kind === 'index') target?.scrollToIndex?.({ index: sc.index, viewPosition: 0.5, animated: false });
+      } catch { /* a row not laid out yet: onScrollToIndexFailed estimates it */ }
+    };
+    requestAnimationFrame(go);
+    // ★ A NEW list has laid out only its first rows: once more when the rest has been measured, so the offset lands.
+    if (remounted && plan.scroll.kind !== 'stay') setTimeout(go, 160);
+    if (plan.focus >= 0) {
+      setJustLeft(urls[plan.focus]);
+      if (keyboardModeNow()) listNavHandle.current?.setFocus(hdrDone.current.length + plan.focus);
+    }
+  }, [returning, listData, loading, selectedDir]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ An adopted directory left before its rows arrived has none to show: fetch them, keeping the search. */
+  useEffect(() => {
+    if (!adoptedDir || adopted?.instances.length) return;
+    setLoading(true);
+    fetchDirectory(adoptedDir, userLocRef.current?.lat, userLocRef.current?.lon)
+      .then((list) => setInstances(list))
+      .catch((e: any) => setError(e?.message || 'Failed to load this directory'))
+      .finally(() => setLoading(false));
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
@@ -2368,8 +2490,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       const canDrag = favSort === 'manual' && !!drag;
       const body = (
           <TouchableOpacity
-            style={[styles.row, { borderColor: navOn ? focusC.ring : C.borderBright,
-                                  borderWidth: navOn ? 2 : 1,
+            style={[styles.row, { borderColor: navOn ? focusC.ring : justLeft === fav.url ? C.key : C.borderBright,
+                                  borderWidth: navOn || justLeft === fav.url ? 2 : 1,
                                   backgroundColor: isActive ? C.keyBgAct : 'rgba(255,100,100,0.06)' }]}
             onPress={() => connectFav(fav)}
             onLongPress={canDrag ? drag : undefined}
@@ -2468,6 +2590,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             isDefault && { borderColor: C.borderBright, backgroundColor: C.keyBgAct },
             favoured && !isDefault && { borderColor: 'rgba(255,80,80,0.4)' },
             isFull && { opacity: 0.4 },
+            // ★ The receiver just left (pickerReturn.ts) — under the focus ring, which still wins.
+            justLeft === inst.url && { borderColor: C.key, borderWidth: 2 },
             // Focus LAST so it wins over default/favourite colouring — the caret must never
             // be hidden by the very rows you are most likely to be standing on.
             navOn && { borderColor: focusC.ring, borderWidth: 2 },
@@ -2964,7 +3088,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               // rows when `data` or `extraData` changes, and the focused index is external
               // state — so focus was moving correctly and invisibly, which is exactly what
               // Stuart saw, and why an Enter could connect to a server he could not see.
-              extraData={[navFocus, showRestricted, rowSub]}
+              extraData={[navFocus, showRestricted, rowSub, justLeft]}
               style={{ flex: 1 }}
               /* ★★★ THE RED-ROW EXPLANATION, WITH ITS OWN SHOW/HIDE. Only appears when this
                  directory actually lists receivers whose owner has switched third-party access off
@@ -3011,7 +3135,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           <DraggableFlatList
             ref={dragRef}
             onScrollOffsetChange={(y: number) => { listScrollY.current = y; }}
-            extraData={[navFocus, rowSub]}   // same reason as the FlatList above
+            extraData={[navFocus, rowSub, justLeft]}   // same reason as the FlatList above
             data={listData}
             onScrollToIndexFailed={onScrollToIndexFailed}
             containerStyle={{ flex: 1 }}

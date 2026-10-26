@@ -2607,6 +2607,11 @@ const BLOCKABLE = [
   { id: "psk",    label: "PSK31/63" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
   { id: "dsc",    label: "DSC" },
+  /* ★ V12 NDB skimmer (docs/v12/NDB-SKIMMER.md) — every aeronautical beacon on 190–535 kHz. Offered only where the radio
+   *  reaches LF; this switch takes it off a radio that could. */
+  { id: "ndb",    label: "NDB beacons" },
+  /* ★ V12 JTTY (docs/v12/JTTY.md) — the WSJT-X 3.2 keyboard mode, every JTTY signal in a listener's passband. */
+  { id: "jtty",   label: "JTTY" },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   { id: "aprs",   label: "APRS" },
@@ -5634,6 +5639,20 @@ function bgIsmBands() {
   if (hw && Array.isArray(hw.ismHwBands) && !hw.offline) return BG_ISM_BANDS.filter(function (b) { return hw.ismHwBands.indexOf(b.id) >= 0; });
   return BG_ISM_BANDS.slice();
 }
+/* ★★ V12 2026-10-27 — AN NDB PROFILE: the LF beacon band whole, every beacon skimmed, each day's heard log and map to the
+ *  gallery (vibe_bgdecode_config.h Profile::ndb). Only where THIS radio reaches LF (HW.ndbHw; else its driver — an HF+ or
+ *  an RSP, an RTL only with direct sampling on or automatic) and never on a locked radio. */
+function bgNdbOk() {
+  const r0 = bgRadio || {};
+  const drv = String(r0.driver || "");
+  if (drv === "icom" || drv === "hackrf" || drv === "airspy") return false;
+  if (r0.mode === "locked" && r0.lockFreq > 0) return false;
+  try { if (typeof modeBlockSet === "function" && modeBlockSet().has("ndb")) return false; } catch (e) { /* no mode list on this page */ }
+  const hw = typeof HW !== "undefined" ? HW : null;
+  if (hw && typeof hw.ndbHw === "boolean" && !hw.offline) return hw.ndbHw;
+  if (drv === "airspyhf" || drv === "sdrplay") return true;
+  return !!r0.autoDirectSampling || (+r0.directSampling || 0) > 0;
+}
 let bgModel = { on: false, waitMin: 5, keepInRange: true, profiles: [] };
 let bgRadio = null;   // ★ the radio the editor shows — its mode decides "locked", its users the user slots
 function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: [{ hz: 0, mode: "usb", dec: "navtex" }] }; }
@@ -5652,6 +5671,7 @@ function bgLoad(r) {
                    return { hz: +v.hz || 0, mode: BG_DEMODS[v.mode] ? v.mode : "usb", dec: v.dec || "navtex" }; }) };
         // ★ only an ISM profile carries "ism" — an ordinary one saves back exactly as it came
         if (typeof p.ism === "string" && p.ism) { q.ism = p.ism; q.centre = 0; q.vfos = []; }
+        else if (p.ndb === true) { q.ndb = true; q.centre = 0; q.vfos = []; }
         return q;
       }) : [];
     }
@@ -5683,7 +5703,7 @@ function bgCollect() {
   bgModel.on = !!($("bgOn") && $("bgOn").checked);
   bgModel.waitMin = parseFloat(($("bgWait") || {}).value) || 5;
   // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
-  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0; }); })) return "";
+  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.ndb || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0; }); })) return "";
   bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
   const out = { on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles };
   if (!bgModel.keepInRange) out.keepInRange = false;    // ★ absent = on, as the server reads it
@@ -5772,22 +5792,32 @@ function bgRender() {
      *  (bgIsmBands); a saved ISM profile on a radio that can no longer do it stays visible, said plainly, so the owner
      *  sees why it does not run (the server refuses the save in words too). */
     const ismBands = bgIsmBands();
-    if (ismBands.length || p.ism) {
+    const ndbOk = bgNdbOk();
+    if (ismBands.length || p.ism || ndbOk || p.ndb) {
       const kl = el("label"); kl.appendChild(el("span", { class: "lbl" }, "Decodes"));
       const ks = el("select", { class: "bgKind", style: "max-width:320px" });
       ks.appendChild(el("option", { value: "vfo" }, "Stations on VFOs (RF centre + VFOs)"));
       if (ismBands.length) ks.appendChild(el("option", { value: "ism" }, "ISM sensors on a whole band"));
-      ks.value = p.ism && ismBands.length ? "ism" : "vfo";
+      if (ndbOk) ks.appendChild(el("option", { value: "ndb" }, "NDB beacons \u2014 the whole LF beacon band"));
+      ks.value = p.ism && ismBands.length ? "ism" : p.ndb && ndbOk ? "ndb" : "vfo";
       ks.onchange = function () {
         if (ks.value === "ism") {
           const land = ismBands.filter(function (b) { return b.id === "433"; })[0] || ismBands[0];
-          p.ism = land.id; p.centre = 0; p.vfos = [];
-        } else { delete p.ism; if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); }
+          delete p.ndb; p.ism = land.id; p.centre = 0; p.vfos = [];
+        } else if (ks.value === "ndb") { delete p.ism; p.ndb = true; p.centre = 0; p.vfos = []; }
+        else { delete p.ism; delete p.ndb; if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); }
         bgRender();
       };
       kl.appendChild(ks); card.appendChild(kl);
     }
-    if (p.ism) {
+    if (p.ndb) {
+      card.appendChild(el("div", { class: "hint bgNdbNote", style: ndbOk ? "" : "color:#ff8a7d" }, ndbOk
+        ? "NDB takes the whole radio onto the LF beacon band (190\u2013535 kHz, as much as its rate holds) and skims every beacon "
+          + "in it \u2014 so it runs only while nobody is listening, and stops the moment anybody connects. Each day\u2019s heard "
+          + "log and a map go to the gallery."
+        : "This profile skims NDBs, which this radio cannot do" + (locked ? " \u2014 its range is locked, and background decoding never moves a locked radio."
+          : " (an RTL needs direct sampling).") + " Choose \u201cStations on VFOs\u201d or delete the profile."));
+    } else if (p.ism) {
       if (!ismBands.length) {
         card.appendChild(el("div", { class: "hint", style: "color:#ff8a7d" }, "This profile decodes ISM, which this radio cannot do"
           + (locked ? " \u2014 its range is locked, and background decoding never moves a locked radio." : ".")

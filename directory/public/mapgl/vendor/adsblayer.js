@@ -189,6 +189,57 @@
     return best;
   }
 
+  /* ★★ THE RANGE RINGS, SHARED (V12 2026-10-27: the NDB map uses them too — Stuart, "same rings, for nm range"). One
+   *  ladder, one geometry, one look, the labels on all four sides, in NAUTICAL MILES. ADS-B's layer and ndblayer.js
+   *  both draw them through these four, so the two maps can never drift apart. */
+  /** The rings for a view: rx {lat,lon}, the zoom, the view's size v {w,h}, the receiver's screen offset o {x,y} from
+   *  the view's centre, the tile size. Enough to reach the furthest corner of the view, at most twelve. */
+  function ringsFor(rx, zoom, v, o, tile) {
+    const npp = nmPerPx(rx.lat, zoom, tile);
+    const step = ringStep(npp, Math.max(70, Math.min(v.w, v.h) / 4.5));
+    const far = Math.max(Math.hypot(v.w / 2 + Math.abs(o.x), v.h / 2 + Math.abs(o.y)), 1) * npp;
+    const n = Math.max(1, Math.min(12, Math.ceil(far / step)));
+    const rings = [];
+    for (let i = 1; i <= n; i++) {
+      const nm = i * step, pts = [];
+      for (let k = 0; k <= 128; k++) { const d = destination(rx.lat, rx.lon, k * 360 / 128, nm); pts.push([d.lon, d.lat]); }
+      /* ★ FOUR LABELS PER RING — top, right, bottom, left (Stuart, 2026-10-25: "so that no matter where the map is panned
+       *  you can see the label"). One at the top went off screen with the receiver panned or zoomed past it. Each sits just
+       *  outside its ring on its own side (a: the text's anchor), so the number never sits on the line. */
+      rings.push({ nm, pts, lbls: [[0, 'bottom'], [90, 'left'], [180, 'top'], [270, 'right']].map(([b, a]) => Object.assign(destination(rx.lat, rx.lon, b, nm), { a })) });
+    }
+    return rings;
+  }
+  /** The GPU map's two sources and two layers for the rings, ids prefixed (e.g. 'vsadsb-', 'vsndb-'). */
+  function addRingLayers(gl, idp, T) {
+    const empty = { type: 'FeatureCollection', features: [] };
+    for (const id of [idp + 'rings', idp + 'ringlbl']) if (!gl.getSource(id)) gl.addSource(id, { type: 'geojson', data: empty });
+    gl.addLayer({ id: idp + 'rings', type: 'line', source: idp + 'rings',
+                  paint: { 'line-color': T.ring, 'line-width': 1, 'line-dasharray': [4, 6] } });
+    gl.addLayer({ id: idp + 'ringlbl', type: 'symbol', source: idp + 'ringlbl',
+                  layout: { 'text-field': ['get', 't'], 'text-font': ['JetBrains Mono Regular'], 'text-size': 10, 'text-anchor': ['get', 'a'],
+                            'text-offset': ['match', ['get', 'a'], 'bottom', ['literal', [0, -0.3]], 'top', ['literal', [0, 0.3]],
+                                            'left', ['literal', [0.4, 0]], ['literal', [-0.4, 0]]],
+                            'text-allow-overlap': true, 'text-ignore-placement': true },
+                  paint: { 'text-color': T.ringLbl, 'text-halo-color': T.halo, 'text-halo-width': 1.2 } });
+  }
+  /** Put rings (or none: null) on the GPU map's ring sources. */
+  function setRingData(gl, idp, rings) {
+    const s1 = gl.getSource(idp + 'rings'), s2 = gl.getSource(idp + 'ringlbl');
+    if (!s1 || !s2) return;
+    s1.setData({ type: 'FeatureCollection', features: (rings || []).map((r) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: r.pts } })) });
+    s2.setData({ type: 'FeatureCollection', features: (rings || []).flatMap((r) => r.lbls.map((l) => ({ type: 'Feature', properties: { t: r.nm + ' NM', a: l.a }, geometry: { type: 'Point', coordinates: [l.lon, l.lat] } }))) });
+  }
+  /** The Leaflet fallback's rings: a layer group (the caller adds and removes it). cls: the label class prefix. */
+  function leafletRings(LL, rx, rings, T, cls) {
+    const g = LL.layerGroup();
+    for (const r of rings) {
+      LL.circle([rx.lat, rx.lon], { radius: r.nm * NM_M, color: T.ring, weight: 1, fill: false, dashArray: '4 6', interactive: false }).addTo(g);
+      for (const l of r.lbls) LL.marker([l.lat, l.lon], { interactive: false, icon: LL.divIcon({ className: '', html: '<div class="' + cls + ' ' + cls + '-' + l.a + '">' + r.nm + ' NM</div>', iconSize: [0, 0] }) }).addTo(g);
+    }
+    return g;
+  }
+
   /** Web Mercator in world units 0..1 (x east, y south). */
   function merc(lat, lon) {
     const s = Math.sin(Math.max(-85.05, Math.min(85.05, lat)) * D2R);
@@ -947,40 +998,16 @@
     function ringGeo() {
       if (!rx || !prefs.rings) return null;
       const z = gl ? gl.getZoom() : lm.getZoom();
-      const v = viewSize();
-      const step = ringStep(nmPerPx(rx.lat, z, TILE), Math.max(70, Math.min(v.w, v.h) / 4.5));
-      // ★ Enough rings to reach the furthest corner of the view from the receiver, at most twelve.
-      const cur = curCam();
-      const o = screenOffset(cur, rx.lat, rx.lon, TILE);
-      const far = Math.max(Math.hypot(v.w / 2 + Math.abs(o.x), v.h / 2 + Math.abs(o.y)), 1) * nmPerPx(rx.lat, z, TILE);
-      const n = Math.max(1, Math.min(12, Math.ceil(far / step)));
-      const rings = [];
-      for (let i = 1; i <= n; i++) {
-        const nm = i * step, pts = [];
-        for (let k = 0; k <= 128; k++) { const d = destination(rx.lat, rx.lon, k * 360 / 128, nm); pts.push([d.lon, d.lat]); }
-        /* ★ FOUR LABELS PER RING — top, right, bottom, left (Stuart, 2026-10-25: "so that no matter where the map is panned
-         *  you can see the label"). One at the top went off screen with the receiver panned or zoomed past it. Each sits just
-         *  outside its ring on its own side (a: the text's anchor), so the number never sits on the line. */
-        rings.push({ nm, pts, lbls: [[0, 'bottom'], [90, 'left'], [180, 'top'], [270, 'right']].map(([b, a]) => ({ ...destination(rx.lat, rx.lon, b, nm), a })) });
-      }
-      return rings;
+      return ringsFor(rx, z, viewSize(), screenOffset(curCam(), rx.lat, rx.lon, TILE), TILE);
     }
     function drawRings() {
       if (destroyed) return;
       const rings = ringGeo();
-      if (gl) {
-        const s1 = gl.getSource('vsadsb-rings'), s2 = gl.getSource('vsadsb-ringlbl');
-        if (!s1 || !s2) return;
-        s1.setData({ type: 'FeatureCollection', features: (rings || []).map((r) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: r.pts } })) });
-        s2.setData({ type: 'FeatureCollection', features: (rings || []).flatMap((r) => r.lbls.map((l) => ({ type: 'Feature', properties: { t: r.nm + ' NM', a: l.a }, geometry: { type: 'Point', coordinates: [l.lon, l.lat] } }))) });
-      } else {
+      if (gl) setRingData(gl, 'vsadsb-', rings);
+      else {
         if (llRings) { lm.removeLayer(llRings); llRings = null; }
         if (!rings) return;
-        llRings = LL.layerGroup();
-        for (const r of rings) {
-          LL.circle([rx.lat, rx.lon], { radius: r.nm * NM_M, color: T.ring, weight: 1, fill: false, dashArray: '4 6', interactive: false }).addTo(llRings);
-          for (const l of r.lbls) LL.marker([l.lat, l.lon], { interactive: false, icon: LL.divIcon({ className: '', html: '<div class="vsadsb-rl vsadsb-rl-' + l.a + '">' + r.nm + ' NM</div>', iconSize: [0, 0] }) }).addTo(llRings);
-        }
+        llRings = leafletRings(LL, rx, rings, T, 'vsadsb-rl');
         llRings.addTo(lm);
       }
     }
@@ -1009,15 +1036,8 @@
     function glSetup() {
       if (destroyed || gl.getSource('vsadsb-ac')) return;
       const empty = { type: 'FeatureCollection', features: [] };
-      for (const id of ['vsadsb-rings', 'vsadsb-ringlbl', 'vsadsb-ac', 'vsadsb-rx']) gl.addSource(id, { type: 'geojson', data: empty });
-      gl.addLayer({ id: 'vsadsb-rings', type: 'line', source: 'vsadsb-rings',
-                    paint: { 'line-color': T.ring, 'line-width': 1, 'line-dasharray': [4, 6] } });
-      gl.addLayer({ id: 'vsadsb-ringlbl', type: 'symbol', source: 'vsadsb-ringlbl',
-                    layout: { 'text-field': ['get', 't'], 'text-font': ['JetBrains Mono Regular'], 'text-size': 10, 'text-anchor': ['get', 'a'],
-                              'text-offset': ['match', ['get', 'a'], 'bottom', ['literal', [0, -0.3]], 'top', ['literal', [0, 0.3]],
-                                              'left', ['literal', [0.4, 0]], ['literal', [-0.4, 0]]],
-                              'text-allow-overlap': true, 'text-ignore-placement': true },
-                    paint: { 'text-color': T.ringLbl, 'text-halo-color': T.halo, 'text-halo-width': 1.2 } });
+      for (const id of ['vsadsb-ac', 'vsadsb-rx']) gl.addSource(id, { type: 'geojson', data: empty });
+      addRingLayers(gl, 'vsadsb-', T);
       gl.addLayer({ id: 'vsadsb-rx', type: 'symbol', source: 'vsadsb-rx',
                     layout: { 'icon-image': 'vsadsb-rx', 'icon-anchor': 'bottom', 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
       // ★ THE TRAIL (trailGradient) — under the aircraft, a soft glow beneath a 3 px line, one gradient for both
@@ -1651,5 +1671,8 @@
     return api;
   }
 
-  global.VibeAdsbLayer = { create, maths, ICONS: Object.keys(ICONS), iconSvg };
+  /* ★ What the NDB layer (ndblayer.js) borrows so its map looks and measures exactly like this one: the rings, the
+   *  theme, the receiver's house, the camera and the CSS (its ring labels' classes). */
+  const shared = { ringsFor, addRingLayers, setRingData, leafletRings, THEME, RX_SVG, injectCss };
+  global.VibeAdsbLayer = { create, maths, shared, ICONS: Object.keys(ICONS), iconSvg };
 })(typeof window !== 'undefined' ? window : globalThis);

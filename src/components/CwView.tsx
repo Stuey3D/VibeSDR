@@ -17,6 +17,7 @@ import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View, type StyleProp, type ViewStyle } from 'react-native';
 import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
+import { fmtSpotTime } from '../utils/spotTime';   // ★ HH:MM:SS UTC (one helper for every spot list)
 import {
   CW_Q_COLOURS, cwAge, cwFreqText, cwPinFromScroll, cwPinRestore, cwSnrText, sortCwSignals,
   type CwList, type CwSignal, type CwSpot,
@@ -34,10 +35,6 @@ export function cwItems(list: CwList | null, spots: readonly CwSpot[]): Array<{ 
 /** ★ The confidence marker, short enough for an SE in Display Zoom; the colour carries it as much as the word. */
 const Q_SHORT: Record<CwSignal['q'], string> = { high: 'HIGH', medium: 'MED', low: 'LOW', poor: 'POOR' };
 
-function hhmm(t: number): string {
-  const d = new Date(t);
-  return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
-}
 
 export interface CwViewProps {
   skim: boolean;
@@ -167,7 +164,7 @@ export default function CwView({ skim, list, spots, text, bodySize, focusIdx, on
             style={[cs.row, { borderBottomColor: tk.divider }, ring(i)]}
             onPress={() => onTune(s.frequency)}>
             <View style={cs.line}>
-              <Text style={[cs.cell, cs.time, { color: tk.muted }]} numberOfLines={1}>{hhmm(s.timestamp)}</Text>
+              <Text style={[cs.cell, cs.time, { color: tk.muted }]} numberOfLines={1}>{fmtSpotTime(s.timestamp)}</Text>
               <Text style={[cs.cell, cs.freq, { color: tk.value }]} numberOfLines={1}>{cwFreqText(s.frequency, s.audio)}</Text>
               <Text style={[cs.cell, cs.call, { color: tk.accent }]} numberOfLines={1}>{s.callsign}</Text>
               <Text style={[cs.cell, cs.country, { color: tk.value }]} numberOfLines={1}>{s.country}</Text>
@@ -200,7 +197,7 @@ const makeCs = (T: DecoderTokens) => StyleSheet.create({
   q:       { width: 38, fontSize: 9, letterSpacing: 0.8, textAlign: 'center', borderWidth: 1, borderRadius: 3,
              paddingVertical: 1, overflow: 'hidden' },
   age:     { width: 26, textAlign: 'right' },
-  time:    { width: 38 },
+  time:    { width: 52 },   // ★ HH:MM:SS (was HH:MM, 38)
   country: { flex: 1, textAlign: 'right' },
   tx:      { fontFamily: DECODER_FONT, fontSize: 12, letterSpacing: 0.6, lineHeight: 17, marginTop: 2 },
   head:    { paddingTop: 10, paddingBottom: 4, paddingHorizontal: 6, borderBottomWidth: StyleSheet.hairlineWidth },

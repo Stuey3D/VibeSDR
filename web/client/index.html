@@ -1311,6 +1311,216 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
   #adsbList { max-height: 222px; max-height: min(6 * 37px, 30vh); }
 }
 
+/* ── NDB: #adsbView's rules for #ndbView ── */
+#ndbView { position: fixed; inset: 0; z-index: 47; display: flex; flex-direction: column; background: #090602; }
+#ndbView[hidden] { display: none; }
+#ndbTop { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-width: 0;
+  padding: 6px 10px; padding-top: max(6px, env(safe-area-inset-top, 0px));
+  padding-left: max(10px, env(safe-area-inset-left, 0px)); padding-right: max(10px, env(safe-area-inset-right, 0px));
+  background: var(--ov-panel98, rgba(8,6,2,0.98)); border-bottom: 1px solid rgba(255, 160, 0, 0.18); }
+#ndbTop button { flex: 0 0 auto; font: inherit; font-size: 13px; letter-spacing: 1px; padding: 6px 11px; min-height: 34px;
+  background: rgba(255, 160, 0, 0.08); border: 1px solid rgba(255, 160, 0, 0.30); border-radius: 8px;
+  color: rgba(255, 184, 51, 0.92); cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+#ndbTop button:hover { background: rgba(255, 160, 0, 0.14); }
+#ndbTop button:active { background: rgba(255, 160, 0, 0.20); }
+#ndbTop button:disabled { opacity: 0.4; cursor: default; }
+/* ★ The way out is the one key that must never be missed: the app's ← SDR, worded for what it does here. */
+#ndbExit { color: var(--btn-active-tx) !important; border-color: rgba(255, 184, 51, 0.55) !important; font-weight: 600; }
+/* ★ The strip beside EXIT: one row that scrolls sideways when it does not fit (the decoder box header's way — momentum,
+   no scrollbar), never wraps, never squeezes a key. On a wide screen the title takes the spare room, centred. */
+#ndbTopScroll { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; overscroll-behavior-x: contain; }
+#ndbTopScroll::-webkit-scrollbar { display: none; }
+#ndbTitle { flex: 1 0 auto; text-align: center; font-size: 14px; letter-spacing: 2px;
+  color: rgba(255, 184, 51, 0.80); white-space: nowrap; }
+#ndbCntWrap { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; color: rgba(255, 190, 40, 0.75); }
+#ndbCnt { color: var(--btn-active-tx); font-size: 16px; font-variant-numeric: tabular-nums; }
+#ndbStat { flex: 0 0 auto; font-size: 11px; letter-spacing: 0.5px; color: var(--text-dim); white-space: nowrap; }
+/* ★ GAIN in ADS-B (Stuart, 2026-10-24: "there is no way of accessing the gain control when ADSB is enabled"): the key
+ *   says what the radio is at; its card holds AUTO and the radio's own gain steps */
+#ndbTop #ndbGain { font-size: 12px; padding: 6px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#ndbGain .k { opacity: 0.6; letter-spacing: 1.5px; }
+#ndbGain .tr { margin-left: 4px; padding: 1px 5px; border-radius: 4px; font-size: 10px; letter-spacing: 1.2px;
+  color: #0b0b0b; background: rgba(255, 184, 51, 0.85); animation: adsbTrain 1.6s ease-in-out infinite; }
+@keyframes adsbTrain { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #ndbGain .tr { animation: none; } }
+#ndbGainPop { position: absolute; top: 8px; right: max(10px, env(safe-area-inset-right, 0px)); z-index: 1200; width: min(300px, calc(100vw - 32px));
+  box-sizing: border-box; padding: 12px; border-radius: 10px; background: rgba(8, 6, 2, 0.94); border: 1px solid rgba(255, 160, 0, 0.35);
+  color: rgba(255, 184, 51, 0.92); font-size: 12px; letter-spacing: 1px; display: grid; gap: 10px; }
+#ndbGainPop[hidden] { display: none; }
+#ndbGainPop .hd { letter-spacing: 2px; }
+#ndbGainPop #ndbGainNow { color: var(--btn-active-tx); font-variant-numeric: tabular-nums; }
+#ndbGainPop button { font: inherit; padding: 7px 10px; border-radius: 8px; cursor: pointer; background: rgba(255, 160, 0, 0.08);
+  border: 1px solid rgba(255, 160, 0, 0.30); color: inherit; }
+#ndbGainPop button.on { background: rgba(255, 160, 0, 0.22); border-color: rgba(255, 184, 51, 0.7); color: var(--btn-active-tx); }
+#ndbGainPop input[type=range] { width: 100%; accent-color: #ffb833; }
+#ndbGainPop .nt { color: var(--text-dim); letter-spacing: 0.5px; line-height: 1.4; }
+/* ★★ The capture warning (adsbCaptureWarning): red, beside the rate; on a phone only "capture 74 %" stays. */
+#ndbCapture { flex: 0 1 auto; min-width: 0; font-size: 11px; letter-spacing: 0.5px; color: var(--red, #ff6b5e);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ndbMain { position: relative; flex: 1 1 auto; min-height: 0; }
+/* ★ isolation: the map's own stacking context — Leaflet's panes carry z-index 400–700, and without one they sat OVER
+ *   the live list (the no-WebGL-2 map: the list could not be clicked — found by the headless trail check, 2026-10-24) */
+#ndbMapHost { position: absolute; inset: 0; background: #123049; isolation: isolate; z-index: 0; }
+#ndbNote { position: absolute; left: 50%; top: 52px; transform: translateX(-50%); z-index: 6;
+  max-width: calc(100% - 32px); text-align: center; padding: 8px 14px; border-radius: 8px;
+  background: var(--ov-panel96, rgba(8, 6, 2, 0.96)); border: 1px solid var(--btn-border); font-size: 12px; letter-spacing: 0.5px; }
+#ndbNote[hidden] { display: none; }
+/* ★ The map's own chrome in the bar's amber (as the popup map had it): the zoom keys and the credits. */
+#ndbView .maplibregl-ctrl-group { background: rgba(9, 6, 2, 0.92) !important; border: 1px solid rgba(255, 160, 0, 0.30); }
+#ndbView .maplibregl-ctrl-group button + button { border-top: 1px solid rgba(255, 160, 0, 0.20); }
+#ndbView .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg); opacity: .7; }
+#ndbView .maplibregl-ctrl-attrib, #ndbView .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(9, 6, 2, 0.72); color: rgba(255, 184, 51, 0.55); font-size: 10px; }
+#ndbView .maplibregl-ctrl-attrib a { color: rgba(255, 184, 51, 0.55); }
+#ndbView .maplibregl-ctrl-attrib-button { filter: invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg); opacity: .55; }
+#ndbView .leaflet-bar a { background: rgba(9, 6, 2, 0.92); color: var(--amber); border-color: rgba(255, 160, 0, 0.30); }
+#ndbView .leaflet-control-attribution { background: rgba(9, 6, 2, 0.72) !important; color: rgba(255, 184, 51, 0.55); }
+#ndbView .leaflet-control-attribution a { color: rgba(255, 184, 51, 0.55); }
+/* ★★ THE HEALTH PILL STAYS, BELOW THE MAP'S TOGGLES. Its corner (top right) is the bar's and then AUTO / FIT /
+     RINGS's; --adsbTopH is the bar's measured height (adsbLayout in main.ts). The battery pill (an older
+     server's) sits in the same corner. */
+body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48px) + 54px) !important; right: 10px !important; }
+
+/* ── THE LIVE LIST — bottom left, clear of the toggles (top right), the zoom keys (top left) and the credits
+   (bottom right). ~7 rows, then it scrolls; the head collapses it to a pill that covers almost nothing. */
+#ndbLive { position: absolute; left: max(10px, env(safe-area-inset-left, 0px)); bottom: max(10px, env(safe-area-inset-bottom, 0px));
+  z-index: 5; width: min(360px, calc(100% - 64px)); display: flex; flex-direction: column;
+  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid rgba(255, 160, 0, 0.30); border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); font-variant-numeric: tabular-nums; overflow: hidden;
+  transition: bottom 0.2s ease; }
+#ndbLive.lift { bottom: calc(var(--adsbAttribH, 0px) + 18px); }
+#ndbLiveHead { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 7px 11px; min-height: 34px;
+  cursor: pointer; font-size: 11px; letter-spacing: 1.5px; color: rgba(255, 184, 51, 0.75); -webkit-tap-highlight-color: transparent; }
+#ndbLiveHead:hover { background: rgba(255, 160, 0, 0.08); }
+#ndbLiveHead:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: -2px; }
+#ndbLiveN { color: var(--btn-active-tx); font-size: 12px; }
+#ndbLiveHead .chev { margin-left: auto; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 6px solid rgba(255, 184, 51, 0.7); }
+#ndbLive.min { width: auto; border-radius: 999px; }
+#ndbLive.min #ndbLiveHead { padding: 7px 14px; }
+#ndbLive.min #ndbLiveHead .chev { border-top: none; border-bottom: 6px solid rgba(255, 184, 51, 0.7); }
+#ndbLive.min #ndbList, #ndbLive.min #ndbChips { display: none; }
+/* ★ The list header's chips: small keys in a row under the head, the key word dimmed so the figure reads first */
+/* ★ a wide screen WRAPS them (height to spare there); a phone scrolls them, as the bar (media query below) */
+#ndbChips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 7px; }
+#ndbChips:not(:has(.adsbChip:not([hidden]))) { display: none; }
+.adsbChip { flex: 0 0 auto; font: inherit; font-size: 11px; letter-spacing: 0.4px; padding: 4px 7px; min-height: 26px; white-space: nowrap;
+  font-variant-numeric: tabular-nums; background: rgba(255, 160, 0, 0.08); border: 1px solid rgba(255, 160, 0, 0.30); border-radius: 7px;
+  color: rgba(255, 184, 51, 0.92); cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.adsbChip:hover { background: rgba(255, 160, 0, 0.14); }
+.adsbChip:active { background: rgba(255, 160, 0, 0.20); }
+.adsbChip:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: 1px; }
+.adsbChip .k { opacity: 0.6; letter-spacing: 1px; }
+#ndbList { max-height: 259px; max-height: min(7 * 37px, 38vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 3px 4px;
+  border-top: 1px solid rgba(255, 160, 0, 0.14); scrollbar-width: thin; scrollbar-color: rgba(255, 160, 0, 0.35) transparent; }
+#ndbList .adsbRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 0 10px; align-items: center;
+  padding: 4px 8px; min-height: 36px; border-radius: 5px; border-left: 3px solid transparent; cursor: pointer; outline: none; }
+#ndbList .adsbRow:hover, #ndbList .adsbRow:focus-visible { background: var(--btn-active-bg); }
+#ndbList .adsbRow.sel { background: rgba(255, 229, 102, 0.12); border-left-color: rgba(255, 229, 102, 0.7); }
+#ndbList .adsbRow .id { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+#ndbList .adsbRow .id b { font-weight: 600; font-size: 12px; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ★ Signal bars beside the callsign (adsb.ts adsbBars): three ascending, the lit ones in the app's link colours. */
+#ndbList .adsbRow .sig { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 9px; margin-left: 6px; vertical-align: 0; }
+#ndbList .adsbRow .sig i { display: block; width: 2.5px; background: rgba(255, 184, 51, 0.22); border-radius: 1px; }
+#ndbList .adsbRow .sig i:nth-child(1) { height: 40%; } #ndbList .adsbRow .sig i:nth-child(2) { height: 70%; } #ndbList .adsbRow .sig i:nth-child(3) { height: 100%; }
+#ndbList .adsbRow .sig.l1 i.on { background: #e04040; } #ndbList .adsbRow .sig.l2 i.on { background: #e0b020; } #ndbList .adsbRow .sig.l3 i.on { background: #33cc44; }
+/* ★ The (i) beside the list's header: the map layer's colour key (toggleLegend), opened above the list. */
+#ndbLegendBtn { all: unset; box-sizing: border-box; position: absolute; top: 5px; right: 30px; width: 24px; height: 24px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font: italic 600 12px Georgia, serif; color: rgba(255, 184, 51, 0.8);
+  border: 1px solid rgba(255, 160, 0, 0.35); cursor: pointer; }
+#ndbLegendBtn.on, #ndbLegendBtn:hover { background: rgba(255, 160, 0, 0.14); }
+#ndbLegendBtn:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: 1px; }
+#ndbLive.min #ndbLegendBtn { display: none; }
+#ndbList .adsbRow .id small { font-size: 9.5px; opacity: .6; letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ★ V12 aircraft data in the row: the flag before the callsign; on the second line the operator's logo (the owner's
+   own, max 12 px high) or its ICAO code as a small badge, then type · registration · route */
+#ndbList .adsbRow .id .flag { font-size: 11px; margin-right: 5px; letter-spacing: 0; }
+#ndbList .adsbRow .id .cc { display: inline-block; font-size: 8px; line-height: 11px; padding: 0 3px; margin-right: 5px; border: 1px solid currentColor;
+  border-radius: 2px; opacity: .7; letter-spacing: .5px; vertical-align: 1px; }
+#ndbList .adsbRow .id small .op { display: inline-block; padding: 0 3px; border: 1px solid currentColor; border-radius: 2px; font-size: 8.5px;
+  line-height: 10px; letter-spacing: .8px; font-weight: 700; }
+#ndbList .adsbRow .id small .oplogo { height: 11px; max-width: 48px; vertical-align: -2px; object-fit: contain; }
+#ndbList .adsbRow .alt, #ndbList .adsbRow .spd, #ndbList .adsbRow .rng { text-align: right; white-space: nowrap; font-size: 11.5px; }
+#ndbList .adsbRow .alt { min-width: 4.9em; }
+#ndbList .adsbRow .spd { min-width: 3.4em; opacity: .8; }
+#ndbList .adsbRow .rng { min-width: 4.6em; }
+#ndbList .adsbRow .rng .trk { display: block; font-size: 10px; opacity: .7; }
+#ndbList .adsbRow i { font-style: normal; font-size: 8px; margin-left: 3px; vertical-align: 1px; }
+/* ★ The arrow takes the altitude's colour from its span (adsb.ts altColour) — no colours of its own. */
+#ndbList .adsbRow .brg, #ndbList .adsbRow .dim { opacity: .6; }
+#ndbList .adsbRow.nopos { opacity: .55; cursor: default; }
+/* ★★ Emergencies at the top, breathing red (the map's breath: 1.2 s, never a hard blink); military beneath them in the
+ *  map's military blue. Both carry a badge beside the callsign. */
+@keyframes adsbEmBreathe { 0%, 100% { background: rgba(224, 64, 64, 0.08); } 50% { background: rgba(224, 64, 64, 0.30); } }
+#ndbList .adsbRow.em { border-left-color: #e04040; animation: adsbEmBreathe 1.2s ease-in-out infinite; }
+#ndbList .adsbRow.mil { border-left-color: rgb(90, 170, 255); background: rgba(90, 170, 255, 0.07); }
+#ndbList .adsbRow.mil .id b { color: rgb(140, 195, 255); }
+#ndbList .adsbRow .tag { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 8.5px; font-weight: 700;
+  letter-spacing: .8px; line-height: 13px; vertical-align: 1px; }
+#ndbList .adsbRow .tag.em { background: #e04040; color: #fff; }
+#ndbList .adsbRow .tag.mil { background: rgba(90, 170, 255, 0.85); color: #06121f; }
+@media (prefers-reduced-motion: reduce) { #ndbList .adsbRow.em { animation: none; background: rgba(224, 64, 64, 0.22); } }
+#ndbList .adsbEmpty { padding: 10px 9px; opacity: .6; font-size: 11.5px; line-height: 1.5; }
+/* ★ A phone: the title loses its second word and the speed column goes before anything is squeezed to an
+     ellipsis; the message rate goes too (the count is what matters at a glance). */
+@media (max-width: 560px) {
+  /* ★ the bar SCROLLS now (#ndbTopScroll), so the stats stay — only the title's second word goes */
+  #ndbTitle .w { display: none; }
+  /* ★ edges FADE, so a word scrolled half out of view thins away instead of being sliced ("%" alone beside EXIT) */
+  #ndbChips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  #ndbChips::-webkit-scrollbar { display: none; }
+  #ndbTopScroll, #ndbChips { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); padding-left: 6px; padding-right: 14px; }
+  #ndbTop { gap: 6px; }
+  #ndbTop button { padding: 6px 9px; font-size: 12px; }
+  #ndbList .adsbRow { grid-template-columns: minmax(0, 1fr) auto auto; }
+  #ndbList .adsbRow .spd { display: none; }
+  #ndbList { max-height: 222px; max-height: min(6 * 37px, 30vh); }
+}
+
+/* ★★ NDB (V12, 2026-10-27) — the ADS-B view's rules above, copied for #ndbView by id (the same layout, bar, list and fold,
+ *    so the two map modes look and behave alike), plus what is NDB's own: the live list's rows (the CW skimmer's: lowest
+ *    frequency first, the readings streaming in, coloured by confidence — the health pill's four colours), the 3-bar
+ *    meter (ADS-B's .sig), the map toggles and the beacon card. */
+#ndbList .ndbRow { display: grid; grid-template-columns: 4em minmax(3.6em, auto) minmax(0, 1fr) auto auto; gap: 1px 8px; align-items: center;
+  padding: 4px 8px; border-left: 2px solid transparent; border-radius: 4px; cursor: pointer; font-size: 12px; }
+#ndbList .ndbRow:hover, #ndbList .ndbRow:focus-visible { background: var(--btn-active-bg); }
+#ndbList .ndbRow.sel { background: rgba(255, 229, 102, 0.12); border-left-color: rgba(255, 229, 102, 0.7); }
+#ndbList .ndbRow.gone { opacity: 0.5; }
+#ndbList .ndbRow .f { color: var(--freq); font-variant-numeric: tabular-nums; }
+#ndbList .ndbRow .c { letter-spacing: 1px; white-space: nowrap; }
+#ndbList .ndbRow .c.conf { color: #5BE36B; font-weight: 600; } #ndbList .ndbRow .c.near { color: #E8C547; font-weight: 600; }
+#ndbList .ndbRow .c.unl { color: var(--freq); font-weight: 600; } #ndbList .ndbRow .c.cand { font-style: italic; color: var(--text-dim); }
+#ndbList .ndbRow .c.none { color: var(--text-dim); } #ndbList .ndbRow .c.harm { color: #c9a0ff; }
+#ndbList .ndbRow .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+#ndbList .ndbRow .d { color: var(--unit); white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 11px; }
+#ndbList .ndbRow .tx { grid-column: 1 / -1; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+#ndbList .ndbRow .tx bdi { direction: ltr; unicode-bidi: isolate; }
+#ndbView .q-high { color: #5BE36B; } #ndbView .q-medium { color: #E8C547; } #ndbView .q-low { color: #FF8A3D; } #ndbView .q-poor { color: #FF4B4B; }
+#ndbView .dim { color: var(--text-dim); }
+#ndbView .sig { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 10px; }
+#ndbView .sig i { display: block; width: 3px; background: rgba(255, 184, 51, 0.22); border-radius: 1px; }
+#ndbView .sig i:nth-child(1) { height: 40%; } #ndbView .sig i:nth-child(2) { height: 70%; } #ndbView .sig i:nth-child(3) { height: 100%; }
+#ndbView .sig.l1 i.on { background: #e04040; } #ndbView .sig.l2 i.on { background: #e0b020; } #ndbView .sig.l3 i.on { background: #33cc44; }
+#ndbTiles { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 4px; }
+#ndbTools { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 7px; }
+#ndbLive.min #ndbTiles, #ndbLive.min #ndbTools { display: none; }
+#ndbTop button.on { background: rgba(255, 176, 0, 0.85); color: #0b0b0b; }
+/* ★ top LEFT, beside the zoom buttons: the health pill sits under the bar on the right (body.adsbMap), as in ADS-B */
+#ndbCard { position: absolute; top: 10px; left: max(54px, calc(env(safe-area-inset-left, 0px) + 54px)); z-index: 6; width: min(300px, calc(100vw - 70px));
+  box-sizing: border-box; padding: 9px 11px; background: rgba(9, 6, 2, 0.95); border: 1px solid rgba(255, 160, 0, 0.30); border-radius: 8px;
+  font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--amber); box-shadow: 0 6px 24px rgba(0,0,0,0.45); }
+#ndbCard[hidden] { display: none; }
+#ndbCard .t { font-size: 13px; margin-right: 22px; } #ndbCard .t b { letter-spacing: 1px; }
+#ndbCard .t b.conf { color: #5BE36B; } #ndbCard .t b.near { color: #E8C547; } #ndbCard .t b.cand { font-style: italic; color: var(--text-dim); }
+#ndbCard .x { all: unset; position: absolute; top: 6px; right: 9px; cursor: pointer; color: rgba(255, 184, 51, 0.7); padding: 2px 4px; }
+#ndbCard .spark { width: 100%; height: 30px; display: block; margin-top: 4px; }
+#ndbCard .cp { margin-top: 3px; font-size: 12px; word-break: break-all; }
+@media (max-width: 600px) { #ndbList .ndbRow { grid-template-columns: 3.6em minmax(3.2em, auto) minmax(0, 1fr) auto; }
+  #ndbList .ndbRow .d { display: none; } }
+
+
 
 /* ★ The greyed ADS-B entry in the demodulator menu: a tap still answers (with the server's reason). */
 .mModeOpt.dis { color: #777; border-style: dashed; border-color: rgba(255, 255, 255, 0.12); }
@@ -2677,7 +2887,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #cwList .tx bdi { direction: ltr; unicode-bidi: isolate; }
 #cwRows .idle, #cwSpots .idle { color: var(--text-dim); font-size: 11px; padding: 6px; }
 #cwSpotsHead { color: var(--text-dim); font-size: 10px; letter-spacing: 1px; margin: 8px 6px 2px; }
-#cwSpots .cws { display: grid; grid-template-columns: 3.2em 6.2em minmax(4.5em, 1fr) minmax(0, 1.2fr) 4.8em; gap: 8px;
+#cwSpots .cws { display: grid; grid-template-columns: 4.8em 6.2em minmax(4.5em, 1fr) minmax(0, 1.2fr) 4.8em; gap: 8px;
                 font-size: 11px; padding: 3px 6px; cursor: pointer; align-items: baseline; }
 #cwSpots .cws .t { color: var(--unit); font-variant-numeric: tabular-nums; }
 #cwSpots .cws .w { color: var(--unit); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -2688,6 +2898,43 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   #cwList .cwr .c { flex: 1 1 auto; min-width: 0; }
   #cwList .cwr .tx { flex: 1 1 100%; }
   #cwSpots .cws .ct { flex: 1 1 auto; min-width: 0; }
+}
+
+/* ★★ V12 JTTY (jtty.ts): one row per station, lowest frequency first — frequency · call · SNR · confidence · age, then
+   its recent messages coloured by confidence (the CW list's four colours); the spots under them. */
+#jttyList { display: none; margin-top: 6px; }
+#jttyList.on { display: block; }
+#jttyList .jtr { display: grid; grid-template-columns: 6.2em minmax(4.5em, 1fr) 4.2em 4.4em 3.4em; gap: 2px 8px;
+                 align-items: baseline; font-size: 11px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+#jttyList .jtr:hover { background: rgba(255,255,255,0.05); }
+#jttyList .jtr.gone { opacity: 0.5; }
+#jttyList .f { color: var(--freq); font-variant-numeric: tabular-nums; }
+#jttyList .c { color: var(--freq); letter-spacing: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#jttyList .c.none { color: var(--text-dim); letter-spacing: 0; }
+#jttyList .s, #jttyList .a { text-align: right; font-variant-numeric: tabular-nums; color: var(--unit); white-space: nowrap; }
+#jttyList .q { text-align: right; white-space: nowrap; }
+#jttyList .q.high, #jttyList .jtr.q-high .tx { color: #5BE36B; }
+#jttyList .q.medium, #jttyList .jtr.q-medium .tx { color: #E8C547; }
+#jttyList .q.low, #jttyList .jtr.q-low .tx { color: #FF8A3D; }
+#jttyList .q.poor, #jttyList .jtr.q-poor .tx { color: #FF4B4B; }
+#jttyList .q.poor { color: var(--text-dim); }
+/* ★ messages WRAP (unlike CW's one-line tail): a JTTY message is a sentence, read whole */
+#jttyList .tx { grid-column: 1 / -1; font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); font-size: 12px;
+                overflow-wrap: anywhere; }
+#jttyRows .idle, #jttySpots .idle { color: var(--text-dim); font-size: 11px; padding: 6px; }
+#jttySpotsHead { color: var(--text-dim); font-size: 10px; letter-spacing: 1px; margin: 8px 6px 2px; }
+#jttySpots .jts { display: grid; grid-template-columns: 3.2em 6.2em minmax(4.5em, 1fr) 2.6em minmax(0, 1.2fr); gap: 8px;
+                  font-size: 11px; padding: 3px 6px; cursor: pointer; align-items: baseline; }
+#jttySpots .jts .t { color: var(--unit); font-variant-numeric: tabular-nums; }
+#jttySpots .jts .f, #jttySpots .jts .c { color: var(--freq); }
+#jttySpots .jts .h { color: var(--unit); }
+#jttySpots .jts.cq .h { color: #5BE36B; }
+#jttySpots .jts .ct { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container decbox (max-width: 400px) {
+  #jttyList .jtr, #jttySpots .jts { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+  #jttyList .jtr .c { flex: 1 1 auto; min-width: 0; }
+  #jttyList .jtr .tx { flex: 1 1 100%; }
+  #jttySpots .jts .ct { flex: 1 1 auto; min-width: 0; }
 }
 
 /* Menu button rows + settings sub-panels (mirrors the app's menu). */
@@ -2930,7 +3177,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* ★ V12: a MODE column after the time — the mode's own colour and letter, as on the map (src/utils/digiModes.ts). */
 #spotList .sres.spot {
   display: grid;
-  grid-template-columns: 3.2em 3.9em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;
+  grid-template-columns: 4.8em 3.9em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;   /* ★ time HH:MM:SS (was 3.2em) */
   gap: 8px; align-items: baseline; font-size: 11px; padding: 4px 6px;
 }
 #spotList .cty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3678,6 +3925,8 @@ select.btn { padding: 6px 8px; }
     <div id="aprsList"><div id="aprsRows"></div><div class="aprsHead" id="aprsMsgHead" hidden>MESSAGES</div><div id="aprsMsgs"></div><div class="aprsHead">PACKETS</div><div id="aprsLog"></div></div>
     <!-- ★★ DSC: the calls, newest first — the server's line, coloured by distress / urgency / safety / routine (dsc.ts). -->
     <div id="dscList"><div id="dscRows"></div></div>
+    <!-- ★★ JTTY: every JTTY station in the passband (lowest frequency first, coloured by confidence), then the spots (jtty.ts). -->
+    <div id="jttyList"><div id="jttyRows"></div><div id="jttySpotsHead">SPOTS</div><div id="jttySpots"></div></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
          health. The VTS bar hides while this is open — no point showing the same data
          twice, and this is the surface the user deliberately chose. -->
@@ -4075,6 +4324,39 @@ select.btn { padding: 6px 8px; }
         <button type="button" id="adsbLong" class="adsbChip" hidden title="The aircraft followed the furthest — tap to show it on the map"></button>
       </div>
       <div id="adsbList" data-navscroll></div>
+    </div>
+  </div>
+</div>
+
+<!-- ★★ V12 NDB (2026-10-27, Stuart: "NDB should be a map and list view like ADS-B with the beacons positioned on the
+     airports with a 3 bar signal meter and in the list it should show the live readings coming in like the CW Skimmer
+     does"). ADS-B's view, by id (#ndb…, styled from #adsbView's rules): EXIT NDB never scrolls away; the map's toggles
+     in the bar; the live list over the map's corner, folding to a pill; the beacon card top right. ndb.ts NdbView. -->
+<div id="ndbView" data-navscope hidden>
+  <div id="ndbTop">
+    <button type="button" id="ndbExit" title="Leave NDB and give the receiver back as it was">EXIT NDB</button>
+    <div id="ndbTopScroll">
+    <div id="ndbTitle">NDB <span class="w">BEACON MAP</span></div>
+    <div id="ndbCntWrap" title="Beacons identified"><svg width="16" height="16" viewBox="0 0 26 26" aria-hidden="true"><path d="M13,3 L13,23 M8,8 Q13,3 18,8 M5,5 Q13,-3 21,5 M11,23 L15,23" stroke="currentColor" stroke-width="2" fill="none"/></svg><span id="ndbCnt">…</span></div>
+    <span id="ndbStat"></span>
+    <button type="button" id="ndbRings" title="Range rings (nautical miles)">RINGS</button>
+    <button type="button" id="ndbUnheard" title="The published beacons not heard, faint">UNHEARD</button>
+    <button type="button" id="ndbFit" title="Fit the map to the beacons heard (and keep fitting until you move it)">FIT</button>
+    </div>
+  </div>
+  <div id="ndbMain">
+    <div id="ndbMapHost"></div>
+    <div id="ndbNote" hidden></div>
+    <div id="ndbCard" hidden role="dialog" aria-label="Beacon"></div>
+    <div id="ndbLive" data-navbox data-navstart=".ndbRow">
+      <button type="button" id="ndbLiveHead" aria-expanded="true" title="Hide the list"><span id="ndbLiveTtl">BEACONS</span><span id="ndbLiveN"></span><span class="chev" aria-hidden="true"></span></button>
+      <div id="ndbTiles"></div>
+      <div id="ndbTools">
+        <button type="button" id="ndbLogBtn" class="adsbChip" title="Every beacon identified, with its best SNR and when it was heard">HEARD LOG</button>
+        <button type="button" id="ndbFindBtn" class="adsbChip" title="Search every published NDB, nearest first">FIND NDB</button>
+        <button type="button" id="ndbStatsBtn" class="adsbChip" title="Reception stats, with CSV">STATS</button>
+      </div>
+      <div id="ndbList" data-navscroll></div>
     </div>
   </div>
 </div>
@@ -4644,6 +4926,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-dec="aprs" hidden title="APRS — stations, positions, weather and messages: 1200 Bd packet in NFM (VHF), or 300 Bd HF packet in USB/LSB">APRS</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <!-- ★★ V12 DSC: maritime Digital Selective Calling (ITU-R M.493) — decoded on the server; hidden unless it says "dsc". -->
+    <!-- ★★ V12 JTTY: the WSJT-X 3.2 keyboard mode — decoded on the server; hidden unless it says "jtty". -->
+    <button class="btn" data-dec="jtty" hidden title="JTTY — the new WSJT-X keyboard mode: RTTY-style contest exchanges and free text with weak-signal FEC; every JTTY signal in your passband decoded at once">JTTY</button>
     <button class="btn" data-dec="dsc" hidden title="Maritime Digital Selective Calling — distress, urgency, safety and routine calls between ships and coast stations (MF/HF and VHF channel 70)">DSC</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
     <button class="btn" data-dec="sstv">SSTV</button>
@@ -4742,6 +5026,19 @@ select.btn { padding: 6px 8px; }
     <div class="hint" id="dscHint">Tune a DSC frequency in <b>USB</b> with the dial 1.7 kHz below it (2185.8 for
       2187.5 kHz) — or press a channel. Channel 70 (156.525 MHz) is <b>NFM</b>. 8414.5 kHz is the busiest by day,
       2187.5 kHz at night. Each call is shown as it is decoded; a position sent gets <b>MAP</b>.</div>
+  </div>
+
+  <!-- ★★ JTTY (V12, 2026-10-26): the announced calling frequencies (USB dial) — only those this radio reaches are drawn
+       (main.ts initJttyDials). Preliminary: the WSJT-X 3.2 release candidates' list, not band-plan allocations. -->
+  <div class="subPanel" id="jttySettings" hidden>
+    <div class="mrow">
+      <label>BAND</label>
+      <div class="seg" id="jttyDials"></div>
+    </div>
+    <div class="hint" id="jttyHint">Tune <b>USB</b> — 14.090 MHz is the main meeting point — or press a band. Every JTTY
+      signal in your passband is decoded at once, whenever it starts: one row per station, lowest frequency first,
+      coloured by confidence (green high · amber medium · orange low · red poor). Calls heard are <b>SPOTS</b>. Tap a row
+      or a spot to tune to it.</div>
   </div>
 
   <div class="subPanel" id="rttySettings" hidden>
@@ -4884,6 +5181,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-kind="psk">PSK</button>
     <!-- ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card. -->
     <button class="btn" data-kind="ism">ISM</button>
+    <!-- ★★ V12 2026-10-26: NDB — each day's heard log (a card) and its map (a picture). -->
+    <button class="btn" data-kind="ndb">NDB</button>
     <!-- ★★ V12: AIS (ships) and APRS (stations) — each a day's log of messages and a summary card of who was heard. -->
     <button class="btn" data-kind="ais">AIS</button>
     <button class="btn" data-kind="aprs">APRS</button>

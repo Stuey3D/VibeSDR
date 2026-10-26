@@ -21,6 +21,7 @@ import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services
 import { DabAssembler } from '../../../src/services/dabAssemble';
 import { AdsbInfoStore, type AdsbInfo } from '../../../src/services/adsbInfo';
 import { ismSanitise, type IsmReport } from './ism';
+import { ndbSanitise, type NdbReport } from './ndb';
 import { aisSanitise, type AisReport } from './tracks';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
@@ -633,6 +634,11 @@ export interface SpectrumCallbacks {
    *  joining — its arrival MEANS ISM is on, on the band it names. null = the server left ISM (`ism_off`). */
   onIsm?: (r: IsmReport | null) => void;
   onIsmError?: (why: string) => void;
+  /** ★★ NDB (V12): a report (on) or null (`ndb_off`); refusals; Find NDB / stats answers. */
+  onNdb?: (r: NdbReport | null) => void;
+  onNdbError?: (why: string) => void;
+  onNdbFound?: (msg: any) => void;
+  onNdbStats?: (msg: any) => void;
   /** ★ AIS (V12, docs/v12/AIS-APRS.md): the ship list once a second while the receiver is in AIS and at once on joining
    *  — its arrival MEANS AIS is on. null = the server left AIS (`ais_off`). */
   onAis?: (r: AisReport | null) => void;
@@ -1116,6 +1122,27 @@ export class SpectrumClient {
       case 'ism_error':
         this.cb.onIsmError?.(String(msg.why ?? 'ISM is not available on this receiver'));
         return;
+      /* ★★ NDB (V12): the same three messages and ghost guard; Find NDB and the stats answer the asker only. */
+      case 'ndb': {
+        if (Date.now() < this.ndbQuietUntil) return;
+        const r = ndbSanitise(msg);
+        if (!r) return;
+        this.ndbHeld = true;
+        this.cb.onNdb?.(r);
+        return;
+      }
+      case 'ndb_off': {
+        this.ndbHeld = false;
+        const now = Date.now();
+        if (this.ndbQuietUntil > now) this.ndbQuietUntil = Math.min(this.ndbQuietUntil, now + 1500);
+        this.cb.onNdb?.(null);
+        return;
+      }
+      case 'ndb_error':
+        this.cb.onNdbError?.(String(msg.why ?? 'NDB is not available on this receiver').slice(0, 200));
+        return;
+      case 'ndb_found': this.cb.onNdbFound?.(msg); return;
+      case 'ndb_stats': this.cb.onNdbStats?.(msg); return;
       /* ★★ AIS (V12) — the same three messages and the same ghost guard as ISM, and a ship's track on request. */
       case 'ais': {
         if (Date.now() < this.aisQuietUntil) return;
@@ -1811,7 +1838,7 @@ export class SpectrumClient {
       return;
     }
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see dabHeld — the multiplex (the band) is the tuning
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see dabHeld — the multiplex (the band) is the tuning
     const prev = this.frequency;
     this.lastLocalTuneAt = performance.now();   // ★ so a config echo is not mistaken for somebody else
     if (frequency) this.frequency = Math.round(frequency);
@@ -1847,7 +1874,7 @@ export class SpectrumClient {
   }
 
   setMode(mode: SDRMode) {
-    if (this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see adsbHeld — the page leaves ADS-B / ISM / AIS before picking a mode
+    if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see adsbHeld — the page leaves ADS-B / ISM / AIS / NDB before picking a mode
     if (this.abOn && this.abSel === 'B') {   // ★★ V12 VFO B — its own mode, never the room's
       this.mode = mode;
       const bw = MODE_BANDWIDTHS[mode];
@@ -1871,7 +1898,7 @@ export class SpectrumClient {
   setBandwidth(low: number, high: number) {
     // ★ The one door every passband goes through (slider, bookmark, shared link), so the WFM floor
     //   is applied once, here — see WFM_MIN_BW_HZ.
-    if (this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see adsbHeld — the server ignores a passband in ADS-B, ISM and AIS
+    if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see adsbHeld — the server ignores a passband in ADS-B, ISM, AIS and NDB
     [low, high] = clampPassband(this.mode, low, high);
     if (this.abOn && this.abSel === 'B') {   // ★★ V12 VFO B — its own passband
       this.bandwidthLow = low; this.bandwidthHigh = high;
@@ -1944,7 +1971,7 @@ export class SpectrumClient {
 
   /** Set view centre + span. binBandwidth is clamped to sane zoom limits. */
   zoom(frequency: number, binBandwidth: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see dabHeld — a zoom narrows the IF under the mux
     const n = this.cfg.binCount || 4096;
     if (this.icomSpans) {
       if (this.icomFollowLocked) { this.cb.onIcomFollowLocked?.(); return; }
@@ -1978,7 +2005,7 @@ export class SpectrumClient {
    * the thing you're listening to stays put and the span closes in around it.
    */
   zoomBy(factor: number, anchorHz?: number) {
-    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld) return;   // ★ see dabHeld
+    if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;   // ★ see dabHeld
     const bb = this.view.binBandwidth || this.cfg.binBandwidth;
     if (!bb) return;
     const n = this.cfg.binCount || 4096;
@@ -2057,6 +2084,19 @@ export class SpectrumClient {
    *  frequency goes through ism({hz}) (the frequency box). Set by our own entry and by any `ism` report. */
   ismHeld = false;
   private ismQuietUntil = 0;
+  /** ★★ NDB (V12): the receiver is on the LF beacon band. Tuning, mode and passband stay the listener's (inside the
+   *  capture); the view, the rate and the IF filter are the mode's. */
+  ndbHeld = false;
+  private ndbQuietUntil = 0;
+  ndb(on: boolean) {
+    if (this.askBlocked()) return;     // ★★ ask before tuning — NDB moves the whole shared radio
+    if (on) this.tunePacer.cancel();
+    this.ndbQuietUntil = on ? 0 : Date.now() + 5000;
+    this.ndbHeld = on;
+    this._send({ type: 'ndb', on: on ? 1 : 0 });
+  }
+  ndbFind(q: string, limit = 60) { this._send({ type: 'ndb_find', q: String(q).slice(0, 40), limit }); }
+  ndbStats() { this._send({ type: 'ndb_stats' }); }
   /** Enter / change band / step / exact frequency / leave. ★ The server owns the band: what it reports is the truth. */
   ism(on: boolean, o: { band?: string; step?: number; hz?: number } = {}) {
     if (this.askBlocked()) return;     // ★★ ask before tuning — ISM takes the whole shared radio
@@ -2132,7 +2172,7 @@ export class SpectrumClient {
     this.zoom(frequency, this.view.binBandwidth || this.cfg.binBandwidth);
   }
 
-  resetView() { if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld) return; this._send({ type: 'reset' }); }
+  resetView() { if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'reset' }); }
 
   /** Frame decimation: server emits only every Nth frame. NB this saves BANDWIDTH
    *  ONLY — the server still computes every FFT. Use setFftRate() to save power. */
@@ -2177,11 +2217,11 @@ export class SpectrumClient {
   setHwBiasT(on: boolean)  { this._send({ type: 'biasT', on }); }
   setHwAgc(on: boolean)    { this._send({ type: 'agc', on }); }
   setHwPpm(ppm: number)    { this._send({ type: 'ppm', value: Math.round(ppm) }); }
-  setHwSampleRate(r: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
+  setHwSampleRate(r: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'sampleRate', value: Math.round(r) }); }
   /** ★ The tuner's IF filter in Hz; 0 = librtlsdr's automatic choice. RTL only. */
   /** ★ TEF6686-style automatic demodulator bandwidth. FM broadcast only; server-wide. */
   setAutoBw(on: boolean) { this._send({ type: 'autobw', on }); }
-  setTunerBandwidth(hz: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld) return; this._send({ type: 'tunerbw', value: Math.round(hz) }); }
+  setTunerBandwidth(hz: number) { if (this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return; this._send({ type: 'tunerbw', value: Math.round(hz) }); }
   setHwDirectSampling(v: 0 | 1 | 2) { this._send({ type: 'directSampling', value: v }); }
   /** ★ The owner's AUTOMATIC crossover — admin-gated server side, because unlike direct sampling
    *  itself this PERSISTS and outlives whoever set it. Turning it off leaves the tuner wherever it
