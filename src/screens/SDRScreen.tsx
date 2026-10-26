@@ -69,6 +69,7 @@ import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
+import { type DabScanState } from '../services/dabBandScan';
 import { adsbToAircraft, adsbCaptureWarning, adsbGainView, type AdsbCap, type AdsbReport } from '../services/adsbTypes';
 import { DabBlockStepper, DabAskGuard, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../utils/dabQuality';
@@ -2354,6 +2355,10 @@ export default function SDRScreen({ route, navigation }: Props) {
    *     shape of bug the VibeServer/UberSDR split was done to end. */
   const [dabState, setDabState] = useState<DabState | null>(null);
   const [dabError, setDabError] = useState<string | undefined>(undefined);
+  /* ★★ V12 DAB BAND SCAN (M7EIW, 2026-10-26): the server's answer for this socket (hwinfo `dabScan`) and the last
+   *  `dab_scan`. The panel draws SCAN only with dabScanOk — never inferred here (no hardcoded settings vs a server). */
+  const [dabScanOk, setDabScanOk] = useState(false);
+  const [dabScan, setDabScan] = useState<DabScanState | null>(null);
   const [dabOn, setDabOn] = useState(false);            // we have ASKED for DAB (see dabBoxOpen)
   /* ★★★ THE DAB RECEPTION METER (Stuart, 2026-10-06) — what the signal bar shows in DAB: can this multiplex be
    *  HEARD, judged on ~5 s of the report's own counters (utils/dabQuality.ts, shared with the web client). A US
@@ -5899,6 +5904,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       /** ★ DAB, about once a second, with the whole measured state of the multiplex. `null` means
        *  it has ended; `why` is the server's refusal, which is an explanation and not an error —
        *  showing it as one would put a red card over a receiver that is working perfectly. */
+      onDabScanOk: (ok) => { if (!destroyed.current) setDabScanOk(ok); },
+      onDabScan: (st) => {
+        if (destroyed.current) return;
+        // ★ A refusal arrives as a not-running state with `error` — shown in the pane's line, in the server's words.
+        setDabScan(st);
+      },
       onDab: (st, why) => {
         if (destroyed.current) return;
         /* ★★★ A REPORT FROM THE BLOCK WE JUST LEFT IS DROPPED, WHOLE (DabAskGuard, 2026-10-21 — the Pi 2's
@@ -11187,7 +11198,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB, ADS-B and ISM, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz) where the server has it.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. On a VibeServer the same sheet has DAB, ADS-B and ISM, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz) where the server has it. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
@@ -12511,6 +12522,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           tall={dabTall} onTall={onDabTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
           onBookmarks={() => { setFreqModalDab(true); setFreqModalOpen(true); }}
+          scanOk={dabScanOk && !!client.current?.dabScan}
+          scan={dabScan}
+          onScan={(on) => {
+            if (on) setDabScan({ running: true, by: '', done: 0, total: DAB_BLOCKS.length, current: '', added: 0, cancelled: false,
+                                 finished: false, secs: 0, seq: 0, found: [] });
+            client.current?.dabScan?.(on);
+          }}
+          onScanTune={(ch, sid) => { const b = DAB_BLOCKS[ch]; if (b) dabGoTo(b.hz, sid ?? -1); }}
           // ★ Above the VTS bar — the DAB box sat on top of it (Stuart, 2026-09-15 07:06).
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           /* ★ The RADIO's address, not the door's — the carousel and the kept logo files belong to

@@ -271,6 +271,8 @@ export interface SDRBackend {
   dab?(on: boolean, channel?: number, sid?: number): void;
   /** Switch service inside the tuned multiplex — no retune, no re-acquire. */
   dabService?(sid: number): void;
+  /** ★★ V12: start / stop a DAB band scan (VibeServer only; who may is the server's call — hwinfo `dabScan`). */
+  dabScan?(on: boolean): void;
   /** ★ The DAB Signal pane is open — scopes (constellation, impulse response) only then (dab=2, dabAssemble.ts). */
   dabScopes?(on: boolean): void;
   /** ★ Raw IQ out for this session (VibeServer). */

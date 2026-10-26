@@ -2728,6 +2728,8 @@ export abstract class VibeServerWsClient {
         this.icom = parseIcomRadio(msg.radio);
         this.callbacks.onRadioCaps?.(msg.radio as RadioCaps);
       }
+      // ★★ V12: may this listener scan Band III for DAB? Absent (an older server, a shared radio, UberSDR) = no SCAN key.
+      this.callbacks.onDabScanOk?.(msg.dabScan === true);
       if (typeof msg.adminSet === 'boolean') {
         this.adminSet = msg.adminSet;
         this.adminOkNow = msg.adminOk === true;

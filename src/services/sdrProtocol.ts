@@ -389,6 +389,10 @@ export interface SDRCallbacks {
    *  multiplex (see DabState — every field is MEASURED, nothing inferred); null means DAB has
    *  ended, and `err` carries the server's refusal when it could not start. */
   onDab?:       (s: DabState | null, err?: string) => void;
+  /** ★★ V12 DAB BAND SCAN, VIBESERVER-ONLY: the scan's state as the server publishes it (`dab_scan`, parsed by
+   *  dabBandScan.ts), and hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
+  onDabScan?:   (s: import('./dabBandScan').DabScanState) => void;
+  onDabScanOk?: (ok: boolean) => void;
   /** ★ V12 ADS-B, VIBESERVER-ONLY like onDab: a report about once a second while the receiver is in
    *  the mode (its arrival MEANS it is on — open the box); null = it ended; `err` = the refusal. */
   onAdsb?:      (r: AdsbReport | null, err?: string) => void;
