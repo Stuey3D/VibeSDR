@@ -955,6 +955,34 @@ bool Ft8SlotDecoder::apDecode(const float* L, const Ft8SlotOptions& o, ftx_messa
     static const bool dbg = std::getenv("FTX_APDBG") != nullptr;
     for (int k = 0; k < nb; ++k) {
         const FtxApBook::Hyp h = FtxApBook::make(X, best[k].kind, best[k].a, best[k].b, best[k].t);
+        if (h.kind == 5) {
+            /* ★★ A SIGN-OFF IS A WHOLE CODEWORD (2026-10-26). "X Y RR73" fixes all 77 message bits, so its CRC and its 83
+             *  parity bits are fixed too: nothing is left to decode, only to DETECT. The codeword is built and held
+             *  against the received bits — the 97 not assumed must agree all but kApFullMaxFree times (a wrong codeword
+             *  disagrees in ~48: P(≤ 20) ≈ 1e-8 per trial), and the whole correlation must be strong. On the busy
+             *  40 m hour this found more sign-offs than BP + OSD with the bits clamped, at a fraction of the cost. */
+            uint8_t p10[10] = {}, a91[FTX_LDPC_K_BYTES] = {};
+            for (int i = 0; i < 77; ++i) if ((h.val[i >> 6] >> (i & 63)) & 1) p10[i / 8] |= (uint8_t)(0x80u >> (i % 8));
+            ftx_add_crc(p10, a91);
+            Bits174 cw{{0, 0, 0}};
+            const Bits174* g = generatorRows();
+            for (int b = 0; b < FTX_LDPC_K; ++b) if ((a91[b / 8] >> (7 - b % 8)) & 1) { cw.w[0] ^= g[b].w[0]; cw.w[1] ^= g[b].w[1]; cw.w[2] ^= g[b].w[2]; }
+            int fe = 0; double sc = 0, q = 0;
+            for (int j = 0; j < FTX_LDPC_N; ++j) { const bool bj = getBit(cw, j); if (j >= 77) fe += (L[j] > 0) != bj; sc += bj ? L[j] : -L[j]; q += (double)L[j] * L[j]; }
+            const double zfull = q > 0 ? sc / std::sqrt(q) : 0;
+            ftx_message_t m;
+            a91ToMessage(a91, m);
+            int fe2 = -1, kk = 5;
+            const bool okc = fe <= kApFullMaxFree && zfull >= kApFullMinZ && apCheck(L, h, cw, m, kApFullMaxFree, &fe2, &kk);
+            if (dbg) {
+                char t[64] = {}; ftx_message_offsets_t of; ftx_message_t mm = m;
+                if (ftx_message_decode(&mm, nullptr, t, &of) != FTX_MESSAGE_RC_OK) std::strcpy(t, "?");
+                std::printf("AP kind 5 z %.2f direct freeErr %d/97 %s : %s | zfull %.2f rank %d\n", best[k].z, fe, okc ? "ACCEPT" : "reject", t, zfull, k);
+            }
+            if (!okc) continue;
+            msg = m; kind = 5;
+            return true;
+        }
         float Lc[FTX_LDPC_N];
         std::memcpy(Lc, L, sizeof Lc);
         for (int w = 0; w < 2; ++w)
@@ -967,7 +995,7 @@ bool Ft8SlotDecoder::apDecode(const float* L, const Ft8SlotOptions& o, ftx_messa
         if (err == 0 && plainCrcOk(plain, a91)) {
             got = true;
             for (int j = 0; j < FTX_LDPC_N; ++j) if (plain[j]) setBit(cw, j);
-        } else if (o.osdMaxErrors > 0 && ft8Osd(Lc, o.osdMaxErrors, o.osdPairSpan, a91) >= 0) {
+        } else if (o.osdMaxErrors > 0 && best[k].z >= kApOsdMinZ && ft8Osd(Lc, o.osdMaxErrors, o.apOsdPairSpan >= 0 ? o.apOsdPairSpan : o.osdPairSpan, a91) >= 0) {
             got = viaO = true;
             const Bits174* g = generatorRows();
             for (int b = 0; b < FTX_LDPC_K; ++b)
@@ -983,7 +1011,7 @@ bool Ft8SlotDecoder::apDecode(const float* L, const Ft8SlotOptions& o, ftx_messa
         if (dbg) {
             char t[64] = {}; ftx_message_offsets_t of; ftx_message_t mm = m;
             if (ftx_message_decode(&mm, nullptr, t, &of) != FTX_MESSAGE_RC_OK) std::strcpy(t, "?");
-            std::printf("AP kind %d z %.2f %s freeErr %d/%d %s : %s | bpErr %d set %d rank %d\n", h.kind, best[k].z, viaO ? "osd" : "bp", fe, nfree, okc ? "ACCEPT" : "reject", t, dbgErr_, dbgSet_, k);
+            std::printf("AP kind %d z %.2f %s freeErr %d/%d %s : %s | bpErr %d set %d rank %d apBp %d\n", h.kind, best[k].z, viaO ? "osd" : "bp", fe, nfree, okc ? "ACCEPT" : "reject", t, dbgErr_, dbgSet_, k, err);
         }
         if (!okc) continue;
         msg = m; kind = kk;
@@ -996,6 +1024,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
     st = Ft8SlotStats{};
     const size_t first = out.size();
     decodedStart_.clear();
+    prevKeys_.clear(); curKeys_.clear();
     if (o.ap) o.ap->beginSlot();
     struct Sub { uint8_t tones[FT4_NN > FT8_NN ? FT4_NN : FT8_NN]; double start; double f0; };
     std::vector<Sub> subs;
@@ -1011,8 +1040,19 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
         double* sm = st.stageMs[pass - 1];
         auto lap = [&, t = tp]() mutable { const auto now = std::chrono::steady_clock::now();
                                           const double d = std::chrono::duration<double, std::milli>(now - t).count(); t = now; return d; };
+        /* ★★ ONLY WHERE THE AUDIO CHANGED (2026-10-26). A pass after the first sees the audio with the last pass's
+         *  decodes taken out — and nowhere else changed. A candidate the last pass already tried, at the same time and
+         *  frequency, whose band touches no subtracted signal, would be measured from the same samples and fail the
+         *  same way; it is skipped. New candidates (the search's list no longer full of strong stations) and those
+         *  beside a subtraction are tried. On busy bands this was most of passes 2 and 3. */
+        changed_.clear();
+        const float baud = 1.0f / mon_.symbol_period, ntones = ft4_ ? 4.0f : 8.0f;
+        for (const Sub& s : subs) changed_.push_back({ (float)s.f0 - 2.0f * baud, (float)s.f0 + (ntones + 1.0f) * baud });
         for (const Sub& s : subs) subtract(audio, n, s.tones, s.start, s.f0);
         subs.clear();
+        prevKeys_.swap(curKeys_);
+        std::sort(prevKeys_.begin(), prevKeys_.end());
+        curKeys_.clear();
         sm[Ft8SlotStats::kSubtract] += lap();
         buildWaterfall(audio, n);
         if (fine_) fine_->invalidate();                         // ★ the audio changed (a new slot, or subtracted)
@@ -1026,6 +1066,14 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
         for (int i = 0; i < nc; ++i) {
             if (o.abort && o.abort->load(std::memory_order_relaxed)) { st.passes = pass; return; }
             const ftx_candidate_t& c = cands_[(size_t)i];
+            const uint32_t key = ((uint32_t)(c.time_offset + 1024) << 14) ^ ((uint32_t)c.time_sub << 12) ^ ((uint32_t)c.freq_offset << 2) ^ c.freq_sub;
+            if (o.onlyChanged && pass > 1 && std::binary_search(prevKeys_.begin(), prevKeys_.end(), key)) {
+                const float lo = (mon_.min_bin + c.freq_offset) / mon_.symbol_period - 1.5f * baud, hi = lo + (ntones + 2.0f) * baud;
+                bool touched = false;
+                for (const auto& r : changed_) touched |= hi > r.first && lo < r.second;
+                if (!touched) { curKeys_.push_back(key); ++st.skipped[pass - 1]; continue; }
+            }
+            curKeys_.push_back(key);
             ftx_message_t msg; ftx_decode_status_t ds;
             bool viaOsd = false;
             const bool bpOk = ftx_decode_candidate_ex(wf, &c, o.ldpcIters, o.bpStall, &msg, &ds);

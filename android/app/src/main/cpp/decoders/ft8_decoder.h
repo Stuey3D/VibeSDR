@@ -183,6 +183,8 @@ struct Ft8SlotOptions {
     int subtractMinSnr = -99;
     /** The second look's OSD also tries pairs of flips among this many least reliable bits (0 = OSD-1). */
     int osdPairSpan   = 0;
+    /** Passes 2-3 skip a candidate the previous pass tried whose band no subtraction touched (it would fail the same). */
+    bool onlyChanged  = false;
     /** Asked before pass 2 and 3 with the ms this decode has taken so far and the ms the last pass took.
      *  Empty = always yes (the bench). */
     std::function<bool(int nextPass, double elapsedMs, double lastPassMs)> mayRunPass;
@@ -191,6 +193,7 @@ struct Ft8SlotOptions {
      *  be on; AP is tried only on its near misses. */
     FtxApBook* ap = nullptr;
     int apMaxCands = 0;              ///< hypotheses decoded per candidate after screening (0 = the default, 3)
+    int apOsdPairSpan = -1;          ///< OSD pair span for AP trials (-1 = osdPairSpan)
     int apMaxBpErr = 0;              ///< a near miss for AP: BP within this many checks (0 = the default; tests raise it)
 };
 struct Ft8SlotStats {
@@ -206,6 +209,7 @@ struct Ft8SlotStats {
     int    fineTried[3] = {0, 0, 0};    ///< of them, how many had the second look
     int    finePassed[3] = {0, 0, 0};   ///< … and passed its sync test
     int    fineDecodes[3] = {0, 0, 0};  ///< … and decoded
+    int    skipped[3] = {0, 0, 0};      ///< candidates passed over: tried last pass, nothing changed near them
     int    apTried[3] = {0, 0, 0};      ///< near misses that went to a-priori decoding
     int    apDecodes[3] = {0, 0, 0};    ///< … and decoded
 };
@@ -266,8 +270,14 @@ private:
     static constexpr int kApMaxCands = 3;           // hypotheses decoded per near miss, after screening
     static constexpr float kApMinZ = 2.0f;          // a hypothesis's screening z-score must reach this
     static constexpr int kApBpIters = 25;
+    static constexpr float kApOsdMinZ = 4.0f;       // OSD for an AP trial only at this screening z (real 40 m: 88 % of
+                                                    // its AP-OSD decodes, 36 % of its AP-OSD calls)
+    static constexpr int kApFullMaxFree = 20;       // a sign-off: at most this many of its 97 other bits may disagree
+    static constexpr float kApFullMinZ = 5.0f;      // … and its whole-codeword correlation at least this
     static constexpr double kApMaxFreeErrFrac = 0.30;   // hard disagreements allowed on the bits not assumed          // BP stops after this many iterations without a new best
     std::vector<double> decodedStart_;     // this slot's decodes' start samples, by result index (the near test)
+    std::vector<uint32_t> prevKeys_, curKeys_;           // candidates tried last pass / this pass (onlyChanged)
+    std::vector<std::pair<float, float>> changed_;       // Hz bands subtracted before this pass
     static constexpr int kFineMinSyncFt8 = 10;    // of 21 Costas symbols (noise: 21/8 ≈ 2.6)
     static constexpr int kFineMinSyncFt4 = 10;   // of 16 (noise: 4)        // the second look, made on first use (its window FFT: 1.5 MB FT8)
 };

@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
         else if (a == "--apseed") apSeed = std::atoi(nxt().c_str()) != 0;
         else if (a == "--aptable") apTable = std::atoi(nxt().c_str());
         else if (a == "--apnear") o.apMaxBpErr = std::atoi(nxt().c_str());
+        else if (a == "--changed") o.onlyChanged = std::atoi(nxt().c_str()) != 0;
         else if (a == "--finesync") o.fineMinSync = std::atoi(nxt().c_str());
         else if (a == "-v") verbose = true;
         else { std::fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }

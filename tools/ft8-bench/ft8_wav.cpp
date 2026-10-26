@@ -89,6 +89,9 @@ int main(int argc, char** argv) {
         else if (a == "--submin") o.subtractMinSnr = (int)nxt();
         else if (a == "--osd2") o.osdPairSpan = (int)nxt();
         else if (a == "--ap") useAp = (int)nxt() != 0;
+        else if (a == "--changed") o.onlyChanged = (int)nxt() != 0;
+        else if (a == "--aposd2") o.apOsdPairSpan = (int)nxt();
+        else if (a == "--apk") o.apMaxCands = (int)nxt();
         else if (a == "--finesync") o.fineMinSync = (int)nxt();
         else if (a == "--lead") lead = nxt();
         else if (a == "--len") len = nxt();
