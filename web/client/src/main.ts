@@ -14,6 +14,7 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand } from './ism';
+import { NdbBox, type NdbReport } from './ndb';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -762,6 +763,7 @@ async function loadAudioPolicy(httpBase: string) {
   dialModeNow = 'exclusive';   // ★ a new receiver's dial is unknown until it says
   adsbCap = null;              // ★ an older server (or no answer) draws no ADS-B control
   ismCap = null;               // ★ …nor an ISM one
+  ndbCap = null;               // ★ …nor an NDB one
   cwCap = false;               // ★ …nor a CW decoder
   landingStepDone = false;
   firstConfigDone = false;
@@ -797,6 +799,7 @@ async function loadAudioPolicy(httpBase: string) {
     dabCapable = j.dab === true;
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
+    ndbReadCap(j);               // ★ NDB (V12): the same three states
     cwCap = j.cw === true;       // ★ CW (V12): this server's own decoder and skimmer
     { const b = document.querySelector('#decodersPanel [data-dec="cw"]') as HTMLElement | null;
       if (b) b.hidden = !cwCap || blockedModes.has('cw'); }
@@ -1635,6 +1638,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAdsb: (r) => onAdsbReport(r),
     onIsm: (r) => onIsmReport(r),
     onIsmError: (why: string) => { showPill(why, 7000); if (ismOn && !ismReport) ismUiOff(); },
+    onNdb: (r) => onNdbReport(r),
+    onNdbError: (why: string) => { showPill(why, 7000); if (ndbOn && !ndbReport) ndbUiOff(); },
+    onNdbFound: (m) => ndbBox?.found_(m),
+    onNdbStats: (m) => ndbBox?.stats_(m),
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
     onDab: (d: DabState) => {
       if (!d) {
@@ -8010,6 +8017,74 @@ function ismSetMode(on: boolean) {
     ismUiOff();
   }
 }
+/* ★★★ NDB (V12, docs/v12/NDB-SKIMMER.md) — the LF beacon skimmer. A LISTENING whole-radio mode: the server puts the
+ *  capture on the beacon band and decodes every beacon in it; the listener keeps the VFO, mode and audio inside it (a row
+ *  tapped tunes to that beacon). The view, the zoom and the IF filter are the mode's (greyed, saying why). Offered only
+ *  where vibeserver.json says so: `ndb` true / false (greyed, `ndbWhy` on a tap) / absent (no LF on this radio). */
+let ndbCap: { ok: boolean; why: string } | null = null;
+let ndbOn = false;
+let ndbReport: NdbReport | null = null;
+let ndbBox: NdbBox | null = null;
+function ndbReadCap(j: any) {
+  if (j?.ndb === true || j?.ndb === false) {
+    const why = typeof j.ndbWhy === 'string' ? j.ndbWhy.trim().slice(0, 200) : '';
+    ndbCap = { ok: j.ndb === true, why: j.ndb === true ? '' : (why || 'NDB is not available on this receiver') };
+  } else ndbCap = null;
+}
+function ndbLockControls(on: boolean) {
+  const why = 'Held in NDB — the view is the whole beacon band';
+  for (const id of ['mZoomIn', 'mZoomOut', 'mPanelFit']) {
+    const el = document.getElementById(id) as HTMLButtonElement | null;
+    if (!el) continue;
+    el.disabled = on;
+    if (on) { if (el.dataset.lockTitle === undefined) el.dataset.lockTitle = el.title; el.title = why; }
+    else if (el.dataset.lockTitle !== undefined) { el.title = el.dataset.lockTitle; delete el.dataset.lockTitle; }
+  }
+  const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
+  if (bw) {
+    bw.disabled = on;
+    if (on) { if (bw.dataset.lockTitle === undefined) bw.dataset.lockTitle = bw.title; bw.title = 'Set by NDB — the filter is the whole capture while beacons are decoded'; }
+    else if (bw.dataset.lockTitle !== undefined) { bw.title = bw.dataset.lockTitle; delete bw.dataset.lockTitle; }
+  }
+}
+function ndbUiOn() {
+  ndbOn = true;
+  if (spec) spec.ndbHeld = true;
+  if (!ndbBox) ndbBox = new NdbBox({
+    onExit: () => ndbSetMode(false),
+    onTune: (hz) => { if (spec && hz > 0) spec.tune(hz); },
+    find: (q) => spec?.ndbFind(q, q ? 120 : 300),
+    stats: () => spec?.ndbStats(),
+    myPos: () => myPos(),
+  });
+  ndbBox.show();
+  ndbLockControls(true);
+}
+function ndbUiOff() {
+  ndbOn = false;
+  ndbReport = null;
+  if (spec) spec.ndbHeld = false;
+  ndbBox?.hide();
+  ndbLockControls(false);
+}
+function ndbSetMode(on: boolean) {
+  if (on) {
+    if (ndbCap && !ndbCap.ok) { showPill(ndbCap.why, 7000); return; }
+    if (spec?.isTuneLocked()) { spec.ndb(true); return; }   // ★ ask before tuning: spec says why
+    ndbUiOn();
+    spec?.ndb(true);
+  } else {
+    spec?.ndb(false);
+    ndbUiOff();
+  }
+}
+/** ★ A report (on) or the server's `ndb_off` (null). */
+function onNdbReport(r: NdbReport | null) {
+  if (!r) { if (ndbOn) ndbUiOff(); return; }
+  ndbReport = r;
+  if (!ndbOn) ndbUiOn();   // ★ somebody else put the receiver in NDB (or we joined it)
+  ndbBox?.update(r);
+}
 /** ★ A report (on) or the server's `ism_off` (null). */
 function onIsmReport(r: IsmReport | null) {
   if (!r) { if (ismOn) { audio?.holdHealing(6000); ismUiOff(); } return; }
@@ -8363,7 +8438,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? `NDB · ${(spec?.mode ?? '').toUpperCase()}` : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -8410,13 +8485,16 @@ function buildControls() {
     // ★ Null between multiplexes (a retune sets dabState = null): the card then says it is searching.
     dabQuality:    () => (dabOn && dabState ? dabQuality : null),
     /* ★ DAB from ADS-B: the server leaves ADS-B itself (it sends adsb_off first), so only our UI unwinds here. */
-    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); dabSetMode(!dabOn); },
+    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); },
     adsbCap:       () => adsbCap,
     adsbOn:        () => adsbOn,
-    toggleAdsb:    () => { if (ismOn && !adsbOn) ismUiOff(); adsbSetMode(!adsbOn); },
+    toggleAdsb:    () => { if (ismOn && !adsbOn) ismUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); },
     ismCap:        () => ismCap,
     ismOn:         () => ismOn,
-    toggleIsm:     () => { if (adsbOn && !ismOn) adsbUiOff(); ismSetMode(!ismOn); },
+    toggleIsm:     () => { if (adsbOn && !ismOn) adsbUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); },
+    ndbCap:        () => ndbCap,
+    ndbOn:         () => ndbOn,
+    toggleNdb:     () => { if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); ndbSetMode(!ndbOn); },
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();

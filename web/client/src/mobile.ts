@@ -86,6 +86,10 @@ export type MobileDeps = {
   ismCap: () => { ok: boolean; why: string } | null;
   ismOn: () => boolean;
   toggleIsm: () => void;
+  /** ★ NDB (V12): null = this radio reaches no LF (no control at all); ok false = greyed with the reason. */
+  ndbCap: () => { ok: boolean; why: string } | null;
+  ndbOn: () => boolean;
+  toggleNdb: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
   openChat: () => void;
@@ -346,6 +350,18 @@ export function initMobileControls(deps: MobileDeps) {
       if (!ic.ok) ismRow.setAttribute('aria-disabled', 'true');
       ismRow.onclick = () => { deps.toggleIsm(); close(); refresh(); };
       grid.appendChild(ismRow);
+    }
+    /* ★★ NDB beside them — the LF beacon skimmer. Absent where the radio reaches no LF (an RTL without direct sampling,
+     *  a HackRF, an Airspy R2): a control that cannot work on this radio is not drawn (AGENTS.md). */
+    const nc = deps.ndbCap();
+    if (nc) {
+      const ndbRow = document.createElement('button');
+      ndbRow.className = 'mModeOpt' + (deps.ndbOn() ? ' on' : '') + (nc.ok ? '' : ' dis');
+      ndbRow.textContent = 'NDB';
+      ndbRow.title = nc.ok ? 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map' : `NDB is not available: ${nc.why}`;
+      if (!nc.ok) ndbRow.setAttribute('aria-disabled', 'true');
+      ndbRow.onclick = () => { deps.toggleNdb(); close(); refresh(); };
+      grid.appendChild(ndbRow);
     }
 
     const sole = deps.soleDecoder();

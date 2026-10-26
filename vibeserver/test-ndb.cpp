@@ -31,7 +31,46 @@ static std::vector<std::string> runOne(const Beacon& b, double secs, uint64_t se
     return got;
 }
 
-int main() {
+/** ★ For scripts/test-server-ndb.mjs: `seconds` of unsigned 8-bit IQ at `rate` centred on `centre`, holding WOD on
+ *  352.0 kHz and CAM on 333.0 kHz (400 Hz A2A, one ident a clip — the fake rtl_tcp loops it, so the clip's length is the
+ *  ident's period). Streamed: a 2.4 MS/s clip never sits in RAM as floats. */
+static int writeClip(const char* path, double centre, double rate, double seconds) {
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 1;
+    struct B { const char* id; double hz, amp; std::vector<std::pair<double, double>> marks; double ph = 0, tph = 0; };
+    std::vector<B> bs = { { "WOD", 352000, 0.25, {} }, { "CAM", 333000, 0.18, {} } };
+    for (size_t k = 0; k < bs.size(); ++k) {
+        double t = 1.0 + 0.7 * k; const double u = 1.2 / 7;
+        for (const char* c = bs[k].id; *c; ++c) {
+            const std::string code = cw::morseCode(std::string(1, *c));
+            for (size_t e = 0; e < code.size(); ++e) { const double len = (code[e] == '-' ? 3 : 1) * u; bs[k].marks.push_back({ t, t + len }); t += len + u; }
+            t += 2 * u;
+        }
+    }
+    Rng rng(77);
+    const size_t n = (size_t)(seconds * rate);
+    std::vector<uint8_t> buf; buf.reserve(1 << 16);
+    for (size_t i = 0; i < n; ++i) {
+        const double tt = (double)i / rate;
+        double re = 0.02 * rng.gauss(), im = 0.02 * rng.gauss();
+        for (auto& b : bs) {
+            bool on = false; for (auto& m : b.marks) if (tt >= m.first && tt < m.second) { on = true; break; }
+            const double a = b.amp * (1.0 + (on ? 0.95 * std::cos(b.tph) : 0.0));
+            re += a * std::cos(b.ph); im += a * std::sin(b.ph);
+            b.ph += 2 * M_PI * (b.hz - centre) / rate; if (b.ph > M_PI) b.ph -= 2 * M_PI; else if (b.ph < -M_PI) b.ph += 2 * M_PI;
+            b.tph += 2 * M_PI * 400.0 / rate; if (b.tph > 2 * M_PI) b.tph -= 2 * M_PI;
+        }
+        buf.push_back((uint8_t)std::max(0.0, std::min(255.0, 127.5 + re * 127.0)));
+        buf.push_back((uint8_t)std::max(0.0, std::min(255.0, 127.5 + im * 127.0)));
+        if (buf.size() >= (1 << 16)) { std::fwrite(buf.data(), 1, buf.size(), f); buf.clear(); }
+    }
+    std::fwrite(buf.data(), 1, buf.size(), f);
+    std::fclose(f);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc > 4 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]), argc > 5 ? std::atof(argv[5]) : 10);
     std::printf("NDB skimmer (%s kernels)\n", ndb::Skimmer::simdName());
 
     std::printf("\n── the vote ──\n");

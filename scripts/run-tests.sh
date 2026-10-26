@@ -997,6 +997,18 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     test-ism --write-clip — the capability, the device list and its readable lines, the privacy rule ON THE WIRE, band
 #     steps (clamped), an exact frequency, EXIT giving the dial back; then the web client in headless Edge (--mute-audio).
 #     Needs VIBESERVER_BIN (exit 3 = not run); the web half also needs Edge.
+# ★★ V12 NDB mode end to end (2026-10-26): an RTL without direct sampling offers no NDB; with automatic direct sampling
+#     the capability, entering, the radio on the beacon band, WOD and CAM identified and named, a tap moving only the VFO,
+#     a tune outside refused, Find NDB, the stats, and the receiver given back exactly (test-server-ndb). ~1 min.
+printf '\n\033[1m── NDB mode (end to end) ──\033[0m\n'
+if [ -x "$OUT/test-ndb" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-ndb" --write-clip "$OUT/ndb-clip.u8" 362750 2400000 10 >/dev/null
+  VIBE_NDB_CLIP="$OUT/ndb-clip.u8" node scripts/test-server-ndb.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/ndb-clip.u8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-ndb build'; notrun=$((notrun+1))
+fi
 printf '\n\033[1m── ISM mode (end to end: server, then the web client) ──\033[0m\n'
 if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   "$OUT/test-ism" --write-clip "$OUT/ism-clip.u8" 434130000 2400000 >/dev/null
