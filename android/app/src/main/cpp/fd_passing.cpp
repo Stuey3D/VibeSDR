@@ -2,6 +2,128 @@
 
 #include <cstring>
 #include <cerrno>
+
+#ifdef _WIN32
+/* ★★★ WINDOWS: THE SAME HAND-OFF WITHOUT SCM_RIGHTS (docs/WINDOWS-PORT-PLAN.md §4.2).
+ *  Windows has AF_UNIX (10 1803+) but cannot carry a descriptor over it. What it has instead is
+ *  WSADuplicateSocketW: the OWNER of a socket fills a WSAPROTOCOL_INFOW for one named target process,
+ *  and that process — and only it — turns the blob back into a live socket with WSASocketW. The TCP
+ *  connection, its unread bytes (the request the front door MSG_PEEK'd) and its state carry over, as
+ *  with SCM_RIGHTS.
+ *  ★★ So the conversation gains one step: the RECEIVER speaks first, with its process id, because the
+ *     sender cannot duplicate for a process it cannot name.
+ *        receiver → sender   4 bytes  its pid (little-endian DWORD)
+ *        sender   → receiver sizeof(WSAPROTOCOL_INFOW) bytes
+ *        receiver → sender   'K' once the socket exists — only then may the sender drop its copy
+ *  ★ The same three functions and the same meaning, so the front door and the radios call them
+ *    unchanged. The socket file lives where the POSIX one does; a stale one is removed before bind. */
+#include <afunix.h>
+
+namespace vibe {
+namespace {
+
+bool fillAddr(sockaddr_un& a, const std::string& path, std::string& err) {
+    if (path.size() >= sizeof(a.sun_path)) { err = "socket path too long: " + path; return false; }
+    memset(&a, 0, sizeof a);
+    a.sun_family = AF_UNIX;
+    memcpy(a.sun_path, path.c_str(), path.size());
+    return true;
+}
+std::string wsaErr(const char* what) {
+    return std::string(what) + ": Winsock error " + std::to_string(WSAGetLastError());
+}
+/** Exactly n bytes, or false — bounded by `ms` per wait so a dead peer cannot hang the front door. */
+bool readAll(SOCKET s, char* p, int n, int ms) {
+    while (n > 0) {
+        WSAPOLLFD pf{}; pf.fd = s; pf.events = POLLRDNORM;
+        if (WSAPoll(&pf, 1, ms) <= 0) return false;
+        const int r = ::recv(s, p, n, 0);
+        if (r <= 0) return false;
+        p += r; n -= r;
+    }
+    return true;
+}
+bool writeAll(SOCKET s, const char* p, int n) {
+    while (n > 0) {
+        const int r = ::send(s, p, n, 0);
+        if (r <= 0) return false;
+        p += r; n -= r;
+    }
+    return true;
+}
+
+}  // namespace
+
+bool sendFdTo(const std::string& path, int fd, std::string& err) {
+    sockaddr_un addr;
+    if (!fillAddr(addr, path, err)) return false;
+    SOCKET s = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (s == INVALID_SOCKET) { err = wsaErr("socket(AF_UNIX)"); return false; }
+    if (::connect(s, (sockaddr*)&addr, sizeof addr) != 0) {
+        err = wsaErr(("connect " + path).c_str()); closesocket(s); return false;
+    }
+    bool ok = false;
+    unsigned char pidb[4];
+    if (!readAll(s, (char*)pidb, 4, 2000)) {
+        err = "the radio did not say who it is (no pid from " + path + ")";
+    } else {
+        const DWORD pid = (DWORD)pidb[0] | ((DWORD)pidb[1] << 8) | ((DWORD)pidb[2] << 16) | ((DWORD)pidb[3] << 24);
+        WSAPROTOCOL_INFOW info;
+        if (WSADuplicateSocketW((SOCKET)(intptr_t)fd, pid, &info) != 0) {
+            err = wsaErr("WSADuplicateSocketW");
+        } else if (!writeAll(s, (const char*)&info, (int)sizeof info)) {
+            err = wsaErr("send(protocol info)");
+        } else {
+            // ★★★ WAIT FOR THE FAR SIDE TO TAKE IT BEFORE CLOSING — as on POSIX, and more so here: the
+            //     duplicate exists only once the receiver has called WSASocketW.
+            char ack = 0;
+            ok = readAll(s, &ack, 1, 2000) && ack == 'K';
+            if (!ok) err = "the radio did not confirm it took the connection";
+        }
+    }
+    closesocket(s);
+    return ok;
+}
+
+int fdListen(const std::string& path, std::string& err) {
+    sockaddr_un addr;
+    if (!fillAddr(addr, path, err)) return -1;
+    ::DeleteFileA(path.c_str());   // ★ a killed process leaves its socket file behind
+    SOCKET s = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (s == INVALID_SOCKET) { err = wsaErr("socket(AF_UNIX)"); return -1; }
+    if (::bind(s, (sockaddr*)&addr, sizeof addr) != 0) {
+        err = wsaErr(("bind " + path).c_str()); closesocket(s); return -1;
+    }
+    if (::listen(s, 16) != 0) { err = wsaErr("listen"); closesocket(s); return -1; }
+    return (int)s;
+}
+
+int fdAccept(int listenFd, int timeoutMs) {
+    WSAPOLLFD p{}; p.fd = (SOCKET)(intptr_t)listenFd; p.events = POLLRDNORM;
+    if (WSAPoll(&p, 1, timeoutMs) <= 0) return -1;
+    SOCKET c = ::accept((SOCKET)(intptr_t)listenFd, nullptr, nullptr);
+    if (c == INVALID_SOCKET) return -1;
+    int got = -1;
+    const DWORD pid = GetCurrentProcessId();
+    const unsigned char pidb[4] = { (unsigned char)pid, (unsigned char)(pid >> 8),
+                                    (unsigned char)(pid >> 16), (unsigned char)(pid >> 24) };
+    WSAPROTOCOL_INFOW info;
+    if (writeAll(c, (const char*)pidb, 4) && readAll(c, (char*)&info, (int)sizeof info, 2000)) {
+        SOCKET ns = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0,
+                               WSA_FLAG_OVERLAPPED);
+        if (ns != INVALID_SOCKET) {
+            got = (int)ns;
+            const char ack = 'K';
+            (void)writeAll(c, &ack, 1);
+        }
+    }
+    closesocket(c);
+    return got;
+}
+
+}  // namespace vibe
+
+#else  // ── POSIX: SCM_RIGHTS ───────────────────────────────────────────────────────────────────
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -147,3 +269,5 @@ int fdAccept(int listenFd, int timeoutMs) {
 }
 
 }  // namespace vibe
+
+#endif  // _WIN32

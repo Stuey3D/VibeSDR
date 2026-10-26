@@ -3,6 +3,219 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+
+#ifdef _WIN32
+/* ★★★ WINDOWS: CreateProcessW, STILL NEVER A SHELL (docs/WINDOWS-PORT-PLAN.md §4.2).
+ *  The no-shell design ports as it is: argv is quoted into ONE command line by the rules the C runtime
+ *  uses to split it again (CommandLineToArgvW's), so an argument containing spaces or quotes arrives
+ *  as the same single argument — the property execvp gave us, kept on purpose.
+ *  ★★ EVERY CHILD JOINS ONE JOB OBJECT with KILL_ON_JOB_CLOSE. When this process ends — normally,
+ *     by Ctrl-C, by a crash or by Task Manager — Windows closes the job's last handle and kills every
+ *     child with it. That is the guarantee PR_SET_PDEATHSIG gives on Linux, without its race, and it
+ *     is why a radio process can never outlive the front door here (the "orphaned engine" class).
+ *  ★ Paths and arguments are UTF-8 in the core and converted to UTF-16 at this boundary. */
+#include <map>
+#include <mutex>
+#include <io.h>
+#include <fcntl.h>
+
+namespace vibeproc {
+namespace {
+
+std::wstring widen(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+    std::wstring w((size_t)n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
+    return w;
+}
+
+/** ★ One argument, quoted so CommandLineToArgvW / the CRT give back exactly these characters:
+ *  backslashes are literal EXCEPT before a quote, where 2n+1 of them make n backslashes and a quote. */
+void appendQuoted(std::wstring& cmd, const std::wstring& a) {
+    if (!a.empty() && a.find_first_of(L" \t\n\v\"") == std::wstring::npos) { cmd += a; return; }
+    cmd += L'"';
+    for (size_t i = 0; ; ++i) {
+        size_t bs = 0;
+        while (i < a.size() && a[i] == L'\\') { ++i; ++bs; }
+        if (i == a.size()) { cmd.append(bs * 2, L'\\'); break; }
+        if (a[i] == L'"') { cmd.append(bs * 2 + 1, L'\\'); cmd += L'"'; }
+        else { cmd.append(bs, L'\\'); cmd += a[i]; }
+    }
+    cmd += L'"';
+}
+
+HANDLE theJob() {
+    static HANDLE job = [] {
+        HANDLE j = CreateJobObjectW(nullptr, nullptr);
+        if (j) {
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION li{};
+            li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(j, JobObjectExtendedLimitInformation, &li, sizeof li);
+        }
+        return j;
+    }();
+    return job;
+}
+
+std::mutex g_mtx;
+std::map<pid_t, HANDLE> g_procs;   // ★ the handle is held until reaped, so the pid cannot be reused under us
+
+HANDLE nulOut() {
+    SECURITY_ATTRIBUTES sa{ sizeof sa, nullptr, TRUE };
+    return CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+}
+
+/** Start argv with the given std handles (inheritable; INVALID = the parent's own).
+ *  ★ `own` = one of our own radio processes: it keeps our console (its log lines interleave with ours,
+ *    as on POSIX) in a process group of its own, so CTRL_BREAK reaches it alone and Ctrl-C reaches only
+ *    us — the front door then stops it in order. A helper tool (curl, …) gets no console window at all. */
+pid_t start(const std::vector<std::string>& argv, HANDLE out, HANDLE err, bool own = false) {
+    std::wstring cmd;
+    for (size_t i = 0; i < argv.size(); ++i) { if (i) cmd += L' '; appendQuoted(cmd, widen(argv[i])); }
+    STARTUPINFOW si{}; si.cb = sizeof si;
+    const bool redirect = out != INVALID_HANDLE_VALUE || err != INVALID_HANDLE_VALUE;
+    if (redirect) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = out != INVALID_HANDLE_VALUE ? out : GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError  = err != INVALID_HANDLE_VALUE ? err : GetStdHandle(STD_ERROR_HANDLE);
+    }
+    PROCESS_INFORMATION pi{};
+    // ★ CREATE_SUSPENDED → join the job → resume: a child that ran first could spawn a grandchild
+    //   outside the job before we put it in.
+    if (!CreateProcessW(nullptr, &cmd[0], nullptr, nullptr, redirect ? TRUE : FALSE,
+                        CREATE_SUSPENDED | (own ? CREATE_NEW_PROCESS_GROUP : CREATE_NO_WINDOW),
+                        nullptr, nullptr, &si, &pi)) {
+        errno = ENOENT;
+        return -1;
+    }
+    if (HANDLE j = theJob()) AssignProcessToJobObject(j, pi.hProcess);
+    ResumeThread(pi.hThread);
+    CloseHandle(pi.hThread);
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_procs[(pid_t)pi.dwProcessId] = pi.hProcess;
+    return (pid_t)pi.dwProcessId;
+}
+
+HANDLE handleOf(pid_t pid) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    auto it = g_procs.find(pid);
+    return it == g_procs.end() ? nullptr : it->second;
+}
+
+}  // namespace
+
+int waitChild(pid_t pid, int timeoutMs) {
+    HANDLE h = handleOf(pid);
+    if (!h) return -1;
+    if (WaitForSingleObject(h, timeoutMs < 0 ? INFINITE : (DWORD)timeoutMs) != WAIT_OBJECT_0) return -2;
+    DWORD code = 0;
+    GetExitCodeProcess(h, &code);
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_procs.erase(pid);
+    }
+    CloseHandle(h);
+    return (int)code;
+}
+
+void killChild(pid_t pid) {
+    if (HANDLE h = handleOf(pid)) TerminateProcess(h, 1);
+}
+
+pid_t spawnInherit(const std::vector<std::string>& argv) {
+    if (argv.empty()) return -1;
+    return start(argv, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, true);
+}
+
+void askToStop(pid_t pid) {
+    // ★ The radio's process-group id is its pid (CREATE_NEW_PROCESS_GROUP). Fails harmlessly with no console.
+    GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, (DWORD)pid);
+}
+
+void restartSelf() {
+    /* ★★ Windows has no exec that keeps the process: start a fresh copy with OUR command line, exactly as we
+     *    were started (GetCommandLineW is the original, quoting and all), and leave. The new copy is not in
+     *    the Job Object (only our children are), so it survives our exit; the radios we started do not —
+     *    which is what the POSIX path's reapRadios() + execv achieves. */
+    wchar_t self[32768];
+    if (!GetModuleFileNameW(nullptr, self, 32768)) return;
+    std::wstring cmd = GetCommandLineW();
+    STARTUPINFOW si{}; si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(self, &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) return;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    fflush(nullptr);
+    ExitProcess(0);
+}
+
+int run(const std::vector<std::string>& argv, std::string* out) {
+    if (argv.empty()) return -1;
+    HANDLE rd = nullptr, wr = nullptr;
+    SECURITY_ATTRIBUTES sa{ sizeof sa, nullptr, TRUE };
+    HANDLE nul = nulOut();
+    if (out) {
+        if (!CreatePipe(&rd, &wr, &sa, 0)) { CloseHandle(nul); return -1; }
+        SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    }
+    const pid_t pid = start(argv, out ? wr : nul, nul);
+    if (wr) CloseHandle(wr);
+    CloseHandle(nul);
+    if (pid < 0) { if (rd) CloseHandle(rd); return -1; }
+    if (out && rd) {
+        char buf[4096]; DWORD n = 0;
+        while (ReadFile(rd, buf, sizeof buf, &n, nullptr) && n > 0) out->append(buf, n);
+        CloseHandle(rd);
+    }
+    return waitChild(pid, -1);
+}
+
+int runToFile(const std::vector<std::string>& argv, const std::string& path) {
+    if (argv.empty() || path.empty()) return -1;
+    SECURITY_ATTRIBUTES sa{ sizeof sa, nullptr, TRUE };
+    HANDLE f = CreateFileW(widen(path).c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return -1;
+    HANDLE nul = nulOut();
+    const pid_t pid = start(argv, f, nul);
+    CloseHandle(f);
+    CloseHandle(nul);
+    return pid < 0 ? -1 : waitChild(pid, -1);
+}
+
+Child spawn(const std::vector<std::string>& argv, bool mergeStderr) {
+    Child c;
+    if (argv.empty()) return c;
+    HANDLE rd = nullptr, wr = nullptr;
+    SECURITY_ATTRIBUTES sa{ sizeof sa, nullptr, TRUE };
+    if (!CreatePipe(&rd, &wr, &sa, 0)) return c;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    HANDLE nul = mergeStderr ? INVALID_HANDLE_VALUE : nulOut();
+    const pid_t pid = start(argv, wr, mergeStderr ? wr : nul);
+    CloseHandle(wr);
+    if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+    if (pid < 0) { CloseHandle(rd); return c; }
+    // ★ Text mode: the readers parse lines, and a Windows tool ends them with CRLF.
+    const int fd = _open_osfhandle((intptr_t)rd, _O_RDONLY | _O_TEXT);
+    c.out = fd >= 0 ? _fdopen(fd, "r") : nullptr;
+    if (!c.out) { if (fd >= 0) _close(fd); else CloseHandle(rd); killChild(pid); waitChild(pid, -1); return c; }
+    c.pid = pid;
+    return c;
+}
+
+int reap(Child& c) {
+    if (c.out) { fclose(c.out); c.out = nullptr; }
+    if (c.pid <= 0) return -1;
+    const pid_t pid = c.pid;
+    c.pid = -1;
+    return waitChild(pid, -1);
+}
+
+}  // namespace vibeproc
+
+#else  // ── POSIX ──────────────────────────────────────────────────────────────────────────────
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -118,3 +331,5 @@ int reap(Child& c) {
 }
 
 }  // namespace vibeproc
+
+#endif  // _WIN32

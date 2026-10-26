@@ -200,6 +200,28 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4
   message(STATUS "32-bit x86: ${VIBE_X86_32_FLAGS}")
 endif()
 
+# ── Windows (2026-10-26, docs/WINDOWS-PORT-PLAN.md, Milestone 1) ──────────────────────────────
+# ★★★ ONE CORE, NOT A FORK. The POSIX surface the server uses is answered by windows/compat: a
+#     force-included vibe_win_compat.h (Winsock2 under the BSD names, poll → WSAPoll, fcntl's
+#     O_NONBLOCK → FIONBIO, setenv, mkdir(path, mode), …) and stand-ins for the POSIX headers MinGW
+#     lacks (<sys/socket.h>, <poll.h>, <netinet/in.h>, …), so the shared sources compile unchanged
+#     wherever the meaning is the same. Where it is NOT the same — fork/exec, SCM_RIGHTS, signals,
+#     /proc — the code says so itself under #ifdef _WIN32, next to the POSIX path it replaces.
+# ★★ -static: libc++, libunwind and winpthreads linked in, so vibeserver.exe needs only Windows' own
+#    DLLs (KERNEL32, WS2_32, SETUPAPI, the UCRT that ships in Windows 10+) — Stuart's no-dependency rule.
+if(WIN32)
+  set(VIBE_WIN_COMPAT "${CMAKE_CURRENT_SOURCE_DIR}/windows/compat")
+  include_directories(BEFORE SYSTEM "${VIBE_WIN_COMPAT}")
+  add_compile_options("SHELL:-include ${VIBE_WIN_COMPAT}/vibe_win_compat.h")
+  # ★ A descriptor is an int in the core and a SOCKET (64-bit unsigned) in Winsock: `pollfd{fd, …}` is a
+  #   narrowing brace-init. The value is preserved exactly (sockets fit in 32 bits, -1 = INVALID_SOCKET).
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-c++11-narrowing>)
+  add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX NOGDI
+                          _POSIX_THREAD_SAFE_FUNCTIONS _USE_MATH_DEFINES rtlsdr_STATIC)
+  add_link_options(-static)
+  link_libraries(ws2_32 iphlpapi setupapi cfgmgr32 advapi32 shell32 ole32 bcrypt psapi)
+endif()
+
 add_library(vibedsp STATIC
     ${VIBEDSP_SRC}
     "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fft.c"
@@ -376,6 +398,10 @@ if(APPLE AND VIBE_MAC_DEPS)
 elseif(VIBE_LINUX_SELFCONTAINED)
   set(VIBE_DEPS_PREFIX "${VIBE_LINUX_DEPS}")
   set(_deps_hint "run vibeserver/linux/build-deps.sh, or rebuild the build image")
+elseif(WIN32)
+  # ★★ Windows: the prefix windows/build-deps.sh fills — the ONLY source, as on the Mac and Linux.
+  set(VIBE_DEPS_PREFIX "${VIBE_WIN_DEPS}")
+  set(_deps_hint "run scripts/build-windows.sh (it builds windows/deps first)")
 endif()
 if(VIBE_DEPS_PREFIX)
   foreach(_f lib/librtlsdr.a lib/libusb-1.0.a lib/libopus.a include/rtl-sdr.h

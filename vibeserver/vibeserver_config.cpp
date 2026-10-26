@@ -265,7 +265,29 @@ std::string mdnsLabel(const std::string& friendly) {
     return out;
 }
 
+#ifdef _WIN32
+/* ★★ Windows: %ProgramData%\VibeServer (docs/WINDOWS-PORT-PLAN.md §4.2) — machine-wide, so the optional
+ *    service of a later milestone and a user's own start read the SAME file. Forward slashes on purpose:
+ *    Windows accepts them everywhere, and the core finds folders with rfind('/'). Created on first use;
+ *    a fresh folder there belongs to the user who made it. */
+const std::string& defaultDir() {
+    static const std::string d = [] {
+        std::string base;
+        if (const char* p = std::getenv("ProgramData"); p && *p) base = p; else base = "C:/ProgramData";
+        for (char& c : base) if (c == '\\') c = '/';
+        const std::string dir = base + "/VibeServer";
+        _mkdir(dir.c_str());
+        return dir;
+    }();
+    return d;
+}
+const char* defaultPath() {
+    static const std::string p = defaultDir() + "/config.json";
+    return p.c_str();
+}
+#else
 const char* defaultPath() { return "/etc/vibeserver/config.json"; }
+#endif
 
 std::string toJson(const Config& c) {
     std::string j = "{\n";

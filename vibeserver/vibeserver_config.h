@@ -998,6 +998,10 @@ bool save(const std::string& path, const Config& cfg, std::string& err);
 
 /** The default location. Overridable for tests and for a non-root run. */
 const char* defaultPath();
+#ifdef _WIN32
+/** ★ Windows: the folder that holds the config and everything else the server keeps (%ProgramData%/VibeServer). */
+const std::string& defaultDir();
+#endif
 
 /** ★ The mDNS label derived from a friendly name — lowercased, ASCII, hyphenated, trimmed.
  *  DERIVED IN ONE PLACE ONLY. The setup page shows the user what their name becomes, and the

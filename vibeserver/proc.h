@@ -53,4 +53,17 @@ Child spawn(const std::vector<std::string>& argv, bool mergeStderr = false);
 /** Close the stream and wait for the child. Safe to call twice. Returns the exit status or -1. */
 int reap(Child& c);
 
+#ifdef _WIN32
+/* ★★ Windows only: what fork + exec + waitpid did for the front door's own radio processes. Every child is in
+ *    the kill-on-close Job Object (see proc.cpp), so none outlives this process however it ends. */
+/** Start argv with this process's own stdout/stderr (a radio's log lines interleave with ours, as on POSIX). */
+pid_t spawnInherit(const std::vector<std::string>& argv);
+/** Exit code; -2 = still running after timeoutMs (0 = poll, -1 = wait for ever); -1 = not our child. */
+int waitChild(pid_t pid, int timeoutMs);
+void killChild(pid_t pid);
+/** CTRL_BREAK to one of our radios (its SIGTERM: the radio's normal, dongle-closing stop). */
+void askToStop(pid_t pid);
+/** The self-restart (execv on POSIX): a fresh copy with our own command line, then exit. Returns only on failure. */
+void restartSelf();
+#endif
 }  // namespace vibeproc
