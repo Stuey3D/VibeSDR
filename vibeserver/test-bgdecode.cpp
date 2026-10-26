@@ -653,8 +653,8 @@ static void phase2() {
         t.finish(true);
         const std::string fl = s.listJson("ft8", 10);
         ok(fl.find(" UTC \xc2\xb7 9 spots \xc2\xb7 3 countries \xc2\xb7 furthest Australia") != std::string::npos
-           && fl.find("FT8 last 10 min to ") != std::string::npos,
-           "★ the run's end: its hour so far (partial) and the last 10 minutes, both titled with the headline");
+           && fl.find("FT8+FT4 last 10 min to ") != std::string::npos,
+           "★ the run's end: its hour so far (partial) and the last 10 minutes, both titled with the headline — and the modes heard (V12: \"FT8+FT4\")");
         size_t n0 = 0; for (size_t at = 0; (at = fl.find("\"f\":", at)) != std::string::npos; at++) n0++;
         bg::Ft8SummaryTap quiet(s, fm, sla, slo);
         quiet.finish(true);
@@ -693,8 +693,8 @@ static void ft8Periodic() {
     ok(ino(roll) == i1, "a new spot waits for the minute (at most one rewrite a minute)");
     T += 70; t.tick();                                          // 18:07:16
     const unsigned long long i2 = ino(roll);
-    ok(count() == 1 && t.rollingName() == roll && list().find("FT8 last 10 min \xc2\xb7 4 spots \xc2\xb7 4 countries") != std::string::npos,
-       "★ more spots → the SAME card rewritten: \"4 spots · 4 countries\"");
+    ok(count() == 1 && t.rollingName() == roll && list().find("FT8+FT4 last 10 min \xc2\xb7 4 spots \xc2\xb7 4 countries") != std::string::npos,
+       "★ more spots → the SAME card rewritten: \"FT8+FT4 last 10 min · 4 spots · 4 countries\" (an FT4 spot joined: the title names both modes)");
     ok(i2 != i1, "...replaced by a rename (a new inode — never written over in place)");
     T += 70; t.tick();
     ok(ino(roll) == i2, "★ nothing changed in the window → not rewritten");
@@ -706,17 +706,17 @@ static void ft8Periodic() {
     T = H18 + 15 * 60 + 30; t.tick();                           // 18:15:30 — the 18:05 spots have aged out, OH2XX (18:06:06) has not
     { const std::string all = s.listJson("", 5); const size_t a1 = all.find(roll), a2 = all.find("a navtex");
       ok(a1 != std::string::npos && a2 != std::string::npos && a1 < a2, "★ the rewritten card lists FIRST (moved to the newest)"); }
-    ok(list().find("FT8 last 10 min \xc2\xb7 1 spot \xc2\xb7 1 country") != std::string::npos, "★ the window rolls: the 18:05 spots aged out → \"1 spot · 1 country\"");
+    ok(list().find("FT4 last 10 min \xc2\xb7 1 spot \xc2\xb7 1 country") != std::string::npos, "★ the window rolls: the 18:05 spots aged out → \"FT4 last 10 min · 1 spot · 1 country\" (only OH2XX's FT4 left)");
     ok(body(roll).find("Spots heard:       1 (FT8 0, FT4 1) from 1 stations") != std::string::npos, "the card's figures are the window's");
     T = H18 + 18 * 60; t.tick();                                // 18:18 — nothing left in the window
-    ok(list().find("FT8 last 10 min \xc2\xb7 nothing heard since 18:06") != std::string::npos, "an empty window says so, with the last spot's time");
+    ok(list().find("FT8+FT4 last 10 min \xc2\xb7 nothing heard since 18:06") != std::string::npos, "an empty window says so, with the last spot's time (named by the run's modes)");
     ok(m.liveSpots->load() == 4, "the admin line's count is the run's, not the window's (4)");
     // the hour closes
     t.spot(false, "K1ABC", "FN42", -18, 1840700);              // 18:18
     T = H18 + 3600 + 5; t.tick();                               // 19:00:05
     { const std::string l = list();
-      ok(count() == 2 && l.find("FT8 18:05\xe2\x80\x93" "19:00 UTC \xc2\xb7 5 spots \xc2\xb7 5 countries \xc2\xb7 furthest United States") != std::string::npos,
-         "★ 19:00: the hour's card, \"FT8 18:05–19:00 UTC · 5 spots · 5 countries · furthest United States\":\n" + l.substr(0, 600));
+      ok(count() == 2 && l.find("FT8+FT4 18:05\xe2\x80\x93" "19:00 UTC \xc2\xb7 5 spots \xc2\xb7 5 countries \xc2\xb7 furthest United States") != std::string::npos,
+         "★ 19:00: the hour's card, \"FT8+FT4 18:05–19:00 UTC · 5 spots · 5 countries · furthest United States\":\n" + l.substr(0, 600));
       ok(l.find("\"partial\":true") != std::string::npos, "a run that began at 18:05 marks its first hour partial"); }
     // a full hour, then the run ends inside the next
     for (int i = 0; i < 4; i++) { T = H18 + 3600 + 600 * (i + 1); t.spot(false, i % 2 ? "VK2XYZ" : "JA1ABC", i % 2 ? "QF56" : "PM95", -20, 1841000); t.tick(); }
@@ -734,7 +734,7 @@ static void ft8Periodic() {
     T = H18 + 2 * 3600 + 20 * 60; t.finish(false);                         // 20:20 — the run ends
     { const std::string l = list();
       ok(count() == 4 && l.find("FT8 20:00\xe2\x80\x93" "20:20 UTC \xc2\xb7 1 spot") != std::string::npos, "★ the run's end: the hour so far, partial (20:00–20:20)");
-      ok(l.find("FT8 last 10 min to 20:20 UTC") != std::string::npos && t.rollingName() == roll, "★ ...and the last-10 card kept, \"to 20:20 UTC\" — still ONE card");
+      ok(l.find("FT8+FT4 last 10 min to 20:20 UTC") != std::string::npos && t.rollingName() == roll, "★ ...and the last-10 card kept, \"to 20:20 UTC\" — still ONE card");
       ok(body(roll).find("The last 10 minutes of the run, to 20:20 UTC") != std::string::npos, "the kept card says it is the run's last 10 minutes"); }
     // ★ the next run on the same VFO finds the same card again (a restart, a crash) — never a second one
     {
@@ -755,6 +755,22 @@ static void ft8Periodic() {
     }
     // ★ the pager still pages: hourly cards are ordinary items
     ok(s.listJson("ft8", 25, 0).find("\"total\":") != std::string::npos, "the 25-a-page list still answers with a total");
+    // ★★ V12 2026-10-26: a BAND run's card names the band and every mode it heard (Stuart: the summary cards carry the mode)
+    {
+        gallery::Store bs; bs.setDir(tmpDir("ft8band"));
+        gallery::Meta bm; bm.kind = "ft8"; bm.origin = "live"; bm.freqHz = 14085700; bm.mode = "usb"; bm.decoder = "ft8band";
+        int64_t T3 = H18;
+        bg::Ft8SummaryTap tb(bs, bm, 52.3125, -0.875, [&] { return T3; });
+        tb.spot(std::string("FT8"), "G4IRX", "IO92", -5, 14074500); tb.spot(std::string("FT8"), "DL1ABC", "JO31", -9, 14075000);
+        tb.spot(std::string("WSPR"), "K1ABC", "FN42", -24, 14097050);
+        T3 += 61; tb.tick();
+        const std::string l = bs.listJson("ft8", 10);
+        ok(l.find("FT8+WSPR last 10 min \xc2\xb7 3 spots") != std::string::npos, "★ Band: the card's title names its modes, most spots first: \"FT8+WSPR last 10 min · 3 spots\"");
+        const std::string txt = tb.text(T3);
+        ok(txt.find("Digital spots summary \xc2\xb7 Band 20 m") == 0, "★ Band: the card says which band — \"Digital spots summary · Band 20 m\"");
+        ok(txt.find("Spots heard:       3 (FT8 2, FT4 0, WSPR 1) from 3 stations") != std::string::npos, "★ Band: the figures count every mode: " + txt.substr(txt.find("Spots heard"), 70));
+        tb.finish(true);
+    }
 }
 
 // ── 7c. ★ beta 4: the FT8 summary counts only real callsigns and their own grids (the Lenovo's "Furthest: DE … AA00") ──
