@@ -143,7 +143,7 @@ import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
 import { NavCard, CardKey } from '../components/NavCard';
 import { bookmarkDefaultName } from '../utils/bookmarkName';
 import { usePadField } from '../components/ControllerKeyboard';
-import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide } from '../utils/hardwareKeys';
+import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide, addSwapVfoListener } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -192,6 +192,7 @@ import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
+import { EarOrder, INACTIVE_INTENSITY, otherVfo, type VfoABInfo, type VfoId } from '../services/vfoAB';
 import { BinauralTracker, binauralModeOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
          type BinauralSink } from '../services/binauralOffset';
 import { isoToFlag, validIso } from '../services/rdsCountry';
@@ -336,6 +337,15 @@ const SQL_AUTO_KEY = 'lsv_squelch_auto';
 const NFM_VOICE_KEY = 'lsv_nfm_voice';
 /** ★ V12 BINAURAL TUNING — the listener's choice, '1' on; absent/'0' off (the default: it changes what you hear). */
 const BINAURAL_KEY = 'lsv_binaural';
+/** ★★ V12 VFO A/B's STEREO switch (lower VFO left / higher right) — remembered per device like binaural; absent = ON. */
+const VFO_STEREO_KEY = 'lsv_vfo_stereo';
+/** ★★ VFO B's needle colour: a contrast to the listener's own (A's) — cyan, or amber when A's is already blue-ish. */
+function vfoBColour(a: string): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(a || '');
+  if (!m) return '#38c8ff';
+  const r = parseInt(m[1], 16), g = parseInt(m[2], 16), b = parseInt(m[3], 16);
+  return b > 140 && b > r + 30 ? '#ffb020' : '#38c8ff';
+}
 const SQL_AUTO_MARGIN_KEY = 'lsv_squelch_auto_margin';
 
 /** The server's health levels arrive as plain numbers off the wire (ServerHealth) and the pill's own
@@ -2826,6 +2836,75 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => { tuneRef.current = { frequency: status.frequency, mode: status.mode }; },
             [status.frequency, status.mode]);
 
+  /* ★★ V12 VFO A/B (services/vfoAB.ts; server vibe_watch.h; GitHub discussion #57). VFO A is the ordinary channel,
+   *  VFO B a second one on the same radio, both heard at once — the server mixes them into the one stream, the LOWER
+   *  frequency in the LEFT ear and the HIGHER in the RIGHT (the STEREO switch, audio menu, default on). The client
+   *  holds the slots: whichever VFO is selected IS `status`, so every control on this screen tunes it unchanged.
+   *  ★ Turned on and off ONLY from the tuning menu; PER SESSION (a reconnect starts with one VFO — the server forgets
+   *    B with the session, and so does the client). Offered only where hwinfo says `watch` > 0 (VibeServer). */
+  const [abOffered, setAbOffered] = useState(0);
+  const [abInfo, setAbInfo] = useState<VfoABInfo | null>(null);
+  const abOn = !!abInfo?.on;
+  const abActive: VfoId = abInfo?.active ?? 'A';
+  const abActiveRef = useRef<VfoId>('A');
+  const earOrder = useRef(new EarOrder());
+  const [vfoStereo, setVfoStereoState] = useState(true);
+  const vfoStereoRef = useRef(true);
+  useEffect(() => {
+    AsyncStorage.getItem(VFO_STEREO_KEY).then((v) => { if (v === '0') { vfoStereoRef.current = false; setVfoStereoState(false); } }).catch(() => {});
+  }, []);
+  const abClient = useCallback(() => client.current as unknown as {
+    abSetOn?: (on: boolean) => boolean; abSelect?: (v: VfoId) => void; abSetStereo?: (on: boolean) => void;
+    abSetMonoOut?: (on: boolean) => void; abInfo?: () => VfoABInfo } | null, []);
+  const onVfoStereo = useCallback((on: boolean) => {
+    vfoStereoRef.current = on; setVfoStereoState(on);
+    AsyncStorage.setItem(VFO_STEREO_KEY, on ? '1' : '0').catch(() => {});
+    abClient()?.abSetStereo?.(on);
+  }, [abClient]);
+  /** The tuning menu's toggle. */
+  const onVfoAB = useCallback((on: boolean) => {
+    const c = abClient();
+    c?.abSetStereo?.(vfoStereoRef.current);
+    // ★ TODO(native): no route channel count reaches JS today (VibePowerModule logs the route, never emits it), so the
+    //   app cannot yet tell a mono speaker from headphones — the hint in the audio menu says what a mono output does,
+    //   and abSetMonoOut(true) is the hook a future `VibeOutputMono` event calls.
+    c?.abSetOn?.(on);
+  }, [abClient]);
+  /** Which VFO the tune controls act on — the A/B key (buttons), the drum's trapezoid hold, the pad/keyboard swap. */
+  const onVfoSwap = useCallback(() => {
+    const c = abClient();
+    const info = c?.abInfo?.();
+    if (!info?.on) return;
+    c?.abSelect?.(otherVfo(info.active));
+  }, [abClient]);
+  // ★★ The pad's swap — a START tap, or △ on a stick pad (padActions); does nothing while A/B is off.
+  useEffect(() => { const sub = addSwapVfoListener(() => onVfoSwap()); return () => sub.remove(); }, [onVfoSwap]);
+  // ★ Each VFO has its OWN squelch: on a switch the slider shows the newly tuned one's (nothing is sent — it is already set).
+  const onWatchInfo = useCallback((info: VfoABInfo) => {
+    if (info.active !== abActiveRef.current) {
+      abActiveRef.current = info.active;
+      setHwSquelch(info.activeSquelchDb); hwSquelchRef.current = info.activeSquelchDb;
+    }
+    if (!info.on) earOrder.current.reset();
+    setAbInfo(info);
+  }, []);
+  // ★★ BINAURAL STANDS ASIDE WHILE VFO B IS ON — it would re-pan the server's L/R mix. Back when B goes, a little after
+  //    the server's 400 ms fade, so A ends wherever binaural places it, with binaural's own smoothing.
+  const [abAudio, setAbAudio] = useState(false);
+  useEffect(() => {
+    if (abOn) { setAbAudio(true); return; }
+    const t = setTimeout(() => setAbAudio(false), 450);
+    return () => clearTimeout(t);
+  }, [abOn]);
+  /** The inactive VFO, as the waterfall draws it — with the ears both needles are in (null tags = both everywhere). */
+  const abOther = abOn && abInfo?.other ? abInfo.other : null;
+  const abEars = abOther
+    ? earOrder.current.ears(abActive === 'A' ? Number(status.frequency) : abOther.frequency,
+                            abActive === 'A' ? abOther.frequency : Number(status.frequency),
+                            vfoStereo, abInfo?.state?.monoOut === true)
+    : null;
+  const abParked = abOn && !!abInfo?.state?.chans.find((c) => c.id === 1)?.parked;
+
   /* ★★ V12 BINAURAL TUNING — the audio leans toward the ear on the side the signal lies and comes back to the
    *  middle of the head as you tune onto it (services/binauralOffset.ts, vibedsp/binaural.h). ONE setting, in the
    *  AUDIO menu, OFF by default and remembered (BINAURAL_KEY): it changes what the listener HEARS, so it is
@@ -2851,13 +2930,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     setBinauralState(on);
     AsyncStorage.setItem(BINAURAL_KEY, on ? '1' : '0').catch(() => {});
   }, []);
+  // ★★ V12: binaural is LIVE only while VFO B is not mixing (abAudio — see above).
+  const binauralLive = binaural && !abAudio;
   useEffect(() => {
-    binauralRef.current = binaural;
+    binauralRef.current = binauralLive;
     binauralTracker.current?.reset();   // the next spectrum frame states source, dial and offset afresh
     const vp = VibePowerModule as BinauralSink & { setBinaural?: (on: boolean) => void } | undefined;
-    if (!binaural) { vp?.setBinauralSource?.(0, 15, 300); vp?.setBinauralSpread?.(0, 50, 2700); }
-    vp?.setBinaural?.(binaural);
-  }, [binaural]);
+    if (!binauralLive) { vp?.setBinauralSource?.(0, 15, 300); vp?.setBinauralSpread?.(0, 50, 2700); }
+    vp?.setBinaural?.(binauralLive);
+  }, [binauralLive]);
   // ★ Leaving the screen leaves nothing behind: a stale offset must not lean the next connection's audio.
   useEffect(() => () => {
     const vp = VibePowerModule as BinauralSink & { setBinaural?: (on: boolean) => void } | undefined;
@@ -2868,12 +2949,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   // WFM: the aid hands over to stereo as the pilot locks (native crossfades with hysteresis — binaural.h).
   //   Forced mono → always the aid; a backend that reports its pilot → that; one that never has → native measures.
   useEffect(() => {
-    if (!binaural) return;
+    if (!binauralLive) return;
     const hint = status.mode !== 'wfm' || !hwStereo ? BIN_STEREO_MONO
       : fmStereoSeenRef.current ? (fmStereo ? BIN_STEREO_LOCKED : BIN_STEREO_MONO)
       : BIN_STEREO_UNKNOWN;
     binauralTracker.current?.setStereo(hint);
-  }, [binaural, status.mode, fmStereo, hwStereo]);
+  }, [binauralLive, status.mode, fmStereo, hwStereo]);
   // Hot-path frame sink — WaterfallView registers its imperative frame handler
   // here; spectrum frames bypass React state entirely (CPU audit 2026-06-11:
   // setState per 10–20Hz frame re-rendered the whole tree ≈ a full core).
@@ -5590,6 +5671,9 @@ export default function SDRScreen({ route, navigation }: Props) {
        *   frequency after every lock-screen skip. */
       const fDisp = convToDisplay(e.frequency, convActive(converterRef.current));
       c?.syncFrequency(fDisp, e.mode as SDRMode);
+      // ★★ V12 VFO A/B: the lock screen tunes the RADIO — VFO A. With B on the dial, A's slot took it (syncFrequency);
+      //    the readout is B's and stays put, and the view is not dragged to A.
+      if (abActiveRef.current === 'B') return;
       setStatus((prev: SDRStatus) => ({ ...prev, frequency: fDisp, ...(e.mode ? { mode: e.mode as SDRMode } : {}) }));
       // Media-control skips tune blind from the lock screen / car stereo —
       // recentre the view on EVERY skip so the VFO stays centred and the
@@ -5890,6 +5974,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         const next = rate > 0 ? { rate, ago } : null;
         setStorms((cur) => (sameStorms(cur, next) ? cur : next));
       },
+      // ★★ V12 VFO A/B — the offer (hwinfo) and the state (VibeServerWsClient's slots). See onWatchInfo.
+      onWatchOffered: (n: number) => {
+        if (destroyed.current) return;
+        setAbOffered(n);
+        if (n > 0) (client.current as unknown as { abSetStereo?: (on: boolean) => void } | null)?.abSetStereo?.(vfoStereoRef.current);
+      },
+      onWatch: (info: VfoABInfo) => { if (!destroyed.current) onWatchInfo(info); },
       /** ★ The server's answer to a raw IQ request: the address or the pairing code, or why not. */
       onIqOut: (m) => {
         if (destroyed.current) return;
@@ -11192,8 +11283,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
-    { id: 'step', title: 'Step rate',
-      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change.',
+    // ★★ V12 VFO A/B lives in this same sheet (StepPicker) — said here because the step key is the last place anybody
+    //    would look for a second VFO. Verified against StepPicker, TunerKeys, DrumWheel and AudioSheet (2026-10-27).
+    { id: 'step', title: 'Step rate, and VFO A/B',
+      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change. On a VibeServer the same sheet has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key between the tune keys (or a press and hold on the tune drum\'s window) chooses which one the controls tune. VFO STEREO under the speaker button puts both in both ears instead.',
       target: tourRef('stepBtn') },
     // ★ The 'back' step ("no back-swipe here") was FOLDED INTO the servers-chip step
     //   in V10 rather than kept: on its own it explained an ABSENCE, which is a whole
@@ -11233,8 +11326,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    ★ And again 2026-10-17 when that STYLE row was REMOVED (one combined behaviour): this card never named the
     //    styles, so nothing here pointed at the row; the whole sentence re-read against AudioSheet, MenuSheet and
     //    FreqModal once more — unchanged.
+    //    ★ Again 2026-10-27 for V12 VFO STEREO (a new AudioSheet row beside BINAURAL): the whole sentence re-read against
+    //      AudioSheet, MenuSheet and FreqModal — VFO A/B itself is in the STEP sheet, said on the 'step' card.
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch, binaural tuning, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch, binaural tuning, VFO stereo, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
@@ -11242,7 +11337,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named above them. In ISM every step of the tuning moves one band.',
       target: tourRef('menuBtn'), illustration: schemeMock },
     { id: 'keys', title: 'A keyboard or controller drives it all',
-      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom. A game controller does the same, on Android too: the D-pad moves the highlight, SELECT shows a guide to every button, holding START switches between face buttons and the two sticks, and Enter on a text box opens an on-screen keyboard it can type with. More in the settings cog, under KEYBOARD and CONTROLLER GUIDE.',
+      body: 'Pair a keyboard — to an iPhone, iPad or Mac — and the arrows or W A S D move a highlight round the controls, Enter presses, Backspace or Esc steps back out, < > tune and - + zoom. A game controller does the same, on Android too: the D-pad moves the highlight, SELECT shows a guide to every button, holding START switches between face buttons and the two sticks (a tap of START — or the top button on a two-stick pad — swaps VFO A and B while both are on), and Enter on a text box opens an on-screen keyboard it can type with. More in the settings cog, under KEYBOARD and CONTROLLER GUIDE.',
       target: tourRef('menuBtn'), illustration: keysMock },
     // ★★ v5, not v4: the two steps above are new in V10 and describe things that
     //    already shipped invisibly. Bumping the key re-runs the tour ONCE for
@@ -11625,7 +11720,15 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
            server, so the frame-generation multiplier stays constant for the whole session. */
         feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
-        needleColor={vfoNeedle}
+        needleColor={abOn && abActive === 'B' ? vfoBColour(vfoNeedle) : vfoNeedle}
+        /* ★★ V12 VFO A/B: the other VFO beside the tuned one — its own colour (A = the listener's needle colour, B a
+           contrasting one), its letter, its ear by frequency (null = both ears / stereo off). Greyed while parked. */
+        secondVfo={abOther ? {
+          hz: abOther.frequency, filterLow: abOther.bandwidthLow, filterHigh: abOther.bandwidthHigh,
+          letter: otherVfo(abActive), ear: abEars ? abEars[otherVfo(abActive)] : null,
+          color: abActive === 'A' ? vfoBColour(vfoNeedle) : vfoNeedle, parked: abParked && abActive === 'A',
+        } : null}
+        activeVfo={abOn ? { letter: abActive, ear: abEars ? abEars[abActive] : null } : null}
         needleIntensity={vfoIntensity}
         needleFrost={vfoFrost}
         bgImageUrl={bgImageUrl}
@@ -12207,6 +12310,9 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  `vfoKeys` untouched — the preference is never written. */
           vfoKeys={vfoKeys || dabOn}
           vfoMuxLabel={dabOn ? (dabBlock >= 0 ? DAB_BLOCKS[dabBlock].name : '—') : undefined}
+          /* ★★ V12 VFO A/B: the A/B key between the tune keys / the letter in the drum's window (hold = switch). */
+          vfoAB={abOn ? abActive : null}
+          onVfoSwap={onVfoSwap}
           zoomKeys={zoomKeys}
           onVfoStep={onVfoStep}
           onZoomStep={onZoomStep}
@@ -12890,6 +12996,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         steps={stepsForFreq(status.frequency, ituRegion)}
         onSelect={hz => { airStepSeq.current++; setStep(hz); }}
         onClose={() => setStepOpen(false)}
+        /* ★★ V12 VFO A/B — turned on and off HERE only, and only where the server offers it (hwinfo `watch`). */
+        vfoAB={abOn}
+        onVfoAB={abOffered > 0 && !dabOn && !icom ? onVfoAB : undefined}
       />
       </PanelBoundary>
 
@@ -13139,6 +13248,10 @@ export default function SDRScreen({ route, navigation }: Props) {
              mode). (FM-DX is not this screen — it has no spectrum to read, and no row.) */
         binaural={binaural}
         onBinaural={binauralModeOk(status.mode) && !dabOn && !icom ? onBinaural : undefined}   /* ★ no IQ, no offset source */
+        /* ★★ V12 VFO A/B's STEREO switch — beside binaural; only where the server offers VFO A/B. */
+        vfoStereo={vfoStereo}
+        onVfoStereo={abOffered > 0 && !icom ? onVfoStereo : undefined}
+        vfoABOn={abOn}
         deemph={hwDeemph}   onDeemph={icom ? undefined : askWrap(onHwDeemph)}   /* ★ an Icom has no WFM chain to de-emphasise */
         stereo={hwStereo}   onStereo={icom ? undefined : askWrap(onHwStereo)}
         fmNr={fmNr}   onFmNr={vibeFmDsp && !icom ? askWrap(onFmNr) : undefined}

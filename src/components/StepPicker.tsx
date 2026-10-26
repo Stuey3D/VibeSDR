@@ -33,9 +33,13 @@ interface StepPickerProps {
   steps?:      number[];   // band-aware list (VHF/UHF gets larger steps); defaults to HF
   onSelect:    (hz: number) => void;
   onClose:     () => void;
+  /** ★★ V12 VFO A/B — THE one place it is turned on and off (Stuart: "the VFO A/B button lives in the tuning menu, a
+   *  simple toggle"). Passed only where the server offers it (VibeServer, hwinfo `watch`); absent = no row. */
+  vfoAB?:      boolean;
+  onVfoAB?:    (on: boolean) => void;
 }
 
-export default function StepPicker({ visible, currentStep, steps, onSelect, onClose }: StepPickerProps) {
+export default function StepPicker({ visible, currentStep, steps, onSelect, onClose, vfoAB = false, onVfoAB }: StepPickerProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const stepList = steps && steps.length ? steps : STEPS_HZ;
   const { theme: t } = useTheme();
@@ -47,10 +51,14 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
   // Keyboard / D-pad navigation. The steps are a wrapped grid and CLOSE is the last
   // entry, so arrows walk the ladder and then land on CLOSE — no separate rule for it.
   // Shared machinery, so the game controller's D-pad drives this unchanged.
+  // ★ VFO A/B (when offered) is one more stop before CLOSE; activating it flips it and leaves the sheet open.
+  const abIdx = onVfoAB ? stepList.length : -1;
+  const closeIdx = stepList.length + (onVfoAB ? 1 : 0);
   const navFocus = useListNav(
     visible,
-    stepList.length + 1,
+    closeIdx + 1,
     (i) => {
+      if (i === abIdx) { onVfoAB?.(!vfoAB); return; }
       if (i >= stepList.length) { onClose(); return; }
       onSelect(stepList[i]); onClose();
     },
@@ -113,13 +121,42 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
               </TouchableOpacity>
             ))}
           </View>
+          {/* ── ★★ V12 VFO A/B: a second VFO on the same radio, heard at once (lower frequency in the left ear) ── */}
+          {onVfoAB && (
+            <View style={st.abRow}>
+              <Text style={[st.abLabel, { color: pt.ink.section, fontFamily: t.font },
+                            pt.metal && { ...engraveText(pt), fontWeight: '700' }]}>VFO A/B</Text>
+              {pt.metal ? (
+                <PopupKey label={vfoAB ? 'ON' : 'OFF'} active={vfoAB} pip focused={navFocus === abIdx}
+                  height={36} fontSize={13} onPress={() => onVfoAB(!vfoAB)} hitSlop={4} style={{ width: 96 }} />
+              ) : (
+                <TouchableOpacity
+                  style={[st.btn, st.abKey, { borderColor: pt.ink.keyBorder },
+                          vfoAB && { backgroundColor: pt.ink.keyBgAct, borderColor: pt.gold.selBorder },
+                          navFocus === abIdx && { borderColor: focusC.ring, borderWidth: 2 }]}
+                  onPress={() => onVfoAB(!vfoAB)} hitSlop={4} activeOpacity={0.75}
+                  accessibilityRole="switch" accessibilityState={{ checked: vfoAB }}
+                  accessibilityLabel="VFO A/B" accessibilityHint="A second frequency on the same radio, heard at the same time">
+                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 14, color: vfoAB ? pt.gold.sel : pt.ink.key }]}>
+                    {vfoAB ? 'ON' : 'OFF'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+          {onVfoAB && (
+            <Text style={[st.abNote, { color: pt.ink.section, fontFamily: t.font }]}>
+              {vfoAB ? 'Switch VFO with the A/B key, or press and hold the tune drum\'s window'
+                     : 'Listen to a second frequency on this radio at the same time'}
+            </Text>
+          )}
           {pt.metal ? (
-            <PopupKey label="CLOSE" onPress={onClose} focused={navFocus === stepList.length} height={32}
+            <PopupKey label="CLOSE" onPress={onClose} focused={navFocus === closeIdx} height={32}
               style={{ alignSelf: 'center', width: 110, marginTop: 14 }} />
           ) : (
           <TouchableOpacity
             style={[st.closeBtn, { borderColor: pt.ink.keyBorder },
-                    navFocus === stepList.length && { borderColor: focusC.ring, borderWidth: 2 }]}
+                    navFocus === closeIdx && { borderColor: focusC.ring, borderWidth: 2 }]}
             onPress={onClose} activeOpacity={0.75}
           >
             <Text style={[st.closeBtnText, { fontFamily: t.font, color: pt.gold.close }]}>
@@ -160,4 +197,8 @@ const st = StyleSheet.create({
     borderWidth: 1, borderRadius: 3, paddingVertical: 7, paddingHorizontal: 24,
   },
   closeBtnText:  { fontSize: 11, textAlign: 'center' },
+  abRow:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, gap: 12 },
+  abLabel:       { fontSize: 10, letterSpacing: 3 },
+  abKey:         { flexGrow: 0, width: 96, paddingVertical: 10 },
+  abNote:        { fontSize: 10, opacity: 0.75, marginTop: 6, textAlign: 'right' },
 });

@@ -60,7 +60,10 @@ export type PadOut =
   /** ★ The controller keyboard is open and a button with a keyboard meaning was pressed (kbPadAction). */
   | { kbButton: PadButton; profile: PadProfile }
   /** ★ The controller keyboard is open and START was TAPPED: submit (decided 10-20). */
-  | { kbSubmit: true };
+  | { kbSubmit: true }
+  /** ★★ V12 VFO A/B: swap which VFO the tune controls act on — a TAP of START (the keyboard closed), or △ (north) on
+   *  a stick pad, as on the web page (gamepad.ts). Ignored by the screen while A/B is off. */
+  | { swapVfo: true };
 
 /**
  * ★★★ THE CONTROLLER KEYBOARD'S BUTTONS (Stuart, decided 2026-10-20 — brief § Button mapping, the proposed table
@@ -168,6 +171,9 @@ export class PadMapper {
     // ★ A START TAP while the keyboard is open submits — released before the hold would have switched.
     if (!startNow && (prev & PAD_BIT.start) && this.kbOpen && st.startAt !== null && st.startAt >= 0
         && now - st.startAt < SWITCH_HOLD_MS) out.push({ kbSubmit: true });
+    // ★★ V12 VFO A/B: a START TAP with the keyboard closed (released before the hold switched the controls).
+    else if (!startNow && (prev & PAD_BIT.start) && !this.kbOpen && st.startAt !== null && st.startAt >= 0
+        && now - st.startAt < SWITCH_HOLD_MS) out.push({ swapVfo: true });
     if (!startNow) st.startAt = null;
     out.push(...this.checkHold(st, now));
 
@@ -185,6 +191,8 @@ export class PadMapper {
       if (!(prev & bit) && (b & bit)) {
         const k = padKey(name, prof);
         if (k) { st.sent.set(name, k); out.push({ kind: 'down', key: k }); }
+        // ★★ V12 VFO A/B: △ (north) on a stick pad, where it means nothing else outside the keyboard.
+        else if (!this.kbOpen && prof === 'sticks' && name === 'north') out.push({ swapVfo: true });
         // ★ The keyboard's own buttons — stick pads only, where these four mean nothing else (kbPadAction).
         else if (this.kbOpen && prof === 'sticks' && KB_BUTTONS.includes(name)) out.push({ kbButton: name, profile: prof });
       }
