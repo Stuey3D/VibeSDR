@@ -7696,6 +7696,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<std::shared_ptr<vibewatch::WatchChannel>> chans;    // present: VFO B (id 1), later more
         std::vector<std::shared_ptr<vibewatch::WatchChannel>> fading;   // removed, still fading out of the mix
         bool stereo = true;                                             // the listener's STEREO switch (audio menu)
+        /** ★ The client says its OUTPUT is mono (a phone speaker, a mono headset) — the server cannot see that. Then every
+         *  VFO goes to both ears at unity, so the speaker plays both and nothing is lost. */
+        bool monoOut = false;
         uint64_t order = 0;                                             // creation order — the newest yields first
         /** The per-channel slice state on a range-locked radio (the listener's thread only). */
         struct Slice { int id = 0; int bins = 0; vibedsp::Channelizer::ExtractCtx ctx; std::vector<cf32> buf; };
@@ -25082,7 +25085,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         snprintf(b, sizeof b, ",\"lo\":%.0f,\"hi\":%.0f", lo, hi); j += b;
         if (w) {
             std::lock_guard<std::mutex> lk(w->m);
-            j += std::string(",\"stereo\":") + (w->stereo ? "true" : "false") + ",\"chans\":[";
+            j += std::string(",\"stereo\":") + (w->stereo ? "true" : "false") + ",\"monoOut\":" + (w->monoOut ? "true" : "false") + ",\"chans\":[";
             bool first = true;
             for (auto& ch : w->chans) {
                 const auto wd = ch->wanted();
@@ -25134,6 +25137,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const bool hasStereo = jsonNum(msg, "stereo", stV) || msg.find("\"stereo\":true") != std::string::npos
                                                            || msg.find("\"stereo\":false") != std::string::npos;
         const bool stereoOn = msg.find("\"stereo\":true") != std::string::npos || (stV != 0 && msg.find("\"stereo\":false") == std::string::npos);
+        // ★ The client's output is mono (it cannot be seen from here) — any message may carry it.
+        const bool hasMonoOut = msg.find("\"monoOut\":") != std::string::npos;
+        const bool monoOutV = jsonOn(msg, "monoOut");
+        if (hasMonoOut && w) { std::lock_guard<std::mutex> lk(w->m); w->monoOut = monoOutV; }
         if (jsonOn(msg, "off")) {
             if (w) {
                 watchRemove(w, id);
@@ -25148,9 +25155,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // only the stereo switch? then that is all
         const bool aims = msg.find("\"frequency\"") != std::string::npos || msg.find("\"mode\"") != std::string::npos
                        || msg.find("\"bandwidth") != std::string::npos || msg.find("\"sql") != std::string::npos
-                       || msg.find("\"on\"") != std::string::npos;
+                       || jsonOn(msg, "on");   // ★ {"on":true} = create at VFO A's frequency
         if (hasStereo && w) { std::lock_guard<std::mutex> lk(w->m); w->stereo = stereoOn; }
-        if (hasStereo && !aims && !ch) {
+        if (!aims && !ch) {   // ★ settings only (stereo, monoOut): never creates a channel
             if (!w) sendText(sock, watchStateJson(nullptr, std::string(",\"stereo\":") + (stereoOn ? "true" : "false")));
             else sendText(sock, watchStateJson(w.get()));
             return;
@@ -25208,6 +25215,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             {
                 std::lock_guard<std::mutex> lk(w->m);
                 if (hasStereo) w->stereo = stereoOn;
+                if (hasMonoOut) w->monoOut = monoOutV;
                 // a channel with this id still fading out is dropped from the fade — the new one replaces it
                 w->fading.erase(std::remove_if(w->fading.begin(), w->fading.end(),
                     [&](const std::shared_ptr<vibewatch::WatchChannel>& c) { return c->id() == id; }), w->fading.end());
@@ -25283,7 +25291,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!w->activeLocked() && !w->mixing) return false;
         w->mixing = true;
         w->mixer.setStereo(w->stereo);
-        w->mixer.setMonoOut(monoOut);
+        w->mixer.setMonoOut(monoOut || w->monoOut);
         const size_t nch = w->chans.size() + w->fading.size();
         if (w->chanPcm.size() < nch) w->chanPcm.resize(nch);
         std::vector<vibewatch::PanMixer::Src> srcs;
