@@ -1182,7 +1182,7 @@ fi
 #     DRM box at desktop and 390 px (test-web-drm). Needs VIBESERVER_BIN, VIBE_TEST_AUDIO (drm/) and numpy for the clip.
 printf '\n\033[1m── DRM (end to end: server, then the web client) ──\033[0m\n'
 DRM_WAV="${VIBE_TEST_AUDIO:-}/drm/uber_rri_9570000_iq48.wav"
-if [ -n "${VIBESERVER_BIN:-}" ] && [ -f "$DRM_WAV" ] && python3 scripts/drm-clip.py "$DRM_WAV" "$OUT/drm-clip.cu8" 60 >/dev/null 2>&1; then
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -f "$DRM_WAV" ] && python3 scripts/drm-clip.py "$DRM_WAV" "$OUT/drm-clip.cu8" 140 >/dev/null 2>&1; then
   VIBE_DRM_CLIP="$OUT/drm-clip.cu8" node scripts/test-server-drm.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_DRM_CLIP="$OUT/drm-clip.cu8" node scripts/test-web-drm.mjs; rc=$?

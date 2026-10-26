@@ -85,7 +85,7 @@ async function server(args, tag) {
   const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(RATE), ...args], { env, stdio: ['ignore', log, log] });
   const status = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
   await until(async () => !!(await status()), 15000);
-  return { port, dir, status, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); setTimeout(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }, 500); } };
+  return { port, dir, status, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); if (!process.env.VIBE_KEEP) setTimeout(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }, 500); else console.log('   kept', dir); } };
 }
 async function listener(port, sid, f, mode) {
   const L = {};
@@ -130,7 +130,7 @@ async function scenario(label, args, tag) {
       let zc = 0; for (let i = 1; i < pcm.length; i++) if ((pcm[i] >= 0) !== (pcm[i - 1] >= 0)) zc++;
       const zcr = zc / Math.max(1, pcm.length) * 48000 / 2;
       ok(pcm.length > 48000 * 6, `programme PCM arrives (${(pcm.length / 48000).toFixed(1)} s in 8 s)`);
-      ok(q(0.5) > 40, `it is not silence (median level ${q(0.5).toFixed(1)} dB re 1 LSB)`);
+      ok(q(0.5) > 40, `it is not silence (median level ${q(0.5).toFixed(1)} dB re 1 LSB)${q(0.5) > 40 ? '' : ' — report: ' + JSON.stringify(last())}`);
       ok(q(0.9) - q(0.1) > 10, `it moves like programme, not noise (envelope p10→p90 ${(q(0.9) - q(0.1)).toFixed(1)} dB)`);
       ok(zcr < 3000, `its energy is low in the band, as AAC at 12 kHz is (zero-crossing rate ≈ ${zcr.toFixed(0)} Hz)`);
       // and as Opus to a client that asks for it
