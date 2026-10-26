@@ -80,6 +80,10 @@ inline const std::vector<DecoderDef>& decoders() {
         //    14.0655–14.0775 at 12 kHz — the PSK segment and its neighbours), a summary of the spots.
         { "psk-skim-6",   "PSK skimmer, 6 kHz (summary)",  "pskskim", "psk", "usb",     0,    0,   0,     false, false, 6000 },
         { "psk-skim-12",  "PSK skimmer, 12 kHz (summary)", "pskskim", "psk", "usb",     0,    0,   0,     false, false, 12000 },
+        // ★★ V12 APRS (docs/v12/AIS-APRS.md): 1200 Bd on an NFM VFO (the region's channel), or HF 300 Bd on USB/LSB —
+        //    kept as the day's packets + a station card. NRZI does not care which way round the tones are, so LSB is fine.
+        { "aprs",         "APRS (1200 Bd, VHF)",          "aprs",   "aprs",  "nfm",     0,    0,   1200,  false, false, 0 },
+        { "aprs-hf",      "APRS HF (300 Bd)",             "aprs",   "aprs",  "usb,lsb", 0,    0,   300,   false, false, 0 },
         // ★★ DSC (V12, 2026-10-26): MF/HF on SSB, the tones 1.7 kHz from the dial (2185.8 USB for 2187.5), either sense
         //    found by the decoder; VHF channel 70 on NFM. Kept as the day's log + an item per distress/urgency call.
         { "dsc",          "DSC (MF/HF)",                  "dsc",    "dsc",   "usb,lsb", 1700, 170, 100,   false, false, 0 },
@@ -133,6 +137,7 @@ inline std::string attachMsg(const Vfo& v) {
         std::snprintf(b, sizeof b, "{\"lpm\":120,\"image_width\":1809,\"carrier\":%.0f,\"deviation\":400,"
                       "\"auto_start\":true,\"auto_stop\":true}", d->toneHz);
     else if (id == "sstv" || id == "ft8") std::snprintf(b, sizeof b, "{}");
+    else if (id == "aprs" || id == "aprs-hf") std::snprintf(b, sizeof b, "{\"baud_rate\":%.0f}", d->baud);
     else if (id == "dsc") std::snprintf(b, sizeof b, "{\"band\":\"hf\",\"center_frequency\":%.0f}", d->toneHz);
     else if (id == "dsc-vhf") std::snprintf(b, sizeof b, "{\"band\":\"vhf\"}");
     else if (d->widthHz > 0) std::snprintf(b, sizeof b, "{\"width\":%.0f}", d->widthHz);

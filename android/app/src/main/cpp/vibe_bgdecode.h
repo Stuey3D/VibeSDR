@@ -31,6 +31,7 @@
 #include "vibe_bgdecode_config.h"   // ★ the profiles, validate(), attachMsg()
 #include "vibe_decoder_host.h"
 #include "vibe_gallery.h"
+#include "vibe_station_log.h"      // ★ V12 APRS: the day's packets + the station card (StationTap)
 #include "vibe_dsc_gallery.h"
 #include "vibe_png.h"
 #include "vibe_callsign_country.h"
@@ -208,6 +209,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "wefax" || ext == "sstv") return ext;
     if (ext == "cw") return "cw";          // ★ a listener's CW decoder: its text, as an RTTY run (a skimmer keeps a summary)
     if (ext == "psk") return "psk";        // ★ …and a listener's PSK decoder (V12 2026-10-26)
+    if (ext == "aprs") return "aprs";      // ★ V12: the day's packets + a summary card of stations (vibe_station_log.h)
     if (ext == "dsc") return "dsc";        // ★ DSC: the day's log per frequency + an item per distress/urgency call
     return "";
 }
@@ -708,10 +710,40 @@ private:
     std::map<std::string, unsigned long> runModes_;   // ★ spots per mode this run (the title of a quiet stretch)
 };
 
+/** ★★ V12 APRS in the gallery: the decoder host's station lines into a day log + summary card (vibe_station_log.h). One
+ *  DayLog per decoder run (a VFO or a listener's session), finished when the decoder stops. */
+class StationTap : public DecoderTap {
+public:
+    StationTap(gallery::Store& st, const gallery::Meta& m) {
+        vibestation::DayLog::Options o;
+        o.kind = m.kind; o.label = "APRS"; o.what = "stations"; o.freqHz = m.freqHz; o.mode = m.mode; o.origin = m.origin; o.profile = m.profile;
+        o.kindWord = [](const std::string& k, int n) -> std::string {
+            if (k == "position" || k == "mice" || k == "nmea") return n == 1 ? "station on the move or fixed" : "stations with positions";
+            if (k == "weather") return n == 1 ? "weather station" : "weather stations";
+            if (k == "object" || k == "item") return n == 1 ? "object" : "objects";
+            if (k == "message" || k == "ack" || k == "bulletin") return n == 1 ? "messaging station" : "messaging stations";
+            if (k == "status") return n == 1 ? "status" : "statuses";
+            return "other";
+        };
+        log_ = std::make_shared<vibestation::DayLog>(st, o);
+        last_ = m.lastItemAt;
+    }
+    void station(const vibestation::Heard& h) override {
+        log_->heard(h);
+        if (last_) last_->store(int64_t(::time(nullptr)));
+    }
+    void tick() override { log_->tick(); }
+    void finish(bool) override { log_->finish(); }
+private:
+    std::shared_ptr<vibestation::DayLog> log_;
+    std::shared_ptr<std::atomic<int64_t>> last_;
+};
+
 /** ★ One factory for every decoder's gallery copy — background decoding's and a listener's alike. */
 inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& meta, std::function<double()> dial = nullptr,
                                     std::function<void(const std::string&)> log = nullptr, const std::string& tag = "") {
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
+    if (meta.kind == "aprs") return std::make_shared<StationTap>(st, meta);
     if (meta.kind == "dsc") return std::make_shared<DscGalleryTap>(st, meta, std::move(dial));
     if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));

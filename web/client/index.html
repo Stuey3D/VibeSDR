@@ -2601,6 +2601,22 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #spotList.on { display: block; }
 /* ★★ CW (V12): the signals list. Line 1 to scan — frequency · call · WPM · SNR · quality · age; line 2 to read — the
    signal's recent text, newest at the right. Dim rows have gone quiet (kept 10 minutes). */
+/* ★★ V12 APRS — the stations (one row each, newest first), the messages, the packets. */
+#aprsList { display: none; margin-top: 4px; }
+#aprsList.on { display: block; }
+#aprsList .ar { display: grid; grid-template-columns: minmax(6.5em, 9em) minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline;
+                font-size: 11px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+#aprsList .ar:hover, #aprsList .ar:focus-visible { background: rgba(255,255,255,0.06); outline: none; }
+#aprsList .ar .c { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#aprsList .ar .c i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+#aprsList .ar .l { color: rgba(255,255,255,0.78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#aprsList .ar .a { color: rgba(255,255,255,0.5); font-variant-numeric: tabular-nums; }
+#aprsList .ar.nopos .c { opacity: 0.75; }
+#aprsList .aprsHead { margin: 8px 6px 2px; font-size: 10px; letter-spacing: 0.08em; color: rgba(255,255,255,0.55); }
+#aprsList .idle { padding: 6px; color: rgba(255,255,255,0.6); font-size: 11px; }
+#aprsMsgs .m, #aprsLog .p { font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; padding: 1px 6px; color: rgba(255,255,255,0.82);
+                            white-space: pre-wrap; word-break: break-word; }
+#aprsLog .p .t { color: rgba(255,255,255,0.45); }
 /* ★★ V12 DSC (dsc.ts): one row per call — time, frequency, ×repeats, then the line; coloured by what the call is. */
 #dscList { display: none; margin-top: 6px; }
 #dscList.on { display: block; }
@@ -3569,6 +3585,7 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="decZoomOut" title="Zoom out" aria-label="Zoom out" style="display:none">−</button>
     <button class="btn" id="decZoomIn" title="Zoom in" aria-label="Zoom in" style="display:none">+</button>
     <button class="btn" id="decAdj" title="Align the chart and set its slant" style="display:none">ADJ</button>
+    <button class="btn" id="aprsMapBtn" title="The stations heard, on the map" style="display:none">MAP</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
     <!-- ★ DAB: CLR clears a text pane DAB does not have, so in DAB this stands in its place
          (Stuart, 2026-09-07): the stations this receiver has learnt, bookmarks filtered to DAB. -->
@@ -3643,6 +3660,8 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ CW: every signal the server is decoding — frequency, call (once spotted), speed, SNR, quality, last heard,
          and its recent text — then the callsigns spotted. The primary signal's text is #decText above it. -->
     <div id="cwList"><div id="cwRows"></div><div id="cwSpotsHead">SPOTS</div><div id="cwSpots"></div></div>
+    <!-- ★★ V12 APRS: the stations heard, the messages, and the packets as they arrive. -->
+    <div id="aprsList"><div id="aprsRows"></div><div class="aprsHead" id="aprsMsgHead" hidden>MESSAGES</div><div id="aprsMsgs"></div><div class="aprsHead">PACKETS</div><div id="aprsLog"></div></div>
     <!-- ★★ DSC: the calls, newest first — the server's line, coloured by distress / urgency / safety / routine (dsc.ts). -->
     <div id="dscList"><div id="dscRows"></div></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
@@ -4593,6 +4612,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-dec="cw" hidden title="Morse — the signal in your passband decoded, every other one in it listed; or SKIMMER: every CW signal across a segment around your dial">CW</button>
     <!-- ★★ V12 2026-10-26: PSK31/63 — this server's own (decoders/psk_skimmer.h); drawn only where vibeserver.json says "psk": true. -->
     <button class="btn" data-dec="psk" hidden title="PSK31 and PSK63 — every PSK signal in your passband listed, the one in the middle decoded; or SKIMMER: every PSK signal across a segment around your dial">PSK</button>
+    <!-- ★★ V12 APRS — this server's own decoder on your audio: 1200 Bd packet on NFM (VHF), or 300 Bd HF packet on USB. -->
+    <button class="btn" data-dec="aprs" hidden title="APRS — stations, positions, weather and messages: 1200 Bd packet in NFM (VHF), or 300 Bd HF packet in USB/LSB">APRS</button>
     <button class="btn" data-dec="navtex">NAVTEX</button>
     <!-- ★★ V12 DSC: maritime Digital Selective Calling (ITU-R M.493) — decoded on the server; hidden unless it says "dsc". -->
     <button class="btn" data-dec="dsc" hidden title="Maritime Digital Selective Calling — distress, urgency, safety and routine calls between ships and coast stations (MF/HF and VHF channel 70)">DSC</button>
@@ -4671,6 +4692,18 @@ select.btn { padding: 6px 8px; }
       </div>
     </div>
     <div class="hint" id="pskHint">Tune <b>USB</b> with the PSK segment in your passband (e.g. <b>14.070</b>).</div>
+  <!-- ★★ APRS (V12): VHF 1200 Bd on NFM (the region's frequency is one tap away), or HF 300 Bd on USB/LSB. -->
+  <div class="subPanel" id="aprsSettings" hidden>
+    <div class="mrow">
+      <label>PACKET</label>
+      <div class="seg" id="aprsBaud">
+        <button class="btn on" data-aprsbaud="1200" title="VHF APRS: Bell 202, 1200 Bd — tune the APRS channel in NFM">VHF 1200</button>
+        <button class="btn" data-aprsbaud="300" title="HF APRS: 300 Bd, 1600/1800 Hz tones — tune 10.1476 MHz (30 m) or 14.105 MHz (20 m) in USB">HF 300</button>
+      </div>
+    </div>
+    <div class="mrow"><button class="btn" id="aprsTune" title="Tune this region's APRS channel">TUNE 144.800 NFM</button></div>
+    <div class="hint" id="aprsHint">Every station heard is listed, with its position, weather, messages and the digipeater
+      that carried it. <b>MAP</b> in the box shows them on the map.</div>
   <!-- ★★ DSC (V12, 2026-10-26): the DSC distress and safety frequencies, tuned as a DSC receiver does (USB 1.7 kHz below,
        or channel 70 in NFM) — only those this radio reaches are drawn (main.ts initDscChannels). -->
   <div class="subPanel" id="dscSettings" hidden>
@@ -4823,6 +4856,9 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-kind="psk">PSK</button>
     <!-- ★★ V12 2026-10-25: ISM — each band's day as a .txt of readings, and the day's summary card. -->
     <button class="btn" data-kind="ism">ISM</button>
+    <!-- ★★ V12: AIS (ships) and APRS (stations) — each a day's log of messages and a summary card of who was heard. -->
+    <button class="btn" data-kind="ais">AIS</button>
+    <button class="btn" data-kind="aprs">APRS</button>
     <!-- ★★ V12 2026-10-26: DSC — each frequency's day of calls as a .txt, and every distress/urgency call on its own (MAP). -->
     <button class="btn" data-kind="dsc">DSC</button>
   </div>
