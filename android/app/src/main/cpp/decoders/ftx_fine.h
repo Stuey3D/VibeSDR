@@ -1,6 +1,7 @@
 // VibeSDR V12 — the FT8 / FT4 / FT2 decoder's SECOND LOOK at a candidate: measured again from the audio, symbol by
 // symbol, instead of from the search waterfall.
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -69,7 +70,7 @@ public:
     int frameSymbols() const { return nn_; }
     int decimation() const { return dd_; }
     int basebandLength() const { return nd_; }
-    size_t ramBytes() const;
+    std::size_t ramBytes() const;
 
 private:
     void extract(double f0);                 // → zr_/zi_ (nd_ samples at rate_/dd_), tone 0 near 0 Hz

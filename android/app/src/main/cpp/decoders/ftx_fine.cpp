@@ -95,7 +95,7 @@ FtxFine::~FtxFine() {
     pffft_aligned_free(bb_);
 }
 
-size_t FtxFine::ramBytes() const {
+std::size_t FtxFine::ramBytes() const {
     return sizeof(float) * ((size_t)nfft_ * 2 + 2 * (size_t)nd_ * 2 + tabC_.size() * 2 + csR_.size() * 2 + taper_.size());
 }
 
