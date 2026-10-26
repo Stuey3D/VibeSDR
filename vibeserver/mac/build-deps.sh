@@ -195,8 +195,9 @@ fi
 #     through cgo), so on a macOS 14 Mac the tunnel switch starts nothing. Compiled here with
 #     CGO_ENABLED=0 Go links it INTERNALLY and stamps Go's own floor (macOS 13 for Go 1.27), and
 #     links nothing but libSystem/libresolv/CoreFoundation/Security — all system. Same source tag,
-#     same -mod=vendor (cloudflared vendors every dependency, so nothing is downloaded but the
-#     tree itself), same main.Version/BuildTime stamps as upstream's Makefile.
+#     same -mod=readonly as upstream's Makefile (2026.10.x no longer keeps a usable vendor/ — its
+#     modules.txt disagrees with go.mod — so modules come from the Go proxy, each checked against the
+#     tag's go.sum), same main.Version/BuildTime stamps as upstream's Makefile.
 # ★ -s -w strip debug info, as the Android build (tools/cloudflared-android/build.sh) does.
 # ★ No self-update concern: directory.cpp always runs it with --no-autoupdate, which matters —
 #   a self-updated binary inside a signed bundle would break the bundle's signature.
@@ -215,7 +216,7 @@ if [ "${FORCE:-0}" != 1 ] && [ -x "$CFDIR/cloudflared" ] && [ -f "$CFDIR/.stamp"
   rm -f "$CFDIR/cloudflared" "$CFDIR/.stamp"
   ( cd "$WORK/cf" && GOCACHE="$WORK/gocache" GOMODCACHE="$WORK/gomod" GOTOOLCHAIN=local GOFLAGS= \
       CGO_ENABLED=0 GOOS=darwin GOARCH="$ARCH" \
-      go build -mod=vendor -trimpath \
+      go build -mod=readonly -trimpath \
         -ldflags "-s -w -X \"main.Version=$CF_VER\" -X \"main.BuildTime=$CF_DATE\"" \
         -o "$CFDIR/cloudflared" ./cmd/cloudflared )
   cp "$WORK/cf/LICENSE" "$CFDIR/LICENSE"
