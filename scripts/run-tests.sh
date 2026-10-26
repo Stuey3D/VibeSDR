@@ -424,6 +424,9 @@ if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fai
 if node --no-warnings scripts/test_mpx_power.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ LOCKED VFO CENTRE (tuneWindow.ts): every app tune clamps into the owner's window, the server's own rule (Stuart 2026-10-18: the app tuned into the black).
 if node --no-warnings scripts/test_tune_window.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 THE SCANNER ENGINE (scanner.ts, docs/v12/SCANNER.md): fake backends of every family — hang cancel on an over-change,
+#     noiseRef thresholds, ignores, priority, OWRX hijack PAUSED/resume, no tune ever outside the span (fuzzed), spikes never stop it.
+if node --no-warnings scripts/test_scanner.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ proxy.kiwisdr.com IS 8073 ONLY (2026-10-07): 47 % of public Kiwis are listed portless (= port 80, refused).
 if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ SERVER ADDRESSES (serverUrl.ts): scheme and port are a PAIR — https://host:8073 stays TLS (GitHub #52, OWRX+ native TLS).
