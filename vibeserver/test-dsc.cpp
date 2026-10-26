@@ -243,6 +243,28 @@ int main() {
         ok(!g.empty() && g[0].symbols == cs[6].syms, "MF/HF at a 12 kHz input rate");
     }
 
+    std::printf("── a real recording (Stuart's UberSDR, 8414.5 kHz, 2026-10-26 07:52 UTC — ~/VibeSDR-test-audio/dsc)\n");
+    {
+        const char* home = std::getenv("HOME");
+        const std::string base = std::string(home ? home : "") + "/VibeSDR-test-audio/dsc/dsc_8414500_20261026T0752";
+        std::ifstream f(base + ".wav", std::ios::binary);
+        if (!f) std::printf("  [skip] not here (%s.wav)\n", base.c_str());
+        else {
+            std::vector<char> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            // a plain 44-byte header from tools/ubersdr-rec: 12 kHz mono int16
+            const uint32_t rate = *(const uint32_t*)(d.data() + 24);
+            std::vector<float> a((d.size() - 44) / 2);
+            for (size_t i = 0; i < a.size(); ++i) a[i] = *(const int16_t*)(d.data() + 44 + 2 * i) / 32768.0f;
+            const auto got = decodeAudio(a, false, rate);
+            std::string ref = slurp(base + ".decoded.txt");
+            int found = 0;
+            for (const auto& c : got) if (ref.find(describe(c)) != std::string::npos) ++found;
+            int refN = 0; for (char ch : ref) refN += ch == '\n';
+            ok(found >= refN && (int)got.size() == refN, std::to_string(got.size()) + " calls, " + std::to_string(found) + " of the "
+               + std::to_string(refN) + " recorded on 2026-10-26 read word for word (test calls to Australia, the USCG, Spain …)");
+        }
+    }
+
     std::printf("── \"dsc\" through a DecoderHost\n");
     {
         DecoderHost::Env e;

@@ -171,7 +171,7 @@ public:
     struct Stats {
         unsigned long syncs = 0;        ///< phasing found
         unsigned long falseSyncs = 0;   ///< …that did not become a call (format unreadable, signal gone)
-        unsigned long calls = 0, corrected = 0, failed = 0;
+        unsigned long calls = 0, corrected = 0, failed = 0;   ///< failed: read but not shown (in doubt, or impossible)
         unsigned long inverted = 0;     ///< calls found in the mirrored sense
     };
     const Stats& stats() const { return st_; }

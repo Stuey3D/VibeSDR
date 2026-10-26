@@ -490,7 +490,7 @@ std::string describe(const Call& c) {
     else if (c.eos == kEosAckBq) p.push_back("acknowledgement");
     if (c.check == Call::Check::Corrected)
         p.push_back(c.corrected == 1 ? "1 symbol corrected" : std::to_string(c.corrected) + " symbols corrected");
-    else if (c.check == Call::Check::Failed) p.push_back("UNCONFIRMED (check character failed)");
+    else if (c.check == Call::Check::Failed) p.push_back("UNCONFIRMED (symbols in doubt)");
     std::string out;
     for (size_t k = 0; k < p.size(); ++k) { if (k) out += kDot; out += p[k]; }
     return out;
@@ -1216,9 +1216,14 @@ bool Receiver::finishPrimary(Cand& c, int mEos) {
 
 void Receiver::emit(Cand& c) {
     if (!c.primaryDone) return;
+    /* ★★ UNCONFIRMED IS NOT SHOWN (2026-10-26, Stuart's UberSDR, 12 h on six frequencies): of 259 calls 4 passed their
+     *  check with symbols in doubt, and at least two were plainly wrong ("from 477165800 to 477165800", "from group
+     *  059982000 (MID 599)"). A wrong MMSI written down is worse than a missed test call; the station repeats. Counted. */
+    if (c.call.check == Call::Check::Failed) { ++st_.failed; return; }
+    // ★ No station calls itself — a read that says so is a misread.
+    if (!c.call.address.empty() && c.call.address == c.call.self) { ++st_.failed; return; }
     ++st_.calls;
     if (c.call.check == Call::Check::Corrected) ++st_.corrected;
-    if (c.call.check == Call::Check::Failed) ++st_.failed;
     if (onCall) onCall(c.call);
 }
 
