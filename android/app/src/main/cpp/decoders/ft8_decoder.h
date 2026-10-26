@@ -77,6 +77,8 @@ Ft8CallHashTable& ft8CallHashes();
  *  and returns the hard-decision disagreements of the closest CRC-valid codeword, or -1 when none is within
  *  `maxErrors`. Exposed for test-ft8-fast. */
 int ft8Osd1(const float* llr, int maxErrors, uint8_t a91[12]);
+/** An OSD decode must be a message people send, with plausible calls (see the .cpp). Exposed for the tests. */
+bool ft8OsdPlausible(const ftx_message_t& msg);
 /** OSD-1, then every pair of flips among the `pairSpan` least reliable independent bits (0 = ft8Osd1 exactly). */
 int ft8Osd(const float* llr, int maxErrors, int pairSpan, uint8_t a91[12]);
 

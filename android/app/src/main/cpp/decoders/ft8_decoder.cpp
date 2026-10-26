@@ -287,6 +287,65 @@ bool plausibleCall(const char* c) {
 }
 }
 
+namespace {
+/** Any callsign field an FT8 message prints: "<...>" (a hash not yet heard), "<CALL>", a standard call with /P or /R,
+ *  or a compound one ("PJ4/K1ABC", "W1AW/9"): every part letters and digits, the main part 3-7 long with a digit in
+ *  it and a letter at its end, any other part 1-4 long with a letter in it (or a single district digit after it). */
+bool plausibleAnyCall(std::string c) {
+    if (c == "<...>") return true;
+    if (c.size() > 2 && c.front() == '<' && c.back() == '>') c = c.substr(1, c.size() - 2);
+    std::vector<std::string> parts;
+    size_t a = 0;
+    for (size_t b; (b = c.find('/', a)) != std::string::npos; a = b + 1) parts.push_back(c.substr(a, b - a));
+    parts.push_back(c.substr(a));
+    if (parts.size() > 2) return false;
+    size_t mainIdx = 0;
+    for (size_t i = 1; i < parts.size(); ++i) if (parts[i].size() > parts[mainIdx].size()) mainIdx = i;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const std::string& p = parts[i];
+        if (p.empty()) return false;
+        bool letter = false, digit = false;
+        for (char ch : p) {
+            if (!std::isalnum((unsigned char)ch)) return false;
+            letter |= std::isalpha((unsigned char)ch) != 0; digit |= std::isdigit((unsigned char)ch) != 0;
+        }
+        if (i == mainIdx) {
+            if (p.size() < 3 || p.size() > 7 || !digit || !letter || !std::isalpha((unsigned char)p.back())) return false;
+        } else if (!(p.size() <= 4 && letter) && !(i > mainIdx && p.size() == 1 && digit) && !(p == "P" || p == "R")) {
+            return false;
+        }
+    }
+    return true;
+}
+}
+
+/* ★★ A CODEWORD OSD FOUND MUST READ LIKE A MESSAGE (2026-10-26). OSD searches hundreds of codewords for one the
+ *  CRC-14 accepts; over enough noise one random codeword will pass and unpack (the FT2 noise run with every candidate
+ *  tried found "1/Y2ESZU4Y3 <...> 73"). So an OSD decode must be a message people send — standard, non-standard
+ *  call, or DXpedition — never free text or telemetry (71 arbitrary bits always "unpack"), and every call in it
+ *  plausible. A decode that BP reached on its own keeps every type, as before. */
+bool ft8OsdPlausible(const ftx_message_t& msg) {
+    const ftx_message_type_t t = ftx_message_get_type(&msg);
+    if (t != FTX_MESSAGE_TYPE_STANDARD && t != FTX_MESSAGE_TYPE_NONSTD_CALL && t != FTX_MESSAGE_TYPE_DXPEDITION
+        && ftx_message_get_i3(&msg) != 2) return false;
+    ftx_message_t m = msg; char txt[FTX_MAX_MESSAGE_LENGTH] = {}; ftx_message_offsets_t offs;
+    if (ftx_message_decode(&m, nullptr, txt, &offs) != FTX_MESSAGE_RC_OK) return false;
+    std::vector<std::string> tok;
+    for (char* q = std::strtok(txt, " "); q; q = std::strtok(nullptr, " ")) tok.push_back(q);
+    for (size_t i = 0; i < tok.size(); ++i) {
+        std::string w = tok[i];
+        if (!w.empty() && w.back() == ';') w.pop_back();
+        if (w == "CQ" || w == "DE" || w == "QRZ" || w == "RR73" || w == "RRR" || w == "73" || w == "R") continue;
+        if (plausibleExtra(w.c_str())) continue;                       // a grid or a report
+        if (i == 1 && tok[0] == "CQ" && w.size() <= 4) {               // "CQ DX", "CQ POTA", "CQ 123"
+            bool alnum = true; for (char ch : w) alnum &= std::isalnum((unsigned char)ch) != 0;
+            if (alnum && tok.size() >= 3) continue;
+        }
+        if (!plausibleAnyCall(w)) return false;
+    }
+    return true;
+}
+
 bool FtxApBook::bitsOf(const char* text, bool ft4, uint64_t out[2]) {
     out[0] = out[1] = 0;
     ftx_message_t m; ftx_message_init(&m);
@@ -1098,6 +1157,7 @@ void Ft8SlotDecoder::decode(float* audio, int n, const Ft8SlotOptions& o, std::v
                 ftx_message_t t = msg; char txt[FTX_MAX_MESSAGE_LENGTH]; ftx_message_offsets_t offs;
                 if (ftx_message_decode(&t, nullptr, txt, &offs) != FTX_MESSAGE_RC_OK) { sm[Ft8SlotStats::kPost] += lap(); continue; }
             }
+            if (viaOsd && !ft8OsdPlausible(msg)) { sm[Ft8SlotStats::kPost] += lap(); continue; }
             bool dup = false;   // ★ one message per slot, whichever pass and candidate found it first
             for (size_t r = first; r < out.size() && !dup; ++r)
                 dup = out[r].msg.hash == msg.hash && std::memcmp(out[r].msg.payload, msg.payload, sizeof msg.payload) == 0;

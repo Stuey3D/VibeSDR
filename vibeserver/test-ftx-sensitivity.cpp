@@ -3,7 +3,7 @@
 //
 // ★★★ WHAT MUST HOLD (Stuart, 2026-10-27: "world class", CPU first; decodes only ever go UP, zero false decodes):
 //   1. the kernels the old decoder still runs are untouched (BP with no stall = bp_decode; OSD with no pairs = OSD-1);
-//      OSD never returns the all-zero codeword;
+//      OSD never returns the all-zero codeword, and what it returns must read like a message people send;
 //   2. the second look finds a clean signal's start to 1/32 symbol and its frequency to a fraction of a tone;
 //   3. on a synthetic band with known answers it decodes well below where the old full depth gave up — FT8, FT4, FT2;
 //   4. the AP book learns calls and pairs, forgets them, and its hypotheses are exactly the messages they stand for;
@@ -188,6 +188,14 @@ int main() {
         float zeros[FTX_LDPC_N]; for (float& v : zeros) v = -10.0f;      // every bit a confident 0: a carrier, a residue
         uint8_t a[12] = {};
         ok(ft8Osd(zeros, 24, 40, a) < 0, "OSD never returns the all-zero codeword (its CRC is 0 — it always 'passes')");
+        auto osdOk = [](const char* t) { ftx_message_t m; ftx_message_init(&m); return ftx_message_encode(&m, nullptr, t) == FTX_MESSAGE_RC_OK && ft8OsdPlausible(m); };
+        ok(osdOk("CQ G4ABC IO92") && osdOk("G4ABC DL1XYZ R-12") && osdOk("PJ4/K1ABC W9XYZ RR73") && osdOk("CQ DX OH3JF KP20"),
+           "an OSD decode people send is kept (CQ, report, compound call, directed CQ)");
+        auto nonstd = [](const char* to, const char* de) { ftx_message_t m; ftx_message_init(&m);
+                                                           return ftx_message_encode_nonstd(&m, nullptr, to, de, "73") == FTX_MESSAGE_RC_OK && ft8OsdPlausible(m); };
+        ok(nonstd("W9XYZ", "PJ4/K1ABC"), "...including a non-standard call (\"<...> PJ4/K1ABC 73\")");
+        ok(!osdOk("TNX BOB 73 GL") && !nonstd("W9XYZ", "1/Y2ESZU4Y3"),
+           "an OSD decode that is free text, or carries no plausible call (the FT2 noise run's \"1/Y2ESZU4Y3\"), is not");
     }
 
     std::printf("2. The second look measures a clean signal\n");
