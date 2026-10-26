@@ -19,6 +19,14 @@ VDSP=android/app/src/main/cpp/vibedsp
 KISS="$VDSP/third_party/kissfft"
 # ★ V12 digital spots: every mode engine in decoders/digimodes/ (the builds glob it) goes wherever digi_modes.cpp goes.
 DIGIMODES="$(ls android/app/src/main/cpp/decoders/digimodes/*.cpp 2>/dev/null | tr '\n' ' ')"
+# ★ V12 DRM: FAAD2's DRM build, where this machine has one (a release's deps prefix via VIBE_DEPS, else an installed copy) —
+#   without it test-drm-faad reports NOT RUN rather than passing.
+FAAD_FLAGS=""
+for d in "${VIBE_DEPS:-/nonexistent}" /opt/homebrew/opt/faad2 /usr/local /usr; do
+  if [ -f "$d/include/neaacdec.h" ] && ls "$d"/lib/libfaad_drm.* >/dev/null 2>&1; then
+    FAAD_FLAGS="-DVIBE_HAVE_FAAD2 -I $d/include -L $d/lib -lfaad_drm -Wl,-rpath,$d/lib"; break
+  fi
+done
 
 # test name -> extra compiler flags it needs
 flags_for() {
@@ -131,6 +139,8 @@ flags_for() {
     #    B's channels in every robustness mode (every frame byte-checked), ±1.2 kHz / ±30 ppm, 10 min of noise + an AM signal =
     #    nothing, the audio framing, a CPU row. VIBE_TEST_AUDIO adds RRI off air (drm/). Optimised: ~2 min.
     test-drm)              echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★★ DRM's AAC through FAAD2 on the real RRI recording: decodes, programme, concealment without clicks or gaps, CPU.
+    test-drm-faad)         echo "-O2 -I $VDSP -I $KISS $FAAD_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★★ V12 WSPR (decoders/digimodes/wspr_decoder.h): protocol, synthetic slots −20…−28 dB with drift and DT, hashed calls, pure
     #    noise, subtraction, the live decoder — optimised, it decodes ~50 two-minute slots. VIBE_TEST_AUDIO adds 40 m + 20 m
     #    off air, with the WSPRnet-scale SNR held to ±1 dB (mean) / ±3 dB (each) of Stuart's UberSDR's own reports.
@@ -257,7 +267,7 @@ deps_for() {
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
     test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
-    test-drm)           echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
+    test-drm|test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
     test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C)
     *)                  echo "" ;;
@@ -278,7 +288,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-drm)
+    test-ndb|test-drm|test-drm-faad)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"

@@ -189,7 +189,9 @@ inline std::vector<uint8_t> loasFrame(const std::vector<uint8_t>& asc, size_t as
 
 // ── The audio super frame → access units ────────────────────────────────────────────────────────────────────────────
 
-struct AccessUnit { std::vector<uint8_t> data; bool crcOk = true; };
+/** ★ `crc` is DRM AAC's per-frame CRC-8 from the super frame (§5.4.1): it covers the frame's side information, so only a
+ *  decoder that parses the frame can check it — FAAD2's DRM mode takes it as the byte before the frame. */
+struct AccessUnit { std::vector<uint8_t> data; bool crcOk = true; uint8_t crc = 0; bool hasCrc = false; };
 
 class AudioFramer {
 public:
@@ -290,7 +292,7 @@ private:
             const size_t end = i < nf - 1 ? size_t(borders[size_t(i)]) : payLen;
             if (end < start || end > payLen) break;
             AccessUnit au; au.data.assign(sf + payStart + start, sf + payStart + end);
-            au.crcOk = true;   // ★ the per-frame CRC covers only the side information; checking it needs the AAC parse
+            au.crcOk = true; au.crc = sf[hdrBytes + size_t(i)]; au.hasCrc = true;   // ★ the per-frame CRC covers only the side information; checking it needs the AAC parse
             ++units_; ++nUnits;
             out.push_back(std::move(au));
             start = end;

@@ -717,6 +717,38 @@ else()
   message(STATUS "libairspyhf not found — building without Airspy HF+ support")
 endif()
 
+# ── FAAD2 (DRM build): DRM's AAC, decoded ON THE SERVER (V12 DRM — docs/v12/DRM-AUDIO-ROUTES.md) ─────────────
+# ★★★ GPL-2.0-or-later ("Any non-GPL usage … strictly forbidden"). The standalone VibeServer (this build: Linux deb,
+#     Mac app, Windows exe) may link it — it is GPL itself. The App Store app must NOT: modules/vibe-local-sdr/build_ios.sh
+#     never defines VIBE_HAVE_FAAD2 and fails if a FAAD2 symbol appears in its archive.
+# ★ Release builds take it from the deps prefix (built from pinned source, statically, by linux/ and mac/build-deps.sh) —
+#   a missing file is a configure error there. A dev build looks for an installed FAAD2's DRM library and, without
+#   one, builds without it: DRM AAC stations then say why they are silent, as before.
+option(VIBE_DRM_FAAD2 "DRM AAC via FAAD2's DRM build (GPL-2.0+; server builds only)" ON)
+if(VIBE_DRM_FAAD2)
+  if(VIBE_DEPS_PREFIX)
+    set(FAAD2_LIB "${VIBE_DEPS_PREFIX}/lib/libfaad_drm.a" CACHE FILEPATH "" FORCE)
+    set(FAAD2_INC "${VIBE_DEPS_PREFIX}/include" CACHE PATH "" FORCE)
+    if(NOT EXISTS "${FAAD2_LIB}" OR NOT EXISTS "${FAAD2_INC}/neaacdec.h")
+      message(FATAL_ERROR "${VIBE_DEPS_PREFIX} has no FAAD2 (lib/libfaad_drm.a, include/neaacdec.h) — ${_deps_hint}")
+    endif()
+  else()
+    find_library(FAAD2_LIB NAMES libfaad_drm.a faad_drm HINTS /opt/homebrew/opt/faad2/lib /opt/homebrew/lib /usr/local/lib /usr/lib)
+    find_path(FAAD2_INC neaacdec.h HINTS /opt/homebrew/opt/faad2/include /opt/homebrew/include /usr/local/include /usr/include)
+  endif()
+  if(FAAD2_LIB AND FAAD2_INC)
+    message(STATUS "FAAD2 (DRM): ${FAAD2_LIB}")
+    if(VIBE_DEPS_PREFIX AND EXISTS "${VIBE_DEPS_PREFIX}/share/licences/COPYING.faad2")
+      install(FILES "${VIBE_DEPS_PREFIX}/share/licences/COPYING.faad2" DESTINATION share/doc/vibeserver)   # ★ the deb carries its licence
+    endif()
+    target_include_directories(vibeserver_core PUBLIC "${FAAD2_INC}")
+    target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_FAAD2)
+    target_link_libraries(vibeserver_core PUBLIC "${FAAD2_LIB}")
+  else()
+    message(STATUS "FAAD2's DRM library not found — building without DRM AAC audio (dev build)")
+  endif()
+endif()
+
 # ── libopus: compressed VibeServer audio (replaces IMA-ADPCM) ──────────────────
 # STATIC like the others, so the .app ships self-contained. VIBE_HAVE_OPUS gates every Opus code
 # path in the shim; where it is undefined (the Android build has no libopus yet — UberSDR decode

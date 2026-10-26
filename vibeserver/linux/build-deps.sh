@@ -46,6 +46,8 @@ USB_SHA=fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf    # = 
 OPUS_VER=1.6.1
 OPUS_SHA=6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1   # = mac/build-deps.sh
 RTL_SHA=797f8143266d983c56d8f35d2d442527529dd8a5                             # = mac/build-deps.sh
+FAAD_VER=2.11.3
+FAAD_SHA=860ab62087e336c1844a70e33196c1790b525fb9a9e7b6ac4fab1a1a4e4d5ce8   # = mac/build-deps.sh (GitHub tag tarball)
 
 # ── the toolchain, per profile ───────────────────────────────────────────────────────────────
 HOSTOPT=(); CMAKE_TC=(); OPUS_EXTRA=()
@@ -163,9 +165,29 @@ cp "$WORK/rtl/include/rtl-sdr.h" "$WORK/rtl/include/rtl-sdr_export.h" "$PREFIX/i
 [ "$(strings "$PREFIX/lib/librtlsdr.a" | count 'Detached kernel driver')" -gt 0 ] \
   || { echo "!! librtlsdr was built without DETACH_KERNEL_DRIVER — refusing"; exit 1; }
 
+# ── FAAD2 2.11.3, its DRM build (libfaad_drm), static — V12 DRM's AAC, decoded on the server ─────────────────
+# ★★★ GPL-2.0-or-later. The server is GPL and may link it; the App Store app never does (build_ios.sh checks). Its
+#     COPYING travels with the package (CMakeLists.txt installs share/licences/COPYING.faad2 into /usr/share/doc).
+# ★ Float, not FAAD2's fixed-point variant: every profile has an FPU (ARMv6 VFPv2 included), and the float decoder is the
+#   one measured (docs/v12/DRM-AUDIO-ROUTES.md). DRC off (DRM's AAC carries none); no CLI.
+fetch "https://github.com/knik0/faad2/archive/refs/tags/$FAAD_VER.tar.gz" "faad2.tar.gz" "$FAAD_SHA"
+mkdir -p "$WORK/faad" && tar -xzf "$WORK/faad2.tar.gz" -C "$WORK/faad" --strip-components 1
+cmake -S "$WORK/faad" -B "$WORK/faad/b" -DCMAKE_BUILD_TYPE=Release "${CMAKE_TC[@]}" \
+      $([ "$PROFILE" = native ] && echo "-DCMAKE_C_COMPILER=$CC_ONLY") \
+      ${ARCHFLAGS:+-DCMAKE_C_FLAGS="$ARCHFLAGS"} -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF \
+      >"$WORK/faad.log" 2>&1 \
+  && cmake --build "$WORK/faad/b" --target faad_drm -j"$JOBS" >>"$WORK/faad.log" 2>&1 \
+  || { tail -40 "$WORK/faad.log"; echo "!! FAAD2 build failed"; exit 1; }
+cp "$WORK/faad/b/libfaad_drm.a" "$PREFIX/lib/"
+cp "$WORK/faad/include/neaacdec.h" "$PREFIX/include/"
+mkdir -p "$PREFIX/share/licences" && cp "$WORK/faad/COPYING" "$PREFIX/share/licences/COPYING.faad2"
+# ★ The FEATURE, not the file: the DRM entry point must be in it (a plain libfaad would build and play nothing).
+[ "$("$NM" "$PREFIX/lib/libfaad_drm.a" 2>/dev/null | count 'T .*NeAACDecInitDRM')" -gt 0 ] \
+  || { echo "!! libfaad_drm.a has no NeAACDecInitDRM — refusing"; exit 1; }
+
 # ── every object for the architecture the profile promises ───────────────────────────────────
 X="$WORK/x"; mkdir -p "$X"
-for a in libusb-1.0 libopus librtlsdr; do
+for a in libusb-1.0 libopus librtlsdr libfaad_drm; do
   rm -rf "$X"/*; ( cd "$X" && "$AR" x "$PREFIX/lib/$a.a" )
   if [ -n "$WANT_FILE" ]; then
     bad="$(file "$X"/*.o | count -v "$WANT_FILE")"
@@ -181,6 +203,7 @@ done
 { echo "libusb $USB_VER sha256 $USB_SHA (no udev)"
   echo "libopus $OPUS_VER sha256 $OPUS_SHA ${OPUS_EXTRA[*]}"
   echo "librtlsdr osmocom/rtl-sdr $RTL_SHA (DETACH_KERNEL_DRIVER)"
+  echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_drm, float, GPL-2.0-or-later)"
   echo "profile $PROFILE, CFLAGS '$CFLAGS', $CCVER"; } > "$PREFIX/BUILT-FROM"
 ls -l "$PREFIX/lib"
 echo "==> deps ($PROFILE): done"

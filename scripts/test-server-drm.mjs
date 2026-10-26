@@ -113,7 +113,34 @@ async function scenario(label, args, tag) {
     ok(r.robustness === 'B' && r.bwKhz === 10 && r.mscQam === 16, `mode B, 10 kHz, 16-QAM (${r.robustness} ${r.bwKhz} ${r.mscQam})`);
     ok(r.label === 'SNR Tiganesti E1', `the station's label: "${r.label}"`);
     ok(r.codec === 'AAC' && r.audioRate === 12000 && r.audioMode === 'mono' && r.bitrate > 10000, `the codec: ${r.codec} ${r.audioMode} ${r.audioRate} Hz, ${r.bitrate} bit/s`);
-    ok(r.playable === false && /cannot be played/.test(r.why || ''), `an AAC station says why it is silent: "${r.why}"`);
+    // ★ A server built with FAAD2 (VIBE_DRM_FAAD2, the release builds) PLAYS DRM's AAC; one without says why it is silent.
+    const faad = r.playable === true;
+    if (process.env.VIBE_DRM_EXPECT_AUDIO === '1') ok(faad, `this build plays DRM AAC (decoder: ${r.decoder})`);
+    if (!faad) ok(r.playable === false && /cannot be played/.test(r.why || ''), `an AAC station says why it is silent: "${r.why}"`);
+    else {
+      ok(/FAAD2/.test(r.decoder || ''), `the box names the decoder: ${r.decoder}`);
+      // the programme itself, as PCM on this listener's audio socket (int16 frames: [ch][0][rate u32 LE][samples])
+      L.aud.countOnly = false; L.aud.bin.length = 0;
+      await sleep(8000);
+      const pcm = [];
+      for (const f of L.aud.bin) if (f[1] === 0) { const ch = f[0]; for (let i = 6; i + 1 < f.length; i += 2 * ch) pcm.push(f.readInt16LE(i)); }
+      const N = 480, env = [];
+      for (let i = 0; i + N <= pcm.length; i += N) { let e = 0; for (let k = 0; k < N; k++) e += pcm[i + k] * pcm[i + k]; env.push(10 * Math.log10(e / N + 1)); }
+      const sorted = [...env].sort((a, b) => a - b), q = (p) => sorted[Math.floor(p * (sorted.length - 1))];
+      let zc = 0; for (let i = 1; i < pcm.length; i++) if ((pcm[i] >= 0) !== (pcm[i - 1] >= 0)) zc++;
+      const zcr = zc / Math.max(1, pcm.length) * 48000 / 2;
+      ok(pcm.length > 48000 * 6, `programme PCM arrives (${(pcm.length / 48000).toFixed(1)} s in 8 s)`);
+      ok(q(0.5) > 40, `it is not silence (median level ${q(0.5).toFixed(1)} dB re 1 LSB)`);
+      ok(q(0.9) - q(0.1) > 10, `it moves like programme, not noise (envelope p10→p90 ${(q(0.9) - q(0.1)).toFixed(1)} dB)`);
+      ok(zcr < 3000, `its energy is low in the band, as AAC at 12 kHz is (zero-crossing rate ≈ ${zcr.toFixed(0)} Hz)`);
+      // and as Opus to a client that asks for it
+      const O = ws(S.port, `/ws/audio?user_session_id=drm${tag}001&codec=opus`);
+      await sleep(4000);
+      const op = O.bin.filter((f) => f[1] === 3).map((f) => f.length - 6);
+      ok(op.length > 50 && Math.max(...op) > 60, `Opus out to a client: ${op.length} packets, up to ${Math.max(0, ...op)} bytes`);
+      // ★ one audio socket per session: the Opus one has taken over — it carries on as this listener's audio
+      L.aud.close(); O.countOnly = true; L.aud = O;
+    }
     ok(r.snr > 10, `SNR ${r.snr} dB`);
     ok(r.sync && r.freq && r.frame && r.fac && r.sdc && r.msc, 'all six lights');
     // ★ VFO A/B: no VFO B in DRM (its audio is the decoded programme) — the toggle's allowance is 0 and a request is refused

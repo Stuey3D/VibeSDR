@@ -14,13 +14,18 @@
 //     answer for an AAC station is the honest one.
 #pragma once
 #include "decoders/drm/drm_audio.h"
+#include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#if defined(VIBE_HAVE_FAAD2)
+#include <neaacdec.h>   // ★★ FAAD2 (GPL-2.0-or-later), its DRM build — SERVER BUILDS ONLY (VIBE_DRM_FAAD2); never the App Store app
+#endif
 #if defined(__ANDROID__)
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
@@ -255,6 +260,126 @@ private:
 };
 #endif
 
+/** ★ An integer-ratio upsampler to 48 kHz stereo (DRM's AAC comes out at 12, 24 or 48 kHz): a windowed-sinc polyphase
+ *  FIR, 24 taps per phase, cut-off just under the input's Nyquist. */
+class DrmUpsampler48 {
+public:
+    bool setRate(int inHz) {
+        if (inHz <= 0 || 48000 % inHz) return false;
+        if (inHz == in_) return true;
+        in_ = inHz; L_ = 48000 / inHz; constexpr int kTaps = 24;
+        const int n = kTaps * L_;
+        h_.assign(size_t(n), 0.0f);
+        const double fc = 0.45 / L_;   // cycles per OUTPUT sample
+        for (int i = 0; i < n; ++i) {
+            const double t = i - (n - 1) / 2.0;
+            const double x = 2.0 * M_PI * fc * t;
+            const double sinc = std::abs(t) < 1e-9 ? 2.0 * fc : std::sin(x) / (M_PI * t);
+            const double w = 0.42 - 0.5 * std::cos(2 * M_PI * i / (n - 1)) + 0.08 * std::cos(4 * M_PI * i / (n - 1));
+            h_[size_t(i)] = float(sinc * w * L_);
+        }
+        hl_.assign(kTaps, 0.0f); hr_.assign(kTaps, 0.0f); pos_ = 0;
+        return true;
+    }
+    /** Interleaved stereo in at the input rate → interleaved stereo out at 48 kHz, appended. */
+    void process(const float* st, int frames, std::vector<float>& out) {
+        const int T = int(hl_.size());
+        for (int f = 0; f < frames; ++f) {
+            hl_[size_t(pos_)] = st[2 * f]; hr_[size_t(pos_)] = st[2 * f + 1];
+            pos_ = (pos_ + 1) % T;
+            for (int ph = 0; ph < L_; ++ph) {
+                float l = 0, r = 0;
+                for (int k = 0; k < T; ++k) {
+                    const int idx = (pos_ - 1 - k + 2 * T) % T;        // newest first
+                    const float c = h_[size_t(k * L_ + ph)];
+                    l += c * hl_[size_t(idx)]; r += c * hr_[size_t(idx)];
+                }
+                out.push_back(l); out.push_back(r);
+            }
+        }
+    }
+private:
+    int in_ = 0, L_ = 1, pos_ = 0;
+    std::vector<float> h_, hl_, hr_;
+};
+
+#if defined(VIBE_HAVE_FAAD2)
+/** ★★★ DRM's AAC THROUGH FAAD2's DRM MODE (Stuart's decision, 2026-10-26: build FAAD2 into the SERVER so every client
+ *  hears DRM AAC as ordinary audio). Nothing else free decodes it — docs/v12/DRM-AUDIO-ROUTES.md has the evidence.
+ *  ★ FAAD2's DRM mode takes each frame with the super frame's CRC-8 IN FRONT of it and checks it (side information);
+ *    SBR and PS are told by the channel code, from the SDC — the frames never say.
+ *  ★★ A FRAME THAT FAILS IS CONCEALED, NOT GLITCHED: the last good frame is played again fading to silence, and the next
+ *     good one fades in — a dropout on a fading HF signal sounds like a fade, not a click or a burst of garbage. */
+class DrmFaad {
+public:
+    ~DrmFaad() { close(); }
+    bool open(const vibedrm::AudioInfo& a) {
+        close();
+        h_ = NeAACDecOpen();
+        if (!h_) return false;
+        unsigned char ch = DRMCH_MONO;
+        if (a.audioMode == 2) ch = a.sbr ? DRMCH_SBR_STEREO : DRMCH_STEREO;
+        else if (a.audioMode == 1) ch = DRMCH_SBR_PS_STEREO;
+        else ch = a.sbr ? DRMCH_SBR_MONO : DRMCH_MONO;
+        if (NeAACDecInitDRM(&h_, (unsigned long)a.sampleRateHz(), ch) < 0) { close(); return false; }
+        NeAACDecConfigurationPtr c = NeAACDecGetCurrentConfiguration(h_);
+        c->outputFormat = FAAD_FMT_FLOAT;
+        NeAACDecSetConfiguration(h_, c);
+        last_.clear(); fadeIn_ = false;
+        return true;
+    }
+    bool ok() const { return h_ != nullptr; }
+    void decode(const vibedrm::AccessUnit& au, std::vector<float>& out) {
+        if (!h_) return;
+        buf_.assign(1, au.crc);
+        buf_.insert(buf_.end(), au.data.begin(), au.data.end());
+        NeAACDecFrameInfo fi{};
+        void* pcm = au.data.empty() ? nullptr : NeAACDecDecode(h_, &fi, buf_.data(), (unsigned long)buf_.size());
+        std::vector<float> st;
+        if (!pcm || fi.error || fi.samples == 0 || fi.channels == 0) {
+            ++bad_;
+            if (last_.empty()) return;
+            // conceal: the last good frame again, fading out
+            st = last_;
+            const size_t n = st.size() / 2;
+            for (size_t i = 0; i < n; ++i) { const float g = float(n - i) / float(n) * fadeGain_; st[2 * i] *= g; st[2 * i + 1] *= g; }
+            fadeGain_ = 0.0f; fadeIn_ = true;
+        } else {
+            ++good_;
+            const float* f = static_cast<const float*>(pcm);
+            const size_t frames = fi.samples / fi.channels;
+            st.resize(frames * 2);
+            for (size_t i = 0; i < frames; ++i) {
+                st[2 * i] = f[i * fi.channels];
+                st[2 * i + 1] = f[i * fi.channels + (fi.channels > 1 ? 1 : 0)];
+            }
+            last_ = st; fadeGain_ = 1.0f;
+            if (fadeIn_) {   // after a concealed frame: in again over ~10 ms
+                const size_t n = std::min<size_t>(frames, size_t(fi.samplerate / 100));
+                for (size_t i = 0; i < n; ++i) { const float g = float(i) / float(n); st[2 * i] *= g; st[2 * i + 1] *= g; }
+                fadeIn_ = false;
+            }
+            rate_ = int(fi.samplerate);
+        }
+        if (rate_ > 0 && up_.setRate(rate_)) up_.process(st.data(), int(st.size() / 2), out);
+    }
+    void close() { if (h_) { NeAACDecClose(h_); h_ = nullptr; } }
+    int64_t good() const { return good_; }
+    int64_t bad() const { return bad_; }
+    static std::string version() {
+        char* id = nullptr; char* cp = nullptr;
+        NeAACDecGetVersion(&id, &cp);
+        return std::string("FAAD2 ") + (id ? id : "");
+    }
+private:
+    NeAACDecHandle h_ = nullptr;
+    std::vector<unsigned char> buf_;
+    std::vector<float> last_; float fadeGain_ = 1.0f; bool fadeIn_ = false;
+    int rate_ = 0; int64_t good_ = 0, bad_ = 0;
+    DrmUpsampler48 up_;
+};
+#endif
+
 /** ★★ The one door the DRM listener uses: configure for a service, ask whether it can be played (and why not), feed
  *  access units, collect PCM (48 kHz stereo on FFmpeg/Apple; the codec's own rate on Android — rateHz()). */
 class DrmAudioDecoder {
@@ -264,6 +389,9 @@ public:
         backend.clear();
         if (!a.present) { why = "Waiting for the station's audio description."; return false; }
         if (a.coding == 0) {
+#if defined(VIBE_HAVE_FAAD2)
+            if (a.sampleRateHz() > 0) { backend = DrmFaad::version(); return true; }
+#endif
             why = std::string("This station uses DRM's ") + a.codecName() +
                   " (error-resilient AAC). No decoder on this server's system can play it, so the audio cannot be played; "
                   "the signal, the station name and its text are still received and decoded.";
@@ -292,6 +420,12 @@ public:
         close();
         const vibedrm::AudioInfo& a = fr.info();
         if (!canDecode(a, why_, backend_)) return false;
+#if defined(VIBE_HAVE_FAAD2)
+        if (a.coding == 0) {
+            if (!faad_.open(a)) { why_ = "FAAD2 refused this station's AAC configuration."; return false; }
+            open_ = true; return true;
+        }
+#endif
         const vibedrm::UsacInfo& u = fr.usac();
         if (!u.ok) { why_ = "This station's xHE-AAC configuration could not be read (" + u.why + ")."; return false; }
         usac_ = u; rate_ = a.sampleRateHz(); ch_ = a.audioMode == 2 ? 2 : 1;
@@ -322,6 +456,9 @@ public:
     /** One access unit in; whatever PCM is ready out (interleaved stereo). */
     void decode(const vibedrm::AccessUnit& au, std::vector<float>& pcm) {
         if (!open_) return;
+#if defined(VIBE_HAVE_FAAD2)
+        if (faad_.ok()) { faad_.decode(au, pcm); return; }
+#endif
 #if defined(__ANDROID__)
         mc_.decode(au.data.data(), au.data.size(), pcm);
 #else
@@ -339,8 +476,26 @@ public:
         (void)pcm;
 #endif
     }
+    /** DRM AAC frames decoded / concealed (FAAD2), for the report. */
+    int64_t unitsGood() const {
+#if defined(VIBE_HAVE_FAAD2)
+        return faad_.good();
+#else
+        return 0;
+#endif
+    }
+    int64_t unitsConcealed() const {
+#if defined(VIBE_HAVE_FAAD2)
+        return faad_.bad();
+#else
+        return 0;
+#endif
+    }
     void close() {
         open_ = false;
+#if defined(VIBE_HAVE_FAAD2)
+        faad_.close();
+#endif
 #if defined(__ANDROID__)
         mc_.close();
 #else
@@ -353,6 +508,9 @@ public:
 private:
     bool open_ = false; std::string why_, backend_;
     vibedrm::UsacInfo usac_; int rate_ = 48000, ch_ = 1;
+#if defined(VIBE_HAVE_FAAD2)
+    DrmFaad faad_;
+#endif
 #if defined(__ANDROID__)
     DrmMediaCodecUsac mc_;
 #else

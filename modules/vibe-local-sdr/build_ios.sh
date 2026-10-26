@@ -100,6 +100,9 @@ cxx "$CPP/spyserver/spyserver_client.cpp"
 for d in fsk_decoder rtty_auto wefax_decoder ft8_decoder ftx_fine sstv_decoder audio_nr auto_notch time_decoder cw_skimmer psk_skimmer digi_modes digi_tuner digi_spotter dsc_decoder jtty_decoder; do cxx "$CPP/decoders/$d.cpp"; done
 # ★ V12: every digital-spots mode engine dropped into decoders/digimodes/ (adding a mode is one file — docs/v12/DIGITAL-SPOTS.md)
 for f in "$CPP"/decoders/digimodes/*.cpp; do [ -e "$f" ] && cxx "$f"; done
+# ★ V12 DRM: the OFDM receiver (local_sdr_shim.cpp includes vibe_drm_listener.h). ★★ NOT FAAD2: it is GPL-2.0+ and
+#   this archive goes into the App Store app — VIBE_HAVE_FAAD2 is never defined here, and the check below enforces it.
+cxx "$CPP/decoders/drm/drm_receiver.cpp"
 
 echo "== ft8_lib (plain KissFFT) =="
 for f in "$CPP"/ft8_lib/ft8/*.c "$CPP/ft8_lib/fft/kiss_fft.c" "$CPP/ft8_lib/fft/kiss_fftr.c" "$CPP/ft8_lib/common/monitor.c"; do cc "$f"; done
@@ -122,8 +125,8 @@ echo "done: $(ls -la "$OUT" | awk '{print $5}') bytes"
 #     a failed archive with certainty, not a guess. Foreign symbols (libc++, Apple frameworks,
 #     opus, kissfft) are left alone: they come from elsewhere by design.
 echo "== link check =="
-und=$(nm -guj "$OUT" 2>/dev/null | c++filt | grep '^vibe::' | sort -u || true)
-def=$(nm -gUj "$OUT" 2>/dev/null | c++filt | grep '^vibe::' | sort -u || true)
+und=$(nm -guj "$OUT" 2>/dev/null | c++filt | grep -E '^vibe(drm)?::' | sort -u || true)
+def=$(nm -gUj "$OUT" 2>/dev/null | c++filt | grep -E '^vibe(drm)?::' | sort -u || true)
 missing=$(comm -23 <(printf '%s\n' "$und") <(printf '%s\n' "$def") | grep -v '^$' || true)
 if [ -n "$missing" ]; then
   echo "!! this archive references vibe:: symbols it does not define — Xcode WILL fail to link:"
@@ -132,4 +135,13 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 echo "link check: every vibe:: symbol referenced is also defined"
+
+# ★★★ NO FAAD2 IN THE APP STORE BINARY (Stuart, 2026-10-26). FAAD2 is GPL-2.0-or-later with "any non-GPL usage …
+#     strictly forbidden"; the server may link it (VIBE_DRM_FAAD2), this archive — which ships inside the iOS/iPadOS/Mac
+#     Catalyst app — must not. A single FAAD2 symbol, defined OR referenced, fails the build here.
+faad=$(nm -gj "$OUT" 2>/dev/null | grep -E 'NeAACDec|faacDec|_NeAAC' | sort -u || true)
+if [ -n "$faad" ]; then
+  echo "!! FAAD2 symbols in the iOS archive — it must never be in the App Store app:"; printf '   %s\n' $faad | head -10; exit 1
+fi
+echo "FAAD2 check: none (the App Store archive is FAAD2-free)"
 rm -rf "$WORK"

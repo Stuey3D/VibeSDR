@@ -102,8 +102,13 @@ try {
   ok(await until(`/SNR \\d/.test(document.querySelector('#drmBody .drmSnr')?.textContent || '')`, 5000), `the SNR: ${await ev(`document.querySelector('#drmBody .drmSnr')?.textContent`)}`);
   const codec = await ev(`document.querySelector('#drmBody .drmCodec')?.textContent || ''`);
   ok(/AAC/.test(codec) && /12 kHz/.test(codec), `the codec line: "${codec.trim()}"`);
-  const why = await ev(`document.querySelector('#drmBody .drmWhy')?.textContent || ''`);
-  ok(/cannot be played/.test(why), `why there is no audio, in words: "${why.slice(0, 90)}…"`);
+  // ★ a FAAD2 server (VIBE_DRM_FAAD2) PLAYS this AAC station; one without says why it is silent
+  const playing = await ev(`!!document.querySelector('#drmBody .drmCodec .drmLight.on')`);
+  if (playing) ok(/FAAD2/.test(codec), `audio playing, the decoder named: "${codec.trim()}"`);
+  else {
+    const why = await ev(`document.querySelector('#drmBody .drmWhy')?.textContent || ''`);
+    ok(/cannot be played/.test(why), `why there is no audio, in words: "${why.slice(0, 90)}…"`);
+  }
   ok(await until(`/SNR Tiganesti E1/.test(document.getElementById('vtsName')?.textContent || '')`, 5000), 'the station bar carries the label');
   ok(await ev(`(() => { const r = document.querySelector('.bwRow'); return !r || r.style.display === 'none'; })()`), 'the bandwidth row is hidden in DRM');
   const s1 = await shot('drm-desktop.png');

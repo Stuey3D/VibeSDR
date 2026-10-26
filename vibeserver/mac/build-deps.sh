@@ -190,6 +190,32 @@ if stamp_ok libopus "$OPUS_STAMP" "$PREFIX/lib/libopus.a"; then echo "==> libopu
   echo "$OPUS_STAMP" > "$PREFIX/.stamp-libopus"
 fi
 
+# ── FAAD2 2.11.3 (libfaad_drm), static — V12 DRM's AAC, decoded on the server ─────────────────────────────────
+# ★★★ GPL-2.0-or-later: the VibeServer MAC APP may contain it (it is GPL, notarised, not App Store). The App Store app's
+#     archive never does — modules/vibe-local-sdr/build_ios.sh fails on any FAAD2 symbol. COPYING → Resources/COPYING.faad2.
+FAAD_VER=2.11.3
+FAAD_SHA=860ab62087e336c1844a70e33196c1790b525fb9a9e7b6ac4fab1a1a4e4d5ce8  # GitHub tag tarball = linux/build-deps.sh
+FAAD_STAMP="faad2 $FAAD_VER $FAAD_SHA min=$MIN arch=$ARCH $CCVER"
+if stamp_ok faad2 "$FAAD_STAMP" "$PREFIX/lib/libfaad_drm.a"; then echo "==> FAAD2 $FAAD_VER: up to date"; else
+  echo "==> FAAD2 $FAAD_VER (DRM build): building for macOS $MIN"
+  fetch "https://github.com/knik0/faad2/archive/refs/tags/$FAAD_VER.tar.gz" "faad2-$FAAD_VER.tar.gz" "$FAAD_SHA"
+  rm -rf "$WORK/faad"; mkdir -p "$WORK/faad"
+  tar -xzf "$SRC/faad2-$FAAD_VER.tar.gz" -C "$WORK/faad" --strip-components 1
+  cmake -S "$WORK/faad" -B "$WORK/faad/b" "${CMAKE_COMMON[@]}" -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF \
+        -DFAAD_APPLY_DRC=OFF >"$WORK/faad.log" 2>&1 \
+    && cmake --build "$WORK/faad/b" --target faad_drm -j"$JOBS" >>"$WORK/faad.log" 2>&1 \
+    || { tail -30 "$WORK/faad.log"; echo "!! FAAD2 build failed"; exit 1; }
+  cp "$WORK/faad/b/libfaad_drm.a" "$PREFIX/lib/"
+  cp "$WORK/faad/include/neaacdec.h" "$PREFIX/include/"
+  mkdir -p "$PREFIX/share/licences"; cp "$WORK/faad/COPYING" "$PREFIX/share/licences/COPYING.faad2"
+  [ "$(nm "$PREFIX/lib/libfaad_drm.a" 2>/dev/null | grep -c 'T .*NeAACDecInitDRM' || true)" -gt 0 ] \
+    || { echo "!! libfaad_drm.a has no NeAACDecInitDRM — refusing"; exit 1; }
+  check_log "$WORK/faad.log"
+  verify_archive "$PREFIX/lib/libfaad_drm.a"
+  rm -rf "$WORK/faad" "$WORK/faad.log"
+  echo "$FAAD_STAMP" > "$PREFIX/.stamp-faad2"
+fi
+
 # ── cloudflared 2026.8.0, compiled ───────────────────────────────────────────────────────────
 # ★★★ Cloudflare's darwin release binary is minos 15.0 (their CI links it with a macOS 15 SDK
 #     through cgo), so on a macOS 14 Mac the tunnel switch starts nothing. Compiled here with

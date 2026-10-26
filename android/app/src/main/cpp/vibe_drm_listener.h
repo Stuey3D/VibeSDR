@@ -165,7 +165,8 @@ private:
                 if (!can) j += ",\"why\":" + drmJsonStr(why);
                 else if (!dec_.isOpen() && decTried_) j += ",\"why\":" + drmJsonStr(dec_.why());
                 if (dec_.isOpen()) j += ",\"decoder\":" + drmJsonStr(dec_.backend());
-                std::snprintf(buf, sizeof buf, ",\"audioUnits\":%lld,\"audioBad\":%lld", (long long)decodedUnits_, (long long)badUnits_); j += buf;
+                std::snprintf(buf, sizeof buf, ",\"audioUnits\":%lld,\"audioBad\":%lld,\"concealed\":%lld", (long long)decodedUnits_, (long long)badUnits_,
+                              (long long)dec_.unitsConcealed()); j += buf;
             }
         }
         std::snprintf(buf, sizeof buf, ",\"facOk\":%lld,\"facBad\":%lld,\"dropped\":%llu}", (long long)s.facGood, (long long)s.facBad,

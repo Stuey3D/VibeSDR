@@ -270,6 +270,10 @@ cp "$ORSP_LIB" "$APP/Contents/Frameworks/libsdrplay_api.so.3.15"
 ln -sf libsdrplay_api.so.3.15 "$APP/Contents/Frameworks/libsdrplay_api.so.3"
 cp "$ORSP_FW/"* "$APP/Contents/Resources/openrsp/firmware/own/"
 cp "$ROOT/vendor/openrsp/COPYING" "$APP/Contents/Resources/COPYING.openrsp"
+# ★ V12 DRM: FAAD2 (GPL-2.0-or-later) is linked into the server for DRM's AAC — its licence travels with it
+if [ -f "$DEPS/prefix/share/licences/COPYING.faad2" ]; then
+  cp "$DEPS/prefix/share/licences/COPYING.faad2" "$APP/Contents/Resources/COPYING.faad2"
+fi
 cp "$ROOT/vendor/openrsp/VIBESDR-CHANGES" "$APP/Contents/Resources/openrsp/VIBESDR-CHANGES"
 cp "$MAC/README.openrsp" "$APP/Contents/Resources/openrsp/README.openrsp"
 ( cd "$APP/Contents/Resources/openrsp/firmware/own" && shasum -a 256 -c manifest.sha256 >/dev/null ) \
