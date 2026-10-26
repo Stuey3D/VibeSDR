@@ -21,7 +21,7 @@
 #   time it is built is not reproducible, and "it worked last week" stops being a useful sentence.
 set -euo pipefail
 
-VERSION="${CLOUDFLARED_VERSION:-2026.8.0}"
+VERSION="${CLOUDFLARED_VERSION:-2026.10.4}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${1:-$HERE/bin}"
 BASE="https://github.com/cloudflare/cloudflared/releases/download/${VERSION}"
@@ -36,20 +36,23 @@ BASE="https://github.com/cloudflare/cloudflared/releases/download/${VERSION}"
 # ★★ THE PINS ARE FOR ${PINNED_VERSION} ONLY. Bumping VERSION without new pins is refused, not
 #    waved through. To bump: download the new release's files, check them against the checksums
 #    Cloudflare publishes on the GitHub release page, and replace every line here in one commit.
-#    Hashes below were taken from the 2026.8.0 binaries already in tools/cloudflared-desktop/bin
-#    on the build Mac (each reports version 2026.8.0) on 2026-10-03.
-PINNED_VERSION="2026.8.0"
+#    Hashes below are the SHA-256 Cloudflare lists on the 2026.10.4 release page (2026-10-26).
+# ★★★ 2026.10.4, NOT 2026.8.0 (2026-10-26): Cloudflare's notice to every tunnel account — eight
+#     eMudhra (emSign) intermediates have weak private keys, and cloudflared before 2026.10.2 still
+#     trusts them. The fix is the Go 1.27.3 toolchain it is built with. Our tunnels all run under
+#     Stuart's account, so every owner's bundled copy is in scope.
+PINNED_VERSION="2026.10.4"
 # ★ A case, not `declare -A`: macOS still ships bash 3.2, which has no associative arrays, and
 #   this script runs on the build Mac.
 pin_for() {
   case "$1" in
-    cloudflared-linux-arm64) echo d2b49df8dbb3a36e743ce00b091c180e0942a0b67487257c573a631db001796c ;;
-    cloudflared-linux-arm)   echo e5853ce169323c10be2fff3fc810e860ead5ab8ee36b8b77268e6c6fbc9ba738 ;;
-    cloudflared-linux-amd64) echo 14ecae0dd17ba74f8055e22b8f5b5acc3cbb5a9c3be4e7d6507fe1c4eadaea95 ;;
+    cloudflared-linux-arm64) echo 2b7203b4fb0ba28a0c1e12f8855ce2c25f76d266a8d5edafac5540b6812acff6 ;;
+    cloudflared-linux-arm)   echo f29b44e97ec18dd2971dfdd9bad0c6d460aaa78223b91b186219f02135c08d8c ;;
+    cloudflared-linux-amd64) echo ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42 ;;
     # ★ 386 added 2026-10-17 for the i386 package — checked against the SHA-256 Cloudflare lists on the
-    #   2026.8.0 release page (the amd64 line above matched that list too). Go's 386 port needs SSE2,
+    #   release page. Go's 386 port needs SSE2,
     #   the same floor as our own i386 build, so the tunnel reaches every machine the server does.
-    cloudflared-linux-386)   echo 2e156c495fa7e1badbdf99cf0a91825453cb8bcb47d773572f466ce1d6114b5b ;;
+    cloudflared-linux-386)   echo a759230628a894c9262cfc0535926ba1e0cc54260e0b35a6e6cf3833919c67f2 ;;
     LICENSE)                 echo 58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd ;;
     *)                       echo "" ;;
   esac

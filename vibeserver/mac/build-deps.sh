@@ -19,7 +19,7 @@
 #      libusb     1.0.30 — what Homebrew gave the Mac. (Android is pinned at 1.0.26, Linux takes
 #                 Debian's; the Mac's darwin backend has had fixes since 1.0.26, so it stays put.)
 #      libopus    1.6.1  — what Homebrew gave the Mac. (Android vendors 1.5.2.)
-#      cloudflared 2026.8.0 — the version tools/cloudflared-desktop/fetch.sh pins, but COMPILED
+#      cloudflared 2026.10.4 — the version tools/cloudflared-desktop/fetch.sh pins, but COMPILED
 #                 (see the cloudflared section: Cloudflare's own binary is minos 15.0).
 #    NOT here, because CMakeLists.txt compiles them into libvibeserver_core.a from the vendored
 #    tree, so they get the deployment target with the rest of the core:
@@ -190,7 +190,7 @@ if stamp_ok libopus "$OPUS_STAMP" "$PREFIX/lib/libopus.a"; then echo "==> libopu
   echo "$OPUS_STAMP" > "$PREFIX/.stamp-libopus"
 fi
 
-# ── cloudflared 2026.8.0, compiled ───────────────────────────────────────────────────────────
+# ── cloudflared 2026.10.4, compiled ───────────────────────────────────────────────────────────
 # ★★★ Cloudflare's darwin release binary is minos 15.0 (their CI links it with a macOS 15 SDK
 #     through cgo), so on a macOS 14 Mac the tunnel switch starts nothing. Compiled here with
 #     CGO_ENABLED=0 Go links it INTERNALLY and stamps Go's own floor (macOS 13 for Go 1.27), and
@@ -200,8 +200,10 @@ fi
 # ★ -s -w strip debug info, as the Android build (tools/cloudflared-android/build.sh) does.
 # ★ No self-update concern: directory.cpp always runs it with --no-autoupdate, which matters —
 #   a self-updated binary inside a signed bundle would break the bundle's signature.
-CF_VER=2026.8.0
-CF_SHA=aba66df755b17b8e46c0b716ea69796b9b570758                   # refs/tags/2026.8.0^{}
+CF_VER=2026.10.4
+CF_SHA=dc3b264da64a801bc3a8d5301a6db21401910ad5                   # refs/tags/2026.10.4^{}
+# ★★★ GO 1.27.3 OR NEWER IS THE FIX ITSELF (eMudhra intermediates distrusted, 2026-10-26) — and
+#     GOTOOLCHAIN=local below means an older Go fails on go.mod's "go 1.27.3" rather than building.
 command -v go >/dev/null || { echo "!! go is not installed (brew install go) — cloudflared must be compiled"; exit 1; }
 GOVER="$(GOTOOLCHAIN=local go version)"
 CF_STAMP="cloudflared $CF_VER $CF_SHA $GOVER"
