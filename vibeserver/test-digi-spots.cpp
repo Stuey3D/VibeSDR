@@ -93,7 +93,32 @@ static digi::ModeDef dummyMode(const char* name, float lo, float hi) {
     return m;
 }
 
+/** ★ `clip <out.cu8> <rate> <centreHz>`: 15 s of 20 m as an RTL delivers it (unsigned 8-bit IQ), UTC-ANCHORED — clip time
+ *  t plays at UTC ≡ t (mod 15) under fake-rtl-tcp --hf-utc — for scripts/test-server-spots.mjs. FT8 at +0.5 s, FT4 at
+ *  +0.5 and +8.0 s, and one FT8 station on the lower sideband of the FT8 dial. */
+static int writeClip(const char* path, double rate, double centre) {
+    std::vector<cf32> x((size_t)(rate * 15.0), cf32(0, 0));
+    struct Tx { const char* msg; bool ft4; double rf, start; };
+    const Tx txs[] = { { "CQ G4ABC IO92", false, 14074600, 0.5 }, { "CQ DL1XYZ JO31", false, 14075450, 0.5 }, { "CQ K1ABC FN42", false, 14076300, 0.5 },
+                       { "CQ JA1QRS PM95", true, 14080800, 0.5 }, { "CQ EA4TUV IN80", true, 14081700, 8.0 },
+                       { "CQ ZL3LSB RE66", false, 14072800, 0.5 } };
+    for (const Tx& t : txs) addTx(x, rate, t.rf - centre, t.start, tonesFor(t.msg, t.ft4), t.ft4, 4.0);
+    addNoise(x, 5.0, 21);
+    std::vector<uint8_t> u(x.size() * 2);
+    for (size_t i = 0; i < x.size(); ++i) {
+        u[2 * i] = (uint8_t)std::max(0.0, std::min(255.0, std::round(127.5 + x[i].real())));
+        u[2 * i + 1] = (uint8_t)std::max(0.0, std::min(255.0, std::round(127.5 + x[i].imag())));
+    }
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 1;
+    std::fwrite(u.data(), 1, u.size(), f);
+    std::fclose(f);
+    std::printf("wrote %s: 15 s at %.0f Hz centred on %.0f\n", path, rate, centre);
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 4 && std::strcmp(argv[1], "clip") == 0) return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     const bool cpu = argc > 1 && std::strcmp(argv[1], "cpu") == 0;
     std::printf("── the registry ──\n");
     {

@@ -404,6 +404,11 @@ if node --no-warnings scripts/test_recordBuffer.ts; then pass=$((pass+1)); else 
 if node --no-warnings scripts/test_cw_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 ISM (src/services/ism.ts): the app's ISM against the web's — sanitiser, lines in every unit, status, filter, capability.
 if npx tsx scripts/test_ism_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 DIGITAL SPOTS (2026-10-26): the client half — band stepping (the server's rule, its cases), the band list parsed
+#    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
+if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and Band's DEFAULT from the benchmark (the setup page's benchApplyDefaults + the app's applyBench), owner override kept.
+if node scripts/test-spots-band-default.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the iOS/Mac ring + the prefix-then-live writer order (macOS only: needs xcrun swiftc).
 if command -v xcrun >/dev/null 2>&1; then if bash scripts/test_recordBuffer_swift.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi; fi
 # ★★★ V12 ICOM, CLIENT SIDE (icomRadio.ts): hwinfo.radio + the status line as the server builds them, the hide list against the
@@ -1020,6 +1025,21 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-cw.sh clip "$OUT/cw-clip.cu8" >/
   rm -f "$OUT/cw-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-cw.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 DIGITAL SPOTS end to end (2026-10-26): a UTC-anchored 20 m clip (test-digi-spots clip) through the real server —
+#     Band on a one-pipeline and a range-locked radio (every FT8 / FT4 station with its mode at its RF, the lower sideband
+#     never), Single on the listener's audio, the owner's "spotsband" switch (test-server-spots); then the web client in
+#     headless Edge (--mute-audio) — the two buttons, band stepping, the band readout and drawn span, the Mode column and
+#     the map coloured by mode with its legend, desktop and 390 px (test-web-spots). Needs VIBESERVER_BIN.
+printf '\n\033[1m── digital spots (end to end: server, then the web client) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-digi-spots" ]; then
+  VIBE_DIGI_BIN="$OUT/test-digi-spots" node scripts/test-server-spots.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_DIGI_BIN="$OUT/test-digi-spots" node scripts/test-web-spots.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+else
+  echo '   not run — needs VIBESERVER_BIN (and test-digi-spots built above)'; notrun=$((notrun+1))
 fi
 
 # ★★ THE RATE PIN AND THE SHARED-DIAL RATE RULE BIND LISTENERS, NOT THE SIGNED-IN ADMIN (Stuart, 2026-10-24: "sample rate

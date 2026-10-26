@@ -74,6 +74,7 @@ import { PsStabiliser } from '../../../src/services/psStabiliser';
 import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
+import { DIGI_MARKER_RIM, digiModeStyle, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
 import {
@@ -763,6 +764,7 @@ async function loadAudioPolicy(httpBase: string) {
   adsbCap = null;              // ★ an older server (or no answer) draws no ADS-B control
   ismCap = null;               // ★ …nor an ISM one
   cwCap = false;               // ★ …nor a CW decoder
+  spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
   firstConfigDone = false;
   try {
@@ -798,6 +800,7 @@ async function loadAudioPolicy(httpBase: string) {
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     cwCap = j.cw === true;       // ★ CW (V12): this server's own decoder and skimmer
+    spotsReadCap(j);             // ★ DIGITAL SPOTS (V12): the modes this server decodes, and Band mode's bands — see spotsReadCap
     { const b = document.querySelector('#decodersPanel [data-dec="cw"]') as HTMLElement | null;
       if (b) b.hidden = !cwCap || blockedModes.has('cw'); }
     dabBoost = j.dabBoost === true;
@@ -1872,8 +1875,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (spotsOff && decoders?.spotsEnabled) {
         decoders.setSpots(false);
         $<HTMLButtonElement>('spotsBtn').classList.remove('on');
+        bandSpotsUi(false);
         if (!activeDec) hideDecBox();
       }
+      spotsBandRender();
       // ★ And the door to them, when there is nothing left behind it.
       // (The card's mode picker is built afresh each time it opens, so it reads the new list
       //  through soleDecoder() / anyDecoderLeft() with nothing more to do here.)
@@ -3279,8 +3284,12 @@ function renderFrame(frameTs: number) {
    *  drawn — drawn only, never sent: the listener's own CW passband is untouched and comes back when the skimmer closes.
    *  Tuning moves the dial as ever, and the server's skimmer follows it. */
   const skim = activeDec === 'cw' && cwSkim;
-  wf.filterLow = skim ? -cwWidth / 2 : spec.bandwidthLow;
-  wf.filterHigh = skim ? cwWidth / 2 : spec.bandwidthHigh;
+  /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (V12, 2026-10-26) — the extra-wide passband the server cuts and every
+   *  mode's decoder reads its own dial from, drawn where it is (it need not be centred: an exact frequency typed inside
+   *  the band moves the dial, the span stays on the modes). Drawn only, never sent, as the skimmer's. */
+  const bp = bandSpots && spotBandCap ? bandPassband(spotBandCap.bands, spec.frequency) : null;
+  wf.filterLow = bp ? bp[0] : skim ? -cwWidth / 2 : spec.bandwidthLow;
+  wf.filterHigh = bp ? bp[1] : skim ? cwWidth / 2 : spec.bandwidthHigh;
   const measuring = isPerf();
   const t0 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL HOLD IS OFF. It froze the display while tuning (Stuart, 2026-08-10: "when I
@@ -10253,17 +10262,82 @@ let decLiveComplete = false;                       // the live image has hit onI
 let decIsRgb = false;                              // for the save filename (sstv vs wefax handled by title)
 const spots: Spot[] = [];
 
-/** Skin BAND_COLOUR — markers coloured by band (verbatim from the app's map). */
-const BAND_COLOUR: Record<string, string> = {
-  '2200m': '#9b30d9', '630m': '#c71585', '160m': '#e8001e', '80m': '#ff5500',
-  '60m': '#ff8c00', '40m': '#ffd700', '30m': '#aacc00', '20m': '#00cc44',
-  '17m': '#00ccaa', '15m': '#00aaff', '12m': '#0055ff', '11m': '#6600ff',
-  '10m': '#cc00cc',
-};
+/* ★★★ DIGITAL SPOTS: SINGLE MODE AND BAND (V12, 2026-10-26 — docs/v12/DIGITAL-SPOTS.md).
+ *  SINGLE is the button there always was: the mode(s) at the listener's dial, on their own audio. BAND reads a whole band's
+ *  digital frequencies at once — the server cuts one extra-wide slice and every mode's decoder reads its own dial from it.
+ *  In Band the tuning controls step BANDS (nudge → bandSpotsStep), the readout names the band (cardFreqText) and the drawn
+ *  VFO is the band's span (renderFrame). ★ The server says what exists (vibeserver.json): `spotModes` (the list filter,
+ *  the Mode column, the map legend), `spotBands` (what Band steps through — only bands THIS radio reaches; absent = no
+ *  Band button, AGENTS.md) and `spotsBand` true / false + `spotsBandWhy` (greyed with the reason — the owner's switch or
+ *  the benchmark's default; never hidden). */
+let spotModes: string[] = ['FT8', 'FT4'];
+let spotBandCap: { ok: boolean; why: string; bands: SpotBand[] } | null = null;
+let bandSpots = false;
+function spotsReadCap(j: any) {
+  if (Array.isArray(j?.spotModes)) {
+    const m = j.spotModes.filter((x: unknown) => typeof x === 'string').map((x: string) => x.replace(/[^0-9A-Za-z+-]/g, '').slice(0, 12))
+      .filter(Boolean).slice(0, 16);
+    if (m.length) spotModes = m;
+  }
+  SF_MODES = ['ALL', ...spotModes];
+  const bands = readSpotBands(j?.spotBands);
+  if ((j?.spotsBand === true || j?.spotsBand === false) && bands.length) {
+    const why = typeof j.spotsBandWhy === 'string' ? j.spotsBandWhy.trim().slice(0, 200) : '';
+    spotBandCap = { ok: j.spotsBand === true, why: j.spotsBand === true ? '' : (why || 'Band spots are not available on this receiver'), bands };
+  } else spotBandCap = null;
+  if (!spotBandCap && bandSpots) bandSpotsUi(false);
+  spotsBandRender();
+}
+/** The Band button: absent where no band is reachable (or spots are off), greyed with its reason, lit while running. */
+function spotsBandRender() {
+  const b = document.getElementById('spotsBandBtn') as HTMLButtonElement | null;
+  if (!b) return;
+  b.hidden = !spotBandCap || blockedModes.has('spots');
+  b.classList.toggle('dis', !!spotBandCap && !spotBandCap.ok);
+  b.classList.toggle('on', bandSpots);
+  b.title = spotBandCap && !spotBandCap.ok ? spotBandCap.why
+    : 'A whole band\'s digital frequencies at once — every mode on its own dial'
+      + (spotBandCap ? ' (' + spotBandCap.bands.map((x) => x.name).join(', ') + ')' : '');
+  const w = document.getElementById('spotsBandWhy');
+  if (w) { w.hidden = !spotBandCap || spotBandCap.ok || b.hidden; w.textContent = spotBandCap && !spotBandCap.ok ? spotBandCap.why : ''; }
+}
+function bandSpotsUi(on: boolean) {
+  bandSpots = on && !!spotBandCap;
+  spotsBandRender();
+  if ($('decBox').classList.contains('open') && decoders?.spotsEnabled) $('decTitle').textContent = spotsTitle();
+  renderFreq();
+}
+/** "FT8 / FT4 SPOTS" (Single) · "DIGITAL SPOTS · 20 m BAND" (Band). */
+function spotsTitle(): string {
+  if (bandSpots && spotBandCap && spec) {
+    const b = spotBandAt(spotBandCap.bands, spec.frequency);
+    return b ? `DIGITAL SPOTS \u00b7 ${b.name.toUpperCase()} BAND` : 'DIGITAL SPOTS \u00b7 BAND';
+  }
+  return spotModes.slice(0, 2).join(' / ') + ' SPOTS';
+}
+/** Put the dial on band `b`'s centre, in USB — a listener's own tune (a user action: the shared-dial contract holds). */
+function bandSpotsGo(b: SpotBand) {
+  if (!spec) return;
+  spec.tune(clampTune(b.hz), 'usb', { recenter: true, retarget: true });
+  savePref('spotBand', b.id);
+  renderFreq();
+  if ($('decBox').classList.contains('open')) $('decTitle').textContent = spotsTitle();
+}
+function bandSpotsStep(dir: number) {
+  if (!spotBandCap || !spec) return;
+  const i = stepSpotBand(spotBandCap.bands, spec.frequency, dir);
+  if (i < 0) return;
+  const b = spotBandCap.bands[i];
+  const cur = spotBandAt(spotBandCap.bands, spec.frequency);
+  if (cur && cur.id === b.id) { showTuneGapMsg(dir < 0 ? `${b.name} is the lowest band this radio reaches` : `${b.name} is the highest band this radio reaches`); return; }
+  bandSpotsGo(b);
+}
+
 
 // Spot filters — the app's sf-mode / sf-band / sf-age cyclers.
-const SF_MODES = ['ALL', 'FT8', 'FT4'];
-const SF_BANDS = ['ALL', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m'];
+/* ★ V12: the mode filter cycles the modes THIS server decodes (vibeserver.json spotModes — FT8 and FT4 on an older one). */
+let SF_MODES = ['ALL', 'FT8', 'FT4'];
+const SF_BANDS = ['ALL', '2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm'];
 const SF_AGES: Array<{ label: string; minutes: number }> = [
   { label: 'AGE', minutes: 0 }, { label: '15m', minutes: 15 },
   { label: '30m', minutes: 30 }, { label: '1h', minutes: 60 },
@@ -10915,7 +10989,7 @@ function initDecoders(host: string, auth: AuthState) {
     //    server are in use — try again shortly"). A panel that just sat on "listening…" would
     //    read as a broken decoder; a button left lit would read as one that is running.
     onRefused: (message, what) => {
-      if (what === 'spots') $<HTMLButtonElement>('spotsBtn').classList.remove('on');
+      if (what === 'spots') { $<HTMLButtonElement>('spotsBtn').classList.remove('on'); bandSpotsUi(false); }
       else if (activeDec && activeDec !== 'rds') { activeDec = null; syncDecButtons(); }
       $('decStatus').textContent = 'not started';
       $('decBox').classList.remove('navtex');   // ★ the refusal is written to #decText — NAVTEX's view must make way
@@ -11068,11 +11142,33 @@ function initDecoders(host: string, auth: AuthState) {
   // Spots + map.
   const spotsBtn = $<HTMLButtonElement>('spotsBtn');
   spotsBtn.onclick = () => {
-    const on = !decoders!.spotsEnabled;
-    decoders!.setSpots(on);
+    // ★ SINGLE MODE: the button there always was. From Band it switches (one subscribe; the server keeps the slot).
+    const on = decoders!.spotsScope !== 'single';
+    decoders!.setSpots(on, 'single');
+    bandSpotsUi(false);
     spotsBtn.classList.toggle('on', on);
     if (on) showDecBox('spots'); else if (!activeDec) hideDecBox();
   };
+  $<HTMLButtonElement>('spotsBandBtn').onclick = () => {
+    if (!spotBandCap) return;
+    // ★ Greyed with the server's reason (the owner switched it off, or the benchmark's default) — say it, start nothing.
+    if (!spotBandCap.ok) { showPill(spotBandCap.why, 7000); return; }
+    const on = decoders!.spotsScope !== 'band';
+    if (on) {
+      const b = landingSpotBand(spotBandCap.bands, spec?.frequency ?? 0, prefs()['spotBand'] as string ?? null);
+      if (!b) return;
+      decoders!.setSpots(true, 'band');
+      bandSpotsUi(true);
+      if (spec && !spotBandAt(spotBandCap.bands, spec.frequency)) bandSpotsGo(b);   // ★ on a band already: stay where you are
+      spotsBtn.classList.remove('on');
+      showDecBox('spots');
+    } else {
+      decoders!.setSpots(false);
+      bandSpotsUi(false);
+      if (!activeDec) hideDecBox();
+    }
+  };
+  spotsBandRender();
   $('mapBtn').onclick = openSpotsMap;
   initGallery();   // ★★ V12: the GALLERY key in this menu — see initGallery
 
@@ -11117,7 +11213,7 @@ function initDecoders(host: string, auth: AuthState) {
   $('decZoomOut').onclick = () => setDecZoom(decZoomI - 1);
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
   $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
-    $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox(); };
+    $<HTMLButtonElement>('spotsBtn').classList.remove('on'); bandSpotsUi(false); hideDecBox(); };
   initDecHeadScroll();
 }
 
@@ -11458,7 +11554,7 @@ function showDecBox(what: string) {
   // ★ "ADV RDS", never plain "RDS". Basic RDS — station name, RadioText, PI — is ALWAYS on
   // and needs no decoder; a button labelled "RDS" would read as "switch this on to get RDS"
   // and imply the app had none until you did (Stuart, 2026-07-26).
-  $('decTitle').textContent = what === 'spots' ? 'FT8 / FT4 SPOTS'
+  $('decTitle').textContent = what === 'spots' ? spotsTitle()
                             : what === 'rds'   ? 'ADV RDS'
                             : what === 'cw'    ? (cwSkim ? 'CW SKIMMER' : 'CW')
                             : what.toUpperCase();
@@ -13370,9 +13466,12 @@ function renderSpots() {
     const row = document.createElement('div');
     row.className = 'sres spot';
     // The app's columns: time · band · snr · call · country · distance.
+    const ms = digiModeStyle(sp.mode);
     row.innerHTML =
       `<span class="t">${fmtSpotTime(sp.timestamp)}</span>` +
-      `<span class="band" style="color:${BAND_COLOUR[sp.band] || 'var(--text-dim)'}">${escapeHtml(sp.band)}</span>` +
+      // ★ V12: the MODE, in its map colour and letter (src/utils/digiModes.ts) — Band mode lists several at once.
+      `<span class="mode" style="color:${ms.colour}"><i style="background:${ms.colour};color:${ms.ink}">${escapeHtml(ms.letter)}</i>${escapeHtml(sp.mode)}</span>` +
+      `<span class="band">${escapeHtml(sp.band)}</span>` +
       `<span class="snr ${Number(sp.snr) >= 0 ? 'pos' : 'neg'}">${Number(sp.snr) || 0}</span>` +
       `<span class="call">${escapeHtml(sp.callsign)}</span>` +
       `<span class="cty">${escapeHtml(abbrCountry(country) || '')}</span>` +
@@ -13501,7 +13600,11 @@ function spotsMapPoints() {
       lat: p.lat, lon: p.lon,
       country: ok(countryForCallsign(s.callsign) || '', /[<>&"'`]/g, 40),
       km: me ? Math.round(haversineKm(me, p)) : null,
-      colour: BAND_COLOUR[s.band] || '#aaaaaa',
+      // ★★ V12: coloured by MODE, with the mode's letter (src/utils/digiModes.ts) — one radio is one band at a time, so a
+      //    band colour told the listener nothing (Stuart, 2026-10-26).
+      colour: digiModeStyle(s.mode).colour,
+      letter: digiModeStyle(s.mode).letter,
+      ink: digiModeStyle(s.mode).ink,
     };
   });
 
@@ -13633,6 +13736,7 @@ ${glHead}
   #legend{top:10px;right:10px;padding:8px 10px;min-width:110px}
   .lrow{display:flex;align-items:center;gap:7px;padding:2px 0;white-space:nowrap;font-size:11px}
   .sw{width:11px;height:11px;border-radius:50%;flex:0 0 11px}
+  .sw.mk{width:14px;height:14px;flex:0 0 14px;box-shadow:0 0 0 1.2px #1a1a1a;font:bold 9px/14px ui-monospace,Menlo,monospace;text-align:center}
   /* Summary strip — bottom, like UberSDR's latest/rarest row. */
   #summary{bottom:10px;left:50%;transform:translateX(-50%);padding:8px 14px;
     display:flex;gap:26px;font-size:11px;white-space:nowrap}
@@ -13669,7 +13773,11 @@ ${ST}
 //    procedural code over a const, which is exactly why it could never update.
 let spots = ${safe(pts)};
 const me = ${safe(me)};
-const COL = ${safe(BAND_COLOUR)};
+// ★ V12: the MODES' colours and letters (src/utils/digiModes.ts), for the legend and the BY MODE bars — the markers carry
+//   their own (spotsMapPoints). The rim keeps pale fills readable on a light map.
+const MODES = ${safe(spotModes.map((m) => ({ m, ...digiModeStyle(m) })))};
+const RIM = ${safe(DIGI_MARKER_RIM)};
+function modeColour(m) { for (const x of MODES) if (x.m === m) return x.colour; return null; }
 // ★ The GPU map's kit, from the page that opened this one: where /mapgl/ is, the style, and whether
 //   the detail pack is installed. null = the Leaflet map.
 const GL = ${kit ? safe(kit) : 'null'};
@@ -13716,6 +13824,8 @@ function cleanSpots(list) {
       country: okStr(s.country, /[<>&"'\`]/g, 40),
       km: s.km == null ? null : Math.round(okNum(s.km)),
       colour: okColour(s.colour),
+      letter: okStr(s.letter, /[^A-Za-z0-9?]/g, 1),
+      ink: okColour(s.ink),
     };
   });
 }
@@ -13855,9 +13965,10 @@ function drawMarkers() {
   if (!spotLayer) return;                        // the map is still loading; render() runs again then
   spotLayer.clearLayers();
   for (const s of spots) {
+    // ★★ V12: the MODE's colour, a dark rim, and (on the GPU map) the mode's LETTER inside — colour is never the only cue.
     L.circleMarker([s.lat, s.lon], {
-      radius: radius(s.snr), color: '#00000066', weight: 1,
-      fillColor: s.colour, fillOpacity: 0.85,
+      radius: Math.max(6.5, radius(s.snr)), color: RIM, weight: 1.2,
+      fillColor: s.colour, fillOpacity: 0.9, label: s.letter, labelColor: s.ink,
     }).addTo(spotLayer).bindPopup(
       '<div class="pop"><b>' + esc(s.callsign) + '</b><br>' +
       (s.country ? esc(s.country) + '<br>' : '') + esc(s.grid) +
@@ -13944,8 +14055,8 @@ if (withKm.length) {
 }
 
 html += '<div class="sect">TOP COUNTRIES</div>' + barList(tally(s => s.country), null, 10);
-html += '<div class="sect">BY BAND</div>' + barList(tally(s => s.band), (b) => COL[b], 12);
-html += '<div class="sect">BY MODE</div>' + barList(tally(s => s.mode), null, 6);
+html += '<div class="sect">BY MODE</div>' + barList(tally(s => s.mode), (m) => modeColour(m), 10);
+html += '<div class="sect">BY BAND</div>' + barList(tally(s => s.band), null, 12);
 html += '<div class="sect">TOTALS</div>' +
   '<div class="row"><span>Spots</span><b>' + spots.length + '</b></div>' +
   '<div class="row"><span>Countries</span><b>' +
@@ -13969,15 +14080,16 @@ if (me && withKm.length) {
     '</div>';
 }
 
-// Legend
-const bandsUsed = [...new Set(spots.map(s => s.band))];
+// Legend — ★ V12: by MODE (every mode this server decodes, with its count), each swatch carrying the marker's letter.
+const modeN = tally(s => s.mode);
+const modeRows = MODES.slice();
+for (const m of Object.keys(modeN)) if (!modeRows.some(x => x.m === m)) modeRows.push({ m: m, colour: '#9E9E9E', ink: '#000000', letter: m.charAt(0) });
 document.getElementById('legend').innerHTML =
   (me ? '<div class="lrow"><span style="display:inline-flex;width:12px;height:12px">' + RX_HOUSE.replace('width="22" height="22"', 'width="12" height="12"') + '</span>Receiver</div>' : '') +
-  (bandsUsed.length
-    ? bandsUsed.map(b => '<div class="lrow"><span class="sw" style="background:' +
-        okColour(COL[b] || '#aaa') + '"></span>' + esc(b) + '</div>').join('')
-    : '<div class="lrow" style="color:var(--dim)">No bands yet</div>') +
-  '<div class="lrow" style="color:var(--dim);font-size:9px;margin-top:4px">Size = SNR</div>';
+  modeRows.map(x => '<div class="lrow" data-mode="' + esc(x.m) + '"><span class="sw mk" style="background:' + okColour(x.colour) +
+    ';color:' + okColour(x.ink) + '">' + esc(x.letter) + '</span>' + esc(x.m) +
+    '<span style="margin-left:auto;padding-left:8px;color:var(--dim)">' + esc(modeN[x.m] || 0) + '</span></div>').join('') +
+  '<div class="lrow" style="color:var(--dim);font-size:9px;margin-top:4px">Colour + letter = mode \u00b7 size = SNR</div>';
 
 // Summary strip — latest and rarest, as UberSDR shows along the bottom.
 const byTime = [...spots].sort((a, b) => b.timestamp - a.timestamp);
@@ -15952,6 +16064,9 @@ function nudge(hz: number) {
   /* ★★★ IN ISM THE ARROWS STEP BANDS (Stuart, 2026-10-25: "I always found it quite hard to tune the ISM on OWRX") — every
    *  arrow, key, wheel and pad press ends here, as DAB's blocks do. The server clamps at the ends and owns the band. */
   if (ismOn) { ismStep(hz < 0 ? -1 : 1); return; }
+  /* ★★★ IN BAND SPOTS THE ARROWS STEP BANDS (V12, 2026-10-26) — every arrow, key, wheel, knob, pad and game-controller
+   *  press ends here, as DAB's blocks and ISM's bands do. A typed or long-pressed frequency is still exact. */
+  if (bandSpots) { bandSpotsStep(hz < 0 ? -1 : 1); return; }
   if (adsbOn) return;   // ★ held on 1090 MHz — the arrows are greyed (wholeRadioLock); keys and the wheel end here
   // Snap to the step grid so repeated nudges stay on round frequencies.
   // ★★ Through airbandStepFrom: the 8.33 kHz step is 25000/3 exactly (no drift), and in the airband
@@ -16026,6 +16141,12 @@ function cardFreqText(): { main: string; fine: string; unit: string; chan?: stri
   if (ismOn && ismReport) {
     const hz = ismReport.centre || spec.frequency;
     return { main: (hz / 1e6).toFixed(3), fine: '', unit: 'MHz', chan: ismReport.custom ? 'ISM' : `ISM ${ismReport.band ?? ''}`.trim() };
+  }
+  /* ★★ IN BAND SPOTS THE READOUT NAMES THE BAND ("20 m BAND") beside the dial — what the arrows now step. */
+  if (bandSpots && spotBandCap) {
+    const b = spotBandAt(spotBandCap.bands, spec.frequency);
+    const r = cardFreqPlain(Math.round(spec.frequency));
+    return r && { ...r, chan: b ? `${b.name} BAND` : 'NO DIGITAL BAND' };
   }
   const hz = Math.round(spec.frequency);
   // ★ An airband channel: its NAME is the figure, in MHz — see renderFreq.
