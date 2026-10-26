@@ -196,7 +196,20 @@ Band mode runs one engine per dial: FT8 + FT4 + FT2 on 20 m adds about 2.9 MB.
   subtracting only decodes an undecoded candidate overlaps (−5 % decodes on busy bands), an interleaved sine table
   (more instructions). A block-linear phase reference would roughly halve its largest loop.
 - **JS8's AP** (its own message format) is not done; JS8 uses the second look and OSD only.
-- **FT4's SNR scale** (reads ~8.6 dB high against STUEY3D, docs/v12/JS8-FT2.md) is unchanged.
+- **FT2's SNR** is checked against only two senders (STUEY3D's PSKReporter reports, 07:34 UTC; the 17:59 recording
+  had none we both decoded): median −1 dB, so its −6 dB stands until a busier FT2 hour is recorded.
+
+## Spot SNR scale (2026-10-26)
+
+Stuart's rule: a spot's SNR reads on the scale other stations report. One constant per mode
+(`Ft8SlotDecoder::kSnrCalFt8/Ft4/Ft2`), set from the median of ours minus STUEY3D's on the same messages in the same
+slots (the UberSDR decoder stream recorded beside each WAV), checked in test-ftx-sensitivity section 7:
+
+| | before | after | sample |
+|---|---|---|---|
+| FT8 | +2 dB (constant +3) | 0 / +1 (constant +1) | 6,701 decodes, seven recordings |
+| FT4 | −6 dB (constant −6: +3 − 9) | 0 (constant 0) | 926 decodes, four recordings |
+| FT2 | −1 dB (constant −6) | unchanged | 2 senders (PSKReporter) |
 
 ## Reproducing
 

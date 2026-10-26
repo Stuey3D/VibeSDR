@@ -234,6 +234,10 @@ public:
     Ft8SlotDecoder(const Ft8SlotDecoder&) = delete;
     Ft8SlotDecoder& operator=(const Ft8SlotDecoder&) = delete;
 
+    /** ★ SNR calibration per mode, dB, onto STUEY3D's (the network's) scale — see snrDb in the .cpp. */
+    static constexpr double kSnrCalFt8 = 1.0;
+    static constexpr double kSnrCalFt4 = 0.0;
+    static constexpr double kSnrCalFt2 = -6.0;
     /** ★ Where the decoded window starts, relative to the UTC slot boundary (seconds; negative = before it). */
     static float leadSec(bool ft4);
     /** Samples one slot's decode reads, starting at slot boundary + leadSec(). */

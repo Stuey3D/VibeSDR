@@ -547,7 +547,6 @@ float Ft8SlotDecoder::colMean(size_t c) {
  *  kSnrCal is the one empirical constant, set against UberSDR's jt9 on the same hour (commit message). Clamped to
  *  -30..+40 as WSJT-X's own figures are. */
 int Ft8SlotDecoder::snrDb(const ftx_candidate_t& c, const uint8_t* tones) {
-    constexpr double kSnrCal = 3.0;
     const ftx_waterfall_t& wf = mon_.wf;
     const size_t row = ((size_t)c.time_sub * wf.freq_osr + c.freq_sub) * wf.num_bins;
     const size_t col0 = row + (size_t)c.freq_offset;
@@ -569,12 +568,14 @@ int Ft8SlotDecoder::snrDb(const ftx_candidate_t& c, const uint8_t* tones) {
     if (!cnt || noise <= 0) return -30;
     const double ratio = sig / cnt / noise - 1.0;
     const double binHz = 1.0 / mon_.symbol_period;
-    /* ★ FT2 (2026-10-26): its reference decoders report on FT4's scale, and against STUEY3D's PSKReporter reports
-     *  this estimator reads FT4 8.6 dB high (four stations, the 2026-10-25 20 m hour) and FT2 7-11 dB high (two
-     *  stations, 2026-10-26) — so FT4 and FT2 (FT4's frame) are both brought onto that scale (2026-10-26, Stuart's go:
-     *  docs/v12/JS8-FT2.md). */
-    const double modeCal = mode_ != FtxMode::FT8 ? -9.0 : 0.0;
-    double snr = 10.0 * std::log10(std::max(ratio, 1e-3)) + 10.0 * std::log10(binHz / 2500.0) + kSnrCal + modeCal;
+    /* ★★ ONE CONSTANT PER MODE, ON THE SCALE OTHER STATIONS REPORT (2026-10-26; Stuart: a spot's SNR reads as the
+     *  network's does, as WSPR's reads on WSPRnet's). Each is the median of ours minus STUEY3D's on the same messages in
+     *  the same slots (the UberSDR decoder stream recorded beside the WAV; test-ftx-sensitivity section 7):
+     *    FT8: +3 read +2 dB high over 6,701 decodes on seven recordings -> +1.
+     *    FT4: the earlier -9 (four stations) read 6 dB LOW over 926 decodes on four recordings -> -3 + 3 = 0 total.
+     *    FT2: see kSnrCalFt2. */
+    const double cal = mode_ == FtxMode::FT8 ? kSnrCalFt8 : mode_ == FtxMode::FT4 ? kSnrCalFt4 : kSnrCalFt2;
+    double snr = 10.0 * std::log10(std::max(ratio, 1e-3)) + 10.0 * std::log10(binHz / 2500.0) + cal;
     snr = std::max(-30.0, std::min(40.0, snr));
     return (int)std::lround(snr);
 }

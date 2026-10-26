@@ -9,10 +9,14 @@
 //   4. the AP book learns calls and pairs, forgets them, and its hypotheses are exactly the messages they stand for;
 //      AP adds decodes of signals whose calls were heard, and NONE that were not sent;
 //   5. pure noise, every candidate down to the weakest sync tried, a full book of 400 calls: no decode at all;
-//   6. (VIBE_TEST_AUDIO) a real 40 m FT8 recording: far more decodes than the old full depth, at about its CPU.
+//   6. (VIBE_TEST_AUDIO) a real 40 m FT8 recording: far more decodes than the old full depth, at about its CPU;
+//   7. (VIBE_TEST_AUDIO) spot SNRs on STUEY3D's scale: median difference within ±1.5 dB (FT8, FT4), ±3.5 (FT2, few).
 #include "decoders/ft8_decoder.h"
 #include "decoders/ftx_fine.h"
+#include <algorithm>
 #include <chrono>
+#include <fstream>
+#include <map>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -165,6 +169,99 @@ static bool readWav(const std::string& path, std::vector<int16_t>& out, int& rat
         } else std::fseek(f, sz + (sz & 1), SEEK_CUR);
     }
     std::fclose(f); return false;
+}
+
+/* ★ The spot SNR scale (Stuart: spots read on the scale other stations report). The UberSDR decoder stream recorded
+ *  beside a WAV gives STUEY3D's SNR for each message; ours minus theirs, median over every message both decoded in
+ *  the same slot. */
+static int medianSnrDiff(const std::string& wav, double t0, const std::string& sse, const std::string& band, FtxMode md, int& n) {
+    std::vector<int16_t> pcm; int rate = 0; n = 0;
+    if (!readWav(wav, pcm, rate) || rate != kFs) return 999;
+    const double P = md == FtxMode::FT8 ? 15.0 : md == FtxMode::FT4 ? 7.5 : kFt2SlotTime;
+    const char* mname = md == FtxMode::FT8 ? "FT8" : md == FtxMode::FT4 ? "FT4" : "FT2";
+    std::multimap<std::string, std::pair<double, int>> ref;     // message -> (UTC of the report, SNR)
+    std::ifstream in(sse); std::string l;
+    auto field = [&](const std::string& k) { const size_t a = l.find("\"" + k + "\":"); if (a == std::string::npos) return std::string();
+        size_t b = a + k.size() + 3; if (l[b] == '"') { const size_t e = l.find('"', b + 1); return l.substr(b + 1, e - b - 1); }
+        size_t e = l.find_first_of(",}", b); return l.substr(b, e - b); };
+    while (std::getline(in, l)) {
+        if (l.rfind("data: ", 0) || field("mode") != mname || field("band") != band) continue;
+        std::string m = field("message"), ts = field("timestamp");
+        std::vector<std::string> w; for (size_t a = 0, b; a < m.size(); a = b + 1) { b = m.find(' ', a); if (b == std::string::npos) b = m.size(); if (b > a) w.push_back(m.substr(a, b - a)); }
+        while (!w.empty() && (w.back() == "?" || (w.back().size() == 2 && w.back()[0] == 'a'))) w.pop_back();
+        std::string mm; for (auto& x : w) mm += (mm.empty() ? "" : " ") + x;
+        struct tm g = {}; if (sscanf(ts.c_str(), "%d-%d-%dT%d:%d:%dZ", &g.tm_year, &g.tm_mon, &g.tm_mday, &g.tm_hour, &g.tm_min, &g.tm_sec) != 6) continue;
+        g.tm_year -= 1900; g.tm_mon -= 1;
+        ref.insert({ mm, { (double)timegm(&g), std::atoi(field("snr").c_str()) } });
+    }
+    Ft8SlotDecoder dec(kFs, md);
+    const int W = dec.windowSamples();
+    std::vector<float> w((size_t)W);
+    Ft8SlotOptions o = newFull(nullptr);
+    if (md == FtxMode::FT2) o.osdMaxErrors = 0;                  // ★ as live
+    std::vector<int> d;
+    for (double S = std::ceil(t0 / P) * P; (S - t0) * kFs + W <= pcm.size(); S += P) {
+        const long i0 = std::lround((S - t0) * kFs);
+        for (int i = 0; i < W; ++i) w[(size_t)i] = pcm[(size_t)(i0 + i)] / 32768.0f;
+        std::vector<Ft8Result> res; Ft8SlotStats st;
+        dec.decode(w.data(), W, o, res, st);
+        for (const Ft8Result& r : res) {
+            const std::string t = text(r.msg);
+            double bestDt = 1e9; int bestSnr = 0;
+            auto rg = ref.equal_range(t);
+            for (auto it = rg.first; it != rg.second; ++it) {
+                const double dt = it->second.first - (S + P);           // reported at the slot's end
+                if (dt >= -1 && dt <= P + 2 && std::fabs(dt) < bestDt) { bestDt = std::fabs(dt); bestSnr = it->second.second; }
+            }
+            if (bestDt < 1e9) d.push_back(r.snr - bestSnr);
+        }
+    }
+    n = (int)d.size();
+    if (d.empty()) return 999;
+    std::nth_element(d.begin(), d.begin() + (long)d.size() / 2, d.end());
+    return d[d.size() / 2];
+}
+
+/** FT2 has too few stream decodes in any recording here, so its reference is STUEY3D's PSKReporter reports (one
+ *  report per sender, flowStartSeconds = when it was heard): ours, in the slot nearest that time, for that sender. */
+static int medianSnrDiffPsk(const std::string& wav, double t0, const std::string& xml, FtxMode md, int& n) {
+    std::vector<int16_t> pcm; int rate = 0; n = 0;
+    if (!readWav(wav, pcm, rate) || rate != kFs) return 999;
+    std::ifstream in(xml); std::string all((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    struct Rep { std::string call; double t; int snr; };
+    std::vector<Rep> reps;
+    const char* mname = md == FtxMode::FT2 ? "FT2" : md == FtxMode::FT4 ? "FT4" : "FT8";
+    for (size_t a = 0; (a = all.find("<receptionReport ", a)) != std::string::npos; ++a) {
+        const size_t e = all.find("/>", a); const std::string r = all.substr(a, e - a);
+        auto attr = [&](const char* k) { const size_t p = r.find(std::string(k) + "=\""); if (p == std::string::npos) return std::string();
+            const size_t b = p + std::strlen(k) + 2; return r.substr(b, r.find('"', b) - b); };
+        if (attr("mode") != mname) continue;
+        reps.push_back({ attr("senderCallsign"), std::atof(attr("flowStartSeconds").c_str()), std::atoi(attr("sNR").c_str()) });
+    }
+    const double P = kFt2SlotTime;
+    Ft8SlotDecoder dec(kFs, md);
+    const int W = dec.windowSamples();
+    std::vector<float> w((size_t)W);
+    Ft8SlotOptions o = newFull(nullptr); o.osdMaxErrors = 0;            // ★ FT2 as live
+    std::map<std::string, std::pair<double, int>> best;                // sender -> (|dt| to its report, our SNR)
+    for (double S = std::ceil(t0 / P) * P; (S - t0) * kFs + W <= pcm.size(); S += P) {
+        const long i0 = std::lround((S - t0) * kFs);
+        for (int i = 0; i < W; ++i) w[(size_t)i] = pcm[(size_t)(i0 + i)] / 32768.0f;
+        std::vector<Ft8Result> res; Ft8SlotStats st;
+        dec.decode(w.data(), W, o, res, st);
+        for (const Ft8Result& r : res) {
+            char to[16] = {}, de[16] = {}, ex[16] = {}; ftx_field_t ft[FTX_MAX_MESSAGE_FIELDS];
+            if (ftx_message_decode_std(&r.msg, nullptr, to, de, ex, ft) != FTX_MESSAGE_RC_OK) continue;
+            for (const Rep& p : reps)
+                if (p.call == de && std::fabs(p.t - S) < 4 * P && (!best.count(de) || std::fabs(p.t - S) < best[de].first))
+                    best[de] = { std::fabs(p.t - S), r.snr - p.snr };
+        }
+    }
+    std::vector<int> d; for (auto& kv : best) d.push_back(kv.second.second);
+    n = (int)d.size();
+    if (d.empty()) return 999;
+    std::sort(d.begin(), d.end());
+    return d.size() % 2 ? d[d.size() / 2] : (int)std::lround(0.5 * (d[d.size() / 2 - 1] + d[d.size() / 2]));
 }
 
 int main() {
@@ -344,6 +441,35 @@ int main() {
             char b[200];
             std::snprintf(b, sizeof b, "20 slots: old full depth %d decodes (%.1f ms/slot), new %d (%.1f ms/slot)", nOld, msOld, nNew, msNew);
             ok(nNew >= nOld * 6 / 5 && msNew <= 1.25 * msOld, b);   // ★ CPU: the same within a timer's noise
+        }
+    }
+    std::printf("7. Spot SNRs on the scale other stations report (median of ours - STUEY3D's, same messages, same slots)\n");
+    {
+        const char* root = std::getenv("VIBE_TEST_AUDIO");
+        struct R { const char* wav; double t0; const char* sse; const char* band; FtxMode md; int tol; int minN; } rs[] = {
+            { "/ft8/ft8_40m_7074000_20261025T2118.wav", 1792963117.948, "/ft8/uber_sse_20261025T2118.txt", "40m-ft8", FtxMode::FT8, 1, 200 },
+            { "/ft8/ft8_20m_14074000_20261026T1619.wav", 1793031575.364, "/ft8/uber_sse_20261026T1619.txt", "20m-ft8", FtxMode::FT8, 1, 200 },
+            { "/ft8/ft4_20m_14080000_20261026T1619.wav", 1793031575.364, "/ft8/uber_sse_20261026T1619.txt", "20m-ft4", FtxMode::FT4, 1, 200 },
+        };
+        for (const R& r : rs) {
+            if (!root) { std::printf("  (not run: VIBE_TEST_AUDIO not set)\n"); break; }
+            int n = 0;
+            const int med = medianSnrDiff(std::string(root) + r.wav, r.t0, std::string(root) + r.sse, r.band, r.md, n);
+            if (med == 999 && n == 0) { std::printf("  (not run: %s absent)\n", r.wav); continue; }
+            char b[200];
+            std::snprintf(b, sizeof b, "%s %s: ours - STUEY3D's median %+d dB over %d decodes (within +-%d.5)", geo(r.md).name, r.band, med, n, r.tol);
+            ok(n >= r.minN && std::abs(med) <= r.tol, b);
+        }
+        if (root) {
+            int n = 0;
+            const int med = medianSnrDiffPsk(std::string(root) + "/ft2/ft2_20m_14084000_20261026T0734.wav", 1793000045.300,
+                                             std::string(root) + "/js8/pskreporter/stuey3d_20261026T0748.xml", FtxMode::FT2, n);
+            if (n == 0) std::printf("  (not run: the FT2 recording or its PSKReporter reports absent)\n");
+            else {
+                char b[200];
+                std::snprintf(b, sizeof b, "FT2 20m: ours - STUEY3D's (PSKReporter) median %+d dB over %d senders — a small sample, so within +-3.5", med, n);
+                ok(std::abs(med) <= 3, b);
+            }
         }
     }
     std::printf(fails ? "\n%d FAILURE(S)\n" : "\nALL PASS (0 failures)\n", fails);
