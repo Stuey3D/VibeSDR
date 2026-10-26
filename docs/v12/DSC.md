@@ -62,7 +62,7 @@ requests/replies, unable to comply (with its reason), semi-automatic calls with 
 rejected at the phasing or the format specifier).
 
 **Real signals** — Stuart's UberSDR, 2026-10-26 07:32–09:32 UTC, all six HF DSC frequencies at once (12 h of audio):
-**248 calls** — 2187.5: 48 · 4207.5: 7 · 6312: 18 · 8414.5: 117 · 12577: 27 · 16804.5: 37 (9 put right by the check
+**248 calls** — 2187.5: 42 · 4207.5: 7 · 6312: 18 · 8414.5: 117 · 12577: 27 · 16804.5: 37 (7 put right by the check
 character). Nearly all SAFETY TEST calls to coast stations and their acknowledgements — Olympia (Greece, 002371000),
 Australia (005030001), Spain (002241022), the USCG (003669991/7/8), Chile, Brazil, Peru, China, Lyngby (Denmark) —
 plus Spanish coast-station safety broadcasts, a Belgian geographic-area safety call (55°N 002°W), Peruvian safety calls
