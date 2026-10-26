@@ -140,6 +140,8 @@ export type VibeServerConfig = {
   /** ★ The rate switch: "change the sample rate when a mode needs it" — DAB 2.048 MS/s, ADS-B 2.4 — the base rate
    *  back when the mode ends. Off: a mode is offered only if the rate already suffices. Key kept from the DAB-only days. */
   dabRateBoost?: boolean;
+  /** ★★ V12 VFO A/B — the owner's switch: 1 (default) listeners may add a VFO B, 0 not. VibeServerBoot reads cfg "vfoB". */
+  vfoB?: number;
   /** ★★ ADS-B at 2.56 MS/s on an RTL — its own switch, not tied to dabRateBoost. Never the default. */
   adsb256?: boolean;
   /** Per-band gain ceilings ("all:250,fm:150"), the gain to return to when everyone leaves
@@ -330,6 +332,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     adsbKeepRunning: cfg.landingAdsb === true && cfg.adsbKeepRunning === true,
     radioLabel: (cfg.radioLabel ?? '').trim(),
     dabRateBoost: cfg.dabRateBoost === true,
+    vfoB: cfg.vfoB === 0 ? 0 : 1,
     adsb256: cfg.adsb256 === true,
     gainLimits: cfg.gainLimits ?? '',
     restGain: cfg.restGain ?? -1,

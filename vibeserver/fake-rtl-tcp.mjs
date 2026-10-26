@@ -50,6 +50,11 @@ let   RATE  = arg('rate', 2_400_000);
 const TONES = arg('tones', 3);
 const WFM_HZ = arg('wfm', 0) * 1e6;
 const STALL_AT = arg('stall-at', 0);
+// ★ --tones-at HZ: the synthetic stations sit at ABSOLUTE frequencies (HZ + their offset) instead of moving with the
+//   dongle, so a test can tune to them exactly whatever offset the server tunes the dongle at (V12 VFO A/B, 2026-10-27).
+const TONES_AT = arg('tones-at', 0);
+// ★ --key S: the LAST station is keyed on for S seconds, off for S — a channel whose squelch opens and shuts.
+const KEY_S = arg('key', 0);
 const dabArg = (() => { const i = process.argv.indexOf('--dab'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const DAB_IQ = dabArg ? fs.readFileSync(dabArg) : null;
 /* ★ --dab-at HZ[,HZ…] (V12 DAB band scan, 2026-10-26): play the multiplex ONLY on these block centres (±50 kHz — 10A and 10N
@@ -121,12 +126,15 @@ const srv = net.createServer((sock) => {
   // other half of the shortfall. Each carrier is a unit complex number advanced
   // by a fixed rotation (one complex multiply), which is the standard cheap
   // oscillator and is exact enough for a synthetic bench.
-  let rate = 0, osc = [], aosc = [];
+  let rate = 0, osc = [], aosc = [], oscAt = 0;
   const retune = () => {
     rate = RATE;
-    osc  = STATIONS.map((st) => {
-      const w = (2 * Math.PI * st.offset) / rate;
-      return { re: 1, im: 0, cw: Math.cos(w), sw: Math.sin(w) };
+    oscAt = centreHz;
+    osc  = STATIONS.map((st, k) => {
+      const off = TONES_AT ? TONES_AT + st.offset - centreHz : st.offset;
+      const w = (2 * Math.PI * off) / rate;
+      const o = osc[k] || { re: 1, im: 0 };
+      return { re: o.re, im: o.im, cw: Math.cos(w), sw: Math.sin(w) };
     });
     aosc = STATIONS.map((st) => {
       const w = (2 * Math.PI * st.audioHz) / rate;
@@ -148,7 +156,8 @@ const srv = net.createServer((sock) => {
   const tick = () => {
     if (stopped || sock.destroyed) return;
     if (STALL_AT > 0 && RATE >= STALL_AT) { nextDue = Date.now(); setTimeout(tick, CHUNK_MS); return; }   // ★ --stall-at
-    if (rate !== RATE) retune();
+    if (rate !== RATE || (TONES_AT && oscAt !== centreHz)) retune();
+    const keyedOff = KEY_S > 0 && Math.floor(Date.now() / 1000 / KEY_S) % 2 === 1;
     const n = Math.max(1024, Math.round(rate * CHUNK_MS / 1000));
     const buf = Buffer.allocUnsafe(n * 2);
     if (HF_IQ && HF_UTC && !hfAnchored) {
@@ -197,7 +206,7 @@ const srv = net.createServer((sock) => {
       let im = (Math.random() + Math.random() - 1) * 0.06;
       for (let s = 0; s < STATIONS.length; s++) {
         const a = aosc[s], c = osc[s];
-        const env = STATIONS[s].amplitude * (0.6 + 0.4 * a.im);   // AM, ~40% depth
+        const env = (keyedOff && s === STATIONS.length - 1) ? 0 : STATIONS[s].amplitude * (0.6 + 0.4 * a.im);   // AM, ~40% depth
         re += env * c.re;
         im += env * c.im;
         advance(a); advance(c);

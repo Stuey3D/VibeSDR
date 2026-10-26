@@ -93,6 +93,7 @@ import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
 import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 import { vsSquelchMsg } from './vibeSquelch';
+import { VfoABCore, watchOffered, vfoB, type VfoId, type TuneStatus, type VfoABInfo } from './vfoAB';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs } from './dialChat';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
@@ -523,6 +524,10 @@ export abstract class VibeServerWsClient {
 
   /** Tune to a new frequency (and optionally mode). Sends to native audio WS + spectrum WS. */
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
+    /* ★★ V12 VFO A/B: with B selected, the tune controls drive VFO B — the server's watch channel. Never the radio:
+     *  no recentre, no pan, no zoom (on a one-listener radio a pan can move the capture under VFO A), and B outside
+     *  the window comes back REFUSED with the window in the note (handleWatch). See vfoAB.ts. */
+    if (this.ab.bTuned) { this.ab.tuneB(frequency, mode); return; }
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
     if (this.dabHeld || this.adsbHeld || this.ismHeld) return;   // ★ see dabHeld — the multiplex IS the tuning
     const prevFreq = this.status.frequency;   // ★ read BEFORE it is overwritten — see sameSpot below
@@ -639,8 +644,10 @@ export abstract class VibeServerWsClient {
 
   /** Update internal state only — used when native already sent the tune (e.g. lock screen skip). */
   syncFrequency(frequency: number, mode?: SDRMode) {
-    if (frequency) this.status.frequency = frequency;
-    if (mode)      this._adoptMode(mode);      // ★ see _adoptMode
+    // ★ The native echo is always VFO A's (the lock screen tunes the radio, never VFO B) — so into A's slot.
+    const a = this.aSlot;
+    if (frequency) a.frequency = frequency;
+    if (mode)      this._adoptMode(mode, a);   // ★ see _adoptMode
   }
 
   /* ★★★ A MODE IS NEVER JUST A MODE — IT CARRIES ITS PASSBAND. setMode() has always mirrored
@@ -669,15 +676,16 @@ export abstract class VibeServerWsClient {
    *      m != mode)` (local_sdr_shim.cpp, the `tune` and `mode` handlers). A re-assert of the
    *      current mode changes nothing there and must change nothing here. AGENTS.md, ONE RULE TWO
    *      READERS: the rule was the server's and only the server kept it. */
-  private _adoptMode(mode: SDRMode) {
-    const changed = mode !== this.status.mode;
-    this.status.mode = mode;
+  private _adoptMode(mode: SDRMode, t: { mode: string; bandwidthLow: number; bandwidthHigh: number } = this.status) {
+    const changed = mode !== t.mode;
+    t.mode = mode;
     if (!changed) return;                      // ★ see above — a re-assert is not a mode change
     const bw = MODE_BANDWIDTHS[mode];
-    if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
+    if (bw) { t.bandwidthLow = bw[0]; t.bandwidthHigh = bw[1]; }
   }
 
   setMode(mode: SDRMode) {
+    if (this.ab.bTuned) { this.ab.modeB(mode); return; }   // ★★ V12 VFO A/B — B's own mode (see tune)
     if (mode !== this.status.mode && this.askBlocked()) return;   // ★★ ask before tuning; a re-pick changes nothing
     const changed = mode !== this.status.mode;
     this.status.mode = mode;
@@ -696,6 +704,11 @@ export abstract class VibeServerWsClient {
   }
 
   setBandwidth(low: number, high: number) {
+    if (this.ab.bTuned) {   // ★★ V12 VFO A/B — B's own passband (the server applies the same clamps)
+      [low, high] = clampVibePassband(this.status.mode, low, high);
+      this.ab.passbandB(low, high);
+      return;
+    }
     // ★★ Ask before tuning — the passband is everybody's on a shared dial. Only a CHANGE asks (a slider settling
     //    on the room's own edges is not somebody reaching for it).
     if ((low !== this.status.bandwidthLow || high !== this.status.bandwidthHigh) && this.askBlocked()) return;
@@ -840,9 +853,55 @@ export abstract class VibeServerWsClient {
   /** ★★★ ON/OFF GOES OUT IN WORDS (vibeSquelch.ts). `db` alone with "<= -100 = off" made every
    *  threshold below -100 dBFS an OFF — and that is where an Airspy HF+'s quiet airband channel sits,
    *  so auto squelch drew its line and never closed the gate (Stuart, 2026-10-14). VS_SQL_OFF = off. */
-  setSquelchDb(db: number) { this._sendCtl(vsSquelchMsg(db)); }
+  setSquelchDb(db: number) {
+    // ★★ V12 VFO A/B — each VFO has its OWN squelch, so a quiet calling channel stays silent until it opens.
+    if (this.ab.squelch(db)) return;
+    this._sendCtl(vsSquelchMsg(db));
+  }
   /** hwinfo said `sqlOn`: this server applies a threshold below -100 instead of reading it as off. */
   squelchSpeaksOn = false;
+
+  // ══ ★★ V12 VFO A/B — the slots live in vfoAB.ts (VfoABCore), pure and tested; this is the wiring ════════════════
+  protected ab = new VfoABCore(() => this.status as unknown as TuneStatus, (m) => { this.sendSpectrum(m); },
+                               (mode, t) => this._adoptMode(mode as SDRMode, t));
+  /** Where VFO A's tuning lives right now: `status` while A is selected, the stash while B is. */
+  protected get aSlot(): TuneStatus { return this.ab.aSlot(); }
+  protected get abActive(): VfoId { return this.ab.active; }
+  abInfo(): VfoABInfo { return this.ab.info(); }
+  private _abNotify() { this.callbacks.onWatch?.(this.ab.info()); }
+  /** The tuning menu's VFO A/B toggle (VibeServer only). False = not offered here. */
+  abSetOn(on: boolean): boolean {
+    const wasB = this.ab.bTuned;
+    const ok = this.ab.setOn(on);
+    if (wasB && !this.ab.bTuned) this.callbacks.onStatus({ ...this.status });
+    this._abNotify();
+    return ok;
+  }
+  /** Which VFO the tune controls act on. */
+  abSelect(v: VfoId) {
+    if (!this.ab.select(v)) return;
+    // ★ The meter follows the selected VFO: B's level from `watch` (twice a second), A's from `sig`.
+    const b = vfoB(this.ab.state);
+    if (v === 'B' && b) { this.sigChanDb = b.lvl; this.sigAt = Date.now(); }
+    this.callbacks.onStatus({ ...this.status });
+    this._abNotify();
+  }
+  /** The audio menu's STEREO switch (lower VFO left / higher right). Sent while B is on, and with B's `on`. */
+  abSetStereo(on: boolean) { this.ab.setStereo(on); }
+  /** ★ The output is mono (a phone speaker, a mono headset): the server then puts both VFOs in both ears. */
+  abSetMonoOut(on: boolean) { this.ab.setMonoOut(on); }
+  private _abReset() {
+    if (this.ab.reset()) this.callbacks.onStatus({ ...this.status });
+    this._abNotify();
+  }
+  private _onWatch(msg: Record<string, unknown>) {
+    const o = this.ab.onWatch(msg);
+    for (const n of o.notes) this.callbacks.onRefused?.(n);   // ★ the server's own sentence, the notice path
+    if (o.meterDb !== undefined) { this.sigChanDb = o.meterDb; this.sigAt = Date.now(); }
+    if (o.statusChanged) this.callbacks.onStatus({ ...this.status });
+    this._abNotify();
+  }
+
   /** ★★★ THE SERVER'S OWN CHANNEL LEVEL (`sig.chan`, dBFS) — the very number its squelch gate compares.
    *  The app used to measure the level from the SPECTRUM FRAME instead, and on a VibeServer that is a
    *  different quantity: frames are peak-held from whichever FFT feeds the current view (the zoom FFT
@@ -1571,6 +1630,8 @@ export abstract class VibeServerWsClient {
 
     let specMsgCount = 0;
     ws.onopen = () => {
+      // ★★ V12 VFO A/B is per SESSION: a fresh socket is a fresh session, and the server has no VFO B for it.
+      if (this.ab.on) this._abReset();
       if (this.destroyed) { ws.close(); return; }
       this.dbg('Spectrum WS open');
       this.callbacks.onConnect();
@@ -2299,6 +2360,7 @@ export abstract class VibeServerWsClient {
     // ★ First, and cheap: twenty a second. Kept as fields, never a callback — the meter emit reads
     //   them on its own frame, so nothing re-renders for a `sig`.
     if (msg.type === 'sig') {
+      if (this.abActive === 'B') return;   // ★ the meter is VFO B's while B is tuned — fed from `watch` (vibeAbMessage)
       const c = Number(msg.chan);
       if (Number.isFinite(c) && c > -500) { this.sigChanDb = c; this.sigAt = Date.now(); }
       return;
@@ -2466,6 +2528,7 @@ export abstract class VibeServerWsClient {
       }
       return;
     }
+    if (msg.type === 'watch') { this._onWatch(msg); return; }
     if (msg.type === 'notice') {
       /* ★★★ ONE TYPE, TWO MESSAGES, AND THE REFUSAL WAS BEING THROWN AWAY.
        *  `text` is the owner's STANDING notice (persistent, posted from the setup page); `why` is
@@ -2665,6 +2728,13 @@ export abstract class VibeServerWsClient {
     }
     if (msg.type === 'hwinfo') {
       this.squelchSpeaksOn = msg.sqlOn === true;   // ★ see setSquelchDb / vibeSquelch.ts
+      // ★★ V12 VFO A/B: does this server offer a VFO B? 0/absent = no — the toggle is not drawn (no dead control).
+      { const wasOn = this.ab.on, wasB = this.ab.bTuned;
+        if (this.ab.setOffered(watchOffered(msg))) {
+          this.callbacks.onWatchOffered?.(this.ab.offered);
+          if (wasB && !this.ab.bTuned) this.callbacks.onStatus({ ...this.status });
+          if (wasOn && !this.ab.on) this._abNotify();
+        } }
       if (typeof msg.autoDs === 'boolean')
         this.callbacks.onHwDirectSampling?.(msg.autoDs, Number(msg.dsBelowHz) || 0, Number(msg.ds) || 0);
       // ★★★ RE-ASSERT OUR OWN TUNE WHEN THE RADIO ANNOUNCES ITSELF ON A *RETURNING* SOCKET.
@@ -2962,7 +3032,8 @@ export abstract class VibeServerWsClient {
       //    adopting inside that window would fight a drag or a held step key.
       {
         const sv = Number(msg.vfo);
-        const bw = Math.abs(Number(this.status.bandwidthHigh) - Number(this.status.bandwidthLow)) || 3000;
+        const aS = this.aSlot;   // ★★ V12 VFO A/B: the server's dial is VFO A's — while B is tuned, A's slot takes it
+        const bw = Math.abs(Number(aS.bandwidthHigh) - Number(aS.bandwidthLow)) || 3000;
         const settled = Date.now() - this.lastLocalTuneAt > 1500;
         // ★★★ ADOPT EVERY MOVE, HOWEVER SMALL — the READOUT is not a jitter problem. This was
         //     gated on the move exceeding the demodulator's bandwidth, which on WFM is ~200 kHz,
@@ -2974,7 +3045,7 @@ export abstract class VibeServerWsClient {
         //     recentring the view — because doing those on every 100 Hz nudge of somebody else's
         //     drum would stutter for everyone watching. Two questions, two thresholds; they were
         //     one, and the cheap one inherited the costly one's caution.
-        const moved = Math.abs(sv - Number(this.status.frequency));
+        const moved = Math.abs(sv - Number(aS.frequency));
         /* ★★★ THE ONE CLAUSE THE WEB CLIENT DOES NOT HAVE — AND IT IS THE BUG.
          *
          *  Compared clause by clause against spectrum.ts, which does this correctly:
@@ -3020,8 +3091,8 @@ export abstract class VibeServerWsClient {
           noteDecision('vibe', `dial adopted ${sv} (moved ${Math.round(moved)})`);
           this.dbg(`another listener moved the dial to ${sv}`);
           this.callbacks.onDialMoved?.(sv, typeof msg.mode === 'string' ? msg.mode : undefined);
-          this.status.frequency = sv;
-          if (typeof msg.mode === 'string' && msg.mode) this._adoptMode(msg.mode as SDRMode);
+          aS.frequency = sv;
+          if (typeof msg.mode === 'string' && msg.mode) this._adoptMode(msg.mode as SDRMode, aS);
           // ★★★ AND BRING THE VIEW WITH IT. Adopting the frequency alone leaves the waterfall
           //     pointed where the radio ISN'T — the server is capturing around the new dial, so
           //     the old view has no data behind it and goes BLACK. Stuart hit exactly that from
@@ -3037,7 +3108,7 @@ export abstract class VibeServerWsClient {
           const bbNow = this.view.binBandwidth || this.status.binBandwidth;
           const viewSpan = bbNow ? bbNow * (this.status.binCount || 4096) : 0;
           const drifted = viewSpan > 0 && Math.abs(sv - this.view.centerHz) > viewSpan * 0.1;
-          if (this.followVfo && (moved > bw || drifted)) {
+          if (this.followVfo && this.abActive === 'A' && (moved > bw || drifted)) {
             const bb = this.view.binBandwidth || this.status.binBandwidth;
             if (bb) this.zoom(sv, bb); else this.pan(sv);
           }
@@ -3051,26 +3122,27 @@ export abstract class VibeServerWsClient {
          *  ★★★ WRITTEN STRAIGHT INTO status, NEVER THROUGH setBandwidth()/setMode(): those transmit,
          *      and an adopted value sent back as a change is the loop the shared-dial contract forbids.
          *      The screen draws its sliders from status (onStatus here, and every spectrum frame). */
+        const aR = this.aSlot;   // ★★ V12 VFO A/B — the room's mode and passband are VFO A's
         const ctx = {
-          shared: sharedNow, mode: String(this.status.mode),
-          low: Number(this.status.bandwidthLow), high: Number(this.status.bandwidthHigh),
+          shared: sharedNow, mode: String(aR.mode),
+          low: Number(aR.bandwidthLow), high: Number(aR.bandwidthHigh),
           sinceLocalMs: Date.now() - Math.max(this.lastLocalTuneAt, this.lastLocalBwAt),
         };
         let roomChanged = false;
         const rm = roomMode(msg, ctx);
         if (rm && rm in MODE_BANDWIDTHS) {
           noteDecision('vibe', `room mode adopted ${rm}`);
-          this._adoptMode(rm as SDRMode);      // ★ the mode's default passband, until the room says otherwise
+          this._adoptMode(rm as SDRMode, aR);  // ★ the mode's default passband, until the room says otherwise
           roomChanged = true;
         }
         const pb = roomPassband(msg, {
-          ...ctx, mode: String(this.status.mode),
-          low: Number(this.status.bandwidthLow), high: Number(this.status.bandwidthHigh),
+          ...ctx, mode: String(aR.mode),
+          low: Number(aR.bandwidthLow), high: Number(aR.bandwidthHigh),
         });
         if (pb) {
           noteDecision('vibe', `room passband adopted ${pb[0]}..${pb[1]}`);
-          this.status.bandwidthLow = pb[0];
-          this.status.bandwidthHigh = pb[1];
+          aR.bandwidthLow = pb[0];
+          aR.bandwidthHigh = pb[1];
           roomChanged = true;
         }
         if (roomChanged) this.callbacks.onStatus({ ...this.status });

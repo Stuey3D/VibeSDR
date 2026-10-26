@@ -150,8 +150,24 @@ console.log(fails ? `test_pad_actions: ${fails} FAILED` : 'test_pad_actions: all
   ok(!o.some((x) => 'kbButton' in x), 'closed: west means nothing again on a stick pad');
   press(0, 5010);
   o = [...press(PAD_BIT.start, 6000), ...press(0, 6100)];
-  ok(!o.some((x) => 'kbSubmit' in x), 'closed: a START tap does nothing, as before');
+  ok(!o.some((x) => 'kbSubmit' in x), 'closed: a START tap does not submit');
+  // ★★ V12 VFO A/B — the pad's swap, as on the web page: a START TAP (keyboard closed), △ on a stick pad.
+  ok(o.some((x) => 'swapVfo' in x), 'closed: a START TAP swaps VFO A/B');
   o = [...press(PAD_BIT.start, 7000), ...m.tick(7000 + SWITCH_HOLD_MS + 10)];
   ok(o.some((x) => 'notice' in x), 'closed: HOLD START still switches the controls');
+  ok(!o.some((x) => 'swapVfo' in x), 'closed: HOLD START does not swap VFO A/B');
+  // (the hold above switched that pad to buttons — a fresh stick pad for △)
+  const m3 = new PadMapper('sticks');
+  const p3 = (b: number, t: number) => m3.feed({ id: 's', sticks: true, b }, t);
+  p3(0, 0);
+  o = p3(PAD_BIT.north, 10);
+  ok(o.some((x) => 'swapVfo' in x), 'stick pad: △ (north) swaps VFO A/B');
+  p3(0, 20);
+  m3.setKeyboardOpen(true);
+  o = p3(PAD_BIT.north, 30);
+  ok(!o.some((x) => 'swapVfo' in x) && o.some((x) => 'kbButton' in x), 'keyboard open: △ is space, never a swap');
+  const mb2 = new PadMapper('buttons');
+  const o2 = mb2.feed({ id: 'b', sticks: false, b: PAD_BIT.north }, 0);
+  ok(!o2.some((x) => 'swapVfo' in x) && o2.some((x) => 'key' in x && x.key === '+'), 'button pad: north stays zoom in');
 }
 process.exit(fails ? 1 : 0);
