@@ -6407,7 +6407,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          * ★★ Re-try only after auditing every reader of hwOffsetHz for driver assumptions. The
          *    failure is silent on a waterfall — the peak is still drawn in the right place. */
         if (useHackRf()) return HW_OFFSET_HACKRF_HZ;
-        return (useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
+        /* ★★ AN RTL_TCP DONGLE HAS THE SAME DC SPIKE AS A USB ONE (Stuart, 2026-10-27: "Can you apply the offset for
+         *  RTL_tcp too please"). rtl_tcp only moves the dongle's samples over the network; the tuner, its LO leakage and
+         *  the spike are the same, so it gets the same 15 kHz. Until now it had none, and a listener with the VFO Centre
+         *  FREE (Gesiima, GitHub #57, two RTL dongles) could tune straight onto the spike.
+         * ★ Only where the header names a real RTL tuner (E4000 … R828D, types 1–6) AND gains: a relayed stream (no
+         *   gains, tuner 0) is someone else's processed IQ, not a dongle, and is left exactly as it was. The open path
+         *   and every retune already go through tuneHw() with the physical centre, so nothing downstream disagrees
+         *   (the trap that made the RSP's offset a 15 kHz error, above).
+         * ★ TEST: VIBE_TCP_DC_OFFSET_HZ, when set, overrides it (0 forces the old arrangement for a test that needs it). */
+        if (useTcp()) {
+            static const double kTcpTestOff = [] { const char* e = std::getenv("VIBE_TCP_DC_OFFSET_HZ"); return e ? std::atof(e) : -1.0; }();
+            if (kTcpTestOff >= 0.0) return kTcpTestOff;
+            return (tcpHasGain() && tcpTunerType >= 1 && tcpTunerType <= 6) ? HW_OFFSET_HZ : 0.0;
+        }
+        return (useAirspyHf() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
     }
 
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
