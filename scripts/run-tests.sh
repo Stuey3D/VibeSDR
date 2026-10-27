@@ -1286,6 +1286,19 @@ else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-jtty.sh)'; notrun=$((notrun+1))
 fi
 
+# ★★★ V12 BAND SPOTS AND THE TUNER'S DC (2026-10-27, v12-band-dc): a fake rtl_tcp with the dongle's 15 kHz offset tuning
+#     (VIBE_TCP_DC_OFFSET_HZ), a dirty DC at its tuned centre and six FT8 stations round 40 m's 7.0756 — BEFORE
+#     (VIBE_BAND_DC=0) the DC sits on FT8 and Band decodes nothing; AFTER the tuner moves the DC outside the slices, all six
+#     are spotted at their RF, a second listener's USB tone stays within 1 Hz through Band on and off, and Band off puts
+#     the tuner back. Needs VIBESERVER_BIN.
+printf '\n\033[1m── Band spots and the tuner DC (end to end) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-digi-spots" ] && [ -x "$OUT/test-band-dc" ]; then
+  VIBE_DIGI_BIN="$OUT/test-digi-spots" VIBE_DC_BIN="$OUT/test-band-dc" node --max-old-space-size=512 scripts/test-server-band-dc.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+else
+  echo '   not run — needs VIBESERVER_BIN (and test-digi-spots / test-band-dc built above)'; notrun=$((notrun+1))
+fi
+
 # ★★★ V12 DIGITAL SPOTS end to end (2026-10-26): a UTC-anchored 20 m clip (test-digi-spots clip) through the real server —
 #     Band on a one-pipeline and a range-locked radio (every FT8 / FT4 station with its mode at its RF, the lower sideband
 #     never), Single on the listener's audio, the owner's "spotsband" switch (test-server-spots); then the web client in

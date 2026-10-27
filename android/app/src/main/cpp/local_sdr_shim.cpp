@@ -27619,6 +27619,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         skimTap_.aim(g);
         skimTap_.feed(iq, n, vibeUtcNow());   // ★ stamped HERE, on the DSP thread: the capture time of the chunk's last sample
+        if (g.bins && !bandDcOn_.load(std::memory_order_relaxed)) bandDcLogAt_ = Impl::nowSecs() - 50.0;   // ★ first line 10 s in, once placed
         bandDcOn_.store(g.bins, std::memory_order_relaxed);   // ★ Band (not the CW/PSK skimmer) — bandDcTick acts on it
         /* ★★ ONE LINE A MINUTE while Band's slice is cut (V12 2026-10-27, for the Pi 2's "nothing decodes"): where the tuner
          *  and its DC are against the band's slices, and what the tap has had to drop — read off the live radio, not believed. */

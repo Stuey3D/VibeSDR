@@ -7,11 +7,14 @@
 //   • checks the placement AFTER: never on a mode, outside every slice wherever the capture allows, every slice still inside
 //     the capture, idempotent, the smallest move, the caller's bounds honoured when they can be, nothing off a band.
 //   test-band-dc            the checks (and the table)
+//   test-band-dc where <rate> <dialHz> <dcHz>   prints where a DC sits: 0 outside every slice, 1 inside one, 2 <MODE> on a mode
+//                                                (scripts/test-server-band-dc.mjs reads it, so the e2e and the rule agree)
 #include "vibe_band_slice.h"
 #include "decoders/digi_bands.h"
 #include "decoders/digi_mode.h"
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <set>
 #include <string>
 #include <vector>
@@ -23,7 +26,14 @@ static void okv(bool c, const std::string& what) { ++checks; std::printf("  [%s]
 // ★ the shim's own rule (local_sdr_shim.cpp fftSizeForRate)
 static int fftFor(double rate) { double want = rate / 75.0; int s = 4096; while (s < (int)want && s < 32768) s *= 2; return s; }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 5 && std::string(argv[1]) == "where") {
+        const double r = std::atof(argv[2]);
+        std::string m;
+        const int w = bandDcWhere(r, fftFor(r), std::atof(argv[3]), std::atof(argv[4]), &m);
+        std::printf("%d %s\n", w, w == 2 ? m.c_str() : "-");
+        return 0;
+    }
     const double rates[] = { 2400000, 2048000, 1024000, 960000, 300000 };
     struct Off { const char* who; double hz; double minRate; } offs[] = { { "RTL/RSP 15 kHz", 15000, 0 }, { "HackRF 250 kHz", 250000, 2e6 },
                                                                          { "rtl_tcp 0", 0, 0 } };

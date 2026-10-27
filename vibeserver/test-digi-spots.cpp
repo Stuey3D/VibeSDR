@@ -223,6 +223,27 @@ static int writeClip40(const char* path, double rate, double centre) {
     std::fclose(f);
     return 0;
 }
+/** ★ V12 (2026-10-27, v12-band-dc) `clip40dc`: 40 m with SIX FT8 CQs spread across the FT8 sub-band (audio 400…2900 Hz, so
+ *  7.0744…7.0769 MHz) — where a dongle's DC lands when the tuner sits 15 kHz above 40 m's Band dial (7.0756): every one is
+ *  within 1.3 kHz of it. scripts/test-server-band-dc.mjs. */
+static const struct { const char* msg; double rf; } kClip40Dc[] = {
+    { "CQ G4AAA IO92", 7074400 }, { "CQ DL1AAB JO31", 7074900 }, { "CQ K1AAC FN42", 7075400 },
+    { "CQ F5AAD JN18", 7075900 }, { "CQ EA4AAE IN80", 7076400 }, { "CQ JA1AAF PM95", 7076900 } };
+static int writeClip40Dc(const char* path, double rate, double centre, double amp) {
+    std::vector<cf32> x((size_t)(rate * 15.0), cf32(0, 0));
+    for (const auto& t : kClip40Dc) addTx(x, rate, t.rf - centre, 0.5, tonesFor(t.msg, false), false, amp);
+    addNoise(x, 5.0, 29);
+    std::vector<uint8_t> u(x.size() * 2);
+    for (size_t i = 0; i < x.size(); ++i) {
+        u[2 * i] = (uint8_t)std::max(0.0, std::min(255.0, std::round(127.5 + x[i].real())));
+        u[2 * i + 1] = (uint8_t)std::max(0.0, std::min(255.0, std::round(127.5 + x[i].imag())));
+    }
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 1;
+    std::fwrite(u.data(), 1, u.size(), f);
+    std::fclose(f);
+    return 0;
+}
 static int writeClip(const char* path, double rate, double centre) {
     std::vector<cf32> x((size_t)(rate * 15.0), cf32(0, 0));
     struct Tx { const char* msg; bool ft4; double rf, start; };
@@ -356,6 +377,7 @@ int main(int argc, char** argv) {
     if (argc > 4 && std::strcmp(argv[1], "realusb") == 0) return runRealUsb(argv[2], std::atof(argv[3]), std::atof(argv[4]), argc > 5 && !std::strcmp(argv[5], "live"));
     if (argc > 4 && std::strcmp(argv[1], "clip") == 0) return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     if (argc > 4 && std::strcmp(argv[1], "clip40") == 0) return writeClip40(argv[2], std::atof(argv[3]), std::atof(argv[4]));
+    if (argc > 4 && std::strcmp(argv[1], "clip40dc") == 0) return writeClip40Dc(argv[2], std::atof(argv[3]), std::atof(argv[4]), argc > 5 ? std::atof(argv[5]) : 4.0);
     if (argc > 4 && std::strcmp(argv[1], "real") == 0) {
         bool swap = false, live = false, gate = false; double budget = INFINITY, maxSec = 1e9;
         for (int i = 5; i < argc; ++i) {

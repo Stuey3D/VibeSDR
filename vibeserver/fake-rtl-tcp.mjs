@@ -33,6 +33,13 @@
 //   --hf FILE --hf-centre HZ   while the dongle is tuned within a quarter of the rate of HZ, replay FILE (unsigned 8-bit IQ
 //               at the rate the server asked for, centred on HZ) on a loop, mixed to wherever the dongle really is — CW
 //               stations for the CW skimmer on the bench (V12, 2026-10-25: `cw_bench clip`, scripts/test-server-cw.mjs).
+//   --dc A      (with --hf) a DONGLE'S DC: a constant A u8 counts at the tuned centre, added after the clip is mixed there
+//               (V12 Band spots and the tuner's DC, 2026-10-27 — scripts/test-server-band-dc.mjs). Stuart's V4 measures a
+//               constant one-bin spike (-45 dBFS ≈ 0.7 counts); the server's capture cleaner removes that.
+//   --dc-skirt HZ --dc-skirt-amp A   …and a DIRTY DC region: complex noise of A counts RMS low-passed to ±HZ round the
+//               tuned centre (a 1/f skirt, a DC that wanders with gain) — the stress model, not a measurement.
+//   --carrier HZ --carrier-amp A   (with --hf) a steady carrier at that ABSOLUTE frequency, A counts — a second listener's
+//               SSB/AM channel to measure to the hertz while the server moves the tuner.
 //   --stall-at HZ  a dongle that FALLS OVER at a rate: while the server has asked for HZ or more, send nothing at all
 //               (the socket stays open, the samples just stop) — the boosted-rate guard's bench (vibe_rate_guard.h,
 //               scripts/test-rate-guard.mjs). Below HZ the stream resumes.
@@ -129,6 +136,8 @@ const HF_IQ = hfArg ? fs.readFileSync(hfArg) : null;
 //   mode in it (FT8 at +0.5 s of a 15 s slot) lands in the server's UTC slots as it would off air (test-server-spots.mjs).
 const HF_UTC = process.argv.includes('--hf-utc');
 const HF_CENTRE = (() => { const i = process.argv.indexOf('--hf-centre'); return i >= 0 ? Number(process.argv[i + 1]) : 7.03e6; })();
+const DC_A = arg('dc', 0), SKIRT_HZ = arg('dc-skirt', 0), SKIRT_A = arg('dc-skirt-amp', 0);   // ★ --dc, --dc-skirt (V12 2026-10-27)
+const CARRIER_HZ = arg('carrier', 0), CARRIER_A = arg('carrier-amp', 8);
 if (HF_IQ) console.log(`[fake-rtl-tcp] HF clip ${hfArg}: ${HF_IQ.length / 2} samples centred on ${HF_CENTRE} Hz`);
 if (ISM_IQ) console.log(`[fake-rtl-tcp] ISM clip ${ismArg}: ${ISM_IQ.length / 2} samples`);
 if (DAB_IQ) console.log(`[fake-rtl-tcp] DAB clip ${dabArg}: ${(DAB_IQ.length / 2 / 2.048e6).toFixed(2)} s at 2.048 MS/s`);
@@ -160,6 +169,7 @@ const srv = net.createServer((sock) => {
   let ism868Pos = 0;      // … and in ISM868_IQ
   let hfPos = 0, hfRe = 1, hfIm = 0;   // replay position in HF_IQ, and the mixer's phase (--hf)
   let hfAnchored = false;               // ★ --hf-utc: the position set from UTC on the first chunk
+  let carRe = 1, carIm = 0, skRe = 0, skIm = 0;   // ★ --carrier's phasor, --dc-skirt's filter state
   // WFM stereo generator state (see --wfm)
   let fmPhase = 0, pilotPh = 0, lPh = 0, rPh = 0;
   let gainTenths = 350, muxPos = 0;   // ★ --dab-mux: the gain the server last wrote, the replay position
@@ -227,14 +237,29 @@ const srv = net.createServer((sock) => {
     if (HF_IQ && Math.abs(centreHz - HF_CENTRE) <= rate / 4) {
       // ★ The clip is centred on HF_CENTRE; the dongle may sit off it (the server's own offset tuning) — mix it there.
       const w = (2 * Math.PI * (HF_CENTRE - centreHz)) / rate, cw = Math.cos(w), sw = Math.sin(w);
+      // ★ --carrier: its own oscillator, re-aimed whenever the dongle is retuned (phase kept)
+      const wc = (2 * Math.PI * (CARRIER_HZ - centreHz)) / rate, ccw = Math.cos(wc), csw = Math.sin(wc);
+      // ★ --dc-skirt: one-pole low-pass on complex Gaussian noise (corner at SKIRT_HZ), scaled to SKIRT_A counts RMS
+      const sa = SKIRT_HZ > 0 ? 1 - Math.exp(-2 * Math.PI * SKIRT_HZ / rate) : 0, sg = SKIRT_A * Math.sqrt((2 - sa) / sa);
       for (let i = 0; i < n; i++) {
         const x = (HF_IQ[hfPos] - 127.5), y = (HF_IQ[hfPos + 1] - 127.5);
         hfPos = (hfPos + 2) % HF_IQ.length;
-        buf[2 * i] = Math.max(0, Math.min(255, Math.round(127.5 + x * hfRe - y * hfIm)));
-        buf[2 * i + 1] = Math.max(0, Math.min(255, Math.round(127.5 + x * hfIm + y * hfRe)));
+        let re = x * hfRe - y * hfIm + DC_A, im = x * hfIm + y * hfRe + DC_A * 0.6;
+        if (CARRIER_HZ) {
+          re += CARRIER_A * carRe; im += CARRIER_A * carIm;
+          const cr = carRe * ccw - carIm * csw; carIm = carRe * csw + carIm * ccw; carRe = cr;
+        }
+        if (sa) {
+          const u1 = Math.random() || 1e-12, u2 = Math.random(), rr = Math.sqrt(-2 * Math.log(u1)) / Math.SQRT2;
+          skRe += sa * (sg * rr * Math.cos(2 * Math.PI * u2) - skRe); skIm += sa * (sg * rr * Math.sin(2 * Math.PI * u2) - skIm);
+          re += skRe; im += skIm;
+        }
+        buf[2 * i] = Math.max(0, Math.min(255, Math.round(127.5 + re)));
+        buf[2 * i + 1] = Math.max(0, Math.min(255, Math.round(127.5 + im)));
         const r = hfRe * cw - hfIm * sw; hfIm = hfRe * sw + hfIm * cw; hfRe = r;
       }
       const m = 1.5 - 0.5 * (hfRe * hfRe + hfIm * hfIm); hfRe *= m; hfIm *= m;
+      const mc = 1.5 - 0.5 * (carRe * carRe + carIm * carIm); carRe *= mc; carIm *= mc;
     } else if (ISM_IQ && Math.abs(centreHz - 434e6) <= 2e6) {
       for (let k = 0; k < n * 2; ) {
         const take = Math.min(n * 2 - k, ISM_IQ.length - ismPos);
