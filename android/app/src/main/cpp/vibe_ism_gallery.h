@@ -58,6 +58,13 @@ inline const std::vector<KindWord>& kindWords() {
         { "sensor",     "sensor",            "sensors" },
         { "energy",     "energy meter",      "energy meters" },
         { "meter",      "meter",             "meters" },           // ★ V12 wM-Bus: water, heat, gas … (vibe_wmbus.h)
+        // ★ V12 LoRa (vibe_lora_track.h, docs/v12/LORA-MESH.md): the mesh nodes, LoRaWAN devices, unnamed LoRa, and the
+        //   mesh networks' PUBLIC messages (each its own row — "meshmsg")
+        { "meshtastic", "Meshtastic node",   "Meshtastic nodes" },
+        { "meshcore",   "MeshCore node",     "MeshCore nodes" },
+        { "lorawan",    "LoRaWAN device",    "LoRaWAN devices" },
+        { "lora",       "LoRa transmitter",  "LoRa transmitters" },
+        { "meshmsg",    "public message",    "public messages" },
     };
     return k;
 }
@@ -87,7 +94,20 @@ inline std::string meterKey(const std::string& line) {
     for (int i = 0; i < 3; ++i) { const size_t d = line.find(kDot, p); if (d == std::string::npos) return line; p = d + 4; }
     return line.substr(0, p - 4);
 }
-inline std::string keyOf(const std::string& kind, const std::string& line) { return kind == "meter" ? meterKey(line) : deviceKey(line); }
+/** ★ V12 LoRa: "Meshtastic · Northampton Base (NBAS) · …" → its first two fields (the network and the node); a public
+ *  message is its own row (the whole line). */
+inline std::string loraKey(const std::string& line) {
+    const size_t a = line.find(kDot);
+    if (a == std::string::npos) return line;
+    const size_t b = line.find(kDot, a + 4);
+    return b == std::string::npos ? line : line.substr(0, b);
+}
+inline std::string keyOf(const std::string& kind, const std::string& line) {
+    if (kind == "meter") return meterKey(line);
+    if (kind == "meshmsg") return line;
+    if (kind == "meshtastic" || kind == "meshcore" || kind == "lorawan" || kind == "lora") return loraKey(line);
+    return deviceKey(line);
+}
 /** "Water meter" → "water", "Cold water meter" → "cold water", "Heat cost allocator" → "heat cost allocator". */
 inline std::string meterSort(const std::string& name) {
     std::string t = name.substr(0, name.find(kDot));
@@ -404,7 +424,8 @@ private:
             d.line = row.substr(q);
             if (d.line.empty()) continue;
             const size_t n = d.line.find(dot);
-            d.name = d.kind == "meter" ? meterKey(d.line) : n == std::string::npos ? d.line : d.line.substr(0, n);
+            d.name = d.kind == "meter" ? meterKey(d.line) : (d.kind == "meshtastic" || d.kind == "meshcore" || d.kind == "lorawan" || d.kind == "lora") ? loraKey(d.line)
+                   : n == std::string::npos ? d.line : d.line.substr(0, n);
             devs_[keyOf(d.kind, d.line)] = d;
         }
         // ★ the totals: the readings line, else the rows' own counts

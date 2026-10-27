@@ -1657,6 +1657,7 @@ static std::vector<vibe::digi::Span> vsSpotSpans();   // ★ V12: the bands Band
 static std::string vsSpotsBandWhyNot();
 static int vsBandOverride(const std::string& mode);   // ★ V12 Band governor: the owner's +1 Always / −1 Off / 0 Auto
 static double vsBandBudgetUnits();                    // ★ …and the benchmark's budget in FT8 units (∞ = none)
+static double vsLoraBenchPct();                       // ★ V12 LoRa: the benchmark's dec_lora row (% of a core; −1 = none)
 static bool vsDabCapableHw();   // ★ the same, ignoring the owner's block — see its definition
 // ★ Forward-declared alongside vsDabCapable for the same reason: the DAB entry path refuses
 //   thousands of lines above the definition, and it needs to name WHICH restriction bit.
@@ -13856,6 +13857,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  last written — so a new DayLog finding the same day's items (a typed frequency inside the band, a step back to
          *  it) reads them back complete. Its nicknames go to the Tracker before it starts (DayLog's "A RESTART"). */
         g_ism.stop();
+        /* ★ V12 LoRa (vibe_lora_service.h, docs/v12/LORA-MESH.md): on unless the owner blocks "lora"; every plan channel
+         *  when the owner allows "lora+all", otherwise the default set plus what the benchmark's dec_lora row affords. */
+        g_ism.setLora(!vsModeBlocked("lora"), vsModeBlocked("lora+all") ? INFINITY : vibelora::budgetFromBench(vsLoraBenchPct()));
         auto log = ismMakeLog(b);
         if (log) for (const auto& kv : log->nickFloor()) g_ism.reserveNicks(kv.first, kv.second);
         { std::lock_guard<std::mutex> lk(ismLogMtx_); ismLog_ = log; }
@@ -33753,6 +33757,19 @@ static int vsBandOverride(const std::string& mode) {
 /** ★ The benchmark's Band row (dec_ft8band: the busiest band, every mode, ONE pass, through the real tuners and engines)
  *  → this machine's budget in FT8 units (digi::budgetUnitsFromBench). No benchmark run, or no Band row: ∞ — the live
  *  skips alone then govern. Parsed from the stored result (GET /vibeserver/benchmark's JSON). */
+/** ★ V12 LoRa: the benchmark's dec_lora row, % of one core (−1 = no benchmark run, or no row). */
+static double vsLoraBenchPct() {
+    LocalSdrShim::BenchGetFn getFn;
+    { std::lock_guard<std::mutex> lk(g_vsBenchMtx); getFn = g_vsBenchGet; }
+    if (!getFn) return -1;
+    const std::string j = getFn();
+    const size_t at = j.find("\"id\":\"dec_lora\"");
+    if (at == std::string::npos) return -1;
+    const size_t end = j.find('}', at);
+    const std::string row = j.substr(at, end == std::string::npos ? std::string::npos : end - at);
+    const size_t pp = row.find("\"pct\":");
+    return pp == std::string::npos ? -1 : std::atof(row.c_str() + pp + 6);
+}
 static double vsBandBudgetUnits() {
     LocalSdrShim::BenchGetFn getFn;
     { std::lock_guard<std::mutex> lk(g_vsBenchMtx); getFn = g_vsBenchGet; }

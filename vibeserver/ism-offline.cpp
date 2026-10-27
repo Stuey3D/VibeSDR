@@ -6,6 +6,10 @@
 // --gallery <dir> (V12 2026-10-25): also keep what was heard as the GALLERY does (vibe_ism_gallery.h) — the day's log and
 // summary card for the nearest band, written into <dir> on the capture's own clock (it starts "now") — so a real
 // recording proves the readable lines and the privacy rule in the files themselves.
+// ★ V12 LoRa (2026-10-27, vibe_lora*.h): the band's LoRa plan runs over the same capture — every plan channel the
+// recording holds (a narrow recording below 1 MS/s made for ONE channel may use its whole width) — and each frame is
+// printed as the clients get it (LoRaWAN payloads by length only; mesh text from the published channels only), then
+// the detectors' counts (preambles, SFDs, bad headers, bad CRCs). --no-lora skips it.
 // Build: g++ -std=c++17 -O2 -I android/app/src/main/cpp -o ism-offline vibeserver/ism-offline.cpp -lpthread
 #include "vibe_ism_service.h"
 #include "vibe_ism_gallery.h"
@@ -21,10 +25,11 @@ int main(int argc, char** argv) {
     if (argc < 4) { std::fprintf(stderr, "usage: %s <capture> <rate> <centre Hz> [u8|cf32] [--bursts]\n", argv[0]); return 2; }
     const double rate = std::atof(argv[2]), centre = std::atof(argv[3]);
     const bool f32 = argc > 4 && std::strcmp(argv[4], "cf32") == 0;
-    bool listBursts = false;
+    bool listBursts = false, lora = true;
     std::string galDir;
     for (int i = 4; i < argc; ++i) {
         if (std::strcmp(argv[i], "--bursts") == 0) listBursts = true;
+        if (std::strcmp(argv[i], "--no-lora") == 0) lora = false;
         if (std::strcmp(argv[i], "--gallery") == 0 && i + 1 < argc) galDir = argv[++i];
     }
     vibe::gallery::Store store;
@@ -52,8 +57,13 @@ int main(int argc, char** argv) {
     std::string lastMeterId; double lastMeterT = -1;
     Tracker tr;
     FobWatch fobs;   // ★ undecoded presses → "Suspected key fob", as the server does
+    vibelora::Engine le;
+    vibelora::MeshTable mesh;
+    if (lora) le.startInline(bandNearest(centre)->id, centre, rate, INFINITY, rate < 1e6 ? 0.5 : 0.45);
+    if (lora) { std::printf("LoRa: %zu plan channels in this capture (%zu detectors)\n", le.channelsRun(), le.detectors());
+                for (auto& n : le.channelNames()) std::printf("  %s\n", n.c_str()); }
     double t = 0;
-    uint64_t nb = 0, nd = 0;
+    uint64_t nb = 0, nd = 0, nl = 0;
     std::vector<uint8_t> u(1 << 20);
     std::vector<float> fb(1 << 20);
     std::vector<cf> x;
@@ -96,6 +106,22 @@ int main(int argc, char** argv) {
         else { n = std::fread(u.data(), 1, u.size(), f) / 2; x.resize(n); for (size_t i = 0; i < n; ++i) x[i] = cf((u[2 * i] - 127.5f) / 128.0f, (u[2 * i + 1] - 127.5f) / 128.0f); }
         if (!n) break;
         fe.feed(x.data(), n, onBurst);
+        if (lora) {
+            le.process(x.data(), n);
+            for (auto& h : le.take()) {
+                ++nl;
+                const auto& m = h.m;
+                const std::string line = m.proto == "lorawan" ? vibelora::lorawan::line(m) : m.proto == "meshtastic" ? vibelora::meshtastic::line(m)
+                                       : m.proto == "meshcore" ? vibelora::meshcore::line(m)
+                                       : "LoRa · sync 0x" + vibelora::crypto::toHex(&m.sync, 1, true) + " · " + std::to_string(m.len) + " bytes";
+                std::printf("%8.3f s  %9.4f MHz  SF%d %5.1f kHz CR4/%d  SNR %5.1f dB  %s\n", t + double(n) / rate, h.f.freqHz / 1e6, h.f.sf,
+                            h.f.bw / 1e3, 4 + h.f.cr, h.f.snrDb, line.c_str());
+                std::vector<vibelora::Event> ev;
+                mesh.accept(m, t, galLog ? &ev : nullptr);
+                capT = t;
+                for (const auto& e : ev) { Heard hd; hd.kind = e.kind; hd.name = e.name; hd.line = e.line; hd.freqHz = e.freqHz; galLog->heard(hd); }
+            }
+        }
         t += n / rate;
         capT = t;
         if (galLog) galLog->tick();
@@ -109,7 +135,10 @@ int main(int argc, char** argv) {
         std::printf("meters: %llu bursts at 868.30 / 868.95 tried, %llu frames (%llu damaged), %llu from collectors; "
                     "★ encrypted payloads are never printed — only their length\n", (unsigned long long)wst.tried,
                     (unsigned long long)wst.frames, (unsigned long long)wst.damaged, (unsigned long long)wst.collector);
-    std::printf("\nthe device list (as the clients get it):\n%s\n", tr.json(t).c_str());
+    if (lora) std::printf("LoRa: %llu frames; per detector that heard anything:\n%s", (unsigned long long)nl, le.stats().c_str());
+    const auto loraRows = mesh.rowsJson(t);
+    std::printf("\nthe device list (as the clients get it):\n%s\n", tr.json(t, &loraRows).c_str());
+    if (lora && mesh.texts()) std::printf("\npublic messages:\n%s\n", mesh.msgsJson(t).c_str());
     if (galLog) {
         galLog->finish();
         std::printf("\nthe gallery (%s): log %s, card %s\n", galDir.c_str(), galLog->logName().c_str(), galLog->cardName().c_str());

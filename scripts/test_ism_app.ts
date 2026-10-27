@@ -132,5 +132,64 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('one waterfall (phone, iPad and Mac share it)', (scr.match(/<WaterfallView\b/g) ?? []).length, 1);
 }
 
+// ── ★ V12 LoRa (docs/v12/LORA-MESH.md): the mesh / LoRaWAN rows, the public messages, the MAP's items — both readers ──
+{
+  const lr = {
+    type: 'ism', band: '868', bandName: '868 MHz SRD', centre: 868_600_000, bursts: 10,
+    lora: { chans: 13, plan: 16, dets: 42, frames: 31, badCrc: 1, texts: 2, mapped: 2, dropped: 0 },
+    msgs: [{ ago: 14, net: 'meshcore', from: 'Alice', node: '', ch: 'Public', freq: 869_617_000, text: 'anyone on the mesh tonight?' },
+           { ago: 40, net: 'meshtastic', from: '!55667788', node: '!55667788', ch: 'LongFast', freq: 869_521_000, text: 'Hello <b>Racecourse</b>' },
+           { ago: 'x', text: 5 }],
+    devices: [
+      { key: 'm1', kind: 'meshtastic', make: 'Meshtastic', model: 'Heltec V3', name: 'Northampton Base (NBAS)',
+        line: 'Meshtastic · Northampton Base (NBAS) · Heltec V3 · router · 52.2400, -0.8950 · 1 hop', node: '!1a2b3c4d', short: 'NBAS',
+        long: 'Northampton Base', hw: 'Heltec V3', role: 'router', chan: 'LongFast', lat: 52.24, lon: -0.895, alt: 68, prec: 32, hops: 1,
+        battPct: 87, sf: 11, bw: 250000, cr: 1, sync: '2B', freq: 869_527_000, snr: 9.8, seen: 20, count: 2,
+        msgs: [{ ago: 12, from: 'Northampton Base', text: 'net check' }] },
+      { key: 'm2', kind: 'meshcore', make: 'MeshCore', model: 'repeater', name: 'Moulton Rptr', line: 'MeshCore · Moulton Rptr · repeater · 52.2900, -0.8400 · heard first-hand',
+        node: '5a5b5c5d', long: 'Moulton Rptr', role: 'repeater', lat: 52.29, lon: -0.84, hops: 0, sf: 8, bw: 62500, cr: 4, freq: 869_619_000, snr: 9.5, seen: 1200, count: 3 },
+      { key: 'm3', kind: 'lorawan', make: 'LoRaWAN', model: 'Unconfirmed up', name: 'TTN 260B1234',
+        line: 'LoRaWAN · TTN 260B1234 · Unconfirmed up · FCnt 4211 · port 2 · 12 bytes encrypted · ADR · SF9', node: '260B1234', net: 'The Things Network',
+        fcnt: 4211, fport: 2, encLen: 12, sf: 9, bw: 125000, freq: 868_103_000, snr: 9.2, seen: 5, count: 1 },
+      { key: 'm4', kind: 'meshtastic', name: '!99aabbcc', line: 'Meshtastic · !99aabbcc · heard first-hand · private channel', node: '!99aabbcc', priv: 1,
+        lat: 0, lon: 0, freq: 869_526_000, snr: 9.7, seen: 30, count: 1 },
+      { key: 'm5', kind: 'lora', name: 'LoRa SF9', line: 'LoRa · SF9 · 125 kHz · sync 0x12 · 20 bytes', sf: 9, freq: 868_300_000, snr: 3, seen: 40, count: 1 },
+    ],
+  };
+  const w = web.ismSanitise(lr)!, a2 = app.ismSanitise(lr)!;
+  eq('LoRa: both sanitisers agree', a2, w);
+  eq('the lora block', w.lora, lr.lora);
+  eq('messages: the broken one dropped, text kept as text', w.msgs!.map((m) => m.text), ['anyone on the mesh tonight?', 'Hello <b>Racecourse</b>']);
+  eq('0,0 is not a position', w.devices.find((d) => d.key === 'm4')!.lat, undefined);
+  eq('two on the map', w.devices.filter(web.ismOnMap).map((d) => d.key), ['m1', 'm2']);
+  eq('app: the same two', a2.devices.filter(app.ismOnMap).map((d) => d.key), ['m1', 'm2']);
+  eq('the status line, both', app.ismStatus(a2), web.ismStatus(w));
+  eq('…which counts the LoRa frames and channels', /LoRa 31 frames · 13 of 16 channels/.test(web.ismStatus(w)), true);
+  const u = { mph: true, pressure: 'bar' as const };
+  for (const d of w.devices) eq(`a LoRa line has no unit choice: ${d.key}`, web.ismLine(d, u), d.line);
+  const rx = { lat: 52.2405, lon: -0.9025 };
+  for (const d of w.devices) eq(`the detail, both: ${d.key}`, app.ismLoraDetail(a2.devices.find((x) => x.key === d.key)!, rx), web.ismLoraDetail(d, rx));
+  const det = web.ismLoraDetail(w.devices[0], rx).join(' | ');
+  eq('a node\'s detail: SF, hops, hardware, battery, range', /SF11 · 250 kHz · CR 4\/5 · SNR 9.8 dB · 1 hop/.test(det) && /Heltec V3 · router · channel LongFast · battery 87 %/.test(det)
+     && /km [NESW]/.test(det) && /net check/.test(det), true);
+  eq('LoRaWAN detail says encrypted, never bytes', web.ismLoraDetail(w.devices[2], rx).some((l) => /never its bytes/.test(l)), true);
+  eq('LORAWAN chip shows unnamed LoRa too', app.ismRows(a2, 'lorawan').map((d) => d.key), ['m3', 'm5']);
+  eq('MESHTASTIC chip', app.ismRows(a2, 'meshtastic').map((d) => d.key), ['m1', 'm4']);
+  eq('MESSAGES chip: messages, not rows', app.ismRows(a2, 'msgs'), []);
+  eq('the messages, app lines', app.ismMsgLines(a2).map((m) => m.text), ['MeshCore Public · Alice: anyone on the mesh tonight?', 'Meshtastic LongFast · !55667788: Hello <b>Racecourse</b>']);
+  eq('the web\'s messages escape what came off the air', /Hello &lt;b&gt;Racecourse&lt;\/b&gt;/.test(web.ismListHtml(w, 'msgs', { mph: false, pressure: 'psi' })), true);
+  eq('MESSAGES empty text, both', app.ismEmptyText('msgs'), web.ismEmptyText('msgs'));
+  eq('the map status, both', app.ismMapStatus(a2, rx), web.ismMapStatus(w, rx));
+  eq('…furthest named', /2 on the map · furthest Moulton Rptr \d/.test(web.ismMapStatus(w, rx)), true);
+  eq('the map icon, both', app.ismMapIcon(a2.devices[0]), web.ismMapIcon(w.devices[0]));
+  eq('the map card escapes', /&lt;|<b>Northampton Base<\/b>/.test(app.ismMapCard(a2.devices[0], rx)), true);
+  const items = app.ismMapItems(a2, rx);
+  eq('the app\'s pins', items.map((i) => [i.key, i.lat, i.lon, i._lb]), [['m1', 52.24, -0.895, 'NBAS'], ['m2', 52.29, -0.84, 'Moulton Rptr']]);
+  eq('the app\'s rows nearest first', app.ismMapRows(a2, rx).map((r) => r.key), ['m1', 'm2']);
+  eq('the MAP key is a stop only when offered', app.ismNavKeys({ on: true, big: false, chips: false, rows: 0, map: true }).map((k) => k.key), ['down', 'up', 'map', 'exit']);
+  eq('…and not otherwise', app.ismNavKeys({ on: true, big: false, chips: false, rows: 0 }).map((k) => k.key), ['down', 'up', 'exit']);
+  eq('the chips, both', app.ISM_KINDS, web.ISM_KINDS);
+}
+
 console.log(`ism app: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);
