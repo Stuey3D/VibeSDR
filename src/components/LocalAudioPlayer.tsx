@@ -4,6 +4,8 @@ import { decodeVibeAdpcmFrame } from '../services/imaAdpcm';
 import { noteAudioEvent } from '../services/audioPathLog';
 import { guard, noteFault } from '../services/faultLog';
 import { shouldForwardTune, type ServerDial } from '../services/audioTuneForward';
+import { auxClose, auxIsOpenFor, auxOpen, auxSend, claimNative, dualHolds, linkFor, nativeOwnedBy, noteLink,
+         releaseNative, sameLink, setAuxOnBytes } from '../services/dualServer';
 
 // VibeSDR V4 — local-hardware / RTL-TCP audio.
 //
@@ -167,6 +169,11 @@ export interface LocalAudioPlayerProps {
    *  says 'choice' — see ServerOccupancy.uncompressed. ~187 KB/s against Opus's ~8, so it is the
    *  listener's deliberate choice on a link that can carry it, never a default. */
   raw?:          boolean;
+  /** ★★ V12 TWO SERVERS AT ONCE (src/services/dualServer.ts). Absent (null) = the ordinary single-server path, exactly
+   *  as before. `id` is this screen's side of the pairing (= sessionId); `transport` which voice its audio rides:
+   *  'native' — the main pump (server 1, or any server playing alone); 'aux' — the second voice (server 2), whose socket
+   *  is read in JS by dualServer and outlives this component. */
+  dual?:         { id: string; transport: 'native' | 'aux' } | null;
 }
 
 function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwidthHigh: number) {
@@ -177,9 +184,20 @@ export default function LocalAudioPlayer(
   { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName,
     host = '127.0.0.1', authSuffix = '', sessionId = '', onBytes, raw = false,
     wsBase = '', adminAuth = '', assertTune = true, userTuneSeq = 0, restartKey = 0,
-    serverDial = null }: LocalAudioPlayerProps,
+    serverDial = null, dual = null }: LocalAudioPlayerProps,
 ) {
   const started = useRef(false);
+  /** ★ V12 two servers: which voice the socket effect last opened, and whether it has run yet on this mount — the FIRST
+   *  run may ADOPT audio that is already playing for this listener (a swap back, a return from the server list). */
+  const transportRef = useRef<'native' | 'aux'>(dual?.transport ?? 'native');
+  const prevTransport = useRef<'native' | 'aux' | null>(null);
+  const runs = useRef(0);
+  /** ★ V12: this mount is still ADOPTING audio a previous mount opened — see the run's facts below. */
+  const adopting = useRef(false);
+  const lastForceKey = useRef('');
+  const dualId = dual?.id ?? null;
+  const transport = dual?.transport ?? 'native';
+  transportRef.current = transport;
   const ws      = useRef<WebSocket | null>(null);
   const extStarted = useRef(false);
 
@@ -242,15 +260,74 @@ export default function LocalAudioPlayer(
     const combinedSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '')
       + (raw ? '' : '&codec=opus') + authSuffix + adminQ;
 
+    /* ★★ V12 TWO SERVERS: the run's facts. `firstRun` — this mount's first open, the only one that may ADOPT. `fromAux` —
+     *  the last run was the second voice and this one is the main pump: the same listener moving voices (it is playing
+     *  alone now), so the new socket says NOTHING — the server kept the dial (THE SHARED-DIAL CONTRACT). */
+    const firstRun = runs.current++ === 0;
+    const myRun = runs.current;
+    const fromAux = prevTransport.current === 'aux' && transport === 'native';
+    prevTransport.current = transport;
+    const wsRootQ = (wsBase || `ws://${host}:${port}`).replace(/\/+$/, '');
+    /* ★★★ ADOPTING SURVIVES THE SCREEN SETTLING. A screen coming back to a server whose audio never stopped opens on
+     *  the address it was given — a multi-radio server's FRONT DOOR — and only reaches the radio's own address a round
+     *  trip later (the wsBase note on this effect's deps). Reopened on each of those, the audio would go to the door
+     *  (no radio, silence) and back: exactly the cut a swap must not make. So while the audio playing is THIS
+     *  listener's (same session, same voice) and nothing has FORCED a new socket (a reconnect, raw/Opus, a credential),
+     *  every run adopts it; once the screen's address matches the one it is playing on, adoption ends and the ordinary
+     *  rules resume. Outside a pairing `dualId` is null, nothing is ever adopted, and this path is exactly as it was. */
+    const forceKey = `${restartKey}|${raw ? 1 : 0}|${adminAuth}`;
+    const forced = !firstRun && forceKey !== lastForceKey.current;
+    lastForceKey.current = forceKey;
+    const desired = { host, port, suffix: combinedSuffix, wsBase: wsBase ?? '' };
+    const runningHere = !!dualId && (transport === 'aux' ? auxIsOpenFor(dualId) : nativeOwnedBy(sessionId || null));
+    if (firstRun) adopting.current = runningHere;
+    const adoptNow = adopting.current && runningHere && !forced && !fromAux;
+    adopting.current = adoptNow && !sameLink(linkFor(dualId), desired);
+    // ★ Recorded only when a socket is actually OPENED — it is where the audio IS, not where the screen points.
+    if (dualId && !adoptNow) noteLink(dualId, desired);
+    /** A stop, decided late when this run was adopting: a cleanup cannot tell a re-run from an unmount, and a re-run
+     *  that is still adopting must not stop what it is adopting. A plain run decides at once, as it always did. */
+    const later = (stop: () => void) => {
+      if (!adoptNow) { stop(); return; }
+      setTimeout(() => { if (runs.current === myRun) stop(); }, 0);
+    };
+
+    if (transport === 'aux' && dualId) {
+      /* ★★★ SERVER 2 RIDES THE SECOND VOICE (dualServer.ts). The socket belongs to dualServer, not to this component:
+       *  it must outlive this screen when the server goes to the background. `channels=1` — the server folds to mono
+       *  before encoding, which is what the second voice does anyway (each server owns ONE ear), so the whole 64 kb/s
+       *  lands in one channel. The tune forwarder below sends through auxSend. */
+      const url = `${wsRootQ}/ws/audio?${(combinedSuffix + '&channels=1').replace(/^&/, '')}`;
+      noteAudioEvent(`second voice ${adoptNow ? 'adopted' : 'opening'} → ${wsRootQ}/ws/audio`);
+      // ★ The hello is the main pump's rule exactly: on every OPEN when this listener may assert its tune (never adopting).
+      if (!adoptNow) auxOpen({ id: dualId, url, hello: assertTune ? tuneJson(f, m, bl, bh) : null }, forced);
+      setAuxOnBytes((n) => onBytes?.(n));
+      started.current = true;
+      return () => {
+        setAuxOnBytes(null);
+        started.current = false;
+        // ★ Going to the background (a swap): dualServer still holds it — keep playing. Otherwise it is ours to close.
+        later(() => { if (!dualHolds(dualId)) auxClose(dualId); });
+      };
+    }
+
     if (USE_NATIVE_PUMP) {
+      // ★ V12 two servers: the pump is ALREADY playing this listener (it never stopped while its screen was away) —
+      //   adopt it. Reopening would cut the audio and make the server meet a reconnect nobody asked for.
+      if (adoptNow) {
+        noteAudioEvent('native pump adopted — already playing this listener');
+      } else {
       // ★ Log the SUFFIX, not a boolean. "[admin]" told me a credential was held and nothing about
       //   whether it was well formed — which is precisely what was wrong with it.
       noteAudioEvent(`native pump start → ${(wsBase || `ws://${host}:${port}`)}/ws/audio`
                      + (adminQ ? ` [admin ${adminQ.slice(0, 18)}…]` : ' [no admin]'));
       // ★ An EMPTY initial tune is the contract on both platforms for "say nothing": Swift keeps
       //   `laTune` empty and skips the send on ready, Kotlin stores null and never sends.
-      Vibe?.startLocalAudio?.(host, port, assertTune ? tuneJson(f, m, bl, bh) : '',
+      Vibe?.startLocalAudio?.(host, port, assertTune && !fromAux ? tuneJson(f, m, bl, bh) : '',
                               combinedSuffix, wsBase ?? '');
+      }
+      // ★ V12: the pump is a singleton — say whose it is, so a screen that goes away later cannot stop another's.
+      claimNative(sessionId);
       started.current = true;
       // ★★ THE LINK METER MUST STILL SEE THE AUDIO. The JS reader below counted every byte as it
       //    arrived; with the socket native, only native can count it — so the pump reports a tally
@@ -277,7 +354,13 @@ export default function LocalAudioPlayer(
       return () => {
         try { sub?.remove(); } catch {}
         try { stateSub?.remove(); } catch {}
-        if (started.current) { Vibe?.stopLocalAudio?.(); started.current = false; }
+        /* ★★ V12 TWO SERVERS: stop only what is still OURS and not wanted by the pairing. dualHolds — this server is
+         *  going to the background and keeps playing. releaseNative — another screen's server has the pump now (a swap,
+         *  or the survivor moved across), and an unconditional stop would silence it. Outside a pairing both answers
+         *  are "stop", exactly as before. */
+        const was = started.current;
+        started.current = false;
+        later(() => { if (was && !dualHolds(dualId) && releaseNative(sessionId)) Vibe?.stopLocalAudio?.(); });
       };
     }
 
@@ -376,7 +459,8 @@ export default function LocalAudioPlayer(
   //    a dep list is a list you must remember, so it WILL be wrong. Name everything the URL is
   //    built from.
   // ★ restartKey: a reconnect asked for a NEW socket — see the prop.
-  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId, assertTune, restartKey]);
+  // ★ V12: `transport` too — a server left playing alone on the second voice moves to the main pump (dualServer.ts).
+  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId, assertTune, restartKey, transport, dualId]);
 
   /* Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
    * JS branch remains for the fallback reader.
@@ -432,7 +516,9 @@ export default function LocalAudioPlayer(
      *  ★★★ AND NOT ON A VALUE THE SERVER GAVE US (2026-10-22): an adopted dial differs from the hello too,
      *      and unsealed the socket for every listener who merely watched somebody else tune — so
      *      shouldForwardTune asks "is this the server's own dial?" before anything else. */
-    if (USE_NATIVE_PUMP) {
+    if (transportRef.current === 'aux') {
+      auxSend(dualId, tuneJson(frequency, mode, bandwidthLow, bandwidthHigh));   // ★ V12: server 2's own socket
+    } else if (USE_NATIVE_PUMP) {
       Vibe?.sendLocalTune?.(tuneJson(frequency, mode, bandwidthLow, bandwidthHigh));
     } else {
       const sock = ws.current;

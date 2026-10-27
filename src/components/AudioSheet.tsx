@@ -588,6 +588,11 @@ export interface AudioSheetProps {
   vfoStereo?: boolean;
   onVfoStereo?: (on: boolean) => void;
   vfoABOn?: boolean;
+  /** ★★ V12 TWO SERVERS AT ONCE — the TWO SERVERS row (Stuart: "if the user has chosen mono audio between both servers
+   *  so no stereo separation"): stereo = server 1 left, server 2 right (the default); mono = both in both ears.
+   *  Passed only while two servers are playing — nowhere else would it do anything. Remembered per device. */
+  dualStereo?: boolean;
+  onDualStereo?: (on: boolean) => void;
   /** ★★ V12 VFO A/B round 3 — A SQUELCH ROW FOR EACH VFO while VFO B is on (Stuart, 2026-10-27: "the 2 VFO's can they
    *  have their own squelch and auto squelch options which show in the audio menu when the 2nd VFO is active"), each
    *  labelled with its letter in its needle colour, each with its own AUTO SQUELCH and a MUTE ("the ability to mute a
@@ -675,6 +680,7 @@ export default function AudioSheet({
   sqlAuto = false, onSqlAuto, sqlAutoMargin = 12, onSqlAutoMargin, sqlAutoOk = false,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
   notchOn = false, onNotch, binaural = false, onBinaural, vfoStereo = true, onVfoStereo, vfoABOn = false, vfoRows,
+  dualStereo = true, onDualStereo,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
   fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
@@ -1001,6 +1007,22 @@ export default function AudioSheet({
               </View>
               <Text style={st.iqNote}>
                 With VFO A/B on (the frequency card): the lower frequency in your left ear, the higher in your right, crossing over smoothly if you tune one past the other. Off: both VFOs in both ears. A phone speaker or a mono headset plays both together either way.{vfoABOn && onBinaural ? ' Binaural tuning rests while VFO B is on.' : ''}
+              </Text>
+            </View>
+          )}
+
+          {/* ★★ V12 TWO SERVERS — the same question as VFO STEREO (which ear), so it sits beside it. Only while two
+              servers are playing (src/services/dualServer.ts). */}
+          {onDualStereo && (
+            <View style={{ marginTop: 2 }}>
+              <View style={st.bwRow}>
+                <Text style={[st.bwLabel, { width: 78 }]}>TWO SERVERS</Text>
+                <View style={{ flex: 1 }} />
+                <Toggle label={dualStereo ? 'STEREO' : 'MONO'} on={dualStereo} onPress={() => onDualStereo(!dualStereo)}
+                  a11y={dualStereo ? 'Two servers in stereo. Tap to hear both in both ears.' : 'Two servers in mono. Tap to put each server in its own ear.'} />
+              </View>
+              <Text style={st.iqNote}>
+                Stereo: the first server in your left ear, the second in your right, whichever is on screen. Mono: both in both ears. Each server is heard in mono either way. Hold the card under Servers for the balance between them.
               </Text>
             </View>
           )}
