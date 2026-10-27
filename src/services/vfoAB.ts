@@ -167,6 +167,20 @@ export class EarOrder {
   }
 }
 
+/** ★★ VFO B's needle colour. 'auto' (the default, and anything unreadable) = a contrast to A's: cyan, or amber when
+ *  A's is already blue-ish — what B has drawn in since it shipped. Otherwise the listener's own pick (Stuart, build 498:
+ *  "the ability for the user to choose a VFO B colour alongside the main VFO colour picker would be good"). */
+export const VFO_B_AUTO = 'auto';
+export function autoVfoBColour(a: string): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(a || '');
+  if (!m) return '#38c8ff';
+  const r = parseInt(m[1], 16), b = parseInt(m[3], 16);
+  return b > 140 && b > r + 30 ? '#ffb020' : '#38c8ff';
+}
+export function vfoBNeedle(aColour: string, chosen: string | null | undefined): string {
+  return typeof chosen === 'string' && /^#[0-9a-f]{6}$/i.test(chosen) ? chosen : autoVfoBColour(aColour);
+}
+
 /** The other one. */
 export const otherVfo = (v: VfoId): VfoId => (v === 'A' ? 'B' : 'A');
 

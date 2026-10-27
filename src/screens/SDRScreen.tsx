@@ -207,7 +207,7 @@ import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
-import { EarOrder, INACTIVE_INTENSITY, otherVfo, type VfoABInfo, type VfoId } from '../services/vfoAB';
+import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, type VfoABInfo, type VfoId } from '../services/vfoAB';
 import { BinauralTracker, binauralModeOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
          type BinauralSink } from '../services/binauralOffset';
 import { isoToFlag, validIso } from '../services/rdsCountry';
@@ -360,13 +360,6 @@ const NFM_VOICE_KEY = 'lsv_nfm_voice';
 const BINAURAL_KEY = 'lsv_binaural';
 /** ★★ V12 VFO A/B's STEREO switch (lower VFO left / higher right) — remembered per device like binaural; absent = ON. */
 const VFO_STEREO_KEY = 'lsv_vfo_stereo';
-/** ★★ VFO B's needle colour: a contrast to the listener's own (A's) — cyan, or amber when A's is already blue-ish. */
-function vfoBColour(a: string): string {
-  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(a || '');
-  if (!m) return '#38c8ff';
-  const r = parseInt(m[1], 16), g = parseInt(m[2], 16), b = parseInt(m[3], 16);
-  return b > 140 && b > r + 30 ? '#ffb020' : '#38c8ff';
-}
 const SQL_AUTO_MARGIN_KEY = 'lsv_squelch_auto_margin';
 
 /** The server's health levels arrive as plain numbers off the wire (ServerHealth) and the pill's own
@@ -3475,6 +3468,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ The "still listening?" card is CENTRED, not stacked, so it contributes nothing here.
   const noticeStackH = (showIdleTerms ? NOTICE_PILL_H : 0) + (antNoticeH ? antNoticeH + 6 : 0);
   const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
+  /** ★★ V12 VFO B's needle colour — 'auto' (a contrast to A's, the default) or the listener's swatch. Saved with A's,
+   *  in the same display blob (this server / global), and reset with it. */
+  const [vfoNeedleB,    setVfoNeedleB]    = useState<string>(VFO_B_AUTO);
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
   // swallow the needle whatever colour it is (Stuart 2026-06-12 eve)
   const [vfoIntensity,  setVfoIntensity]  = useState(5);
@@ -4041,6 +4037,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (p.signalMode === 'snr' || p.signalMode === 'smeter' || p.signalMode === 'dbfs') setSignalMode(p.signalMode);
           if (typeof p.colormap === 'string')  setColormap(p.colormap);
           if (typeof p.vfoNeedle === 'string') setVfoNeedle(p.vfoNeedle);
+          if (typeof p.vfoNeedleB === 'string') setVfoNeedleB(p.vfoNeedleB);
           num('vfoIntensity', setVfoIntensity);
           num('vfoFrost', setVfoFrost);
           num('bgOpacity', (v: number) => { setBgOpacity(v); bgOpacityUserSet.current = true; });
@@ -4056,7 +4053,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const json = JSON.stringify({
       dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
-      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoNeedleB, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
       specRatioPortrait, specRatioLandscape, avgFrames,
     });
     latestPrefsJson.current = json;
@@ -4069,7 +4066,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
-      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoNeedleB, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
       specRatioPortrait, specRatioLandscape, avgFrames, baseUrl]);
 
   // Display-panel save row (skin parity): RESET = defaults + drop the server
@@ -4083,7 +4080,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSpecPeakScale(10); setPeakHold(true);
     setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
     setAutoContrast(5); setSpatialSmooth(true); setWfCoarse('auto');
-    setVfoNeedle('#ffffff'); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
+    setVfoNeedle('#ffffff'); setVfoNeedleB(VFO_B_AUTO); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
     setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
     appAlert('Display Reset', 'Display settings restored to defaults.');
   }, [baseUrl]);
@@ -12097,6 +12094,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    FreqModal once more — unchanged.
     //    ★ Again 2026-10-27 for V12 VFO STEREO (a new AudioSheet row beside BINAURAL): the whole sentence re-read against
     //      AudioSheet, MenuSheet and FreqModal — VFO A/B itself is in the STEP sheet, said on the 'step' card.
+    //    ★ Again 2026-10-27 (build 498) when VFO A/B moved to the frequency card and VFO B gained its own needle colour
+    //      (MenuSheet, display settings, beside VFO A's): this card names neither, so nothing here pointed at them.
     { id: 'menu', title: 'Everything else: the settings cog',
       body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch, binaural tuning, VFO stereo, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
       target: tourRef('menuBtn') },
@@ -12491,13 +12490,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
            server, so the frame-generation multiplier stays constant for the whole session. */
         feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
-        needleColor={abOn && abActive === 'B' ? vfoBColour(vfoNeedle) : vfoNeedle}
+        needleColor={abOn && abActive === 'B' ? vfoBNeedle(vfoNeedle, vfoNeedleB) : vfoNeedle}
         /* ★★ V12 VFO A/B: the other VFO beside the tuned one — its own colour (A = the listener's needle colour, B a
-           contrasting one), its letter, its ear by frequency (null = both ears / stereo off). Greyed while parked. */
+           contrasting one by default, or the listener's VFO B colour), its letter, its ear by frequency (null = both ears / stereo off). Greyed while parked. */
         secondVfo={abOther ? {
           hz: abOther.frequency, filterLow: abOther.bandwidthLow, filterHigh: abOther.bandwidthHigh,
           letter: otherVfo(abActive), ear: abEars ? abEars[otherVfo(abActive)] : null,
-          color: abActive === 'A' ? vfoBColour(vfoNeedle) : vfoNeedle, parked: abParked && abActive === 'A',
+          color: abActive === 'A' ? vfoBNeedle(vfoNeedle, vfoNeedleB) : vfoNeedle, parked: abParked && abActive === 'A',
         } : null}
         activeVfo={abOn ? { letter: abActive, ear: abEars ? abEars[abActive] : null } : null}
         needleIntensity={vfoIntensity}
@@ -13634,7 +13633,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setSpecPeakScale(10); setPeakHold(true);
           setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
           setAutoContrast(5); setSpatialSmooth(true);
-          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ffffff'); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3);
+          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ffffff'); setVfoNeedleB(VFO_B_AUTO); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3);
           setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
           onNrMode('off'); onNb(false);
           onSnrSquelch(-999); onFmSquelch(-999);
@@ -13657,6 +13656,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         }}
         onSpecRatio={() => { setMenuOpen(false); setRatioOverlayOpen(true); }}
         vfoNeedle={vfoNeedle}           onVfoNeedle={setVfoNeedle}
+        /* ★★ V12: VFO B's colour beside A's — only where this server offers VFO A/B (else a dead control). */
+        vfoNeedleB={vfoNeedleB}         onVfoNeedleB={abOffered > 0 ? setVfoNeedleB : undefined}
         vfoIntensity={vfoIntensity}       onVfoIntensity={setVfoIntensity}
         vfoFrost={vfoFrost}               onVfoFrost={setVfoFrost}
         bgOpacity={bgOpacity}             onBgOpacity={(v: number) => { bgOpacityUserSet.current = true; setBgOpacity(v); }}
