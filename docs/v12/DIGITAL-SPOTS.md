@@ -577,6 +577,60 @@ and a JTTY CQ on each of its six dials decoded in Band through the slice route w
 `test-band-slice real <wav> <utc> <rec centre> <dial> [live] [stall=ms] [oldstamp] [oldslice] [chan]` replays a recording.
 `test-server-spots` adds 40 m on both radio layouts: JTTY at 7.0915 on its extra slice, at its RF, with its chip.
 
+## The tuner's DC and Band's slices (2026-10-27, branch `v12-band-dc`)
+
+**The report.** Stuart's Pi 2 (RTL-SDR Blog V4, 2.048 MS/s), 40 m in Band: 0 spots in 3 min, every chip LIGHT; Single at
+7.074 on the same radio: 98 FT8 spots from 42 calls in 2 min. The log: `dial centre 7.060600 MHz … + DC offset 15.000 kHz =
+tuner 7.075600 MHz` — a zero-IF radio's DC sits at rtlCenter + hwOffsetHz(), and with the tuner following the dial (auto IF)
+Band's dial IS the slice centre, so 40 m's DC landed in the middle of FT8 (7.0742–7.0770).
+
+**Where the DC lands, every band** (`test-band-dc` prints the table: tuner on the Band dial, five rates):
+
+| radio (offset) | DC on a mode's passband | DC inside a slice, clear of the modes |
+|---|---|---|
+| RTL / RSP (15 kHz) | **40 m — FT8, at every rate** | 30, 20, 15, 10, 2 m (every rate); 80 m at 2.048 M / 1.024 M / 960 k |
+| HackRF (250 kHz) | none | none |
+| rtl_tcp (0) | 2200 m WSPR, 630 m WSPR, 160 m FT8, 80 m FT4, 30 m FT8, 17 m FT4, 12 m FT4, 4 m FT8, 70 cm FT8 | 60, 40, 20, 15, 10, 6, 2 m |
+
+**The fix: move the capture, not the offset** (`vibe_band_slice.h` `bandDcCentre`, the shim's `bandDcSafe` / `bandDcTick`).
+While Band's slice is cut on a one-pipeline radio whose DC is at its capture centre (dongle, rtl_tcp, HackRF, RSP — not the
+HF+, a SpyServer or an Icom), every placement of the tuner — a pan (`dongleForView`), a band step (`retune`'s recentre), and
+the DSP loop's `bandDcTick` for Band starting, a dial moved inside the window, and Band stopping — puts the LOGICAL centre
+where the DC is outside every slice (main and extras) with a 3 kHz guard; else outside every passband; the smaller move;
+every slice still captured. 40 m at 2.048 MS/s: tuner 7060.6 → 7095.8 kHz, DC 7075.6 → 7110.8 kHz, outside both slices
+(7028.6–7092.6, 7075.8–7107.8). Of 192 band × rate × offset placements, 110 move the tuner, by at most 61.2 kHz.
+Options weighed:
+- (a) a Band-mode `hwOffsetHz()` (half the slice + a guard ≈ 35–60 kHz): hwOffsetHz() has ~60 readers and is COPIED into
+  the raw-IQ rotation, the background runner, a pending pan, DAB's RF centre — any one missed is the 15.00 kHz error of
+  2026-08-09 again; on a locked radio a bigger offset would also push the advertised window's far edge off the capture.
+- (b) choose each band's centre so dial + 15 kHz falls in a gap: moves the readout and the drawn VFO, makes the slice
+  off-centre (wider), leaves the spike inside the slice, and depends on a gap existing on every band at every offset.
+- (c) a notch at DC: FT8 lives there.
+- **(d), built:** rtlCenter already leaves the dial on every minimal-movement pan and every consumer derives the physical
+  centre from rtlCenter + hwOffsetHz() at the moment it uses it, so nothing new can disagree. One retune at Band start,
+  one per band step (the step's own), one at Band stop. A shared dial's other listeners hear the same demodulator, re-aimed
+  by `rx.setTune(vfoOffsetNow())` in the same move. A locked radio never moves (its DC is where the owner's centre puts it).
+  `VIBE_BAND_DC=0` = the placement exactly as before (A/B).
+
+**Measured, and said plainly.** A CLEAN DC does little harm: Stuart's V4 recording at 7.150 MHz (`iq/v4l_40m_7150000_2400k.cu8`)
+has a −45 dBFS spike one FFT bin wide (±50 Hz), constant to 0.0001 for 30 s, which the capture cleaner's slow mean removes;
+the busy 40 m recording through the slice route with that DC on FT8 (`test-band-slice real … dc=-45 clean`) decoded 80 of
+80 FT8 calls, and 78 of 80 at −25 dBFS. The armhf (Cortex-A7 NEON) build of the same route under qemu decodes exactly what
+the Mac does (66 calls in 50 s). So the DC explains the Pi 2's zero only if its DC region is DIRTY (a 1/f skirt, a DC that
+steps with every gain change) — which the e2e test models (a ±1.5 kHz skirt: 0 of 6 before, 6 of 6 after) but which has not
+been seen on a V4. If the Pi still decodes nothing with this build, the two minute lines say why:
+`Band slice: dial …, tuner centre …, DC … (outside every slice), …, tap dropped N` and `Band decode, last 60 s of capture:
+main slice X s fed …; decode A–B s behind the capture; IQ blocks dropped N; slots decoded N, skipped N; spots: …; chips: …`
+— X < 60 or drops = the box is not keeping up (every chip LIGHT means the governor thinks it is loaded); a lag of seconds =
+the slot clock.
+
+**Tests.** `test-band-dc` (890 checks: the table; never on a mode on any band/rate/offset, the guard kept, idempotent,
+slices captured, bounds honoured or waived, nothing off a band). `test-server-band-dc.mjs` (22): a fake rtl_tcp with the
+dongle's offset (`VIBE_TCP_DC_OFFSET_HZ`, test only), `--dc 6 --dc-skirt 1500 --dc-skirt-amp 30`, six FT8 CQs round 7.0756
+(`test-digi-spots clip40dc`); BEFORE (`VIBE_BAND_DC=0`) the server tunes 7075.6 kHz (on FT8) and 0 of 6 are spotted; AFTER
+it tunes 7109.8 kHz once, 6 of 6 are spotted at their RF to the hertz, a second listener's USB tone on the shared dial reads
+1000.000 Hz before, during and after Band, its readout never moves, and Band off puts the tuner back at dial + 15 kHz.
+
 ## Not done / owed
 - **Band governor (2026-10-27):** the app (React Native) now has the Band key and the chips (2026-10-26 parity pass) but no per-mode owner setting in
   its server screen (the setup page has it); a steady carrier holds a window open; ~~Band's slice is not sized for the
