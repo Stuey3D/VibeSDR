@@ -107,7 +107,7 @@ try {
   await click('#audioGate button');
   ok(await until(`!!window.__vibeWf() && window.__rows.length > 20`, 15000), `the page is drawing (${await ev('window.__rows.length')} rows in)`);
   // ★ The needle, its passband and the RF-centre line are drawn over the waterfall — hide them so the brightest pixel is the carrier.
-  await ev(`(() => { const { wf, spec } = window.__vibeWf(); wf.vfoHidden = true; spec.followVfo = true;
+  await ev(`(() => { const { wf, spec } = window.__vibeWf(); wf._drawVfo = () => {}; spec.followVfo = true;
     spec.tune(${CENTRE}); spec.zoom(${CENTRE}, ${SPAN} / (spec.cfg.binCount || 1024)); return true; })()`);
   await sleep(10000);  // a straight trail to start from — it fills the lower part of the picture (the resize check reads it)
 
