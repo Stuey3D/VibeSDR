@@ -17,7 +17,9 @@
 //      full span, auto IF and manual: 9 kHz steps and 500 Hz sweeps across the DC, up and back. The centre moves only for
 //      the DC, ≤ one nudge's reach, once per crossing, never back onto the dial (no "deferred retune"), and a small pan
 //      moves nothing. On beta24 (da9dc130f) the zoomed auto-IF case retunes 14 times for one crossing and ends on the dial;
-//   6. LOCKED VFO (a zoom onto the dial every tune): unchanged — auto IF keeps the tuner on the dial;
+//   6. LOCKED VFO (a zoom onto the dial every tune), auto IF: the centre stays put while the view is inside the 350 kHz IF
+//      filter (175 kHz either side), then follows ONCE, decisively — a handful of retunes for 40 tunes (beta24: one or two
+//      per tune), never two on one step, the DC never in the passband, the filter never widened by a tune;
 //   7. the clients are told where the spike is: hwinfo `dcHz` on connect, a `dc` message after the nudge.
 // Silent: audio frames are analysed in memory, never played. Every child is killed in a finally.
 //   VIBESERVER_BIN=…/vibeserver node --max-old-space-size=512 scripts/test-server-vfo-dc.mjs
@@ -196,13 +198,15 @@ async function appSweep(S, A, from, to, step, ms = 120) {
     A.tune(f);
     await sleep(ms);
     if (Math.abs(S.dcNow() - f) < ZONE - 100) await until(() => S.tunes.length > n, 1500);
-    out.push({ dial: f, dc: S.dcNow() });
+    out.push({ dial: f, dc: S.dcNow(), moved: S.tunes.length - n });
   }
   await sleep(400);   // ★ a deferred move (the pan cooldown, 120 ms) has had every chance to land
   const tail = S.log().slice(log0);
   return { steps: out, retunes: S.tunes.length - n0, moves: S.tunes.slice(n0), settled: S.dcNow(),
            onDc: out.filter((s) => Math.abs(s.dc - s.dial) < ZONE - 100),
-           nudges: (tail.match(/VFO free: DC/g) || []).length, deferred: (tail.match(/deferred retune applied/g) || []).length };
+           nudges: (tail.match(/VFO free: DC/g) || []).length, deferred: (tail.match(/deferred retune applied/g) || []).length,
+           edges: (tail.match(/auto IF: the view or the VFO reached the IF filter's edge/g) || []).length,
+           maxPerStep: Math.max(0, ...out.map((o) => o.moved)) };
 }
 async function tone(L, ms = 2000) {
   L.aud.bin.length = 0; L.aud.keepBin = true;
@@ -298,7 +302,8 @@ try {
     } finally { S.stop(); }
   }
   /* ★★★ 5. FREE TUNING WITH THE APP'S OWN MESSAGES (beta25). The centre stays put — "the RF centre can be off screen in free
-   *  mode it is fine" (Stuart) — and moves only for the DC, by no more than a nudge, and the nudge sticks: no "deferred
+   *  mode it is fine" (Stuart) — and moves only for the DC, by no more than a nudge, or (auto IF) once the view reaches the
+   *  IF filter's edge ("a 350KHz IF filter should in theory give 175KHz of breathing room"); a nudge sticks: no "deferred
    *  retune" putting the tuner back on the dial. */
   const freeCase = async (tag, { spanHz, ifHz = 0, from, to, step, back }) => {
     const S = await server(tag, ['--users', '1']);
@@ -311,16 +316,20 @@ try {
       await sleep(700);
       const c0 = S.dcNow() - OFF;
       const ifNote = ifHz ? `IF ${ifHz / 1e3} kHz manual` : 'auto IF';
+      // ★ auto IF on a 60 kHz view: the filter is 350 kHz (its floor), so the view may walk ±(175 − 30) kHz from the tuner
+      //   before it moves — 270 kHz of travel needs at most two edge moves besides the crossing's nudge
+      const edgesOk = !ifHz && spanHz < cfg.maxBandwidth ? 2 : 0;
       const check = (r, what, maxRetunes) => {
         ok(r.onDc.length === 0, `${what}: ${r.steps.length} tunes, the DC never inside ±${ZONE / 1e3} kHz of the dial`);
-        ok(r.retunes <= maxRetunes, `${what}: ${r.retunes} retune(s) (≤ ${maxRetunes} — one per crossing; ${r.moves.map(kHz).join(', ') || 'none'})`);
-        ok(r.retunes === r.nudges && r.deferred === 0, `${what}: every move a DC nudge (${r.nudges} nudge(s), ${r.deferred} deferred retune(s) — none undoing it)`);
+        ok(r.retunes <= maxRetunes + edgesOk, `${what}: ${r.retunes} retune(s) (≤ ${maxRetunes} per crossing + ${edgesOk} at the IF filter's edge; ${r.moves.map(kHz).join(', ') || 'none'})`);
+        ok(r.retunes === r.nudges + r.edges && r.edges <= edgesOk && r.deferred === 0 && r.maxPerStep <= 1,
+           `${what}: every move a DC nudge or an IF-edge move (${r.nudges} nudge(s), ${r.edges} edge move(s), ${r.deferred} deferred, ≤ ${r.maxPerStep} per step)`);
         const last = r.steps[r.steps.length - 1];
         ok(r.settled === last.dc && Math.abs((r.settled - OFF) - last.dial) > 1000, `${what}: the centre is NOT on the dial at the end, and nothing moved it after (centre ${kHz(r.settled - OFF)}, dial ${kHz(last.dial)})`);
       };
       const up = await appSweep(S, A, from, to, step);
       check(up, `${tag} up (${spanHz >= cfg.maxBandwidth ? 'full span' : `${spanHz / 1e3} kHz view`}, ${ifNote})`, 1);
-      if (up.retunes) ok(Math.abs(up.moves[0] - OFF - c0) <= 25000, `${tag}: the nudge moved the centre ${kHz(Math.abs(up.moves[0] - OFF - c0))} kHz (≤ a nudge's reach)`);
+      if (up.nudges) ok(Math.abs(up.moves[0] - OFF - c0) <= 25000, `${tag}: the nudge moved the centre ${kHz(Math.abs(up.moves[0] - OFF - c0))} kHz (≤ a nudge's reach)`);
       const down = await appSweep(S, A, to, back, -step);
       check(down, `${tag} down`, 1);
       // ★ a small pan of the view (the web's FREE, or a finger): the centre stays where the nudge left it
@@ -336,18 +345,28 @@ try {
   await freeCase('freefull', { spanHz: 1e9, from: CENTRE, to: TONES_AT, step: STEP, back: CENTRE - 10000 });
   await freeCase('freeman', { spanHz: 60000, ifHz: 1500000, from: DC0 - 40000, to: DC0 + 230000, step: 9000, back: DC0 - 40000 });
   {
-    console.log('── 6. LOCKED VFO (the app zooms onto the dial every tune): unchanged — auto IF keeps the tuner on the dial ──');
+    console.log('── 6. LOCKED VFO (the app zooms onto the dial every tune), auto IF: the centre follows at the IF filter\'s edge ──');
     const S = await server('lockedvfo', ['--users', '1']);
     try {
       const L = await listener(S.port, 'vfodclkvfo01', CENTRE);
       const A = appClient(L, configs(L.spec).slice(-1)[0], { free: false, spanHz: 60000 });
       A.zoom(CENTRE);
       await sleep(700);
-      const r = await appSweep(S, A, DC0 - 40000, DC0 + 100000, 9000);
-      ok(r.onDc.length === 0, `${r.steps.length} tunes: the DC never inside ±${ZONE / 1e3} kHz of the dial`);
-      const last = r.steps[r.steps.length - 1];
-      ok(r.retunes >= r.steps.length / 2 && Math.abs((r.settled - OFF) - last.dial) <= 1000,
-         `the tuner follows the dial as before (${r.retunes} retunes for ${r.steps.length} tunes; centre ${kHz(r.settled - OFF)}, dial ${kHz(last.dial)})`);
+      const rf0 = S.dcNow();
+      const r = await appSweep(S, A, CENTRE + 9000, CENTRE + 9000 * 40, 9000);
+      ok(r.onDc.length === 0, `${r.steps.length} tunes of 9 kHz: the DC never inside ±${ZONE / 1e3} kHz of the dial`);
+      // ★★ Stuart: "a 350KHz IF filter should in theory give 175KHz of breathing room before the RF centre has to follow".
+      //    The view is 60 kHz, so it may reach ±(175 − 30) kHz from the tuner; beta24 moved the tuner on EVERY step
+      //    (17 retunes for 16 tunes: a nudge and a follow).
+      const firstEdge = r.steps.find((st, i) => st.moved && Math.abs(st.dc - (i ? r.steps[i - 1].dc : rf0)) > 50000);   // ★ a nudge moves ≤ 25 kHz
+      const before = firstEdge ? r.steps[r.steps.indexOf(firstEdge) - 1] : null;
+      const reach = firstEdge && before ? firstEdge.dial - before.dc : 0;
+      ok(firstEdge && reach > 145000 && reach <= 145000 + 9000,
+         `the centre stays put until the view nears the 350 kHz filter's edge: first follow with the dial ${kHz(reach)} kHz from the tuner (beyond 175 − 30 = 145 expected)`);
+      ok(r.retunes <= 4 && r.retunes >= 2 && r.maxPerStep <= 1 && r.deferred === 0,
+         `retunes ≪ tunes: ${r.retunes} for ${r.steps.length} (${r.edges} at the filter's edge, ${r.nudges} DC nudge(s)), never two on one step`);
+      const ifs = [...new Set((S.log().match(/IF filter (?:widened|narrowed)?[^\n]*?(\d+) -> (\d+) kHz/g) || []))];
+      ok(!/IF filter widened/.test(S.log()), `the filter is never widened by a tune (${ifs.length ? ifs.join('; ') : 'no width changes'})`);
       L.close();
     } finally { S.stop(); }
   }

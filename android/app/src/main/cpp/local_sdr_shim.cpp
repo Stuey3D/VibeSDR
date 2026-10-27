@@ -6974,7 +6974,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double half = rxBwHz * 0.5;
         {
             const double span = displaySpan() / zoomFactor.load();
-            half = std::max(half, std::fabs(viewCenter.load() - rf) + span * 0.5 + rxBwHz * 0.5);
+            /* ★★★ V12 beta25 — OFF A SHARED DIAL THE WIDTH FOLLOWS THE SIZE OF WHAT MUST FIT, NOT WHERE IT SITS: the view and
+             *  the VFO's passband, plus the room the recentre may leave beside them (ifShift). dongleForView keeps them
+             *  inside it by moving the centre at the filter's edge — so a tune or a pan no longer widens the filter (an AGC
+             *  forget) or narrows it again; only a zoom, or a FREE VFO walking away from its view, changes the width. */
+            if (vsSharedDial()) half = std::max(half, std::fabs(viewCenter.load() - rf) + span * 0.5 + rxBwHz * 0.5);
+            else { double rlo = 0, rhi = 0; ifRegion(viewCenter.load(), span, audioFreq.load(), rlo, rhi);
+                   half = std::max(half, 0.5 * (rhi - rlo) + ifShift(audioFreq.load(), true)); }
             /* ★★★ BUT NOT ON A SHARED DIAL (2026-09-22). There is ONE view for everybody there,
              *     and the server states it; a joiner's default full-span view is not a request,
              *     it is a client that has not adopted yet. Counting it walked the filter open four
@@ -6988,8 +6994,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (auto& pr : allSpecPeers()) {
                 auto c = dspFor(pr.sock);
                 if (!c || c->viewSpanHz <= 0) continue;
-                half = std::max(half,
-                    std::fabs(c->viewCentreHz - rf) + c->viewSpanHz * 0.5 + rxBwHz * 0.5);
+                { double rlo = 0, rhi = 0; ifRegion(c->viewCentreHz, c->viewSpanHz, audioFreq.load(), rlo, rhi);   // ★ beta25: size, not place
+                  half = std::max(half, 0.5 * (rhi - rlo) + ifShift(audioFreq.load(), true)); }
             }
         }
         int want = (int)std::lround(half * 2.0);
@@ -7279,6 +7285,83 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!(z.lo < z.hi)) return 0.0;
         return (z.hi - z.lo) + std::max(vibe::kVfoDcHoldMinHz, 0.5 * (z.hi - z.lo));
     }
+    /* ═══ ★★★ V12 beta25 — AUTO IF: THE CENTRE FOLLOWS AT THE FILTER'S EDGE, NOT ON EVERY STEP ═══════════════════════════
+     *  Stuart, 2026-10-27: "in auto IF the RF centre needs to follow at a closer position then to keep the VFO within the IF
+     *  filtered boundary … but not for every tune step … a 350KHz IF filter should in theory give 175KHz of breathing room
+     *  before the RF centre has to follow". The tuner's IF filter is centred on the TUNER (rtlCenter + hwOffsetHz(), which
+     *  is also where the DC is). So the centre stays put while the VFO's passband AND the visible view sit inside the filter's
+     *  usable half-width, and only when one would leave it does the centre move — decisively, the region recentred so a
+     *  whole filter's worth of headroom is regained, with the DC put BEHIND the travel so the next steps walk away from it.
+     *  The filter's width meanwhile follows only the SIZE of what must fit (applyAutoIf), never where it sits, so a tune or
+     *  a pan no longer re-derives it. LOCKED and FREE alike; ✗ a shared dial keeps the old follow, ✗ an owner's locked
+     *  window never moves.
+     * ★★ THE MARGIN, FROM THE FILTER WE MEASURED (the note at hwinfo's rfCentre): at a 400 kHz IF the roll-off reaches -3 dB
+     *    31 % of the 2.4 MHz capture in from each edge — ±456 kHz, 1.14× the nominal width either side of centre, with soft
+     *    skirts. Fitting that square-law, the -1 dB point sits at 0.66× the width from centre, beyond the nominal half-width
+     *    (0.5×, ≈ -0.6 dB). And librtlsdr only ever rounds the corner UP (r82xx_set_bandwidth takes the narrowest low-pass at
+     *    or above the request, vibe_r82xx_if.h). So the nominal half-width is already inside the flat part: the margin is
+     *    0 Hz, and 350 kHz gives exactly Stuart's 175 kHz. kIfEdgeMarginHz names it so a measurement can change it. */
+    static constexpr double kIfEdgeMarginHz = 0.0;
+    int travelDir_ = 0;   // ★ which way the dial last moved (retune) — the recentre leaves the DC behind it
+    /** The IF filter's usable half-width now (Hz): the width set, or the capture when none is (0 = wide open). */
+    double ifUsableHalf() const {
+        const int w = g_tunerBwHz.load(std::memory_order_relaxed);
+        const double W = w > 0 ? std::min((double)w, (double)sampleRate) : (double)sampleRate;
+        return std::max(0.0, W * 0.5 - kIfEdgeMarginHz);
+    }
+    /** What must sit inside the filter: the view and the VFO's passband (a FREE VFO may be off the view). */
+    void ifRegion(double view, double viewSpan, double vfo, double& rlo, double& rhi) const {
+        rlo = std::min(view - viewSpan * 0.5, vfo - rxBwHz * 0.5);
+        rhi = std::max(view + viewSpan * 0.5, vfo + rxBwHz * 0.5);
+    }
+    /** The region the PLACEMENT keeps inside the filter: ifRegion — unless the filter cannot hold it with room to spare
+     *  (a view as wide as the capture, where the filter is capped at the capture), when only the VFO's passband is held and
+     *  the capture's own rules place the view. Without this a full-span view never fits, and every tune would recentre it
+     *  (and undo the DC nudge). The spare room — a tenth of the half-width — is the hysteresis a recentre buys at least. */
+    void ifFitRegion(double view, double viewSpan, double vfo, bool person, double& rlo, double& rhi) const {
+        ifRegion(view, viewSpan, vfo, rlo, rhi);
+        const double u = ifUsableHalf();
+        if (0.5 * (rhi - rlo) + ifShift(vfo, person) + 0.1 * u > u) { rlo = vfo - rxBwHz * 0.5; rhi = vfo + rxBwHz * 0.5; }
+    }
+    /** Does the filter, with the tuner at logical centre `c`, hold the region? */
+    bool ifHolds(double c, double rlo, double rhi) const {
+        const double rf = c + hwOffsetHz(), u = ifUsableHalf();
+        return rlo >= rf - u && rhi <= rf + u;
+    }
+    /** How far the recentre may put the filter's centre from the region's middle — the DC kept off the passband (the
+     *  zone + the hold, as vfoDcCentre) or simply the radio's own offset. applyAutoIf sizes the width with it, so a
+     *  recentred region always fits. */
+    double ifShift(double dial, bool person) const {
+        const double off = hwOffsetHz(), doff = vfoDcOff(person);
+        if (doff <= 0.0) return std::max(0.0, off);
+        const vibe::VfoDcZone z = mainDcZone(dial, doff);
+        const double hold = std::max(vibe::kVfoDcHoldMinHz, 0.5 * (z.hi - z.lo));
+        return std::max(off, std::max(z.hi - dial, dial - z.lo) + hold);
+    }
+    /** The decisive recentre: the region's middle, the DC (the filter's centre) behind the travel where the DC rule
+     *  applies — else the LOCKED arrangement, the radio's offset above the middle. Returns the LOGICAL centre. */
+    double ifRecentre(double rlo, double rhi, double dial, bool person) const {
+        const double off = hwOffsetHz(), mid = 0.5 * (rlo + rhi);
+        const double doff = vfoDcOff(person);
+        if (doff > 0.0 && travelDir_ != 0) {
+            const vibe::VfoDcZone z = mainDcZone(dial, doff);
+            const double hold = std::max(vibe::kVfoDcHoldMinHz, 0.5 * (z.hi - z.lo));
+            const double rf = travelDir_ > 0 ? z.lo - hold : z.hi + hold;
+            if (ifHolds(rf - off, rlo, rhi)) return rf - off;
+        }
+        return mid;
+    }
+    /** ★ Will auto IF have to move the centre for a tune to `freq`? Off a shared dial and an owner's locked window only.
+     *  The view the tune will have: a LOCKED view (not marked free, centred on the old dial) is about to be zoomed onto
+     *  `freq`; a FREE one stays where it is. `rlo`..`rhi` returns the region that must fit. */
+    bool tuneEdge(double freq, double prevDial, double centre, double& rlo, double& rhi) {
+        if (!g_tunerBwAuto.load(std::memory_order_relaxed) || g_vsLockedCentre.load() > 0.0 || vsSharedDial()) return false;
+        const double span = displaySpan() / zoomFactor.load(), view = viewCenter.load();
+        const bool lockedView = !viewFree_.load(std::memory_order_relaxed)
+                             && std::fabs(view - prevDial) <= std::max(250.0, span * 0.002);
+        ifFitRegion(lockedView ? freq : view, span, freq, true, rlo, rhi);
+        return !ifHolds(centre, rlo, rhi);
+    }
     double dongleForView(double view, double viewSpan, bool person = false) {
         // ★★★ THE VFO IS NOT A POINT — IT HAS A BANDWIDTH, AND THE EDGES ARE WHERE IT DIES.
         //     This margin used to protect the VFO's CENTRE only, so a WFM signal could sit within
@@ -7348,7 +7431,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     the nudge sticks; nothing recentres it "because the view moved" (the double move of beta24: nudge, then the
         //     next zoom/pan back onto the dial, every step).
         const bool follows = viewFollowsDial(view, vfo, viewSpan);
-        const double slack = follows ? 0.0 : vfoDcSlack(vfo, person);
+        const double slack = vsSharedDial() ? 0.0 : vfoDcSlack(vfo, person);
         const auto keepsNudge = [&](double l, double h) {
             return slack > 0.0 && cur >= hardLo && cur <= hardHi && cur >= l - slack && cur <= h + slack;
         };
@@ -7364,10 +7447,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     VIEW stays inside the capture, so panning is unaffected and this simply loses when
          *     the two disagree. */
         // ★★★ V12 beta25: …WHEN THE VIEW FOLLOWS THE DIAL (a LOCKED VFO). A FREE view leaves the tuner where it is.
-        if (g_tunerBwAuto.load(std::memory_order_relaxed)
-            && g_vsLockedCentre.load() <= 0.0 && follows) {
-            const double want = bandDcSafe(std::max(lo, std::min(hi, vfo)), lo, hi);
-            if (std::fabs(want - cur) > 1000.0) return dcSafe(want);
+        // ★★★ V12 beta25: on a shared dial exactly as before; everywhere else the EDGE rule (ifHolds — see kIfEdgeMarginHz).
+        if (g_tunerBwAuto.load(std::memory_order_relaxed) && g_vsLockedCentre.load() <= 0.0) {
+            if (vsSharedDial()) {
+                if (follows) {
+                    const double want = bandDcSafe(std::max(lo, std::min(hi, vfo)), lo, hi);
+                    if (std::fabs(want - cur) > 1000.0) return dcSafe(want);
+                }
+            } else {
+                double rlo = 0, rhi = 0; ifFitRegion(view, viewSpan, vfo, person, rlo, rhi);
+                if (!ifHolds(cur, rlo, rhi)) {
+                    const double want = bandDcSafe(std::max(lo, std::min(hi, ifRecentre(rlo, rhi, vfo, person))), lo, hi);
+                    if (std::fabs(want - cur) > 1000.0) {
+                        LOGI("auto IF: the view or the VFO reached the IF filter's edge (%.0f kHz either side of %.4f MHz) — "
+                             "centre %.4f -> %.4f MHz (a pan or zoom)", ifUsableHalf() / 1e3, (cur + hwOffsetHz()) / 1e6,
+                             cur / 1e6, want / 1e6);
+                        return dcSafe(want);
+                    }
+                }
+            }
         }
         // Still legal where we are? Then DON'T MOVE: no retune, no PLL relock, and
         // the pan is a pure crop of spectrum we already have.
@@ -16062,6 +16160,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     //    background profile. On a shared dial only a person's tune may move the centre to dodge the DC (vfoDcPlace).
     void retune(double freq, bool person = false) {
         const double prevDial = audioFreq.load();   // ★ which way the dial is travelling — vfoDcPlace leaves the DC behind it
+        if (std::fabs(freq - prevDial) > 1.0) travelDir_ = freq > prevDial ? 1 : -1;   // ★ beta25: ifRecentre's DC side
         // ★ There is no VFO in DAB — the ensemble IS the capture. See flushPendingDongle.
         if (g_dabMode.load(std::memory_order_relaxed)) return;
         // ★★★ NOR ON AN ICOM: the radio is the dial, and only icomControl() — a PERSON's tune — moves it.
@@ -16106,11 +16205,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const double winLimit  = sampleRate / 2.0 - std::min(50000.0, sampleRate * 0.15);
             const double centreNow = rtlCenter.load();
             const bool   leaves    = lockC <= 0.0 && std::fabs(freq - centreNow) > winLimit;
-            // ★ V12 beta25: and only where the view follows the dial (viewFollowsDial) — a FREE view leaves it put
+            // ★ V12 beta25: on a shared dial auto IF follows every tune as before; elsewhere only at the filter's edge (tuneEdge)
+            double eRlo = 0, eRhi = 0;
+            const bool   edgeMove  = tuneEdge(freq, prevDial, centreNow, eRlo, eRhi);
             const bool   follows   = lockC <= 0.0 && g_tunerBwAuto.load(std::memory_order_relaxed)
-                                     && std::fabs(freq - centreNow) > 1000.0
-                                     && viewFollowsDial(viewCenter.load(), audioFreq.load(), displaySpan() / zoomFactor.load());
-            const double centreNew = lockC > 0.0 ? lockC : ((leaves || follows) ? bandDcSafeFor(freq, freq) : centreNow);   // ★ Band: see bandDcSafe
+                                     && (vsSharedDial() ? std::fabs(freq - centreNow) > 1000.0 : edgeMove);
+            const double centreNew = lockC > 0.0 ? lockC
+                                   : leaves ? bandDcSafeFor(freq, freq)
+                                   : follows ? (vsSharedDial() ? bandDcSafeFor(freq, freq) : ifRecentre(eRlo, eRhi, freq, person))
+                                   : centreNow;   // ★ Band: see bandDcSafe
             const double tunerNew  = centreNew - convOffsetHz.load(std::memory_order_relaxed) + hwOffsetHz();
             const double ifEff     = vibeagc::agcIfEffectiveHz((double)g_tunerBwHz.load(std::memory_order_relaxed),
                                                                sampleRate);
@@ -16289,7 +16392,42 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              * ★ The pan cooldown is restarted so a pan's deferred move waits behind this one; flushPendingDongle re-checks it
              *   against the DC before applying it. */
             const double cur = rtlCenter.load();
-            const double c = vfoDcPlace(cur, freq, prevDial, person);
+            /* ★★★ V12 beta25 — AUTO IF, OFF A SHARED DIAL: THE CENTRE MOVES HERE, AT THE FILTER'S EDGE, ONCE (tuneEdge — the
+             *  view this tune will have: a LOCKED view's zoom onto the dial is a few ms behind it). Then the zoom finds the
+             *  region already inside the filter and moves nothing: one retune, with the DC behind the travel (ifRecentre),
+             *  and the DC rule still has the last word. Inside the edge, only the DC can move it (below). */
+            double eRlo = 0, eRhi = 0;
+            if (!vsSharedDial() && tuneEdge(freq, prevDial, cur, eRlo, eRhi)) {
+                const double lim = watchVfoLim(rxBwHz);
+                double c = std::max(freq - lim, std::min(freq + lim, ifRecentre(eRlo, eRhi, freq, person)));
+                c = vfoDcPlace(bandDcSafeFor(freq, c, freq - lim, freq + lim), freq, prevDial, person);
+                if (std::fabs(c - cur) > 1.0) {
+                    LOGI("auto IF: the view or the VFO reached the IF filter's edge (%.0f kHz either side of %.4f MHz) — centre "
+                         "%.4f -> %.4f MHz", ifUsableHalf() / 1e3, (cur + hwOffsetHz()) / 1e6, cur / 1e6, c / 1e6);
+                    lastDongleMoveMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+                    rtlCenter.store(c);
+                    tuneHw(c);
+                    updateZoomView();
+                    applyAutoIf();
+                }
+            } else {
+            /* ★★★ V12 beta25 — NOT WHEN THE VIEW FOLLOWS THE DIAL (a LOCKED VFO, in auto IF). There the listener's zoom onto
+             *  the new dial is a few tens of ms behind this tune, and dongleForView puts the tuner ON the dial — the DC then
+             *  sits hwOffsetHz() away, clear of the passband. Nudging first only bought a second retune per step (beta24:
+             *  17 retunes for 16 LOCKED 9 kHz steps — two PLL relocks, two lots of AGC bookkeeping). The nudge is a FREE
+             *  tuning feature. ★ Deferred, not dropped: dcBackstop() re-checks shortly after, so a client that sends no zoom
+             *  after all (an older page, a recentre that coincided) is still moved off the spike. */
+            // ★ beta25: now only a SHARED dial's follow (off one, tuneEdge above has already moved the centre if it must)
+            const bool followComing = vsSharedDial() && g_tunerBwAuto.load(std::memory_order_relaxed)
+                && !viewFree_.load(std::memory_order_relaxed) && std::fabs(freq - cur) > 1000.0
+                && std::fabs(viewCenter.load() - prevDial) <= std::max(250.0, (displaySpan() / zoomFactor.load()) * 0.002);
+            if (followComing) {
+                dcCheckAtMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count() + 300;
+                dcCheckPerson_ = person;
+            }
+            const double c = followComing ? cur : vfoDcPlace(cur, freq, prevDial, person);
             if (std::fabs(c - cur) > 1.0) {
                 lastDongleMoveMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -16297,6 +16435,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 tuneHw(c);
                 updateZoomView();   // ★ the zoom channel is measured from rtlCenter + hwOffsetHz()
                 applyAutoIf();      // ★ the IF filter follows the capture, as after any retune
+            }
             }
         }
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
@@ -27375,6 +27514,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             flushPendingDongle();     // a retune the pan cooldown postponed — never dropped
             bandDcTick();             // ★ V12: Band spots on/off/stepped — the tuner's DC off the band's slices (bandDcSafe)
+            dcBackstop();             // ★ V12 beta25: a nudge retune() deferred for a LOCKED view's follow, if no follow came
             dcTell();                 // ★ V12 beta25: the RF centre and the DC spike told when the centre moves (dcSpikeHz)
             // ★★★ IS THE DSP KEEPING REAL TIME? The only measure that matters under load, and the
             //     one nothing was watching: a probe that counts frames cannot tell "smooth" from
@@ -28257,6 +28397,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  told — a nudge, a pan's move, a recentre — one small `dc` message with the tuner's centre and the spike, so the RF-
      *  centre line and the red label follow the radio itself rather than waiting for the next hwinfo. At most every 100 ms;
      *  a client that does not know the type ignores it. */
+    /** ★ V12 beta25 — the nudge retune() deferred for a LOCKED view's follow (see followComing there): due at dcCheckAtMs_
+     *  (0 = none), on the DSP loop. If the follow came, the DC is already clear and this does nothing; if no zoom came, the
+     *  centre is moved off the spike exactly as retune() would have. Waits behind a pan's pending move. */
+    long long dcCheckAtMs_ = 0;
+    bool dcCheckPerson_ = false;
+    void dcBackstop() {
+        if (dcCheckAtMs_ <= 0 || pendingDongle > 0.0) return;
+        const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (nowMs < dcCheckAtMs_) return;
+        dcCheckAtMs_ = 0;
+        if (g_vsLockedCentre.load() > 0.0 || g_dabMode.load(std::memory_order_relaxed)) return;
+        const double cur = rtlCenter.load(), dial = audioFreq.load();
+        const double c = vfoDcPlace(cur, dial, dial, dcCheckPerson_);
+        if (std::fabs(c - cur) <= 1.0) return;
+        lastDongleMoveMs = nowMs;
+        rtlCenter.store(c);
+        tuneHw(c);
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        updateZoomView();
+        applyAutoIf();
+    }
     double dcToldCentre_ = 0.0, dcToldSpike_ = -1.0;
     long long dcToldMs_ = 0;
     void dcTell() {
