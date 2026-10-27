@@ -250,6 +250,11 @@ export interface MeterValues {
    *  The LED ring and the analogue red hand are placed from it on the calibrated scale, so they sit
    *  under the label the mode box would name at the gate. Absent = not stated: no ring, never a wrong one. */
   sqlVal?: number;
+  /** ★★ V12 VFO A/B round 3 — each VFO's own squelch row while VFO B is on (the Audio menu): its level (bar scale,
+   *  smoothed and raw), its threshold's bar position (-1 = off) and whether its gate is shut. The fields above stay
+   *  the METER's — the selected VFO's. Absent with one VFO. */
+  ab?: { aLevel: number; aRaw: number; aSql: number; aGate: boolean;
+         bLevel: number; bRaw: number; bSql: number; bGate: boolean };
   /** Is the gate ACTUALLY closed (muting) right now? Computed from the same quantity the gate
    *  itself compares — not from bar geometry. In S-meter/dBFS mode the bar is a smoothed dBFS fill
    *  while the UberSDR gate compares raw SNR, so "fill < line" could redden while audio flowed (and

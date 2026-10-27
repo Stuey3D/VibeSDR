@@ -27,7 +27,12 @@ import { fileURLToPath } from 'node:url';
  *     not know about a B the server holds ADOPTS it (A selected, nothing sent, the mode's passband shape at the
  *     server's width); not the echo of our own OFF, not a refusal; the client's onopen no longer resets;
  *   • the A/B ON/OFF lives on the frequency card (FreqModal + its nav stop), not the tuning-step sheet;
- *   • VFO B's colour: AUTO (the contrast rule B has always drawn in) or the listener's swatch.
+ *   • VFO B's colour: AUTO (the contrast rule B has always drawn in) or the listener's swatch;
+ *   • ROUND 3: the mutes on the wire and in the state (muteA, a channel's mute); squelchFor — each VFO's own squelch BY
+ *     NAME whichever is tuned (A's never as `watch`, B's never without a B); setMute only while B is on; info carries
+ *     both squelches and both mutes; SqlAutoTrack (B's auto squelch) — seeds from the neighbours, rises only while shut,
+ *     opens above the margin, holds OFF through the hang, re-judges on a new channel, sends only on a change; and the
+ *     screen's wiring (source checks): Band mutes VFO A with B on, the decoder box tunes VFO A.
  *
  * Run: node --no-warnings scripts/test_vfoAB.ts   (silent: no audio anywhere)
  */
@@ -37,6 +42,8 @@ import {
   type TuneStatus,
 } from '../src/services/vfoAB.ts';
 import { shouldForwardTune } from '../src/services/audioTuneForward.ts';
+import { msgMute } from '../src/services/vfoAB.ts';
+import { SqlAutoTrack, SQL_AUTO_HANG_MS } from '../src/utils/sqlAutoTrack.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -331,6 +338,67 @@ ok(vfoB(parseWatch({ type: 'watch', chans: [{ id: 1, freq: 1e6 }] }))?.freq === 
   ok(/private _onWatch\(msg[^)]*\) \{\s*\{ const m = watchMaxOf\(msg\); if \(m !== null\) this\._abOffer\(m\); \}/.test(ws)
      && /this\._abOffer\(watchOffered\(msg\)\)/.test(ws),
      'the client takes the offer from hwinfo AND the watch state\'s max (as the web does)');
+}
+console.log('── round 3: mutes, each VFO\'s squelch by name, B\'s auto squelch ──');
+{
+  const st = parseWatch({ type: 'watch', max: 1, muteA: true, chans: [{ id: 1, freq: 7e6, mute: true }, { id: 2, freq: 7.1e6 }] })!;
+  ok(st.muteA === true && st.chans[0].mute === true && st.chans[1].mute === false, 'parseWatch: muteA and each channel\'s mute (absent = false)');
+  ok(parseWatch({ type: 'watch', chans: [] })!.muteA === false, 'an older server (no muteA): not muted');
+  ok(JSON.stringify(msgMute('A', true)) === '{"type":"watch","muteA":true}' && JSON.stringify(msgMute('B', false)) === '{"type":"watch","id":1,"mute":false}',
+     'msgMute: A by muteA, B by its channel id');
+  const status: TuneStatus = { frequency: 7074000, mode: 'usb', bandwidthLow: 100, bandwidthHigh: 2800 };
+  const sent: Record<string, unknown>[] = [];
+  let t = 1000;
+  const ab = new VfoABCore(() => status, (m) => sent.push(m), () => {}, () => t);
+  ab.setOffered(1);
+  ab.setMute('B', true);
+  ok(sent.length === 0, 'setMute with no VFO B: nothing sent');
+  ok(ab.squelchFor('B', -80) === true && sent.length === 0, 'B\'s squelch with no VFO B: swallowed — never sent as A\'s');
+  ab.setOn(true); sent.length = 0;
+  ok(ab.squelchFor('A', -85) === false && sent.length === 0, 'A\'s squelch by name: the client sends it as the ordinary squelch, never `watch`');
+  ok(ab.squelchFor('B', -77) === true && sent.at(-1)!.type === 'watch' && sent.at(-1)!.sql === -77, 'B\'s squelch by name: `watch`');
+  ab.select('B');
+  ok(ab.squelchFor('A', -88) === false && ab.info().squelchA === -88 && ab.info().squelchB === -77, 'with B tuned, A\'s squelch by name is still A\'s');
+  ab.setMute('A', true);
+  ok(sent.at(-1)!.muteA === true, 'setMute A: on the wire');
+  t += 2000;
+  ab.onWatch({ type: 'watch', max: 1, muteA: true, chans: [{ id: 1, freq: 7074000, mode: 'usb', bw: 2700, mute: false }] });
+  ok(ab.info().muteA === true && ab.info().muteB === false, 'info carries the server\'s mutes');
+  ab.onWatch({ type: 'watch', max: 1, muteA: true, chans: [] });
+  ok(!ab.on && ab.info().muteA === false, 'B gone: no mute shown (there is no per-VFO mute with one VFO)');
+}
+{
+  // B's auto squelch: a quiet channel at -100 with its neighbours at -100, then a signal at -70, then quiet again.
+  const tr = new SqlAutoTrack();
+  let now = 0;
+  const step = (chan: number, ex: number, key = 'k1') => { now += 50; return tr.tick(chan, key, ex, 12, now); };
+  const first = step(-100, 0);
+  ok(first === -88, `seeded from the neighbours, threshold = floor + margin (${first})`);
+  for (let i = 0; i < 40; i++) step(-100, 0);
+  ok(tr.sent === -88 && step(-100, 0) === null, 'steady noise: nothing more sent');
+  const open = step(-70, 30);
+  ok(open === -999, `a signal above the threshold: the gate is held OPEN (VS_SQL_OFF) (${open})`);
+  for (let i = 0; i < 100; i++) step(-70, 30);
+  ok(Math.abs(tr.base - -100) < 0.5, `the baseline does not rise during the over (${tr.base.toFixed(2)})`);
+  // quiet again: the hang holds, then the threshold comes back
+  const t0 = now;
+  let back: number | null = null;
+  for (let i = 0; i < 40 && back === null; i++) { const r = step(-100, 0); if (r !== null) back = r; }
+  ok(back === -88 && now - t0 >= SQL_AUTO_HANG_MS, `after the ${SQL_AUTO_HANG_MS} ms hang the threshold returns (${back} at +${now - t0} ms)`);
+  // a new channel re-judges from its own neighbours
+  const nk = step(-90, 0, 'k2');
+  ok(nk === -78, `a new channel (key): reseeded there (${nk})`);
+  ok(new SqlAutoTrack().tick(NaN, 'k', 0, 12, 0) === null, 'no level: nothing sent');
+}
+{
+  const src = (f: string) => readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
+  const scr = src('../src/screens/SDRScreen.tsx');
+  ok(/const wantSpk = spotsBandOn && !abOn, wantA = spotsBandOn && abOn;/.test(scr) && /abSetMute\?\.\('A', true\)/.test(scr),
+     'Band with VFO B on mutes VFO A in the mix, not the speaker');
+  ok(/onTuneHz=\{onDecTuneHz\}/.test(scr) && /else abDecodeOnA\(\);/.test(scr) && /abDecodeOnA\(\);   \/\/ ★★ VFO A\/B round 3: Band is VFO A's dial/.test(scr),
+     'the decoder box tunes VFO A: its taps, a decoder started, Band');
+  ok(/vfoRows=\{abOn && isLocal && !icom \?/.test(scr), 'the Audio menu gets a row per VFO only while B is on');
+  ok(!/setHwSquelch\(info\.activeSquelchDb\)/.test(scr), 'the squelch slider no longer follows a switch (it is VFO A\'s row)');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

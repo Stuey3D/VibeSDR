@@ -357,6 +357,20 @@ function SquelchControl({
   );
 }
 
+/* ── ★★ V12 VFO A/B round 3: one VFO's squelch-row label — SQUELCH, the VFO's letter in its needle colour, and its MUTE.
+ *  A muted VFO keeps decoding and its meter keeps moving; the other comes to the middle, both ears (the server's mix). */
+function VfoSqlLabel({ vfo, colour, muted, onMute }: { vfo: 'A' | 'B'; colour: string; muted: boolean; onMute: (on: boolean) => void }) {
+  const st = usePopupStyles(makeSt);
+  return (
+    <View style={[st.sqlLabel, { alignItems: 'flex-start' }]}>
+      <Text style={st.bwLabel}>SQUELCH</Text>
+      <Text style={[st.bwLabel, { color: colour, fontWeight: '700' }]} accessibilityLabel={`VFO ${vfo}`}>{`VFO ${vfo}`}</Text>
+      <Btn label={muted ? 'MUTED' : 'MUTE'} active={muted} onPress={() => onMute(!muted)}
+           style={{ minWidth: 0, paddingHorizontal: 6, marginTop: 4 }} />
+    </View>
+  );
+}
+
 // ── Helpers (local copies) ────────────────────────────────────────────────────
 function fmtRecTime(s: number) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -574,6 +588,16 @@ export interface AudioSheetProps {
   vfoStereo?: boolean;
   onVfoStereo?: (on: boolean) => void;
   vfoABOn?: boolean;
+  /** ★★ V12 VFO A/B round 3 — A SQUELCH ROW FOR EACH VFO while VFO B is on (Stuart, 2026-10-27: "the 2 VFO's can they
+   *  have their own squelch and auto squelch options which show in the audio menu when the 2nd VFO is active"), each
+   *  labelled with its letter in its needle colour, each with its own AUTO SQUELCH and a MUTE ("the ability to mute a
+   *  VFO that is decoding"). The A row is the ordinary local squelch props (A's whichever VFO is tuned); the B row's
+   *  handlers are here; both read their levels from the meter bus's `ab`. Absent = one VFO: exactly as before. */
+  vfoRows?: {
+    colourA: string; colourB: string; muteA: boolean; muteB: boolean;
+    onMute: (v: 'A' | 'B', on: boolean) => void;
+    onDragB: (v: number) => void; autoB: boolean; onAutoB: (on: boolean) => void; autoOkB: boolean;
+  };
 
   /** ★★ FM DE-EMPHASIS AND WFM STEREO LIVE HERE, NOT IN THE HARDWARE PANEL. They are not
    *  properties of the radio — they act on OUR demodulator, which is why they applied to a
@@ -650,7 +674,7 @@ export default function AudioSheet({
   kiwiSquelch = 0, onKiwiSquelch, onSquelchDrag, onSquelchDragEnd,
   sqlAuto = false, onSqlAuto, sqlAutoMargin = 12, onSqlAutoMargin, sqlAutoOk = false,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
-  notchOn = false, onNotch, binaural = false, onBinaural, vfoStereo = true, onVfoStereo, vfoABOn = false,
+  notchOn = false, onNotch, binaural = false, onBinaural, vfoStereo = true, onVfoStereo, vfoABOn = false, vfoRows,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
   fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
@@ -893,8 +917,25 @@ export default function AudioSheet({
             </View>
           </>)}
 
-          {/* Local SDR: power-based squelch (dBFS). */}
-          {onLocalSquelch ? (
+          {/* Local SDR: power-based squelch (dBFS). ★★ V12 VFO A/B round 3: one row per VFO while B is on. */}
+          {onLocalSquelch && vfoRows ? (<>
+            <View style={st.bwRow}>
+              <VfoSqlLabel vfo="A" colour={vfoRows.colourA} muted={vfoRows.muteA} onMute={(on) => vfoRows.onMute('A', on)} />
+              <SquelchControl level={liveM?.ab?.aLevel ?? liveM?.level ?? 0} raw={liveM?.ab?.aRaw} pos={liveM?.ab?.aSql ?? -1}
+                              gate={liveM?.ab?.aGate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd}
+                              auto={sqlAuto} onAuto={onSqlAuto}
+                              margin={sqlAutoMargin} onMargin={onSqlAutoMargin}
+                              autoOk={sqlAutoOk} />
+            </View>
+            <View style={st.bwRow}>
+              <VfoSqlLabel vfo="B" colour={vfoRows.colourB} muted={vfoRows.muteB} onMute={(on) => vfoRows.onMute('B', on)} />
+              <SquelchControl level={liveM?.ab?.bLevel ?? 0} raw={liveM?.ab?.bRaw} pos={liveM?.ab?.bSql ?? -1}
+                              gate={liveM?.ab?.bGate} onDrag={vfoRows.onDragB} onDragEnd={onSquelchDragEnd}
+                              auto={vfoRows.autoB} onAuto={vfoRows.onAutoB}
+                              margin={sqlAutoMargin} onMargin={onSqlAutoMargin}
+                              autoOk={vfoRows.autoOkB} />
+            </View>
+          </>) : onLocalSquelch ? (
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
               <SquelchControl level={liveM?.level ?? 0} raw={liveM?.raw} pos={liveM?.sql ?? -1}

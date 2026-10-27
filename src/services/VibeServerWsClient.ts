@@ -868,6 +868,28 @@ export abstract class VibeServerWsClient {
     if (this.ab.squelch(db)) return;
     this._sendCtl(vsSquelchMsg(db));
   }
+  /** ★★ V12 VFO A/B round 3 — a NAMED VFO's squelch, whichever VFO the controls tune: the Audio menu has a row for each
+   *  (Stuart, 2026-10-27: "the 2 VFO's can they have their own squelch and auto squelch options"). A's goes out as the
+   *  ordinary squelch (the listener's own channel), B's as its `watch` squelch. */
+  setSquelchVfo(v: VfoId, db: number) {
+    if (this.ab.squelchFor(v, db)) return;
+    this._sendCtl(vsSquelchMsg(db));
+  }
+  /** ★★ V12 VFO A/B round 3 — mute VFO `v` in this listener's mix (the other comes home to both ears). */
+  abSetMute(v: VfoId, on: boolean) { this.ab.setMute(v, on); }
+  /** ★★ V12 VFO A/B round 3 — each VFO's OWN level (`sig.chan` is always A's, `sig.chanB` B's), for its squelch row and
+   *  its auto squelch — NaN when none has arrived within `maxAgeMs`. The meter's figure stays `sigChanDb` (the
+   *  selected VFO's). B falls back to its watch-state level from a server too old to send chanB. */
+  channelLevelVfoDb(v: VfoId, maxAgeMs = 1000): number {
+    const fresh = Date.now() - this.sigVfoAt <= maxAgeMs;
+    if (v === 'A') return fresh && Number.isFinite(this.sigChanADb) ? this.sigChanADb : NaN;
+    if (fresh && Number.isFinite(this.sigChanBDb)) return this.sigChanBDb;
+    const b = this.ab.on ? vfoB(this.ab.state) : undefined;
+    return b && b.lvl > -150 ? b.lvl : NaN;
+  }
+  private sigChanADb = NaN;
+  private sigChanBDb = NaN;
+  private sigVfoAt = 0;
   /** hwinfo said `sqlOn`: this server applies a threshold below -100 instead of reading it as off. */
   squelchSpeaksOn = false;
 
@@ -2392,8 +2414,16 @@ export abstract class VibeServerWsClient {
     // ★ First, and cheap: twenty a second. Kept as fields, never a callback — the meter emit reads
     //   them on its own frame, so nothing re-renders for a `sig`.
     if (msg.type === 'sig') {
-      if (this.abActive === 'B') return;   // ★ the meter is VFO B's while B is tuned — fed from `watch` (vibeAbMessage)
       const c = Number(msg.chan);
+      // ★★ V12 VFO A/B round 3: `chan` is VFO A's, `chanB` (with a VFO B, on a current server) VFO B's — each row's own.
+      const cb = typeof msg.chanB === 'number' && Number.isFinite(msg.chanB) ? msg.chanB : NaN;
+      if (Number.isFinite(c) && c > -500) { this.sigChanADb = c; this.sigChanBDb = cb; this.sigVfoAt = Date.now(); }
+      if (this.abActive === 'B') {
+        // ★ The meter is VFO B's while B is tuned — B's own level every frame where the server sends it, else from
+        //   `watch` (twice a second, vibeAbMessage).
+        if (Number.isFinite(cb)) { this.sigChanDb = cb; this.sigAt = Date.now(); }
+        return;
+      }
       if (Number.isFinite(c) && c > -500) { this.sigChanDb = c; this.sigAt = Date.now(); }
       return;
     }
