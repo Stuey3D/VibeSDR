@@ -666,6 +666,12 @@ private:
         why_ = b;
     }
 
+    /** The floor the search measured at rung `i`, if it tried it — so the reason quotes the chosen rung's floor, not
+     *  the last one tried (the rung over the ceiling). */
+    void floorFromSearch(int i) {
+        for (size_t k = 0; k < search_.order().size(); ++k)
+            if (search_.order()[k] == i && search_.floors()[k] == search_.floors()[k]) { floorNow_ = search_.floors()[k]; floorEma_ = NAN; return; }
+    }
     void rampDone(double t) {
         const int n = int(gains_.size()), mid = n / 2;
         const GainSearch& s = search_;
@@ -673,6 +679,7 @@ private:
         phase_ = Phase::Steady;
         if (held_) {
             idx_ = s.found() ? s.result() : start_;
+            floorFromSearch(idx_);
             setWhy(Reason::Held);
             return;
         }
@@ -686,6 +693,7 @@ private:
         if (!s.found()) {
             const int u = s.underCeiling();
             idx_ = u >= 0 ? u : s.order()[0];
+            floorFromSearch(idx_);
             setWhy(Reason::Quiet);
         } else if (s.ceilingAt() < 0 && !lookedDown_ && s.result() == s.order().front() && mid >= 2) {
             // the middle was the best: the peak may be below it — look down the same way
@@ -697,6 +705,7 @@ private:
             return;
         } else {
             idx_ = s.result();
+            floorFromSearch(idx_);
             setWhy(s.ceilingAt() >= 0 ? Reason::Target : s.cliff() ? Reason::Cliff : idx_ == n - 1 ? Reason::Top : Reason::Peak);
         }
         lookedDown_ = false;

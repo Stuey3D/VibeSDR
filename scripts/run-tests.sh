@@ -1131,6 +1131,14 @@ printf '\n\033[1m── ADS-B landing + keep running (end to end) ──\033[0m\
 node scripts/test-server-adsb-landing.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ V12 THE ADS-B GAIN RULE end to end (2026-10-26): Stuart's FlightAware clip (filtered LNA feed) replayed so that it
+#     follows the gain the server writes (fake-rtl-tcp --adsb-gain); the ramp must end at 38.6–40.2 dB (where dump1090-fa
+#     holds it), not 49.6, the reason naming the noise floor, no feed warning. ~1.5 min. Needs VIBESERVER_BIN and
+#     VIBE_ADSB_CLIP (exit 3 = not run).
+printf '\n\033[1m── ADS-B gain rule (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-vibeserver/build/vibeserver}" bash scripts/test-adsb-gain-e2e.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ V12 ISM MODE (docs/v12/ISM-DECODER.md): the real server on a fake rtl_tcp replaying a synthetic 433 MHz clip made by
 #     test-ism --write-clip — the capability, the device list and its readable lines, the privacy rule ON THE WIRE, band
 #     steps (clamped), an exact frequency, EXIT giving the dial back; then the web client in headless Edge (--mute-audio).
