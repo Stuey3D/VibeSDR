@@ -12041,8 +12041,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ Bookmarks were RELOCATED here from the menu (see FreqModal: "relocated from MenuSheet
     //   §4.2"), and nothing said so — they are behind a Tune | Bookmarks header on this same card,
     //   which nobody finds by accident. The tour is the only place most people will meet them.
-    { id: 'freq', title: 'Set the frequency, and your bookmarks',
-      body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
+    // ★★ V12 VFO A/B's ON/OFF moved HERE from the step sheet (Stuart, build 498: "it needs to be in the frequency entry
+    //    screen"). Verified against FreqModal (the row above CANCEL / TUNE, VibeServer only), TunerKeys, DrumWheel and
+    //    AudioSheet (VFO STEREO) — the whole card, not just the new sentence (2026-10-27).
+    { id: 'freq', title: 'Set the frequency, your bookmarks, and VFO A/B',
+      body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. VFO STEREO under the speaker button puts both in both ears instead.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
       body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls, with the channels to tune) and APRS (packet stations, with MAP in its box) where the server has them, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Where the server offers it, SPOTS: BAND beside DIGITAL SPOTS reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
@@ -12050,10 +12053,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
-    // ★★ V12 VFO A/B lives in this same sheet (StepPicker) — said here because the step key is the last place anybody
-    //    would look for a second VFO. Verified against StepPicker, TunerKeys, DrumWheel and AudioSheet (2026-10-27).
-    { id: 'step', title: 'Step rate, and VFO A/B',
-      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change. On a VibeServer the same sheet has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. VFO STEREO under the speaker button puts both in both ears instead.',
+    // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
+    { id: 'step', title: 'Step rate',
+      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change.',
       target: tourRef('stepBtn') },
     // ★ The 'back' step ("no back-swipe here") was FOLDED INTO the servers-chip step
     //   in V10 rather than kept: on its own it explained an ABSENCE, which is a whole
@@ -13818,9 +13820,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         steps={stepsForFreq(status.frequency, ituRegion)}
         onSelect={hz => { airStepSeq.current++; setStep(hz); }}
         onClose={() => setStepOpen(false)}
-        /* ★★ V12 VFO A/B — turned on and off HERE only, and only where the server offers it (hwinfo `watch`). */
-        vfoAB={abOn}
-        onVfoAB={abOffered > 0 && !dabOn && !icom && activeDecoder !== 'scanner' ? onVfoAB : undefined}
       />
       </PanelBoundary>
 
@@ -14494,6 +14493,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         onAddServerBookmark={adminAuthQ ? onAddServerBookmark : undefined}
         onImportToServer={adminAuthQ ? onImportToServer : undefined}
         onPickImportFileToServer={adminAuthQ ? onPickImportFileToServer : undefined}
+        /* ★★ V12 VFO A/B — turned on and off HERE only (moved from the tuning-step sheet — Stuart, build 498: "it needs
+         *  to be in the frequency entry screen"), and only where the server offers it (hwinfo `watch`). */
+        vfoAB={abOn}
+        onVfoAB={abOffered > 0 && !dabOn && !icom && activeDecoder !== 'scanner' ? onVfoAB : undefined}
       />
       </PanelBoundary>
 
